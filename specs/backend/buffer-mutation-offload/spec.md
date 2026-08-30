@@ -9,9 +9,10 @@ tags: [backend, buffers, producer-concurrency, offload]
 
 Design for R-BACK-44.1..44.11 (`requirements.md`). The V1 transport is
 implemented and default on; mutation composition is observer-first. The bounded
-observer core and one successful-Unlock producer hook are implemented, while
-production use/barrier emission, runtime reporting, the decision gate, and
-composition remain open — see `gap.md`.
+observer is installed only by the explicit diagnostic gate and records the
+production Unlock, replay-use, CPU-read, barrier, completion, and Present-window
+edges. It reports the decision gate but never performs composition; the separate
+R-BACK-44.11 proof/promotion stack remains forbidden — see `gap.md`.
 
 ## 1. Problem shape
 
@@ -136,7 +137,7 @@ overtaking the mutation and prevents a visible rotation with no committed task.
 | Ordering + visibility (R-BACK-44.3/44.4) | New `BufferMutationOffload.tla` (production cfg) modeling producer rotate/enqueue, worker apply, commit capture, encode read; invariant: an encode-side byte read at ordinal `k` observes every mutation with ordinal `< k` applied, and every captured snapshot's revision equals the record revision at its commit. |
 | Counterexample obligation (R-BACK-44.6 via R-BACK-43.6) | `.counterexample.cfg` removing the FIFO-position premise (worker may apply the mutation after a later chunk's replay) must violate the visibility invariant; a second cfg deferring the logical rotation to the worker must violate the snapshot-revision invariant. |
 | Reuse-safety of synchronous rotation | Existing `BufferBackingVersioning.tla` (R-BACK-5.11) — selection logic unchanged; the extension must not weaken `NoUploadOverwriteInFlight` / `NoBackingFreedInFlight`. |
-| Model-to-code binding | Shared pure predicates header (mutation admission, FIFO-position, direct-reader fence predicates), consumed by both the production code and a native spec, following `dxmt9_mark_reclaim_predicates.hpp` / `dxmt9-producer-mark-reclaim-spec`. |
+| Model-to-code binding | Shared pure predicates header covers mutation admission, FIFO position, and direct-reader fences. `classifyComposition` is consumed by the observer and native cases; the mutation-composition generator supplies vocabulary only, while `MutationComposition.tla` retains an explicit bounded relation and documents that semantic duplication. |
 | Bridge classification | `specs/backend/producer-concurrency/spec.md` classification block row for `dxmt9c_buffer_unlock` updated with the mode-conditional class; `audit_bridge_entry_classification.py` stays green. |
 | Runtime mechanism proof | New counters: mutation tasks enqueued/applied, staged bytes, apply CPU on worker, producer unlock CPU delta; existing `d3d9_buffer_unlock_*` family shows the synchronous half shrinking. |
 | Wild gates | R-BACK-44.8: conformance, GT1/GT3/SFIV visual anchors, GT2 matched A/B (producer wall, FPS, zero GPU errors, locality). |
@@ -157,20 +158,24 @@ overtaking the mutation and prevents a visible rotation with no committed task.
 ## 8. Observer-first composition decision
 
 The V1 task is the semantic baseline: one accepted Unlock, one ordered task,
-one exact backing generation, one application. The completed observer must
-shadow that stream without changing it, key events by the same resource
-identity, backing generation, revision, FIFO ordinal, and captured-use identity
-used by production, then classify only adjacent candidates for which every
-known barrier is absent. The current producer-only scaffold does not yet have
-the use/barrier observations needed to make that classification.
+one exact backing generation, one application. The completed observer shadows
+that stream without changing it, keys events by the same resource identity,
+backing generation, revision, FIFO ordinal, and captured-use identity used by
+production, and classifies only adjacent candidates for which every known
+barrier is absent. It also records first CPU/GPU use, non-plain dispositions,
+pending/failed/discarded completion, overflow, reset, and teardown evidence.
 
-Observer output is a decision record, not a composition plan:
+Observer output is a decision record, not a composition plan. Completion rows
+are reported with `pending`, terminal counts, and separate provisional versus
+final rejection totals; the final view is rebuilt after the Present boundary
+so a transient Pending rejection cannot survive as a final semantic rejection:
 
 ```text
 (workload, mutation class,
  candidate calls, candidate bytes, candidate CPU time per Present,
  zero-use generations, mergeable union/overlap bytes,
- rejection counts by barrier, disabled-path audit result)
+ provisional/final rejection counts, completion/disposition counts,
+ Render Tape identity, disabled-path audit result)
 ```
 
 The decision is fixed by R-BACK-44.10: `>=0.5ms/Present` opens a separate
@@ -179,6 +184,18 @@ authorizes no code. The source experiment is
 `docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.38.md`.
 The observer must not count time already attributed to bridge residence,
 queueing, or a non-composable mutation class.
+
+Current decision: composition is forbidden. The formal/native classifier truth
+table passes and the observer emits the economic classification, but the prior
+GT2 zero-candidate report is unreliable: synchronous observations used a
+private CPU counter while deferred/replay observations used `replaySeq`, so
+valid mixed-path adjacency could be rejected by `SourceOrder`. The observer now
+assigns a shared typed, generation-qualified ordering identity at ingress;
+mixed sync↔deferred witnesses cover both directions. No matched Render
+Tape/runtime bundle has yet supplied the separate semantic proof, GPU/Wine
+oracle, and repeatable economic result required by R-BACK-44.11; therefore this
+implementation performs no composition or fusion and the economic gate must be
+remeasured.
 
 If the lane opens, the new design must explicitly model the mutation algebra
 and barriers from R-BACK-44.11. In particular, chunk adjacency alone is not an

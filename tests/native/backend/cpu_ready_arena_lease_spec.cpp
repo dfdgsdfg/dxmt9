@@ -982,10 +982,12 @@ void testDirectDrawCaptureConsumesEveryRawAnchor() {
       .draw = DrawParam{.primitiveCount = 1u},
   };
   check(begin->captureNextCommandRecord(0u) &&
-            queue.submitDirectReplayDraw(input),
+            queue.submitDirectReplayDraw(input) ==
+                core::DirectReplayDrawDisposition::Appended,
         "the first direct draw consumes its raw capture anchor");
   check(begin->captureNextCommandRecord(1u) &&
-            queue.submitDirectReplayDraw(input),
+            queue.submitDirectReplayDraw(input) ==
+                core::DirectReplayDrawDisposition::Appended,
         "a merged direct draw can arm and consume the next raw anchor");
 
   CommandQueue::CpuReadyCaptureIdentity identity{};

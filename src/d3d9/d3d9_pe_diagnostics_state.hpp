@@ -9,6 +9,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -179,6 +180,10 @@ struct PeDiagnosticsState {
         childObserver(device),
         scalarSemanticTokens(resolved.scalarSemanticObserver
             ? std::make_unique<dxmt9::d3d9::pe::PeScalarSemanticTokenLedger>()
+            : nullptr),
+        allFamilySemanticTokens(resolved.scalarSemanticObserver
+            ? std::make_unique<
+                  dxmt9::d3d9::pe::PeAllFamilySemanticTokenLedger>()
             : nullptr) {}
 
   static constexpr std::size_t kPeAppendTypeBuckets = 8;
@@ -217,6 +222,11 @@ struct PeDiagnosticsState {
   // the source ordinal that PendingDelta intentionally does not retain.
   std::unique_ptr<dxmt9::d3d9::pe::PeScalarSemanticTokenLedger>
       scalarSemanticTokens{};
+  // Same default-off proof gate, now extended across every PE record family.
+  // The large bounded ledger remains heap-owned and therefore does not change
+  // PeRecorderState, D3D9DeviceImpl, or child wrapper layout on x86/x64.
+  std::unique_ptr<dxmt9::d3d9::pe::PeAllFamilySemanticTokenLedger>
+      allFamilySemanticTokens{};
   VsConstSetterRangePerf vsConstSetterRangePerf_{};
   PeRecorderStats peRecorderStats_{};
   PeDecimatedScopeStats peChunkAppendDecimatedStats_{};
@@ -304,6 +314,10 @@ static_assert(
     sizeof(decltype(PeDiagnosticsState::scalarSemanticTokens)) ==
         sizeof(void*),
     "cold scalar observer owner must remain one nullable pointer");
+static_assert(
+    sizeof(decltype(PeDiagnosticsState::allFamilySemanticTokens)) ==
+        sizeof(void*),
+    "cold all-family observer owner must remain one nullable pointer");
 
 inline std::unique_ptr<PeDiagnosticsState>
 makePeDiagnosticsState(D3D9DeviceImpl *device,
@@ -334,3 +348,36 @@ inline auto peDiagnosticsRead(PeDiagnosticsState *diagnostics,
   }
   return std::forward<Fn>(read)(*diagnostics);
 }
+
+// Value-only timer passed to append emitters. Keeping its implementation with
+// the cold diagnostics state prevents the device declaration shell from
+// reacquiring observer implementation detail.
+struct PeAppendPhaseTimer {
+  PeDiagnosticsState *diagnostics = nullptr;
+
+  std::chrono::steady_clock::time_point begin() const noexcept {
+    return peDiagnosticsRead(diagnostics, [](PeDiagnosticsState &) noexcept {
+      return std::chrono::steady_clock::now();
+    });
+  }
+
+  void recordEncode(
+      std::chrono::steady_clock::time_point t0) const noexcept {
+    if (!diagnostics) return;
+    PeDecimatedScopeTimer::recordSample(
+        diagnostics->peAppendPhaseEncode_,
+        static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - t0).count()));
+  }
+
+  void recordFlush(
+      std::chrono::steady_clock::time_point t0) const noexcept {
+    if (!diagnostics) return;
+    PeDecimatedScopeTimer::recordSample(
+        diagnostics->peAppendPhaseFlush_,
+        static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - t0).count()));
+  }
+};

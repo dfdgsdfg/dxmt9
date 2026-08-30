@@ -1145,7 +1145,7 @@ the later publication reports attribution loss instead.
 It is diagnostic evidence only and cannot change admission, publication,
 dequeue, release, or completion policy.
 
-**R-BACK-2.85** The replay-to-queue direct path must use a
+**R-BACK-2.85** The opt-in replay-to-queue direct path must use a
 `TransactionalChunkSlotAssembler` whose reservation is owned by the final
 `ChunkSlot` / Arena payload destination. `reserve` must prove bounded capacity
 for every final SoA range, byte arena, re-entrant owner, locator, and retain
@@ -1157,7 +1157,8 @@ retains, restores slot/page/control/sequence credit, and leaves no published
 locator. A post-effect or post-publication failure must fail-stop and must not
 invoke rollback or legacy replay.
 
-**R-BACK-2.86** Arena replay must construct admitted commands, draw-run state,
+**R-BACK-2.86** Arena replay and an eligible ordinary synchronous replay must
+construct admitted commands, draw-run state,
 uniform locators, params, payload bytes, shader-layout owners, and resource
 summaries directly into the assembler's final `ChunkSlot` /
 `SourcePayloadBlockChain` regions. A `DrawRunSubmission`, per-command vector,
@@ -1168,15 +1169,24 @@ an encoder-visible record or payload byte. Exact/conservative reservation may
 waste bounded capacity; it must not reallocate and copy an earlier final
 extent.
 
-**R-BACK-2.87** Until promotion, a legacy/direct differential harness must feed
+Ordinary synchronous selection is behind the default-off
+`DXMT9_DIRECT_CHUNK_SLOT_REPLAY` gate and is independently forced off by
+`DXMT_TRACE_RENDER`; the implementation must remain available for explicit
+evidence runs while the Legacy path remains the default.
+
+**R-BACK-2.87** Before any default promotion, a legacy/direct differential harness must feed
 the same validated `RawOwned` input to the compatibility replay and the
 assembler path. It must compare the effective ordered command kinds and fields,
 original ordinals, barriers/readbacks/present boundaries, final payload bytes,
 handle/resource identity and retention, draw-run grouping, failure
-disposition, rollback, and completion identities. It must not compare padding
-or process-local object addresses as semantics. The direct path remains
-default-off and the legacy path remains a supported rollback lane until all
-R-ARCH-7.10 gates pass.
+ disposition, rollback, and completion identities. It must not compare padding
+or process-local object addresses as semantics. The ordinary fresh-`ChunkSlot`
+candidate must preserve source, command-buffer, and render-pass cadence and keep
+Legacy as a typed pre-effect lane for populated destinations,
+unsupported/UP/Inline/Present/capture/trace/oversized work. The candidate remains
+default-off until the differential, GPU, and broader wild equivalence evidence
+is complete. The CPU-ready Tape provider remains a separate default-off policy
+until all R-ARCH-7.10 gates for that provider pass.
 
 **R-BACK-2.88** The concrete queue lifecycle must refine
 `ProducerOwned -> RawOwned -> ReplayBorrowed -> FinalOwned -> Encoding ->

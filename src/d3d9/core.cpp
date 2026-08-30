@@ -177,6 +177,14 @@ Device::~Device() {
     upperDevice_->flush();
   }
   completeUpTo(submittedSequenceId_);
+  // Teardown is a post-drain control boundary.  The queue lifecycle already
+  // emitted completion/reclaim edges for every source that had an identity;
+  // this observation must not terminalize a still-live source.
+  if (upperDevice_) {
+    upperDevice_->observePipelineControl(
+        dxmt9::queue::PipelineControl::Teardown,
+        dxmt9::queue::PipelineDisposition::Teardown);
+  }
   // SeqIdSafety / drain-before-teardown: pending work is drained before the
   // default-pool resources are invalidated.
   DXMT_ASSERT(completedSequenceId_ == submittedSequenceId_);
@@ -285,6 +293,11 @@ HResult Device::resetValidated(const PresentParameters& params) {
   // Drain-before-teardown: Reset waits for queued work to drain before
   // invalidating default-pool resources.
   DXMT_ASSERT(completedSequenceId_ == submittedSequenceId_);
+  if (upperDevice_) {
+    upperDevice_->observePipelineControl(
+        dxmt9::queue::PipelineControl::Reset,
+        dxmt9::queue::PipelineDisposition::Reset);
+  }
   invalidateDefaultPoolResources();
   state_.reset();
   state_.renderStates.set(RS_Z_ENABLE,

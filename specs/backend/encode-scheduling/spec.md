@@ -106,6 +106,28 @@ Binding snapshots and resource summaries are resolved before commit but stored
 once. A conservative reservation may leave unused tail capacity; no used prefix
 may be moved or recopied.
 
+The ordinary synchronous candidate uses the same transaction without selecting
+CPU-ready Tape, but production selection is behind the default-off
+`DXMT9_DIRECT_CHUNK_SLOT_REPLAY` gate and is forced off by `DXMT_TRACE_RENDER`.
+When explicitly enabled, it borrows the current compatibility source by exact
+`(sourceId, storageGeneration, controlIndex, seqId, buildGeneration)`, reserves
+the final `ChunkSlot` vectors, including the planner's complete nested
+`clearRects` count, replays directly, and commits while leaving that slot in
+`Writing`. Direct Clear values transfer their already-owned rect vectors after
+reservation, so the direct append cannot allocate nested rect storage; rect
+overflow is rejected before mutation. Present/Flush therefore closes the same
+source, command buffer, and render-pass boundary as Legacy. Direct reservation
+is admitted only on a fresh writing slot: reserving behind a used vector prefix
+could relocate already-final bytes, so a populated slot is a typed pre-effect
+Legacy fallback. UP draws, ordered controls, Present, capture/trace, oversize,
+and structural rejects likewise retain explicit dispositions. Once replay
+effects begin, any generation, append, validation, resource-closure, or
+evidence failure is fail-stop and cannot retry the raw through Legacy.
+
+The candidate is not a promotion claim: the implementation and explicit native
+failure support remain available, while GPU readback and broader multi-workload
+wild equivalence evidence are still required before changing the default.
+
 The differential harness compares semantic command records and exact payload
 bytes after both paths have completed their own representation-specific build.
 It also compares the effective queue observer stream, retain/release counts,

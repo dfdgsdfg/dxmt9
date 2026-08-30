@@ -776,12 +776,22 @@ class TransactionalChunkSlotAssembler {
     Prepared,
     Committed,
     RolledBack,
+    AbandonedFailStop,
     Failed,
   };
 
   explicit TransactionalChunkSlotAssembler(
       ArenaSourcePayloadBuilder& builder) noexcept
       : builder_(&builder) {
+    reserve();
+  }
+
+  // Ordinary replay transaction: construct directly into the queue-owned
+  // compatibility ChunkSlot while retaining the same typed assembler state
+  // machine and commit-evidence gate used by Arena publication.
+  TransactionalChunkSlotAssembler(
+      ChunkSlot& slot, const SourcePayloadCapacity& capacity) noexcept
+      : directSlot_(&slot), directCapacity_(capacity) {
     reserve();
   }
 
@@ -817,6 +827,7 @@ class TransactionalChunkSlotAssembler {
   bool commitValueOnlyForTest() noexcept;
   bool commit() noexcept;
   void rollback() noexcept;
+  void abandonFailStop() noexcept;
 
   template <typename Build>
     requires std::is_nothrow_invocable_r_v<
@@ -831,7 +842,7 @@ class TransactionalChunkSlotAssembler {
 
   State state() const noexcept { return state_; }
   bool good() const noexcept {
-    return builder_ && builder_->good() &&
+    return ((builder_ && builder_->good()) || directSlot_) &&
            (state_ == State::Reserved || state_ == State::Building);
   }
   bool commitEvidenceMatches(
@@ -861,6 +872,7 @@ class TransactionalChunkSlotAssembler {
   bool tryAppendDirectDraw(
       const DirectReplayDrawInput& input) noexcept;
   bool tryAppendClear(const ClearDesc& value) noexcept;
+  bool tryAppendClear(ClearDesc&& value) noexcept;
   bool tryAppendSurfaceCopy(const SurfaceCopyDesc& value) noexcept;
   bool tryAppendStretchRect(const StretchRectDesc& value) noexcept;
   bool tryAppendReadback(const ReadbackDesc& value) noexcept;
@@ -879,6 +891,16 @@ class TransactionalChunkSlotAssembler {
                              std::size_t runPayloadOffset) noexcept;
 
   ArenaSourcePayloadBuilder* builder_ = nullptr;
+  ChunkSlot* directSlot_ = nullptr;
+  SourcePayloadCapacity directCapacity_{};
+  SourcePayloadCapacity directCheckpoint_{};
+  // ChunkSlot keeps ClearDesc records for compatibility, so the nested rect
+  // vectors are tracked as one exact transaction-wide capacity dimension.
+  std::size_t directClearRectCount_ = 0;
+  DrawUniformFixedHandle directLastUniformFixedHandle_{};
+  DrawUniformStageHandle directLastUniformVertexConstantsHandle_{};
+  DrawUniformStageHandle directLastUniformPixelConstantsHandle_{};
+  DrawUniformHandle directLastUniformHandle_{};
   std::size_t commandCount_ = 0;
   std::size_t stateCount_ = 0;
   std::size_t uniformCount_ = 0;

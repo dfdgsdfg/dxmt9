@@ -19,6 +19,7 @@
 
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
 #include "../../../src/dxmt9/dxmt9_queue.hpp"
+#include "../../../src/dxmt9/dxmt9_scheduling_progress_watchdog.hpp"
 
 namespace {
 
@@ -36,6 +37,7 @@ using dxmt9::core::metalqueue::EncodeSessionSourceList;
 using dxmt9::core::metalqueue::kMaxEncodeSessionSources;
 using dxmt9::core::metalqueue::appendCompletionSourcesToQueues;
 using dxmt9::core::metalqueue::completionSourceForReadySlot;
+using dxmt9::queue::PipelineOwner;
 using dxmt9::core::metalqueue::committedSequenceWaitTarget;
 using dxmt9::core::metalqueue::foldEncodedSessionFragmentCarrier;
 using dxmt9::core::metalqueue::hasExactRedundantFixedCompletionSources;
@@ -336,6 +338,46 @@ void encodeSessionSourceListStoresConsecutiveSources() {
           "session source list clear scrubs stale command-count metadata");
   checkEq(list.entries[0].commandBegin, 0u,
           "session source list clear scrubs stale command-begin metadata");
+}
+
+void carriedSessionRetainsPerSourceEncodeOwners() {
+  EncodeSessionSourceList list;
+  auto serial = QueueCompletionSource{
+      .source = testSource(1u, 1u), .slotIndex = 1u, .seqId = 1u};
+  auto parallel = QueueCompletionSource{
+      .source = testSource(2u, 2u), .slotIndex = 2u, .seqId = 2u};
+  check(list.append(serial), "mixed session accepts serial source");
+  check(list.append(parallel), "mixed session accepts selected source");
+  check(list.setOwner(1u, PipelineOwner::SelectedParallel),
+        "selected owner joins after serial fragment");
+  check(list.setOwner(1u, PipelineOwner::SerialEncode),
+        "serial fragment cannot downgrade a selected owner");
+  check(list.setOwner(2u, PipelineOwner::SelectedParallel),
+        "selected owner is attached to its source");
+  check(list.entries[0].pipelineOwner == PipelineOwner::SelectedParallel &&
+            list.entries[1].pipelineOwner == PipelineOwner::SelectedParallel,
+        "carried session preserves per-source selected owners");
+
+  auto replacement = parallel;
+  replacement.source = testSource(3u, 2u);
+  replacement.receipt = {};
+  check(list.replaceIdentity(parallel, replacement),
+        "receipt/source replacement succeeds for selected source");
+  check(list.entries[1].pipelineOwner == PipelineOwner::SelectedParallel,
+        "identity replacement retains exact source owner");
+
+  EncodeSessionSourceList reverse;
+  auto reverseSource = QueueCompletionSource{
+      .source = testSource(4u, 4u), .slotIndex = 4u, .seqId = 4u};
+  check(reverse.append(reverseSource), "reverse-order source is retained");
+  check(reverse.setOwner(4u, PipelineOwner::SelectedParallel),
+        "parallel owner is accepted first");
+  check(reverse.setOwner(4u, PipelineOwner::SerialEncode),
+        "serial owner joins after parallel without downgrade");
+  check(reverse.setOwner(4u, PipelineOwner::SelectedParallel),
+        "repeated parallel owner update is idempotent");
+  check(reverse.entries[0].pipelineOwner == PipelineOwner::SelectedParallel,
+        "owner join is commutative and idempotent");
 }
 
 void encodeSessionSourceListRejectsInvalidShape() {
@@ -710,11 +752,17 @@ struct QueueFixture {
   std::condition_variable presentCompletedCv{};
   bool stop = false;
   dxmt9::queue::PipelineLifecycleObserver pipelineObserver{};
+  std::optional<dxmt9::SchedulingProgressWatchdog> pipelineWatchdog{};
   QueueLifecycleController controller{};
 
   explicit QueueFixture(
-      CpuReadyTapeConfig tapeConfig = CpuReadyTapeConfig::compatibility(4))
+      CpuReadyTapeConfig tapeConfig = CpuReadyTapeConfig::compatibility(4),
+      bool lifecycleSink = true, bool watchdogEnabled = false)
       : cpuReadyTape(tapeConfig) {
+    if (watchdogEnabled) {
+      pipelineWatchdog.emplace(/*enabled=*/true, /*thresholdMs=*/1000,
+                               /*startSamplerThread=*/false);
+    }
     controller.bindTrackedSubmissionState(QueueLifecycleController::SubmissionBinding{
         .writingSlot = &writingSlot,
         .writeIndex = &writeIndex,
@@ -735,7 +783,12 @@ struct QueueFixture {
         .finishCv = &finishCv,
         .presentCompletedCv = &presentCompletedCv,
         .stop = &stop,
-        .pipelineLifecycleObserver = pipelineObserver.productionSink(),
+        .schedulingProgressWatchdog = pipelineWatchdog
+            ? &*pipelineWatchdog : nullptr,
+        .pipelineLifecycleObserver = lifecycleSink
+            ? pipelineObserver.productionSink()
+            : dxmt9::queue::PipelineLifecycleObserverSink{},
+        .pipelineControlObserver = pipelineObserver.productionControlSink(),
     });
   }
 
@@ -831,6 +884,79 @@ void actualOwnerPipelineObserverUsesQueueAndCv() {
   check(event.identity.sourceOrdinal == event.identity.seqId &&
             event.identity.generation != 0u,
         "actual owner evidence preserves source ordinal, seqId, and generation");
+}
+
+void disabledPipelineProjectionDoesNotResolveOrEmit() {
+  QueueFixture fixture(CpuReadyTapeConfig::compatibility(1),
+                       /*lifecycleSink=*/false, /*watchdogEnabled=*/false);
+  const auto staleRejectsBefore = fixture.cpuReadyTape.stats().staleRejects;
+  {
+    std::unique_lock lock(fixture.mutex);
+    check(fixture.controller.presentAndCommit(lock, 1u, dxmt9::core::SwapDesc{},
+                                              dxmt9::core::Handle{}),
+          "disabled projection fixture publishes one source");
+    ReadySlotSnapshot source{};
+    check(fixture.controller.dequeueReadySlot(lock, source),
+          "disabled projection fixture dequeues one source");
+    check(fixture.controller.completeInlineChunk(lock, source.slotIndex,
+                                                 source.seqId),
+          "disabled projection fixture completes one source inline");
+    check(fixture.controller.runFinishIteration(lock),
+          "disabled projection fixture reclaims one source");
+  }
+  check(fixture.cpuReadyTape.stats().staleRejects == staleRejectsBefore &&
+            fixture.pipelineObserver.state().ownerEventCount == 0u,
+        "disabled projection gates before Tape resolution and emits no owner rows");
+}
+
+void watchdogOnlyPipelineProjectionRetainsAttribution() {
+  QueueFixture fixture(CpuReadyTapeConfig::compatibility(1),
+                       /*lifecycleSink=*/false, /*watchdogEnabled=*/true);
+  {
+    std::unique_lock lock(fixture.mutex);
+    check(fixture.controller.presentAndCommit(lock, 1u, dxmt9::core::SwapDesc{},
+                                              dxmt9::core::Handle{}),
+          "watchdog-only fixture publishes one source");
+    ReadySlotSnapshot source{};
+    check(fixture.controller.dequeueReadySlot(lock, source),
+          "watchdog-only fixture dequeues one source");
+    check(fixture.controller.completeInlineChunk(lock, source.slotIndex,
+                                                 source.seqId),
+          "watchdog-only fixture completes one source inline");
+    check(fixture.controller.runFinishIteration(lock),
+          "watchdog-only fixture reclaims one source");
+  }
+  const auto snapshot = fixture.pipelineWatchdog->slotSnapshotForTest(1u);
+  check(snapshot.tracked && snapshot.identity == 1u &&
+            snapshot.owner == dxmt9::queue::PipelineOwner::Queue &&
+            snapshot.disposition == dxmt9::queue::PipelineDisposition::NoGpuTerminal,
+        "watchdog-only projection preserves production owner attribution");
+  check(fixture.pipelineObserver.state().ownerEventCount == 0u,
+        "watchdog-only projection does not require a lifecycle sink");
+}
+
+void controlBoundaryObservationIsColdAndNonReclaiming() {
+  QueueFixture fixture;
+  fixture.controller.observePipelineControl(
+      dxmt9::queue::PipelineControl::Reset,
+      dxmt9::queue::PipelineDisposition::Reset);
+  const auto& state = fixture.pipelineObserver.state();
+  check(state.controlEventCount == 1u && state.ownerEventCount == 0u,
+        "Reset emits one cold control observation without owner rows");
+  check(state.controlEvents[0].control == dxmt9::queue::PipelineControl::Reset &&
+            state.controlEvents[0].disposition ==
+                dxmt9::queue::PipelineDisposition::Reset &&
+            state.controlEvents[0].epoch != 0u &&
+            state.controlEvents[0].liveSourceCount == 0u &&
+            state.controlEvents[0].drained,
+        "Reset observation records epoch and drained source count");
+  fixture.controller.observePipelineControl(
+      dxmt9::queue::PipelineControl::Teardown,
+      dxmt9::queue::PipelineDisposition::Teardown);
+  check(fixture.pipelineObserver.state().controlEventCount == 2u &&
+            fixture.pipelineObserver.state().controlEvents[1].epoch >
+                fixture.pipelineObserver.state().controlEvents[0].epoch,
+        "Teardown advances the cold control epoch independently");
 }
 
 void arenaSourceArrivalUsesOneGenerationQualifiedOwnerEdge() {
@@ -3754,6 +3880,9 @@ int main() {
   try {
     dceChunkLookaheadProgressPolicyIsFailOpen();
     actualOwnerPipelineObserverUsesQueueAndCv();
+    disabledPipelineProjectionDoesNotResolveOrEmit();
+    watchdogOnlyPipelineProjectionRetainsAttribution();
+    controlBoundaryObservationIsColdAndNonReclaiming();
     arenaSourceArrivalUsesOneGenerationQualifiedOwnerEdge();
     mapWaitTargetNeverExceedsCommittedWaterline();
     undrainedSettlementLedgerFailsClosedAtCapacity();
@@ -3765,6 +3894,7 @@ int main() {
     respectsAlreadyQueuedCompletions();
     presentQueueMayBeAbsent();
     encodeSessionSourceListStoresConsecutiveSources();
+    carriedSessionRetainsPerSourceEncodeOwners();
     encodeSessionSourceListRejectsInvalidShape();
     encodeSessionSourceListAssignIsTransactional();
     diagnosticsMergeKeepsTailIdentityAndAggregatesSourceShape();

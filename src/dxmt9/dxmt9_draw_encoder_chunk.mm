@@ -4663,6 +4663,7 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
   const bool suppressCommandEncoderSideEffects =
       ctx.drawRecorder &&
       ctx.drawRecorder->suppressCommandEncoderSideEffects;
+  bool selectedParallelUsed = false;
   auto encodeSelectedCommands = [&](auto& replayObserver) {
     std::uint32_t parallelConsumedReplayOrdinalEnd = 0u;
     EncodePartitionSerialCursor partitionCursor(
@@ -4698,6 +4699,7 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
                                  source.command);
               if (tryEncodeParallelPass(replayObserver, *pass, commandIndex,
                                         source.command)) {
+                selectedParallelUsed = true;
                 parallelConsumedReplayOrdinalEnd = pass->replayOrdinalEnd;
                 traceEncodeCommand("after-encode", commandIndex,
                                    Kind::DrawRun, source.command);
@@ -4753,6 +4755,7 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
         encodedInParallel = tryEncodeParallelPass(
             replayObserver, *pass, commandIndex, command);
         if (encodedInParallel) {
+          selectedParallelUsed = true;
           parallelConsumedReplayOrdinalEnd = pass->replayOrdinalEnd;
         }
       }
@@ -4787,6 +4790,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
   }
 
   if (options.session && options.sessionSource.has_value()) {
+    options.sessionSource->pipelineOwner = selectedParallelUsed
+        ? ::dxmt9::queue::PipelineOwner::SelectedParallel
+        : ::dxmt9::queue::PipelineOwner::SerialEncode;
     const bool appended =
         appendEncodeChunkSessionSource(*options.session,
                                        *options.sessionSource);
@@ -4843,6 +4849,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
   traceEncodeStage("before-build-submission-record");
   core::metalqueue::QueueSubmissionRecord record;
   record.commandBufferChainLength = perChunkSubCBCount + 1;
+  record.pipelineOwner = selectedParallelUsed
+      ? ::dxmt9::queue::PipelineOwner::SelectedParallel
+      : ::dxmt9::queue::PipelineOwner::SerialEncode;
   record.slotIndex = slotIndex;
   record.seqId = seqId;
   record.context = "queue";

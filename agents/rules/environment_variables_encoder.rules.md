@@ -18,6 +18,7 @@ below remain default off and are not provider compatibility promises.
 
 | Var | Purpose | Default |
 |---|---|---|
+| `DXMT9_DIRECT_CHUNK_SLOT_REPLAY` | Experimental ordinary synchronous replay selector: when set, an eligible whole raw chunk may construct directly into a fresh queue-owned `ChunkSlot` while preserving the Legacy source/command-buffer cadence. Unset/empty and `0` keep the Legacy path; `DXMT_TRACE_RENDER` always disables this selector. This does not enable CPU-ready Tape, and populated destinations, UP/ordered-control/Present/capture/trace/oversized/unsupported work retain typed pre-effect fallbacks. The implementation and explicit native failure-support tests remain present, but promotion still requires the encode-scheduling differential, GPU, and broader wild evidence in `specs/backend/encode-scheduling/gap.md`. | `0` |
 | `DXMT_DEBUG_FORCE_CULL_MODE` | Force a specific cull mode (`none`, `front`, or `back`). For 3DMark05 perf work this is exposed by `run_3dmark05_perf_probe.sh --force-cull-mode` as a correctness-invalid cull/backend shape classifier; use only in paired gputrace probes and gate on Xcode VS buffer-write / VS invocation deltas | unset |
 | `DXMT_DEBUG_FORCE_TRANSIENT_DEDICATED` | Force dedicated transient buffer | `0` |
 | `DXMT_DEBUG_FORCE_VISIBLE` / `DXMT9_DEBUG_FORCE_VISIBLE_DRAW` | Force draw visible | `0` |

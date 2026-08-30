@@ -407,11 +407,15 @@ drain, alias-before-parent destruction, builder reset, warm-retainer advance,
 emitter acceptance, every production CapacityPost outcome, discard, and
 successful device-reset recovery. The evidence must bind generated production
 rows or production-used pure predicates. Its semantic state-write projection
-must conserve category/key/value/ordinal-qualified pending tokens exactly; a
-heterogeneous generic append envelope that lacks those semantic fields may bind
-only acceptance, ordinal, counts, and disposition and must name exact cross-
-projection binding as a gap rather than encode record type or byte size as a
-surrogate semantic token. The bundle must include independent expected
+must conserve category/key/value/ordinal-qualified pending tokens exactly. The
+heterogeneous generic append envelope must issue a producer-qualified source
+ordinal before capacity settlement and, after acceptance, synchronously bind
+exact payload bytes plus every qualified handle identity to the exact record
+ordinal and represented byte range. Its complete producer inventory must
+generate the bounded formal family table. A disabled observer retains no
+ledger and may pay only its nullable-owner branch; record type, byte size,
+count, or a hash without collision proof remains an invalid surrogate semantic
+token. The bundle must include independent expected
 counterexamples for retrying an effect-unknown bridge failure, consuming an
 unattempted capacity-pre record, retracting capture after command acceptance,
 and resetting before drain completion.
@@ -497,3 +501,13 @@ record kind, byte count, or timing cannot substitute. Wild evidence is last and
 must show the named copy-class reduction, bounded peak retention, conserved
 commands/resources/completions, normal visual anchors, zero new GPU errors, and
 no displaced wait or copy class before a default change.
+
+**R-VERIF-7.8** The end-to-end CPU pipeline lifecycle model must retain a
+bounded safety configuration and a separate small weak-fair progress
+configuration. The progress configuration must prove eventual reclaim for
+every admitted source, normal GPU completion and reclaim, explicit Present
+settlement, and selected-parallel child join; it must not rely on an
+unconstrained `[Next]_vars` stutter behavior. These proofs assume scheduler
+fairness, GPU completion, the specified C++ atomic ordering, and driver
+behavior; those assumptions are environment boundaries rather than model
+proofs.

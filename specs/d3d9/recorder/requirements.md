@@ -165,9 +165,17 @@ rows not represented by a bounded projection remain
 pending for retry. If an accepted append cannot settle its prepared state, the
 recorder enters the existing fail-stop/device-lost state; it must not return
 `S_OK` with stale pending state.
-Matrices, COM bindings, constants, and heterogeneous records remain an
-explicit no-token subset and are not claimed by the scalar proof. These
-projections may prove finite transition/
+The same default-off cold owner must issue a producer-qualified source ordinal
+at the common append envelope for matrices, COM bindings, constants, and every
+heterogeneous record family. After builder acceptance it must bind that source
+ordinal to the exact record ordinal, payload-arena-relative committed byte range,
+synchronous exact payload bytes, and every qualified wire
+`(kind,generation,objectId)` named by the record. Pre-capacity and emitter
+rejection preserve the source disposition without manufacturing an accepted
+token; an effect-unknown bridge failure retains accepted tokens until explicit
+Reset/teardown discard; and materialized, rejected, and skipped capture paths
+settle them only after command acceptance. The default path retains no ledger
+and pays only the cached nullable-owner branch. These projections may prove finite transition/
 refinement properties only; they must not claim C++ object layout, allocator
 internals, ABI bytes, or unbounded execution.
 Capacity-pre success must include settlement of the already-full builder across
@@ -520,6 +528,9 @@ draw/UP payload, StateBlock, query/readback/update/copy, Present, and capture
 settlement. A token binds source category/key/value-or-identity, source ordinal,
 wire record ordinal, and represented byte range. Record type, byte size, count,
 or a hash without collision proof must not stand in for semantic identity.
+The all-family producer inventory must be one production C++ table that also
+generates the bounded formal family table; freshness checking and exhaustive
+native enumeration must reject a newly added producer without a semantic row.
 
 **R-CORE-REC-7.5** PE promotion requires bounded x64 and x86 Wine fault
 evidence in addition to native projection tests. At minimum, the fixture must

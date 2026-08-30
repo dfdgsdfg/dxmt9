@@ -135,8 +135,12 @@ bool SchedulingProgressWatchdog::findOrClaimLocked(
   slot.acceptedNs = nowNs;
   slot.progressNs = nowNs;
   slot.lastReportNs = 0;
+  slot.generation = 0;
+  slot.sourceOrdinal = 0;
   slot.flags = 0;
   slot.phase = SchedulingProgressPhase::Admission;
+  slot.owner = queue::PipelineOwner::Queue;
+  slot.disposition = queue::PipelineDisposition::Advance;
   slot.identity = seqId;
   return true;
 }
@@ -152,7 +156,9 @@ void SchedulingProgressWatchdog::note(
 
 void SchedulingProgressWatchdog::noteAt(
     std::uint64_t seqId, SchedulingProgressPhase phase,
-    std::uint32_t flags, std::uint64_t nowNs) noexcept {
+    std::uint32_t flags, std::uint64_t nowNs,
+    queue::PipelineOwner owner, queue::PipelineDisposition disposition,
+    std::uint64_t generation, std::uint64_t sourceOrdinal) noexcept {
   if (seqId == 0) {
     return;
   }
@@ -162,6 +168,14 @@ void SchedulingProgressWatchdog::noteAt(
     slot.flags |= flags;
     slot.phase = phase;
     slot.progressNs = nowNs;
+    slot.owner = owner;
+    slot.disposition = disposition;
+    if (generation != 0) {
+      slot.generation = generation;
+    }
+    if (sourceOrdinal != 0) {
+      slot.sourceOrdinal = sourceOrdinal;
+    }
   }
   unlockSlot(slot);
 }
@@ -238,6 +252,55 @@ void SchedulingProgressWatchdog::noteReleased(
   unlockSlot(slot);
 }
 
+void SchedulingProgressWatchdog::notePipelineEvent(
+    const queue::PipelineLifecycleEvent& event) noexcept {
+  if (!enabled_ || !event.identity.valid()) {
+    return;
+  }
+  SchedulingProgressPhase phase = SchedulingProgressPhase::Admission;
+  switch (event.to) {
+  case queue::PipelineStage::SourceArrival:
+  case queue::PipelineStage::ProducerOwned:
+    phase = SchedulingProgressPhase::Admission;
+    break;
+  case queue::PipelineStage::RawOwned:
+  case queue::PipelineStage::ReplayBorrowed:
+  case queue::PipelineStage::FinalOwned:
+  case queue::PipelineStage::Encoding:
+    phase = SchedulingProgressPhase::EncodeOrOpenSession;
+    break;
+  case queue::PipelineStage::GPUInFlight:
+    phase = SchedulingProgressPhase::Submitted;
+    break;
+  case queue::PipelineStage::Completed:
+    phase = SchedulingProgressPhase::CompletionExpanded;
+    break;
+  case queue::PipelineStage::Reclaimed:
+    phase = event.control == queue::PipelineControl::Present
+        ? SchedulingProgressPhase::PresentRelease
+        : SchedulingProgressPhase::Released;
+    break;
+  }
+  std::uint32_t flags = 0;
+  if (event.hasPresent ||
+      event.payloadKind == queue::PipelinePayloadKind::PresentOnly ||
+      event.control == queue::PipelineControl::Present) {
+    flags |= SchedulingProgressHasPresent;
+  }
+  if (event.to == queue::PipelineStage::GPUInFlight) {
+    flags |= SchedulingProgressAccepted;
+  }
+  if (event.to == queue::PipelineStage::Reclaimed) {
+    flags |= SchedulingProgressReleased;
+    if (event.control == queue::PipelineControl::Present) {
+      flags |= SchedulingProgressPresentSettled;
+    }
+  }
+  noteAt(event.identity.seqId, phase, flags, steadyNowNs(), event.owner,
+         event.disposition, event.identity.generation,
+         event.identity.sourceOrdinal);
+}
+
 SchedulingProgressWatchdog::SlotSnapshotForTest
 SchedulingProgressWatchdog::slotSnapshotForTest(
     std::uint64_t seqId) noexcept {
@@ -250,8 +313,12 @@ SchedulingProgressWatchdog::slotSnapshotForTest(
   result.tracked = slot.identity == seqId;
   result.identity = slot.identity;
   result.progressNs = slot.progressNs;
+  result.generation = slot.generation;
+  result.sourceOrdinal = slot.sourceOrdinal;
   result.flags = slot.flags;
   result.phase = slot.phase;
+  result.owner = slot.owner;
+  result.disposition = slot.disposition;
   unlockSlot(slot);
   return result;
 }

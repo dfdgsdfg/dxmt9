@@ -1616,6 +1616,20 @@ class ProductionLoopBackend final : public dxmt9::render::IRenderBackend {
         state->postCommitCv.notify_all();
       });
     }
+    // Mirror encodeChunk's session contract: a deferred backend result has
+    // already registered its source in the carried session before the queue
+    // refreshes the exact per-source owner attribution.
+    if (options.session && options.sessionSource.has_value() &&
+        !dxmt9::encoders::appendEncodeChunkSessionSource(
+            *options.session, *options.sessionSource)) {
+      return std::nullopt;
+    }
+    if (options.session) {
+      submission.commandBuffer = options.commandBuffer
+          ? std::move(options.commandBuffer)
+          : retainedToken<WMT::CommandBuffer>(
+                "production-session-command-buffer-token");
+    }
     return submission;
   }
 

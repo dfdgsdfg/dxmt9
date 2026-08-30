@@ -6,34 +6,82 @@ repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 tla_dir="$repo_root/specs/verification/tla"
 tlc_workers="${DXMT9_TLC_WORKERS:-auto}"
 
-# The PE recorder TLA module is generated from the same bounded decision table
-# included by the production C++ algebra.  A stale generated module is a
-# model/code binding failure, not a harmless documentation diff.
+# Keep the standalone safety inventory explicit.  TLA helper modules are
+# intentionally absent from this list: they are imported by an owning model
+# and must not acquire a standalone configuration by filename convention.
+normal_models=(
+  AutogenMipGeneration
+  BufferBackingVersioning
+  BufferMutationOffload
+  CommandQueue
+  ConcurrentProgressSignals
+  CpuPipelineLifecycle
+  CpuPipelineOwnership
+  CpuReadyActiveHeadLookahead
+  CpuReadySessionProgress
+  DceChunkLookahead
+  DrawPsoIdentity
+  DrawableToken
+  EncodeSchedulingProgress
+  EncodeSessionCompletion
+  EncoderLifecycle
+  MutationComposition
+  NoOverwriteByteRange
+  ParallelDrawBinding
+  ParallelPolicySelection
+  PeRecorderCommit
+  PeRecorderScalarProjection
+  PeRecorderSemanticProjection
+  PeRecorderSettlement
+  PeRecorderTransition
+  PeStateBlockTransaction
+  PeStateBlockValues
+  PostEncodePayloadRetirement
+  PresentFrameLatency
+  PresentIdAba
+  ProducerMarkReclaim
+  PsoSlotPublication
+  QuerySeqId
+  QueueLifecycleRefinement
+  QueueT2dReserveCopyCommit
+  RenderTapeIdentitySegments
+  RenderTapeParallelJoin
+  ReplayScopedDrain
+  ResourceLifetime
+  SessionCapacityLease
+  StateBlockOrderedReplay
+  WireObjectRegistry
+  WsiPresenterReplacement
+)
+
+expected_normal_count=42
+expected_progress_count=1
+expected_counterexample_count=63
+expected_cfg_count=106
+progress_model=CpuPipelineLifecycle
+progress_cfg_name="$progress_model.progress.cfg"
+
+# Generated TLA vocabulary modules are checked against their production enum
+# sources.  A stale module is a vocabulary drift, not a harmless documentation
+# diff; predicate semantics remain explicitly owned by each model/native case.
 "$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_pe_transition_table.py" --check
 "$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_pe_commit_transition_table.py" --check
 "$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_pe_stateblock_transition_table.py" --check
+"$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_pe_semantic_producer_table.py" --check
 "$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_pe_composed_tables.py" --check
 "$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_pe_composed_tables.py" --verify-generation
 "$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/check_pe_scalar_projection_model.py"
+"$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_mutation_composition_table.py" --check
+"$repo_root/scripts/run_python.sh" "$repo_root/scripts/check/gen_pipeline_lifecycle_table.py" --check
 
 jar_dir=""
-if command -v tlc >/dev/null 2>&1; then
-  tlc_cmd=(tlc)
-else
-  if [[ -n "${TLA2TOOLS_JAR:-}" && -f "${TLA2TOOLS_JAR}" ]]; then
-    jar_path="$TLA2TOOLS_JAR"
-  else
-    jar_dir="$(mktemp -d)"
-    jar_path="$jar_dir/tla2tools.jar"
-    curl -fsSL -o "$jar_path" \
-      https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar
-  fi
-  tlc_cmd=(java -cp "$jar_path" tlc2.TLC)
-fi
-
+inventory_dir=""
 cleanup() {
   if [[ -n "${metadir:-}" && -d "${metadir:-}" ]]; then
     rm -rf "$metadir"
+  fi
+  if [[ -n "${inventory_dir:-}" && -d "$inventory_dir" ]]; then
+    rm -rf "$inventory_dir"
   fi
   if [[ -n "${jar_dir:-}" && -d "$jar_dir" ]]; then
     rm -rf "$jar_dir"
@@ -41,27 +89,23 @@ cleanup() {
 }
 trap cleanup EXIT
 
-for spec in "$tla_dir"/*.tla; do
-  cfg="${spec%.tla}.cfg"
-  # Imported/generated helper modules have no standalone behavior to check.
-  # Their owning model imports them after the freshness check above.
-  [[ -f "$cfg" ]] || continue
-  metadir="$(mktemp -d)"
-  echo "=== $(basename "$spec") ==="
-  "${tlc_cmd[@]}" -workers "$tlc_workers" -metadir "$metadir" -config "$cfg" "$spec"
-  rm -rf "$metadir"
-  unset metadir
-done
-
 # Some models carry a deliberately broken companion configuration. Keep those
 # counterexamples executable: a change that makes a buggy configuration green
 # means the model no longer distinguishes the regression it exists to guard,
-# while a production configuration failure is still handled by the loop above.
+# while a production configuration failure is still handled by the safety loop
+# below.
 #
 # Rows are "<model>|<cfg suffix>|<expected TLC message>". The model name
 # selects `<model>.tla`; the suffix selects `<model><suffix>.cfg`, so one model
 # may carry several independent broken premises.
 counterexample_models=(
+  # Queue T2d is deferred, but its proposed reserve/copy/commit protocol is
+  # modelled before any production lock narrowing.  Publication of a
+  # half-constructed slot, reuse of a frozen reservation after generation
+  # advance, and lost-prefix rollback are independent expected failures.
+  "QueueT2dReserveCopyCommit|.half-appended-slot.counterexample|Invariant NoHalfAppendedSlot is violated"
+  "QueueT2dReserveCopyCommit|.stale-reservation.counterexample|Invariant NoStaleReservationWrite is violated"
+  "QueueT2dReserveCopyCommit|.lost-prefix-rollback.counterexample|Invariant RollbackRestoresPrefix is violated"
   # The historical R15 shadow planner dropped the active render seed after
   # retaining and restoring a Ready head, so it could never prove A|B|A.
   "CpuReadyActiveHeadLookahead|.seedless.counterexample|Invariant ActiveSeedPreserved is violated"
@@ -77,6 +121,10 @@ counterexample_models=(
   "CpuPipelineOwnership|.fabricated-gpu-milestone.counterexample|Invariant NoGpuTerminalIsTerminal is violated"
   "CpuPipelineOwnership|.partial-publication.counterexample|Invariant PublicationIsComplete is violated"
   "CpuPipelineOwnership|.completion-before-join.counterexample|Invariant CompletionAuthorityAfterJoin is violated"
+  "CpuPipelineLifecycle|.missing-wake.counterexample|Invariant WakeOnReclaim is violated"
+  "CpuPipelineLifecycle|.no-reset-generation.counterexample|Invariant ResetGenerationAdvances is violated"
+  "CpuPipelineLifecycle|.present-reclaim.counterexample|Invariant PresentSettledBeforeReclaim is violated"
+  "CpuPipelineLifecycle|.fabricated-gpu-milestone.counterexample|Invariant NoGpuMilestone is violated"
   # Full-shadow upload clobbers the in-flight NOOVERWRITE read range.
   "NoOverwriteByteRange|.counterexample|Invariant NoOverwriteReadPreserved is violated"
   # Pin-ordering premise removed: a reclaim frees a record the producer's
@@ -130,6 +178,18 @@ counterexample_models=(
   "PeRecorderScalarProjection|.record-ordinal.counterexample|Invariant ExactProjection is violated"
   "PeRecorderScalarProjection|.category.counterexample|Invariant ExactProjection is violated"
   "PeRecorderScalarProjection|.key.counterexample|Invariant ExactProjection is violated"
+  # Every heterogeneous producer family binds exact source/record ordinals,
+  # byte range, value or qualified identity, and fail-stop settlement.
+  "PeRecorderSemanticProjection|.missing-source.counterexample|Invariant ExactProjection is violated"
+  "PeRecorderSemanticProjection|.wrong-source.counterexample|Invariant ExactProjection is violated"
+  "PeRecorderSemanticProjection|.aba.counterexample|Invariant ExactProjection is violated"
+  "PeRecorderSemanticProjection|.wrong-producer.counterexample|Invariant ExactProjection is violated"
+  "PeRecorderSemanticProjection|.wrong-record.counterexample|Invariant ExactProjection is violated"
+  "PeRecorderSemanticProjection|.missing-range.counterexample|Invariant ExactProjection is violated"
+  "PeRecorderSemanticProjection|.wrong-value.counterexample|Invariant ExactProjection is violated"
+  "PeRecorderSemanticProjection|.wrong-identity.counterexample|Invariant ExactProjection is violated"
+  "PeRecorderSemanticProjection|.bridge-retry.counterexample|Invariant BridgeEffectUnknownFailStop is violated"
+  "PeRecorderSemanticProjection|.capture-retract.counterexample|Invariant CaptureAfterAccept is violated"
   # Parent destruction before alias retirement breaks the ordering contract.
   "PeRecorderCommit|.parent-before-alias.counterexample|Invariant AliasBeforeParent is violated"
   # Builder reset while pending references remain breaks no-early-drain/reset.
@@ -179,6 +239,148 @@ counterexample_models=(
   "StateBlockOrderedReplay|.non-fifo.counterexample|Invariant CompletedIsAcceptedPrefix is violated"
 )
 
+# Validate the complete on-disk inventory before starting TLC.  This is kept
+# separate from the execution loops so a missing model cannot disappear via a
+# wildcard, and imported/generated helper modules remain excluded.
+if (( ${#normal_models[@]} != expected_normal_count )); then
+  echo "normal safety inventory declaration drifted: expected $expected_normal_count, found ${#normal_models[@]}" >&2
+  exit 1
+fi
+normal_duplicates="$(printf '%s\n' "${normal_models[@]}" | sort | uniq -d)"
+if [[ -n "$normal_duplicates" ]]; then
+  echo "duplicate normal safety model declarations: $normal_duplicates" >&2
+  exit 1
+fi
+
+if (( ${#counterexample_models[@]} != expected_counterexample_count )); then
+  echo "counterexample inventory declaration drifted: expected $expected_counterexample_count, found ${#counterexample_models[@]}" >&2
+  exit 1
+fi
+counterexample_cfg_names=()
+for row in "${counterexample_models[@]}"; do
+  model="${row%%|*}"
+  rest="${row#*|}"
+  cfg_suffix="${rest%%|*}"
+  counterexample_cfg_names+=("$model$cfg_suffix.cfg")
+done
+counterexample_duplicates="$(printf '%s\n' "${counterexample_cfg_names[@]}" | sort | uniq -d)"
+if [[ -n "$counterexample_duplicates" ]]; then
+  echo "duplicate counterexample declarations: $counterexample_duplicates" >&2
+  exit 1
+fi
+
+inventory_dir="$(mktemp -d)"
+expected_cfgs="$inventory_dir/expected.cfgs"
+actual_cfgs="$inventory_dir/actual.cfgs"
+declared_counterexamples="$inventory_dir/declared.counterexamples"
+actual_counterexamples="$inventory_dir/actual.counterexamples"
+{
+  for model in "${normal_models[@]}"; do
+    printf '%s\n' "$model.cfg"
+  done
+  printf '%s\n' "$progress_cfg_name"
+  printf '%s\n' "${counterexample_cfg_names[@]}"
+} | sort >"$expected_cfgs"
+inventory_duplicates="$(sort "$expected_cfgs" | uniq -d)"
+if [[ -n "$inventory_duplicates" ]]; then
+  echo "duplicate TLA configuration inventory entries: $inventory_duplicates" >&2
+  exit 1
+fi
+
+find "$tla_dir" -maxdepth 1 -type f -name '*.cfg' -exec basename {} \; | sort >"$actual_cfgs"
+find "$tla_dir" -maxdepth 1 -type f -name '*.counterexample.cfg' -exec basename {} \; | sort >"$actual_counterexamples"
+printf '%s\n' "${counterexample_cfg_names[@]}" | sort >"$declared_counterexamples"
+
+# The progress pair is mandatory even when both files disappear together;
+# otherwise the safety inventory can pass while the temporal proof silently
+# vanishes.  A second progress configuration is also inventory drift.
+progress_spec="$tla_dir/$progress_model.tla"
+progress_cfg="$tla_dir/$progress_cfg_name"
+if [[ ! -f "$progress_spec" || ! -f "$progress_cfg" ]]; then
+  echo "lifecycle progress configuration pair is missing: $progress_model.tla + $progress_cfg_name" >&2
+  exit 1
+fi
+actual_progress_count="$(find "$tla_dir" -maxdepth 1 -type f -name '*.progress.cfg' | wc -l | tr -d '[:space:]')"
+if (( actual_progress_count != expected_progress_count )); then
+  echo "lifecycle progress configuration count drifted: expected $expected_progress_count, found $actual_progress_count" >&2
+  exit 1
+fi
+
+for model in "${normal_models[@]}"; do
+  if [[ ! -f "$tla_dir/$model.tla" || ! -f "$tla_dir/$model.cfg" ]]; then
+    echo "normal safety configuration pair is missing: $model.tla + $model.cfg" >&2
+    exit 1
+  fi
+done
+
+missing_counterexamples="$(comm -23 "$declared_counterexamples" "$actual_counterexamples")"
+extra_counterexamples="$(comm -13 "$declared_counterexamples" "$actual_counterexamples")"
+if [[ -n "$missing_counterexamples" ]]; then
+  echo "listed counterexample configurations are missing:" >&2
+  printf '%s\n' "$missing_counterexamples" >&2
+  exit 1
+fi
+if [[ -n "$extra_counterexamples" ]]; then
+  echo "unlisted counterexample configurations are present:" >&2
+  printf '%s\n' "$extra_counterexamples" >&2
+  exit 1
+fi
+
+missing_cfgs="$(comm -23 "$expected_cfgs" "$actual_cfgs")"
+extra_cfgs="$(comm -13 "$expected_cfgs" "$actual_cfgs")"
+if [[ -n "$missing_cfgs" ]]; then
+  echo "documented TLA configurations are missing:" >&2
+  printf '%s\n' "$missing_cfgs" >&2
+  exit 1
+fi
+if [[ -n "$extra_cfgs" ]]; then
+  echo "unlisted TLA configurations are present:" >&2
+  printf '%s\n' "$extra_cfgs" >&2
+  exit 1
+fi
+
+actual_safety_count="$(find "$tla_dir" -maxdepth 1 -type f -name '*.cfg' \
+  ! -name '*.counterexample.cfg' ! -name '*.progress.cfg' | wc -l | tr -d '[:space:]')"
+actual_counterexample_count="$(find "$tla_dir" -maxdepth 1 -type f -name '*.counterexample.cfg' | wc -l | tr -d '[:space:]')"
+actual_cfg_count="$(find "$tla_dir" -maxdepth 1 -type f -name '*.cfg' | wc -l | tr -d '[:space:]')"
+if (( actual_safety_count != expected_normal_count ||
+      actual_counterexample_count != expected_counterexample_count ||
+      actual_cfg_count != expected_cfg_count )); then
+  echo "TLA configuration count drifted: expected ${expected_normal_count} safety + ${expected_progress_count} progress + ${expected_counterexample_count} counterexamples = ${expected_cfg_count}, found ${actual_safety_count} + ${actual_progress_count} + ${actual_counterexample_count} = ${actual_cfg_count}" >&2
+  exit 1
+fi
+
+if command -v tlc >/dev/null 2>&1; then
+  tlc_cmd=(tlc)
+else
+  if [[ -n "${TLA2TOOLS_JAR:-}" && -f "${TLA2TOOLS_JAR}" ]]; then
+    jar_path="$TLA2TOOLS_JAR"
+  else
+    jar_dir="$(mktemp -d)"
+    jar_path="$jar_dir/tla2tools.jar"
+    curl -fsSL -o "$jar_path" \
+      https://github.com/tlaplus/tlaplus/releases/latest/download/tla2tools.jar
+  fi
+  tlc_cmd=(java -cp "$jar_path" tlc2.TLC)
+fi
+
+for model in "${normal_models[@]}"; do
+  spec="$tla_dir/$model.tla"
+  cfg="$tla_dir/$model.cfg"
+  metadir="$(mktemp -d)"
+  echo "=== $model.tla ==="
+  "${tlc_cmd[@]}" -workers "$tlc_workers" -metadir "$metadir" -config "$cfg" "$spec"
+  rm -rf "$metadir"
+  unset metadir
+done
+
+metadir="$(mktemp -d)"
+echo "=== $progress_cfg_name ==="
+"${tlc_cmd[@]}" -workers "$tlc_workers" -metadir "$metadir" \
+  -config "$progress_cfg" "$progress_spec"
+rm -rf "$metadir"
+unset metadir
+
 for row in "${counterexample_models[@]}"; do
   model="${row%%|*}"
   rest="${row#*|}"
@@ -186,7 +388,10 @@ for row in "${counterexample_models[@]}"; do
   expected="${rest#*|}"
   counterexample_cfg="$tla_dir/$model$cfg_suffix.cfg"
   counterexample_spec="$tla_dir/$model.tla"
-  [[ -f "$counterexample_cfg" && -f "$counterexample_spec" ]] || continue
+  if [[ ! -f "$counterexample_cfg" || ! -f "$counterexample_spec" ]]; then
+    echo "listed counterexample configuration is missing: $model$cfg_suffix.cfg" >&2
+    exit 1
+  fi
 
   metadir="$(mktemp -d)"
   counterexample_log="$metadir/tlc.log"

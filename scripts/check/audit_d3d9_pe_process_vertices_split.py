@@ -85,8 +85,8 @@ def main() -> int:
         forbid(device_impl + device, fragment, "retired state fragment")
         if (ROOT / "src/d3d9" / fragment).exists():
             fail(f"retired state fragment still exists: {fragment}")
-    if len(device_impl.splitlines()) > 3677:
-        fail("D3D9DeviceImpl declaration shell exceeds 3677-line evidence residual")
+    if len(device_impl.splitlines()) > 3713:
+        fail("D3D9DeviceImpl declaration shell exceeds 3713-line evidence residual")
     require(engine_hpp, "struct Context {", "borrowed context")
     require(engine_hpp, "std::span<IDirect3DVertexBuffer9 *const,", "bounded stream span")
     require(engine_hpp, "std::span<IDirect3DBaseTexture9 *const,", "bounded texture span")

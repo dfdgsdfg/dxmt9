@@ -1,5 +1,6 @@
 #include "d3d9_pe_semantic_tokens.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -260,6 +261,335 @@ void typedEnvelopesRejectSameSizeSurrogates() {
         "pre-effect rejection preserves the exact heterogeneous source token");
 }
 
+void prepareExactIdentities(
+    dxmt9::d3d9::pe::PeAllFamilySemanticTokenLedger& ledger,
+    std::uint64_t sourceOrdinal, std::uint64_t recordOrdinal,
+    dxmt9::d3d9::pe::PeSemanticByteRange range,
+    std::uint32_t count, std::uint64_t objectSeed) {
+  using namespace dxmt9::d3d9::pe;
+  check(ledger.beginIdentityProjection(sourceOrdinal, recordOrdinal, range),
+        "exact identity projection begins");
+  for (std::uint32_t index = 0u; index < count; ++index) {
+    check(ledger.observeIdentity({
+              .sourceOrdinal = sourceOrdinal,
+              .recordOrdinal = recordOrdinal,
+              .recordWireRange = range,
+              .identityOrdinal = index,
+              .kind = index % (D9C_CHUNK_HANDLE_KIND_QUERY + 1u),
+              .generation = index + 1u,
+              .objectId = objectSeed + index,
+          }),
+          "every exact qualified identity is admitted in ordinal order");
+  }
+  check(ledger.finishIdentityProjection(count),
+        "exact identity projection count settles");
+}
+
+void everyProductionFamilyBindsExactToken() {
+  using namespace dxmt9::d3d9::pe;
+  PeAllFamilySemanticTokenLedger ledger{};
+  const std::array exactValue = {
+      std::byte{0x10}, std::byte{0x20}, std::byte{0x30}, std::byte{0x40},
+  };
+  std::uint64_t recordOrdinal = 1u;
+  for (const auto& row : kPeSemanticProducerPolicyTable) {
+    const auto sourceOrdinal = ledger.beginSource(row.recordType);
+    check(sourceOrdinal != 0u, "every production family issues a source ordinal");
+    const PeSemanticByteRange range{
+        .offset = static_cast<std::uint32_t>(recordOrdinal * 8u),
+        .length = static_cast<std::uint32_t>(exactValue.size()),
+    };
+    prepareExactIdentities(ledger, sourceOrdinal, recordOrdinal, range, 2u,
+                           0x10000u + recordOrdinal * 4u);
+    check(ledger.accept({
+              .recordType = row.recordType,
+              .sourceOrdinal = sourceOrdinal,
+              .recordOrdinal = recordOrdinal,
+              .wireRange = range,
+              .exactValue = exactValue,
+              .exactIdentityCount = 2u,
+              .exactIdentitiesValid = true,
+          }) == PeSemanticProjectionAction::Accept,
+          "every production family accepts only its exact committed token");
+    const auto& token = ledger.pending(ledger.pendingCount() - 1u);
+    const auto identities = ledger.pendingExactIdentities(
+        ledger.pendingCount() - 1u);
+    check(token.producer == row.kind && token.category == row.category &&
+              token.semanticKey == row.recordType &&
+              token.recordType == row.recordType &&
+              token.sourceOrdinal == sourceOrdinal &&
+              token.recordOrdinal == recordOrdinal &&
+              token.exactValueBytes == exactValue.size() &&
+              token.exactIdentityCount == 2u &&
+              peSemanticBytesEqual(
+                  ledger.pendingExactValue(ledger.pendingCount() - 1u),
+                  exactValue) && identities.size() == 2u &&
+              identities[0].generation == 1u &&
+              identities[0].objectId == 0x10000u + recordOrdinal * 4u &&
+              identities[1].generation == 2u,
+          "category/key/value-or-identity/source/record/range remain qualified");
+    ++recordOrdinal;
+  }
+  check(ledger.pendingCount() == kPeSemanticProducerPolicyTable.size(),
+        "all-family corpus retains one bounded token per accepted record");
+  check(ledger.settleCapture(PeSemanticCaptureDisposition::Materialized) &&
+            ledger.pendingCount() == 0u &&
+            ledger.settledCount() == kPeSemanticProducerPolicyTable.size(),
+        "capture materialization settles every accepted family exactly once");
+}
+
+void exhaustiveAllFamilyCounterexamples() {
+  using namespace dxmt9::d3d9::pe;
+  const std::array value = {std::byte{0x7a}, std::byte{0x11}};
+  const auto recordType = kPeSemanticProducerPolicyTable.front().recordType;
+  for (unsigned sourceValid = 0u; sourceValid < 2u; ++sourceValid) {
+    for (unsigned recordValid = 0u; recordValid < 2u; ++recordValid) {
+      for (unsigned rangeValid = 0u; rangeValid < 2u; ++rangeValid) {
+        for (unsigned valueValid = 0u; valueValid < 2u; ++valueValid) {
+          for (unsigned identitiesValid = 0u; identitiesValid < 2u;
+               ++identitiesValid) {
+            const auto facts = PeCommittedSemanticProjectionFacts{
+                .recordType = recordType,
+                .sourceOrdinal = sourceValid ? 1u : 0u,
+                .recordOrdinal = recordValid ? 1u : 0u,
+                .wireRange = rangeValid
+                    ? PeSemanticByteRange{.offset = 8u, .length = 2u}
+                    : PeSemanticByteRange{},
+                .exactValue = valueValid ? std::span<const std::byte>(value)
+                                         : std::span<const std::byte>{},
+                .exactIdentityCount = 1u,
+                .exactIdentitiesValid = identitiesValid != 0u,
+            };
+            const bool exact = sourceValid && recordValid && rangeValid &&
+                               valueValid && identitiesValid;
+            check(planCommittedPeSemanticProjection(facts) ==
+                      (exact ? PeSemanticProjectionAction::Accept
+                             : PeSemanticProjectionAction::FailStop),
+                  "every missing exact-token field is an independent counterexample");
+          }
+        }
+      }
+    }
+  }
+  auto unknown = PeCommittedSemanticProjectionFacts{
+      .recordType = 0xffffffffu,
+      .sourceOrdinal = 1u,
+      .recordOrdinal = 1u,
+      .wireRange = {.offset = 4u, .length = 2u},
+      .exactValue = value,
+      .exactIdentityCount = 0u,
+      .exactIdentitiesValid = true,
+  };
+  check(planCommittedPeSemanticProjection(unknown) ==
+            PeSemanticProjectionAction::FailStop,
+        "unknown same-size record families fail closed");
+}
+
+void allFamilyRetryPoisonAndDifferential() {
+  using namespace dxmt9::d3d9::pe;
+  const std::array value = {std::byte{0x01}, std::byte{0x02},
+                            std::byte{0x03}, std::byte{0x04}};
+  PeAllFamilySemanticTokenLedger legacy{};
+  PeAllFamilySemanticTokenLedger direct{};
+  std::uint64_t recordOrdinal = 1u;
+  for (const auto& row : kPeSemanticProducerPolicyTable) {
+    const auto legacySource = legacy.beginSource(row.recordType);
+    const auto directSource = direct.beginSource(row.recordType);
+    check(legacySource == directSource,
+          "legacy/direct source ordinals are differential inputs");
+    const PeCommittedSemanticProjectionFacts facts{
+        .recordType = row.recordType,
+        .sourceOrdinal = legacySource,
+        .recordOrdinal = recordOrdinal,
+        .wireRange = {.offset = static_cast<std::uint32_t>(recordOrdinal * 4u),
+                      .length = static_cast<std::uint32_t>(value.size())},
+        .exactValue = value,
+        .exactIdentityCount =
+            static_cast<std::uint32_t>(recordOrdinal % 3u),
+        .exactIdentitiesValid = true,
+    };
+    prepareExactIdentities(legacy, legacySource, recordOrdinal,
+                           facts.wireRange, facts.exactIdentityCount,
+                           0x20000u + recordOrdinal * 8u);
+    prepareExactIdentities(direct, directSource, recordOrdinal,
+                           facts.wireRange, facts.exactIdentityCount,
+                           0x20000u + recordOrdinal * 8u);
+    check(legacy.accept(facts) == PeSemanticProjectionAction::Accept &&
+              direct.accept(facts) == PeSemanticProjectionAction::Accept,
+          "legacy/direct paths accept the same immutable all-family batch");
+    const auto& a = legacy.pending(legacy.pendingCount() - 1u);
+    const auto& b = direct.pending(direct.pendingCount() - 1u);
+    check(a.producer == b.producer && a.recordType == b.recordType &&
+              a.sourceOrdinal == b.sourceOrdinal &&
+              a.recordOrdinal == b.recordOrdinal &&
+              a.wireRange.offset == b.wireRange.offset &&
+              a.wireRange.length == b.wireRange.length &&
+              a.exactValueBytes == b.exactValueBytes &&
+              a.exactIdentityCount == b.exactIdentityCount &&
+              peSemanticBytesEqual(
+                  legacy.pendingExactValue(legacy.pendingCount() - 1u),
+                  direct.pendingExactValue(direct.pendingCount() - 1u)) &&
+              std::equal(
+                  legacy.pendingExactIdentities(legacy.pendingCount() - 1u)
+                      .begin(),
+                  legacy.pendingExactIdentities(legacy.pendingCount() - 1u)
+                      .end(),
+                  direct.pendingExactIdentities(direct.pendingCount() - 1u)
+                      .begin()),
+          "legacy/direct semantic tokens are byte-range and identity exact");
+    ++recordOrdinal;
+  }
+  const auto retry = legacy.beginSource(
+      kPeSemanticProducerPolicyTable.front().recordType);
+  legacy.preserveForRetry(retry);
+  check(legacy.preservedForRetryCount() == 1u &&
+            legacy.beginSource(
+                kPeSemanticProducerPolicyTable.front().recordType) == retry,
+        "pre-effect failure preserves and reissues the exact source ordinal");
+  legacy.bridgeEffectUnknown();
+  check(legacy.effectUnknown() &&
+            !legacy.settleCapture(PeSemanticCaptureDisposition::Rejected) &&
+            legacy.pendingCount() == kPeSemanticProducerPolicyTable.size(),
+        "effect-unknown bridge failure poisons without retracting tokens");
+  legacy.discard();
+  check(!legacy.effectUnknown() && legacy.pendingCount() == 0u,
+        "explicit reset/teardown discard releases poisoned token ownership");
+  check(direct.settleCapture(PeSemanticCaptureDisposition::Skipped) &&
+            direct.pendingCount() == 0u,
+        "capture-skipped settlement accepts the command and clears tokens");
+}
+
+void allFamilyLatestIssuanceBinding() {
+  using namespace dxmt9::d3d9::pe;
+  const auto recordTypeA = kPeSemanticProducerPolicyTable[0].recordType;
+  const auto recordTypeB = kPeSemanticProducerPolicyTable[1].recordType;
+  const std::array value = {std::byte{0x41}, std::byte{0x42}};
+
+  // A/B/A is the ABA case: the first A remains structurally valid but is no
+  // longer the most recent issuance once the second A has been opened.
+  PeAllFamilySemanticTokenLedger aba{};
+  const auto sourceA1 = aba.beginSource(recordTypeA);
+  const auto sourceB = aba.beginSource(recordTypeB);
+  const auto sourceA2 = aba.beginSource(recordTypeA);
+  check(sourceA1 != 0u && sourceB != 0u && sourceA2 != 0u &&
+            sourceA1 != sourceB && sourceB != sourceA2,
+        "A/B/A issues distinct source ordinals");
+  const PeSemanticByteRange rangeA1{.offset = 8u, .length = 2u};
+  prepareExactIdentities(aba, sourceA1, 1u, rangeA1, 0u, 0u);
+  check(aba.accept({
+              .recordType = recordTypeA,
+              .sourceOrdinal = sourceA1,
+              .recordOrdinal = 1u,
+              .wireRange = rangeA1,
+              .exactValue = value,
+              .exactIdentityCount = 0u,
+              .exactIdentitiesValid = true,
+          }) == PeSemanticProjectionAction::FailStop &&
+            aba.pendingCount() == 0u,
+        "A/B/A rejects the older A despite structurally valid facts");
+
+  // A valid source ordinal paired with the wrong producer family must also
+  // fail.  This catches a fact that was assembled from a different emitter.
+  PeAllFamilySemanticTokenLedger wrongProducer{};
+  const auto producerSource = wrongProducer.beginSource(recordTypeA);
+  const PeSemanticByteRange producerRange{.offset = 16u, .length = 2u};
+  prepareExactIdentities(wrongProducer, producerSource, 1u, producerRange, 0u,
+                         0u);
+  check(wrongProducer.accept({
+              .recordType = recordTypeB,
+              .sourceOrdinal = producerSource,
+              .recordOrdinal = 1u,
+              .wireRange = producerRange,
+              .exactValue = value,
+              .exactIdentityCount = 0u,
+              .exactIdentitiesValid = true,
+          }) == PeSemanticProjectionAction::FailStop,
+        "wrong producer family cannot consume the latest issuance");
+
+  // The source value alone is not enough: a fabricated or stale source must
+  // match the exact latest beginSource result, not merely be nonzero.
+  PeAllFamilySemanticTokenLedger wrongSource{};
+  const auto issuedSource = wrongSource.beginSource(recordTypeA);
+  const auto fabricatedSource = issuedSource + 1u;
+  const PeSemanticByteRange sourceRange{.offset = 24u, .length = 2u};
+  prepareExactIdentities(wrongSource, fabricatedSource, 1u, sourceRange, 0u,
+                         0u);
+  check(wrongSource.accept({
+              .recordType = recordTypeA,
+              .sourceOrdinal = fabricatedSource,
+              .recordOrdinal = 1u,
+              .wireRange = sourceRange,
+              .exactValue = value,
+              .exactIdentityCount = 0u,
+              .exactIdentitiesValid = true,
+          }) == PeSemanticProjectionAction::FailStop,
+        "wrong source ordinal cannot consume the latest issuance");
+
+  // A failed append still preserves its exact issuance for retry, even when
+  // another family is opened in between.  The retry rebinds the latest
+  // producer/type pair before accepting its facts.
+  PeAllFamilySemanticTokenLedger retry{};
+  const auto retrySource = retry.beginSource(recordTypeA);
+  retry.preserveForRetry(retrySource);
+  (void)retry.beginSource(recordTypeB);
+  check(retry.beginSource(recordTypeA) == retrySource,
+        "retry preserves the exact source across another family issuance");
+  const PeSemanticByteRange retryRange{.offset = 32u, .length = 2u};
+  prepareExactIdentities(retry, retrySource, 1u, retryRange, 0u, 0u);
+  check(retry.accept({
+              .recordType = recordTypeA,
+              .sourceOrdinal = retrySource,
+              .recordOrdinal = 1u,
+              .wireRange = retryRange,
+              .exactValue = value,
+              .exactIdentityCount = 0u,
+              .exactIdentitiesValid = true,
+          }) == PeSemanticProjectionAction::Accept,
+        "exact latest retry issuance remains accepted");
+  prepareExactIdentities(retry, retrySource, 2u, retryRange, 0u, 0u);
+  check(retry.accept({
+              .recordType = recordTypeA,
+              .sourceOrdinal = retrySource,
+              .recordOrdinal = 2u,
+              .wireRange = retryRange,
+              .exactValue = value,
+              .exactIdentityCount = 0u,
+              .exactIdentitiesValid = true,
+          }) == PeSemanticProjectionAction::FailStop &&
+            retry.pendingCount() == 1u,
+        "a consumed issuance cannot be accepted a second time");
+}
+
+void exactQualifiedIdentityTokens() {
+  using namespace dxmt9::d3d9::pe;
+  PeAllFamilySemanticTokenLedger ledger{};
+  const PeSemanticByteRange range{.offset = 24u, .length = 8u};
+  check(ledger.beginIdentityProjection(3u, 7u, range),
+        "identity projection binds source/record/range first");
+  check(ledger.observeIdentity({
+            .sourceOrdinal = 3u,
+            .recordOrdinal = 7u,
+            .recordWireRange = range,
+            .identityOrdinal = 0u,
+            .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+            .generation = 9u,
+            .objectId = 0x12345678u,
+        }) && ledger.finishIdentityProjection(1u),
+        "kind/generation/object identity is consumed exactly");
+  check(ledger.beginIdentityProjection(3u, 8u, range),
+        "second identity projection begins independently");
+  check(!ledger.observeIdentity({
+            .sourceOrdinal = 3u,
+            .recordOrdinal = 8u,
+            .recordWireRange = range,
+            .identityOrdinal = 0u,
+            .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+            .generation = 0u,
+            .objectId = 0x12345678u,
+        }) && !ledger.finishIdentityProjection(1u),
+        "stale zero-generation identity is an executable counterexample");
+}
+
 }  // namespace
 
 int main() {
@@ -269,6 +599,11 @@ int main() {
     everyDistinctScalarSlotIsRepresentable();
     exhaustiveHeterogeneousSettlementPredicate();
     typedEnvelopesRejectSameSizeSurrogates();
+    everyProductionFamilyBindsExactToken();
+    exhaustiveAllFamilyCounterexamples();
+    allFamilyRetryPoisonAndDifferential();
+    allFamilyLatestIssuanceBinding();
+    exactQualifiedIdentityTokens();
     std::cout << "pe semantic projection spec: PASS\n";
   } catch (const Failure& failure) {
     std::cerr << "pe semantic projection spec: FAIL: " << failure.what()

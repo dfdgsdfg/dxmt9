@@ -19,6 +19,7 @@ NSObject release symbols link against winemetal.
 | `allocation_counter_spec.cpp` | Real perf-counter emission for Metal buffer allocations (wrapped via `assert_perf_counters`) (`R-BENCH-2.5`) |
 | `metalcapture_spec.cpp` | MetalCapture marker placement + counter |
 | `dynamic_rename_ring_spec.cpp` | DYNAMIC DISCARD + MANAGED writable-upload backing versioning, sequence reuse, and concrete draw snapshot (`R-BACK-5.8`, `R-BACK-5.11`) |
+| `mutation_composition_observer_spec.cpp` | Opt-in bounded mutation identity/range/disposition/completion observer and native cases for the production classifier (`R-BACK-44.9`–`44.11`) |
 | `heap_pooling_spec.cpp` | MTLHeap small-resource pooling classify + lifetime (`R-BACK-5.9, 5.10, 14.*`) |
 | `argbuf_hybrid_spec.cpp` | Stage 2 argbuf capability gate + selector + variant key + descriptor (`R-BACK-12.22-12.26`) |
 | `argbuf_hybrid_msl_spec.cpp` | FFP/DXBC→MSL emitter routing through ArgbufLayout slot 30 |

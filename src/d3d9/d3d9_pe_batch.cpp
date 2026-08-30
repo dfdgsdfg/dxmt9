@@ -2,6 +2,19 @@
 
 namespace dxmt9::d3d9::pe {
 
+bool preparePeExactSingleton(CommandChunkBuilder& builder,
+                             PeSemanticProducerKind producer,
+                             std::uint32_t handleCount,
+                             std::uint32_t payloadBytes) noexcept {
+  const auto policy = peExactProductionPolicy(producer);
+  if (policy.disposition != PeExactProductionDisposition::ExactSingleton ||
+      policy.fallbackReason != PeExactFallbackReason::None) {
+    return false;
+  }
+  return builder.prepareExactFinalLayout(
+      planExactCommandChunkLayout(1u, handleCount, payloadBytes));
+}
+
 PePresentBatchPlan planPePresentBatch(const PePresentBatch& batch) noexcept {
   if (!batch.valid()) {
     return {};
@@ -10,6 +23,41 @@ PePresentBatchPlan planPePresentBatch(const PePresentBatch& batch) noexcept {
       .layout = planExactCommandChunkLayout(
           1u, 1u, sizeof(D9CCommandChunkWirePresent)),
   };
+}
+
+PePresentBatchPlan planPeReadbackBatch(const PeReadbackBatch& batch) noexcept {
+  if (!batch.valid()) {
+    return {};
+  }
+  return PePresentBatchPlan{
+      .layout = planExactCommandChunkLayout(
+          1u, 2u, sizeof(D9CCommandChunkWireReadback)),
+  };
+}
+
+bool appendPeExactPresentSingleton(CommandChunkBuilder& builder,
+                                   const PePresentBatch& batch) noexcept {
+  const bool exactPrepared = preparePeExactSingleton(
+      builder, PeSemanticProducerKind::Present, 1u,
+      sizeof(D9CCommandChunkWirePresent));
+  const bool accepted = appendPresent(builder, batch.command, batch.source);
+  if (!accepted && exactPrepared) {
+    (void)builder.returnToLegacyFinalLayout();
+  }
+  return accepted;
+}
+
+bool appendPeExactReadbackSingleton(CommandChunkBuilder& builder,
+                                    const PeReadbackBatch& batch) noexcept {
+  const bool exactPrepared = preparePeExactSingleton(
+      builder, PeSemanticProducerKind::Readback, 2u,
+      sizeof(D9CCommandChunkWireReadback));
+  const bool accepted = appendReadback(
+      builder, batch.source, batch.destination);
+  if (!accepted && exactPrepared) {
+    (void)builder.returnToLegacyFinalLayout();
+  }
+  return accepted;
 }
 
 PePresentBatchTransaction::PePresentBatchTransaction(

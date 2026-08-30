@@ -120,6 +120,7 @@ using dxmt9::d3d9::ImportedChunkView;
 using dxmt9::d3d9::CommandChunkEnvelope;
 using dxmt9::d3d9::pe::CommandChunkBuilder;
 using dxmt9::d3d9::pe::CommandChunkBuilderCapacities;
+using dxmt9::d3d9::pe::CommandChunkDiscardTarget;
 using dxmt9::d3d9::pe::CommittedPendingChunkLease;
 using dxmt9::d3d9::pe::ExactCommandChunkLayoutPlan;
 using dxmt9::d3d9::pe::PeWireObjectRef;
@@ -1564,6 +1565,62 @@ struct ImmutableExactBatch {
   std::array<D9CRect, 1> clearRects{};
 };
 
+struct CommittedSemanticSnapshot {
+  D9CCommandChunkWireRecordHeader record{};
+  std::uint64_t recordOrdinal = 0u;
+  std::array<std::byte, 1024u> payload{};
+  std::uint32_t payloadSize = 0u;
+  std::array<D9CCommandChunkWireHandleEntry, 64u> identities{};
+  std::uint32_t identityCount = 0u;
+};
+
+bool snapshotLastCommittedSemanticRecord(
+    const CommandChunkBuilder& builder,
+    CommittedSemanticSnapshot& out) noexcept {
+  out = {};
+  if (!builder.visitLastCommittedRecord(
+          [&](const dxmt9::d3d9::pe::PeCommittedRecordSemanticView& view)
+              noexcept {
+            if (!view.exactHandleIdentitiesValid ||
+                view.exactPayload.size() > out.payload.size()) {
+              return false;
+            }
+            out.record = view.record;
+            out.recordOrdinal = view.recordOrdinal;
+            out.payloadSize = static_cast<std::uint32_t>(
+                view.exactPayload.size());
+            std::copy(view.exactPayload.begin(), view.exactPayload.end(),
+                      out.payload.begin());
+            return true;
+          })) {
+    return false;
+  }
+  if (out.record.handleCount > out.identities.size()) return false;
+  out.identityCount = out.record.handleCount;
+  return builder.visitLastCommittedRecordHandles(
+      [&](std::uint32_t index,
+          const D9CCommandChunkWireHandleEntry& identity) noexcept {
+        out.identities[index] = identity;
+        return true;
+      });
+}
+
+bool exactSemanticSnapshotEqual(const CommittedSemanticSnapshot& a,
+                                const CommittedSemanticSnapshot& b) noexcept {
+  return a.recordOrdinal != 0u && b.recordOrdinal != 0u &&
+         std::memcmp(&a.record, &b.record, sizeof(a.record)) == 0 &&
+         a.payloadSize == b.payloadSize &&
+         std::equal(a.payload.begin(), a.payload.begin() + a.payloadSize,
+                    b.payload.begin()) &&
+         a.identityCount == b.identityCount &&
+         std::equal(a.identities.begin(),
+                    a.identities.begin() + a.identityCount,
+                    b.identities.begin(),
+                    [](const auto& left, const auto& right) {
+                      return std::memcmp(&left, &right, sizeof(left)) == 0;
+                    });
+}
+
 bool emitExactBatchFirst(CommandChunkBuilder& builder,
                          const ImmutableExactBatch& batch) noexcept {
   // Same handle twice requires record-local dedup. Exact mode resolves it by
@@ -1615,11 +1672,18 @@ void testExactFinalLayoutSink() {
   std::uint32_t legacyRecordCount = 0u;
   std::uint32_t legacyHandleCount = 0u;
   std::uint32_t legacyPayloadBytes = 0u;
+  CommittedSemanticSnapshot legacyFirstSemantic{};
+  CommittedSemanticSnapshot legacyLastSemantic{};
   {
     CommandChunkBuilder legacy;
     check(emitExactBatchFirst(legacy, batch) &&
-              emitExactBatchRest(legacy, batch),
-          "immutable exact batch builds through the legacy sink");
+              snapshotLastCommittedSemanticRecord(
+                  legacy, legacyFirstSemantic),
+          "legacy sink exposes exact UpdateTexture payload and identities");
+    check(emitExactBatchRest(legacy, batch) &&
+              snapshotLastCommittedSemanticRecord(
+                  legacy, legacyLastSemantic),
+          "immutable exact batch builds through the legacy semantic sink");
     legacyRecordCount = static_cast<std::uint32_t>(legacy.recordCount());
     legacyHandleCount = static_cast<std::uint32_t>(legacy.handleCount());
     legacyPayloadBytes = static_cast<std::uint32_t>(legacy.payloadBytes());
@@ -1678,11 +1742,21 @@ void testExactFinalLayoutSink() {
 
   check(emitExactBatchFirst(exact, batch),
         "exact sink accepts the first immutable record");
+  CommittedSemanticSnapshot exactFirstSemantic{};
+  check(snapshotLastCommittedSemanticRecord(exact, exactFirstSemantic) &&
+            exactSemanticSnapshotEqual(legacyFirstSemantic,
+                                       exactFirstSemantic),
+        "legacy/exact UpdateTexture semantic payload and identities match");
   check(!exact.seal().valid() && exact.recordCount() == 1u &&
             exact.handleCount() == 1u,
         "underfilled exact seal preserves bytes and counts for retry");
   check(emitExactBatchRest(exact, batch),
         "exact sink resumes after an underfilled seal retry");
+  CommittedSemanticSnapshot exactLastSemantic{};
+  check(snapshotLastCommittedSemanticRecord(exact, exactLastSemantic) &&
+            exactSemanticSnapshotEqual(legacyLastSemantic,
+                                       exactLastSemantic),
+        "legacy/exact Clear semantic payload and byte range match");
   const auto first = exact.seal();
   check(first.valid() && first.recordCount == legacyRecordCount &&
             first.handleCount == legacyHandleCount &&
@@ -1819,6 +1893,12 @@ void testPresentBatchTransaction() {
   transaction.resetAndReleaseRetained();
   check(surface.refs == 1u,
         "Present batch discard releases the physical pin exactly once");
+  check(transaction.emit() && transaction.seal().valid() &&
+            surface.refs == 2u,
+        "standalone exact discard preserves its immutable retry layout");
+  transaction.resetAndReleaseRetained();
+  check(surface.refs == 1u,
+        "standalone exact retry releases its physical pin exactly once");
 
   const auto invalid = dxmt9::d3d9::pe::PePresentBatch{
       .command = batch.command,
@@ -1826,6 +1906,434 @@ void testPresentBatchTransaction() {
   };
   check(!dxmt9::d3d9::pe::planPePresentBatch(invalid).valid(),
         "invalid Present batch fails before any retain or publication");
+
+  std::size_t exactFamilyCount = 0u;
+  for (std::size_t index = 0u;
+       index < dxmt9::d3d9::pe::kPeExactProductionPolicyTable.size();
+       ++index) {
+    const auto& exactPolicy =
+        dxmt9::d3d9::pe::kPeExactProductionPolicyTable[index];
+    const auto& semanticPolicy =
+        dxmt9::d3d9::pe::kPeSemanticProducerPolicyTable[index];
+    check(exactPolicy.producer == semanticPolicy.kind,
+          "exact production disposition covers the semantic family row");
+    if (exactPolicy.disposition ==
+        dxmt9::d3d9::pe::PeExactProductionDisposition::ExactSingleton) {
+      ++exactFamilyCount;
+      check(exactPolicy.fallbackReason ==
+                dxmt9::d3d9::pe::PeExactFallbackReason::None,
+            "selected exact family has no fallback reason");
+    } else {
+      check(exactPolicy.fallbackReason !=
+                dxmt9::d3d9::pe::PeExactFallbackReason::None,
+            "residual exact family has an explicit typed fallback");
+    }
+  }
+  check(exactFamilyCount == 2u,
+        "only Present and synchronous Readback are production-selected");
+
+  CommandChunkBuilder productionPresent;
+  check(dxmt9::d3d9::pe::appendPeExactPresentSingleton(
+            productionPresent, batch) &&
+            productionPresent.exactFinalLayout(),
+        "production Present selects the exact final allocation in place");
+  const auto productionPresentBytes = productionPresent.seal();
+  check(productionPresentBytes.valid() &&
+            productionPresentBytes.blob.size() == legacyBytes.size() &&
+            std::equal(productionPresentBytes.blob.begin(),
+                       productionPresentBytes.blob.end(),
+                       legacyBytes.begin()),
+        "production Present exact bytes match the legacy oracle");
+  productionPresent.reset();
+  check(productionPresent.returnToLegacyFinalLayout() &&
+            !productionPresent.exactFinalLayout(),
+        "successful Present reset restores the persistent legacy fallback");
+  productionPresent.resetAndReleaseRetained();
+
+  D9CSurface destination;
+  const dxmt9::d3d9::pe::PeReadbackBatch readback{
+      .source = batch.source,
+      .destination = dxmt9::d3d9::pe::qualifyLocalRef<
+          dxmt9::d3d9::pe::SurfaceRef>(wireRef(
+          &destination, D9C_CHUNK_HANDLE_KIND_SURFACE, 0xb200u)),
+  };
+  std::vector<std::byte> legacyReadbackBytes;
+  {
+    CommandChunkBuilder legacyReadback;
+    check(dxmt9::d3d9::pe::appendReadback(
+              legacyReadback, readback.source, readback.destination),
+          "Readback legacy oracle emits");
+    const auto sealed = legacyReadback.seal();
+    check(sealed.valid(), "Readback legacy oracle seals");
+    legacyReadbackBytes.assign(sealed.blob.begin(), sealed.blob.end());
+    legacyReadback.resetAndReleaseRetained();
+  }
+  CommandChunkBuilder productionReadback;
+  check(dxmt9::d3d9::pe::planPeReadbackBatch(readback).valid() &&
+            dxmt9::d3d9::pe::appendPeExactReadbackSingleton(
+                productionReadback, readback) &&
+            productionReadback.exactFinalLayout(),
+        "production Readback selects its exact immutable transaction");
+  const auto productionReadbackBytes = productionReadback.seal();
+  check(productionReadbackBytes.valid() &&
+            productionReadbackBytes.blob.size() ==
+                legacyReadbackBytes.size() &&
+            std::equal(productionReadbackBytes.blob.begin(),
+                       productionReadbackBytes.blob.end(),
+                       legacyReadbackBytes.begin()),
+        "production Readback exact bytes match the legacy oracle");
+  productionReadback.reset();
+  check(productionReadback.returnToLegacyFinalLayout(),
+        "successful Readback reset restores the legacy fallback");
+  productionReadback.resetAndReleaseRetained();
+  check(surface.refs == 1u && destination.refs == 1u,
+        "production singleton transactions release warm pins exactly once");
+}
+
+void testExactProductionPreservesLegacyWarmStorage() {
+  D9CTexture warmSource;
+  D9CTexture warmDestination;
+  D9CSurface presentSource;
+  const auto warmSourceRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::TextureRef>(wireRef(
+      &warmSource, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xb700u));
+  const auto warmDestinationRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::TextureRef>(wireRef(
+      &warmDestination, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xb800u));
+  const auto presentSourceRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::SurfaceRef>(wireRef(
+      &presentSource, D9C_CHUNK_HANDLE_KIND_SURFACE, 0xb900u));
+
+  const CommandChunkBuilderCapacities capacities{
+      .records = 4u, .handles = 8u, .payloadBytes = 1024u,
+      .sealedBytes = 2048u};
+  CommandChunkBuilder builder(capacities);
+  check(dxmt9::d3d9::pe::appendUpdateTexture(
+            builder, warmSourceRef, warmDestinationRef) &&
+            builder.seal().valid(),
+        "warm-storage fixture emits a legacy chunk");
+  builder.reset();
+  check(builder.retainedObjectCount() == 2u && warmSource.refs == 2u &&
+            warmDestination.refs == 2u,
+        "legacy reset leaves both wrapper pins warm");
+
+  const auto recordsCapacity = builder.recordsCapacityForTest();
+  const auto handlesCapacity = builder.handlesCapacityForTest();
+  const auto handleObjectsCapacity = builder.handleObjectsCapacityForTest();
+  const auto payloadCapacity = builder.payloadCapacityForTest();
+  const auto sealedCapacity = builder.sealedBlobCapacityForTest();
+  const dxmt9::d3d9::pe::PePresentBatch presentBatch{
+      .command = D9CCommandChunkWirePresent{.hwnd = 0xba00u},
+      .source = presentSourceRef};
+  check(appendPeExactPresentSingleton(builder, presentBatch) &&
+            builder.exactFinalLayout() && builder.retainedObjectCount() == 3u &&
+            warmSource.refs == 2u && warmDestination.refs == 2u &&
+            presentSource.refs == 2u,
+        "exact preparation preserves warm ownership while adding Present");
+  check(builder.recordsCapacityForTest() == recordsCapacity &&
+            builder.handlesCapacityForTest() == handlesCapacity &&
+            builder.handleObjectsCapacityForTest() == handleObjectsCapacity &&
+            builder.payloadCapacityForTest() == payloadCapacity &&
+            builder.sealedBlobCapacityForTest() >= sealedCapacity,
+        "exact preparation preserves every legacy warm vector capacity");
+  check(builder.seal().valid(), "exact warm-storage fixture seals");
+  builder.reset();
+  check(builder.returnToLegacyFinalLayout() &&
+            !builder.exactFinalLayout() &&
+            builder.recordsCapacityForTest() == recordsCapacity &&
+            builder.handlesCapacityForTest() == handlesCapacity &&
+            builder.handleObjectsCapacityForTest() == handleObjectsCapacity &&
+            builder.payloadCapacityForTest() == payloadCapacity &&
+            warmSource.refs == 2u && warmDestination.refs == 2u &&
+            presentSource.refs == 2u,
+        "successful exact boundary returns to legacy with warm storage/ownership");
+  check(builder.resetAndReleaseRetained(
+            CommandChunkDiscardTarget::LegacyProduction) &&
+            warmSource.refs == 1u && warmDestination.refs == 1u &&
+            presentSource.refs == 1u,
+        "legacy-target discard releases all warm and exact owners");
+}
+
+void testDeviceLostExactDiscardReturnsToLegacy() {
+  D9CTexture warmSource;
+  D9CTexture warmDestination;
+  D9CSurface presentSource;
+  const auto warmSourceRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::TextureRef>(wireRef(
+      &warmSource, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xb300u));
+  const auto warmDestinationRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::TextureRef>(wireRef(
+      &warmDestination, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xb400u));
+  const auto presentSourceRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::SurfaceRef>(wireRef(
+      &presentSource, D9C_CHUNK_HANDLE_KIND_SURFACE, 0xb500u));
+
+  CommandChunkBuilder builder;
+  check(dxmt9::d3d9::pe::appendUpdateTexture(
+            builder, warmSourceRef, warmDestinationRef) &&
+            builder.seal().valid(),
+        "device-lost fixture commits the prior legacy chunk");
+  builder.reset();
+  check(!builder.exactFinalLayout() && builder.retainedObjectCount() == 2u &&
+            warmSource.refs == 2u && warmDestination.refs == 2u,
+        "prior legacy chunk leaves its bounded retainer pins warm");
+
+  const dxmt9::d3d9::pe::PePresentBatch presentBatch{
+      .command = D9CCommandChunkWirePresent{
+          .hwnd = 0xb600u,
+          .flags = 0u,
+          .hasSrc = 0u,
+          .hasDst = 0u,
+          .sourceHandleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+      },
+      .source = presentSourceRef,
+  };
+  check(dxmt9::d3d9::pe::appendPeExactPresentSingleton(
+            builder, presentBatch) &&
+            builder.exactFinalLayout(),
+        "device-lost fixture enters the production exact singleton");
+  const auto failedBridgeChunk = builder.seal();
+  check(failedBridgeChunk.valid() && failedBridgeChunk.recordCount == 1u &&
+            failedBridgeChunk.handleCount == 1u && presentSource.refs == 2u,
+        "entered bridge failure leaves one sealed exact Present pending");
+  const std::vector<std::byte> failedBridgeBytes(
+      failedBridgeChunk.blob.begin(), failedBridgeChunk.blob.end());
+
+  check(builder.resetAndReleaseRetained(
+            CommandChunkDiscardTarget::LegacyProduction) &&
+            !builder.exactFinalLayout() && !builder.sealed() &&
+            builder.recordCount() == 0u && builder.handleCount() == 0u &&
+            builder.payloadBytes() == 0u &&
+            builder.retainedObjectCount() == 0u &&
+            warmSource.refs == 1u && warmDestination.refs == 1u &&
+            presentSource.refs == 1u,
+        "typed device discard releases warm/exact pins and restores legacy");
+  const auto emptyAfterDiscard = builder.seal();
+  check(emptyAfterDiscard.valid() && emptyAfterDiscard.recordCount == 0u &&
+            emptyAfterDiscard.handleCount == 0u &&
+            emptyAfterDiscard.blob.size() ==
+                sizeof(D9CCommandChunkWireHeader) &&
+            emptyAfterDiscard.blob.size() < failedBridgeBytes.size(),
+        "typed device discard cannot republish stale exact sealed bytes");
+  check(builder.resetAndReleaseRetained(
+            CommandChunkDiscardTarget::LegacyProduction),
+        "empty post-discard probe reopens the legacy production builder");
+
+  check(dxmt9::d3d9::pe::appendUpdateTexture(
+            builder, warmSourceRef, warmDestinationRef) &&
+            dxmt9::d3d9::pe::appendUpdateTexture(
+                builder, warmDestinationRef, warmSourceRef) &&
+            builder.recordsForTest().size() == 2u,
+        "post-device-lost production accepts an ordinary multi-record append");
+  const auto recoveredChunk = builder.seal();
+  ImportedChunkView imported;
+  const auto validation = dxmt9::d3d9::validateCommandChunk(
+      recoveredChunk.blob,
+      CommandChunkEnvelope{
+          .version = D9C_COMMAND_CHUNK_VERSION,
+          .recordCount = recoveredChunk.recordCount,
+          .handleCount = recoveredChunk.handleCount,
+      },
+      &imported);
+  check(recoveredChunk.valid() && recoveredChunk.recordCount == 2u &&
+            validation.valid() && imported.records.size() == 2u &&
+            imported.records[0].type == D9C_COMMAND_RECORD_UPDATE_TEXTURE &&
+            imported.records[1].type == D9C_COMMAND_RECORD_UPDATE_TEXTURE &&
+            (recoveredChunk.blob.size() != failedBridgeBytes.size() ||
+             !std::equal(recoveredChunk.blob.begin(), recoveredChunk.blob.end(),
+                         failedBridgeBytes.begin())),
+        "recovered legacy chunk imports two new records with no stale bytes");
+  check(builder.resetAndReleaseRetained(
+            CommandChunkDiscardTarget::LegacyProduction) &&
+            warmSource.refs == 1u && warmDestination.refs == 1u &&
+            presentSource.refs == 1u,
+        "legacy-target discard is idempotent after recovered production");
+}
+
+void testAllFamilyExactDifferential() {
+  D9CTexture sourceTexture;
+  D9CTexture destinationTexture;
+  D9CSurface sourceSurface;
+  D9CSurface destinationSurface;
+  D9CQuery query;
+  const auto sourceTextureRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::TextureRef>(wireRef(
+      &sourceTexture, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xc100u));
+  const auto destinationTextureRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::TextureRef>(wireRef(
+      &destinationTexture, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xc200u));
+  const auto sourceSurfaceRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::SurfaceRef>(wireRef(
+      &sourceSurface, D9C_CHUNK_HANDLE_KIND_SURFACE, 0xc300u));
+  const auto destinationSurfaceRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::SurfaceRef>(wireRef(
+      &destinationSurface, D9C_CHUNK_HANDLE_KIND_SURFACE, 0xc400u));
+  const auto queryRef = dxmt9::d3d9::pe::qualifyLocalRef<
+      dxmt9::d3d9::pe::QueryRef>(wireRef(
+      &query, D9C_CHUNK_HANDLE_KIND_QUERY, 0xc500u));
+  const std::array<std::byte, 16> wideConstant{};
+  const std::array<std::byte, 4> boolConstant{};
+  const std::array<std::byte, 12> vertices{};
+  const std::array<std::byte, 6> indices{};
+  const std::array clearRects{D9CRect{0, 0, 8, 8}};
+  const std::array renderStates{
+      D9CCommandChunkWireRenderState{.state = 7u, .value = 1u}};
+
+  const auto emit = [&](dxmt9::d3d9::pe::PeSemanticProducerKind kind,
+                        CommandChunkBuilder& builder) noexcept {
+    using Kind = dxmt9::d3d9::pe::PeSemanticProducerKind;
+    switch (kind) {
+      case Kind::DrawPrimitive:
+        return dxmt9::d3d9::pe::appendSparseRecord(
+            builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+            D9CCommandChunkWireDrawHeader{
+                .primitiveType = 4u, .primitiveCount = 1u},
+            {});
+      case Kind::DrawIndexedPrimitive:
+        return dxmt9::d3d9::pe::appendSparseRecord(
+            builder, D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+            D9CCommandChunkWireDrawHeader{
+                .primitiveType = 4u, .numVertices = 3u,
+                .primitiveCount = 1u},
+            {});
+      case Kind::DrawPrimitiveUp:
+        return dxmt9::d3d9::pe::appendSparseRecord(
+            builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
+            D9CCommandChunkWireDrawHeader{
+                .primitiveType = 4u, .primitiveCount = 1u, .stride = 4u},
+            SparseStateInput{.upVertexData = vertices});
+      case Kind::DrawIndexedPrimitiveUp:
+        return dxmt9::d3d9::pe::appendSparseRecord(
+            builder, D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
+            D9CCommandChunkWireDrawHeader{
+                .primitiveType = 4u, .numVertices = 3u,
+                .primitiveCount = 1u, .stride = 4u, .indexFormat = 101u},
+            SparseStateInput{.upIndexData = indices,
+                             .upVertexData = vertices});
+      case Kind::ApplyState:
+        return dxmt9::d3d9::pe::appendApplyState(
+            builder, 0u, SparseStateInput{.renderStates = renderStates});
+      case Kind::VsFloatConstant:
+        return dxmt9::d3d9::pe::appendSetConstants(
+            builder, D9C_COMMAND_RECORD_SET_VS_CONST_F, 0u, 1u,
+            wideConstant);
+      case Kind::VsIntConstant:
+        return dxmt9::d3d9::pe::appendSetConstants(
+            builder, D9C_COMMAND_RECORD_SET_VS_CONST_I, 0u, 1u,
+            wideConstant);
+      case Kind::VsBoolConstant:
+        return dxmt9::d3d9::pe::appendSetConstants(
+            builder, D9C_COMMAND_RECORD_SET_VS_CONST_B, 0u, 1u,
+            boolConstant);
+      case Kind::PsFloatConstant:
+        return dxmt9::d3d9::pe::appendSetConstants(
+            builder, D9C_COMMAND_RECORD_SET_PS_CONST_F, 0u, 1u,
+            wideConstant);
+      case Kind::PsIntConstant:
+        return dxmt9::d3d9::pe::appendSetConstants(
+            builder, D9C_COMMAND_RECORD_SET_PS_CONST_I, 0u, 1u,
+            wideConstant);
+      case Kind::PsBoolConstant:
+        return dxmt9::d3d9::pe::appendSetConstants(
+            builder, D9C_COMMAND_RECORD_SET_PS_CONST_B, 0u, 1u,
+            boolConstant);
+      case Kind::Clear:
+        return dxmt9::d3d9::pe::appendClear(
+            builder, D9CCommandChunkWireClear{
+                         .flags = 1u, .colorARGB = 0xff010203u, .z = 1.0f},
+            clearRects);
+      case Kind::StretchRect:
+        return dxmt9::d3d9::pe::appendStretchRect(
+            builder, D9CCommandChunkWireStretchRect{}, sourceSurfaceRef,
+            destinationSurfaceRef);
+      case Kind::ColorFill:
+        return dxmt9::d3d9::pe::appendColorFill(
+            builder, D9CCommandChunkWireColorFill{.colorARGB = 0xff010203u},
+            destinationSurfaceRef);
+      case Kind::UpdateTexture:
+        return dxmt9::d3d9::pe::appendUpdateTexture(
+            builder, sourceTextureRef, destinationTextureRef);
+      case Kind::UpdateSurface:
+        return dxmt9::d3d9::pe::appendUpdateSurface(
+            builder, D9CCommandChunkWireUpdateSurface{}, sourceSurfaceRef,
+            destinationSurfaceRef);
+      case Kind::QueryIssue:
+        return dxmt9::d3d9::pe::appendQueryIssue(builder, 1u, queryRef);
+      case Kind::Readback:
+        return dxmt9::d3d9::pe::appendReadback(
+            builder, sourceSurfaceRef, destinationSurfaceRef);
+      case Kind::ReszDepthResolve:
+        return dxmt9::d3d9::pe::appendReszDepthResolve(
+            builder, sourceSurfaceRef, destinationTextureRef);
+      case Kind::GenerateMipmaps:
+        return dxmt9::d3d9::pe::appendGenerateMipmaps(
+            builder, sourceTextureRef);
+      case Kind::Present:
+        return dxmt9::d3d9::pe::appendPresent(
+            builder, D9CCommandChunkWirePresent{}, sourceSurfaceRef);
+      case Kind::Count:
+        return false;
+    }
+    return false;
+  };
+
+  for (const auto& policy :
+       dxmt9::d3d9::pe::kPeSemanticProducerPolicyTable) {
+    std::vector<std::byte> legacyBytes;
+    std::uint32_t legacyHandles = 0u;
+    std::uint32_t legacyPayload = 0u;
+    {
+      CommandChunkBuilder legacy;
+      check(emit(policy.kind, legacy),
+            "all-family legacy differential fixture emits");
+      legacyHandles = static_cast<std::uint32_t>(legacy.handleCount());
+      legacyPayload = static_cast<std::uint32_t>(legacy.payloadBytes());
+      const auto sealed = legacy.seal();
+      check(sealed.valid() && sealed.recordCount == 1u,
+            "all-family legacy differential fixture seals");
+      legacyBytes.assign(sealed.blob.begin(), sealed.blob.end());
+      legacy.resetAndReleaseRetained();
+    }
+
+    const auto underPlan = dxmt9::d3d9::pe::planExactCommandChunkLayout(
+        1u, legacyHandles,
+        legacyPayload == 0u ? 0u : legacyPayload - 1u);
+    CommandChunkBuilder rejecting(underPlan);
+    check(!emit(policy.kind, rejecting) && rejecting.recordCount() == 0u &&
+              rejecting.handleCount() == 0u &&
+              rejecting.payloadBytes() == 0u,
+          "all-family exact under-plan rolls back without partial outcome");
+    rejecting.resetAndReleaseRetained();
+
+    const auto exactPlan = dxmt9::d3d9::pe::planExactCommandChunkLayout(
+        1u, legacyHandles, legacyPayload);
+    CommandChunkBuilder exact(exactPlan);
+    check(emit(policy.kind, exact),
+          "all-family exact differential fixture emits");
+    const auto sealed = exact.seal();
+    check(sealed.valid() && sealed.blob.size() == legacyBytes.size() &&
+              std::equal(sealed.blob.begin(), sealed.blob.end(),
+                         legacyBytes.begin()),
+          "all-family exact bytes match the legacy final wire");
+    ImportedChunkView imported;
+    const auto validation = dxmt9::d3d9::validateCommandChunk(
+        sealed.blob,
+        CommandChunkEnvelope{
+            .version = D9C_COMMAND_CHUNK_VERSION,
+            .recordCount = sealed.recordCount,
+            .handleCount = sealed.handleCount,
+        },
+        &imported);
+    check(validation.valid() && imported.records.size() == 1u &&
+              imported.records[0].type == policy.recordType,
+          "all-family exact effective import matches the semantic row");
+    exact.resetAndReleaseRetained();
+  }
+
+  check(sourceTexture.refs == 1u && destinationTexture.refs == 1u &&
+            sourceSurface.refs == 1u && destinationSurface.refs == 1u &&
+            query.refs == 1u,
+        "all-family differential rollback/commit releases every retain once");
 }
 
 void testLargeHandleSealByteIdentityAndLedger() {
@@ -1947,6 +2455,9 @@ int main() {
     testTypedTailAndSectionAdmission();
     testExactFinalLayoutSink();
     testPresentBatchTransaction();
+    testExactProductionPreservesLegacyWarmStorage();
+    testDeviceLostExactDiscardReturnsToLegacy();
+    testAllFamilyExactDifferential();
     testLargeHandleSealByteIdentityAndLedger();
   } catch (const TestFailure& error) {
     std::cerr << "pe_chunk_record_value_spec failed: " << error.what()

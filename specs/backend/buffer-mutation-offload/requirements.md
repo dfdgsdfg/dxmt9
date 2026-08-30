@@ -191,6 +191,17 @@ candidate bytes, and attributable time, not call counts alone. The observer
 must share the production generation and barrier classifiers, retain no
 payload, and obey the disabled-path contract in R-ARCH-7.7.
 
+Its composition ordering identity is observer-owned and typed as
+`(ordering-generation, ordering-ordinal, source-kind)`. Every accepted mutation
+and use receives the next ordinal from one fixed-width policy, regardless of
+whether its retained production `sourceOrdinal` came from synchronous CPU work
+or deferred/replay `replaySeq`. Reset advances the ordering generation before
+restarting ordinals; generation mismatch, policy exhaustion, and unsupported
+reentry are not comparable and must reject closed. The retained production
+ordinal remains available for exact deferred settlement and source-facing
+diagnostics, but must never be compared directly with the observer ordering
+ordinal.
+
 ## R-BACK-44.10 (Decision gate)
 
 No mutation stream, merge, elision, delayed Unlock, or changed acknowledgement

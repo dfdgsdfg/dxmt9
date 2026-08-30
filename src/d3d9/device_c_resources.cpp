@@ -1,6 +1,7 @@
 #include "device_c_provider.hpp"
 #include "device_c_replay_offload.hpp"
 #include "dxmt9/dxmt9_perf_counters.hpp"
+#include "dxmt9/dxmt9_device.hpp"
 #include "util/log/log.hpp"
 
 #include <algorithm>
@@ -1309,6 +1310,13 @@ extern "C" int32_t dxmt9c_buffer_lock(D9CBuffer* b, uint32_t offset, uint32_t si
   b->lastLockSize = actualSize;
   b->lastLockFlags = flags;
   b->lastLockSucceeded = true;
+  if ((flags & kD3DLockReadOnly) != 0u &&
+      b->obj->desc().pool == dxmt9::core::Pool::Managed && b->device &&
+      b->device->mutationCompositionObserver) {
+    b->device->mutationCompositionObserver->observeCpuUseForResource(
+        b->obj->handle().value,
+        dxmt9::resources::mutation_observer::ObserverKind::CpuObserver);
+  }
   return dxmt9::core::D3D_OK;
 }
 
@@ -1413,6 +1421,52 @@ extern "C" int32_t dxmt9c_buffer_unlock(D9CBuffer* b) {
   const auto coreNs = static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now() - coreStart).count());
+  if (!wasReadOnly && b->obj->desc().pool == dxmt9::core::Pool::Managed &&
+      b->device &&
+      b->device->mutationCompositionObserver) {
+    // The synchronous path has no task lease, so obtain the post-unlock
+    // content revision through the same value snapshot used by production
+    // capture. This block is entirely cold and executes only when the
+    // composition observer is explicitly enabled.
+    std::uint64_t generation = 1u;
+    if (auto upper = b->device->dev().upperDevice()) {
+      const std::array<dxmt9::core::ChunkHandleEntry, 1> entries{{
+          {.kind = dxmt9::core::ChunkHandleKind::Buffer,
+           .handle = b->obj->handle()}}};
+      std::vector<dxmt9::core::ChunkBufferBindingSnapshot> snapshots;
+      if (upper->captureChunkBufferBindings(entries, snapshots) ==
+              dxmt9::core::ChunkBufferBindingCaptureResult::Complete &&
+          !snapshots.empty() && snapshots.front().snapshot.contentRevision != 0u) {
+        generation = snapshots.front().snapshot.contentRevision;
+      }
+    }
+    const auto disposition =
+        (b->lastLockFlags & kD3DLockDiscard) != 0u
+            ? dxmt9::resources::mutation_observer::Disposition::Discard
+            : (b->lastLockFlags & kD3DLockNoOverwrite) != 0u
+                  ? dxmt9::resources::mutation_observer::Disposition::NoOverwrite
+                  : dxmt9::resources::mutation_observer::Disposition::Plain;
+    (void)b->device->mutationCompositionObserver->recordMutation({
+        .identity = {.resource = b->obj->handle().value,
+                     .backingGeneration = generation,
+                     .sourceOrdinal = b->device->mutationCompositionObserver
+                                          ->allocateSourceOrdinal()},
+        .sourceKind =
+            dxmt9::resources::MutationSourceKind::SynchronousMutation,
+        .renderTapeIdentity =
+            {.kind = b->wireIdentity.kind,
+             .generation = b->wireIdentity.generation,
+             .objectId = b->wireIdentity.objectId},
+        .disposition = disposition,
+        .byteOffset = b->lastLockOffset,
+        .byteSize = b->lastLockSize,
+        .timing = {.wow64WritebackNs = writebackNs,
+                   .liveContentsCopyNs = coreNs},
+        .successful = true,
+        .completion =
+            dxmt9::resources::mutation_observer::CompletionDisposition::Completed,
+    });
+  }
   if (traceBuffer) {
     bufferTraceLog("buffer_trace unlock buffer=%p handle=0x%llx offset=%u actual_size=%u flags=0x%x readonly=%u upload=%u",
                    static_cast<void*>(b), static_cast<unsigned long long>(handle),

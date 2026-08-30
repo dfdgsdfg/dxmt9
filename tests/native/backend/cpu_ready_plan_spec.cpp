@@ -1,5 +1,6 @@
 #include "device_c_cpu_ready_plan.hpp"
 #include "device_c_ordered_control.hpp"
+#include "dxmt9/dxmt9_device.hpp"
 
 #include <algorithm>
 #include <array>
@@ -22,6 +23,7 @@ using dxmt9::d3d9::OrderedControlDisposition;
 using dxmt9::d3d9::OrderedControlKind;
 using dxmt9::d3d9::RawCommandChunk;
 using dxmt9::d3d9::CommandChunkEnvelope;
+using dxmt9::d3d9::DirectChunkSlotReplayDisposition;
 using dxmt9::d3d9::ReplayLane;
 using dxmt9::d3d9::ReplayReason;
 using dxmt9::core::metalqueue::SessionReleaseAction;
@@ -375,6 +377,21 @@ void eligibleWholeRawPlanHasTypedCapacity() {
             plan.capacity.drawUniformPixelConstantsLookupTails == 8 &&
             plan.capacity.drawUniformPixelConstantsLookupNext == 1,
         "one draw uses eight lookup buckets and one next link per group");
+}
+
+void directChunkSlotReplayGateTruthTable() {
+  check(!dxmt9::resolveDirectChunkSlotReplayEnabled(nullptr, false),
+        "ordinary direct ChunkSlot replay is disabled when the gate is unset");
+  check(!dxmt9::resolveDirectChunkSlotReplayEnabled("", false),
+        "ordinary direct ChunkSlot replay is disabled for an empty gate");
+  check(!dxmt9::resolveDirectChunkSlotReplayEnabled("0", false),
+        "ordinary direct ChunkSlot replay accepts explicit zero as off");
+  check(dxmt9::resolveDirectChunkSlotReplayEnabled("1", false),
+        "ordinary direct ChunkSlot replay enables on an explicit nonzero gate");
+  check(dxmt9::resolveDirectChunkSlotReplayEnabled("true", false),
+        "ordinary direct ChunkSlot replay follows nonzero flag semantics");
+  check(!dxmt9::resolveDirectChunkSlotReplayEnabled("1", true),
+        "render tracing disables ordinary direct ChunkSlot replay");
 }
 
 void stateOnlyRawHasNoLogicalSourceOrAdmission() {
@@ -944,10 +961,83 @@ void oversizeAndOverflowFallbackBeforeReplay() {
 
 }
 
+void directChunkSlotWholeRawDispositionsAreTypedAndPreEffect() {
+  const auto eligibleFixture = makeValidatedFixture(eligibleRecords());
+  const auto eligible = eligibleFixture.view();
+  const auto direct = dxmt9::d3d9::planCpuReadyChunk(eligible, 31);
+  check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+            eligible, direct, /*captureOrTrace=*/false) ==
+            DirectChunkSlotReplayDisposition::Direct,
+        "all eligible draw/copy/fill/resolve families select direct ChunkSlot");
+  check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+            eligible, direct, /*captureOrTrace=*/true) ==
+            DirectChunkSlotReplayDisposition::LegacyCaptureOrTrace,
+        "capture/trace is a typed pre-effect Legacy disposition");
+
+  const std::array stateRecords{
+      drawRecord(D9C_COMMAND_RECORD_APPLY_STATE)};
+  const auto stateFixture = makeValidatedFixture(stateRecords);
+  const auto state = stateFixture.view();
+  check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+            state, dxmt9::d3d9::planCpuReadyChunk(state, 32), false) ==
+            DirectChunkSlotReplayDisposition::LegacyStateOnly,
+        "state-only raw keeps the no-source compatibility cadence");
+
+  const std::array upRecords{directUpDrawRecord()};
+  const auto upFixture = makeValidatedFixture(upRecords);
+  const auto up = upFixture.view();
+  check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+            up, dxmt9::d3d9::planCpuReadyChunk(up, 33), false) ==
+            DirectChunkSlotReplayDisposition::LegacyUnsupported,
+        "UP draws remain an explicit unsupported Legacy family");
+
+  const std::array presentRecords{
+      blockingRecord(D9C_COMMAND_RECORD_PRESENT)};
+  const auto presentFixture = makeValidatedFixture(presentRecords);
+  const auto present = presentFixture.view();
+  check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+            present, dxmt9::d3d9::planCpuReadyChunk(present, 34), false) ==
+            DirectChunkSlotReplayDisposition::LegacyUnsupported,
+        "Present keeps its compatibility publication boundary");
+
+  for (const auto type : {D9C_COMMAND_RECORD_QUERY_ISSUE,
+                          D9C_COMMAND_RECORD_READBACK,
+                          D9C_COMMAND_RECORD_UPDATE_TEXTURE}) {
+    const std::array records{blockingRecord(type)};
+    const auto fixture = makeValidatedFixture(records);
+    const auto imported = fixture.view();
+    check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+              imported, dxmt9::d3d9::planCpuReadyChunk(imported, 35),
+              false) ==
+              DirectChunkSlotReplayDisposition::InlineOrderedControl,
+          "ordered query/readback/update families retain typed Inline routing");
+  }
+
+  const auto oversize = dxmt9::d3d9::planCpuReadyChunk(
+      eligible, 36,
+      {.pageSize = dxmt9::core::kSourcePayloadByteAlignment,
+       .maxPages = 1});
+  check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+            eligible, oversize, false) ==
+            DirectChunkSlotReplayDisposition::LegacyOversized,
+        "oversized final storage retains its dedicated Legacy disposition");
+
+  const D9CCommandChunkWireRecordHeader unknownHeader{.type = 0xffffu};
+  const ImportedChunkView invalid{
+      .header = {.recordCount = 1},
+      .records = std::span(&unknownHeader, 1),
+  };
+  check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+            invalid, dxmt9::d3d9::planCpuReadyChunk(invalid, 37), false) ==
+            DirectChunkSlotReplayDisposition::RejectInvalid,
+        "invalid whole raws reject before destination ownership or effects");
+}
+
 }  // namespace
 
 int main() {
   try {
+    directChunkSlotReplayGateTruthTable();
     eligibleWholeRawPlanHasTypedCapacity();
     stateOnlyRawHasNoLogicalSourceOrAdmission();
     blockersSelectOneWholeRawFallbackLane();
@@ -963,6 +1053,7 @@ int main() {
     presentTailIsAOrderedDirectSegment();
     nonFinalOrRepeatedPresentFallsBackAsOneSource();
     oversizeAndOverflowFallbackBeforeReplay();
+    directChunkSlotWholeRawDispositionsAreTypedAndPreEffect();
   } catch (const std::exception& error) {
     std::cerr << "cpu_ready_plan_spec failed: " << error.what() << '\n';
     return 1;

@@ -1140,6 +1140,27 @@ struct DirectReplayDrawInput {
   }
 };
 
+// Typed result for synchronous replay-to-final-storage ingress.  Only the
+// Legacy* values are strict pre-effect dispositions: callers may materialize
+// the compatibility DrawRunSubmission/CanonicalDrawState lane after one of
+// those results.  AcceptedFailStop means the destination transaction owns the
+// command but has been poisoned and therefore must not be replayed a second
+// time through Legacy.
+enum class DirectReplayDrawDisposition : u8 {
+  Appended = 0,
+  AcceptedFailStop,
+  LegacyUnsupported,
+  LegacyOversized,
+  LegacyPreEffectFailure,
+};
+
+constexpr bool directReplayDrawPermitsLegacyFallback(
+    DirectReplayDrawDisposition disposition) noexcept {
+  return disposition == DirectReplayDrawDisposition::LegacyUnsupported ||
+         disposition == DirectReplayDrawDisposition::LegacyOversized ||
+         disposition == DirectReplayDrawDisposition::LegacyPreEffectFailure;
+}
+
 inline std::span<const u8> drawBindingOverrideBytes(
     const DrawBindingOverride& binding) noexcept {
   return std::span<const u8>(reinterpret_cast<const u8*>(&binding),

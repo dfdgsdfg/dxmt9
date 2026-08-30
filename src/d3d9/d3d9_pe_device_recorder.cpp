@@ -29,8 +29,15 @@ void D3D9DeviceImpl::clearPendingCommandChunk(
     // Discard path (device teardown, Reset, ResetEx): release the warm
     // retainer pins too, so nothing is still holding a unix object when
     // dxmt9c_device_reset* / dxmt9c_device_release runs.
-    recorderState_.commandChunk.resetAndReleaseRetained();
+    const bool legacyBuilderReady =
+        recorderState_.commandChunk.resetAndReleaseRetained(
+            dxmt9::d3d9::pe::CommandChunkDiscardTarget::LegacyProduction);
+    DXMT_ASSERT(legacyBuilderReady);
+    if (!legacyBuilderReady && peCaptureState_) {
+        markRenderTapeInvalidOnce("commit_discard_legacy_layout");
+    }
     if (auto* tokens = scalarSemanticObserver()) tokens->clear();
+    if (auto* tokens = allFamilySemanticObserver()) tokens->discard();
 }
 
 HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
@@ -167,6 +174,9 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
                 // sealed ownership for Reset/teardown cleanup, but poison the
                 // PE recorder so ordinary app traffic cannot retry it.
                 DXMT_ASSERT(composedBridgePlan.poison() && bridgePlan.poisons());
+                if (auto* tokens = allFamilySemanticObserver()) {
+                    tokens->bridgeEffectUnknown();
+                }
                 poisonStateBlockTransaction();
                 if (presentMirrorReserved) {
                     dxmt9c_device_cancel_render_tape_present_capture(dev_);
@@ -197,6 +207,17 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
                 DXMT_ASSERT(
                     !dxmt9::d3d9::pe::recorderCaptureMayRetract(
                         bridgePlan.commandAccepted()));
+                if (auto* tokens = allFamilySemanticObserver()) {
+                    const auto disposition = captureChunkPrepared
+                        ? dxmt9::d3d9::pe::PeSemanticCaptureDisposition::Materialized
+                        : captureWasActive
+                            ? dxmt9::d3d9::pe::PeSemanticCaptureDisposition::Rejected
+                            : dxmt9::d3d9::pe::PeSemanticCaptureDisposition::Skipped;
+                    if (!tokens->settleCapture(disposition)) {
+                        poisonStateBlockTransaction();
+                        return D3DERR_DEVICELOST;
+                    }
+                }
             }
             if (settledPhase) {
                 *settledPhase = settlementPhase;

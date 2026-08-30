@@ -102,9 +102,10 @@ void testOptionalOwnerAllocationAndConfig() {
     check(diagnostics != nullptr,
           "each individual diagnostic gate constructs the cold owner");
     const auto expectedAllocations =
-        config.scalarSemanticObserver ? 2u : 1u;
+        // Owner + scalar ledger + all-family ledger/value arena/identity arena.
+        config.scalarSemanticObserver ? 5u : 1u;
     check(after == before + expectedAllocations,
-          "the optional scalar observer adds only its cold allocation");
+          "the optional semantic observers add only their cold allocations");
     check(diagnostics->config.recorderStats == config.recorderStats &&
               diagnostics->config.recorderChunkLog ==
                   config.recorderChunkLog &&
@@ -135,7 +136,10 @@ void testOptionalOwnerAllocationAndConfig() {
           "observer-only gates remain independently cached");
     check(static_cast<bool>(diagnostics->scalarSemanticTokens) ==
               config.scalarSemanticObserver,
-          "the exact semantic ledger exists only behind its own gate");
+          "the exact scalar ledger exists only behind its own gate");
+    check(static_cast<bool>(diagnostics->allFamilySemanticTokens) ==
+              config.scalarSemanticObserver,
+          "the exact all-family ledger shares the default-off proof gate");
   }
 }
 
@@ -239,17 +243,18 @@ void testSourceContracts(const std::filesystem::path &root) {
               !std::filesystem::exists(root / "src/d3d9" / fragment),
           "retired state fragment is absent");
   }
-  check(std::count(device.begin(), device.end(), '\n') <= 3677,
-        "device declaration shell stays within the measured 3677-line residual");
+  check(std::count(device.begin(), device.end(), '\n') <= 3713,
+        "device declaration shell stays within the measured 3713-line residual");
   checkContains(presentBatch, "struct PePresentBatch",
                 "Present has a typed immutable value owner");
   checkContains(device, "const dxmt9::d3d9::pe::PePresentBatch presentBatch",
                 "the real Present boundary owns its batch value");
-  checkContains(device,
-                "builder, presentBatch.command, presentBatch.source",
-                "legacy Present append consumes the owned batch value");
+  checkContains(device, "builder, presentBatch",
+                "exact Present append consumes the owned batch value");
+  checkContains(device, "appendPeExactPresentSingleton",
+                "Present selects the in-place exact singleton transaction");
   checkNotContains(device, "PePresentBatchTransaction",
-                   "exact Present transaction remains unselected in production");
+                   "production reuses the persistent builder and warm retainer");
   for (const std::string_view retainedInline : {
            "HRESULT STDMETHODCALLTYPE Present(",
            "HRESULT STDMETHODCALLTYPE SetStreamSource(",
@@ -269,10 +274,14 @@ void testSourceContracts(const std::filesystem::path &root) {
   const auto deviceSource = device + deviceOwner;
   const auto recorder =
       readTextFile(root / "src/d3d9/d3d9_pe_device_recorder.cpp");
+  checkContains(recorder, "CommandChunkDiscardTarget::LegacyProduction",
+                "device discard explicitly restores the production layout");
   const auto recorderHeader =
       readTextFile(root / "src/d3d9/d3d9_pe_recorder.hpp");
   const auto deviceCold =
       readTextFile(root / "src/d3d9/d3d9_pe_device_com_cold.cpp");
+  checkContains(deviceCold, "appendPeExactReadbackSingleton",
+                "synchronous Readback selects the exact singleton transaction");
   const auto deviceDiag =
       readTextFile(root / "src/d3d9/d3d9_pe_device_diag.cpp");
   const auto peBuilder =
@@ -295,6 +304,12 @@ void testSourceContracts(const std::filesystem::path &root) {
       readTextFile(root / "src/dxmt9/dxmt9_argbuf_hybrid.cpp");
   const auto queue =
       readTextFile(root / "src/dxmt9/dxmt9_command_queue.cpp");
+  const auto queueLifecycle =
+      readTextFile(root / "src/dxmt9/dxmt9_queue.cpp");
+  const auto queueHeader =
+      readTextFile(root / "src/dxmt9/dxmt9_queue.hpp");
+  const auto commandQueueHeader =
+      readTextFile(root / "src/dxmt9/dxmt9_command_queue.hpp");
   const auto sourcePayload =
       readTextFile(root / "src/dxmt9/dxmt9_source_payload.cpp");
   const auto copyLedger =
@@ -451,6 +466,18 @@ void testSourceContracts(const std::filesystem::path &root) {
                    "the always-on recorder does not own the scalar ledger");
   checkContains(deviceSource, "DXMT9_PE_SCALAR_SEMANTIC_OBSERVER",
                 "the cold scalar witness has an explicit default-off gate");
+  checkContains(device,
+                "scalarSemanticObserver() noexcept {",
+                "PE scalar semantic lookup is visible to inline hot entries");
+  checkContains(device,
+                "allFamilySemanticObserver() noexcept {",
+                "PE all-family semantic lookup is visible to inline append");
+  checkNotContains(deviceOwner,
+                   "D3D9DeviceImpl::scalarSemanticObserver()",
+                   "PE scalar semantic lookup has no unconditional out-of-line call");
+  checkNotContains(deviceOwner,
+                   "D3D9DeviceImpl::allFamilySemanticObserver()",
+                   "PE all-family semantic lookup has no unconditional out-of-line call");
   checkContains(deviceSource, "if (!diagnostics->gates.callScope)",
                 "unrelated diagnostic gates skip call scope construction");
   checkContains(deviceSource, "if (!diagnostics->gates.hotSetterTimer)",
@@ -503,6 +530,56 @@ void testSourceContracts(const std::filesystem::path &root) {
       "if (recorderState_.stateBlockTransaction.isPoisoned())",
       "if (!recorderState_.commandChunkNegotiated || bytes == 0u",
       "poison stops every writer before negotiation and capacity work");
+  checkBefore(
+      appendRecordBody,
+      "if (allFamilyTokens) {",
+      "lastCommittedRecordOrdinal()",
+      "disabled PE semantic path does not read committed ordinals");
+  checkContains(
+      queueLifecycle,
+      "if (pipelineLifecycleObserverEnabled()) {\n    observePipelineOwnerTransition",
+      "queue owner observer is called only after the cached enabled gate");
+  const auto transitionBegin = queueLifecycle.find(
+      "void QueueLifecycleController::transition(QueueTransitionRecord record,");
+  const auto transitionEnd = transitionBegin == std::string::npos
+      ? std::string::npos
+      : queueLifecycle.find("bool QueueLifecycleController::submit(",
+                            transitionBegin);
+  check(transitionBegin != std::string::npos &&
+            transitionEnd != std::string::npos,
+        "queue transition source contract is present");
+  const std::string_view transitionBody(
+      queueLifecycle.data() + transitionBegin,
+      transitionEnd - transitionBegin);
+  checkContains(
+      transitionBody,
+      "const bool pipelineProjectionEnabled = pipelineLifecycleObserverEnabled();",
+      "queue transition resolves the observer gate from cached binding state");
+  checkNotContains(
+      transitionBody,
+      "submissionBinding_.schedulingProgressWatchdog->enabled()",
+      "queue transition does not recompute watchdog enablement per event");
+  checkBefore(
+      transitionBody,
+      "const bool pipelineProjectionEnabled = pipelineLifecycleObserverEnabled();",
+      "if (pipelineProjectionEnabled && submissionBinding_.cpuReadyTape",
+      "queue transition gates source metadata work with the cached observer bit");
+  checkContains(
+      queueHeader,
+      "bool pipelineLifecycleObservationEnabled = false;",
+      "queue lifecycle observer state caches its nullable enabled branch");
+  checkContains(
+      queue,
+      "if (pipelineLifecycleObservationEnabled_) {\n    queueLifecycle_.recordPipelineSourceArrival",
+      "source admission skips the out-of-line observer when disabled");
+  checkContains(
+      queue,
+      "if (pipelineLifecycleObservationEnabled_) {\n    queueLifecycle_.observePipelineControl",
+      "pipeline control skips the out-of-line observer when disabled");
+  checkContains(
+      commandQueueHeader,
+      "bool pipelineLifecycleObservationEnabled_ = false;",
+      "command queue caches its pipeline observer gate once");
   const auto flushBegin = recorder.find(
       "HRESULT D3D9DeviceImpl::flushPendingCommandChunk(");
   const auto flushEnd = flushBegin == std::string::npos
@@ -624,6 +701,28 @@ void testSourceContracts(const std::filesystem::path &root) {
                    "active production lookup has no test-then-production probe");
   checkNotContains(copyLedger, "gCopyMaterializationTestOwnerLedgers.fill",
                    "test sinks remain owner-qualified rather than all-owner");
+  const auto disabledPathBegin = copyLedger.find(
+      "if (!copyMaterializationLedgerEnabled()) {");
+  const auto disabledPathEnd = disabledPathBegin == std::string::npos
+      ? std::string::npos
+      : copyLedger.find("auto& registry", disabledPathBegin);
+  check(disabledPathBegin != std::string::npos &&
+            disabledPathEnd != std::string::npos &&
+            disabledPathBegin < disabledPathEnd,
+        "production lookup exposes a bounded disabled branch");
+  const std::string_view disabledPath(
+      copyLedger.data() + disabledPathBegin,
+      disabledPathEnd - disabledPathBegin);
+  checkNotContains(disabledPath, "steady_clock",
+                   "disabled copy-ledger branch does not read a clock");
+  checkNotContains(disabledPath, "fetch_add",
+                   "disabled copy-ledger branch does not touch atomics");
+  checkNotContains(disabledPath, "CopyMaterializationEvent",
+                   "disabled copy-ledger branch does not construct events");
+  checkNotContains(disabledPath, "operator new",
+                   "disabled copy-ledger branch does not allocate");
+  checkNotContains(disabledPath, "malloc",
+                   "disabled copy-ledger branch does not allocate");
   checkContains(sourcePayload, "tryAppendDrawRunBatch",
                 "batch assembler remains covered by the source audit");
   checkNotContains(sourcePayload,

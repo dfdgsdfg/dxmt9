@@ -1,5 +1,7 @@
 #pragma once
 
+#include "dxmt9_pipeline_lifecycle.hpp"
+
 #include <array>
 #include <atomic>
 #include <chrono>
@@ -63,6 +65,11 @@ class SchedulingProgressWatchdog {
   void noteCompletionExpanded(std::uint64_t seqId) noexcept;
   void notePresentDisposition(std::uint64_t seqId, bool published) noexcept;
   void noteReleased(std::uint64_t seqId, bool presentSettled) noexcept;
+  // Attribute a watchdog phase to the production lifecycle owner. This is
+  // deliberately a diagnostic projection: it copies only scalar identity and
+  // disposition and never retains a source view or queue-owned span.
+  void notePipelineEvent(
+      const queue::PipelineLifecycleEvent& event) noexcept;
   void noteTerminal(bool deviceLoss) noexcept;
   void stop() noexcept;
 
@@ -70,8 +77,13 @@ class SchedulingProgressWatchdog {
     bool tracked = false;
     std::uint64_t identity = 0;
     std::uint64_t progressNs = 0;
+    std::uint64_t generation = 0;
+    std::uint64_t sourceOrdinal = 0;
     std::uint32_t flags = 0;
     SchedulingProgressPhase phase = SchedulingProgressPhase::Admission;
+    queue::PipelineOwner owner = queue::PipelineOwner::Queue;
+    queue::PipelineDisposition disposition =
+        queue::PipelineDisposition::Advance;
   };
   SlotSnapshotForTest slotSnapshotForTest(std::uint64_t seqId) noexcept;
 
@@ -94,15 +106,25 @@ class SchedulingProgressWatchdog {
     std::uint64_t acceptedNs = 0;
     std::uint64_t progressNs = 0;
     std::uint64_t lastReportNs = 0;
+    std::uint64_t generation = 0;
+    std::uint64_t sourceOrdinal = 0;
     std::uint32_t flags = 0;
     SchedulingProgressPhase phase = SchedulingProgressPhase::Admission;
+    queue::PipelineOwner owner = queue::PipelineOwner::Queue;
+    queue::PipelineDisposition disposition =
+        queue::PipelineDisposition::Advance;
   };
 
   static std::uint64_t steadyNowNs() noexcept;
   void note(std::uint64_t seqId, SchedulingProgressPhase phase,
             std::uint32_t flags) noexcept;
   void noteAt(std::uint64_t seqId, SchedulingProgressPhase phase,
-              std::uint32_t flags, std::uint64_t nowNs) noexcept;
+              std::uint32_t flags, std::uint64_t nowNs,
+              queue::PipelineOwner owner = queue::PipelineOwner::Queue,
+              queue::PipelineDisposition disposition =
+                  queue::PipelineDisposition::Advance,
+              std::uint64_t generation = 0,
+              std::uint64_t sourceOrdinal = 0) noexcept;
   static void lockSlot(Slot& slot) noexcept;
   static void unlockSlot(Slot& slot) noexcept;
   bool findOrClaimLocked(Slot& slot, std::uint64_t seqId,

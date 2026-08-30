@@ -4,6 +4,7 @@
 #include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_render_scheduling.hpp"
+#include "util/config/config.hpp"
 #include "util/log/log.hpp"
 
 #include <algorithm>
@@ -48,6 +49,15 @@ bool cpuReadyTapeDirectReplayEnabled() noexcept {
         std::getenv("DXMT9_CPU_READY_TAPE"),
         std::getenv("DXMT9_RENDER_TAPE_CAPTURE"),
         std::getenv("DXMT9_RENDER_TAPE_OUTPUT_ROOT"));
+  }();
+  return enabled;
+}
+
+bool directChunkSlotReplayEnabled() noexcept {
+  static const bool enabled = [] {
+    return resolveDirectChunkSlotReplayEnabled(
+        std::getenv("DXMT9_DIRECT_CHUNK_SLOT_REPLAY"),
+        util::getenvFlag("DXMT_TRACE_RENDER"));
   }();
   return enabled;
 }
@@ -148,6 +158,7 @@ class DeviceImpl final : public Device {
         renderTapePublisherCaptureEnabled_(
             renderTapePublisherCaptureEnabled()),
         cpuReadyTapeDirectReplayEnabled_(cpuReadyTapeDirectReplayEnabled()),
+        directChunkSlotReplayEnabled_(directChunkSlotReplayEnabled()),
         renderPartitionConfig_(renderPartitionConfig()),
         queue_(wmt_device_, limits_, cpuReadyTapeDirectReplayEnabled_,
                renderTapePublisherCaptureEnabled_, renderPartitionConfig_) {
@@ -339,7 +350,7 @@ class DeviceImpl final : public Device {
                      std::span<const core::DrawParamPayloadView> payloads) override {
     queue_.submitDrawRun(std::move(state), uniforms, draws, payloads);
   }
-  bool submitDirectReplayDraw(
+  core::DirectReplayDrawDisposition submitDirectReplayDraw(
       const core::DirectReplayDrawInput& input) noexcept override {
     return queue_.submitDirectReplayDraw(input);
   }
@@ -363,6 +374,9 @@ class DeviceImpl final : public Device {
   }
   bool supportsCpuReadyArenaReplay() const noexcept override {
     return cpuReadyTapeDirectReplayEnabled_;
+  }
+  bool supportsDirectChunkSlotReplay() const noexcept override {
+    return directChunkSlotReplayEnabled_;
   }
   bool dynamicBufferRenameEnabled() const noexcept override {
     return resources::dynamicBufferRenameEnabled();
@@ -408,6 +422,11 @@ class DeviceImpl final : public Device {
         ordinal, maxFrameLatency_, backBufferCount, displaySyncEnabled);
   }
   void abortPresentOrdinalWaits() override { queue_.abortPresentOrdinalWaits(); }
+  void observePipelineControl(
+      queue::PipelineControl control,
+      queue::PipelineDisposition disposition) noexcept override {
+    queue_.observePipelineControl(control, disposition);
+  }
   void flush() override { queue_.submitFlush(); }
   wsi::QuiescenceDisposition beginWsiQuiescence() noexcept override {
     return queue_.beginWsiQuiescence();
@@ -449,6 +468,7 @@ class DeviceImpl final : public Device {
   std::uint32_t maxFrameLatency_ = core::kDefaultFrameLatency;
   bool renderTapePublisherCaptureEnabled_ = false;
   bool cpuReadyTapeDirectReplayEnabled_ = false;
+  bool directChunkSlotReplayEnabled_ = false;
   render::RenderPartitionConfig renderPartitionConfig_{};
   CommandQueue queue_;
 };

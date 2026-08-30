@@ -357,6 +357,12 @@ class CommandQueue {
                bool renderTapePublisherCaptureEnabled = false,
                render::RenderPartitionConfig renderPartitionConfig = {});
 
+  // Cold control-plane diagnostic boundary used by the PE device Reset and
+  // teardown owners; it never synthesizes per-source reclaim transitions.
+  void observePipelineControl(
+      ::dxmt9::queue::PipelineControl control,
+      ::dxmt9::queue::PipelineDisposition disposition) noexcept;
+
   // Inert queue for native encoder lifecycle specs. The supplied handle is
   // used only as a validity token: this constructor does not create queue
   // workers, resource initializers, or any other Metal-owned subsystem.
@@ -420,7 +426,7 @@ class CommandQueue {
                      const core::DrawUniformPayload& uniforms,
                      std::span<const core::DrawParam> draws,
                      std::span<const core::DrawParamPayloadView> payloads = {});
-  bool submitDirectReplayDraw(
+  core::DirectReplayDrawDisposition submitDirectReplayDraw(
       const core::DirectReplayDrawInput& input) noexcept;
   void submitDrawRunBatch(std::span<core::DrawRunSubmission> submissions);
 
@@ -628,6 +634,61 @@ class CommandQueue {
         core::kMaxArenaSourcePayloadSegments;
     std::size_t maxPagesPerSource = 0;
   };
+
+  enum class DirectChunkSlotReplayStatus : std::uint8_t {
+    Ready,
+    Committed,
+    LegacyUnsupported,
+    LegacyOversized,
+    LegacyPreEffectFailure,
+    FailStopped,
+  };
+
+  class DirectChunkSlotReplayLease {
+   public:
+    DirectChunkSlotReplayLease() = default;
+    ~DirectChunkSlotReplayLease();
+    DirectChunkSlotReplayLease(const DirectChunkSlotReplayLease&) = delete;
+    DirectChunkSlotReplayLease& operator=(
+        const DirectChunkSlotReplayLease&) = delete;
+    DirectChunkSlotReplayLease(
+        DirectChunkSlotReplayLease&& other) noexcept;
+    DirectChunkSlotReplayLease& operator=(
+        DirectChunkSlotReplayLease&& other) noexcept;
+
+    explicit operator bool() const noexcept { return queue_ != nullptr; }
+    void markSemanticEffectsStarted() noexcept { effectsStarted_ = true; }
+    DirectChunkSlotReplayStatus commit(
+        std::span<const core::ChunkHandleEntry> resources) noexcept;
+    bool rollbackPreEffect() noexcept;
+
+   private:
+    friend class CommandQueue;
+    DirectChunkSlotReplayLease(
+        CommandQueue& queue, core::CpuReadyPublicationTicket ticket,
+        std::size_t controlIndex) noexcept
+        : queue_(&queue), ticket_(ticket), controlIndex_(controlIndex) {}
+    void settle() noexcept;
+
+    CommandQueue* queue_ = nullptr;
+    core::CpuReadyPublicationTicket ticket_{};
+    std::size_t controlIndex_ = std::numeric_limits<std::size_t>::max();
+    bool effectsStarted_ = false;
+  };
+
+  struct DirectChunkSlotReplayBeginResult {
+    DirectChunkSlotReplayStatus status =
+        DirectChunkSlotReplayStatus::LegacyUnsupported;
+    std::optional<DirectChunkSlotReplayLease> lease{};
+
+    bool has_value() const noexcept { return lease.has_value(); }
+    explicit operator bool() const noexcept { return has_value(); }
+  };
+
+  DirectChunkSlotReplayBeginResult beginDirectChunkSlotReplay(
+      std::uint64_t rawOrdinal,
+      const core::SourcePayloadCapacity& capacity,
+      std::size_t plannedBytes) noexcept;
 
   CpuReadyArenaBeginResult beginCpuReadyArenaSource(
       std::uint64_t rawOrdinal,
@@ -1192,6 +1253,10 @@ class CommandQueue {
   core::metalqueue::QueueLifecycleController queueLifecycle_{};
   std::unique_ptr<dxmt9::queue::PipelineLifecycleObserver>
       pipelineLifecycleObserver_{};
+  // Resolved once during lifecycle binding so hot source-admission paths do
+  // not make an unconditional out-of-line observer call when diagnostics are
+  // disabled.
+  bool pipelineLifecycleObservationEnabled_ = false;
   // Cold, opt-in diagnostics are held by the binary-local registry. They are
   // intentionally not queue-owned: several live devices must not overwrite
   // or dangle a process-wide installation.
@@ -1574,6 +1639,18 @@ class CommandQueue {
     bool captureDirectDraw(bool appendedCommand) noexcept;
   };
 
+  struct DirectChunkSlotBuildContext {
+    std::thread::id ownerThread{};
+    core::CpuReadyPublicationTicket ticket{};
+    std::size_t controlIndex = std::numeric_limits<std::size_t>::max();
+    std::optional<core::TransactionalChunkSlotAssembler> assembler{};
+    core::Handle initialBackBuffer{};
+    core::Handle pendingBackBuffer{};
+    bool updatesBackBuffer = false;
+    bool failed = false;
+    bool effectsStarted = false;
+  };
+
   enum class ActiveArenaAppendResult {
     Inactive,
     Appended,
@@ -1621,6 +1698,43 @@ class CommandQueue {
     return ActiveArenaAppendResult::Appended;
   }
 
+  template <typename Append>
+  ActiveArenaAppendResult appendActiveDirectChunkSlot(
+      Append&& append) noexcept {
+    auto* context = activeDirectChunkSlotBuild_.load(
+        std::memory_order_acquire);
+    if (!context) {
+      return ActiveArenaAppendResult::Inactive;
+    }
+    std::lock_guard lock(mutex_);
+    if (!directChunkSlotBuildContext_ ||
+        &*directChunkSlotBuildContext_ != context ||
+        context->ownerThread != std::this_thread::get_id() ||
+        context->failed || context->controlIndex >= slots_.size() ||
+        !writingSlot_ || *writingSlot_ != context->controlIndex) {
+      if (directChunkSlotBuildContext_ &&
+          &*directChunkSlotBuildContext_ == context) {
+        context->failed = true;
+      }
+      return ActiveArenaAppendResult::Failed;
+    }
+    auto& control = slots_[context->controlIndex];
+    auto* payload = cpuReadyTape_.resolveForWrite(
+        core::CpuReadyPublicationTicket{
+            .id = control.sourceId,
+            .storage = control.storage,
+        });
+    if (control.state != core::ChunkSlot::State::Writing ||
+        control.sourceId != context->ticket.id ||
+        control.storage != context->ticket.storage ||
+        payload != control.payload || !context->assembler ||
+        !append(*context, *context->assembler)) {
+      context->failed = true;
+      return ActiveArenaAppendResult::Failed;
+    }
+    return ActiveArenaAppendResult::Appended;
+  }
+
   ActiveArenaAppendResult appendActiveArenaDrawRunBatch(
       std::span<core::DrawRunSubmission> submissions) noexcept;
   ActiveArenaAppendResult appendActiveArenaDrawRun(
@@ -1647,6 +1761,26 @@ class CommandQueue {
       bool tokenStashed) noexcept;
   ActiveArenaAppendResult deferActiveArenaFlush() noexcept;
   ActiveArenaAppendResult rejectIfActiveArena() noexcept;
+  core::DirectReplayDrawDisposition appendActiveDirectChunkSlotDraw(
+      const core::DirectReplayDrawInput& input) noexcept;
+  ActiveArenaAppendResult appendActiveDirectChunkSlotClear(
+      const core::ClearDesc& value) noexcept;
+  ActiveArenaAppendResult appendActiveDirectChunkSlotSurfaceCopy(
+      const core::SurfaceCopyDesc& value) noexcept;
+  ActiveArenaAppendResult appendActiveDirectChunkSlotStretchRect(
+      const core::StretchRectDesc& value) noexcept;
+  ActiveArenaAppendResult appendActiveDirectChunkSlotColorFill(
+      const core::ColorFillDesc& value) noexcept;
+  ActiveArenaAppendResult appendActiveDirectChunkSlotDepthResolve(
+      const core::DepthResolveDesc& value) noexcept;
+  ActiveArenaAppendResult appendActiveDirectChunkSlotGenerateMipmaps(
+      const core::GenerateMipmapsDesc& value) noexcept;
+  DirectChunkSlotReplayStatus commitDirectChunkSlotReplay(
+      core::CpuReadyPublicationTicket ticket, std::size_t controlIndex,
+      std::span<const core::ChunkHandleEntry> resources) noexcept;
+  bool abortDirectChunkSlotReplay(
+      core::CpuReadyPublicationTicket ticket, std::size_t controlIndex,
+      bool failStop) noexcept;
   bool waitEnterWsiPresentUse() noexcept;
   void leaveWsiPresentUse() noexcept;
   bool selectCpuReadyArenaSegment(
@@ -1686,6 +1820,10 @@ class CommandQueue {
   std::atomic<ArenaBuildContext*> activeArenaBuild_{nullptr};
   std::atomic<bool> arenaAdmissionActive_{false};
   std::atomic<bool> arenaBuildPoisoned_{false};
+  std::optional<DirectChunkSlotBuildContext> directChunkSlotBuildContext_{};
+  std::atomic<DirectChunkSlotBuildContext*> activeDirectChunkSlotBuild_{
+      nullptr};
+  std::uint64_t nextDirectChunkSlotBuildGeneration_ = 1;
   std::atomic<std::uint32_t> arenaAdmissionWaiterCount_{0};
   std::uint64_t nextArenaBuildGeneration_ = 1;
   std::atomic<bool> wsiQuiescenceActive_{false};

@@ -14,6 +14,14 @@
 
 namespace dxmt9::d3d9::pe {
 
+// A device discard is a terminal boundary for the current production chunk,
+// not a retry of an immutable exact transaction. Keep that distinction typed:
+// standalone exact owners use the no-argument reset API, while Reset/ResetEx,
+// device-lost recovery, and teardown explicitly restore the general builder.
+enum class CommandChunkDiscardTarget : std::uint8_t {
+  LegacyProduction,
+};
+
 // Payload values are copied verbatim into the bounded wire blob. Admission is
 // intentionally closed over the fixed payload types used by the producer.
 // Variable tails and sparse sections have separate closed adapters below; raw
@@ -422,6 +430,13 @@ struct SealedCommandChunk {
   bool valid() const noexcept { return !blob.empty(); }
 };
 
+struct PeCommittedRecordSemanticView {
+  D9CCommandChunkWireRecordHeader record{};
+  std::uint64_t recordOrdinal = 0u;
+  std::span<const std::byte> exactPayload{};
+  bool exactHandleIdentitiesValid = false;
+};
+
 // R-BACK-43.4 `producer-owned` (PE game thread). Every member below —
 // the legacy `records_`/`handles_`/`payload_` staging, `handleObjects_`, the
 // final `sealedBlob_` allocation used directly by exact mode,
@@ -439,9 +454,9 @@ class CommandChunkBuilder {
  public:
   explicit CommandChunkBuilder(
       const CommandChunkBuilderCapacities& capacities = {});
-  // Internal exact-count primitive. Production command recording does not
-  // currently own a replayable whole-batch transaction from which to obtain
-  // this plan before any retain or pending-delta effect.
+  // Internal exact-count primitive. Production uses the in-place preparation
+  // below for complete singleton transactions; general multi-record recording
+  // still lacks a replayable whole-batch owner for this constructor's plan.
   explicit CommandChunkBuilder(const ExactCommandChunkLayoutPlan& plan);
   ~CommandChunkBuilder();
 
@@ -449,6 +464,19 @@ class CommandChunkBuilder {
   CommandChunkBuilder& operator=(const CommandChunkBuilder&) = delete;
 
   bool beginRecord(std::uint32_t type) noexcept;
+
+  // Replans an empty production builder onto one exact final allocation.
+  // The persistent retainer is deliberately preserved, so warm pins and
+  // their crossing multiplicity remain identical to the legacy chunk lane.
+  // Allocation is transactional: on failure the builder remains an empty
+  // legacy builder and the caller may use its typed fallback.
+  bool prepareExactFinalLayout(
+      const ExactCommandChunkLayoutPlan& plan) noexcept;
+
+  // Returns a successfully committed/reset exact transaction to the legacy
+  // staging lane. Entered bridge failures keep their sealed exact bytes and
+  // never call this operation.
+  bool returnToLegacyFinalLayout() noexcept;
 
   template <typename T>
   bool appendPayloadValue(const T& value,
@@ -605,8 +633,12 @@ class CommandChunkBuilder {
   // pins warm across the boundary (see D3D9PePendingCommandRetainer).
   void reset() noexcept;
   // Discard: same as reset() but also releases every warm pin. Use at device
-  // teardown / Reset / ResetEx.
+  // teardown of a standalone owner. Exact transactions retain their plan so
+  // the same immutable input can be emitted again.
   void resetAndReleaseRetained() noexcept;
+  // Device discard: releases every pin and explicitly escapes an exact final
+  // layout before later production recording resumes.
+  bool resetAndReleaseRetained(CommandChunkDiscardTarget target) noexcept;
 
   bool recordActive() const noexcept { return active_.active; }
   bool sealed() const noexcept { return sealed_; }
@@ -624,6 +656,69 @@ class CommandChunkBuilder {
   // must bind semantic witnesses to this record, not to the prior commit.
   std::uint64_t activeRecordOrdinal() const noexcept {
     return active_.active ? active_.recordOrdinal : 0u;
+  }
+
+  // Cold semantic observer view over the most recently committed record.
+  // The span is synchronous and const; it never exposes mutable builder
+  // storage or survives a later append/seal/reset.
+  template <typename Visit>
+    requires std::is_nothrow_invocable_r_v<
+        bool, Visit&, const PeCommittedRecordSemanticView&>
+  bool visitLastCommittedRecord(Visit&& visit) const noexcept {
+    const auto count = recordCount();
+    if (count == 0u || lastCommittedRecordOrdinal_ == 0u) return false;
+    D9CCommandChunkWireRecordHeader record{};
+    if (!readRecordEntry(count - 1u, record)) return false;
+    const auto payloadSize = currentPayloadBytes();
+    if (record.payloadOffset > payloadSize ||
+        record.payloadSize > payloadSize - record.payloadOffset) {
+      return false;
+    }
+    const auto* data = payloadData();
+    if (!data || record.firstHandle > handleCount() ||
+        record.handleCount > handleCount() - record.firstHandle) {
+      return false;
+    }
+    bool handlesValid = true;
+    for (std::uint32_t index = 0u; index < record.handleCount; ++index) {
+      D9CCommandChunkWireHandleEntry handle{};
+      if (!readHandleEntry(record.firstHandle + index, handle) ||
+          handle.kind > D9C_CHUNK_HANDLE_KIND_QUERY ||
+          handle.generation == 0u || handle.objectId == 0u) {
+        handlesValid = false;
+        break;
+      }
+    }
+    return visit(PeCommittedRecordSemanticView{
+        .record = record,
+        .recordOrdinal = lastCommittedRecordOrdinal_,
+        .exactPayload = std::span<const std::byte>(
+            data + record.payloadOffset, record.payloadSize),
+        .exactHandleIdentitiesValid = handlesValid,
+    });
+  }
+
+  template <typename Visit>
+    requires std::is_nothrow_invocable_r_v<
+        bool, Visit&, std::uint32_t,
+        const D9CCommandChunkWireHandleEntry&>
+  bool visitLastCommittedRecordHandles(Visit&& visit) const noexcept {
+    const auto count = recordCount();
+    if (count == 0u || lastCommittedRecordOrdinal_ == 0u) return false;
+    D9CCommandChunkWireRecordHeader record{};
+    if (!readRecordEntry(count - 1u, record) ||
+        record.firstHandle > handleCount() ||
+        record.handleCount > handleCount() - record.firstHandle) {
+      return false;
+    }
+    for (std::uint32_t index = 0u; index < record.handleCount; ++index) {
+      D9CCommandChunkWireHandleEntry handle{};
+      if (!readHandleEntry(record.firstHandle + index, handle) ||
+          !visit(index, handle)) {
+        return false;
+      }
+    }
+    return true;
   }
   bool referencesObject(PeLocalObjectIdentity identity) const noexcept;
 
@@ -711,6 +806,24 @@ class CommandChunkBuilder {
   const std::vector<std::byte>& payloadForTest() const noexcept {
     return payload_;
   }
+  // Native fixtures use these to pin the warm-storage contract across the
+  // default exact singleton path. They expose allocation shape only; no
+  // production recorder code relies on them.
+  std::size_t recordsCapacityForTest() const noexcept {
+    return records_.capacity();
+  }
+  std::size_t handlesCapacityForTest() const noexcept {
+    return handles_.capacity();
+  }
+  std::size_t handleObjectsCapacityForTest() const noexcept {
+    return handleObjects_.capacity();
+  }
+  std::size_t payloadCapacityForTest() const noexcept {
+    return payload_.capacity();
+  }
+  std::size_t sealedBlobCapacityForTest() const noexcept {
+    return sealedBlob_.capacity();
+  }
 
  private:
   template <typename T>
@@ -773,6 +886,9 @@ class CommandChunkBuilder {
   bool readHandleEntry(
       std::size_t index,
       D9CCommandChunkWireHandleEntry& entry) const noexcept;
+  bool readRecordEntry(
+      std::size_t index,
+      D9CCommandChunkWireRecordHeader& entry) const noexcept;
   bool writeExactRecordEntry(
       std::size_t index,
       const D9CCommandChunkWireRecordHeader& record) noexcept;

@@ -4,8 +4,8 @@ workload: dxmt9 performance
 title: "DXMT9 Performance Bottleneck Model"
 type: root-overview
 status: current
-updated: 2026-08-25
-source: docs/perfomance/index.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; experiments/output/app-d3d9-3dmark05-current-cap-gt{1,2,3}-r1-20260825; experiments/output/app-d3d9-sfiv-benchmark-current-cap-sfiv-r1-20260825; docs/perfomance/shader-codegen/shader-codegen-defselect.02.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md
+updated: 2026-08-30
+source: docs/perfomance/index.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-copy-materialization-ledger.237.md; experiments/output/app-d3d9-3dmark05-current-cap-gt{1,2,3}-r1-20260825; experiments/output/app-d3d9-sfiv-benchmark-current-cap-sfiv-r1-20260825; experiments/output/app-d3d9-3dmark05-task4-gt2-ledger-{default,direct}-20260830; experiments/output/app-d3d9-sfiv-benchmark-task4-sfiv-ledger-direct-20260830; docs/perfomance/shader-codegen/shader-codegen-defselect.02.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md; docs/perfomance/state-churn-encode/state-churn-encode-encode-phase.203.md
 related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/overview-sfiv.md
 ---
 
@@ -20,7 +20,7 @@ related: docs/perfomance/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/
 > bottleneck taxonomy and the cross-workload baseline; that one joins the four
 > views for a single workload.
 
-Date: 2026-08-25
+Date: 2026-08-30
 
 Scope:
 
@@ -87,6 +87,17 @@ The remaining GT2 buffer Lock/Unlock residence is `2.203ms/Present`, but its
 bridge-transition component is small. Upload merging remains an observer-first
 lane: prove dead or composable source-qualified buffer generations before
 changing mutation timing.
+
+The owner-qualified copy/materialization ledger now covers the surviving
+PE, bridge, replay, queue, mutation, upload, arena, and semantic rows. In
+matched GT2 runs, the removable PE builder+seal rows cost `0.944-1.018ms` per
+published Present, bridge raw ownership costs `0.043-0.045ms`, and physical
+GPU upload records `12.375-12.774MB` / `1.177-1.260ms` per Present. The broader
+SFIV run shows the same ordering at smaller transfer volume. The Tape-on route
+does not produce a promotion result: CB/pass cadence stays approximately
+`4/16`, but the single pair is noisy and the Xcode producer verdict is
+`producer-state-inconclusive`. See
+[present-pacing-copy-materialization-ledger.237](present-pacing/present-pacing-copy-materialization-ledger.237.md).
 
 ### Preserved 2026-07-31 repeated baseline
 
@@ -451,6 +462,7 @@ flowchart TD
 |---|---|---|---|
 | Producer-thread saturation | Time Profiler running time by producer/replay/encode thread, PE module/PC samples, bridge/resource mutation counts | The application-facing producer remains continuously runnable while replay and encode retain slack. The 2026-08-25 GT2 sample assigns only `10.6%` of producer PCs to `d3d9.dll`; work in the game, Wine/bridge, and downstream snapshot construction composes the wall rather than one PE setter leaf. | First run the PE module/PC sampler to bound the dxmt9-owned share. When no leaf dominates, stop local setter tuning and reduce boundary crossings, resource-update traffic, or replay snapshot/materialization; prove overlap without increasing CB/pass/tile shape. |
 | Commit chunk replay | `bridge_commit_latency_ns`, `commit_chunk_import_cpu_ms`, `commit_chunk_handle_cpu_ms`, `commit_chunk_replay_cpu_ms`, `commit_chunk_queue_draw_submission_cpu_ms`, `commit_chunk_draw_batch_submit_cpu_ms`, draw-run child timers, `submit_draw_run_*_cpu_ms`, `submit_draw_run_batch_*_cpu_ms` | Unix-side record replay, draw-run scanning, snapshot/draw submission construction, queued submission flushing, or queue slot append/resource-mark/chunk-commit work. With the engine-default commit-replay offload, this class runs on the device-owned replay worker rather than inside the synchronous `commit_chunk` call (only validation/import/handle-marking stay app-thread synchronous); `bridge_commit_latency_ns` then measures raw-queue push backpressure, and a large historical value is not necessarily raw PE/unix bridge overhead. | Split replay and submit children first; optimize snapshot/draw submission, record dispatch, draw-run scan, constant-upload pass-through, submission batch construction, resource marking, and chunk append/publish cost before changing the ABI. Replay-worker-side CPU wins are FPS-flat while the worker has idle headroom; check worker idle before promoting them. |
+| Copy/materialization | `copy_materialization` rows: owner, calls, bytes, retained peak, explicit `copy_ns`, and semantic counts | PE builder/seal temporaries, pointer-free raw bridge ownership, queue finalization, mutation staging, and CPU→GPU upload each represent different ownership obligations; collapsing them hides the removable class and can mislabel necessary ABI/GPU transfers. Current matched GT2 evidence prices PE builder+seal at `0.944-1.018ms/Present`, bridge raw at `0.043-0.045ms`, and GPU upload at `1.177-1.260ms` with `12.375-12.774MB` transferred. | First attack the removable PE final-layout/seal class under exact-wire/rollback tests. Then prove source-qualified GPU upload reuse and raw bridge ownership transfer. Keep the ledger opt-in; its disabled branch is source-pinned to cached null pointers with no clock, atomic, or allocation work. |
 | Snapshot cache invalidation | `d3d9_snapshot_cache_lookup_cpu_ms`, `d3d9_snapshot_cache_miss_cpu_ms`, `d3d9_snapshot_cache_uniform_refresh_cpu_ms`, `d3d9_snapshot_uniform_build_calls`, `draw_uniform_payload_appends`, `draw_uniform_payload_append_bytes`, `draw_packet_declared_nonbinding`, `draw_packet_actual_nonbinding`, `draw_packet_redundant_nonbinding`, `draw_packet_redundant_uniform` | D3D9 snapshot submission rebuilds shader layout, hot state, or uniform payload too often. Current GT1 proof rejects broad same-value non-binding deltas (`redundant_nonbinding=0`), and the accepted cache-hit uniform refresh fast path proves a large part is real component payload construction/hash rather than redundant invalidation. | Keep cache-hit shader-constant refresh on the fast path. Remaining work is miss hot-build, VS indexed constant fallback, and stronger proof before revisiting invalidation policy. |
 | Per-draw CPU encode | `encode_draw_cpu_ms`, `bind_*`, `pipeline_lookup`, `fvf_decode` | Draws are replayed one by one even when state is stable. | Improve draw-run formation, cache decoded state, skip redundant binds. |
 | Payload/upload pressure | `transient_upload_calls`, `transient_upload_bytes`, `uniform_*`, payload arena counters | Stable constants or state are uploaded at draw frequency. | Split stable/volatile payloads, coalesce slab reservations, skip duplicate payload copies. |

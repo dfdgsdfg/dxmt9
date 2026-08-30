@@ -334,6 +334,9 @@ struct QueueTransitionRecord {
   std::optional<ChunkSlot::State> beforeSlotState{};
   std::optional<ChunkSlot::State> afterSlotState{};
   std::optional<QueueLifecycleEvent> forcedEvent{};
+  // Set by the encoder after the real serial/selected-parallel decision. This
+  // is diagnostic provenance, not scheduling policy.
+  std::optional<::dxmt9::queue::PipelineOwner> pipelineOwner{};
   std::size_t beforeCommandCount = 0;
   std::size_t afterCommandCount = 0;
   CpuReadySourceId beforeSourceId{};
@@ -389,6 +392,11 @@ struct QueueCompletionSource {
   // reclaim identity is source + seqId and never resolves this live shell.
   size_t slotIndex = 0;
   u64 seqId = 0;
+  // Exact encode owner for this source. A carried EncodeSession may contain
+  // serial and selected-parallel sources together; do not infer ownership
+  // from the record-wide tail owner.
+  ::dxmt9::queue::PipelineOwner pipelineOwner =
+      ::dxmt9::queue::PipelineOwner::SerialEncode;
   bool hasPresent = false;
   size_t commandBegin = 0;
   size_t commandCount = 0;
@@ -400,7 +408,8 @@ struct QueueCompletionSource {
     return !source.valid() && receipt.valid() && receipt.seqId == seqId;
   }
   bool completionIdentityValid() const noexcept {
-    return seqId != 0u && (locatorBacked() || receiptBacked());
+    return seqId != 0u && ::dxmt9::queue::pipelineEncodeOwnerValid(pipelineOwner) &&
+        (locatorBacked() || receiptBacked());
   }
 };
 
@@ -522,6 +531,26 @@ struct EncodeSessionSourceList {
       if (entry.seqId == replacement.seqId &&
           entry.source == replacement.source &&
           entry.receipt == replacement.receipt) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  bool setOwner(u64 sourceSeqId,
+                ::dxmt9::queue::PipelineOwner owner) noexcept {
+    if (!::dxmt9::queue::pipelineEncodeOwnerValid(owner)) {
+      return false;
+    }
+    for (size_t i = 0; i < count; ++i) {
+      if (entries[i].seqId == sourceSeqId) {
+        // SelectedParallel is the join of per-fragment provenance: it
+        // dominates SerialEncode in either update order. This is diagnostic
+        // metadata only and must not turn a mixed fragment into a scheduler
+        // abort or downgrade an already observed parallel fragment.
+        if (owner == ::dxmt9::queue::PipelineOwner::SelectedParallel) {
+          entries[i].pipelineOwner = owner;
+        }
         return true;
       }
     }
@@ -1090,6 +1119,11 @@ struct QueueSubmissionRecord {
   // commitCommandBuffer skips the legacy start in that case and only
   // issues stopCapture after commit.
   bool metalCaptureAlreadyStarted = false;
+  // The encoder writes this only after a selected-parallel pass has actually
+  // passed its proof gates. Queue observation must not infer selection from
+  // payload kind or command count.
+  ::dxmt9::queue::PipelineOwner pipelineOwner =
+      ::dxmt9::queue::PipelineOwner::SerialEncode;
   size_t slotIndex = 0;
   u64 seqId = 0;
   // Empty means the legacy one-slot submission: (slotIndex, seqId,
@@ -1418,9 +1452,18 @@ class QueueLifecycleController {
     // Nullable diagnostic sink.  The queue owns the observer; the controller
     // only forwards owner evidence and never allocates on the disabled path.
     ::dxmt9::queue::PipelineLifecycleObserverSink pipelineLifecycleObserver{};
+    ::dxmt9::queue::PipelineControlObserverSink pipelineControlObserver{};
+    // Resolved once when this binding is installed. Queue event producers use
+    // this cached bit to avoid an unconditional call into the owner observer.
+    bool pipelineLifecycleObservationEnabled = false;
   };
 
   void bindTrackedSubmissionState(SubmissionBinding binding);
+  // Control-plane boundary evidence. This is separate from per-source owner
+  // rows and never synthesizes a GPU completion or reclaim.
+  void observePipelineControl(::dxmt9::queue::PipelineControl control,
+                              ::dxmt9::queue::PipelineDisposition disposition)
+      noexcept;
   // Record an arena/source admission before the Tape entry becomes Ready.
   // The caller supplies the immutable admission identity because Tape quite
   // intentionally does not expose metadata while the entry is Writing.
@@ -1722,6 +1765,13 @@ class QueueLifecycleController {
   void recordNoEnqueueWaitGapToEncodeDequeue();
   void recordNoEnqueueWaitGapToCommandBufferCommit();
   void observeTransition(const QueueTransitionRecord& record) const;
+  // Keep the owner-evidence helper off the queue event hot path when both
+  // diagnostic consumers are absent. This cached/null test must remain at the
+  // call site: merely putting the same test inside an out-of-line helper still
+  // pays that call for every queue transition.
+  bool pipelineLifecycleObserverEnabled() const noexcept {
+    return submissionBinding_.pipelineLifecycleObservationEnabled;
+  }
   void observePipelineOwnerTransition(const QueueTransitionRecord& record,
                                       QueueLifecycleEvent event) const noexcept;
   void observePipelinePoisonStop() const noexcept;
@@ -1805,6 +1855,7 @@ class QueueLifecycleController {
       tentativeReadyPrefix_{};
   size_t tentativeReadyPrefixCount_ = 0;
   std::uint64_t cpuReadyCapacityProgressGeneration_ = 0;
+  std::uint64_t pipelineControlEpoch_ = 0;
   PostEncodeCompletionLedger postEncodeCompletionLedger_{};
   ArenaGroupSettlementLedger completedArenaGroupSettlements_{};
   std::uint64_t completedEventSettlementCount_ = 0;

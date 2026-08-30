@@ -3467,6 +3467,14 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
       ActiveArenaAppendResult::Inactive) {
     return;
   }
+  if (activeDirectChunkSlotBuild_.load(std::memory_order_acquire)) {
+    (void)appendActiveDirectChunkSlot(
+        [](DirectChunkSlotBuildContext&,
+           core::TransactionalChunkSlotAssembler&) noexcept {
+          return false;
+        });
+    return;
+  }
   if (draws.empty()) {
     return;
   }
@@ -3956,6 +3964,279 @@ void CommandQueue::CpuReadyArenaBuildLease::abort(bool failStop) noexcept {
   batch_ = false;
 }
 
+CommandQueue::DirectChunkSlotReplayLease::~DirectChunkSlotReplayLease() {
+  settle();
+}
+
+CommandQueue::DirectChunkSlotReplayLease::DirectChunkSlotReplayLease(
+    DirectChunkSlotReplayLease&& other) noexcept
+    : queue_(other.queue_), ticket_(other.ticket_),
+      controlIndex_(other.controlIndex_), effectsStarted_(other.effectsStarted_) {
+  other.queue_ = nullptr;
+  other.ticket_ = {};
+  other.controlIndex_ = std::numeric_limits<std::size_t>::max();
+  other.effectsStarted_ = false;
+}
+
+CommandQueue::DirectChunkSlotReplayLease&
+CommandQueue::DirectChunkSlotReplayLease::operator=(
+    DirectChunkSlotReplayLease&& other) noexcept {
+  if (this == &other) return *this;
+  settle();
+  queue_ = other.queue_;
+  ticket_ = other.ticket_;
+  controlIndex_ = other.controlIndex_;
+  effectsStarted_ = other.effectsStarted_;
+  other.queue_ = nullptr;
+  other.ticket_ = {};
+  other.controlIndex_ = std::numeric_limits<std::size_t>::max();
+  other.effectsStarted_ = false;
+  return *this;
+}
+
+CommandQueue::DirectChunkSlotReplayStatus
+CommandQueue::DirectChunkSlotReplayLease::commit(
+    std::span<const core::ChunkHandleEntry> resources) noexcept {
+  if (!queue_) return DirectChunkSlotReplayStatus::FailStopped;
+  auto* queue = queue_;
+  const auto status = queue->commitDirectChunkSlotReplay(
+      ticket_, controlIndex_, resources);
+  queue_ = nullptr;
+  ticket_ = {};
+  controlIndex_ = std::numeric_limits<std::size_t>::max();
+  effectsStarted_ = false;
+  return status;
+}
+
+bool CommandQueue::DirectChunkSlotReplayLease::rollbackPreEffect() noexcept {
+  if (!queue_ || effectsStarted_) return false;
+  const bool rolledBack = queue_->abortDirectChunkSlotReplay(
+      ticket_, controlIndex_, false);
+  queue_ = nullptr;
+  ticket_ = {};
+  controlIndex_ = std::numeric_limits<std::size_t>::max();
+  return rolledBack;
+}
+
+void CommandQueue::DirectChunkSlotReplayLease::settle() noexcept {
+  if (!queue_) return;
+  (void)queue_->abortDirectChunkSlotReplay(
+      ticket_, controlIndex_, effectsStarted_);
+  queue_ = nullptr;
+  ticket_ = {};
+  controlIndex_ = std::numeric_limits<std::size_t>::max();
+  effectsStarted_ = false;
+}
+
+CommandQueue::DirectChunkSlotReplayBeginResult
+CommandQueue::beginDirectChunkSlotReplay(
+    std::uint64_t rawOrdinal,
+    const core::SourcePayloadCapacity& capacity,
+    std::size_t plannedBytes) noexcept {
+  if (rawOrdinal == 0 || plannedBytes == 0 || capacity.commandHeaders == 0) {
+    return {.status = DirectChunkSlotReplayStatus::LegacyUnsupported};
+  }
+  const auto qmxBegin = queueMutexProbeBegin();
+  std::unique_lock lock(mutex_);
+  QueueMutexProbeScope qmxScope(
+      qmxBegin, "begin_direct_chunkslot_replay", /*skipHold=*/true);
+  if (stop_ || activeArenaBuild_.load(std::memory_order_acquire) ||
+      activeDirectChunkSlotBuild_.load(std::memory_order_acquire) ||
+      directChunkSlotBuildContext_) {
+    return {.status = stop_
+        ? DirectChunkSlotReplayStatus::FailStopped
+        : DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+  }
+  ensureWritingSlotUnlocked(*this, lock);
+  if (!writingSlot_ || *writingSlot_ >= slots_.size()) {
+    return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+  }
+  const auto controlIndex = *writingSlot_;
+  auto& control = slots_[controlIndex];
+  auto* payload = cpuReadyTape_.resolveForWrite(
+      core::CpuReadyPublicationTicket{
+          .id = control.sourceId,
+          .storage = control.storage,
+      });
+  if (control.state != core::ChunkSlot::State::Writing ||
+      !payload || payload != control.payload) {
+    return {.status = DirectChunkSlotReplayStatus::FailStopped};
+  }
+  // ChunkSlot vectors own their final bytes. Reserving behind an already
+  // constructed prefix could relocate that prefix, which would turn this
+  // direct lane into a hidden final-to-final copy. Preserve ordinary source
+  // cadence by falling back before effects until a fresh writing slot exists.
+  if (!payload->commandsEmpty()) {
+    return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+  }
+  if (nextDirectChunkSlotBuildGeneration_ == 0) {
+    requestSchedulingStopLocked();
+    return {.status = DirectChunkSlotReplayStatus::FailStopped};
+  }
+  const core::CpuReadyPublicationTicket ticket{
+      .id = control.sourceId,
+      .storage = control.storage,
+      .rawOrdinal = rawOrdinal,
+      .sourceOrdinal = control.sourceId.generation,
+      .seqId = nextSeqId_.load(std::memory_order_relaxed),
+      .buildGeneration = nextDirectChunkSlotBuildGeneration_++,
+  };
+  directChunkSlotBuildContext_.emplace();
+  auto& context = *directChunkSlotBuildContext_;
+  context.ownerThread = std::this_thread::get_id();
+  context.ticket = ticket;
+  context.controlIndex = controlIndex;
+  context.initialBackBuffer = currentBackBuffer_;
+  context.pendingBackBuffer = currentBackBuffer_;
+  context.assembler.emplace(*payload, capacity);
+  const bool bound = context.assembler->good() &&
+      context.assembler->bindOuter(
+          core::TransactionalChunkSlotAssembler::OuterBinding{
+              .rawOrdinal = ticket.rawOrdinal,
+              .sourceOrdinal = ticket.sourceOrdinal,
+              .seqId = ticket.seqId,
+              .buildGeneration = ticket.buildGeneration,
+              .sourceGeneration = ticket.id.generation,
+              .storageGeneration = ticket.storage.generation,
+              .controlIndex = static_cast<std::uint32_t>(controlIndex),
+              .firstPage = ticket.storage.firstPage,
+              .pageCount = ticket.storage.pageCount,
+              .segmentIndex = 0u,
+              .segmentCount = 1u,
+              .plannedBytes = plannedBytes,
+          });
+  if (!bound) {
+    context.assembler->rollback();
+    directChunkSlotBuildContext_.reset();
+    return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+  }
+  activeDirectChunkSlotBuild_.store(&context, std::memory_order_release);
+  return {
+      .status = DirectChunkSlotReplayStatus::Ready,
+      .lease = DirectChunkSlotReplayLease(*this, ticket, controlIndex),
+  };
+}
+
+bool CommandQueue::abortDirectChunkSlotReplay(
+    core::CpuReadyPublicationTicket ticket, std::size_t controlIndex,
+    bool failStop) noexcept {
+  std::lock_guard lock(mutex_);
+  auto* context = activeDirectChunkSlotBuild_.load(
+      std::memory_order_acquire);
+  if (!context || !directChunkSlotBuildContext_ ||
+      &*directChunkSlotBuildContext_ != context ||
+      context->ticket != ticket || context->controlIndex != controlIndex) {
+    if (failStop) requestSchedulingStopLocked();
+    return false;
+  }
+  bool destinationStillOwned = controlIndex < slots_.size() && writingSlot_ &&
+      *writingSlot_ == controlIndex;
+  if (destinationStillOwned) {
+    const auto& control = slots_[controlIndex];
+    destinationStillOwned =
+        control.state == core::ChunkSlot::State::Writing &&
+        control.sourceId == ticket.id && control.storage == ticket.storage &&
+        cpuReadyTape_.resolveForWrite(core::CpuReadyPublicationTicket{
+            .id = ticket.id,
+            .storage = ticket.storage,
+        }) == control.payload;
+  }
+  if (context->assembler) {
+    if (destinationStillOwned) {
+      context->assembler->rollback();
+    } else {
+      context->assembler->abandonFailStop();
+      failStop = true;
+    }
+  }
+  activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
+  directChunkSlotBuildContext_.reset();
+  if (failStop) requestSchedulingStopLocked();
+  return !failStop && destinationStillOwned;
+}
+
+CommandQueue::DirectChunkSlotReplayStatus
+CommandQueue::commitDirectChunkSlotReplay(
+    core::CpuReadyPublicationTicket ticket, std::size_t controlIndex,
+    std::span<const core::ChunkHandleEntry> resources) noexcept {
+  std::lock_guard lock(mutex_);
+  auto* context = activeDirectChunkSlotBuild_.load(
+      std::memory_order_acquire);
+  if (!context || !directChunkSlotBuildContext_ ||
+      &*directChunkSlotBuildContext_ != context ||
+      context->ticket != ticket || context->controlIndex != controlIndex ||
+      context->ownerThread != std::this_thread::get_id() ||
+      context->failed || !context->assembler ||
+      controlIndex >= slots_.size() || !writingSlot_ ||
+      *writingSlot_ != controlIndex) {
+    if (context && context->assembler) context->assembler->abandonFailStop();
+    activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
+    directChunkSlotBuildContext_.reset();
+    requestSchedulingStopLocked();
+    return DirectChunkSlotReplayStatus::FailStopped;
+  }
+  auto& control = slots_[controlIndex];
+  auto* payload = cpuReadyTape_.resolveForWrite(
+      core::CpuReadyPublicationTicket{
+          .id = ticket.id,
+          .storage = ticket.storage,
+      });
+  if (control.state != core::ChunkSlot::State::Writing ||
+      control.sourceId != ticket.id || control.storage != ticket.storage ||
+      payload != control.payload ||
+      nextSeqId_.load(std::memory_order_relaxed) != ticket.seqId ||
+      !context->assembler->prepare()) {
+    context->assembler->abandonFailStop();
+    activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
+    directChunkSlotBuildContext_.reset();
+    requestSchedulingStopLocked();
+    return DirectChunkSlotReplayStatus::FailStopped;
+  }
+
+  markChunkResourcesWithExactSeq(pool_, resources, ticket.seqId);
+  const core::SourcePayloadView payloadView(*payload);
+  if (!payloadView.valid()) {
+    context->assembler->abandonFailStop();
+    activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
+    directChunkSlotBuildContext_.reset();
+    requestSchedulingStopLocked();
+    return DirectChunkSlotReplayStatus::FailStopped;
+  }
+  markArenaSourceResources(pool_, payloadView, ticket.seqId);
+  ArenaResourceRetainDigest retained;
+  retained.add(resources);
+  retained.add(payloadView);
+  const auto& binding = *context->assembler->outerBinding();
+  if (!context->assembler->bindCommitEvidence(
+          core::ArenaCommitEvidence(
+              core::ArenaLiveTransactionToken(context), ticket.rawOrdinal,
+              ticket.sourceOrdinal, ticket.seqId, ticket.buildGeneration,
+              ticket.id.generation, ticket.storage.generation,
+              static_cast<std::uint32_t>(controlIndex),
+              ticket.storage.firstPage, ticket.storage.pageCount, 0u, 1u,
+              binding.plannedBytes, retained.count, retained.hash)) ||
+      !context->assembler->commitEvidenceMatches(
+          context, ticket.rawOrdinal, ticket.sourceOrdinal, ticket.seqId,
+          ticket.buildGeneration, ticket.id.generation,
+          ticket.storage.generation,
+          static_cast<std::uint32_t>(controlIndex),
+          ticket.storage.firstPage, ticket.storage.pageCount, 0u, 1u,
+          binding.plannedBytes, retained.count, retained.hash) ||
+      !context->assembler->commit()) {
+    context->assembler->abandonFailStop();
+    activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
+    directChunkSlotBuildContext_.reset();
+    requestSchedulingStopLocked();
+    return DirectChunkSlotReplayStatus::FailStopped;
+  }
+  if (context->updatesBackBuffer) {
+    currentBackBuffer_ = context->pendingBackBuffer;
+  }
+  activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
+  directChunkSlotBuildContext_.reset();
+  return DirectChunkSlotReplayStatus::Committed;
+}
+
 CommandQueue::CpuReadyArenaBeginResult
 CommandQueue::beginCpuReadyArenaSource(
     std::uint64_t rawOrdinal,
@@ -4073,11 +4354,13 @@ CommandQueue::beginCpuReadyArenaSource(
   control.sourceId = reservation->id;
   control.storage = reservation->storage;
   control.payload = nullptr;
-  queueLifecycle_.recordPipelineSourceArrival(
-      core::CpuReadyTape::PayloadKind::Arena,
-      core::CpuReadyTape::SourceRef{.id = reservation->id,
-                                    .storage = reservation->storage},
-      identity, layout.usedBytes);
+  if (pipelineLifecycleObservationEnabled_) {
+    queueLifecycle_.recordPipelineSourceArrival(
+        core::CpuReadyTape::PayloadKind::Arena,
+        core::CpuReadyTape::SourceRef{.id = reservation->id,
+                                      .storage = reservation->storage},
+        identity, layout.usedBytes);
+  }
   // Release, for the same reason as the publish increment in
   // QueueLifecycleController::commitCurrentChunk: a lock-free
   // `markTicketAcquire()` reader synchronizes with this store.
@@ -4227,17 +4510,19 @@ CommandQueue::beginCpuReadyArenaSources(
     control.sourceId = batch->reservations[i].id;
     control.storage = batch->reservations[i].storage;
     control.payload = nullptr;
-    queueLifecycle_.recordPipelineSourceArrival(
-        core::CpuReadyTape::PayloadKind::Arena,
-        core::CpuReadyTape::SourceRef{.id = control.sourceId,
-                                      .storage = control.storage},
-        core::CpuReadyAdmissionIdentity{
-            .rawOrdinal = rawOrdinal,
-            .sourceOrdinal = firstSeqId + i,
-            .seqId = firstSeqId + i,
-            .buildGeneration = buildGeneration,
-        },
-        layouts[i].usedBytes);
+    if (pipelineLifecycleObservationEnabled_) {
+      queueLifecycle_.recordPipelineSourceArrival(
+          core::CpuReadyTape::PayloadKind::Arena,
+          core::CpuReadyTape::SourceRef{.id = control.sourceId,
+                                        .storage = control.storage},
+          core::CpuReadyAdmissionIdentity{
+              .rawOrdinal = rawOrdinal,
+              .sourceOrdinal = firstSeqId + i,
+              .seqId = firstSeqId + i,
+              .buildGeneration = buildGeneration,
+          },
+          layouts[i].usedBytes);
+    }
   }
   nextSeqId_.store(exclusiveSeqTail, std::memory_order_release);
   arenaAdmissionActive_.store(true, std::memory_order_release);
@@ -4824,6 +5109,140 @@ CommandQueue::appendActiveArenaGenerateMipmaps(
     return assembler && assembler->tryAppendGenerateMipmaps(value) &&
            context.captureSingleCommand();
   });
+}
+
+core::DirectReplayDrawDisposition
+CommandQueue::appendActiveDirectChunkSlotDraw(
+    const core::DirectReplayDrawInput& input) noexcept {
+  const auto result = appendActiveDirectChunkSlot(
+      [&](DirectChunkSlotBuildContext& context,
+          core::TransactionalChunkSlotAssembler& assembler) noexcept {
+        const auto commandCount = assembler.commandCount();
+        if (!assembler.tryAppendDirectDraw(input)) return false;
+        context.pendingBackBuffer = input.hot->colorAttachments[0].handle;
+        context.updatesBackBuffer = true;
+        if (assembler.commandCount() != commandCount) {
+          noteCurrentSlotCommandAppendStartedUnlocked(*this);
+        }
+        const std::span<const core::DrawParamPayloadView> payloads(
+            &input.payload, 1u);
+        markDrawBindingSnapshotResources(pool_, payloads, context.ticket.seqId);
+        if (!skipDrawResourceMarking_ ||
+            forceDrawResourceMarkingAfterSplit_) {
+          pool_.markDrawResources(*input.hot, context.ticket.seqId);
+          markDrawBindingOverrideResources(pool_, payloads,
+                                           context.ticket.seqId);
+        }
+        return true;
+      });
+  switch (result) {
+  case ActiveArenaAppendResult::Inactive:
+    return core::DirectReplayDrawDisposition::LegacyUnsupported;
+  case ActiveArenaAppendResult::Appended:
+    return core::DirectReplayDrawDisposition::Appended;
+  case ActiveArenaAppendResult::Failed:
+    return core::DirectReplayDrawDisposition::AcceptedFailStop;
+  }
+  return core::DirectReplayDrawDisposition::AcceptedFailStop;
+}
+
+CommandQueue::ActiveArenaAppendResult
+CommandQueue::appendActiveDirectChunkSlotClear(
+    const core::ClearDesc& value) noexcept {
+  // ClearDesc owns its nested rect vector. Make that ownership transfer
+  // before the assembler reserves the destination so direct replay performs
+  // no nested-vector allocation after reservation.
+  if (!activeDirectChunkSlotBuild_.load(std::memory_order_acquire)) {
+    return ActiveArenaAppendResult::Inactive;
+  }
+  core::ClearDesc owned;
+  try {
+    owned = value;
+  } catch (...) {
+    return appendActiveDirectChunkSlot(
+        [](DirectChunkSlotBuildContext&,
+           core::TransactionalChunkSlotAssembler&) noexcept {
+          return false;
+        });
+  }
+  return appendActiveDirectChunkSlot(
+      [this, owned = std::move(owned)](DirectChunkSlotBuildContext& context,
+          core::TransactionalChunkSlotAssembler& assembler) mutable noexcept {
+        auto clear = std::move(owned);
+        if (!assembler.tryAppendClear(std::move(clear))) return false;
+        noteCurrentSlotCommandAppendStartedUnlocked(*this);
+        if (clear.colorAttachments[0].handle) {
+          context.pendingBackBuffer = clear.colorAttachments[0].handle;
+          context.updatesBackBuffer = true;
+        }
+        return true;
+      });
+}
+
+CommandQueue::ActiveArenaAppendResult
+CommandQueue::appendActiveDirectChunkSlotSurfaceCopy(
+    const core::SurfaceCopyDesc& value) noexcept {
+  return appendActiveDirectChunkSlot(
+      [&](DirectChunkSlotBuildContext& context,
+          core::TransactionalChunkSlotAssembler& assembler) noexcept {
+        if (!assembler.tryAppendSurfaceCopy(value)) return false;
+        noteCurrentSlotCommandAppendStartedUnlocked(*this);
+        context.pendingBackBuffer = value.destination;
+        context.updatesBackBuffer = true;
+        return true;
+      });
+}
+
+CommandQueue::ActiveArenaAppendResult
+CommandQueue::appendActiveDirectChunkSlotStretchRect(
+    const core::StretchRectDesc& value) noexcept {
+  return appendActiveDirectChunkSlot(
+      [&](DirectChunkSlotBuildContext& context,
+          core::TransactionalChunkSlotAssembler& assembler) noexcept {
+        if (!assembler.tryAppendStretchRect(value)) return false;
+        noteCurrentSlotCommandAppendStartedUnlocked(*this);
+        context.pendingBackBuffer = value.destination;
+        context.updatesBackBuffer = true;
+        return true;
+      });
+}
+
+CommandQueue::ActiveArenaAppendResult
+CommandQueue::appendActiveDirectChunkSlotColorFill(
+    const core::ColorFillDesc& value) noexcept {
+  return appendActiveDirectChunkSlot(
+      [&](DirectChunkSlotBuildContext& context,
+          core::TransactionalChunkSlotAssembler& assembler) noexcept {
+        if (!assembler.tryAppendColorFill(value)) return false;
+        noteCurrentSlotCommandAppendStartedUnlocked(*this);
+        context.pendingBackBuffer = value.destination;
+        context.updatesBackBuffer = true;
+        return true;
+      });
+}
+
+CommandQueue::ActiveArenaAppendResult
+CommandQueue::appendActiveDirectChunkSlotDepthResolve(
+    const core::DepthResolveDesc& value) noexcept {
+  return appendActiveDirectChunkSlot(
+      [&](DirectChunkSlotBuildContext&,
+          core::TransactionalChunkSlotAssembler& assembler) noexcept {
+        if (!assembler.tryAppendDepthResolve(value)) return false;
+        noteCurrentSlotCommandAppendStartedUnlocked(*this);
+        return true;
+      });
+}
+
+CommandQueue::ActiveArenaAppendResult
+CommandQueue::appendActiveDirectChunkSlotGenerateMipmaps(
+    const core::GenerateMipmapsDesc& value) noexcept {
+  return appendActiveDirectChunkSlot(
+      [&](DirectChunkSlotBuildContext&,
+          core::TransactionalChunkSlotAssembler& assembler) noexcept {
+        if (!assembler.tryAppendGenerateMipmaps(value)) return false;
+        noteCurrentSlotCommandAppendStartedUnlocked(*this);
+        return true;
+      });
 }
 
 CommandQueue::ActiveArenaAppendResult CommandQueue::appendActiveArenaPresent(
@@ -5909,22 +6328,40 @@ void CommandQueue::submitDrawRunBatch(
       ActiveArenaAppendResult::Inactive) {
     return;
   }
+  if (activeDirectChunkSlotBuild_.load(std::memory_order_acquire)) {
+    (void)appendActiveDirectChunkSlot(
+        [](DirectChunkSlotBuildContext&,
+           core::TransactionalChunkSlotAssembler&) noexcept {
+          return false;
+        });
+    return;
+  }
   submitDrawRunBatchImpl(*this, pool_, mutex_, currentBackBuffer_,
                          skipDrawResourceMarking_,
                          forceDrawResourceMarkingAfterSplit_,
                          submissions);
 }
 
-bool CommandQueue::submitDirectReplayDraw(
+core::DirectReplayDrawDisposition CommandQueue::submitDirectReplayDraw(
     const core::DirectReplayDrawInput& input) noexcept {
   perf::countSubmitDraw();
-  return appendActiveArenaDirectReplayDraw(input) !=
-         ActiveArenaAppendResult::Inactive;
+  const auto arena = appendActiveArenaDirectReplayDraw(input);
+  if (arena == ActiveArenaAppendResult::Appended) {
+    return core::DirectReplayDrawDisposition::Appended;
+  }
+  if (arena == ActiveArenaAppendResult::Failed) {
+    return core::DirectReplayDrawDisposition::AcceptedFailStop;
+  }
+  return appendActiveDirectChunkSlotDraw(input);
 }
 
 void CommandQueue::submitClear(const core::ClearDesc& desc) {
   perf::countSubmitClear();
   if (appendActiveArenaClear(desc) != ActiveArenaAppendResult::Inactive) {
+    return;
+  }
+  if (appendActiveDirectChunkSlotClear(desc) !=
+      ActiveArenaAppendResult::Inactive) {
     return;
   }
   const auto qmxBegin = queueMutexProbeBegin();
@@ -5950,6 +6387,10 @@ void CommandQueue::submitSurfaceCopy(const core::SurfaceCopyDesc& desc) {
       ActiveArenaAppendResult::Inactive) {
     return;
   }
+  if (appendActiveDirectChunkSlotSurfaceCopy(desc) !=
+      ActiveArenaAppendResult::Inactive) {
+    return;
+  }
   const auto qmxBegin = queueMutexProbeBegin();
   std::unique_lock lock(mutex_);
   // skipHold: `lock` is handed to ensureWritingSlotUnlocked below, which may
@@ -5966,6 +6407,10 @@ void CommandQueue::submitSurfaceCopy(const core::SurfaceCopyDesc& desc) {
 void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
   perf::countSubmitStretch();
   if (appendActiveArenaStretchRect(desc) !=
+      ActiveArenaAppendResult::Inactive) {
+    return;
+  }
+  if (appendActiveDirectChunkSlotStretchRect(desc) !=
       ActiveArenaAppendResult::Inactive) {
     return;
   }
@@ -6015,6 +6460,10 @@ void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
       ActiveArenaAppendResult::Inactive) {
     return;
   }
+  if (appendActiveDirectChunkSlotColorFill(desc) !=
+      ActiveArenaAppendResult::Inactive) {
+    return;
+  }
   const auto qmxBegin = queueMutexProbeBegin();
   std::unique_lock lock(mutex_);
   // skipHold: `lock` is handed to ensureWritingSlotUnlocked below, which may
@@ -6030,6 +6479,10 @@ void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
 
 void CommandQueue::submitDepthResolve(const core::DepthResolveDesc& desc) {
   if (appendActiveArenaDepthResolve(desc) !=
+      ActiveArenaAppendResult::Inactive) {
+    return;
+  }
+  if (appendActiveDirectChunkSlotDepthResolve(desc) !=
       ActiveArenaAppendResult::Inactive) {
     return;
   }
@@ -6052,6 +6505,10 @@ void CommandQueue::submitDepthResolve(const core::DepthResolveDesc& desc) {
 void CommandQueue::submitGenerateMipmaps(
     const core::GenerateMipmapsDesc& desc) {
   if (appendActiveArenaGenerateMipmaps(desc) !=
+      ActiveArenaAppendResult::Inactive) {
+    return;
+  }
+  if (appendActiveDirectChunkSlotGenerateMipmaps(desc) !=
       ActiveArenaAppendResult::Inactive) {
     return;
   }
@@ -7343,6 +7800,9 @@ CommandQueue::encodeCpuReadySessionSource(
 }
 
 void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) {
+  pipelineLifecycleObservationEnabled_ =
+      pipelineLifecycleObserver_ != nullptr ||
+      schedulingProgressWatchdog_.enabled();
   queueLifecycle_.bindTrackedSubmissionState({
       .writingSlot = &writingSlot_,
       .writeIndex = &writeIndex_,
@@ -7372,6 +7832,9 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
       .pipelineLifecycleObserver = pipelineLifecycleObserver_
           ? pipelineLifecycleObserver_->productionSink()
           : dxmt9::queue::PipelineLifecycleObserverSink{},
+      .pipelineControlObserver = pipelineLifecycleObserver_
+          ? pipelineLifecycleObserver_->productionControlSink()
+          : dxmt9::queue::PipelineControlObserverSink{},
   });
 }
 
@@ -7453,6 +7916,14 @@ void CommandQueue::requestSchedulingStopLocked() noexcept {
   cpuReadyTape_.stopAdmission();
   notifySchedulingTerminalWaiters(
       render::SchedulingTerminalDisposition::Stop);
+}
+
+void CommandQueue::observePipelineControl(
+    ::dxmt9::queue::PipelineControl control,
+    ::dxmt9::queue::PipelineDisposition disposition) noexcept {
+  if (pipelineLifecycleObservationEnabled_) {
+    queueLifecycle_.observePipelineControl(control, disposition);
+  }
 }
 
 void CommandQueue::notifySchedulingTerminalWaiters(

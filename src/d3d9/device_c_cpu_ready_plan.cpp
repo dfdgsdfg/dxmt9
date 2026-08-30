@@ -640,4 +640,58 @@ CpuReadyPlan planCpuReadyChunk(
   return plan;
 }
 
+DirectChunkSlotReplayDisposition classifyDirectChunkSlotReplay(
+    const ImportedChunkView& imported, const CpuReadyPlan& plan,
+    bool captureOrTrace) noexcept {
+  if (captureOrTrace) {
+    return DirectChunkSlotReplayDisposition::LegacyCaptureOrTrace;
+  }
+  if (plan.lane == ReplayLane::Reject) {
+    return DirectChunkSlotReplayDisposition::RejectInvalid;
+  }
+  if (plan.containsOrderedControls || plan.lane == ReplayLane::Inline) {
+    return DirectChunkSlotReplayDisposition::InlineOrderedControl;
+  }
+  if (plan.reason == ReplayReason::Oversize) {
+    return DirectChunkSlotReplayDisposition::LegacyOversized;
+  }
+  if (plan.lane == ReplayLane::StateOnly) {
+    return DirectChunkSlotReplayDisposition::LegacyStateOnly;
+  }
+  if (!plan.directArenaCandidate() || plan.sourceCount != 1u ||
+      plan.segmentCount != 1u || !plan.layout) {
+    return DirectChunkSlotReplayDisposition::LegacyUnsupported;
+  }
+  for (std::size_t i = 0; i < imported.records.size(); ++i) {
+    switch (imported.records[i].type) {
+    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+    case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+    case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+    case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_B:
+    case D9C_COMMAND_RECORD_APPLY_STATE:
+    case D9C_COMMAND_RECORD_CLEAR:
+    case D9C_COMMAND_RECORD_UPDATE_SURFACE:
+    case D9C_COMMAND_RECORD_STRETCH_RECT:
+    case D9C_COMMAND_RECORD_COLOR_FILL:
+    case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE:
+    case D9C_COMMAND_RECORD_GENERATE_MIPMAPS:
+      break;
+    case D9C_COMMAND_RECORD_QUERY_ISSUE:
+    case D9C_COMMAND_RECORD_READBACK:
+    case D9C_COMMAND_RECORD_UPDATE_TEXTURE:
+      return DirectChunkSlotReplayDisposition::InlineOrderedControl;
+    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
+    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
+    case D9C_COMMAND_RECORD_PRESENT:
+    default:
+      return DirectChunkSlotReplayDisposition::LegacyUnsupported;
+    }
+  }
+  return DirectChunkSlotReplayDisposition::Direct;
+}
+
 }  // namespace dxmt9::d3d9

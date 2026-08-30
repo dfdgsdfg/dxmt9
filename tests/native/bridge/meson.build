@@ -15,7 +15,10 @@ test('dxmt9-pe-retainer-spec', pe_retainer_spec)
 pe_semantic_projection_spec = executable(
   'dxmt9-pe-semantic-projection-spec',
   'pe_semantic_projection_spec.cpp',
-  include_directories: include_directories('../../../src/d3d9'),
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
   link_args: dxmt9_test_link_args,
 )
 

@@ -34,6 +34,16 @@ namespace dxmt9::d3d9 {
 
 namespace {
 
+using MutationObserver =
+    dxmt9::resources::mutation_observer::MutationCompositionObserver;
+
+dxmt9::resources::mutation_observer::ResourceMutationIdentity
+mutationObserverIdentity(const BufferMutationTask& task) noexcept {
+  return {.resource = task.bufferHandle,
+          .backingGeneration = task.lease.contentRevision,
+          .sourceOrdinal = task.replaySeq};
+}
+
 // Same file-local RAII CPU-time scope pattern used across the codebase
 // (e.g. src/d3d9/core_draw.cpp, src/dxmt9/dxmt9_command_queue.cpp): there is
 // no shared dxmt9::perf::PerfScope type, each TU that needs one defines its
@@ -368,10 +378,17 @@ namespace {
 // retention; a mutation task gives up its core-buffer retention and its ring
 // entry's residency lease when its `unique_ptr` dies, so the only thing the
 // drain owes is the counter that says the bytes were never published.
-void releaseDrainedQueueItems(std::vector<ReplayQueueItem>& items) {
+void releaseDrainedQueueItems(
+    std::vector<ReplayQueueItem>& items,
+    MutationObserver* observer = nullptr) {
   for (auto& item : items) {
     if (item.isMutation()) {
       dxmt9::perf::countOffloadBufferMutationDiscarded();
+      if (observer) {
+        observer->settleMutation(
+            mutationObserverIdentity(*item.mutation),
+            dxmt9::resources::mutation_observer::CompletionDisposition::Discarded);
+      }
       item.mutation.reset();
       continue;
     }
@@ -402,7 +419,8 @@ void ReplayOffloadWorker::stop() {
   // did not go through the fail-stop path.
   std::vector<ReplayQueueItem> drained;
   queue_.drainRemaining(drained);
-  releaseDrainedQueueItems(drained);
+  releaseDrainedQueueItems(drained, owner_ ?
+      owner_->mutationCompositionObserver.get() : nullptr);
 }
 
 void ReplayOffloadWorker::run(D9CDevice* device) {
@@ -424,6 +442,9 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
         failed_.store(true, std::memory_order_release);
         device->replayDrainLedger.poison();
         queue_.stop();
+        if (auto* observer = device->mutationCompositionObserver.get())
+          observer->observeGlobalBarrier(
+              dxmt9::resources::mutation_observer::BarrierReason::Failure);
         if (!applyStateBlock_) {
           DXMT_ASSERT(false && "deferred state block apply failed");
         }
@@ -468,6 +489,9 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
         failed_.store(true, std::memory_order_release);
         device->replayDrainLedger.poison();
         queue_.stop();
+        if (auto* observer = device->mutationCompositionObserver.get())
+          observer->observeGlobalBarrier(
+              dxmt9::resources::mutation_observer::BarrierReason::Failure);
         if (!applyMutation_) {
           DXMT_ASSERT(false && "deferred buffer mutation apply failed");
         }
@@ -484,9 +508,19 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
           }
         }
         dxmt9::perf::countOffloadBufferMutationDiscarded();
+        if (auto* observer = device->mutationCompositionObserver.get()) {
+          observer->settleMutation(
+              mutationObserverIdentity(task),
+              dxmt9::resources::mutation_observer::CompletionDisposition::Failed);
+        }
         item.mutation.reset();
         queue_.markReplayDone();
         break;
+      }
+      if (auto* observer = device->mutationCompositionObserver.get()) {
+        observer->settleMutation(
+            mutationObserverIdentity(task),
+            dxmt9::resources::mutation_observer::CompletionDisposition::Completed);
       }
       device->replayDrainLedger.publishMutationReplayed(task);
       item.mutation.reset();
@@ -511,6 +545,9 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
       failed_.store(true, std::memory_order_release);
       device->replayDrainLedger.poison();
       queue_.stop();
+      if (auto* observer = device->mutationCompositionObserver.get())
+        observer->observeGlobalBarrier(
+            dxmt9::resources::mutation_observer::BarrierReason::Failure);
       if (!replay_) {
         DXMT_ASSERT(false && "deferred commit replay failed");
       }
@@ -535,6 +572,36 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
       queue_.markReplayDone();
       break;
     }
+    if (auto* observer = device->mutationCompositionObserver.get()) {
+      // A chunk's captured backing/revision is the same identity consumed by
+      // Render Tape replay. Mark use only after replay succeeds so a failed
+      // chunk cannot falsely discharge a dead-generation observation.
+      for (const auto& snapshot : chunk.bufferSnapshots) {
+        const auto identity =
+            dxmt9::resources::mutation_observer::ResourceMutationIdentity{
+                .resource = snapshot.buffer.value,
+                .backingGeneration = snapshot.snapshot.contentRevision != 0u
+                                         ? snapshot.snapshot.contentRevision
+                                         : 1u,
+                .sourceOrdinal = chunk.replaySeq};
+        observer->observeUse(
+            identity,
+            dxmt9::resources::mutation_observer::ObserverKind::GpuUse);
+      }
+      // Legacy/unsupported capture lanes still expose the canonical handle
+      // set, but no immutable backing snapshot. Bind their use to the newest
+      // observed generation for that logical resource; this keeps the
+      // observer conservative without changing replay or fabricating a
+      // concrete backing identity that Render Tape did not capture.
+      if (chunk.bufferSnapshots.empty()) {
+        for (const auto& entry : chunk.resourceEntries) {
+          if (entry.kind != dxmt9::core::ChunkHandleKind::Buffer) continue;
+          observer->observeUseForResource(
+              entry.handle.value, chunk.replaySeq,
+              dxmt9::resources::mutation_observer::ObserverKind::GpuUse);
+        }
+      }
+    }
     device->replayDrainLedger.publishReplayed(chunk);
     // Raw-entry backing leases are needed only until replay has consumed the
     // immutable table. Release them before the worker can idle on its next pop;
@@ -557,7 +624,7 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
   // other thread calls pop()/markReplayDone() on this queue.
   std::vector<ReplayQueueItem> drained;
   queue_.drainRemaining(drained);
-  releaseDrainedQueueItems(drained);
+  releaseDrainedQueueItems(drained, device->mutationCompositionObserver.get());
 }
 
 // Per-call-site attribution for the drain fence
@@ -1127,15 +1194,19 @@ BufferMutationOffloadResult offloadManagedBufferMutation(
   const auto length = std::min(static_cast<std::size_t>(b->obj->lockedSize()),
                                bounded - offset);
 
-  const auto stageStart = std::chrono::steady_clock::now();
   // Step 1: reserve first, so the FIFO ordinal is fixed before anything else
   // in this transaction happens, then stage into task-owned storage.
+  const auto queueStart = std::chrono::steady_clock::now();
   const auto reservation = queue.reserveMutation(length, ledger);
+  const auto queueNs = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - queueStart).count());
   if (!reservation.valid()) {
     dxmt9::perf::countD3D9BufferUnlockDeferredRejected();
     return BufferMutationOffloadResult::RejectedPreEffect;
   }
-    std::unique_ptr<BufferMutationTask> task;
+  const auto stageStart = std::chrono::steady_clock::now();
+  std::unique_ptr<BufferMutationTask> task;
   try {
     task = std::make_unique<BufferMutationTask>();
     if (length != 0u) {
@@ -1188,8 +1259,9 @@ BufferMutationOffloadResult offloadManagedBufferMutation(
   // Step 3: infallible commit at the reserved position + ledger publication.
   const auto stagedBytes =
       static_cast<std::uint64_t>(task->stagedBytes.size());
-  auto* observer = dxmt9::resources::mutation_observer::
-      activeMutationCompositionObserver();
+  auto* observer = b->device
+      ? b->device->mutationCompositionObserver.get()
+      : nullptr;
   std::uint64_t observerResource = 0u;
   std::uint64_t observerGeneration = 0u;
   std::uint64_t observerOrdinal = 0u;
@@ -1215,14 +1287,23 @@ BufferMutationOffloadResult offloadManagedBufferMutation(
                 .resource = observerResource,
                 .backingGeneration = observerGeneration,
                 .sourceOrdinal = observerOrdinal},
+        .sourceKind =
+            dxmt9::resources::MutationSourceKind::DeferredMutation,
+        .renderTapeIdentity =
+            dxmt9::resources::mutation_observer::RenderTapeIdentity{
+                .kind = b->wireIdentity.kind,
+                .generation = b->wireIdentity.generation,
+                .objectId = b->wireIdentity.objectId},
         .disposition = dxmt9::resources::mutation_observer::Disposition::Plain,
         .byteOffset = observerOffset,
         .byteSize = stagedBytes,
         .timing = dxmt9::resources::mutation_observer::MutationTiming{
             .wow64WritebackNs = wow64WritebackNs,
+            .queueLockNs = queueNs,
             .backingRotationNs = rotateNs,
             .shadowCopyNs = stageNs},
         .successful = true,
+        .completion = dxmt9::resources::mutation_observer::CompletionDisposition::Pending,
     });
   }
   dxmt9::perf::countD3D9BufferUnlockDeferred(stagedBytes, stageNs, rotateNs);

@@ -27,6 +27,11 @@ under `tests/meson.build`.
   generation atomically replaces each distinct module, and
   `--verify-generation` exercises that separate-output path in a temporary
   directory. `verify_tla.sh` rejects either generated module when stale.
+- `gen_mutation_composition_table.py` — generates or checks the TLA decision
+  vocabulary shared by the production mutation-composition classifier and its
+  bounded model. It does not generate the predicate relation; that relation is
+  intentionally explicit in the production classifier, TLA `Expected`, and
+  native cases.
 - `assert_perf_counters.py` — fails when expected perf counter keys are
   missing from a run JSON; intended to extend draw-uniforms coverage.
 - `audit_perf_counter_table.py` — text-based audit detecting fields added to

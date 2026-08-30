@@ -2216,6 +2216,13 @@ struct ChunkSlot {
     appendCommandRecord(MetalCommandKind::Clear, clearRecords, clear);
   }
 
+  // Direct replay transfers an already-owned ClearDesc after reservation so
+  // copying its nested rect vector cannot allocate on the reserved path.
+  void appendClear(ClearDesc&& clear) {
+    appendCommandRecord(MetalCommandKind::Clear, clearRecords,
+                        std::move(clear));
+  }
+
   void appendSurfaceCopy(const SurfaceCopyDesc& surfaceCopy) {
     appendCommandRecord(MetalCommandKind::SurfaceCopy, surfaceCopyRecords, surfaceCopy);
   }

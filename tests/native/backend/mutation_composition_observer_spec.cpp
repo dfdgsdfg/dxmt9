@@ -1,4 +1,5 @@
 #include "dxmt9/mutation_composition_observer.hpp"
+#include "dxmt9/mutation_composition_predicates.hpp"
 
 #include <cstdint>
 #include <cstdlib>
@@ -19,17 +20,76 @@ void check(bool condition, std::string_view message) {
 mo::MutationEvent event(std::uint64_t resource, std::uint64_t generation,
                         std::uint64_t ordinal, mo::Disposition disposition,
                         std::uint64_t offset, std::uint64_t bytes,
-                        std::uint64_t cpuNs = 0u, bool successful = true) {
+                        std::uint64_t cpuNs = 0u, bool successful = true,
+                        dxmt9::resources::MutationSourceKind source =
+                            dxmt9::resources::MutationSourceKind::SynchronousMutation) {
   mo::MutationEvent result{};
   result.identity = {.resource = resource,
                      .backingGeneration = generation,
                      .sourceOrdinal = ordinal};
+  result.sourceKind = source;
+  result.renderTapeIdentity = {.kind = 1u, .generation = 1u, .objectId = 1u};
   result.disposition = disposition;
   result.byteOffset = offset;
   result.byteSize = bytes;
   result.timing.shadowCopyNs = cpuNs;
   result.successful = successful;
   return result;
+}
+
+void testMixedSyncAndDeferredShareOrderingDomain() {
+  mo::MutationCompositionObserver observer;
+
+  // The production ordinals intentionally disagree: a deferred queue item
+  // can carry a large replaySeq while a synchronous unlock's retained source
+  // ordinal starts at one.  Composition uses the observer-issued ordering
+  // identity, so both valid adjacency directions remain candidates.
+  check(observer.recordMutation(event(
+            0x2au, 1u, 900u, mo::Disposition::Plain, 0u, 8u, 0u, true,
+            dxmt9::resources::MutationSourceKind::SynchronousMutation)),
+        "synchronous mutation accepted before deferred mutation");
+  check(observer.recordMutation(event(
+            0x2au, 1u, 2u, mo::Disposition::Plain, 8u, 8u, 0u, true,
+            dxmt9::resources::MutationSourceKind::DeferredMutation)),
+        "deferred mutation accepted after synchronous mutation");
+  check(observer.snapshot().candidateCalls == 1u,
+        "sync-to-deferred adjacency uses one ordering domain");
+  check(observer.eventAt(0u)->orderingIdentity.source ==
+            dxmt9::resources::MutationSourceKind::SynchronousMutation &&
+            observer.eventAt(1u)->orderingIdentity.source ==
+            dxmt9::resources::MutationSourceKind::DeferredMutation &&
+            observer.eventAt(0u)->orderingIdentity.generation ==
+            observer.eventAt(1u)->orderingIdentity.generation,
+        "mixed events retain typed generation-qualified identities");
+
+  mo::MutationCompositionObserver reverse;
+  check(reverse.recordMutation(event(
+            0x2bu, 1u, 900u, mo::Disposition::Plain, 0u, 8u, 0u, true,
+            dxmt9::resources::MutationSourceKind::DeferredMutation)),
+        "deferred mutation accepted before synchronous mutation");
+  check(reverse.recordMutation(event(
+            0x2bu, 1u, 2u, mo::Disposition::Plain, 8u, 8u, 0u, true,
+            dxmt9::resources::MutationSourceKind::SynchronousMutation)),
+        "synchronous mutation accepted after deferred mutation");
+  check(reverse.snapshot().candidateCalls == 1u,
+        "deferred-to-sync adjacency uses one ordering domain");
+}
+
+void testOrderingPolicyGenerationResetFailsClosed() {
+  dxmt9::resources::MutationOrderingPolicy policy;
+  const auto before = policy.issue(
+      dxmt9::resources::MutationSourceKind::SynchronousMutation);
+  check(before.valid(), "ordering policy issues a qualified identity");
+  check(policy.reset(), "ordering policy advances on reset");
+  const auto after = policy.issue(
+      dxmt9::resources::MutationSourceKind::DeferredMutation);
+  check(after.valid() && after.generation != before.generation,
+        "reset qualifies the restarted ordinal");
+  check(!dxmt9::resources::mutationOrderingPrecedes(before, after),
+        "cross-generation ordering is rejected");
+  check(!policy.issue(static_cast<dxmt9::resources::MutationSourceKind>(0xffu))
+             .valid(),
+        "unsupported source kind is rejected closed");
 }
 
 void testAtoBtoAAndGenerationQualification() {
@@ -53,6 +113,26 @@ void testAtoBtoAAndGenerationQualification() {
   check(observer.eventAt(2u)->identity.resource == 0x11u &&
             observer.eventAt(2u)->identity.backingGeneration == 2u,
         "event retains source-qualified A identity");
+}
+
+void testFinalRejectionPreservesReturningGenerationPredecessor() {
+  mo::MutationCompositionObserver observer;
+  check(observer.recordMutation(
+            event(0x12u, 1u, 4u, mo::Disposition::Plain, 0u, 8u)),
+        "first generation-one mutation accepted");
+  check(observer.recordMutation(
+            event(0x12u, 2u, 5u, mo::Disposition::Plain, 0u, 8u)),
+        "interleaved generation-two mutation accepted");
+  check(observer.recordMutation(
+            event(0x12u, 1u, 6u, mo::Disposition::Plain, 8u, 8u)),
+        "returning generation-one mutation accepted");
+  observer.finalize();
+  const auto snapshot = observer.snapshot();
+  check(snapshot.candidateCalls == 1u,
+        "returning generation compares with its own last event");
+  check(snapshot.finalRejectionCounts[static_cast<std::size_t>(
+            mo::RejectionReason::DifferentGeneration)] == 1u,
+        "only the first event of generation two observes the generation edge");
 }
 
 void testMergeUseDistanceAndBarriers() {
@@ -169,12 +249,119 @@ void testInvalidAndDefaultDisabledPath() {
         "scope restores disabled path");
 }
 
+void testProductionCompositionTruthTable() {
+  const auto base = event(0x88u, 4u, 40u, mo::Disposition::Plain, 0u, 8u);
+  const auto candidate = event(0x88u, 4u, 41u, mo::Disposition::Plain, 8u, 8u);
+  check(mo::classifyComposition(base, candidate, false) ==
+            mo::CompositionDecision::Candidate,
+        "production candidate predicate accepts plain adjacent patches");
+  auto altered = candidate;
+  altered.renderTapeIdentity = {};
+  check(mo::classifyComposition(base, altered, false) ==
+            mo::CompositionDecision::RenderTapeIdentity,
+        "production predicate rejects one missing Render Tape identity");
+  altered = candidate;
+  auto missingTape = base;
+  missingTape.renderTapeIdentity = {};
+  altered.renderTapeIdentity = {};
+  check(mo::classifyComposition(missingTape, altered, false) ==
+            mo::CompositionDecision::RenderTapeIdentity,
+        "production predicate rejects two missing Render Tape identities");
+  altered = candidate;
+  altered.identity.resource++;
+  check(mo::classifyComposition(base, altered, false) ==
+            mo::CompositionDecision::DifferentResource,
+        "production predicate rejects resource mismatch");
+  altered = candidate;
+  altered.identity.backingGeneration++;
+  check(mo::classifyComposition(base, altered, false) ==
+            mo::CompositionDecision::DifferentGeneration,
+        "production predicate rejects generation mismatch");
+  altered = candidate;
+  altered.identity.sourceOrdinal = base.identity.sourceOrdinal;
+  check(mo::classifyComposition(base, altered, false) ==
+            mo::CompositionDecision::SourceOrder,
+        "production predicate rejects non-monotone source order");
+  check(mo::classifyComposition(base, candidate, true) ==
+            mo::CompositionDecision::Barrier,
+        "production predicate rejects intervening barrier");
+  altered = candidate;
+  altered.completion = mo::CompletionDisposition::Pending;
+  check(mo::classifyComposition(base, altered, false) ==
+            mo::CompositionDecision::Completion,
+        "production predicate rejects incomplete event");
+  altered = candidate;
+  altered.disposition = mo::Disposition::Discard;
+  check(mo::classifyComposition(base, altered, false) ==
+            mo::CompositionDecision::Disposition,
+        "production predicate rejects discard freshness boundary");
+  altered = candidate;
+  altered.disposition = mo::Disposition::NoOverwrite;
+  altered.byteOffset = 4u;
+  check(mo::classifyComposition(
+            event(0x88u, 4u, 40u, mo::Disposition::NoOverwrite, 0u, 8u),
+            altered, false) == mo::CompositionDecision::RangeOverlap,
+        "production predicate rejects overlapping no-overwrite ranges");
+}
+
+void testCompletionOverflowAndReset() {
+  mo::MutationCompositionObserver observer;
+  auto pending = event(0x99u, 1u, 50u, mo::Disposition::Plain, 0u, 4u);
+  pending.completion = mo::CompletionDisposition::Pending;
+  check(observer.recordMutation(pending), "pending mutation accepted");
+  observer.settleMutation(pending.identity,
+                          mo::CompletionDisposition::Completed);
+  pending.identity.sourceOrdinal = 51u;
+  check(observer.recordMutation(pending), "failed pending mutation accepted");
+  observer.settleMutation(pending.identity,
+                          mo::CompletionDisposition::Failed);
+  pending.identity.sourceOrdinal = 52u;
+  check(observer.recordMutation(pending), "discarded pending mutation accepted");
+  observer.settleMutation(pending.identity,
+                          mo::CompletionDisposition::Discarded);
+  auto snapshot = observer.snapshot();
+  check(snapshot.completedMutations == 1u && snapshot.failedMutations == 1u &&
+            snapshot.discardedMutations == 1u,
+        "completion dispositions settle exactly once");
+  check(snapshot.pendingMutations == 0u &&
+            snapshot.rejectionCounts[static_cast<std::size_t>(
+                mo::RejectionReason::Completion)] != 0u,
+        "record-time pending adjacency is retained as provisional evidence");
+  observer.finalize();
+  snapshot = observer.snapshot();
+  check(snapshot.finalRejectionCounts[static_cast<std::size_t>(
+                mo::RejectionReason::Completion)] == 0u &&
+            snapshot.finalRejectionCounts[static_cast<std::size_t>(
+                mo::RejectionReason::Failure)] != 0u,
+        "final rejection view reflects settled terminal dispositions");
+
+  for (std::size_t i = observer.eventCount();
+       i < mo::MutationCompositionObserver::kMaxEvents + 1u; ++i) {
+    auto bounded = event(0xaau, 1u, 100u + i, mo::Disposition::Plain, 0u, 1u);
+    check(observer.recordMutation(bounded) ||
+              observer.snapshot().invalidOrDroppedEvents != 0u,
+          "capacity overflow is observable");
+  }
+  check(observer.snapshot().invalidOrDroppedEvents != 0u,
+        "event capacity overflow is counted");
+  observer.notePresent();
+  observer.reset();
+  check(observer.eventCount() == 0u && observer.windowPresents() == 0u &&
+            observer.snapshot().mutationCalls == 0u,
+        "window reset clears bounded state");
+}
+
 }  // namespace
 
 int main() {
+  testMixedSyncAndDeferredShareOrderingDomain();
+  testOrderingPolicyGenerationResetFailsClosed();
   testAtoBtoAAndGenerationQualification();
+  testFinalRejectionPreservesReturningGenerationPredecessor();
   testMergeUseDistanceAndBarriers();
   testZeroUseDiscardChainFailureAndOverlap();
   testInvalidAndDefaultDisabledPath();
+  testProductionCompositionTruthTable();
+  testCompletionOverflowAndReset();
   return 0;
 }

@@ -121,6 +121,57 @@ CommandChunkBuilder::~CommandChunkBuilder() {
   resetAndReleaseRetained();
 }
 
+bool CommandChunkBuilder::prepareExactFinalLayout(
+    const ExactCommandChunkLayoutPlan& plan) noexcept {
+  if (!plan.valid() || exactFinalLayout_ || active_.active || sealed_ ||
+      recordCount() != 0u || handleCount() != 0u || payloadBytes() != 0u ||
+      !handleObjects_.empty() || !sealedBlob_.empty()) {
+    return false;
+  }
+
+  try {
+    // Reuse the builder's own final-byte storage and preserve the legacy
+    // handleObjects_ allocation.  The latter is the local half of warm
+    // retainer ownership and must not be swapped with a short-lived exact
+    // vector when the default Present/Readback path changes layout.
+    sealedBlob_.reserve(plan.totalBytes);
+    sealedBlob_.resize(plan.totalBytes, std::byte{0});
+    handleObjects_.reserve(plan.handleCount);
+  } catch (...) {
+    sealedBlob_.clear();
+    return false;
+  }
+
+  const D9CCommandChunkWireHeader header{
+      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+      .recordTableOffset = plan.recordTableOffset,
+      .recordCount = 0u,
+      .handleTableOffset = plan.handleTableOffset,
+      .handleCount = 0u,
+      .payloadArenaOffset = plan.payloadArenaOffset,
+      .payloadArenaSize = 0u,
+      .reserved0 = 0u,
+      .reserved1 = 0u,
+  };
+  std::memcpy(sealedBlob_.data(), &header, sizeof(header));
+  exactFinalLayout_ = true;
+  return true;
+}
+
+bool CommandChunkBuilder::returnToLegacyFinalLayout() noexcept {
+  if (!exactFinalLayout_ || active_.active || sealed_ || recordCount() != 0u ||
+      handleCount() != 0u || payloadBytes() != 0u ||
+      !handleObjects_.empty()) {
+    return false;
+  }
+  sealedBlob_.clear();
+  exactFinalLayout_ = false;
+  return true;
+}
+
 std::size_t CommandChunkBuilder::recordCount() const noexcept {
   if (!exactFinalLayout_) {
     return records_.size();
@@ -275,6 +326,32 @@ bool CommandChunkBuilder::readHandleEntry(
   D9CCommandChunkWireHeader header{};
   std::memcpy(&header, sealedBlob_.data(), sizeof(header));
   const auto offset = static_cast<std::size_t>(header.handleTableOffset) +
+                      index * sizeof(entry);
+  if (offset > sealedBlob_.size() ||
+      sizeof(entry) > sealedBlob_.size() - offset) {
+    return false;
+  }
+  std::memcpy(&entry, sealedBlob_.data() + offset, sizeof(entry));
+  return true;
+}
+
+bool CommandChunkBuilder::readRecordEntry(
+    std::size_t index,
+    D9CCommandChunkWireRecordHeader& entry) const noexcept {
+  if (!exactFinalLayout_) {
+    if (index >= records_.size()) {
+      return false;
+    }
+    entry = records_[index];
+    return true;
+  }
+  if (index >= recordCount() ||
+      sealedBlob_.size() < sizeof(D9CCommandChunkWireHeader)) {
+    return false;
+  }
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, sealedBlob_.data(), sizeof(header));
+  const auto offset = static_cast<std::size_t>(header.recordTableOffset) +
                       index * sizeof(entry);
   if (offset > sealedBlob_.size() ||
       sizeof(entry) > sealedBlob_.size() - offset) {
@@ -1175,6 +1252,19 @@ void CommandChunkBuilder::resetAndReleaseRetained() noexcept {
   payload_.clear();
   sealedBlob_.clear();
   sealed_ = false;
+}
+
+bool CommandChunkBuilder::resetAndReleaseRetained(
+    CommandChunkDiscardTarget target) noexcept {
+  resetAndReleaseRetained();
+  switch (target) {
+    case CommandChunkDiscardTarget::LegacyProduction:
+      if (!exactFinalLayout_) {
+        return true;
+      }
+      return returnToLegacyFinalLayout();
+  }
+  return false;
 }
 
 std::size_t CommandChunkBuilder::payloadBytes() const noexcept {

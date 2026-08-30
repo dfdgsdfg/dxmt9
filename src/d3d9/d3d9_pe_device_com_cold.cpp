@@ -1701,13 +1701,15 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetRenderTargetData(IDirect3DSurface9*
     // the actual readback HRESULT back to PE.
     const HRESULT barrierHr = chunkBarrierFlush();
     if (FAILED(barrierHr)) return barrierHr;
+    const dxmt9::d3d9::pe::PeReadbackBatch readbackBatch{
+        .source = source.wire(), .destination = destination.wire()};
     const HRESULT appendHr = appendRecord(
         D9C_COMMAND_RECORD_READBACK, kLegacyReadbackSizeHint,
         [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
             const AppendPhaseTimer& phase) -> HRESULT {
             const auto t0 = phase.begin();
-            const bool ok = dxmt9::d3d9::pe::appendReadback(
-                builder, source.wire(), destination.wire());
+            const bool ok = dxmt9::d3d9::pe::appendPeExactReadbackSingleton(
+                builder, readbackBatch);
             phase.recordEncode(t0);
             return ok ? S_OK : D3DERR_INVALIDCALL;
         });
@@ -1715,7 +1717,12 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetRenderTargetData(IDirect3DSurface9*
     // Sync semantics: commit the chunk now and wait for completion.
     // flushPendingCommandChunk routes through commit_chunk -> server's
     // record dispatcher -> readback record handler.
-    return flushPendingCommandChunk(PeRecorderFlushReason::Readback);
+    const HRESULT flushHr =
+        flushPendingCommandChunk(PeRecorderFlushReason::Readback);
+    if (SUCCEEDED(flushHr)) {
+        (void)recorderState_.commandChunk.returnToLegacyFinalLayout();
+    }
+    return flushHr;
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetFrontBufferData(UINT sc, IDirect3DSurface9* surface) noexcept {

@@ -4122,8 +4122,9 @@ HResult Device::submitDirectReplayDrawFromCurrentState(
       .payload = payload,
   };
   DXMT_ASSERT(cached.fullUniformsValid);
-  if (!upperDevice_->submitDirectReplayDraw(input)) {
-    // The virtual false disposition is pre-effect. Test/stub devices and any
+  const auto disposition = upperDevice_->submitDirectReplayDraw(input);
+  if (directReplayDrawPermitsLegacyFallback(disposition)) {
+    // Typed Legacy dispositions are pre-effect. Test/stub devices and any
     // backend that cannot adopt the destination transaction retain the
     // existing serial submission path without making borrowed spans escape.
     CanonicalDrawState state{cached.hot, cached.shaderLayout, input.debug};
@@ -4131,6 +4132,9 @@ HResult Device::submitDirectReplayDrawFromCurrentState(
     const std::span<const DrawParamPayloadView> payloads(&payload, 1u);
     upperDevice_->submitDrawRun(std::move(state), cached.uniforms, draws,
                                 payloads);
+  } else if (disposition ==
+             DirectReplayDrawDisposition::AcceptedFailStop) {
+    return D3DERR_DEVICELOST;
   }
   if (activeOcclusionQuery_) {
     activeOcclusionCount_ += draw.primitiveCount;

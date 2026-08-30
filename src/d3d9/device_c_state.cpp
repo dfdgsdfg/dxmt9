@@ -1,5 +1,6 @@
 #include "device_c_provider.hpp"
 #include "device_c_replay_offload.hpp"
+#include "dxmt9/mutation_composition_observer.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -19,6 +20,11 @@ D9CDevice::~D9CDevice() {
   if (replayOffload) {
     replayOffload->queue().waitDrained();
     replayOffload->stop();
+  }
+  if (mutationCompositionObserver) {
+    mutationCompositionObserver->observeGlobalBarrier(
+        dxmt9::resources::mutation_observer::BarrierReason::DestroyReset);
+    mutationCompositionObserver->finalize();
   }
   // Replay must finish before the mirror lease is cancelled: encode may have
   // taken its raw target handle while the command buffer is still in flight.
@@ -145,6 +151,10 @@ extern "C" int32_t dxmt9c_device_reset(D9CDevice* d, const D9CPresentParams* pp)
   // The PE bridge wrapper drains deferred replay before entering this provider
   // reset path; cancel only after that ordering point is established.
   dxmt9c_device_cancel_render_tape_present_capture(d);
+  if (d && d->mutationCompositionObserver) {
+    d->mutationCompositionObserver->observeGlobalBarrier(
+        dxmt9::resources::mutation_observer::BarrierReason::DestroyReset);
+  }
   const int32_t hr = d->iface->Reset(ppFromC(*pp));
   if (hr == dxmt9::core::D3D_OK) {
     clearBoundRenderTargetCache(d);
@@ -160,6 +170,10 @@ extern "C" int32_t dxmt9c_device_reset_ex(D9CDevice* d, const D9CPresentParams* 
   // The PE bridge wrapper drains deferred replay before entering this provider
   // reset path; cancel only after that ordering point is established.
   dxmt9c_device_cancel_render_tape_present_capture(d);
+  if (d && d->mutationCompositionObserver) {
+    d->mutationCompositionObserver->observeGlobalBarrier(
+        dxmt9::resources::mutation_observer::BarrierReason::DestroyReset);
+  }
   auto params = ppFromC(*pp);
   if (dm) {
     auto dmex = dmExFromC(*dm);

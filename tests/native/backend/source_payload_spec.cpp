@@ -11,6 +11,7 @@
 #include <string>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 namespace dxmt9::core {
@@ -792,7 +793,7 @@ void testReplayAssemblerConsumesScratchIntoFinalArena() {
       sizeof(dxmt9::core::PixelShaderConstants);
   capacity.drawUniformPayloads = 1;
   capacity.drawParams = 1;
-  capacity.drawPayloadBytes = 64;
+  capacity.drawPayloadBytes = 2048;
   capacity.drawRunRecords = 1;
   capacity.clearRecords = 1;
   capacity.clearRects = 1;
@@ -877,6 +878,7 @@ void testDirectAssemblerDifferentialAndConservation() {
   capacity.drawPayloadBytes = 2048;
   capacity.drawRunRecords = 1;
   capacity.clearRecords = 1;
+  capacity.clearRects = 2;
   capacity.surfaceCopyRecords = 1;
   capacity.readbackRecords = 1;
   capacity.presentRecords = 1;
@@ -1136,6 +1138,304 @@ void testDirectAssemblerDifferentialAndConservation() {
         "real materialization and final destination bytes");
   legacyBlock.destroyConstructed();
   directBlock.destroyConstructed();
+}
+
+void testDirectChunkSlotAllFamilyParityAndRollback() {
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 7;
+  capacity.drawHotStates = 1;
+  capacity.drawShaderLayouts = 1;
+  capacity.drawDebugSnapshots = 1;
+  capacity.drawPsoSubviews = 1;
+  capacity.drawUniformFixedPayloads = 1;
+  capacity.drawUniformVertexConstants = 1;
+  capacity.drawUniformVertexConstantBytes =
+      sizeof(dxmt9::core::VertexShaderConstants);
+  capacity.drawUniformPixelConstants = 1;
+  capacity.drawUniformPixelConstantBytes =
+      sizeof(dxmt9::core::PixelShaderConstants);
+  capacity.drawUniformPayloads = 1;
+  capacity.drawParams = 1;
+  capacity.drawPayloadBytes = 2048;
+  capacity.drawRunRecords = 1;
+  capacity.clearRecords = 1;
+  capacity.clearRects = 2;
+  capacity.surfaceCopyRecords = 1;
+  capacity.stretchRectRecords = 1;
+  capacity.colorFillRecords = 1;
+  capacity.depthResolveRecords = 1;
+  capacity.generateMipmapsRecords = 1;
+
+  FlatDrawStateRecord hot{};
+  hot.key.renderStateHash = 0x101u;
+  hot.streamMask = 1u;
+  hot.streamBuffers[0] = dxmt9::core::Handle{11u};
+  hot.indexBuffer = dxmt9::core::Handle{12u};
+  hot.textureMask = 1u;
+  hot.textures[0] = dxmt9::core::Handle{13u};
+  hot.renderTargetMask = 1u;
+  hot.colorAttachments[0].handle = dxmt9::core::Handle{14u};
+  hot.depthStencil.handle = dxmt9::core::Handle{15u};
+  DrawShaderLayoutContext shaderLayout{};
+  DrawDebugSnapshot debug{};
+  dxmt9::core::DrawUniformPayload uniforms{};
+  uniforms.hash = 0x202u;
+  uniforms.fixedPayloadHash = 0x303u;
+  DrawParam draw{.primitiveCount = 2u,
+                 .startIndex = 3u,
+                 .indexType = dxmt9::core::IndexType::UInt16,
+                 .indexed = true};
+  std::array<dxmt9::core::u8, 4> vertexBytes{1u, 2u, 3u, 4u};
+  dxmt9::core::DrawBindingOverride bindingOverride{};
+  bindingOverride.streamMask = 1u;
+  bindingOverride.streams[0].buffer = dxmt9::core::Handle{16u};
+  const auto overrideBytes = std::span<const dxmt9::core::u8>(
+      reinterpret_cast<const dxmt9::core::u8*>(&bindingOverride),
+      sizeof(bindingOverride));
+  const dxmt9::core::DrawParamPayloadView payload{
+      .userVertexData = vertexBytes,
+      .bindingOverrideData = overrideBytes,
+  };
+  ClearDesc clear{};
+  clear.clearColor = true;
+  clear.colorAttachments[0].handle = dxmt9::core::Handle{21u};
+  clear.rects.push_back({.left = 1, .top = 2, .right = 3, .bottom = 4});
+  clear.rects.push_back({.left = 5, .top = 6, .right = 7, .bottom = 8});
+  const dxmt9::core::SurfaceCopyDesc copy{
+      .source = dxmt9::core::Handle{22u},
+      .destination = dxmt9::core::Handle{23u}};
+  const dxmt9::core::StretchRectDesc stretch{
+      .source = dxmt9::core::Handle{24u},
+      .destination = dxmt9::core::Handle{25u}};
+  const dxmt9::core::ColorFillDesc fill{
+      .destination = dxmt9::core::Handle{26u}};
+  const dxmt9::core::DepthResolveDesc resolve{
+      .msaaDepth = dxmt9::core::Handle{27u},
+      .intzDest = dxmt9::core::Handle{28u}};
+  const dxmt9::core::GenerateMipmapsDesc mipmaps{
+      .texture = dxmt9::core::Handle{29u}};
+
+  ChunkSlot legacy;
+  std::array<DrawRunSubmission, 1> legacyDraw{DrawRunSubmission{
+      .state = dxmt9::core::CanonicalDrawState{hot, shaderLayout, debug},
+      .uniforms = uniforms,
+      .draw = draw,
+      .payload = payload,
+  }};
+  legacy.appendDrawRunBatch(legacyDraw);
+  check(!legacy.drawParams.empty() && legacy.drawParams.front().uniformHandle.valid(),
+        "Legacy batch fixture materializes its per-draw uniform handle");
+  legacy.appendClear(clear);
+  legacy.appendSurfaceCopy(copy);
+  legacy.appendStretchRect(stretch);
+  legacy.appendColorFill(fill);
+  legacy.appendDepthResolve(resolve);
+  legacy.appendGenerateMipmaps(mipmaps);
+
+  ChunkSlot direct;
+  ClearDesc directClear = clear;
+  const auto* directClearRectStorage = directClear.rects.data();
+  TransactionalChunkSlotAssembler assembler(direct, capacity);
+  const auto* commandStorage = direct.commandHeaders.data();
+  const auto* paramStorage = direct.drawParams.data();
+  const auto* payloadStorage = direct.drawPayloadArena.data();
+  const auto* clearStorage = direct.clearRecords.data();
+  const DirectReplayDrawInput input{
+      .hot = &hot,
+      .shaderLayout = &shaderLayout,
+      .uniforms = &uniforms,
+      .debug = debug,
+      .draw = draw,
+      .payload = payload,
+  };
+  check(assembler.tryAppendDirectDraw(input),
+        "direct draw appends: states=" +
+            std::to_string(direct.drawHotStates.size()) +
+            " uniforms=" + std::to_string(direct.drawUniformPayloads.size()) +
+            " params=" + std::to_string(direct.drawParams.size()) +
+            " payload=" + std::to_string(overrideBytes.size() + vertexBytes.size()) +
+            " capacity=" + std::to_string(capacity.drawPayloadBytes));
+  check(assembler.tryAppendClear(std::move(directClear)),
+        "direct clear appends without reallocating nested rect storage");
+  check(assembler.tryAppendSurfaceCopy(copy), "direct surface copy appends");
+  check(assembler.tryAppendStretchRect(stretch), "direct stretch appends");
+  check(assembler.tryAppendColorFill(fill), "direct color fill appends");
+  check(assembler.tryAppendDepthResolve(resolve), "direct resolve appends");
+  check(assembler.tryAppendGenerateMipmaps(mipmaps),
+        "direct mipmap generation appends");
+  check(assembler.commitValueOnlyForTest(),
+        "eligible families construct directly in final ChunkSlot storage");
+  check(commandStorage == direct.commandHeaders.data() &&
+            paramStorage == direct.drawParams.data() &&
+            payloadStorage == direct.drawPayloadArena.data() &&
+            clearStorage == direct.clearRecords.data() &&
+            direct.clearRecords.size() == 1u &&
+            direct.clearRecords.front().rects.data() == directClearRectStorage,
+        "reservation keeps every sampled final vector at one stable locality");
+
+  const SourcePayloadView legacyView(legacy);
+  const SourcePayloadView directView(direct);
+  check(legacyView.commandCount() == 7u &&
+            directView.commandCount() == legacyView.commandCount() &&
+            direct.drawStateStorageConsistent() &&
+            direct.commandPayloadsInRange(),
+        "direct final ChunkSlot has the Legacy command count and valid SoA locators");
+  for (std::size_t i = 0; i < legacyView.commandCount(); ++i) {
+    check(legacyView.commandAt(i).kind() == directView.commandAt(i).kind(),
+          "direct final ChunkSlot preserves all-family command order");
+  }
+  const auto& legacyParam = legacyView.drawParams().front();
+  const auto& directParam = directView.drawParams().front();
+  check(legacyView.drawParams().size() == directView.drawParams().size() &&
+            legacyParam.primitiveType == directParam.primitiveType &&
+            legacyParam.primitiveCount == directParam.primitiveCount &&
+            legacyParam.startVertex == directParam.startVertex &&
+            legacyParam.baseVertexIndex == directParam.baseVertexIndex &&
+            legacyParam.startIndex == directParam.startIndex &&
+            legacyParam.indexType == directParam.indexType &&
+            legacyParam.indexed == directParam.indexed &&
+            legacyParam.instanceCount == directParam.instanceCount &&
+            legacyParam.userVertexRange.offset ==
+                directParam.userVertexRange.offset &&
+            legacyParam.userVertexRange.size ==
+                directParam.userVertexRange.size &&
+            legacyParam.bindingOverrideRange.offset ==
+                directParam.bindingOverrideRange.offset &&
+            legacyParam.bindingOverrideRange.size ==
+                directParam.bindingOverrideRange.size &&
+            legacyParam.uniformHandle == directParam.uniformHandle &&
+            legacyView.drawPayloadBytes().size() ==
+                directView.drawPayloadBytes().size() &&
+            std::equal(legacyView.drawPayloadBytes().begin(),
+                       legacyView.drawPayloadBytes().end(),
+                       directView.drawPayloadBytes().begin()),
+        "direct draw parameters and payload bytes are byte-identical to Legacy: "
+        "legacy payload=" + std::to_string(legacyView.drawPayloadBytes().size()) +
+        " direct payload=" + std::to_string(directView.drawPayloadBytes().size()) +
+        " legacy override=" +
+            std::to_string(legacyParam.bindingOverrideRange.offset) + ":" +
+            std::to_string(legacyParam.bindingOverrideRange.size) +
+        " direct override=" +
+            std::to_string(directParam.bindingOverrideRange.offset) + ":" +
+            std::to_string(directParam.bindingOverrideRange.size) +
+        " uniform=" + std::to_string(legacyParam.uniformHandle.index) + "/" +
+            std::to_string(directParam.uniformHandle.index) +
+        " generation=" +
+            std::to_string(legacyParam.uniformHandle.generation) + "/" +
+            std::to_string(directParam.uniformHandle.generation) +
+        " hash=" + std::to_string(legacyParam.uniformHandle.hash) + "/" +
+            std::to_string(directParam.uniformHandle.hash));
+  check(directView.commandAt(1).clear->rects.size() == 2u &&
+            legacyView.commandAt(1).clear->rects.size() == 2u &&
+            directView.commandAt(1).clear->rects[0] ==
+                legacyView.commandAt(1).clear->rects[0] &&
+            directView.commandAt(1).clear->rects[1] ==
+                legacyView.commandAt(1).clear->rects[1] &&
+            directView.commandAt(2).command.surfaceCopy->destination ==
+                legacyView.commandAt(2).command.surfaceCopy->destination &&
+            directView.commandAt(3).command.stretchRect->source ==
+                legacyView.commandAt(3).command.stretchRect->source &&
+            directView.commandAt(4).command.colorFill->destination ==
+                legacyView.commandAt(4).command.colorFill->destination &&
+            directView.commandAt(5).command.depthResolve->intzDest ==
+                legacyView.commandAt(5).command.depthResolve->intzDest &&
+            directView.commandAt(6).command.generateMipmaps->texture ==
+                legacyView.commandAt(6).command.generateMipmaps->texture,
+        "all non-draw payload families are semantically identical");
+
+  const auto resources = [](const SourcePayloadView& view) {
+    std::vector<std::pair<std::uint8_t, std::uint64_t>> result;
+    for (std::size_t i = 0; i < view.commandCount(); ++i) {
+      dxmt9::core::visitSourceCommandResources(
+          view.commandAt(i), [&](const dxmt9::core::SourceCommandResourceRef& ref) {
+            result.emplace_back(static_cast<std::uint8_t>(ref.entry.kind),
+                                ref.entry.handle.value);
+          });
+    }
+    std::sort(result.begin(), result.end());
+    return result;
+  };
+  check(resources(legacyView) == resources(directView),
+        "direct final ChunkSlot closes over the exact Legacy resource set");
+
+  ChunkSlot rollbackSlot;
+  rollbackSlot.appendDrawRunBatch(legacyDraw);
+  rollbackSlot.appendClear(clear);
+  const auto prefixCommands = rollbackSlot.commandHeaders.size();
+  const auto prefixClears = rollbackSlot.clearRecords.size();
+  const auto prefixClearRects = rollbackSlot.clearRecords.front().rects.size();
+  const auto prefixHotStates = rollbackSlot.drawHotStates.size();
+  const auto prefixParams = rollbackSlot.drawParams.size();
+  const auto prefixPayloadBytes = rollbackSlot.drawPayloadArena.size();
+  const auto prefixUniformPayloadLookupHeads =
+      rollbackSlot.drawUniformPayloadLookupHeads;
+  const auto prefixUniformPayloadLookupTails =
+      rollbackSlot.drawUniformPayloadLookupTails;
+  const auto prefixUniformPayloadLookupNext =
+      rollbackSlot.drawUniformPayloadLookupNext;
+  const auto prefixVertexLookupHeads =
+      rollbackSlot.drawUniformVertexConstantsLookupHeads;
+  const auto prefixVertexLookupTails =
+      rollbackSlot.drawUniformVertexConstantsLookupTails;
+  const auto prefixVertexLookupNext =
+      rollbackSlot.drawUniformVertexConstantsLookupNext;
+  const auto prefixPixelLookupHeads =
+      rollbackSlot.drawUniformPixelConstantsLookupHeads;
+  const auto prefixPixelLookupTails =
+      rollbackSlot.drawUniformPixelConstantsLookupTails;
+  const auto prefixPixelLookupNext =
+      rollbackSlot.drawUniformPixelConstantsLookupNext;
+  auto rollbackUniforms = uniforms;
+  rollbackUniforms.hash = 0x404u;
+  rollbackUniforms.fixedPayloadHash = 0x505u;
+  rollbackUniforms.vertexConstantsHash = 0x606u;
+  rollbackUniforms.pixelConstantsHash = 0x707u;
+  rollbackUniforms.vertexFloatConstantCount = 1u;
+  rollbackUniforms.pixelFloatConstantCount = 1u;
+  rollbackUniforms.vsConst.float4[0][0] = 1.0f;
+  rollbackUniforms.psConst.float4[0][0] = 2.0f;
+  auto rollbackInput = input;
+  rollbackInput.uniforms = &rollbackUniforms;
+  SourcePayloadCapacity failing = capacity;
+  failing.commandHeaders = 3;
+  failing.clearRects = 1;
+  TransactionalChunkSlotAssembler failingAssembler(rollbackSlot, failing);
+  ClearDesc rollbackClear = clear;
+  check(failingAssembler.tryAppendDirectDraw(rollbackInput) &&
+            failingAssembler.tryAppendSurfaceCopy(copy) &&
+            !failingAssembler.tryAppendClear(std::move(rollbackClear)),
+        "underplanned nested clear-rect capacity fails after a partial append");
+  failingAssembler.rollback();
+  check(failingAssembler.state() ==
+                TransactionalChunkSlotAssembler::State::RolledBack &&
+            rollbackSlot.commandHeaders.size() == prefixCommands &&
+            rollbackSlot.clearRecords.size() == prefixClears &&
+            rollbackSlot.clearRecords.front().rects.size() == prefixClearRects &&
+            rollbackSlot.clearRecords.front().rects == clear.rects &&
+            rollbackSlot.drawHotStates.size() == prefixHotStates &&
+            rollbackSlot.drawParams.size() == prefixParams &&
+            rollbackSlot.drawPayloadArena.size() == prefixPayloadBytes &&
+            rollbackSlot.surfaceCopyRecords.empty() &&
+            rollbackSlot.drawUniformPayloadLookupHeads ==
+                prefixUniformPayloadLookupHeads &&
+            rollbackSlot.drawUniformPayloadLookupTails ==
+                prefixUniformPayloadLookupTails &&
+            rollbackSlot.drawUniformPayloadLookupNext ==
+                prefixUniformPayloadLookupNext &&
+            rollbackSlot.drawUniformVertexConstantsLookupHeads ==
+                prefixVertexLookupHeads &&
+            rollbackSlot.drawUniformVertexConstantsLookupTails ==
+                prefixVertexLookupTails &&
+            rollbackSlot.drawUniformVertexConstantsLookupNext ==
+                prefixVertexLookupNext &&
+            rollbackSlot.drawUniformPixelConstantsLookupHeads ==
+                prefixPixelLookupHeads &&
+            rollbackSlot.drawUniformPixelConstantsLookupTails ==
+                prefixPixelLookupTails &&
+            rollbackSlot.drawUniformPixelConstantsLookupNext ==
+                prefixPixelLookupNext &&
+            rollbackSlot.commandPayloadsInRange(),
+        "negative rollback restores the exact semantic and lookup prefix");
 }
 
 void testCopyMaterializationRegistryOwnershipAndDisabledPath() {
@@ -1455,6 +1755,7 @@ int main() {
     testConsolidatedNondrawCommandParity();
     testReplayAssemblerConsumesScratchIntoFinalArena();
     testDirectAssemblerDifferentialAndConservation();
+    testDirectChunkSlotAllFamilyParityAndRollback();
     testCopyMaterializationRegistryOwnershipAndDisabledPath();
     testTransactionalAssemblerRollbackReclaimsDestination();
     testProductionCommitRequiresTypedEvidence();

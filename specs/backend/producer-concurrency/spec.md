@@ -411,6 +411,26 @@ review obligation, not a resolved fact):
   `CapturePinDiscipline` constant would delete the same conjunct under a
   second name.
 
+- **T2d reserve/copy/commit (deferred)**: the proposed bounded reservation
+  protocol remains a design-gated option, not a production mode. A reservation
+  must charge capacity under the queue mutex, checkpoint the writing slot's
+  pre-existing valid prefix, freeze slot generation and ticket, construct only
+  private bounded reservation bytes outside the mutex, and commit under the
+  mutex only after validating the frozen identity and complete count. Commit
+  may publish only checkpointed prefix plus complete private reservation;
+  rollback restores the exact prefix, charge, and waiter wake, while
+  mark/capture/reclaim ordering remains unchanged. `QueueT2dReserveCopyCommit.tla`
+  and its three expected-failure configurations are the preflight model. The accepted
+  matched queue-mutex pair at commit `3eaac5a8` (append decomposition `.36`)
+  shows zero append-segment wait, so `submitDrawRunBatchImpl`'s
+  append remains mutex-protected until a real waiting victim clears the
+  economic gate. The gate defines `W` as append-segment **acquire wait** in
+  milliseconds per Present, attributed to a producer blocked on the segment;
+  hold time is local work and is never substituted for `W`: close below
+  `0.2 ms/Present`, repeat matched profiles from `0.2` through `<0.5`, and
+  open investigation at `>=0.5 ms/Present` only with lifecycle owner/victim
+  and matched wild safety/error evidence.
+
 ## 5. Verification mapping
 
 ### Ordered StateBlock apply

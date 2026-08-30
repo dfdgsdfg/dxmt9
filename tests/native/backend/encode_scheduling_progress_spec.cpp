@@ -591,6 +591,53 @@ void watchdogConservesSegmentSerialProgressPerSource() {
   }
 }
 
+void watchdogAttributesProductionPipelineOwners() {
+  using namespace dxmt9::queue;
+  dxmt9::SchedulingProgressWatchdog watchdog(
+      /*enabled=*/true, /*thresholdMs=*/1000,
+      /*startSamplerThread=*/false);
+  const PipelineIdentity identity{
+      .workId = 700, .sourceOrdinal = 701, .seqId = 702, .generation = 703};
+  const auto note = [&](PipelineStage to, PipelineOwner owner,
+                        PipelineDisposition disposition,
+                        PipelineControl control = PipelineControl::Normal,
+                        PipelinePayloadKind kind = PipelinePayloadKind::Arena) {
+    PipelineLifecycleEvent event{};
+    event.identity = identity;
+    event.to = to;
+    event.owner = owner;
+    event.disposition = disposition;
+    event.control = control;
+    event.payloadKind = kind;
+    watchdog.notePipelineEvent(event);
+  };
+  note(PipelineStage::ProducerOwned, PipelineOwner::PeImport,
+       PipelineDisposition::Advance);
+  note(PipelineStage::RawOwned, PipelineOwner::Replay,
+       PipelineDisposition::Advance);
+  note(PipelineStage::ReplayBorrowed, PipelineOwner::Replay,
+       PipelineDisposition::Advance);
+  note(PipelineStage::FinalOwned, PipelineOwner::DirectPublication,
+       PipelineDisposition::Advance);
+  note(PipelineStage::Encoding, PipelineOwner::SerialEncode,
+       PipelineDisposition::Advance);
+  note(PipelineStage::GPUInFlight, PipelineOwner::Receipt,
+       PipelineDisposition::Advance);
+  note(PipelineStage::Completed, PipelineOwner::GpuCompletion,
+       PipelineDisposition::Completed);
+  note(PipelineStage::Reclaimed, PipelineOwner::Reclaim,
+       PipelineDisposition::PresentSettled, PipelineControl::Present,
+       PipelinePayloadKind::PresentOnly);
+  const auto snapshot = watchdog.slotSnapshotForTest(identity.seqId);
+  check(snapshot.tracked && snapshot.generation == identity.generation &&
+            snapshot.sourceOrdinal == identity.sourceOrdinal &&
+            snapshot.owner == PipelineOwner::Reclaim &&
+            snapshot.disposition == PipelineDisposition::PresentSettled &&
+            snapshot.phase == dxmt9::SchedulingProgressPhase::PresentRelease &&
+            (snapshot.flags & dxmt9::SchedulingProgressPresentSettled) != 0,
+        "watchdog retains generation-qualified owner and Present attribution");
+}
+
 void poisonOriginPublishesFirstCallsiteOnce() {
   auto queue = makeSchedulingQueue();
   std::uint_least32_t firstLine = 0;
@@ -619,6 +666,7 @@ int main() {
     watchdogUsesBoundedGenerationSafeSlots();
     watchdogRejectsStaleStoresAcrossCapacityReuse();
     watchdogConservesSegmentSerialProgressPerSource();
+    watchdogAttributesProductionPipelineOwners();
     poisonOriginPublishesFirstCallsiteOnce();
     std::cout << "encode scheduling progress spec: ok\n";
     return 0;

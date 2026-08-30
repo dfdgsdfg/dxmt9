@@ -103,6 +103,12 @@ bool appendEncodeChunkSessionSources(
   return true;
 }
 
+bool setEncodeChunkSessionSourceOwner(
+    EncodeChunkSessionState& session, std::uint64_t seqId,
+    ::dxmt9::queue::PipelineOwner owner) noexcept {
+  return session.sources.setOwner(seqId, owner);
+}
+
 bool replaceEncodeChunkSessionSourceIdentity(
     EncodeChunkSessionState& session,
     const core::metalqueue::QueueCompletionSource& expected,

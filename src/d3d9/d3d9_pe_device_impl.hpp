@@ -1065,8 +1065,23 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         dxmt9::d3d9::pe::RecorderCommitEvent discardEvent =
             dxmt9::d3d9::pe::RecorderCommitEvent::ExplicitDiscard);
 
+    // The semantic ledgers are cold, nullable owners. Keep these accessors
+    // visible to the in-class hot setters/append envelope so the disabled
+    // path pays only the cached diagnostics/null branch; an out-of-line
+    // accessor call would be unconditional even when the pointer is null.
     dxmt9::d3d9::pe::PeScalarSemanticTokenLedger*
-    scalarSemanticObserver() noexcept;
+    scalarSemanticObserver() noexcept {
+        return diagnostics_ ? diagnostics_->scalarSemanticTokens.get() : nullptr;
+    }
+
+    dxmt9::d3d9::pe::PeAllFamilySemanticTokenLedger*
+    allFamilySemanticObserver() noexcept {
+        return diagnostics_ ? diagnostics_->allFamilySemanticTokens.get() : nullptr;
+    }
+
+    bool observeCommittedSemanticRecord(
+        std::uint32_t recordType, std::uint64_t sourceOrdinal,
+        const dxmt9::d3d9::pe::CommandChunkBuilder& builder) noexcept;
 
     void clearPeStateTracking();
 
@@ -2175,43 +2190,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         PeRecorderFlushDisposition disposition =
             PeRecorderFlushDisposition::Submit);
 
-    // Phase timer handed to an appendRecord emitter. The envelope owns the
-    // decimation sampling decision, so an emitter that has its own phases to
-    // attribute (the legacy adapter's resize and write) records them through
-    // this rather than re-deriving `phaseSampled`.
-    struct AppendPhaseTimer {
-        PeDiagnosticsState* diagnostics = nullptr;
-
-        std::chrono::steady_clock::time_point begin() const noexcept {
-            return peDiagnosticsRead(
-                diagnostics, [](PeDiagnosticsState&) noexcept {
-                    return std::chrono::steady_clock::now();
-                });
-        }
-        void recordEncode(
-            std::chrono::steady_clock::time_point t0) const noexcept {
-            if (!diagnostics) {
-                return;
-            }
-            PeDecimatedScopeTimer::recordSample(
-                diagnostics->peAppendPhaseEncode_,
-                static_cast<std::uint64_t>(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        std::chrono::steady_clock::now() - t0).count()));
-        }
-        void recordFlush(
-            std::chrono::steady_clock::time_point t0) const noexcept {
-            if (!diagnostics) {
-                return;
-            }
-            PeDecimatedScopeTimer::recordSample(
-                diagnostics->peAppendPhaseFlush_,
-                static_cast<std::uint64_t>(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(
-                        std::chrono::steady_clock::now() - t0).count()));
-        }
-    };
-
+    using AppendPhaseTimer = PeAppendPhaseTimer;
     // Append envelope. Owns the recorder mutex, the negotiation gate, the
     // CapacityPre and CapacityPost flushes, and every append telemetry site;
     // `emit` supplies only the record itself.
@@ -2286,6 +2265,13 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
             return recorderState_.commandChunkNegotiated ? D3DERR_INVALIDCALL
                                            : D3DERR_NOTAVAILABLE;
         }
+        auto* const allFamilyTokens = allFamilySemanticObserver();
+        const std::uint64_t semanticSourceOrdinal = allFamilyTokens
+            ? allFamilyTokens->beginSource(type)
+            : 0u;
+        if (allFamilyTokens && semanticSourceOrdinal == 0u) {
+            return D3DERR_INVALIDCALL;
+        }
         const auto maxRecords = maxPendingCommandRecords();
         const auto maxBytes = maxPendingCommandBytes();
         const auto recordCountBefore = recorderState_.commandChunk.recordCount();
@@ -2356,6 +2342,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                          ((plan.retryable() || plan.poison()) &&
                           !plan.acceptedRecord())));
             (void)plan;
+            if (FAILED(hr) && allFamilyTokens) {
+                allFamilyTokens->preserveForRetry(semanticSourceOrdinal);
+            }
         }
         if (SUCCEEDED(hr)) {
             // The emitter records diagnostics_->peAppendPhaseEncode_ itself around the direct
@@ -2363,17 +2352,49 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
             // context/retention preparation and silently redefine `encode`,
             // the figure the migration is measured against -- see
             // docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.01.md.
-            hr = emit(recorderState_.commandChunk, phase);
-            const auto plan = dxmt9::d3d9::pe::planRecorderSettlement({
-                .point = dxmt9::d3d9::pe::RecorderSettlementPoint::Emitter,
-                .result = SUCCEEDED(hr)
-                    ? dxmt9::d3d9::pe::RecorderSettlementResult::Succeeded
-                    : dxmt9::d3d9::pe::RecorderSettlementResult::FailedPreEffect,
-            });
-            DXMT_ASSERT(plan.valid() &&
-                        (SUCCEEDED(hr) ? plan.acceptedRecord()
-                                       : plan.rollbackEmitter()));
-            (void)plan;
+            if (allFamilyTokens) {
+                const auto recordOrdinalBefore =
+                    recorderState_.commandChunk.lastCommittedRecordOrdinal();
+                hr = emit(recorderState_.commandChunk, phase);
+                const bool recordAccepted =
+                    recorderState_.commandChunk.lastCommittedRecordOrdinal() !=
+                        recordOrdinalBefore;
+                if (recordAccepted) {
+                    if (!observeCommittedSemanticRecord(
+                            type, semanticSourceOrdinal,
+                            recorderState_.commandChunk)) {
+                        poisonStateBlockTransaction();
+                        hr = D3DERR_DEVICELOST;
+                    }
+                } else if (FAILED(hr)) {
+                    allFamilyTokens->preserveForRetry(semanticSourceOrdinal);
+                } else {
+                    poisonStateBlockTransaction();
+                    hr = D3DERR_DEVICELOST;
+                }
+                const auto plan = dxmt9::d3d9::pe::planRecorderSettlement({
+                    .point = dxmt9::d3d9::pe::RecorderSettlementPoint::Emitter,
+                    .result = recordAccepted
+                        ? dxmt9::d3d9::pe::RecorderSettlementResult::Succeeded
+                        : dxmt9::d3d9::pe::RecorderSettlementResult::FailedPreEffect,
+                });
+                DXMT_ASSERT(plan.valid() &&
+                            (recordAccepted ? plan.acceptedRecord()
+                                            : plan.rollbackEmitter()));
+                (void)plan;
+            } else {
+                hr = emit(recorderState_.commandChunk, phase);
+                const auto plan = dxmt9::d3d9::pe::planRecorderSettlement({
+                    .point = dxmt9::d3d9::pe::RecorderSettlementPoint::Emitter,
+                    .result = SUCCEEDED(hr)
+                        ? dxmt9::d3d9::pe::RecorderSettlementResult::Succeeded
+                        : dxmt9::d3d9::pe::RecorderSettlementResult::FailedPreEffect,
+                });
+                DXMT_ASSERT(plan.valid() &&
+                            (SUCCEEDED(hr) ? plan.acceptedRecord()
+                                           : plan.rollbackEmitter()));
+                (void)plan;
+            }
         }
         if (SUCCEEDED(hr) &&
             (recorderState_.commandChunk.recordCount() >= maxRecords ||
@@ -2897,9 +2918,8 @@ public:
             [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
                 const AppendPhaseTimer& phase) -> HRESULT {
                 const auto t0 = phase.begin();
-                const bool ok =
-                    dxmt9::d3d9::pe::appendPresent(
-                        builder, presentBatch.command, presentBatch.source);
+                const bool ok = dxmt9::d3d9::pe::appendPeExactPresentSingleton(
+                    builder, presentBatch);
                 phase.recordEncode(t0);
                 return ok ? S_OK : D3DERR_INVALIDCALL;
             });
@@ -2925,6 +2945,7 @@ public:
             return appendHr;
         }
         const HRESULT flushHr = flushPendingCommandChunk(PeRecorderFlushReason::Present);
+        if (SUCCEEDED(flushHr)) (void)recorderState_.commandChunk.returnToLegacyFinalLayout();
         if (recordPresentTiming) {
             presentTimingFlushEnd = std::chrono::steady_clock::now();
             dxmt9DeviceInfoLog(

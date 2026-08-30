@@ -87,6 +87,71 @@ void digestDrawParam(std::uint64_t& hash,
   digestValue(hash, value.uniformHandle.hash);
 }
 
+void digestBindingSnapshot(
+    std::uint64_t& hash,
+    const dxmt9::core::DrawBufferBindingSnapshot& value) noexcept {
+  digestValue(hash, value.metalHandle);
+  // contentsAddress is process-local evidence, not replay semantics.
+  digestValue(hash, value.byteSize);
+  digestValue(hash, value.contentRevision);
+}
+
+void digestDrawPayloadSemantics(
+    std::uint64_t& hash, const dxmt9::core::DrawParam& param,
+    std::span<const dxmt9::core::u8> arena) noexcept {
+  const auto digestRawRange = [&](dxmt9::core::DrawPayloadRange range) {
+    const auto bytes = dxmt9::core::drawPayloadRangeBytes(range, arena);
+    digestValue(hash, bytes.size());
+    digestBytes(hash, bytes.data(), bytes.size());
+  };
+  digestRawRange(param.userVertexRange);
+  digestRawRange(param.userIndexRange);
+
+  const auto overrideBytes = dxmt9::core::drawPayloadRangeBytes(
+      param.bindingOverrideRange, arena);
+  digestValue(hash, overrideBytes.size());
+  if (overrideBytes.size() == sizeof(dxmt9::core::DrawBindingOverride)) {
+    dxmt9::core::DrawBindingOverride value{};
+    std::memcpy(&value, overrideBytes.data(), sizeof(value));
+    for (const auto& stream : value.streams) {
+      digestHandle(hash, stream.buffer);
+      digestValue(hash, stream.offset);
+      digestValue(hash, stream.stride);
+    }
+    digestValue(hash, value.streamMask);
+    digestHandle(hash, value.indexBuffer);
+    digestValue(hash, value.indexType);
+    digestValue(hash, value.indexBufferValid);
+    digestValue(hash, value.alphaTestEnable);
+    digestValue(hash, value.alphaTestFunc);
+    digestValue(hash, value.alphaTestRef);
+    digestValue(hash, value.alphaTestStateValid);
+  } else {
+    digestBytes(hash, overrideBytes.data(), overrideBytes.size());
+  }
+
+  const auto snapshotBytes = dxmt9::core::drawPayloadRangeBytes(
+      param.bindingSnapshotRange, arena);
+  digestValue(hash, snapshotBytes.size());
+  if (snapshotBytes.size() == sizeof(dxmt9::core::DrawBindingSnapshot)) {
+    dxmt9::core::DrawBindingSnapshot value{};
+    std::memcpy(&value, snapshotBytes.data(), sizeof(value));
+    for (const auto& stream : value.streams) {
+      digestHandle(hash, stream.buffer);
+      digestValue(hash, stream.offset);
+      digestValue(hash, stream.stride);
+      digestBindingSnapshot(hash, stream.snapshot);
+    }
+    digestValue(hash, value.streamMask);
+    digestHandle(hash, value.indexBuffer);
+    digestValue(hash, value.indexType);
+    digestBindingSnapshot(hash, value.indexSnapshot);
+    digestValue(hash, value.indexSnapshotValid);
+  } else {
+    digestBytes(hash, snapshotBytes.data(), snapshotBytes.size());
+  }
+}
+
 std::uint64_t effectivePayloadDigest(
     const dxmt9::core::SourcePayloadView& payload) noexcept {
   std::uint64_t hash = 1469598103934665603ull;
@@ -136,9 +201,10 @@ std::uint64_t effectivePayloadDigest(
         for (const auto handle : hot.streamBuffers) digestHandle(hash, handle);
         for (const auto handle : hot.textures) digestHandle(hash, handle);
       }
-      for (const auto& param : command.drawParams) digestDrawParam(hash, param);
-      digestBytes(hash, command.drawPayloadBytes.data(),
-                  command.drawPayloadBytes.size_bytes());
+      for (const auto& param : command.drawParams) {
+        digestDrawParam(hash, param);
+        digestDrawPayloadSemantics(hash, param, command.drawPayloadBytes);
+      }
       break;
     case dxmt9::core::MetalCommandKind::Clear:
       if (source.clear) {
@@ -241,6 +307,16 @@ struct CommandQueueArenaLeaseTestAccess {
     core::Handle presentSource{};
   };
 
+  struct DrawDigest {
+    std::uint64_t record = 0;
+    std::uint64_t pso = 0;
+    std::uint64_t hot = 0;
+    std::uint64_t params = 0;
+    std::uint64_t payload = 0;
+    core::DrawParam param{};
+    std::size_t payloadBytes = 0;
+  };
+
   static std::uint64_t nextSeqId(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.nextSeqId_;
@@ -254,6 +330,84 @@ struct CommandQueueArenaLeaseTestAccess {
   static std::size_t residentCount(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.cpuReadyTape_.residentCount();
+  }
+
+  static std::size_t writingCommandCount(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    if (!queue.writingSlot_ || *queue.writingSlot_ >= queue.slots_.size() ||
+        !queue.slots_[*queue.writingSlot_].payload) {
+      return 0;
+    }
+    return queue.slots_[*queue.writingSlot_].payload->commandCount();
+  }
+
+  static bool stopped(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.stop_;
+  }
+
+  static DrawDigest writingDrawDigest(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    DrawDigest result{};
+    if (!queue.writingSlot_) return result;
+    const core::SourcePayloadView view(
+        *queue.slots_[*queue.writingSlot_].payload);
+    if (view.commandCount() == 0u) return result;
+    const auto& command = view.commandAt(0u).command;
+    constexpr std::uint64_t offset = 1469598103934665603ull;
+    result.record = result.pso = result.hot = result.params = result.payload =
+        offset;
+    if (command.drawRunRecord) {
+      const auto& record = *command.drawRunRecord;
+      digestValue(result.record, record.stateIndex);
+      digestValue(result.record, record.firstParam);
+      digestValue(result.record, record.paramCount);
+      digestValue(result.record, record.payloadOffset);
+      digestValue(result.record, record.payloadSize);
+      digestValue(result.record, record.uniformHandle.index);
+      digestValue(result.record, record.uniformHandle.generation);
+      digestValue(result.record, record.uniformHandle.hash);
+      digestValue(result.record, record.invariant.viewportScissorHash);
+      digestValue(result.record, record.invariant.runStableBindingHash);
+      digestValue(result.record, record.invariant.streamMask);
+      digestValue(result.record, record.invariant.textureMask);
+      digestValue(result.record, record.invariant.samplerStateMask);
+    }
+    if (command.drawPsoSubview) {
+      const auto& pso = *command.drawPsoSubview;
+      digestValue(result.pso, pso.hasShaderContext);
+      digestValue(result.pso, pso.vertexShaderHash);
+      digestValue(result.pso, pso.pixelShaderHash);
+      digestValue(result.pso, pso.vertexDeclHash);
+      digestValue(result.pso, pso.renderStateHash);
+      digestValue(result.pso, pso.textureMask);
+      digestValue(result.pso, pso.samplerStateMask);
+      digestValue(result.pso, pso.renderTargetMask);
+      for (const auto handle : pso.colorAttachmentHandles) {
+        digestHandle(result.pso, handle);
+      }
+      digestHandle(result.pso, pso.depthStencilHandle);
+    }
+    if (command.drawState.hot) {
+      const auto& hot = *command.drawState.hot;
+      digestValue(result.hot, hot.key.renderStateHash);
+      digestValue(result.hot, hot.streamMask);
+      digestValue(result.hot, hot.textureMask);
+      digestValue(result.hot, hot.renderTargetMask);
+      digestHandle(result.hot, hot.indexBuffer);
+      for (const auto handle : hot.streamBuffers) digestHandle(result.hot, handle);
+      for (const auto handle : hot.textures) digestHandle(result.hot, handle);
+    }
+    for (const auto& param : command.drawParams) {
+      digestDrawParam(result.params, param);
+    }
+    if (!command.drawParams.empty()) result.param = command.drawParams.front();
+    result.payloadBytes = command.drawPayloadBytes.size();
+    for (const auto& param : command.drawParams) {
+      digestDrawPayloadSemantics(result.payload, param,
+                                 command.drawPayloadBytes);
+    }
+    return result;
   }
 
   static void forceNextBatchBuilderFailure(CommandQueue& queue) {
@@ -582,7 +736,8 @@ RecordSpec applyRenderStateRecord(std::uint32_t state,
   };
 }
 
-RecordSpec drawRecord(const D9CWireObjectIdentity& bufferIdentity) {
+RecordSpec drawRecord(const D9CWireObjectIdentity& bufferIdentity,
+                      std::uint32_t streamHandleIndex = 0u) {
   D9CCommandChunkWireDrawHeader draw{
       .primitiveType = 4u,
       .primitiveCount = 1u,
@@ -602,7 +757,7 @@ RecordSpec drawRecord(const D9CWireObjectIdentity& bufferIdentity) {
   const D9CCommandChunkWireStreamBinding stream{
       .slot = 0u,
       .valid = 1u,
-      .handleIndex = 0u,
+      .handleIndex = streamHandleIndex,
       .offset = 0u,
       .stride = 16u,
       .frequency = 1u,
@@ -675,7 +830,8 @@ dxmt9::d3d9::RawCommandChunk makeRaw(const WireFixture& fixture,
 
 struct RoutingDevice final : dxmt9::Device {
   explicit RoutingDevice(bool rejectAfterClear = false,
-                         bool segmentSerial = false)
+                         bool segmentSerial = false,
+                         bool directChunkSlot = false)
       : queue_(
             dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, limits_, {},
             segmentSerial
@@ -687,13 +843,17 @@ struct RoutingDevice final : dxmt9::Device {
                               .resolved = dxmt9::render::
                                   SourceIdentityMode::SegmentSerial}}
                 : dxmt9::render::RenderPartitionConfig{}),
-        rejectAfterClear_(rejectAfterClear) {}
+        rejectAfterClear_(rejectAfterClear),
+        directChunkSlot_(directChunkSlot) {}
 
   WMT::Device wmtDevice() override { return WMT::Device{NULL_OBJECT_HANDLE}; }
   dxmt9::CommandQueue& queue() override { return queue_; }
   const BackendLimits& limits() const override { return limits_; }
   std::shared_ptr<BackendDevice> backend() override { return {}; }
   bool supportsCpuReadyArenaReplay() const noexcept override { return true; }
+  bool supportsDirectChunkSlotReplay() const noexcept override {
+    return directChunkSlot_;
+  }
 
   BufferHandle createBuffer(const BufferDesc& desc) override {
     return queue_.pool().createBuffer(WMT::Device{NULL_OBJECT_HANDLE}, desc);
@@ -743,6 +903,20 @@ struct RoutingDevice final : dxmt9::Device {
     queue_.submitDrawRun(std::move(state), uniforms, draws, payloads);
   }
 
+  void submitDrawRunBatch(
+      std::span<DrawRunSubmission> submissions) override {
+    ++drawBatchCalls;
+    lastDrawBatchSize = static_cast<std::uint32_t>(submissions.size());
+    drawCalls += static_cast<std::uint32_t>(submissions.size());
+    queue_.submitDrawRunBatch(submissions);
+  }
+
+  DirectReplayDrawDisposition submitDirectReplayDraw(
+      const DirectReplayDrawInput& input) noexcept override {
+    ++drawCalls;
+    return queue_.submitDirectReplayDraw(input);
+  }
+
   void present(const SwapDesc& desc) override {
     ++presentCalls;
     lastPresentSeqId = queue_.submitPresent(desc);
@@ -752,10 +926,13 @@ struct RoutingDevice final : dxmt9::Device {
   dxmt9::CommandQueue queue_;
   bool rejectAfterClear_ = false;
   bool rejectAfterFinalClear_ = false;
+  bool directChunkSlot_ = false;
   std::uint64_t nextHandle_ = 1;
   std::atomic<std::uint32_t> clearCalls{0};
   std::atomic<std::uint32_t> drawCalls{0};
+  std::atomic<std::uint32_t> drawBatchCalls{0};
   std::atomic<std::uint32_t> presentCalls{0};
+  std::uint32_t lastDrawBatchSize = 0;
   std::uint64_t lastPresentSeqId = 0;
   std::uint32_t captureCalls = 0;
   std::uint32_t legacyMarkCalls = 0;
@@ -768,9 +945,11 @@ struct RoutingDevice final : dxmt9::Device {
 
 struct RuntimeFixture {
   explicit RuntimeFixture(bool rejectAfterClear = false,
-                          bool segmentSerial = false) {
+                          bool segmentSerial = false,
+                          bool directChunkSlot = false) {
     auto upper = std::make_unique<RoutingDevice>(rejectAfterClear,
-                                                  segmentSerial);
+                                                  segmentSerial,
+                                                  directChunkSlot);
     routing = upper.get();
     factory = dxmt9::com::Direct3DCreate9Ex(
         dxmt9::com::D3D_SDK_VERSION, std::move(upper));
@@ -1227,6 +1406,218 @@ void sameRawLegacyAndDirectProductionOracle() {
   dxmt9c_surface_release(destination);
 }
 
+void ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr, "ordinary direct/Legacy draw buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+  const std::array records{drawRecord(identity), clearRecord()};
+  const auto wire = makeWireFixture(records);
+  auto directRaw = makeRaw(wire, 71u, false, &registry);
+  auto legacyRaw = makeRaw(wire, 72u, false, &registry);
+  directRaw.resourceEntries.push_back(ChunkHandleEntry{
+      .kind = ChunkHandleKind::Buffer,
+      .handle = buffer->obj->handle(),
+  });
+  legacyRaw.resourceEntries.push_back(ChunkHandleEntry{
+      .kind = ChunkHandleKind::Buffer,
+      .handle = buffer->obj->handle(),
+  });
+  directRaw.cpuReadyTapePlanningEnabled = false;
+  legacyRaw.cpuReadyTapePlanningEnabled = false;
+
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), directRaw) == D3D_OK,
+        "ordinary direct-ChunkSlot raw replays successfully");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+                fixture.routing->queue_) == 0u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+                fixture.routing->queue_) == 2u &&
+            fixture.routing->drawCalls == 1u,
+        "direct construction preserves the ordinary source/CB publication cadence");
+  check(fixture.routing->legacyMarkCalls == 0u,
+        "direct commit owns exact resource closure without Legacy pre-marking");
+  const auto directDrawDigest =
+      dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
+          fixture.routing->queue_);
+
+  fixture.routing->present(SwapDesc{});
+  const auto directCompletion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+  check(fixture.device->SetStreamSource(0u, nullptr, 0u, 0u) == D3D_OK,
+        "ordinary differential restores its initial stream state");
+  fixture.routing->directChunkSlot_ = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), legacyRaw) == D3D_OK &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+                fixture.routing->queue_) == 2u &&
+            fixture.routing->drawCalls == 2u &&
+            fixture.routing->legacyMarkCalls == 1u,
+        "the same raw takes the typed Legacy lane when direct support is absent");
+  const auto legacyDrawDigest =
+      dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
+          fixture.routing->queue_);
+  fixture.routing->present(SwapDesc{});
+  const auto legacyCompletion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+  check(directCompletion.dequeued && !directCompletion.arena &&
+            directCompletion.submitted && directCompletion.completed &&
+            directCompletion.reclaimed &&
+            legacyCompletion.dequeued && !legacyCompletion.arena &&
+            legacyCompletion.submitted && legacyCompletion.completed &&
+            legacyCompletion.reclaimed &&
+            directCompletion.commandCount == 3u &&
+            directCompletion.commandCount == legacyCompletion.commandCount &&
+            directCompletion.effectiveDigest == legacyCompletion.effectiveDigest,
+        "ordinary direct and Legacy final ChunkSlots are completion- and semantic-neutral: "
+        "direct count=" + std::to_string(directCompletion.commandCount) +
+        " legacy count=" + std::to_string(legacyCompletion.commandCount) +
+        " direct seq=" + std::to_string(directCompletion.seqId) +
+        " legacy seq=" + std::to_string(legacyCompletion.seqId) +
+        " direct digest=" + std::to_string(directCompletion.effectiveDigest) +
+        " legacy digest=" + std::to_string(legacyCompletion.effectiveDigest) +
+        " buffer=" + std::to_string(buffer->obj->handle().value) +
+        " record=" + std::to_string(directDrawDigest.record) + "/" +
+            std::to_string(legacyDrawDigest.record) +
+        " pso=" + std::to_string(directDrawDigest.pso) + "/" +
+            std::to_string(legacyDrawDigest.pso) +
+        " hot=" + std::to_string(directDrawDigest.hot) + "/" +
+            std::to_string(legacyDrawDigest.hot) +
+        " params=" + std::to_string(directDrawDigest.params) + "/" +
+            std::to_string(legacyDrawDigest.params) +
+        " payload=" + std::to_string(directDrawDigest.payload) + "/" +
+            std::to_string(legacyDrawDigest.payload) +
+        " payload bytes=" + std::to_string(directDrawDigest.payloadBytes) +
+            "/" + std::to_string(legacyDrawDigest.payloadBytes) +
+        " override=" +
+            std::to_string(directDrawDigest.param.bindingOverrideRange.offset) +
+            ":" +
+            std::to_string(directDrawDigest.param.bindingOverrideRange.size) +
+            "/" +
+            std::to_string(legacyDrawDigest.param.bindingOverrideRange.offset) +
+            ":" +
+            std::to_string(legacyDrawDigest.param.bindingOverrideRange.size) +
+        " snapshot=" +
+            std::to_string(directDrawDigest.param.bindingSnapshotRange.offset) +
+            ":" +
+            std::to_string(directDrawDigest.param.bindingSnapshotRange.size) +
+            "/" +
+            std::to_string(legacyDrawDigest.param.bindingSnapshotRange.offset) +
+            ":" +
+            std::to_string(legacyDrawDigest.param.bindingSnapshotRange.size) +
+        " start=" + std::to_string(directDrawDigest.param.startVertex) + "/" +
+            std::to_string(legacyDrawDigest.param.startVertex) +
+        " base=" +
+            std::to_string(directDrawDigest.param.baseVertexIndex) + "/" +
+            std::to_string(legacyDrawDigest.param.baseVertexIndex) +
+        " index=" + std::to_string(directDrawDigest.param.startIndex) + "/" +
+            std::to_string(legacyDrawDigest.param.startIndex) +
+        " indexed=" + std::to_string(directDrawDigest.param.indexed) + "/" +
+            std::to_string(legacyDrawDigest.param.indexed) +
+        " instance=" +
+            std::to_string(directDrawDigest.param.instanceCount) + "/" +
+            std::to_string(legacyDrawDigest.param.instanceCount) +
+        " uniform=" +
+            std::to_string(directDrawDigest.param.uniformHandle.index) + ":" +
+            std::to_string(directDrawDigest.param.uniformHandle.generation) +
+            ":" + std::to_string(directDrawDigest.param.uniformHandle.hash) +
+            "/" +
+            std::to_string(legacyDrawDigest.param.uniformHandle.index) + ":" +
+            std::to_string(legacyDrawDigest.param.uniformHandle.generation) +
+            ":" + std::to_string(legacyDrawDigest.param.uniformHandle.hash));
+  dxmt9::d3d9::releaseRetainedWrappers(directRaw);
+  dxmt9::d3d9::releaseRetainedWrappers(legacyRaw);
+  dxmt9c_buffer_release(buffer);
+}
+
+void directAdmissionRejectionPreservesLegacyDrawBatchGrouping() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  auto* secondBuffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr && secondBuffer != nullptr,
+        "pre-effect fallback buffers construct");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+  const auto secondIdentity = registry.insert(
+      D9C_CHUNK_HANDLE_KIND_BUFFER, secondBuffer);
+  const std::array records{drawRecord(identity), drawRecord(secondIdentity, 1u)};
+  auto raw = makeRaw(makeWireFixture(records), 73u, false, &registry);
+  raw.cpuReadyTapePlanningEnabled = false;
+
+  // Leave a compatibility command in the writing slot. Direct admission
+  // rejects before semantic replay, so this raw must use the Legacy path.
+  fixture.routing->queue_.submitClear(ClearDesc{});
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+            fixture.routing->queue_) == 1u,
+        "fallback fixture must retain its compatibility prefix");
+
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK,
+        "pre-effect Direct admission rejection must fall back successfully");
+  check(fixture.routing->drawCalls == 2u &&
+            fixture.routing->drawBatchCalls == 1u &&
+            fixture.routing->lastDrawBatchSize == 2u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+                fixture.routing->queue_) == 2u,
+        "Legacy fallback must preserve one submitDrawRunBatch group for the raw draws");
+
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(buffer);
+  dxmt9c_buffer_release(secondBuffer);
+}
+
+void directChunkSlotRollbackAndPostEffectFailureAreFailSafe() {
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  capacity.clearRecords = 1;
+
+  dxmt9::CommandQueue rollbackQueue(
+      dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto rollback = rollbackQueue.beginDirectChunkSlotReplay(
+      81u, capacity, sizeof(ClearDesc));
+  check(rollback.status ==
+                dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Ready &&
+            rollback.lease.has_value(),
+        "pre-effect rollback fixture acquires a generation-qualified borrow");
+  rollbackQueue.submitClear(ClearDesc{});
+  check(rollback.lease->rollbackPreEffect() &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+                rollbackQueue) == 0u &&
+            !dxmt9::CommandQueueArenaLeaseTestAccess::stopped(rollbackQueue),
+        "pre-effect rollback restores the exact writing-slot checkpoint");
+
+  dxmt9::CommandQueue failStopQueue(
+      dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto failStop = failStopQueue.beginDirectChunkSlotReplay(
+      82u, capacity, sizeof(ClearDesc));
+  check(failStop.lease.has_value(),
+        "post-effect fail-stop fixture acquires direct destination ownership");
+  failStop.lease->markSemanticEffectsStarted();
+  failStopQueue.submitClear(ClearDesc{});
+  failStopQueue.submitDrawRun(CanonicalDrawState{}, DrawUniformPayload{}, {});
+  const auto status = failStop.lease->commit(
+      std::span<const ChunkHandleEntry>{});
+  check(status ==
+                dxmt9::CommandQueue::DirectChunkSlotReplayStatus::FailStopped &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::stopped(failStopQueue) &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(failStopQueue) ==
+                0u,
+        "post-effect unsupported carrier ingress fail-stops without publication or retry");
+
+  const auto unsupported = failStopQueue.beginDirectChunkSlotReplay(
+      0u, capacity, sizeof(ClearDesc));
+  check(unsupported.status ==
+            dxmt9::CommandQueue::DirectChunkSlotReplayStatus::LegacyUnsupported,
+        "invalid pre-effect admission retains a typed Legacy disposition");
+}
+
 void transactionalArenaFailureInjectionDisposition() {
   {
     RuntimeFixture fixture;
@@ -1559,6 +1950,9 @@ int main() {
     oversizeSegmentedPresentTakesOneLegacyRollbackSource();
     resourceBearingDirectCapturesThenMarksExactTicketAndPublishes();
     sameRawLegacyAndDirectProductionOracle();
+    ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion();
+    directAdmissionRejectionPreservesLegacyDrawBatchGrouping();
+    directChunkSlotRollbackAndPostEffectFailureAreFailSafe();
     transactionalArenaFailureInjectionDisposition();
     stateOnlyRawMutatesWithoutTicket();
     postSemanticDirectFailureDoesNotFallback();

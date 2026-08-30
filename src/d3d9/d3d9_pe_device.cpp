@@ -1400,9 +1400,55 @@ void D3D9DeviceImpl::releaseAllBound() {
     }
 }
 
-dxmt9::d3d9::pe::PeScalarSemanticTokenLedger*
-D3D9DeviceImpl::scalarSemanticObserver() noexcept {
-    return diagnostics_ ? diagnostics_->scalarSemanticTokens.get() : nullptr;
+bool D3D9DeviceImpl::observeCommittedSemanticRecord(
+    std::uint32_t recordType, std::uint64_t sourceOrdinal,
+    const dxmt9::d3d9::pe::CommandChunkBuilder& builder) noexcept {
+    auto* const observer = allFamilySemanticObserver();
+    if (!observer) return true;
+    bool accepted = false;
+    const bool visited = builder.visitLastCommittedRecord(
+        [&](const dxmt9::d3d9::pe::PeCommittedRecordSemanticView& view)
+            noexcept {
+          if (view.record.type != recordType ||
+              view.record.payloadOffset > 0xffffffffu -
+                  view.record.payloadSize) {
+            return false;
+          }
+          const dxmt9::d3d9::pe::PeSemanticByteRange range{
+              .offset = view.record.payloadOffset,
+              .length = view.record.payloadSize,
+          };
+          if (!observer->beginIdentityProjection(
+                  sourceOrdinal, view.recordOrdinal, range) ||
+              !builder.visitLastCommittedRecordHandles(
+                  [&](std::uint32_t identityOrdinal,
+                      const D9CCommandChunkWireHandleEntry& identity)
+                      noexcept {
+                    return observer->observeIdentity({
+                        .sourceOrdinal = sourceOrdinal,
+                        .recordOrdinal = view.recordOrdinal,
+                        .recordWireRange = range,
+                        .identityOrdinal = identityOrdinal,
+                        .kind = identity.kind,
+                        .generation = identity.generation,
+                        .objectId = identity.objectId,
+                    });
+                  }) ||
+              !observer->finishIdentityProjection(view.record.handleCount)) {
+            return false;
+          }
+          accepted = observer->accept({
+              .recordType = recordType,
+              .sourceOrdinal = sourceOrdinal,
+              .recordOrdinal = view.recordOrdinal,
+              .wireRange = range,
+              .exactValue = view.exactPayload,
+              .exactIdentityCount = view.record.handleCount,
+              .exactIdentitiesValid = view.exactHandleIdentitiesValid,
+          }) == dxmt9::d3d9::pe::PeSemanticProjectionAction::Accept;
+          return accepted;
+        });
+    return visited && accepted;
 }
 
 void D3D9DeviceImpl::clearPeStateTracking() {
@@ -1412,6 +1458,7 @@ void D3D9DeviceImpl::clearPeStateTracking() {
     recorderState_.peConsts.reset();
     recorderState_.peBindingView = {};
     if (auto* tokens = scalarSemanticObserver()) tokens->clear();
+    if (auto* tokens = allFamilySemanticObserver()) tokens->clear();
     recorderState_.stateBlockTransaction.clearRecordedCandidateForReset();
     clearPendingCommandChunk(
         dxmt9::d3d9::pe::RecorderCommitEvent::DeviceReset);

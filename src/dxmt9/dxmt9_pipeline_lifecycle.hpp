@@ -47,6 +47,15 @@ enum class PipelineDisposition : std::uint8_t {
   StateOnly,
   FailStop,
   Shutdown,
+  // Control-plane terminal rows.  These are deliberately distinct from
+  // ordinary queue completion: Reset advances the PE epoch and Teardown
+  // drains the remaining owners without inventing a GPU completion.
+  Reset,
+  Teardown,
+  BridgeReject,
+  ReplayFailure,
+  EncodeFailure,
+  PresentSettled,
 };
 
 // Identifies the production owner that emitted a lifecycle edge.  This is
@@ -57,7 +66,118 @@ enum class PipelineOwner : std::uint8_t {
   Receipt,
   SelectedParallel,
   DeviceLoss,
+  Replay,
+  DirectPublication,
+  LegacyPublication,
+  SerialEncode,
+  GpuSubmission,
+  GpuCompletion,
+  Reclaim,
+  Reset,
+  Teardown,
 };
+
+enum class PipelineControl : std::uint8_t {
+  Normal,
+  Present,
+  Reset,
+  Teardown,
+  DeviceLoss,
+  Exception,
+};
+
+// This is the production-owned lifecycle vocabulary. The same X-macro is
+// parsed by gen_pipeline_lifecycle_table.py, so the C++ validator and the TLA+
+// model cannot silently acquire different transition rows.
+#define DXMT9_PIPELINE_LIFECYCLE_ROWS(X)                                      \
+  X(SourceArrival, ProducerOwned, PeImport, Advance, Normal)                 \
+  X(ProducerOwned, RawOwned, Replay, Advance, Normal)                        \
+  X(RawOwned, ReplayBorrowed, Replay, Advance, Normal)                       \
+  X(RawOwned, RawOwned, Queue, AdmissionWait, Normal)                        \
+  X(RawOwned, ReplayBorrowed, Replay, AdmissionRetry, Normal)                 \
+  X(ReplayBorrowed, ReplayBorrowed, Replay, BuildProgress, Normal)            \
+  X(ReplayBorrowed, ReplayBorrowed, Replay, Advance, Normal)                   \
+  X(ReplayBorrowed, FinalOwned, DirectPublication, Advance, Normal)            \
+  X(ReplayBorrowed, FinalOwned, LegacyPublication, Advance, Normal)            \
+  X(ReplayBorrowed, FinalOwned, Queue, Advance, Normal)                        \
+  X(FinalOwned, Encoding, SerialEncode, Advance, Normal)                      \
+  X(FinalOwned, Encoding, SelectedParallel, Advance, Normal)                  \
+  X(FinalOwned, Encoding, Queue, Advance, Normal)                              \
+  X(Encoding, Encoding, Queue, ChildJoin, Normal)                             \
+  X(Encoding, GPUInFlight, Receipt, Advance, Normal)                          \
+  X(Encoding, GPUInFlight, SelectedParallel, Advance, Normal)                \
+  X(Encoding, GPUInFlight, GpuSubmission, Advance, Normal)                    \
+  X(Encoding, GPUInFlight, Receipt, Advance, Present)                          \
+  X(Encoding, GPUInFlight, SelectedParallel, Advance, Present)                \
+  X(GPUInFlight, GPUInFlight, Receipt, PayloadRetired, Normal)                 \
+  X(GPUInFlight, Completed, GpuCompletion, Completed, Normal)                  \
+  X(GPUInFlight, Completed, Receipt, Completed, Normal)                        \
+  X(GPUInFlight, Completed, GpuCompletion, Completed, Present)                 \
+  X(GPUInFlight, Completed, Receipt, Completed, Present)                        \
+  X(GPUInFlight, Completed, DeviceLoss, DeviceLost, DeviceLoss)               \
+  X(Completed, Reclaimed, Reclaim, Completed, Normal)                         \
+  X(Completed, Reclaimed, Reclaim, PresentSettled, Present)                   \
+  X(Encoding, Reclaimed, Queue, NoGpuTerminal, Normal)                        \
+  X(RawOwned, Reclaimed, Queue, NoGpuTerminal, Normal)                         \
+  X(FinalOwned, Reclaimed, Queue, NoGpuTerminal, Normal)                       \
+  X(RawOwned, Reclaimed, DeviceLoss, FailStop, DeviceLoss)                    \
+  X(Encoding, Reclaimed, DeviceLoss, FailStop, DeviceLoss)                    \
+  X(RawOwned, Reclaimed, PeImport, BridgeReject, Exception)                   \
+  X(ProducerOwned, Reclaimed, PeImport, BridgeReject, Exception)               \
+  X(ReplayBorrowed, RawOwned, Queue, PreEffectRollback, Normal)               \
+  X(ReplayBorrowed, Reclaimed, Replay, ReplayFailure, Exception)              \
+  X(Encoding, Reclaimed, SerialEncode, EncodeFailure, Exception)               \
+  X(Encoding, Reclaimed, SelectedParallel, EncodeFailure, Exception)           \
+  X(ProducerOwned, Reclaimed, DeviceLoss, FailStop, DeviceLoss)                \
+  X(ReplayBorrowed, Reclaimed, DeviceLoss, FailStop, DeviceLoss)               \
+  X(FinalOwned, Reclaimed, DeviceLoss, FailStop, DeviceLoss)                   \
+  X(Completed, Reclaimed, DeviceLoss, FailStop, DeviceLoss)                    \
+  X(GPUInFlight, Reclaimed, DeviceLoss, FailStop, DeviceLoss)                  \
+  X(RawOwned, Reclaimed, Reset, Reset, Reset)                                  \
+  X(FinalOwned, Reclaimed, Reset, Reset, Reset)                                \
+  X(Encoding, Reclaimed, Reset, Reset, Reset)                                  \
+  X(RawOwned, Reclaimed, Teardown, Teardown, Teardown)                         \
+  X(FinalOwned, Reclaimed, Teardown, Teardown, Teardown)                       \
+  X(Encoding, Reclaimed, Teardown, Teardown, Teardown)                       \
+  X(ProducerOwned, Reclaimed, Teardown, Teardown, Teardown)                  \
+  X(ReplayBorrowed, Reclaimed, Teardown, Teardown, Teardown)                 \
+  X(Completed, Reclaimed, Teardown, Teardown, Teardown)                       \
+  X(GPUInFlight, Reclaimed, Teardown, Teardown, Teardown)
+
+struct PipelineLifecycleRow {
+  PipelineStage from = PipelineStage::SourceArrival;
+  PipelineStage to = PipelineStage::SourceArrival;
+  PipelineOwner owner = PipelineOwner::Queue;
+  PipelineDisposition disposition = PipelineDisposition::Advance;
+  PipelineControl control = PipelineControl::Normal;
+};
+
+inline constexpr auto kPipelineLifecycleRows = std::array{
+#define DXMT9_PIPELINE_LIFECYCLE_ROW(from, to, owner, disposition, control) \
+  PipelineLifecycleRow{PipelineStage::from, PipelineStage::to,              \
+                       PipelineOwner::owner, PipelineDisposition::disposition, \
+                       PipelineControl::control},
+  DXMT9_PIPELINE_LIFECYCLE_ROWS(DXMT9_PIPELINE_LIFECYCLE_ROW)
+#undef DXMT9_PIPELINE_LIFECYCLE_ROW
+};
+
+constexpr bool pipelineKnownLifecycleRow(
+    PipelineStage from, PipelineStage to, PipelineOwner owner,
+    PipelineDisposition disposition,
+    PipelineControl control = PipelineControl::Normal) noexcept {
+  for (const auto& row : kPipelineLifecycleRows) {
+    if (row.from == from && row.to == to && row.owner == owner &&
+        row.disposition == disposition && row.control == control) {
+      return true;
+    }
+  }
+  return false;
+}
+
+constexpr bool pipelineEncodeOwnerValid(PipelineOwner owner) noexcept {
+  return owner == PipelineOwner::SerialEncode ||
+      owner == PipelineOwner::SelectedParallel;
+}
 
 struct PipelineIdentity {
   std::uint64_t workId = 0;
@@ -97,6 +217,10 @@ struct PipelineLifecycleEvent {
   PipelinePayloadKind payloadKind = PipelinePayloadKind::Legacy;
   PipelineDisposition disposition = PipelineDisposition::Advance;
   PipelineOwner owner = PipelineOwner::Queue;
+  PipelineControl control = PipelineControl::Normal;
+  // Present is a control-plane fact independent of payload representation:
+  // Legacy/Arena sources may contain Draw records followed by Present.
+  bool hasPresent = false;
   std::uint64_t ownedBytes = 0;
   std::uint32_t outstandingBorrows = 0;
   std::uint32_t constructedCount = 0;
@@ -106,6 +230,25 @@ struct PipelineLifecycleEvent {
   bool completionAuthority = false;
   PipelineQueueSnapshot before{};
   PipelineQueueSnapshot after{};
+};
+
+// Cold control-plane evidence is intentionally separate from per-source
+// lifecycle transitions.  Reset/Teardown report the queue boundary and the
+// number of identities still live; they never synthesize Reclaimed edges.
+struct PipelineControlObservation {
+  PipelineControl control = PipelineControl::Normal;
+  PipelineDisposition disposition = PipelineDisposition::Advance;
+  std::uint64_t epoch = 0;
+  std::uint64_t completedSeq = 0;
+  std::uint64_t capacityGeneration = 0;
+  std::uint32_t liveSourceCount = 0;
+  bool drained = false;
+};
+
+struct PipelineControlObserverSink {
+  using Fn = void (*)(void*, const PipelineControlObservation&) noexcept;
+  void* context = nullptr;
+  Fn fn = nullptr;
 };
 
 enum class PipelineObservationError : std::uint8_t {
@@ -158,31 +301,52 @@ constexpr bool pipelineOwnerMatchesTransition(
     PipelineStage from,
     PipelineStage to,
     PipelineDisposition disposition) noexcept {
-  if (from == PipelineStage::SourceArrival &&
-      to == PipelineStage::ProducerOwned) {
-    return owner == PipelineOwner::PeImport;
+  for (const auto& row : kPipelineLifecycleRows) {
+    if (row.from == from && row.to == to && row.owner == owner &&
+        row.disposition == disposition) {
+      return true;
+    }
   }
-  if (from == PipelineStage::Encoding &&
-      to == PipelineStage::GPUInFlight) {
-    return owner == PipelineOwner::Receipt ||
-        owner == PipelineOwner::SelectedParallel;
+  return false;
+}
+
+constexpr bool pipelineControlIsTerminal(PipelineControl control) noexcept {
+  return control == PipelineControl::Reset ||
+      control == PipelineControl::Teardown ||
+      control == PipelineControl::DeviceLoss;
+}
+
+constexpr bool pipelineDispositionIsFailure(
+    PipelineDisposition disposition) noexcept {
+  return disposition == PipelineDisposition::BridgeReject ||
+      disposition == PipelineDisposition::ReplayFailure ||
+      disposition == PipelineDisposition::EncodeFailure ||
+      disposition == PipelineDisposition::FailStop ||
+      disposition == PipelineDisposition::DeviceLost;
+}
+
+constexpr bool pipelineControlMatches(
+    PipelineControl control, PipelineDisposition disposition,
+    PipelinePayloadKind payloadKind, bool hasPresent = false) noexcept {
+  if (control == PipelineControl::Present &&
+      !hasPresent && payloadKind != PipelinePayloadKind::PresentOnly) {
+    return false;
   }
-  if (from == PipelineStage::GPUInFlight &&
-      to == PipelineStage::Completed) {
-    return disposition == PipelineDisposition::DeviceLost
-        ? owner == PipelineOwner::DeviceLoss
-        : owner == PipelineOwner::Receipt;
+  if (control == PipelineControl::DeviceLoss &&
+      disposition != PipelineDisposition::DeviceLost &&
+      disposition != PipelineDisposition::FailStop) {
+    return false;
   }
-  // A poison-stop may terminate work that never acquired GPU authority.  The
-  // queue emits this exact owner-qualified edge when device loss observes a
-  // Pending/Encoding control shell; it must not be rejected as a fabricated
-  // ordinary Queue reclaim.
-  if (to == PipelineStage::Reclaimed &&
-      disposition == PipelineDisposition::FailStop &&
-      (from == PipelineStage::RawOwned || from == PipelineStage::Encoding)) {
-    return owner == PipelineOwner::DeviceLoss;
+  if (control == PipelineControl::Reset &&
+      disposition != PipelineDisposition::Reset) {
+    return false;
   }
-  return owner == PipelineOwner::Queue;
+  if (control == PipelineControl::Teardown &&
+      disposition != PipelineDisposition::Teardown &&
+      disposition != PipelineDisposition::Shutdown) {
+    return false;
+  }
+  return true;
 }
 
 constexpr bool pipelineCompletionMayPublish(
@@ -213,14 +377,20 @@ constexpr bool pipelineOwnerMayReclaim(
   if (stage == PipelineStage::Completed) {
     return completionAuthority &&
         (disposition == PipelineDisposition::Completed ||
-         disposition == PipelineDisposition::DeviceLost);
+         disposition == PipelineDisposition::DeviceLost ||
+         disposition == PipelineDisposition::PresentSettled);
   }
   return pipelineNoGpuTerminalMayPublish(
              stage, disposition, outstandingBorrows, completionAuthority) ||
       disposition == PipelineDisposition::PreEffectReject ||
       disposition == PipelineDisposition::StateOnly ||
       disposition == PipelineDisposition::FailStop ||
-      disposition == PipelineDisposition::Shutdown;
+      disposition == PipelineDisposition::Shutdown ||
+      disposition == PipelineDisposition::Teardown ||
+      disposition == PipelineDisposition::Reset ||
+      disposition == PipelineDisposition::BridgeReject ||
+      disposition == PipelineDisposition::ReplayFailure ||
+      disposition == PipelineDisposition::EncodeFailure;
 }
 
 constexpr bool pipelineTransitionRequiresAdmissionWake(
@@ -257,14 +427,21 @@ struct PipelineLifecycleRecord {
   bool terminal = false;
 };
 
-inline constexpr std::size_t kMaxObservedPipelineSources = 8;
+// Match the bounded carried-session source ledger. Production owner
+// validation must be able to reduce one 128-source completion chain without
+// silently dropping identities from its strict state.
+inline constexpr std::size_t kMaxObservedPipelineSources = 256;
 inline constexpr std::size_t kMaxObservedPipelineEvents = 256;
+inline constexpr std::size_t kMaxObservedPipelineControls = 16;
 
 struct PipelineLifecycleObserverState {
   std::array<PipelineLifecycleRecord, kMaxObservedPipelineSources> records{};
   std::array<PipelineLifecycleEvent, kMaxObservedPipelineEvents> ownerEvents{};
+  std::array<PipelineControlObservation, kMaxObservedPipelineControls>
+      controlEvents{};
   std::size_t recordCount = 0;
   std::size_t ownerEventCount = 0;
+  std::size_t controlEventCount = 0;
   PipelineQueueSnapshot queue{};
   bool hasQueueSnapshot = false;
   std::size_t eventCount = 0;
@@ -340,6 +517,14 @@ constexpr PipelineObservationError validateTransition(
     const PipelineLifecycleEvent& event) noexcept {
   if (record.stage != event.from || record.terminal) {
     return PipelineObservationError::DuplicateOrRegressedStage;
+  }
+  if (!pipelineControlMatches(event.control, event.disposition,
+                              event.payloadKind, event.hasPresent)) {
+    return PipelineObservationError::InvalidDisposition;
+  }
+  if (!pipelineKnownLifecycleRow(event.from, event.to, event.owner,
+                                 event.disposition, event.control)) {
+    return PipelineObservationError::InvalidDisposition;
   }
   if (!pipelineOwnerMatchesTransition(event.owner, event.from, event.to,
                                        event.disposition)) {
@@ -472,7 +657,8 @@ constexpr PipelineObservationError validateTransition(
         event.after.completedSeq != event.identity.seqId) {
       return PipelineObservationError::CompletionOutOfOrder;
     }
-    const bool present = event.payloadKind == PipelinePayloadKind::PresentOnly;
+    const bool present = event.hasPresent ||
+        event.payloadKind == PipelinePayloadKind::PresentOnly;
     if ((present && event.after.presentSeq != event.identity.seqId) ||
         (!present && event.after.presentSeq != event.before.presentSeq)) {
       return PipelineObservationError::PresentOutOfOrder;
@@ -482,7 +668,8 @@ constexpr PipelineObservationError validateTransition(
   if (event.from == PipelineStage::Completed &&
       event.to == PipelineStage::Reclaimed &&
       (event.disposition == PipelineDisposition::Completed ||
-       event.disposition == PipelineDisposition::DeviceLost)) {
+       event.disposition == PipelineDisposition::DeviceLost ||
+       event.disposition == PipelineDisposition::PresentSettled)) {
     if (!pipelineOwnerMayReclaim(event.from, event.disposition,
                                  event.outstandingBorrows,
                                  event.completionAuthority)) {
@@ -513,8 +700,20 @@ constexpr PipelineObservationError validateTransition(
         (event.disposition == PipelineDisposition::FailStop &&
          (event.from == PipelineStage::RawOwned ||
           event.from == PipelineStage::Encoding)) ||
-        (event.disposition == PipelineDisposition::Shutdown &&
-         event.from != PipelineStage::GPUInFlight);
+       (event.disposition == PipelineDisposition::Shutdown &&
+         event.from != PipelineStage::GPUInFlight) ||
+       (event.disposition == PipelineDisposition::Reset &&
+        event.from != PipelineStage::GPUInFlight) ||
+       (event.disposition == PipelineDisposition::Teardown &&
+        event.from != PipelineStage::GPUInFlight) ||
+       (event.disposition == PipelineDisposition::BridgeReject &&
+        event.from == PipelineStage::RawOwned) ||
+       (event.disposition == PipelineDisposition::ReplayFailure &&
+        event.from == PipelineStage::ReplayBorrowed) ||
+       (event.disposition == PipelineDisposition::EncodeFailure &&
+        event.from == PipelineStage::Encoding) ||
+       (event.disposition == PipelineDisposition::PresentSettled &&
+        event.from == PipelineStage::Completed);
     const bool terminalSnapshotMatches =
         event.disposition != PipelineDisposition::FailStop ||
         event.after.failed;
@@ -550,7 +749,9 @@ constexpr PipelineObservationError reducePipelineLifecycleEvent(
         event.to != PipelineStage::ProducerOwned ||
         event.disposition != PipelineDisposition::Advance ||
         event.owner != PipelineOwner::PeImport ||
-        event.outstandingBorrows != 0) {
+        event.outstandingBorrows != 0 ||
+        !pipelineKnownLifecycleRow(event.from, event.to, event.owner,
+                                   event.disposition, event.control)) {
       return PipelineObservationError::DuplicateOrRegressedStage;
     }
     if (state.recordCount == state.records.size()) {
@@ -609,6 +810,14 @@ inline void emitPipelineLifecycleEvent(
   }
 }
 
+inline void emitPipelineControlObservation(
+    PipelineControlObserverSink sink,
+    const PipelineControlObservation& observation) noexcept {
+  if (sink.fn) {
+    sink.fn(sink.context, observation);
+  }
+}
+
 class PipelineLifecycleObserver {
  public:
   void observe(const PipelineLifecycleEvent& event) noexcept {
@@ -624,27 +833,49 @@ class PipelineLifecycleObserver {
 
   // Production owners already have the queue's serialized transition record
   // and exact Tape locator. Preserve that evidence verbatim in a bounded cold
-  // lane; the strict reducer remains available to deterministic/model tests.
+  // lane, then run the same strict reducer used by deterministic/model tests.
   // This method intentionally performs no allocation, clock read, or atomic
   // operation and is reached only through the opt-in production sink.
   void observeOwnerEvent(const PipelineLifecycleEvent& event) noexcept {
-    if (error_ != PipelineObservationError::None) {
-      return;
-    }
     if (!event.identity.valid()) {
-      error_ = PipelineObservationError::InvalidIdentity;
+      if (error_ == PipelineObservationError::None) {
+        error_ = PipelineObservationError::InvalidIdentity;
+      }
       return;
     }
     if (state_.ownerEventCount == state_.ownerEvents.size()) {
-      error_ = PipelineObservationError::BoundedObserverOverflow;
+      if (error_ == PipelineObservationError::None) {
+        error_ = PipelineObservationError::BoundedObserverOverflow;
+      }
       return;
     }
     state_.ownerEvents[state_.ownerEventCount++] = event;
-    ++state_.eventCount;
+    if (error_ == PipelineObservationError::None) {
+      const auto validation = reducePipelineLifecycleEvent(state_, event);
+      if (validation != PipelineObservationError::None) {
+        error_ = validation;
+      }
+    }
   }
 
   PipelineLifecycleObserverSink productionSink() noexcept {
     return {.context = this, .fn = &observeOwnerFromSink};
+  }
+
+  void observeControl(const PipelineControlObservation& observation) noexcept {
+    if (error_ != PipelineObservationError::None) {
+      return;
+    }
+    if (state_.controlEventCount == state_.controlEvents.size()) {
+      error_ = PipelineObservationError::BoundedObserverOverflow;
+      return;
+    }
+    state_.controlEvents[state_.controlEventCount++] = observation;
+    ++state_.eventCount;
+  }
+
+  PipelineControlObserverSink productionControlSink() noexcept {
+    return {.context = this, .fn = &observeControlFromSink};
   }
 
   constexpr PipelineObservationError error() const noexcept { return error_; }
@@ -664,6 +895,11 @@ class PipelineLifecycleObserver {
   static void observeOwnerFromSink(
       void* context, const PipelineLifecycleEvent& event) noexcept {
     static_cast<PipelineLifecycleObserver*>(context)->observeOwnerEvent(event);
+  }
+
+  static void observeControlFromSink(
+      void* context, const PipelineControlObservation& observation) noexcept {
+    static_cast<PipelineLifecycleObserver*>(context)->observeControl(observation);
   }
 
   PipelineLifecycleObserverState state_{};

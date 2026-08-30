@@ -107,3 +107,15 @@ argument from scratch because no standing contract existed
   the 256-record cadence promotion exposing O(n²) handle dedup at 277
   handles/call, and warm epochs enlarging the retainer's linear scan —
   `state-churn-encode-append-decomposition.{26,28}.md`.)
+
+- **R-BACK-43.8** The deferred T2d reserve/copy/commit design may open only
+  through an explicit economic gate on matched queue-mutex profiles. Let `W`
+  be the `submit_draw_run_batch_impl/append` **acquire-wait** time in
+  milliseconds per Present, attributed to a producer waiting for that segment;
+  the segment's mutex **hold** time is a separate local-work measurement and
+  must never be substituted for `W`. Close the gate without adding concurrency
+  when `W < 0.2 ms/Present`; for `0.2 <= W < 0.5 ms/Present`, repeat matched
+  profiles before deciding; open the economic investigation only at
+  `W >= 0.5 ms/Present`, and then only with lifecycle owner/victim evidence and
+  matched wild safety/error evidence. A zero restamp-fire count cannot open or
+  weaken this gate.

@@ -599,16 +599,26 @@ record checkpoint. Seal requires exact plan exhaustion before publishing,
 repeated seal returns the same committed bytes, and Reset reuses the fixed
 layout while preserving the existing warm-retainer policy.
 
-This primitive is not selected by normal production recording. The current
-`D3D9DeviceImpl::appendRecord` boundary owns one D3D9 call at a time, and
-CapacityPre/CapacityPost may flush according to counts accumulated so far;
-neither it nor `flushPendingCommandChunk` owns the future calls that will
-complete the chunk. Render Tape snapshot construction is a separate mutable
-bootstrap path, not a replayable normal command batch. Production selection
-therefore requires the missing replayable producer transaction from
-R-CORE-REC-7.2.1: one owner of a complete immutable batch, side-effect-free
-exact planning, and a second traversal of the same owned inputs without
-retaining call-local borrows or changing chunk cadence.
+Production selects the primitive only for Present and synchronous Readback.
+Both APIs force the prior chunk empty, append exactly one record, and commit it
+before returning, so `prepareExactFinalLayout` can transactionally replan the
+persistent builder without changing CapacityPre/CapacityPost cadence, the warm
+retainer, capture preparation, bridge fail-stop, or Reset cleanup. Preparation
+reuses the builder's final-byte vector and preserves the capacity of every
+legacy staging vector, including the local handle-object vector that carries
+warm ownership; it does not swap in short-lived exact vectors. Allocation
+failure leaves the empty legacy builder untouched. After accepted commit and
+the ordinary builder reset, `returnToLegacyFinalLayout` restores the fallback;
+an entered bridge failure instead keeps the sealed exact bytes under poison.
+
+`kPeExactProductionPolicyTable` gives all 21 semantic producer rows an explicit
+typed disposition. The other 19 remain legacy because normal `appendRecord`
+owns one D3D9 call at a time and neither it nor `flushPendingCommandChunk` owns
+the future calls that complete a multi-record chunk. Their borrowed sparse/UP/
+Clear inputs, pending-state consumption, capture closure, resource side
+effects, or cross-call ordering still require the replayable whole-chunk owner
+from R-CORE-REC-7.2.1. Render Tape snapshot construction is a separate mutable
+bootstrap path and is not that owner.
 
 `RecorderBorrow<T>` and `RecorderLockCapability` are proof-carrying API shapes,
 not new owners. They carry the recorder epoch and transaction identity, have no
@@ -620,22 +630,42 @@ an already-owned destination; it cannot retain the borrow or lock witness.
 The heterogeneous semantic projection is a cold oracle over accepted append
 transactions. It records category-qualified semantic tokens before build and
 matches them to exact committed record ordinals and byte ranges after build.
-The projection covers every family in R-CORE-REC-7.4 and composes with the
-existing scalar and StateBlock projections; it does not infer semantics from a
-wire type or payload size. The default path need not retain the token ledger.
-When disabled, one cached-null branch is the full hot-path cost.
+`DXMT9_PE_SEMANTIC_PRODUCER_TABLE` is the one closed inventory for the two
+sparse draw forms, two UP forms, APPLY_STATE, six constant kinds, every named
+copy/update/query/readback record, GenerateMipmaps, and Present. The common
+append envelope issues the source ordinal before CapacityPre. After an emitter
+accepts, the cold ledger synchronously copies the builder's exact const
+payload span and each full wire identity into bounded cold arenas, and binds
+category, record-type key, value/identity, source ordinal, builder record
+ordinal, and payload-arena-relative byte range. Acceptance additionally requires
+the fact's producer/record family and source ordinal to equal the exact most
+recent `beginSource` issuance; a structurally valid fact from an older A/B/A
+issuance is rejected. A successful accept consumes and clears that latest
+issuance, so a second accept without a new `beginSource` fails closed; failed
+pre-effect append still uses `preserveForRetry`. Bridge effect-unknown retains those
+accepted tokens until Reset/teardown discard; capture materialized/rejected/
+skipped settles them only after bridge acceptance. The projection composes
+with the existing scalar and StateBlock projections and does not use record
+size, count, or a hash as semantic identity. The value arena is bounded to the
+16 MiB recorder byte ceiling and the identity arena to 64 qualified identities
+per maximum record slot; exhaustion fails stop only while the explicit proof
+gate is enabled. The default path retains no ledger; one cached nullable-owner
+branch is the full append-envelope cost.
 
-The bounded native legacy/direct fixture runs both builders from one immutable
-canonical batch. It currently proves complete wire-byte identity, arena-
-relative offsets, duplicate-handle behavior, retain rollback, underfilled-seal
-retry, repeated seal, Reset reuse, and absence of the physically eliminated PE
-temporary/seal materializations. The promotion harness must additionally
-compare all command families and owner/settlement outcomes before import, then
-import both blobs and compare the effective command sequence. Failure cases
-must stop at the same injected fallible boundary and compare rollback, retry,
-poison, and capture results. Cross-target PE builds plus the bounded Wine matrix
-in R-CORE-REC-7.5 are required because host-only value tests cannot exercise
-the PE COM and bridge failure boundary.
+The bounded native legacy/direct fixture runs both builders from immutable
+canonical values. It proves complete wire-byte identity, arena-relative
+offsets, duplicate-handle behavior, retain rollback, underfilled-seal retry,
+repeated seal, Reset reuse, and absence of physically eliminated temporary/seal
+materializations. Its all-family loop emits every semantic producer row as one
+record through both sinks, requires exact blob identity and successful importer
+identity, and under-plans each exact payload to prove atomic rollback and retain
+release. Present and Readback additionally exercise the production in-place
+selection and restoration seam. Multi-record CapacityPre/CapacityPost,
+pending/capture/resource-side-effect equivalence, and allocation/retain/bridge/
+capture fault injection remain required before another row is selected.
+Cross-target PE builds plus the bounded Wine matrix in R-CORE-REC-7.5 remain
+non-substitutable because host-only value tests cannot exercise PE COM and the
+bridge failure boundary.
 
 Non-goals are a wire-version change, pointer-bearing ABI, cross-thread recorder
 callbacks, record fusion, changed chunk cadence, semantic state merging, or
@@ -676,7 +706,7 @@ owners are explicit in the manifest, and the bridge schema/hash is unchanged.
 | `R-CORE-REC-4.*` | `PeWireObjectRef`, builder dedup, `WireObjectRegistry`, capture registry, TU-local concrete COM membership | `dxmt9-chunk-record-registry-spec` includes all-method callback re-entry rejection; `WireObjectRegistry.tla`; render-tape identity tests; `dxmt9-pe-com-membership-spec` covers the post-RTTI ten-kind owner/public/wire/alias member matrix; canonical x64/x86 PE builds instantiate the RTTI boundary | Wine foreign-wrapper COM-boundary conformance remains required; native predicates do not prove runtime Wine membership behavior |
 | `R-CORE-REC-5.1` | `D3D9DeviceImpl::assertRecorderThreadConfined` / recorder lock | `R-BACK-43.5` audit and shared helper | retain exact owner declarations as decomposition lands |
 | `R-CORE-REC-5.2`–`5.3` | `PeRecorderState`, nullable `PeCaptureState`, nullable `PeDiagnosticsState`, hot device TU, cold tape/diag TUs, child interface | direct `recorderState_` ownership with audited reference aliases removed; compile-time `PeRecorderState` pins exclude the default-off scalar ledger, whose nullable cold owner allocates only under its explicit gate; capture/diagnostic lifecycle tests cover disabled/enabled allocation, callback, clock, owner/source, observer-vtable, COM-ref, and key-function pins | broaden instruction/code-size coverage across representative methods and add Wine/wild enabled-diagnostic evidence; no runtime performance result is claimed by native pins |
-| `R-CORE-REC-6.*` | shared transition table plus verification owners | Production transition/commit/settlement/value tables feed generated TLA tables; freshness checks precede TLC; native exhaustive rows cover state-write, recorder settlement, repeated Capture/Apply values, and failure controls. The complete `dxmt9-verify-tla` multi-model bundle passes in the integrated tree. | exact semantic cross-projection across the heterogeneous append envelope and Wine bridge/capture fault injection remain open |
+| `R-CORE-REC-6.*` | shared transition table plus verification owners | Production transition/commit/settlement/value tables and `DXMT9_PE_SEMANTIC_PRODUCER_TABLE` feed generated TLA tables; freshness checks precede TLC. `dxmt9-pe-semantic-projection-spec` enumerates all 21 producer rows, exact field-presence combinations, legacy/direct immutable-token equality, identity rejection, retry, capture, poison, and discard. `PeRecorderSemanticProjection.tla` checks the same producer set and seven independent counterexamples. | Generic reserve/retain/capture-throw runtime injection, x64/x86 Wine evidence, and wild observer evidence remain open; the host projection is not PE COM/bridge proof |
 
 The host suite can compile shared headers and extracted value/predicate owners,
 but cannot directly compile or execute the Windows-only COM TUs. Therefore

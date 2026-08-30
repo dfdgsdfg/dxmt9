@@ -23,6 +23,7 @@ void check(bool condition, const char* message) {
 struct FakeSource {
   PipelineIdentity identity{};
   PipelinePayloadKind payloadKind = PipelinePayloadKind::Arena;
+  bool hasPresent = false;
   PipelineStage stage = PipelineStage::SourceArrival;
   std::uint64_t ownedBytes = 0;
   std::uint64_t observedWakeGeneration = 0;
@@ -55,6 +56,7 @@ class FakePipelineQueue {
                      .seqId = id,
                      .generation = generation},
         .payloadKind = kind,
+        .hasPresent = kind == PipelinePayloadKind::PresentOnly,
     };
   }
 
@@ -212,7 +214,7 @@ class FakePipelineQueue {
       --queue_.admissionWaiters;
     }
     emit(source, source.stage, PipelineStage::Reclaimed,
-         PipelineDisposition::Shutdown, before);
+         PipelineDisposition::Teardown, before);
   }
 
   void injectStaleGeneration(const FakeSource& source) {
@@ -270,7 +272,7 @@ class FakePipelineQueue {
                       PipelineDisposition disposition) {
     const auto beforeCompletion = queue_;
     ++queue_.completedSeq;
-    if (source.payloadKind == PipelinePayloadKind::PresentOnly) {
+    if (source.hasPresent) {
       queue_.presentSeq = source.identity.seqId;
     }
     if (disposition == PipelineDisposition::DeviceLost) {
@@ -283,7 +285,13 @@ class FakePipelineQueue {
     --queue_.occupancy;
     ++queue_.capacityGeneration;
     publishAdmissionWakeIfNeeded(beforeReclaim);
-    emit(source, source.stage, PipelineStage::Reclaimed, disposition,
+    // Device-loss is the GPU completion disposition; reclaim remains owned by
+    // the normal Reclaim owner with the production Completed/PresentSettled
+    // terminal row.
+    const auto reclaimDisposition = source.hasPresent
+        ? PipelineDisposition::PresentSettled
+        : PipelineDisposition::Completed;
+    emit(source, source.stage, PipelineStage::Reclaimed, reclaimDisposition,
          beforeReclaim);
   }
 
@@ -298,10 +306,35 @@ class FakePipelineQueue {
         .to = to,
         .payloadKind = source.payloadKind,
         .disposition = disposition,
-        .owner = from == PipelineStage::SourceArrival
+        .owner = disposition == PipelineDisposition::Teardown
+            ? PipelineOwner::Teardown
+            : from == PipelineStage::SourceArrival
             ? PipelineOwner::PeImport
+            : from == PipelineStage::ProducerOwned &&
+                    to == PipelineStage::RawOwned
+                ? PipelineOwner::Replay
+            : from == PipelineStage::RawOwned &&
+                    to == PipelineStage::ReplayBorrowed
+                ? PipelineOwner::Replay
+            : from == PipelineStage::ReplayBorrowed &&
+                    to == PipelineStage::FinalOwned
+                ? (source.payloadKind == PipelinePayloadKind::Arena
+                       ? PipelineOwner::DirectPublication
+                       : PipelineOwner::LegacyPublication)
+            : from == PipelineStage::ReplayBorrowed &&
+                    to == PipelineStage::ReplayBorrowed
+                ? PipelineOwner::Replay
+            : from == PipelineStage::FinalOwned &&
+                    to == PipelineStage::Encoding
+                ? (source.children > 1u
+                       ? PipelineOwner::SelectedParallel
+                       : PipelineOwner::SerialEncode)
             : from == PipelineStage::Encoding &&
                     to == PipelineStage::GPUInFlight
+                ? PipelineOwner::Receipt
+            : from == PipelineStage::GPUInFlight &&
+                    to == PipelineStage::GPUInFlight &&
+                    disposition == PipelineDisposition::PayloadRetired
                 ? PipelineOwner::Receipt
             : from == PipelineStage::GPUInFlight &&
                     disposition == PipelineDisposition::DeviceLost
@@ -314,7 +347,21 @@ class FakePipelineQueue {
                 : from == PipelineStage::GPUInFlight &&
                         disposition == PipelineDisposition::Completed
                     ? PipelineOwner::Receipt
+                    : from == PipelineStage::Completed &&
+                            to == PipelineStage::Reclaimed
+                        ? PipelineOwner::Reclaim
                     : PipelineOwner::Queue,
+        .control = disposition == PipelineDisposition::DeviceLost ||
+                disposition == PipelineDisposition::FailStop
+            ? PipelineControl::DeviceLoss
+            : disposition == PipelineDisposition::Teardown
+                ? PipelineControl::Teardown
+            : source.hasPresent &&
+                    (to == PipelineStage::Completed ||
+                     to == PipelineStage::Reclaimed)
+                ? PipelineControl::Present
+                : PipelineControl::Normal,
+        .hasPresent = source.hasPresent,
         .ownedBytes = source.ownedBytes,
         .outstandingBorrows = source.borrows,
         .constructedCount = source.constructed,
@@ -357,6 +404,26 @@ void buildAndSubmit(FakePipelineQueue& queue,
 }
 
 void purePredicateTruthTables() {
+  check(kPipelineLifecycleRows.size() >= 30u,
+        "production lifecycle table retains the bounded transition vocabulary");
+  check(pipelineKnownLifecycleRow(
+            PipelineStage::FinalOwned, PipelineStage::Encoding,
+            PipelineOwner::SerialEncode, PipelineDisposition::Advance),
+        "serial encode row is shared by C++ and the model");
+  check(pipelineKnownLifecycleRow(
+            PipelineStage::FinalOwned, PipelineStage::Encoding,
+            PipelineOwner::SelectedParallel, PipelineDisposition::Advance),
+        "selected-parallel encode row is shared by C++ and the model");
+  check(pipelineKnownLifecycleRow(
+            PipelineStage::Encoding, PipelineStage::Reclaimed,
+            PipelineOwner::SelectedParallel, PipelineDisposition::EncodeFailure,
+            PipelineControl::Exception),
+        "control/disposition failure row is shared by C++ and the model");
+  check(!pipelineKnownLifecycleRow(
+            PipelineStage::Encoding, PipelineStage::GPUInFlight,
+            PipelineOwner::Queue, PipelineDisposition::Advance),
+        "unknown owner transition is rejected by the production table");
+
   check(pipelinePublicationMayCommit(2, 2, 0),
         "complete assembler prefix publishes after borrow return");
   check(!pipelinePublicationMayCommit(1, 2, 0),
@@ -460,6 +527,38 @@ void purePredicateTruthTables() {
         "ring/admission CV predicate preserves active-build pressure");
 }
 
+void mixedDrawPresentSourceCompletes() {
+  FakePipelineQueue queue;
+  auto mixed = queue.makeSource(1, PipelinePayloadKind::Arena);
+  mixed.hasPresent = true;
+  queue.arrive(mixed);
+  queue.adoptRaw(mixed);
+  buildAndSubmit(queue, mixed, 1);
+  queue.complete(mixed);
+  check(queue.snapshot().presentSeq == 1,
+        "mixed Draw+Present source advances present settlement on Arena payload");
+  check(queue.observer().valid(),
+        "mixed Draw+Present source remains valid through completion/reclaim");
+  check(pipelineControlMatches(PipelineControl::Present,
+                               PipelineDisposition::Completed,
+                               PipelinePayloadKind::Arena, true),
+        "Present control accepts a mixed Arena payload with present evidence");
+  check(pipelineControlMatches(PipelineControl::Present,
+                               PipelineDisposition::PresentSettled,
+                               PipelinePayloadKind::Arena, true),
+        "Present control accepts mixed Arena present settlement");
+  check(pipelineKnownLifecycleRow(
+            PipelineStage::Encoding, PipelineStage::GPUInFlight,
+            PipelineOwner::Receipt, PipelineDisposition::Advance,
+            PipelineControl::Present),
+        "mixed Draw+Present submit consumes the production Present row");
+  check(pipelineKnownLifecycleRow(
+            PipelineStage::GPUInFlight, PipelineStage::Completed,
+            PipelineOwner::Receipt, PipelineDisposition::Completed,
+            PipelineControl::Present),
+        "mixed Draw+Present completion consumes the production Present row");
+}
+
 void presentOnlyAdmissionWedgeCompletes() {
   FakePipelineQueue queue;
   auto first = queue.makeSource(1, PipelinePayloadKind::Arena);
@@ -484,7 +583,6 @@ void presentOnlyAdmissionWedgeCompletes() {
   queue.submit(presentOnly);
   queue.retirePayload(presentOnly);
   queue.complete(presentOnly);
-
   check(queue.observer().valid(),
         "end-to-end production observer accepts the bounded pipeline");
   check(queue.snapshot().completedSeq == 2,
@@ -631,6 +729,8 @@ void ownerEvidenceOverflowFailsClosed() {
   event.to = PipelineStage::ProducerOwned;
   event.disposition = PipelineDisposition::Advance;
   event.owner = PipelineOwner::PeImport;
+  event.before.capacity = 1;
+  event.after.capacity = 1;
   for (std::size_t i = 0; i < kMaxObservedPipelineEvents; ++i) {
     event.identity = PipelineIdentity{
         .workId = i + 1u, .sourceOrdinal = i + 1u, .seqId = i + 1u,
@@ -742,6 +842,7 @@ void failureAndShutdownRows() {
 int main() {
   try {
     purePredicateTruthTables();
+    mixedDrawPresentSourceCompletes();
     presentOnlyAdmissionWedgeCompletes();
     composedThreeAxisWakeIsDeterministic();
     deliberateNativeCounterexamples();

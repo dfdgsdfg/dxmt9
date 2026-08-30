@@ -105,6 +105,23 @@ struct CpuReadyPlan {
   }
 };
 
+enum class DirectChunkSlotReplayDisposition : std::uint8_t {
+  Direct = 0,
+  LegacyStateOnly,
+  LegacyUnsupported,
+  LegacyOversized,
+  LegacyCaptureOrTrace,
+  InlineOrderedControl,
+  RejectInvalid,
+};
+
+// Whole-raw promotion gate for the ordinary compatibility source. It is a
+// pure structural classifier: no queue state, D3D shadow, resource mark, or
+// destination storage is touched here.
+DirectChunkSlotReplayDisposition classifyDirectChunkSlotReplay(
+    const ImportedChunkView& imported, const CpuReadyPlan& plan,
+    bool captureOrTrace) noexcept;
+
 // Scans one already-validated ImportedChunkView structurally. It does not
 // resolve handles, mutate D3D state, invoke semantic replay, or reserve Tape
 // storage. The returned lane covers the whole raw chunk.

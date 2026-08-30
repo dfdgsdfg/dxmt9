@@ -2641,6 +2641,15 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                       abortCpuReadySessionFailOpen(
                           "deferred terminal-suffix joined effect");
                     }
+                    if (!pendingSources.setOwner(replaySources[run].seqId,
+                                                 submission->pipelineOwner) ||
+                        !pendingSession ||
+                        !encoders::setEncodeChunkSessionSourceOwner(
+                            *pendingSession, replaySources[run].seqId,
+                            submission->pipelineOwner)) {
+                      abortCpuReadySessionFailOpen(
+                          "deferred terminal-suffix owner attribution");
+                    }
                     carrier = std::move(*submission);
                   }
 
@@ -3025,6 +3034,16 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                     abortCpuReadySessionFailOpen(
                         "multi-source fragment encode returned null");
                   }
+                  const auto fragmentOwner = submission->pipelineOwner;
+                  if (!stagedSources.setOwner(replaySource.seqId,
+                                              fragmentOwner) ||
+                      !pendingSession ||
+                      !encoders::setEncodeChunkSessionSourceOwner(
+                          *pendingSession, replaySource.seqId,
+                          fragmentOwner)) {
+                    abortCpuReadySessionFailOpen(
+                        "multi-source fragment owner attribution");
+                  }
                   if (fragmentCarrier) {
                     if (!core::metalqueue::foldEncodedSessionFragmentCarrier(
                             *submission, *fragmentCarrier,
@@ -3403,6 +3422,34 @@ multi_source_window_complete:
         unchargeSelectedCapacity(sourceIndex);
         completeInlineSnapshot(lock, source);
         continue;
+      }
+
+      // EncodeChunk decides the owner only after replay has run. Refresh every
+      // carried ledger that already contains this source before any merge or
+      // receipt replacement; the record-wide tail owner is insufficient for a
+      // mixed serial/selected-parallel session.
+      if (appendToPending || startPending) {
+        const auto owner = submission->pipelineOwner;
+        const std::uint64_t sourceSeqId = source.seqId;
+        if (appendRetainedValid) {
+          appendRetained.pipelineOwner = owner;
+        }
+        if (startRetainedValid) {
+          startRetained.pipelineOwner = owner;
+        }
+        // The queue list contains the current source only after the merge;
+        // appendRetained carries its owner into that staged list below.
+        if (pendingRecord && !appendToPending &&
+            !pendingSources.setOwner(sourceSeqId, owner)) {
+          abortCpuReadySessionFailOpen(
+              "carried session owner attribution missing queue source");
+        }
+        if (pendingSession &&
+            !encoders::setEncodeChunkSessionSourceOwner(
+                *pendingSession, sourceSeqId, owner)) {
+          abortCpuReadySessionFailOpen(
+              "carried session owner attribution missing session source");
+        }
       }
 
       if (startPending) {

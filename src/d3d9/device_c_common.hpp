@@ -17,6 +17,7 @@
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9/core_snapshots.hpp"
+#include "dxmt9/mutation_composition_observer.hpp"
 
 #include <algorithm>
 #include <array>
@@ -190,12 +191,23 @@ struct D9CDevice {
   std::unordered_map<uint32_t, uint32_t> stateBlockRenderStateValues;
   dxmt9::d3d9::ReplayDrainLedger replayDrainLedger;
   std::unique_ptr<dxmt9::d3d9::ReplayOffloadWorker> replayOffload;
+  // Cold, bounded composition observer. The owner is absent unless the
+  // explicit diagnostic gate is set, preserving the ordinary D9C layout and
+  // mutation transport when observation is disabled.
+  std::unique_ptr<dxmt9::resources::mutation_observer::MutationCompositionObserver>
+      mutationCompositionObserver;
   dxmt9::d3d9::WireObjectRegistry wireObjects;
   std::optional<D9CRenderTapePresentCaptureLease> renderTapePresentCapture;
   dxmt9::d3d9::RenderTapeProductionIdentityLedger renderTapeIdentityCapture;
   std::uint64_t presentOrdinal = 0;  // present-bearing commits, offload pacing
 
-  explicit D9CDevice(dxmt9::com::IDirect3DDevice9Ex* i) : iface(i) {}
+  explicit D9CDevice(dxmt9::com::IDirect3DDevice9Ex* i) : iface(i) {
+    const char* enabled = std::getenv("DXMT9_MUTATION_COMPOSITION_OBSERVER");
+    if (enabled && enabled[0] != '\0' && enabled[0] != '0') {
+      mutationCompositionObserver = std::make_unique<
+          dxmt9::resources::mutation_observer::MutationCompositionObserver>();
+    }
+  }
   // Defined out-of-line in device_c_state.cpp, next to
   // dxmt9c_device_release(), so the replayOffload drain/stop ordering lives
   // with the rest of the device teardown path.

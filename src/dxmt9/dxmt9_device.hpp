@@ -183,6 +183,9 @@ class Device {
     return markChunkResourcesAndCaptureBufferBindings(entries, snapshots);
   }
   virtual bool supportsCpuReadyArenaReplay() const noexcept { return false; }
+  // The ordinary synchronous replay lane may bypass DrawRunSubmission only
+  // when the backend advertises a transactional final-ChunkSlot destination.
+  virtual bool supportsDirectChunkSlotReplay() const noexcept { return false; }
   virtual bool dynamicBufferRenameEnabled() const noexcept { return false; }
   // Phase 14: chunk importer toggles per-draw markDrawResources off
   // around the record-iteration block so bulk markChunkResources is the
@@ -195,11 +198,12 @@ class Device {
                              const core::DrawUniformPayload&,
                              std::span<const core::DrawParam>,
                              std::span<const core::DrawParamPayloadView>) {}
-  // Direct-Arena replay borrows Device cache values synchronously and
-  // materializes them once in the final source payload before returning.
-  // False is a strict pre-effect rejection and permits serial fallback.
-  virtual bool submitDirectReplayDraw(
-      const core::DirectReplayDrawInput&) noexcept { return false; }
+  // Direct replay borrows Device cache values synchronously and materializes
+  // them once in the final Arena/ChunkSlot destination before returning.
+  virtual core::DirectReplayDrawDisposition submitDirectReplayDraw(
+      const core::DirectReplayDrawInput&) noexcept {
+    return core::DirectReplayDrawDisposition::LegacyUnsupported;
+  }
   virtual void submitDrawRunBatch(std::span<core::DrawRunSubmission> submissions) {
     if (submissions.empty()) {
       return;
@@ -260,6 +264,8 @@ class Device {
   // in waitPresentOrdinalBoundary must be released instead of hanging.
   virtual void abortPresentOrdinalWaits() {}
   virtual void flush() {}
+  virtual void observePipelineControl(
+      queue::PipelineControl, queue::PipelineDisposition) noexcept {}
   virtual wsi::QuiescenceDisposition beginWsiQuiescence() noexcept {
     return wsi::QuiescenceDisposition::QueueStopped;
   }
@@ -286,6 +292,14 @@ constexpr bool resolveCpuReadyTapeDirectReplayEnabled(
     const char* value) noexcept {
   return value && value[0] != '\0' &&
          !(value[0] == '0' && value[1] == '\0');
+}
+
+// Isolated ordinary replay-to-ChunkSlot production selector. Keep this
+// provider configuration transform out of the D3D9 replay planner so the
+// Metal/backend device layer never depends on a frontend-private header.
+constexpr bool resolveDirectChunkSlotReplayEnabled(
+    const char* value, bool traceRender) noexcept {
+  return !traceRender && resolveCpuReadyTapeDirectReplayEnabled(value);
 }
 
 constexpr bool resolveRenderTapePublisherCaptureEnabled(

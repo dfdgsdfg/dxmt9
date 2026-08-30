@@ -514,7 +514,7 @@ public:
       std::vector<dxmt9::core::DrawRunSubmission>* pendingDrawSubmissions,
       std::vector<dxmt9::core::DrawBindingSnapshot>* bindingSnapshots,
       std::span<const dxmt9::core::ChunkBufferBindingSnapshot> capturedBuffers,
-      bool capturedBuffersRequired, bool directArenaDraws)
+      bool capturedBuffersRequired, bool directFinalDraws)
       : device_(device),
         pacedByPresentOrdinal_(pacedByPresentOrdinal),
         pendingDrawSubmissions_(pendingDrawSubmissions),
@@ -522,7 +522,7 @@ public:
         snapshotResolver_(capturedBuffers),
         capturedBuffersRequired_(capturedBuffersRequired &&
                                  snapshotResolver_.hasCapturedBackings()),
-        directArenaDraws_(directArenaDraws) {
+        directFinalDraws_(directFinalDraws) {
     if (capturedBuffersRequired_) {
       const auto& state = device_->dev().state();
       for (dxmt9::core::u32 stream = 0;
@@ -860,7 +860,7 @@ public:
       draw.indexType = device_->dev().state().indexType;
     }
     if (batchCurrentDraw_ && pendingDrawSubmissions_) {
-      if (directArenaDraws_) {
+      if (directFinalDraws_) {
         auto payload = call.payload;
         if (!attachCapturedBindingSnapshot(draw, payload)) {
           return dxmt9::core::D3DERR_INVALIDCALL;
@@ -1005,7 +1005,7 @@ private:
   bool capturedIndexBinding_ = false;
   bool unresolvedIndexBinding_ = false;
   bool batchCurrentDraw_ = false;
-  bool directArenaDraws_ = false;
+  bool directFinalDraws_ = false;
 };
 
 bool recordCanBatchDraw(
@@ -1046,7 +1046,8 @@ int32_t replayResolvedChunk(
     std::span<const dxmt9::d3d9::CpuReadySegmentPlan> arenaSegments = {},
     bool containsOrderedControls = false,
     std::span<const dxmt9::d3d9::CpuReadySourcePlan> arenaSources = {},
-    bool* preEffectFailure = nullptr) {
+    bool* preEffectFailure = nullptr,
+    bool activeDirectChunkSlotPath = false) {
   if (preEffectFailure) {
     // The arena lease is still pre-effect until the command loop starts.
     // Setup/anchor/descriptor failures therefore have one guarded rollback
@@ -1156,10 +1157,16 @@ int32_t replayResolvedChunk(
     pendingDrawSubmissions.clear();
     pendingDrawRecordIndices.clear();
   };
+  // Direct-final draws are safe only while the corresponding destination
+  // transaction is active. A backend capability is merely an admission
+  // opportunity: when the pre-effect Direct ChunkSlot lease is rejected, the
+  // same raw must retain Legacy's batched submitDrawRunBatch grouping.
+  const bool directFinalDraws = arenaLease != nullptr ||
+      activeDirectChunkSlotPath;
   DeviceReplaySink sink(
       device, pacedByPresentOrdinal, &pendingDrawSubmissions,
       &replayScratch.bindingSnapshots, raw.bufferSnapshots,
-      raw.bufferSnapshotsCaptured, arenaLease != nullptr);
+      raw.bufferSnapshotsCaptured, directFinalDraws);
   std::size_t activeSegment = 0;
   std::size_t activeSource = 0;
   std::size_t activeSourceSegment = 0;
@@ -1580,16 +1587,80 @@ int32_t replayPlannedChunk(D9CDevice* device,
     // Gate-off is the historical R-BACK-2.51(a) lane: admission already used
     // the combined mark/capture hook before handoff and replay performs no
     // planning or repeated marking.
-    markLegacyResources(device, raw);
     if (captureIdentityRequested) failCaptureIdentity("planning-disabled");
     if (reportOffloadReplayStage) {
       dxmt9::perf::recordOffloadReplayStage(
           dxmt9::perf::OffloadReplayStage::Encode);
     }
-    if (auto upper = device->dev().upperDevice()) {
-      upper->queue().noteCpuReadySupplyReplayEntry(
+    auto upper = device->dev().upperDevice();
+    auto* queue = upper ? &upper->queue() : nullptr;
+    if (queue) {
+      queue->noteCpuReadySupplyReplayEntry(
           dxmt9::core::CpuReadyTape::PayloadKind::Legacy);
     }
+    if (!captureIdentityRequested && upper && queue &&
+        upper->supportsDirectChunkSlotReplay()) {
+      dxmt9::d3d9::ImportedChunkView imported;
+      if (!importOwnedChunk(raw, imported)) {
+        return commitChunkFail("chunk-direct-slot-import");
+      }
+      const auto limits = queue->cpuReadyArenaPlanLimits();
+      const auto plan = dxmt9::d3d9::planCpuReadyChunk(
+          imported, raw.replaySeq,
+          dxmt9::d3d9::CpuReadyPlanOptions{
+              .pageSize = limits.pageSize == 0 ? 4096 : limits.pageSize,
+              .maxOrdinaryPagesPerSegment =
+                  limits.maxOrdinaryPagesPerSegment,
+              .maxSegmentsPerSource = limits.maxSegmentsPerSource,
+              .maxPagesPerSource = limits.maxPagesPerSource == 0
+                  ? std::numeric_limits<std::uint32_t>::max()
+                  : limits.maxPagesPerSource,
+              .maxPages = limits.maxPagesPerSource == 0
+                  ? std::numeric_limits<std::uint32_t>::max()
+                  : limits.maxPagesPerSource,
+              .maxSourcesPerChunk = 1u,
+          });
+      const auto disposition =
+          dxmt9::d3d9::classifyDirectChunkSlotReplay(
+              imported, plan, /*captureOrTrace=*/false);
+      if (disposition ==
+          dxmt9::d3d9::DirectChunkSlotReplayDisposition::RejectInvalid) {
+        return commitChunkFail("chunk-direct-slot-plan");
+      }
+      if (disposition ==
+              dxmt9::d3d9::DirectChunkSlotReplayDisposition::Direct &&
+          plan.layout) {
+        auto begin = queue->beginDirectChunkSlotReplay(
+            raw.replaySeq, plan.capacity, plan.layout->usedBytes);
+        if (begin.status ==
+                dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Ready &&
+            begin.lease) {
+          auto lease = std::move(*begin.lease);
+          // From this point D3D state replay is observable. Any append,
+          // validation, generation, or evidence failure is fail-stop; the raw
+          // stream must never be materialized through Legacy a second time.
+          lease.markSemanticEffectsStarted();
+          const auto hr = replayResolvedChunk(
+              device, raw, pacedByPresentOrdinal, nullptr, {}, false, {},
+              nullptr, /*activeDirectChunkSlotPath=*/true);
+          if (failed(hr)) {
+            return hr;
+          }
+          if (lease.commit(raw.resourceEntries) !=
+              dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Committed) {
+            return commitChunkFail("chunk-direct-slot-commit");
+          }
+          return hr;
+        }
+        if (begin.status ==
+            dxmt9::CommandQueue::DirectChunkSlotReplayStatus::FailStopped) {
+          return commitChunkFail("chunk-direct-slot-begin");
+        }
+        // Capacity/admission failure is still before replay effects. The
+        // exact checkpoint has been rolled back, so Legacy owns this raw once.
+      }
+    }
+    markLegacyResources(device, raw);
     return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
   }
 
@@ -2068,9 +2139,34 @@ int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
         d, raw, /*pacedByPresentOrdinal=*/false,
         /*allowDirectArena=*/false);
     if (!failed(hr)) {
+      if (auto* observer = d->mutationCompositionObserver.get()) {
+        // Inline replay is the rollback lane for commit offload and for
+        // synchronous readback chunks; bind the same Render Tape snapshot
+        // identity and source ordinal used by the worker path.
+        for (const auto& snapshot : raw.bufferSnapshots) {
+          observer->observeUse(
+              {.resource = snapshot.buffer.value,
+               .backingGeneration = snapshot.snapshot.contentRevision != 0u
+                                        ? snapshot.snapshot.contentRevision
+                                        : 1u,
+               .sourceOrdinal = raw.replaySeq},
+              dxmt9::resources::mutation_observer::ObserverKind::GpuUse);
+        }
+        if (raw.bufferSnapshots.empty()) {
+          for (const auto& entry : raw.resourceEntries) {
+            if (entry.kind != dxmt9::core::ChunkHandleKind::Buffer) continue;
+            observer->observeUseForResource(
+                entry.handle.value, raw.replaySeq,
+                dxmt9::resources::mutation_observer::ObserverKind::GpuUse);
+          }
+        }
+      }
       d->replayDrainLedger.publishReplayed(raw);
     } else {
       d->replayDrainLedger.poison();
+      if (auto* observer = d->mutationCompositionObserver.get())
+        observer->observeGlobalBarrier(
+            dxmt9::resources::mutation_observer::BarrierReason::Failure);
     }
     return hr;
   } catch (const std::bad_alloc&) {
@@ -2237,6 +2333,8 @@ static int32_t dxmt9c_device_commit_chunk_impl(
       }
       if (hasPresent) {
         ++d->presentOrdinal;
+        if (auto* observer = d->mutationCompositionObserver.get())
+          observer->notePresent();
         // Periodic, not at teardown: 3DMark05 never releases the device, so
         // ~D9CDevice does not run and a destructor-emitted report is lost --
         // verified empirically, the run's log ends at [dxmt9-perf] with no
@@ -2255,6 +2353,83 @@ static int32_t dxmt9c_device_commit_chunk_impl(
                   dxmt9::core::PresentInterval::Immediate);
           presentWaitPhase.stop(
               dxmt9::perf::countCommitChunkPhasePresentWaitTime);
+        }
+        // Report only after the Present boundary wait. By this point the
+        // worker has settled all preceding mutation tasks and replay-use
+        // observations; reporting before the wait would classify pending
+        // completions as forbidden candidates and then reset their identity.
+        if (auto* observer = d->mutationCompositionObserver.get();
+            observer && d->presentOrdinal % 60u == 0u) {
+          observer->finalize();
+          const auto snapshot = observer->snapshot();
+          const double presents = observer->windowPresents() == 0u
+                                      ? 1.0
+                                      : static_cast<double>(
+                                            observer->windowPresents());
+          const double candidateMs =
+              static_cast<double>(snapshot.candidateCpuTimeSavedNs) /
+              presents / 1.0e6;
+          std::uint64_t provisionalRejections = 0u;
+          std::uint64_t finalRejections = 0u;
+          for (std::size_t i = 0u;
+               i < static_cast<std::size_t>(
+                       dxmt9::resources::mutation_observer::RejectionReason::Count);
+               ++i) {
+            provisionalRejections += snapshot.rejectionCounts[i];
+            finalRejections += snapshot.finalRejectionCounts[i];
+          }
+          const char* gate = candidateMs >= 0.5
+                                 ? "open"
+                                 : candidateMs < 0.2 ? "closed" : "inconclusive";
+          dxmt9::util::logf(
+              dxmt9::util::LogLevel::Info, "dxmt9-mutation-composition",
+              "window_presents=%llu mutations=%llu candidate_calls=%llu "
+              "candidate_bytes=%llu candidate_cpu_ms_per_present=%.6f "
+              "wow64_writeback_ns=%llu queue_lock_ns=%llu "
+              "backing_rotation_ns=%llu arena_update_ns=%llu "
+              "shadow_copy_ns=%llu live_contents_copy_ns=%llu "
+              "mergeable_union_bytes=%llu mergeable_overlap_bytes=%llu "
+              "zero_use_generations=%llu discard_discard_dead=%llu "
+              "pending=%llu completed=%llu failed=%llu discarded=%llu "
+              "provisional_rejections=%llu final_rejections=%llu "
+              "provisional_completion_rejections=%llu "
+              "final_completion_rejections=%llu "
+              "first_use_gpu=%llu first_use_cpu=%llu invalid_or_dropped=%llu "
+              "gate=%s "
+              "composition=forbidden reason=semantic-proof-required",
+              static_cast<unsigned long long>(observer->windowPresents()),
+              static_cast<unsigned long long>(snapshot.mutationCalls),
+              static_cast<unsigned long long>(snapshot.candidateCalls),
+              static_cast<unsigned long long>(snapshot.candidateBytesSaved),
+              candidateMs,
+              static_cast<unsigned long long>(snapshot.wow64WritebackNs),
+              static_cast<unsigned long long>(snapshot.queueLockNs),
+              static_cast<unsigned long long>(snapshot.backingRotationNs),
+              static_cast<unsigned long long>(snapshot.arenaUpdateNs),
+              static_cast<unsigned long long>(snapshot.shadowCopyNs),
+              static_cast<unsigned long long>(snapshot.liveContentsCopyNs),
+              static_cast<unsigned long long>(snapshot.mergeableUnionBytes),
+              static_cast<unsigned long long>(snapshot.mergeableOverlapBytes),
+              static_cast<unsigned long long>(snapshot.zeroUseGenerations),
+              static_cast<unsigned long long>(
+                  snapshot.discardToDiscardDeadChains),
+              static_cast<unsigned long long>(snapshot.pendingMutations),
+              static_cast<unsigned long long>(snapshot.completedMutations),
+              static_cast<unsigned long long>(snapshot.failedMutations),
+              static_cast<unsigned long long>(snapshot.discardedMutations),
+              static_cast<unsigned long long>(provisionalRejections),
+              static_cast<unsigned long long>(finalRejections),
+              static_cast<unsigned long long>(snapshot.rejectionCounts[
+                  static_cast<std::size_t>(
+                      dxmt9::resources::mutation_observer::RejectionReason::Completion)]),
+              static_cast<unsigned long long>(snapshot.finalRejectionCounts[
+                  static_cast<std::size_t>(
+                      dxmt9::resources::mutation_observer::RejectionReason::Completion)]),
+              static_cast<unsigned long long>(snapshot.firstUseGpuCount),
+              static_cast<unsigned long long>(snapshot.firstUseCpuCount),
+              static_cast<unsigned long long>(snapshot.invalidOrDroppedEvents),
+              gate);
+          observer->reset();
         }
       }
       countDurationSince(bridgeCommitStart,
@@ -2292,9 +2467,34 @@ static int32_t dxmt9c_device_commit_chunk_impl(
         d, raw, /*pacedByPresentOrdinal=*/false,
         /*allowDirectArena=*/false);
     if (!failed(hr)) {
+      if (auto* observer = d->mutationCompositionObserver.get()) {
+        // Inline replay is the rollback lane for commit offload and for
+        // synchronous readback chunks; bind the same snapshot identity and
+        // source ordinal used by the worker path.
+        for (const auto& snapshot : raw.bufferSnapshots) {
+          observer->observeUse(
+              {.resource = snapshot.buffer.value,
+               .backingGeneration = snapshot.snapshot.contentRevision != 0u
+                                        ? snapshot.snapshot.contentRevision
+                                        : 1u,
+               .sourceOrdinal = raw.replaySeq},
+              dxmt9::resources::mutation_observer::ObserverKind::GpuUse);
+        }
+        if (raw.bufferSnapshots.empty()) {
+          for (const auto& entry : raw.resourceEntries) {
+            if (entry.kind != dxmt9::core::ChunkHandleKind::Buffer) continue;
+            observer->observeUseForResource(
+                entry.handle.value, raw.replaySeq,
+                dxmt9::resources::mutation_observer::ObserverKind::GpuUse);
+          }
+        }
+      }
       d->replayDrainLedger.publishReplayed(raw);
     } else {
       d->replayDrainLedger.poison();
+      if (auto* observer = d->mutationCompositionObserver.get())
+        observer->observeGlobalBarrier(
+            dxmt9::resources::mutation_observer::BarrierReason::Failure);
     }
     dxmt9::d3d9::releaseRetainedWrappers(raw);
     if (!failed(hr)) {
