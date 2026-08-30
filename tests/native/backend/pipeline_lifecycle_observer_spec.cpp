@@ -431,6 +431,11 @@ void purePredicateTruthTables() {
   check(!pipelinePublicationMayCommit(2, 2, 1),
         "publication cannot escape its replay borrow");
 
+  check(pipelineReplayFailureMayRollback(false),
+        "pre-effect construction failure may restore the exact Raw owner");
+  check(!pipelineReplayFailureMayRollback(true),
+        "post-effect construction failure cannot retry through Legacy");
+
   check(pipelineCompletionMayPublish(3, 4, 0, 2, 2, true),
         "joined FIFO completion advances");
   check(!pipelineCompletionMayPublish(3, 5, 0, 2, 2, true),

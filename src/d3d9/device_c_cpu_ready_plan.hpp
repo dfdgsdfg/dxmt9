@@ -108,6 +108,9 @@ struct CpuReadyPlan {
 enum class DirectChunkSlotReplayDisposition : std::uint8_t {
   Direct = 0,
   LegacyStateOnly,
+  LegacySegmented,
+  LegacyUpDraw,
+  LegacyPresent,
   LegacyUnsupported,
   LegacyOversized,
   LegacyCaptureOrTrace,

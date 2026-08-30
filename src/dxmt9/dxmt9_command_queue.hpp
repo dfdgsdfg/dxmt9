@@ -1859,6 +1859,7 @@ class CommandQueue {
   bool testOnlyForceNextCpuReadyArenaValidationFailure_ = false;
   bool testOnlyForceNextCpuReadyArenaResourceRetainFailure_ = false;
   bool testOnlyForceNextCpuReadyArenaPublicationFailure_ = false;
+  bool testOnlyForceNextDirectChunkSlotCommitFailure_ = false;
   // Native planner seam: tests may observe one event-wide planner result or
   // force that result invalid before any Ready/resource effect. These fields
   // are never armed by production callers.

@@ -655,11 +655,17 @@ DirectChunkSlotReplayDisposition classifyDirectChunkSlotReplay(
   if (plan.reason == ReplayReason::Oversize) {
     return DirectChunkSlotReplayDisposition::LegacyOversized;
   }
+  if (plan.reason == ReplayReason::Present) {
+    return DirectChunkSlotReplayDisposition::LegacyPresent;
+  }
   if (plan.lane == ReplayLane::StateOnly) {
     return DirectChunkSlotReplayDisposition::LegacyStateOnly;
   }
-  if (!plan.directArenaCandidate() || plan.sourceCount != 1u ||
-      plan.segmentCount != 1u || !plan.layout) {
+  if (plan.directArenaCandidate() &&
+      (plan.sourceCount != 1u || plan.segmentCount != 1u || !plan.layout)) {
+    return DirectChunkSlotReplayDisposition::LegacySegmented;
+  }
+  if (!plan.directArenaCandidate()) {
     return DirectChunkSlotReplayDisposition::LegacyUnsupported;
   }
   for (std::size_t i = 0; i < imported.records.size(); ++i) {
@@ -686,7 +692,9 @@ DirectChunkSlotReplayDisposition classifyDirectChunkSlotReplay(
       return DirectChunkSlotReplayDisposition::InlineOrderedControl;
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
     case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
+      return DirectChunkSlotReplayDisposition::LegacyUpDraw;
     case D9C_COMMAND_RECORD_PRESENT:
+      return DirectChunkSlotReplayDisposition::LegacyPresent;
     default:
       return DirectChunkSlotReplayDisposition::LegacyUnsupported;
     }

@@ -285,6 +285,14 @@ constexpr bool pipelinePublicationMayCommit(
       outstandingBorrows == 0;
 }
 
+// R-BACK-2.85 / R-VERIF-2.23: rollback is legal only while the exact raw can
+// still be replayed through Legacy without duplicating a semantic or Metal
+// effect. DirectChunkSlotReplayLease is the production owner of this cut.
+constexpr bool pipelineReplayFailureMayRollback(
+    bool semanticEffectsStarted) noexcept {
+  return !semanticEffectsStarted;
+}
+
 constexpr bool pipelineNoGpuTerminalMayPublish(
     PipelineStage stage,
     PipelineDisposition disposition,

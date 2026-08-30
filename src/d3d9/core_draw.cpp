@@ -1,4 +1,5 @@
 #include "dxmt9/assert.hpp"
+#include "dxmt9/copy_materialization_ledger.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_d3d9_bytecode.hpp"
@@ -3906,6 +3907,8 @@ HResult Device::snapshotDrawSubmissionFromCurrentState(
     DrawParam draw, DrawRunSubmission& submission,
     const DrawRunSubmission* previousSubmission) {
   PerfScope scope(dxmt9::perf::countD3D9SnapshotDrawSubmissionCpuTime);
+  auto* const carrierLedger = dxmt9::core::activeCopyMaterializationLedger(
+      dxmt9::core::CopyMaterializationOwner::Unix);
   if (draw.primitiveType == PrimitiveType::TriangleFan) {
     return D3DERR_INVALIDCALL;
   }
@@ -3973,6 +3976,14 @@ HResult Device::snapshotDrawSubmissionFromCurrentState(
         drawRunSubmissionUniformCopyBytes());
   } else {
     const auto uniformBytes = drawRunSubmissionUniformCopyBytes();
+    std::optional<dxmt9::core::CopyMaterializationEvent> carrierCopy;
+    if (carrierLedger) {
+      carrierCopy.emplace(
+          carrierLedger,
+          dxmt9::core::CopyMaterializationClass::
+              ReplaySubmissionCarrierCopy,
+          uniformBytes);
+    }
     {
       PerfScope uniformCopyScope(
           dxmt9::perf::countD3D9SnapshotUniformCopyCpuTime);
@@ -3990,6 +4001,14 @@ HResult Device::snapshotDrawSubmissionFromCurrentState(
         drawRunSubmissionStateCopyBytes());
   } else {
     auto& state = submission.state.emplace();
+    std::optional<dxmt9::core::CopyMaterializationEvent> carrierCopy;
+    if (carrierLedger) {
+      carrierCopy.emplace(
+          carrierLedger,
+          dxmt9::core::CopyMaterializationClass::
+              ReplaySubmissionCarrierCopy,
+          drawRunSubmissionStateCopyBytes());
+    }
     {
       PerfScope stateCopyScope(
           dxmt9::perf::countD3D9SnapshotStateCopyCpuTime);
@@ -4061,6 +4080,12 @@ HResult Device::snapshotDrawSubmissionFromCurrentState(
       drawRunSubmissionCarrierStateStorageBytes(),
       drawRunSubmissionCarrierUniformStorageBytes(),
       fullUniformLaneUnused);
+  if (carrierLedger) {
+    carrierLedger->recordMaterialization(
+        dxmt9::core::CopyMaterializationClass::
+            ReplaySubmissionCarrierMaterialization,
+        drawRunSubmissionCarrierBytes());
+  }
   return D3D_OK;
 }
 

@@ -380,18 +380,20 @@ void eligibleWholeRawPlanHasTypedCapacity() {
 }
 
 void directChunkSlotReplayGateTruthTable() {
-  check(!dxmt9::resolveDirectChunkSlotReplayEnabled(nullptr, false),
-        "ordinary direct ChunkSlot replay is disabled when the gate is unset");
-  check(!dxmt9::resolveDirectChunkSlotReplayEnabled("", false),
-        "ordinary direct ChunkSlot replay is disabled for an empty gate");
+  check(dxmt9::resolveDirectChunkSlotReplayEnabled(nullptr, false) ==
+                dxmt9::kDirectChunkSlotReplayDefaultEnabled &&
+            dxmt9::resolveDirectChunkSlotReplayEnabled("", false) ==
+                dxmt9::kDirectChunkSlotReplayDefaultEnabled,
+        "unset and empty ordinary-direct selection follow the single promotion policy line");
   check(!dxmt9::resolveDirectChunkSlotReplayEnabled("0", false),
-        "ordinary direct ChunkSlot replay accepts explicit zero as off");
+        "ordinary direct ChunkSlot replay keeps explicit zero as rollback");
   check(dxmt9::resolveDirectChunkSlotReplayEnabled("1", false),
         "ordinary direct ChunkSlot replay enables on an explicit nonzero gate");
   check(dxmt9::resolveDirectChunkSlotReplayEnabled("true", false),
         "ordinary direct ChunkSlot replay follows nonzero flag semantics");
-  check(!dxmt9::resolveDirectChunkSlotReplayEnabled("1", true),
-        "render tracing disables ordinary direct ChunkSlot replay");
+  check(!dxmt9::resolveDirectChunkSlotReplayEnabled(nullptr, true) &&
+            !dxmt9::resolveDirectChunkSlotReplayEnabled("1", true),
+        "render tracing overrides both the policy default and explicit enable");
 }
 
 void stateOnlyRawHasNoLogicalSourceOrAdmission() {
@@ -682,6 +684,10 @@ void segmentedArenaBoundariesAndHardCaps() {
             split.segments[0].layout.pageCount <= 64 &&
             split.segments[1].layout.pageCount <= 64,
         "a 65+-page aggregate splits before the second GPU record in source order");
+  check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+            splitFixture.view(), split, /*captureOrTrace=*/false) ==
+            DirectChunkSlotReplayDisposition::LegacySegmented,
+        "multi-segment ordinary storage retains a typed pre-effect Legacy disposition");
   const auto segmentCapped = dxmt9::d3d9::planCpuReadyChunk(
       splitFixture.view(), 22,
       {.pageSize = 4096,
@@ -988,8 +994,8 @@ void directChunkSlotWholeRawDispositionsAreTypedAndPreEffect() {
   const auto up = upFixture.view();
   check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
             up, dxmt9::d3d9::planCpuReadyChunk(up, 33), false) ==
-            DirectChunkSlotReplayDisposition::LegacyUnsupported,
-        "UP draws remain an explicit unsupported Legacy family");
+            DirectChunkSlotReplayDisposition::LegacyUpDraw,
+        "UP draws retain a dedicated typed Legacy family");
 
   const std::array presentRecords{
       blockingRecord(D9C_COMMAND_RECORD_PRESENT)};
@@ -997,8 +1003,8 @@ void directChunkSlotWholeRawDispositionsAreTypedAndPreEffect() {
   const auto present = presentFixture.view();
   check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
             present, dxmt9::d3d9::planCpuReadyChunk(present, 34), false) ==
-            DirectChunkSlotReplayDisposition::LegacyUnsupported,
-        "Present keeps its compatibility publication boundary");
+            DirectChunkSlotReplayDisposition::LegacyPresent,
+        "Present keeps its typed compatibility publication boundary");
 
   for (const auto type : {D9C_COMMAND_RECORD_QUERY_ISSUE,
                           D9C_COMMAND_RECORD_READBACK,

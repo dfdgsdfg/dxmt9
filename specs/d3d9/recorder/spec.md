@@ -611,6 +611,13 @@ failure leaves the empty legacy builder untouched. After accepted commit and
 the ordinary builder reset, `returnToLegacyFinalLayout` restores the fallback;
 an entered bridge failure instead keeps the sealed exact bytes under poison.
 
+Canonical compact D9C V2 direct-final publication remains blocked for the
+other producer families until a complete immutable semantic batch supports
+side-effect-free count/dedup followed by one `ExactFixed`-style emission. A new
+bounded scatter/gather ABI is the alternative if that complete batch owner
+cannot be established. The fixed-layout constructor remains the truthful
+differential oracle; it is not a production multi-record route.
+
 `kPeExactProductionPolicyTable` gives all 21 semantic producer rows an explicit
 typed disposition. The other 19 remain legacy because normal `appendRecord`
 owns one D3D9 call at a time and neither it nor `flushPendingCommandChunk` owns

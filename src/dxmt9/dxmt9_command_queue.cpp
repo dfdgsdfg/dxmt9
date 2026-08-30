@@ -4009,7 +4009,10 @@ CommandQueue::DirectChunkSlotReplayLease::commit(
 }
 
 bool CommandQueue::DirectChunkSlotReplayLease::rollbackPreEffect() noexcept {
-  if (!queue_ || effectsStarted_) return false;
+  if (!queue_ ||
+      !queue::pipelineReplayFailureMayRollback(effectsStarted_)) {
+    return false;
+  }
   const bool rolledBack = queue_->abortDirectChunkSlotReplay(
       ticket_, controlIndex_, false);
   queue_ = nullptr;
@@ -4020,8 +4023,10 @@ bool CommandQueue::DirectChunkSlotReplayLease::rollbackPreEffect() noexcept {
 
 void CommandQueue::DirectChunkSlotReplayLease::settle() noexcept {
   if (!queue_) return;
+  const bool failStop =
+      !queue::pipelineReplayFailureMayRollback(effectsStarted_);
   (void)queue_->abortDirectChunkSlotReplay(
-      ticket_, controlIndex_, effectsStarted_);
+      ticket_, controlIndex_, failStop);
   queue_ = nullptr;
   ticket_ = {};
   controlIndex_ = std::numeric_limits<std::size_t>::max();
@@ -4142,7 +4147,12 @@ bool CommandQueue::abortDirectChunkSlotReplay(
         }) == control.payload;
   }
   if (context->assembler) {
-    if (destinationStillOwned) {
+    if (failStop) {
+      // Semantic effects already escaped the transaction. Retain the applied
+      // prefix under the stopped queue owner; rolling it back would falsely
+      // make the raw appear eligible for Legacy replay.
+      context->assembler->abandonFailStop();
+    } else if (destinationStillOwned) {
       context->assembler->rollback();
     } else {
       context->assembler->abandonFailStop();
@@ -4186,6 +4196,14 @@ CommandQueue::commitDirectChunkSlotReplay(
       payload != control.payload ||
       nextSeqId_.load(std::memory_order_relaxed) != ticket.seqId ||
       !context->assembler->prepare()) {
+    context->assembler->abandonFailStop();
+    activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
+    directChunkSlotBuildContext_.reset();
+    requestSchedulingStopLocked();
+    return DirectChunkSlotReplayStatus::FailStopped;
+  }
+  if (testOnlyForceNextDirectChunkSlotCommitFailure_) {
+    testOnlyForceNextDirectChunkSlotCommitFailure_ = false;
     context->assembler->abandonFailStop();
     activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
     directChunkSlotBuildContext_.reset();

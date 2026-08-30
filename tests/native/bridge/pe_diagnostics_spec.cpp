@@ -292,6 +292,8 @@ void testSourceContracts(const std::filesystem::path &root) {
       readTextFile(root / "src/d3d9/device_c_chunk_replay.cpp");
   const auto coreResources =
       readTextFile(root / "src/d3d9/core_resources.cpp");
+  const auto coreDraw =
+      readTextFile(root / "src/d3d9/core_draw.cpp");
   const auto providerOffload =
       readTextFile(root / "src/d3d9/device_c_replay_offload.cpp");
   const auto providerPayload =
@@ -731,6 +733,35 @@ void testSourceContracts(const std::filesystem::path &root) {
   checkContains(sourcePayload,
                 "CopyMaterializationClass::QueueFinalSlotAppend",
                 "batch assembler retains final-slot accounting");
+  const auto snapshotBegin = coreDraw.find(
+      "HResult Device::snapshotDrawSubmissionFromCurrentState(");
+  const auto directReplayBegin = coreDraw.find(
+      "HResult Device::submitDirectReplayDrawFromCurrentState(",
+      snapshotBegin);
+  check(snapshotBegin != std::string::npos &&
+            directReplayBegin != std::string::npos &&
+            snapshotBegin < directReplayBegin,
+        "legacy carrier and direct replay bodies have a bounded source order");
+  const std::string_view snapshotBody(
+      coreDraw.data() + snapshotBegin, directReplayBegin - snapshotBegin);
+  checkContains(
+      snapshotBody,
+      "CopyMaterializationClass::\n              ReplaySubmissionCarrierCopy",
+      "legacy snapshot records its actual state/uniform carrier copies");
+  checkContains(
+      snapshotBody,
+      "CopyMaterializationClass::\n            ReplaySubmissionCarrierMaterialization",
+      "legacy snapshot records one semantic carrier materialization");
+  const auto directReplayEnd = coreDraw.find(
+      "void Device::submitDrawRunInternal(", directReplayBegin);
+  check(directReplayEnd != std::string::npos,
+        "direct replay source contract has a bounded body");
+  const std::string_view directReplayBody(
+      coreDraw.data() + directReplayBegin,
+      directReplayEnd - directReplayBegin);
+  checkNotContains(
+      directReplayBody, "ReplaySubmissionCarrier",
+      "direct replay never fabricates a legacy carrier ledger row");
   checkContains(cpuPipelineOwnership,
                 "Production DCE successor lookahead and CPU-ready session "
                 "replay use this",

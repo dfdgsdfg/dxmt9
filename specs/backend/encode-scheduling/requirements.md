@@ -1169,10 +1169,10 @@ an encoder-visible record or payload byte. Exact/conservative reservation may
 waste bounded capacity; it must not reallocate and copy an earlier final
 extent.
 
-Ordinary synchronous selection is behind the default-off
-`DXMT9_DIRECT_CHUNK_SLOT_REPLAY` gate and is independently forced off by
-`DXMT_TRACE_RENDER`; the implementation must remain available for explicit
-evidence runs while the Legacy path remains the default.
+Ordinary synchronous selection follows one backend policy constant
+and the `DXMT9_DIRECT_CHUNK_SLOT_REPLAY` override, and is independently forced
+off by `DXMT_TRACE_RENDER`. Exact `0` must continue to select Legacy after
+policy-default promotion.
 
 **R-BACK-2.87** Before any default promotion, a legacy/direct differential harness must feed
 the same validated `RawOwned` input to the compatibility replay and the
@@ -1182,8 +1182,9 @@ handle/resource identity and retention, draw-run grouping, failure
  disposition, rollback, and completion identities. It must not compare padding
 or process-local object addresses as semantics. The ordinary fresh-`ChunkSlot`
 candidate must preserve source, command-buffer, and render-pass cadence and keep
-Legacy as a typed pre-effect lane for populated destinations,
-unsupported/UP/Inline/Present/capture/trace/oversized work. The candidate remains
+Legacy as a typed pre-effect lane for populated destinations, segmented or
+structurally unsupported raws, UP draws, Inline ordered controls/readback,
+Present, capture/trace, and oversized work. The candidate remains
 default-off until the differential, GPU, and broader wild equivalence evidence
 is complete. The CPU-ready Tape provider remains a separate default-off policy
 until all R-ARCH-7.10 gates for that provider pass.

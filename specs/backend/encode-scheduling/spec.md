@@ -106,10 +106,12 @@ Binding snapshots and resource summaries are resolved before commit but stored
 once. A conservative reservation may leave unused tail capacity; no used prefix
 may be moved or recopied.
 
-The ordinary synchronous candidate uses the same transaction without selecting
-CPU-ready Tape, but production selection is behind the default-off
-`DXMT9_DIRECT_CHUNK_SLOT_REPLAY` gate and is forced off by `DXMT_TRACE_RENDER`.
-When explicitly enabled, it borrows the current compatibility source by exact
+The ordinary synchronous path uses the same transaction without selecting
+CPU-ready Tape. Production selection follows one default-on backend policy
+constant plus the `DXMT9_DIRECT_CHUNK_SLOT_REPLAY` override and is forced off
+by `DXMT_TRACE_RENDER`; exact `0` remains the Legacy rollback independently of
+the policy constant.
+When selected, it borrows the current compatibility source by exact
 `(sourceId, storageGeneration, controlIndex, seqId, buildGeneration)`, reserves
 the final `ChunkSlot` vectors, including the planner's complete nested
 `clearRects` count, replays directly, and commits while leaving that slot in
@@ -119,14 +121,17 @@ overflow is rejected before mutation. Present/Flush therefore closes the same
 source, command buffer, and render-pass boundary as Legacy. Direct reservation
 is admitted only on a fresh writing slot: reserving behind a used vector prefix
 could relocate already-final bytes, so a populated slot is a typed pre-effect
-Legacy fallback. UP draws, ordered controls, Present, capture/trace, oversize,
-and structural rejects likewise retain explicit dispositions. Once replay
-effects begin, any generation, append, validation, resource-closure, or
+Legacy fallback. Segmented raws, UP draws, ordered controls/readback, Present,
+capture/trace, oversize, and structural rejects likewise retain explicit
+dispositions. Once replay effects begin, any generation, append, validation,
+resource-closure, or
 evidence failure is fail-stop and cannot retry the raw through Legacy.
 
-The candidate is not a promotion claim: the implementation and explicit native
-failure support remain available, while GPU readback and broader multi-workload
-wild equivalence evidence are still required before changing the default.
+The ordinary representation was promoted after the production Metal readback
+oracle and the same-build GT1/GT2/GT3/SFIV wild matrix closed R-BACK-2.87 on
+2026-08-31. This is a representation promotion, not an FPS claim: only the GT2
+ledger run selected the Direct lane non-vacuously, and exact `0` remains the
+rollback while broader Wine fault injection remains residual evidence.
 
 The differential harness compares semantic command records and exact payload
 bytes after both paths have completed their own representation-specific build.

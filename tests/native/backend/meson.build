@@ -469,6 +469,28 @@ test('dxmt9-render-tape-d24x8-snapshot-metal-spec',
      is_parallel: false,
      timeout: 30)
 
+# Production ordinary Direct ChunkSlot replay oracle. Each child selects the
+# cached resolver with an explicit env value, proves the Direct commit seam,
+# then compares the same offscreen Metal readback against Legacy.
+direct_chunk_slot_metal_oracle_spec = executable(
+  'dxmt9-direct-chunk-slot-metal-oracle-spec',
+  'direct_chunk_slot_metal_oracle_spec.mm',
+  include_directories: dxmt9_inc,
+  dependencies: [
+    dxmt9_dep,
+    dxmt9_frontend_dep,
+    dxmt9_winemetal_dep,
+    dependency('appleframeworks', modules: ['Foundation', 'Metal']),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-direct-chunk-slot-metal-oracle-spec',
+     direct_chunk_slot_metal_oracle_spec,
+     env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1'],
+     is_parallel: false,
+     timeout: 30)
+
 encode_session_lifecycle_spec = executable(
   'dxmt9-encode-session-lifecycle-spec',
   'encode_session_lifecycle_spec.cpp',

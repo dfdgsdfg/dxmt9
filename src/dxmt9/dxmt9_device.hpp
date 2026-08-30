@@ -297,9 +297,17 @@ constexpr bool resolveCpuReadyTapeDirectReplayEnabled(
 // Isolated ordinary replay-to-ChunkSlot production selector. Keep this
 // provider configuration transform out of the D3D9 replay planner so the
 // Metal/backend device layer never depends on a frontend-private header.
+// Promotion is deliberately one policy-line change after R-BACK-2.87 closes;
+// an explicit `0` remains the rollback independently of this default.
+inline constexpr bool kDirectChunkSlotReplayDefaultEnabled = true;
+
 constexpr bool resolveDirectChunkSlotReplayEnabled(
     const char* value, bool traceRender) noexcept {
-  return !traceRender && resolveCpuReadyTapeDirectReplayEnabled(value);
+  if (traceRender) return false;
+  if (!value || value[0] == '\0') {
+    return kDirectChunkSlotReplayDefaultEnabled;
+  }
+  return !(value[0] == '0' && value[1] == '\0');
 }
 
 constexpr bool resolveRenderTapePublisherCaptureEnabled(
