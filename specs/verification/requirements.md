@@ -256,6 +256,20 @@ bounded pressure. Expected-failure configurations must independently remove
 the borrow-return, rollback, publish-after-build, no-post-effect-retry, and
 completion-before-reclaim premises.
 
+**R-VERIF-2.24** The fixed-role `SegmentedTransportV1` refinement must model
+exactly three ordered roles, `ReserveAll`/`AdoptAll` atomicity, and the later
+immutable semantic-batch to pure count/dedup to `ExactFixed` CPU Tape path.
+The bounded model must prove complete final-capacity reservation, pointer-free
+publication after the trusted in-process recorder boundary, retain/capacity/
+ledger conservation, one contiguous at-most-once pre-effect fallback, poison
+after adoption or effect, strict FIFO settlement, and reclaim wake/progress.
+Independent expected-failure configurations must expose partial adoption,
+fallback after effect, lost checkpoint, partial ledger, and missing wake. This
+model is protocol evidence only: it does not prove PE COM or bridge ABI bytes,
+allocator internals, Objective-C/Metal behavior, or final pixels. The transport
+and later Tape provider remain default-off until model-to-code, native/GPU,
+wild, locality, and performance gates are complete.
+
 ---
 
 ## 3. Resource Lifetime

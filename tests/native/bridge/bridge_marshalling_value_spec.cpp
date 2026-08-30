@@ -539,6 +539,23 @@ void testWow64GeneratedArgsUseHandleAndPointerHelpers() {
   checkEq(commit.ret, 0x06070809,
           "wow64 commit args preserve returned status field");
 
+  dxmt9::bridge::Args32_dxmt9c_device_commit_chunk_segmented segmented{};
+  segmented.arg0 = deviceToken;
+  segmented.arg1 = 0x00d00000u;
+  auto* decodedSegmented =
+      dxmt9::util::marshal::decodeOpaque<
+          dxmt9::bridge::Args32_dxmt9c_device_commit_chunk_segmented>(
+          &segmented);
+  checkSamePtr(
+      dxmt9::util::marshal::wow64::decodePtr<
+          const D9CCommandChunkSegmentedTransportV1*>(decodedSegmented->arg1),
+      reinterpret_cast<const D9CCommandChunkSegmentedTransportV1*>(
+          static_cast<std::uintptr_t>(0x00d00000u)),
+      "wow64 segmented commit decodes descriptor pointer token");
+  decodedSegmented->ret = 0x0708090a;
+  checkEq(segmented.ret, 0x0708090a,
+          "wow64 segmented commit preserves returned status field");
+
   dxmt9::bridge::Args32_dxmt9c_device_set_vs_const_f constants{};
   constants.arg0 = deviceToken;
   constants.start = 240u;
@@ -573,6 +590,38 @@ void testDecodeOpaqueRejectsMissingArgumentBlock() {
 }
 
 void testCommandChunkGeneratedArgumentLayouts() {
+  checkEq(sizeof(D9CCommandChunkNegotiation), std::size_t{32},
+          "transport negotiation remains 32 bytes");
+  checkEq(offsetof(D9CCommandChunkNegotiation, peSupportedTransports),
+          std::size_t{16}, "PE transport capability offset");
+  checkEq(offsetof(D9CCommandChunkNegotiation, pePreferredTransport),
+          std::size_t{20}, "PE transport preference offset");
+  checkEq(offsetof(D9CCommandChunkNegotiation, unixSupportedTransports),
+          std::size_t{24}, "unix transport capability offset");
+  checkEq(offsetof(D9CCommandChunkNegotiation, selectedTransport),
+          std::size_t{28}, "selected transport offset");
+  checkEq(sizeof(D9CCommandChunkSegmentedTransportV1), std::size_t{112},
+          "fixed segmented transport descriptor size");
+  checkEq(offsetof(D9CCommandChunkSegmentedTransportV1, header),
+          std::size_t{0}, "segmented header is by value at offset zero");
+  checkEq(offsetof(D9CCommandChunkSegmentedTransportV1, records),
+          std::size_t{48}, "segmented records role offset");
+  checkEq(offsetof(D9CCommandChunkSegmentedTransportV1, handles),
+          std::size_t{64}, "segmented handles role offset");
+  checkEq(offsetof(D9CCommandChunkSegmentedTransportV1, payload),
+          std::size_t{80}, "segmented payload role offset");
+  checkEq(D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES,
+          32u * 1024u * 1024u, "shared segmented aggregate bound");
+  checkEq(D9C_COMMAND_CHUNK_TRANSPORT_CONTIGUOUS |
+              D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1,
+          3u, "contiguous and segmented transport capability bits");
+
+  checkPodArgShape<
+      dxmt9::bridge::Args_dxmt9c_device_commit_chunk_segmented>(
+      "native segmented commit args", 24u, 8u);
+  checkPodArgShape<
+      dxmt9::bridge::Args32_dxmt9c_device_commit_chunk_segmented>(
+      "wow64 segmented commit args", 12u, 4u);
   checkPodArgShape<
       dxmt9::bridge::Args_dxmt9c_device_negotiate_command_chunk>(
       "native canonical negotiation args", 24u, 8u);

@@ -678,6 +678,59 @@ Non-goals are a wire-version change, pointer-bearing ABI, cross-thread recorder
 callbacks, record fusion, changed chunk cadence, semantic state merging, or
 removal of the compatibility builder before all promotion gates pass.
 
+### 6.2 Fixed-role SegmentedTransportV1 and later ExactFixed Tape emission
+
+`SegmentedTransportV1` fixes one immutable semantic batch and three ordered
+roles:
+
+```text
+ReserveRole --ReserveAll--> AdoptRole --AdoptAll--> EmitRole --ExactFixed-->
+  FIFO settlement
+```
+
+The batch owner performs pure exact count/dedup first: record count, unique
+qualified-handle count, and total wire bytes (including header, tables,
+payload, alignment, and padding) are checked against the 32 MiB total-wire
+cap. Canonical D9C V2 contributes a 48-byte header, 32-byte record row,
+16-byte handle row, and 16-byte section descriptor. The fixed
+`D9CCommandChunkSegmentedTransportV1` descriptor is 112 bytes, ending in the
+16-byte capture-token/event-ordinal pair; its role byte counts exclude
+inter-table alignment, which the importer reconstructs from header offsets.
+The trusted in-process recorder pointer boundary ends at this owner;
+the transport and Tape contain only validated value metadata and owned
+pointer-free storage. `ReserveAll` reserves the complete fixed layout and all
+capacity credits before adoption. `AdoptAll` transfers every record, retain,
+and semantic-ledger entry as one publication; no segment or partial ledger is
+visible independently.
+
+`ExactFixed` is deliberately later than transport adoption. It emits the same
+immutable batch once into one contiguous final CPU Tape extent. Before
+adoption, a failed pre-effect transaction restores the complete checkpoint
+and may take one contiguous legacy fallback. After adoption or the first
+emission effect, failure is poison/fail-stop and never a legacy retry. FIFO
+settlement releases retained/capacity/ledger credits only after the final
+segment; reclaim wakes a blocked producer through the same generation-tested
+condition-variable predicate.
+
+`tla/SegmentedTransportV1.tla` is the bounded protocol model. Its production
+configuration checks role order, pure count/dedup, atomic adoption, exact
+wire emission, checkpoint/retain/capacity/ledger conservation, FIFO
+settlement, post-effect poison, and wake progress. Independent expected
+failures remove complete reservation, partial adoption, pre-effect-only
+fallback, checkpoint restoration, exact ledger publication, or reclaim wake
+publication. This
+model does not prove PE COM behavior, bridge ABI bytes, allocator internals,
+Objective-C/Metal ownership, or final pixels; those remain separate evidence
+layers. The runtime bridge is implemented behind opt-in
+`DXMT9_PE_SEGMENTED_TRANSPORT`: PE lends its immutable record, handle, and
+payload regions and Unix adopts one validated owned candidate without a
+contiguous gather. Contiguous V2 remains the default and the Render Tape
+capture representation. A host-only immutable owner/count-plan/ExactFixed
+fixture compares all 21 producer families byte-for-byte with validated
+contiguous V2. It is not yet the production recorder owner and does not emit
+into CPU-ready Tape; that later provider remains default-off until the layered
+gates in `R-VERIF-6.4` and the backend acceptance contract pass.
+
 ## 7. Acceptance matrix
 
 ### 7.0 PE ABI and codegen audit
@@ -713,7 +766,7 @@ owners are explicit in the manifest, and the bridge schema/hash is unchanged.
 | `R-CORE-REC-4.*` | `PeWireObjectRef`, builder dedup, `WireObjectRegistry`, capture registry, TU-local concrete COM membership | `dxmt9-chunk-record-registry-spec` includes all-method callback re-entry rejection; `WireObjectRegistry.tla`; render-tape identity tests; `dxmt9-pe-com-membership-spec` covers the post-RTTI ten-kind owner/public/wire/alias member matrix; canonical x64/x86 PE builds instantiate the RTTI boundary | Wine foreign-wrapper COM-boundary conformance remains required; native predicates do not prove runtime Wine membership behavior |
 | `R-CORE-REC-5.1` | `D3D9DeviceImpl::assertRecorderThreadConfined` / recorder lock | `R-BACK-43.5` audit and shared helper | retain exact owner declarations as decomposition lands |
 | `R-CORE-REC-5.2`–`5.3` | `PeRecorderState`, nullable `PeCaptureState`, nullable `PeDiagnosticsState`, hot device TU, cold tape/diag TUs, child interface | direct `recorderState_` ownership with audited reference aliases removed; compile-time `PeRecorderState` pins exclude the default-off scalar ledger, whose nullable cold owner allocates only under its explicit gate; capture/diagnostic lifecycle tests cover disabled/enabled allocation, callback, clock, owner/source, observer-vtable, COM-ref, and key-function pins | broaden instruction/code-size coverage across representative methods and add Wine/wild enabled-diagnostic evidence; no runtime performance result is claimed by native pins |
-| `R-CORE-REC-6.*` | shared transition table plus verification owners | Production transition/commit/settlement/value tables and `DXMT9_PE_SEMANTIC_PRODUCER_TABLE` feed generated TLA tables; freshness checks precede TLC. `dxmt9-pe-semantic-projection-spec` enumerates all 21 producer rows, exact field-presence combinations, legacy/direct immutable-token equality, identity rejection, retry, capture, poison, and discard. `PeRecorderSemanticProjection.tla` checks the same producer set and seven independent counterexamples. | Generic reserve/retain/capture-throw runtime injection, x64/x86 Wine evidence, and wild observer evidence remain open; the host projection is not PE COM/bridge proof |
+| `R-CORE-REC-6.*` | shared transition table plus verification owners | Production transition/commit/settlement/value tables and `DXMT9_PE_SEMANTIC_PRODUCER_TABLE` feed generated TLA tables; freshness checks precede TLC. `dxmt9-pe-semantic-projection-spec` enumerates all 21 producer rows, exact field-presence combinations, legacy/direct immutable-token equality, identity rejection, retry, capture, poison, and discard. `PeRecorderSemanticProjection.tla` checks the same producer set and ten independent counterexamples. | Generic reserve/retain/capture-throw runtime injection, x64/x86 Wine evidence, and wild observer evidence remain open; the host projection is not PE COM/bridge proof |
 
 The host suite can compile shared headers and extracted value/predicate owners,
 but cannot directly compile or execute the Windows-only COM TUs. Therefore

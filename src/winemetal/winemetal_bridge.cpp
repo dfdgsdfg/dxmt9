@@ -319,6 +319,7 @@ BridgeClass classifyBridgeClass(unsigned int code) {
     return BridgeClass::State;
 
   case BridgeOpcode::dxmt9c_device_commit_chunk:
+  case BridgeOpcode::dxmt9c_device_commit_chunk_segmented:
   case BridgeOpcode::dxmt9c_device_draw_primitive:
   case BridgeOpcode::dxmt9c_device_draw_indexed_primitive:
   case BridgeOpcode::dxmt9c_device_draw_primitive_up:
@@ -461,6 +462,7 @@ bool classifyBridgeDetail(unsigned int code, BridgeDetail& detail) {
     detail = BridgeDetail::SetFVF;
     return true;
   case BridgeOpcode::dxmt9c_device_commit_chunk:
+  case BridgeOpcode::dxmt9c_device_commit_chunk_segmented:
     detail = BridgeDetail::CommitChunk;
     return true;
   case BridgeOpcode::dxmt9c_device_draw_primitive:

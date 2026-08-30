@@ -208,22 +208,69 @@ int32_t copyWireIdentity(Object* object, std::uint32_t expectedKind,
 
 extern "C" int32_t dxmt9c_device_negotiate_command_chunk(
     D9CDevice* device, D9CCommandChunkNegotiation* negotiation) {
-  if (!device || !negotiation || negotiation->reserved0 != 0u ||
-      negotiation->reserved1 != 0u || negotiation->reserved2 != 0u ||
-      negotiation->reserved3 != 0u) {
+  if (!device || !negotiation) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
 
+  const auto peSupportedVersions = negotiation->peSupportedVersions;
+  const auto pePreferredVersion = negotiation->pePreferredVersion;
+  const auto peSupportedTransports = negotiation->peSupportedTransports;
+  const auto pePreferredTransport = negotiation->pePreferredTransport;
   negotiation->unixSupportedVersions = D9C_COMMAND_CHUNK_CAP_CURRENT;
   negotiation->selectedVersion = 0u;
-  const auto common = negotiation->peSupportedVersions &
+  negotiation->unixSupportedTransports =
+      D9C_COMMAND_CHUNK_TRANSPORT_CONTIGUOUS |
+      D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1;
+  negotiation->selectedTransport = 0u;
+
+  if (device->commandChunkNegotiated &&
+      (device->commandChunkPeSupportedVersions != peSupportedVersions ||
+       device->commandChunkPePreferredVersion != pePreferredVersion ||
+       device->commandChunkPeSupportedTransports != peSupportedTransports ||
+       device->commandChunkPePreferredTransport != pePreferredTransport)) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+
+  const auto common = peSupportedVersions &
                       negotiation->unixSupportedVersions;
-  if (negotiation->pePreferredVersion != D9C_COMMAND_CHUNK_VERSION ||
+  if (pePreferredVersion != D9C_COMMAND_CHUNK_VERSION ||
       (common & D9C_COMMAND_CHUNK_CAP_CURRENT) == 0u) {
     return dxmt9::core::D3DERR_INVALIDCALL;
   }
 
   negotiation->selectedVersion = D9C_COMMAND_CHUNK_VERSION;
+  const auto transportCommon = peSupportedTransports &
+                                negotiation->unixSupportedTransports;
+  // Zero is the legacy PE shape: retain contiguous as the compatibility
+  // default. A nonzero preference is forced and must be jointly supported.
+  const auto preferred = pePreferredTransport;
+  if (preferred != 0u && (preferred & transportCommon) == 0u) {
+    negotiation->selectedTransport = 0u;
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const auto selected = preferred != 0u
+                            ? preferred
+                            : ((transportCommon &
+                                D9C_COMMAND_CHUNK_TRANSPORT_CONTIGUOUS) != 0u
+                                   ? D9C_COMMAND_CHUNK_TRANSPORT_CONTIGUOUS
+                                   : (transportCommon &
+                                              D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1)
+                                         ? D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1
+                                         : D9C_COMMAND_CHUNK_TRANSPORT_CONTIGUOUS);
+  if (selected != D9C_COMMAND_CHUNK_TRANSPORT_CONTIGUOUS &&
+      selected != D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1) {
+    negotiation->selectedTransport = 0u;
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  negotiation->selectedTransport = selected;
+  if (!device->commandChunkNegotiated) {
+    device->commandChunkNegotiated = true;
+    device->commandChunkPeSupportedVersions = peSupportedVersions;
+    device->commandChunkPePreferredVersion = pePreferredVersion;
+    device->commandChunkPeSupportedTransports = peSupportedTransports;
+    device->commandChunkPePreferredTransport = pePreferredTransport;
+  }
+  device->commandChunkTransport = selected;
   return dxmt9::core::D3D_OK;
 }
 

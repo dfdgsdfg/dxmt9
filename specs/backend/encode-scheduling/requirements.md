@@ -1174,20 +1174,20 @@ and the `DXMT9_DIRECT_CHUNK_SLOT_REPLAY` override, and is independently forced
 off by `DXMT_TRACE_RENDER`. Exact `0` must continue to select Legacy after
 policy-default promotion.
 
-**R-BACK-2.87** Before any default promotion, a legacy/direct differential harness must feed
-the same validated `RawOwned` input to the compatibility replay and the
-assembler path. It must compare the effective ordered command kinds and fields,
-original ordinals, barriers/readbacks/present boundaries, final payload bytes,
-handle/resource identity and retention, draw-run grouping, failure
- disposition, rollback, and completion identities. It must not compare padding
-or process-local object addresses as semantics. The ordinary fresh-`ChunkSlot`
-candidate must preserve source, command-buffer, and render-pass cadence and keep
+**R-BACK-2.87** A legacy/direct differential harness must feed the same
+validated `RawOwned` input to the compatibility replay and the assembler path.
+It must compare the effective ordered command kinds and fields, original
+ordinals, barriers/readbacks/present boundaries, final payload bytes,
+handle/resource identity and retention, draw-run grouping, failure disposition,
+rollback, and completion identities. It must not compare padding or
+process-local object addresses as semantics. The ordinary fresh-`ChunkSlot`
+candidate preserves source, command-buffer, and render-pass cadence and keeps
 Legacy as a typed pre-effect lane for populated destinations, segmented or
 structurally unsupported raws, UP draws, Inline ordered controls/readback,
-Present, capture/trace, and oversized work. The candidate remains
-default-off until the differential, GPU, and broader wild equivalence evidence
-is complete. The CPU-ready Tape provider remains a separate default-off policy
-until all R-ARCH-7.10 gates for that provider pass.
+Present, capture/trace, and oversized work. Ordinary eligible selection is
+default-on after the differential, GPU, and broader wild equivalence evidence
+recorded in the backend gap; the CPU-ready Tape provider remains a separate
+default-off policy until all R-ARCH-7.10 gates for that provider pass.
 
 **R-BACK-2.88** The concrete queue lifecycle must refine
 `ProducerOwned -> RawOwned -> ReplayBorrowed -> FinalOwned -> Encoding ->
@@ -1210,3 +1210,50 @@ asynchronous task handoff. Partition locators may cross threads only as
 pointer-free generation-checked values and must reacquire a fresh synchronous
 borrow at use. No completion callback, child-worker closure, queue node, or
 observer may retain a resolved span or the capability itself.
+
+**R-BACK-2.90** `SegmentedTransportV1` must use exactly three ordered queue
+roles: `ReserveRole`, `AdoptRole`, and `EmitRole`. A complete immutable
+semantic batch is the sole input to those roles. `ReserveAll` must reserve the
+complete final record, handle, payload, retention, and publication-control
+footprint from pure count/dedup results before `AdoptAll`; physical payload
+blocks, identity segments, and partial event metadata must not become visible
+before complete adoption. A role may not bypass, repeat, or independently
+publish an earlier role.
+
+**R-BACK-2.91** The fixed transport wire extent must include its header,
+record/handle tables, payload bytes, alignment, and padding and must not exceed
+32 MiB. The canonical D9C V2 sizes are a 48-byte header, 32-byte record row,
+16-byte handle row, and 16-byte section descriptor. The fixed
+`D9CCommandChunkSegmentedTransportV1` descriptor is 112 bytes, ending with
+16 bytes for the capture token and event ordinal; role byte counts exclude
+inter-table alignment, which the importer reconstructs from header offsets.
+The in-process recorder may cross the producer boundary with a trusted
+validated pointer only synchronously; queue-owned Tape storage and every
+cross-thread/cross-boundary value must be pointer-free, generation-qualified,
+and bounded. Count/dedup and checked-size failure must happen before retain,
+publication, or Metal-visible work.
+
+**R-BACK-2.92** `AdoptAll` must atomically transfer every reserved record,
+qualified handle retain, resource-mark claim, and semantic-ledger entry. A
+partial adoption or partial ledger is invalid and must not reach `EmitRole`.
+Before any adoption or encoder effect, rollback restores the exact prior
+checkpoint and may route the complete contiguous batch through EventSerial or
+the typed Legacy path at most once. Once adoption, receipt activation, child
+creation, or any encoder effect has occurred, failure is poison/fail-stop and
+must not retry or execute the fallback.
+
+**R-BACK-2.93** `ExactFixed` is a later emission stage, enabled only after
+complete `ReserveAll` and `AdoptAll`. It must visit the same immutable batch
+once and construct one contiguous final CPU Tape extent without a second
+semantic transform or an unbounded staging copy. Retain, capacity, ledger,
+record order, and completion identities must conserve through emission and
+settle in strict FIFO segment order; the final segment alone releases the
+group's credits.
+
+**R-BACK-2.94** A producer blocked by transport capacity must wait on the
+queue condition variable, not poll. Reclaim must publish the generation/wake
+signal used by that wait, and acquisition must re-check the complete capacity
+predicate after wake. The fixed-role transport and later ExactFixed provider
+remain default-off with EventSerial/Legacy fallback reachable until formal,
+native model binding, GPU, wild, locality, and performance evidence satisfy
+`R-BACK-2.50` and `R-VERIF-6.4`.

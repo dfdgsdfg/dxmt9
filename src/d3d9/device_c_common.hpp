@@ -200,6 +200,15 @@ struct D9CDevice {
   std::optional<D9CRenderTapePresentCaptureLease> renderTapePresentCapture;
   dxmt9::d3d9::RenderTapeProductionIdentityLedger renderTapeIdentityCapture;
   std::uint64_t presentOrdinal = 0;  // present-bearing commits, offload pacing
+  // Latched by the one-time PE/unix negotiation. A segmented entry is
+  // rejected unless this device explicitly selected SegmentedTransportV1.
+  bool commandChunkNegotiated = false;
+  std::uint32_t commandChunkPeSupportedVersions = 0u;
+  std::uint32_t commandChunkPePreferredVersion = 0u;
+  std::uint32_t commandChunkPeSupportedTransports = 0u;
+  std::uint32_t commandChunkPePreferredTransport = 0u;
+  std::uint32_t commandChunkTransport =
+      D9C_COMMAND_CHUNK_TRANSPORT_CONTIGUOUS;
 
   explicit D9CDevice(dxmt9::com::IDirect3DDevice9Ex* i) : iface(i) {
     const char* enabled = std::getenv("DXMT9_MUTATION_COMPOSITION_OBSERVER");

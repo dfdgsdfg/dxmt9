@@ -31,6 +31,9 @@ enum class CopyMaterializationClass : std::uint8_t {
   MutationStaging,
   UpScratch,
   PeSectionAppend,
+  // A segmented command chunk owns already-final role regions. This row
+  // tracks their logical lifetime without misreporting a byte copy.
+  PeWireView,
   Count,
 };
 
@@ -82,6 +85,8 @@ enum class CopyMaterializationOwner : std::uint8_t {
     return "materialize.up.scratch";
   case CopyMaterializationClass::PeSectionAppend:
     return "materialize.pe.section-append";
+  case CopyMaterializationClass::PeWireView:
+    return "view.pe.wire-final";
   case CopyMaterializationClass::Count:
     break;
   }
@@ -138,6 +143,8 @@ enum class CopyMaterializationClassification : std::uint8_t {
     return "pointer-free-wire-construction-transactional";
   case CopyMaterializationClass::PeSectionAppend:
     return "pe-section-ownership-before-sealing";
+  case CopyMaterializationClass::PeWireView:
+    return "direct-final-region-view-ownership";
   case CopyMaterializationClass::Count:
     break;
   }
@@ -165,6 +172,7 @@ copyMaterializationClassification(
   case CopyMaterializationClass::MutationStaging:
   case CopyMaterializationClass::UpScratch:
   case CopyMaterializationClass::PeSectionAppend:
+  case CopyMaterializationClass::PeWireView:
   case CopyMaterializationClass::Count:
     return CopyMaterializationClassification::Necessary;
   }

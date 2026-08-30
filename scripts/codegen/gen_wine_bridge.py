@@ -763,10 +763,155 @@ def write_server_cpp(path: pathlib.Path, ops_header_name: str, protos: list[Prot
     lines.append("")
     lines.append("#include <cstdint>")
     lines.append("#include <cstring>")
+    lines.append("#include <limits>")
     lines.append("#include <memory>")
     lines.append("#include <vector>")
     lines.append("")
+
+    # SegmentedTransportV1 preserves the three fixed roles until the provider
+    # adopts them. The native thunk forwards directly. WoW64 validates the
+    # descriptor and lends the three guest ranges to the provider for the
+    # duration of the synchronous call; the provider performs the only
+    # ownership copy. Keep this adapter generated with the dispatch table.
+    lines.extend([
+        "namespace {",
+        "using SegmentedTransport = D9CCommandChunkSegmentedTransportV1;",
+        "constexpr std::uint64_t kSegmentedTransportMaxBytes =",
+        "    D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES;",
+        "",
+        "bool segmentedRoleValid(const D9CWireHandle& token, std::uint32_t bytes,",
+        "                         bool wow64) {",
+        "  if ((wow64 && (token.hi != 0u ||",
+        "                 static_cast<std::uint64_t>(token.lo) + bytes >",
+        "                     (std::uint64_t{1} << 32u))) ||",
+        "      (bytes == 0u) != (token.lo == 0u && token.hi == 0u)) {",
+        "    return false;",
+        "  }",
+        "  const auto address = static_cast<std::uint64_t>(token.lo) |",
+        "      (static_cast<std::uint64_t>(token.hi) << 32u);",
+        "  return bytes == 0u ||",
+        "      address <= std::numeric_limits<std::uintptr_t>::max() - bytes;",
+        "}",
+        "",
+        "bool segmentedHeaderValid(const SegmentedTransport& transport,",
+        "                          std::uint64_t& totalBytes) {",
+        "  const auto& header = transport.header;",
+        "  if (header.version != D9C_COMMAND_CHUNK_WIRE_VERSION ||",
+        "      header.headerSize != sizeof(D9CCommandChunkWireHeader) ||",
+        "      header.recordHeaderSize != sizeof(D9CCommandChunkWireRecordHeader) ||",
+        "      header.handleEntrySize != sizeof(D9CCommandChunkWireHandleEntry) ||",
+        "      header.reserved0 != 0u || header.reserved1 != 0u ||",
+        "      header.recordTableOffset != sizeof(D9CCommandChunkWireHeader) ||",
+        "      header.handleTableOffset < header.recordTableOffset ||",
+        "      header.payloadArenaOffset < header.handleTableOffset ||",
+        "      header.recordCount > std::numeric_limits<std::uint32_t>::max() /",
+        "          sizeof(D9CCommandChunkWireRecordHeader) ||",
+        "      header.handleCount > std::numeric_limits<std::uint32_t>::max() /",
+        "          sizeof(D9CCommandChunkWireHandleEntry)) {",
+        "    return false;",
+        "  }",
+        "  const auto recordBytes = static_cast<std::uint64_t>(header.recordCount) *",
+        "      sizeof(D9CCommandChunkWireRecordHeader);",
+        "  const auto handleBytes = static_cast<std::uint64_t>(header.handleCount) *",
+        "      sizeof(D9CCommandChunkWireHandleEntry);",
+        "  if (transport.recordBytes != recordBytes ||",
+        "      transport.handleBytes != handleBytes ||",
+        "      transport.payloadBytes != header.payloadArenaSize ||",
+        "      transport.recordReserved != 0u || transport.handleReserved != 0u ||",
+        "      transport.payloadReserved != 0u ||",
+        "      header.handleTableOffset < header.recordTableOffset + recordBytes ||",
+        "      header.payloadArenaOffset < header.handleTableOffset + handleBytes) {",
+        "    return false;",
+        "  }",
+        "  totalBytes = static_cast<std::uint64_t>(header.payloadArenaOffset) +",
+        "      transport.payloadBytes;",
+        "  return totalBytes >= sizeof(D9CCommandChunkWireHeader) &&",
+        "      totalBytes <= kSegmentedTransportMaxBytes;",
+        "}",
+        "",
+        "const std::uint8_t* wow64SegmentPointer(const D9CWireHandle& token) {",
+        "  return dxmt9::util::marshal::wow64::decodePtr<const std::uint8_t*>(token.lo);",
+        "}",
+        "}  // namespace",
+        "",
+    ])
     for proto in protos:
+        if proto.name == "dxmt9c_device_commit_chunk_segmented":
+            lines.append(f"extern \"C\" NTSTATUS thunk_{proto.name}(void *opaque) {{")
+            lines.append(
+                f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args_{proto.name}>(opaque);"
+            )
+            lines.append("  if (!args) return DXMT9_STATUS_INVALID_PARAMETER;")
+            lines.append(
+                "  args->ret = dxmt9c_device_commit_chunk_segmented(args->arg0, args->arg1);"
+            )
+            lines.append("  return DXMT9_STATUS_SUCCESS;")
+            lines.append("}")
+            lines.append("")
+            lines.append(f"extern \"C\" NTSTATUS thunk_wow64_{proto.name}(void *opaque) {{")
+            lines.append("  dxmt9::d3d9::devicec::ScopedWow64ClientCall wow64_client_call;")
+            lines.append(
+                f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args32_{proto.name}>(opaque);"
+            )
+            lines.append("  if (!args) return DXMT9_STATUS_INVALID_PARAMETER;")
+            lines.append(
+                "  const auto* transport = dxmt9::util::marshal::wow64::decodePtr<"
+                "const SegmentedTransport*>(args->arg1);"
+            )
+            lines.append("  if (!transport) {")
+            lines.append(
+                "    args->ret = dxmt9c_device_commit_chunk_segmented("
+                "dxmt9::util::marshal::wow64::decodeHandle<D9CDevice*>(args->arg0), nullptr);"
+            )
+            lines.append("    return DXMT9_STATUS_SUCCESS;")
+            lines.append("  }")
+            lines.append("  SegmentedTransport native_transport = *transport;")
+            lines.append("  std::uint64_t total_bytes = 0u;")
+            lines.append(
+                "  if (!segmentedHeaderValid(native_transport, total_bytes) ||"
+            )
+            lines.append(
+                "      !segmentedRoleValid(native_transport.records, native_transport.recordBytes, true) ||"
+            )
+            lines.append(
+                "      !segmentedRoleValid(native_transport.handles, native_transport.handleBytes, true) ||"
+            )
+            lines.append(
+                "      !segmentedRoleValid(native_transport.payload, native_transport.payloadBytes, true)) {"
+            )
+            lines.append("    args->ret = dxmt9::core::D3DERR_INVALIDCALL;")
+            lines.append("    return DXMT9_STATUS_SUCCESS;")
+            lines.append("  }")
+            lines.append(
+                "  const auto* records = wow64SegmentPointer(native_transport.records);"
+            )
+            lines.append(
+                "  const auto* handles = wow64SegmentPointer(native_transport.handles);"
+            )
+            lines.append(
+                "  const auto* payload = wow64SegmentPointer(native_transport.payload);"
+            )
+            lines.append(
+                "  dxmt9::d3d9::devicec::ScopedWow64NativePointerAllowance records_allowance("
+                "records, native_transport.recordBytes);"
+            )
+            lines.append(
+                "  dxmt9::d3d9::devicec::ScopedWow64NativePointerAllowance handles_allowance("
+                "handles, native_transport.handleBytes);"
+            )
+            lines.append(
+                "  dxmt9::d3d9::devicec::ScopedWow64NativePointerAllowance payload_allowance("
+                "payload, native_transport.payloadBytes);"
+            )
+            lines.append(
+                "  args->ret = dxmt9c_device_commit_chunk_segmented("
+                "dxmt9::util::marshal::wow64::decodeHandle<D9CDevice*>(args->arg0), "
+                "&native_transport);"
+            )
+            lines.append("  return DXMT9_STATUS_SUCCESS;")
+            lines.append("}")
+            lines.append("")
+            continue
         lines.append(f"extern \"C\" NTSTATUS thunk_{proto.name}(void *opaque) {{")
         lines.append(f"  auto *args = dxmt9::util::marshal::decodeOpaque<dxmt9::bridge::Args_{proto.name}>(opaque);")
         lines.append("  if (!args) return DXMT9_STATUS_INVALID_PARAMETER;")

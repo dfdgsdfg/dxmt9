@@ -23,6 +23,7 @@
 #include "d3d9_pe_shader_bytecode_scan.hpp"
 #include "d3d9_pe_stateblock_fault.hpp"
 
+#include <cstdlib>
 #include <new>
 
 namespace {
@@ -107,22 +108,45 @@ D3D9DeviceImpl::D3D9DeviceImpl(D9CDevice* dev, IDirect3D9Ex* factory,
         D9CCommandChunkNegotiation negotiation{};
         negotiation.peSupportedVersions = D9C_COMMAND_CHUNK_CAP_CURRENT;
         negotiation.pePreferredVersion = D9C_COMMAND_CHUNK_VERSION;
+        negotiation.peSupportedTransports =
+            D9C_COMMAND_CHUNK_TRANSPORT_CONTIGUOUS |
+            D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1;
+        const char* segmentedTransport =
+            std::getenv("DXMT9_PE_SEGMENTED_TRANSPORT");
+        negotiation.pePreferredTransport =
+            segmentedTransport && segmentedTransport[0] != '\0' &&
+                    segmentedTransport[0] != '0'
+                ? D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1
+                : D9C_COMMAND_CHUNK_TRANSPORT_CONTIGUOUS;
         const HRESULT negotiationHr =
             hr32(dxmt9c_device_negotiate_command_chunk(
                 dev_, &negotiation));
         recorderState_.commandChunkNegotiated = SUCCEEDED(negotiationHr) &&
-            negotiation.selectedVersion == D9C_COMMAND_CHUNK_VERSION;
+            negotiation.selectedVersion == D9C_COMMAND_CHUNK_VERSION &&
+            (negotiation.selectedTransport ==
+                 D9C_COMMAND_CHUNK_TRANSPORT_CONTIGUOUS ||
+             negotiation.selectedTransport ==
+                 D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1);
+        if (recorderState_.commandChunkNegotiated) {
+            recorderState_.commandChunkTransport =
+                static_cast<std::uint8_t>(negotiation.selectedTransport);
+        }
         if (recorderState_.commandChunkNegotiated) {
             dxmt9DeviceInfoLog(
-                "command chunk negotiation selected canonical pe_caps=0x%x unix_caps=0x%x",
+                "command chunk negotiation selected canonical transport=0x%x pe_caps=0x%x unix_caps=0x%x pe_transport=0x%x unix_transport=0x%x",
+                negotiation.selectedTransport,
                 negotiation.peSupportedVersions,
-                negotiation.unixSupportedVersions);
+                negotiation.unixSupportedVersions,
+                negotiation.peSupportedTransports,
+                negotiation.unixSupportedTransports);
         } else {
             dxmt9DeviceInfoLog(
-                "command chunk negotiation failed hr=0x%08x preferred=canonical selected=v%u unix_caps=0x%x",
+                "command chunk negotiation failed hr=0x%08x preferred=canonical selected=v%u selected_transport=0x%x unix_caps=0x%x unix_transport=0x%x",
                 static_cast<unsigned>(negotiationHr),
                 negotiation.selectedVersion,
-                negotiation.unixSupportedVersions);
+                negotiation.selectedTransport,
+                negotiation.unixSupportedVersions,
+                negotiation.unixSupportedTransports);
         }
     }
     // T2: Initialize viewport/scissor PE shadow from the implicit

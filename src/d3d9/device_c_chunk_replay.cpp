@@ -443,13 +443,14 @@ const char* cpuReadyArenaBeginStopReasonName(
 // canonical admission retains every resolved wrapper before inline or offloaded
 // replay. Both replay completion and queue teardown release the same list.
 void dxmt9::d3d9::releaseRetainedWrappers(dxmt9::d3d9::RawCommandChunk& chunk) {
-  if (!chunk.recordBlob.empty()) {
+  if (chunk.bridgeRawLedgerOwnedBytes != 0u) {
     if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
             dxmt9::core::CopyMaterializationOwner::Unix)) {
       ledger->release(
           dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
-          chunk.recordBlob.size());
+          chunk.bridgeRawLedgerOwnedBytes);
     }
+    chunk.bridgeRawLedgerOwnedBytes = 0u;
   }
   for (const auto& entry : chunk.retainedWrappers) {
     switch (entry.kind) {
@@ -1039,6 +1040,33 @@ bool recordProducesArenaCommand(std::uint32_t type) noexcept {
   }
 }
 
+bool importRawChunk(const dxmt9::d3d9::RawCommandChunk& raw,
+                   dxmt9::d3d9::ImportedChunkView& imported) noexcept {
+  const dxmt9::d3d9::CommandChunkEnvelope envelope{
+      .version = raw.wireVersion,
+      .recordCount = raw.recordCount,
+      .handleCount = raw.handleCount,
+  };
+  if (!raw.preflightValidated) return false;
+  if (raw.segmentedTransport) {
+    const auto records = std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(raw.recordRegion.data()),
+        raw.recordRegion.size() * sizeof(D9CCommandChunkWireRecordHeader));
+    const auto handles = std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(raw.handleRegion.data()),
+        raw.handleRegion.size() * sizeof(D9CCommandChunkWireHandleEntry));
+    const auto payload = std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(raw.payloadRegion.data()),
+        raw.payloadRegionBytes);
+    return dxmt9::d3d9::importPrevalidatedSegmentedCommandChunk(
+        raw.wireHeader, records, handles, payload, envelope, imported);
+  }
+  const auto bytes = std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(raw.recordBlob.data()),
+      raw.recordBlob.size());
+  return dxmt9::d3d9::importPrevalidatedCommandChunk(bytes, envelope, imported);
+}
+
 int32_t replayResolvedChunk(
     D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
     bool pacedByPresentOrdinal,
@@ -1054,18 +1082,9 @@ int32_t replayResolvedChunk(
     // boundary; the caller may retry EventSerial only while this remains true.
     *preEffectFailure = true;
   }
-  const auto bytes = std::span<const std::byte>(
-      reinterpret_cast<const std::byte*>(raw.recordBlob.data()),
-      raw.recordBlob.size());
   dxmt9::d3d9::ImportedChunkView imported;
-  const dxmt9::d3d9::CommandChunkEnvelope envelope{
-      .version = raw.wireVersion,
-      .recordCount = raw.recordCount,
-      .handleCount = raw.handleCount,
-  };
   if (!raw.preflightValidated ||
-      !dxmt9::d3d9::importPrevalidatedCommandChunk(
-          bytes, envelope, imported) ||
+      !importRawChunk(raw, imported) ||
       raw.resolvedObjects.size() != imported.handles.size()) {
     return commitChunkFail("chunk-replay-preflight-view");
   }
@@ -1478,18 +1497,8 @@ bool chunkRequiresInlineReplay(
 
 bool importOwnedChunk(dxmt9::d3d9::RawCommandChunk& raw,
                         dxmt9::d3d9::ImportedChunkView& imported) noexcept {
-  const auto bytes = std::span<const std::byte>(
-      reinterpret_cast<const std::byte*>(raw.recordBlob.data()),
-      raw.recordBlob.size());
   return raw.preflightValidated && raw.replaySeq != 0 &&
-         dxmt9::d3d9::importPrevalidatedCommandChunk(
-             bytes,
-             dxmt9::d3d9::CommandChunkEnvelope{
-                 .version = raw.wireVersion,
-                 .recordCount = raw.recordCount,
-                 .handleCount = raw.handleCount,
-             },
-             imported) &&
+         importRawChunk(raw, imported) &&
          raw.resolvedObjects.size() == imported.handles.size();
 }
 
@@ -2100,6 +2109,7 @@ int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
       ledger->retain(
           dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
           raw.recordBlob.size());
+      raw.bridgeRawLedgerOwnedBytes = raw.recordBlob.size();
     }
     raw.wireVersion = envelope.version;
     raw.recordCount = envelope.recordCount;
@@ -2180,13 +2190,14 @@ int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
 }
 
 static int32_t dxmt9c_device_commit_chunk_impl(
-    D9CDevice* d, const D9CCommandChunk* chunk) {
+    D9CDevice* d, const D9CCommandChunk* chunk,
+    dxmt9::d3d9::RawCommandChunk* preparedRaw,
+    std::chrono::steady_clock::time_point bridgeCommitStart) {
   // Boundary B2 — wall-clock latency of one commit_chunk bridge call.
   // This includes importer validation, handle/resource marking, record
   // replay, and queue submission construction. It excludes asynchronous
   // encode/GPU work after this call returns.
-  const auto bridgeCommitStart = std::chrono::steady_clock::now();
-  if (!d || !chunk) {
+  if (!d || (!chunk && !preparedRaw)) {
     return commitChunkFail("bad-header");
   }
 #if defined(__APPLE__)
@@ -2214,53 +2225,57 @@ static int32_t dxmt9c_device_commit_chunk_impl(
                       static_cast<unsigned long long>(nativeThreadId));
   }
 #endif
-  if (chunk->version != D9C_COMMAND_CHUNK_VERSION) {
+  if (!preparedRaw && chunk->version != D9C_COMMAND_CHUNK_VERSION) {
     dxmt9::perf::countCommandChunkReject();
     return commitChunkFail("unsupported-wire-version", chunk->version);
   }
   {
-    if (wireHandleValue(chunk->handles) != 0u ||
-        chunk->recordBytes == 0u) {
-      dxmt9::perf::countCommandChunkReject();
-      return commitChunkFail("chunk-bad-outer");
-    }
-    const auto* records = wireHandlePtr<const std::byte>(chunk->records);
-    if (!records) {
-      dxmt9::perf::countCommandChunkReject();
-      return commitChunkFail("chunk-missing-records");
-    }
-    const auto blob = std::span<const std::byte>(records,
-                                                 chunk->recordBytes);
-    const dxmt9::d3d9::CommandChunkEnvelope envelope{
-        .version = chunk->version,
-        .recordCount = chunk->recordCount,
-        .handleCount = chunk->handleCount,
-    };
     const bool phaseSplit = commitChunkPhaseSplitEnabled();
-    if (phaseSplit) {
+    if (phaseSplit && !preparedRaw) {
       dxmt9::perf::countCommitChunkPhaseCall();
     }
     dxmt9::d3d9::RawCommandChunk raw;
-    ScopedRetainedWrapperRelease retainedRelease(raw);
-    CommitChunkPhaseTimer preparePhase(phaseSplit);
-    const bool prepared = dxmt9::d3d9::prepareOffloadChunk(
-        blob, envelope, d->wireObjects, retainWrapper, raw);
-    preparePhase.stop(dxmt9::perf::countCommitChunkPhasePrepareCpuTime);
+    bool prepared = false;
+    if (preparedRaw) {
+      raw = std::move(*preparedRaw);
+      prepared = true;
+    } else {
+      if (wireHandleValue(chunk->handles) != 0u ||
+          chunk->recordBytes == 0u ||
+          chunk->recordBytes > D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES) {
+        dxmt9::perf::countCommandChunkReject();
+        return commitChunkFail("chunk-bad-outer");
+      }
+      const auto* records = wireHandlePtr<const std::byte>(chunk->records);
+      if (!records) {
+        dxmt9::perf::countCommandChunkReject();
+        return commitChunkFail("chunk-missing-records");
+      }
+      const auto blob = std::span<const std::byte>(records, chunk->recordBytes);
+      const dxmt9::d3d9::CommandChunkEnvelope envelope{
+          .version = chunk->version,
+          .recordCount = chunk->recordCount,
+          .handleCount = chunk->handleCount,
+      };
+      CommitChunkPhaseTimer preparePhase(phaseSplit);
+      prepared = dxmt9::d3d9::prepareOffloadChunk(
+          blob, envelope, d->wireObjects, retainWrapper, raw);
+      preparePhase.stop(dxmt9::perf::countCommitChunkPhasePrepareCpuTime);
+      if (prepared) {
+        raw.renderTapeCaptureToken = chunk->renderTapeCaptureToken;
+        raw.renderTapeEventOrdinal = chunk->renderTapeEventOrdinal;
+      }
+    }
     if (!prepared) {
       dxmt9::perf::countCommandChunkReject();
       return commitChunkFail("chunk-admission");
     }
-    raw.renderTapeCaptureToken = chunk->renderTapeCaptureToken;
-    raw.renderTapeEventOrdinal = chunk->renderTapeEventOrdinal;
+    ScopedRetainedWrapperRelease retainedRelease(raw);
     dxmt9::d3d9::ImportedChunkView imported;
-    const auto ownedBytes = std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(raw.recordBlob.data()),
-        raw.recordBlob.size());
     CommitChunkPhaseTimer importPhase(phaseSplit);
     const bool importedOk =
         raw.preflightValidated &&
-        dxmt9::d3d9::importPrevalidatedCommandChunk(
-            ownedBytes, envelope, imported);
+        importRawChunk(raw, imported);
     importPhase.stop(dxmt9::perf::countCommitChunkPhaseImportCpuTime);
     if (!importedOk) {
       dxmt9::d3d9::releaseRetainedWrappers(raw);
@@ -2277,8 +2292,7 @@ static int32_t dxmt9c_device_commit_chunk_impl(
       return commitChunkFail("chunk-buffer-capture");
     }
     dxmt9::perf::countCommandChunkWire(
-        D9C_COMMAND_CHUNK_VERSION, chunk->recordCount,
-        chunk->recordBytes, chunk->handleCount);
+        raw.wireVersion, raw.recordCount, raw.recordBytes, raw.handleCount);
 
     if (auto* q = findDirtyQueue(d)) {
       q->noteCommitChunkEntryForCompletionGap();
@@ -2513,7 +2527,8 @@ static int32_t dxmt9c_device_commit_chunk_impl(
 extern "C" int32_t dxmt9c_device_commit_chunk(
     D9CDevice* d, const D9CCommandChunk* chunk) {
   try {
-    return dxmt9c_device_commit_chunk_impl(d, chunk);
+    return dxmt9c_device_commit_chunk_impl(
+        d, chunk, nullptr, std::chrono::steady_clock::now());
   } catch (const std::bad_alloc&) {
     // Any exception that escapes the implementation may have followed a
     // ledger publication.  Poison conservatively; the local RawCommandChunk
@@ -2526,5 +2541,73 @@ extern "C" int32_t dxmt9c_device_commit_chunk(
     if (d) d->replayDrainLedger.poison();
     dxmt9::perf::countCommandChunkReject();
     return commitChunkFail("chunk-boundary-exception");
+  }
+}
+
+extern "C" int32_t dxmt9c_device_commit_chunk_segmented(
+    D9CDevice* d, const D9CCommandChunkSegmentedTransportV1* transport) {
+  try {
+    const auto bridgeCommitStart = std::chrono::steady_clock::now();
+    if (!d || !transport ||
+        d->commandChunkTransport != D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1) {
+      return commitChunkFail("segmented-transport-not-negotiated");
+    }
+    const auto spanFor = [](const D9CWireHandle& handle,
+                            std::uint32_t bytes) {
+      if (bytes == 0u) return std::span<const std::byte>{};
+      const auto address = wireHandleValue(handle);
+      if (address > std::numeric_limits<std::uintptr_t>::max() - bytes) {
+        return std::span<const std::byte>{};
+      }
+      const auto* ptr = wireValuePtr<const std::byte>(address);
+      return ptr ? std::span<const std::byte>(ptr, bytes)
+                 : std::span<const std::byte>{};
+    };
+    const auto roleTokenMatchesExtent = [](const D9CWireHandle& handle,
+                                           std::uint32_t bytes) noexcept {
+      return (bytes == 0u) == (wireHandleValue(handle) == 0u);
+    };
+    if (!roleTokenMatchesExtent(transport->records, transport->recordBytes) ||
+        !roleTokenMatchesExtent(transport->handles, transport->handleBytes) ||
+        !roleTokenMatchesExtent(transport->payload, transport->payloadBytes)) {
+      return commitChunkFail("segmented-transport-role-token");
+    }
+    const auto records = spanFor(transport->records, transport->recordBytes);
+    const auto handles = spanFor(transport->handles, transport->handleBytes);
+    const auto payload = spanFor(transport->payload, transport->payloadBytes);
+    if ((transport->recordBytes != 0u && records.empty()) ||
+        (transport->handleBytes != 0u && handles.empty()) ||
+        (transport->payloadBytes != 0u && payload.empty())) {
+      return commitChunkFail("segmented-transport-pointer");
+    }
+    dxmt9::d3d9::RawCommandChunk raw;
+    const bool phaseSplit = commitChunkPhaseSplitEnabled();
+    if (phaseSplit) {
+      dxmt9::perf::countCommitChunkPhaseCall();
+    }
+    CommitChunkPhaseTimer preparePhase(phaseSplit);
+    if (!dxmt9::d3d9::prepareSegmentedOffloadChunk(
+            *transport, records, handles, payload, d->wireObjects,
+            retainWrapper, raw)) {
+      preparePhase.stop(dxmt9::perf::countCommitChunkPhasePrepareCpuTime);
+      dxmt9::perf::countCommandChunkReject();
+      return commitChunkFail("segmented-chunk-admission");
+    }
+    preparePhase.stop(dxmt9::perf::countCommitChunkPhasePrepareCpuTime);
+    // The common implementation immediately moves `raw` into its own guarded
+    // owner. Do not arm a second guard here: vector moves empty their storage,
+    // but scalar payloadRegionBytes would remain in the moved-from object and
+    // could release the ownership ledger twice on return.
+    return dxmt9c_device_commit_chunk_impl(d, nullptr, &raw,
+                                           bridgeCommitStart);
+  } catch (const std::bad_alloc&) {
+    if (d) d->replayDrainLedger.poison();
+    dxmt9::perf::countCommandChunkReject();
+    return commitChunkFail("segmented-boundary-allocation", 0xffffffffu, 0u,
+                           dxmt9::core::E_OUTOFMEMORY);
+  } catch (...) {
+    if (d) d->replayDrainLedger.poison();
+    dxmt9::perf::countCommandChunkReject();
+    return commitChunkFail("segmented-boundary-exception");
   }
 }

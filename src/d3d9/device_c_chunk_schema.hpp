@@ -7,11 +7,29 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <type_traits>
 
 namespace dxmt9::d3d9 {
 
 static_assert(std::endian::native == std::endian::little,
               "command chunk wire canonical requires a little-endian target");
+static_assert(std::is_standard_layout_v<D9CCommandChunkSegmentedTransportV1>);
+static_assert(std::is_trivially_copyable_v<
+              D9CCommandChunkSegmentedTransportV1>);
+static_assert(sizeof(D9CCommandChunkSegmentedTransportV1) ==
+              D9C_COMMAND_CHUNK_SEGMENTED_TRANSPORT_V1_SIZE);
+static_assert(alignof(D9CCommandChunkSegmentedTransportV1) == 8u);
+static_assert(offsetof(D9CCommandChunkSegmentedTransportV1, header) == 0u);
+static_assert(offsetof(D9CCommandChunkSegmentedTransportV1, records) == 48u);
+static_assert(offsetof(D9CCommandChunkSegmentedTransportV1, recordBytes) == 56u);
+static_assert(offsetof(D9CCommandChunkSegmentedTransportV1, handles) == 64u);
+static_assert(offsetof(D9CCommandChunkSegmentedTransportV1, handleBytes) == 72u);
+static_assert(offsetof(D9CCommandChunkSegmentedTransportV1, payload) == 80u);
+static_assert(offsetof(D9CCommandChunkSegmentedTransportV1, payloadBytes) == 88u);
+static_assert(offsetof(D9CCommandChunkSegmentedTransportV1,
+                       renderTapeCaptureToken) == 96u);
+static_assert(offsetof(D9CCommandChunkSegmentedTransportV1,
+                       renderTapeEventOrdinal) == 104u);
 
 enum RecordRuleFlags : std::uint32_t {
   RecordRuleNone = 0u,

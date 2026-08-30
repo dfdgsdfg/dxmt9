@@ -2183,7 +2183,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     HRESULT commitPendingCommandChunk(
         PeRecorderFlushReason commitReason, const D9CCommandChunk& chunk,
         const PeCommandChunkCommitInfo& info,
-        dxmt9::d3d9::pe::RecorderCommitPhase* settledPhase = nullptr);
+        dxmt9::d3d9::pe::RecorderCommitPhase* settledPhase = nullptr,
+        const dxmt9::d3d9::pe::SegmentedCommandChunk* segmented = nullptr);
 
     HRESULT flushPendingCommandChunk(
         PeRecorderFlushReason reason,

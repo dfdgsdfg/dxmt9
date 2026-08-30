@@ -379,6 +379,10 @@ enum {
 #define D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT 0x00000001u
 #define D9C_COMMAND_CHUNK_CAP_CURRENT 0x00000002u
 #define D9C_COMMAND_CHUNK_DEFAULT_WIRE_VERSION 2u
+#define D9C_COMMAND_CHUNK_TRANSPORT_CONTIGUOUS 0x00000001u
+#define D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1 0x00000002u
+#define D9C_COMMAND_CHUNK_SEGMENTED_TRANSPORT_V1 1u
+#define D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES (32u * 1024u * 1024u)
 
 typedef struct D9CCommandChunkWireHeader {
     uint32_t version;
@@ -394,6 +398,30 @@ typedef struct D9CCommandChunkWireHeader {
     uint32_t reserved0;
     uint32_t reserved1;
 } D9CCommandChunkWireHeader;
+
+/* Fixed-role SegmentedTransportV1 descriptor. The canonical V2 header is
+ * passed by value; each role token names only the live bytes of one client
+ * span. recordBytes and handleBytes exclude the canonical zero-alignment gaps
+ * between tables. The unix importer reconstructs those gaps from the header
+ * offsets, so PE vectors never need to carry padding or expose bytes past
+ * their logical ends. No role table or variable-width descriptor is
+ * permitted. */
+typedef struct D9CCommandChunkSegmentedTransportV1 {
+    D9CCommandChunkWireHeader header;
+    D9CWireHandle records;
+    uint32_t recordBytes;
+    uint32_t recordReserved;
+    D9CWireHandle handles;
+    uint32_t handleBytes;
+    uint32_t handleReserved;
+    D9CWireHandle payload;
+    uint32_t payloadBytes;
+    uint32_t payloadReserved;
+    uint64_t renderTapeCaptureToken;
+    uint64_t renderTapeEventOrdinal;
+} D9CCommandChunkSegmentedTransportV1;
+
+#define D9C_COMMAND_CHUNK_SEGMENTED_TRANSPORT_V1_SIZE 112u
 
 typedef struct D9CCommandChunkWireRecordHeader {
     uint32_t type;
@@ -421,19 +449,34 @@ typedef struct D9CWireObjectIdentity {
     uint64_t objectId;
 } D9CWireObjectIdentity;
 
-/* One-time per-device PE/unix command-chunk negotiation. The PE fills the
- * first two fields; unix fills the next two. A forced preference must be
- * selected exactly or device initialization fails; no device changes grammar
- * after this exchange. */
+/* One-time per-device PE/unix command-chunk negotiation. Each side fills its
+ * supported/preferred pair for the canonical wire version and independently
+ * for transport. A forced preference must be selected exactly or device
+ * initialization fails; no device changes grammar after this exchange. */
 typedef struct D9CCommandChunkNegotiation {
     uint32_t peSupportedVersions;
     uint32_t pePreferredVersion;
     uint32_t unixSupportedVersions;
     uint32_t selectedVersion;
-    uint32_t reserved0;
-    uint32_t reserved1;
-    uint32_t reserved2;
-    uint32_t reserved3;
+    /* Transport negotiation is independent from canonical wire-version
+     * negotiation. These slots were reserved in the original 32-byte
+     * exchange so adding SegmentedTransportV1 cannot change D9C V2. */
+    union {
+        uint32_t peSupportedTransports;
+        uint32_t reserved0;
+    };
+    union {
+        uint32_t pePreferredTransport;
+        uint32_t reserved1;
+    };
+    union {
+        uint32_t unixSupportedTransports;
+        uint32_t reserved2;
+    };
+    union {
+        uint32_t selectedTransport;
+        uint32_t reserved3;
+    };
 } D9CCommandChunkNegotiation;
 
 typedef struct D9CCommandChunkWireSectionDesc {
@@ -1172,6 +1215,8 @@ DXMT9_NODISCARD D9CSurface* dxmt9c_device_get_depth_stencil(D9CDevice*);
 DXMT9_NODISCARD int32_t  dxmt9c_device_draw_primitive(D9CDevice*, uint32_t type,
                                        uint32_t startVertex, uint32_t count);
 DXMT9_NODISCARD int32_t  dxmt9c_device_commit_chunk(D9CDevice*, const D9CCommandChunk*);
+DXMT9_NODISCARD int32_t  dxmt9c_device_commit_chunk_segmented(
+    D9CDevice*, const D9CCommandChunkSegmentedTransportV1*);
 DXMT9_NODISCARD int32_t  dxmt9c_device_reserve_render_tape_present_capture(D9CDevice*);
 DXMT9_NODISCARD int32_t  dxmt9c_device_finish_render_tape_present_capture(
     D9CDevice*, D9CRenderTapePresentCaptureResult* out, void* bytes,

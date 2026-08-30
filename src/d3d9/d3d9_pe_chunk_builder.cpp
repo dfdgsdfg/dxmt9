@@ -997,6 +997,9 @@ SealedCommandChunk CommandChunkBuilder::seal() noexcept {
     return {};
   }
   if (sealed_) {
+    if (segmentedSealed_) {
+      return {};
+    }
     return SealedCommandChunk{
         .blob = sealedBlob_,
         .recordCount = static_cast<std::uint32_t>(recordCount()),
@@ -1169,14 +1172,137 @@ SealedCommandChunk CommandChunkBuilder::seal() noexcept {
   };
 }
 
+SegmentedCommandChunk CommandChunkBuilder::sealSegmented(
+    std::uint64_t renderTapeCaptureToken,
+    std::uint64_t renderTapeEventOrdinal) noexcept {
+  if (active_.active) {
+    return {};
+  }
+  if (sealed_ && !segmentedSealed_) {
+    return {};
+  }
+
+  D9CCommandChunkSegmentedTransportV1 transport{};
+  std::size_t totalBytes = 0u;
+  const std::byte* recordData = nullptr;
+  const std::byte* handleData = nullptr;
+  const std::byte* payloadData = nullptr;
+  const bool newlySealed = !sealed_;
+
+  if (exactFinalLayout_) {
+    if (sealedBlob_.size() < sizeof(D9CCommandChunkWireHeader)) {
+      return {};
+    }
+    std::memcpy(&transport.header, sealedBlob_.data(),
+                sizeof(transport.header));
+    const auto expected = planExactCommandChunkLayout(
+        transport.header.recordCount, transport.header.handleCount,
+        transport.header.payloadArenaSize);
+    if (!expected.valid() || expected.totalBytes != sealedBlob_.size() ||
+        transport.header.recordTableOffset != expected.recordTableOffset ||
+        transport.header.handleTableOffset != expected.handleTableOffset ||
+        transport.header.payloadArenaOffset != expected.payloadArenaOffset ||
+        transport.header.reserved0 != 0u || transport.header.reserved1 != 0u) {
+      return {};
+    }
+    totalBytes = expected.totalBytes;
+    recordData = sealedBlob_.data() + expected.recordTableOffset;
+    handleData = sealedBlob_.data() + expected.handleTableOffset;
+    payloadData = sealedBlob_.data() + expected.payloadArenaOffset;
+  } else {
+    if (records_.empty() || records_.size() >
+            std::numeric_limits<std::uint32_t>::max() /
+                sizeof(D9CCommandChunkWireRecordHeader) ||
+        handles_.size() > std::numeric_limits<std::uint32_t>::max() /
+                             sizeof(D9CCommandChunkWireHandleEntry) ||
+        payload_.size() > std::numeric_limits<std::uint32_t>::max()) {
+      return {};
+    }
+    const auto plan = planExactCommandChunkLayout(
+        static_cast<std::uint32_t>(records_.size()),
+        static_cast<std::uint32_t>(handles_.size()),
+        static_cast<std::uint32_t>(payload_.size()));
+    if (!plan.valid()) {
+      return {};
+    }
+    totalBytes = plan.totalBytes;
+    transport.header = D9CCommandChunkWireHeader{
+        .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+        .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+        .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+        .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+        .recordTableOffset = plan.recordTableOffset,
+        .recordCount = static_cast<std::uint32_t>(records_.size()),
+        .handleTableOffset = plan.handleTableOffset,
+        .handleCount = static_cast<std::uint32_t>(handles_.size()),
+        .payloadArenaOffset = plan.payloadArenaOffset,
+        .payloadArenaSize = static_cast<std::uint32_t>(payload_.size()),
+        .reserved0 = 0u,
+        .reserved1 = 0u,
+    };
+    recordData = reinterpret_cast<const std::byte*>(records_.data());
+    handleData = reinterpret_cast<const std::byte*>(handles_.data());
+    payloadData = payload_.data();
+  }
+
+  const auto recordBytes = static_cast<std::size_t>(
+      transport.header.recordCount) * sizeof(D9CCommandChunkWireRecordHeader);
+  const auto handleBytes = static_cast<std::size_t>(
+      transport.header.handleCount) * sizeof(D9CCommandChunkWireHandleEntry);
+  if (transport.header.recordCount == 0u || recordBytes == 0u ||
+      recordBytes > std::numeric_limits<std::uint32_t>::max() ||
+      handleBytes > std::numeric_limits<std::uint32_t>::max() ||
+      totalBytes > D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES ||
+      totalBytes > std::numeric_limits<std::uint32_t>::max()) {
+    return {};
+  }
+  transport.records = recordBytes != 0u ? toWireHandle(recordData) : D9CWireHandle{};
+  transport.recordBytes = static_cast<std::uint32_t>(recordBytes);
+  transport.handles = handleBytes != 0u ? toWireHandle(handleData) : D9CWireHandle{};
+  transport.handleBytes = static_cast<std::uint32_t>(handleBytes);
+  transport.payload = transport.header.payloadArenaSize != 0u
+      ? toWireHandle(payloadData)
+      : D9CWireHandle{};
+  transport.payloadBytes = transport.header.payloadArenaSize;
+  transport.recordReserved = 0u;
+  transport.handleReserved = 0u;
+  transport.payloadReserved = 0u;
+  transport.renderTapeCaptureToken = renderTapeCaptureToken;
+  transport.renderTapeEventOrdinal = renderTapeEventOrdinal;
+
+  if (newlySealed) {
+    sealed_ = true;
+    segmentedSealed_ = true;
+    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+            dxmt9::core::CopyMaterializationOwner::Pe)) {
+      ledger->record(dxmt9::core::CopyMaterializationClass::PeWireView,
+                     totalBytes);
+      ledger->retain(dxmt9::core::CopyMaterializationClass::PeWireView,
+                     totalBytes);
+    }
+  }
+  return SegmentedCommandChunk{.transport = transport,
+                               .wireBytes = static_cast<std::uint32_t>(
+                                   totalBytes)};
+}
+
 void CommandChunkBuilder::reset() noexcept {
   rollbackRecord();
-  if (sealed_ && !sealedBlob_.empty()) {
+  const auto finalWireBytes = sealedBlob_.empty()
+      ? planExactCommandChunkLayout(
+            static_cast<std::uint32_t>(recordCount()),
+            static_cast<std::uint32_t>(handleCount()),
+            static_cast<std::uint32_t>(currentPayloadBytes()))
+            .totalBytes
+      : sealedBlob_.size();
+  if (sealed_ && finalWireBytes != 0u) {
     if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
           dxmt9::core::CopyMaterializationOwner::Pe)) {
-      ledger->release(dxmt9::core::CopyMaterializationClass::PeWireFinal,
-                      sealedBlob_.size());
-      if (!exactFinalLayout_) {
+      const auto finalClass = segmentedSealed_
+          ? dxmt9::core::CopyMaterializationClass::PeWireView
+          : dxmt9::core::CopyMaterializationClass::PeWireFinal;
+      ledger->release(finalClass, finalWireBytes);
+      if (!sealedBlob_.empty() && !exactFinalLayout_) {
         ledger->release(dxmt9::core::CopyMaterializationClass::PeSealRecords,
                         records_.size() * sizeof(records_[0]));
         ledger->release(dxmt9::core::CopyMaterializationClass::PeSealHandles,
@@ -1204,6 +1330,7 @@ void CommandChunkBuilder::reset() noexcept {
   if (exactFinalLayout_) {
     resetExactStorage();
     sealed_ = false;
+    segmentedSealed_ = false;
     return;
   }
   if (sealed_) {
@@ -1214,16 +1341,26 @@ void CommandChunkBuilder::reset() noexcept {
   payload_.clear();
   sealedBlob_.clear();
   sealed_ = false;
+  segmentedSealed_ = false;
 }
 
 void CommandChunkBuilder::resetAndReleaseRetained() noexcept {
   rollbackRecord();
-  if (sealed_ && !sealedBlob_.empty()) {
+  const auto finalWireBytes = sealedBlob_.empty()
+      ? planExactCommandChunkLayout(
+            static_cast<std::uint32_t>(recordCount()),
+            static_cast<std::uint32_t>(handleCount()),
+            static_cast<std::uint32_t>(currentPayloadBytes()))
+            .totalBytes
+      : sealedBlob_.size();
+  if (sealed_ && finalWireBytes != 0u) {
     if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
-            dxmt9::core::CopyMaterializationOwner::Pe)) {
-      ledger->release(dxmt9::core::CopyMaterializationClass::PeWireFinal,
-                      sealedBlob_.size());
-      if (!exactFinalLayout_) {
+          dxmt9::core::CopyMaterializationOwner::Pe)) {
+      const auto finalClass = segmentedSealed_
+          ? dxmt9::core::CopyMaterializationClass::PeWireView
+          : dxmt9::core::CopyMaterializationClass::PeWireFinal;
+      ledger->release(finalClass, finalWireBytes);
+      if (!sealedBlob_.empty() && !exactFinalLayout_) {
         ledger->release(dxmt9::core::CopyMaterializationClass::PeSealRecords,
                         records_.size() * sizeof(records_[0]));
         ledger->release(dxmt9::core::CopyMaterializationClass::PeSealHandles,
@@ -1244,6 +1381,7 @@ void CommandChunkBuilder::resetAndReleaseRetained() noexcept {
   if (exactFinalLayout_) {
     resetExactStorage();
     sealed_ = false;
+    segmentedSealed_ = false;
     return;
   }
   if (sealed_) {
@@ -1252,6 +1390,7 @@ void CommandChunkBuilder::resetAndReleaseRetained() noexcept {
   payload_.clear();
   sealedBlob_.clear();
   sealed_ = false;
+  segmentedSealed_ = false;
 }
 
 bool CommandChunkBuilder::resetAndReleaseRetained(

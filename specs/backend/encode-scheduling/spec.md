@@ -1884,13 +1884,61 @@ publishes a capture-authority v2 sidecar with 147 completed source segments and
 identity evidence only; the full-frame provider oracle mismatch prevents a
 promotion claim.
 
-## 10. Verification Mapping
+## 10. Fixed-role SegmentedTransportV1
+
+The next CPU-ready Tape transport is intentionally fixed-role. One immutable
+semantic batch crosses three ordered roles only:
+
+```text
+ReserveRole -- ReserveAll --> AdoptRole -- AdoptAll --> EmitRole -- ExactFixed --> settle
+```
+
+The recorder-side owner performs pure exact count/dedup before this pipeline,
+including the complete final wire extent. The extent includes header,
+record/handle tables, payload, alignment, and padding and is capped at 32 MiB.
+The canonical D9C V2 sizes are 48 bytes for the header, 32 bytes for each
+record row, 16 bytes for each handle row, and 16 bytes for each section
+descriptor. The fixed `D9CCommandChunkSegmentedTransportV1` descriptor is 112
+bytes, ending with 16 bytes for the capture token and event ordinal; role byte
+counts exclude inter-table alignment, which the importer reconstructs from
+header offsets.
+Trusted in-process recorder pointers are permitted only for synchronous,
+validated reads before the boundary; all queue/Tape values are bounded,
+generation-qualified, and pointer-free.
+
+`ReserveAll` reserves every final region and ownership/capacity credit before
+any adoption. `AdoptAll` atomically adopts all records, qualified handle
+retains, resource marks, and semantic-ledger entries; no segment or partial
+ledger may be independently Ready. `ExactFixed` is a later stage that visits
+the same batch once and emits one contiguous final CPU Tape extent.
+
+Before adoption and effects, rollback restores the exact checkpoint and may
+take one contiguous legacy/EventSerial fallback, once. After adoption,
+receipt activation, child creation, or any encoder effect, failure is poison
+and fail-stop; no fallback or retry is legal. Settlement consumes segments in
+FIFO order and releases the retained/capacity/ledger credits only after the
+final segment. Reclaim wakes a blocked producer through the generation-tested
+condition-variable predicate.
+
+The bridge half is implemented behind opt-in
+`DXMT9_PE_SEGMENTED_TRANSPORT`: PE lends exactly three immutable regions,
+WoW64 bounds each guest range, and Unix validates/copies/retains one complete
+candidate before publication. Contiguous V2 remains the default fallback.
+The host-only semantic-batch owner and ExactFixed fixture bind the bounded
+value algebra and all 21 canonical producer families. Production CPU-ready
+Tape does not yet consume that owner, so the Reserve/Adopt/Emit queue-role
+refinement, GPU behavior, pixels, locality, and performance remain open. The
+bounded protocol is checked by `tla/SegmentedTransportV1.tla` and its
+production/negative configurations.
+
+## 11. Verification Mapping
 
 | Contract | Evidence |
 |---|---|
 | Existing one-successor DCE | `DceChunkLookahead.tla` and FrameGraph native specs |
 | General bounded ready-prefix DCE | missing extension or refinement model plus pure summary tests |
-| Tape layout and ABA | missing pure specs for multi-segment packing, non-wrapping reserve/wrap padding, indivisible jumbo records, all-or-nothing chain rollback, generation rejection, ordered reclaim, and oversize rollback |
+| Tape layout and ABA | `SegmentedTransportV1.tla` now covers the fixed-role semantic-batch handoff, complete reservation/adoption, exact contiguous emission, checkpoint rollback, FIFO settlement, and wake protocol; broader physical multi-segment packing, jumbo/non-wrapping page layout, generation rejection, ordered reclaim, and oversize rollback remain separate obligations |
+| Fixed-role `SegmentedTransportV1` / later `ExactFixed` (`R-BACK-2.90`–`2.94`) | opt-in fixed-region bridge plus host immutable-owner/21-family ExactFixed binding; bounded TLA model and six expected-failure configurations; production CPU-ready Tape role binding and promotion evidence remain open |
 | CPU-ready admission and session progress | native admission policy specs cover exact Writing/headroom qualification, real lease charge, stale identity, the complete typed drain matrix, unlocked wait, semantic-drain priority, and exact Ready over admission/writer pressure. The production join spec fills all 31 Ready controls and composes the real replay-drain queue with a direct real `QueueLifecycleController::waitForSequence` call, proving one Present plus seven admission escapes and 23 exact producer-fence escapes cover the complete fence in FIFO order without a capacity-generation transition. Exact-head at-most-once tokens, target coverage, restore eligibility, ownership conservation, admission retry, completion-fence return, and distinct counters are pinned through production CVs. GT2 r17 binds the actual reserve path, records 672 producer-wait escapes, returns from reserve, and publishes a fully settled 147-segment v2 sidecar with zero watchdog/GPU errors. Four sibling cases retain Present, non-Arena, ordinary-capacity, and high-water ineligibility without token consumption; generation retry retains priority. Seeded `EncodeSchedulingProgress` composes admission progress followed by the post-admission producer fence and return. |
 | Pass streaming | planner specs cover the allocation-free exact four-command proof, malformed/unsupported shapes, identity/attachment/alias hazards, complete coverage, and the unchanged universal validator. Production specs cover default-off natural replay, exact joined replay, render-pass begin/end `3 -> 2`, one removed mid-chunk split, stale pre-effect restore, ordered-release and stop drains, pending-carrier capture-start drain through the full capture predicate, one observer, natural FIFO completion, receipt-backed retirement/reclaim, and the independent 8+1 bounded-window edge. |
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |

@@ -2,6 +2,8 @@
 // drain fence used by the commit-replay offload path.
 #include "../../../src/d3d9/device_c_replay_offload.hpp"
 #include "../../../src/d3d9/device_c_common.hpp"
+#include "../../../src/d3d9/d3d9_pe_chunk_builder.hpp"
+#include "dxmt9/copy_materialization_ledger.hpp"
 
 #include <atomic>
 #include <array>
@@ -40,6 +42,146 @@ dxmt9::d3d9::RawCommandChunk makeChunk(uint32_t bytes) {
   c.recordBytes = bytes;
   c.recordCount = 1;
   return c;
+}
+
+std::span<const std::byte> segmentedRoleBytes(
+    D9CWireHandle token, std::uint32_t bytes) {
+  return {reinterpret_cast<const std::byte*>(
+              static_cast<std::uintptr_t>(d9cWireHandleValue(token))),
+          bytes};
+}
+
+void testSegmentedPrepareIsAllOrNothing() {
+  using namespace dxmt9::d3d9;
+  using namespace dxmt9::d3d9::pe;
+
+  const D9CCommandChunkWireRecordHeader record{
+      .type = D9C_COMMAND_RECORD_CLEAR,
+      .flags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+      .payloadOffset = 0u,
+      .payloadSize = sizeof(D9CCommandChunkWireClear),
+      .firstHandle = 0u,
+      .handleCount = 0u,
+      .reserved0 = 0u,
+      .reserved1 = 0u,
+  };
+  const D9CCommandChunkWireClear clear{
+      .flags = 1u,
+      .colorARGB = 0xff102030u,
+      .z = 1.0f,
+      .stencil = 0u,
+      .rectCount = 0u,
+      .rectOffset = sizeof(D9CCommandChunkWireClear),
+  };
+  const auto plan = planExactCommandChunkLayout(
+      1u, 0u, sizeof(D9CCommandChunkWireClear));
+  D9CCommandChunkSegmentedTransportV1 transport{
+      .header = D9CCommandChunkWireHeader{
+          .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+          .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+          .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+          .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+          .recordTableOffset = plan.recordTableOffset,
+          .recordCount = 1u,
+          .handleTableOffset = plan.handleTableOffset,
+          .handleCount = 0u,
+          .payloadArenaOffset = plan.payloadArenaOffset,
+          .payloadArenaSize = sizeof(clear),
+          .reserved0 = 0u,
+          .reserved1 = 0u,
+      },
+      .records = toWireHandle(&record),
+      .recordBytes = sizeof(record),
+      .recordReserved = 0u,
+      .handles = {},
+      .handleBytes = 0u,
+      .handleReserved = 0u,
+      .payload = toWireHandle(&clear),
+      .payloadBytes = sizeof(clear),
+      .payloadReserved = 0u,
+      .renderTapeCaptureToken = 0x1234u,
+      .renderTapeEventOrdinal = 0x5678u,
+  };
+  const auto records = segmentedRoleBytes(transport.records,
+                                          transport.recordBytes);
+  const auto handles = segmentedRoleBytes(transport.handles,
+                                          transport.handleBytes);
+  const auto payload = segmentedRoleBytes(transport.payload,
+                                          transport.payloadBytes);
+
+  WireObjectRegistry registry;
+  RawCommandChunk rejected;
+  rejected.recordBytes = 7u;
+  check(!prepareSegmentedOffloadChunk(
+            transport, records.first(records.size() - 1u), handles,
+            payload, registry, nullptr, rejected),
+        "truncated segmented role rejects before adoption");
+  check(rejected.recordBytes == 7u && !rejected.segmentedTransport &&
+            rejected.recordBlob.empty() && rejected.recordRegion.empty() &&
+            rejected.handleRegion.empty() && rejected.payloadRegion.empty(),
+        "pre-effect segmented rejection leaves caller output unchanged");
+
+  RawCommandChunk occupied = makeChunk(7u);
+  const auto occupiedBytes = occupied.recordBlob;
+  check(!prepareSegmentedOffloadChunk(
+            transport, records, handles, payload, registry, nullptr, occupied) &&
+            occupied.recordBlob == occupiedBytes && occupied.recordBytes == 7u,
+        "segmented adoption rejects a nonempty output owner without mutation");
+
+  dxmt9::core::CopyMaterializationLedger ledger;
+  {
+    dxmt9::core::ScopedCopyMaterializationLedger observe(
+        dxmt9::core::CopyMaterializationOwner::Unix, ledger);
+    RawCommandChunk output;
+    RawCommandChunk sibling;
+    check(prepareSegmentedOffloadChunk(
+              transport, records, handles, payload, registry,
+              nullptr, output),
+          "valid segmented roles adopt atomically");
+    check(prepareSegmentedOffloadChunk(
+              transport, records, handles, payload, registry,
+              nullptr, sibling),
+          "a second segmented owner adopts independently");
+    check(output.segmentedTransport && output.preflightValidated &&
+              output.recordBlob.empty() && output.recordRegion.size() == 1u &&
+              output.handleRegion.empty() &&
+              output.payloadRegionBytes == payload.size() &&
+              output.renderTapeCaptureToken == 0x1234u &&
+              output.renderTapeEventOrdinal == 0x5678u,
+          "successful segmented adoption preserves typed regions and identity");
+    ImportedChunkView imported;
+    check(importPrevalidatedSegmentedCommandChunk(
+              output.wireHeader,
+              std::as_bytes(std::span(output.recordRegion)),
+              std::as_bytes(std::span(output.handleRegion)),
+              std::span<const std::byte>(
+                  reinterpret_cast<const std::byte*>(
+                      output.payloadRegion.data()),
+                  output.payloadRegionBytes),
+              CommandChunkEnvelope{
+                  .version = output.wireVersion,
+                  .recordCount = output.recordCount,
+                  .handleCount = output.handleCount,
+              },
+              imported) &&
+              imported.records.size() == 1u &&
+              imported.records[0].type == D9C_COMMAND_RECORD_CLEAR,
+          "adopted segmented owner imports without a contiguous gather");
+    const auto ownedBytes = records.size() + handles.size() + payload.size();
+    releaseRetainedWrappers(output);
+    releaseRetainedWrappers(output);
+    check(ledger.snapshot(
+              dxmt9::core::CopyMaterializationClass::BridgeRawOwnership)
+              .retainedBytes == ownedBytes,
+          "repeated release cannot consume a sibling chunk's ledger ownership");
+    releaseRetainedWrappers(sibling);
+  }
+  const auto ownership = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::BridgeRawOwnership);
+  check(ownership.retainedBytes == 0u &&
+            ownership.retainedBytesPeak ==
+                2u * (records.size() + handles.size() + payload.size()),
+        "segmented ownership ledger conserves adopted region bytes");
 }
 
 void testFifoPushPop() {
@@ -806,6 +948,7 @@ void testTerminalScopedFenceRejectsProviderCall() {
 
 int main() {
   try {
+    testSegmentedPrepareIsAllOrNothing();
     testFifoPushPop();
     testPopExposesOnlyAdoptedImmediateRawLookahead();
     testDrainWaitsForInFlight();

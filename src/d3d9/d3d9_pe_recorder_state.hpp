@@ -44,6 +44,11 @@ struct PeRecorderState {
 
   CommandChunkBuilder commandChunk{};
   bool commandChunkNegotiated = false;
+  // Transport is negotiated independently from the canonical V2 grammar.
+  // Keep contiguous as the fail-closed default for tests and old providers;
+  // a provider that accepts SegmentedTransportV1 selects it explicitly.
+  std::uint8_t commandChunkTransport =
+      D9C_COMMAND_CHUNK_TRANSPORT_CONTIGUOUS;
 
   // These are recorder protocol state rather than diagnostics: a failed
   // append must leave them available for retry, and a successful commit must

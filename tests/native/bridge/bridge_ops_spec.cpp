@@ -45,9 +45,9 @@ void testBridgeOpcodeCountMatchesEnumSpan() {
 
   checkEq(first, static_cast<unsigned int>(DXMT9_WINEMETAL_BRIDGE_OP_BASE),
           "device_c bridge starts after shader unix-call slots");
-  // 165 after the dedicated cold WSI adopt and teardown operations were
-  // added without changing the hot CommandChunk schema.
-  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 165u,
+  // SegmentedTransportV1 is an additional bridge operation; canonical D9C V2
+  // remains the payload grammar used by both commit entries.
+  checkEq(dxmt9::bridge::kBridgeOpcodeCount, 166u,
           "generated bridge opcode count");
   check(last >= first, "bridge opcode enum is monotonic");
   checkEq(last - first + 1u, dxmt9::bridge::kBridgeOpcodeCount,
@@ -65,6 +65,9 @@ void testCommandChunkBridgeOpsAreGenerated() {
   check(inRange(dxmt9::bridge::BridgeOpcode::
                     dxmt9c_device_negotiate_command_chunk),
         "canonical negotiation opcode is generated");
+  check(inRange(dxmt9::bridge::BridgeOpcode::
+                    dxmt9c_device_commit_chunk_segmented),
+        "segmented transport opcode is generated");
   check(inRange(dxmt9::bridge::BridgeOpcode::
                     dxmt9c_device_finish_render_tape_present_capture),
         "capture-only PresentComplete finish opcode is generated");

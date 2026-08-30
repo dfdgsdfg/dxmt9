@@ -135,6 +135,7 @@ dxmt9c_device_check_device_state visibility-wait
 dxmt9c_device_clear ordering-fence
 dxmt9c_device_color_fill visibility-wait
 dxmt9c_device_commit_chunk record-only
+dxmt9c_device_commit_chunk_segmented record-only
 dxmt9c_device_create_additional_swap_chain ordering-fence
 dxmt9c_device_create_cube_texture ordering-fence
 dxmt9c_device_create_cube_texture_shared ordering-fence

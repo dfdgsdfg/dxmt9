@@ -151,7 +151,23 @@ class ReplayDrainLedger {
 };
 
 struct RawCommandChunk {
+  // Contiguous commits retain the historical single blob. Segmented commits
+  // retain these three final Unix-owned regions instead; no borrowed provider
+  // span survives the bridge call.
   std::vector<dxmt9::core::u8> recordBlob;
+  std::vector<D9CCommandChunkWireRecordHeader> recordRegion;
+  std::vector<D9CCommandChunkWireHandleEntry> handleRegion;
+  // The payload arena is required to be uint32-aligned by the wire schema;
+  // words make that alignment explicit while payloadRegionBytes preserves its
+  // exact byte length (the final word may be partially used).
+  std::vector<std::uint32_t> payloadRegion;
+  std::size_t payloadRegionBytes = 0u;
+  // Exact amount retained in the Unix BridgeRawOwnership ledger. This is a
+  // settlement token, not derived from vector capacity, and is cleared on the
+  // first release so explicit cleanup plus a scope guard is idempotent.
+  std::size_t bridgeRawLedgerOwnedBytes = 0u;
+  D9CCommandChunkWireHeader wireHeader{};
+  bool segmentedTransport = false;
   uint32_t wireVersion = D9C_COMMAND_CHUNK_VERSION;
   uint32_t recordCount = 0;
   uint32_t recordBytes = 0;
@@ -379,6 +395,12 @@ bool prepareOffloadChunk(
     const WireObjectRegistry& registry,
     WireObjectRegistry::RetainFn retain,
     RawCommandChunk& out) noexcept;
+
+bool prepareSegmentedOffloadChunk(
+    const D9CCommandChunkSegmentedTransportV1& transport,
+    std::span<const std::byte> records, std::span<const std::byte> handles,
+    std::span<const std::byte> payload, const WireObjectRegistry& registry,
+    WireObjectRegistry::RetainFn retain, RawCommandChunk& out) noexcept;
 
 // Perf hooks (defined in device_c_replay_offload.cpp) — invoked only when a
 // wait actually occurred, so the uncontended queue paths stay a predicate

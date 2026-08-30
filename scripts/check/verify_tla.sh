@@ -46,6 +46,7 @@ normal_models=(
   QueueT2dReserveCopyCommit
   RenderTapeIdentitySegments
   RenderTapeParallelJoin
+  SegmentedTransportV1
   ReplayScopedDrain
   ResourceLifetime
   SessionCapacityLease
@@ -54,10 +55,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=42
+expected_normal_count=43
 expected_progress_count=1
-expected_counterexample_count=63
-expected_cfg_count=106
+expected_counterexample_count=69
+expected_cfg_count=113
 progress_model=CpuPipelineLifecycle
 progress_cfg_name="$progress_model.progress.cfg"
 
@@ -237,6 +238,17 @@ counterexample_models=(
   "PsoSlotPublication|.counterexample|Invariant LookupFailClosed is violated"
   # A worker that skips the FIFO head can complete ChunkB before StateBlock.
   "StateBlockOrderedReplay|.non-fifo.counterexample|Invariant CompletedIsAcceptedPrefix is violated"
+  # SegmentedTransportV1 fixes the role order ReserveAll -> AdoptAll ->
+  # ExactFixed.  These controls independently remove complete reservation,
+  # atomic adoption,
+  # pre-effect-only fallback, checkpoint restoration, exact ledger commit,
+  # and reclaim wake publication.
+  "SegmentedTransportV1|.partial-reservation.counterexample|Invariant ReservationIsComplete is violated"
+  "SegmentedTransportV1|.partial-adoption.counterexample|Invariant AdoptionIsAtomic is violated"
+  "SegmentedTransportV1|.fallback-after-effect.counterexample|Invariant NoFallbackAfterEffect is violated"
+  "SegmentedTransportV1|.lost-checkpoint.counterexample|Invariant RollbackRestoresCheckpoint is violated"
+  "SegmentedTransportV1|.partial-ledger.counterexample|Invariant LedgerConserved is violated"
+  "SegmentedTransportV1|.missing-wake.counterexample|Invariant WakeOnReclaim is violated"
 )
 
 # Validate the complete on-disk inventory before starting TLC.  This is kept

@@ -1,4 +1,5 @@
 #include "device_c_chunk_registry.hpp"
+#include "device_c_common.hpp"
 
 #include <array>
 #include <atomic>
@@ -229,18 +230,49 @@ void testGenerationWrapRetiresSlot() {
 }
 
 void testPerDeviceVersionNegotiation() {
-  auto* device = reinterpret_cast<D9CDevice*>(std::uintptr_t{1u});
+  D9CDevice legacyDevice(nullptr);
+  D9CCommandChunkNegotiation legacy{
+      .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_CURRENT,
+      .pePreferredVersion = D9C_COMMAND_CHUNK_VERSION,
+  };
+  check(dxmt9p_device_negotiate_command_chunk(&legacyDevice, &legacy) == 0 &&
+            legacy.selectedVersion == D9C_COMMAND_CHUNK_VERSION &&
+            legacy.selectedTransport ==
+                D9C_COMMAND_CHUNK_TRANSPORT_CONTIGUOUS &&
+            legacyDevice.commandChunkTransport ==
+                D9C_COMMAND_CHUNK_TRANSPORT_CONTIGUOUS,
+        "zeroed legacy transport slots negotiate contiguous compatibility");
+
+  D9CDevice deviceStorage(nullptr);
+  auto* device = &deviceStorage;
   static_assert(D9C_COMMAND_CHUNK_DEFAULT_WIRE_VERSION ==
                 D9C_COMMAND_CHUNK_VERSION);
   D9CCommandChunkNegotiation automatic{
       .peSupportedVersions = D9C_COMMAND_CHUNK_CAP_CURRENT,
       .pePreferredVersion = D9C_COMMAND_CHUNK_DEFAULT_WIRE_VERSION,
+      .peSupportedTransports = D9C_COMMAND_CHUNK_TRANSPORT_CONTIGUOUS |
+                               D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1,
+      .pePreferredTransport = D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1,
   };
   check(dxmt9p_device_negotiate_command_chunk(device, &automatic) == 0 &&
             automatic.unixSupportedVersions ==
                 D9C_COMMAND_CHUNK_CAP_CURRENT &&
-            automatic.selectedVersion == D9C_COMMAND_CHUNK_VERSION,
-        "canonical peers negotiate numeric wire version 2");
+            automatic.selectedVersion == D9C_COMMAND_CHUNK_VERSION &&
+            automatic.selectedTransport ==
+                D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1 &&
+            device->commandChunkNegotiated,
+        "canonical peers negotiate wire version 2 and segmented transport");
+
+  auto repeated = automatic;
+  repeated.unixSupportedVersions = 0u;
+  repeated.selectedVersion = 0u;
+  repeated.unixSupportedTransports = 0u;
+  repeated.selectedTransport = 0u;
+  check(dxmt9p_device_negotiate_command_chunk(device, &repeated) == 0 &&
+            repeated.selectedVersion == D9C_COMMAND_CHUNK_VERSION &&
+            repeated.selectedTransport ==
+                D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1,
+        "identical negotiation is idempotent");
 
   D9CCommandChunkNegotiation versionOne{
       .peSupportedVersions = 0x00000001u,
@@ -251,6 +283,18 @@ void testPerDeviceVersionNegotiation() {
                 D9C_COMMAND_CHUNK_CAP_CURRENT &&
             versionOne.selectedVersion == 0u,
         "numeric wire version 1 is rejected");
+
+  auto changedTransport = automatic;
+  changedTransport.pePreferredTransport =
+      D9C_COMMAND_CHUNK_TRANSPORT_CONTIGUOUS;
+  changedTransport.selectedVersion = 0u;
+  changedTransport.selectedTransport = 0u;
+  check(dxmt9p_device_negotiate_command_chunk(device, &changedTransport) < 0 &&
+            changedTransport.selectedVersion == 0u &&
+            changedTransport.selectedTransport == 0u &&
+            device->commandChunkTransport ==
+                D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1,
+        "a second negotiation cannot mutate the latched transport");
 
   D9CCommandChunkNegotiation unsupported{
       .peSupportedVersions = 0x00000004u,

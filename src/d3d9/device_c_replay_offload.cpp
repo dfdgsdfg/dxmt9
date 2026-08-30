@@ -294,7 +294,10 @@ bool prepareOffloadChunk(
     const WireObjectRegistry& registry,
     WireObjectRegistry::RetainFn retain,
     RawCommandChunk& out) noexcept {
-  if (!out.retainedWrappers.empty() || !out.resolvedObjects.empty()) {
+  if (!out.recordBlob.empty() || !out.recordRegion.empty() ||
+      !out.handleRegion.empty() || !out.payloadRegion.empty() ||
+      out.payloadRegionBytes != 0u || out.bridgeRawLedgerOwnedBytes != 0u ||
+      !out.retainedWrappers.empty() || !out.resolvedObjects.empty()) {
     return false;
   }
 
@@ -349,6 +352,118 @@ bool prepareOffloadChunk(
           dxmt9::core::CopyMaterializationOwner::Unix)) {
     ledger->retain(dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
                    candidate.recordBlob.size());
+    candidate.bridgeRawLedgerOwnedBytes = candidate.recordBlob.size();
+  }
+  out = std::move(candidate);
+  return true;
+}
+
+bool prepareSegmentedOffloadChunk(
+    const D9CCommandChunkSegmentedTransportV1& transport,
+    std::span<const std::byte> records, std::span<const std::byte> handles,
+    std::span<const std::byte> payload, const WireObjectRegistry& registry,
+    WireObjectRegistry::RetainFn retain, RawCommandChunk& out) noexcept {
+  if (!out.recordBlob.empty() || !out.recordRegion.empty() ||
+      !out.handleRegion.empty() || !out.payloadRegion.empty() ||
+      out.payloadRegionBytes != 0u || out.bridgeRawLedgerOwnedBytes != 0u ||
+      !out.retainedWrappers.empty() || !out.resolvedObjects.empty()) {
+    return false;
+  }
+  const CommandChunkEnvelope envelope{
+      .version = transport.header.version,
+      .recordCount = transport.header.recordCount,
+      .handleCount = transport.header.handleCount,
+  };
+  // This pass is pre-effect and bounds the three client spans before any
+  // allocation, retain, or queue publication. The final semantic pass below
+  // runs on the copied regions, so every span retained by RawCommandChunk is
+  // owned by Unix.
+  if (!validateSegmentedCommandChunk(transport, records, handles, payload,
+                                     envelope)
+           .valid()) {
+    return false;
+  }
+  RawCommandChunk candidate;
+  try {
+    auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+        dxmt9::core::CopyMaterializationOwner::Unix);
+    std::optional<dxmt9::core::CopyMaterializationEvent> regionCopy;
+    if (ledger) {
+      regionCopy.emplace(
+          ledger, dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
+          records.size() + handles.size() + payload.size());
+    }
+    const auto recordCount = transport.header.recordCount;
+    const auto handleCount = transport.header.handleCount;
+    candidate.recordRegion.resize(recordCount);
+    candidate.handleRegion.resize(handleCount);
+    candidate.payloadRegionBytes = payload.size();
+    candidate.payloadRegion.resize(
+        (candidate.payloadRegionBytes + sizeof(std::uint32_t) - 1u) /
+        sizeof(std::uint32_t));
+    if (recordCount != 0u) {
+      std::memcpy(candidate.recordRegion.data(), records.data(), records.size());
+    }
+    if (handleCount != 0u) {
+      std::memcpy(candidate.handleRegion.data(), handles.data(), handles.size());
+    }
+    if (candidate.payloadRegionBytes != 0u) {
+      std::memcpy(candidate.payloadRegion.data(), payload.data(),
+                  candidate.payloadRegionBytes);
+    }
+    candidate.resolvedObjects.resize(envelope.handleCount);
+    candidate.retainedWrappers.resize(envelope.handleCount);
+    candidate.ledgerTargets.reserve(envelope.handleCount);
+    candidate.bufferSnapshots.reserve(envelope.handleCount);
+  } catch (...) {
+    return false;
+  }
+  const auto ownedRecords = std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(candidate.recordRegion.data()),
+      candidate.recordRegion.size() * sizeof(D9CCommandChunkWireRecordHeader));
+  const auto ownedHandles = std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(candidate.handleRegion.data()),
+      candidate.handleRegion.size() * sizeof(D9CCommandChunkWireHandleEntry));
+  const auto ownedPayload = std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(candidate.payloadRegion.data()),
+      candidate.payloadRegionBytes);
+  ImportedChunkView view;
+  if (!validateSegmentedCommandChunk(transport, ownedRecords, ownedHandles,
+                                     ownedPayload, envelope, &view)
+           .valid() ||
+      !registry.resolveAndRetain(view.handles, candidate.resolvedObjects,
+                                 retain)) {
+    return false;
+  }
+  for (std::size_t i = 0u; i < view.handles.size(); ++i) {
+    candidate.retainedWrappers[i] = {
+        .kind = view.handles[i].kind, .ptr = candidate.resolvedObjects[i]};
+  }
+  candidate.wireHeader = transport.header;
+  candidate.segmentedTransport = true;
+  candidate.wireVersion = envelope.version;
+  candidate.recordCount = envelope.recordCount;
+  candidate.handleCount = envelope.handleCount;
+  candidate.recordBytes = candidate.wireHeader.payloadArenaOffset +
+                          candidate.wireHeader.payloadArenaSize;
+  candidate.preflightValidated = true;
+  candidate.hasPresent = std::any_of(
+      view.records.begin(), view.records.end(), [](const auto& record) {
+        return record.type == D9C_COMMAND_RECORD_PRESENT;
+      });
+  candidate.renderTapeCaptureToken = transport.renderTapeCaptureToken;
+  candidate.renderTapeEventOrdinal = transport.renderTapeEventOrdinal;
+  if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+          dxmt9::core::CopyMaterializationOwner::Unix)) {
+    const auto ownedBytes =
+        candidate.recordRegion.size() *
+            sizeof(D9CCommandChunkWireRecordHeader) +
+        candidate.handleRegion.size() *
+            sizeof(D9CCommandChunkWireHandleEntry) +
+        candidate.payloadRegionBytes;
+    ledger->retain(dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
+                   ownedBytes);
+    candidate.bridgeRawLedgerOwnedBytes = ownedBytes;
   }
   out = std::move(candidate);
   return true;

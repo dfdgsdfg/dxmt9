@@ -64,6 +64,10 @@ struct ChunkFixture {
     return at<D9CCommandChunkWireHeader>(bytes, 0u);
   }
 
+  const D9CCommandChunkWireHeader& header() const {
+    return *reinterpret_cast<const D9CCommandChunkWireHeader*>(bytes.data());
+  }
+
   D9CCommandChunkWireRecordHeader& record(std::size_t index) {
     return at<D9CCommandChunkWireRecordHeader>(
         bytes, header().recordTableOffset +
@@ -580,6 +584,83 @@ void testPrevalidatedViewReconstruction() {
         "truncated storage cannot reconstruct a prevalidated view");
 }
 
+D9CWireHandle wireHandle(const void* value) {
+  const auto bits = static_cast<std::uint64_t>(
+      reinterpret_cast<std::uintptr_t>(value));
+  return D9CWireHandle{static_cast<std::uint32_t>(bits),
+                       static_cast<std::uint32_t>(bits >> 32u)};
+}
+
+void testSegmentedTransportSharesCanonicalValidation() {
+  const D9CCommandChunkWireUpdateTexture update{0u, 1u};
+  const RecordSpec spec{
+      .type = D9C_COMMAND_RECORD_UPDATE_TEXTURE,
+      .payload = bytesOf(update),
+      .handles = {
+          handle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x810000001ull),
+          handle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x810000002ull),
+      },
+  };
+  const auto contiguous = makeChunk(spec);
+  std::vector<D9CCommandChunkWireRecordHeader> records(1u);
+  std::vector<D9CCommandChunkWireHandleEntry> handles(2u);
+  std::vector<std::uint32_t> payload(2u);
+  std::memcpy(records.data(), contiguous.bytes.data() +
+                                  contiguous.header().recordTableOffset,
+              sizeof(records[0]));
+  std::memcpy(handles.data(), contiguous.bytes.data() +
+                                  contiguous.header().handleTableOffset,
+              handles.size() * sizeof(handles[0]));
+  std::memcpy(payload.data(), contiguous.bytes.data() +
+                                  contiguous.header().payloadArenaOffset,
+              sizeof(update));
+
+  D9CCommandChunkSegmentedTransportV1 segmented{};
+  segmented.header = contiguous.header();
+  segmented.records = wireHandle(records.data());
+  segmented.recordBytes = sizeof(records[0]);
+  segmented.handles = wireHandle(handles.data());
+  segmented.handleBytes =
+      static_cast<std::uint32_t>(handles.size() * sizeof(handles[0]));
+  segmented.payload = wireHandle(payload.data());
+  segmented.payloadBytes = sizeof(update);
+  segmented.renderTapeCaptureToken = 0x1020304050607080ull;
+  segmented.renderTapeEventOrdinal = 7u;
+
+  const auto recordBytes = std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(records.data()),
+      records.size() * sizeof(records[0]));
+  const auto handleBytes = std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(handles.data()),
+      handles.size() * sizeof(handles[0]));
+  const auto payloadBytes = std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(payload.data()), sizeof(update));
+  ImportedChunkView view;
+  check(validateSegmentedCommandChunk(
+            segmented, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope, &view)
+            .valid(),
+        "segmented regions share canonical semantic validation");
+  check(view.records.size() == 1u && view.handles.size() == 2u &&
+            view.record(0u).payload.size() == sizeof(update),
+        "segmented view exposes typed records, handles, and payload");
+
+  auto wrongBytes = segmented;
+  ++wrongBytes.recordBytes;
+  check(validateSegmentedCommandChunk(
+            wrongBytes, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
+        "segmented live table byte count is exact");
+  auto wrongOffset = segmented;
+  ++wrongOffset.header.payloadArenaOffset;
+  check(validateSegmentedCommandChunk(
+            wrongOffset, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
+        "segmented virtual offsets retain canonical alignment gaps");
+}
+
 struct RejectObservers {
   std::uint32_t registryRetains = 0u;
   std::uint32_t stateMutations = 0u;
@@ -783,6 +864,7 @@ int main() {
     testConstantUpAndPaddingRejects();
     testFailedValidationDoesNotPublishViewOrAllocatePerRecord();
     testPrevalidatedViewReconstruction();
+    testSegmentedTransportSharesCanonicalValidation();
     testTableAndSeededMalformedPropertyCorpus();
   } catch (const TestFailure& error) {
     std::cerr << "chunk_record_validation_spec failed: " << error.what()

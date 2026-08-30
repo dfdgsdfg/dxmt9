@@ -540,3 +540,39 @@ failure, capture reject/throw, Reset recovery, and retry. It must assert exact
 HRESULT/poison disposition, no leaked retain, no partial blob publication, and
 no duplicate accepted command. An unavailable fault seam remains an explicit
 gap; ordinary successful Wine execution cannot replace it.
+
+**R-CORE-REC-7.6** A future multi-record CPU-ready Tape producer must own one
+complete immutable semantic batch before transport begins. The batch must be
+pointer-free at the PE/unix boundary, while a trusted in-process recorder
+pointer may be used only synchronously inside the producer owner to read
+validated source values; no pointer, borrow, span, COM identity, or callback
+capture may cross a role boundary or survive the call. A pure first pass must
+compute exact record count, unique qualified-handle count, and payload bytes
+without retaining, consuming `PendingDelta`, journaling capture, publishing a
+source, or changing application-visible state. The total final wire extent,
+including fixed header, record/handle tables, payload, alignment, and padding,
+must be bounded by 32 MiB; canonical D9C V2 sizes are a 48-byte header,
+32-byte record row, 16-byte handle row, and 16-byte section descriptor. The
+fixed `D9CCommandChunkSegmentedTransportV1` descriptor is 112 bytes, with its
+last 16 bytes carrying the capture token and event ordinal; role byte counts
+exclude inter-table alignment, which is reconstructed from canonical offsets.
+An overflow or invalid checked arithmetic result rejects before retention or
+publication.
+
+**R-CORE-REC-7.7** The transport handoff must expose exactly three ordered
+roles: `ReserveRole`, `AdoptRole`, and `EmitRole`. `ReserveAll` reserves every
+final region and ownership/capacity credit from the pure counts. `AdoptAll`
+must adopt the complete batch atomically, including every retained identity and
+semantic-ledger entry; partial adoption is invalid. `ExactFixed` emission may
+run only after complete adoption and must visit the same immutable batch to
+write one contiguous final CPU Tape extent. A later role may not bypass or
+re-enter an earlier role.
+
+**R-CORE-REC-7.8** A failure before adoption and before any visible effect may
+restore the exact transaction checkpoint and use at most one contiguous,
+at-most-once legacy fallback. A failure after adoption, receipt activation, or
+the first ExactFixed effect is effect-unknown and must poison/fail-stop; it
+must not retry, duplicate the batch, or route through legacy fallback. Retain,
+capacity, ledger, source order, and FIFO settlement counts must conserve at
+every role transition, and reclaim that releases blocked capacity must publish
+the wake/progress signal used by the waiting producer.

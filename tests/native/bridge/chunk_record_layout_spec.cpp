@@ -20,6 +20,7 @@ static_assert(isWirePod<D9CCommandChunkWireDrawHeader>);
 static_assert(isWirePod<D9CCommandChunk>);
 static_assert(isWirePod<D9CWireObjectIdentity>);
 static_assert(isWirePod<D9CCommandChunkNegotiation>);
+static_assert(isWirePod<D9CCommandChunkSegmentedTransportV1>);
 static_assert(D9C_COMMAND_CHUNK_VERSION == 2u);
 static_assert(D9C_COMMAND_CHUNK_WIRE_VERSION == 2u);
 static_assert(D9C_COMMAND_CHUNK_CAP_CURRENT == 0x00000002u);
@@ -38,6 +39,15 @@ static_assert(sizeof(D9CWireObjectIdentity) == 16u);
 static_assert(alignof(D9CWireObjectIdentity) == 8u);
 static_assert(sizeof(D9CCommandChunkNegotiation) == 32u);
 static_assert(alignof(D9CCommandChunkNegotiation) == 4u);
+static_assert(sizeof(D9CCommandChunkSegmentedTransportV1) == 112u);
+static_assert(alignof(D9CCommandChunkSegmentedTransportV1) == 8u);
+static_assert(offsetof(D9CCommandChunkSegmentedTransportV1, records) == 48u);
+static_assert(offsetof(D9CCommandChunkSegmentedTransportV1, handles) == 64u);
+static_assert(offsetof(D9CCommandChunkSegmentedTransportV1, payload) == 80u);
+static_assert(offsetof(D9CCommandChunkSegmentedTransportV1,
+                       renderTapeCaptureToken) == 96u);
+static_assert(offsetof(D9CCommandChunkSegmentedTransportV1,
+                       renderTapeEventOrdinal) == 104u);
 static_assert(sizeof(D9CCommandChunk) == 48u);
 static_assert(alignof(D9CCommandChunk) == 8u);
 static_assert(offsetof(D9CCommandChunk, records) == 12u);

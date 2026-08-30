@@ -160,12 +160,12 @@ void dxmt9c_read(D9CDevice *device, D9CTestRecord *output);
         )
         canonical = GENERATOR.canonicalize_schema(protos, records)
 
-        self.assertEqual(len(protos), 165)
+        self.assertEqual(len(protos), 166)
         self.assertEqual(protos[0].name, "dxmt9c_factory_create")
         self.assertEqual(protos[-1].name, "dxmt9c_vdecl_get_declaration")
         self.assertIn("op|ordinal=0|dxmt9c_factory_create|", canonical)
         self.assertIn(
-            "op|ordinal=164|dxmt9c_vdecl_get_declaration|", canonical
+            "op|ordinal=165|dxmt9c_vdecl_get_declaration|", canonical
         )
         record_names = {record.name for record in records}
         self.assertIn("D9CCommandChunk", record_names)
@@ -173,6 +173,32 @@ void dxmt9c_read(D9CDevice *device, D9CTestRecord *output);
         self.assertIn("Dxmt9WinemetalCompileShaderParams", record_names)
         self.assertIn("layout-context|", canonical)
         self.assertNotEqual(GENERATOR.compute_bridge_abi_hash(protos, records), 0)
+
+    def test_segmented_transport_uses_custom_wow64_adapter(self) -> None:
+        device_header = GENERATOR.DEVICE_C_HEADER
+        unix_schema = REPO_ROOT / "src" / "winemetal" / "winemetal_unix_schema.h"
+        protos = GENERATOR.collect_prototypes([unix_schema, device_header])
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "dispatch.cpp"
+            GENERATOR.write_server_cpp(output, "ops.h", protos)
+            generated = output.read_text()
+        self.assertIn("thunk_wow64_dxmt9c_device_commit_chunk_segmented", generated)
+        self.assertIn("segmentedRoleValid", generated)
+        self.assertIn("token.hi != 0u", generated)
+        self.assertIn("static_cast<std::uint64_t>(token.lo) + bytes >", generated)
+        self.assertIn("(std::uint64_t{1} << 32u)", generated)
+        self.assertIn("D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES", generated)
+        self.assertIn("ScopedWow64NativePointerAllowance records_allowance", generated)
+        self.assertIn("ScopedWow64NativePointerAllowance handles_allowance", generated)
+        self.assertIn("ScopedWow64NativePointerAllowance payload_allowance", generated)
+        self.assertIn("dxmt9c_device_commit_chunk_segmented(", generated)
+        self.assertNotIn("std::vector<std::uint8_t> blob(static_cast<std::size_t>(totalBytes))", generated)
+
+    def test_bridge_classification_covers_segmented_commit(self) -> None:
+        source = (REPO_ROOT / "src" / "winemetal" / "winemetal_bridge.cpp").read_text()
+        self.assertGreaterEqual(
+            source.count("BridgeOpcode::dxmt9c_device_commit_chunk_segmented"), 2
+        )
 
 
 if __name__ == "__main__":

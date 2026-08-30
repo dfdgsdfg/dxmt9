@@ -2328,6 +2328,63 @@ void testAllFamilyExactDifferential() {
               imported.records[0].type == policy.recordType,
           "all-family exact effective import matches the semantic row");
     exact.resetAndReleaseRetained();
+
+    CommandChunkBuilder segmentedBuilder;
+    check(emit(policy.kind, segmentedBuilder),
+          "all-family segmented differential fixture emits");
+    const auto segmented = segmentedBuilder.sealSegmented(0xabcdu, 17u);
+    check(segmented.valid() && segmented.transport.header.recordCount == 1u &&
+              segmented.transport.header.handleCount == legacyHandles &&
+              segmented.transport.header.payloadArenaSize == legacyPayload,
+          "all-family segmented differential fixture seals");
+    const auto roleBytes = [](D9CWireHandle token,
+                              std::uint32_t bytes) noexcept {
+      return std::span<const std::byte>(
+          reinterpret_cast<const std::byte*>(
+              static_cast<std::uintptr_t>(d9cWireHandleValue(token))),
+          bytes);
+    };
+    const auto segmentedRecords = roleBytes(
+        segmented.transport.records, segmented.transport.recordBytes);
+    const auto segmentedHandles = roleBytes(
+        segmented.transport.handles, segmented.transport.handleBytes);
+    const auto segmentedPayload = roleBytes(
+        segmented.transport.payload, segmented.transport.payloadBytes);
+    ImportedChunkView segmentedImported;
+    const auto segmentedValidation =
+        dxmt9::d3d9::validateSegmentedCommandChunk(
+            segmented.transport, segmentedRecords, segmentedHandles,
+            segmentedPayload,
+            CommandChunkEnvelope{
+                .version = D9C_COMMAND_CHUNK_VERSION,
+                .recordCount = 1u,
+                .handleCount = legacyHandles,
+            },
+            &segmentedImported);
+    check(segmentedValidation.valid() &&
+              segmentedImported.records.size() == 1u &&
+              segmentedImported.records[0].type == policy.recordType,
+          "all-family segmented effective import matches the semantic row");
+
+    std::vector<std::byte> reconstructed(segmented.wireBytes);
+    std::memcpy(reconstructed.data(), &segmented.transport.header,
+                sizeof(segmented.transport.header));
+    std::memcpy(reconstructed.data() +
+                    segmented.transport.header.recordTableOffset,
+                segmentedRecords.data(), segmentedRecords.size());
+    if (!segmentedHandles.empty()) {
+      std::memcpy(reconstructed.data() +
+                      segmented.transport.header.handleTableOffset,
+                  segmentedHandles.data(), segmentedHandles.size());
+    }
+    if (!segmentedPayload.empty()) {
+      std::memcpy(reconstructed.data() +
+                      segmented.transport.header.payloadArenaOffset,
+                  segmentedPayload.data(), segmentedPayload.size());
+    }
+    check(reconstructed == legacyBytes,
+          "all-family segmented canonical concatenation matches contiguous V2");
+    segmentedBuilder.resetAndReleaseRetained();
   }
 
   check(sourceTexture.refs == 1u && destinationTexture.refs == 1u &&
@@ -2436,6 +2493,135 @@ void testLargeHandleSealByteIdentityAndLedger() {
         "reset reclaims ledger-retained final blob bytes");
 }
 
+void testSegmentedSealUsesLiveFinalRegions() {
+  D9CTexture source;
+  D9CTexture destination;
+  const auto sourceRef = wireRef(&source, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                 0x710000000ull);
+  const auto destinationRef = wireRef(&destination,
+                                      D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                      0x720000000ull);
+  dxmt9::core::CopyMaterializationLedger ledger;
+  dxmt9::core::ScopedCopyMaterializationLedger observe(
+      dxmt9::core::CopyMaterializationOwner::Pe, ledger);
+  CommandChunkBuilder builder;
+  std::uint32_t sourceIndex = 0u;
+  std::uint32_t destinationIndex = 0u;
+  check(builder.beginRecord(D9C_COMMAND_RECORD_UPDATE_TEXTURE) &&
+            builder.appendHandle(sourceRef, D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                 sourceIndex) &&
+            builder.appendHandle(destinationRef,
+                                 D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                 destinationIndex) &&
+            builder.appendPayloadValue(D9CCommandChunkWireUpdateTexture{
+                .srcHandleIndex = sourceIndex,
+                .dstHandleIndex = destinationIndex}) &&
+            builder.commitRecord(),
+        "segmented fixture builds one canonical record");
+
+  const auto segmented = builder.sealSegmented(0x1111u, 0x2222u);
+  check(segmented.valid() &&
+            segmented.transport.recordBytes ==
+                sizeof(D9CCommandChunkWireRecordHeader) &&
+            segmented.transport.handleBytes ==
+                2u * sizeof(D9CCommandChunkWireHandleEntry) &&
+            segmented.transport.payloadBytes ==
+                sizeof(D9CCommandChunkWireUpdateTexture) &&
+            segmented.transport.renderTapeCaptureToken == 0x1111u &&
+            segmented.transport.renderTapeEventOrdinal == 0x2222u,
+        "segmented seal exposes live role extents and capture metadata");
+  check(ledger.snapshot(dxmt9::core::CopyMaterializationClass::PeSealRecords)
+                .calls == 0u &&
+            ledger.snapshot(dxmt9::core::CopyMaterializationClass::PeSealHandles)
+                .calls == 0u &&
+            ledger.snapshot(dxmt9::core::CopyMaterializationClass::PeSealPayload)
+                .calls == 0u,
+        "segmented seal performs no canonical table or payload copies");
+  check(ledger.snapshot(dxmt9::core::CopyMaterializationClass::PeWireFinal)
+                .calls == 0u &&
+            ledger.snapshot(dxmt9::core::CopyMaterializationClass::PeWireView)
+                    .calls == 1u &&
+            ledger.snapshot(dxmt9::core::CopyMaterializationClass::PeWireView)
+                    .retainedBytes == segmented.wireBytes,
+        "segmented seal tracks ownership as a view, not materialization");
+
+  const auto& transport = segmented.transport;
+  const auto records = std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(static_cast<std::uintptr_t>(
+          d9cWireHandleValue(transport.records))), transport.recordBytes);
+  const auto handles = std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(static_cast<std::uintptr_t>(
+          d9cWireHandleValue(transport.handles))), transport.handleBytes);
+  const auto payload = std::span<const std::byte>(
+      reinterpret_cast<const std::byte*>(static_cast<std::uintptr_t>(
+          d9cWireHandleValue(transport.payload))), transport.payloadBytes);
+  ImportedChunkView imported{};
+  check(dxmt9::d3d9::importPrevalidatedSegmentedCommandChunk(
+            transport.header, records, handles, payload,
+            CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_VERSION,
+                                 .recordCount = 1u,
+                                 .handleCount = 2u},
+            imported) &&
+            imported.records.size() == 1u && imported.handles.size() == 2u &&
+            imported.payloadArena.size() == payload.size(),
+        "segmented role view imports through the canonical provider view");
+  builder.resetAndReleaseRetained();
+  check(source.refs == 1u && destination.refs == 1u &&
+            ledger.snapshot(dxmt9::core::CopyMaterializationClass::PeWireFinal)
+                    .retainedBytes == 0u &&
+            ledger.snapshot(dxmt9::core::CopyMaterializationClass::PeWireView)
+                    .retainedBytes == 0u,
+        "segmented reset releases pins and final-region accounting once");
+
+  // Clear has a valid fixed payload but no resource handles. The role token
+  // must still be null for the empty handle region (including after a repeat
+  // seal), while reset keeps the builder reusable.
+  CommandChunkBuilder zeroHandle;
+  check(zeroHandle.beginRecord(D9C_COMMAND_RECORD_CLEAR) &&
+            zeroHandle.appendPayloadValue(D9CCommandChunkWireClear{
+                .flags = 0u, .colorARGB = 0u, .z = 1.0f, .stencil = 0u,
+                .rectCount = 0u,
+                .rectOffset = sizeof(D9CCommandChunkWireClear)}) &&
+            zeroHandle.commitRecord(),
+        "zero-handle record commits");
+  const auto zeroHandles = zeroHandle.sealSegmented();
+  check(zeroHandles.valid() && zeroHandles.transport.handleBytes == 0u &&
+            d9cWireHandleValue(zeroHandles.transport.handles) == 0u,
+        "zero-handle segmented role has a null pointer token");
+  check(zeroHandle.sealSegmented().valid(),
+        "repeated zero-handle segmented seal is stable");
+  zeroHandle.reset();
+  check(zeroHandle.recordCount() == 0u && zeroHandle.handleCount() == 0u &&
+            zeroHandle.payloadBytes() == 0u,
+        "segmented reset clears zero-handle regions");
+
+  const auto emptyPlan =
+      dxmt9::d3d9::pe::planExactCommandChunkLayout(0u, 0u, 0u);
+  const D9CCommandChunkWireHeader emptyHeader{
+      .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+      .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+      .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+      .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+      .recordTableOffset = emptyPlan.recordTableOffset,
+      .recordCount = 0u,
+      .handleTableOffset = emptyPlan.handleTableOffset,
+      .handleCount = 0u,
+      .payloadArenaOffset = emptyPlan.payloadArenaOffset,
+      .payloadArenaSize = 0u,
+      .reserved0 = 0u,
+      .reserved1 = 0u,
+  };
+  ImportedChunkView emptyImported{};
+  check(dxmt9::d3d9::importPrevalidatedSegmentedCommandChunk(
+            emptyHeader, {}, {}, {},
+            CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_VERSION,
+                                 .recordCount = 0u,
+                                 .handleCount = 0u},
+            emptyImported) && emptyImported.records.empty() &&
+            emptyImported.handles.empty() && emptyImported.payloadArena.empty(),
+        "zero-payload segmented roles import with null pointers");
+}
+
 }  // namespace
 
 int main() {
@@ -2459,6 +2645,7 @@ int main() {
     testDeviceLostExactDiscardReturnsToLegacy();
     testAllFamilyExactDifferential();
     testLargeHandleSealByteIdentityAndLedger();
+    testSegmentedSealUsesLiveFinalRegions();
   } catch (const TestFailure& error) {
     std::cerr << "pe_chunk_record_value_spec failed: " << error.what()
               << '\n';

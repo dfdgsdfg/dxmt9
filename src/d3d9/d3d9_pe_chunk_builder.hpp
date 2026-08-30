@@ -1,6 +1,7 @@
 #pragma once
 
 #include "d3d9_pe_retainer.hpp"
+#include "d3d9_pe_wire_handle.hpp"
 #include "device_c_chunk_schema.hpp"
 
 #include <algorithm>
@@ -430,6 +431,41 @@ struct SealedCommandChunk {
   bool valid() const noexcept { return !blob.empty(); }
 };
 
+// A segmented seal is a view over the builder's three immutable final
+// regions.  The vectors remain owned by CommandChunkBuilder; this descriptor
+// is therefore only valid until the next reset and is consumed synchronously
+// by the PE bridge.  The header offsets describe the canonical concatenation
+// (header, record table, handle table, payload arena), while each role token
+// points at the corresponding table/arena without materializing that
+// concatenation.
+struct SegmentedCommandChunk {
+  D9CCommandChunkSegmentedTransportV1 transport{};
+  std::uint32_t wireBytes = 0u;
+
+  bool valid() const noexcept {
+    const auto expectedRecordBytes = static_cast<std::uint64_t>(
+        transport.header.recordCount) *
+        sizeof(D9CCommandChunkWireRecordHeader);
+    const auto expectedHandleBytes = static_cast<std::uint64_t>(
+        transport.header.handleCount) * sizeof(D9CCommandChunkWireHandleEntry);
+    const auto roleValid = [](D9CWireHandle role,
+                              std::uint32_t bytes) noexcept {
+      return (bytes == 0u) == (d9cWireHandleValue(role) == 0u);
+    };
+    return transport.header.version == D9C_COMMAND_CHUNK_WIRE_VERSION &&
+           transport.header.recordCount != 0u &&
+           transport.header.recordTableOffset ==
+               D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE &&
+           expectedRecordBytes == transport.recordBytes &&
+           expectedHandleBytes == transport.handleBytes &&
+           transport.payloadBytes == transport.header.payloadArenaSize &&
+           roleValid(transport.records, transport.recordBytes) &&
+           roleValid(transport.handles, transport.handleBytes) &&
+           roleValid(transport.payload, transport.payloadBytes) &&
+           wireBytes != 0u;
+  }
+};
+
 struct PeCommittedRecordSemanticView {
   D9CCommandChunkWireRecordHeader record{};
   std::uint64_t recordOrdinal = 0u;
@@ -629,6 +665,13 @@ class CommandChunkBuilder {
   void rollbackRecord() noexcept;
 
   SealedCommandChunk seal() noexcept;
+  // Seal the legacy producer regions in place for SegmentedTransportV1.
+  // Unlike seal(), this performs no table/payload relocation and no final
+  // allocation: records_, handles_, and payload_ become immutable until the
+  // next reset, and the bridge receives them as the three fixed roles.
+  SegmentedCommandChunk sealSegmented(
+      std::uint64_t renderTapeCaptureToken = 0u,
+      std::uint64_t renderTapeEventOrdinal = 0u) noexcept;
   // Chunk boundary after a successful commit: keeps recently-named wrapper
   // pins warm across the boundary (see D3D9PePendingCommandRetainer).
   void reset() noexcept;
@@ -1233,6 +1276,7 @@ class CommandChunkBuilder {
   std::uint64_t nextRecordOrdinal_ = 1u;
   std::uint64_t lastCommittedRecordOrdinal_ = 0u;
   bool sealed_ = false;
+  bool segmentedSealed_ = false;
   // Fits the existing tail padding on both supported PE pointer widths; the
   // PeRecorderState x86/x64 footprint assertions remain unchanged.
   bool exactFinalLayout_ = false;

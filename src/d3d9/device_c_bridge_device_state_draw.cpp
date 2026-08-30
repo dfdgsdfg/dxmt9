@@ -292,6 +292,12 @@ extern "C" int32_t dxmt9c_device_commit_chunk(D9CDevice* arg0, const D9CCommandC
   return dxmt9p_device_commit_chunk(arg0, chunk);
 }
 
+extern "C" int32_t dxmt9c_device_commit_chunk_segmented(
+    D9CDevice* arg0,
+    const D9CCommandChunkSegmentedTransportV1* transport) {
+  return dxmt9p_device_commit_chunk_segmented(arg0, transport);
+}
+
 extern "C" int32_t dxmt9c_device_reserve_render_tape_present_capture(
     D9CDevice* arg0) {
   DXMT9_DRAIN_OR_RETURN(arg0, "dxmt9c_device_reserve_render_tape_present_capture");

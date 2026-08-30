@@ -105,4 +105,16 @@ bool importPrevalidatedCommandChunk(
     std::span<const std::byte> blob, const CommandChunkEnvelope& envelope,
     ImportedChunkView& out) noexcept;
 
+CommandChunkValidationResult validateSegmentedCommandChunk(
+    const D9CCommandChunkSegmentedTransportV1& transport,
+    std::span<const std::byte> records, std::span<const std::byte> handles,
+    std::span<const std::byte> payload, const CommandChunkEnvelope& envelope,
+    ImportedChunkView* out = nullptr) noexcept;
+
+bool importPrevalidatedSegmentedCommandChunk(
+    const D9CCommandChunkWireHeader& header,
+    std::span<const std::byte> records, std::span<const std::byte> handles,
+    std::span<const std::byte> payload, const CommandChunkEnvelope& envelope,
+    ImportedChunkView& out) noexcept;
+
 }  // namespace dxmt9::d3d9

@@ -24,6 +24,29 @@ pe_semantic_projection_spec = executable(
 
 test('dxmt9-pe-semantic-projection-spec', pe_semantic_projection_spec)
 
+# Fixed-role SegmentedTransportV1 semantic-batch seam. This host-only target
+# feeds every production producer family through the immutable owner and
+# compares ExactFixed with canonical contiguous D9C V2 bytes.
+pe_semantic_batch_spec = executable(
+  'dxmt9-pe-semantic-batch-spec',
+  [
+    'pe_semantic_batch_spec.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
+    '../../../src/d3d9/d3d9_pe_batch.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_draw.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_nondraw.cpp',
+  ],
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  cpp_args: ['-DDXMT9_PE_SHADOW_TEST_SEAM=1'],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-pe-semantic-batch-spec', pe_semantic_batch_spec)
+
 pe_fvf_transaction_spec = executable(
   'dxmt9-pe-fvf-transaction-spec',
   'pe_fvf_transaction_spec.cpp',

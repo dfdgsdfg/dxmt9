@@ -43,7 +43,8 @@ void D3D9DeviceImpl::clearPendingCommandChunk(
 HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
     PeRecorderFlushReason commitReason, const D9CCommandChunk& chunk,
     const PeCommandChunkCommitInfo& info,
-    dxmt9::d3d9::pe::RecorderCommitPhase* settledPhase) {
+    dxmt9::d3d9::pe::RecorderCommitPhase* settledPhase,
+    const dxmt9::d3d9::pe::SegmentedCommandChunk* segmented) {
             PeCaptureState *const captureState =
                 peCaptureState_ ? &*peCaptureState_ : nullptr;
             const bool capturePresent = captureState &&
@@ -108,7 +109,10 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
                         captureState->renderTapeCapture.eventCount()) + 1u;
             }
             const HRESULT hr = hr32(
-                dxmt9c_device_commit_chunk(dev_, &submittedChunk));
+                segmented
+                    ? dxmt9c_device_commit_chunk_segmented(
+                          dev_, &segmented->transport)
+                    : dxmt9c_device_commit_chunk(dev_, &submittedChunk));
             const auto composedBridgePlan =
                 dxmt9::d3d9::pe::planRecorderSettlement({
                     .point = dxmt9::d3d9::pe::RecorderSettlementPoint::Bridge,
@@ -370,8 +374,31 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(
         return S_OK;
     }
     const auto payloadBytes = recorderState_.commandChunk.payloadBytes();
-    const auto sealed = recorderState_.commandChunk.seal();
-    if (!sealed.valid() || sealed.blob.size() > 0xffffffffull) {
+    // Render Tape currently consumes the canonical contiguous blob on the PE
+    // side for handle admission, first-access inspection, and capture. Keep
+    // that path as the explicit canonical fallback; ordinary production with
+    // no Tape owner can pass the builder's three immutable regions directly.
+    const bool useSegmented =
+        recorderState_.commandChunkTransport ==
+            D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1 &&
+        peCaptureState_ == nullptr;
+    dxmt9::d3d9::pe::SegmentedCommandChunk segmented{};
+    dxmt9::d3d9::pe::SealedCommandChunk sealed{};
+    if (useSegmented) {
+        segmented = recorderState_.commandChunk.sealSegmented();
+    }
+    if (useSegmented && !segmented.valid()) {
+        // Segmented sealing is pre-effect and allocation-free. A malformed
+        // or over-limit region may still take the one canonical fallback;
+        // once commit is entered no second transport is attempted.
+        segmented = {};
+    }
+    if (!segmented.valid()) {
+        sealed = recorderState_.commandChunk.seal();
+    }
+    if ((!segmented.valid() && !sealed.valid()) ||
+        (segmented.valid() && segmented.wireBytes > 0xffffffffull) ||
+        (!segmented.valid() && sealed.blob.size() > 0xffffffffull)) {
         const auto sealPlan = dxmt9::d3d9::pe::settleRecorderCommit({
             .phase = dxmt9::d3d9::pe::RecorderCommitPhase::Unsealed,
             .event = dxmt9::d3d9::pe::RecorderCommitEvent::SealFailed,
@@ -391,21 +418,31 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(
     }
     D9CCommandChunk chunk{};
     chunk.version = D9C_COMMAND_CHUNK_VERSION;
-    chunk.recordCount = sealed.recordCount;
-    chunk.recordBytes = static_cast<std::uint32_t>(sealed.blob.size());
-    chunk.records = toWireHandle(sealed.blob.data());
-    chunk.handleCount = sealed.handleCount;
+    if (segmented.valid()) {
+        chunk.recordCount = segmented.transport.header.recordCount;
+        // This metadata chunk is used only for counters and the cold
+        // settlement path; the segmented descriptor is the bridge payload.
+        chunk.recordBytes = segmented.wireBytes;
+        chunk.records = segmented.transport.records;
+        chunk.handleCount = segmented.transport.header.handleCount;
+    } else {
+        chunk.recordCount = sealed.recordCount;
+        chunk.recordBytes = static_cast<std::uint32_t>(sealed.blob.size());
+        chunk.records = toWireHandle(sealed.blob.data());
+        chunk.handleCount = sealed.handleCount;
+    }
     const PeCommandChunkCommitInfo info{
-        .recordCount = sealed.recordCount,
+        .recordCount = chunk.recordCount,
         .payloadBytes = static_cast<std::uint32_t>(std::min<std::size_t>(
             payloadBytes, std::numeric_limits<std::uint32_t>::max())),
-        .handleCount = sealed.handleCount,
+        .handleCount = chunk.handleCount,
         .wireBytes = chunk.recordBytes,
     };
     dxmt9::d3d9::pe::RecorderCommitPhase settlementPhase =
         dxmt9::d3d9::pe::RecorderCommitPhase::Sealed;
     const HRESULT hr =
-        commitPendingCommandChunk(reason, chunk, info, &settlementPhase);
+        commitPendingCommandChunk(reason, chunk, info, &settlementPhase,
+                                  segmented.valid() ? &segmented : nullptr);
     if (SUCCEEDED(hr)) {
         const auto beginDrain = dxmt9::d3d9::pe::settleRecorderCommit({
             .phase = settlementPhase,
