@@ -1781,10 +1781,12 @@ void QueueLifecycleController::observePipelineOwnerTransition(
                         std::uint32_t borrows = 0,
                         std::uint32_t joined = 0,
                         std::uint32_t total = 1,
-                        bool authority = false) {
+                        bool authority = false,
+                        PipelineOwner owner = PipelineOwner::Queue) {
     emitPipelineLifecycleEvent(sink, PipelineLifecycleEvent{
         .identity = identity, .from = from, .to = to,
         .payloadKind = effectivePayloadKind, .disposition = disposition,
+        .owner = owner,
         .ownedBytes = metadata->usedBytes, .outstandingBorrows = borrows,
         .constructedCount = 1, .requiredCount = 1,
         .joinedChildren = joined, .totalChildren = total,
@@ -1797,7 +1799,8 @@ void QueueLifecycleController::observePipelineOwnerTransition(
       // the CommitPublish edge as their one SourceArrival transition.
       if (effectivePayloadKind != PipelinePayloadKind::Arena) {
         emit(PipelineStage::SourceArrival, PipelineStage::ProducerOwned,
-             PipelineDisposition::Advance);
+             PipelineDisposition::Advance, 0, 0, 1, false,
+             PipelineOwner::PeImport);
       }
       emit(PipelineStage::ProducerOwned, PipelineStage::RawOwned,
            PipelineDisposition::Advance);
@@ -1812,27 +1815,27 @@ void QueueLifecycleController::observePipelineOwnerTransition(
       emit(PipelineStage::FinalOwned, PipelineStage::Encoding,
            PipelineDisposition::Advance, 1, 0, 1);
       emit(PipelineStage::Encoding, PipelineStage::GPUInFlight,
-           PipelineDisposition::Advance, 0, 1, 1, true);
+           PipelineDisposition::Advance, 0, 1, 1, true,
+           PipelineOwner::Receipt);
       break;
     case QueueLifecycleEvent::GpuComplete:
       emit(PipelineStage::GPUInFlight, PipelineStage::Completed,
-           PipelineDisposition::Completed, 0, 1, 1, true);
+           PipelineDisposition::Completed, 0, 1, 1, true,
+           PipelineOwner::Receipt);
       break;
     case QueueLifecycleEvent::FinishInline:
       emit(PipelineStage::ReplayBorrowed, PipelineStage::FinalOwned,
            PipelineDisposition::Advance);
       emit(PipelineStage::FinalOwned, PipelineStage::Encoding,
            PipelineDisposition::Advance, 1, 0, 1);
-      emit(PipelineStage::Encoding, PipelineStage::GPUInFlight,
-           PipelineDisposition::Advance, 0, 1, 1, true);
-      emit(PipelineStage::GPUInFlight, PipelineStage::Completed,
-           PipelineDisposition::Completed, 0, 1, 1, true);
-      emit(PipelineStage::Completed, PipelineStage::Reclaimed,
-           PipelineDisposition::Completed, 0, 1, 1, true);
+      emit(PipelineStage::Encoding, PipelineStage::Reclaimed,
+           PipelineDisposition::NoGpuTerminal, 0, 0, 1, false,
+           PipelineOwner::Queue);
       break;
     case QueueLifecycleEvent::ReclaimFree:
       emit(PipelineStage::Completed, PipelineStage::Reclaimed,
-           PipelineDisposition::Completed, 0, 1, 1, true);
+           PipelineDisposition::Completed, 0, 1, 1, true,
+           PipelineOwner::Queue);
       break;
     default:
       break;
@@ -1889,6 +1892,7 @@ void QueueLifecycleController::observePipelinePoisonStop() const noexcept {
         .identity = identity, .from = from, .to = PipelineStage::Reclaimed,
         .payloadKind = PipelinePayloadKind::Legacy,
         .disposition = PipelineDisposition::FailStop,
+        .owner = PipelineOwner::DeviceLoss,
         .ownedBytes = metadata->usedBytes, .before = snapshot,
         .after = snapshot});
   }
@@ -2060,6 +2064,7 @@ void QueueLifecycleController::recordPipelineSourceArrival(
       .to = PipelineStage::ProducerOwned,
       .payloadKind = payloadKind == CpuReadyTape::PayloadKind::Arena
           ? PipelinePayloadKind::Arena : PipelinePayloadKind::Legacy,
+      .owner = PipelineOwner::PeImport,
       .ownedBytes = ownedBytes, .before = snapshot, .after = snapshot});
 }
 

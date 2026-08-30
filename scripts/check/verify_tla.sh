@@ -64,10 +64,14 @@ done
 counterexample_models=(
   # End-to-end CPU pipeline mutations are independent: reclaim must wake a
   # parked admission, publication requires the complete assembler prefix,
-  # completion authority follows the child join, and owner reclaim follows
-  # ordered completion.
+  # completion authority follows the child join, owner reclaim follows
+  # ordered completion, and skipped/reclaim-before-completion mechanisms are
+  # checked separately.
   "CpuPipelineOwnership|.missing-wake.counterexample|Invariant AdmissionReleaseNotifies is violated"
   "CpuPipelineOwnership|.premature-reclaim.counterexample|Invariant NoPrematureReclaim is violated"
+  "CpuPipelineOwnership|.skipped-completion.counterexample|Invariant NoSkippedCompletion is violated"
+  "CpuPipelineOwnership|.reclaim-before-completion.counterexample|Invariant NoReclaimBeforeCompletion is violated"
+  "CpuPipelineOwnership|.fabricated-gpu-milestone.counterexample|Invariant NoGpuTerminalIsTerminal is violated"
   "CpuPipelineOwnership|.partial-publication.counterexample|Invariant PublicationIsComplete is violated"
   "CpuPipelineOwnership|.completion-before-join.counterexample|Invariant CompletionAuthorityAfterJoin is violated"
   # Full-shadow upload clobbers the in-flight NOOVERWRITE read range.

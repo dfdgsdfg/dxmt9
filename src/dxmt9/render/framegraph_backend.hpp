@@ -142,6 +142,15 @@ class FrameGraphBackend final : public IRenderBackend {
   const DagObserver& observer() const { return observer_; }
 
  private:
+  std::optional<core::metalqueue::QueueSubmissionRecord> onSourceReadyImpl(
+      encoders::EncodeContext& ctx,
+      std::size_t slotIndex,
+      core::SourcePayloadView payload,
+      std::uint64_t seqId,
+      encoders::EncodeChunkOptions options,
+      std::span<const core::metalqueue::ResolvedPublishedSource>
+          sessionLookaheadSources);
+
   RendererCompatProfile profile_ = RendererCompatProfile::Progressive;
   RendererFeatureSet features_;
   // R-BACK-40.5: strict keeps this all-false. Progressive defaults only

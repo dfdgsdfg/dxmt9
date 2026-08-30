@@ -1446,12 +1446,14 @@ struct ActiveSeedMergeTicketAudit {
 
 }  // namespace
 
-std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
+static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
     EncodeContext& ctx,
     std::size_t slotIndex,
     core::SourcePayloadView payload,
     std::uint64_t sourceSeqId,
-    EncodeChunkOptions options) {
+    EncodeChunkOptions options,
+    std::span<const core::metalqueue::ResolvedPublishedSource>
+        sessionLookaheadSources) {
   @autoreleasepool {
   PerfScope scope(perf::countEncodeChunkCpuTime);
   if (!ctx.device || !ctx.queue.valid()) {
@@ -1711,11 +1713,11 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   if (firstTransactionFragment) {
     encode_session::initializeGpuSamplingStorage(
         session, WMT::Device{ctx.device.handle},
-        options.sessionLookaheadSources.empty()
+        sessionLookaheadSources.empty()
             ? replayRange.commandCount()
             : encode_session::gpuSamplingCommandCount(
                   payload, sourceSeqId, replayRange.commandCount(),
-                  options.sessionLookaheadSources));
+                  sessionLookaheadSources));
   }
   traceEncodeStage("after-gpu-sampling-setup");
 
@@ -2060,7 +2062,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             ? &*options.sessionSource
             : nullptr,
         .partitionSource = options.partitionSource,
-        .retainedSources = options.sessionLookaheadSources,
+        .retainedSources = sessionLookaheadSources,
         .replayCommandPlanActive = options.replayCommandPlanActive,
         .replayCommandOrder = options.replayCommandOrder,
         .replayOrdinalByCommandIndex = replayOrdinalByCommandIndex,
@@ -4801,6 +4803,32 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   traceEncodeStage("return-record");
   return record;
   }  // @autoreleasepool
+}
+
+std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
+    EncodeContext& ctx,
+    std::size_t slotIndex,
+    core::SourcePayloadView payload,
+    std::uint64_t sourceSeqId,
+    EncodeChunkOptions options) {
+  if (options.sessionLookaheadBorrows) {
+    std::optional<core::metalqueue::QueueSubmissionRecord> result;
+    const bool visited = options.sessionLookaheadBorrows->visitResolved(
+        [&](std::span<const core::metalqueue::ResolvedPublishedSource> sources)
+            noexcept {
+          try {
+            result = encodeChunkImpl(ctx, slotIndex, payload, sourceSeqId,
+                                     std::move(options), sources);
+            return true;
+          } catch (...) {
+            return false;
+          }
+        });
+    return visited ? std::move(result) : std::nullopt;
+  }
+  const auto fallbackLookaheadSources = options.sessionLookaheadSources;
+  return encodeChunkImpl(ctx, slotIndex, payload, sourceSeqId,
+                         std::move(options), fallbackLookaheadSources);
 }
 
 std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(

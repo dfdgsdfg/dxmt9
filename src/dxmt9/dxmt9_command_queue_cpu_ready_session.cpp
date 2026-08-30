@@ -253,6 +253,31 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
   using core::metalqueue::SessionReleaseCompletion;
   const bool schedulingObservabilityEnabled = perf::enabled();
 
+  // Keep every session encode under a queue-issued generation witness.  The
+  // backend may derive call-local payload views from this batch, but no raw
+  // lookahead span is allowed to cross the synchronous callback boundary.
+  const auto encodeWithBorrows =
+      [this](std::unique_lock<std::mutex>& lock,
+             std::span<const ResolvedPublishedSource> sources,
+             const ResolvedPublishedSource& source,
+             encoders::EncodeChunkOptions options)
+      -> std::optional<QueueSubmissionRecord> {
+    std::optional<QueueSubmissionRecord> result;
+    const bool visited = queueLifecycle_.visitRepresentedSourceBorrows(
+        lock, sources,
+        [&](const SynchronousSourceBorrowBatch& sourceBorrows) noexcept {
+          options.sessionLookaheadBorrows = &sourceBorrows;
+          ScopedQueueUnlock queueUnlocked(lock);
+          try {
+            result = encodeCpuReadySessionSource(source, std::move(options));
+            return true;
+          } catch (...) {
+            return false;
+          }
+        });
+    return visited ? std::move(result) : std::nullopt;
+  };
+
   std::array<ReadySlotSnapshot, kCommandChunkCount> scratch{};
   std::optional<QueueSubmissionRecord> pendingRecord;
   const auto fullCaptureBoundary = [this, &pendingRecord]() noexcept {
@@ -1769,7 +1794,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
     }
 
     // H185 invariant (kind-neutral): validate + retain the whole selected
-    // source prefix before exposing cross-source sessionLookaheadSources.
+    // source prefix before issuing the cross-source borrow batch.
     if (!selectedPrefixStartsSession) {
       const auto first = queueLifecycle_.resolveRepresentedSource(scratch[0]);
       if (!first.valid()) {
@@ -2431,15 +2456,13 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                     options.preRegisteredSourceAccumulator = successorRun
                         ? &successorFragments
                         : &held->fragments;
-                    options.sessionLookaheadSources =
+                    options.skipBackendPlanning = true;
+                    auto submission = encodeWithBorrows(
+                        lock,
                         std::span<const ResolvedPublishedSource>(
                             replaySources.data() + run,
-                            replaySources.size() - run);
-                    options.skipBackendPlanning = true;
-                    lock.unlock();
-                    auto submission = encodeCpuReadySessionSource(
+                            replaySources.size() - run),
                         replaySources[run], std::move(options));
-                    lock.lock();
                     if (!submission ||
                         (carrier &&
                          !core::metalqueue::
@@ -2802,11 +2825,6 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                           .transactionFragmentCount =
                               run.transactionFragmentCount,
                       };
-                  options.sessionLookaheadSources =
-                      std::span<const ResolvedPublishedSource>(
-                          replayLookaheadSources.data(),
-                          replayLookaheadSources.size())
-                          .subspan(runIndex);
                   options.preRegisteredSourceAccumulator =
                       &sourceFragmentAccumulators[replaySourceIndex];
                   options.skipBackendPlanning = true;
@@ -2822,10 +2840,13 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                     };
                   }
 
-                  lock.unlock();
-                  auto submission = encodeCpuReadySessionSource(
+                  auto submission = encodeWithBorrows(
+                      lock,
+                      std::span<const ResolvedPublishedSource>(
+                          replayLookaheadSources.data(),
+                          replayLookaheadSources.size())
+                          .subspan(runIndex),
                       replaySource, std::move(options));
-                  lock.lock();
                   if (!submission.has_value()) {
                     perf::countCpuReadyMultiSourcePostEffectFatal(
                         perf::CpuReadyMultiSourceFatalReason::
@@ -3187,17 +3208,12 @@ multi_source_window_complete:
             return;
           }
         }
-        if (resolvedCount > 1u) {
-          options.sessionLookaheadSources =
-              std::span<const ResolvedPublishedSource>(
-                  resolvedLookahead.data(), resolvedCount);
-        }
-        lock.unlock();
-        submission = encodeCpuReadySessionSource(
+        submission = encodeWithBorrows(
+            lock,
+            std::span<const ResolvedPublishedSource>(resolvedLookahead.data(),
+                                                     resolvedCount),
             resolvedLookahead[0], std::move(options));
       }
-      lock.lock();
-
       if (!submission.has_value()) {
         if (appendToPending) {
           perf::countCpuReadySessionReleased(

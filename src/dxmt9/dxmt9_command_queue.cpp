@@ -7181,8 +7181,7 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
     options.partitionSource = selected[0].source;
     if (sourceAction ==
         DceChunkLookaheadSourceAction::EncodeCurrentExposeLegacyLookahead) {
-      options.sessionLookaheadSources =
-          std::span<const ResolvedPublishedSource>(selected);
+      options.sessionLookaheadBorrows = nullptr;
     }
     if (encodedPrefix) {
       options.allowInjectedCommandBufferMidChunkCommits = true;
@@ -7196,11 +7195,41 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
     std::optional<QueueSubmissionRecord> submission;
     {
       const auto& slot = *selected[0].slot;
-      lock.unlock();
-      traceEncodeFnStage("before-backend-onChunkReady",
-                         current.slotIndex, slot);
-      submission = backend_->onChunkReady(
-          *ctx, current.slotIndex, slot, std::move(options));
+      if (sourceAction ==
+          DceChunkLookaheadSourceAction::EncodeCurrentExposeLegacyLookahead) {
+        const bool visited = queueLifecycle_.visitRepresentedSourceBorrows(
+            lock,
+            std::span<const ResolvedPublishedSource>(selected.data(),
+                                                     hasNext ? 2u : 1u),
+            [&](const core::metalqueue::SynchronousSourceBorrowBatch& sourceBorrows) noexcept {
+              options.sessionLookaheadBorrows = &sourceBorrows;
+              lock.unlock();
+              try {
+                traceEncodeFnStage("before-backend-onChunkReady",
+                                   current.slotIndex, slot);
+                submission = backend_->onChunkReady(
+                    *ctx, current.slotIndex, slot, std::move(options));
+                lock.lock();
+                return true;
+              } catch (...) {
+                if (!lock.owns_lock()) {
+                  lock.lock();
+                }
+                return false;
+              }
+            });
+        if (!visited) {
+          queueLifecycle_.poisonTapeFailureLocked();
+          return;
+        }
+      } else {
+        lock.unlock();
+        traceEncodeFnStage("before-backend-onChunkReady",
+                           current.slotIndex, slot);
+        submission = backend_->onChunkReady(
+            *ctx, current.slotIndex, slot, std::move(options));
+        lock.lock();
+      }
       if (submission.has_value() && !submission->commandBuffer) {
         submission.reset();
       }

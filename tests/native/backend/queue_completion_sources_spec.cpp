@@ -802,7 +802,7 @@ void actualOwnerPipelineObserverUsesQueueAndCv() {
   check(fixture.pipelineObserver.state().ownerEventCount != 0u,
         "production sink receives actual QueueLifecycleController owners");
   const auto& ownerState = fixture.pipelineObserver.state();
-  check(ownerState.ownerEventCount == 8u,
+  check(ownerState.ownerEventCount == 6u,
         "one physical owner emits each lifecycle edge exactly once");
   constexpr std::array expectedStages{
       std::pair{dxmt9::queue::PipelineStage::SourceArrival,
@@ -816,17 +816,17 @@ void actualOwnerPipelineObserverUsesQueueAndCv() {
       std::pair{dxmt9::queue::PipelineStage::FinalOwned,
                  dxmt9::queue::PipelineStage::Encoding},
       std::pair{dxmt9::queue::PipelineStage::Encoding,
-                 dxmt9::queue::PipelineStage::GPUInFlight},
-      std::pair{dxmt9::queue::PipelineStage::GPUInFlight,
-                 dxmt9::queue::PipelineStage::Completed},
-      std::pair{dxmt9::queue::PipelineStage::Completed,
                  dxmt9::queue::PipelineStage::Reclaimed},
   };
   for (std::size_t i = 0; i < expectedStages.size(); ++i) {
     check(ownerState.ownerEvents[i].from == expectedStages[i].first &&
               ownerState.ownerEvents[i].to == expectedStages[i].second,
-          "actual owner event order has no duplicate completion/reclaim edge");
+          "actual owner event order has no fabricated GPU edge");
   }
+  check(ownerState.ownerEvents[0].owner == dxmt9::queue::PipelineOwner::PeImport &&
+            ownerState.ownerEvents[5].disposition ==
+                dxmt9::queue::PipelineDisposition::NoGpuTerminal,
+        "actual owners qualify import and zero-GPU terminal evidence");
   const auto& event = ownerState.ownerEvents[0];
   check(event.identity.sourceOrdinal == event.identity.seqId &&
             event.identity.generation != 0u,
@@ -851,6 +851,7 @@ void arenaSourceArrivalUsesOneGenerationQualifiedOwnerEdge() {
   const auto& event = state.ownerEvents[0];
   check(event.from == dxmt9::queue::PipelineStage::SourceArrival &&
             event.to == dxmt9::queue::PipelineStage::ProducerOwned &&
+            event.owner == dxmt9::queue::PipelineOwner::PeImport &&
             event.payloadKind == dxmt9::queue::PipelinePayloadKind::Arena &&
             event.identity.workId == 101u &&
             event.identity.sourceOrdinal == 202u && event.identity.seqId == 7u &&
@@ -1348,6 +1349,38 @@ void synchronousSourceBatchRejectsStaleAndReclaimingBorrows() {
   check(!nestedCallbackRan, "nested borrow callback is never invoked");
   check(!concurrentCompletionSucceeded,
         "concurrent reclaim cannot pass an already-issued source pin");
+
+  bool resolvedViewVisited = false;
+  check(fixture.controller.visitRepresentedSourceBorrows(
+            lock,
+            std::span<const ResolvedPublishedSource>(&resolved, 1),
+            [&](const SynchronousSourceBorrowBatch& batch) noexcept {
+              return batch.visitResolved(
+                  [&](std::span<const ResolvedPublishedSource> views) noexcept {
+                    resolvedViewVisited = views.size() == 1u &&
+                        views[0].source == resolved.source &&
+                        views[0].payload.valid() && views[0].slot == nullptr;
+                    return resolvedViewVisited;
+                  });
+            }),
+        "queue derives call-local resolved views from a live borrow batch");
+  check(resolvedViewVisited,
+        "resolved lookahead view is generation-qualified and slot-free");
+
+  bool throwingVisitReturned = false;
+  check(fixture.controller.visitRepresentedSourceBorrows(
+            lock,
+            std::span<const ResolvedPublishedSource>(&resolved, 1),
+            [&](const SynchronousSourceBorrowBatch& batch) noexcept {
+              throwingVisitReturned = !batch.visitResolved(
+                  [&](std::span<const ResolvedPublishedSource>) {
+                    throw std::runtime_error("borrow callback probe");
+                  });
+              return true;
+            }),
+        "throwing borrow callback remains a failed synchronous visit");
+  check(throwingVisitReturned && lock.owns_lock(),
+        "throwing borrow callback restores queue lock ownership");
 
   QueueFixture postValidationFixture;
   postValidationFixture.addReadySlot(0, 1);

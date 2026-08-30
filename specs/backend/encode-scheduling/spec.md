@@ -123,12 +123,14 @@ bounded event per state change:
 | `ReplayBorrowed -> FinalOwned` | assembler commit / source Ready publication |
 | `FinalOwned -> Encoding` | exact source borrow by serial or selected partition execution |
 | `Encoding -> GPUInFlight` | receipt activation or submitted completion authority |
-| `GPUInFlight -> Reclaimed` | ordered completion/device-loss settlement and final resource/page release |
+| `GPUInFlight -> Completed` | ordered completion/device-loss settlement and completion-waterline publication |
+| `Completed -> Reclaimed` | final resource/page/receipt release after completion authority |
 
 Early payload retirement stutters within `GPUInFlight`: it may release payload
 pages only after a receipt owns completion, and it must not claim that resource
-waterlines or GPU work were reclaimed. State-only and pre-effect rejected work
-use explicit terminal dispositions. The observer cannot influence scheduling,
+waterlines or GPU work were reclaimed. State-only, inline zero-GPU, and
+pre-effect rejected work use explicit terminal dispositions. The observer
+cannot influence scheduling,
 retain spans, or invent a missing milestone.
 
 Dependencies and gates are strict: planner bounds and heterogeneous replay

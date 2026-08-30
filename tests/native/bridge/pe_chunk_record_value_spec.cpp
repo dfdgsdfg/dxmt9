@@ -1,4 +1,5 @@
 #include "d3d9_pe_chunk_builder.hpp"
+#include "d3d9_pe_batch.hpp"
 #include "d3d9_pe_const_shadow.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "device_c_chunk_validate.hpp"
@@ -1754,6 +1755,79 @@ void testExactFinalLayoutSink() {
         "exact discard releases warm pins and final-blob ledger retention");
 }
 
+void testPresentBatchTransaction() {
+  D9CSurface surface;
+  const dxmt9::d3d9::pe::PePresentBatch batch{
+      .command = D9CCommandChunkWirePresent{
+          .hwnd = 0x1122334455667788ull,
+          .flags = 5u,
+          .hasSrc = 1u,
+          .hasDst = 1u,
+          .sourceHandleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+          .src = D9CRect{1, 2, 30, 40},
+          .dst = D9CRect{3, 4, 50, 60},
+      },
+      .source = dxmt9::d3d9::pe::qualifyLocalRef<
+          dxmt9::d3d9::pe::SurfaceRef>(
+          wireRef(&surface, D9C_CHUNK_HANDLE_KIND_SURFACE, 0xb100u)),
+  };
+  check(dxmt9::d3d9::pe::planPePresentBatch(batch).valid() &&
+            dxmt9::d3d9::pe::planPePresentBatch(batch).recordCount() == 1u &&
+            dxmt9::d3d9::pe::planPePresentBatch(batch).uniqueHandleCount() ==
+                1u &&
+            dxmt9::d3d9::pe::planPePresentBatch(batch).payloadBytes() ==
+                sizeof(D9CCommandChunkWirePresent),
+        "Present batch pass one computes bounded exact counts without effects");
+  std::vector<std::byte> legacyBytes;
+  {
+    CommandChunkBuilder legacy;
+    check(dxmt9::d3d9::pe::appendPresent(legacy, batch.command,
+                                         batch.source),
+          "Present batch legacy oracle emits");
+    const auto sealed = legacy.seal();
+    check(sealed.valid(), "Present batch legacy oracle seals");
+    legacyBytes.assign(sealed.blob.begin(), sealed.blob.end());
+    legacy.resetAndReleaseRetained();
+  }
+  check(surface.refs == 1u,
+        "Present batch legacy oracle releases its physical pin");
+
+  dxmt9::d3d9::pe::PePresentBatchTransaction transaction(batch);
+  check(!transaction.emitted() && !transaction.seal().valid() &&
+            surface.refs == 1u,
+        "batch construction and seal-before-emit retain no wrapper");
+  check(transaction.emit() && transaction.emitted() && surface.refs == 2u,
+        "Present batch pass two emits and retains exactly once");
+  const auto first = transaction.seal();
+  check(first.valid() && first.recordCount == 1u && first.handleCount == 1u,
+        "Present batch transaction publishes one exact immutable record");
+  check(first.blob.size() == legacyBytes.size() &&
+            std::equal(first.blob.begin(), first.blob.end(),
+                       legacyBytes.begin()),
+        "Present batch exact output is byte-identical to legacy");
+  const auto repeated = transaction.seal();
+  check(repeated.valid() && repeated.blob.data() == first.blob.data() &&
+            repeated.blob.size() == first.blob.size() &&
+            std::equal(repeated.blob.begin(), repeated.blob.end(),
+                       first.blob.begin()),
+        "Present batch repeated seal is byte-stable");
+
+  transaction.reset();
+  check(!transaction.emitted() && transaction.emit() && transaction.seal().valid() &&
+            surface.refs == 2u,
+        "Present batch Reset retries with the same owned inputs");
+  transaction.resetAndReleaseRetained();
+  check(surface.refs == 1u,
+        "Present batch discard releases the physical pin exactly once");
+
+  const auto invalid = dxmt9::d3d9::pe::PePresentBatch{
+      .command = batch.command,
+      .source = {},
+  };
+  check(!dxmt9::d3d9::pe::planPePresentBatch(invalid).valid(),
+        "invalid Present batch fails before any retain or publication");
+}
+
 void testLargeHandleSealByteIdentityAndLedger() {
   constexpr std::size_t kHandleCount = 160u;
   std::vector<std::unique_ptr<D9CTexture>> textures;
@@ -1872,6 +1946,7 @@ int main() {
     testOversizedPendingBatchAppendFailure();
     testTypedTailAndSectionAdmission();
     testExactFinalLayoutSink();
+    testPresentBatchTransaction();
     testLargeHandleSealByteIdentityAndLedger();
   } catch (const TestFailure& error) {
     std::cerr << "pe_chunk_record_value_spec failed: " << error.what()

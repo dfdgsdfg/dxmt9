@@ -1452,6 +1452,21 @@ snapshotLookaheadSources(
   return snapshots;
 }
 
+std::vector<dxmt9::core::metalqueue::QueueCompletionSource>
+snapshotLookaheadSources(const dxmt9::encoders::EncodeChunkOptions& options) {
+  if (options.sessionLookaheadBorrows) {
+    std::vector<dxmt9::core::metalqueue::QueueCompletionSource> snapshots;
+    options.sessionLookaheadBorrows->visitResolved(
+        [&](std::span<const dxmt9::core::metalqueue::ResolvedPublishedSource>
+                sources) {
+          snapshots = snapshotLookaheadSources(sources);
+          return true;
+        });
+    return snapshots;
+  }
+  return snapshotLookaheadSources(options.sessionLookaheadSources);
+}
+
 struct ProductionLoopBackendState {
   std::vector<ProductionLoopBackendCall> calls;
   std::mutex postCommitMutex;
@@ -1517,9 +1532,10 @@ class ProductionLoopBackend final : public dxmt9::render::IRenderBackend {
             options.allowInjectedCommandBufferMidChunkCommits,
         .sessionSource = options.sessionSource,
         .partitionSource = options.partitionSource,
-        .lookaheadCount = options.sessionLookaheadSources.size(),
-        .lookaheadSources =
-            snapshotLookaheadSources(options.sessionLookaheadSources),
+        .lookaheadCount = options.sessionLookaheadBorrows
+                              ? options.sessionLookaheadBorrows->size()
+                              : options.sessionLookaheadSources.size(),
+        .lookaheadSources = snapshotLookaheadSources(options),
         .replayWindow = options.replayWindow,
         .activeSeedMergeTicket = options.activeSeedMergeTicket,
         .activeSeedMergeTargets = std::vector<
@@ -1724,9 +1740,10 @@ class PlannedProductionBackend final : public dxmt9::render::IRenderBackend {
             options.allowInjectedCommandBufferMidChunkCommits,
         .sessionSource = options.sessionSource,
         .partitionSource = options.partitionSource,
-        .lookaheadCount = options.sessionLookaheadSources.size(),
-        .lookaheadSources =
-            snapshotLookaheadSources(options.sessionLookaheadSources),
+        .lookaheadCount = options.sessionLookaheadBorrows
+                              ? options.sessionLookaheadBorrows->size()
+                              : options.sessionLookaheadSources.size(),
+        .lookaheadSources = snapshotLookaheadSources(options),
         .replayWindow = options.replayWindow,
         .activeSeedMergeTicket = options.activeSeedMergeTicket,
         .activeSeedMergeTargets = std::vector<
@@ -6659,6 +6676,9 @@ void tapeDceRequestSelectsSessionTerminalCoordinator() {
               std::memory_order_acquire);
         }),
         "Tape+DCE terminal fixture must hold one session-owned source");
+  check(!backendState->calls.empty() &&
+            backendState->calls.front().lookaheadCount == 0u,
+        "DCE no-expose disposition must not publish a successor lookahead");
 
   std::atomic<bool> finalReturned{false};
   std::thread finalizer([&] {

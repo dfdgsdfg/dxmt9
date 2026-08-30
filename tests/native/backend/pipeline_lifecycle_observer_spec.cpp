@@ -191,7 +191,7 @@ class FakePipelineQueue {
   void finishStateOnly(FakeSource& source) {
     const auto before = queue_;
     emit(source, source.stage, PipelineStage::Reclaimed,
-         PipelineDisposition::StateOnly, before);
+         PipelineDisposition::NoGpuTerminal, before);
   }
 
   void failStop(FakeSource& source) {
@@ -229,6 +229,12 @@ class FakePipelineQueue {
     ++queue_.capacityGeneration;
     emit(source, source.stage, PipelineStage::Reclaimed,
          PipelineDisposition::Completed, before);
+  }
+
+  void injectFabricatedGpuMilestone(FakeSource& source) {
+    const auto before = queue_;
+    emit(source, PipelineStage::RawOwned, PipelineStage::GPUInFlight,
+         PipelineDisposition::Advance, before);
   }
 
   const PipelineLifecycleObserver& observer() const noexcept {
@@ -292,6 +298,23 @@ class FakePipelineQueue {
         .to = to,
         .payloadKind = source.payloadKind,
         .disposition = disposition,
+        .owner = from == PipelineStage::SourceArrival
+            ? PipelineOwner::PeImport
+            : from == PipelineStage::Encoding &&
+                    to == PipelineStage::GPUInFlight
+                ? PipelineOwner::Receipt
+            : from == PipelineStage::GPUInFlight &&
+                    disposition == PipelineDisposition::DeviceLost
+                ? PipelineOwner::DeviceLoss
+            : to == PipelineStage::Reclaimed &&
+                    disposition == PipelineDisposition::FailStop &&
+                    (from == PipelineStage::RawOwned ||
+                     from == PipelineStage::Encoding)
+                ? PipelineOwner::DeviceLoss
+                : from == PipelineStage::GPUInFlight &&
+                        disposition == PipelineDisposition::Completed
+                    ? PipelineOwner::Receipt
+                    : PipelineOwner::Queue,
         .ownedBytes = source.ownedBytes,
         .outstandingBorrows = source.borrows,
         .constructedCount = source.constructed,
@@ -352,6 +375,54 @@ void purePredicateTruthTables() {
             PipelineStage::GPUInFlight, PipelineDisposition::Completed, 0,
             true),
         "completed GPU owner can reclaim");
+  check(pipelineNoGpuTerminalMayPublish(
+            PipelineStage::Encoding, PipelineDisposition::NoGpuTerminal, 0,
+            false),
+        "zero-command-buffer encoding has an explicit terminal disposition");
+  check(!pipelineNoGpuTerminalMayPublish(
+             PipelineStage::Encoding, PipelineDisposition::NoGpuTerminal, 1,
+             false),
+        "a zero-GPU terminal cannot escape an outstanding borrow");
+  check(pipelineOwnerMatchesTransition(
+            PipelineOwner::PeImport, PipelineStage::SourceArrival,
+            PipelineStage::ProducerOwned, PipelineDisposition::Advance),
+        "PE/import owns source arrival");
+  check(pipelineOwnerMatchesTransition(
+            PipelineOwner::Receipt, PipelineStage::Encoding,
+            PipelineStage::GPUInFlight, PipelineDisposition::Advance),
+        "receipt owns GPU submission");
+  check(pipelineOwnerMatchesTransition(
+            PipelineOwner::Receipt, PipelineStage::GPUInFlight,
+            PipelineStage::Completed, PipelineDisposition::Completed),
+        "receipt owns ordinary GPU completion");
+  check(pipelineOwnerMatchesTransition(
+            PipelineOwner::DeviceLoss, PipelineStage::GPUInFlight,
+            PipelineStage::Completed, PipelineDisposition::DeviceLost),
+        "device-loss owner settles an in-flight source");
+  check(pipelineOwnerMatchesTransition(
+            PipelineOwner::DeviceLoss, PipelineStage::RawOwned,
+            PipelineStage::Reclaimed, PipelineDisposition::FailStop),
+        "device-loss owner fail-stops raw-owned poison work");
+  check(pipelineOwnerMatchesTransition(
+            PipelineOwner::DeviceLoss, PipelineStage::Encoding,
+            PipelineStage::Reclaimed, PipelineDisposition::FailStop),
+        "device-loss owner fail-stops encoding poison work");
+  check(!pipelineOwnerMatchesTransition(
+             PipelineOwner::Queue, PipelineStage::RawOwned,
+             PipelineStage::Reclaimed, PipelineDisposition::FailStop),
+        "queue cannot masquerade as poison device-loss owner");
+  check(!pipelineOwnerMatchesTransition(
+             PipelineOwner::Receipt, PipelineStage::GPUInFlight,
+             PipelineStage::Completed, PipelineDisposition::DeviceLost),
+        "ordinary receipt cannot masquerade as device loss");
+  check(pipelineOwnerMatchesTransition(
+            PipelineOwner::SelectedParallel, PipelineStage::Encoding,
+            PipelineStage::GPUInFlight, PipelineDisposition::Advance),
+        "selected-parallel completion is owner-qualified without new behavior");
+  check(!pipelineOwnerMatchesTransition(
+             PipelineOwner::Queue, PipelineStage::Encoding,
+             PipelineStage::GPUInFlight, PipelineDisposition::Advance),
+        "GPU submission cannot omit its receipt or selected owner");
   check(!pipelineOwnerMayReclaim(
             PipelineStage::GPUInFlight, PipelineDisposition::Completed, 1,
             true),
@@ -534,6 +605,16 @@ void deliberateNativeCounterexamples() {
 
   {
     FakePipelineQueue queue;
+    auto source = queue.makeSource(1, PipelinePayloadKind::StateOnly);
+    queue.arrive(source);
+    queue.adoptRaw(source);
+    queue.injectFabricatedGpuMilestone(source);
+    check(queue.observer().error() != PipelineObservationError::None,
+          "fabricated GPU milestones cannot stand in for no-GPU terminal work");
+  }
+
+  {
+    FakePipelineQueue queue;
     auto source = queue.makeSource(1, PipelinePayloadKind::Arena);
     queue.arrive(source);
     queue.injectStaleGeneration(source);
@@ -549,6 +630,7 @@ void ownerEvidenceOverflowFailsClosed() {
   event.from = PipelineStage::SourceArrival;
   event.to = PipelineStage::ProducerOwned;
   event.disposition = PipelineDisposition::Advance;
+  event.owner = PipelineOwner::PeImport;
   for (std::size_t i = 0; i < kMaxObservedPipelineEvents; ++i) {
     event.identity = PipelineIdentity{
         .workId = i + 1u, .sourceOrdinal = i + 1u, .seqId = i + 1u,

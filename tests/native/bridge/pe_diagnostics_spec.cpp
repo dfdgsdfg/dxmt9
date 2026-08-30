@@ -228,6 +228,8 @@ void testSourceContracts(const std::filesystem::path &root) {
       root / "src/d3d9/d3d9_pe_device_impl.hpp");
   const auto deviceOwner = readTextFile(
       root / "src/d3d9/d3d9_pe_device.cpp");
+  const auto presentBatch = readTextFile(
+      root / "src/d3d9/d3d9_pe_batch.hpp");
   for (const std::string_view fragment : {
            "d3d9_pe_device_state_core.inc.hpp",
            "d3d9_pe_device_state_texture_fvf.inc.hpp",
@@ -239,6 +241,15 @@ void testSourceContracts(const std::filesystem::path &root) {
   }
   check(std::count(device.begin(), device.end(), '\n') <= 3677,
         "device declaration shell stays within the measured 3677-line residual");
+  checkContains(presentBatch, "struct PePresentBatch",
+                "Present has a typed immutable value owner");
+  checkContains(device, "const dxmt9::d3d9::pe::PePresentBatch presentBatch",
+                "the real Present boundary owns its batch value");
+  checkContains(device,
+                "builder, presentBatch.command, presentBatch.source",
+                "legacy Present append consumes the owned batch value");
+  checkNotContains(device, "PePresentBatchTransaction",
+                   "exact Present transaction remains unselected in production");
   for (const std::string_view retainedInline : {
            "HRESULT STDMETHODCALLTYPE Present(",
            "HRESULT STDMETHODCALLTYPE SetStreamSource(",

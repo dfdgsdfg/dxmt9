@@ -9,7 +9,7 @@
  * queue credit it must park behind source 1, consume the reclaim wake, and
  * still advance both completion waterlines.
  *
- * The four Discipline constants are mutation switches used only by the
+ * The Discipline constants are mutation switches used only by the
  * executable expected-failure configurations.  The production configuration
  * requires an admission wake, complete publication, join before completion
  * authority, and completion before owner reclaim.
@@ -19,10 +19,11 @@
  * created only for the synchronous encode/plan/observe visit; the only value
  * permitted across a worker or completion boundary is
  * WorkerOwnedSourceSnapshot.  In this model, borrowCount=1 therefore denotes
- * only the queue-issued synchronous replay/encode/plan/observe visit.  It does
- * not claim concrete bindings for DCE/lookahead, session, partition,
- * selected-child, observer, or completion-callback surfaces; those remain
- * separate implementation/evidence gaps until they use the same capability.
+ * only the queue-issued synchronous replay/encode/plan/observe visit.
+ * Production DCE successor lookahead and CPU-ready session replay use this
+ * synchronous capability.  Partition plans, selected-child state, observer
+ * events, submissions, and completion callbacks retain value snapshots only;
+ * asynchronous handoff remains value-only through WorkerOwnedSourceSnapshot.
  *)
 
 EXTENDS Naturals, FiniteSets, TLC
@@ -30,12 +31,13 @@ EXTENDS Naturals, FiniteSets, TLC
 CONSTANTS MaxSources, Capacity, RequiredParts, PresentSources, ParallelSources,
           FailureSources, StateOnlySources, AllowShutdown,
           WakeDiscipline, PublicationDiscipline, JoinDiscipline,
-          ReclaimDiscipline
+          ReclaimDiscipline, NoGpuDiscipline
 
 Sources == 1 .. MaxSources
 Phases == {"Absent", "ProducerOwned", "RawOwned", "ReplayBorrowed",
-           "FinalOwned", "Encoding", "GPUInFlight", "Reclaimed"}
-OwnedPhases == {"ReplayBorrowed", "FinalOwned", "Encoding", "GPUInFlight"}
+           "FinalOwned", "Encoding", "GPUInFlight", "Completed", "Reclaimed"}
+OwnedPhases == {"ReplayBorrowed", "FinalOwned", "Encoding", "GPUInFlight",
+                "Completed"}
 
 VARIABLES
   phase,
@@ -223,11 +225,16 @@ SubmitGpu(s) ==
        THEN /\ borrowCount[s] = 0
             /\ s \in joined
        ELSE TRUE
-  /\ phase' = [phase EXCEPT ![s] = "GPUInFlight"]
-  /\ completionAuthority' = completionAuthority \cup {s}
+  /\ phase' = [phase EXCEPT ![s] =
+       IF ReclaimDiscipline = "SkipCompletion"
+       THEN "Reclaimed" ELSE "GPUInFlight"]
+  /\ completionAuthority' = IF ReclaimDiscipline = "SkipCompletion"
+       THEN completionAuthority ELSE completionAuthority \cup {s}
+  /\ occupancy' = IF ReclaimDiscipline = "SkipCompletion"
+       THEN occupancy - 1 ELSE occupancy
   /\ UNCHANGED <<nextArrival, constructed, borrowCount, joinedChildren,
                   published, fullyBuilt, joined, completed, noGpuTerminal,
-                  failedOnce, occupancy, admissionWaiting,
+                  failedOnce, admissionWaiting,
                   observedWakeGeneration, wakeGeneration, completedSeq,
                   presentSeq, stopped>>
 
@@ -235,10 +242,21 @@ CompleteGpu(s) ==
   /\ phase[s] = "GPUInFlight"
   /\ s \in completionAuthority
   /\ completedSeq = s - 1
-  /\ phase' = [phase EXCEPT ![s] = "Reclaimed"]
+  /\ phase' = [phase EXCEPT ![s] = "Completed"]
   /\ completed' = completed \cup {s}
   /\ completedSeq' = s
   /\ presentSeq' = IF s \in PresentSources THEN s ELSE presentSeq
+  /\ UNCHANGED <<occupancy, wakeGeneration>>
+  /\ UNCHANGED <<nextArrival, constructed, borrowCount, joinedChildren,
+                  published, fullyBuilt, joined, completionAuthority,
+                  noGpuTerminal, failedOnce, admissionWaiting,
+                  observedWakeGeneration, stopped>>
+
+ReclaimCompleted(s) ==
+  /\ ~stopped
+  /\ phase[s] = "Completed"
+  /\ s \in completed
+  /\ phase' = [phase EXCEPT ![s] = "Reclaimed"]
   /\ occupancy' = occupancy - 1
   /\ wakeGeneration' = IF admissionWaiting # {} /\
                               WakeDiscipline = "Notify"
@@ -246,8 +264,8 @@ CompleteGpu(s) ==
        ELSE wakeGeneration
   /\ UNCHANGED <<nextArrival, constructed, borrowCount, joinedChildren,
                   published, fullyBuilt, joined, completionAuthority,
-                  noGpuTerminal, failedOnce, admissionWaiting,
-                  observedWakeGeneration, stopped>>
+                  completed, noGpuTerminal, failedOnce, admissionWaiting,
+                  observedWakeGeneration, completedSeq, presentSeq, stopped>>
 
 RollbackReplay(s) ==
   /\ ~stopped
@@ -270,18 +288,35 @@ RollbackReplay(s) ==
 FinishStateOnly(s) ==
   /\ ~stopped
   /\ s \in StateOnlySources
-  /\ phase[s] = "RawOwned"
-  /\ phase' = [phase EXCEPT ![s] = "Reclaimed"]
+  /\ phase[s] \in {"RawOwned", "FinalOwned", "Encoding"}
+  /\ borrowCount[s] = 0
+  /\ phase' = [phase EXCEPT ![s] =
+       IF NoGpuDiscipline = "Fabricated" THEN "GPUInFlight" ELSE "Reclaimed"]
   /\ noGpuTerminal' = noGpuTerminal \cup {s}
+  /\ occupancy' = IF phase[s] = "RawOwned" THEN occupancy
+                  ELSE IF NoGpuDiscipline = "Fabricated" THEN occupancy
+                  ELSE occupancy - 1
   /\ UNCHANGED <<nextArrival, constructed, borrowCount, joinedChildren,
                   published, fullyBuilt, joined, completionAuthority,
-                  completed, failedOnce, occupancy, admissionWaiting,
+                  completed, failedOnce, admissionWaiting,
                   observedWakeGeneration, wakeGeneration, completedSeq,
                   presentSeq, stopped>>
 
 PrematureReclaim(s) ==
   /\ ReclaimDiscipline = "Premature"
   /\ Owned(s)
+  /\ phase[s] # "Completed"
+  /\ phase' = [phase EXCEPT ![s] = "Reclaimed"]
+  /\ occupancy' = occupancy - 1
+  /\ UNCHANGED <<nextArrival, constructed, borrowCount, joinedChildren,
+                  published, fullyBuilt, joined, completionAuthority,
+                  completed, noGpuTerminal, failedOnce, admissionWaiting,
+                  observedWakeGeneration, wakeGeneration, completedSeq,
+                  presentSeq, stopped>>
+
+ReclaimBeforeCompletion(s) ==
+  /\ ReclaimDiscipline = "ReclaimBeforeCompletion"
+  /\ phase[s] = "GPUInFlight"
   /\ phase' = [phase EXCEPT ![s] = "Reclaimed"]
   /\ occupancy' = occupancy - 1
   /\ UNCHANGED <<nextArrival, constructed, borrowCount, joinedChildren,
@@ -330,9 +365,11 @@ Next ==
   \/ \E s \in Sources : FinishChild(s)
   \/ \E s \in Sources : SubmitGpu(s)
   \/ \E s \in Sources : CompleteGpu(s)
+  \/ \E s \in Sources : ReclaimCompleted(s)
   \/ \E s \in Sources : RollbackReplay(s)
   \/ \E s \in Sources : FinishStateOnly(s)
   \/ \E s \in Sources : PrematureReclaim(s)
+  \/ \E s \in Sources : ReclaimBeforeCompletion(s)
   \/ RequestShutdown
   \/ \E s \in Sources : DrainShutdown(s)
 
@@ -351,6 +388,7 @@ Spec ==
        /\ WF_vars(FinishChild(s))
        /\ WF_vars(SubmitGpu(s))
        /\ WF_vars(CompleteGpu(s))
+       /\ WF_vars(ReclaimCompleted(s))
        /\ WF_vars(RollbackReplay(s))
        /\ WF_vars(FinishStateOnly(s))
        /\ WF_vars(DrainShutdown(s))
@@ -390,6 +428,20 @@ CompletionAuthorityAfterJoin == completionAuthority \subseteq joined
 
 NoPrematureReclaim ==
   {s \in Sources : Terminal(s)} \subseteq completed \cup noGpuTerminal
+
+NoReclaimBeforeCompletion ==
+  \A s \in Sources : phase[s] = "Reclaimed" =>
+    s \in completed \/ s \in noGpuTerminal
+
+NoSkippedCompletion ==
+  \A s \in Sources : phase[s] = "Reclaimed" =>
+    s \in completed \/ s \in noGpuTerminal
+
+NoGpuTerminalIsTerminal ==
+  \A s \in noGpuTerminal : phase[s] = "Reclaimed"
+
+CompletedPhaseHasCompleted ==
+  {s \in Sources : phase[s] = "Completed"} \subseteq completed
 
 CompletedPrefix == completed = 1 .. completedSeq
 

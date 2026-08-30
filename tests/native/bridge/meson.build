@@ -405,6 +405,7 @@ pe_chunk_record_value_spec = executable(
   [
     'pe_chunk_record_value_spec.cpp',
     '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
+    '../../../src/d3d9/d3d9_pe_batch.cpp',
     '../../../src/d3d9/d3d9_pe_chunk_draw.cpp',
     '../../../src/d3d9/d3d9_pe_chunk_nondraw.cpp',
   ],

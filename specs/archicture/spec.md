@@ -262,6 +262,13 @@ payload-retirement rules; the recorder spec owns the PE wire transaction and
 recorder capabilities; the verification spec owns formal and executable
 evidence.
 
+The concrete lifecycle observer preserves `Completed` as a distinct owner from
+`Reclaimed`. Queue-owned zero-command-buffer inline work emits an explicit
+no-GPU terminal disposition from `Encoding` to `Reclaimed`; it must not invent
+`GPUInFlight` or completion milestones. Observer owner metadata is diagnostic
+and opt-in, with `PeImport`, `Receipt`, `SelectedParallel`, `DeviceLoss`, and
+`Queue` as the bounded owner-qualified values.
+
 ---
 
 ## 3. CPU-Bound Submission Sequence

@@ -40,11 +40,23 @@ enum class PipelineDisposition : std::uint8_t {
   PayloadRetired,
   Completed,
   DeviceLost,
+  // Inline, state-only, and pre-effect terminal work with no GPU authority.
+  NoGpuTerminal,
   PreEffectRollback,
   PreEffectReject,
   StateOnly,
   FailStop,
   Shutdown,
+};
+
+// Identifies the production owner that emitted a lifecycle edge.  This is
+// diagnostic metadata only; it does not add an ABI or scheduling boundary.
+enum class PipelineOwner : std::uint8_t {
+  Queue,
+  PeImport,
+  Receipt,
+  SelectedParallel,
+  DeviceLoss,
 };
 
 struct PipelineIdentity {
@@ -84,6 +96,7 @@ struct PipelineLifecycleEvent {
   PipelineStage to = PipelineStage::SourceArrival;
   PipelinePayloadKind payloadKind = PipelinePayloadKind::Legacy;
   PipelineDisposition disposition = PipelineDisposition::Advance;
+  PipelineOwner owner = PipelineOwner::Queue;
   std::uint64_t ownedBytes = 0;
   std::uint32_t outstandingBorrows = 0;
   std::uint32_t constructedCount = 0;
@@ -129,6 +142,49 @@ constexpr bool pipelinePublicationMayCommit(
       outstandingBorrows == 0;
 }
 
+constexpr bool pipelineNoGpuTerminalMayPublish(
+    PipelineStage stage,
+    PipelineDisposition disposition,
+    std::uint32_t outstandingBorrows,
+    bool completionAuthority) noexcept {
+  return disposition == PipelineDisposition::NoGpuTerminal &&
+      (stage == PipelineStage::RawOwned ||
+       stage == PipelineStage::FinalOwned || stage == PipelineStage::Encoding) &&
+      outstandingBorrows == 0 && !completionAuthority;
+}
+
+constexpr bool pipelineOwnerMatchesTransition(
+    PipelineOwner owner,
+    PipelineStage from,
+    PipelineStage to,
+    PipelineDisposition disposition) noexcept {
+  if (from == PipelineStage::SourceArrival &&
+      to == PipelineStage::ProducerOwned) {
+    return owner == PipelineOwner::PeImport;
+  }
+  if (from == PipelineStage::Encoding &&
+      to == PipelineStage::GPUInFlight) {
+    return owner == PipelineOwner::Receipt ||
+        owner == PipelineOwner::SelectedParallel;
+  }
+  if (from == PipelineStage::GPUInFlight &&
+      to == PipelineStage::Completed) {
+    return disposition == PipelineDisposition::DeviceLost
+        ? owner == PipelineOwner::DeviceLoss
+        : owner == PipelineOwner::Receipt;
+  }
+  // A poison-stop may terminate work that never acquired GPU authority.  The
+  // queue emits this exact owner-qualified edge when device loss observes a
+  // Pending/Encoding control shell; it must not be rejected as a fabricated
+  // ordinary Queue reclaim.
+  if (to == PipelineStage::Reclaimed &&
+      disposition == PipelineDisposition::FailStop &&
+      (from == PipelineStage::RawOwned || from == PipelineStage::Encoding)) {
+    return owner == PipelineOwner::DeviceLoss;
+  }
+  return owner == PipelineOwner::Queue;
+}
+
 constexpr bool pipelineCompletionMayPublish(
     std::uint64_t completedSeq,
     std::uint64_t sourceSeq,
@@ -159,7 +215,9 @@ constexpr bool pipelineOwnerMayReclaim(
         (disposition == PipelineDisposition::Completed ||
          disposition == PipelineDisposition::DeviceLost);
   }
-  return disposition == PipelineDisposition::PreEffectReject ||
+  return pipelineNoGpuTerminalMayPublish(
+             stage, disposition, outstandingBorrows, completionAuthority) ||
+      disposition == PipelineDisposition::PreEffectReject ||
       disposition == PipelineDisposition::StateOnly ||
       disposition == PipelineDisposition::FailStop ||
       disposition == PipelineDisposition::Shutdown;
@@ -283,6 +341,10 @@ constexpr PipelineObservationError validateTransition(
   if (record.stage != event.from || record.terminal) {
     return PipelineObservationError::DuplicateOrRegressedStage;
   }
+  if (!pipelineOwnerMatchesTransition(event.owner, event.from, event.to,
+                                       event.disposition)) {
+    return PipelineObservationError::InvalidDisposition;
+  }
 
   if (event.disposition == PipelineDisposition::AdmissionWait) {
     if (event.from != PipelineStage::RawOwned ||
@@ -336,6 +398,17 @@ constexpr PipelineObservationError validateTransition(
       return PipelineObservationError::InvalidDisposition;
     }
     return PipelineObservationError::None;
+  }
+
+  if (event.disposition == PipelineDisposition::NoGpuTerminal) {
+    return event.to == PipelineStage::Reclaimed &&
+        pipelineNoGpuTerminalMayPublish(
+            event.from, event.disposition, event.outstandingBorrows,
+            event.completionAuthority)
+        ? PipelineObservationError::None
+        : event.outstandingBorrows != 0
+            ? PipelineObservationError::OutstandingBorrow
+            : PipelineObservationError::InvalidDisposition;
   }
 
   if (event.from == PipelineStage::ProducerOwned &&
@@ -438,7 +511,8 @@ constexpr PipelineObservationError validateTransition(
          (event.from == PipelineStage::RawOwned ||
           event.from == PipelineStage::FinalOwned)) ||
         (event.disposition == PipelineDisposition::FailStop &&
-         event.from == PipelineStage::Encoding) ||
+         (event.from == PipelineStage::RawOwned ||
+          event.from == PipelineStage::Encoding)) ||
         (event.disposition == PipelineDisposition::Shutdown &&
          event.from != PipelineStage::GPUInFlight);
     const bool terminalSnapshotMatches =
@@ -475,6 +549,7 @@ constexpr PipelineObservationError reducePipelineLifecycleEvent(
     if (event.from != PipelineStage::SourceArrival ||
         event.to != PipelineStage::ProducerOwned ||
         event.disposition != PipelineDisposition::Advance ||
+        event.owner != PipelineOwner::PeImport ||
         event.outstandingBorrows != 0) {
       return PipelineObservationError::DuplicateOrRegressedStage;
     }

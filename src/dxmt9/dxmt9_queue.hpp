@@ -610,6 +610,7 @@ class SynchronousSourcePayloadBorrow final {
   friend class ::dxmt9::CommandQueue;
   friend class ::dxmt9::render::FrameGraphBackend;
   friend class GenerationQualifiedSourceBorrow;
+  friend class SynchronousSourceBorrowBatch;
 
   SynchronousSourcePayloadBorrow(
       const SynchronousSourceBorrowWitness& witness,
@@ -774,6 +775,56 @@ class SynchronousSourceBorrowBatch final {
       }
     }
     return true;
+  }
+
+  // Materialize a call-local value view only while the generation-qualified
+  // batch is live.  This is the narrow adapter for consumers that still use
+  // the established SourcePayloadView-based planner helpers; the resulting
+  // span is never owned by the batch and must not escape this callback.
+  template <typename Fn>
+  bool visitResolved(Fn&& fn) const noexcept {
+    try {
+      std::array<ResolvedPublishedSource, kMaxReadyPrefixSources> resolved{};
+      const bool valid = visit(
+          [&](const GenerationQualifiedSourceBorrow& source,
+              std::size_t index) {
+            return source.visitPayload(
+                [&](const SynchronousSourcePayloadBorrow& payload) {
+                  resolved[index] = ResolvedPublishedSource{
+                      .source = source.source(),
+                      .slotIndex = source.slotIndex(),
+                      .seqId = source.seqId(),
+                      .metadata = source.metadata(),
+                      .semantic = source.semantic(),
+                      .payload = payload.checkedView(),
+                      .sourceId = source.source().id,
+                      .storage = source.source().storage,
+                      .slot = nullptr,
+                      .hasPresent = source.hasPresent(),
+                      .commandBegin = source.commandBegin(),
+                      .commandCount = source.commandCount(),
+                  };
+                  return resolved[index].valid();
+                });
+          });
+      if (!valid) {
+        return false;
+      }
+      const auto views = std::span<const ResolvedPublishedSource>(
+          resolved.data(), sources_.size());
+      if constexpr (std::is_same_v<std::invoke_result_t<Fn&, decltype(views)>,
+                                   bool>) {
+        return std::invoke(fn, views);
+      } else {
+        std::invoke(fn, views);
+        return true;
+      }
+    } catch (...) {
+      // Borrow visitors are noexcept by contract so the queue can always
+      // restore and invalidate its epoch. Convert backend/test exceptions to
+      // a deterministic failed visit instead of terminating the process.
+      return false;
+    }
   }
 
  private:

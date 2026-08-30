@@ -23,6 +23,7 @@
 // See docs/superpowers/specs/2026-07-29-pe-legacy-record-removal-design.md §4.
 
 #include "d3d9_pe_producer_views.hpp"
+#include "d3d9_pe_batch.hpp"
 #include "d3d9_pe_semantic_tokens.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "dxmt9/device_c.h"

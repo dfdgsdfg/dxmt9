@@ -2884,14 +2884,13 @@ public:
             return D3DERR_INVALIDCALL;
         }
         const auto presentSourceWire = validatedPresentSource.wire();
-        const D9CCommandChunkWirePresent presentWire{
-            .hwnd = (uint64_t)(uintptr_t)wnd,
-            .flags = 0,
-            .hasSrc = src ? 1u : 0u,
-            .hasDst = dst ? 1u : 0u,
-            .sourceHandleIndex = 0u,
-            .src = src ? cs : D9CRect{},
-            .dst = dst ? cd : D9CRect{},
+        const dxmt9::d3d9::pe::PePresentBatch presentBatch{
+            .command = D9CCommandChunkWirePresent{
+                .hwnd = (uint64_t)(uintptr_t)wnd, .flags = 0,
+                .hasSrc = src ? 1u : 0u, .hasDst = dst ? 1u : 0u,
+                .sourceHandleIndex = 0u, .src = src ? cs : D9CRect{},
+                .dst = dst ? cd : D9CRect{}},
+            .source = presentSourceWire,
         };
         const HRESULT appendHr = appendRecord(
             D9C_COMMAND_RECORD_PRESENT, kLegacyPresentSizeHint,
@@ -2900,7 +2899,7 @@ public:
                 const auto t0 = phase.begin();
                 const bool ok =
                     dxmt9::d3d9::pe::appendPresent(
-                        builder, presentWire, presentSourceWire);
+                        builder, presentBatch.command, presentBatch.source);
                 phase.recordEncode(t0);
                 return ok ? S_OK : D3DERR_INVALIDCALL;
             });

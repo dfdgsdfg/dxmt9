@@ -392,7 +392,40 @@ FrameGraphBackend::onSourceReady(encoders::EncodeContext& ctx,
                                  core::SourcePayloadView payload,
                                  std::uint64_t seqId,
                                  encoders::EncodeChunkOptions options) {
+  if (options.sessionLookaheadBorrows) {
+    std::optional<core::metalqueue::QueueSubmissionRecord> result;
+    const bool visited = options.sessionLookaheadBorrows->visitResolved(
+        [&](std::span<const core::metalqueue::ResolvedPublishedSource> sources)
+            noexcept {
+          try {
+            result = onSourceReadyImpl(ctx, slotIndex, payload, seqId,
+                                       std::move(options), sources);
+            return true;
+          } catch (...) {
+            return false;
+          }
+        });
+    return visited ? std::move(result) : std::nullopt;
+  }
+  const auto fallbackLookaheadSources = options.sessionLookaheadSources;
+  return onSourceReadyImpl(ctx, slotIndex, payload, seqId,
+                           std::move(options), fallbackLookaheadSources);
+}
+
+std::optional<core::metalqueue::QueueSubmissionRecord>
+FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
+                                 std::size_t slotIndex,
+                                 core::SourcePayloadView payload,
+                                 std::uint64_t seqId,
+                                 encoders::EncodeChunkOptions options,
+                                 std::span<const core::metalqueue::ResolvedPublishedSource>
+                                     sessionLookaheadSources) {
   if (options.skipBackendPlanning) {
+    // The surrounding onSourceReady wrapper has already converted the live
+    // borrow batch into this call-local span. Clear the capability before
+    // delegating so encodeChunk does not materialize the same lookahead twice.
+    options.sessionLookaheadBorrows = nullptr;
+    options.sessionLookaheadSources = sessionLookaheadSources;
     return encoders::encodeChunk(ctx, slotIndex, payload, seqId,
                                  std::move(options));
   }
@@ -418,7 +451,7 @@ FrameGraphBackend::onSourceReady(encoders::EncodeContext& ctx,
     std::vector<framegraph::ResourceHandle> overwriteProof;
     if (features_.dce) {
       if (const auto* next = selectFrameGraphLookahead(
-              options.sessionLookaheadSources, slotIndex, payload, seqId,
+              sessionLookaheadSources, slotIndex, payload, seqId,
               options.partitionSource)) {
         const framegraph::FrameGraph lookahead =
             framegraph::buildFrameGraph(next->payload, next->seqId,
@@ -715,6 +748,8 @@ FrameGraphBackend::onSourceReady(encoders::EncodeContext& ctx,
                         FinalReorderedActivated
                   : perf::FramegraphSourceLocalReplayOutcome::
                         FinalNaturalOrder);
+          options.sessionLookaheadBorrows = nullptr;
+          options.sessionLookaheadSources = sessionLookaheadSources;
           return encoders::encodeChunk(ctx, slotIndex, payload, seqId,
                                        std::move(options));
         }
@@ -740,6 +775,8 @@ FrameGraphBackend::onSourceReady(encoders::EncodeContext& ctx,
     recordSourceLocalReturnOutcome(
         perf::FramegraphSourceLocalReplayOutcome::FinalNaturalOrder);
   }
+  options.sessionLookaheadBorrows = nullptr;
+  options.sessionLookaheadSources = sessionLookaheadSources;
   return encoders::encodeChunk(ctx, slotIndex, payload, seqId,
                                std::move(options));
 }

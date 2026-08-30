@@ -133,10 +133,15 @@ struct EncodeChunkOptions {
   std::optional<PreRegisteredEncodeChunkFragment> preRegisteredFragment{};
   PreRegisteredEncodeSourceFragmentAccumulator*
       preRegisteredSourceAccumulator = nullptr;
-  // Call-local selected FIFO source suffix used for load/store and FrameGraph
-  // lookahead proofs, and as partitionRanges' retained source table. The span
-  // points at synchronously resolved, Represented-pinned sources and must not
-  // be retained by encodeChunk or EncodeSession.
+  // Call-local generation-qualified FIFO source suffix used for load/store and
+  // FrameGraph lookahead proofs. The queue owns the batch and keeps it live
+  // across the synchronous backend callback; consumers must process it via
+  // visitResolved and never retain a source view or span.
+  const core::metalqueue::SynchronousSourceBorrowBatch*
+      sessionLookaheadBorrows = nullptr;
+  // Compatibility seam for native planner tests and legacy direct callers.
+  // Production queue paths must use sessionLookaheadBorrows; this span is
+  // still call-local and must never be retained.
   std::span<const core::metalqueue::ResolvedPublishedSource>
       sessionLookaheadSources{};
   // Observability-only identity of the bounded planner/fallback window that
