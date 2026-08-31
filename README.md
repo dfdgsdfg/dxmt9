@@ -66,6 +66,31 @@ Each dxmt9 value is one `perf` run. Measurement modes:
   - D9VK/MoltenVK and Heroic 11.16 WineD3D: 1280x800
   - Non-dxmt9 values use the 240-second benchmark-overlay average
 
+### S.T.A.L.K.E.R.: Call of Pripyat Benchmark
+
+| Scene     | API / backend                       | Min FPS | Average FPS | Max FPS |
+| --------- | ----------------------------------- | ------: | ----------: | ------: |
+| Day       | D3D9 / dxmt9 / Metal                | `4.1`   | `12.5`      | `30.0`  |
+| Day       | D3D9 / WineD3D / OpenGL (Sikarugir) | `6.3`   | `23.4`      | `60.8`  |
+| Day       | D3D9 / D9VK / MoltenVK 1.4.1        | `2.9`   | `30.4`      | `76.6`  |
+| Night     | D3D9 / dxmt9 / Metal                | `3.4`   | `13.8`      | `36.4`  |
+| Night     | D3D9 / WineD3D / OpenGL (Sikarugir) | `6.1`   | `23.3`      | `59.0`  |
+| Night     | D3D9 / D9VK / MoltenVK 1.4.1        | `4.4`   | `31.8`      | `78.3`  |
+| Rain      | D3D9 / dxmt9 / Metal                | `3.3`   | `17.0`      | `40.2`  |
+| Rain      | D3D9 / WineD3D / OpenGL (Sikarugir) | `5.7`   | `25.8`      | `60.6`  |
+| Rain      | D3D9 / D9VK / MoltenVK 1.4.1        | `5.5`   | `37.5`      | `93.0`  |
+| Sunshafts | D3D9 / dxmt9 / Metal                | `3.5`   | `11.2`      | `27.3`  |
+| Sunshafts | D3D9 / WineD3D / OpenGL (Sikarugir) | `5.1`   | `21.1`      | `59.3`  |
+| Sunshafts | D3D9 / D9VK / MoltenVK 1.4.1        | `4.0`   | `31.9`      | `75.9`  |
+
+Measured 2026-08-31 on the same M1 system with the High preset,
+`renderer_r2.5`, and a 1280x720 window. Each row is one `perf` run and uses the
+benchmark-owned `.result` statistics. The WineD3D rows use the pristine
+Sikarugir builtin D3D9 after one cold shader-cache warm-up. The D9VK rows use
+Sikarugir D9VK `v1.10.3-20250511-async` and the current MoltenVK 1.4.1 after
+one state-cache-building run. Additional API rows, including D3D11, can be
+added using the same convention.
+
 See the [performance overview](docs/perfomance/overview.md) for methodology and
 [wild FPS refresh](docs/perfomance/baselines/baselines-wild-fps-refresh.04.md)
 and [3DMark06 WineD3D baseline](docs/perfomance/baselines/baselines-3dmark06-wined3d.05.md)
