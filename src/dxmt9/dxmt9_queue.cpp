@@ -2843,7 +2843,8 @@ void QueueLifecycleController::flushAndWait(
 bool QueueLifecycleController::commitCurrentChunk(
     std::unique_lock<std::mutex>& lock,
     size_t inflightLimit,
-    const std::function<void(ChunkSlot&)>& onBeforePublish) {
+    const std::function<void(ChunkSlot&)>& onBeforePublish,
+    CompatibilityPublicationIdentity identity) {
   // TLA+: QueueLifecycleRefinement / CommitEmpty or CommitPublish.
   DXMT_ASSERT(lock.owns_lock());
   static_cast<void>(lock);
@@ -2870,6 +2871,12 @@ bool QueueLifecycleController::commitCurrentChunk(
   auto* stop = submissionBinding_.stop;
   if (!writingSlot || !writeIndex || !nextSeqId || !inflightCount ||
       !lastCommittedSeqId || !writeCv || !stop) {
+    dxmt9::noteQueueMutexSegmentIfEnabled("commit_current_chunk/pre_wait",
+                                          qmxEnabled, qmxSegStart);
+    return false;
+  }
+  if (!identity.empty() && !identity.valid()) {
+    poisonTapeFailureLocked();
     dxmt9::noteQueueMutexSegmentIfEnabled("commit_current_chunk/pre_wait",
                                           qmxEnabled, qmxSegStart);
     return false;
@@ -3001,14 +3008,20 @@ bool QueueLifecycleController::commitCurrentChunk(
     recordNoEnqueueCommitPublishOnBeforePublishCpu(static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - onBeforePublishStart).count()));
+    const std::uint64_t sourceOrdinal =
+        identity.valid() ? identity.sourceOrdinal : slot.seqId;
+    const std::uint64_t rawOrdinal =
+        identity.valid() ? identity.rawOrdinal : 0;
     sealed = submissionBinding_.cpuReadyTape->sealAndPublish(
         CpuReadyPublicationTicket{
             .id = slot.sourceId,
             .storage = slot.storage,
         },
+        sourceOrdinal,
         slot.seqId,
-        slot.seqId,
-        publishedSlotIndex);
+        publishedSlotIndex,
+        0,
+        rawOrdinal);
     DXMT_ASSERT(sealed);
     if (!sealed) {
       slot.seqId = 0;

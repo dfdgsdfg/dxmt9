@@ -1142,7 +1142,7 @@ void testDirectAssemblerDifferentialAndConservation() {
 
 void testDirectChunkSlotAllFamilyParityAndRollback() {
   SourcePayloadCapacity capacity{};
-  capacity.commandHeaders = 7;
+  capacity.commandHeaders = 8;
   capacity.drawHotStates = 1;
   capacity.drawShaderLayouts = 1;
   capacity.drawDebugSnapshots = 1;
@@ -1165,6 +1165,7 @@ void testDirectChunkSlotAllFamilyParityAndRollback() {
   capacity.colorFillRecords = 1;
   capacity.depthResolveRecords = 1;
   capacity.generateMipmapsRecords = 1;
+  capacity.presentRecords = 1;
 
   FlatDrawStateRecord hot{};
   hot.key.renderStateHash = 0x101u;
@@ -1214,6 +1215,8 @@ void testDirectChunkSlotAllFamilyParityAndRollback() {
       .intzDest = dxmt9::core::Handle{28u}};
   const dxmt9::core::GenerateMipmapsDesc mipmaps{
       .texture = dxmt9::core::Handle{29u}};
+  const dxmt9::core::PresentCommandRecord present{
+      .present = {}, .presentSource = dxmt9::core::Handle{21u}};
 
   ChunkSlot legacy;
   std::array<DrawRunSubmission, 1> legacyDraw{DrawRunSubmission{
@@ -1231,6 +1234,7 @@ void testDirectChunkSlotAllFamilyParityAndRollback() {
   legacy.appendColorFill(fill);
   legacy.appendDepthResolve(resolve);
   legacy.appendGenerateMipmaps(mipmaps);
+  legacy.appendPresent(present.present, present.presentSource);
 
   ChunkSlot direct;
   ClearDesc directClear = clear;
@@ -1263,6 +1267,8 @@ void testDirectChunkSlotAllFamilyParityAndRollback() {
   check(assembler.tryAppendDepthResolve(resolve), "direct resolve appends");
   check(assembler.tryAppendGenerateMipmaps(mipmaps),
         "direct mipmap generation appends");
+  check(assembler.tryAppendPresent(dxmt9::core::PresentCommandRecord(present)),
+        "direct Present appends into final ChunkSlot capacity");
   check(assembler.commitValueOnlyForTest(),
         "eligible families construct directly in final ChunkSlot storage");
   check(commandStorage == direct.commandHeaders.data() &&
@@ -1275,7 +1281,7 @@ void testDirectChunkSlotAllFamilyParityAndRollback() {
 
   const SourcePayloadView legacyView(legacy);
   const SourcePayloadView directView(direct);
-  check(legacyView.commandCount() == 7u &&
+  check(legacyView.commandCount() == 8u &&
             directView.commandCount() == legacyView.commandCount() &&
             direct.drawStateStorageConsistent() &&
             direct.commandPayloadsInRange(),

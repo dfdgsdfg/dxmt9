@@ -1184,7 +1184,16 @@ process-local object addresses as semantics. The ordinary fresh-`ChunkSlot`
 candidate preserves source, command-buffer, and render-pass cadence and keeps
 Legacy as a typed pre-effect lane for populated destinations, segmented or
 structurally unsupported raws, UP draws, Inline ordered controls/readback,
-Present, capture/trace, and oversized work. Ordinary eligible selection is
+standalone/nonterminal/duplicate Present, capture/trace, and oversized work.
+The narrow optional leading Clear plus non-UP Draw/APPLY_STATE/constants plus exactly
+one terminal Present shape may use `DirectWithPresentTail`; the coordinator
+validates direct ownership before WSI effects, stages descriptor/source/token/
+boundary policy, appends Present inside the assembler transaction so resource
+closure evidence covers it, and publishes the same slot only after evidence
+commit (then applies the deferred boundary order). Every classified raw emits
+exactly one perf-gated typed disposition and begin/admission outcome with raw,
+record, and wire-byte units; disabled runs retain only the cached gate branch.
+Ordinary eligible selection is
 default-on after the differential, GPU, and broader wild equivalence evidence
 recorded in the backend gap; the CPU-ready Tape provider remains a separate
 default-off policy until all R-ARCH-7.10 gates for that provider pass.

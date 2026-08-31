@@ -4078,12 +4078,14 @@ CommandQueue::beginDirectChunkSlotReplay(
     requestSchedulingStopLocked();
     return {.status = DirectChunkSlotReplayStatus::FailStopped};
   }
+  const std::uint64_t seqId =
+      nextSeqId_.load(std::memory_order_relaxed);
   const core::CpuReadyPublicationTicket ticket{
       .id = control.sourceId,
       .storage = control.storage,
       .rawOrdinal = rawOrdinal,
-      .sourceOrdinal = control.sourceId.generation,
-      .seqId = nextSeqId_.load(std::memory_order_relaxed),
+      .sourceOrdinal = seqId,
+      .seqId = seqId,
       .buildGeneration = nextDirectChunkSlotBuildGeneration_++,
   };
   directChunkSlotBuildContext_.emplace();
@@ -4125,7 +4127,9 @@ CommandQueue::beginDirectChunkSlotReplay(
 bool CommandQueue::abortDirectChunkSlotReplay(
     core::CpuReadyPublicationTicket ticket, std::size_t controlIndex,
     bool failStop) noexcept {
-  std::lock_guard lock(mutex_);
+  core::PresentId stashedPresentId{};
+  bool removeStashedPresentToken = false;
+  std::unique_lock lock(mutex_);
   auto* context = activeDirectChunkSlotBuild_.load(
       std::memory_order_acquire);
   if (!context || !directChunkSlotBuildContext_ ||
@@ -4159,9 +4163,18 @@ bool CommandQueue::abortDirectChunkSlotReplay(
       failStop = true;
     }
   }
+  if (context->presentTokenStashed) {
+    stashedPresentId = context->pendingPresentId;
+    context->presentTokenStashed = false;
+    removeStashedPresentToken = true;
+  }
   activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
   directChunkSlotBuildContext_.reset();
   if (failStop) requestSchedulingStopLocked();
+  lock.unlock();
+  if (removeStashedPresentToken) {
+    (void)takeDrawableToken(stashedPresentId);
+  }
   return !failStop && destinationStillOwned;
 }
 
@@ -4169,7 +4182,7 @@ CommandQueue::DirectChunkSlotReplayStatus
 CommandQueue::commitDirectChunkSlotReplay(
     core::CpuReadyPublicationTicket ticket, std::size_t controlIndex,
     std::span<const core::ChunkHandleEntry> resources) noexcept {
-  std::lock_guard lock(mutex_);
+  std::unique_lock lock(mutex_);
   auto* context = activeDirectChunkSlotBuild_.load(
       std::memory_order_acquire);
   if (!context || !directChunkSlotBuildContext_ ||
@@ -4179,10 +4192,23 @@ CommandQueue::commitDirectChunkSlotReplay(
       context->failed || !context->assembler ||
       controlIndex >= slots_.size() || !writingSlot_ ||
       *writingSlot_ != controlIndex) {
-    if (context && context->assembler) context->assembler->abandonFailStop();
+    core::PresentId stashedPresentId{};
+    const bool removeStashedPresentToken =
+        context && context->presentTokenStashed;
+    if (context) {
+      if (removeStashedPresentToken) {
+        stashedPresentId = context->pendingPresentId;
+        context->presentTokenStashed = false;
+      }
+      if (context->assembler) context->assembler->abandonFailStop();
+    }
     activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
     directChunkSlotBuildContext_.reset();
     requestSchedulingStopLocked();
+    lock.unlock();
+    if (removeStashedPresentToken) {
+      (void)takeDrawableToken(stashedPresentId);
+    }
     return DirectChunkSlotReplayStatus::FailStopped;
   }
   auto& control = slots_[controlIndex];
@@ -4191,34 +4217,54 @@ CommandQueue::commitDirectChunkSlotReplay(
           .id = ticket.id,
           .storage = ticket.storage,
       });
+  const bool hasPendingPresent = context->presentAppended;
+  const auto pendingPresentDesc = context->pendingPresentDesc;
+  const auto pendingPresentBoundaryPolicy =
+      context->pendingPresentBoundaryPolicy;
+  const auto failStop = [&]() noexcept {
+    core::PresentId stashedPresentId{};
+    const bool removeStashedPresentToken = context->presentTokenStashed;
+    if (removeStashedPresentToken) {
+      stashedPresentId = context->pendingPresentId;
+      context->presentTokenStashed = false;
+    }
+    context->assembler->abandonFailStop();
+    activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
+    directChunkSlotBuildContext_.reset();
+    requestSchedulingStopLocked();
+    lock.unlock();
+    if (removeStashedPresentToken) {
+      (void)takeDrawableToken(stashedPresentId);
+    }
+    return DirectChunkSlotReplayStatus::FailStopped;
+  };
   if (control.state != core::ChunkSlot::State::Writing ||
       control.sourceId != ticket.id || control.storage != ticket.storage ||
       payload != control.payload ||
-      nextSeqId_.load(std::memory_order_relaxed) != ticket.seqId ||
-      !context->assembler->prepare()) {
-    context->assembler->abandonFailStop();
-    activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
-    directChunkSlotBuildContext_.reset();
-    requestSchedulingStopLocked();
-    return DirectChunkSlotReplayStatus::FailStopped;
+      nextSeqId_.load(std::memory_order_relaxed) != ticket.seqId) {
+    return failStop();
+  }
+  if (hasPendingPresent &&
+      !context->assembler->tryAppendPresent(core::PresentCommandRecord{
+          .present = std::move(context->pendingPresentDesc),
+          .presentSource = context->pendingPresentSource})) {
+    return failStop();
+  }
+  if (hasPendingPresent) {
+    noteCurrentSlotCommandAppendStartedUnlocked(*this);
+  }
+  if (!context->assembler->prepare()) {
+    return failStop();
   }
   if (testOnlyForceNextDirectChunkSlotCommitFailure_) {
     testOnlyForceNextDirectChunkSlotCommitFailure_ = false;
-    context->assembler->abandonFailStop();
-    activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
-    directChunkSlotBuildContext_.reset();
-    requestSchedulingStopLocked();
-    return DirectChunkSlotReplayStatus::FailStopped;
+    return failStop();
   }
 
   markChunkResourcesWithExactSeq(pool_, resources, ticket.seqId);
   const core::SourcePayloadView payloadView(*payload);
   if (!payloadView.valid()) {
-    context->assembler->abandonFailStop();
-    activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
-    directChunkSlotBuildContext_.reset();
-    requestSchedulingStopLocked();
-    return DirectChunkSlotReplayStatus::FailStopped;
+    return failStop();
   }
   markArenaSourceResources(pool_, payloadView, ticket.seqId);
   ArenaResourceRetainDigest retained;
@@ -4241,17 +4287,44 @@ CommandQueue::commitDirectChunkSlotReplay(
           ticket.storage.firstPage, ticket.storage.pageCount, 0u, 1u,
           binding.plannedBytes, retained.count, retained.hash) ||
       !context->assembler->commit()) {
-    context->assembler->abandonFailStop();
-    activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
-    directChunkSlotBuildContext_.reset();
-    requestSchedulingStopLocked();
-    return DirectChunkSlotReplayStatus::FailStopped;
+    return failStop();
   }
   if (context->updatesBackBuffer) {
     currentBackBuffer_ = context->pendingBackBuffer;
   }
+  const bool hasPublishedPresent = hasPendingPresent;
+  const auto publishedPresentDesc = pendingPresentDesc;
+  const auto publishedPresentBoundaryPolicy = pendingPresentBoundaryPolicy;
+  bool published = true;
+  if (hasPublishedPresent) {
+    published = queueLifecycle_.commitCurrentChunk(
+        lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
+          prepareSlotForPublish(*this, pool_, slot,
+                                perf::ChunkPublishReason::Present);
+        },
+        core::metalqueue::CompatibilityPublicationIdentity{
+            .rawOrdinal = ticket.rawOrdinal,
+            .sourceOrdinal = ticket.sourceOrdinal,
+        });
+  }
+  if (!published) {
+    return failStop();
+  }
+  context->presentTokenStashed = false;
   activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
   directChunkSlotBuildContext_.reset();
+  lock.unlock();
+  writeCv_.notify_all();
+  if (hasPublishedPresent) {
+    if (publishedPresentBoundaryPolicy ==
+        BoundaryPolicy::DeferredPresentCompletion) {
+      PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
+      drainDeferredPresentBoundary();
+    }
+    applyPublishedPresentBoundary(ticket.seqId, publishedPresentDesc,
+                                  publishedPresentBoundaryPolicy);
+    noteCopyMaterializationPublishedPresent();
+  }
   return DirectChunkSlotReplayStatus::Committed;
 }
 
@@ -5261,6 +5334,68 @@ CommandQueue::appendActiveDirectChunkSlotGenerateMipmaps(
         noteCurrentSlotCommandAppendStartedUnlocked(*this);
         return true;
       });
+}
+
+CommandQueue::ActiveArenaAppendResult
+CommandQueue::appendActiveDirectChunkSlotPresent(
+    core::SwapDesc value, BoundaryPolicy boundaryPolicy,
+    bool tokenStashed) noexcept {
+  return appendActiveDirectChunkSlot(
+      [value = std::move(value), boundaryPolicy,
+       tokenStashed](DirectChunkSlotBuildContext& context,
+                     core::TransactionalChunkSlotAssembler&) mutable noexcept {
+        if (context.presentAppended) return false;
+        const core::Handle fallback = context.updatesBackBuffer
+            ? context.pendingBackBuffer
+            : context.initialBackBuffer;
+        const core::Handle sourceHandle =
+            core::metalqueue::selectPresentSourceHandle(value, fallback);
+        perf::countPresentSourceSelection(
+            static_cast<bool>(value.sourceSurface),
+            sourceHandle.value != 0 && sourceHandle == fallback);
+        // The context owns token cleanup until commit publishes the slot.
+        context.pendingPresentId = value.presentId;
+        context.pendingPresentDesc = std::move(value);
+        context.pendingPresentSource = sourceHandle;
+        context.pendingPresentBoundaryPolicy = boundaryPolicy;
+        context.presentAppended = true;
+        context.presentTokenStashed = tokenStashed;
+        return true;
+      });
+}
+
+std::optional<std::uint64_t>
+CommandQueue::validateActiveDirectChunkSlotPresent() noexcept {
+  auto* context = activeDirectChunkSlotBuild_.load(
+      std::memory_order_acquire);
+  if (!context) return std::nullopt;
+  std::lock_guard lock(mutex_);
+  if (!directChunkSlotBuildContext_ ||
+      &*directChunkSlotBuildContext_ != context ||
+      context->ownerThread != std::this_thread::get_id() ||
+      context->failed || !context->assembler || context->presentAppended ||
+      context->controlIndex >= slots_.size() || !writingSlot_ ||
+      *writingSlot_ != context->controlIndex) {
+    if (directChunkSlotBuildContext_ &&
+        &*directChunkSlotBuildContext_ == context) {
+      context->failed = true;
+    }
+    return std::nullopt;
+  }
+  const auto& control = slots_[context->controlIndex];
+  const auto* payload = cpuReadyTape_.resolveForWrite(
+      core::CpuReadyPublicationTicket{
+          .id = control.sourceId,
+          .storage = control.storage,
+      });
+  if (control.state != core::ChunkSlot::State::Writing ||
+      control.sourceId != context->ticket.id ||
+      control.storage != context->ticket.storage ||
+      payload != control.payload) {
+    context->failed = true;
+    return std::nullopt;
+  }
+  return context->ticket.seqId;
 }
 
 CommandQueue::ActiveArenaAppendResult CommandQueue::appendActiveArenaPresent(
@@ -6644,6 +6779,8 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   }
   const bool arenaPresentActive =
       arenaAdmissionActive_.load(std::memory_order_acquire);
+  const bool directPresentActive =
+      activeDirectChunkSlotBuild_.load(std::memory_order_acquire) != nullptr;
   std::uint64_t arenaPresentSeqId = 0;
   if (arenaPresentActive) {
     auto* context = activeArenaBuild_.load(std::memory_order_acquire);
@@ -6657,6 +6794,14 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
       return 0;
     }
     arenaPresentSeqId = context->reservation.ticket.seqId;
+  }
+  std::uint64_t directPresentSeqId = 0;
+  if (directPresentActive) {
+    const auto validatedSeqId = validateActiveDirectChunkSlotPresent();
+    if (!validatedSeqId) {
+      return 0;
+    }
+    directPresentSeqId = *validatedSeqId;
   }
   // TLA+: PresentFrameLatency / CommitPresent.
   perf::countSubmitPresent();
@@ -6675,7 +6820,7 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   // process (a direct COM caller, or one replayed by the synchronous
   // non-offload chunk path) may have deferred a target even while offload
   // is globally enabled for other (paced) presents.
-  if (!arenaPresentActive &&
+  if (!arenaPresentActive && !directPresentActive &&
       boundaryPolicy == BoundaryPolicy::DeferredPresentCompletion) {
     PerfScope stageScope(perf::countSubmitPresentBoundaryCpuTime);
     drainDeferredPresentBoundary();
@@ -6705,7 +6850,7 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
         break;
       }
       case AcquirePolicy::SyncOnSubmit: {
-        if (!arenaPresentActive) {
+        if (!arenaPresentActive && !directPresentActive) {
           const auto qmxBegin = queueMutexProbeBegin();
           std::unique_lock lock(mutex_);
           // skipHold: `lock` is handed to queueLifecycle_.commitCurrentChunk()
@@ -6738,6 +6883,18 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
         std::move(queuedDesc), boundaryPolicy, presentTokenStashed);
     if (appendResult == ActiveArenaAppendResult::Appended) {
       return arenaPresentSeqId;
+    }
+    return 0;
+  }
+
+  if (directPresentActive) {
+    const auto appendResult = appendActiveDirectChunkSlotPresent(
+        std::move(queuedDesc), boundaryPolicy, presentTokenStashed);
+    if (appendResult == ActiveArenaAppendResult::Appended) {
+      return directPresentSeqId;
+    }
+    if (presentTokenStashed) {
+      (void)takeDrawableToken(desc.presentId);
     }
     return 0;
   }

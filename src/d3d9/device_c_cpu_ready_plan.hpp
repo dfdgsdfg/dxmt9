@@ -107,6 +107,7 @@ struct CpuReadyPlan {
 
 enum class DirectChunkSlotReplayDisposition : std::uint8_t {
   Direct = 0,
+  DirectWithPresentTail,
   LegacyStateOnly,
   LegacySegmented,
   LegacyUpDraw,
@@ -116,6 +117,7 @@ enum class DirectChunkSlotReplayDisposition : std::uint8_t {
   LegacyCaptureOrTrace,
   InlineOrderedControl,
   RejectInvalid,
+  Count,
 };
 
 // Whole-raw promotion gate for the ordinary compatibility source. It is a

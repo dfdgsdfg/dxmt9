@@ -1402,8 +1402,24 @@ void traceQueueSlotsEvent(const char* event,
  * assertPendingCompletionInvariantsLocked() are the executable binding for
  * the safety invariants in both modules.
  */
+struct CompatibilityPublicationIdentity {
+  // Empty preserves historical compatibility publication. A complete value
+  // carries a direct transaction's already-proven raw/source identity into
+  // the same final ChunkSlot publication without changing its seqId.
+  std::uint64_t rawOrdinal = 0;
+  std::uint64_t sourceOrdinal = 0;
+
+  constexpr bool empty() const noexcept {
+    return rawOrdinal == 0 && sourceOrdinal == 0;
+  }
+  constexpr bool valid() const noexcept {
+    return rawOrdinal != 0 && sourceOrdinal != 0;
+  }
+};
+
 class QueueLifecycleController {
  public:
+
   // Failure-only provenance for lifecycle poison.  The source-location
   // strings point at static compiler literals; publication is one-shot and
   // never participates in normal queue payloads or transition records.
@@ -1522,7 +1538,8 @@ class QueueLifecycleController {
   // TLA+: CommitEmpty or CommitPublish.
   bool commitCurrentChunk(std::unique_lock<std::mutex>& lock,
                           size_t inflightLimit,
-                          const std::function<void(ChunkSlot&)>& onBeforePublish = {});
+                          const std::function<void(ChunkSlot&)>& onBeforePublish = {},
+                          CompatibilityPublicationIdentity identity = {});
   // TLA+: EncodeDequeue.
   bool dequeueReadySlot(std::unique_lock<std::mutex>& lock,
                         ReadySlotSnapshot& out);

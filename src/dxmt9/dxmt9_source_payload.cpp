@@ -2243,7 +2243,24 @@ bool TransactionalChunkSlotAssembler::tryAppendGenerateMipmaps(
 bool TransactionalChunkSlotAssembler::tryAppendPresent(
     PresentCommandRecord&& value) noexcept {
   directRunOpen_ = false;
-  if (directSlot_) return fail();
+  if (directSlot_) {
+    if (!beginBuild() ||
+        !directCapacityAvailable(directSlot_->commandHeaders.size(),
+                                 directCheckpoint_.commandHeaders,
+                                 directCapacity_.commandHeaders) ||
+        !directCapacityAvailable(directSlot_->presentRecords.size(),
+                                 directCheckpoint_.presentRecords,
+                                 directCapacity_.presentRecords)) {
+      return fail();
+    }
+    try {
+      directSlot_->appendPresent(value.present, value.presentSource);
+      ++commandCount_;
+      return true;
+    } catch (...) {
+      return fail();
+    }
+  }
   if (!beginBuild() || !builder_->tryAppendPresentCommand(std::move(value))) {
     return builder_->reject();
   }

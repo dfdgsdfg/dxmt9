@@ -1649,6 +1649,14 @@ class CommandQueue {
     bool updatesBackBuffer = false;
     bool failed = false;
     bool effectsStarted = false;
+    // Present is staged by submitPresent, but remains coordinator-owned until
+    // direct assembler evidence has committed the same final ChunkSlot.
+    core::PresentId pendingPresentId{};
+    core::SwapDesc pendingPresentDesc{};
+    core::Handle pendingPresentSource{};
+    BoundaryPolicy pendingPresentBoundaryPolicy = BoundaryPolicy::Disabled;
+    bool presentAppended = false;
+    bool presentTokenStashed = false;
   };
 
   enum class ActiveArenaAppendResult {
@@ -1775,6 +1783,11 @@ class CommandQueue {
       const core::DepthResolveDesc& value) noexcept;
   ActiveArenaAppendResult appendActiveDirectChunkSlotGenerateMipmaps(
       const core::GenerateMipmapsDesc& value) noexcept;
+  ActiveArenaAppendResult appendActiveDirectChunkSlotPresent(
+      core::SwapDesc value, BoundaryPolicy boundaryPolicy,
+      bool tokenStashed) noexcept;
+  std::optional<std::uint64_t>
+  validateActiveDirectChunkSlotPresent() noexcept;
   DirectChunkSlotReplayStatus commitDirectChunkSlotReplay(
       core::CpuReadyPublicationTicket ticket, std::size_t controlIndex,
       std::span<const core::ChunkHandleEntry> resources) noexcept;

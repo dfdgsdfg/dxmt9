@@ -1639,7 +1639,7 @@ void ordinaryDrawApplyStateDrawUsesCarrierFreeDirectPath() {
   dxmt9c_buffer_release(buffer);
 }
 
-void drawApplyStateDrawWithPresentRetainsLegacyCarrierBoundary() {
+void drawApplyStateDrawWithPresentUsesDirectPresentTail() {
   RuntimeFixture fixture(/*rejectAfterClear=*/false,
                          /*segmentSerial=*/false,
                          /*directChunkSlot=*/true);
@@ -1650,6 +1650,7 @@ void drawApplyStateDrawWithPresentRetainsLegacyCarrierBoundary() {
   dxmt9::d3d9::WireObjectRegistry registry;
   const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
   const std::array records{
+      clearRecord(),
       drawRecord(identity, 0u),
       applyRenderStateRecord(RS_TEXTURE_FACTOR, 0x01020304u),
       drawRecord(identity, 1u),
@@ -1666,22 +1667,53 @@ void drawApplyStateDrawWithPresentRetainsLegacyCarrierBoundary() {
   check(plan.directArenaCandidate() &&
             dxmt9::d3d9::classifyDirectChunkSlotReplay(
                 imported, plan, /*captureOrTrace=*/false) ==
-                dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyPresent,
-        "Present-bearing raw remains fail-closed LegacyPresent");
+                dxmt9::d3d9::DirectChunkSlotReplayDisposition::DirectWithPresentTail,
+        "supported Present-bearing raw selects the direct Present tail");
 
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
+            fixture.routing->clearCalls == 1u &&
             fixture.routing->drawCalls == 2u &&
-            fixture.routing->drawBatchCalls == 2u &&
-            fixture.routing->lastDrawBatchSize == 1u &&
-            fixture.routing->presentCalls == 1u,
-        "Present-bearing Draw/ApplyState/Draw must retain Legacy carriers");
+            fixture.routing->drawBatchCalls == 0u &&
+            fixture.routing->presentCalls == 1u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
+                fixture.routing->queue_) == 2u,
+        "Present-bearing Draw/ApplyState/Draw uses one direct final source");
   const auto completion =
       dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
           fixture.routing->queue_);
-  check(completion.dequeued && !completion.arena && completion.hasPresent &&
-            completion.submitted && completion.completed &&
-            completion.reclaimed,
-        "Legacy carrier boundary preserves Present completion");
+  check(completion.dequeued, "direct Present tail dequeues one source");
+  check(!completion.arena,
+        "direct Present tail retains final ChunkSlot representation");
+  check(completion.hasPresent,
+        "direct Present tail keeps Present as the terminal command");
+  check(completion.commandCount == 4u,
+        "direct Present tail keeps Clear, two draws, and terminal Present");
+  check(completion.seqId == 1u,
+        "direct Present tail preserves the admitted sequence identity");
+  check(completion.rawOrdinal == 92u && completion.sourceOrdinal != 0u,
+        "direct Present tail preserves raw and source identity");
+  check(completion.submitted && completion.completed && completion.reclaimed,
+        "direct Present tail reaches completion and reclaim");
+  check(!dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+            fixture.routing->queue_),
+        "direct Present tail publishes exactly one source");
+  auto nextRaw = makeRaw(makeWireFixture(records), 93u, false, &registry);
+  nextRaw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), nextRaw) == D3D_OK &&
+            fixture.routing->clearCalls == 2u &&
+            fixture.routing->presentCalls == 2u,
+        "a second direct Present tail publishes without source-ordinal reuse");
+  const auto nextCompletion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+  check(nextCompletion.dequeued && nextCompletion.hasPresent &&
+            nextCompletion.seqId == 2u &&
+            nextCompletion.rawOrdinal == 93u &&
+            nextCompletion.sourceOrdinal == 2u &&
+            nextCompletion.submitted && nextCompletion.completed &&
+            nextCompletion.reclaimed,
+        "consecutive direct Present tails retain monotone source identity");
+  dxmt9::d3d9::releaseRetainedWrappers(nextRaw);
   dxmt9::d3d9::releaseRetainedWrappers(raw);
   dxmt9c_buffer_release(buffer);
 }
@@ -2290,7 +2322,7 @@ int main() {
     sameRawLegacyAndDirectProductionOracle();
     ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion();
     ordinaryDrawApplyStateDrawUsesCarrierFreeDirectPath();
-    drawApplyStateDrawWithPresentRetainsLegacyCarrierBoundary();
+    drawApplyStateDrawWithPresentUsesDirectPresentTail();
     ordinarySingleSourceSegmentedAggregateUsesDirectConstruction();
     ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics();
     directAdmissionRejectionPreservesLegacyDrawBatchGrouping();

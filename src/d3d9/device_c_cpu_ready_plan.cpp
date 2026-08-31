@@ -655,8 +655,42 @@ DirectChunkSlotReplayDisposition classifyDirectChunkSlotReplay(
   if (plan.reason == ReplayReason::Oversize) {
     return DirectChunkSlotReplayDisposition::LegacyOversized;
   }
+  const auto directPresentTailShape = [&]() noexcept {
+    if (!plan.directArenaCandidate() || plan.sourceCount != 1u ||
+        !plan.arenaLayout.has_value() || imported.records.size() < 2u ||
+        imported.records.back().type != D9C_COMMAND_RECORD_PRESENT) {
+      return false;
+    }
+    bool sawDraw = false;
+    bool sawClear = false;
+    for (std::size_t i = 0; i + 1u < imported.records.size(); ++i) {
+      switch (imported.records[i].type) {
+      case D9C_COMMAND_RECORD_CLEAR:
+        if (i != 0u || sawClear) return false;
+        sawClear = true;
+        break;
+      case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+      case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+        sawDraw = true;
+        break;
+      case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+      case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+      case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+      case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+      case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+      case D9C_COMMAND_RECORD_SET_PS_CONST_B:
+      case D9C_COMMAND_RECORD_APPLY_STATE:
+        break;
+      default:
+        return false;
+      }
+    }
+    return sawDraw;
+  };
   if (plan.reason == ReplayReason::Present) {
-    return DirectChunkSlotReplayDisposition::LegacyPresent;
+    return directPresentTailShape()
+               ? DirectChunkSlotReplayDisposition::DirectWithPresentTail
+               : DirectChunkSlotReplayDisposition::LegacyPresent;
   }
   if (plan.lane == ReplayLane::StateOnly) {
     return DirectChunkSlotReplayDisposition::LegacyStateOnly;
@@ -699,7 +733,9 @@ DirectChunkSlotReplayDisposition classifyDirectChunkSlotReplay(
     case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
       return DirectChunkSlotReplayDisposition::LegacyUpDraw;
     case D9C_COMMAND_RECORD_PRESENT:
-      return DirectChunkSlotReplayDisposition::LegacyPresent;
+      return directPresentTailShape()
+                 ? DirectChunkSlotReplayDisposition::DirectWithPresentTail
+                 : DirectChunkSlotReplayDisposition::LegacyPresent;
     default:
       return DirectChunkSlotReplayDisposition::LegacyUnsupported;
     }

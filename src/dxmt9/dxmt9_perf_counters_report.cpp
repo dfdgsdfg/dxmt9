@@ -5,6 +5,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdint>
+#include <iterator>
 #include <string>
 
 namespace dxmt9::perf::detail {
@@ -2536,6 +2537,44 @@ void report() {
                           (c.*e.ringField).percentile(e.percentile)));
         break;
     }
+    line += field;
+  }
+  constexpr const char* kDispositionNames[] = {
+      "direct",       "direct_with_present_tail", "legacy_state_only",
+      "legacy_segmented", "legacy_up_draw",       "legacy_present",
+      "legacy_unsupported", "legacy_oversized",   "legacy_capture_or_trace",
+      "inline_ordered_control", "reject_invalid"};
+  constexpr const char* kOutcomeNames[] = {
+      "not_attempted", "import_rejected", "plan_rejected",
+      "begin_legacy_pre_effect_failure", "begin_fail_stopped", "replay_failed",
+      "commit_failed", "committed"};
+  static_assert(std::size(kDispositionNames) ==
+                static_cast<std::size_t>(
+                    DirectChunkSlotReplayDisposition::Count));
+  static_assert(std::size(kOutcomeNames) ==
+                static_cast<std::size_t>(DirectChunkSlotReplayOutcome::Count));
+  for (std::size_t i = 0; i < std::size(kDispositionNames); ++i) {
+    char field[160]{};
+    std::snprintf(field, sizeof(field),
+                  " direct_chunkslot_replay_%s_raws=%llu"
+                  " direct_chunkslot_replay_%s_records=%llu"
+                  " direct_chunkslot_replay_%s_wire_bytes=%llu",
+                  kDispositionNames[i],
+                  static_cast<unsigned long long>(
+                      load(c.directChunkSlotReplayRaws[i])),
+                  kDispositionNames[i],
+                  static_cast<unsigned long long>(
+                      load(c.directChunkSlotReplayRecords[i])),
+                  kDispositionNames[i],
+                  static_cast<unsigned long long>(
+                      load(c.directChunkSlotReplayWireBytes[i])));
+    line += field;
+  }
+  for (std::size_t i = 0; i < std::size(kOutcomeNames); ++i) {
+    char field[128]{};
+    std::snprintf(field, sizeof(field), " direct_chunkslot_replay_outcome_%s=%llu",
+                  kOutcomeNames[i],
+                  static_cast<unsigned long long>(load(c.directChunkSlotReplayOutcomes[i])));
     line += field;
   }
   line += '\n';

@@ -1010,6 +1010,47 @@ void directChunkSlotWholeRawDispositionsAreTypedAndPreEffect() {
             DirectChunkSlotReplayDisposition::LegacyPresent,
         "Present keeps its typed compatibility publication boundary");
 
+  const std::array directPresentTailRecords{
+      clearRecord(1), drawRecord(),
+      drawRecord(D9C_COMMAND_RECORD_APPLY_STATE),
+      blockingRecord(D9C_COMMAND_RECORD_PRESENT)};
+  const auto directPresentTailFixture =
+      makeValidatedFixture(directPresentTailRecords);
+  const auto directPresentTail = directPresentTailFixture.view();
+  check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+            directPresentTail,
+            dxmt9::d3d9::planCpuReadyChunk(directPresentTail, 341), false) ==
+            DirectChunkSlotReplayDisposition::DirectWithPresentTail,
+        "optional Clear plus Draw/ApplyState and terminal Present selects direct tail");
+  const std::array unsupportedPresentTail{
+      drawRecord(), clearRecord(1), clearRecord(1),
+      blockingRecord(D9C_COMMAND_RECORD_PRESENT)};
+  const auto unsupportedPresentFixture =
+      makeValidatedFixture(unsupportedPresentTail);
+  const auto unsupportedPresent = unsupportedPresentFixture.view();
+  check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+            unsupportedPresent,
+            dxmt9::d3d9::planCpuReadyChunk(unsupportedPresent, 342), false) ==
+            DirectChunkSlotReplayDisposition::LegacyPresent,
+        "unsupported Present-bearing shape keeps LegacyPresent fallback");
+  const std::array nonterminalPresent{
+      blockingRecord(D9C_COMMAND_RECORD_PRESENT), drawRecord()};
+  const auto nonterminalFixture = makeValidatedFixture(nonterminalPresent);
+  const auto nonterminal = nonterminalFixture.view();
+  check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+            nonterminal, dxmt9::d3d9::planCpuReadyChunk(nonterminal, 343), false) ==
+            DirectChunkSlotReplayDisposition::LegacyPresent,
+        "nonterminal Present keeps LegacyPresent fallback");
+  const std::array duplicatePresent{
+      drawRecord(), blockingRecord(D9C_COMMAND_RECORD_PRESENT),
+      blockingRecord(D9C_COMMAND_RECORD_PRESENT)};
+  const auto duplicateFixture = makeValidatedFixture(duplicatePresent);
+  const auto duplicate = duplicateFixture.view();
+  check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+            duplicate, dxmt9::d3d9::planCpuReadyChunk(duplicate, 344), false) ==
+            DirectChunkSlotReplayDisposition::LegacyPresent,
+        "duplicate Present keeps LegacyPresent fallback");
+
   for (const auto type : {D9C_COMMAND_RECORD_QUERY_ISSUE,
                           D9C_COMMAND_RECORD_READBACK,
                           D9C_COMMAND_RECORD_UPDATE_TEXTURE}) {

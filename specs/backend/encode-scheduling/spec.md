@@ -121,9 +121,16 @@ overflow is rejected before mutation. Present/Flush therefore closes the same
 source, command buffer, and render-pass boundary as Legacy. Direct reservation
 is admitted only on a fresh writing slot: reserving behind a used vector prefix
 could relocate already-final bytes, so a populated slot is a typed pre-effect
-Legacy fallback. Segmented raws, UP draws, ordered controls/readback, Present,
-capture/trace, oversize, and structural rejects likewise retain explicit
-dispositions. Once replay effects begin, any generation, append, validation,
+Legacy fallback. Segmented raws, UP draws, ordered controls/readback,
+standalone/nonterminal/duplicate Present, capture/trace, oversize, and
+structural rejects likewise retain explicit dispositions. The narrow `optional
+leading Clear + non-UP Draw/APPLY_STATE/constants + exactly one terminal Present` shape
+uses the typed `DirectWithPresentTail` route: Present acquisition remains
+coordinator-owned, its descriptor/source/token/boundary policy is staged in the
+direct build context, and the coordinator appends it inside the assembler
+transaction so its resource closure is covered by evidence; only publication
+occurs after assembler evidence commits. Deferred present completion drains before
+boundary application. Once replay effects begin, any generation, append, validation,
 resource-closure, or
 evidence failure is fail-stop and cannot retry the raw through Legacy.
 

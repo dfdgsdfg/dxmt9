@@ -325,6 +325,23 @@ void countCommandChunkReject() {
   add(counters().commandChunkRejects);
 }
 
+void recordDirectChunkSlotReplayDisposition(
+    DirectChunkSlotReplayDisposition disposition,
+    DirectChunkSlotReplayOutcome outcome, std::uint64_t records,
+    std::uint64_t wireBytes) {
+  if (!enabled()) return;
+  const auto d = static_cast<std::size_t>(disposition);
+  const auto o = static_cast<std::size_t>(outcome);
+  if (d >= counters().directChunkSlotReplayRaws.size() ||
+      o >= counters().directChunkSlotReplayOutcomes.size()) {
+    return;
+  }
+  add(counters().directChunkSlotReplayRaws[d]);
+  add(counters().directChunkSlotReplayRecords[d], records);
+  add(counters().directChunkSlotReplayWireBytes[d], wireBytes);
+  add(counters().directChunkSlotReplayOutcomes[o]);
+}
+
 void countRingArenaHeapFallback(RingArenaKind kind, std::uint64_t bytes) {
   if (!enabled()) return;
   add(counters().ringArenaHeapFallbackCount);

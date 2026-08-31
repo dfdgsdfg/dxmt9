@@ -244,6 +244,38 @@ void countCommandChunkWire(std::uint32_t version, std::uint64_t records,
                            std::uint64_t bytes,
                            std::uint64_t registryResolutions = 0u);
 void countCommandChunkReject();
+// One gated observation per raw direct-replay classification. The three
+// payload axes intentionally remain separate so callers can compare raw,
+// record, and wire-byte populations without reconstructing them.
+enum class DirectChunkSlotReplayDisposition : std::uint8_t {
+  Direct = 0,
+  DirectWithPresentTail,
+  LegacyStateOnly,
+  LegacySegmented,
+  LegacyUpDraw,
+  LegacyPresent,
+  LegacyUnsupported,
+  LegacyOversized,
+  LegacyCaptureOrTrace,
+  InlineOrderedControl,
+  RejectInvalid,
+  Count,
+};
+enum class DirectChunkSlotReplayOutcome : std::uint8_t {
+  NotAttempted = 0,
+  ImportRejected,
+  PlanRejected,
+  BeginLegacyPreEffectFailure,
+  BeginFailStopped,
+  ReplayFailed,
+  CommitFailed,
+  Committed,
+  Count,
+};
+void recordDirectChunkSlotReplayDisposition(
+    DirectChunkSlotReplayDisposition disposition,
+    DirectChunkSlotReplayOutcome outcome, std::uint64_t records,
+    std::uint64_t wireBytes);
 void countRingArenaHeapFallback(RingArenaKind kind, std::uint64_t bytes);
 
 void countSubmitDraw();

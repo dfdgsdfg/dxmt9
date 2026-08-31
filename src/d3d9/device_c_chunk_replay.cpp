@@ -1577,6 +1577,54 @@ int32_t replayPlannedChunk(D9CDevice* device,
       device->dev().upperDevice()->queue().segmentSerialEnabled();
   const bool captureSegmentSerialRequested =
       captureIdentityRequested && segmentSerialRequested;
+  const bool directReplayObservabilityEnabled = dxmt9::perf::enabled();
+  static_assert(
+      static_cast<std::uint8_t>(
+          dxmt9::d3d9::DirectChunkSlotReplayDisposition::Count) ==
+      static_cast<std::uint8_t>(
+          dxmt9::perf::DirectChunkSlotReplayDisposition::Count));
+  const auto toPerfDisposition =
+      [](dxmt9::d3d9::DirectChunkSlotReplayDisposition disposition) noexcept {
+        switch (disposition) {
+        case dxmt9::d3d9::DirectChunkSlotReplayDisposition::Direct:
+          return dxmt9::perf::DirectChunkSlotReplayDisposition::Direct;
+        case dxmt9::d3d9::DirectChunkSlotReplayDisposition::
+            DirectWithPresentTail:
+          return dxmt9::perf::DirectChunkSlotReplayDisposition::
+              DirectWithPresentTail;
+        case dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyStateOnly:
+          return dxmt9::perf::DirectChunkSlotReplayDisposition::LegacyStateOnly;
+        case dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacySegmented:
+          return dxmt9::perf::DirectChunkSlotReplayDisposition::LegacySegmented;
+        case dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyUpDraw:
+          return dxmt9::perf::DirectChunkSlotReplayDisposition::LegacyUpDraw;
+        case dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyPresent:
+          return dxmt9::perf::DirectChunkSlotReplayDisposition::LegacyPresent;
+        case dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyUnsupported:
+          return dxmt9::perf::DirectChunkSlotReplayDisposition::LegacyUnsupported;
+        case dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyOversized:
+          return dxmt9::perf::DirectChunkSlotReplayDisposition::LegacyOversized;
+        case dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyCaptureOrTrace:
+          return dxmt9::perf::DirectChunkSlotReplayDisposition::LegacyCaptureOrTrace;
+        case dxmt9::d3d9::DirectChunkSlotReplayDisposition::InlineOrderedControl:
+          return dxmt9::perf::DirectChunkSlotReplayDisposition::InlineOrderedControl;
+        case dxmt9::d3d9::DirectChunkSlotReplayDisposition::RejectInvalid:
+          return dxmt9::perf::DirectChunkSlotReplayDisposition::RejectInvalid;
+        case dxmt9::d3d9::DirectChunkSlotReplayDisposition::Count:
+          break;
+        }
+        DXMT_ASSERT(false);
+        return dxmt9::perf::DirectChunkSlotReplayDisposition::RejectInvalid;
+      };
+  const auto recordDirectDisposition =
+      [&](dxmt9::d3d9::DirectChunkSlotReplayDisposition disposition,
+          dxmt9::perf::DirectChunkSlotReplayOutcome outcome) noexcept {
+        if (directReplayObservabilityEnabled) {
+          dxmt9::perf::recordDirectChunkSlotReplayDisposition(
+              toPerfDisposition(disposition),
+              outcome, raw.recordCount, raw.recordBytes);
+        }
+      };
   std::uint32_t capturePlanReason = std::numeric_limits<std::uint32_t>::max();
   const auto failCaptureIdentity = [&](const char* reason) {
     if (raw.renderTapeCaptureToken != 0u) {
@@ -1615,6 +1663,9 @@ int32_t replayPlannedChunk(D9CDevice* device,
         upper->supportsDirectChunkSlotReplay()) {
       dxmt9::d3d9::ImportedChunkView imported;
       if (!importOwnedChunk(raw, imported)) {
+        recordDirectDisposition(
+            dxmt9::d3d9::DirectChunkSlotReplayDisposition::RejectInvalid,
+            dxmt9::perf::DirectChunkSlotReplayOutcome::ImportRejected);
         return commitChunkFail("chunk-direct-slot-import");
       }
       const auto limits = queue->cpuReadyArenaPlanLimits();
@@ -1636,12 +1687,24 @@ int32_t replayPlannedChunk(D9CDevice* device,
       const auto disposition =
           dxmt9::d3d9::classifyDirectChunkSlotReplay(
               imported, plan, /*captureOrTrace=*/false);
+      bool dispositionRecorded = false;
+      const auto recordDispositionOnce =
+          [&](dxmt9::perf::DirectChunkSlotReplayOutcome outcome) noexcept {
+            if (!dispositionRecorded) {
+              recordDirectDisposition(disposition, outcome);
+              dispositionRecorded = true;
+            }
+          };
       if (disposition ==
           dxmt9::d3d9::DirectChunkSlotReplayDisposition::RejectInvalid) {
+        recordDispositionOnce(
+            dxmt9::perf::DirectChunkSlotReplayOutcome::PlanRejected);
         return commitChunkFail("chunk-direct-slot-plan");
       }
-      if (disposition ==
-              dxmt9::d3d9::DirectChunkSlotReplayDisposition::Direct &&
+      if ((disposition ==
+               dxmt9::d3d9::DirectChunkSlotReplayDisposition::Direct ||
+           disposition == dxmt9::d3d9::DirectChunkSlotReplayDisposition::
+                              DirectWithPresentTail) &&
           plan.arenaLayout) {
         auto begin = queue->beginDirectChunkSlotReplay(
             raw.replaySeq, plan.capacity, plan.arenaLayout->usedBytes);
@@ -1657,21 +1720,34 @@ int32_t replayPlannedChunk(D9CDevice* device,
               device, raw, pacedByPresentOrdinal, nullptr, {}, false, {},
               nullptr, /*activeDirectChunkSlotPath=*/true);
           if (failed(hr)) {
+            recordDispositionOnce(
+                dxmt9::perf::DirectChunkSlotReplayOutcome::ReplayFailed);
             return hr;
           }
           if (lease.commit(raw.resourceEntries) !=
               dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Committed) {
+            recordDispositionOnce(
+                dxmt9::perf::DirectChunkSlotReplayOutcome::CommitFailed);
             return commitChunkFail("chunk-direct-slot-commit");
           }
+          recordDispositionOnce(
+              dxmt9::perf::DirectChunkSlotReplayOutcome::Committed);
           return hr;
         }
         if (begin.status ==
             dxmt9::CommandQueue::DirectChunkSlotReplayStatus::FailStopped) {
+          recordDispositionOnce(
+              dxmt9::perf::DirectChunkSlotReplayOutcome::BeginFailStopped);
           return commitChunkFail("chunk-direct-slot-begin");
         }
+        recordDispositionOnce(
+            dxmt9::perf::DirectChunkSlotReplayOutcome::
+                BeginLegacyPreEffectFailure);
         // Capacity/admission failure is still before replay effects. The
         // exact checkpoint has been rolled back, so Legacy owns this raw once.
       }
+      recordDispositionOnce(
+          dxmt9::perf::DirectChunkSlotReplayOutcome::NotAttempted);
     }
     markLegacyResources(device, raw);
     return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
