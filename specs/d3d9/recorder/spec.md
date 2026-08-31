@@ -611,6 +611,19 @@ failure leaves the empty legacy builder untouched. After accepted commit and
 the ordinary builder reset, `returnToLegacyFinalLayout` restores the fallback;
 an entered bridge failure instead keeps the sealed exact bytes under poison.
 
+All producer families now share one persistent, chunk-scoped settlement owner
+even when they continue to use the compatibility builder. The owner carries a
+monotonic transaction epoch, record and retainer checkpoints, a generation-
+qualified PendingDelta frontier, CapacityPre/CapacityPost dispositions, the
+seal/bridge cut, and capture reservation/disposition through builder reset.
+Record-local emitter failure removes only the active record intent and restores
+the preceding accepted chunk frontier; an entered bridge failure leaves the
+same owner poisoned until Reset/teardown. PendingDelta conditional consumers
+reject an old generation even for an A -> B -> A value sequence. This connects
+production settlement ownership for all 21 families, but does not make their
+final-wire construction ExactFixed or connect the immutable batch to CPU-ready
+Tape.
+
 Canonical compact D9C V2 direct-final publication remains blocked for the
 other producer families until a complete immutable semantic batch supports
 side-effect-free count/dedup followed by one `ExactFixed`-style emission. A new
@@ -723,13 +736,18 @@ model does not prove PE COM behavior, bridge ABI bytes, allocator internals,
 Objective-C/Metal ownership, or final pixels; those remain separate evidence
 layers. The runtime bridge is implemented behind opt-in
 `DXMT9_PE_SEGMENTED_TRANSPORT`: PE lends its immutable record, handle, and
-payload regions and Unix adopts one validated owned candidate without a
-contiguous gather. Contiguous V2 remains the default and the Render Tape
-capture representation. A host-only immutable owner/count-plan/ExactFixed
-fixture compares all 21 producer families byte-for-byte with validated
-contiguous V2. It is not yet the production recorder owner and does not emit
-into CPU-ready Tape; that later provider remains default-off until the layered
-gates in `R-VERIF-6.4` and the backend acceptance contract pass.
+payload regions. Unix packs the three live roles into one 8-byte-aligned,
+move-only pooled extent while retaining three scatter copies totaling each
+live byte once; validation, qualified retains, exact-ledger settlement, and
+adoption remain all-or-nothing. Pool contention never introduces a queue wait:
+acquire cold-allocates and recycle evicts. Contiguous V2 remains the default and
+the Render Tape capture representation. A host-only immutable
+owner/count-plan/ExactFixed fixture compares all 21 producer families
+byte-for-byte with validated contiguous V2. The production chunk settlement
+owner is now common to those families, but the immutable ExactFixed owner still
+does not construct their production final wire or emit into CPU-ready Tape;
+that later provider remains default-off until the layered gates in
+`R-VERIF-6.4` and the backend acceptance contract pass.
 
 ## 7. Acceptance matrix
 

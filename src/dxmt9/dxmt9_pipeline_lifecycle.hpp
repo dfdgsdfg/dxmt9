@@ -5,6 +5,8 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
+#include <span>
 
 namespace dxmt9::queue {
 
@@ -56,6 +58,10 @@ enum class PipelineDisposition : std::uint8_t {
   ReplayFailure,
   EncodeFailure,
   PresentSettled,
+  // Finish-thread dequeue advances the public waterline but does not change
+  // ownership.  Keep it explicit so GPU completion and reclaim can retain
+  // their physical ordering in the production trace.
+  FinishAdvance,
 };
 
 // Identifies the production owner that emitted a lifecycle edge.  This is
@@ -117,6 +123,7 @@ enum class PipelineControl : std::uint8_t {
   X(GPUInFlight, Completed, DeviceLoss, DeviceLost, DeviceLoss)               \
   X(Completed, Reclaimed, Reclaim, Completed, Normal)                         \
   X(Completed, Reclaimed, Reclaim, PresentSettled, Present)                   \
+  X(Completed, Completed, Queue, FinishAdvance, Normal)                       \
   X(Encoding, Reclaimed, Queue, NoGpuTerminal, Normal)                        \
   X(RawOwned, Reclaimed, Queue, NoGpuTerminal, Normal)                         \
   X(FinalOwned, Reclaimed, Queue, NoGpuTerminal, Normal)                       \
@@ -196,8 +203,15 @@ struct PipelineIdentity {
 };
 
 struct PipelineQueueSnapshot {
+  // `completedSeq` is retained as the historical finish-waterline alias for
+  // existing model/native fixtures. Production snapshots also fill the
+  // explicitly named frontiers below.
   std::uint64_t completedSeq = 0;
   std::uint64_t presentSeq = 0;
+  std::uint64_t gpuCompletedTailSeq = 0;
+  std::uint64_t gpuCompletedPresentSeq = 0;
+  std::uint64_t finishWaterlineSeq = 0;
+  std::uint32_t completedQueueDepth = 0;
   std::uint64_t capacityGeneration = 0;
   std::uint64_t admissionWakeGeneration = 0;
   std::uint32_t occupancy = 0;
@@ -228,6 +242,12 @@ struct PipelineLifecycleEvent {
   std::uint32_t joinedChildren = 0;
   std::uint32_t totalChildren = 0;
   bool completionAuthority = false;
+  // Physical batch correlation is diagnostic only; it never creates a
+  // scheduling boundary.  A source event remains independently
+  // identity-qualified by PipelineIdentity.
+  std::uint64_t physicalBatchId = 0;
+  std::uint32_t batchIndex = 0;
+  std::uint32_t batchCount = 1;
   PipelineQueueSnapshot before{};
   PipelineQueueSnapshot after{};
 };
@@ -269,6 +289,8 @@ enum class PipelineObservationError : std::uint8_t {
   CompletionOutOfOrder,
   PresentOutOfOrder,
   InvalidDisposition,
+  InvalidPhysicalBatch,
+  IncompletePhysicalBatch,
 };
 
 constexpr bool pipelineStageOwnsQueueCredit(PipelineStage stage) noexcept {
@@ -357,6 +379,39 @@ constexpr bool pipelineControlMatches(
   return true;
 }
 
+// Legacy fixtures populate completedSeq/presentSeq only. Production
+// snapshots populate explicit GPU and finish frontiers so completion-watcher
+// publication is not confused with finish-thread dequeue.
+constexpr std::uint64_t pipelineGpuCompletedSeq(
+    const PipelineQueueSnapshot& snapshot) noexcept {
+  return snapshot.gpuCompletedTailSeq != 0
+      ? snapshot.gpuCompletedTailSeq : snapshot.completedSeq;
+}
+
+constexpr std::uint64_t pipelineGpuPresentSeq(
+    const PipelineQueueSnapshot& snapshot) noexcept {
+  return snapshot.gpuCompletedPresentSeq != 0
+      ? snapshot.gpuCompletedPresentSeq : snapshot.presentSeq;
+}
+
+constexpr std::uint64_t pipelineFinishWaterlineSeq(
+    const PipelineQueueSnapshot& snapshot) noexcept {
+  return snapshot.finishWaterlineSeq != 0
+      ? snapshot.finishWaterlineSeq : snapshot.completedSeq;
+}
+
+// Completion publication is a FIFO prefix: the GPU tail is the finish
+// waterline plus the number of completed-but-not-yet-finished entries.  Keep
+// this arithmetic explicit so a sparse or wrapped queue cannot be silently
+// presented as a contiguous frontier to the observer/model.
+constexpr bool pipelineCompletionFrontierContiguous(
+    std::uint64_t finishWaterlineSeq, std::uint32_t completedQueueDepth,
+    std::uint64_t gpuCompletedTailSeq) noexcept {
+  return completedQueueDepth <=
+             std::numeric_limits<std::uint64_t>::max() - finishWaterlineSeq &&
+      gpuCompletedTailSeq == finishWaterlineSeq + completedQueueDepth;
+}
+
 constexpr bool pipelineCompletionMayPublish(
     std::uint64_t completedSeq,
     std::uint64_t sourceSeq,
@@ -380,12 +435,14 @@ constexpr bool pipelineOwnerMayReclaim(
   if (stage == PipelineStage::GPUInFlight) {
     return completionAuthority &&
         (disposition == PipelineDisposition::Completed ||
-         disposition == PipelineDisposition::DeviceLost);
+         disposition == PipelineDisposition::DeviceLost ||
+         disposition == PipelineDisposition::FailStop);
   }
   if (stage == PipelineStage::Completed) {
     return completionAuthority &&
         (disposition == PipelineDisposition::Completed ||
          disposition == PipelineDisposition::DeviceLost ||
+         disposition == PipelineDisposition::FailStop ||
          disposition == PipelineDisposition::PresentSettled);
   }
   return pipelineNoGpuTerminalMayPublish(
@@ -439,7 +496,11 @@ struct PipelineLifecycleRecord {
 // validation must be able to reduce one 128-source completion chain without
 // silently dropping identities from its strict state.
 inline constexpr std::size_t kMaxObservedPipelineSources = 256;
-inline constexpr std::size_t kMaxObservedPipelineEvents = 256;
+// A max-size EncodeSession can contain 128 sources and emit several owner
+// edges per source. Keep this cold diagnostic storage large enough for one
+// bounded physical batch rather than rejecting a valid batch as observer
+// overflow. It is allocated only when the opt-in observer is enabled.
+inline constexpr std::size_t kMaxObservedPipelineEvents = 4096;
 inline constexpr std::size_t kMaxObservedPipelineControls = 16;
 
 struct PipelineLifecycleObserverState {
@@ -456,6 +517,95 @@ struct PipelineLifecycleObserverState {
 };
 
 namespace detail {
+
+// Physical batching is only a correlation envelope.  Every member still has
+// an independent logical identity and must retain its stable zero-based slot
+// in that envelope.  The reducer permits repeated lifecycle edges for the
+// same member, but never permits an id/index pair to be rebound or an
+// identity to move to another index.
+constexpr PipelineObservationError validatePhysicalBatchMember(
+    const PipelineLifecycleObserverState& state,
+    const PipelineLifecycleEvent& event) noexcept {
+  if (event.physicalBatchId == 0) {
+    return event.batchCount == 1 && event.batchIndex == 0
+        ? PipelineObservationError::None
+        : PipelineObservationError::InvalidPhysicalBatch;
+  }
+  if (event.batchCount == 0 || event.batchIndex >= event.batchCount) {
+    return PipelineObservationError::InvalidPhysicalBatch;
+  }
+  bool hasPriorMember = false;
+  bool identityWasSeen = false;
+  for (std::size_t i = 0; i < state.ownerEventCount; ++i) {
+    const auto& prior = state.ownerEvents[i];
+    if (prior.physicalBatchId == event.physicalBatchId &&
+        prior.identity == event.identity) {
+      identityWasSeen = true;
+      break;
+    }
+  }
+  for (std::size_t i = 0; i < state.ownerEventCount; ++i) {
+    const auto& prior = state.ownerEvents[i];
+    if (prior.physicalBatchId != event.physicalBatchId) continue;
+    hasPriorMember = true;
+    if (prior.batchCount != event.batchCount) {
+      return PipelineObservationError::InvalidPhysicalBatch;
+    }
+    if (prior.batchIndex == event.batchIndex &&
+        prior.identity != event.identity) {
+      return PipelineObservationError::InvalidPhysicalBatch;
+    }
+    if (prior.identity == event.identity &&
+        prior.batchIndex != event.batchIndex) {
+      return PipelineObservationError::InvalidPhysicalBatch;
+    }
+    if (!identityWasSeen && prior.batchIndex > event.batchIndex &&
+        prior.identity != event.identity) {
+      return PipelineObservationError::InvalidPhysicalBatch;
+    }
+    // A physical batch is emitted in prefix order.  Repeated events for an
+    // already-seen member are fine; a first event for a later member is not.
+    if (!identityWasSeen && prior.batchIndex < event.batchIndex &&
+        prior.identity != event.identity) {
+      bool earlierMemberSeen = false;
+      for (std::size_t j = 0; j < state.ownerEventCount; ++j) {
+        if (state.ownerEvents[j].physicalBatchId == event.physicalBatchId &&
+            state.ownerEvents[j].batchIndex + 1 == event.batchIndex) {
+          earlierMemberSeen = true;
+          break;
+        }
+      }
+      if (!earlierMemberSeen) {
+        return PipelineObservationError::InvalidPhysicalBatch;
+      }
+    }
+  }
+  if (!hasPriorMember && event.batchIndex != 0) {
+    return PipelineObservationError::InvalidPhysicalBatch;
+  }
+  return PipelineObservationError::None;
+}
+
+constexpr bool pipelinePhysicalBatchComplete(
+    std::span<const PipelineLifecycleEvent> events,
+    std::uint64_t physicalBatchId, std::uint32_t batchCount) noexcept {
+  if (physicalBatchId == 0 || batchCount == 0) return false;
+  std::uint32_t seen = 0;
+  for (std::uint32_t index = 0; index < batchCount; ++index) {
+    bool memberSeen = false;
+    for (const auto& event : events) {
+      if (event.physicalBatchId == physicalBatchId &&
+          event.batchCount == batchCount && event.batchIndex == index &&
+          event.to == PipelineStage::Reclaimed) {
+        memberSeen = true;
+        break;
+      }
+    }
+    if (!memberSeen) return false;
+    ++seen;
+  }
+  return seen == batchCount;
+}
 
 constexpr PipelineLifecycleRecord* findExact(
     PipelineLifecycleObserverState& state,
@@ -498,9 +648,31 @@ constexpr PipelineObservationError validateQueueSnapshots(
       after.completedSeq < before.completedSeq ||
       after.presentSeq < before.presentSeq ||
       after.presentSeq > after.completedSeq ||
+      pipelineGpuCompletedSeq(after) < pipelineGpuCompletedSeq(before) ||
+      pipelineGpuPresentSeq(after) < pipelineGpuPresentSeq(before) ||
+      pipelineFinishWaterlineSeq(after) <
+          pipelineFinishWaterlineSeq(before) ||
+      after.completedQueueDepth > after.capacity ||
       after.capacityGeneration < before.capacityGeneration ||
       after.admissionWakeGeneration < before.admissionWakeGeneration ||
       (before.stopped && !after.stopped) || (before.failed && !after.failed)) {
+    return PipelineObservationError::InvalidQueueSnapshot;
+  }
+
+  const bool beforeHasExplicitFrontier =
+      before.gpuCompletedTailSeq != 0 || before.finishWaterlineSeq != 0 ||
+      before.completedQueueDepth != 0;
+  const bool afterHasExplicitFrontier =
+      after.gpuCompletedTailSeq != 0 || after.finishWaterlineSeq != 0 ||
+      after.completedQueueDepth != 0;
+  if ((beforeHasExplicitFrontier &&
+       !pipelineCompletionFrontierContiguous(
+           pipelineFinishWaterlineSeq(before), before.completedQueueDepth,
+           pipelineGpuCompletedSeq(before))) ||
+      (afterHasExplicitFrontier &&
+       !pipelineCompletionFrontierContiguous(
+           pipelineFinishWaterlineSeq(after), after.completedQueueDepth,
+           pipelineGpuCompletedSeq(after)))) {
     return PipelineObservationError::InvalidQueueSnapshot;
   }
 
@@ -593,6 +765,29 @@ constexpr PipelineObservationError validateTransition(
     return PipelineObservationError::None;
   }
 
+  if (event.disposition == PipelineDisposition::FinishAdvance) {
+    const auto beforeFinish = pipelineFinishWaterlineSeq(event.before);
+    const auto afterFinish = pipelineFinishWaterlineSeq(event.after);
+    const auto beforeGpu = pipelineGpuCompletedSeq(event.before);
+    const auto afterGpu = pipelineGpuCompletedSeq(event.after);
+    if (event.from != PipelineStage::Completed ||
+        event.to != PipelineStage::Completed ||
+        event.owner != PipelineOwner::Queue ||
+        event.outstandingBorrows != 0 || !event.completionAuthority ||
+        !pipelineCompletionFrontierContiguous(
+            beforeFinish, event.before.completedQueueDepth, beforeGpu) ||
+        !pipelineCompletionFrontierContiguous(
+            afterFinish, event.after.completedQueueDepth, afterGpu) ||
+        afterFinish != beforeFinish + 1u ||
+        event.before.completedQueueDepth == 0u ||
+        event.after.completedQueueDepth + 1u !=
+            event.before.completedQueueDepth ||
+        afterGpu != beforeGpu) {
+      return PipelineObservationError::InvalidDisposition;
+    }
+    return PipelineObservationError::None;
+  }
+
   if (event.disposition == PipelineDisposition::NoGpuTerminal) {
     return event.to == PipelineStage::Reclaimed &&
         pipelineNoGpuTerminalMayPublish(
@@ -659,16 +854,17 @@ constexpr PipelineObservationError validateTransition(
           : PipelineObservationError::MissingCompletionAuthority;
     }
     if (!pipelineCompletionMayPublish(
-            event.before.completedSeq, event.identity.seqId,
+            pipelineGpuCompletedSeq(event.before), event.identity.seqId,
             event.outstandingBorrows, event.joinedChildren,
             event.totalChildren, event.completionAuthority) ||
-        event.after.completedSeq != event.identity.seqId) {
+        pipelineGpuCompletedSeq(event.after) != event.identity.seqId) {
       return PipelineObservationError::CompletionOutOfOrder;
     }
     const bool present = event.hasPresent ||
         event.payloadKind == PipelinePayloadKind::PresentOnly;
-    if ((present && event.after.presentSeq != event.identity.seqId) ||
-        (!present && event.after.presentSeq != event.before.presentSeq)) {
+    if ((present && pipelineGpuPresentSeq(event.after) != event.identity.seqId) ||
+        (!present && pipelineGpuPresentSeq(event.after) !=
+             pipelineGpuPresentSeq(event.before))) {
       return PipelineObservationError::PresentOutOfOrder;
     }
     return PipelineObservationError::None;
@@ -685,7 +881,8 @@ constexpr PipelineObservationError validateTransition(
           ? PipelineObservationError::OutstandingBorrow
           : PipelineObservationError::MissingCompletionAuthority;
     }
-    if (event.after.completedSeq != event.before.completedSeq ||
+    if (pipelineFinishWaterlineSeq(event.after) !=
+            pipelineFinishWaterlineSeq(event.before) ||
         event.after.presentSeq != event.before.presentSeq ||
         event.after.occupancy > event.before.occupancy) {
       return PipelineObservationError::CompletionOutOfOrder;
@@ -707,7 +904,9 @@ constexpr PipelineObservationError validateTransition(
           event.from == PipelineStage::FinalOwned)) ||
         (event.disposition == PipelineDisposition::FailStop &&
          (event.from == PipelineStage::RawOwned ||
-          event.from == PipelineStage::Encoding)) ||
+          event.from == PipelineStage::Encoding ||
+          event.from == PipelineStage::GPUInFlight ||
+          event.from == PipelineStage::Completed)) ||
        (event.disposition == PipelineDisposition::Shutdown &&
          event.from != PipelineStage::GPUInFlight) ||
        (event.disposition == PipelineDisposition::Reset &&
@@ -736,6 +935,17 @@ constexpr PipelineObservationError validateTransition(
 }
 
 }  // namespace detail
+
+// Test/model hook for the explicit physical-batch boundary.  Production
+// owners call this only when the last member reaches its terminal edge; it is
+// intentionally value-only so malformed missing/skipped members are caught
+// without retaining payloads or adding a scheduling dependency.
+constexpr bool pipelinePhysicalBatchComplete(
+    std::span<const PipelineLifecycleEvent> events,
+    std::uint64_t physicalBatchId, std::uint32_t batchCount) noexcept {
+  return detail::pipelinePhysicalBatchComplete(events, physicalBatchId,
+                                               batchCount);
+}
 
 constexpr PipelineObservationError reducePipelineLifecycleEvent(
     PipelineLifecycleObserverState& state,
@@ -804,9 +1014,20 @@ using PipelineLifecycleObserverFn = void (*)(
 struct PipelineLifecycleObserverSink {
   void* context = nullptr;
   PipelineLifecycleObserverFn fn = nullptr;
+  using FinalizeFn = void (*)(void*, std::uint64_t,
+                              std::uint32_t) noexcept;
+  FinalizeFn finalizeFn = nullptr;
 
   explicit constexpr operator bool() const noexcept { return fn != nullptr; }
 };
+
+inline void finalizePipelineLifecycleBatch(
+    PipelineLifecycleObserverSink sink, std::uint64_t physicalBatchId,
+    std::uint32_t batchCount) noexcept {
+  if (sink.finalizeFn) {
+    sink.finalizeFn(sink.context, physicalBatchId, batchCount);
+  }
+}
 
 // The disabled path is one nullable function-pointer branch.  In particular it
 // reads no clock, allocates no storage, and cannot retain a synchronous view.
@@ -851,6 +1072,14 @@ class PipelineLifecycleObserver {
       }
       return;
     }
+    if (const auto batchError = detail::validatePhysicalBatchMember(
+            state_, event);
+        batchError != PipelineObservationError::None) {
+      if (error_ == PipelineObservationError::None) {
+        error_ = batchError;
+      }
+      return;
+    }
     if (state_.ownerEventCount == state_.ownerEvents.size()) {
       if (error_ == PipelineObservationError::None) {
         error_ = PipelineObservationError::BoundedObserverOverflow;
@@ -867,7 +1096,27 @@ class PipelineLifecycleObserver {
   }
 
   PipelineLifecycleObserverSink productionSink() noexcept {
-    return {.context = this, .fn = &observeOwnerFromSink};
+    return {.context = this,
+            .fn = &observeOwnerFromSink,
+            .finalizeFn = &finalizeFromSink};
+  }
+
+  // The queue owner calls this when the actual physical reclaim ledger is
+  // empty, independently of which member index happened to reclaim last.
+  // Completeness is Reclaimed-edge qualified: seeing every identity at an
+  // earlier dequeue/submit stage cannot hide a dropped terminal projection.
+  PipelineObservationError finalizePhysicalBatch(
+      std::uint64_t physicalBatchId, std::uint32_t batchCount) noexcept {
+    if (error_ != PipelineObservationError::None) {
+      return error_;
+    }
+    const auto events = std::span<const PipelineLifecycleEvent>(
+        state_.ownerEvents.data(), state_.ownerEventCount);
+    if (!detail::pipelinePhysicalBatchComplete(events, physicalBatchId,
+                                               batchCount)) {
+      error_ = PipelineObservationError::IncompletePhysicalBatch;
+    }
+    return error_;
   }
 
   void observeControl(const PipelineControlObservation& observation) noexcept {
@@ -903,6 +1152,12 @@ class PipelineLifecycleObserver {
   static void observeOwnerFromSink(
       void* context, const PipelineLifecycleEvent& event) noexcept {
     static_cast<PipelineLifecycleObserver*>(context)->observeOwnerEvent(event);
+  }
+
+  static void finalizeFromSink(void* context, std::uint64_t physicalBatchId,
+                               std::uint32_t batchCount) noexcept {
+    static_cast<PipelineLifecycleObserver*>(context)->finalizePhysicalBatch(
+        physicalBatchId, batchCount);
   }
 
   static void observeControlFromSink(

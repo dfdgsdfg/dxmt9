@@ -1923,7 +1923,11 @@ condition-variable predicate.
 The bridge half is implemented behind opt-in
 `DXMT9_PE_SEGMENTED_TRANSPORT`: PE lends exactly three immutable regions,
 WoW64 bounds each guest range, and Unix validates/copies/retains one complete
-candidate before publication. Contiguous V2 remains the default fallback.
+candidate before publication. The candidate owns one aligned pooled live-
+region extent with typed offsets for records, handles, and payload. It performs
+three scatter copies, not a contiguous gather or zero-copy handoff, and settles
+the exact admission ledger through a move-only charge bound to the original
+sink. Contiguous V2 remains the default fallback.
 The host-only semantic-batch owner and ExactFixed fixture bind the bounded
 value algebra and all 21 canonical producer families. Production CPU-ready
 Tape does not yet consume that owner, so the Reserve/Adopt/Emit queue-role

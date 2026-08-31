@@ -190,6 +190,9 @@ struct D9CDevice {
   std::unordered_set<uint32_t> stateBlockRenderStates;
   std::unordered_map<uint32_t, uint32_t> stateBlockRenderStateValues;
   dxmt9::d3d9::ReplayDrainLedger replayDrainLedger;
+  // Declared before replayOffload so reverse member destruction tears the
+  // worker down before any queued region lease can outlive its recycle pool.
+  dxmt9::d3d9::SegmentedCommandChunkRegionPool commandChunkRegionPool;
   std::unique_ptr<dxmt9::d3d9::ReplayOffloadWorker> replayOffload;
   // Cold, bounded composition observer. The owner is absent unless the
   // explicit diagnostic gate is set, preserving the ordinary D9C layout and

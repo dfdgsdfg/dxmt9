@@ -34,8 +34,10 @@ class WireObjectRegistry {
                 const void* object = nullptr) const;
 
   // Validates the complete entry array first, then fills `objects` and calls
-  // retain for every entry while registry mutation remains excluded. Callers
-  // supply capacity-preserving scratch for `objects`.
+  // retain for every entry while registry mutation remains excluded. A
+  // successful return transfers one callback-established owning reference per
+  // entry to the caller; `retain` must not be a no-op for a live object.
+  // Callers supply capacity-preserving scratch for `objects`.
   bool resolveAndRetain(
       std::span<const D9CCommandChunkWireHandleEntry> entries,
       std::span<void*> objects,

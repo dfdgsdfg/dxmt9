@@ -11,13 +11,17 @@
 #include <deque>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <span>
 #include <thread>
+#include <type_traits>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include "device_c_chunk_registry.hpp"
 #include "device_c_chunk_validate.hpp"
+#include "dxmt9/copy_materialization_ledger.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9/dxmt9_managed_mutation_lease.hpp"
 
@@ -39,6 +43,44 @@ namespace dxmt9::d3d9 {
 struct RetainedWireHandle {
   uint32_t kind = 0;
   void* ptr = nullptr;
+};
+
+// Move-only wrapper-reference owner. Its move assignment first settles any
+// destination refs, so RawCommandChunk remains safe even when a queue item is
+// reused rather than requiring every caller to remember an empty-destination
+// precondition.
+class RetainedWireHandleBatch {
+ public:
+  RetainedWireHandleBatch() = default;
+  ~RetainedWireHandleBatch();
+  RetainedWireHandleBatch(const RetainedWireHandleBatch&) = delete;
+  RetainedWireHandleBatch& operator=(const RetainedWireHandleBatch&) = delete;
+  RetainedWireHandleBatch(RetainedWireHandleBatch&& other) noexcept {
+    entries_.swap(other.entries_);
+  }
+  RetainedWireHandleBatch& operator=(
+      RetainedWireHandleBatch&& other) noexcept;
+
+  void reset() noexcept;
+  bool empty() const noexcept { return entries_.empty(); }
+  std::size_t size() const noexcept { return entries_.size(); }
+  void clear() noexcept { reset(); }
+  void resize(std::size_t size) { entries_.resize(size); }
+  void reserve(std::size_t size) { entries_.reserve(size); }
+  void push_back(RetainedWireHandle entry) { entries_.push_back(entry); }
+  RetainedWireHandle& operator[](std::size_t index) noexcept {
+    return entries_[index];
+  }
+  const RetainedWireHandle& operator[](std::size_t index) const noexcept {
+    return entries_[index];
+  }
+  auto begin() noexcept { return entries_.begin(); }
+  auto end() noexcept { return entries_.end(); }
+  auto begin() const noexcept { return entries_.begin(); }
+  auto end() const noexcept { return entries_.end(); }
+
+ private:
+  std::vector<RetainedWireHandle> entries_;
 };
 
 using ReplaySeq = std::uint64_t;
@@ -150,22 +192,177 @@ class ReplayDrainLedger {
   std::size_t nextBufferTargetSweep_ = 64u;
 };
 
+class BridgeRawOwnershipCharge {
+ public:
+  BridgeRawOwnershipCharge() = default;
+  ~BridgeRawOwnershipCharge() { reset(); }
+
+  BridgeRawOwnershipCharge(const BridgeRawOwnershipCharge&) = delete;
+  BridgeRawOwnershipCharge& operator=(const BridgeRawOwnershipCharge&) = delete;
+  BridgeRawOwnershipCharge(BridgeRawOwnershipCharge&& other) noexcept
+      : ledger_(std::exchange(other.ledger_, nullptr)),
+        bytes_(std::exchange(other.bytes_, 0u)) {}
+  BridgeRawOwnershipCharge& operator=(
+      BridgeRawOwnershipCharge&& other) noexcept {
+    if (this == &other) return *this;
+    reset();
+    ledger_ = std::exchange(other.ledger_, nullptr);
+    bytes_ = std::exchange(other.bytes_, 0u);
+    return *this;
+  }
+
+  void retain(dxmt9::core::CopyMaterializationLedger* ledger,
+              std::size_t bytes) noexcept {
+    reset();
+    if (!ledger || bytes == 0u) return;
+    ledger->retain(dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
+                   bytes);
+    ledger_ = ledger;
+    bytes_ = bytes;
+  }
+  void reset() noexcept {
+    if (ledger_ && bytes_ != 0u) {
+      ledger_->release(
+          dxmt9::core::CopyMaterializationClass::BridgeRawOwnership, bytes_);
+    }
+    ledger_ = nullptr;
+    bytes_ = 0u;
+  }
+
+  explicit operator bool() const noexcept { return bytes_ != 0u; }
+  std::size_t bytes() const noexcept { return bytes_; }
+
+ private:
+  dxmt9::core::CopyMaterializationLedger* ledger_ = nullptr;
+  std::size_t bytes_ = 0u;
+};
+
+struct SegmentedCommandChunkRegionLayout {
+  std::size_t recordOffset = 0u;
+  std::size_t recordBytes = 0u;
+  std::size_t handleOffset = 0u;
+  std::size_t handleBytes = 0u;
+  std::size_t payloadOffset = 0u;
+  std::size_t payloadBytes = 0u;
+  std::size_t usedBytes = 0u;
+};
+
+class SegmentedCommandChunkRegionPool;
+
+// One Unix-owned, max-align-safe extent for the three fixed transport roles.
+// The PE spans are copied synchronously into this lease before bridge return;
+// only the move-only lease may cross into the replay queue.
+class SegmentedCommandChunkRegions {
+ public:
+  SegmentedCommandChunkRegions() = default;
+  ~SegmentedCommandChunkRegions();
+
+  SegmentedCommandChunkRegions(const SegmentedCommandChunkRegions&) = delete;
+  SegmentedCommandChunkRegions& operator=(
+      const SegmentedCommandChunkRegions&) = delete;
+  SegmentedCommandChunkRegions(
+      SegmentedCommandChunkRegions&& other) noexcept;
+  SegmentedCommandChunkRegions& operator=(
+      SegmentedCommandChunkRegions&& other) noexcept;
+
+  explicit operator bool() const noexcept { return owner_ != nullptr; }
+  void reset() noexcept;
+
+  std::span<std::byte> recordsBytes() noexcept;
+  std::span<std::byte> handlesBytes() noexcept;
+  std::span<std::byte> payloadBytes() noexcept;
+  std::span<const std::byte> recordsBytes() const noexcept;
+  std::span<const std::byte> handlesBytes() const noexcept;
+  std::span<const std::byte> payloadBytes() const noexcept;
+  std::span<const D9CCommandChunkWireRecordHeader> records() const noexcept;
+  std::span<const D9CCommandChunkWireHandleEntry> handles() const noexcept;
+
+  const SegmentedCommandChunkRegionLayout& layout() const noexcept {
+    return layout_;
+  }
+  std::size_t capacityBytes() const noexcept { return capacityBytes_; }
+
+ private:
+  friend class SegmentedCommandChunkRegionPool;
+  SegmentedCommandChunkRegions(
+      SegmentedCommandChunkRegionPool* owner,
+      std::vector<std::uint64_t>&& words, std::size_t capacityBytes,
+      SegmentedCommandChunkRegionLayout layout) noexcept;
+
+  std::span<std::byte> bytesAt(std::size_t offset,
+                               std::size_t size) noexcept;
+  std::span<const std::byte> bytesAt(std::size_t offset,
+                                     std::size_t size) const noexcept;
+
+  SegmentedCommandChunkRegionPool* owner_ = nullptr;
+  std::vector<std::uint64_t> words_;
+  std::size_t capacityBytes_ = 0u;
+  SegmentedCommandChunkRegionLayout layout_{};
+};
+
+// Bounded nonblocking per-device recycle cache. A miss performs one aligned
+// allocation; a full cache evicts instead of adding a second capacity wait.
+class SegmentedCommandChunkRegionPool {
+ public:
+  static constexpr std::size_t kMinBucketBytes = 256u;
+  static constexpr std::size_t kMaxBucketBytes = 1024u * 1024u;
+  static constexpr std::size_t kBucketCount = 13u;
+  static constexpr std::size_t kMaxBlocksPerBucket = 4u;
+  static constexpr std::size_t kMaxCachedBytes = 8u * 1024u * 1024u;
+
+  SegmentedCommandChunkRegions acquire(
+      std::size_t recordBytes, std::size_t handleBytes,
+      std::size_t payloadBytes);
+
+  void failNextAllocationForTest() noexcept {
+    failNextAllocation_.store(true, std::memory_order_relaxed);
+  }
+  std::size_t allocationCountForTest() const noexcept;
+  std::size_t hitCountForTest() const noexcept;
+  std::size_t evictionCountForTest() const noexcept;
+  std::size_t cachedBytesForTest() const noexcept;
+  std::size_t cachedBlocksForTest() const noexcept;
+
+ private:
+  friend class SegmentedCommandChunkRegions;
+  struct CachedBlock {
+    std::vector<std::uint64_t> words;
+    std::size_t capacityBytes = 0u;
+  };
+
+  static std::optional<SegmentedCommandChunkRegionLayout> planLayout(
+      std::size_t recordBytes, std::size_t handleBytes,
+      std::size_t payloadBytes) noexcept;
+  static std::size_t bucketCapacityFor(std::size_t bytes) noexcept;
+  static std::size_t bucketIndexFor(std::size_t capacity) noexcept;
+  void recycle(std::vector<std::uint64_t>&& words,
+               std::size_t capacityBytes) noexcept;
+
+  mutable std::mutex mutex_;
+  std::array<std::array<std::optional<CachedBlock>, kMaxBlocksPerBucket>,
+             kBucketCount>
+      buckets_{};
+  std::atomic<bool> failNextAllocation_{false};
+  std::atomic<std::size_t> allocationCount_{0u};
+  std::atomic<std::size_t> hitCount_{0u};
+  std::atomic<std::size_t> evictionCount_{0u};
+  std::size_t cachedBytes_ = 0u;
+  std::size_t cachedBlocks_ = 0u;
+};
+
 struct RawCommandChunk {
+  RawCommandChunk() = default;
+  RawCommandChunk(const RawCommandChunk&) = delete;
+  RawCommandChunk& operator=(const RawCommandChunk&) = delete;
+  RawCommandChunk(RawCommandChunk&&) noexcept = default;
+  RawCommandChunk& operator=(RawCommandChunk&&) noexcept = default;
+
   // Contiguous commits retain the historical single blob. Segmented commits
-  // retain these three final Unix-owned regions instead; no borrowed provider
-  // span survives the bridge call.
+  // retain one pooled Unix-owned extent instead; no borrowed provider span
+  // survives the bridge call.
   std::vector<dxmt9::core::u8> recordBlob;
-  std::vector<D9CCommandChunkWireRecordHeader> recordRegion;
-  std::vector<D9CCommandChunkWireHandleEntry> handleRegion;
-  // The payload arena is required to be uint32-aligned by the wire schema;
-  // words make that alignment explicit while payloadRegionBytes preserves its
-  // exact byte length (the final word may be partially used).
-  std::vector<std::uint32_t> payloadRegion;
-  std::size_t payloadRegionBytes = 0u;
-  // Exact amount retained in the Unix BridgeRawOwnership ledger. This is a
-  // settlement token, not derived from vector capacity, and is cleared on the
-  // first release so explicit cleanup plus a scope guard is idempotent.
-  std::size_t bridgeRawLedgerOwnedBytes = 0u;
+  SegmentedCommandChunkRegions segmentedRegions;
+  BridgeRawOwnershipCharge bridgeRawLedgerCharge;
   D9CCommandChunkWireHeader wireHeader{};
   bool segmentedTransport = false;
   uint32_t wireVersion = D9C_COMMAND_CHUNK_VERSION;
@@ -178,7 +375,7 @@ struct RawCommandChunk {
   // The worker consumes these pointers directly and never looks a stable
   // registry ID up after the app-thread commit returns.
   std::vector<void*> resolvedObjects;
-  std::vector<RetainedWireHandle> retainedWrappers;
+  RetainedWireHandleBatch retainedWrappers;
   std::vector<ReplayDrainTarget*> ledgerTargets;
   // Validated, deduplicated unix-side resource identities. The app thread
   // persists these before handoff. Legacy admission may have already stamped
@@ -399,7 +596,9 @@ bool prepareOffloadChunk(
 bool prepareSegmentedOffloadChunk(
     const D9CCommandChunkSegmentedTransportV1& transport,
     std::span<const std::byte> records, std::span<const std::byte> handles,
-    std::span<const std::byte> payload, const WireObjectRegistry& registry,
+    std::span<const std::byte> payload,
+    SegmentedCommandChunkRegionPool& regionPool,
+    const WireObjectRegistry& registry,
     WireObjectRegistry::RetainFn retain, RawCommandChunk& out) noexcept;
 
 // Perf hooks (defined in device_c_replay_offload.cpp) — invoked only when a
@@ -1104,9 +1303,9 @@ enum class BufferMutationOffloadResult : std::uint8_t {
 BufferMutationOffloadResult offloadManagedBufferMutation(
     D9CBuffer* b, std::uint64_t wow64WritebackNs = 0u) noexcept;
 
-// Releases every wrapper retained during canonical admission and clears the list.
-// Namespace linkage allows both the commit push-failure path and the offload
-// worker's fail-stop drain to call it.
+// Settles the raw-byte charge/region lease and every wrapper retained during
+// canonical admission. Idempotent so explicit failure cleanup and RAII guards
+// may converge on the same terminal path.
 void releaseRetainedWrappers(RawCommandChunk& chunk);
 
 }  // namespace dxmt9::d3d9

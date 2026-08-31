@@ -29,6 +29,7 @@ LifecycleRows == {
   [from |-> "GPUInFlight", to |-> "Completed", owner |-> "DeviceLoss", disposition |-> "DeviceLost", control |-> "DeviceLoss"],
   [from |-> "Completed", to |-> "Reclaimed", owner |-> "Reclaim", disposition |-> "Completed", control |-> "Normal"],
   [from |-> "Completed", to |-> "Reclaimed", owner |-> "Reclaim", disposition |-> "PresentSettled", control |-> "Present"],
+  [from |-> "Completed", to |-> "Completed", owner |-> "Queue", disposition |-> "FinishAdvance", control |-> "Normal"],
   [from |-> "Encoding", to |-> "Reclaimed", owner |-> "Queue", disposition |-> "NoGpuTerminal", control |-> "Normal"],
   [from |-> "RawOwned", to |-> "Reclaimed", owner |-> "Queue", disposition |-> "NoGpuTerminal", control |-> "Normal"],
   [from |-> "FinalOwned", to |-> "Reclaimed", owner |-> "Queue", disposition |-> "NoGpuTerminal", control |-> "Normal"],

@@ -1593,7 +1593,32 @@ void QueueLifecycleController::recordNoEnqueueFirstPublishSlotShapeBeforePublish
 void QueueLifecycleController::observeTransition(const QueueTransitionRecord& record) const {
   const auto lifecycleEvent = classifyTransition(record);
   if (pipelineLifecycleObserverEnabled()) {
-    observePipelineOwnerTransition(record, lifecycleEvent);
+    if (lifecycleEvent == QueueLifecycleEvent::EncodeDequeue &&
+        !record.batchReadySources.empty()) {
+      const auto batch = record.batchReadySources;
+      for (std::size_t i = 0; i < batch.size(); ++i) {
+        QueueTransitionRecord sourceRecord = record;
+        // Retain the physical member span while projecting each member.  The
+        // QueueControllerState stores a non-owning slot span, so after the
+        // batched mutation its `before` view aliases the physical `after`
+        // slots.  The snapshot projector uses this span to restore the
+        // complete pre/post batch states before it emits the serialized
+        // per-source chain.
+        sourceRecord.slotIndex = batch[i].controlIndex;
+        sourceRecord.eventSeqId = batch[i].seqId;
+        sourceRecord.beforeSourceId = batch[i].source.id;
+        sourceRecord.beforeStorage = batch[i].source.storage;
+        sourceRecord.afterSourceId = batch[i].source.id;
+        sourceRecord.afterStorage = batch[i].source.storage;
+        sourceRecord.beforeMetadata = batch[i].metadata;
+        sourceRecord.physicalBatchId = record.physicalBatchId;
+        sourceRecord.batchIndex = static_cast<std::uint32_t>(i);
+        sourceRecord.batchCount = static_cast<std::uint32_t>(batch.size());
+        observePipelineOwnerTransition(sourceRecord, lifecycleEvent);
+      }
+    } else {
+      observePipelineOwnerTransition(record, lifecycleEvent);
+    }
   }
   switch (lifecycleEvent) {
     case QueueLifecycleEvent::PresentEnqueue:
@@ -1691,12 +1716,28 @@ void QueueLifecycleController::observePipelineOwnerTransition(
     return;
   }
 
-  const auto snapshot = [this, &record](const QueueControllerState& state,
+  const auto snapshot = [this, &record, event](const QueueControllerState& state,
                                         bool beforeState) {
-    PipelineQueueSnapshot out{};
+    ::dxmt9::queue::PipelineQueueSnapshot out{};
     out.completedSeq = state.completedSeqId;
     out.presentSeq = submissionBinding_.presentCompletedSeqId
         ? *submissionBinding_.presentCompletedSeqId : 0;
+    out.finishWaterlineSeq = out.completedSeq;
+    out.completedQueueDepth = state.completedQueueCount;
+    out.gpuCompletedTailSeq = out.completedSeq;
+    if (submissionBinding_.completedSeqQueue) {
+      const auto depth = submissionBinding_.completedSeqQueue->size();
+      if (depth <= std::numeric_limits<std::uint64_t>::max() -
+                      out.completedSeq) {
+        out.gpuCompletedTailSeq += depth;
+      }
+    }
+    out.gpuCompletedPresentSeq = out.presentSeq;
+    if (submissionBinding_.completedPresentSeqQueue &&
+        !submissionBinding_.completedPresentSeqQueue->empty()) {
+      out.gpuCompletedPresentSeq =
+          submissionBinding_.completedPresentSeqQueue->back();
+    }
     out.capacityGeneration = cpuReadyCapacityProgressGeneration_;
     out.admissionWakeGeneration = cpuReadyCapacityProgressGeneration_;
     out.capacity = static_cast<std::uint32_t>(state.slots.size());
@@ -1709,6 +1750,19 @@ void QueueLifecycleController::observePipelineOwnerTransition(
           slotState = *record.beforeSlotState;
         } else if (!beforeState && record.afterSlotState) {
           slotState = *record.afterSlotState;
+        }
+      }
+      if (event == QueueLifecycleEvent::EncodeDequeue &&
+          record.batchCount > 1u && !record.batchReadySources.empty()) {
+        for (const auto& batchSource : record.batchReadySources) {
+          if (batchSource.controlIndex != i) continue;
+          // All members are Pending before the physical prefix commit and
+          // Encoding afterwards.  Restore those states even for members
+          // other than the currently projected source; otherwise the span
+          // alias makes every logical source inherit a phantom old credit.
+          slotState = beforeState ? ChunkSlot::State::Pending
+                                  : ChunkSlot::State::Encoding;
+          break;
         }
       }
       if (slotState == ChunkSlot::State::Encoding ||
@@ -1724,12 +1778,10 @@ void QueueLifecycleController::observePipelineOwnerTransition(
         std::min<std::uint64_t>(
             std::numeric_limits<std::uint32_t>::max() - occupied,
             gpuOutstandingCompletionSourceCount_));
-    if (submissionBinding_.completedSeqQueue) {
-      const auto completedCount = std::min<std::size_t>(
-          submissionBinding_.completedSeqQueue->size(),
-          std::numeric_limits<std::uint32_t>::max() - occupied);
-      occupied += static_cast<std::uint32_t>(completedCount);
-    }
+    occupied += static_cast<std::uint32_t>(
+        std::min<std::uint64_t>(
+            std::numeric_limits<std::uint32_t>::max() - occupied,
+            completedNotReclaimedCount_));
     out.occupancy = occupied;
     return out;
   };
@@ -1751,12 +1803,13 @@ void QueueLifecycleController::observePipelineOwnerTransition(
   if (!source.valid()) source = sourceSlot(true);
   if (!source.valid()) return;
   std::optional<CpuReadySourceMetadata> metadata;
-  for (const auto state : {CpuReadyTape::State::Ready,
-                           CpuReadyTape::State::TentativeRepresented,
-                           CpuReadyTape::State::Encoding,
-                           CpuReadyTape::State::Submitted,
-                           CpuReadyTape::State::Completed,
-                           CpuReadyTape::State::Represented}) {
+    for (const auto state : {CpuReadyTape::State::Ready,
+                             CpuReadyTape::State::TentativeRepresented,
+                             CpuReadyTape::State::Encoding,
+                             CpuReadyTape::State::Submitted,
+                             CpuReadyTape::State::GPU,
+                             CpuReadyTape::State::Completed,
+                             CpuReadyTape::State::Represented}) {
     metadata = submissionBinding_.cpuReadyTape->sourceMetadata(
         source.id, source.storage, state);
     if (metadata) break;
@@ -1766,12 +1819,14 @@ void QueueLifecycleController::observePipelineOwnerTransition(
   }
   if (!metadata || !metadata->valid()) return;
   std::optional<CpuReadyTape::PayloadKind> kind;
-  for (const auto state : {CpuReadyTape::State::Ready,
-                           CpuReadyTape::State::TentativeRepresented,
-                           CpuReadyTape::State::Represented,
-                           CpuReadyTape::State::Submitted,
-                           CpuReadyTape::State::Reclaiming,
-                           CpuReadyTape::State::Completed}) {
+    for (const auto state : {CpuReadyTape::State::Ready,
+                             CpuReadyTape::State::TentativeRepresented,
+                             CpuReadyTape::State::Encoding,
+                             CpuReadyTape::State::Represented,
+                             CpuReadyTape::State::Submitted,
+                             CpuReadyTape::State::Reclaiming,
+                             CpuReadyTape::State::GPU,
+                             CpuReadyTape::State::Completed}) {
     kind = submissionBinding_.cpuReadyTape->payloadKind(
         source.id, source.storage, state);
     if (kind) break;
@@ -1781,12 +1836,14 @@ void QueueLifecycleController::observePipelineOwnerTransition(
       ? PipelinePayloadKind::Arena : PipelinePayloadKind::Legacy;
   auto effectivePayloadKind = payloadKind;
   bool hasPresent = false;
-  for (const auto state : {CpuReadyTape::State::Ready,
-                           CpuReadyTape::State::TentativeRepresented,
-                           CpuReadyTape::State::Represented,
-                           CpuReadyTape::State::Submitted,
-                           CpuReadyTape::State::Reclaiming,
-                           CpuReadyTape::State::Completed}) {
+    for (const auto state : {CpuReadyTape::State::Ready,
+                             CpuReadyTape::State::TentativeRepresented,
+                             CpuReadyTape::State::Encoding,
+                             CpuReadyTape::State::Represented,
+                             CpuReadyTape::State::Submitted,
+                             CpuReadyTape::State::Reclaiming,
+                             CpuReadyTape::State::GPU,
+                             CpuReadyTape::State::Completed}) {
     const auto payload = submissionBinding_.cpuReadyTape->resolveSourcePayload(
         source.id, source.storage, state);
     if (payload.valid()) {
@@ -1814,7 +1871,42 @@ void QueueLifecycleController::observePipelineOwnerTransition(
   const auto after = snapshot(record.after, false);
   const auto encodeOwner = record.pipelineOwner.value_or(
       PipelineOwner::SerialEncode);
-  PipelineQueueSnapshot logicalBefore = before;
+  PipelineQueueSnapshot logicalBefore =
+      (record.batchIndex != 0u && event != QueueLifecycleEvent::GpuComplete &&
+       event != QueueLifecycleEvent::EncodeDequeue)
+          ? after : before;
+  if (event == QueueLifecycleEvent::EncodeDequeue &&
+      record.batchIndex != 0u) {
+    // The physical transition moves the entire Ready prefix to Encoding at
+    // once.  Project the serialized logical chain one source at a time so
+    // source i starts after exactly i earlier logical credits, rather than
+    // inheriting the physical post-state (which contains the whole prefix).
+    const auto prefix = static_cast<std::uint64_t>(record.batchIndex);
+    logicalBefore.occupancy =
+        prefix > std::numeric_limits<std::uint32_t>::max() -
+                    logicalBefore.occupancy
+            ? std::numeric_limits<std::uint32_t>::max()
+            : logicalBefore.occupancy + static_cast<std::uint32_t>(prefix);
+  }
+  if (event == QueueLifecycleEvent::GpuComplete && record.batchCount > 1u) {
+    // The completion watcher publishes a contiguous source batch in one
+    // physical operation. Project each source's frontier independently while
+    // retaining the shared physical queue snapshot at the batch boundary.
+    const auto baseQueueDepth =
+        after.completedQueueDepth >= record.batchCount
+            ? after.completedQueueDepth - record.batchCount : 0u;
+    logicalBefore.completedQueueDepth =
+        baseQueueDepth + record.batchIndex;
+    // GPU ownership is transferred to Completed one source at a time, but
+    // every source already held one queue credit before this physical batch
+    // callback.  Do not manufacture an occupancy increase for later batch
+    // indices; doing so creates a false resource leak in the reducer.
+    logicalBefore.occupancy = before.occupancy;
+    logicalBefore.gpuCompletedTailSeq =
+        record.eventSeqId - 1u;
+    logicalBefore.gpuCompletedPresentSeq =
+        before.gpuCompletedPresentSeq;
+  }
   const auto emit = [&](PipelineStage from, PipelineStage to,
                         PipelineDisposition disposition,
                         std::uint32_t borrows = 0,
@@ -1840,6 +1932,20 @@ void QueueLifecycleController::observePipelineOwnerTransition(
          to == PipelineStage::Completed)) {
       logicalAfter = after;
     }
+    if (event == QueueLifecycleEvent::GpuComplete &&
+        record.batchCount > 1u) {
+      const auto baseQueueDepth =
+          after.completedQueueDepth >= record.batchCount
+              ? after.completedQueueDepth - record.batchCount : 0u;
+      logicalAfter.completedQueueDepth =
+          baseQueueDepth + record.batchIndex + 1u;
+      logicalAfter.occupancy = logicalBefore.occupancy;
+      logicalAfter.gpuCompletedTailSeq = record.eventSeqId;
+      logicalAfter.gpuCompletedPresentSeq = logicalBefore.gpuCompletedPresentSeq;
+      if (hasPresent) {
+        logicalAfter.gpuCompletedPresentSeq = record.eventSeqId;
+      }
+    }
     const PipelineLifecycleEvent lifecycleEvent{
         .identity = identity, .from = from, .to = to,
         .payloadKind = effectivePayloadKind, .disposition = disposition,
@@ -1849,7 +1955,11 @@ void QueueLifecycleController::observePipelineOwnerTransition(
         .ownedBytes = metadata->usedBytes, .outstandingBorrows = borrows,
         .constructedCount = 1, .requiredCount = 1,
         .joinedChildren = joined, .totalChildren = total,
-        .completionAuthority = authority, .before = logicalBefore,
+        .completionAuthority = authority,
+        .physicalBatchId = record.physicalBatchId,
+        .batchIndex = record.batchIndex,
+        .batchCount = record.batchCount,
+        .before = logicalBefore,
         .after = logicalAfter};
     emitPipelineLifecycleEvent(sink, lifecycleEvent);
     if (watchdog) {
@@ -1932,11 +2042,30 @@ void QueueLifecycleController::observePipelinePoisonStop() const noexcept {
   snapshot.completedSeq = state.completedSeqId;
   snapshot.presentSeq = submissionBinding_.presentCompletedSeqId
       ? *submissionBinding_.presentCompletedSeqId : 0;
+  snapshot.finishWaterlineSeq = snapshot.completedSeq;
+  snapshot.completedQueueDepth = state.completedQueueCount;
+  snapshot.gpuCompletedTailSeq = snapshot.completedSeq +
+      snapshot.completedQueueDepth;
+  snapshot.gpuCompletedPresentSeq = snapshot.presentSeq;
+  if (submissionBinding_.completedPresentSeqQueue &&
+      !submissionBinding_.completedPresentSeqQueue->empty()) {
+    snapshot.gpuCompletedPresentSeq =
+        submissionBinding_.completedPresentSeqQueue->back();
+  }
   snapshot.capacity = static_cast<std::uint32_t>(state.slots.size());
   snapshot.capacityGeneration = cpuReadyCapacityProgressGeneration_;
   snapshot.admissionWakeGeneration = cpuReadyCapacityProgressGeneration_;
   snapshot.stopped = true;
   snapshot.failed = true;
+  std::uint32_t occupied = 0;
+  for (const auto& slot : state.slots) {
+    if (slot.state == ChunkSlot::State::Encoding ||
+        slot.state == ChunkSlot::State::Retiring) ++occupied;
+  }
+  occupied += static_cast<std::uint32_t>(std::min<std::uint64_t>(
+      std::numeric_limits<std::uint32_t>::max() - occupied,
+      gpuOutstandingCompletionSourceCount_ + completedNotReclaimedCount_));
+  snapshot.occupancy = occupied;
   for (const auto& slot : state.slots) {
     if (!slot.sourceId.valid() || !slot.storage.valid()) continue;
     std::optional<CpuReadySourceMetadata> metadata;
@@ -1969,18 +2098,75 @@ void QueueLifecycleController::observePipelinePoisonStop() const noexcept {
         .generation = slot.storage.generation,
     };
     if (!identity.valid()) continue;
+    auto before = snapshot;
+    auto after = snapshot;
+    if (before.occupancy != 0u) --after.occupancy;
+    const auto kind = submissionBinding_.cpuReadyTape->payloadKind(
+        slot.sourceId, slot.storage, CpuReadyTape::State::Completed);
     const PipelineLifecycleEvent lifecycleEvent{
         .identity = identity, .from = from, .to = PipelineStage::Reclaimed,
-        .payloadKind = PipelinePayloadKind::Legacy,
+        .payloadKind = kind && *kind == CpuReadyTape::PayloadKind::Arena
+            ? PipelinePayloadKind::Arena : PipelinePayloadKind::Legacy,
         .disposition = PipelineDisposition::FailStop,
         .owner = PipelineOwner::DeviceLoss,
         .control = PipelineControl::DeviceLoss,
-        .ownedBytes = metadata->usedBytes, .before = snapshot,
-        .after = snapshot};
+        .ownedBytes = metadata->usedBytes, .before = before,
+        .after = after};
     emitPipelineLifecycleEvent(sink, lifecycleEvent);
     if (watchdog) {
       watchdog->notePipelineEvent(lifecycleEvent);
     }
+    snapshot = after;
+  }
+  std::array<QueueCompletionSource, kMaxEncodeSessionSources>
+      pendingPoisonSources{};
+  std::size_t pendingPoisonCount = 0;
+  {
+    std::lock_guard lock(pendingCompletionMutex_);
+    pendingPoisonCount = pendingPoisonSourceCount_;
+    for (std::size_t i = 0; i < pendingPoisonCount; ++i) {
+      pendingPoisonSources[i] = pendingPoisonSources_[i];
+    }
+  }
+  for (std::size_t i = 0; i < pendingPoisonCount; ++i) {
+    const auto& source = pendingPoisonSources[i];
+    if (!source.locatorBacked()) continue;
+    std::optional<CpuReadySourceMetadata> metadata;
+    std::optional<CpuReadyTape::PayloadKind> kind;
+    for (const auto tapeState : {CpuReadyTape::State::GPU,
+                                 CpuReadyTape::State::Submitted,
+                                 CpuReadyTape::State::Completed}) {
+      metadata = submissionBinding_.cpuReadyTape->sourceMetadata(
+          source.source.id, source.source.storage, tapeState);
+      kind = submissionBinding_.cpuReadyTape->payloadKind(
+          source.source.id, source.source.storage, tapeState);
+      if (metadata && kind) break;
+    }
+    if (!metadata || !kind) continue;
+    auto before = snapshot;
+    auto after = snapshot;
+    if (before.occupancy != 0u) --after.occupancy;
+    const PipelineLifecycleEvent lifecycleEvent{
+        .identity = PipelineIdentity{
+            .workId = metadata->rawOrdinal != 0 ? metadata->rawOrdinal
+                                                 : metadata->sourceOrdinal,
+            .sourceOrdinal = metadata->sourceOrdinal,
+            .seqId = metadata->seqId,
+            .generation = source.source.storage.generation},
+        .from = PipelineStage::GPUInFlight,
+        .to = PipelineStage::Reclaimed,
+        .payloadKind = *kind == CpuReadyTape::PayloadKind::Arena
+            ? PipelinePayloadKind::Arena : PipelinePayloadKind::Legacy,
+        .disposition = PipelineDisposition::FailStop,
+        .owner = PipelineOwner::DeviceLoss,
+        .control = PipelineControl::DeviceLoss,
+        .ownedBytes = metadata->usedBytes,
+        .completionAuthority = true,
+        .before = before,
+        .after = after};
+    emitPipelineLifecycleEvent(sink, lifecycleEvent);
+    if (watchdog) watchdog->notePipelineEvent(lifecycleEvent);
+    snapshot = after;
   }
 }
 
@@ -2142,9 +2328,26 @@ void QueueLifecycleController::recordPipelineSourceArrival(
       ? submissionBinding_.completedSeqId->load(std::memory_order_relaxed) : 0;
   snapshot.presentSeq = submissionBinding_.presentCompletedSeqId
       ? *submissionBinding_.presentCompletedSeqId : 0;
+  snapshot.finishWaterlineSeq = snapshot.completedSeq;
   snapshot.capacity = static_cast<std::uint32_t>(submissionBinding_.slots.size());
   snapshot.capacityGeneration = cpuReadyCapacityProgressGeneration_;
   snapshot.admissionWakeGeneration = cpuReadyCapacityProgressGeneration_;
+  snapshot.completedQueueDepth = submissionBinding_.completedSeqQueue
+      ? static_cast<std::uint32_t>(submissionBinding_.completedSeqQueue->size())
+      : 0u;
+  if (snapshot.completedQueueDepth >
+      std::numeric_limits<std::uint64_t>::max() -
+          snapshot.finishWaterlineSeq) {
+    return;
+  }
+  snapshot.gpuCompletedTailSeq =
+      snapshot.finishWaterlineSeq + snapshot.completedQueueDepth;
+  snapshot.gpuCompletedPresentSeq = snapshot.presentSeq;
+  if (submissionBinding_.completedPresentSeqQueue &&
+      !submissionBinding_.completedPresentSeqQueue->empty()) {
+    snapshot.gpuCompletedPresentSeq =
+        submissionBinding_.completedPresentSeqQueue->back();
+  }
   snapshot.stopped = submissionBinding_.stop && *submissionBinding_.stop;
   const PipelineLifecycleEvent lifecycleEvent{
       .identity = PipelineIdentity{
@@ -2165,6 +2368,176 @@ void QueueLifecycleController::recordPipelineSourceArrival(
   if (watchdog) {
     watchdog->notePipelineEvent(lifecycleEvent);
   }
+}
+
+void QueueLifecycleController::recordPipelineSourcePublication(
+    CpuReadyTape::PayloadKind payloadKind, CpuReadyTape::SourceRef source,
+    CpuReadyAdmissionIdentity identity, std::size_t ownedBytes,
+    std::uint64_t physicalBatchId, std::uint32_t batchIndex,
+    std::uint32_t batchCount) const noexcept {
+  using namespace ::dxmt9::queue;
+  const auto sink = submissionBinding_.pipelineLifecycleObserver;
+  auto* watchdog = submissionBinding_.schedulingProgressWatchdog;
+  if (!sink.fn && !(watchdog && watchdog->enabled())) return;
+  if (!source.valid() || !identity.valid()) return;
+  PipelineQueueSnapshot snapshot{};
+  snapshot.completedSeq = submissionBinding_.completedSeqId
+      ? submissionBinding_.completedSeqId->load(std::memory_order_relaxed) : 0;
+  snapshot.presentSeq = submissionBinding_.presentCompletedSeqId
+      ? *submissionBinding_.presentCompletedSeqId : 0;
+  snapshot.finishWaterlineSeq = snapshot.completedSeq;
+  snapshot.capacity = static_cast<std::uint32_t>(submissionBinding_.slots.size());
+  snapshot.capacityGeneration = cpuReadyCapacityProgressGeneration_;
+  snapshot.admissionWakeGeneration = cpuReadyCapacityProgressGeneration_;
+  snapshot.completedQueueDepth = submissionBinding_.completedSeqQueue
+      ? static_cast<std::uint32_t>(submissionBinding_.completedSeqQueue->size())
+      : 0u;
+  if (snapshot.completedQueueDepth >
+      std::numeric_limits<std::uint64_t>::max() - snapshot.completedSeq) {
+    return;
+  }
+  snapshot.gpuCompletedTailSeq = snapshot.completedSeq +
+      snapshot.completedQueueDepth;
+  snapshot.gpuCompletedPresentSeq = snapshot.presentSeq;
+  if (submissionBinding_.completedPresentSeqQueue &&
+      !submissionBinding_.completedPresentSeqQueue->empty()) {
+    snapshot.gpuCompletedPresentSeq =
+        submissionBinding_.completedPresentSeqQueue->back();
+  }
+  const PipelineLifecycleEvent event{
+      .identity = PipelineIdentity{
+          .workId = identity.rawOrdinal != 0 ? identity.rawOrdinal
+                                              : identity.sourceOrdinal,
+          .sourceOrdinal = identity.sourceOrdinal,
+          .seqId = identity.seqId,
+          .generation = source.storage.generation},
+      .from = PipelineStage::ProducerOwned,
+      .to = PipelineStage::RawOwned,
+      .payloadKind = payloadKind == CpuReadyTape::PayloadKind::Arena
+          ? PipelinePayloadKind::Arena : PipelinePayloadKind::Legacy,
+      .disposition = PipelineDisposition::Advance,
+      .owner = PipelineOwner::Replay,
+      .control = PipelineControl::Normal,
+      .ownedBytes = ownedBytes,
+      .physicalBatchId = physicalBatchId,
+      .batchIndex = batchIndex,
+      .batchCount = batchCount,
+      .before = snapshot,
+      .after = snapshot};
+  emitPipelineLifecycleEvent(sink, event);
+  if (watchdog) watchdog->notePipelineEvent(event);
+}
+
+void QueueLifecycleController::recordPipelineFinishAdvance(
+    CpuReadyTape::SourceRef source, CpuReadySourceMetadata metadata,
+    CpuReadyTape::PayloadKind payloadKind, bool hasPresent,
+    ::dxmt9::queue::PipelineQueueSnapshot before,
+    ::dxmt9::queue::PipelineQueueSnapshot after) const noexcept {
+  using namespace ::dxmt9::queue;
+  const auto sink = submissionBinding_.pipelineLifecycleObserver;
+  auto* watchdog = submissionBinding_.schedulingProgressWatchdog;
+  if (!sink.fn && !(watchdog && watchdog->enabled())) return;
+  if (!source.valid() || !metadata.valid()) return;
+  // The source has already left the notification FIFO by this owner edge,
+  // but it still owns Completed credit until Tape reclaim.
+  const PipelineLifecycleEvent event{
+      .identity = PipelineIdentity{
+          .workId = metadata.rawOrdinal != 0 ? metadata.rawOrdinal
+                                              : metadata.sourceOrdinal,
+          .sourceOrdinal = metadata.sourceOrdinal,
+          .seqId = metadata.seqId,
+          .generation = source.storage.generation},
+      .from = PipelineStage::Completed,
+      .to = PipelineStage::Completed,
+      .payloadKind = payloadKind == CpuReadyTape::PayloadKind::Arena
+          ? PipelinePayloadKind::Arena : PipelinePayloadKind::Legacy,
+      .disposition = PipelineDisposition::FinishAdvance,
+      .owner = PipelineOwner::Queue,
+      .control = PipelineControl::Normal,
+      .hasPresent = hasPresent,
+      .ownedBytes = metadata.usedBytes,
+      .completionAuthority = true,
+      .before = before,
+      .after = after};
+  emitPipelineLifecycleEvent(sink, event);
+  if (watchdog) watchdog->notePipelineEvent(event);
+}
+
+void QueueLifecycleController::recordPipelineReclaim(
+    CpuReadyTape::SourceRef source, CpuReadySourceMetadata metadata,
+    CpuReadyTape::PayloadKind payloadKind, bool hasPresent,
+    const QueueControllerState& beforeState,
+    const QueueControllerState& afterState, std::uint64_t physicalBatchId,
+    std::uint32_t batchIndex, std::uint32_t batchCount) const noexcept {
+  using namespace ::dxmt9::queue;
+  const auto sink = submissionBinding_.pipelineLifecycleObserver;
+  auto* watchdog = submissionBinding_.schedulingProgressWatchdog;
+  if (!sink.fn && !(watchdog && watchdog->enabled())) return;
+  if (!source.valid() || !metadata.valid()) return;
+  const auto makeSnapshot = [this](const QueueControllerState& state) {
+    PipelineQueueSnapshot out{};
+    out.completedSeq = state.completedSeqId;
+    out.presentSeq = submissionBinding_.presentCompletedSeqId
+        ? *submissionBinding_.presentCompletedSeqId : 0;
+    out.finishWaterlineSeq = out.completedSeq;
+    out.capacity = static_cast<std::uint32_t>(state.slots.size());
+    out.capacityGeneration = cpuReadyCapacityProgressGeneration_;
+    out.admissionWakeGeneration = cpuReadyCapacityProgressGeneration_;
+    out.completedQueueDepth = state.completedQueueCount;
+    if (out.completedQueueDepth >
+        std::numeric_limits<std::uint64_t>::max() - out.completedSeq) {
+      return out;
+    }
+    out.gpuCompletedTailSeq = out.completedSeq + out.completedQueueDepth;
+    out.gpuCompletedPresentSeq = out.presentSeq;
+    if (submissionBinding_.completedPresentSeqQueue &&
+        !submissionBinding_.completedPresentSeqQueue->empty()) {
+      out.gpuCompletedPresentSeq =
+          submissionBinding_.completedPresentSeqQueue->back();
+    }
+    std::uint32_t occupied = 0;
+    for (const auto& slot : state.slots) {
+      if (slot.state == ChunkSlot::State::Encoding ||
+          slot.state == ChunkSlot::State::Retiring) ++occupied;
+    }
+    occupied += static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        std::numeric_limits<std::uint32_t>::max() - occupied,
+        gpuOutstandingCompletionSourceCount_));
+    occupied += static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        std::numeric_limits<std::uint32_t>::max() - occupied,
+        completedNotReclaimedCount_));
+    out.occupancy = occupied;
+    return out;
+  };
+  auto before = makeSnapshot(beforeState);
+  const auto after = makeSnapshot(afterState);
+  before.occupancy = after.occupancy + 1u;
+  const PipelineLifecycleEvent event{
+      .identity = PipelineIdentity{
+          .workId = metadata.rawOrdinal != 0 ? metadata.rawOrdinal
+                                              : metadata.sourceOrdinal,
+          .sourceOrdinal = metadata.sourceOrdinal,
+          .seqId = metadata.seqId,
+          .generation = source.storage.generation},
+      .from = PipelineStage::Completed,
+      .to = PipelineStage::Reclaimed,
+      .payloadKind = payloadKind == CpuReadyTape::PayloadKind::Arena
+          ? PipelinePayloadKind::Arena : PipelinePayloadKind::Legacy,
+      .disposition = hasPresent ? PipelineDisposition::PresentSettled
+                                : PipelineDisposition::Completed,
+      .owner = PipelineOwner::Reclaim,
+      .control = hasPresent ? PipelineControl::Present
+                            : PipelineControl::Normal,
+      .hasPresent = hasPresent,
+      .ownedBytes = metadata.usedBytes,
+      .completionAuthority = true,
+      .physicalBatchId = physicalBatchId,
+      .batchIndex = batchIndex,
+      .batchCount = batchCount,
+      .before = before,
+      .after = after};
+  emitPipelineLifecycleEvent(sink, event);
+  if (watchdog) watchdog->notePipelineEvent(event);
 }
 
 void QueueLifecycleController::observePipelineControl(
@@ -2978,6 +3351,8 @@ bool QueueLifecycleController::commitReservedReadySlotBatch(
   auto* cpuReadyTape = submissionBinding_.cpuReadyTape;
   recordNoEnqueueWaitGapToEncodeDequeue();
   bool committed = false;
+  const auto physicalBatchId = ready[0].metadata.rawOrdinal != 0
+      ? ready[0].metadata.rawOrdinal : ready[0].seqId;
   encodeDequeue(ready[0].controlIndex, ready[0].seqId, [&] {
     committed = cpuReadyTape->commitReservedReadyPrefix(
         std::span<const CpuReadyTape::ReadyEntry>(ready.data(), sources.size()));
@@ -2989,7 +3364,8 @@ bool QueueLifecycleController::commitReservedReadySlotBatch(
           ChunkSlot::State::Encoding;
     }
     recordCpuReadyTapeStats(*cpuReadyTape);
-  });
+  }, std::span<const CpuReadyTape::ReadyEntry>(ready.data(), sources.size()),
+     physicalBatchId);
   if (!committed) {
     return false;
   }
@@ -3643,6 +4019,69 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
   bool presentSettled = false;
   const bool publicationCreditReleased =
       postEncodeCompletionLedger_.completed(seqId);
+  const auto completedHead = submissionBinding_.cpuReadyTape->oldestResident();
+  const auto completedHeadMetadata = completedHead
+      ? submissionBinding_.cpuReadyTape->sourceMetadata(
+            completedHead->source.id, completedHead->source.storage,
+            CpuReadyTape::State::Completed)
+      : std::nullopt;
+  const auto completedHeadKind = completedHead
+      ? submissionBinding_.cpuReadyTape->payloadKind(
+            completedHead->source.id, completedHead->source.storage,
+            CpuReadyTape::State::Completed)
+      : std::nullopt;
+  const auto completedHeadPayload = completedHead
+      ? submissionBinding_.cpuReadyTape->resolveSourcePayload(
+            completedHead->source.id, completedHead->source.storage,
+            CpuReadyTape::State::Completed)
+      : SourcePayloadView{};
+  const bool completedHeadHasPresent = completedHeadPayload.valid() &&
+      completedHeadPayload.presentRecordCount() != 0u;
+  const auto capturePipelineSnapshot = [this](
+      const QueueControllerState& state, u64 presentSeq,
+      u64 completedPresentTail) {
+    ::dxmt9::queue::PipelineQueueSnapshot out{};
+    out.completedSeq = state.completedSeqId;
+    out.presentSeq = presentSeq;
+    out.finishWaterlineSeq = state.completedSeqId;
+    out.capacity = static_cast<std::uint32_t>(state.slots.size());
+    out.capacityGeneration = cpuReadyCapacityProgressGeneration_;
+    out.admissionWakeGeneration = cpuReadyCapacityProgressGeneration_;
+    out.completedQueueDepth = state.completedQueueCount;
+    if (state.completedQueueCount <=
+        std::numeric_limits<std::uint64_t>::max() - out.finishWaterlineSeq) {
+      out.gpuCompletedTailSeq = out.finishWaterlineSeq +
+          state.completedQueueCount;
+    }
+    out.gpuCompletedPresentSeq = completedPresentTail != 0
+        ? completedPresentTail : presentSeq;
+    out.stopped = submissionBinding_.stop && *submissionBinding_.stop;
+    std::uint32_t occupied = 0;
+    for (const auto& slot : state.slots) {
+      if (slot.state == ChunkSlot::State::Encoding ||
+          slot.state == ChunkSlot::State::Retiring) {
+        ++occupied;
+      }
+    }
+    occupied += static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        std::numeric_limits<std::uint32_t>::max() - occupied,
+        gpuOutstandingCompletionSourceCount_));
+    occupied += static_cast<std::uint32_t>(std::min<std::uint64_t>(
+        std::numeric_limits<std::uint32_t>::max() - occupied,
+        completedNotReclaimedCount_));
+    out.occupancy = occupied;
+    return out;
+  };
+  const auto pipelineFinishBefore = currentState();
+  const u64 presentSeqBefore = submissionBinding_.presentCompletedSeqId
+      ? *submissionBinding_.presentCompletedSeqId : 0;
+  const u64 completedPresentTailBefore =
+      submissionBinding_.completedPresentSeqQueue &&
+              !submissionBinding_.completedPresentSeqQueue->empty()
+          ? submissionBinding_.completedPresentSeqQueue->back()
+          : presentSeqBefore;
+  const auto pipelineFinishBeforeSnapshot = capturePipelineSnapshot(
+      pipelineFinishBefore, presentSeqBefore, completedPresentTailBefore);
   // TLA+: QueueLifecycleRefinement / FinishDequeue.
   DXMT_ASSERT(seqId == completedSeqId->load(std::memory_order_relaxed) + 1);
   finishDequeue(seqId, [&] {
@@ -3696,6 +4135,23 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
       DXMT_ASSERT(*presentCompletedSeqId <= completedSeqIdValue);
     }
   });
+  const auto pipelineFinishAfter = currentState();
+  const u64 presentSeqAfter = submissionBinding_.presentCompletedSeqId
+      ? *submissionBinding_.presentCompletedSeqId : 0;
+  const u64 completedPresentTailAfter =
+      submissionBinding_.completedPresentSeqQueue &&
+              !submissionBinding_.completedPresentSeqQueue->empty()
+          ? submissionBinding_.completedPresentSeqQueue->back()
+          : presentSeqAfter;
+  const auto pipelineFinishAfterSnapshot = capturePipelineSnapshot(
+      pipelineFinishAfter, presentSeqAfter, completedPresentTailAfter);
+  if (completedHead && completedHeadMetadata && completedHeadKind &&
+      completedHead->seqId == seqId) {
+    recordPipelineFinishAdvance(
+        completedHead->source, *completedHeadMetadata, *completedHeadKind,
+        completedHeadHasPresent, pipelineFinishBeforeSnapshot,
+        pipelineFinishAfterSnapshot);
+  }
   if (submissionBinding_.schedulingProgressWatchdog) {
     submissionBinding_.schedulingProgressWatchdog->noteReleased(
         seqId, presentSettled);
@@ -3886,6 +4342,34 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
     poisonTapeFailureLocked();
     return false;
   }
+  // Keep the physical group envelope out of CpuReadySourceMetadata (which is
+  // embedded in the compact Ready/Resolved snapshots).  ReclaimStatus reads
+  // the queue-owned Entry while it is still Completed, so the same immutable
+  // group identity can be forwarded to the lifecycle observer without
+  // widening every source snapshot.
+  const auto pipelineReclaimStatus =
+      submissionBinding_.cpuReadyTape->reclaimStatus(
+          head->source.id, head->source.storage);
+  PhysicalBatchReclaimMember physicalBatch{};
+  bool hasPhysicalBatch = false;
+  for (std::size_t i = 0; i < physicalBatchReclaimMemberCount_; ++i) {
+    if (physicalBatchReclaimMembers_[i].seqId == seqId) {
+      physicalBatch = physicalBatchReclaimMembers_[i];
+      hasPhysicalBatch = true;
+      break;
+    }
+  }
+  const auto pipelineReclaimMetadata =
+      submissionBinding_.cpuReadyTape->sourceMetadata(
+          head->source.id, head->source.storage, CpuReadyTape::State::Completed);
+  const auto pipelineReclaimKind = submissionBinding_.cpuReadyTape->payloadKind(
+      head->source.id, head->source.storage, CpuReadyTape::State::Completed);
+  const auto pipelineReclaimPayload =
+      submissionBinding_.cpuReadyTape->resolveSourcePayload(
+          head->source.id, head->source.storage, CpuReadyTape::State::Completed);
+  const bool pipelineReclaimHasPresent = pipelineReclaimPayload.valid() &&
+      pipelineReclaimPayload.presentRecordCount() != 0u;
+  const auto pipelineReclaimBefore = currentState();
   if (!submissionBinding_.cpuReadyTape->beginReclaim(
           head->source.id, head->source.storage)) {
     poisonTapeFailureLocked();
@@ -3950,6 +4434,65 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
     dxmt9::noteQueueMutexSegmentIfEnabled("run_finish_loop/retire", qmxEnabled,
                                           qmxSegStart);
     return false;
+  }
+  // This counter is observer-only accounting.  Some compatibility/inline
+  // completion paths publish directly to completedSeqQueue without passing
+  // through the asynchronous batch counter, so a zero value here must never
+  // alter the queue's writer/reclaim semantics or poison a valid source.
+  if (completedNotReclaimedCount_ != 0u) {
+    --completedNotReclaimedCount_;
+  }
+  const auto pipelineReclaimAfter = currentState();
+  if (pipelineReclaimMetadata && pipelineReclaimKind) {
+    recordPipelineReclaim(head->source, *pipelineReclaimMetadata,
+                          *pipelineReclaimKind, pipelineReclaimHasPresent,
+                          pipelineReclaimBefore, pipelineReclaimAfter,
+                          hasPhysicalBatch
+                              ? physicalBatch.physicalBatchId
+                              : pipelineReclaimStatus.grouped()
+                                  ? pipelineReclaimMetadata->rawOrdinal : 0u,
+                          hasPhysicalBatch
+                              ? physicalBatch.batchIndex
+                              : pipelineReclaimStatus.grouped()
+                                  ? pipelineReclaimStatus.groupSourceIndex : 0u,
+                          hasPhysicalBatch
+                              ? physicalBatch.batchCount
+                              : pipelineReclaimStatus.grouped()
+                                  ? pipelineReclaimStatus.groupSourceCount : 1u);
+  }
+  bool physicalBatchDrained = false;
+  if (hasPhysicalBatch) {
+    for (std::size_t i = 0; i < physicalBatchReclaimMemberCount_; ++i) {
+      if (physicalBatchReclaimMembers_[i].seqId != seqId) continue;
+      physicalBatchReclaimMembers_[i] =
+          physicalBatchReclaimMembers_[--physicalBatchReclaimMemberCount_];
+      break;
+    }
+    physicalBatchDrained = true;
+    for (std::size_t i = 0; i < physicalBatchReclaimMemberCount_; ++i) {
+      if (physicalBatchReclaimMembers_[i].physicalBatchId ==
+          physicalBatch.physicalBatchId) {
+        physicalBatchDrained = false;
+        break;
+      }
+    }
+  }
+  if (hasPhysicalBatch && physicalBatchDrained) {
+    // Close from the actual queue-owned reclaim ledger, not from a particular
+    // member event. If terminal projection for any member was omitted, the
+    // observer now sees the incomplete Reclaimed set and fails closed.
+    ::dxmt9::queue::finalizePipelineLifecycleBatch(
+        submissionBinding_.pipelineLifecycleObserver,
+        physicalBatch.physicalBatchId, physicalBatch.batchCount);
+  } else if (!hasPhysicalBatch && pipelineReclaimStatus.grouped() &&
+             pipelineReclaimStatus.groupSourceIndex + 1u ==
+                 pipelineReclaimStatus.groupSourceCount) {
+    // Arena group reclaim is FIFO by the group's immutable source index; its
+    // final actual reclaim is the corresponding owner boundary.
+    ::dxmt9::queue::finalizePipelineLifecycleBatch(
+        submissionBinding_.pipelineLifecycleObserver,
+        pipelineReclaimMetadata ? pipelineReclaimMetadata->rawOrdinal : 0u,
+        pipelineReclaimStatus.groupSourceCount);
   }
   recordCpuReadyTapeStats(*submissionBinding_.cpuReadyTape);
   perf::countCpuReadyTapeReclaimWakeup();
@@ -4093,10 +4636,18 @@ void QueueLifecycleController::commitPublish(size_t slotIndex,
 
 void QueueLifecycleController::encodeDequeue(size_t slotIndex,
                                              u64 eventSeqId,
-                                             const std::function<void()>& mutate) {
+                                             const std::function<void()>& mutate,
+                                             std::span<const CpuReadyTape::ReadyEntry>
+                                                 batchSources,
+                                             std::uint64_t physicalBatchId) {
   transition(QueueTransitionRecord{
                  .slotIndex = slotIndex,
                  .eventSeqId = eventSeqId,
+                 .batchReadySources = batchSources,
+                 .physicalBatchId = physicalBatchId != 0
+                     ? physicalBatchId : eventSeqId,
+                 .batchCount = static_cast<std::uint32_t>(batchSources.empty()
+                         ? 1u : batchSources.size()),
              },
              mutate);
 }
@@ -4560,6 +5111,45 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
   const CommandBufferDiagnostics diagnostics =
       summarizeSubmissionSources(record, completionSources);
 
+  // Keep the physical batch correlation stable across dequeue, submit, and
+  // completion.  Arena groups carry one raw ordinal; legacy/mixed records
+  // fall back to the first FIFO source sequence.  This is observer metadata
+  // only and never becomes a queue boundary.
+  std::uint64_t physicalBatchId = completionSources.front().seqId;
+  if (completionSources.front().locatorBacked()) {
+    const auto batchMetadata = submissionBinding_.cpuReadyTape->sourceMetadata(
+        completionSources.front().source.id,
+        completionSources.front().source.storage,
+        CpuReadyTape::State::Represented);
+    if (batchMetadata && batchMetadata->rawOrdinal != 0) {
+      physicalBatchId = batchMetadata->rawOrdinal;
+    }
+  }
+
+  if (pipelineLifecycleObserverEnabled() && record.commandBuffer &&
+      completionSources.size() > 1u) {
+    // A ready-prefix batch may contain independently admitted sources, so
+    // ReclaimStatus cannot recover its physical envelope later. Retain only
+    // source sequence and batch coordinates until the finish thread emits the
+    // corresponding Reclaimed edge; this is cold observer bookkeeping and
+    // never participates in queue admission or completion decisions.
+    for (std::size_t i = 0; i < completionSources.size(); ++i) {
+      const auto& source = completionSources[i];
+      if (!source.locatorBacked() ||
+          physicalBatchReclaimMemberCount_ >=
+              physicalBatchReclaimMembers_.size()) {
+        continue;
+      }
+      physicalBatchReclaimMembers_[physicalBatchReclaimMemberCount_++] =
+          PhysicalBatchReclaimMember{
+              .seqId = source.seqId,
+              .physicalBatchId = physicalBatchId,
+              .batchIndex = static_cast<std::uint32_t>(i),
+              .batchCount = static_cast<std::uint32_t>(completionSources.size()),
+          };
+    }
+  }
+
   const auto beforeCommitState = currentState();
   const bool transitioned = tapeSourceCount == 0u ||
       submissionBinding_.cpuReadyTape->transitionAll(
@@ -4608,6 +5198,23 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
         .slotIndex = source.slotIndex,
         .eventSeqId = source.seqId,
         .pipelineOwner = source.pipelineOwner,
+        .beforeSourceId = source.source.id,
+        .beforeStorage = source.source.storage,
+        .afterSourceId = source.source.id,
+        .afterStorage = source.source.storage,
+        .beforeMetadata = source.locatorBacked()
+            ? submissionBinding_.cpuReadyTape->sourceMetadata(
+                  source.source.id, source.source.storage,
+                  CpuReadyTape::State::GPU)
+            : std::nullopt,
+        .beforePayloadKind = source.locatorBacked()
+            ? submissionBinding_.cpuReadyTape->payloadKind(
+                  source.source.id, source.source.storage,
+                  CpuReadyTape::State::GPU)
+            : std::nullopt,
+        .physicalBatchId = physicalBatchId,
+        .batchIndex = static_cast<std::uint32_t>(&source - completionSources.data()),
+        .batchCount = static_cast<std::uint32_t>(completionSources.size()),
     });
   }
   if (submissionBinding_.writeCv) {
@@ -4713,6 +5320,7 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     // any C++ callback or queue/Tape completion effect.
     pending.fixedCompletionSources = record.fixedCompletionSources;
     pending.completionSpanShadow = record.completionSpanShadow;
+    pending.physicalBatchId = physicalBatchId;
     const bool handoffShadowMatches =
         pending.completionSpanShadowMatchesSources();
     DXMT_ASSERT(handoffShadowMatches);
@@ -4760,6 +5368,10 @@ bool QueueLifecycleController::processOnePendingCompletion() {
     pending = std::move(pendingCompletion_.front());
     pendingCompletion_.pop_front();
     pendingDepthAfterPop = pendingCompletion_.size();
+    pendingPoisonSourceCount_ = pending.fixedCompletionSources.size();
+    for (std::size_t i = 0; i < pendingPoisonSourceCount_; ++i) {
+      pendingPoisonSources_[i] = pending.fixedCompletionSources.entries[i];
+    }
     forcedCompletionFailure = testOnlyForceNextCompletionFailure_;
     testOnlyForceNextCompletionFailure_ = false;
   }
@@ -4979,6 +5591,14 @@ bool QueueLifecycleController::processOnePendingCompletion() {
       poisonTapeFailureLocked();
       return false;
     }
+    // This is observer-only residency attribution.  Saturate its diagnostic
+    // value rather than poisoning or changing completion behavior when the
+    // counter's representational range is exhausted.
+    const auto remaining = std::numeric_limits<std::uint64_t>::max() -
+        completedNotReclaimedCount_;
+    completedNotReclaimedCount_ = tapeSourceCount > remaining
+        ? std::numeric_limits<std::uint64_t>::max()
+        : completedNotReclaimedCount_ + tapeSourceCount;
     if (binding.completedArenaGroupSettlements) {
       for (const auto& source : completionSources) {
         if (source.receiptBacked()) {
@@ -5042,6 +5662,23 @@ bool QueueLifecycleController::processOnePendingCompletion() {
           .slotIndex = source.slotIndex,
           .eventSeqId = source.seqId,
           .pipelineOwner = source.pipelineOwner,
+          .beforeSourceId = source.source.id,
+          .beforeStorage = source.source.storage,
+          .afterSourceId = source.source.id,
+          .afterStorage = source.source.storage,
+          .beforeMetadata = source.locatorBacked()
+              ? binding.cpuReadyTape->sourceMetadata(
+                    source.source.id, source.source.storage,
+                    CpuReadyTape::State::Completed)
+              : std::nullopt,
+          .beforePayloadKind = source.locatorBacked()
+              ? binding.cpuReadyTape->payloadKind(
+                    source.source.id, source.source.storage,
+                    CpuReadyTape::State::Completed)
+              : std::nullopt,
+          .physicalBatchId = pending.physicalBatchId,
+          .batchIndex = static_cast<std::uint32_t>(&source - completionSources.data()),
+          .batchCount = static_cast<std::uint32_t>(completionSources.size()),
       });
     }
     if (binding.finishCv) {
@@ -5049,6 +5686,11 @@ bool QueueLifecycleController::processOnePendingCompletion() {
     }
   }
   // pending.commandBuffer is released when `pending` goes out of scope.
+  {
+    std::lock_guard lock(pendingCompletionMutex_);
+    pendingPoisonSourceCount_ = 0;
+    pendingPoisonSources_ = {};
+  }
   return true;
 }
 

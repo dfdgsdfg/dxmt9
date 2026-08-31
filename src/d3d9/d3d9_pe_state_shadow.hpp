@@ -1414,6 +1414,16 @@ private:
     friend struct PeHotStateShadow;
 };
 
+// Generation-qualified witness for a PendingDelta snapshot.  The generation
+// lives in PeHotStateShadow's existing layout reservation so this capability
+// adds no hot-state storage.  Consumers must reject stale tickets instead of
+// erasing a newer value by key.
+struct PendingDeltaTicket {
+    std::uint64_t generation = 0u;
+
+    constexpr bool valid() const noexcept { return generation != 0u; }
+};
+
 class PendingDelta {
 private:
     // Scalar pending categories stay flat and allocation-free. Keyed tables
@@ -2118,7 +2128,11 @@ private:
         }
 
     private:
-        explicit Maintenance(PeHotStateShadow& shadow) noexcept : shadow_(shadow) {}
+        explicit Maintenance(PeHotStateShadow& shadow) noexcept : shadow_(shadow) {
+            // Mutable references are an intentionally conservative invalidation
+            // point for plans that may have borrowed the pending frontier.
+            shadow_.bumpPendingGeneration();
+        }
         PeHotStateShadow& shadow_;
         friend struct PeHotStateShadow;
     };
@@ -2129,45 +2143,54 @@ public:
         void setRenderState(RenderStateSlot key, std::uint32_t value) noexcept {
             shadow_.LiveShadow::renderStates().set(key, value);
             shadow_.PendingDelta::renderStates().set(key, value);
+            shadow_.bumpPendingGeneration();
         }
         void setTextureStageState(TextureStageIndex stage,
                                   TextureStageStateType type,
                                   std::uint32_t value) noexcept {
             shadow_.LiveShadow::textureStageStates().set(stage, type, value);
             shadow_.PendingDelta::textureStageStates().set(stage, type, value);
+            shadow_.bumpPendingGeneration();
         }
         void setSamplerState(SamplerIndex sampler, SamplerStateType type,
                              std::uint32_t value) noexcept {
             shadow_.LiveShadow::samplerStates().set(sampler, type, value);
             shadow_.PendingDelta::samplerStates().set(sampler, type, value);
+            shadow_.bumpPendingGeneration();
         }
         void setTransform(TransformState key,
                           const D9CMatrix& value) noexcept {
             shadow_.LiveShadow::transforms().set(key, value);
             shadow_.PendingDelta::transforms().set(key, value);
+            shadow_.bumpPendingGeneration();
         }
         void setViewport(const D9CViewport& value) noexcept {
             shadow_.LiveShadow::viewportShadow_ = value;
             shadow_.PendingDelta::pendingViewport_ = true;
+            shadow_.bumpPendingGeneration();
         }
         void setScissor(const D9CRect& value) noexcept {
             shadow_.LiveShadow::scissorShadow_ = value;
             shadow_.PendingDelta::pendingScissor_ = true;
+            shadow_.bumpPendingGeneration();
         }
         void setMaterial(const D9CMaterial& value) noexcept {
             shadow_.LiveShadow::materialShadow_ = value;
             shadow_.PendingDelta::pendingMaterial_ = true;
+            shadow_.bumpPendingGeneration();
         }
         void setClipPlane(std::uint32_t slot, const float* value) noexcept {
             if (slot >= 6u || !value) return;
             std::memcpy(shadow_.LiveShadow::clipPlaneShadow_ + slot * 4u,
                         value, sizeof(float) * 4u);
             shadow_.PendingDelta::pendingClipPlaneMask_ |= 1u << slot;
+            shadow_.bumpPendingGeneration();
         }
         void setLight(std::uint32_t slot, const D9CLight& value) noexcept {
             if (slot >= D9C_DRAW_PACKET_MAX_LIGHTS) return;
             shadow_.LiveShadow::lightShadow_[slot] = value;
             shadow_.PendingDelta::pendingLightSlotMask_ |= 1u << slot;
+            shadow_.bumpPendingGeneration();
         }
         void setLightEnable(std::uint32_t slot, bool enabled) noexcept {
             if (slot >= D9C_DRAW_PACKET_MAX_LIGHTS) return;
@@ -2180,6 +2203,7 @@ public:
                 shadow_.PendingDelta::pendingLightEnableMask_ &= ~bit;
                 shadow_.LiveShadow::lightEnableShadow_ &= ~bit;
             }
+            shadow_.bumpPendingGeneration();
         }
 
         template<typename Fn>
@@ -2188,6 +2212,7 @@ public:
             if (slot >= D9C_DRAW_PACKET_MAX_TEXTURES) return;
             std::forward<Fn>(bind)();
             shadow_.PendingDelta::pendingTextureMask_ |= 1u << slot;
+            shadow_.bumpPendingGeneration();
         }
         template<typename Fn>
             requires std::is_nothrow_invocable_v<Fn&&>
@@ -2195,6 +2220,7 @@ public:
             if (slot >= D9C_DRAW_PACKET_MAX_STREAMS) return;
             std::forward<Fn>(bind)();
             shadow_.PendingDelta::pendingStreamMask_ |= 1u << slot;
+            shadow_.bumpPendingGeneration();
         }
         template<typename Fn>
             requires std::is_nothrow_invocable_v<Fn&&>
@@ -2202,12 +2228,14 @@ public:
             if (slot >= D9C_DRAW_PACKET_MAX_RENDER_TARGETS) return;
             std::forward<Fn>(bind)();
             shadow_.PendingDelta::pendingRtMask_ |= 1u << slot;
+            shadow_.bumpPendingGeneration();
         }
         template<typename Fn>
             requires std::is_nothrow_invocable_v<Fn&&>
         void bindDepthStencil(Fn&& bind) noexcept {
             std::forward<Fn>(bind)();
             shadow_.PendingDelta::pendingDs_ = true;
+            shadow_.bumpPendingGeneration();
         }
         template<typename Fn>
             requires std::is_nothrow_invocable_v<Fn&&>
@@ -2215,24 +2243,28 @@ public:
             std::forward<Fn>(bind)();
             shadow_.PendingDelta::pendingFvf_ = true;
             shadow_.PendingDelta::pendingVdecl_ = true;
+            shadow_.bumpPendingGeneration();
         }
         template<typename Fn>
             requires std::is_nothrow_invocable_v<Fn&&>
         void bindVertexShader(Fn&& bind) noexcept {
             std::forward<Fn>(bind)();
             shadow_.PendingDelta::pendingVs_ = true;
+            shadow_.bumpPendingGeneration();
         }
         template<typename Fn>
             requires std::is_nothrow_invocable_v<Fn&&>
         void bindPixelShader(Fn&& bind) noexcept {
             std::forward<Fn>(bind)();
             shadow_.PendingDelta::pendingPs_ = true;
+            shadow_.bumpPendingGeneration();
         }
         template<typename Fn>
             requires std::is_nothrow_invocable_v<Fn&&>
         void bindIndexBuffer(Fn&& bind) noexcept {
             std::forward<Fn>(bind)();
             shadow_.PendingDelta::pendingIb_ = true;
+            shadow_.bumpPendingGeneration();
         }
 
     private:
@@ -2331,28 +2363,34 @@ public:
         friend struct PeHotStateShadow;
     };
 
+    class ConditionalPendingConsumer;
+
     class Consumer {
     public:
         bool acceptRenderStateBatch(
             std::span<const D9CCommandChunkWireRenderState> accepted,
             const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
+            if (!valid()) return false;
             return shadow_.PendingDelta::acceptRenderStateBatch(accepted, plan);
         }
         bool acceptTextureStageStateBatch(
             std::span<const D9CDrawPacketTextureStageState> accepted,
             const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
+            if (!valid()) return false;
             return shadow_.PendingDelta::acceptTextureStageStateBatch(accepted,
                                                                        plan);
         }
         bool acceptSamplerStateBatch(
             std::span<const D9CDrawPacketSamplerState> accepted,
             const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
+            if (!valid()) return false;
             return shadow_.PendingDelta::acceptSamplerStateBatch(accepted,
                                                                   plan);
         }
         bool acceptTransformBatch(
             std::span<const D9CDrawPacketTransform> accepted,
             const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
+            if (!valid()) return false;
             return shadow_.PendingDelta::acceptTransformBatch(accepted, plan);
         }
         void clearPendingHotState() noexcept {
@@ -2425,15 +2463,131 @@ public:
             shadow_.PendingDelta::pendingLightEnableMask_ &= ~bit;
         }
 
+        bool valid() const noexcept {
+            return true;
+        }
+
     private:
         explicit Consumer(PeHotStateShadow& shadow) noexcept : shadow_(shadow) {}
         PeHotStateShadow& shadow_;
+        friend class ConditionalPendingConsumer;
+        friend struct PeHotStateShadow;
+    };
+
+    // Conditional settlement carries the generation witness separately from
+    // the ordinary one-reference consumer.  The hot `Consumer` remains a
+    // pointer-sized capability; this cold/conditional form intentionally costs
+    // one additional word only at callers that need stale-ticket rejection.
+    class ConditionalPendingConsumer {
+    public:
+        bool valid() const noexcept {
+            return ticket_.valid() &&
+                   consumer_.shadow_.pendingTicketMatches(ticket_);
+        }
+        bool acceptRenderStateBatch(
+            std::span<const D9CCommandChunkWireRenderState> accepted,
+            const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
+            return valid() && consumer_.acceptRenderStateBatch(accepted, plan);
+        }
+        bool acceptTextureStageStateBatch(
+            std::span<const D9CDrawPacketTextureStageState> accepted,
+            const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
+            return valid() &&
+                   consumer_.acceptTextureStageStateBatch(accepted, plan);
+        }
+        bool acceptSamplerStateBatch(
+            std::span<const D9CDrawPacketSamplerState> accepted,
+            const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
+            return valid() && consumer_.acceptSamplerStateBatch(accepted, plan);
+        }
+        bool acceptTransformBatch(
+            std::span<const D9CDrawPacketTransform> accepted,
+            const dxmt9::d3d9::pe::AppendPlan& plan) noexcept {
+            return valid() && consumer_.acceptTransformBatch(accepted, plan);
+        }
+        void clearPendingHotState() noexcept {
+            if (valid()) consumer_.clearPendingHotState();
+        }
+        void acceptAllRenderStates() noexcept {
+            if (valid()) consumer_.acceptAllRenderStates();
+        }
+        void acceptAllTextureStageStates() noexcept {
+            if (valid()) consumer_.acceptAllTextureStageStates();
+        }
+        void acceptAllSamplerStates() noexcept {
+            if (valid()) consumer_.acceptAllSamplerStates();
+        }
+        void acceptAllTransforms() noexcept {
+            if (valid()) consumer_.acceptAllTransforms();
+        }
+        void acceptTexture(std::uint32_t slot) noexcept {
+            if (valid()) consumer_.acceptTexture(slot);
+        }
+        void acceptStream(std::uint32_t slot) noexcept {
+            if (valid()) consumer_.acceptStream(slot);
+        }
+        void acceptVertexShader() noexcept {
+            if (valid()) consumer_.acceptVertexShader();
+        }
+        void acceptPixelShader() noexcept {
+            if (valid()) consumer_.acceptPixelShader();
+        }
+        void acceptVertexDeclaration() noexcept {
+            if (valid()) consumer_.acceptVertexDeclaration();
+        }
+        void acceptFvf() noexcept {
+            if (valid()) consumer_.acceptFvf();
+        }
+        void acceptIndexBuffer() noexcept {
+            if (valid()) consumer_.acceptIndexBuffer();
+        }
+        void acceptRenderTarget(std::uint32_t slot) noexcept {
+            if (valid()) consumer_.acceptRenderTarget(slot);
+        }
+        void acceptDepthStencil() noexcept {
+            if (valid()) consumer_.acceptDepthStencil();
+        }
+        void acceptViewport() noexcept {
+            if (valid()) consumer_.acceptViewport();
+        }
+        void acceptScissor() noexcept {
+            if (valid()) consumer_.acceptScissor();
+        }
+        void acceptMaterial() noexcept {
+            if (valid()) consumer_.acceptMaterial();
+        }
+        void acceptClipPlane(std::uint32_t slot) noexcept {
+            if (valid()) consumer_.acceptClipPlane(slot);
+        }
+        void acceptLight(std::uint32_t slot) noexcept {
+            if (valid()) consumer_.acceptLight(slot);
+        }
+        void acceptLightEnable(std::uint32_t slot) noexcept {
+            if (valid()) consumer_.acceptLightEnable(slot);
+        }
+
+    private:
+        explicit ConditionalPendingConsumer(
+            PeHotStateShadow& shadow, PendingDeltaTicket ticket) noexcept
+            : consumer_(shadow), ticket_(ticket) {}
+        Consumer consumer_;
+        PendingDeltaTicket ticket_{};
         friend struct PeHotStateShadow;
     };
 
     Transition transition() noexcept { return Transition(*this); }
     Snapshot snapshot() const noexcept { return Snapshot(*this); }
     Consumer consume() noexcept { return Consumer(*this); }
+    ConditionalPendingConsumer consume(PendingDeltaTicket ticket) noexcept {
+        return ConditionalPendingConsumer(*this, ticket);
+    }
+
+    PendingDeltaTicket pendingTicket() const noexcept {
+        return PendingDeltaTicket{pendingGeneration_};
+    }
+    bool pendingTicketMatches(PendingDeltaTicket ticket) const noexcept {
+        return ticket.valid() && ticket.generation == pendingGeneration_;
+    }
 
 #if defined(DXMT9_PE_SHADOW_TEST_SEAM)
     using Writer = Maintenance;
@@ -2527,7 +2681,11 @@ private:
 
     // Keep the two hot domains naturally aligned without folding the cold
     // StateBlockRecorded owner back into this object.
-    [[maybe_unused]] std::uint64_t reservedLayout_ = 0u;
+    void bumpPendingGeneration() noexcept {
+        ++pendingGeneration_;
+        if (pendingGeneration_ == 0u) pendingGeneration_ = 1u;
+    }
+    std::uint64_t pendingGeneration_ = 1u;
 };
 
 static_assert(sizeof(LiveShadow) == 22968u);

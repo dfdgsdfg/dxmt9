@@ -66,6 +66,7 @@
 #include "d3d9_pe_process_vertices.hpp"
 #include "d3d9_pe_public_allocation.hpp"
 #include "d3d9_pe_recorder.hpp"
+#include "d3d9_pe_recorder_transaction.hpp"
 #include "d3d9_pe_recorder_settlement.hpp"
 #include "d3d9_pe_recorder_state.hpp"
 #include "d3d9_pe_state_shadow.hpp"
@@ -1005,10 +1006,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         IDirect3DSurface9* value) const noexcept;
     StateBlockDepthStencilRef stateBlockDepthStencilRef(
         IDirect3DSurface9* value) const noexcept;
-
     void discardPreparedStateBlockApply() noexcept;
 
     void poisonStateBlockTransaction() noexcept;
+    void settleAppendEmitter(bool accepted, HRESULT& hr) noexcept;
 
     template<typename Table, typename Key, typename Validated>
     static void setRecordedRef(Table table, Key slot,
@@ -1061,7 +1062,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
 
     void releaseAllBound();
 
-    void clearPendingCommandChunk(
+    bool clearPendingCommandChunk(
         dxmt9::d3d9::pe::RecorderCommitEvent discardEvent =
             dxmt9::d3d9::pe::RecorderCommitEvent::ExplicitDiscard);
 
@@ -1083,7 +1084,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         std::uint32_t recordType, std::uint64_t sourceOrdinal,
         const dxmt9::d3d9::pe::CommandChunkBuilder& builder) noexcept;
 
-    void clearPeStateTracking();
+    bool clearPeStateTracking();
 
     bool hasPendingHotState() const;
 
@@ -2346,6 +2347,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
             if (FAILED(hr) && allFamilyTokens) {
                 allFamilyTokens->preserveForRetry(semanticSourceOrdinal);
             }
+            if (FAILED(hr) && !recorderState_.recordCapacityPreEvidence(false)) {
+                poisonStateBlockTransaction();
+                return D3DERR_DEVICELOST;
+            }
+        }
+        if (SUCCEEDED(hr) && !recorderState_.prepareChunkRecord(
+                type, bytes, willFlushBeforeAppend)) {
+            (void)recorderState_.chunkTransaction.poison();
+            poisonStateBlockTransaction();
+            return D3DERR_DEVICELOST;
         }
         if (SUCCEEDED(hr)) {
             // The emitter records diagnostics_->peAppendPhaseEncode_ itself around the direct
@@ -2367,11 +2378,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                         poisonStateBlockTransaction();
                         hr = D3DERR_DEVICELOST;
                     }
+                    settleAppendEmitter(recordAccepted, hr);
                 } else if (FAILED(hr)) {
                     allFamilyTokens->preserveForRetry(semanticSourceOrdinal);
+                    settleAppendEmitter(false, hr);
                 } else {
                     poisonStateBlockTransaction();
                     hr = D3DERR_DEVICELOST;
+                    settleAppendEmitter(false, hr);
                 }
                 const auto plan = dxmt9::d3d9::pe::planRecorderSettlement({
                     .point = dxmt9::d3d9::pe::RecorderSettlementPoint::Emitter,
@@ -2385,6 +2399,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                 (void)plan;
             } else {
                 hr = emit(recorderState_.commandChunk, phase);
+                settleAppendEmitter(SUCCEEDED(hr), hr);
                 const auto plan = dxmt9::d3d9::pe::planRecorderSettlement({
                     .point = dxmt9::d3d9::pe::RecorderSettlementPoint::Emitter,
                     .result = SUCCEEDED(hr)

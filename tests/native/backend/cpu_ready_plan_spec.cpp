@@ -686,8 +686,8 @@ void segmentedArenaBoundariesAndHardCaps() {
         "a 65+-page aggregate splits before the second GPU record in source order");
   check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
             splitFixture.view(), split, /*captureOrTrace=*/false) ==
-            DirectChunkSlotReplayDisposition::LegacySegmented,
-        "multi-segment ordinary storage retains a typed pre-effect Legacy disposition");
+            DirectChunkSlotReplayDisposition::Direct,
+        "single-source multi-segment storage is a validated Direct aggregate");
   const auto segmentCapped = dxmt9::d3d9::planCpuReadyChunk(
       splitFixture.view(), 22,
       {.pageSize = 4096,
@@ -778,6 +778,10 @@ void segmentedSourcesPreserveRawRangesAndTailOwnership() {
             plan.sources[1].firstRecordIndex + plan.sources[1].recordCount ==
                 records.size(),
         "source ranges preserve the state prefix, interstitial state, and trailing state exactly once");
+  check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+            fixture.view(), plan, /*captureOrTrace=*/false) ==
+            DirectChunkSlotReplayDisposition::LegacySegmented,
+        "multi-source segmented storage remains fail-closed before source transaction support");
 }
 
 void segmentedPresentTailStaysInFinalSource() {

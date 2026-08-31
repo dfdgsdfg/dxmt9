@@ -11,13 +11,14 @@ linker_id = "ld.lld"
 configuration = "release"
 
 [recorder_state]
-sizeof_x64 = 104472
-sizeof_x86 = 103584
+sizeof_x64 = 104648
+sizeof_x86 = 103704
+sizeof_host = 104672
 
 [device_layout]
-sizeof_x64 = 106976
+sizeof_x64 = 107152
 alignof_x64 = 8
-sizeof_x86 = 105752
+sizeof_x86 = 105872
 alignof_x86 = 8
 
 [layout]

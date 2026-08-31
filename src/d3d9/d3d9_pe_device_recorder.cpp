@@ -7,7 +7,7 @@
 
 #include "d3d9_pe_device_impl.hpp"
 
-void D3D9DeviceImpl::clearPendingCommandChunk(
+bool D3D9DeviceImpl::clearPendingCommandChunk(
     dxmt9::d3d9::pe::RecorderCommitEvent discardEvent) {
     const auto discardPlan = dxmt9::d3d9::pe::settleRecorderCommit({
         .phase = recorderState_.commandChunk.sealed()
@@ -20,8 +20,9 @@ void D3D9DeviceImpl::clearPendingCommandChunk(
         discardPlan.action() ==
             dxmt9::d3d9::pe::RecorderCommitAction::DiscardAll;
     DXMT_ASSERT(discardAdmitted);
-    if (!discardAdmitted && peCaptureState_) {
-        markRenderTapeInvalidOnce("commit_discard_settlement");
+    if (!discardAdmitted) {
+        if (peCaptureState_) markRenderTapeInvalidOnce("commit_discard_settlement");
+        return false;
     }
     // Discarded chunks never acquire a tape ObjectDestroy event. Drain
     // the logical pending refs before raw D9C retainer reset.
@@ -33,11 +34,14 @@ void D3D9DeviceImpl::clearPendingCommandChunk(
         recorderState_.commandChunk.resetAndReleaseRetained(
             dxmt9::d3d9::pe::CommandChunkDiscardTarget::LegacyProduction);
     DXMT_ASSERT(legacyBuilderReady);
-    if (!legacyBuilderReady && peCaptureState_) {
-        markRenderTapeInvalidOnce("commit_discard_legacy_layout");
+    if (!legacyBuilderReady) {
+        if (peCaptureState_) markRenderTapeInvalidOnce("commit_discard_legacy_layout");
+        return false;
     }
     if (auto* tokens = scalarSemanticObserver()) tokens->clear();
     if (auto* tokens = allFamilySemanticObserver()) tokens->discard();
+    recorderState_.chunkTransaction.discard();
+    return true;
 }
 
 HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
@@ -45,8 +49,23 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
     const PeCommandChunkCommitInfo& info,
     dxmt9::d3d9::pe::RecorderCommitPhase* settledPhase,
     const dxmt9::d3d9::pe::SegmentedCommandChunk* segmented) {
-            PeCaptureState *const captureState =
-                peCaptureState_ ? &*peCaptureState_ : nullptr;
+    auto& commitTransaction = recorderState_.chunkTransaction;
+    // This is the same persistent owner started by appendRecord; commit does
+    // not create a second local observer. The builder, retainer, and capture
+    // objects remain storage owners.
+    if (commitTransaction.phase() !=
+        dxmt9::d3d9::pe::RecorderChunkTransactionPhase::Sealed) {
+        (void)commitTransaction.poison();
+        poisonStateBlockTransaction();
+        return D3DERR_DEVICELOST;
+    }
+    if (!recorderState_.sealedEvidenceMatchesChunk()) {
+        (void)commitTransaction.poison();
+        poisonStateBlockTransaction();
+        return D3DERR_DEVICELOST;
+    }
+    PeCaptureState *const captureState =
+        peCaptureState_ ? &*peCaptureState_ : nullptr;
             const bool capturePresent = captureState &&
                 captureState->renderTapeCapture.state() ==
                     dxmt9::d3d9::RenderTapeCaptureState::Capturing &&
@@ -108,6 +127,16 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
                     static_cast<std::uint64_t>(
                         captureState->renderTapeCapture.eventCount()) + 1u;
             }
+            if (!commitTransaction.recordCaptureReservation(
+                    captureState
+                        ? captureState->renderTapeActiveCaptureToken
+                        : 0u,
+                    submittedChunk.renderTapeEventOrdinal,
+                    presentMirrorReserved || captureChunkPrepared)) {
+                (void)commitTransaction.poison();
+                poisonStateBlockTransaction();
+                return D3DERR_DEVICELOST;
+            }
             const HRESULT hr = hr32(
                 segmented
                     ? dxmt9c_device_commit_chunk_segmented(
@@ -128,10 +157,15 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
             });
             if (!composedBridgePlan.valid() || !bridgePlan.valid()) {
                 DXMT_ASSERT(false && "invalid bridge settlement");
+                if (!commitTransaction.poison()) {
+                    poisonStateBlockTransaction();
+                    return D3DERR_DEVICELOST;
+                }
                 if (captureState) {
                     markRenderTapeInvalidOnce("commit_bridge_settlement");
                 }
-                return D3DERR_INVALIDCALL;
+                poisonStateBlockTransaction();
+                return D3DERR_DEVICELOST;
             }
             const std::int64_t returnNs = peDiagnosticsRead(
                 chunkDiagnostics, [](PeDiagnosticsState&) noexcept {
@@ -190,7 +224,22 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
                         dxmt9::d3d9::RenderTapeCaptureState::Capturing) {
                     abortRenderTapeCapture("bridge_commit");
                 }
+                const bool bridgeSettled =
+                    commitTransaction.recordBridgeResult(false);
+                if (!bridgeSettled || !commitTransaction.poisoned()) {
+                    poisonStateBlockTransaction();
+                    return D3DERR_DEVICELOST;
+                }
                 return hr;
+            }
+            const bool transactionBridgeSettled =
+                commitTransaction.recordBridgeResult(true);
+            if (!transactionBridgeSettled ||
+                commitTransaction.phase() !=
+                    dxmt9::d3d9::pe::RecorderChunkTransactionPhase::BridgeAccepted) {
+                (void)commitTransaction.poison();
+                poisonStateBlockTransaction();
+                return D3DERR_DEVICELOST;
             }
             auto settlementPhase = bridgePlan.next();
             const auto capturePlan = dxmt9::d3d9::pe::settleRecorderCommit({
@@ -206,11 +255,45 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
                 if (captureState) {
                     markRenderTapeInvalidOnce("commit_capture_settlement");
                 }
+                if (!commitTransaction.poison()) {
+                    poisonStateBlockTransaction();
+                    return D3DERR_DEVICELOST;
+                }
+                poisonStateBlockTransaction();
+                return D3DERR_DEVICELOST;
             } else {
+                const auto disposition = captureChunkPrepared
+                    ? dxmt9::d3d9::pe::RecorderChunkCaptureDisposition::Materialized
+                    : captureWasActive
+                            ? dxmt9::d3d9::pe::RecorderChunkCaptureDisposition::Rejected
+                            : dxmt9::d3d9::pe::RecorderChunkCaptureDisposition::Skipped;
+                if (!commitTransaction.captureReservationMatches(
+                        captureState
+                            ? captureState->renderTapeActiveCaptureToken
+                            : 0u,
+                        submittedChunk.renderTapeEventOrdinal,
+                        presentMirrorReserved || captureChunkPrepared)) {
+                    (void)commitTransaction.poison();
+                    poisonStateBlockTransaction();
+                    return D3DERR_DEVICELOST;
+                }
+                const bool transactionCaptureSettled =
+                    commitTransaction.recordCaptureResult(disposition);
+                if (!transactionCaptureSettled) {
+                    (void)commitTransaction.poison();
+                    poisonStateBlockTransaction();
+                    return D3DERR_DEVICELOST;
+                }
                 settlementPhase = capturePlan.next();
-                DXMT_ASSERT(
+                const bool captureCannotRetract =
                     !dxmt9::d3d9::pe::recorderCaptureMayRetract(
-                        bridgePlan.commandAccepted()));
+                        bridgePlan.commandAccepted());
+                DXMT_ASSERT(captureCannotRetract);
+                if (!captureCannotRetract) {
+                    (void)commitTransaction.poison();
+                    poisonStateBlockTransaction();
+                    return D3DERR_DEVICELOST;
+                }
                 if (auto* tokens = allFamilySemanticObserver()) {
                     const auto disposition = captureChunkPrepared
                         ? dxmt9::d3d9::pe::PeSemanticCaptureDisposition::Materialized
@@ -218,6 +301,7 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
                             ? dxmt9::d3d9::pe::PeSemanticCaptureDisposition::Rejected
                             : dxmt9::d3d9::pe::PeSemanticCaptureDisposition::Skipped;
                     if (!tokens->settleCapture(disposition)) {
+                        (void)commitTransaction.poison();
                         poisonStateBlockTransaction();
                         return D3DERR_DEVICELOST;
                     }
@@ -345,6 +429,18 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
                     dxmt9c_device_cancel_render_tape_present_capture(dev_);
                 }
             }
+            if (commitTransaction.phase() ==
+                    dxmt9::d3d9::pe::RecorderChunkTransactionPhase::BridgeAccepted) {
+                // A malformed capture settlement is handled by the existing
+                // fail-closed diagnostics path above; command publication is
+                // still complete and cannot be retracted.
+                if (!commitTransaction.recordCaptureResult(
+                        dxmt9::d3d9::pe::RecorderChunkCaptureDisposition::Rejected)) {
+                    (void)commitTransaction.poison();
+                    poisonStateBlockTransaction();
+                    return D3DERR_DEVICELOST;
+                }
+            }
             return hr;
 }
 
@@ -355,10 +451,13 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(
     const auto flushAction = planPeRecorderFlush(
         disposition, recorderState_.stateBlockTransaction.isPoisoned());
     if (flushAction == PeRecorderFlushAction::Discard) {
-        clearPendingCommandChunk(
+        if (!clearPendingCommandChunk(
             reason == PeRecorderFlushReason::Reset
                 ? dxmt9::d3d9::pe::RecorderCommitEvent::DeviceReset
-                : dxmt9::d3d9::pe::RecorderCommitEvent::ExplicitDiscard);
+                : dxmt9::d3d9::pe::RecorderCommitEvent::ExplicitDiscard)) {
+            poisonStateBlockTransaction();
+            return D3DERR_DEVICELOST;
+        }
         return S_OK;
     }
     if (flushAction == PeRecorderFlushAction::RejectPoisoned) {
@@ -370,6 +469,21 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(
     if (!recorderState_.commandChunkNegotiated) {
         return D3DERR_NOTAVAILABLE;
     }
+    const bool settlingCapacityPost =
+        reason == PeRecorderFlushReason::CapacityPost;
+    const auto recordCapacityPost = [&](bool succeeded) noexcept {
+        if (!settlingCapacityPost) return true;
+        const bool recorded =
+            recorderState_.chunkTransaction.recordCapacityPostResult(succeeded);
+        if (!recorded) {
+            // This is a producer/transaction invariant failure, not an
+            // assertion-only diagnostic: do not let a flush proceed with
+            // capacity evidence detached from its persistent owner.
+            (void)recorderState_.chunkTransaction.poison();
+            poisonStateBlockTransaction();
+        }
+        return recorded;
+    };
     if (recorderState_.commandChunk.recordCount() == 0u) {
         return S_OK;
     }
@@ -404,8 +518,18 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(
             .event = dxmt9::d3d9::pe::RecorderCommitEvent::SealFailed,
         });
         if (!sealPlan.valid() || !sealPlan.preserveRetryBytes()) {
-            return D3DERR_INVALIDCALL;
+            if (!recorderState_.chunkTransaction.poison()) {
+                poisonStateBlockTransaction();
+                return D3DERR_DEVICELOST;
+            }
+            poisonStateBlockTransaction();
+            return D3DERR_DEVICELOST;
         }
+        if (!recorderState_.chunkTransaction.recordSealResult(false)) {
+            poisonStateBlockTransaction();
+            return D3DERR_DEVICELOST;
+        }
+        if (!recordCapacityPost(false)) return D3DERR_DEVICELOST;
         return D3DERR_INVALIDCALL;
     }
     const auto sealPlan = dxmt9::d3d9::pe::settleRecorderCommit({
@@ -414,7 +538,29 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(
     });
     if (!sealPlan.valid() || sealPlan.next() !=
             dxmt9::d3d9::pe::RecorderCommitPhase::Sealed) {
-        return D3DERR_INVALIDCALL;
+        const bool postRecorded = recordCapacityPost(false);
+        const bool transactionPoisoned = recorderState_.chunkTransaction.poison();
+        if (!postRecorded || !transactionPoisoned) {
+            poisonStateBlockTransaction();
+            return D3DERR_DEVICELOST;
+        }
+        poisonStateBlockTransaction();
+        return D3DERR_DEVICELOST;
+    }
+    if (!recorderState_.chunkTransaction.recordSealResult(true)) {
+        const bool postRecorded = recordCapacityPost(false);
+        const bool transactionPoisoned = recorderState_.chunkTransaction.poison();
+        if (!postRecorded || !transactionPoisoned) {
+            poisonStateBlockTransaction();
+            return D3DERR_DEVICELOST;
+        }
+        poisonStateBlockTransaction();
+        return D3DERR_DEVICELOST;
+    }
+    if (!recorderState_.recordChunkSealedEvidence()) {
+        (void)recorderState_.chunkTransaction.poison();
+        poisonStateBlockTransaction();
+        return D3DERR_DEVICELOST;
     }
     D9CCommandChunk chunk{};
     chunk.version = D9C_COMMAND_CHUNK_VERSION;
@@ -443,6 +589,9 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(
     const HRESULT hr =
         commitPendingCommandChunk(reason, chunk, info, &settlementPhase,
                                   segmented.valid() ? &segmented : nullptr);
+    if (FAILED(hr) && !recordCapacityPost(false)) {
+        return D3DERR_DEVICELOST;
+    }
     if (SUCCEEDED(hr)) {
         const auto beginDrain = dxmt9::d3d9::pe::settleRecorderCommit({
             .phase = settlementPhase,
@@ -452,9 +601,13 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(
             beginDrain.valid() &&
             beginDrain.action() ==
                 dxmt9::d3d9::pe::RecorderCommitAction::BeginDrain;
-        DXMT_ASSERT(beginDrainAdmitted);
         if (!beginDrainAdmitted && peCaptureState_) {
             markRenderTapeInvalidOnce("commit_begin_drain_settlement");
+        }
+        if (!beginDrainAdmitted) {
+            (void)recorderState_.chunkTransaction.poison();
+            poisonStateBlockTransaction();
+            return D3DERR_DEVICELOST;
         }
         const auto drainPhase = beginDrainAdmitted
             ? beginDrain.next()
@@ -499,12 +652,32 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(
                 dxmt9::d3d9::pe::RecorderCommitAction::AdvanceWarmEpoch &&
             dxmt9::d3d9::pe::recorderWarmAdvanceAllowed(
                 resetAdmitted, finishDrainAdmitted);
-        DXMT_ASSERT(finishDrainAdmitted && resetAdmitted && warmAdmitted);
+        const bool cleanupSettled = finishDrainAdmitted && resetAdmitted &&
+            warmAdmitted;
+        DXMT_ASSERT(cleanupSettled);
+        if (!cleanupSettled) {
+            (void)recorderState_.chunkTransaction.poison();
+            poisonStateBlockTransaction();
+            return D3DERR_DEVICELOST;
+        }
         if ((!finishDrainAdmitted || !resetAdmitted || !warmAdmitted) &&
             peCaptureState_) {
             markRenderTapeInvalidOnce("commit_cleanup_settlement");
         }
+        if (!recordCapacityPost(true)) {
+            (void)recorderState_.chunkTransaction.poison();
+            poisonStateBlockTransaction();
+            return D3DERR_DEVICELOST;
+        }
+        const bool transactionCompleted =
+            recorderState_.chunkTransaction.complete();
+        if (!transactionCompleted) {
+            (void)recorderState_.chunkTransaction.poison();
+            poisonStateBlockTransaction();
+            return D3DERR_DEVICELOST;
+        }
         recorderState_.commandChunk.reset();
+        recorderState_.chunkTransaction.discard();
     }
     return hr;
 }
@@ -692,7 +865,8 @@ HRESULT D3D9DeviceImpl::chunkBarrierFlush() {
                         recorderState_.peState, recorderState_.peConsts,
                         sparsePlan, settlement,
                         scalarSemanticObserver(),
-                        builder.activeRecordOrdinal());
+                        builder.activeRecordOrdinal(),
+                        recorderState_.chunkTransaction.pendingTicket());
                 phase.recordEncode(t0);
                 if (ok && !settled) {
                     poisonStateBlockTransaction();
@@ -768,7 +942,8 @@ HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords(
                     dxmt9::d3d9::pe::acceptPreparedSparseState(
                         recorderState_.peState, recorderState_.peConsts,
                         recorderState_.peSparseState, settlement,
-                        scalarSemanticObserver(), recordOrdinal);
+                        scalarSemanticObserver(), recordOrdinal,
+                        recorderState_.chunkTransaction.pendingTicket());
                 return settled;
             });
         if (FAILED(hr)) return hr;
@@ -788,7 +963,8 @@ HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords(
                     dxmt9::d3d9::pe::acceptPreparedSparseState(
                         recorderState_.peState, recorderState_.peConsts,
                         recorderState_.peSparseState, settlement,
-                        scalarSemanticObserver(), recordOrdinal);
+                        scalarSemanticObserver(), recordOrdinal,
+                        recorderState_.chunkTransaction.pendingTicket());
                 return settled;
             });
         if (FAILED(hr)) return hr;
@@ -808,7 +984,8 @@ HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords(
                     dxmt9::d3d9::pe::acceptPreparedSparseState(
                         recorderState_.peState, recorderState_.peConsts,
                         recorderState_.peSparseState, settlement,
-                        scalarSemanticObserver(), recordOrdinal);
+                        scalarSemanticObserver(), recordOrdinal,
+                        recorderState_.chunkTransaction.pendingTicket());
                 return settled;
             });
         if (FAILED(hr)) return hr;
@@ -824,9 +1001,12 @@ HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords(
             },
             [&](const dxmt9::d3d9::pe::AppendPlan& settlement,
                 std::uint64_t) -> bool {
-                return recorderState_.peState.consume().acceptTransformBatch(
-                    std::span(recorderState_.peSparseScratch.transforms).first(n),
-                    settlement);
+                return recorderState_.peState.consume(
+                           recorderState_.chunkTransaction.pendingTicket())
+                    .acceptTransformBatch(
+                        std::span(recorderState_.peSparseScratch.transforms)
+                            .first(n),
+                        settlement);
             });
         if (FAILED(hr)) return hr;
     }
@@ -872,7 +1052,8 @@ HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords(
                     recorderState_.peState, recorderState_.peConsts,
                     sparsePlan, settlement,
                     scalarSemanticObserver(),
-                    builder.activeRecordOrdinal());
+                    builder.activeRecordOrdinal(),
+                    recorderState_.chunkTransaction.pendingTicket());
             phase.recordEncode(t0);
             if (ok && !settled) {
                 poisonStateBlockTransaction();

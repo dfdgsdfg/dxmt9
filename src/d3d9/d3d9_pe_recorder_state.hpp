@@ -12,6 +12,7 @@
 #include "d3d9_pe_producer_views.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "d3d9_pe_stateblock_transaction.hpp"
+#include "d3d9_pe_recorder_transaction.hpp"
 #include "dxmt9/thread_ownership.hpp"
 
 namespace dxmt9::d3d9::pe {
@@ -43,6 +44,9 @@ struct PeRecorderState {
   mutable PeDrawPayloads peSparsePayloads{};
 
   CommandChunkBuilder commandChunk{};
+  // One persistent identity bridges append intent, seal/bridge, capture, and
+  // builder reset. Payload/retainer/capture storage remains in their owners.
+  PeRecorderChunkTransaction chunkTransaction{};
   bool commandChunkNegotiated = false;
   // Transport is negotiated independently from the canonical V2 grammar.
   // Keep contiguous as the fail-closed default for tests and old providers;
@@ -56,17 +60,74 @@ struct PeRecorderState {
   std::uint64_t commandChunkCommits = 0;
   std::uint64_t commandChunkRecords = 0;
   std::uint64_t commandChunkBytes = 0;
+
+  // These helpers keep the persistent transaction choreography out of the
+  // large device header. They only carry value/checkpoint evidence; the
+  // builder and semantic shadows remain the storage owners.
+  bool recordCapacityPreEvidence(bool succeeded) noexcept {
+    return chunkTransaction.recordCapacityPreEvidence(succeeded);
+  }
+  bool prepareChunkRecord(std::uint32_t type, std::size_t sizeHint,
+                          bool capacityPreFlushed) noexcept {
+    if (chunkTransaction.phase() == RecorderChunkTransactionPhase::RolledBack) {
+      chunkTransaction.discard();
+    }
+    if (chunkTransaction.phase() == RecorderChunkTransactionPhase::Idle ||
+        chunkTransaction.phase() == RecorderChunkTransactionPhase::Completed) {
+      if (!chunkTransaction.beginChunk()) return false;
+    }
+    if (capacityPreFlushed && !chunkTransaction.recordCapacityPreEvidence(true)) {
+      return false;
+    }
+    if (!chunkTransaction.noteRecord(
+            type, sizeHint, peState.pendingTicket(), commandChunk.recordCount(),
+            commandChunk.handleCount(), commandChunk.payloadBytes(),
+            commandChunk.retainedObjectCount())) {
+      return false;
+    }
+    return true;
+  }
+  bool settleChunkEmitter(bool accepted) noexcept {
+    if (!chunkTransaction.activeRecord()) return false;
+    const auto recordCheckpoint = chunkTransaction.activeRecordCheckpoint();
+    const auto handleCheckpoint = chunkTransaction.activeHandleCheckpoint();
+    const auto payloadCheckpoint = chunkTransaction.activePayloadCheckpoint();
+    const auto retainerCheckpoint = chunkTransaction.activeRetainerCheckpoint();
+    const bool checkpointsMatch = accepted
+        ? commandChunk.recordCount() > recordCheckpoint &&
+          commandChunk.handleCount() >= handleCheckpoint &&
+          commandChunk.payloadBytes() >= payloadCheckpoint &&
+          commandChunk.retainedObjectCount() >= retainerCheckpoint
+        : commandChunk.recordCount() == recordCheckpoint &&
+          commandChunk.handleCount() == handleCheckpoint &&
+          commandChunk.payloadBytes() == payloadCheckpoint &&
+          commandChunk.retainedObjectCount() == retainerCheckpoint;
+    if (!checkpointsMatch) return false;
+    return chunkTransaction.recordEmitResult(accepted);
+  }
+  bool recordChunkSealedEvidence() noexcept {
+    return chunkTransaction.recordSealedEvidence(
+        commandChunk.recordCount(), commandChunk.handleCount(),
+        commandChunk.payloadBytes(), commandChunk.retainedObjectCount());
+  }
+  bool sealedEvidenceMatchesChunk() const noexcept {
+    return chunkTransaction.sealedEvidenceMatches(
+        commandChunk.recordCount(), commandChunk.handleCount(),
+        commandChunk.payloadBytes(), commandChunk.retainedObjectCount());
+  }
 };
 
-// R-CORE-REC-5.1.1: scalar proof instrumentation must not enlarge the
-// always-on recorder owner. These are the pre-observer canonical footprints;
-// the host ABI carries eight additional bytes in std::recursive_mutex.
+// The transaction owner is intentionally part of the recorder footprint; its
+// phase/checkpoint state replaces the former split local observers.
 #if defined(_WIN64)
-static_assert(sizeof(PeRecorderState) == 104472u);
+static_assert(sizeof(PeRecorderState) == 104472u + sizeof(PeRecorderChunkTransaction));
+static_assert(sizeof(PeRecorderState) == 104648u);
 #elif defined(_WIN32)
-static_assert(sizeof(PeRecorderState) == 103584u);
+static_assert(sizeof(PeRecorderState) == 103584u + sizeof(PeRecorderChunkTransaction));
+static_assert(sizeof(PeRecorderState) == 103704u);
 #else
-static_assert(sizeof(PeRecorderState) == 104496u);
+static_assert(sizeof(PeRecorderState) == 104496u + sizeof(PeRecorderChunkTransaction));
+static_assert(sizeof(PeRecorderState) == 104672u);
 #endif
 
 }  // namespace dxmt9::d3d9::pe

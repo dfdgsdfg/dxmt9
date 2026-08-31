@@ -8,10 +8,17 @@
 // (including D3D9DeviceImpl::Present) and the vtable are emitted by this TU.
 
 #if defined(_WIN64)
-static_assert(sizeof(D3D9DeviceImpl) == 106976);
+static_assert(sizeof(D3D9DeviceImpl) ==
+              106976 + sizeof(dxmt9::d3d9::pe::PeRecorderChunkTransaction));
+// Canonical artifact pins consumed by audit_d3d9_pe_abi_codegen.py. Keep the
+// expanded values beside the ownership-relative expression above so a change
+// to the transaction owner requires both PE ABI surfaces to be reviewed.
+static_assert(sizeof(D3D9DeviceImpl) == 107152);
 static_assert(alignof(D3D9DeviceImpl) == 8);
 #elif defined(_WIN32)
-static_assert(sizeof(D3D9DeviceImpl) == 105752);
+static_assert(sizeof(D3D9DeviceImpl) ==
+              105752 + sizeof(dxmt9::d3d9::pe::PeRecorderChunkTransaction));
+static_assert(sizeof(D3D9DeviceImpl) == 105872);
 static_assert(alignof(D3D9DeviceImpl) == 8);
 #endif
 
@@ -1282,6 +1289,22 @@ void D3D9DeviceImpl::poisonStateBlockTransaction() noexcept {
         d3d9PeReleaseStateBlockRef);
 }
 
+void D3D9DeviceImpl::settleAppendEmitter(bool accepted, HRESULT& hr) noexcept {
+    if (recorderState_.settleChunkEmitter(accepted)) {
+        // A record that was emitted but then failed semantic observation has
+        // an effect-unknown local outcome. Do not leave the persistent owner
+        // looking retryable after the builder already advanced.
+        if (accepted && FAILED(hr)) {
+            (void)recorderState_.chunkTransaction.poison();
+            poisonStateBlockTransaction();
+        }
+        return;
+    }
+    (void)recorderState_.chunkTransaction.poison();
+    poisonStateBlockTransaction();
+    hr = D3DERR_DEVICELOST;
+}
+
 void D3D9DeviceImpl::releaseRecordedStateBlockRefs() noexcept {
     recorderState_.stateBlockTransaction.abandonRecording(
         d3d9PeReleaseStateBlockRef);
@@ -1451,7 +1474,7 @@ bool D3D9DeviceImpl::observeCommittedSemanticRecord(
     return visited && accepted;
 }
 
-void D3D9DeviceImpl::clearPeStateTracking() {
+bool D3D9DeviceImpl::clearPeStateTracking() {
     (void)recorderState_.stateBlockTransaction.invalidateRecorderCapabilities();
     recorderState_.peState.maintenance().clearServerShadowTables();
     recorderState_.peState.consume().clearPendingHotState();
@@ -1460,8 +1483,11 @@ void D3D9DeviceImpl::clearPeStateTracking() {
     if (auto* tokens = scalarSemanticObserver()) tokens->clear();
     if (auto* tokens = allFamilySemanticObserver()) tokens->clear();
     recorderState_.stateBlockTransaction.clearRecordedCandidateForReset();
-    clearPendingCommandChunk(
-        dxmt9::d3d9::pe::RecorderCommitEvent::DeviceReset);
+    if (!clearPendingCommandChunk(
+            dxmt9::d3d9::pe::RecorderCommitEvent::DeviceReset)) {
+        poisonStateBlockTransaction();
+        return false;
+    }
     submittedIndexBufferWireValue_ = 0;
     submittedIndexBufferKnown_ = false;
     fvf_ = 0;
@@ -1475,6 +1501,7 @@ void D3D9DeviceImpl::clearPeStateTracking() {
     for (UINT& freq : streamFreq_) {
         freq = 1;
     }
+    return true;
 }
 
 bool D3D9DeviceImpl::hasPendingHotState() const {
@@ -1887,7 +1914,8 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT st
                     recorderState_.peState, recorderState_.peConsts,
                     sparsePlan, settlement,
                     scalarSemanticObserver(),
-                    builder.activeRecordOrdinal());
+                    builder.activeRecordOrdinal(),
+                    recorderState_.chunkTransaction.pendingTicket());
             phase.recordEncode(t0);
             if (ok && !settled) {
                 // The record is already durable in the builder, but its
@@ -1968,7 +1996,8 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveRecord(D3DPRIMITIVETYPE type,
                     recorderState_.peState, recorderState_.peConsts,
                     sparsePlan, settlement,
                     scalarSemanticObserver(),
-                    builder.activeRecordOrdinal());
+                    builder.activeRecordOrdinal(),
+                    recorderState_.chunkTransaction.pendingTicket());
             phase.recordEncode(t0);
             if (ok && !settled) {
                 poisonStateBlockTransaction();
@@ -2140,7 +2169,8 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveUPRecordWithFvf(D3DPRIMITIVETYPE type
                         recorderState_.peState, recorderState_.peConsts,
                         sparsePlan, settlement,
                         scalarSemanticObserver(),
-                        builder.activeRecordOrdinal());
+                        builder.activeRecordOrdinal(),
+                        recorderState_.chunkTransaction.pendingTicket());
                 if (ok && !settled) {
                     poisonStateBlockTransaction();
                     phase.recordEncode(t0);
@@ -2321,7 +2351,8 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveUPRecordWithFvf(D3DPRIMITIVETY
                         recorderState_.peState, recorderState_.peConsts,
                         sparsePlan, settlement,
                         scalarSemanticObserver(),
-                        builder.activeRecordOrdinal());
+                        builder.activeRecordOrdinal(),
+                        recorderState_.chunkTransaction.pendingTicket());
                 if (ok && !settled) {
                     poisonStateBlockTransaction();
                     phase.recordEncode(t0);

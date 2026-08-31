@@ -926,7 +926,10 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(D3DPRESENT_PARAMETERS* pPP) noex
     if (FAILED(flushHr)) return flushHr;
     releaseAllBound();
     if (defaultPoolResourceRefs_ != 0) {
-        clearPeStateTracking();
+        if (!clearPeStateTracking()) {
+            deviceNotReset_ = true;
+            return D3DERR_DEVICELOST;
+        }
         releaseRecordedStateBlockRefs();
         recorderState_.stateBlockTransaction.resetFailed();
         deviceNotReset_ = true;
@@ -942,7 +945,10 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(D3DPRESENT_PARAMETERS* pPP) noex
         return D3DERR_NOTAVAILABLE;
     }
     D3D9PeWsiBinding oldBinding = std::move(implicitWsiBinding_);
-    clearPeStateTracking();
+    if (!clearPeStateTracking()) {
+        deviceNotReset_ = true;
+        return D3DERR_DEVICELOST;
+    }
     releaseRecordedStateBlockRefs();
     const HRESULT hr = hr32(dxmt9c_device_reset(dev_, &cpp));
     if (SUCCEEDED(hr)) {
@@ -3053,7 +3059,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(D3DPRESENT_PARAMETERS* pPP,
         return D3DERR_NOTAVAILABLE;
     }
     D3D9PeWsiBinding oldBinding = std::move(implicitWsiBinding_);
-    clearPeStateTracking();
+    if (!clearPeStateTracking()) {
+        return D3DERR_DEVICELOST;
+    }
     releaseRecordedStateBlockRefs();
     const HRESULT hr = hr32(dxmt9c_device_reset_ex(dev_, &cpp,
         pFsMode ? &cdme : nullptr));

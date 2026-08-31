@@ -349,6 +349,13 @@ struct QueueTransitionRecord {
   std::optional<CpuReadySourceMetadata> beforeMetadata{};
   std::optional<CpuReadyTape::PayloadKind> beforePayloadKind{};
   std::optional<bool> beforePresentOnly{};
+  // A single physical dequeue may atomically represent several Ready
+  // sources. The span is call-local and consumed synchronously by the
+  // observer; it never escapes into queue state.
+  std::span<const CpuReadyTape::ReadyEntry> batchReadySources{};
+  std::uint64_t physicalBatchId = 0;
+  std::uint32_t batchIndex = 0;
+  std::uint32_t batchCount = 1;
 };
 
 struct NoEnqueueCommitChunkRecordShape {
@@ -1471,6 +1478,24 @@ class QueueLifecycleController {
                                    CpuReadyTape::SourceRef source,
                                    CpuReadyAdmissionIdentity identity,
                                    std::size_t ownedBytes) const noexcept;
+  void recordPipelineSourcePublication(
+      CpuReadyTape::PayloadKind payloadKind, CpuReadyTape::SourceRef source,
+      CpuReadyAdmissionIdentity identity, std::size_t ownedBytes,
+      std::uint64_t physicalBatchId = 0, std::uint32_t batchIndex = 0,
+      std::uint32_t batchCount = 1) const noexcept;
+  void recordPipelineFinishAdvance(
+      CpuReadyTape::SourceRef source, CpuReadySourceMetadata metadata,
+      CpuReadyTape::PayloadKind payloadKind, bool hasPresent,
+      ::dxmt9::queue::PipelineQueueSnapshot before,
+      ::dxmt9::queue::PipelineQueueSnapshot after) const noexcept;
+  void recordPipelineReclaim(
+      CpuReadyTape::SourceRef source, CpuReadySourceMetadata metadata,
+      CpuReadyTape::PayloadKind payloadKind, bool hasPresent,
+      const QueueControllerState& before,
+      const QueueControllerState& after,
+      std::uint64_t physicalBatchId = 0,
+      std::uint32_t batchIndex = 0,
+      std::uint32_t batchCount = 1) const noexcept;
   // R-BACK-2.65 / SessionCapacityLease: publish every transition that can
   // reduce the physical residency excluded from a new session lease. Callers
   // hold the queue scheduling mutex, so the generation and the capacity
@@ -1791,7 +1816,10 @@ class QueueLifecycleController {
                      u64 eventSeqId,
                      size_t inflightLimit,
                      const std::function<void()>& mutate = {});
-  void encodeDequeue(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate = {});
+  void encodeDequeue(size_t slotIndex, u64 eventSeqId,
+                     const std::function<void()>& mutate = {},
+                     std::span<const CpuReadyTape::ReadyEntry> batchSources = {},
+                     std::uint64_t physicalBatchId = 0);
   void finishInline(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate = {});
   void finishDequeue(u64 eventSeqId, const std::function<void()>& mutate = {});
   void reclaimFree(size_t slotIndex, u64 eventSeqId, const std::function<void()>& mutate = {});
@@ -1868,6 +1896,31 @@ class QueueLifecycleController {
   std::size_t completedEventSettlementHistoryHead_ = 0;
   std::size_t completedEventSettlementHistoryCount_ = 0;
   std::uint64_t gpuOutstandingCompletionSourceCount_ = 0;
+  // Ready-prefix submissions can batch independent Tape sources, so their
+  // physical envelope is not available from CpuReadyTape::ReclaimStatus.
+  // Retain only the value identity needed to carry that envelope to reclaim;
+  // payloads and views never enter this diagnostic ledger.
+  struct PhysicalBatchReclaimMember {
+    std::uint64_t seqId = 0;
+    std::uint64_t physicalBatchId = 0;
+    std::uint32_t batchIndex = 0;
+    std::uint32_t batchCount = 1;
+  };
+  std::array<PhysicalBatchReclaimMember,
+             ::dxmt9::queue::kMaxObservedPipelineSources>
+      physicalBatchReclaimMembers_{};
+  std::size_t physicalBatchReclaimMemberCount_ = 0;
+  // Completed sources retain queue credit until the finish thread performs
+  // Tape reclaim. This count is separate from completedSeq (finish
+  // waterline) and completedQueue depth (notification FIFO).
+  std::uint64_t completedNotReclaimedCount_ = 0;
+  // A completion watcher removes PendingCompletion from its protected FIFO
+  // before waiting on Metal. Keep a value-only copy while it is in flight so
+  // device-loss observation cannot lose its source identities after the
+  // temporary ChunkSlot shell has already been cleared.
+  std::array<QueueCompletionSource, kMaxEncodeSessionSources>
+      pendingPoisonSources_{};
+  std::size_t pendingPoisonSourceCount_ = 0;
   // These fields are touched only when fail-stop poison is requested.  Keep
   // them outside SubmissionBinding and all transition/payload structures so
   // normal queue hot paths retain their existing shape.
@@ -1891,6 +1944,10 @@ class QueueLifecycleController {
     size_t slotIndex = 0;
     u64 seqId = 0;
     bool gpuOutstandingCounted = false;
+    // Physical batch identity is copied from the submission before its
+    // command buffer enters the asynchronous completion FIFO. It is the
+    // correlation envelope used by per-source completion/reclaim evidence.
+    std::uint64_t physicalBatchId = 0;
     EncodeSessionSourceList fixedCompletionSources{};
     std::optional<encoders::EncodedCompletionSpan> completionSpanShadow{};
     std::span<const QueueCompletionSource> explicitCompletionSourceSpan()
@@ -2016,7 +2073,9 @@ class QueueLifecycleController {
 
   void resetNoEnqueueGapProgressLocked();
 
-  std::mutex pendingCompletionMutex_{};
+  // Poison observation is a const cold-path projection, but it must snapshot
+  // the pending completion ledger under the same mutex as its producer.
+  mutable std::mutex pendingCompletionMutex_{};
   std::condition_variable pendingCompletionCv_{};
   std::deque<PendingCompletion> pendingCompletion_{};
   bool pendingCompletionStop_ = false;

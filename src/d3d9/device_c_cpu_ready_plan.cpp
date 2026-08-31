@@ -661,8 +661,13 @@ DirectChunkSlotReplayDisposition classifyDirectChunkSlotReplay(
   if (plan.lane == ReplayLane::StateOnly) {
     return DirectChunkSlotReplayDisposition::LegacyStateOnly;
   }
+  // Ordinary Direct ChunkSlot construction has one queue-owned destination,
+  // but that destination is not page-segmented. A single logical source may
+  // therefore consume several planner segments as one aggregate, provided
+  // the planner produced its checked packed layout. Multiple logical sources
+  // still require the Arena batch transaction and remain a typed fallback.
   if (plan.directArenaCandidate() &&
-      (plan.sourceCount != 1u || plan.segmentCount != 1u || !plan.layout)) {
+      (plan.sourceCount != 1u || !plan.arenaLayout.has_value())) {
     return DirectChunkSlotReplayDisposition::LegacySegmented;
   }
   if (!plan.directArenaCandidate()) {

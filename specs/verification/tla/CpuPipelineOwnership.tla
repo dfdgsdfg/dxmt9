@@ -24,6 +24,12 @@
  * synchronous capability.  Partition plans, selected-child state, observer
  * events, submissions, and completion callbacks retain value snapshots only;
  * asynchronous handoff remains value-only through WorkerOwnedSourceSnapshot.
+ *
+ * Concrete refinement note: the C++ queue exposes the model's `completedSeq`
+ * as a source-completion value, but this ownership model does not assert the
+ * GPU-tail/finish-waterline arithmetic.  That bounded temporal composition is
+ * authoritative only in CpuPipelineLifecycle.tla; native ownership records
+ * carry the three values as an externally validated snapshot.
  *)
 
 EXTENDS Naturals, FiniteSets, TLC
@@ -38,6 +44,14 @@ Phases == {"Absent", "ProducerOwned", "RawOwned", "ReplayBorrowed",
            "FinalOwned", "Encoding", "GPUInFlight", "Completed", "Reclaimed"}
 OwnedPhases == {"ReplayBorrowed", "FinalOwned", "Encoding", "GPUInFlight",
                 "Completed"}
+
+(***************************************************************************)
+(* Completion-frontier temporal state is authoritative in                 *)
+(* CpuPipelineLifecycle.tla.  This ownership model intentionally remains   *)
+(* the source-borrow/admission refinement and does not claim to model the   *)
+(* GPU-tail -> finish-waterline hand-off.  Native ownership observations   *)
+(* that use this module must therefore treat those fields as an external    *)
+(* snapshot relation, not as a liveness proof.                              *)
 
 VARIABLES
   phase,

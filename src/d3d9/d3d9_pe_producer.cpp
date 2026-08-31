@@ -93,6 +93,7 @@ bool buildSparseStatePlan(const RecorderLockCapability& access,
   if (!plan.bindSources(access, shadow, constants, bindings)) {
     return false;
   }
+  plan.pendingTicket = shadow.pendingTicket();
   plan.draw = params;
   plan.fullSnapshot =
       forceFullSnapshot || dxmt9PeFullSnapshotEnabled();
@@ -287,10 +288,16 @@ static bool acceptSparseStatePlanWithSources(
     PeHotStateShadow& shadow, PeConstShadowBlock& constants,
     const PeBindingView& bindings, const SparseStatePlan& state,
     const AppendPlan& plan, PeScalarSemanticTokenLedger* tokens,
-    std::uint64_t recordOrdinal) noexcept {
+    std::uint64_t recordOrdinal,
+    PendingDeltaTicket transactionTicket) noexcept {
+  const PendingDeltaTicket settlementTicket = transactionTicket.valid()
+      ? transactionTicket
+      : state.pendingTicket;
   if (!plan.valid() || !plan.consumeRepresentedPending() ||
       !plan.recordDurable() || !state.prepared ||
-      !state.chunkContextFinalized) {
+      !state.chunkContextFinalized ||
+      (settlementTicket.valid() &&
+       !shadow.pendingTicketMatches(settlementTicket))) {
     return false;
   }
 
@@ -485,6 +492,10 @@ static bool acceptSparseStatePlanWithSources(
     }
   }
 
+  if (settlementTicket.valid() &&
+      !shadow.pendingTicketMatches(settlementTicket)) {
+    return false;
+  }
   auto consumer = shadow.consume();
   consumer.acceptAllRenderStates();
   consumer.acceptAllTextureStageStates();
@@ -536,7 +547,8 @@ bool acceptSparseStatePlan(PeHotStateShadow& shadow,
                            const SparseStatePlan& state,
                            const AppendPlan& plan,
                            PeScalarSemanticTokenLedger* tokens,
-                           std::uint64_t recordOrdinal) noexcept {
+                           std::uint64_t recordOrdinal,
+                           PendingDeltaTicket transactionTicket) noexcept {
   bool accepted = false;
   return state.withSettlementSources(
       [&](const PeHotStateShadow& borrowedShadow,
@@ -547,7 +559,7 @@ bool acceptSparseStatePlan(PeHotStateShadow& shadow,
         }
         accepted = acceptSparseStatePlanWithSources(
             shadow, constants, bindings, state, plan, tokens,
-            recordOrdinal);
+            recordOrdinal, transactionTicket);
       }) && accepted;
 }
 
@@ -1037,7 +1049,8 @@ bool acceptPreparedSparseState(PeHotStateShadow& shadow,
                                const SparseStateInput& state,
                                const AppendPlan& plan,
                                PeScalarSemanticTokenLedger* tokens,
-                               std::uint64_t recordOrdinal) noexcept {
+                               std::uint64_t recordOrdinal,
+                               PendingDeltaTicket transactionTicket) noexcept {
   if (!plan.valid() || !plan.consumeRepresentedPending() ||
       !plan.recordDurable()) {
     return false;
@@ -1128,6 +1141,11 @@ bool acceptPreparedSparseState(PeHotStateShadow& shadow,
   // is therefore effect-free with respect to validation failures.
   if (!acceptInlineConstantDelta(constants, state, plan)) return false;
 
+  const PendingDeltaTicket settlementTicket = transactionTicket;
+  if (settlementTicket.valid() &&
+      !shadow.pendingTicketMatches(settlementTicket)) {
+    return false;
+  }
   auto consumer = shadow.consume();
   consumer.acceptRenderStateBatch(state.renderStates, plan);
   consumer.acceptTextureStageStateBatch(state.textureStageStates, plan);

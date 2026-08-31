@@ -1,9 +1,11 @@
 #include "../../../src/dxmt9/dxmt9_pipeline_lifecycle.hpp"
 
+#include <array>
 #include <condition_variable>
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <string>
@@ -23,6 +25,9 @@ void check(bool condition, const char* message) {
 struct FakeSource {
   PipelineIdentity identity{};
   PipelinePayloadKind payloadKind = PipelinePayloadKind::Arena;
+  std::uint64_t physicalBatchId = 0;
+  std::uint32_t physicalBatchIndex = 0;
+  std::uint32_t physicalBatchCount = 1;
   bool hasPresent = false;
   PipelineStage stage = PipelineStage::SourceArrival;
   std::uint64_t ownedBytes = 0;
@@ -369,6 +374,9 @@ class FakePipelineQueue {
         .joinedChildren = source.joined,
         .totalChildren = source.children,
         .completionAuthority = source.completionAuthority,
+        .physicalBatchId = source.physicalBatchId,
+        .batchIndex = source.physicalBatchIndex,
+        .batchCount = source.physicalBatchCount,
         .before = before,
         .after = queue_,
     };
@@ -423,6 +431,10 @@ void purePredicateTruthTables() {
             PipelineStage::Encoding, PipelineStage::GPUInFlight,
             PipelineOwner::Queue, PipelineDisposition::Advance),
         "unknown owner transition is rejected by the production table");
+  check(pipelineKnownLifecycleRow(
+            PipelineStage::Completed, PipelineStage::Completed,
+            PipelineOwner::Queue, PipelineDisposition::FinishAdvance),
+        "finish-waterline advancement is an explicit shared lifecycle row");
 
   check(pipelinePublicationMayCommit(2, 2, 0),
         "complete assembler prefix publishes after borrow return");
@@ -499,6 +511,15 @@ void purePredicateTruthTables() {
             PipelineStage::GPUInFlight, PipelineDisposition::Completed, 1,
             true),
         "outstanding borrow blocks reclaim");
+  check(pipelineOwnerMayReclaim(
+            PipelineStage::GPUInFlight, PipelineDisposition::FailStop, 0,
+            true),
+        "pending completion poison may fail-stop a GPU-owned source");
+  check(pipelineKnownLifecycleRow(
+            PipelineStage::GPUInFlight, PipelineStage::Reclaimed,
+            PipelineOwner::DeviceLoss, PipelineDisposition::FailStop,
+            PipelineControl::DeviceLoss),
+        "pending completion poison has an identity-qualified terminal row");
 
   PipelineQueueSnapshot waiting{
       .admissionWakeGeneration = 8,
@@ -530,6 +551,219 @@ void purePredicateTruthTables() {
             !ringAdmissionWaitSatisfied(false, false, true, false,
                                                 true, false),
         "ring/admission CV predicate preserves active-build pressure");
+}
+
+void explicitCompletionAndFinishFrontiers() {
+  PipelineLifecycleObserver observer;
+  const PipelineIdentity identity{.workId = 1, .sourceOrdinal = 1,
+                                  .seqId = 1, .generation = 7};
+  PipelineQueueSnapshot base{
+      .completedSeq = 0,
+      .presentSeq = 0,
+      .gpuCompletedTailSeq = 0,
+      .gpuCompletedPresentSeq = 0,
+      .finishWaterlineSeq = 0,
+      .completedQueueDepth = 0,
+      .capacityGeneration = 0,
+      .admissionWakeGeneration = 0,
+      .occupancy = 0,
+      .capacity = 2,
+  };
+  auto emit = [&](PipelineStage from, PipelineStage to,
+                  PipelineDisposition disposition,
+                  PipelineOwner owner, PipelineQueueSnapshot before,
+                  PipelineQueueSnapshot after, std::uint32_t borrows = 0,
+                  std::uint32_t joined = 0, bool authority = false) {
+    emitPipelineLifecycleEvent(
+        observer.productionSink(), PipelineLifecycleEvent{
+            .identity = identity,
+            .from = from,
+            .to = to,
+            .payloadKind = PipelinePayloadKind::Arena,
+            .disposition = disposition,
+            .owner = owner,
+            .ownedBytes = 64,
+            .outstandingBorrows = borrows,
+            .constructedCount = 2,
+            .requiredCount = 2,
+            .joinedChildren = joined,
+            .totalChildren = 1,
+            .completionAuthority = authority,
+            .before = before,
+            .after = after});
+  };
+  auto owned = base;
+  owned.occupancy = 1;
+  emit(PipelineStage::SourceArrival, PipelineStage::ProducerOwned,
+       PipelineDisposition::Advance, PipelineOwner::PeImport, base, base);
+  emit(PipelineStage::ProducerOwned, PipelineStage::RawOwned,
+       PipelineDisposition::Advance, PipelineOwner::Replay, base, base);
+  emit(PipelineStage::RawOwned, PipelineStage::ReplayBorrowed,
+       PipelineDisposition::Advance, PipelineOwner::Replay, base, owned, 1);
+  emit(PipelineStage::ReplayBorrowed, PipelineStage::FinalOwned,
+       PipelineDisposition::Advance, PipelineOwner::DirectPublication, owned,
+       owned);
+  emit(PipelineStage::FinalOwned, PipelineStage::Encoding,
+       PipelineDisposition::Advance, PipelineOwner::SerialEncode, owned, owned,
+       1);
+  auto gpu = owned;
+  gpu.gpuCompletedTailSeq = 1;
+  gpu.completedQueueDepth = 1;
+  emit(PipelineStage::Encoding, PipelineStage::GPUInFlight,
+       PipelineDisposition::Advance, PipelineOwner::Receipt, owned, owned,
+       0, 1, true);
+  emit(PipelineStage::GPUInFlight, PipelineStage::Completed,
+       PipelineDisposition::Completed, PipelineOwner::GpuCompletion, owned,
+       gpu, 0, 1, true);
+  auto finish = gpu;
+  finish.finishWaterlineSeq = 1;
+  finish.completedSeq = 1;
+  finish.completedQueueDepth = 0;
+  emit(PipelineStage::Completed, PipelineStage::Completed,
+       PipelineDisposition::FinishAdvance, PipelineOwner::Queue, gpu, finish,
+       0, 1, true);
+  auto reclaimed = finish;
+  reclaimed.occupancy = 0;
+  emit(PipelineStage::Completed, PipelineStage::Reclaimed,
+       PipelineDisposition::Completed, PipelineOwner::Reclaim, finish,
+       reclaimed, 0, 1, true);
+  check(observer.valid(),
+        "explicit GPU completion and finish waterline frontiers refine");
+}
+
+void completionFrontierTruthTable() {
+  check(pipelineCompletionFrontierContiguous(4, 3, 7),
+        "completed FIFO tail is the finish waterline plus queue depth");
+  check(!pipelineCompletionFrontierContiguous(4, 3, 8),
+        "a sparse completed FIFO tail is rejected");
+  check(!pipelineCompletionFrontierContiguous(
+             std::numeric_limits<std::uint64_t>::max(), 1, 0),
+        "completed FIFO frontier overflow is rejected");
+}
+
+PipelineLifecycleEvent batchMemberEvent(PipelineIdentity identity,
+                                        std::uint32_t index,
+                                        std::uint32_t count) {
+  PipelineQueueSnapshot queue{};
+  queue.capacity = 2;
+  return PipelineLifecycleEvent{
+      .identity = identity,
+      .from = PipelineStage::SourceArrival,
+      .to = PipelineStage::ProducerOwned,
+      .payloadKind = PipelinePayloadKind::Arena,
+      .disposition = PipelineDisposition::Advance,
+      .owner = PipelineOwner::PeImport,
+      .physicalBatchId = 91,
+      .batchIndex = index,
+      .batchCount = count,
+      .before = queue,
+      .after = queue};
+}
+
+void physicalBatchMemberTruthTable() {
+  const PipelineIdentity first{.workId = 1, .sourceOrdinal = 1,
+                               .seqId = 1, .generation = 1};
+  const PipelineIdentity second{.workId = 2, .sourceOrdinal = 2,
+                                .seqId = 2, .generation = 1};
+  {
+    PipelineLifecycleObserver observer;
+    emitPipelineLifecycleEvent(observer.productionSink(),
+                               batchMemberEvent(first, 0, 2));
+    emitPipelineLifecycleEvent(observer.productionSink(),
+                               batchMemberEvent(second, 1, 2));
+    check(observer.valid(), "two-source physical batch preserves member order");
+  }
+  {
+    PipelineLifecycleObserver observer;
+    emitPipelineLifecycleEvent(observer.productionSink(),
+                               batchMemberEvent(first, 1, 2));
+    check(observer.error() == PipelineObservationError::InvalidPhysicalBatch,
+          "skipped physical batch member is rejected");
+  }
+  {
+    PipelineLifecycleObserver observer;
+    emitPipelineLifecycleEvent(observer.productionSink(),
+                               batchMemberEvent(first, 0, 2));
+    emitPipelineLifecycleEvent(observer.productionSink(),
+                               batchMemberEvent(second, 0, 2));
+    check(observer.error() == PipelineObservationError::InvalidPhysicalBatch,
+          "duplicate physical batch index is rejected");
+  }
+  {
+    PipelineLifecycleObserver observer;
+    emitPipelineLifecycleEvent(observer.productionSink(),
+                               batchMemberEvent(first, 0, 2));
+    emitPipelineLifecycleEvent(observer.productionSink(),
+                               batchMemberEvent(first, 1, 2));
+    check(observer.error() == PipelineObservationError::InvalidPhysicalBatch,
+          "moving one identity to another physical batch index is rejected");
+  }
+  const auto firstEvent = batchMemberEvent(first, 0, 2);
+  const auto secondEvent = batchMemberEvent(second, 1, 2);
+  auto firstReclaim = firstEvent;
+  firstReclaim.to = PipelineStage::Reclaimed;
+  auto secondReclaim = secondEvent;
+  secondReclaim.to = PipelineStage::Reclaimed;
+  const std::array<PipelineLifecycleEvent, 1> missing{firstReclaim};
+  const std::array<PipelineLifecycleEvent, 2> complete{
+      firstReclaim, secondReclaim};
+  check(!pipelinePhysicalBatchComplete(missing, 91, 2),
+        "physical batch closure rejects a missing member");
+  check(pipelinePhysicalBatchComplete(complete, 91, 2),
+        "physical batch closure accepts every ordered member");
+}
+
+void physicalBatchOwnerChainRetainsReclaimClosure() {
+  FakePipelineQueue queue;
+  auto first = queue.makeSource(1, PipelinePayloadKind::Arena);
+  auto second = queue.makeSource(2, PipelinePayloadKind::Arena);
+  first.physicalBatchId = second.physicalBatchId = 91;
+  first.physicalBatchIndex = 0;
+  second.physicalBatchIndex = 1;
+  first.physicalBatchCount = second.physicalBatchCount = 2;
+
+  for (auto* source : {&first, &second}) {
+    queue.arrive(*source);
+    queue.adoptRaw(*source);
+    check(queue.beginReplay(*source),
+          "physical batch source acquires one replay borrow");
+    queue.buildPart(*source, 1);
+    queue.publishFinal(*source);
+    queue.beginEncoding(*source, 1);
+    queue.joinChild(*source);
+    queue.submit(*source);
+    queue.complete(*source);
+  }
+
+  check(queue.ownerObserver().valid(),
+        "physical batch owner chain reduces through both source reclaims");
+  const auto& events = queue.ownerObserver().state();
+  bool sawReclaim[2] = {false, false};
+  for (std::size_t i = 0; i < events.ownerEventCount; ++i) {
+    const auto& event = events.ownerEvents[i];
+    if (event.to == PipelineStage::Reclaimed &&
+        event.physicalBatchId == 91 && event.batchCount == 2 &&
+        event.batchIndex < 2) {
+      sawReclaim[event.batchIndex] = true;
+    }
+  }
+  check(sawReclaim[0] && sawReclaim[1],
+        "physical batch identity reaches both Completed-to-Reclaimed edges");
+}
+
+void physicalBatchOwnerFinalizeRejectsOmittedTail() {
+  PipelineLifecycleObserver observer;
+  const PipelineIdentity first{.workId = 1, .sourceOrdinal = 1,
+                               .seqId = 1, .generation = 1};
+  const PipelineIdentity second{.workId = 2, .sourceOrdinal = 2,
+                                .seqId = 2, .generation = 1};
+  const auto sink = observer.productionSink();
+  emitPipelineLifecycleEvent(sink, batchMemberEvent(first, 0, 2));
+  emitPipelineLifecycleEvent(sink, batchMemberEvent(second, 1, 2));
+  finalizePipelineLifecycleBatch(sink, 91, 2);
+  check(observer.error() == PipelineObservationError::IncompletePhysicalBatch,
+        "observer boundary rejects an omitted terminal batch projection even "
+        "when every member appeared at an earlier stage");
 }
 
 void mixedDrawPresentSourceCompletes() {
@@ -730,30 +964,52 @@ void ownerEvidenceOverflowFailsClosed() {
   PipelineLifecycleObserver observer;
   const auto sink = observer.productionSink();
   PipelineLifecycleEvent event{};
-  event.from = PipelineStage::SourceArrival;
-  event.to = PipelineStage::ProducerOwned;
-  event.disposition = PipelineDisposition::Advance;
-  event.owner = PipelineOwner::PeImport;
-  event.before.capacity = 1;
-  event.after.capacity = 1;
-  for (std::size_t i = 0; i < kMaxObservedPipelineEvents; ++i) {
+  PipelineQueueSnapshot queue{};
+  queue.capacity = static_cast<std::uint32_t>(kMaxObservedPipelineSources);
+  for (std::size_t i = 0; i < kMaxObservedPipelineSources; ++i) {
+    event = {};
     event.identity = PipelineIdentity{
         .workId = i + 1u, .sourceOrdinal = i + 1u, .seqId = i + 1u,
         .generation = i + 1u};
+    event.from = PipelineStage::SourceArrival;
+    event.to = PipelineStage::ProducerOwned;
+    event.disposition = PipelineDisposition::Advance;
+    event.owner = PipelineOwner::PeImport;
+    event.before = queue;
+    event.after = queue;
     emitPipelineLifecycleEvent(sink, event);
+
+    event.from = PipelineStage::ProducerOwned;
+    event.to = PipelineStage::RawOwned;
+    event.owner = PipelineOwner::Replay;
+    emitPipelineLifecycleEvent(sink, event);
+
+    auto owned = queue;
+    ++owned.occupancy;
+    event.from = PipelineStage::RawOwned;
+    event.to = PipelineStage::ReplayBorrowed;
+    event.owner = PipelineOwner::Replay;
+    event.outstandingBorrows = 1;
+    event.before = queue;
+    event.after = owned;
+    emitPipelineLifecycleEvent(sink, event);
+
+    event.from = PipelineStage::ReplayBorrowed;
+    event.to = PipelineStage::FinalOwned;
+    event.owner = PipelineOwner::DirectPublication;
+    event.outstandingBorrows = 0;
+    event.constructedCount = 1;
+    event.requiredCount = 1;
+    event.before = owned;
+    event.after = owned;
+    emitPipelineLifecycleEvent(sink, event);
+    queue = owned;
   }
-  check(observer.valid() &&
-            observer.state().ownerEventCount == kMaxObservedPipelineEvents,
-        "owner evidence accepts exactly its fixed event capacity");
-  event.identity = PipelineIdentity{
-      .workId = kMaxObservedPipelineEvents + 1u,
-      .sourceOrdinal = kMaxObservedPipelineEvents + 1u,
-      .seqId = kMaxObservedPipelineEvents + 1u,
-      .generation = kMaxObservedPipelineEvents + 1u};
-  emitPipelineLifecycleEvent(sink, event);
-  check(observer.error() == PipelineObservationError::BoundedObserverOverflow &&
-            observer.state().ownerEventCount == kMaxObservedPipelineEvents,
-        "owner evidence overflow is a stable bounded disposition");
+  static_assert(kMaxObservedPipelineEvents >= 2048,
+                "the observer must hold a bounded 128-source lifecycle trace");
+  check(observer.valid() && observer.state().ownerEventCount ==
+            kMaxObservedPipelineSources * 4u,
+        "128-source lifecycle evidence fits below the fixed event capacity");
 }
 
 void failureAndShutdownRows() {
@@ -847,6 +1103,11 @@ void failureAndShutdownRows() {
 int main() {
   try {
     purePredicateTruthTables();
+    completionFrontierTruthTable();
+    physicalBatchMemberTruthTable();
+    physicalBatchOwnerChainRetainsReclaimClosure();
+    physicalBatchOwnerFinalizeRejectsOmittedTail();
+    explicitCompletionAndFinishFrontiers();
     mixedDrawPresentSourceCompletes();
     presentOnlyAdmissionWedgeCompletes();
     composedThreeAxisWakeIsDeterministic();

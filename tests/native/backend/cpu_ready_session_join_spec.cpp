@@ -910,13 +910,38 @@ RecordSpec queryIssueRecord(const D9CWireObjectIdentity& queryIdentity,
   };
 }
 
+void retainRawFixtureObject(std::uint32_t kind, void* object) noexcept {
+  if (!object) return;
+  switch (kind) {
+  case D9C_CHUNK_HANDLE_KIND_TEXTURE:
+    dxmt9c_texture_addref(static_cast<D9CTexture*>(object));
+    break;
+  case D9C_CHUNK_HANDLE_KIND_SURFACE:
+    dxmt9c_surface_addref(static_cast<D9CSurface*>(object));
+    break;
+  case D9C_CHUNK_HANDLE_KIND_BUFFER:
+    dxmt9c_buffer_addref(static_cast<D9CBuffer*>(object));
+    break;
+  case D9C_CHUNK_HANDLE_KIND_SHADER:
+    dxmt9c_shader_addref(static_cast<D9CShader*>(object));
+    break;
+  case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
+    dxmt9c_vdecl_addref(static_cast<D9CVertexDecl*>(object));
+    break;
+  case D9C_CHUNK_HANDLE_KIND_QUERY:
+    dxmt9c_query_addref(static_cast<D9CQuery*>(object));
+    break;
+  default:
+    break;
+  }
+}
+
 dxmt9::d3d9::RawCommandChunk makeRaw(const WireFixture& fixture,
                                      std::uint64_t rawOrdinal) {
   dxmt9::d3d9::WireObjectRegistry registry;
   dxmt9::d3d9::RawCommandChunk raw;
   const bool prepared = dxmt9::d3d9::prepareOffloadChunk(
-      fixture.bytes, fixture.envelope, registry,
-      [](std::uint32_t, void*) noexcept {}, raw);
+      fixture.bytes, fixture.envelope, registry, retainRawFixtureObject, raw);
   check(prepared, "session join raw chunk must pass owned preflight");
   raw.replaySeq = rawOrdinal;
   raw.cpuReadyTapePlanningEnabled = true;
@@ -928,8 +953,7 @@ dxmt9::d3d9::RawCommandChunk makeRaw(
     const dxmt9::d3d9::WireObjectRegistry& registry) {
   dxmt9::d3d9::RawCommandChunk raw;
   const bool prepared = dxmt9::d3d9::prepareOffloadChunk(
-      fixture.bytes, fixture.envelope, registry,
-      [](std::uint32_t, void*) noexcept {}, raw);
+      fixture.bytes, fixture.envelope, registry, retainRawFixtureObject, raw);
   check(prepared,
         "resource-bearing session join chunk must pass owned preflight");
   raw.replaySeq = rawOrdinal;
@@ -1161,10 +1185,18 @@ struct RuntimeFixture {
     check(buffer != nullptr, "arena draw buffer must construct");
     D9CBuffer wireBuffer(buffer, cDevice.get());
     const std::array records{drawRecord(wireBuffer.wireIdentity, 0u)};
-    auto raw = makeRaw(makeWireFixture(records), rawOrdinal,
-                       cDevice->wireObjects);
-    const auto hr = dxmt9::d3d9::replayRawChunk(cDevice.get(), raw);
-    check(hr == D3D_OK, "arena Direct draw must replay and publish");
+    check(wireBuffer.refs.load(std::memory_order_relaxed) == 1u,
+          "arena draw wrapper starts with one fixture reference");
+    {
+      auto raw = makeRaw(makeWireFixture(records), rawOrdinal,
+                         cDevice->wireObjects);
+      check(wireBuffer.refs.load(std::memory_order_relaxed) == 2u,
+            "owned raw chunk retains the arena draw wrapper exactly once");
+      const auto hr = dxmt9::d3d9::replayRawChunk(cDevice.get(), raw);
+      check(hr == D3D_OK, "arena Direct draw must replay and publish");
+    }
+    check(wireBuffer.refs.load(std::memory_order_relaxed) == 1u,
+          "raw destruction releases only its retained wrapper reference");
   }
 
   void replayStateOnly(std::uint64_t rawOrdinal) {

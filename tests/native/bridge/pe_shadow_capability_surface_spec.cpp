@@ -34,6 +34,8 @@ static_assert(requires(PeHotStateShadow& shadow, RenderStateSlot slot) {
 });
 static_assert(sizeof(PeHotStateShadow::Transition) == sizeof(void*));
 static_assert(sizeof(PeHotStateShadow::Consumer) == sizeof(void*));
+static_assert(sizeof(PeHotStateShadow::ConditionalPendingConsumer) ==
+              sizeof(void*) * 2u);
 static_assert(sizeof(PeHotStateShadow) == 44944u);
 
 using ValidatedSurfaceObject = D3D9PeValidatedObject<

@@ -34,6 +34,255 @@ namespace dxmt9::d3d9 {
 
 namespace {
 
+constexpr std::size_t kRegionAlignment = alignof(std::uint64_t);
+
+static_assert(alignof(D9CCommandChunkWireRecordHeader) <= kRegionAlignment);
+static_assert(alignof(D9CCommandChunkWireHandleEntry) <= kRegionAlignment);
+static_assert(sizeof(D9CCommandChunkWireRecordHeader) % kRegionAlignment == 0u);
+static_assert(sizeof(D9CCommandChunkWireHandleEntry) % kRegionAlignment == 0u);
+
+}  // namespace
+
+SegmentedCommandChunkRegions::SegmentedCommandChunkRegions(
+    SegmentedCommandChunkRegionPool* owner,
+    std::vector<std::uint64_t>&& words, std::size_t capacityBytes,
+    SegmentedCommandChunkRegionLayout layout) noexcept
+    : owner_(owner), words_(std::move(words)), capacityBytes_(capacityBytes),
+      layout_(layout) {}
+
+SegmentedCommandChunkRegions::~SegmentedCommandChunkRegions() {
+  reset();
+}
+
+SegmentedCommandChunkRegions::SegmentedCommandChunkRegions(
+    SegmentedCommandChunkRegions&& other) noexcept
+    : owner_(std::exchange(other.owner_, nullptr)),
+      words_(std::move(other.words_)),
+      capacityBytes_(std::exchange(other.capacityBytes_, 0u)),
+      layout_(std::exchange(other.layout_, {})) {}
+
+SegmentedCommandChunkRegions& SegmentedCommandChunkRegions::operator=(
+    SegmentedCommandChunkRegions&& other) noexcept {
+  if (this == &other) return *this;
+  reset();
+  owner_ = std::exchange(other.owner_, nullptr);
+  words_ = std::move(other.words_);
+  capacityBytes_ = std::exchange(other.capacityBytes_, 0u);
+  layout_ = std::exchange(other.layout_, {});
+  return *this;
+}
+
+void SegmentedCommandChunkRegions::reset() noexcept {
+  if (owner_) {
+    owner_->recycle(std::move(words_), capacityBytes_);
+  }
+  owner_ = nullptr;
+  words_.clear();
+  capacityBytes_ = 0u;
+  layout_ = {};
+}
+
+std::span<std::byte> SegmentedCommandChunkRegions::bytesAt(
+    std::size_t offset, std::size_t size) noexcept {
+  if (!owner_ || offset > layout_.usedBytes ||
+      size > layout_.usedBytes - offset) {
+    return {};
+  }
+  auto* bytes = reinterpret_cast<std::byte*>(words_.data());
+  return {bytes + offset, size};
+}
+
+std::span<const std::byte> SegmentedCommandChunkRegions::bytesAt(
+    std::size_t offset, std::size_t size) const noexcept {
+  if (!owner_ || offset > layout_.usedBytes ||
+      size > layout_.usedBytes - offset) {
+    return {};
+  }
+  const auto* bytes = reinterpret_cast<const std::byte*>(words_.data());
+  return {bytes + offset, size};
+}
+
+std::span<std::byte> SegmentedCommandChunkRegions::recordsBytes() noexcept {
+  return bytesAt(layout_.recordOffset, layout_.recordBytes);
+}
+
+std::span<std::byte> SegmentedCommandChunkRegions::handlesBytes() noexcept {
+  return bytesAt(layout_.handleOffset, layout_.handleBytes);
+}
+
+std::span<std::byte> SegmentedCommandChunkRegions::payloadBytes() noexcept {
+  return bytesAt(layout_.payloadOffset, layout_.payloadBytes);
+}
+
+std::span<const std::byte>
+SegmentedCommandChunkRegions::recordsBytes() const noexcept {
+  return bytesAt(layout_.recordOffset, layout_.recordBytes);
+}
+
+std::span<const std::byte>
+SegmentedCommandChunkRegions::handlesBytes() const noexcept {
+  return bytesAt(layout_.handleOffset, layout_.handleBytes);
+}
+
+std::span<const std::byte>
+SegmentedCommandChunkRegions::payloadBytes() const noexcept {
+  return bytesAt(layout_.payloadOffset, layout_.payloadBytes);
+}
+
+std::span<const D9CCommandChunkWireRecordHeader>
+SegmentedCommandChunkRegions::records() const noexcept {
+  const auto bytes = recordsBytes();
+  return {reinterpret_cast<const D9CCommandChunkWireRecordHeader*>(bytes.data()),
+          bytes.size() / sizeof(D9CCommandChunkWireRecordHeader)};
+}
+
+std::span<const D9CCommandChunkWireHandleEntry>
+SegmentedCommandChunkRegions::handles() const noexcept {
+  const auto bytes = handlesBytes();
+  return {reinterpret_cast<const D9CCommandChunkWireHandleEntry*>(bytes.data()),
+          bytes.size() / sizeof(D9CCommandChunkWireHandleEntry)};
+}
+
+std::optional<SegmentedCommandChunkRegionLayout>
+SegmentedCommandChunkRegionPool::planLayout(
+    std::size_t recordBytes, std::size_t handleBytes,
+    std::size_t payloadBytes) noexcept {
+  if (recordBytes == 0u ||
+      recordBytes % sizeof(D9CCommandChunkWireRecordHeader) != 0u ||
+      handleBytes % sizeof(D9CCommandChunkWireHandleEntry) != 0u ||
+      recordBytes > D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES ||
+      handleBytes > D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES - recordBytes ||
+      payloadBytes > D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES - recordBytes -
+                         handleBytes) {
+    return std::nullopt;
+  }
+  const auto handleOffset = recordBytes;
+  const auto payloadOffset = handleOffset + handleBytes;
+  const auto usedBytes = payloadOffset + payloadBytes;
+  if (handleOffset % alignof(D9CCommandChunkWireHandleEntry) != 0u ||
+      payloadOffset % kRegionAlignment != 0u) {
+    return std::nullopt;
+  }
+  return SegmentedCommandChunkRegionLayout{
+      .recordOffset = 0u,
+      .recordBytes = recordBytes,
+      .handleOffset = handleOffset,
+      .handleBytes = handleBytes,
+      .payloadOffset = payloadOffset,
+      .payloadBytes = payloadBytes,
+      .usedBytes = usedBytes,
+  };
+}
+
+std::size_t SegmentedCommandChunkRegionPool::bucketCapacityFor(
+    std::size_t bytes) noexcept {
+  if (bytes == 0u || bytes > kMaxBucketBytes) return 0u;
+  std::size_t capacity = kMinBucketBytes;
+  while (capacity < bytes) capacity <<= 1u;
+  return capacity;
+}
+
+std::size_t SegmentedCommandChunkRegionPool::bucketIndexFor(
+    std::size_t capacity) noexcept {
+  std::size_t candidate = kMinBucketBytes;
+  for (std::size_t index = 0u; index < kBucketCount; ++index) {
+    if (candidate == capacity) return index;
+    candidate <<= 1u;
+  }
+  return kBucketCount;
+}
+
+SegmentedCommandChunkRegions SegmentedCommandChunkRegionPool::acquire(
+    std::size_t recordBytes, std::size_t handleBytes,
+    std::size_t payloadBytes) {
+  const auto layout = planLayout(recordBytes, handleBytes, payloadBytes);
+  if (!layout) return {};
+  const auto bucketCapacity = bucketCapacityFor(layout->usedBytes);
+  const auto allocationBytes = bucketCapacity != 0u
+      ? bucketCapacity
+      : ((layout->usedBytes + kRegionAlignment - 1u) /
+         kRegionAlignment) * kRegionAlignment;
+  if (bucketCapacity != 0u) {
+    std::unique_lock lock(mutex_, std::try_to_lock);
+    if (lock.owns_lock()) {
+      const auto bucketIndex = bucketIndexFor(bucketCapacity);
+      for (auto& slot : buckets_[bucketIndex]) {
+        if (!slot) continue;
+        auto block = std::move(*slot);
+        slot.reset();
+        cachedBytes_ -= block.capacityBytes;
+        --cachedBlocks_;
+        hitCount_.fetch_add(1u, std::memory_order_relaxed);
+        return SegmentedCommandChunkRegions(
+            this, std::move(block.words), block.capacityBytes, *layout);
+      }
+    }
+  }
+
+  if (failNextAllocation_.exchange(false, std::memory_order_relaxed)) {
+    throw std::bad_alloc();
+  }
+  std::vector<std::uint64_t> words;
+  words.resize(allocationBytes / sizeof(std::uint64_t));
+  allocationCount_.fetch_add(1u, std::memory_order_relaxed);
+  return SegmentedCommandChunkRegions(
+      this, std::move(words), allocationBytes, *layout);
+}
+
+void SegmentedCommandChunkRegionPool::recycle(
+    std::vector<std::uint64_t>&& words,
+    std::size_t capacityBytes) noexcept {
+  if (words.empty() || capacityBytes == 0u) return;
+  const auto bucketIndex = bucketIndexFor(capacityBytes);
+  std::unique_lock lock(mutex_, std::try_to_lock);
+  if (!lock.owns_lock()) {
+    evictionCount_.fetch_add(1u, std::memory_order_relaxed);
+    return;
+  }
+  if (bucketIndex == kBucketCount ||
+      cachedBytes_ > kMaxCachedBytes - capacityBytes) {
+    evictionCount_.fetch_add(1u, std::memory_order_relaxed);
+    return;
+  }
+  for (auto& slot : buckets_[bucketIndex]) {
+    if (slot) continue;
+    slot.emplace(CachedBlock{
+        .words = std::move(words), .capacityBytes = capacityBytes});
+    cachedBytes_ += capacityBytes;
+    ++cachedBlocks_;
+    return;
+  }
+  evictionCount_.fetch_add(1u, std::memory_order_relaxed);
+}
+
+std::size_t SegmentedCommandChunkRegionPool::allocationCountForTest()
+    const noexcept {
+  return allocationCount_.load(std::memory_order_relaxed);
+}
+
+std::size_t SegmentedCommandChunkRegionPool::hitCountForTest() const noexcept {
+  return hitCount_.load(std::memory_order_relaxed);
+}
+
+std::size_t SegmentedCommandChunkRegionPool::evictionCountForTest()
+    const noexcept {
+  return evictionCount_.load(std::memory_order_relaxed);
+}
+
+std::size_t SegmentedCommandChunkRegionPool::cachedBytesForTest()
+    const noexcept {
+  std::lock_guard lock(mutex_);
+  return cachedBytes_;
+}
+
+std::size_t SegmentedCommandChunkRegionPool::cachedBlocksForTest()
+    const noexcept {
+  std::lock_guard lock(mutex_);
+  return cachedBlocks_;
+}
+
+namespace {
+
 using MutationObserver =
     dxmt9::resources::mutation_observer::MutationCompositionObserver;
 
@@ -294,9 +543,8 @@ bool prepareOffloadChunk(
     const WireObjectRegistry& registry,
     WireObjectRegistry::RetainFn retain,
     RawCommandChunk& out) noexcept {
-  if (!out.recordBlob.empty() || !out.recordRegion.empty() ||
-      !out.handleRegion.empty() || !out.payloadRegion.empty() ||
-      out.payloadRegionBytes != 0u || out.bridgeRawLedgerOwnedBytes != 0u ||
+  if (!out.recordBlob.empty() || out.segmentedRegions ||
+      out.bridgeRawLedgerCharge ||
       !out.retainedWrappers.empty() || !out.resolvedObjects.empty()) {
     return false;
   }
@@ -350,9 +598,8 @@ bool prepareOffloadChunk(
       });
   if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
           dxmt9::core::CopyMaterializationOwner::Unix)) {
-    ledger->retain(dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
-                   candidate.recordBlob.size());
-    candidate.bridgeRawLedgerOwnedBytes = candidate.recordBlob.size();
+    candidate.bridgeRawLedgerCharge.retain(ledger,
+                                            candidate.recordBlob.size());
   }
   out = std::move(candidate);
   return true;
@@ -361,11 +608,12 @@ bool prepareOffloadChunk(
 bool prepareSegmentedOffloadChunk(
     const D9CCommandChunkSegmentedTransportV1& transport,
     std::span<const std::byte> records, std::span<const std::byte> handles,
-    std::span<const std::byte> payload, const WireObjectRegistry& registry,
+    std::span<const std::byte> payload,
+    SegmentedCommandChunkRegionPool& regionPool,
+    const WireObjectRegistry& registry,
     WireObjectRegistry::RetainFn retain, RawCommandChunk& out) noexcept {
-  if (!out.recordBlob.empty() || !out.recordRegion.empty() ||
-      !out.handleRegion.empty() || !out.payloadRegion.empty() ||
-      out.payloadRegionBytes != 0u || out.bridgeRawLedgerOwnedBytes != 0u ||
+  if (!out.recordBlob.empty() || out.segmentedRegions ||
+      out.bridgeRawLedgerCharge ||
       !out.retainedWrappers.empty() || !out.resolvedObjects.empty()) {
     return false;
   }
@@ -385,6 +633,13 @@ bool prepareSegmentedOffloadChunk(
   }
   RawCommandChunk candidate;
   try {
+    candidate.segmentedRegions = regionPool.acquire(
+        records.size(), handles.size(), payload.size());
+    if (!candidate.segmentedRegions) return false;
+    candidate.resolvedObjects.resize(envelope.handleCount);
+    candidate.retainedWrappers.resize(envelope.handleCount);
+    candidate.ledgerTargets.reserve(envelope.handleCount);
+    candidate.bufferSnapshots.reserve(envelope.handleCount);
     auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
         dxmt9::core::CopyMaterializationOwner::Unix);
     std::optional<dxmt9::core::CopyMaterializationEvent> regionCopy;
@@ -393,40 +648,24 @@ bool prepareSegmentedOffloadChunk(
           ledger, dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
           records.size() + handles.size() + payload.size());
     }
-    const auto recordCount = transport.header.recordCount;
-    const auto handleCount = transport.header.handleCount;
-    candidate.recordRegion.resize(recordCount);
-    candidate.handleRegion.resize(handleCount);
-    candidate.payloadRegionBytes = payload.size();
-    candidate.payloadRegion.resize(
-        (candidate.payloadRegionBytes + sizeof(std::uint32_t) - 1u) /
-        sizeof(std::uint32_t));
-    if (recordCount != 0u) {
-      std::memcpy(candidate.recordRegion.data(), records.data(), records.size());
+    if (!records.empty()) {
+      std::memcpy(candidate.segmentedRegions.recordsBytes().data(),
+                  records.data(), records.size());
     }
-    if (handleCount != 0u) {
-      std::memcpy(candidate.handleRegion.data(), handles.data(), handles.size());
+    if (!handles.empty()) {
+      std::memcpy(candidate.segmentedRegions.handlesBytes().data(),
+                  handles.data(), handles.size());
     }
-    if (candidate.payloadRegionBytes != 0u) {
-      std::memcpy(candidate.payloadRegion.data(), payload.data(),
-                  candidate.payloadRegionBytes);
+    if (!payload.empty()) {
+      std::memcpy(candidate.segmentedRegions.payloadBytes().data(),
+                  payload.data(), payload.size());
     }
-    candidate.resolvedObjects.resize(envelope.handleCount);
-    candidate.retainedWrappers.resize(envelope.handleCount);
-    candidate.ledgerTargets.reserve(envelope.handleCount);
-    candidate.bufferSnapshots.reserve(envelope.handleCount);
   } catch (...) {
     return false;
   }
-  const auto ownedRecords = std::span<const std::byte>(
-      reinterpret_cast<const std::byte*>(candidate.recordRegion.data()),
-      candidate.recordRegion.size() * sizeof(D9CCommandChunkWireRecordHeader));
-  const auto ownedHandles = std::span<const std::byte>(
-      reinterpret_cast<const std::byte*>(candidate.handleRegion.data()),
-      candidate.handleRegion.size() * sizeof(D9CCommandChunkWireHandleEntry));
-  const auto ownedPayload = std::span<const std::byte>(
-      reinterpret_cast<const std::byte*>(candidate.payloadRegion.data()),
-      candidate.payloadRegionBytes);
+  const auto ownedRecords = candidate.segmentedRegions.recordsBytes();
+  const auto ownedHandles = candidate.segmentedRegions.handlesBytes();
+  const auto ownedPayload = candidate.segmentedRegions.payloadBytes();
   ImportedChunkView view;
   if (!validateSegmentedCommandChunk(transport, ownedRecords, ownedHandles,
                                      ownedPayload, envelope, &view)
@@ -455,15 +694,8 @@ bool prepareSegmentedOffloadChunk(
   candidate.renderTapeEventOrdinal = transport.renderTapeEventOrdinal;
   if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
           dxmt9::core::CopyMaterializationOwner::Unix)) {
-    const auto ownedBytes =
-        candidate.recordRegion.size() *
-            sizeof(D9CCommandChunkWireRecordHeader) +
-        candidate.handleRegion.size() *
-            sizeof(D9CCommandChunkWireHandleEntry) +
-        candidate.payloadRegionBytes;
-    ledger->retain(dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
-                   ownedBytes);
-    candidate.bridgeRawLedgerOwnedBytes = ownedBytes;
+    candidate.bridgeRawLedgerCharge.retain(
+        ledger, candidate.segmentedRegions.layout().usedBytes);
   }
   out = std::move(candidate);
   return true;

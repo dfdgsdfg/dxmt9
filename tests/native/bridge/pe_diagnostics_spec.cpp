@@ -539,8 +539,13 @@ void testSourceContracts(const std::filesystem::path &root) {
       "disabled PE semantic path does not read committed ordinals");
   checkContains(
       queueLifecycle,
-      "if (pipelineLifecycleObserverEnabled()) {\n    observePipelineOwnerTransition",
+      "if (pipelineLifecycleObserverEnabled()) {",
       "queue owner observer is called only after the cached enabled gate");
+  checkBefore(
+      queueLifecycle,
+      "if (pipelineLifecycleObserverEnabled()) {",
+      "observePipelineOwnerTransition(sourceRecord, lifecycleEvent);",
+      "batched queue owner evidence stays behind the cached enabled gate");
   const auto transitionBegin = queueLifecycle.find(
       "void QueueLifecycleController::transition(QueueTransitionRecord record,");
   const auto transitionEnd = transitionBegin == std::string::npos

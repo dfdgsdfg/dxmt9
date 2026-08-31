@@ -2110,8 +2110,35 @@ void tentativeRestorePrecedesYoungerReadyPublication() {
 
 void tentativeCommitAloneMovesExactPrefixToEncoding() {
   QueueFixture fixture;
-  fixture.addReadySlot(0, 1);
-  fixture.addReadySlot(1, 2);
+  fixture.addReadySlot(0, 1, false, {}, 0, 77);
+  fixture.addReadySlot(1, 2, false, {}, 0, 78);
+
+  // Mirror the production Arena admission/publication evidence before the
+  // queue performs its real two-source reserved commit.  The commit itself
+  // must then preserve one strict logical chain per source.
+  for (std::size_t i = 0; i < 2; ++i) {
+    const auto& slot = fixture.slots[i];
+    const auto metadata = fixture.cpuReadyTape.sourceMetadata(
+        slot.sourceId, slot.storage, CpuReadyTape::State::Ready);
+    check(metadata.has_value(), "batch fixture exposes ready source metadata");
+    const CpuReadyAdmissionIdentity identity{
+        .rawOrdinal = 77u + i,
+        .sourceOrdinal = i + 1u,
+        .seqId = i + 1u,
+        // Compatibility payloads do not carry the Arena build-generation
+        // field, but the storage generation is still the authoritative
+        // freshness witness at this observer boundary.
+        .buildGeneration = slot.storage.generation,
+    };
+    fixture.controller.recordPipelineSourceArrival(
+        CpuReadyTape::PayloadKind::Legacy,
+        CpuReadyTape::SourceRef{.id = slot.sourceId, .storage = slot.storage},
+        identity, metadata->usedBytes);
+    fixture.controller.recordPipelineSourcePublication(
+        CpuReadyTape::PayloadKind::Legacy,
+        CpuReadyTape::SourceRef{.id = slot.sourceId, .storage = slot.storage},
+        identity, metadata->usedBytes, 77u, static_cast<std::uint32_t>(i), 2u);
+  }
   fixture.addReadySlot(2, 3);
 
   std::array<ReadySlotSnapshot, 2> snapshots{};
@@ -2152,6 +2179,19 @@ void tentativeCommitAloneMovesExactPrefixToEncoding() {
         "committed snapshots resolve under represented lifetime");
   check(!fixture.controller.resolveTentativeSource(lock, snapshots[0]).valid(),
         "committed snapshot no longer resolves as tentative");
+  const auto& ownerState = fixture.pipelineObserver.state();
+  bool sawBatchMember[2] = {false, false};
+  for (std::size_t i = 0; i < ownerState.ownerEventCount; ++i) {
+    const auto& event = ownerState.ownerEvents[i];
+    if (event.physicalBatchId != 0 && event.batchCount == 2 &&
+        event.batchIndex < 2) {
+      sawBatchMember[event.batchIndex] = true;
+    }
+  }
+  check(sawBatchMember[0] && sawBatchMember[1],
+        "production reserved commit retains both physical batch members");
+  check(fixture.pipelineObserver.valid(),
+        "production two-source commit has a valid lifecycle projection");
 }
 
 void tentativeQueueApisRejectUnlockedStaleAndTamperedSnapshots() {

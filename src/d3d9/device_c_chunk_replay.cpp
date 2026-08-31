@@ -442,17 +442,21 @@ const char* cpuReadyArenaBeginStopReasonName(
 
 // canonical admission retains every resolved wrapper before inline or offloaded
 // replay. Both replay completion and queue teardown release the same list.
-void dxmt9::d3d9::releaseRetainedWrappers(dxmt9::d3d9::RawCommandChunk& chunk) {
-  if (chunk.bridgeRawLedgerOwnedBytes != 0u) {
-    if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
-            dxmt9::core::CopyMaterializationOwner::Unix)) {
-      ledger->release(
-          dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
-          chunk.bridgeRawLedgerOwnedBytes);
-    }
-    chunk.bridgeRawLedgerOwnedBytes = 0u;
-  }
-  for (const auto& entry : chunk.retainedWrappers) {
+dxmt9::d3d9::RetainedWireHandleBatch::~RetainedWireHandleBatch() {
+  reset();
+}
+
+dxmt9::d3d9::RetainedWireHandleBatch&
+dxmt9::d3d9::RetainedWireHandleBatch::operator=(
+    RetainedWireHandleBatch&& other) noexcept {
+  if (this == &other) return *this;
+  reset();
+  entries_.swap(other.entries_);
+  return *this;
+}
+
+void dxmt9::d3d9::RetainedWireHandleBatch::reset() noexcept {
+  for (const auto& entry : entries_) {
     switch (entry.kind) {
     case D9C_CHUNK_HANDLE_KIND_TEXTURE:
       dxmt9c_texture_release(static_cast<D9CTexture*>(entry.ptr));
@@ -476,7 +480,13 @@ void dxmt9::d3d9::releaseRetainedWrappers(dxmt9::d3d9::RawCommandChunk& chunk) {
       break;
     }
   }
-  chunk.retainedWrappers.clear();
+  entries_.clear();
+}
+
+void dxmt9::d3d9::releaseRetainedWrappers(dxmt9::d3d9::RawCommandChunk& chunk) {
+  chunk.bridgeRawLedgerCharge.reset();
+  chunk.segmentedRegions.reset();
+  chunk.retainedWrappers.reset();
 }
 
 namespace {
@@ -1049,15 +1059,9 @@ bool importRawChunk(const dxmt9::d3d9::RawCommandChunk& raw,
   };
   if (!raw.preflightValidated) return false;
   if (raw.segmentedTransport) {
-    const auto records = std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(raw.recordRegion.data()),
-        raw.recordRegion.size() * sizeof(D9CCommandChunkWireRecordHeader));
-    const auto handles = std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(raw.handleRegion.data()),
-        raw.handleRegion.size() * sizeof(D9CCommandChunkWireHandleEntry));
-    const auto payload = std::span<const std::byte>(
-        reinterpret_cast<const std::byte*>(raw.payloadRegion.data()),
-        raw.payloadRegionBytes);
+    const auto records = raw.segmentedRegions.recordsBytes();
+    const auto handles = raw.segmentedRegions.handlesBytes();
+    const auto payload = raw.segmentedRegions.payloadBytes();
     return dxmt9::d3d9::importPrevalidatedSegmentedCommandChunk(
         raw.wireHeader, records, handles, payload, envelope, imported);
   }
@@ -1638,9 +1642,9 @@ int32_t replayPlannedChunk(D9CDevice* device,
       }
       if (disposition ==
               dxmt9::d3d9::DirectChunkSlotReplayDisposition::Direct &&
-          plan.layout) {
+          plan.arenaLayout) {
         auto begin = queue->beginDirectChunkSlotReplay(
-            raw.replaySeq, plan.capacity, plan.layout->usedBytes);
+            raw.replaySeq, plan.capacity, plan.arenaLayout->usedBytes);
         if (begin.status ==
                 dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Ready &&
             begin.lease) {
@@ -2106,10 +2110,7 @@ int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
         reinterpret_cast<const dxmt9::core::u8*>(bytes.data()),
         reinterpret_cast<const dxmt9::core::u8*>(bytes.data() + bytes.size()));
     if (ledger) {
-      ledger->retain(
-          dxmt9::core::CopyMaterializationClass::BridgeRawOwnership,
-          raw.recordBlob.size());
-      raw.bridgeRawLedgerOwnedBytes = raw.recordBlob.size();
+      raw.bridgeRawLedgerCharge.retain(ledger, raw.recordBlob.size());
     }
     raw.wireVersion = envelope.version;
     raw.recordCount = envelope.recordCount;
@@ -2587,17 +2588,16 @@ extern "C" int32_t dxmt9c_device_commit_chunk_segmented(
     }
     CommitChunkPhaseTimer preparePhase(phaseSplit);
     if (!dxmt9::d3d9::prepareSegmentedOffloadChunk(
-            *transport, records, handles, payload, d->wireObjects,
+            *transport, records, handles, payload, d->commandChunkRegionPool,
+            d->wireObjects,
             retainWrapper, raw)) {
       preparePhase.stop(dxmt9::perf::countCommitChunkPhasePrepareCpuTime);
       dxmt9::perf::countCommandChunkReject();
       return commitChunkFail("segmented-chunk-admission");
     }
     preparePhase.stop(dxmt9::perf::countCommitChunkPhasePrepareCpuTime);
-    // The common implementation immediately moves `raw` into its own guarded
-    // owner. Do not arm a second guard here: vector moves empty their storage,
-    // but scalar payloadRegionBytes would remain in the moved-from object and
-    // could release the ownership ledger twice on return.
+    // The common implementation immediately moves the move-only region lease,
+    // exact ledger charge, and wrapper batch into its guarded owner.
     return dxmt9c_device_commit_chunk_impl(d, nullptr, &raw,
                                            bridgeCommitStart);
   } catch (const std::bad_alloc&) {

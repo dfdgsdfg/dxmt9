@@ -144,6 +144,9 @@ static_assert(sizeof(PeHotStateShadow::Writer) == sizeof(void*) &&
               sizeof(PeHotStateShadow::Snapshot) == sizeof(void*) &&
               sizeof(PeHotStateShadow::Consumer) == sizeof(void*),
               "phase capabilities must remain one-reference stack values");
+static_assert(sizeof(PeHotStateShadow::ConditionalPendingConsumer) ==
+                  sizeof(void*) * 2u,
+              "conditional settlement keeps its ticket out of Consumer");
 
 static_assert(requires(PeHotStateShadow& shadow, RenderStateSlot render,
                        TextureStageIndex stage,

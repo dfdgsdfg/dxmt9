@@ -1345,7 +1345,6 @@ void sameRawLegacyAndDirectProductionOracle() {
   const auto legacyCompletion =
       dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
           fixture.routing->queue_);
-
   check(directCompletion.dequeued && directCompletion.arena &&
             directCompletion.submitted && directCompletion.completed &&
             directCompletion.reclaimed &&
@@ -1588,6 +1587,245 @@ void ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion() {
   dxmt9c_buffer_release(buffer);
   dxmt9c_surface_release(source);
   dxmt9c_surface_release(destination);
+}
+
+void ordinaryDrawApplyStateDrawUsesCarrierFreeDirectPath() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr,
+        "Draw/ApplyState/Draw direct fixture buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+  const std::array records{
+      drawRecord(identity, 0u),
+      applyRenderStateRecord(RS_TEXTURE_FACTOR, 0x01020304u),
+      drawRecord(identity, 1u),
+  };
+  auto raw = makeRaw(makeWireFixture(records), 91u, false, &registry);
+  raw.cpuReadyTapePlanningEnabled = false;
+
+  dxmt9::d3d9::ImportedChunkView imported;
+  const auto wire = makeWireFixture(records);
+  check(validateCommandChunk(wire.bytes, wire.envelope, &imported).valid(),
+        "Draw/ApplyState/Draw direct fixture validates");
+  const auto plan = dxmt9::d3d9::planCpuReadyChunk(imported, 91u);
+  check(plan.directArenaCandidate() && plan.sourceCount == 1u &&
+            plan.segmentCount == 1u &&
+            dxmt9::d3d9::classifyDirectChunkSlotReplay(
+                imported, plan, /*captureOrTrace=*/false) ==
+                dxmt9::d3d9::DirectChunkSlotReplayDisposition::Direct,
+        "present-less Draw/ApplyState/Draw remains an ordinary Direct candidate");
+
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
+            fixture.routing->drawCalls == 2u &&
+            fixture.routing->drawBatchCalls == 0u &&
+            fixture.routing->legacyMarkCalls == 0u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+                fixture.routing->queue_) == 2u,
+        "Direct Draw/ApplyState/Draw must bypass DrawRunSubmission carrier");
+
+  fixture.routing->present(SwapDesc{});
+  const auto completion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+  check(completion.dequeued && !completion.arena && completion.submitted &&
+            completion.completed && completion.reclaimed &&
+            completion.commandCount == 3u,
+        "carrier-free Draw/ApplyState/Draw preserves one completion source");
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(buffer);
+}
+
+void drawApplyStateDrawWithPresentRetainsLegacyCarrierBoundary() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr,
+        "Draw/ApplyState/Draw/Present Legacy fixture buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+  const std::array records{
+      drawRecord(identity, 0u),
+      applyRenderStateRecord(RS_TEXTURE_FACTOR, 0x01020304u),
+      drawRecord(identity, 1u),
+      presentRecord(),
+  };
+  auto raw = makeRaw(makeWireFixture(records), 92u, false, &registry);
+  raw.cpuReadyTapePlanningEnabled = false;
+
+  dxmt9::d3d9::ImportedChunkView imported;
+  const auto wire = makeWireFixture(records);
+  check(validateCommandChunk(wire.bytes, wire.envelope, &imported).valid(),
+        "Draw/ApplyState/Draw/Present fixture validates");
+  const auto plan = dxmt9::d3d9::planCpuReadyChunk(imported, 92u);
+  check(plan.directArenaCandidate() &&
+            dxmt9::d3d9::classifyDirectChunkSlotReplay(
+                imported, plan, /*captureOrTrace=*/false) ==
+                dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyPresent,
+        "Present-bearing raw remains fail-closed LegacyPresent");
+
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
+            fixture.routing->drawCalls == 2u &&
+            fixture.routing->drawBatchCalls == 2u &&
+            fixture.routing->lastDrawBatchSize == 1u &&
+            fixture.routing->presentCalls == 1u,
+        "Present-bearing Draw/ApplyState/Draw must retain Legacy carriers");
+  const auto completion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+  check(completion.dequeued && !completion.arena && completion.hasPresent &&
+            completion.submitted && completion.completed &&
+            completion.reclaimed,
+        "Legacy carrier boundary preserves Present completion");
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(buffer);
+}
+
+void ordinarySingleSourceSegmentedAggregateUsesDirectConstruction() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  const auto rects = clearRectCountForPlannerPages(40);
+  const std::array records{clearRecord(rects), clearRecord(rects)};
+  const auto wire = makeWireFixture(records);
+  dxmt9::d3d9::ImportedChunkView imported;
+  check(validateCommandChunk(wire.bytes, wire.envelope, &imported).valid(),
+        "single-source segmented aggregate fixture validates");
+  const auto plan = dxmt9::d3d9::planCpuReadyChunk(
+      imported, 93u,
+      {.pageSize = 4096u,
+       .maxOrdinaryPagesPerSegment = 64u,
+       .maxSegmentsPerSource = 2u,
+       .maxPagesPerSource = 128u,
+       .maxPages = 128u,
+       .maxSourcesPerChunk = 1u});
+  check(plan.directArenaCandidate() && plan.sourceCount == 1u &&
+            plan.segmentCount == 2u && plan.arenaLayout.has_value() &&
+            !plan.layout.has_value() &&
+            dxmt9::d3d9::classifyDirectChunkSlotReplay(
+                imported, plan, /*captureOrTrace=*/false) ==
+                dxmt9::d3d9::DirectChunkSlotReplayDisposition::Direct,
+        "one logical source may aggregate multiple checked physical segments");
+
+  auto raw = makeRaw(wire, 93u);
+  raw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
+            fixture.routing->clearCalls == 2u &&
+            fixture.routing->drawBatchCalls == 0u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+                fixture.routing->queue_) == 2u,
+        "segmented single-source aggregate must construct Direct ChunkSlot");
+  fixture.routing->present(SwapDesc{});
+  const auto completion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+  check(completion.dequeued && !completion.arena && completion.commandCount == 3u &&
+            completion.submitted && completion.completed &&
+            completion.reclaimed,
+        "segmented aggregate preserves one ordinary completion identity");
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+}
+
+void ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/true,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr,
+        "segmented Draw/ApplyState/Draw differential buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+  // SegmentSerial production storage permits a bounded aggregate source. Two
+  // 40-page records force physical segmentation while leaving the complete
+  // Draw/APPLY_STATE/Draw sequence in one validated logical source.
+  const auto rects = clearRectCountForPlannerPages(40);
+  const std::array records{
+      drawRecord(identity, 0u),
+      applyRenderStateRecord(RS_TEXTURE_FACTOR, 0x01020304u),
+      drawRecord(identity, 1u),
+      clearRecord(rects),
+      clearRecord(rects),
+  };
+  const auto wire = makeWireFixture(records);
+  dxmt9::d3d9::ImportedChunkView imported;
+  check(validateCommandChunk(wire.bytes, wire.envelope, &imported).valid(),
+        "segmented Draw/ApplyState/Draw differential fixture validates");
+  const auto plan = dxmt9::d3d9::planCpuReadyChunk(
+      imported, 94u,
+      {.pageSize = 4096u,
+       .maxOrdinaryPagesPerSegment = 64u,
+       .maxSegmentsPerSource = 2u,
+       .maxPagesPerSource = 128u,
+       .maxPages = 128u,
+       .maxSourcesPerChunk = 1u});
+  check(plan.directArenaCandidate() && plan.sourceCount == 1u &&
+            plan.segmentCount == 2u && plan.arenaLayout.has_value() &&
+            !plan.layout.has_value() &&
+            dxmt9::d3d9::classifyDirectChunkSlotReplay(
+                imported, plan, /*captureOrTrace=*/false) ==
+                dxmt9::d3d9::DirectChunkSlotReplayDisposition::Direct,
+        "segmented Draw/ApplyState/Draw is one validated Direct aggregate");
+
+  auto direct = makeRaw(wire, 94u, false, &registry);
+  auto legacy = makeRaw(wire, 94u, false, &registry);
+  direct.cpuReadyTapePlanningEnabled = false;
+  legacy.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), direct) == D3D_OK &&
+            fixture.routing->clearCalls == 2u &&
+            fixture.routing->drawCalls == 2u &&
+            fixture.routing->drawBatchCalls == 0u,
+        "segmented Draw/ApplyState/Draw uses carrier-free Direct replay");
+  const auto directWritingCommandCount =
+      dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+          fixture.routing->queue_);
+  const auto directDrawDigest =
+      dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
+          fixture.routing->queue_);
+  fixture.routing->present(SwapDesc{});
+  const auto directCompletion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+  check(fixture.device->SetRenderState(RS_TEXTURE_FACTOR, 0u) == D3D_OK,
+        "segmented differential restores render state before Legacy replay");
+
+  fixture.routing->directChunkSlot_ = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), legacy) == D3D_OK &&
+            fixture.routing->clearCalls == 4u &&
+            fixture.routing->drawCalls == 4u &&
+            fixture.routing->drawBatchCalls == 2u,
+        "the same segmented Draw/ApplyState/Draw takes the Legacy carrier lane");
+  const auto legacyWritingCommandCount =
+      dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+          fixture.routing->queue_);
+  const auto legacyDrawDigest =
+      dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
+          fixture.routing->queue_);
+  fixture.routing->present(SwapDesc{});
+  const auto legacyCompletion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+  check(directCompletion.dequeued && directCompletion.submitted &&
+            directCompletion.completed && directCompletion.reclaimed &&
+            legacyCompletion.dequeued && legacyCompletion.submitted &&
+            legacyCompletion.completed && legacyCompletion.reclaimed &&
+            directWritingCommandCount == legacyWritingCommandCount &&
+            directCompletion.commandCount == legacyCompletion.commandCount &&
+            // The carrier and Direct forms intentionally have different
+            // internal state/PSO identities. Compare the stable draw
+            // parameters and payload bytes, which are the semantic ABI.
+            directDrawDigest.params == legacyDrawDigest.params &&
+            directDrawDigest.payload == legacyDrawDigest.payload &&
+            directDrawDigest.payloadBytes == legacyDrawDigest.payloadBytes,
+        "segmented Direct and Legacy preserve exact command and draw semantics");
+  dxmt9::d3d9::releaseRetainedWrappers(direct);
+  dxmt9::d3d9::releaseRetainedWrappers(legacy);
+  dxmt9c_buffer_release(buffer);
 }
 
 void directAdmissionRejectionPreservesLegacyDrawBatchGrouping() {
@@ -2051,6 +2289,10 @@ int main() {
     resourceBearingDirectCapturesThenMarksExactTicketAndPublishes();
     sameRawLegacyAndDirectProductionOracle();
     ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion();
+    ordinaryDrawApplyStateDrawUsesCarrierFreeDirectPath();
+    drawApplyStateDrawWithPresentRetainsLegacyCarrierBoundary();
+    ordinarySingleSourceSegmentedAggregateUsesDirectConstruction();
+    ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics();
     directAdmissionRejectionPreservesLegacyDrawBatchGrouping();
     ordinaryChunkSlotSameRawCommitFailureDoesNotRetryLegacy();
     directChunkSlotRollbackAndPostEffectFailureAreFailSafe();

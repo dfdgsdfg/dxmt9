@@ -1,4 +1,7 @@
 #include "d3d9_pe_commit_transition.hpp"
+#include "d3d9_pe_recorder_transaction.hpp"
+#include "d3d9_pe_recorder_state.hpp"
+#include "d3d9_pe_state_shadow.hpp"
 #include "d3d9_pe_recorder.hpp"
 
 #include <array>
@@ -350,6 +353,138 @@ void testCapacityPreFlushComposition() {
   }
 }
 
+void testRecorderChunkTransactionAndPendingTicket() {
+  using Phase = pe::RecorderChunkTransactionPhase;
+  pe::PeRecorderChunkTransaction append;
+  check(!append.recordCapacityPreEvidence(true) &&
+            !append.recordCapacityPostResult(true),
+        "capacity evidence rejects an idle owner");
+  check(!append.seal(true) && append.phase() == Phase::Idle,
+        "an untracked builder cannot synthesize a production owner at seal");
+  check(append.beginRecord(17u, 64u),
+        "transaction accepts a bounded record intent");
+  check(!append.capacityPre(false) && append.retryable() &&
+            append.phase() == Phase::Retry,
+        "capacity-pre failure is retryable before emitter effects");
+
+  pe::PeRecorderChunkTransaction emitter;
+  check(emitter.beginRecord(17u, 64u) && emitter.capacityPre(true) &&
+            !emitter.emit(false) &&
+            emitter.phase() == Phase::Collecting && emitter.recordCount() == 0u,
+        "emitter failure rolls back only the active record intent");
+
+  pe::PeRecorderChunkTransaction post;
+  check(post.beginRecord(17u, 64u) && post.emit(true) &&
+            !post.capacityPost(false) && post.retryable(),
+        "capacity-post failure keeps the accepted record retryable");
+
+  pe::PeRecorderChunkTransaction bridge;
+  check(bridge.beginChunk() && bridge.seal(true) && !bridge.bridge(false) &&
+            bridge.poisoned(),
+        "entered bridge failure is effect-unknown and poisons");
+
+  pe::PeRecorderChunkTransaction capture;
+  check(capture.beginChunk() && capture.seal(true) &&
+            (capture.recordCaptureReservation(0x90u, 0x91u, true),
+             capture.captureReserved() && capture.captureToken() == 0x90u &&
+             capture.captureOrdinal() == 0x91u) && capture.bridge(true) &&
+            capture.capture(pe::RecorderChunkCaptureDisposition::Rejected) &&
+            capture.complete() && capture.completed(),
+        "capture rejection settles after command acceptance");
+
+  pe::PeRecorderChunkTransaction multi;
+  check(multi.beginChunk() &&
+            multi.noteRecord(17u, 64u, {.generation = 11u}, 1u, 2u, 3u, 4u) &&
+            multi.emit(true) &&
+            multi.transactionEpoch() != 0u &&
+            [&multi] {
+              const auto epoch = multi.transactionEpoch();
+              return multi.noteRecord(18u, 72u, {.generation = 12u},
+                                      5u, 6u, 7u, 8u) &&
+                     multi.transactionEpoch() == epoch &&
+                     !multi.emit(false);
+            }() &&
+            multi.phase() == Phase::Emitted &&
+            multi.recordCount() == 1u &&
+            multi.pendingTicket().generation == 11u &&
+            multi.recordCheckpoint() == 1u &&
+            multi.activeRecordCheckpoint() == 0u &&
+            multi.activeHandleCheckpoint() == 0u &&
+            multi.activePayloadCheckpoint() == 0u &&
+            multi.activeRetainerCheckpoint() == 0u,
+        "failed second record restores the prior transaction frontier");
+
+  pe::PeRecorderChunkTransaction poisoned;
+  check(poisoned.beginChunk() && poisoned.seal(true) &&
+            !poisoned.bridge(false) && poisoned.poisoned() &&
+            !poisoned.recordCapacityPreResult(false) && poisoned.poisoned() &&
+            poisoned.recordCapacityPostResult(false) && poisoned.poisoned(),
+        "capacity-pre failure cannot reopen an effect-unknown owner");
+
+  // This is deliberately a bounded production-type seam harness rather than
+  // a D3D9DeviceImpl/COM fixture. It drives the same PeRecorderState helpers
+  // used by appendRecord/flushPendingCommandChunk, with the real bounded
+  // CommandChunkBuilder and a canonical Clear emitter.
+  pe::PeRecorderState productionState;
+  const auto pendingKey = renderStateSlotKey(7u);
+  productionState.peState.transition().setRenderState(pendingKey, 1u);
+  const auto pendingTicket = productionState.peState.pendingTicket();
+  const D9CCommandChunkWireClear clear{.flags = 1u,
+                                       .colorARGB = 0xff102030u,
+                                       .z = 0.5f,
+                                       .stencil = 3u};
+  const std::array<D9CRect, 0u> rects{};
+  check(productionState.prepareChunkRecord(
+              D9C_COMMAND_RECORD_CLEAR, sizeof(clear), false) &&
+            productionState.chunkTransaction.pendingTicket().generation ==
+                pendingTicket.generation &&
+            dxmt9::d3d9::pe::appendClear(
+                productionState.commandChunk, clear, rects) &&
+            productionState.settleChunkEmitter(true),
+        "production-type append records through the persistent owner");
+  const auto sealed = productionState.commandChunk.seal();
+  check(sealed.valid() &&
+            productionState.chunkTransaction.recordSealResult(true) &&
+            productionState.recordChunkSealedEvidence() &&
+            productionState.sealedEvidenceMatchesChunk() &&
+            productionState.chunkTransaction.recordCaptureReservation(
+                0u, 0u, false) &&
+            productionState.chunkTransaction.recordBridgeResult(true) &&
+            productionState.chunkTransaction.recordCaptureResult(
+                pe::RecorderChunkCaptureDisposition::Skipped) &&
+            productionState.chunkTransaction.recordCapacityPostResult(true) &&
+            productionState.chunkTransaction.complete() &&
+            productionState.chunkTransaction.completed(),
+        "production-type seal freezes storage before bridge settlement");
+  productionState.commandChunk.reset();
+  productionState.chunkTransaction.discard();
+  check(!productionState.commandChunk.sealed() &&
+            productionState.commandChunk.recordCount() == 0u &&
+            productionState.chunkTransaction.phase() == Phase::Idle,
+        "production-type reset releases sealed storage and owner");
+
+  PeHotStateShadow shadow{};
+  const auto key = renderStateSlotKey(7u);
+  shadow.transition().setRenderState(key, 1u);
+  const auto stale = shadow.pendingTicket();
+  shadow.transition().setRenderState(key, 2u);
+  shadow.transition().setRenderState(key, 1u);
+  const auto accepted = pe::settleRecorderAppend({
+      .phase = pe::AppendSettlement::Prepared,
+      .appendSucceeded = true,
+  });
+  const std::array<D9CCommandChunkWireRenderState, 1u> row{{{7u, 1u}}};
+  auto staleConsumer = shadow.consume(stale);
+  check(!staleConsumer.valid() &&
+            shadow.pendingRenderStatesTyped().contains(key),
+        "A-to-B-to-A invalidates the old pending ticket");
+  auto currentConsumer = shadow.consume(shadow.pendingTicket());
+  check(currentConsumer.valid() &&
+            currentConsumer.acceptRenderStateBatch(row, accepted) &&
+            shadow.pendingRenderStatesTyped().empty(),
+        "the current ticket conditionally settles the pending row");
+}
+
 }  // namespace
 
 int main() {
@@ -358,7 +493,8 @@ int main() {
   testDiscardAndFailureMatrix();
   testComposedSettlementPredicates();
   testCapacityPreFlushComposition();
+  testRecorderChunkTransactionAndPendingTicket();
   if (failures != 0) return 1;
-  std::puts("pe commit transition spec: PASS");
+  std::puts("pe commit transition/production-type seam spec: PASS");
   return 0;
 }

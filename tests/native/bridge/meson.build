@@ -478,7 +478,11 @@ test('dxmt9-pe-transition-algebra-spec',
 
 pe_commit_transition_spec = executable(
   'dxmt9-pe-commit-transition-spec',
-  ['pe_commit_transition_spec.cpp'],
+  [
+    'pe_commit_transition_spec.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_nondraw.cpp',
+  ],
   include_directories: [
     dxmt9_inc,
     include_directories('../../../src/d3d9'),

@@ -5592,6 +5592,17 @@ bool CommandQueue::publishCpuReadyArenaSource(
   queueLifecycle_.recordCpuReadySupplyPublished(
       core::CpuReadyTape::PayloadKind::Arena, ticket.id, ticket.storage,
       static_cast<std::uint32_t>(controlIndex), ticket.seqId);
+  if (pipelineLifecycleObservationEnabled_) {
+    queueLifecycle_.recordPipelineSourcePublication(
+        core::CpuReadyTape::PayloadKind::Arena,
+        core::CpuReadyTape::SourceRef{.id = ticket.id, .storage = ticket.storage},
+        core::CpuReadyAdmissionIdentity{
+            .rawOrdinal = ticket.rawOrdinal,
+            .sourceOrdinal = ticket.sourceOrdinal,
+            .seqId = ticket.seqId,
+            .buildGeneration = ticket.buildGeneration},
+        context->layout.usedBytes);
+  }
   control.seqId = ticket.seqId;
   control.state = core::ChunkSlot::State::Pending;
   lastCommittedSeqId_ = ticket.seqId;
@@ -6077,6 +6088,10 @@ CommandQueue::publishCpuReadyArenaBatch(
     return CpuReadyArenaPublishStatus::FailStopped;
   }
   const std::size_t last = context->sourceCount - 1u;
+  const std::uint64_t physicalBatchId =
+      context->batchReservations.front().ticket.rawOrdinal != 0
+          ? context->batchReservations.front().ticket.rawOrdinal
+          : context->batchReservations.front().ticket.seqId;
   for (std::size_t i = 0; i < context->sourceCount; ++i) {
     auto& control = slots_[controlIndices[i]];
     control.seqId = context->batchReservations[i].ticket.seqId;
@@ -6087,6 +6102,22 @@ CommandQueue::publishCpuReadyArenaBatch(
         context->batchReservations[i].storage,
         static_cast<std::uint32_t>(controlIndices[i]),
         context->batchReservations[i].ticket.seqId);
+    if (pipelineLifecycleObservationEnabled_) {
+      const auto& sourceTicket = context->batchReservations[i].ticket;
+      queueLifecycle_.recordPipelineSourcePublication(
+          core::CpuReadyTape::PayloadKind::Arena,
+          core::CpuReadyTape::SourceRef{
+              .id = sourceTicket.id, .storage = sourceTicket.storage},
+          core::CpuReadyAdmissionIdentity{
+              .rawOrdinal = sourceTicket.rawOrdinal,
+              .sourceOrdinal = sourceTicket.sourceOrdinal,
+              .seqId = sourceTicket.seqId,
+              .buildGeneration = sourceTicket.buildGeneration},
+          context->batchLayouts[i].usedBytes,
+          physicalBatchId,
+          static_cast<std::uint32_t>(i),
+          static_cast<std::uint32_t>(context->sourceCount));
+    }
   }
   lastCommittedSeqId_ = context->batchReservations[last].ticket.seqId;
   inflightCount_ += context->sourceCount;

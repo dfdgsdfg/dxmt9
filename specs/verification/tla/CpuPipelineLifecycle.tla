@@ -30,15 +30,42 @@ Oldest(set) == CHOOSE s \in set : \A t \in set : s <= t
 LifecycleAllowed(from, to, ownerName, dispositionName, controlName) ==
   KnownLifecycleRow(from, to, ownerName, dispositionName, controlName)
 
+(* Bounded completion-frontier composition.  CompleteGpu owns the GPU tail;
+ * the finish thread advances its waterline separately.  This relation is the
+ * model-side contract for the native FinishAdvance snapshot and intentionally
+ * does not add a second queue implementation to this lifecycle model. *)
+CompletionFrontierContiguous(finishWaterline, completedQueueDepth, gpuTail) ==
+  gpuTail = finishWaterline + completedQueueDepth
+
+FinishAdvanceAction(gpuTailBefore, finishBefore, depthBefore,
+                    gpuTailAfter, finishAfter, depthAfter) ==
+  /\ CompletionFrontierContiguous(finishBefore, depthBefore, gpuTailBefore)
+  /\ CompletionFrontierContiguous(finishAfter, depthAfter, gpuTailAfter)
+  /\ gpuTailAfter = gpuTailBefore
+  /\ finishAfter = finishBefore + 1
+  /\ depthBefore = depthAfter + 1
+
+FinishAdvanceInvariant(gpuTailBefore, finishBefore, depthBefore,
+                       gpuTailAfter, finishAfter, depthAfter) ==
+  FinishAdvanceAction(gpuTailBefore, finishBefore, depthBefore,
+                      gpuTailAfter, finishAfter, depthAfter)
+  => finishAfter <= gpuTailAfter
+
 VARIABLES phase, generation, epoch, nextArrival, constructed, borrows,
           childTotal, joined, authority, completed, noGpu, presentPending,
           presentSettled, occupancy, waiting, observedWake, wake,
-          completedSeq, presentSeq, stopped, resetCount, owner, disposition
+          completedSeq, presentSeq, gpuCompletedTailSeq,
+          finishWaterlineSeq, completedQueueDepth, stopped, resetCount,
+          owner, disposition
 
 vars == <<phase, generation, epoch, nextArrival, constructed, borrows,
   childTotal, joined, authority, completed, noGpu, presentPending,
   presentSettled, occupancy, waiting, observedWake, wake, completedSeq,
-  presentSeq, stopped, resetCount, owner, disposition>>
+  presentSeq, gpuCompletedTailSeq, finishWaterlineSeq, completedQueueDepth,
+  stopped, resetCount, owner, disposition>>
+
+frontierVars == <<gpuCompletedTailSeq, finishWaterlineSeq,
+                  completedQueueDepth>>
 
 Init ==
   /\ phase = [s \in Sources |-> "Absent"]
@@ -60,6 +87,9 @@ Init ==
   /\ wake = 0
   /\ completedSeq = 0
   /\ presentSeq = 0
+  /\ gpuCompletedTailSeq = 0
+  /\ finishWaterlineSeq = 0
+  /\ completedQueueDepth = 0
   /\ stopped = FALSE
   /\ resetCount = 0
   /\ owner = [s \in Sources |-> "None"]
@@ -76,6 +106,7 @@ Arrive(s) ==
       joined, authority, completed, noGpu, presentPending, presentSettled,
       occupancy, waiting, observedWake, wake, completedSeq, presentSeq,
       stopped, resetCount>>
+  /\ UNCHANGED frontierVars
 
 AdoptRaw(s) ==
   /\ ~stopped /\ phase[s] = "ProducerOwned"
@@ -88,6 +119,7 @@ AdoptRaw(s) ==
       childTotal, joined, authority, completed, noGpu, presentPending,
       presentSettled, occupancy, waiting, observedWake, wake, completedSeq,
       presentSeq, stopped, resetCount>>
+  /\ UNCHANGED frontierVars
 
 Park(s) ==
   /\ ~stopped /\ phase[s] = "RawOwned" /\ occupancy = Capacity
@@ -99,6 +131,7 @@ Park(s) ==
       borrows, childTotal, joined, authority, completed, noGpu,
       presentPending, presentSettled, occupancy, wake, completedSeq,
       presentSeq, stopped, resetCount, owner, disposition>>
+  /\ UNCHANGED frontierVars
 
 Admit(s) ==
   /\ ~stopped /\ phase[s] = "RawOwned" /\ occupancy < Capacity
@@ -114,6 +147,7 @@ Admit(s) ==
       joined, authority, completed, noGpu, presentPending, presentSettled,
       waiting, observedWake, wake, completedSeq, presentSeq, stopped,
       resetCount>>
+  /\ UNCHANGED frontierVars
 
 Retry(s) ==
   /\ ~stopped /\ phase[s] = "RawOwned" /\ s \in waiting
@@ -129,6 +163,7 @@ Retry(s) ==
   /\ UNCHANGED <<generation, epoch, nextArrival, constructed, childTotal,
       joined, authority, completed, noGpu, presentPending, presentSettled,
       observedWake, wake, completedSeq, presentSeq, stopped, resetCount>>
+  /\ UNCHANGED frontierVars
 
 Build(s) ==
   /\ ~stopped /\ phase[s] = "ReplayBorrowed"
@@ -139,6 +174,7 @@ Build(s) ==
       joined, authority, completed, noGpu, presentPending, presentSettled,
       occupancy, waiting, observedWake, wake, completedSeq, presentSeq,
       stopped, resetCount, owner, disposition>>
+  /\ UNCHANGED frontierVars
 
 ReturnReplayBorrow(s) ==
   /\ ~stopped /\ phase[s] = "ReplayBorrowed"
@@ -150,6 +186,7 @@ ReturnReplayBorrow(s) ==
       childTotal, joined, authority, completed, noGpu, presentPending,
       presentSettled, occupancy, waiting, observedWake, wake, completedSeq,
       presentSeq, stopped, resetCount, owner>>
+  /\ UNCHANGED frontierVars
 
 Publish(s) ==
   /\ ~stopped /\ phase[s] = "ReplayBorrowed"
@@ -165,6 +202,7 @@ Publish(s) ==
       joined, authority, completed, noGpu, presentPending, presentSettled,
       occupancy, waiting, observedWake, wake, completedSeq, presentSeq,
       stopped, resetCount>>
+  /\ UNCHANGED frontierVars
 
 BeginEncode(s) ==
   /\ ~stopped /\ phase[s] = "FinalOwned"
@@ -181,6 +219,7 @@ BeginEncode(s) ==
   /\ UNCHANGED <<generation, epoch, nextArrival, constructed, authority,
       completed, noGpu, presentPending, presentSettled, occupancy, waiting,
       observedWake, wake, completedSeq, presentSeq, stopped, resetCount>>
+  /\ UNCHANGED frontierVars
 
 Join(s) ==
   /\ ~stopped /\ phase[s] = "Encoding"
@@ -192,6 +231,7 @@ Join(s) ==
       childTotal, authority, completed, noGpu, presentPending,
       presentSettled, occupancy, waiting, observedWake, wake, completedSeq,
       presentSeq, stopped, resetCount, owner>>
+  /\ UNCHANGED frontierVars
 
 Submit(s) ==
   /\ ~stopped /\ phase[s] = "Encoding" /\ joined[s] = childTotal[s]
@@ -206,12 +246,15 @@ Submit(s) ==
       childTotal, joined, completed, noGpu, presentPending, presentSettled,
       occupancy, waiting, observedWake, wake, completedSeq, presentSeq,
       stopped, resetCount>>
+  /\ UNCHANGED frontierVars
 
 CompleteGpu(s) ==
   /\ phase[s] = "GPUInFlight" /\ s \in authority
   /\ LifecycleAllowed("GPUInFlight", "Completed", "GpuCompletion", "Completed",
       IF s \in PresentSources THEN "Present" ELSE "Normal")
   /\ completedSeq = s - 1
+  /\ CompletionFrontierContiguous(finishWaterlineSeq,
+      completedQueueDepth, gpuCompletedTailSeq)
   /\ phase' = [phase EXCEPT ![s] = "Completed"]
   /\ completed' = completed \cup {s}
   /\ completedSeq' = s
@@ -220,14 +263,39 @@ CompleteGpu(s) ==
   /\ presentSettled' = IF s \in PresentSources /\ PresentDiscipline = "Enforced"
         THEN presentSettled \cup {s} ELSE presentSettled
   /\ presentSeq' = IF s \in PresentSources THEN s ELSE presentSeq
+  /\ gpuCompletedTailSeq' = s
+  /\ completedQueueDepth' = completedQueueDepth + 1
+  /\ finishWaterlineSeq' = finishWaterlineSeq
   /\ owner' = [owner EXCEPT ![s] = "GpuCompletion"]
   /\ disposition' = [disposition EXCEPT ![s] = "Completed"]
   /\ UNCHANGED <<generation, epoch, nextArrival, constructed, borrows,
       childTotal, joined, authority, noGpu, occupancy,
       waiting, observedWake, wake, stopped, resetCount>>
 
+FinishAdvance(s) ==
+  /\ ~stopped /\ phase[s] = "Completed" /\ s \in completed
+  /\ s = finishWaterlineSeq + 1
+  /\ completedQueueDepth > 0
+  /\ CompletionFrontierContiguous(finishWaterlineSeq,
+      completedQueueDepth, gpuCompletedTailSeq)
+  /\ FinishAdvanceAction(gpuCompletedTailSeq, finishWaterlineSeq,
+      completedQueueDepth, gpuCompletedTailSeq, finishWaterlineSeq + 1,
+      completedQueueDepth - 1)
+  /\ FinishAdvanceInvariant(gpuCompletedTailSeq, finishWaterlineSeq,
+      completedQueueDepth, gpuCompletedTailSeq, finishWaterlineSeq + 1,
+      completedQueueDepth - 1)
+  /\ finishWaterlineSeq' = finishWaterlineSeq + 1
+  /\ gpuCompletedTailSeq' = gpuCompletedTailSeq
+  /\ completedQueueDepth' = completedQueueDepth - 1
+  /\ UNCHANGED <<phase, generation, epoch, nextArrival, constructed, borrows,
+      childTotal, joined, authority, completed, noGpu, presentPending,
+      presentSettled, occupancy, waiting, observedWake, wake,
+      completedSeq, presentSeq, stopped, resetCount, owner, disposition>>
+
+
 Reclaim(s) ==
   /\ ~stopped /\ phase[s] = "Completed" /\ s \in completed
+  /\ s <= finishWaterlineSeq
   /\ LifecycleAllowed("Completed", "Reclaimed", "Reclaim",
       IF s \in PresentSources THEN "PresentSettled" ELSE "Completed",
       IF s \in PresentSources THEN "Present" ELSE "Normal")
@@ -244,6 +312,7 @@ Reclaim(s) ==
       childTotal, joined, authority, completed, noGpu, presentPending,
       presentSettled, waiting, observedWake, completedSeq, presentSeq,
       stopped, resetCount>>
+  /\ UNCHANGED frontierVars
 
 InlineTerminal(s) ==
   /\ ~stopped /\ s \in InlineSources
@@ -264,6 +333,7 @@ InlineTerminal(s) ==
       childTotal, joined, authority, completed, presentPending,
       presentSettled, waiting, observedWake, completedSeq, presentSeq,
       stopped, resetCount>>
+  /\ UNCHANGED frontierVars
 
 BridgeReject(s) ==
   /\ ~stopped /\ s \in FailureSources /\ phase[s] = "ProducerOwned"
@@ -275,6 +345,7 @@ BridgeReject(s) ==
       childTotal, joined, authority, completed, noGpu, presentPending,
       presentSettled, occupancy, waiting, observedWake, wake, completedSeq,
       presentSeq, stopped, resetCount>>
+  /\ UNCHANGED frontierVars
 
 DeviceLoss ==
   /\ ~stopped /\ FailureSources # {}
@@ -297,6 +368,7 @@ DeviceLoss ==
       childTotal, joined, authority, completed, presentPending,
       presentSettled, observedWake, wake, completedSeq,
       presentSeq, resetCount>>
+  /\ UNCHANGED frontierVars
 
 Teardown ==
   /\ AllowTeardown /\ ~stopped
@@ -319,6 +391,7 @@ Teardown ==
       childTotal, joined, authority, completed, noGpu, presentPending,
       presentSettled, observedWake, wake, completedSeq,
       presentSeq, resetCount>>
+  /\ UNCHANGED frontierVars
 
 Reset ==
   /\ AllowReset /\ stopped /\ resetCount = 0
@@ -345,13 +418,16 @@ Reset ==
   /\ wake' = wake
   /\ completedSeq' = 0
   /\ presentSeq' = 0
+  /\ gpuCompletedTailSeq' = 0
+  /\ finishWaterlineSeq' = 0
+  /\ completedQueueDepth' = 0
   /\ owner' = [s \in Sources |-> "None"]
   /\ disposition' = [s \in Sources |-> "None"]
 
 Next ==
   \/ \E s \in Sources : Arrive(s) \/ AdoptRaw(s) \/ Park(s) \/ Admit(s)
   \/ \E s \in Sources : Retry(s) \/ Build(s) \/ ReturnReplayBorrow(s) \/ Publish(s) \/ BeginEncode(s)
-  \/ \E s \in Sources : Join(s) \/ Submit(s) \/ CompleteGpu(s)
+  \/ \E s \in Sources : Join(s) \/ Submit(s) \/ CompleteGpu(s) \/ FinishAdvance(s)
   \/ \E s \in Sources : Reclaim(s)
   \/ \E s \in Sources : InlineTerminal(s) \/ BridgeReject(s)
   \/ DeviceLoss \/ Teardown \/ Reset
@@ -370,6 +446,7 @@ ProgressBeginEncode == \E s \in Sources : BeginEncode(s)
 ProgressJoin == \E s \in Sources : Join(s)
 ProgressSubmit == \E s \in Sources : Submit(s)
 ProgressCompleteGpu == \E s \in Sources : CompleteGpu(s)
+ProgressFinishAdvance == \E s \in Sources : FinishAdvance(s)
 ProgressReclaim == \E s \in Sources : Reclaim(s)
 
 ProgressNext ==
@@ -377,6 +454,7 @@ ProgressNext ==
   \/ ProgressRetry \/ ProgressBuild \/ ProgressReturnBorrow
   \/ ProgressPublish \/ ProgressBeginEncode \/ ProgressJoin
   \/ ProgressSubmit \/ ProgressCompleteGpu
+  \/ ProgressFinishAdvance
   \/ ProgressReclaim
 
 ProgressFairness ==
@@ -392,6 +470,7 @@ ProgressFairness ==
   /\ WF_vars(ProgressJoin)
   /\ WF_vars(ProgressSubmit)
   /\ WF_vars(ProgressCompleteGpu)
+  /\ WF_vars(ProgressFinishAdvance)
   /\ WF_vars(ProgressReclaim)
 
 ProgressSpec == Init /\ [][ProgressNext]_vars /\ ProgressFairness
@@ -416,6 +495,11 @@ TypeOK ==
   /\ wake \in Nat
   /\ completedSeq \in 0..MaxSources
   /\ presentSeq \in 0..MaxSources
+  /\ gpuCompletedTailSeq \in 0..MaxSources
+  /\ finishWaterlineSeq \in 0..MaxSources
+  /\ completedQueueDepth \in 0..Capacity
+  /\ CompletionFrontierContiguous(finishWaterlineSeq,
+      completedQueueDepth, gpuCompletedTailSeq)
   /\ stopped \in BOOLEAN
   /\ resetCount \in 0..1
   /\ owner \in [Sources -> STRING]

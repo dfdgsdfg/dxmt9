@@ -103,7 +103,8 @@ bool acceptSparseStatePlan(PeHotStateShadow& shadow,
                            const SparseStatePlan& state,
                            const AppendPlan& plan,
                            PeScalarSemanticTokenLedger* tokens = nullptr,
-                           std::uint64_t recordOrdinal = 0u) noexcept;
+                           std::uint64_t recordOrdinal = 0u,
+                           PendingDeltaTicket transactionTicket = {}) noexcept;
 
 std::size_t sparseStatePlanConstantPayloadBytes(
     const SparseStatePlan& plan) noexcept;
@@ -122,7 +123,8 @@ bool acceptPreparedSparseState(PeHotStateShadow& shadow,
                                const SparseStateInput& state,
                                const AppendPlan& plan,
                                PeScalarSemanticTokenLedger* tokens = nullptr,
-                               std::uint64_t recordOrdinal = 0u) noexcept;
+                               std::uint64_t recordOrdinal = 0u,
+                               PendingDeltaTicket transactionTicket = {}) noexcept;
 
 // Builds the value-owned checkpoint form used by Render Tape. Unlike the
 // normal draw path this preserves the complete constant shadow rather than
