@@ -47,6 +47,28 @@ pe_semantic_batch_spec = executable(
 
 test('dxmt9-pe-semantic-batch-spec', pe_semantic_batch_spec)
 
+# P1 host-only semantic owner coverage.  Admission copies typed fixed values,
+# constants/UP bytes, rectangles, and sparse rows while typed physical pins
+# stay owned until reset/settlement; no production producer is wired here.
+pe_semantic_owner_spec = executable(
+  'dxmt9-pe-semantic-owner-spec',
+  [
+    'pe_semantic_owner_spec.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_draw.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_nondraw.cpp',
+  ],
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  cpp_args: ['-DDXMT9_PE_SHADOW_TEST_SEAM=1'],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-pe-semantic-owner-spec', pe_semantic_owner_spec)
+
 pe_fvf_transaction_spec = executable(
   'dxmt9-pe-fvf-transaction-spec',
   'pe_fvf_transaction_spec.cpp',
@@ -127,14 +149,35 @@ pe_diagnostics_spec = executable(
   'pe_diagnostics_spec.cpp',
   include_directories: [
     dxmt9_inc,
+    include_directories('../../../src'),
     include_directories('../../../src/d3d9'),
   ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
   link_args: dxmt9_test_link_args,
 )
 
 test('dxmt9-pe-diagnostics-spec',
      pe_diagnostics_spec,
      args: [meson.project_source_root()])
+
+pe_recorder_fault_matrix_spec = executable(
+  'dxmt9-pe-recorder-fault-matrix-spec',
+  'pe_recorder_fault_matrix_spec.cpp',
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src'),
+    include_directories('../../../src/d3d9'),
+  ],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-pe-recorder-fault-matrix-spec', pe_recorder_fault_matrix_spec)
+
+test('dxmt9-d3d9-fault-matrix-script-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                       'tests/scripts/test_d3d9_fault_matrix.py')],
+     env: dxmt9_native_test_env)
 
 wsi_surface_protocol_spec = executable(
   'dxmt9-wsi-surface-protocol-spec',

@@ -195,6 +195,9 @@ struct EncodeContext {
   uniform::DirtyState dirty{};
   EncodeDrawRecorder* drawRecorder = nullptr;
   core::metalqueue::ReplayObserverSink replayObserver{};
+  // Nullable cold lifecycle facts sidecar; no source record stores these
+  // diagnostics when the production observer is disabled.
+  ::dxmt9::queue::PipelineLifecycleObserverSink pipelineLifecycleObserver{};
   // Encode-chunk-local completion watermark for transient arena reservation.
   // A stale lower watermark is safe: it can delay reclaim, never release
   // storage before the GPU completion waterline.

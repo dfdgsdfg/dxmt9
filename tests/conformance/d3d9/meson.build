@@ -52,6 +52,20 @@ d3d9_auxiliary = executable(
   install: false,
 )
 
+recorder_fault_arch = 'x64'
+if host_machine.cpu_family() == 'x86'
+  recorder_fault_arch = 'x86'
+endif
+d3d9_recorder_fault = executable(
+  'd3d9_recorder_fault_' + recorder_fault_arch,
+  'd3d9_recorder_fault.cpp',
+  dependencies: [
+    cpp.find_library('user32', required: true),
+    cpp.find_library('d3d9', required: true),
+  ],
+  install: false,
+)
+
 d3d9_queries = executable(
   'd3d9_queries_x64',
   'd3d9_queries.cpp',
@@ -193,6 +207,7 @@ alias_target(
     d3d9_device_lifetime,
     d3d9_exports,
     d3d9_auxiliary,
+    d3d9_recorder_fault,
     d3d9_queries,
     d3d9_resources,
     d3d9_device_misc,

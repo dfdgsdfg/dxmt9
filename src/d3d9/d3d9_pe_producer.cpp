@@ -284,6 +284,16 @@ std::size_t sparseStatePlanConstantPayloadBytes(
          plan.psBoolConstants.registerBytes.size();
 }
 
+std::size_t sparseStateInputConstantPayloadBytes(
+    const SparseStateInput& state) noexcept {
+  return state.vsFloatConstants.registerBytes.size() +
+         state.vsIntConstants.registerBytes.size() +
+         state.vsBoolConstants.registerBytes.size() +
+         state.psFloatConstants.registerBytes.size() +
+         state.psIntConstants.registerBytes.size() +
+         state.psBoolConstants.registerBytes.size();
+}
+
 static bool acceptSparseStatePlanWithSources(
     PeHotStateShadow& shadow, PeConstShadowBlock& constants,
     const PeBindingView& bindings, const SparseStatePlan& state,

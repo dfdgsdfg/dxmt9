@@ -5,7 +5,7 @@ date: 2026-08-31
 title: Queue T2d reserve-copy-commit economic gate remains deferred
 type: evidence
 status: deferred
-source: docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.36.md; docs/perfomance/present-pacing/present-pacing-copy-materialization-ledger.237.md
+source: docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.36.md; docs/perfomance/present-pacing/present-pacing-copy-materialization-ledger.237.md; experiments/output/app-d3d9-3dmark05-head-qmutex-gt2-off-20260831; experiments/output/app-d3d9-3dmark05-head-qmutex-gt2-on-20260831
 related: specs/backend/producer-concurrency/gap.md; specs/backend/producer-concurrency/spec.md; specs/verification/tla/QueueT2dReserveCopyCommit.tla
 ---
 
@@ -45,6 +45,17 @@ wild evidence; the `3.3471 ms/Present` hold is local work and never substitutes
 for `W`. Independently, the Task 4 materialization ledger measures queue,
 mutation, and arena work at `<=0.041 ms/Present` in GT2 (and `<=0.001` in
 SFIV), agreeing with deferral.
+
+The 2026-08-31 current-worktree repeat reaches the same decision. OFF/ON both
+pass with zero chunk rejects and zero GPU command-buffer errors (1,832/1,823
+Presents). The ON table's final 1,800-Present emission measures
+`submit_draw_run_batch_impl/append` at `559.270` acquires/Present,
+`0.0000 ms/Present` acquire wait, and `3.3025 ms/Present` hold. The parent
+submit wait is `0.0846 ms/Present`; resource marking is `0.1686`, direct replay
+entry `0.0285`, and present dequeue `0.0261`. The formerly dominant
+`find_reordered_index_buffer` row is absent in this run. These are improvements
+in attribution, but they do not alter the gate: the measured append victim
+wait `W` is still exactly zero.
 
 Task 7 lifecycle work supplies deterministic native/model owner evidence for
 mixed Draw+Present settlement, reset/teardown, generation-qualified identity,

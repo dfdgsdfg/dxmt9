@@ -445,6 +445,11 @@ test('dxmt9-audit-perf-docs-sources', python3,
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)
+test('dxmt9-audit-mutation-composition-report', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_audit_mutation_composition_report.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
 test('dxmt9-build-3dmark05-mini-replay-manifest', python3,
      args: [join_paths(meson.project_source_root(), 'tests/scripts/test_build_3dmark05_mini_replay_manifest.py')],
      workdir: meson.project_source_root(),

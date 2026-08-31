@@ -1,10 +1,12 @@
 #include "d3d9_pe_semantic_batch.hpp"
+#include "d3d9_pe_batch.hpp"
 #include "d3d9_pe_chunk_builder.hpp"
 #include "device_c_chunk_validate.hpp"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -245,6 +247,209 @@ void ownershipAndFailureCutsFailClosed() {
             post.phase() == BatchPhase::Poisoned,
         "post-emission settlement failure is fail-stop");
 }
+
+void preWireCandidateOwnershipAndRetry() {
+  D9CSurface source;
+  D9CSurface destination;
+  const auto sourceRef = qualifyLocalRef<SurfaceRef>(wireRef(
+      &source, D9C_CHUNK_HANDLE_KIND_SURFACE, 0xd100u));
+  D9CCommandChunkWirePresent command{
+      .hwnd = 0x1020304050607080ull,
+      .flags = 3u,
+      .hasSrc = 1u,
+      .hasDst = 1u,
+      .sourceHandleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+      .src = D9CRect{1, 2, 31, 42},
+      .dst = D9CRect{5, 6, 35, 46},
+  };
+  const auto candidate = PeOwnedRecordCandidate::present(command, sourceRef);
+  command.hwnd = 0u;
+  command.src.left = 99;
+  check(candidate.valid() && candidate.uniqueHandleCount() == 1u,
+        "call-local candidate owns bounded values before source mutation");
+
+  PeSemanticChunkOwner legacyOwner;
+  check(legacyOwner.bind(candidate), "legacy owner binds candidate once");
+  CommandChunkBuilder legacy;
+  check(legacyOwner.emitLegacy(legacy),
+        "legacy emitter consumes the owned candidate");
+  const auto legacyWire = legacy.seal();
+  check(legacyWire.valid(), "legacy candidate wire seals");
+  ImportedChunkView legacyImported;
+  check(validateCommandChunk(
+            std::span<const std::byte>(legacyWire.blob.data(),
+                                        legacyWire.blob.size()),
+            {D9C_COMMAND_CHUNK_VERSION, legacyWire.recordCount,
+             legacyWire.handleCount},
+            &legacyImported)
+            .valid(),
+        "legacy candidate wire validates");
+  check(legacyImported.payloadArena.size() >= sizeof(command),
+        "candidate preserves fixed payload bytes");
+  D9CCommandChunkWirePresent emitted{};
+  std::memcpy(&emitted, legacyImported.payloadArena.data(), sizeof(emitted));
+  check(emitted.hwnd == 0x1020304050607080ull && emitted.src.left == 1,
+        "mutating the source after bind cannot change candidate values");
+  legacy.resetAndReleaseRetained();
+
+  PeSemanticChunkOwner exactOwner;
+  check(exactOwner.bind(candidate), "exact owner binds the same candidate");
+  CommandChunkBuilder exact;
+  check(exact.prepareExactFinalLayout(exactOwner.exactLayout()) &&
+            exactOwner.emitExact(exact),
+        "exact emitter consumes the same candidate without post-wire copy");
+  const auto exactWire = exact.seal();
+  check(exactWire.valid() &&
+            std::equal(exactWire.blob.begin(), exactWire.blob.end(),
+                       legacyWire.blob.begin()),
+        "legacy and exact candidate sinks are byte-identical");
+  check(!exactOwner.emitLegacy(exact),
+        "legacy emission cannot mix into an exact candidate chunk");
+  exact.resetAndReleaseRetained();
+
+  const auto duplicate = PeOwnedRecordCandidate::readback(
+      sourceRef, sourceRef);
+  check(duplicate.valid() && duplicate.handleCount() == 2u &&
+            duplicate.uniqueHandleCount() == 1u,
+        "qualified identity dedup is preserved in the candidate");
+  PeSemanticChunkOwner duplicateOwner;
+  check(duplicateOwner.bind(duplicate), "duplicate candidate binds once");
+  CommandChunkBuilder duplicateExact;
+  check(duplicateExact.prepareExactFinalLayout(duplicateOwner.exactLayout()) &&
+            duplicateOwner.emitExact(duplicateExact),
+        "duplicate identity emits through the exact sink");
+  const auto duplicateWire = duplicateExact.seal();
+  check(duplicateWire.valid() && duplicateWire.handleCount == 1u,
+        "exact sink emits one handle for one qualified identity");
+  duplicateExact.resetAndReleaseRetained();
+
+  const auto conflicting = PeOwnedRecordCandidate::readback(
+      sourceRef, qualifyLocalRef<SurfaceRef>(wireRef(
+          &destination, D9C_CHUNK_HANDLE_KIND_SURFACE, 0xd100u)));
+  check(!conflicting.valid() && conflicting.uniqueHandleCount() == 0u,
+        "identity collision with a different wrapper fails closed");
+
+  CommandChunkBuilder rollback(
+      CommandChunkBuilderCapacities{.records = 1u, .handles = 0u,
+                                    .payloadBytes = 128u, .sealedBytes = 128u});
+  PeSemanticChunkOwner rollbackOwner;
+  check(rollbackOwner.bind(candidate), "rollback owner binds candidate");
+  // Deliberately under-plan the final handle table to force a failure after
+  // the typed append starts; this exercises the builder checkpoint rather
+  // than relying on spare-vector capacities in exact mode.
+  check(rollback.prepareExactFinalLayout(planExactCommandChunkLayout(
+              1u, 0u, sizeof(D9CCommandChunkWirePresent))) &&
+            !rollbackOwner.emitExact(rollback) &&
+            rollback.recordCount() == 0u && rollback.handleCount() == 0u &&
+            rollbackOwner.bound() && source.refs == 1u,
+        "failed exact emission rolls back candidate retention");
+  check(rollback.returnToLegacyFinalLayout(),
+        "failed exact emission restores the legacy sink");
+
+  PeAllFamilySemanticTokenLedger ordinals;
+  const auto first = ordinals.beginSource(D9C_COMMAND_RECORD_PRESENT);
+  ordinals.preserveForRetry(first);
+  check(first != 0u && ordinals.beginSource(D9C_COMMAND_RECORD_PRESENT) == first,
+        "pre-effect retry reuses the issued ordinal");
+  check(ordinals.beginSource(D9C_COMMAND_RECORD_PRESENT) != first,
+        "a fresh append receives a fresh ordinal");
+
+  static_assert(std::is_nothrow_default_constructible_v<PeSemanticChunkOwner>);
+  static_assert(sizeof(PeSemanticChunkOwner) <= 160u);
+  static_assert(!std::is_constructible_v<PeSemanticChunkOwner, std::size_t>);
+}
+
+void callLocalPilotTransactionPlanAndEmission() {
+  D9CSurface source;
+  D9CSurface destination;
+  const auto sourceRef = qualifyLocalRef<SurfaceRef>(wireRef(
+      &source, D9C_CHUNK_HANDLE_KIND_SURFACE, 0xe100u));
+  const auto destinationRef = qualifyLocalRef<SurfaceRef>(wireRef(
+      &destination, D9C_CHUNK_HANDLE_KIND_SURFACE, 0xe200u));
+  const PePresentBatch present{
+      .command = D9CCommandChunkWirePresent{.hwnd = 0x1234u},
+      .source = sourceRef,
+  };
+  const PeReadbackBatch readback{
+      .source = sourceRef,
+      .destination = destinationRef,
+  };
+  PePrewireChunkTransaction owner;
+  check(owner.append(PeOwnedRecordCandidate::present(
+                        present.command, present.source),
+                    {.sourceOrdinal = 11u, .recordOrdinal = 101u,
+                     .pendingGeneration = 7u, .pendingKey = 1u,
+                     .pendingValue = 2u, .retainerCheckpoint = 3u,
+                     .pendingWitness = true, .retainerCheckpointValid = true}),
+        "call-local pilot admits first typed candidate");
+  check(owner.append(PeOwnedRecordCandidate::readback(
+                        readback.source, readback.destination),
+                    {.sourceOrdinal = 12u, .recordOrdinal = 102u,
+                     .captureToken = 9u, .captureOrdinal = 10u,
+                     .captureReserved = true}),
+        "call-local pilot admits second typed candidate");
+  const auto plan = owner.plan();
+  check(plan.valid() && plan.recordCount == 2u &&
+            plan.uniqueHandleCount == 3u && owner.size() == 2u,
+        "call-local pilot computes bounded multi-record count and dedup plan");
+  check(owner.checkpoint(0u).recordOrdinal == 101u &&
+            owner.checkpoint(1u).captureOrdinal == 10u,
+        "call-local pilot retains source/record checkpoints");
+
+  CommandChunkBuilder occupied;
+  check(appendPresent(occupied, {}, sourceRef),
+        "occupied builder supplies a pre-effect rollback cut");
+  check(!owner.emitExact(occupied) && !owner.emitted() && owner.plan().valid(),
+        "non-empty exact destination rejects before adoption and remains retryable");
+  occupied.resetAndReleaseRetained();
+
+  CommandChunkBuilder underplanned;
+  check(underplanned.prepareExactFinalLayout(
+            planExactCommandChunkLayout(2u, 0u, 1u)),
+        "under-planned exact layout reserves");
+  check(!owner.emitExact(underplanned),
+        "under-planned exact emission rejects");
+  check(!owner.emitted(), "under-planned owner remains retryable");
+  check(!underplanned.exactFinalLayout(),
+        "under-planned builder returns to legacy storage");
+  check(owner.plan().valid(), "under-planned owner retains its immutable plan");
+
+  CommandChunkBuilder legacy;
+  check(owner.emitLegacy(legacy), "call-local pilot legacy fallback emits typed rows");
+  const auto legacyWire = legacy.seal();
+  check(legacyWire.valid(), "legacy multi-record owner seals");
+  CommandChunkBuilder exact;
+  check(owner.emitExact(exact),
+        "call-local pilot emits the same candidates into final layout once");
+  const auto exactWire = owner.seal();
+  check(exactWire.valid() && exactWire.blob.size() == legacyWire.blob.size() &&
+            std::equal(exactWire.blob.begin(), exactWire.blob.end(),
+                       legacyWire.blob.begin()),
+        "multi-record exact and legacy bytes are identical");
+  check(!owner.emitExact(exact), "exact emission cannot run twice");
+  owner.resetAndReleaseRetained();
+  legacy.resetAndReleaseRetained();
+  exact.resetAndReleaseRetained();
+  check(source.refs == 1u && destination.refs == 1u,
+        "multi-record owner rollback/reset releases retained identities");
+
+  PePrewireChunkTransaction residual;
+  const auto unsupported = PeExactProductionPolicyRow{
+      .producer = PeSemanticProducerKind::DrawPrimitive,
+      .disposition = PeExactProductionDisposition::LegacyFallback,
+      .fallbackReason = PeExactFallbackReason::DeferredStateSettlement};
+  check(unsupported.producer == PeSemanticProducerKind::DrawPrimitive &&
+            peExactProductionPolicy(unsupported.producer).fallbackReason !=
+                PeExactFallbackReason::None,
+        "unsupported family remains explicitly classified as residual");
+  check(!residual.append(PeOwnedRecordCandidate{},
+                         {.sourceOrdinal = 1u, .recordOrdinal = 1u}),
+        "untyped residual cannot enter the exact owner");
+  for (const auto& row : kPeExactProductionPolicyTable) {
+    check(row.producer != PeSemanticProducerKind::Count,
+          "all semantic producer rows are classified");
+  }
+}
 }  // namespace
 
 int main() {
@@ -253,6 +458,8 @@ int main() {
     static_assert(!std::is_move_constructible_v<BatchOwner>);
     exactFixedMatchesCanonicalAllFamilyWire();
     ownershipAndFailureCutsFailClosed();
+    preWireCandidateOwnershipAndRetry();
+    callLocalPilotTransactionPlanAndEmission();
   } catch (const Failure& failure) {
     std::cerr << "pe_semantic_batch_spec failed: " << failure.what() << '\n';
     return 1;

@@ -1,15 +1,15 @@
 ---
 domain: present-pacing
 workload: 3DMark05 GT2
-title: "Present-Pacing #236 - Current GT2 Ceiling Is The Producer Thread; PE d3d9.dll Is 10.6%"
+title: "Present-Pacing #236 - Current GT2 Ceiling Is The Producer Thread; PE d3d9.dll Is 12.8%"
 type: leaf
 status: current
-updated: 2026-08-25
-source: experiments/output/app-d3d9-3dmark05-current-cap-gt2-r1-20260825; experiments/output/app-d3d9-3dmark05-current-admission-phase-split-gt2-r1-20260825; experiments/output/app-d3d9-3dmark05-current-bottleneck-gt2-clean-cpu-r2-20260825; traces/app-d3d9-3dmark05-current-bottleneck-gt2-clean-cpu-r2-20260825/analysis/xctrace-cpu-thread-summary.md; traces/app-d3d9-3dmark05-current-bottleneck-gt2-r1-20260825/analysis/xctrace-metal-gpu-intervals-summary.md; experiments/output/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825; traces/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825/analysis/pe-sampler.md; traces/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825/analysis/pe-sampler-selfpc.csv
+updated: 2026-08-31
+source: experiments/output/app-d3d9-3dmark05-current-cap-gt2-r1-20260825; experiments/output/app-d3d9-3dmark05-current-admission-phase-split-gt2-r1-20260825; experiments/output/app-d3d9-3dmark05-current-bottleneck-gt2-clean-cpu-r2-20260825; traces/app-d3d9-3dmark05-current-bottleneck-gt2-clean-cpu-r2-20260825/analysis/xctrace-cpu-thread-summary.md; traces/app-d3d9-3dmark05-current-bottleneck-gt2-r1-20260825/analysis/xctrace-metal-gpu-intervals-summary.md; experiments/output/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825; traces/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825/analysis/pe-sampler.md; traces/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825/analysis/pe-sampler-selfpc.csv; experiments/output/app-d3d9-3dmark05-head-pe-symbol-gt2-20260831/pe-sampler.md
 related: docs/perfomance/overview-3dmark05-gt2.md; docs/perfomance/baselines/baselines-wild-fps-refresh.04.md; docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.38.md; docs/perfomance/state-churn-encode/overview.md
 ---
 
-# Present-Pacing #236 - Current GT2 Ceiling Is The Producer Thread; PE `d3d9.dll` Is 10.6%
+# Present-Pacing #236 - Current GT2 Ceiling Is The Producer Thread; PE `d3d9.dll` Is 12.8%
 
 ## Question
 
@@ -78,6 +78,13 @@ if CPU production is substantially reduced, not the current first ceiling.
 | `winemetal.dll` | `2,006` | **`13.9%`** |
 | `d3d9.dll` | `1,531` | **`10.6%`** |
 | Wine, CRT, and other modules | `1,621` | `11.2%` |
+
+The 2026-08-31 current-worktree repeat strengthens, rather than changes, that
+attribution. Its module-map probe passed with zero suspend/context/resume
+failures and no self-PC overflow. Across 13,550 samples and 1,740 Presents it
+recorded `3DMark05.exe` 67.7%, `d3d9.dll` 12.8%, and
+`winemetal_dxmt9.dll` 9.4%. Sampling overhead still makes this invalid as FPS
+evidence; the module shares are the claim.
 
 `winemetal.dll` is bridge residence rather than the recorder core: the clean
 run's bridge counters and producer stacks place buffer lock/unlock, upload,

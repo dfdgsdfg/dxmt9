@@ -80,6 +80,13 @@ struct CpuReadyPlan {
   std::vector<CpuReadySourcePlan> sources{};
   std::size_t sourceCount = 0;
   std::optional<core::ArenaSourcePayloadLayout> arenaLayout{};
+  // A carrier-free ordinary ChunkSlot can represent one raw source even when
+  // the Arena planner must reject its bounded page grouping.  This layout is
+  // computed only for the narrow non-UP Draw/APPLY_STATE/constants envelope;
+  // it is not a queue/Tape reservation or a second source identity.
+  core::SourcePayloadCapacity directSlotCapacity{};
+  std::optional<core::SourcePayloadLayout> directSlotLayout{};
+  bool directSlotSingleSource = false;
   // True when the complete raw stream contains at least one structurally
   // validated Query, Readback, or UpdateTexture. The plan intentionally does
   // not retain a variable-size disposition list: compatibility replay rebuilds
@@ -96,6 +103,10 @@ struct CpuReadyPlan {
            sourceCount != 0;
   }
 
+  bool directChunkSlotCandidate() const noexcept {
+    return directSlotSingleSource && directSlotLayout.has_value();
+  }
+
   bool requiresAdmission() const noexcept { return directArenaCandidate(); }
 
   // Every non-rejected whole-raw disposition must replay D3D semantics once;
@@ -107,6 +118,7 @@ struct CpuReadyPlan {
 
 enum class DirectChunkSlotReplayDisposition : std::uint8_t {
   Direct = 0,
+  DirectOversized,
   DirectWithPresentTail,
   LegacyStateOnly,
   LegacySegmented,

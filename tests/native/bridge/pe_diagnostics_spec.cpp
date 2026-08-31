@@ -601,10 +601,23 @@ void testSourceContracts(const std::filesystem::path &root) {
       "if (flushAction == PeRecorderFlushAction::RejectPoisoned)",
       "if (!recorderState_.commandChunkNegotiated)",
       "ordinary flush rejects poison before negotiation, seal, or bridge entry");
-  checkContains(
-      deviceCold,
-      "D3D9DeviceImpl::~D3D9DeviceImpl() {\n    (void)flushPeRecorder(\n        PeRecorderFlushReason::Destructor,\n        PeRecorderFlushDisposition::DiscardForRecovery);",
-      "destructor unconditionally selects recovery discard");
+  const auto destructorBegin = deviceCold.find(
+      "D3D9DeviceImpl::~D3D9DeviceImpl() {");
+  const auto destructorEnd = destructorBegin == std::string::npos
+      ? std::string::npos
+      : deviceCold.find(
+            "HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(",
+            destructorBegin);
+  check(destructorBegin != std::string::npos &&
+            destructorEnd != std::string::npos,
+        "destructor source contract is present");
+  const std::string_view destructorBody(
+      deviceCold.data() + destructorBegin, destructorEnd - destructorBegin);
+  checkBefore(
+      destructorBody,
+      "dxmt9PeConsumeRecorderFault(PeRecorderFaultPoint::Teardown",
+      "flushPeRecorder(\n        PeRecorderFlushReason::Destructor,\n        PeRecorderFlushDisposition::DiscardForRecovery)",
+      "destructor observes teardown fault before recovery discard");
   constexpr std::string_view resetDispositionCall =
       "peRecorderResetDisposition(\n            recorderState_.stateBlockTransaction.isPoisoned())";
   const auto resetBegin = deviceCold.find(

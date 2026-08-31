@@ -2,6 +2,7 @@
 
 #include "d3d9_pe_diagnostic_observer.hpp"
 #include "d3d9_pe_recorder.hpp"
+#include "d3d9_pe_semantic_owner.hpp"
 #include "d3d9_pe_semantic_tokens.hpp"
 #include "d3d9_pe_stats_decimation.hpp"
 #include "dxmt9/copy_materialization_ledger.hpp"
@@ -31,12 +32,14 @@ struct PeDiagnosticsConfig {
   bool debugLog = false;
   bool scalarSemanticObserver = false;
   bool copyMaterializationLedger = false;
+  bool semanticBatchOwner = false;
   std::uint32_t threadSamplerHz = 250;
 
   constexpr bool enabled() const noexcept {
     return recorderStats || recorderChunkLog || statsDecimationN != 0 ||
            vsConstSetterRange || moduleMap || threadSampler || debugLog ||
-           scalarSemanticObserver || copyMaterializationLedger;
+           scalarSemanticObserver || copyMaterializationLedger ||
+           semanticBatchOwner;
   }
 
   constexpr bool chunkCommitTimingEnabled() const noexcept {
@@ -58,11 +61,13 @@ struct PeDiagnosticsFeatureGates {
   bool debugLog = false;
   bool scalarSemanticObserver = false;
   bool copyMaterializationLedger = false;
+  bool semanticBatchOwner = false;
 
   constexpr bool any() const noexcept {
     return callScope || hotSetterTimer || chunkCommitTiming ||
            vsConstSetterRange || moduleMap || threadSampler || debugLog ||
-           scalarSemanticObserver || copyMaterializationLedger;
+           scalarSemanticObserver || copyMaterializationLedger ||
+           semanticBatchOwner;
   }
 
   static constexpr PeDiagnosticsFeatureGates fromConfig(
@@ -78,6 +83,7 @@ struct PeDiagnosticsFeatureGates {
         .debugLog = config.debugLog,
         .scalarSemanticObserver = config.scalarSemanticObserver,
         .copyMaterializationLedger = config.copyMaterializationLedger,
+        .semanticBatchOwner = config.semanticBatchOwner,
     };
   }
 };
@@ -173,6 +179,26 @@ struct PeInterAppendCallSiteStats {
   std::uint64_t maxNs = 0;
 };
 
+// Keep the semantic owner capacity in lockstep with the promoted legacy
+// recorder cadence.  The owner is heap-backed, so these bounded typed arenas
+// do not enlarge D3D9DeviceImpl; construction fails closed if their one-time
+// allocation or retainer reserve cannot be established.  MaxPins matches the
+// legacy builder's 256-handle production reservation, and the owner must not
+// introduce a lower novel handle ceiling on an otherwise admissible chunk.
+using PeProductionSemanticBatchOwner = dxmt9::d3d9::pe::PeSemanticBatchOwner<
+    256u, 256u, 1310720u, 1024u, 2048u>;
+
+inline std::unique_ptr<PeProductionSemanticBatchOwner>
+makePeProductionSemanticBatchOwner(bool enabled) noexcept {
+  if (!enabled) return nullptr;
+  try {
+    auto owner = std::make_unique<PeProductionSemanticBatchOwner>();
+    return owner->constructionSucceeded() ? std::move(owner) : nullptr;
+  } catch (...) {
+    return nullptr;
+  }
+}
+
 struct PeDiagnosticsState {
   explicit PeDiagnosticsState(D3D9DeviceImpl *device,
                               const PeDiagnosticsConfig &resolved)
@@ -184,7 +210,9 @@ struct PeDiagnosticsState {
         allFamilySemanticTokens(resolved.scalarSemanticObserver
             ? std::make_unique<
                   dxmt9::d3d9::pe::PeAllFamilySemanticTokenLedger>()
-            : nullptr) {}
+            : nullptr),
+        semanticBatchOwner(makePeProductionSemanticBatchOwner(
+            resolved.semanticBatchOwner)) {}
 
   static constexpr std::size_t kPeAppendTypeBuckets = 8;
   static std::size_t peAppendTypeBucket(std::uint32_t type) noexcept {
@@ -227,6 +255,14 @@ struct PeDiagnosticsState {
   // PeRecorderState, D3D9DeviceImpl, or child wrapper layout on x86/x64.
   std::unique_ptr<dxmt9::d3d9::pe::PeAllFamilySemanticTokenLedger>
       allFamilySemanticTokens{};
+  // The opt-in production lane owns exactly one semantic batch and retainer
+  // per device; it is absent on the default path.
+  std::unique_ptr<PeProductionSemanticBatchOwner> semanticBatchOwner{};
+  dxmt9::d3d9::pe::PeSemanticRecordInput semanticInput{};
+  bool semanticInputValid = false;
+  // Legacy sizeHint accounting remains separate from semantic payload bytes,
+  // preserving CapacityPre/Post cadence while the owner emits exact bytes.
+  std::size_t semanticCadenceBytes = 0u;
   VsConstSetterRangePerf vsConstSetterRangePerf_{};
   PeRecorderStats peRecorderStats_{};
   PeDecimatedScopeStats peChunkAppendDecimatedStats_{};

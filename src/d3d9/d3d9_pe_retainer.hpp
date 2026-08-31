@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dxmt9/device_c.h"
+#include "d3d9_pe_recorder_fault.hpp"
 
 #include <algorithm>
 #include <cstddef>
@@ -57,10 +58,29 @@ public:
 
     static constexpr std::size_t kDefaultCapacity = 256u;
 
+    enum class ConstructionMode : std::uint8_t {
+        Normal,
+        FailForTesting,
+    };
+
     explicit D3D9PePendingCommandRetainer(
-        std::size_t capacity = kDefaultCapacity) {
-        entries_.reserve(capacity);
-        index_.reserveForEntries(capacity);
+        std::size_t capacity = kDefaultCapacity,
+        ConstructionMode mode = ConstructionMode::Normal) noexcept {
+        if (mode == ConstructionMode::FailForTesting) {
+            return;
+        }
+        try {
+            entries_.reserve(capacity);
+            index_.reserveForEntries(capacity);
+            ready_ = true;
+        } catch (...) {
+            // Construction is deliberately fail-closed.  In particular, the
+            // owner itself is noexcept, so a vector allocation failure here
+            // must become an unavailable retainer rather than terminate the
+            // process during stack/device construction.
+            entries_.clear();
+            index_.clear();
+        }
     }
 
     ~D3D9PePendingCommandRetainer() {
@@ -80,63 +100,82 @@ public:
         return Acquired{entries_.size()};
     }
 
+    bool constructionSucceeded() const noexcept { return ready_; }
+
     std::size_t size() const noexcept {
         return entries_.size();
     }
 
-    void retainSurface(D9CSurface* surface, Acquired&) {
-        retain(D9C_CHUNK_HANDLE_KIND_SURFACE, surface,
-               [](D9CSurface* value) { dxmt9c_surface_addref(value); });
+    // Typed warm-set probes let a bounded owner distinguish a duplicate
+    // already retained from a novel object when the retainer is at capacity.
+    // They do not mutate the index or allocate; the normal typed retain call
+    // below performs the epoch touch and remains the single ownership path.
+    bool containsSurface(D9CSurface* surface) const noexcept {
+        return contains(D9C_CHUNK_HANDLE_KIND_SURFACE, surface);
+    }
+    bool containsTexture(D9CTexture* texture) const noexcept {
+        return contains(D9C_CHUNK_HANDLE_KIND_TEXTURE, texture);
+    }
+    bool containsBuffer(D9CBuffer* buffer) const noexcept {
+        return contains(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+    }
+    bool containsShader(D9CShader* shader) const noexcept {
+        return contains(D9C_CHUNK_HANDLE_KIND_SHADER, shader);
+    }
+    bool containsVdecl(D9CVertexDecl* vdecl) const noexcept {
+        return contains(D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, vdecl);
+    }
+    bool containsQuery(D9CQuery* query) const noexcept {
+        return contains(D9C_CHUNK_HANDLE_KIND_QUERY, query);
     }
 
-    void retainTexture(D9CTexture* texture, Acquired&) {
-        retain(D9C_CHUNK_HANDLE_KIND_TEXTURE, texture,
-               [](D9CTexture* value) { dxmt9c_texture_addref(value); });
+    bool retainSurface(D9CSurface* surface, Acquired&) {
+        return retain(D9C_CHUNK_HANDLE_KIND_SURFACE, surface,
+                      [](D9CSurface* value) { dxmt9c_surface_addref(value); });
     }
 
-    void retainBuffer(D9CBuffer* buffer, Acquired&) {
-        retain(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer,
-               [](D9CBuffer* value) { dxmt9c_buffer_addref(value); });
+    bool retainTexture(D9CTexture* texture, Acquired&) {
+        return retain(D9C_CHUNK_HANDLE_KIND_TEXTURE, texture,
+                      [](D9CTexture* value) { dxmt9c_texture_addref(value); });
     }
 
-    void retainShader(D9CShader* shader, Acquired&) {
-        retain(D9C_CHUNK_HANDLE_KIND_SHADER, shader,
-               [](D9CShader* value) { dxmt9c_shader_addref(value); });
+    bool retainBuffer(D9CBuffer* buffer, Acquired&) {
+        return retain(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer,
+                      [](D9CBuffer* value) { dxmt9c_buffer_addref(value); });
     }
 
-    void retainVdecl(D9CVertexDecl* vdecl, Acquired&) {
-        retain(D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, vdecl,
-               [](D9CVertexDecl* value) { dxmt9c_vdecl_addref(value); });
+    bool retainShader(D9CShader* shader, Acquired&) {
+        return retain(D9C_CHUNK_HANDLE_KIND_SHADER, shader,
+                      [](D9CShader* value) { dxmt9c_shader_addref(value); });
     }
 
-    void retainQuery(D9CQuery* query, Acquired&) {
-        retain(D9C_CHUNK_HANDLE_KIND_QUERY, query,
-               [](D9CQuery* value) { dxmt9c_query_addref(value); });
+    bool retainVdecl(D9CVertexDecl* vdecl, Acquired&) {
+        return retain(D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, vdecl,
+                      [](D9CVertexDecl* value) { dxmt9c_vdecl_addref(value); });
     }
 
-    void retainWireObject(std::uint32_t kind, void* object,
+    bool retainQuery(D9CQuery* query, Acquired&) {
+        return retain(D9C_CHUNK_HANDLE_KIND_QUERY, query,
+                      [](D9CQuery* value) { dxmt9c_query_addref(value); });
+    }
+
+    bool retainWireObject(std::uint32_t kind, void* object,
                           Acquired& acquired) {
         switch (kind) {
         case D9C_CHUNK_HANDLE_KIND_TEXTURE:
-            retainTexture(static_cast<D9CTexture*>(object), acquired);
-            break;
+            return retainTexture(static_cast<D9CTexture*>(object), acquired);
         case D9C_CHUNK_HANDLE_KIND_SURFACE:
-            retainSurface(static_cast<D9CSurface*>(object), acquired);
-            break;
+            return retainSurface(static_cast<D9CSurface*>(object), acquired);
         case D9C_CHUNK_HANDLE_KIND_BUFFER:
-            retainBuffer(static_cast<D9CBuffer*>(object), acquired);
-            break;
+            return retainBuffer(static_cast<D9CBuffer*>(object), acquired);
         case D9C_CHUNK_HANDLE_KIND_SHADER:
-            retainShader(static_cast<D9CShader*>(object), acquired);
-            break;
+            return retainShader(static_cast<D9CShader*>(object), acquired);
         case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
-            retainVdecl(static_cast<D9CVertexDecl*>(object), acquired);
-            break;
+            return retainVdecl(static_cast<D9CVertexDecl*>(object), acquired);
         case D9C_CHUNK_HANDLE_KIND_QUERY:
-            retainQuery(static_cast<D9CQuery*>(object), acquired);
-            break;
+            return retainQuery(static_cast<D9CQuery*>(object), acquired);
         default:
-            break;
+            return true;
         }
     }
 
@@ -190,6 +229,10 @@ public:
     }
 
 private:
+    bool contains(std::uint32_t kind, void* object) const noexcept {
+        return object != nullptr && index_.find(kind, object) != nullptr;
+    }
+
     struct Entry {
         std::uint32_t kind = 0;
         void* ptr = nullptr;
@@ -347,15 +390,29 @@ private:
     };
 
     template<typename T, typename AddRefFn>
-    void retain(std::uint32_t kind, T* ptr, AddRefFn&& addRef) {
+    bool retain(std::uint32_t kind, T* ptr, AddRefFn&& addRef) {
+        if (!ready_) {
+            return false;
+        }
         if (!ptr) {
-            return;
+            return true;
         }
         if (const std::size_t* found = index_.find(kind, ptr)) {
             // Already pinned — by this chunk or by a recent one. Refresh the
             // warmth stamp and cross nothing.
             entries_[*found].lastTouchedEpoch = epoch_;
-            return;
+            return true;
+        }
+        // This is the one boundary where a new wire handle acquires its
+        // producer-side pin.  A fault budget counts only these unique
+        // acquisitions, so duplicate handle references neither consume the
+        // budget nor fail a record before the actual AddRef point.
+        std::int32_t injectedResult;
+        if (dxmt9PeRecorderFaultsEnabled() &&
+            dxmt9PeConsumeRecorderFault(PeRecorderFaultPoint::RetainAcquire,
+                                        injectedResult)) {
+            (void)injectedResult;
+            return false;
         }
         entries_.push_back(Entry{kind, ptr, epoch_});
         try {
@@ -375,6 +432,7 @@ private:
         // Publish the entry (and its index) before taking ownership so a
         // failure above cannot leak an AddRef that rollback/clear cannot see.
         addRef(ptr);
+        return true;
     }
 
     static void release(const Entry& entry) {
@@ -405,4 +463,5 @@ private:
     std::vector<Entry> entries_{};
     RetentionIndex index_{};
     std::uint64_t epoch_ = 0;
+    bool ready_ = false;
 };

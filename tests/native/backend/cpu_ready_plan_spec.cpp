@@ -293,14 +293,19 @@ std::size_t clearRectCountForSegmentPages(std::size_t targetPages,
   return match;
 }
 
-RecordSpec partialFloatConstantRecord(std::uint32_t type,
-                                      std::uint32_t startRegister) {
+RecordSpec partialConstantRecord(std::uint32_t type,
+                                 std::uint32_t startRegister) {
   const D9CCommandChunkWireSetConst fixed{
       .startRegister = startRegister,
       .registerCount = 1,
   };
   auto payload = bytesOf(fixed);
-  payload.resize(payload.size() + 4 * sizeof(float));
+  const auto elementSize =
+      type == D9C_COMMAND_RECORD_SET_VS_CONST_B ||
+              type == D9C_COMMAND_RECORD_SET_PS_CONST_B
+          ? sizeof(std::uint32_t)
+          : 4u * sizeof(float);
+  payload.resize(payload.size() + elementSize);
   return {.type = type, .payload = std::move(payload)};
 }
 
@@ -353,6 +358,8 @@ void eligibleWholeRawPlanHasTypedCapacity() {
         "one whole eligible raw chunk becomes one direct arena candidate");
   check(!plan.containsOrderedControls,
         "an eligible Arena plan has no compatibility disposition");
+  check(!plan.directChunkSlotCandidate() && !plan.directSlotLayout,
+        "normal Arena planning does not build a direct-slot carrier plan");
   check(plan.capacity.commandHeaders == 6 &&
             plan.capacity.drawRunRecords == 1 &&
             plan.capacity.clearRecords == 1 &&
@@ -537,9 +544,9 @@ void blockersSelectOneWholeRawFallbackLane() {
 void partialConstantDeltasDoNotInflateSnapshotCapacity() {
   std::vector<RecordSpec> records;
   for (std::uint32_t i = 0; i < 16; ++i) {
-    records.push_back(partialFloatConstantRecord(
+    records.push_back(partialConstantRecord(
         D9C_COMMAND_RECORD_SET_VS_CONST_F, i));
-    records.push_back(partialFloatConstantRecord(
+    records.push_back(partialConstantRecord(
         D9C_COMMAND_RECORD_SET_PS_CONST_F, i));
   }
   records.push_back(drawRecord());
@@ -1072,6 +1079,47 @@ void directChunkSlotWholeRawDispositionsAreTypedAndPreEffect() {
             eligible, oversize, false) ==
             DirectChunkSlotReplayDisposition::LegacyOversized,
         "oversized final storage retains its dedicated Legacy disposition");
+
+  const std::array oversizedDirectRecords{
+      drawRecord(),
+      partialConstantRecord(D9C_COMMAND_RECORD_SET_VS_CONST_F, 0u),
+      partialConstantRecord(D9C_COMMAND_RECORD_SET_VS_CONST_I, 1u),
+      partialConstantRecord(D9C_COMMAND_RECORD_SET_VS_CONST_B, 2u),
+      partialConstantRecord(D9C_COMMAND_RECORD_SET_PS_CONST_F, 0u),
+      partialConstantRecord(D9C_COMMAND_RECORD_SET_PS_CONST_I, 1u),
+      partialConstantRecord(D9C_COMMAND_RECORD_SET_PS_CONST_B, 2u),
+      drawRecord(D9C_COMMAND_RECORD_APPLY_STATE), drawRecord()};
+  const auto oversizedDirectFixture =
+      makeValidatedFixture(oversizedDirectRecords);
+  const auto oversizedDirect = dxmt9::d3d9::planCpuReadyChunk(
+      oversizedDirectFixture.view(), 38,
+      {.pageSize = dxmt9::core::kSourcePayloadByteAlignment,
+       .maxPages = 1u});
+  check(oversizedDirect.lane == ReplayLane::Legacy &&
+            oversizedDirect.reason == ReplayReason::Oversize &&
+            oversizedDirect.directChunkSlotCandidate() &&
+            oversizedDirect.directSlotLayout->pageCount > 1u,
+        "oversized non-UP Draw/APPLY_STATE raw retains one final-slot plan");
+  check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+            oversizedDirectFixture.view(), oversizedDirect, false) ==
+            DirectChunkSlotReplayDisposition::DirectOversized,
+        "all VS/PS F/I/B constants in the narrow oversized envelope select Direct");
+  check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+            oversizedDirectFixture.view(), oversizedDirect,
+            /*captureOrTrace=*/true) ==
+            DirectChunkSlotReplayDisposition::LegacyCaptureOrTrace,
+        "capture/trace remains fail-closed for oversized direct candidates");
+
+  const auto oversizedMixedFixture = makeValidatedFixture(
+      std::array{drawRecord(), clearRecord(1)});
+  const auto oversizedMixed = dxmt9::d3d9::planCpuReadyChunk(
+      oversizedMixedFixture.view(), 39,
+      {.pageSize = dxmt9::core::kSourcePayloadByteAlignment,
+       .maxPages = 1u});
+  check(dxmt9::d3d9::classifyDirectChunkSlotReplay(
+            oversizedMixedFixture.view(), oversizedMixed, false) ==
+            DirectChunkSlotReplayDisposition::LegacyOversized,
+        "oversized Clear-containing raw remains fail-closed Legacy");
 
   const D9CCommandChunkWireRecordHeader unknownHeader{.type = 0xffffu};
   const ImportedChunkView invalid{

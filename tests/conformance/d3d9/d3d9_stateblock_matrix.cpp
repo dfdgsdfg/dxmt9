@@ -660,18 +660,43 @@ void stateblock_state_management_matrix() {
   stateblock_reject_foreign_wrapper();
 }
 
+// Fault-matrix entry point used by the canonical auxiliary runner.  Keep the
+// established nine StateBlock points as-is; this dispatch only makes the
+// fixture's one-shot process contract explicit and rejects unknown selectors
+// before any COM work.
+void stateblock_state_management_fault_matrix() {
+  const char *fault = std::getenv("DXMT9_PE_STATEBLOCK_FAULT");
+  if (!fault || !*fault) {
+    std::printf("SKIP:stateblock_fault_matrix: fault selector is unset\n");
+    ++skips;
+    return;
+  }
+  const bool known = fault_is(fault, "capture_pre") ||
+      fault_is(fault, "apply_pre") || fault_is(fault, "end_pre") ||
+      fault_is(fault, "alloc_pre") || fault_is(fault, "bridge_pre") ||
+      fault_is(fault, "capture_entered") ||
+      fault_is(fault, "apply_entered") || fault_is(fault, "end_entered") ||
+      fault_is(fault, "bridge_entered");
+  if (!known) {
+    std::printf("FAIL:stateblock_fault_matrix: unknown fault selector\n");
+    ++failures;
+    return;
+  }
+  if (fault_is(fault, "capture_pre") || fault_is(fault, "apply_pre") ||
+      fault_is(fault, "end_pre") || fault_is(fault, "alloc_pre") ||
+      fault_is(fault, "bridge_pre")) {
+    stateblock_fault_pre(fault);
+  } else {
+    stateblock_fault_entered(fault);
+  }
+}
+
 }  // namespace
 
 int main() {
   const char *fault = std::getenv("DXMT9_PE_STATEBLOCK_FAULT");
   if (fault && *fault) {
-    if (fault_is(fault, "capture_pre") || fault_is(fault, "apply_pre") ||
-        fault_is(fault, "end_pre") || fault_is(fault, "alloc_pre") ||
-        fault_is(fault, "bridge_pre")) {
-      stateblock_fault_pre(fault);
-    } else {
-      stateblock_fault_entered(fault);
-    }
+    stateblock_state_management_fault_matrix();
   } else {
     stateblock_state_management_matrix();
   }

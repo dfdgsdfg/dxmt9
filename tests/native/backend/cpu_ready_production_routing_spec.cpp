@@ -741,6 +741,17 @@ RecordSpec applyRenderStateRecord(std::uint32_t state,
   };
 }
 
+RecordSpec floatConstantRecord(std::uint32_t type,
+                               std::uint32_t startRegister) {
+  const D9CCommandChunkWireSetConst fixed{
+      .startRegister = startRegister,
+      .registerCount = 1u,
+  };
+  auto payload = bytesOf(fixed);
+  payload.resize(payload.size() + 4u * sizeof(float));
+  return {.type = type, .payload = std::move(payload)};
+}
+
 RecordSpec drawRecord(const D9CWireObjectIdentity& bufferIdentity,
                       std::uint32_t streamHandleIndex = 0u) {
   D9CCommandChunkWireDrawHeader draw{
@@ -1639,6 +1650,63 @@ void ordinaryDrawApplyStateDrawUsesCarrierFreeDirectPath() {
   dxmt9c_buffer_release(buffer);
 }
 
+void ordinaryOversizedDrawSourceUsesCarrierFreeLifecycle() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr, "oversized direct fixture buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+  std::vector<RecordSpec> records;
+  records.reserve(640u);
+  std::uint32_t nextHandleIndex = 0u;
+  records.push_back(
+      floatConstantRecord(D9C_COMMAND_RECORD_SET_VS_CONST_F, 0u));
+  for (std::size_t i = 0; i < 640u; ++i) {
+    records.push_back(drawRecord(identity, nextHandleIndex++));
+    if (i % 16u == 0u) {
+      records.push_back(applyRenderStateRecord(
+          RS_TEXTURE_FACTOR, static_cast<std::uint32_t>(i)));
+    }
+    if (i == 320u) {
+      records.push_back(
+          floatConstantRecord(D9C_COMMAND_RECORD_SET_PS_CONST_F, 0u));
+    }
+  }
+  const auto wire = makeWireFixture(records);
+  dxmt9::d3d9::ImportedChunkView imported;
+  const auto validation =
+      validateCommandChunk(wire.bytes, wire.envelope, &imported);
+  check(validation.valid(),
+        "oversized direct Draw/APPLY_STATE fixture validates");
+  const auto plan = dxmt9::d3d9::planCpuReadyChunk(imported, 95u);
+  check(plan.reason == dxmt9::d3d9::ReplayReason::Oversize &&
+            plan.directChunkSlotCandidate() &&
+            dxmt9::d3d9::classifyDirectChunkSlotReplay(
+                imported, plan, /*captureOrTrace=*/false) ==
+                dxmt9::d3d9::DirectChunkSlotReplayDisposition::DirectOversized,
+        "oversized Draw/APPLY_STATE source selects the narrow direct envelope");
+
+  auto raw = makeRaw(wire, 95u, false, &registry);
+  raw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
+            fixture.routing->drawCalls == 640u &&
+            fixture.routing->drawBatchCalls == 0u,
+        "oversized source bypasses DrawRunSubmission exactly once");
+  fixture.routing->present(SwapDesc{});
+  const auto completion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+  check(completion.dequeued && !completion.arena && completion.submitted &&
+            completion.completed && completion.reclaimed &&
+            completion.commandCount != 0u,
+        "oversized direct source retains one FIFO completion identity");
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(buffer);
+}
+
 void drawApplyStateDrawWithPresentUsesDirectPresentTail() {
   RuntimeFixture fixture(/*rejectAfterClear=*/false,
                          /*segmentSerial=*/false,
@@ -2327,6 +2395,7 @@ int main() {
     ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics();
     directAdmissionRejectionPreservesLegacyDrawBatchGrouping();
     ordinaryChunkSlotSameRawCommitFailureDoesNotRetryLegacy();
+    ordinaryOversizedDrawSourceUsesCarrierFreeLifecycle();
     directChunkSlotRollbackAndPostEffectFailureAreFailSafe();
     transactionalArenaFailureInjectionDisposition();
     stateOnlyRawMutatesWithoutTicket();

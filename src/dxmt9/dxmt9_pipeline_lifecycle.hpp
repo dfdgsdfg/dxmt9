@@ -3,10 +3,14 @@
 #include "dxmt9/progress_predicates.hpp"
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <memory>
+#include <mutex>
 #include <span>
+#include <type_traits>
 
 namespace dxmt9::queue {
 
@@ -110,6 +114,7 @@ enum class PipelineControl : std::uint8_t {
   X(FinalOwned, Encoding, SelectedParallel, Advance, Normal)                  \
   X(FinalOwned, Encoding, Queue, Advance, Normal)                              \
   X(Encoding, Encoding, Queue, ChildJoin, Normal)                             \
+  X(Encoding, Encoding, SelectedParallel, ChildJoin, Normal)                 \
   X(Encoding, GPUInFlight, Receipt, Advance, Normal)                          \
   X(Encoding, GPUInFlight, SelectedParallel, Advance, Normal)                \
   X(Encoding, GPUInFlight, GpuSubmission, Advance, Normal)                    \
@@ -186,6 +191,86 @@ constexpr bool pipelineEncodeOwnerValid(PipelineOwner owner) noexcept {
       owner == PipelineOwner::SelectedParallel;
 }
 
+// Certified post-join summary carried from the bounded selected-parallel
+// encoder into the queue observer. This is deliberately not a capability: it
+// cannot resolve Tape storage or authorize completion/reclaim. A valid record
+// means the source crossed the encoder's pre-effect boundary and reports the
+// exact child cardinality/join prefix observed at the backend join boundary.
+// The encoder publishes these values through the sidecar's mutex; the queue
+// observer consumes them after the matching lock/unlock (release/acquire)
+// handoff. This documents the bounded visibility assumption only; it is not
+// an unbounded atomic-order proof.
+struct PipelineLifecycleFacts {
+  bool valid = false;
+  bool selectedParallel = false;
+  bool effectBoundaryCrossed = false;
+  PipelineOwner encodeOwner = PipelineOwner::SerialEncode;
+  std::uint32_t childTotal = 1;
+  std::uint32_t joinedChildren = 0;
+  std::uint64_t receiptSeqId = 0;
+  std::uint64_t receiptGeneration = 0;
+  std::uint32_t receiptSlot = std::numeric_limits<std::uint32_t>::max();
+
+  constexpr bool receiptIdentityValid() const noexcept {
+    return receiptSeqId != 0u && receiptGeneration != 0u &&
+        receiptSlot != std::numeric_limits<std::uint32_t>::max();
+  }
+
+  constexpr bool shapeValid() const noexcept {
+    if (!valid || !pipelineEncodeOwnerValid(encodeOwner) || childTotal == 0u ||
+        joinedChildren > childTotal ||
+        (selectedParallel != (encodeOwner == PipelineOwner::SelectedParallel))) {
+      return false;
+    }
+    if (selectedParallel && (childTotal < 2u || !effectBoundaryCrossed)) {
+      return false;
+    }
+    const bool anyReceipt = receiptSeqId != 0u || receiptGeneration != 0u ||
+        receiptSlot != std::numeric_limits<std::uint32_t>::max();
+    return !anyReceipt || receiptIdentityValid();
+  }
+
+  constexpr PipelineLifecycleFacts withJoined(
+      std::uint32_t joined) const noexcept {
+    auto result = *this;
+    result.joinedChildren = joined;
+    return result;
+  }
+
+  constexpr PipelineLifecycleFacts withReceipt(
+      std::uint64_t seqId, std::uint64_t generation,
+      std::uint32_t slot) const noexcept {
+    auto result = *this;
+    result.receiptSeqId = seqId;
+    result.receiptGeneration = generation;
+    result.receiptSlot = slot;
+    return result;
+  }
+
+  friend constexpr bool operator==(const PipelineLifecycleFacts&,
+                                   const PipelineLifecycleFacts&) noexcept =
+      default;
+};
+
+using PipelinePostJoinSummary = PipelineLifecycleFacts;
+
+static_assert(std::is_trivially_copyable_v<PipelineLifecycleFacts>);
+static_assert(std::is_standard_layout_v<PipelineLifecycleFacts>);
+
+constexpr bool pipelineChildJoinMayPublish(
+    const PipelineLifecycleFacts& facts, std::uint32_t joined,
+    std::uint32_t outstandingBorrows) noexcept {
+  return facts.shapeValid() && facts.selectedParallel &&
+      joined != 0u && joined <= facts.childTotal &&
+      outstandingBorrows <= facts.childTotal &&
+      joined == facts.childTotal - outstandingBorrows;
+}
+
+constexpr bool pipelineLifecycleFactsConsistent(
+    const PipelineLifecycleFacts& facts) noexcept {
+  return !facts.valid || facts.shapeValid();
+}
+
 struct PipelineIdentity {
   std::uint64_t workId = 0;
   std::uint64_t sourceOrdinal = 0;
@@ -200,6 +285,173 @@ struct PipelineIdentity {
   }
 
   constexpr bool operator==(const PipelineIdentity&) const noexcept = default;
+};
+
+enum class PipelineLifecycleSidecarResult : std::uint8_t {
+  Stored,
+  InvalidIdentity,
+  BoundedOverflow,
+  StaleGeneration,
+};
+
+struct PipelineLifecycleSidecarKey {
+  std::uint64_t seqId = 0;
+  std::uint64_t generation = 0;
+
+  constexpr bool valid() const noexcept {
+    return seqId != 0u && generation != 0u;
+  }
+  constexpr bool operator==(const PipelineLifecycleSidecarKey&) const noexcept =
+      default;
+};
+
+// Cold, bounded sidecar for the production observer. Queue/source records keep
+// their existing DOD shape; the sidecar is allocated with the opt-in observer.
+// Its key includes the Tape storage generation so a recycled seqId can never
+// inherit facts from the prior source generation.
+struct PipelineLifecycleSidecarEntry {
+  PipelineLifecycleSidecarKey key{};
+  PipelineIdentity identity{};
+  PipelineLifecycleFacts facts{};
+  bool hasIdentity = false;
+  bool hasFacts = false;
+};
+
+class PipelineLifecycleSidecar final {
+ public:
+  PipelineLifecycleSidecarResult recordFacts(
+      std::uint64_t seqId, std::uint64_t generation,
+      const PipelineLifecycleFacts& facts) noexcept {
+    const PipelineLifecycleSidecarKey key{seqId, generation};
+    if (!key.valid() || !facts.valid || !facts.shapeValid()) {
+      return PipelineLifecycleSidecarResult::InvalidIdentity;
+    }
+    std::lock_guard lock(mutex_);
+    auto* entry = findLocked(key);
+    if (!entry) {
+      if (findSeqLocked(seqId)) {
+        return PipelineLifecycleSidecarResult::StaleGeneration;
+      }
+      entry = allocateLocked(seqId, generation);
+    }
+    if (!entry) return PipelineLifecycleSidecarResult::BoundedOverflow;
+    entry->key = key;
+    entry->facts = facts;
+    entry->hasFacts = true;
+    return PipelineLifecycleSidecarResult::Stored;
+  }
+
+  PipelineLifecycleSidecarResult recordIdentity(
+      const PipelineIdentity& identity) noexcept {
+    const PipelineLifecycleSidecarKey key{identity.seqId, identity.generation};
+    if (!key.valid() || !identity.valid()) {
+      return PipelineLifecycleSidecarResult::InvalidIdentity;
+    }
+    std::lock_guard lock(mutex_);
+    auto* entry = findLocked(key);
+    if (!entry) {
+      if (findSeqLocked(identity.seqId)) {
+        return PipelineLifecycleSidecarResult::StaleGeneration;
+      }
+      entry = allocateLocked(identity.seqId, identity.generation);
+    }
+    if (!entry) return PipelineLifecycleSidecarResult::BoundedOverflow;
+    if (entry->hasIdentity && entry->identity != identity) {
+      return PipelineLifecycleSidecarResult::StaleGeneration;
+    }
+    entry->key = key;
+    entry->identity = identity;
+    entry->hasIdentity = true;
+    return PipelineLifecycleSidecarResult::Stored;
+  }
+
+  bool lookup(std::uint64_t seqId, std::uint64_t generation,
+              PipelineIdentity& identity,
+              PipelineLifecycleFacts& facts) const noexcept {
+    std::lock_guard lock(mutex_);
+    const auto* entry = generation != 0u
+        ? findLocked(PipelineLifecycleSidecarKey{seqId, generation})
+        : findUniqueSeqLocked(seqId);
+    if (!entry) return false;
+    if (entry->hasIdentity) identity = entry->identity;
+    if (entry->hasFacts) facts = entry->facts;
+    return entry->hasIdentity || entry->hasFacts;
+  }
+
+  bool erase(const PipelineIdentity& identity) noexcept {
+    std::lock_guard lock(mutex_);
+    auto* entry = findLocked(PipelineLifecycleSidecarKey{
+        identity.seqId, identity.generation});
+    if (!entry) return false;
+    *entry = {};
+    ++eraseCount_;
+    return true;
+  }
+
+  void clear() noexcept {
+    std::lock_guard lock(mutex_);
+    for (auto& entry : entries_) entry = {};
+    ++clearCount_;
+  }
+
+  std::uint32_t overflowCount() const noexcept {
+    return overflowCount_.load(std::memory_order_relaxed);
+  }
+  std::uint32_t eraseCount() const noexcept { return eraseCount_; }
+  std::uint32_t clearCount() const noexcept { return clearCount_; }
+
+ private:
+  static constexpr std::size_t kCapacity = 256;
+
+  PipelineLifecycleSidecarEntry* findLocked(
+      PipelineLifecycleSidecarKey key) noexcept {
+    for (auto& entry : entries_) {
+      if (entry.key == key) return &entry;
+    }
+    return nullptr;
+  }
+  const PipelineLifecycleSidecarEntry* findLocked(
+      PipelineLifecycleSidecarKey key) const noexcept {
+    for (const auto& entry : entries_) {
+      if (entry.key == key) return &entry;
+    }
+    return nullptr;
+  }
+  PipelineLifecycleSidecarEntry* findSeqLocked(
+      std::uint64_t seqId) noexcept {
+    for (auto& entry : entries_) {
+      if (entry.key.seqId == seqId) return &entry;
+    }
+    return nullptr;
+  }
+  const PipelineLifecycleSidecarEntry* findUniqueSeqLocked(
+      std::uint64_t seqId) const noexcept {
+    const PipelineLifecycleSidecarEntry* result = nullptr;
+    for (const auto& entry : entries_) {
+      if (entry.key.seqId != seqId) continue;
+      if (result) return nullptr;
+      result = &entry;
+    }
+    return result;
+  }
+  PipelineLifecycleSidecarEntry* allocateLocked(
+      std::uint64_t seqId, std::uint64_t generation) noexcept {
+    for (auto& entry : entries_) {
+      if (!entry.key.valid()) {
+        entry = PipelineLifecycleSidecarEntry{};
+        entry.key = {seqId, generation};
+        return &entry;
+      }
+    }
+    overflowCount_.fetch_add(1u, std::memory_order_relaxed);
+    return nullptr;
+  }
+
+  mutable std::mutex mutex_{};
+  std::array<PipelineLifecycleSidecarEntry, kCapacity> entries_{};
+  mutable std::atomic<std::uint32_t> overflowCount_{0};
+  std::uint32_t eraseCount_ = 0;
+  std::uint32_t clearCount_ = 0;
 };
 
 struct PipelineQueueSnapshot {
@@ -242,6 +494,7 @@ struct PipelineLifecycleEvent {
   std::uint32_t joinedChildren = 0;
   std::uint32_t totalChildren = 0;
   bool completionAuthority = false;
+  PipelineLifecycleFacts lifecycleFacts{};
   // Physical batch correlation is diagnostic only; it never creates a
   // scheduling boundary.  A source event remains independently
   // identity-qualified by PipelineIdentity.
@@ -297,6 +550,22 @@ constexpr bool pipelineStageOwnsQueueCredit(PipelineStage stage) noexcept {
   return stage == PipelineStage::ReplayBorrowed ||
       stage == PipelineStage::FinalOwned || stage == PipelineStage::Encoding ||
       stage == PipelineStage::GPUInFlight || stage == PipelineStage::Completed;
+}
+
+constexpr bool pipelineCheckedFrontierAdd(std::uint64_t base,
+                                          std::uint64_t delta,
+                                          std::uint64_t& result) noexcept {
+  if (delta > std::numeric_limits<std::uint64_t>::max() - base) return false;
+  result = base + delta;
+  return true;
+}
+
+constexpr bool pipelineCheckedOccupancyAdd(std::uint32_t base,
+                                           std::uint64_t delta,
+                                           std::uint32_t& result) noexcept {
+  if (delta > std::numeric_limits<std::uint32_t>::max() - base) return false;
+  result = base + static_cast<std::uint32_t>(delta);
+  return true;
 }
 
 constexpr bool pipelinePublicationMayCommit(
@@ -487,6 +756,7 @@ struct PipelineLifecycleRecord {
   std::uint32_t joinedChildren = 0;
   std::uint32_t totalChildren = 0;
   bool completionAuthority = false;
+  PipelineLifecycleFacts lifecycleFacts{};
   bool payloadRetired = false;
   bool occupied = false;
   bool terminal = false;
@@ -706,6 +976,19 @@ constexpr PipelineObservationError validateTransition(
                                  event.disposition, event.control)) {
     return PipelineObservationError::InvalidDisposition;
   }
+  if (event.lifecycleFacts.valid && !event.lifecycleFacts.shapeValid()) {
+    return PipelineObservationError::InvalidDisposition;
+  }
+  if (event.lifecycleFacts.receiptIdentityValid() &&
+      (event.lifecycleFacts.receiptSeqId != event.identity.seqId ||
+       event.lifecycleFacts.receiptGeneration != event.identity.generation)) {
+    return PipelineObservationError::InvalidIdentity;
+  }
+  if (record.lifecycleFacts.valid && event.lifecycleFacts.valid &&
+      record.lifecycleFacts.encodeOwner !=
+          event.lifecycleFacts.encodeOwner) {
+    return PipelineObservationError::InvalidDisposition;
+  }
   if (!pipelineOwnerMatchesTransition(event.owner, event.from, event.to,
                                        event.disposition)) {
     return PipelineObservationError::InvalidDisposition;
@@ -751,6 +1034,12 @@ constexpr PipelineObservationError validateTransition(
         event.joinedChildren != record.joinedChildren + 1 ||
         event.joinedChildren > event.totalChildren ||
         event.outstandingBorrows + 1 != record.outstandingBorrows) {
+      return PipelineObservationError::InvalidDisposition;
+    }
+    if (event.lifecycleFacts.valid &&
+        !pipelineChildJoinMayPublish(event.lifecycleFacts,
+                                     event.joinedChildren,
+                                     event.outstandingBorrows)) {
       return PipelineObservationError::InvalidDisposition;
     }
     return PipelineObservationError::None;
@@ -826,6 +1115,11 @@ constexpr PipelineObservationError validateTransition(
       event.disposition == PipelineDisposition::Advance &&
       event.outstandingBorrows != 0 && event.totalChildren != 0 &&
       event.joinedChildren == 0) {
+    if (event.lifecycleFacts.valid &&
+        (event.lifecycleFacts.childTotal != event.totalChildren ||
+         event.lifecycleFacts.joinedChildren != 0u)) {
+      return PipelineObservationError::InvalidDisposition;
+    }
     return PipelineObservationError::None;
   }
   if (event.from == PipelineStage::Encoding &&
@@ -837,6 +1131,13 @@ constexpr PipelineObservationError validateTransition(
     }
     if (event.outstandingBorrows != 0) {
       return PipelineObservationError::OutstandingBorrow;
+    }
+    if (event.lifecycleFacts.valid &&
+        (event.lifecycleFacts.joinedChildren != event.joinedChildren ||
+         event.lifecycleFacts.childTotal != event.totalChildren ||
+         (event.lifecycleFacts.selectedParallel &&
+          !event.lifecycleFacts.effectBoundaryCrossed))) {
+      return PipelineObservationError::CompletionBeforeJoin;
     }
     return event.completionAuthority
         ? PipelineObservationError::None
@@ -992,6 +1293,7 @@ constexpr PipelineObservationError reducePipelineLifecycleEvent(
   record->joinedChildren = event.joinedChildren;
   record->totalChildren = event.totalChildren;
   record->completionAuthority = event.completionAuthority;
+  record->lifecycleFacts = event.lifecycleFacts;
   record->occupied = pipelineStageOwnsQueueCredit(event.to);
   record->terminal = event.to == PipelineStage::Reclaimed;
   if (event.disposition == PipelineDisposition::AdmissionWait) {
@@ -1017,6 +1319,19 @@ struct PipelineLifecycleObserverSink {
   using FinalizeFn = void (*)(void*, std::uint64_t,
                               std::uint32_t) noexcept;
   FinalizeFn finalizeFn = nullptr;
+  // These callbacks address the nullable cold facts sidecar. They are not
+  // consulted by queue/source records on the disabled path.
+  using RecordFactsFn = void (*)(void*, std::uint64_t, std::uint64_t,
+                                 const PipelineLifecycleFacts&) noexcept;
+  RecordFactsFn recordFactsFn = nullptr;
+  using RecordIdentityFn = void (*)(void*, const PipelineIdentity&) noexcept;
+  RecordIdentityFn recordIdentityFn = nullptr;
+  using LookupFn = bool (*)(void*, std::uint64_t, std::uint64_t,
+                            PipelineIdentity&,
+                            PipelineLifecycleFacts&) noexcept;
+  LookupFn lookupFn = nullptr;
+  using ClearFn = void (*)(void*) noexcept;
+  ClearFn clearFn = nullptr;
 
   explicit constexpr operator bool() const noexcept { return fn != nullptr; }
 };
@@ -1047,8 +1362,18 @@ inline void emitPipelineControlObservation(
   }
 }
 
+inline void clearPipelineLifecycleSidecar(
+    PipelineLifecycleObserverSink sink) noexcept {
+  if (sink.clearFn) sink.clearFn(sink.context);
+}
+
 class PipelineLifecycleObserver {
  public:
+  explicit PipelineLifecycleObserver(bool productionEnabled = false)
+      : sidecar_(productionEnabled
+                     ? std::make_unique<PipelineLifecycleSidecar>()
+                     : nullptr) {}
+
   void observe(const PipelineLifecycleEvent& event) noexcept {
     if (error_ != PipelineObservationError::None) {
       return;
@@ -1093,12 +1418,19 @@ class PipelineLifecycleObserver {
         error_ = validation;
       }
     }
+    if (event.to == PipelineStage::Reclaimed && sidecar_) {
+      sidecar_->erase(event.identity);
+    }
   }
 
   PipelineLifecycleObserverSink productionSink() noexcept {
     return {.context = this,
             .fn = &observeOwnerFromSink,
-            .finalizeFn = &finalizeFromSink};
+            .finalizeFn = &finalizeFromSink,
+            .recordFactsFn = &recordFactsFromSink,
+            .recordIdentityFn = &recordIdentityFromSink,
+            .lookupFn = &lookupFromSink,
+            .clearFn = &clearSidecarFromSink};
   }
 
   // The queue owner calls this when the actual physical reclaim ledger is
@@ -1160,13 +1492,61 @@ class PipelineLifecycleObserver {
         physicalBatchId, batchCount);
   }
 
+  static void recordFactsFromSink(
+      void* context, std::uint64_t seqId, std::uint64_t generation,
+      const PipelineLifecycleFacts& facts) noexcept {
+    auto* observer = static_cast<PipelineLifecycleObserver*>(context);
+    if (!observer->sidecar_) return;
+    const auto result = observer->sidecar_->recordFacts(seqId, generation, facts);
+    if (result == PipelineLifecycleSidecarResult::BoundedOverflow) {
+      observer->error_ = PipelineObservationError::BoundedObserverOverflow;
+    } else if (result == PipelineLifecycleSidecarResult::StaleGeneration) {
+      observer->error_ = PipelineObservationError::StaleGeneration;
+    } else if (result == PipelineLifecycleSidecarResult::InvalidIdentity) {
+      observer->error_ = PipelineObservationError::InvalidIdentity;
+    }
+  }
+
+  static void recordIdentityFromSink(
+      void* context, const PipelineIdentity& identity) noexcept {
+    auto* observer = static_cast<PipelineLifecycleObserver*>(context);
+    if (!observer->sidecar_) return;
+    const auto result = observer->sidecar_->recordIdentity(identity);
+    if (result == PipelineLifecycleSidecarResult::BoundedOverflow) {
+      observer->error_ = PipelineObservationError::BoundedObserverOverflow;
+    } else if (result == PipelineLifecycleSidecarResult::StaleGeneration) {
+      observer->error_ = PipelineObservationError::StaleGeneration;
+    } else if (result == PipelineLifecycleSidecarResult::InvalidIdentity) {
+      observer->error_ = PipelineObservationError::InvalidIdentity;
+    }
+  }
+
+  static bool lookupFromSink(
+      void* context, std::uint64_t seqId, std::uint64_t generation,
+      PipelineIdentity& identity,
+      PipelineLifecycleFacts& facts) noexcept {
+    auto* observer = static_cast<PipelineLifecycleObserver*>(context);
+    return observer->sidecar_ &&
+        observer->sidecar_->lookup(seqId, generation, identity, facts);
+  }
+
   static void observeControlFromSink(
       void* context, const PipelineControlObservation& observation) noexcept {
-    static_cast<PipelineLifecycleObserver*>(context)->observeControl(observation);
+    auto* observer = static_cast<PipelineLifecycleObserver*>(context);
+    observer->observeControl(observation);
+    if (pipelineControlIsTerminal(observation.control)) {
+      clearSidecarFromSink(observer);
+    }
+  }
+
+  static void clearSidecarFromSink(void* context) noexcept {
+    auto* observer = static_cast<PipelineLifecycleObserver*>(context);
+    if (observer->sidecar_) observer->sidecar_->clear();
   }
 
   PipelineLifecycleObserverState state_{};
   PipelineObservationError error_ = PipelineObservationError::None;
+  std::unique_ptr<PipelineLifecycleSidecar> sidecar_{};
 };
 
 }  // namespace dxmt9::queue

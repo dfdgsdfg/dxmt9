@@ -44,6 +44,10 @@ under `tests/meson.build`.
   requires every concrete source path to exist. Historical leaves remain
   outside the default scope; an explicitly marked `outdated:` leaf records
   that legacy evidence debt instead of silently making it current.
+- `audit_mutation_composition_report.py` — strictly parses finalized observer
+  windows, preserving mutation bytes, typed barriers, first-use distances,
+  every provisional/final rejection reason, terminal conservation, and the
+  weighted candidate CPU gate.
 - `test_render_tape_cli.py` — produces a bounded v2 frame-tape fixture through
   the native builder and checks validator/inspect success with a verified
   mutation blob, digest-named bundle pack/validation, corrupted-header

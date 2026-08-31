@@ -300,6 +300,54 @@ struct SegmentAccumulator {
   bool active = false;
 };
 
+// The ordinary direct ChunkSlot path has no Arena segment boundary to carry
+// an oversized source.  Keep this independent structural pass deliberately
+// narrow: only non-UP draws and state/constants may use the final-slot
+// representation.  All other record families retain their existing
+// pre-effect fallback disposition.
+std::optional<core::SourcePayloadLayout> makeDirectSlotCapacity(
+    const ImportedChunkView& imported, std::size_t pageSize,
+    core::SourcePayloadCapacity& capacity) noexcept {
+  std::size_t drawCount = 0;
+  bool sawDraw = false;
+  for (std::size_t i = 0; i < imported.records.size(); ++i) {
+    const auto record = imported.record(i);
+    if (record.header.type != imported.records[i].type ||
+        record.payload.size() != imported.records[i].payloadSize) {
+      return std::nullopt;
+    }
+    switch (record.header.type) {
+    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+      if (addDirectRecordCapacity(capacity, drawCount, record) !=
+          DirectRecordResult::GpuProducing) {
+        return std::nullopt;
+      }
+      sawDraw = true;
+      break;
+    case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+    case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+    case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_B:
+    case D9C_COMMAND_RECORD_APPLY_STATE:
+      if (addDirectRecordCapacity(capacity, drawCount, record) !=
+          DirectRecordResult::StateOnly) {
+        return std::nullopt;
+      }
+      break;
+    default:
+      return std::nullopt;
+    }
+  }
+  if (!sawDraw || !addDerivedDrawCapacity(capacity, drawCount)) {
+    return std::nullopt;
+  }
+  return core::makeSourcePayloadLayout(
+      capacity, pageSize, std::numeric_limits<std::uint32_t>::max());
+}
+
 }  // namespace
 
 CpuReadyPlan planCpuReadyChunk(
@@ -384,6 +432,19 @@ CpuReadyPlan planCpuReadyChunk(
   }
   const std::size_t maxPagesPerSource =
       std::min(options.maxPages, options.maxPagesPerSource);
+  const auto oversizedFallback = [&]() noexcept {
+    auto result = fallback(rawOrdinal, ReplayLane::Legacy,
+                           ReplayReason::Oversize);
+    core::SourcePayloadCapacity directSlotCapacity{};
+    const auto directSlotLayout = makeDirectSlotCapacity(
+        imported, options.pageSize, directSlotCapacity);
+    if (directSlotLayout) {
+      result.directSlotCapacity = directSlotCapacity;
+      result.directSlotLayout = directSlotLayout;
+      result.directSlotSingleSource = true;
+    }
+    return result;
+  };
   std::size_t totalDrawCount = 0;
   SegmentAccumulator current{};
   bool sawPresent = false;
@@ -487,8 +548,7 @@ CpuReadyPlan planCpuReadyChunk(
     }
 
     if (current.active && !appendSegment(current, false)) {
-      return fallback(rawOrdinal, ReplayLane::Legacy,
-                      ReplayReason::Oversize);
+      return oversizedFallback();
     }
     if (current.active) {
       nextSegmentRecordIndex = current.lastRecordIndex + 1u;
@@ -514,8 +574,7 @@ CpuReadyPlan planCpuReadyChunk(
             options.maxOrdinaryPagesPerSegment) {
       if (indivisibleLayout->pageCount > maxPagesPerSource ||
           !appendSegment(indivisible, true)) {
-        return fallback(rawOrdinal, ReplayLane::Legacy,
-                        ReplayReason::Oversize);
+        return oversizedFallback();
       }
       nextSegmentRecordIndex = i + 1u;
       current = {};
@@ -533,8 +592,7 @@ CpuReadyPlan planCpuReadyChunk(
   if (current.active) {
     current.lastRecordIndex = imported.records.size() - 1u;
     if (!appendSegment(current, false)) {
-      return fallback(rawOrdinal, ReplayLane::Legacy,
-                      ReplayReason::Oversize);
+      return oversizedFallback();
     }
   } else if (nextSegmentRecordIndex < imported.records.size()) {
     auto& tail = plan.segments[plan.segmentCount - 1u];
@@ -556,8 +614,7 @@ CpuReadyPlan planCpuReadyChunk(
   std::size_t sourceSegmentBegin = 0;
   while (sourceSegmentBegin < plan.segmentCount) {
     if (plan.sourceCount >= options.maxSourcesPerChunk) {
-      return fallback(rawOrdinal, ReplayLane::Legacy,
-                      ReplayReason::Oversize);
+      return oversizedFallback();
     }
     std::size_t sourceSegmentEnd = sourceSegmentBegin;
     std::array<core::SourcePayloadLayout,
@@ -585,8 +642,7 @@ CpuReadyPlan planCpuReadyChunk(
       // Each physical block was checked against maxPagesPerSource when it
       // was formed. Reaching this branch means the bounded planner cannot
       // represent the requested source grouping.
-      return fallback(rawOrdinal, ReplayLane::Legacy,
-                      ReplayReason::Oversize);
+      return oversizedFallback();
     }
 
     const auto& first = plan.segments[sourceSegmentBegin];
@@ -653,6 +709,30 @@ DirectChunkSlotReplayDisposition classifyDirectChunkSlotReplay(
     return DirectChunkSlotReplayDisposition::InlineOrderedControl;
   }
   if (plan.reason == ReplayReason::Oversize) {
+    if (plan.directChunkSlotCandidate()) {
+      bool sawDraw = false;
+      for (const auto& record : imported.records) {
+        switch (record.type) {
+        case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+        case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+          sawDraw = true;
+          break;
+        case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+        case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+        case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+        case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+        case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+        case D9C_COMMAND_RECORD_SET_PS_CONST_B:
+        case D9C_COMMAND_RECORD_APPLY_STATE:
+          break;
+        default:
+          return DirectChunkSlotReplayDisposition::LegacyOversized;
+        }
+      }
+      if (sawDraw) {
+        return DirectChunkSlotReplayDisposition::DirectOversized;
+      }
+    }
     return DirectChunkSlotReplayDisposition::LegacyOversized;
   }
   const auto directPresentTailShape = [&]() noexcept {

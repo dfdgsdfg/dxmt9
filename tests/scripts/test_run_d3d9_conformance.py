@@ -56,6 +56,103 @@ class ChunkProcessFailureTests(unittest.TestCase):
 
         self.assertEqual(results, {})
 
+    def test_recorder_fault_fixture_environment_is_deterministic(self):
+        args = SimpleNamespace(
+            prefix=Path("/tmp/dxmt9-fault-prefix"),
+            pe_recorder_fault="capacity_pre_reserve",
+            stateblock_fault=None,
+            output=Path("/tmp/dxmt9-fault-matrix/recorder-capacity.json"),
+        )
+        with patch.dict(os.environ, {
+            "DXMT9_PE_CHUNK_MAX_BYTES": "999",
+            "DXMT9_RENDER_TAPE_CAPTURE": "1",
+            "DXMT9_RENDER_TAPE_OUTPUT_ROOT": "/tmp/stale-capture",
+        }, clear=True):
+            env = runner.build_env(args)
+        self.assertEqual(env["DXMT9_PE_CHUNK_MAX_BYTES"], "50")
+        self.assertNotIn("DXMT9_RENDER_TAPE_CAPTURE", env)
+        self.assertNotIn("DXMT9_RENDER_TAPE_OUTPUT_ROOT", env)
+
+    def test_recorder_capture_root_is_pe_absolute_wine_path(self):
+        args = SimpleNamespace(
+            prefix=Path("/tmp/dxmt9-fault-prefix"),
+            pe_recorder_fault="capture_throw",
+            stateblock_fault=None,
+            output=Path("/tmp/dxmt9-fault-matrix/recorder-capture.json"),
+        )
+        with patch.dict(os.environ, {}, clear=True):
+            env = runner.build_env(args)
+        self.assertEqual(env["DXMT9_RENDER_TAPE_CAPTURE"], "1")
+        self.assertEqual(
+            env["DXMT9_RENDER_TAPE_OUTPUT_ROOT"],
+            r"Z:\tmp\dxmt9-fault-matrix\recorder-capture-capture")
+
+    def test_recorder_aux_requires_reached_marker(self):
+        args = SimpleNamespace(wine=Path("/wine"),
+                               pe_recorder_fault="bridge_pre")
+        completed = SimpleNamespace(stdout="recorder_fault_matrix: passed\n",
+                                    stderr="", returncode=0)
+        with patch.object(runner, "build_env", return_value={}), \
+                patch.object(runner.subprocess, "run", return_value=completed):
+            verdicts, _, timed_out = runner.run_aux_exe(
+                args, Path("/fixture.exe"), ["run_fault"], 1.0)
+        self.assertFalse(timed_out)
+        self.assertEqual(verdicts, {"run_fault": "fail"})
+
+    def test_recorder_aux_accepts_reached_marker(self):
+        args = SimpleNamespace(wine=Path("/wine"),
+                               pe_recorder_fault="bridge_pre")
+        completed = SimpleNamespace(
+            stdout=("DXMT9_PE_RECORDER_FAULT_CONSUMED=bridge_pre\n"
+                    "REACHED:recorder_fault:bridge_pre\n"), stderr="",
+            returncode=0)
+        with patch.object(runner, "build_env", return_value={}), \
+                patch.object(runner.subprocess, "run", return_value=completed):
+            verdicts, _, timed_out = runner.run_aux_exe(
+                args, Path("/fixture.exe"), ["run_fault"], 1.0)
+        self.assertFalse(timed_out)
+        self.assertEqual(verdicts, {"run_fault": "pass"})
+
+    def test_recorder_aux_rejects_missing_consumption_receipt(self):
+        args = SimpleNamespace(wine=Path("/wine"),
+                               pe_recorder_fault="bridge_pre")
+        completed = SimpleNamespace(
+            stdout="REACHED:recorder_fault:bridge_pre\n", stderr="",
+            returncode=0)
+        with patch.object(runner, "build_env", return_value={}), \
+                patch.object(runner.subprocess, "run", return_value=completed):
+            verdicts, _, timed_out = runner.run_aux_exe(
+                args, Path("/fixture.exe"), ["run_fault"], 1.0)
+        self.assertFalse(timed_out)
+        self.assertEqual(verdicts, {"run_fault": "fail"})
+
+    def test_recorder_aux_rejects_wrong_consumption_receipt(self):
+        args = SimpleNamespace(wine=Path("/wine"),
+                               pe_recorder_fault="bridge_pre")
+        completed = SimpleNamespace(
+            stdout=("DXMT9_PE_RECORDER_FAULT_CONSUMED=bridge_entered\n"
+                    "REACHED:recorder_fault:bridge_pre\n"), stderr="",
+            returncode=0)
+        with patch.object(runner, "build_env", return_value={}), \
+                patch.object(runner.subprocess, "run", return_value=completed):
+            verdicts, _, timed_out = runner.run_aux_exe(
+                args, Path("/fixture.exe"), ["run_fault"], 1.0)
+        self.assertFalse(timed_out)
+        self.assertEqual(verdicts, {"run_fault": "fail"})
+
+    def test_recorder_aux_preserves_explicit_runtime_skip(self):
+        args = SimpleNamespace(wine=Path("/wine"),
+                               pe_recorder_fault="capture_throw")
+        completed = SimpleNamespace(
+            stdout="SKIP:run_fault: capture unsupported\n",
+            stderr="", returncode=77)
+        with patch.object(runner, "build_env", return_value={}), \
+                patch.object(runner.subprocess, "run", return_value=completed):
+            verdicts, _, timed_out = runner.run_aux_exe(
+                args, Path("/fixture.exe"), ["run_fault"], 1.0)
+        self.assertFalse(timed_out)
+        self.assertEqual(verdicts, {"run_fault": "skip"})
+
 
 class BuiltinStagingArchitectureTests(unittest.TestCase):
     @staticmethod

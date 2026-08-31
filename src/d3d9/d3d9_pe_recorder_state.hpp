@@ -69,6 +69,18 @@ struct PeRecorderState {
   }
   bool prepareChunkRecord(std::uint32_t type, std::size_t sizeHint,
                           bool capacityPreFlushed) noexcept {
+    return prepareChunkRecord(type, sizeHint, capacityPreFlushed,
+                              commandChunk.recordCount(),
+                              commandChunk.handleCount(),
+                              commandChunk.payloadBytes(),
+                              commandChunk.retainedObjectCount());
+  }
+  bool prepareChunkRecord(std::uint32_t type, std::size_t sizeHint,
+                          bool capacityPreFlushed,
+                          std::size_t recordCount,
+                          std::size_t handleCount,
+                          std::size_t payloadBytes,
+                          std::size_t retainedObjects) noexcept {
     if (chunkTransaction.phase() == RecorderChunkTransactionPhase::RolledBack) {
       chunkTransaction.discard();
     }
@@ -80,9 +92,8 @@ struct PeRecorderState {
       return false;
     }
     if (!chunkTransaction.noteRecord(
-            type, sizeHint, peState.pendingTicket(), commandChunk.recordCount(),
-            commandChunk.handleCount(), commandChunk.payloadBytes(),
-            commandChunk.retainedObjectCount())) {
+            type, sizeHint, peState.pendingTicket(), recordCount,
+            handleCount, payloadBytes, retainedObjects)) {
       return false;
     }
     return true;
@@ -105,29 +116,60 @@ struct PeRecorderState {
     if (!checkpointsMatch) return false;
     return chunkTransaction.recordEmitResult(accepted);
   }
+  bool settleSemanticEmitter(bool accepted,
+                             std::size_t recordCount,
+                             std::size_t handleCount,
+                             std::size_t payloadBytes,
+                             std::size_t retainedObjects) noexcept {
+    if (!chunkTransaction.activeRecord()) return false;
+    const auto recordCheckpoint = chunkTransaction.activeRecordCheckpoint();
+    const auto handleCheckpoint = chunkTransaction.activeHandleCheckpoint();
+    const auto payloadCheckpoint = chunkTransaction.activePayloadCheckpoint();
+    const auto retainerCheckpoint = chunkTransaction.activeRetainerCheckpoint();
+    const bool checkpointsMatch = accepted
+        ? recordCount > recordCheckpoint && handleCount >= handleCheckpoint &&
+          payloadBytes >= payloadCheckpoint && retainedObjects >= retainerCheckpoint
+        : recordCount == recordCheckpoint && handleCount == handleCheckpoint &&
+          payloadBytes == payloadCheckpoint && retainedObjects == retainerCheckpoint;
+    return checkpointsMatch && chunkTransaction.recordEmitResult(accepted);
+  }
   bool recordChunkSealedEvidence() noexcept {
     return chunkTransaction.recordSealedEvidence(
         commandChunk.recordCount(), commandChunk.handleCount(),
         commandChunk.payloadBytes(), commandChunk.retainedObjectCount());
+  }
+  bool recordChunkSealedEvidence(std::size_t recordCount,
+                                 std::size_t handleCount,
+                                 std::size_t payloadBytes,
+                                 std::size_t retainedObjects) noexcept {
+    return chunkTransaction.recordSealedEvidence(
+        recordCount, handleCount, payloadBytes, retainedObjects);
   }
   bool sealedEvidenceMatchesChunk() const noexcept {
     return chunkTransaction.sealedEvidenceMatches(
         commandChunk.recordCount(), commandChunk.handleCount(),
         commandChunk.payloadBytes(), commandChunk.retainedObjectCount());
   }
+  bool sealedEvidenceMatchesChunk(std::size_t recordCount,
+                                  std::size_t handleCount,
+                                  std::size_t payloadBytes,
+                                  std::size_t retainedObjects) const noexcept {
+    return chunkTransaction.sealedEvidenceMatches(
+        recordCount, handleCount, payloadBytes, retainedObjects);
+  }
 };
 
 // The transaction owner is intentionally part of the recorder footprint; its
 // phase/checkpoint state replaces the former split local observers.
 #if defined(_WIN64)
-static_assert(sizeof(PeRecorderState) == 104472u + sizeof(PeRecorderChunkTransaction));
-static_assert(sizeof(PeRecorderState) == 104648u);
+static_assert(sizeof(PeRecorderState) == 104480u + sizeof(PeRecorderChunkTransaction));
+static_assert(sizeof(PeRecorderState) == 104656u);
 #elif defined(_WIN32)
-static_assert(sizeof(PeRecorderState) == 103584u + sizeof(PeRecorderChunkTransaction));
-static_assert(sizeof(PeRecorderState) == 103704u);
+static_assert(sizeof(PeRecorderState) == 103592u + sizeof(PeRecorderChunkTransaction));
+static_assert(sizeof(PeRecorderState) == 103712u);
 #else
-static_assert(sizeof(PeRecorderState) == 104496u + sizeof(PeRecorderChunkTransaction));
-static_assert(sizeof(PeRecorderState) == 104672u);
+static_assert(sizeof(PeRecorderState) == 104504u + sizeof(PeRecorderChunkTransaction));
+static_assert(sizeof(PeRecorderState) == 104680u);
 #endif
 
 }  // namespace dxmt9::d3d9::pe

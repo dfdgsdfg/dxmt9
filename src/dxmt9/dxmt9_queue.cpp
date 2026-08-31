@@ -1801,8 +1801,19 @@ void QueueLifecycleController::observePipelineOwnerTransition(
   };
   auto source = sourceSlot(false);
   if (!source.valid()) source = sourceSlot(true);
-  if (!source.valid()) return;
+  PipelineIdentity sidecarIdentity{};
+  PipelineLifecycleFacts sidecarFacts{};
+  const bool sidecarFound =
+      submissionBinding_.pipelineLifecycleObserver.lookupFn &&
+      submissionBinding_.pipelineLifecycleObserver.lookupFn(
+          submissionBinding_.pipelineLifecycleObserver.context,
+          record.eventSeqId, source.valid() ? source.storage.generation : 0u,
+          sidecarIdentity, sidecarFacts);
+  const bool detachedReceipt = !source.valid() &&
+      sidecarFound && sidecarIdentity.valid();
+  if (!source.valid() && !detachedReceipt) return;
   std::optional<CpuReadySourceMetadata> metadata;
+  if (!detachedReceipt) {
     for (const auto state : {CpuReadyTape::State::Ready,
                              CpuReadyTape::State::TentativeRepresented,
                              CpuReadyTape::State::Encoding,
@@ -1814,11 +1825,13 @@ void QueueLifecycleController::observePipelineOwnerTransition(
         source.id, source.storage, state);
     if (metadata) break;
   }
+  }
   if ((!metadata || !metadata->valid()) && record.beforeMetadata) {
     metadata = record.beforeMetadata;
   }
-  if (!metadata || !metadata->valid()) return;
+  if ((!metadata || !metadata->valid()) && !detachedReceipt) return;
   std::optional<CpuReadyTape::PayloadKind> kind;
+  if (!detachedReceipt) {
     for (const auto state : {CpuReadyTape::State::Ready,
                              CpuReadyTape::State::TentativeRepresented,
                              CpuReadyTape::State::Encoding,
@@ -1831,11 +1844,16 @@ void QueueLifecycleController::observePipelineOwnerTransition(
         source.id, source.storage, state);
     if (kind) break;
   }
+  }
   if (!kind) kind = record.beforePayloadKind;
   const auto payloadKind = kind && *kind == CpuReadyTape::PayloadKind::Arena
       ? PipelinePayloadKind::Arena : PipelinePayloadKind::Legacy;
   auto effectivePayloadKind = payloadKind;
   bool hasPresent = false;
+  if (detachedReceipt) {
+    hasPresent = record.beforePresentOnly.value_or(false);
+  }
+  if (!detachedReceipt) {
     for (const auto state : {CpuReadyTape::State::Ready,
                              CpuReadyTape::State::TentativeRepresented,
                              CpuReadyTape::State::Encoding,
@@ -1859,18 +1877,28 @@ void QueueLifecycleController::observePipelineOwnerTransition(
     effectivePayloadKind = PipelinePayloadKind::PresentOnly;
     hasPresent = true;
   }
-  const PipelineIdentity identity{
-      .workId = metadata->rawOrdinal != 0 ? metadata->rawOrdinal
-                                          : metadata->sourceOrdinal,
-      .sourceOrdinal = metadata->sourceOrdinal,
-      .seqId = metadata->seqId,
-      .generation = source.storage.generation,
-  };
+  }
+  const PipelineIdentity identity = detachedReceipt
+      ? sidecarIdentity
+      : PipelineIdentity{
+            .workId = metadata->rawOrdinal != 0 ? metadata->rawOrdinal
+                                                : metadata->sourceOrdinal,
+            .sourceOrdinal = metadata->sourceOrdinal,
+            .seqId = metadata->seqId,
+            .generation = source.storage.generation,
+        };
   if (!identity.valid()) return;
+  const std::uint64_t ownedBytes = metadata ? metadata->usedBytes : 0u;
+  const auto lifecycleFacts = sidecarFound
+      ? sidecarFacts : PipelineLifecycleFacts{};
   const auto before = snapshot(record.before, true);
   const auto after = snapshot(record.after, false);
-  const auto encodeOwner = record.pipelineOwner.value_or(
-      PipelineOwner::SerialEncode);
+  // A submission record's owner is not generation-qualified. Never infer a
+  // selected-parallel owner from it after a seqId reuse; only the exact
+  // generation-qualified post-join summary may authorize that attribution.
+  const auto encodeOwner =
+      sidecarFound && lifecycleFacts.valid && lifecycleFacts.selectedParallel
+      ? PipelineOwner::SelectedParallel : PipelineOwner::SerialEncode;
   PipelineQueueSnapshot logicalBefore =
       (record.batchIndex != 0u && event != QueueLifecycleEvent::GpuComplete &&
        event != QueueLifecycleEvent::EncodeDequeue)
@@ -1914,7 +1942,8 @@ void QueueLifecycleController::observePipelineOwnerTransition(
                         std::uint32_t total = 1,
                         bool authority = false,
                         PipelineOwner owner = PipelineOwner::Queue,
-                        PipelineControl control = PipelineControl::Normal) {
+                        PipelineControl control = PipelineControl::Normal,
+                        PipelineLifecycleFacts facts = {}) {
     PipelineQueueSnapshot logicalAfter = logicalBefore;
     const auto occupancyDelta = static_cast<std::int64_t>(
         pipelineStageOwnsQueueCredit(to)) - static_cast<std::int64_t>(
@@ -1952,10 +1981,11 @@ void QueueLifecycleController::observePipelineOwnerTransition(
         .owner = owner,
         .control = control,
         .hasPresent = hasPresent,
-        .ownedBytes = metadata->usedBytes, .outstandingBorrows = borrows,
+        .ownedBytes = ownedBytes, .outstandingBorrows = borrows,
         .constructedCount = 1, .requiredCount = 1,
         .joinedChildren = joined, .totalChildren = total,
         .completionAuthority = authority,
+        .lifecycleFacts = facts,
         .physicalBatchId = record.physicalBatchId,
         .batchIndex = record.batchIndex,
         .batchCount = record.batchCount,
@@ -1992,21 +2022,47 @@ void QueueLifecycleController::observePipelineOwnerTransition(
            effectivePayloadKind == PipelinePayloadKind::Arena
                ? PipelineOwner::DirectPublication
                : PipelineOwner::LegacyPublication);
-      emit(PipelineStage::FinalOwned, PipelineStage::Encoding,
-           PipelineDisposition::Advance, 1, 0, 1, false,
-           encodeOwner);
-      emit(PipelineStage::Encoding, PipelineStage::GPUInFlight,
-           PipelineDisposition::Advance, 0, 1, 1, true,
-           PipelineOwner::Receipt,
-           hasPresent
-               ? PipelineControl::Present : PipelineControl::Normal);
+      {
+        const bool hasFacts = lifecycleFacts.valid;
+        const std::uint32_t childTotal = hasFacts
+            ? lifecycleFacts.childTotal : 1u;
+        const std::uint32_t joinedChildren = hasFacts
+            ? lifecycleFacts.joinedChildren : 1u;
+        const bool selectedParallel = hasFacts &&
+            lifecycleFacts.selectedParallel;
+        const auto encodeFacts = hasFacts
+            ? lifecycleFacts.withJoined(0u)
+            : PipelineLifecycleFacts{};
+        emit(PipelineStage::FinalOwned, PipelineStage::Encoding,
+             PipelineDisposition::Advance, childTotal, 0, childTotal, false,
+             encodeOwner, PipelineControl::Normal, encodeFacts);
+        // Child joins are observed by the production parallel backend at its
+        // joinChild boundary. The queue transition is later than that
+        // boundary, so it must not fabricate one event per final count.
+        // `lifecycleFacts` is a certified post-join summary; the model's
+        // per-child Join action remains an explicit refinement gap.
+        const auto submitOwner = selectedParallel
+            ? PipelineOwner::SelectedParallel : PipelineOwner::Receipt;
+        emit(PipelineStage::Encoding, PipelineStage::GPUInFlight,
+             PipelineDisposition::Advance, childTotal - joinedChildren,
+             joinedChildren, childTotal, true, submitOwner,
+             hasPresent ? PipelineControl::Present : PipelineControl::Normal,
+             hasFacts ? lifecycleFacts : PipelineLifecycleFacts{});
+      }
       break;
     case QueueLifecycleEvent::GpuComplete:
-      emit(PipelineStage::GPUInFlight, PipelineStage::Completed,
-           PipelineDisposition::Completed, 0, 1, 1, true,
-           PipelineOwner::GpuCompletion,
-           hasPresent
-               ? PipelineControl::Present : PipelineControl::Normal);
+      {
+        const std::uint32_t childTotal = lifecycleFacts.valid
+            ? lifecycleFacts.childTotal : 1u;
+        const std::uint32_t joinedChildren = lifecycleFacts.valid
+            ? lifecycleFacts.joinedChildren : 1u;
+        emit(PipelineStage::GPUInFlight, PipelineStage::Completed,
+             PipelineDisposition::Completed, 0, joinedChildren, childTotal,
+             true, PipelineOwner::GpuCompletion,
+             hasPresent
+                 ? PipelineControl::Present : PipelineControl::Normal,
+             lifecycleFacts);
+      }
       break;
     case QueueLifecycleEvent::FinishInline:
       emit(PipelineStage::ReplayBorrowed, PipelineStage::FinalOwned,
@@ -2017,12 +2073,19 @@ void QueueLifecycleController::observePipelineOwnerTransition(
            PipelineDisposition::NoGpuTerminal, 0, 0, 1, false,
            PipelineOwner::Queue);
       break;
-  case QueueLifecycleEvent::ReclaimFree:
-    emit(PipelineStage::Completed, PipelineStage::Reclaimed,
-           hasPresent ? PipelineDisposition::PresentSettled
-                      : PipelineDisposition::Completed,
-           0, 1, 1, true, PipelineOwner::Reclaim,
-           hasPresent ? PipelineControl::Present : PipelineControl::Normal);
+    case QueueLifecycleEvent::ReclaimFree:
+      {
+        const std::uint32_t childTotal = lifecycleFacts.valid
+            ? lifecycleFacts.childTotal : 1u;
+        const std::uint32_t joinedChildren = lifecycleFacts.valid
+            ? lifecycleFacts.joinedChildren : 1u;
+        emit(PipelineStage::Completed, PipelineStage::Reclaimed,
+             hasPresent ? PipelineDisposition::PresentSettled
+                        : PipelineDisposition::Completed,
+             0, joinedChildren, childTotal, true, PipelineOwner::Reclaim,
+             hasPresent ? PipelineControl::Present : PipelineControl::Normal,
+             lifecycleFacts);
+      }
       break;
     default:
       break;
@@ -2044,8 +2107,11 @@ void QueueLifecycleController::observePipelinePoisonStop() const noexcept {
       ? *submissionBinding_.presentCompletedSeqId : 0;
   snapshot.finishWaterlineSeq = snapshot.completedSeq;
   snapshot.completedQueueDepth = state.completedQueueCount;
-  snapshot.gpuCompletedTailSeq = snapshot.completedSeq +
-      snapshot.completedQueueDepth;
+  if (!pipelineCheckedFrontierAdd(snapshot.completedSeq,
+                                  snapshot.completedQueueDepth,
+                                  snapshot.gpuCompletedTailSeq)) {
+    return;
+  }
   snapshot.gpuCompletedPresentSeq = snapshot.presentSeq;
   if (submissionBinding_.completedPresentSeqQueue &&
       !submissionBinding_.completedPresentSeqQueue->empty()) {
@@ -2062,9 +2128,13 @@ void QueueLifecycleController::observePipelinePoisonStop() const noexcept {
     if (slot.state == ChunkSlot::State::Encoding ||
         slot.state == ChunkSlot::State::Retiring) ++occupied;
   }
-  occupied += static_cast<std::uint32_t>(std::min<std::uint64_t>(
-      std::numeric_limits<std::uint32_t>::max() - occupied,
-      gpuOutstandingCompletionSourceCount_ + completedNotReclaimedCount_));
+  if (!pipelineCheckedOccupancyAdd(occupied,
+                                   gpuOutstandingCompletionSourceCount_,
+                                   occupied) ||
+      !pipelineCheckedOccupancyAdd(occupied, completedNotReclaimedCount_,
+                                   occupied)) {
+    return;
+  }
   snapshot.occupancy = occupied;
   for (const auto& slot : state.slots) {
     if (!slot.sourceId.valid() || !slot.storage.valid()) continue;
@@ -2130,7 +2200,41 @@ void QueueLifecycleController::observePipelinePoisonStop() const noexcept {
   }
   for (std::size_t i = 0; i < pendingPoisonCount; ++i) {
     const auto& source = pendingPoisonSources[i];
-    if (!source.locatorBacked()) continue;
+    if (!source.locatorBacked()) {
+      if (!source.receiptBacked() ||
+          !submissionBinding_.pipelineLifecycleObserver.lookupFn) {
+        continue;
+      }
+      PipelineIdentity identity{};
+      PipelineLifecycleFacts lifecycleFacts{};
+      if (!submissionBinding_.pipelineLifecycleObserver.lookupFn(
+              submissionBinding_.pipelineLifecycleObserver.context, source.seqId,
+              0u,
+              identity, lifecycleFacts) || !identity.valid()) {
+        continue;
+      }
+      auto before = snapshot;
+      auto after = snapshot;
+      if (before.occupancy != 0u) --after.occupancy;
+      const PipelineLifecycleEvent lifecycleEvent{
+          .identity = identity,
+          .from = PipelineStage::GPUInFlight,
+          .to = PipelineStage::Reclaimed,
+          .payloadKind = source.hasPresent
+              ? PipelinePayloadKind::PresentOnly : PipelinePayloadKind::Legacy,
+          .disposition = PipelineDisposition::FailStop,
+          .owner = PipelineOwner::DeviceLoss,
+          .control = PipelineControl::DeviceLoss,
+          .ownedBytes = 0u,
+          .completionAuthority = true,
+          .lifecycleFacts = lifecycleFacts,
+          .before = before,
+          .after = after};
+      emitPipelineLifecycleEvent(sink, lifecycleEvent);
+      if (watchdog) watchdog->notePipelineEvent(lifecycleEvent);
+      snapshot = after;
+      continue;
+    }
     std::optional<CpuReadySourceMetadata> metadata;
     std::optional<CpuReadyTape::PayloadKind> kind;
     for (const auto tapeState : {CpuReadyTape::State::GPU,
@@ -2168,6 +2272,13 @@ void QueueLifecycleController::observePipelinePoisonStop() const noexcept {
     if (watchdog) watchdog->notePipelineEvent(lifecycleEvent);
     snapshot = after;
   }
+  // Device loss is a terminal generation boundary even when a receipt was
+  // already detached and no source record remained to produce a terminal
+  // event. Clear the cold sidecar after all best-effort poison projections so
+  // no detached fact can survive into a recycled seqId, without adding a
+  // repeated control event to the bounded lifecycle trace.
+  clearPipelineLifecycleSidecar(
+      submissionBinding_.pipelineLifecycleObserver);
 }
 
 void QueueLifecycleController::bindTrackedSubmissionState(SubmissionBinding binding) {
@@ -2500,18 +2611,22 @@ void QueueLifecycleController::recordPipelineReclaim(
       if (slot.state == ChunkSlot::State::Encoding ||
           slot.state == ChunkSlot::State::Retiring) ++occupied;
     }
-    occupied += static_cast<std::uint32_t>(std::min<std::uint64_t>(
-        std::numeric_limits<std::uint32_t>::max() - occupied,
-        gpuOutstandingCompletionSourceCount_));
-    occupied += static_cast<std::uint32_t>(std::min<std::uint64_t>(
-        std::numeric_limits<std::uint32_t>::max() - occupied,
-        completedNotReclaimedCount_));
+    if (!pipelineCheckedOccupancyAdd(occupied,
+                                     gpuOutstandingCompletionSourceCount_,
+                                     occupied) ||
+        !pipelineCheckedOccupancyAdd(occupied, completedNotReclaimedCount_,
+                                     occupied)) {
+      out.occupancy = std::numeric_limits<std::uint32_t>::max();
+      return out;
+    }
     out.occupancy = occupied;
     return out;
   };
   auto before = makeSnapshot(beforeState);
   const auto after = makeSnapshot(afterState);
-  before.occupancy = after.occupancy + 1u;
+  if (!pipelineCheckedOccupancyAdd(after.occupancy, 1u, before.occupancy)) {
+    return;
+  }
   const PipelineLifecycleEvent event{
       .identity = PipelineIdentity{
           .workId = metadata.rawOrdinal != 0 ? metadata.rawOrdinal
@@ -3542,6 +3657,20 @@ PostEncodeReceiptResult QueueLifecycleController::retireEncodedSourcePayload(
   control.state = ChunkSlot::State::Retiring;
 
   const auto sourceRef = source.source;
+  const auto metadata = tape->sourceMetadata(
+      sourceRef.id, sourceRef.storage, CpuReadyTape::State::Represented);
+  if (metadata && metadata->valid() &&
+      submissionBinding_.pipelineLifecycleObserver.recordIdentityFn) {
+    const auto identity = ::dxmt9::queue::PipelineIdentity{
+        .workId = metadata->rawOrdinal != 0u
+            ? metadata->rawOrdinal : metadata->sourceOrdinal,
+        .sourceOrdinal = metadata->sourceOrdinal,
+        .seqId = source.seqId,
+        .generation = sourceRef.storage.generation,
+    };
+    submissionBinding_.pipelineLifecycleObserver.recordIdentityFn(
+        submissionBinding_.pipelineLifecycleObserver.context, identity);
+  }
   lock.unlock();
   if (legacyPayload) {
     legacyPayload->clearCommands();

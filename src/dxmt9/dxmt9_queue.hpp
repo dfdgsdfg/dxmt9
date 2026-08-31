@@ -420,6 +420,12 @@ struct QueueCompletionSource {
   }
 };
 
+// Lifecycle facts live in the nullable observer sidecar, never in this
+// per-source completion value. Keep the source descriptor bounded so the
+// disabled path remains the pre-existing source shape.
+static_assert(sizeof(QueueCompletionSource) <= 128,
+              "completion source must remain a compact queue value");
+
 // Fixed-capacity value ledger for completed SegmentSerial event tails. The
 // consumer must drain this ledger; an unconsumed producer cannot grow it
 // without bound and fails closed on overflow. Tail seqIds are monotonic so a

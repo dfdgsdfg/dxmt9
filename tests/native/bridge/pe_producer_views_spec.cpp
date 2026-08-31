@@ -44,6 +44,16 @@ void payloadsAreEmptyByDefault() {
   check(payloads.upVertex.empty(), "default upVertex must be empty");
 }
 
+void semanticInputConstantCadenceMatchesSelectedBytes() {
+  std::array<std::byte, 16> vsFloat{};
+  std::array<std::byte, 8> psBool{};
+  pe::SparseStateInput state{};
+  state.vsFloatConstants.registerBytes = vsFloat;
+  state.psBoolConstants.registerBytes = psBool;
+  check(pe::sparseStateInputConstantPayloadBytes(state) == 24u,
+        "semantic input cadence counts every selected constant byte");
+}
+
 void defaultBindingViewIsAllNull() {
   pe::PeBindingView bindings{};
   for (const auto& texture : bindings.textures) {
@@ -429,6 +439,7 @@ int main() {
   try {
     viewsAreTriviallyCopyable();
     payloadsAreEmptyByDefault();
+    semanticInputConstantCadenceMatchesSelectedBytes();
     defaultBindingViewIsAllNull();
     defaultChunkContextClaimsNothingRetained();
     defaultDrawParamsAreZero();

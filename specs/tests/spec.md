@@ -696,6 +696,7 @@ sequenceDiagram
 | `d3d9_window_cursor_x64.exe` | `device.c` / `d3d9ex.c` window and cursor tests | cursor API return values, clipping, window ownership, wndproc transitions, fullscreen/windowed style changes, destroyed-window handling |
 | `d3d9_device_misc_x64.exe` | `device.c` creation-flag and utility tests | `GetDirect3D`, `GetCreationParameters`, `ValidateDevice`, raster status, dialog-box mode, FPU preserve, multithreaded and no-window-changes flags |
 | `d3d9_auxiliary_x64.exe` | `d3d9.spec`, `d3d9_main.c`, `device.c:test_shader_validator`, `test_d3d9on12` | shader-validator stub calls, `D3DPERF_*`, `DebugSetMute`, `Direct3DCreate9On12`, query-safe D3D9On12 failure |
+| `d3d9_recorder_fault_{x64,x86}.exe` | dxmt9 PE recorder fault contract | one-selector clean-room reachability for CapacityPre, unique retain rollback, bridge pre retry, bridge-entered fail-stop, active-capture disposition/throw, Reset recovery, and teardown accounting; unknown selectors fail and capture setup reports SKIP |
 
 The same source layout may also build x86 PE binaries when the configured Wine
 runtime supports WoW64.

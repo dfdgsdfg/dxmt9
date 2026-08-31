@@ -10,6 +10,12 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   distribution from PE and unix builds.
 - `cleanup_dxmt9_temp_prefixes.py` — list/prune temporary Wine prefixes
   created by experiment runs.
+- `run_d3d9_fault_matrix.py` — drive one typed `DXMT9_PE_RECORDER_FAULT` or
+  existing StateBlock fault selector per fresh canonical conformance process;
+  write one JSON result per point. The recorder matrix includes
+  `retain_acquire=0` (pre-first) and `retain_acquire=1` (partial-retain)
+  rollback cases; `--dry-run` inspects the bounded matrix without launching
+  Wine.
 - `run_dxmt9_render_tape.py` — transactionally pack and validate frame-tape
   and bounded two-interval sequence-tape bundles, authenticate optional
   `identity.bin`, replay through fresh production-provider devices, reduce or

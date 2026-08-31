@@ -16,6 +16,7 @@ LifecycleRows == {
   [from |-> "FinalOwned", to |-> "Encoding", owner |-> "SelectedParallel", disposition |-> "Advance", control |-> "Normal"],
   [from |-> "FinalOwned", to |-> "Encoding", owner |-> "Queue", disposition |-> "Advance", control |-> "Normal"],
   [from |-> "Encoding", to |-> "Encoding", owner |-> "Queue", disposition |-> "ChildJoin", control |-> "Normal"],
+  [from |-> "Encoding", to |-> "Encoding", owner |-> "SelectedParallel", disposition |-> "ChildJoin", control |-> "Normal"],
   [from |-> "Encoding", to |-> "GPUInFlight", owner |-> "Receipt", disposition |-> "Advance", control |-> "Normal"],
   [from |-> "Encoding", to |-> "GPUInFlight", owner |-> "SelectedParallel", disposition |-> "Advance", control |-> "Normal"],
   [from |-> "Encoding", to |-> "GPUInFlight", owner |-> "GpuSubmission", disposition |-> "Advance", control |-> "Normal"],

@@ -44,6 +44,15 @@ constexpr PeRecorderFlushAction planPeRecorderFlush(
                             : PeRecorderFlushAction::Submit;
 }
 
+// BridgePre retry admission is transport-agnostic: either the legacy builder
+// is sealed or the semantic owner has a valid immutable emission. Empty owner
+// state is not retry bytes, and a non-retryable transaction must never reopen.
+constexpr bool peRecorderRetryBytesReady(bool legacySealed,
+                                         bool semanticEmissionValid,
+                                         bool transactionRetryable) noexcept {
+    return transactionRetryable && (legacySealed || semanticEmissionValid);
+}
+
 // A healthy Reset is an ordering boundary: queued command work must reach the
 // unix device before the backend reset. Only poisoned recovery may discard the
 // sealed projection, because its earlier bridge effect is unknown.

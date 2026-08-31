@@ -1588,6 +1588,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
         switch (disposition) {
         case dxmt9::d3d9::DirectChunkSlotReplayDisposition::Direct:
           return dxmt9::perf::DirectChunkSlotReplayDisposition::Direct;
+        case dxmt9::d3d9::DirectChunkSlotReplayDisposition::DirectOversized:
+          return dxmt9::perf::DirectChunkSlotReplayDisposition::DirectOversized;
         case dxmt9::d3d9::DirectChunkSlotReplayDisposition::
             DirectWithPresentTail:
           return dxmt9::perf::DirectChunkSlotReplayDisposition::
@@ -1701,13 +1703,31 @@ int32_t replayPlannedChunk(D9CDevice* device,
             dxmt9::perf::DirectChunkSlotReplayOutcome::PlanRejected);
         return commitChunkFail("chunk-direct-slot-plan");
       }
-      if ((disposition ==
-               dxmt9::d3d9::DirectChunkSlotReplayDisposition::Direct ||
-           disposition == dxmt9::d3d9::DirectChunkSlotReplayDisposition::
-                              DirectWithPresentTail) &&
-          plan.arenaLayout) {
+      const bool directSlotDisposition =
+          disposition ==
+              dxmt9::d3d9::DirectChunkSlotReplayDisposition::Direct ||
+          disposition ==
+              dxmt9::d3d9::DirectChunkSlotReplayDisposition::DirectOversized ||
+          disposition == dxmt9::d3d9::DirectChunkSlotReplayDisposition::
+                             DirectWithPresentTail;
+      const bool oversizedDirect =
+          disposition ==
+          dxmt9::d3d9::DirectChunkSlotReplayDisposition::DirectOversized;
+      const bool directSlotLayoutReady = oversizedDirect
+          ? plan.directSlotLayout.has_value()
+          : plan.arenaLayout.has_value();
+      const std::size_t directSlotPlannedBytes = oversizedDirect
+          ? (plan.directSlotLayout ? plan.directSlotLayout->usedBytes : 0u)
+          : (plan.arenaLayout ? plan.arenaLayout->usedBytes : 0u);
+      if (directSlotDisposition && directSlotLayoutReady &&
+          directSlotPlannedBytes != 0u) {
         auto begin = queue->beginDirectChunkSlotReplay(
-            raw.replaySeq, plan.capacity, plan.arenaLayout->usedBytes);
+            raw.replaySeq,
+            disposition ==
+                    dxmt9::d3d9::DirectChunkSlotReplayDisposition::DirectOversized
+                ? plan.directSlotCapacity
+                : plan.capacity,
+            directSlotPlannedBytes);
         if (begin.status ==
                 dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Ready &&
             begin.lease) {
@@ -2460,6 +2480,18 @@ static int32_t dxmt9c_device_commit_chunk_impl(
           const double candidateMs =
               static_cast<double>(snapshot.candidateCpuTimeSavedNs) /
               presents / 1.0e6;
+          using RejectionReason =
+              dxmt9::resources::mutation_observer::RejectionReason;
+          using BarrierReason =
+              dxmt9::resources::mutation_observer::BarrierReason;
+          const auto rejectionCount = [&](const auto& counts,
+                                          RejectionReason reason) {
+            return counts[static_cast<std::size_t>(reason)];
+          };
+          std::uint64_t barriers = 0u;
+          for (std::size_t i = 0u;
+               i < static_cast<std::size_t>(BarrierReason::Count); ++i)
+            barriers += snapshot.barrierCounts[i];
           std::uint64_t provisionalRejections = 0u;
           std::uint64_t finalRejections = 0u;
           for (std::size_t i = 0u;
@@ -2474,24 +2506,61 @@ static int32_t dxmt9c_device_commit_chunk_impl(
                                  : candidateMs < 0.2 ? "closed" : "inconclusive";
           dxmt9::util::logf(
               dxmt9::util::LogLevel::Info, "dxmt9-mutation-composition",
-              "window_presents=%llu mutations=%llu candidate_calls=%llu "
-              "candidate_bytes=%llu candidate_cpu_ms_per_present=%.6f "
+              "window_presents=%llu mutations=%llu mutation_bytes=%llu "
+              "mergeable_range_pairs=%llu candidate_calls=%llu "
+              "candidate_bytes=%llu "
+              "candidate_cpu_time_saved_ns=%llu "
+              "candidate_cpu_ms_per_present=%.6f "
               "wow64_writeback_ns=%llu queue_lock_ns=%llu "
               "backing_rotation_ns=%llu arena_update_ns=%llu "
               "shadow_copy_ns=%llu live_contents_copy_ns=%llu "
               "mergeable_union_bytes=%llu mergeable_overlap_bytes=%llu "
               "zero_use_generations=%llu discard_discard_dead=%llu "
+              "barriers=%llu barrier_draw=%llu "
+              "barrier_process_vertices=%llu barrier_read_lock=%llu "
+              "barrier_query_readback=%llu barrier_update_copy=%llu "
+              "barrier_cross_thread=%llu barrier_destroy_reset=%llu "
+              "barrier_capture_lease=%llu barrier_failure=%llu "
+              "barrier_unknown=%llu "
               "pending=%llu completed=%llu failed=%llu discarded=%llu "
+              "overflow=%llu "
               "provisional_rejections=%llu final_rejections=%llu "
               "provisional_completion_rejections=%llu "
               "final_completion_rejections=%llu "
-              "first_use_gpu=%llu first_use_cpu=%llu invalid_or_dropped=%llu "
+              "provisional_rejection_different_resource=%llu "
+              "provisional_rejection_different_generation=%llu "
+              "provisional_rejection_render_tape_identity=%llu "
+              "provisional_rejection_disposition=%llu "
+              "provisional_rejection_range_overlap=%llu "
+              "provisional_rejection_barrier=%llu "
+              "provisional_rejection_failure=%llu "
+              "provisional_rejection_source_order=%llu "
+              "provisional_rejection_capacity=%llu "
+              "provisional_rejection_invalid=%llu "
+              "provisional_rejection_completion=%llu "
+              "final_rejection_different_resource=%llu "
+              "final_rejection_different_generation=%llu "
+              "final_rejection_render_tape_identity=%llu "
+              "final_rejection_disposition=%llu "
+              "final_rejection_range_overlap=%llu "
+              "final_rejection_barrier=%llu "
+              "final_rejection_failure=%llu "
+              "final_rejection_source_order=%llu "
+              "final_rejection_capacity=%llu "
+              "final_rejection_invalid=%llu "
+              "final_rejection_completion=%llu "
+              "first_use_gpu=%llu first_use_cpu=%llu "
+              "first_use_distance_total=%llu first_use_distance_max=%llu "
+              "invalid_or_dropped=%llu "
               "gate=%s "
               "composition=forbidden reason=semantic-proof-required",
               static_cast<unsigned long long>(observer->windowPresents()),
               static_cast<unsigned long long>(snapshot.mutationCalls),
+              static_cast<unsigned long long>(snapshot.mutationBytes),
+              static_cast<unsigned long long>(snapshot.mergeableRangePairs),
               static_cast<unsigned long long>(snapshot.candidateCalls),
               static_cast<unsigned long long>(snapshot.candidateBytesSaved),
+              static_cast<unsigned long long>(snapshot.candidateCpuTimeSavedNs),
               candidateMs,
               static_cast<unsigned long long>(snapshot.wow64WritebackNs),
               static_cast<unsigned long long>(snapshot.queueLockNs),
@@ -2504,20 +2573,92 @@ static int32_t dxmt9c_device_commit_chunk_impl(
               static_cast<unsigned long long>(snapshot.zeroUseGenerations),
               static_cast<unsigned long long>(
                   snapshot.discardToDiscardDeadChains),
+              static_cast<unsigned long long>(barriers),
+              static_cast<unsigned long long>(snapshot.barrierCounts[
+                  static_cast<std::size_t>(BarrierReason::Draw)]),
+              static_cast<unsigned long long>(snapshot.barrierCounts[
+                  static_cast<std::size_t>(BarrierReason::ProcessVertices)]),
+              static_cast<unsigned long long>(snapshot.barrierCounts[
+                  static_cast<std::size_t>(BarrierReason::ReadLock)]),
+              static_cast<unsigned long long>(snapshot.barrierCounts[
+                  static_cast<std::size_t>(BarrierReason::QueryReadback)]),
+              static_cast<unsigned long long>(snapshot.barrierCounts[
+                  static_cast<std::size_t>(BarrierReason::UpdateCopy)]),
+              static_cast<unsigned long long>(snapshot.barrierCounts[
+                  static_cast<std::size_t>(BarrierReason::CrossThread)]),
+              static_cast<unsigned long long>(snapshot.barrierCounts[
+                  static_cast<std::size_t>(BarrierReason::DestroyReset)]),
+              static_cast<unsigned long long>(snapshot.barrierCounts[
+                  static_cast<std::size_t>(BarrierReason::CaptureLease)]),
+              static_cast<unsigned long long>(snapshot.barrierCounts[
+                  static_cast<std::size_t>(BarrierReason::Failure)]),
+              static_cast<unsigned long long>(snapshot.barrierCounts[
+                  static_cast<std::size_t>(BarrierReason::Unknown)]),
               static_cast<unsigned long long>(snapshot.pendingMutations),
               static_cast<unsigned long long>(snapshot.completedMutations),
               static_cast<unsigned long long>(snapshot.failedMutations),
               static_cast<unsigned long long>(snapshot.discardedMutations),
+              static_cast<unsigned long long>(snapshot.overflowEvents),
               static_cast<unsigned long long>(provisionalRejections),
               static_cast<unsigned long long>(finalRejections),
-              static_cast<unsigned long long>(snapshot.rejectionCounts[
-                  static_cast<std::size_t>(
-                      dxmt9::resources::mutation_observer::RejectionReason::Completion)]),
-              static_cast<unsigned long long>(snapshot.finalRejectionCounts[
-                  static_cast<std::size_t>(
-                      dxmt9::resources::mutation_observer::RejectionReason::Completion)]),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.rejectionCounts, RejectionReason::Completion)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.finalRejectionCounts, RejectionReason::Completion)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.rejectionCounts,
+                  RejectionReason::DifferentResource)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.rejectionCounts,
+                  RejectionReason::DifferentGeneration)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.rejectionCounts,
+                  RejectionReason::RenderTapeIdentity)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.rejectionCounts, RejectionReason::Disposition)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.rejectionCounts, RejectionReason::RangeOverlap)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.rejectionCounts, RejectionReason::Barrier)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.rejectionCounts, RejectionReason::Failure)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.rejectionCounts, RejectionReason::SourceOrder)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.rejectionCounts, RejectionReason::Capacity)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.rejectionCounts, RejectionReason::Invalid)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.rejectionCounts, RejectionReason::Completion)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.finalRejectionCounts,
+                  RejectionReason::DifferentResource)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.finalRejectionCounts,
+                  RejectionReason::DifferentGeneration)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.finalRejectionCounts,
+                  RejectionReason::RenderTapeIdentity)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.finalRejectionCounts, RejectionReason::Disposition)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.finalRejectionCounts, RejectionReason::RangeOverlap)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.finalRejectionCounts, RejectionReason::Barrier)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.finalRejectionCounts, RejectionReason::Failure)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.finalRejectionCounts, RejectionReason::SourceOrder)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.finalRejectionCounts, RejectionReason::Capacity)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.finalRejectionCounts, RejectionReason::Invalid)),
+              static_cast<unsigned long long>(rejectionCount(
+                  snapshot.finalRejectionCounts, RejectionReason::Completion)),
               static_cast<unsigned long long>(snapshot.firstUseGpuCount),
               static_cast<unsigned long long>(snapshot.firstUseCpuCount),
+              static_cast<unsigned long long>(snapshot.firstUseDistanceTotal),
+              static_cast<unsigned long long>(snapshot.firstUseDistanceMax),
               static_cast<unsigned long long>(snapshot.invalidOrDroppedEvents),
               gate);
           observer->reset();

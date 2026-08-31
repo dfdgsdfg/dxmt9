@@ -2540,7 +2540,8 @@ void report() {
     line += field;
   }
   constexpr const char* kDispositionNames[] = {
-      "direct",       "direct_with_present_tail", "legacy_state_only",
+      "direct", "direct_oversized", "direct_with_present_tail",
+      "legacy_state_only",
       "legacy_segmented", "legacy_up_draw",       "legacy_present",
       "legacy_unsupported", "legacy_oversized",   "legacy_capture_or_trace",
       "inline_ordered_control", "reject_invalid"};

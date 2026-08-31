@@ -509,6 +509,25 @@ must preserve the existing CapacityPre/CapacityPost flush cadence. A per-call
 append owner whose future chunk contents and final counts are unknown does not
 satisfy this production boundary.
 
+The current implementation has a bounded `PeSemanticBatchOwner` production
+lane behind the default-off `DXMT9_PE_SEMANTIC_BATCH_OWNER` gate: all 21
+producer rows have typed record slots, kind-qualified physical pin arenas,
+source/record checkpoints, constant/UP byte arenas, rectangle storage, and
+sparse typed arenas. Admission is atomic and fail-closed for generation
+collisions and capacity overflow; successful settlement preserves the bounded
+warm retainer epoch and clears used ranges, while Reset/discard releases every
+retain. Its typed `appendOwnedRecord` adapter and const emission visitors
+perform checked record-local handle dedup and exact payload alignment into
+either segmented fixed roles or one contiguous ExactFixed extent, with no
+allocation or recorder side effect during emission. The persistent recorder
+transaction binds PendingDelta, capture, resource-side-effect, ordering, and
+bridge retry/poison boundaries without mixing the legacy builder graph. The
+256-record/256-pin production alias matches the promoted default cadence;
+larger debug record-cap overrides fail closed under the owner gate. The older
+`PePrewireChunkTransaction` and `PeOwnedRecordCandidate` remain call-local
+Present/Readback test/pilot compatibility paths, not all-family owners. A
+residual cannot be smuggled into the owner through a raw or type-erased sink.
+
 **R-CORE-REC-7.3** Recorder reads and writes that depend on the recorder mutex
 must use typed, epoch-qualified, non-copyable and non-movable call-scope
 capabilities: `RecorderBorrow<T>` for immutable source access and

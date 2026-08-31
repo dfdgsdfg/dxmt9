@@ -249,6 +249,7 @@ void countCommandChunkReject();
 // record, and wire-byte populations without reconstructing them.
 enum class DirectChunkSlotReplayDisposition : std::uint8_t {
   Direct = 0,
+  DirectOversized,
   DirectWithPresentTail,
   LegacyStateOnly,
   LegacySegmented,

@@ -14,10 +14,12 @@
 EXTENDS Naturals, FiniteSets, TLC, PipelineLifecycleTable
 
 CONSTANTS MaxSources, Capacity, RequiredParts, PresentSources,
-          ParallelSources, InlineSources, FailureSources,
+          ParallelSources, SelectedSources, InlineSources, FailureSources,
           DirectSources, AllowReset, AllowTeardown,
           WakeDiscipline, ResetDiscipline,
-          InlineDiscipline, PresentDiscipline
+          InlineDiscipline, PresentDiscipline,
+          OwnerDiscipline, ReceiptDiscipline, ImportDiscipline,
+          DeviceLossDiscipline
 
 Sources == 1..MaxSources
 Stages == {"Absent", "ProducerOwned", "RawOwned", "ReplayBorrowed",
@@ -25,7 +27,9 @@ Stages == {"Absent", "ProducerOwned", "RawOwned", "ReplayBorrowed",
            "Reclaimed"}
 OwnedStages == {"ReplayBorrowed", "FinalOwned", "Encoding", "GPUInFlight",
                 "Completed"}
-ChildCount(s) == IF s \in ParallelSources THEN 2 ELSE 1
+(* ParallelSources describes candidates; SelectedSources is the bounded
+ * production decision after eligibility/proof gates. *)
+ChildCount(s) == IF s \in SelectedSources THEN 2 ELSE 1
 Oldest(set) == CHOOSE s \in set : \A t \in set : s <= t
 LifecycleAllowed(from, to, ownerName, dispositionName, controlName) ==
   KnownLifecycleRow(from, to, ownerName, dispositionName, controlName)
@@ -34,6 +38,10 @@ LifecycleAllowed(from, to, ownerName, dispositionName, controlName) ==
  * the finish thread advances its waterline separately.  This relation is the
  * model-side contract for the native FinishAdvance snapshot and intentionally
  * does not add a second queue implementation to this lifecycle model. *)
+(* The actions abstract the queue mutex handoff: producer facts are published
+ * before submission, and completion observes them after the matching
+ * release/acquire edge. TLC checks this bounded value relation, not arbitrary
+ * C++ atomic-order executions or an unbounded Metal execution. *)
 CompletionFrontierContiguous(finishWaterline, completedQueueDepth, gpuTail) ==
   gpuTail = finishWaterline + completedQueueDepth
 
@@ -99,7 +107,8 @@ Arrive(s) ==
   /\ ~stopped /\ s = nextArrival /\ s \in Sources
   /\ LifecycleAllowed("SourceArrival", "ProducerOwned", "PeImport", "Advance", "Normal")
   /\ phase' = [phase EXCEPT ![s] = "ProducerOwned"]
-  /\ owner' = [owner EXCEPT ![s] = "PeImport"]
+  /\ owner' = [owner EXCEPT ![s] =
+      IF ImportDiscipline = "Exact" THEN "PeImport" ELSE "None"]
   /\ disposition' = [disposition EXCEPT ![s] = "Advance"]
   /\ nextArrival' = nextArrival + 1
   /\ UNCHANGED <<generation, epoch, constructed, borrows, childTotal,
@@ -207,14 +216,16 @@ Publish(s) ==
 BeginEncode(s) ==
   /\ ~stopped /\ phase[s] = "FinalOwned"
   /\ LifecycleAllowed("FinalOwned", "Encoding",
-      IF s \in ParallelSources THEN "SelectedParallel" ELSE "SerialEncode",
+      IF s \in SelectedSources /\ OwnerDiscipline = "Exact"
+      THEN "SelectedParallel" ELSE "SerialEncode",
       "Advance", "Normal")
   /\ phase' = [phase EXCEPT ![s] = "Encoding"]
   /\ borrows' = [borrows EXCEPT ![s] = ChildCount(s)]
   /\ childTotal' = [childTotal EXCEPT ![s] = ChildCount(s)]
   /\ joined' = [joined EXCEPT ![s] = 0]
   /\ owner' = [owner EXCEPT ![s] =
-        IF s \in ParallelSources THEN "SelectedParallel" ELSE "SerialEncode"]
+        IF s \in SelectedSources /\ OwnerDiscipline = "Exact"
+        THEN "SelectedParallel" ELSE "SerialEncode"]
   /\ disposition' = [disposition EXCEPT ![s] = "Advance"]
   /\ UNCHANGED <<generation, epoch, nextArrival, constructed, authority,
       completed, noGpu, presentPending, presentSettled, occupancy, waiting,
@@ -235,12 +246,17 @@ Join(s) ==
 
 Submit(s) ==
   /\ ~stopped /\ phase[s] = "Encoding" /\ joined[s] = childTotal[s]
-  /\ LifecycleAllowed("Encoding", "GPUInFlight", "Receipt", "Advance",
+  /\ LifecycleAllowed("Encoding", "GPUInFlight",
+      IF s \in SelectedSources /\ OwnerDiscipline = "Exact"
+      THEN "SelectedParallel" ELSE "Receipt", "Advance",
       IF s \in PresentSources THEN "Present" ELSE "Normal")
   /\ borrows[s] = 0
   /\ phase' = [phase EXCEPT ![s] = "GPUInFlight"]
-  /\ authority' = authority \cup {s}
-  /\ owner' = [owner EXCEPT ![s] = "Receipt"]
+  /\ authority' = IF ReceiptDiscipline = "Exact"
+        THEN authority \cup {s} ELSE authority
+  /\ owner' = [owner EXCEPT ![s] =
+        IF s \in SelectedSources /\ OwnerDiscipline = "Exact"
+        THEN "SelectedParallel" ELSE "Receipt"]
   /\ disposition' = [disposition EXCEPT ![s] = "Advance"]
   /\ UNCHANGED <<generation, epoch, nextArrival, constructed, borrows,
       childTotal, joined, completed, noGpu, presentPending, presentSettled,
@@ -359,9 +375,11 @@ DeviceLoss ==
       THEN phase[s] ELSE "Reclaimed"]
   /\ noGpu' = noGpu \cup {s \in Sources : phase[s] # "Absent"}
   /\ owner' = [s \in Sources |->
-      IF phase[s] = "Absent" THEN owner[s] ELSE "DeviceLoss"]
+      IF phase[s] = "Absent" THEN owner[s]
+      ELSE IF DeviceLossDiscipline = "Exact" THEN "DeviceLoss" ELSE "None"]
   /\ disposition' = [s \in Sources |->
-      IF phase[s] = "Absent" THEN disposition[s] ELSE "FailStop"]
+      IF phase[s] = "Absent" THEN disposition[s]
+      ELSE IF DeviceLossDiscipline = "Exact" THEN "FailStop" ELSE "None"]
   /\ occupancy' = 0
   /\ waiting' = {}
   /\ UNCHANGED <<generation, epoch, nextArrival, constructed, borrows,
@@ -524,15 +542,24 @@ OwnersAreExplicit ==
   \A s \in Sources : phase[s] # "Absent" =>
     owner[s] # "None" /\ disposition[s] # "None"
 
+SelectedOwnerExact ==
+  \A s \in Sources : phase[s] = "Encoding" =>
+    IF s \in SelectedSources
+    THEN owner[s] = "SelectedParallel"
+    ELSE owner[s] = "SerialEncode"
+
+ReceiptAuthorityExact ==
+  \A s \in Sources : phase[s] = "GPUInFlight" => s \in authority
+
 NormalCompletionState ==
   \A s \in Sources : owner[s] = "GpuCompletion" =>
     s \notin FailureSources /\
     phase[s] \in {"Completed", "Reclaimed"}
 
 ParallelJoinState ==
-  \A s \in Sources : s \in ParallelSources /\
+  \A s \in Sources : s \in SelectedSources /\
       joined[s] = childTotal[s] /\ childTotal[s] > 0 =>
-    s \in ParallelSources /\ phase[s] \in {"Encoding", "GPUInFlight",
+    s \in SelectedSources /\ phase[s] \in {"Encoding", "GPUInFlight",
       "Completed", "Reclaimed"}
 
 NormalGpuCompletionPath ==
@@ -546,7 +573,7 @@ NormalReclaimPath ==
     owner[s] = "Reclaim")
 
 ParallelJoinPath ==
-  <> (\E s \in ParallelSources : joined[s] = childTotal[s] /\
+  <> (\E s \in SelectedSources : joined[s] = childTotal[s] /\
     childTotal[s] > 0)
 
 EventuallyReclaimed ==

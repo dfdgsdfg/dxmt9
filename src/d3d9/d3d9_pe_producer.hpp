@@ -108,6 +108,8 @@ bool acceptSparseStatePlan(PeHotStateShadow& shadow,
 
 std::size_t sparseStatePlanConstantPayloadBytes(
     const SparseStatePlan& plan) noexcept;
+std::size_t sparseStateInputConstantPayloadBytes(
+    const SparseStateInput& state) noexcept;
 
 // Settles only the constant ranges prepared by buildSparseState after the
 // builder has accepted their record. A failed append must skip this call.

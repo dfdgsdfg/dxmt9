@@ -135,6 +135,12 @@ def parse_args() -> argparse.Namespace:
                    help="Run only this auxiliary executable (repeatable).")
     p.add_argument("--aux-timeout", type=float, default=120.0,
                    help="Per-auxiliary-exe timeout in seconds (default: 120).")
+    p.add_argument("--pe-recorder-fault", default=None,
+                   help="Set DXMT9_PE_RECORDER_FAULT for this fresh process "
+                        "(one typed point, optionally with =HRESULT).")
+    p.add_argument("--stateblock-fault", default=None,
+                   help="Set DXMT9_PE_STATEBLOCK_FAULT for this fresh process "
+                        "(one existing StateBlock point, optionally with =HRESULT).")
     p.add_argument("--wine", type=Path, default=DEFAULT_WINE,
                    help="Wine binary path.")
     p.add_argument("--prefix", type=Path, default=DEFAULT_PREFIX,
@@ -247,6 +253,11 @@ def run_aux_exe(args: argparse.Namespace, exe_path: Path,
                            attribute their FAIL lines to a specific
                            test function name)
       - timeout         -> all timeout
+
+    Recorder-fault auxiliaries additionally require exactly one
+    `DXMT9_PE_RECORDER_FAULT_CONSUMED=<selector>` line and the matching
+    `REACHED:recorder_fault:<selector>` line; an explicit SKIP marker remains
+    eligible for rc=77 unsupported-capture handling.
     """
     cmd = [str(args.wine), str(exe_path)]
     env = build_env(args)
@@ -269,6 +280,26 @@ def run_aux_exe(args: argparse.Namespace, exe_path: Path,
         stdout = (exc.stdout or b"").decode("utf-8", errors="replace") \
             + (exc.stderr or b"").decode("utf-8", errors="replace")
 
+    # The recorder fault fixture is intentionally stricter than ordinary
+    # auxiliary probes: exit 0 alone cannot prove that the selected seam was
+    # consumed (an old/stale binary or a path that never reached the fault can
+    # also exit cleanly). Require both the fixture's post-cleanup marker and
+    # the exact cold production consumption receipt, while preserving an
+    # explicit unsupported-runtime SKIP verdict.
+    recorder_fault = getattr(args, "pe_recorder_fault", None)
+    explicit_skip = False
+    if not timed_out and recorder_fault is not None:
+        reached = f"REACHED:recorder_fault:{recorder_fault}"
+        explicit_skip = any(f"SKIP:{name}:" in stdout for name in owned_cases)
+        if reached not in stdout and not explicit_skip:
+            return {name: "fail" for name in owned_cases}, stdout, False
+        if not explicit_skip:
+            receipt = f"DXMT9_PE_RECORDER_FAULT_CONSUMED={recorder_fault}"
+            receipts = [line for line in stdout.splitlines()
+                        if line.startswith("DXMT9_PE_RECORDER_FAULT_CONSUMED=")]
+            if receipts != [receipt]:
+                return {name: "fail" for name in owned_cases}, stdout, False
+
     verdicts: dict[str, str] = {}
     if timed_out:
         for name in owned_cases:
@@ -282,7 +313,10 @@ def run_aux_exe(args: argparse.Namespace, exe_path: Path,
             skipped_names.add(m.group(1))
 
     # Map exit code to aggregate verdict.
-    if rc == 0:
+    if explicit_skip:
+        for name in owned_cases:
+            verdicts[name] = "skip"
+    elif rc == 0:
         for name in owned_cases:
             verdicts[name] = "pass"
     elif rc == 77:
@@ -515,6 +549,42 @@ def build_env(args: argparse.Namespace) -> dict[str, str]:
     if getattr(args, "staged_winemetal_so", None):
         env.setdefault("DXMT9_WINEMETAL_SO",
                        str(args.staged_winemetal_so.resolve()))
+    # Fault selectors belong to this runner invocation. Clear inherited
+    # selectors first so a StateBlock lane cannot accidentally consume a
+    # recorder fault (or vice versa) from the parent shell.
+    env.pop("DXMT9_PE_RECORDER_FAULT", None)
+    env.pop("DXMT9_PE_STATEBLOCK_FAULT", None)
+    if getattr(args, "pe_recorder_fault", None) is not None:
+        env["DXMT9_PE_RECORDER_FAULT"] = args.pe_recorder_fault
+    if getattr(args, "stateblock_fault", None) is not None:
+        env["DXMT9_PE_STATEBLOCK_FAULT"] = args.stateblock_fault
+    recorder_fault = getattr(args, "pe_recorder_fault", None)
+    if recorder_fault is not None:
+        recorder_point = recorder_fault.split("=", 1)[0]
+        # CapacityPre is only observable when a pending record is below the
+        # cap but the next record would cross it.  The clean-room fixture uses
+        # two one-rectangle Clear records (48-byte size hint / 16-byte
+        # payload), so 50 makes the second call enter this seam deterministically
+        # without changing production defaults.
+        if recorder_point == "capacity_pre_reserve":
+            env["DXMT9_PE_CHUNK_MAX_BYTES"] = "50"
+        else:
+            env.pop("DXMT9_PE_CHUNK_MAX_BYTES", None)
+        if recorder_point in {"capture_disposition", "capture_throw"}:
+            env["DXMT9_RENDER_TAPE_CAPTURE"] = "1"
+            output = getattr(args, "output", None)
+            capture_root = (output.parent / (output.stem + "-capture")
+                            if output is not None
+                            else args.prefix / "dxmt9-recorder-capture")
+            # This value is consumed by the PE filesystem implementation.
+            # A host POSIX path is not absolute there; Wine's Z: drive is the
+            # canonical pointer-free projection of the host root.
+            resolved_capture_root = capture_root.resolve()
+            env["DXMT9_RENDER_TAPE_OUTPUT_ROOT"] = (
+                "Z:" + str(resolved_capture_root).replace("/", "\\"))
+        else:
+            env.pop("DXMT9_RENDER_TAPE_CAPTURE", None)
+            env.pop("DXMT9_RENDER_TAPE_OUTPUT_ROOT", None)
     env["DXMT9_PREWARM"] = "disabled"
     # Quiet down Wine FIXMEs that would otherwise drown our parse loop.
     env.setdefault("WINEDEBUG", "-all")

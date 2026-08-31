@@ -4,8 +4,8 @@ workload: 3DMark05 GT2 and SFIV Benchmark
 title: "Matched copy/materialization ledger and CPU evidence"
 type: evidence
 status: partial
-updated: 2026-08-30
-source: include/dxmt9/copy_materialization_ledger.hpp; tests/native/bridge/pe_diagnostics_spec.cpp; tests/native/backend/source_payload_spec.cpp; experiments/output/app-d3d9-3dmark05-task4-gt2-ledger-default-20260830; experiments/output/app-d3d9-3dmark05-task4-gt2-ledger-direct-20260830; experiments/output/app-d3d9-sfiv-benchmark-task4-sfiv-ledger-direct-20260830; traces/app-d3d9-3dmark05-task4-gt2-profile-default-20260830; traces/app-d3d9-3dmark05-task4-gt2-profile-direct-20260830
+updated: 2026-08-31
+source: include/dxmt9/copy_materialization_ledger.hpp; tests/native/bridge/pe_diagnostics_spec.cpp; tests/native/backend/source_payload_spec.cpp; experiments/output/app-d3d9-3dmark05-task4-gt2-ledger-default-20260830; experiments/output/app-d3d9-3dmark05-task4-gt2-ledger-direct-20260830; experiments/output/app-d3d9-sfiv-benchmark-task4-sfiv-ledger-direct-20260830; experiments/output/app-d3d9-3dmark05-head-ledger-gt2-20260831; traces/app-d3d9-3dmark05-task4-gt2-profile-default-20260830; traces/app-d3d9-3dmark05-task4-gt2-profile-direct-20260830
 related: docs/perfomance/overview.md; specs/archicture/gap.md; specs/d3d9/recorder/gap.md; specs/backend/gap.md
 ---
 
@@ -75,6 +75,29 @@ explicitly checks that the implementation does not claim a false whole-carrier
 copy. The Tape-on route's queue-final and arena rows are real final-slot/source
 delivery activity, while the Tape-off route has no arena row in this lane.
 
+### Current-worktree ledger correction (2026-08-31)
+
+The expanded production ledger now records the actual per-record replay
+carrier field copies instead of treating only a whole-carrier copy as
+observable. A fresh GT2 run completed 1,728 Presents with zero chunk rejects
+and zero GPU command-buffer errors. Its final cumulative rows normalize to:
+
+| Identity | calls / Present | MB / Present | ms / Present |
+|---|---:|---:|---:|
+| PE builder temporary | 5,132.172 | 0.991 | 0.854 |
+| PE seals, three rows combined | 43.461 | 1.240 | 0.043 |
+| bridge raw ownership | 15.451 | 1.240 | 0.042 |
+| replay submission-carrier field copy | 1,476.209 | 15.740 | 0.627 |
+| GPU upload | 1,083.183 | 11.810 | 1.034 |
+| mutation staging | 0.708 | 0.070 | 0.004 |
+
+Thus PE builder plus seals remains about `0.897 ms/Present`, but replay carrier
+copy is also a real `0.627 ms/Present` removable class. The older zero row and
+the ranking statement that followed it were limits of the former observer,
+not proof that field-level carrier materialization was absent. Global byte
+sums remain invalid because semantic materialization and physical ownership
+rows can describe the same payload at different boundaries.
+
 ## Matched GT2 CPU and cadence
 
 | Route | Presents | CB / Present | Pass / Present | PE builder + seals ms / Present | Bridge raw ms / Present | GPU upload ms / Present | Producer profile weight | Encode profile weight |
@@ -129,9 +152,12 @@ FPS gain.
    this evidence (`<=0.041 ms/Present` in GT2, `<=0.001 ms/Present` in SFIV)
    and do not justify queue T2d by themselves without a measured waiting
    victim and a workload showing a different shape.
-5. **Replay carrier rows.** No physical or semantic row survives in these
-   runs; keep the source negative assertion and do not spend follow-up work on a
-   nonexistent whole-carrier copy.
+5. **Replay carrier rows.** The former observer saw no whole-carrier event, but
+   the current field-level ledger measures `15.740 MB/Present` and
+   `0.627 ms/Present` in GT2. This is now the second removable CPU class after
+   PE builder/seal work. Expand carrier-free replay only through exact
+   source-qualified destination construction; ordered-control and unsupported
+   producer families remain fail-closed.
 
 For the planned queue T2d reserve-copy-commit decision, this evidence is a weak
 economic signal: queue/mutation/arena materialization is small and the Xcode

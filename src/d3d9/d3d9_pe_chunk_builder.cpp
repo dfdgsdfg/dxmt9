@@ -824,8 +824,10 @@ bool CommandChunkBuilder::appendNewHandleEntry(
     if (auto* slot = handlePresence_.findOrInsert(local)) {
       ++slot->count;
     }
-    retainer_.retainWireObject(object.identity.kind, object.object,
-                               active_.retainedCheckpoint);
+    if (!retainer_.retainWireObject(object.identity.kind, object.object,
+                                    active_.retainedCheckpoint)) {
+      return false;
+    }
   } catch (...) {
     return false;
   }

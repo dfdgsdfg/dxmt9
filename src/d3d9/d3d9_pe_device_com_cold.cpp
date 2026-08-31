@@ -187,6 +187,11 @@ D3D9DeviceImpl::D3D9DeviceImpl(D9CDevice* dev, IDirect3D9Ex* factory,
 }
 
 D3D9DeviceImpl::~D3D9DeviceImpl() {
+    std::int32_t teardownFaultHr = 0;
+    // Teardown is terminal by definition: consume the probe for matrix
+    // accounting, but never turn destruction into a recoverable operation.
+    (void)dxmt9PeConsumeRecorderFault(PeRecorderFaultPoint::Teardown,
+                                      teardownFaultHr);
     (void)flushPeRecorder(
         PeRecorderFlushReason::Destructor,
         PeRecorderFlushDisposition::DiscardForRecovery);
@@ -902,6 +907,14 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::Reset(D3DPRESENT_PARAMETERS* pPP) noex
         FAILED(vhr)) {
         return vhr;
     }
+    // Reset is the recovery edge for effect-unknown recorder failures. Keep
+    // this injectable point before any flush, release, WSI adoption, or core
+    // reset work so a failed probe cannot partially tear down the device.
+    std::int32_t injectedFaultHr = 0;
+    if (dxmt9PeConsumeRecorderFault(PeRecorderFaultPoint::Reset,
+                                    injectedFaultHr)) {
+        return static_cast<HRESULT>(injectedFaultHr);
+    }
     D9CPresentParams cpp{};
     cpp.backBufferWidth  = pPP->BackBufferWidth;
     cpp.backBufferHeight = pPP->BackBufferHeight;
@@ -1587,6 +1600,12 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::UpdateSurface(IDirect3DSurface9* src,
         .srcRect = cs,
         .dstPoint = cd,
     };
+    armSemanticRecord(
+        dxmt9::d3d9::pe::PeSemanticProducerKind::UpdateSurface,
+        D9C_COMMAND_RECORD_UPDATE_SURFACE,
+        dxmt9::d3d9::pe::PeSemanticRecordInput{
+            .updateSurface = wire, .surface0 = source.wire(),
+            .surface1 = destination.wire()});
     const HRESULT appendHr = appendRecord(
         D9C_COMMAND_RECORD_UPDATE_SURFACE,
         kLegacyUpdateSurfaceSizeHint,
@@ -1637,6 +1656,13 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::UpdateTexture(IDirect3DBaseTexture9* s
     if (FAILED(barrierHr)) return barrierHr;
     const auto sourceWire = source.wire();
     const auto destinationWire = destination.wire();
+    armSemanticRecord(
+        dxmt9::d3d9::pe::PeSemanticProducerKind::UpdateTexture,
+        D9C_COMMAND_RECORD_UPDATE_TEXTURE,
+        dxmt9::d3d9::pe::PeSemanticRecordInput{
+            .updateFlags = 0u,
+            .texture0 = sourceWire, .texture1 = destinationWire,
+        });
     // Wine d3d9 UpdateTexture: both args non-NULL; src in SYSTEMMEM;
     // dst not SYSTEMMEM/SCRATCH. test_update_texture_pool_copy_2d.
     const HRESULT appendHr = appendRecord(
@@ -1733,6 +1759,12 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetRenderTargetData(IDirect3DSurface9*
     if (FAILED(barrierHr)) return barrierHr;
     const dxmt9::d3d9::pe::PeReadbackBatch readbackBatch{
         .source = source.wire(), .destination = destination.wire()};
+    armSemanticRecord(
+        dxmt9::d3d9::pe::PeSemanticProducerKind::Readback,
+        D9C_COMMAND_RECORD_READBACK,
+        dxmt9::d3d9::pe::PeSemanticRecordInput{
+            .surface0 = readbackBatch.source,
+            .surface1 = readbackBatch.destination});
     const HRESULT appendHr = appendRecord(
         D9C_COMMAND_RECORD_READBACK, kLegacyReadbackSizeHint,
         [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
@@ -1870,6 +1902,12 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::StretchRect(IDirect3DSurface9* src,
         .srcRect = srcRect ? cs : D9CRect{},
         .dstRect = dstRect ? cd : D9CRect{},
     };
+    armSemanticRecord(
+        dxmt9::d3d9::pe::PeSemanticProducerKind::StretchRect,
+        D9C_COMMAND_RECORD_STRETCH_RECT,
+        dxmt9::d3d9::pe::PeSemanticRecordInput{
+            .stretchRect = wire, .surface0 = source.wire(),
+            .surface1 = destination.wire()});
     const HRESULT appendHr = appendRecord(
         D9C_COMMAND_RECORD_STRETCH_RECT,
         kLegacyStretchRectSizeHint,
@@ -1923,6 +1961,11 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ColorFill(IDirect3DSurface9* pSurf,
         .reserved0 = 0u,
         .rect = pRect ? cr : D9CRect{},
     };
+    armSemanticRecord(
+        dxmt9::d3d9::pe::PeSemanticProducerKind::ColorFill,
+        D9C_COMMAND_RECORD_COLOR_FILL,
+        dxmt9::d3d9::pe::PeSemanticRecordInput{
+            .colorFill = wire, .surface0 = surface.wire()});
     const HRESULT appendHr = appendRecord(
         D9C_COMMAND_RECORD_COLOR_FILL, kLegacyColorFillSizeHint,
         [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
@@ -3019,6 +3062,11 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ResetEx(D3DPRESENT_PARAMETERS* pPP,
             pPP->MultiSampleType, pPP->MultiSampleQuality, extended_);
         FAILED(vhr)) {
         return vhr;
+    }
+    std::int32_t injectedFaultHr = 0;
+    if (dxmt9PeConsumeRecorderFault(PeRecorderFaultPoint::Reset,
+                                    injectedFaultHr)) {
+        return static_cast<HRESULT>(injectedFaultHr);
     }
     D9CPresentParams cpp{};
     cpp.backBufferWidth  = pPP->BackBufferWidth;

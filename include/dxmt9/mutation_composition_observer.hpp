@@ -148,6 +148,11 @@ struct ObserverSnapshot {
   // the exact terminal-state view below rather than mutating history.
   std::uint64_t finalRejectionCounts[
       static_cast<std::size_t>(RejectionReason::Count)]{};
+  // Capacity drops are kept separate from malformed observations.  The
+  // report parser uses this to prove that the terminal-state counts cover
+  // every accepted event rather than silently treating a bounded overflow as
+  // a completed workload.
+  std::uint64_t overflowEvents = 0u;
   std::uint64_t invalidOrDroppedEvents = 0u;
   std::uint64_t pendingMutations = 0u;
   std::uint64_t completedMutations = 0u;
@@ -237,6 +242,7 @@ class MutationCompositionObserver final {
       return false;
     }
     if (eventCount_ == kMaxEvents) {
+      ++snapshot_.overflowEvents;
       ++snapshot_.invalidOrDroppedEvents;
       reject(RejectionReason::Capacity);
       return false;
@@ -244,6 +250,7 @@ class MutationCompositionObserver final {
     auto* generation = findGeneration(observed.identity);
     if (generation == nullptr) {
       if (generationCount_ == kMaxGenerations) {
+        ++snapshot_.overflowEvents;
         ++snapshot_.invalidOrDroppedEvents;
         reject(RejectionReason::Capacity);
         return false;

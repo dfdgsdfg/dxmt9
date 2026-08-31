@@ -681,7 +681,7 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
   if (pipelineObserverEnv && pipelineObserverEnv[0] != '\0' &&
       pipelineObserverEnv[0] != '0') {
     pipelineLifecycleObserver_ =
-        std::make_unique<dxmt9::queue::PipelineLifecycleObserver>();
+        std::make_unique<dxmt9::queue::PipelineLifecycleObserver>(true);
   }
 
   // Bind queueLifecycle_ to our own state + a pool-based surface-compat
@@ -834,6 +834,9 @@ encoders::EncodeContext CommandQueue::makeEncodeContext() {
   ctx.transientCompletedSeqId = transientCompletedSeqId;
   ctx.drawRecorder = testOnlyDrawRecorder_;
   ctx.replayObserver = replayObserver_;
+  ctx.pipelineLifecycleObserver = pipelineLifecycleObserver_
+      ? pipelineLifecycleObserver_->productionSink()
+      : dxmt9::queue::PipelineLifecycleObserverSink{};
   return ctx;
 }
 
@@ -8279,6 +8282,7 @@ void CommandQueue::stashDrawableToken(core::PresentId id,
   // reached the single-use Take transition.
   const bool stashed = slot.pendingToken.stash(std::move(token));
   DXMT_ASSERT(stashed);
+  if (!stashed) return;
 }
 
 std::shared_ptr<PresentDrawableToken>

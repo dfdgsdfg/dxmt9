@@ -69,6 +69,7 @@
 #include "d3d9_pe_recorder_transaction.hpp"
 #include "d3d9_pe_recorder_settlement.hpp"
 #include "d3d9_pe_recorder_state.hpp"
+#include "d3d9_pe_recorder_fault.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "d3d9_pe_stateblock_transaction.hpp"
 #include "d3d9_pe_stats_decimation.hpp"
@@ -404,6 +405,9 @@ inline bool dxmt9PeScalarSemanticObserverEnabled() {
     return enabled;
 }
 
+// Opt-in P2/P3 semantic batch lane, resolved once during device construction.
+bool dxmt9PeSemanticBatchOwnerEnabled();
+
 inline std::uint32_t dxmt9PeThreadSamplerHz() {
     static const std::uint32_t hz = [] {
         // Unset, unparseable, and 0 all fall back to the default rather than
@@ -430,6 +434,7 @@ inline PeDiagnosticsConfig dxmt9PeResolvedDiagnosticsConfig() {
         .scalarSemanticObserver = dxmt9PeScalarSemanticObserverEnabled(),
         .copyMaterializationLedger =
             dxmt9::core::copyMaterializationLedgerEnabled(),
+        .semanticBatchOwner = dxmt9PeSemanticBatchOwnerEnabled(),
         .threadSamplerHz = dxmt9PeThreadSamplerHz(),
     };
 }
@@ -1066,19 +1071,33 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         dxmt9::d3d9::pe::RecorderCommitEvent discardEvent =
             dxmt9::d3d9::pe::RecorderCommitEvent::ExplicitDiscard);
 
-    // The semantic ledgers are cold, nullable owners. Keep these accessors
-    // visible to the in-class hot setters/append envelope so the disabled
-    // path pays only the cached diagnostics/null branch; an out-of-line
-    // accessor call would be unconditional even when the pointer is null.
+    // Keep nullable observer accessors inline on the default-disabled path.
     dxmt9::d3d9::pe::PeScalarSemanticTokenLedger*
     scalarSemanticObserver() noexcept {
         return diagnostics_ ? diagnostics_->scalarSemanticTokens.get() : nullptr;
     }
-
     dxmt9::d3d9::pe::PeAllFamilySemanticTokenLedger*
     allFamilySemanticObserver() noexcept {
         return diagnostics_ ? diagnostics_->allFamilySemanticTokens.get() : nullptr;
     }
+    PeProductionSemanticBatchOwner* semanticBatchOwner() noexcept;
+    const PeProductionSemanticBatchOwner* semanticBatchOwner() const noexcept;
+    bool semanticBatchRequested() const noexcept;
+
+    void armSemanticRecord(
+        dxmt9::d3d9::pe::PeSemanticProducerKind producer,
+        std::uint32_t recordType,
+        const dxmt9::d3d9::pe::PeSemanticRecordInput& input) noexcept;
+    void clearSemanticRecordInput() noexcept;
+
+    bool settleSemanticRecord(
+        const dxmt9::d3d9::pe::PeSemanticRecordInput& input,
+        std::uint64_t recordOrdinal) noexcept;
+    HRESULT appendSemanticRecord(std::uint32_t type, std::size_t bytes);
+    HRESULT retryPendingSemanticChunk();
+    HRESULT appendSemanticRecordBoundary(std::uint32_t type,
+                                         std::size_t bytes,
+                                         std::uint64_t sourceOrdinal);
 
     bool observeCommittedSemanticRecord(
         std::uint32_t recordType, std::uint64_t sourceOrdinal,
@@ -1122,88 +1141,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
 
     void logVsConstSetterRangePerf(const char* event);
 
-    // Fill the producer's binding view from the COM members. Reuses a member
-    // rather than a local so the ~850-byte view is not zero-initialized on
-    // every draw.
-    //
-    // `needAllSlots` mirrors the producer's own snapshot gate. It matters for
-    // cost, not correctness: textureHandle() is not a cast -- the trusted
-    // virtual GetType() call per bound texture -- so translating all 20 texture
-    // and 16 stream slots unconditionally would do roughly 45 raw* calls per
-    // draw where the delta path historically did about 9. At GT2's ~1,700
-    // packet builds per present that is tens of thousands of extra virtual
-    // calls, on the same hot path aefde46f had just cleaned up. So the delta
-    // fill translates exactly the pending slots the old inline code did, and
-    // only the snapshot path drains everything.
-    //
-    // Fills the FULL PeWireObjectRef -- identity as well as object -- via the
-    // ref accessors return each wrapper's cached reference.
-    //
-    // Identity is not optional: CommandChunkBuilder::appendHandle rejects a
-    // ref whose identity is zero (PeWireObjectRef::valid checks kind,
-    // generation and objectId) and fails the whole record through
-    // failActiveRecord() with NO log line. An earlier revision filled only
-    // `object`, on the reasoning that nothing read identity yet; the moment
-    // APPLY_STATE started going through appendApplyState that turned into
-    // "IDirect3DDevice9::Clear failed: Invalid call" with nothing explaining
-    // why, and the harness still reported status=pass because it does not gate
-    // on the rendered image.
-    //
-    // These accessors are also cheaper than the raw* pair they replaced for
-    // surfaces and buffers: wireObject() is a member read where rawSurf() went
-    // through a cast and textureHandle() made a virtual GetType()
-    // call. The texture ref accessor still switches on GetType(), so the texture loop
-    // keeps its pending-mask guard.
-    // `allStreams` makes the stream half authoritative for EVERY slot, not just
-    // pending ones. Draw sites need that: chunk-context re-emission asks "what
-    // is bound in slot N", and a non-pending slot otherwise holds whatever the
-    // last build that touched it left behind -- stale after
-    // clearPeStateTracking()/Reset, which clears streamOff_/streamStr_ and the
-    // shadow but not this view. It costs what production already paid: the draw
-    // sites called currentDrawStreamSources(), which reads all 16 slots.
+    // Build binding and retention views without transferring ownership.
     void populateBindingView(dxmt9::d3d9::pe::PeBindingView& view,
                              bool needAllSlots,
                              bool allStreams = false) const;
 
-    // Forwards to the rehosted producer in d3d9_pe_producer.cpp. The signature
-    // is deliberately unchanged so all six call sites -- which differ only in
-    // which packet field they pass, whether they thread a live
-    // forceFullSnapshot, and what they do on failure -- keep working verbatim.
-    // Rewriting them individually would have been six hand edits in a
-    // translation unit no meson test can compile; this is one function.
-    //
-    // The DXMT9_PE_STATS_DECIMATION `draw_packet` scope lives HERE, not in the
-    // producer, because it historically covered the COM-to-wire binding
-    // translation as well as the packet fill. Timing only the producer would
-    // have made the figure read lower while the work moved outside it, and that
-    // figure is what docs/perfomance/ cites for PE recording cost.
-    // Destination-chunk retention, as data. MUST be read after any CapacityPre
-    // flush has resealed the chunk -- that is why the draw sites build it inside
-    // the append emitter and not before.
     dxmt9::d3d9::pe::PeChunkContext currentChunkContext() const;
 
-    // Compatibility producer for Render Tape, oversized batches, and SWVP
-    // override packets. Ordinary APPLY_STATE and non-UP draws use the compact
-    // two-pass SparseStatePlan path below and never write section-sized scratch.
-    // The decimated draw_packet scope lives here for
-    // the same reason it does on the fat-packet forwarder: it has to cover the
-    // COM-to-wire binding translation, not just the section fill.
-    // The shadow is const through this producer boundary. Preparation is
-    // intentionally non-consuming; acceptInlineConstantDelta is the only
-    // operation that settles represented constant ranges after append
-    // acceptance. The recorder lock/producer ownership contract makes this
-    // prepare/accept interval non-reentrant.
-    // params.recordType is the ONLY record-type input, deliberately: this used
-    // to take a separate recordType argument and stamp it onto params. Because
-    // params was taken by value, the stamp landed on the local copy only, so
-    // every caller that later handed its own params to addChunkContextSections
-    // passed recordType == 0. That reads as "not an indexed draw", and the
-    // context step does not merely skip the index section -- it rebuilds the
-    // span as first(0), wiping the one buildSparseState had already emitted
-    // for pendingIb. SetIndices records nothing standalone in chunk mode, so
-    // every indexed draw then replayed against a stale index buffer: GT1 came
-    // out as sliver triangles with garbled HUD digits. Two sources of truth for
-    // one value, one of them silently write-only. Now there is one.
+    // Compatibility producer for Render Tape, oversized batches, and SWVP.
     bool buildSparseStateForRecord(
         const dxmt9::d3d9::pe::PeDrawParams& params,
         bool forceFullSnapshot = false,
@@ -2268,11 +2213,33 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                                            : D3DERR_NOTAVAILABLE;
         }
         auto* const allFamilyTokens = allFamilySemanticObserver();
+        auto* const semanticOwner = semanticBatchOwner();
+        if (semanticBatchRequested() && !semanticOwner) {
+            return D3DERR_NOTAVAILABLE;
+        }
+        const bool semanticLane = semanticOwner != nullptr;
+        if (recorderState_.chunkTransaction.retryable() &&
+            recorderState_.chunkTransaction.retryAtSeal()) {
+            const HRESULT retryHr = retryPendingSemanticChunk();
+            if (FAILED(retryHr)) return retryHr;
+        }
         const std::uint64_t semanticSourceOrdinal = allFamilyTokens
             ? allFamilyTokens->beginSource(type)
             : 0u;
         if (allFamilyTokens && semanticSourceOrdinal == 0u) {
             return D3DERR_INVALIDCALL;
+        }
+        if (semanticLane) {
+            const HRESULT semanticHr = appendSemanticRecordBoundary(
+                type, bytes, semanticSourceOrdinal);
+            if (FAILED(semanticHr) && dxmt9PeRecorderChunkLogEnabled()) {
+                dxmt9DeviceInfoLog(
+                    "pe_semantic_append_failed device=%p type=%u bytes=%zu "
+                    "hr=0x%08x records=%zu",
+                    this, type, bytes, static_cast<unsigned>(semanticHr),
+                    semanticOwner->size());
+            }
+            return semanticHr;
         }
         const auto maxRecords = maxPendingCommandRecords();
         const auto maxBytes = maxPendingCommandBytes();
@@ -2289,6 +2256,17 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
             appendedRecordCount >= maxRecords || appendedPayloadBytes >= maxBytes;
         const bool noFlushAppend =
             !willFlushBeforeAppend && !willFlushAfterAppend;
+        // Checked before CapacityPre mutates the transaction. A failed
+        // attempt remains an unattempted record and can be retried verbatim.
+        std::int32_t injectedFaultHr = 0;
+        if (dxmt9PeRecorderFaultsEnabled() && willFlushBeforeAppend &&
+            dxmt9PeConsumeRecorderFault(
+                PeRecorderFaultPoint::CapacityPreReserve, injectedFaultHr)) {
+            if (allFamilyTokens) {
+                allFamilyTokens->preserveForRetry(semanticSourceOrdinal);
+            }
+            return static_cast<HRESULT>(injectedFaultHr);
+        }
         // Gate the clock reads, not just their consumers. All four users of
         // these two timestamps (recordPeChunkInterAppendGap, recordPeAppendCpu,
         // notePeChunkAppendBoundary, logPeRecordMilestoneAfterPresent) early-out
@@ -2368,6 +2346,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                 const auto recordOrdinalBefore =
                     recorderState_.commandChunk.lastCommittedRecordOrdinal();
                 hr = emit(recorderState_.commandChunk, phase);
+                if (FAILED(hr)) {
+                    std::int32_t retainFaultHr = 0;
+                    if (dxmt9PeTakeRecorderRetainFaultResult(retainFaultHr)) {
+                        hr = static_cast<HRESULT>(retainFaultHr);
+                    }
+                }
                 const bool recordAccepted =
                     recorderState_.commandChunk.lastCommittedRecordOrdinal() !=
                         recordOrdinalBefore;
@@ -2399,6 +2383,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                 (void)plan;
             } else {
                 hr = emit(recorderState_.commandChunk, phase);
+                if (FAILED(hr)) {
+                    std::int32_t retainFaultHr = 0;
+                    if (dxmt9PeTakeRecorderRetainFaultResult(retainFaultHr)) {
+                        hr = static_cast<HRESULT>(retainFaultHr);
+                    }
+                }
                 settleAppendEmitter(SUCCEEDED(hr), hr);
                 const auto plan = dxmt9::d3d9::pe::planRecorderSettlement({
                     .point = dxmt9::d3d9::pe::RecorderSettlementPoint::Emitter,
@@ -2927,8 +2917,14 @@ public:
                 .hasSrc = src ? 1u : 0u, .hasDst = dst ? 1u : 0u,
                 .sourceHandleIndex = 0u, .src = src ? cs : D9CRect{},
                 .dst = dst ? cd : D9CRect{}},
-            .source = presentSourceWire,
+                .source = presentSourceWire,
         };
+        armSemanticRecord(
+            dxmt9::d3d9::pe::PeSemanticProducerKind::Present,
+            D9C_COMMAND_RECORD_PRESENT,
+            dxmt9::d3d9::pe::PeSemanticRecordInput{
+                .present = presentBatch.command,
+                .surface0 = presentBatch.source});
         const HRESULT appendHr = appendRecord(
             D9C_COMMAND_RECORD_PRESENT, kLegacyPresentSizeHint,
             [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
@@ -2961,7 +2957,9 @@ public:
             return appendHr;
         }
         const HRESULT flushHr = flushPendingCommandChunk(PeRecorderFlushReason::Present);
-        if (SUCCEEDED(flushHr)) (void)recorderState_.commandChunk.returnToLegacyFinalLayout();
+        if (SUCCEEDED(flushHr) && !semanticBatchOwner()) {
+            (void)recorderState_.commandChunk.returnToLegacyFinalLayout();
+        }
         if (recordPresentTiming) {
             presentTimingFlushEnd = std::chrono::steady_clock::now();
             dxmt9DeviceInfoLog(

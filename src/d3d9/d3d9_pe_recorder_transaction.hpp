@@ -197,6 +197,27 @@ public:
         return recordBridgeResult(commandAccepted) && commandAccepted;
     }
 
+    // A fault injected before entering the PE/unix call keeps the sealed
+    // bytes and all retained objects retryable. `retryAtSeal_` is reused as
+    // the compact retry witness; no recorder footprint or ABI changes.
+    constexpr bool recordBridgePreEffectFailure() noexcept {
+        if (phase_ != RecorderChunkTransactionPhase::Sealed) return false;
+        retryAtSeal_ = true;
+        phase_ = RecorderChunkTransactionPhase::Retry;
+        return true;
+    }
+
+    constexpr bool reopenBridgePreEffectRetry() noexcept {
+        if (phase_ != RecorderChunkTransactionPhase::Retry || !retryAtSeal_) {
+            return false;
+        }
+        // The builder remains sealed, but flushPendingCommandChunk runs its
+        // normal seal bookkeeping again. Emitted is the pre-seal phase that
+        // admits that second bookkeeping pass.
+        phase_ = RecorderChunkTransactionPhase::Emitted;
+        return true;
+    }
+
     // Returns transition validity independently from the bridge result.  A
     // false bridge result is an accepted effect-unknown transition to
     // Poisoned, while a false return here means the owner was malformed.
@@ -312,6 +333,7 @@ public:
     constexpr bool capacityPostSeen() const noexcept { return capacityPostSeen_; }
     constexpr bool capacityPostSucceeded() const noexcept { return capacityPostSucceeded_; }
     constexpr bool retryable() const noexcept { return phase_ == RecorderChunkTransactionPhase::Retry; }
+    constexpr bool retryAtSeal() const noexcept { return retryAtSeal_; }
     constexpr bool poisoned() const noexcept { return phase_ == RecorderChunkTransactionPhase::Poisoned; }
     constexpr bool completed() const noexcept { return phase_ == RecorderChunkTransactionPhase::Completed; }
 

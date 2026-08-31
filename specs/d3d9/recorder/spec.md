@@ -599,46 +599,37 @@ record checkpoint. Seal requires exact plan exhaustion before publishing,
 repeated seal returns the same committed bytes, and Reset reuses the fixed
 layout while preserving the existing warm-retainer policy.
 
-Production selects the primitive only for Present and synchronous Readback.
-Both APIs force the prior chunk empty, append exactly one record, and commit it
-before returning, so `prepareExactFinalLayout` can transactionally replan the
-persistent builder without changing CapacityPre/CapacityPost cadence, the warm
-retainer, capture preparation, bridge fail-stop, or Reset cleanup. Preparation
-reuses the builder's final-byte vector and preserves the capacity of every
-legacy staging vector, including the local handle-object vector that carries
-warm ownership; it does not swap in short-lived exact vectors. Allocation
-failure leaves the empty legacy builder untouched. After accepted commit and
-the ordinary builder reset, `returnToLegacyFinalLayout` restores the fallback;
-an entered bridge failure instead keeps the sealed exact bytes under poison.
+Production selects the primitive through the default-off
+`DXMT9_PE_SEMANTIC_BATCH_OWNER` gate. Disabled devices retain the legacy
+`CommandChunkBuilder`/retainer behavior, with only cached nullable checks at
+the producer arm and common append envelope. When enabled, `appendRecord`
+chooses exactly one lane before builder preparation or retention: one
+chunk-scoped `PeSemanticBatchOwner` admits all 21 producer rows into typed
+record slots, copies only constant/UP byte payloads plus typed sparse and
+rectangle arenas, and acquires kind-qualified physical pins at admission.
+Admission checkpoints source/record ordinals and all arena/pin frontiers and
+rolls back atomically on collision or bounded overflow; successful settlement
+ends the retainer warm epoch while clearing only used record/pin/arena ranges,
+whereas Reset/discard releases every current and warm pin. Admission maintains
+O(1) record-local handle/payload frontiers for cadence and transaction
+evidence; the full record walk is reserved for final emission validation. Its
+pure visitors provide negotiated segmented fixed-role
+emission for normal bridge transport and contiguous ExactFixed emission for
+capture/compatibility, with identical record-local dedup, generation-qualified
+identities, payload alignment, and copied arenas. Construction failure is
+fail-closed before the gate becomes usable.
 
-All producer families now share one persistent, chunk-scoped settlement owner
-even when they continue to use the compatibility builder. The owner carries a
-monotonic transaction epoch, record and retainer checkpoints, a generation-
-qualified PendingDelta frontier, CapacityPre/CapacityPost dispositions, the
-seal/bridge cut, and capture reservation/disposition through builder reset.
-Record-local emitter failure removes only the active record intent and restores
-the preceding accepted chunk frontier; an entered bridge failure leaves the
-same owner poisoned until Reset/teardown. PendingDelta conditional consumers
-reject an old generation even for an A -> B -> A value sequence. This connects
-production settlement ownership for all 21 families, but does not make their
-final-wire construction ExactFixed or connect the immutable batch to CPU-ready
-Tape.
-
-Canonical compact D9C V2 direct-final publication remains blocked for the
-other producer families until a complete immutable semantic batch supports
-side-effect-free count/dedup followed by one `ExactFixed`-style emission. A new
-bounded scatter/gather ABI is the alternative if that complete batch owner
-cannot be established. The fixed-layout constructor remains the truthful
-differential oracle; it is not a production multi-record route.
-
-`kPeExactProductionPolicyTable` gives all 21 semantic producer rows an explicit
-typed disposition. The other 19 remain legacy because normal `appendRecord`
-owns one D3D9 call at a time and neither it nor `flushPendingCommandChunk` owns
-the future calls that complete a multi-record chunk. Their borrowed sparse/UP/
-Clear inputs, pending-state consumption, capture closure, resource side
-effects, or cross-call ordering still require the replayable whole-chunk owner
-from R-CORE-REC-7.2.1. Render Tape snapshot construction is a separate mutable
-bootstrap path and is not that owner.
+The compatibility `PePrewireChunkTransaction` and `PeOwnedRecordCandidate`
+remain only as bounded call-local Present/Readback test/pilot values; they are
+not production semantic-batch owners and copy no final wire bytes. The enabled
+semantic lane preserves legacy sizeHint cadence, CapacityPre/CapacityPost,
+PendingDelta settlement, capture reservation, bridge pre-effect retry,
+effect-unknown poison, and Reset cleanup through the persistent recorder
+transaction, while never preparing or retaining in the legacy graph for that
+chunk. Capture always selects contiguous ExactFixed because its existing
+consumer requires it; normal segmented transport is selected only when the
+negotiated bridge accepts it. CPU-ready Tape role integration and default
+promotion remain open pending cross/Wine/wild evidence.
 
 `RecorderBorrow<T>` and `RecorderLockCapability` are proof-carrying API shapes,
 not new owners. They carry the recorder epoch and transaction identity, have no
@@ -669,23 +660,19 @@ with the existing scalar and StateBlock projections and does not use record
 size, count, or a hash as semantic identity. The value arena is bounded to the
 16 MiB recorder byte ceiling and the identity arena to 64 qualified identities
 per maximum record slot; exhaustion fails stop only while the explicit proof
-gate is enabled. The default path retains no ledger; one cached nullable-owner
-branch is the full append-envelope cost.
+gate is enabled. The default path retains no ledger or semantic storage. Its
+additional cached nullable checks have cross-build coverage but do not yet have
+a disassembly or workload-cost claim.
 
 The bounded native legacy/direct fixture runs both builders from immutable
-canonical values. It proves complete wire-byte identity, arena-relative
-offsets, duplicate-handle behavior, retain rollback, underfilled-seal retry,
-repeated seal, Reset reuse, and absence of physically eliminated temporary/seal
-materializations. Its all-family loop emits every semantic producer row as one
-record through both sinks, requires exact blob identity and successful importer
-identity, and under-plans each exact payload to prove atomic rollback and retain
-release. Present and Readback additionally exercise the production in-place
-selection and restoration seam. Multi-record CapacityPre/CapacityPost,
-pending/capture/resource-side-effect equivalence, and allocation/retain/bridge/
-capture fault injection remain required before another row is selected.
-Cross-target PE builds plus the bounded Wine matrix in R-CORE-REC-7.5 remain
-non-substitutable because host-only value tests cannot exercise PE COM and the
-bridge failure boundary.
+canonical values. The production owner additionally proves ownership under
+source mutation, identity deduplication, failed emission rollback, exact and
+segmented byte identity, multi-record cadence, warm settlement, and retry-
+ordinal reuse without fabricating an ordinal. All 21 producer families are
+wired to the default-off owner, but bounded value tests and cross compilation
+do not substitute for PE COM execution. Broader per-call Wine faults,
+capture/resource-side-effect equivalence, pixels, locality, and workload cost
+remain required before promotion.
 
 Non-goals are a wire-version change, pointer-bearing ABI, cross-thread recorder
 callbacks, record fusion, changed chunk cadence, semantic state merging, or

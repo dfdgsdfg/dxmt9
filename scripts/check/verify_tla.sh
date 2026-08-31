@@ -57,8 +57,8 @@ normal_models=(
 
 expected_normal_count=43
 expected_progress_count=1
-expected_counterexample_count=69
-expected_cfg_count=113
+expected_counterexample_count=73
+expected_cfg_count=117
 progress_model=CpuPipelineLifecycle
 progress_cfg_name="$progress_model.progress.cfg"
 
@@ -126,6 +126,10 @@ counterexample_models=(
   "CpuPipelineLifecycle|.no-reset-generation.counterexample|Invariant ResetGenerationAdvances is violated"
   "CpuPipelineLifecycle|.present-reclaim.counterexample|Invariant PresentSettledBeforeReclaim is violated"
   "CpuPipelineLifecycle|.fabricated-gpu-milestone.counterexample|Invariant NoGpuMilestone is violated"
+  "CpuPipelineLifecycle|.owner-omission.counterexample|Invariant SelectedOwnerExact is violated"
+  "CpuPipelineLifecycle|.receipt-omission.counterexample|Invariant ReceiptAuthorityExact is violated"
+  "CpuPipelineLifecycle|.import-omission.counterexample|Invariant OwnersAreExplicit is violated"
+  "CpuPipelineLifecycle|.device-loss-omission.counterexample|Invariant OwnersAreExplicit is violated"
   # Full-shadow upload clobbers the in-flight NOOVERWRITE read range.
   "NoOverwriteByteRange|.counterexample|Invariant NoOverwriteReadPreserved is violated"
   # Pin-ordering premise removed: a reclaim frees a record the producer's

@@ -38,6 +38,8 @@ struct FakeSource {
   std::uint32_t joined = 0;
   std::uint32_t children = 0;
   bool completionAuthority = false;
+  bool selectedParallel = false;
+  bool effectBoundaryCrossed = false;
 };
 
 // Deterministic queue/fake-backend owner.  It drives the same pure admission,
@@ -109,6 +111,8 @@ class FakePipelineQueue {
     const auto before = queue_;
     source.children = children;
     source.joined = 0;
+    source.selectedParallel = children > 1u;
+    source.effectBoundaryCrossed = source.selectedParallel;
     source.borrows = children;
     emit(source, source.stage, PipelineStage::Encoding,
          PipelineDisposition::Advance, before);
@@ -335,8 +339,14 @@ class FakePipelineQueue {
                        ? PipelineOwner::SelectedParallel
                        : PipelineOwner::SerialEncode)
             : from == PipelineStage::Encoding &&
+                    to == PipelineStage::Encoding &&
+                    disposition == PipelineDisposition::ChildJoin
+                ? (source.selectedParallel ? PipelineOwner::SelectedParallel
+                                            : PipelineOwner::Queue)
+            : from == PipelineStage::Encoding &&
                     to == PipelineStage::GPUInFlight
-                ? PipelineOwner::Receipt
+                ? (source.selectedParallel ? PipelineOwner::SelectedParallel
+                                            : PipelineOwner::Receipt)
             : from == PipelineStage::GPUInFlight &&
                     to == PipelineStage::GPUInFlight &&
                     disposition == PipelineDisposition::PayloadRetired
@@ -349,9 +359,9 @@ class FakePipelineQueue {
                     (from == PipelineStage::RawOwned ||
                      from == PipelineStage::Encoding)
                 ? PipelineOwner::DeviceLoss
-                : from == PipelineStage::GPUInFlight &&
+            : from == PipelineStage::GPUInFlight &&
                         disposition == PipelineDisposition::Completed
-                    ? PipelineOwner::Receipt
+                    ? PipelineOwner::GpuCompletion
                     : from == PipelineStage::Completed &&
                             to == PipelineStage::Reclaimed
                         ? PipelineOwner::Reclaim
@@ -374,6 +384,16 @@ class FakePipelineQueue {
         .joinedChildren = source.joined,
         .totalChildren = source.children,
         .completionAuthority = source.completionAuthority,
+        .lifecycleFacts = source.selectedParallel
+            ? PipelineLifecycleFacts{
+                .valid = true,
+                .selectedParallel = true,
+                .effectBoundaryCrossed = source.effectBoundaryCrossed,
+                .encodeOwner = PipelineOwner::SelectedParallel,
+                .childTotal = source.children,
+                .joinedChildren = source.joined,
+              }
+            : PipelineLifecycleFacts{},
         .physicalBatchId = source.physicalBatchId,
         .batchIndex = source.physicalBatchIndex,
         .batchCount = source.physicalBatchCount,
@@ -409,6 +429,37 @@ void buildAndSubmit(FakePipelineQueue& queue,
     queue.joinChild(source);
   }
   queue.submit(source);
+}
+
+void selectedParallelRecordedChain() {
+  FakePipelineQueue queue;
+  auto source = queue.makeSource(1, PipelinePayloadKind::Arena);
+  queue.arrive(source);
+  queue.adoptRaw(source);
+  buildAndSubmit(queue, source, 2);
+  queue.complete(source);
+  check(queue.ownerObserver().valid(),
+        "recorded selected-parallel chain reduces through reclaim");
+  std::uint32_t joins = 0;
+  bool selectedSubmit = false;
+  for (const auto& event : queue.events()) {
+    if (event.disposition == PipelineDisposition::ChildJoin) {
+      ++joins;
+      check(event.owner == PipelineOwner::SelectedParallel,
+            "child join retains selected-parallel ownership");
+      check(event.lifecycleFacts.valid &&
+                event.lifecycleFacts.selectedParallel &&
+                event.lifecycleFacts.effectBoundaryCrossed,
+            "child join carries the post-gate selected facts");
+    }
+    if (event.from == PipelineStage::Encoding &&
+        event.to == PipelineStage::GPUInFlight) {
+      selectedSubmit = event.owner == PipelineOwner::SelectedParallel &&
+          event.totalChildren == 2u && event.joinedChildren == 2u;
+    }
+  }
+  check(joins == 2u && selectedSubmit,
+        "selected-parallel observer records both joins before submit");
 }
 
 void purePredicateTruthTables() {
@@ -503,6 +554,23 @@ void purePredicateTruthTables() {
             PipelineOwner::SelectedParallel, PipelineStage::Encoding,
             PipelineStage::GPUInFlight, PipelineDisposition::Advance),
         "selected-parallel completion is owner-qualified without new behavior");
+  check(pipelineOwnerMatchesTransition(
+            PipelineOwner::SelectedParallel, PipelineStage::Encoding,
+            PipelineStage::Encoding, PipelineDisposition::ChildJoin),
+        "selected-parallel child joins are owner-qualified lifecycle rows");
+  const PipelineLifecycleFacts selectedFacts{
+      .valid = true,
+      .selectedParallel = true,
+      .effectBoundaryCrossed = true,
+      .encodeOwner = PipelineOwner::SelectedParallel,
+      .childTotal = 2u,
+      .joinedChildren = 1u,
+  };
+  check(selectedFacts.shapeValid() &&
+            pipelineChildJoinMayPublish(selectedFacts, 1u, 1u),
+        "selected-parallel facts enforce child total and join prefix");
+  check(!pipelineChildJoinMayPublish(selectedFacts, 2u, 1u),
+        "selected-parallel facts reject an inconsistent join borrow count");
   check(!pipelineOwnerMatchesTransition(
              PipelineOwner::Queue, PipelineStage::Encoding,
              PipelineStage::GPUInFlight, PipelineDisposition::Advance),
@@ -639,6 +707,26 @@ void completionFrontierTruthTable() {
   check(!pipelineCompletionFrontierContiguous(
              std::numeric_limits<std::uint64_t>::max(), 1, 0),
         "completed FIFO frontier overflow is rejected");
+}
+
+void lifecycleArithmeticTruthTable() {
+  std::uint64_t frontier = 0;
+  check(pipelineCheckedFrontierAdd(7, 5, frontier) && frontier == 12,
+        "completion frontier addition preserves an in-range sum");
+  frontier = 41;
+  check(!pipelineCheckedFrontierAdd(
+            std::numeric_limits<std::uint64_t>::max(), 1, frontier) &&
+            frontier == 41,
+        "completion frontier overflow fails before mutating evidence");
+
+  std::uint32_t occupancy = 0;
+  check(pipelineCheckedOccupancyAdd(7, 5, occupancy) && occupancy == 12,
+        "queue occupancy addition preserves an in-range sum");
+  occupancy = 23;
+  check(!pipelineCheckedOccupancyAdd(
+            std::numeric_limits<std::uint32_t>::max(), 1, occupancy) &&
+            occupancy == 23,
+        "queue occupancy overflow fails before mutating evidence");
 }
 
 PipelineLifecycleEvent batchMemberEvent(PipelineIdentity identity,
@@ -1012,6 +1100,114 @@ void ownerEvidenceOverflowFailsClosed() {
         "128-source lifecycle evidence fits below the fixed event capacity");
 }
 
+void lifecycleSidecarGenerationAndSaturation() {
+  PipelineLifecycleSidecar sidecar;
+  const PipelineLifecycleFacts facts{
+      .valid = true,
+      .selectedParallel = false,
+      .effectBoundaryCrossed = false,
+      .encodeOwner = PipelineOwner::SerialEncode,
+      .childTotal = 1u,
+      .joinedChildren = 1u,
+  };
+  for (std::uint64_t seq = 1u; seq <= 256u; ++seq) {
+    check(sidecar.recordFacts(seq, 1u, facts) ==
+              PipelineLifecycleSidecarResult::Stored,
+          "sidecar accepts its bounded generation-qualified capacity");
+  }
+  check(sidecar.recordFacts(257u, 1u, facts) ==
+            PipelineLifecycleSidecarResult::BoundedOverflow &&
+            sidecar.overflowCount() == 1u,
+        "sidecar exposes saturation instead of silently dropping evidence");
+
+  const PipelineIdentity oldIdentity{
+      .workId = 1u, .sourceOrdinal = 1u, .seqId = 1u, .generation = 1u};
+  const PipelineIdentity newIdentity{
+      .workId = 8u, .sourceOrdinal = 8u, .seqId = 257u, .generation = 2u};
+  check(sidecar.erase(oldIdentity),
+        "terminal identity erases its sidecar entry for reuse");
+  check(sidecar.recordIdentity(newIdentity) ==
+            PipelineLifecycleSidecarResult::Stored,
+        "freed sidecar capacity is reusable");
+  PipelineLifecycleSidecar identitySidecar;
+  const PipelineIdentity reusedOld{
+      .workId = 7u, .sourceOrdinal = 7u, .seqId = 7u, .generation = 1u};
+  const PipelineIdentity reusedNew{
+      .workId = 8u, .sourceOrdinal = 8u, .seqId = 7u, .generation = 2u};
+  const PipelineLifecycleFacts newerFacts{
+      .valid = true,
+      .selectedParallel = false,
+      .effectBoundaryCrossed = false,
+      .encodeOwner = PipelineOwner::SerialEncode,
+      .childTotal = 2u,
+      .joinedChildren = 2u,
+  };
+  check(identitySidecar.erase(reusedOld) == false,
+        "a missing terminal identity cannot erase another generation");
+  check(identitySidecar.recordFacts(7u, 1u, facts) ==
+            PipelineLifecycleSidecarResult::Stored &&
+            identitySidecar.recordFacts(7u, 2u, newerFacts) ==
+                PipelineLifecycleSidecarResult::StaleGeneration,
+        "same seqId rejects a concurrent facts generation");
+  check(identitySidecar.recordIdentity(reusedOld) ==
+            PipelineLifecycleSidecarResult::Stored &&
+            identitySidecar.recordIdentity(reusedNew) ==
+                PipelineLifecycleSidecarResult::StaleGeneration,
+        "same seqId rejects a concurrent identity generation");
+  PipelineIdentity lookedUp{};
+  PipelineLifecycleFacts lookedUpFacts{};
+  check(identitySidecar.lookup(7u, 1u, lookedUp, lookedUpFacts) &&
+            lookedUp == reusedOld && lookedUpFacts == facts,
+        "rejected generation leaves exact old identity and facts intact");
+  check(!identitySidecar.lookup(7u, 2u, lookedUp, lookedUpFacts),
+        "rejected generation does not allocate a second sidecar entry");
+  check(identitySidecar.lookup(7u, 0u, lookedUp, lookedUpFacts) &&
+            lookedUp == reusedOld && lookedUpFacts == facts,
+        "unqualified lookup remains unique with one live generation");
+  check(identitySidecar.erase(reusedOld),
+        "exact terminal identity erases its sidecar entry for reuse");
+  check(identitySidecar.recordFacts(7u, 2u, newerFacts) ==
+            PipelineLifecycleSidecarResult::Stored &&
+            identitySidecar.recordIdentity(reusedNew) ==
+                PipelineLifecycleSidecarResult::Stored,
+        "exact erase permits same seqId generation reuse");
+  check(identitySidecar.lookup(7u, 2u, lookedUp, lookedUpFacts) &&
+            lookedUp == reusedNew && lookedUpFacts == newerFacts,
+        "reused generation publishes only its new identity and facts");
+  identitySidecar.clear();
+  check(!identitySidecar.lookup(7u, 2u, lookedUp, lookedUpFacts) &&
+            identitySidecar.clearCount() == 1u,
+        "reset/device-loss clear fences stale sidecar facts");
+  const PipelineIdentity clearedReuse{
+      .workId = 9u, .sourceOrdinal = 9u, .seqId = 7u, .generation = 3u};
+  check(identitySidecar.recordIdentity(clearedReuse) ==
+            PipelineLifecycleSidecarResult::Stored &&
+            identitySidecar.recordFacts(7u, 3u, facts) ==
+                PipelineLifecycleSidecarResult::Stored,
+        "reset/device-loss clear permits same seqId generation reuse");
+
+  PipelineLifecycleObserver observer(true);
+  const auto observerSink = observer.productionSink();
+  observerSink.recordFactsFn(observerSink.context, 41u, 3u, facts);
+  for (std::uint64_t seq = 42u; seq <= 297u; ++seq) {
+    observerSink.recordFactsFn(observerSink.context, seq, 3u, facts);
+  }
+  check(observer.error() == PipelineObservationError::BoundedObserverOverflow,
+        "production sink surfaces sidecar overflow as observer evidence");
+
+  PipelineLifecycleObserver resetObserver(true);
+  const auto resetSink = resetObserver.productionSink();
+  resetSink.recordFactsFn(resetSink.context, 9u, 1u, facts);
+  emitPipelineControlObservation(
+      resetObserver.productionControlSink(),
+      PipelineControlObservation{.control = PipelineControl::Reset,
+                                 .disposition = PipelineDisposition::Reset,
+                                 .epoch = 1u});
+  resetSink.recordFactsFn(resetSink.context, 9u, 2u, facts);
+  check(resetObserver.error() == PipelineObservationError::None,
+        "reset clears the old sidecar generation before reuse");
+}
+
 void failureAndShutdownRows() {
   {
     FakePipelineQueue queue;
@@ -1103,7 +1299,9 @@ void failureAndShutdownRows() {
 int main() {
   try {
     purePredicateTruthTables();
+    selectedParallelRecordedChain();
     completionFrontierTruthTable();
+    lifecycleArithmeticTruthTable();
     physicalBatchMemberTruthTable();
     physicalBatchOwnerChainRetainsReclaimClosure();
     physicalBatchOwnerFinalizeRejectsOmittedTail();
@@ -1113,6 +1311,7 @@ int main() {
     composedThreeAxisWakeIsDeterministic();
     deliberateNativeCounterexamples();
     ownerEvidenceOverflowFailsClosed();
+    lifecycleSidecarGenerationAndSaturation();
     failureAndShutdownRows();
   } catch (const std::exception& e) {
     std::cerr << "pipeline_lifecycle_observer_spec failed: " << e.what()

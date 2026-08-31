@@ -3238,6 +3238,22 @@ source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1
 summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — pass via extended chunked runner aux-exe pass."
 
 [[case]]
+executable = "d3d9_stateblock_x64.exe"
+source_file = "d3d9_stateblock_matrix.cpp"
+function = "stateblock_state_management_fault_matrix"
+source = "src/d3d9/d3d9_pe_stateblock_fault.hpp"
+source_kind = "dxmt9-policy"
+license = "MIT"
+license_scope = "dxmt9"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "stateblock"
+owner = "core/stateblock"
+requirements = ["R-TEST-12.5", "R-TEST-12.19"]
+acceptance = ["One fresh process accepts exactly one of the nine existing StateBlock fault points, including bridge_pre, and verifies pre-effect retry or entered-call effect-unknown fail-stop followed by Reset recovery; unknown selectors fail closed"]
+status = "scaffolded"
+
+[[case]]
 executable = "d3d9_reset_lost_x64.exe"
 source_file = "d3d9_reset_lost.cpp"
 function = "get_render_target_returns_user_surface"
@@ -6149,3 +6165,35 @@ arch = "x64"
 status = "passing"
 source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:209"
 summary = "Sikarugir-CX 24.0.7 builtin x64 2026-08-01: passes with the hoist (13 checks, 0 failures); with the eight guards removed the same draw returns D3DERR_INVALIDCALL, so the case is verified to discriminate."
+
+[[case]]
+executable = "d3d9_recorder_fault_x64.exe"
+source_file = "d3d9_recorder_fault.cpp"
+function = "run_fault"
+source = "dxmt9 clean-room recorder fault reachability fixture"
+source_kind = "dxmt9-policy"
+license = "MIT"
+license_scope = "dxmt9"
+lanes = ["app-local", "builtin"]
+arches = ["x64"]
+area = "recorder-faults"
+owner = "pe/recorder"
+requirements = ["R-TEST-12.8", "R-TEST-12.12"]
+acceptance = ["Each typed recorder selector is rejected when unknown, identifies the selected path, reaches its intended D3D9 seam in a fresh process, and cannot pass without both the post-check marker and exact DXMT9_PE_RECORDER_FAULT_CONSUMED=<selector> production receipt", "capacity_pre_reserve, retain_acquire=0/1, bridge pre/retry, bridge-entered fail-stop, active-capture disposition/throw, Reset recovery, and teardown ownership/accounting are exercised by the fixture; unsupported capture is rc=77 SKIP"]
+status = "scaffolded"
+
+[[case]]
+executable = "d3d9_recorder_fault_x86.exe"
+source_file = "d3d9_recorder_fault.cpp"
+function = "run_fault"
+source = "dxmt9 clean-room recorder fault reachability fixture"
+source_kind = "dxmt9-policy"
+license = "MIT"
+license_scope = "dxmt9"
+lanes = ["app-local", "builtin"]
+arches = ["x86"]
+area = "recorder-faults"
+owner = "pe/recorder"
+requirements = ["R-TEST-12.8", "R-TEST-12.12"]
+acceptance = ["Each typed recorder selector is rejected when unknown, identifies the selected path, reaches its intended D3D9 seam in a fresh process, and cannot pass without both the post-check marker and exact DXMT9_PE_RECORDER_FAULT_CONSUMED=<selector> production receipt", "capacity_pre_reserve, retain_acquire=0/1, bridge pre/retry, bridge-entered fail-stop, active-capture disposition/throw, Reset recovery, and teardown ownership/accounting are exercised by the fixture; unsupported capture is rc=77 SKIP"]
+status = "scaffolded"

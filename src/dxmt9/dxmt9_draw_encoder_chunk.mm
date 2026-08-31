@@ -3953,6 +3953,8 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
   // tables, resource arrays, mixed ABIs, and overrides that can rebuild the
   // prefetched PSO stay on the serial path. Clear/Present, pass actions, and
   // completion remain coordinator-owned.
+  std::uint32_t selectedParallelChildTotal = 0u;
+  bool selectedParallelEffectBoundaryCrossed = false;
   auto tryEncodeParallelPass = [&]
       (auto& replayObserver,
        const SealedParallelPassSnapshot& pass,
@@ -4393,6 +4395,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
       std::uint32_t commandIndex = 0;
       std::uint32_t sourceIndex = 0;
       std::uint64_t sourceSeqId = 0;
+      std::uint64_t sourceGeneration = 0;
+      std::uint32_t parallelChildTotal = 0u;
+      std::uint32_t joinedChildren = 0u;
       std::uint64_t encoderIndex = 0;
       std::uint64_t currentLoadBytes = 0;
       ParallelPassDirectBindingMode bindingMode =
@@ -4418,6 +4423,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
         .commandIndex = commandIndex,
         .sourceIndex = options.replayWindow.sourceIndex,
         .sourceSeqId = sourceSeqId,
+        .sourceGeneration = options.partitionSource.storage.generation,
+        .parallelChildTotal = static_cast<std::uint32_t>(
+            parallelPlanStorage.count),
         .encoderIndex = diagnosticsState.renderEncoderIndex,
         .currentLoadBytes = prepared.actions.colorLoadBytes +
             prepared.actions.depthLoadBytes +
@@ -4588,7 +4596,25 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
           recordBody();
           return bodyOk;
         },
-        .joinChild = +[](void*, std::uint32_t) noexcept { return true; },
+        .joinChild = +[](void* raw, std::uint32_t) noexcept {
+          auto& state = *static_cast<ProductionParallelContext*>(raw);
+          if (state.joinedChildren == state.parallelChildTotal) return false;
+          ++state.joinedChildren;
+          if (state.ctx->pipelineLifecycleObserver.recordFactsFn) {
+            const ::dxmt9::queue::PipelinePostJoinSummary summary{
+                .valid = true,
+                .selectedParallel = true,
+                .effectBoundaryCrossed = true,
+                .encodeOwner = ::dxmt9::queue::PipelineOwner::SelectedParallel,
+                .childTotal = state.parallelChildTotal,
+                .joinedChildren = state.joinedChildren,
+            };
+            state.ctx->pipelineLifecycleObserver.recordFactsFn(
+                state.ctx->pipelineLifecycleObserver.context,
+                state.sourceSeqId, state.sourceGeneration, summary);
+          }
+          return true;
+        },
         .endPassActions = +[](void*) noexcept { return true; },
         .publishSidecars = +[](void*) noexcept { return true; },
         .publishCompletion = +[](void* raw) noexcept {
@@ -4656,6 +4682,15 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
     if (execution.status != ParallelPassExecutionStatus::Completed) {
       return false;
     }
+    if (selectedParallelChildTotal >
+        std::numeric_limits<std::uint32_t>::max() -
+            static_cast<std::uint32_t>(parallelPlanStorage.count)) {
+      abortEncodePartitionInvariant("parallel child lifecycle count overflow");
+    }
+    selectedParallelChildTotal +=
+        static_cast<std::uint32_t>(parallelPlanStorage.count);
+    selectedParallelEffectBoundaryCrossed =
+        selectedParallelEffectBoundaryCrossed || execution.crossedEffectBoundary;
     commandBufferHasWork = true;
     return true;
   };
@@ -4782,6 +4817,8 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
         .sink = ctx.replayObserver,
         .source = options.partitionSource,
         .seqId = sourceSeqId,
+        .handles = {},
+        .observedCommandOrdinals = {},
     };
     encodeSelectedCommands(replayObserver);
   } else {
@@ -4852,6 +4889,20 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
   record.pipelineOwner = selectedParallelUsed
       ? ::dxmt9::queue::PipelineOwner::SelectedParallel
       : ::dxmt9::queue::PipelineOwner::SerialEncode;
+  if (selectedParallelUsed && options.partitionSource.storage.valid() &&
+      ctx.pipelineLifecycleObserver.recordFactsFn) {
+    const ::dxmt9::queue::PipelineLifecycleFacts lifecycleFacts{
+        .valid = true,
+        .selectedParallel = selectedParallelUsed,
+        .effectBoundaryCrossed = selectedParallelEffectBoundaryCrossed,
+        .encodeOwner = record.pipelineOwner,
+        .childTotal = selectedParallelUsed ? selectedParallelChildTotal : 1u,
+        .joinedChildren = selectedParallelUsed ? selectedParallelChildTotal : 1u,
+    };
+    ctx.pipelineLifecycleObserver.recordFactsFn(
+        ctx.pipelineLifecycleObserver.context, sourceSeqId,
+        options.partitionSource.storage.generation, lifecycleFacts);
+  }
   record.slotIndex = slotIndex;
   record.seqId = seqId;
   record.context = "queue";

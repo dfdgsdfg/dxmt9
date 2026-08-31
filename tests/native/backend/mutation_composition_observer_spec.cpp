@@ -344,6 +344,8 @@ void testCompletionOverflowAndReset() {
   }
   check(observer.snapshot().invalidOrDroppedEvents != 0u,
         "event capacity overflow is counted");
+  check(observer.snapshot().overflowEvents != 0u,
+        "event capacity overflow is reported separately from invalid input");
   observer.notePresent();
   observer.reset();
   check(observer.eventCount() == 0u && observer.windowPresents() == 0u &&

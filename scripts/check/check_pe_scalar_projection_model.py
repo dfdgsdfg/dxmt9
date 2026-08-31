@@ -183,8 +183,8 @@ def main() -> int:
     require("strictlyOrdered(state.renderStates" in producer_cpp and
             "pending != entry.value" in producer_cpp,
             "default production order/value preflight is missing")
-    require("sizeof(PeRecorderState) == 104472u" in recorder_state and
-            "sizeof(PeRecorderState) == 103584u" in recorder_state,
+    require("sizeof(PeRecorderState) == 104480u" in recorder_state and
+            "sizeof(PeRecorderState) == 103592u" in recorder_state,
             "canonical x64/x86 recorder footprint pins are missing")
 
     require("Handwritten exact bounded refinement" in tla,
