@@ -83,9 +83,11 @@ class ChunkProcessFailureTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True):
             env = runner.build_env(args)
         self.assertEqual(env["DXMT9_RENDER_TAPE_CAPTURE"], "1")
+        expected_root = Path(
+            "/tmp/dxmt9-fault-matrix/recorder-capture-capture").resolve()
         self.assertEqual(
             env["DXMT9_RENDER_TAPE_OUTPUT_ROOT"],
-            r"Z:\tmp\dxmt9-fault-matrix\recorder-capture-capture")
+            "Z:" + str(expected_root).replace("/", "\\"))
 
     def test_recorder_aux_requires_reached_marker(self):
         args = SimpleNamespace(wine=Path("/wine"),

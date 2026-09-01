@@ -2493,6 +2493,12 @@ constexpr CounterEntry kCounterTable[] = {
     {"framegraph_active_render_seed_fallback_live_set_mismatch", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSeedFallbackLiveSetMismatch, nullptr, nullptr, 0.0},
     {"framegraph_active_render_seed_fallback_duplicate_command", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSeedFallbackDuplicateCommand, nullptr, nullptr, 0.0},
     {"framegraph_active_render_seed_replay_activated", CounterEntry::Kind::UnsignedCount, &Counters::framegraphActiveRenderSeedReplayActivated, nullptr, nullptr, 0.0},
+    {"direct_chunkslot_continuation_attempted", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotContinuationAttempted, nullptr, nullptr, 0.0},
+    {"direct_chunkslot_continuation_admitted", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotContinuationAdmitted, nullptr, nullptr, 0.0},
+    {"direct_chunkslot_continuation_capacity_rejected", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotContinuationCapacityRejected, nullptr, nullptr, 0.0},
+    {"direct_chunkslot_continuation_structural_rejected", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotContinuationStructuralRejected, nullptr, nullptr, 0.0},
+    {"direct_chunkslot_continuation_committed", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotContinuationCommitted, nullptr, nullptr, 0.0},
+    {"direct_chunkslot_continuation_populated_fallback", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotContinuationPopulatedFallback, nullptr, nullptr, 0.0},
 };
 
 }  // namespace
@@ -2578,22 +2584,6 @@ void report() {
                   static_cast<unsigned long long>(load(c.directChunkSlotReplayOutcomes[i])));
     line += field;
   }
-  const auto appendContinuationCounter = [&](const char* name,
-                                              const auto& value) {
-    char field[128]{};
-    std::snprintf(field, sizeof(field), " direct_chunkslot_continuation_%s=%llu",
-                  name, static_cast<unsigned long long>(load(value)));
-    line += field;
-  };
-  appendContinuationCounter("attempted", c.directChunkSlotContinuationAttempted);
-  appendContinuationCounter("admitted", c.directChunkSlotContinuationAdmitted);
-  appendContinuationCounter("capacity_rejected",
-                            c.directChunkSlotContinuationCapacityRejected);
-  appendContinuationCounter("structural_rejected",
-                            c.directChunkSlotContinuationStructuralRejected);
-  appendContinuationCounter("committed", c.directChunkSlotContinuationCommitted);
-  appendContinuationCounter("populated_fallback",
-                            c.directChunkSlotContinuationPopulatedFallback);
   line += '\n';
   std::fwrite(line.data(), 1, line.size(), stderr);
   std::fflush(stderr);

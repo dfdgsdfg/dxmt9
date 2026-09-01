@@ -5,7 +5,7 @@ title: "Matched copy/materialization ledger and CPU evidence"
 type: evidence
 status: partial
 updated: 2026-09-01
-source: include/dxmt9/copy_materialization_ledger.hpp; tests/native/bridge/pe_diagnostics_spec.cpp; tests/native/backend/source_payload_spec.cpp; experiments/output/app-d3d9-3dmark05-task4-gt2-ledger-default-20260830; experiments/output/app-d3d9-3dmark05-task4-gt2-ledger-direct-20260830; experiments/output/app-d3d9-sfiv-benchmark-task4-sfiv-ledger-direct-20260830; experiments/output/app-d3d9-3dmark05-head-ledger-gt2-20260831; experiments/output/app-d3d9-3dmark05-semantic-owner-ledger-gt2-r2-20260901; experiments/output/app-d3d9-3dmark05-semantic-owner-ledger-bound-gt2-20260901; traces/app-d3d9-3dmark05-task4-gt2-profile-default-20260830; traces/app-d3d9-3dmark05-task4-gt2-profile-direct-20260830
+source: include/dxmt9/copy_materialization_ledger.hpp; tests/native/bridge/pe_diagnostics_spec.cpp; tests/native/backend/source_payload_spec.cpp; experiments/output/app-d3d9-3dmark05-task4-gt2-ledger-default-20260830; experiments/output/app-d3d9-3dmark05-task4-gt2-ledger-direct-20260830; experiments/output/app-d3d9-sfiv-benchmark-task4-sfiv-ledger-direct-20260830; experiments/output/app-d3d9-3dmark05-head-ledger-gt2-20260831; experiments/output/app-d3d9-3dmark05-semantic-owner-ledger-gt2-r2-20260901; experiments/output/app-d3d9-3dmark05-semantic-owner-ledger-bound-gt2-20260901; experiments/output/app-d3d9-3dmark05-semantic-owner-ledger-off-gt2-20260901; traces/app-d3d9-3dmark05-task4-gt2-profile-default-20260830; traces/app-d3d9-3dmark05-task4-gt2-profile-direct-20260830
 related: docs/perfomance/overview.md; specs/archicture/gap.md; specs/d3d9/recorder/gap.md; specs/backend/gap.md
 ---
 
@@ -146,9 +146,18 @@ buffers were `3.999/P` in both runs and render passes changed from `15.765/P`
 to `15.761/P`. Sampled frame rate changed from `26.290` to `25.445 FPS` in
 these single runs. That delta is not a product-performance result: the new
 diagnostic reads two clocks and updates atomics for approximately 2,666
-admissions per Present and is default-off. The evidence closes ownership and
-cost visibility while intentionally leaving a matched ledger-off performance
-gate separate.
+admissions per Present and is default-off.
+
+The same recipe was then repeated with only
+`DXMT9_PERF_COPY_MATERIALIZATION_LEDGER=0`. It passed 1,693 Presents at
+`26.150 FPS`, `3.9994` command buffers/Present, and `15.7631` render
+passes/Present, with zero GPU command-buffer errors, zero chunk rejects, and
+zero ledger report rows. The adjacent enabled run was `25.445 FPS`, so the
+disabled run is `2.77%` faster while preserving cadence. This is a single-run
+observer-cost direction check, not a product-performance or promotion claim;
+the intervening source change only moved six continuation counters into the
+shutdown report table and did not change the measured hot path. Repeated
+matched runs remain necessary before assigning a stable observer cost.
 
 ## Matched GT2 CPU and cadence
 
@@ -183,33 +192,34 @@ FPS gain.
 
 ## Next-owner ranking and queue T2d gate
 
-1. **PE recorder: builder temporary plus seal tables/payload.** This is the
-   strongest removable CPU class: about `0.944-1.018 ms/Present` in GT2 and
-   `0.322 ms/Present` in SFIV (builder plus three seal rows). A separate
-   all-family exact-final-layout follow-up should preserve exact wire bytes and
-   rollback, then repeat the ledger and native fault matrix.
-2. **Unix backend: GPU upload bytes.** This is the largest physical transfer
-   observed at `12.375-12.774 MB/Present` and `1.177-1.260 ms/Present` in GT2;
-   SFIV is `1.127 MB` and `0.086 ms`. It is necessary today, so a later GPU
-   upload investigation needs
-   source-qualified reuse/hoisting evidence and GPU correctness before trying
-   to remove it.
-3. **PE/Unix boundary: raw ownership handoff.** Final-wire and bridge rows
-   each carry about `1.24 MB/Present` in GT2 for only `0.043-0.045 ms` measured
-   bridge copy time, and `0.275 MB/Present` / `0.010 ms` in SFIV. Investigate
-   whether the pointer-free ABI can transfer ownership without another byte
-   copy, but retain the current necessary owner boundary until a byte-identity
-   proof exists.
-4. **Unix queue/mutation staging and direct arena bytes.** These are small in
-   this evidence (`<=0.041 ms/Present` in GT2, `<=0.001 ms/Present` in SFIV)
-   and do not justify queue T2d by themselves without a measured waiting
-   victim and a workload showing a different shape.
-5. **Replay carrier rows.** The former observer saw no whole-carrier event, but
-   the current field-level ledger measures `15.740 MB/Present` and
-   `0.627 ms/Present` in GT2. This is now the second removable CPU class after
-   PE builder/seal work. Expand carrier-free replay only through exact
-   source-qualified destination construction; ordered-control and unsupported
-   producer families remain fail-closed.
+1. **Replay carrier rows.** The current owner-qualified run measures
+   `15.852 MB/Present` and `0.643 ms/Present` in GT2. This is the only remaining
+   measured, removable CPU materialization class. Expand carrier-free replay
+   only through exact source-qualified destination construction; ordered
+   control and unsupported producer families remain fail-closed.
+2. **PE final emission and segmented transport.** `ExactFixed` final emission
+   measures `1.252 MB/Present` and `0.908 ms/Present`. It is still required by
+   the default and capture paths, so it is not yet a removable copy. A later
+   all-family segmented promotion must first preserve exact wire bytes,
+   rollback, and capture equivalence. The inclusive semantic-owner admission
+   time (`2.564 ms/Present`) is transaction work and must not be added to the
+   memcpy ledger as if it were another copy.
+3. **Unix backend GPU upload.** This necessary transfer is
+   `12.241 MB/Present` and `1.068 ms/Present` in the current GT2 evidence. A
+   later GPU-side investigation needs source-qualified reuse or hoisting
+   evidence and the GPU correctness oracle before trying to remove it.
+4. **PE/Unix raw ownership handoff.** The bridge carries
+   `1.252 MB/Present` for `0.043 ms/Present`. Its byte volume is visible, but
+   its measured CPU cost is too small to justify weakening the pointer-free
+   ownership boundary without a byte-identity proof.
+5. **Queue and mutation staging.** Queue finalization is
+   `0.008 ms/Present` in the current run; prior queue/mutation evidence is also
+   below the T2d promotion threshold. It does not justify reserve-copy-commit
+   work without a measured waiting victim.
+
+The former PE builder/seal ranking is historical and closed: the production
+all-family semantic owner now emits the final wire transaction, so those
+removed temporary rows are no longer a next-owner candidate.
 
 For the planned queue T2d reserve-copy-commit decision, this evidence is a weak
 economic signal: queue/mutation/arena materialization is small and the Xcode
