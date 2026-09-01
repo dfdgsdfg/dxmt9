@@ -9,6 +9,7 @@
 #include "device_c_chunk_replay.hpp"
 #include "device_c_presence_table.hpp"
 #include "device_c_record_utils.hpp"
+#include "device_c_replay_projection.hpp"
 #include "device_c_replay_offload.hpp"
 #include "device_c_cpu_ready_transfer.hpp"
 #include "util/unixcall_marshal.hpp"
@@ -28,6 +29,7 @@
 #include <cstdlib>
 #include <cstdint>
 #include <cstring>
+#include <limits>
 #include <memory>
 #include <new>
 #include <optional>
@@ -193,6 +195,7 @@ struct ReplayScratchArena {
   std::vector<dxmt9::core::ChunkHandleEntry> coreEntries;
   LedgerTargetPresence ledgerTargetPresence;
   CoreEntryPresence coreEntryPresence;
+  dxmt9::d3d9::ReplayTransaction transaction;
   bool inUse = false;
 
   void clear() noexcept {
@@ -526,7 +529,8 @@ public:
       std::vector<dxmt9::core::DrawRunSubmission>* pendingDrawSubmissions,
       std::vector<dxmt9::core::DrawBindingSnapshot>* bindingSnapshots,
       std::span<const dxmt9::core::ChunkBufferBindingSnapshot> capturedBuffers,
-      bool capturedBuffersRequired, bool directFinalDraws)
+      bool capturedBuffersRequired, bool directFinalDraws,
+      dxmt9::d3d9::ReplayTransaction& transaction)
       : device_(device),
         pacedByPresentOrdinal_(pacedByPresentOrdinal),
         pendingDrawSubmissions_(pendingDrawSubmissions),
@@ -534,7 +538,7 @@ public:
         snapshotResolver_(capturedBuffers),
         capturedBuffersRequired_(capturedBuffersRequired &&
                                  snapshotResolver_.hasCapturedBackings()),
-        directFinalDraws_(directFinalDraws) {
+        directFinalDraws_(directFinalDraws), transaction_(&transaction) {
     if (capturedBuffersRequired_) {
       const auto& state = device_->dev().state();
       for (dxmt9::core::u32 stream = 0;
@@ -551,6 +555,10 @@ public:
 
   void setBatchCurrentDraw(bool value) noexcept {
     batchCurrentDraw_ = value;
+  }
+
+  bool startIrreversibleEffect() noexcept {
+    return transaction_ && transaction_->startIrreversibleEffect();
   }
 
   std::int32_t setConstants(
@@ -647,6 +655,12 @@ public:
   std::int32_t setRenderStates(
       std::span<const D9CCommandChunkWireRenderState> values) override {
     for (const auto& value : values) {
+      const auto& state = device_->dev().state();
+      if (!transaction_->journal().captureRenderState(state, value.state) ||
+          (value.state == dxmt9::core::RS_SCISSOR_TEST_ENABLE &&
+           !transaction_->journal().captureScissor(state))) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
       const auto hr = dxmt9c_device_set_render_state(
           device_, value.state, value.value);
       if (failed(hr)) return hr;
@@ -662,6 +676,13 @@ public:
   }
 
   std::int32_t setTexture(std::uint32_t slot, void* texture) override {
+    const auto& state = device_->dev().state();
+    if (!transaction_->journal().captureTexture(state, slot) ||
+        (slot < dxmt9::core::kMaxTextureStages &&
+         !transaction_->journal().captureTextureStageState(
+             state, slot, dxmt9::core::TSS_TEXTURE_TYPE))) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
     return dxmt9c_device_set_texture(
         device_, slot, static_cast<D9CTexture*>(texture));
   }
@@ -669,6 +690,10 @@ public:
   std::int32_t setStream(
       const D9CCommandChunkWireStreamBinding& value,
       void* buffer) override {
+    if (!transaction_->journal().captureStream(
+            device_->dev().state(), value.slot)) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
     const auto hr = dxmt9c_device_set_stream_source(
         device_, value.slot, static_cast<D9CBuffer*>(buffer), value.offset,
         value.stride);
@@ -683,7 +708,13 @@ public:
   }
 
   std::int32_t setShader(std::uint32_t stage, void* shader) override {
-    return stage == D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX
+    const bool vertex =
+        stage == D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX;
+    if (!transaction_->journal().captureShader(device_->dev().state(),
+                                               vertex)) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    return vertex
                ? dxmt9c_device_set_vertex_shader(
                      device_, static_cast<D9CShader*>(shader))
                : dxmt9c_device_set_pixel_shader(
@@ -692,6 +723,11 @@ public:
 
   std::int32_t setVertexInput(std::uint32_t kind, std::uint32_t value,
                               void* declaration) override {
+    const auto& state = device_->dev().state();
+    if (!transaction_->journal().captureFvf(state) ||
+        !transaction_->journal().captureVertexDeclaration(state)) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
     if (kind == D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF) {
       return dxmt9c_device_set_fvf(device_, value);
     }
@@ -703,6 +739,9 @@ public:
   }
 
   std::int32_t setIndexBuffer(void* buffer) override {
+    if (!transaction_->journal().captureIndex(device_->dev().state())) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
     const auto hr =
         dxmt9c_device_set_indices(device_, static_cast<D9CBuffer*>(buffer));
     if (!failed(hr) && capturedBuffersRequired_) {
@@ -715,16 +754,30 @@ public:
   }
 
   std::int32_t setRenderTarget(std::uint32_t slot, void* surface) override {
+    const auto& state = device_->dev().state();
+    if (!transaction_->journal().captureRenderTarget(state, slot) ||
+        (slot == 0u &&
+         (!transaction_->journal().captureViewport(state) ||
+          !transaction_->journal().captureScissor(state)))) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
     return dxmt9c_device_set_render_target(
         device_, slot, static_cast<D9CSurface*>(surface));
   }
 
   std::int32_t setDepthStencil(void* surface) override {
+    if (!transaction_->journal().captureDepthStencil(
+            device_->dev().state())) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
     return dxmt9c_device_set_depth_stencil(
         device_, static_cast<D9CSurface*>(surface));
   }
 
   std::int32_t setViewport(const D9CViewport& value) override {
+    if (!transaction_->journal().captureViewport(device_->dev().state())) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
     if (auto* queue = findDirtyQueue(device_)) {
       queue->applyDirtyViewportChange();
     }
@@ -732,10 +785,16 @@ public:
   }
 
   std::int32_t setScissor(const D9CRect& value) override {
+    if (!transaction_->journal().captureScissor(device_->dev().state())) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
     return dxmt9c_device_set_scissor_rect(device_, &value);
   }
 
   std::int32_t setMaterial(const D9CMaterial& value) override {
+    if (!transaction_->journal().captureMaterial(device_->dev().state())) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
     if (auto* queue = findDirtyQueue(device_)) {
       queue->applyDirtyTransformChange();
     }
@@ -744,6 +803,10 @@ public:
 
   std::int32_t setClipPlane(
       const D9CCommandChunkWireClipPlane& value) override {
+    if (!transaction_->journal().captureClipPlane(
+            device_->dev().state(), value.slot)) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
     if (auto* queue = findDirtyQueue(device_)) {
       queue->applyDirtyClipPlaneChange();
     }
@@ -753,6 +816,10 @@ public:
   std::int32_t setTextureStageStates(
       std::span<const D9CDrawPacketTextureStageState> values) override {
     for (const auto& value : values) {
+      if (!transaction_->journal().captureTextureStageState(
+              device_->dev().state(), value.stage, value.type)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
       const auto hr = dxmt9c_device_set_texture_stage_state(
           device_, value.stage, value.type, value.value);
       if (failed(hr)) return hr;
@@ -768,6 +835,10 @@ public:
   std::int32_t setSamplerStates(
       std::span<const D9CDrawPacketSamplerState> values) override {
     for (const auto& value : values) {
+      if (!transaction_->journal().captureSamplerState(
+              device_->dev().state(), value.sampler, value.type)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
       const auto hr = dxmt9c_device_set_sampler_state(
           device_, value.sampler, value.type, value.value);
       if (failed(hr)) return hr;
@@ -783,6 +854,10 @@ public:
       }
     }
     for (const auto& value : values) {
+      if (!transaction_->journal().captureTransform(
+              device_->dev().state(), value.state)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
       const auto hr = dxmt9c_device_set_transform(
           device_, value.state, &value.matrix);
       if (failed(hr)) return hr;
@@ -798,6 +873,10 @@ public:
       }
     }
     for (const auto& value : values) {
+      if (!transaction_->journal().captureLight(
+              device_->dev().state(), value.slot)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
       const auto hr = dxmt9c_device_set_light(
           device_, value.slot, &value.light);
       if (failed(hr)) return hr;
@@ -813,6 +892,11 @@ public:
       }
     }
     for (const auto& value : values) {
+      const auto& state = device_->dev().state();
+      if (!transaction_->journal().captureLight(state, value.slot) ||
+          !transaction_->journal().captureLightEnabled(state, value.slot)) {
+        return dxmt9::core::D3DERR_INVALIDCALL;
+      }
       const auto hr = dxmt9c_device_light_enable(
           device_, value.slot, value.enabled);
       if (failed(hr)) return hr;
@@ -877,8 +961,15 @@ public:
         if (!attachCapturedBindingSnapshot(draw, payload)) {
           return dxmt9::core::D3DERR_INVALIDCALL;
         }
-        return device_->dev().submitDirectReplayDrawFromCurrentState(
-            draw, payload);
+        const auto result =
+            device_->dev().submitDirectReplayDrawFromCurrentState(
+                draw, payload);
+        if (result.disposition !=
+                dxmt9::core::DirectReplayDrawDisposition::Appended &&
+            !startIrreversibleEffect()) {
+          return dxmt9::core::D3DERR_DEVICELOST;
+        }
+        return result.result;
       }
       const std::size_t previousIndex = pendingDrawSubmissions_->size();
       auto& submission = pendingDrawSubmissions_->emplace_back();
@@ -982,6 +1073,35 @@ private:
                                 std::uint32_t count,
                                 std::span<const std::byte> bytes) {
     const void* data = bytes.data();
+    using ConstantKind =
+        dxmt9::d3d9::DeviceStateUndoJournal::ConstantKind;
+    std::optional<ConstantKind> kind;
+    switch (type) {
+    case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+      kind = ConstantKind::VertexFloat;
+      break;
+    case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+      kind = ConstantKind::VertexInt;
+      break;
+    case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+      kind = ConstantKind::VertexBool;
+      break;
+    case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+      kind = ConstantKind::PixelFloat;
+      break;
+    case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+      kind = ConstantKind::PixelInt;
+      break;
+    case D9C_COMMAND_RECORD_SET_PS_CONST_B:
+      kind = ConstantKind::PixelBool;
+      break;
+    default:
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    if (!transaction_->journal().captureConstantRange(
+            device_->dev().state(), *kind, start, count)) {
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
     switch (type) {
     case D9C_COMMAND_RECORD_SET_VS_CONST_F:
       return dxmt9c_device_set_vs_const_f(
@@ -1018,6 +1138,7 @@ private:
   bool unresolvedIndexBinding_ = false;
   bool batchCurrentDraw_ = false;
   bool directFinalDraws_ = false;
+  dxmt9::d3d9::ReplayTransaction* transaction_ = nullptr;
 };
 
 bool recordCanBatchDraw(
@@ -1044,6 +1165,7 @@ bool recordProducesArenaCommand(std::uint32_t type) noexcept {
   case D9C_COMMAND_RECORD_STRETCH_RECT:
   case D9C_COMMAND_RECORD_COLOR_FILL:
   case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE:
+  case D9C_COMMAND_RECORD_GENERATE_MIPMAPS:
   case D9C_COMMAND_RECORD_PRESENT:
     return true;
   default:
@@ -1075,18 +1197,12 @@ bool importRawChunk(const dxmt9::d3d9::RawCommandChunk& raw,
 int32_t replayResolvedChunk(
     D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
     bool pacedByPresentOrdinal,
+    dxmt9::d3d9::ReplayTransaction& transaction,
     dxmt9::CommandQueue::CpuReadyArenaBuildLease* arenaLease = nullptr,
     std::span<const dxmt9::d3d9::CpuReadySegmentPlan> arenaSegments = {},
     bool containsOrderedControls = false,
     std::span<const dxmt9::d3d9::CpuReadySourcePlan> arenaSources = {},
-    bool* preEffectFailure = nullptr,
     bool activeDirectChunkSlotPath = false) {
-  if (preEffectFailure) {
-    // The arena lease is still pre-effect until the command loop starts.
-    // Setup/anchor/descriptor failures therefore have one guarded rollback
-    // boundary; the caller may retry EventSerial only while this remains true.
-    *preEffectFailure = true;
-  }
   dxmt9::d3d9::ImportedChunkView imported;
   if (!raw.preflightValidated ||
       !importRawChunk(raw, imported) ||
@@ -1158,9 +1274,6 @@ int32_t replayResolvedChunk(
     }
     if (captureIdentity &&
         !arenaLease->beginCaptureIdentity(raw.recordCount)) {
-      if (preEffectFailure) {
-        *preEffectFailure = true;
-      }
       return commitChunkFail("chunk-capture-identity-begin");
     }
   }
@@ -1177,6 +1290,10 @@ int32_t replayResolvedChunk(
     }
     dxmt9::perf::countCommitChunkDrawSubmissionBatch(
         static_cast<std::uint32_t>(pendingDrawSubmissions.size()));
+    // Compatibility batches leave the source-local carrier here.  This is
+    // the exact irreversible cut: before it, both the journal and a private
+    // Direct/Arena destination can still restore their checkpoints.
+    (void)transaction.startIrreversibleEffect();
     device->dev().submitDrawSubmissionBatch(pendingDrawSubmissions);
     pendingDrawSubmissions.clear();
     pendingDrawRecordIndices.clear();
@@ -1190,7 +1307,7 @@ int32_t replayResolvedChunk(
   DeviceReplaySink sink(
       device, pacedByPresentOrdinal, &pendingDrawSubmissions,
       &replayScratch.bindingSnapshots, raw.bufferSnapshots,
-      raw.bufferSnapshotsCaptured, directFinalDraws);
+      raw.bufferSnapshotsCaptured, directFinalDraws, transaction);
   std::size_t activeSegment = 0;
   std::size_t activeSource = 0;
   std::size_t activeSourceSegment = 0;
@@ -1200,9 +1317,6 @@ int32_t replayResolvedChunk(
       (arenaLease && !arenaSources.empty() &&
        !arenaLease->selectSourceSegment(0, 0))) {
     return commitChunkFail("chunk-replay-segment-initial");
-  }
-  if (preEffectFailure) {
-    *preEffectFailure = false;
   }
   for (std::size_t index = 0u; index < imported.records.size(); ++index) {
     if (arenaLease && !arenaSources.empty()) {
@@ -1269,6 +1383,20 @@ int32_t replayResolvedChunk(
       }
     }
     const auto record = resolved.record(index);
+    const auto projectedSource = !arenaSources.empty()
+        ? transaction.state().identity.source + activeSource
+        : transaction.state().identity.source;
+    if (!transaction.project({
+            .stateGeneration = raw.replaySeq != 0u ? raw.replaySeq : 1u,
+            .source = projectedSource,
+            .recordOrdinal = static_cast<std::uint32_t>(index),
+        })) {
+      pendingDrawSubmissions.clear();
+      pendingDrawRecordIndices.clear();
+      return commitChunkFail("chunk-replay-transaction-project",
+                             static_cast<std::uint32_t>(index),
+                             record.wire.header.type);
+    }
     const bool batchableDraw = recordCanBatchDraw(device, record.wire);
     sink.setBatchCurrentDraw(batchableDraw);
     if (captureIdentity && batchableDraw) {
@@ -1306,6 +1434,13 @@ int32_t replayResolvedChunk(
       }
     }
     if (orderedControl) {
+      if (!sink.startIrreversibleEffect()) {
+        pendingDrawSubmissions.clear();
+        pendingDrawRecordIndices.clear();
+        return commitChunkFail("chunk-ordered-control-effect-cut",
+                               static_cast<std::uint32_t>(index),
+                               record.wire.header.type);
+      }
       observeOrderedControlReplay(/*BeforeRelease=*/1u, index,
                                   record.wire.header.type);
       auto upper = device->dev().upperDevice();
@@ -1338,6 +1473,19 @@ int32_t replayResolvedChunk(
             static_cast<std::uint32_t>(index))) {
       captureIdentity = false;
     }
+    const auto replayInfo = replayInfoForCommandRecordType(
+        record.wire.header.type);
+    const bool stateOnly =
+        replayInfo.category == ImportedRecordReplayCategory::ConstantUpload ||
+        replayInfo.category == ImportedRecordReplayCategory::StateApply;
+    if (!stateOnly && !batchableDraw && !dispatchingOrderedControl &&
+        !sink.startIrreversibleEffect()) {
+      pendingDrawSubmissions.clear();
+      pendingDrawRecordIndices.clear();
+      return commitChunkFail("chunk-replay-effect-cut",
+                             static_cast<std::uint32_t>(index),
+                             record.wire.header.type);
+    }
     const auto hr = dxmt9::d3d9::isSparseRecord(record.wire.header.type)
                         ? dxmt9::d3d9::replaySparseRecord(record, sink)
                         : dxmt9::d3d9::replayNonDrawRecord(record, sink);
@@ -1346,9 +1494,24 @@ int32_t replayResolvedChunk(
                                   record.wire.header.type, hr);
     }
     if (failed(hr)) {
-      flushPendingDrawSubmissions();
+      // A later malformed record must not turn an otherwise rollbackable
+      // private prefix into an effect merely to preserve the old batching
+      // side effect. The transaction owner decides rollback versus fail-stop.
+      pendingDrawSubmissions.clear();
+      pendingDrawRecordIndices.clear();
       return commitChunkFail("chunk-replay", static_cast<std::uint32_t>(index),
                              record.wire.header.type, hr);
+    }
+    if (recordProducesArenaCommand(record.wire.header.type) &&
+        !transaction.stage({
+            .commandCount = 1u,
+            .byteCount = record.wire.header.payloadSize,
+        })) {
+      pendingDrawSubmissions.clear();
+      pendingDrawRecordIndices.clear();
+      return commitChunkFail("chunk-replay-transaction-stage",
+                             static_cast<std::uint32_t>(index),
+                             record.wire.header.type);
     }
   }
   flushPendingDrawSubmissions();
@@ -1570,6 +1733,119 @@ constexpr dxmt9::core::CpuReadyProducerIdentity cpuReadyProducerIdentity(
   };
 }
 
+dxmt9::d3d9::ReplaySourceIdentity replaySourceIdentity(
+    const dxmt9::d3d9::RawCommandChunk& raw) noexcept {
+  const auto sequence = raw.replaySeq != 0u ? raw.replaySeq : 1u;
+  const auto source = raw.producerIdentity.firstSourceOrdinal != 0u
+      ? raw.producerIdentity.firstSourceOrdinal
+      : sequence;
+  const auto lastSource = raw.producerIdentity.lastSourceOrdinal >= source
+      ? raw.producerIdentity.lastSourceOrdinal
+      : source;
+  return {
+      .source = source,
+      .lastSource = lastSource,
+      .sequence = sequence,
+  };
+}
+
+dxmt9::d3d9::ReplayTransaction& beginReplayTransaction(
+    D9CDevice* device, const dxmt9::d3d9::RawCommandChunk& raw,
+    std::size_t compatibilitySourceCount = 1u) noexcept {
+  auto& transaction = replayScratchArena().transaction;
+  auto identity = replaySourceIdentity(raw);
+  if (raw.producerIdentity.firstSourceOrdinal == 0u &&
+      compatibilitySourceCount != 0u &&
+      compatibilitySourceCount - 1u <=
+          std::numeric_limits<std::uint64_t>::max() - identity.source) {
+    identity.lastSource = identity.source + compatibilitySourceCount - 1u;
+  }
+  transaction.begin(identity, device ? &device->dev() : nullptr);
+  return transaction;
+}
+
+bool rollbackReplayTransaction(
+    D9CDevice* device,
+    dxmt9::d3d9::ReplayTransaction& transaction) noexcept {
+  if (!device || transaction.state().irreversible()) {
+    (void)transaction.failStop();
+    return false;
+  }
+  // mutableState() invalidates every derived draw cache. The journal restores
+  // the exact semantic fields; conservative dirty generations are preferable
+  // to reviving a cache built from the abandoned working state.
+  return transaction.rollback(device->dev());
+}
+
+dxmt9::d3d9::ReplayDestinationReceipt compatibilityReplayReceipt(
+    const dxmt9::d3d9::ReplayTransaction& transaction) noexcept {
+  return {
+      .kind = dxmt9::d3d9::ReplayDestinationKind::Compatibility,
+      .identity = transaction.state().identity,
+      .queueSequence = transaction.state().identity.sequence,
+      .commandCount = transaction.state().stagedCommandCount,
+  };
+}
+
+dxmt9::d3d9::ReplayDestinationReceipt publishedReplayReceipt(
+    const dxmt9::d3d9::ReplayTransaction& transaction,
+    const dxmt9::core::CpuReadyPublicationTicket& ticket,
+    std::size_t controlIndex,
+    dxmt9::d3d9::ReplayDestinationKind kind) noexcept {
+  const auto& identity = transaction.state().identity;
+  const bool producerIdentityPresent = !ticket.producerIdentity.absent();
+  if (kind == dxmt9::d3d9::ReplayDestinationKind::Compatibility ||
+      !ticket.strictIdentityValid() || ticket.rawOrdinal != identity.sequence ||
+      (producerIdentityPresent &&
+       (ticket.producerIdentity.firstSourceOrdinal != identity.source ||
+        ticket.producerIdentity.lastSourceOrdinal != identity.lastSource)) ||
+      controlIndex > std::numeric_limits<std::uint32_t>::max()) {
+    return {};
+  }
+  return {
+      .kind = kind,
+      .identity = identity,
+      .queueSequence = ticket.seqId,
+      .buildGeneration = ticket.buildGeneration,
+      .sourceGeneration = ticket.id.generation,
+      .storageGeneration = ticket.storage.generation,
+      .controlIndex = static_cast<std::uint32_t>(controlIndex),
+      .commandCount = transaction.state().stagedCommandCount,
+  };
+}
+
+bool commitReplayTransaction(
+    dxmt9::d3d9::ReplayTransaction& transaction,
+    dxmt9::d3d9::ReplayDestinationReceipt receipt) noexcept {
+  if (!transaction.receiveDestination(receipt)) {
+    (void)transaction.failStop();
+    return false;
+  }
+  if (!transaction.commit()) {
+    (void)transaction.failStop();
+    return false;
+  }
+  return true;
+}
+
+int32_t replayCompatibilityChunk(
+    D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
+    bool pacedByPresentOrdinal, bool containsOrderedControls = false) {
+  auto& transaction = beginReplayTransaction(device, raw);
+  const auto hr = replayResolvedChunk(
+      device, raw, pacedByPresentOrdinal, transaction, nullptr, {},
+      containsOrderedControls);
+  if (failed(hr)) {
+    (void)rollbackReplayTransaction(device, transaction);
+    return hr;
+  }
+  if (!commitReplayTransaction(transaction,
+                               compatibilityReplayReceipt(transaction))) {
+    return commitChunkFail("chunk-replay-transaction-commit");
+  }
+  return hr;
+}
+
 int32_t replayPlannedChunk(D9CDevice* device,
                              dxmt9::d3d9::RawCommandChunk& raw,
                              bool pacedByPresentOrdinal,
@@ -1744,23 +2020,48 @@ int32_t replayPlannedChunk(D9CDevice* device,
                 dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Ready &&
             begin.lease) {
           auto lease = std::move(*begin.lease);
-          // From this point D3D state replay is observable. Any append,
-          // validation, generation, or evidence failure is fail-stop; the raw
-          // stream must never be materialized through Legacy a second time.
-          lease.markSemanticEffectsStarted();
+          auto& transaction = beginReplayTransaction(device, raw);
           const auto hr = replayResolvedChunk(
-              device, raw, pacedByPresentOrdinal, nullptr, {}, false, {},
-              nullptr, /*activeDirectChunkSlotPath=*/true);
+              device, raw, pacedByPresentOrdinal, transaction, nullptr, {},
+              false, {}, /*activeDirectChunkSlotPath=*/true);
           if (failed(hr)) {
             recordDispositionOnce(
                 dxmt9::perf::DirectChunkSlotReplayOutcome::ReplayFailed);
+            if (transaction.state().irreversible()) {
+              lease.markSemanticEffectsStarted();
+              (void)transaction.failStop();
+              return hr;
+            }
+            const bool stateRolledBack =
+                rollbackReplayTransaction(device, transaction);
+            const bool destinationRolledBack = lease.rollbackPreEffect();
+            if (stateRolledBack && destinationRolledBack) {
+              // The raw source and both checkpoints are intact. Compatibility
+              // replay is now the sole owner of this event.
+              markLegacyResources(device, raw);
+              return replayCompatibilityChunk(
+                  device, raw, pacedByPresentOrdinal);
+            }
             return hr;
           }
+          const auto destinationTicket = lease.ticket();
+          const auto destinationControlIndex = lease.controlIndex();
           if (lease.commit(raw.resourceEntries) !=
               dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Committed) {
+            (void)transaction.failStop();
             recordDispositionOnce(
                 dxmt9::perf::DirectChunkSlotReplayOutcome::CommitFailed);
             return commitChunkFail("chunk-direct-slot-commit");
+          }
+          // Queue commit has authenticated the captured lease ticket against
+          // the live control/storage/build generations and exact assembler
+          // evidence. Only now may that queue-minted identity become the
+          // replay transaction's destination receipt.
+          const auto destinationReceipt = publishedReplayReceipt(
+              transaction, destinationTicket, destinationControlIndex,
+              dxmt9::d3d9::ReplayDestinationKind::DirectChunkSlot);
+          if (!commitReplayTransaction(transaction, destinationReceipt)) {
+            return commitChunkFail("chunk-direct-slot-state-commit");
           }
           recordDispositionOnce(
               dxmt9::perf::DirectChunkSlotReplayOutcome::Committed);
@@ -1782,7 +2083,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
           dxmt9::perf::DirectChunkSlotReplayOutcome::NotAttempted);
     }
     markLegacyResources(device, raw);
-    return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
+    return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal);
   }
 
   auto upper = device->dev().upperDevice();
@@ -1873,7 +2174,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
     // State-only chunks mutate the replay shadow exactly once but publish no
     // GPU source and therefore consume neither a queue seq nor resource marks.
     if (captureIdentityRequested) failCaptureIdentity("state-only");
-    return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
+    return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal);
   case dxmt9::d3d9::ReplayLane::Legacy:
     if (plan.reason == dxmt9::d3d9::ReplayReason::Oversize) {
       dxmt9::perf::countCpuReadyTapeLegacyOversizeBypass();
@@ -1888,9 +2189,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
   case dxmt9::d3d9::ReplayLane::Inline:
     if (captureIdentityRequested) failCaptureIdentity("legacy-or-inline");
     markLegacyResources(device, raw);
-    return replayResolvedChunk(
-        device, raw, pacedByPresentOrdinal, nullptr, {},
-        plan.containsOrderedControls);
+    return replayCompatibilityChunk(
+        device, raw, pacedByPresentOrdinal, plan.containsOrderedControls);
   case dxmt9::d3d9::ReplayLane::DirectArenaCandidate:
     break;
   }
@@ -1910,9 +2210,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
     // Only Direct arena construction depends on worker-side arena admission.
     if (captureIdentityRequested) failCaptureIdentity("direct-arena-disallowed");
     markLegacyResources(device, raw);
-    return replayResolvedChunk(
-        device, raw, pacedByPresentOrdinal, nullptr, {},
-        plan.containsOrderedControls);
+    return replayCompatibilityChunk(
+        device, raw, pacedByPresentOrdinal, plan.containsOrderedControls);
   }
 
   if (!queue || (!plan.arenaLayout.has_value() && plan.sources.empty()) ||
@@ -1922,7 +2221,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
     // still use the compatibility lane without duplication.
     if (captureIdentityRequested) failCaptureIdentity("queue-or-layout-missing");
     markLegacyResources(device, raw);
-    return replayResolvedChunk(device, raw, pacedByPresentOrdinal);
+    return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal);
   }
 
   std::array<dxmt9::core::ArenaSourcePayloadLayout,
@@ -2014,15 +2313,20 @@ int32_t replayPlannedChunk(D9CDevice* device,
                                 allowDirectArena, /*forceEventSerial=*/true);
     }
   }
-  bool preEffectFailure = false;
+  auto& transaction = beginReplayTransaction(
+      device, transferRaw, segmentSerial ? sourceCount : 1u);
   const int32_t hr = replayResolvedChunk(
-      device, transferRaw, pacedByPresentOrdinal, &transfer.lease(),
+      device, transferRaw, pacedByPresentOrdinal, transaction,
+      &transfer.lease(),
       std::span(plan.segments).first(plan.segmentCount), false,
       segmentSerial ? std::span(plan.sources) :
-                       std::span<const dxmt9::d3d9::CpuReadySourcePlan>{},
-      &preEffectFailure);
+                       std::span<const dxmt9::d3d9::CpuReadySourcePlan>{});
   if (failed(hr)) {
-    if (preEffectFailure && segmentSerial) {
+    const bool transactionMayRollback =
+        !transaction.state().irreversible();
+    const bool stateRolledBack = transactionMayRollback &&
+        rollbackReplayTransaction(device, transaction);
+    if (stateRolledBack) {
       if (!transfer.abortForFallback()) {
         queue->failStopCpuReadyArena();
         return commitChunkFail("chunk-capture-identity-rollback");
@@ -2030,18 +2334,22 @@ int32_t replayPlannedChunk(D9CDevice* device,
       supplyReplayEntry.cancel();
       transfer.restoreToSource();
       return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
-                                allowDirectArena, /*forceEventSerial=*/true);
+                                /*allowDirectArena=*/false,
+                                /*forceEventSerial=*/true);
     }
+    (void)transaction.failStop();
     // Lease destruction performs the two-phase fail-stop abort. Replaying the
     // raw chunk through Legacy here would duplicate already-applied semantics.
     if (captureIdentityRequested) failCaptureIdentity("arena-replay");
     return hr;
   }
   if (!transfer.markEmitted()) {
+    (void)transaction.failStop();
     queue->failStopCpuReadyArena();
     return commitChunkFail("chunk-cpu-ready-transfer-emit");
   }
   const auto admissionTicket = transfer.lease().ticket();
+  const auto admissionControlIndex = transfer.lease().controlIndex();
   if (!segmentSerial && transferRaw.nextQueuedRawOrdinalHint != 0u) {
     (void)queue->armCpuReadyNextSourceIntent(
         admissionTicket, transferRaw.nextQueuedRawOrdinalHint,
@@ -2061,6 +2369,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
     // legal EventSerial fallback boundary: poison and fail-stop rather than
     // replaying this raw event a second time.
     queue->failStopCpuReadyArena();
+    (void)transaction.failStop();
     const auto failure = queue->peekCpuReadyArenaFailure();
     if (failure.failureClass !=
         dxmt9::CommandQueue::CpuReadyArenaFailureClass::None) {
@@ -2080,8 +2389,20 @@ int32_t replayPlannedChunk(D9CDevice* device,
   }
   if (publishStatus !=
       dxmt9::CommandQueue::CpuReadyArenaPublishStatus::Published) {
+    (void)transaction.failStop();
     if (captureIdentityRequested) failCaptureIdentity("arena-publish");
     return commitChunkFail("chunk-arena-publish");
+  }
+  // publish/publishBatch has validated every source reservation, segment
+  // assembler, storage generation, and commit evidence under the queue's
+  // authoritative transaction. The first ticket plus its producer interval
+  // identifies the complete physical batch for replay settlement.
+  const auto destinationReceipt = publishedReplayReceipt(
+      transaction, admissionTicket, admissionControlIndex,
+      dxmt9::d3d9::ReplayDestinationKind::Arena);
+  if (!commitReplayTransaction(transaction, destinationReceipt)) {
+    queue->failStopCpuReadyArena();
+    return commitChunkFail("chunk-arena-state-commit");
   }
   supplyReplayEntry.releaseAfterPublish();
   if (captureIdentityRequested && segmentSerial) {

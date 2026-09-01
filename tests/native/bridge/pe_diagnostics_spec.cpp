@@ -777,7 +777,7 @@ void testSourceContracts(const std::filesystem::path &root) {
   const auto snapshotBegin = coreDraw.find(
       "HResult Device::snapshotDrawSubmissionFromCurrentState(");
   const auto directReplayBegin = coreDraw.find(
-      "HResult Device::submitDirectReplayDrawFromCurrentState(",
+      "DirectReplayDrawResult Device::submitDirectReplayDrawFromCurrentState(",
       snapshotBegin);
   check(snapshotBegin != std::string::npos &&
             directReplayBegin != std::string::npos &&

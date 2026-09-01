@@ -5256,15 +5256,12 @@ CommandQueue::appendActiveDirectChunkSlotDraw(
         if (assembler.commandCount() != commandCount) {
           noteCurrentSlotCommandAppendStartedUnlocked(*this);
         }
-        const std::span<const core::DrawParamPayloadView> payloads(
-            &input.payload, 1u);
-        markDrawBindingSnapshotResources(pool_, payloads, context.ticket.seqId);
-        if (!skipDrawResourceMarking_ ||
-            forceDrawResourceMarkingAfterSplit_) {
-          pool_.markDrawResources(*input.hot, context.ticket.seqId);
-          markDrawBindingOverrideResources(pool_, payloads,
-                                           context.ticket.seqId);
-        }
+        // The destination is still private. Resource-use watermarks are
+        // publication effects and therefore belong to
+        // commitDirectChunkSlotReplay(), which validates the exact ticket and
+        // marks both the imported closure and the final payload view. Marking
+        // here would survive rollback and contaminate a later compatibility
+        // replay of the same raw source.
         return true;
       });
   switch (result) {

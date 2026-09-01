@@ -1154,6 +1154,14 @@ enum class DirectReplayDrawDisposition : u8 {
   LegacyPreEffectFailure,
 };
 
+struct DirectReplayDrawResult {
+  HResult result = D3DERR_INVALIDCALL;
+  DirectReplayDrawDisposition disposition =
+      DirectReplayDrawDisposition::LegacyPreEffectFailure;
+
+  constexpr bool succeeded() const noexcept { return result == D3D_OK; }
+};
+
 constexpr bool directReplayDrawPermitsLegacyFallback(
     DirectReplayDrawDisposition disposition) noexcept {
   return disposition == DirectReplayDrawDisposition::LegacyUnsupported ||
@@ -2289,6 +2297,23 @@ enum class ShaderConstantRegisterClass : u8 {
 
 class Device : public std::enable_shared_from_this<Device> {
  public:
+  // Opaque rollback authority for source-local replay. Only Device can mint
+  // or consume these values; callers cannot manufacture individual counters.
+  // The capability covers draw-side semantic progress intentionally kept
+  // outside DeviceState.
+  class ReplayProgressCheckpoint final {
+   public:
+    ReplayProgressCheckpoint(const ReplayProgressCheckpoint&) = default;
+    ReplayProgressCheckpoint& operator=(const ReplayProgressCheckpoint&) =
+        default;
+
+   private:
+    friend class Device;
+    ReplayProgressCheckpoint() = default;
+    u64 submittedSequenceId_ = 0;
+    u64 activeOcclusionCount_ = 0;
+  };
+
   Device(AdapterInfo adapter, BackendLimits limits,
          PresentParameters params, u32 behaviorFlags,
          std::shared_ptr<dxmt9::Device> upperDevice = {},
@@ -2333,6 +2358,18 @@ class Device : public std::enable_shared_from_this<Device> {
                                                     u32 count) noexcept;
   DeviceState& mutablePixelShaderBoolConstantsState(u32 start,
                                                      u32 count) noexcept;
+  ReplayProgressCheckpoint replayProgressCheckpoint() const noexcept {
+    ReplayProgressCheckpoint checkpoint;
+    checkpoint.submittedSequenceId_ = submittedSequenceId_;
+    checkpoint.activeOcclusionCount_ = activeOcclusionCount_;
+    return checkpoint;
+  }
+  void restoreReplayProgress(
+      const ReplayProgressCheckpoint& checkpoint) noexcept {
+    DXMT_ASSERT(checkpoint.submittedSequenceId_ >= completedSequenceId_);
+    submittedSequenceId_ = checkpoint.submittedSequenceId_;
+    activeOcclusionCount_ = checkpoint.activeOcclusionCount_;
+  }
   const PresentParameters& presentParameters() const noexcept { return presentParameters_; }
   // Transitional accessor — returns the cached upper-device ptr, which
   // exposes both resource-ops + submit/present now (via the dxmt9::Device
@@ -2429,7 +2466,7 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult snapshotDrawSubmissionFromCurrentState(
       DrawParam draw, DrawRunSubmission& submission,
       const DrawRunSubmission* previousSubmission = nullptr);
-  HResult submitDirectReplayDrawFromCurrentState(
+  DirectReplayDrawResult submitDirectReplayDrawFromCurrentState(
       DrawParam draw, DrawParamPayloadView payload = {});
   void submitDrawSubmissionBatch(std::span<DrawRunSubmission> submissions);
   HResult present();

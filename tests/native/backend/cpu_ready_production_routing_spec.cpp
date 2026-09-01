@@ -885,6 +885,57 @@ RecordSpec applyRenderStateRecord(std::uint32_t state,
   };
 }
 
+RecordSpec applyRenderStateThenInvalidTransformRecord(
+    std::uint32_t state, std::uint32_t value) {
+  D9CCommandChunkWireDrawHeader draw{
+      .sectionCount = 2,
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
+  };
+  const auto tableEnd = sizeof(draw) +
+      2u * sizeof(D9CCommandChunkWireSectionDesc);
+  const auto renderOffset = alignUp(
+      tableEnd, alignof(D9CCommandChunkWireRenderState));
+  const auto transformOffset = alignUp(
+      renderOffset + sizeof(D9CCommandChunkWireRenderState),
+      alignof(D9CDrawPacketTransform));
+  draw.sectionPayloadOffset = static_cast<std::uint32_t>(renderOffset);
+  const std::array sections{
+      D9CCommandChunkWireSectionDesc{
+          .kind = D9C_COMMAND_CHUNK_SECTION_RENDER_STATE,
+          .elementSize = sizeof(D9CCommandChunkWireRenderState),
+          .count = 1,
+          .payloadOffset = static_cast<std::uint32_t>(renderOffset),
+          .byteSize = sizeof(D9CCommandChunkWireRenderState),
+      },
+      D9CCommandChunkWireSectionDesc{
+          .kind = D9C_COMMAND_CHUNK_SECTION_TRANSFORM,
+          .elementSize = sizeof(D9CDrawPacketTransform),
+          .count = 1,
+          .payloadOffset = static_cast<std::uint32_t>(transformOffset),
+          .byteSize = sizeof(D9CDrawPacketTransform),
+      },
+  };
+  const D9CCommandChunkWireRenderState renderState{
+      .state = state,
+      .value = value,
+  };
+  const D9CDrawPacketTransform transform{
+      .state = dxmt9::core::kMaxTransformSlots,
+  };
+  std::vector<std::byte> payload(transformOffset + sizeof(transform));
+  std::memcpy(payload.data(), &draw, sizeof(draw));
+  std::memcpy(payload.data() + draw.sectionTableOffset,
+              sections.data(), sizeof(sections));
+  std::memcpy(payload.data() + renderOffset,
+              &renderState, sizeof(renderState));
+  std::memcpy(payload.data() + transformOffset,
+              &transform, sizeof(transform));
+  return {
+      .type = D9C_COMMAND_RECORD_APPLY_STATE,
+      .payload = std::move(payload),
+  };
+}
+
 RecordSpec floatConstantRecord(std::uint32_t type,
                                std::uint32_t startRegister) {
   const D9CCommandChunkWireSetConst fixed{
@@ -2435,6 +2486,44 @@ void populatedContinuationCommitFailureIsTerminalWithoutRetry() {
   dxmt9c_buffer_release(buffer);
 }
 
+void lateStateFailureDoesNotDuplicateDiscardedDirectProgress() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr, "late replay failure buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+  constexpr std::uint32_t kInitial = 0x01020304u;
+  constexpr std::uint32_t kAbandoned = 0xa0b0c0d0u;
+  check(fixture.cDevice->dev().setRenderState(RS_TEXTURE_FACTOR, kInitial) ==
+            D3D_OK,
+        "late replay failure baseline state applies");
+  const auto submittedBefore =
+      fixture.cDevice->dev().submittedSequenceId();
+  const std::array records{
+      drawRecord(identity, 0u),
+      applyRenderStateThenInvalidTransformRecord(
+          RS_TEXTURE_FACTOR, kAbandoned),
+  };
+  auto raw = makeRaw(makeWireFixture(records), 81u, false, &registry);
+  raw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) != D3D_OK,
+        "late invalid state must fail both direct and compatibility replay");
+  check(fixture.cDevice->dev().submittedSequenceId() == submittedBefore + 1u,
+        "discarded Direct draw must not duplicate the one compatibility "
+        "prefix effect");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+            fixture.routing->queue_) == 1u &&
+            !dxmt9::CommandQueueArenaLeaseTestAccess::stopped(
+                fixture.routing->queue_),
+        "Direct rollback must discard its private draw before the single "
+        "compatibility prefix is emitted");
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(buffer);
+}
+
 void populatedSlotPresentTailIsExcludedFromContinuation() {
   RuntimeFixture fixture(/*rejectAfterClear=*/false,
                          /*segmentSerial=*/false,
@@ -3042,6 +3131,7 @@ int main() {
     populatedSlotDrawApplyDrawUsesCarrierFreeContinuation();
     populatedSlotInsufficientCapacityFallsBackBeforeEffects();
     populatedContinuationCommitFailureIsTerminalWithoutRetry();
+    lateStateFailureDoesNotDuplicateDiscardedDirectProgress();
     populatedSlotPresentTailIsExcludedFromContinuation();
     directContinuationAdmissionMatchesShapeAndCapacityTruthTable();
     triangleFanNeverEntersDirectReplay();

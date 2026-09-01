@@ -287,6 +287,18 @@ test('dxmt9-source-payload-spec',
      source_payload_spec,
      env: dxmt9_native_test_env)
 
+replay_projection_transaction_spec = executable(
+  'dxmt9-replay-projection-transaction-spec',
+  'replay_projection_transaction_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-replay-projection-transaction-spec',
+     replay_projection_transaction_spec,
+     env: dxmt9_native_test_env)
+
 cpu_ready_arena_lease_spec = executable(
   'dxmt9-cpu-ready-arena-lease-spec',
   'cpu_ready_arena_lease_spec.cpp',

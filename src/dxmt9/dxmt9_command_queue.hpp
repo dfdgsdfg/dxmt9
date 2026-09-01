@@ -521,6 +521,7 @@ class CommandQueue {
 
     explicit operator bool() const noexcept { return queue_ != nullptr; }
     core::CpuReadyPublicationTicket ticket() const noexcept { return ticket_; }
+    std::size_t controlIndex() const noexcept { return controlIndex_; }
     std::uint64_t seqId() const noexcept { return ticket_.seqId; }
     bool selectSegment(std::size_t segmentIndex) noexcept;
     // Selects a physical segment in the bounded SegmentSerial batch.  The
@@ -657,6 +658,8 @@ class CommandQueue {
         DirectChunkSlotReplayLease&& other) noexcept;
 
     explicit operator bool() const noexcept { return queue_ != nullptr; }
+    core::CpuReadyPublicationTicket ticket() const noexcept { return ticket_; }
+    std::size_t controlIndex() const noexcept { return controlIndex_; }
     void markSemanticEffectsStarted() noexcept { effectsStarted_ = true; }
     DirectChunkSlotReplayStatus commit(
         std::span<const core::ChunkHandleEntry> resources) noexcept;

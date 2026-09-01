@@ -29,15 +29,23 @@ The composed model/code binding does not yet distinguish the valid complete
 unowned same-address alias. Those two expected-failure traces are required by
 R-ARCH-7.20 and R-VERIF-7.9 before any shared-address adoption proposal.
 
-R-VERIF-7.10 additionally requires a source-wide replay-state transaction and
-an explicit core/optimizer boundary. Production currently reuses the
-imperative `DeviceReplaySink`/device-setter state path, while Direct replay
-changes the draw destination. It does not yet expose one pure
-`project(persistentState, source)` transition or atomically commit the next
-state with final-storage publication. The model/code transition table,
-A→B→A/ordered-control cases, state-commit-before-emission and partial-publish
-counterexamples, and Legacy/Direct next-state differential remain open.
-After those close, R-ARCH-7.23 and R-BACK-2.99 require a production/API source
+R-VERIF-7.10's source-wide replay-state settlement is now implemented through
+one shared pure phase relation plus a fixed-capacity typed undo journal. The
+production compatibility, ordinary Direct, and Arena paths bind the same exact
+source/record order, mark the irreversible cut before control or command
+effects, restore both state and a private destination on pre-effect failure,
+require an exact destination receipt before state commit, and prohibit retry
+after effects. `ReplayProjectionTransaction.tla` and the native transaction
+truth table cover A→B→A ordering, generation qualification, exact dedup
+attribution, optimizer isolation/proof, state-before-emission, partial publish,
+ordered-control reorder, and retry-after-effect. The immutable authenticated
+raw sequence is the representation-preserving effective stream; no second
+complete carrier is introduced by the transaction.
+
+The complete Legacy/direct differential over effective commands, next state,
+final SoA values, resource/completion identity, and failure disposition remains
+open, as does production optimizer-policy admission binding. R-ARCH-7.23 and
+R-BACK-2.99 require a production/API source
 audit proving `DrawRunSubmission`, equivalent per-draw AoS carriers,
 carrier-specific counters, adapters, and carrier-only test seams are absent.
 R-ARCH-7.24 and R-BACK-2.100 additionally require a fresh owner-qualified

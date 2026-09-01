@@ -50,6 +50,7 @@ normal_models=(
   RenderTapeParallelJoin
   SegmentedTransportV1
   ReplayScopedDrain
+  ReplayProjectionTransaction
   ResourceLifetime
   SessionCapacityLease
   StateBlockOrderedReplay
@@ -57,10 +58,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=45
+expected_normal_count=46
 expected_progress_count=1
-expected_counterexample_count=76
-expected_cfg_count=122
+expected_counterexample_count=84
+expected_cfg_count=131
 progress_model=CpuPipelineLifecycle
 progress_cfg_name="$progress_model.progress.cfg"
 
@@ -258,6 +259,18 @@ counterexample_models=(
   "SegmentedTransportV1|.lost-checkpoint.counterexample|Invariant RollbackRestoresCheckpoint is violated"
   "SegmentedTransportV1|.partial-ledger.counterexample|Invariant LedgerConserved is violated"
   "SegmentedTransportV1|.missing-wake.counterexample|Invariant WakeOnReclaim is violated"
+  # Source-wide replay projection keeps persistent state, working state, the
+  # representation-preserving effective stream, exact emission receipt, and
+  # publication as separate transaction facts.  Each negative control removes
+  # one gate and is expected to fail at the corresponding invariant.
+  "ReplayProjectionTransaction|.state-before-emission.counterexample|Invariant PersistentStateCommitsOnlyAfterReceipt is violated"
+  "ReplayProjectionTransaction|.partial-publish.counterexample|Invariant PublishedOnlyAfterCompleteReceipt is violated"
+  "ReplayProjectionTransaction|.optimizer-state.counterexample|Invariant WorkingStateMatchesProjection is violated"
+  "ReplayProjectionTransaction|.optimizer-without-proof.counterexample|Invariant OptimizerRequiresProof is violated"
+  "ReplayProjectionTransaction|.dedup-attribution.counterexample|Invariant DedupAttributionExact is violated"
+  "ReplayProjectionTransaction|.stale-generation.counterexample|Invariant WorkingGenerationQualified is violated"
+  "ReplayProjectionTransaction|.ordered-control-reorder.counterexample|Invariant EmittedIsExactSourcePrefix is violated"
+  "ReplayProjectionTransaction|.retry-after-effect.counterexample|Invariant NoRetryAfterEffect is violated"
 )
 
 # Validate the complete on-disk inventory before starting TLC.  This is kept

@@ -4089,10 +4089,11 @@ HResult Device::snapshotDrawSubmissionFromCurrentState(
   return D3D_OK;
 }
 
-HResult Device::submitDirectReplayDrawFromCurrentState(
+DirectReplayDrawResult Device::submitDirectReplayDrawFromCurrentState(
     DrawParam draw, DrawParamPayloadView payload) {
   if (draw.primitiveType == PrimitiveType::TriangleFan) {
-    return D3DERR_INVALIDCALL;
+    return {D3DERR_INVALIDCALL,
+            DirectReplayDrawDisposition::LegacyPreEffectFailure};
   }
 
   draw.primitiveType = canonicalPrimitiveType(draw.primitiveType);
@@ -4131,7 +4132,7 @@ HResult Device::submitDirectReplayDrawFromCurrentState(
     const std::span<const DrawParam> draws(&draw, 1u);
     const std::span<const DrawParamPayloadView> payloads(&payload, 1u);
     submitDrawRunInternal(std::move(state), cached.uniforms, draws, payloads);
-    return D3D_OK;
+    return {D3D_OK, DirectReplayDrawDisposition::LegacyUnsupported};
   }
 
   const DirectReplayDrawInput input{
@@ -4159,14 +4160,14 @@ HResult Device::submitDirectReplayDrawFromCurrentState(
                                 payloads);
   } else if (disposition ==
              DirectReplayDrawDisposition::AcceptedFailStop) {
-    return D3DERR_DEVICELOST;
+    return {D3DERR_DEVICELOST, disposition};
   }
   if (activeOcclusionQuery_) {
     activeOcclusionCount_ += draw.primitiveCount;
   }
   ++submittedSequenceId_;
   DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
-  return D3D_OK;
+  return {D3D_OK, disposition};
 }
 
 void Device::submitDrawRunInternal(

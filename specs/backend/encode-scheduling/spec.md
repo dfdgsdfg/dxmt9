@@ -2037,13 +2037,36 @@ state. Serial Encode receives cursor values and the source-qualified sidecar;
 parallel Encode receives the bounded compact indexed pass under the existing
 generation lease.
 
-The existing imperative compatibility sink remains a valid semantic oracle but
-is not yet this complete transaction: `DeviceReplaySink` calls the ordinary
-device setters and therefore advances `Device::state_` while walking the
-source, before a source-wide final-storage commit. Direct draw ingress removes
-the large carrier for admitted draws, but does not by itself provide a separate
-working-state checkpoint. R-BACK-2.97 requires the transactional ownership and
-failure equivalence before that path can be described as complete.
+Production Replay now owns one `ReplayTransaction` for every admitted source.
+Its immutable source identity, exact record ordinal, state generation,
+effective command count, irreversible-effect cut, destination receipt, and
+terminal disposition advance through the shared pure
+`advanceReplayTransaction` relation. `DeviceReplaySink` remains the semantic
+executor, but every setter first captures the touched typed category in one
+fixed-capacity sparse `DeviceStateUndoJournal`. The journal is the source-local
+working-state checkpoint permitted by R-BACK-2.97: it does not copy the complete
+`DeviceState`, allocate a second command carrier, or publish a second replay
+representation. The authenticated raw record order is the representation-
+preserving effective stream in this increment.
+
+Before an irreversible effect, failure restores the exact semantic categories,
+invalidates derived caches conservatively, restores the private Direct/Arena
+destination checkpoint, and permits exactly one compatibility replay of the
+same immutable raw source. Compatibility draw-batch submission, ordered-control
+release, and non-private command execution mark the irreversible cut before
+their effect. After that cut, or after final-storage publication, failure is
+fail-stop and cannot expose the partially advanced working state to a later
+source. A successful Direct/Arena publication or zero-command StateOnly replay
+produces an exact destination receipt before the transaction commits. Legacy,
+ordinary Direct, and Arena replay therefore share the same source-wide state
+settlement protocol even though their physical destinations remain different.
+
+This closes the transaction/failure portion of R-BACK-2.97, not the carrier-
+retirement portion. Compatibility batching still materializes
+`DrawRunSubmission`, and the universal carrier-free serial cursor, full
+Legacy/direct next-state/final-SoA differential, production optimizer
+certificate binding, and fresh materialization ledger remain R-BACK-2.98
+through R-BACK-2.100 work.
 
 FrameGraph DCE/pass coalescing, mutation composition, source folding, and
 parallel policy selection consume the effective stream only through their
@@ -2064,7 +2087,7 @@ control, and Present boundaries remain coordinator-owned.
 | General bounded ready-prefix DCE | missing extension or refinement model plus pure summary tests |
 | Tape layout and ABA | `SegmentedTransportV1.tla` now covers the fixed-role semantic-batch handoff, complete reservation/adoption, exact contiguous emission, checkpoint rollback, FIFO settlement, and wake protocol; broader physical multi-segment packing, jumbo/non-wrapping page layout, generation rejection, ordered reclaim, and oversize rollback remain separate obligations |
 | Fixed-role `SegmentedTransportV1` / later `ExactFixed` (`R-BACK-2.90`–`2.94`) | opt-in fixed-region bridge plus host immutable-owner/21-family ExactFixed binding; bounded TLA model and six expected-failure configurations; production CPU-ready Tape role binding and promotion evidence remain open |
-| End-to-end source lease/facade/completion/materialization composition (R-BACK-2.95–2.100, R-ARCH-7.11–7.24) | Production PE emission carries a closed event/source interval through authenticated Raw ownership, direct or Arena publication, the generation-qualified lifecycle sidecar, completion, and reclaim. `CpuPipelineLifecycle` and native truth tables reject partial and cross-raw duplicate identity. Current import closes ownership with Unix `RawOwned` storage before bridge return; same-address adoption remains invalid without a negotiated shared lease. Source-wide transactional replay-state commit, core-versus-optimizer model/code binding, universal all-family final emission, `DrawRunSubmission` retirement, and a fresh four-boundary ledger audit remain open. Broader atomic-order, Wine/GPU, and promotion evidence remain separate. |
+| End-to-end source lease/facade/completion/materialization composition (R-BACK-2.95–2.100, R-ARCH-7.11–7.24) | Production PE emission carries a closed event/source interval through authenticated Raw ownership, direct or Arena publication, the generation-qualified lifecycle sidecar, completion, and reclaim. `CpuPipelineLifecycle` and native truth tables reject partial and cross-raw duplicate identity. Current import closes ownership with Unix `RawOwned` storage before bridge return; same-address adoption remains invalid without a negotiated shared lease. `ReplayProjectionTransaction` plus the production `ReplayTransaction`/sparse undo journal bind exact source-order projection, pre-effect state/destination rollback, receipt-before-commit, and post-effect no-retry fail-stop. Universal all-family carrier-free emission, `DrawRunSubmission` retirement, optimizer-policy proof binding, the complete Legacy/direct differential, and a fresh four-boundary ledger audit remain open. Broader atomic-order, Wine/GPU, and promotion evidence remain separate. |
 | CPU-ready admission and session progress | native admission policy specs cover exact Writing/headroom qualification, real lease charge, stale identity, the complete typed drain matrix, unlocked wait, semantic-drain priority, and exact Ready over admission/writer pressure. The production join spec fills all 31 Ready controls and composes the real replay-drain queue with a direct real `QueueLifecycleController::waitForSequence` call, proving one Present plus seven admission escapes and 23 exact producer-fence escapes cover the complete fence in FIFO order without a capacity-generation transition. Exact-head at-most-once tokens, target coverage, restore eligibility, ownership conservation, admission retry, completion-fence return, and distinct counters are pinned through production CVs. GT2 r17 binds the actual reserve path, records 672 producer-wait escapes, returns from reserve, and publishes a fully settled 147-segment v2 sidecar with zero watchdog/GPU errors. Four sibling cases retain Present, non-Arena, ordinary-capacity, and high-water ineligibility without token consumption; generation retry retains priority. Seeded `EncodeSchedulingProgress` composes admission progress followed by the post-admission producer fence and return. |
 | Pass streaming | planner specs cover the allocation-free exact four-command proof, malformed/unsupported shapes, identity/attachment/alias hazards, complete coverage, and the unchanged universal validator. Production specs cover default-off natural replay, exact joined replay, render-pass begin/end `3 -> 2`, one removed mid-chunk split, stale pre-effect restore, ordered-release and stop drains, pending-carrier capture-start drain through the full capture predicate, one observer, natural FIFO completion, receipt-backed retirement/reclaim, and the independent 8+1 bounded-window edge. |
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |
