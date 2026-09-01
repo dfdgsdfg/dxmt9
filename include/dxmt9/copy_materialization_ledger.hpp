@@ -19,8 +19,8 @@ enum class CopyMaterializationClass : std::uint8_t {
   PeSealHandles,
   PeSealPayload,
   BridgeRawOwnership,
-  ReplaySubmissionCarrierMaterialization,
-  ReplaySubmissionCarrierCopy,
+  ReservedRetiredReplayMaterialization,
+  ReservedRetiredReplayCopy,
   QueueFinalSlotAppend,
   GpuUploadCopy,
   GpuSharedMaterialization,
@@ -70,10 +70,10 @@ enum class CopyMaterializationOwner : std::uint8_t {
     return "copy.pe.seal-payload";
   case CopyMaterializationClass::BridgeRawOwnership:
     return "copy.bridge.raw-owned";
-  case CopyMaterializationClass::ReplaySubmissionCarrierMaterialization:
-    return "materialize.replay-submission-carrier";
-  case CopyMaterializationClass::ReplaySubmissionCarrierCopy:
-    return "copy.replay.submission-carrier";
+  case CopyMaterializationClass::ReservedRetiredReplayMaterialization:
+    return "retired.replay-materialization";
+  case CopyMaterializationClass::ReservedRetiredReplayCopy:
+    return "retired.replay-copy";
   case CopyMaterializationClass::QueueFinalSlotAppend:
     return "materialize.queue-final";
   case CopyMaterializationClass::GpuUploadCopy:
@@ -130,10 +130,9 @@ enum class CopyMaterializationClassification : std::uint8_t {
     return "typed-producers-final-payload-range";
   case CopyMaterializationClass::BridgeRawOwnership:
     return "process-abi-ownership-no-shared-ownership-abi";
-  case CopyMaterializationClass::ReplaySubmissionCarrierMaterialization:
-    return "bounded-planning-final-queue-storage";
-  case CopyMaterializationClass::ReplaySubmissionCarrierCopy:
-    return "final-queue-destination-known-after-bounded-planning";
+  case CopyMaterializationClass::ReservedRetiredReplayMaterialization:
+  case CopyMaterializationClass::ReservedRetiredReplayCopy:
+    return "retired-reserved-enum-slot";
   case CopyMaterializationClass::QueueFinalSlotAppend:
     return "immutable-queue-ownership";
   case CopyMaterializationClass::GpuUploadCopy:
@@ -166,8 +165,8 @@ copyMaterializationClassification(
   case CopyMaterializationClass::PeSealRecords:
   case CopyMaterializationClass::PeSealHandles:
   case CopyMaterializationClass::PeSealPayload:
-  case CopyMaterializationClass::ReplaySubmissionCarrierMaterialization:
-  case CopyMaterializationClass::ReplaySubmissionCarrierCopy:
+  case CopyMaterializationClass::ReservedRetiredReplayMaterialization:
+  case CopyMaterializationClass::ReservedRetiredReplayCopy:
     return CopyMaterializationClassification::Removable;
   case CopyMaterializationClass::PeStateShadow:
   case CopyMaterializationClass::PeWireFinal:

@@ -303,6 +303,8 @@ void testSourceContracts(const std::filesystem::path &root) {
       readTextFile(root / "src/d3d9/core_resources.cpp");
   const auto coreDraw =
       readTextFile(root / "src/d3d9/core_draw.cpp");
+  const auto coreSnapshots =
+      readTextFile(root / "include/dxmt9/core_snapshots.hpp");
   const auto providerOffload =
       readTextFile(root / "src/d3d9/device_c_replay_offload.cpp");
   const auto providerPayload =
@@ -321,8 +323,16 @@ void testSourceContracts(const std::filesystem::path &root) {
       readTextFile(root / "src/dxmt9/dxmt9_queue.hpp");
   const auto commandQueueHeader =
       readTextFile(root / "src/dxmt9/dxmt9_command_queue.hpp");
+  const auto backendTypes =
+      readTextFile(root / "src/dxmt9/dxmt9_backend_types.hpp");
+  const auto deviceInterface =
+      readTextFile(root / "src/dxmt9/dxmt9_device.hpp");
+  const auto deviceImplementation =
+      readTextFile(root / "src/dxmt9/dxmt9_device.cpp");
   const auto sourcePayload =
       readTextFile(root / "src/dxmt9/dxmt9_source_payload.cpp");
+  const auto sourcePayloadHeader =
+      readTextFile(root / "src/dxmt9/dxmt9_source_payload.hpp");
   const auto copyLedger =
       readTextFile(root / "include/dxmt9/copy_materialization_ledger.hpp");
   const auto cpuPipelineOwnership = readTextFile(
@@ -766,33 +776,33 @@ void testSourceContracts(const std::filesystem::path &root) {
                    "disabled copy-ledger branch does not allocate");
   checkNotContains(disabledPath, "malloc",
                    "disabled copy-ledger branch does not allocate");
-  checkContains(sourcePayload, "tryAppendDrawRunBatch",
-                "batch assembler remains covered by the source audit");
+  checkNotContains(sourcePayload, "tryAppendDrawRunBatch",
+                   "retired batch carrier adapter is absent");
   checkNotContains(sourcePayload,
                    "CopyMaterializationClass::ReplaySubmissionCarrierCopy",
                    "batch assembler does not claim a false whole-carrier copy");
   checkContains(sourcePayload,
                 "CopyMaterializationClass::QueueFinalSlotAppend",
                 "batch assembler retains final-slot accounting");
-  const auto snapshotBegin = coreDraw.find(
-      "HResult Device::snapshotDrawSubmissionFromCurrentState(");
   const auto directReplayBegin = coreDraw.find(
-      "DirectReplayDrawResult Device::submitDirectReplayDrawFromCurrentState(",
-      snapshotBegin);
-  check(snapshotBegin != std::string::npos &&
-            directReplayBegin != std::string::npos &&
-            snapshotBegin < directReplayBegin,
-        "legacy carrier and direct replay bodies have a bounded source order");
-  const std::string_view snapshotBody(
-      coreDraw.data() + snapshotBegin, directReplayBegin - snapshotBegin);
-  checkContains(
-      snapshotBody,
-      "CopyMaterializationClass::\n              ReplaySubmissionCarrierCopy",
-      "legacy snapshot records its actual state/uniform carrier copies");
-  checkContains(
-      snapshotBody,
-      "CopyMaterializationClass::\n            ReplaySubmissionCarrierMaterialization",
-      "legacy snapshot records one semantic carrier materialization");
+      "DirectReplayDrawResult Device::submitDirectReplayDrawFromCurrentState(");
+  check(directReplayBegin != std::string::npos,
+        "direct replay source contract has a bounded start");
+  checkNotContains(coreDraw, "snapshotDrawSubmissionFromCurrentState",
+                   "retired carrier snapshot API is absent");
+  checkNotContains(coreDraw, "submitDrawSubmissionBatch",
+                   "retired carrier submit API is absent");
+  for (const auto* productionSurface : {
+           &coreSnapshots, &providerReplay, &coreDraw, &queue,
+           &commandQueueHeader, &backendTypes, &deviceInterface,
+           &deviceImplementation, &sourcePayload, &sourcePayloadHeader}) {
+    checkNotContains(*productionSurface, "DrawRunSubmission",
+                     "retired draw carrier type is absent from production");
+    checkNotContains(*productionSurface, "submitDrawRunBatch",
+                     "retired draw carrier submit surface is absent");
+    checkNotContains(*productionSurface, "appendDrawRunBatch",
+                     "retired draw carrier append surface is absent");
+  }
   const auto directReplayEnd = coreDraw.find(
       "void Device::submitDrawRunInternal(", directReplayBegin);
   check(directReplayEnd != std::string::npos,

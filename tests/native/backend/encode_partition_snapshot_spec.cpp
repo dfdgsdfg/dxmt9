@@ -426,21 +426,22 @@ void retainedSourceResolverUsesSegmentLocalArenaViews() {
                sizeof(dxmt9::core::DrawBindingSnapshot)> snapshotBytes{};
     std::memcpy(overrideBytes.data(), &bindingOverride, overrideBytes.size());
     std::memcpy(snapshotBytes.data(), &bindingSnapshot, snapshotBytes.size());
-    dxmt9::core::DrawRunSubmission submission{
-        .state = dxmt9::core::CanonicalDrawState{},
-        .uniforms = dxmt9::core::DrawUniformPayload{},
+    dxmt9::core::CanonicalDrawState state{};
+    dxmt9::core::DrawUniformPayload uniforms{};
+    const dxmt9::core::DirectReplayDrawInput input{
+        .hot = &state.hot,
+        .shaderLayout = &state.shaderLayout,
+        .uniforms = &uniforms,
         .draw = dxmt9::core::DrawParam{},
         .payload = {
             .bindingOverrideData = overrideBytes,
             .bindingSnapshotData = snapshotBytes,
         },
-        .uniformGeneration = static_cast<std::uint64_t>(i + 1),
     };
     dxmt9::core::ArenaSourcePayloadBuilder builder(
         blocks[i], *layout, memory.first(layout->usedBytes));
     dxmt9::core::ArenaSourcePayloadAssembler assembler(builder);
-    check(assembler.tryAppendDrawRunBatch(
-              std::span<dxmt9::core::DrawRunSubmission>(&submission, 1)) &&
+    check(assembler.tryAppendDirectDraw(input) &&
               assembler.commitValueOnlyForTest(),
           "each segment publishes one complete draw run");
   }

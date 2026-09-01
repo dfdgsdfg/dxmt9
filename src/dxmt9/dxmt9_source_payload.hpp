@@ -734,8 +734,7 @@ class ArenaSourcePayloadBuilder {
   bool good_ = false;
 };
 
-// Replay-thread-scoped adapter from the existing DrawRunSubmission scratch
-// carrier to the final fixed-capacity arena regions. It owns no storage and
+// Replay-thread-scoped final-storage assembler. It owns no storage and
 // performs no fallback allocation; any partial append makes the underlying
 // builder sticky-failed and the enclosing publication ticket must abort.
 class TransactionalChunkSlotAssembler {
@@ -867,8 +866,6 @@ class TransactionalChunkSlotAssembler {
     return outerBinding_;
   }
 
-  bool tryAppendDrawRunBatch(
-      std::span<DrawRunSubmission> submissions) noexcept;
   bool tryAppendDirectDraw(
       const DirectReplayDrawInput& input) noexcept;
   bool tryAppendClear(const ClearDesc& value) noexcept;

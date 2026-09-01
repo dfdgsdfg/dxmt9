@@ -37,16 +37,12 @@
 #include <sstream>
 #include <utility>
 #include <vector>
-
 #if defined(__APPLE__)
 #include <pthread.h>
 #include <pthread/qos.h>
 #endif
-
 namespace dxmt9 {
-
 namespace {
-
 void recordCpuReadyTapeStats(const core::CpuReadyTape& tape) {
   const auto& stats = tape.stats();
   perf::recordCpuReadyTapeStats(
@@ -295,13 +291,6 @@ std::atomic_uint64_t gCommandBufferLabelCounter{0};
   std::abort();
 }
 
-bool drawRunGroupByGenerationLaneEnabled() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_DRAWRUN_GROUP_BY_GEN_LANE");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled;
-}
 
 bool renderTapeCaptureEnabled() {
   static const bool enabled = [] {
@@ -2423,161 +2412,9 @@ std::size_t drawRunPayloadBytes(
   return bytes;
 }
 
-template <typename Submission>
-std::size_t drawRunSubmissionPayloadBytes(
-    std::span<Submission> submissions) {
-  std::size_t bytes = 0;
-  for (const auto& submission : submissions) {
-    const auto& payload = submission.payload;
-    if (payload.userIndexData.size() >
-        std::numeric_limits<std::size_t>::max() - payload.userVertexData.size()) {
-      return std::numeric_limits<std::size_t>::max();
-    }
-    const std::size_t payloadBytes =
-        payload.userVertexData.size() + payload.userIndexData.size();
-    if (payload.bindingOverrideData.size() >
-        std::numeric_limits<std::size_t>::max() - payloadBytes) {
-      return std::numeric_limits<std::size_t>::max();
-    }
-    const std::size_t payloadAndBindingBytes =
-        payloadBytes + payload.bindingOverrideData.size();
-    if (payload.bindingSnapshotData.size() >
-        std::numeric_limits<std::size_t>::max() - payloadAndBindingBytes) {
-      return std::numeric_limits<std::size_t>::max();
-    }
-    const std::size_t totalPayloadBytes =
-        payloadAndBindingBytes + payload.bindingSnapshotData.size();
-    if (totalPayloadBytes > std::numeric_limits<std::size_t>::max() - bytes) {
-      return std::numeric_limits<std::size_t>::max();
-    }
-    bytes += totalPayloadBytes;
-  }
-  return bytes;
-}
-
-template <typename Submission>
-bool drawSubmissionStatesCompatible(
-    const Submission& a,
-    const Submission& b) noexcept {
-  const bool sameGenerationLane =
-      core::drawRunSubmissionSameStateGenerationLane(a, b);
-  if (drawRunGroupByGenerationLaneEnabled()) {
-    perf::countSubmitDrawRunBatchCompatPair(sameGenerationLane,
-                                            sameGenerationLane);
-    return sameGenerationLane;
-  }
-  if (sameGenerationLane) {
-#ifndef NDEBUG
-    if (a.stateMaterialized && b.stateMaterialized) {
-      DXMT_ASSERT(core::drawRunSubmissionStatesCompatibleForBatch(a, b));
-    }
-#endif
-    perf::countSubmitDrawRunBatchCompatPair(true, true);
-    return true;
-  }
-  DXMT_ASSERT(a.stateMaterialized && b.stateMaterialized);
-  const bool compatible = core::drawRunSubmissionStatesCompatibleForBatch(a, b);
-  perf::countSubmitDrawRunBatchCompatPair(false, compatible);
-  if (!compatible) {
-    const auto& aState = a.materializedState();
-    const auto& bState = b.materializedState();
-    const auto incompat = core::classifyDrawRunBatchIncompatibility(
-        aState.hot, bState.hot, aState.shaderLayout, bState.shaderLayout);
-    perf::countSubmitDrawRunBatchIncompat(
-        static_cast<std::uint8_t>(incompat.firstDiff), incompat.textureOnly);
-    if (incompat.renderStateDiff !=
-        core::DrawRunBatchRenderStateDiffClass::None) {
-      perf::countSubmitDrawRunBatchIncompatRenderState(
-          static_cast<std::uint8_t>(incompat.renderStateDiff));
-    }
-  }
-  return compatible;
-}
-
-template <typename Submission>
-bool drawSubmissionStatesCompatibleWithAcceptedPrevious(
-    const Submission& base,
-    const Submission& previous,
-    const Submission& candidate) noexcept {
-  if (drawRunGroupByGenerationLaneEnabled()) {
-    return drawSubmissionStatesCompatible(base, candidate);
-  }
-
-  const bool sameBaseGenerationLane =
-      core::drawRunSubmissionSameStateGenerationLane(base, candidate);
-  if (sameBaseGenerationLane) {
-#ifndef NDEBUG
-    if (base.stateMaterialized && candidate.stateMaterialized) {
-      DXMT_ASSERT(core::drawRunSubmissionStatesCompatibleForBatch(base,
-                                                                  candidate));
-    }
-#endif
-    perf::countSubmitDrawRunBatchCompatPair(true, true);
-    return true;
-  }
-
-  if (core::drawRunSubmissionUsesAcceptedPreviousStateGenerationLane(
-          base, previous, candidate)) {
-    // The previous submission is already in this batch; sharing its producer
-    // stamp makes the elided candidate compatible by transitivity.
-    perf::countSubmitDrawRunBatchCompatPair(false, true);
-    return true;
-  }
-
-  DXMT_ASSERT(candidate.stateMaterialized);
-  const bool compatible =
-      core::drawRunSubmissionStatesCompatibleForBatch(base, candidate);
-  perf::countSubmitDrawRunBatchCompatPair(false, compatible);
-  if (!compatible) {
-    const auto& baseState = base.materializedState();
-    const auto& candidateState = candidate.materializedState();
-    const auto incompat = core::classifyDrawRunBatchIncompatibility(
-        baseState.hot, candidateState.hot, baseState.shaderLayout,
-        candidateState.shaderLayout);
-    perf::countSubmitDrawRunBatchIncompat(
-        static_cast<std::uint8_t>(incompat.firstDiff), incompat.textureOnly);
-    if (incompat.renderStateDiff !=
-        core::DrawRunBatchRenderStateDiffClass::None) {
-      perf::countSubmitDrawRunBatchIncompatRenderState(
-          static_cast<std::uint8_t>(incompat.renderStateDiff));
-    }
-  }
-  return compatible;
-}
-
-template <typename Submission>
-void countDrawSubmissionAdjacentStateGenerations(
-    std::span<Submission> submissions) noexcept {
-  for (std::size_t i = 1; i < submissions.size(); ++i) {
-    perf::countSubmitDrawRunBatchSubmissionAdjacent(
-        core::drawRunSubmissionSameStateGenerationLane(submissions[i - 1],
-                                                       submissions[i]));
-  }
-}
-
-template <typename Submission>
-void countDrawRunBatchDiscardedMaterializedStates(
-    std::span<Submission> submissions) noexcept {
-  if (submissions.size() <= 1u) {
-    return;
-  }
-  std::uint64_t records = 0;
-  for (std::size_t i = 1; i < submissions.size(); ++i) {
-    if (submissions[i].stateMaterialized) {
-      ++records;
-    }
-  }
-  if (records == 0) {
-    return;
-  }
-  perf::countSubmitDrawRunBatchDiscardedState(
-      records, records * core::drawRunSubmissionStateCopyBytes());
-}
-
 struct DrawSubmitScratch {
   std::vector<core::DrawBindingSnapshot> bindingSnapshots;
   std::vector<core::DrawParamPayloadView> snapshotPayloads;
-  std::vector<core::DrawRunSubmission> arenaSubmissions;
   bool inUse = false;
 };
 
@@ -2597,7 +2434,6 @@ public:
   ~ScopedDrawSubmitScratchUse() {
     scratch_.bindingSnapshots.clear();
     scratch_.snapshotPayloads.clear();
-    scratch_.arenaSubmissions.clear();
     scratch_.inUse = false;
   }
 
@@ -2607,27 +2443,6 @@ public:
 private:
   DrawSubmitScratch& scratch_;
 };
-
-template <typename Submission>
-void prepareDrawRunBatchBindingOverrides(
-    std::span<Submission> submissions) noexcept {
-  if (submissions.empty()) {
-    return;
-  }
-  const auto& base = submissions.front();
-  DXMT_ASSERT(base.stateMaterialized);
-  for (auto& submission : submissions) {
-    if (!submission.stateMaterialized) {
-      if (core::drawRunSubmissionHasExternalBindingOverride(submission)) {
-        core::ensureDrawRunSubmissionBindingOverridePayload(submission);
-      } else {
-        submission.bindingOverride = {};
-      }
-      continue;
-    }
-    core::prepareDrawRunSubmissionBindingOverride(base, submission);
-  }
-}
 
 core::DrawParamPayloadView drawPayloadAt(
     std::span<const core::DrawParamPayloadView> payloads,
@@ -2755,44 +2570,6 @@ std::span<const core::DrawParamPayloadView> snapshotDrawRunBindingPayloads(
     return payloads;
   }
   return snapshotPayloads;
-}
-
-template <typename Submission>
-void snapshotDrawSubmissionBindingPayloads(
-    resources::Pool& pool,
-    std::span<Submission> submissions,
-    std::vector<core::DrawBindingSnapshot>& bindingSnapshots) {
-  bindingSnapshots.clear();
-  bindingSnapshots.reserve(submissions.size());
-  if (submissions.empty()) {
-    return;
-  }
-  DXMT_ASSERT(submissions.front().stateMaterialized);
-  const auto& frontHot = submissions.front().materializedState().hot;
-
-  for (auto& submission : submissions) {
-    core::DrawParamPayloadView payload = submission.payload;
-    if (!payload.bindingSnapshotData.empty()) {
-      continue;
-    }
-    core::DrawBindingSnapshot snapshot{};
-    bool addedSnapshots = false;
-    const auto& hot = submission.stateMaterialized
-        ? submission.materializedState().hot
-        : frontHot;
-    addDynamicBufferSnapshots(pool,
-                              hot,
-                              submission.draw,
-                              payload,
-                              snapshot,
-                              addedSnapshots);
-    if (!addedSnapshots) {
-      continue;
-    }
-    bindingSnapshots.push_back(snapshot);
-    submission.payload.bindingSnapshotData =
-        core::drawBindingSnapshotBytes(bindingSnapshots.back());
-  }
 }
 
 void markDrawBindingOverrideResource(resources::Pool& pool,
@@ -3537,6 +3314,7 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   currentBackBuffer_ = state.hot.colorAttachments[0].handle;
   {
     PerfScope stageScope(perf::countSubmitDrawRunAppendCpuTime);
+    DXMT_ASSERT_OWNED_BY_OR_LOCKED(writingSlotOwnership_, lock.owns_lock());
     noteCurrentSlotCommandAppendStartedUnlocked(*this);
     currentSlotUnlocked(*this).appendDrawRun(
         std::move(state), uniforms, draws, effectivePayloads);
@@ -3547,179 +3325,6 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   }
 }
 
-void submitDrawRunBatchImpl(CommandQueue& queue,
-                            resources::Pool& pool,
-                            std::mutex& mutex,
-                            core::Handle& currentBackBuffer,
-                            bool skipDrawResourceMarking,
-                            bool forceDrawResourceMarkingAfterSplit,
-                            std::span<core::DrawRunSubmission> submissions) {
-  if (submissions.empty()) {
-    return;
-  }
-  auto& scratch = drawSubmitScratch();
-  ScopedDrawSubmitScratchUse scratchUse(scratch);
-  scratch.bindingSnapshots.reserve(submissions.size());
-  DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("submitDrawRunBatch");
-  countDrawSubmissionAdjacentStateGenerations(submissions);
-  std::unique_lock lock(mutex, std::defer_lock);
-  {
-    PerfScope stageScope(perf::countSubmitDrawRunBatchQueueLockCpuTime);
-    const auto qmxBegin = queueMutexProbeBegin();
-    lock.lock();
-    // skipHold: `lock` is handed by reference to ensureWritingSlotUnlocked /
-    // maybeCommitDrawPayloadArenaUnlocked / maybeCommitDrawChunkUnlocked
-    // below (per batch iteration), which may unlock/relock it an unbounded
-    // number of times, so only the acquire-wait for this initial lock() is
-    // recorded. This site is not among the 41 acquisitions that spell the
-    // member name `mutex_` (it locks the same std::mutex via the `mutex`
-    // reference parameter passed from CommandQueue::submitDrawRunBatch), but
-    // it is the hot per-draw-run-batch acquisition called by the replay
-    // offload worker hundreds of times per present, so it is included here.
-    QueueMutexProbeScope qmxScope(
-        qmxBegin, "submit_draw_run_batch_impl", /*skipHold=*/true);
-  }
-  std::size_t batchStart = 0;
-  while (batchStart < submissions.size()) {
-    std::size_t batchEnd = batchStart + 1u;
-    {
-      PerfScope stageScope(perf::countSubmitDrawRunBatchCompatScanCpuTime);
-      while (batchEnd < submissions.size() &&
-             drawSubmissionStatesCompatibleWithAcceptedPrevious(
-                 submissions[batchStart], submissions[batchEnd - 1u],
-                 submissions[batchEnd])) {
-        ++batchEnd;
-      }
-    }
-    auto batch = submissions.subspan(batchStart, batchEnd - batchStart);
-    countDrawRunBatchDiscardedMaterializedStates(batch);
-    {
-      PerfScope stageScope(perf::countSubmitDrawRunBatchBindingOverrideCpuTime);
-      prepareDrawRunBatchBindingOverrides(batch);
-    }
-    {
-      PerfScope stageScope(perf::countSubmitDrawRunBatchBindingSnapshotCpuTime);
-      snapshotDrawSubmissionBindingPayloads(pool, batch, scratch.bindingSnapshots);
-    }
-    std::size_t pendingPayloadBytes = 0;
-    {
-      PerfScope stageScope(perf::countSubmitDrawRunBatchPayloadBytesCpuTime);
-      pendingPayloadBytes = drawRunSubmissionPayloadBytes(batch);
-    }
-    {
-      PerfScope stageScope(perf::countSubmitDrawRunBatchSlotPrepareCpuTime);
-      ensureWritingSlotUnlocked(queue, lock);
-      maybeCommitDrawPayloadArenaUnlocked(queue, pool, lock, pendingPayloadBytes);
-      DXMT_ASSERT(batch.front().stateMaterialized);
-    }
-    // T2a' — the per-batch stamp loop. Every entry point it reaches
-    // (`Pool::markDrawResources`, `markDrawBindingSnapshotResources`,
-    // `markDrawBindingOverrideResources`) bottoms out in `markBufferUse` /
-    // `markTextureUse` / `markSurfaceUse` / `markBufferSnapshotUse`, each of
-    // which touches only HandleArena-locked slot metadata — the pool header's
-    // documented arena-stamp exception. None of them reads the heap manager,
-    // the slot ring, or any other `CommandQueue::mutex_`-protected state, so
-    // the loop is callable with the queue mutex released.
-    const auto stampBatch = [&](std::uint64_t seqId) {
-      if (!skipDrawResourceMarking || forceDrawResourceMarkingAfterSplit) {
-        pool.markDrawResources(batch.front().materializedState().hot, seqId);
-      }
-      for (auto& submission : batch) {
-        std::span<const core::DrawParamPayloadView> payloads{};
-        if (!submission.payload.userVertexData.empty() ||
-            !submission.payload.userIndexData.empty() ||
-            !submission.payload.bindingOverrideData.empty() ||
-            !submission.payload.bindingSnapshotData.empty()) {
-          payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
-        }
-        markDrawBindingSnapshotResources(pool, payloads, seqId);
-        if (!skipDrawResourceMarking || forceDrawResourceMarkingAfterSplit) {
-          markDrawBindingOverrideResources(pool, payloads, seqId);
-        }
-      }
-    };
-    // The marking window runs UNLOCKED. Three facts make that sound:
-    //
-    //  1. RECLAIM. The pin-ordering premise, symmetric to the producer's: the
-    //     replay offload worker holds the retained wrappers for every resource
-    //     this batch names and drops them only in `releaseRetainedWrappers`
-    //     after the replay, so nothing here can be `destroyPending`, so
-    //     nothing here can be reclaimed mid-stamp.
-    //     TLA+: ProducerMarkReclaim!WorkerStampMark.
-    //  2. COMMAND ORDER. No other actor can append into the writing slot
-    //     inside the window. Every producer-side direct call goes through
-    //     `drainDeferredReplay` (R-BACK-2.51(d)) first, which does not return
-    //     while this worker still has queued chunks to replay.
-    //  3. SLOT IDENTITY. What the window does NOT exclude is a *publish* of
-    //     the open slot — a scoped or bypassing `buffer_lock` can reach
-    //     `commitCurrentChunk` without a full drain — which both retires the
-    //     writing slot and raises the seq. Both are repaired below:
-    //     `ensureWritingSlotUnlocked` re-opens a slot, and
-    //     `restampIfTicketAdvancedLocked` re-stamps for the new seq.
-    std::uint64_t markTicket = 0;
-    {
-      PerfScope stageScope(perf::countSubmitDrawRunBatchResourceMarkCpuTime);
-      lock.unlock();
-      markTicket = seqIdForMark(queue, 0);
-      stampBatch(markTicket);
-      lock.lock();
-    }
-    {
-      PerfScope stageScope(perf::countSubmitDrawRunBatchSlotPrepareCpuTime);
-      // The unlocked window above permits a concurrent force-publish to have
-      // retired the writing slot, so it has to be re-established before
-      // currentSlotUnlocked(). `pendingPayloadBytes` is deliberately not
-      // re-evaluated: a slot that was published is empty, so the arena limit
-      // cannot bind, and if it was not published the check above already ran.
-      ensureWritingSlotUnlocked(queue, lock);
-      DXMT_ASSERT(batch.front().stateMaterialized);
-    }
-    // SEGMENT-HOLD: from here through the append below, `lock` is
-    // continuously held with no interior unlock/relock (the helpers that may
-    // unlock -- ensureWritingSlotUnlocked and
-    // maybeCommitDrawPayloadArenaUnlocked -- already returned above, and
-    // maybeCommitDrawChunkUnlocked below has not been called yet). The
-    // marking half of the old combined segment is gone from the hold; what is
-    // left is the append the module comment above calls out (22.6
-    // calls/present).
-    {
-      QueueMutexSegmentScope qmxAppendSegment("submit_draw_run_batch_impl/append");
-      // R-BACK-43.4/43.5 — `worker-owned` writing slot, shape-(c) check. The
-      // witness is structurally true here because this whole segment runs with
-      // `lock` held; its value is that a future unlocked append (T2d's
-      // reserve-copy-commit, whose bounded model is still owed) cannot land
-      // silently — without the mutex the assert falls back to requiring that
-      // this thread is still the one that established the slot, which the
-      // producer's map-wait force-publish can invalidate at any point.
-      DXMT_ASSERT_OWNED_BY_OR_LOCKED(queue.writingSlotOwnership_,
-                                     lock.owns_lock());
-      // Frozen-ticket re-read. If a force-publish moved the seq while the
-      // stamps were being written unlocked, the batch is re-stamped with the
-      // new one BEFORE its records enter the slot, so the stamps still cover
-      // the seq the slot will be published under. Removing this step is the
-      // `RestampDiscipline = "Removed"` counterexample.
-      (void)restampIfTicketAdvancedLocked(queue, markTicket, stampBatch);
-      DXMT_ASSERT(batch.front().stateMaterialized);
-      currentBackBuffer =
-          batch.front().materializedState().hot.colorAttachments[0].handle;
-
-      perf::countSubmitDrawRunBatchGroup(static_cast<std::uint32_t>(batch.size()));
-      {
-        PerfScope stageScope(perf::countSubmitDrawRunBatchAppendCpuTime);
-        noteCurrentSlotCommandAppendStartedUnlocked(queue);
-        currentSlotUnlocked(queue).appendDrawRunBatch(batch);
-      }
-    }
-    {
-      PerfScope stageScope(perf::countSubmitDrawRunBatchChunkCommitCpuTime);
-      const bool committed = maybeCommitDrawChunkUnlocked(queue, pool, lock);
-      forceDrawResourceMarkingAfterSplit =
-          forceDrawResourceMarkingAfterSplit ||
-          (committed && skipDrawResourceMarking);
-    }
-    batchStart = batchEnd;
-  }
-}
 
 CommandQueue::CpuReadyArenaBuildLease::~CpuReadyArenaBuildLease() {
   abort();
@@ -5054,54 +4659,6 @@ CommandQueue::ActiveArenaAppendResult CommandQueue::rejectIfActiveArena()
 
 void CommandQueue::rejectActiveCpuReadyArenaSource() noexcept {
   (void)rejectIfActiveArena();
-}
-
-CommandQueue::ActiveArenaAppendResult
-CommandQueue::appendActiveArenaDrawRunBatch(
-    std::span<core::DrawRunSubmission> submissions) noexcept {
-  return appendActiveArena([&](ArenaBuildContext& context) {
-    auto* assembler = context.activeAssembler();
-    if (submissions.empty() || !submissions.front().stateMaterialized) {
-      return false;
-    }
-    countDrawSubmissionAdjacentStateGenerations(submissions);
-
-    std::size_t batchStart = 0;
-    while (batchStart < submissions.size()) {
-      std::size_t batchEnd = batchStart + 1u;
-      while (batchEnd < submissions.size() &&
-             drawSubmissionStatesCompatibleWithAcceptedPrevious(
-                 submissions[batchStart], submissions[batchEnd - 1u],
-                 submissions[batchEnd])) {
-        ++batchEnd;
-      }
-      auto batch = submissions.subspan(batchStart, batchEnd - batchStart);
-      countDrawRunBatchDiscardedMaterializedStates(batch);
-      prepareDrawRunBatchBindingOverrides(batch);
-      // Direct replay payloads already carry the app-admission concrete
-      // backing snapshot. Never recapture from Pool on the replay thread:
-      // doing so would substitute a later rename generation. Publish validates
-      // every versioned binding through Pool's own synchronization before
-      // marking it, outside the queue scheduling mutex.
-      if (!assembler || !assembler->tryAppendDrawRunBatch(batch)) {
-        return false;
-      }
-      if (!context.captureDrawCommand(batchStart, batch.size())) {
-        return false;
-      }
-      context.pendingBackBuffer = batch.front()
-                                      .materializedState()
-                                      .hot.colorAttachments[0].handle;
-      context.updatesBackBuffer = true;
-      perf::countSubmitDrawRunBatchGroup(
-          static_cast<std::uint32_t>(batch.size()));
-      batchStart = batchEnd;
-    }
-    if (context.captureEnabled()) {
-      context.captureNextRawRecords.clear();
-    }
-    return true;
-  });
 }
 
 CommandQueue::ActiveArenaAppendResult
@@ -6542,29 +6099,6 @@ void CommandQueue::abortCpuReadyArenaSource(
       render::SchedulingTerminalDisposition::DeviceLoss);
 }
 
-void CommandQueue::submitDrawRunBatch(
-    std::span<core::DrawRunSubmission> submissions) {
-  for (std::size_t i = 0; i < submissions.size(); ++i) {
-    perf::countSubmitDraw();
-  }
-  PerfScope scope(perf::countSubmitDrawCpuTime);
-  if (appendActiveArenaDrawRunBatch(submissions) !=
-      ActiveArenaAppendResult::Inactive) {
-    return;
-  }
-  if (activeDirectChunkSlotBuild_.load(std::memory_order_acquire)) {
-    (void)appendActiveDirectChunkSlot(
-        [](DirectChunkSlotBuildContext&,
-           core::TransactionalChunkSlotAssembler&) noexcept {
-          return false;
-        });
-    return;
-  }
-  submitDrawRunBatchImpl(*this, pool_, mutex_, currentBackBuffer_,
-                         skipDrawResourceMarking_,
-                         forceDrawResourceMarkingAfterSplit_,
-                         submissions);
-}
 
 core::DirectReplayDrawDisposition CommandQueue::submitDirectReplayDraw(
     const core::DirectReplayDrawInput& input) noexcept {

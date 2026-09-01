@@ -187,7 +187,6 @@ using CoreEntryPresence = dxmt9::d3d9::PresenceTable<
     CoreEntryPresenceKey, CoreEntryPresenceHash>;
 
 struct ReplayScratchArena {
-  std::vector<dxmt9::core::DrawRunSubmission> submissions;
   std::vector<dxmt9::core::DrawParam> runParams;
   std::vector<dxmt9::core::DrawBindingOverride> bindingOverrides;
   std::vector<dxmt9::core::DrawBindingSnapshot> bindingSnapshots;
@@ -199,7 +198,6 @@ struct ReplayScratchArena {
   bool inUse = false;
 
   void clear() noexcept {
-    submissions.clear();
     runParams.clear();
     bindingOverrides.clear();
     bindingSnapshots.clear();
@@ -348,19 +346,6 @@ struct CommitChunkPhaseTimer {
   }
 };
 
-bool commitChunkRecordAllowsPendingDrawBatchThrough(std::uint32_t type) {
-  switch (type) {
-  case D9C_COMMAND_RECORD_SET_VS_CONST_F:
-  case D9C_COMMAND_RECORD_SET_VS_CONST_I:
-  case D9C_COMMAND_RECORD_SET_VS_CONST_B:
-  case D9C_COMMAND_RECORD_SET_PS_CONST_F:
-  case D9C_COMMAND_RECORD_SET_PS_CONST_I:
-  case D9C_COMMAND_RECORD_SET_PS_CONST_B:
-    return true;
-  default:
-    return false;
-  }
-}
 
 
 
@@ -526,14 +511,12 @@ class DeviceReplaySink final : public dxmt9::d3d9::NonDrawReplaySink,
 public:
   DeviceReplaySink(
       D9CDevice* device, bool pacedByPresentOrdinal,
-      std::vector<dxmt9::core::DrawRunSubmission>* pendingDrawSubmissions,
       std::vector<dxmt9::core::DrawBindingSnapshot>* bindingSnapshots,
       std::span<const dxmt9::core::ChunkBufferBindingSnapshot> capturedBuffers,
       bool capturedBuffersRequired, bool directFinalDraws,
       dxmt9::d3d9::ReplayTransaction& transaction)
       : device_(device),
         pacedByPresentOrdinal_(pacedByPresentOrdinal),
-        pendingDrawSubmissions_(pendingDrawSubmissions),
         bindingSnapshots_(bindingSnapshots),
         snapshotResolver_(capturedBuffers),
         capturedBuffersRequired_(capturedBuffersRequired &&
@@ -955,38 +938,26 @@ public:
     if (draw.indexed) {
       draw.indexType = device_->dev().state().indexType;
     }
-    if (batchCurrentDraw_ && pendingDrawSubmissions_) {
-      if (directFinalDraws_) {
-        auto payload = call.payload;
-        if (!attachCapturedBindingSnapshot(draw, payload)) {
-          return dxmt9::core::D3DERR_INVALIDCALL;
-        }
-        const auto result =
-            device_->dev().submitDirectReplayDrawFromCurrentState(
-                draw, payload);
-        if (result.disposition !=
-                dxmt9::core::DirectReplayDrawDisposition::Appended &&
-            !startIrreversibleEffect()) {
-          return dxmt9::core::D3DERR_DEVICELOST;
-        }
-        return result.result;
-      }
-      const std::size_t previousIndex = pendingDrawSubmissions_->size();
-      auto& submission = pendingDrawSubmissions_->emplace_back();
-      const auto* previous =
-          previousIndex == 0u
-              ? nullptr
-              : &(*pendingDrawSubmissions_)[previousIndex - 1u];
-      const auto hr = device_->dev().snapshotDrawSubmissionFromCurrentState(
-          draw, submission, previous);
-      if (failed(hr)) {
-        pendingDrawSubmissions_->pop_back();
-      } else if (!attachCapturedBindingSnapshot(
-                     draw, submission.payload)) {
-        pendingDrawSubmissions_->pop_back();
+    if (batchCurrentDraw_) {
+      auto payload = call.payload;
+      if (!attachCapturedBindingSnapshot(draw, payload)) {
         return dxmt9::core::D3DERR_INVALIDCALL;
       }
-      return hr;
+      // A private Direct/Arena destination remains rollbackable until commit.
+      // The ordinary serial path publishes directly into final queue storage,
+      // so its effect cut must precede the synchronous borrowed-state call.
+      if (!directFinalDraws_ && !startIrreversibleEffect()) {
+        return dxmt9::core::D3DERR_DEVICELOST;
+      }
+      const auto result =
+          device_->dev().submitDirectReplayDrawFromCurrentState(draw, payload);
+      if (directFinalDraws_ &&
+          result.disposition !=
+              dxmt9::core::DirectReplayDrawDisposition::Appended &&
+          !startIrreversibleEffect()) {
+        return dxmt9::core::D3DERR_DEVICELOST;
+      }
+      return result.result;
     }
     auto payload = call.payload;
     if (!attachCapturedBindingSnapshot(draw, payload)) {
@@ -1128,7 +1099,6 @@ private:
 
   D9CDevice* device_ = nullptr;
   bool pacedByPresentOrdinal_ = false;
-  std::vector<dxmt9::core::DrawRunSubmission>* pendingDrawSubmissions_ = nullptr;
   std::vector<dxmt9::core::DrawBindingSnapshot>* bindingSnapshots_ = nullptr;
   dxmt9::d3d9::ReplayBufferSnapshotResolver snapshotResolver_;
   bool capturedBuffersRequired_ = false;
@@ -1259,54 +1229,21 @@ int32_t replayResolvedChunk(
   };
   auto& replayScratch = replayScratchArena();
   ScopedReplayScratchUse replayScratchUse(replayScratch);
-  auto& pendingDrawSubmissions = replayScratch.submissions;
-  pendingDrawSubmissions.reserve(
-      std::min<std::uint32_t>(raw.recordCount, 256u));
   replayScratch.bindingSnapshots.reserve(raw.recordCount);
-  std::vector<std::uint32_t> pendingDrawRecordIndices;
   bool captureIdentity = arenaLease &&
       raw.renderTapeCaptureToken != 0u;
-  if (captureIdentity) {
-    try {
-      pendingDrawRecordIndices.reserve(raw.recordCount);
-    } catch (...) {
-      captureIdentity = false;
-    }
-    if (captureIdentity &&
-        !arenaLease->beginCaptureIdentity(raw.recordCount)) {
-      return commitChunkFail("chunk-capture-identity-begin");
-    }
+  if (captureIdentity &&
+      !arenaLease->beginCaptureIdentity(raw.recordCount)) {
+    return commitChunkFail("chunk-capture-identity-begin");
   }
-  const auto flushPendingDrawSubmissions = [&]() {
-    if (pendingDrawSubmissions.empty()) {
-      return;
-    }
-    if (captureIdentity &&
-        (pendingDrawRecordIndices.size() != pendingDrawSubmissions.size() ||
-         !arenaLease->captureNextDrawRecords(pendingDrawRecordIndices))) {
-      // Identity is a capture-only observer. Losing its bounded anchor state
-      // must poison the sidecar, never suppress the Draw batch being observed.
-      captureIdentity = false;
-    }
-    dxmt9::perf::countCommitChunkDrawSubmissionBatch(
-        static_cast<std::uint32_t>(pendingDrawSubmissions.size()));
-    // Compatibility batches leave the source-local carrier here.  This is
-    // the exact irreversible cut: before it, both the journal and a private
-    // Direct/Arena destination can still restore their checkpoints.
-    (void)transaction.startIrreversibleEffect();
-    device->dev().submitDrawSubmissionBatch(pendingDrawSubmissions);
-    pendingDrawSubmissions.clear();
-    pendingDrawRecordIndices.clear();
-  };
-  // Direct-final draws are safe only while the corresponding destination
-  // transaction is active. A backend capability is merely an admission
-  // opportunity: when the pre-effect Direct ChunkSlot lease is rejected, the
-  // same raw must retain Legacy's batched submitDrawRunBatch grouping.
+  // A private destination keeps replay rollbackable. The ordinary serial
+  // path uses the same borrowed-state ingress but publishes directly into
+  // final queue storage instead of materializing an intermediate carrier.
   const bool directFinalDraws = arenaLease != nullptr ||
       activeDirectChunkSlotPath;
   DeviceReplaySink sink(
-      device, pacedByPresentOrdinal, &pendingDrawSubmissions,
-      &replayScratch.bindingSnapshots, raw.bufferSnapshots,
+      device, pacedByPresentOrdinal, &replayScratch.bindingSnapshots,
+      raw.bufferSnapshots,
       raw.bufferSnapshotsCaptured, directFinalDraws, transaction);
   std::size_t activeSegment = 0;
   std::size_t activeSource = 0;
@@ -1328,12 +1265,10 @@ int32_t replayResolvedChunk(
         const std::size_t nextSourceFirst =
             arenaSources[activeSource + 1u].firstRecordIndex;
         if (index > nextSourceFirst) {
-          flushPendingDrawSubmissions();
           return commitChunkFail("chunk-replay-source-edge",
                                  static_cast<std::uint32_t>(index));
         }
         if (index == nextSourceFirst) {
-          flushPendingDrawSubmissions();
           ++activeSource;
           activeSourceSegment = 0;
           if (!arenaLease->selectSourceSegment(activeSource, 0)) {
@@ -1348,12 +1283,10 @@ int32_t replayResolvedChunk(
                                               activeSourceSegment + 1u]
                                    .firstRecordIndex;
         if (index > nextFirst) {
-          flushPendingDrawSubmissions();
           return commitChunkFail("chunk-replay-segment-edge",
                                  static_cast<std::uint32_t>(index));
         }
         if (index == nextFirst) {
-          flushPendingDrawSubmissions();
           ++activeSourceSegment;
           if (!arenaLease->selectSourceSegment(activeSource,
                                                activeSourceSegment)) {
@@ -1366,15 +1299,10 @@ int32_t replayResolvedChunk(
       const std::size_t nextFirstRecord =
           arenaSegments[activeSegment + 1u].firstRecordIndex;
       if (index > nextFirstRecord) {
-        flushPendingDrawSubmissions();
         return commitChunkFail("chunk-replay-segment-edge",
                                static_cast<std::uint32_t>(index));
       }
       if (index == nextFirstRecord) {
-        // A draw batch is source-local but its Arena indices are block-local.
-        // Flush before changing builders so no DrawRun crosses the exact
-        // structural firstRecordIndex edge selected by the planner.
-        flushPendingDrawSubmissions();
         ++activeSegment;
         if (!arenaLease->selectSegment(activeSegment)) {
           return commitChunkFail("chunk-replay-segment-select",
@@ -1391,8 +1319,6 @@ int32_t replayResolvedChunk(
             .source = projectedSource,
             .recordOrdinal = static_cast<std::uint32_t>(index),
         })) {
-      pendingDrawSubmissions.clear();
-      pendingDrawRecordIndices.clear();
       return commitChunkFail("chunk-replay-transaction-project",
                              static_cast<std::uint32_t>(index),
                              record.wire.header.type);
@@ -1405,14 +1331,7 @@ int32_t replayResolvedChunk(
         if (!arenaLease->captureNextDrawRecords(recordIndex)) {
           captureIdentity = false;
         }
-      } else {
-        pendingDrawRecordIndices.push_back(static_cast<std::uint32_t>(index));
       }
-    }
-    if (!batchableDraw &&
-        !commitChunkRecordAllowsPendingDrawBatchThrough(
-            record.wire.header.type)) {
-      flushPendingDrawSubmissions();
     }
     std::optional<dxmt9::d3d9::OrderedControlDisposition> orderedControl;
     if (containsOrderedControls) {
@@ -1423,7 +1342,6 @@ int32_t replayResolvedChunk(
         orderedControl = dxmt9::d3d9::makeOrderedControlDisposition(
             record.wire, raw.replaySeq, index);
         if (!orderedControl) {
-          flushPendingDrawSubmissions();
           return commitChunkFail("chunk-ordered-control-rebuild",
                                  static_cast<std::uint32_t>(index),
                                  record.wire.header.type);
@@ -1435,8 +1353,6 @@ int32_t replayResolvedChunk(
     }
     if (orderedControl) {
       if (!sink.startIrreversibleEffect()) {
-        pendingDrawSubmissions.clear();
-        pendingDrawRecordIndices.clear();
         return commitChunkFail("chunk-ordered-control-effect-cut",
                                static_cast<std::uint32_t>(index),
                                record.wire.header.type);
@@ -1480,8 +1396,6 @@ int32_t replayResolvedChunk(
         replayInfo.category == ImportedRecordReplayCategory::StateApply;
     if (!stateOnly && !batchableDraw && !dispatchingOrderedControl &&
         !sink.startIrreversibleEffect()) {
-      pendingDrawSubmissions.clear();
-      pendingDrawRecordIndices.clear();
       return commitChunkFail("chunk-replay-effect-cut",
                              static_cast<std::uint32_t>(index),
                              record.wire.header.type);
@@ -1497,8 +1411,6 @@ int32_t replayResolvedChunk(
       // A later malformed record must not turn an otherwise rollbackable
       // private prefix into an effect merely to preserve the old batching
       // side effect. The transaction owner decides rollback versus fail-stop.
-      pendingDrawSubmissions.clear();
-      pendingDrawRecordIndices.clear();
       return commitChunkFail("chunk-replay", static_cast<std::uint32_t>(index),
                              record.wire.header.type, hr);
     }
@@ -1507,16 +1419,10 @@ int32_t replayResolvedChunk(
             .commandCount = 1u,
             .byteCount = record.wire.header.payloadSize,
         })) {
-      pendingDrawSubmissions.clear();
-      pendingDrawRecordIndices.clear();
       return commitChunkFail("chunk-replay-transaction-stage",
                              static_cast<std::uint32_t>(index),
                              record.wire.header.type);
     }
-  }
-  flushPendingDrawSubmissions();
-  if (!pendingDrawSubmissions.empty() || !pendingDrawRecordIndices.empty()) {
-    return commitChunkFail("chunk-replay-identity-draw-flush");
   }
   if (arenaLease && arenaSources.empty() &&
       activeSegment + 1u != arenaSegments.size()) {

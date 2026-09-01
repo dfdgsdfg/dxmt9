@@ -1112,21 +1112,19 @@ struct RoutingDevice final : dxmt9::Device {
                      std::span<const DrawParam> draws,
                      std::span<const DrawParamPayloadView> payloads) override {
     ++drawCalls;
+    ++ordinaryDrawCalls;
+    lastDrawRunSize = static_cast<std::uint32_t>(draws.size());
     queue_.submitDrawRun(std::move(state), uniforms, draws, payloads);
-  }
-
-  void submitDrawRunBatch(
-      std::span<DrawRunSubmission> submissions) override {
-    ++drawBatchCalls;
-    lastDrawBatchSize = static_cast<std::uint32_t>(submissions.size());
-    drawCalls += static_cast<std::uint32_t>(submissions.size());
-    queue_.submitDrawRunBatch(submissions);
   }
 
   DirectReplayDrawDisposition submitDirectReplayDraw(
       const DirectReplayDrawInput& input) noexcept override {
-    ++drawCalls;
-    return queue_.submitDirectReplayDraw(input);
+    const auto disposition = queue_.submitDirectReplayDraw(input);
+    if (disposition == DirectReplayDrawDisposition::Appended ||
+        disposition == DirectReplayDrawDisposition::AcceptedFailStop) {
+      ++drawCalls;
+    }
+    return disposition;
   }
 
   void present(const SwapDesc& desc) override {
@@ -1142,9 +1140,9 @@ struct RoutingDevice final : dxmt9::Device {
   std::uint64_t nextHandle_ = 1;
   std::atomic<std::uint32_t> clearCalls{0};
   std::atomic<std::uint32_t> drawCalls{0};
-  std::atomic<std::uint32_t> drawBatchCalls{0};
+  std::atomic<std::uint32_t> ordinaryDrawCalls{0};
   std::atomic<std::uint32_t> presentCalls{0};
-  std::uint32_t lastDrawBatchSize = 0;
+  std::uint32_t lastDrawRunSize = 0;
   std::uint64_t lastPresentSeqId = 0;
   std::uint32_t captureCalls = 0;
   std::uint32_t legacyMarkCalls = 0;
@@ -1962,11 +1960,11 @@ void ordinaryDrawApplyStateDrawUsesCarrierFreeDirectPath() {
 
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
             fixture.routing->drawCalls == 2u &&
-            fixture.routing->drawBatchCalls == 0u &&
+            fixture.routing->ordinaryDrawCalls == 0u &&
             fixture.routing->legacyMarkCalls == 0u &&
             dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
                 fixture.routing->queue_) == 2u,
-        "Direct Draw/ApplyState/Draw must bypass DrawRunSubmission carrier");
+        "Direct Draw/ApplyState/Draw must use final storage directly");
 
   fixture.routing->present(SwapDesc{});
   const auto completion =
@@ -2023,8 +2021,8 @@ void ordinaryOversizedDrawSourceUsesCarrierFreeLifecycle() {
   raw.cpuReadyTapePlanningEnabled = false;
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
             fixture.routing->drawCalls == 640u &&
-            fixture.routing->drawBatchCalls == 0u,
-        "oversized source bypasses DrawRunSubmission exactly once");
+            fixture.routing->ordinaryDrawCalls == 0u,
+        "oversized source uses final storage exactly once");
   fixture.routing->present(SwapDesc{});
   const auto completion =
       dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
@@ -2071,7 +2069,7 @@ void drawApplyStateDrawWithPresentUsesDirectPresentTail() {
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
             fixture.routing->clearCalls == 1u &&
             fixture.routing->drawCalls == 2u &&
-            fixture.routing->drawBatchCalls == 0u &&
+            fixture.routing->ordinaryDrawCalls == 0u &&
             fixture.routing->presentCalls == 1u &&
             dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
                 fixture.routing->queue_) == 2u,
@@ -2146,7 +2144,7 @@ void ordinarySingleSourceSegmentedAggregateUsesDirectConstruction() {
   raw.cpuReadyTapePlanningEnabled = false;
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
             fixture.routing->clearCalls == 2u &&
-            fixture.routing->drawBatchCalls == 0u &&
+            fixture.routing->ordinaryDrawCalls == 0u &&
             dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
                 fixture.routing->queue_) == 2u,
         "segmented single-source aggregate must construct Direct ChunkSlot");
@@ -2209,7 +2207,7 @@ void ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics() {
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), direct) == D3D_OK &&
             fixture.routing->clearCalls == 2u &&
             fixture.routing->drawCalls == 2u &&
-            fixture.routing->drawBatchCalls == 0u,
+            fixture.routing->ordinaryDrawCalls == 0u,
         "segmented Draw/ApplyState/Draw uses carrier-free Direct replay");
   const auto directWritingCommandCount =
       dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
@@ -2228,8 +2226,8 @@ void ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics() {
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), legacy) == D3D_OK &&
             fixture.routing->clearCalls == 4u &&
             fixture.routing->drawCalls == 4u &&
-            fixture.routing->drawBatchCalls == 2u,
-        "the same segmented Draw/ApplyState/Draw takes the Legacy carrier lane");
+            fixture.routing->ordinaryDrawCalls == 2u,
+        "the same segmented Draw/ApplyState/Draw uses ordinary final storage");
   const auto legacyWritingCommandCount =
       dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
           fixture.routing->queue_);
@@ -2286,11 +2284,11 @@ void directAdmissionRejectionPreservesLegacyDrawBatchGrouping() {
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK,
         "pre-effect Direct admission rejection must fall back successfully");
   check(fixture.routing->drawCalls == 2u &&
-            fixture.routing->drawBatchCalls == 1u &&
-            fixture.routing->lastDrawBatchSize == 2u &&
+            fixture.routing->ordinaryDrawCalls == 2u &&
+            fixture.routing->lastDrawRunSize == 1u &&
             dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
-                fixture.routing->queue_) == 2u,
-        "Legacy fallback must preserve one submitDrawRunBatch group for the raw draws");
+                fixture.routing->queue_) == 3u,
+        "ordinary fallback must append both draws without an intermediate carrier");
 
   dxmt9::d3d9::releaseRetainedWrappers(raw);
   dxmt9c_buffer_release(buffer);
@@ -2334,7 +2332,7 @@ void populatedSlotDrawApplyDrawUsesCarrierFreeContinuation() {
   raw.cpuReadyTapePlanningEnabled = false;
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
             fixture.routing->drawCalls == 3u &&
-            fixture.routing->drawBatchCalls == 0u,
+            fixture.routing->ordinaryDrawCalls == 0u,
         "populated Draw/ApplyState/Draw/ApplyState/Draw must use Direct continuation");
   check(dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
             fixture.routing->queue_) == 4u,
@@ -2353,15 +2351,6 @@ void populatedSlotDrawApplyDrawUsesCarrierFreeContinuation() {
   check(completion.dequeued && completion.commandCount == 5u &&
             completion.submitted && completion.completed && completion.reclaimed,
         "continuation completion must retain one ordered prefix identity");
-  const auto carrierCopy = unixLedger.snapshot(
-      dxmt9::core::CopyMaterializationClass::ReplaySubmissionCarrierCopy);
-  const auto carrierMaterialization = unixLedger.snapshot(
-      dxmt9::core::CopyMaterializationClass::ReplaySubmissionCarrierMaterialization);
-  check(carrierCopy.calls == 0u && carrierCopy.semanticCalls == 0u &&
-            carrierMaterialization.calls == 0u &&
-            carrierMaterialization.semanticCalls == 0u,
-        "admitted continuation must not materialize or copy a replay carrier");
-
   RuntimeFixture legacyFixture(/*rejectAfterClear=*/false,
                                /*segmentSerial=*/false,
                                /*directChunkSlot=*/false);
@@ -2388,8 +2377,8 @@ void populatedSlotDrawApplyDrawUsesCarrierFreeContinuation() {
   legacyRaw.cpuReadyTapePlanningEnabled = false;
   check(dxmt9::d3d9::replayRawChunk(legacyFixture.cDevice.get(), legacyRaw) ==
                 D3D_OK &&
-            legacyFixture.routing->drawBatchCalls == 3u,
-        "A-to-B-to-A Legacy oracle must preserve three state-separated batches");
+            legacyFixture.routing->ordinaryDrawCalls == 3u,
+        "A-to-B-to-A ordinary oracle must preserve three state-separated runs");
   const auto legacyA = dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
       legacyFixture.routing->queue_, 1u);
   const auto legacyB = dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
@@ -2439,12 +2428,12 @@ void populatedSlotInsufficientCapacityFallsBackBeforeEffects() {
   raw.cpuReadyTapePlanningEnabled = false;
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
             fixture.routing->drawCalls == 2u &&
-            fixture.routing->drawBatchCalls == 1u &&
-            fixture.routing->lastDrawBatchSize == 2u,
-        "insufficient continuation capacity must use one Legacy batch");
+            fixture.routing->ordinaryDrawCalls == 2u &&
+            fixture.routing->lastDrawRunSize == 1u,
+        "insufficient continuation capacity must use ordinary final storage");
   check(dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
-            fixture.routing->queue_) == 2u,
-        "capacity rejection must preserve the populated prefix unchanged before Legacy append");
+            fixture.routing->queue_) == 3u,
+        "capacity rejection must preserve the populated prefix and append each ordinary draw");
   dxmt9::d3d9::releaseRetainedWrappers(raw);
   dxmt9c_buffer_release(buffer);
 }
@@ -2475,7 +2464,7 @@ void populatedContinuationCommitFailureIsTerminalWithoutRetry() {
       fixture.routing->queue_);
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) != D3D_OK &&
             fixture.routing->drawCalls == 2u &&
-            fixture.routing->drawBatchCalls == 0u &&
+            fixture.routing->ordinaryDrawCalls == 0u &&
             dxmt9::CommandQueueArenaLeaseTestAccess::stopped(
                 fixture.routing->queue_),
         "continuation commit failure must fail-stop after one semantic replay");
@@ -2542,7 +2531,7 @@ void populatedSlotPresentTailIsExcludedFromContinuation() {
   raw.cpuReadyTapePlanningEnabled = false;
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
             fixture.routing->drawCalls == 1u &&
-            fixture.routing->drawBatchCalls == 1u &&
+            fixture.routing->ordinaryDrawCalls == 1u &&
             fixture.routing->presentCalls == 1u,
         "populated Direct continuation must exclude a Present tail before effects");
   check(!dxmt9::CommandQueueArenaLeaseTestAccess::stopped(

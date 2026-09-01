@@ -2861,8 +2861,8 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
   // is the "ensureWritingSlot*"/QueueLifecycleController handoff site the
   // module comment in dxmt9_command_queue.cpp calls out for conversion --
   // reached from ensureWritingSlotUnlocked, in turn called by every
-  // submit_* draw/clear/StretchRect/ColorFill/DepthResolve site and the
-  // hot submit_draw_run_batch_impl per-batch loop, i.e. per-present traffic.
+  // submit_* draw/clear/StretchRect/ColorFill/DepthResolve site, including
+  // ordinary replay's direct final-slot draw ingress, i.e. per-present traffic.
   // A single "ensure_writer_slot" tag accumulates one sample per bracketed
   // interval (pre-wait bookkeeping through to the next wait, or through to
   // the final acquireWriterSlot() bookkeeping after the loop breaks).

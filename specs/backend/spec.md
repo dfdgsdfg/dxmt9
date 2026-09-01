@@ -814,103 +814,23 @@ mode. The registry, producer, importer, native parity tests, PE x64/x86 builds,
 and runtime bridge-op gates
 passed before the canonical promotion.
 
-### 2.5 Transitional Draw-Run Batch Compatibility
+### 2.5 Retired Draw-Run Submission Carrier
 
-This section documents the current compatibility carrier, not a permanent
-backend representation. `specs/archicture/requirements.md` R-ARCH-7.23 and
-`backend/encode-scheduling/requirements.md` R-BACK-2.99 require its deletion
-after universal effective-stream projection and final-SoA emission cover every
-draw source family and typed ordered controls.
+The transitional `DrawRunSubmission` representation is retired. Production
+replay no longer snapshots state/uniform values into a per-draw AoS vector or
+submits that vector through batch-specific Device, queue, or source-payload
+APIs. Each draw instead presents a synchronous `DirectReplayDrawInput` borrow
+to the provider. An admitted Direct/Arena transaction copies it once into its
+private final storage; a pre-effect fallback appends it directly to ordinary
+final `ChunkSlot` storage.
 
-Draw-run batching coalesces adjacent draws that share one canonical render state
-into a single execution record, so the encoder binds state once and issues N draw
-calls. Each queued submission carries a `{stateGeneration,stateLane}` stamp. The
-stamp is the producer's witness that two `DrawRunSubmission`s were snapshotted
-from the same stable cache object (`cachedBaseDrawStateForSubmissionBatch()`),
-which is sufficient for them to share one canonical state. Per-draw differences
-ride `DrawParam`, the binding-override / snapshot payloads, and per-draw uniform
-payload identity. The per-draw binding rides a `DrawBindingOverride` built from
-the live `DeviceState`, so `state.hot` is binding-agnostic
-(`clearDrawStateBindingFields`).
-
-The default path materializes a canonical state only when the stamp changes from
-the previous queued submission, then elides the `state.hot` / `shaderLayout`
-copy for same-stamp continuations. `CommandQueue::submitDrawRunBatch` keeps the
-normal compatibility policy: same-stamp candidates use the generation fast path,
-other materialized candidates fall back to the deep compatibility compare, and
-an elided candidate may inherit compatibility from the previous accepted draw
-when it shares that draw's stamp. This removes materialized-but-discarded
-non-front state without reducing the normal compatibility batch width.
-
-The opt-in `DXMT9_DRAWRUN_GROUP_BY_GEN_LANE=1` path is stricter diagnostic
-batching: it groups adjacent submissions only when their stamps match, so no
-deep compatibility fallback is used. It remains useful for paired A/B runs that
-want to isolate stamp-only batching behavior from the default broader grouping.
-
-`ChunkSlot::appendDrawRunBatch` stores the batch-front state once. For same-stamp
-continuations, the only canonical state materialized is the one the batch keeps
-or a materialized candidate needed by the normal deep-compare path — the
-no-discarded-materialization floor for the same-stamp draw-state class
-(R-ARCH-7.2, carrier part of R-ARCH-7.4).
-
-The same carrier also stamps `uniformGeneration` and has an opt-in uniform
-payload elision path that can reuse the previous `DrawUniformHandle` when
-adjacent submissions share both state stamp and uniform generation. 3DMark05 GT1
-currently rejects this as an optimization target: the state path elides hundreds
-of thousands of non-front submissions, but `d3d9_snapshot_uniform_elided` remains
-zero because the same-state groups still change uniform generation.
-
-```mermaid
-flowchart LR
-  Draw["per-draw snapshot"] --> Same{"same {generation,lane}\nas previous submission?"}
-  Same -->|yes| Elide["carry DrawParam + binding\n(no state.hot / shaderLayout copy)"]
-  Same -->|no| Front["materialize state\n(FlatDrawStateRecord + shaderLayout)"]
-  Elide --> Group["submitDrawRunBatch:\nnormal compat policy"]
-  Front --> Group
-  Group --> Fast["same-stamp fast path\nor accepted-previous transitivity"]
-  Group --> Deep["deep compare for\nmaterialized different-stamp candidates"]
-  Fast --> Append["appendDrawRunBatch:\nstore batch-front state once"]
-  Deep --> Append
-```
-
-**Invariants.**
-
-- *Stamp soundness.* Equal `{generation, lane}` implies byte-equal batch-consumed
-  state. Only `front().state` is consumed downstream — by `makeDrawPsoSubview`,
-  the `DrawRunInvariant` (render / decl / texture / sampler / stream masks and
-  hashes), resource marking (`markDrawResources`), the back-buffer handle, and
-  encode; every batch-front read addresses `front()`, never `back()`. The stamp
-  covers every field those readers touch: constant-value drift within a generation
-  is safe (none read the constant hashes — constants ride the per-draw
-  `DrawUniformHandle`), and binding-field drift is safe (binding-agnostic
-  `state.hot` clears those fields and the encoder binds from the per-draw
-  `DrawBindingOverride`). Any field a mid-generation refresh (uniform refresh,
-  binding-layout stride refresh) can change while the stamp stays equal, and that
-  a front reader also consumes, forces a new generation or is excluded from the
-  elided record.
-- *Run-front availability.* Every queue batch front is materialized. Snapshot
-  elision is only relative to the previous queued submission, so the first
-  submission in the pending vector and every stamp-change submission owns a
-  state. If normal compatibility grouping accepts a materialized different-stamp
-  submission and the following submission is elided from it, the queue accepts
-  that elided candidate through the already accepted previous draw rather than
-  trying to deep-compare missing state.
-
-**Strict stamp-only grouping.** `DXMT9_DRAWRUN_GROUP_BY_GEN_LANE=1` changes the
-queue scan to read only the stamp, never a non-front `state.hot`, so an elided
-continuation never needs a materialized state for a state-reading fallback.
-Batching granularity is therefore snapshot identity: a stamp-run is as long as
-the stable-state-generation run that produced it, so the producer keeps the
-cache snapshot stable across compatible draws to keep runs long.
-
-**Evidence counters.** The default path exposes
-`d3d9_snapshot_state_materialized`,
-`d3d9_snapshot_state_materialized_bytes`, `d3d9_snapshot_state_elided`, and
-`d3d9_snapshot_state_elided_bytes` alongside the existing
-`d3d9_snapshot_state_copy_cpu_ms`, draw-run batch counters, and
-`submit_draw_run_batch_discarded_state_{records,bytes}`. A valid regression
-check must show discarded state stays zero for same-stamp continuations and that
-copy-byte elimination does not come with a larger batching/encode loss.
+The retired generation/lane grouping knobs and carrier-specific counters are
+not runtime policy. Equal uniform payloads may still be interned in final SoA
+storage, and `DrawRunCommandRecord` may still represent multiple draws, but
+neither mechanism reintroduces an intermediate per-draw ownership carrier.
+R-BACK-2.99 source audits pin the retired symbols and equivalent AoS ownership
+surfaces absent. Wild locality and materialization-floor evidence remain
+separate promotion gates.
 
 ---
 

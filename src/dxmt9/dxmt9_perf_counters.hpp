@@ -903,49 +903,18 @@ void countShaderVariantKeyHashCpuTime(std::uint64_t nanoseconds);
 void countRenderPassBegin();
 void countRenderPassEnd(EncoderSplitReason reason);
 void countHazardProbe(bool bloomOverlap, bool exactOverlap);
-void countCommitChunkDrawSubmissionBatch(std::uint32_t recordCount);
-void countSubmitDrawRunBatchGroup(std::uint32_t recordCount);
-void countSubmitDrawRunBatchDiscardedState(std::uint64_t records,
-                                           std::uint64_t bytes);
 void countSubmitDrawRunBindingSnapshotCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunPayloadBytesCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunSlotPrepareCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunResourceMarkCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunAppendCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunChunkCommitCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchQueueLockCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchCompatScanCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchSubmissionAdjacent(bool sameGenerationLane);
-void countSubmitDrawRunBatchCompatPair(bool sameGenerationLane, bool compatible);
-void countSubmitDrawRunBatchIncompat(std::uint8_t firstDiffClass,
-                                     bool textureOnly);
-void countSubmitDrawRunBatchIncompatRenderState(std::uint8_t diffClass);
-void countSubmitDrawRunBatchBindingOverrideCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchBindingSnapshotCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchPayloadBytesCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchSlotPrepareCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchResourceMarkCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchAppendCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchAppendReserveCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchAppendStateCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchAppendStatePsoCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchAppendStateInvariantCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchAppendStateSoaCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchAppendUniformCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchAppendPayloadCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchAppendParamCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchAppendRecordCpuTime(std::uint64_t nanoseconds);
-void countSubmitDrawRunBatchAppendPayloadBytes(std::uint64_t bytes);
-void countSubmitDrawRunBatchAppendParams(std::uint64_t paramCount);
-void countSubmitDrawRunBatchChunkCommitCpuTime(std::uint64_t nanoseconds);
 void countD3D9DrawStateCacheLookup(bool hit, bool includeIndexBuffer);
 void countD3D9DrawStateCacheDirectLookup(bool hit, bool includeIndexBuffer);
 void countD3D9DrawStateCacheBatchLookup(bool hit);
 void countD3D9DrawStateCacheUniformRefresh();
 void countD3D9DrawStateCacheMissReason(std::uint32_t reasonMask);
 void countD3D9DrawStateCacheBatchMissReason(std::uint32_t reasonMask);
-void countD3D9SnapshotDrawSubmissionCpuTime(std::uint64_t nanoseconds);
-void countD3D9SnapshotCacheLookupCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheHitCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheMissCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotCacheDirectHitCpuTime(std::uint64_t nanoseconds);
@@ -1038,39 +1007,6 @@ void countD3D9SnapshotUniformBuildVsConstHashFullIndexedBool();
 void countD3D9SnapshotUniformBuildPsConstHashFullIndexedBool();
 void countD3D9SnapshotUniformBuildVsConstHashBytes(std::uint64_t bytes);
 void countD3D9SnapshotUniformBuildPsConstHashBytes(std::uint64_t bytes);
-void countD3D9SnapshotUniformCopyCpuTime(std::uint64_t nanoseconds);
-void countD3D9SnapshotUniformMaterialized(std::uint64_t bytes);
-void countD3D9SnapshotSubmissionCarrier(std::uint64_t carrierBytes,
-                                        std::uint64_t stateStorageBytes,
-                                        std::uint64_t uniformStorageBytes,
-                                        bool uniformStorageUnused);
-void countD3D9SnapshotUniformElided(std::uint64_t bytes);
-void countD3D9SnapshotUniformAdjacentSameGeneration(bool sameStateLane,
-                                                    std::uint64_t bytes);
-void countD3D9SnapshotUniformAdjacentSamePayloadHash(bool sameStateLane,
-                                                     bool sameGeneration,
-                                                     std::uint64_t bytes);
-void countD3D9SnapshotUniformAdjacentComponentHashes(bool sameStateLane,
-                                                     bool sameGeneration,
-                                                     bool sameVertexConstants,
-                                                     bool samePixelConstants,
-                                                     bool sameFixedPayload);
-void countD3D9SnapshotStateCopyCpuTime(std::uint64_t nanoseconds);
-void countD3D9SnapshotStateMaterialized(std::uint64_t bytes);
-void countD3D9SnapshotStateElided(std::uint64_t bytes);
-void countD3D9SnapshotDebugSnapshotCpuTime(std::uint64_t nanoseconds);
-void countD3D9SnapshotFlatStateEntries(std::uint32_t renderStateEntries,
-                                       std::uint32_t textureStageStateEntries,
-                                       std::uint32_t textureStageStateEntryMax,
-                                       std::uint32_t samplerStateEntries,
-                                       std::uint32_t samplerStateEntryMax,
-                                       bool renderStateOverflow,
-                                       bool textureStageStateOverflow,
-                                       bool samplerStateOverflow);
-void countD3D9SnapshotBindingOverrideCpuTime(std::uint64_t nanoseconds);
-void countD3D9SnapshotBindingOverride(std::uint32_t streamScans,
-                                      std::uint32_t streamRecords,
-                                      bool indexRecord);
 void countDrawUniformPayloadLookupCandidateHit();
 void countDrawUniformPayloadLookupLastHit();
 void countDrawUniformPayloadLookupBucketHit();

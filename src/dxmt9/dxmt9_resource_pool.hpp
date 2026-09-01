@@ -29,8 +29,8 @@
 //      - the producer's commit-time bulk mark
 //        (`markChunkResources` / `markChunkResourcesAndCaptureBufferBindings`,
 //        design T2a);
-//      - the replay offload worker's per-batch draw mark
-//        (`submitDrawRunBatchImpl`, design T2a').
+//      - final-storage publication, which marks the completed slot contents
+//        through the same exact sequence ticket before publication.
 //
 //    A caller that stamps outside the queue mutex owes TWO obligations, both
 //    model-checked in `specs/verification/tla/ProducerMarkReclaim.tla` with a

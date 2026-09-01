@@ -1695,71 +1695,6 @@ void testDrawUniformPayloadMaterializeCacheReusesCommandHandle() {
             "materialize cache keeps fixed payload fields");
 }
 
-void testDrawUniformPayloadMaterializeCacheReusesOverrideHandle() {
-  DrawDesc front{};
-  front.primitiveCount = 1u;
-  front.vsConst.float4[0] = {1.0f, 2.0f, 3.0f, 4.0f};
-  front.material.diffuse = ColorRGBA{0.10f, 0.20f, 0.30f, 1.0f};
-
-  DrawDesc override = front;
-  override.vsConst.float4[0] = {90.0f, 91.0f, 92.0f, 93.0f};
-  override.material.diffuse = ColorRGBA{0.60f, 0.70f, 0.80f, 1.0f};
-  auto frontUniform = makeDrawUniformPayload(front);
-  auto overrideUniform = makeDrawUniformPayload(override);
-
-  std::array<DrawRunSubmission, 3> submissions{};
-  submissions[0].state = makeCanonicalDrawStateForTest(front);
-  submissions[0].uniforms = frontUniform;
-  submissions[0].draw = makeDrawParamForTest(front);
-  submissions[0].uniformGeneration = 1u;
-
-  submissions[1].uniforms = overrideUniform;
-  submissions[1].draw = makeDrawParamForTest(override);
-  submissions[1].uniformGeneration = 2u;
-
-  submissions[2].draw = makeDrawParamForTest(override);
-  submissions[2].uniformGeneration = 2u;
-
-  ChunkSlot slot{};
-  slot.appendDrawRunBatch(
-      std::span<DrawRunSubmission>(submissions.data(), submissions.size()));
-  const auto command = slot.commandAt(0);
-  check(command.drawRunRecord != nullptr,
-        "materialize cache override test resolves draw-run record");
-  checkEq(command.drawParams.size(), std::size_t{3},
-          "materialize cache override test keeps all batched params");
-  check(command.drawParams[1].uniformHandle.valid(),
-        "materialize cache override test stores an override handle");
-  check(command.drawParams[1].uniformHandle == command.drawParams[2].uniformHandle,
-        "materialize cache override test reuses the repeated override handle");
-  check(!(command.drawParams[1].uniformHandle ==
-          command.drawRunRecord->uniformHandle),
-        "materialize cache override test keeps override distinct from front");
-
-  DrawUniformPayload commandScratch;
-  const auto* commandPayload = drawRunUniformPayloadForHandle(
-      command, command.drawRunRecord->uniformHandle, commandScratch);
-  check(commandPayload != nullptr,
-        "materialize cache override test resolves command-front payload");
-  check(commandPayload->vsConst.float4[0][0] == 1.0f,
-        "materialize cache override test keeps command-front VS constants");
-
-  DrawUniformPayloadMaterializeCache cache{};
-  const auto* overrideFirst =
-      cache.payloadForParam(command, command.drawParams[1]);
-  const auto* overrideSecond =
-      cache.payloadForParam(command, command.drawParams[2]);
-  check(overrideFirst != nullptr && overrideSecond != nullptr,
-        "materialize cache override test resolves repeated override payloads");
-  checkEq(overrideSecond, overrideFirst,
-          "materialize cache override test reuses override scratch");
-  check(overrideFirst != commandPayload,
-        "materialize cache override test keeps command scratch separate");
-  check(overrideFirst->vsConst.float4[0][0] == 90.0f,
-        "materialize cache override test keeps override VS constants");
-  check(commandPayload->vsConst.float4[0][0] == 1.0f,
-        "materialize cache override test does not overwrite command payload");
-}
 
 void testShaderLayoutCarriesConstantUsageMetadata() {
   DrawDesc desc{};
@@ -3227,7 +3162,6 @@ int main() {
   testIndexedFloatConstantHashKeepsFullFloatButTrimsIntBoolTail();
   testShaderConstantPayloadSurvivesDrawRunCommandView();
   testDrawUniformPayloadMaterializeCacheReusesCommandHandle();
-  testDrawUniformPayloadMaterializeCacheReusesOverrideHandle();
   testShaderLayoutCarriesConstantUsageMetadata();
   testResourceBindingsAndAttachments();
   testTextureSamplerAndAttachmentPayloadSurvivesDrawRunCommandView();

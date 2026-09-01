@@ -2875,42 +2875,9 @@ void countHazardProbe(bool bloomOverlap, bool exactOverlap) {
 }
 
 
-void countCommitChunkDrawSubmissionBatch(std::uint32_t recordCount) {
-  auto& c = counters();
-  add(c.commitChunkDrawSubmissionBatchSubmits);
-  add(c.commitChunkDrawSubmissionBatchRecords, recordCount);
-  updateMax(c.commitChunkDrawSubmissionBatchMaxRecords, recordCount);
-  if (recordCount <= 1u) {
-    add(c.commitChunkDrawSubmissionBatchSize1);
-  } else if (recordCount == 2u) {
-    add(c.commitChunkDrawSubmissionBatchSize2);
-  } else if (recordCount <= 4u) {
-    add(c.commitChunkDrawSubmissionBatchSize3To4);
-  } else if (recordCount <= 8u) {
-    add(c.commitChunkDrawSubmissionBatchSize5To8);
-  } else if (recordCount <= 16u) {
-    add(c.commitChunkDrawSubmissionBatchSize9To16);
-  } else if (recordCount <= 32u) {
-    add(c.commitChunkDrawSubmissionBatchSize17To32);
-  } else {
-    add(c.commitChunkDrawSubmissionBatchSize33Plus);
-  }
-}
 
 
-void countSubmitDrawRunBatchGroup(std::uint32_t recordCount) {
-  auto& c = counters();
-  add(c.submitDrawRunBatchGroups);
-  add(c.submitDrawRunBatchRecords, recordCount);
-  updateMax(c.submitDrawRunBatchMaxRecords, recordCount);
-}
 
-void countSubmitDrawRunBatchDiscardedState(std::uint64_t records,
-                                           std::uint64_t bytes) {
-  auto& c = counters();
-  add(c.submitDrawRunBatchDiscardedStateRecords, records);
-  add(c.submitDrawRunBatchDiscardedStateBytes, bytes);
-}
 
 void countSubmitDrawRunBindingSnapshotCpuTime(std::uint64_t nanoseconds) {
   auto& c = counters();
@@ -2954,198 +2921,29 @@ void countSubmitDrawRunChunkCommitCpuTime(std::uint64_t nanoseconds) {
                 nanoseconds);
 }
 
-void countSubmitDrawRunBatchQueueLockCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchQueueLockCpuNs,
-                c.submitDrawRunBatchQueueLockCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchCompatScanCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchCompatScanCpuNs,
-                c.submitDrawRunBatchCompatScanCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchSubmissionAdjacent(bool sameGenerationLane) {
-  auto& c = counters();
-  add(c.submitDrawRunBatchSubmissionAdjacentPairs);
-  if (sameGenerationLane) {
-    add(c.submitDrawRunBatchSubmissionAdjacentSameGenerationLane);
-  }
-}
 
-void countSubmitDrawRunBatchCompatPair(bool sameGenerationLane,
-                                       bool compatible) {
-  auto& c = counters();
-  add(c.submitDrawRunBatchCompatPairs);
-  add(compatible ? c.submitDrawRunBatchCompatCompatible
-                 : c.submitDrawRunBatchCompatIncompatible);
-  if (!sameGenerationLane) {
-    return;
-  }
-  add(c.submitDrawRunBatchCompatSameGenerationLane);
-  add(compatible
-          ? c.submitDrawRunBatchCompatSameGenerationLaneCompatible
-          : c.submitDrawRunBatchCompatSameGenerationLaneIncompatible);
-}
 
-void countSubmitDrawRunBatchIncompat(std::uint8_t firstDiffClass,
-                                     bool textureOnly) {
-  auto& c = counters();
-  switch (firstDiffClass) {
-  case 0: add(c.submitDrawRunBatchIncompatTexture); break;
-  case 1: add(c.submitDrawRunBatchIncompatSampler); break;
-  case 2: add(c.submitDrawRunBatchIncompatTextureStageState); break;
-  case 3: add(c.submitDrawRunBatchIncompatRenderState); break;
-  case 4: add(c.submitDrawRunBatchIncompatShader); break;
-  case 5: add(c.submitDrawRunBatchIncompatVertexDecl); break;
-  case 6: add(c.submitDrawRunBatchIncompatAttachment); break;
-  case 7: add(c.submitDrawRunBatchIncompatViewport); break;
-  case 8: add(c.submitDrawRunBatchIncompatClipPlane); break;
-  case 9: add(c.submitDrawRunBatchIncompatLayoutUsage); break;
-  default: add(c.submitDrawRunBatchIncompatUnknown); break;
-  }
-  if (textureOnly) {
-    add(c.submitDrawRunBatchIncompatTextureOnly);
-  }
-}
 
-void countSubmitDrawRunBatchIncompatRenderState(std::uint8_t diffClass) {
-  auto& c = counters();
-  switch (diffClass) {
-  case 0: add(c.submitDrawRunBatchIncompatRsAlphaTestOnly); break;
-  case 1: add(c.submitDrawRunBatchIncompatRsBlendOnly); break;
-  case 2: add(c.submitDrawRunBatchIncompatRsCullOnly); break;
-  case 3: add(c.submitDrawRunBatchIncompatRsDepthOnly); break;
-  case 4: add(c.submitDrawRunBatchIncompatRsFogOnly); break;
-  case 5: add(c.submitDrawRunBatchIncompatRsTextureFactorOnly); break;
-  case 6: add(c.submitDrawRunBatchIncompatRsSingleOther); break;
-  case 7: add(c.submitDrawRunBatchIncompatRsMixed); break;
-  default: break;
-  }
-}
 
-void countSubmitDrawRunBatchBindingOverrideCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchBindingOverrideCpuNs,
-                c.submitDrawRunBatchBindingOverrideCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchBindingSnapshotCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchBindingSnapshotCpuNs,
-                c.submitDrawRunBatchBindingSnapshotCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchPayloadBytesCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchPayloadBytesCpuNs,
-                c.submitDrawRunBatchPayloadBytesCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchSlotPrepareCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchSlotPrepareCpuNs,
-                c.submitDrawRunBatchSlotPrepareCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchResourceMarkCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchResourceMarkCpuNs,
-                c.submitDrawRunBatchResourceMarkCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchAppendCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchAppendCpuNs,
-                c.submitDrawRunBatchAppendCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchAppendReserveCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchAppendReserveCpuNs,
-                c.submitDrawRunBatchAppendReserveCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchAppendStateCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchAppendStateCpuNs,
-                c.submitDrawRunBatchAppendStateCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchAppendStatePsoCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchAppendStatePsoCpuNs,
-                c.submitDrawRunBatchAppendStatePsoCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchAppendStateInvariantCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchAppendStateInvariantCpuNs,
-                c.submitDrawRunBatchAppendStateInvariantCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchAppendStateSoaCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchAppendStateSoaCpuNs,
-                c.submitDrawRunBatchAppendStateSoaCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchAppendUniformCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchAppendUniformCpuNs,
-                c.submitDrawRunBatchAppendUniformCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchAppendPayloadCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchAppendPayloadCpuNs,
-                c.submitDrawRunBatchAppendPayloadCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchAppendParamCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchAppendParamCpuNs,
-                c.submitDrawRunBatchAppendParamCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchAppendRecordCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchAppendRecordCpuNs,
-                c.submitDrawRunBatchAppendRecordCpuMaxNs,
-                nanoseconds);
-}
 
-void countSubmitDrawRunBatchAppendPayloadBytes(std::uint64_t bytes) {
-  add(counters().submitDrawRunBatchAppendPayloadBytes, bytes);
-}
 
-void countSubmitDrawRunBatchAppendParams(std::uint64_t paramCount) {
-  add(counters().submitDrawRunBatchAppendParams, paramCount);
-}
 
-void countSubmitDrawRunBatchChunkCommitCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  recordCpuTime(c.submitDrawRunBatchChunkCommitCpuNs,
-                c.submitDrawRunBatchChunkCommitCpuMaxNs,
-                nanoseconds);
-}
 
 void countD3D9DrawStateCacheLookup(bool hit, bool includeIndexBuffer) {
   auto& c = counters();
@@ -4850,15 +4648,6 @@ void countEncodeDrawPsoPrefetch(bool handleAvailable,
   }
 }
 
-void countD3D9SnapshotDrawSubmissionCpuTime(std::uint64_t nanoseconds) {
-  add(counters().d3d9SnapshotDrawSubmissionCpuNs, nanoseconds);
-  updateMax(counters().d3d9SnapshotDrawSubmissionCpuMaxNs, nanoseconds);
-  recordRing(counters().d3d9SnapshotDrawSubmissionCpuRing, nanoseconds);
-}
-
-void countD3D9SnapshotCacheLookupCpuTime(std::uint64_t nanoseconds) {
-  add(counters().d3d9SnapshotCacheLookupCpuNs, nanoseconds);
-}
 
 void countD3D9SnapshotCacheHitCpuTime(std::uint64_t nanoseconds) {
   add(counters().d3d9SnapshotCacheHitCpuNs, nanoseconds);
@@ -5348,193 +5137,6 @@ void countD3D9SnapshotUniformBuildPsConstHashBytes(std::uint64_t bytes) {
   addBatchMissUniformBuild(
       counters().d3d9SnapshotCacheBatchMissUniformBuildPsConstHashBytes,
       bytes);
-}
-
-void countD3D9SnapshotUniformCopyCpuTime(std::uint64_t nanoseconds) {
-  add(counters().d3d9SnapshotUniformCopyCpuNs, nanoseconds);
-}
-
-void countD3D9SnapshotUniformMaterialized(std::uint64_t bytes) {
-  auto& c = counters();
-  add(c.d3d9SnapshotUniformMaterialized);
-  add(c.d3d9SnapshotUniformMaterializedBytes, bytes);
-}
-
-void countD3D9SnapshotSubmissionCarrier(
-    std::uint64_t carrierBytes,
-    std::uint64_t stateStorageBytes,
-    std::uint64_t uniformStorageBytes,
-    bool uniformStorageUnused) {
-  auto& c = counters();
-  add(c.d3d9SnapshotSubmissionCarrierRecords);
-  add(c.d3d9SnapshotSubmissionCarrierBytes, carrierBytes);
-  add(c.d3d9SnapshotSubmissionCarrierStateStorageBytes, stateStorageBytes);
-  add(c.d3d9SnapshotSubmissionCarrierUniformStorageBytes, uniformStorageBytes);
-  if (uniformStorageUnused && uniformStorageBytes != 0) {
-    add(c.d3d9SnapshotSubmissionCarrierUnusedUniformStorageRecords);
-    add(c.d3d9SnapshotSubmissionCarrierUnusedUniformStorageBytes,
-        uniformStorageBytes);
-  }
-}
-
-void countD3D9SnapshotUniformElided(std::uint64_t bytes) {
-  auto& c = counters();
-  add(c.d3d9SnapshotUniformElided);
-  add(c.d3d9SnapshotUniformElidedBytes, bytes);
-}
-
-void countD3D9SnapshotUniformAdjacentSameGeneration(bool sameStateLane,
-                                                    std::uint64_t bytes) {
-  auto& c = counters();
-  add(c.d3d9SnapshotUniformAdjacentSameGen);
-  add(c.d3d9SnapshotUniformAdjacentSameGenBytes, bytes);
-  if (sameStateLane) {
-    add(c.d3d9SnapshotUniformAdjacentSameGenSameState);
-    add(c.d3d9SnapshotUniformAdjacentSameGenSameStateBytes, bytes);
-  } else {
-    add(c.d3d9SnapshotUniformAdjacentSameGenDiffState);
-    add(c.d3d9SnapshotUniformAdjacentSameGenDiffStateBytes, bytes);
-  }
-}
-
-void countD3D9SnapshotUniformAdjacentSamePayloadHash(bool sameStateLane,
-                                                     bool sameGeneration,
-                                                     std::uint64_t bytes) {
-  auto& c = counters();
-  add(c.d3d9SnapshotUniformAdjacentSamePayloadHash);
-  add(c.d3d9SnapshotUniformAdjacentSamePayloadHashBytes, bytes);
-  if (sameStateLane) {
-    add(c.d3d9SnapshotUniformAdjacentSamePayloadHashSameState);
-    add(c.d3d9SnapshotUniformAdjacentSamePayloadHashSameStateBytes, bytes);
-  } else {
-    add(c.d3d9SnapshotUniformAdjacentSamePayloadHashDiffState);
-    add(c.d3d9SnapshotUniformAdjacentSamePayloadHashDiffStateBytes, bytes);
-  }
-  if (!sameGeneration) {
-    add(c.d3d9SnapshotUniformAdjacentSamePayloadHashDiffGeneration);
-    add(c.d3d9SnapshotUniformAdjacentSamePayloadHashDiffGenerationBytes, bytes);
-  }
-}
-
-void countD3D9SnapshotUniformAdjacentComponentHashes(bool sameStateLane,
-                                                     bool sameGeneration,
-                                                     bool sameVertexConstants,
-                                                     bool samePixelConstants,
-                                                     bool sameFixedPayload) {
-  auto& c = counters();
-  add(c.d3d9SnapshotUniformAdjacentPreviousPayload);
-  if (sameFixedPayload) {
-    add(c.d3d9SnapshotUniformAdjacentSameFixedPayloadHash);
-    if (sameStateLane) {
-      add(c.d3d9SnapshotUniformAdjacentSameFixedPayloadHashSameState);
-    }
-    if (!sameGeneration) {
-      add(c.d3d9SnapshotUniformAdjacentSameFixedPayloadHashDiffGeneration);
-    }
-  }
-  if (sameVertexConstants) {
-    add(c.d3d9SnapshotUniformAdjacentSameVsConstHash);
-    if (sameStateLane) {
-      add(c.d3d9SnapshotUniformAdjacentSameVsConstHashSameState);
-    }
-    if (!sameGeneration) {
-      add(c.d3d9SnapshotUniformAdjacentSameVsConstHashDiffGeneration);
-    }
-  }
-  if (samePixelConstants) {
-    add(c.d3d9SnapshotUniformAdjacentSamePsConstHash);
-    if (sameStateLane) {
-      add(c.d3d9SnapshotUniformAdjacentSamePsConstHashSameState);
-    }
-    if (!sameGeneration) {
-      add(c.d3d9SnapshotUniformAdjacentSamePsConstHashDiffGeneration);
-    }
-  }
-  if (sameVertexConstants && samePixelConstants) {
-    add(c.d3d9SnapshotUniformAdjacentSameShaderConstHashes);
-    if (sameStateLane) {
-      add(c.d3d9SnapshotUniformAdjacentSameShaderConstHashesSameState);
-    }
-    if (!sameGeneration) {
-      add(c.d3d9SnapshotUniformAdjacentSameShaderConstHashesDiffGeneration);
-    }
-  }
-  if (sameFixedPayload && sameVertexConstants && samePixelConstants) {
-    add(c.d3d9SnapshotUniformAdjacentSameFixedAndShaderConstHashes);
-    if (sameStateLane) {
-      add(c.d3d9SnapshotUniformAdjacentSameFixedAndShaderConstHashesSameState);
-    }
-    if (!sameGeneration) {
-      add(c.d3d9SnapshotUniformAdjacentSameFixedAndShaderConstHashesDiffGeneration);
-    }
-  }
-}
-
-void countD3D9SnapshotStateCopyCpuTime(std::uint64_t nanoseconds) {
-  add(counters().d3d9SnapshotStateCopyCpuNs, nanoseconds);
-}
-
-void countD3D9SnapshotStateMaterialized(std::uint64_t bytes) {
-  auto& c = counters();
-  add(c.d3d9SnapshotStateMaterialized);
-  add(c.d3d9SnapshotStateMaterializedBytes, bytes);
-}
-
-void countD3D9SnapshotStateElided(std::uint64_t bytes) {
-  auto& c = counters();
-  add(c.d3d9SnapshotStateElided);
-  add(c.d3d9SnapshotStateElidedBytes, bytes);
-}
-
-void countD3D9SnapshotDebugSnapshotCpuTime(std::uint64_t nanoseconds) {
-  add(counters().d3d9SnapshotDebugSnapshotCpuNs, nanoseconds);
-}
-
-void countD3D9SnapshotFlatStateEntries(std::uint32_t renderStateEntries,
-                                       std::uint32_t textureStageStateEntries,
-                                       std::uint32_t textureStageStateEntryMax,
-                                       std::uint32_t samplerStateEntries,
-                                       std::uint32_t samplerStateEntryMax,
-                                       bool renderStateOverflow,
-                                       bool textureStageStateOverflow,
-                                       bool samplerStateOverflow) {
-  auto& c = counters();
-  add(c.d3d9SnapshotFlatStateSamples);
-  add(c.d3d9SnapshotFlatRenderStateEntries, renderStateEntries);
-  updateMax(c.d3d9SnapshotFlatRenderStateEntriesMax, renderStateEntries);
-  if (renderStateEntries > 64u) {
-    add(c.d3d9SnapshotFlatRenderStateEntriesGt64);
-  }
-  if (renderStateEntries > 128u) {
-    add(c.d3d9SnapshotFlatRenderStateEntriesGt128);
-  }
-  if (renderStateOverflow) {
-    add(c.d3d9SnapshotFlatRenderStateOverflow);
-  }
-  add(c.d3d9SnapshotFlatTssEntries, textureStageStateEntries);
-  updateMax(c.d3d9SnapshotFlatTssStageEntriesMax, textureStageStateEntryMax);
-  if (textureStageStateOverflow) {
-    add(c.d3d9SnapshotFlatTssOverflow);
-  }
-  add(c.d3d9SnapshotFlatSamplerEntries, samplerStateEntries);
-  updateMax(c.d3d9SnapshotFlatSamplerSlotEntriesMax, samplerStateEntryMax);
-  if (samplerStateOverflow) {
-    add(c.d3d9SnapshotFlatSamplerOverflow);
-  }
-}
-
-void countD3D9SnapshotBindingOverrideCpuTime(std::uint64_t nanoseconds) {
-  add(counters().d3d9SnapshotBindingOverrideCpuNs, nanoseconds);
-}
-
-void countD3D9SnapshotBindingOverride(std::uint32_t streamScans,
-                                      std::uint32_t streamRecords,
-                                      bool indexRecord) {
-  add(counters().d3d9SnapshotBindingOverrideStreamScans, streamScans);
-  add(counters().d3d9SnapshotBindingOverrideStreamRecords, streamRecords);
-  if (indexRecord) {
-    add(counters().d3d9SnapshotBindingOverrideIndexRecords);
-  }
 }
 
 void countDrawUniformPayloadLookupCandidateHit() {

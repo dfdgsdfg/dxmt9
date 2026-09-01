@@ -42,12 +42,13 @@ ordered-control reorder, and retry-after-effect. The immutable authenticated
 raw sequence is the representation-preserving effective stream; no second
 complete carrier is introduced by the transaction.
 
-The complete Legacy/direct differential over effective commands, next state,
+The complete ordinary/direct differential over effective commands, next state,
 final SoA values, resource/completion identity, and failure disposition remains
-open, as does production optimizer-policy admission binding. R-ARCH-7.23 and
-R-BACK-2.99 require a production/API source
-audit proving `DrawRunSubmission`, equivalent per-draw AoS carriers,
-carrier-specific counters, adapters, and carrier-only test seams are absent.
+open, as does production optimizer-policy admission binding. The R-ARCH-7.23 /
+R-BACK-2.99 production/API source audit now proves `DrawRunSubmission`, its
+batch APIs, carrier-specific counters/adapters/scratch, and carrier-only test
+seams are absent; the remaining negative audit continues to forbid equivalent
+per-draw AoS carriers.
 R-ARCH-7.24 and R-BACK-2.100 additionally require a fresh owner-qualified
 ledger proving the PE emission, current-ABI RawOwned copy, final-SoA emission,
 and required GPU-visible writes are the only large materializations; no current

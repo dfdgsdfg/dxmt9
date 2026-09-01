@@ -87,16 +87,9 @@
 //               executable, so a regression in the premise is visible as a
 //               behaviour difference between S1A and S1B.
 //
-// NOT REACHED — stated so the coverage claim is not read wider than it is:
-//   `CommandQueue::submitDrawRunBatchImpl`'s worker-side T2a' mark
-//   (`dxmt9_command_queue.cpp:3608-3650`) is not reachable from a native
-//   spec. `specs/backend/producer-concurrency/gap.md`'s R-BACK-43.5 row
-//   already records why: the only spec that calls `submitDrawRunBatch`
-//   short-circuits into the active-arena path first. The worker and the
-//   producer share ONE helper (`restampIfTicketAdvancedLocked`) and ONE
-//   stamp predicate, and this harness drives both through the producer entry
-//   point; what is unproven is that call site's own surroundings, not the
-//   protocol.
+// The retired replay submission carrier no longer has a separate worker-side
+// batch-mark call site. The producer schedule below remains the native binding
+// for `restampIfTicketAdvancedLocked` and the shared stamp predicate.
 //
 // ===========================================================================
 // WHAT A SCRIPTED SCHEDULE CAN AND CANNOT SEE

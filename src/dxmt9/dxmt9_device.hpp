@@ -183,8 +183,8 @@ class Device {
     return markChunkResourcesAndCaptureBufferBindings(entries, snapshots);
   }
   virtual bool supportsCpuReadyArenaReplay() const noexcept { return false; }
-  // The ordinary synchronous replay lane may bypass DrawRunSubmission only
-  // when the backend advertises a transactional final-ChunkSlot destination.
+  // The ordinary synchronous replay lane may use a transactional
+  // final-ChunkSlot destination when the backend advertises it.
   virtual bool supportsDirectChunkSlotReplay() const noexcept { return false; }
   virtual bool dynamicBufferRenameEnabled() const noexcept { return false; }
   // Phase 14: chunk importer toggles per-draw markDrawResources off
@@ -203,37 +203,6 @@ class Device {
   virtual core::DirectReplayDrawDisposition submitDirectReplayDraw(
       const core::DirectReplayDrawInput&) noexcept {
     return core::DirectReplayDrawDisposition::LegacyUnsupported;
-  }
-  virtual void submitDrawRunBatch(std::span<core::DrawRunSubmission> submissions) {
-    if (submissions.empty()) {
-      return;
-    }
-    const auto& frontState = submissions.front().materializedState();
-    const core::DrawUniformPayload* previousUniform = nullptr;
-    std::uint64_t previousUniformGeneration = 0;
-    for (auto& submission : submissions) {
-      const std::span<const core::DrawParam> draws(&submission.draw, 1);
-      std::span<const core::DrawParamPayloadView> payloads{};
-      if (!submission.payload.userVertexData.empty() ||
-          !submission.payload.userIndexData.empty() ||
-          !submission.payload.bindingOverrideData.empty() ||
-          !submission.payload.bindingSnapshotData.empty()) {
-        payloads = std::span<const core::DrawParamPayloadView>(&submission.payload, 1);
-      }
-      if (submission.uniforms.has_value()) {
-        previousUniform = &submission.uniformPayload();
-        previousUniformGeneration = submission.uniformGeneration;
-      } else {
-        const bool sameUniformGeneration =
-            submission.uniformGeneration == previousUniformGeneration;
-        DXMT_ASSERT(previousUniform && sameUniformGeneration);
-        (void)sameUniformGeneration;
-      }
-      submitDrawRun(submission.stateMaterialized
-                        ? submission.materializedState()
-                        : frontState,
-                    *previousUniform, draws, payloads);
-    }
   }
   virtual void submitClear(const core::ClearDesc&) {}
   virtual void submitSurfaceCopy(const core::SurfaceCopyDesc&) {}

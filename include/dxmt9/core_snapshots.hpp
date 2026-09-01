@@ -1083,49 +1083,11 @@ struct DrawParamPayloadView {
   std::span<const u8> bindingSnapshotData{};
 };
 
-enum class DrawRunSubmissionStateLane : u8 {
-  Unknown = 0,
-  BindingAgnostic = 1,
-  FullNoIndex = 2,
-  FullWithIndex = 3,
-};
-
-struct DrawRunSubmission {
-  std::optional<CanonicalDrawState> state{};
-  std::optional<DrawUniformPayload> uniforms{};
-  DrawParam draw{};
-  DrawParamPayloadView payload{};
-  DrawBindingOverride bindingOverride{};
-  u64 stateGeneration = 0;
-  u64 uniformGeneration = 0;
-  u64 uniformFixedPayloadGeneration = 0;
-  u64 uniformPayloadHash = 0;
-  DrawRunSubmissionStateLane stateLane = DrawRunSubmissionStateLane::Unknown;
-  bool stateMaterialized = true;
-
-  CanonicalDrawState& materializedState() noexcept {
-    DXMT_ASSERT(stateMaterialized && state.has_value());
-    return *state;
-  }
-  const CanonicalDrawState& materializedState() const noexcept {
-    DXMT_ASSERT(stateMaterialized && state.has_value());
-    return *state;
-  }
-  DrawUniformPayload& uniformPayload() noexcept {
-    DXMT_ASSERT(uniforms.has_value());
-    return *uniforms;
-  }
-  const DrawUniformPayload& uniformPayload() const noexcept {
-    DXMT_ASSERT(uniforms.has_value());
-    return *uniforms;
-  }
-};
-
 // Synchronous direct-replay input.  The state and uniform pointers borrow the
 // core Device cache only for the duration of submitDirectReplayDraw(); final
 // Arena/ChunkSlot storage must copy their values before returning.  Keeping
 // the large state/uniform values behind synchronous borrowed pointers prevents
-// the compatibility DrawRunSubmission carrier from riding the eligible path.
+// an intermediate per-draw state carrier from riding the eligible path.
 struct DirectReplayDrawInput {
   const FlatDrawStateRecord* hot = nullptr;
   const DrawShaderLayoutContext* shaderLayout = nullptr;
@@ -1141,9 +1103,9 @@ struct DirectReplayDrawInput {
 };
 
 // Typed result for synchronous replay-to-final-storage ingress.  Only the
-// Legacy* values are strict pre-effect dispositions: callers may materialize
-// the compatibility DrawRunSubmission/CanonicalDrawState lane after one of
-// those results.  AcceptedFailStop means the destination transaction owns the
+// Legacy* values are strict pre-effect dispositions: callers may publish
+// directly to the ordinary final ChunkSlot after one of those results.
+// AcceptedFailStop means the destination transaction owns the
 // command but has been poisoned and therefore must not be replayed a second
 // time through Legacy.
 enum class DirectReplayDrawDisposition : u8 {
@@ -1216,23 +1178,6 @@ inline void clearDrawStateBindingFields(FlatDrawStateRecord& hot) noexcept {
 inline void clearDrawShaderLayoutBindingFields(
     DrawShaderLayoutContext& shaderLayout) noexcept {
   shaderLayout.vertexDecl.streams = {};
-}
-
-template <typename Submission>
-inline bool drawRunSubmissionHasExternalBindingOverride(
-    const Submission& submission) noexcept {
-  return !submission.payload.bindingOverrideData.empty() ||
-         !drawBindingOverrideEmpty(submission.bindingOverride);
-}
-
-template <typename Submission>
-inline void ensureDrawRunSubmissionBindingOverridePayload(
-    Submission& submission) noexcept {
-  if (submission.payload.bindingOverrideData.empty() &&
-      !drawBindingOverrideEmpty(submission.bindingOverride)) {
-    submission.payload.bindingOverrideData =
-        drawBindingOverrideBytes(submission.bindingOverride);
-  }
 }
 
 // H228 — the alpha-test render-state trio is exempt from draw-run batch
@@ -1534,134 +1479,6 @@ inline DrawRunBatchIncompat classifyDrawRunBatchIncompatibility(
         a.renderStates, b.renderStates, &result.renderStateDiffFirstRegister);
   }
   return result;
-}
-
-template <typename Submission>
-inline bool drawRunSubmissionStatesCompatibleForBatch(
-    const Submission& a,
-    const Submission& b) noexcept {
-  const auto& aState = a.materializedState();
-  const auto& bState = b.materializedState();
-  return drawStatesCompatibleForDrawRunBatch(aState.hot, bState.hot) &&
-         shaderLayoutsCompatibleForDrawRunBatch(aState.shaderLayout,
-                                                bState.shaderLayout);
-}
-
-template <typename SubmissionA, typename SubmissionB>
-inline bool drawRunSubmissionSameStateGenerationLane(
-    const SubmissionA& a,
-    const SubmissionB& b) noexcept {
-  return a.stateGeneration != 0 &&
-         a.stateGeneration == b.stateGeneration &&
-         a.stateLane != DrawRunSubmissionStateLane::Unknown &&
-         a.stateLane == b.stateLane;
-}
-
-template <typename Submission>
-inline bool drawRunSubmissionUsesAcceptedPreviousStateGenerationLane(
-    const Submission& base,
-    const Submission& previous,
-    const Submission& candidate) noexcept {
-  return !drawRunSubmissionSameStateGenerationLane(base, candidate) &&
-         !candidate.stateMaterialized &&
-         drawRunSubmissionSameStateGenerationLane(previous, candidate);
-}
-
-inline std::uint64_t drawRunSubmissionStateCopyBytes() noexcept {
-  return sizeof(FlatDrawStateRecord) + sizeof(DrawShaderLayoutContext);
-}
-
-inline std::uint64_t drawRunSubmissionUniformCopyBytes() noexcept {
-  return sizeof(DrawUniformPayload);
-}
-
-inline std::uint64_t drawRunSubmissionCarrierBytes() noexcept {
-  return sizeof(DrawRunSubmission);
-}
-
-inline std::uint64_t drawRunSubmissionCarrierStateStorageBytes() noexcept {
-  return sizeof(std::optional<CanonicalDrawState>);
-}
-
-inline std::uint64_t drawRunSubmissionCarrierUniformStorageBytes() noexcept {
-  return sizeof(std::optional<DrawUniformPayload>);
-}
-
-template <typename SubmissionA, typename SubmissionB>
-inline bool drawRunSubmissionSameUniformGeneration(
-    const SubmissionA& a,
-    const SubmissionB& b) noexcept {
-  return a.uniformGeneration != 0 &&
-         a.uniformGeneration == b.uniformGeneration;
-}
-
-template <typename SubmissionA, typename SubmissionB>
-inline bool drawRunSubmissionSameUniformPayloadHash(
-    const SubmissionA& a,
-    const SubmissionB& b) noexcept {
-  return a.uniformPayloadHash != 0 &&
-         a.uniformPayloadHash == b.uniformPayloadHash;
-}
-
-template <typename Submission>
-inline void prepareDrawRunSubmissionBindingOverride(
-    const Submission& base,
-    Submission& submission) noexcept {
-  if (drawRunSubmissionHasExternalBindingOverride(submission)) {
-    ensureDrawRunSubmissionBindingOverridePayload(submission);
-    return;
-  }
-
-  const auto& baseState = base.materializedState();
-  const auto& submissionState = submission.materializedState();
-  submission.bindingOverride = {};
-  for (u32 stream = 0; stream < kMaxStreams; ++stream) {
-    if (baseState.hot.streamBuffers[stream] == submissionState.hot.streamBuffers[stream] &&
-        baseState.hot.streamOffsets[stream] == submissionState.hot.streamOffsets[stream] &&
-        baseState.hot.streamStrides[stream] == submissionState.hot.streamStrides[stream]) {
-      continue;
-    }
-    submission.bindingOverride.streamMask |= 1u << stream;
-    submission.bindingOverride.streams[stream] = DrawStreamBindingOverride{
-        .buffer = submissionState.hot.streamBuffers[stream],
-        .offset = submissionState.hot.streamOffsets[stream],
-        .stride = submissionState.hot.streamStrides[stream],
-    };
-  }
-
-  if (baseState.hot.indexBuffer != submissionState.hot.indexBuffer ||
-      base.draw.indexType != submission.draw.indexType) {
-    submission.bindingOverride.indexBuffer = submissionState.hot.indexBuffer;
-    submission.bindingOverride.indexType = submission.draw.indexType;
-    submission.bindingOverride.indexBufferValid = true;
-  }
-
-  // H228 — batched submissions share the base's canonical state, so a draw
-  // whose alpha-test trio differs from the base must carry its own values as
-  // a per-draw immediate override (the batch predicate exempts exactly this
-  // trio). Raw D3DRS values; defaults mirror fillFfpPsConsts' reads.
-  const auto alphaTrioOf = [](const FlatRenderStateSet& rs) {
-    struct Trio { u32 enable, func, ref; };
-    return Trio{
-        flatStateOr(rs, RS_ALPHA_TEST_ENABLE, 0u),
-        flatStateOr(rs, RS_ALPHA_FUNC, static_cast<u32>(CompareFunc::Always)),
-        flatStateOr(rs, RS_ALPHA_REF, 0u),
-    };
-  };
-  const auto baseTrio = alphaTrioOf(baseState.hot.renderStates);
-  const auto submissionTrio = alphaTrioOf(submissionState.hot.renderStates);
-  if (baseTrio.enable != submissionTrio.enable ||
-      baseTrio.func != submissionTrio.func ||
-      baseTrio.ref != submissionTrio.ref) {
-    submission.bindingOverride.alphaTestEnable = submissionTrio.enable;
-    submission.bindingOverride.alphaTestFunc = submissionTrio.func;
-    submission.bindingOverride.alphaTestRef = submissionTrio.ref;
-    submission.bindingOverride.alphaTestStateValid = true;
-  }
-
-  if (!drawBindingOverrideEmpty(submission.bindingOverride)) {
-    ensureDrawRunSubmissionBindingOverridePayload(submission);
-  }
 }
 
 namespace fixture {
@@ -2463,12 +2280,8 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult drawPrimitiveRun(std::span<const DrawParam> draws);
   HResult drawPrimitiveRun(std::span<const DrawParam> draws,
                            std::span<const DrawParamPayloadView> payloads);
-  HResult snapshotDrawSubmissionFromCurrentState(
-      DrawParam draw, DrawRunSubmission& submission,
-      const DrawRunSubmission* previousSubmission = nullptr);
   DirectReplayDrawResult submitDirectReplayDrawFromCurrentState(
       DrawParam draw, DrawParamPayloadView payload = {});
-  void submitDrawSubmissionBatch(std::span<DrawRunSubmission> submissions);
   HResult present();
   HResult reset(const PresentParameters& params);
   HResult checkDeviceMultiSampleType(Format format, MultiSampleType type) const;

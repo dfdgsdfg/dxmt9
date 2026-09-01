@@ -55,8 +55,9 @@
  *                Q4 — the worker is a *third* reclaim actor); and
  *                (b) WorkerBeginBatch → WorkerStampMark* → WorkerEndStamping
  *                → WorkerRestamp? → WorkerAppend → WorkerReleaseBatchRefs →
- *                WorkerRetireBatch is `submitDrawRunBatchImpl`'s per-batch
- *                marking + append, the T2a' half. Its pin premise is
+ *                WorkerRetireBatch models the retired
+ *                `submitDrawRunBatchImpl` per-batch marking + append, the
+ *                historical T2a' half. Its pin premise is
  *                symmetric to the producer's: it holds its batch's retained
  *                refs across its own marking window and releases them
  *                strictly after the append.
@@ -467,7 +468,7 @@ SlotAdvance ==
 
 (*
  * WorkerBeginBatch(S)
- * `submitDrawRunBatchImpl` starts a batch. The worker already holds the
+ * The retired `submitDrawRunBatchImpl` starts a batch. The worker already holds the
  * retained wrappers for every resource the batch names (they were handed over
  * at `commit_chunk` and are dropped only by `releaseRetainedWrappers` after
  * replay), which is the pin premise, symmetric to the producer's. The ticket
@@ -553,7 +554,7 @@ WorkerRestamp ==
 
 (*
  * WorkerAppend
- * `currentSlotUnlocked(queue).appendDrawRunBatch(batch)` — the records land
+ * The retired batch append lands records
  * in the open writing slot, which will be published as seq `nextSeqId`. The
  * safety obligation `WorkerAppendCoveredByStamps` is evaluated from here on.
  *)

@@ -428,7 +428,6 @@ class CommandQueue {
                      std::span<const core::DrawParamPayloadView> payloads = {});
   core::DirectReplayDrawDisposition submitDirectReplayDraw(
       const core::DirectReplayDrawInput& input) noexcept;
-  void submitDrawRunBatch(std::span<core::DrawRunSubmission> submissions);
 
   // Cold, capture-only ownership copied from the exact Direct-Arena source
   // before it becomes visible to the encode thread.  Raw-record ranges are
@@ -1217,7 +1216,7 @@ class CommandQueue {
   // R-BACK-43.4 `worker-owned` BETWEEN EVENTS, with one documented exception.
   // The thread that (re-)established the writing slot via `ensureWritingSlot*`
   // owns the slot's contents until it is published; in the hot path that is
-  // the replay offload worker in `submitDrawRunBatchImpl`. The EXCEPTION is
+  // the replay offload worker's direct final-storage ingress. The EXCEPTION is
   // the producer's map-wait force-publish, which reaches the same slot through
   // `commitCurrentChunk` while holding `mutex_` — so the contract is "owner OR
   // holder of `mutex_`", which is why this is a shape-(c) token and why an
@@ -1752,8 +1751,6 @@ class CommandQueue {
     return ActiveArenaAppendResult::Appended;
   }
 
-  ActiveArenaAppendResult appendActiveArenaDrawRunBatch(
-      std::span<core::DrawRunSubmission> submissions) noexcept;
   ActiveArenaAppendResult appendActiveArenaDrawRun(
       core::CanonicalDrawState& state,
       const core::DrawUniformPayload& uniforms,

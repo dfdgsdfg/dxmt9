@@ -386,21 +386,22 @@ struct SyntheticBufferHandleGuard {
   }
 };
 
-dxmt9::core::DrawRunSubmission materializedSubmission(
+dxmt9::core::DirectReplayDrawDisposition submitDirectDraw(
+    dxmt9::CommandQueue& queue,
     dxmt9::core::Handle attachment,
-    std::uint64_t stateGeneration,
-    std::uint64_t uniformGeneration) {
+    dxmt9::core::DrawParamPayloadView payload = {}) {
   using namespace dxmt9::core;
-  DrawRunSubmission submission{
-      .state = CanonicalDrawState{},
-      .uniforms = DrawUniformPayload{},
+  CanonicalDrawState state{};
+  state.hot.colorAttachments[0].handle = attachment;
+  DrawUniformPayload uniforms{};
+  const DirectReplayDrawInput input{
+      .hot = &state.hot,
+      .shaderLayout = &state.shaderLayout,
+      .uniforms = &uniforms,
       .draw = DrawParam{.primitiveCount = 1},
-      .stateGeneration = stateGeneration,
-      .uniformGeneration = uniformGeneration,
-      .stateLane = DrawRunSubmissionStateLane::FullNoIndex,
+      .payload = payload,
   };
-  submission.materializedState().hot.colorAttachments[0].handle = attachment;
-  return submission;
+  return queue.submitDirectReplayDraw(input);
 }
 
 void testExplicitControlIndexGroupingAndExactSnapshotMark() {
@@ -448,30 +449,25 @@ void testExplicitControlIndexGroupingAndExactSnapshotMark() {
             ticket.seqId + 1,
         "strict admission must consume nextSeqId immediately");
 
-  std::array<DrawRunSubmission, 3> submissions{
-      materializedSubmission(Handle{11}, 7, 9),
-      DrawRunSubmission{},
-      materializedSubmission(Handle{22}, 8, 10),
-  };
-  submissions[1].state.reset();
-  submissions[1].uniforms.reset();
-  submissions[1].stateMaterialized = false;
-  submissions[1].stateGeneration = 7;
-  submissions[1].uniformGeneration = 9;
-  submissions[1].stateLane = DrawRunSubmissionStateLane::FullNoIndex;
-  submissions[1].draw.primitiveCount = 1;
-  submissions[1].bindingOverride.streamMask = 1;
-  submissions[1].bindingOverride.streams[0].buffer = buffer;
-  submissions[1].bindingOverride.streams[0].stride = 16;
   DrawBindingSnapshot captured{};
   captured.streamMask = 1;
   captured.streams[0].buffer = buffer;
   captured.streams[0].stride = 16;
   captured.streams[0].snapshot.metalHandle = capturedBacking;
-  submissions[1].payload.bindingSnapshotData =
-      drawBindingSnapshotBytes(captured);
-
-  queue.submitDrawRunBatch(submissions);
+  DrawBindingOverride bindingOverride{};
+  bindingOverride.streamMask = 1;
+  bindingOverride.streams[0].buffer = buffer;
+  bindingOverride.streams[0].stride = 16;
+  check(submitDirectDraw(queue, Handle{11}) ==
+            DirectReplayDrawDisposition::Appended &&
+            submitDirectDraw(queue, Handle{11}, DrawParamPayloadView{
+                .bindingOverrideData =
+                    drawBindingOverrideBytes(bindingOverride),
+                .bindingSnapshotData = drawBindingSnapshotBytes(captured),
+            }) == DirectReplayDrawDisposition::Appended &&
+            submitDirectDraw(queue, Handle{22}) ==
+                DirectReplayDrawDisposition::Appended,
+        "direct draws must append to the active authenticated source");
   check(CommandQueueArenaLeaseTestAccess::currentBackBuffer(queue) ==
             oldBackBuffer,
         "active appends must not expose pending backbuffer semantics");
@@ -1217,20 +1213,20 @@ void testBatchPublishBuildsOneAuthenticatedCrossSourcePass() {
   check(begin->beginCaptureIdentity(2u),
         "batch capture identity must reserve the complete event range");
 
-  const auto first = materializedSubmission(Handle{11}, 7, 9);
-  const auto second = materializedSubmission(Handle{11}, 7, 9);
-  std::array submissions{first};
   check(begin->selectSourceSegment(0, 0),
         "first source local segment must be selected");
   check(begin->captureNextCommandRecord(0),
         "first source anchor must be recorded before append");
-  queue.submitDrawRunBatch(submissions);
-  submissions[0] = second;
+  check(submitDirectDraw(queue, Handle{11}) ==
+            DirectReplayDrawDisposition::Appended,
+        "first source draw must append directly");
   check(begin->selectSourceSegment(1, 0),
         "second source local segment must be selected in order");
   check(begin->captureNextCommandRecord(1),
         "second source anchor must be recorded before append");
-  queue.submitDrawRunBatch(submissions);
+  check(submitDirectDraw(queue, Handle{11}) ==
+            DirectReplayDrawDisposition::Appended,
+        "second source draw must append directly");
   constexpr std::array firstRecords{0u, 1u};
   constexpr std::array recordCounts{1u, 1u};
   check(begin->setCaptureSourceRanges(firstRecords, recordCounts),
@@ -1263,14 +1259,16 @@ void testBatchPublishRunsEventProofWithoutCaptureSidecar() {
   CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
   auto begin = queue.beginCpuReadyArenaSources(128, layouts);
   check(begin.has_value(), "no-capture batch admission must succeed");
-  const auto submission = materializedSubmission(Handle{11}, 7, 9);
-  std::array submissions{submission};
   check(begin->selectSourceSegment(0, 0),
         "no-capture first source selection must succeed");
-  queue.submitDrawRunBatch(submissions);
+  check(submitDirectDraw(queue, Handle{11}) ==
+            DirectReplayDrawDisposition::Appended,
+        "no-capture first draw must append directly");
   check(begin->selectSourceSegment(1, 0),
         "no-capture second source selection must succeed");
-  queue.submitDrawRunBatch(submissions);
+  check(submitDirectDraw(queue, Handle{11}) ==
+            DirectReplayDrawDisposition::Appended,
+        "no-capture second draw must append directly");
   CommandQueueArenaLeaseTestAccess::armBatchPlannerObservation(queue, false);
   check(begin->publishBatchWithStatus({}, nullptr) ==
             CommandQueue::CpuReadyArenaPublishStatus::Published,
@@ -1293,14 +1291,16 @@ void testBatchPlannerRejectionRollsBackBeforeEffects() {
   CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
   auto begin = queue.beginCpuReadyArenaSources(129, layouts);
   check(begin.has_value(), "planner rejection admission must succeed");
-  const auto submission = materializedSubmission(Handle{11}, 7, 9);
-  std::array submissions{submission};
   check(begin->selectSourceSegment(0, 0),
         "planner rejection first source selection must succeed");
-  queue.submitDrawRunBatch(submissions);
+  check(submitDirectDraw(queue, Handle{11}) ==
+            DirectReplayDrawDisposition::Appended,
+        "planner rejection first draw must append directly");
   check(begin->selectSourceSegment(1, 0),
         "planner rejection second source selection must succeed");
-  queue.submitDrawRunBatch(submissions);
+  check(submitDirectDraw(queue, Handle{11}) ==
+            DirectReplayDrawDisposition::Appended,
+        "planner rejection second draw must append directly");
   CommandQueueArenaLeaseTestAccess::armBatchPlannerObservation(queue, true);
   check(begin->publishBatchWithStatus({}, nullptr) ==
             CommandQueue::CpuReadyArenaPublishStatus::RecoverableFailure,
@@ -1327,17 +1327,21 @@ void testBatchBuilderFailureRollsBackForEventSerialFallback() {
   CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
   auto begin = queue.beginCpuReadyArenaSources(127, layouts);
   check(begin.has_value(), "builder failure admission must succeed");
-  const auto submission = materializedSubmission(Handle{12}, 8, 10);
-  std::array submissions{submission};
   check(begin->selectSourceSegment(0, 0),
         "builder failure first source selection must succeed");
-  queue.submitDrawRunBatch(submissions);
+  check(submitDirectDraw(queue, Handle{12}) ==
+            DirectReplayDrawDisposition::Appended,
+        "builder failure first draw must append directly");
   check(begin->selectSourceSegment(1, 0),
         "builder failure second source selection must succeed");
-  queue.submitDrawRunBatch(submissions);
+  check(submitDirectDraw(queue, Handle{12}) ==
+            DirectReplayDrawDisposition::Appended,
+        "builder failure second draw must append directly");
   // The one-command source capacity makes this append reject the active
   // builder before publication; the batch must still have zero Ready rows.
-  queue.submitDrawRunBatch(submissions);
+  check(submitDirectDraw(queue, Handle{12}) ==
+            DirectReplayDrawDisposition::AcceptedFailStop,
+        "builder overflow must fail-stop the accepted source");
   const auto publishStatus = begin->publishBatchWithStatus({}, nullptr);
   check(publishStatus ==
             CommandQueue::CpuReadyArenaPublishStatus::RecoverableFailure,
@@ -1360,15 +1364,18 @@ void testFirstArenaFailureRetainsCoordinatesAcrossLaterFailures() {
   CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
   auto begin = queue.beginCpuReadyArenaSources(129, layouts);
   check(begin.has_value(), "failure-retention admission must succeed");
-  const auto submission = materializedSubmission(Handle{17}, 8, 10);
-  std::array submissions{submission};
   check(begin->selectSourceSegment(0, 0),
         "failure-retention first source selection must succeed");
-  queue.submitDrawRunBatch(submissions);
+  check(submitDirectDraw(queue, Handle{17}) ==
+            DirectReplayDrawDisposition::Appended,
+        "failure-retention first draw must append directly");
   check(begin->selectSourceSegment(1, 0),
         "failure-retention second source selection must succeed");
-  queue.submitDrawRunBatch(submissions);
-  queue.submitDrawRunBatch(submissions);
+  check(submitDirectDraw(queue, Handle{17}) ==
+            DirectReplayDrawDisposition::Appended &&
+            submitDirectDraw(queue, Handle{17}) ==
+                DirectReplayDrawDisposition::AcceptedFailStop,
+        "failure-retention overflow must fail-stop the source");
   const auto first = CommandQueueArenaLeaseTestAccess::activeFailure(queue);
   check(first.failureClass ==
             CommandQueue::CpuReadyArenaFailureClass::Append &&
@@ -1381,7 +1388,9 @@ void testFirstArenaFailureRetainsCoordinatesAcrossLaterFailures() {
             " segment=" + std::to_string(first.segment) +
             " planned=" + std::to_string(first.plannedPages) +
             " actual=" + std::to_string(first.actualCommands));
-  queue.submitDrawRunBatch(submissions);
+  check(submitDirectDraw(queue, Handle{17}) ==
+            DirectReplayDrawDisposition::AcceptedFailStop,
+        "later append remains fail-stopped");
   const auto retained = CommandQueueArenaLeaseTestAccess::activeFailure(queue);
   check(retained.failureClass == first.failureClass &&
             retained.source == first.source && retained.segment == first.segment &&

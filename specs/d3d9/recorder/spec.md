@@ -713,8 +713,8 @@ source. This is a bounded, default-on ordinary Direct-lane mechanism, not
 evidence for broad or wild performance promotion. Its typed counters distinguish
 attempted, admitted, capacity-rejected, structural-rejected, committed, and populated
 fallback cases; admitted continuation must not emit
-`ReplaySubmissionCarrierCopy` or `ReplaySubmissionCarrierMaterialization`
-ledger events.
+the reserved retired replay-copy/materialization ledger ordinals. Production
+has no carrier event class or call site.
 
 ### 6.2 Fixed-role SegmentedTransportV1 and later ExactFixed Tape emission
 

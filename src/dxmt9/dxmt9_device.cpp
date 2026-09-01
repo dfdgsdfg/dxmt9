@@ -323,7 +323,7 @@ class DeviceImpl final : public Device {
     // arena-protected record state (`shadow`, the leased ring entry's
     // `contents`) and needs no GPU watermark, and it runs on the replay
     // offload worker, which already holds the queue mutex for large stretches
-    // of `submitDrawRunBatch`. The record cannot be reclaimed underneath it
+    // of replay draw submission. The record cannot be reclaimed underneath it
     // because the task holds a `core::Buffer` retention (R-BACK-44.2a), which
     // is what keeps `destroyBuffer`/`destroyPending` unreachable.
     return queue_.pool().applyManagedBufferMutation(
@@ -353,9 +353,6 @@ class DeviceImpl final : public Device {
   core::DirectReplayDrawDisposition submitDirectReplayDraw(
       const core::DirectReplayDrawInput& input) noexcept override {
     return queue_.submitDirectReplayDraw(input);
-  }
-  void submitDrawRunBatch(std::span<core::DrawRunSubmission> submissions) override {
-    queue_.submitDrawRunBatch(submissions);
   }
   void markChunkResources(std::span<const core::ChunkHandleEntry> entries) override {
     queue_.markChunkResources(entries);

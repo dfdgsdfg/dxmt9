@@ -151,15 +151,11 @@ Construct-in-place and unified memory (R-ARCH-7.4, R-ARCH-7.5):
   ChunkSlot SoA slot and the shared-storage transient/argbuf allocation —
   rather than into a `DrawRunSubmission`-style carrier that is then copied in.
 - Current status: dirty constant bytes are built directly into shared-storage
-  transient/argbuf memory. Draw-run state now avoids materializing same-stamp
-  N-1 non-front records in the default binding-agnostic snapshot path, and the
-  queue accepts elided continuations without reducing normal compatibility
-  grouping. The surviving front/materialized state still travels through
-  `DrawRunSubmission` before `ChunkSlot::appendDrawRunBatch` stores it, so
-  direct construction into the queue-owned slot remains open. Adjacent uniform
-  payload elision is measured and rejected for 3DMark05 GT1:
-  `d3d9_snapshot_uniform_elided=0`, so uniform snapshot reuse is not a live GT1
-  target.
+  transient/argbuf memory. The per-draw `DrawRunSubmission` carrier is retired;
+  replay synchronously borrows current state/uniform data and constructs Direct,
+  Arena, or ordinary final `ChunkSlot` storage. Queue-wide final storage and its
+  handoff to the distinct encode thread remain until the fused serial cursor is
+  proven.
 - A shared (`MTLStorageModeShared`) backing is the GPU-read allocation itself, so
   on Apple Silicon the in-place build of dirty constants is the upload; no
   separate CPU-struct-then-staging copy is required (R-BACK-5.7). The allocation
@@ -396,13 +392,11 @@ and producer wake; partial role adoption is forbidden. The expected benefit
 must be measured against `copy.bridge.raw-owned` before introducing that larger
 lifecycle protocol.
 
-`DrawRunSubmission` is therefore a transitional compatibility representation,
-not the architecture's source or sidecar type and not a permanent fallback
-ABI. It combines optional canonical state,
-uniform payload, draw parameters, borrowed payload spans, binding overrides,
-and generation stamps into one replay-scoped AoS before `ChunkSlot` decomposes
-it into final SoA regions. The target serial direct cursor instead advances the
-same replay state and encodes without a complete final draw representation. The
+`DrawRunSubmission` was a transitional compatibility representation and is now
+retired from production. Ordinary fallback does not recreate it: replay passes
+a synchronous borrowed-state input directly to final `ChunkSlot` storage. The
+target serial direct cursor advances the same replay state and encodes without
+a complete queue-wide final draw representation. The
 experimental parallel provider performs a bounded count/dedup plan only for an
 accepted sealed pass and emits compact indices plus unique value tables.
 The `ResolvedSourceSidecar` contains only source-qualified resolutions and
