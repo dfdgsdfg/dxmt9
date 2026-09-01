@@ -1167,7 +1167,11 @@ the removable `copy.replay-submission-carrier` class. Planning scratch may hold
 counts, offsets, masks, hashes, and borrowed source witnesses, but must not own
 an encoder-visible record or payload byte. Exact/conservative reservation may
 waste bounded capacity; it must not reallocate and copy an earlier final
-extent.
+extent. Replay-thread offload remains permitted: it must publish final storage
+and a source-qualified compact sidecar rather than use the compatibility
+carrier as an asynchronous handoff. The final storage owns draw/state/uniform/
+payload values; the sidecar owns only resolutions, locators, hazard/pass/PSO
+summaries, and completion-independent derived values.
 
 Ordinary synchronous selection follows one backend policy constant
 and the `DXMT9_DIRECT_CHUNK_SLOT_REPLAY` override, and is independently forced

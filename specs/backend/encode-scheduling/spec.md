@@ -1963,6 +1963,22 @@ records may retain only the locator-free `CompletionProjection` after early
 payload retirement. R-BACK-2.95 owns these mappings and R-VERIF-7.9 owns their
 composed trace.
 
+The replay worker is a scheduling choice, not a representation owner. It may
+overlap source planning and final-Arena construction with PE production and
+encoding of an older source. Its queue publication contains final storage,
+`EndToEndSourceIdentity`, storage generation, and the compact resolved sidecar;
+it does not require `DrawRunSubmission`. That type remains the synchronous
+Legacy adapter which snapshots optional state/uniform values and borrowed draw
+payloads before `ChunkSlot::appendDrawRunBatch` decomposes them into SoA. The
+direct path replaces the adapter with a count/dedup plan followed by one final
+emission, while retaining exactly the same serial command order and completion
+identity.
+
+If replay planning is later fused with encoding, the coordinator must append
+the source to the existing EncodeSession. Source arrival is not permission to
+close a render pass or submit a command buffer; semantic pass, hazard, ordered
+control, and Present boundaries remain coordinator-owned.
+
 ## 11. Verification Mapping
 
 | Contract | Evidence |

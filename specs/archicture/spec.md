@@ -353,6 +353,43 @@ Failure ownership is fixed by the first visible effect:
 | zero-GPU source | settle the source identity through an explicit terminal projection without `GPUInFlight` |
 | normal/device-loss completion | settle ordered effects, return all borrows, release pins/sidecars, reclaim once, publish capacity wake |
 
+Thread separation and replay materialization are orthogonal. The PE producer
+remains independent from Unix execution so it can record source `N+1` while
+Unix plans or encodes source `N`. A replay worker may also remain independent
+from the encode coordinator when measured overlap justifies it. Neither
+boundary requires a large per-draw carrier: the handoff is the immutable source
+lease plus generation-qualified final-storage and sidecar identities.
+
+`DrawRunSubmission` is therefore a compatibility representation, not the
+architecture's source or sidecar type. It combines optional canonical state,
+uniform payload, draw parameters, borrowed payload spans, binding overrides,
+and generation stamps into one replay-scoped AoS before `ChunkSlot` decomposes
+it into final SoA regions. Direct construction instead performs a bounded
+count/dedup plan and emits those values once into final queue-owned storage.
+The `ResolvedSourceSidecar` contains only source-qualified resolutions and
+derived planning/encode values; it must not duplicate the state, uniform, or
+payload bytes that made the compatibility carrier large.
+
+```mermaid
+flowchart LR
+    P["PE producer\nimmutable source N+1"]
+    R["Replay worker\ncount/dedup/resolve N"]
+    A["Final Arena / ChunkSlot\nSoA + payload"]
+    S["ResolvedSourceSidecar\nidentity + derived values"]
+    E["Encode coordinator\nopen session/pass"]
+
+    P --> R
+    R --> A
+    R --> S
+    A --> E
+    S --> E
+```
+
+The direct path may later fuse replay planning into the encode coordinator, but
+it must not interpret an immutable source boundary as a Metal render-pass or
+command-buffer boundary. A long-lived encode session decides those boundaries
+from D3D9 semantics, hazards, ordered controls, and Present policy.
+
 Subsystem traceability is intentionally bidirectional:
 
 | Detail owner | Narrows this contract through |

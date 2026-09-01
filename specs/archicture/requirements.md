@@ -384,16 +384,24 @@ remain unix-owned and must never enter the PE wire or source facade.
 **R-ARCH-7.16** Replay direct construction must be a pure bounded plan followed
 by one transactional emission into final queue-owned storage. Planning may own
 counts, offsets, masks, hashes, and locators, but no encoder-visible record or
-payload byte. Unsupported record families, insufficient capacity, ordered
-controls, or unresolved lifetime evidence must fail closed before effects;
-post-adoption or post-encoder failure must follow the specified fail-stop path.
+payload byte. A replay worker may remain a distinct pipeline stage to overlap
+PE production, but that thread boundary must carry only an immutable source
+lease, generation-qualified locators, compact plan values, and final-storage
+ownership. It must not require a per-draw `DrawRunSubmission` or equivalent
+large AoS carrier before constructing the final Arena/`ChunkSlot` SoA.
+Unsupported record families, insufficient capacity, ordered controls, or
+unresolved lifetime evidence must fail closed before effects; post-adoption or
+post-encoder failure must follow the specified fail-stop path.
 
 **R-ARCH-7.17** Serial and partitioned encoding may transfer only immutable,
 source-qualified ranges and locator-free snapshots across threads. Each worker
 must reacquire a synchronous facade under the same source lease and generation.
 The coordinator alone owns session-global encoder, render-pass action, hazard,
 Present, query, completion, and reclaim state unless a narrower subsystem
-requirement proves an explicit transfer.
+requirement proves an explicit transfer. D3D9 command order does not require PE
+production, replay planning, and Metal encoding to execute on one CPU thread:
+different immutable sources may overlap in those stages while the coordinator
+preserves their serial semantic and Metal-effect order.
 
 **R-ARCH-7.18** A source may reach `Reclaimed` exactly once only after all
 synchronous borrows have returned, every encoder or ordered-control effect has
