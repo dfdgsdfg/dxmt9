@@ -5,7 +5,8 @@
 (* This model is intentionally smaller than the queue lifecycle models.   *)
 (* It checks the transaction at the exact boundary changed by the        *)
 (* optimization: a complete DrawRun/APPLY_STATE plan may append to an     *)
-(* existing final ChunkSlot only when structural and capacity proofs hold. *)
+(* existing final ChunkSlot only when structural, capacity, and producer   *)
+(* identity proofs hold.                                                   *)
 (*                                                                         *)
 (* APPLY_STATE and constant setters are state-only in the wire plan; they  *)
 (* do not add command headers. Any coordinator/resource/readback/Present   *)
@@ -21,12 +22,23 @@ Stages == {"Idle", "Legacy", "Admitted", "Building", "Prepared",
 Dispositions == {"Unset", "Legacy", "Direct"}
 
 VARIABLES stage, disposition, shapeValid, capacityReady,
-          structuralEligible, prefixCount, stagedCount, appendedCount,
-          effectsStarted, retryCount
+          structuralEligible, currentEventOrdinal, nextEventOrdinal,
+          currentSourceOrdinal, nextSourceOrdinal, prefixCount, stagedCount,
+          appendedCount, effectsStarted, retryCount
 
 vars == <<stage, disposition, shapeValid, capacityReady,
-  structuralEligible, prefixCount, stagedCount, appendedCount,
-  effectsStarted, retryCount>>
+  structuralEligible, currentEventOrdinal, nextEventOrdinal,
+  currentSourceOrdinal, nextSourceOrdinal, prefixCount, stagedCount,
+  appendedCount, effectsStarted, retryCount>>
+
+(* A populated compatibility slot may be extended only by the exact next
+   producer interval in both identity dimensions. These are the current
+   slot's last values and the candidate's first values. The native predicate
+   also rejects invalid/max values before applying these +1 relations; the
+   bounded model's domain contains only valid values. *)
+IdentityAppendable ==
+  /\ nextEventOrdinal = currentEventOrdinal + 1
+  /\ nextSourceOrdinal = currentSourceOrdinal + 1
 
 Init ==
   /\ stage = "Idle"
@@ -34,31 +46,39 @@ Init ==
   /\ shapeValid \in BOOLEAN
   /\ capacityReady \in BOOLEAN
   /\ structuralEligible \in BOOLEAN
+  /\ currentEventOrdinal \in 1..3
+  /\ nextEventOrdinal \in 1..3
+  /\ currentSourceOrdinal \in 1..3
+  /\ nextSourceOrdinal \in 1..3
   /\ prefixCount = 2
   /\ stagedCount = 0
   /\ appendedCount = 0
   /\ effectsStarted = FALSE
   /\ retryCount = 0
 
-(* The production predicate is the conjunction of the three value-only
-   premises. Invalid plans are handed to the ordinary Legacy route before
-   any semantic effect. *)
+(* The production predicate is the conjunction of the structural/capacity
+   premises and exact producer-identity adjacency. Invalid plans, including
+   an identity gap or overlap, are handed to the ordinary Legacy route
+   before any semantic effect. *)
 Admit ==
   /\ stage = "Idle"
-  /\ IF shapeValid /\ capacityReady /\ structuralEligible
+  /\ IF shapeValid /\ capacityReady /\ structuralEligible /\ IdentityAppendable
         THEN /\ stage' = "Admitted"
              /\ disposition' = "Direct"
         ELSE /\ stage' = "Legacy"
              /\ disposition' = "Legacy"
   /\ UNCHANGED <<shapeValid, capacityReady, structuralEligible,
-      prefixCount, stagedCount, appendedCount, effectsStarted, retryCount>>
+      currentEventOrdinal, nextEventOrdinal, currentSourceOrdinal,
+      nextSourceOrdinal, prefixCount, stagedCount, appendedCount,
+      effectsStarted, retryCount>>
 
 Build ==
   /\ stage = "Admitted"
   /\ stage' = "Building"
   /\ UNCHANGED <<disposition, shapeValid, capacityReady,
-      structuralEligible, prefixCount, stagedCount, appendedCount,
-      effectsStarted, retryCount>>
+      structuralEligible, currentEventOrdinal, nextEventOrdinal,
+      currentSourceOrdinal, nextSourceOrdinal, prefixCount, stagedCount,
+      appendedCount, effectsStarted, retryCount>>
 
 (* Construction may have a complete private candidate before Prepare.  It is
    not visible in the final slot until StartEffects, so rollback can prove a
@@ -68,16 +88,18 @@ BuildPartial ==
   /\ stagedCount = 0
   /\ stagedCount' = 1
   /\ UNCHANGED <<stage, disposition, shapeValid, capacityReady,
-      structuralEligible, prefixCount, appendedCount, effectsStarted,
-      retryCount>>
+      structuralEligible, currentEventOrdinal, nextEventOrdinal,
+      currentSourceOrdinal, nextSourceOrdinal, prefixCount, appendedCount,
+      effectsStarted, retryCount>>
 
 PrepareSuccess ==
   /\ stage = "Building"
   /\ stagedCount = 1
   /\ stage' = "Prepared"
   /\ UNCHANGED <<disposition, shapeValid, capacityReady,
-      structuralEligible, prefixCount, stagedCount, appendedCount,
-      effectsStarted, retryCount>>
+      structuralEligible, currentEventOrdinal, nextEventOrdinal,
+      currentSourceOrdinal, nextSourceOrdinal, prefixCount, stagedCount,
+      appendedCount, effectsStarted, retryCount>>
 
 (* No visible effect has happened, so the exact populated prefix survives and
    the failed candidate is not retried through Legacy in this transaction. *)
@@ -88,7 +110,9 @@ PreEffectRollback ==
   /\ stagedCount' = 0
   /\ appendedCount' = 0
   /\ UNCHANGED <<disposition, shapeValid, capacityReady,
-      structuralEligible, prefixCount, effectsStarted, retryCount>>
+      structuralEligible, currentEventOrdinal, nextEventOrdinal,
+      currentSourceOrdinal, nextSourceOrdinal, prefixCount, effectsStarted,
+      retryCount>>
 
 StartEffects ==
   /\ stage = "Prepared"
@@ -98,14 +122,16 @@ StartEffects ==
   /\ appendedCount' = 1
   /\ stagedCount' = 0
   /\ UNCHANGED <<disposition, shapeValid, capacityReady,
-      structuralEligible, prefixCount, retryCount>>
+      structuralEligible, currentEventOrdinal, nextEventOrdinal,
+      currentSourceOrdinal, nextSourceOrdinal, prefixCount, retryCount>>
 
 Commit ==
   /\ stage = "Effects"
   /\ stage' = "Committed"
   /\ UNCHANGED <<disposition, shapeValid, capacityReady,
-      structuralEligible, prefixCount, stagedCount, appendedCount,
-      effectsStarted, retryCount>>
+      structuralEligible, currentEventOrdinal, nextEventOrdinal,
+      currentSourceOrdinal, nextSourceOrdinal, prefixCount, stagedCount,
+      appendedCount, effectsStarted, retryCount>>
 
 (* Once semantic effects have started, retrying the source through Legacy is
    forbidden: effect ownership is unknown and the queue must fail-stop. *)
@@ -114,8 +140,9 @@ PostEffectFailStop ==
   /\ stage' = "FailStopped"
   /\ retryCount' = 0
   /\ UNCHANGED <<disposition, shapeValid, capacityReady,
-      structuralEligible, prefixCount, stagedCount, appendedCount,
-      effectsStarted>>
+      structuralEligible, currentEventOrdinal, nextEventOrdinal,
+      currentSourceOrdinal, nextSourceOrdinal, prefixCount, stagedCount,
+      appendedCount, effectsStarted>>
 
 Next == Admit \/ Build \/ BuildPartial \/ PrepareSuccess \/ PreEffectRollback \/ StartEffects
          \/ Commit \/ PostEffectFailStop
@@ -126,6 +153,10 @@ TypeOK ==
   /\ shapeValid \in BOOLEAN
   /\ capacityReady \in BOOLEAN
   /\ structuralEligible \in BOOLEAN
+  /\ currentEventOrdinal \in 1..3
+  /\ nextEventOrdinal \in 1..3
+  /\ currentSourceOrdinal \in 1..3
+  /\ nextSourceOrdinal \in 1..3
   /\ prefixCount = 2
   /\ stagedCount \in 0..1
   /\ appendedCount \in 0..1
@@ -135,7 +166,11 @@ TypeOK ==
 AdmissionSound ==
   stage = "Admitted" =>
     disposition = "Direct" /\ shapeValid /\ capacityReady /\
-      structuralEligible
+      structuralEligible /\ IdentityAppendable
+
+NonAppendableIdentityCannotEnterDirect ==
+  ~IdentityAppendable =>
+    stage \notin {"Admitted", "Building", "Prepared", "Effects", "Committed"}
 
 LegacyBeforeEffects ==
   disposition = "Legacy" => ~effectsStarted /\ stagedCount = 0 /\ appendedCount = 0

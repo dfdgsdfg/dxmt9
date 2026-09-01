@@ -358,6 +358,10 @@ void countDirectChunkSlotContinuationStructuralRejected() {
   add(counters().directChunkSlotContinuationStructuralRejected);
 }
 
+void countDirectChunkSlotContinuationIdentityRejected() {
+  add(counters().directChunkSlotContinuationIdentityRejected);
+}
+
 void countDirectChunkSlotContinuationCommitted() {
   add(counters().directChunkSlotContinuationCommitted);
 }

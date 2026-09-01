@@ -104,6 +104,7 @@ struct Counters {
   std::atomic<std::uint64_t> directChunkSlotContinuationAdmitted{0};
   std::atomic<std::uint64_t> directChunkSlotContinuationCapacityRejected{0};
   std::atomic<std::uint64_t> directChunkSlotContinuationStructuralRejected{0};
+  std::atomic<std::uint64_t> directChunkSlotContinuationIdentityRejected{0};
   std::atomic<std::uint64_t> directChunkSlotContinuationCommitted{0};
   std::atomic<std::uint64_t> directChunkSlotContinuationPopulatedFallback{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackCount{0};

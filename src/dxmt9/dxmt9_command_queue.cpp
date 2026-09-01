@@ -3702,6 +3702,19 @@ CommandQueue::beginDirectChunkSlotReplay(
   bool continuation = false;
   if (populated) {
     perf::countDirectChunkSlotContinuationAttempted();
+    const auto currentProducerIdentity = cpuReadyTape_.inspectProducerIdentity(
+        core::CpuReadyTape::SourceRef{
+            .id = control.sourceId, .storage = control.storage});
+    if (!currentProducerIdentity) {
+      requestSchedulingStopLocked();
+      return {.status = DirectChunkSlotReplayStatus::FailStopped};
+    }
+    if (!core::compatibilityProducerIdentityAppendable(
+            *currentProducerIdentity, producerIdentity)) {
+      perf::countDirectChunkSlotContinuationIdentityRejected();
+      perf::countDirectChunkSlotContinuationPopulatedFallback();
+      return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+    }
     switch (core::directContinuationAdmission(*payload, capacity).disposition) {
       case core::DirectContinuationAdmission::Admitted:
         continuation = true;

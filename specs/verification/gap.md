@@ -95,13 +95,18 @@ pooled storage and copy-removal evidence remain open.
 
 The Direct ChunkSlot queue now has a bounded pre-effect continuation proof for
 non-UP Draw plus APPLY_STATE/constants. It admits only when every final SoA
-vector and uniform lookup chain already has capacity for the immutable plan;
-Present, ordered control/query/readback, Update*, UP, capture/trace, resource
-mutation, and unsupported shapes remain Legacy fallback. `TriangleFan` is an
-explicit structural exclusion because canonical replay decomposes it through
-the Legacy draw sink; classifying it as Direct would cross the active
-transaction and fail-stop the queue. Typed admission and
-fallback counters are emitted only when perf observation is enabled. Native
+vector and uniform lookup chain already has capacity for the immutable plan,
+and the candidate producer interval is exactly adjacent to the populated
+slot's last event and source ordinals. A gap, overlap, reordering, invalid
+identity, or ordinal overflow therefore takes Legacy before effects; the
+bounded model enumerates the exact `next = current + 1` relation in both
+identity dimensions. Present, ordered control/query/readback, Update*, UP,
+capture/trace, resource mutation, and unsupported shapes remain Legacy
+fallback. `TriangleFan` is an explicit structural exclusion because
+canonical replay decomposes it through the Legacy draw sink; classifying it as
+Direct would cross the active transaction and fail-stop the queue. Typed
+admission and fallback counters are emitted only when perf observation is
+enabled. Native
 coverage includes a populated Draw→Apply→Draw continuation, an insufficient
 capacity fallback, Present-tail exclusion, terminal commit failure,
 A→B→A state/completion differential, carrier-ledger zero assertions, and a
@@ -109,15 +114,21 @@ direct native truth table for malformed DrawRun shape, TriangleFan, Clear,
 Readback, and resource-mutation exclusions. `DirectChunkSlotContinuation.tla`
 is the small model/code boundary for the same admission, pre-effect rollback,
 commit, and post-effect fail-stop/no-retry contract. The ordinary Direct lane
-is enabled by default; the continuation itself is still strict fail-closed and does not
-claim broad performance promotion. Fresh bounded scene evidence is
-correctness-positive but only GT2 completed its benchmark result: GT2 committed
-2,703 continuations, while the supervised HDR1 sample committed 7,118 across
-4,080 Presents before timeout and the SFIV sample rendered normally before
-timeout while all 22 attempts fell back for capacity. All three reported zero
-continuation failures, chunk rejects, or GPU command-buffer errors. Completed
-matched cost/performance evidence and broader ordered-control/resource/capture
-faults remain open.
+is enabled by default; the continuation itself is still strict fail-closed and
+does not claim broad performance promotion. A 2026-09-02 GT2 run exposed the
+previously unpinned populated-slot producer-identity gap after semantic replay;
+the preflight relation above now rejects that shape before effects and the late
+commit guard remains defensive. The fixed default-on run completed 1,578
+Presents with zero commit failures, chunk rejects, or GPU command-buffer errors,
+while retaining 3.999 command buffers and 15.790 render passes per Present. A
+same-build direct-off diagnostic retained 3.999 command buffers and 15.797
+passes per Present, so this correction does not create a Metal locality split.
+The run is not performance-promotion evidence: default-on measured 24.362 FPS
+against 25.204 FPS direct-off in one sequential spot pair. Of 15,277
+continuation attempts, 79.54% rejected for capacity, 5.32% rejected for producer
+identity, and 15.13% were admitted. The remaining economic question is therefore
+the CPU cost of planning and attempting capacity-rejected continuations;
+broader ordered-control/resource/capture faults remain open.
 
 The PE recorder Wave 1A correction supersedes the older recorder counts below:
 `PeRecorderCommit.tla` now checks the generated C++ commit matrix, models the

@@ -2438,6 +2438,58 @@ void populatedSlotInsufficientCapacityFallsBackBeforeEffects() {
   dxmt9c_buffer_release(buffer);
 }
 
+void populatedSlotProducerIdentityGapFallsBackBeforeEffects() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr, "identity-gap fallback fixture buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+  const std::array records{drawRecord(identity)};
+
+  auto firstWire = makeWireFixture(records);
+  firstWire.envelope.producerIdentity = {
+      .firstEventOrdinal = 10u,
+      .lastEventOrdinal = 10u,
+      .firstSourceOrdinal = 20u,
+      .lastSourceOrdinal = 20u,
+  };
+  auto firstRaw = makeRaw(firstWire, 96u, false, &registry);
+  firstRaw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), firstRaw) ==
+                D3D_OK &&
+            fixture.routing->drawCalls == 1u &&
+            fixture.routing->ordinaryDrawCalls == 0u,
+        "first identity-qualified raw constructs the open Direct source");
+  dxmt9::CommandQueueArenaLeaseTestAccess::reserveDirectContinuationHeadroom(
+      fixture.routing->queue_);
+
+  auto gapWire = makeWireFixture(records);
+  gapWire.envelope.producerIdentity = {
+      .firstEventOrdinal = 12u,
+      .lastEventOrdinal = 12u,
+      .firstSourceOrdinal = 21u,
+      .lastSourceOrdinal = 21u,
+  };
+  auto gapRaw = makeRaw(gapWire, 97u, false, &registry);
+  gapRaw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), gapRaw) == D3D_OK &&
+            fixture.routing->drawCalls == 2u &&
+            fixture.routing->ordinaryDrawCalls == 1u &&
+            !dxmt9::CommandQueueArenaLeaseTestAccess::stopped(
+                fixture.routing->queue_) &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+                fixture.routing->queue_) == 2u,
+        "a forward-gapped producer interval must select Legacy before effects "
+        "and apply its draw exactly once without poisoning the queue");
+
+  dxmt9::d3d9::releaseRetainedWrappers(gapRaw);
+  dxmt9::d3d9::releaseRetainedWrappers(firstRaw);
+  dxmt9c_buffer_release(buffer);
+}
+
 void populatedContinuationCommitFailureIsTerminalWithoutRetry() {
   RuntimeFixture fixture(/*rejectAfterClear=*/false,
                          /*segmentSerial=*/false,
@@ -3119,6 +3171,7 @@ int main() {
     directAdmissionRejectionPreservesLegacyDrawBatchGrouping();
     populatedSlotDrawApplyDrawUsesCarrierFreeContinuation();
     populatedSlotInsufficientCapacityFallsBackBeforeEffects();
+    populatedSlotProducerIdentityGapFallsBackBeforeEffects();
     populatedContinuationCommitFailureIsTerminalWithoutRetry();
     lateStateFailureDoesNotDuplicateDiscardedDirectProgress();
     populatedSlotPresentTailIsExcludedFromContinuation();

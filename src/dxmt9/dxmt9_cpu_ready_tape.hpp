@@ -289,6 +289,21 @@ struct CpuReadyProducerIdentity {
                                    CpuReadyProducerIdentity) noexcept = default;
 };
 
+// An open compatibility source may represent several PE semantic batches only
+// when their closed producer intervals are exactly adjacent. Keep this check
+// value-only so Direct admission and the Tape commit guard cannot drift.
+constexpr bool compatibilityProducerIdentityAppendable(
+    CpuReadyProducerIdentity current,
+    CpuReadyProducerIdentity next) noexcept {
+  if (!next.importable()) return false;
+  if (next.absent() || current.absent()) return true;
+  return current.valid() &&
+      current.lastEventOrdinal != std::numeric_limits<std::uint64_t>::max() &&
+      current.lastSourceOrdinal != std::numeric_limits<std::uint64_t>::max() &&
+      next.firstEventOrdinal == current.lastEventOrdinal + 1u &&
+      next.firstSourceOrdinal == current.lastSourceOrdinal + 1u;
+}
+
 struct CpuReadyPublicationTicket {
   CpuReadySourceId id{};
   CpuReadyStorageRef storage{};
@@ -1774,21 +1789,17 @@ class CpuReadyTape {
       noteStaleReject();
       return false;
     }
+    if (!compatibilityProducerIdentityAppendable(entry->producerIdentity,
+                                                  next)) {
+      noteStaleReject();
+      return false;
+    }
     if (next.absent()) return true;
     if (entry->producerIdentity.absent()) {
       entry->producerIdentity = next;
       return true;
     }
     auto& current = entry->producerIdentity;
-    if (!current.valid() || current.lastEventOrdinal ==
-            std::numeric_limits<std::uint64_t>::max() ||
-        current.lastSourceOrdinal ==
-            std::numeric_limits<std::uint64_t>::max() ||
-        next.firstEventOrdinal != current.lastEventOrdinal + 1u ||
-        next.firstSourceOrdinal != current.lastSourceOrdinal + 1u) {
-      noteStaleReject();
-      return false;
-    }
     current.lastEventOrdinal = next.lastEventOrdinal;
     current.lastSourceOrdinal = next.lastSourceOrdinal;
     return true;

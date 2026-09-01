@@ -1998,6 +1998,10 @@ void compatibilityProducerIntervalsComposeWithoutPublishing() {
       .firstSourceOrdinal = 23u,
       .lastSourceOrdinal = 27u,
   };
+  check(compatibilityProducerIdentityAppendable({}, first) &&
+            compatibilityProducerIdentityAppendable(first, second) &&
+            compatibilityProducerIdentityAppendable(first, {}),
+        "shared producer-identity predicate admits empty and adjacent ranges");
   check(tape.extendCompatibilityProducerIdentity(source->ticket, first) &&
             tape.extendCompatibilityProducerIdentity(source->ticket, second),
         "consecutive direct replays extend one open producer interval");
@@ -2011,8 +2015,32 @@ void compatibilityProducerIntervalsComposeWithoutPublishing() {
   auto gap = second;
   gap.firstEventOrdinal = 14u;
   gap.lastEventOrdinal = 14u;
-  check(!tape.extendCompatibilityProducerIdentity(source->ticket, gap),
-        "producer event gaps fail closed before publication");
+  auto sourceGap = second;
+  sourceGap.firstSourceOrdinal = 29u;
+  sourceGap.lastSourceOrdinal = 29u;
+  auto overlap = second;
+  overlap.firstEventOrdinal = first.lastEventOrdinal;
+  overlap.firstSourceOrdinal = first.lastSourceOrdinal;
+  const CpuReadyProducerIdentity eventOverflow{
+      .firstEventOrdinal = std::numeric_limits<std::uint64_t>::max(),
+      .lastEventOrdinal = std::numeric_limits<std::uint64_t>::max(),
+      .firstSourceOrdinal = 1u,
+      .lastSourceOrdinal = 1u,
+  };
+  const CpuReadyProducerIdentity sourceOverflow{
+      .firstEventOrdinal = 1u,
+      .lastEventOrdinal = 1u,
+      .firstSourceOrdinal = std::numeric_limits<std::uint64_t>::max(),
+      .lastSourceOrdinal = std::numeric_limits<std::uint64_t>::max(),
+  };
+  check(!compatibilityProducerIdentityAppendable(second, gap) &&
+            !compatibilityProducerIdentityAppendable(second, sourceGap) &&
+            !compatibilityProducerIdentityAppendable(first, overlap) &&
+            !compatibilityProducerIdentityAppendable(eventOverflow, second) &&
+            !compatibilityProducerIdentityAppendable(sourceOverflow, second) &&
+            !tape.extendCompatibilityProducerIdentity(source->ticket, gap),
+        "producer gaps, overlap, and successor overflow fail closed before "
+        "publication");
   check(tape.sealAndPublish(source->ticket, 1u, 1u, 0u),
         "composed producer interval publishes with the source");
   const auto readyIdentity = tape.producerIdentity(

@@ -281,6 +281,7 @@ void countDirectChunkSlotContinuationAttempted();
 void countDirectChunkSlotContinuationAdmitted();
 void countDirectChunkSlotContinuationCapacityRejected();
 void countDirectChunkSlotContinuationStructuralRejected();
+void countDirectChunkSlotContinuationIdentityRejected();
 void countDirectChunkSlotContinuationCommitted();
 void countDirectChunkSlotContinuationPopulatedFallback();
 void countRingArenaHeapFallback(RingArenaKind kind, std::uint64_t bytes);
