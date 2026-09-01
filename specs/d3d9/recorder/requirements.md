@@ -10,7 +10,8 @@ tags: [specs, d3d9, recorder, pe, command-chunk]
 This topic refines the parent D3D9 hot-path contract
 (`R-CORE-3.1`–`3.8`, `R-CORE-11.1`–`11.18`) for the PE recorder. It preserves
 the ownership and POD boundaries in `R-ARCH-1.*`, `R-ARCH-2.*`,
-`R-ARCH-3.*`, and `R-ARCH-6.*`; the producer-ownership discipline in
+`R-ARCH-3.*`, `R-ARCH-6.*`, and the immutable-source lifecycle in
+`R-ARCH-7.11`–`7.19`; the producer-ownership discipline in
 `R-BACK-43.4`–`43.7`; and the evidence ladder in `R-VERIF-1.5`–`1.8`,
 `R-VERIF-6.4`–`6.6`, and `R-VERIF-7.1`–`7.4`.
 
@@ -599,3 +600,15 @@ must not retry, duplicate the batch, or route through legacy fallback. Retain,
 capacity, ledger, source order, and FIFO settlement counts must conserve at
 every role transition, and reclaim that releases blocked capacity must publish
 the wake/progress signal used by the waiting producer.
+
+**R-CORE-REC-7.9** The committed `PeSemanticBatchOwner` output is the PE
+specialization of `ImmutableSemanticSource` in R-ARCH-7.11 through
+R-ARCH-7.14. It must assign the producer event ordinal and complete semantic
+range needed to derive one `EndToEndSourceIdentity`, seal the same immutable
+record/payload/resource/control values for contiguous and segmented emission,
+and carry only pointer-free offsets, counts, qualified identities, capture
+token, and event ordinal across the PE/unix boundary. PE settlement must not
+claim Unix `SourceLease`, queue sequence, storage generation, or completion
+ownership; those fields are bound atomically by the importer/queue contract in
+R-BACK-2.90 through R-BACK-2.95. The all-family projection and fault matrix
+must reject a producer family that cannot preserve this mapping.

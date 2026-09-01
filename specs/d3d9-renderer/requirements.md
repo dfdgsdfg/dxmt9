@@ -286,6 +286,19 @@ defer, or coalesce completion. Only an explicitly authenticated SegmentSerial
 identity mapping may split one event into source completions, and it must
 preserve exact event-local segment order and all-or-nothing publication.
 
+**R-BACK-32.12** Renderer planning and linearization must consume the
+R-ARCH-7.13 `SynchronousSourceFacade` under the R-BACK-2.89 borrow protocol.
+`SourcePayloadView` is the renderer's call-local facade projection over either
+contiguous or segmented physical storage; it must not become graph, session,
+partition, observer, submission, or completion ownership. FrameGraph nodes and
+optimized replay ranges may retain only source-qualified command locators,
+generation-qualified identities, and compact derived values. Resource aliases,
+hazard summaries, pass actions, PSO keys, and first-draw snapshots form the
+R-ARCH-7.15 `ResolvedSourceSidecar`; they must be invalidated on source or
+storage-generation mismatch. The linearizer must reacquire and revalidate a
+fresh facade before resolving any locator, and only a locator-free completion
+projection may survive payload retirement.
+
 **R-BACK-32.2** Frame Graph construction must be deterministic: the same source
 view and retained resource-alias mapping must always produce the same DAG, the
 same optimizer outcome, and the same Metal call sequence. The renderer must not

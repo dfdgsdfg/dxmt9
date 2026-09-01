@@ -774,6 +774,24 @@ does not construct their production final wire or emit into CPU-ready Tape;
 that later provider remains default-off until the layered gates in
 `R-VERIF-6.4` and the backend acceptance contract pass.
 
+### 6.3 End-to-end source identity handoff
+
+The recorder is the first concrete owner in the architecture contract
+R-ARCH-7.11 through R-ARCH-7.19; it does not own the whole lifecycle.
+`PeSemanticBatchOwner` seals the ordered semantic source and supplies the
+producer event ordinal, qualified resource/control identities, exact role
+extents, capture token, and byte ranges. Contiguous and segmented visitors read
+that same sealed source. The PE bridge passes only the pointer-free descriptor
+defined by R-CORE-REC-7.6 through R-CORE-REC-7.9.
+
+Unix import authenticates that descriptor and adds the raw/source, queue
+sequence, storage-generation, and completion qualifications required to form
+the complete `EndToEndSourceIdentity` under R-BACK-2.90 through R-BACK-2.95.
+The recorder settles PE retains and capture state against the accepted event,
+but it must not fabricate a Unix `SourceLease`, retain a Unix facade, predict a
+queue sequence, or treat a physical segment as an independent completion
+source. R-VERIF-7.9 owns verification of this cross-side composition point.
+
 ## 7. Acceptance matrix
 
 ### 7.0 PE ABI and codegen audit

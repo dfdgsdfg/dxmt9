@@ -271,6 +271,98 @@ no-GPU terminal disposition from `Encoding` to `Reclaimed`; it must not invent
 and opt-in, with `PeImport`, `Receipt`, `SelectedParallel`, `DeviceLoss`, and
 `Queue` as the bounded owner-qualified values.
 
+### 2.5 End-to-end immutable source contract
+
+`R-ARCH-7.11` through `R-ARCH-7.19` make one semantic source, rather than a
+sequence of carriers, the architecture-wide unit of work. The terms below are
+normative interfaces; subsystem specs map them to concrete types.
+
+| Contract term | Owns | Must not own |
+|---|---|---|
+| `EndToEndSourceIdentity` | producer event, raw/source, queue sequence, storage generation, completion qualification | pointer, payload bytes, Metal object |
+| `ImmutableSemanticSource` | sealed ordered records, payload bytes, qualified resource/control identities, one reclaim authority | mutable PE shadow, resolved Metal objects, completion callback |
+| `SourceLease` | generation-qualified permission to keep the physical source resident and issue synchronous borrows | resolved span, Arena page pointer, session-global encoder state |
+| `SynchronousSourceFacade` | call-local typed records, spans, and bounded locators over one leased source | ownership, asynchronous escape, mutable storage |
+| `ResolvedSourceSidecar` | source-qualified Unix resource resolutions and compact derived planning/encode values | duplicate semantic payload, PE/ABI pointer, independent completion identity |
+| `CompletionProjection` | locator-free command/source completion facts needed after payload retirement | payload pointer, facade, source page, mutable native binding shadow |
+
+```mermaid
+flowchart LR
+    PE["PE semantic owner\nProducerOwned"]
+    WIRE["pointer-free source\nsealed identity"]
+    RAW["Unix authenticated source\nRawOwned + SourceLease"]
+    VIEW["SynchronousSourceFacade\nReplayBorrowed"]
+    FINAL["ChunkSlot / Arena final regions\nFinalOwned"]
+    ENC["EncodeSession / child range\nEncoding"]
+    GPU["receipt + resource waterlines\nGPUInFlight"]
+    DONE["CompletionProjection\nCompleted"]
+    FREE["one reclaim\nReclaimed"]
+
+    PE -->|commit| WIRE
+    WIRE -->|atomic copy or negotiated adoption| RAW
+    RAW -->|issue generation borrow| VIEW
+    VIEW -->|transactional direct projection| FINAL
+    FINAL -->|issue fresh encode borrow| ENC
+    ENC -->|submit| GPU
+    ENC -.->|explicit no-GPU terminal| FREE
+    GPU -->|ordered settlement| DONE
+    DONE -->|borrows zero + pins releasable| FREE
+```
+
+The diagram is a refinement sequence, not a mandatory allocation sequence.
+The compatibility importer may own a copied contiguous `RawOwned` extent;
+negotiated segmented transport may atomically adopt fixed regions. Both expose
+the same checked facade and preserve the same source identity. A direct replay
+may construct final SoA and payload regions once; a compatibility replay may
+materialize the named removable carrier. Neither choice changes command,
+resource, failure, Present, or completion semantics.
+
+Before import acceptance, the PE recorder transaction owns rollback and every
+producer retain. Import acceptance atomically transfers the logical reclaim
+authority to the Unix source identity; the PE call may then settle its local
+transaction, but no second completion owner is created. A copied bridge extent
+and its PE source may overlap physically during that call only as the named
+`copy.bridge.raw-owned` operation, never as two independently publishable or
+reclaimable sources.
+
+Facade construction follows three rules:
+
+1. Validate the complete pointer-free header, region bounds, record order, and
+   qualified resource identities before issuing a facade.
+2. Resolve typed values only inside a non-copyable synchronous borrow. A
+   segmented source uses region locators rather than pretending to have one
+   contiguous base pointer.
+3. Store only source-qualified locators or compact value snapshots in planners,
+   sessions, partitions, and sidecars. Reacquire and revalidate a facade at the
+   point of use.
+
+The Unix side may derive a `ResolvedSourceSidecar` once validation succeeds.
+Resource wrapper/Metal object references, hazard summaries, pass-action proof,
+PSO keys, and first-draw snapshots belong there. A sidecar shares the source
+lease and generation; only a locator-free `CompletionProjection` may survive
+early payload retirement. The PE wire and facade never contain COM, Metal, or
+Objective-C pointers.
+
+Failure ownership is fixed by the first visible effect:
+
+| Cut | Required disposition |
+|---|---|
+| count, reserve, validation, or adoption failure before any effect | restore the exact checkpoint; at most one typed compatibility fallback |
+| partial source adoption or partial source publication | invalid; publish nothing and release all reserved credit |
+| failure after adoption/receipt activation or an encoder/ordered-control effect | poison/fail-stop; never retry or duplicate the source |
+| zero-GPU source | settle the source identity through an explicit terminal projection without `GPUInFlight` |
+| normal/device-loss completion | settle ordered effects, return all borrows, release pins/sidecars, reclaim once, publish capacity wake |
+
+Subsystem traceability is intentionally bidirectional:
+
+| Detail owner | Narrows this contract through |
+|---|---|
+| PE semantic owner and fixed-role transport | `specs/d3d9/recorder/requirements.md` R-CORE-REC-7.2.1 and R-CORE-REC-7.6 through R-CORE-REC-7.9 |
+| Unix adoption, direct projection, typed borrow, completion/reclaim | `specs/backend/encode-scheduling/requirements.md` R-BACK-2.85 through R-BACK-2.95 |
+| FrameGraph/renderer facade consumption | `specs/d3d9-renderer/requirements.md` R-BACK-32.1, R-BACK-32.8, and R-BACK-32.12 |
+| Composed model, model/code trace, differential and GPU evidence | `specs/verification/requirements.md` R-VERIF-7.6 through R-VERIF-7.9 |
+| Copy classification and promotion | this document §2.3 and `requirements.md` R-ARCH-7.7 through R-ARCH-7.10 |
+
 ---
 
 ## 3. CPU-Bound Submission Sequence
@@ -300,13 +392,14 @@ sequenceDiagram
     else PE/unix bridge path
         Rec->>Rec: buildSparseState -> SparseStateInput
         Rec->>Rec: appendRecord (seal + flush every N records)
-        Rec->>Bridge: commitChunk(wire blob)
-        Bridge->>Import: one unix-call with POD blob
-        Import->>Import: validate header/table/ranges/handles
-        Import->>Import: copy blob, retain wrappers, bulk-mark resources
-        Import->>Worker: push raw chunk (bounded FIFO)
-        Worker-->>CQ: replay records, publish slot (deferred)
-        CQ->>Slot: append imported flat records
+        Rec->>Bridge: commit immutable pointer-free source
+        Bridge->>Import: one unix-call with contiguous or segmented descriptor
+        Import->>Import: validate complete source + qualified identity
+        Import->>Import: copy RawOwned or atomically adopt negotiated regions
+        Import->>Worker: publish SourceLease (bounded FIFO)
+        Worker->>Worker: issue synchronous facade + pure final-layout plan
+        Worker-->>Slot: direct final projection or typed compatibility replay
+        Slot-->>CQ: publish one immutable completion identity
     end
     CQ-->>App: return after queue ownership
 ```
@@ -321,12 +414,14 @@ CPU-bound design rules:
 
 - `Set*` updates PE state and invalidates derived flat-state caches; it does not
   call Metal.
-- Ordinary draws submit `DrawParam` spans and payload spans. Queue append owns
-  the copied data before returning.
+- Ordinary draws submit bounded typed values. A synchronous facade may expose
+  spans only while its `SourceLease` pins the source generation; queue-owned
+  final storage or an explicit compatibility owner must exist before return.
 - `ChunkSlot` arrays reserve capacity and retain capacity after `clear()`, so
   warm frames should not allocate per ordinary draw.
-- Importer coalescing may use temporary `DrawParam` vectors. That cost is
-  acceptable unless bridge-heavy benchmarks show it as CPU-bound.
+- Direct replay planning may own counts and locators but no `DrawParam` or
+  payload carrier. Compatibility carriers remain the named removable ledger
+  class and must not silently become the default for a newly supported family.
 
 ---
 

@@ -525,3 +525,17 @@ unconstrained `[Next]_vars` stutter behavior. These proofs assume scheduler
 fairness, GPU completion, the specified C++ atomic ordering, and driver
 behavior; those assumptions are environment boundaries rather than model
 proofs.
+
+**R-VERIF-7.9** One composed model/code trace must bind R-ARCH-7.11 through
+R-ARCH-7.19 across the real subsystem transitions. Its state must include the
+complete `EndToEndSourceIdentity`, physical representation kind, storage
+generation, lease/borrow count, sidecar generation, effect cut, completion
+projection, reclaim authority, and capacity-wake generation. Native
+isomorphism must compare the same transition relation against production PE
+accept/import, direct and compatibility replay, serial and selected-child
+encode, normal/no-GPU/device-loss completion, and reclaim. Deliberate
+counterexamples must cover duplicate logical identity, partial adoption,
+facade escape or reclaim with a borrow, stale sidecar/locator use, retry after
+an effect, completion before child join, double reclaim, and missing capacity
+wake. Component models remain useful but cannot substitute for this composed
+trace.

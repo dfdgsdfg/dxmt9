@@ -1942,6 +1942,27 @@ refinement, GPU behavior, pixels, locality, and performance remain open. The
 bounded protocol is checked by `tla/SegmentedTransportV1.tla` and its
 production/negative configurations.
 
+### 10.1 Source lease, facade, and completion projection
+
+This subsystem specializes R-ARCH-7.11 through R-ARCH-7.19. Authenticated
+contiguous V2 and segmented fixed regions are physical representations of one
+`ImmutableSemanticSource`; their import paths bind the same
+`EndToEndSourceIdentity`. `GenerationQualifiedSourceBorrow` and
+`SynchronousSourcePayloadBorrow` are the queue-issued `SourceLease` and
+`SynchronousSourceFacade` enforcement surfaces. `SourcePayloadView` is a
+call-local facade projection used inside that borrow, not a stored owner.
+
+`TransactionalChunkSlotAssembler` consumes the facade and constructs final
+queue storage. Compatibility replay may use the explicitly measured carrier,
+but it may not alter identity, completion, or failure semantics. FrameGraph,
+EncodeSession, DCE, and partition workers retain only qualified locators or
+compact value snapshots and reacquire the facade under the same generation at
+use. Resource resolution and pass/hazard/binding summaries form the
+`ResolvedSourceSidecar`; `PostEncodeCompletionLedger` and pending completion
+records may retain only the locator-free `CompletionProjection` after early
+payload retirement. R-BACK-2.95 owns these mappings and R-VERIF-7.9 owns their
+composed trace.
+
 ## 11. Verification Mapping
 
 | Contract | Evidence |
@@ -1950,6 +1971,7 @@ production/negative configurations.
 | General bounded ready-prefix DCE | missing extension or refinement model plus pure summary tests |
 | Tape layout and ABA | `SegmentedTransportV1.tla` now covers the fixed-role semantic-batch handoff, complete reservation/adoption, exact contiguous emission, checkpoint rollback, FIFO settlement, and wake protocol; broader physical multi-segment packing, jumbo/non-wrapping page layout, generation rejection, ordered reclaim, and oversize rollback remain separate obligations |
 | Fixed-role `SegmentedTransportV1` / later `ExactFixed` (`R-BACK-2.90`–`2.94`) | opt-in fixed-region bridge plus host immutable-owner/21-family ExactFixed binding; bounded TLA model and six expected-failure configurations; production CPU-ready Tape role binding and promotion evidence remain open |
+| End-to-end source lease/facade/completion composition (R-BACK-2.95, R-ARCH-7.11–7.19) | Existing pipeline lifecycle and typed-borrow evidence covers Unix stages; R-VERIF-7.9 requires the missing PE-to-reclaim identity-qualified composed trace and counterexamples |
 | CPU-ready admission and session progress | native admission policy specs cover exact Writing/headroom qualification, real lease charge, stale identity, the complete typed drain matrix, unlocked wait, semantic-drain priority, and exact Ready over admission/writer pressure. The production join spec fills all 31 Ready controls and composes the real replay-drain queue with a direct real `QueueLifecycleController::waitForSequence` call, proving one Present plus seven admission escapes and 23 exact producer-fence escapes cover the complete fence in FIFO order without a capacity-generation transition. Exact-head at-most-once tokens, target coverage, restore eligibility, ownership conservation, admission retry, completion-fence return, and distinct counters are pinned through production CVs. GT2 r17 binds the actual reserve path, records 672 producer-wait escapes, returns from reserve, and publishes a fully settled 147-segment v2 sidecar with zero watchdog/GPU errors. Four sibling cases retain Present, non-Arena, ordinary-capacity, and high-water ineligibility without token consumption; generation retry retains priority. Seeded `EncodeSchedulingProgress` composes admission progress followed by the post-admission producer fence and return. |
 | Pass streaming | planner specs cover the allocation-free exact four-command proof, malformed/unsupported shapes, identity/attachment/alias hazards, complete coverage, and the unchanged universal validator. Production specs cover default-off natural replay, exact joined replay, render-pass begin/end `3 -> 2`, one removed mid-chunk split, stale pre-effect restore, ordered-release and stop drains, pending-carrier capture-start drain through the full capture predicate, one observer, natural FIFO completion, receipt-backed retirement/reclaim, and the independent 8+1 bounded-window edge. |
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |

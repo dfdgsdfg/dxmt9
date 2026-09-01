@@ -23,7 +23,7 @@ another:
 | Submission boundary | A command buffer or jointly committed command-buffer group enters Metal execution. |
 
 The requirements `R-BACK-2.35` through `R-BACK-2.50`, `R-BACK-2.57`
-through `R-BACK-2.67`, and `R-BACK-2.76` through `R-BACK-2.84` are
+through `R-BACK-2.67`, and `R-BACK-2.76` through `R-BACK-2.95` are
 authoritative here.
 
 ## 1. Producer / Encode Overlap
@@ -1266,3 +1266,17 @@ predicate after wake. The fixed-role transport and later ExactFixed provider
 remain default-off with EventSerial/Legacy fallback reachable until formal,
 native model binding, GPU, wild, locality, and performance evidence satisfy
 `R-BACK-2.50` and `R-VERIF-6.4`.
+
+**R-BACK-2.95** Unix import, replay, encode scheduling, completion, and reclaim
+must implement the `ImmutableSemanticSource` composition in R-ARCH-7.11 through
+R-ARCH-7.19. Import must bind the authenticated PE event to one queue source,
+storage generation, sequence, and completion identity before publication.
+`TransactionalChunkSlotAssembler` and compatibility replay must consume only a
+generation-qualified `SynchronousSourceFacade`; their different physical
+representations must preserve the same effective commands and completion
+identity. `SourcePayloadView` is a facade projection, never an owner.
+FrameGraph, session, and partition state may retain only source-qualified
+locators or compact value snapshots and must reacquire a facade at use.
+After payload retirement only a locator-free completion projection may remain.
+Normal completion, state-only/no-GPU settlement, device loss, rollback, poison,
+and capacity wake must each terminate the same identity exactly once.

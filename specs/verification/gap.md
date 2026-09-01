@@ -8,6 +8,20 @@ tags: [specs, gap, verification]
 
 Domain-owned implementation and evidence gap tracker. Use the [root gap index](../gap.md) for cross-domain rollup.
 
+## End-to-end immutable source composition
+
+R-VERIF-7.9 now owns the missing composition from PE semantic acceptance to
+terminal reclaim under one `EndToEndSourceIdentity`. Existing recorder,
+segmented-transport, direct-assembler, typed-borrow, parallel-binding,
+completion, and reclaim models remain valid component proofs. They do not yet
+form one production-bound trace across the PE/import cut. Closure requires the
+real transition owners, storage/sidecar generations, borrow cardinality,
+effect cut, locator-free completion projection, reclaim authority, and
+capacity-wake generation, plus deliberate duplicate-identity, partial-adopt,
+facade-escape, stale-sidecar, retry-after-effect, pre-join completion,
+double-reclaim, and missing-wake counterexamples. Until then the architecture
+contract is normative but its full model/code isomorphism is partial.
+
 ## Recorder fault evidence boundary (2026-08-31)
 
 The native `dxmt9-pe-recorder-fault-matrix-spec` binds the common typed fault

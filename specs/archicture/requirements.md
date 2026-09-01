@@ -341,3 +341,71 @@ PE or bridge change; then matched wild counters proving the named removable
 class fell without displacement into retention, waits, or another copy class.
 Timing alone, a lower call count, or a speculative merge is not promotion
 evidence.
+
+**R-ARCH-7.11** Every accepted producer batch must have one stable
+`EndToEndSourceIdentity` from PE commit through terminal reclaim. The identity
+must qualify the producer event ordinal, authenticated raw/source identity,
+queue sequence, storage generation, and completion identity. Physical
+contiguous, segmented, `ChunkSlot`, Arena, or early-retirement representations
+may refine that identity but must not create a second logical command stream or
+independently reclaimable completion owner.
+
+**R-ARCH-7.12** An `ImmutableSemanticSource` is the authoritative ordered
+semantic byte stream for one `EndToEndSourceIdentity`. Publication seals its
+record order, payload bytes, qualified resource identities, and control
+dispositions. A representation change may copy or directly adopt those bytes
+only through a named R-ARCH-7.7 ledger class; it must preserve one reclaim
+authority and must not mutate the published semantics.
+
+**R-ARCH-7.13** Consumers must access a published source through a
+`SynchronousSourceFacade` issued by a generation-qualified `SourceLease`. The
+facade is a non-owning value view: it may expose checked typed records, bounded
+spans, and `(region, offset, length)` locators only for the issuing synchronous
+scope. It must not expose an ABI-crossing pointer, Arena page pointer, mutable
+source storage, or a span/capability that can be retained by a queue node,
+session, callback, completion object, or asynchronous task.
+
+**R-ARCH-7.14** Contiguous and segmented physical sources must resolve to the
+same facade semantics. PE/unix transport remains pointer-free and
+bounds-checkable. Direct adoption requires an explicitly negotiated
+shared-ownership ABI that atomically transfers the whole source lease; in its
+absence the unix importer must establish `RawOwned` storage through the named
+`copy.bridge.raw-owned` class. Partial adoption, role-local publication, and
+embedded process-local pointers are invalid.
+
+**R-ARCH-7.15** Unix resource resolution, hazard/pass summaries, PSO keys,
+first-draw snapshots, and other derived encode data belong to a compact
+`ResolvedSourceSidecar`, not to the immutable wire. A sidecar must be qualified
+by the source identity and storage generation, must not own a second copy of
+the semantic payload, and must not outlive the source lease unless it has been
+projected to a locator-free completion value. Metal and Objective-C objects
+remain unix-owned and must never enter the PE wire or source facade.
+
+**R-ARCH-7.16** Replay direct construction must be a pure bounded plan followed
+by one transactional emission into final queue-owned storage. Planning may own
+counts, offsets, masks, hashes, and locators, but no encoder-visible record or
+payload byte. Unsupported record families, insufficient capacity, ordered
+controls, or unresolved lifetime evidence must fail closed before effects;
+post-adoption or post-encoder failure must follow the specified fail-stop path.
+
+**R-ARCH-7.17** Serial and partitioned encoding may transfer only immutable,
+source-qualified ranges and locator-free snapshots across threads. Each worker
+must reacquire a synchronous facade under the same source lease and generation.
+The coordinator alone owns session-global encoder, render-pass action, hazard,
+Present, query, completion, and reclaim state unless a narrower subsystem
+requirement proves an explicit transfer.
+
+**R-ARCH-7.18** A source may reach `Reclaimed` exactly once only after all
+synchronous borrows have returned, every encoder or ordered-control effect has
+settled, the completion authority has advanced, and all source-qualified
+resource pins and sidecars are releasable. Reclaim that frees admission credit
+must publish the generation-qualified wake consumed by blocked producers. A
+zero-GPU terminal path must settle the same identity without fabricating a GPU
+milestone.
+
+**R-ARCH-7.19** The end-to-end contract must be verified as one composition,
+not inferred from green component models. One deterministic lifecycle trace and
+one bounded formal refinement must cover PE acceptance/import, source sealing,
+facade borrow/return, direct or compatibility replay, serial or selected-child
+encode, completion, and reclaim. Subsystem models may abstract adjacent stages
+only through the transitions and fields defined by `EndToEndSourceIdentity`.

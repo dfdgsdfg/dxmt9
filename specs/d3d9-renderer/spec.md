@@ -215,7 +215,7 @@ data-oriented encode path, which is already function-separated (so the §15
 | Spec concept | Actual code symbol | Location |
 |---|---|---|
 | `ArgumentEncodingContext` (AEC) | `encoders::EncodeContext` (a view bundle, **not** a stateful class) + the free functions `encoders::beginRenderPass` / `encodeDraw` / `encodeChunk` | `src/dxmt9/dxmt9_draw_encoder.{hpp,mm}` |
-| `SourcePayloadView` | `core::SourcePayloadView`, an immutable borrowed logical-source view. The legacy adapter wraps one `core::ChunkSlot`; the Arena adapter resolves one complete packed payload-block chain without exposing page pointers. | `src/dxmt9/dxmt9_source_payload.{hpp,cpp}` |
+| `SourcePayloadView` | `core::SourcePayloadView`, the R-ARCH-7.13 call-local `SynchronousSourceFacade` projection. The legacy adapter wraps one `core::ChunkSlot`; the Arena adapter resolves one complete packed payload-block chain without exposing page pointers. It is never the source owner. | `src/dxmt9/dxmt9_source_payload.{hpp,cpp}` |
 | `ImportContext` / the source-ready hook | `render::IRenderBackend::onSourceReady` carries one `core::SourcePayloadView` plus source identity and encode-session context. The `onChunkReady` compatibility adapter constructs the same logical view from a legacy `ChunkSlot`. | `src/dxmt9/render/backend_interface.hpp`, `src/dxmt9/render/{traditional_backend,framegraph_backend}.cpp` |
 | AEC "encoder lifecycle" vs "draw emission" split (§15) | already distinct functions: `beginRenderPass` (open) / `encodeDraw` (+ a clear-within-pass) (emit) / `endEncoding` (close) | `src/dxmt9/dxmt9_draw_encoder.mm` |
 | `IExternalDrawEmitter` | new interface wrapping `encoders::encodeDraw` + a clear emitter; `endEncoding`/`beginRenderPass` stay caller-owned | new `src/dxmt9/render/` |
@@ -229,6 +229,11 @@ source's packed block chain. Both adapters expose stable
 `(retainedSourceIndex, commandIndex)` attribution and call-local typed record
 resolution. The view owns no payload: queue storage remains pinned through the
 source completion contract in `specs/backend/encode-scheduling/requirements.md`.
+R-BACK-32.12 additionally requires graph, optimizer, session, and partition
+state to retain only source-qualified locators or compact sidecar values and to
+reacquire this facade under the R-BACK-2.89 generation-qualified borrow before
+resolution. The end-to-end identity and reclaim authority remain those of
+R-ARCH-7.11 through R-ARCH-7.19, not a renderer-local identity.
 
 ---
 
