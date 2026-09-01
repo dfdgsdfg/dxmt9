@@ -10,17 +10,40 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## End-to-end immutable source composition
 
-R-VERIF-7.9 now owns the missing composition from PE semantic acceptance to
-terminal reclaim under one `EndToEndSourceIdentity`. Existing recorder,
-segmented-transport, direct-assembler, typed-borrow, parallel-binding,
-completion, and reclaim models remain valid component proofs. They do not yet
-form one production-bound trace across the PE/import cut. Closure requires the
-real transition owners, storage/sidecar generations, borrow cardinality,
-effect cut, locator-free completion projection, reclaim authority, and
-capacity-wake generation, plus deliberate duplicate-identity, partial-adopt,
-facade-escape, stale-sidecar, retry-after-effect, pre-join completion,
-double-reclaim, and missing-wake counterexamples. Until then the architecture
-contract is normative but its full model/code isomorphism is partial.
+The production identity spine now composes PE semantic acceptance through
+terminal reclaim. PE ExactFixed and segmented descriptors carry a closed
+producer event/source interval; Unix import rejects partial intervals, Raw and
+CPU-ready owners preserve it, direct continuation extends only consecutive
+intervals without adding a publish boundary, and the generation-qualified
+lifecycle sidecar carries it through completion and reclaim. The strict
+production observer rejects missing or cross-raw duplicate identity.
+`CpuPipelineLifecycle` checks the same completeness/non-overlap relation and
+has independent duplicate-event, duplicate-source, and partial-identity
+expected failures. Existing
+borrow, effect-cut, child-join, completion, reclaim, device-loss, and wake
+counterexamples remain the other axes of R-VERIF-7.9. Broader all-family direct
+projection, C++ atomic-order evidence, Wine/GPU oracles, and promotion gates
+remain open; they no longer represent a missing PE-to-reclaim identity join.
+The composed model/code binding does not yet distinguish the valid complete
+`RawOwned` copy from an invalid PE span retained after bridge return or an
+unowned same-address alias. Those two expected-failure traces are required by
+R-ARCH-7.20 and R-VERIF-7.9 before any shared-address adoption proposal.
+
+R-VERIF-7.10 additionally requires a source-wide replay-state transaction and
+an explicit core/optimizer boundary. Production currently reuses the
+imperative `DeviceReplaySink`/device-setter state path, while Direct replay
+changes the draw destination. It does not yet expose one pure
+`project(persistentState, source)` transition or atomically commit the next
+state with final-storage publication. The model/code transition table,
+A→B→A/ordered-control cases, state-commit-before-emission and partial-publish
+counterexamples, and Legacy/Direct next-state differential remain open.
+After those close, R-ARCH-7.23 and R-BACK-2.99 require a production/API source
+audit proving `DrawRunSubmission`, equivalent per-draw AoS carriers,
+carrier-specific counters, adapters, and carrier-only test seams are absent.
+R-ARCH-7.24 and R-BACK-2.100 additionally require a fresh owner-qualified
+ledger proving the PE emission, current-ABI RawOwned copy, final-SoA emission,
+and required GPU-visible writes are the only large materializations; no current
+run closes that four-boundary reconciliation yet.
 
 ## Recorder fault evidence boundary (2026-08-31)
 

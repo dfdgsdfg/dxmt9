@@ -495,9 +495,10 @@ current ABI lacks shared-lease adoption, and GPU-visible writes required by
 Metal resources or transient bindings. Replay direct-cursor state, queue
 handoff, sidecar construction, session transfer, completion, and reclaim must
 move leases, identities, locators, or bounded compact values rather than
-O(source bytes) or O(draw-state) storage. After `UnixOwnedSourceLeaseV1` is
-promoted, direct construction into that lease replaces the PE emission/import
-overlap and the separate `RawOwned` copy is no longer permitted.
+O(source bytes) or O(draw-state) storage. The copied `RawOwned` transfer remains
+the stable default floor. An experimental shared-lease provider may remove that
+copy only inside its explicitly selected lane and does not reclassify or weaken
+the default ownership contract.
 
 `ExplicitParallelCompactSoA` may add one fourth, experimental class: a single
 transactional `RawOwned`-to-pass-local compact indexed SoA emission for one
@@ -513,15 +514,18 @@ themselves evidence of a GPU byte copy. GPU-transfer accounting must distinguish
 resource reference/API command emission from known CPU writes, shared/private
 resource uploads, and driver-internal transfers whose byte count is unavailable.
 
-**R-ARCH-7.25** The target PE-to-Unix transport is
-`UnixOwnedSourceLeaseV1`. Unix must allocate a bounded pool of source regions
-at device creation or through an amortized refill, and issue PE one typed
-writable capability containing only a lease identity, generation, writable
-producer mappings, role capacities, and source-size limit. PE must construct the
-canonical pointer-free record, handle, and payload roles directly in those
-regions. The committed descriptor contains the lease identity, generation,
-used extents, wire header, and `EndToEndSourceIdentity`; it must not contain a
-retained process pointer, C++ object, allocator identity, or mutable span.
+**R-ARCH-7.25** `CopiedRawOwned` is the stable default PE-to-Unix ownership
+provider. `UnixOwnedSourceLeaseV1` is an `ExperimentalCandidate` whose fallback
+is `CopiedRawOwned`; it must be selected once per device or queue before source
+construction and must not activate when unset. In the candidate lane, Unix must
+allocate a bounded pool of source regions at device creation or through an
+amortized refill, and issue PE one typed writable capability containing only a
+lease identity, generation, writable producer mappings, role capacities, and
+source-size limit. PE must construct the canonical pointer-free record, handle,
+and payload roles directly in those regions. The committed descriptor contains
+the lease identity, generation, used extents, wire header, and
+`EndToEndSourceIdentity`; it must not contain a retained process pointer, C++
+object, allocator identity, or mutable span.
 
 The pool is bounded by both lease count and resident bytes. Exhaustion must
 apply one observable producer back-pressure policy and generation-qualified
@@ -562,4 +566,8 @@ acquire, wait time, occupancy/peak, commit, cancel, revoke failure, stale
 generation, reclaim, and wake counts. Promotion requires
 `copy.bridge.raw-owned` to reach zero without increasing PE final-wire
 materialization, source residency, admission wait, or frame latency beyond its
-declared gate.
+declared gate. Zero copied bytes is not sufficient: repeated matched workloads
+must show a positive end-to-end CPU or frame-time benefit beyond the declared
+noise floor in a workload where bridge ownership transfer is on the critical
+path. In the absence of that evidence, the candidate remains experimental or
+is retired and `CopiedRawOwned` remains the default.
