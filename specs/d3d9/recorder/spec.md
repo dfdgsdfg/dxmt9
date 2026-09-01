@@ -731,8 +731,9 @@ qualified-handle count, and total wire bytes (including header, tables,
 payload, alignment, and padding) are checked against the 32 MiB total-wire
 cap. Canonical D9C V2 contributes a 48-byte header, 32-byte record row,
 16-byte handle row, and 16-byte section descriptor. The fixed
-`D9CCommandChunkSegmentedTransportV1` descriptor is 112 bytes, ending in the
-16-byte capture-token/event-ordinal pair; its role byte counts exclude
+`D9CCommandChunkSegmentedTransportV1` descriptor is 144 bytes, ending in the
+16-byte capture-token/event-ordinal pair followed by the 32-byte immutable
+producer event/source interval; its role byte counts exclude
 inter-table alignment, which the importer reconstructs from header offsets.
 The trusted in-process recorder pointer boundary ends at this owner;
 the transport and Tape contain only validated value metadata and owned
@@ -779,10 +780,11 @@ that later provider remains default-off until the layered gates in
 The recorder is the first concrete owner in the architecture contract
 R-ARCH-7.11 through R-ARCH-7.24; it does not own the whole lifecycle.
 `PeSemanticBatchOwner` seals the ordered semantic source and supplies the
-producer event ordinal, qualified resource/control identities, exact role
-extents, capture token, and byte ranges. Contiguous and segmented visitors read
-that same sealed source. The PE bridge passes only the pointer-free descriptor
-defined by R-CORE-REC-7.6 through R-CORE-REC-7.9.
+closed producer event/source interval, qualified resource/control identities,
+exact role extents, capture token, and byte ranges. Contiguous and segmented
+visitors read that same sealed source. The PE bridge passes only the
+pointer-free descriptor and lifetime contract defined by R-CORE-REC-7.6
+through R-CORE-REC-7.10.
 
 Unix import authenticates that descriptor and adds the raw/source, queue
 sequence, storage-generation, and completion qualifications required to form

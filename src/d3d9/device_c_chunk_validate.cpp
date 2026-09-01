@@ -968,6 +968,9 @@ CommandChunkValidationResult validateCommandChunk(
   if (out) {
     *out = {};
   }
+  if (!commandChunkProducerIdentityImportable(envelope.producerIdentity)) {
+    return failure(CommandChunkValidationStatus::InvalidSourceIdentity);
+  }
   D9CCommandChunkWireHeader header{};
   if (!load(blob, 0u, header)) {
     return failure(CommandChunkValidationStatus::MissingHeader);
@@ -1058,6 +1061,9 @@ bool importPrevalidatedCommandChunk(
     std::span<const std::byte> blob, const CommandChunkEnvelope& envelope,
     ImportedChunkView& out) noexcept {
   out = {};
+  if (!commandChunkProducerIdentityImportable(envelope.producerIdentity)) {
+    return false;
+  }
   D9CCommandChunkWireHeader header{};
   if (!load(blob, 0u, header) ||
       envelope.version != D9C_COMMAND_CHUNK_VERSION ||
@@ -1116,6 +1122,11 @@ CommandChunkValidationResult validateSegmentedCommandChunk(
     std::span<const std::byte> payload, const CommandChunkEnvelope& envelope,
     ImportedChunkView* out) noexcept {
   if (out) *out = {};
+  if (!commandChunkProducerIdentityImportable(transport.producerIdentity) ||
+      !commandChunkProducerIdentityEqual(transport.producerIdentity,
+                                         envelope.producerIdentity)) {
+    return failure(CommandChunkValidationStatus::InvalidSourceIdentity);
+  }
   const auto& header = transport.header;
   const auto expectedRecords =
       static_cast<std::uint64_t>(header.recordCount) *

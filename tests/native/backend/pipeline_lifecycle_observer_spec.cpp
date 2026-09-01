@@ -801,6 +801,95 @@ void physicalBatchMemberTruthTable() {
         "physical batch closure accepts every ordered member");
 }
 
+void endToEndProducerIdentityTruthTable() {
+  PipelineQueueSnapshot queue{};
+  queue.capacity = 4u;
+  const auto arrival = [&](PipelineIdentity identity) {
+    return PipelineLifecycleEvent{
+        .identity = identity,
+        .from = PipelineStage::SourceArrival,
+        .to = PipelineStage::ProducerOwned,
+        .payloadKind = PipelinePayloadKind::Arena,
+        .disposition = PipelineDisposition::Advance,
+        .owner = PipelineOwner::PeImport,
+        .before = queue,
+        .after = queue};
+  };
+  const PipelineIdentity complete{
+      .firstProducerEventOrdinal = 7u,
+      .lastProducerEventOrdinal = 8u,
+      .firstProducerSourceOrdinal = 11u,
+      .lastProducerSourceOrdinal = 14u,
+      .workId = 31u,
+      .sourceOrdinal = 41u,
+      .seqId = 51u,
+      .generation = 61u,
+  };
+  {
+    PipelineLifecycleObserver observer(true, true);
+    emitPipelineLifecycleEvent(observer.productionSink(), arrival(complete));
+    check(observer.valid(),
+          "strict production observer accepts a complete PE-to-storage identity");
+  }
+  {
+    PipelineLifecycleObserver observer(true, true);
+    auto missing = complete;
+    missing.firstProducerEventOrdinal = 0u;
+    missing.lastProducerEventOrdinal = 0u;
+    missing.firstProducerSourceOrdinal = 0u;
+    missing.lastProducerSourceOrdinal = 0u;
+    emitPipelineLifecycleEvent(observer.productionSink(), arrival(missing));
+    check(observer.error() == PipelineObservationError::InvalidIdentity,
+          "strict production observer rejects a missing PE identity");
+  }
+  {
+    PipelineLifecycleObserver observer(true, true);
+    auto partial = complete;
+    partial.lastProducerEventOrdinal = 0u;
+    emitPipelineLifecycleEvent(observer.productionSink(), arrival(partial));
+    check(observer.error() == PipelineObservationError::InvalidIdentity,
+          "strict production observer rejects a partial PE identity");
+  }
+  {
+    PipelineLifecycleObserver observer(true, true);
+    auto otherRaw = complete;
+    otherRaw.firstProducerSourceOrdinal = 15u;
+    otherRaw.lastProducerSourceOrdinal = 18u;
+    otherRaw.workId = 32u;
+    otherRaw.sourceOrdinal = 42u;
+    otherRaw.seqId = 52u;
+    emitPipelineLifecycleEvent(observer.productionSink(), arrival(complete));
+    emitPipelineLifecycleEvent(observer.productionSink(), arrival(otherRaw));
+    check(observer.error() ==
+              PipelineObservationError::DuplicateOrRegressedStage,
+          "a different raw source cannot reuse a producer event interval");
+  }
+  {
+    PipelineLifecycleObserver observer(true, true);
+    auto otherRaw = complete;
+    otherRaw.firstProducerEventOrdinal = 9u;
+    otherRaw.lastProducerEventOrdinal = 10u;
+    otherRaw.workId = 32u;
+    otherRaw.sourceOrdinal = 42u;
+    otherRaw.seqId = 52u;
+    emitPipelineLifecycleEvent(observer.productionSink(), arrival(complete));
+    emitPipelineLifecycleEvent(observer.productionSink(), arrival(otherRaw));
+    check(observer.error() ==
+              PipelineObservationError::DuplicateOrRegressedStage,
+          "a different raw source cannot reuse a producer source interval");
+  }
+  {
+    PipelineLifecycleObserver observer(true, true);
+    auto segmented = complete;
+    segmented.sourceOrdinal = 42u;
+    segmented.seqId = 52u;
+    emitPipelineLifecycleEvent(observer.productionSink(), arrival(complete));
+    emitPipelineLifecycleEvent(observer.productionSink(), arrival(segmented));
+    check(observer.valid(),
+          "one raw producer interval may qualify several SegmentSerial sources");
+  }
+}
+
 void physicalBatchOwnerChainRetainsReclaimClosure() {
   FakePipelineQueue queue;
   auto first = queue.makeSource(1, PipelinePayloadKind::Arena);
@@ -1303,6 +1392,7 @@ int main() {
     completionFrontierTruthTable();
     lifecycleArithmeticTruthTable();
     physicalBatchMemberTruthTable();
+    endToEndProducerIdentityTruthTable();
     physicalBatchOwnerChainRetainsReclaimClosure();
     physicalBatchOwnerFinalizeRejectsOmittedTail();
     explicitCompletionAndFinishFrontiers();

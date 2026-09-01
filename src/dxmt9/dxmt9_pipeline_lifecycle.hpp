@@ -272,6 +272,10 @@ constexpr bool pipelineLifecycleFactsConsistent(
 }
 
 struct PipelineIdentity {
+  std::uint64_t firstProducerEventOrdinal = 0;
+  std::uint64_t lastProducerEventOrdinal = 0;
+  std::uint64_t firstProducerSourceOrdinal = 0;
+  std::uint64_t lastProducerSourceOrdinal = 0;
   std::uint64_t workId = 0;
   std::uint64_t sourceOrdinal = 0;
   std::uint64_t seqId = 0;
@@ -282,6 +286,24 @@ struct PipelineIdentity {
 
   constexpr bool valid() const noexcept {
     return workId != 0 && sourceOrdinal != 0 && seqId != 0 && generation != 0;
+  }
+
+  constexpr bool producerIdentityAbsent() const noexcept {
+    return firstProducerEventOrdinal == 0u &&
+        lastProducerEventOrdinal == 0u &&
+        firstProducerSourceOrdinal == 0u &&
+        lastProducerSourceOrdinal == 0u;
+  }
+
+  constexpr bool producerIdentityValid() const noexcept {
+    return firstProducerEventOrdinal != 0u &&
+        lastProducerEventOrdinal >= firstProducerEventOrdinal &&
+        firstProducerSourceOrdinal != 0u &&
+        lastProducerSourceOrdinal >= firstProducerSourceOrdinal;
+  }
+
+  constexpr bool endToEndValid() const noexcept {
+    return valid() && producerIdentityValid();
   }
 
   constexpr bool operator==(const PipelineIdentity&) const noexcept = default;
@@ -905,6 +927,21 @@ constexpr bool staleGeneration(const PipelineLifecycleObserverState& state,
   return false;
 }
 
+constexpr bool producerIdentityOverlaps(const PipelineIdentity& a,
+                                        const PipelineIdentity& b) noexcept {
+  if (!a.producerIdentityValid() || !b.producerIdentityValid()) return false;
+  const bool eventOverlap =
+      a.firstProducerEventOrdinal <= b.lastProducerEventOrdinal &&
+      b.firstProducerEventOrdinal <= a.lastProducerEventOrdinal;
+  const bool sourceOverlap =
+      a.firstProducerSourceOrdinal <= b.lastProducerSourceOrdinal &&
+      b.firstProducerSourceOrdinal <= a.lastProducerSourceOrdinal;
+  // SegmentSerial may project one raw/producer interval into several
+  // queue-local sources. That is one physical batch, not duplicated logical
+  // ownership. Reuse by a different raw identity is the forbidden case.
+  return a.workId != b.workId && (eventOverlap || sourceOverlap);
+}
+
 constexpr PipelineObservationError validateQueueSnapshots(
     const PipelineLifecycleObserverState& state,
     const PipelineLifecycleEvent& event) noexcept {
@@ -1273,6 +1310,12 @@ constexpr PipelineObservationError reducePipelineLifecycleEvent(
                                    event.disposition, event.control)) {
       return PipelineObservationError::DuplicateOrRegressedStage;
     }
+    for (std::size_t i = 0; i < state.recordCount; ++i) {
+      if (detail::producerIdentityOverlaps(state.records[i].identity,
+                                           event.identity)) {
+        return PipelineObservationError::DuplicateOrRegressedStage;
+      }
+    }
     if (state.recordCount == state.records.size()) {
       return PipelineObservationError::BoundedObserverOverflow;
     }
@@ -1369,10 +1412,12 @@ inline void clearPipelineLifecycleSidecar(
 
 class PipelineLifecycleObserver {
  public:
-  explicit PipelineLifecycleObserver(bool productionEnabled = false)
+  explicit PipelineLifecycleObserver(bool productionEnabled = false,
+                                     bool requireEndToEndIdentity = false)
       : sidecar_(productionEnabled
                      ? std::make_unique<PipelineLifecycleSidecar>()
-                     : nullptr) {}
+                     : nullptr),
+        requireEndToEndIdentity_(requireEndToEndIdentity) {}
 
   void observe(const PipelineLifecycleEvent& event) noexcept {
     if (error_ != PipelineObservationError::None) {
@@ -1391,7 +1436,8 @@ class PipelineLifecycleObserver {
   // This method intentionally performs no allocation, clock read, or atomic
   // operation and is reached only through the opt-in production sink.
   void observeOwnerEvent(const PipelineLifecycleEvent& event) noexcept {
-    if (!event.identity.valid()) {
+    if (!event.identity.valid() ||
+        (requireEndToEndIdentity_ && !event.identity.endToEndValid())) {
       if (error_ == PipelineObservationError::None) {
         error_ = PipelineObservationError::InvalidIdentity;
       }
@@ -1511,6 +1557,10 @@ class PipelineLifecycleObserver {
       void* context, const PipelineIdentity& identity) noexcept {
     auto* observer = static_cast<PipelineLifecycleObserver*>(context);
     if (!observer->sidecar_) return;
+    if (observer->requireEndToEndIdentity_ && !identity.endToEndValid()) {
+      observer->error_ = PipelineObservationError::InvalidIdentity;
+      return;
+    }
     const auto result = observer->sidecar_->recordIdentity(identity);
     if (result == PipelineLifecycleSidecarResult::BoundedOverflow) {
       observer->error_ = PipelineObservationError::BoundedObserverOverflow;
@@ -1547,6 +1597,7 @@ class PipelineLifecycleObserver {
   PipelineLifecycleObserverState state_{};
   PipelineObservationError error_ = PipelineObservationError::None;
   std::unique_ptr<PipelineLifecycleSidecar> sidecar_{};
+  bool requireEndToEndIdentity_ = false;
 };
 
 }  // namespace dxmt9::queue

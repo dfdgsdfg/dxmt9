@@ -286,7 +286,7 @@ normative interfaces; subsystem specs map them to concrete types.
 
 | Contract term | Owns | Must not own |
 |---|---|---|
-| `EndToEndSourceIdentity` | producer event, raw/source, queue sequence, storage generation, completion qualification | pointer, payload bytes, Metal object |
+| `EndToEndSourceIdentity` | closed producer event/source interval, raw/source, queue sequence, storage generation, completion qualification | pointer, payload bytes, Metal object |
 | `ImmutableSemanticSource` | sealed ordered records, payload bytes, qualified resource/control identities, one reclaim authority | mutable PE shadow, resolved Metal objects, completion callback |
 | `SourceLease` | generation-qualified permission to keep the physical source resident and issue synchronous borrows | resolved span, Arena page pointer, session-global encoder state |
 | `SynchronousSourceFacade` | call-local typed records, spans, and bounded locators over one leased source | ownership, asynchronous escape, mutable storage |

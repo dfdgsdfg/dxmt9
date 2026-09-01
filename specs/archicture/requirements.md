@@ -344,8 +344,9 @@ evidence.
 
 **R-ARCH-7.11** Every accepted producer batch must have one stable
 `EndToEndSourceIdentity` from PE commit through terminal reclaim. The identity
-must qualify the producer event ordinal, authenticated raw/source identity,
-queue sequence, storage generation, and completion identity. Physical
+must qualify the closed producer event/source interval, authenticated raw and
+queue-local source identity, queue sequence, storage generation, and completion
+identity. Physical
 contiguous, segmented, `ChunkSlot`, Arena, or early-retirement representations
 may refine that identity but must not create a second logical command stream or
 independently reclaimable completion owner.

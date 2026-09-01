@@ -1922,8 +1922,9 @@ including the complete final wire extent. The extent includes header,
 record/handle tables, payload, alignment, and padding and is capped at 32 MiB.
 The canonical D9C V2 sizes are 48 bytes for the header, 32 bytes for each
 record row, 16 bytes for each handle row, and 16 bytes for each section
-descriptor. The fixed `D9CCommandChunkSegmentedTransportV1` descriptor is 112
-bytes, ending with 16 bytes for the capture token and event ordinal; role byte
+descriptor. The fixed `D9CCommandChunkSegmentedTransportV1` descriptor is 144
+bytes, ending with 16 bytes for the capture token and event ordinal plus 32
+bytes for the immutable producer event/source interval; role byte
 counts exclude inter-table alignment, which the importer reconstructs from
 header offsets.
 Trusted in-process recorder pointers are permitted only for synchronous,

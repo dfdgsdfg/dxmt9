@@ -591,6 +591,7 @@ bool prepareOffloadChunk(
   candidate.recordCount = envelope.recordCount;
   candidate.recordBytes = static_cast<std::uint32_t>(blob.size());
   candidate.handleCount = envelope.handleCount;
+  candidate.producerIdentity = envelope.producerIdentity;
   candidate.preflightValidated = true;
   candidate.hasPresent = std::any_of(
       view.records.begin(), view.records.end(), [](const auto& record) {
@@ -621,6 +622,7 @@ bool prepareSegmentedOffloadChunk(
       .version = transport.header.version,
       .recordCount = transport.header.recordCount,
       .handleCount = transport.header.handleCount,
+      .producerIdentity = transport.producerIdentity,
   };
   // This pass is pre-effect and bounds the three client spans before any
   // allocation, retain, or queue publication. The final semantic pass below
@@ -683,6 +685,7 @@ bool prepareSegmentedOffloadChunk(
   candidate.wireVersion = envelope.version;
   candidate.recordCount = envelope.recordCount;
   candidate.handleCount = envelope.handleCount;
+  candidate.producerIdentity = envelope.producerIdentity;
   candidate.recordBytes = candidate.wireHeader.payloadArenaOffset +
                           candidate.wireHeader.payloadArenaSize;
   candidate.preflightValidated = true;

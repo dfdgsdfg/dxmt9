@@ -550,6 +550,6 @@ class SemanticBatchSettlement final {
 
 static_assert(std::is_trivially_copyable_v<BatchRecordInput>);
 static_assert(std::is_trivially_copyable_v<OwnedBatchRecord>);
-static_assert(sizeof(D9CCommandChunkSegmentedTransportV1) == 112u);
+static_assert(sizeof(D9CCommandChunkSegmentedTransportV1) == 144u);
 
 }  // namespace dxmt9::d3d9::pe::semantic_batch

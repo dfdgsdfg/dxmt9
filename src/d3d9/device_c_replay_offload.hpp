@@ -385,6 +385,9 @@ struct RawCommandChunk {
   std::vector<dxmt9::core::ChunkBufferBindingSnapshot> bufferSnapshots;
   // Raw FIFO identity. For canonical planning/admission, replaySeq == rawOrdinal.
   ReplaySeq replaySeq = 0;
+  // Immutable PE semantic event/range identity. Compatibility fixtures may
+  // carry the all-zero value; production owner emission is always complete.
+  D9CCommandChunkProducerIdentity producerIdentity{};
   // Single-consumer-only lookahead. pop() sets this only when the immediately
   // following FIFO item is an already-adopted planning-enabled raw chunk.
   // It owns no payload and predicts neither an empty queue nor a control item.

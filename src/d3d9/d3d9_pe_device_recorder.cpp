@@ -1039,6 +1039,7 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(
         chunk.recordBytes = semanticExact.wireBytes;
         chunk.records = toWireHandle(semanticExact.wire.data());
         chunk.handleCount = semanticExact.transport.header.handleCount;
+        chunk.producerIdentity = semanticExact.transport.producerIdentity;
     } else if (segmented.valid()) {
         chunk.recordCount = segmented.transport.header.recordCount;
         // This metadata chunk is used only for counters and the cold
@@ -1046,6 +1047,7 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(
         chunk.recordBytes = segmented.wireBytes;
         chunk.records = segmented.transport.records;
         chunk.handleCount = segmented.transport.header.handleCount;
+        chunk.producerIdentity = segmented.transport.producerIdentity;
     }
     const PeCommandChunkCommitInfo info{
         .recordCount = chunk.recordCount,

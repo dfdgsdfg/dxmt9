@@ -39,7 +39,7 @@ static_assert(sizeof(D9CWireObjectIdentity) == 16u);
 static_assert(alignof(D9CWireObjectIdentity) == 8u);
 static_assert(sizeof(D9CCommandChunkNegotiation) == 32u);
 static_assert(alignof(D9CCommandChunkNegotiation) == 4u);
-static_assert(sizeof(D9CCommandChunkSegmentedTransportV1) == 112u);
+static_assert(sizeof(D9CCommandChunkSegmentedTransportV1) == 144u);
 static_assert(alignof(D9CCommandChunkSegmentedTransportV1) == 8u);
 static_assert(offsetof(D9CCommandChunkSegmentedTransportV1, records) == 48u);
 static_assert(offsetof(D9CCommandChunkSegmentedTransportV1, handles) == 64u);
@@ -48,7 +48,7 @@ static_assert(offsetof(D9CCommandChunkSegmentedTransportV1,
                        renderTapeCaptureToken) == 96u);
 static_assert(offsetof(D9CCommandChunkSegmentedTransportV1,
                        renderTapeEventOrdinal) == 104u);
-static_assert(sizeof(D9CCommandChunk) == 48u);
+static_assert(sizeof(D9CCommandChunk) == 80u);
 static_assert(alignof(D9CCommandChunk) == 8u);
 static_assert(offsetof(D9CCommandChunk, records) == 12u);
 static_assert(offsetof(D9CCommandChunk, handles) == 24u);

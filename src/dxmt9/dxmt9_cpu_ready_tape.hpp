@@ -268,6 +268,27 @@ class CpuReadyTapeConfig {
   Values values_{};
 };
 
+struct CpuReadyProducerIdentity {
+  std::uint64_t firstEventOrdinal = 0;
+  std::uint64_t lastEventOrdinal = 0;
+  std::uint64_t firstSourceOrdinal = 0;
+  std::uint64_t lastSourceOrdinal = 0;
+
+  constexpr bool absent() const noexcept {
+    return firstEventOrdinal == 0u && lastEventOrdinal == 0u &&
+        firstSourceOrdinal == 0u && lastSourceOrdinal == 0u;
+  }
+  constexpr bool valid() const noexcept {
+    return firstEventOrdinal != 0u &&
+        lastEventOrdinal >= firstEventOrdinal && firstSourceOrdinal != 0u &&
+        lastSourceOrdinal >= firstSourceOrdinal;
+  }
+  constexpr bool importable() const noexcept { return absent() || valid(); }
+
+  friend constexpr bool operator==(CpuReadyProducerIdentity,
+                                   CpuReadyProducerIdentity) noexcept = default;
+};
+
 struct CpuReadyPublicationTicket {
   CpuReadySourceId id{};
   CpuReadyStorageRef storage{};
@@ -275,6 +296,7 @@ struct CpuReadyPublicationTicket {
   std::uint64_t sourceOrdinal = 0;
   std::uint64_t seqId = 0;
   std::uint64_t buildGeneration = 0;
+  CpuReadyProducerIdentity producerIdentity{};
 
   constexpr bool valid() const noexcept {
     return id.valid() && storage.valid();
@@ -282,12 +304,12 @@ struct CpuReadyPublicationTicket {
 
   constexpr bool hasAdmissionIdentity() const noexcept {
     return rawOrdinal != 0 || sourceOrdinal != 0 || seqId != 0 ||
-           buildGeneration != 0;
+           buildGeneration != 0 || !producerIdentity.absent();
   }
 
   constexpr bool strictIdentityValid() const noexcept {
     return rawOrdinal != 0 && sourceOrdinal != 0 && seqId != 0 &&
-           buildGeneration != 0;
+           buildGeneration != 0 && producerIdentity.importable();
   }
 
   friend constexpr bool operator==(CpuReadyPublicationTicket,
@@ -299,10 +321,11 @@ struct CpuReadyAdmissionIdentity {
   std::uint64_t sourceOrdinal = 0;
   std::uint64_t seqId = 0;
   std::uint64_t buildGeneration = 0;
+  CpuReadyProducerIdentity producerIdentity{};
 
   constexpr bool valid() const noexcept {
     return rawOrdinal != 0 && sourceOrdinal != 0 && seqId != 0 &&
-           buildGeneration != 0;
+           buildGeneration != 0 && producerIdentity.importable();
   }
 };
 
@@ -1088,6 +1111,7 @@ class CpuReadyTape {
     entry->sourceOrdinal = identity.sourceOrdinal;
     entry->seqId = identity.seqId;
     entry->buildGeneration = identity.buildGeneration;
+    entry->producerIdentity = identity.producerIdentity;
     entry->arenaPayloadCount = layout.segmentCount;
     entry->groupRawOrdinal = identity.rawOrdinal;
     entry->groupHeadSourceOrdinal = identity.sourceOrdinal;
@@ -1112,6 +1136,7 @@ class CpuReadyTape {
         .sourceOrdinal = identity.sourceOrdinal,
         .seqId = identity.seqId,
         .buildGeneration = identity.buildGeneration,
+        .producerIdentity = identity.producerIdentity,
     };
     return reservation;
   }
@@ -1123,11 +1148,13 @@ class CpuReadyTape {
   std::optional<ArenaBatchReservation> reserveArenaBatch(
       std::span<const ArenaSourcePayloadLayout> layouts,
       std::uint64_t rawOrdinal, std::uint64_t firstSourceOrdinal,
-      std::uint64_t firstSeqId, std::uint64_t buildGeneration) noexcept {
+      std::uint64_t firstSeqId, std::uint64_t buildGeneration,
+      CpuReadyProducerIdentity producerIdentity = {}) noexcept {
     lastArenaBatchReserveFailure_ = ArenaBatchReserveFailure::None;
     if (layouts.empty() || layouts.size() > kMaxArenaBatchSources ||
         rawOrdinal == 0 || firstSourceOrdinal == 0 || firstSeqId == 0 ||
-        buildGeneration == 0 || compatibilityWritingCount_ != 0 ||
+        buildGeneration == 0 || !producerIdentity.importable() ||
+        compatibilityWritingCount_ != 0 ||
         strictWritingActive_ || rawOrdinal <= rawOrdinalHighWater_ ||
         firstSourceOrdinal <= sourceOrdinalHighWater_ ||
         firstSeqId <= seqIdHighWater_) {
@@ -1297,6 +1324,7 @@ class CpuReadyTape {
       entry->sourceOrdinal = firstSourceOrdinal + i;
       entry->seqId = firstSeqId + i;
       entry->buildGeneration = buildGeneration;
+      entry->producerIdentity = producerIdentity;
       entry->arenaPayloadCount = layouts[i].segmentCount;
       entry->groupRawOrdinal = rawOrdinal;
       entry->groupHeadSourceOrdinal = firstSourceOrdinal;
@@ -1318,6 +1346,7 @@ class CpuReadyTape {
           .sourceOrdinal = firstSourceOrdinal + i,
           .seqId = firstSeqId + i,
           .buildGeneration = buildGeneration,
+          .producerIdentity = producerIdentity,
       };
       result.reservations[i] = *reservation;
       ++result.count;
@@ -1627,12 +1656,40 @@ class CpuReadyTape {
     return entry->payloadKind;
   }
 
+  std::optional<CpuReadyProducerIdentity> producerIdentity(
+      CpuReadySourceId id, CpuReadyStorageRef storage,
+      State expected) const noexcept {
+    const auto* entry = resolveEntry(id, storage);
+    if (!entry || entry->state != expected ||
+        !entry->producerIdentity.importable()) {
+      noteStaleReject();
+      return std::nullopt;
+    }
+    return entry->producerIdentity;
+  }
+
+  // Cold lifecycle-observer lookup.  The queue owner already serializes this
+  // call with every Tape transition, so the observer can read the immutable
+  // producer interval without guessing the current state.  A lookup miss is
+  // not a stale-capability rejection and therefore must not perturb the Tape
+  // staleRejects counter used by the production ownership contract.
+  std::optional<CpuReadyProducerIdentity> inspectProducerIdentity(
+      SourceRef source) const noexcept {
+    const auto* entry = resolveEntry(source.id, source.storage);
+    if (!entry || entry->state == State::Free ||
+        !entry->producerIdentity.importable()) {
+      return std::nullopt;
+    }
+    return entry->producerIdentity;
+  }
+
   bool sealAndPublish(CpuReadyPublicationTicket ticket,
                       std::uint64_t sourceOrdinal,
                       std::uint64_t seqId,
                       std::size_t controlIndex,
                       std::size_t usedBytes = 0,
-                      std::uint64_t rawOrdinal = 0) noexcept {
+                      std::uint64_t rawOrdinal = 0,
+                      CpuReadyProducerIdentity producerIdentity = {}) noexcept {
     auto* entry = resolveEntry(ticket.id, ticket.storage);
     const std::size_t reservedBytes =
         static_cast<std::size_t>(ticket.storage.pageCount) *
@@ -1640,6 +1697,9 @@ class CpuReadyTape {
     if (!entry || entry->state != State::Writing || entry->strictAdmission ||
         entry->payloadKind != PayloadKind::Legacy ||
         ticket.hasAdmissionIdentity() || sourceOrdinal == 0 || seqId == 0 ||
+        !producerIdentity.importable() ||
+        (!entry->producerIdentity.absent() && !producerIdentity.absent() &&
+         entry->producerIdentity != producerIdentity) ||
         (rawOrdinal != 0 && rawOrdinal <= rawOrdinalHighWater_) ||
         sourceOrdinal <= sourceOrdinalHighWater_ ||
         seqId <= seqIdHighWater_ || controlIndex == kInvalidIndex ||
@@ -1675,6 +1735,9 @@ class CpuReadyTape {
     entry->rawOrdinal = rawOrdinal;
     entry->sourceOrdinal = sourceOrdinal;
     entry->seqId = seqId;
+    if (entry->producerIdentity.absent()) {
+      entry->producerIdentity = producerIdentity;
+    }
     entry->usedBytes = usedBytes;
     entry->semantic = semantic;
     entry->state = State::Ready;
@@ -1694,6 +1757,40 @@ class CpuReadyTape {
     }
     sourceOrdinalHighWater_ = sourceOrdinal;
     seqIdHighWater_ = seqId;
+    return true;
+  }
+
+  // Direct replay may append several consecutive PE events into one open
+  // compatibility ChunkSlot. Preserve the exact closed producer interval
+  // without forcing a physical publish boundary. Any gap, overlap, or
+  // reordering is a post-effect ownership failure for the caller.
+  bool extendCompatibilityProducerIdentity(
+      CpuReadyPublicationTicket ticket,
+      CpuReadyProducerIdentity next) noexcept {
+    auto* entry = resolveEntry(ticket.id, ticket.storage);
+    if (!entry || entry->state != State::Writing || entry->strictAdmission ||
+        entry->payloadKind != PayloadKind::Legacy ||
+        ticket.hasAdmissionIdentity() || !next.importable()) {
+      noteStaleReject();
+      return false;
+    }
+    if (next.absent()) return true;
+    if (entry->producerIdentity.absent()) {
+      entry->producerIdentity = next;
+      return true;
+    }
+    auto& current = entry->producerIdentity;
+    if (!current.valid() || current.lastEventOrdinal ==
+            std::numeric_limits<std::uint64_t>::max() ||
+        current.lastSourceOrdinal ==
+            std::numeric_limits<std::uint64_t>::max() ||
+        next.firstEventOrdinal != current.lastEventOrdinal + 1u ||
+        next.firstSourceOrdinal != current.lastSourceOrdinal + 1u) {
+      noteStaleReject();
+      return false;
+    }
+    current.lastEventOrdinal = next.lastEventOrdinal;
+    current.lastSourceOrdinal = next.lastSourceOrdinal;
     return true;
   }
 
@@ -2285,6 +2382,7 @@ class CpuReadyTape {
     std::uint64_t sourceOrdinal = 0;
     std::uint64_t seqId = 0;
     std::uint64_t buildGeneration = 0;
+    CpuReadyProducerIdentity producerIdentity{};
     std::uint64_t groupRawOrdinal = 0;
     std::uint64_t groupHeadSourceOrdinal = 0;
     std::uint64_t groupBuildGeneration = 0;
@@ -2469,6 +2567,7 @@ class CpuReadyTape {
       ticket.sourceOrdinal = entry.sourceOrdinal;
       ticket.seqId = entry.seqId;
       ticket.buildGeneration = entry.buildGeneration;
+      ticket.producerIdentity = entry.producerIdentity;
     }
     if (resolveEntry(id, entry.storage) != &entry ||
         !ticketMatchesEntry(ticket, entry)) {
@@ -2502,7 +2601,8 @@ class CpuReadyTape {
            ticket.rawOrdinal == entry.rawOrdinal &&
            ticket.sourceOrdinal == entry.sourceOrdinal &&
            ticket.seqId == entry.seqId &&
-           ticket.buildGeneration == entry.buildGeneration;
+           ticket.buildGeneration == entry.buildGeneration &&
+           ticket.producerIdentity == entry.producerIdentity;
   }
 
   static CpuReadySourceMetadata metadataForEntry(
@@ -2806,6 +2906,7 @@ class CpuReadyTape {
     entry.sourceOrdinal = 0;
     entry.seqId = 0;
     entry.buildGeneration = 0;
+    entry.producerIdentity = {};
     entry.strictAdmission = false;
     entry.readyPublicationReserved = true;
     entry.arenaOwnerDetached = false;

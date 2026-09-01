@@ -688,18 +688,21 @@ class CommandQueue {
   DirectChunkSlotReplayBeginResult beginDirectChunkSlotReplay(
       std::uint64_t rawOrdinal,
       const core::SourcePayloadCapacity& capacity,
-      std::size_t plannedBytes) noexcept;
+      std::size_t plannedBytes,
+      core::CpuReadyProducerIdentity producerIdentity = {}) noexcept;
 
   CpuReadyArenaBeginResult beginCpuReadyArenaSource(
       std::uint64_t rawOrdinal,
       const core::ArenaSourcePayloadLayout& layout,
       std::optional<core::metalqueue::CpuReadySupplyObservationToken>
-          supplyAttempt = std::nullopt) noexcept;
+          supplyAttempt = std::nullopt,
+      core::CpuReadyProducerIdentity producerIdentity = {}) noexcept;
   CpuReadyArenaBeginResult beginCpuReadyArenaSources(
       std::uint64_t rawOrdinal,
       std::span<const core::ArenaSourcePayloadLayout> layouts,
       std::optional<core::metalqueue::CpuReadySupplyObservationToken>
-          supplyAttempt = std::nullopt) noexcept;
+          supplyAttempt = std::nullopt,
+      core::CpuReadyProducerIdentity producerIdentity = {}) noexcept;
   CpuReadyArenaPlanLimits cpuReadyArenaPlanLimits() const noexcept {
     const auto& values = cpuReadyTape_.config().values();
     return {

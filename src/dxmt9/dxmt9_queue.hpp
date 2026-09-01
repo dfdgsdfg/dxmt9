@@ -1414,12 +1414,14 @@ struct CompatibilityPublicationIdentity {
   // the same final ChunkSlot publication without changing its seqId.
   std::uint64_t rawOrdinal = 0;
   std::uint64_t sourceOrdinal = 0;
+  CpuReadyProducerIdentity producerIdentity{};
 
   constexpr bool empty() const noexcept {
     return rawOrdinal == 0 && sourceOrdinal == 0;
   }
   constexpr bool valid() const noexcept {
-    return rawOrdinal != 0 && sourceOrdinal != 0;
+    return rawOrdinal != 0 && sourceOrdinal != 0 &&
+        producerIdentity.importable();
   }
 };
 

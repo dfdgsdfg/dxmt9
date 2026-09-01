@@ -59,8 +59,8 @@ normal_models=(
 
 expected_normal_count=45
 expected_progress_count=1
-expected_counterexample_count=73
-expected_cfg_count=119
+expected_counterexample_count=76
+expected_cfg_count=122
 progress_model=CpuPipelineLifecycle
 progress_cfg_name="$progress_model.progress.cfg"
 
@@ -132,6 +132,9 @@ counterexample_models=(
   "CpuPipelineLifecycle|.receipt-omission.counterexample|Invariant ReceiptAuthorityExact is violated"
   "CpuPipelineLifecycle|.import-omission.counterexample|Invariant OwnersAreExplicit is violated"
   "CpuPipelineLifecycle|.device-loss-omission.counterexample|Invariant OwnersAreExplicit is violated"
+  "CpuPipelineLifecycle|.duplicate-event-identity.counterexample|Invariant EndToEndSourceIdentityExact is violated"
+  "CpuPipelineLifecycle|.duplicate-source-identity.counterexample|Invariant EndToEndSourceIdentityExact is violated"
+  "CpuPipelineLifecycle|.partial-source-identity.counterexample|Invariant EndToEndSourceIdentityExact is violated"
   # Full-shadow upload clobbers the in-flight NOOVERWRITE read range.
   "NoOverwriteByteRange|.counterexample|Invariant NoOverwriteReadPreserved is violated"
   # Pin-ordering premise removed: a reclaim frees a record the producer's

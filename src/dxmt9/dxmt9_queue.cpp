@@ -26,6 +26,45 @@ namespace {
 
 using enum dxmt9::core::metalcompat::CompatFlagBits;
 
+constexpr ::dxmt9::queue::PipelineIdentity pipelineIdentity(
+    const CpuReadyAdmissionIdentity& identity,
+    std::uint64_t storageGeneration) noexcept {
+  return {
+      .firstProducerEventOrdinal =
+          identity.producerIdentity.firstEventOrdinal,
+      .lastProducerEventOrdinal = identity.producerIdentity.lastEventOrdinal,
+      .firstProducerSourceOrdinal =
+          identity.producerIdentity.firstSourceOrdinal,
+      .lastProducerSourceOrdinal =
+          identity.producerIdentity.lastSourceOrdinal,
+      .workId = identity.rawOrdinal != 0u
+          ? identity.rawOrdinal : identity.sourceOrdinal,
+      .sourceOrdinal = identity.sourceOrdinal,
+      .seqId = identity.seqId,
+      .generation = storageGeneration,
+  };
+}
+
+std::optional<CpuReadyProducerIdentity> pipelineProducerIdentity(
+    const CpuReadyTape& tape, CpuReadyTape::SourceRef source) noexcept {
+  return source.valid() ? tape.inspectProducerIdentity(source) : std::nullopt;
+}
+
+constexpr ::dxmt9::queue::PipelineIdentity pipelineIdentity(
+    const CpuReadySourceMetadata& identity,
+    CpuReadyProducerIdentity producerIdentity,
+    std::uint64_t storageGeneration) noexcept {
+  return pipelineIdentity(
+      CpuReadyAdmissionIdentity{
+          .rawOrdinal = identity.rawOrdinal,
+          .sourceOrdinal = identity.sourceOrdinal,
+          .seqId = identity.seqId,
+          .buildGeneration = identity.buildGeneration,
+          .producerIdentity = producerIdentity,
+      },
+      storageGeneration);
+}
+
 class ScopedQueueUnlock final {
  public:
   explicit ScopedQueueUnlock(std::unique_lock<std::mutex>& lock) noexcept
@@ -1880,13 +1919,11 @@ void QueueLifecycleController::observePipelineOwnerTransition(
   }
   const PipelineIdentity identity = detachedReceipt
       ? sidecarIdentity
-      : PipelineIdentity{
-            .workId = metadata->rawOrdinal != 0 ? metadata->rawOrdinal
-                                                : metadata->sourceOrdinal,
-            .sourceOrdinal = metadata->sourceOrdinal,
-            .seqId = metadata->seqId,
-            .generation = source.storage.generation,
-        };
+      : pipelineIdentity(
+            *metadata,
+            pipelineProducerIdentity(*submissionBinding_.cpuReadyTape, source)
+                .value_or(CpuReadyProducerIdentity{}),
+            source.storage.generation);
   if (!identity.valid()) return;
   const std::uint64_t ownedBytes = metadata ? metadata->usedBytes : 0u;
   const auto lifecycleFacts = sidecarFound
@@ -2160,13 +2197,14 @@ void QueueLifecycleController::observePipelinePoisonStop() const noexcept {
       default:
         continue;
     }
-    const PipelineIdentity identity{
-        .workId = metadata->rawOrdinal != 0 ? metadata->rawOrdinal
-                                             : metadata->sourceOrdinal,
-        .sourceOrdinal = metadata->sourceOrdinal,
-        .seqId = metadata->seqId,
-        .generation = slot.storage.generation,
-    };
+    const PipelineIdentity identity = pipelineIdentity(
+        *metadata,
+        pipelineProducerIdentity(
+            *submissionBinding_.cpuReadyTape,
+            CpuReadyTape::SourceRef{.id = slot.sourceId,
+                                    .storage = slot.storage})
+            .value_or(CpuReadyProducerIdentity{}),
+        slot.storage.generation);
     if (!identity.valid()) continue;
     auto before = snapshot;
     auto after = snapshot;
@@ -2251,12 +2289,12 @@ void QueueLifecycleController::observePipelinePoisonStop() const noexcept {
     auto after = snapshot;
     if (before.occupancy != 0u) --after.occupancy;
     const PipelineLifecycleEvent lifecycleEvent{
-        .identity = PipelineIdentity{
-            .workId = metadata->rawOrdinal != 0 ? metadata->rawOrdinal
-                                                 : metadata->sourceOrdinal,
-            .sourceOrdinal = metadata->sourceOrdinal,
-            .seqId = metadata->seqId,
-            .generation = source.source.storage.generation},
+        .identity = pipelineIdentity(
+            *metadata,
+            pipelineProducerIdentity(*submissionBinding_.cpuReadyTape,
+                                     source.source)
+                .value_or(CpuReadyProducerIdentity{}),
+            source.source.storage.generation),
         .from = PipelineStage::GPUInFlight,
         .to = PipelineStage::Reclaimed,
         .payloadKind = *kind == CpuReadyTape::PayloadKind::Arena
@@ -2461,13 +2499,7 @@ void QueueLifecycleController::recordPipelineSourceArrival(
   }
   snapshot.stopped = submissionBinding_.stop && *submissionBinding_.stop;
   const PipelineLifecycleEvent lifecycleEvent{
-      .identity = PipelineIdentity{
-          .workId = identity.rawOrdinal != 0 ? identity.rawOrdinal
-                                              : identity.sourceOrdinal,
-          .sourceOrdinal = identity.sourceOrdinal,
-          .seqId = identity.seqId,
-          .generation = source.storage.generation,
-      },
+      .identity = pipelineIdentity(identity, source.storage.generation),
       .from = PipelineStage::SourceArrival,
       .to = PipelineStage::ProducerOwned,
       .payloadKind = payloadKind == CpuReadyTape::PayloadKind::Arena
@@ -2516,12 +2548,7 @@ void QueueLifecycleController::recordPipelineSourcePublication(
         submissionBinding_.completedPresentSeqQueue->back();
   }
   const PipelineLifecycleEvent event{
-      .identity = PipelineIdentity{
-          .workId = identity.rawOrdinal != 0 ? identity.rawOrdinal
-                                              : identity.sourceOrdinal,
-          .sourceOrdinal = identity.sourceOrdinal,
-          .seqId = identity.seqId,
-          .generation = source.storage.generation},
+      .identity = pipelineIdentity(identity, source.storage.generation),
       .from = PipelineStage::ProducerOwned,
       .to = PipelineStage::RawOwned,
       .payloadKind = payloadKind == CpuReadyTape::PayloadKind::Arena
@@ -2552,12 +2579,11 @@ void QueueLifecycleController::recordPipelineFinishAdvance(
   // The source has already left the notification FIFO by this owner edge,
   // but it still owns Completed credit until Tape reclaim.
   const PipelineLifecycleEvent event{
-      .identity = PipelineIdentity{
-          .workId = metadata.rawOrdinal != 0 ? metadata.rawOrdinal
-                                              : metadata.sourceOrdinal,
-          .sourceOrdinal = metadata.sourceOrdinal,
-          .seqId = metadata.seqId,
-          .generation = source.storage.generation},
+      .identity = pipelineIdentity(
+          metadata,
+          pipelineProducerIdentity(*submissionBinding_.cpuReadyTape, source)
+              .value_or(CpuReadyProducerIdentity{}),
+          source.storage.generation),
       .from = PipelineStage::Completed,
       .to = PipelineStage::Completed,
       .payloadKind = payloadKind == CpuReadyTape::PayloadKind::Arena
@@ -2628,12 +2654,11 @@ void QueueLifecycleController::recordPipelineReclaim(
     return;
   }
   const PipelineLifecycleEvent event{
-      .identity = PipelineIdentity{
-          .workId = metadata.rawOrdinal != 0 ? metadata.rawOrdinal
-                                              : metadata.sourceOrdinal,
-          .sourceOrdinal = metadata.sourceOrdinal,
-          .seqId = metadata.seqId,
-          .generation = source.storage.generation},
+      .identity = pipelineIdentity(
+          metadata,
+          pipelineProducerIdentity(*submissionBinding_.cpuReadyTape, source)
+              .value_or(CpuReadyProducerIdentity{}),
+          source.storage.generation),
       .from = PipelineStage::Completed,
       .to = PipelineStage::Reclaimed,
       .payloadKind = payloadKind == CpuReadyTape::PayloadKind::Arena
@@ -3136,13 +3161,39 @@ bool QueueLifecycleController::commitCurrentChunk(
         slot.seqId,
         publishedSlotIndex,
         0,
-        rawOrdinal);
+        rawOrdinal,
+        identity.producerIdentity);
     DXMT_ASSERT(sealed);
     if (!sealed) {
       slot.seqId = 0;
       writingPayload->seqId = 0;
       poisonTapeFailureLocked();
       return;
+    }
+    if (const auto metadata = submissionBinding_.cpuReadyTape->sourceMetadata(
+            slot.sourceId, slot.storage, CpuReadyTape::State::Ready)) {
+      const auto producerIdentity =
+          submissionBinding_.cpuReadyTape->producerIdentity(
+              slot.sourceId, slot.storage, CpuReadyTape::State::Ready)
+              .value_or(CpuReadyProducerIdentity{});
+      const CpuReadyAdmissionIdentity admission{
+          .rawOrdinal = metadata->rawOrdinal,
+          .sourceOrdinal = metadata->sourceOrdinal,
+          .seqId = metadata->seqId,
+          .buildGeneration = metadata->buildGeneration != 0u
+              ? metadata->buildGeneration : slot.storage.generation,
+          .producerIdentity = producerIdentity,
+      };
+      recordPipelineSourceArrival(
+          CpuReadyTape::PayloadKind::Legacy,
+          CpuReadyTape::SourceRef{.id = slot.sourceId,
+                                  .storage = slot.storage},
+          admission, metadata->usedBytes);
+      recordPipelineSourcePublication(
+          CpuReadyTape::PayloadKind::Legacy,
+          CpuReadyTape::SourceRef{.id = slot.sourceId,
+                                  .storage = slot.storage},
+          admission, metadata->usedBytes);
     }
     recordCpuReadySupplyPublished(
         CpuReadyTape::PayloadKind::Legacy, slot.sourceId, slot.storage,
@@ -3661,13 +3712,12 @@ PostEncodeReceiptResult QueueLifecycleController::retireEncodedSourcePayload(
       sourceRef.id, sourceRef.storage, CpuReadyTape::State::Represented);
   if (metadata && metadata->valid() &&
       submissionBinding_.pipelineLifecycleObserver.recordIdentityFn) {
-    const auto identity = ::dxmt9::queue::PipelineIdentity{
-        .workId = metadata->rawOrdinal != 0u
-            ? metadata->rawOrdinal : metadata->sourceOrdinal,
-        .sourceOrdinal = metadata->sourceOrdinal,
-        .seqId = source.seqId,
-        .generation = sourceRef.storage.generation,
-    };
+    auto identity = pipelineIdentity(
+        *metadata,
+        pipelineProducerIdentity(*tape, sourceRef)
+            .value_or(CpuReadyProducerIdentity{}),
+        sourceRef.storage.generation);
+    identity.seqId = source.seqId;
     submissionBinding_.pipelineLifecycleObserver.recordIdentityFn(
         submissionBinding_.pipelineLifecycleObserver.context, identity);
   }

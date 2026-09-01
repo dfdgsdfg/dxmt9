@@ -1560,6 +1560,16 @@ private:
   dxmt9::core::metalqueue::CpuReadySupplyObservationToken attemptToken_{};
 };
 
+constexpr dxmt9::core::CpuReadyProducerIdentity cpuReadyProducerIdentity(
+    const D9CCommandChunkProducerIdentity& identity) noexcept {
+  return {
+      .firstEventOrdinal = identity.firstEventOrdinal,
+      .lastEventOrdinal = identity.lastEventOrdinal,
+      .firstSourceOrdinal = identity.firstSourceOrdinal,
+      .lastSourceOrdinal = identity.lastSourceOrdinal,
+  };
+}
+
 int32_t replayPlannedChunk(D9CDevice* device,
                              dxmt9::d3d9::RawCommandChunk& raw,
                              bool pacedByPresentOrdinal,
@@ -1728,7 +1738,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
                     dxmt9::d3d9::DirectChunkSlotReplayDisposition::DirectOversized
                 ? plan.directSlotCapacity
                 : plan.capacity,
-            directSlotPlannedBytes);
+            directSlotPlannedBytes,
+            cpuReadyProducerIdentity(raw.producerIdentity));
         if (begin.status ==
                 dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Ready &&
             begin.lease) {
@@ -1934,10 +1945,12 @@ int32_t replayPlannedChunk(D9CDevice* device,
     begin = segmentSerial
         ? queue->beginCpuReadyArenaSources(
               plan.rawOrdinal, std::span(sourceLayouts).first(sourceCount),
-              supplyReplayEntry.attemptToken())
+              supplyReplayEntry.attemptToken(),
+              cpuReadyProducerIdentity(raw.producerIdentity))
         : queue->beginCpuReadyArenaSource(
               plan.rawOrdinal, sourceLayouts[0],
-              supplyReplayEntry.attemptToken());
+              supplyReplayEntry.attemptToken(),
+              cpuReadyProducerIdentity(raw.producerIdentity));
     if (begin.status !=
         dxmt9::CommandQueue::CpuReadyArenaBeginStatus::TemporaryPressure) {
       break;
@@ -2374,6 +2387,7 @@ static int32_t dxmt9c_device_commit_chunk_impl(
           .version = chunk->version,
           .recordCount = chunk->recordCount,
           .handleCount = chunk->handleCount,
+          .producerIdentity = chunk->producerIdentity,
       };
       CommitChunkPhaseTimer preparePhase(phaseSplit);
       prepared = dxmt9::d3d9::prepareOffloadChunk(

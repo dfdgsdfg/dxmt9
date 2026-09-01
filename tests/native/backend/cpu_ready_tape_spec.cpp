@@ -48,6 +48,7 @@ using dxmt9::core::ChunkSlotControl;
 using dxmt9::core::CpuReadyAdmissionIdentity;
 using dxmt9::core::CpuReadySourceId;
 using dxmt9::core::CpuReadySourceMetadata;
+using dxmt9::core::CpuReadyProducerIdentity;
 using dxmt9::core::CpuReadyStorageRef;
 using dxmt9::core::CpuReadyTape;
 using dxmt9::core::SourceEntryEncoderKind;
@@ -1981,6 +1982,45 @@ void shutdownStopsAdmissionButAllowsRelease() {
         "shutdown rollback leaves no resident source");
 }
 
+void compatibilityProducerIntervalsComposeWithoutPublishing() {
+  CpuReadyTape tape{4};
+  const auto source = tape.reserve();
+  check(source.has_value(), "producer interval fixture reserves one source");
+  const CpuReadyProducerIdentity first{
+      .firstEventOrdinal = 10u,
+      .lastEventOrdinal = 10u,
+      .firstSourceOrdinal = 20u,
+      .lastSourceOrdinal = 22u,
+  };
+  const CpuReadyProducerIdentity second{
+      .firstEventOrdinal = 11u,
+      .lastEventOrdinal = 12u,
+      .firstSourceOrdinal = 23u,
+      .lastSourceOrdinal = 27u,
+  };
+  check(tape.extendCompatibilityProducerIdentity(source->ticket, first) &&
+            tape.extendCompatibilityProducerIdentity(source->ticket, second),
+        "consecutive direct replays extend one open producer interval");
+  const auto writingIdentity = tape.producerIdentity(
+      source->id, source->storage, CpuReadyTape::State::Writing);
+  check(writingIdentity && writingIdentity->firstEventOrdinal == 10u &&
+            writingIdentity->lastEventOrdinal == 12u &&
+            writingIdentity->firstSourceOrdinal == 20u &&
+            writingIdentity->lastSourceOrdinal == 27u,
+        "open compatibility source preserves both interval endpoints");
+  auto gap = second;
+  gap.firstEventOrdinal = 14u;
+  gap.lastEventOrdinal = 14u;
+  check(!tape.extendCompatibilityProducerIdentity(source->ticket, gap),
+        "producer event gaps fail closed before publication");
+  check(tape.sealAndPublish(source->ticket, 1u, 1u, 0u),
+        "composed producer interval publishes with the source");
+  const auto readyIdentity = tape.producerIdentity(
+      source->id, source->storage, CpuReadyTape::State::Ready);
+  check(readyIdentity && *readyIdentity == *writingIdentity,
+        "publication preserves the composed producer interval exactly");
+}
+
 void controlShellDoesNotOwnPayload() {
   CpuReadyTape tape{makeConfig(2, 4, 2, 1, 2, 0, 2, 0)};
   const auto reservation = tape.reserve();
@@ -2041,6 +2081,7 @@ int main() {
     invalidPageRequestsDoNotCloseAdmission();
     headCandidatePressureStaysLatchedUntilAllLowWaterBounds();
     shutdownStopsAdmissionButAllowsRelease();
+    compatibilityProducerIntervalsComposeWithoutPublishing();
     controlShellDoesNotOwnPayload();
   } catch (const std::exception& error) {
     std::cerr << "cpu_ready_tape_spec failed: " << error.what() << '\n';

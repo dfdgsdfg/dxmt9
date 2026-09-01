@@ -1240,8 +1240,9 @@ publish an earlier role.
 record/handle tables, payload bytes, alignment, and padding and must not exceed
 32 MiB. The canonical D9C V2 sizes are a 48-byte header, 32-byte record row,
 16-byte handle row, and 16-byte section descriptor. The fixed
-`D9CCommandChunkSegmentedTransportV1` descriptor is 112 bytes, ending with
-16 bytes for the capture token and event ordinal; role byte counts exclude
+`D9CCommandChunkSegmentedTransportV1` descriptor is 144 bytes, ending with
+16 bytes for the capture token and event ordinal plus 32 bytes for the
+immutable producer event/source interval; role byte counts exclude
 inter-table alignment, which the importer reconstructs from header offsets.
 The in-process recorder may cross the producer boundary with a trusted
 validated pointer only synchronously; queue-owned Tape storage and every

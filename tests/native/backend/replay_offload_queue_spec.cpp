@@ -121,6 +121,12 @@ void testSegmentedPrepareIsAllOrNothing() {
       .payloadReserved = 0u,
       .renderTapeCaptureToken = 0x1234u,
       .renderTapeEventOrdinal = 0x5678u,
+      .producerIdentity = {
+          .firstEventOrdinal = 9u,
+          .lastEventOrdinal = 10u,
+          .firstSourceOrdinal = 21u,
+          .lastSourceOrdinal = 24u,
+      },
   };
   const auto records = segmentedRoleBytes(transport.records,
                                           transport.recordBytes);
@@ -140,6 +146,14 @@ void testSegmentedPrepareIsAllOrNothing() {
   check(rejected.recordBytes == 7u && !rejected.segmentedTransport &&
             rejected.recordBlob.empty() && !rejected.segmentedRegions,
         "pre-effect segmented rejection leaves caller output unchanged");
+
+  auto partialIdentity = transport;
+  partialIdentity.producerIdentity.lastEventOrdinal = 0u;
+  RawCommandChunk identityRejected;
+  check(!prepareSegmentedOffloadChunk(
+            partialIdentity, records, handles, payload, regionPool, registry,
+            nullptr, identityRejected) && !identityRejected.segmentedRegions,
+        "partial PE producer identity rejects before Unix adoption");
 
   RawCommandChunk occupied = makeChunk(7u);
   const auto occupiedBytes = occupied.recordBlob;
@@ -176,7 +190,11 @@ void testSegmentedPrepareIsAllOrNothing() {
               output.segmentedRegions.layout().usedBytes ==
                   records.size() + handles.size() + payload.size() &&
               output.renderTapeCaptureToken == 0x1234u &&
-              output.renderTapeEventOrdinal == 0x5678u,
+              output.renderTapeEventOrdinal == 0x5678u &&
+              output.producerIdentity.firstEventOrdinal == 9u &&
+              output.producerIdentity.lastEventOrdinal == 10u &&
+              output.producerIdentity.firstSourceOrdinal == 21u &&
+              output.producerIdentity.lastSourceOrdinal == 24u,
           "successful segmented adoption preserves typed regions and identity");
     check(std::memcmp(output.segmentedRegions.recordsBytes().data(),
                       records.data(), records.size()) == 0 &&

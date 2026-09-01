@@ -34,6 +34,28 @@ Oldest(set) == CHOOSE s \in set : \A t \in set : s <= t
 LifecycleAllowed(from, to, ownerName, dispositionName, controlName) ==
   KnownLifecycleRow(from, to, ownerName, dispositionName, controlName)
 
+(* The production PE event/source interval is immutable across every modeled
+ * stage. Exact uses one event/source per abstract source; the two alternate
+ * disciplines are deliberate native/model counterexamples for a reused
+ * producer identity and a partially initialized identity. *)
+ProducerFirstEvent(s) ==
+  IF ImportDiscipline = "DuplicateEventIdentity" THEN 1
+  ELSE IF ImportDiscipline = "PartialIdentity" THEN 0 ELSE s
+ProducerLastEvent(s) == s
+ProducerFirstSource(s) ==
+  IF ImportDiscipline = "DuplicateSourceIdentity" THEN 1 ELSE s
+ProducerLastSource(s) == s
+ProducerIdentityValid(s) ==
+  ProducerFirstEvent(s) > 0 /\
+  ProducerLastEvent(s) >= ProducerFirstEvent(s) /\
+  ProducerFirstSource(s) > 0 /\
+  ProducerLastSource(s) >= ProducerFirstSource(s)
+ProducerIdentityDisjoint(s, t) ==
+  /\ (ProducerLastEvent(s) < ProducerFirstEvent(t) \/
+      ProducerLastEvent(t) < ProducerFirstEvent(s))
+  /\ (ProducerLastSource(s) < ProducerFirstSource(t) \/
+      ProducerLastSource(t) < ProducerFirstSource(s))
+
 (* Bounded completion-frontier composition.  CompleteGpu owns the GPU tail;
  * the finish thread advances its waterline separately.  This relation is the
  * model-side contract for the native FinishAdvance snapshot and intentionally
@@ -541,6 +563,12 @@ ResetGenerationAdvances == resetCount > 0 => epoch > 1 /\
 OwnersAreExplicit ==
   \A s \in Sources : phase[s] # "Absent" =>
     owner[s] # "None" /\ disposition[s] # "None"
+
+EndToEndSourceIdentityExact ==
+  /\ \A s \in Sources : phase[s] # "Absent" => ProducerIdentityValid(s)
+  /\ \A s, t \in Sources :
+      s # t /\ phase[s] # "Absent" /\ phase[t] # "Absent"
+      => ProducerIdentityDisjoint(s, t)
 
 SelectedOwnerExact ==
   \A s \in Sources : phase[s] = "Encoding" =>

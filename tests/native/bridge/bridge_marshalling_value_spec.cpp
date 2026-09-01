@@ -600,7 +600,7 @@ void testCommandChunkGeneratedArgumentLayouts() {
           std::size_t{24}, "unix transport capability offset");
   checkEq(offsetof(D9CCommandChunkNegotiation, selectedTransport),
           std::size_t{28}, "selected transport offset");
-  checkEq(sizeof(D9CCommandChunkSegmentedTransportV1), std::size_t{112},
+  checkEq(sizeof(D9CCommandChunkSegmentedTransportV1), std::size_t{144},
           "fixed segmented transport descriptor size");
   checkEq(offsetof(D9CCommandChunkSegmentedTransportV1, header),
           std::size_t{0}, "segmented header is by value at offset zero");

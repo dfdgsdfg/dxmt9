@@ -577,8 +577,9 @@ source, or changing application-visible state. The total final wire extent,
 including fixed header, record/handle tables, payload, alignment, and padding,
 must be bounded by 32 MiB; canonical D9C V2 sizes are a 48-byte header,
 32-byte record row, 16-byte handle row, and 16-byte section descriptor. The
-fixed `D9CCommandChunkSegmentedTransportV1` descriptor is 112 bytes, with its
-last 16 bytes carrying the capture token and event ordinal; role byte counts
+fixed `D9CCommandChunkSegmentedTransportV1` descriptor is 144 bytes, with its
+last 48 bytes carrying the capture token/event ordinal and the immutable
+producer event/source interval; role byte counts
 exclude inter-table alignment, which is reconstructed from canonical offsets.
 An overflow or invalid checked arithmetic result rejects before retention or
 publication.
@@ -603,8 +604,8 @@ the wake/progress signal used by the waiting producer.
 
 **R-CORE-REC-7.9** The committed `PeSemanticBatchOwner` output is the PE
 specialization of `ImmutableSemanticSource` in R-ARCH-7.11 through
-R-ARCH-7.14. It must assign the producer event ordinal and complete semantic
-range needed to derive one `EndToEndSourceIdentity`, seal the same immutable
+R-ARCH-7.14. It must assign the closed producer event interval and complete
+semantic-source interval needed to derive one `EndToEndSourceIdentity`, seal the same immutable
 record/payload/resource/control values for contiguous and segmented emission,
 and carry only pointer-free offsets, counts, qualified identities, capture
 token, and event ordinal across the PE/unix boundary. PE settlement must not

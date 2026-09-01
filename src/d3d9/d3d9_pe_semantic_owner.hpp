@@ -201,7 +201,13 @@ struct PeSemanticSegmentedEmission {
   bool valid() const noexcept {
     return transport.header.recordCount != 0u && wireBytes != 0u &&
            transport.recordReserved == 0u && transport.handleReserved == 0u &&
-           transport.payloadReserved == 0u;
+           transport.payloadReserved == 0u &&
+           transport.producerIdentity.firstEventOrdinal != 0u &&
+           transport.producerIdentity.lastEventOrdinal >=
+               transport.producerIdentity.firstEventOrdinal &&
+           transport.producerIdentity.firstSourceOrdinal != 0u &&
+           transport.producerIdentity.lastSourceOrdinal >=
+               transport.producerIdentity.firstSourceOrdinal;
   }
 };
 
@@ -212,7 +218,13 @@ struct PeSemanticExactFixedEmission {
 
   bool valid() const noexcept {
     return wireBytes != 0u && wire.size() == wireBytes &&
-           transport.header.recordCount != 0u;
+           transport.header.recordCount != 0u &&
+           transport.producerIdentity.firstEventOrdinal != 0u &&
+           transport.producerIdentity.lastEventOrdinal >=
+               transport.producerIdentity.firstEventOrdinal &&
+           transport.producerIdentity.firstSourceOrdinal != 0u &&
+           transport.producerIdentity.lastSourceOrdinal >=
+               transport.producerIdentity.firstSourceOrdinal;
   }
 };
 
@@ -755,6 +767,24 @@ class PeSemanticBatchOwner final {
     return lastRecordOrdinal_ == std::numeric_limits<std::uint64_t>::max()
         ? 0u : lastRecordOrdinal_ + 1u;
   }
+  bool producerIdentity(
+      D9CCommandChunkProducerIdentity& identity) const noexcept {
+    identity = {};
+    if (!ready_ || recordCount_ == 0u ||
+        settledChunks_ == std::numeric_limits<std::uint64_t>::max()) {
+      return false;
+    }
+    const std::uint64_t first = storage_->records[0].sourceOrdinal;
+    const std::uint64_t last = storage_->records[recordCount_ - 1u].sourceOrdinal;
+    if (first == 0u || last < first) return false;
+    identity = {
+        .firstEventOrdinal = settledChunks_ + 1u,
+        .lastEventOrdinal = settledChunks_ + 1u,
+        .firstSourceOrdinal = first,
+        .lastSourceOrdinal = last,
+    };
+    return true;
+  }
   bool emissionMetrics(std::size_t& handles, std::size_t& payload,
                        std::size_t& wire) const noexcept {
     // Admission maintains these frontiers transactionally, so recorder
@@ -802,6 +832,7 @@ class PeSemanticBatchOwner final {
                                   payloadRegion.first(plan.payloadBytes),
                                   renderTapeCaptureToken,
                                   renderTapeEventOrdinal);
+    if (!producerIdentity(out.transport.producerIdentity)) return false;
     out.wireBytes = plan.wireBytes;
     return out.valid();
   }
@@ -830,6 +861,7 @@ class PeSemanticBatchOwner final {
                                          plan.payloadBytes);
       if (!writeEmission(plan, records, handles, payload)) return false;
       out.transport = makeTransport(plan, records, handles, payload, 0u, 0u);
+      if (!producerIdentity(out.transport.producerIdentity)) return false;
       out.wire = std::span<const std::byte>(destination.data(), plan.wireBytes);
       out.wireBytes = plan.wireBytes;
       return out.valid();
@@ -911,6 +943,7 @@ class PeSemanticBatchOwner final {
         std::span<std::byte>(storage_->wire).subspan(payloadOffset,
                                                       plan.payloadBytes),
         renderTapeCaptureToken, renderTapeEventOrdinal);
+    if (!producerIdentity(out.transport.producerIdentity)) return false;
     out.wireBytes = plan.wireBytes;
     return out.valid();
   }
@@ -2032,6 +2065,7 @@ class PeSemanticBatchOwner final {
         .payloadReserved = 0u,
         .renderTapeCaptureToken = captureToken,
         .renderTapeEventOrdinal = eventOrdinal,
+        .producerIdentity = {},
     };
   }
 

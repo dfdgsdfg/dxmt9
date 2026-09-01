@@ -399,6 +399,18 @@ typedef struct D9CCommandChunkWireHeader {
     uint32_t reserved1;
 } D9CCommandChunkWireHeader;
 
+/* Immutable producer-side identity for one accepted semantic batch.  The
+ * all-zero value is reserved for compatibility/import fixtures; production
+ * PE emission supplies the complete range.  A partial range is invalid.
+ * firstSourceOrdinal..lastSourceOrdinal names the inclusive PE semantic
+ * source range represented by this one producer event. */
+typedef struct D9CCommandChunkProducerIdentity {
+    uint64_t firstEventOrdinal;
+    uint64_t lastEventOrdinal;
+    uint64_t firstSourceOrdinal;
+    uint64_t lastSourceOrdinal;
+} D9CCommandChunkProducerIdentity;
+
 /* Fixed-role SegmentedTransportV1 descriptor. The canonical V2 header is
  * passed by value; each role token names only the live bytes of one client
  * span. recordBytes and handleBytes exclude the canonical zero-alignment gaps
@@ -419,9 +431,10 @@ typedef struct D9CCommandChunkSegmentedTransportV1 {
     uint32_t payloadReserved;
     uint64_t renderTapeCaptureToken;
     uint64_t renderTapeEventOrdinal;
+    D9CCommandChunkProducerIdentity producerIdentity;
 } D9CCommandChunkSegmentedTransportV1;
 
-#define D9C_COMMAND_CHUNK_SEGMENTED_TRANSPORT_V1_SIZE 112u
+#define D9C_COMMAND_CHUNK_SEGMENTED_TRANSPORT_V1_SIZE 144u
 
 typedef struct D9CCommandChunkWireRecordHeader {
     uint32_t type;
@@ -908,6 +921,7 @@ typedef struct D9CCommandChunk {
     D9CWireHandle handles;
     uint64_t renderTapeCaptureToken;
     uint64_t renderTapeEventOrdinal;
+    D9CCommandChunkProducerIdentity producerIdentity;
 } D9CCommandChunk;
 
 typedef enum D9CRenderTapeIdentityCaptureStatus {

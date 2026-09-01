@@ -682,7 +682,7 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
   if (pipelineObserverEnv && pipelineObserverEnv[0] != '\0' &&
       pipelineObserverEnv[0] != '0') {
     pipelineLifecycleObserver_ =
-        std::make_unique<dxmt9::queue::PipelineLifecycleObserver>(true);
+        std::make_unique<dxmt9::queue::PipelineLifecycleObserver>(true, true);
   }
 
   // Bind queueLifecycle_ to our own state + a pool-based surface-compat
@@ -4044,8 +4044,10 @@ CommandQueue::DirectChunkSlotReplayBeginResult
 CommandQueue::beginDirectChunkSlotReplay(
     std::uint64_t rawOrdinal,
     const core::SourcePayloadCapacity& capacity,
-    std::size_t plannedBytes) noexcept {
-  if (rawOrdinal == 0 || plannedBytes == 0 || capacity.commandHeaders == 0) {
+    std::size_t plannedBytes,
+    core::CpuReadyProducerIdentity producerIdentity) noexcept {
+  if (rawOrdinal == 0 || plannedBytes == 0 || capacity.commandHeaders == 0 ||
+      !producerIdentity.importable()) {
     return {.status = DirectChunkSlotReplayStatus::LegacyUnsupported};
   }
   const auto qmxBegin = queueMutexProbeBegin();
@@ -4106,6 +4108,7 @@ CommandQueue::beginDirectChunkSlotReplay(
       .sourceOrdinal = seqId,
       .seqId = seqId,
       .buildGeneration = nextDirectChunkSlotBuildGeneration_++,
+      .producerIdentity = producerIdentity,
   };
   directChunkSlotBuildContext_.emplace();
   auto& context = *directChunkSlotBuildContext_;
@@ -4309,6 +4312,14 @@ CommandQueue::commitDirectChunkSlotReplay(
       !context->assembler->commit()) {
     return failStop();
   }
+  if (!cpuReadyTape_.extendCompatibilityProducerIdentity(
+          core::CpuReadyPublicationTicket{
+              .id = ticket.id,
+              .storage = ticket.storage,
+          },
+          ticket.producerIdentity)) {
+    return failStop();
+  }
   if (context->updatesBackBuffer) {
     currentBackBuffer_ = context->pendingBackBuffer;
   }
@@ -4357,8 +4368,9 @@ CommandQueue::beginCpuReadyArenaSource(
     std::uint64_t rawOrdinal,
     const core::ArenaSourcePayloadLayout& layout,
     std::optional<core::metalqueue::CpuReadySupplyObservationToken>
-        supplyAttempt) noexcept {
-  if (rawOrdinal == 0 || !layout.valid()) {
+        supplyAttempt,
+    core::CpuReadyProducerIdentity producerIdentity) noexcept {
+  if (rawOrdinal == 0 || !layout.valid() || !producerIdentity.importable()) {
     return {.status = CpuReadyArenaBeginStatus::Invalid};
   }
   for (std::size_t i = 0; i < layout.segmentCount; ++i) {
@@ -4454,6 +4466,7 @@ CommandQueue::beginCpuReadyArenaSource(
       .seqId = seqId,
       .buildGeneration = buildGeneration == 0 ? nextArenaBuildGeneration_++
                                              : buildGeneration,
+      .producerIdentity = producerIdentity,
   };
   auto reservation = cpuReadyTape_.reserve(layout, identity);
   if (!reservation) {
@@ -4512,9 +4525,11 @@ CommandQueue::beginCpuReadyArenaSources(
     std::uint64_t rawOrdinal,
     std::span<const core::ArenaSourcePayloadLayout> layouts,
     std::optional<core::metalqueue::CpuReadySupplyObservationToken>
-        supplyAttempt) noexcept {
+        supplyAttempt,
+    core::CpuReadyProducerIdentity producerIdentity) noexcept {
   if (rawOrdinal == 0 || layouts.empty() ||
-      layouts.size() > core::CpuReadyTape::kMaxArenaBatchSources) {
+      layouts.size() > core::CpuReadyTape::kMaxArenaBatchSources ||
+      !producerIdentity.importable()) {
     return {.status = CpuReadyArenaBeginStatus::Invalid};
   }
   for (const auto& layout : layouts) {
@@ -4590,7 +4605,8 @@ CommandQueue::beginCpuReadyArenaSources(
       ? nextArenaBuildGeneration_++
       : generation;
   auto batch = cpuReadyTape_.reserveArenaBatch(
-      layouts, rawOrdinal, firstSeqId, firstSeqId, buildGeneration);
+      layouts, rawOrdinal, firstSeqId, firstSeqId, buildGeneration,
+      producerIdentity);
   if (!batch) {
     // reserveArenaBatch performs one aggregate preflight over every source.
     // Do not probe layouts.front(): a later-source descriptor or allocator
@@ -4635,6 +4651,7 @@ CommandQueue::beginCpuReadyArenaSources(
               .sourceOrdinal = firstSeqId + i,
               .seqId = firstSeqId + i,
               .buildGeneration = buildGeneration,
+              .producerIdentity = producerIdentity,
           },
           layouts[i].usedBytes);
     }
@@ -5759,7 +5776,8 @@ bool CommandQueue::publishCpuReadyArenaSource(
             .rawOrdinal = ticket.rawOrdinal,
             .sourceOrdinal = ticket.sourceOrdinal,
             .seqId = ticket.seqId,
-            .buildGeneration = ticket.buildGeneration},
+            .buildGeneration = ticket.buildGeneration,
+            .producerIdentity = ticket.producerIdentity},
         context->layout.usedBytes);
   }
   control.seqId = ticket.seqId;
@@ -6271,7 +6289,8 @@ CommandQueue::publishCpuReadyArenaBatch(
               .rawOrdinal = sourceTicket.rawOrdinal,
               .sourceOrdinal = sourceTicket.sourceOrdinal,
               .seqId = sourceTicket.seqId,
-              .buildGeneration = sourceTicket.buildGeneration},
+              .buildGeneration = sourceTicket.buildGeneration,
+              .producerIdentity = sourceTicket.producerIdentity},
           context->batchLayouts[i].usedBytes,
           physicalBatchId,
           static_cast<std::uint32_t>(i),

@@ -14,8 +14,16 @@ CpuReadySemanticTransfer::CpuReadySemanticTransfer(
       .sourceOrdinal = ticket.sourceOrdinal,
       .seqId = ticket.seqId,
       .buildGeneration = ticket.buildGeneration,
+      .producerIdentity = ticket.producerIdentity,
   };
-  if (!identity_.valid() || ticket.rawOrdinal != raw_.replaySeq) {
+  const dxmt9::core::CpuReadyProducerIdentity rawProducerIdentity{
+      .firstEventOrdinal = raw_.producerIdentity.firstEventOrdinal,
+      .lastEventOrdinal = raw_.producerIdentity.lastEventOrdinal,
+      .firstSourceOrdinal = raw_.producerIdentity.firstSourceOrdinal,
+      .lastSourceOrdinal = raw_.producerIdentity.lastSourceOrdinal,
+  };
+  if (!identity_.valid() || ticket.rawOrdinal != raw_.replaySeq ||
+      ticket.producerIdentity != rawProducerIdentity) {
     fail(CpuReadySemanticTransferFailure::InvalidSourceIdentity,
          CpuReadySemanticTransferStage::FailStopped);
   }

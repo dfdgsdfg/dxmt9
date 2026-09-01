@@ -13,6 +13,9 @@ namespace dxmt9::d3d9 {
 
 static_assert(std::endian::native == std::endian::little,
               "command chunk wire canonical requires a little-endian target");
+static_assert(std::is_standard_layout_v<D9CCommandChunkProducerIdentity>);
+static_assert(std::is_trivially_copyable_v<D9CCommandChunkProducerIdentity>);
+static_assert(sizeof(D9CCommandChunkProducerIdentity) == 32u);
 static_assert(std::is_standard_layout_v<D9CCommandChunkSegmentedTransportV1>);
 static_assert(std::is_trivially_copyable_v<
               D9CCommandChunkSegmentedTransportV1>);
@@ -30,6 +33,38 @@ static_assert(offsetof(D9CCommandChunkSegmentedTransportV1,
                        renderTapeCaptureToken) == 96u);
 static_assert(offsetof(D9CCommandChunkSegmentedTransportV1,
                        renderTapeEventOrdinal) == 104u);
+static_assert(offsetof(D9CCommandChunkSegmentedTransportV1,
+                       producerIdentity) == 112u);
+
+constexpr bool commandChunkProducerIdentityAbsent(
+    const D9CCommandChunkProducerIdentity& identity) noexcept {
+  return identity.firstEventOrdinal == 0u &&
+      identity.lastEventOrdinal == 0u && identity.firstSourceOrdinal == 0u &&
+      identity.lastSourceOrdinal == 0u;
+}
+
+constexpr bool commandChunkProducerIdentityValid(
+    const D9CCommandChunkProducerIdentity& identity) noexcept {
+  return identity.firstEventOrdinal != 0u &&
+      identity.lastEventOrdinal >= identity.firstEventOrdinal &&
+      identity.firstSourceOrdinal != 0u &&
+      identity.lastSourceOrdinal >= identity.firstSourceOrdinal;
+}
+
+constexpr bool commandChunkProducerIdentityImportable(
+    const D9CCommandChunkProducerIdentity& identity) noexcept {
+  return commandChunkProducerIdentityAbsent(identity) ||
+      commandChunkProducerIdentityValid(identity);
+}
+
+constexpr bool commandChunkProducerIdentityEqual(
+    const D9CCommandChunkProducerIdentity& lhs,
+    const D9CCommandChunkProducerIdentity& rhs) noexcept {
+  return lhs.firstEventOrdinal == rhs.firstEventOrdinal &&
+      lhs.lastEventOrdinal == rhs.lastEventOrdinal &&
+      lhs.firstSourceOrdinal == rhs.firstSourceOrdinal &&
+      lhs.lastSourceOrdinal == rhs.lastSourceOrdinal;
+}
 
 enum RecordRuleFlags : std::uint32_t {
   RecordRuleNone = 0u,

@@ -15,6 +15,7 @@ enum class CommandChunkValidationStatus : std::uint8_t {
   OuterVersionMismatch,
   OuterCountMismatch,
   InvalidHeader,
+  InvalidSourceIdentity,
   InvalidChunkRange,
   InvalidAlignment,
   NonCanonicalChunkLayout,
@@ -44,6 +45,7 @@ struct CommandChunkEnvelope {
   std::uint32_t version = D9C_COMMAND_CHUNK_VERSION;
   std::uint32_t recordCount = 0u;
   std::uint32_t handleCount = 0u;
+  D9CCommandChunkProducerIdentity producerIdentity{};
 };
 
 struct ImportedSectionView {

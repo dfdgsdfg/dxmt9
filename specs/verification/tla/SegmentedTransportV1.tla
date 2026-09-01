@@ -45,15 +45,16 @@ ExpectedHandleCount == 2
 ExpectedPayloadBytes == SegmentCount
 WireCapBytes == 32 * 1024 * 1024
 (* These are the canonical D9C V2 values in include/dxmt9/device_c.h.  The
-   fixed-role descriptor is a 112-byte POD value; its final 16 bytes are the
-   capture token and event ordinal.  Its role byte counts intentionally omit
+   fixed-role descriptor is a 144-byte POD value; its final 48 bytes are the
+   capture token/event ordinal and immutable producer interval. Its role byte counts intentionally omit
    inter-table alignment, which the importer reconstructs from offsets. *)
 WireHeaderBytes == 48
 WireRecordBytes == 32
 WireHandleBytes == 16
 WireSectionDescriptorBytes == 16
-SegmentedTransportDescriptorBytes == 112
+SegmentedTransportDescriptorBytes == 144
 CaptureTokenEventOrdinalBytes == 16
+ProducerIdentityBytes == 32
 WireAlignmentBytes == 8
 AlignUp(value, alignment) == alignment * ((value + alignment - 1) \div alignment)
 RecordTableOffset == WireHeaderBytes
@@ -392,14 +393,16 @@ WireExtentBounded ==
   /\ WireRecordBytes = 32
   /\ WireHandleBytes = 16
   /\ WireSectionDescriptorBytes = 16
-  /\ SegmentedTransportDescriptorBytes = 112
+  /\ SegmentedTransportDescriptorBytes = 144
   /\ CaptureTokenEventOrdinalBytes = 16
+  /\ ProducerIdentityBytes = 32
   /\ ExpectedWireBytes <= WireCapBytes
 
 DescriptorShape ==
   /\ SegmentedTransportDescriptorBytes = WireHeaderBytes
        + 3 * (2 * 4 + 4 + 4) + CaptureTokenEventOrdinalBytes
-  /\ SegmentedTransportDescriptorBytes = 112
+       + ProducerIdentityBytes
+  /\ SegmentedTransportDescriptorBytes = 144
   /\ InterTablePaddingBytes = PayloadArenaOffset - PayloadTableEnd
 
 RoleOrder ==

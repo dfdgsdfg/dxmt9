@@ -35,10 +35,11 @@ struct CpuReadySemanticTransferIdentity {
   std::uint64_t sourceOrdinal = 0;
   std::uint64_t seqId = 0;
   std::uint64_t buildGeneration = 0;
+  dxmt9::core::CpuReadyProducerIdentity producerIdentity{};
 
   bool valid() const noexcept {
     return rawOrdinal != 0 && sourceOrdinal != 0 && seqId != 0 &&
-           buildGeneration != 0;
+           buildGeneration != 0 && producerIdentity.importable();
   }
 };
 

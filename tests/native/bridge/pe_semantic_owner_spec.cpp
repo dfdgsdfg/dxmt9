@@ -508,6 +508,39 @@ void emissionSmoke() {
   nullableCanonical.resetAndReleaseRetained();
 }
 
+void producerIdentityFollowsSettlementAndSourceRange() {
+  Owner owner;
+  D9CSurface surface;
+  auto first = base(PeSemanticProducerKind::Present, 1u, 1u);
+  first.surface0 =
+      localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0x771u);
+  auto second = base(PeSemanticProducerKind::Present, 2u, 2u);
+  second.surface0 = first.surface0;
+  check(owner.admit(first) && owner.admit(second),
+        "producer identity fixture admits a source interval");
+  PeSemanticExactFixedEmission firstEmission;
+  check(owner.emitExactFixed(firstEmission) &&
+            firstEmission.transport.producerIdentity.firstEventOrdinal == 1u &&
+            firstEmission.transport.producerIdentity.lastEventOrdinal == 1u &&
+            firstEmission.transport.producerIdentity.firstSourceOrdinal == 1u &&
+            firstEmission.transport.producerIdentity.lastSourceOrdinal == 2u,
+        "first immutable emission binds its exact PE event/source interval");
+  check(owner.settle(), "producer identity fixture settles its first event");
+
+  auto third = base(PeSemanticProducerKind::Present, 3u, 3u);
+  third.surface0 = first.surface0;
+  check(owner.admit(third), "producer identity fixture admits next event");
+  PeSemanticSegmentedEmission secondEmission;
+  check(owner.emitSegmented(secondEmission) &&
+            secondEmission.transport.producerIdentity.firstEventOrdinal == 2u &&
+            secondEmission.transport.producerIdentity.lastEventOrdinal == 2u &&
+            secondEmission.transport.producerIdentity.firstSourceOrdinal == 3u &&
+            secondEmission.transport.producerIdentity.lastSourceOrdinal == 3u,
+        "settlement advances the PE event while preserving source order");
+  owner.reset();
+  check(surface.refs == 1u, "producer identity fixture releases its pin");
+}
+
 void semanticBridgePreRetryPreservesOwnerBytes() {
   Owner owner;
   D9CSurface surface;
@@ -884,6 +917,7 @@ int main() {
     partialRectClearMatchesCanonicalBuilder();
     collisionCopyOverflowAndRetry();
     emissionSmoke();
+    producerIdentityFollowsSettlementAndSourceRange();
     semanticBridgePreRetryPreservesOwnerBytes();
     semanticRetryPredicateTruthTable();
     productionCapacityMatchesLegacyCadence();
