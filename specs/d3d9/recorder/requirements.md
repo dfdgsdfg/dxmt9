@@ -11,7 +11,7 @@ This topic refines the parent D3D9 hot-path contract
 (`R-CORE-3.1`–`3.8`, `R-CORE-11.1`–`11.18`) for the PE recorder. It preserves
 the ownership and POD boundaries in `R-ARCH-1.*`, `R-ARCH-2.*`,
 `R-ARCH-3.*`, `R-ARCH-6.*`, and the immutable-source lifecycle in
-`R-ARCH-7.11`–`7.19`; the producer-ownership discipline in
+`R-ARCH-7.11`–`7.24`; the producer-ownership discipline in
 `R-BACK-43.4`–`43.7`; and the evidence ladder in `R-VERIF-1.5`–`1.8`,
 `R-VERIF-6.4`–`6.6`, and `R-VERIF-7.1`–`7.4`.
 
@@ -612,3 +612,13 @@ claim Unix `SourceLease`, queue sequence, storage generation, or completion
 ownership; those fields are bound atomically by the importer/queue contract in
 R-BACK-2.90 through R-BACK-2.95. The all-family projection and fault matrix
 must reject a producer family that cannot preserve this mapping.
+
+**R-CORE-REC-7.10** PE must expose the complete committed semantic batch as one
+synchronous borrowed source during the bridge call. The batch may use
+pointer-free record/handle tables and payload arenas, but no PE address, span,
+allocator block, or recorder capability may become an asynchronous Replay
+owner merely because PE and unixlib share a process address space. Before the
+call returns, the importer must establish complete Unix ownership through the
+named `copy.bridge.raw-owned` operation or a separately specified atomic
+shared-lease adoption protocol. PE must not prebuild backend-private
+`ChunkSlot`/Arena SoA, Unix resource resolutions, or Metal binding state.

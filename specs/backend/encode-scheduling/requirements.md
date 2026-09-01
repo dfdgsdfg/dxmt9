@@ -23,7 +23,7 @@ another:
 | Submission boundary | A command buffer or jointly committed command-buffer group enters Metal execution. |
 
 The requirements `R-BACK-2.35` through `R-BACK-2.50`, `R-BACK-2.57`
-through `R-BACK-2.67`, and `R-BACK-2.76` through `R-BACK-2.95` are
+through `R-BACK-2.67`, and `R-BACK-2.76` through `R-BACK-2.100` are
 authoritative here.
 
 ## 1. Producer / Encode Overlap
@@ -1273,7 +1273,7 @@ native model binding, GPU, wild, locality, and performance evidence satisfy
 
 **R-BACK-2.95** Unix import, replay, encode scheduling, completion, and reclaim
 must implement the `ImmutableSemanticSource` composition in R-ARCH-7.11 through
-R-ARCH-7.19. Import must bind the authenticated PE event to one queue source,
+R-ARCH-7.24. Import must bind the authenticated PE event to one queue source,
 storage generation, sequence, and completion identity before publication.
 `TransactionalChunkSlotAssembler` and compatibility replay must consume only a
 generation-qualified `SynchronousSourceFacade`; their different physical
@@ -1284,3 +1284,64 @@ locators or compact value snapshots and must reacquire a facade at use.
 After payload retirement only a locator-free completion projection may remain.
 Normal completion, state-only/no-GPU settlement, device loss, rollback, poison,
 and capacity wake must each terminate the same identity exactly once.
+
+**R-BACK-2.96** Unix import must close asynchronous source ownership before the
+PE bridge call returns. With the current ABI it must copy the accepted complete
+source into one `RawOwned` lease; a future same-address path must atomically
+adopt a generation-qualified shared allocation and its sole reclaim authority.
+Replay may move that lease or source-qualified block references between threads
+without copying semantic bytes. It must build final queue-owned SoA/payload
+storage through one bounded plan and one transactional emission. Ordered
+controls may fail closed or select compatibility replay, but they must not cause
+partial source ownership, retained PE spans, or a per-draw AoS handoff to become
+the normal asynchronous representation.
+
+**R-BACK-2.97** Replay must project each admitted source against one
+single-writer persistent backend state through a source-local working state.
+The projection must deterministically produce the effective ordered commands,
+draw state/uniform values, ordered-control dispositions, qualified resources,
+and exact next persistent state. Exact layout/count/dedup planning must consume
+that projection without mutating it, and transactional emission must construct
+the final SoA/payload/sidecar before publishing either the destination or the
+next persistent state. Pre-effect failure restores both checkpoints; failure
+after an irreversible ordered-control, receipt, publication, or encoder effect
+must poison/fail-stop and must not expose a partially advanced state to a later
+source. This is a logical value transaction: implementations should use a
+versioned overlay, checkpoint/undo journal, persistent root, or equivalent
+bounded DOD mechanism rather than copying the complete backend state or
+materializing a second complete effective-command carrier.
+
+**R-BACK-2.98** Replay-core canonicalization must be representation preserving.
+Exact interning may map multiple equal values to one physical row while keeping
+every logical command attribution. Dead-state/command elimination, draw
+reordering, pass coalescing, mutation composition, cross-source state folding,
+and partition/parallel selection must use a separate policy interface over the
+immutable `EffectiveStream`. Each admitted policy must retain a source-qualified
+fallback/certificate and satisfy its own formal, native differential, GPU, and
+wild promotion gates. Optimized encoder output must not determine the next
+persistent replay state; that state derives from the complete unoptimized
+projection.
+
+**R-BACK-2.99** Completion of R-BACK-2.97 through R-BACK-2.98 must retire
+`DrawRunSubmission`, `DrawRunSubmissionStateLane`, their snapshot/batch submit
+APIs, carrier-specific grouping/elision helpers, source-payload adapters,
+scratch vectors, and copy/materialization counters from production. Every draw
+family must enter final queue storage through the universal assembler; mixed
+sources must use typed ordered-control boundaries without rebuilding an AoS
+draw carrier. Exact Legacy semantic behavior may remain as an oracle or
+pre-effect disposition, but not as a second production representation. The
+removal gate requires Legacy/direct effective-stream and next-state
+differentials, final-SoA/resource/completion equivalence, trace/capture and
+segmented/oversized/UP coverage, source audits, GPU readback, and wild visual
+and locality evidence.
+
+**R-BACK-2.100** Import, Replay, queue publication, and Encode must implement
+the R-ARCH-7.24 materialization floor. Import owns at most one complete
+`copy.bridge.raw-owned` operation per accepted source under the current ABI.
+Replay owns at most one transactional construction of each surviving final SoA
+row and payload byte. Cross-thread/source/session/partition handoffs must move
+leases and bounded metadata without gathering or copying source payloads.
+Encode must count known GPU-visible writes separately from Metal command and
+resource-reference emission. Any additional O(source bytes), O(draw state), or
+O(resource payload) copy requires a named owner-qualified ledger row and must
+fail the carrier-retirement gate unless a requirement proves it unavoidable.

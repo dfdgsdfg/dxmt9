@@ -417,3 +417,74 @@ one bounded formal refinement must cover PE acceptance/import, source sealing,
 facade borrow/return, direct or compatibility replay, serial or selected-child
 encode, completion, and reclaim. Subsystem models may abstract adjacent stages
 only through the transitions and fields defined by `EndToEndSourceIdentity`.
+
+**R-ARCH-7.20** The PE/unix call boundary must classify the complete committed
+batch by lifetime, not classify individual D3D9 commands as synchronous or
+asynchronous. PE pointers and spans may be borrowed only while the bridge call
+is active. Before that call returns, Unix must either copy the complete accepted
+source into one Unix-owned `RawOwned` lease or atomically adopt it through a
+negotiated shared-ownership ABI. Sharing one process virtual address, retaining
+only selected spans, or assuming the PE allocator remains stable is not an
+ownership transfer. Reset, teardown, retry, and allocator reuse must not create
+an ABA-valid asynchronous pointer.
+
+**R-ARCH-7.21** The immutable producer layout and the final queue execution
+layout are distinct DOD representations with one semantic identity. PE may
+construct pointer-free record/handle tables and payload arenas optimized for
+bounded capture and transport; it must not construct a Unix `ChunkSlot`, Metal
+binding layout, resolved-resource sidecar, or backend-private SoA. After import,
+Replay must perform at most one bounded count/dedup/resolve plan and one
+transactional emission into final queue-owned SoA/payload storage. The source
+lease may cross a worker boundary without copying its bytes. A large per-draw
+AoS carrier, a second semantic serialization, or physical concatenation of
+already-owned source blocks is a removable compatibility materialization, not
+a required consequence of keeping Replay on a separate thread.
+
+**R-ARCH-7.22** Mandatory Replay projection and optional scheduling
+optimization must be separate typed stages. Replay core may perform canonical
+decoding, sequential backend-state transitions, exact layout/count, provably
+equal byte/value interning, resource resolution and lifetime qualification,
+and representation-only canonicalization. It must produce one immutable,
+source-qualified `EffectiveStream` and the exact next persistent replay state.
+Dead-state or command elimination, draw reordering, pass coalescing, mutation
+composition, cross-source state folding, and partition/parallel selection are
+optimizer policies. Such a policy must consume the effective stream through a
+separate interface, preserve the unoptimized stream for deterministic fallback,
+and supply the semantic/refinement evidence required by R-ARCH-7.10. Physical
+deduplication may share storage for equal values; it must not silently remove a
+logical command or change the persistent replay state.
+
+The value semantics of `ReplayState` and `EffectiveStream` must not require an
+O(full device state) copy or a second O(source bytes) carrier per source. A
+versioned overlay, checkpoint/undo journal, persistent table root, bounded
+projection cursor, or compact typed plan may implement the same transaction if
+rollback, deterministic re-traversal, and source-qualified attribution remain
+equivalent.
+
+**R-ARCH-7.23** `DrawRunSubmission` and any equivalent large per-draw AoS are
+transitional compatibility carriers and must be removed from production once
+the universal Replay projection, transactional final-storage assembler, and
+typed ordered-control dispositions cover every admitted source family. A
+semantic fallback may remain, but it must consume the same immutable source and
+emit final SoA or an explicit control effect without reconstructing the retired
+carrier. Removal requires a source/API audit showing no production declaration,
+snapshot, vector, queue handoff, adapter, or carrier-specific counter remains;
+native fixtures must construct `EffectiveStream` or final-storage inputs rather
+than preserve the retired representation as a test API.
+
+**R-ARCH-7.24** The normal CPU/GPU submission path may contain only four named
+large materialization classes: one PE semantic-source emission from committed
+state, one complete PE-to-Unix `RawOwned` ownership copy while the current ABI
+lacks shared-lease adoption, one transactional `RawOwned`-to-final-SoA/payload
+emission, and GPU-visible writes required by Metal resources or transient
+bindings. Queue handoff, planning, sidecar construction, partition/session
+transfer, completion, and reclaim must move leases, identities, locators, or
+bounded compact values rather than O(source bytes) storage. A per-draw carrier,
+cross-source gather, repeated serialization, final-region reallocation/copy, or
+upload of CPU-only planning data is outside this floor and must have an explicit
+ledger class, measured necessity, and promotion requirement or be removed.
+
+Metal command encoding and existing `MTLBuffer`/`MTLTexture` binding are not by
+themselves evidence of a GPU byte copy. GPU-transfer accounting must distinguish
+resource reference/API command emission from known CPU writes, shared/private
+resource uploads, and driver-internal transfers whose byte count is unavailable.

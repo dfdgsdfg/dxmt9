@@ -777,7 +777,7 @@ that later provider remains default-off until the layered gates in
 ### 6.3 End-to-end source identity handoff
 
 The recorder is the first concrete owner in the architecture contract
-R-ARCH-7.11 through R-ARCH-7.19; it does not own the whole lifecycle.
+R-ARCH-7.11 through R-ARCH-7.24; it does not own the whole lifecycle.
 `PeSemanticBatchOwner` seals the ordered semantic source and supplies the
 producer event ordinal, qualified resource/control identities, exact role
 extents, capture token, and byte ranges. Contiguous and segmented visitors read
@@ -786,11 +786,22 @@ defined by R-CORE-REC-7.6 through R-CORE-REC-7.9.
 
 Unix import authenticates that descriptor and adds the raw/source, queue
 sequence, storage-generation, and completion qualifications required to form
-the complete `EndToEndSourceIdentity` under R-BACK-2.90 through R-BACK-2.95.
+the complete `EndToEndSourceIdentity` under R-BACK-2.90 through R-BACK-2.96.
 The recorder settles PE retains and capture state against the accepted event,
 but it must not fabricate a Unix `SourceLease`, retain a Unix facade, predict a
 queue sequence, or treat a physical segment as an independent completion
 source. R-VERIF-7.9 owns verification of this cross-side composition point.
+
+The PE representation is already DOD: canonical record and handle tables plus
+payload arenas are emitted from one immutable semantic owner. It is not the
+backend execution SoA. The recorder does not resolve Unix objects, choose
+queue capacity, intern final draw/uniform state, or encode Metal bindings, so
+constructing `ChunkSlot` layout on PE would couple the wire ABI to backend
+storage while still leaving Unix-only work unresolved. R-CORE-REC-7.10 instead
+places one mechanical lifetime cut around the complete batch. Unix may inspect
+the borrowed PE regions synchronously, but it must own the complete accepted
+source before the bridge returns; no record-family-specific lifetime inference
+is permitted.
 
 ## 7. Acceptance matrix
 

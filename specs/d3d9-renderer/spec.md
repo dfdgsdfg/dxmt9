@@ -233,7 +233,7 @@ R-BACK-32.12 additionally requires graph, optimizer, session, and partition
 state to retain only source-qualified locators or compact sidecar values and to
 reacquire this facade under the R-BACK-2.89 generation-qualified borrow before
 resolution. The end-to-end identity and reclaim authority remain those of
-R-ARCH-7.11 through R-ARCH-7.19, not a renderer-local identity.
+R-ARCH-7.11 through R-ARCH-7.24, not a renderer-local identity.
 
 ---
 

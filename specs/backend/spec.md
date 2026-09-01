@@ -814,7 +814,13 @@ mode. The registry, producer, importer, native parity tests, PE x64/x86 builds,
 and runtime bridge-op gates
 passed before the canonical promotion.
 
-### 2.5 Draw-Run Batch Compatibility
+### 2.5 Transitional Draw-Run Batch Compatibility
+
+This section documents the current compatibility carrier, not a permanent
+backend representation. `specs/archicture/requirements.md` R-ARCH-7.23 and
+`backend/encode-scheduling/requirements.md` R-BACK-2.99 require its deletion
+after universal effective-stream projection and final-SoA emission cover every
+draw source family and typed ordered controls.
 
 Draw-run batching coalesces adjacent draws that share one canonical render state
 into a single execution record, so the encoder binds state once and issues N draw

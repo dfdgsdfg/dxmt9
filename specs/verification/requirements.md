@@ -527,7 +527,7 @@ behavior; those assumptions are environment boundaries rather than model
 proofs.
 
 **R-VERIF-7.9** One composed model/code trace must bind R-ARCH-7.11 through
-R-ARCH-7.19 across the real subsystem transitions. Its state must include the
+R-ARCH-7.24 across the real subsystem transitions. Its state must include the
 complete `EndToEndSourceIdentity`, physical representation kind, storage
 generation, lease/borrow count, sidecar generation, effect cut, completion
 projection, reclaim authority, and capacity-wake generation. Native
@@ -535,7 +535,30 @@ isomorphism must compare the same transition relation against production PE
 accept/import, direct and compatibility replay, serial and selected-child
 encode, normal/no-GPU/device-loss completion, and reclaim. Deliberate
 counterexamples must cover duplicate logical identity, partial adoption,
-facade escape or reclaim with a borrow, stale sidecar/locator use, retry after
-an effect, completion before child join, double reclaim, and missing capacity
-wake. Component models remain useful but cannot substitute for this composed
-trace.
+facade escape or reclaim with a borrow, retention of a PE span after bridge
+return, false same-address adoption without reclaim transfer, stale
+sidecar/locator use, retry after an effect, completion before child join,
+double reclaim, and missing capacity wake. Component models remain useful but
+cannot substitute for this composed trace.
+
+**R-VERIF-7.10** Replay projection must have a model/code isomorphism over a
+bounded persistent state, immutable source, source-local working state,
+effective stream, exact physical plan, final emission, and state commit. The
+production projection and native truth table must use the same pure transition
+for representative A→B→A state, draw, resource-generation, and ordered-control
+sequences. Counterexamples must reject state commit before successful emission,
+partial destination publication, exact dedup that drops logical attribution,
+optimizer output used as the next persistent state, and optimizer admission
+without its typed proof/fallback certificate. A Legacy-versus-direct
+differential must compare effective commands, next state, final SoA values,
+resource/completion identity, and failure disposition. Retirement evidence must
+also audit production sources and public backend APIs for the absence of
+`DrawRunSubmission`, equivalent per-draw AoS carriers, carrier-specific
+materialization counters, and carrier-only test seams.
+
+The same evidence must reconcile the owner-qualified copy/materialization
+ledger with R-ARCH-7.24: exactly one named PE semantic emission, at most one
+current-ABI `RawOwned` import copy, one final-SoA construction per surviving
+value/byte, and separately classified GPU-visible writes. It must reject hidden
+queue/session gathers, repeated serialization, final-region relocation, and
+Metal command/resource references misreported as known byte copies.

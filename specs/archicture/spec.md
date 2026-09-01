@@ -273,7 +273,7 @@ and opt-in, with `PeImport`, `Receipt`, `SelectedParallel`, `DeviceLoss`, and
 
 ### 2.5 End-to-end immutable source contract
 
-`R-ARCH-7.11` through `R-ARCH-7.19` make one semantic source, rather than a
+`R-ARCH-7.11` through `R-ARCH-7.24` make one semantic source, rather than a
 sequence of carriers, the architecture-wide unit of work. The terms below are
 normative interfaces; subsystem specs map them to concrete types.
 
@@ -316,6 +316,22 @@ the same checked facade and preserve the same source identity. A direct replay
 may construct final SoA and payload regions once; a compatibility replay may
 materialize the named removable carrier. Neither choice changes command,
 resource, failure, Present, or completion semantics.
+
+The source and destination are both data-oriented, but they serve different
+consumers and therefore need not share one physical schema:
+
+| Representation | Optimized for | Ownership boundary |
+|---|---|---|
+| PE semantic tables plus payload arena | exact D3D9 order, bounded validation, capture, and pointer-free ABI emission | `ProducerOwned`; readable by Unix only during the active bridge call |
+| Unix `RawOwned` source | asynchronous Replay residency and generation-qualified facade issuance | one Unix source lease established before bridge return |
+| Queue `ChunkSlot` / Arena SoA | replay scans, state/uniform interning, encode locality, and completion attribution | `FinalOwned`; constructed transactionally from the leased source |
+
+This distinction does not require a per-command guess about whether a call is
+"really synchronous." The complete committed batch crosses the lifetime cut as
+one unit. Call-local typed facades are then issued mechanically from the
+Unix-owned lease and become invalid when their callback returns. Commands that
+require ordered control still affect replay/encode disposition, but they do not
+weaken source ownership.
 
 Before import acceptance, the PE recorder transaction owns rollback and every
 producer retain. Import acceptance atomically transfers the logical reclaim
@@ -360,8 +376,18 @@ from the encode coordinator when measured overlap justifies it. Neither
 boundary requires a large per-draw carrier: the handoff is the immutable source
 lease plus generation-qualified final-storage and sidecar identities.
 
-`DrawRunSubmission` is therefore a compatibility representation, not the
-architecture's source or sidecar type. It combines optional canonical state,
+Wine's PE and unixlib may observe the same process virtual address during a
+`wine_unix_call`, but address visibility is not asynchronous ownership. Under
+the current pointer-free ABI, import establishes `RawOwned` bytes before the
+call returns. A future same-address path is valid only if its ABI names the
+allocation, capacity, used extent, generation, transfer point, reclaim owner,
+and producer wake; partial role adoption is forbidden. The expected benefit
+must be measured against `copy.bridge.raw-owned` before introducing that larger
+lifecycle protocol.
+
+`DrawRunSubmission` is therefore a transitional compatibility representation,
+not the architecture's source or sidecar type and not a permanent fallback
+ABI. It combines optional canonical state,
 uniform payload, draw parameters, borrowed payload spans, binding overrides,
 and generation stamps into one replay-scoped AoS before `ChunkSlot` decomposes
 it into final SoA regions. Direct construction instead performs a bounded
@@ -369,6 +395,13 @@ count/dedup plan and emits those values once into final queue-owned storage.
 The `ResolvedSourceSidecar` contains only source-qualified resolutions and
 derived planning/encode values; it must not duplicate the state, uniform, or
 payload bytes that made the compatibility carrier large.
+
+Once R-ARCH-7.22 projection and the universal final-storage transaction cover
+all source families, R-ARCH-7.23 requires deleting this type and its public
+submission APIs. Unsupported or ordered effects retain typed dispositions, not
+the carrier: they seal or split final storage at the semantic boundary, execute
+through the coordinator-owned control path, and preserve the same source and
+completion identity.
 
 ```mermaid
 flowchart LR
@@ -390,14 +423,104 @@ it must not interpret an immutable source boundary as a Metal render-pass or
 command-buffer boundary. A long-lived encode session decides those boundaries
 from D3D9 semantics, hazards, ordered controls, and Present policy.
 
+### 2.6 Replay projection and policy boundary
+
+Replay state is necessary even when its input is immutable. A source normally
+contains deltas from the preceding source, so projection is a deterministic
+state-machine transition rather than a stateless decode:
+
+```text
+ReplayState working = persistentState;
+EffectiveStream effective = project(source, working);
+FinalPlan plan = countAndLayout(effective);
+emit(finalSoA, effective, plan);
+persistentState = working;  // commit only after successful final emission
+```
+
+This pseudocode specifies value and commit semantics, not mandatory physical
+copies. `working` may be a versioned overlay, persistent-table root, or bounded
+undo journal over `persistentState`. `EffectiveStream` may be an allocation-free
+typed cursor or compact plan over the immutable source and working-state
+snapshot. It must not recreate the large intermediate carrier that direct
+construction is intended to remove.
+
+`project` owns D3D9 command order, canonical decoding, backend state
+transitions, draw-effective state/uniform formation, resource resolution, and
+ordered-control classification. `countAndLayout` owns only checked sizes,
+offsets, exact-value interning, arena ranges, and sidecar capacity. `emit`
+constructs final queue storage from those two immutable products. None of these
+steps may decide that a logical command is unnecessary merely to improve
+performance.
+
+The state commit and final-storage publication form one transaction. A failure
+before either becomes visible restores the original persistent state and exact
+destination checkpoint. Once an ordered-control, receipt, encoder effect, or
+publication makes rollback impossible, the source follows its typed fail-stop
+path rather than committing a partial state or retrying through another lane.
+The working state is single-writer Replay data; Encode receives only immutable
+draw-effective values and source-qualified sidecar data.
+
+Optimization is a later, explicit transform:
+
+```text
+EffectiveStream effective = project(source, working);
+OptimizedEffectiveStream selected =
+    optimizer.admit(effective, proof) ? optimizer.apply(effective) : effective;
+FinalPlan plan = countAndLayout(selected);
+emit(finalSoA, selected, plan);
+persistentState = working;
+```
+
+The persistent state always commits the complete unoptimized D3D9 transition,
+even when an optimizer proves that an encoder-visible state command is dead.
+This prevents dead-state elimination or cross-source folding from changing the
+initial state seen by the next source.
+
+| Replay core | Separate optimizer policy |
+|---|---|
+| canonical decoding and ordered state transition | dead-state or command elimination |
+| exact count, offsets, and capacity | draw or command reordering |
+| byte/value-identity interning | pass coalescing and source folding |
+| resource resolution and lifetime qualification | mutation composition |
+| representation-only canonicalization | partition and parallel selection |
+
+Optimizer output must retain source-qualified command attribution and a typed
+fallback relation to `EffectiveStream`. Ordered controls, queries, readback,
+Present, resource lifetime, or unknown aliasing fail closed unless the policy's
+own requirement proves the relevant boundary.
+
+### 2.7 Large materialization floor
+
+R-ARCH-7.24 permits four large representation changes on the normal path:
+
+| Stage | Permitted materialization | Required ownership result |
+|---|---|---|
+| PE producer | committed `LiveShadow`/`PendingDelta` → immutable semantic record/handle tables and payload arena | one `ProducerOwned` source |
+| PE/unix import | complete semantic source → Unix `RawOwned` | one asynchronous Unix source lease before bridge return |
+| Replay | `RawOwned` + working replay state → final `ChunkSlot`/Arena SoA, payload, and compact sidecar | one immutable `FinalOwned` queue source |
+| Encode/Metal | final SoA values → Metal commands plus only required uniform, argument, UP/dynamic, or resource-upload bytes | command buffer and referenced GPU-visible resources |
+
+The first three transformations may temporarily overlap their source and
+destination lifetimes, but no third full representation may be inserted between
+them. Planning uses counts, offsets, masks, hashes, compact certificates, and
+source-qualified locators. Queue publication moves a source lease; partition
+and session publication moves ranges and snapshots; completion and reclaim move
+waterlines and release authority. None requires O(source bytes) copying.
+
+The fourth row is not a statement that Metal receives `ChunkSlot` bytes
+verbatim. Encode reads the CPU execution SoA, emits API commands, binds existing
+resources by reference, and writes only data the GPU must consume. Copy-ledger
+evidence must keep known application writes separate from command emission and
+from opaque driver-internal transfer.
+
 Subsystem traceability is intentionally bidirectional:
 
 | Detail owner | Narrows this contract through |
 |---|---|
-| PE semantic owner and fixed-role transport | `specs/d3d9/recorder/requirements.md` R-CORE-REC-7.2.1 and R-CORE-REC-7.6 through R-CORE-REC-7.9 |
-| Unix adoption, direct projection, typed borrow, completion/reclaim | `specs/backend/encode-scheduling/requirements.md` R-BACK-2.85 through R-BACK-2.95 |
+| PE semantic owner and fixed-role transport | `specs/d3d9/recorder/requirements.md` R-CORE-REC-7.2.1 and R-CORE-REC-7.6 through R-CORE-REC-7.10 |
+| Unix adoption, direct projection, typed borrow, completion/reclaim | `specs/backend/encode-scheduling/requirements.md` R-BACK-2.85 through R-BACK-2.100 |
 | FrameGraph/renderer facade consumption | `specs/d3d9-renderer/requirements.md` R-BACK-32.1, R-BACK-32.8, and R-BACK-32.12 |
-| Composed model, model/code trace, differential and GPU evidence | `specs/verification/requirements.md` R-VERIF-7.6 through R-VERIF-7.9 |
+| Composed model, model/code trace, differential and GPU evidence | `specs/verification/requirements.md` R-VERIF-7.6 through R-VERIF-7.10 |
 | Copy classification and promotion | this document §2.3 and `requirements.md` R-ARCH-7.7 through R-ARCH-7.10 |
 
 ---

@@ -1944,7 +1944,7 @@ production/negative configurations.
 
 ### 10.1 Source lease, facade, and completion projection
 
-This subsystem specializes R-ARCH-7.11 through R-ARCH-7.19. Authenticated
+This subsystem specializes R-ARCH-7.11 through R-ARCH-7.24. Authenticated
 contiguous V2 and segmented fixed regions are physical representations of one
 `ImmutableSemanticSource`; their import paths bind the same
 `EndToEndSourceIdentity`. `GenerationQualifiedSourceBorrow` and
@@ -1960,19 +1960,73 @@ compact value snapshots and reacquire the facade under the same generation at
 use. Resource resolution and pass/hazard/binding summaries form the
 `ResolvedSourceSidecar`; `PostEncodeCompletionLedger` and pending completion
 records may retain only the locator-free `CompletionProjection` after early
-payload retirement. R-BACK-2.95 owns these mappings and R-VERIF-7.9 owns their
+payload retirement. R-BACK-2.95 through R-BACK-2.96 own these mappings and
+R-VERIF-7.9 owns their
 composed trace.
 
 The replay worker is a scheduling choice, not a representation owner. It may
 overlap source planning and final-Arena construction with PE production and
 encoding of an older source. Its queue publication contains final storage,
 `EndToEndSourceIdentity`, storage generation, and the compact resolved sidecar;
-it does not require `DrawRunSubmission`. That type remains the synchronous
-Legacy adapter which snapshots optional state/uniform values and borrowed draw
+it does not require `DrawRunSubmission`. That type is the transitional
+synchronous Legacy adapter scheduled for removal by R-BACK-2.99; it snapshots
+optional state/uniform values and borrowed draw
 payloads before `ChunkSlot::appendDrawRunBatch` decomposes them into SoA. The
 direct path replaces the adapter with a count/dedup plan followed by one final
 emission, while retaining exactly the same serial command order and completion
 identity.
+
+After universal projection lands, a fallback disposition still may reject
+Direct policy or select a coordinator-owned ordered-control path, but it must
+not recreate the adapter. Final SoA plus the compact sidecar becomes the only
+draw execution representation consumed by Encode.
+
+The scheduling path therefore has one permitted large import copy and one
+permitted final-storage construction. `RawOwned` may move into the replay queue,
+and final block references may move into CPU-ready/session queues, without
+moving their backing bytes. Count/dedup plans and resolved sidecars are bounded
+metadata. Encode binds existing Metal resources by reference and accounts only
+known GPU-visible writes as data transfer; command emission is a distinct cost
+class.
+
+The bridge/import cut applies to the whole immutable batch. The importer may
+read PE regions through a synchronous facade while `wine_unix_call` is active,
+but asynchronous Replay starts only from `RawOwned` or an atomically adopted
+shared lease. The current implementation therefore pays one named raw-source
+copy; it does not infer lifetime from command family or retain selected PE
+spans. Moving `RawOwned`, a `SourceLease`, or source-local final block
+references through the replay queue transfers compact ownership metadata, not
+the source bytes.
+
+Replay's target is the queue execution SoA, which is intentionally different
+from the PE semantic table/arena layout. A pure count/dedup/resolve pass may
+derive exact ranges and sidecar values without materializing encoder-visible
+records. The following transaction constructs each surviving final SoA/payload
+value once. Multiple already-owned source blocks may remain a bounded
+source-qualified chain consumed by a cursor; joining sources does not require
+physically gathering all bytes into a new contiguous carrier.
+
+Replay projection precedes that physical plan. The production target is one
+source-local `ReplayState` transaction: clone or checkpoint the device-owned
+persistent replay state, apply every immutable record in order, derive an
+immutable `EffectiveStream`, compute the exact layout, and emit final storage.
+Only successful emission commits both the destination and the next replay
+state. Encode never reads the mutable working state. It receives the resulting
+SoA and source-qualified sidecar under the existing generation lease.
+
+The existing imperative compatibility sink remains a valid semantic oracle but
+is not yet this complete transaction: `DeviceReplaySink` calls the ordinary
+device setters and therefore advances `Device::state_` while walking the
+source, before a source-wide final-storage commit. Direct draw ingress removes
+the large carrier for admitted draws, but does not by itself provide a separate
+working-state checkpoint. R-BACK-2.97 requires the transactional ownership and
+failure equivalence before that path can be described as complete.
+
+FrameGraph DCE/pass coalescing, mutation composition, source folding, and
+parallel policy selection consume the effective stream only through their
+separate proof-bearing interfaces. They may reduce or rearrange encoder work,
+but they never rewrite the committed replay state. The exact plan may intern
+equal state or uniform values; physical row sharing is not command elimination.
 
 If replay planning is later fused with encoding, the coordinator must append
 the source to the existing EncodeSession. Source arrival is not permission to
@@ -1987,7 +2041,7 @@ control, and Present boundaries remain coordinator-owned.
 | General bounded ready-prefix DCE | missing extension or refinement model plus pure summary tests |
 | Tape layout and ABA | `SegmentedTransportV1.tla` now covers the fixed-role semantic-batch handoff, complete reservation/adoption, exact contiguous emission, checkpoint rollback, FIFO settlement, and wake protocol; broader physical multi-segment packing, jumbo/non-wrapping page layout, generation rejection, ordered reclaim, and oversize rollback remain separate obligations |
 | Fixed-role `SegmentedTransportV1` / later `ExactFixed` (`R-BACK-2.90`–`2.94`) | opt-in fixed-region bridge plus host immutable-owner/21-family ExactFixed binding; bounded TLA model and six expected-failure configurations; production CPU-ready Tape role binding and promotion evidence remain open |
-| End-to-end source lease/facade/completion composition (R-BACK-2.95, R-ARCH-7.11–7.19) | Existing pipeline lifecycle and typed-borrow evidence covers Unix stages; R-VERIF-7.9 requires the missing PE-to-reclaim identity-qualified composed trace and counterexamples |
+| End-to-end source lease/facade/completion/materialization composition (R-BACK-2.95–2.100, R-ARCH-7.11–7.24) | Production PE emission carries a closed event/source interval through authenticated Raw ownership, direct or Arena publication, the generation-qualified lifecycle sidecar, completion, and reclaim. `CpuPipelineLifecycle` and native truth tables reject partial and cross-raw duplicate identity. Current import closes ownership with Unix `RawOwned` storage before bridge return; same-address adoption remains invalid without a negotiated shared lease. Source-wide transactional replay-state commit, core-versus-optimizer model/code binding, universal all-family final emission, `DrawRunSubmission` retirement, and a fresh four-boundary ledger audit remain open. Broader atomic-order, Wine/GPU, and promotion evidence remain separate. |
 | CPU-ready admission and session progress | native admission policy specs cover exact Writing/headroom qualification, real lease charge, stale identity, the complete typed drain matrix, unlocked wait, semantic-drain priority, and exact Ready over admission/writer pressure. The production join spec fills all 31 Ready controls and composes the real replay-drain queue with a direct real `QueueLifecycleController::waitForSequence` call, proving one Present plus seven admission escapes and 23 exact producer-fence escapes cover the complete fence in FIFO order without a capacity-generation transition. Exact-head at-most-once tokens, target coverage, restore eligibility, ownership conservation, admission retry, completion-fence return, and distinct counters are pinned through production CVs. GT2 r17 binds the actual reserve path, records 672 producer-wait escapes, returns from reserve, and publishes a fully settled 147-segment v2 sidecar with zero watchdog/GPU errors. Four sibling cases retain Present, non-Arena, ordinary-capacity, and high-water ineligibility without token consumption; generation retry retains priority. Seeded `EncodeSchedulingProgress` composes admission progress followed by the post-admission producer fence and return. |
 | Pass streaming | planner specs cover the allocation-free exact four-command proof, malformed/unsupported shapes, identity/attachment/alias hazards, complete coverage, and the unchanged universal validator. Production specs cover default-off natural replay, exact joined replay, render-pass begin/end `3 -> 2`, one removed mid-chunk split, stale pre-effect restore, ordered-release and stop drains, pending-carrier capture-start drain through the full capture predicate, one observer, natural FIFO completion, receipt-backed retirement/reclaim, and the independent 8+1 bounded-window edge. |
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |
