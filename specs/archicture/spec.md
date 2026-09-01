@@ -203,7 +203,9 @@ up to exactly one identity below.
 | Identity | Operation | Classification | Reason / target |
 |---|---|---|---|
 | `materialize.pe.state-shadow` | store the D3D9 value and ownership needed for later recording | necessary | preserves producer-visible D3D9 state semantics |
+| `materialize.pe.semantic-owner-admission` | transfer one accepted producer record into rollback-capable typed semantic arenas and kind-qualified pins | necessary | establishes the first chunk-owned typed semantic representation |
 | `materialize.pe.wire-final` | create a record, handle entry, or payload directly in the final PE wire blob | necessary | establishes pointer-free PE ownership |
+| `view.pe.wire-final` | expose already-final typed regions through the bounded segmented transport descriptor | necessary | preserves direct final-region ownership without reporting a byte copy |
 | `materialize.pe.builder-temporary` | create a record, handle entry, or payload in a temporary builder region later copied by seal | removable | the final wire layout is the target owner |
 | `copy.pe.seal-records` | copy the temporary record table into `sealedBlob_` | removable | final offsets are knowable before construction |
 | `copy.pe.seal-handles` | copy the temporary handle table into `sealedBlob_` | removable | final handle capacity is reservable transactionally |

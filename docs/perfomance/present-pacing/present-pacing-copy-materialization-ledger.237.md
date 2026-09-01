@@ -4,15 +4,15 @@ workload: 3DMark05 GT2 and SFIV Benchmark
 title: "Matched copy/materialization ledger and CPU evidence"
 type: evidence
 status: partial
-updated: 2026-08-31
-source: include/dxmt9/copy_materialization_ledger.hpp; tests/native/bridge/pe_diagnostics_spec.cpp; tests/native/backend/source_payload_spec.cpp; experiments/output/app-d3d9-3dmark05-task4-gt2-ledger-default-20260830; experiments/output/app-d3d9-3dmark05-task4-gt2-ledger-direct-20260830; experiments/output/app-d3d9-sfiv-benchmark-task4-sfiv-ledger-direct-20260830; experiments/output/app-d3d9-3dmark05-head-ledger-gt2-20260831; traces/app-d3d9-3dmark05-task4-gt2-profile-default-20260830; traces/app-d3d9-3dmark05-task4-gt2-profile-direct-20260830
+updated: 2026-09-01
+source: include/dxmt9/copy_materialization_ledger.hpp; tests/native/bridge/pe_diagnostics_spec.cpp; tests/native/backend/source_payload_spec.cpp; experiments/output/app-d3d9-3dmark05-task4-gt2-ledger-default-20260830; experiments/output/app-d3d9-3dmark05-task4-gt2-ledger-direct-20260830; experiments/output/app-d3d9-sfiv-benchmark-task4-sfiv-ledger-direct-20260830; experiments/output/app-d3d9-3dmark05-head-ledger-gt2-20260831; experiments/output/app-d3d9-3dmark05-semantic-owner-ledger-gt2-r2-20260901; experiments/output/app-d3d9-3dmark05-semantic-owner-ledger-bound-gt2-20260901; traces/app-d3d9-3dmark05-task4-gt2-profile-default-20260830; traces/app-d3d9-3dmark05-task4-gt2-profile-direct-20260830
 related: docs/perfomance/overview.md; specs/archicture/gap.md; specs/d3d9/recorder/gap.md; specs/backend/gap.md
 ---
 
 # Matched copy/materialization ledger and CPU evidence
 
-This is the owner-qualified copy/materialization ledger evidence leaf.
-ledger. It records counters and CPU time, not an FPS claim. The GT2 pair used
+This is the owner-qualified copy/materialization ledger evidence leaf. It
+records counters and CPU time, not an FPS claim. The original GT2 pair used
 the same current staged build, `perf` profile, no-gputrace wrapper, frame
 sampling, and `DXMT9_PERF_COPY_MATERIALIZATION_LEDGER=1`; only
 `DXMT9_CPU_READY_TAPE` changed (`0` Tape-off default versus `1` Tape-on
@@ -97,6 +97,58 @@ the ranking statement that followed it were limits of the former observer,
 not proof that field-level carrier materialization was absent. Global byte
 sums remain invalid because semantic materialization and physical ownership
 rows can describe the same payload at different boundaries.
+
+### Production semantic-owner binding (2026-09-01)
+
+After `PeSemanticBatchOwner` became the sole production final-wire owner, its
+two ownership boundaries were connected to the PE-qualified ledger. The same
+GT2 Tape-off recipe was repeated with `perf`, frame sampling,
+`DXMT_LOG_LEVEL=info`, and `DXMT9_PERF_COPY_MATERIALIZATION_LEDGER=1`:
+
+```text
+DXMT_EXPERIMENT_PROFILE=perf DXMT_LOG_LEVEL=info \
+DXMT_3DMARK05_LANE=gt2 DXMT9_CPU_READY_TAPE=0 \
+DXMT9_PERF_COPY_MATERIALIZATION_LEDGER=1 \
+DXMT9_PERF_FRAME_SAMPLING=1 \
+scripts/run_python.sh scripts/run_apps/run_experiment.py run \
+  app-d3d9-3dmark05 \
+  --output-suffix semantic-owner-ledger-bound-gt2-20260901
+```
+
+The run passed 1,647 Presents with zero chunk rejects and zero GPU
+command-buffer errors. Its output preserved the staged artifact hashes. The
+preceding owner-promoted r2 run used the same recipe but predates these two PE
+instrumentation sites.
+
+| Identity | calls / Present | MB / Present | inclusive ms / Present | retained peak |
+|---|---:|---:|---:|---:|
+| PE semantic-owner admission | 2,665.815 | 2.693 | 2.564 | 368,064 B |
+| PE ExactFixed final wire | 15.645 | 1.252 | 0.908 | 229,384 B |
+| Unix bridge raw ownership | 15.645 | 1.252 | 0.043 | 449,696 B |
+| Unix replay carrier copy | 1,486.697 | 15.852 | 0.643 | 0 B |
+| Unix queue final | 1.780 | 0.037 | 0.008 | 0 B |
+| Unix GPU upload | 1,093.570 | 12.241 | 1.068 | 0 B |
+| Unix mutation staging | 0.744 | 0.074 | 0.005 | 0 B |
+
+`materialize.pe.builder-temporary` and all three `copy.pe.seal-*` rows are
+absent, confirming that production no longer fabricates the retired builder or
+seal classes. Admission bytes are the increase in live typed record, pin,
+sparse, rectangle, and variable-payload extents. Its timer spans the complete
+atomic admission, including retain and PendingDelta settlement, so it is a
+transaction cost rather than a memcpy-only row and must not be compared
+directly with the old builder-copy number. ExactFixed measures the actual
+contiguous zero/header/table/arena emission. Both retained rows returned to
+zero at settlement; failed native admissions emit no event, and repeated
+ExactFixed emission counts work without double-retaining the fixed buffer.
+
+Cadence remained invariant against the preceding r2 observation: command
+buffers were `3.999/P` in both runs and render passes changed from `15.765/P`
+to `15.761/P`. Sampled frame rate changed from `26.290` to `25.445 FPS` in
+these single runs. That delta is not a product-performance result: the new
+diagnostic reads two clocks and updates atomics for approximately 2,666
+admissions per Present and is default-off. The evidence closes ownership and
+cost visibility while intentionally leaving a matched ledger-off performance
+gate separate.
 
 ## Matched GT2 CPU and cadence
 

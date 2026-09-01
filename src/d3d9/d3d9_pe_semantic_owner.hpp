@@ -12,6 +12,7 @@
 #include "d3d9_pe_producer_views.hpp"
 #include "d3d9_pe_retainer.hpp"
 #include "d3d9_pe_semantic_tokens.hpp"
+#include "dxmt9/copy_materialization_ledger.hpp"
 
 #include <algorithm>
 #include <array>
@@ -335,6 +336,7 @@ class PeSemanticBatchOwner final {
                   D3D9PePendingCommandRetainer::ConstructionMode::FailForTesting) {}
   PeSemanticBatchOwner(const PeSemanticBatchOwner&) = delete;
   PeSemanticBatchOwner& operator=(const PeSemanticBatchOwner&) = delete;
+  ~PeSemanticBatchOwner() { releaseLedgerRetention(); }
 
   bool constructionSucceeded() const noexcept { return ready_; }
   AdmissionFailure lastAdmissionFailure() const noexcept {
@@ -429,55 +431,57 @@ class PeSemanticBatchOwner final {
     requires std::is_nothrow_invocable_r_v<bool, Commit&>
   bool appendOwnedRecord(const PeSemanticRecordInput& input,
                          Commit&& commit) noexcept {
-    lastAdmissionFailure_ = AdmissionFailure::None;
-    if (!ready_) {
-      lastAdmissionFailure_ = AdmissionFailure::Unavailable;
-      return false;
-    }
-    const auto checkpoint = checkpointState();
-    retainedCheckpoint_ = checkpoint.retained;
-    if (!validAdmissionHeader(input)) {
-      lastAdmissionFailure_ = AdmissionFailure::Header;
-      rollback(checkpoint);
-      return false;
-    }
-    if (!copyFixedValues(input)) {
-      lastAdmissionFailure_ = AdmissionFailure::Fixed;
-      rollback(checkpoint);
-      return false;
-    }
-    auto& slot = storage_->records[recordCount_];
-    if (!copyDirectPins(input, slot)) {
-      lastAdmissionFailure_ = AdmissionFailure::DirectPins;
-      rollback(checkpoint);
-      return false;
-    }
-    if (!copySparse(input, slot)) {
-      if (lastAdmissionFailure_ == AdmissionFailure::None)
-        lastAdmissionFailure_ = AdmissionFailure::Sparse;
-      rollback(checkpoint);
-      return false;
-    }
-    if (!copyVariablePayloads(input, slot)) {
-      lastAdmissionFailure_ = AdmissionFailure::VariablePayload;
-      rollback(checkpoint);
-      return false;
-    }
-    if (!cacheEmissionMetrics(slot)) {
-      lastAdmissionFailure_ = AdmissionFailure::EmissionMetrics;
-      rollback(checkpoint);
-      return false;
-    }
-    ++recordCount_;
-    auto&& callback = commit;
-    if (!callback()) {
-      lastAdmissionFailure_ = AdmissionFailure::Settlement;
-      rollback(checkpoint);
-      return false;
-    }
-    lastSourceOrdinal_ = input.sourceOrdinal;
-    lastRecordOrdinal_ = input.recordOrdinal;
-    return true;
+    return recordAdmission([&]() noexcept {
+      lastAdmissionFailure_ = AdmissionFailure::None;
+      if (!ready_) {
+        lastAdmissionFailure_ = AdmissionFailure::Unavailable;
+        return false;
+      }
+      const auto checkpoint = checkpointState();
+      retainedCheckpoint_ = checkpoint.retained;
+      if (!validAdmissionHeader(input)) {
+        lastAdmissionFailure_ = AdmissionFailure::Header;
+        rollback(checkpoint);
+        return false;
+      }
+      if (!copyFixedValues(input)) {
+        lastAdmissionFailure_ = AdmissionFailure::Fixed;
+        rollback(checkpoint);
+        return false;
+      }
+      auto& slot = storage_->records[recordCount_];
+      if (!copyDirectPins(input, slot)) {
+        lastAdmissionFailure_ = AdmissionFailure::DirectPins;
+        rollback(checkpoint);
+        return false;
+      }
+      if (!copySparse(input, slot)) {
+        if (lastAdmissionFailure_ == AdmissionFailure::None)
+          lastAdmissionFailure_ = AdmissionFailure::Sparse;
+        rollback(checkpoint);
+        return false;
+      }
+      if (!copyVariablePayloads(input, slot)) {
+        lastAdmissionFailure_ = AdmissionFailure::VariablePayload;
+        rollback(checkpoint);
+        return false;
+      }
+      if (!cacheEmissionMetrics(slot)) {
+        lastAdmissionFailure_ = AdmissionFailure::EmissionMetrics;
+        rollback(checkpoint);
+        return false;
+      }
+      ++recordCount_;
+      auto&& callback = commit;
+      if (!callback()) {
+        lastAdmissionFailure_ = AdmissionFailure::Settlement;
+        rollback(checkpoint);
+        return false;
+      }
+      lastSourceOrdinal_ = input.sourceOrdinal;
+      lastRecordOrdinal_ = input.recordOrdinal;
+      return true;
+    });
   }
 
   template <typename Visit>
@@ -497,49 +501,51 @@ class PeSemanticBatchOwner final {
   // Admission is atomic.  Every counter and every typed pin is restored when
   // any validation, arena, or retain operation fails.
   bool admit(const PeSemanticRecordInput& input) noexcept {
-    lastAdmissionFailure_ = AdmissionFailure::None;
-    if (!ready_) {
-      lastAdmissionFailure_ = AdmissionFailure::Unavailable;
-      return false;
-    }
-    const auto checkpoint = checkpointState();
-    retainedCheckpoint_ = checkpoint.retained;
-    if (!validAdmissionHeader(input)) {
-      lastAdmissionFailure_ = AdmissionFailure::Header;
-      rollback(checkpoint);
-      return false;
-    }
-    if (!copyFixedValues(input)) {
-      lastAdmissionFailure_ = AdmissionFailure::Fixed;
-      rollback(checkpoint);
-      return false;
-    }
-    auto& slot = storage_->records[recordCount_];
-    if (!copyDirectPins(input, slot)) {
-      lastAdmissionFailure_ = AdmissionFailure::DirectPins;
-      rollback(checkpoint);
-      return false;
-    }
-    if (!copySparse(input, slot)) {
-      if (lastAdmissionFailure_ == AdmissionFailure::None)
-        lastAdmissionFailure_ = AdmissionFailure::Sparse;
-      rollback(checkpoint);
-      return false;
-    }
-    if (!copyVariablePayloads(input, slot)) {
-      lastAdmissionFailure_ = AdmissionFailure::VariablePayload;
-      rollback(checkpoint);
-      return false;
-    }
-    if (!cacheEmissionMetrics(slot)) {
-      lastAdmissionFailure_ = AdmissionFailure::EmissionMetrics;
-      rollback(checkpoint);
-      return false;
-    }
-    ++recordCount_;
-    lastSourceOrdinal_ = input.sourceOrdinal;
-    lastRecordOrdinal_ = input.recordOrdinal;
-    return true;
+    return recordAdmission([&]() noexcept {
+      lastAdmissionFailure_ = AdmissionFailure::None;
+      if (!ready_) {
+        lastAdmissionFailure_ = AdmissionFailure::Unavailable;
+        return false;
+      }
+      const auto checkpoint = checkpointState();
+      retainedCheckpoint_ = checkpoint.retained;
+      if (!validAdmissionHeader(input)) {
+        lastAdmissionFailure_ = AdmissionFailure::Header;
+        rollback(checkpoint);
+        return false;
+      }
+      if (!copyFixedValues(input)) {
+        lastAdmissionFailure_ = AdmissionFailure::Fixed;
+        rollback(checkpoint);
+        return false;
+      }
+      auto& slot = storage_->records[recordCount_];
+      if (!copyDirectPins(input, slot)) {
+        lastAdmissionFailure_ = AdmissionFailure::DirectPins;
+        rollback(checkpoint);
+        return false;
+      }
+      if (!copySparse(input, slot)) {
+        if (lastAdmissionFailure_ == AdmissionFailure::None)
+          lastAdmissionFailure_ = AdmissionFailure::Sparse;
+        rollback(checkpoint);
+        return false;
+      }
+      if (!copyVariablePayloads(input, slot)) {
+        lastAdmissionFailure_ = AdmissionFailure::VariablePayload;
+        rollback(checkpoint);
+        return false;
+      }
+      if (!cacheEmissionMetrics(slot)) {
+        lastAdmissionFailure_ = AdmissionFailure::EmissionMetrics;
+        rollback(checkpoint);
+        return false;
+      }
+      ++recordCount_;
+      lastSourceOrdinal_ = input.sourceOrdinal;
+      lastRecordOrdinal_ = input.recordOrdinal;
+      return true;
+    });
   }
 
   // Destructive reset used by Reset/teardown/discard. It drops both current
@@ -565,6 +571,7 @@ class PeSemanticBatchOwner final {
 
  private:
   void clearChunkState() noexcept {
+    releaseLedgerRetention();
     lastClearedBytes_ = 0u;
     if (!ready_) return;
     lastClearedBytes_ += clearUsed(storage_->records, recordCount_);
@@ -799,9 +806,9 @@ class PeSemanticBatchOwner final {
     return out.valid();
   }
 
-  // Compatibility/differential target: one canonical contiguous D9C V2
-  // extent. It traverses the same immutable slots and handle identities as
-  // emitSegmented(), and therefore cannot drift in order or alignment.
+  // Canonical contiguous D9C V2 target used by the default production and
+  // capture lanes. It traverses the same immutable slots and handle identities
+  // as emitSegmented(), and therefore cannot drift in order or alignment.
   bool emitExactFixed(std::span<std::byte> destination,
                       PeSemanticExactFixedEmission& out) const noexcept {
     out = {};
@@ -811,24 +818,51 @@ class PeSemanticBatchOwner final {
                 alignof(D9CCommandChunkWireHandleEntry) != 0u) {
       return false;
     }
-    std::fill(destination.begin(), destination.begin() + plan.wireBytes,
-              std::byte{0});
-    std::memcpy(destination.data(), &plan.header, sizeof(plan.header));
-    auto records = destination.subspan(plan.header.recordTableOffset,
-                                        plan.recordBytes());
-    auto handles = destination.subspan(plan.header.handleTableOffset,
-                                        plan.handleBytes());
-    auto payload = destination.subspan(plan.header.payloadArenaOffset,
-                                       plan.payloadBytes);
-    if (!writeEmission(plan, records, handles, payload)) return false;
-    out.transport = makeTransport(plan, records, handles, payload, 0u, 0u);
-    out.wire = std::span<const std::byte>(destination.data(), plan.wireBytes);
-    out.wireBytes = plan.wireBytes;
-    return out.valid();
+    const auto emit = [&]() noexcept {
+      std::fill(destination.begin(), destination.begin() + plan.wireBytes,
+                std::byte{0});
+      std::memcpy(destination.data(), &plan.header, sizeof(plan.header));
+      auto records = destination.subspan(plan.header.recordTableOffset,
+                                         plan.recordBytes());
+      auto handles = destination.subspan(plan.header.handleTableOffset,
+                                         plan.handleBytes());
+      auto payload = destination.subspan(plan.header.payloadArenaOffset,
+                                         plan.payloadBytes);
+      if (!writeEmission(plan, records, handles, payload)) return false;
+      out.transport = makeTransport(plan, records, handles, payload, 0u, 0u);
+      out.wire = std::span<const std::byte>(destination.data(), plan.wireBytes);
+      out.wireBytes = plan.wireBytes;
+      return out.valid();
+    };
+    auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+        dxmt9::core::CopyMaterializationOwner::Pe);
+    if (!ledger) return emit();
+    dxmt9::core::CopyMaterializationEvent event(
+        ledger, dxmt9::core::CopyMaterializationClass::PeWireFinal,
+        plan.wireBytes);
+    if (!emit()) {
+      event.cancel();
+      return false;
+    }
+    event.commit();
+    return true;
   }
 
   bool emitExactFixed(PeSemanticExactFixedEmission& out) const noexcept {
-    return emitExactFixed(std::span<std::byte>(storage_->wire), out);
+    if (!emitExactFixed(std::span<std::byte>(storage_->wire), out)) return false;
+    auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+        dxmt9::core::CopyMaterializationOwner::Pe);
+    if (!ledger) return true;
+    if (exactWireLedger_ && exactWireRetainedBytes_ != 0u) {
+      exactWireLedger_->release(
+          dxmt9::core::CopyMaterializationClass::PeWireFinal,
+          exactWireRetainedBytes_);
+    }
+    ledger->retain(dxmt9::core::CopyMaterializationClass::PeWireFinal,
+                   out.wireBytes);
+    exactWireLedger_ = ledger;
+    exactWireRetainedBytes_ = out.wireBytes;
+    return true;
   }
 
   // Production segmented target backed by the same fixed wire arena.  The
@@ -2019,6 +2053,95 @@ class PeSemanticBatchOwner final {
   static constexpr std::size_t kLights = 15u;
   static constexpr std::size_t kLightEnables = 16u;
 
+  std::size_t ownedMaterializedBytes() const noexcept {
+    if (!ready_) return 0u;
+    std::size_t bytes = recordCount_ * sizeof(storage_->records[0]);
+    bytes += surfaceCount_ * sizeof(storage_->surfaces[0]);
+    bytes += textureCount_ * sizeof(storage_->textures[0]);
+    bytes += bufferCount_ * sizeof(storage_->buffers[0]);
+    bytes += shaderCount_ * sizeof(storage_->shaders[0]);
+    bytes += declarationCount_ * sizeof(storage_->declarations[0]);
+    bytes += queryCount_ * sizeof(storage_->queries[0]);
+    bytes += semanticBytes_;
+    bytes += rectCount_ * sizeof(storage_->rects[0]);
+    bytes += sparseCounts_.values[kRenderStates] *
+        sizeof(storage_->renderStates[0]);
+    bytes += sparseCounts_.values[kTextures] *
+        sizeof(storage_->texturesArena[0]);
+    bytes += sparseCounts_.values[kStreams] *
+        sizeof(storage_->streamsArena[0]);
+    bytes += sparseCounts_.values[kShaders] *
+        sizeof(storage_->shadersArena[0]);
+    bytes += sparseCounts_.values[kVertexInputs] *
+        sizeof(storage_->vertexInputsArena[0]);
+    bytes += sparseCounts_.values[kIndexBuffers] *
+        sizeof(storage_->indexBuffersArena[0]);
+    bytes += sparseCounts_.values[kRenderTargets] *
+        sizeof(storage_->renderTargetsArena[0]);
+    bytes += sparseCounts_.values[kDepthStencils] *
+        sizeof(storage_->depthStencilsArena[0]);
+    bytes += sparseCounts_.values[kViewports] * sizeof(storage_->viewports[0]);
+    bytes += sparseCounts_.values[kScissors] * sizeof(storage_->scissors[0]);
+    bytes += sparseCounts_.values[kMaterials] * sizeof(storage_->materials[0]);
+    bytes += sparseCounts_.values[kClipPlanes] *
+        sizeof(storage_->clipPlanes[0]);
+    bytes += sparseCounts_.values[kTextureStageStates] *
+        sizeof(storage_->textureStageStates[0]);
+    bytes += sparseCounts_.values[kSamplerStates] *
+        sizeof(storage_->samplerStates[0]);
+    bytes += sparseCounts_.values[kTransforms] *
+        sizeof(storage_->transforms[0]);
+    bytes += sparseCounts_.values[kLights] * sizeof(storage_->lights[0]);
+    bytes += sparseCounts_.values[kLightEnables] *
+        sizeof(storage_->lightEnables[0]);
+    return bytes;
+  }
+
+  template <typename Admit>
+    requires std::is_nothrow_invocable_r_v<bool, Admit&>
+  bool recordAdmission(Admit&& admit) noexcept {
+    auto&& operation = admit;
+    auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+        dxmt9::core::CopyMaterializationOwner::Pe);
+    if (!ledger) return operation();
+
+    const auto before = ownedMaterializedBytes();
+    dxmt9::core::CopyMaterializationEvent event(
+        ledger,
+        dxmt9::core::CopyMaterializationClass::PeSemanticOwnerAdmission,
+        0u);
+    if (!operation()) {
+      event.cancel();
+      return false;
+    }
+    const auto after = ownedMaterializedBytes();
+    const auto admittedBytes = after >= before ? after - before : 0u;
+    event.setBytes(admittedBytes);
+    event.commit();
+    ledger->retain(
+        dxmt9::core::CopyMaterializationClass::PeSemanticOwnerAdmission,
+        admittedBytes);
+    admissionLedger_ = ledger;
+    return true;
+  }
+
+  void releaseLedgerRetention() noexcept {
+    const auto admissionBytes = ownedMaterializedBytes();
+    if (admissionLedger_ && admissionBytes != 0u) {
+      admissionLedger_->release(
+          dxmt9::core::CopyMaterializationClass::PeSemanticOwnerAdmission,
+          admissionBytes);
+    }
+    admissionLedger_ = nullptr;
+    if (exactWireLedger_ && exactWireRetainedBytes_ != 0u) {
+      exactWireLedger_->release(
+          dxmt9::core::CopyMaterializationClass::PeWireFinal,
+          exactWireRetainedBytes_);
+    }
+    exactWireLedger_ = nullptr;
+    exactWireRetainedBytes_ = 0u;
+  }
+
   StateCheckpoint checkpointState() const noexcept {
     return {.records = recordCount_,
             .semanticBytes = semanticBytes_,
@@ -2730,6 +2853,9 @@ class PeSemanticBatchOwner final {
   std::uint64_t lastSourceOrdinal_ = 0u;
   AdmissionFailure lastAdmissionFailure_ = AdmissionFailure::None;
   std::uint64_t lastRecordOrdinal_ = 0u;
+  dxmt9::core::CopyMaterializationLedger* admissionLedger_ = nullptr;
+  mutable dxmt9::core::CopyMaterializationLedger* exactWireLedger_ = nullptr;
+  mutable std::size_t exactWireRetainedBytes_ = 0u;
 };
 
 // Bind the cold all-family refinement ledger to the exact immutable bytes

@@ -789,6 +789,77 @@ void productionOwnerProjectionBindsColdLedger() {
   check(source.refs == 1u && destination.refs == 1u,
         "owner projection adds no lifetime outside the owner transaction");
 }
+
+void ownerQualifiedMaterializationLedger() {
+  dxmt9::core::CopyMaterializationLedger ledger;
+  dxmt9::core::ScopedCopyMaterializationLedger observe(
+      dxmt9::core::CopyMaterializationOwner::Pe, ledger);
+  Owner owner;
+  D9CSurface surface;
+  auto present = base(PeSemanticProducerKind::Present, 1u, 1u);
+  present.surface0 =
+      localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0xb101u, 3u);
+  check(owner.admit(present), "ledger fixture admits one semantic record");
+  const auto admitted = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::PeSemanticOwnerAdmission);
+  check(admitted.calls == 1u && admitted.bytes != 0u &&
+            admitted.retainedBytes == admitted.bytes &&
+            admitted.retainedBytesPeak == admitted.bytes,
+        "semantic admission records one PE-owned materialization and retention");
+
+  auto invalid = base(PeSemanticProducerKind::Present, 0u, 0u);
+  invalid.surface0 = present.surface0;
+  check(!owner.admit(invalid), "invalid ledger admission fails closed");
+  const auto afterFailure = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::PeSemanticOwnerAdmission);
+  check(afterFailure.calls == admitted.calls &&
+            afterFailure.bytes == admitted.bytes &&
+            afterFailure.retainedBytes == admitted.retainedBytes,
+        "rolled-back admission emits no copy-ledger event");
+
+  PeSemanticExactFixedEmission first;
+  check(owner.emitExactFixed(first), "ledger fixture emits ExactFixed");
+  const auto exactFirst = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::PeWireFinal);
+  check(exactFirst.calls == 1u && exactFirst.bytes == first.wireBytes &&
+            exactFirst.retainedBytes == first.wireBytes &&
+            exactFirst.retainedBytesPeak == first.wireBytes,
+        "ExactFixed emission records one PE-owned physical final wire");
+
+  PeSemanticExactFixedEmission repeated;
+  check(owner.emitExactFixed(repeated) && repeated.wireBytes == first.wireBytes,
+        "repeated ExactFixed emission preserves bytes");
+  const auto exactRepeated = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::PeWireFinal);
+  check(exactRepeated.calls == 2u &&
+            exactRepeated.bytes == first.wireBytes + repeated.wireBytes &&
+            exactRepeated.retainedBytes == repeated.wireBytes &&
+            exactRepeated.retainedBytesPeak == repeated.wireBytes,
+        "re-emission counts physical work without double-retaining the buffer");
+  check(ledger.snapshot(
+            dxmt9::core::CopyMaterializationClass::PeBuilderTemporary).calls ==
+            0u &&
+            ledger.snapshot(
+                dxmt9::core::CopyMaterializationClass::PeSealRecords).calls ==
+                0u &&
+            ledger.snapshot(
+                dxmt9::core::CopyMaterializationClass::PeSealHandles).calls ==
+                0u &&
+            ledger.snapshot(
+                dxmt9::core::CopyMaterializationClass::PeSealPayload).calls ==
+                0u,
+        "semantic owner ledger never fabricates retired builder or seal work");
+
+  check(owner.settle(), "ledger fixture settles the owner");
+  check(ledger.snapshot(
+            dxmt9::core::CopyMaterializationClass::PeSemanticOwnerAdmission)
+                .retainedBytes == 0u &&
+            ledger.snapshot(dxmt9::core::CopyMaterializationClass::PeWireFinal)
+                .retainedBytes == 0u,
+        "settlement releases admission and final-wire ledger retention");
+  owner.reset();
+  check(surface.refs == 1u, "ledger fixture releases its warm pin");
+}
 }  // namespace
 
 int main() {
@@ -821,6 +892,7 @@ int main() {
     emptyOwnerStartsAtZeroCadence();
     committedLeaseQualificationUsesOwnerPins();
     productionOwnerProjectionBindsColdLedger();
+    ownerQualifiedMaterializationLedger();
   } catch (const Failure& failure) {
     std::cerr << "pe_semantic_owner_spec failed: " << failure.what() << '\n';
     return 1;

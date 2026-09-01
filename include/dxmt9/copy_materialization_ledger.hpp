@@ -34,6 +34,9 @@ enum class CopyMaterializationClass : std::uint8_t {
   // A segmented command chunk owns already-final role regions. This row
   // tracks their logical lifetime without misreporting a byte copy.
   PeWireView,
+  // Typed producer values become rollback-capable, chunk-owned semantic
+  // storage before either contiguous or segmented final-wire emission.
+  PeSemanticOwnerAdmission,
   Count,
 };
 
@@ -87,6 +90,8 @@ enum class CopyMaterializationOwner : std::uint8_t {
     return "materialize.pe.section-append";
   case CopyMaterializationClass::PeWireView:
     return "view.pe.wire-final";
+  case CopyMaterializationClass::PeSemanticOwnerAdmission:
+    return "materialize.pe.semantic-owner-admission";
   case CopyMaterializationClass::Count:
     break;
   }
@@ -145,6 +150,8 @@ enum class CopyMaterializationClassification : std::uint8_t {
     return "pe-section-ownership-before-sealing";
   case CopyMaterializationClass::PeWireView:
     return "direct-final-region-view-ownership";
+  case CopyMaterializationClass::PeSemanticOwnerAdmission:
+    return "rollback-capable-typed-semantic-ownership";
   case CopyMaterializationClass::Count:
     break;
   }
@@ -173,6 +180,7 @@ copyMaterializationClassification(
   case CopyMaterializationClass::UpScratch:
   case CopyMaterializationClass::PeSectionAppend:
   case CopyMaterializationClass::PeWireView:
+  case CopyMaterializationClass::PeSemanticOwnerAdmission:
   case CopyMaterializationClass::Count:
     return CopyMaterializationClassification::Necessary;
   }
@@ -413,14 +421,19 @@ public:
   }
 
   ~CopyMaterializationEvent() {
+    commit();
+  }
+
+  void setBytes(std::size_t bytes) noexcept { bytes_ = bytes; }
+  void cancel() noexcept { ledger_ = nullptr; }
+  void commit() noexcept {
     if (!ledger_) return;
     const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
         Clock::now() - started_);
     ledger_->record(materializationClass_, bytes_,
                     static_cast<std::uint64_t>(elapsed.count()));
+    ledger_ = nullptr;
   }
-
-  void setBytes(std::size_t bytes) noexcept { bytes_ = bytes; }
 
   CopyMaterializationEvent(const CopyMaterializationEvent&) = delete;
   CopyMaterializationEvent& operator=(const CopyMaterializationEvent&) = delete;

@@ -618,6 +618,20 @@ select a compatibility builder. The owner's exact typed pins also issue Render
 Tape pending-chunk leases and answer buffer-hazard queries, so those consumers
 cannot observe a different ownership graph.
 
+The optional owner-qualified copy/materialization ledger binds this same
+transaction at its two physical ownership boundaries. A successful admission
+records the increase in live typed record, pin, sparse, rectangle, and variable
+payload extents as `materialize.pe.semantic-owner-admission`; rollback records
+nothing, and settlement/reset releases the retained extent. Contiguous
+ExactFixed emission records `materialize.pe.wire-final` and retains only the
+owner-internal final wire until settlement/reset. Re-emission counts repeated
+physical work without double-retaining the fixed buffer. The admission timer
+deliberately spans the complete atomic owner transaction, including retain and
+PendingDelta settlement, and therefore is an inclusive, non-additive transaction
+cost rather than a memcpy-only sample. Segmented emission remains zero-copy and
+must be classified as `view.pe.wire-final`, rather than charged as an
+ExactFixed copy, when its lifetime observation is connected separately.
+
 The compatibility `CommandChunkBuilder`, `PePrewireChunkTransaction`, and
 `PeOwnedRecordCandidate` remain only as bounded differential-test or Bootstrap
 oracles; they are not production semantic-batch owners or fallbacks. The

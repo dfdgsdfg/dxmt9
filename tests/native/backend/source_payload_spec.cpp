@@ -1554,6 +1554,8 @@ void testCopyMaterializationRegistryOwnershipAndDisabledPath() {
       CopyMaterializationClass::MutationStaging,
       CopyMaterializationClass::UpScratch,
       CopyMaterializationClass::PeSectionAppend,
+      CopyMaterializationClass::PeWireView,
+      CopyMaterializationClass::PeSemanticOwnerAdmission,
   };
   for (const auto materializationClass : descriptorClasses) {
     const auto row = dxmt9::core::copyMaterializationDescriptor(

@@ -855,6 +855,16 @@ void testSourceContracts(const std::filesystem::path &root) {
                    "PE builder copy sites never select the Unix owner");
   checkContains(peBuilder, "CopyMaterializationClass::PeWireFinal",
                 "PE builder final-wire materialization remains PE-owned");
+  checkContains(semanticOwner, "CopyMaterializationOwner::Pe",
+                "semantic-owner copy sites explicitly select the PE owner");
+  checkNotContains(semanticOwner, "CopyMaterializationOwner::Unix",
+                   "semantic-owner copy sites never select the Unix owner");
+  checkContains(
+      semanticOwner,
+      "CopyMaterializationClass::PeSemanticOwnerAdmission",
+      "semantic admission records its chunk-owned typed representation");
+  checkContains(semanticOwner, "CopyMaterializationClass::PeWireFinal",
+                "ExactFixed emission records its physical final wire");
   checkContains(peConstShadow, "CopyMaterializationOwner::Pe",
                 "PE constant shadow copy sites explicitly select the PE owner");
   checkNotContains(peConstShadow, "CopyMaterializationOwner::Unix",
