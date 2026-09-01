@@ -494,7 +494,9 @@ current ABI lacks shared-lease adoption, and GPU-visible writes required by
 Metal resources or transient bindings. Replay direct-cursor state, queue
 handoff, sidecar construction, session transfer, completion, and reclaim must
 move leases, identities, locators, or bounded compact values rather than
-O(source bytes) or O(draw-state) storage.
+O(source bytes) or O(draw-state) storage. After `UnixOwnedSourceLeaseV1` is
+promoted, direct construction into that lease replaces the PE emission/import
+overlap and the separate `RawOwned` copy is no longer permitted.
 
 `ExplicitParallelCompactSoA` may add one fourth, experimental class: a single
 transactional `RawOwned`-to-pass-local compact indexed SoA emission for one
@@ -509,3 +511,54 @@ Metal command encoding and existing `MTLBuffer`/`MTLTexture` binding are not by
 themselves evidence of a GPU byte copy. GPU-transfer accounting must distinguish
 resource reference/API command emission from known CPU writes, shared/private
 resource uploads, and driver-internal transfers whose byte count is unavailable.
+
+**R-ARCH-7.25** The target PE-to-Unix transport is
+`UnixOwnedSourceLeaseV1`. Unix must allocate a bounded pool of source regions
+at device creation or through an amortized refill, and issue PE one typed
+writable capability containing only a lease identity, generation, writable
+producer mappings, role capacities, and source-size limit. PE must construct the
+canonical pointer-free record, handle, and payload roles directly in those
+regions. The committed descriptor contains the lease identity, generation,
+used extents, wire header, and `EndToEndSourceIdentity`; it must not contain a
+retained process pointer, C++ object, allocator identity, or mutable span.
+
+The pool is bounded by both lease count and resident bytes. Exhaustion must
+apply one observable producer back-pressure policy and generation-qualified
+wake; it must not allocate without a bound, publish a partial role set, or
+silently switch one source to a different transport after source construction
+has begun. Oversized sources may use one bounded multi-region lease only when
+all regions are reserved, sealed, published, and reclaimed as one transaction.
+
+**R-ARCH-7.26** A Unix-owned source lease must refine the total state machine
+`Free -> PeWritable -> SealedPending -> UnixOwned -> Borrowed -> Reclaiming ->
+Free`. `commit` is the only ownership-transfer transition. It must validate the
+complete source and qualified resource identities, revoke the PE writable
+capability, and publish Unix ownership atomically; failure before publication
+returns or cancels the whole lease without a Replay or Metal effect. After a
+successful commit, PE must not write any byte in the used extents and Unix must
+consume them only through generation-qualified synchronous facades. Reclaim
+may advance exactly once only after all Replay/encode borrows, capture leases,
+resource pins, ordered effects, and completion projections that retain the
+source have settled.
+
+**R-ARCH-7.27** The shared lease is a storage-ownership ABI, not a shared C++
+object ABI. Its persistent schema must remain fixed-width C POD with explicit
+sizes, offsets, alignments, versions, and ABI-hash coverage. PE and Unix may not
+share STL containers, vtables, allocator-owned objects, raw resource wrappers,
+or a `std::atomic` representation. Native x64 and WoW64 producers must receive a
+writer mapping representable in their address domain while the committed token
+remains pointer-width independent. Resource wrappers continue to cross as
+kind- and generation-qualified wire identities and are resolved and retained
+by Unix at commit.
+
+**R-ARCH-7.28** Promotion of `UnixOwnedSourceLeaseV1` requires a shared pure
+transition table used by the ABI implementation and native model/code
+isomorphism tests; a bounded refinement covering acquire, seal, commit,
+cancel, borrow, reset/poison, reclaim, ABA rejection, and producer wake; exact
+contiguous/segmented wire equivalence; x64 and WoW64 bridge layout and fault
+tests; and matched wild copy-ledger evidence. The lease lane must report
+acquire, wait time, occupancy/peak, commit, cancel, revoke failure, stale
+generation, reclaim, and wake counts. Promotion requires
+`copy.bridge.raw-owned` to reach zero without increasing PE final-wire
+materialization, source residency, admission wait, or frame latency beyond its
+declared gate.

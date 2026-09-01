@@ -216,7 +216,8 @@ up to exactly one identity below.
 | `copy.pe.seal-records` | copy the temporary record table into `sealedBlob_` | removable | final offsets are knowable before construction |
 | `copy.pe.seal-handles` | copy the temporary handle table into `sealedBlob_` | removable | final handle capacity is reservable transactionally |
 | `copy.pe.seal-payload` | copy the temporary payload arena into `sealedBlob_` | removable | typed producers can write the final payload range |
-| `copy.bridge.raw-owned` | import the authenticated wire blob into unix-owned `RawCommandChunk` storage | necessary | establishes process/ABI ownership; removal would require a separately specified shared-ownership ABI |
+| `copy.bridge.raw-owned` | import the authenticated wire blob into separately allocated Unix `RawCommandChunk` storage | removable | compatibility ownership transfer until `UnixOwnedSourceLeaseV1` is promoted |
+| `adopt.bridge.unix-source-lease` | atomically transfer one sealed Unix-allocated source lease from PE write ownership to Unix read ownership | necessary | establishes asynchronous Unix ownership without duplicating source bytes |
 | `materialize.replay-submission-carrier` | create canonical draw state, uniform, param, or payload-view values in replay scratch | removable | bounded planning can target final queue storage |
 | `copy.replay-submission-carrier` | copy canonical draw state, uniforms, params, or payload views through a replay submission carrier | removable | final queue destination is known after bounded planning |
 | `materialize.queue-final` | construct the surviving SoA record, owner, or byte range in `ChunkSlot` / `SourcePayloadBlockChain` | necessary | establishes immutable queue ownership |
@@ -279,7 +280,7 @@ and opt-in, with `PeImport`, `Receipt`, `SelectedParallel`, `DeviceLoss`, and
 
 ### 2.5 End-to-end immutable source contract
 
-`R-ARCH-7.11` through `R-ARCH-7.24` make one semantic source, rather than a
+`R-ARCH-7.11` through `R-ARCH-7.28` make one semantic source, rather than a
 sequence of carriers, the architecture-wide unit of work. The terms below are
 normative interfaces; subsystem specs map them to concrete types.
 
@@ -517,17 +518,19 @@ pass:
 | Stage | Permitted materialization | Required ownership result |
 |---|---|---|
 | PE producer | committed `LiveShadow`/`PendingDelta` → immutable semantic record/handle tables and payload arena | one `ProducerOwned` source |
-| PE/unix import | complete semantic source → Unix `RawOwned` | one asynchronous Unix source lease before bridge return |
+| PE/unix import | compatibility: complete semantic source → copied Unix `RawOwned`; target: PE constructs directly in `UnixOwnedSourceLeaseV1` and commit transfers ownership | one asynchronous Unix source lease before bridge return; zero duplicated source bytes in the target lane |
 | Serial Replay/encode | no large CPU materialization; `RawOwned` + working replay state are consumed by a bounded direct cursor | compact sidecar/payload ownership only; no complete final draw SoA |
 | Explicit parallel Replay (experimental) | one accepted sealed pass → compact indexed draw columns plus unique state/uniform/resource-set tables | one bounded pass-local `FinalOwned` representation |
 | Encode/Metal | direct cursor or accepted-pass compact values → Metal commands plus only required uniform, argument, UP/dynamic, or resource-upload bytes | command buffer and referenced GPU-visible resources |
 
-The PE emission and current-ABI import may temporarily overlap their source and
-destination lifetimes, but no third full representation may be inserted between
-them. Parallel compact materialization occurs only after pre-eligibility and is
-charged to that provider's economy. Planning uses counts, offsets, masks,
-hashes, compact certificates, and
-source-qualified locators. Queue publication moves a source lease; partition
+The compatibility PE emission and current-ABI import may temporarily overlap
+their source and destination lifetimes, but no third full representation may be
+inserted between them. `UnixOwnedSourceLeaseV1` instead makes the Unix lease the
+PE emission destination, so import changes ownership without duplicating the
+source bytes. Parallel compact materialization occurs only after
+pre-eligibility and is charged to that provider's economy. Planning uses
+counts, offsets, masks, hashes, compact certificates, and source-qualified
+locators. Queue publication moves a source lease; partition
 and session publication moves ranges and snapshots; completion and reclaim move
 waterlines and release authority. None requires O(source bytes) copying.
 
@@ -546,6 +549,77 @@ Subsystem traceability is intentionally bidirectional:
 | FrameGraph/renderer facade consumption | `specs/d3d9-renderer/requirements.md` R-BACK-32.1, R-BACK-32.8, and R-BACK-32.12 |
 | Composed model, model/code trace, differential and GPU evidence | `specs/verification/requirements.md` R-VERIF-7.6 through R-VERIF-7.10 |
 | Copy classification and promotion | this document §2.3 and `requirements.md` R-ARCH-7.7 through R-ARCH-7.10 |
+
+### 2.8 Unix-owned bounded source lease
+
+`UnixOwnedSourceLeaseV1` removes the compatibility `RawOwned` import copy by
+moving allocation before PE final-wire construction. It does not make a PE
+allocator or C++ object asynchronously visible to Unix.
+
+```text
+UnixSourceLeaseIdentity {
+  pool_id
+  slot_or_group_id
+  generation
+}
+
+PeWritableSourceLease {
+  identity
+  records_writer_mapping, records_capacity
+  handles_writer_mapping, handles_capacity
+  payload_writer_mapping, payload_capacity
+  maximum_source_bytes
+}
+
+CommittedUnixSourceLeaseV1 {
+  identity
+  canonical_wire_header
+  records_used, handles_used, payload_used
+  end_to_end_source_identity
+}
+```
+
+Writer mappings are acquisition results, not persistent descriptor fields.
+They are valid only while the lease is `PeWritable`. The committed descriptor
+uses the pointer-width-independent identity and checked extents. The Unix
+consumer reads its own mapping of the same regions after the bridge has revoked
+the PE writer capability and completed the ownership transition.
+
+```mermaid
+stateDiagram-v2
+    [*] --> Free
+    Free --> PeWritable: acquire whole bounded lease
+    PeWritable --> SealedPending: seal exact extents
+    PeWritable --> Free: cancel / producer failure
+    SealedPending --> UnixOwned: validate + revoke writer + atomic commit
+    SealedPending --> Free: pre-publication failure
+    UnixOwned --> Borrowed: issue generation-qualified facade
+    Borrowed --> UnixOwned: return facade
+    UnixOwned --> Reclaiming: all source-retaining effects settled
+    Reclaiming --> Free: generation-qualified reclaim + producer wake
+```
+
+One source may occupy one region or a bounded fixed-role group. A group is one
+lease: partial role publication, role-local reclaim, and mixed copied/adopted
+ownership are invalid. Pool count and resident-byte limits are device-owned and
+resolved before hot-path use. Exhaustion waits on a generation-qualified
+reclaim signal; an implementation may retain the copied transport as a
+queue-immutable rollback provider during promotion, but it may not change
+transport after a source has acquired writable lease storage.
+
+The ABI remains fixed-width C POD because PE and Unix target different platform
+ABIs even when they use the same LLVM family. Writer mappings must be usable by
+the active x64 or WoW64 producer, while the committed lease token, offsets, and
+generations have identical meaning on both sides. Resource entries remain wire
+identities; Unix still resolves and retains Metal-owning wrappers before Replay
+publication.
+
+The lease removes only `copy.bridge.raw-owned`. It does not remove canonical PE
+state transition, exact count/layout, resource retention, Replay projection, or
+required GPU-visible writes. The performance gate therefore compares the
+measured bridge-copy saving against acquisition, protection/revocation,
+back-pressure, cache-coherency, and longer residency costs rather than assuming
+that zero copied bytes implies a frame-time win.
 
 ---
 
@@ -579,7 +653,7 @@ sequenceDiagram
         Rec->>Bridge: commit immutable pointer-free source
         Bridge->>Import: one unix-call with contiguous or segmented descriptor
         Import->>Import: validate complete source + qualified identity
-        Import->>Import: copy RawOwned or atomically adopt negotiated regions
+        Import->>Import: copy RawOwned or commit UnixOwnedSourceLeaseV1
         Import->>Worker: publish SourceLease (bounded FIFO)
         Worker->>Worker: issue synchronous facade + pure final-layout plan
         Worker-->>Slot: direct final projection or typed compatibility replay
