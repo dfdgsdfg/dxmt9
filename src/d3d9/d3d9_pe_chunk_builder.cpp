@@ -161,7 +161,7 @@ bool CommandChunkBuilder::prepareExactFinalLayout(
   return true;
 }
 
-bool CommandChunkBuilder::returnToLegacyFinalLayout() noexcept {
+bool CommandChunkBuilder::returnToMutableLayout() noexcept {
   if (!exactFinalLayout_ || active_.active || sealed_ || recordCount() != 0u ||
       handleCount() != 0u || payloadBytes() != 0u ||
       !handleObjects_.empty()) {
@@ -1396,14 +1396,14 @@ void CommandChunkBuilder::resetAndReleaseRetained() noexcept {
 }
 
 bool CommandChunkBuilder::resetAndReleaseRetained(
-    CommandChunkDiscardTarget target) noexcept {
+    CommandChunkResetTarget target) noexcept {
   resetAndReleaseRetained();
   switch (target) {
-    case CommandChunkDiscardTarget::LegacyProduction:
+    case CommandChunkResetTarget::MutableOracle:
       if (!exactFinalLayout_) {
         return true;
       }
-      return returnToLegacyFinalLayout();
+      return returnToMutableLayout();
   }
   return false;
 }

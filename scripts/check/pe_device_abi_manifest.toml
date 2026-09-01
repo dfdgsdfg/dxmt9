@@ -11,14 +11,14 @@ linker_id = "ld.lld"
 configuration = "release"
 
 [recorder_state]
-sizeof_x64 = 104656
-sizeof_x86 = 103712
-sizeof_host = 104680
+sizeof_x64 = 104296
+sizeof_x86 = 103496
+sizeof_host = 104320
 
 [device_layout]
-sizeof_x64 = 107160
+sizeof_x64 = 106808
 alignof_x64 = 8
-sizeof_x86 = 105880
+sizeof_x86 = 105664
 alignof_x86 = 8
 
 [layout]
@@ -26,7 +26,8 @@ critical_member_order = [
   "refs_", "dev_", "factory_", "recorderState_", "stateBlockContext_",
   "bufferContext_",
   "surfaceTextureContext_", "queryContext_", "presentationContext_",
-  "shaderDeclarationContext_", "peCaptureState_", "diagnostics_"
+  "shaderDeclarationContext_", "semanticRecorderState_", "peCaptureState_",
+  "diagnostics_"
 ]
 # State implementations have real translation-unit ownership; no class-body
 # include fragment is permitted.
@@ -40,7 +41,7 @@ retained_inline_helpers = [
   "setRecordedStreamRef", "shadowedStreamSourceEquals", "PeCallScope",
   "PeHotStateSetterTimer", "withPeCallScope", "withPeCallAndHotStateSetter",
   "validateConstRangeFast", "applyConstStateWrite",
-  "prepareSoftwareDrawCandidate", "drawPrimitiveCore", "AppendPhaseTimer",
+  "prepareSoftwareDrawCandidate", "drawPrimitiveCore",
   "notePeDeviceCallAfterPresent", "pushPeCallScope", "notePeCallScopeReturn",
   "popPeCallScope"
 ]

@@ -1960,8 +1960,9 @@ void D3D9DeviceImpl::recordPeHotStateSetterCpu(PeHotStateSetterFamily family,
 
 void D3D9DeviceImpl::notePeChunkAppendBoundary(std::int64_t appendReturnNs,
                                std::uint32_t type) {
-    if (!dxmt9PeRecorderStatsEnabled() ||
-        recorderState_.commandChunk.recordCount() == 0) {
+    const auto* const semanticOwner = semanticBatchOwner();
+    if (!dxmt9PeRecorderStatsEnabled() || !semanticOwner ||
+        semanticOwner->size() == 0u) {
         return;
     }
     if (diagnostics_->peRecorderCurrentChunkFirstAppendNs_ == 0) {
@@ -3092,8 +3093,6 @@ void D3D9DeviceImpl::logPeStatsDecimation() {
         "const_flush_events=%llu const_flush_sampled=%llu const_flush_sampled_ms=%.3f "
         "draw_packet_events=%llu draw_packet_sampled=%llu draw_packet_sampled_ms=%.3f "
         "identity_getter_calls=%llu null_scope_sampled=%llu null_scope_ms=%.3f "
-        "append_encode_sampled=%llu append_encode_ms=%.3f "
-        "append_flush_sampled=%llu append_flush_ms=%.3f "
         "entry_const_events=%llu entry_const_sampled=%llu entry_const_ms=%.3f "
         "entry_draw_events=%llu entry_draw_sampled=%llu entry_draw_ms=%.3f "
         "entry_state_events=%llu entry_state_sampled=%llu entry_state_ms=%.3f "
@@ -3118,10 +3117,6 @@ void D3D9DeviceImpl::logPeStatsDecimation() {
             dxmt9::d3d9::pe::wireIdentityGetterCallCount()),
         static_cast<unsigned long long>(peDecimatedNullScopeStats().sampled),
         static_cast<double>(peDecimatedNullScopeStats().sampledNs) / 1.0e6,
-        static_cast<unsigned long long>(diagnostics_->peAppendPhaseEncode_.sampled),
-        static_cast<double>(diagnostics_->peAppendPhaseEncode_.sampledNs) / 1.0e6,
-        static_cast<unsigned long long>(diagnostics_->peAppendPhaseFlush_.sampled),
-        static_cast<double>(diagnostics_->peAppendPhaseFlush_.sampledNs) / 1.0e6,
         static_cast<unsigned long long>(diagnostics_->peEntryConstDecimatedStats_.events),
         static_cast<unsigned long long>(diagnostics_->peEntryConstDecimatedStats_.sampled),
         static_cast<double>(diagnostics_->peEntryConstDecimatedStats_.sampledNs) / 1.0e6,

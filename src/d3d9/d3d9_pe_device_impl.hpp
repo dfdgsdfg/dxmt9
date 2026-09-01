@@ -70,6 +70,7 @@
 #include "d3d9_pe_recorder_settlement.hpp"
 #include "d3d9_pe_recorder_state.hpp"
 #include "d3d9_pe_recorder_fault.hpp"
+#include "d3d9_pe_semantic_recorder_state.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "d3d9_pe_stateblock_transaction.hpp"
 #include "d3d9_pe_stats_decimation.hpp"
@@ -405,9 +406,6 @@ inline bool dxmt9PeScalarSemanticObserverEnabled() {
     return enabled;
 }
 
-// Opt-in P2/P3 semantic batch lane, resolved once during device construction.
-bool dxmt9PeSemanticBatchOwnerEnabled();
-
 inline std::uint32_t dxmt9PeThreadSamplerHz() {
     static const std::uint32_t hz = [] {
         // Unset, unparseable, and 0 all fall back to the default rather than
@@ -434,7 +432,6 @@ inline PeDiagnosticsConfig dxmt9PeResolvedDiagnosticsConfig() {
         .scalarSemanticObserver = dxmt9PeScalarSemanticObserverEnabled(),
         .copyMaterializationLedger =
             dxmt9::core::copyMaterializationLedgerEnabled(),
-        .semanticBatchOwner = dxmt9PeSemanticBatchOwnerEnabled(),
         .threadSamplerHz = dxmt9PeThreadSamplerHz(),
     };
 }
@@ -813,7 +810,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     // DXMT9_PE_CHUNK_MAX_RECORDS=64 DXMT9_PE_CHUNK_MAX_BYTES=262144 —
     // and the helpers below cap env values to prevent pathological
     // inputs from blowing chunk-side allocations. Note the two move
-    // together: the frozen legacy sizeHints make the byte precheck
+    // together: the frozen stable cadence estimates make the byte precheck
     // bind near 53 draw records at the old byte cap, so raising only
     // the record cap is inert.
     static constexpr UINT kDefaultMaxPendingCommandRecords = 256;
@@ -929,10 +926,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     bool rtSlotExplicit_[4]{};
     IDirect3DSurface9* dsSurface_ = nullptr;
 
-    // Section-sized sparse compatibility storage lives in recorderState_ and
-    // is reserved for oversized, Render Tape, and SWVP override projections.
-    // Ordinary draws/APPLY_STATE use a compact call-local plan.
+    // Section-sized sparse preparation storage lives in recorderState_. Every
+    // production draw/APPLY_STATE variant synchronously transfers those typed
+    // views into the mandatory semantic owner before the recorder guard ends.
     bool dsSurfaceExplicit_ = false;
+    // The production all-family transaction is mandatory. Its heap owner
+    // keeps the large fixed arenas out of the COM object and makes allocation
+    // failure a device-creation failure, never a legacy final-wire fallback.
+    std::unique_ptr<PeProductionSemanticRecorderState> semanticRecorderState_{};
     // The complete Render Tape lifecycle is cold. The nullable owner leaves
     // only one pointer in the normal renderer and constructs no capture
     // storage when capture/tracking is disabled.
@@ -1014,7 +1015,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     void discardPreparedStateBlockApply() noexcept;
 
     void poisonStateBlockTransaction() noexcept;
-    void settleAppendEmitter(bool accepted, HRESULT& hr) noexcept;
 
     template<typename Table, typename Key, typename Validated>
     static void setRecordedRef(Table table, Key slot,
@@ -1082,7 +1082,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     }
     PeProductionSemanticBatchOwner* semanticBatchOwner() noexcept;
     const PeProductionSemanticBatchOwner* semanticBatchOwner() const noexcept;
-    bool semanticBatchRequested() const noexcept;
 
     void armSemanticRecord(
         dxmt9::d3d9::pe::PeSemanticProducerKind producer,
@@ -1099,9 +1098,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                                          std::size_t bytes,
                                          std::uint64_t sourceOrdinal);
 
-    bool observeCommittedSemanticRecord(
-        std::uint32_t recordType, std::uint64_t sourceOrdinal,
-        const dxmt9::d3d9::pe::CommandChunkBuilder& builder) noexcept;
+    bool observeCommittedSemanticOwnerRecord() noexcept;
 
     bool clearPeStateTracking();
 
@@ -1148,17 +1145,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
 
     dxmt9::d3d9::pe::PeChunkContext currentChunkContext() const;
 
-    // Compatibility producer for Render Tape, oversized batches, and SWVP.
+    // Value-owned sparse producer shared by ordinary draws, oversized batches,
+    // SWVP overrides, and Render Tape bootstrap snapshots.
     bool buildSparseStateForRecord(
         const dxmt9::d3d9::pe::PeDrawParams& params,
-        bool forceFullSnapshot = false,
-        bool inlineConstDelta = false);
-
-    bool buildSparseStatePlanForRecord(
-        const dxmt9::d3d9::pe::RecorderLockCapability& access,
-        const dxmt9::d3d9::pe::PeDrawParams& params,
-        const dxmt9::d3d9::pe::PeDrawPayloads& payloads,
-        dxmt9::d3d9::pe::SparseStatePlan& plan,
         bool forceFullSnapshot = false,
         bool inlineConstDelta = false);
     static UINT primitiveVertexCount(D3DPRIMITIVETYPE type, UINT primitiveCount);
@@ -2137,67 +2127,44 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         PeRecorderFlushDisposition disposition =
             PeRecorderFlushDisposition::Submit);
 
-    using AppendPhaseTimer = PeAppendPhaseTimer;
     // Append envelope. Owns the recorder mutex, the negotiation gate, the
-    // CapacityPre and CapacityPost flushes, and every append telemetry site;
-    // `emit` supplies only the record itself.
+    // CapacityPre and CapacityPost flushes, and every append telemetry site.
     //
     // `sizeHint` feeds the capacity precheck and therefore decides where
-    // chunks are cut. A caller that no longer builds a legacy record must
-    // still pass a value on the same scale as the legacy record it replaced,
-    // or chunk seal cadence shifts -- which no per-record test can observe.
+    // chunks are cut. These values retain the established production cadence;
+    // changing them shifts chunk boundaries, which no per-record test observes.
     //
-    // `emit` is invoked as HRESULT(CommandChunkBuilder&, const AppendPhaseTimer&).
-    // It returns an HRESULT rather than bool so an emitter can distinguish
-    // E_OUTOFMEMORY from a malformed record.
-    //
-    // The return type is asserted, not merely documented, because HRESULT is
-    // LONG: an emitter that returned the canonical emitters' natural `bool` would
-    // convert `false` to 0 == S_OK, so a failed append would be reported as a
-    // success. CapacityPost would run, notePeChunkAppendBoundary would count a
-    // record that was never appended, and the record would vanish with no
-    // error. Emitters must spell out `? S_OK : D3DERR_INVALIDCALL`.
     // Chunk seal cadence is a behavioural contract, not a size. appendRecord's
     // sizeHint is what the capacity precheck compares against, so changing it
     // moves where chunks seal and therefore which draws share a chunk. These are
-    // the sizes of the legacy records each site used to build, preserved verbatim
-    // so cadence stays bit-identical to the pre-migration recorder.
+    // frozen historical record-size estimates, preserved verbatim so cadence
+    // stays bit-identical across the ownership migration.
     //
-    // Frozen deliberately. Their origin -- sizeof() of a legacy record struct --
-    // is deleted by this commit, so nothing regenerates them and nothing should:
-    // the number IS the contract now. Every sparse record is far smaller than its
-    // legacy counterpart, so each of these is an over-estimate, which is the safe
-    // direction (seal earlier, never overrun a chunk).
+    // Frozen deliberately. Their former sizeof() origin is no longer part of
+    // the production route: the number is the cadence contract now. Every
+    // sparse record is smaller than its estimate, so the estimate remains in
+    // the safe direction (seal earlier, never overrun a chunk).
     //
-    // Worth revisiting, but NOT here: now that the legacy format is gone, cadence
-    // no longer has to match the legacy era -- it only has to be sensible. Using
-    // true sparse sizes would seal chunks far less often, which is a perf change
+    // Worth revisiting, but NOT here: using true sparse sizes would seal chunks
+    // far less often, which is a perf change
     // needing paired GT1/GT2 evidence, not a side effect of a deletion commit.
-    static constexpr std::size_t kLegacyApplyStateSizeHint = 4888u;
-    static constexpr std::size_t kLegacyClearSizeHint = 32u;
-    static constexpr std::size_t kLegacyColorFillSizeHint = 40u;
-    static constexpr std::size_t kLegacyDrawIndexedPrimitiveSizeHint = 4920u;
-    static constexpr std::size_t kLegacyDrawIndexedPrimitiveUPSizeHint = 4924u;
-    static constexpr std::size_t kLegacyDrawPrimitiveSizeHint = 4888u;
-    static constexpr std::size_t kLegacyDrawPrimitiveUPSizeHint = 4904u;
-    static constexpr std::size_t kLegacyPresentSizeHint = 64u;
-    static constexpr std::size_t kLegacyQueryIssueSizeHint = 24u;
-    static constexpr std::size_t kLegacyReadbackSizeHint = 24u;
-    static constexpr std::size_t kLegacyReszDepthResolveSizeHint = 24u;
-    static constexpr std::size_t kLegacySetConstSizeHint = 16u;
-    static constexpr std::size_t kLegacyStretchRectSizeHint = 72u;
-    static constexpr std::size_t kLegacyUpdateSurfaceSizeHint = 64u;
-    static constexpr std::size_t kLegacyUpdateTextureSizeHint = 24u;
+    static constexpr std::size_t kStableApplyStateCadenceBytes = 4888u;
+    static constexpr std::size_t kStableClearCadenceBytes = 32u;
+    static constexpr std::size_t kStableColorFillCadenceBytes = 40u;
+    static constexpr std::size_t kStableDrawIndexedPrimitiveCadenceBytes = 4920u;
+    static constexpr std::size_t kStableDrawIndexedPrimitiveUPCadenceBytes = 4924u;
+    static constexpr std::size_t kStableDrawPrimitiveCadenceBytes = 4888u;
+    static constexpr std::size_t kStableDrawPrimitiveUPCadenceBytes = 4904u;
+    static constexpr std::size_t kStablePresentCadenceBytes = 64u;
+    static constexpr std::size_t kStableQueryIssueCadenceBytes = 24u;
+    static constexpr std::size_t kStableReadbackCadenceBytes = 24u;
+    static constexpr std::size_t kStableReszDepthResolveCadenceBytes = 24u;
+    static constexpr std::size_t kStableSetConstCadenceBytes = 16u;
+    static constexpr std::size_t kStableStretchRectCadenceBytes = 72u;
+    static constexpr std::size_t kStableUpdateSurfaceCadenceBytes = 64u;
+    static constexpr std::size_t kStableUpdateTextureCadenceBytes = 24u;
 
-    template<typename EmitFn>
-    HRESULT appendRecord(uint32_t type, size_t sizeHint, EmitFn emit) {
-        static_assert(
-            std::is_same_v<
-                decltype(emit(std::declval<dxmt9::d3d9::pe::CommandChunkBuilder&>(),
-                              std::declval<const AppendPhaseTimer&>())),
-                HRESULT>,
-            "appendRecord emitters must return HRESULT, not bool: a bool "
-            "false would silently convert to S_OK");
+    HRESULT appendRecord(uint32_t type, size_t sizeHint) {
         const size_t bytes = sizeHint;
         assertRecorderThreadConfined();
         PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
@@ -2214,10 +2181,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         }
         auto* const allFamilyTokens = allFamilySemanticObserver();
         auto* const semanticOwner = semanticBatchOwner();
-        if (semanticBatchRequested() && !semanticOwner) {
+        // The all-family owner is the sole production transaction. A missing
+        // owner is a construction invariant failure; never fall back to a
+        // second builder after semantic state may have been prepared.
+        if (!semanticOwner) {
             return D3DERR_NOTAVAILABLE;
         }
-        const bool semanticLane = semanticOwner != nullptr;
         if (recorderState_.chunkTransaction.retryable() &&
             recorderState_.chunkTransaction.retryAtSeal()) {
             const HRESULT retryHr = retryPendingSemanticChunk();
@@ -2229,194 +2198,47 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         if (allFamilyTokens && semanticSourceOrdinal == 0u) {
             return D3DERR_INVALIDCALL;
         }
-        if (semanticLane) {
-            const HRESULT semanticHr = appendSemanticRecordBoundary(
-                type, bytes, semanticSourceOrdinal);
-            if (FAILED(semanticHr) && dxmt9PeRecorderChunkLogEnabled()) {
-                dxmt9DeviceInfoLog(
-                    "pe_semantic_append_failed device=%p type=%u bytes=%zu "
-                    "hr=0x%08x records=%zu",
-                    this, type, bytes, static_cast<unsigned>(semanticHr),
-                    semanticOwner->size());
-            }
-            return semanticHr;
-        }
-        const auto maxRecords = maxPendingCommandRecords();
-        const auto maxBytes = maxPendingCommandBytes();
-        const auto recordCountBefore = recorderState_.commandChunk.recordCount();
-        const auto payloadBytesBefore = recorderState_.commandChunk.payloadBytes();
-        const bool willFlushBeforeAppend = recordCountBefore != 0u &&
-            (recordCountBefore >= maxRecords ||
-             payloadBytesBefore + bytes > maxBytes);
-        const std::uint32_t appendedRecordCount =
-            willFlushBeforeAppend ? 1u : recordCountBefore + 1u;
-        const auto appendedPayloadBytes =
-            willFlushBeforeAppend ? bytes : payloadBytesBefore + bytes;
-        const bool willFlushAfterAppend =
-            appendedRecordCount >= maxRecords || appendedPayloadBytes >= maxBytes;
-        const bool noFlushAppend =
-            !willFlushBeforeAppend && !willFlushAfterAppend;
-        // Checked before CapacityPre mutates the transaction. A failed
-        // attempt remains an unattempted record and can be retried verbatim.
-        std::int32_t injectedFaultHr = 0;
-        if (dxmt9PeRecorderFaultsEnabled() && willFlushBeforeAppend &&
-            dxmt9PeConsumeRecorderFault(
-                PeRecorderFaultPoint::CapacityPreReserve, injectedFaultHr)) {
-            if (allFamilyTokens) {
-                allFamilyTokens->preserveForRetry(semanticSourceOrdinal);
-            }
-            return static_cast<HRESULT>(injectedFaultHr);
-        }
-        // Gate the clock reads, not just their consumers. All four users of
-        // these two timestamps (recordPeChunkInterAppendGap, recordPeAppendCpu,
-        // notePeChunkAppendBoundary, logPeRecordMilestoneAfterPresent) early-out
-        // on this same flag, which is off in every perf/production run -- so the
-        // two steady_clock::now() calls were being paid per append and thrown
-        // away. At GT2's 2,707 appends/present and the ~187ns/call this codebase
-        // measured for its own null scope, that is ~1.0ms/present, about 1.9% of
-        // the frame. The flag is a cached static bool, so the branch is free.
+        const auto recordCountBefore = semanticOwner->size();
         const bool peStatsEnabled = dxmt9PeRecorderStatsEnabled();
-        const std::int64_t appendEntryNs =
-            peStatsEnabled ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
-                           : 0;
+        const std::int64_t appendEntryNs = peStatsEnabled
+            ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
+            : 0;
         if (peStatsEnabled) {
             recordPeChunkInterAppendGap(appendEntryNs, recordCountBefore, type);
         }
-        HRESULT hr = S_OK;
         DxmtPeDecimatedScopeGuard appendDecimatedScope;
         const std::uint32_t decimationN = dxmt9PeStatsDecimationN();
-        if (decimationN != 0 &&
+        if (decimationN != 0u && diagnostics_ &&
             PeDecimatedScopeTimer::shouldSample(
                 diagnostics_->peChunkAppendDecimatedStats_, decimationN)) {
-            appendDecimatedScope.stats = &diagnostics_->peChunkAppendDecimatedStats_;
-            {
-                const auto n0 = std::chrono::steady_clock::now();
-                const auto n1 = std::chrono::steady_clock::now();
-                PeDecimatedScopeTimer::recordSample(
-                    peDecimatedNullScopeStats(),
-                    static_cast<std::uint64_t>(
-                        std::chrono::duration_cast<std::chrono::nanoseconds>(n1 - n0).count()));
-            }
+            appendDecimatedScope.stats =
+                &diagnostics_->peChunkAppendDecimatedStats_;
+            const auto n0 = std::chrono::steady_clock::now();
+            const auto n1 = std::chrono::steady_clock::now();
+            PeDecimatedScopeTimer::recordSample(
+                peDecimatedNullScopeStats(),
+                static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        n1 - n0).count()));
             appendDecimatedScope.t0 = std::chrono::steady_clock::now();
         }
-        if (decimationN != 0) {
+        if (decimationN != 0u && diagnostics_) {
             const auto typeBucket = PeDiagnosticsState::peAppendTypeBucket(type);
             ++diagnostics_->peAppendTypeCounts_[typeBucket];
             diagnostics_->peAppendTypeBytes_[typeBucket] += bytes;
         }
-        const bool phaseSampled = appendDecimatedScope.stats != nullptr;
-        const AppendPhaseTimer phase{
-            phaseSampled ? diagnostics_.get() : nullptr};
-        if (willFlushBeforeAppend) {
-            const auto t0 = phase.begin();
-            hr = flushPendingCommandChunk(PeRecorderFlushReason::CapacityPre);
-            phase.recordFlush(t0);
-            const auto plan = dxmt9::d3d9::pe::planRecorderSettlement({
-                .point = dxmt9::d3d9::pe::RecorderSettlementPoint::CapacityPre,
-                .result = dxmt9::d3d9::pe::recorderFlushSettlementResult(
-                    SUCCEEDED(hr),
-                    recorderState_.stateBlockTransaction.isPoisoned()),
-            });
-            DXMT_ASSERT(plan.valid() &&
-                        (SUCCEEDED(hr) ||
-                         ((plan.retryable() || plan.poison()) &&
-                          !plan.acceptedRecord())));
-            (void)plan;
-            if (FAILED(hr) && allFamilyTokens) {
-                allFamilyTokens->preserveForRetry(semanticSourceOrdinal);
-            }
-            if (FAILED(hr) && !recorderState_.recordCapacityPreEvidence(false)) {
-                poisonStateBlockTransaction();
-                return D3DERR_DEVICELOST;
-            }
+        const HRESULT semanticHr = appendSemanticRecordBoundary(
+            type, bytes, semanticSourceOrdinal);
+        if (FAILED(semanticHr) && allFamilyTokens &&
+            !recorderState_.stateBlockTransaction.isPoisoned()) {
+            allFamilyTokens->preserveForRetry(semanticSourceOrdinal);
         }
-        if (SUCCEEDED(hr) && !recorderState_.prepareChunkRecord(
-                type, bytes, willFlushBeforeAppend)) {
-            (void)recorderState_.chunkTransaction.poison();
-            poisonStateBlockTransaction();
-            return D3DERR_DEVICELOST;
-        }
-        if (SUCCEEDED(hr)) {
-            // The emitter records diagnostics_->peAppendPhaseEncode_ itself around the direct
-            // canonical builder append. Timing the whole callable here would include
-            // context/retention preparation and silently redefine `encode`,
-            // the figure the migration is measured against -- see
-            // docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.01.md.
-            if (allFamilyTokens) {
-                const auto recordOrdinalBefore =
-                    recorderState_.commandChunk.lastCommittedRecordOrdinal();
-                hr = emit(recorderState_.commandChunk, phase);
-                if (FAILED(hr)) {
-                    std::int32_t retainFaultHr = 0;
-                    if (dxmt9PeTakeRecorderRetainFaultResult(retainFaultHr)) {
-                        hr = static_cast<HRESULT>(retainFaultHr);
-                    }
-                }
-                const bool recordAccepted =
-                    recorderState_.commandChunk.lastCommittedRecordOrdinal() !=
-                        recordOrdinalBefore;
-                if (recordAccepted) {
-                    if (!observeCommittedSemanticRecord(
-                            type, semanticSourceOrdinal,
-                            recorderState_.commandChunk)) {
-                        poisonStateBlockTransaction();
-                        hr = D3DERR_DEVICELOST;
-                    }
-                    settleAppendEmitter(recordAccepted, hr);
-                } else if (FAILED(hr)) {
-                    allFamilyTokens->preserveForRetry(semanticSourceOrdinal);
-                    settleAppendEmitter(false, hr);
-                } else {
-                    poisonStateBlockTransaction();
-                    hr = D3DERR_DEVICELOST;
-                    settleAppendEmitter(false, hr);
-                }
-                const auto plan = dxmt9::d3d9::pe::planRecorderSettlement({
-                    .point = dxmt9::d3d9::pe::RecorderSettlementPoint::Emitter,
-                    .result = recordAccepted
-                        ? dxmt9::d3d9::pe::RecorderSettlementResult::Succeeded
-                        : dxmt9::d3d9::pe::RecorderSettlementResult::FailedPreEffect,
-                });
-                DXMT_ASSERT(plan.valid() &&
-                            (recordAccepted ? plan.acceptedRecord()
-                                            : plan.rollbackEmitter()));
-                (void)plan;
-            } else {
-                hr = emit(recorderState_.commandChunk, phase);
-                if (FAILED(hr)) {
-                    std::int32_t retainFaultHr = 0;
-                    if (dxmt9PeTakeRecorderRetainFaultResult(retainFaultHr)) {
-                        hr = static_cast<HRESULT>(retainFaultHr);
-                    }
-                }
-                settleAppendEmitter(SUCCEEDED(hr), hr);
-                const auto plan = dxmt9::d3d9::pe::planRecorderSettlement({
-                    .point = dxmt9::d3d9::pe::RecorderSettlementPoint::Emitter,
-                    .result = SUCCEEDED(hr)
-                        ? dxmt9::d3d9::pe::RecorderSettlementResult::Succeeded
-                        : dxmt9::d3d9::pe::RecorderSettlementResult::FailedPreEffect,
-                });
-                DXMT_ASSERT(plan.valid() &&
-                            (SUCCEEDED(hr) ? plan.acceptedRecord()
-                                           : plan.rollbackEmitter()));
-                (void)plan;
-            }
-        }
-        if (SUCCEEDED(hr) &&
-            (recorderState_.commandChunk.recordCount() >= maxRecords ||
-             recorderState_.commandChunk.payloadBytes() >= maxBytes)) {
-            const auto t0 = phase.begin();
-            hr = flushPendingCommandChunk(PeRecorderFlushReason::CapacityPost);
-            phase.recordFlush(t0);
-            const auto plan = dxmt9::d3d9::pe::planRecorderSettlement({
-                .point = dxmt9::d3d9::pe::RecorderSettlementPoint::CapacityPost,
-                .result = dxmt9::d3d9::pe::recorderFlushSettlementResult(
-                    SUCCEEDED(hr),
-                    recorderState_.stateBlockTransaction.isPoisoned()),
-            });
-            DXMT_ASSERT(plan.valid() && plan.acceptedRecord() &&
-                        (SUCCEEDED(hr) || plan.retryable() || plan.poison()));
-            (void)plan;
+        if (FAILED(semanticHr) && dxmt9PeRecorderChunkLogEnabled()) {
+            dxmt9DeviceInfoLog(
+                "pe_semantic_append_failed device=%p type=%u bytes=%zu "
+                "hr=0x%08x records=%zu",
+                this, type, bytes, static_cast<unsigned>(semanticHr),
+                semanticOwner->size());
         }
         if (peStatsEnabled) {
             const auto appendReturnNs =
@@ -2424,19 +2246,20 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
             if (appendReturnNs > appendEntryNs) {
                 recordPeAppendCpu(
                     static_cast<std::uint64_t>(appendReturnNs - appendEntryNs),
-                    noFlushAppend);
+                    SUCCEEDED(semanticHr) &&
+                        semanticOwner->size() == recordCountBefore + 1u);
             }
-            if (SUCCEEDED(hr)) {
+            if (SUCCEEDED(semanticHr) && semanticOwner->size() != 0u) {
                 notePeChunkAppendBoundary(appendReturnNs, type);
                 logPeRecordMilestoneAfterPresent(
-                    type, appendedRecordCount,
+                    type, static_cast<std::uint32_t>(semanticOwner->size()),
                     static_cast<std::uint32_t>(std::min<std::size_t>(
-                        appendedPayloadBytes,
+                        semanticRecorderState_->cadenceBytes,
                         std::numeric_limits<std::uint32_t>::max())),
                     appendEntryNs);
             }
         }
-        return hr;
+        return semanticHr;
     }
 
     // Non-indexed draw: fold or flush pending constants, then emit one sparse
@@ -2499,8 +2322,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     // Caller must supply the matching D9C_COMMAND_RECORD_SET_*_CONST_*
     // type tag; decoder will validate header.size against count*elemSize.
     HRESULT appendSetConstRecord(uint32_t recordType, UINT start, UINT count,
-                                 const void* data, std::size_t elemSize,
-                                 ConstShadow& settlementOwner);
+                                 const void* data, std::size_t elemSize);
 
     static bool constShadowElemEquals(const ConstShadow& shadow,
                                       std::uint32_t reg,
@@ -2621,14 +2443,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     HRESULT chunkBarrierFlush();
 
     // One APPLY_STATE record carrying exactly one category's batch. The
-    // sizeHint stays kLegacyApplyStateSizeHint, which is what the
-    // capacity precheck saw when this drained legacy records, so seal cadence is
-    // unchanged. flags stay 0: these are batches, never snapshots.
-    template <typename Fill, typename Accept>
-    HRESULT appendSingleCategoryApplyState(Fill fill, Accept accept);
+    // The stable cadence estimate preserves the established seal boundaries.
+    // Flags stay 0: these are batches, never snapshots.
+    template <typename Fill>
+    HRESULT appendSingleCategoryApplyState(Fill fill);
 
-    HRESULT drainOversizedPendingStateAsApplyStateRecords(
-        const dxmt9::d3d9::pe::RecorderLockCapability& access);
+    HRESULT drainOversizedPendingStateAsApplyStateRecords();
 
 public:
     // KEY FUNCTION. QueryInterface is deliberately declaration-only and its
@@ -2926,15 +2746,7 @@ public:
                 .present = presentBatch.command,
                 .surface0 = presentBatch.source});
         const HRESULT appendHr = appendRecord(
-            D9C_COMMAND_RECORD_PRESENT, kLegacyPresentSizeHint,
-            [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
-                const AppendPhaseTimer& phase) -> HRESULT {
-                const auto t0 = phase.begin();
-                const bool ok = dxmt9::d3d9::pe::appendPeExactPresentSingleton(
-                    builder, presentBatch);
-                phase.recordEncode(t0);
-                return ok ? S_OK : D3DERR_INVALIDCALL;
-            });
+            D9C_COMMAND_RECORD_PRESENT, kStablePresentCadenceBytes);
         presentSource->Release();
         if (recordPresentTiming) {
             presentTimingAppendEnd = std::chrono::steady_clock::now();
@@ -2957,9 +2769,6 @@ public:
             return appendHr;
         }
         const HRESULT flushHr = flushPendingCommandChunk(PeRecorderFlushReason::Present);
-        if (SUCCEEDED(flushHr) && !semanticBatchOwner()) {
-            (void)recorderState_.commandChunk.returnToLegacyFinalLayout();
-        }
         if (recordPresentTiming) {
             presentTimingFlushEnd = std::chrono::steady_clock::now();
             dxmt9DeviceInfoLog(

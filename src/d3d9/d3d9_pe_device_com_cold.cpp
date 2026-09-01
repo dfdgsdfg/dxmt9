@@ -85,6 +85,8 @@ D3D9DeviceImpl::D3D9DeviceImpl(D9CDevice* dev, IDirect3D9Ex* factory,
     // initializer, so it needs no entry here.
     , softwareVertexProcessing_((behaviorFlags & D3DCREATE_SOFTWARE_VERTEXPROCESSING) ? TRUE : FALSE)
     , extended_(extended)
+    , semanticRecorderState_(
+          std::make_unique<PeProductionSemanticRecorderState>())
     , peCaptureState_(makePeCaptureState(
           dxmt9PeRenderTapeCaptureEnabled(),
           dxmt9PeRenderTapeCaptureLimits(
@@ -1608,15 +1610,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::UpdateSurface(IDirect3DSurface9* src,
             .surface1 = destination.wire()});
     const HRESULT appendHr = appendRecord(
         D9C_COMMAND_RECORD_UPDATE_SURFACE,
-        kLegacyUpdateSurfaceSizeHint,
-        [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
-            const AppendPhaseTimer& phase) -> HRESULT {
-            const auto t0 = phase.begin();
-            const bool ok = dxmt9::d3d9::pe::appendUpdateSurface(
-                builder, wire, source.wire(), destination.wire());
-            phase.recordEncode(t0);
-            return ok ? S_OK : D3DERR_INVALIDCALL;
-        });
+        kStableUpdateSurfaceCadenceBytes);
     if (SUCCEEDED(appendHr)) {
         D3D9PeMarkSurfaceAutogenDirty(dst);
     }
@@ -1667,15 +1661,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::UpdateTexture(IDirect3DBaseTexture9* s
     // dst not SYSTEMMEM/SCRATCH. test_update_texture_pool_copy_2d.
     const HRESULT appendHr = appendRecord(
         D9C_COMMAND_RECORD_UPDATE_TEXTURE,
-        kLegacyUpdateTextureSizeHint,
-        [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
-            const AppendPhaseTimer& phase) -> HRESULT {
-            const auto t0 = phase.begin();
-            const bool ok = dxmt9::d3d9::pe::appendUpdateTexture(
-                builder, sourceWire, destinationWire);
-            phase.recordEncode(t0);
-            return ok ? S_OK : D3DERR_INVALIDCALL;
-        });
+        kStableUpdateTextureCadenceBytes);
     // The registry shadow is committed only after appendRecord accepts the
     // record. If the append's capacity flush or emitter fails, the
     // destination remains unchanged; the normal command bytes are also
@@ -1766,25 +1752,12 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetRenderTargetData(IDirect3DSurface9*
             .surface0 = readbackBatch.source,
             .surface1 = readbackBatch.destination});
     const HRESULT appendHr = appendRecord(
-        D9C_COMMAND_RECORD_READBACK, kLegacyReadbackSizeHint,
-        [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
-            const AppendPhaseTimer& phase) -> HRESULT {
-            const auto t0 = phase.begin();
-            const bool ok = dxmt9::d3d9::pe::appendPeExactReadbackSingleton(
-                builder, readbackBatch);
-            phase.recordEncode(t0);
-            return ok ? S_OK : D3DERR_INVALIDCALL;
-        });
+        D9C_COMMAND_RECORD_READBACK, kStableReadbackCadenceBytes);
     if (FAILED(appendHr)) return appendHr;
     // Sync semantics: commit the chunk now and wait for completion.
     // flushPendingCommandChunk routes through commit_chunk -> server's
     // record dispatcher -> readback record handler.
-    const HRESULT flushHr =
-        flushPendingCommandChunk(PeRecorderFlushReason::Readback);
-    if (SUCCEEDED(flushHr)) {
-        (void)recorderState_.commandChunk.returnToLegacyFinalLayout();
-    }
-    return flushHr;
+    return flushPendingCommandChunk(PeRecorderFlushReason::Readback);
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetFrontBufferData(UINT sc, IDirect3DSurface9* surface) noexcept {
@@ -1910,15 +1883,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::StretchRect(IDirect3DSurface9* src,
             .surface1 = destination.wire()});
     const HRESULT appendHr = appendRecord(
         D9C_COMMAND_RECORD_STRETCH_RECT,
-        kLegacyStretchRectSizeHint,
-        [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
-            const AppendPhaseTimer& phase) -> HRESULT {
-            const auto t0 = phase.begin();
-            const bool ok = dxmt9::d3d9::pe::appendStretchRect(
-                builder, wire, source.wire(), destination.wire());
-            phase.recordEncode(t0);
-            return ok ? S_OK : D3DERR_INVALIDCALL;
-        });
+        kStableStretchRectCadenceBytes);
     if (SUCCEEDED(appendHr)) {
         D3D9PeMarkSurfaceAutogenDirty(dst);
     }
@@ -1967,15 +1932,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ColorFill(IDirect3DSurface9* pSurf,
         dxmt9::d3d9::pe::PeSemanticRecordInput{
             .colorFill = wire, .surface0 = surface.wire()});
     const HRESULT appendHr = appendRecord(
-        D9C_COMMAND_RECORD_COLOR_FILL, kLegacyColorFillSizeHint,
-        [&](dxmt9::d3d9::pe::CommandChunkBuilder& builder,
-            const AppendPhaseTimer& phase) -> HRESULT {
-            const auto t0 = phase.begin();
-            const bool ok = dxmt9::d3d9::pe::appendColorFill(
-                builder, wire, surface.wire());
-            phase.recordEncode(t0);
-            return ok ? S_OK : D3DERR_INVALIDCALL;
-        });
+        D9C_COMMAND_RECORD_COLOR_FILL, kStableColorFillCadenceBytes);
     if (SUCCEEDED(appendHr)) {
         D3D9PeMarkSurfaceAutogenDirty(pSurf);
     }

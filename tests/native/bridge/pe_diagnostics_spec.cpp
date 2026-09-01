@@ -249,12 +249,14 @@ void testSourceContracts(const std::filesystem::path &root) {
                 "Present has a typed immutable value owner");
   checkContains(device, "const dxmt9::d3d9::pe::PePresentBatch presentBatch",
                 "the real Present boundary owns its batch value");
-  checkContains(device, "builder, presentBatch",
-                "exact Present append consumes the owned batch value");
-  checkContains(device, "appendPeExactPresentSingleton",
-                "Present selects the in-place exact singleton transaction");
+  checkContains(device, ".present = presentBatch.command",
+                "Present arms the mandatory semantic owner from its batch value");
+  checkContains(device, ".surface0 = presentBatch.source",
+                "Present transfers its qualified source into semantic ownership");
+  checkNotContains(device, "appendPeExactPresentSingleton",
+                   "Present has no standalone final-wire transaction");
   checkNotContains(device, "PePresentBatchTransaction",
-                   "production reuses the persistent builder and warm retainer");
+                   "production uses the all-family owner for Present");
   for (const std::string_view retainedInline : {
            "HRESULT STDMETHODCALLTYPE Present(",
            "HRESULT STDMETHODCALLTYPE SetStreamSource(",
@@ -274,18 +276,25 @@ void testSourceContracts(const std::filesystem::path &root) {
   const auto deviceSource = device + deviceOwner;
   const auto recorder =
       readTextFile(root / "src/d3d9/d3d9_pe_device_recorder.cpp");
-  checkContains(recorder, "CommandChunkDiscardTarget::LegacyProduction",
-                "device discard explicitly restores the production layout");
+  checkNotContains(deviceSource, "CommandChunkResetTarget::MutableOracle",
+                   "production device has no mutable-oracle discard route");
+  checkNotContains(deviceSource, "returnToMutableLayout",
+                   "production device never restores a compatibility layout");
   const auto recorderHeader =
       readTextFile(root / "src/d3d9/d3d9_pe_recorder.hpp");
   const auto deviceCold =
       readTextFile(root / "src/d3d9/d3d9_pe_device_com_cold.cpp");
-  checkContains(deviceCold, "appendPeExactReadbackSingleton",
-                "synchronous Readback selects the exact singleton transaction");
+  checkContains(deviceCold,
+                "PeSemanticProducerKind::Readback",
+                "synchronous Readback enters the all-family semantic transaction");
+  checkNotContains(deviceCold, "appendPeExactReadbackSingleton",
+                   "Readback has no standalone final-wire transaction");
   const auto deviceDiag =
       readTextFile(root / "src/d3d9/d3d9_pe_device_diag.cpp");
   const auto peBuilder =
       readTextFile(root / "src/d3d9/d3d9_pe_chunk_builder.cpp");
+  const auto semanticOwner =
+      readTextFile(root / "src/d3d9/d3d9_pe_semantic_owner.hpp");
   const auto peConstShadow =
       readTextFile(root / "src/d3d9/d3d9_pe_const_shadow.hpp");
   const auto providerReplay =
@@ -345,8 +354,7 @@ void testSourceContracts(const std::filesystem::path &root) {
   for (const std::string_view field : {
            "vsConstSetterRangePerf_", "peRecorderStats_",
            "peChunkAppendDecimatedStats_", "peAppendTypeCounts_",
-           "peAppendTypeBytes_", "peAppendPhaseEncode_",
-           "peAppendPhaseFlush_", "peConstFlushDecimatedStats_",
+           "peAppendTypeBytes_", "peConstFlushDecimatedStats_",
            "peEntryConstDecimatedStats_", "peEntryDrawDecimatedStats_",
            "peEntryStateDecimatedStats_", "peDrawPhaseSwvpDecimatedStats_",
            "peDrawPhaseRecordDecimatedStats_",
@@ -403,6 +411,11 @@ void testSourceContracts(const std::filesystem::path &root) {
   checkContains(deviceSource,
                 "dxmt9::d3d9::pe::PeRecorderState recorderState_{};",
                 "device stores the hot recorder owner directly");
+  checkContains(deviceSource,
+                "std::unique_ptr<PeProductionSemanticRecorderState> semanticRecorderState_{};",
+                "device owns one mandatory production semantic transaction");
+  checkNotContains(recorderState, "CommandChunkBuilder commandChunk",
+                   "hot recorder state has no embedded legacy final-wire builder");
   for (const std::string_view alias : {
            "bool& recorderLockRequired_",
            "std::recursive_mutex& recorderMutex_",
@@ -488,8 +501,14 @@ void testSourceContracts(const std::filesystem::path &root) {
                 "disabled device debug logging is guarded at each call site");
   checkContains(recorder, "peDiagnosticsRead(\n                    chunkDiagnostics",
                 "chunk commit clocks are behind the nullable owner gate");
-  checkContains(deviceSource, "const auto t0 = phase.begin();",
-                "append phase clocks use the nullable clock gate");
+  checkContains(recorder, "observeCommittedSemanticOwnerRecord",
+                "all-family observation reads the production semantic owner");
+  checkContains(recorder, "projectLastCommittedSemanticRecord",
+                "device delegates exact projection to the shared owner relation");
+  checkContains(semanticOwner, "owner.emitExactFixed(emission)",
+                "semantic observation uses the owner's immutable projection");
+  checkNotContains(recorder, "visitLastCommittedRecord(",
+                   "production observation never reads the compatibility builder");
   checkNotContains(
       deviceSource,
       "dxmt9PeArmDecimatedScope(peEntryScope, diagnostics_ ? "
@@ -518,7 +537,7 @@ void testSourceContracts(const std::filesystem::path &root) {
                    "PeStateBlockTransactionState& stateBlockTransaction_",
                    "device has no dependent StateBlock transaction pointer");
   const auto appendRecordBegin = deviceSource.find(
-      "HRESULT appendRecord(uint32_t type, size_t sizeHint, EmitFn emit)");
+      "HRESULT appendRecord(uint32_t type, size_t sizeHint)");
   const auto appendRecordEnd = appendRecordBegin == std::string::npos
       ? std::string::npos
       : deviceSource.find("HRESULT appendDrawPrimitiveRecord", appendRecordBegin);
@@ -534,9 +553,13 @@ void testSourceContracts(const std::filesystem::path &root) {
       "poison stops every writer before negotiation and capacity work");
   checkBefore(
       appendRecordBody,
-      "if (allFamilyTokens) {",
-      "lastCommittedRecordOrdinal()",
-      "disabled PE semantic path does not read committed ordinals");
+      "if (!semanticOwner)",
+      "appendSemanticRecordBoundary(",
+      "missing mandatory semantic ownership fails before final-wire emission");
+  checkContains(
+      appendRecordBody,
+      "? allFamilyTokens->beginSource(type)",
+      "disabled PE semantic observation does not allocate source ordinals");
   checkContains(
       queueLifecycle,
       "if (pipelineLifecycleObserverEnabled()) {",

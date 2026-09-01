@@ -15,12 +15,11 @@
 
 namespace dxmt9::d3d9::pe {
 
-// A device discard is a terminal boundary for the current production chunk,
-// not a retry of an immutable exact transaction. Keep that distinction typed:
-// standalone exact owners use the no-argument reset API, while Reset/ResetEx,
-// device-lost recovery, and teardown explicitly restore the general builder.
-enum class CommandChunkDiscardTarget : std::uint8_t {
-  LegacyProduction,
+// Differential and Bootstrap fixtures may switch one compatibility builder
+// between exact and mutable layouts. Keep that test-only reset target typed;
+// the production recorder never owns or selects this builder.
+enum class CommandChunkResetTarget : std::uint8_t {
+  MutableOracle,
 };
 
 // Payload values are copied verbatim into the bounded wire blob. Admission is
@@ -183,11 +182,16 @@ struct PeLocalObjectIdentity {
                          const PeLocalObjectIdentity&) = default;
 };
 
-// A logical Render Tape pending-chunk lease may only be issued by a builder
-// after it has proved that the exact wrapper identity is present in the
-// committed portion of the current chunk.  The constructor is private so a
-// registry cannot manufacture a lease from a wire identity alone; the token
-// is only a witness and owns no retain/release operation.
+template <std::size_t MaxRecords, std::size_t MaxPins,
+          std::size_t MaxSemanticBytes, std::size_t MaxRects,
+          std::size_t MaxSparseValues>
+class PeSemanticBatchOwner;
+
+// A logical Render Tape pending-chunk lease may only be issued by a final-wire
+// transaction owner after it has proved that the exact wrapper identity is
+// present in the committed portion of the current chunk. The constructor is
+// private so a registry cannot manufacture a lease from a wire identity
+// alone; the token is only a witness and owns no retain/release operation.
 class CommittedPendingChunkLease final {
  public:
   CommittedPendingChunkLease(const CommittedPendingChunkLease&) = delete;
@@ -204,6 +208,9 @@ class CommittedPendingChunkLease final {
 
  private:
   friend class CommandChunkBuilder;
+  template <std::size_t, std::size_t, std::size_t, std::size_t,
+            std::size_t>
+  friend class PeSemanticBatchOwner;
 
   explicit CommittedPendingChunkLease(PeWireObjectRef object) noexcept
       : object_(object) {}
@@ -512,7 +519,7 @@ class CommandChunkBuilder {
   // Returns a successfully committed/reset exact transaction to the legacy
   // staging lane. Entered bridge failures keep their sealed exact bytes and
   // never call this operation.
-  bool returnToLegacyFinalLayout() noexcept;
+  bool returnToMutableLayout() noexcept;
 
   template <typename T>
   bool appendPayloadValue(const T& value,
@@ -679,9 +686,9 @@ class CommandChunkBuilder {
   // teardown of a standalone owner. Exact transactions retain their plan so
   // the same immutable input can be emitted again.
   void resetAndReleaseRetained() noexcept;
-  // Device discard: releases every pin and explicitly escapes an exact final
-  // layout before later production recording resumes.
-  bool resetAndReleaseRetained(CommandChunkDiscardTarget target) noexcept;
+  // Oracle discard: releases every pin and restores the mutable differential
+  // layout for another fixture case.
+  bool resetAndReleaseRetained(CommandChunkResetTarget target) noexcept;
 
   bool recordActive() const noexcept { return active_.active; }
   bool sealed() const noexcept { return sealed_; }

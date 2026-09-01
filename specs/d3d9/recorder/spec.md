@@ -17,9 +17,9 @@ does not yet satisfy it.
 |---|---|---|
 | COM validation, app-visible state, getters | `D3D9DeviceImpl` in `src/d3d9/d3d9_pe_device_impl.hpp` and its cold COM TUs | Metal objects, unix queue state |
 | State-domain value types and typed keys | `src/d3d9/d3d9_pe_state_shadow.hpp`, `d3d9_pe_const_shadow.hpp` | COM lifetime, capture journaling |
-| Sparse normalization | `buildSparseStatePlan` / `finalizeSparseStatePlanChunkContext` in `src/d3d9/d3d9_pe_producer.cpp`; compatibility `buildSparseState` only for oversized, Render Tape, and SWVP override projections | wire-row staging, handle retention, or pending consumption during pass 1 |
-| Record/chunk transaction | `CommandChunkBuilder` in `src/d3d9/d3d9_pe_chunk_builder.*` and `D3D9DeviceImpl::appendRecord` / `flushPendingCommandChunk` | D3D9 getter authority, Metal execution |
-| PE local pinning | `D3D9PePendingCommandRetainer` in `src/d3d9/d3d9_pe_retainer.*`; `CommandChunkBuilder` owns physical retain/rollback | Render Tape logical settlement |
+| Sparse normalization | production `buildSparseState` prepares one borrowed `SparseStateInput`; `PeSemanticBatchOwner::appendOwnedRecord` copies it into bounded typed arenas. `SparseStatePlan` remains a differential oracle only | final-wire tables, handle retention, or pending consumption during preparation |
+| Record/chunk transaction | mandatory `PeProductionSemanticRecorderState` / `PeSemanticBatchOwner` and `D3D9DeviceImpl::appendRecord` / `flushPendingCommandChunk`; `CommandChunkBuilder` is limited to tests and Render Tape bootstrap construction | D3D9 getter authority, Metal execution |
+| PE local pinning | the semantic owner's kind-qualified pin arenas and bounded retainer own physical retain/rollback | Render Tape logical settlement |
 | Wire registry resolution | `WireObjectRegistry` in `src/d3d9/device_c_chunk_registry.*` | PE wrapper-pointer identity |
 | Capture registry and settlement | Nullable heap-owned `PeCaptureState` in `src/d3d9/d3d9_pe_capture_state.hpp`, operated by `D3D9DeviceImpl` cold methods in `d3d9_pe_device_tape.cpp` | changes to app HRESULT or capture-off cadence |
 | PE recorder diagnostics | Optional `PeDiagnosticsState` in `src/d3d9/d3d9_pe_diagnostics_state.hpp`, operated by cold helpers in `d3d9_pe_device_diag.cpp` and nullable hot gates | recorder protocol counters, pacing limits, semantic shadows, capture transaction state |
@@ -109,16 +109,15 @@ Preparing a record computes a non-owning candidate projection:
 Candidate = Normalize(LiveShadow, PendingDelta, explicit draw/control input)
 ```
 
-Ordinary draws and APPLY_STATE use a two-pass `SparseStatePlan`. Pass 1 owns
-only bounded masks, category counts, constant ranges, UP spans, draw semantics,
-and borrowed source witnesses held under the recorder lock. It owns no
-`PeSparseScratch`, `SparseStateInput`, or section-sized wire array, performs no
-handle retain, and does not mutate `PendingDelta`. CapacityPre may flush after
-pass 1. The emitter then finalizes destination-chunk stream/index selection and
-pass 2 visits each selected source row once, writing it directly into the
-builder's final typed payload range. The active-record checkpoint owns handle
-retention and rollback. Acceptance rebinds the exact source witnesses and
-selection before consuming pending categories or dirty constant ranges.
+Ordinary draws and APPLY_STATE prepare one bounded `SparseStateInput` from the
+live shadow and binding view. The input is borrowed only across the immediate
+`appendRecord` call. CapacityPre may flush while those recorder-owned scratch
+spans remain stable; `appendOwnedRecord` then validates destination-chunk
+stream/index selection, copies the selected values into the mandatory semantic
+owner's typed arenas, acquires kind-qualified pins, and commits the record
+atomically. Only that accepted admission consumes pending categories or dirty
+constant ranges. The older two-pass `SparseStatePlan` stays in the native
+differential corpus and is not selectable by production code.
 
 Only accepted settlement through the consume capability may perform:
 
@@ -256,19 +255,19 @@ checkpoint even though it is owned outside the builder.
 
 | Outcome | Builder | Retainer | `PendingDelta` | App result |
 |---|---|---|---|---|
-| pre-capacity flush fails | prior builder remains sealed or unsealed according to its own settlement; new record is unattempted | prior pins retained | new prepared token unchanged | failure; no emitter call |
+| pre-capacity flush fails | prior owner transaction remains sealed or unsealed according to its settlement; new record is unattempted | prior pins retained | new prepared token unchanged | failure; no admission call |
 | preparation/validation fails | unchanged | unchanged | unchanged | failure |
-| payload/handle/retain append fails | rollback to all checkpoints | rollback new pins | unchanged | failure |
-| `commitRecord` fails | rollback active record | rollback new pins | unchanged | failure |
-| `commitRecord` succeeds | record becomes durable in current builder | pins owned by builder | remove exactly represented entries | success or continue to capacity settlement |
+| payload/pin/arena admission fails | rollback to all owner checkpoints | rollback new pins | unchanged | failure |
+| owner record commit fails | rollback active record | rollback new pins | unchanged | failure |
+| owner record commit succeeds | record becomes durable in the semantic owner | pins owned by that owner | remove exactly represented entries | success or continue to capacity settlement |
 | post-append capacity commit is effect-unknown | sealed accepted record remains owned for Reset/teardown cleanup, not ordinary retry | pins retained | entries remain represented by the accepted record, not reintroduced as a duplicate | failure and recorder poison |
 
-`buildSparseStatePlan`, compatibility `buildSparseState`, and every typed
-`prepare*Batch` are non-consuming. `acceptSparseStatePlan`, compatibility
-`acceptPreparedSparseState`, `acceptInlineConstantDelta`, standalone constant
-flush, and the four oversized adapters all consume through an Accepted
-`AppendPlan`; Failed and Discarded plans retain pending state and the prepared
-retry witness.
+Production `buildSparseState`, oracle-only `buildSparseStatePlan`, and every
+typed `prepare*Batch` are non-consuming. Production
+`acceptPreparedSparseState`, oracle-only `acceptSparseStatePlan`,
+`acceptInlineConstantDelta`, standalone constant flush, and the four oversized
+adapters consume only through an Accepted `AppendPlan`; Failed and Discarded
+plans retain pending state and the prepared retry witness.
 
 ### 3.2 Seal, commit, retry, and capture settlement
 
@@ -483,15 +482,14 @@ backend chunk retains remain private and do not alter public COM refcount
 observations. The prepare/accept boundary is non-reentrant: preparation reads
 into reusable scratch, and only acceptance settles pending state, so a failed
 append cannot erase a later mutation.
-Prepared plan rows are materialized one row at a time into a builder-reserved
-final section range. The builder exposes no mutable payload span: a typed
-visitor receives a call-local sink, binding rows resolve handles through the
-existing retention path, and each value is copied by record-relative offset.
-A failure rolls payload, handle, and retainer state back to the same record
-checkpoint. Ordinary production therefore has no section-sized wire staging
-copy. `PeSparseScratch` and `SparseStateInput` remain value-owned compatibility
-storage only for oversized batches, Render Tape full snapshots, and SWVP
-override packets whose borrowed bindings are restored before append.
+Prepared sparse rows are admitted one at a time into the semantic owner's
+typed arenas. The owner exposes no mutable final-wire span: binding rows become
+kind-qualified pins, payload ranges use bounded typed copies, and final
+ExactFixed or segmented emission visits only committed immutable records. A
+failure rolls arenas, pins, and the active record back to one checkpoint.
+`PeSparseScratch` and `SparseStateInput` are production preparation scratch for
+ordinary draws/APPLY_STATE as well as oversized, Render Tape, and SWVP forms;
+they own no final-wire lifetime and do not survive admission.
 
 ## 6. Shared predicates and counterexamples
 
@@ -590,7 +588,8 @@ No producer receives the base pointer or an unbounded mutable span. The sink
 accepts one checked element or exact typed range and advances monotonically
 within its reserved region. Exact mode writes record headers and handle entries
 directly into their final tables and payload bytes directly into the final
-arena; the legacy wire record, wire handle, and payload vectors remain empty.
+arena; the compatibility builder's wire-record, wire-handle, and payload
+vectors remain empty.
 Record `payloadOffset` values remain relative to the payload arena. Used-prefix
 counts live in the private final header while the transaction is unsealed;
 handle dedup and rollback use those counts, `handleObjects_`, and reads from the
@@ -599,12 +598,9 @@ record checkpoint. Seal requires exact plan exhaustion before publishing,
 repeated seal returns the same committed bytes, and Reset reuses the fixed
 layout while preserving the existing warm-retainer policy.
 
-Production selects the primitive through the default-off
-`DXMT9_PE_SEMANTIC_BATCH_OWNER` gate. Disabled devices retain the legacy
-`CommandChunkBuilder`/retainer behavior, with only cached nullable checks at
-the producer arm and common append envelope. When enabled, `appendRecord`
-chooses exactly one lane before builder preparation or retention: one
-chunk-scoped `PeSemanticBatchOwner` admits all 21 producer rows into typed
+Production constructs one mandatory chunk-scoped `PeSemanticBatchOwner` with
+the device and uses it as the sole final-wire transaction. `appendRecord`
+admits all 21 producer rows into typed
 record slots, copies only constant/UP byte payloads plus typed sparse and
 rectangle arenas, and acquires kind-qualified physical pins at admission.
 Admission checkpoints source/record ordinals and all arena/pin frontiers and
@@ -617,19 +613,22 @@ pure visitors provide negotiated segmented fixed-role
 emission for normal bridge transport and contiguous ExactFixed emission for
 capture/compatibility, with identical record-local dedup, generation-qualified
 identities, payload alignment, and copied arenas. Construction failure is
-fail-closed before the gate becomes usable.
+fail-closed at device creation. Admission, seal, and transport failure never
+select a compatibility builder. The owner's exact typed pins also issue Render
+Tape pending-chunk leases and answer buffer-hazard queries, so those consumers
+cannot observe a different ownership graph.
 
-The compatibility `PePrewireChunkTransaction` and `PeOwnedRecordCandidate`
-remain only as bounded call-local Present/Readback test/pilot values; they are
-not production semantic-batch owners and copy no final wire bytes. The enabled
-semantic lane preserves legacy sizeHint cadence, CapacityPre/CapacityPost,
+The compatibility `CommandChunkBuilder`, `PePrewireChunkTransaction`, and
+`PeOwnedRecordCandidate` remain only as bounded differential-test or Bootstrap
+oracles; they are not production semantic-batch owners or fallbacks. The
+production owner preserves the established sizeHint cadence, CapacityPre/CapacityPost,
 PendingDelta settlement, capture reservation, bridge pre-effect retry,
 effect-unknown poison, and Reset cleanup through the persistent recorder
-transaction, while never preparing or retaining in the legacy graph for that
+transaction, while never preparing or retaining in a compatibility graph for that
 chunk. Capture always selects contiguous ExactFixed because its existing
 consumer requires it; normal segmented transport is selected only when the
-negotiated bridge accepts it. CPU-ready Tape role integration and default
-promotion remain open pending cross/Wine/wild evidence.
+negotiated bridge accepts it. Segmented-transport promotion and CPU-ready Tape
+integration remain independent workstreams.
 
 `RecorderBorrow<T>` and `RecorderLockCapability` are proof-carrying API shapes,
 not new owners. They carry the recorder epoch and transaction identity, have no
@@ -660,23 +659,22 @@ with the existing scalar and StateBlock projections and does not use record
 size, count, or a hash as semantic identity. The value arena is bounded to the
 16 MiB recorder byte ceiling and the identity arena to 64 qualified identities
 per maximum record slot; exhaustion fails stop only while the explicit proof
-gate is enabled. The default path retains no ledger or semantic storage. Its
-additional cached nullable checks have cross-build coverage but do not yet have
-a disassembly or workload-cost claim.
+gate is enabled. The default path retains no optional proof ledger; mandatory
+semantic transaction storage is production state, not an observer knob.
 
 The bounded native legacy/direct fixture runs both builders from immutable
 canonical values. The production owner additionally proves ownership under
 source mutation, identity deduplication, failed emission rollback, exact and
 segmented byte identity, multi-record cadence, warm settlement, and retry-
 ordinal reuse without fabricating an ordinal. All 21 producer families are
-wired to the default-off owner, but bounded value tests and cross compilation
+wired to the production owner, but bounded value tests and cross compilation
 do not substitute for PE COM execution. Broader per-call Wine faults,
 capture/resource-side-effect equivalence, pixels, locality, and workload cost
 remain required before promotion.
 
 Non-goals are a wire-version change, pointer-bearing ABI, cross-thread recorder
 callbacks, record fusion, changed chunk cadence, semantic state merging, or
-removal of the compatibility builder before all promotion gates pass.
+removal of compatibility builders from differential and Bootstrap fixtures.
 
 ### 6.1.1 Bounded populated-slot Direct continuation
 

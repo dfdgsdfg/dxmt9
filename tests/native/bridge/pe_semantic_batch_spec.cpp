@@ -343,7 +343,7 @@ void preWireCandidateOwnershipAndRetry() {
             rollback.recordCount() == 0u && rollback.handleCount() == 0u &&
             rollbackOwner.bound() && source.refs == 1u,
         "failed exact emission rolls back candidate retention");
-  check(rollback.returnToLegacyFinalLayout(),
+  check(rollback.returnToMutableLayout(),
         "failed exact emission restores the legacy sink");
 
   PeAllFamilySemanticTokenLedger ordinals;

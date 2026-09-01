@@ -419,8 +419,8 @@ HOT_PREFIXES = {
     "DrawPrimitive": "ZN14D3D9DeviceImpl13DrawPrimitive",
     "DrawIndexedPrimitive": "ZN14D3D9DeviceImpl20DrawIndexedPrimitive",
     "Present": "ZN14D3D9DeviceImpl7Present",
-    # Representative template instantiations used by the present/state paths.
-    "appendRecord": "ZN14D3D9DeviceImpl12appendRecordIZNS_7Present",
+    # The promoted all-family owner has one non-template append envelope.
+    "appendRecord": "ZN14D3D9DeviceImpl12appendRecordE",
     "setRenderStateCore": "ZN14D3D9DeviceImpl18setRenderStateCoreIKNS_25PeNullHotStateSetterTimer",
     "applyConstStateWrite": "ZN14D3D9DeviceImpl20applyConstStateWrite",
 }

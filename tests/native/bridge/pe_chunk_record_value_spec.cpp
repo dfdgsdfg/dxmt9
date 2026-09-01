@@ -120,7 +120,7 @@ using dxmt9::d3d9::ImportedChunkView;
 using dxmt9::d3d9::CommandChunkEnvelope;
 using dxmt9::d3d9::pe::CommandChunkBuilder;
 using dxmt9::d3d9::pe::CommandChunkBuilderCapacities;
-using dxmt9::d3d9::pe::CommandChunkDiscardTarget;
+using dxmt9::d3d9::pe::CommandChunkResetTarget;
 using dxmt9::d3d9::pe::CommittedPendingChunkLease;
 using dxmt9::d3d9::pe::ExactCommandChunkLayoutPlan;
 using dxmt9::d3d9::pe::PeWireObjectRef;
@@ -1945,7 +1945,7 @@ void testPresentBatchTransaction() {
                        legacyBytes.begin()),
         "production Present exact bytes match the legacy oracle");
   productionPresent.reset();
-  check(productionPresent.returnToLegacyFinalLayout() &&
+  check(productionPresent.returnToMutableLayout() &&
             !productionPresent.exactFinalLayout(),
         "successful Present reset restores the persistent legacy fallback");
   productionPresent.resetAndReleaseRetained();
@@ -1983,7 +1983,7 @@ void testPresentBatchTransaction() {
                        legacyReadbackBytes.begin()),
         "production Readback exact bytes match the legacy oracle");
   productionReadback.reset();
-  check(productionReadback.returnToLegacyFinalLayout(),
+  check(productionReadback.returnToMutableLayout(),
         "successful Readback reset restores the legacy fallback");
   productionReadback.resetAndReleaseRetained();
   check(surface.refs == 1u && destination.refs == 1u,
@@ -2038,7 +2038,7 @@ void testExactProductionPreservesLegacyWarmStorage() {
         "exact preparation preserves every legacy warm vector capacity");
   check(builder.seal().valid(), "exact warm-storage fixture seals");
   builder.reset();
-  check(builder.returnToLegacyFinalLayout() &&
+  check(builder.returnToMutableLayout() &&
             !builder.exactFinalLayout() &&
             builder.recordsCapacityForTest() == recordsCapacity &&
             builder.handlesCapacityForTest() == handlesCapacity &&
@@ -2046,12 +2046,12 @@ void testExactProductionPreservesLegacyWarmStorage() {
             builder.payloadCapacityForTest() == payloadCapacity &&
             warmSource.refs == 2u && warmDestination.refs == 2u &&
             presentSource.refs == 2u,
-        "successful exact boundary returns to legacy with warm storage/ownership");
+        "successful exact boundary returns to mutable oracle storage/ownership");
   check(builder.resetAndReleaseRetained(
-            CommandChunkDiscardTarget::LegacyProduction) &&
+            CommandChunkResetTarget::MutableOracle) &&
             warmSource.refs == 1u && warmDestination.refs == 1u &&
             presentSource.refs == 1u,
-        "legacy-target discard releases all warm and exact owners");
+        "mutable-oracle discard releases all warm and exact owners");
 }
 
 void testDeviceLostExactDiscardReturnsToLegacy() {
@@ -2100,14 +2100,14 @@ void testDeviceLostExactDiscardReturnsToLegacy() {
       failedBridgeChunk.blob.begin(), failedBridgeChunk.blob.end());
 
   check(builder.resetAndReleaseRetained(
-            CommandChunkDiscardTarget::LegacyProduction) &&
+            CommandChunkResetTarget::MutableOracle) &&
             !builder.exactFinalLayout() && !builder.sealed() &&
             builder.recordCount() == 0u && builder.handleCount() == 0u &&
             builder.payloadBytes() == 0u &&
             builder.retainedObjectCount() == 0u &&
             warmSource.refs == 1u && warmDestination.refs == 1u &&
             presentSource.refs == 1u,
-        "typed device discard releases warm/exact pins and restores legacy");
+        "typed oracle discard releases warm/exact pins and restores mutable layout");
   const auto emptyAfterDiscard = builder.seal();
   check(emptyAfterDiscard.valid() && emptyAfterDiscard.recordCount == 0u &&
             emptyAfterDiscard.handleCount == 0u &&
@@ -2116,8 +2116,8 @@ void testDeviceLostExactDiscardReturnsToLegacy() {
             emptyAfterDiscard.blob.size() < failedBridgeBytes.size(),
         "typed device discard cannot republish stale exact sealed bytes");
   check(builder.resetAndReleaseRetained(
-            CommandChunkDiscardTarget::LegacyProduction),
-        "empty post-discard probe reopens the legacy production builder");
+            CommandChunkResetTarget::MutableOracle),
+        "empty post-discard probe reopens the mutable oracle builder");
 
   check(dxmt9::d3d9::pe::appendUpdateTexture(
             builder, warmSourceRef, warmDestinationRef) &&
@@ -2144,10 +2144,10 @@ void testDeviceLostExactDiscardReturnsToLegacy() {
                          failedBridgeBytes.begin())),
         "recovered legacy chunk imports two new records with no stale bytes");
   check(builder.resetAndReleaseRetained(
-            CommandChunkDiscardTarget::LegacyProduction) &&
+            CommandChunkResetTarget::MutableOracle) &&
             warmSource.refs == 1u && warmDestination.refs == 1u &&
             presentSource.refs == 1u,
-        "legacy-target discard is idempotent after recovered production");
+        "mutable-oracle discard is idempotent after recovered fixture output");
 }
 
 void testAllFamilyExactDifferential() {

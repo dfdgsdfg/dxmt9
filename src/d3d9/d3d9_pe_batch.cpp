@@ -236,7 +236,7 @@ bool PePrewireChunkTransaction::emitExact(
   for (std::size_t index = 0u; index < count_; ++index) {
     if (!candidates_[index].emitExact(builder)) {
       builder.resetAndReleaseRetained();
-      (void)builder.returnToLegacyFinalLayout();
+      (void)builder.returnToMutableLayout();
       exactBuilder_ = nullptr;
       return false;
     }
@@ -245,7 +245,7 @@ bool PePrewireChunkTransaction::emitExact(
       builder.handleCount() != exactPlan.layout.handleCount ||
       builder.payloadBytes() != exactPlan.layout.payloadBytes) {
     builder.resetAndReleaseRetained();
-    (void)builder.returnToLegacyFinalLayout();
+    (void)builder.returnToMutableLayout();
     exactBuilder_ = nullptr;
     return false;
   }
@@ -376,7 +376,7 @@ bool appendPeExactPresentSingleton(CommandChunkBuilder& builder,
       ? owner.emitExact(builder)
       : owner.emitLegacy(builder);
   if (!accepted && exactPrepared) {
-    (void)builder.returnToLegacyFinalLayout();
+    (void)builder.returnToMutableLayout();
   }
   return accepted;
 }
@@ -394,7 +394,7 @@ bool appendPeExactReadbackSingleton(CommandChunkBuilder& builder,
       ? owner.emitExact(builder)
       : owner.emitLegacy(builder);
   if (!accepted && exactPrepared) {
-    (void)builder.returnToLegacyFinalLayout();
+    (void)builder.returnToMutableLayout();
   }
   return accepted;
 }

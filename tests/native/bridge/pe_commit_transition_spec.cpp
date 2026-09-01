@@ -421,11 +421,11 @@ void testRecorderChunkTransactionAndPendingTicket() {
             poisoned.recordCapacityPostResult(false) && poisoned.poisoned(),
         "capacity-pre failure cannot reopen an effect-unknown owner");
 
-  // This is deliberately a bounded production-type seam harness rather than
-  // a D3D9DeviceImpl/COM fixture. It drives the same PeRecorderState helpers
-  // used by appendRecord/flushPendingCommandChunk, with the real bounded
-  // CommandChunkBuilder and a canonical Clear emitter.
+  // This is deliberately a bounded transaction seam rather than a
+  // D3D9DeviceImpl/COM fixture. CommandChunkBuilder is only the differential
+  // byte oracle; PeRecorderState owns no compatibility builder in production.
   pe::PeRecorderState productionState;
+  pe::CommandChunkBuilder oracle;
   const auto pendingKey = renderStateSlotKey(7u);
   productionState.peState.transition().setRenderState(pendingKey, 1u);
   const auto pendingTicket = productionState.peState.pendingTicket();
@@ -435,18 +435,24 @@ void testRecorderChunkTransactionAndPendingTicket() {
                                        .stencil = 3u};
   const std::array<D9CRect, 0u> rects{};
   check(productionState.prepareChunkRecord(
-              D9C_COMMAND_RECORD_CLEAR, sizeof(clear), false) &&
+              D9C_COMMAND_RECORD_CLEAR, sizeof(clear), false,
+              0u, 0u, 0u, 0u) &&
             productionState.chunkTransaction.pendingTicket().generation ==
                 pendingTicket.generation &&
-            dxmt9::d3d9::pe::appendClear(
-                productionState.commandChunk, clear, rects) &&
-            productionState.settleChunkEmitter(true),
+            dxmt9::d3d9::pe::appendClear(oracle, clear, rects) &&
+            productionState.settleSemanticEmitter(
+                true, oracle.recordCount(), oracle.handleCount(),
+                oracle.payloadBytes(), oracle.retainedObjectCount()),
         "production-type append records through the persistent owner");
-  const auto sealed = productionState.commandChunk.seal();
+  const auto sealed = oracle.seal();
   check(sealed.valid() &&
             productionState.chunkTransaction.recordSealResult(true) &&
-            productionState.recordChunkSealedEvidence() &&
-            productionState.sealedEvidenceMatchesChunk() &&
+            productionState.recordChunkSealedEvidence(
+                oracle.recordCount(), oracle.handleCount(),
+                oracle.payloadBytes(), oracle.retainedObjectCount()) &&
+            productionState.sealedEvidenceMatchesChunk(
+                oracle.recordCount(), oracle.handleCount(),
+                oracle.payloadBytes(), oracle.retainedObjectCount()) &&
             productionState.chunkTransaction.recordCaptureReservation(
                 0u, 0u, false) &&
             productionState.chunkTransaction.recordBridgeResult(true) &&
@@ -456,10 +462,9 @@ void testRecorderChunkTransactionAndPendingTicket() {
             productionState.chunkTransaction.complete() &&
             productionState.chunkTransaction.completed(),
         "production-type seal freezes storage before bridge settlement");
-  productionState.commandChunk.reset();
+  oracle.reset();
   productionState.chunkTransaction.discard();
-  check(!productionState.commandChunk.sealed() &&
-            productionState.commandChunk.recordCount() == 0u &&
+  check(!oracle.sealed() && oracle.recordCount() == 0u &&
             productionState.chunkTransaction.phase() == Phase::Idle,
         "production-type reset releases sealed storage and owner");
 

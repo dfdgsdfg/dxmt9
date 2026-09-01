@@ -438,8 +438,13 @@ void D3D9DeviceImpl::drainPendingRenderTapeChunk(bool recordDestroy) noexcept {
     // materialized. Duplicate handles across records are harmless because
     // the bounded lifetime ref reaches zero on the first visit. Run aliases
     // first so the parent order does not depend on wire handle ordering.
+    const auto* const semanticOwner = semanticBatchOwner();
+    if (!semanticOwner) {
+        markRenderTapeInvalidOnce("pending_lease_owner_missing");
+        return;
+    }
     const auto drainPass = [&](bool aliasPass) noexcept {
-      recorderState_.commandChunk.visitCommittedPendingChunkLeases(
+      semanticOwner->visitCommittedPendingChunkLeases(
           [&](const dxmt9::d3d9::pe::CommittedPendingChunkLease &lease) noexcept {
         const D9CWireObjectIdentity identity = lease.object().identity;
         auto *entry = findRenderTapeObject(lease.object());
@@ -527,8 +532,9 @@ void D3D9DeviceImpl::NotifyRenderTapeObjectDestroyForChild(
         bool issuedLease = false;
         if (entry && entry->lifetime.wrapperRefs == 1u &&
             entry->lifetime.pendingChunkRefs == 0u) {
-            issuedLease = recorderState_.commandChunk
-                .visitCommittedPendingChunkLease(
+            const auto* const semanticOwner = semanticBatchOwner();
+            issuedLease = semanticOwner &&
+                semanticOwner->visitCommittedPendingChunkLease(
                     object,
                     [&](const dxmt9::d3d9::pe::CommittedPendingChunkLease &lease)
                         noexcept {

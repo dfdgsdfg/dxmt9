@@ -167,10 +167,10 @@ recorder enters the existing fail-stop/device-lost state; it must not return
 `S_OK` with stale pending state.
 The same default-off cold owner must issue a producer-qualified source ordinal
 at the common append envelope for matrices, COM bindings, constants, and every
-heterogeneous record family. After builder acceptance it must bind that source
+heterogeneous record family. After semantic-owner admission it must bind that source
 ordinal to the exact record ordinal, payload-arena-relative committed byte range,
 synchronous exact payload bytes, and every qualified wire
-`(kind,generation,objectId)` named by the record. Pre-capacity and emitter
+`(kind,generation,objectId)` named by the record. Pre-capacity and admission
 rejection preserve the source disposition without manufacturing an accepted
 token; an effect-unknown bridge failure retains accepted tokens until explicit
 Reset/teardown discard; and materialized, rejected, and skipped capture paths
@@ -509,9 +509,9 @@ must preserve the existing CapacityPre/CapacityPost flush cadence. A per-call
 append owner whose future chunk contents and final counts are unknown does not
 satisfy this production boundary.
 
-The current implementation has a bounded `PeSemanticBatchOwner` production
-lane behind the default-off `DXMT9_PE_SEMANTIC_BATCH_OWNER` gate: all 21
-producer rows have typed record slots, kind-qualified physical pin arenas,
+The production recorder uses one mandatory bounded `PeSemanticBatchOwner` as
+its sole final-wire transaction. All 21 producer rows have typed record slots,
+kind-qualified physical pin arenas,
 source/record checkpoints, constant/UP byte arenas, rectangle storage, and
 sparse typed arenas. Admission is atomic and fail-closed for generation
 collisions and capacity overflow; successful settlement preserves the bounded
@@ -521,11 +521,15 @@ perform checked record-local handle dedup and exact payload alignment into
 either segmented fixed roles or one contiguous ExactFixed extent, with no
 allocation or recorder side effect during emission. The persistent recorder
 transaction binds PendingDelta, capture, resource-side-effect, ordering, and
-bridge retry/poison boundaries without mixing the legacy builder graph. The
+bridge retry/poison boundaries without mixing a compatibility builder graph.
+Its exact typed pins are also the authority for buffer-hazard queries and
+Render Tape pending-chunk leases. The
 256-record/256-pin production alias matches the promoted default cadence;
-larger debug record-cap overrides fail closed under the owner gate. The older
+larger debug record-cap overrides fail closed. Owner construction failure is a
+device-creation failure and no append, seal, or transport failure may select a
+second production builder. The older
 `PePrewireChunkTransaction` and `PeOwnedRecordCandidate` remain call-local
-Present/Readback test/pilot compatibility paths, not all-family owners. A
+test oracles, not all-family owners or production fallbacks. A
 residual cannot be smuggled into the owner through a raw or type-erased sink.
 
 **R-CORE-REC-7.3** Recorder reads and writes that depend on the recorder mutex

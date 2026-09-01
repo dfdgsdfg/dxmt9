@@ -6,8 +6,8 @@
 // call-local typed views to admit(), but this owner never stores a wire object
 // reference or a borrowed span.  Physical objects are pinned immediately and
 // are represented by kind-qualified typed slots for the rest of the chunk.
-// The owner is consumed by the opt-in all-family production lane. The
-// call-local Present/Readback pilot remains separate and is not an owner.
+// The owner is the sole all-family production final-wire transaction.
+// Compatibility builders remain test/bootstrap oracles, never fallbacks.
 
 #include "d3d9_pe_producer_views.hpp"
 #include "d3d9_pe_retainer.hpp"
@@ -638,6 +638,101 @@ class PeSemanticBatchOwner final {
       if (storage_->buffers[i].object == object) return true;
     }
     return false;
+  }
+  template <typename Visit>
+    requires std::is_nothrow_invocable_r_v<
+        bool, Visit&, const CommittedPendingChunkLease&>
+  bool visitCommittedPendingChunkLease(const PeWireObjectRef& expected,
+                                       Visit&& visit) const noexcept {
+    if (!expected.object ||
+        expected.identity.kind > D9C_CHUNK_HANDLE_KIND_QUERY ||
+        expected.identity.generation == 0u ||
+        expected.identity.objectId == 0u) {
+      return false;
+    }
+    bool committed = false;
+    for (std::size_t record = 0u; record < recordCount_; ++record) {
+      if (!visitRecordHandles(
+              storage_->records[record],
+              [&](const D9CWireObjectIdentity& identity) noexcept {
+                if (identity.kind == expected.identity.kind &&
+                    identity.generation == expected.identity.generation &&
+                    identity.objectId == expected.identity.objectId) {
+                  committed = true;
+                }
+                return true;
+              })) {
+        return false;
+      }
+    }
+    if (!committed) return false;
+    const auto match = [&](const auto& pins, std::size_t count) noexcept {
+      for (std::size_t i = 0u; i < count; ++i) {
+        const auto& pin = pins[i];
+        if (!pin.valid() || pin.object != expected.object ||
+            !(pin.identity.value.kind == expected.identity.kind &&
+              pin.identity.value.generation == expected.identity.generation &&
+              pin.identity.value.objectId == expected.identity.objectId)) {
+          continue;
+        }
+        const CommittedPendingChunkLease lease(expected);
+        return visit(lease);
+      }
+      return false;
+    };
+    switch (expected.identity.kind) {
+      case D9C_CHUNK_HANDLE_KIND_SURFACE:
+        return match(storage_->surfaces, surfaceCount_);
+      case D9C_CHUNK_HANDLE_KIND_TEXTURE:
+        return match(storage_->textures, textureCount_);
+      case D9C_CHUNK_HANDLE_KIND_BUFFER:
+        return match(storage_->buffers, bufferCount_);
+      case D9C_CHUNK_HANDLE_KIND_SHADER:
+        return match(storage_->shaders, shaderCount_);
+      case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
+        return match(storage_->declarations, declarationCount_);
+      case D9C_CHUNK_HANDLE_KIND_QUERY:
+        return match(storage_->queries, queryCount_);
+      default:
+        return false;
+    }
+  }
+
+  template <typename Visit>
+    requires std::is_nothrow_invocable_v<
+        Visit&, const CommittedPendingChunkLease&>
+  void visitCommittedPendingChunkLeases(Visit&& visit) const noexcept {
+    const auto each = [&](const auto& pins, std::size_t count) noexcept {
+      for (std::size_t i = 0u; i < count; ++i) {
+        const auto& pin = pins[i];
+        if (!pin.valid()) continue;
+        bool committed = false;
+        for (std::size_t record = 0u; record < recordCount_; ++record) {
+          if (!visitRecordHandles(
+                  storage_->records[record],
+                  [&](const D9CWireObjectIdentity& identity) noexcept {
+                    if (identity.kind == pin.identity.value.kind &&
+                        identity.generation == pin.identity.value.generation &&
+                        identity.objectId == pin.identity.value.objectId) {
+                      committed = true;
+                    }
+                    return true;
+                  })) {
+            return;
+          }
+        }
+        if (!committed) continue;
+        visit(CommittedPendingChunkLease(PeWireObjectRef{
+            .identity = pin.identity.value,
+            .object = pin.object}));
+      }
+    };
+    each(storage_->surfaces, surfaceCount_);
+    each(storage_->textures, textureCount_);
+    each(storage_->buffers, bufferCount_);
+    each(storage_->shaders, shaderCount_);
+    each(storage_->declarations, declarationCount_);
+    each(storage_->queries, queryCount_);
   }
   std::size_t semanticBytes() const noexcept { return semanticBytes_; }
   std::size_t clearedBytesLastBoundary() const noexcept {
@@ -2636,6 +2731,91 @@ class PeSemanticBatchOwner final {
   AdmissionFailure lastAdmissionFailure_ = AdmissionFailure::None;
   std::uint64_t lastRecordOrdinal_ = 0u;
 };
+
+// Bind the cold all-family refinement ledger to the exact immutable bytes
+// emitted by the production owner. This is intentionally owner-generic so the
+// native bounded owner uses the same relation as the 256-record production
+// alias; compatibility builders do not participate.
+template <typename Owner>
+bool projectLastCommittedSemanticRecord(
+    const Owner& owner, PeAllFamilySemanticTokenLedger& observer) noexcept {
+  if (owner.size() == 0u) return false;
+  PeSemanticExactFixedEmission emission{};
+  if (!owner.emitExactFixed(emission) || !emission.valid()) return false;
+
+  const auto& slot = owner.record(owner.size() - 1u);
+  const auto& header = emission.transport.header;
+  const auto recordIndex = header.recordCount - 1u;
+  const auto recordOffset = static_cast<std::size_t>(header.recordTableOffset) +
+      static_cast<std::size_t>(recordIndex) *
+          sizeof(D9CCommandChunkWireRecordHeader);
+  if (header.recordCount == 0u || recordOffset > emission.wire.size() ||
+      sizeof(D9CCommandChunkWireRecordHeader) >
+          emission.wire.size() - recordOffset) {
+    return false;
+  }
+  D9CCommandChunkWireRecordHeader record{};
+  std::memcpy(&record, emission.wire.data() + recordOffset, sizeof(record));
+  if (record.type != slot.recordType || record.payloadSize == 0u ||
+      record.payloadOffset > header.payloadArenaSize ||
+      record.payloadSize > header.payloadArenaSize - record.payloadOffset ||
+      record.firstHandle > header.handleCount ||
+      record.handleCount > header.handleCount - record.firstHandle) {
+    return false;
+  }
+  const auto payloadOffset =
+      static_cast<std::size_t>(header.payloadArenaOffset) +
+      record.payloadOffset;
+  if (payloadOffset > emission.wire.size() ||
+      record.payloadSize > emission.wire.size() - payloadOffset) {
+    return false;
+  }
+  const PeSemanticByteRange range{
+      .offset = record.payloadOffset,
+      .length = record.payloadSize,
+  };
+  if (!observer.beginIdentityProjection(slot.sourceOrdinal,
+                                        slot.recordOrdinal, range)) {
+    return false;
+  }
+  for (std::uint32_t identityOrdinal = 0u;
+       identityOrdinal < record.handleCount; ++identityOrdinal) {
+    const auto handleIndex = record.firstHandle + identityOrdinal;
+    const auto handleOffset =
+        static_cast<std::size_t>(header.handleTableOffset) +
+        static_cast<std::size_t>(handleIndex) *
+            sizeof(D9CCommandChunkWireHandleEntry);
+    if (handleOffset > emission.wire.size() ||
+        sizeof(D9CCommandChunkWireHandleEntry) >
+            emission.wire.size() - handleOffset) {
+      return false;
+    }
+    D9CCommandChunkWireHandleEntry identity{};
+    std::memcpy(&identity, emission.wire.data() + handleOffset,
+                sizeof(identity));
+    if (!observer.observeIdentity({
+            .sourceOrdinal = slot.sourceOrdinal,
+            .recordOrdinal = slot.recordOrdinal,
+            .recordWireRange = range,
+            .identityOrdinal = identityOrdinal,
+            .kind = identity.kind,
+            .generation = identity.generation,
+            .objectId = identity.objectId,
+        })) {
+      return false;
+    }
+  }
+  if (!observer.finishIdentityProjection(record.handleCount)) return false;
+  return observer.accept({
+      .recordType = slot.recordType,
+      .sourceOrdinal = slot.sourceOrdinal,
+      .recordOrdinal = slot.recordOrdinal,
+      .wireRange = range,
+      .exactValue = emission.wire.subspan(payloadOffset, record.payloadSize),
+      .exactIdentityCount = record.handleCount,
+      .exactIdentitiesValid = true,
+  }) == PeSemanticProjectionAction::Accept;
+}
 
 // CapacityPre needs a current payload frontier even before the first record.
 // An empty owner has no emit-ready chunk, so emissionMetrics() correctly

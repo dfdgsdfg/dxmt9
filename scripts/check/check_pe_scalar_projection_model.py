@@ -157,7 +157,8 @@ def main() -> int:
         ("tokens->project(", producer_cpp),
         ("tokens->canConsumeProjected(", producer_cpp),
         ("tokens->consumeProjected(", producer_cpp),
-        ("activeRecordOrdinal()", device_impl + device_recorder),
+        ("semanticOwner->nextRecordOrdinal()", device_recorder),
+        ("input.recordOrdinal", device_recorder),
         ("semanticTokens->canRecord(", device_impl),
         ("semanticTokens->record(", device_impl),
         ("scalarSemanticObserver()", device_impl + device_recorder),
@@ -183,8 +184,8 @@ def main() -> int:
     require("strictlyOrdered(state.renderStates" in producer_cpp and
             "pending != entry.value" in producer_cpp,
             "default production order/value preflight is missing")
-    require("sizeof(PeRecorderState) == 104480u" in recorder_state and
-            "sizeof(PeRecorderState) == 103592u" in recorder_state,
+    require("sizeof(PeRecorderState) == 104120u" in recorder_state and
+            "sizeof(PeRecorderState) == 103376u" in recorder_state,
             "canonical x64/x86 recorder footprint pins are missing")
 
     require("Handwritten exact bounded refinement" in tla,

@@ -699,6 +699,96 @@ void emptyOwnerStartsAtZeroCadence() {
   owner.reset();
   check(surface.refs == 1u, "cadence fixture releases its pin");
 }
+
+void committedLeaseQualificationUsesOwnerPins() {
+  Owner owner;
+  D9CSurface surface;
+  D9CTexture source;
+  D9CTexture destination;
+  auto present = base(PeSemanticProducerKind::Present, 1u, 1u);
+  present.surface0 =
+      localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0x951u, 3u);
+  auto update = base(PeSemanticProducerKind::UpdateTexture, 2u, 2u);
+  update.texture0 =
+      localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(&source, 0x952u, 4u);
+  update.texture1 =
+      localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(&destination, 0x953u, 5u);
+  check(owner.admit(present) && owner.admit(update),
+        "lease fixture admits committed owner records");
+
+  std::size_t visited = 0u;
+  bool localPointersValid = true;
+  owner.visitCommittedPendingChunkLeases(
+      [&](const CommittedPendingChunkLease& lease) noexcept {
+        localPointersValid = localPointersValid &&
+            lease.object().object != nullptr;
+        ++visited;
+      });
+  check(localPointersValid && visited == 3u,
+        "owner enumerates each committed exact wire identity once");
+
+  bool matched = false;
+  check(owner.visitCommittedPendingChunkLease(
+            present.surface0,
+            [&](const CommittedPendingChunkLease& lease) noexcept {
+              matched = lease.object().object == &surface &&
+                  lease.object().identity.generation == 3u;
+              return matched;
+            }) && matched,
+        "owner issues a lease only for matching identity and wrapper");
+  auto wrongGeneration = present.surface0;
+  ++wrongGeneration.identity.generation;
+  check(!owner.visitCommittedPendingChunkLease(
+            wrongGeneration,
+            [](const CommittedPendingChunkLease&) noexcept { return true; }),
+        "owner rejects a mismatched generation");
+  auto wrongWrapper = present.surface0;
+  wrongWrapper.object = &destination;
+  check(!owner.visitCommittedPendingChunkLease(
+            wrongWrapper,
+            [](const CommittedPendingChunkLease&) noexcept { return true; }),
+        "owner rejects a mismatched local wrapper");
+  owner.reset();
+}
+
+void productionOwnerProjectionBindsColdLedger() {
+  Owner owner;
+  PeAllFamilySemanticTokenLedger ledger;
+  D9CTexture source;
+  D9CTexture destination;
+  const auto sourceOrdinal =
+      ledger.beginSource(D9C_COMMAND_RECORD_UPDATE_TEXTURE);
+  auto input = base(PeSemanticProducerKind::UpdateTexture,
+                    sourceOrdinal, 1u);
+  input.texture0 =
+      localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(&source, 0xa101u, 7u);
+  input.texture1 =
+      localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(&destination, 0xa102u, 9u);
+  check(sourceOrdinal != 0u && owner.admit(input),
+        "projection fixture admits one owner record");
+  check(projectLastCommittedSemanticRecord(owner, ledger),
+        "cold ledger projects the owner's immutable final bytes");
+  check(ledger.acceptedCount() == 1u && ledger.pendingCount() == 1u,
+        "owner projection accepts exactly one semantic token");
+  const auto& token = ledger.pending(0u);
+  const auto identities = ledger.pendingExactIdentities(0u);
+  check(token.recordType == D9C_COMMAND_RECORD_UPDATE_TEXTURE &&
+            token.sourceOrdinal == sourceOrdinal &&
+            token.recordOrdinal == 1u && token.wireRange.valid() &&
+            ledger.pendingExactValue(0u).size() == token.wireRange.length &&
+            identities.size() == 2u &&
+            identities[0].kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
+            identities[0].generation == 7u &&
+            identities[0].objectId == 0xa101u &&
+            identities[1].generation == 9u &&
+            identities[1].objectId == 0xa102u,
+        "owner projection preserves exact range and qualified identities");
+  check(ledger.settleCapture(PeSemanticCaptureDisposition::Skipped),
+        "projected token settles through the existing capture disposition");
+  owner.reset();
+  check(source.refs == 1u && destination.refs == 1u,
+        "owner projection adds no lifetime outside the owner transaction");
+}
 }  // namespace
 
 int main() {
@@ -729,6 +819,8 @@ int main() {
     warmRetainerCapacityDistinguishesNovelObjects();
     settledOwnerCannotExposePriorRanges();
     emptyOwnerStartsAtZeroCadence();
+    committedLeaseQualificationUsesOwnerPins();
+    productionOwnerProjectionBindsColdLedger();
   } catch (const Failure& failure) {
     std::cerr << "pe_semantic_owner_spec failed: " << failure.what() << '\n';
     return 1;
