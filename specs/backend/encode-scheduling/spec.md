@@ -175,56 +175,73 @@ change. Non-goals are command fusion, state or mutation merging, changed
 logical-pass/CB shape, a pointer-bearing locator, unbounded reservation, and
 deleting compatibility replay during this workstream.
 
-### 2.2 Render Scheduling Provider Configuration
+### 2.2 Exclusive Encode Execution Provider
 
-Scheduling policy resolves into one queue-immutable value rather than a set of
-hot-path environment checks:
+Scheduling resolves one queue-immutable provider, not a product of independent
+source, partition, and segmentation selectors:
 
 ```text
-RenderSchedulingProviderConfig {
-  SourceDeliveryMode sourceDelivery       // Compatibility | Streaming
-  PartitionExecutionMode partition        // IdentitySerial | ExplicitSerial | ExplicitParallel
-  SegmentExecutionMode segmentation       // Disabled | Metal4
+EncodeExecutionProvider {
+  SerialDirectCursor
+  LongSessionDirectCursor
+  ExplicitParallelCompactSoA
 }
 ```
 
-These are stable provider modes under
-[`R-BACK-42.*`](../render-provider/requirements.md), including modes whose
-implementation is still partial or planned. Default promotion and feature
-availability are therefore separate from selector lifetime.
+`SerialDirectCursor` is the stable specified target default. It advances
+transactional replay state while consuming the immutable source in order and
+emits Metal commands directly. It may construct compact sidecars and bounded
+cursor state, but it does not construct a complete per-draw final SoA. The Unix
+Replay worker is also the serial encode coordinator; no second command-queue
+encode thread or complete-draw Ready handoff exists in this mode.
 
-The axes compose without hidden implications:
+`LongSessionDirectCursor` is experimental. It uses the identical cursor and
+changes only Metal lifetime ownership: a validated command buffer, render
+encoder, attachment/action state, hazards, binding shadows, and completion
+sources may survive an admitted source boundary. It neither requires SoA nor
+changes replay semantics, and it retains the same fused replay/encode worker.
 
-| Axis | Stable modes | Ownership change | Does not change |
+`ExplicitParallelCompactSoA` is experimental. It begins on the direct cursor.
+Only a complete sealed logical pass that passes semantic and economic
+pre-eligibility is materialized into pass-local indexed columns and unique
+state/uniform/resource-set tables. The Replay worker publishes that accepted
+representation to a dedicated encode coordinator and bounded child workers.
+Coordinator commands remain outside child ranges. A rejected pass is consumed
+serially before any parallel or Metal side effect.
+
+| Provider | Materialization | Lifetime extension | Stable fallback |
 |---|---|---|---|
-| Source delivery | `compatibility`, `streaming` | Payload-owning compatibility source versus bounded Tape publication and multi-source session admission | Effective replay semantics, partition policy, Presenter, or completion order |
-| Partition execution | `identity`, `serial`, `parallel` | Identity cursor, explicit ranges on the coordinator, or explicit ranges on ordered parallel children | Source representation, logical-pass actions, command-buffer count, or semantic optimization |
-| Segmentation | `off`, `metal4` | One serial/parallel command-buffer envelope versus a bounded jointly committed Metal 4 group | Logical-pass boundary, source order, or partition eligibility |
+| `serial-direct` | bounded cursor and compact sidecar only | one fused Replay/encode worker; no downstream encode thread | current serial identity implementation until target promotion |
+| `long-session-direct` | same as serial-direct | the fused worker retains validated serial encoder/session state across sources | `serial-direct` |
+| `parallel-compact-soa` | accepted pass-local compact indexed SoA only | Replay/materialization worker plus encode coordinator and ordered parallel children | `serial-direct` |
 
-This produces deliberate comparison lanes. For example,
-`compatibility + serial + off` isolates the production planner from Tape
-storage, and `streaming + identity + off` isolates source streaming from
-partition subdivision. `compatibility + parallel + off` remains a valid target:
-workers consume immutable source-qualified locators and must not depend on
-Arena page ownership. A parallel request still falls back per pass when the
-pass is unsealed, too small, hazardous, or otherwise ineligible. A Metal 4
-request falls back at queue creation when capability is absent and per group
-when bounded validation rejects the candidate.
+Only one row may be selected for a queue. A long-session/parallel hybrid,
+per-pass provider search, and orthogonal Metal 4 enablement are unsupported.
+The direct-serial branch inside the parallel provider is a typed pre-effect
+fallback, not selection of a second provider.
 
-`DXMT9_RENDER_SOURCE_MODE`, `DXMT9_RENDER_PARTITION_MODE`, and
-`DXMT9_RENDER_SEGMENT_MODE` are the canonical configuration surface. The
-existing `DXMT9_CPU_READY_TAPE` spelling is only a migration alias for source
-delivery. Resolution occurs once before queue-owned storage or workers are
-created. The startup log and perf snapshot record both requested and resolved
-values plus a typed fallback reason; no draw, source, or partition rereads the
-process environment.
+```text
+serial-direct:        PE -> Replay+Encode -> Metal
+long-session-direct: PE -> Replay+Encode(session-owned) -> Metal
+parallel-compact-soa: PE -> Replay/compact-SoA -> EncodeCoordinator/children -> Metal
+```
 
-Provider selection is below FrameGraph semantic selection. It neither selects
-`passcoalesce`/DCE nor changes `DXMT9_RENDER_MODE` or the compatibility profile.
-This separation keeps a rendering-provider A/B from silently changing command
-meaning. It also makes promotion monotonic: a new default may use a more capable
-provider, while every earlier supported mode remains a first-class rollback and
-regression lane.
+The PE producer remains separate from the fused Unix worker, preserving overlap
+between production of source `N+1` and replay/encoding of source `N`. Queue
+finish and completion workers remain unchanged and are not encode workers.
+
+The planned canonical selector is
+`DXMT9_RENDER_EXECUTION_MODE=serial-direct|long-session-direct|parallel-compact-soa`.
+Resolution occurs before queue-owned storage or workers are created. Startup
+and perf observations record requested/resolved values plus a typed fallback
+reason. The selector is not an active runtime interface until that resolver is
+implemented. Current Tape, partition, identity-granularity, and segmentation
+knobs remain implementation experiments and migration inputs; they do not
+define the target provider algebra.
+
+Provider selection remains below FrameGraph semantic selection. It neither
+selects `passcoalesce`/DCE nor changes `DXMT9_RENDER_MODE`, compatibility
+profile, Presenter policy, or D3D9-visible ordering.
 
 ## 3. CPU-Ready Tape
 
@@ -1978,41 +1995,46 @@ identity.
 
 After universal projection lands, a fallback disposition still may reject
 Direct policy or select a coordinator-owned ordered-control path, but it must
-not recreate the adapter. Final SoA plus the compact sidecar becomes the only
-draw execution representation consumed by Encode.
+not recreate the adapter. The target serial representation is the direct cursor
+plus compact sidecar. Only an accepted `ExplicitParallelCompactSoA` pass may
+materialize compact indexed draw storage.
 
-The scheduling path therefore has one permitted large import copy and one
-permitted final-storage construction. `RawOwned` may move into the replay queue,
-and final block references may move into CPU-ready/session queues, without
-moving their backing bytes. Count/dedup plans and resolved sidecars are bounded
-metadata. Encode binds existing Metal resources by reference and accounts only
-known GPU-visible writes as data transfer; command emission is a distinct cost
-class.
+The default scheduling path therefore has one permitted large import copy and
+no complete final draw-storage construction. `RawOwned` may move into the
+replay queue, and leases or compact sidecars may move into CPU-ready/session
+queues, without moving their backing bytes. The experimental parallel provider
+may add one accepted-pass count/dedup plan and compact indexed construction;
+that cost belongs to its economy gate. Encode binds existing Metal resources by
+reference and accounts only known GPU-visible writes as data transfer; command
+emission is a distinct cost class.
 
 The bridge/import cut applies to the whole immutable batch. The importer may
 read PE regions through a synchronous facade while `wine_unix_call` is active,
 but asynchronous Replay starts only from `RawOwned` or an atomically adopted
 shared lease. The current implementation therefore pays one named raw-source
 copy; it does not infer lifetime from command family or retain selected PE
-spans. Moving `RawOwned`, a `SourceLease`, or source-local final block
+spans. Moving `RawOwned`, a `SourceLease`, or source-local payload block
 references through the replay queue transfers compact ownership metadata, not
 the source bytes.
 
-Replay's target is the queue execution SoA, which is intentionally different
-from the PE semantic table/arena layout. A pure count/dedup/resolve pass may
-derive exact ranges and sidecar values without materializing encoder-visible
-records. The following transaction constructs each surviving final SoA/payload
-value once. Multiple already-owned source blocks may remain a bounded
-source-qualified chain consumed by a cursor; joining sources does not require
-physically gathering all bytes into a new contiguous carrier.
+Replay's default target is the serial direct cursor, which consumes the PE
+semantic table/arena through authenticated `RawOwned` storage without a second
+complete draw layout. A pure resolve/state-transition pass derives sidecar
+values without materializing encoder-visible records. Multiple already-owned
+source blocks may remain a bounded source-qualified chain consumed by that
+cursor; joining sources does not require physically gathering all bytes into a
+new contiguous carrier. A count/dedup plan constructs indexed unique tables
+only for an already accepted explicit-parallel pass.
 
 Replay projection precedes that physical plan. The production target is one
 source-local `ReplayState` transaction: clone or checkpoint the device-owned
 persistent replay state, apply every immutable record in order, derive an
-immutable `EffectiveStream`, compute the exact layout, and emit final storage.
-Only successful emission commits both the destination and the next replay
-state. Encode never reads the mutable working state. It receives the resulting
-SoA and source-qualified sidecar under the existing generation lease.
+immutable `EffectiveStream`, and consume it through the selected provider.
+Only successful direct consumption or accepted-pass emission commits both any
+destination and the next replay state. Encode never reads the mutable working
+state. Serial Encode receives cursor values and the source-qualified sidecar;
+parallel Encode receives the bounded compact indexed pass under the existing
+generation lease.
 
 The existing imperative compatibility sink remains a valid semantic oracle but
 is not yet this complete transaction: `DeviceReplaySink` calls the ordinary

@@ -36,9 +36,9 @@ must state whether selection is process-, device-, queue-, pass-, or draw-scoped
 Unknown selector values must fail closed with one bounded warning.
 
 **R-BACK-42.3** Stable axes must compose without undocumented implications.
-Renderer backend, semantic optimization, producer replay, source delivery,
-partition execution, command-buffer segmentation, submission grain, binding
-representation, FFP execution, and presentation policy may constrain a
+Renderer backend, semantic optimization, producer replay, exclusive encode
+execution, submission grain, binding representation, FFP execution, and
+presentation policy may constrain a
 combination only through an explicit dependency or capability rule. A selector
 must not enable an optimizer unless that dependency is named by the owning
 requirement and registry; no composition may change D3D9-visible semantics.
@@ -113,3 +113,102 @@ implementation unconditional when its invariants and maintenance cost are
 small; otherwise remove it. A rollback selector is justified only by unresolved
 correctness, compatibility, or measurable regression risk, not by the existence
 of a micro-optimization itself.
+
+## Encode Execution Provider
+
+**R-BACK-42.13** Encode execution must resolve exactly one queue-immutable
+provider:
+
+- `SerialDirectCursor`;
+- `LongSessionDirectCursor`; or
+- `ExplicitParallelCompactSoA`.
+
+These values are alternatives, not independently composable feature axes. A
+queue must not combine long-session ownership with explicit parallel children,
+switch providers per source or pass, or enable one provider as a side effect of
+another selector. The planned canonical selector is
+`DXMT9_RENDER_EXECUTION_MODE=serial-direct|long-session-direct|parallel-compact-soa`.
+Under R-BACK-42.7 it must remain absent from the environment-variable mirror
+until the runtime implements the resolver. Existing source-delivery, partition,
+and segmentation selectors are migration/implementation controls, not the
+future provider algebra.
+
+**R-BACK-42.14** `SerialDirectCursor` is the stable specified default target.
+It must consume the immutable Unix-owned semantic source through a bounded,
+stateful cursor, resolve resources and lifetime qualifications in source order,
+and encode surviving commands without constructing a complete per-draw final
+SoA or a `DrawRunSubmission`-equivalent carrier. The cursor may retain bounded
+working replay state, exact layout metadata, source-qualified locators, and
+compact sidecars, but it must not retain source borrows beyond their issued
+lifetime. Until this provider is implemented and promoted, the current serial
+identity path remains the runtime fallback and must be reported as such rather
+than described as the target default.
+
+Replay and Metal encoding must execute serially on one Unix execution worker.
+For this provider the Replay worker is the encode coordinator: it must not
+publish complete draw work through a `ChunkSlot`/Ready handoff to a second
+dedicated encode thread. This rule removes an execution-stage boundary; it does
+not move Replay onto the PE/game thread and does not remove GPU finish or
+completion workers.
+
+**R-BACK-42.15** `LongSessionDirectCursor` is an `ExperimentalCandidate` whose
+fallback is `SerialDirectCursor`. It must use the same direct cursor and may
+extend only queue/command-buffer, active encoder, attachment, hazard, binding-
+shadow, action-ledger, and completion ownership across admitted source
+boundaries. It must not require or implicitly construct a final SoA. It uses
+the same single replay/encode worker as `SerialDirectCursor`; session
+lifetime extension must not introduce a dedicated downstream encode thread.
+Promotion requires the EncodeSession correctness, progress, completion,
+resource-lifetime, and locality gates plus positive end-to-end workload
+evidence.
+
+**R-BACK-42.16** `ExplicitParallelCompactSoA` is an
+`ExperimentalCandidate` whose fallback is `SerialDirectCursor`. Only after a
+complete sealed logical pass passes semantic, attachment, hazard, resource,
+first-draw, child-capacity, and economic proof may it materialize one bounded
+pass-local compact indexed SoA. That representation must store unique state,
+uniform, and resource-set values once and index them from draw columns; it must
+not expand full state or binding payload per draw. Coordinator commands,
+ordered control, Present, query/readback, and unsealed or carried-incomplete
+passes remain outside child ranges. Rejection before Metal effects consumes the
+same pass through the provider's direct serial fallback. This fail-closed branch
+is internal to the selected provider and does not permit provider composition
+or a mid-queue mode switch.
+
+This is the only provider permitted to split replay/materialization from Metal
+encoding through a dedicated encode coordinator or child-worker pool. The
+Replay worker may publish only an accepted pass-local compact indexed SoA plus
+its source-qualified certificate and sidecar. Worker creation, the handoff, and
+all associated synchronization/materialization cost belong to this provider's
+economy gate. Its ineligible-pass serial fallback executes on the provider's
+encode coordinator without changing the resolved provider.
+
+**R-BACK-42.17** Provider equivalence must be established from the same
+immutable source and initial replay state. Direct serial execution is the
+semantic oracle. Long-session execution must preserve command order, next
+replay state, logical-pass actions, completion identity, and GPU output while
+changing only encoder lifetime. Parallel compact-SoA execution must additionally
+preserve exactly-once draw coverage, child binding isolation, parent/join order,
+and source-qualified attribution. Candidate materialization and proof cost is
+part of the promotion economy; an encoder-local speedup is insufficient.
+
+**R-BACK-42.18** Provider thread topology is part of the resolved policy and
+must be observable and regression tested. `SerialDirectCursor` and
+`LongSessionDirectCursor` resolve to one Unix replay/encode execution worker and
+zero additional encode workers. `ExplicitParallelCompactSoA` resolves to one
+Replay/materialization worker, one encode coordinator, and a bounded child pool
+whose capacity is fixed at queue creation. PE production remains a distinct
+application-side stage in every mode. Finish, GPU completion, Presenter
+acquisition, shader compilation, and diagnostic sampler workers are outside
+this encode-execution count and must not be used to claim render parallelism.
+Queue lifecycle construction and teardown must therefore be able to run finish
+and completion workers when a direct provider resolves zero dedicated encode
+workers.
+
+Requested/resolved observability must include execution-worker topology,
+direct-cursor sources, compact-SoA publications, serial-fallback passes, and
+child tasks. Native topology pins must prove that direct modes invoke Replay
+projection and encode on the same owner with zero complete-draw Ready
+publications, that the parallel mode publishes exactly one compact pass only
+after acceptance, and that stop, poison, device loss, and completion release do
+not depend on a nonexistent direct-mode encode thread.

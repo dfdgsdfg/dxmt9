@@ -743,59 +743,62 @@ required pages, required total sources/pages, and whether sources, pages, or
 both exceeded their limits. This observation must not affect classification,
 the selected predecessor fence, or session grouping.
 
-**R-BACK-2.66** Render scheduling must expose stable provider configuration as
-four typed, independently resolved axes:
+**R-BACK-2.66** Encode scheduling must resolve exactly one queue-immutable
+execution provider defined by R-BACK-42.13:
 
-- source delivery is `Compatibility` or `Streaming`;
-- source identity granularity is `EventSerial` or `SegmentSerial`;
-- partition execution is `IdentitySerial`, `ExplicitSerial`, or
-  `ExplicitParallel`; and
-- command-buffer segmentation is `Disabled` or `Metal4`.
+- `SerialDirectCursor` is the stable specified default target;
+- `LongSessionDirectCursor` is experimental; and
+- `ExplicitParallelCompactSoA` is experimental.
 
-Every named mode is a `StableProvider` under `R-BACK-42.1`; implementation and
-default state remain tracked separately in the render-provider registry.
+The values are mutually exclusive. Source delivery, event segmentation,
+partition planning, child execution, and command-buffer segmentation are
+mechanisms owned inside the selected provider, not independently composable
+public axes. The runtime must not combine a long-lived session with parallel
+children, switch provider per source/pass, or make Metal 4 an orthogonal toggle
+on either candidate. A future combination requires a new named provider and a
+new proof/economy contract.
 
-The runtime must resolve the complete configuration once at device or command-
-queue creation and keep it immutable for that queue. `Compatibility` uses the
-payload-owning source path, while `Streaming` selects bounded CPU-ready Tape
-publication and `EncodeSession` source streaming; ordered Legacy, Inline, and
-control dispositions remain valid fallbacks inside the streaming mode.
-`EventSerial` is mandatory for Compatibility and is the default Streaming
-identity lane. `SegmentSerial` is opt-in, requires the bounded event-group
-publication contract in R-BACK-2.40 and R-BACK-2.60, and must fall back the
-complete event to EventSerial compatibility when any segment cannot be proved.
-`IdentitySerial` uses the allocation-free identity cursor,
-`ExplicitSerial` runs the deterministic production partition planner on the
-single encode coordinator, and `ExplicitParallel` runs the same validated plan
-through eligible parallel children with mandatory per-pass serial fallback.
-`Metal4` is orthogonal to partition parallelism and must retain the capability-
-selected fallback in `R-BACK-2.64`.
+`SerialDirectCursor` consumes the immutable source with sequential replay state
+and direct Metal emission, without a complete final draw SoA. One Unix worker
+must own both Replay projection and serial Metal encoding; there is no
+Replay-to-Ready/`ChunkSlot` handoff to a dedicated encode thread.
+`LongSessionDirectCursor` consumes the identical cursor but may preserve the
+validated Metal session/encoder ownership named by R-BACK-2.42 through
+R-BACK-2.49 across source boundaries on that same worker; it must not add a
+downstream encode thread. `ExplicitParallelCompactSoA` follows the direct cursor
+until a complete sealed pass passes all pre-effect safety and economic gates,
+then materializes only that pass into bounded compact indexed tables and hands
+them to a dedicated encode coordinator and bounded child pool. An ineligible or
+rejected pass executes through the selected provider's serial-direct branch
+before any child or Metal side effect; this is fail-closed execution, not a
+provider switch.
 
-The source and partition axes must not imply one another. In particular,
-explicit serial planning and eligible parallel execution must remain usable
-with either source-delivery mode; parallel execution must not require promotion
-of the Tape. Selecting a provider mode must not implicitly enable FrameGraph
-semantic optimizers such as pass coalescing or DCE, alter Presenter policy, or
-weaken any order, lifetime, load/store, completion, or locality contract.
+Selection must not implicitly enable FrameGraph semantic optimizers such as
+pass coalescing or DCE, alter Presenter policy, or weaken order, lifetime,
+load/store, completion, or locality contracts. Event-versus-segment source
+identity remains a storage/publication fact governed by R-BACK-2.40 and
+R-BACK-2.60, not an encode-provider choice.
 
-The canonical process selectors are `DXMT9_RENDER_SOURCE_MODE` with values
-`compatibility|streaming`, an identity-granularity selector with values
-`event|segment`, `DXMT9_RENDER_PARTITION_MODE` with values
-`identity|serial|parallel`, and `DXMT9_RENDER_SEGMENT_MODE` with values
-`off|metal4`. The identity-granularity default is `event`; the current full
-default is
-`compatibility + event + identity + off`. Until migration is complete,
-`DXMT9_CPU_READY_TAPE=0|1` is a compatibility alias for only the source-delivery
-axis when the canonical source selector is unset; it is not a separate provider
-mode. An unknown value must fail closed to that axis's default and emit one
-bounded warning. Requested and resolved axes, capability fallback, per-pass
-lane fallback, and mode-specific work counts must be observable.
+The planned canonical process selector is
+`DXMT9_RENDER_EXECUTION_MODE=serial-direct|long-session-direct|parallel-compact-soa`.
+It must be resolved once at device or command-queue creation, report requested
+and resolved values plus a typed fallback reason, and fail an unknown value
+closed to `serial-direct` with one bounded warning. Under R-BACK-42.7 it remains
+absent from the active environment-variable mirror until implemented. Existing
+`DXMT9_CPU_READY_TAPE`, `DXMT9_RENDER_PARTITION_MODE`, identity-granularity, and
+segmentation controls remain migration or experimental implementation surfaces;
+they must not be documented as the future stable provider algebra.
 
-These selectors describe supported rendering-provider modes, not temporary
-experiment probes. Promotion under `R-BACK-2.50` may change a default but must
-not make the previous mode unreachable. Removing a supported mode requires an
-explicit requirement amendment, migration evidence, and replacement regression
-coverage; ordinary hot-path cleanup must preserve every supported selector.
+The PE/game thread remains a producer in all modes. The direct providers require
+offloaded Unix Replay, but fuse that Replay worker with the serial encode owner.
+Only `ExplicitParallelCompactSoA` may retain a Replay-to-encode queue boundary.
+Finish, completion, presentation-acquire, compilation, and diagnostic threads
+are outside this provider topology.
+
+Promotion under R-BACK-2.50 may change implementation activation but must not
+promote either experimental candidate without its own correctness, locality,
+progress, and end-to-end economy evidence. `SerialDirectCursor` remains the
+semantic oracle and stable fallback.
 
 **R-BACK-2.67** Encode scheduling must carry a composed end-to-end temporal
 progress proof in addition to the per-component models. The scheduling
@@ -1291,7 +1294,9 @@ source into one `RawOwned` lease; a future same-address path must atomically
 adopt a generation-qualified shared allocation and its sole reclaim authority.
 Replay may move that lease or source-qualified block references between threads
 without copying semantic bytes. It must build final queue-owned SoA/payload
-storage through one bounded plan and one transactional emission. Ordered
+storage only when required for payload ownership or by the explicitly selected
+parallel compact-SoA provider; the default serial provider must use a bounded
+direct cursor. Ordered
 controls may fail closed or select compatibility replay, but they must not cause
 partial source ownership, retained PE spans, or a per-draw AoS handoff to become
 the normal asynchronous representation.
@@ -1300,10 +1305,12 @@ the normal asynchronous representation.
 single-writer persistent backend state through a source-local working state.
 The projection must deterministically produce the effective ordered commands,
 draw state/uniform values, ordered-control dispositions, qualified resources,
-and exact next persistent state. Exact layout/count/dedup planning must consume
-that projection without mutating it, and transactional emission must construct
-the final SoA/payload/sidecar before publishing either the destination or the
-next persistent state. Pre-effect failure restores both checkpoints; failure
+and exact next persistent state. The serial direct cursor must consume that
+projection without constructing a complete final draw SoA. Exact
+layout/count/dedup planning is mandatory only for bounded payload ownership and
+an already accepted explicit-parallel pass; it must not mutate the projection.
+The next persistent state and any published destination commit atomically.
+Pre-effect failure restores both checkpoints; failure
 after an irreversible ordered-control, receipt, publication, or encoder effect
 must poison/fail-stop and must not expose a partially advanced state to a later
 source. This is a logical value transaction: implementations should use a
@@ -1326,20 +1333,24 @@ projection.
 `DrawRunSubmission`, `DrawRunSubmissionStateLane`, their snapshot/batch submit
 APIs, carrier-specific grouping/elision helpers, source-payload adapters,
 scratch vectors, and copy/materialization counters from production. Every draw
-family must enter final queue storage through the universal assembler; mixed
-sources must use typed ordered-control boundaries without rebuilding an AoS
-draw carrier. Exact Legacy semantic behavior may remain as an oracle or
+family must be consumable through the universal serial direct cursor; only an
+accepted explicit-parallel pass may enter pass-local compact indexed storage.
+Mixed sources must use typed ordered-control boundaries without rebuilding an
+AoS draw carrier. Exact Legacy semantic behavior may remain as an oracle or
 pre-effect disposition, but not as a second production representation. The
 removal gate requires Legacy/direct effective-stream and next-state
-differentials, final-SoA/resource/completion equivalence, trace/capture and
+differentials, direct-cursor/compact-SoA resource and completion equivalence,
+trace/capture and
 segmented/oversized/UP coverage, source audits, GPU readback, and wild visual
 and locality evidence.
 
 **R-BACK-2.100** Import, Replay, queue publication, and Encode must implement
 the R-ARCH-7.24 materialization floor. Import owns at most one complete
 `copy.bridge.raw-owned` operation per accepted source under the current ABI.
-Replay owns at most one transactional construction of each surviving final SoA
-row and payload byte. Cross-thread/source/session/partition handoffs must move
+Serial Replay owns no complete final draw SoA and constructs each required
+payload byte or compact sidecar value at most once. The explicit parallel
+provider owns at most one transactional pass-local indexed-SoA construction for
+an already accepted sealed pass. Cross-thread/source/session/partition handoffs must move
 leases and bounded metadata without gathering or copying source payloads.
 Encode must count known GPU-visible writes separately from Metal command and
 resource-reference emission. Any additional O(source bytes), O(draw state), or

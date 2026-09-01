@@ -16,7 +16,7 @@ flat bag of booleans:
 RenderProviderConfig {
   RendererPolicy renderer
   ProducerReplayPolicy producerReplay
-  RenderSchedulingProviderConfig scheduling
+  EncodeExecutionProvider encodeExecution
   SubmissionPolicy submission
   BindingPolicy binding
   FfpExecutionPolicy ffp
@@ -26,7 +26,7 @@ RenderProviderConfig {
 
 Each owner resolves its value once at the narrowest valid lifetime. Backend,
 producer replay, and renderer feature selection are process/device scoped;
-render scheduling and submission policy are queue scoped; binding and FFP
+encode execution and submission policy are queue scoped; binding and FFP
 selection may fall back per pass after queue-cached capability resolution;
 Presenter owns acquire and boundary policy. Hot draw code consumes resolved
 values and never reparses the process environment.
@@ -45,9 +45,7 @@ complete.
 | Renderer fallback | `allow`, `strict` | Stable / planned | allow specified default, selector not implemented | `R-BACK-31.5`, `R-BACK-31.8` |
 | Producer replay | `inline`, `offloaded` | Stable / implemented | offloaded default; inline rollback | `R-BACK-2.51` |
 | Opaque-depth index locality | original order, conservative LRU32 reorder | Stable fallback; reorder is bounded opt-in | original order default; `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1` enables the reorder only for stable sources at ≥256 primitives, with whole-candidate frontier/work budgets and fail-open fallback | `R-BACK-2.51`, `R-BACK-42.8`–`42.11` |
-| Source delivery | `compatibility`, `streaming` | Stable; compatibility implemented, streaming partial | compatibility default; streaming available through migration alias | `R-BACK-2.66` |
-| Partition execution | `identity`, `serial`, `parallel` | Stable; identity implemented, explicit serial partial, parallel planned | identity default | `R-BACK-2.66` |
-| CB segmentation | `off`, `metal4` | Stable; off implemented, Metal 4 planned | off default | `R-BACK-2.66` |
+| Encode execution | `serial-direct`, `long-session-direct`, `parallel-compact-soa` | serial-direct stable specified target / partial; long-session and parallel compact-SoA experimental / partial | current serial identity implementation is the fallback; serial-direct is the target default; candidates opt-in only | `R-BACK-42.13`–`42.18`, `R-BACK-2.66` |
 | Submission grain | `off`, `per-render-pass` | Stable / implemented | per-render-pass default with cap 4; off rollback | `R-BACK-2.29`–`2.34` |
 | Binding representation | Stage 1 direct, Stage 2 constants, Stage 2b direct-cbuf, Stage 2 resource-array | Stable / implemented with capability fallback | Stage 2b automatic on Apple3+/Tier2; Stage 1 fallback; resource-array opt-in | `R-BACK-12.22`–`12.26` |
 | FFP execution | `portable`, `tile-auto` | portable stable / implemented; tile-auto candidate / correctness-blocked | tile-auto resolves to portable | `R-BACK-13.*` |
@@ -55,16 +53,77 @@ complete.
 | Present boundary | `default`, `after-acquire`, `completion`, `present-completion` | Stable / implemented | present-completion default | `R-BACK-6.12`, Presenter |
 | Drawable storage | general drawable, framebuffer-only drawable | Stable / implemented | general default; framebuffer-only opt-in | `R-CORE-WSI-6.1`–`6.2` |
 
-The existing `DXMT9_CPU_READY_TAPE` spelling is only the migration alias for
-the stable `streaming` source-delivery mode. The canonical scheduling selectors
-and resolver remain implementation gaps under `R-BACK-2.66`.
+The existing `DXMT9_CPU_READY_TAPE`, `DXMT9_RENDER_PARTITION_MODE`, and Metal 4
+segmentation controls describe current implementation experiments and migration
+surfaces. They are not three independently composable future provider axes.
+The planned canonical queue selector is
+`DXMT9_RENDER_EXECUTION_MODE=serial-direct|long-session-direct|parallel-compact-soa`;
+it remains absent from the runtime and environment-variable registry until the
+exclusive resolver is implemented.
 
-### 2.1 Experimental candidates
+### 2.1 Encode execution providers
 
-These lanes are implemented enough to run but are not compatibility promises:
+Exactly one provider owns a queue. There is no supported hybrid such as a
+long-session parent that opportunistically creates parallel children, and no
+per-pass automatic provider search.
+
+| Provider | Source consumption | Queue representation | Status |
+|---|---|---|---|
+| `SerialDirectCursor` | immutable semantic source plus transactional replay state | one Unix worker performs Replay and direct Metal emission; no complete draw SoA or downstream encode queue | stable specified target; implementation/promotion open |
+| `LongSessionDirectCursor` | the same direct cursor | the same replay/encode worker plus session-owned Metal encoder/lifetime state | experimental |
+| `ExplicitParallelCompactSoA` | Replay worker until a complete sealed-pass certificate and economic gate accept | pass-local compact indexed SoA handed to a dedicated encode coordinator and bounded children | experimental |
+
+The compact parallel representation is conceptually:
+
+```text
+CompactIndexedPassSoA {
+  DrawColumns[]
+  StateIndex[]
+  UniformIndex[]
+  ResourceSetIndex[]
+  UniqueStateTable[]
+  UniqueUniformTable[]
+  UniqueResourceSetTable[]
+  ChildFirstDrawSnapshot[]
+  SourceQualifiedLocator[]
+}
+```
+
+The index columns and unique tables are sized by a bounded count/dedup pass and
+exist only for the accepted logical pass. They are not a queue-wide expanded
+SoA and may not repeat complete state, uniform, or resource sets for every draw.
+An ineligible pass remains on the selected parallel provider's pre-effect
+direct-serial branch; it does not activate another queue provider.
+
+Thread topology is likewise exclusive:
+
+```text
+SerialDirectCursor
+PE producer -> Unix replay/encode worker -> Metal
+
+LongSessionDirectCursor
+PE producer -> Unix replay/encode worker (session retained) -> Metal
+
+ExplicitParallelCompactSoA
+PE producer -> Replay/materialization worker -> compact pass SoA
+            -> encode coordinator -> bounded child workers -> Metal
+```
+
+The first two modes do not start the current downstream command-queue encode
+thread. Their Replay worker becomes the sole serial Metal-effect owner. The PE
+producer remains separate so source `N+1` can overlap Replay/encode of source
+`N`. Finish and completion workers remain queue infrastructure and are not
+counted as encode workers.
+
+### 2.2 Experimental candidates
+
+These lanes are implemented, partial, or production-shaped plans, but are not
+compatibility promises:
 
 | Candidate | Stable fallback | Promotion requirement |
 |---|---|---|
+| `long-session-direct` | `serial-direct` | EncodeSession correctness/progress/completion proof, non-increasing CB/pass/tile locality, and end-to-end benefit |
+| `parallel-compact-soa` | `serial-direct` | sealed-pass safety, compact materialization economy, Metal equality, and an encode-bound workload benefit |
 | `per-n-records` mid-chunk commit | `off` or `per-render-pass` | production shape and locality evidence |
 | deferred present-completion boundary | present-completion | pass-streaming, ordered completion, visual, latency, and locality gates |
 | PE inline-constant delta | standalone constant records | renewed workload evidence above the noise gate |
@@ -85,7 +144,7 @@ These lanes are implemented enough to run but are not compatibility promises:
 it is a correctness-blocked candidate, not a usable opt-in provider.
 `DXMT9_TILE_FFP=force` is diagnostic only.
 
-### 2.2 Diagnostic and retired surfaces
+### 2.3 Diagnostic and retired surfaces
 
 Correctness-invalid state overrides, draw filters, geometry mutation probes,
 attachment-view suppression, capture/dump controls, measurement-only counters,
@@ -104,16 +163,19 @@ details unless a future requirement exposes a selectable provider mode.
 
 ## 3. Composition Rules
 
-- Semantic features operate above source delivery and partition execution.
-  `dce` or `passcoalesce` must not be implied by streaming or parallelism.
-- Producer offload is independent of source delivery. An unsupported
-  combination must resolve explicitly rather than silently changing both axes.
+- Semantic features operate above encode execution. `dce` or `passcoalesce`
+  must not be implied by direct cursor, session lifetime, or parallelism.
+- Producer offload does not select an encode provider, but both direct-cursor
+  providers require Unix offload so the PE/game thread never becomes the Metal
+  owner. Their offloaded Replay worker also performs serial encode. The inline
+  replay rollback therefore remains a compatibility implementation path, not a
+  valid topology for either target direct provider.
 - The existing offloaded-replay to conservative opaque-depth index-locality
   default is an explicit `R-BACK-2.51` coupling, not a general permission for
   provider selectors to enable unrelated optimizers.
-- Submission grain and Metal 4 segmentation are distinct: sub-CB chaining ends
-  a physical command buffer, while Metal 4 preserves a validated logical pass
-  across jointly committed physical segments.
+- Long-session, parallel-child execution, and Metal 4 segmentation are not
+  composable provider features. A future provider that deliberately combines
+  them requires a new named mode and its own proof/economy contract.
 - Binding and tile-FFP selection may fall back per pass without changing source,
   partition, completion, or Present policy.
 - Present policy controls drawable acquisition and frame-latency backpressure;
@@ -137,7 +199,7 @@ owning pass falls back atomically according to its domain contract.
 |---|---|
 | Renderer backend/profile/features | backend factory and FrameGraph native specs; aggressive and planned features remain unavailable |
 | Producer replay | offload and byte-identity native variants; provider-style canonical resolver naming remains optional cleanup |
-| Scheduling provider | `R-BACK-2.66` contract and serial/session specs; canonical resolver and full mode matrix missing |
+| Encode execution provider | `R-BACK-42.13`–`42.18` and `R-BACK-2.66`; current Replay and command-queue encode workers are separate in all production modes, while the target direct providers fuse them; exclusive resolver, direct-cursor default, compact indexed SoA, topology matrix, and full differential evidence are missing |
 | Submission grain | mid-chunk policy and TLA evidence; `per-n-records` production evidence missing |
 | Binding representation | argbuf selector/MSL/populator and shader-runner readback evidence; resource-array performance gate missing |
 | FFP execution | tile selector/MSL/readback equality; workload promotion evidence missing |

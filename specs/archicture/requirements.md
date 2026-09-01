@@ -381,14 +381,20 @@ the semantic payload, and must not outlive the source lease unless it has been
 projected to a locator-free completion value. Metal and Objective-C objects
 remain unix-owned and must never enter the PE wire or source facade.
 
-**R-ARCH-7.16** Replay direct construction must be a pure bounded plan followed
-by one transactional emission into final queue-owned storage. Planning may own
-counts, offsets, masks, hashes, and locators, but no encoder-visible record or
-payload byte. A replay worker may remain a distinct pipeline stage to overlap
-PE production, but that thread boundary must carry only an immutable source
-lease, generation-qualified locators, compact plan values, and final-storage
-ownership. It must not require a per-draw `DrawRunSubmission` or equivalent
-large AoS carrier before constructing the final Arena/`ChunkSlot` SoA.
+**R-ARCH-7.16** Replay direct consumption must be a pure bounded projection
+cursor with one transactional replay-state commit. The serial cursor may own
+counts, offsets, masks, hashes, locators, compact sidecars, and required payload
+ownership, but no complete encoder-visible draw representation. An explicitly
+selected parallel provider may add one bounded count/dedup plan and one
+transactional pass-local compact indexed SoA after pre-effect acceptance. A
+Replay remains offloaded from PE production so source `N+1` may overlap source
+`N`, but the serial direct providers must fuse Replay projection and Metal
+encoding on that one Unix worker. They must not add a Replay-to-encode thread
+boundary. Only the explicit parallel provider may transfer an immutable source
+lease, generation-qualified locators, compact plan values, required payload,
+and accepted-pass compact-SoA ownership to a dedicated encode coordinator. No
+provider may require a per-draw `DrawRunSubmission`, queue-wide expanded SoA,
+or equivalent large carrier.
 Unsupported record families, insufficient capacity, ordered controls, or
 unresolved lifetime evidence must fail closed before effects; post-adoption or
 post-encoder failure must follow the specified fail-stop path.
@@ -399,9 +405,12 @@ must reacquire a synchronous facade under the same source lease and generation.
 The coordinator alone owns session-global encoder, render-pass action, hazard,
 Present, query, completion, and reclaim state unless a narrower subsystem
 requirement proves an explicit transfer. D3D9 command order does not require PE
-production, replay planning, and Metal encoding to execute on one CPU thread:
-different immutable sources may overlap in those stages while the coordinator
-preserves their serial semantic and Metal-effect order.
+production to share a CPU thread with Unix execution: the PE producer may
+overlap source `N+1` with source `N` on the Unix replay/encode worker. Within a
+direct provider, however, Replay projection and Metal encoding intentionally
+share that one worker and preserve serial semantic and Metal-effect order. Only
+the explicit parallel compact-SoA provider may transfer accepted immutable
+child ranges to additional encode workers under coordinator ownership.
 
 **R-ARCH-7.18** A source may reach `Reclaimed` exactly once only after all
 synchronous borrows have returned, every encoder or ordered-control effect has
@@ -433,10 +442,14 @@ layout are distinct DOD representations with one semantic identity. PE may
 construct pointer-free record/handle tables and payload arenas optimized for
 bounded capture and transport; it must not construct a Unix `ChunkSlot`, Metal
 binding layout, resolved-resource sidecar, or backend-private SoA. After import,
-Replay must perform at most one bounded count/dedup/resolve plan and one
-transactional emission into final queue-owned SoA/payload storage. The source
-lease may cross a worker boundary without copying its bytes. A large per-draw
-AoS carrier, a second semantic serialization, or physical concatenation of
+the default serial provider must consume the source through a bounded
+transactional direct cursor and may construct only compact sidecars and required
+payload ownership; it must not materialize a complete per-draw final SoA. The
+source lease may cross a worker boundary without copying its bytes. An
+explicitly selected parallel provider may perform one bounded pass-local
+count/dedup plan and emit one compact indexed SoA only after the pass passes its
+pre-effect proof and economy gate. A large per-draw AoS carrier, queue-wide
+expanded SoA, second semantic serialization, or physical concatenation of
 already-owned source blocks is a removable compatibility materialization, not
 a required consequence of keeping Replay on a separate thread.
 
@@ -463,26 +476,34 @@ equivalent.
 
 **R-ARCH-7.23** `DrawRunSubmission` and any equivalent large per-draw AoS are
 transitional compatibility carriers and must be removed from production once
-the universal Replay projection, transactional final-storage assembler, and
-typed ordered-control dispositions cover every admitted source family. A
-semantic fallback may remain, but it must consume the same immutable source and
-emit final SoA or an explicit control effect without reconstructing the retired
-carrier. Removal requires a source/API audit showing no production declaration,
+the universal Replay projection, transactional direct cursor, and typed
+ordered-control dispositions cover every admitted source family. A semantic
+fallback may remain, but it must consume the same immutable source and emit
+directly, construct an accepted pass-local compact indexed SoA, or produce an
+explicit control effect without reconstructing the retired carrier. Removal
+requires a source/API audit showing no production declaration,
 snapshot, vector, queue handoff, adapter, or carrier-specific counter remains;
 native fixtures must construct `EffectiveStream` or final-storage inputs rather
-than preserve the retired representation as a test API.
+than preserve the retired representation as a test API. Final-storage fixtures
+are limited to compatibility evidence and accepted pass-local compact SoA.
 
-**R-ARCH-7.24** The normal CPU/GPU submission path may contain only four named
-large materialization classes: one PE semantic-source emission from committed
-state, one complete PE-to-Unix `RawOwned` ownership copy while the current ABI
-lacks shared-lease adoption, one transactional `RawOwned`-to-final-SoA/payload
-emission, and GPU-visible writes required by Metal resources or transient
-bindings. Queue handoff, planning, sidecar construction, partition/session
-transfer, completion, and reclaim must move leases, identities, locators, or
-bounded compact values rather than O(source bytes) storage. A per-draw carrier,
-cross-source gather, repeated serialization, final-region reallocation/copy, or
-upload of CPU-only planning data is outside this floor and must have an explicit
-ledger class, measured necessity, and promotion requirement or be removed.
+**R-ARCH-7.24** The default serial CPU/GPU submission path may contain only
+three named large materialization classes: one PE semantic-source emission from
+committed state, one complete PE-to-Unix `RawOwned` ownership copy while the
+current ABI lacks shared-lease adoption, and GPU-visible writes required by
+Metal resources or transient bindings. Replay direct-cursor state, queue
+handoff, sidecar construction, session transfer, completion, and reclaim must
+move leases, identities, locators, or bounded compact values rather than
+O(source bytes) or O(draw-state) storage.
+
+`ExplicitParallelCompactSoA` may add one fourth, experimental class: a single
+transactional `RawOwned`-to-pass-local compact indexed SoA emission for one
+already accepted sealed pass. It must deduplicate repeated state, uniform, and
+resource-set values and must be included in the provider's economy gate. A
+per-draw carrier, queue-wide expanded SoA, cross-source gather, repeated
+serialization, final-region reallocation/copy, or upload of CPU-only planning
+data is outside this floor and must have an explicit ledger class, measured
+necessity, and promotion requirement or be removed.
 
 Metal command encoding and existing `MTLBuffer`/`MTLTexture` binding are not by
 themselves evidence of a GPU byte copy. GPU-transfer accounting must distinguish
