@@ -187,10 +187,7 @@ using CoreEntryPresence = dxmt9::d3d9::PresenceTable<
     CoreEntryPresenceKey, CoreEntryPresenceHash>;
 
 struct ReplayScratchArena {
-  std::vector<dxmt9::core::DrawParam> runParams;
-  std::vector<dxmt9::core::DrawBindingOverride> bindingOverrides;
   std::vector<dxmt9::core::DrawBindingSnapshot> bindingSnapshots;
-  std::vector<dxmt9::core::DrawParamPayloadView> runPayloads;
   std::vector<dxmt9::core::ChunkHandleEntry> coreEntries;
   LedgerTargetPresence ledgerTargetPresence;
   CoreEntryPresence coreEntryPresence;
@@ -198,10 +195,7 @@ struct ReplayScratchArena {
   bool inUse = false;
 
   void clear() noexcept {
-    runParams.clear();
-    bindingOverrides.clear();
     bindingSnapshots.clear();
-    runPayloads.clear();
     coreEntries.clear();
     // ledgerTargetPresence / coreEntryPresence are NOT cleared here: they are
     // resized-and-refilled explicitly by

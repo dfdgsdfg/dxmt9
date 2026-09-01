@@ -45,7 +45,7 @@ complete.
 | Renderer fallback | `allow`, `strict` | Stable / planned | allow specified default, selector not implemented | `R-BACK-31.5`, `R-BACK-31.8` |
 | Producer replay | `inline`, `offloaded` | Stable / implemented | offloaded default; inline rollback | `R-BACK-2.51` |
 | Opaque-depth index locality | original order, conservative LRU32 reorder | Stable fallback; reorder is bounded opt-in | original order default; `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1` enables the reorder only for stable sources at ≥256 primitives, with whole-candidate frontier/work budgets and fail-open fallback | `R-BACK-2.51`, `R-BACK-42.8`–`42.11` |
-| Encode execution | `serial-direct`, `long-session-direct`, `parallel-compact-soa` | serial-direct stable specified target / partial; long-session and parallel compact-SoA experimental / partial | current serial identity implementation is the fallback; serial-direct is the target default; candidates opt-in only | `R-BACK-42.13`–`42.18`, `R-BACK-2.66` |
+| Encode execution | `serial-final-slot-thread`, `serial-direct`, `long-session-direct`, `parallel-compact-soa` | serial-final-slot-thread stable/current; fused serial-direct and long-session-direct optional/experimental; parallel compact-SoA experimental | serial-final-slot-thread is the current default; fused and parallel candidates remain opt-in | `R-BACK-42.13`–`42.18`, `R-BACK-2.66` |
 | Submission grain | `off`, `per-render-pass` | Stable / implemented | per-render-pass default with cap 4; off rollback | `R-BACK-2.29`–`2.34` |
 | Binding representation | Stage 1 direct, Stage 2 constants, Stage 2b direct-cbuf, Stage 2 resource-array | Stable / implemented with capability fallback | Stage 2b automatic on Apple3+/Tier2; Stage 1 fallback; resource-array opt-in | `R-BACK-12.22`–`12.26` |
 | FFP execution | `portable`, `tile-auto` | portable stable / implemented; tile-auto candidate / correctness-blocked | tile-auto resolves to portable | `R-BACK-13.*` |
@@ -57,7 +57,7 @@ The existing `DXMT9_CPU_READY_TAPE`, `DXMT9_RENDER_PARTITION_MODE`, and Metal 4
 segmentation controls describe current implementation experiments and migration
 surfaces. They are not three independently composable future provider axes.
 The planned canonical queue selector is
-`DXMT9_RENDER_EXECUTION_MODE=serial-direct|long-session-direct|parallel-compact-soa`;
+`DXMT9_RENDER_EXECUTION_MODE=serial-final-slot-thread|serial-direct|long-session-direct|parallel-compact-soa`;
 it remains absent from the runtime and environment-variable registry until the
 exclusive resolver is implemented.
 
@@ -69,8 +69,9 @@ per-pass automatic provider search.
 
 | Provider | Source consumption | Queue representation | Status |
 |---|---|---|---|
-| `SerialDirectCursor` | immutable semantic source plus transactional replay state | one Unix worker performs Replay and direct Metal emission; no complete draw SoA or downstream encode queue | stable specified target; implementation/promotion open |
-| `LongSessionDirectCursor` | the same direct cursor | the same replay/encode worker plus session-owned Metal encoder/lifetime state | experimental |
+| `SerialFinalSlotThread` | immutable semantic source plus transactional replay state | Replay/materialization worker constructs one final `ChunkSlot`; dedicated encode thread consumes the Ready source | stable/current; carrier-free final-slot closure and evidence in progress |
+| `SerialDirectCursor` | immutable semantic source plus transactional replay state | one Unix worker performs Replay and direct Metal emission; no complete draw SoA or downstream encode queue | optional future topology; implementation/promotion open |
+| `LongSessionDirectCursor` | the same direct cursor | the same fused replay/encode worker plus session-owned Metal encoder/lifetime state | experimental |
 | `ExplicitParallelCompactSoA` | Replay worker until a complete sealed-pass certificate and economic gate accept | pass-local compact indexed SoA handed to a dedicated encode coordinator and bounded children | experimental |
 
 The compact parallel representation is conceptually:
@@ -98,6 +99,9 @@ direct-serial branch; it does not activate another queue provider.
 Thread topology is likewise exclusive:
 
 ```text
+SerialFinalSlotThread
+PE producer -> Replay/materialization worker -> final ChunkSlot -> encode thread -> Metal
+
 SerialDirectCursor
 PE producer -> Unix replay/encode worker -> Metal
 
@@ -109,11 +113,14 @@ PE producer -> Replay/materialization worker -> compact pass SoA
             -> encode coordinator -> bounded child workers -> Metal
 ```
 
-The first two modes do not start the current downstream command-queue encode
-thread. Their Replay worker becomes the sole serial Metal-effect owner. The PE
-producer remains separate so source `N+1` can overlap Replay/encode of source
-`N`. Finish and completion workers remain queue infrastructure and are not
-counted as encode workers.
+`SerialFinalSlotThread` starts the existing downstream command-queue encode
+thread. Its Replay worker remains the sole final-slot materialization owner and
+publishes a complete immutable source before the encode thread performs Metal
+effects. The optional fused direct modes do not start that downstream encode
+thread; their Replay worker becomes the sole serial Metal-effect owner. The PE
+producer remains separate so source `N+1` can overlap Replay/materialization or
+Replay/encode of source `N`. Finish and completion workers remain queue
+infrastructure and are not counted as encode workers.
 
 ### 2.2 Experimental candidates
 
@@ -122,8 +129,8 @@ compatibility promises:
 
 | Candidate | Stable fallback | Promotion requirement |
 |---|---|---|
-| `long-session-direct` | `serial-direct` | EncodeSession correctness/progress/completion proof, non-increasing CB/pass/tile locality, and end-to-end benefit |
-| `parallel-compact-soa` | `serial-direct` | sealed-pass safety, compact materialization economy, Metal equality, and an encode-bound workload benefit |
+| `long-session-direct` | `serial-final-slot-thread` | EncodeSession correctness/progress/completion proof, non-increasing CB/pass/tile locality, and end-to-end benefit |
+| `parallel-compact-soa` | `serial-final-slot-thread` | sealed-pass safety, compact materialization economy, Metal equality, and an encode-bound workload benefit |
 | `per-n-records` mid-chunk commit | `off` or `per-render-pass` | production shape and locality evidence |
 | deferred present-completion boundary | present-completion | pass-streaming, ordered completion, visual, latency, and locality gates |
 | PE inline-constant delta | standalone constant records | renewed workload evidence above the noise gate |
@@ -165,11 +172,13 @@ details unless a future requirement exposes a selectable provider mode.
 
 - Semantic features operate above encode execution. `dce` or `passcoalesce`
   must not be implied by direct cursor, session lifetime, or parallelism.
-- Producer offload does not select an encode provider, but both direct-cursor
-  providers require Unix offload so the PE/game thread never becomes the Metal
-  owner. Their offloaded Replay worker also performs serial encode. The inline
+- Producer offload does not select an encode provider, but every serial
+  topology requires Unix offload so the PE/game thread never becomes the Metal
+  owner. `SerialFinalSlotThread` keeps Replay/materialization on the Replay
+  worker and performs Metal effects on the dedicated encode thread. The
+  optional fused direct topologies perform both on the Replay worker. Inline
   replay rollback therefore remains a compatibility implementation path, not a
-  valid topology for either target direct provider.
+  valid topology for either serial provider.
 - The existing offloaded-replay to conservative opaque-depth index-locality
   default is an explicit `R-BACK-2.51` coupling, not a general permission for
   provider selectors to enable unrelated optimizers.
@@ -199,7 +208,7 @@ owning pass falls back atomically according to its domain contract.
 |---|---|
 | Renderer backend/profile/features | backend factory and FrameGraph native specs; aggressive and planned features remain unavailable |
 | Producer replay | offload and byte-identity native variants; provider-style canonical resolver naming remains optional cleanup |
-| Encode execution provider | `R-BACK-42.13`–`42.18` and `R-BACK-2.66`; current Replay and command-queue encode workers are separate in all production modes, while the target direct providers fuse them; exclusive resolver, direct-cursor default, compact indexed SoA, topology matrix, and full differential evidence are missing |
+| Encode execution provider | `R-BACK-42.13`–`42.18` and `R-BACK-2.66`; current stable topology keeps Replay/materialization and the dedicated encode thread separate, while fused direct execution remains optional; exclusive resolver, placement matrix, full final-slot differential, and provider evidence are incomplete |
 | Submission grain | mid-chunk policy and TLA evidence; `per-n-records` production evidence missing |
 | Binding representation | argbuf selector/MSL/populator and shader-runner readback evidence; resource-array performance gate missing |
 | FFP execution | tile selector/MSL/readback equality; workload promotion evidence missing |

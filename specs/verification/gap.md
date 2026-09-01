@@ -42,17 +42,19 @@ ordered-control reorder, and retry-after-effect. The immutable authenticated
 raw sequence is the representation-preserving effective stream; no second
 complete carrier is introduced by the transaction.
 
-The complete ordinary/direct differential over effective commands, next state,
-final SoA values, resource/completion identity, and failure disposition remains
-open, as does production optimizer-policy admission binding. The R-ARCH-7.23 /
-R-BACK-2.99 production/API source audit now proves `DrawRunSubmission`, its
-batch APIs, carrier-specific counters/adapters/scratch, and carrier-only test
-seams are absent; the remaining negative audit continues to forbid equivalent
-per-draw AoS carriers.
+The complete final-slot/direct differential over effective commands, next
+state, final storage values, resource/completion identity, and failure
+disposition remains open, as does production optimizer-policy admission
+binding. The R-ARCH-7.23 / R-BACK-2.99 production/API source audit now proves
+`DrawRunSubmission`, its batch APIs, carrier-specific counters/adapters/scratch,
+and carrier-only test seams are absent; the remaining negative audit continues
+to forbid equivalent per-draw AoS carriers. The stable
+`OwnedRawFinalChunkSlot` is an intentional queue-owned destination consumed by
+the dedicated encode thread, not a compatibility carrier.
 R-ARCH-7.24 and R-BACK-2.100 additionally require a fresh owner-qualified
-ledger proving the PE emission, current-ABI RawOwned copy, final-SoA emission,
-and required GPU-visible writes are the only large materializations; no current
-run closes that four-boundary reconciliation yet.
+ledger proving the PE emission, current-ABI RawOwned copy, one queue-final-slot
+transaction, and required GPU-visible writes are the only large
+materializations; no current run closes that four-boundary reconciliation yet.
 
 ## Recorder fault evidence boundary (2026-08-31)
 

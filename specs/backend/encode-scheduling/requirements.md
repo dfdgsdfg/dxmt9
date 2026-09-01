@@ -746,7 +746,8 @@ the selected predecessor fence, or session grouping.
 **R-BACK-2.66** Encode scheduling must resolve exactly one queue-immutable
 execution provider defined by R-BACK-42.13:
 
-- `SerialDirectCursor` is the stable specified default target;
+- `SerialFinalSlotThread` is the stable/current serial topology;
+- `SerialDirectCursor` is an optional fused topology;
 - `LongSessionDirectCursor` is experimental; and
 - `ExplicitParallelCompactSoA` is experimental.
 
@@ -758,20 +759,22 @@ children, switch provider per source/pass, or make Metal 4 an orthogonal toggle
 on either candidate. A future combination requires a new named provider and a
 new proof/economy contract.
 
-`SerialDirectCursor` consumes the immutable source with sequential replay state
-and direct Metal emission, without a complete final draw SoA. One Unix worker
-must own both Replay projection and serial Metal encoding; there is no
-Replay-to-Ready/`ChunkSlot` handoff to a dedicated encode thread.
-`LongSessionDirectCursor` consumes the identical cursor but may preserve the
+`SerialFinalSlotThread` consumes the immutable source with sequential replay
+state; the Replay/materialization worker constructs one queue-owned
+`OwnedRawFinalChunkSlot`, then the dedicated encode thread performs serial
+Metal encoding. `SerialDirectCursor` is optional: one Unix worker may own both
+Replay projection and serial Metal encoding without a complete final draw SoA.
+`LongSessionDirectCursor` consumes the identical optional cursor but may
+preserve the
 validated Metal session/encoder ownership named by R-BACK-2.42 through
 R-BACK-2.49 across source boundaries on that same worker; it must not add a
 downstream encode thread. `ExplicitParallelCompactSoA` follows the direct cursor
 until a complete sealed pass passes all pre-effect safety and economic gates,
 then materializes only that pass into bounded compact indexed tables and hands
 them to a dedicated encode coordinator and bounded child pool. An ineligible or
-rejected pass executes through the selected provider's serial-direct branch
-before any child or Metal side effect; this is fail-closed execution, not a
-provider switch.
+rejected pass executes through the selected provider's stable serial final-slot
+branch before any child or Metal side effect; this is fail-closed execution,
+not a provider switch.
 
 Selection must not implicitly enable FrameGraph semantic optimizers such as
 pass coalescing or DCE, alter Presenter policy, or weaken order, lifetime,
@@ -780,25 +783,28 @@ identity remains a storage/publication fact governed by R-BACK-2.40 and
 R-BACK-2.60, not an encode-provider choice.
 
 The planned canonical process selector is
-`DXMT9_RENDER_EXECUTION_MODE=serial-direct|long-session-direct|parallel-compact-soa`.
+`DXMT9_RENDER_EXECUTION_MODE=serial-final-slot-thread|serial-direct|long-session-direct|parallel-compact-soa`.
 It must be resolved once at device or command-queue creation, report requested
 and resolved values plus a typed fallback reason, and fail an unknown value
-closed to `serial-direct` with one bounded warning. Under R-BACK-42.7 it remains
+closed to `serial-final-slot-thread` with one bounded warning. Under R-BACK-42.7 it remains
 absent from the active environment-variable mirror until implemented. Existing
 `DXMT9_CPU_READY_TAPE`, `DXMT9_RENDER_PARTITION_MODE`, identity-granularity, and
 segmentation controls remain migration or experimental implementation surfaces;
 they must not be documented as the future stable provider algebra.
 
-The PE/game thread remains a producer in all modes. The direct providers require
-offloaded Unix Replay, but fuse that Replay worker with the serial encode owner.
-Only `ExplicitParallelCompactSoA` may retain a Replay-to-encode queue boundary.
+The PE/game thread remains a producer in all modes. The stable serial final-slot
+topology requires offloaded Unix Replay/materialization followed by the
+dedicated encode thread. Optional fused direct providers require offloaded Unix
+Replay and fuse that worker with the serial encode owner. Only
+`ExplicitParallelCompactSoA` may add child workers.
 Finish, completion, presentation-acquire, compilation, and diagnostic threads
 are outside this provider topology.
 
 Promotion under R-BACK-2.50 may change implementation activation but must not
-promote either experimental candidate without its own correctness, locality,
-progress, and end-to-end economy evidence. `SerialDirectCursor` remains the
-semantic oracle and stable fallback.
+promote an optional topology without its own correctness, locality, progress,
+and end-to-end economy evidence. `SerialFinalSlotThread` remains the stable
+serial baseline and `SerialDirectCursor` remains the semantic oracle for any
+fused candidate.
 
 **R-BACK-2.67** Encode scheduling must carry a composed end-to-end temporal
 progress proof in addition to the per-component models. The scheduling
@@ -1294,10 +1300,10 @@ PE bridge call returns. With the current ABI it must copy the accepted complete
 source into one `RawOwned` lease; a future same-address path must atomically
 adopt a generation-qualified shared allocation and its sole reclaim authority.
 Replay may move that lease or source-qualified block references between threads
-without copying semantic bytes. It must build final queue-owned SoA/payload
-storage only when required for payload ownership or by the explicitly selected
-parallel compact-SoA provider; the default serial provider must use a bounded
-direct cursor. Ordered
+without copying semantic bytes. The stable `SerialFinalSlotThread` provider
+builds final queue-owned SoA/payload storage transactionally in the Replay
+worker and hands the immutable source to `encodeThread_`; the optional fused
+serial provider uses a bounded direct cursor instead. Ordered
 controls may fail closed or select compatibility replay, but they must not cause
 partial source ownership, retained PE spans, or a per-draw AoS handoff to become
 the normal asynchronous representation.
@@ -1306,7 +1312,9 @@ the normal asynchronous representation.
 single-writer persistent backend state through a source-local working state.
 The projection must deterministically produce the effective ordered commands,
 draw state/uniform values, ordered-control dispositions, qualified resources,
-and exact next persistent state. The serial direct cursor must consume that
+and exact next persistent state. The stable final-slot provider must consume
+that projection by constructing one transactional queue-owned
+`OwnedRawFinalChunkSlot`. An optional serial direct cursor may consume the same
 projection without constructing a complete final draw SoA. Exact
 layout/count/dedup planning is mandatory only for bounded payload ownership and
 an already accepted explicit-parallel pass; it must not mutate the projection.
@@ -1334,25 +1342,32 @@ projection.
 `DrawRunSubmission`, `DrawRunSubmissionStateLane`, their snapshot/batch submit
 APIs, carrier-specific grouping/elision helpers, source-payload adapters,
 scratch vectors, and copy/materialization counters from production. Every draw
-family must be consumable through the universal serial direct cursor; only an
-accepted explicit-parallel pass may enter pass-local compact indexed storage.
-Mixed sources must use typed ordered-control boundaries without rebuilding an
-AoS draw carrier. Exact Legacy semantic behavior may remain as an oracle or
-pre-effect disposition, but not as a second production representation. The
-removal gate requires Legacy/direct effective-stream and next-state
-differentials, direct-cursor/compact-SoA resource and completion equivalence,
-trace/capture and
-segmented/oversized/UP coverage, source audits, GPU readback, and wild visual
-and locality evidence.
+family must be consumable through the stable final-slot provider: one
+transactional `OwnedRawFinalChunkSlot` destination may be published and then
+consumed by the dedicated encode thread. An optional `SerialDirectCursor` may
+consume the same effective stream on the Replay worker without constructing a
+complete final SoA; its absence is not a reason to retain the retired carrier.
+Only an accepted explicit-parallel pass may enter pass-local compact indexed
+storage. Mixed sources must use typed ordered-control boundaries without
+rebuilding an AoS draw carrier. Exact Legacy semantic behavior may remain as
+an oracle or pre-effect disposition, but not as a second production
+representation. The removal gate requires Legacy/direct effective-stream and
+next-state differentials, final-slot/direct resource and completion
+equivalence, trace/capture and segmented/oversized/UP coverage, source audits,
+GPU readback, and wild visual and locality evidence. Full fused-cursor
+coverage is a separate optional-provider gate.
 
 **R-BACK-2.100** Import, Replay, queue publication, and Encode must implement
 the R-ARCH-7.24 materialization floor. Import owns at most one complete
 `copy.bridge.raw-owned` operation per accepted source under the current ABI.
-Serial Replay owns no complete final draw SoA and constructs each required
-payload byte or compact sidecar value at most once. The explicit parallel
-provider owns at most one transactional pass-local indexed-SoA construction for
-an already accepted sealed pass. Cross-thread/source/session/partition handoffs must move
-leases and bounded metadata without gathering or copying source payloads.
+The stable `OwnedRawFinalChunkSlot` topology constructs one queue-owned final
+storage transaction in the Replay/materialization worker and moves its lease
+and bounded metadata to the dedicated encode thread. A fused
+`SerialDirectCursor` may instead construct no complete final draw SoA, but
+remains optional. The explicit parallel provider owns at most one
+transactional pass-local indexed-SoA construction for an already accepted
+sealed pass. Cross-thread/source/session/partition handoffs must move leases
+and bounded metadata without gathering or copying source payloads.
 Encode must count known GPU-visible writes separately from Metal command and
 resource-reference emission. Any additional O(source bytes), O(draw state), or
 O(resource payload) copy requires a named owner-qualified ledger row and must

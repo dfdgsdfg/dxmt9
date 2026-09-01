@@ -355,7 +355,9 @@ class CommandQueue {
   CommandQueue(WMT::Device device, core::BackendLimits limits,
                bool cpuReadySessionLaneEnabled,
                bool renderTapePublisherCaptureEnabled = false,
-               render::RenderPartitionConfig renderPartitionConfig = {});
+               render::RenderPartitionConfig renderPartitionConfig = {},
+               render::EncodeExecutionTopology encodeExecutionTopology =
+                   render::kStableOwnedRawSlotTopology);
 
   // Cold control-plane diagnostic boundary used by the PE device Reset and
   // teardown owners; it never synthesizes per-source reclaim transitions.
@@ -1909,6 +1911,8 @@ class CommandQueue {
   WMT::Device device_{};
   bool cpuReadySessionLaneEnabled_ = false;
   render::RenderPartitionConfig renderPartitionConfig_{};
+  render::EncodeExecutionTopology encodeExecutionTopology_ =
+      render::kStableOwnedRawSlotTopology;
   WMT::Reference<WMT::CommandQueue> queue_{};
   WMT::CommandQueue queueView_{};  // non-owning view of queue_
 

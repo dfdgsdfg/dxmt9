@@ -182,18 +182,24 @@ source, partition, and segmentation selectors:
 
 ```text
 EncodeExecutionProvider {
+  SerialFinalSlotThread
   SerialDirectCursor
   LongSessionDirectCursor
   ExplicitParallelCompactSoA
 }
 ```
 
-`SerialDirectCursor` is the stable specified target default. It advances
-transactional replay state while consuming the immutable source in order and
-emits Metal commands directly. It may construct compact sidecars and bounded
-cursor state, but it does not construct a complete per-draw final SoA. The Unix
-Replay worker is also the serial encode coordinator; no second command-queue
-encode thread or complete-draw Ready handoff exists in this mode.
+`SerialFinalSlotThread` is the stable/current serial topology. It advances
+transactional replay state while the Replay/materialization worker constructs
+one queue-owned `OwnedRawFinalChunkSlot` transaction. The published final slot
+is consumed by the dedicated encode thread, which owns Metal command encoding.
+Final-slot materialization and encode-thread placement are separate policy axes;
+neither reintroduces the retired per-draw carrier.
+
+`SerialDirectCursor` is an optional fused topology. It consumes the same
+effective stream in order and emits Metal commands on the Replay worker,
+without constructing a complete per-draw final SoA. Its absence does not block
+the stable final-slot DOD closure or carrier retirement.
 
 `LongSessionDirectCursor` is experimental. It uses the identical cursor and
 changes only Metal lifetime ownership: a validated command buffer, render
@@ -211,9 +217,10 @@ serially before any parallel or Metal side effect.
 
 | Provider | Materialization | Lifetime extension | Stable fallback |
 |---|---|---|---|
-| `serial-direct` | bounded cursor and compact sidecar only | one fused Replay/encode worker; no downstream encode thread | current serial identity implementation until target promotion |
-| `long-session-direct` | same as serial-direct | the fused worker retains validated serial encoder/session state across sources | `serial-direct` |
-| `parallel-compact-soa` | accepted pass-local compact indexed SoA only | Replay/materialization worker plus encode coordinator and ordered parallel children | `serial-direct` |
+| `serial-final-slot-thread` | one transactional `OwnedRawFinalChunkSlot` plus bounded sidecar | Replay/materialization worker publishes to the dedicated encode thread | stable/current |
+| `serial-direct` | bounded cursor and compact sidecar only | one fused Replay/encode worker; no downstream encode thread | `serial-final-slot-thread` |
+| `long-session-direct` | same as serial-direct | the fused worker retains validated serial encoder/session state across sources | `serial-final-slot-thread` |
+| `parallel-compact-soa` | accepted pass-local compact indexed SoA only | Replay/materialization worker plus encode coordinator and ordered parallel children | `serial-final-slot-thread` |
 
 Only one row may be selected for a queue. A long-session/parallel hybrid,
 per-pass provider search, and orthogonal Metal 4 enablement are unsupported.
@@ -221,17 +228,21 @@ The direct-serial branch inside the parallel provider is a typed pre-effect
 fallback, not selection of a second provider.
 
 ```text
-serial-direct:        PE -> Replay+Encode -> Metal
-long-session-direct: PE -> Replay+Encode(session-owned) -> Metal
-parallel-compact-soa: PE -> Replay/compact-SoA -> EncodeCoordinator/children -> Metal
+serial-final-slot-thread: PE -> Replay/materialize -> Final ChunkSlot -> EncodeThread -> Metal
+serial-direct:            PE -> Replay+Encode -> Metal
+long-session-direct:      PE -> Replay+Encode(session-owned) -> Metal
+parallel-compact-soa:     PE -> Replay/compact-SoA -> EncodeCoordinator/children -> Metal
 ```
 
-The PE producer remains separate from the fused Unix worker, preserving overlap
-between production of source `N+1` and replay/encoding of source `N`. Queue
-finish and completion workers remain unchanged and are not encode workers.
+The PE producer remains separate from the Unix Replay/materialization worker,
+preserving overlap between production of source `N+1` and replay of source `N`.
+In the stable topology the final-slot handoff continues to the dedicated encode
+thread; fused providers combine Replay and encode only as an explicit optional
+placement. Queue finish and completion workers remain unchanged and are not
+encode workers.
 
 The planned canonical selector is
-`DXMT9_RENDER_EXECUTION_MODE=serial-direct|long-session-direct|parallel-compact-soa`.
+`DXMT9_RENDER_EXECUTION_MODE=serial-final-slot-thread|serial-direct|long-session-direct|parallel-compact-soa`.
 Resolution occurs before queue-owned storage or workers are created. Startup
 and perf observations record requested/resolved values plus a typed fallback
 reason. The selector is not an active runtime interface until that resolver is
@@ -1983,11 +1994,12 @@ payload retirement. R-BACK-2.95 through R-BACK-2.96 own these mappings and
 R-VERIF-7.9 owns their
 composed trace.
 
-The replay worker is a scheduling choice, not a representation owner. It may
-overlap source planning and final-Arena construction with PE production and
-encoding of an older source. Its queue publication contains final storage,
-`EndToEndSourceIdentity`, storage generation, and the compact resolved sidecar;
-it does not require an intermediate per-draw carrier. The retired
+The Replay/materialization worker owns construction of the final queue storage
+in the stable topology. It may overlap source planning and final-slot
+construction with PE production and encoding of an older source. Its queue
+publication contains final storage, `EndToEndSourceIdentity`, storage
+generation, and the compact resolved sidecar; it does not require an
+intermediate per-draw carrier. The retired
 `DrawRunSubmission` adapter previously snapshotted optional state/uniform
 values before queue ingestion. Production now passes borrowed current-state
 views synchronously to either a private Direct/Arena transaction or ordinary
@@ -1996,12 +2008,14 @@ completion identity.
 
 After universal projection lands, a fallback disposition still may reject
 Direct policy or select a coordinator-owned ordered-control path, but it must
-not recreate the adapter. The target serial representation is the direct cursor
-plus compact sidecar. Only an accepted `ExplicitParallelCompactSoA` pass may
-materialize compact indexed draw storage.
+not recreate the adapter. The stable serial representation is the
+`OwnedRawFinalChunkSlot` plus compact sidecar, consumed by the dedicated encode
+thread. An optional direct cursor may use the fused compact-sidecar form. Only
+an accepted `ExplicitParallelCompactSoA` pass may materialize compact indexed
+draw storage.
 
 The default scheduling path therefore has one permitted large import copy and
-no complete final draw-storage construction. `RawOwned` may move into the
+one transactional queue-owned final-slot construction. `RawOwned` may move into the
 replay queue, and leases or compact sidecars may move into CPU-ready/session
 queues, without moving their backing bytes. The experimental parallel provider
 may add one accepted-pass count/dedup plan and compact indexed construction;
@@ -2018,14 +2032,15 @@ spans. Moving `RawOwned`, a `SourceLease`, or source-local payload block
 references through the replay queue transfers compact ownership metadata, not
 the source bytes.
 
-Replay's default target is the serial direct cursor, which consumes the PE
-semantic table/arena through authenticated `RawOwned` storage without a second
-complete draw layout. A pure resolve/state-transition pass derives sidecar
-values without materializing encoder-visible records. Multiple already-owned
-source blocks may remain a bounded source-qualified chain consumed by that
-cursor; joining sources does not require physically gathering all bytes into a
-new contiguous carrier. A count/dedup plan constructs indexed unique tables
-only for an already accepted explicit-parallel pass.
+Replay's stable target is `SerialFinalSlotThread`: it consumes the PE semantic
+table/arena through authenticated `RawOwned` storage and transactionally builds
+one final queue-owned `ChunkSlot`. A pure resolve/state-transition pass derives
+sidecar values before that construction. Multiple already-owned source blocks
+may remain a bounded source-qualified chain; joining sources does not require
+physically gathering all bytes into a new contiguous carrier. The optional
+serial direct cursor consumes the same projection without a complete final
+draw layout. A count/dedup plan constructs indexed unique tables only for an
+already accepted explicit-parallel pass.
 
 Replay projection precedes that physical plan. The production target is one
 source-local `ReplayState` transaction: clone or checkpoint the device-owned
@@ -2062,8 +2077,8 @@ ordinary Direct, and Arena replay therefore share the same source-wide state
 settlement protocol even though their physical destinations remain different.
 
 This closes the transaction/failure portion of R-BACK-2.97 and the concrete
-carrier/API retirement portion of R-BACK-2.99. The universal fused serial
-cursor, full ordinary/direct next-state/final-SoA differential, production
+carrier/API retirement portion of R-BACK-2.99. The optional universal fused
+serial cursor, full final-slot/direct next-state/final-storage differential, production
 optimizer certificate binding, fresh materialization ledger, GPU readback, and
 wild locality evidence remain R-BACK-2.98 through R-BACK-2.100 work. Carrier
 retirement is therefore an implementation fact, not by itself a provider

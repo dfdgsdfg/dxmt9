@@ -106,7 +106,8 @@ only as an accepted-pass representation for explicit parallel execution.
 |---|---|---|
 | API layer to D3D9 frontend | COM calls + PE `DeviceState` | PE owns Windows-visible state and validation |
 | D3D9 frontend to backend facade | `CanonicalDrawState`, `DrawUniformPayload`, `span<DrawParam>`, `span<DrawParamPayloadView>` | Borrowed spans are immediate-use only |
-| Replay to serial encoder (target) | direct cursor plus compact sidecar | Source lease and cursor callback bound the borrow; no complete final SoA |
+| Replay/materialization to serial encoder (stable) | `OwnedRawFinalChunkSlot` plus compact sidecar | Replay worker owns one transactional final slot; dedicated encode thread borrows the published immutable slot |
+| Replay to fused serial encoder (optional) | direct cursor plus compact sidecar | Source lease and cursor callback bind the borrow; no complete final SoA |
 | Replay to explicit parallel encoder (experimental) | accepted pass-local compact indexed SoA | Queue owns the bounded pass representation until joined encoding completes |
 | CommandQueue to ChunkSlot (compatibility) | SoA arrays and byte arena | Queue owns copied records after append |
 | ChunkSlot to encoder (compatibility) | `MetalCommandView`, `FlatDrawStateView`, `span<DrawParam>`, payload span | Borrowed view over queue-owned slot storage |
@@ -153,9 +154,11 @@ Construct-in-place and unified memory (R-ARCH-7.4, R-ARCH-7.5):
 - Current status: dirty constant bytes are built directly into shared-storage
   transient/argbuf memory. The per-draw `DrawRunSubmission` carrier is retired;
   replay synchronously borrows current state/uniform data and constructs Direct,
-  Arena, or ordinary final `ChunkSlot` storage. Queue-wide final storage and its
-  handoff to the distinct encode thread remain until the fused serial cursor is
-  proven.
+  Arena, or ordinary final `ChunkSlot` storage. The stable serial final-slot
+  topology keeps the distinct encode thread as an execution policy: the Replay
+  worker owns the transactional final-slot build and publishes its Ready source.
+  A fused Replay/encode cursor remains an optional future topology, not a
+  prerequisite for carrier-free DOD construction.
 - A shared (`MTLStorageModeShared`) backing is the GPU-read allocation itself, so
   on Apple Silicon the in-place build of dirty constants is the upload; no
   separate CPU-struct-then-staging copy is required (R-BACK-5.7). The allocation
@@ -329,7 +332,8 @@ consumers and therefore need not share one physical schema:
 |---|---|---|
 | PE semantic tables plus payload arena | exact D3D9 order, bounded validation, capture, and pointer-free ABI emission | `ProducerOwned`; readable by Unix only during the active bridge call |
 | Unix `RawOwned` source | asynchronous Replay residency and generation-qualified facade issuance | one Unix source lease established before bridge return |
-| Serial direct cursor plus compact sidecar (target) | sequential state transition, resource qualification, immediate encode, and completion attribution | synchronous borrow over `RawOwned`; only compact derived values become `FinalOwned` |
+| Serial final-slot worker plus compact sidecar (stable/current) | sequential state transition, resource qualification, and carrier-free final-slot construction before encode-thread execution | synchronous borrow over `RawOwned`; one transaction owns `FinalOwned` |
+| Fused serial direct cursor plus compact sidecar (optional future) | sequential state transition, resource qualification, immediate encode, and completion attribution | synchronous borrow over `RawOwned`; only compact derived values become `FinalOwned` |
 | Pass-local compact indexed SoA (experimental) | parallel child ranges with deduplicated state/uniform/resource sets | `FinalOwned` only for one accepted sealed pass |
 | Queue `ChunkSlot` / Arena SoA (compatibility) | replay scans, state/uniform interning, encode locality, and completion attribution | `FinalOwned`; constructed transactionally from the leased source |
 
@@ -377,11 +381,13 @@ Failure ownership is fixed by the first visible effect:
 | normal/device-loss completion | settle ordered effects, return all borrows, release pins/sidecars, reclaim once, publish capacity wake |
 
 The PE producer remains independent from Unix execution so it can record source
-`N+1` while Unix replays and encodes source `N`. The target direct providers do
-not add a second Unix pipeline boundary: their Replay worker is also the serial
-Metal encode coordinator. Only `ExplicitParallelCompactSoA` separates Replay
-from encode, using an accepted pass-local compact representation. Neither the
-PE/Unix boundary nor that experimental handoff permits a large per-draw carrier.
+`N+1` while Unix replays source `N`. The stable final-slot provider keeps the
+existing Replay/materialization-to-dedicated-encode-thread boundary; its
+`OwnedRawFinalChunkSlot` is the final queue-owned representation, not an
+intermediate per-draw carrier. Optional direct providers fuse Replay and Metal
+encoding on the Replay worker. Only `ExplicitParallelCompactSoA` adds a
+pass-local compact representation and child handoff. Neither the PE/Unix
+boundary nor either optional handoff permits a large per-draw carrier.
 
 Wine's PE and unixlib may observe the same process virtual address during a
 `wine_unix_call`, but address visibility is not asynchronous ownership. Under
@@ -395,7 +401,9 @@ lifecycle protocol.
 `DrawRunSubmission` was a transitional compatibility representation and is now
 retired from production. Ordinary fallback does not recreate it: replay passes
 a synchronous borrowed-state input directly to final `ChunkSlot` storage. The
-target serial direct cursor advances the same replay state and encodes without
+stable serial final-slot provider advances the same replay state and constructs
+one queue-owned final slot transaction before dedicated-thread encoding. An
+optional serial direct cursor advances the same replay state and encodes without
 a complete queue-wide final draw representation. The
 experimental parallel provider performs a bounded count/dedup plan only for an
 accepted sealed pass and emits compact indices plus unique value tables.
@@ -403,17 +411,22 @@ The `ResolvedSourceSidecar` contains only source-qualified resolutions and
 derived planning/encode values; it must not duplicate the state, uniform, or
 payload bytes that made the compatibility carrier large.
 
-Once R-ARCH-7.22 projection and the universal direct-cursor transaction cover
-all source families, R-ARCH-7.23 requires deleting this type and its public
-submission APIs. Unsupported or ordered effects retain typed dispositions, not
-the carrier: they seal or split final storage at the semantic boundary, execute
+R-ARCH-7.22 projection and the final-slot transaction cover the stable
+representation for all admitted source families; R-ARCH-7.23 therefore
+requires deleting this type and its public submission APIs. Universal fused
+cursor coverage is an optional provider gate, not a prerequisite for that
+removal. Unsupported or ordered effects retain typed dispositions, not the
+carrier: they seal or split final storage at the semantic boundary, execute
 through the coordinator-owned control path, and preserve the same source and
 completion identity.
 
 ```mermaid
 flowchart LR
     P["PE producer\nimmutable source N+1"]
-    R["Replay worker\nstate/resolve direct cursor N"]
+    R["Replay/materialization worker\nstate/resolve + final-slot transaction N"]
+    F["Stable final ChunkSlot\nOwnedRawFinalChunkSlot"]
+    T["Dedicated encode thread\nMetal effects"]
+    D["Optional fused direct cursor\nReplay + Metal"]
     A["Optional accepted pass\ncompact indexed SoA"]
     S["ResolvedSourceSidecar\nidentity + derived values"]
     E["Encode coordinator\nopen session/pass"]
@@ -421,12 +434,16 @@ flowchart LR
     P --> R
     R --> S
     S --> E
-    R --> E
+    R --> F
+    F --> T
+    R -.->|optional fused provider| D
+    D --> E
     R -.->|parallel provider only| A
     A -.-> E
 ```
 
-The direct path fuses replay projection and encode ownership on the Replay
+The stable path publishes the final slot to the dedicated encode thread. An
+optional direct path fuses replay projection and encode ownership on the Replay
 worker, but it must not interpret an immutable source boundary as a Metal
 render-pass or command-buffer boundary. A long-lived encode session decides
 those boundaries from D3D9 semantics, hazards, ordered controls, and Present
@@ -513,7 +530,8 @@ pass:
 |---|---|---|
 | PE producer | committed `LiveShadow`/`PendingDelta` → immutable semantic record/handle tables and payload arena | one `ProducerOwned` source |
 | PE/unix import | default: complete semantic source → copied Unix `RawOwned`; experimental: PE constructs directly in `UnixOwnedSourceLeaseV1` and commit transfers ownership | one asynchronous Unix source lease before bridge return; zero duplicated source bytes only in the selected experimental lane |
-| Serial Replay/encode | no large CPU materialization; `RawOwned` + working replay state are consumed by a bounded direct cursor | compact sidecar/payload ownership only; no complete final draw SoA |
+| Serial final-slot Replay | `RawOwned` + working replay state → one transactional queue-owned final `ChunkSlot` | `materialize.queue-final`; no per-draw carrier or second semantic serialization |
+| Fused serial Replay/encode (optional) | no large CPU materialization; `RawOwned` + working replay state are consumed by a bounded direct cursor | compact sidecar/payload ownership only; no complete final draw SoA |
 | Explicit parallel Replay (experimental) | one accepted sealed pass → compact indexed draw columns plus unique state/uniform/resource-set tables | one bounded pass-local `FinalOwned` representation |
 | Encode/Metal | direct cursor or accepted-pass compact values → Metal commands plus only required uniform, argument, UP/dynamic, or resource-upload bytes | command buffer and referenced GPU-visible resources |
 
@@ -809,10 +827,13 @@ Render-flow invariants:
 
 The concurrency model is producer/consumer with bounded queue ownership. The
 application-visible thread records D3D9 work and hands it to Unix-owned storage.
-Exactly one encode-execution provider then owns the source. Direct providers use
-one fused Replay/encode worker; only the explicit parallel provider adds a
-Replay-to-encode handoff and child workers. Metal/GPU and finish/completion work
-remain asynchronous unless an explicit synchronization boundary applies.
+Exactly one encode-execution topology then owns the source. The stable serial
+final-slot topology uses a Replay worker for transactional final-slot
+construction followed by the dedicated encode thread; an optional fused
+Replay/encode topology removes that handoff only when its provider is selected.
+Only the explicit parallel provider adds a compact pass handoff and child
+workers. Metal/GPU and finish/completion work remain asynchronous unless an
+explicit synchronization boundary applies.
 
 ```mermaid
 flowchart TD
@@ -868,7 +889,9 @@ flowchart TD
 | Application / Wine API thread | D3D9-visible call order, PE validation, PE `DeviceState` mutation | Unix replay/encode worker, GPU execution of older chunks, finish thread | call Metal directly or keep backend-owned pointers |
 | PE recorder / bridge call frame | POD chunk construction, local wire blob lifetime | prior GPU work, async pipeline compilation | expose PE COM pointers or borrowed stack spans after return |
 | Commit synchronous half (app thread) | wire validation, unix-owned blob copy + wrapper retention, bulk resource marking, raw-queue push | worker replaying/encoding *older* chunks, GPU | hand off a record before validation and marking complete (`R-BACK-2.51(a)`) |
-| Direct Replay/encode worker (device-owned) | FIFO Replay, transactional state projection, direct cursor, logical pass/session, Metal encoding, submission identity | application recording later chunks and GPU execution of older command buffers | publish a complete draw SoA to a downstream encode thread or reorder sources |
+| Replay/materialization worker (device-owned) | FIFO Replay, transactional state projection, and carrier-free final `ChunkSlot` construction | application recording later chunks, encode-thread execution, and GPU execution of older command buffers | call Metal, publish partial final storage, or reorder sources |
+| Dedicated encode thread (stable serial topology) | Ready `ChunkSlot` consumption, logical pass/session, Metal encoding, submission identity | application recording and Replay/materialization of later sources | read PE state, mutate source storage, or reorder sources |
+| Fused Replay/encode worker (optional topology) | FIFO Replay, transactional state projection, direct cursor, logical pass/session, Metal encoding, submission identity | application recording later chunks and GPU execution of older command buffers | publish a complete draw SoA to a downstream encode thread or reorder sources |
 | Parallel Replay/materialization worker (experimental) | FIFO Replay, sealed-pass proof, compact indexed SoA construction | application recording later chunks and encode workers on accepted older passes | publish an unaccepted/incomplete pass or expanded per-draw state |
 | Parallel encode coordinator (experimental) | accepted compact pass, Metal CB/parent encoder, child order/join, finalization and completion identities | application submission, Replay of later sources, GPU execution of older command buffers, partition workers | read PE state, mutate Replay persistent state, or delegate session-global state |
 | CPU-ready store | bounded immutable source residency, admission, and publication watermarks | selected provider and GPU | infer Metal boundaries from publication or retain unbounded sources |

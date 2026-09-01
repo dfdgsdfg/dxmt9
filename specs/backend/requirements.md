@@ -45,7 +45,10 @@ application (e.g., merging render passes with identical attachments).
 ## 2. Command Encoding
 
 **R-BACK-2.1** The Wine/application thread must not block on Metal API calls during
-draw submission. Metal command encoding must occur on a dedicated encode thread.
+draw submission. In the stable `SerialFinalSlotThread` topology, Metal command
+encoding must occur on a dedicated encode thread. An explicitly selected,
+separately proven fused provider may place encoding on its Replay worker, but
+the application thread must never become the Metal owner.
 
 **R-BACK-2.2** The application thread and the encode thread must synchronize only
 through a bounded queue. The maximum number of frames the application thread can

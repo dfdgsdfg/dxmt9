@@ -481,6 +481,49 @@ void canonicalPartitionSelectorResolvesQueueImmutableModes() {
         "bounded source identity selector defaults and fails closed");
 }
 
+void encodeStorageAndExecutionPlacementRemainIndependent() {
+  using dxmt9::render::EncodeExecutionPlacement;
+  using dxmt9::render::EncodeExecutionTopology;
+  using dxmt9::render::FinalSourceStorage;
+
+  constexpr auto stable =
+      dxmt9::render::kStableOwnedRawSlotTopology;
+  constexpr EncodeExecutionTopology fused{
+      .storage = FinalSourceStorage::OwnedRawFinalChunkSlot,
+      .placement = EncodeExecutionPlacement::ReplayWorker,
+  };
+  constexpr EncodeExecutionTopology arenaThreaded{
+      .storage = FinalSourceStorage::CpuReadyArena,
+      .placement = EncodeExecutionPlacement::DedicatedEncodeThread,
+  };
+  constexpr EncodeExecutionTopology compactParallel{
+      .storage = FinalSourceStorage::CompactParallelSoA,
+      .placement = EncodeExecutionPlacement::ParallelCoordinator,
+  };
+  constexpr EncodeExecutionTopology invalidCompactSerial{
+      .storage = FinalSourceStorage::CompactParallelSoA,
+      .placement = EncodeExecutionPlacement::DedicatedEncodeThread,
+  };
+
+  static_assert(dxmt9::render::encodeExecutionTopologyValid(stable));
+  static_assert(dxmt9::render::encodeExecutionTopologyValid(fused));
+  static_assert(dxmt9::render::encodeExecutionTopologyValid(arenaThreaded));
+  static_assert(
+      dxmt9::render::encodeExecutionTopologyValid(compactParallel));
+  static_assert(
+      !dxmt9::render::encodeExecutionTopologyValid(invalidCompactSerial));
+  static_assert(dxmt9::render::encodeExecutionTopologyImplemented(stable));
+  static_assert(!dxmt9::render::encodeExecutionTopologyImplemented(fused));
+  static_assert(dxmt9::render::dedicatedEncodeWorkerCount(stable) == 1u);
+  static_assert(dxmt9::render::dedicatedEncodeWorkerCount(fused) == 0u);
+
+  check(stable.storage == FinalSourceStorage::OwnedRawFinalChunkSlot &&
+            stable.placement ==
+                EncodeExecutionPlacement::DedicatedEncodeThread,
+        "stable serial topology keeps final-slot DOD and encode placement "
+        "as separately typed policy values");
+}
+
 void identityTraversesMixedSourceOrder() {
   MixedFixture fixture;
   const auto stream = fixture.sourceOrder();
@@ -1429,6 +1472,7 @@ int main() {
     productionPlannerPreservesMergeChainsAndFailsOpenBoundedly();
     productionPlannerKeepsTransitiveMergeChainWhole();
     canonicalPartitionSelectorResolvesQueueImmutableModes();
+    encodeStorageAndExecutionPlacementRemainIndependent();
     replayStreamValidProvesActiveOrderContract();
     identityUsesFramegraphOrderAndDceSelection();
     identityUsesPartialSessionSourceRange();

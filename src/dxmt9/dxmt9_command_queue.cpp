@@ -531,7 +531,9 @@ class PerfScope {
 CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
                            bool cpuReadySessionLaneEnabled,
                            bool renderTapePublisherCaptureEnabled,
-                           render::RenderPartitionConfig renderPartitionConfig)
+                           render::RenderPartitionConfig renderPartitionConfig,
+                           render::EncodeExecutionTopology
+                               encodeExecutionTopology)
     : cpuReadyTape_(renderTapePublisherCaptureEnabled
                         ? core::CpuReadyTapeConfig::queueCaptureStreaming(
                               kCommandChunkCount)
@@ -543,6 +545,7 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
       device_(device),
       cpuReadySessionLaneEnabled_(cpuReadySessionLaneEnabled),
       renderPartitionConfig_(renderPartitionConfig),
+      encodeExecutionTopology_(encodeExecutionTopology),
       limits_(limits),
       // R-BACK-3.9 — Mode::Full defers the archive load: shaderArchive_
       // starts default-constructed (empty, zero I/O) here and the real
@@ -556,6 +559,15 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
                          ? shaders::Archive()
                          : shaders::Archive(device, resolveShaderCachePath(device))) {
   setRenderTapeExactAttachmentPreservation(renderTapeCaptureEnabled());
+  if (!render::encodeExecutionTopologyValid(encodeExecutionTopology_) ||
+      !render::encodeExecutionTopologyImplemented(
+          encodeExecutionTopology_)) {
+    util::logf(util::LogLevel::Error, "dxmt9-queue",
+               "unsupported encode execution topology storage=%u placement=%u",
+               static_cast<unsigned>(encodeExecutionTopology_.storage),
+               static_cast<unsigned>(encodeExecutionTopology_.placement));
+    return;
+  }
   if (!device_) {
     return;
   }
@@ -692,9 +704,14 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
   // source-order byte-identical rollback.
   backend_ = render::createBackendFromEnv();
 
-  // Spawn the three worker threads. Threads block on writeCv_ until the
-  // first submit; no race with DeviceImpl's still-completing ctor because
-  // submits can only happen after CreateDXMT9Device returns.
+  // The stable topology deliberately keeps representation and placement
+  // separate: Replay constructs the queue-owned final ChunkSlot, then the
+  // dedicated encode worker consumes that immutable slot. Threads block on
+  // writeCv_ until the first submit; no race with DeviceImpl's still-
+  // completing ctor because submits can only happen after CreateDXMT9Device
+  // returns.
+  DXMT_ASSERT(render::dedicatedEncodeWorkerCount(
+                  encodeExecutionTopology_) == 1u);
   startThreads(
       [this] {
         auto encodeSingleSource = [this](

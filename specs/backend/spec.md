@@ -557,7 +557,8 @@ flowchart LR
     POD --> IMP["Importer\nvalidate, canonicalize,\nretain handles"]
     IMP --> IR["ImportedChunk\nrecords + FlatDrawStateView\nuniform handle + resource refs"]
     IR --> REPLAY["Replay transform\nrecords + queue state\n→ encoder ops"]
-    REPLAY --> ENC["Encode transform\nencoder ops + caches\n→ Metal commands"]
+    REPLAY --> SLOT["Final-slot transform\ntransactional queue-owned\nChunkSlot"]
+    SLOT --> ENC["Encode transform\ndedicated encode thread\n→ Metal commands"]
 ```
 
 Transform boundaries:
@@ -567,10 +568,14 @@ Transform boundaries:
 - **Import:** unix code validates record headers, payload sizes, offsets, version
   fields, and handle liveness, then retains backend resources into queue-owned
   imported structs.
-- **Replay:** the encode thread consumes imported records plus queue-local state such
-  as the active encoder, deferred clears, hazard filters, and allocator cursors.
-- **Encode:** `ArgumentEncodingContext`, PSO/DSS/shader caches, and the presenter
-  convert replay decisions into Metal commands.
+- **Replay:** the Replay/materialization worker consumes imported records plus
+  queue-local state and constructs one transactional queue-owned final
+  `ChunkSlot`.
+- **Encode:** the stable dedicated encode thread consumes the published final
+  slot; `ArgumentEncodingContext`, PSO/DSS/shader caches, and the presenter
+  convert its replay decisions into Metal commands. An optional fused cursor may
+  combine these two stages on the Replay worker, but that placement is not a
+  prerequisite for final-slot DOD closure.
 
 Replay/encode helpers should be deterministic functions where possible:
 

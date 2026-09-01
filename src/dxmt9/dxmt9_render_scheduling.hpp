@@ -5,6 +5,76 @@
 
 namespace dxmt9::render {
 
+// Final source representation and Metal execution placement are independent
+// policy axes.  The stable production topology materializes one queue-owned
+// final ChunkSlot on the Replay worker and lets the dedicated encode worker
+// consume it.  A future fused worker changes only placement; it does not
+// reopen the source representation or reintroduce a per-draw carrier.
+enum class FinalSourceStorage : std::uint8_t {
+  OwnedRawFinalChunkSlot,
+  CpuReadyArena,
+  CompactParallelSoA,
+  Count,
+};
+
+enum class EncodeExecutionPlacement : std::uint8_t {
+  DedicatedEncodeThread,
+  ReplayWorker,
+  ParallelCoordinator,
+  Count,
+};
+
+struct EncodeExecutionTopology {
+  FinalSourceStorage storage = FinalSourceStorage::OwnedRawFinalChunkSlot;
+  EncodeExecutionPlacement placement =
+      EncodeExecutionPlacement::DedicatedEncodeThread;
+
+  friend constexpr bool operator==(const EncodeExecutionTopology&,
+                                   const EncodeExecutionTopology&) = default;
+};
+
+inline constexpr EncodeExecutionTopology kStableOwnedRawSlotTopology{};
+
+constexpr bool encodeExecutionTopologyValid(
+    EncodeExecutionTopology topology) noexcept {
+  switch (topology.storage) {
+  case FinalSourceStorage::OwnedRawFinalChunkSlot:
+    return topology.placement ==
+               EncodeExecutionPlacement::DedicatedEncodeThread ||
+           topology.placement == EncodeExecutionPlacement::ReplayWorker;
+  case FinalSourceStorage::CpuReadyArena:
+    return topology.placement ==
+           EncodeExecutionPlacement::DedicatedEncodeThread;
+  case FinalSourceStorage::CompactParallelSoA:
+    return topology.placement ==
+           EncodeExecutionPlacement::ParallelCoordinator;
+  case FinalSourceStorage::Count:
+    return false;
+  }
+  return false;
+}
+
+// Only the stable topology is selectable by the current runtime.  Keeping
+// future combinations in the algebra makes their ownership requirements
+// explicit without creating an environment selector or a half-enabled lane.
+constexpr bool encodeExecutionTopologyImplemented(
+    EncodeExecutionTopology topology) noexcept {
+  return topology == kStableOwnedRawSlotTopology;
+}
+
+constexpr std::uint8_t dedicatedEncodeWorkerCount(
+    EncodeExecutionTopology topology) noexcept {
+  switch (topology.placement) {
+  case EncodeExecutionPlacement::DedicatedEncodeThread:
+  case EncodeExecutionPlacement::ParallelCoordinator:
+    return 1u;
+  case EncodeExecutionPlacement::ReplayWorker:
+  case EncodeExecutionPlacement::Count:
+    return 0u;
+  }
+  return 0u;
+}
+
 enum class PartitionExecutionMode : std::uint8_t {
   IdentitySerial,
   ExplicitSerial,

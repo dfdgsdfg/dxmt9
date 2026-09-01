@@ -119,6 +119,7 @@ of a micro-optimization itself.
 **R-BACK-42.13** Encode execution must resolve exactly one queue-immutable
 provider:
 
+- `SerialFinalSlotThread`;
 - `SerialDirectCursor`;
 - `LongSessionDirectCursor`; or
 - `ExplicitParallelCompactSoA`.
@@ -127,32 +128,37 @@ These values are alternatives, not independently composable feature axes. A
 queue must not combine long-session ownership with explicit parallel children,
 switch providers per source or pass, or enable one provider as a side effect of
 another selector. The planned canonical selector is
-`DXMT9_RENDER_EXECUTION_MODE=serial-direct|long-session-direct|parallel-compact-soa`.
+`DXMT9_RENDER_EXECUTION_MODE=serial-final-slot-thread|serial-direct|long-session-direct|parallel-compact-soa`.
 Under R-BACK-42.7 it must remain absent from the environment-variable mirror
 until the runtime implements the resolver. Existing source-delivery, partition,
 and segmentation selectors are migration/implementation controls, not the
 future provider algebra.
 
-**R-BACK-42.14** `SerialDirectCursor` is the stable specified default target.
-It must consume the immutable Unix-owned semantic source through a bounded,
-stateful cursor, resolve resources and lifetime qualifications in source order,
-and encode surviving commands without constructing a complete per-draw final
-SoA or a `DrawRunSubmission`-equivalent carrier. The cursor may retain bounded
-working replay state, exact layout metadata, source-qualified locators, and
-compact sidecars, but it must not retain source borrows beyond their issued
-lifetime. Until this provider is implemented and promoted, the current serial
-identity path remains the runtime fallback and must be reported as such rather
-than described as the target default.
+**R-BACK-42.14** `SerialFinalSlotThread` is the stable/current serial topology.
+It must consume the immutable Unix-owned semantic source through a bounded
+transactional replay projection, construct one queue-owned final `ChunkSlot`
+with `TransactionalChunkSlotAssembler`, and publish that complete source
+before the dedicated encode thread performs Metal effects. The build may retain
+bounded working replay state, exact layout metadata, source-qualified locators,
+and compact sidecars, but it must not create a per-draw
+`DrawRunSubmission`-equivalent carrier or a second semantic serialization.
+Reservation must precede effects and the final destination must be constructed
+at most once. The Replay worker remains separate from the PE/game thread.
 
-Replay and Metal encoding must execute serially on one Unix execution worker.
-For this provider the Replay worker is the encode coordinator: it must not
-publish complete draw work through a `ChunkSlot`/Ready handoff to a second
-dedicated encode thread. This rule removes an execution-stage boundary; it does
-not move Replay onto the PE/game thread and does not remove GPU finish or
-completion workers.
+The dedicated encode thread is an execution-placement policy, not a semantic
+owner: it consumes only the immutable final slot, preserves source order and
+completion identity, and cannot mutate PE state or source storage. Until the
+optional fused provider is implemented and promoted, this topology is the
+runtime serial baseline.
+
+**R-BACK-42.14a** `SerialDirectCursor` is an optional future topology. It
+consumes the same immutable source and replay relation without constructing a
+complete final draw SoA, and may perform Replay projection and serial Metal
+encoding on one Unix worker. Its absence must not block the stable
+`SerialFinalSlotThread` DOD closure or carrier retirement.
 
 **R-BACK-42.15** `LongSessionDirectCursor` is an `ExperimentalCandidate` whose
-fallback is `SerialDirectCursor`. It must use the same direct cursor and may
+fallback is `SerialFinalSlotThread`. It must use the same direct cursor and may
 extend only queue/command-buffer, active encoder, attachment, hazard, binding-
 shadow, action-ledger, and completion ownership across admitted source
 boundaries. It must not require or implicitly construct a final SoA. It uses
@@ -163,7 +169,7 @@ resource-lifetime, and locality gates plus positive end-to-end workload
 evidence.
 
 **R-BACK-42.16** `ExplicitParallelCompactSoA` is an
-`ExperimentalCandidate` whose fallback is `SerialDirectCursor`. Only after a
+`ExperimentalCandidate` whose fallback is `SerialFinalSlotThread`. Only after a
 complete sealed logical pass passes semantic, attachment, hazard, resource,
 first-draw, child-capacity, and economic proof may it materialize one bounded
 pass-local compact indexed SoA. That representation must store unique state,
@@ -193,17 +199,19 @@ and source-qualified attribution. Candidate materialization and proof cost is
 part of the promotion economy; an encoder-local speedup is insufficient.
 
 **R-BACK-42.18** Provider thread topology is part of the resolved policy and
-must be observable and regression tested. `SerialDirectCursor` and
-`LongSessionDirectCursor` resolve to one Unix replay/encode execution worker and
-zero additional encode workers. `ExplicitParallelCompactSoA` resolves to one
-Replay/materialization worker, one encode coordinator, and a bounded child pool
+must be observable and regression tested. `SerialFinalSlotThread` resolves to
+one Replay/materialization worker and one dedicated encode thread.
+`SerialDirectCursor` and `LongSessionDirectCursor` resolve to one Unix
+replay/encode execution worker and zero additional encode workers.
+`ExplicitParallelCompactSoA` resolves to one Replay/materialization worker, one
+encode coordinator, and a bounded child pool
 whose capacity is fixed at queue creation. PE production remains a distinct
 application-side stage in every mode. Finish, GPU completion, Presenter
 acquisition, shader compilation, and diagnostic sampler workers are outside
 this encode-execution count and must not be used to claim render parallelism.
-Queue lifecycle construction and teardown must therefore be able to run finish
-and completion workers when a direct provider resolves zero dedicated encode
-workers.
+Queue lifecycle construction and teardown must therefore run finish and
+completion workers independently of whether the selected topology has a
+dedicated encode thread.
 
 Requested/resolved observability must include execution-worker topology,
 direct-cursor sources, compact-SoA publications, serial-fallback passes, and
@@ -211,4 +219,4 @@ child tasks. Native topology pins must prove that direct modes invoke Replay
 projection and encode on the same owner with zero complete-draw Ready
 publications, that the parallel mode publishes exactly one compact pass only
 after acceptance, and that stop, poison, device loss, and completion release do
-not depend on a nonexistent direct-mode encode thread.
+not depend on the optional fused mode's lack of a dedicated encode thread.
