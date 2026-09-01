@@ -6,6 +6,7 @@
 #include "dxmt9_debug_alloc_guard.hpp"
 #include "dxmt9_debug_trace.hpp"
 #include "dxmt9_device.hpp"
+#include "dxmt9_direct_continuation.hpp"
 #include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_compat.hpp"
 #include "dxmt9_draw_encoder.hpp"
@@ -3874,6 +3875,9 @@ bool CommandQueue::CpuReadyArenaBuildLease::abortForFallback() noexcept {
                  CpuReadyArenaBatchAbortStatus::RolledBack;
   } else {
     queue_->abortCpuReadyArenaSource(ticket_, controlIndex_);
+    // A single-source abort is the terminal fail-stop path.  Only a batch
+    // lease has the transactional rollback contract needed by recursive
+    // pre-effect fallback.
   }
   queue_ = nullptr;
   ticket_ = {};
@@ -4070,12 +4074,24 @@ CommandQueue::beginDirectChunkSlotReplay(
       !payload || payload != control.payload) {
     return {.status = DirectChunkSlotReplayStatus::FailStopped};
   }
-  // ChunkSlot vectors own their final bytes. Reserving behind an already
-  // constructed prefix could relocate that prefix, which would turn this
-  // direct lane into a hidden final-to-final copy. Preserve ordinary source
-  // cadence by falling back before effects until a fresh writing slot exists.
-  if (!payload->commandsEmpty()) {
-    return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+  const bool populated = !payload->commandsEmpty();
+  bool continuation = false;
+  if (populated) {
+    perf::countDirectChunkSlotContinuationAttempted();
+    switch (core::directContinuationAdmission(*payload, capacity).disposition) {
+      case core::DirectContinuationAdmission::Admitted:
+        continuation = true;
+        perf::countDirectChunkSlotContinuationAdmitted();
+        break;
+      case core::DirectContinuationAdmission::CapacityRejected:
+        perf::countDirectChunkSlotContinuationCapacityRejected();
+        perf::countDirectChunkSlotContinuationPopulatedFallback();
+        return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+      case core::DirectContinuationAdmission::StructuralRejected:
+        perf::countDirectChunkSlotContinuationStructuralRejected();
+        perf::countDirectChunkSlotContinuationPopulatedFallback();
+        return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+    }
   }
   if (nextDirectChunkSlotBuildGeneration_ == 0) {
     requestSchedulingStopLocked();
@@ -4098,6 +4114,7 @@ CommandQueue::beginDirectChunkSlotReplay(
   context.controlIndex = controlIndex;
   context.initialBackBuffer = currentBackBuffer_;
   context.pendingBackBuffer = currentBackBuffer_;
+  context.continuation = continuation;
   context.assembler.emplace(*payload, capacity);
   const bool bound = context.assembler->good() &&
       context.assembler->bindOuter(
@@ -4314,6 +4331,7 @@ CommandQueue::commitDirectChunkSlotReplay(
     return failStop();
   }
   context->presentTokenStashed = false;
+  const bool continuationCommitted = context->continuation;
   activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
   directChunkSlotBuildContext_.reset();
   lock.unlock();
@@ -4327,6 +4345,9 @@ CommandQueue::commitDirectChunkSlotReplay(
     applyPublishedPresentBoundary(ticket.seqId, publishedPresentDesc,
                                   publishedPresentBoundaryPolicy);
     noteCopyMaterializationPublishedPresent();
+  }
+  if (continuationCommitted) {
+    perf::countDirectChunkSlotContinuationCommitted();
   }
   return DirectChunkSlotReplayStatus::Committed;
 }

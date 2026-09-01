@@ -678,6 +678,32 @@ Non-goals are a wire-version change, pointer-bearing ABI, cross-thread recorder
 callbacks, record fusion, changed chunk cadence, semantic state merging, or
 removal of the compatibility builder before all promotion gates pass.
 
+### 6.1.1 Bounded populated-slot Direct continuation
+
+The Direct ChunkSlot lane may continue an existing writing prefix only for a
+complete immutable plan containing non-UP Draw and APPLY_STATE/constants. The
+queue performs a pre-effect proof over the final SoA vectors, payload arena,
+and all uniform lookup heads/tails/next chains. Every required `size + extra`
+extent must fit in the existing vector capacity, and the lookup bucket shape
+must already be valid; otherwise the candidate is classified as either a
+capacity or structural rejection and the legacy path owns the raw exactly
+once. The proof therefore forbids hidden prefix relocation, lookup rebuild,
+and carrier materialization.
+
+Present, Clear, ordered control/query/readback, Update*, capture/trace,
+resource mutation, UP, and unsupported shapes are structural exclusions even
+when their byte counts would fit. `TriangleFan` is explicitly excluded because
+canonical replay decomposes it through the Legacy draw sink; the planner must
+reject it before opening a Direct transaction. Admission preserves the existing
+source, sequence, storage, and build-generation identity and uses the same assembler
+checkpoint/rollback and post-effect fail-stop contract as an empty-slot Direct
+source. This is a bounded, default-on ordinary Direct-lane mechanism, not
+evidence for broad or wild performance promotion. Its typed counters distinguish
+attempted, admitted, capacity-rejected, structural-rejected, committed, and populated
+fallback cases; admitted continuation must not emit
+`ReplaySubmissionCarrierCopy` or `ReplaySubmissionCarrierMaterialization`
+ledger events.
+
 ### 6.2 Fixed-role SegmentedTransportV1 and later ExactFixed Tape emission
 
 `SegmentedTransportV1` fixes one immutable semantic batch and three ordered

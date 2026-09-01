@@ -277,6 +277,12 @@ void recordDirectChunkSlotReplayDisposition(
     DirectChunkSlotReplayDisposition disposition,
     DirectChunkSlotReplayOutcome outcome, std::uint64_t records,
     std::uint64_t wireBytes);
+void countDirectChunkSlotContinuationAttempted();
+void countDirectChunkSlotContinuationAdmitted();
+void countDirectChunkSlotContinuationCapacityRejected();
+void countDirectChunkSlotContinuationStructuralRejected();
+void countDirectChunkSlotContinuationCommitted();
+void countDirectChunkSlotContinuationPopulatedFallback();
 void countRingArenaHeapFallback(RingArenaKind kind, std::uint64_t bytes);
 
 void countSubmitDraw();

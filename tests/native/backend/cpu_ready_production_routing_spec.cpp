@@ -1,12 +1,14 @@
 #include "device_c_common.hpp"
 #include "device_c_cpu_ready_plan.hpp"
 #include "device_c_chunk_replay.hpp"
+#include "device_c_cpu_ready_transfer.hpp"
 #include "device_c_replay_offload.hpp"
 #include "dxmt9/com.hpp"
 #include "dxmt9/copy_materialization_ledger.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9/device_c.h"
 #include "dxmt9/dxmt9_command_queue.hpp"
+#include "dxmt9/dxmt9_direct_continuation.hpp"
 #include "dxmt9/dxmt9_device.hpp"
 #include "d3d9_pe_wire_handle.hpp"
 
@@ -27,6 +29,13 @@
 #include <vector>
 
 namespace {
+
+static_assert(!std::is_copy_constructible_v<
+              dxmt9::d3d9::CpuReadySemanticTransfer>);
+static_assert(!std::is_copy_assignable_v<
+              dxmt9::d3d9::CpuReadySemanticTransfer>);
+static_assert(std::is_move_constructible_v<
+              dxmt9::d3d9::CpuReadySemanticTransfer>);
 
 void digestBytes(std::uint64_t& hash, const void* data,
                  std::size_t size) noexcept {
@@ -341,19 +350,61 @@ struct CommandQueueArenaLeaseTestAccess {
     return queue.slots_[*queue.writingSlot_].payload->commandCount();
   }
 
+  static void reserveDirectContinuationHeadroom(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    if (!queue.writingSlot_ || *queue.writingSlot_ >= queue.slots_.size() ||
+        !queue.slots_[*queue.writingSlot_].payload) {
+      return;
+    }
+    auto& slot = *queue.slots_[*queue.writingSlot_].payload;
+    constexpr std::size_t kDrawHeadroom = 16u;
+    slot.commandHeaders.reserve(kDrawHeadroom);
+    slot.drawHotStates.reserve(kDrawHeadroom);
+    slot.drawShaderLayouts.reserve(kDrawHeadroom);
+    slot.drawDebugSnapshots.reserve(kDrawHeadroom);
+    slot.drawPsoSubviews.reserve(kDrawHeadroom);
+    slot.drawUniformFixedPayloads.reserve(kDrawHeadroom);
+    slot.drawUniformVertexConstants.reserve(kDrawHeadroom);
+    slot.drawUniformPixelConstants.reserve(kDrawHeadroom);
+    slot.drawUniformPayloads.reserve(kDrawHeadroom);
+    slot.drawParams.reserve(kDrawHeadroom);
+    slot.drawRunRecords.reserve(kDrawHeadroom);
+    // The direct planner accounts for binding override/snapshot records in
+    // this byte arena even for non-UP draws. Leave a deliberately generous,
+    // explicit byte budget so the fixture proves the admission predicate
+    // rather than depending on vector growth heuristics.
+    slot.drawPayloadArena.reserve(1u << 20);
+    slot.drawUniformVertexConstantBytes.reserve(
+        kDrawHeadroom * sizeof(core::VertexShaderConstants));
+    slot.drawUniformPixelConstantBytes.reserve(
+        kDrawHeadroom * sizeof(core::PixelShaderConstants));
+    slot.reserveDrawUniformPayloadLookup(kDrawHeadroom);
+    slot.reserveDrawUniformStageLookup(
+        slot.drawUniformVertexConstants,
+        slot.drawUniformVertexConstantsLookupHeads,
+        slot.drawUniformVertexConstantsLookupTails,
+        slot.drawUniformVertexConstantsLookupNext, kDrawHeadroom);
+    slot.reserveDrawUniformStageLookup(
+        slot.drawUniformPixelConstants,
+        slot.drawUniformPixelConstantsLookupHeads,
+        slot.drawUniformPixelConstantsLookupTails,
+        slot.drawUniformPixelConstantsLookupNext, kDrawHeadroom);
+  }
+
   static bool stopped(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.stop_;
   }
 
-  static DrawDigest writingDrawDigest(CommandQueue& queue) {
+  static DrawDigest writingDrawDigest(CommandQueue& queue,
+                                      std::size_t commandIndex = 0u) {
     std::lock_guard lock(queue.mutex_);
     DrawDigest result{};
     if (!queue.writingSlot_) return result;
     const core::SourcePayloadView view(
         *queue.slots_[*queue.writingSlot_].payload);
-    if (view.commandCount() == 0u) return result;
-    const auto& command = view.commandAt(0u).command;
+    if (commandIndex >= view.commandCount()) return result;
+    const auto& command = view.commandAt(commandIndex).command;
     constexpr std::uint64_t offset = 1469598103934665603ull;
     result.record = result.pso = result.hot = result.params = result.payload =
         offset;
@@ -571,6 +622,99 @@ void check(bool condition, std::string_view message) {
 
 std::size_t alignUp(std::size_t value, std::size_t alignment) {
   return (value + alignment - 1u) & ~(alignment - 1u);
+}
+
+SourcePayloadCapacity oneDrawContinuationCapacity(
+    std::size_t drawCount = 1u) {
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = drawCount;
+  capacity.drawHotStates = drawCount;
+  capacity.drawShaderLayouts = drawCount;
+  capacity.drawDebugSnapshots = drawCount;
+  capacity.drawPsoSubviews = drawCount;
+  capacity.drawUniformFixedPayloads = drawCount;
+  capacity.drawUniformVertexConstants = drawCount;
+  capacity.drawUniformVertexConstantBytes =
+      drawCount * sizeof(VertexShaderConstants);
+  capacity.drawUniformPixelConstants = drawCount;
+  capacity.drawUniformPixelConstantBytes =
+      drawCount * sizeof(PixelShaderConstants);
+  capacity.drawUniformPayloads = drawCount;
+  const auto buckets = detail::chunkSlotUniformLookupBucketCount(drawCount);
+  capacity.drawUniformPayloadLookupHeads = buckets;
+  capacity.drawUniformPayloadLookupTails = buckets;
+  capacity.drawUniformPayloadLookupNext = drawCount;
+  capacity.drawUniformVertexConstantsLookupHeads = buckets;
+  capacity.drawUniformVertexConstantsLookupTails = buckets;
+  capacity.drawUniformVertexConstantsLookupNext = drawCount;
+  capacity.drawUniformPixelConstantsLookupHeads = buckets;
+  capacity.drawUniformPixelConstantsLookupTails = buckets;
+  capacity.drawUniformPixelConstantsLookupNext = drawCount;
+  capacity.drawParams = drawCount;
+  capacity.drawRunRecords = drawCount;
+  return capacity;
+}
+
+ChunkSlot validDirectContinuationSlot() {
+  ChunkSlot slot;
+  constexpr std::size_t kCapacity = 2u;
+  slot.commandHeaders.reserve(kCapacity);
+  slot.drawHotStates.reserve(kCapacity);
+  slot.drawShaderLayouts.reserve(kCapacity);
+  slot.drawDebugSnapshots.reserve(kCapacity);
+  slot.drawPsoSubviews.reserve(kCapacity);
+  slot.drawUniformFixedPayloads.reserve(kCapacity);
+  slot.drawUniformVertexConstants.reserve(kCapacity);
+  slot.drawUniformVertexConstantBytes.reserve(
+      kCapacity * sizeof(VertexShaderConstants));
+  slot.drawUniformPixelConstants.reserve(kCapacity);
+  slot.drawUniformPixelConstantBytes.reserve(
+      kCapacity * sizeof(PixelShaderConstants));
+  slot.drawUniformPayloads.reserve(kCapacity);
+  slot.drawParams.reserve(kCapacity);
+  slot.drawRunRecords.reserve(kCapacity);
+  slot.commandHeaders.push_back({
+      MetalCommandKind::DrawRun,
+      CommandPayloadIndex::fromU32(0u),
+  });
+  slot.drawHotStates.resize(1u);
+  slot.drawShaderLayouts.resize(1u);
+  slot.drawDebugSnapshots.resize(1u);
+  slot.drawPsoSubviews.resize(1u);
+  slot.drawUniformFixedPayloads.resize(1u);
+  slot.drawUniformVertexConstants.resize(1u);
+  slot.drawUniformPixelConstants.resize(1u);
+  slot.drawUniformPayloads.resize(1u);
+  slot.drawParams.resize(1u);
+  slot.drawRunRecords.push_back({
+      .stateIndex = 0u,
+      .firstParam = 0u,
+      .paramCount = 1u,
+  });
+  const auto buckets = detail::chunkSlotUniformLookupBucketCount(1u);
+  slot.drawUniformPayloadLookupHeads.assign(
+      buckets, detail::kChunkSlotInvalidUniformIndex);
+  slot.drawUniformPayloadLookupTails.assign(
+      buckets, detail::kChunkSlotInvalidUniformIndex);
+  slot.drawUniformPayloadLookupNext.reserve(2u);
+  slot.drawUniformPayloadLookupNext.assign(
+      1u, detail::kChunkSlotInvalidUniformIndex);
+  slot.drawUniformVertexConstantsLookupHeads.assign(
+      buckets, detail::kChunkSlotInvalidUniformIndex);
+  slot.drawUniformVertexConstantsLookupTails.assign(
+      buckets, detail::kChunkSlotInvalidUniformIndex);
+  slot.drawUniformVertexConstantsLookupNext.reserve(2u);
+  slot.drawUniformVertexConstantsLookupNext.assign(
+      1u, detail::kChunkSlotInvalidUniformIndex);
+  slot.drawUniformPixelConstantsLookupHeads.assign(
+      buckets, detail::kChunkSlotInvalidUniformIndex);
+  slot.drawUniformPixelConstantsLookupTails.assign(
+      buckets, detail::kChunkSlotInvalidUniformIndex);
+  slot.drawUniformPixelConstantsLookupNext.reserve(2u);
+  slot.drawUniformPixelConstantsLookupNext.assign(
+      1u, detail::kChunkSlotInvalidUniformIndex);
+  slot.drawPayloadArena.reserve(1024u);
+  return slot;
 }
 
 template <typename T>
@@ -1026,6 +1170,141 @@ void directRawPublishesAndCompletesArenaSource() {
   check(dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(
             fixture.routing->queue_) == 0,
         "completed Direct source must release Tape residency");
+}
+
+void semanticTransferOwnsArenaTransactionUntilSettlement() {
+  RuntimeFixture fixture;
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1u;
+  capacity.clearRecords = 1u;
+  const auto limits = fixture.routing->queue_.cpuReadyArenaPlanLimits();
+  const auto segment = makeSourcePayloadLayout(
+      capacity, limits.pageSize, limits.maxOrdinaryPagesPerSegment);
+  check(segment.has_value(), "transfer fixture segment must build");
+  const auto layout = makeArenaSourcePayloadLayout(
+      std::array{*segment}, limits.pageSize, limits.maxPagesPerSource);
+  check(layout.has_value(), "transfer fixture layout must build");
+
+  auto raw = makeRaw(makeWireFixture(std::array{clearRecord()}), 77u);
+  const auto originalBytes = raw.recordBlob;
+  auto begin = fixture.routing->queue_.beginCpuReadyArenaSource(77u, *layout);
+  check(begin.has_value(), "transfer fixture must reserve Tape storage");
+  dxmt9::d3d9::CpuReadySemanticTransfer transfer(raw, std::move(*begin));
+  check(transfer.stage() ==
+            dxmt9::d3d9::CpuReadySemanticTransferStage::Reserved &&
+            transfer.identity().rawOrdinal == 77u &&
+            transfer.identity().seqId == 1u && raw.recordBlob.empty(),
+        "transfer must move Raw ownership into the reserved transaction");
+  check(transfer.adopt() && transfer.markEmitted(),
+        "transfer must enforce Reserve-Adopt-Emit order");
+  fixture.routing->queue_.submitClear(ClearDesc{});
+  check(transfer.publish() ==
+            dxmt9::CommandQueue::CpuReadyArenaPublishStatus::Published &&
+            transfer.stage() ==
+                dxmt9::d3d9::CpuReadySemanticTransferStage::Published,
+        "transfer must publish the emitted Tape source exactly once");
+  transfer.restoreToSource();
+  check(raw.recordBlob == originalBytes,
+        "published transfer must restore worker Raw ownership without copy");
+  const auto completion = dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+      fixture.routing->queue_);
+  check(completion.arena && completion.clear && completion.reclaimed,
+        "published transfer must reach normal completion and reclaim");
+}
+
+void semanticTransferPreEffectAbortRestoresOwner() {
+  RuntimeFixture fixture;
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1u;
+  capacity.clearRecords = 1u;
+  const auto limits = fixture.routing->queue_.cpuReadyArenaPlanLimits();
+  const auto segment = makeSourcePayloadLayout(
+      capacity, limits.pageSize, limits.maxOrdinaryPagesPerSegment);
+  check(segment.has_value(), "abort fixture segment must build");
+  const auto layout = makeArenaSourcePayloadLayout(
+      std::array{*segment}, limits.pageSize, limits.maxPagesPerSource);
+  check(layout.has_value(), "abort fixture layout must build");
+  auto raw = makeRaw(makeWireFixture(std::array{clearRecord()}), 78u);
+  const auto originalBytes = raw.recordBlob;
+  auto begin = fixture.routing->queue_.beginCpuReadyArenaSource(78u, *layout);
+  check(begin.has_value(), "abort fixture must reserve Tape storage");
+  dxmt9::d3d9::CpuReadySemanticTransfer transfer(raw, std::move(*begin));
+  check(transfer.adopt() && !transfer.abortForFallback() &&
+            transfer.stage() ==
+                dxmt9::d3d9::CpuReadySemanticTransferStage::FailStopped &&
+            transfer.failure() ==
+                dxmt9::d3d9::CpuReadySemanticTransferFailure::AbortFailed &&
+            fixture.routing->queue_.cpuReadyArenaPoisoned(),
+        "single-source abort must remain terminal rather than claim rollback");
+  transfer.restoreToSource();
+  check(raw.recordBlob == originalBytes &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+                fixture.routing->queue_) == 0u,
+        "terminal abort must return Raw after releasing Tape storage");
+}
+
+void semanticTransferBatchAbortRestoresOwner() {
+  RuntimeFixture fixture;
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1u;
+  capacity.clearRecords = 1u;
+  const auto limits = fixture.routing->queue_.cpuReadyArenaPlanLimits();
+  const auto segment = makeSourcePayloadLayout(
+      capacity, limits.pageSize, limits.maxOrdinaryPagesPerSegment);
+  check(segment.has_value(), "batch abort fixture segment must build");
+  const auto layout = makeArenaSourcePayloadLayout(
+      std::array{*segment}, limits.pageSize, limits.maxPagesPerSource);
+  check(layout.has_value(), "batch abort fixture layout must build");
+  const std::array layouts{*layout, *layout};
+  auto raw = makeRaw(
+      makeWireFixture(std::array{clearRecord(), clearRecord()}), 80u);
+  const auto originalBytes = raw.recordBlob;
+  auto begin = fixture.routing->queue_.beginCpuReadyArenaSources(80u, layouts);
+  check(begin.has_value(), "batch abort fixture must reserve Tape storage");
+  dxmt9::d3d9::CpuReadySemanticTransfer transfer(raw, std::move(*begin));
+  check(transfer.adopt() && transfer.abortForFallback() &&
+            transfer.stage() ==
+                dxmt9::d3d9::CpuReadySemanticTransferStage::Aborted,
+        "batch pre-effect abort must be recoverable");
+  transfer.restoreToSource();
+  check(raw.recordBlob == originalBytes &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+                fixture.routing->queue_) == 0u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
+                fixture.routing->queue_) == 1u &&
+            !fixture.routing->queue_.cpuReadyArenaPoisoned(),
+        "batch abort must restore Raw, cursors, and an unpoisoned queue");
+}
+
+void semanticTransferPostEffectFailureIsTerminal() {
+  RuntimeFixture fixture;
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1u;
+  capacity.clearRecords = 1u;
+  const auto limits = fixture.routing->queue_.cpuReadyArenaPlanLimits();
+  const auto segment = makeSourcePayloadLayout(
+      capacity, limits.pageSize, limits.maxOrdinaryPagesPerSegment);
+  check(segment.has_value(), "failure fixture segment must build");
+  const auto layout = makeArenaSourcePayloadLayout(
+      std::array{*segment}, limits.pageSize, limits.maxPagesPerSource);
+  check(layout.has_value(), "failure fixture layout must build");
+  auto raw = makeRaw(makeWireFixture(std::array{clearRecord()}), 79u);
+  auto begin = fixture.routing->queue_.beginCpuReadyArenaSource(79u, *layout);
+  check(begin.has_value(), "failure fixture must reserve Tape storage");
+  dxmt9::d3d9::CpuReadySemanticTransfer transfer(raw, std::move(*begin));
+  check(transfer.adopt(), "failure fixture must adopt before effects");
+  fixture.routing->queue_.submitClear(ClearDesc{});
+  check(transfer.markEmitted(), "failure fixture must record emission");
+  dxmt9::CommandQueueArenaLeaseTestAccess::forceNextPublicationFailure(
+      fixture.routing->queue_);
+  check(transfer.publish() ==
+            dxmt9::CommandQueue::CpuReadyArenaPublishStatus::FailStopped &&
+            transfer.stage() ==
+                dxmt9::d3d9::CpuReadySemanticTransferStage::FailStopped &&
+            transfer.failure() ==
+                dxmt9::d3d9::CpuReadySemanticTransferFailure::PublishFailStopped &&
+            fixture.routing->queue_.cpuReadyArenaPoisoned(),
+        "post-effect publication failure must be typed and terminal");
 }
 
 void ordinarySegmentConfiguredRawKeepsOneSourceAt512Pages() {
@@ -1967,6 +2246,368 @@ void directAdmissionRejectionPreservesLegacyDrawBatchGrouping() {
   dxmt9c_buffer_release(secondBuffer);
 }
 
+void populatedSlotDrawApplyDrawUsesCarrierFreeContinuation() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr, "continuation fixture buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+  dxmt9::core::CopyMaterializationLedger unixLedger;
+  dxmt9::core::ScopedCopyMaterializationLedger observeUnix(
+      dxmt9::core::CopyMaterializationOwner::Unix, unixLedger);
+
+  // Seed the compatibility writer with one draw. The ordinary append path
+  // grows all final SoA vectors with headroom; the following validated raw is
+  // the first production-shaped opportunity to append without a carrier.
+  const std::array seedDraws{DrawParam{}};
+  const std::array seedPayloads{DrawParamPayloadView{}};
+  fixture.routing->queue_.submitDrawRun(
+      CanonicalDrawState{}, DrawUniformPayload{}, seedDraws, seedPayloads);
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+            fixture.routing->queue_) == 1u,
+        "continuation fixture must retain a populated DrawRun prefix");
+  dxmt9::CommandQueueArenaLeaseTestAccess::reserveDirectContinuationHeadroom(
+      fixture.routing->queue_);
+
+  const std::array records{
+      drawRecord(identity, 0u),
+      applyRenderStateRecord(RS_TEXTURE_FACTOR, 0x01020304u),
+      drawRecord(identity, 1u),
+      applyRenderStateRecord(RS_TEXTURE_FACTOR, 0u),
+      drawRecord(identity, 2u),
+  };
+  auto raw = makeRaw(makeWireFixture(records), 74u, false, &registry);
+  raw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
+            fixture.routing->drawCalls == 3u &&
+            fixture.routing->drawBatchCalls == 0u,
+        "populated Draw/ApplyState/Draw/ApplyState/Draw must use Direct continuation");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+            fixture.routing->queue_) == 4u,
+        "continuation must preserve the existing prefix and append A→B→A draw runs");
+  const auto directA = dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
+      fixture.routing->queue_, 1u);
+  const auto directB = dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
+      fixture.routing->queue_, 2u);
+  const auto directA2 = dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
+      fixture.routing->queue_, 3u);
+
+  fixture.routing->present(SwapDesc{});
+  const auto completion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+  check(completion.dequeued && completion.commandCount == 5u &&
+            completion.submitted && completion.completed && completion.reclaimed,
+        "continuation completion must retain one ordered prefix identity");
+  const auto carrierCopy = unixLedger.snapshot(
+      dxmt9::core::CopyMaterializationClass::ReplaySubmissionCarrierCopy);
+  const auto carrierMaterialization = unixLedger.snapshot(
+      dxmt9::core::CopyMaterializationClass::ReplaySubmissionCarrierMaterialization);
+  check(carrierCopy.calls == 0u && carrierCopy.semanticCalls == 0u &&
+            carrierMaterialization.calls == 0u &&
+            carrierMaterialization.semanticCalls == 0u,
+        "admitted continuation must not materialize or copy a replay carrier");
+
+  RuntimeFixture legacyFixture(/*rejectAfterClear=*/false,
+                               /*segmentSerial=*/false,
+                               /*directChunkSlot=*/false);
+  auto* legacyBuffer = dxmt9c_device_create_vertex_buffer(
+      legacyFixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(legacyBuffer != nullptr, "A-to-B-to-A Legacy oracle buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry legacyRegistry;
+  const auto legacyIdentity = legacyRegistry.insert(
+      D9C_CHUNK_HANDLE_KIND_BUFFER, legacyBuffer);
+  const std::array legacySeedDraws{DrawParam{}};
+  const std::array legacySeedPayloads{DrawParamPayloadView{}};
+  legacyFixture.routing->queue_.submitDrawRun(
+      CanonicalDrawState{}, DrawUniformPayload{}, legacySeedDraws,
+      legacySeedPayloads);
+  auto legacyRaw = makeRaw(
+      makeWireFixture(std::array{
+          drawRecord(legacyIdentity, 0u),
+          applyRenderStateRecord(RS_TEXTURE_FACTOR, 0x01020304u),
+          drawRecord(legacyIdentity, 1u),
+          applyRenderStateRecord(RS_TEXTURE_FACTOR, 0u),
+          drawRecord(legacyIdentity, 2u),
+      }),
+      74u, false, &legacyRegistry);
+  legacyRaw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(legacyFixture.cDevice.get(), legacyRaw) ==
+                D3D_OK &&
+            legacyFixture.routing->drawBatchCalls == 3u,
+        "A-to-B-to-A Legacy oracle must preserve three state-separated batches");
+  const auto legacyA = dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
+      legacyFixture.routing->queue_, 1u);
+  const auto legacyB = dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
+      legacyFixture.routing->queue_, 2u);
+  const auto legacyA2 = dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
+      legacyFixture.routing->queue_, 3u);
+  legacyFixture.routing->present(SwapDesc{});
+  const auto legacyCompletion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          legacyFixture.routing->queue_);
+  check(legacyCompletion.dequeued && legacyCompletion.commandCount == 5u &&
+            legacyCompletion.submitted && legacyCompletion.completed &&
+            legacyCompletion.reclaimed &&
+            directA.hot == legacyA.hot && directA.pso == legacyA.pso &&
+            directB.hot == legacyB.hot && directB.pso == legacyB.pso &&
+            directA2.hot == legacyA2.hot && directA2.pso == legacyA2.pso,
+        "Direct continuation and Legacy A-to-B-to-A state semantics must match");
+  dxmt9::d3d9::releaseRetainedWrappers(legacyRaw);
+  dxmt9c_buffer_release(legacyBuffer);
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(buffer);
+}
+
+void populatedSlotInsufficientCapacityFallsBackBeforeEffects() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr, "capacity fallback fixture buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+
+  // The legacy append reserves exactly this seven-draw prefix. A two-draw
+  // continuation cannot fit all final vectors, so admission must reject before
+  // the first source semantic effect and let one Legacy batch own the raw.
+  const std::array seedDraws{DrawParam{}, DrawParam{}, DrawParam{}, DrawParam{},
+                             DrawParam{}, DrawParam{}, DrawParam{}};
+  const std::array seedPayloads{
+      DrawParamPayloadView{}, DrawParamPayloadView{}, DrawParamPayloadView{},
+      DrawParamPayloadView{}, DrawParamPayloadView{}, DrawParamPayloadView{},
+      DrawParamPayloadView{}};
+  fixture.routing->queue_.submitDrawRun(
+      CanonicalDrawState{}, DrawUniformPayload{}, seedDraws, seedPayloads);
+  const std::array records{drawRecord(identity, 0u), drawRecord(identity, 1u)};
+  auto raw = makeRaw(makeWireFixture(records), 75u, false, &registry);
+  raw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
+            fixture.routing->drawCalls == 2u &&
+            fixture.routing->drawBatchCalls == 1u &&
+            fixture.routing->lastDrawBatchSize == 2u,
+        "insufficient continuation capacity must use one Legacy batch");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+            fixture.routing->queue_) == 2u,
+        "capacity rejection must preserve the populated prefix unchanged before Legacy append");
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(buffer);
+}
+
+void populatedContinuationCommitFailureIsTerminalWithoutRetry() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr, "continuation failure fixture buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+  const std::array seedDraws{DrawParam{}};
+  const std::array seedPayloads{DrawParamPayloadView{}};
+  fixture.routing->queue_.submitDrawRun(
+      CanonicalDrawState{}, DrawUniformPayload{}, seedDraws, seedPayloads);
+  dxmt9::CommandQueueArenaLeaseTestAccess::reserveDirectContinuationHeadroom(
+      fixture.routing->queue_);
+  const std::array records{
+      drawRecord(identity, 0u),
+      applyRenderStateRecord(RS_TEXTURE_FACTOR, 0x01020304u),
+      drawRecord(identity, 1u),
+  };
+  auto raw = makeRaw(makeWireFixture(records), 76u, false, &registry);
+  raw.cpuReadyTapePlanningEnabled = false;
+  dxmt9::CommandQueueArenaLeaseTestAccess::forceNextDirectChunkSlotCommitFailure(
+      fixture.routing->queue_);
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) != D3D_OK &&
+            fixture.routing->drawCalls == 2u &&
+            fixture.routing->drawBatchCalls == 0u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::stopped(
+                fixture.routing->queue_),
+        "continuation commit failure must fail-stop after one semantic replay");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+            fixture.routing->queue_) == 3u,
+        "continuation commit failure must retain the applied prefix without Legacy retry");
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(buffer);
+}
+
+void populatedSlotPresentTailIsExcludedFromContinuation() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr, "present-tail exclusion fixture buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+  const std::array seedDraws{DrawParam{}};
+  const std::array seedPayloads{DrawParamPayloadView{}};
+  fixture.routing->queue_.submitDrawRun(
+      CanonicalDrawState{}, DrawUniformPayload{}, seedDraws, seedPayloads);
+  const std::array records{drawRecord(identity), presentRecord()};
+  auto raw = makeRaw(makeWireFixture(records), 77u, false, &registry);
+  raw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
+            fixture.routing->drawCalls == 1u &&
+            fixture.routing->drawBatchCalls == 1u &&
+            fixture.routing->presentCalls == 1u,
+        "populated Direct continuation must exclude a Present tail before effects");
+  check(!dxmt9::CommandQueueArenaLeaseTestAccess::stopped(
+            fixture.routing->queue_),
+        "Present-tail exclusion must remain a recoverable Legacy fallback");
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(buffer);
+}
+
+void directContinuationAdmissionMatchesShapeAndCapacityTruthTable() {
+  auto slot = validDirectContinuationSlot();
+  const auto valid = oneDrawContinuationCapacity();
+  const auto admitted = directContinuationAdmission(slot, valid);
+  check(admitted.admitted(),
+        "shared continuation predicate must admit a complete reserved draw shape");
+
+  auto malformed = valid;
+  malformed.drawRunRecords = 0u;
+  const auto malformedResult = directContinuationAdmission(slot, malformed);
+  check(malformedResult.structuralRejected(),
+        "missing DrawRun SoA row must be a structural rejection");
+
+  auto clear = valid;
+  clear.clearRecords = 1u;
+  const auto clearResult = directContinuationAdmission(slot, clear);
+  check(clearResult.structuralRejected(),
+        "Clear must remain outside populated render continuation");
+
+  auto readback = valid;
+  readback.readbackRecords = 1u;
+  const auto readbackResult = directContinuationAdmission(slot, readback);
+  check(readbackResult.structuralRejected(),
+        "Readback must remain outside populated render continuation");
+
+  auto resourceMutation = valid;
+  resourceMutation.surfaceCopyRecords = 1u;
+  const auto resourceMutationResult =
+      directContinuationAdmission(slot, resourceMutation);
+  check(resourceMutationResult.structuralRejected(),
+        "resource mutation must remain outside populated render continuation");
+
+  const auto capacityRejected =
+      directContinuationAdmission(slot, oneDrawContinuationCapacity(1000u));
+  check(capacityRejected.capacityRejected(),
+        "a complete shape without final-vector capacity must reject by capacity");
+}
+
+void triangleFanNeverEntersDirectReplay() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr, "TriangleFan direct exclusion buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+  const auto fanRecord = [&](std::uint32_t handleIndex = 0u) {
+    auto record = drawRecord(identity, handleIndex);
+    D9CCommandChunkWireDrawHeader header{};
+    std::memcpy(&header, record.payload.data(), sizeof(header));
+    header.primitiveType = 6u;
+    std::memcpy(record.payload.data(), &header, sizeof(header));
+    return record;
+  };
+  const auto fan = fanRecord();
+  const std::array records{fan};
+  const auto wire = makeWireFixture(records);
+  dxmt9::d3d9::ImportedChunkView imported;
+  check(validateCommandChunk(wire.bytes, wire.envelope, &imported).valid(),
+        "TriangleFan direct exclusion fixture validates");
+  const auto plan = dxmt9::d3d9::planCpuReadyChunk(imported, 80u);
+  check(plan.directArenaCandidate() &&
+            dxmt9::d3d9::classifyDirectChunkSlotReplay(
+                imported, plan, /*captureOrTrace=*/false) ==
+                dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyUnsupported,
+        "TriangleFan must fail closed to Legacy before Direct admission");
+
+  std::vector<RecordSpec> oversizedRecords;
+  oversizedRecords.reserve(640u);
+  for (std::uint32_t i = 0; i < 640u; ++i) {
+    oversizedRecords.push_back(fanRecord(i));
+  }
+  const auto oversizedWire = makeWireFixture(oversizedRecords);
+  dxmt9::d3d9::ImportedChunkView oversizedImported;
+  check(validateCommandChunk(oversizedWire.bytes, oversizedWire.envelope,
+                             &oversizedImported).valid(),
+        "oversized TriangleFan exclusion fixture validates");
+  const auto oversizedPlan =
+      dxmt9::d3d9::planCpuReadyChunk(oversizedImported, 81u);
+  check(oversizedPlan.reason == dxmt9::d3d9::ReplayReason::Oversize &&
+            oversizedPlan.directChunkSlotCandidate() &&
+            dxmt9::d3d9::classifyDirectChunkSlotReplay(
+                oversizedImported, oversizedPlan,
+                /*captureOrTrace=*/false) ==
+                dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyOversized,
+        "oversized TriangleFan must fail closed before Direct admission");
+
+  const std::array presentTailRecords{
+      clearRecord(), fan,
+      applyRenderStateRecord(RS_TEXTURE_FACTOR, 0x01020304u),
+      drawRecord(identity, 1u), presentRecord()};
+  const auto presentTailWire = makeWireFixture(presentTailRecords);
+  dxmt9::d3d9::ImportedChunkView presentTailImported;
+  check(validateCommandChunk(presentTailWire.bytes, presentTailWire.envelope,
+                             &presentTailImported).valid(),
+        "Present-tail TriangleFan exclusion fixture validates");
+  const std::array supportedPresentTailRecords{
+      clearRecord(), drawRecord(identity, 0u),
+      applyRenderStateRecord(RS_TEXTURE_FACTOR, 0x01020304u),
+      drawRecord(identity, 1u), presentRecord()};
+  const auto supportedPresentTailWire =
+      makeWireFixture(supportedPresentTailRecords);
+  dxmt9::d3d9::ImportedChunkView supportedPresentTailImported;
+  check(validateCommandChunk(supportedPresentTailWire.bytes,
+                             supportedPresentTailWire.envelope,
+                             &supportedPresentTailImported).valid(),
+        "supported Present-tail classifier fixture validates");
+  const auto presentTailPlan = dxmt9::d3d9::planCpuReadyChunk(
+      supportedPresentTailImported, 82u);
+  const auto supportedPresentTailDisposition =
+      dxmt9::d3d9::classifyDirectChunkSlotReplay(
+          supportedPresentTailImported, presentTailPlan,
+          /*captureOrTrace=*/false);
+  check(supportedPresentTailDisposition ==
+            dxmt9::d3d9::DirectChunkSlotReplayDisposition::DirectWithPresentTail,
+        "supported Present-tail classifier fixture must select Direct: " +
+            std::to_string(
+                static_cast<unsigned>(supportedPresentTailDisposition)));
+  const auto presentTailDisposition =
+      dxmt9::d3d9::classifyDirectChunkSlotReplay(
+          presentTailImported, presentTailPlan, /*captureOrTrace=*/false);
+  check(presentTailDisposition ==
+            dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyUnsupported,
+        "Present-tail TriangleFan must fail closed before Direct admission: " +
+            std::to_string(static_cast<unsigned>(presentTailDisposition)));
+
+  const std::array seedDraws{DrawParam{}};
+  const std::array seedPayloads{DrawParamPayloadView{}};
+  fixture.routing->queue_.submitDrawRun(
+      CanonicalDrawState{}, DrawUniformPayload{}, seedDraws, seedPayloads);
+  dxmt9::CommandQueueArenaLeaseTestAccess::reserveDirectContinuationHeadroom(
+      fixture.routing->queue_);
+  auto raw = makeRaw(makeWireFixture(records), 80u, false, &registry);
+  raw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
+            fixture.routing->drawCalls == 1u &&
+            !dxmt9::CommandQueueArenaLeaseTestAccess::stopped(
+                fixture.routing->queue_),
+        "populated-slot TriangleFan must replay once through Legacy without "
+        "poisoning Direct continuation");
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(buffer);
+}
+
 void ordinaryChunkSlotSameRawCommitFailureDoesNotRetryLegacy() {
   RuntimeFixture fixture(/*rejectAfterClear=*/false,
                          /*segmentSerial=*/false,
@@ -2381,6 +3022,10 @@ int main() {
   try {
     productionGateIsExplicitAndDefaultOff();
     directRawPublishesAndCompletesArenaSource();
+    semanticTransferOwnsArenaTransactionUntilSettlement();
+    semanticTransferPreEffectAbortRestoresOwner();
+    semanticTransferBatchAbortRestoresOwner();
+    semanticTransferPostEffectFailureIsTerminal();
     ordinarySegmentConfiguredRawKeepsOneSourceAt512Pages();
     capturedLargeRawPublishesTwoAuthenticatedSources();
     mixedSourceLeaseSelectionPreservesSourceOrder();
@@ -2394,6 +3039,12 @@ int main() {
     ordinarySingleSourceSegmentedAggregateUsesDirectConstruction();
     ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics();
     directAdmissionRejectionPreservesLegacyDrawBatchGrouping();
+    populatedSlotDrawApplyDrawUsesCarrierFreeContinuation();
+    populatedSlotInsufficientCapacityFallsBackBeforeEffects();
+    populatedContinuationCommitFailureIsTerminalWithoutRetry();
+    populatedSlotPresentTailIsExcludedFromContinuation();
+    directContinuationAdmissionMatchesShapeAndCapacityTruthTable();
+    triangleFanNeverEntersDirectReplay();
     ordinaryChunkSlotSameRawCommitFailureDoesNotRetryLegacy();
     ordinaryOversizedDrawSourceUsesCarrierFreeLifecycle();
     directChunkSlotRollbackAndPostEffectFailureAreFailSafe();

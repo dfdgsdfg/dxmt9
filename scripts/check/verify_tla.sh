@@ -18,8 +18,10 @@ normal_models=(
   CpuPipelineLifecycle
   CpuPipelineOwnership
   CpuReadyActiveHeadLookahead
+  CpuReadySemanticTransfer
   CpuReadySessionProgress
   DceChunkLookahead
+  DirectChunkSlotContinuation
   DrawPsoIdentity
   DrawableToken
   EncodeSchedulingProgress
@@ -55,10 +57,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=43
+expected_normal_count=45
 expected_progress_count=1
 expected_counterexample_count=73
-expected_cfg_count=117
+expected_cfg_count=119
 progress_model=CpuPipelineLifecycle
 progress_cfg_name="$progress_model.progress.cfg"
 

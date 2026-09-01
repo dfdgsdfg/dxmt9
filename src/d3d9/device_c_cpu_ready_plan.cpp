@@ -44,6 +44,29 @@ bool addAlignedBytes(std::size_t& target,
   return true;
 }
 
+// The direct replay sink can only append ordinary point/line/triangle-list
+// and triangle-strip draws through submitDirectReplayDrawFromCurrentState.
+// TriangleFan is
+// intentionally handled by the legacy draw path (the sink's record-level
+// batch predicate rejects it), so allowing it into a Direct ChunkSlot would
+// silently call submitDrawRun while a direct transaction is active.  That
+// marks the transaction failed without returning an HRESULT and turns the
+// later commit into a misleading D3DERR_INVALIDCALL. Keep planner admission
+// closed over the same primitive boundary as the replay sink.
+bool directDrawRecordSupported(const ImportedChunkView& imported,
+                               std::size_t recordIndex) noexcept {
+  const auto type = imported.records[recordIndex].type;
+  switch (type) {
+  case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+  case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+    return static_cast<core::PrimitiveType>(
+               imported.record(recordIndex).drawHeader.primitiveType - 1u) !=
+           core::PrimitiveType::TriangleFan;
+  default:
+    return true;
+  }
+}
+
 template <typename T>
 bool loadFixed(const ImportedRecordView& record, T& out) noexcept {
   if (record.payload.size() < sizeof(T)) {
@@ -711,7 +734,11 @@ DirectChunkSlotReplayDisposition classifyDirectChunkSlotReplay(
   if (plan.reason == ReplayReason::Oversize) {
     if (plan.directChunkSlotCandidate()) {
       bool sawDraw = false;
-      for (const auto& record : imported.records) {
+      for (std::size_t i = 0; i < imported.records.size(); ++i) {
+        const auto& record = imported.records[i];
+        if (!directDrawRecordSupported(imported, i)) {
+          return DirectChunkSlotReplayDisposition::LegacyOversized;
+        }
         switch (record.type) {
         case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
         case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
@@ -744,6 +771,9 @@ DirectChunkSlotReplayDisposition classifyDirectChunkSlotReplay(
     bool sawDraw = false;
     bool sawClear = false;
     for (std::size_t i = 0; i + 1u < imported.records.size(); ++i) {
+      if (!directDrawRecordSupported(imported, i)) {
+        return false;
+      }
       switch (imported.records[i].type) {
       case D9C_COMMAND_RECORD_CLEAR:
         if (i != 0u || sawClear) return false;
@@ -788,6 +818,9 @@ DirectChunkSlotReplayDisposition classifyDirectChunkSlotReplay(
     return DirectChunkSlotReplayDisposition::LegacyUnsupported;
   }
   for (std::size_t i = 0; i < imported.records.size(); ++i) {
+    if (!directDrawRecordSupported(imported, i)) {
+      return DirectChunkSlotReplayDisposition::LegacyUnsupported;
+    }
     switch (imported.records[i].type) {
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
     case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:

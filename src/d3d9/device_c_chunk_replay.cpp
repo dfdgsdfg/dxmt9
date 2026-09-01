@@ -10,6 +10,7 @@
 #include "device_c_presence_table.hpp"
 #include "device_c_record_utils.hpp"
 #include "device_c_replay_offload.hpp"
+#include "device_c_cpu_ready_transfer.hpp"
 #include "util/unixcall_marshal.hpp"
 
 #include "../dxmt9/dxmt9_perf_counters.hpp"
@@ -1965,6 +1966,17 @@ int32_t replayPlannedChunk(D9CDevice* device,
   }
 
   auto lease = std::move(*begin);
+  // The imported RawCommandChunk and the Tape reservation now have one
+  // explicit Unix-side owner.  The transfer keeps the retained wrappers and
+  // immutable replay identity alive through Emit and Publish; its destructor
+  // restores the Raw object to the worker so the existing completion/release
+  // authority remains unchanged.
+  dxmt9::d3d9::CpuReadySemanticTransfer transfer(raw, std::move(lease));
+  if (!transfer.adopt()) {
+    queue->failStopCpuReadyArena();
+    return commitChunkFail("chunk-cpu-ready-transfer-adopt");
+  }
+  auto& transferRaw = transfer.raw();
   if (captureIdentityRequested && segmentSerial) {
     std::array<std::uint32_t,
                dxmt9::core::CpuReadyTape::kMaxArenaBatchSources>
@@ -1976,32 +1988,34 @@ int32_t replayPlannedChunk(D9CDevice* device,
       firstRecords[source] = plan.sources[source].firstRecordIndex;
       recordCounts[source] = plan.sources[source].recordCount;
     }
-    if (!lease.setCaptureSourceRanges(
+    if (!transfer.lease().setCaptureSourceRanges(
             std::span(firstRecords).first(sourceCount),
             std::span(recordCounts).first(sourceCount))) {
-      if (!lease.abortForFallback()) {
+      if (!transfer.abortForFallback()) {
         queue->failStopCpuReadyArena();
         return commitChunkFail("chunk-capture-ranges-rollback");
       }
       supplyReplayEntry.cancel();
+      transfer.restoreToSource();
       return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
                                 allowDirectArena, /*forceEventSerial=*/true);
     }
   }
   bool preEffectFailure = false;
   const int32_t hr = replayResolvedChunk(
-      device, raw, pacedByPresentOrdinal, &lease,
+      device, transferRaw, pacedByPresentOrdinal, &transfer.lease(),
       std::span(plan.segments).first(plan.segmentCount), false,
       segmentSerial ? std::span(plan.sources) :
                        std::span<const dxmt9::d3d9::CpuReadySourcePlan>{},
       &preEffectFailure);
   if (failed(hr)) {
     if (preEffectFailure && segmentSerial) {
-      if (!lease.abortForFallback()) {
+      if (!transfer.abortForFallback()) {
         queue->failStopCpuReadyArena();
         return commitChunkFail("chunk-capture-identity-rollback");
       }
       supplyReplayEntry.cancel();
+      transfer.restoreToSource();
       return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
                                 allowDirectArena, /*forceEventSerial=*/true);
     }
@@ -2010,21 +2024,23 @@ int32_t replayPlannedChunk(D9CDevice* device,
     if (captureIdentityRequested) failCaptureIdentity("arena-replay");
     return hr;
   }
-  const auto admissionTicket = lease.ticket();
-  if (!segmentSerial && raw.nextQueuedRawOrdinalHint != 0u) {
+  if (!transfer.markEmitted()) {
+    queue->failStopCpuReadyArena();
+    return commitChunkFail("chunk-cpu-ready-transfer-emit");
+  }
+  const auto admissionTicket = transfer.lease().ticket();
+  if (!segmentSerial && transferRaw.nextQueuedRawOrdinalHint != 0u) {
     (void)queue->armCpuReadyNextSourceIntent(
-        admissionTicket, raw.nextQueuedRawOrdinalHint, raw.hasPresent);
+        admissionTicket, transferRaw.nextQueuedRawOrdinalHint,
+        transferRaw.hasPresent);
   }
   dxmt9::CommandQueue::CpuReadyCaptureIdentity captureIdentity{};
   dxmt9::CommandQueue::CpuReadyCaptureIdentityBatch captureBatch{};
   const auto publishStatus = segmentSerial
-      ? lease.publishBatchWithStatus(
-            raw.resourceEntries,
+      ? transfer.publishBatch(
             captureIdentityRequested ? &captureBatch : nullptr)
-      : (lease.publish(raw.resourceEntries,
-                       captureIdentityRequested ? &captureIdentity : nullptr)
-             ? dxmt9::CommandQueue::CpuReadyArenaPublishStatus::Published
-             : dxmt9::CommandQueue::CpuReadyArenaPublishStatus::FailStopped);
+      : transfer.publish(
+            captureIdentityRequested ? &captureIdentity : nullptr);
   if (publishStatus ==
       dxmt9::CommandQueue::CpuReadyArenaPublishStatus::RecoverableFailure) {
     // replayResolvedChunk has already applied D3D semantics and may have
@@ -2040,7 +2056,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
           "cpu_ready_arena post_replay_publish_failure raw=%llu "
           "records=%u class=%s source=%u segment=%u "
           "planned_pages=%u actual_commands=%u",
-          static_cast<unsigned long long>(raw.replaySeq), raw.recordCount,
+          static_cast<unsigned long long>(transferRaw.replaySeq),
+          transferRaw.recordCount,
           cpuReadyArenaFailureClassName(failure.failureClass),
           failure.source, failure.segment, failure.plannedPages,
           failure.actualCommands);
@@ -2077,7 +2094,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
         return dxmt9::core::D3D_OK;
       }
       if (!device->renderTapeIdentityCapture.append(
-              raw.renderTapeCaptureToken, raw.renderTapeEventOrdinal,
+              transferRaw.renderTapeCaptureToken,
+              transferRaw.renderTapeEventOrdinal,
               segment.sourceOrdinal, segment.seqId, segment.firstRecord,
               segment.recordCount, ranges)) {
         failCaptureIdentity("snapshot-or-ledger-append");
@@ -2085,8 +2103,9 @@ int32_t replayPlannedChunk(D9CDevice* device,
       }
     }
     if (!device->renderTapeIdentityCapture.registerExpectedSettlement(
-            raw.renderTapeCaptureToken, raw.renderTapeEventOrdinal,
-            raw.replaySeq, admissionTicket.buildGeneration,
+            transferRaw.renderTapeCaptureToken,
+            transferRaw.renderTapeEventOrdinal, transferRaw.replaySeq,
+            admissionTicket.buildGeneration,
             captureBatch.segments.front().sourceOrdinal,
             captureBatch.segments.back().seqId,
             static_cast<std::uint32_t>(captureBatch.segments.size()))) {
@@ -2110,14 +2129,16 @@ int32_t replayPlannedChunk(D9CDevice* device,
     }
     if (!captureIdentity.valid() ||
         !device->renderTapeIdentityCapture.append(
-            raw.renderTapeCaptureToken, raw.renderTapeEventOrdinal,
-            captureIdentity.sourceOrdinal, captureIdentity.seqId,
+            transferRaw.renderTapeCaptureToken,
+            transferRaw.renderTapeEventOrdinal, captureIdentity.sourceOrdinal,
+            captureIdentity.seqId,
             captureIdentity.firstRecord, captureIdentity.recordCount,
             ranges)) {
       failCaptureIdentity("snapshot-or-ledger-append");
     } else if (!device->renderTapeIdentityCapture.registerExpectedSettlement(
-                   raw.renderTapeCaptureToken, raw.renderTapeEventOrdinal,
-                   raw.replaySeq, admissionTicket.buildGeneration,
+                   transferRaw.renderTapeCaptureToken,
+                   transferRaw.renderTapeEventOrdinal, transferRaw.replaySeq,
+                   admissionTicket.buildGeneration,
                    admissionTicket.sourceOrdinal, admissionTicket.seqId, 1u)) {
       failCaptureIdentity("event-settlement");
     }

@@ -97,6 +97,15 @@ struct Counters {
   std::array<std::atomic<std::uint64_t>,
              static_cast<std::size_t>(DirectChunkSlotReplayOutcome::Count)>
       directChunkSlotReplayOutcomes{};
+  // Populated-slot continuation admission is intentionally narrower than the
+  // ordinary direct lane. These counters distinguish a proof failure from a
+  // structural exclusion and make the carrier-free claim auditable.
+  std::atomic<std::uint64_t> directChunkSlotContinuationAttempted{0};
+  std::atomic<std::uint64_t> directChunkSlotContinuationAdmitted{0};
+  std::atomic<std::uint64_t> directChunkSlotContinuationCapacityRejected{0};
+  std::atomic<std::uint64_t> directChunkSlotContinuationStructuralRejected{0};
+  std::atomic<std::uint64_t> directChunkSlotContinuationCommitted{0};
+  std::atomic<std::uint64_t> directChunkSlotContinuationPopulatedFallback{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackCount{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackBytes{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackCountArgbuf{0};

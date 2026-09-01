@@ -1649,6 +1649,9 @@ class CommandQueue {
     bool updatesBackBuffer = false;
     bool failed = false;
     bool effectsStarted = false;
+    // True only when admission proved that this source can append to an
+    // already populated slot without relocating or rebuilding its prefix.
+    bool continuation = false;
     // Present is staged by submitPresent, but remains coordinator-owned until
     // direct assembler evidence has committed the same final ChunkSlot.
     core::PresentId pendingPresentId{};

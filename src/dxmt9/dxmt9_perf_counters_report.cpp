@@ -2578,6 +2578,22 @@ void report() {
                   static_cast<unsigned long long>(load(c.directChunkSlotReplayOutcomes[i])));
     line += field;
   }
+  const auto appendContinuationCounter = [&](const char* name,
+                                              const auto& value) {
+    char field[128]{};
+    std::snprintf(field, sizeof(field), " direct_chunkslot_continuation_%s=%llu",
+                  name, static_cast<unsigned long long>(load(value)));
+    line += field;
+  };
+  appendContinuationCounter("attempted", c.directChunkSlotContinuationAttempted);
+  appendContinuationCounter("admitted", c.directChunkSlotContinuationAdmitted);
+  appendContinuationCounter("capacity_rejected",
+                            c.directChunkSlotContinuationCapacityRejected);
+  appendContinuationCounter("structural_rejected",
+                            c.directChunkSlotContinuationStructuralRejected);
+  appendContinuationCounter("committed", c.directChunkSlotContinuationCommitted);
+  appendContinuationCounter("populated_fallback",
+                            c.directChunkSlotContinuationPopulatedFallback);
   line += '\n';
   std::fwrite(line.data(), 1, line.size(), stderr);
   std::fflush(stderr);
