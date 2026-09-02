@@ -1938,6 +1938,20 @@ int32_t replayEmissionSpans(
     if (begin.status !=
             dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Ready ||
         !begin.lease) {
+      if (separatorEffectsStarted ||
+          begin.status ==
+              dxmt9::CommandQueue::DirectChunkSlotReplayStatus::FailStopped) {
+        dxmt9::util::logf(
+            dxmt9::util::LogLevel::Info, "dxmt9-device",
+            "direct_span_begin_reject raw=%llu span=%u status=%u reason=%u "
+            "publication_reason=%u admission=%u",
+            static_cast<unsigned long long>(raw.replaySeq),
+            static_cast<unsigned>(span.leaseOrdinal),
+            static_cast<unsigned>(begin.status),
+            static_cast<unsigned>(begin.failureReason),
+            static_cast<unsigned>(begin.publicationFailure),
+            static_cast<unsigned>(begin.spanAdmission));
+      }
       if (begin.status ==
           dxmt9::CommandQueue::DirectChunkSlotReplayStatus::FailStopped) {
         outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::BeginFailStopped;

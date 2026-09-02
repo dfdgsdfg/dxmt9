@@ -1446,10 +1446,13 @@ A raw cut into several spans presents the *same* closed producer interval for
 each of them, which the cross-raw adjacency rule cannot describe and must not
 be relaxed to admit: that rule is what keeps a different raw from appending
 onto a populated slot. Same-raw continuation is a separate typed question,
-decided by a slot-scoped witness naming the exact active raw, its last
-committed span ordinal, and whether it settled. Only the immediate successor
-span of that raw, before settlement, carrying the identical interval, is
-admitted; duplicate, skipped, out-of-order, post-settlement and
+decided by a slot-scoped witness naming the exact active raw, its exact closed
+producer interval, its last committed span ordinal, and whether it settled.
+The witness interval must be stored independently from the slot-wide aggregate
+producer interval: a populated slot can already include older adjacent raws,
+and its aggregate must never serve as the same-raw witness. Only the immediate
+successor span of that raw, before settlement, carrying the identical raw-local
+interval, is admitted; duplicate, skipped, out-of-order, post-settlement and
 interval-mismatched spans are each rejected with their own reason. The witness
 is reset with the slot, so a rotation or reuse cannot carry a stale admission
 across a publication boundary.

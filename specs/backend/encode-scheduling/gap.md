@@ -63,10 +63,13 @@ span of one raw presents the identical closed producer interval, so
 the event and source dimension -- can never describe two spans of one raw. That
 rule is unchanged and still governs a *different* raw extending a populated
 slot. `compatibilitySpanAdmission` decides the same-raw question from a
-slot-scoped witness (active raw, last committed span ordinal, settled), and
+slot-scoped witness (active raw, exact raw-local producer interval, last
+committed span ordinal, settled), and
 admits only the immediate successor span before settlement. Duplicate, skipped,
 out-of-order, post-settlement and interval-mismatched spans each get their own
-rejection reason. The witness is reset with the Tape entry.
+rejection reason. The raw-local interval is deliberately distinct from the
+slot-wide aggregate interval, which can include older adjacent raws. The
+witness is reset with the Tape entry.
 
 **Present is a whole-raw gate, not a per-span one.** `appendActiveDirectChunk
 SlotPresent` parks the Present in the build context and
@@ -97,11 +100,11 @@ append, so it is not on the cost path this requirement targets.
 | Layer | Where |
 |---|---|
 | Exhaustive classifier truth table | `dxmt9-replay-emission-plan-spec` -- every emission-class sequence of length 1..5 (3,905 cases), plus all 21 live record kinds through the whole-range gate, plus the executable span partition |
-| TLA+ | `specs/verification/tla/ReplayEmissionPlanIslands.tla` with three deliberate-regression configurations (span identity, separator cut, run closure), registered in `scripts/check/verify_tla.sh` |
+| TLA+ | `specs/verification/tla/ReplayEmissionPlanIslands.tla` with four deliberate-regression configurations (span identity, raw-local witness versus slot aggregate, separator cut, run closure), registered in `scripts/check/verify_tla.sh` |
 | Model-code binding | `dxmt9-replay-emission-plan-islands-spec` -- truth table over the production `compatibilitySpanAdmission`, plus one translated trace per `.counterexample.cfg` |
 | Storage capacity model | `specs/verification/tla/DirectSlotCapacityProvisioning.tla` -- capacity as a quantity, empty-slot provisioning, slot generation, and boundary credits against a same-capacity serial reference, with `exact-fit` and `grow-populated` expected failures |
 | Storage capacity model-code binding | `dxmt9-direct-slot-provisioning-spec` -- the production `directSlotStorageTransition` reducer, `directSlotProvisionPlan`, move-only `LeaseHeld` / off-slot `StagedDirectSlot` two-phase transaction, 64-payload aggregate lease ledger and priced budget, including every 21 vector + nine lookup allocation failure, exact pointer/capacity/topology rollback, replacement/denial/reuse/leak cases, and consecutive mean-sized sources |
-| Production differential | `dxmt9-cpu-ready-production-routing-spec` -- a compatibility-cut raw against the Legacy lane, comparing the **concatenated per-command `effectiveCommandDigest` sequence** across every source the raw published (ordered command kind, draw parameters, binding-override and binding-snapshot payload bytes, coordinator descriptors), not a command total; plus the Present-tail span, the coordinator-bearing span, both capacity rotations, and the non-terminal/duplicate Present whole-raw fallbacks with their published source order |
+| Production differential | `dxmt9-cpu-ready-production-routing-spec` -- a compatibility-cut raw against the Legacy lane, comparing the **concatenated per-command `effectiveCommandDigest` sequence** across every source the raw published (ordered command kind, draw parameters, binding-override and binding-snapshot payload bytes, coordinator descriptors), not a command total; plus a populated identity-qualified slot followed by `Direct -> TriangleFan -> Direct`, the Present-tail span, the coordinator-bearing span, both capacity rotations, and the non-terminal/duplicate Present whole-raw fallbacks with their published source order |
 
 **Open, and not claimed (`R-BACK-2.103` / `R-VERIF-2.25`):**
 
@@ -116,18 +119,28 @@ contents are covered by focused transaction and production differentials, not
 by an all-family final-storage differential. These are explicit formal and
 model/code closure gaps, not claims delegated to the wild gate.
 
-1. **The first positive-headroom wild gate failed correctness.** On 2026-09-02,
-   GT1 with the 48 MiB calibration candidate stopped after one Clear/Present
-   frame with no draws or encode chunks and a Wine null-read page fault. An
-   explicit 8 MiB candidate reproduced the same frame-0 failure. The identical
-   staged binaries with `DXMT9_DIRECT_SLOT_HEADROOM_BYTES=0` completed 2,913
-   frames. A second 8 MiB run after failure-atomic off-slot staging produced the
-   identical fault; the partial-mutation defect was valid but not the whole
-   startup cause. This proves a positive-provisioning blocker, not a particular
-   root cause: no allocator failure, RSS/VM/address-domain sample, or crash
-   backtrace was captured. GT2 was intentionally not run after the GT1
-   correctness gate failed. Headroom is now default-off independently of the
-   default-on Direct replay policy.
+1. **Positive-headroom correctness is repaired; locality is not promoted.**
+   The 2026-09-02 GT1 48 MiB and 8 MiB candidates stopped before drawing in a
+   Wine startup fault, while the zero-headroom control completed 2,913 frames.
+   A later production-replay probe reached Direct provisioning and exposed the
+   independent deterministic defect: after an older raw and span 0 of the
+   active raw shared a slot, the slot aggregate was event `3-4` / source
+   `260-640`, but the active raw's exact interval was event `4-4` / source
+   `516-640`. Comparing span 1 with the aggregate rejected it after a
+   TriangleFan separator had executed and therefore fail-stopped the queue.
+   `CpuReadySpanWitness` now owns the active raw's exact producer interval
+   separately from the slot aggregate, and same-raw admission compares that
+   witness exactly. The production differential pins a populated predecessor
+   followed by `Direct -> TriangleFan -> Direct`; the TLA+ model has a matching
+   expected counterexample when the two identities are collapsed.
+
+   The 2026-09-03 non-vacuous GT1 smoke
+   `app-d3d9-3dmark05-direct-slot-headroom5m-witness-fix-gt1-20260903`
+   completed 2,580 presents with two provisioned slots, 1,188 same-raw span
+   admissions, zero same-raw rejection, zero separator fail-stop, and zero GPU
+   command-buffer errors. The run was timeout-terminated after successful
+   progression and is correctness evidence only. The policy remains
+   default-off: one smoke is neither memory nor locality promotion evidence.
 2. **Rotation changed chunk cadence, was measured, and is partly fixed
    (`R-BACK-2.104`).** The unmeasured risk recorded here became a measured
    regression on 2026-09-02. The assembler reserved `size() + extra` exactly, so
@@ -147,9 +160,11 @@ model/code closure gaps, not claims delegated to the wild gate.
 
    - **No positive locality result.** Native and TLA evidence proves the scalar
      capacity mechanism and boundary credits against a same-capacity reference;
-     it does not prove the wild values return to Legacy. The candidate failed
-     before those counters could be collected and is reachable only through an
-     explicit positive `DXMT9_DIRECT_SLOT_HEADROOM_BYTES` value.
+     it does not prove the wild values return to Legacy. The corrected 5 MiB
+     smoke was intentionally read only as a correctness gate: just two slots
+     were provisioned, while 20,704 aggregate-lease denials and 18,127 capacity
+     rotations remained. Provisioning is reachable only through an explicit
+     positive `DXMT9_DIRECT_SLOT_HEADROOM_BYTES` value.
    - **No wild memory evidence, and the payload aggregate is large.** The
      calibration ceiling is 48 MiB per physical payload and a mean-shaped plan
      commits 42.46 MiB of it (21,788 B/draw x 2,048 draws).

@@ -21,8 +21,10 @@
 (*     describe them and must not be relaxed to try -- it is what keeps a   *)
 (*     *different* raw from appending onto a populated slot. A separate     *)
 (*     witness (which raw is extending this slot, how far its span sequence *)
-(*     has got, whether it settled) admits only the immediate successor     *)
-(*     span of the exact active raw.                                        *)
+(*     has got, whether it settled, and its exact raw-local interval) admits*)
+(*     only the immediate successor span of the exact active raw. The slot  *)
+(*     aggregate may already include an older adjacent raw and is never the *)
+(*     same-raw witness.                                                     *)
 (*                                                                         *)
 (*  2. The separator cut. A whole-raw transaction could hand a failed raw   *)
 (*     back to Legacy because nothing of it had executed. Once a separator  *)
@@ -47,6 +49,9 @@ CONSTANTS
   \* "Enforced" admits only the immediate successor span of the exact active
   \* raw, before settlement. "Removed" drops the witness check entirely.
   SpanIdentityDiscipline,
+  \* "Enforced" stores the active raw's exact interval separately from the
+  \* populated slot aggregate. "Removed" recreates aggregate-as-witness.
+  RawLocalWitnessDiscipline,
   \* "Enforced" turns a post-separator failure into a fail-stop. "Removed"
   \* keeps the whole-raw Legacy retry that was sound only while a raw was
   \* indivisible.
@@ -65,14 +70,16 @@ LeaseOrdinal(s) == IF s = 0 THEN 0 ELSE 1
 Stages == {"Init", "Span0Begun", "Span0Committed", "SeparatorDone",
            "Span2Begun", "Done", "FailStopped", "LegacyWholeRaw"}
 Dispositions == {"Unset", "Direct", "Legacy", "FailStop"}
+Intervals == {"None", "PreviousRaw", "ActiveRaw", "SlotAggregate"}
 
 VARIABLES stage, disposition, witnessRaw, witnessSpan, witnessSettled,
+          slotInterval, witnessInterval,
           emitted, separatorExecuted, runOpen, runStraddledCut,
           effectsStarted, span2Fails
 
 vars == <<stage, disposition, witnessRaw, witnessSpan, witnessSettled,
-  emitted, separatorExecuted, runOpen, runStraddledCut, effectsStarted,
-  span2Fails>>
+  slotInterval, witnessInterval, emitted, separatorExecuted, runOpen,
+  runStraddledCut, effectsStarted, span2Fails>>
 
 (* The production predicate, `compatibilitySpanAdmission` in
    src/dxmt9/dxmt9_cpu_ready_tape.hpp. A same-raw span is admitted only when
@@ -81,6 +88,7 @@ vars == <<stage, disposition, witnessRaw, witnessSpan, witnessSettled,
 AdmitsLeaseOrdinal(n) ==
   /\ witnessRaw = 1
   /\ ~witnessSettled
+  /\ witnessInterval = "ActiveRaw"
   /\ n = witnessSpan + 1
 
 \* A span whose witness is inactive takes the unchanged cross-raw path.
@@ -94,6 +102,10 @@ Init ==
   /\ witnessRaw = 0
   /\ witnessSpan = 0
   /\ witnessSettled = FALSE
+  \* The raw begins on a populated slot whose aggregate already owns one
+  \* adjacent predecessor, but there is no active span sequence yet.
+  /\ slotInterval = "PreviousRaw"
+  /\ witnessInterval = "None"
   /\ emitted = [s \in Spans |-> 0]
   /\ separatorExecuted = FALSE
   /\ runOpen = FALSE
@@ -109,8 +121,8 @@ BeginSpan0 ==
   /\ stage' = "Span0Begun"
   /\ runOpen' = TRUE
   /\ UNCHANGED <<disposition, witnessRaw, witnessSpan, witnessSettled,
-      emitted, separatorExecuted, runStraddledCut, effectsStarted,
-      span2Fails>>
+      slotInterval, witnessInterval, emitted, separatorExecuted,
+      runStraddledCut, effectsStarted, span2Fails>>
 
 (* Commit installs the witness and, with the discipline enforced, closes the
    open run so the cut cannot be straddled. *)
@@ -121,6 +133,9 @@ CommitSpan0 ==
   /\ witnessRaw' = 1
   /\ witnessSpan' = LeaseOrdinal(0)
   /\ witnessSettled' = FALSE
+  /\ slotInterval' = "SlotAggregate"
+  /\ witnessInterval' = IF RawLocalWitnessDiscipline = "Enforced"
+       THEN "ActiveRaw" ELSE "SlotAggregate"
   /\ emitted' = [emitted EXCEPT ![0] = @ + 1]
   /\ effectsStarted' = TRUE
   /\ runOpen' = IF RunClosureDiscipline = "Enforced" THEN FALSE ELSE runOpen
@@ -136,7 +151,7 @@ ExecuteSeparator ==
   /\ runStraddledCut' = (runStraddledCut \/ runOpen)
   /\ runOpen' = FALSE
   /\ UNCHANGED <<disposition, witnessRaw, witnessSpan, witnessSettled,
-      effectsStarted, span2Fails>>
+      slotInterval, witnessInterval, effectsStarted, span2Fails>>
 
 BeginSpan2 ==
   /\ stage = "SeparatorDone"
@@ -145,8 +160,8 @@ BeginSpan2 ==
   /\ stage' = "Span2Begun"
   /\ runOpen' = TRUE
   /\ UNCHANGED <<disposition, witnessRaw, witnessSpan, witnessSettled,
-      emitted, separatorExecuted, runStraddledCut, effectsStarted,
-      span2Fails>>
+      slotInterval, witnessInterval, emitted, separatorExecuted,
+      runStraddledCut, effectsStarted, span2Fails>>
 
 CommitSpan2 ==
   /\ stage = "Span2Begun"
@@ -157,7 +172,7 @@ CommitSpan2 ==
   /\ emitted' = [emitted EXCEPT ![2] = @ + 1]
   /\ runOpen' = IF RunClosureDiscipline = "Enforced" THEN FALSE ELSE runOpen
   /\ UNCHANGED <<disposition, witnessRaw, separatorExecuted, runStraddledCut,
-      effectsStarted, span2Fails>>
+      slotInterval, witnessInterval, effectsStarted, span2Fails>>
 
 (* The whole point of the cut. Span 2's own destination is still private and
    rolls back, but the raw is jointly owned the moment the separator ran, so
@@ -174,8 +189,9 @@ FailSpan2 ==
        ELSE /\ stage' = "LegacyWholeRaw"
             /\ disposition' = "Legacy"
             /\ emitted' = [s \in Spans |-> emitted[s] + 1]
-  /\ UNCHANGED <<witnessRaw, witnessSpan, witnessSettled, separatorExecuted,
-      runOpen, runStraddledCut, effectsStarted, span2Fails>>
+  /\ UNCHANGED <<witnessRaw, witnessSpan, witnessSettled, slotInterval,
+      witnessInterval, separatorExecuted, runOpen, runStraddledCut,
+      effectsStarted, span2Fails>>
 
 (* A duplicate span: the producer re-presents an ordinal the witness already
    committed. Enforced, the witness refuses it outright. *)
@@ -185,8 +201,8 @@ BeginDuplicateSpan0 ==
      \/ AdmitsLeaseOrdinal(LeaseOrdinal(0))
   /\ emitted' = [emitted EXCEPT ![0] = @ + 1]
   /\ UNCHANGED <<stage, disposition, witnessRaw, witnessSpan, witnessSettled,
-      separatorExecuted, runOpen, runStraddledCut, effectsStarted,
-      span2Fails>>
+      slotInterval, witnessInterval, separatorExecuted, runOpen,
+      runStraddledCut, effectsStarted, span2Fails>>
 
 (* A post-settlement span: the raw already published its final span. *)
 BeginAfterSettled ==
@@ -195,8 +211,8 @@ BeginAfterSettled ==
      \/ AdmitsLeaseOrdinal(LeaseOrdinal(2))
   /\ emitted' = [emitted EXCEPT ![2] = @ + 1]
   /\ UNCHANGED <<stage, disposition, witnessRaw, witnessSpan, witnessSettled,
-      separatorExecuted, runOpen, runStraddledCut, effectsStarted,
-      span2Fails>>
+      slotInterval, witnessInterval, separatorExecuted, runOpen,
+      runStraddledCut, effectsStarted, span2Fails>>
 
 Next ==
   \/ BeginSpan0 \/ CommitSpan0 \/ ExecuteSeparator \/ BeginSpan2
@@ -210,6 +226,8 @@ TypeOK ==
   /\ witnessRaw \in {0, 1}
   /\ witnessSpan \in 0..2
   /\ witnessSettled \in BOOLEAN
+  /\ slotInterval \in Intervals
+  /\ witnessInterval \in Intervals
   /\ emitted \in [Spans -> 0..3]
   /\ separatorExecuted \in BOOLEAN
   /\ runOpen \in BOOLEAN
@@ -237,7 +255,17 @@ RunClosedAcrossSeparator == ~runStraddledCut
 SpanAdmissionWitnessed ==
   stage \in {"Span2Begun", "Done"} =>
     /\ witnessRaw = 1
+    /\ witnessInterval = "ActiveRaw"
     /\ separatorExecuted
+
+(* A populated slot aggregates the predecessor and active raw, while the
+   witness retains only the active raw's exact interval. Using the aggregate
+   as the witness recreates the positive-headroom GT1 rejection after the
+   separator effect. *)
+RawLocalWitnessSeparated ==
+  stage \in {"Span0Committed", "SeparatorDone", "Span2Begun", "Done"} =>
+    /\ slotInterval = "SlotAggregate"
+    /\ witnessInterval = "ActiveRaw"
 
 (* Nothing may extend a raw after its final span has committed. *)
 NoPostSettlementExtension ==

@@ -3212,6 +3212,12 @@ bool QueueLifecycleController::commitCurrentChunk(
   dxmt9::noteQueueMutexSegmentIfEnabled("commit_current_chunk/post_wait",
                                         qmxEnabled, qmxSegStart);
   if (!sealed) {
+    dxmt9::util::logf(
+        dxmt9::util::LogLevel::Info, "dxmt9-queue",
+        "commit_publish_reject slot=%zu seq=%llu publication_reason=%u",
+        publishedSlotIndex, static_cast<unsigned long long>(publishedSeqId),
+        static_cast<unsigned>(submissionBinding_.cpuReadyTape
+                                  ->lastPublicationFailure()));
     return false;
   }
   noteCpuReadyCapacityProgress();

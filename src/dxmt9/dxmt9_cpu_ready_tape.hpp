@@ -306,8 +306,9 @@ constexpr bool compatibilityProducerIdentityAppendable(
 }
 
 // One raw may own several consecutive final-slot lease spans when an ordered
-// control or a compatibility range cuts it. Every span of that raw presents
-// the SAME closed producer interval, so the cross-raw adjacency rule above --
+// control or a compatibility range cuts it. The span witness owns the exact
+// producer interval of its opening span, while the slot aggregate may include
+// an older prefix, so the cross-raw adjacency rule above --
 // which demands a strict +1 in both dimensions -- can never describe them,
 // and must not be weakened to try: it is what makes a *different* raw
 // silently appending onto a populated slot impossible.
@@ -316,7 +317,7 @@ constexpr bool compatibilityProducerIdentityAppendable(
 // active-raw identity of the slot: which raw is currently extending it, how
 // far its span sequence has got, and whether that sequence has settled. A
 // same-raw continuation is admitted only for the immediate successor span of
-// the exact witnessed raw, before settlement, carrying the identical closed
+// the exact witnessed raw, before settlement, carrying the exact witnessed
 // interval. Duplicate, skipped, out-of-order and post-settlement spans are
 // each rejected with their own reason.
 struct CpuReadySpanWitness {
@@ -327,8 +328,14 @@ struct CpuReadySpanWitness {
   std::uint32_t lastSpanOrdinal = 0;
   // The raw published its final span; nothing further may extend it.
   bool settled = false;
+  // Exact identity of the span that opened this witness. This is distinct
+  // from the slot's aggregate producer identity, which may cover an older
+  // prefix and must never be used to admit a later same-raw span.
+  CpuReadyProducerIdentity producerIdentity{};
 
-  constexpr bool active() const noexcept { return rawOrdinal != 0u; }
+  constexpr bool active() const noexcept {
+    return rawOrdinal != 0u && producerIdentity.importable();
+  }
   friend constexpr bool operator==(CpuReadySpanWitness,
                                    CpuReadySpanWitness) noexcept = default;
 };
@@ -351,8 +358,8 @@ enum class CpuReadySpanAdmission : std::uint8_t {
 };
 
 constexpr CpuReadySpanAdmission compatibilitySpanAdmission(
-    CpuReadySpanWitness witness, CpuReadyProducerIdentity witnessIdentity,
-    std::uint64_t rawOrdinal, std::uint32_t spanOrdinal,
+    CpuReadySpanWitness witness, std::uint64_t rawOrdinal,
+    std::uint32_t spanOrdinal,
     CpuReadyProducerIdentity identity) noexcept {
   if (!witness.active() || rawOrdinal == 0u ||
       witness.rawOrdinal != rawOrdinal) {
@@ -361,9 +368,7 @@ constexpr CpuReadySpanAdmission compatibilitySpanAdmission(
   if (witness.settled) {
     return CpuReadySpanAdmission::SettledRaw;
   }
-  // A raw carries one closed producer interval, so every span of it presents
-  // the identical value. Exact equality, not adjacency, is the same-raw rule.
-  if (witnessIdentity != identity) {
+  if (witness.producerIdentity != identity) {
     return CpuReadySpanAdmission::IdentityMismatch;
   }
   if (spanOrdinal <= witness.lastSpanOrdinal) {
@@ -379,44 +384,62 @@ constexpr CpuReadySpanAdmission compatibilitySpanAdmission(
 // The cross-raw rule is untouched by span identity: a span sequence never
 // widens which *other* raw may extend a populated slot.
 static_assert(compatibilitySpanAdmission(
-                  CpuReadySpanWitness{}, CpuReadyProducerIdentity{}, 0u, 0u,
+                  CpuReadySpanWitness{}, 0u, 0u,
                   CpuReadyProducerIdentity{}) ==
               CpuReadySpanAdmission::CrossRaw);
 static_assert(
     compatibilitySpanAdmission(
-        CpuReadySpanWitness{.rawOrdinal = 5u, .lastSpanOrdinal = 0u},
-        CpuReadyProducerIdentity{7u, 7u, 11u, 11u}, 6u, 1u,
+        CpuReadySpanWitness{
+            .rawOrdinal = 5u,
+            .lastSpanOrdinal = 0u,
+            .producerIdentity = {7u, 7u, 11u, 11u}},
+        6u, 1u,
         CpuReadyProducerIdentity{8u, 8u, 12u, 12u}) ==
     CpuReadySpanAdmission::CrossRaw);
 static_assert(
     compatibilitySpanAdmission(
-        CpuReadySpanWitness{.rawOrdinal = 5u, .lastSpanOrdinal = 0u},
-        CpuReadyProducerIdentity{7u, 7u, 11u, 11u}, 5u, 1u,
+        CpuReadySpanWitness{
+            .rawOrdinal = 5u,
+            .lastSpanOrdinal = 0u,
+            .producerIdentity = {7u, 7u, 11u, 11u}},
+        5u, 1u,
         CpuReadyProducerIdentity{7u, 7u, 11u, 11u}) ==
     CpuReadySpanAdmission::SameRawSpan);
 static_assert(
     compatibilitySpanAdmission(
-        CpuReadySpanWitness{.rawOrdinal = 5u, .lastSpanOrdinal = 1u},
-        CpuReadyProducerIdentity{7u, 7u, 11u, 11u}, 5u, 1u,
+        CpuReadySpanWitness{
+            .rawOrdinal = 5u,
+            .lastSpanOrdinal = 1u,
+            .producerIdentity = {7u, 7u, 11u, 11u}},
+        5u, 1u,
         CpuReadyProducerIdentity{7u, 7u, 11u, 11u}) ==
     CpuReadySpanAdmission::DuplicateSpan);
 static_assert(
     compatibilitySpanAdmission(
-        CpuReadySpanWitness{.rawOrdinal = 5u, .lastSpanOrdinal = 1u},
-        CpuReadyProducerIdentity{7u, 7u, 11u, 11u}, 5u, 3u,
+        CpuReadySpanWitness{
+            .rawOrdinal = 5u,
+            .lastSpanOrdinal = 1u,
+            .producerIdentity = {7u, 7u, 11u, 11u}},
+        5u, 3u,
         CpuReadyProducerIdentity{7u, 7u, 11u, 11u}) ==
     CpuReadySpanAdmission::SkippedSpan);
 static_assert(
     compatibilitySpanAdmission(
         CpuReadySpanWitness{
-            .rawOrdinal = 5u, .lastSpanOrdinal = 1u, .settled = true},
-        CpuReadyProducerIdentity{7u, 7u, 11u, 11u}, 5u, 2u,
+            .rawOrdinal = 5u,
+            .lastSpanOrdinal = 1u,
+            .settled = true,
+            .producerIdentity = {7u, 7u, 11u, 11u}},
+        5u, 2u,
         CpuReadyProducerIdentity{7u, 7u, 11u, 11u}) ==
     CpuReadySpanAdmission::SettledRaw);
 static_assert(
     compatibilitySpanAdmission(
-        CpuReadySpanWitness{.rawOrdinal = 5u, .lastSpanOrdinal = 0u},
-        CpuReadyProducerIdentity{7u, 7u, 11u, 11u}, 5u, 1u,
+        CpuReadySpanWitness{
+            .rawOrdinal = 5u,
+            .lastSpanOrdinal = 0u,
+            .producerIdentity = {7u, 7u, 11u, 11u}},
+        5u, 1u,
         CpuReadyProducerIdentity{7u, 9u, 11u, 13u}) ==
     CpuReadySpanAdmission::IdentityMismatch);
 // A same-raw span is exactly the case the cross-raw predicate refuses, which
@@ -450,6 +473,29 @@ struct CpuReadyPublicationTicket {
 
   friend constexpr bool operator==(CpuReadyPublicationTicket,
                                    CpuReadyPublicationTicket) noexcept = default;
+};
+
+// Cold provenance for a failed publication attempt.  The bool publication
+// API remains unchanged for hot callers; this value is sampled only by queue
+// diagnostics/tests after a false result.  Keep the first failing predicate
+// stable so a monolithic admission guard cannot hide which contract broke.
+enum class CpuReadyPublicationFailureReason : std::uint8_t {
+  None,
+  MissingEntry,
+  WrongState,
+  WrongPayloadKind,
+  StrictAdmissionMismatch,
+  TicketMismatch,
+  InvalidIdentity,
+  ProducerIdentityMismatch,
+  HighWaterOrderViolation,
+  InvalidControlIndex,
+  PublicationReservationMissing,
+  ReadyQueueFull,
+  MissingPayload,
+  ExtentOutOfBounds,
+  ArenaPayloadInvalid,
+  ArenaChainInvalid,
 };
 
 struct CpuReadyAdmissionIdentity {
@@ -809,6 +855,10 @@ class CpuReadyTape {
     std::uint64_t staleRejects = 0;
     bool admissionClosed = false;
   };
+
+  CpuReadyPublicationFailureReason lastPublicationFailure() const noexcept {
+    return lastPublicationFailure_;
+  }
 
   struct LeaseCapacityClaim {
     std::uint64_t sources = 0;
@@ -1861,36 +1911,54 @@ class CpuReadyTape {
                       std::size_t usedBytes = 0,
                       std::uint64_t rawOrdinal = 0,
                       CpuReadyProducerIdentity producerIdentity = {}) noexcept {
+    lastPublicationFailure_ = CpuReadyPublicationFailureReason::None;
     auto* entry = resolveEntry(ticket.id, ticket.storage);
     const std::size_t reservedBytes =
         static_cast<std::size_t>(ticket.storage.pageCount) *
         config_.values().pageSize;
-    if (!entry || entry->state != State::Writing || entry->strictAdmission ||
-        entry->payloadKind != PayloadKind::Legacy ||
-        ticket.hasAdmissionIdentity() || sourceOrdinal == 0 || seqId == 0 ||
-        !producerIdentity.importable() ||
-        (!entry->producerIdentity.absent() && !producerIdentity.absent() &&
-         entry->producerIdentity != producerIdentity) ||
-        (rawOrdinal != 0 && rawOrdinal <= rawOrdinalHighWater_) ||
+    if (!entry) return rejectPublication(
+        CpuReadyPublicationFailureReason::MissingEntry);
+    if (entry->state != State::Writing) return rejectPublication(
+        CpuReadyPublicationFailureReason::WrongState);
+    if (entry->strictAdmission || ticket.hasAdmissionIdentity()) {
+      return rejectPublication(
+          CpuReadyPublicationFailureReason::StrictAdmissionMismatch);
+    }
+    if (entry->payloadKind != PayloadKind::Legacy) return rejectPublication(
+        CpuReadyPublicationFailureReason::WrongPayloadKind);
+    if (sourceOrdinal == 0 || seqId == 0 || !producerIdentity.importable()) {
+      return rejectPublication(
+          CpuReadyPublicationFailureReason::InvalidIdentity);
+    }
+    if (!entry->producerIdentity.absent() && !producerIdentity.absent() &&
+        entry->producerIdentity != producerIdentity) {
+      return rejectPublication(
+          CpuReadyPublicationFailureReason::ProducerIdentityMismatch);
+    }
+    if ((rawOrdinal != 0 && rawOrdinal <= rawOrdinalHighWater_) ||
         sourceOrdinal <= sourceOrdinalHighWater_ ||
-        seqId <= seqIdHighWater_ || controlIndex == kInvalidIndex ||
-        !entry->readyPublicationReserved ||
-        readyCount_ >= config_.values().readyFifoCount ||
+        seqId <= seqIdHighWater_) {
+      return rejectPublication(
+          CpuReadyPublicationFailureReason::HighWaterOrderViolation);
+    }
+    if (controlIndex == kInvalidIndex) return rejectPublication(
+        CpuReadyPublicationFailureReason::InvalidControlIndex);
+    if (!entry->readyPublicationReserved) return rejectPublication(
+        CpuReadyPublicationFailureReason::PublicationReservationMissing);
+    if (readyCount_ >= config_.values().readyFifoCount ||
         readyFifo_[readyTail_].valid()) {
-      noteStaleReject();
-      return false;
+      return rejectPublication(CpuReadyPublicationFailureReason::ReadyQueueFull);
     }
     auto* payload = compatibilityPayload(*entry);
     if (!payload) {
-      noteStaleReject();
-      return false;
+      return rejectPublication(CpuReadyPublicationFailureReason::MissingPayload);
     }
     if (usedBytes != 0) {
       // Explicit extents continue to describe caller-written Tape storage and
       // must fit the reserved page run.
       if (usedBytes > reservedBytes) {
-        noteStaleReject();
-        return false;
+        return rejectPublication(
+            CpuReadyPublicationFailureReason::ExtentOutOfBounds);
       }
     } else {
       // Legacy compatibility payloads live in their ChunkSlot vectors rather
@@ -1954,8 +2022,7 @@ class CpuReadyTape {
       return false;
     }
     const auto admission = compatibilitySpanAdmission(
-        entry->spanWitness, entry->producerIdentity, spanRawOrdinal,
-        spanOrdinal, next);
+        entry->spanWitness, spanRawOrdinal, spanOrdinal, next);
     switch (admission) {
     case CpuReadySpanAdmission::SameRawSpan:
       // The interval is already exactly this raw's; only the witness moves.
@@ -1981,7 +2048,8 @@ class CpuReadyTape {
     entry->spanWitness = spanRawOrdinal != 0u
         ? CpuReadySpanWitness{.rawOrdinal = spanRawOrdinal,
                               .lastSpanOrdinal = spanOrdinal,
-                              .settled = finalSpan}
+                              .settled = finalSpan,
+                              .producerIdentity = next}
         : CpuReadySpanWitness{};
     if (next.absent()) return true;
     if (entry->producerIdentity.absent()) {
@@ -1997,21 +2065,33 @@ class CpuReadyTape {
   bool sealAndPublish(CpuReadyPublicationTicket ticket,
                       std::size_t controlIndex,
                       std::size_t usedBytes = 0) noexcept {
+    lastPublicationFailure_ = CpuReadyPublicationFailureReason::None;
     auto* entry = resolveEntry(ticket.id, ticket.storage);
     const std::size_t reservedBytes =
         static_cast<std::size_t>(ticket.storage.pageCount) *
         config_.values().pageSize;
-    if (!entry || entry->state != State::Writing ||
-        !entry->strictAdmission || !strictWritingActive_ ||
-        entry->payloadKind != PayloadKind::Arena ||
-        !ticketMatchesEntry(ticket, *entry) ||
-        controlIndex == kInvalidIndex || usedBytes != entry->plannedBytes ||
-        entry->plannedBytes > reservedBytes ||
-        !entry->readyPublicationReserved ||
-        readyCount_ >= config_.values().readyFifoCount ||
+    if (!entry) return rejectPublication(
+        CpuReadyPublicationFailureReason::MissingEntry);
+    if (entry->state != State::Writing || !strictWritingActive_) {
+      return rejectPublication(CpuReadyPublicationFailureReason::WrongState);
+    }
+    if (entry->payloadKind != PayloadKind::Arena) return rejectPublication(
+        CpuReadyPublicationFailureReason::WrongPayloadKind);
+    if (!entry->strictAdmission || !ticketMatchesEntry(ticket, *entry)) {
+      return rejectPublication(
+          CpuReadyPublicationFailureReason::TicketMismatch);
+    }
+    if (controlIndex == kInvalidIndex) return rejectPublication(
+        CpuReadyPublicationFailureReason::InvalidControlIndex);
+    if (usedBytes != entry->plannedBytes || entry->plannedBytes > reservedBytes) {
+      return rejectPublication(
+          CpuReadyPublicationFailureReason::ExtentOutOfBounds);
+    }
+    if (!entry->readyPublicationReserved) return rejectPublication(
+        CpuReadyPublicationFailureReason::PublicationReservationMissing);
+    if (readyCount_ >= config_.values().readyFifoCount ||
         readyFifo_[readyTail_].valid()) {
-      noteStaleReject();
-      return false;
+      return rejectPublication(CpuReadyPublicationFailureReason::ReadyQueueFull);
     }
     const auto reservedStorage = storageSpan(ticket.storage);
     const auto plannedStorage = reservedStorage.first(entry->plannedBytes);
@@ -2021,8 +2101,8 @@ class CpuReadyTape {
       const auto extent = entry->arenaExtents[i];
       if (extent.byteOffset > plannedStorage.size() ||
           extent.byteCount > plannedStorage.size() - extent.byteOffset) {
-        noteStaleReject();
-        return false;
+        return rejectPublication(
+            CpuReadyPublicationFailureReason::ExtentOutOfBounds);
       }
       const auto& owner = arenaOwner(ticket.id.index, i);
       const auto* payload = owner.constructed ? owner.payload() : nullptr;
@@ -2031,15 +2111,15 @@ class CpuReadyTape {
       if (!payload || !payload->published() ||
           !payload->boundTo(
               std::span<const std::byte>(segmentStorage))) {
-        noteStaleReject();
-        return false;
+        return rejectPublication(
+            CpuReadyPublicationFailureReason::ArenaPayloadInvalid);
       }
       payloads[i] = payload;
     }
     if (!entry->arenaChain.initialize(
             std::span(payloads).first(entry->arenaPayloadCount))) {
-      noteStaleReject();
-      return false;
+      return rejectPublication(
+          CpuReadyPublicationFailureReason::ArenaChainInvalid);
     }
     const SourcePayloadView payloadView = entry->arenaPayloadCount == 1
         ? SourcePayloadView(*payloads[0])
@@ -3396,6 +3476,12 @@ class CpuReadyTape {
     }
   }
 
+  bool rejectPublication(CpuReadyPublicationFailureReason reason) noexcept {
+    lastPublicationFailure_ = reason;
+    noteStaleReject();
+    return false;
+  }
+
   void noteStaleReject() const noexcept { ++stats_.staleRejects; }
 
   void rollbackNewest(Entry& entry) noexcept {
@@ -3504,6 +3590,8 @@ class CpuReadyTape {
   bool strictWritingActive_ = false;
   ArenaBatchReserveFailure lastArenaBatchReserveFailure_ =
       ArenaBatchReserveFailure::None;
+  CpuReadyPublicationFailureReason lastPublicationFailure_ =
+      CpuReadyPublicationFailureReason::None;
   bool stopped_ = false;
   mutable Stats stats_{};
 };

@@ -3831,7 +3831,10 @@ CommandQueue::beginDirectChunkSlotReplay(
       rangeDrawCount > rangeRecordCount ||
       rangeRecordCount > std::numeric_limits<std::uint32_t>::max() ||
       rangeDrawCount > std::numeric_limits<std::uint32_t>::max()) {
-    return {.status = DirectChunkSlotReplayStatus::LegacyUnsupported};
+    return {
+        .status = DirectChunkSlotReplayStatus::LegacyUnsupported,
+        .failureReason = DirectChunkSlotReplayFailureReason::InvalidArguments,
+    };
   }
   const auto qmxBegin = queueMutexProbeBegin();
   std::unique_lock lock(mutex_);
@@ -3840,9 +3843,13 @@ CommandQueue::beginDirectChunkSlotReplay(
   if (stop_ || activeArenaBuild_.load(std::memory_order_acquire) ||
       activeDirectChunkSlotBuild_.load(std::memory_order_acquire) ||
       directChunkSlotBuildContext_) {
-    return {.status = stop_
-        ? DirectChunkSlotReplayStatus::FailStopped
-        : DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+    return {
+        .status = stop_ ? DirectChunkSlotReplayStatus::FailStopped
+                        : DirectChunkSlotReplayStatus::LegacyPreEffectFailure,
+        .failureReason = stop_
+            ? DirectChunkSlotReplayFailureReason::QueueStopped
+            : DirectChunkSlotReplayFailureReason::ActiveBuildConflict,
+    };
   }
   // A capacity-rejected continuation must not degrade into ordinary
   // draw-by-draw compatibility replay: that would split one span's draws
@@ -3860,7 +3867,13 @@ CommandQueue::beginDirectChunkSlotReplay(
   for (;;) {
     ensureWritingSlotUnlocked(*this, lock);
     if (!writingSlot_ || *writingSlot_ >= slots_.size()) {
-      return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+      return {
+          .status = stop_ ? DirectChunkSlotReplayStatus::FailStopped
+                          : DirectChunkSlotReplayStatus::LegacyPreEffectFailure,
+          .failureReason =
+              stop_ ? DirectChunkSlotReplayFailureReason::QueueStopped
+                    : DirectChunkSlotReplayFailureReason::WritingSlotUnavailable,
+      };
     }
     controlIndex = *writingSlot_;
     auto& control = slots_[controlIndex];
@@ -3871,7 +3884,11 @@ CommandQueue::beginDirectChunkSlotReplay(
         });
     if (control.state != core::ChunkSlot::State::Writing ||
         !payload || payload != control.payload) {
-      return {.status = DirectChunkSlotReplayStatus::FailStopped};
+      return {
+          .status = DirectChunkSlotReplayStatus::FailStopped,
+          .failureReason =
+              DirectChunkSlotReplayFailureReason::PayloadUnavailable,
+      };
     }
     if (payload->commandsEmpty()) {
       continuation = false;
@@ -3986,15 +4003,21 @@ CommandQueue::beginDirectChunkSlotReplay(
     const auto spanWitness = cpuReadyTape_.inspectSpanWitness(sourceRef);
     if (!currentProducerIdentity || !spanWitness) {
       requestSchedulingStopLocked();
-      return {.status = DirectChunkSlotReplayStatus::FailStopped};
+      return {
+          .status = DirectChunkSlotReplayStatus::FailStopped,
+          .failureReason =
+              !currentProducerIdentity
+                  ? DirectChunkSlotReplayFailureReason::ProducerIdentityMissing
+                  : DirectChunkSlotReplayFailureReason::SpanWitnessMissing,
+      };
     }
     // Two separate questions. A different raw extending this populated slot
     // still needs the unchanged closed-interval adjacency rule; the same raw
     // extending its own prefix with the next span needs the witness instead,
-    // because every span of one raw carries the identical closed interval.
+    // because every span carries the same raw-local closed interval. The
+    // witness owns that interval separately from the slot-wide aggregate.
     const auto spanAdmission = core::compatibilitySpanAdmission(
-        *spanWitness, *currentProducerIdentity, rawOrdinal, spanOrdinal,
-        producerIdentity);
+        *spanWitness, rawOrdinal, spanOrdinal, producerIdentity);
     if (spanAdmission == core::CpuReadySpanAdmission::SameRawSpan) {
       perf::countReplaySpanSameRawAdmitted();
     } else if (spanAdmission != core::CpuReadySpanAdmission::CrossRaw) {
@@ -4004,12 +4027,22 @@ CommandQueue::beginDirectChunkSlotReplay(
       perf::countReplaySpanSameRawRejected();
       perf::countDirectChunkSlotContinuationIdentityRejected();
       perf::countDirectChunkSlotContinuationPopulatedFallback();
-      return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+      return {
+          .status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure,
+          .failureReason =
+              DirectChunkSlotReplayFailureReason::SpanAdmissionRejected,
+          .spanAdmission = spanAdmission,
+      };
     } else if (!core::compatibilityProducerIdentityAppendable(
                    *currentProducerIdentity, producerIdentity)) {
       perf::countDirectChunkSlotContinuationIdentityRejected();
       perf::countDirectChunkSlotContinuationPopulatedFallback();
-      return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+      return {
+          .status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure,
+          .failureReason =
+              DirectChunkSlotReplayFailureReason::ProducerIdentityAppendRejected,
+          .spanAdmission = spanAdmission,
+      };
     }
     // The reducer owns rotate-vs-fallback. The single bounded rotation per
     // admission is lifecycle state it cannot see, so it is passed in; nothing
@@ -4038,16 +4071,28 @@ CommandQueue::beginDirectChunkSlotReplay(
         }
       }
       perf::countDirectChunkSlotContinuationPopulatedFallback();
-      return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+      return {
+          .status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure,
+          .failureReason =
+              DirectChunkSlotReplayFailureReason::RotationPublicationRejected,
+          .publicationFailure = cpuReadyTape_.lastPublicationFailure(),
+      };
     }
     perf::countDirectChunkSlotContinuationStructuralRejected();
     perf::countDirectChunkSlotContinuationPopulatedFallback();
-    return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+    return {
+        .status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure,
+        .failureReason = DirectChunkSlotReplayFailureReason::StructuralRejected,
+    };
   }
   auto& control = slots_[controlIndex];
   if (nextDirectChunkSlotBuildGeneration_ == 0) {
     requestSchedulingStopLocked();
-    return {.status = DirectChunkSlotReplayStatus::FailStopped};
+    return {
+        .status = DirectChunkSlotReplayStatus::FailStopped,
+        .failureReason =
+            DirectChunkSlotReplayFailureReason::BuildGenerationUnavailable,
+    };
   }
   const std::uint64_t seqId =
       nextSeqId_.load(std::memory_order_relaxed);
@@ -4102,7 +4147,10 @@ CommandQueue::beginDirectChunkSlotReplay(
   if (!bound) {
     context.assembler->rollback();
     directChunkSlotBuildContext_.reset();
-    return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+    return {
+        .status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure,
+        .failureReason = DirectChunkSlotReplayFailureReason::AssemblerRejected,
+    };
   }
   activeDirectChunkSlotBuild_.store(&context, std::memory_order_release);
   return {

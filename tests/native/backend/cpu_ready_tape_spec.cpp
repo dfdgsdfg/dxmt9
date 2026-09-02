@@ -49,6 +49,9 @@ using dxmt9::core::CpuReadyAdmissionIdentity;
 using dxmt9::core::CpuReadySourceId;
 using dxmt9::core::CpuReadySourceMetadata;
 using dxmt9::core::CpuReadyProducerIdentity;
+using dxmt9::core::CpuReadyPublicationFailureReason;
+using dxmt9::core::CpuReadySpanAdmission;
+using dxmt9::core::CpuReadySpanWitness;
 using dxmt9::core::CpuReadyStorageRef;
 using dxmt9::core::CpuReadyTape;
 using dxmt9::core::SourceEntryEncoderKind;
@@ -449,6 +452,20 @@ void sealAndPublishFailureLeavesWritingAndCursorsUnchanged() {
             tape.stats().readyPublicationReservations ==
                 before.readyPublicationReservations,
         "failed publication leaves Writing state and every reservation cursor unchanged");
+  check(tape.lastPublicationFailure() ==
+            CpuReadyPublicationFailureReason::ReadyQueueFull,
+        "publication failure preserves the exact full-ready-queue guard");
+}
+
+void publicationFailureReasonPreservesFirstRejectedGuard() {
+  CpuReadyTape tape{makeConfig(4, 2, 2, 1, 2, 0, 4, 0)};
+  const auto source = tape.reserve();
+  check(source.has_value(), "typed publication fixture reserves a source");
+  check(!tape.sealAndPublish(source->ticket, 0, 1, 0),
+        "zero source ordinal rejects before publication");
+  check(tape.lastPublicationFailure() ==
+            CpuReadyPublicationFailureReason::InvalidIdentity,
+        "publication reports the first invalid-identity guard");
 }
 
 void leaseSnapshotSeparatesOnlyUniqueOrderedTailWriting() {
@@ -2049,6 +2066,33 @@ void compatibilityProducerIntervalsComposeWithoutPublishing() {
         "publication preserves the composed producer interval exactly");
 }
 
+void sameRawSpanUsesExactWitnessIdentity() {
+  const CpuReadyProducerIdentity aggregate{
+      .firstEventOrdinal = 3u,
+      .lastEventOrdinal = 4u,
+      .firstSourceOrdinal = 260u,
+      .lastSourceOrdinal = 640u,
+  };
+  const CpuReadyProducerIdentity spanIdentity{
+      .firstEventOrdinal = 4u,
+      .lastEventOrdinal = 4u,
+      .firstSourceOrdinal = 516u,
+      .lastSourceOrdinal = 640u,
+  };
+  const CpuReadySpanWitness witness{
+      .rawOrdinal = 445u,
+      .lastSpanOrdinal = 0u,
+      .settled = false,
+      .producerIdentity = spanIdentity,
+  };
+  check(compatibilitySpanAdmission(witness, 445u, 1u, spanIdentity) ==
+            CpuReadySpanAdmission::SameRawSpan,
+        "same-raw continuation uses its exact opening witness identity");
+  check(compatibilitySpanAdmission(witness, 445u, 1u, aggregate) ==
+            CpuReadySpanAdmission::IdentityMismatch,
+        "an arbitrary contained aggregate interval cannot impersonate a span");
+}
+
 void controlShellDoesNotOwnPayload() {
   CpuReadyTape tape{makeConfig(2, 4, 2, 1, 2, 0, 2, 0)};
   const auto reservation = tape.reserve();
@@ -2074,6 +2118,7 @@ int main() {
     productionProfilesSeparateSessionPageAndSourceHeadroom();
     readyAdmissionDistinguishesHardHighAndLowWater();
     sealAndPublishFailureLeavesWritingAndCursorsUnchanged();
+    publicationFailureReasonPreservesFirstRejectedGuard();
     leaseSnapshotSeparatesOnlyUniqueOrderedTailWriting();
     leaseSnapshotKeepsNonWritingResidencyUnavailable();
     representPrefixIsAtomicAndPreservesReadySuffix();
@@ -2110,6 +2155,7 @@ int main() {
     headCandidatePressureStaysLatchedUntilAllLowWaterBounds();
     shutdownStopsAdmissionButAllowsRelease();
     compatibilityProducerIntervalsComposeWithoutPublishing();
+    sameRawSpanUsesExactWitnessIdentity();
     controlShellDoesNotOwnPayload();
   } catch (const std::exception& error) {
     std::cerr << "cpu_ready_tape_spec failed: " << error.what() << '\n';

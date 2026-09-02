@@ -653,6 +653,23 @@ class CommandQueue {
     FailStopped,
   };
 
+  enum class DirectChunkSlotReplayFailureReason : std::uint8_t {
+    None,
+    InvalidArguments,
+    QueueStopped,
+    ActiveBuildConflict,
+    WritingSlotUnavailable,
+    PayloadUnavailable,
+    ProducerIdentityMissing,
+    SpanWitnessMissing,
+    SpanAdmissionRejected,
+    ProducerIdentityAppendRejected,
+    BuildGenerationUnavailable,
+    RotationPublicationRejected,
+    StructuralRejected,
+    AssemblerRejected,
+  };
+
   class DirectChunkSlotReplayLease {
    public:
     DirectChunkSlotReplayLease() = default;
@@ -729,6 +746,12 @@ class CommandQueue {
   struct DirectChunkSlotReplayBeginResult {
     DirectChunkSlotReplayStatus status =
         DirectChunkSlotReplayStatus::LegacyUnsupported;
+    DirectChunkSlotReplayFailureReason failureReason =
+        DirectChunkSlotReplayFailureReason::None;
+    core::CpuReadyPublicationFailureReason publicationFailure =
+        core::CpuReadyPublicationFailureReason::None;
+    core::CpuReadySpanAdmission spanAdmission =
+        core::CpuReadySpanAdmission::CrossRaw;
     std::optional<DirectChunkSlotReplayLease> lease{};
 
     bool has_value() const noexcept { return lease.has_value(); }

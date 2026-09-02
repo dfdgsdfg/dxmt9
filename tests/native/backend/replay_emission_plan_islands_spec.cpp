@@ -92,59 +92,73 @@ void spanAdmissionTruthTable() {
         "the cross-raw predicate still admits the adjacent next raw");
 
   // No witness: the cross-raw predicate remains the only authority.
-  check(compatibilitySpanAdmission(CpuReadySpanWitness{},
-                                   CpuReadyProducerIdentity{}, kRaw, 0u,
+  check(compatibilitySpanAdmission(CpuReadySpanWitness{}, kRaw, 0u,
                                    kRawIdentity) ==
             CpuReadySpanAdmission::CrossRaw,
         "an inactive witness defers to the cross-raw rule");
   // A span-unqualified caller (rawOrdinal == 0) is the historical whole-raw
   // path and must be byte-identical to the pre-span behaviour.
   check(compatibilitySpanAdmission(
-            CpuReadySpanWitness{.rawOrdinal = kRaw, .lastSpanOrdinal = 0u},
-            kRawIdentity, 0u, 0u, kRawIdentity) ==
+            CpuReadySpanWitness{.rawOrdinal = kRaw,
+                                .lastSpanOrdinal = 0u,
+                                .producerIdentity = kRawIdentity},
+            0u, 0u, kRawIdentity) ==
             CpuReadySpanAdmission::CrossRaw,
         "an unqualified caller never takes the same-raw path");
   // A different raw never reaches the witnessed path either.
   check(compatibilitySpanAdmission(
-            CpuReadySpanWitness{.rawOrdinal = kRaw, .lastSpanOrdinal = 0u},
-            kRawIdentity, kOtherRaw, 1u, kNextRawIdentity) ==
+            CpuReadySpanWitness{.rawOrdinal = kRaw,
+                                .lastSpanOrdinal = 0u,
+                                .producerIdentity = kRawIdentity},
+            kOtherRaw, 1u, kNextRawIdentity) ==
             CpuReadySpanAdmission::CrossRaw,
         "a different raw is decided by the unchanged cross-raw rule");
 
   // The one admitted case: the exact witnessed raw, unsettled, immediate
   // successor ordinal, identical closed interval.
   check(compatibilitySpanAdmission(
-            CpuReadySpanWitness{.rawOrdinal = kRaw, .lastSpanOrdinal = 0u},
-            kRawIdentity, kRaw, 1u, kRawIdentity) ==
+            CpuReadySpanWitness{.rawOrdinal = kRaw,
+                                .lastSpanOrdinal = 0u,
+                                .producerIdentity = kRawIdentity},
+            kRaw, 1u, kRawIdentity) ==
             CpuReadySpanAdmission::SameRawSpan,
         "the immediate successor span of the active raw is admitted");
 
   // Every rejection is its own reason, so a fallback is never unclassified.
   check(compatibilitySpanAdmission(
-            CpuReadySpanWitness{.rawOrdinal = kRaw, .lastSpanOrdinal = 1u},
-            kRawIdentity, kRaw, 1u, kRawIdentity) ==
+            CpuReadySpanWitness{.rawOrdinal = kRaw,
+                                .lastSpanOrdinal = 1u,
+                                .producerIdentity = kRawIdentity},
+            kRaw, 1u, kRawIdentity) ==
             CpuReadySpanAdmission::DuplicateSpan,
         "a repeated span ordinal is a duplicate");
   check(compatibilitySpanAdmission(
-            CpuReadySpanWitness{.rawOrdinal = kRaw, .lastSpanOrdinal = 1u},
-            kRawIdentity, kRaw, 0u, kRawIdentity) ==
+            CpuReadySpanWitness{.rawOrdinal = kRaw,
+                                .lastSpanOrdinal = 1u,
+                                .producerIdentity = kRawIdentity},
+            kRaw, 0u, kRawIdentity) ==
             CpuReadySpanAdmission::DuplicateSpan,
         "an out-of-order span ordinal is a duplicate");
   check(compatibilitySpanAdmission(
-            CpuReadySpanWitness{.rawOrdinal = kRaw, .lastSpanOrdinal = 1u},
-            kRawIdentity, kRaw, 3u, kRawIdentity) ==
+            CpuReadySpanWitness{.rawOrdinal = kRaw,
+                                .lastSpanOrdinal = 1u,
+                                .producerIdentity = kRawIdentity},
+            kRaw, 3u, kRawIdentity) ==
             CpuReadySpanAdmission::SkippedSpan,
         "a non-adjacent span ordinal is a skip");
   check(compatibilitySpanAdmission(
             CpuReadySpanWitness{.rawOrdinal = kRaw,
                                 .lastSpanOrdinal = 1u,
-                                .settled = true},
-            kRawIdentity, kRaw, 2u, kRawIdentity) ==
+                                .settled = true,
+                                .producerIdentity = kRawIdentity},
+            kRaw, 2u, kRawIdentity) ==
             CpuReadySpanAdmission::SettledRaw,
         "nothing may extend a raw after its final span");
   check(compatibilitySpanAdmission(
-            CpuReadySpanWitness{.rawOrdinal = kRaw, .lastSpanOrdinal = 0u},
-            kRawIdentity, kRaw, 1u, kNextRawIdentity) ==
+            CpuReadySpanWitness{.rawOrdinal = kRaw,
+                                .lastSpanOrdinal = 0u,
+                                .producerIdentity = kRawIdentity},
+            kRaw, 1u, kNextRawIdentity) ==
             CpuReadySpanAdmission::IdentityMismatch,
         "the same raw presenting a different interval is rejected");
 
@@ -153,8 +167,9 @@ void spanAdmissionTruthTable() {
   check(compatibilitySpanAdmission(
             CpuReadySpanWitness{.rawOrdinal = kRaw,
                                 .lastSpanOrdinal = 0u,
-                                .settled = true},
-            kRawIdentity, kRaw, 1u, kRawIdentity) ==
+                                .settled = true,
+                                .producerIdentity = kRawIdentity},
+            kRaw, 1u, kRawIdentity) ==
             CpuReadySpanAdmission::SettledRaw,
         "settlement is checked before the ordinal relation");
 
@@ -162,8 +177,9 @@ void spanAdmissionTruthTable() {
   check(compatibilitySpanAdmission(
             CpuReadySpanWitness{
                 .rawOrdinal = kRaw,
-                .lastSpanOrdinal = std::numeric_limits<std::uint32_t>::max()},
-            kRawIdentity, kRaw, 0u, kRawIdentity) ==
+                .lastSpanOrdinal = std::numeric_limits<std::uint32_t>::max(),
+                .producerIdentity = kRawIdentity},
+            kRaw, 0u, kRawIdentity) ==
             CpuReadySpanAdmission::DuplicateSpan,
         "a saturated witness ordinal never admits a wrapped successor");
 }
@@ -175,8 +191,16 @@ enum class Discipline : std::uint8_t { Enforced, Removed };
 
 struct Disciplines {
   Discipline spanIdentity = Discipline::Enforced;
+  Discipline rawLocalWitness = Discipline::Enforced;
   Discipline separatorCut = Discipline::Enforced;
   Discipline runClosure = Discipline::Enforced;
+};
+
+enum class IntervalIdentity : std::uint8_t {
+  None,
+  PreviousRaw,
+  ActiveRaw,
+  SlotAggregate,
 };
 
 enum class Stage : std::uint8_t {
@@ -209,6 +233,8 @@ struct ModelState {
   Stage stage = Stage::Init;
   Disposition disposition = Disposition::Unset;
   CpuReadySpanWitness witness{};
+  IntervalIdentity slotInterval = IntervalIdentity::PreviousRaw;
+  IntervalIdentity witnessInterval = IntervalIdentity::None;
   std::array<std::uint32_t, 3> emitted{};
   bool separatorExecuted = false;
   bool runOpen = false;
@@ -229,7 +255,7 @@ bool admitsLeaseOrdinal(const ModelState& state, std::uint32_t ordinal,
   if (disciplines.spanIdentity == Discipline::Removed) {
     return true;
   }
-  return compatibilitySpanAdmission(state.witness, kRawIdentity, kRaw, ordinal,
+  return compatibilitySpanAdmission(state.witness, kRaw, ordinal,
                                     kRawIdentity) ==
          CpuReadySpanAdmission::SameRawSpan;
 }
@@ -247,8 +273,19 @@ bool applyStep(ModelState& state, Step step, Disciplines disciplines) {
     if (state.stage != Stage::Span0Begun) return false;
     state.stage = Stage::Span0Committed;
     state.disposition = Disposition::Direct;
+    state.slotInterval = IntervalIdentity::SlotAggregate;
+    state.witnessInterval =
+        disciplines.rawLocalWitness == Discipline::Enforced
+        ? IntervalIdentity::ActiveRaw
+        : IntervalIdentity::SlotAggregate;
     state.witness = CpuReadySpanWitness{
-        .rawOrdinal = kRaw, .lastSpanOrdinal = leaseOrdinal(0), .settled = false};
+        .rawOrdinal = kRaw,
+        .lastSpanOrdinal = leaseOrdinal(0),
+        .settled = false,
+        .producerIdentity =
+            disciplines.rawLocalWitness == Discipline::Enforced
+            ? kRawIdentity
+            : CpuReadyProducerIdentity{6u, 7u, 10u, 11u}};
     ++state.emitted[0];
     state.effectsStarted = true;
     if (disciplines.runClosure == Discipline::Enforced) state.runOpen = false;
@@ -323,6 +360,16 @@ bool runClosedAcrossSeparator(const ModelState& state) {
   return !state.runStraddledCut;
 }
 
+bool rawLocalWitnessSeparated(const ModelState& state) {
+  const bool installed = state.stage == Stage::Span0Committed ||
+      state.stage == Stage::SeparatorDone || state.stage == Stage::Span2Begun ||
+      state.stage == Stage::Done;
+  return !installed ||
+      (state.slotInterval == IntervalIdentity::SlotAggregate &&
+       state.witnessInterval == IntervalIdentity::ActiveRaw &&
+       state.witness.producerIdentity == kRawIdentity);
+}
+
 bool noPostSettlementExtension(const ModelState& state) {
   return !state.witness.settled ||
          state.stage == Stage::Done || state.stage == Stage::FailStopped;
@@ -363,6 +410,7 @@ void productionTraceHoldsEveryInvariant() {
   check(eachRecordEmittedOnce(result.state) &&
             noLegacyRetryAfterSeparator(result.state) &&
             runClosedAcrossSeparator(result.state) &&
+            rawLocalWitnessSeparated(result.state) &&
             noPostSettlementExtension(result.state) &&
             failStopIsTerminal(result.state),
         "the production trace holds every invariant");
@@ -383,6 +431,7 @@ void productionTraceHoldsEveryInvariant() {
   check(eachRecordEmittedOnce(failed.state) &&
             noLegacyRetryAfterSeparator(failed.state) &&
             runClosedAcrossSeparator(failed.state) &&
+            rawLocalWitnessSeparated(failed.state) &&
             failStopIsTerminal(failed.state),
         "the failure trace holds every invariant");
 
@@ -417,6 +466,23 @@ void spanIdentityCounterexampleTrace() {
         "EachRecordEmittedOnce");
   check(result.state.emitted[0] == 2u,
         "the raw's first span is emitted twice without the witness");
+}
+
+void rawLocalWitnessCounterexampleTrace() {
+  const Disciplines aggregateWitness{
+      .rawLocalWitness = Discipline::Removed,
+  };
+  const std::array steps{Step::BeginSpan0, Step::CommitSpan0};
+  auto result = runTrace(steps, aggregateWitness, /*span2Fails=*/false);
+  check(result.appliedSteps == steps.size(),
+        "the populated slot installs the deliberately wrong aggregate witness");
+  check(!rawLocalWitnessSeparated(result.state),
+        "ReplayEmissionPlanIslands.raw-local-witness.counterexample violates "
+        "RawLocalWitnessSeparated");
+  check(compatibilitySpanAdmission(result.state.witness, kRaw,
+                                   leaseOrdinal(2), kRawIdentity) ==
+            CpuReadySpanAdmission::IdentityMismatch,
+        "the aggregate witness rejects the unchanged second-span identity");
 }
 
 void separatorCutCounterexampleTrace() {
@@ -458,6 +524,7 @@ int main() {
     spanAdmissionTruthTable();
     productionTraceHoldsEveryInvariant();
     spanIdentityCounterexampleTrace();
+    rawLocalWitnessCounterexampleTrace();
     separatorCutCounterexampleTrace();
     runClosureCounterexampleTrace();
   } catch (const std::exception& error) {

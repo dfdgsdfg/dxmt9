@@ -2177,6 +2177,72 @@ void compatibilityCutSplitsTheRawIntoTwoLeaseSpans() {
   dxmt9c_buffer_release(buffer);
 }
 
+// A populated slot owns two different identity domains at once: the slot-wide
+// aggregate covers every adjacent raw already appended, while the span witness
+// covers only the active raw. Positive continuation headroom exposed the bug
+// this pins: after raw 119 and span 0 of raw 120, comparing span 1 against the
+// aggregate (event 3-4) rejects raw 120's unchanged event-4 identity after the
+// TriangleFan effect has already executed. The production router must instead
+// use the raw-local witness and finish exactly once without fail-stop.
+void populatedIdentityAggregateDoesNotRejectSameRawSecondSpan() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr,
+        "populated multi-span identity fixture buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+
+  auto prefixWire = makeWireFixture(
+      std::array{drawRecord(identity, 0u)});
+  prefixWire.envelope.producerIdentity = {
+      .firstEventOrdinal = 3u,
+      .lastEventOrdinal = 3u,
+      .firstSourceOrdinal = 260u,
+      .lastSourceOrdinal = 515u,
+  };
+  auto prefixRaw = makeRaw(prefixWire, 119u, false, &registry);
+  prefixRaw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), prefixRaw) ==
+                D3D_OK &&
+            fixture.routing->drawCalls == 0u,
+        "the adjacent predecessor raw constructs the populated slot");
+  dxmt9::CommandQueueArenaLeaseTestAccess::reserveDirectContinuationHeadroom(
+      fixture.routing->queue_);
+
+  auto fanRecord = drawRecord(identity, 1u);
+  D9CCommandChunkWireDrawHeader fanHeader{};
+  std::memcpy(&fanHeader, fanRecord.payload.data(), sizeof(fanHeader));
+  fanHeader.primitiveType = 6u;
+  std::memcpy(fanRecord.payload.data(), &fanHeader, sizeof(fanHeader));
+  auto splitWire = makeWireFixture(std::array{
+      drawRecord(identity, 0u), fanRecord, drawRecord(identity, 2u)});
+  splitWire.envelope.producerIdentity = {
+      .firstEventOrdinal = 4u,
+      .lastEventOrdinal = 4u,
+      .firstSourceOrdinal = 516u,
+      .lastSourceOrdinal = 640u,
+  };
+  auto splitRaw = makeRaw(splitWire, 120u, false, &registry);
+  splitRaw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), splitRaw) ==
+                D3D_OK &&
+            fixture.routing->drawCalls == 1u &&
+            fixture.routing->ordinaryDrawCalls == 1u &&
+            !dxmt9::CommandQueueArenaLeaseTestAccess::stopped(
+                fixture.routing->queue_),
+        "the raw-local witness admits span 1 after the compatibility cut");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+            fixture.routing->queue_) == 4u,
+        "the predecessor and direct-fan-direct raw remain one ordered stream");
+
+  dxmt9::d3d9::releaseRetainedWrappers(splitRaw);
+  dxmt9::d3d9::releaseRetainedWrappers(prefixRaw);
+  dxmt9c_buffer_release(buffer);
+}
+
 // The same records through the Legacy lane must produce the same ordered
 // command kinds and the same draw parameters/payload bytes. This is the
 // production differential for a multi-span raw: the span partition is a
@@ -3635,6 +3701,7 @@ int main() {
     ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion();
     ordinaryDrawApplyStateDrawUsesCarrierFreeDirectPath();
     compatibilityCutSplitsTheRawIntoTwoLeaseSpans();
+    populatedIdentityAggregateDoesNotRejectSameRawSecondSpan();
     compatibilityCutMatchesLegacyDrawSemantics();
     drawApplyStateDrawWithPresentUsesOneLeaseSpan();
     nonTerminalPresentFallsBackToCompatibilityInSourceOrder();
