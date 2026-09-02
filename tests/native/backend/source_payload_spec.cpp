@@ -975,6 +975,46 @@ void testTransactionalAssemblerRollbackReclaimsDestination() {
         "rollback reclaims partial final destination and publishes nothing");
 }
 
+// `replay_span_soa_growth_after_reserve` targets zero and means "a reservation
+// was wrong": an append grew final storage the plan had already sized. That is
+// only true if the baseline it compares against is sampled AFTER the direct
+// assembler's constructor, which is where the planned reserve happens. This
+// pins both halves of that -- the constructor reserves, and appends inside the
+// reservation do not grow -- so a future sampling point that moves back before
+// construction has a failing test rather than a permanently non-zero counter.
+void testDirectChunkSlotReserveHappensInTheConstructor() {
+  ChunkSlot slot;
+  const auto beforeConstruction = slot.commandHeaders.capacity();
+
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 4;
+  capacity.clearRecords = 4;
+
+  {
+    TransactionalChunkSlotAssembler assembler(slot, capacity);
+    check(assembler.state() == TransactionalChunkSlotAssembler::State::Reserved,
+          "the direct assembler constructor must reach Reserved");
+    const auto afterConstruction = slot.commandHeaders.capacity();
+    // The whole point: sampling the baseline before this constructor would
+    // report the planned reserve itself as post-reserve growth on every
+    // normally reserved span.
+    check(afterConstruction >= beforeConstruction + capacity.commandHeaders &&
+              afterConstruction != beforeConstruction,
+          "the constructor performs this span's planned command reserve");
+
+    for (std::size_t i = 0; i < capacity.commandHeaders; ++i) {
+      check(assembler.tryAppendClear(ClearDesc{}),
+            "every planned command must append inside the reservation");
+    }
+    check(slot.commandHeaders.capacity() == afterConstruction,
+          "appends inside the reservation must not grow final storage");
+    check(assembler.prepare(), "the exactly-filled reservation must prepare");
+    check(slot.commandHeaders.capacity() == afterConstruction,
+          "prepare must not grow final storage either");
+    assembler.rollback();
+  }
+}
+
 void testProductionCommitRequiresTypedEvidence() {
   SourcePayloadCapacity capacity{};
   capacity.commandHeaders = 1;
@@ -1088,6 +1128,7 @@ int main() {
     testConsolidatedNondrawCommandParity();
     testCopyMaterializationRegistryOwnershipAndDisabledPath();
     testTransactionalAssemblerRollbackReclaimsDestination();
+    testDirectChunkSlotReserveHappensInTheConstructor();
     testProductionCommitRequiresTypedEvidence();
     testArenaChainMapsOneLogicalCommandSpaceWithoutGather();
     testPublishRejectsInvalidCommandRanges();

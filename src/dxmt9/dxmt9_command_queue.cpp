@@ -2674,8 +2674,9 @@ void markVisitedResource(resources::Pool& pool,
 
 void markArenaSourceResources(resources::Pool& pool,
                               const core::SourcePayloadView& payload,
-                              std::uint64_t seqId) {
-  for (std::size_t i = 0; i < payload.commandCount(); ++i) {
+                              std::uint64_t seqId,
+                              std::size_t firstCommand = 0) {
+  for (std::size_t i = firstCommand; i < payload.commandCount(); ++i) {
     const auto sourceCommand = payload.commandAt(i);
     visitSourceCommandResources(sourceCommand,
                                 [&](const core::SourceCommandResourceRef& resource) {
@@ -2708,8 +2709,13 @@ struct ArenaResourceRetainDigest {
     for (const auto entry : entries) add(entry);
   }
 
-  void add(const core::SourcePayloadView& payload) noexcept {
-    for (std::size_t i = 0; i < payload.commandCount(); ++i) {
+  // `firstCommand` must equal the first command index the mark loop walked.
+  // The digest is evidence that marking happened over exactly that closure,
+  // so a span that marks only its own commands must digest only its own
+  // commands too.
+  void add(const core::SourcePayloadView& payload,
+           std::size_t firstCommand = 0) noexcept {
+    for (std::size_t i = firstCommand; i < payload.commandCount(); ++i) {
       visitSourceCommandResources(
           payload.commandAt(i),
           [&](const core::SourceCommandResourceRef& resource) {
@@ -3713,7 +3719,10 @@ CommandQueue::beginDirectChunkSlotReplay(
     std::size_t plannedBytes,
     core::CpuReadyProducerIdentity producerIdentity,
     std::size_t rangeRecordCount,
-    std::size_t rangeDrawCount) noexcept {
+    std::size_t rangeDrawCount,
+    std::uint32_t spanOrdinal,
+    bool finalSpan,
+    bool allowRotation) noexcept {
   if (rawOrdinal == 0 || plannedBytes == 0 || capacity.commandHeaders == 0 ||
       !producerIdentity.importable() ||
       ((rangeRecordCount == 0) != (rangeDrawCount == 0)) ||
@@ -3733,53 +3742,100 @@ CommandQueue::beginDirectChunkSlotReplay(
         ? DirectChunkSlotReplayStatus::FailStopped
         : DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
   }
-  ensureWritingSlotUnlocked(*this, lock);
-  if (!writingSlot_ || *writingSlot_ >= slots_.size()) {
-    return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
-  }
-  const auto controlIndex = *writingSlot_;
-  auto& control = slots_[controlIndex];
-  auto* payload = cpuReadyTape_.resolveForWrite(
-      core::CpuReadyPublicationTicket{
-          .id = control.sourceId,
-          .storage = control.storage,
-      });
-  if (control.state != core::ChunkSlot::State::Writing ||
-      !payload || payload != control.payload) {
-    return {.status = DirectChunkSlotReplayStatus::FailStopped};
-  }
-  const bool populated = !payload->commandsEmpty();
+  // A capacity-rejected continuation must not degrade into ordinary
+  // draw-by-draw compatibility replay: that would split one span's draws
+  // across two representations. Publish the populated prefix once -- the same
+  // boundary the queue already takes on its own draw/payload limits -- and
+  // retry the identical exact plan against a fresh empty slot. The retry is
+  // bounded to one rotation per begin so a plan larger than an empty slot can
+  // ever hold cannot loop, and it happens strictly before any semantic effect
+  // of the incoming span.
+  std::size_t controlIndex = 0;
+  core::SourcePayloadBlock* payload = nullptr;
   bool continuation = false;
-  if (populated) {
+  bool rotated = false;
+  for (;;) {
+    ensureWritingSlotUnlocked(*this, lock);
+    if (!writingSlot_ || *writingSlot_ >= slots_.size()) {
+      return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+    }
+    controlIndex = *writingSlot_;
+    auto& control = slots_[controlIndex];
+    payload = cpuReadyTape_.resolveForWrite(
+        core::CpuReadyPublicationTicket{
+            .id = control.sourceId,
+            .storage = control.storage,
+        });
+    if (control.state != core::ChunkSlot::State::Writing ||
+        !payload || payload != control.payload) {
+      return {.status = DirectChunkSlotReplayStatus::FailStopped};
+    }
+    if (payload->commandsEmpty()) {
+      continuation = false;
+      break;
+    }
     perf::countDirectChunkSlotContinuationAttempted();
-    const auto currentProducerIdentity = cpuReadyTape_.inspectProducerIdentity(
-        core::CpuReadyTape::SourceRef{
-            .id = control.sourceId, .storage = control.storage});
-    if (!currentProducerIdentity) {
+    const core::CpuReadyTape::SourceRef sourceRef{
+        .id = control.sourceId, .storage = control.storage};
+    const auto currentProducerIdentity =
+        cpuReadyTape_.inspectProducerIdentity(sourceRef);
+    const auto spanWitness = cpuReadyTape_.inspectSpanWitness(sourceRef);
+    if (!currentProducerIdentity || !spanWitness) {
       requestSchedulingStopLocked();
       return {.status = DirectChunkSlotReplayStatus::FailStopped};
     }
-    if (!core::compatibilityProducerIdentityAppendable(
-            *currentProducerIdentity, producerIdentity)) {
+    // Two separate questions. A different raw extending this populated slot
+    // still needs the unchanged closed-interval adjacency rule; the same raw
+    // extending its own prefix with the next span needs the witness instead,
+    // because every span of one raw carries the identical closed interval.
+    const auto spanAdmission = core::compatibilitySpanAdmission(
+        *spanWitness, *currentProducerIdentity, rawOrdinal, spanOrdinal,
+        producerIdentity);
+    if (spanAdmission == core::CpuReadySpanAdmission::SameRawSpan) {
+      perf::countReplaySpanSameRawAdmitted();
+    } else if (spanAdmission != core::CpuReadySpanAdmission::CrossRaw) {
+      // Duplicate, skipped, out-of-order, post-settlement, or a same raw
+      // presenting a different interval. All are producer-ordering faults,
+      // not capacity, so rotation cannot help and Legacy must own the span.
+      perf::countReplaySpanSameRawRejected();
+      perf::countDirectChunkSlotContinuationIdentityRejected();
+      perf::countDirectChunkSlotContinuationPopulatedFallback();
+      return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+    } else if (!core::compatibilityProducerIdentityAppendable(
+                   *currentProducerIdentity, producerIdentity)) {
       perf::countDirectChunkSlotContinuationIdentityRejected();
       perf::countDirectChunkSlotContinuationPopulatedFallback();
       return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
     }
-    switch (core::directContinuationAdmission(*payload, capacity).disposition) {
-      case core::DirectContinuationAdmission::Admitted:
-        continuation = true;
-        perf::countDirectChunkSlotContinuationAdmitted();
-        break;
-      case core::DirectContinuationAdmission::CapacityRejected:
-        perf::countDirectChunkSlotContinuationCapacityRejected();
-        perf::countDirectChunkSlotContinuationPopulatedFallback();
-        return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
-      case core::DirectContinuationAdmission::StructuralRejected:
-        perf::countDirectChunkSlotContinuationStructuralRejected();
-        perf::countDirectChunkSlotContinuationPopulatedFallback();
-        return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+    const auto admission =
+        core::directContinuationAdmission(*payload, capacity).disposition;
+    if (admission == core::DirectContinuationAdmission::Admitted) {
+      continuation = true;
+      perf::countDirectChunkSlotContinuationAdmitted();
+      break;
     }
+    if (admission == core::DirectContinuationAdmission::CapacityRejected) {
+      perf::countDirectChunkSlotContinuationCapacityRejected();
+      if (allowRotation && !rotated) {
+        rotated = true;
+        if (queueLifecycle_.commitCurrentChunk(
+                lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
+                  prepareSlotForPublish(
+                      *this, pool_, slot,
+                      perf::ChunkPublishReason::DirectCapacityRotation);
+                })) {
+          perf::countDirectChunkSlotContinuationCapacityRotated();
+          continue;
+        }
+      }
+      perf::countDirectChunkSlotContinuationPopulatedFallback();
+      return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
+    }
+    perf::countDirectChunkSlotContinuationStructuralRejected();
+    perf::countDirectChunkSlotContinuationPopulatedFallback();
+    return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
   }
+  auto& control = slots_[controlIndex];
   if (nextDirectChunkSlotBuildGeneration_ == 0) {
     requestSchedulingStopLocked();
     return {.status = DirectChunkSlotReplayStatus::FailStopped};
@@ -3804,8 +3860,18 @@ CommandQueue::beginDirectChunkSlotReplay(
   context.pendingBackBuffer = currentBackBuffer_;
   context.continuation = continuation;
   context.expectedRangeRecordCount = rangeRecordCount;
+  context.spanOrdinal = spanOrdinal;
+  context.finalSpan = finalSpan;
   context.assembler.emplace(*payload, capacity, rangeRecordCount,
                             rangeDrawCount);
+  // Baseline AFTER the assembler constructor, which performs this span's
+  // planned reserve. Sampling it before would make every normally reserved
+  // span report post-reserve growth, which is the opposite of what
+  // `replay_span_soa_growth_after_reserve` means: the counter targets zero and
+  // exists to say that a *reservation was wrong*, i.e. that an append grew
+  // final storage the plan had already sized. Only a growth beyond the planned
+  // reserve may set it.
+  context.reservedCommandHeaderCapacity = payload->commandHeaders.capacity();
   const bool bound = context.assembler->good() &&
       context.assembler->bindOuter(
           core::TransactionalChunkSlotAssembler::OuterBinding{
@@ -3986,15 +4052,35 @@ CommandQueue::commitDirectChunkSlotReplay(
     return failStop();
   }
 
+  // The raw's handle closure is marked once per span, deliberately. Retention
+  // is seq-qualified, and each span publishes under its own seqId, so marking
+  // the closure only at the raw's first span would leave a resource a later
+  // span uses carrying an earlier watermark -- the unsafe direction. Marking
+  // a resource under a later seq only extends retention.
   markChunkResourcesWithExactSeq(pool_, resources, ticket.seqId);
   const core::SourcePayloadView payloadView(*payload);
   if (!payloadView.valid()) {
     return failStop();
   }
-  markArenaSourceResources(pool_, payloadView, ticket.seqId);
+  // The command walk, by contrast, is exact-once: it starts at this
+  // transaction's own command checkpoint, so a span never rescans the prefix
+  // that earlier spans (or an earlier raw) already left in this slot. Without
+  // the checkpoint this walk is quadratic in the raw's span count and
+  // re-marks every earlier command under a later seq.
+  const auto firstSpanCommand = context->assembler->directCommandCheckpoint();
+  markArenaSourceResources(pool_, payloadView, ticket.seqId, firstSpanCommand);
+  // Every dimension is reserved once at admission and the per-append `fits`
+  // predicate keeps writes inside it, so the destination must not have
+  // reallocated. Reported rather than enforced: the transaction is already
+  // consistent, and a non-zero row means a reservation was wrong.
+  if (context->reservedCommandHeaderCapacity != 0 &&
+      payload->commandHeaders.capacity() !=
+          context->reservedCommandHeaderCapacity) {
+    perf::countReplaySpanSoaGrowthAfterReserve();
+  }
   ArenaResourceRetainDigest retained;
   retained.add(resources);
-  retained.add(payloadView);
+  retained.add(payloadView, firstSpanCommand);
   const auto& binding = *context->assembler->outerBinding();
   if (!context->assembler->bindCommitEvidence(
           core::ArenaCommitEvidence(
@@ -4014,12 +4100,18 @@ CommandQueue::commitDirectChunkSlotReplay(
       !context->assembler->commit()) {
     return failStop();
   }
+  // Present the span identity, not just the interval. For span 0 (and every
+  // historical whole-raw commit) this is the unchanged cross-raw extension;
+  // for a later span of the same raw the witness admits the immediate
+  // successor without advancing the interval, which the closed +1 rule
+  // cannot express and must not be relaxed to.
   if (!cpuReadyTape_.extendCompatibilityProducerIdentity(
           core::CpuReadyPublicationTicket{
               .id = ticket.id,
               .storage = ticket.storage,
           },
-          ticket.producerIdentity)) {
+          ticket.producerIdentity, ticket.rawOrdinal, context->spanOrdinal,
+          context->finalSpan)) {
     return failStop();
   }
   if (context->updatesBackBuffer) {
@@ -4973,14 +5065,34 @@ CommandQueue::appendActiveDirectChunkSlotClear(
           return false;
         });
   }
+  // Borrowed path: the transaction's owning thread appends straight into the
+  // queue-owned assembler with no mutex reacquisition and no queue timing
+  // state. Publication-time effects -- resource marks, back-buffer promotion,
+  // the slot command-append note -- stay in commitDirectChunkSlotReplay,
+  // which already performs them once against the authenticated ticket.
+  if (auto borrowed = borrowedDirectChunkSlotAppend()) {
+    // Read the attachment before the move. ClearDesc moves only its nested
+    // rect vector today, so reading it afterwards is currently correct, but a
+    // future moved member behind colorAttachments would break that silently.
+    const auto colorAttachment = owned.colorAttachments[0].handle;
+    if (!borrowed.assembler->tryAppendClear(std::move(owned))) {
+      borrowed.poison();
+      return ActiveArenaAppendResult::Failed;
+    }
+    if (colorAttachment) {
+      borrowed.context->pendingBackBuffer = colorAttachment;
+      borrowed.context->updatesBackBuffer = true;
+    }
+    return ActiveArenaAppendResult::Appended;
+  }
   return appendActiveDirectChunkSlot(
       [this, owned = std::move(owned)](DirectChunkSlotBuildContext& context,
           core::TransactionalChunkSlotAssembler& assembler) mutable noexcept {
-        auto clear = std::move(owned);
-        if (!assembler.tryAppendClear(std::move(clear))) return false;
+        const auto colorAttachment = owned.colorAttachments[0].handle;
+        if (!assembler.tryAppendClear(std::move(owned))) return false;
         noteCurrentSlotCommandAppendStartedUnlocked(*this);
-        if (clear.colorAttachments[0].handle) {
-          context.pendingBackBuffer = clear.colorAttachments[0].handle;
+        if (colorAttachment) {
+          context.pendingBackBuffer = colorAttachment;
           context.updatesBackBuffer = true;
         }
         return true;
@@ -4990,6 +5102,15 @@ CommandQueue::appendActiveDirectChunkSlotClear(
 CommandQueue::ActiveArenaAppendResult
 CommandQueue::appendActiveDirectChunkSlotSurfaceCopy(
     const core::SurfaceCopyDesc& value) noexcept {
+  if (auto borrowed = borrowedDirectChunkSlotAppend()) {
+    if (!borrowed.assembler->tryAppendSurfaceCopy(value)) {
+      borrowed.poison();
+      return ActiveArenaAppendResult::Failed;
+    }
+    borrowed.context->pendingBackBuffer = value.destination;
+    borrowed.context->updatesBackBuffer = true;
+    return ActiveArenaAppendResult::Appended;
+  }
   return appendActiveDirectChunkSlot(
       [&](DirectChunkSlotBuildContext& context,
           core::TransactionalChunkSlotAssembler& assembler) noexcept {
@@ -5004,6 +5125,15 @@ CommandQueue::appendActiveDirectChunkSlotSurfaceCopy(
 CommandQueue::ActiveArenaAppendResult
 CommandQueue::appendActiveDirectChunkSlotStretchRect(
     const core::StretchRectDesc& value) noexcept {
+  if (auto borrowed = borrowedDirectChunkSlotAppend()) {
+    if (!borrowed.assembler->tryAppendStretchRect(value)) {
+      borrowed.poison();
+      return ActiveArenaAppendResult::Failed;
+    }
+    borrowed.context->pendingBackBuffer = value.destination;
+    borrowed.context->updatesBackBuffer = true;
+    return ActiveArenaAppendResult::Appended;
+  }
   return appendActiveDirectChunkSlot(
       [&](DirectChunkSlotBuildContext& context,
           core::TransactionalChunkSlotAssembler& assembler) noexcept {
@@ -5018,6 +5148,15 @@ CommandQueue::appendActiveDirectChunkSlotStretchRect(
 CommandQueue::ActiveArenaAppendResult
 CommandQueue::appendActiveDirectChunkSlotColorFill(
     const core::ColorFillDesc& value) noexcept {
+  if (auto borrowed = borrowedDirectChunkSlotAppend()) {
+    if (!borrowed.assembler->tryAppendColorFill(value)) {
+      borrowed.poison();
+      return ActiveArenaAppendResult::Failed;
+    }
+    borrowed.context->pendingBackBuffer = value.destination;
+    borrowed.context->updatesBackBuffer = true;
+    return ActiveArenaAppendResult::Appended;
+  }
   return appendActiveDirectChunkSlot(
       [&](DirectChunkSlotBuildContext& context,
           core::TransactionalChunkSlotAssembler& assembler) noexcept {
@@ -5032,6 +5171,14 @@ CommandQueue::appendActiveDirectChunkSlotColorFill(
 CommandQueue::ActiveArenaAppendResult
 CommandQueue::appendActiveDirectChunkSlotDepthResolve(
     const core::DepthResolveDesc& value) noexcept {
+  if (auto borrowed = borrowedDirectChunkSlotAppend()) {
+    // The destination is the INTZ depth texture, not the present back buffer,
+    // so the pending back buffer is deliberately untouched -- this mirrors
+    // CommandQueue::submitDepthResolve.
+    return borrowed.assembler->tryAppendDepthResolve(value)
+               ? ActiveArenaAppendResult::Appended
+               : (borrowed.poison(), ActiveArenaAppendResult::Failed);
+  }
   return appendActiveDirectChunkSlot(
       [&](DirectChunkSlotBuildContext&,
           core::TransactionalChunkSlotAssembler& assembler) noexcept {
@@ -5044,6 +5191,11 @@ CommandQueue::appendActiveDirectChunkSlotDepthResolve(
 CommandQueue::ActiveArenaAppendResult
 CommandQueue::appendActiveDirectChunkSlotGenerateMipmaps(
     const core::GenerateMipmapsDesc& value) noexcept {
+  if (auto borrowed = borrowedDirectChunkSlotAppend()) {
+    return borrowed.assembler->tryAppendGenerateMipmaps(value)
+               ? ActiveArenaAppendResult::Appended
+               : (borrowed.poison(), ActiveArenaAppendResult::Failed);
+  }
   return appendActiveDirectChunkSlot(
       [&](DirectChunkSlotBuildContext&,
           core::TransactionalChunkSlotAssembler& assembler) noexcept {

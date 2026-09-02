@@ -1365,10 +1365,16 @@ bool TransactionalChunkSlotAssembler::prepare() noexcept {
             directExpectedDrawCount_ &&
         commandCount != std::numeric_limits<std::size_t>::max() &&
         commandCount == commandCount_ &&
+        // Draw runs and coordinator commands both contribute exactly one
+        // command header, but only a draw run contributes a DrawRunCommandRecord
+        // and a PSO subview. Conserving them against the run total rather than
+        // the header total is what lets one range own islands and coordinator
+        // locators together.
+        directRunCommandCount_ <= commandCount &&
         delta(slot.drawRunRecords.size(), directCheckpoint_.drawRunRecords) ==
-            commandCount &&
+            directRunCommandCount_ &&
         delta(slot.drawPsoSubviews.size(), directCheckpoint_.drawPsoSubviews) ==
-            commandCount &&
+            directRunCommandCount_ &&
         within(slot.commandHeaders.size(), directCheckpoint_.commandHeaders,
                directCapacity_.commandHeaders) &&
         within(slot.drawHotStates.size(), directCheckpoint_.drawHotStates,
@@ -1890,6 +1896,7 @@ bool TransactionalChunkSlotAssembler::tryAppendDirectDraw(
       directRunPayloadOffset_ = runPayloadOffset;
       directRunOpen_ = true;
       ++commandCount_;
+      ++directRunCommandCount_;
       return true;
     } catch (...) {
       return fail();

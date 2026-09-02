@@ -8,7 +8,7 @@ tags: [specs, backend, encode-scheduling, gap]
 # Encode Scheduling Gap
 
 This is the detailed owner for `R-BACK-2.35`–`R-BACK-2.50`,
-`R-BACK-2.57`–`R-BACK-2.67`, and `R-BACK-2.76`–`R-BACK-2.100`. The parent
+`R-BACK-2.57`–`R-BACK-2.67`, and `R-BACK-2.76`–`R-BACK-2.102`. The parent
 [backend gap](../gap.md) keeps only a routing summary. Historical experiments
 remain in `docs/perfomance/`.
 
@@ -18,10 +18,142 @@ remain in `docs/perfomance/`.
 |---|---|---|
 | `TransactionalChunkSlotAssembler` (`R-BACK-2.85`) | The transaction now owns either a bounded Arena payload block or the ordinary queue-owned compatibility `ChunkSlot`. The latter checkpoints every final SoA/payload range, including the aggregate nested Clear rect prefix, and uniform locator; reserves the planner's complete upper bound before replay; enforces that bound on each typed append; transfers owned direct Clear rect vectors without post-reservation allocation; and rebuilds uniform lookup state on rollback. Production commits bind private move-only `ArenaCommitEvidence` to the exact raw/source/sequence/build/storage/control witness and the seq-qualified resource closure digest. `pipelineReplayFailureMayRollback` is the shared production/test cut: pre-effect partial construction restores the exact prefix, while post-effect identity, append, or injected commit failure abandons rollback and fail-stops without a Legacy retry. | Broader bounded x64/x86 Wine allocation/retain/bridge/capture fault injection remains open. |
 | Fixed-role `SegmentedTransportV1` and later `ExactFixed` CPU Tape emission (`R-BACK-2.90`–`2.94`) | opt-in bridge transport, pooled Unix live-region owner, production chunk settlement owner, and bounded host model binding implemented; production Tape roles/default promotion open | The PE/WoW64/Unix path validates three borrowed fixed regions and atomically adopts one aligned move-only pooled Unix extent. It retains three scatter copies, but eliminates the three independent region allocations; exact ledger release follows the admitting sink across worker threads. Contiguous V2 remains the default and at-most-once fallback. The all-family production transaction now spans PendingDelta generation, CapacityPre/Post, retainer checkpoint, seal/bridge, capture disposition, and reset. The host immutable semantic owner independently freezes exact role extents and emits a byte-identical 21-family ExactFixed extent. `tla/SegmentedTransportV1.tla` models the later CPU-ready Tape roles. | Bind the immutable semantic owner itself to production final-wire construction and real CPU-ready queue transitions. Add pooled-storage TLA, Wine fault, GPU/readback, wild locality, and performance evidence before changing either default. |
-| Arena/ordinary direct replay to final storage (`R-BACK-2.86`–`2.87`) | Eligible Arena and ordinary synchronous draw records call `submitDirectReplayDrawFromCurrentState` and construct final payload SoAs without `DrawRunSubmission`. Ordinary replay does not require `DXMT9_CPU_READY_TAPE`: a pure whole-raw classifier admits one validated logical source, including a multi-segment aggregate layout, into a fresh writing `ChunkSlot`, preserving source/CB/pass cadence. Draw → APPLY_STATE → Draw is pinned carrier-free. Oversized sources retain the bounded non-UP Draw/APPLY_STATE/constants Direct envelope; Present, Clear/copy/fill/resolve/mipmap, ordered controls, UP, capture/trace, multi-source, populated destinations, and an active build remain typed pre-effect exclusions. Those dispositions now use synchronous borrowed-state ingress to final storage when they emit draws; no DrawRun/Arena compatibility carrier remains. The stable provider publishes the completed `OwnedRawFinalChunkSlot` to the dedicated encode thread; a fused direct cursor remains an optional future placement. The prior owner ledger measured the now-retired carrier at `15.852 MB/Present` and `0.643 ms/Present`; this is historical attribution, not current evidence or a critical-path claim. | Complete final-slot/direct lifecycle, materialization, and Metal-owner evidence while retaining explicit fail-closed ordered-control, UP, capture, and unsupported-resource dispositions. Re-run the owner-qualified ledger and ordinary/direct differential after carrier retirement. Fused-worker lifecycle/progress and broader Wine allocation/retain/bridge/capture fault injection, wild visual/locality, and WSI evidence remain separate optional-provider gaps. CPU-ready Tape is independently default off. |
+| Arena/ordinary direct replay to final storage (`R-BACK-2.86`–`2.87`) | Eligible Arena and ordinary synchronous draw records call `submitDirectReplayDrawFromCurrentState` and construct final payload SoAs without `DrawRunSubmission`. Ordinary replay does not require `DXMT9_CPU_READY_TAPE`: a source-wide emission plan partitions one validated logical source into direct draw/state islands, typed coordinator locators, ordered-control cuts, and compatibility ranges. Draw → APPLY_STATE → Draw is pinned carrier-free. Since `R-BACK-2.102`, Clear, a lease-trailing single Present, copy/fill/resolve/mipmap coordinators, and the islands around them construct into exact final-slot lease spans; ordered controls and UP/TriangleFan compatibility ranges execute through the ordinary sink at their exact serial positions without demoting unrelated islands. A non-trailing or duplicate Present remains a whole-raw typed pre-effect fallback, as do capture/trace, invalid, and overflowing plans. No DrawRun/Arena compatibility carrier remains. The stable provider publishes the completed `OwnedRawFinalChunkSlot` to the dedicated encode thread; a fused direct cursor remains an optional future placement. The prior owner ledger measured the now-retired carrier at `15.852 MB/Present` and `0.643 ms/Present`; this is historical attribution, not current evidence or a critical-path claim. | Add wild visual/locality/performance evidence for the source-wide lease-span policy, including rotation cadence and Present ordering, while retaining explicit fail-closed capture, invalid, overflow, and post-effect failure dispositions. Fused-worker lifecycle/progress and broader Wine allocation/retain/bridge/capture fault injection, WSI evidence, and the ordered-control end-to-end differential remain separate gaps. CPU-ready Tape is independently default off. |
 | Pipeline ownership/progress observer (`R-BACK-2.88`) | `CpuPipelineOwnership.tla` separates `GPUInFlight -> Completed -> Reclaimed`; its companion `CpuPipelineLifecycle.tla` binds the contiguous GPU-completion frontier independently from the finish-thread waterline. Production emits the Arena publish edge, identity-qualified physical batch index/count for every source in multi-source dequeue/submit/completion, explicit finish advance, actual reclaim, and pending-completion poison evidence. Observer-only occupancy accounting cannot poison or otherwise change queue behavior. Native coverage pins missing second-source, stale batch snapshot, split-frontier, writer-frontier reclaim, and fail-stop cases. | This is a bounded queue/Tape projection, not full lifecycle isomorphism. PE import, selected-parallel child/join, receipt detail, C++ atomic ordering, GPU/wild equivalence, and promotion remain open. |
 | Typed replay/encode borrows (`R-BACK-2.89`) | The ordinary Unix queue encode API now passes a non-copyable/non-movable `GenerationQualifiedSourceBorrow` plus a trivially-copyable `WorkerOwnedSourceSnapshot`. FrameGraph planning and observation receive only queue-issued `SynchronousSourceBorrowBatch` values: construction is private, issuance freezes and prevalidates exact source/storage generations while holding the queue mutex, and an active epoch pins those locators against reclaim. Unlocked payload/command projections check only the atomic epoch and frozen identity, never the queue-owned Tape; the caller relocks and revalidates every exact Tape generation before deactivation. The visitor and Ready-prefix selector paths use allocation-free templates/thunks. `GenerationQualifiedSourceBorrow` no longer returns a `SourcePayloadView`; its checked `visitPayload` callback receives the noncopyable `SynchronousSourcePayloadBorrow`, whose public surface is limited to checked synchronous projections. Native pins reject public/default/forged construction and capability copying, and cover nested reentry, concurrent reclaim rejection, post-callback generation mismatch, and stale-after-reclaim rejection. This is runtime protocol enforcement, not a claim that C++ can prevent deliberately retaining an address obtained from a returned command/span projection; such escape remains a contract violation and undefined lifetime use. Production DCE issues a batch spanning the selected FIFO sources only when successor lookahead is exposed; the no-expose path retains zero lookahead. CPU-ready session replay uses the same batch capability. The encoder and FrameGraph backend derive any planner spans inside the batch callback, and no lookahead span is retained in a session, partition, selected-child, observer, submission, or completion object. The compatibility span remains only for synchronous native planner seams. | Keep the inventory pinned across replay, serial, DCE/lookahead, session, partition, selected-parallel, observer, and completion callbacks; PE/import/receipt/device-loss owner evidence remains bounded to the existing observer abstractions, while asynchronous GPU/wild equivalence and promotion remain open. |
 | End-to-end source composition, carrier retirement, and materialization floor (`R-BACK-2.95`–`2.100`, `R-ARCH-7.11`–`7.24`) | Production PE descriptors carry a closed event/source interval through authenticated Raw storage, Arena or ordinary final-storage publication, queue residency generations, synchronous replay/encode borrows, early payload retirement, completion, and reclaim. Import closes asynchronous ownership through one complete Unix `RawOwned` copy; replay queues move leases rather than source bytes. Every source owns one fixed-capacity sparse state checkpoint and one shared pure transaction phase relation. Ordinary, Direct, and Arena replay preserve exact record order, restore state plus private destination before the effect cut, require a destination receipt before state commit, and fail-stop without retry after an ordered-control/command/publication effect. `DrawRunSubmission`, its state-lane/helpers, snapshot/batch APIs, source adapter, scratch vectors, carrier counters, and carrier-only tests are removed; source audits pin the absence. The stable `OwnedRawFinalChunkSlot` provider is the current queue-owned final representation: Replay/materialization constructs it transactionally and the dedicated encode thread consumes it. | Complete the final-slot/direct effective-stream, next-state, final-storage, resource/completion, and failure differential; re-run the owner-qualified ledger and prove the R-ARCH-7.24 floor. The fused serial cursor, if pursued, is an optional provider that may later remove the final-slot handoff and dedicated encode thread after its own all-family lifecycle/progress and economy evidence. Add C++ atomic, Wine/GPU, wild, and sidecar audit evidence. |
+
+### Source-range lease spans, in production (`R-BACK-2.101`/`R-BACK-2.102`, 2026-09-02)
+
+`planReplayEmission` is the **single routing authority** for the ordinary
+final-slot lane. It returns a total ordered partition of the raw into
+`DirectIsland` / `StateOnlyRun` / `CoordinatorLocator` /
+`OrderedControlLocator` / `CompatibilityRange` segments, an executable
+`EmissionLeaseSpan` list derived from it, and a separately typed
+`EmissionLeaseBlock` describing whether one lease could own the whole raw. The
+narrow `classifyDirectChunkSlotRange` / `planDirectChunkSlotRange` gate is no
+longer the production router; it remains as the cheap whole-range predicate the
+plan and the specs check against.
+
+**What changed in production.** One coordinator command anywhere used to demote
+every draw in the raw to compatibility replay. Now:
+
+* a raw of islands and coordinator locators is one lease span, so
+  `Clear, Draw, Draw, Present` constructs directly with the Present as its
+  terminal locator;
+* a raw cut by an ordered control or a UP/TriangleFan draw becomes several
+  spans, and the islands either side of the cut keep their leases -- the cut
+  ends the span before it and delays the one after it, and poisons neither;
+* a capacity-rejected continuation publishes the populated extent once and
+  retries the identical exact plan against a fresh empty slot, instead of
+  degrading to draw-by-draw ordinary replay.
+
+**The alphabet has a single authority.** `kRecordTopology`
+(`src/d3d9/device_c_chunk_schema.hpp`) carries one closed `RecordReplayTopology`
+row per live record kind, row-aligned with `kRecordRules` and conserved against
+it by `static_assert`. The four hand-written switches that each carried a
+private opinion about the same 21 kinds -- and had already drifted on six --
+are now reads of one `islandMembership` predicate. The drift was live: the
+exact capacity pass accepted TriangleFan draws the range gate rejected, so a
+fan raw could present as a direct-slot candidate.
+
+**Same-raw span identity is a new typed predicate, not a relaxation.** Every
+span of one raw presents the identical closed producer interval, so
+`compatibilityProducerIdentityAppendable` -- which demands a strict `+1` in both
+the event and source dimension -- can never describe two spans of one raw. That
+rule is unchanged and still governs a *different* raw extending a populated
+slot. `compatibilitySpanAdmission` decides the same-raw question from a
+slot-scoped witness (active raw, last committed span ordinal, settled), and
+admits only the immediate successor span before settlement. Duplicate, skipped,
+out-of-order, post-settlement and interval-mismatched spans each get their own
+rejection reason. The witness is reset with the Tape entry.
+
+**Present is a whole-raw gate, not a per-span one.** `appendActiveDirectChunk
+SlotPresent` parks the Present in the build context and
+`commitDirectChunkSlotReplay` appends it once, last, as the slot's publication
+boundary. Two consequences: anything a lease appends after a Present executes
+*before* it, and a second Present in one transaction is refused
+(`if (context.presentAppended) return false;`). `EmissionLeaseBlock::
+PresentOrdering` therefore rejects any raw where a lease-owning span would hold
+a Present that is not its trailing segment, or more than one, and it takes
+precedence over every other block so a mis-ordered Present is never attributed
+to a compatibility range or an ordered control instead. The raw falls back
+whole, pre-effect, and reports `LegacyPresent`. Earlier coordinators carry no
+ordering constraint: `Clear, Draw, Draw, Present` is `DirectWithPresentTail`,
+and the classifier counts Present locators rather than coordinators, which an
+earlier `coordinatorCount == 1` test got wrong in both directions.
+
+**Coordinator appends do not take the queue mutex.** They append through the
+queue-owned `DirectChunkSlotBuildContext`, which is non-moving for the whole
+transaction and already published via `activeDirectChunkSlotBuild_`. The RAII
+lease is move-constructed out of an optional by its caller, so its address is
+not stable and is deliberately never published; the lease stays the settlement
+authority. Present is the one exception and keeps the mutex-guarded path: it is
+a publication boundary that occurs at most once per raw, not a per-record
+append, so it is not on the cost path this requirement targets.
+
+**Evidence today.**
+
+| Layer | Where |
+|---|---|
+| Exhaustive classifier truth table | `dxmt9-replay-emission-plan-spec` -- every emission-class sequence of length 1..5 (3,905 cases), plus all 21 live record kinds through the whole-range gate, plus the executable span partition |
+| TLA+ | `specs/verification/tla/ReplayEmissionPlanIslands.tla` with three deliberate-regression configurations (span identity, separator cut, run closure), registered in `scripts/check/verify_tla.sh` |
+| Model-code binding | `dxmt9-replay-emission-plan-islands-spec` -- truth table over the production `compatibilitySpanAdmission`, plus one translated trace per `.counterexample.cfg` |
+| Production differential | `dxmt9-cpu-ready-production-routing-spec` -- a compatibility-cut raw against the Legacy lane, comparing the **concatenated per-command `effectiveCommandDigest` sequence** across every source the raw published (ordered command kind, draw parameters, binding-override and binding-snapshot payload bytes, coordinator descriptors), not a command total; plus the Present-tail span, the coordinator-bearing span, both capacity rotations, and the non-terminal/duplicate Present whole-raw fallbacks with their published source order |
+
+**Open, and not claimed:**
+
+1. **No wild, GPU, or performance evidence.** The three-way cadence matrix
+   (Legacy / whole-raw Direct / spans) on GT1/GT2/GT3/SFIV has not been run.
+   `DXMT9_DIRECT_CHUNK_SLOT_REPLAY` is policy-default-on, so this is a default
+   change and that matrix is required before treating it as promoted.
+2. **Rotation changes chunk cadence.** A capacity- or coordinator-rejected
+   continuation now publishes where it previously fell back, so mixed raws can
+   seal more chunks than before. `chunk_publish_reason_direct_capacity_rotation`
+   sizes it; the effect on command-buffer/render-pass locality is unmeasured.
+3. **The raw handle closure is re-marked per span.** `markArenaSourceResources`
+   is now exact-once (it starts at the transaction's own command checkpoint),
+   but `markChunkResourcesWithExactSeq(raw.resourceEntries)` still runs once per
+   span. That is deliberate -- retention is sequence-qualified and each span
+   publishes under its own seq, so marking only at the first span would leave a
+   later span's resources under an earlier watermark -- but it is conservative
+   over-retention costing `handles x spans`, and a plan-owned per-span closure
+   would remove it. PSO prefetch is already exact-once by construction:
+   `prefetchSlotPipelines` starts at `slot.prefetchedPipelineCommandCursor()`
+   and never rescans an earlier span's commands or the semantic raw.
+4. **Ordered-control spans are untested end-to-end.** The
+   `releaseCpuReadySessionBeforeOrderedControl` path publishes the current
+   chunk, so a suffix span opens on an empty slot and never consults the
+   witness -- but only while `cpuReadySessionLaneEnabled_` is true. With that
+   lane off the suffix span is a same-raw continuation and takes the witness
+   path. Only the compatibility-range cut has a production differential.
+5. **`DirectOversized` remains unreachable** from this lane: it is an
+   Arena-lane disposition, and `emissionPlanDisposition` never produces it.
+   `LegacySegmented` is likewise production-unreachable from this router: it is
+   produced only for `EmissionPlanReason::Coverage`, and the coverage fold is
+   *enforced* over a partition that is total for every structurally sound view,
+   so reaching it would mean the partition itself is broken. It stays in the
+   alphabet as the typed report of exactly that, and the legacy whole-raw
+   classifier still produces it for a multi-segment plan, so it is not dead in
+   the test lane.
+6. **`classifyDirectChunkSlotReplay` is production-dead but deliberately
+   retained.** No production call site remains; routing goes through
+   `planReplayEmission` + `emissionPlanDisposition`. It is kept, and now
+   documented in-header as legacy/test-only, because it is the independent
+   second opinion the emission plan is differentially checked against in
+   `dxmt9-cpu-ready-plan-spec` and `dxmt9-cpu-ready-production-routing-spec`;
+   deleting it would delete roughly thirty pinned assertions along with the
+   oracle. **Open:** either promote it to an explicit test-only helper (moving
+   it out of the production header and into the spec support surface) or retire
+   it together with the assertions it backs. Doing so is a bounded but separate
+   change; it was deliberately not folded into this one.
+7. **Present ordering has no wild evidence.** The `PresentOrdering` block is
+   pinned by the pure classifier truth table and by two production routing
+   fixtures (`Draw, Present, Draw` and a duplicate Present), both asserting
+   compatibility routing and the exact published source order. Whether either
+   shape occurs in a real title's chunk stream is unmeasured; the gate is
+   fail-closed, so the cost of it never firing is zero and the cost of it
+   firing is one whole-raw compatibility replay.
 
 ### Ordinary source-range closure (2026-09-02)
 

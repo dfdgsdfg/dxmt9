@@ -110,6 +110,23 @@ struct Counters {
   std::atomic<std::uint64_t> directChunkSlotContinuationIdentityRejected{0};
   std::atomic<std::uint64_t> directChunkSlotContinuationCommitted{0};
   std::atomic<std::uint64_t> directChunkSlotContinuationPopulatedFallback{0};
+  // Lease-span routing (R-BACK-2.102). Count-only; every row is written only
+  // while perf counters are enabled.
+  std::atomic<std::uint64_t> directChunkSlotContinuationCapacityRotated{0};
+  std::atomic<std::uint64_t> replaySpanLeases{0};
+  std::atomic<std::uint64_t> replaySpanLeaseDraws{0};
+  std::atomic<std::uint64_t> replaySpanLeaseCommands{0};
+  std::atomic<std::uint64_t> replaySpanIslands{0};
+  std::atomic<std::uint64_t> replaySpanCoordinators{0};
+  std::atomic<std::uint64_t> replaySpanOrderedControlCuts{0};
+  std::atomic<std::uint64_t> replaySpanCompatibilityCuts{0};
+  std::atomic<std::uint64_t> replaySpanOrdinaryFallbackDraws{0};
+  std::atomic<std::uint64_t> replaySpanSoaGrowthAfterReserve{0};
+  std::atomic<std::uint64_t> replaySpanStateProjections{0};
+  std::atomic<std::uint64_t> replaySpanSameRawAdmitted{0};
+  std::atomic<std::uint64_t> replaySpanSameRawRejected{0};
+  std::atomic<std::uint64_t> replaySpanPlanRejected{0};
+  std::atomic<std::uint64_t> replaySpanSeparatorFailStops{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackCount{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackBytes{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackCountArgbuf{0};
@@ -148,6 +165,7 @@ struct Counters {
   std::atomic<std::uint64_t> chunkPublishReasonMapWait{0};
   std::atomic<std::uint64_t> chunkPublishReasonPresentSplitBefore{0};
   std::atomic<std::uint64_t> chunkPublishReasonSemanticBoundary{0};
+  std::atomic<std::uint64_t> chunkPublishReasonDirectCapacityRotation{0};
   std::atomic<std::uint64_t> chunkPublishCommandsUnknown{0};
   std::atomic<std::uint64_t> chunkPublishCommandsDrawLimit{0};
   std::atomic<std::uint64_t> chunkPublishCommandsPayloadLimit{0};
@@ -158,6 +176,7 @@ struct Counters {
   std::atomic<std::uint64_t> chunkPublishCommandsMapWait{0};
   std::atomic<std::uint64_t> chunkPublishCommandsPresentSplitBefore{0};
   std::atomic<std::uint64_t> chunkPublishCommandsSemanticBoundary{0};
+  std::atomic<std::uint64_t> chunkPublishCommandsDirectCapacityRotation{0};
   // Tape-gated CPU-ready session join lane (DXMT9_CPU_READY_TAPE):
   std::atomic<std::uint64_t> encodePartitionIdentitySelections{0};
   std::atomic<std::uint64_t> encodePartitionExplicitSelections{0};

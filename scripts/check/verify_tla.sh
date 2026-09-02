@@ -49,6 +49,7 @@ normal_models=(
   RenderTapeIdentitySegments
   RenderTapeParallelJoin
   SegmentedTransportV1
+  ReplayEmissionPlanIslands
   ReplayScopedDrain
   ReplayProjectionTransaction
   ResourceLifetime
@@ -58,10 +59,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=46
+expected_normal_count=47
 expected_progress_count=1
-expected_counterexample_count=84
-expected_cfg_count=131
+expected_counterexample_count=87
+expected_cfg_count=135
 progress_model=CpuPipelineLifecycle
 progress_cfg_name="$progress_model.progress.cfg"
 
@@ -103,6 +104,13 @@ trap cleanup EXIT
 # selects `<model>.tla`; the suffix selects `<model><suffix>.cfg`, so one model
 # may carry several independent broken premises.
 counterexample_models=(
+  # Lease-span replay of one raw. Each row deletes exactly one of the three
+  # disciplines a divisible raw needs and that an indivisible one never did:
+  # the active-raw span witness, the post-separator fail-stop cut, and the
+  # explicit draw-run closure at a cut.
+  "ReplayEmissionPlanIslands|.span-identity.counterexample|Invariant EachRecordEmittedOnce is violated"
+  "ReplayEmissionPlanIslands|.separator-cut.counterexample|Invariant NoLegacyRetryAfterSeparator is violated"
+  "ReplayEmissionPlanIslands|.run-closure.counterexample|Invariant RunClosedAcrossSeparator is violated"
   # Queue T2d is deferred, but its proposed reserve/copy/commit protocol is
   # modelled before any production lock narrowing.  Publication of a
   # half-constructed slot, reuse of a frozen reservation after generation

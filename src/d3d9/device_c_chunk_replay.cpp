@@ -1164,6 +1164,28 @@ bool importRawChunk(const dxmt9::d3d9::RawCommandChunk& raw,
   return dxmt9::d3d9::importPrevalidatedCommandChunk(bytes, envelope, imported);
 }
 
+// One executable slice of the raw. The default value is the whole raw, which
+// is what every pre-span caller passes. A lease-span driver replays the raw as
+// several consecutive ranges; record ordinals stay raw-absolute so the
+// transaction projection and every receipt remain source-relative.
+struct ReplayRecordRange {
+  std::size_t firstRecordIndex = 0;
+  std::size_t recordCount = std::numeric_limits<std::size_t>::max();
+  // The driver performs the whole-raw ordered-control preflight once, before
+  // any span executes, so no later malformed control can fail after an
+  // earlier span has already applied effects. A per-span call must not repeat
+  // it: the span may legitimately contain no control at all.
+  bool orderedControlPreflightDone = false;
+  // `chunk_admit` counts admitted raws, not executed ranges. A span driver
+  // suppresses it per span and counts the raw once.
+  bool countAdmit = true;
+
+  bool wholeRaw() const noexcept {
+    return firstRecordIndex == 0 &&
+           recordCount == std::numeric_limits<std::size_t>::max();
+  }
+};
+
 int32_t replayResolvedChunk(
     D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
     bool pacedByPresentOrdinal,
@@ -1174,12 +1196,25 @@ int32_t replayResolvedChunk(
     std::span<const dxmt9::d3d9::CpuReadySourcePlan> arenaSources = {},
     bool activeDirectChunkSlotPath = false,
     const dxmt9::core::DirectReplayDrawAppendCapability*
-        directRangeAppender = nullptr) {
+        directRangeAppender = nullptr,
+    ReplayRecordRange range = {}) {
   dxmt9::d3d9::ImportedChunkView imported;
   if (!raw.preflightValidated ||
       !importRawChunk(raw, imported) ||
       raw.resolvedObjects.size() != imported.handles.size()) {
     return commitChunkFail("chunk-replay-preflight-view");
+  }
+  const std::size_t rangeFirst = range.firstRecordIndex;
+  const std::size_t rangeEnd =
+      range.recordCount == std::numeric_limits<std::size_t>::max()
+          ? imported.records.size()
+          : rangeFirst + range.recordCount;
+  if (rangeFirst > imported.records.size() ||
+      rangeEnd > imported.records.size() || rangeEnd < rangeFirst ||
+      // Arena segment/source selection describes the complete raw and has no
+      // meaning over a sub-range.
+      (arenaLease != nullptr && !range.wholeRaw())) {
+    return commitChunkFail("chunk-replay-record-range");
   }
   if (arenaLease) {
     std::size_t coveredRecords = 0;
@@ -1196,7 +1231,7 @@ int32_t replayResolvedChunk(
       return commitChunkFail("chunk-replay-segment-cover");
     }
   }
-  if (containsOrderedControls) {
+  if (containsOrderedControls && !range.orderedControlPreflightDone) {
     // The planner already performed this complete scan. Repeat it against the
     // exact immutable replay view before constructing the sink or applying any
     // semantic effect, so no later malformed control can fail after an older
@@ -1258,7 +1293,7 @@ int32_t replayResolvedChunk(
        !arenaLease->selectSourceSegment(0, 0))) {
     return commitChunkFail("chunk-replay-segment-initial");
   }
-  for (std::size_t index = 0u; index < imported.records.size(); ++index) {
+  for (std::size_t index = rangeFirst; index < rangeEnd; ++index) {
     if (arenaLease && !arenaSources.empty()) {
       if (activeSource >= arenaSources.size()) {
         return commitChunkFail("chunk-replay-source-range");
@@ -1436,7 +1471,9 @@ int32_t replayResolvedChunk(
        activeSourceSegment + 1u != arenaSources.back().segmentCount)) {
     return commitChunkFail("chunk-replay-source-incomplete");
   }
-  dxmt9::perf::countChunkAdmit();
+  if (range.countAdmit) {
+    dxmt9::perf::countChunkAdmit();
+  }
   return dxmt9::core::D3D_OK;
 }
 
@@ -1660,7 +1697,8 @@ dxmt9::d3d9::ReplaySourceIdentity replaySourceIdentity(
 
 dxmt9::d3d9::ReplayTransaction& beginReplayTransaction(
     D9CDevice* device, const dxmt9::d3d9::RawCommandChunk& raw,
-    std::size_t compatibilitySourceCount = 1u) noexcept {
+    std::size_t compatibilitySourceCount = 1u,
+    std::uint32_t firstRecordOrdinal = 0u) noexcept {
   auto& transaction = replayScratchArena().transaction;
   auto identity = replaySourceIdentity(raw);
   if (raw.producerIdentity.firstSourceOrdinal == 0u &&
@@ -1669,7 +1707,8 @@ dxmt9::d3d9::ReplayTransaction& beginReplayTransaction(
           std::numeric_limits<std::uint64_t>::max() - identity.source) {
     identity.lastSource = identity.source + compatibilitySourceCount - 1u;
   }
-  transaction.begin(identity, device ? &device->dev() : nullptr);
+  transaction.begin(identity, device ? &device->dev() : nullptr,
+                    firstRecordOrdinal);
   return transaction;
 }
 
@@ -1753,6 +1792,250 @@ int32_t replayCompatibilityChunk(
     return commitChunkFail("chunk-replay-transaction-commit");
   }
   return hr;
+}
+
+// ---------------------------------------------------------------------------
+// Lease-span replay (R-BACK-2.102).
+//
+// The whole-raw gate answers one question: may this *entire* raw construct
+// directly? One coordinator command anywhere demoted every draw in the raw to
+// compatibility replay. The executable partition replaces that with an ordered
+// sequence of spans: each maximal run of direct islands and coordinator
+// locators between an ordered control or a compatibility range owns exactly
+// one final-slot lease, and the cuts execute at their exact serial positions
+// through the ordinary sink they already used.
+//
+// Per span, exactly one of each owner: one ReplayTransaction, one destination
+// receipt, one resource-marking/retention owner. Source-level completion
+// settles every span exactly once, in order.
+//
+// The failure algebra is the reason this is not just a loop. Before any span
+// has applied an effect the raw is still wholly rollbackable and Legacy may
+// own it, exactly as today. Once any span has committed, or any separator has
+// executed, a later failure MUST NOT hand the raw back to Legacy: that would
+// replay an already-executed prefix. It is a typed fail-stop cut instead.
+// `outcome` reports what actually happened to the *direct* attempt, which is
+// not derivable from the returned HRESULT: this driver can return D3D_OK after
+// having handed the raw to compatibility replay, and reporting that as
+// `Committed` would put a fallback population inside the committed row. It is
+// seeded with the pre-effect fallback value and narrowed as the driver makes
+// progress, so every early return is already classified.
+int32_t replayEmissionSpans(
+    D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
+    bool pacedByPresentOrdinal,
+    const dxmt9::d3d9::ImportedChunkView& imported,
+    const dxmt9::d3d9::ReplayEmissionPlan& plan,
+    dxmt9::CommandQueue& queue, bool observability,
+    dxmt9::perf::DirectChunkSlotReplayOutcome& outcome) {
+  outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::NotAttempted;
+  // Whole-raw ordered-control preflight, once, before any span executes.
+  // Every span call below then skips its own preflight: a span may
+  // legitimately contain no control, and repeating the scan per span would
+  // let a late malformed control fail after an earlier span's effects.
+  if (plan.orderedControlCount != 0) {
+    bool foundOrderedControl = false;
+    for (std::size_t index = 0; index < imported.records.size(); ++index) {
+      const auto record = imported.record(index);
+      switch (record.header.type) {
+      case D9C_COMMAND_RECORD_QUERY_ISSUE:
+      case D9C_COMMAND_RECORD_READBACK:
+      case D9C_COMMAND_RECORD_UPDATE_TEXTURE:
+        foundOrderedControl = true;
+        if (!dxmt9::d3d9::makeOrderedControlDisposition(
+                record, raw.replaySeq, index)) {
+          outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::PlanRejected;
+          return commitChunkFail(
+              "chunk-span-ordered-control-preflight",
+              static_cast<std::uint32_t>(index), record.header.type);
+        }
+        break;
+      default:
+        break;
+      }
+    }
+    if (!foundOrderedControl) {
+      outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::PlanRejected;
+      return commitChunkFail("chunk-span-ordered-control-preflight-empty");
+    }
+  }
+
+  const auto producerIdentity = cpuReadyProducerIdentity(raw.producerIdentity);
+  // True once any span has applied a semantic effect. From that point the raw
+  // is jointly owned and no whole-raw Legacy retry is sound.
+  bool separatorEffectsStarted = false;
+  const auto failStopAfterEffects = [&](const char* reason,
+                                        std::uint32_t index) noexcept {
+    if (observability) dxmt9::perf::countReplaySpanSeparatorFailStop();
+    return commitChunkFail(reason, index);
+  };
+
+  for (const auto& span : plan.leaseSpans) {
+    const ReplayRecordRange range{
+        .firstRecordIndex = span.firstRecordIndex,
+        .recordCount = span.recordCount,
+        .orderedControlPreflightDone = true,
+        .countAdmit = false,
+    };
+    // Only the separator span itself carries the control. A state-only run
+    // that merely *precedes* one shares the trailing cut but holds no control
+    // record, so key this on the span's own leading segment kind rather than
+    // on what follows it.
+    const bool spanHasOrderedControl =
+        span.firstSegmentIndex < plan.segments.size() &&
+        plan.segments[span.firstSegmentIndex].kind ==
+            dxmt9::d3d9::EmissionSegmentKind::OrderedControlLocator;
+
+    if (!span.ownsLease) {
+      // Separators and draw-free runs replay exactly where they already did:
+      // through the ordinary sink, at their exact serial position. A
+      // compatibility range therefore cannot poison the direct spans around
+      // it -- it only ends the one before it and delays the one after it.
+      // Count the cut itself, not a draw-free run that merely precedes one.
+      if (observability && span.firstSegmentIndex < plan.segments.size()) {
+        switch (plan.segments[span.firstSegmentIndex].kind) {
+        case dxmt9::d3d9::EmissionSegmentKind::OrderedControlLocator:
+          dxmt9::perf::countReplaySpanOrderedControlCut();
+          break;
+        case dxmt9::d3d9::EmissionSegmentKind::CompatibilityRange:
+          dxmt9::perf::countReplaySpanCompatibilityCut();
+          break;
+        default:
+          break;
+        }
+      }
+      markLegacyResources(device, raw);
+      auto& transaction = beginReplayTransaction(
+          device, raw, /*compatibilitySourceCount=*/1u,
+          span.firstRecordIndex);
+      const auto hr = replayResolvedChunk(
+          device, raw, pacedByPresentOrdinal, transaction, nullptr, {},
+          spanHasOrderedControl, {}, /*activeDirectChunkSlotPath=*/false,
+          nullptr, range);
+      if (failed(hr)) {
+        outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::ReplayFailed;
+        if (separatorEffectsStarted) {
+          (void)transaction.failStop();
+          return failStopAfterEffects("chunk-span-ordinary",
+                                      span.firstRecordIndex);
+        }
+        (void)rollbackReplayTransaction(device, transaction);
+        return hr;
+      }
+      if (!commitReplayTransaction(transaction,
+                                   compatibilityReplayReceipt(transaction))) {
+        outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::CommitFailed;
+        return commitChunkFail("chunk-span-ordinary-commit",
+                               span.firstRecordIndex);
+      }
+      separatorEffectsStarted = true;
+      continue;
+    }
+
+    auto begin = queue.beginDirectChunkSlotReplay(
+        raw.replaySeq, span.capacity, span.plannedBytes, producerIdentity,
+        span.recordCount, span.drawCount, span.leaseOrdinal,
+        span.finalLeaseSpan, /*allowRotation=*/true);
+    if (begin.status !=
+            dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Ready ||
+        !begin.lease) {
+      if (begin.status ==
+          dxmt9::CommandQueue::DirectChunkSlotReplayStatus::FailStopped) {
+        outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::BeginFailStopped;
+        return commitChunkFail("chunk-span-begin", span.firstRecordIndex);
+      }
+      if (separatorEffectsStarted) {
+        // A pre-effect admission failure for *this* span is still a hard stop
+        // once an earlier span has executed: the alternatives are replaying
+        // an executed prefix or splitting one span's draws across two
+        // representations, and both are worse than failing. It is no longer a
+        // *pre-effect* outcome for the raw, so report the fail-stop instead.
+        outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::BeginFailStopped;
+        return failStopAfterEffects("chunk-span-begin-after-effects",
+                                    span.firstRecordIndex);
+      }
+      outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::
+          BeginLegacyPreEffectFailure;
+      // Nothing has executed yet, so the raw is still wholly rollbackable and
+      // Legacy owns it once -- exactly today's pre-effect fallback. The
+      // counter targets zero: a non-zero row means a direct span degraded.
+      if (observability) {
+        dxmt9::perf::countReplaySpanOrdinaryFallbackDraws(span.drawCount);
+      }
+      markLegacyResources(device, raw);
+      return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal);
+    }
+
+    auto lease = std::move(*begin.lease);
+    const auto* directRangeAppender = lease.borrowDirectRangeAppender();
+    if (!directRangeAppender) {
+      outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::ReplayFailed;
+      (void)lease.rollbackPreEffect();
+      return commitChunkFail("chunk-span-appender", span.firstRecordIndex);
+    }
+    auto& transaction = beginReplayTransaction(
+        device, raw, /*compatibilitySourceCount=*/1u, span.firstRecordIndex);
+    const auto hr = replayResolvedChunk(
+        device, raw, pacedByPresentOrdinal, transaction, nullptr, {},
+        /*containsOrderedControls=*/false, {},
+        /*activeDirectChunkSlotPath=*/true, directRangeAppender, range);
+    if (failed(hr)) {
+      outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::ReplayFailed;
+      if (transaction.state().irreversible()) {
+        lease.markSemanticEffectsStarted();
+        (void)transaction.failStop();
+        return hr;
+      }
+      const bool stateRolledBack =
+          rollbackReplayTransaction(device, transaction);
+      const bool destinationRolledBack = lease.rollbackPreEffect();
+      if (!stateRolledBack || !destinationRolledBack) {
+        return hr;
+      }
+      if (separatorEffectsStarted) {
+        return failStopAfterEffects("chunk-span-replay-after-effects",
+                                    span.firstRecordIndex);
+      }
+      if (observability) {
+        dxmt9::perf::countDirectChunkSlotReplayPostMaterializationFallback();
+        dxmt9::perf::countReplaySpanOrdinaryFallbackDraws(span.drawCount);
+      }
+      // Already narrowed to ReplayFailed above; compatibility replay owning
+      // the raw from here must not report the direct attempt as committed.
+      markLegacyResources(device, raw);
+      return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal);
+    }
+    // Explicit cut at the span end. Coordinator appends already seal the open
+    // run implicitly, but a span boundary is a cut the assembler never sees,
+    // and `Draw, Draw, <cut>, Draw` must produce two run records, not one.
+    lease.closeDirectRun();
+    const auto destinationTicket = lease.ticket();
+    const auto destinationControlIndex = lease.controlIndex();
+    if (lease.commit(raw.resourceEntries) !=
+        dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Committed) {
+      outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::CommitFailed;
+      (void)transaction.failStop();
+      return commitChunkFail("chunk-span-commit", span.firstRecordIndex);
+    }
+    const auto destinationReceipt = publishedReplayReceipt(
+        transaction, destinationTicket, destinationControlIndex,
+        dxmt9::d3d9::ReplayDestinationKind::DirectChunkSlot);
+    if (!commitReplayTransaction(transaction, destinationReceipt)) {
+      outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::CommitFailed;
+      return commitChunkFail("chunk-span-state-commit", span.firstRecordIndex);
+    }
+    // At least one lease reached publication. A later span may still fail, and
+    // will narrow this again; nothing after this point can fall back.
+    outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::Committed;
+    separatorEffectsStarted = true;
+    if (observability) {
+      dxmt9::perf::countReplaySpanLease(
+          span.drawCount, span.drawCount + span.coordinatorCount,
+          span.islandCount, span.coordinatorCount);
+      dxmt9::perf::countReplaySpanStateProjections(span.recordCount);
+    }
+  }
+  dxmt9::perf::countChunkAdmit();
+  return dxmt9::core::D3D_OK;
 }
 
 int32_t replayPlannedChunk(D9CDevice* device,
@@ -1857,6 +2140,17 @@ int32_t replayPlannedChunk(D9CDevice* device,
       queue->noteCpuReadySupplyReplayEntry(
           dxmt9::core::CpuReadyTape::PayloadKind::Legacy);
     }
+    if (captureIdentityRequested && upper && queue &&
+        upper->supportsDirectChunkSlotReplay() &&
+        directReplayObservabilityEnabled) {
+      // The raw is otherwise classified by this lane, so it owes exactly one
+      // disposition; capture identity is why it does not get to construct
+      // directly. Without this row the capture population is silently absent
+      // rather than typed.
+      recordDirectDisposition(
+          dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyCaptureOrTrace,
+          dxmt9::perf::DirectChunkSlotReplayOutcome::NotAttempted);
+    }
     if (!captureIdentityRequested && upper && queue &&
         upper->supportsDirectChunkSlotReplay()) {
       dxmt9::d3d9::ImportedChunkView imported;
@@ -1867,173 +2161,73 @@ int32_t replayPlannedChunk(D9CDevice* device,
         return commitChunkFail("chunk-direct-slot-import");
       }
       const auto limits = queue->cpuReadyArenaPlanLimits();
-      // The ordinary final-slot lane has a deliberately cheap first gate.
-      // Valid multi-record Draw/APPLY_STATE ranges do not need Arena segment
-      // planning: count their exact final SoA dimensions once and open one
-      // transactional ChunkSlot destination. Other valid families stay on
-      // compatibility replay; the legacy planner is not an admission oracle
-      // for this strict carrier-free whole-range transaction.
-      const auto rangeClass =
-          dxmt9::d3d9::classifyDirectChunkSlotRange(imported);
-      if (rangeClass == dxmt9::d3d9::DirectChunkSlotRangeClass::Malformed) {
-        recordDirectDisposition(
-            dxmt9::d3d9::DirectChunkSlotReplayDisposition::RejectInvalid,
-            dxmt9::perf::DirectChunkSlotReplayOutcome::PlanRejected);
-        return commitChunkFail("chunk-direct-slot-range");
-      }
-      std::optional<dxmt9::d3d9::DirectChunkSlotRangePlan> directRange;
-      bool directRangePlanFailed = false;
-      if (rangeClass == dxmt9::d3d9::DirectChunkSlotRangeClass::Eligible) {
-        directRange = dxmt9::d3d9::planDirectChunkSlotRange(
-            imported, limits.pageSize == 0 ? 4096 : limits.pageSize);
-        if (!directRange || !directRange->eligible()) {
-          // The source passed the eligibility gate, so a null exact plan is
-          // a valid capacity/overflow admission failure, not malformed input.
-          // Keep the raw pre-effect and let compatibility replay own it; this
-          // is deliberately not a RejectInvalid/device-loss outcome.
-          directRangePlanFailed = true;
-          directRange.reset();
-        }
-      }
-      if (rangeClass != dxmt9::d3d9::DirectChunkSlotRangeClass::Eligible) {
+      // The source-wide emission plan is the single routing authority for
+      // this lane. It replaces the whole-raw gate, which asked only whether
+      // the *entire* raw could construct directly and therefore demoted every
+      // draw in a raw the moment it met one coordinator command. The plan
+      // partitions the raw instead, and the executable spans it derives say
+      // which ranges own a final-slot lease and which cuts execute where they
+      // already did.
+      const auto plan = dxmt9::d3d9::planReplayEmission(
+          imported, raw.replaySeq,
+          limits.pageSize == 0 ? 4096 : limits.pageSize);
+      if (!plan.partitioned()) {
+        const auto disposition =
+            dxmt9::d3d9::emissionPlanDisposition(plan, /*captureOrTrace=*/false);
         if (directReplayObservabilityEnabled) {
-          dxmt9::perf::countDirectChunkSlotReplayCheapRejected();
+          dxmt9::perf::countReplaySpanPlanRejected();
         }
-      }
-      // Only the strict whole-range envelope may enter this final-slot
-      // transaction. Ordered controls, resource/control operations, UP and
-      // TriangleFan draws, and unsafe mixes remain compatibility-owned even
-      // when the legacy planner could describe a direct-shaped layout.
-      if (!directRange) {
-        if (directRangePlanFailed && directReplayObservabilityEnabled) {
-          recordDirectDisposition(
-              dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyOversized,
-              dxmt9::perf::DirectChunkSlotReplayOutcome::NotAttempted);
-        } else if (directReplayObservabilityEnabled) {
-          const auto disposition =
-              rangeClass == dxmt9::d3d9::DirectChunkSlotRangeClass::Empty
-                  ? dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyStateOnly
-                  : dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyUnsupported;
+        if (disposition ==
+            dxmt9::d3d9::DirectChunkSlotReplayDisposition::RejectInvalid) {
           recordDirectDisposition(
               disposition,
-              dxmt9::perf::DirectChunkSlotReplayOutcome::NotAttempted);
+              dxmt9::perf::DirectChunkSlotReplayOutcome::PlanRejected);
+          return commitChunkFail("chunk-direct-slot-plan");
         }
+        // A structurally sound view always partitions, so reaching here means
+        // a checked overflow, a failed layout, or a failed reservation. All
+        // are pre-effect, so Legacy owns the raw once.
+        recordDirectDisposition(
+            disposition,
+            dxmt9::perf::DirectChunkSlotReplayOutcome::NotAttempted);
         markLegacyResources(device, raw);
         return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal);
       }
       const auto disposition =
-          dxmt9::d3d9::DirectChunkSlotReplayDisposition::Direct;
-      bool dispositionRecorded = false;
-      const auto recordDispositionOnce =
-          [&](dxmt9::perf::DirectChunkSlotReplayOutcome outcome) noexcept {
-            if (!dispositionRecorded) {
-              recordDirectDisposition(disposition, outcome);
-              dispositionRecorded = true;
-            }
-          };
-      if (disposition ==
-          dxmt9::d3d9::DirectChunkSlotReplayDisposition::RejectInvalid) {
-        recordDispositionOnce(
-            dxmt9::perf::DirectChunkSlotReplayOutcome::PlanRejected);
-        return commitChunkFail("chunk-direct-slot-plan");
-      }
-      const bool directSlotDisposition =
-          disposition ==
-              dxmt9::d3d9::DirectChunkSlotReplayDisposition::Direct ||
-          disposition ==
-              dxmt9::d3d9::DirectChunkSlotReplayDisposition::DirectOversized ||
-          disposition == dxmt9::d3d9::DirectChunkSlotReplayDisposition::
-                             DirectWithPresentTail;
-      const bool directSlotLayoutReady = directRange.has_value();
-      const std::size_t directSlotPlannedBytes =
-          directRange ? directRange->plannedBytes : 0u;
-      if (directSlotDisposition && directSlotLayoutReady &&
-          directSlotPlannedBytes != 0u) {
-        auto begin = queue->beginDirectChunkSlotReplay(
-            raw.replaySeq,
-            directRange
-                ? directRange->capacity
-                : dxmt9::core::SourcePayloadCapacity{},
-            directSlotPlannedBytes,
-            cpuReadyProducerIdentity(raw.producerIdentity),
-            imported.records.size(), directRange->drawCount);
-        if (begin.status ==
-                dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Ready &&
-            begin.lease) {
-          auto lease = std::move(*begin.lease);
-          const auto* directRangeAppender =
-              lease.borrowDirectRangeAppender();
-          if (!directRangeAppender) {
-            recordDispositionOnce(
-                dxmt9::perf::DirectChunkSlotReplayOutcome::ReplayFailed);
-            (void)lease.rollbackPreEffect();
-            return commitChunkFail("chunk-direct-slot-appender");
-          }
-          auto& transaction = beginReplayTransaction(device, raw);
-          const auto hr = replayResolvedChunk(
-              device, raw, pacedByPresentOrdinal, transaction, nullptr, {},
-              false, {}, /*activeDirectChunkSlotPath=*/true,
-              directRangeAppender);
-          if (failed(hr)) {
-            recordDispositionOnce(
-                dxmt9::perf::DirectChunkSlotReplayOutcome::ReplayFailed);
-            if (transaction.state().irreversible()) {
-              lease.markSemanticEffectsStarted();
-              (void)transaction.failStop();
-              return hr;
-            }
-            const bool stateRolledBack =
-                rollbackReplayTransaction(device, transaction);
-            const bool destinationRolledBack = lease.rollbackPreEffect();
-            if (stateRolledBack && destinationRolledBack) {
-              if (directReplayObservabilityEnabled) {
-                dxmt9::perf::countDirectChunkSlotReplayPostMaterializationFallback();
-              }
-              // The raw source and both checkpoints are intact. Compatibility
-              // replay is now the sole owner of this event.
-              markLegacyResources(device, raw);
-              return replayCompatibilityChunk(
-                  device, raw, pacedByPresentOrdinal);
-            }
-            return hr;
-          }
-          const auto destinationTicket = lease.ticket();
-          const auto destinationControlIndex = lease.controlIndex();
-          if (lease.commit(raw.resourceEntries) !=
-              dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Committed) {
-            (void)transaction.failStop();
-            recordDispositionOnce(
-                dxmt9::perf::DirectChunkSlotReplayOutcome::CommitFailed);
-            return commitChunkFail("chunk-direct-slot-commit");
-          }
-          // Queue commit has authenticated the captured lease ticket against
-          // the live control/storage/build generations and exact assembler
-          // evidence. Only now may that queue-minted identity become the
-          // replay transaction's destination receipt.
-          const auto destinationReceipt = publishedReplayReceipt(
-              transaction, destinationTicket, destinationControlIndex,
-              dxmt9::d3d9::ReplayDestinationKind::DirectChunkSlot);
-          if (!commitReplayTransaction(transaction, destinationReceipt)) {
-            return commitChunkFail("chunk-direct-slot-state-commit");
-          }
-          recordDispositionOnce(
-              dxmt9::perf::DirectChunkSlotReplayOutcome::Committed);
-          return hr;
+          dxmt9::d3d9::emissionPlanDisposition(plan, /*captureOrTrace=*/false);
+      if (!plan.spansExecutable() || plan.leaseOwningSpanCount() == 0) {
+        // Two pre-effect populations, both wholly compatibility-owned:
+        //
+        //  * `!spansExecutable()` -- a lease-owning span would have had to
+        //    emit a Present that is not its trailing coordinator, or a second
+        //    Present. Present is parked by the build context and appended once
+        //    at commit as the slot's publication boundary, so a lease cannot
+        //    represent `Draw, Present, Draw` in source order at all, and a
+        //    second Present in one transaction is refused. The whole raw must
+        //    fall back BEFORE any direct/Metal/queue effect: routing around
+        //    one span is not available, because the remaining spans are only
+        //    meaningful as a refinement of a stream this router declined.
+        //  * no lease-owning span -- no island-eligible draw anywhere. This is
+        //    the state-only / all-compatibility population and it keeps
+        //    exactly the ownership it had before spans existed.
+        if (directReplayObservabilityEnabled) {
+          dxmt9::perf::countDirectChunkSlotReplayCheapRejected();
         }
-        if (begin.status ==
-            dxmt9::CommandQueue::DirectChunkSlotReplayStatus::FailStopped) {
-          recordDispositionOnce(
-              dxmt9::perf::DirectChunkSlotReplayOutcome::BeginFailStopped);
-          return commitChunkFail("chunk-direct-slot-begin");
-        }
-        recordDispositionOnce(
-            dxmt9::perf::DirectChunkSlotReplayOutcome::
-                BeginLegacyPreEffectFailure);
-        // Capacity/admission failure is still before replay effects. The
-        // exact checkpoint has been rolled back, so Legacy owns this raw once.
+        recordDirectDisposition(
+            disposition,
+            dxmt9::perf::DirectChunkSlotReplayOutcome::NotAttempted);
+        markLegacyResources(device, raw);
+        return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal);
       }
-      recordDispositionOnce(
-          dxmt9::perf::DirectChunkSlotReplayOutcome::NotAttempted);
+      // The span driver can return D3D_OK after handing the raw to
+      // compatibility replay, so the outcome it reports is not derivable from
+      // the HRESULT and must not be inferred from it.
+      auto outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::NotAttempted;
+      const auto hr = replayEmissionSpans(
+          device, raw, pacedByPresentOrdinal, imported, plan, *queue,
+          directReplayObservabilityEnabled, outcome);
+      recordDirectDisposition(disposition, outcome);
+      return hr;
     }
     markLegacyResources(device, raw);
     return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal);

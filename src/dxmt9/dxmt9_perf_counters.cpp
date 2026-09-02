@@ -378,6 +378,57 @@ void countDirectChunkSlotContinuationPopulatedFallback() {
   add(counters().directChunkSlotContinuationPopulatedFallback);
 }
 
+void countDirectChunkSlotContinuationCapacityRotated() {
+  add(counters().directChunkSlotContinuationCapacityRotated);
+}
+
+void countReplaySpanLease(std::uint64_t draws, std::uint64_t commands,
+                          std::uint64_t islands,
+                          std::uint64_t coordinators) {
+  if (!enabled()) return;
+  add(counters().replaySpanLeases);
+  addEnabledNonZero(counters().replaySpanLeaseDraws, draws);
+  addEnabledNonZero(counters().replaySpanLeaseCommands, commands);
+  addEnabledNonZero(counters().replaySpanIslands, islands);
+  addEnabledNonZero(counters().replaySpanCoordinators, coordinators);
+}
+
+void countReplaySpanOrderedControlCut() {
+  add(counters().replaySpanOrderedControlCuts);
+}
+
+void countReplaySpanCompatibilityCut() {
+  add(counters().replaySpanCompatibilityCuts);
+}
+
+void countReplaySpanOrdinaryFallbackDraws(std::uint64_t draws) {
+  addEnabledNonZero(counters().replaySpanOrdinaryFallbackDraws, draws);
+}
+
+void countReplaySpanSoaGrowthAfterReserve() {
+  add(counters().replaySpanSoaGrowthAfterReserve);
+}
+
+void countReplaySpanStateProjections(std::uint64_t projections) {
+  addEnabledNonZero(counters().replaySpanStateProjections, projections);
+}
+
+void countReplaySpanSameRawAdmitted() {
+  add(counters().replaySpanSameRawAdmitted);
+}
+
+void countReplaySpanSameRawRejected() {
+  add(counters().replaySpanSameRawRejected);
+}
+
+void countReplaySpanPlanRejected() {
+  add(counters().replaySpanPlanRejected);
+}
+
+void countReplaySpanSeparatorFailStop() {
+  add(counters().replaySpanSeparatorFailStops);
+}
+
 void countRingArenaHeapFallback(RingArenaKind kind, std::uint64_t bytes) {
   if (!enabled()) return;
   add(counters().ringArenaHeapFallbackCount);
@@ -518,6 +569,10 @@ void countChunkPublishReason(ChunkPublishReason reason,
   case ChunkPublishReason::SemanticBoundary:
     count = &c.chunkPublishReasonSemanticBoundary;
     commands = &c.chunkPublishCommandsSemanticBoundary;
+    break;
+  case ChunkPublishReason::DirectCapacityRotation:
+    count = &c.chunkPublishReasonDirectCapacityRotation;
+    commands = &c.chunkPublishCommandsDirectCapacityRotation;
     break;
   // DrawContinuation is retained for counter-table numbering stability and
   // folded into the Unknown bucket.

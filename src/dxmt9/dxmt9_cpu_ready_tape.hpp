@@ -304,6 +304,126 @@ constexpr bool compatibilityProducerIdentityAppendable(
       next.firstSourceOrdinal == current.lastSourceOrdinal + 1u;
 }
 
+// One raw may own several consecutive final-slot lease spans when an ordered
+// control or a compatibility range cuts it. Every span of that raw presents
+// the SAME closed producer interval, so the cross-raw adjacency rule above --
+// which demands a strict +1 in both dimensions -- can never describe them,
+// and must not be weakened to try: it is what makes a *different* raw
+// silently appending onto a populated slot impossible.
+//
+// Keep the two questions separate and typed. The witness below is the exact
+// active-raw identity of the slot: which raw is currently extending it, how
+// far its span sequence has got, and whether that sequence has settled. A
+// same-raw continuation is admitted only for the immediate successor span of
+// the exact witnessed raw, before settlement, carrying the identical closed
+// interval. Duplicate, skipped, out-of-order and post-settlement spans are
+// each rejected with their own reason.
+struct CpuReadySpanWitness {
+  // The raw whose spans are extending this slot. Zero means no span sequence
+  // is active, so the cross-raw predicate is the only authority.
+  std::uint64_t rawOrdinal = 0;
+  // Highest span ordinal of that raw already committed into this slot.
+  std::uint32_t lastSpanOrdinal = 0;
+  // The raw published its final span; nothing further may extend it.
+  bool settled = false;
+
+  constexpr bool active() const noexcept { return rawOrdinal != 0u; }
+  friend constexpr bool operator==(CpuReadySpanWitness,
+                                   CpuReadySpanWitness) noexcept = default;
+};
+
+enum class CpuReadySpanAdmission : std::uint8_t {
+  // No active witness, or a different raw. The unchanged cross-raw adjacency
+  // predicate decides, exactly as before span identity existed.
+  CrossRaw = 0,
+  // The exact witnessed raw is extending its own prefix with the immediate
+  // successor span.
+  SameRawSpan,
+  // The witnessed raw re-presented a span ordinal it already committed.
+  DuplicateSpan,
+  // The witnessed raw skipped at least one span ordinal.
+  SkippedSpan,
+  // The witnessed raw already committed its final span.
+  SettledRaw,
+  // The witnessed raw presented a different closed producer interval.
+  IdentityMismatch,
+};
+
+constexpr CpuReadySpanAdmission compatibilitySpanAdmission(
+    CpuReadySpanWitness witness, CpuReadyProducerIdentity witnessIdentity,
+    std::uint64_t rawOrdinal, std::uint32_t spanOrdinal,
+    CpuReadyProducerIdentity identity) noexcept {
+  if (!witness.active() || rawOrdinal == 0u ||
+      witness.rawOrdinal != rawOrdinal) {
+    return CpuReadySpanAdmission::CrossRaw;
+  }
+  if (witness.settled) {
+    return CpuReadySpanAdmission::SettledRaw;
+  }
+  // A raw carries one closed producer interval, so every span of it presents
+  // the identical value. Exact equality, not adjacency, is the same-raw rule.
+  if (witnessIdentity != identity) {
+    return CpuReadySpanAdmission::IdentityMismatch;
+  }
+  if (spanOrdinal <= witness.lastSpanOrdinal) {
+    return CpuReadySpanAdmission::DuplicateSpan;
+  }
+  if (witness.lastSpanOrdinal == std::numeric_limits<std::uint32_t>::max() ||
+      spanOrdinal != witness.lastSpanOrdinal + 1u) {
+    return CpuReadySpanAdmission::SkippedSpan;
+  }
+  return CpuReadySpanAdmission::SameRawSpan;
+}
+
+// The cross-raw rule is untouched by span identity: a span sequence never
+// widens which *other* raw may extend a populated slot.
+static_assert(compatibilitySpanAdmission(
+                  CpuReadySpanWitness{}, CpuReadyProducerIdentity{}, 0u, 0u,
+                  CpuReadyProducerIdentity{}) ==
+              CpuReadySpanAdmission::CrossRaw);
+static_assert(
+    compatibilitySpanAdmission(
+        CpuReadySpanWitness{.rawOrdinal = 5u, .lastSpanOrdinal = 0u},
+        CpuReadyProducerIdentity{7u, 7u, 11u, 11u}, 6u, 1u,
+        CpuReadyProducerIdentity{8u, 8u, 12u, 12u}) ==
+    CpuReadySpanAdmission::CrossRaw);
+static_assert(
+    compatibilitySpanAdmission(
+        CpuReadySpanWitness{.rawOrdinal = 5u, .lastSpanOrdinal = 0u},
+        CpuReadyProducerIdentity{7u, 7u, 11u, 11u}, 5u, 1u,
+        CpuReadyProducerIdentity{7u, 7u, 11u, 11u}) ==
+    CpuReadySpanAdmission::SameRawSpan);
+static_assert(
+    compatibilitySpanAdmission(
+        CpuReadySpanWitness{.rawOrdinal = 5u, .lastSpanOrdinal = 1u},
+        CpuReadyProducerIdentity{7u, 7u, 11u, 11u}, 5u, 1u,
+        CpuReadyProducerIdentity{7u, 7u, 11u, 11u}) ==
+    CpuReadySpanAdmission::DuplicateSpan);
+static_assert(
+    compatibilitySpanAdmission(
+        CpuReadySpanWitness{.rawOrdinal = 5u, .lastSpanOrdinal = 1u},
+        CpuReadyProducerIdentity{7u, 7u, 11u, 11u}, 5u, 3u,
+        CpuReadyProducerIdentity{7u, 7u, 11u, 11u}) ==
+    CpuReadySpanAdmission::SkippedSpan);
+static_assert(
+    compatibilitySpanAdmission(
+        CpuReadySpanWitness{
+            .rawOrdinal = 5u, .lastSpanOrdinal = 1u, .settled = true},
+        CpuReadyProducerIdentity{7u, 7u, 11u, 11u}, 5u, 2u,
+        CpuReadyProducerIdentity{7u, 7u, 11u, 11u}) ==
+    CpuReadySpanAdmission::SettledRaw);
+static_assert(
+    compatibilitySpanAdmission(
+        CpuReadySpanWitness{.rawOrdinal = 5u, .lastSpanOrdinal = 0u},
+        CpuReadyProducerIdentity{7u, 7u, 11u, 11u}, 5u, 1u,
+        CpuReadyProducerIdentity{7u, 9u, 11u, 13u}) ==
+    CpuReadySpanAdmission::IdentityMismatch);
+// A same-raw span is exactly the case the cross-raw predicate refuses, which
+// is why it needs its own witnessed rule rather than a relaxation.
+static_assert(!compatibilityProducerIdentityAppendable(
+    CpuReadyProducerIdentity{7u, 7u, 11u, 11u},
+    CpuReadyProducerIdentity{7u, 7u, 11u, 11u}));
+
 struct CpuReadyPublicationTicket {
   CpuReadySourceId id{};
   CpuReadyStorageRef storage{};
@@ -1698,6 +1818,17 @@ class CpuReadyTape {
     return entry->producerIdentity;
   }
 
+  // The exact active-raw span witness of a live slot. Callers use it before
+  // opening a transaction so a same-raw continuation is decided pre-effect.
+  std::optional<CpuReadySpanWitness> inspectSpanWitness(
+      SourceRef source) const noexcept {
+    const auto* entry = resolveEntry(source.id, source.storage);
+    if (!entry || entry->state == State::Free) {
+      return std::nullopt;
+    }
+    return entry->spanWitness;
+  }
+
   bool sealAndPublish(CpuReadyPublicationTicket ticket,
                       std::uint64_t sourceOrdinal,
                       std::uint64_t seqId,
@@ -1779,13 +1910,39 @@ class CpuReadyTape {
   // compatibility ChunkSlot. Preserve the exact closed producer interval
   // without forcing a physical publish boundary. Any gap, overlap, or
   // reordering is a post-effect ownership failure for the caller.
+  // `spanRawOrdinal == 0` is the historical whole-raw caller and is decided
+  // entirely by the unchanged cross-raw predicate. A span-qualified caller
+  // additionally presents which raw it belongs to, that raw's span ordinal,
+  // and whether the span is the raw's last; only the immediate successor span
+  // of the exact witnessed raw extends the slot without an interval advance.
   bool extendCompatibilityProducerIdentity(
       CpuReadyPublicationTicket ticket,
-      CpuReadyProducerIdentity next) noexcept {
+      CpuReadyProducerIdentity next,
+      std::uint64_t spanRawOrdinal = 0,
+      std::uint32_t spanOrdinal = 0,
+      bool finalSpan = true) noexcept {
     auto* entry = resolveEntry(ticket.id, ticket.storage);
     if (!entry || entry->state != State::Writing || entry->strictAdmission ||
         entry->payloadKind != PayloadKind::Legacy ||
         ticket.hasAdmissionIdentity() || !next.importable()) {
+      noteStaleReject();
+      return false;
+    }
+    const auto admission = compatibilitySpanAdmission(
+        entry->spanWitness, entry->producerIdentity, spanRawOrdinal,
+        spanOrdinal, next);
+    switch (admission) {
+    case CpuReadySpanAdmission::SameRawSpan:
+      // The interval is already exactly this raw's; only the witness moves.
+      entry->spanWitness.lastSpanOrdinal = spanOrdinal;
+      entry->spanWitness.settled = finalSpan;
+      return true;
+    case CpuReadySpanAdmission::CrossRaw:
+      break;
+    case CpuReadySpanAdmission::DuplicateSpan:
+    case CpuReadySpanAdmission::SkippedSpan:
+    case CpuReadySpanAdmission::SettledRaw:
+    case CpuReadySpanAdmission::IdentityMismatch:
       noteStaleReject();
       return false;
     }
@@ -1794,6 +1951,13 @@ class CpuReadyTape {
       noteStaleReject();
       return false;
     }
+    // A cross-raw extension always replaces the witness: the previous raw's
+    // span sequence can never resume behind a newer raw's prefix.
+    entry->spanWitness = spanRawOrdinal != 0u
+        ? CpuReadySpanWitness{.rawOrdinal = spanRawOrdinal,
+                              .lastSpanOrdinal = spanOrdinal,
+                              .settled = finalSpan}
+        : CpuReadySpanWitness{};
     if (next.absent()) return true;
     if (entry->producerIdentity.absent()) {
       entry->producerIdentity = next;
@@ -2394,6 +2558,10 @@ class CpuReadyTape {
     std::uint64_t seqId = 0;
     std::uint64_t buildGeneration = 0;
     CpuReadyProducerIdentity producerIdentity{};
+    // Which raw's lease-span sequence is currently extending this slot. Reset
+    // with the entry, so a slot rotation or reuse cannot carry a stale
+    // same-raw admission across a publication boundary.
+    CpuReadySpanWitness spanWitness{};
     std::uint64_t groupRawOrdinal = 0;
     std::uint64_t groupHeadSourceOrdinal = 0;
     std::uint64_t groupBuildGeneration = 0;
@@ -2918,6 +3086,7 @@ class CpuReadyTape {
     entry.seqId = 0;
     entry.buildGeneration = 0;
     entry.producerIdentity = {};
+    entry.spanWitness = {};
     entry.strictAdmission = false;
     entry.readyPublicationReserved = true;
     entry.arenaOwnerDetached = false;

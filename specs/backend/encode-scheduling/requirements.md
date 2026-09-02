@@ -1372,3 +1372,122 @@ Encode must count known GPU-visible writes separately from Metal command and
 resource-reference emission. Any additional O(source bytes), O(draw state), or
 O(resource payload) copy requires a named owner-qualified ledger row and must
 fail the carrier-retirement gate unless a requirement proves it unavoidable.
+
+**R-BACK-2.101** A source-wide replay emission plan must classify every record
+of an already-validated `ImportedChunkView` into a *total* ordered partition
+before any semantic effect. The partition alphabet is closed and derived from
+one table: exactly one `RecordReplayTopology` row per live D9C record kind,
+row-aligned with the structural `kRecordRules` table and conserved against it
+at compile time. A structurally sound view must always produce a partition;
+whole-plan rejection is reserved for a malformed view, a record type outside
+the closed alphabet, a checked accumulation overflow, a failed coverage fold,
+a failed aggregate layout, or a failed segment reservation.
+
+Segments are `DirectIsland`, `StateOnlyRun`, `CoordinatorLocator`,
+`OrderedControlLocator`, and `CompatibilityRange`. They must partition
+`[0, recordCount)` with no gap, overlap, duplicate, or empty segment; every
+segment must be maximal for its kind, so no two adjacent segments share a
+mergeable kind. A `DirectIsland` holds only island-resident records and at
+least one island-eligible draw. Coordinator and ordered-control locators are
+exactly one record each and keep their exact serial index. Leading and
+interstitial state belongs to the following GPU-producing record; trailing
+state belongs to the preceding segment. Segments must be pointer-free and
+trivially copyable and must not retain a resolved span, handle, or destination
+address (R-BACK-2.89).
+
+Whether one final-slot lease may own the raw is a *separate* typed question
+reported as `EmissionLeaseBlock` in fixed precedence: `OrderedControl`,
+`CompatibilityRange`, `NoIsland`, then `None`. An ordered control requires a
+CPU-ready session release at its exact position, which no open direct
+transaction may straddle without publishing a half-built private prefix
+(R-BACK-2.85); a compatibility range holds records the direct draw appender
+cannot own. Both therefore block the lease for the whole raw while the
+partition still describes it.
+
+Aggregate capacity is computed once, only for a lease-eligible raw, and covers
+island draws plus coordinator locators. The non-additive derived dimensions —
+uniform constant bytes and the uniform lookup bucket triples — must be derived
+once from the total island draw count and must never be summed per island: the
+bucket count is a non-linear function of the draw count, so a per-island sum
+under-reserves and would force an append to resize final storage inside the
+transaction, which R-BACK-2.86 forbids. Per-island capacity remains exact and
+is descriptive; only the aggregate is a reservation.
+
+The plan must be pure: no handle resolution, queue state, D3D shadow mutation,
+resource marking, or Metal effect, and no allocation beyond one caught segment
+reservation bounded by the producer's raw record cap. Model-code binding is an
+exhaustive native truth table over every emission-class sequence within a
+bounded length, asserting totality, exact coverage, maximality, segment
+membership, lease-block precedence, and aggregate/per-island capacity
+conservation.
+
+**R-BACK-2.102** The emission plan must derive an *executable* partition from
+the descriptive one, and production replay must route through it. Each maximal
+run of `DirectIsland`, `StateOnlyRun` and `CoordinatorLocator` segments between
+`OrderedControlLocator` and `CompatibilityRange` cuts is one lease span; a span
+holding at least one island-eligible draw owns exactly one final-slot lease,
+and a span with no draw keeps the ordinary ownership it already had. Spans must
+partition `[0, recordCount)` and the segment table exactly, in order. A
+coordinator locator never cuts a span: the direct assembler has a typed
+appender for every coordinator command and for Present.
+
+Per lease span there is exactly one checkpoint, one `ReplayTransaction`, one
+destination receipt, and one resource-marking/retention owner. A span's
+transaction projects raw-absolute record ordinals, so receipts stay
+source-relative. Source-level completion settles every span exactly once, in
+order. The command walk that marks published resources must start at the
+transaction's own command checkpoint: a span may commit into a slot that
+already holds earlier spans, and rescanning that prefix is both quadratic in
+the span count and a re-mark of earlier commands under a later sequence. The
+raw's handle closure is marked once per span by design, because retention is
+sequence-qualified and each span publishes under its own seq.
+
+A raw cut into several spans presents the *same* closed producer interval for
+each of them, which the cross-raw adjacency rule cannot describe and must not
+be relaxed to admit: that rule is what keeps a different raw from appending
+onto a populated slot. Same-raw continuation is a separate typed question,
+decided by a slot-scoped witness naming the exact active raw, its last
+committed span ordinal, and whether it settled. Only the immediate successor
+span of that raw, before settlement, carrying the identical interval, is
+admitted; duplicate, skipped, out-of-order, post-settlement and
+interval-mismatched spans are each rejected with their own reason. The witness
+is reset with the slot, so a rotation or reuse cannot carry a stale admission
+across a publication boundary.
+
+Present is the one coordinator whose position inside a span is constrained, and
+the constraint is a whole-raw gate. A direct lease does not append Present at
+its serial index: the append parks it in the transaction's build context and
+commit emits it once, last, as the slot's publication boundary, and a second
+Present in one transaction must be refused. A lease span may therefore own at
+most one Present, and only as its trailing segment. Any other Present shape --
+a Present with further slot-appending work after it in the same span, or a
+duplicate Present in one span -- must fail the **whole raw** closed to
+compatibility replay before any direct, Metal, or queue effect, and must be
+reported under its own typed lease block taking precedence over every other
+block, so a mis-ordered Present can never be attributed to an unrelated reason.
+Routing around only the offending span is not available: the remaining spans
+are meaningful only as a refinement of a stream the router has declined to
+emit. Earlier coordinators carry no such constraint and must not disqualify a
+Present tail; the classifier counts Present locators, not coordinators.
+
+Coordinator appends inside an open span must not reacquire the queue mutex per
+record. They append through the queue-owned build context, which is non-moving
+for the whole transaction and already published; the RAII lease is
+move-constructed by its caller, so its address must never be published, and it
+remains the settlement authority only. Every publication-time effect --
+resource marking, back-buffer promotion, present publication, slot
+command-append notes -- stays in commit. An open `DrawRunCommandRecord` must be
+closed at every island and coordinator cut, and explicitly at a span boundary
+the assembler never sees, so `Draw, Draw, <cut>, Draw` produces two run records.
+
+A populated slot that cannot hold a span's exact reservation, including its
+coordinator dimensions, must publish the existing extent pre-effect and acquire
+a fresh empty final-slot transaction, bounded to one rotation per admission. It
+must never reserve-grow or copy the old final extent, and never degrade a
+direct span to draw-by-draw ordinary replay. Before any span has applied an
+effect the raw is still wholly rollbackable and Legacy may own it once; after
+any span has committed or any separator has executed, a later failure is a
+typed fail-stop and never a whole-raw retry. Observability is count-only and
+perf-gated, covering draws and commands per lease, ordinary fallback draws and
+post-reserve storage growth (both targeting zero), state projections, island,
+coordinator and cut counts, and each typed rejection.

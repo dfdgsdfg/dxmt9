@@ -263,6 +263,38 @@ session_release_event_spec = executable(
 test('dxmt9-session-release-event-spec',
      session_release_event_spec)
 
+replay_emission_plan_spec = executable(
+  'dxmt9-replay-emission-plan-spec',
+  'replay_emission_plan_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-replay-emission-plan-spec',
+     replay_emission_plan_spec,
+     env: dxmt9_native_test_env)
+
+# Binds `specs/verification/tla/ReplayEmissionPlanIslands.tla` to the C++
+# predicate in `src/dxmt9/dxmt9_cpu_ready_tape.hpp`
+# (`compatibilitySpanAdmission`), which the queue calls from
+# `beginDirectChunkSlotReplay` and the Tape calls again from
+# `extendCompatibilityProducerIdentity`. Truth table plus trace conformance:
+# the production interleavings, and one translated trace per
+# `.counterexample.cfg` so the negative TLA configs and the native negative
+# cases stay paired.
+replay_emission_plan_islands_spec = executable(
+  'dxmt9-replay-emission-plan-islands-spec',
+  'replay_emission_plan_islands_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-replay-emission-plan-islands-spec',
+     replay_emission_plan_islands_spec,
+     env: dxmt9_native_test_env)
+
 cpu_ready_plan_spec = executable(
   'dxmt9-cpu-ready-plan-spec',
   'cpu_ready_plan_spec.cpp',

@@ -394,9 +394,16 @@ class ReplayTransaction final {
  public:
   ReplayTransaction() noexcept = default;
 
+  // `firstRecordOrdinal` seeds the projection cursor for a transaction that
+  // owns a sub-range of its raw. A lease span replays records
+  // [first, first + count) and projects raw-absolute ordinals, so its
+  // receipts stay source-relative; a whole-raw transaction passes 0 and is
+  // unchanged.
   void begin(ReplaySourceIdentity identity,
-             const core::Device* device = nullptr) noexcept {
+             const core::Device* device = nullptr,
+             std::uint32_t firstRecordOrdinal = 0) noexcept {
     state_ = ReplayTransactionState{.identity = identity};
+    state_.nextRecordOrdinal = firstRecordOrdinal;
     journal_.clear();
     progress_.reset();
     if (device) progress_ = device->replayProgressCheckpoint();

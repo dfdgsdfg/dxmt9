@@ -206,6 +206,10 @@ enum class ChunkPublishReason : std::uint8_t {
   MapWait,
   SemanticBoundary,
   DrawContinuation,
+  // A populated final slot could not hold the next lease span's exact
+  // reservation, so the span published the existing extent and retried
+  // against a fresh empty slot instead of degrading to draw-by-draw replay.
+  DirectCapacityRotation,
 };
 
 enum class ChunkPublishTailCommandKind : std::uint8_t {
@@ -290,6 +294,22 @@ void countDirectChunkSlotContinuationStructuralRejected();
 void countDirectChunkSlotContinuationIdentityRejected();
 void countDirectChunkSlotContinuationCommitted();
 void countDirectChunkSlotContinuationPopulatedFallback();
+void countDirectChunkSlotContinuationCapacityRotated();
+// Lease-span routing observability (R-BACK-2.102). Count-only and perf-gated:
+// `ordinaryFallbackDraws` and `soaGrowthAfterReserve` both target zero, so a
+// non-zero row is the signal that a direct span degraded or that a reserved
+// destination grew inside its transaction.
+void countReplaySpanLease(std::uint64_t draws, std::uint64_t commands,
+                          std::uint64_t islands, std::uint64_t coordinators);
+void countReplaySpanOrderedControlCut();
+void countReplaySpanCompatibilityCut();
+void countReplaySpanOrdinaryFallbackDraws(std::uint64_t draws);
+void countReplaySpanSoaGrowthAfterReserve();
+void countReplaySpanStateProjections(std::uint64_t projections);
+void countReplaySpanSameRawAdmitted();
+void countReplaySpanSameRawRejected();
+void countReplaySpanPlanRejected();
+void countReplaySpanSeparatorFailStop();
 void countRingArenaHeapFallback(RingArenaKind kind, std::uint64_t bytes);
 
 void countSubmitDraw();

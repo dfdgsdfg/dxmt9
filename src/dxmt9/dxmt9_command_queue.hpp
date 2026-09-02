@@ -677,6 +677,21 @@ class CommandQueue {
                  : nullptr;
     }
     void markSemanticEffectsStarted() noexcept { effectsStarted_ = true; }
+    // Seal the open DrawRunCommandRecord at an island or coordinator cut, so
+    // draws either side of the cut can never merge into one run record. Every
+    // borrowed coordinator append below does this implicitly; the explicit
+    // call exists for a cut the assembler never sees.
+    void closeDirectRun() noexcept {
+      if (directRangeAppendLive_ && directAssembler_ &&
+          ownerThread_ == std::this_thread::get_id()) {
+        directAssembler_->closeDirectRun();
+      }
+    }
+    // Coordinator commands a lease span owns are appended through the
+    // queue-owned build context (`borrowedDirectChunkSlotAppend`), not
+    // through this lease: the lease is move-constructed out of an optional by
+    // its caller, so its address is not stable and must never be published.
+    // The lease remains the settlement authority.
     DirectChunkSlotReplayStatus commit(
         std::span<const core::ChunkHandleEntry> resources) noexcept;
     bool rollbackPreEffect() noexcept;
@@ -719,13 +734,24 @@ class CommandQueue {
     explicit operator bool() const noexcept { return has_value(); }
   };
 
+  // A raw cut by an ordered control or a compatibility range owns several
+  // consecutive lease spans. `spanOrdinal` is that raw's 0-based span index
+  // and `finalSpan` marks the last one; together they let the Tape witness
+  // admit the immediate successor span of the exact active raw without
+  // widening which *other* raw may extend a populated slot. `allowRotation`
+  // permits one bounded publish-and-retry when a populated slot cannot hold
+  // the span's exact reservation, so a direct span never degrades into
+  // draw-by-draw compatibility replay.
   DirectChunkSlotReplayBeginResult beginDirectChunkSlotReplay(
       std::uint64_t rawOrdinal,
       const core::SourcePayloadCapacity& capacity,
       std::size_t plannedBytes,
       core::CpuReadyProducerIdentity producerIdentity = {},
       std::size_t rangeRecordCount = 0,
-      std::size_t rangeDrawCount = 0) noexcept;
+      std::size_t rangeDrawCount = 0,
+      std::uint32_t spanOrdinal = 0,
+      bool finalSpan = true,
+      bool allowRotation = false) noexcept;
   CpuReadyArenaBeginResult beginCpuReadyArenaSource(
       std::uint64_t rawOrdinal,
       const core::ArenaSourcePayloadLayout& layout,
@@ -1695,6 +1721,16 @@ class CommandQueue {
     // range; prepare/commit verify the bound once, rather than synchronizing
     // with the queue for every record.
     std::size_t expectedRangeRecordCount = 0;
+    // Lease-span identity of the raw owning this transaction. `spanOrdinal`
+    // is 0-based within the raw and `finalSpan` marks its last span; commit
+    // presents both to the Tape witness so only the immediate successor span
+    // of the exact active raw may extend a populated slot.
+    std::uint32_t spanOrdinal = 0;
+    bool finalSpan = true;
+    // Destination command-header capacity observed at admission. R-BACK-2.86
+    // forbids reallocating an earlier final extent, so a different capacity at
+    // commit means an append grew reserved storage inside the transaction.
+    std::size_t reservedCommandHeaderCapacity = 0;
     // Present is staged by submitPresent, but remains coordinator-owned until
     // direct assembler evidence has committed the same final ChunkSlot.
     core::PresentId pendingPresentId{};
@@ -1813,6 +1849,43 @@ class CommandQueue {
       bool tokenStashed) noexcept;
   ActiveArenaAppendResult deferActiveArenaFlush() noexcept;
   ActiveArenaAppendResult rejectIfActiveArena() noexcept;
+  // Thread-pinned borrowed coordinator append over the *queue-owned* build
+  // context. The RAII lease is move-constructed out of an optional by its
+  // caller, so its address is not stable and must never be published; the
+  // context in `directChunkSlotBuildContext_` is queue-owned, non-moving for
+  // the whole transaction, and already published through
+  // `activeDirectChunkSlotBuild_`. The lease stays the settlement authority
+  // (commit / rollback / fail-stop); this is only the append seam.
+  struct BorrowedDirectChunkSlotAppend {
+    DirectChunkSlotBuildContext* context = nullptr;
+    core::TransactionalChunkSlotAssembler* assembler = nullptr;
+
+    explicit operator bool() const noexcept {
+      return context != nullptr && assembler != nullptr;
+    }
+    // Poison the transaction after a rejected append, mirroring the borrowed
+    // draw appender. Returns false so callers can `return poison();`.
+    bool poison() const noexcept {
+      if (context) context->failed = true;
+      return false;
+    }
+  };
+
+  // Non-null only on the transaction's owning thread, which is its sole
+  // writer. That is what lets this skip the queue mutex and the slot
+  // revalidation the generic append below performs: no other thread may
+  // change the writing slot while a direct build is active, and the
+  // destination is pre-reserved so no append can grow it.
+  BorrowedDirectChunkSlotAppend borrowedDirectChunkSlotAppend() noexcept {
+    auto* context =
+        activeDirectChunkSlotBuild_.load(std::memory_order_acquire);
+    if (!context || context->ownerThread != std::this_thread::get_id() ||
+        context->failed || !context->assembler ||
+        !context->assembler->good()) {
+      return {};
+    }
+    return {context, &*context->assembler};
+  }
   core::DirectReplayDrawDisposition appendActiveDirectChunkSlotDraw(
       const core::DirectReplayDrawInput& input) noexcept;
   ActiveArenaAppendResult appendActiveDirectChunkSlotClear(

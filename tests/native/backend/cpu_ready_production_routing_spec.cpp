@@ -161,11 +161,16 @@ void digestDrawPayloadSemantics(
   }
 }
 
-std::uint64_t effectivePayloadDigest(
-    const dxmt9::core::SourcePayloadView& payload) noexcept {
+// One command's storage-independent effective semantics. Split out of the
+// whole-payload digest below so a raw whose commands are spread over several
+// published sources can be compared against a single-source lane command by
+// command, in source order: a per-source digest embeds that source's command
+// count and cannot be concatenated.
+std::uint64_t effectiveCommandDigest(
+    const dxmt9::core::SourcePayloadView& payload,
+    std::size_t index) noexcept {
   std::uint64_t hash = 1469598103934665603ull;
-  digestValue(hash, payload.commandCount());
-  for (std::size_t index = 0; index < payload.commandCount(); ++index) {
+  {
     const auto source = payload.commandAt(index);
     const auto& command = source.command;
     digestValue(hash, command.kind);
@@ -264,6 +269,16 @@ std::uint64_t effectivePayloadDigest(
   return hash;
 }
 
+std::uint64_t effectivePayloadDigest(
+    const dxmt9::core::SourcePayloadView& payload) noexcept {
+  std::uint64_t hash = 1469598103934665603ull;
+  digestValue(hash, payload.commandCount());
+  for (std::size_t index = 0; index < payload.commandCount(); ++index) {
+    digestValue(hash, effectiveCommandDigest(payload, index));
+  }
+  return hash;
+}
+
 }  // namespace
 
 namespace dxmt9 {
@@ -282,6 +297,12 @@ struct CommandQueueArenaLeaseTestAccess {
     std::uint64_t rawOrdinal = 0;
     std::uint64_t sourceOrdinal = 0;
     std::uint64_t effectiveDigest = 0;
+    // One entry per command of this source, in source order. Concatenating
+    // these across the sources one raw published gives that raw's exact
+    // ordered command identity/parameter stream, which a per-source digest
+    // cannot express because it embeds the source's own command count.
+    std::vector<std::uint64_t> commandDigests{};
+    std::vector<std::uint8_t> commandKinds{};
     std::size_t commandCount = 0;
     std::size_t arenaSegmentCount = 0;
     core::Handle presentSource{};
@@ -519,6 +540,14 @@ struct CommandQueueArenaLeaseTestAccess {
       result.rawOrdinal = resolved.metadata.rawOrdinal;
       result.sourceOrdinal = resolved.metadata.sourceOrdinal;
       result.effectiveDigest = effectivePayloadDigest(resolved.payload);
+      result.commandDigests.reserve(result.commandCount);
+      result.commandKinds.reserve(result.commandCount);
+      for (std::size_t index = 0; index < result.commandCount; ++index) {
+        result.commandDigests.push_back(
+            effectiveCommandDigest(resolved.payload, index));
+        result.commandKinds.push_back(static_cast<std::uint8_t>(
+            resolved.payload.commandAt(index).kind()));
+      }
       result.clear = result.arena && resolved.payload.commandCount() == 1u &&
                      resolved.payload.commandAt(0).kind() ==
                          core::MetalCommandKind::Clear;
@@ -1164,6 +1193,43 @@ struct RuntimeFixture {
   dxmt9::com::IDirect3DDevice9Ex* device = nullptr;
   std::unique_ptr<D9CDevice> cDevice;
 };
+
+// Every command the replayed raw published, in source order, across every
+// source it published. A replayed raw may seal more than one source -- a
+// Present publishes its slot, and a span may rotate -- so the ordered command
+// stream of the raw is the concatenation, not any single source's payload.
+//
+// The trailing `present()` flushes a still-open writing slot; the drain is then
+// bounded by the non-blocking `readyCount` snapshot. `consumeOne` is NOT an
+// empty-queue probe: one extra call past the last ready source waits on a
+// condition variable and wedges the test thread.
+std::vector<dxmt9::core::MetalCommandKind> drainOrderedCommandKinds(
+    RuntimeFixture& fixture) {
+  fixture.routing->present(SwapDesc{});
+  const auto ready = dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+      fixture.routing->queue_);
+  check(ready != 0u, "a replayed raw publishes at least one source");
+  std::vector<dxmt9::core::MetalCommandKind> kinds;
+  for (std::size_t i = 0; i < ready; ++i) {
+    const auto completion =
+        dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+            fixture.routing->queue_);
+    check(completion.dequeued,
+          "every counted ready source dequeues without waiting");
+    for (const auto kind : completion.commandKinds) {
+      kinds.push_back(static_cast<dxmt9::core::MetalCommandKind>(kind));
+    }
+  }
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+            fixture.routing->queue_) == 0u,
+        "the bounded drain consumes exactly the published sources");
+  // The flushing present above contributes the final Present barrier; the
+  // records under test own everything before it.
+  check(!kinds.empty() && kinds.back() == dxmt9::core::MetalCommandKind::Present,
+        "the flushing present closes the drained stream");
+  kinds.pop_back();
+  return kinds;
+}
 
 void directRawPublishesAndCompletesArenaSource() {
   RuntimeFixture fixture;
@@ -2056,7 +2122,162 @@ void ordinaryOversizedDrawSourceUsesCarrierFreeLifecycle() {
   dxmt9c_buffer_release(buffer);
 }
 
-void drawApplyStateDrawWithPresentStaysCompatibilityOwned() {
+// A raw cut by a compatibility range is the shape the whole-raw gate could
+// never own: one UP/TriangleFan draw anywhere demoted every draw in the raw.
+// The executable partition gives it three spans -- direct, ordinary, direct --
+// so the compatibility range ends the island before it and delays the island
+// after it without poisoning either.
+void compatibilityCutSplitsTheRawIntoTwoLeaseSpans() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr, "compatibility-cut fixture buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+  const auto fanRecord = [&](std::uint32_t handleIndex) {
+    auto record = drawRecord(identity, handleIndex);
+    D9CCommandChunkWireDrawHeader header{};
+    std::memcpy(&header, record.payload.data(), sizeof(header));
+    header.primitiveType = 6u;  // TriangleFan: compatibility-sink owned.
+    std::memcpy(record.payload.data(), &header, sizeof(header));
+    return record;
+  };
+  const std::array records{drawRecord(identity, 0u), fanRecord(1u),
+                           drawRecord(identity, 2u)};
+  const auto wire = makeWireFixture(records);
+  dxmt9::d3d9::ImportedChunkView imported;
+  check(validateCommandChunk(wire.bytes, wire.envelope, &imported).valid(),
+        "compatibility-cut fixture validates");
+
+  const auto plan = dxmt9::d3d9::planReplayEmission(imported, 120u, 4096u);
+  check(plan.partitioned() && plan.leaseSpanCount == 3u &&
+            plan.leaseOwningSpanCount() == 2u,
+        "a compatibility range splits the raw into two lease spans");
+  check(plan.leaseSpans[0].ownsLease && plan.leaseSpans[0].leaseOrdinal == 0u &&
+            !plan.leaseSpans[0].finalLeaseSpan &&
+            !plan.leaseSpans[1].ownsLease &&
+            plan.leaseSpans[2].ownsLease &&
+            plan.leaseSpans[2].leaseOrdinal == 1u &&
+            plan.leaseSpans[2].finalLeaseSpan,
+        "the two islands own adjacent lease ordinals across the cut");
+
+  auto raw = makeRaw(wire, 120u, false, &registry);
+  raw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK,
+        "a compatibility-cut raw replays successfully");
+  // Only the TriangleFan takes the ordinary submission path. Both island
+  // draws construct directly, which is exactly what the whole-raw gate could
+  // not do: one unsupported primitive no longer demotes the whole raw.
+  check(fixture.routing->drawCalls == 1u &&
+            fixture.routing->ordinaryDrawCalls == 1u,
+        "only the compatibility range itself uses ordinary draw submission");
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(buffer);
+}
+
+// The same records through the Legacy lane must produce the same ordered
+// command kinds and the same draw parameters/payload bytes. This is the
+// production differential for a multi-span raw: the span partition is a
+// refinement of the serial stream, not a different stream.
+//
+// Comparing only a total command count would pass for a *reordered* or
+// differently-parameterised stream, so the comparison is the concatenated
+// per-command `effectiveCommandDigest` sequence -- ordered command kind, draw
+// parameters, binding-override and binding-snapshot payload bytes, and the
+// coordinator descriptors -- across every source the raw published.
+void compatibilityCutMatchesLegacyDrawSemantics() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr, "compatibility-cut differential buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+  const auto fanRecord = [&](std::uint32_t handleIndex) {
+    auto record = drawRecord(identity, handleIndex);
+    D9CCommandChunkWireDrawHeader header{};
+    std::memcpy(&header, record.payload.data(), sizeof(header));
+    header.primitiveType = 6u;
+    std::memcpy(record.payload.data(), &header, sizeof(header));
+    return record;
+  };
+  const std::array records{drawRecord(identity, 0u), fanRecord(1u),
+                           drawRecord(identity, 2u)};
+  const auto wire = makeWireFixture(records);
+
+  auto spanRaw = makeRaw(wire, 121u, false, &registry);
+  auto legacyRaw = makeRaw(wire, 122u, false, &registry);
+  spanRaw.cpuReadyTapePlanningEnabled = false;
+  legacyRaw.cpuReadyTapePlanningEnabled = false;
+
+  // A span lane may rotate, so the raw's commands can be spread over more
+  // than one published source. Compare what the raw actually emitted: drain
+  // every source and sum. Comparing one writing slot would compare a tail
+  // against a whole.
+  //
+  // The drain is bounded by the non-blocking `readyCount` snapshot taken
+  // after publication. `consumeOne` is NOT an empty-queue probe: its
+  // `dequeueReadySlot` reaches `reserveReadySlotBatchPrefix`, which waits on
+  // a condition variable, so one extra call past the last ready source wedges
+  // the test thread instead of returning `dequeued == false`.
+  struct DrainedStream {
+    std::vector<std::uint64_t> digests;
+    std::vector<std::uint8_t> kinds;
+  };
+  const auto drainOrderedCommands = [&]() {
+    fixture.routing->present(SwapDesc{});
+    const auto ready = dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+        fixture.routing->queue_);
+    check(ready != 0u, "a replayed raw publishes at least one source");
+    DrainedStream stream;
+    for (std::size_t i = 0; i < ready; ++i) {
+      const auto completion =
+          dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+              fixture.routing->queue_);
+      check(completion.dequeued,
+            "every counted ready source dequeues without waiting");
+      check(completion.commandDigests.size() == completion.commandCount &&
+                completion.commandKinds.size() == completion.commandCount,
+            "every published command contributes exactly one digest");
+      stream.digests.insert(stream.digests.end(),
+                            completion.commandDigests.begin(),
+                            completion.commandDigests.end());
+      stream.kinds.insert(stream.kinds.end(),
+                          completion.commandKinds.begin(),
+                          completion.commandKinds.end());
+    }
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+              fixture.routing->queue_) == 0u,
+          "the bounded drain consumes exactly the published sources");
+    return stream;
+  };
+
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), spanRaw) == D3D_OK,
+        "the span lane replays the differential raw");
+  const auto spanStream = drainOrderedCommands();
+
+  fixture.routing->directChunkSlot_ = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), legacyRaw) == D3D_OK,
+        "the Legacy lane replays the same records");
+  const auto legacyStream = drainOrderedCommands();
+
+  check(!spanStream.digests.empty() &&
+            spanStream.digests.size() == legacyStream.digests.size(),
+        "span replay and Legacy replay emit the same total command count");
+  check(spanStream.kinds == legacyStream.kinds,
+        "span replay and Legacy replay emit the same ordered command kinds");
+  check(spanStream.digests == legacyStream.digests,
+        "span replay and Legacy replay emit identical ordered command "
+        "identities, draw parameters, and draw payload bytes");
+  dxmt9::d3d9::releaseRetainedWrappers(spanRaw);
+  dxmt9::d3d9::releaseRetainedWrappers(legacyRaw);
+  dxmt9c_buffer_release(buffer);
+}
+
+void drawApplyStateDrawWithPresentUsesOneLeaseSpan() {
   RuntimeFixture fixture(/*rejectAfterClear=*/false,
                          /*segmentSerial=*/false,
                          /*directChunkSlot=*/true);
@@ -2079,17 +2300,41 @@ void drawApplyStateDrawWithPresentStaysCompatibilityOwned() {
   const auto wire = makeWireFixture(records);
   check(validateCommandChunk(wire.bytes, wire.envelope, &imported).valid(),
         "Draw/ApplyState/Draw/Present fixture validates");
+  // The narrow whole-raw gate rejects the range, because one coordinator
+  // command anywhere demoted the entire raw. The source-wide partition does
+  // not: the raw is one lease span holding a two-draw island plus a terminal
+  // Present locator, which is exactly the DirectWithPresentTail shape.
   check(dxmt9::d3d9::classifyDirectChunkSlotRange(imported) ==
             dxmt9::d3d9::DirectChunkSlotRangeClass::Unsupported,
         "Present-bearing range stays outside strict direct eligibility");
+  const auto emission =
+      dxmt9::d3d9::planReplayEmission(imported, 92u, 4096u);
+  check(emission.partitioned() && emission.leaseSpanCount == 1u &&
+            emission.leaseSpans.front().ownsLease &&
+            emission.leaseSpans.front().finalLeaseSpan &&
+            emission.leaseSpans.front().leaseOrdinal == 0u &&
+            emission.leaseSpans.front().drawCount == 2u &&
+            emission.leaseSpans.front().coordinatorCount == 1u &&
+            emission.leaseSpans.front().containsTerminalPresent &&
+            emission.leaseSpans.front().recordCount == 4u,
+        "Present-bearing raw is one lease span with a terminal Present");
+  check(dxmt9::d3d9::emissionPlanDisposition(emission, false) ==
+            dxmt9::d3d9::DirectChunkSlotReplayDisposition::
+                DirectWithPresentTail,
+        "the emission plan reports the Present-tail disposition");
 
+  // A direct draw is appended straight into the final ChunkSlot through the
+  // borrowed appender, so it never reaches the routing backend at all: both
+  // draw counters staying zero is the proof that neither draw took the
+  // ordinary submission path, matching the oversized-direct case above.
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
-            fixture.routing->drawCalls == 2u &&
-            fixture.routing->ordinaryDrawCalls == 2u &&
+            fixture.routing->drawCalls == 0u &&
+            fixture.routing->ordinaryDrawCalls == 0u &&
             fixture.routing->presentCalls == 1u &&
             dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
                 fixture.routing->queue_) == 2u,
-        "Present-bearing Draw/ApplyState/Draw uses compatibility replay");
+        "Present-bearing Draw/ApplyState/Draw constructs through one lease "
+        "span with no ordinary draw fallback");
   const auto completion =
       dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
           fixture.routing->queue_);
@@ -2102,8 +2347,11 @@ void drawApplyStateDrawWithPresentStaysCompatibilityOwned() {
         "compatibility Present keeps two draws and terminal Present");
   check(completion.seqId == 1u,
         "compatibility Present preserves the admitted sequence identity");
-  check(completion.rawOrdinal == 0u && completion.sourceOrdinal != 0u,
-        "compatibility Present uses queue-owned source identity");
+  // The lease span publishes with the exact raw ordinal it constructed from,
+  // where whole-raw compatibility replay published an anonymous source. The
+  // queue still mints the source ordinal.
+  check(completion.rawOrdinal == 92u && completion.sourceOrdinal != 0u,
+        "the Present-tail span publishes its exact raw identity");
   check(completion.submitted && completion.completed && completion.reclaimed,
         "compatibility Present reaches completion and reclaim");
   check(!dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
@@ -2119,12 +2367,132 @@ void drawApplyStateDrawWithPresentStaysCompatibilityOwned() {
           fixture.routing->queue_);
   check(nextCompletion.dequeued && nextCompletion.hasPresent &&
             nextCompletion.seqId == 2u &&
-            nextCompletion.rawOrdinal == 0u &&
+            nextCompletion.rawOrdinal == 93u &&
             nextCompletion.sourceOrdinal == 2u &&
             nextCompletion.submitted && nextCompletion.completed &&
             nextCompletion.reclaimed,
-        "consecutive compatibility Presents retain monotone source identity");
+        "consecutive Present-tail spans retain monotone source identity and "
+        "each carry their own raw ordinal");
   dxmt9::d3d9::releaseRetainedWrappers(nextRaw);
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(buffer);
+}
+
+// A Present is NOT appended at its serial index. `appendActiveDirectChunkSlot
+// Present` parks it in the queue-owned build context and
+// `commitDirectChunkSlotReplay` appends it once, last, as the slot's
+// publication boundary. So a lease that owned `Draw, Present, Draw` would
+// publish `Draw, Draw, Present` -- the second draw executing BEFORE the
+// Present it followed in the source. A second Present in one transaction is
+// refused outright (`if (context.presentAppended) return false;`) and poisons
+// the build.
+//
+// Both shapes must therefore be routed to whole-raw compatibility replay
+// BEFORE any direct, Metal, or queue side effect. These are the production
+// pins for that: compatibility routing (both draws reach the ordinary
+// submission path, so no direct lease was taken) plus the exact published
+// source order.
+void nonTerminalPresentFallsBackToCompatibilityInSourceOrder() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr, "non-terminal Present fixture buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+
+  const std::array records{drawRecord(identity, 0u), presentRecord(),
+                           drawRecord(identity, 1u)};
+  const auto wire = makeWireFixture(records);
+  dxmt9::d3d9::ImportedChunkView imported;
+  check(validateCommandChunk(wire.bytes, wire.envelope, &imported).valid(),
+        "Draw/Present/Draw fixture validates");
+
+  const auto plan = dxmt9::d3d9::planReplayEmission(imported, 130u, 4096u);
+  check(plan.partitioned() && plan.presentCount == 1u,
+        "Draw,Present,Draw still partitions completely");
+  check(plan.leaseBlock ==
+            dxmt9::d3d9::EmissionLeaseBlock::PresentOrdering &&
+            !plan.spansExecutable() && !plan.leaseEligible(),
+        "a non-terminal Present blocks every lease of the raw");
+  check(dxmt9::d3d9::emissionPlanDisposition(plan, /*captureOrTrace=*/false) ==
+            dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyPresent,
+        "a non-terminal Present reports LegacyPresent");
+
+  auto raw = makeRaw(wire, 130u, false, &registry);
+  raw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK,
+        "a non-terminal Present raw replays successfully");
+  // Both draws took the ordinary submission path, which is the observable
+  // proof that no direct lease was taken for any span of this raw.
+  check(fixture.routing->drawCalls == 2u &&
+            fixture.routing->ordinaryDrawCalls == 2u &&
+            fixture.routing->presentCalls == 1u,
+        "a non-terminal Present routes the whole raw to compatibility replay");
+
+  // Exact source order. The Present publishes the slot holding the first draw,
+  // so the second draw can only appear after it; a lease would have emitted
+  // both draws first.
+  const auto kinds = drainOrderedCommandKinds(fixture);
+  check(kinds.size() == 3u &&
+            kinds[0] == dxmt9::core::MetalCommandKind::DrawRun &&
+            kinds[1] == dxmt9::core::MetalCommandKind::Present &&
+            kinds[2] == dxmt9::core::MetalCommandKind::DrawRun,
+        "the published stream keeps Draw, Present, Draw in source order");
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(buffer);
+}
+
+// Two Presents in one raw. The direct build context refuses the second append
+// outright, so this must also fail closed to whole-raw compatibility replay
+// before any effect rather than poison an open transaction.
+void duplicatePresentFallsBackToCompatibilityInSourceOrder() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr, "duplicate Present fixture buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+
+  const std::array records{drawRecord(identity, 0u), presentRecord(),
+                           drawRecord(identity, 1u), presentRecord()};
+  const auto wire = makeWireFixture(records);
+  dxmt9::d3d9::ImportedChunkView imported;
+  check(validateCommandChunk(wire.bytes, wire.envelope, &imported).valid(),
+        "Draw/Present/Draw/Present fixture validates");
+
+  const auto plan = dxmt9::d3d9::planReplayEmission(imported, 131u, 4096u);
+  check(plan.partitioned() && plan.presentCount == 2u &&
+            plan.leaseBlock ==
+                dxmt9::d3d9::EmissionLeaseBlock::PresentOrdering &&
+            !plan.spansExecutable(),
+        "a duplicate Present blocks every lease of the raw");
+  check(dxmt9::d3d9::emissionPlanDisposition(plan, /*captureOrTrace=*/false) ==
+            dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyPresent,
+        "a duplicate Present reports LegacyPresent");
+
+  auto raw = makeRaw(wire, 131u, false, &registry);
+  raw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK,
+        "a duplicate Present raw replays successfully");
+  check(fixture.routing->drawCalls == 2u &&
+            fixture.routing->ordinaryDrawCalls == 2u &&
+            fixture.routing->presentCalls == 2u,
+        "a duplicate Present routes the whole raw to compatibility replay");
+  check(!dxmt9::CommandQueueArenaLeaseTestAccess::stopped(
+            fixture.routing->queue_),
+        "a duplicate Present is a pre-effect fallback, never a fail-stop");
+
+  const auto kinds = drainOrderedCommandKinds(fixture);
+  check(kinds.size() == 4u &&
+            kinds[0] == dxmt9::core::MetalCommandKind::DrawRun &&
+            kinds[1] == dxmt9::core::MetalCommandKind::Present &&
+            kinds[2] == dxmt9::core::MetalCommandKind::DrawRun &&
+            kinds[3] == dxmt9::core::MetalCommandKind::Present,
+        "the published stream keeps both Presents at their source positions");
   dxmt9::d3d9::releaseRetainedWrappers(raw);
   dxmt9c_buffer_release(buffer);
 }
@@ -2205,11 +2573,17 @@ void ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics() {
   auto legacy = makeRaw(wire, 94u, false, &registry);
   direct.cpuReadyTapePlanningEnabled = false;
   legacy.cpuReadyTapePlanningEnabled = false;
+  // Draw, ApplyState, Draw, Clear, Clear is one lease span: a two-draw island
+  // followed by two coordinator locators. Both draws construct directly (both
+  // draw counters stay zero), and both Clears still execute at their exact
+  // serial position -- they reach Device::clear as before and are appended
+  // into the same private destination through the borrowed appender rather
+  // than demoting the island in front of them.
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), direct) == D3D_OK &&
             fixture.routing->clearCalls == 2u &&
-            fixture.routing->drawCalls == 2u &&
-            fixture.routing->ordinaryDrawCalls == 2u,
-        "segmented mixed range uses compatibility replay without a carrier");
+            fixture.routing->drawCalls == 0u &&
+            fixture.routing->ordinaryDrawCalls == 0u,
+        "a coordinator-bearing range constructs as one lease span");
   const auto directWritingCommandCount =
       dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
           fixture.routing->queue_);
@@ -2224,10 +2598,12 @@ void ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics() {
         "segmented differential restores render state before Legacy replay");
 
   fixture.routing->directChunkSlot_ = false;
+  // Cumulative counters. The direct pass above contributed two Clears and no
+  // draw submissions, so the Legacy pass adds two of each.
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), legacy) == D3D_OK &&
             fixture.routing->clearCalls == 4u &&
-            fixture.routing->drawCalls == 4u &&
-            fixture.routing->ordinaryDrawCalls == 4u,
+            fixture.routing->drawCalls == 2u &&
+            fixture.routing->ordinaryDrawCalls == 2u,
         "the same segmented Draw/ApplyState/Draw uses ordinary final storage");
   const auto legacyWritingCommandCount =
       dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
@@ -2285,12 +2661,18 @@ void directAdmissionRejectionPreservesLegacyDrawBatchGrouping() {
 
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK,
         "pre-effect Direct admission rejection must fall back successfully");
-  check(fixture.routing->drawCalls == 2u &&
-            fixture.routing->ordinaryDrawCalls == 2u &&
-            fixture.routing->lastDrawRunSize == 1u &&
+  // A capacity-rejected continuation no longer degrades into draw-by-draw
+  // ordinary replay. The populated prefix is published once -- the same
+  // boundary the queue already takes on its own draw/payload limits -- and
+  // the identical exact plan is retried against a fresh empty final slot, so
+  // the span's draws stay in one representation. Both draw counters staying
+  // zero is the proof that neither draw took the ordinary submission path.
+  check(fixture.routing->drawCalls == 0u &&
+            fixture.routing->ordinaryDrawCalls == 0u &&
             dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
-                fixture.routing->queue_) == 3u,
-        "ordinary fallback must append both draws without an intermediate carrier");
+                fixture.routing->queue_) == 1u,
+        "a capacity-rejected span rotates instead of falling back to ordinary "
+        "draw submission");
 
   dxmt9::d3d9::releaseRetainedWrappers(raw);
   dxmt9c_buffer_release(buffer);
@@ -2404,7 +2786,7 @@ void populatedSlotDrawApplyDrawUsesCarrierFreeContinuation() {
   dxmt9c_buffer_release(buffer);
 }
 
-void populatedSlotInsufficientCapacityFallsBackBeforeEffects() {
+void populatedSlotInsufficientCapacityRotatesBeforeEffects() {
   RuntimeFixture fixture(/*rejectAfterClear=*/false,
                          /*segmentSerial=*/false,
                          /*directChunkSlot=*/true);
@@ -2415,8 +2797,11 @@ void populatedSlotInsufficientCapacityFallsBackBeforeEffects() {
   const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
 
   // The legacy append reserves exactly this seven-draw prefix. A two-draw
-  // continuation cannot fit all final vectors, so admission must reject before
-  // the first source semantic effect and let one Legacy batch own the raw.
+  // continuation cannot fit all final vectors, so admission rejects on
+  // capacity before the first source semantic effect. The span then publishes
+  // the seven-draw prefix and retries the identical exact plan against a
+  // fresh empty final slot, rather than splitting its two draws across two
+  // representations by degrading to ordinary submission.
   const std::array seedDraws{DrawParam{}, DrawParam{}, DrawParam{}, DrawParam{},
                              DrawParam{}, DrawParam{}, DrawParam{}};
   const std::array seedPayloads{
@@ -2429,13 +2814,16 @@ void populatedSlotInsufficientCapacityFallsBackBeforeEffects() {
   auto raw = makeRaw(makeWireFixture(records), 75u, false, &registry);
   raw.cpuReadyTapePlanningEnabled = false;
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
-            fixture.routing->drawCalls == 2u &&
-            fixture.routing->ordinaryDrawCalls == 2u &&
-            fixture.routing->lastDrawRunSize == 1u,
-        "insufficient continuation capacity must use ordinary final storage");
+            fixture.routing->drawCalls == 0u &&
+            fixture.routing->ordinaryDrawCalls == 0u,
+        "insufficient continuation capacity rotates to a fresh final slot");
+  // The seven-draw prefix was published intact by the rotation, so the fresh
+  // writing slot holds only this span's own run. The prefix was never grown,
+  // copied, or relocated.
   check(dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
-            fixture.routing->queue_) == 3u,
-        "capacity rejection must preserve the populated prefix and append each ordinary draw");
+            fixture.routing->queue_) == 1u,
+        "capacity rejection publishes the populated prefix and constructs the "
+        "span into a fresh slot");
   dxmt9::d3d9::releaseRetainedWrappers(raw);
   dxmt9c_buffer_release(buffer);
 }
@@ -2567,7 +2955,7 @@ void lateStateFailureDoesNotDuplicateDiscardedDirectProgress() {
   dxmt9c_buffer_release(buffer);
 }
 
-void populatedSlotPresentTailIsExcludedFromContinuation() {
+void populatedSlotPresentTailRotatesIntoAFreshSlot() {
   RuntimeFixture fixture(/*rejectAfterClear=*/false,
                          /*segmentSerial=*/false,
                          /*directChunkSlot=*/true);
@@ -2583,11 +2971,17 @@ void populatedSlotPresentTailIsExcludedFromContinuation() {
   const std::array records{drawRecord(identity), presentRecord()};
   auto raw = makeRaw(makeWireFixture(records), 77u, false, &registry);
   raw.cpuReadyTapePlanningEnabled = false;
+  // A populated slot has no reserved Present row, so the coordinator
+  // dimension is a capacity rejection. Requirement: publish the populated
+  // extent pre-effect and acquire a fresh empty final-slot transaction --
+  // never grow or copy the old extent, and never split the span's draw onto
+  // the ordinary path.
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
-            fixture.routing->drawCalls == 1u &&
-            fixture.routing->ordinaryDrawCalls == 1u &&
+            fixture.routing->drawCalls == 0u &&
+            fixture.routing->ordinaryDrawCalls == 0u &&
             fixture.routing->presentCalls == 1u,
-        "populated Direct continuation must exclude a Present tail before effects");
+        "a Present-tail span rejected on coordinator capacity rotates into a "
+        "fresh final slot");
   check(!dxmt9::CommandQueueArenaLeaseTestAccess::stopped(
             fixture.routing->queue_),
         "Present-tail exclusion must remain a recoverable Legacy fallback");
@@ -2675,8 +3069,13 @@ void triangleFanNeverEntersDirectReplay() {
         "oversized TriangleFan exclusion fixture validates");
   const auto oversizedPlan =
       dxmt9::d3d9::planCpuReadyChunk(oversizedImported, 81u);
+  // A TriangleFan raw is not a direct-slot candidate at all: island
+  // membership now has one authority (`kRecordTopology` plus the primitive
+  // predicate), so the exact capacity pass rejects the same primitive the
+  // range gate rejects. Before that, the capacity pass accepted fans and only
+  // the gate excluded them -- a live second opinion about the same alphabet.
   check(oversizedPlan.reason == dxmt9::d3d9::ReplayReason::Oversize &&
-            oversizedPlan.directChunkSlotCandidate() &&
+            !oversizedPlan.directChunkSlotCandidate() &&
             dxmt9::d3d9::classifyDirectChunkSlotReplay(
                 oversizedImported, oversizedPlan,
                 /*captureOrTrace=*/false) ==
@@ -3235,16 +3634,20 @@ int main() {
     sameRawLegacyAndDirectProductionOracle();
     ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion();
     ordinaryDrawApplyStateDrawUsesCarrierFreeDirectPath();
-    drawApplyStateDrawWithPresentStaysCompatibilityOwned();
+    compatibilityCutSplitsTheRawIntoTwoLeaseSpans();
+    compatibilityCutMatchesLegacyDrawSemantics();
+    drawApplyStateDrawWithPresentUsesOneLeaseSpan();
+    nonTerminalPresentFallsBackToCompatibilityInSourceOrder();
+    duplicatePresentFallsBackToCompatibilityInSourceOrder();
     ordinaryUnsupportedClearRangeStaysCompatibilityOwned();
     ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics();
     directAdmissionRejectionPreservesLegacyDrawBatchGrouping();
     populatedSlotDrawApplyDrawUsesCarrierFreeContinuation();
-    populatedSlotInsufficientCapacityFallsBackBeforeEffects();
+    populatedSlotInsufficientCapacityRotatesBeforeEffects();
     populatedSlotProducerIdentityGapFallsBackBeforeEffects();
     populatedContinuationCommitFailureIsTerminalWithoutRetry();
     lateStateFailureDoesNotDuplicateDiscardedDirectProgress();
-    populatedSlotPresentTailIsExcludedFromContinuation();
+    populatedSlotPresentTailRotatesIntoAFreshSlot();
     directContinuationAdmissionMatchesShapeAndCapacityTruthTable();
     triangleFanNeverEntersDirectReplay();
     ordinaryChunkSlotSameRawCommitFailureDoesNotRetryLegacy();

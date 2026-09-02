@@ -362,6 +362,142 @@ inline constexpr std::array<SectionRule,
          kNoHandleKind},
     }};
 
+// Closed exhaustive replay topology over the live record alphabet.
+//
+// `kRecordRules` is the single structural authority for the 21 live record
+// kinds; this table is its semantic twin and must stay row-aligned with it.
+// Before it existed, four independent hand-written switches
+// (`classifyDirectChunkSlotRange`, `makeDirectSlotCapacity`,
+// `addDirectRecordCapacity`, `classifyDirectChunkSlotReplay`) each carried a
+// private opinion about the same alphabet and had already drifted on six
+// kinds. Widening the direct/island alphabet is now a one-row edit with a
+// compile-time conservation check instead of four coordinated edits.
+enum class RecordReplayTopology : std::uint8_t {
+  // A: island-eligible GPU-producing draw. `primitivePredicate` still
+  // excludes TriangleFan at plan time; the wire kind alone is not sufficient.
+  DirectDraw = 0,
+  // B: island-resident record that mutates replay state and emits no
+  // final-Slot command header.
+  DirectStateOnly,
+  // C: coordinator command with a typed final-Slot vector, an assembler
+  // direct-branch appender, and an encode case. It terminates a draw island
+  // and keeps its exact serial position.
+  CoordinatorCommand,
+  // E: ordered control that must release the CPU-ready session before it
+  // dispatches. Never enters a direct transaction.
+  OrderedControl,
+  // UP draws: structurally valid, replayed by the compatibility sink, never
+  // island-eligible (the sink bypasses the direct appender entirely).
+  CompatibilityDraw,
+  Count,
+};
+
+struct RecordTopologyRule {
+  std::uint32_t type;
+  RecordReplayTopology topology;
+  // Draw records additionally require a runtime primitive-type check
+  // (non-TriangleFan) before island admission.
+  bool primitivePredicate;
+  // True when the kind materializes a final-Slot command header. Mirrors
+  // `recordProducesArenaCommand`.
+  bool producesSlotCommand;
+  // True when a direct island may contain this kind with no separator.
+  bool islandResident;
+};
+
+inline constexpr std::array<RecordTopologyRule, 21> kRecordTopology = {{
+    {D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+     RecordReplayTopology::DirectDraw, true, true, true},
+    {D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+     RecordReplayTopology::DirectDraw, true, true, true},
+    {D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
+     RecordReplayTopology::CompatibilityDraw, true, true, false},
+    {D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
+     RecordReplayTopology::CompatibilityDraw, true, true, false},
+    {D9C_COMMAND_RECORD_SET_VS_CONST_F,
+     RecordReplayTopology::DirectStateOnly, false, false, true},
+    {D9C_COMMAND_RECORD_SET_VS_CONST_I,
+     RecordReplayTopology::DirectStateOnly, false, false, true},
+    {D9C_COMMAND_RECORD_SET_VS_CONST_B,
+     RecordReplayTopology::DirectStateOnly, false, false, true},
+    {D9C_COMMAND_RECORD_SET_PS_CONST_F,
+     RecordReplayTopology::DirectStateOnly, false, false, true},
+    {D9C_COMMAND_RECORD_SET_PS_CONST_I,
+     RecordReplayTopology::DirectStateOnly, false, false, true},
+    {D9C_COMMAND_RECORD_SET_PS_CONST_B,
+     RecordReplayTopology::DirectStateOnly, false, false, true},
+    {D9C_COMMAND_RECORD_CLEAR,
+     RecordReplayTopology::CoordinatorCommand, false, true, false},
+    {D9C_COMMAND_RECORD_PRESENT,
+     RecordReplayTopology::CoordinatorCommand, false, true, false},
+    {D9C_COMMAND_RECORD_STRETCH_RECT,
+     RecordReplayTopology::CoordinatorCommand, false, true, false},
+    {D9C_COMMAND_RECORD_COLOR_FILL,
+     RecordReplayTopology::CoordinatorCommand, false, true, false},
+    {D9C_COMMAND_RECORD_UPDATE_TEXTURE,
+     RecordReplayTopology::OrderedControl, false, false, false},
+    {D9C_COMMAND_RECORD_UPDATE_SURFACE,
+     RecordReplayTopology::CoordinatorCommand, false, true, false},
+    {D9C_COMMAND_RECORD_QUERY_ISSUE,
+     RecordReplayTopology::OrderedControl, false, false, false},
+    {D9C_COMMAND_RECORD_READBACK,
+     RecordReplayTopology::OrderedControl, false, false, false},
+    {D9C_COMMAND_RECORD_APPLY_STATE,
+     RecordReplayTopology::DirectStateOnly, false, false, true},
+    {D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE,
+     RecordReplayTopology::CoordinatorCommand, false, true, false},
+    {D9C_COMMAND_RECORD_GENERATE_MIPMAPS,
+     RecordReplayTopology::CoordinatorCommand, false, true, false},
+}};
+
+static_assert(kRecordTopology.size() == kRecordRules.size(),
+              "replay topology must stay row-aligned with kRecordRules");
+
+// Conservation between the structural and semantic tables. Each of these has
+// exactly one production consumer today; keeping them compile-time means a
+// future row edit cannot silently disagree with the wire rules.
+static_assert([] {
+  for (std::size_t i = 0; i < kRecordTopology.size(); ++i) {
+    const auto& topology = kRecordTopology[i];
+    const auto& rule = kRecordRules[i];
+    if (topology.type != rule.type) return false;
+    if (topology.topology == RecordReplayTopology::Count) return false;
+    // A synchronous read boundary is always an ordered control.
+    if ((rule.ruleFlags & RecordRuleSynchronousBoundary) != 0u &&
+        topology.topology != RecordReplayTopology::OrderedControl) {
+      return false;
+    }
+    // The wire Draw flag and the semantic draw classes are the same set.
+    const bool wireDraw = (rule.ruleFlags & RecordRuleDraw) != 0u;
+    const bool semanticDraw =
+        topology.topology == RecordReplayTopology::DirectDraw ||
+        topology.topology == RecordReplayTopology::CompatibilityDraw;
+    if (wireDraw != semanticDraw) return false;
+    if (topology.primitivePredicate != semanticDraw) return false;
+    // Island residency is exactly {DirectDraw, DirectStateOnly}.
+    const bool resident =
+        topology.topology == RecordReplayTopology::DirectDraw ||
+        topology.topology == RecordReplayTopology::DirectStateOnly;
+    if (topology.islandResident != resident) return false;
+    // State-only records emit no final-Slot command header; ordered controls
+    // are dispatched by the coordinator and emit none either.
+    const bool emits =
+        topology.topology != RecordReplayTopology::DirectStateOnly &&
+        topology.topology != RecordReplayTopology::OrderedControl;
+    if (topology.producesSlotCommand != emits) return false;
+  }
+  return true;
+}(), "replay topology and kRecordRules must agree on every live record kind");
+
+constexpr const RecordTopologyRule* recordTopology(std::uint32_t type) {
+  for (const auto& rule : kRecordTopology) {
+    if (rule.type == type) {
+      return &rule;
+    }
+  }
+  return nullptr;
+}
+
 constexpr const RecordRule* recordRule(std::uint32_t type) {
   for (const auto& rule : kRecordRules) {
     if (rule.type == type) {

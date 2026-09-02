@@ -43,20 +43,42 @@ inline constexpr bool directContinuationAppendFits(
 // capacity plan for the source being considered; it is not a count of raw
 // records. APPLY_STATE and constant setters are state-only and therefore do
 // not contribute commandHeaders.  The plan producer must nevertheless emit
-// the complete one-draw-per-header SoA shape checked below.
+// the complete one-draw-per-header SoA shape checked below, plus at most one
+// header per coordinator locator.
 inline DirectContinuationAdmissionResult directContinuationAdmission(
     const ChunkSlot& slot, const SourcePayloadCapacity& extra) noexcept {
-  // Coordinator, ordered-control, resource-mutation, and other command
-  // families are never allowed to enter a populated render continuation.
-  if (extra.clearRecords != 0 || extra.clearRects != 0 ||
-      extra.surfaceCopyRecords != 0 || extra.stretchRectRecords != 0 ||
-      extra.readbackRecords != 0 || extra.colorFillRecords != 0 ||
-      extra.depthResolveRecords != 0 || extra.generateMipmapsRecords != 0 ||
-      extra.presentRecords != 0) {
+  // Readback has a declared final-slot vector but no direct-branch appender
+  // (`TransactionalChunkSlotAssembler::tryAppendReadback` hard-fails when the
+  // destination is a direct ChunkSlot), so a plan reserving one can never be
+  // built and must stay a structural rejection rather than a capacity one.
+  if (extra.readbackRecords != 0) {
     return {DirectContinuationAdmission::StructuralRejected};
   }
 
-  const auto drawCount = extra.commandHeaders;
+  // A source-wide emission plan may carry coordinator locators alongside its
+  // draw islands. Each contributes exactly one command header plus one row in
+  // its own typed vector, so the header total is no longer the draw count.
+  // Derive the draw count from `drawParams` -- the one dimension that is
+  // one-per-draw and never written by a coordinator -- and require the header
+  // total to equal draws plus locators exactly. With no coordinator dimension
+  // present this reduces to the historical draw-only predicate with
+  // byte-identical behavior.
+  const auto drawCount = extra.drawParams;
+  const auto coordinatorHeaders =
+      extra.clearRecords + extra.surfaceCopyRecords +
+      extra.stretchRectRecords + extra.colorFillRecords +
+      extra.depthResolveRecords + extra.generateMipmapsRecords +
+      extra.presentRecords;
+  if (coordinatorHeaders >
+          std::numeric_limits<std::size_t>::max() - drawCount ||
+      extra.commandHeaders != drawCount + coordinatorHeaders ||
+      // A Clear locator's rects live inside its own ClearDesc, so the rect
+      // dimension is a transaction-wide bookkeeping total, never a slot
+      // vector. It may only be non-zero when a Clear locator is present.
+      (extra.clearRects != 0 && extra.clearRecords == 0)) {
+    return {DirectContinuationAdmission::StructuralRejected};
+  }
+
   const auto drawShapeMatches =
       drawCount != 0 && extra.drawHotStates == drawCount &&
       extra.drawShaderLayouts == drawCount &&
@@ -133,7 +155,21 @@ inline DirectContinuationAdmissionResult directContinuationAdmission(
       !fits(slot.drawPayloadArena.size(), extra.drawPayloadBytes,
             slot.drawPayloadArena.capacity()) ||
       !fits(slot.drawRunRecords.size(), extra.drawRunRecords,
-            slot.drawRunRecords.capacity())) {
+            slot.drawRunRecords.capacity()) ||
+      !fits(slot.clearRecords.size(), extra.clearRecords,
+            slot.clearRecords.capacity()) ||
+      !fits(slot.surfaceCopyRecords.size(), extra.surfaceCopyRecords,
+            slot.surfaceCopyRecords.capacity()) ||
+      !fits(slot.stretchRectRecords.size(), extra.stretchRectRecords,
+            slot.stretchRectRecords.capacity()) ||
+      !fits(slot.colorFillRecords.size(), extra.colorFillRecords,
+            slot.colorFillRecords.capacity()) ||
+      !fits(slot.depthResolveRecords.size(), extra.depthResolveRecords,
+            slot.depthResolveRecords.capacity()) ||
+      !fits(slot.generateMipmapsRecords.size(), extra.generateMipmapsRecords,
+            slot.generateMipmapsRecords.capacity()) ||
+      !fits(slot.presentRecords.size(), extra.presentRecords,
+            slot.presentRecords.capacity())) {
     return {DirectContinuationAdmission::CapacityRejected};
   }
 

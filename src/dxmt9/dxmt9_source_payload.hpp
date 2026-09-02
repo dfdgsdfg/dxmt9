@@ -875,9 +875,24 @@ class TransactionalChunkSlotAssembler {
   bool failed() const noexcept { return !good(); }
   std::size_t commandCount() const noexcept { return commandCount_; }
   bool directRangeBuild() const noexcept { return directRangeBuild_; }
+  // First final-slot command index this transaction appended. A span
+  // commits into a slot that may already hold earlier spans (and earlier
+  // raws), so resource marking walks only [checkpoint, commandCount) rather
+  // than rescanning the whole growing prefix on every span.
+  std::size_t directCommandCheckpoint() const noexcept {
+    return directCheckpoint_.commandHeaders;
+  }
   const std::optional<OuterBinding>& outerBinding() const noexcept {
     return outerBinding_;
   }
+
+  // Seal the open DrawRunCommandRecord so the next direct draw must start a
+  // new one. Every non-draw append already does this implicitly; a lease-span
+  // driver must be able to state it at an island or coordinator cut where no
+  // append happens on this assembler, so that `Draw, Draw, <cut>, Draw`
+  // produces two run records rather than one that spans the cut.
+  void closeDirectRun() noexcept { directRunOpen_ = false; }
+  bool directRunOpen() const noexcept { return directRunOpen_; }
 
   bool tryAppendDirectDraw(
       const DirectReplayDrawInput& input) noexcept;
@@ -924,6 +939,11 @@ class TransactionalChunkSlotAssembler {
   std::size_t directRunPayloadOffset_ = 0;
   std::size_t directRangeRecordCount_ = 0;
   std::size_t directExpectedDrawCount_ = 0;
+  // Command headers this range contributed that are DrawRun records. A range
+  // may now also carry coordinator commands, whose headers grow
+  // `commandCount_` but not `drawRunRecords`/`drawPsoSubviews`, so the
+  // prepare-time conservation check needs the two totals separately.
+  std::size_t directRunCommandCount_ = 0;
   bool directRangeBuild_ = false;
   bool directRunOpen_ = false;
   std::optional<OuterBinding> outerBinding_{};
