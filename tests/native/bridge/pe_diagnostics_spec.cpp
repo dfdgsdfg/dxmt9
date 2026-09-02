@@ -13,6 +13,9 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <type_traits>
+
+#include "dxmt9/core_snapshots.hpp"
 
 namespace {
 
@@ -813,6 +816,46 @@ void testSourceContracts(const std::filesystem::path &root) {
   checkNotContains(
       directReplayBody, "ReplaySubmissionCarrier",
       "direct replay never fabricates a legacy carrier ledger row");
+  check(!std::is_copy_constructible_v<
+            dxmt9::core::DirectReplayDrawAppendCapability> &&
+            !std::is_move_constructible_v<
+                dxmt9::core::DirectReplayDrawAppendCapability>,
+        "direct-range append capability cannot escape by value");
+  checkContains(commandQueueHeader, "borrowDirectRangeAppender",
+                "direct range appender is borrowed only from a live lease");
+  checkContains(commandQueueHeader, "directRangeAppender_{}",
+                "direct range appender has stable lease-owned storage");
+  checkContains(queue, "directRangeAppender_.disarm()",
+                "direct range appender is disarmed on terminal lease paths");
+  checkContains(queue, "DirectChunkSlotReplayLease::operator=",
+                "direct range appender move path is explicit and bounded");
+  checkContains(providerReplay, "lease.borrowDirectRangeAppender()",
+                "eligible range replay obtains the lease-scoped appender");
+  checkContains(
+      providerReplay, "draw, payload, directRangeAppender_);",
+      "eligible range draws use the lease-scoped appender directly");
+  checkNotContains(
+      providerReplay,
+      "submitDirectReplayDrawFromCurrentState(draw, payload);",
+      "eligible range replay has no per-draw legacy queue lookup call");
+  const auto borrowedAppenderBegin = queue.find(
+      "CommandQueue::appendDirectChunkSlotDrawBorrowed(");
+  const auto borrowedAppenderEnd = queue.find(
+      "CommandQueue::appendActiveDirectChunkSlotDraw(",
+      borrowedAppenderBegin);
+  check(borrowedAppenderBegin != std::string::npos &&
+            borrowedAppenderEnd != std::string::npos &&
+            borrowedAppenderBegin < borrowedAppenderEnd,
+        "borrowed direct appender source contract has a bounded body");
+  const std::string_view borrowedAppenderBody(
+      queue.data() + borrowedAppenderBegin,
+      borrowedAppenderEnd - borrowedAppenderBegin);
+  checkNotContains(borrowedAppenderBody, "mutex_",
+                   "borrowed direct appender never acquires the queue mutex");
+  checkNotContains(borrowedAppenderBody, "activeDirectChunkSlotBuild_",
+                   "borrowed direct appender never performs active lookup");
+  checkNotContains(borrowedAppenderBody, "memory_order",
+                   "borrowed direct appender has no atomic revalidation");
   checkContains(cpuPipelineOwnership,
                 "Production DCE successor lookahead and CPU-ready session "
                 "replay use this",

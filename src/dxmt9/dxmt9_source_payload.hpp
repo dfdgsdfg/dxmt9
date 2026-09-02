@@ -755,6 +755,11 @@ class TransactionalChunkSlotAssembler {
     std::uint32_t pageCount = 0;
     std::uint32_t segmentIndex = 0;
     std::uint32_t segmentCount = 0;
+    // Non-zero only for the ordinary whole-source direct range. Arena
+    // bindings leave these optional fields zero because their segment/source
+    // tables carry the range cardinality separately.
+    std::uint32_t rangeRecordCount = 0;
+    std::uint32_t rangeDrawCount = 0;
     std::size_t plannedBytes = 0;
 
     constexpr bool valid() const noexcept {
@@ -764,7 +769,9 @@ class TransactionalChunkSlotAssembler {
              controlIndex != std::numeric_limits<std::uint32_t>::max() &&
              firstPage != std::numeric_limits<std::uint32_t>::max() &&
              pageCount != 0 && segmentCount != 0 &&
-             segmentIndex < segmentCount && plannedBytes != 0;
+             segmentIndex < segmentCount &&
+             ((rangeRecordCount == 0) == (rangeDrawCount == 0)) &&
+             rangeDrawCount <= rangeRecordCount && plannedBytes != 0;
     }
   };
 
@@ -789,8 +796,13 @@ class TransactionalChunkSlotAssembler {
   // compatibility ChunkSlot while retaining the same typed assembler state
   // machine and commit-evidence gate used by Arena publication.
   TransactionalChunkSlotAssembler(
-      ChunkSlot& slot, const SourcePayloadCapacity& capacity) noexcept
-      : directSlot_(&slot), directCapacity_(capacity) {
+      ChunkSlot& slot, const SourcePayloadCapacity& capacity,
+      std::size_t rangeRecordCount = 0,
+      std::size_t rangeDrawCount = 0) noexcept
+      : directSlot_(&slot), directCapacity_(capacity),
+        directRangeRecordCount_(rangeRecordCount),
+        directExpectedDrawCount_(rangeDrawCount),
+        directRangeBuild_(rangeRecordCount != 0 || rangeDrawCount != 0) {
     reserve();
   }
 
@@ -862,6 +874,7 @@ class TransactionalChunkSlotAssembler {
   }
   bool failed() const noexcept { return !good(); }
   std::size_t commandCount() const noexcept { return commandCount_; }
+  bool directRangeBuild() const noexcept { return directRangeBuild_; }
   const std::optional<OuterBinding>& outerBinding() const noexcept {
     return outerBinding_;
   }
@@ -909,6 +922,9 @@ class TransactionalChunkSlotAssembler {
   std::size_t directRunStateIndex_ = 0;
   std::size_t directRunRecordIndex_ = 0;
   std::size_t directRunPayloadOffset_ = 0;
+  std::size_t directRangeRecordCount_ = 0;
+  std::size_t directExpectedDrawCount_ = 0;
+  bool directRangeBuild_ = false;
   bool directRunOpen_ = false;
   std::optional<OuterBinding> outerBinding_{};
   std::optional<ArenaCommitEvidence> commitEvidence_{};

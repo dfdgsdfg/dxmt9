@@ -25,6 +25,7 @@ namespace dxmt9 {
 class PresentOutput;
 struct PresentOutputTarget;
 class PresentMirrorTicket;
+class CommandQueue;
 }
 
 namespace dxmt9::core {
@@ -1114,6 +1115,47 @@ enum class DirectReplayDrawDisposition : u8 {
   LegacyUnsupported,
   LegacyOversized,
   LegacyPreEffectFailure,
+};
+
+// A queue-minted, non-escaping sink for one direct replay range.  The opaque
+// callback state is owned by CommandQueue::DirectChunkSlotReplayLease; callers
+// can append only typed draw inputs and cannot obtain destination storage.
+class DirectReplayDrawAppendCapability final {
+ public:
+  DirectReplayDrawAppendCapability() = default;
+  DirectReplayDrawAppendCapability(const DirectReplayDrawAppendCapability&) =
+      delete;
+  DirectReplayDrawAppendCapability& operator=(
+      const DirectReplayDrawAppendCapability&) = delete;
+  DirectReplayDrawAppendCapability(DirectReplayDrawAppendCapability&&) =
+      delete;
+  DirectReplayDrawAppendCapability& operator=(
+      DirectReplayDrawAppendCapability&&) = delete;
+
+  explicit operator bool() const noexcept { return append_ != nullptr; }
+  DirectReplayDrawDisposition append(
+      const DirectReplayDrawInput& input) const noexcept {
+    return append_ ? append_(state_, input)
+                   : DirectReplayDrawDisposition::LegacyPreEffectFailure;
+  }
+
+ private:
+  using AppendFn = DirectReplayDrawDisposition (*) (
+      void*, const DirectReplayDrawInput&) noexcept;
+  friend class ::dxmt9::CommandQueue;
+  void arm(void* state, AppendFn append) noexcept {
+    state_ = state;
+    append_ = append;
+  }
+  void disarm() noexcept {
+    state_ = nullptr;
+    append_ = nullptr;
+  }
+  DirectReplayDrawAppendCapability(void* state, AppendFn append) noexcept
+      : state_(state), append_(append) {}
+
+  void* state_ = nullptr;
+  AppendFn append_ = nullptr;
 };
 
 struct DirectReplayDrawResult {
@@ -2281,7 +2323,8 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult drawPrimitiveRun(std::span<const DrawParam> draws,
                            std::span<const DrawParamPayloadView> payloads);
   DirectReplayDrawResult submitDirectReplayDrawFromCurrentState(
-      DrawParam draw, DrawParamPayloadView payload = {});
+      DrawParam draw, DrawParamPayloadView payload = {},
+      const DirectReplayDrawAppendCapability* appendCapability = nullptr);
   HResult present();
   HResult reset(const PresentParameters& params);
   HResult checkDeviceMultiSampleType(Format format, MultiSampleType type) const;

@@ -373,6 +373,85 @@ std::optional<core::SourcePayloadLayout> makeDirectSlotCapacity(
 
 }  // namespace
 
+DirectChunkSlotRangeClass classifyDirectChunkSlotRange(
+    const ImportedChunkView& imported) noexcept {
+  if (imported.records.size() != imported.header.recordCount) {
+    return DirectChunkSlotRangeClass::Malformed;
+  }
+  bool sawDraw = false;
+  for (std::size_t i = 0; i < imported.records.size(); ++i) {
+    const auto record = imported.record(i);
+    if (record.header.type != imported.records[i].type ||
+        record.payload.size() != imported.records[i].payloadSize) {
+      return DirectChunkSlotRangeClass::Malformed;
+    }
+    switch (record.header.type) {
+    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE: {
+      D9CCommandChunkWireDrawHeader draw{};
+      if (!loadFixed(record, draw) || draw.primitiveType < 1u ||
+          draw.primitiveType > 6u) {
+        return DirectChunkSlotRangeClass::Malformed;
+      }
+      // TriangleFan is a valid D3D9 draw, but its canonical replay expands
+      // it through the compatibility sink and cannot enter this transaction.
+      if (draw.primitiveType == 6u) {
+        return DirectChunkSlotRangeClass::Unsupported;
+      }
+      sawDraw = true;
+      break;
+    }
+    case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+    case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+    case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_B: {
+      D9CCommandChunkWireSetConst fixed{};
+      if (!loadFixed(record, fixed)) {
+        return DirectChunkSlotRangeClass::Malformed;
+      }
+      break;
+    }
+    case D9C_COMMAND_RECORD_APPLY_STATE:
+      break;
+    default:
+      // Valid controls and resource operations are deliberately rejected by
+      // this cheap gate. Compatibility replay owns their ordering and keeps
+      // the final-slot path carrier-free.
+      return DirectChunkSlotRangeClass::Unsupported;
+    }
+  }
+  return sawDraw ? DirectChunkSlotRangeClass::Eligible
+                 : DirectChunkSlotRangeClass::Empty;
+}
+
+std::optional<DirectChunkSlotRangePlan> planDirectChunkSlotRange(
+    const ImportedChunkView& imported, std::size_t pageSize) noexcept {
+  if (classifyDirectChunkSlotRange(imported) !=
+      DirectChunkSlotRangeClass::Eligible) {
+    return std::nullopt;
+  }
+  core::SourcePayloadCapacity capacity{};
+  const auto layout = makeDirectSlotCapacity(imported, pageSize, capacity);
+  if (!layout) {
+    return std::nullopt;
+  }
+  std::size_t drawCount = 0;
+  for (const auto& record : imported.records) {
+    if (record.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
+        record.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
+      ++drawCount;
+    }
+  }
+  return DirectChunkSlotRangePlan{
+      .classification = DirectChunkSlotRangeClass::Eligible,
+      .capacity = capacity,
+      .drawCount = drawCount,
+      .plannedBytes = layout->usedBytes,
+  };
+}
+
 CpuReadyPlan planCpuReadyChunk(
     const ImportedChunkView& imported,
     RawOrdinal rawOrdinal,

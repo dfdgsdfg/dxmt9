@@ -342,6 +342,14 @@ void recordDirectChunkSlotReplayDisposition(
   add(counters().directChunkSlotReplayOutcomes[o]);
 }
 
+void countDirectChunkSlotReplayCheapRejected() {
+  add(counters().directChunkSlotReplayCheapRejected);
+}
+
+void countDirectChunkSlotReplayPostMaterializationFallback() {
+  add(counters().directChunkSlotReplayPostMaterializationFallback);
+}
+
 void countDirectChunkSlotContinuationAttempted() {
   add(counters().directChunkSlotContinuationAttempted);
 }

@@ -3600,11 +3600,22 @@ CommandQueue::DirectChunkSlotReplayLease::~DirectChunkSlotReplayLease() {
 CommandQueue::DirectChunkSlotReplayLease::DirectChunkSlotReplayLease(
     DirectChunkSlotReplayLease&& other) noexcept
     : queue_(other.queue_), ticket_(other.ticket_),
-      controlIndex_(other.controlIndex_), effectsStarted_(other.effectsStarted_) {
+      controlIndex_(other.controlIndex_), effectsStarted_(other.effectsStarted_),
+      directAssembler_(other.directAssembler_),
+      directContext_(other.directContext_), ownerThread_(other.ownerThread_),
+      directRangeAppendLive_(other.directRangeAppendLive_) {
+  if (directRangeAppendLive_) {
+    CommandQueue::armDirectReplayDrawAppender(directRangeAppender_, this);
+  }
   other.queue_ = nullptr;
   other.ticket_ = {};
   other.controlIndex_ = std::numeric_limits<std::size_t>::max();
   other.effectsStarted_ = false;
+  other.directAssembler_ = nullptr;
+  other.directContext_ = nullptr;
+  other.directRangeAppender_.disarm();
+  other.ownerThread_ = {};
+  other.directRangeAppendLive_ = false;
 }
 
 CommandQueue::DirectChunkSlotReplayLease&
@@ -3616,10 +3627,22 @@ CommandQueue::DirectChunkSlotReplayLease::operator=(
   ticket_ = other.ticket_;
   controlIndex_ = other.controlIndex_;
   effectsStarted_ = other.effectsStarted_;
+  directAssembler_ = other.directAssembler_;
+  directContext_ = other.directContext_;
+  ownerThread_ = other.ownerThread_;
+  directRangeAppendLive_ = other.directRangeAppendLive_;
+  if (directRangeAppendLive_) {
+    CommandQueue::armDirectReplayDrawAppender(directRangeAppender_, this);
+  }
   other.queue_ = nullptr;
   other.ticket_ = {};
   other.controlIndex_ = std::numeric_limits<std::size_t>::max();
   other.effectsStarted_ = false;
+  other.directAssembler_ = nullptr;
+  other.directContext_ = nullptr;
+  other.directRangeAppender_.disarm();
+  other.ownerThread_ = {};
+  other.directRangeAppendLive_ = false;
   return *this;
 }
 
@@ -3634,6 +3657,11 @@ CommandQueue::DirectChunkSlotReplayLease::commit(
   ticket_ = {};
   controlIndex_ = std::numeric_limits<std::size_t>::max();
   effectsStarted_ = false;
+  directRangeAppender_.disarm();
+  directAssembler_ = nullptr;
+  directContext_ = nullptr;
+  ownerThread_ = {};
+  directRangeAppendLive_ = false;
   return status;
 }
 
@@ -3647,6 +3675,11 @@ bool CommandQueue::DirectChunkSlotReplayLease::rollbackPreEffect() noexcept {
   queue_ = nullptr;
   ticket_ = {};
   controlIndex_ = std::numeric_limits<std::size_t>::max();
+  directRangeAppender_.disarm();
+  directAssembler_ = nullptr;
+  directContext_ = nullptr;
+  ownerThread_ = {};
+  directRangeAppendLive_ = false;
   return rolledBack;
 }
 
@@ -3660,6 +3693,17 @@ void CommandQueue::DirectChunkSlotReplayLease::settle() noexcept {
   ticket_ = {};
   controlIndex_ = std::numeric_limits<std::size_t>::max();
   effectsStarted_ = false;
+  directRangeAppender_.disarm();
+  directAssembler_ = nullptr;
+  directContext_ = nullptr;
+  ownerThread_ = {};
+  directRangeAppendLive_ = false;
+}
+
+void CommandQueue::armDirectReplayDrawAppender(
+    core::DirectReplayDrawAppendCapability& destination,
+    void* state) noexcept {
+  destination.arm(state, &CommandQueue::appendDirectChunkSlotDrawBorrowed);
 }
 
 CommandQueue::DirectChunkSlotReplayBeginResult
@@ -3667,9 +3711,15 @@ CommandQueue::beginDirectChunkSlotReplay(
     std::uint64_t rawOrdinal,
     const core::SourcePayloadCapacity& capacity,
     std::size_t plannedBytes,
-    core::CpuReadyProducerIdentity producerIdentity) noexcept {
+    core::CpuReadyProducerIdentity producerIdentity,
+    std::size_t rangeRecordCount,
+    std::size_t rangeDrawCount) noexcept {
   if (rawOrdinal == 0 || plannedBytes == 0 || capacity.commandHeaders == 0 ||
-      !producerIdentity.importable()) {
+      !producerIdentity.importable() ||
+      ((rangeRecordCount == 0) != (rangeDrawCount == 0)) ||
+      rangeDrawCount > rangeRecordCount ||
+      rangeRecordCount > std::numeric_limits<std::uint32_t>::max() ||
+      rangeDrawCount > std::numeric_limits<std::uint32_t>::max()) {
     return {.status = DirectChunkSlotReplayStatus::LegacyUnsupported};
   }
   const auto qmxBegin = queueMutexProbeBegin();
@@ -3753,7 +3803,9 @@ CommandQueue::beginDirectChunkSlotReplay(
   context.initialBackBuffer = currentBackBuffer_;
   context.pendingBackBuffer = currentBackBuffer_;
   context.continuation = continuation;
-  context.assembler.emplace(*payload, capacity);
+  context.expectedRangeRecordCount = rangeRecordCount;
+  context.assembler.emplace(*payload, capacity, rangeRecordCount,
+                            rangeDrawCount);
   const bool bound = context.assembler->good() &&
       context.assembler->bindOuter(
           core::TransactionalChunkSlotAssembler::OuterBinding{
@@ -3768,6 +3820,8 @@ CommandQueue::beginDirectChunkSlotReplay(
               .pageCount = ticket.storage.pageCount,
               .segmentIndex = 0u,
               .segmentCount = 1u,
+              .rangeRecordCount = static_cast<std::uint32_t>(rangeRecordCount),
+              .rangeDrawCount = static_cast<std::uint32_t>(rangeDrawCount),
               .plannedBytes = plannedBytes,
           });
   if (!bound) {
@@ -3778,7 +3832,9 @@ CommandQueue::beginDirectChunkSlotReplay(
   activeDirectChunkSlotBuild_.store(&context, std::memory_order_release);
   return {
       .status = DirectChunkSlotReplayStatus::Ready,
-      .lease = DirectChunkSlotReplayLease(*this, ticket, controlIndex),
+      .lease = DirectChunkSlotReplayLease(
+          *this, ticket, controlIndex,
+          context.assembler ? &*context.assembler : nullptr, &context),
   };
 }
 
@@ -3909,6 +3965,17 @@ CommandQueue::commitDirectChunkSlotReplay(
     return failStop();
   }
   if (hasPendingPresent) {
+    noteCurrentSlotCommandAppendStartedUnlocked(*this);
+  }
+  // replayResolvedChunk returns only after its loop consumed the immutable
+  // imported range. The expected count is bound in OuterBinding and checked
+  // by assembler::prepare once; no per-record queue lookup or synchronization
+  // is allowed on this hot path.
+  if (context->expectedRangeRecordCount != 0 &&
+      !context->assembler->directRangeBuild()) {
+    return failStop();
+  }
+  if (context->assembler->commandCount() != 0u) {
     noteCurrentSlotCommandAppendStartedUnlocked(*this);
   }
   if (!context->assembler->prepare()) {
@@ -4828,6 +4895,31 @@ CommandQueue::appendActiveArenaGenerateMipmaps(
     return assembler && assembler->tryAppendGenerateMipmaps(value) &&
            context.captureSingleCommand();
   });
+}
+
+core::DirectReplayDrawDisposition
+CommandQueue::appendDirectChunkSlotDrawBorrowed(
+    void* state, const core::DirectReplayDrawInput& input) noexcept {
+  auto* lease = static_cast<DirectChunkSlotReplayLease*>(state);
+  if (!lease || !lease->queue_ || !lease->directRangeAppendLive_ ||
+      !lease->directAssembler_ || !lease->directContext_ ||
+      lease->ownerThread_ != std::this_thread::get_id() ||
+      lease->directContext_->failed || !input.valid() ||
+      !lease->directAssembler_->good()) {
+    return core::DirectReplayDrawDisposition::AcceptedFailStop;
+  }
+  auto& assembler = *lease->directAssembler_;
+  if (!assembler.tryAppendDirectDraw(input)) {
+    lease->directContext_->failed = true;
+    return core::DirectReplayDrawDisposition::AcceptedFailStop;
+  }
+  lease->directContext_->pendingBackBuffer =
+      input.hot->colorAttachments[0].handle;
+  lease->directContext_->updatesBackBuffer = true;
+  // This callback intentionally does not touch queue timing/probe state: it
+  // runs outside the queue lock and the direct range owns one pre-reserved
+  // slot.
+  return core::DirectReplayDrawDisposition::Appended;
 }
 
 core::DirectReplayDrawDisposition

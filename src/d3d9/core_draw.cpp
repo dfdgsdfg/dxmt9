@@ -3869,7 +3869,8 @@ void Device::submitDrawRunInternalFromCurrentState(
 
 
 DirectReplayDrawResult Device::submitDirectReplayDrawFromCurrentState(
-    DrawParam draw, DrawParamPayloadView payload) {
+    DrawParam draw, DrawParamPayloadView payload,
+    const DirectReplayDrawAppendCapability* appendCapability) {
   if (draw.primitiveType == PrimitiveType::TriangleFan) {
     return {D3DERR_INVALIDCALL,
             DirectReplayDrawDisposition::LegacyPreEffectFailure};
@@ -3927,8 +3928,17 @@ DirectReplayDrawResult Device::submitDirectReplayDrawFromCurrentState(
       .payload = payload,
   };
   DXMT_ASSERT(cached.fullUniformsValid);
-  const auto disposition = upperDevice_->submitDirectReplayDraw(input);
-  if (directReplayDrawPermitsLegacyFallback(disposition)) {
+  const auto disposition = appendCapability
+      ? appendCapability->append(input)
+      : upperDevice_->submitDirectReplayDraw(input);
+  if (appendCapability) {
+    if (disposition != DirectReplayDrawDisposition::Appended) {
+      return {disposition == DirectReplayDrawDisposition::AcceptedFailStop
+                  ? D3DERR_DEVICELOST
+                  : D3DERR_INVALIDCALL,
+              disposition};
+    }
+  } else if (directReplayDrawPermitsLegacyFallback(disposition)) {
     // Typed Legacy dispositions are pre-effect. Test/stub devices and any
     // backend that cannot adopt the destination transaction retain the
     // existing serial submission path without making borrowed spans escape.

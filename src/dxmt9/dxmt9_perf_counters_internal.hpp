@@ -97,6 +97,9 @@ struct Counters {
   std::array<std::atomic<std::uint64_t>,
              static_cast<std::size_t>(DirectChunkSlotReplayOutcome::Count)>
       directChunkSlotReplayOutcomes{};
+  std::atomic<std::uint64_t> directChunkSlotReplayCheapRejected{0};
+  std::atomic<std::uint64_t> directChunkSlotReplayPostMaterializationFallback{
+      0};
   // Populated-slot continuation admission is intentionally narrower than the
   // ordinary direct lane. These counters distinguish a proof failure from a
   // structural exclusion and make the carrier-free claim auditable.

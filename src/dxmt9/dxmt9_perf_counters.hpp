@@ -277,6 +277,12 @@ void recordDirectChunkSlotReplayDisposition(
     DirectChunkSlotReplayDisposition disposition,
     DirectChunkSlotReplayOutcome outcome, std::uint64_t records,
     std::uint64_t wireBytes);
+// Direct whole-range gate telemetry. Cheap rejection is decided before queue
+// admission/materialization; post-materialization fallback means the private
+// final-slot transaction was entered and then rolled back before compatibility
+// replay took ownership.
+void countDirectChunkSlotReplayCheapRejected();
+void countDirectChunkSlotReplayPostMaterializationFallback();
 void countDirectChunkSlotContinuationAttempted();
 void countDirectChunkSlotContinuationAdmitted();
 void countDirectChunkSlotContinuationCapacityRejected();

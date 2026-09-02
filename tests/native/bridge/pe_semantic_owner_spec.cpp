@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iostream>
+#include <limits>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
@@ -107,7 +108,9 @@ void classificationAndLifetime() {
       case PeSemanticProducerKind::Clear: in.clear.rectCount = 0u; break;
       case PeSemanticProducerKind::Count: break;
     }
-    if (!owner.admit(in)) {
+    PeSemanticAdmissionPlan admission{};
+    if (!planPeSemanticAdmission(in, admission) ||
+        !owner.tryAppendOwnedRecord(in, []() noexcept { return true; })) {
       std::cerr << "semantic admission failed for producer "
                 << static_cast<unsigned>(row.kind) << "\n";
       throw Failure("every semantic producer row admits a typed slot");
@@ -261,6 +264,252 @@ void duplicateSurfacePinSmoke() {
   input.surface1 = input.surface0;
   check(owner.admit(input), "duplicate surface pin admission");
   owner.reset();
+}
+
+void qualifiedBufferReferenceLookup() {
+  Owner owner;
+  D9CBuffer buffer;
+  std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>, 1u>
+      streams{};
+  streams[0].wire = {
+      .slot = 0u, .valid = 1u, .offset = 16u, .stride = 32u,
+      .frequency = 0u};
+  const auto ref = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&buffer, 0x52u, 7u);
+  streams[0].object = ref;
+  auto input = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+  input.sparse.streams = streams;
+  check(owner.admit(input), "qualified buffer reference admission");
+  check(owner.referencesBuffer(ref),
+        "qualified buffer reference finds the exact object and generation");
+  auto stale = ref;
+  stale.identity.generation = 8u;
+  check(!owner.referencesBuffer(stale),
+        "qualified buffer reference rejects a stale generation");
+  auto differentObject = ref;
+  D9CBuffer other;
+  differentObject.object = &other;
+  check(!owner.referencesBuffer(differentObject),
+        "qualified buffer reference rejects an object mismatch");
+  owner.reset();
+}
+
+void pureAdmissionPlanDeduplicatesQualifiedBindings() {
+  Owner owner;
+  D9CBuffer buffer;
+  const auto ref = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&buffer, 0x62u, 4u);
+  std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>, 1u> streams{{
+      {.wire = {.slot = 0u, .valid = 1u, .offset = 0u, .stride = 16u,
+                .frequency = 0u},
+       .object = ref}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireIndexBinding>, 1u> indices{{
+      {.wire = {.valid = 1u}, .object = ref}}};
+  auto input = base(PeSemanticProducerKind::DrawIndexedPrimitive, 1u, 1u);
+  input.sparse.streams = streams;
+  input.sparse.indexBuffers = indices;
+  PeSemanticAdmissionPlan plan{};
+  check(planPeSemanticAdmission(input, plan) && plan.valid,
+        "pure admission planning accepts qualified sparse bindings");
+  check(plan.uniquePinCounts[2] == 1u && plan.handleCount == 1u &&
+            plan.sparseCounts[2] == 1u && plan.sparseCounts[5] == 1u &&
+            plan.payloadBytes != 0u,
+        "pure admission planning deduplicates one buffer across two roles");
+  check(owner.tryAppendOwnedRecord(input, []() noexcept { return true; }),
+        "owner admission consumes the private prepared result");
+  alignas(8) std::array<std::byte, 4096u> bytes{};
+  PeSemanticExactFixedEmission emission;
+  check(owner.emitExactFixed(bytes, emission) && emission.transport.header.handleCount == 1u,
+        "prepared admission emits one qualified final-wire handle");
+  owner.reset();
+}
+
+void admissionArithmeticRejectsOverflow() {
+  std::size_t result = 0u;
+  check(!detail::checkedSizeAdd(std::numeric_limits<std::size_t>::max(), 1u,
+                                result),
+        "checked admission addition rejects size overflow");
+  check(!detail::checkedSizeMultiply(std::numeric_limits<std::size_t>::max(), 2u,
+                                     result),
+        "checked admission multiplication rejects size overflow");
+
+  // Keep every production span physically valid; multiplication boundaries
+  // are exercised through the pure checked-size helper below.
+  std::array<D9CViewport, 1u> viewport{};
+  auto draw = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+  draw.sparse.viewports = viewport;
+  check(detail::admissionPayloadBytes(draw, result),
+        "payload planner accepts a physically valid typed section");
+
+  if constexpr (sizeof(std::size_t) > sizeof(std::uint32_t)) {
+    std::uint32_t bounded = 0u;
+    check(!detail::checkedSizeToU32(
+              static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) + 1u,
+              bounded),
+          "checked admission conversion rejects a synthetic count above wire width");
+    PeSemanticAdmissionPlan plan{};
+    check(planPeSemanticAdmission(draw, plan) && plan.sparseCounts[8] == 1u,
+          "planner accepts the valid sparse span after synthetic boundary checks");
+  }
+}
+
+void pendingDeltaViewRejectsStaleTicket() {
+  PeHotStateShadow shadow{};
+  const auto view = shadow.pendingDeltaView();
+  check(view.valid() &&
+            view.ticket().generation == shadow.pendingTicket().generation,
+        "pending delta view captures the current ticket");
+  shadow.transition().setRenderState(RenderStateSlot::fromRaw(1u), 0x42u);
+  check(!view.valid(),
+        "pending delta view invalidates after a newer pending mutation");
+  const auto fresh = shadow.pendingDeltaView();
+  check(fresh.valid() && fresh.pendingRenderStatesTyped().size() == 1u,
+        "fresh pending delta view observes the new immutable frontier");
+}
+
+void transactionalAdmissionRollsBackWithoutLeakingPins() {
+  Owner owner;
+  D9CSurface surface;
+  auto input = base(PeSemanticProducerKind::Present, 1u, 1u);
+  input.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0x72u, 3u);
+  PeSemanticAdmissionPlan plan{};
+  check(planPeSemanticAdmission(input, plan),
+        "transactional failure fixture plans without exposing capability");
+  check(!owner.tryAppendOwnedRecord(input, []() noexcept { return false; }) &&
+            owner.size() == 0u && owner.retainedCount() == 0u && surface.refs == 1u,
+        "transactional settlement failure rolls back owner and typed retain");
+  check(owner.tryAppendOwnedRecord(input, []() noexcept { return true; }) &&
+            owner.size() == 1u && surface.refs == 2u,
+        "same input remains retryable after pre-effect rollback");
+  owner.reset();
+  check(surface.refs == 1u, "prepared retry releases its typed retain");
+}
+
+void admissionFactsAreNotAcceptedByProductionApi() {
+  Owner owner;
+  D9CSurface surface;
+  auto input = base(PeSemanticProducerKind::Present, 1u, 1u);
+  input.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0x731u, 2u);
+  PeSemanticAdmissionPlan plan{};
+  check(planPeSemanticAdmission(input, plan),
+        "transactional fixture keeps pure facts out of production API");
+  plan.handleCount = 0u;
+  // The strongest representable forgery cannot be supplied to the
+  // transactional operation; it plans from the immutable input internally.
+  check(owner.tryAppendOwnedRecord(input, []() noexcept { return true; }) &&
+            owner.size() == 1u && surface.refs == 2u,
+        "same-address forged facts are unrepresentable by production API");
+  owner.reset();
+  check(surface.refs == 1u, "unforgeable admission releases its typed retain");
+}
+
+void immediateAppendClosesSpanMutationGap() {
+  Owner owner;
+  std::array<std::byte, 4u> source{
+      std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0x44}};
+  auto input = base(PeSemanticProducerKind::VsBoolConstant, 1u, 1u);
+  input.setConst.registerCount = 1u;
+  input.constantBytes = source;
+  check(owner.tryAppendOwnedRecord(input, []() noexcept { return true; }),
+        "immediate operation copies span content before returning");
+  source[0] = std::byte{0x7f};
+  check(owner.constantBytes(owner.record(0u))[0] == std::byte{0x11},
+        "post-operation span mutation cannot alter owned semantic bytes");
+  owner.reset();
+}
+
+void repeatedIdentityUsesBatchGlobalRetentionDelta() {
+  using Tiny = PeSemanticBatchOwner<4u, 1u, 4096u, 4u, 4u>;
+  Tiny owner;
+  D9CSurface surface;
+  for (std::uint64_t ordinal = 1u; ordinal <= Tiny::maxRecords;
+       ++ordinal) {
+    auto input = base(PeSemanticProducerKind::Present, ordinal, ordinal);
+    input.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+        &surface, 0x741u, 5u);
+    check(owner.tryAppendOwnedRecord(input,
+                                    []() noexcept { return true; }),
+          "repeated identity consumes one global retained pin");
+  }
+  PeSemanticExactFixedEmission exact{};
+  check(owner.size() == Tiny::maxRecords && owner.emitExactFixed(exact) &&
+            exact.transport.header.recordCount == Tiny::maxRecords,
+        "repeated identities preserve per-record ExactFixed handle layout");
+  PeSemanticSegmentedEmission segmented{};
+  check(owner.emitSegmented(segmented) &&
+            segmented.transport.header.handleCount == Tiny::maxRecords,
+        "repeated identities preserve segmented per-record handles");
+  owner.reset();
+  check(surface.refs == 1u,
+        "repeated identities release the retained stack object before scope exit");
+}
+
+void retentionIdentityAndPointerAliasesReject() {
+  using Tiny = PeSemanticBatchOwner<4u, 2u, 4096u, 4u, 4u>;
+  Tiny owner;
+  D9CSurface first;
+  D9CSurface alias;
+  D9CTexture crossKind;
+  auto accepted = base(PeSemanticProducerKind::Present, 1u, 1u);
+  accepted.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&first, 0x752u, 7u);
+  check(owner.tryAppendOwnedRecord(accepted,
+                                   []() noexcept { return true; }),
+        "identity alias fixture admits its first generation");
+
+  auto crossKindIdentity = base(PeSemanticProducerKind::UpdateTexture, 2u, 2u);
+  crossKindIdentity.texture0 = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+      &crossKind, 0x752u, 7u);
+  crossKindIdentity.texture1 = crossKindIdentity.texture0;
+  check(owner.tryAppendOwnedRecord(crossKindIdentity,
+                                   []() noexcept { return true; }) &&
+            crossKind.refs == 2u,
+        "same object id in a different kind remains a distinct identity");
+
+  auto generationAlias = base(PeSemanticProducerKind::Present, 3u, 3u);
+  generationAlias.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &first, 0x752u, 8u);
+  check(!owner.tryAppendOwnedRecord(generationAlias,
+                                    []() noexcept { return true; }) &&
+            owner.size() == 2u,
+        "different generation with one object id is rejected");
+
+  auto pointerAlias = base(PeSemanticProducerKind::Present, 4u, 4u);
+  pointerAlias.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &alias, 0x752u, 7u);
+  check(!owner.tryAppendOwnedRecord(pointerAlias,
+                                    []() noexcept { return true; }) &&
+            owner.size() == 2u && first.refs == 2u && alias.refs == 1u,
+        "same generation and object id with another pointer is rejected");
+  owner.reset();
+  check(first.refs == 1u && alias.refs == 1u && crossKind.refs == 1u,
+        "identity alias rejection leaves typed ledger balanced");
+}
+
+void capacityFailureIsPreEffectAndRetryableAfterBoundary() {
+  using Tiny = PeSemanticBatchOwner<4u, 1u, 4096u, 4u, 4u>;
+  Tiny owner;
+  D9CSurface first;
+  D9CSurface second;
+  auto firstInput = base(PeSemanticProducerKind::Present, 1u, 1u);
+  firstInput.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &first, 0x761u, 1u);
+  check(owner.tryAppendOwnedRecord(firstInput,
+                                   []() noexcept { return true; }),
+        "capacity retry fixture admits the first pin");
+  auto secondInput = base(PeSemanticProducerKind::Present, 2u, 2u);
+  secondInput.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &second, 0x762u, 1u);
+  check(!owner.tryAppendOwnedRecord(secondInput,
+                                    []() noexcept { return true; }) &&
+            owner.lastAdmissionFailure() == Tiny::AdmissionFailure::Capacity &&
+            owner.size() == 1u && first.refs == 2u && second.refs == 1u,
+        "capacity failure is pre-effect and retains no novel pin");
+  check(owner.settle() &&
+            owner.tryAppendOwnedRecord(secondInput,
+                                       []() noexcept { return true; }) &&
+            owner.size() == 1u && second.refs == 2u,
+        "capacity retry succeeds after the owner boundary");
+  owner.reset();
+  check(first.refs == 1u && second.refs == 1u,
+        "capacity retry fixture releases both typed pins");
 }
 
 void collisionCopyOverflowAndRetry() {
@@ -832,7 +1081,9 @@ void ownerQualifiedMaterializationLedger() {
   auto present = base(PeSemanticProducerKind::Present, 1u, 1u);
   present.surface0 =
       localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0xb101u, 3u);
-  check(owner.admit(present), "ledger fixture admits one semantic record");
+  check(owner.tryAppendOwnedRecord(present,
+                                   []() noexcept { return true; }),
+        "ledger fixture admits one prepared semantic record");
   const auto admitted = ledger.snapshot(
       dxmt9::core::CopyMaterializationClass::PeSemanticOwnerAdmission);
   check(admitted.calls == 1u && admitted.bytes != 0u &&
@@ -897,6 +1148,7 @@ void ownerQualifiedMaterializationLedger() {
 
 int main() {
   try {
+    static_assert(sizeof(PeSemanticAdmissionPlan) <= 256u);
     static_assert(sizeof(DefaultOwner) <= 512u);
     check(sizeof(DefaultOwner) <= 512u && DefaultOwner{}.constructionSucceeded(),
           "default owner shell stays within the size budget");
@@ -913,6 +1165,16 @@ int main() {
     static_assert(!std::is_copy_constructible_v<Owner>);
     static_assert(!std::is_move_constructible_v<Owner>);
     duplicateSurfacePinSmoke();
+    qualifiedBufferReferenceLookup();
+    pureAdmissionPlanDeduplicatesQualifiedBindings();
+    admissionArithmeticRejectsOverflow();
+    pendingDeltaViewRejectsStaleTicket();
+    transactionalAdmissionRollsBackWithoutLeakingPins();
+    admissionFactsAreNotAcceptedByProductionApi();
+    immediateAppendClosesSpanMutationGap();
+    repeatedIdentityUsesBatchGlobalRetentionDelta();
+    retentionIdentityAndPointerAliasesReject();
+    capacityFailureIsPreEffectAndRetryableAfterBoundary();
     classificationAndLifetime();
     partialRectClearMatchesCanonicalBuilder();
     collisionCopyOverflowAndRetry();

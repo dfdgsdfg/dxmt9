@@ -2273,6 +2273,81 @@ public:
         friend struct PeHotStateShadow;
     };
 
+    // Immutable, ticket-scoped view of the PendingDelta frontier.  The view
+    // borrows the hot shadow and is therefore only valid while its generation
+    // witness still matches.  This keeps the producer from accidentally
+    // reading a newer setter frontier after a plan has been prepared.
+    class PendingDeltaView {
+    public:
+        PendingDeltaView() noexcept = default;
+        bool valid() const noexcept {
+            return shadow_ != nullptr && ticket_.valid() &&
+                   shadow_->pendingTicketMatches(ticket_);
+        }
+        PendingDeltaTicket ticket() const noexcept { return ticket_; }
+        std::uint32_t pendingTextureMask() const noexcept {
+            return shadow_->PendingDelta::pendingTextureMask_;
+        }
+        std::uint32_t pendingStreamMask() const noexcept {
+            return shadow_->PendingDelta::pendingStreamMask_;
+        }
+        bool pendingFvf() const noexcept { return shadow_->PendingDelta::pendingFvf_; }
+        bool pendingVs() const noexcept { return shadow_->PendingDelta::pendingVs_; }
+        bool pendingPs() const noexcept { return shadow_->PendingDelta::pendingPs_; }
+        bool pendingVdecl() const noexcept {
+            return shadow_->PendingDelta::pendingVdecl_;
+        }
+        bool pendingIb() const noexcept { return shadow_->PendingDelta::pendingIb_; }
+        std::uint32_t pendingRtMask() const noexcept {
+            return shadow_->PendingDelta::pendingRtMask_;
+        }
+        bool pendingDs() const noexcept { return shadow_->PendingDelta::pendingDs_; }
+        bool pendingViewport() const noexcept {
+            return shadow_->PendingDelta::pendingViewport_;
+        }
+        bool pendingScissor() const noexcept {
+            return shadow_->PendingDelta::pendingScissor_;
+        }
+        bool pendingMaterial() const noexcept {
+            return shadow_->PendingDelta::pendingMaterial_;
+        }
+        std::uint32_t pendingClipPlaneMask() const noexcept {
+            return shadow_->PendingDelta::pendingClipPlaneMask_;
+        }
+        std::uint32_t pendingLightSlotMask() const noexcept {
+            return shadow_->PendingDelta::pendingLightSlotMask_;
+        }
+        std::uint32_t pendingLightEnableValidMask() const noexcept {
+            return shadow_->PendingDelta::pendingLightEnableValidMask_;
+        }
+        ConstRenderStateTableView pendingRenderStatesTyped() const noexcept {
+            return shadow_->PendingDelta::renderStates();
+        }
+        ConstTssTableView pendingTssTyped() const noexcept {
+            return shadow_->PendingDelta::textureStageStates();
+        }
+        ConstSamplerStateTableView pendingSamplerStatesTyped() const noexcept {
+            return shadow_->PendingDelta::samplerStates();
+        }
+        ConstTypedTransformTableView pendingTransformsTyped() const noexcept {
+            return shadow_->PendingDelta::transforms();
+        }
+
+    private:
+        PendingDeltaView(const PeHotStateShadow& shadow,
+                         PendingDeltaTicket ticket) noexcept
+            : shadow_(&shadow), ticket_(ticket) {}
+        const PeHotStateShadow* shadow_ = nullptr;
+        PendingDeltaTicket ticket_{};
+        friend struct PeHotStateShadow;
+    };
+
+    PendingDeltaView pendingDeltaView(
+        PendingDeltaTicket ticket = {}) const noexcept {
+        const auto current = pendingTicket();
+        return PendingDeltaView(*this, ticket.valid() ? ticket : current);
+    }
+
     class Snapshot {
     public:
         const D9CViewport& viewportShadow() const noexcept {

@@ -132,6 +132,45 @@ enum class DirectChunkSlotReplayDisposition : std::uint8_t {
   Count,
 };
 
+// Cheap, allocation-free eligibility-only gate for the ordinary final
+// ChunkSlot path. The complete wire validator runs before import; this gate
+// intentionally accepts only non-UP Draw records and APPLY_STATE/constant
+// records. All other valid record families remain compatibility/coordinator
+// owned, while an impossible imported-view mismatch fails closed.
+enum class DirectChunkSlotRangeClass : std::uint8_t {
+  Eligible,
+  Empty,
+  Unsupported,
+  Malformed,
+};
+
+struct DirectChunkSlotRangePlan {
+  DirectChunkSlotRangeClass classification =
+      DirectChunkSlotRangeClass::Malformed;
+  core::SourcePayloadCapacity capacity{};
+  std::size_t drawCount = 0;
+  std::size_t plannedBytes = 0;
+
+  bool eligible() const noexcept {
+    return classification == DirectChunkSlotRangeClass::Eligible &&
+           drawCount != 0 && plannedBytes != 0;
+  }
+};
+
+// First pass over an already imported source. Complete validity is supplied by
+// validateCommandChunk before import; this pass performs no layout
+// construction, allocation, queue admission, state mutation, or resource
+// marking and is therefore safe to use before any replay effect.
+DirectChunkSlotRangeClass classifyDirectChunkSlotRange(
+    const ImportedChunkView& imported) noexcept;
+
+// Exact final-slot SoA count/reserve plan for a source accepted by the cheap
+// classifier.  The returned bytes are the complete destination layout bound
+// by TransactionalChunkSlotAssembler; no per-draw capacity boundary is
+// introduced by this plan.
+std::optional<DirectChunkSlotRangePlan> planDirectChunkSlotRange(
+    const ImportedChunkView& imported, std::size_t pageSize) noexcept;
+
 // Whole-raw promotion gate for the ordinary compatibility source. It is a
 // pure structural classifier: no queue state, D3D shadow, resource mark, or
 // destination storage is touched here.

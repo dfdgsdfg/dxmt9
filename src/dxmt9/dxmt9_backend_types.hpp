@@ -1300,7 +1300,8 @@ struct ChunkSlot {
   bool appendDrawUniformStageConstantsBytes(
       std::vector<u8>& arena,
       const ShaderConstantSnapshot<FloatCount>& constants,
-      DrawUniformStageConstantsSpan& span) {
+      DrawUniformStageConstantsSpan& span,
+      bool alreadyReserved = false) {
     if (!detail::chunkSlotCanAppendU32Range(arena.size(), span.byteSize)) {
       return false;
     }
@@ -1309,7 +1310,9 @@ struct ChunkSlot {
       return true;
     }
     const auto oldSize = arena.size();
-    detail::chunkSlotReserveAtLeast(arena, oldSize + span.byteSize);
+    if (!alreadyReserved) {
+      detail::chunkSlotReserveAtLeast(arena, oldSize + span.byteSize);
+    }
     arena.resize(oldSize + span.byteSize);
     auto* cursor = arena.data() + oldSize;
 
@@ -1336,7 +1339,8 @@ struct ChunkSlot {
   }
 
   DrawUniformStageHandle
-  appendDrawUniformVertexConstants(const DrawUniformPayload& payload) {
+  appendDrawUniformVertexConstants(const DrawUniformPayload& payload,
+                                   bool alreadyReserved = false) {
     detail::ChunkSlotPerfScope appendScope(
         dxmt9::perf::countDrawUniformPayloadAppendVertexAppendCpuTime);
     const bool canUseUniformSoA =
@@ -1353,7 +1357,8 @@ struct ChunkSlot {
         recordIndex, payload.vertexConstantsHash);
     auto constantsSpan = makeDrawUniformVertexConstantsSpan(payload, 0u);
     if (!appendDrawUniformStageConstantsBytes(
-            drawUniformVertexConstantBytes, payload.vsConst, constantsSpan)) {
+            drawUniformVertexConstantBytes, payload.vsConst, constantsSpan,
+            alreadyReserved)) {
       return {};
     }
     const auto appendBytes =
@@ -1363,11 +1368,13 @@ struct ChunkSlot {
       dxmt9::perf::countDrawUniformVertexConstantsAppendBytes(appendBytes);
       dxmt9::perf::countDrawUniformPayloadAppendBytes(appendBytes);
     }
-    reserveDrawUniformStageLookup(drawUniformVertexConstants,
-                                  drawUniformVertexConstantsLookupHeads,
-                                  drawUniformVertexConstantsLookupTails,
-                                  drawUniformVertexConstantsLookupNext,
-                                  drawUniformVertexConstants.size() + 1u);
+    if (!alreadyReserved) {
+      reserveDrawUniformStageLookup(
+          drawUniformVertexConstants, drawUniformVertexConstantsLookupHeads,
+          drawUniformVertexConstantsLookupTails,
+          drawUniformVertexConstantsLookupNext,
+          drawUniformVertexConstants.size() + 1u);
+    }
     drawUniformVertexConstants.push_back(DrawUniformVertexConstantsRecord{
         .handle = handle,
         .constants = constantsSpan,
@@ -1382,7 +1389,8 @@ struct ChunkSlot {
   }
 
   DrawUniformStageHandle
-  appendDrawUniformPixelConstants(const DrawUniformPayload& payload) {
+  appendDrawUniformPixelConstants(const DrawUniformPayload& payload,
+                                  bool alreadyReserved = false) {
     detail::ChunkSlotPerfScope appendScope(
         dxmt9::perf::countDrawUniformPayloadAppendPixelAppendCpuTime);
     const bool canUseUniformSoA =
@@ -1399,7 +1407,8 @@ struct ChunkSlot {
         recordIndex, payload.pixelConstantsHash);
     auto constantsSpan = makeDrawUniformPixelConstantsSpan(payload, 0u);
     if (!appendDrawUniformStageConstantsBytes(
-            drawUniformPixelConstantBytes, payload.psConst, constantsSpan)) {
+            drawUniformPixelConstantBytes, payload.psConst, constantsSpan,
+            alreadyReserved)) {
       return {};
     }
     const auto appendBytes =
@@ -1409,11 +1418,13 @@ struct ChunkSlot {
       dxmt9::perf::countDrawUniformPixelConstantsAppendBytes(appendBytes);
       dxmt9::perf::countDrawUniformPayloadAppendBytes(appendBytes);
     }
-    reserveDrawUniformStageLookup(drawUniformPixelConstants,
-                                  drawUniformPixelConstantsLookupHeads,
-                                  drawUniformPixelConstantsLookupTails,
-                                  drawUniformPixelConstantsLookupNext,
-                                  drawUniformPixelConstants.size() + 1u);
+    if (!alreadyReserved) {
+      reserveDrawUniformStageLookup(
+          drawUniformPixelConstants, drawUniformPixelConstantsLookupHeads,
+          drawUniformPixelConstantsLookupTails,
+          drawUniformPixelConstantsLookupNext,
+          drawUniformPixelConstants.size() + 1u);
+    }
     drawUniformPixelConstants.push_back(DrawUniformPixelConstantsRecord{
         .handle = handle,
         .constants = constantsSpan,
@@ -1644,7 +1655,8 @@ struct ChunkSlot {
 
   DrawUniformHandle appendDrawUniformPayload(
       const DrawUniformPayload& payload,
-      DrawUniformFixedHandle fixedHandleCandidate = {}) {
+      DrawUniformFixedHandle fixedHandleCandidate = {},
+      bool alreadyReserved = false) {
     const bool canUseUniformSoA =
         detail::chunkSlotCanAppendU32IndexedElement(drawUniformPayloads.size()) &&
         detail::chunkSlotCanAppendU32IndexedElement(drawUniformFixedPayloads.size()) &&
@@ -1682,7 +1694,8 @@ struct ChunkSlot {
       vertexConstantsHandle = findDrawUniformVertexConstants(payload);
     }
     if (!vertexConstantsHandle.valid()) {
-      vertexConstantsHandle = appendDrawUniformVertexConstants(payload);
+      vertexConstantsHandle = appendDrawUniformVertexConstants(
+          payload, alreadyReserved);
       if (!vertexConstantsHandle.valid()) {
         return {};
       }
@@ -1695,7 +1708,8 @@ struct ChunkSlot {
       pixelConstantsHandle = findDrawUniformPixelConstants(payload);
     }
     if (!pixelConstantsHandle.valid()) {
-      pixelConstantsHandle = appendDrawUniformPixelConstants(payload);
+      pixelConstantsHandle = appendDrawUniformPixelConstants(
+          payload, alreadyReserved);
       if (!pixelConstantsHandle.valid()) {
         return {};
       }
@@ -1710,7 +1724,8 @@ struct ChunkSlot {
     {
       detail::ChunkSlotPerfScope scope(
           dxmt9::perf::countDrawUniformPayloadAppendReserveCpuTime);
-      if (!detail::chunkSlotDisableDrawUniformPayloadDedup()) {
+      if (!alreadyReserved &&
+          !detail::chunkSlotDisableDrawUniformPayloadDedup()) {
         reserveDrawUniformPayloadLookup(drawUniformPayloads.size() + 1u);
       }
     }

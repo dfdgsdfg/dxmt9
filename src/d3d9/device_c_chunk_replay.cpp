@@ -508,14 +508,17 @@ public:
       std::vector<dxmt9::core::DrawBindingSnapshot>* bindingSnapshots,
       std::span<const dxmt9::core::ChunkBufferBindingSnapshot> capturedBuffers,
       bool capturedBuffersRequired, bool directFinalDraws,
-      dxmt9::d3d9::ReplayTransaction& transaction)
+      dxmt9::d3d9::ReplayTransaction& transaction,
+      const dxmt9::core::DirectReplayDrawAppendCapability*
+          directRangeAppender = nullptr)
       : device_(device),
         pacedByPresentOrdinal_(pacedByPresentOrdinal),
         bindingSnapshots_(bindingSnapshots),
         snapshotResolver_(capturedBuffers),
         capturedBuffersRequired_(capturedBuffersRequired &&
                                  snapshotResolver_.hasCapturedBackings()),
-        directFinalDraws_(directFinalDraws), transaction_(&transaction) {
+        directFinalDraws_(directFinalDraws), transaction_(&transaction),
+        directRangeAppender_(directRangeAppender) {
     if (capturedBuffersRequired_) {
       const auto& state = device_->dev().state();
       for (dxmt9::core::u32 stream = 0;
@@ -944,7 +947,8 @@ public:
         return dxmt9::core::D3DERR_DEVICELOST;
       }
       const auto result =
-          device_->dev().submitDirectReplayDrawFromCurrentState(draw, payload);
+          device_->dev().submitDirectReplayDrawFromCurrentState(
+              draw, payload, directRangeAppender_);
       if (directFinalDraws_ &&
           result.disposition !=
               dxmt9::core::DirectReplayDrawDisposition::Appended &&
@@ -1103,6 +1107,8 @@ private:
   bool batchCurrentDraw_ = false;
   bool directFinalDraws_ = false;
   dxmt9::d3d9::ReplayTransaction* transaction_ = nullptr;
+  const dxmt9::core::DirectReplayDrawAppendCapability*
+      directRangeAppender_ = nullptr;
 };
 
 bool recordCanBatchDraw(
@@ -1166,7 +1172,9 @@ int32_t replayResolvedChunk(
     std::span<const dxmt9::d3d9::CpuReadySegmentPlan> arenaSegments = {},
     bool containsOrderedControls = false,
     std::span<const dxmt9::d3d9::CpuReadySourcePlan> arenaSources = {},
-    bool activeDirectChunkSlotPath = false) {
+    bool activeDirectChunkSlotPath = false,
+    const dxmt9::core::DirectReplayDrawAppendCapability*
+        directRangeAppender = nullptr) {
   dxmt9::d3d9::ImportedChunkView imported;
   if (!raw.preflightValidated ||
       !importRawChunk(raw, imported) ||
@@ -1238,7 +1246,8 @@ int32_t replayResolvedChunk(
   DeviceReplaySink sink(
       device, pacedByPresentOrdinal, &replayScratch.bindingSnapshots,
       raw.bufferSnapshots,
-      raw.bufferSnapshotsCaptured, directFinalDraws, transaction);
+      raw.bufferSnapshotsCaptured, directFinalDraws, transaction,
+      directRangeAppender);
   std::size_t activeSegment = 0;
   std::size_t activeSource = 0;
   std::size_t activeSourceSegment = 0;
@@ -1858,24 +1867,62 @@ int32_t replayPlannedChunk(D9CDevice* device,
         return commitChunkFail("chunk-direct-slot-import");
       }
       const auto limits = queue->cpuReadyArenaPlanLimits();
-      const auto plan = dxmt9::d3d9::planCpuReadyChunk(
-          imported, raw.replaySeq,
-          dxmt9::d3d9::CpuReadyPlanOptions{
-              .pageSize = limits.pageSize == 0 ? 4096 : limits.pageSize,
-              .maxOrdinaryPagesPerSegment =
-                  limits.maxOrdinaryPagesPerSegment,
-              .maxSegmentsPerSource = limits.maxSegmentsPerSource,
-              .maxPagesPerSource = limits.maxPagesPerSource == 0
-                  ? std::numeric_limits<std::uint32_t>::max()
-                  : limits.maxPagesPerSource,
-              .maxPages = limits.maxPagesPerSource == 0
-                  ? std::numeric_limits<std::uint32_t>::max()
-                  : limits.maxPagesPerSource,
-              .maxSourcesPerChunk = 1u,
-          });
+      // The ordinary final-slot lane has a deliberately cheap first gate.
+      // Valid multi-record Draw/APPLY_STATE ranges do not need Arena segment
+      // planning: count their exact final SoA dimensions once and open one
+      // transactional ChunkSlot destination. Other valid families stay on
+      // compatibility replay; the legacy planner is not an admission oracle
+      // for this strict carrier-free whole-range transaction.
+      const auto rangeClass =
+          dxmt9::d3d9::classifyDirectChunkSlotRange(imported);
+      if (rangeClass == dxmt9::d3d9::DirectChunkSlotRangeClass::Malformed) {
+        recordDirectDisposition(
+            dxmt9::d3d9::DirectChunkSlotReplayDisposition::RejectInvalid,
+            dxmt9::perf::DirectChunkSlotReplayOutcome::PlanRejected);
+        return commitChunkFail("chunk-direct-slot-range");
+      }
+      std::optional<dxmt9::d3d9::DirectChunkSlotRangePlan> directRange;
+      bool directRangePlanFailed = false;
+      if (rangeClass == dxmt9::d3d9::DirectChunkSlotRangeClass::Eligible) {
+        directRange = dxmt9::d3d9::planDirectChunkSlotRange(
+            imported, limits.pageSize == 0 ? 4096 : limits.pageSize);
+        if (!directRange || !directRange->eligible()) {
+          // The source passed the eligibility gate, so a null exact plan is
+          // a valid capacity/overflow admission failure, not malformed input.
+          // Keep the raw pre-effect and let compatibility replay own it; this
+          // is deliberately not a RejectInvalid/device-loss outcome.
+          directRangePlanFailed = true;
+          directRange.reset();
+        }
+      }
+      if (rangeClass != dxmt9::d3d9::DirectChunkSlotRangeClass::Eligible) {
+        if (directReplayObservabilityEnabled) {
+          dxmt9::perf::countDirectChunkSlotReplayCheapRejected();
+        }
+      }
+      // Only the strict whole-range envelope may enter this final-slot
+      // transaction. Ordered controls, resource/control operations, UP and
+      // TriangleFan draws, and unsafe mixes remain compatibility-owned even
+      // when the legacy planner could describe a direct-shaped layout.
+      if (!directRange) {
+        if (directRangePlanFailed && directReplayObservabilityEnabled) {
+          recordDirectDisposition(
+              dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyOversized,
+              dxmt9::perf::DirectChunkSlotReplayOutcome::NotAttempted);
+        } else if (directReplayObservabilityEnabled) {
+          const auto disposition =
+              rangeClass == dxmt9::d3d9::DirectChunkSlotRangeClass::Empty
+                  ? dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyStateOnly
+                  : dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyUnsupported;
+          recordDirectDisposition(
+              disposition,
+              dxmt9::perf::DirectChunkSlotReplayOutcome::NotAttempted);
+        }
+        markLegacyResources(device, raw);
+        return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal);
+      }
       const auto disposition =
-          dxmt9::d3d9::classifyDirectChunkSlotReplay(
-              imported, plan, /*captureOrTrace=*/false);
+          dxmt9::d3d9::DirectChunkSlotReplayDisposition::Direct;
       bool dispositionRecorded = false;
       const auto recordDispositionOnce =
           [&](dxmt9::perf::DirectChunkSlotReplayOutcome outcome) noexcept {
@@ -1897,33 +1944,36 @@ int32_t replayPlannedChunk(D9CDevice* device,
               dxmt9::d3d9::DirectChunkSlotReplayDisposition::DirectOversized ||
           disposition == dxmt9::d3d9::DirectChunkSlotReplayDisposition::
                              DirectWithPresentTail;
-      const bool oversizedDirect =
-          disposition ==
-          dxmt9::d3d9::DirectChunkSlotReplayDisposition::DirectOversized;
-      const bool directSlotLayoutReady = oversizedDirect
-          ? plan.directSlotLayout.has_value()
-          : plan.arenaLayout.has_value();
-      const std::size_t directSlotPlannedBytes = oversizedDirect
-          ? (plan.directSlotLayout ? plan.directSlotLayout->usedBytes : 0u)
-          : (plan.arenaLayout ? plan.arenaLayout->usedBytes : 0u);
+      const bool directSlotLayoutReady = directRange.has_value();
+      const std::size_t directSlotPlannedBytes =
+          directRange ? directRange->plannedBytes : 0u;
       if (directSlotDisposition && directSlotLayoutReady &&
           directSlotPlannedBytes != 0u) {
         auto begin = queue->beginDirectChunkSlotReplay(
             raw.replaySeq,
-            disposition ==
-                    dxmt9::d3d9::DirectChunkSlotReplayDisposition::DirectOversized
-                ? plan.directSlotCapacity
-                : plan.capacity,
+            directRange
+                ? directRange->capacity
+                : dxmt9::core::SourcePayloadCapacity{},
             directSlotPlannedBytes,
-            cpuReadyProducerIdentity(raw.producerIdentity));
+            cpuReadyProducerIdentity(raw.producerIdentity),
+            imported.records.size(), directRange->drawCount);
         if (begin.status ==
                 dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Ready &&
             begin.lease) {
           auto lease = std::move(*begin.lease);
+          const auto* directRangeAppender =
+              lease.borrowDirectRangeAppender();
+          if (!directRangeAppender) {
+            recordDispositionOnce(
+                dxmt9::perf::DirectChunkSlotReplayOutcome::ReplayFailed);
+            (void)lease.rollbackPreEffect();
+            return commitChunkFail("chunk-direct-slot-appender");
+          }
           auto& transaction = beginReplayTransaction(device, raw);
           const auto hr = replayResolvedChunk(
               device, raw, pacedByPresentOrdinal, transaction, nullptr, {},
-              false, {}, /*activeDirectChunkSlotPath=*/true);
+              false, {}, /*activeDirectChunkSlotPath=*/true,
+              directRangeAppender);
           if (failed(hr)) {
             recordDispositionOnce(
                 dxmt9::perf::DirectChunkSlotReplayOutcome::ReplayFailed);
@@ -1936,6 +1986,9 @@ int32_t replayPlannedChunk(D9CDevice* device,
                 rollbackReplayTransaction(device, transaction);
             const bool destinationRolledBack = lease.rollbackPreEffect();
             if (stateRolledBack && destinationRolledBack) {
+              if (directReplayObservabilityEnabled) {
+                dxmt9::perf::countDirectChunkSlotReplayPostMaterializationFallback();
+              }
               // The raw source and both checkpoints are intact. Compatibility
               // replay is now the sole owner of this event.
               markLegacyResources(device, raw);

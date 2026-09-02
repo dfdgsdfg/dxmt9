@@ -193,6 +193,10 @@ struct SparseStatePlan {
   bool prepared = false;
   bool fullSnapshot = false;
   bool chunkContextFinalized = false;
+  // The producer's pending reads are authenticated to the exact frontier
+  // observed during pass 1.  A later setter invalidates this view and the
+  // settlement path rejects the stale plan rather than consuming newer state.
+  PeHotStateShadow::PendingDeltaView pendingDelta{};
   // The plan may be prepared before the append emitter runs.  Keep the
   // PendingDelta frontier it observed so a later setter cannot be erased by
   // the plan's conditional settlement.

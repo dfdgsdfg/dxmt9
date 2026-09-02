@@ -330,6 +330,12 @@ struct PresentOrdinalGate {
 class CommandQueue {
  private:
   struct ArenaBuildContext;
+  struct DirectChunkSlotBuildContext;
+  static core::DirectReplayDrawDisposition appendDirectChunkSlotDrawBorrowed(
+      void* state, const core::DirectReplayDrawInput& input) noexcept;
+  static void armDirectReplayDrawAppender(
+      core::DirectReplayDrawAppendCapability& destination,
+      void* state) noexcept;
 
  public:
   // Full execution-service constructor. Allocates the WMT::CommandQueue,
@@ -661,6 +667,15 @@ class CommandQueue {
     explicit operator bool() const noexcept { return queue_ != nullptr; }
     core::CpuReadyPublicationTicket ticket() const noexcept { return ticket_; }
     std::size_t controlIndex() const noexcept { return controlIndex_; }
+    // Borrowed only for the synchronous replay call made while this lease is
+    // alive. The capability is lease-owned and is invalidated by every
+    // terminal settle operation; callers cannot retain destination storage.
+    const core::DirectReplayDrawAppendCapability*
+    borrowDirectRangeAppender() const noexcept {
+      return directRangeAppendLive_ && directRangeAppender_
+                 ? &directRangeAppender_
+                 : nullptr;
+    }
     void markSemanticEffectsStarted() noexcept { effectsStarted_ = true; }
     DirectChunkSlotReplayStatus commit(
         std::span<const core::ChunkHandleEntry> resources) noexcept;
@@ -670,14 +685,29 @@ class CommandQueue {
     friend class CommandQueue;
     DirectChunkSlotReplayLease(
         CommandQueue& queue, core::CpuReadyPublicationTicket ticket,
-        std::size_t controlIndex) noexcept
-        : queue_(&queue), ticket_(ticket), controlIndex_(controlIndex) {}
+        std::size_t controlIndex,
+        core::TransactionalChunkSlotAssembler* assembler,
+        DirectChunkSlotBuildContext* context) noexcept
+        : queue_(&queue), ticket_(ticket), controlIndex_(controlIndex),
+          directAssembler_(assembler), directContext_(context),
+          ownerThread_(std::this_thread::get_id()),
+          directRangeAppendLive_(assembler != nullptr && context != nullptr) {
+      if (directRangeAppendLive_) {
+        CommandQueue::armDirectReplayDrawAppender(
+            directRangeAppender_, this);
+      }
+    }
     void settle() noexcept;
 
     CommandQueue* queue_ = nullptr;
     core::CpuReadyPublicationTicket ticket_{};
     std::size_t controlIndex_ = std::numeric_limits<std::size_t>::max();
     bool effectsStarted_ = false;
+    core::TransactionalChunkSlotAssembler* directAssembler_ = nullptr;
+    DirectChunkSlotBuildContext* directContext_ = nullptr;
+    core::DirectReplayDrawAppendCapability directRangeAppender_{};
+    std::thread::id ownerThread_{};
+    bool directRangeAppendLive_ = false;
   };
 
   struct DirectChunkSlotReplayBeginResult {
@@ -693,8 +723,9 @@ class CommandQueue {
       std::uint64_t rawOrdinal,
       const core::SourcePayloadCapacity& capacity,
       std::size_t plannedBytes,
-      core::CpuReadyProducerIdentity producerIdentity = {}) noexcept;
-
+      core::CpuReadyProducerIdentity producerIdentity = {},
+      std::size_t rangeRecordCount = 0,
+      std::size_t rangeDrawCount = 0) noexcept;
   CpuReadyArenaBeginResult beginCpuReadyArenaSource(
       std::uint64_t rawOrdinal,
       const core::ArenaSourcePayloadLayout& layout,
@@ -1659,6 +1690,11 @@ class CommandQueue {
     // True only when admission proved that this source can append to an
     // already populated slot without relocating or rebuilding its prefix.
     bool continuation = false;
+    // A nonzero value binds the complete immutable imported range to this
+    // lease. replayResolvedChunk returns only after consuming that complete
+    // range; prepare/commit verify the bound once, rather than synchronizing
+    // with the queue for every record.
+    std::size_t expectedRangeRecordCount = 0;
     // Present is staged by submitPresent, but remains coordinator-owned until
     // direct assembler evidence has committed the same final ChunkSlot.
     core::PresentId pendingPresentId{};

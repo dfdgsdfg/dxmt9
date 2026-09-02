@@ -171,47 +171,18 @@ std::uint64_t effectivePayloadDigest(
     digestValue(hash, command.kind);
     switch (command.kind) {
     case dxmt9::core::MetalCommandKind::DrawRun:
-      if (command.drawRunRecord) {
-        const auto& record = *command.drawRunRecord;
-        digestValue(hash, record.stateIndex);
-        digestValue(hash, record.firstParam);
-        digestValue(hash, record.paramCount);
-        digestValue(hash, record.payloadOffset);
-        digestValue(hash, record.payloadSize);
-        digestValue(hash, record.uniformHandle.index);
-        digestValue(hash, record.uniformHandle.generation);
-        digestValue(hash, record.uniformHandle.hash);
-        digestValue(hash, record.invariant.viewportScissorHash);
-        digestValue(hash, record.invariant.runStableBindingHash);
-        digestValue(hash, record.invariant.streamMask);
-        digestValue(hash, record.invariant.textureMask);
-        digestValue(hash, record.invariant.samplerStateMask);
-      }
-      if (command.drawPsoSubview) {
-        const auto& pso = *command.drawPsoSubview;
-        digestValue(hash, pso.hasShaderContext);
-        digestValue(hash, pso.vertexShaderHash);
-        digestValue(hash, pso.pixelShaderHash);
-        digestValue(hash, pso.vertexDeclHash);
-        digestValue(hash, pso.renderStateHash);
-        digestValue(hash, pso.textureMask);
-        digestValue(hash, pso.samplerStateMask);
-        digestValue(hash, pso.renderTargetMask);
-        for (const auto handle : pso.colorAttachmentHandles) digestHandle(hash, handle);
-        digestHandle(hash, pso.depthStencilHandle);
-      }
-      if (command.drawState.hot) {
-        const auto& hot = *command.drawState.hot;
-        digestValue(hash, hot.key.renderStateHash);
-        digestValue(hash, hot.streamMask);
-        digestValue(hash, hot.textureMask);
-        digestValue(hash, hot.renderTargetMask);
-        digestHandle(hash, hot.indexBuffer);
-        for (const auto handle : hot.streamBuffers) digestHandle(hash, handle);
-        for (const auto handle : hot.textures) digestHandle(hash, handle);
-      }
+      // Draw state/PSO locators are checked by DrawDigest below; the
+      // effective stream digest deliberately contains only storage-independent
+      // command and draw payload semantics.
       for (const auto& param : command.drawParams) {
-        digestDrawParam(hash, param);
+        digestValue(hash, param.primitiveType);
+        digestValue(hash, param.primitiveCount);
+        digestValue(hash, param.startVertex);
+        digestValue(hash, param.baseVertexIndex);
+        digestValue(hash, param.startIndex);
+        digestValue(hash, param.indexType);
+        digestValue(hash, param.indexed);
+        digestValue(hash, param.instanceCount);
         digestDrawPayloadSemantics(hash, param, command.drawPayloadBytes);
       }
       break;
@@ -1754,6 +1725,9 @@ void ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion() {
   RuntimeFixture fixture(/*rejectAfterClear=*/false,
                          /*segmentSerial=*/false,
                          /*directChunkSlot=*/true);
+  RuntimeFixture legacyFixture(/*rejectAfterClear=*/false,
+                               /*segmentSerial=*/false,
+                               /*directChunkSlot=*/false);
   auto* buffer = dxmt9c_device_create_vertex_buffer(
       fixture.cDevice.get(), 256u, 0u, 0u, 0u);
   auto* source = dxmt9c_device_create_render_target(
@@ -1769,11 +1743,35 @@ void ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion() {
   const auto destinationIdentity =
       registry.insert(D9C_CHUNK_HANDLE_KIND_SURFACE, destination);
   const std::array records{
-      drawRecord(identity), clearRecord(),
-      stretchRectRecord(sourceIdentity, destinationIdentity, 1u)};
+      drawRecord(identity),
+      applyRenderStateRecord(RS_TEXTURE_FACTOR, 0x01020304u),
+      drawRecord(identity, 1u)};
   const auto wire = makeWireFixture(records);
   auto directRaw = makeRaw(wire, 71u, false, &registry);
-  auto legacyRaw = makeRaw(wire, 71u, false, &registry);
+  auto* legacyBuffer = dxmt9c_device_create_vertex_buffer(
+      legacyFixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  auto* legacySource = dxmt9c_device_create_render_target(
+      legacyFixture.cDevice.get(), 16u, 16u, 21u, 0u, 0u, 0u, nullptr);
+  auto* legacyDestination = dxmt9c_device_create_render_target(
+      legacyFixture.cDevice.get(), 16u, 16u, 21u, 0u, 0u, 0u, nullptr);
+  check(legacyBuffer != nullptr && legacySource != nullptr &&
+            legacyDestination != nullptr,
+        "ordinary Legacy differential resources construct");
+  dxmt9::d3d9::WireObjectRegistry legacyRegistry;
+  const auto legacyIdentity = legacyRegistry.insert(
+      D9C_CHUNK_HANDLE_KIND_BUFFER, legacyBuffer);
+  const auto legacySourceIdentity = legacyRegistry.insert(
+      D9C_CHUNK_HANDLE_KIND_SURFACE, legacySource);
+  const auto legacyDestinationIdentity = legacyRegistry.insert(
+      D9C_CHUNK_HANDLE_KIND_SURFACE, legacyDestination);
+  (void)legacySourceIdentity;
+  (void)legacyDestinationIdentity;
+  const std::array legacyRecords{
+      drawRecord(legacyIdentity),
+      applyRenderStateRecord(RS_TEXTURE_FACTOR, 0x01020304u),
+      drawRecord(legacyIdentity, 1u)};
+  const auto legacyWire = makeWireFixture(legacyRecords);
+  auto legacyRaw = makeRaw(legacyWire, 71u, false, &legacyRegistry);
   const std::array resources{
       ChunkHandleEntry{.kind = ChunkHandleKind::Buffer,
                        .handle = buffer->obj->handle()},
@@ -1782,8 +1780,16 @@ void ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion() {
       ChunkHandleEntry{.kind = ChunkHandleKind::Surface,
                        .handle = destination->obj->handle()},
   };
+  const std::array legacyResources{
+      ChunkHandleEntry{.kind = ChunkHandleKind::Buffer,
+                       .handle = legacyBuffer->obj->handle()},
+      ChunkHandleEntry{.kind = ChunkHandleKind::Surface,
+                       .handle = legacySource->obj->handle()},
+      ChunkHandleEntry{.kind = ChunkHandleKind::Surface,
+                       .handle = legacyDestination->obj->handle()},
+  };
   directRaw.resourceEntries.assign(resources.begin(), resources.end());
-  legacyRaw.resourceEntries.assign(resources.begin(), resources.end());
+  legacyRaw.resourceEntries.assign(legacyResources.begin(), legacyResources.end());
   directRaw.cpuReadyTapePlanningEnabled = false;
   legacyRaw.cpuReadyTapePlanningEnabled = false;
 
@@ -1795,8 +1801,8 @@ void ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion() {
   check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
                 fixture.routing->queue_) == 0u &&
             directWritingCommandCount != 0u &&
-            fixture.routing->drawCalls == 1u,
-        "direct mixed Draw/Clear/copy construction preserves the ordinary "
+            fixture.routing->drawCalls == 0u,
+        "direct Draw/APPLY_STATE/Draw construction preserves the ordinary "
         "source/CB publication cadence");
   check(fixture.routing->legacyMarkCalls == 0u,
         "direct commit owns exact resource closure without Legacy pre-marking");
@@ -1808,22 +1814,20 @@ void ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion() {
   const auto directCompletion =
       dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
           fixture.routing->queue_);
-  check(fixture.device->SetStreamSource(0u, nullptr, 0u, 0u) == D3D_OK,
-        "ordinary differential restores its initial stream state");
-  fixture.routing->directChunkSlot_ = false;
-  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), legacyRaw) == D3D_OK &&
+  check(dxmt9::d3d9::replayRawChunk(legacyFixture.cDevice.get(), legacyRaw) ==
+                D3D_OK &&
             dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
-                fixture.routing->queue_) == directWritingCommandCount &&
-            fixture.routing->drawCalls == 2u &&
-            fixture.routing->legacyMarkCalls == 1u,
-        "the same raw takes the typed Legacy lane when direct support is absent");
+                legacyFixture.routing->queue_) == directWritingCommandCount &&
+            legacyFixture.routing->drawCalls == 2u &&
+            legacyFixture.routing->legacyMarkCalls == 1u,
+        "the same raw takes the typed Legacy lane on a fresh equivalent fixture");
   const auto legacyDrawDigest =
       dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
-          fixture.routing->queue_);
-  fixture.routing->present(SwapDesc{});
+          legacyFixture.routing->queue_);
+  legacyFixture.routing->present(SwapDesc{});
   const auto legacyCompletion =
       dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
-          fixture.routing->queue_);
+          legacyFixture.routing->queue_);
   check(directCompletion.dequeued && !directCompletion.arena &&
             directCompletion.submitted && directCompletion.completed &&
             directCompletion.reclaimed &&
@@ -1832,14 +1836,17 @@ void ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion() {
             legacyCompletion.reclaimed &&
             directCompletion.commandCount == directWritingCommandCount + 1u &&
             directCompletion.commandCount == legacyCompletion.commandCount &&
+            directCompletion.rawOrdinal == legacyCompletion.rawOrdinal &&
+            directCompletion.sourceOrdinal == legacyCompletion.sourceOrdinal &&
+            directCompletion.seqId == legacyCompletion.seqId &&
             directCompletion.effectiveDigest == legacyCompletion.effectiveDigest &&
+            directDrawDigest.params == legacyDrawDigest.params &&
             directDrawDigest.record == legacyDrawDigest.record &&
             directDrawDigest.pso == legacyDrawDigest.pso &&
             directDrawDigest.hot == legacyDrawDigest.hot &&
-            directDrawDigest.params == legacyDrawDigest.params &&
             directDrawDigest.payload == legacyDrawDigest.payload &&
             directDrawDigest.payloadBytes == legacyDrawDigest.payloadBytes,
-        "ordinary direct and Legacy final ChunkSlots are completion- and semantic-neutral: "
+        "ordinary direct and Legacy final ChunkSlots preserve completion and normalized draw semantics: "
         "direct count=" + std::to_string(directCompletion.commandCount) +
         " legacy count=" + std::to_string(legacyCompletion.commandCount) +
         " direct seq=" + std::to_string(directCompletion.seqId) +
@@ -1895,6 +1902,17 @@ void ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion() {
             std::to_string(legacyDrawDigest.param.uniformHandle.index) + ":" +
             std::to_string(legacyDrawDigest.param.uniformHandle.generation) +
             ":" + std::to_string(legacyDrawDigest.param.uniformHandle.hash));
+  check(fixture.device->GetRenderState(RS_TEXTURE_FACTOR) ==
+            legacyFixture.device->GetRenderState(RS_TEXTURE_FACTOR),
+        "ordinary direct and Legacy preserve final D3D render state");
+  const auto* directBufferRecord = fixture.routing->queue_.pool().findBuffer(
+      buffer->obj->handle().value);
+  const auto* legacyBufferRecord = legacyFixture.routing->queue_.pool().findBuffer(
+      legacyBuffer->obj->handle().value);
+  check(directBufferRecord && legacyBufferRecord &&
+            directBufferRecord->lastUsedSeqId == legacyBufferRecord->lastUsedSeqId &&
+            directBufferRecord->lastUsedSeqId == directCompletion.seqId,
+        "ordinary direct and Legacy preserve owner resource-mark ledger identity");
 
   const std::array synchronousBarrierRecords{
       drawRecord(identity), clearRecord(),
@@ -1924,8 +1942,11 @@ void ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion() {
   dxmt9::d3d9::releaseRetainedWrappers(directRaw);
   dxmt9::d3d9::releaseRetainedWrappers(legacyRaw);
   dxmt9c_buffer_release(buffer);
+  dxmt9c_buffer_release(legacyBuffer);
   dxmt9c_surface_release(source);
   dxmt9c_surface_release(destination);
+  dxmt9c_surface_release(legacySource);
+  dxmt9c_surface_release(legacyDestination);
 }
 
 void ordinaryDrawApplyStateDrawUsesCarrierFreeDirectPath() {
@@ -1959,7 +1980,7 @@ void ordinaryDrawApplyStateDrawUsesCarrierFreeDirectPath() {
         "present-less Draw/ApplyState/Draw remains an ordinary Direct candidate");
 
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
-            fixture.routing->drawCalls == 2u &&
+            fixture.routing->drawCalls == 0u &&
             fixture.routing->ordinaryDrawCalls == 0u &&
             fixture.routing->legacyMarkCalls == 0u &&
             dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
@@ -2020,7 +2041,7 @@ void ordinaryOversizedDrawSourceUsesCarrierFreeLifecycle() {
   auto raw = makeRaw(wire, 95u, false, &registry);
   raw.cpuReadyTapePlanningEnabled = false;
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
-            fixture.routing->drawCalls == 640u &&
+            fixture.routing->drawCalls == 0u &&
             fixture.routing->ordinaryDrawCalls == 0u,
         "oversized source uses final storage exactly once");
   fixture.routing->present(SwapDesc{});
@@ -2035,7 +2056,7 @@ void ordinaryOversizedDrawSourceUsesCarrierFreeLifecycle() {
   dxmt9c_buffer_release(buffer);
 }
 
-void drawApplyStateDrawWithPresentUsesDirectPresentTail() {
+void drawApplyStateDrawWithPresentStaysCompatibilityOwned() {
   RuntimeFixture fixture(/*rejectAfterClear=*/false,
                          /*segmentSerial=*/false,
                          /*directChunkSlot=*/true);
@@ -2046,7 +2067,6 @@ void drawApplyStateDrawWithPresentUsesDirectPresentTail() {
   dxmt9::d3d9::WireObjectRegistry registry;
   const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
   const std::array records{
-      clearRecord(),
       drawRecord(identity, 0u),
       applyRenderStateRecord(RS_TEXTURE_FACTOR, 0x01020304u),
       drawRecord(identity, 1u),
@@ -2059,62 +2079,57 @@ void drawApplyStateDrawWithPresentUsesDirectPresentTail() {
   const auto wire = makeWireFixture(records);
   check(validateCommandChunk(wire.bytes, wire.envelope, &imported).valid(),
         "Draw/ApplyState/Draw/Present fixture validates");
-  const auto plan = dxmt9::d3d9::planCpuReadyChunk(imported, 92u);
-  check(plan.directArenaCandidate() &&
-            dxmt9::d3d9::classifyDirectChunkSlotReplay(
-                imported, plan, /*captureOrTrace=*/false) ==
-                dxmt9::d3d9::DirectChunkSlotReplayDisposition::DirectWithPresentTail,
-        "supported Present-bearing raw selects the direct Present tail");
+  check(dxmt9::d3d9::classifyDirectChunkSlotRange(imported) ==
+            dxmt9::d3d9::DirectChunkSlotRangeClass::Unsupported,
+        "Present-bearing range stays outside strict direct eligibility");
 
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
-            fixture.routing->clearCalls == 1u &&
             fixture.routing->drawCalls == 2u &&
-            fixture.routing->ordinaryDrawCalls == 0u &&
+            fixture.routing->ordinaryDrawCalls == 2u &&
             fixture.routing->presentCalls == 1u &&
             dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
                 fixture.routing->queue_) == 2u,
-        "Present-bearing Draw/ApplyState/Draw uses one direct final source");
+        "Present-bearing Draw/ApplyState/Draw uses compatibility replay");
   const auto completion =
       dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
           fixture.routing->queue_);
-  check(completion.dequeued, "direct Present tail dequeues one source");
+  check(completion.dequeued, "compatibility Present dequeues one source");
   check(!completion.arena,
-        "direct Present tail retains final ChunkSlot representation");
+        "compatibility Present retains final ChunkSlot representation");
   check(completion.hasPresent,
-        "direct Present tail keeps Present as the terminal command");
-  check(completion.commandCount == 4u,
-        "direct Present tail keeps Clear, two draws, and terminal Present");
+        "compatibility Present keeps Present as the terminal command");
+  check(completion.commandCount == 3u,
+        "compatibility Present keeps two draws and terminal Present");
   check(completion.seqId == 1u,
-        "direct Present tail preserves the admitted sequence identity");
-  check(completion.rawOrdinal == 92u && completion.sourceOrdinal != 0u,
-        "direct Present tail preserves raw and source identity");
+        "compatibility Present preserves the admitted sequence identity");
+  check(completion.rawOrdinal == 0u && completion.sourceOrdinal != 0u,
+        "compatibility Present uses queue-owned source identity");
   check(completion.submitted && completion.completed && completion.reclaimed,
-        "direct Present tail reaches completion and reclaim");
+        "compatibility Present reaches completion and reclaim");
   check(!dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
             fixture.routing->queue_),
-        "direct Present tail publishes exactly one source");
+        "compatibility Present publishes exactly one source");
   auto nextRaw = makeRaw(makeWireFixture(records), 93u, false, &registry);
   nextRaw.cpuReadyTapePlanningEnabled = false;
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), nextRaw) == D3D_OK &&
-            fixture.routing->clearCalls == 2u &&
             fixture.routing->presentCalls == 2u,
-        "a second direct Present tail publishes without source-ordinal reuse");
+        "a second compatibility Present publishes without source reuse");
   const auto nextCompletion =
       dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
           fixture.routing->queue_);
   check(nextCompletion.dequeued && nextCompletion.hasPresent &&
             nextCompletion.seqId == 2u &&
-            nextCompletion.rawOrdinal == 93u &&
+            nextCompletion.rawOrdinal == 0u &&
             nextCompletion.sourceOrdinal == 2u &&
             nextCompletion.submitted && nextCompletion.completed &&
             nextCompletion.reclaimed,
-        "consecutive direct Present tails retain monotone source identity");
+        "consecutive compatibility Presents retain monotone source identity");
   dxmt9::d3d9::releaseRetainedWrappers(nextRaw);
   dxmt9::d3d9::releaseRetainedWrappers(raw);
   dxmt9c_buffer_release(buffer);
 }
 
-void ordinarySingleSourceSegmentedAggregateUsesDirectConstruction() {
+void ordinaryUnsupportedClearRangeStaysCompatibilityOwned() {
   RuntimeFixture fixture(/*rejectAfterClear=*/false,
                          /*segmentSerial=*/false,
                          /*directChunkSlot=*/true);
@@ -2124,21 +2139,10 @@ void ordinarySingleSourceSegmentedAggregateUsesDirectConstruction() {
   dxmt9::d3d9::ImportedChunkView imported;
   check(validateCommandChunk(wire.bytes, wire.envelope, &imported).valid(),
         "single-source segmented aggregate fixture validates");
-  const auto plan = dxmt9::d3d9::planCpuReadyChunk(
-      imported, 93u,
-      {.pageSize = 4096u,
-       .maxOrdinaryPagesPerSegment = 64u,
-       .maxSegmentsPerSource = 2u,
-       .maxPagesPerSource = 128u,
-       .maxPages = 128u,
-       .maxSourcesPerChunk = 1u});
-  check(plan.directArenaCandidate() && plan.sourceCount == 1u &&
-            plan.segmentCount == 2u && plan.arenaLayout.has_value() &&
-            !plan.layout.has_value() &&
-            dxmt9::d3d9::classifyDirectChunkSlotReplay(
-                imported, plan, /*captureOrTrace=*/false) ==
-                dxmt9::d3d9::DirectChunkSlotReplayDisposition::Direct,
-        "one logical source may aggregate multiple checked physical segments");
+  check(dxmt9::d3d9::classifyDirectChunkSlotRange(imported) ==
+                dxmt9::d3d9::DirectChunkSlotRangeClass::Unsupported &&
+            !dxmt9::d3d9::planDirectChunkSlotRange(imported, 4096u),
+        "Clear-only ranges stay outside strict Draw/APPLY_STATE eligibility");
 
   auto raw = makeRaw(wire, 93u);
   raw.cpuReadyTapePlanningEnabled = false;
@@ -2147,7 +2151,7 @@ void ordinarySingleSourceSegmentedAggregateUsesDirectConstruction() {
             fixture.routing->ordinaryDrawCalls == 0u &&
             dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
                 fixture.routing->queue_) == 2u,
-        "segmented single-source aggregate must construct Direct ChunkSlot");
+        "Clear-only range remains compatibility-owned with no Arena carrier");
   fixture.routing->present(SwapDesc{});
   const auto completion =
       dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
@@ -2155,7 +2159,7 @@ void ordinarySingleSourceSegmentedAggregateUsesDirectConstruction() {
   check(completion.dequeued && !completion.arena && completion.commandCount == 3u &&
             completion.submitted && completion.completed &&
             completion.reclaimed,
-        "segmented aggregate preserves one ordinary completion identity");
+        "compatibility-owned Clear range preserves one completion identity");
   dxmt9::d3d9::releaseRetainedWrappers(raw);
 }
 
@@ -2192,13 +2196,10 @@ void ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics() {
        .maxPagesPerSource = 128u,
        .maxPages = 128u,
        .maxSourcesPerChunk = 1u});
-  check(plan.directArenaCandidate() && plan.sourceCount == 1u &&
-            plan.segmentCount == 2u && plan.arenaLayout.has_value() &&
-            !plan.layout.has_value() &&
-            dxmt9::d3d9::classifyDirectChunkSlotReplay(
-                imported, plan, /*captureOrTrace=*/false) ==
-                dxmt9::d3d9::DirectChunkSlotReplayDisposition::Direct,
-        "segmented Draw/ApplyState/Draw is one validated Direct aggregate");
+  check(plan.directArenaCandidate() &&
+            dxmt9::d3d9::classifyDirectChunkSlotRange(imported) ==
+                dxmt9::d3d9::DirectChunkSlotRangeClass::Unsupported,
+        "legacy planner candidates with Clear boundaries stay strict-unsupported");
 
   auto direct = makeRaw(wire, 94u, false, &registry);
   auto legacy = makeRaw(wire, 94u, false, &registry);
@@ -2207,8 +2208,8 @@ void ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics() {
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), direct) == D3D_OK &&
             fixture.routing->clearCalls == 2u &&
             fixture.routing->drawCalls == 2u &&
-            fixture.routing->ordinaryDrawCalls == 0u,
-        "segmented Draw/ApplyState/Draw uses carrier-free Direct replay");
+            fixture.routing->ordinaryDrawCalls == 2u,
+        "segmented mixed range uses compatibility replay without a carrier");
   const auto directWritingCommandCount =
       dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
           fixture.routing->queue_);
@@ -2226,7 +2227,7 @@ void ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics() {
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), legacy) == D3D_OK &&
             fixture.routing->clearCalls == 4u &&
             fixture.routing->drawCalls == 4u &&
-            fixture.routing->ordinaryDrawCalls == 2u,
+            fixture.routing->ordinaryDrawCalls == 4u,
         "the same segmented Draw/ApplyState/Draw uses ordinary final storage");
   const auto legacyWritingCommandCount =
       dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
@@ -2238,19 +2239,20 @@ void ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics() {
   const auto legacyCompletion =
       dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
           fixture.routing->queue_);
-  check(directCompletion.dequeued && directCompletion.submitted &&
+  check(directCompletion.dequeued && !directCompletion.arena &&
+            directCompletion.submitted &&
             directCompletion.completed && directCompletion.reclaimed &&
             legacyCompletion.dequeued && legacyCompletion.submitted &&
             legacyCompletion.completed && legacyCompletion.reclaimed &&
             directWritingCommandCount == legacyWritingCommandCount &&
             directCompletion.commandCount == legacyCompletion.commandCount &&
-            // The carrier and Direct forms intentionally have different
-            // internal state/PSO identities. Compare the stable draw
+            // Both routes may have different internal state/PSO identities.
+            // Compare the stable draw
             // parameters and payload bytes, which are the semantic ABI.
             directDrawDigest.params == legacyDrawDigest.params &&
             directDrawDigest.payload == legacyDrawDigest.payload &&
             directDrawDigest.payloadBytes == legacyDrawDigest.payloadBytes,
-        "segmented Direct and Legacy preserve exact command and draw semantics");
+        "segmented compatibility and Legacy preserve exact command and draw semantics");
   dxmt9::d3d9::releaseRetainedWrappers(direct);
   dxmt9::d3d9::releaseRetainedWrappers(legacy);
   dxmt9c_buffer_release(buffer);
@@ -2331,7 +2333,7 @@ void populatedSlotDrawApplyDrawUsesCarrierFreeContinuation() {
   auto raw = makeRaw(makeWireFixture(records), 74u, false, &registry);
   raw.cpuReadyTapePlanningEnabled = false;
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
-            fixture.routing->drawCalls == 3u &&
+            fixture.routing->drawCalls == 0u &&
             fixture.routing->ordinaryDrawCalls == 0u,
         "populated Draw/ApplyState/Draw/ApplyState/Draw must use Direct continuation");
   check(dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
@@ -2460,7 +2462,7 @@ void populatedSlotProducerIdentityGapFallsBackBeforeEffects() {
   firstRaw.cpuReadyTapePlanningEnabled = false;
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), firstRaw) ==
                 D3D_OK &&
-            fixture.routing->drawCalls == 1u &&
+            fixture.routing->drawCalls == 0u &&
             fixture.routing->ordinaryDrawCalls == 0u,
         "first identity-qualified raw constructs the open Direct source");
   dxmt9::CommandQueueArenaLeaseTestAccess::reserveDirectContinuationHeadroom(
@@ -2476,7 +2478,7 @@ void populatedSlotProducerIdentityGapFallsBackBeforeEffects() {
   auto gapRaw = makeRaw(gapWire, 97u, false, &registry);
   gapRaw.cpuReadyTapePlanningEnabled = false;
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), gapRaw) == D3D_OK &&
-            fixture.routing->drawCalls == 2u &&
+            fixture.routing->drawCalls == 1u &&
             fixture.routing->ordinaryDrawCalls == 1u &&
             !dxmt9::CommandQueueArenaLeaseTestAccess::stopped(
                 fixture.routing->queue_) &&
@@ -2515,7 +2517,7 @@ void populatedContinuationCommitFailureIsTerminalWithoutRetry() {
   dxmt9::CommandQueueArenaLeaseTestAccess::forceNextDirectChunkSlotCommitFailure(
       fixture.routing->queue_);
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) != D3D_OK &&
-            fixture.routing->drawCalls == 2u &&
+            fixture.routing->drawCalls == 0u &&
             fixture.routing->ordinaryDrawCalls == 0u &&
             dxmt9::CommandQueueArenaLeaseTestAccess::stopped(
                 fixture.routing->queue_),
@@ -2742,17 +2744,22 @@ void ordinaryChunkSlotSameRawCommitFailureDoesNotRetryLegacy() {
   RuntimeFixture fixture(/*rejectAfterClear=*/false,
                          /*segmentSerial=*/false,
                          /*directChunkSlot=*/true);
-  const std::array records{clearRecord()};
-  auto raw = makeRaw(makeWireFixture(records), 79u);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr, "same-raw commit failure buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+  const std::array records{drawRecord(identity)};
+  auto raw = makeRaw(makeWireFixture(records), 79u, false, &registry);
   raw.cpuReadyTapePlanningEnabled = false;
   dxmt9::CommandQueueArenaLeaseTestAccess::
       forceNextDirectChunkSlotCommitFailure(fixture.routing->queue_);
 
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) != D3D_OK &&
-            fixture.routing->clearCalls == 1u &&
+            fixture.routing->drawCalls == 0u &&
             fixture.routing->legacyMarkCalls == 0u,
-        "same-raw ordinary Direct commit failure applies semantics once and "
-        "never retries Legacy");
+        "same-raw ordinary Direct commit failure applies one draw and never "
+        "retries Legacy");
   check(dxmt9::CommandQueueArenaLeaseTestAccess::stopped(
             fixture.routing->queue_) &&
             dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
@@ -2762,6 +2769,7 @@ void ordinaryChunkSlotSameRawCommitFailureDoesNotRetryLegacy() {
         "same-raw post-effect failure fail-stops before publication without "
         "rolling back the applied prefix");
   dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(buffer);
 }
 
 void directChunkSlotRollbackAndPostEffectFailureAreFailSafe() {
@@ -2825,6 +2833,68 @@ void directChunkSlotRollbackAndPostEffectFailureAreFailSafe() {
   check(unsupported.status ==
             dxmt9::CommandQueue::DirectChunkSlotReplayStatus::LegacyUnsupported,
         "invalid pre-effect admission retains a typed Legacy disposition");
+}
+
+void directChunkSlotCapabilityLifetimeIsTerminalSafe() {
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1u;
+  capacity.clearRecords = 1u;
+
+  dxmt9::CommandQueue commitQueue(
+      dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto commit = commitQueue.beginDirectChunkSlotReplay(
+      84u, capacity, sizeof(ClearDesc));
+  check(commit.lease.has_value(),
+        "capability lifetime commit fixture acquires a direct lease");
+  const auto* committedCapability =
+      commit.lease->borrowDirectRangeAppender();
+  check(committedCapability && static_cast<bool>(*committedCapability),
+        "borrowed capability is armed while its lease is live");
+  commitQueue.submitClear(ClearDesc{});
+  check(commit.lease->commit(std::span<const ChunkHandleEntry>{}) ==
+                dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Committed &&
+            !static_cast<bool>(*committedCapability) &&
+            committedCapability->append({}) ==
+                dxmt9::core::DirectReplayDrawDisposition::LegacyPreEffectFailure,
+        "committed capability is disarmed and cannot access stale state");
+
+  dxmt9::CommandQueue rollbackQueue(
+      dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto rollback = rollbackQueue.beginDirectChunkSlotReplay(
+      85u, capacity, sizeof(ClearDesc));
+  check(rollback.lease.has_value(),
+        "capability lifetime rollback fixture acquires a direct lease");
+  const auto* rolledBackCapability =
+      rollback.lease->borrowDirectRangeAppender();
+  check(rolledBackCapability && static_cast<bool>(*rolledBackCapability),
+        "rollback capability is armed before terminal settlement");
+  check(rollback.lease->rollbackPreEffect() &&
+            !static_cast<bool>(*rolledBackCapability) &&
+            rolledBackCapability->append({}) ==
+                dxmt9::core::DirectReplayDrawDisposition::LegacyPreEffectFailure,
+        "rolled-back capability is disarmed and cannot access stale state");
+
+  dxmt9::CommandQueue moveQueue(
+      dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto source = moveQueue.beginDirectChunkSlotReplay(
+      86u, capacity, sizeof(ClearDesc));
+  check(source.lease.has_value(),
+        "capability lifetime move fixture acquires a direct lease");
+  const auto* movedFromCapability = source.lease->borrowDirectRangeAppender();
+  check(movedFromCapability && static_cast<bool>(*movedFromCapability),
+        "move fixture capability is armed before lease transfer");
+  auto destination = std::move(*source.lease);
+  const auto* movedCapability = destination.borrowDirectRangeAppender();
+  check(!static_cast<bool>(*movedFromCapability) &&
+            movedFromCapability->append({}) ==
+                dxmt9::core::DirectReplayDrawDisposition::LegacyPreEffectFailure &&
+            movedCapability && static_cast<bool>(*movedCapability),
+        "moved-from capability is disarmed while destination is re-armed");
+  check(destination.rollbackPreEffect() &&
+            !static_cast<bool>(*movedCapability) &&
+            movedCapability->append({}) ==
+                dxmt9::core::DirectReplayDrawDisposition::LegacyPreEffectFailure,
+        "moved destination capability disarms at rollback");
 }
 
 void transactionalArenaFailureInjectionDisposition() {
@@ -3165,8 +3235,8 @@ int main() {
     sameRawLegacyAndDirectProductionOracle();
     ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion();
     ordinaryDrawApplyStateDrawUsesCarrierFreeDirectPath();
-    drawApplyStateDrawWithPresentUsesDirectPresentTail();
-    ordinarySingleSourceSegmentedAggregateUsesDirectConstruction();
+    drawApplyStateDrawWithPresentStaysCompatibilityOwned();
+    ordinaryUnsupportedClearRangeStaysCompatibilityOwned();
     ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics();
     directAdmissionRejectionPreservesLegacyDrawBatchGrouping();
     populatedSlotDrawApplyDrawUsesCarrierFreeContinuation();
@@ -3180,6 +3250,7 @@ int main() {
     ordinaryChunkSlotSameRawCommitFailureDoesNotRetryLegacy();
     ordinaryOversizedDrawSourceUsesCarrierFreeLifecycle();
     directChunkSlotRollbackAndPostEffectFailureAreFailSafe();
+    directChunkSlotCapabilityLifetimeIsTerminalSafe();
     transactionalArenaFailureInjectionDisposition();
     stateOnlyRawMutatesWithoutTicket();
     postSemanticDirectFailureDoesNotFallback();

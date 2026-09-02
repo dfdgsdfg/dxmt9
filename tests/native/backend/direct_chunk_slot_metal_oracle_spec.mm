@@ -1,7 +1,7 @@
 // Concrete production oracle for the ordinary Direct ChunkSlot route.
 //
 // Each child process creates the real dxmt9::Device after selecting one
-// DXMT9_DIRECT_CHUNK_SLOT_REPLAY value, replays the same ColorFill chunk, and
+// DXMT9_DIRECT_CHUNK_SLOT_REPLAY value, replays the same Draw chunk, and
 // reads the resulting offscreen texture back from Metal. The Direct child also
 // runs a separate forced-commit probe: the existing production test seam can
 // fire only from commitDirectChunkSlotReplay, so a fail-stop result proves the
@@ -19,6 +19,7 @@
 #include "dxmt9/dxmt9_command_queue.hpp"
 
 #include <array>
+#include <algorithm>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
@@ -76,7 +77,22 @@ namespace {
 
 constexpr std::uint32_t kWidth = 16u;
 constexpr std::uint32_t kHeight = 16u;
-constexpr std::uint32_t kColorArgb = 0xff123456u;
+constexpr std::uint32_t kTriangleFvf = 0x0044u; // D3DFVF_XYZRHW | DIFFUSE.
+// A8R8G8B8 is read back from the BGRA8Unorm Metal backing in byte order
+// B,G,R,A. The triangle covers every pixel center in the 16x16 viewport, so
+// this is a full-image oracle rather than a non-zero smoke check.
+constexpr std::array<std::uint8_t, 4> kExpectedPixelBytes{
+    0x56u, 0x34u, 0x12u, 0xffu};
+
+struct TriangleVertex {
+  float x;
+  float y;
+  float z;
+  float rhw;
+  std::uint32_t color;
+};
+
+static_assert(sizeof(TriangleVertex) == 20u);
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -97,32 +113,110 @@ struct WireFixture {
   dxmt9::d3d9::CommandChunkEnvelope envelope{};
 };
 
-void retainSurface(std::uint32_t kind, void* object) noexcept {
-  if (kind == D9C_CHUNK_HANDLE_KIND_SURFACE && object) {
+void retainOracleObject(std::uint32_t kind, void* object) noexcept {
+  if (kind == D9C_CHUNK_HANDLE_KIND_BUFFER && object) {
+    dxmt9c_buffer_addref(static_cast<D9CBuffer*>(object));
+  } else if (kind == D9C_CHUNK_HANDLE_KIND_SURFACE && object) {
     dxmt9c_surface_addref(static_cast<D9CSurface*>(object));
   }
 }
 
-WireFixture makeColorFillChunk(const D9CWireObjectIdentity& identity) {
-  const D9CCommandChunkWireColorFill fixed{
-      .surfaceHandleIndex = 0u,
-      .colorARGB = kColorArgb,
-      .hasRect = 0u,
-      .reserved0 = 0u,
-      .rect = {.left = 0, .top = 0,
-               .right = static_cast<std::int32_t>(kWidth),
-               .bottom = static_cast<std::int32_t>(kHeight)},
+WireFixture makeTriangleDrawChunk(
+    const D9CWireObjectIdentity& bufferIdentity,
+    const D9CWireObjectIdentity& surfaceIdentity) {
+  D9CCommandChunkWireDrawHeader draw{
+      .primitiveType = 4u, // D3DPT_TRIANGLELIST.
+      .primitiveCount = 1u,
+      .sectionCount = 4u,
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
   };
+  const auto tableEnd = sizeof(draw) +
+                        4u * sizeof(D9CCommandChunkWireSectionDesc);
+  const auto streamOffset = alignUp(
+      tableEnd, alignof(D9CCommandChunkWireStreamBinding));
+  const auto inputOffset = alignUp(
+      streamOffset + sizeof(D9CCommandChunkWireStreamBinding),
+      alignof(D9CCommandChunkWireVertexInput));
+  const auto targetOffset = alignUp(
+      inputOffset + sizeof(D9CCommandChunkWireVertexInput),
+      alignof(D9CCommandChunkWireRenderTargetBinding));
+  const auto viewportOffset = alignUp(
+      targetOffset + sizeof(D9CCommandChunkWireRenderTargetBinding),
+      alignof(D9CViewport));
+  draw.sectionPayloadOffset = static_cast<std::uint32_t>(streamOffset);
+  const std::array sections{
+      D9CCommandChunkWireSectionDesc{
+          .kind = D9C_COMMAND_CHUNK_SECTION_STREAM,
+          .elementSize = sizeof(D9CCommandChunkWireStreamBinding),
+          .count = 1u,
+          .payloadOffset = static_cast<std::uint32_t>(streamOffset),
+          .byteSize = sizeof(D9CCommandChunkWireStreamBinding),
+      },
+      D9CCommandChunkWireSectionDesc{
+          .kind = D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT,
+          .elementSize = sizeof(D9CCommandChunkWireVertexInput),
+          .count = 1u,
+          .payloadOffset = static_cast<std::uint32_t>(inputOffset),
+          .byteSize = sizeof(D9CCommandChunkWireVertexInput),
+      },
+      D9CCommandChunkWireSectionDesc{
+          .kind = D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET,
+          .elementSize = sizeof(D9CCommandChunkWireRenderTargetBinding),
+          .count = 1u,
+          .payloadOffset = static_cast<std::uint32_t>(targetOffset),
+          .byteSize = sizeof(D9CCommandChunkWireRenderTargetBinding),
+      },
+      D9CCommandChunkWireSectionDesc{
+          .kind = D9C_COMMAND_CHUNK_SECTION_VIEWPORT,
+          .elementSize = sizeof(D9CViewport),
+          .count = 1u,
+          .payloadOffset = static_cast<std::uint32_t>(viewportOffset),
+          .byteSize = sizeof(D9CViewport),
+      },
+  };
+  const D9CCommandChunkWireVertexInput input{
+      .valid = 1u,
+      .kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF,
+      .value = kTriangleFvf,
+      .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+  };
+  const D9CCommandChunkWireStreamBinding stream{
+      .slot = 0u,
+      .valid = 1u,
+      .handleIndex = 0u,
+      .offset = 0u,
+      .stride = sizeof(TriangleVertex),
+      .frequency = 1u,
+  };
+  const D9CCommandChunkWireRenderTargetBinding target{
+      .slot = 0u,
+      .valid = 1u,
+      .handleIndex = 1u,
+  };
+  const D9CViewport viewport{
+      .x = 0u, .y = 0u, .width = kWidth, .height = kHeight,
+      .minZ = 0.0f, .maxZ = 1.0f};
+  std::vector<std::byte> payload(viewportOffset + sizeof(viewport));
+  std::memcpy(payload.data(), &draw, sizeof(draw));
+  std::memcpy(payload.data() + draw.sectionTableOffset, sections.data(),
+              sizeof(sections));
+  std::memcpy(payload.data() + streamOffset, &stream,
+              sizeof(stream));
+  std::memcpy(payload.data() + inputOffset, &input, sizeof(input));
+  std::memcpy(payload.data() + targetOffset, &target, sizeof(target));
+  std::memcpy(payload.data() + viewportOffset, &viewport, sizeof(viewport));
   const D9CCommandChunkWireRecordHeader record{
-      .type = D9C_COMMAND_RECORD_COLOR_FILL,
+      .type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
       .flags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
       .payloadOffset = 0u,
-      .payloadSize = sizeof(fixed),
+      .payloadSize = static_cast<std::uint32_t>(payload.size()),
       .firstHandle = 0u,
-      .handleCount = 1u,
+      .handleCount = 2u,
   };
-  const D9CCommandChunkWireHandleEntry handle =
-      dxmt9::d3d9::wireHandleEntry(identity);
+  const std::array handles{
+      dxmt9::d3d9::wireHandleEntry(bufferIdentity),
+      dxmt9::d3d9::wireHandleEntry(surfaceIdentity),
+  };
   D9CCommandChunkWireHeader header{
       .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
       .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
@@ -130,41 +224,46 @@ WireFixture makeColorFillChunk(const D9CWireObjectIdentity& identity) {
       .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
       .recordTableOffset = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
       .recordCount = 1u,
-      .handleCount = 1u,
-      .payloadArenaSize = sizeof(fixed),
+      .handleCount = static_cast<std::uint32_t>(handles.size()),
+      .payloadArenaSize = static_cast<std::uint32_t>(payload.size()),
   };
   header.handleTableOffset = static_cast<std::uint32_t>(alignUp(
       header.recordTableOffset + sizeof(record),
       alignof(D9CCommandChunkWireHandleEntry)));
   header.payloadArenaOffset = static_cast<std::uint32_t>(alignUp(
-      header.handleTableOffset + sizeof(handle), alignof(std::uint32_t)));
+      header.handleTableOffset + handles.size() * sizeof(handles[0]),
+      alignof(std::uint32_t)));
 
   WireFixture result;
-  result.bytes.resize(header.payloadArenaOffset + sizeof(fixed));
+  result.bytes.resize(header.payloadArenaOffset + payload.size());
   std::memcpy(result.bytes.data(), &header, sizeof(header));
   std::memcpy(result.bytes.data() + header.recordTableOffset, &record,
               sizeof(record));
-  std::memcpy(result.bytes.data() + header.handleTableOffset, &handle,
-              sizeof(handle));
-  std::memcpy(result.bytes.data() + header.payloadArenaOffset, &fixed,
-              sizeof(fixed));
+  std::memcpy(result.bytes.data() + header.handleTableOffset, handles.data(),
+              sizeof(handles));
+  std::memcpy(result.bytes.data() + header.payloadArenaOffset, payload.data(),
+              payload.size());
   result.envelope = {
       .version = D9C_COMMAND_CHUNK_VERSION,
       .recordCount = 1u,
-      .handleCount = 1u,
+      .handleCount = static_cast<std::uint32_t>(handles.size()),
   };
   return result;
 }
 
 dxmt9::d3d9::RawCommandChunk makeRaw(const WireFixture& fixture,
                                      dxmt9::d3d9::WireObjectRegistry& registry,
-                                     D9CSurface& surface) {
+                                     D9CBuffer& buffer, D9CSurface& surface) {
   dxmt9::d3d9::RawCommandChunk raw;
   check(dxmt9::d3d9::prepareOffloadChunk(
-            fixture.bytes, fixture.envelope, registry, retainSurface, raw),
-        "production ColorFill raw chunk passes owned preflight");
+            fixture.bytes, fixture.envelope, registry, retainOracleObject, raw),
+        "production Draw raw chunk passes owned preflight");
   raw.replaySeq = 1u;
   raw.cpuReadyTapePlanningEnabled = false;
+  raw.resourceEntries.push_back({
+      .kind = dxmt9::core::ChunkHandleKind::Buffer,
+      .handle = buffer.obj->handle(),
+  });
   raw.resourceEntries.push_back({
       .kind = dxmt9::core::ChunkHandleKind::Surface,
       .handle = surface.obj->handle(),
@@ -196,9 +295,47 @@ struct ProductionFixture {
         cDevice.get(), kWidth, kHeight, 21u, 0u, 0u, 0u, nullptr);
     check(surface != nullptr && surface->obj,
           "production offscreen render target constructs");
+    buffer = dxmt9c_device_create_vertex_buffer(
+        cDevice.get(), 3u * sizeof(TriangleVertex), 0u, kTriangleFvf, 0u);
+    check(buffer != nullptr && buffer->obj,
+          "production triangle vertex buffer constructs");
+    void* vertexBytes = nullptr;
+    check(dxmt9c_buffer_lock(buffer, 0u, 3u * sizeof(TriangleVertex),
+                             &vertexBytes, 0u) == dxmt9::core::D3D_OK &&
+              vertexBytes != nullptr,
+          "production triangle vertex buffer lock succeeds");
+    constexpr std::array vertices{
+        // This right triangle covers every 16x16 pixel center. Keeping the
+        // diffuse value constant makes the readback an exact fixture oracle,
+        // rather than comparing interpolation at a partially covered edge.
+        TriangleVertex{0.0f, 0.0f, 0.5f, 1.0f, 0xff123456u},
+        TriangleVertex{32.0f, 0.0f, 0.5f, 1.0f, 0xff123456u},
+        TriangleVertex{0.0f, 32.0f, 0.5f, 1.0f, 0xff123456u},
+    };
+    std::memcpy(vertexBytes, vertices.data(), sizeof(vertices));
+    check(dxmt9c_buffer_unlock(buffer) == dxmt9::core::D3D_OK,
+          "production triangle vertex buffer unlock succeeds");
+    const D9CViewport viewport{
+        .x = 0u, .y = 0u, .width = kWidth, .height = kHeight,
+        .minZ = 0.0f, .maxZ = 1.0f};
+    check(dxmt9c_device_set_viewport(cDevice.get(), &viewport) ==
+              dxmt9::core::D3D_OK &&
+              dxmt9c_device_set_fvf(cDevice.get(), kTriangleFvf) ==
+              dxmt9::core::D3D_OK &&
+              dxmt9c_device_set_render_target(cDevice.get(), 0u, surface) ==
+              dxmt9::core::D3D_OK,
+          "production triangle state binds viewport, FVF, and target");
+    check(dxmt9c_device_clear(cDevice.get(), 0u, nullptr, 1u, 0u, 1.0f,
+                              0u) == dxmt9::core::D3D_OK,
+          "production triangle target clears to a deterministic black seed");
+    upperRaw->flush();
   }
 
   ~ProductionFixture() {
+    if (buffer) {
+      dxmt9c_buffer_release(buffer);
+      buffer = nullptr;
+    }
     if (surface) {
       dxmt9c_surface_release(surface);
       surface = nullptr;
@@ -216,6 +353,7 @@ struct ProductionFixture {
   dxmt9::com::IDirect3D9Ex* factory = nullptr;
   dxmt9::com::IDirect3DDevice9Ex* device = nullptr;
   std::unique_ptr<D9CDevice> cDevice;
+  D9CBuffer* buffer = nullptr;
   D9CSurface* surface = nullptr;
 };
 
@@ -230,10 +368,12 @@ void directCommitProbe(WMT::Device metalDevice) {
   check(fixture.upperRaw->supportsDirectChunkSlotReplay(),
         "env=1 production device advertises Direct ChunkSlot replay");
   dxmt9::d3d9::WireObjectRegistry registry;
-  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                        fixture.surface);
-  const auto wire = makeColorFillChunk(identity);
-  auto raw = makeRaw(wire, registry, *fixture.surface);
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER,
+                                        fixture.buffer);
+  const auto surfaceIdentity = registry.insert(
+      D9C_CHUNK_HANDLE_KIND_SURFACE, fixture.surface);
+  const auto wire = makeTriangleDrawChunk(identity, surfaceIdentity);
+  auto raw = makeRaw(wire, registry, *fixture.buffer, *fixture.surface);
   dxmt9::CommandQueueArenaLeaseTestAccess::forceNextDirectChunkSlotCommitFailure(
       fixture.upperRaw->queue());
   const auto hr = dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw);
@@ -254,6 +394,27 @@ struct ChildResult {
   std::uint64_t completedSeq = 0;
   std::vector<std::byte> pixels;
 };
+
+std::uint64_t pixelDigest(std::span<const std::byte> pixels) noexcept {
+  // FNV-1a is deliberately tiny and stable across child processes; this is
+  // diagnostics only, while the oracle below still requires exact bytes.
+  std::uint64_t digest = 1469598103934665603ull;
+  for (const auto byte : pixels) {
+    digest ^= static_cast<std::uint8_t>(byte);
+    digest *= 1099511628211ull;
+  }
+  return digest;
+}
+
+void printPixelQuad(std::ostream& out, std::span<const std::byte> pixels,
+                    std::size_t offset) {
+  out << '[';
+  for (std::size_t i = 0u; i < 4u; ++i) {
+    if (i != 0u) out << ',';
+    out << static_cast<unsigned>(static_cast<std::uint8_t>(pixels[offset + i]));
+  }
+  out << ']';
+}
 
 ChildResult runChild(bool expectedDirect) {
   setenv("DXMT9_DIRECT_CHUNK_SLOT_REPLAY", expectedDirect ? "1" : "0", 1);
@@ -276,19 +437,21 @@ ChildResult runChild(bool expectedDirect) {
     check(fixture.upperRaw->supportsDirectChunkSlotReplay() == expectedDirect,
           "real production device capability matches selected env mode");
     dxmt9::d3d9::WireObjectRegistry registry;
-    const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_SURFACE,
-                                          fixture.surface);
-    const auto wire = makeColorFillChunk(identity);
-    auto raw = makeRaw(wire, registry, *fixture.surface);
+    const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER,
+                                          fixture.buffer);
+    const auto surfaceIdentity = registry.insert(
+        D9C_CHUNK_HANDLE_KIND_SURFACE, fixture.surface);
+    const auto wire = makeTriangleDrawChunk(identity, surfaceIdentity);
+    auto raw = makeRaw(wire, registry, *fixture.buffer, *fixture.surface);
     check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) ==
               dxmt9::core::D3D_OK,
-          "unforced production ColorFill replay succeeds");
+          "unforced production Draw replay succeeds");
     const auto& queue = fixture.upperRaw->queue();
     const auto commandCount =
         dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
             const_cast<dxmt9::CommandQueue&>(queue));
     check(commandCount == 1u,
-          "same ColorFill semantic input creates one production command");
+          "same Draw semantic input creates one production command");
     fixture.upperRaw->flush();
 
     dxmt9::core::ReadbackPixels readback;
@@ -325,25 +488,15 @@ ChildResult runChild(bool expectedDirect) {
                       static_cast<std::size_t>(row) * readback.pitch,
                   kWidth * 4u);
     }
-    for (std::size_t pixel = 0u; pixel < result.pixels.size(); pixel += 4u) {
-      if (static_cast<std::uint8_t>(result.pixels[pixel + 0u]) != 0x56u ||
-          static_cast<std::uint8_t>(result.pixels[pixel + 1u]) != 0x34u ||
-          static_cast<std::uint8_t>(result.pixels[pixel + 2u]) != 0x12u ||
-          static_cast<std::uint8_t>(result.pixels[pixel + 3u]) != 0xffu) {
-        std::cerr << "pixel " << pixel / 4u << " = "
-                  << static_cast<unsigned>(static_cast<std::uint8_t>(
-                         result.pixels[pixel + 0u]))
-                  << ','
-                  << static_cast<unsigned>(static_cast<std::uint8_t>(
-                         result.pixels[pixel + 1u]))
-                  << ','
-                  << static_cast<unsigned>(static_cast<std::uint8_t>(
-                         result.pixels[pixel + 2u]))
-                  << ','
-                  << static_cast<unsigned>(static_cast<std::uint8_t>(
-                         result.pixels[pixel + 3u]))
-                  << '\n';
-        throw TestFailure("Metal readback pixels match the ColorFill semantic input");
+    check(result.pixels.size() == expectedBytes,
+          "Metal readback contains exactly one 16x16 RGBA image");
+    for (std::size_t pixel = 0u; pixel < kWidth * kHeight; ++pixel) {
+      const auto offset = pixel * kExpectedPixelBytes.size();
+      for (std::size_t component = 0u;
+           component < kExpectedPixelBytes.size(); ++component) {
+        check(static_cast<std::uint8_t>(result.pixels[offset + component]) ==
+                  kExpectedPixelBytes[component],
+              "Metal readback every pixel matches the expected BGRA color");
       }
     }
     dxmt9::d3d9::releaseRetainedWrappers(raw);
@@ -449,12 +602,39 @@ int main(int argc, char** argv) {
           "env=0 child remains on the Legacy route");
     check(direct.direct && direct.directCommitProved,
           "env=1 child proves the ordinary Direct route before readback");
+    // Resource handles are process-local opaque ordinals: each lane runs in a
+    // fresh child, so compare their normalized presence and queue sequence,
+    // not the raw handle value. The source wire identity is otherwise exactly
+    // the same one-buffer Draw fixture in both children.
     check(legacy.commandCount == direct.commandCount &&
-              legacy.resourceHandle == direct.resourceHandle &&
+              legacy.resourceHandle != 0u && direct.resourceHandle != 0u &&
               legacy.resourceSeq == direct.resourceSeq &&
               legacy.committedSeq == direct.committedSeq &&
               legacy.completedSeq == direct.completedSeq,
-          "Direct/Legacy preserve command, resource, and completion identity");
+          "Direct/Legacy preserve command, normalized resource, and completion identity");
+    if (legacy.pixels != direct.pixels) {
+      std::size_t firstDifference = 0u;
+      while (firstDifference < legacy.pixels.size() &&
+             firstDifference < direct.pixels.size() &&
+             legacy.pixels[firstDifference] == direct.pixels[firstDifference]) {
+        ++firstDifference;
+      }
+      std::cerr << "Draw oracle first pixel difference="
+                << firstDifference / 4u << " byte=" << firstDifference % 4u
+                << " legacy=";
+      if (firstDifference + 4u <= legacy.pixels.size()) {
+        printPixelQuad(std::cerr, legacy.pixels,
+                       firstDifference & ~std::size_t{3u});
+      }
+      std::cerr << " direct=";
+      if (firstDifference + 4u <= direct.pixels.size()) {
+        printPixelQuad(std::cerr, direct.pixels,
+                       firstDifference & ~std::size_t{3u});
+      }
+      std::cerr << " legacyDigest=0x" << std::hex
+                << pixelDigest(legacy.pixels) << " directDigest=0x"
+                << pixelDigest(direct.pixels) << std::dec << '\n';
+    }
     check(legacy.pixels == direct.pixels,
           "Direct/Legacy exact offscreen Metal readback pixels match");
     return 0;

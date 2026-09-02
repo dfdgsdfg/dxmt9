@@ -1498,8 +1498,7 @@ dxmt9::d3d9::pe::PeChunkContext D3D9DeviceImpl::currentChunkContext() const {
         const auto* semanticOwner = semanticBatchOwner();
         const bool retained = semanticOwner &&
             semanticOwner->referencesBuffer(
-                static_cast<const D9CBuffer*>(
-                    recorderState_.peBindingView.streams[slot].buffer.object));
+                recorderState_.peBindingView.streams[slot].buffer);
         if (retained) {
             chunk.retainedStreamMask |= 1u << slot;
         }
@@ -1508,8 +1507,7 @@ dxmt9::d3d9::pe::PeChunkContext D3D9DeviceImpl::currentChunkContext() const {
     chunk.submittedIndexBufferWire = submittedIndexBufferWireValue_;
     chunk.indexBufferRetained = semanticBatchOwner() &&
         semanticBatchOwner()->referencesBuffer(
-            static_cast<const D9CBuffer*>(
-                recorderState_.peBindingView.indexBuffer.object));
+            recorderState_.peBindingView.indexBuffer);
     return chunk;
 }
 
@@ -1845,8 +1843,7 @@ bool D3D9DeviceImpl::pendingChunkReferencesBuffer(
         return false;
     }
     const auto* const owner = semanticBatchOwner();
-    return owner && owner->referencesBuffer(
-        static_cast<const D9CBuffer*>(buffer.object));
+    return owner && owner->referencesBuffer(buffer);
 }
 
 HRESULT D3D9DeviceImpl::appendDrawPrimitiveUPRecord(D3DPRIMITIVETYPE type,
@@ -2173,7 +2170,10 @@ HRESULT D3D9DeviceImpl::FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer
     assertRecorderThreadConfined();
     PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
     const auto* const owner = semanticBatchOwner();
-    const bool referenced = owner && owner->referencesBuffer(buffer);
+    dxmt9::d3d9::pe::BufferRef bufferRef{};
+    bufferRef.identity = buffer->wireIdentity;
+    bufferRef.object = buffer;
+    const bool referenced = owner && owner->referencesBuffer(bufferRef);
     if (!referenced) {
         return S_OK;
     }

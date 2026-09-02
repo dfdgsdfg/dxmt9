@@ -10,6 +10,24 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## End-to-end immutable source composition
 
+### PE final-wire closure slice (2026-09-02)
+
+The PE recorder now carries an explicit ticket-scoped immutable
+`PendingDeltaView` and reuses one pure `PeSemanticAdmissionPlan` for qualified
+identity deduplication, payload layout, capacity, and owner emission-frontier
+accounting. `PeSemanticBatchOwner` remains the sole production ExactFixed /
+segmented final-wire owner for all 21 producer families; the old builder path
+remains a differential oracle. A `CapacityPre` flush still requires a fresh
+context projection because destination-chunk retention changes at that
+boundary; this is intentional and preserves the state transition contract.
+Production admission now uses one owner-local transactional operation: it
+computes pure facts and six batch-global retention deltas internally, then
+copies and settles immediately; wire handle counts remain record-local
+because `EmissionHandleContext` resets per record.
+Semantic-owner arena copies and final-wire bytes remain distinct required
+lifetimes, cold observer re-emission remains instrumentation, and fresh
+copy-ledger reconciliation plus Wine/GPU/pixel/locality evidence remain open.
+
 The production identity spine now composes PE semantic acceptance through
 terminal reclaim. PE ExactFixed and segmented descriptors carry a closed
 producer event/source interval; Unix import rejects partial intervals, Raw and

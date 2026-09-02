@@ -1336,8 +1336,105 @@ bool TransactionalChunkSlotAssembler::prepare() noexcept {
       ? directSlot_->drawStateStorageConsistent() &&
             directSlot_->commandPayloadsInRange()
       : builder_ && builder_->publish();
+  bool rangeCountsReady = true;
+  if (directSlot_ && directRangeBuild_) {
+    const auto& slot = *directSlot_;
+    const auto delta = [](std::size_t current, std::size_t checkpoint) {
+      return current >= checkpoint ? current - checkpoint
+                                   : std::numeric_limits<std::size_t>::max();
+    };
+    const auto within = [&](std::size_t current, std::size_t checkpoint,
+                            std::size_t allowance) {
+      const auto count = delta(current, checkpoint);
+      return count != std::numeric_limits<std::size_t>::max() &&
+             count <= allowance;
+    };
+    const auto commandCount =
+        delta(slot.commandHeaders.size(), directCheckpoint_.commandHeaders);
+    // The exact range plan reserves every final SoA vector once at admission.
+    // Per-draw appends therefore do not make capacity/publication decisions;
+    // this single prepare-time invariant catches a missing/duplicated draw or
+    // a deduplicated uniform dimension escaping its planned upper bound.
+    rangeCountsReady =
+        outerBinding_.has_value() &&
+        outerBinding_->rangeRecordCount == directRangeRecordCount_ &&
+        outerBinding_->rangeDrawCount == directExpectedDrawCount_ &&
+        directRangeRecordCount_ != 0 && directExpectedDrawCount_ != 0 &&
+        directExpectedDrawCount_ <= directRangeRecordCount_ &&
+        delta(slot.drawParams.size(), directCheckpoint_.drawParams) ==
+            directExpectedDrawCount_ &&
+        commandCount != std::numeric_limits<std::size_t>::max() &&
+        commandCount == commandCount_ &&
+        delta(slot.drawRunRecords.size(), directCheckpoint_.drawRunRecords) ==
+            commandCount &&
+        delta(slot.drawPsoSubviews.size(), directCheckpoint_.drawPsoSubviews) ==
+            commandCount &&
+        within(slot.commandHeaders.size(), directCheckpoint_.commandHeaders,
+               directCapacity_.commandHeaders) &&
+        within(slot.drawHotStates.size(), directCheckpoint_.drawHotStates,
+               directCapacity_.drawHotStates) &&
+        within(slot.drawShaderLayouts.size(),
+               directCheckpoint_.drawShaderLayouts,
+               directCapacity_.drawShaderLayouts) &&
+        within(slot.drawDebugSnapshots.size(),
+               directCheckpoint_.drawDebugSnapshots,
+               directCapacity_.drawDebugSnapshots) &&
+        within(slot.drawPsoSubviews.size(), directCheckpoint_.drawPsoSubviews,
+               directCapacity_.drawPsoSubviews) &&
+        within(slot.drawRunRecords.size(), directCheckpoint_.drawRunRecords,
+               directCapacity_.drawRunRecords) &&
+        within(slot.drawUniformFixedPayloads.size(),
+               directCheckpoint_.drawUniformFixedPayloads,
+               directCapacity_.drawUniformFixedPayloads) &&
+        within(slot.drawUniformVertexConstants.size(),
+               directCheckpoint_.drawUniformVertexConstants,
+               directCapacity_.drawUniformVertexConstants) &&
+        within(slot.drawUniformVertexConstantBytes.size(),
+               directCheckpoint_.drawUniformVertexConstantBytes,
+               directCapacity_.drawUniformVertexConstantBytes) &&
+        within(slot.drawUniformPixelConstants.size(),
+               directCheckpoint_.drawUniformPixelConstants,
+               directCapacity_.drawUniformPixelConstants) &&
+        within(slot.drawUniformPixelConstantBytes.size(),
+               directCheckpoint_.drawUniformPixelConstantBytes,
+               directCapacity_.drawUniformPixelConstantBytes) &&
+        within(slot.drawUniformPayloads.size(),
+               directCheckpoint_.drawUniformPayloads,
+               directCapacity_.drawUniformPayloads) &&
+        within(slot.drawUniformPayloadLookupHeads.size(),
+               directCheckpoint_.drawUniformPayloadLookupHeads,
+               directCapacity_.drawUniformPayloadLookupHeads) &&
+        within(slot.drawUniformPayloadLookupTails.size(),
+               directCheckpoint_.drawUniformPayloadLookupTails,
+               directCapacity_.drawUniformPayloadLookupTails) &&
+        within(slot.drawUniformPayloadLookupNext.size(),
+               directCheckpoint_.drawUniformPayloadLookupNext,
+               directCapacity_.drawUniformPayloadLookupNext) &&
+        within(slot.drawUniformVertexConstantsLookupHeads.size(),
+               directCheckpoint_.drawUniformVertexConstantsLookupHeads,
+               directCapacity_.drawUniformVertexConstantsLookupHeads) &&
+        within(slot.drawUniformVertexConstantsLookupTails.size(),
+               directCheckpoint_.drawUniformVertexConstantsLookupTails,
+               directCapacity_.drawUniformVertexConstantsLookupTails) &&
+        within(slot.drawUniformVertexConstantsLookupNext.size(),
+               directCheckpoint_.drawUniformVertexConstantsLookupNext,
+               directCapacity_.drawUniformVertexConstantsLookupNext) &&
+        within(slot.drawUniformPixelConstantsLookupHeads.size(),
+               directCheckpoint_.drawUniformPixelConstantsLookupHeads,
+               directCapacity_.drawUniformPixelConstantsLookupHeads) &&
+        within(slot.drawUniformPixelConstantsLookupTails.size(),
+               directCheckpoint_.drawUniformPixelConstantsLookupTails,
+               directCapacity_.drawUniformPixelConstantsLookupTails) &&
+        within(slot.drawUniformPixelConstantsLookupNext.size(),
+               directCheckpoint_.drawUniformPixelConstantsLookupNext,
+               directCapacity_.drawUniformPixelConstantsLookupNext) &&
+        within(slot.drawParams.size(), directCheckpoint_.drawParams,
+               directCapacity_.drawParams) &&
+        within(slot.drawPayloadArena.size(), directCheckpoint_.drawPayloadBytes,
+               directCapacity_.drawPayloadBytes);
+  }
   if ((state_ != State::Reserved && state_ != State::Building) ||
-      !destinationReady) {
+      !destinationReady || !rangeCountsReady) {
     state_ = State::Failed;
     return false;
   }
@@ -1621,46 +1718,47 @@ bool TransactionalChunkSlotAssembler::tryAppendDirectDraw(
         }
         payloadBytes += bytes.size();
       }
-      if (!fits(slot.commandHeaders.size(), directCheckpoint_.commandHeaders,
-                extendRun ? 0u : 1u, directCapacity_.commandHeaders) ||
-          !fits(slot.drawHotStates.size(), directCheckpoint_.drawHotStates,
-                extendRun ? 0u : 1u, directCapacity_.drawHotStates) ||
-          !fits(slot.drawShaderLayouts.size(),
-                directCheckpoint_.drawShaderLayouts, extendRun ? 0u : 1u,
-                directCapacity_.drawShaderLayouts) ||
-          !fits(slot.drawDebugSnapshots.size(),
-                directCheckpoint_.drawDebugSnapshots, extendRun ? 0u : 1u,
-                directCapacity_.drawDebugSnapshots) ||
-          !fits(slot.drawPsoSubviews.size(),
-                directCheckpoint_.drawPsoSubviews, extendRun ? 0u : 1u,
-                directCapacity_.drawPsoSubviews) ||
-          !fits(slot.drawUniformFixedPayloads.size(),
-                directCheckpoint_.drawUniformFixedPayloads, 1u,
-                directCapacity_.drawUniformFixedPayloads) ||
-          !fits(slot.drawUniformVertexConstants.size(),
-                directCheckpoint_.drawUniformVertexConstants, 1u,
-                directCapacity_.drawUniformVertexConstants) ||
-          !fits(slot.drawUniformVertexConstantBytes.size(),
-                directCheckpoint_.drawUniformVertexConstantBytes,
-                sizeof(VertexShaderConstants),
-                directCapacity_.drawUniformVertexConstantBytes) ||
-          !fits(slot.drawUniformPixelConstants.size(),
-                directCheckpoint_.drawUniformPixelConstants, 1u,
-                directCapacity_.drawUniformPixelConstants) ||
-          !fits(slot.drawUniformPixelConstantBytes.size(),
-                directCheckpoint_.drawUniformPixelConstantBytes,
-                sizeof(PixelShaderConstants),
-                directCapacity_.drawUniformPixelConstantBytes) ||
-          !fits(slot.drawUniformPayloads.size(),
-                directCheckpoint_.drawUniformPayloads, 1u,
-                directCapacity_.drawUniformPayloads) ||
-          !fits(slot.drawParams.size(), directCheckpoint_.drawParams, 1u,
-                directCapacity_.drawParams) ||
-          !fits(slot.drawPayloadArena.size(),
-                directCheckpoint_.drawPayloadBytes, payloadBytes,
-                directCapacity_.drawPayloadBytes) ||
-          !fits(slot.drawRunRecords.size(), directCheckpoint_.drawRunRecords,
-                extendRun ? 0u : 1u, directCapacity_.drawRunRecords)) {
+      if (!directRangeBuild_ &&
+          (!fits(slot.commandHeaders.size(), directCheckpoint_.commandHeaders,
+                 extendRun ? 0u : 1u, directCapacity_.commandHeaders) ||
+           !fits(slot.drawHotStates.size(), directCheckpoint_.drawHotStates,
+                 extendRun ? 0u : 1u, directCapacity_.drawHotStates) ||
+           !fits(slot.drawShaderLayouts.size(),
+                 directCheckpoint_.drawShaderLayouts, extendRun ? 0u : 1u,
+                 directCapacity_.drawShaderLayouts) ||
+           !fits(slot.drawDebugSnapshots.size(),
+                 directCheckpoint_.drawDebugSnapshots, extendRun ? 0u : 1u,
+                 directCapacity_.drawDebugSnapshots) ||
+           !fits(slot.drawPsoSubviews.size(),
+                 directCheckpoint_.drawPsoSubviews, extendRun ? 0u : 1u,
+                 directCapacity_.drawPsoSubviews) ||
+           !fits(slot.drawUniformFixedPayloads.size(),
+                 directCheckpoint_.drawUniformFixedPayloads, 1u,
+                 directCapacity_.drawUniformFixedPayloads) ||
+           !fits(slot.drawUniformVertexConstants.size(),
+                 directCheckpoint_.drawUniformVertexConstants, 1u,
+                 directCapacity_.drawUniformVertexConstants) ||
+           !fits(slot.drawUniformVertexConstantBytes.size(),
+                 directCheckpoint_.drawUniformVertexConstantBytes,
+                 sizeof(VertexShaderConstants),
+                 directCapacity_.drawUniformVertexConstantBytes) ||
+           !fits(slot.drawUniformPixelConstants.size(),
+                 directCheckpoint_.drawUniformPixelConstants, 1u,
+                 directCapacity_.drawUniformPixelConstants) ||
+           !fits(slot.drawUniformPixelConstantBytes.size(),
+                 directCheckpoint_.drawUniformPixelConstantBytes,
+                 sizeof(PixelShaderConstants),
+                 directCapacity_.drawUniformPixelConstantBytes) ||
+           !fits(slot.drawUniformPayloads.size(),
+                 directCheckpoint_.drawUniformPayloads, 1u,
+                 directCapacity_.drawUniformPayloads) ||
+           !fits(slot.drawParams.size(), directCheckpoint_.drawParams, 1u,
+                 directCapacity_.drawParams) ||
+           !fits(slot.drawPayloadArena.size(),
+                 directCheckpoint_.drawPayloadBytes, payloadBytes,
+                 directCapacity_.drawPayloadBytes) ||
+           !fits(slot.drawRunRecords.size(), directCheckpoint_.drawRunRecords,
+                 extendRun ? 0u : 1u, directCapacity_.drawRunRecords))) {
         return fail();
       }
       const auto finalBaseBytes = sizeof(DrawParam) +
@@ -1699,8 +1797,8 @@ bool TransactionalChunkSlotAssembler::tryAppendDirectDraw(
         slot.drawDebugSnapshots.push_back(input.debug);
       }
 
-      const auto uniformHandle =
-          slot.appendDrawUniformPayload(*input.uniforms);
+      const auto uniformHandle = slot.appendDrawUniformPayload(
+          *input.uniforms, {}, directRangeBuild_);
       if (!uniformHandle.valid() ||
           slot.drawParams.size() > std::numeric_limits<std::uint32_t>::max()) {
         return fail();

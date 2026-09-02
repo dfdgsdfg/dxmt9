@@ -2350,6 +2350,8 @@ constexpr CounterEntry kCounterTable[] = {
     {"direct_chunkslot_continuation_identity_rejected", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotContinuationIdentityRejected, nullptr, nullptr, 0.0},
     {"direct_chunkslot_continuation_committed", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotContinuationCommitted, nullptr, nullptr, 0.0},
     {"direct_chunkslot_continuation_populated_fallback", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotContinuationPopulatedFallback, nullptr, nullptr, 0.0},
+    {"direct_chunkslot_replay_cheap_rejected", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotReplayCheapRejected, nullptr, nullptr, 0.0},
+    {"direct_chunkslot_replay_post_materialization_fallback", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotReplayPostMaterializationFallback, nullptr, nullptr, 0.0},
 };
 
 }  // namespace

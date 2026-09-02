@@ -121,6 +121,359 @@ struct PeSemanticRecordInput {
   std::span<const D9CRect> clearRects{};
 };
 
+// Pure admission facts for one immutable record input.  This is deliberately
+// independent of owner counters: the owner uses it as a local layout/count
+// oracle before applying its owner-qualified retention delta.
+// Identity counts are qualified by kind/generation/objectId and deduplicated
+// within the record, matching the final-wire handle table semantics.
+struct PeSemanticAdmissionPlan {
+  bool valid = false;
+  std::uint32_t recordType = 0u;
+  std::uint32_t handleCount = 0u;
+  std::uint32_t payloadBytes = 0u;
+  std::uint32_t rectCount = 0u;
+  std::uint32_t semanticBytes = 0u;
+  std::array<std::uint32_t, 17u> sparseCounts{};
+  std::array<std::uint32_t, 6u> uniquePinCounts{};
+};
+
+static_assert(std::is_trivially_copyable_v<PeSemanticAdmissionPlan>);
+
+namespace detail {
+
+inline bool checkedSizeToU32(std::size_t value, std::uint32_t& out) noexcept {
+  if (value > std::numeric_limits<std::uint32_t>::max()) return false;
+  out = static_cast<std::uint32_t>(value);
+  return true;
+}
+
+inline bool checkedSizeAdd(std::size_t lhs, std::size_t rhs,
+                           std::size_t& out) noexcept {
+  if (rhs > std::numeric_limits<std::size_t>::max() - lhs) return false;
+  out = lhs + rhs;
+  return true;
+}
+
+inline bool checkedSizeMultiply(std::size_t lhs, std::size_t rhs,
+                                std::size_t& out) noexcept {
+  if (lhs != 0u && rhs > std::numeric_limits<std::size_t>::max() / lhs)
+    return false;
+  out = lhs * rhs;
+  return true;
+}
+
+struct PeSemanticIdentitySet {
+  // A record has at most 64 wire-visible handles; the extra slots cover the
+  // direct typed pins retained by the owner but intentionally omitted from
+  // the record-local wire handle table.
+  std::array<D9CWireObjectIdentity, 80u> values{};
+  std::array<const void*, 80u> objects{};
+  std::size_t count = 0u;
+
+  bool add(const PeWireObjectRef& ref, std::uint32_t kind) noexcept {
+    if (!ref.object) {
+      return ref.identity.kind == 0u && ref.identity.generation == 0u &&
+             ref.identity.objectId == 0u;
+    }
+    if (!ref.valid(kind)) return false;
+    for (std::size_t i = 0u; i < count; ++i) {
+      if (values[i].kind == ref.identity.kind &&
+          values[i].objectId == ref.identity.objectId) {
+        return values[i].generation == ref.identity.generation &&
+               objects[i] == ref.object;
+      }
+    }
+    if (count == values.size()) return false;
+    values[count++] = ref.identity;
+    objects[count - 1u] = ref.object;
+    return true;
+  }
+};
+
+inline bool addAdmissionSection(std::uint16_t kind, std::size_t count,
+                               std::size_t bytes,
+                               std::size_t& cursor) noexcept {
+  if (count == 0u) return true;
+  const auto* rule = sectionRule(kind);
+  if (!rule || count > rule->maxCount ||
+      bytes > std::numeric_limits<std::size_t>::max() - cursor) {
+    return false;
+  }
+  const auto alignment = static_cast<std::size_t>(rule->payloadAlignment);
+  if (alignment == 0u || (alignment & (alignment - 1u)) != 0u) {
+    return false;
+  }
+  std::size_t aligned = 0u;
+  if (!checkedSizeAdd(cursor, alignment - 1u, aligned)) return false;
+  aligned &= ~(alignment - 1u);
+  return checkedSizeAdd(aligned, bytes, cursor);
+}
+
+inline bool admissionPayloadBytes(const PeSemanticRecordInput& input,
+                                  std::size_t& out) noexcept {
+  out = 0u;
+  switch (input.producer) {
+    case PeSemanticProducerKind::DrawPrimitive:
+    case PeSemanticProducerKind::DrawIndexedPrimitive:
+    case PeSemanticProducerKind::DrawPrimitiveUp:
+    case PeSemanticProducerKind::DrawIndexedPrimitiveUp:
+    case PeSemanticProducerKind::ApplyState: {
+      const auto& s = input.sparse;
+      const std::size_t sectionCount =
+          !s.renderStates.empty() + !s.textures.empty() + !s.streams.empty() +
+          !s.shaders.empty() + !s.vertexInputs.empty() + !s.indexBuffers.empty() +
+          !s.renderTargets.empty() + !s.depthStencils.empty() + !s.viewports.empty() +
+          !s.scissors.empty() + !s.materials.empty() + !s.clipPlanes.empty() +
+          !s.textureStageStates.empty() + !s.samplerStates.empty() + !s.transforms.empty() +
+          !s.lights.empty() + !s.lightEnables.empty() +
+          (s.vsFloatConstants.present()) + (s.vsIntConstants.present()) +
+          (s.vsBoolConstants.present()) + (s.psFloatConstants.present()) +
+          (s.psIntConstants.present()) + (s.psBoolConstants.present()) +
+          !s.upIndexData.empty() + !s.upVertexData.empty();
+      if (sectionCount > D9C_COMMAND_CHUNK_SECTION_COUNT) return false;
+      std::size_t sectionBytes = 0u;
+      std::size_t cursor = 0u;
+      if (!checkedSizeMultiply(sectionCount,
+                               sizeof(D9CCommandChunkWireSectionDesc),
+                               sectionBytes) ||
+          !checkedSizeAdd(sizeof(D9CCommandChunkWireDrawHeader), sectionBytes,
+                          cursor)) return false;
+      const auto typed = [&](std::uint16_t kind, std::size_t count,
+                             std::size_t element) noexcept {
+        std::size_t bytes = 0u;
+        return checkedSizeMultiply(count, element, bytes) &&
+               addAdmissionSection(kind, count, bytes, cursor);
+      };
+      const auto raw = [&](std::uint16_t kind, std::span<const std::byte> bytes) noexcept {
+        return addAdmissionSection(kind, bytes.size(), bytes.size(), cursor);
+      };
+      const auto constant = [&](std::uint16_t kind,
+                                const SparseConstantRangeInput& range) noexcept {
+        if (!range.present()) return true;
+        const auto* rule = sectionRule(kind);
+        std::size_t registerBytes = 0u;
+        std::size_t sectionBytes = 0u;
+        if (!rule || range.registerCount > rule->maxCount ||
+            static_cast<std::uint64_t>(range.startRegister) + range.registerCount >
+                rule->maxCount ||
+            !checkedSizeMultiply(static_cast<std::size_t>(range.registerCount),
+                                 rule->elementSize, registerBytes) ||
+            range.registerBytes.size() != registerBytes ||
+            !checkedSizeAdd(sizeof(D9CCommandChunkWireConstantRange),
+                            registerBytes, sectionBytes)) {
+          return false;
+        }
+        return addAdmissionSection(
+            kind, range.registerCount, sectionBytes, cursor);
+      };
+      if (!typed(D9C_COMMAND_CHUNK_SECTION_RENDER_STATE, s.renderStates.size(),
+                 sizeof(D9CCommandChunkWireRenderState)) ||
+          !typed(D9C_COMMAND_CHUNK_SECTION_TEXTURE, s.textures.size(),
+                 sizeof(D9CCommandChunkWireTextureBinding)) ||
+          !typed(D9C_COMMAND_CHUNK_SECTION_STREAM, s.streams.size(),
+                 sizeof(D9CCommandChunkWireStreamBinding)) ||
+          !typed(D9C_COMMAND_CHUNK_SECTION_SHADER, s.shaders.size(),
+                 sizeof(D9CCommandChunkWireShaderBinding)) ||
+          !typed(D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT, s.vertexInputs.size(),
+                 sizeof(D9CCommandChunkWireVertexInput)) ||
+          !typed(D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER, s.indexBuffers.size(),
+                 sizeof(D9CCommandChunkWireIndexBinding)) ||
+          !typed(D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET, s.renderTargets.size(),
+                 sizeof(D9CCommandChunkWireRenderTargetBinding)) ||
+          !typed(D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL, s.depthStencils.size(),
+                 sizeof(D9CCommandChunkWireDepthStencilBinding)) ||
+          !typed(D9C_COMMAND_CHUNK_SECTION_VIEWPORT, s.viewports.size(), sizeof(D9CViewport)) ||
+          !typed(D9C_COMMAND_CHUNK_SECTION_SCISSOR, s.scissors.size(), sizeof(D9CRect)) ||
+          !typed(D9C_COMMAND_CHUNK_SECTION_MATERIAL, s.materials.size(), sizeof(D9CMaterial)) ||
+          !typed(D9C_COMMAND_CHUNK_SECTION_CLIP_PLANE, s.clipPlanes.size(),
+                 sizeof(D9CCommandChunkWireClipPlane)) ||
+          !typed(D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE, s.textureStageStates.size(),
+                 sizeof(D9CDrawPacketTextureStageState)) ||
+          !typed(D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE, s.samplerStates.size(),
+                 sizeof(D9CDrawPacketSamplerState)) ||
+          !typed(D9C_COMMAND_CHUNK_SECTION_TRANSFORM, s.transforms.size(),
+                 sizeof(D9CDrawPacketTransform)) ||
+          !typed(D9C_COMMAND_CHUNK_SECTION_LIGHT, s.lights.size(),
+                 sizeof(D9CCommandChunkWireLight)) ||
+          !typed(D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE, s.lightEnables.size(),
+                 sizeof(D9CCommandChunkWireLightEnable)) ||
+          !constant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_F, s.vsFloatConstants) ||
+          !constant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_I, s.vsIntConstants) ||
+          !constant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_B, s.vsBoolConstants) ||
+          !constant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_F, s.psFloatConstants) ||
+          !constant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_I, s.psIntConstants) ||
+          !constant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_B, s.psBoolConstants) ||
+          !raw(D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA, s.upIndexData) ||
+          !raw(D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA, s.upVertexData)) {
+        return false;
+      }
+      out = cursor;
+      return true;
+    }
+    case PeSemanticProducerKind::VsFloatConstant:
+    case PeSemanticProducerKind::VsIntConstant:
+    case PeSemanticProducerKind::VsBoolConstant:
+    case PeSemanticProducerKind::PsFloatConstant:
+    case PeSemanticProducerKind::PsIntConstant:
+    case PeSemanticProducerKind::PsBoolConstant:
+      return checkedSizeAdd(sizeof(D9CCommandChunkWireSetConst),
+                            input.constantBytes.size(), out);
+    case PeSemanticProducerKind::Clear: {
+      std::size_t rectBytes = 0u;
+      return checkedSizeMultiply(input.clearRects.size(), sizeof(D9CRect),
+                                 rectBytes) &&
+             checkedSizeAdd(sizeof(D9CCommandChunkWireClear), rectBytes, out);
+    }
+    case PeSemanticProducerKind::Present: out = sizeof(input.present); return true;
+    case PeSemanticProducerKind::StretchRect: out = sizeof(input.stretchRect); return true;
+    case PeSemanticProducerKind::ColorFill: out = sizeof(input.colorFill); return true;
+    case PeSemanticProducerKind::UpdateTexture:
+      out = sizeof(D9CCommandChunkWireUpdateTexture); return true;
+    case PeSemanticProducerKind::UpdateSurface: out = sizeof(input.updateSurface); return true;
+    case PeSemanticProducerKind::QueryIssue: out = sizeof(input.queryIssue); return true;
+    case PeSemanticProducerKind::Readback: out = sizeof(D9CCommandChunkWireReadback); return true;
+    case PeSemanticProducerKind::ReszDepthResolve:
+      out = sizeof(D9CCommandChunkWireReszDepthResolve); return true;
+    case PeSemanticProducerKind::GenerateMipmaps:
+      out = sizeof(D9CCommandChunkWireGenerateMipmaps); return true;
+    case PeSemanticProducerKind::Count: return false;
+  }
+  return false;
+}
+
+}  // namespace detail
+
+inline bool planPeSemanticAdmission(const PeSemanticRecordInput& input,
+                                    PeSemanticAdmissionPlan& out) noexcept {
+  out = {};
+  out.recordType = input.recordType;
+  // One wire set and one retention set keep the planner's fixed stack bounded
+  // independently of the six handle kinds; kind remains part of identity.
+  detail::PeSemanticIdentitySet wirePins{};
+  detail::PeSemanticIdentitySet retainedPins{};
+  const auto direct = [&](const PeWireObjectRef& ref,
+                          std::uint32_t kind) noexcept {
+    return wirePins.add(ref, kind);
+  };
+  if (!retainedPins.add(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE) ||
+      !retainedPins.add(input.surface1, D9C_CHUNK_HANDLE_KIND_SURFACE) ||
+      !retainedPins.add(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE) ||
+      !retainedPins.add(input.texture1, D9C_CHUNK_HANDLE_KIND_TEXTURE) ||
+      !retainedPins.add(input.buffer0, D9C_CHUNK_HANDLE_KIND_BUFFER) ||
+      !retainedPins.add(input.buffer1, D9C_CHUNK_HANDLE_KIND_BUFFER) ||
+      !retainedPins.add(input.shader0, D9C_CHUNK_HANDLE_KIND_SHADER) ||
+      !retainedPins.add(input.shader1, D9C_CHUNK_HANDLE_KIND_SHADER) ||
+      !retainedPins.add(input.declaration, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) ||
+      !retainedPins.add(input.query, D9C_CHUNK_HANDLE_KIND_QUERY)) return false;
+  bool directValid = true;
+  switch (input.producer) {
+    case PeSemanticProducerKind::Present:
+    case PeSemanticProducerKind::ColorFill:
+      directValid = direct(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE);
+      break;
+    case PeSemanticProducerKind::GenerateMipmaps:
+      directValid = direct(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
+      break;
+    case PeSemanticProducerKind::StretchRect:
+    case PeSemanticProducerKind::UpdateSurface:
+    case PeSemanticProducerKind::Readback:
+      directValid = direct(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE) &&
+                    direct(input.surface1, D9C_CHUNK_HANDLE_KIND_SURFACE);
+      break;
+    case PeSemanticProducerKind::UpdateTexture:
+      directValid = direct(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE) &&
+                    direct(input.texture1, D9C_CHUNK_HANDLE_KIND_TEXTURE);
+      break;
+    case PeSemanticProducerKind::QueryIssue:
+      directValid = direct(input.query, D9C_CHUNK_HANDLE_KIND_QUERY);
+      break;
+    case PeSemanticProducerKind::ReszDepthResolve:
+      directValid = direct(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE) &&
+                    direct(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
+      break;
+    default:
+      break;
+  }
+  if (!directValid) return false;
+  const auto sparse = [&](auto rows, std::uint32_t kind,
+                          std::size_t sparseKind) noexcept {
+    std::uint32_t count = 0u;
+    if (!detail::checkedSizeToU32(rows.size(), count)) return false;
+    out.sparseCounts[sparseKind] = count;
+    for (const auto& row : rows) {
+      if (!row.wire.valid) continue;
+      if (!wirePins.add(row.object, kind) ||
+          !retainedPins.add(row.object, kind)) return false;
+    }
+    return true;
+  };
+  const auto& s = input.sparse;
+  if (!sparse(s.textures, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u) ||
+      !sparse(s.streams, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u) ||
+      !sparse(s.shaders, D9C_CHUNK_HANDLE_KIND_SHADER, 3u) ||
+      !sparse(s.vertexInputs, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, 4u) ||
+      !sparse(s.indexBuffers, D9C_CHUNK_HANDLE_KIND_BUFFER, 5u) ||
+      !sparse(s.renderTargets, D9C_CHUNK_HANDLE_KIND_SURFACE, 6u) ||
+      !sparse(s.depthStencils, D9C_CHUNK_HANDLE_KIND_SURFACE, 7u)) return false;
+  const auto storeSparseCount = [&](std::size_t index,
+                                    std::size_t count) noexcept {
+    std::uint32_t bounded = 0u;
+    if (!detail::checkedSizeToU32(count, bounded)) return false;
+    out.sparseCounts[index] = bounded;
+    return true;
+  };
+  if (!storeSparseCount(0u, s.renderStates.size()) ||
+      !storeSparseCount(8u, s.viewports.size()) ||
+      !storeSparseCount(9u, s.scissors.size()) ||
+      !storeSparseCount(10u, s.materials.size()) ||
+      !storeSparseCount(11u, s.clipPlanes.size()) ||
+      !storeSparseCount(12u, s.textureStageStates.size()) ||
+      !storeSparseCount(13u, s.samplerStates.size()) ||
+      !storeSparseCount(14u, s.transforms.size()) ||
+      !storeSparseCount(15u, s.lights.size()) ||
+      !storeSparseCount(16u, s.lightEnables.size())) return false;
+  std::uint32_t boundedRectCount = 0u;
+  std::uint32_t boundedConstantBytes = 0u;
+  if (!detail::checkedSizeToU32(input.clearRects.size(), boundedRectCount) ||
+      !detail::checkedSizeToU32(input.constantBytes.size(), boundedConstantBytes)) {
+    return false;
+  }
+  std::size_t payloadBytes = 0u;
+  if (!detail::admissionPayloadBytes(input, payloadBytes) ||
+      !detail::checkedSizeToU32(payloadBytes, out.payloadBytes)) return false;
+  out.rectCount = boundedRectCount;
+  std::size_t semanticBytes = boundedConstantBytes;
+  const auto addBytes = [&](std::size_t bytes) noexcept {
+    if (semanticBytes > std::numeric_limits<std::uint32_t>::max() ||
+        bytes > std::numeric_limits<std::uint32_t>::max() - semanticBytes) return false;
+    semanticBytes += bytes;
+    return true;
+  };
+  if (!addBytes(s.vsFloatConstants.registerBytes.size()) ||
+      !addBytes(s.vsIntConstants.registerBytes.size()) ||
+      !addBytes(s.vsBoolConstants.registerBytes.size()) ||
+      !addBytes(s.psFloatConstants.registerBytes.size()) ||
+      !addBytes(s.psIntConstants.registerBytes.size()) ||
+      !addBytes(s.psBoolConstants.registerBytes.size()) ||
+      !addBytes(s.upIndexData.size()) || !addBytes(s.upVertexData.size())) return false;
+  if (!detail::checkedSizeToU32(semanticBytes, out.semanticBytes) ||
+      !detail::checkedSizeToU32(wirePins.count, out.handleCount)) return false;
+  for (std::size_t i = 0u; i < retainedPins.count; ++i) {
+    const auto kind = retainedPins.values[i].kind;
+    if (kind > D9C_CHUNK_HANDLE_KIND_QUERY) return false;
+    const auto pinKind = kind == D9C_CHUNK_HANDLE_KIND_SURFACE
+        ? 0u
+        : kind == D9C_CHUNK_HANDLE_KIND_TEXTURE
+            ? 1u
+            : static_cast<std::size_t>(kind);
+    if (out.uniquePinCounts[pinKind] ==
+        std::numeric_limits<std::uint32_t>::max()) return false;
+    ++out.uniquePinCounts[pinKind];
+  }
+  out.valid = true;
+  return true;
+}
+
 struct PeSemanticRecordSlot {
   PeSemanticProducerKind producer = PeSemanticProducerKind::DrawPrimitive;
   std::uint32_t recordType = 0u;
@@ -302,6 +655,7 @@ class PeSemanticBatchOwner final {
   enum class AdmissionFailure : std::uint8_t {
     None,
     Unavailable,
+    Capacity,
     Header,
     Fixed,
     DirectPins,
@@ -355,98 +709,81 @@ class PeSemanticBatchOwner final {
     return lastAdmissionFailure_;
   }
 
-  // Pure CapacityPre query. It checks only bounded owner storage; schema,
-  // identity and callback validity remain admission concerns. Counts are
-  // conservative for duplicate pins inside one input, which may seal an
-  // experimental semantic chunk early but can never admit an overflowing
-  // record or turn invalid semantics into valid semantics.
-  bool canAdmitStorage(const PeSemanticRecordInput& input) const noexcept {
-    if (!ready_ || recordCount_ >= MaxRecords) return false;
-    const auto fitsSparse = [&](std::size_t kind,
-                                std::size_t count) noexcept {
-      return count <= MaxSparseValues - sparseCounts_.values[kind];
+ private:
+  // Pure CapacityPre query. The same qualified-dedup/count result is consumed
+  // by appendOwnedRecord, so admission and cadence cannot disagree about
+  // duplicate identities or variable-byte capacity.
+  bool canAdmitPreparedStorage(
+      const PeSemanticAdmissionPlan& plan,
+      const std::array<std::uint32_t, 6u>& retentionDeltas) const noexcept {
+    if (!ready_ || !plan.valid || recordCount_ >= MaxRecords) return false;
+    const auto* rule = recordRule(plan.recordType);
+    if (!rule || plan.payloadBytes == 0u) return false;
+    for (std::size_t i = 0u; i < plan.sparseCounts.size(); ++i) {
+      if (plan.sparseCounts[i] > MaxSparseValues - sparseCounts_.values[i])
+        return false;
+    }
+    if (plan.rectCount > MaxRects - rectCount_ ||
+        plan.semanticBytes > MaxSemanticBytes - semanticBytes_) return false;
+    const auto fitsPins = [](std::size_t used, std::size_t add) noexcept {
+      return add <= MaxPins - used;
     };
-    const auto& s = input.sparse;
-    if (!fitsSparse(kRenderStates, s.renderStates.size()) ||
-        !fitsSparse(kTextures, s.textures.size()) ||
-        !fitsSparse(kStreams, s.streams.size()) ||
-        !fitsSparse(kShaders, s.shaders.size()) ||
-        !fitsSparse(kVertexInputs, s.vertexInputs.size()) ||
-        !fitsSparse(kIndexBuffers, s.indexBuffers.size()) ||
-        !fitsSparse(kRenderTargets, s.renderTargets.size()) ||
-        !fitsSparse(kDepthStencils, s.depthStencils.size()) ||
-        !fitsSparse(kViewports, s.viewports.size()) ||
-        !fitsSparse(kScissors, s.scissors.size()) ||
-        !fitsSparse(kMaterials, s.materials.size()) ||
-        !fitsSparse(kClipPlanes, s.clipPlanes.size()) ||
-        !fitsSparse(kTextureStageStates, s.textureStageStates.size()) ||
-        !fitsSparse(kSamplerStates, s.samplerStates.size()) ||
-        !fitsSparse(kTransforms, s.transforms.size()) ||
-        !fitsSparse(kLights, s.lights.size()) ||
-        !fitsSparse(kLightEnables, s.lightEnables.size()) ||
-        input.clearRects.size() > MaxRects - rectCount_) {
+    if (!fitsPins(surfaceCount_, retentionDeltas[0]) ||
+        !fitsPins(textureCount_, retentionDeltas[1]) ||
+        !fitsPins(bufferCount_, retentionDeltas[2]) ||
+        !fitsPins(shaderCount_, retentionDeltas[3]) ||
+        !fitsPins(declarationCount_, retentionDeltas[4]) ||
+        !fitsPins(queryCount_, retentionDeltas[5])) return false;
+    std::size_t aligned = 0u;
+    if (!alignEmission(emissionPayloadBytes_, rule->payloadAlignment, aligned) ||
+        plan.payloadBytes > std::numeric_limits<std::size_t>::max() - aligned) {
       return false;
     }
-    const auto fitsPins = [](std::size_t used, std::size_t direct,
-                             std::size_t sparse) noexcept {
-      return direct <= MaxPins - used && sparse <= MaxPins - used - direct;
-    };
-    if (!fitsPins(surfaceCount_,
-                  static_cast<std::size_t>(input.surface0.valid()) +
-                      static_cast<std::size_t>(input.surface1.valid()),
-                  s.renderTargets.size() + s.depthStencils.size()) ||
-        !fitsPins(textureCount_,
-                  static_cast<std::size_t>(input.texture0.valid()) +
-                      static_cast<std::size_t>(input.texture1.valid()),
-                  s.textures.size()) ||
-        !fitsPins(bufferCount_,
-                  static_cast<std::size_t>(input.buffer0.valid()) +
-                      static_cast<std::size_t>(input.buffer1.valid()),
-                  s.streams.size() + s.indexBuffers.size()) ||
-        !fitsPins(shaderCount_,
-                  static_cast<std::size_t>(input.shader0.valid()) +
-                      static_cast<std::size_t>(input.shader1.valid()),
-                  s.shaders.size()) ||
-        !fitsPins(declarationCount_,
-                  static_cast<std::size_t>(input.declaration.valid()),
-                  s.vertexInputs.size()) ||
-        !fitsPins(queryCount_, static_cast<std::size_t>(input.query.valid()),
-                  0u)) {
-      return false;
-    }
-    std::size_t bytes = semanticBytes_;
-    const auto addBytes = [&](std::size_t count) noexcept {
-      if (count > MaxSemanticBytes - bytes) return false;
-      bytes += count;
-      return true;
-    };
-    return addBytes(input.constantBytes.size()) &&
-           addBytes(s.vsFloatConstants.registerBytes.size()) &&
-           addBytes(s.vsIntConstants.registerBytes.size()) &&
-           addBytes(s.vsBoolConstants.registerBytes.size()) &&
-           addBytes(s.psFloatConstants.registerBytes.size()) &&
-           addBytes(s.psIntConstants.registerBytes.size()) &&
-           addBytes(s.psBoolConstants.registerBytes.size()) &&
-           addBytes(s.upIndexData.size()) && addBytes(s.upVertexData.size());
+    const auto nextPayload = aligned + plan.payloadBytes;
+    const auto nextHandles = emissionHandleCount_ + plan.handleCount;
+    if (nextPayload > std::numeric_limits<std::uint32_t>::max() ||
+        nextHandles > std::numeric_limits<std::uint32_t>::max()) return false;
+    const auto layout = planExactCommandChunkLayout(
+        static_cast<std::uint32_t>(recordCount_ + 1u),
+        static_cast<std::uint32_t>(nextHandles),
+        static_cast<std::uint32_t>(nextPayload));
+    return layout.valid() &&
+           layout.totalBytes <= D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES;
   }
 
+  bool canAdmitStorage(const PeSemanticRecordInput& input) const noexcept {
+    PeSemanticAdmissionPlan plan{};
+    std::array<std::uint32_t, 6u> deltas{};
+    return planPeSemanticAdmission(input, plan) &&
+           computeRetentionDeltas(input, deltas) &&
+           canAdmitPreparedStorage(plan, deltas);
+  }
+
+ public:
   // A typed adapter used by producer-family call sites. It intentionally
   // aliases admission rather than exposing the owner internals to producers.
   bool appendOwnedRecord(const PeSemanticRecordInput& input) noexcept {
     return admit(input);
   }
 
-  // A producer settlement callback runs while the admission checkpoint is
-  // still live, so a PendingDelta validation failure rolls back atomically
-  // without adding checkpoint state to the small owner shell.
+ private:
+  // Owner-local implementation. The pure facts and qualified deltas never
+  // leave tryAppendOwnedRecord(), so there is no caller-visible TOCTOU seam.
   template <typename Commit>
     requires std::is_nothrow_invocable_r_v<bool, Commit&>
-  bool appendOwnedRecord(const PeSemanticRecordInput& input,
+  bool appendPreparedRecord(
+                         const PeSemanticRecordInput& input,
+                         const PeSemanticAdmissionPlan& prepared,
+                         const std::array<std::uint32_t, 6u>& deltas,
                          Commit&& commit) noexcept {
     return recordAdmission([&]() noexcept {
       lastAdmissionFailure_ = AdmissionFailure::None;
       if (!ready_) {
         lastAdmissionFailure_ = AdmissionFailure::Unavailable;
+        return false;
+      }
+      if (!canAdmitPreparedStorage(prepared, deltas)) {
+        lastAdmissionFailure_ = AdmissionFailure::Header;
         return false;
       }
       const auto checkpoint = checkpointState();
@@ -478,7 +815,7 @@ class PeSemanticBatchOwner final {
         rollback(checkpoint);
         return false;
       }
-      if (!cacheEmissionMetrics(slot)) {
+      if (!cacheEmissionMetrics(slot, prepared)) {
         lastAdmissionFailure_ = AdmissionFailure::EmissionMetrics;
         rollback(checkpoint);
         return false;
@@ -494,6 +831,37 @@ class PeSemanticBatchOwner final {
       lastRecordOrdinal_ = input.recordOrdinal;
       return true;
     });
+  }
+
+ public:
+  // The producer settlement callback runs while the admission checkpoint is
+  // still live, so any settlement failure rolls back atomically without
+  // adding checkpoint state to the small owner shell.
+  template <typename Commit>
+    requires std::is_nothrow_invocable_r_v<bool, Commit&>
+  bool tryAppendOwnedRecord(const PeSemanticRecordInput& input,
+                            Commit&& commit) noexcept {
+    PeSemanticAdmissionPlan prepared{};
+    std::array<std::uint32_t, 6u> deltas{};
+    if (!planPeSemanticAdmission(input, prepared) ||
+        !computeRetentionDeltas(input, deltas)) {
+      lastAdmissionFailure_ = AdmissionFailure::Header;
+      return false;
+    }
+    if (!canAdmitPreparedStorage(prepared, deltas)) {
+      lastAdmissionFailure_ = AdmissionFailure::Capacity;
+      return false;
+    }
+    return appendPreparedRecord(input, prepared, deltas,
+                                std::forward<Commit>(commit));
+  }
+
+  // Compatibility adapter for existing cold/oracle callers.
+  template <typename Commit>
+    requires std::is_nothrow_invocable_r_v<bool, Commit&>
+  bool appendOwnedRecord(const PeSemanticRecordInput& input,
+                         Commit&& commit) noexcept {
+    return tryAppendOwnedRecord(input, std::forward<Commit>(commit));
   }
 
   template <typename Visit>
@@ -651,13 +1019,17 @@ class PeSemanticBatchOwner final {
 
   std::size_t size() const noexcept { return recordCount_; }
   std::size_t retainedCount() const noexcept { return retainer_.size(); }
-  bool referencesBuffer(const D9CBuffer* object) const noexcept {
-    if (!object) return false;
-    for (std::size_t i = 0u; i < bufferCount_; ++i) {
-      if (storage_->buffers[i].object == object) return true;
-    }
-    return false;
+  // The dependency query is part of the producer projection path.  Keep it
+  // qualified by the complete wire identity: object-id-only or pointer-only
+  // answers can incorrectly carry a stale generation across a wrapper reuse.
+  bool referencesBuffer(const BufferRef& ref) const noexcept {
+    if (!ref.valid()) return false;
+    std::size_t pin = 0u;
+    return findPinIndex(storage_->bufferIdentityIndex, ref.identity, true,
+                        pin) &&
+        pin < bufferCount_ && storage_->buffers[pin].object == ref.object;
   }
+
   template <typename Visit>
     requires std::is_nothrow_invocable_r_v<
         bool, Visit&, const CommittedPendingChunkLease&>
@@ -2210,6 +2582,40 @@ class PeSemanticBatchOwner final {
     rebuildPinIndexes();
   }
 
+  bool cacheEmissionMetrics(const PeSemanticRecordSlot& slot,
+                            const PeSemanticAdmissionPlan& prepared) noexcept {
+    const auto* rule = recordRule(slot.recordType);
+    if (!rule || !prepared.valid) return false;
+    std::size_t bytes = 0u;
+    std::size_t aligned = 0u;
+    if (prepared.payloadBytes == 0u ||
+        !alignEmission(emissionPayloadBytes_, rule->payloadAlignment, aligned) ||
+        prepared.payloadBytes > std::numeric_limits<std::size_t>::max() - aligned ||
+        emissionHandleCount_ > std::numeric_limits<std::size_t>::max() -
+            prepared.handleCount) {
+      return false;
+    }
+    bytes = prepared.payloadBytes;
+    const auto nextPayloadBytes = aligned + bytes;
+    const auto nextHandleCount = emissionHandleCount_ + prepared.handleCount;
+    if (recordCount_ + 1u > std::numeric_limits<std::uint32_t>::max() ||
+        nextPayloadBytes > std::numeric_limits<std::uint32_t>::max() ||
+        nextHandleCount > std::numeric_limits<std::uint32_t>::max()) {
+      return false;
+    }
+    const auto layout = planExactCommandChunkLayout(
+        static_cast<std::uint32_t>(recordCount_ + 1u),
+        static_cast<std::uint32_t>(nextHandleCount),
+        static_cast<std::uint32_t>(nextPayloadBytes));
+    if (!layout.valid() || layout.totalBytes > D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES)
+      return false;
+    emissionPayloadBytes_ = nextPayloadBytes;
+    emissionHandleCount_ = nextHandleCount;
+    return true;
+  }
+
+  // Compatibility/oracle path: retain the old slot walk for tests that call
+  // owner admission directly without a prepared pure result.
   bool cacheEmissionMetrics(const PeSemanticRecordSlot& slot) noexcept {
     const auto* rule = recordRule(slot.recordType);
     if (!rule) return false;
@@ -2244,6 +2650,121 @@ class PeSemanticBatchOwner final {
     emissionPayloadBytes_ = nextPayloadBytes;
     emissionHandleCount_ = nextHandleCount;
     return true;
+  }
+
+  template <typename PinArray>
+  bool findOrValidateExistingPin(
+      const PinIndex<kPinIndexCapacity>& exactIndex,
+      const PinIndex<kPinIndexCapacity>& objectIndex,
+      const PinArray& pins, std::size_t count,
+      const D9CWireObjectIdentity& identity, const void* object,
+      bool& existing) const noexcept {
+    std::size_t objectPin = 0u;
+    const bool objectFound =
+        findPinIndex(objectIndex, identity, false, objectPin);
+    std::size_t exactPin = 0u;
+    const bool exactFound =
+        findPinIndex(exactIndex, identity, true, exactPin);
+    if (!objectFound) {
+      if (exactFound) return false;
+      existing = false;
+      return true;
+    }
+    if (!exactFound || exactPin != objectPin || objectPin >= count ||
+        pins[objectPin].object != object) {
+      // The object-id index deliberately rejects a generation or pointer
+      // alias, even when the full identity differs.
+      return false;
+    }
+    existing = true;
+    return true;
+  }
+
+  bool computeRetentionDeltas(
+      const PeSemanticRecordInput& input,
+      std::array<std::uint32_t, 6u>& out) const noexcept {
+    out = {};
+    // The kind is part of each identity key, so one sequential set preserves
+    // cross-kind distinctions without reserving six 80-entry frames.
+    detail::PeSemanticIdentitySet seen{};
+    const auto add = [&](const PeWireObjectRef& ref, std::uint32_t kind,
+                         std::size_t pinKind) noexcept {
+      if (!seen.add(ref, kind)) return false;
+      if (!ref.object) return true;
+      bool existing = false;
+      switch (pinKind) {
+        case 0u:
+          if (!findOrValidateExistingPin(
+                  storage_->surfaceIdentityIndex, storage_->surfaceObjectIndex,
+                  storage_->surfaces, surfaceCount_, ref.identity, ref.object,
+                  existing)) return false;
+          break;
+        case 1u:
+          if (!findOrValidateExistingPin(
+                  storage_->textureIdentityIndex, storage_->textureObjectIndex,
+                  storage_->textures, textureCount_, ref.identity, ref.object,
+                  existing)) return false;
+          break;
+        case 2u:
+          if (!findOrValidateExistingPin(
+                  storage_->bufferIdentityIndex, storage_->bufferObjectIndex,
+                  storage_->buffers, bufferCount_, ref.identity, ref.object,
+                  existing)) return false;
+          break;
+        case 3u:
+          if (!findOrValidateExistingPin(
+                  storage_->shaderIdentityIndex, storage_->shaderObjectIndex,
+                  storage_->shaders, shaderCount_, ref.identity, ref.object,
+                  existing)) return false;
+          break;
+        case 4u:
+          if (!findOrValidateExistingPin(
+                  storage_->declarationIdentityIndex,
+                  storage_->declarationObjectIndex, storage_->declarations,
+                  declarationCount_, ref.identity, ref.object, existing))
+            return false;
+          break;
+        case 5u:
+          if (!findOrValidateExistingPin(
+                  storage_->queryIdentityIndex, storage_->queryObjectIndex,
+                  storage_->queries, queryCount_, ref.identity, ref.object,
+                  existing)) return false;
+          break;
+        default:
+          return false;
+      }
+      if (!existing) {
+        if (out[pinKind] == std::numeric_limits<std::uint32_t>::max())
+          return false;
+        ++out[pinKind];
+      }
+      return true;
+    };
+    if (!add(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u) ||
+        !add(input.surface1, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u) ||
+        !add(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u) ||
+        !add(input.texture1, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u) ||
+        !add(input.buffer0, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u) ||
+        !add(input.buffer1, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u) ||
+        !add(input.shader0, D9C_CHUNK_HANDLE_KIND_SHADER, 3u) ||
+        !add(input.shader1, D9C_CHUNK_HANDLE_KIND_SHADER, 3u) ||
+        !add(input.declaration, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, 4u) ||
+        !add(input.query, D9C_CHUNK_HANDLE_KIND_QUERY, 5u)) return false;
+    const auto sparse = [&](auto rows, std::uint32_t kind,
+                            std::size_t pinKind) noexcept {
+      for (const auto& row : rows) {
+        if (row.wire.valid && !add(row.object, kind, pinKind)) return false;
+      }
+      return true;
+    };
+    const auto& s = input.sparse;
+    return sparse(s.textures, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u) &&
+           sparse(s.streams, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u) &&
+           sparse(s.shaders, D9C_CHUNK_HANDLE_KIND_SHADER, 3u) &&
+           sparse(s.vertexInputs, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, 4u) &&
+           sparse(s.indexBuffers, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u) &&
+           sparse(s.renderTargets, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u) &&
+           sparse(s.depthStencils, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u);
   }
 
   template <typename PinArray>

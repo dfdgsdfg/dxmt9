@@ -1132,6 +1132,37 @@ void directChunkSlotWholeRawDispositionsAreTypedAndPreEffect() {
         "invalid whole raws reject before destination ownership or effects");
 }
 
+void directChunkSlotRangeGateAndExactPlan() {
+  const std::array records{
+      drawRecord(),
+      drawRecord(D9C_COMMAND_RECORD_APPLY_STATE),
+      drawRecord(),
+  };
+  const auto fixture = makeValidatedFixture(records);
+  const auto imported = fixture.view();
+  check(dxmt9::d3d9::classifyDirectChunkSlotRange(imported) ==
+            dxmt9::d3d9::DirectChunkSlotRangeClass::Eligible,
+        "Draw/APPLY_STATE whole range passes the cheap direct gate");
+  const auto plan = dxmt9::d3d9::planDirectChunkSlotRange(imported, 4096u);
+  check(plan && plan->eligible() && plan->drawCount == 2u &&
+            plan->capacity.commandHeaders == 2u &&
+            plan->capacity.drawParams == 2u && plan->plannedBytes != 0u,
+        "eligible range gets one exact final-slot count/reserve plan");
+
+  const std::array mixed{drawRecord(), clearRecord(1u)};
+  const auto mixedFixture = makeValidatedFixture(mixed);
+  check(dxmt9::d3d9::classifyDirectChunkSlotRange(mixedFixture.view()) ==
+            dxmt9::d3d9::DirectChunkSlotRangeClass::Unsupported &&
+            !dxmt9::d3d9::planDirectChunkSlotRange(mixedFixture.view(), 4096u),
+        "mixed resource/control boundaries fail the cheap gate before planning");
+
+  const std::array stateOnly{drawRecord(D9C_COMMAND_RECORD_APPLY_STATE)};
+  const auto stateFixture = makeValidatedFixture(stateOnly);
+  check(dxmt9::d3d9::classifyDirectChunkSlotRange(stateFixture.view()) ==
+            dxmt9::d3d9::DirectChunkSlotRangeClass::Empty,
+        "APPLY_STATE-only range remains without a direct source");
+}
+
 }  // namespace
 
 int main() {
@@ -1153,6 +1184,7 @@ int main() {
     nonFinalOrRepeatedPresentFallsBackAsOneSource();
     oversizeAndOverflowFallbackBeforeReplay();
     directChunkSlotWholeRawDispositionsAreTypedAndPreEffect();
+    directChunkSlotRangeGateAndExactPlan();
   } catch (const std::exception& error) {
     std::cerr << "cpu_ready_plan_spec failed: " << error.what() << '\n';
     return 1;
