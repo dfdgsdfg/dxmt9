@@ -37,7 +37,8 @@ struct D3D9PeStateBlockContext {
 struct D3D9PeBufferContext {
   D3D9DeviceImpl *device = nullptr;
   HRESULT FlushPeRecorderForChild() noexcept;
-  HRESULT FlushPeRecorderForBufferHazardForChild(D9CBuffer *) noexcept;
+  HRESULT FlushPeRecorderForBufferHazardForChild(
+      const dxmt9::d3d9::pe::BufferRef &) noexcept;
   void AddDefaultPoolResourceRefForChild() noexcept;
   void ReleaseDefaultPoolResourceRefForChild() noexcept;
   void NotifyRenderTapeObjectDestroyForChild(

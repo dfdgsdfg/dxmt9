@@ -2163,17 +2163,15 @@ void D3D9DeviceImpl::PoisonStateBlockRecorderForChild() noexcept {
     poisonStateBlockTransaction();
 }
 
-HRESULT D3D9DeviceImpl::FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer) noexcept {
-    if (!buffer) {
+HRESULT D3D9DeviceImpl::FlushPeRecorderForBufferHazardForChild(
+    const dxmt9::d3d9::pe::BufferRef &buffer) noexcept {
+    if (!buffer.valid()) {
         return S_OK;
     }
     assertRecorderThreadConfined();
     PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
     const auto* const owner = semanticBatchOwner();
-    dxmt9::d3d9::pe::BufferRef bufferRef{};
-    bufferRef.identity = buffer->wireIdentity;
-    bufferRef.object = buffer;
-    const bool referenced = owner && owner->referencesBuffer(bufferRef);
+    const bool referenced = owner && owner->referencesBuffer(buffer);
     if (!referenced) {
         return S_OK;
     }

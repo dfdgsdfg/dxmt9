@@ -39,7 +39,7 @@ HRESULT D3D9PeBufferContext::FlushPeRecorderForChild() noexcept {
   return device ? device->FlushPeRecorderForChild() : S_OK;
 }
 HRESULT D3D9PeBufferContext::FlushPeRecorderForBufferHazardForChild(
-    D9CBuffer *buffer) noexcept {
+    const dxmt9::d3d9::pe::BufferRef &buffer) noexcept {
   return device ? device->FlushPeRecorderForBufferHazardForChild(buffer) : S_OK;
 }
 void D3D9PeBufferContext::AddDefaultPoolResourceRefForChild() noexcept {

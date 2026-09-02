@@ -2465,7 +2465,8 @@ public:
     bool IsStateBlockRecorderPoisonedForChild() const noexcept;
     void DiscardPreparedStateBlockApplyForChild() noexcept;
     void PoisonStateBlockRecorderForChild() noexcept;
-    HRESULT FlushPeRecorderForBufferHazardForChild(D9CBuffer *buffer) noexcept;
+    HRESULT FlushPeRecorderForBufferHazardForChild(
+        const dxmt9::d3d9::pe::BufferRef &buffer) noexcept;
     void NotifyRenderTapeObjectDefineForChild(
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
         std::span<const std::byte> descriptor,

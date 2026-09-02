@@ -77,8 +77,9 @@ static void dxmt9DeviceDebugLog(const char *fmt, ...) {
 }
 
 [[nodiscard]] static HRESULT
-flushChildRecorderForBufferLock(D3D9PeBufferContext *recorder, D9CBuffer *buffer,
-                                DWORD flags) {
+flushChildRecorderForBufferLock(
+    D3D9PeBufferContext *recorder,
+    const dxmt9::d3d9::pe::BufferRef &buffer, DWORD flags) {
   return dxmt9::d3d9::pe::sealBufferGenerationBeforeLock(
     recorder != nullptr, flags, static_cast<HRESULT>(S_OK),
     [&] { return recorder->FlushPeRecorderForBufferHazardForChild(buffer); });
@@ -303,7 +304,7 @@ validateBufferLockArgs(D9CBuffer *buffer, const D9CBufferDesc &cachedDesc,
 [[nodiscard]] static HRESULT
 lockPeBuffer(D9CBuffer *buffer, D3D9PeBufferContext *recorder,
              const D9CBufferDesc &cachedDesc, bool cachedDescValid,
-             const dxmt9::d3d9::pe::PeWireObjectRef &wireObject,
+             const dxmt9::d3d9::pe::BufferRef &wireObject,
              D3D9PeBufferLockState &state, UINT off, UINT size, void **pp,
              DWORD flags) noexcept {
   const auto notifyCpuRead = [&]() noexcept {
@@ -351,7 +352,8 @@ lockPeBuffer(D9CBuffer *buffer, D3D9PeBufferContext *recorder,
     return S_OK;
   }
 
-  const HRESULT flushHr = flushChildRecorderForBufferLock(recorder, buffer, flags);
+  const HRESULT flushHr =
+      flushChildRecorderForBufferLock(recorder, wireObject, flags);
   if (FAILED(flushHr))
     return flushHr;
 
@@ -394,7 +396,7 @@ lockPeBuffer(D9CBuffer *buffer, D3D9PeBufferContext *recorder,
 
 [[nodiscard]] static HRESULT
 unlockPeBuffer(D9CBuffer *buffer, D3D9PeBufferContext *recorder,
-               const dxmt9::d3d9::pe::PeWireObjectRef &wireObject,
+               const dxmt9::d3d9::pe::BufferRef &wireObject,
                D3D9PeBufferLockState &state) noexcept {
   if (!state.locked)
     return D3DERR_INVALIDCALL;
@@ -410,7 +412,7 @@ unlockPeBuffer(D9CBuffer *buffer, D3D9PeBufferContext *recorder,
     return S_OK;
   }
   const HRESULT flushHr =
-      flushChildRecorderForBufferLock(recorder, buffer, state.flags);
+      flushChildRecorderForBufferLock(recorder, wireObject, state.flags);
   if (FAILED(flushHr))
     return flushHr;
   std::vector<std::byte> mutationCopy;
