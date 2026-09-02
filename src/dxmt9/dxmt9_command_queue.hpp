@@ -23,6 +23,7 @@
 #include "dxmt9_backend_types.hpp"
 #include "dxmt9/copy_materialization_ledger.hpp"
 #include "dxmt9_capture.hpp"
+#include "dxmt9_direct_continuation.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9/wsi_surface_protocol.hpp"
 #include "dxmt9_hud.hpp"
@@ -1266,6 +1267,13 @@ class CommandQueue {
 
   core::CpuReadyTape cpuReadyTape_{
       core::CpuReadyTapeConfig::queueCompatibility(kCommandChunkCount)};
+  // R-BACK-2.104: retained capacity follows the 64 persistent compatibility
+  // payloads, not the 32 reusable control shells. Guarded by `mutex_`.
+  std::array<core::DirectSlotCapacityLeaseEntry,
+             kCommandChunkCount * 2> directSlotCapacityLeaseEntries_{};
+  std::uint64_t directSlotCapacityRetainedBytes_ = 0;
+  std::uint64_t directSlotCapacityStagedBytes_ = 0;
+  std::uint64_t directSlotCapacityNextTicketSerial_ = 1;
   std::array<core::ChunkSlotControl, kCommandChunkCount> slots_{};
   // Diagnostic-only residency timestamps for the current writing slot.
   // Set on the first command append and consumed when the slot is published;

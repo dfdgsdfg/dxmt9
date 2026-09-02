@@ -3,6 +3,7 @@
 #include "dxmt9_encode_partition.hpp"
 #include "dxmt9_parallel_render_pass.hpp"
 #include "dxmt9_perf_counters_internal.hpp"
+#include "dxmt9_process_memory_observer.hpp"
 #include "dxmt9_render_scheduling.hpp"
 #include "render/encode_scheduling_progress.hpp"
 
@@ -10,9 +11,13 @@
 
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstdint>
+
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 
 namespace dxmt9::perf {
 namespace detail {
@@ -69,6 +74,25 @@ std::uint64_t periodicPresentInterval() {
     char* end = nullptr;
     const auto parsed = std::strtoull(env, &end, 10);
     return end != env ? parsed : 0ull;
+  }();
+  return value;
+}
+
+std::uint64_t processMemoryPresentInterval() {
+  static const std::uint64_t value = [] {
+    const char* env = std::getenv("DXMT9_PERF_PROCESS_MEMORY_PRESENTS");
+    if (!env || env[0] == '\0' || env[0] == '0') {
+      return 0ull;
+    }
+    for (const char* c = env; *c != '\0'; ++c) {
+      if (*c < '0' || *c > '9') {
+        return 0ull;
+      }
+    }
+    errno = 0;
+    char* end = nullptr;
+    const auto parsed = std::strtoull(env, &end, 10);
+    return end != env && *end == '\0' && errno != ERANGE ? parsed : 0ull;
   }();
   return value;
 }
@@ -259,6 +283,81 @@ void updateMin(std::atomic<std::uint64_t>& counter, std::uint64_t value) {
   }
 }
 
+void sampleProcessMemory() {
+  task_vm_info_data_t taskInfo{};
+  mach_msg_type_number_t taskInfoCount = TASK_VM_INFO_COUNT;
+  if (task_info(mach_task_self(), TASK_VM_INFO,
+                reinterpret_cast<task_info_t>(&taskInfo),
+                &taskInfoCount) != KERN_SUCCESS) {
+    add(counters().processMemoryQueryFailures);
+    return;
+  }
+  // task_info is versioned: never report fields beyond the returned word
+  // count, even when the kernel call itself succeeded.
+  if (taskInfoCount < TASK_VM_INFO_COUNT) {
+    add(counters().processMemoryQueryFailures);
+    return;
+  }
+
+  LowAddressMapSummary low4{};
+  mach_vm_address_t address = 0;
+  natural_t depth = 0;
+  while (address < kLow4GiBDomainEnd) {
+    mach_vm_size_t size = 0;
+    vm_region_submap_info_data_64_t region{};
+    mach_msg_type_number_t regionCount = VM_REGION_SUBMAP_INFO_COUNT_64;
+    const auto result = mach_vm_region_recurse(
+        mach_task_self(), &address, &size, &depth,
+        reinterpret_cast<vm_region_recurse_info_t>(&region), &regionCount);
+    if (result == KERN_INVALID_ADDRESS) {
+      break;
+    }
+    if (result != KERN_SUCCESS || size == 0) {
+      add(counters().processMemoryQueryFailures);
+      return;
+    }
+    if (region.is_submap) {
+      ++depth;
+      continue;
+    }
+    const auto begin = static_cast<std::uint64_t>(address);
+    const auto extent = static_cast<std::uint64_t>(size);
+    const auto end = extent > std::numeric_limits<std::uint64_t>::max() - begin
+        ? std::numeric_limits<std::uint64_t>::max()
+        : begin + extent;
+    low4 = addLowAddressMappedInterval(low4, begin, end);
+    if (!low4.valid || end <= begin) {
+      add(counters().processMemoryQueryFailures);
+      return;
+    }
+    address = static_cast<mach_vm_address_t>(end);
+  }
+  low4 = finishLowAddressMapSummary(low4);
+  if (!low4.valid) {
+    add(counters().processMemoryQueryFailures);
+    return;
+  }
+
+  auto& c = counters();
+  add(c.processMemorySamples);
+  c.processMemoryRssBytes.store(taskInfo.resident_size,
+                                std::memory_order_relaxed);
+  updateMax(c.processMemoryRssPeakBytes, taskInfo.resident_size);
+  c.processMemoryVmBytes.store(taskInfo.virtual_size,
+                               std::memory_order_relaxed);
+  updateMax(c.processMemoryVmPeakBytes, taskInfo.virtual_size);
+  c.processMemoryPhysicalFootprintBytes.store(taskInfo.phys_footprint,
+                                              std::memory_order_relaxed);
+  updateMax(c.processMemoryPhysicalFootprintPeakBytes,
+            taskInfo.phys_footprint);
+  c.processMemoryLow4MappedBytes.store(low4.mappedBytes,
+                                       std::memory_order_relaxed);
+  updateMax(c.processMemoryLow4MappedPeakBytes, low4.mappedBytes);
+  c.processMemoryLow4LargestGapBytes.store(low4.largestGapBytes,
+                                           std::memory_order_relaxed);
+  updateMin(c.processMemoryLow4LargestGapMinBytes, low4.largestGapBytes);
+}
+
 void recordCpuTime(std::atomic<std::uint64_t>& total,
                    std::atomic<std::uint64_t>& max,
                    std::uint64_t nanoseconds) {
@@ -396,6 +495,27 @@ void countDirectChunkSlotSlotProvisionSkippedNonEmpty() {
 
 void countDirectChunkSlotSlotProvisionSourceExceedsBudget() {
   add(counters().directChunkSlotSlotProvisionSourceExceedsBudget);
+}
+
+void countDirectSlotCapacityLeaseDenied() {
+  add(counters().directSlotCapacityLeaseDenials);
+}
+
+void recordDirectSlotCapacityLease(std::uint64_t retainedBytes,
+                                   std::uint64_t stagedBytes,
+                                   bool generationAdvanced,
+                                   bool rolledBack) {
+  auto& c = counters();
+  store(c.directSlotCapacityLeaseRetainedBytes, retainedBytes);
+  updateMax(c.directSlotCapacityLeaseRetainedPeakBytes, retainedBytes);
+  store(c.directSlotCapacityLeaseStagedBytes, stagedBytes);
+  updateMax(c.directSlotCapacityLeaseStagedPeakBytes, stagedBytes);
+  if (generationAdvanced) {
+    add(c.directSlotCapacityLeaseGenerationAdvances);
+  }
+  if (rolledBack) {
+    add(c.directSlotCapacityLeaseRollbacks);
+  }
 }
 
 void countReplaySpanLease(std::uint64_t draws, std::uint64_t commands,
@@ -7441,6 +7561,10 @@ void countPresentEncoded() {
   }
   const auto value =
       counters().presentEncoded.fetch_add(1, std::memory_order_relaxed) + 1;
+  const auto memoryInterval = processMemoryPresentInterval();
+  if (memoryInterval != 0 && value % memoryInterval == 0) {
+    sampleProcessMemory();
+  }
   const auto interval = periodicPresentInterval();
   if (interval != 0 && value % interval == 0) {
     detail::report();

@@ -10,7 +10,9 @@
 // Everything here is pure and value-only: no queue, no Metal, no Wine.
 
 #include "dxmt9/dxmt9_direct_continuation.hpp"
+#include "dxmt9/dxmt9_cpu_ready_tape.hpp"
 
+#include <array>
 #include <cstdio>
 #include <cstdlib>
 #include <vector>
@@ -58,41 +60,11 @@ SourcePayloadCapacity exactSpanPlan(std::size_t draws,
   return capacity;
 }
 
-// Reserve a provisioning plan into an empty slot exactly the way
-// `provisionEmptyDirectSlotUnlocked` does in the queue. Kept in step with that
-// function by `provisioningMatchesQueueReserveShape` below.
+// Invoke the real production primitive. There is deliberately no test-local
+// copy of the reservation sequence.
 void provision(ChunkSlot& slot, const SourcePayloadCapacity& plan) {
-  const auto reserve = [](auto& values, std::size_t required) {
-    if (values.capacity() < required) {
-      values.reserve(required);
-    }
-  };
-  reserve(slot.commandHeaders, plan.commandHeaders);
-  reserve(slot.drawHotStates, plan.drawHotStates);
-  reserve(slot.drawShaderLayouts, plan.drawShaderLayouts);
-  reserve(slot.drawDebugSnapshots, plan.drawDebugSnapshots);
-  reserve(slot.drawPsoSubviews, plan.drawPsoSubviews);
-  reserve(slot.drawUniformFixedPayloads, plan.drawUniformFixedPayloads);
-  reserve(slot.drawUniformVertexConstants, plan.drawUniformVertexConstants);
-  reserve(slot.drawUniformVertexConstantBytes,
-          plan.drawUniformVertexConstantBytes);
-  reserve(slot.drawUniformPixelConstants, plan.drawUniformPixelConstants);
-  reserve(slot.drawUniformPixelConstantBytes,
-          plan.drawUniformPixelConstantBytes);
-  reserve(slot.drawUniformPayloads, plan.drawUniformPayloads);
-  reserve(slot.drawParams, plan.drawParams);
-  reserve(slot.drawPayloadArena, plan.drawPayloadBytes);
-  reserve(slot.drawRunRecords, plan.drawRunRecords);
-  reserve(slot.clearRecords, plan.clearRecords);
-  reserve(slot.surfaceCopyRecords, plan.surfaceCopyRecords);
-  reserve(slot.stretchRectRecords, plan.stretchRectRecords);
-  reserve(slot.colorFillRecords, plan.colorFillRecords);
-  reserve(slot.depthResolveRecords, plan.depthResolveRecords);
-  reserve(slot.generateMipmapsRecords, plan.generateMipmapsRecords);
-  reserve(slot.presentRecords, plan.presentRecords);
-  slot.provisionEmptyDrawUniformLookup(plan.drawUniformPayloads,
-                                       plan.drawUniformVertexConstants,
-                                       plan.drawUniformPixelConstants);
+  check(provisionEmptyDirectSlotStorage(slot, plan),
+        "the production staged provisioning primitive succeeds");
 }
 
 // Grow a slot by one source's exact plan without inspecting capacity, the way
@@ -165,6 +137,66 @@ StorageAddresses addressesOf(const ChunkSlot& slot) {
       .drawRunRecords = slot.drawRunRecords.data(),
       .payloadLookupHeads = slot.drawUniformPayloadLookupHeads.data(),
   };
+}
+
+struct VectorTopology {
+  const void* data = nullptr;
+  std::size_t size = 0;
+  std::size_t capacity = 0;
+
+  friend bool operator==(const VectorTopology&,
+                         const VectorTopology&) = default;
+};
+
+std::array<VectorTopology, 30> topologyOf(const ChunkSlot& slot) {
+  const auto entry = [](const auto& values) {
+    return VectorTopology{values.data(), values.size(), values.capacity()};
+  };
+  return {
+      entry(slot.commandHeaders),
+      entry(slot.drawHotStates),
+      entry(slot.drawShaderLayouts),
+      entry(slot.drawDebugSnapshots),
+      entry(slot.drawPsoSubviews),
+      entry(slot.drawUniformFixedPayloads),
+      entry(slot.drawUniformVertexConstants),
+      entry(slot.drawUniformVertexConstantBytes),
+      entry(slot.drawUniformPixelConstants),
+      entry(slot.drawUniformPixelConstantBytes),
+      entry(slot.drawUniformPayloads),
+      entry(slot.drawParams),
+      entry(slot.drawPayloadArena),
+      entry(slot.drawRunRecords),
+      entry(slot.clearRecords),
+      entry(slot.surfaceCopyRecords),
+      entry(slot.stretchRectRecords),
+      entry(slot.colorFillRecords),
+      entry(slot.depthResolveRecords),
+      entry(slot.generateMipmapsRecords),
+      entry(slot.presentRecords),
+      entry(slot.drawUniformPayloadLookupHeads),
+      entry(slot.drawUniformPayloadLookupTails),
+      entry(slot.drawUniformPayloadLookupNext),
+      entry(slot.drawUniformVertexConstantsLookupHeads),
+      entry(slot.drawUniformVertexConstantsLookupTails),
+      entry(slot.drawUniformVertexConstantsLookupNext),
+      entry(slot.drawUniformPixelConstantsLookupHeads),
+      entry(slot.drawUniformPixelConstantsLookupTails),
+      entry(slot.drawUniformPixelConstantsLookupNext),
+  };
+}
+
+std::array<std::vector<std::uint32_t>, 9> lookupValuesOf(
+    const ChunkSlot& slot) {
+  return {slot.drawUniformPayloadLookupHeads,
+          slot.drawUniformPayloadLookupTails,
+          slot.drawUniformPayloadLookupNext,
+          slot.drawUniformVertexConstantsLookupHeads,
+          slot.drawUniformVertexConstantsLookupTails,
+          slot.drawUniformVertexConstantsLookupNext,
+          slot.drawUniformPixelConstantsLookupHeads,
+          slot.drawUniformPixelConstantsLookupTails,
+          slot.drawUniformPixelConstantsLookupNext};
 }
 
 // ---------------------------------------------------------------------------
@@ -585,9 +617,8 @@ void payloadBytesReduceTheDrawBudgetInsteadOfBreakingTheCap() {
         "a payload-free plan stays inside the declared ceiling");
 }
 
-// The whole-ring figure is a property of the design, not a footnote: the
-// compatibility ring is `kCommandChunkCount` slots wide and each may hold a
-// full provisioning plan.
+// The aggregate figure is a property of the design, not a footnote:
+// queueCompatibility owns two persistent payloads per control shell.
 void perSlotBoundIsStatedPerSlotAndScalesWithTheRing() {
   const auto budget = candidateBudget();
   const auto plan = directSlotProvisionPlan(exactSpanPlan(112), budget);
@@ -596,8 +627,11 @@ void perSlotBoundIsStatedPerSlotAndScalesWithTheRing() {
         "the per-slot ceiling binds the per-slot plan");
   check(perSlot > budget.maxBytes / 2,
         "the budget-fixed plan really does commit most of the declared "
-        "ceiling -- the whole-ring figure must be read as 32x this, not as "
+        "ceiling -- the aggregate must be read as 64x this, not as "
         "free headroom");
+  check(CpuReadyTapeConfig::queueCompatibility(32)
+                .values().compatibilityPayloadCount == 64,
+        "the aggregate multiplier is the physical payload count");
 }
 
 // The derived dimensions have exactly one owner; a per-source sum would
@@ -627,6 +661,195 @@ void derivedDimensionsAreDerivedFromTheTotal() {
         "constant byte totals are exact");
 }
 
+struct FailingAllocation {
+  DirectSlotProvisionAllocation target =
+      DirectSlotProvisionAllocation::Count;
+  bool observed = false;
+};
+
+bool failAllocation(void* opaque,
+                    DirectSlotProvisionAllocation allocation) noexcept {
+  auto& state = *static_cast<FailingAllocation*>(opaque);
+  if (allocation != state.target) {
+    return false;
+  }
+  state.observed = true;
+  return true;
+}
+
+SourcePayloadCapacity allAllocationDimensionsPlan() {
+  auto plan = exactSpanPlan(2, /*clears=*/1, /*presents=*/1,
+                            /*payloadBytesPerDraw=*/16);
+  plan.surfaceCopyRecords = 1;
+  plan.stretchRectRecords = 1;
+  plan.colorFillRecords = 1;
+  plan.depthResolveRecords = 1;
+  plan.generateMipmapsRecords = 1;
+  plan.commandHeaders = plan.drawParams + plan.clearRecords +
+      plan.surfaceCopyRecords + plan.stretchRectRecords +
+      plan.colorFillRecords + plan.depthResolveRecords +
+      plan.generateMipmapsRecords + plan.presentRecords;
+  return plan;
+}
+
+void everyProductionAllocationFailureIsAtomic() {
+  const auto plan = allAllocationDimensionsPlan();
+  constexpr auto count = static_cast<std::size_t>(
+      DirectSlotProvisionAllocation::Count);
+  check(count == 30, "the production staging surface has exactly 30 allocations");
+  for (std::size_t i = 0; i < count; ++i) {
+    ChunkSlot slot;
+    provision(slot, exactSpanPlan(1));
+    const auto before = topologyOf(slot);
+    const auto lookupBefore = lookupValuesOf(slot);
+    const auto retainedBefore = directSlotPhysicalRetainedBytes(slot);
+    FailingAllocation injection{
+        .target = static_cast<DirectSlotProvisionAllocation>(i)};
+    check(!provisionEmptyDirectSlotStorage(
+              slot, plan,
+              DirectSlotProvisionFault{&injection, &failAllocation}),
+          "each deterministic allocation failure rejects the staged candidate");
+    check(injection.observed,
+          "each declared allocation dimension is reached by production");
+    check(topologyOf(slot) == before && lookupValuesOf(slot) == lookupBefore &&
+              directSlotPhysicalRetainedBytes(slot) == retainedBefore &&
+              chunkSlotDirectStorageEmpty(slot),
+          "allocation failure leaves every live pointer, size, capacity and "
+          "lookup topology byte-identical");
+    check(provisionEmptyDirectSlotStorage(slot, plan),
+          "the same live payload accepts a later complete replacement");
+    check(topologyOf(slot) != before && slot.drawUniformPayloadLookupReady(),
+          "successful replacement atomically publishes the complete topology");
+  }
+}
+
+void aggregateLeaseConservesGenerationAndCredit() {
+  const auto compatibility = CpuReadyTapeConfig::queueCompatibility(32);
+  check(compatibility.values().compatibilityPayloadCount == 64,
+        "aggregate policy covers 64 physical payloads, not 32 controls");
+  CpuReadyTape tape(compatibility);
+  check(tape.compatibilityPayloadRetainedBytes(63).has_value() &&
+            *tape.compatibilityPayloadRetainedBytes(63) == 0 &&
+            !tape.compatibilityPayloadRetainedBytes(64).has_value(),
+        "physical capacity inspection is scalar, bounded, and covers payload 64");
+
+  DirectSlotCapacityLeaseState initial{
+      .limitBytes = 500,
+      .retainedBytes = 100,
+      .entry = {.generation = 7, .retainedBytes = 100},
+  };
+  const auto observed = reduceDirectSlotCapacityLease(
+      initial, DirectSlotCapacityLeaseEvent::Observe, 100);
+  check(observed.accepted && observed.next == initial,
+        "observing unchanged physical capacity preserves its generation");
+  const auto staged = reduceDirectSlotCapacityLease(
+      observed.next, DirectSlotCapacityLeaseEvent::Stage, 200);
+  check(staged.accepted && staged.next.retainedBytes == 100 &&
+            staged.next.stagedBytes == 200 &&
+            staged.next.entry.generation == 7 && staged.ticket.valid() &&
+            staged.ticket.generation == 7,
+        "staging charges new credit without releasing old capacity");
+  const auto rolledBack = reduceDirectSlotCapacityLease(
+      staged.next, DirectSlotCapacityLeaseEvent::Rollback, 0, staged.ticket);
+  check(rolledBack.accepted && rolledBack.next.limitBytes == initial.limitBytes &&
+            rolledBack.next.retainedBytes == initial.retainedBytes &&
+            rolledBack.next.stagedBytes == 0 &&
+            rolledBack.next.entry == initial.entry &&
+            !rolledBack.next.stagedTicket.valid(),
+        "failure releases only staged credit with no generation leak");
+
+  const auto adopted = reduceDirectSlotCapacityLease(
+      staged.next, DirectSlotCapacityLeaseEvent::Adopt, 200, staged.ticket);
+  check(adopted.accepted && adopted.next.retainedBytes == 200 &&
+            adopted.next.stagedBytes == 0 &&
+            adopted.next.entry.retainedBytes == 200 &&
+            adopted.next.entry.generation == 8,
+        "atomic adoption replaces credit and advances one capacity generation");
+
+  auto deniedState = initial;
+  deniedState.limitBytes = 250;
+  const auto denied = reduceDirectSlotCapacityLease(
+      deniedState, DirectSlotCapacityLeaseEvent::Stage, 200);
+  check(!denied.accepted && denied.next == deniedState,
+        "replacement is denied when old plus new exceeds the aggregate even "
+        "though the final new capacity alone would fit");
+
+  auto overLimitObservation = initial;
+  overLimitObservation.limitBytes = 150;
+  const auto overLimit = reduceDirectSlotCapacityLease(
+      overLimitObservation, DirectSlotCapacityLeaseEvent::Observe, 200);
+  check(!overLimit.accepted && overLimit.next == overLimitObservation,
+        "observation denies retained physical capacity beyond the aggregate");
+
+  auto reused = adopted.next;
+  reused.retainedBytes += 50;  // another physical payload owns this credit
+  const auto reuseObservation = reduceDirectSlotCapacityLease(
+      reused, DirectSlotCapacityLeaseEvent::Observe, 300);
+  check(reuseObservation.accepted &&
+            reuseObservation.next.retainedBytes == 350 &&
+            reuseObservation.next.entry.generation == 9,
+        "physical-payload reuse updates only that payload and conserves peers");
+
+  auto disabled = initial;
+  disabled.limitBytes = 0;
+  const auto disabledStage = reduceDirectSlotCapacityLease(
+      disabled, DirectSlotCapacityLeaseEvent::Stage, 1);
+  check(!disabledStage.accepted && disabledStage.next == disabled,
+        "zero aggregate policy preserves the exact-fit lane");
+
+  const auto staleAdopt = reduceDirectSlotCapacityLease(
+      staged.next, DirectSlotCapacityLeaseEvent::Adopt, 200,
+      {.generation = staged.ticket.generation,
+       .serial = staged.ticket.serial - 1});
+  check(!staleAdopt.accepted && staleAdopt.next == staged.next,
+        "a stale generation-qualified adoption cannot settle a stage");
+  const auto staleStage = reduceDirectSlotCapacityLease(
+      staged.next, DirectSlotCapacityLeaseEvent::Stage, 1);
+  check(!staleStage.accepted && staleStage.next == staged.next,
+        "a second stage cannot overwrite an outstanding generation ticket");
+  const auto staleRollback = reduceDirectSlotCapacityLease(
+      staged.next, DirectSlotCapacityLeaseEvent::Rollback, 0,
+      {.generation = staged.ticket.generation,
+       .serial = staged.ticket.serial - 1});
+  check(!staleRollback.accepted && staleRollback.next == staged.next,
+        "a stale generation-qualified rollback cannot settle a stage");
+  const auto doubleRollback = reduceDirectSlotCapacityLease(
+      rolledBack.next, DirectSlotCapacityLeaseEvent::Rollback, 0,
+      staged.ticket);
+  check(!doubleRollback.accepted && doubleRollback.next == rolledBack.next,
+        "a second settlement is rejected after rollback");
+  const auto doubleAdopt = reduceDirectSlotCapacityLease(
+      adopted.next, DirectSlotCapacityLeaseEvent::Adopt, 200, staged.ticket);
+  check(!doubleAdopt.accepted && doubleAdopt.next == adopted.next,
+        "a second settlement is rejected after adoption");
+
+  std::array<DirectSlotCapacityLeaseEntry, 64> entries{};
+  std::array<std::uint64_t, 64> actual{};
+  entries[0] = {.generation = 3, .retainedBytes = 10};
+  entries[63] = {.generation = 9, .retainedBytes = 20};
+  actual[0] = 15;
+  actual[63] = 30;
+  const auto reconciled = reconcileDirectSlotCapacityLease(
+      entries, actual, 0, 100, 17);
+  check(reconciled.accepted && reconciled.state.retainedBytes == 45 &&
+            reconciled.state.entry == reconciled.entries[0] &&
+            reconciled.entries[0].generation == 4 &&
+            reconciled.entries[63].generation == 10,
+        "the full physical fold prices an unseen peer and restores the selected "
+        "payload instead of leaking the last peer into its ticket");
+  const auto currentStage = reduceDirectSlotCapacityLease(
+      reconciled.state, DirectSlotCapacityLeaseEvent::Stage, 40);
+  check(currentStage.accepted && currentStage.ticket.generation == 4,
+        "the stage ticket is qualified by the selected payload generation");
+
+  actual[62] = 80;
+  const auto peerOverLimit = reconcileDirectSlotCapacityLease(
+      entries, actual, 0, 100, 17);
+  check(!peerOverLimit.accepted,
+        "unseen peer exact-fit growth that exceeds the aggregate denies "
+        "positive provisioning");
+}
+
 }  // namespace
 
 int main() {
@@ -648,6 +871,8 @@ int main() {
   payloadBytesReduceTheDrawBudgetInsteadOfBreakingTheCap();
   perSlotBoundIsStatedPerSlotAndScalesWithTheRing();
   derivedDimensionsAreDerivedFromTheTotal();
+  everyProductionAllocationFailureIsAtomic();
+  aggregateLeaseConservesGenerationAndCredit();
   if (failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", failures);
     return EXIT_FAILURE;

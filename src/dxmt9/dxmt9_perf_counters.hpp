@@ -307,6 +307,11 @@ void countDirectChunkSlotSlotProvisioned();
 void countDirectChunkSlotSlotProvisionFailed();
 void countDirectChunkSlotSlotProvisionSkippedNonEmpty();
 void countDirectChunkSlotSlotProvisionSourceExceedsBudget();
+void countDirectSlotCapacityLeaseDenied();
+void recordDirectSlotCapacityLease(std::uint64_t retainedBytes,
+                                   std::uint64_t stagedBytes,
+                                   bool generationAdvanced,
+                                   bool rolledBack);
 // Lease-span routing observability (R-BACK-2.102). Count-only and perf-gated:
 // `ordinaryFallbackDraws` and `soaGrowthAfterReserve` both target zero, so a
 // non-zero row is the signal that a direct span degraded or that a reserved

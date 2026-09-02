@@ -3029,137 +3029,52 @@ DirectSlotHeadroomResolution resolveDirectSlotHeadroomBytes(
   return result;
 }
 
-const core::DirectSlotProvisionBudget& directSlotProvisionBudget() {
-  static const core::DirectSlotProvisionBudget budget = [] {
-    const auto resolved = resolveDirectSlotHeadroomBytes(
+struct DirectSlotProvisionPolicy {
+  core::DirectSlotProvisionBudget budget{};
+  std::uint64_t aggregateBytes = 0;
+};
+
+const DirectSlotProvisionPolicy& directSlotProvisionPolicy() {
+  static const DirectSlotProvisionPolicy policy = [] {
+    const auto perPayload = resolveDirectSlotHeadroomBytes(
         std::getenv("DXMT9_DIRECT_SLOT_HEADROOM_BYTES"));
-    if (resolved.rejected) {
+    const auto aggregate = resolveDirectSlotHeadroomBytes(
+        std::getenv("DXMT9_DIRECT_SLOT_AGGREGATE_HEADROOM_BYTES"));
+    if (perPayload.rejected) {
       dxmt9::util::logf(
           dxmt9::util::LogLevel::Warn, "dxmt9-queue",
           "DXMT9_DIRECT_SLOT_HEADROOM_BYTES is not a decimal byte count; "
           "using the disabled default %zu",
-          resolved.maxBytes);
-    } else if (resolved.clamped) {
+          perPayload.maxBytes);
+    } else if (perPayload.clamped) {
       dxmt9::util::logf(
           dxmt9::util::LogLevel::Warn, "dxmt9-queue",
           "DXMT9_DIRECT_SLOT_HEADROOM_BYTES raised to %zu (one draw costs "
           "%zu bytes plus coordinator floors; use 0 for the exact-fit "
           "rollback lane)",
-          resolved.maxBytes, core::kDirectSlotWorstCaseBytesPerDraw);
+          perPayload.maxBytes, core::kDirectSlotWorstCaseBytesPerDraw);
     }
-    core::DirectSlotProvisionBudget value{};
-    value.maxBytes = resolved.maxBytes;
+    if (aggregate.rejected) {
+      dxmt9::util::logf(
+          dxmt9::util::LogLevel::Warn, "dxmt9-queue",
+          "DXMT9_DIRECT_SLOT_AGGREGATE_HEADROOM_BYTES is not a decimal byte "
+          "count; disabling direct-slot provisioning");
+    }
+    DirectSlotProvisionPolicy value{};
+    if (!perPayload.rejected && !aggregate.rejected &&
+        perPayload.maxBytes != 0 && aggregate.maxBytes != 0) {
+      value.budget.maxBytes = perPayload.maxBytes;
+      value.aggregateBytes = aggregate.maxBytes;
+    } else if (perPayload.maxBytes != 0) {
+      dxmt9::util::logf(
+          dxmt9::util::LogLevel::Warn, "dxmt9-queue",
+          "positive DXMT9_DIRECT_SLOT_HEADROOM_BYTES requires an explicit "
+          "positive DXMT9_DIRECT_SLOT_AGGREGATE_HEADROOM_BYTES; using exact "
+          "fit");
+    }
     return value;
   }();
-  return budget;
-}
-
-// Reserve a provisioning plan into a slot that is EMPTY in every direct
-// dimension. This is the only place a final-slot vector may reallocate, and it
-// is address-safe precisely because there is nothing published to move: no
-// row, byte range, uniform-lookup link or open draw run exists yet. A
-// populated slot is never touched here.
-//
-// A throwing reservation must leave the live slot byte-identical. Stage every
-// allocation in an isolated empty holder, then publish the capacity set with
-// noexcept vector swaps. The assembler's own exact reserve still runs after a
-// failed attempt, so the opt-in mechanism degrades to the ordinary exact-fit
-// lane without exposing a partially provisioned lookup topology.
-bool provisionEmptyDirectSlotUnlocked(
-    core::ChunkSlot& slot,
-    const core::SourcePayloadCapacity& plan) noexcept {
-  DXMT_ASSERT(core::chunkSlotDirectStorageEmpty(slot) &&
-              "direct slot provisioning may only reserve an empty slot");
-  if (!core::chunkSlotDirectStorageEmpty(slot)) {
-    return false;
-  }
-  core::ChunkSlot staged;
-  const auto swapStorage = [](core::ChunkSlot& left,
-                              core::ChunkSlot& right) noexcept {
-    using std::swap;
-    swap(left.commandHeaders, right.commandHeaders);
-    swap(left.drawHotStates, right.drawHotStates);
-    swap(left.drawShaderLayouts, right.drawShaderLayouts);
-    swap(left.drawDebugSnapshots, right.drawDebugSnapshots);
-    swap(left.drawPsoSubviews, right.drawPsoSubviews);
-    swap(left.drawUniformFixedPayloads, right.drawUniformFixedPayloads);
-    swap(left.drawUniformVertexConstants, right.drawUniformVertexConstants);
-    swap(left.drawUniformVertexConstantBytes,
-         right.drawUniformVertexConstantBytes);
-    swap(left.drawUniformPixelConstants, right.drawUniformPixelConstants);
-    swap(left.drawUniformPixelConstantBytes,
-         right.drawUniformPixelConstantBytes);
-    swap(left.drawUniformPayloads, right.drawUniformPayloads);
-    swap(left.drawUniformPayloadLookupHeads,
-         right.drawUniformPayloadLookupHeads);
-    swap(left.drawUniformPayloadLookupTails,
-         right.drawUniformPayloadLookupTails);
-    swap(left.drawUniformPayloadLookupNext,
-         right.drawUniformPayloadLookupNext);
-    swap(left.drawUniformVertexConstantsLookupHeads,
-         right.drawUniformVertexConstantsLookupHeads);
-    swap(left.drawUniformVertexConstantsLookupTails,
-         right.drawUniformVertexConstantsLookupTails);
-    swap(left.drawUniformVertexConstantsLookupNext,
-         right.drawUniformVertexConstantsLookupNext);
-    swap(left.drawUniformPixelConstantsLookupHeads,
-         right.drawUniformPixelConstantsLookupHeads);
-    swap(left.drawUniformPixelConstantsLookupTails,
-         right.drawUniformPixelConstantsLookupTails);
-    swap(left.drawUniformPixelConstantsLookupNext,
-         right.drawUniformPixelConstantsLookupNext);
-    swap(left.drawParams, right.drawParams);
-    swap(left.drawPayloadArena, right.drawPayloadArena);
-    swap(left.drawRunRecords, right.drawRunRecords);
-    swap(left.clearRecords, right.clearRecords);
-    swap(left.surfaceCopyRecords, right.surfaceCopyRecords);
-    swap(left.stretchRectRecords, right.stretchRectRecords);
-    swap(left.colorFillRecords, right.colorFillRecords);
-    swap(left.depthResolveRecords, right.depthResolveRecords);
-    swap(left.generateMipmapsRecords, right.generateMipmapsRecords);
-    swap(left.presentRecords, right.presentRecords);
-  };
-  try {
-    const auto reserve = [](auto& values, std::size_t required) {
-      if (values.capacity() < required) {
-        values.reserve(required);
-      }
-    };
-    reserve(staged.commandHeaders, plan.commandHeaders);
-    reserve(staged.drawHotStates, plan.drawHotStates);
-    reserve(staged.drawShaderLayouts, plan.drawShaderLayouts);
-    reserve(staged.drawDebugSnapshots, plan.drawDebugSnapshots);
-    reserve(staged.drawPsoSubviews, plan.drawPsoSubviews);
-    reserve(staged.drawUniformFixedPayloads, plan.drawUniformFixedPayloads);
-    reserve(staged.drawUniformVertexConstants, plan.drawUniformVertexConstants);
-    reserve(staged.drawUniformVertexConstantBytes,
-            plan.drawUniformVertexConstantBytes);
-    reserve(staged.drawUniformPixelConstants, plan.drawUniformPixelConstants);
-    reserve(staged.drawUniformPixelConstantBytes,
-            plan.drawUniformPixelConstantBytes);
-    reserve(staged.drawUniformPayloads, plan.drawUniformPayloads);
-    reserve(staged.drawParams, plan.drawParams);
-    reserve(staged.drawPayloadArena, plan.drawPayloadBytes);
-    reserve(staged.drawRunRecords, plan.drawRunRecords);
-    reserve(staged.clearRecords, plan.clearRecords);
-    reserve(staged.surfaceCopyRecords, plan.surfaceCopyRecords);
-    reserve(staged.stretchRectRecords, plan.stretchRectRecords);
-    reserve(staged.colorFillRecords, plan.colorFillRecords);
-    reserve(staged.depthResolveRecords, plan.depthResolveRecords);
-    reserve(staged.generateMipmapsRecords, plan.generateMipmapsRecords);
-    reserve(staged.presentRecords, plan.presentRecords);
-    // Bucket tables are SIZED, not reserved, and a later growth would rehash
-    // an already-published prefix -- which continuation admission forbids. Size
-    // them once here, while the record vectors are empty and the rebuild is
-    // trivial.
-    staged.provisionEmptyDrawUniformLookup(plan.drawUniformPayloads,
-                                           plan.drawUniformVertexConstants,
-                                           plan.drawUniformPixelConstants);
-  } catch (...) {
-    return false;
-  }
-  swapStorage(slot, staged);
-  return true;
+  return policy;
 }
 
 bool maybeCommitDrawChunkUnlocked(
@@ -3941,6 +3856,7 @@ CommandQueue::beginDirectChunkSlotReplay(
   core::SourcePayloadBlock* payload = nullptr;
   bool continuation = false;
   bool rotated = false;
+  const auto& provisionPolicy = directSlotProvisionPolicy();
   for (;;) {
     ensureWritingSlotUnlocked(*this, lock);
     if (!writingSlot_ || *writingSlot_ >= slots_.size()) {
@@ -3963,11 +3879,116 @@ CommandQueue::beginDirectChunkSlotReplay(
       // headroom. The shared reducer owns the decision; production, the native
       // truth table and the TLA binding all consume it.
       const auto storage = core::directSlotStorageTransition(
-          *payload, capacity, directSlotProvisionBudget(),
+          *payload, capacity, provisionPolicy.budget,
           allowRotation && !rotated);
       switch (storage.action) {
-      case core::DirectSlotStorageAction::ProvisionEmpty:
-        if (provisionEmptyDirectSlotUnlocked(*payload, storage.provision)) {
+      case core::DirectSlotStorageAction::ProvisionEmpty: {
+        const core::CpuReadyTape::SourceRef sourceRef{
+            .id = control.sourceId, .storage = control.storage};
+        const auto payloadIndex =
+            cpuReadyTape_.compatibilityPayloadIndex(sourceRef);
+        bool provisioned = false;
+        if (payloadIndex &&
+            *payloadIndex < directSlotCapacityLeaseEntries_.size()) {
+          // Reconcile every persistent compatibility payload before charging
+          // positive headroom.  A peer can have grown by exact-fit appends
+          // while its reusable control shell was inactive; pricing only the
+          // current payload would let that retained capacity evade the
+          // aggregate lease.
+          std::array<std::uint64_t, kCommandChunkCount * 2>
+              actualRetainedBytes{};
+          bool snapshotValid = directSlotCapacityStagedBytes_ == 0 &&
+              cpuReadyTape_.compatibilityPayloadCount() ==
+                  actualRetainedBytes.size();
+          for (std::size_t i = 0; snapshotValid &&
+                               i < actualRetainedBytes.size(); ++i) {
+            const auto actual =
+                cpuReadyTape_.compatibilityPayloadRetainedBytes(i);
+            if (!actual) {
+              snapshotValid = false;
+              break;
+            }
+            actualRetainedBytes[i] = *actual;
+          }
+          const auto reconciliation = snapshotValid
+              ? core::reconcileDirectSlotCapacityLease(
+                    directSlotCapacityLeaseEntries_, actualRetainedBytes,
+                    *payloadIndex, provisionPolicy.aggregateBytes,
+                    directSlotCapacityNextTicketSerial_)
+              : core::DirectSlotCapacityLeaseReconciliation<
+                    kCommandChunkCount * 2>{};
+          auto leaseState = reconciliation.state;
+          if (reconciliation.accepted) {
+            directSlotCapacityRetainedBytes_ = leaseState.retainedBytes;
+            directSlotCapacityStagedBytes_ = leaseState.stagedBytes;
+            directSlotCapacityLeaseEntries_ = reconciliation.entries;
+            perf::recordDirectSlotCapacityLease(
+                leaseState.retainedBytes, leaseState.stagedBytes,
+                reconciliation.generationAdvanced, false);
+          }
+          const auto requested = core::directSlotProvisionRetainedBytes(
+              storage.provision);
+          const auto stage = reconciliation.accepted
+              ? core::reduceDirectSlotCapacityLease(
+                    leaseState, core::DirectSlotCapacityLeaseEvent::Stage,
+                    requested)
+              : core::DirectSlotCapacityLeaseTransition{};
+          if (stage.accepted) {
+            leaseState = stage.next;
+            directSlotCapacityRetainedBytes_ = leaseState.retainedBytes;
+            directSlotCapacityStagedBytes_ = leaseState.stagedBytes;
+            directSlotCapacityLeaseEntries_[*payloadIndex] = leaseState.entry;
+            directSlotCapacityNextTicketSerial_ =
+                leaseState.nextTicketSerial;
+            perf::recordDirectSlotCapacityLease(
+                leaseState.retainedBytes, leaseState.stagedBytes,
+                false, false);
+            struct AdoptionContext {
+              core::DirectSlotCapacityLeaseState state{};
+              bool adopted = false;
+            } adoptionContext{.state = leaseState};
+            const auto acceptAdoption = [](void* opaque,
+                                           std::uint64_t retainedBytes) noexcept {
+              auto& context = *static_cast<AdoptionContext*>(opaque);
+              const auto adoption = core::reduceDirectSlotCapacityLease(
+                  context.state,
+                  core::DirectSlotCapacityLeaseEvent::Adopt,
+                  retainedBytes, context.state.stagedTicket);
+              if (!adoption.accepted) {
+                return false;
+              }
+              context.state = adoption.next;
+              context.adopted = true;
+              return true;
+            };
+            provisioned = core::provisionEmptyDirectSlotStorage(
+                *payload, storage.provision, {},
+                core::DirectSlotProvisionAdoption{
+                    &adoptionContext, acceptAdoption});
+            const auto finish = provisioned && adoptionContext.adopted
+                ? core::DirectSlotCapacityLeaseTransition{
+                      .next = adoptionContext.state, .accepted = true}
+                : core::reduceDirectSlotCapacityLease(
+                      leaseState,
+                      core::DirectSlotCapacityLeaseEvent::Rollback, 0,
+                      leaseState.stagedTicket);
+            if (!finish.accepted) {
+              requestSchedulingStopLocked();
+              return {.status = DirectChunkSlotReplayStatus::FailStopped};
+            }
+            directSlotCapacityRetainedBytes_ = finish.next.retainedBytes;
+            directSlotCapacityStagedBytes_ = finish.next.stagedBytes;
+            directSlotCapacityLeaseEntries_[*payloadIndex] = finish.next.entry;
+            directSlotCapacityNextTicketSerial_ =
+                finish.next.nextTicketSerial;
+            perf::recordDirectSlotCapacityLease(
+                finish.next.retainedBytes, finish.next.stagedBytes,
+                provisioned, !provisioned);
+          } else {
+            perf::countDirectSlotCapacityLeaseDenied();
+          }
+        }
+        if (provisioned) {
           perf::countDirectChunkSlotSlotProvisioned();
           if (storage.sourceExceedsBudget) {
             // The source is its own budget: no adjacent source can share this
@@ -3978,6 +3999,7 @@ CommandQueue::beginDirectChunkSlotReplay(
           perf::countDirectChunkSlotSlotProvisionFailed();
         }
         break;
+      }
       case core::DirectSlotStorageAction::ProvisionSkippedNonEmpty:
         perf::countDirectChunkSlotSlotProvisionSkippedNonEmpty();
         break;
@@ -4023,7 +4045,7 @@ CommandQueue::beginDirectChunkSlotReplay(
     // admission is lifecycle state it cannot see, so it is passed in; nothing
     // here re-derives the decision from `admission`.
     const auto storage = core::directSlotStorageTransition(
-        *payload, capacity, directSlotProvisionBudget(),
+        *payload, capacity, provisionPolicy.budget,
         allowRotation && !rotated);
     if (storage.action == core::DirectSlotStorageAction::AppendInPlace) {
       continuation = true;

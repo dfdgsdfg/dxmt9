@@ -100,7 +100,7 @@ append, so it is not on the cost path this requirement targets.
 | TLA+ | `specs/verification/tla/ReplayEmissionPlanIslands.tla` with three deliberate-regression configurations (span identity, separator cut, run closure), registered in `scripts/check/verify_tla.sh` |
 | Model-code binding | `dxmt9-replay-emission-plan-islands-spec` -- truth table over the production `compatibilitySpanAdmission`, plus one translated trace per `.counterexample.cfg` |
 | Storage capacity model | `specs/verification/tla/DirectSlotCapacityProvisioning.tla` -- capacity as a quantity, empty-slot provisioning, slot generation, and boundary credits against a same-capacity serial reference, with `exact-fit` and `grow-populated` expected failures |
-| Storage capacity model-code binding | `dxmt9-direct-slot-provisioning-spec` -- the production `directSlotStorageTransition` reducer, `directSlotProvisionPlan`, `provisionEmptyDrawUniformLookup` and the priced budget, exercised over 16 consecutive mean-sized sources with pointer-identity assertions |
+| Storage capacity model-code binding | `dxmt9-direct-slot-provisioning-spec` -- the production `directSlotStorageTransition` reducer, `directSlotProvisionPlan`, real staged provisioning primitive, 64-payload aggregate lease reducer and priced budget, including every 21 vector + nine lookup allocation failure, exact pointer/capacity/topology rollback, replacement/denial/reuse/leak cases, and consecutive mean-sized sources |
 | Production differential | `dxmt9-cpu-ready-production-routing-spec` -- a compatibility-cut raw against the Legacy lane, comparing the **concatenated per-command `effectiveCommandDigest` sequence** across every source the raw published (ordered command kind, draw parameters, binding-override and binding-snapshot payload bytes, coordinator descriptors), not a command total; plus the Present-tail span, the coordinator-bearing span, both capacity rotations, and the non-terminal/duplicate Present whole-raw fallbacks with their published source order |
 
 **Open, and not claimed (`R-BACK-2.103` / `R-VERIF-2.25`):**
@@ -150,24 +150,27 @@ model/code closure gaps, not claims delegated to the wild gate.
      it does not prove the wild values return to Legacy. The candidate failed
      before those counters could be collected and is reachable only through an
      explicit positive `DXMT9_DIRECT_SLOT_HEADROOM_BYTES` value.
-   - **No memory evidence, and the ring figure is large.** The calibration ceiling
-     is 48 MiB per slot and a mean-shaped plan commits 42.46 MiB of it
-     (21,788 B/draw x 2,048 draws). The compatibility ring is
-     `kCommandChunkCount = 32` slots wide, so worst-case whole-ring retention is
-     about **1.33 GiB**. Two things reduce the marginal cost against Legacy --
+   - **No wild memory evidence, and the payload aggregate is large.** The
+     calibration ceiling is 48 MiB per physical payload and a mean-shaped plan
+     commits 42.46 MiB of it (21,788 B/draw x 2,048 draws).
+     `queueCompatibility(32)` owns 64 persistent payloads, so logical worst-case
+     retention is about **2.65 GiB**. Two things reduce the marginal cost against Legacy --
      Legacy already accumulates a whole present per slot and `std::vector`
      doubling rounds the same vectors up, and reserved-but-unwritten pages are
      not resident -- but neither is a measurement and neither cancels the ring
-     figure. No wild peak-RSS delta against the exact-fit lane has been
+     figure. The bounded aggregate lease, deterministic staging-failure matrix,
+     and opt-in Mach RSS/VM/physical-footprint plus low-4-GiB mapped/largest-gap
+     counters are now native-bound; no wild delta against exact fit has been
      collected. The 8 MiB failure and x86_64 unix allocator mean 32-bit address-
-     space exhaustion cannot be claimed. The next proof boundary is an aggregate
-     ring lease plus RSS/VM/address-domain telemetry, not a smaller guessed
-     default.
-   - **Failure atomicity is implemented but not fault-injected.** Capacity and
-     lookup topology are now staged in an isolated empty slot and adopted by
-     non-throwing swaps, so an exception leaves the live slot on exact-fit. The
-     missing evidence is deterministic allocation failure at every staged
-     dimension plus a real assembler/checkpoint/dedup/rollback/reuse fixture.
+     space exhaustion cannot be claimed.
+   - **The staging primitive is fault-injected, but queue integration remains
+     open.** Capacity and lookup topology are staged in an isolated empty slot
+     and adopted by non-throwing swaps; native tests inject allocation failure
+     at all 30 production dimensions (21 storage vectors plus 9 lookup arrays)
+     and verify pointer/capacity/topology rollback. A real queue-level
+     assembler/checkpoint/dedup/rollback/reuse fixture and no-boundary
+     integration proof are still missing, so this primitive result is not an
+     encode-scheduling promotion claim.
    - **A coordinator-only first span still costs one rotation.** A span with no
      draws provisions zero draw storage on purpose, so a following draw-bearing
      source rotates once before the slot is provisioned against a plan that

@@ -22,6 +22,7 @@ normal_models=(
   CpuReadySessionProgress
   DceChunkLookahead
   DirectChunkSlotContinuation
+  DirectSlotAggregateCapacityLease
   DirectSlotCapacityProvisioning
   DrawPsoIdentity
   DrawableToken
@@ -60,10 +61,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=48
+expected_normal_count=49
 expected_progress_count=1
-expected_counterexample_count=89
-expected_cfg_count=138
+expected_counterexample_count=91
+expected_cfg_count=141
 progress_model=CpuPipelineLifecycle
 progress_cfg_name="$progress_model.progress.cfg"
 
@@ -116,6 +117,8 @@ counterexample_models=(
   # reallocating an already published extent.
   "DirectSlotCapacityProvisioning|.exact-fit.counterexample|Invariant BoundaryCreditsNotExceeded is violated"
   "DirectSlotCapacityProvisioning|.grow-populated.counterexample|Invariant NoGrowWhilePopulated is violated"
+  "DirectSlotAggregateCapacityLease|.partial-adoption.counterexample|Invariant AdoptionIsAtomic is violated"
+  "DirectSlotAggregateCapacityLease|.leaked-credit.counterexample|Invariant RetainedCreditConserved is violated"
   "ReplayEmissionPlanIslands|.span-identity.counterexample|Invariant EachRecordEmittedOnce is violated"
   "ReplayEmissionPlanIslands|.separator-cut.counterexample|Invariant NoLegacyRetryAfterSeparator is violated"
   "ReplayEmissionPlanIslands|.run-closure.counterexample|Invariant RunClosedAcrossSeparator is violated"

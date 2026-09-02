@@ -2133,9 +2133,12 @@ previous source exactly.
 ### Empty-slot storage provisioning (R-BACK-2.104)
 
 A final slot's physical capacity is provisioned once, while the slot is empty in
-every direct dimension, and never grown afterwards. Production policy resolves
-unset, empty, malformed and exact-zero headroom to disabled; an explicit
-positive byte count is the only way to enter this experimental mechanism.
+every direct dimension, and never grown afterwards. The storage owner is one
+of the 64 persistent compatibility payloads in `CpuReadyTape`, not one of the
+32 reusable control shells. Production keys retained credit to physical
+payload index plus capacity generation. Both the per-payload and aggregate
+byte ceilings must be explicit positive decimal values; otherwise the policy
+resolves to disabled and exact-fit remains byte-identical.
 
 The allocation is a transaction of its own. Production first constructs the
 complete vector-capacity and uniform-lookup topology in an isolated empty
@@ -2144,6 +2147,19 @@ failure destroys the staging slot and leaves the live slot unchanged for the
 ordinary exact-fit assembler path. Sequentially reserving the live slot and
 catching an exception is invalid because it exposes a partially provisioned
 topology to replay.
+
+The queue-wide lease reducer charges old retained capacity plus the complete
+staging candidate during replacement. Before positive-headroom staging,
+production reconciles the scalar retained-capacity snapshot for all 64
+persistent compatibility payloads, so an unseen peer exact-fit growth is
+priced and an already-over-limit observation denies provisioning. Admission
+denial allocates nothing; allocation failure rolls staged credit back; successful
+swap advances only the physical payload's capacity generation and replaces old
+credit with new. Stage/Adopt/Rollback carry an explicit generation-qualified
+ticket, making stale and double settlement pure reducer rejections. The
+per-span semantic `ReplayTransaction` remains separate and unchanged: capacity
+lease acquisition/adoption is neither a semantic transaction nor a source,
+session, publication, completion, or wake transition.
 
 The draw dimension is **budget-fixed**: every in-budget first span provisions the
 same priced ceiling, so slot storage does not depend on where the producer
@@ -2206,16 +2222,16 @@ The lookup triples are priced at **four** buckets per record, not two:
 so two would make the byte ceiling unsound against
 `directSlotProvisionRetainedBytes`, which counts what is actually reserved.
 
-At that price the 2,048-draw ceiling commits **42.46 MiB per slot**
-(44,526,752 B for a mean-shaped plan). **This is a per-slot figure and the
-compatibility ring is `kCommandChunkCount = 32` slots wide, so the worst-case
-whole-ring retention is about 1.33 GiB.** That number is the honest cost of the
+At that price the 2,048-draw ceiling commits **42.46 MiB per physical payload**
+(44,526,752 B for a mean-shaped plan). **`queueCompatibility(32)` owns 64
+persistent payloads, so their logical worst-case retention is about 2.65
+GiB.** That number is the honest cost of the
 mechanism and is not offset by anything below; it is why provisioning is bounded
 by an explicit byte budget with a documented `0` rollback rather than being
 treated as free.
 
 Two things do reduce the *marginal* cost against the reference lane, and neither
-cancels the ring figure. First, the Legacy reference lane already accumulates a
+cancels the aggregate figure. First, the Legacy reference lane already accumulates a
 whole present into one slot -- GT1 2,235,425 draws over 2,995 presents and GT2
 2,491,431 over 1,478, i.e. 746 and 1,685 draws per published chunk -- and
 `std::vector` growth rounds each of those vectors to the next power-of-two

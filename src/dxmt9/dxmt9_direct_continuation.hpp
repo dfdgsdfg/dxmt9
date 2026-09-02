@@ -1,10 +1,14 @@
 #pragma once
 
+#include "dxmt9_chunk_slot_capacity.hpp"
 #include "dxmt9_source_payload.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <new>
+#include <utility>
 
 namespace dxmt9::core {
 
@@ -83,15 +87,17 @@ struct DirectSlotProvisionBudget {
   // `directSlotProvisionRetainedBytes`, which is the function the ceiling is
   // derived against.
   //
-  // This is a per-slot number and the ring is `kCommandChunkCount` slots wide,
-  // so the worst-case whole-ring retention is that many times larger. That
+  // This is a per-payload number and queueCompatibility owns
+  // `2 * kCommandChunkCount` persistent payloads, so the worst-case aggregate
+  // retention is that many times larger. That
   // figure is stated, not waved away, in
   // `specs/backend/encode-scheduling/{spec,gap}.md`; it is the reason this
   // mechanism is bounded and explicitly opt-in rather than free.
   //
   // Provisioning is fail-closed by default. A positive
-  // `DXMT9_DIRECT_SLOT_HEADROOM_BYTES` explicitly selects the experimental
-  // candidate; `0` retains the byte-identical exact-fit lane. The candidate
+  // `DXMT9_DIRECT_SLOT_HEADROOM_BYTES` plus an explicit positive aggregate
+  // ceiling select the experimental candidate; `0` retains the byte-identical
+  // exact-fit lane. The candidate
   // ceiling remains named here so pure algebra/model tests do not smuggle a
   // production default through value initialization.
   std::size_t maxBytes = 0;
@@ -273,7 +279,7 @@ inline constexpr std::size_t kDirectSlotMinHeadroomBytes =
 // budget regression asserts the bound with a NON-ZERO per-draw payload, so the
 // bound is checked rather than merely stated.
 //
-// This is one slot. The compatibility ring holds `kCommandChunkCount` of them.
+// This is one payload. Queue compatibility owns two payloads per control.
 inline constexpr std::size_t directSlotProvisionRetainedBytes(
     const SourcePayloadCapacity& plan) noexcept {
   return plan.commandHeaders * sizeof(MetalCommandHeader) +
@@ -307,6 +313,15 @@ inline constexpr std::size_t directSlotProvisionRetainedBytes(
       plan.depthResolveRecords * sizeof(DepthResolveDesc) +
       plan.generateMipmapsRecords * sizeof(GenerateMipmapsDesc) +
       plan.presentRecords * sizeof(PresentCommandRecord);
+}
+
+// Retained bytes of the storage a physical compatibility payload actually
+// owns. Unlike the logical plan price above, this reads vector capacities so
+// aggregate lease credit follows the persistent CpuReadyTape payload across
+// source/control reuse and exact-fit growth.
+inline std::size_t directSlotPhysicalRetainedBytes(
+    const ChunkSlot& slot) noexcept {
+  return chunkSlotPhysicalRetainedBytes(slot);
 }
 
 // Per-draw payload arena bytes this source implies. Rounded UP so provisioning
@@ -458,6 +473,435 @@ inline bool chunkSlotDirectStorageEmpty(const ChunkSlot& slot) noexcept {
       slot.readbackRecords.empty() && slot.colorFillRecords.empty() &&
       slot.depthResolveRecords.empty() &&
       slot.generateMipmapsRecords.empty() && slot.presentRecords.empty();
+}
+
+enum class DirectSlotProvisionAllocation : std::uint8_t {
+  CommandHeaders,
+  DrawHotStates,
+  DrawShaderLayouts,
+  DrawDebugSnapshots,
+  DrawPsoSubviews,
+  DrawUniformFixedPayloads,
+  DrawUniformVertexConstants,
+  DrawUniformVertexConstantBytes,
+  DrawUniformPixelConstants,
+  DrawUniformPixelConstantBytes,
+  DrawUniformPayloads,
+  DrawParams,
+  DrawPayloadArena,
+  DrawRunRecords,
+  ClearRecords,
+  SurfaceCopyRecords,
+  StretchRectRecords,
+  ColorFillRecords,
+  DepthResolveRecords,
+  GenerateMipmapsRecords,
+  PresentRecords,
+  PayloadLookupHeads,
+  PayloadLookupTails,
+  PayloadLookupNext,
+  VertexLookupHeads,
+  VertexLookupTails,
+  VertexLookupNext,
+  PixelLookupHeads,
+  PixelLookupTails,
+  PixelLookupNext,
+  Count,
+};
+
+struct DirectSlotProvisionFault {
+  void* context = nullptr;
+  bool (*fail)(void*, DirectSlotProvisionAllocation) noexcept = nullptr;
+
+  bool shouldFail(DirectSlotProvisionAllocation allocation) const noexcept {
+    return fail && fail(context, allocation);
+  }
+};
+
+struct DirectSlotProvisionAdoption {
+  void* context = nullptr;
+  bool (*accept)(void*, std::uint64_t) noexcept = nullptr;
+
+  bool accepts(std::uint64_t retainedBytes) const noexcept {
+    return !accept || accept(context, retainedBytes);
+  }
+};
+
+// The real production staging primitive. Tests inject at the operation seam;
+// production passes the default no-fault value. All allocations land in the
+// isolated holder and the only live-slot mutation is the final noexcept swap.
+inline bool provisionEmptyDirectSlotStorage(
+    ChunkSlot& slot, const SourcePayloadCapacity& plan,
+    DirectSlotProvisionFault fault = {},
+    DirectSlotProvisionAdoption adoption = {}) noexcept {
+  DXMT_ASSERT(chunkSlotDirectStorageEmpty(slot) &&
+              "direct slot provisioning requires an empty physical payload");
+  if (!chunkSlotDirectStorageEmpty(slot)) {
+    return false;
+  }
+  ChunkSlot staged;
+  const auto reserve = [&](auto& values, std::size_t required,
+                           DirectSlotProvisionAllocation allocation) {
+    if (required == 0) {
+      return;
+    }
+    if (fault.shouldFail(allocation)) {
+      throw std::bad_alloc{};
+    }
+    values.reserve(required);
+  };
+  const auto lookup = [&](std::vector<std::uint32_t>& heads,
+                          std::vector<std::uint32_t>& tails,
+                          std::vector<std::uint32_t>& next,
+                          std::size_t count,
+                          DirectSlotProvisionAllocation headAllocation,
+                          DirectSlotProvisionAllocation tailAllocation,
+                          DirectSlotProvisionAllocation nextAllocation) {
+    if (count == 0) {
+      return;
+    }
+    const auto buckets = detail::chunkSlotUniformLookupBucketCount(count);
+    if (fault.shouldFail(headAllocation)) {
+      throw std::bad_alloc{};
+    }
+    heads.assign(buckets, detail::kChunkSlotInvalidUniformIndex);
+    if (fault.shouldFail(tailAllocation)) {
+      throw std::bad_alloc{};
+    }
+    tails.assign(buckets, detail::kChunkSlotInvalidUniformIndex);
+    if (fault.shouldFail(nextAllocation)) {
+      throw std::bad_alloc{};
+    }
+    next.reserve(count);
+  };
+  try {
+    reserve(staged.commandHeaders, plan.commandHeaders,
+            DirectSlotProvisionAllocation::CommandHeaders);
+    reserve(staged.drawHotStates, plan.drawHotStates,
+            DirectSlotProvisionAllocation::DrawHotStates);
+    reserve(staged.drawShaderLayouts, plan.drawShaderLayouts,
+            DirectSlotProvisionAllocation::DrawShaderLayouts);
+    reserve(staged.drawDebugSnapshots, plan.drawDebugSnapshots,
+            DirectSlotProvisionAllocation::DrawDebugSnapshots);
+    reserve(staged.drawPsoSubviews, plan.drawPsoSubviews,
+            DirectSlotProvisionAllocation::DrawPsoSubviews);
+    reserve(staged.drawUniformFixedPayloads, plan.drawUniformFixedPayloads,
+            DirectSlotProvisionAllocation::DrawUniformFixedPayloads);
+    reserve(staged.drawUniformVertexConstants,
+            plan.drawUniformVertexConstants,
+            DirectSlotProvisionAllocation::DrawUniformVertexConstants);
+    reserve(staged.drawUniformVertexConstantBytes,
+            plan.drawUniformVertexConstantBytes,
+            DirectSlotProvisionAllocation::DrawUniformVertexConstantBytes);
+    reserve(staged.drawUniformPixelConstants, plan.drawUniformPixelConstants,
+            DirectSlotProvisionAllocation::DrawUniformPixelConstants);
+    reserve(staged.drawUniformPixelConstantBytes,
+            plan.drawUniformPixelConstantBytes,
+            DirectSlotProvisionAllocation::DrawUniformPixelConstantBytes);
+    reserve(staged.drawUniformPayloads, plan.drawUniformPayloads,
+            DirectSlotProvisionAllocation::DrawUniformPayloads);
+    reserve(staged.drawParams, plan.drawParams,
+            DirectSlotProvisionAllocation::DrawParams);
+    reserve(staged.drawPayloadArena, plan.drawPayloadBytes,
+            DirectSlotProvisionAllocation::DrawPayloadArena);
+    reserve(staged.drawRunRecords, plan.drawRunRecords,
+            DirectSlotProvisionAllocation::DrawRunRecords);
+    reserve(staged.clearRecords, plan.clearRecords,
+            DirectSlotProvisionAllocation::ClearRecords);
+    reserve(staged.surfaceCopyRecords, plan.surfaceCopyRecords,
+            DirectSlotProvisionAllocation::SurfaceCopyRecords);
+    reserve(staged.stretchRectRecords, plan.stretchRectRecords,
+            DirectSlotProvisionAllocation::StretchRectRecords);
+    reserve(staged.colorFillRecords, plan.colorFillRecords,
+            DirectSlotProvisionAllocation::ColorFillRecords);
+    reserve(staged.depthResolveRecords, plan.depthResolveRecords,
+            DirectSlotProvisionAllocation::DepthResolveRecords);
+    reserve(staged.generateMipmapsRecords, plan.generateMipmapsRecords,
+            DirectSlotProvisionAllocation::GenerateMipmapsRecords);
+    reserve(staged.presentRecords, plan.presentRecords,
+            DirectSlotProvisionAllocation::PresentRecords);
+    lookup(staged.drawUniformPayloadLookupHeads,
+           staged.drawUniformPayloadLookupTails,
+           staged.drawUniformPayloadLookupNext, plan.drawUniformPayloads,
+           DirectSlotProvisionAllocation::PayloadLookupHeads,
+           DirectSlotProvisionAllocation::PayloadLookupTails,
+           DirectSlotProvisionAllocation::PayloadLookupNext);
+    lookup(staged.drawUniformVertexConstantsLookupHeads,
+           staged.drawUniformVertexConstantsLookupTails,
+           staged.drawUniformVertexConstantsLookupNext,
+           plan.drawUniformVertexConstants,
+           DirectSlotProvisionAllocation::VertexLookupHeads,
+           DirectSlotProvisionAllocation::VertexLookupTails,
+           DirectSlotProvisionAllocation::VertexLookupNext);
+    lookup(staged.drawUniformPixelConstantsLookupHeads,
+           staged.drawUniformPixelConstantsLookupTails,
+           staged.drawUniformPixelConstantsLookupNext,
+           plan.drawUniformPixelConstants,
+           DirectSlotProvisionAllocation::PixelLookupHeads,
+           DirectSlotProvisionAllocation::PixelLookupTails,
+           DirectSlotProvisionAllocation::PixelLookupNext);
+  } catch (...) {
+    return false;
+  }
+
+  if (!adoption.accepts(directSlotPhysicalRetainedBytes(staged))) {
+    return false;
+  }
+
+  using std::swap;
+  swap(slot.commandHeaders, staged.commandHeaders);
+  swap(slot.drawHotStates, staged.drawHotStates);
+  swap(slot.drawShaderLayouts, staged.drawShaderLayouts);
+  swap(slot.drawDebugSnapshots, staged.drawDebugSnapshots);
+  swap(slot.drawPsoSubviews, staged.drawPsoSubviews);
+  swap(slot.drawUniformFixedPayloads, staged.drawUniformFixedPayloads);
+  swap(slot.drawUniformVertexConstants, staged.drawUniformVertexConstants);
+  swap(slot.drawUniformVertexConstantBytes,
+       staged.drawUniformVertexConstantBytes);
+  swap(slot.drawUniformPixelConstants, staged.drawUniformPixelConstants);
+  swap(slot.drawUniformPixelConstantBytes,
+       staged.drawUniformPixelConstantBytes);
+  swap(slot.drawUniformPayloads, staged.drawUniformPayloads);
+  swap(slot.drawUniformPayloadLookupHeads,
+       staged.drawUniformPayloadLookupHeads);
+  swap(slot.drawUniformPayloadLookupTails,
+       staged.drawUniformPayloadLookupTails);
+  swap(slot.drawUniformPayloadLookupNext,
+       staged.drawUniformPayloadLookupNext);
+  swap(slot.drawUniformVertexConstantsLookupHeads,
+       staged.drawUniformVertexConstantsLookupHeads);
+  swap(slot.drawUniformVertexConstantsLookupTails,
+       staged.drawUniformVertexConstantsLookupTails);
+  swap(slot.drawUniformVertexConstantsLookupNext,
+       staged.drawUniformVertexConstantsLookupNext);
+  swap(slot.drawUniformPixelConstantsLookupHeads,
+       staged.drawUniformPixelConstantsLookupHeads);
+  swap(slot.drawUniformPixelConstantsLookupTails,
+       staged.drawUniformPixelConstantsLookupTails);
+  swap(slot.drawUniformPixelConstantsLookupNext,
+       staged.drawUniformPixelConstantsLookupNext);
+  swap(slot.drawParams, staged.drawParams);
+  swap(slot.drawPayloadArena, staged.drawPayloadArena);
+  swap(slot.drawRunRecords, staged.drawRunRecords);
+  swap(slot.clearRecords, staged.clearRecords);
+  swap(slot.surfaceCopyRecords, staged.surfaceCopyRecords);
+  swap(slot.stretchRectRecords, staged.stretchRectRecords);
+  swap(slot.colorFillRecords, staged.colorFillRecords);
+  swap(slot.depthResolveRecords, staged.depthResolveRecords);
+  swap(slot.generateMipmapsRecords, staged.generateMipmapsRecords);
+  swap(slot.presentRecords, staged.presentRecords);
+  return true;
+}
+
+struct DirectSlotCapacityLeaseEntry {
+  std::uint64_t generation = 0;
+  std::uint64_t retainedBytes = 0;
+
+  friend constexpr bool operator==(const DirectSlotCapacityLeaseEntry&,
+                                   const DirectSlotCapacityLeaseEntry&) = default;
+};
+
+// A settlement ticket is bound to both the observed capacity generation and
+// a monotone operation serial.  The serial prevents a ticket from a prior
+// rollback from settling a later stage that happens to use the same bytes.
+struct DirectSlotCapacityLeaseTicket {
+  std::uint64_t generation = 0;
+  std::uint64_t serial = 0;
+
+  constexpr bool valid() const noexcept {
+    return generation != 0 && serial != 0;
+  }
+  friend constexpr bool operator==(const DirectSlotCapacityLeaseTicket&,
+                                   const DirectSlotCapacityLeaseTicket&) = default;
+};
+
+struct DirectSlotCapacityLeaseState {
+  std::uint64_t limitBytes = 0;
+  std::uint64_t retainedBytes = 0;
+  std::uint64_t stagedBytes = 0;
+  std::uint64_t nextTicketSerial = 1;
+  DirectSlotCapacityLeaseEntry entry{};
+  DirectSlotCapacityLeaseTicket stagedTicket{};
+
+  friend constexpr bool operator==(const DirectSlotCapacityLeaseState&,
+                                   const DirectSlotCapacityLeaseState&) = default;
+};
+
+enum class DirectSlotCapacityLeaseEvent : std::uint8_t {
+  Observe,
+  Stage,
+  Adopt,
+  Rollback,
+};
+
+struct DirectSlotCapacityLeaseTransition {
+  DirectSlotCapacityLeaseState next{};
+  bool accepted = false;
+  DirectSlotCapacityLeaseTicket ticket{};
+};
+
+inline constexpr std::uint64_t nextDirectSlotCapacityGeneration(
+    std::uint64_t generation) noexcept {
+  return generation == std::numeric_limits<std::uint64_t>::max()
+      ? 0
+      : generation + 1;
+}
+
+// Shared pure aggregate-lease reducer used by production and native tests.
+// `Observe` binds retained credit to the physical payload's actual vector
+// capacities; `Stage` charges new capacity without releasing old capacity;
+// `Adopt` replaces old with staged and advances the capacity generation;
+// `Rollback` releases only staged credit.
+inline constexpr DirectSlotCapacityLeaseTransition
+reduceDirectSlotCapacityLease(
+    DirectSlotCapacityLeaseState state,
+    DirectSlotCapacityLeaseEvent event,
+    std::uint64_t bytes = 0,
+    DirectSlotCapacityLeaseTicket ticket = {}) noexcept {
+  const auto add = [](std::uint64_t a, std::uint64_t b,
+                      std::uint64_t& result) constexpr noexcept {
+    if (b > std::numeric_limits<std::uint64_t>::max() - a) {
+      return false;
+    }
+    result = a + b;
+    return true;
+  };
+  switch (event) {
+  case DirectSlotCapacityLeaseEvent::Observe: {
+    if (state.stagedBytes != 0 || state.retainedBytes < state.entry.retainedBytes) {
+      return {state, false};
+    }
+    std::uint64_t retained = state.retainedBytes - state.entry.retainedBytes;
+    if (!add(retained, bytes, retained)) {
+      return {state, false};
+    }
+    if (state.limitBytes != 0 && retained > state.limitBytes) {
+      return {state, false};
+    }
+    if (state.entry.generation == 0 ||
+        state.entry.retainedBytes != bytes) {
+      const auto generation = nextDirectSlotCapacityGeneration(
+          state.entry.generation);
+      if (generation == 0) {
+        return {state, false};
+      }
+      state.entry.generation = generation;
+    }
+    state.entry.retainedBytes = bytes;
+    state.retainedBytes = retained;
+    return {state, true};
+  }
+  case DirectSlotCapacityLeaseEvent::Stage: {
+    std::uint64_t transient = 0;
+    if (bytes == 0 || state.limitBytes == 0 || state.stagedBytes != 0 ||
+        ticket.valid() ||
+        !state.entry.generation ||
+        state.nextTicketSerial == 0 ||
+        !add(state.retainedBytes, bytes, transient) ||
+        transient > state.limitBytes) {
+      return {state, false};
+    }
+    state.stagedBytes = bytes;
+    state.stagedTicket = {.generation = state.entry.generation,
+                          .serial = state.nextTicketSerial};
+    if (state.nextTicketSerial == std::numeric_limits<std::uint64_t>::max()) {
+      state.nextTicketSerial = 0;
+    } else {
+      ++state.nextTicketSerial;
+    }
+    return {.next = state, .accepted = true, .ticket = state.stagedTicket};
+  }
+  case DirectSlotCapacityLeaseEvent::Adopt: {
+    if (state.stagedBytes == 0 || bytes == 0 || bytes > state.stagedBytes ||
+        state.retainedBytes < state.entry.retainedBytes ||
+        !ticket.valid() || ticket != state.stagedTicket ||
+        ticket.generation != state.entry.generation) {
+      return {state, false};
+    }
+    std::uint64_t retained = state.retainedBytes - state.entry.retainedBytes;
+    if (!add(retained, bytes, retained)) {
+      return {state, false};
+    }
+    const auto generation = nextDirectSlotCapacityGeneration(
+        state.entry.generation);
+    if (generation == 0) {
+      return {state, false};
+    }
+    state.entry = {.generation = generation,
+                   .retainedBytes = bytes};
+    state.retainedBytes = retained;
+    state.stagedBytes = 0;
+    state.stagedTicket = {};
+    return {state, true};
+  }
+  case DirectSlotCapacityLeaseEvent::Rollback:
+    if (bytes != 0 || state.stagedBytes == 0 || !ticket.valid() ||
+        ticket != state.stagedTicket ||
+        ticket.generation != state.entry.generation) {
+      return {state, false};
+    }
+    state.stagedBytes = 0;
+    state.stagedTicket = {};
+    return {state, true};
+  }
+  return {state, false};
+}
+
+template <std::size_t PayloadCount>
+struct DirectSlotCapacityLeaseReconciliation {
+  DirectSlotCapacityLeaseState state{};
+  std::array<DirectSlotCapacityLeaseEntry, PayloadCount> entries{};
+  bool accepted = false;
+  bool generationAdvanced = false;
+};
+
+// Reconcile the complete physical owner set before one payload may stage new
+// headroom.  The result deliberately restores `state.entry` to currentIndex:
+// leaving the last folded peer selected would bind the settlement ticket to
+// the wrong physical payload whenever currentIndex != PayloadCount - 1.
+template <std::size_t PayloadCount>
+inline constexpr DirectSlotCapacityLeaseReconciliation<PayloadCount>
+reconcileDirectSlotCapacityLease(
+    const std::array<DirectSlotCapacityLeaseEntry, PayloadCount>& entries,
+    const std::array<std::uint64_t, PayloadCount>& actualRetainedBytes,
+    std::size_t currentIndex,
+    std::uint64_t limitBytes,
+    std::uint64_t nextTicketSerial) noexcept {
+  DirectSlotCapacityLeaseReconciliation<PayloadCount> result{};
+  result.entries = entries;
+  if (currentIndex >= PayloadCount || limitBytes == 0 ||
+      nextTicketSerial == 0) {
+    return result;
+  }
+
+  result.state.limitBytes = limitBytes;
+  result.state.nextTicketSerial = nextTicketSerial;
+  for (const auto& entry : entries) {
+    if (entry.retainedBytes >
+        std::numeric_limits<std::uint64_t>::max() -
+            result.state.retainedBytes) {
+      return result;
+    }
+    result.state.retainedBytes += entry.retainedBytes;
+  }
+
+  for (std::size_t i = 0; i < PayloadCount; ++i) {
+    result.state.entry = entries[i];
+    const auto observed = reduceDirectSlotCapacityLease(
+        result.state, DirectSlotCapacityLeaseEvent::Observe,
+        actualRetainedBytes[i]);
+    if (!observed.accepted) {
+      return result;
+    }
+    result.generationAdvanced = result.generationAdvanced ||
+        observed.next.entry.generation != result.state.entry.generation;
+    result.state = observed.next;
+    result.entries[i] = result.state.entry;
+  }
+
+  result.state.entry = result.entries[currentIndex];
+  result.accepted = true;
+  return result;
 }
 
 inline constexpr bool directContinuationAppendFits(

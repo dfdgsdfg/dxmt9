@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dxmt9_backend_types.hpp"
+#include "dxmt9_chunk_slot_capacity.hpp"
 #include "dxmt9_source_payload.hpp"
 #include "dxmt9_source_semantics.hpp"
 
@@ -884,6 +885,30 @@ class CpuReadyTape {
   const CpuReadyTapeConfig& config() const noexcept { return config_; }
   std::size_t capacity() const noexcept {
     return config_.values().sourceSlotCount;
+  }
+  std::size_t compatibilityPayloadCount() const noexcept {
+    return config_.values().compatibilityPayloadCount;
+  }
+  // Scalar snapshot only: callers cannot borrow or race a payload's storage.
+  // This is intentionally owned by the tape because compatibility payloads
+  // persist across source/control reuse.
+  std::optional<std::uint64_t> compatibilityPayloadRetainedBytes(
+      std::size_t index) const noexcept {
+    if (index >= config_.values().compatibilityPayloadCount) {
+      return std::nullopt;
+    }
+    return static_cast<std::uint64_t>(
+        chunkSlotPhysicalRetainedBytes(compatibilityPayloads_[index]));
+  }
+  std::optional<std::size_t> compatibilityPayloadIndex(
+      SourceRef source) const noexcept {
+    const auto* entry = resolveEntry(source.id, source.storage);
+    if (!entry || entry->payloadKind != PayloadKind::Legacy ||
+        entry->compatibilityIndex >=
+            config_.values().compatibilityPayloadCount) {
+      return std::nullopt;
+    }
+    return entry->compatibilityIndex;
   }
   std::size_t residentCount() const noexcept { return residentCount_; }
   std::size_t readyCount() const noexcept { return readyCount_; }

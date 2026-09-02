@@ -307,14 +307,23 @@ command limit is unbounded by default; parity against an unbounded reference is
 an explicit open obligation, not a discharged one.
 
 The scalar-capacity refinement is not allocator or process-memory evidence.
-Its promotion obligation must compose all ring slots with an aggregate retained-
-capacity lease and must model allocation as a fallible staged transaction:
-either every vector and lookup-table capacity is adopted into an empty slot, or
-the live slot remains byte-identical and ordinary exact-fit replay proceeds.
-Expected-failure coverage must expose partial adoption and leaked aggregate
-credit. Native allocation-failure injection and wild RSS/VM/address-domain
-evidence own the implementation binding; TLC success alone cannot discharge
-them.
+Its promotion obligation must compose the 64 physical compatibility payloads
+owned by `queueCompatibility(32)`, not the 32 control shells, with an aggregate
+retained-capacity lease keyed by `(payload index, capacity generation)`. Before
+positive-headroom staging, all 64 physical payload capacities must be
+reconciled through a scalar CpuReadyTape inspection; an over-limit observation
+is denied. Stage/Adopt/Rollback use an explicit generation-qualified operation
+ticket and reject stale or duplicate settlement. The model must cover
+replacement as a fallible staged transaction whose transient credit
+includes old plus new capacity: either all 21 vectors and all nine uniform
+lookup allocations are adopted into an empty payload and the old generation's
+credit is released, or the live payload and retained credit remain identical,
+staged credit returns to zero, and ordinary exact-fit replay proceeds.
+Expected-failure coverage must independently expose partial adoption and leaked
+aggregate credit. Native injection through the real production primitive must
+bind every allocation point and exact rollback topology; opt-in Mach RSS/VM/
+physical-footprint and low-4-GiB mapped/largest-gap evidence owns the memory
+binding. TLC success alone cannot discharge either obligation.
 
 A separate weak-fair progress configuration must prove that an admitted raw
 eventually settles, fails terminally, or takes one pre-effect compatibility

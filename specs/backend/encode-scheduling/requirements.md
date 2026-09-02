@@ -1618,21 +1618,55 @@ with a non-zero payload. The single exception is a source whose own exact plan
 already exceeds the ceiling: never under-reserve, reserve exactly, and classify
 it as at-budget.
 
-The declared ceiling is **per slot**. The requirement must state the whole-ring
-retention (`kCommandChunkCount` times the per-slot figure) explicitly wherever
-the per-slot figure appears, and must not present reservation as free on the
-grounds that unwritten pages are not resident. Per-slot arithmetic is not a
-ring-wide admission contract: promotion requires a bounded aggregate retained-
-capacity policy and measurements of resident memory, virtual memory, and the
-relevant Wine address domains. Until those exist, unset and malformed policy
-input must resolve to zero and positive provisioning remains opt-in only.
+The declared ceiling is **per physical compatibility payload**, not per
+`ChunkSlotControl`. `queueCompatibility(kCommandChunkCount)` owns
+`2 * kCommandChunkCount` persistent `CpuReadyTape` compatibility payloads, so
+the 48 MiB candidate's logical retention is about 2.65 GiB across 64 payloads,
+not the earlier 32-shell estimate. Retained credit must be keyed by the exact
+compatibility-payload index and a non-wrapping capacity generation. Reusing a
+32-entry control shell for another Tape source must neither transfer nor erase
+that physical payload's credit, while replacing one payload's empty storage
+must advance its capacity generation.
+
+Positive provisioning requires two explicit decimal policies: the per-payload
+ceiling and an aggregate retained-byte ceiling. If either is unset, empty,
+malformed, signed, or zero, provisioning is disabled and the byte-identical
+exact-fit path remains authoritative. Before positive-headroom staging,
+production reconciles all 64 persistent payload capacities through the
+CpuReadyTape scalar inspection API, so unseen peer exact-fit growth is charged
+and an over-limit observation denies provisioning. Aggregate admission must use
+the shared pure lease reducer. During staged replacement both the old live
+capacity and the complete new staged capacity are charged; successful atomic
+adoption releases the old generation and retains the new one, denial or
+allocation failure releases only staged credit, and exact conservation must
+hold across replacement, denial, payload reuse, and teardown. Stage/Adopt/
+Rollback carry a generation-qualified operation ticket and reject stale or
+duplicate settlement. Aggregate denial is an
+ordinary pre-effect provisioning miss: it changes no semantic, command-buffer,
+render-pass, completion, or wake boundary and proceeds through the existing
+exact-fit assembler path.
 
 Provisioning must also be failure-atomic. Every allocation and lookup-table
 size change must be staged outside the live slot and adopted only after the
 complete capacity set succeeds. An exception or allocation failure must leave
 the live slot byte-identical to the exact-fit lane; partial vector capacity or
-partial lookup topology must never become assembler input. Allocation-failure
-injection must cover every staged dimension before promotion.
+partial lookup topology must never become assembler input. Deterministic
+allocation-failure injection must execute the real production staging
+primitive, not a copied test helper, and cover all 30 allocation dimensions:
+the 21 final-slot vectors plus head, tail and next storage for each of the
+payload, vertex-constant and pixel-constant lookup families. Every injected
+point must prove exact live-slot sizes, capacities, data pointers and lookup
+topology, unchanged lease generation/retained credit, released staged credit,
+and successful exact-fit replacement after the denial. Tests must also cover
+aggregate denial, successful replacement, payload reuse and no leaked credit.
+
+Promotion evidence must include an explicit low-frequency, opt-in unix-side
+observer of Mach task resident bytes, virtual bytes and physical footprint,
+plus mapped bytes and largest free gap in `[0, 4 GiB)`. Map walking must use
+64-bit Mach VM ranges, flatten submaps, clip intervals to that domain, and
+report query failure rather than inventing zero-valued evidence. The observer
+is diagnostic only: when disabled it performs no Mach query, range walk, clock
+read, allocation, or counter write and it must not run on a per-draw path.
 
 The derived per-draw dimensions -- constant bytes and the three uniform
 lookup bucket triples -- must be computed once from the combined draw total by
