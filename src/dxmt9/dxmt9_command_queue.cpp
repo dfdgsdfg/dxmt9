@@ -3889,15 +3889,16 @@ CommandQueue::beginDirectChunkSlotReplay(
             cpuReadyTape_.compatibilityPayloadIndex(sourceRef);
         bool provisioned = false;
         if (payloadIndex &&
-            *payloadIndex < directSlotCapacityLeaseEntries_.size()) {
+            *payloadIndex < directSlotCapacityLedger_.entries.size()) {
           // Reconcile every persistent compatibility payload before charging
           // positive headroom.  A peer can have grown by exact-fit appends
           // while its reusable control shell was inactive; pricing only the
           // current payload would let that retained capacity evade the
           // aggregate lease.
-          std::array<std::uint64_t, kCommandChunkCount * 2>
+          std::array<std::uint64_t,
+                     core::kDirectSlotCapacityPayloadCount>
               actualRetainedBytes{};
-          bool snapshotValid = directSlotCapacityStagedBytes_ == 0 &&
+          bool snapshotValid = directSlotCapacityLedger_.stagedBytes == 0 &&
               cpuReadyTape_.compatibilityPayloadCount() ==
                   actualRetainedBytes.size();
           for (std::size_t i = 0; snapshotValid &&
@@ -3910,82 +3911,51 @@ CommandQueue::beginDirectChunkSlotReplay(
             }
             actualRetainedBytes[i] = *actual;
           }
-          const auto reconciliation = snapshotValid
-              ? core::reconcileDirectSlotCapacityLease(
-                    directSlotCapacityLeaseEntries_, actualRetainedBytes,
-                    *payloadIndex, provisionPolicy.aggregateBytes,
-                    directSlotCapacityNextTicketSerial_)
-              : core::DirectSlotCapacityLeaseReconciliation<
-                    kCommandChunkCount * 2>{};
-          auto leaseState = reconciliation.state;
-          if (reconciliation.accepted) {
-            directSlotCapacityRetainedBytes_ = leaseState.retainedBytes;
-            directSlotCapacityStagedBytes_ = leaseState.stagedBytes;
-            directSlotCapacityLeaseEntries_ = reconciliation.entries;
-            perf::recordDirectSlotCapacityLease(
-                leaseState.retainedBytes, leaseState.stagedBytes,
-                reconciliation.generationAdvanced, false);
-          }
           const auto requested = core::directSlotProvisionRetainedBytes(
               storage.provision);
-          const auto stage = reconciliation.accepted
-              ? core::reduceDirectSlotCapacityLease(
-                    leaseState, core::DirectSlotCapacityLeaseEvent::Stage,
-                    requested)
-              : core::DirectSlotCapacityLeaseTransition{};
-          if (stage.accepted) {
-            leaseState = stage.next;
-            directSlotCapacityRetainedBytes_ = leaseState.retainedBytes;
-            directSlotCapacityStagedBytes_ = leaseState.stagedBytes;
-            directSlotCapacityLeaseEntries_[*payloadIndex] = leaseState.entry;
-            directSlotCapacityNextTicketSerial_ =
-                leaseState.nextTicketSerial;
-            perf::recordDirectSlotCapacityLease(
-                leaseState.retainedBytes, leaseState.stagedBytes,
-                false, false);
-            struct AdoptionContext {
-              core::DirectSlotCapacityLeaseState state{};
-              bool adopted = false;
-            } adoptionContext{.state = leaseState};
-            const auto acceptAdoption = [](void* opaque,
-                                           std::uint64_t retainedBytes) noexcept {
-              auto& context = *static_cast<AdoptionContext*>(opaque);
-              const auto adoption = core::reduceDirectSlotCapacityLease(
-                  context.state,
-                  core::DirectSlotCapacityLeaseEvent::Adopt,
-                  retainedBytes, context.state.stagedTicket);
-              if (!adoption.accepted) {
-                return false;
-              }
-              context.state = adoption.next;
-              context.adopted = true;
-              return true;
-            };
-            provisioned = core::provisionEmptyDirectSlotStorage(
-                *payload, storage.provision, {},
-                core::DirectSlotProvisionAdoption{
-                    &adoptionContext, acceptAdoption});
-            const auto finish = provisioned && adoptionContext.adopted
-                ? core::DirectSlotCapacityLeaseTransition{
-                      .next = adoptionContext.state, .accepted = true}
-                : core::reduceDirectSlotCapacityLease(
-                      leaseState,
-                      core::DirectSlotCapacityLeaseEvent::Rollback, 0,
-                      leaseState.stagedTicket);
-            if (!finish.accepted) {
-              requestSchedulingStopLocked();
-              return {.status = DirectChunkSlotReplayStatus::FailStopped};
+          bool leaseAcquired = false;
+          if (snapshotValid) {
+            bool generationAdvanced = false;
+            std::uint64_t reconciledRetainedBytes = 0;
+            bool reconciliationAccepted = false;
+            auto lease = core::LeaseHeld::tryAcquire(
+                directSlotCapacityLedger_, *payload, actualRetainedBytes,
+                *payloadIndex, provisionPolicy.aggregateBytes, requested,
+                &generationAdvanced, &reconciledRetainedBytes,
+                &reconciliationAccepted);
+            if (reconciliationAccepted) {
+              perf::recordDirectSlotCapacityLease(
+                  reconciledRetainedBytes, 0, generationAdvanced, false);
             }
-            directSlotCapacityRetainedBytes_ = finish.next.retainedBytes;
-            directSlotCapacityStagedBytes_ = finish.next.stagedBytes;
-            directSlotCapacityLeaseEntries_[*payloadIndex] = finish.next.entry;
-            directSlotCapacityNextTicketSerial_ =
-                finish.next.nextTicketSerial;
-            perf::recordDirectSlotCapacityLease(
-                finish.next.retainedBytes, finish.next.stagedBytes,
-                provisioned, !provisioned);
+            if (lease.valid()) {
+              leaseAcquired = true;
+              perf::recordDirectSlotCapacityLease(
+                  directSlotCapacityLedger_.retainedBytes,
+                  directSlotCapacityLedger_.stagedBytes, false, false);
+              {
+                auto staged = core::StagedDirectSlot::create(
+                    std::move(lease), storage.provision);
+                if (staged.valid()) {
+                  const auto receipt = std::move(staged).commit();
+                  provisioned = static_cast<bool>(receipt);
+                }
+              }
+            } else {
+              perf::countDirectSlotCapacityLeaseDenied();
+            }
           } else {
+            // A physical snapshot failure is the same fail-closed admission
+            // result as the pre-refactor reducer path, and remains visible in
+            // the existing denial counter.
             perf::countDirectSlotCapacityLeaseDenied();
+          }
+          if (leaseAcquired) {
+            // LeaseHeld rolls back here if off-slot allocation or commit did
+            // not complete; telemetry observes the settled ledger state.
+            perf::recordDirectSlotCapacityLease(
+                directSlotCapacityLedger_.retainedBytes,
+                directSlotCapacityLedger_.stagedBytes, provisioned,
+                !provisioned);
           }
         }
         if (provisioned) {

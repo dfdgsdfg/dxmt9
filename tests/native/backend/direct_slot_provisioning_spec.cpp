@@ -13,13 +13,57 @@
 #include "dxmt9/dxmt9_cpu_ready_tape.hpp"
 
 #include <array>
+#include <concepts>
 #include <cstdio>
 #include <cstdlib>
+#include <type_traits>
+#include <utility>
 #include <vector>
 
 using namespace dxmt9::core;
 
 namespace {
+
+template <typename Staged>
+concept LvalueCommit = requires(Staged& staged) {
+  staged.commit();
+};
+
+template <typename Staged, typename Lease>
+concept ExternalLeaseCommit = requires(Staged&& staged, Lease&& lease) {
+  std::move(staged).commit(std::move(lease));
+};
+
+template <typename Staged>
+concept StageWithoutLease = requires(ChunkSlot& destination,
+                                     SourcePayloadCapacity& plan) {
+  Staged::create(destination, plan);
+};
+
+template <typename Staged>
+concept StageFromLeaseLvalue = requires(LeaseHeld& lease,
+                                        SourcePayloadCapacity& plan) {
+  Staged::create(lease, plan);
+};
+
+static_assert(!std::is_copy_constructible_v<LeaseHeld>);
+static_assert(!std::is_copy_assignable_v<LeaseHeld>);
+static_assert(!std::is_copy_constructible_v<StagedDirectSlot>);
+static_assert(!std::is_copy_assignable_v<StagedDirectSlot>);
+static_assert(std::is_nothrow_move_constructible_v<LeaseHeld>);
+static_assert(std::is_nothrow_move_constructible_v<StagedDirectSlot>);
+static_assert(std::is_nothrow_destructible_v<LeaseHeld>);
+static_assert(std::is_nothrow_destructible_v<StagedDirectSlot>);
+static_assert(!std::is_move_assignable_v<LeaseHeld>);
+static_assert(!std::is_move_assignable_v<StagedDirectSlot>);
+static_assert(requires(StagedDirectSlot&& staged) {
+  { std::move(staged).commit() } -> std::same_as<DirectSlotCapacityLeaseReceipt>;
+});
+static_assert(noexcept(std::declval<StagedDirectSlot&&>().commit()));
+static_assert(!LvalueCommit<StagedDirectSlot>);
+static_assert(!ExternalLeaseCommit<StagedDirectSlot, LeaseHeld>);
+static_assert(!StageWithoutLease<StagedDirectSlot>);
+static_assert(!StageFromLeaseLvalue<StagedDirectSlot>);
 
 int failures = 0;
 
@@ -723,6 +767,67 @@ void everyProductionAllocationFailureIsAtomic() {
   }
 }
 
+void everyTypedAllocationFailureOwnsAndRollsBackLease() {
+  const auto plan = allAllocationDimensionsPlan();
+  const auto provision = directSlotProvisionPlan(plan, candidateBudget());
+  const auto requested = directSlotProvisionRetainedBytes(provision);
+  constexpr auto count = static_cast<std::size_t>(
+      DirectSlotProvisionAllocation::Count);
+  for (std::size_t i = 0; i < count; ++i) {
+    QueueDirectSlotCapacityLeaseLedger ledger{};
+    std::array<std::uint64_t, kDirectSlotCapacityPayloadCount> actual{};
+    ChunkSlot destination;
+    // Keep a real empty-but-reserved live dimension so the typed failure
+    // matrix proves pointer/capacity preservation, not only empty vectors.
+    destination.commandHeaders.reserve(1);
+    actual[0] = directSlotPhysicalRetainedBytes(destination);
+    const auto topologyBefore = topologyOf(destination);
+    const auto lookupBefore = lookupValuesOf(destination);
+    const auto readbackBefore = VectorTopology{
+        destination.readbackRecords.data(), destination.readbackRecords.size(),
+        destination.readbackRecords.capacity()};
+    FailingAllocation injection{
+        .target = static_cast<DirectSlotProvisionAllocation>(i)};
+
+    auto lease = LeaseHeld::tryAcquire(
+        ledger, destination, actual, 0, requested * 2, requested);
+    check(lease.valid() && ledger.stagedBytes != 0,
+          "each typed fault case acquires staged aggregate credit");
+    const auto entriesAfterAcquire = ledger.entries;
+    const auto retainedAfterAcquire = ledger.retainedBytes;
+    const auto generationAfterAcquire = ledger.entries[0].generation;
+    const auto stagedAfterAcquire = ledger.stagedBytes;
+    {
+      auto failed = StagedDirectSlot::create(
+          std::move(lease), provision,
+          DirectSlotProvisionFault{&injection, &failAllocation});
+      check(!lease.valid() && !failed.valid() && injection.observed,
+            "each typed allocation fault consumes LeaseHeld into failed staging");
+      check(ledger.stagedBytes == stagedAfterAcquire &&
+                topologyOf(destination) == topologyBefore &&
+                lookupValuesOf(destination) == lookupBefore &&
+                VectorTopology{destination.readbackRecords.data(),
+                               destination.readbackRecords.size(),
+                               destination.readbackRecords.capacity()} ==
+                    readbackBefore,
+            "failed typed staging keeps live storage and staged credit intact "
+            "until owner destruction");
+    }
+    check(ledger.stagedBytes == 0 &&
+              ledger.retainedBytes == retainedAfterAcquire &&
+              ledger.entries == entriesAfterAcquire &&
+              ledger.entries[0].generation == generationAfterAcquire &&
+              topologyOf(destination) == topologyBefore &&
+              lookupValuesOf(destination) == lookupBefore &&
+              VectorTopology{destination.readbackRecords.data(),
+                             destination.readbackRecords.size(),
+                             destination.readbackRecords.capacity()} ==
+                  readbackBefore,
+          "typed fault owner destruction rolls back credit and preserves the "
+          "live destination");
+  }
+}
+
 void aggregateLeaseConservesGenerationAndCredit() {
   const auto compatibility = CpuReadyTapeConfig::queueCompatibility(32);
   check(compatibility.values().compatibilityPayloadCount == 64,
@@ -850,6 +955,74 @@ void aggregateLeaseConservesGenerationAndCredit() {
         "positive provisioning");
 }
 
+void typedLeaseTransactionCommitsOrRollsBack() {
+  QueueDirectSlotCapacityLeaseLedger ledger{};
+  std::array<std::uint64_t, kDirectSlotCapacityPayloadCount> actual{};
+  ChunkSlot destination;
+  const auto plan = exactSpanPlan(1, /*clears=*/1);
+  const auto provision = directSlotProvisionPlan(plan, candidateBudget());
+  const auto requested = directSlotProvisionRetainedBytes(provision);
+
+  {
+    bool generationAdvanced = false;
+    auto lease = LeaseHeld::tryAcquire(
+        ledger, destination, actual, 0, requested * 2, requested,
+        &generationAdvanced);
+    check(lease.valid(), "the typed transaction acquires a Plan-bound lease");
+    auto movedLease = LeaseHeld(std::move(lease));
+    check(!lease.valid() && movedLease.valid(),
+          "moving LeaseHeld preserves its destination-bound capability");
+    auto staged = StagedDirectSlot::create(std::move(movedLease), provision);
+    check(staged.valid() && !movedLease.valid(),
+          "staging consumes LeaseHeld and owns the moved capability");
+    const auto receipt = std::move(staged).commit();
+    check(receipt.committed && ledger.stagedBytes == 0 &&
+              destination.commandHeaders.capacity() >= provision.commandHeaders,
+          "rvalue commit atomically adopts storage and clears staged credit");
+    const auto secondReceipt = std::move(staged).commit();
+    check(!secondReceipt.committed && ledger.stagedBytes == 0,
+          "a staged owner can commit only once");
+    actual[0] = directSlotPhysicalRetainedBytes(destination);
+  }
+
+  const auto retained = ledger.retainedBytes;
+  {
+    auto lease = LeaseHeld::tryAcquire(
+        ledger, destination, actual, 0, requested * 4, requested, nullptr);
+    const auto stagedBefore = ledger.stagedBytes;
+    FailingAllocation injection{
+        .target = DirectSlotProvisionAllocation::CommandHeaders};
+    auto failed = StagedDirectSlot::create(
+        std::move(lease), provision,
+        DirectSlotProvisionFault{&injection, &failAllocation});
+    check(!failed.valid() && injection.observed &&
+              ledger.stagedBytes == stagedBefore,
+          "failed off-slot staging leaves the held credit until owner teardown");
+    // failed owns the moved LeaseHeld; destruction rolls back below.
+  }
+  check(ledger.stagedBytes == 0 && ledger.retainedBytes == retained,
+        "uncommitted destruction rolls back without a generation or credit leak");
+}
+
+void aggregateReconciliationIncludesReusedReadbackCapacity() {
+  ChunkSlot reusedPayload;
+  reusedPayload.readbackRecords.reserve(1);
+  const auto readbackBytes = directSlotPhysicalRetainedBytes(reusedPayload);
+  check(readbackBytes >= sizeof(ReadbackDesc),
+        "physical retained-byte pricing includes readback records");
+
+  QueueDirectSlotCapacityLeaseLedger ledger{};
+  std::array<std::uint64_t, kDirectSlotCapacityPayloadCount> actual{};
+  actual[0] = readbackBytes;
+  bool reconciliationAccepted = false;
+  const auto lease = LeaseHeld::tryAcquire(
+      ledger, reusedPayload, actual, 0, readbackBytes, 1, nullptr, nullptr,
+      &reconciliationAccepted);
+  check(!lease.valid() && reconciliationAccepted &&
+            ledger.retainedBytes == readbackBytes && ledger.stagedBytes == 0,
+        "reused readback capacity is reconciled before aggregate stage denial");
+}
+
 }  // namespace
 
 int main() {
@@ -872,7 +1045,10 @@ int main() {
   perSlotBoundIsStatedPerSlotAndScalesWithTheRing();
   derivedDimensionsAreDerivedFromTheTotal();
   everyProductionAllocationFailureIsAtomic();
+  everyTypedAllocationFailureOwnsAndRollsBackLease();
   aggregateLeaseConservesGenerationAndCredit();
+  typedLeaseTransactionCommitsOrRollsBack();
+  aggregateReconciliationIncludesReusedReadbackCapacity();
   if (failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", failures);
     return EXIT_FAILURE;

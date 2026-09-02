@@ -5,6 +5,11 @@
 (* native production binding pins all 64 payloads and all 30 allocations.  *)
 (* control shells and ReplayTransaction are absent because neither owns     *)
 (* credit. Settlement tickets carry both generation and operation serial.  *)
+(* The production projection is `LeaseHeld::tryAcquire` followed by         *)
+(* `StagedDirectSlot::create(LeaseHeld&&)` and `commit() &&`: `Staged` is    *)
+(* the only phase with staged credit, and commit moves directly to `Done`;  *)
+(* LeaseHeld destruction is modeled by AllocationFailure. There is          *)
+(* deliberately no typed edge from Done back to rollback.                   *)
 (***************************************************************************)
 
 EXTENDS Naturals, TLC

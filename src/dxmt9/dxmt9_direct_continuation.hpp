@@ -518,22 +518,16 @@ struct DirectSlotProvisionFault {
   }
 };
 
-struct DirectSlotProvisionAdoption {
-  void* context = nullptr;
-  bool (*accept)(void*, std::uint64_t) noexcept = nullptr;
+class LeaseHeld;
+struct DirectSlotCapacityLeaseReceipt;
 
-  bool accepts(std::uint64_t retainedBytes) const noexcept {
-    return !accept || accept(context, retainedBytes);
-  }
-};
-
-// The real production staging primitive. Tests inject at the operation seam;
-// production passes the default no-fault value. All allocations land in the
-// isolated holder and the only live-slot mutation is the final noexcept swap.
+// Low-level isolated reservation helper used by StagedDirectSlot (and kept as
+// a value-test seam). Tests inject at the operation seam; production passes
+// the default no-fault value. All allocations land in the isolated holder and
+// the only live-slot mutation is the final noexcept swap.
 inline bool provisionEmptyDirectSlotStorage(
     ChunkSlot& slot, const SourcePayloadCapacity& plan,
-    DirectSlotProvisionFault fault = {},
-    DirectSlotProvisionAdoption adoption = {}) noexcept {
+    DirectSlotProvisionFault fault = {}) noexcept {
   DXMT_ASSERT(chunkSlotDirectStorageEmpty(slot) &&
               "direct slot provisioning requires an empty physical payload");
   if (!chunkSlotDirectStorageEmpty(slot)) {
@@ -641,10 +635,6 @@ inline bool provisionEmptyDirectSlotStorage(
            DirectSlotProvisionAllocation::PixelLookupTails,
            DirectSlotProvisionAllocation::PixelLookupNext);
   } catch (...) {
-    return false;
-  }
-
-  if (!adoption.accepts(directSlotPhysicalRetainedBytes(staged))) {
     return false;
   }
 
@@ -848,6 +838,254 @@ reduceDirectSlotCapacityLease(
 }
 
 template <std::size_t PayloadCount>
+struct DirectSlotCapacityLeaseReconciliation;
+
+template <std::size_t PayloadCount>
+inline constexpr DirectSlotCapacityLeaseReconciliation<PayloadCount>
+reconcileDirectSlotCapacityLease(
+    const std::array<DirectSlotCapacityLeaseEntry, PayloadCount>& entries,
+    const std::array<std::uint64_t, PayloadCount>& actualRetainedBytes,
+    std::size_t currentIndex, std::uint64_t limitBytes,
+    std::uint64_t nextTicketSerial) noexcept;
+
+// Queue-owned aggregate ledger. All fields are scalar/fixed-capacity and are
+// guarded by the queue mutex. A LeaseHeld never outlives that guard.
+template <std::size_t PayloadCount>
+struct DirectSlotCapacityLeaseLedger {
+  std::array<DirectSlotCapacityLeaseEntry, PayloadCount> entries{};
+  std::uint64_t limitBytes = 0;
+  std::uint64_t retainedBytes = 0;
+  std::uint64_t stagedBytes = 0;
+  std::uint64_t nextTicketSerial = 1;
+};
+
+inline constexpr std::size_t kDirectSlotCapacityPayloadCount = 64;
+using QueueDirectSlotCapacityLeaseLedger =
+    DirectSlotCapacityLeaseLedger<kDirectSlotCapacityPayloadCount>;
+
+struct DirectSlotCapacityLeaseReceipt {
+  std::uint64_t retainedBytes = 0;
+  std::uint64_t generation = 0;
+  bool committed = false;
+
+  constexpr explicit operator bool() const noexcept { return committed; }
+};
+
+// Move-only linear capability for one outstanding aggregate lease. Its
+// destructor is the rollback edge, and that edge is disarmed before commit;
+// therefore the typed surface has no committed-to-rollback transition.
+class LeaseHeld {
+ public:
+  LeaseHeld() = default;
+  LeaseHeld(const LeaseHeld&) = delete;
+  LeaseHeld& operator=(const LeaseHeld&) = delete;
+
+  LeaseHeld(LeaseHeld&& other) noexcept
+      : ledger_(other.ledger_), destination_(other.destination_),
+        state_(other.state_), index_(other.index_), ticket_(other.ticket_),
+        active_(other.active_) {
+    other.disarm();
+  }
+
+  LeaseHeld& operator=(LeaseHeld&&) = delete;
+
+  ~LeaseHeld() { rollback(); }
+
+  bool valid() const noexcept {
+    return active_ && ledger_ != nullptr && destination_ != nullptr &&
+        ticket_.valid();
+  }
+  DirectSlotCapacityLeaseTicket ticket() const noexcept { return ticket_; }
+
+  static LeaseHeld tryAcquire(
+      QueueDirectSlotCapacityLeaseLedger& ledger,
+      ChunkSlot& destination,
+      const std::array<std::uint64_t, kDirectSlotCapacityPayloadCount>&
+          actualRetainedBytes,
+      std::size_t currentIndex, std::uint64_t limitBytes,
+      std::uint64_t requestedBytes, bool* generationAdvanced = nullptr,
+      std::uint64_t* reconciledRetainedBytes = nullptr,
+      bool* reconciliationAccepted = nullptr) noexcept;
+
+ private:
+  LeaseHeld(QueueDirectSlotCapacityLeaseLedger& ledger,
+            ChunkSlot& destination,
+            DirectSlotCapacityLeaseState state, std::size_t index,
+            DirectSlotCapacityLeaseTicket ticket) noexcept
+      : ledger_(&ledger), destination_(&destination), state_(state),
+        index_(index), ticket_(ticket), active_(true) {}
+
+  void rollbackLedger() noexcept {
+    auto& ledger = *ledger_;
+    const auto rolledBack = reduceDirectSlotCapacityLease(
+        state_, DirectSlotCapacityLeaseEvent::Rollback, 0, ticket_);
+    if (!rolledBack.accepted || index_ >= ledger.entries.size()) {
+      return;
+    }
+    ledger.entries[index_] = rolledBack.next.entry;
+    ledger.limitBytes = rolledBack.next.limitBytes;
+    ledger.retainedBytes = rolledBack.next.retainedBytes;
+    ledger.stagedBytes = rolledBack.next.stagedBytes;
+    ledger.nextTicketSerial = rolledBack.next.nextTicketSerial;
+  }
+
+  void rollback() noexcept {
+    if (!active_) {
+      return;
+    }
+    rollbackLedger();
+    disarm();
+  }
+
+  void disarm() noexcept {
+    ledger_ = nullptr;
+    destination_ = nullptr;
+    state_ = {};
+    index_ = 0;
+    ticket_ = {};
+    active_ = false;
+  }
+
+  QueueDirectSlotCapacityLeaseLedger* ledger_ = nullptr;
+  ChunkSlot* destination_ = nullptr;
+  DirectSlotCapacityLeaseState state_{};
+  std::size_t index_ = 0;
+  DirectSlotCapacityLeaseTicket ticket_{};
+  bool active_ = false;
+
+  friend class StagedDirectSlot;
+};
+
+// Owns the reserved candidate and the held aggregate capability as one
+// linear object. Construction consumes LeaseHeld&&; callers cannot create a
+// staged owner without first acquiring and moving the matching lease.
+class StagedDirectSlot {
+ public:
+  StagedDirectSlot() = default;
+  StagedDirectSlot(const StagedDirectSlot&) = delete;
+  StagedDirectSlot& operator=(const StagedDirectSlot&) = delete;
+
+  StagedDirectSlot(StagedDirectSlot&& other) noexcept
+      : lease_(std::move(other.lease_)),
+        destination_(other.destination_), ready_(other.ready_) {
+    swapStorage(staged_, other.staged_);
+    other.destination_ = nullptr;
+    other.ready_ = false;
+  }
+
+  StagedDirectSlot& operator=(StagedDirectSlot&&) = delete;
+
+  static StagedDirectSlot create(
+      LeaseHeld&& lease, const SourcePayloadCapacity& plan,
+      DirectSlotProvisionFault fault = {}) noexcept {
+    if (!lease.valid()) {
+      return {};
+    }
+    return StagedDirectSlot(std::move(lease), plan, fault);
+  }
+
+  bool valid() const noexcept {
+    return ready_ && destination_ != nullptr && lease_.valid();
+  }
+  std::uint64_t retainedBytes() const noexcept {
+    return directSlotPhysicalRetainedBytes(staged_);
+  }
+
+  // Consuming commit is intentionally rvalue-only. A committed owner is
+  // disarmed before the first live-slot swap and cannot roll back later.
+  DirectSlotCapacityLeaseReceipt commit() && noexcept {
+    if (!valid()) {
+      return {};
+    }
+    const auto adopted = reduceDirectSlotCapacityLease(
+        lease_.state_, DirectSlotCapacityLeaseEvent::Adopt, retainedBytes(),
+        lease_.ticket_);
+    if (!adopted.accepted) {
+      return {};
+    }
+    auto* ledger = lease_.ledger_;
+    const auto index = lease_.index_;
+    lease_.disarm();
+    swapStorage(*destination_, staged_);
+    ledger->entries[index] = adopted.next.entry;
+    ledger->limitBytes = adopted.next.limitBytes;
+    ledger->retainedBytes = adopted.next.retainedBytes;
+    ledger->stagedBytes = adopted.next.stagedBytes;
+    ledger->nextTicketSerial = adopted.next.nextTicketSerial;
+    ready_ = false;
+    destination_ = nullptr;
+    return {.retainedBytes = adopted.next.retainedBytes,
+            .generation = adopted.next.entry.generation,
+            .committed = true};
+  }
+
+ private:
+  StagedDirectSlot(LeaseHeld&& lease, const SourcePayloadCapacity& plan,
+                   DirectSlotProvisionFault fault) noexcept
+      : lease_(std::move(lease)), destination_(lease_.destination_) {
+    if (destination_ == nullptr ||
+        !chunkSlotDirectStorageEmpty(*destination_)) {
+      destination_ = nullptr;
+      return;
+    }
+    ready_ = provisionEmptyDirectSlotStorage(staged_, plan, fault);
+    if (!ready_) {
+      destination_ = nullptr;
+    }
+  }
+
+  static void swapStorage(ChunkSlot& lhs, ChunkSlot& rhs) noexcept {
+    using std::swap;
+    swap(lhs.commandHeaders, rhs.commandHeaders);
+    swap(lhs.drawHotStates, rhs.drawHotStates);
+    swap(lhs.drawShaderLayouts, rhs.drawShaderLayouts);
+    swap(lhs.drawDebugSnapshots, rhs.drawDebugSnapshots);
+    swap(lhs.drawPsoSubviews, rhs.drawPsoSubviews);
+    swap(lhs.drawUniformFixedPayloads, rhs.drawUniformFixedPayloads);
+    swap(lhs.drawUniformVertexConstants, rhs.drawUniformVertexConstants);
+    swap(lhs.drawUniformVertexConstantBytes,
+         rhs.drawUniformVertexConstantBytes);
+    swap(lhs.drawUniformPixelConstants, rhs.drawUniformPixelConstants);
+    swap(lhs.drawUniformPixelConstantBytes,
+         rhs.drawUniformPixelConstantBytes);
+    swap(lhs.drawUniformPayloads, rhs.drawUniformPayloads);
+    swap(lhs.drawUniformPayloadLookupHeads,
+         rhs.drawUniformPayloadLookupHeads);
+    swap(lhs.drawUniformPayloadLookupTails,
+         rhs.drawUniformPayloadLookupTails);
+    swap(lhs.drawUniformPayloadLookupNext, rhs.drawUniformPayloadLookupNext);
+    swap(lhs.drawUniformVertexConstantsLookupHeads,
+         rhs.drawUniformVertexConstantsLookupHeads);
+    swap(lhs.drawUniformVertexConstantsLookupTails,
+         rhs.drawUniformVertexConstantsLookupTails);
+    swap(lhs.drawUniformVertexConstantsLookupNext,
+         rhs.drawUniformVertexConstantsLookupNext);
+    swap(lhs.drawUniformPixelConstantsLookupHeads,
+         rhs.drawUniformPixelConstantsLookupHeads);
+    swap(lhs.drawUniformPixelConstantsLookupTails,
+         rhs.drawUniformPixelConstantsLookupTails);
+    swap(lhs.drawUniformPixelConstantsLookupNext,
+         rhs.drawUniformPixelConstantsLookupNext);
+    swap(lhs.drawParams, rhs.drawParams);
+    swap(lhs.drawPayloadArena, rhs.drawPayloadArena);
+    swap(lhs.drawRunRecords, rhs.drawRunRecords);
+    swap(lhs.clearRecords, rhs.clearRecords);
+    swap(lhs.surfaceCopyRecords, rhs.surfaceCopyRecords);
+    swap(lhs.stretchRectRecords, rhs.stretchRectRecords);
+    swap(lhs.readbackRecords, rhs.readbackRecords);
+    swap(lhs.colorFillRecords, rhs.colorFillRecords);
+    swap(lhs.depthResolveRecords, rhs.depthResolveRecords);
+    swap(lhs.generateMipmapsRecords, rhs.generateMipmapsRecords);
+    swap(lhs.presentRecords, rhs.presentRecords);
+  }
+
+  LeaseHeld lease_{};
+  ChunkSlot staged_{};
+  ChunkSlot* destination_ = nullptr;
+  bool ready_ = false;
+};
+
+template <std::size_t PayloadCount>
 struct DirectSlotCapacityLeaseReconciliation {
   DirectSlotCapacityLeaseState state{};
   std::array<DirectSlotCapacityLeaseEntry, PayloadCount> entries{};
@@ -902,6 +1140,62 @@ reconcileDirectSlotCapacityLease(
   result.state.entry = result.entries[currentIndex];
   result.accepted = true;
   return result;
+}
+
+inline LeaseHeld LeaseHeld::tryAcquire(
+    QueueDirectSlotCapacityLeaseLedger& ledger,
+    ChunkSlot& destination,
+    const std::array<std::uint64_t, kDirectSlotCapacityPayloadCount>&
+        actualRetainedBytes,
+    std::size_t currentIndex, std::uint64_t limitBytes,
+    std::uint64_t requestedBytes, bool* generationAdvanced,
+    std::uint64_t* reconciledRetainedBytes,
+    bool* reconciliationAccepted) noexcept {
+  if (generationAdvanced) {
+    *generationAdvanced = false;
+  }
+  if (reconciledRetainedBytes) {
+    *reconciledRetainedBytes = 0;
+  }
+  if (reconciliationAccepted) {
+    *reconciliationAccepted = false;
+  }
+  const auto reconciliation = reconcileDirectSlotCapacityLease(
+      ledger.entries, actualRetainedBytes, currentIndex, limitBytes,
+      ledger.nextTicketSerial);
+  if (!reconciliation.accepted) {
+    return {};
+  }
+  // Preserve the pre-refactor observation boundary even if Stage is denied:
+  // physical reconciliation is an observable ledger update, not part of the
+  // candidate rollback.
+  ledger.entries = reconciliation.entries;
+  ledger.entries[currentIndex] = reconciliation.state.entry;
+  ledger.limitBytes = reconciliation.state.limitBytes;
+  ledger.retainedBytes = reconciliation.state.retainedBytes;
+  ledger.stagedBytes = reconciliation.state.stagedBytes;
+  ledger.nextTicketSerial = reconciliation.state.nextTicketSerial;
+  if (reconciliationAccepted) {
+    *reconciliationAccepted = true;
+  }
+  if (reconciledRetainedBytes) {
+    *reconciledRetainedBytes = reconciliation.state.retainedBytes;
+  }
+  if (generationAdvanced) {
+    *generationAdvanced = reconciliation.generationAdvanced;
+  }
+  const auto stage = reduceDirectSlotCapacityLease(
+      reconciliation.state, DirectSlotCapacityLeaseEvent::Stage,
+      requestedBytes);
+  if (!stage.accepted) {
+    return {};
+  }
+  ledger.entries[currentIndex] = stage.next.entry;
+  ledger.limitBytes = stage.next.limitBytes;
+  ledger.retainedBytes = stage.next.retainedBytes;
+  ledger.stagedBytes = stage.next.stagedBytes;
+  ledger.nextTicketSerial = stage.next.nextTicketSerial;
+  return LeaseHeld(ledger, destination, stage.next, currentIndex, stage.ticket);
 }
 
 inline constexpr bool directContinuationAppendFits(

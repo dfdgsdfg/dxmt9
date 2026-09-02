@@ -100,7 +100,7 @@ append, so it is not on the cost path this requirement targets.
 | TLA+ | `specs/verification/tla/ReplayEmissionPlanIslands.tla` with three deliberate-regression configurations (span identity, separator cut, run closure), registered in `scripts/check/verify_tla.sh` |
 | Model-code binding | `dxmt9-replay-emission-plan-islands-spec` -- truth table over the production `compatibilitySpanAdmission`, plus one translated trace per `.counterexample.cfg` |
 | Storage capacity model | `specs/verification/tla/DirectSlotCapacityProvisioning.tla` -- capacity as a quantity, empty-slot provisioning, slot generation, and boundary credits against a same-capacity serial reference, with `exact-fit` and `grow-populated` expected failures |
-| Storage capacity model-code binding | `dxmt9-direct-slot-provisioning-spec` -- the production `directSlotStorageTransition` reducer, `directSlotProvisionPlan`, real staged provisioning primitive, 64-payload aggregate lease reducer and priced budget, including every 21 vector + nine lookup allocation failure, exact pointer/capacity/topology rollback, replacement/denial/reuse/leak cases, and consecutive mean-sized sources |
+| Storage capacity model-code binding | `dxmt9-direct-slot-provisioning-spec` -- the production `directSlotStorageTransition` reducer, `directSlotProvisionPlan`, move-only `LeaseHeld` / off-slot `StagedDirectSlot` two-phase transaction, 64-payload aggregate lease ledger and priced budget, including every 21 vector + nine lookup allocation failure, exact pointer/capacity/topology rollback, replacement/denial/reuse/leak cases, and consecutive mean-sized sources |
 | Production differential | `dxmt9-cpu-ready-production-routing-spec` -- a compatibility-cut raw against the Legacy lane, comparing the **concatenated per-command `effectiveCommandDigest` sequence** across every source the raw published (ordered command kind, draw parameters, binding-override and binding-snapshot payload bytes, coordinator descriptors), not a command total; plus the Present-tail span, the coordinator-bearing span, both capacity rotations, and the non-terminal/duplicate Present whole-raw fallbacks with their published source order |
 
 **Open, and not claimed (`R-BACK-2.103` / `R-VERIF-2.25`):**
@@ -163,14 +163,19 @@ model/code closure gaps, not claims delegated to the wild gate.
      counters are now native-bound; no wild delta against exact fit has been
      collected. The 8 MiB failure and x86_64 unix allocator mean 32-bit address-
      space exhaustion cannot be claimed.
-   - **The staging primitive is fault-injected, but queue integration remains
-     open.** Capacity and lookup topology are staged in an isolated empty slot
-     and adopted by non-throwing swaps; native tests inject allocation failure
-     at all 30 production dimensions (21 storage vectors plus 9 lookup arrays)
-     and verify pointer/capacity/topology rollback. A real queue-level
-     assembler/checkpoint/dedup/rollback/reuse fixture and no-boundary
-     integration proof are still missing, so this primitive result is not an
-     encode-scheduling promotion claim.
+   - **The staging transaction is queue-integrated, but promotion remains
+     open.** Production computes a `Plan`, acquires the move-only `LeaseHeld`
+     capability, then constructs the off-slot `StagedDirectSlot` by consuming
+     `LeaseHeld&&`; its rvalue-only `commit() && noexcept` returns a receipt and
+     disarms RAII rollback before the non-throwing swaps. The queue mutex
+     dominates that complete lifetime, and
+     rollback destruction performs no lock acquisition. Native tests inject
+     allocation failure at all 30 production dimensions (21 storage vectors
+     plus 9 lookup arrays), verify pointer/capacity/topology rollback and
+     reused readback-capacity denial, and compile-time pin the linear typed
+     surface. A real queue-level assembler/checkpoint/dedup/reuse differential
+     and no-boundary integration proof are still missing, so this transaction
+     result is not an encode-scheduling promotion claim.
    - **A coordinator-only first span still costs one rotation.** A span with no
      draws provisions zero draw storage on purpose, so a following draw-bearing
      source rotates once before the slot is provisioned against a plan that

@@ -7,9 +7,12 @@
 
 namespace dxmt9::core {
 
-// Physical bytes retained by one persistent compatibility payload. Keep this
-// list in lockstep with the production reservation primitive: lookup arrays
-// are real retained storage, even when their logical heads are empty.
+// Physical bytes retained by one persistent compatibility payload. This is the
+// complete payload footprint, including exact-fit-only dimensions such as
+// readback records; lookup arrays are real retained storage even when their
+// logical heads are empty. Provisioning price remains deliberately separate
+// and fail-closed for readback because the direct branch has no readback
+// appender.
 inline std::size_t chunkSlotPhysicalRetainedBytes(
     const ChunkSlot& slot) noexcept {
   const auto bytes = [](std::size_t count, std::size_t element) noexcept {
@@ -56,6 +59,7 @@ inline std::size_t chunkSlotPhysicalRetainedBytes(
   add(bytes(slot.colorFillRecords.capacity(), sizeof(ColorFillDesc)));
   add(bytes(slot.depthResolveRecords.capacity(), sizeof(DepthResolveDesc)));
   add(bytes(slot.generateMipmapsRecords.capacity(), sizeof(GenerateMipmapsDesc)));
+  add(bytes(slot.readbackRecords.capacity(), sizeof(ReadbackDesc)));
   add(bytes(slot.presentRecords.capacity(), sizeof(PresentCommandRecord)));
   return total;
 }

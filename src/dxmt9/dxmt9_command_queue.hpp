@@ -1269,11 +1269,7 @@ class CommandQueue {
       core::CpuReadyTapeConfig::queueCompatibility(kCommandChunkCount)};
   // R-BACK-2.104: retained capacity follows the 64 persistent compatibility
   // payloads, not the 32 reusable control shells. Guarded by `mutex_`.
-  std::array<core::DirectSlotCapacityLeaseEntry,
-             kCommandChunkCount * 2> directSlotCapacityLeaseEntries_{};
-  std::uint64_t directSlotCapacityRetainedBytes_ = 0;
-  std::uint64_t directSlotCapacityStagedBytes_ = 0;
-  std::uint64_t directSlotCapacityNextTicketSerial_ = 1;
+  core::QueueDirectSlotCapacityLeaseLedger directSlotCapacityLedger_{};
   std::array<core::ChunkSlotControl, kCommandChunkCount> slots_{};
   // Diagnostic-only residency timestamps for the current writing slot.
   // Set on the first command append and consumed when the slot is published;

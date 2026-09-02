@@ -2140,16 +2140,27 @@ payload index plus capacity generation. Both the per-payload and aggregate
 byte ceilings must be explicit positive decimal values; otherwise the policy
 resolves to disabled and exact-fit remains byte-identical.
 
-The allocation is a transaction of its own. Production first constructs the
+The allocation is a transaction of its own. Production computes the immutable
+provision `Plan`, acquires a move-only `LeaseHeld` capability (reconciling all
+64 physical payloads and staging aggregate credit), then constructs the
 complete vector-capacity and uniform-lookup topology in an isolated empty
-`ChunkSlot`, then adopts every vector through non-throwing swaps. Any allocation
-failure destroys the staging slot and leaves the live slot unchanged for the
-ordinary exact-fit assembler path. Sequentially reserving the live slot and
-catching an exception is invalid because it exposes a partially provisioned
-topology to replay.
+`StagedDirectSlot` by consuming `LeaseHeld&&`. The staging owner then exposes
+only an explicit rvalue `commit() && noexcept` that returns a small receipt and
+adopts every vector through non-throwing swaps. Any allocation failure destroys
+the staging owner and
+leaves the live slot unchanged for the ordinary exact-fit assembler path;
+destruction of an uncommitted `LeaseHeld` rolls back only its staged credit.
+The capability is disarmed before a successful commit, so the typed surface
+cannot transition a committed transaction back to rollback. The queue mutex
+dominates Plan, LeaseHeld, StagedDirectSlot, commit, receipt, and rollback
+destruction; rollback never acquires a queue lock. Sequentially reserving the
+live slot and catching an exception is invalid because it exposes a partially
+provisioned topology to replay.
 
-The queue-wide lease reducer charges old retained capacity plus the complete
-staging candidate during replacement. Before positive-headroom staging,
+The queue-wide lease ledger charges old retained capacity plus the complete
+staging candidate during replacement. Its narrow two-phase API keeps the queue
+mutex dominant for the entire capability lifetime and performs no lock
+acquisition from rollback destruction. Before positive-headroom staging,
 production reconciles the scalar retained-capacity snapshot for all 64
 persistent compatibility payloads, so an unseen peer exact-fit growth is
 priced and an already-over-limit observation denies provisioning. Admission
@@ -2238,6 +2249,10 @@ whole present into one slot -- GT1 2,235,425 draws over 2,995 presents and GT2
 capacity, so a steady-state Legacy slot is already within a factor of the
 provisioned shape. Second, capacity is reserved, not touched: the pages behind an
 unwritten reservation are not resident until written. Neither is a measurement.
+Physical aggregate accounting includes every retained vector, including
+`readbackRecords` grown by exact-fit/legacy reuse. Readback remains fail-closed
+for provisioning because the direct assembler has no readback appender and its
+provision price intentionally excludes that dimension.
 The first wild gate rejected the candidate before locality could be measured.
 GT1 with the 48 MiB calibration value and with an explicit 8 MiB value both
 stopped after the frame-0 Clear/Present with the same Wine null-read page fault
