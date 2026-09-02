@@ -2095,6 +2095,54 @@ the source to the existing EncodeSession. Source arrival is not permission to
 close a render pass or submit a command buffer; semantic pass, hazard, ordered
 control, and Present boundaries remain coordinator-owned.
 
+### 10.2 Source-range lease refinement boundary
+
+The source-wide emission planner and `TransactionalChunkSlotAssembler` are two
+layers of one serial refinement, not independent optimizations. The planner
+describes a total partition of the authenticated raw; the span driver consumes
+that partition in record order; and the assembler owns exactly one private
+destination checkpoint for each lease-owning span. Ordinary separators remain
+in the same flattened record stream and become irreversible cuts as soon as
+their semantic effect executes.
+
+```mermaid
+flowchart LR
+  R[Immutable Raw] --> P[Total emission partition]
+  P --> X[Executable span cursor]
+  X -->|Direct span| L[Final-slot lease and checkpoint]
+  X -->|Ordinary separator| O[Ordered serial sink]
+  L --> S[Reserved ChunkSlot SoA]
+  S --> C[Receipt and commit]
+  O --> E[Effect cut]
+  C --> E
+  E --> F[Source settlement]
+  F --> G[Encode / GPU / completion / reclaim]
+```
+
+The formal state carries the raw and span cursors, active-raw witness, slot
+generation, capacity vector, construction extent, open draw run, parked
+Present, effect cut, receipt, resource sequence, settlement, and completion.
+Capacity rotation is a generation transition to a fresh destination, not a
+fallback and not permission to copy or resize an already populated final
+extent. An ordered control is a serial separator whose session-enabled and
+session-disabled paths must refine the same source order. Once any earlier span
+or separator has an effect, every later failure is terminal for the raw.
+
+The transition algebra is owned by one pure `ReplaySpanTransition` reducer
+shared by production and native isomorphism. The existing
+`compatibilitySpanAdmission` remains a leaf predicate of that reducer. The
+bounded `ReplayEmissionPlanIslands` model is retained as the smallest
+counterexample-rich slice for same-raw identity, separator failure, and run
+closure; it does not by itself prove the composed lifecycle or progress.
+
+Temporal verification intentionally abstracts SoA contents to reserved and
+constructed dimensions. Native differential evidence owns exact command,
+state, uniform, payload, resource, Present, and completion values and must show
+that every append stays within the precomputed reservation. Render Tape or a
+Metal readback owns concrete GPU-visible equivalence. Wild workloads are the
+final locality and performance gate, never a substitute for the preceding
+layers.
+
 ## 11. Verification Mapping
 
 | Contract | Evidence |
@@ -2104,6 +2152,7 @@ control, and Present boundaries remain coordinator-owned.
 | Tape layout and ABA | `SegmentedTransportV1.tla` now covers the fixed-role semantic-batch handoff, complete reservation/adoption, exact contiguous emission, checkpoint rollback, FIFO settlement, and wake protocol; broader physical multi-segment packing, jumbo/non-wrapping page layout, generation rejection, ordered reclaim, and oversize rollback remain separate obligations |
 | Fixed-role `SegmentedTransportV1` / later `ExactFixed` (`R-BACK-2.90`–`2.94`) | opt-in fixed-region bridge plus host immutable-owner/21-family ExactFixed binding; bounded TLA model and six expected-failure configurations; production CPU-ready Tape role binding and promotion evidence remain open |
 | End-to-end source lease/facade/completion/materialization composition (R-BACK-2.95–2.100, R-ARCH-7.11–7.24) | Production PE emission carries a closed event/source interval through authenticated Raw ownership, direct or Arena publication, the generation-qualified lifecycle sidecar, completion, and reclaim. `CpuPipelineLifecycle` and native truth tables reject partial and cross-raw duplicate identity. Current import closes ownership with Unix `RawOwned` storage before bridge return; same-address adoption remains invalid without a negotiated shared lease. `ReplayProjectionTransaction` plus the production `ReplayTransaction`/sparse undo journal bind exact source-order projection, pre-effect state/destination rollback, receipt-before-commit, and post-effect no-retry fail-stop. The `DrawRunSubmission` carrier, its batch APIs/adapters/scratch, and carrier-specific counters/tests are retired from production; synchronous direct or ordinary final-storage ingress replaces them. Universal fused all-family cursor execution, optimizer-policy proof binding, the complete ordinary/direct differential, and a fresh four-boundary ledger audit remain open. Broader atomic-order, Wine/GPU, and promotion evidence remain separate. |
+| Source-range emission plan and lease lifecycle (`R-BACK-2.101`–`2.103`, `R-VERIF-2.25`) | `ReplayEmissionPlanIslands` proves the smallest three-span safety slice and its native binding calls production `compatibilitySpanAdmission`; the production planner itself has a bounded exhaustive class truth table and a focused serial differential. The composed multi-cut/rotation/ordered-control/slot-generation progress model, shared production span reducer, complete SoA differential, GPU oracle, and wild locality/performance evidence remain open. |
 | CPU-ready admission and session progress | native admission policy specs cover exact Writing/headroom qualification, real lease charge, stale identity, the complete typed drain matrix, unlocked wait, semantic-drain priority, and exact Ready over admission/writer pressure. The production join spec fills all 31 Ready controls and composes the real replay-drain queue with a direct real `QueueLifecycleController::waitForSequence` call, proving one Present plus seven admission escapes and 23 exact producer-fence escapes cover the complete fence in FIFO order without a capacity-generation transition. Exact-head at-most-once tokens, target coverage, restore eligibility, ownership conservation, admission retry, completion-fence return, and distinct counters are pinned through production CVs. GT2 r17 binds the actual reserve path, records 672 producer-wait escapes, returns from reserve, and publishes a fully settled 147-segment v2 sidecar with zero watchdog/GPU errors. Four sibling cases retain Present, non-Arena, ordinary-capacity, and high-water ineligibility without token consumption; generation retry retains priority. Seeded `EncodeSchedulingProgress` composes admission progress followed by the post-admission producer fence and return. |
 | Pass streaming | planner specs cover the allocation-free exact four-command proof, malformed/unsupported shapes, identity/attachment/alias hazards, complete coverage, and the unchanged universal validator. Production specs cover default-off natural replay, exact joined replay, render-pass begin/end `3 -> 2`, one removed mid-chunk split, stale pre-effect restore, ordered-release and stop drains, pending-carrier capture-start drain through the full capture predicate, one observer, natural FIFO completion, receipt-backed retirement/reclaim, and the independent 8+1 bounded-window edge. |
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |

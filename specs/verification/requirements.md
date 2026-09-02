@@ -270,6 +270,35 @@ allocator internals, Objective-C/Metal behavior, or final pixels. The transport
 and later Tape provider remain default-off until model-to-code, native/GPU,
 wild, locality, and performance gates are complete.
 
+**R-VERIF-2.25** Formal evidence for R-BACK-2.101 through R-BACK-2.103 must
+compose source-range partitioning with final-slot lease ownership and the
+R-VERIF-2.23 pipeline lifecycle. The bounded safety model must prove total and
+ordered exact-once record coverage, immediate same-raw span succession,
+witness reset on slot generation change, explicit draw-run closure at every
+cut, one terminal Present at most, publication only after complete reserved SoA
+construction, no fallback after any semantic or publication effect, and no
+completion or reclaim before all spans of the raw settle. It must include
+multiple separators, capacity rotation, slot reuse, and both CPU-ready session
+dispositions for ordered control. Independent expected-failure configurations
+must remove each of the span witness, separator effect cut, run closure,
+Present-ordering gate, capacity bound, slot-generation reset, receipt-before-
+commit, completion ordering, and wake/progress premises.
+
+A separate weak-fair progress configuration must prove that an admitted raw
+eventually settles, fails terminally, or takes one pre-effect compatibility
+fallback when replay, encode, GPU completion, and reclaim agents continue to
+run. Disabling deadlock checks without an equivalent terminal-state predicate
+does not satisfy this obligation.
+
+Native model/code isomorphism must invoke the same pure span-lifecycle reducer
+as production. Direct calls to production planning and admission predicates
+are valid bindings for those predicates, while a manually mirrored test-only
+transition system is not proof that production begin/commit/separator/failure
+actions implement the model. Exact SoA capacity, layout, payload bytes, and
+post-state equivalence remain native/property-test obligations, and concrete
+Metal resource, shader, attachment, and pixel equivalence remains a GPU-oracle
+obligation under R-VERIF-1.7.
+
 ---
 
 ## 3. Resource Lifetime

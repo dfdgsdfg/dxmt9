@@ -8,7 +8,7 @@ tags: [specs, backend, encode-scheduling, gap]
 # Encode Scheduling Gap
 
 This is the detailed owner for `R-BACK-2.35`–`R-BACK-2.50`,
-`R-BACK-2.57`–`R-BACK-2.67`, and `R-BACK-2.76`–`R-BACK-2.102`. The parent
+`R-BACK-2.57`–`R-BACK-2.67`, and `R-BACK-2.76`–`R-BACK-2.103`. The parent
 [backend gap](../gap.md) keeps only a routing summary. Historical experiments
 remain in `docs/perfomance/`.
 
@@ -101,7 +101,18 @@ append, so it is not on the cost path this requirement targets.
 | Model-code binding | `dxmt9-replay-emission-plan-islands-spec` -- truth table over the production `compatibilitySpanAdmission`, plus one translated trace per `.counterexample.cfg` |
 | Production differential | `dxmt9-cpu-ready-production-routing-spec` -- a compatibility-cut raw against the Legacy lane, comparing the **concatenated per-command `effectiveCommandDigest` sequence** across every source the raw published (ordered command kind, draw parameters, binding-override and binding-snapshot payload bytes, coordinator descriptors), not a command total; plus the Present-tail span, the coordinator-bearing span, both capacity rotations, and the non-terminal/duplicate Present whole-raw fallbacks with their published source order |
 
-**Open, and not claimed:**
+**Open, and not claimed (`R-BACK-2.103` / `R-VERIF-2.25`):**
+
+The existing `ReplayEmissionPlanIslands` model is the minimal three-span safety
+slice. It intentionally does not compose the executable span cursor with slot
+generation, capacity rotation, ordered-control session disposition,
+publication/completion/reclaim, or weak-fair progress. Its native binding
+shares the production `compatibilitySpanAdmission` predicate; the remaining
+begin/separator/commit/failure actions are still mirrored in a test-only state
+machine rather than consumed from a shared production reducer. Exact SoA
+contents are covered by focused transaction and production differentials, not
+by an all-family final-storage differential. These are explicit formal and
+model/code closure gaps, not claims delegated to the wild gate.
 
 1. **No wild, GPU, or performance evidence.** The three-way cadence matrix
    (Legacy / whole-raw Direct / spans) on GT1/GT2/GT3/SFIV has not been run.
@@ -154,6 +165,14 @@ append, so it is not on the cost path this requirement targets.
    shape occurs in a real title's chunk stream is unmeasured; the gate is
    fail-closed, so the cost of it never firing is zero and the cost of it
    firing is one whole-raw compatibility replay.
+
+8. **Default-on is provisional, not promoted evidence.** The enclosing
+   `DXMT9_DIRECT_CHUNK_SLOT_REPLAY` selector was already policy-default-on when
+   lease spans replaced whole-raw routing. Until the R-BACK-2.103 composed
+   refinement, complete native differential, deterministic GPU oracle, and
+   supervised wild locality gates close, that default is an implementation
+   state protected by the explicit `0` rollback, not a completed promotion
+   claim under R-VERIF-1.5 through R-VERIF-1.8.
 
 ### Ordinary source-range closure (2026-09-02)
 

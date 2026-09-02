@@ -23,7 +23,7 @@ another:
 | Submission boundary | A command buffer or jointly committed command-buffer group enters Metal execution. |
 
 The requirements `R-BACK-2.35` through `R-BACK-2.50`, `R-BACK-2.57`
-through `R-BACK-2.67`, and `R-BACK-2.76` through `R-BACK-2.100` are
+through `R-BACK-2.67`, and `R-BACK-2.76` through `R-BACK-2.103` are
 authoritative here.
 
 ## 1. Producer / Encode Overlap
@@ -1491,3 +1491,47 @@ typed fail-stop and never a whole-raw retry. Observability is count-only and
 perf-gated, covering draws and commands per lease, ordinary fallback draws and
 post-reserve storage growth (both targeting zero), state projections, island,
 coordinator and cut counts, and each typed rejection.
+
+**R-BACK-2.103** Source-range lease replay must have one composed refinement
+boundary from the immutable raw through executable span selection, final-slot
+construction, publication, completion, and reclaim. The reference behavior is
+the authenticated serial record stream. Flattening every committed direct span
+and every ordinary separator must reproduce that stream exactly once and in
+order, including state-only prefixes and suffixes, coordinator commands,
+ordered controls, compatibility draws, and Present.
+
+The refinement state must distinguish the raw record cursor, descriptive
+segment cursor, executable span and lease ordinals, active raw witness, slot
+and storage generations, assembler checkpoint, reserved and constructed SoA
+dimensions, open draw-run state, irreversible-effect cut, parked Present,
+destination receipt, per-span sequence-qualified resource closure, source
+settlement, completion, and reclaim. It must cover more than one separator,
+capacity rotation onto a fresh slot, slot reuse, an ordered control with the
+CPU-ready session lane both enabled and disabled, and failure before and after
+each effect boundary. Under explicit replay-worker, encode-worker, completion,
+and reclaim fairness assumptions, every admitted raw must eventually settle,
+fail-stop, or enter one pre-effect compatibility fallback; indefinite lease or
+capacity wait is invalid.
+
+The production driver and native isomorphism must consume one shared pure
+`ReplaySpanTransition` relation for begin, separator, commit, rollback,
+fail-stop, witness advance, and final settlement. A test-only state machine that
+reimplements those actions is supporting evidence only. The production
+`compatibilitySpanAdmission` predicate remains the authority for same-raw
+continuation, but binding that predicate alone does not establish transition
+isomorphism for the complete span lifecycle.
+
+Exact final-storage evidence is data-level rather than temporal. A bounded
+native differential must compare the serial reference with Direct lease replay
+for the complete ordered command stream, projected next state, every populated
+`ChunkSlot` SoA and payload range, state and uniform generations, draw-run
+boundaries, resource and sequence identities, Present disposition, completion,
+and failure result. It must exercise every Direct-capable coordinator family,
+multiple cuts, capacity rotation, and the configured maximum local boundary
+values. Planned reservation must equal or conservatively bound every append,
+and no final SoA vector or nested payload may grow after reservation.
+
+This composed algebra, model/code binding, and native differential are
+necessary but do not prove Metal behavior or pixels. A deterministic Render
+Tape or Metal readback oracle and supervised wild locality/performance evidence
+remain required before a newly introduced span policy may become default-on.
