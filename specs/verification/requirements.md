@@ -284,6 +284,38 @@ must remove each of the span witness, separator effect cut, run closure,
 Present-ordering gate, capacity bound, slot-generation reset, receipt-before-
 commit, completion ordering, and wake/progress premises.
 
+Storage capacity must be modelled as a quantity, not a boolean premise, and the
+model must distinguish the per-transaction exact reservation from the slot's
+physical capacity (R-BACK-2.103, R-BACK-2.104). It must cover empty-slot
+provisioning, the prohibition on growing a populated slot, slot-generation
+advance across a publication, and **boundary credits** against a
+same-capacity serial reference consuming the identical source sequence: Direct
+must never publish more often than that reference. The provisioned amount must be the
+budget-fixed one the implementation uses, not a per-source proportional one, and
+the model's input must be a nondeterministic **set** of adjacent source
+sequences covering heterogeneous shapes -- a tiny leading span before
+budget-sized ones, a leading span above the budget, and sources at and beyond it
+-- rather than one deterministic literal, which is a simulation and cannot
+express first-span sensitivity at all. Independent expected-failure
+configurations must remove the provisioning premise -- restoring exact-fit
+reservation, which is the measured regression -- and the empty-only premise,
+which reallocates a published extent. The growth action must not be the only
+enabled move when the empty-only premise is removed: rotation stays enabled
+beside it so the model *chooses* to grow. The reference in this model is a
+same-capacity serial slot rather than the production Legacy lane, whose chunk
+command limit is unbounded by default; parity against an unbounded reference is
+an explicit open obligation, not a discharged one.
+
+The scalar-capacity refinement is not allocator or process-memory evidence.
+Its promotion obligation must compose all ring slots with an aggregate retained-
+capacity lease and must model allocation as a fallible staged transaction:
+either every vector and lookup-table capacity is adopted into an empty slot, or
+the live slot remains byte-identical and ordinary exact-fit replay proceeds.
+Expected-failure coverage must expose partial adoption and leaked aggregate
+credit. Native allocation-failure injection and wild RSS/VM/address-domain
+evidence own the implementation binding; TLC success alone cannot discharge
+them.
+
 A separate weak-fair progress configuration must prove that an admitted raw
 eventually settles, fails terminally, or takes one pre-effect compatibility
 fallback when replay, encode, GPU completion, and reclaim agents continue to

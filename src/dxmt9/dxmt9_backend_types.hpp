@@ -1497,6 +1497,58 @@ struct ChunkSlot {
     }
   }
 
+  // R-BACK-2.104: size the uniform lookup bucket tables for a PROVISIONED
+  // capacity while the slot is still empty.
+  //
+  // `reserveDrawUniformPayloadLookup` / `reserveDrawUniformStageLookup` cannot
+  // do this: both delegate to a rebuild whose empty-records branch clears
+  // heads/tails/next, so on an empty slot they provision nothing and the first
+  // append then sizes the tables to that first source alone. Every following
+  // adjacent source is then capacity-rejected on the lookup arm of
+  // `directContinuationAdmission` even though every record vector has room.
+  //
+  // Growing the tables later is not an option -- it would rehash a published
+  // prefix -- so they are assigned here, once, at the provisioned bucket count.
+  // `next` keeps size 0 (it must stay equal to the record count) and only
+  // takes capacity, so the append path's `next.size() != recordIndex` guard
+  // never fires and never rebuilds the tables back down.
+  //
+  // Callers must have verified the slot is empty in every direct dimension.
+  void provisionEmptyDrawUniformLookup(std::size_t payloadCount,
+                                       std::size_t vertexCount,
+                                       std::size_t pixelCount) {
+    const auto provision = [](std::vector<std::uint32_t>& heads,
+                              std::vector<std::uint32_t>& tails,
+                              std::vector<std::uint32_t>& next,
+                              std::size_t count) {
+      if (count == 0) {
+        return;
+      }
+      const auto bucketCount = detail::chunkSlotUniformLookupBucketCount(count);
+      if (heads.size() < bucketCount) {
+        heads.assign(bucketCount, detail::kChunkSlotInvalidUniformIndex);
+        tails.assign(bucketCount, detail::kChunkSlotInvalidUniformIndex);
+      } else {
+        heads.assign(heads.size(), detail::kChunkSlotInvalidUniformIndex);
+        tails.assign(heads.size(), detail::kChunkSlotInvalidUniformIndex);
+      }
+      next.clear();
+      detail::chunkSlotReserveAtLeast(next, count);
+    };
+    if (!drawUniformPayloads.empty() || !drawUniformVertexConstants.empty() ||
+        !drawUniformPixelConstants.empty()) {
+      return;
+    }
+    provision(drawUniformPayloadLookupHeads, drawUniformPayloadLookupTails,
+              drawUniformPayloadLookupNext, payloadCount);
+    provision(drawUniformVertexConstantsLookupHeads,
+              drawUniformVertexConstantsLookupTails,
+              drawUniformVertexConstantsLookupNext, vertexCount);
+    provision(drawUniformPixelConstantsLookupHeads,
+              drawUniformPixelConstantsLookupTails,
+              drawUniformPixelConstantsLookupNext, pixelCount);
+  }
+
   void reserveDrawUniformPayloadLookup(std::size_t payloadCount) {
     if (payloadCount == 0) {
       return;

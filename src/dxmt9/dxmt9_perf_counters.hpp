@@ -295,6 +295,18 @@ void countDirectChunkSlotContinuationIdentityRejected();
 void countDirectChunkSlotContinuationCommitted();
 void countDirectChunkSlotContinuationPopulatedFallback();
 void countDirectChunkSlotContinuationCapacityRotated();
+// Empty-slot storage provisioning (R-BACK-2.104). Count-only and perf-gated.
+// `provisionFailed` targets zero and means staged allocation did not publish;
+// `provisionSkippedNonEmpty` targets zero: a non-zero row means a slot carried
+// no commands but was not empty in every direct dimension, so provisioning
+// declined to reallocate and the exact per-transaction reserve stood alone.
+// `sourceExceedsBudget` is the *expected* residual: a source whose own exact
+// plan is larger than the bounded slot budget, i.e. a genuine budget rotation
+// rather than an artefact of exact-fit reservation.
+void countDirectChunkSlotSlotProvisioned();
+void countDirectChunkSlotSlotProvisionFailed();
+void countDirectChunkSlotSlotProvisionSkippedNonEmpty();
+void countDirectChunkSlotSlotProvisionSourceExceedsBudget();
 // Lease-span routing observability (R-BACK-2.102). Count-only and perf-gated:
 // `ordinaryFallbackDraws` and `soaGrowthAfterReserve` both target zero, so a
 // non-zero row is the signal that a direct span degraded or that a reserved

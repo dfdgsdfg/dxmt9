@@ -113,6 +113,10 @@ struct Counters {
   // Lease-span routing (R-BACK-2.102). Count-only; every row is written only
   // while perf counters are enabled.
   std::atomic<std::uint64_t> directChunkSlotContinuationCapacityRotated{0};
+  std::atomic<std::uint64_t> directChunkSlotSlotProvisioned{0};
+  std::atomic<std::uint64_t> directChunkSlotSlotProvisionFailed{0};
+  std::atomic<std::uint64_t> directChunkSlotSlotProvisionSkippedNonEmpty{0};
+  std::atomic<std::uint64_t> directChunkSlotSlotProvisionSourceExceedsBudget{0};
   std::atomic<std::uint64_t> replaySpanLeases{0};
   std::atomic<std::uint64_t> replaySpanLeaseDraws{0};
   std::atomic<std::uint64_t> replaySpanLeaseCommands{0};

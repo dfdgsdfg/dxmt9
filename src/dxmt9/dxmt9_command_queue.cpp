@@ -26,6 +26,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <chrono>
 #include <cstdarg>
 #include <cstdio>
@@ -2975,6 +2976,192 @@ void prepareSlotForPublish(CommandQueue& q,
   }
 }
 
+// R-BACK-2.104 empty-slot storage provisioning.
+//
+// `DXMT9_DIRECT_SLOT_HEADROOM_BYTES` is a decimal byte count and nothing else.
+// Exactly `0` disables provisioning and restores byte-identical exact-fit
+// reservation. A malformed value (a sign, whitespace, trailing characters, an
+// out-of-range magnitude) keeps the disabled default rather than silently
+// meaning something: `strtoull` wraps `-1` to `SIZE_MAX`, which is not a
+// contract this knob offers. A positive value below one draw's price would
+// make the byte ceiling zero -- neither the documented enabled behaviour nor
+// the documented `0` rollback -- so it clamps up to
+// `kDirectSlotMinHeadroomBytes` with one
+// bounded warn.
+struct DirectSlotHeadroomResolution {
+  std::size_t maxBytes = 0;
+  bool clamped = false;
+  bool rejected = false;
+};
+
+DirectSlotHeadroomResolution resolveDirectSlotHeadroomBytes(
+    const char* env) noexcept {
+  DirectSlotHeadroomResolution result{};
+  if (!env || env[0] == '\0') {
+    return result;
+  }
+  // Digits only: no sign, no leading whitespace, no trailing characters.
+  for (const char* c = env; *c != '\0'; ++c) {
+    if (*c < '0' || *c > '9') {
+      result.rejected = true;
+      return result;
+    }
+  }
+  errno = 0;
+  char* end = nullptr;
+  const auto parsed = std::strtoull(env, &end, 10);
+  if (end == env || *end != '\0' || errno == ERANGE ||
+      parsed > std::numeric_limits<std::size_t>::max()) {
+    result.rejected = true;
+    return result;
+  }
+  const auto value = static_cast<std::size_t>(parsed);
+  if (value == 0) {
+    result.maxBytes = 0;  // the explicit rollback lane
+    return result;
+  }
+  if (value < core::kDirectSlotMinHeadroomBytes) {
+    result.maxBytes = core::kDirectSlotMinHeadroomBytes;
+    result.clamped = true;
+    return result;
+  }
+  result.maxBytes = value;
+  return result;
+}
+
+const core::DirectSlotProvisionBudget& directSlotProvisionBudget() {
+  static const core::DirectSlotProvisionBudget budget = [] {
+    const auto resolved = resolveDirectSlotHeadroomBytes(
+        std::getenv("DXMT9_DIRECT_SLOT_HEADROOM_BYTES"));
+    if (resolved.rejected) {
+      dxmt9::util::logf(
+          dxmt9::util::LogLevel::Warn, "dxmt9-queue",
+          "DXMT9_DIRECT_SLOT_HEADROOM_BYTES is not a decimal byte count; "
+          "using the disabled default %zu",
+          resolved.maxBytes);
+    } else if (resolved.clamped) {
+      dxmt9::util::logf(
+          dxmt9::util::LogLevel::Warn, "dxmt9-queue",
+          "DXMT9_DIRECT_SLOT_HEADROOM_BYTES raised to %zu (one draw costs "
+          "%zu bytes plus coordinator floors; use 0 for the exact-fit "
+          "rollback lane)",
+          resolved.maxBytes, core::kDirectSlotWorstCaseBytesPerDraw);
+    }
+    core::DirectSlotProvisionBudget value{};
+    value.maxBytes = resolved.maxBytes;
+    return value;
+  }();
+  return budget;
+}
+
+// Reserve a provisioning plan into a slot that is EMPTY in every direct
+// dimension. This is the only place a final-slot vector may reallocate, and it
+// is address-safe precisely because there is nothing published to move: no
+// row, byte range, uniform-lookup link or open draw run exists yet. A
+// populated slot is never touched here.
+//
+// A throwing reservation must leave the live slot byte-identical. Stage every
+// allocation in an isolated empty holder, then publish the capacity set with
+// noexcept vector swaps. The assembler's own exact reserve still runs after a
+// failed attempt, so the opt-in mechanism degrades to the ordinary exact-fit
+// lane without exposing a partially provisioned lookup topology.
+bool provisionEmptyDirectSlotUnlocked(
+    core::ChunkSlot& slot,
+    const core::SourcePayloadCapacity& plan) noexcept {
+  DXMT_ASSERT(core::chunkSlotDirectStorageEmpty(slot) &&
+              "direct slot provisioning may only reserve an empty slot");
+  if (!core::chunkSlotDirectStorageEmpty(slot)) {
+    return false;
+  }
+  core::ChunkSlot staged;
+  const auto swapStorage = [](core::ChunkSlot& left,
+                              core::ChunkSlot& right) noexcept {
+    using std::swap;
+    swap(left.commandHeaders, right.commandHeaders);
+    swap(left.drawHotStates, right.drawHotStates);
+    swap(left.drawShaderLayouts, right.drawShaderLayouts);
+    swap(left.drawDebugSnapshots, right.drawDebugSnapshots);
+    swap(left.drawPsoSubviews, right.drawPsoSubviews);
+    swap(left.drawUniformFixedPayloads, right.drawUniformFixedPayloads);
+    swap(left.drawUniformVertexConstants, right.drawUniformVertexConstants);
+    swap(left.drawUniformVertexConstantBytes,
+         right.drawUniformVertexConstantBytes);
+    swap(left.drawUniformPixelConstants, right.drawUniformPixelConstants);
+    swap(left.drawUniformPixelConstantBytes,
+         right.drawUniformPixelConstantBytes);
+    swap(left.drawUniformPayloads, right.drawUniformPayloads);
+    swap(left.drawUniformPayloadLookupHeads,
+         right.drawUniformPayloadLookupHeads);
+    swap(left.drawUniformPayloadLookupTails,
+         right.drawUniformPayloadLookupTails);
+    swap(left.drawUniformPayloadLookupNext,
+         right.drawUniformPayloadLookupNext);
+    swap(left.drawUniformVertexConstantsLookupHeads,
+         right.drawUniformVertexConstantsLookupHeads);
+    swap(left.drawUniformVertexConstantsLookupTails,
+         right.drawUniformVertexConstantsLookupTails);
+    swap(left.drawUniformVertexConstantsLookupNext,
+         right.drawUniformVertexConstantsLookupNext);
+    swap(left.drawUniformPixelConstantsLookupHeads,
+         right.drawUniformPixelConstantsLookupHeads);
+    swap(left.drawUniformPixelConstantsLookupTails,
+         right.drawUniformPixelConstantsLookupTails);
+    swap(left.drawUniformPixelConstantsLookupNext,
+         right.drawUniformPixelConstantsLookupNext);
+    swap(left.drawParams, right.drawParams);
+    swap(left.drawPayloadArena, right.drawPayloadArena);
+    swap(left.drawRunRecords, right.drawRunRecords);
+    swap(left.clearRecords, right.clearRecords);
+    swap(left.surfaceCopyRecords, right.surfaceCopyRecords);
+    swap(left.stretchRectRecords, right.stretchRectRecords);
+    swap(left.colorFillRecords, right.colorFillRecords);
+    swap(left.depthResolveRecords, right.depthResolveRecords);
+    swap(left.generateMipmapsRecords, right.generateMipmapsRecords);
+    swap(left.presentRecords, right.presentRecords);
+  };
+  try {
+    const auto reserve = [](auto& values, std::size_t required) {
+      if (values.capacity() < required) {
+        values.reserve(required);
+      }
+    };
+    reserve(staged.commandHeaders, plan.commandHeaders);
+    reserve(staged.drawHotStates, plan.drawHotStates);
+    reserve(staged.drawShaderLayouts, plan.drawShaderLayouts);
+    reserve(staged.drawDebugSnapshots, plan.drawDebugSnapshots);
+    reserve(staged.drawPsoSubviews, plan.drawPsoSubviews);
+    reserve(staged.drawUniformFixedPayloads, plan.drawUniformFixedPayloads);
+    reserve(staged.drawUniformVertexConstants, plan.drawUniformVertexConstants);
+    reserve(staged.drawUniformVertexConstantBytes,
+            plan.drawUniformVertexConstantBytes);
+    reserve(staged.drawUniformPixelConstants, plan.drawUniformPixelConstants);
+    reserve(staged.drawUniformPixelConstantBytes,
+            plan.drawUniformPixelConstantBytes);
+    reserve(staged.drawUniformPayloads, plan.drawUniformPayloads);
+    reserve(staged.drawParams, plan.drawParams);
+    reserve(staged.drawPayloadArena, plan.drawPayloadBytes);
+    reserve(staged.drawRunRecords, plan.drawRunRecords);
+    reserve(staged.clearRecords, plan.clearRecords);
+    reserve(staged.surfaceCopyRecords, plan.surfaceCopyRecords);
+    reserve(staged.stretchRectRecords, plan.stretchRectRecords);
+    reserve(staged.colorFillRecords, plan.colorFillRecords);
+    reserve(staged.depthResolveRecords, plan.depthResolveRecords);
+    reserve(staged.generateMipmapsRecords, plan.generateMipmapsRecords);
+    reserve(staged.presentRecords, plan.presentRecords);
+    // Bucket tables are SIZED, not reserved, and a later growth would rehash
+    // an already-published prefix -- which continuation admission forbids. Size
+    // them once here, while the record vectors are empty and the rebuild is
+    // trivial.
+    staged.provisionEmptyDrawUniformLookup(plan.drawUniformPayloads,
+                                           plan.drawUniformVertexConstants,
+                                           plan.drawUniformPixelConstants);
+  } catch (...) {
+    return false;
+  }
+  swapStorage(slot, staged);
+  return true;
+}
+
 bool maybeCommitDrawChunkUnlocked(
     CommandQueue& q,
     resources::Pool& pool,
@@ -3772,6 +3959,31 @@ CommandQueue::beginDirectChunkSlotReplay(
     }
     if (payload->commandsEmpty()) {
       continuation = false;
+      // R-BACK-2.104: the one address-safe moment to give this slot storage
+      // headroom. The shared reducer owns the decision; production, the native
+      // truth table and the TLA binding all consume it.
+      const auto storage = core::directSlotStorageTransition(
+          *payload, capacity, directSlotProvisionBudget(),
+          allowRotation && !rotated);
+      switch (storage.action) {
+      case core::DirectSlotStorageAction::ProvisionEmpty:
+        if (provisionEmptyDirectSlotUnlocked(*payload, storage.provision)) {
+          perf::countDirectChunkSlotSlotProvisioned();
+          if (storage.sourceExceedsBudget) {
+            // The source is its own budget: no adjacent source can share this
+            // slot, so the next one is a genuine budget rotation.
+            perf::countDirectChunkSlotSlotProvisionSourceExceedsBudget();
+          }
+        } else {
+          perf::countDirectChunkSlotSlotProvisionFailed();
+        }
+        break;
+      case core::DirectSlotStorageAction::ProvisionSkippedNonEmpty:
+        perf::countDirectChunkSlotSlotProvisionSkippedNonEmpty();
+        break;
+      default:
+        break;
+      }
       break;
     }
     perf::countDirectChunkSlotContinuationAttempted();
@@ -3807,16 +4019,21 @@ CommandQueue::beginDirectChunkSlotReplay(
       perf::countDirectChunkSlotContinuationPopulatedFallback();
       return {.status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure};
     }
-    const auto admission =
-        core::directContinuationAdmission(*payload, capacity).disposition;
-    if (admission == core::DirectContinuationAdmission::Admitted) {
+    // The reducer owns rotate-vs-fallback. The single bounded rotation per
+    // admission is lifecycle state it cannot see, so it is passed in; nothing
+    // here re-derives the decision from `admission`.
+    const auto storage = core::directSlotStorageTransition(
+        *payload, capacity, directSlotProvisionBudget(),
+        allowRotation && !rotated);
+    if (storage.action == core::DirectSlotStorageAction::AppendInPlace) {
       continuation = true;
       perf::countDirectChunkSlotContinuationAdmitted();
       break;
     }
-    if (admission == core::DirectContinuationAdmission::CapacityRejected) {
+    if (storage.admission ==
+        core::DirectContinuationAdmission::CapacityRejected) {
       perf::countDirectChunkSlotContinuationCapacityRejected();
-      if (allowRotation && !rotated) {
+      if (storage.action == core::DirectSlotStorageAction::Rotate) {
         rotated = true;
         if (queueLifecycle_.commitCurrentChunk(
                 lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {

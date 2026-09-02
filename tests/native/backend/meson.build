@@ -307,6 +307,18 @@ test('dxmt9-cpu-ready-plan-spec',
      cpu_ready_plan_spec,
      env: dxmt9_native_test_env)
 
+direct_slot_provisioning_spec = executable(
+  'dxmt9-direct-slot-provisioning-spec',
+  'direct_slot_provisioning_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-direct-slot-provisioning-spec',
+     direct_slot_provisioning_spec,
+     env: dxmt9_native_test_env)
+
 source_payload_spec = executable(
   'dxmt9-source-payload-spec',
   'source_payload_spec.cpp',

@@ -1,5 +1,8 @@
 #include "device_c_cpu_ready_plan.hpp"
 #include "device_c_ordered_control.hpp"
+// Only this translation unit needs the shared derived-dimension helper; the
+// planner header must not pull the whole direct-continuation surface in.
+#include "../dxmt9/dxmt9_direct_continuation.hpp"
 
 #include <cstring>
 #include <limits>
@@ -343,21 +346,13 @@ bool addDerivedDrawCapacity(core::SourcePayloadCapacity& capacity,
                         pixelConstantBytes)) {
     return false;
   }
-  capacity.drawUniformVertexConstantBytes = vertexConstantBytes;
-  capacity.drawUniformPixelConstantBytes = pixelConstantBytes;
-
-  const auto lookupBucketCount =
-      core::detail::chunkSlotUniformLookupBucketCount(drawCount);
-  capacity.drawUniformPayloadLookupHeads = lookupBucketCount;
-  capacity.drawUniformPayloadLookupTails = lookupBucketCount;
-  capacity.drawUniformPayloadLookupNext = drawCount;
-  capacity.drawUniformVertexConstantsLookupHeads = lookupBucketCount;
-  capacity.drawUniformVertexConstantsLookupTails = lookupBucketCount;
-  capacity.drawUniformVertexConstantsLookupNext = drawCount;
-  capacity.drawUniformPixelConstantsLookupHeads = lookupBucketCount;
-  capacity.drawUniformPixelConstantsLookupTails = lookupBucketCount;
-  capacity.drawUniformPixelConstantsLookupNext = drawCount;
-  return true;
+  // The u32 checks above are this planner's own overflow contract; the
+  // derived dimensions themselves are owned by one shared pure function so
+  // the producer plan, the empty-slot provisioning budget and the continuation
+  // admission predicate cannot drift apart (R-BACK-2.104).
+  core::applyDerivedDrawCapacity(capacity, drawCount);
+  return capacity.drawUniformVertexConstantBytes == vertexConstantBytes &&
+         capacity.drawUniformPixelConstantBytes == pixelConstantBytes;
 }
 
 std::optional<core::SourcePayloadLayout> makeSegmentLayout(

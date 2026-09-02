@@ -2124,7 +2124,124 @@ generation, capacity vector, construction extent, open draw run, parked
 Present, effect cut, receipt, resource sequence, settlement, and completion.
 Capacity rotation is a generation transition to a fresh destination, not a
 fallback and not permission to copy or resize an already populated final
-extent. An ordered control is a serial separator whose session-enabled and
+extent. It is a **storage** event, never by itself a Metal one: a rotation adds
+a command-buffer and render-pass boundary the same-capacity serial reference
+does not have, so it may only be reached from a typed forced-capacity bound
+(R-BACK-2.103 clause 3), never from a slot that was simply reserved to fit the
+previous source exactly.
+
+### Empty-slot storage provisioning (R-BACK-2.104)
+
+A final slot's physical capacity is provisioned once, while the slot is empty in
+every direct dimension, and never grown afterwards. Production policy resolves
+unset, empty, malformed and exact-zero headroom to disabled; an explicit
+positive byte count is the only way to enter this experimental mechanism.
+
+The allocation is a transaction of its own. Production first constructs the
+complete vector-capacity and uniform-lookup topology in an isolated empty
+`ChunkSlot`, then adopts every vector through non-throwing swaps. Any allocation
+failure destroys the staging slot and leaves the live slot unchanged for the
+ordinary exact-fit assembler path. Sequentially reserving the live slot and
+catching an exception is invalid because it exposes a partially provisioned
+topology to replay.
+
+The draw dimension is **budget-fixed**: every in-budget first span provisions the
+same priced ceiling, so slot storage does not depend on where the producer
+happened to cut the first span. A first-span-proportional rule fails in both
+directions -- a short leading span under-provisions the slot for every source
+after it, and a large leading span reserves it exactly and restores the
+regression -- and neither failure is visible in the rotation counters. The
+ceiling is
+
+```
+perDraw  = kDirectSlotWorstCaseBytesPerDraw
+         + ceil(source.drawPayloadBytes / source.drawParams)
+fixed    = provisioned coordinator rows + their command headers, in bytes
+ceiling  = min(maxDraws, (maxBytes - fixed) / perDraw)
+draws    = source.drawParams >= ceiling ? source.drawParams : ceiling
+```
+
+so `directSlotProvisionRetainedBytes(plan) <= maxBytes` holds by construction
+whenever the ceiling binds. Folding the per-draw payload rate into `perDraw` is
+what stops a payload-carrying source from multiplying retained bytes: it is
+charged for its own arena *before* the draw count is chosen, so a heavy payload
+buys fewer draws rather than a larger slot. The single documented exception is a
+source whose own exact plan already exceeds the ceiling: it is reserved exactly
+-- provisioning must never under-reserve -- owns its slot, and the source after
+it is a genuine budget rotation. That case is classified by the reducer as
+`sourceExceedsBudget`, not re-derived at the call site.
+
+The non-draw coordinator dimensions stay proportional to the source's own
+coordinator use (16x, with floors of four records and one Present). An untouched
+family therefore receives only that small floor and never scales with the draw
+budget, while a Clear- or Present-bearing adjacent source does not rotate on a
+coordinator dimension alone. A **coordinator-only span** (`drawParams == 0`) provisions zero draws: it
+is reachable, and committing the full draw ceiling on a span that does not draw
+would retain tens of megabytes against unknown demand. A following draw-bearing
+source therefore takes one rotation and then provisions properly.
+`DXMT9_DIRECT_SLOT_HEADROOM_BYTES=0` restores byte-identical exact-fit
+reservation.
+
+The uniform lookup bucket tables are provisioned by a dedicated empty-only
+operation. The routine reserve helpers cannot do it: both delegate to a rebuild
+whose empty-records branch clears heads, tails and `next`, so on an empty slot
+they provision nothing and the first append then sizes the tables to that
+source alone -- after which every adjacent source is capacity-rejected on the
+lookup arm even though every record vector has room.
+
+The budget is priced, not asserted. One draw's worst-case final-slot
+reservation is:
+
+| Dimension | Bytes/draw |
+|---|---|
+| `FlatDrawStateRecord` | 8,112 |
+| `VertexShaderConstants` + `PixelShaderConstants` bytes | 8,224 |
+| `DrawUniformFixedPayloadRecord` | 2,584 |
+| `DrawShaderLayoutContext` | 2,248 |
+| Command header, `DrawParam`, `DrawRunCommandRecord`, `DrawPsoSubview`, `DrawDebugSnapshot`, `DrawUniformPayloadRecord`, the two stage records, and the three uniform lookup triples | 620 |
+| **Total** | **21,788** |
+
+The lookup triples are priced at **four** buckets per record, not two:
+`chunkSlotUniformLookupBucketCount` rounds `2 x records` up to a power of two,
+so two would make the byte ceiling unsound against
+`directSlotProvisionRetainedBytes`, which counts what is actually reserved.
+
+At that price the 2,048-draw ceiling commits **42.46 MiB per slot**
+(44,526,752 B for a mean-shaped plan). **This is a per-slot figure and the
+compatibility ring is `kCommandChunkCount = 32` slots wide, so the worst-case
+whole-ring retention is about 1.33 GiB.** That number is the honest cost of the
+mechanism and is not offset by anything below; it is why provisioning is bounded
+by an explicit byte budget with a documented `0` rollback rather than being
+treated as free.
+
+Two things do reduce the *marginal* cost against the reference lane, and neither
+cancels the ring figure. First, the Legacy reference lane already accumulates a
+whole present into one slot -- GT1 2,235,425 draws over 2,995 presents and GT2
+2,491,431 over 1,478, i.e. 746 and 1,685 draws per published chunk -- and
+`std::vector` growth rounds each of those vectors to the next power-of-two
+capacity, so a steady-state Legacy slot is already within a factor of the
+provisioned shape. Second, capacity is reserved, not touched: the pages behind an
+unwritten reservation are not resident until written. Neither is a measurement.
+The first wild gate rejected the candidate before locality could be measured.
+GT1 with the 48 MiB calibration value and with an explicit 8 MiB value both
+stopped after the frame-0 Clear/Present with the same Wine null-read page fault
+and no draws or encode chunks. Re-running 8 MiB after failure-atomic staging
+produced the identical fault, so partial live-slot mutation was a real safety
+defect but is not the observed startup failure's complete cause. The same staged
+binaries with exact zero completed 2,913 frames. This isolates the failure to
+positive provisioning but does not identify its cause: no allocator failure,
+RSS/VM sample, low-address sample or crash backtrace was captured, and unix-side
+storage uses the x86_64 allocator.
+Address-space exhaustion is therefore only a hypothesis. The mechanism remains
+opt-in until a ring-wide retained-capacity contract, failure injection, memory
+evidence, and positive GT1/GT2 locality runs exist.
+
+The one term Direct reserves more conservatively than Legacy retains is the
+constant-byte pair: the plan must bound it at `sizeof(VertexShaderConstants)`
+per draw, while Legacy stores only the usage-live, deduplicated prefix. That
+difference is an open item in `gap.md`.
+
+An ordered control is a serial separator whose session-enabled and
 session-disabled paths must refine the same source order. Once any earlier span
 or separator has an effect, every later failure is terminal for the raw.
 

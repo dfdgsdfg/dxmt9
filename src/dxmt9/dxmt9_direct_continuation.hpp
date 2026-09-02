@@ -33,6 +33,433 @@ struct DirectContinuationAdmissionResult {
   }
 };
 
+// ---------------------------------------------------------------------------
+// Empty-slot storage provisioning (R-BACK-2.104).
+//
+// The per-transaction reservation below (`SourcePayloadCapacity extra`) is a
+// *semantic* contract: it is the exact plan the assembler is allowed to append
+// and prepare-time conservation checks against. The final slot's *physical*
+// vector capacity is a separate, purely allocational property. Before this
+// requirement existed the two were the same number -- the assembler reserved
+// `size() + extra` exactly -- so every populated slot satisfied
+// `size() == capacity()` and the capacity arm below was false by construction
+// for every following source. Each adjacent source then had to publish the
+// slot and take a fresh one, and an allocator decision became a Metal
+// command-buffer and render-pass boundary.
+//
+// Provisioning fixes that at the only address-safe moment: while the slot is
+// empty in every direct dimension, so no published prefix is reallocated,
+// rehashed or copied. A populated slot is still never grown.
+//
+// The draw dimension is provisioned to a **budget-fixed ceiling**, not to a
+// multiple of whichever span happened to arrive first. A first-span-proportional
+// rule leaves the regression live for two whole populations: a short leading
+// span (a Clear-bearing or few-draw span at a frame boundary) under-provisions
+// the slot for every source after it, and a large leading span reintroduces
+// exact fit. The ceiling is the same priced, bounded number in both cases, so
+// the slot's storage does not depend on where the producer happened to cut.
+// The non-draw coordinator dimensions stay proportional to the source's own
+// coordinator use, so a dimension the workload does not touch stays sparse.
+//
+// A source whose own exact plan exceeds the ceiling is still reserved exactly
+// and is a *genuine* budget rotation afterwards, not a provisioning failure.
+struct DirectSlotProvisionBudget {
+  static constexpr std::size_t kCandidateMaxBytes = 48u * 1024u * 1024u;
+  // Multiplier for the NON-draw coordinator dimensions only. It is deliberately
+  // not the draw rule: coordinator rows are cheap (ClearDesc and
+  // PresentCommandRecord are hundreds of bytes, not tens of kilobytes) and are
+  // genuinely proportional to what the source uses. Small floors also reserve
+  // bounded room in untouched families so a Clear- or Present-bearing adjacent
+  // source does not rotate on a coordinator dimension alone. Draws are
+  // budget-fixed instead; see
+  // `directSlotProvisionDrawBudget`.
+  std::size_t coordinatorScale = 16;
+  // Draw-equivalent ceiling. Keeps every derived count far inside u32 and
+  // covers a whole measured GT2 present (1,678 draws) with margin.
+  std::size_t maxDraws = 2048;
+  // Retained-byte ceiling for ONE slot. Bounds the whole provisioning plan --
+  // draws, per-draw payload bytes, coordinator rows and command headers -- and
+  // not merely the draw-record dimensions; see
+  // `directSlotProvisionRetainedBytes`, which is the function the ceiling is
+  // derived against.
+  //
+  // This is a per-slot number and the ring is `kCommandChunkCount` slots wide,
+  // so the worst-case whole-ring retention is that many times larger. That
+  // figure is stated, not waved away, in
+  // `specs/backend/encode-scheduling/{spec,gap}.md`; it is the reason this
+  // mechanism is bounded and explicitly opt-in rather than free.
+  //
+  // Provisioning is fail-closed by default. A positive
+  // `DXMT9_DIRECT_SLOT_HEADROOM_BYTES` explicitly selects the experimental
+  // candidate; `0` retains the byte-identical exact-fit lane. The candidate
+  // ceiling remains named here so pure algebra/model tests do not smuggle a
+  // production default through value initialization.
+  std::size_t maxBytes = 0;
+  // A populated slot reserves no coordinator row at all, so a Clear- or
+  // Present-bearing adjacent source rotates today even when every draw
+  // dimension fits. These floors are cheap: ClearDesc and PresentCommandRecord
+  // together are a few kilobytes per slot.
+  std::size_t coordinatorFloor = 4;
+  std::size_t presentFloor = 1;
+
+  constexpr bool enabled() const noexcept {
+    return coordinatorScale != 0 && maxDraws != 0 && maxBytes != 0;
+  }
+};
+
+inline constexpr DirectSlotProvisionBudget kDirectSlotCandidateBudget = [] {
+  DirectSlotProvisionBudget budget{};
+  budget.maxBytes = DirectSlotProvisionBudget::kCandidateMaxBytes;
+  return budget;
+}();
+
+// Worst-case retained final-slot bytes for one direct draw, priced from the
+// real record sizes rather than guessed. Every slot vector the provisioning
+// plan reserves per draw appears here.
+//
+// The uniform lookup tables are the one non-linear term.
+// `chunkSlotUniformLookupBucketCount` rounds `2 * records` UP to a power of
+// two, so the worst case is just under FOUR buckets per record, not two, across
+// three families and two tables each (3 x 2 x 4 x u32), plus one `next` entry
+// per record per family (3 x u32). Pricing those at two buckets would make the
+// byte ceiling below unsound, because `directSlotProvisionRetainedBytes` counts
+// what is actually reserved.
+//
+// `FlatDrawStateRecord`, the two full constant snapshots,
+// `DrawUniformFixedPayloadRecord` and `DrawShaderLayoutContext` are ~97% of the
+// total; shrinking those is what would let the budget rise without cost. See
+// `specs/backend/encode-scheduling/gap.md`.
+inline constexpr std::size_t kDirectSlotWorstCaseBytesPerDraw =
+    sizeof(MetalCommandHeader) + sizeof(FlatDrawStateRecord) +
+    sizeof(DrawShaderLayoutContext) + sizeof(DrawDebugSnapshot) +
+    sizeof(DrawPsoSubview) + sizeof(DrawUniformFixedPayloadRecord) +
+    sizeof(DrawUniformVertexConstantsRecord) + sizeof(VertexShaderConstants) +
+    sizeof(DrawUniformPixelConstantsRecord) + sizeof(PixelShaderConstants) +
+    sizeof(DrawUniformPayloadRecord) + sizeof(DrawParam) +
+    sizeof(DrawRunCommandRecord) +
+    3u * sizeof(std::uint32_t) +
+    3u * 2u * 4u * sizeof(std::uint32_t);
+
+// Derived (non-additive) per-draw dimensions. The uniform lookup bucket count
+// is a non-linear function of the draw count, so it must be derived once from
+// a total and never summed. Shared so the producer plan, the provisioning
+// budget and the admission predicate cannot drift apart.
+inline constexpr void applyDerivedDrawCapacity(
+    SourcePayloadCapacity& capacity, std::size_t drawCount) noexcept {
+  capacity.drawUniformVertexConstantBytes =
+      drawCount * sizeof(VertexShaderConstants);
+  capacity.drawUniformPixelConstantBytes =
+      drawCount * sizeof(PixelShaderConstants);
+  const auto buckets = detail::chunkSlotUniformLookupBucketCount(drawCount);
+  capacity.drawUniformPayloadLookupHeads = buckets;
+  capacity.drawUniformPayloadLookupTails = buckets;
+  capacity.drawUniformPayloadLookupNext = drawCount;
+  capacity.drawUniformVertexConstantsLookupHeads = buckets;
+  capacity.drawUniformVertexConstantsLookupTails = buckets;
+  capacity.drawUniformVertexConstantsLookupNext = drawCount;
+  capacity.drawUniformPixelConstantsLookupHeads = buckets;
+  capacity.drawUniformPixelConstantsLookupTails = buckets;
+  capacity.drawUniformPixelConstantsLookupNext = drawCount;
+}
+
+inline constexpr std::size_t directSlotCeilDiv(std::size_t numerator,
+                                               std::size_t denominator)
+    noexcept {
+  return denominator == 0
+      ? 0u
+      : numerator / denominator + (numerator % denominator != 0 ? 1u : 0u);
+}
+
+inline constexpr std::size_t directSlotSaturatingMul(
+    std::size_t value, std::size_t factor) noexcept {
+  if (value == 0 || factor == 0) {
+    return 0;
+  }
+  return value > std::numeric_limits<std::size_t>::max() / factor
+      ? std::numeric_limits<std::size_t>::max()
+      : value * factor;
+}
+
+// One coordinator dimension: proportional to the source's own use, then lifted
+// to its floor. Independent of the draw budget by construction, so a tiny
+// first span cannot inflate a coordinator dimension by the draw ratio.
+inline constexpr std::size_t directSlotProvisionCoordinator(
+    std::size_t value, std::size_t scale, std::size_t floorValue) noexcept {
+  const auto scaled = directSlotSaturatingMul(value, scale);
+  return scaled < floorValue ? floorValue : scaled;
+}
+
+// The coordinator half of a provisioning plan. Computed first and separately
+// because it does not depend on the draw budget, which lets the byte ceiling
+// charge for it before deciding how many draws are affordable.
+struct DirectSlotProvisionCoordinatorPlan {
+  std::size_t clearRecords = 0;
+  std::size_t clearRects = 0;
+  std::size_t surfaceCopyRecords = 0;
+  std::size_t stretchRectRecords = 0;
+  std::size_t colorFillRecords = 0;
+  std::size_t depthResolveRecords = 0;
+  std::size_t generateMipmapsRecords = 0;
+  std::size_t presentRecords = 0;
+
+  constexpr std::size_t records() const noexcept {
+    return clearRecords + surfaceCopyRecords + stretchRectRecords +
+        colorFillRecords + depthResolveRecords + generateMipmapsRecords +
+        presentRecords;
+  }
+};
+
+inline constexpr DirectSlotProvisionCoordinatorPlan
+directSlotProvisionCoordinatorPlan(
+    const SourcePayloadCapacity& extra,
+    const DirectSlotProvisionBudget& budget) noexcept {
+  const auto scale = budget.enabled() ? budget.coordinatorScale : std::size_t{1};
+  const auto recordFloor =
+      budget.enabled() ? budget.coordinatorFloor : std::size_t{0};
+  const auto presentFloor =
+      budget.enabled() ? budget.presentFloor : std::size_t{0};
+  return DirectSlotProvisionCoordinatorPlan{
+      .clearRecords =
+          directSlotProvisionCoordinator(extra.clearRecords, scale, recordFloor),
+      .clearRects = directSlotProvisionCoordinator(extra.clearRects, scale, 0),
+      .surfaceCopyRecords = directSlotProvisionCoordinator(
+          extra.surfaceCopyRecords, scale, recordFloor),
+      .stretchRectRecords = directSlotProvisionCoordinator(
+          extra.stretchRectRecords, scale, recordFloor),
+      .colorFillRecords = directSlotProvisionCoordinator(
+          extra.colorFillRecords, scale, recordFloor),
+      .depthResolveRecords = directSlotProvisionCoordinator(
+          extra.depthResolveRecords, scale, recordFloor),
+      .generateMipmapsRecords = directSlotProvisionCoordinator(
+          extra.generateMipmapsRecords, scale, recordFloor),
+      .presentRecords = directSlotProvisionCoordinator(
+          extra.presentRecords, scale, presentFloor),
+  };
+}
+
+// Retained bytes the coordinator half commits the slot to, including the
+// command headers those rows will occupy. `clearRects` is deliberately absent:
+// it is an arena-layout dimension with no reserved ChunkSlot vector, and this
+// function prices exactly what `provisionEmptyDirectSlotUnlocked` reserves.
+inline constexpr std::size_t directSlotProvisionCoordinatorBytes(
+    const DirectSlotProvisionCoordinatorPlan& plan) noexcept {
+  return plan.clearRecords * sizeof(ClearDesc) +
+      plan.surfaceCopyRecords * sizeof(SurfaceCopyDesc) +
+      plan.stretchRectRecords * sizeof(StretchRectDesc) +
+      plan.colorFillRecords * sizeof(ColorFillDesc) +
+      plan.depthResolveRecords * sizeof(DepthResolveDesc) +
+      plan.generateMipmapsRecords * sizeof(GenerateMipmapsDesc) +
+      plan.presentRecords * sizeof(PresentCommandRecord) +
+      plan.records() * sizeof(MetalCommandHeader);
+}
+
+// Smallest override `DXMT9_DIRECT_SLOT_HEADROOM_BYTES` may express while still
+// meaning "provisioning is on". The coordinator floors are part of the slot's
+// retained shape, so pricing only two draws would leave room for at most one
+// after those fixed bytes were subtracted. Include the exact default floor
+// price and two draws: this is the smallest enabled budget that can admit a
+// second adjacent one-draw source, the property that distinguishes
+// provisioning from exact fit.
+inline constexpr std::size_t kDirectSlotMinHeadroomBytes =
+    directSlotProvisionCoordinatorBytes(directSlotProvisionCoordinatorPlan(
+        SourcePayloadCapacity{}, kDirectSlotCandidateBudget)) +
+    2u * kDirectSlotWorstCaseBytesPerDraw;
+
+// Worst-case retained final-slot bytes a provisioning plan commits ONE slot to.
+// Complete over every vector `provisionEmptyDirectSlotUnlocked` reserves:
+// headers, all one-per-draw record dimensions, both constant-byte regions, the
+// draw-payload arena, the three uniform lookup triples, and every coordinator
+// row. The ceiling below is derived against this function, and the native
+// budget regression asserts the bound with a NON-ZERO per-draw payload, so the
+// bound is checked rather than merely stated.
+//
+// This is one slot. The compatibility ring holds `kCommandChunkCount` of them.
+inline constexpr std::size_t directSlotProvisionRetainedBytes(
+    const SourcePayloadCapacity& plan) noexcept {
+  return plan.commandHeaders * sizeof(MetalCommandHeader) +
+      plan.drawHotStates * sizeof(FlatDrawStateRecord) +
+      plan.drawShaderLayouts * sizeof(DrawShaderLayoutContext) +
+      plan.drawDebugSnapshots * sizeof(DrawDebugSnapshot) +
+      plan.drawPsoSubviews * sizeof(DrawPsoSubview) +
+      plan.drawUniformFixedPayloads * sizeof(DrawUniformFixedPayloadRecord) +
+      plan.drawUniformVertexConstants *
+          sizeof(DrawUniformVertexConstantsRecord) +
+      plan.drawUniformVertexConstantBytes +
+      plan.drawUniformPixelConstants * sizeof(DrawUniformPixelConstantsRecord) +
+      plan.drawUniformPixelConstantBytes +
+      plan.drawUniformPayloads * sizeof(DrawUniformPayloadRecord) +
+      plan.drawParams * sizeof(DrawParam) + plan.drawPayloadBytes +
+      plan.drawRunRecords * sizeof(DrawRunCommandRecord) +
+      (plan.drawUniformPayloadLookupHeads +
+       plan.drawUniformPayloadLookupTails +
+       plan.drawUniformPayloadLookupNext +
+       plan.drawUniformVertexConstantsLookupHeads +
+       plan.drawUniformVertexConstantsLookupTails +
+       plan.drawUniformVertexConstantsLookupNext +
+       plan.drawUniformPixelConstantsLookupHeads +
+       plan.drawUniformPixelConstantsLookupTails +
+       plan.drawUniformPixelConstantsLookupNext) *
+          sizeof(std::uint32_t) +
+      plan.clearRecords * sizeof(ClearDesc) +
+      plan.surfaceCopyRecords * sizeof(SurfaceCopyDesc) +
+      plan.stretchRectRecords * sizeof(StretchRectDesc) +
+      plan.colorFillRecords * sizeof(ColorFillDesc) +
+      plan.depthResolveRecords * sizeof(DepthResolveDesc) +
+      plan.generateMipmapsRecords * sizeof(GenerateMipmapsDesc) +
+      plan.presentRecords * sizeof(PresentCommandRecord);
+}
+
+// Per-draw payload arena bytes this source implies. Rounded UP so provisioning
+// can never under-reserve the source that priced it.
+inline constexpr std::size_t directSlotProvisionPayloadBytesPerDraw(
+    const SourcePayloadCapacity& extra) noexcept {
+  return directSlotCeilDiv(extra.drawPayloadBytes, extra.drawParams);
+}
+
+// The budget-fixed draw ceiling for a slot whose first exact span is `extra`.
+//
+//   perDraw  = kDirectSlotWorstCaseBytesPerDraw
+//            + ceil(extra.drawPayloadBytes / extra.drawParams)
+//   fixed    = coordinator record bytes + their command headers
+//   ceiling  = min(maxDraws, (maxBytes - fixed) / perDraw)
+//
+// so `directSlotProvisionRetainedBytes(plan) <= maxBytes` holds by
+// construction whenever the ceiling is what binds. Folding the payload rate
+// into `perDraw` is what makes a payload-carrying source unable to push the
+// plan past the declared ceiling: it is charged for its own payload before the
+// draw count is chosen, rather than scaled up afterwards.
+//
+// Returns 0 when the coordinator half alone already exhausts the budget, in
+// which case the caller reserves exactly (never under-reserve).
+inline constexpr std::size_t directSlotProvisionDrawCeiling(
+    const SourcePayloadCapacity& extra,
+    const DirectSlotProvisionBudget& budget) noexcept {
+  if (!budget.enabled()) {
+    return 0;
+  }
+  const auto fixedBytes = directSlotProvisionCoordinatorBytes(
+      directSlotProvisionCoordinatorPlan(extra, budget));
+  if (fixedBytes >= budget.maxBytes) {
+    return 0;
+  }
+  const auto perDraw = kDirectSlotWorstCaseBytesPerDraw +
+      directSlotProvisionPayloadBytesPerDraw(extra);
+  const auto byBytes = (budget.maxBytes - fixedBytes) / perDraw;
+  return byBytes < budget.maxDraws ? byBytes : budget.maxDraws;
+}
+
+// Provisioned draw total. Budget-fixed: every in-budget first span that draws
+// at all provisions the same ceiling, so slot storage does not depend on where
+// the producer happened to cut the first span. A source at or beyond the
+// ceiling is its own budget and is reserved exactly -- provisioning never
+// under-reserves.
+//
+// A coordinator-only span (`drawParams == 0`) provisions ZERO draws. It is
+// reachable in production -- a span may carry locators and no draw -- and
+// committing the full draw ceiling on the strength of a span that does not draw
+// would retain tens of megabytes for a slot whose demand is unknown. Such a
+// span still gets the coordinator floors, so the arm this requirement fixes
+// (a Clear- or Present-bearing adjacent source rotating on a coordinator
+// dimension alone) is still covered; a following draw-bearing source rotates
+// once and then provisions properly against its own plan. That single rotation
+// is the conservative choice, and it is recorded as such in
+// `specs/backend/encode-scheduling/gap.md`.
+inline constexpr std::size_t directSlotProvisionDrawBudget(
+    const SourcePayloadCapacity& extra,
+    const DirectSlotProvisionBudget& budget) noexcept {
+  const auto exact = extra.drawParams;
+  if (!budget.enabled() || exact == 0) {
+    return exact;
+  }
+  const auto ceiling = directSlotProvisionDrawCeiling(extra, budget);
+  return exact >= ceiling ? exact : ceiling;
+}
+
+// True when the source's own exact plan is at or beyond the provisioning
+// ceiling, so the slot is reserved exactly and the next source is a *genuine*
+// budget rotation under R-BACK-2.103 clause (3). A coordinator-only span
+// (`drawParams == 0`) is never this: it provisions zero draw storage, and
+// reporting it as at-budget would inflate the residual with spans that do not
+// draw at all.
+inline constexpr bool directSlotSourceExceedsProvisionBudget(
+    const SourcePayloadCapacity& extra,
+    const DirectSlotProvisionBudget& budget) noexcept {
+  return budget.enabled() && extra.drawParams != 0 &&
+      extra.drawParams >= directSlotProvisionDrawCeiling(extra, budget);
+}
+
+// The provisioning target for an empty slot, expressed in the same value type
+// as an exact plan: budget-fixed draws, proportional coordinator rows with
+// floors, derived dimensions from the combined draw total.
+inline constexpr SourcePayloadCapacity directSlotProvisionPlan(
+    const SourcePayloadCapacity& extra,
+    const DirectSlotProvisionBudget& budget) noexcept {
+  const auto draws = directSlotProvisionDrawBudget(extra, budget);
+  const auto coordinator = directSlotProvisionCoordinatorPlan(extra, budget);
+  SourcePayloadCapacity plan{};
+  plan.drawHotStates = draws;
+  plan.drawShaderLayouts = draws;
+  plan.drawDebugSnapshots = draws;
+  plan.drawPsoSubviews = draws;
+  plan.drawUniformFixedPayloads = draws;
+  plan.drawUniformVertexConstants = draws;
+  plan.drawUniformPixelConstants = draws;
+  plan.drawUniformPayloads = draws;
+  plan.drawParams = draws;
+  plan.drawRunRecords = draws;
+  // Exactly the rate the ceiling was priced against, so the reserved arena can
+  // never exceed what the byte budget already charged for. When the source owns
+  // its slot the reservation is its own byte count, unrounded.
+  plan.drawPayloadBytes = (draws == extra.drawParams)
+      ? extra.drawPayloadBytes
+      : directSlotSaturatingMul(directSlotProvisionPayloadBytesPerDraw(extra),
+                                draws);
+  if (plan.drawPayloadBytes < extra.drawPayloadBytes) {
+    plan.drawPayloadBytes = extra.drawPayloadBytes;
+  }
+  plan.clearRecords = coordinator.clearRecords;
+  plan.clearRects = coordinator.clearRects;
+  plan.surfaceCopyRecords = coordinator.surfaceCopyRecords;
+  plan.stretchRectRecords = coordinator.stretchRectRecords;
+  plan.colorFillRecords = coordinator.colorFillRecords;
+  plan.depthResolveRecords = coordinator.depthResolveRecords;
+  plan.generateMipmapsRecords = coordinator.generateMipmapsRecords;
+  plan.presentRecords = coordinator.presentRecords;
+  // Readback has no direct appender and must never be provisioned: a plan
+  // reserving one is a structural rejection, not a capacity question.
+  plan.readbackRecords = 0;
+  plan.commandHeaders = draws + coordinator.records();
+  if (plan.commandHeaders < extra.commandHeaders) {
+    plan.commandHeaders = extra.commandHeaders;
+  }
+  applyDerivedDrawCapacity(plan, draws);
+  return plan;
+}
+
+// True only when nothing has been appended to any dimension this policy
+// provisions. `commandsEmpty()` alone is not enough to license a reallocating
+// reserve: it inspects one vector, and provisioning must not move storage any
+// other published row still occupies.
+inline bool chunkSlotDirectStorageEmpty(const ChunkSlot& slot) noexcept {
+  return slot.commandHeaders.empty() && slot.drawHotStates.empty() &&
+      slot.drawShaderLayouts.empty() && slot.drawDebugSnapshots.empty() &&
+      slot.drawPsoSubviews.empty() && slot.drawUniformFixedPayloads.empty() &&
+      slot.drawUniformVertexConstants.empty() &&
+      slot.drawUniformVertexConstantBytes.empty() &&
+      slot.drawUniformPixelConstants.empty() &&
+      slot.drawUniformPixelConstantBytes.empty() &&
+      slot.drawUniformPayloads.empty() &&
+      slot.drawUniformPayloadLookupNext.empty() &&
+      slot.drawUniformVertexConstantsLookupNext.empty() &&
+      slot.drawUniformPixelConstantsLookupNext.empty() &&
+      slot.drawParams.empty() && slot.drawPayloadArena.empty() &&
+      slot.drawRunRecords.empty() && slot.clearRecords.empty() &&
+      slot.surfaceCopyRecords.empty() && slot.stretchRectRecords.empty() &&
+      slot.readbackRecords.empty() && slot.colorFillRecords.empty() &&
+      slot.depthResolveRecords.empty() &&
+      slot.generateMipmapsRecords.empty() && slot.presentRecords.empty();
+}
+
 inline constexpr bool directContinuationAppendFits(
     std::size_t current, std::size_t extra, std::size_t capacity) noexcept {
   return extra <= std::numeric_limits<std::size_t>::max() - current &&
@@ -212,6 +639,105 @@ inline DirectContinuationAdmissionResult directContinuationAdmission(
     return {DirectContinuationAdmission::CapacityRejected};
   }
   return {DirectContinuationAdmission::Admitted};
+}
+
+
+// ---------------------------------------------------------------------------
+// Shared storage transition (R-BACK-2.104).
+//
+// One pure reducer for the whole "may this source construct into the current
+// final slot, and what does that cost the slot's storage" question. Production
+// (`CommandQueue::beginDirectChunkSlotReplay`), the native truth table and the
+// TLA model binding all consume THIS function, and production switches on
+// `action` rather than re-deriving rotate-vs-fallback from `admission`. The one
+// lifecycle input the reducer cannot see -- whether this admission has already
+// spent its single bounded rotation -- is passed in as `rotationAllowed`, so
+// every arm the tests assert on is an arm production can take.
+//
+// It decides storage only. Producer identity, span-witness succession,
+// Present ordering, ordered-control cuts and every semantic effect stay where
+// they are and are unchanged by this reducer.
+enum class DirectSlotStorageAction : std::uint8_t {
+  // Slot is empty in every direct dimension: reserve the provisioning plan
+  // once, here, where no published row can be moved by the allocation.
+  ProvisionEmpty,
+  // Slot carries no commands but is not empty in every dimension. Reserve
+  // nothing extra and let the transaction's own exact reservation stand.
+  ProvisionSkippedNonEmpty,
+  // Provisioning is switched off (`DXMT9_DIRECT_SLOT_HEADROOM_BYTES=0`).
+  // Byte-identical to the pre-R-BACK-2.104 exact-fit behaviour.
+  ProvisionDisabled,
+  // Populated slot with room: append in place, no allocation at all.
+  AppendInPlace,
+  // Populated slot without room for this exact plan. Publish the extent and
+  // retry against a fresh slot. After provisioning this is a *genuine budget*
+  // rotation -- the source is larger than the slot budget -- not an artefact
+  // of reserving exactly what the previous source needed.
+  Rotate,
+  // Structural, or capacity with rotation not permitted. Legacy owns it.
+  LegacyFallback,
+};
+
+struct DirectSlotStorageDecision {
+  DirectSlotStorageAction action = DirectSlotStorageAction::LegacyFallback;
+  DirectContinuationAdmission admission =
+      DirectContinuationAdmission::StructuralRejected;
+  // Meaningful only for ProvisionEmpty.
+  SourcePayloadCapacity provision{};
+  bool populated = false;
+  // ProvisionEmpty only: the source's own exact plan was at or beyond the
+  // provisioning ceiling, so the slot was reserved exactly and the next source
+  // is a genuine budget rotation. Classified here rather than re-derived at the
+  // call site, so a coordinator-only span cannot be counted as at-budget.
+  bool sourceExceedsBudget = false;
+
+  constexpr bool constructsIntoCurrentSlot() const noexcept {
+    return action == DirectSlotStorageAction::ProvisionEmpty ||
+        action == DirectSlotStorageAction::ProvisionSkippedNonEmpty ||
+        action == DirectSlotStorageAction::ProvisionDisabled ||
+        action == DirectSlotStorageAction::AppendInPlace;
+  }
+};
+
+inline DirectSlotStorageDecision directSlotStorageTransition(
+    const ChunkSlot& slot, const SourcePayloadCapacity& extra,
+    const DirectSlotProvisionBudget& budget,
+    bool rotationAllowed) noexcept {
+  DirectSlotStorageDecision decision{};
+  decision.populated = !slot.commandsEmpty();
+  if (!decision.populated) {
+    // `commandsEmpty()` is the historical fresh-slot test and stays the
+    // authority on whether this is a continuation. Provisioning needs the
+    // strictly stronger property, because it is the only step that may move
+    // storage.
+    if (!budget.enabled()) {
+      decision.action = DirectSlotStorageAction::ProvisionDisabled;
+      return decision;
+    }
+    if (!chunkSlotDirectStorageEmpty(slot)) {
+      decision.action = DirectSlotStorageAction::ProvisionSkippedNonEmpty;
+      return decision;
+    }
+    decision.action = DirectSlotStorageAction::ProvisionEmpty;
+    decision.provision = directSlotProvisionPlan(extra, budget);
+    decision.sourceExceedsBudget =
+        directSlotSourceExceedsProvisionBudget(extra, budget);
+    return decision;
+  }
+  decision.admission = directContinuationAdmission(slot, extra).disposition;
+  switch (decision.admission) {
+  case DirectContinuationAdmission::Admitted:
+    decision.action = DirectSlotStorageAction::AppendInPlace;
+    break;
+  case DirectContinuationAdmission::CapacityRejected:
+    decision.action = rotationAllowed ? DirectSlotStorageAction::Rotate
+                                      : DirectSlotStorageAction::LegacyFallback;
+    break;
+  case DirectContinuationAdmission::StructuralRejected:
+    decision.action = DirectSlotStorageAction::LegacyFallback;
+    break;
+  }
+  return decision;
 }
 
 }  // namespace dxmt9::core

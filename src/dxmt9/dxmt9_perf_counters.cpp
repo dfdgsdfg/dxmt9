@@ -382,6 +382,22 @@ void countDirectChunkSlotContinuationCapacityRotated() {
   add(counters().directChunkSlotContinuationCapacityRotated);
 }
 
+void countDirectChunkSlotSlotProvisioned() {
+  add(counters().directChunkSlotSlotProvisioned);
+}
+
+void countDirectChunkSlotSlotProvisionFailed() {
+  add(counters().directChunkSlotSlotProvisionFailed);
+}
+
+void countDirectChunkSlotSlotProvisionSkippedNonEmpty() {
+  add(counters().directChunkSlotSlotProvisionSkippedNonEmpty);
+}
+
+void countDirectChunkSlotSlotProvisionSourceExceedsBudget() {
+  add(counters().directChunkSlotSlotProvisionSourceExceedsBudget);
+}
+
 void countReplaySpanLease(std::uint64_t draws, std::uint64_t commands,
                           std::uint64_t islands,
                           std::uint64_t coordinators) {

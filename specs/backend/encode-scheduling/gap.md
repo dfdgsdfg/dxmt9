@@ -99,6 +99,8 @@ append, so it is not on the cost path this requirement targets.
 | Exhaustive classifier truth table | `dxmt9-replay-emission-plan-spec` -- every emission-class sequence of length 1..5 (3,905 cases), plus all 21 live record kinds through the whole-range gate, plus the executable span partition |
 | TLA+ | `specs/verification/tla/ReplayEmissionPlanIslands.tla` with three deliberate-regression configurations (span identity, separator cut, run closure), registered in `scripts/check/verify_tla.sh` |
 | Model-code binding | `dxmt9-replay-emission-plan-islands-spec` -- truth table over the production `compatibilitySpanAdmission`, plus one translated trace per `.counterexample.cfg` |
+| Storage capacity model | `specs/verification/tla/DirectSlotCapacityProvisioning.tla` -- capacity as a quantity, empty-slot provisioning, slot generation, and boundary credits against a same-capacity serial reference, with `exact-fit` and `grow-populated` expected failures |
+| Storage capacity model-code binding | `dxmt9-direct-slot-provisioning-spec` -- the production `directSlotStorageTransition` reducer, `directSlotProvisionPlan`, `provisionEmptyDrawUniformLookup` and the priced budget, exercised over 16 consecutive mean-sized sources with pointer-identity assertions |
 | Production differential | `dxmt9-cpu-ready-production-routing-spec` -- a compatibility-cut raw against the Legacy lane, comparing the **concatenated per-command `effectiveCommandDigest` sequence** across every source the raw published (ordered command kind, draw parameters, binding-override and binding-snapshot payload bytes, coordinator descriptors), not a command total; plus the Present-tail span, the coordinator-bearing span, both capacity rotations, and the non-terminal/duplicate Present whole-raw fallbacks with their published source order |
 
 **Open, and not claimed (`R-BACK-2.103` / `R-VERIF-2.25`):**
@@ -114,14 +116,92 @@ contents are covered by focused transaction and production differentials, not
 by an all-family final-storage differential. These are explicit formal and
 model/code closure gaps, not claims delegated to the wild gate.
 
-1. **No wild, GPU, or performance evidence.** The three-way cadence matrix
-   (Legacy / whole-raw Direct / spans) on GT1/GT2/GT3/SFIV has not been run.
-   `DXMT9_DIRECT_CHUNK_SLOT_REPLAY` is policy-default-on, so this is a default
-   change and that matrix is required before treating it as promoted.
-2. **Rotation changes chunk cadence.** A capacity- or coordinator-rejected
-   continuation now publishes where it previously fell back, so mixed raws can
-   seal more chunks than before. `chunk_publish_reason_direct_capacity_rotation`
-   sizes it; the effect on command-buffer/render-pass locality is unmeasured.
+1. **The first positive-headroom wild gate failed correctness.** On 2026-09-02,
+   GT1 with the 48 MiB calibration candidate stopped after one Clear/Present
+   frame with no draws or encode chunks and a Wine null-read page fault. An
+   explicit 8 MiB candidate reproduced the same frame-0 failure. The identical
+   staged binaries with `DXMT9_DIRECT_SLOT_HEADROOM_BYTES=0` completed 2,913
+   frames. A second 8 MiB run after failure-atomic off-slot staging produced the
+   identical fault; the partial-mutation defect was valid but not the whole
+   startup cause. This proves a positive-provisioning blocker, not a particular
+   root cause: no allocator failure, RSS/VM/address-domain sample, or crash
+   backtrace was captured. GT2 was intentionally not run after the GT1
+   correctness gate failed. Headroom is now default-off independently of the
+   default-on Direct replay policy.
+2. **Rotation changed chunk cadence, was measured, and is partly fixed
+   (`R-BACK-2.104`).** The unmeasured risk recorded here became a measured
+   regression on 2026-09-02. The assembler reserved `size() + extra` exactly, so
+   every populated slot satisfied `size() == capacity()` and the capacity arm of
+   `directContinuationAdmission` was false by construction for every adjacent
+   source:
+
+   | | GT1 Legacy | GT1 Direct | GT2 Legacy | GT2 Direct |
+   |---|---|---|---|---|
+   | command buffers / present | 4.000 | 12.666 | 3.999 | 20.815 |
+   | render passes / present | 10.657 | 18.603 | 15.781 | 31.362 |
+   | continuations rotated | - | 19,854 / 20,631 | - | 21,432 / 21,537 |
+
+   Empty-slot provisioning removes the *cause*: a slot's physical capacity is
+   set once while it is empty, so adjacent in-budget sources append in place
+   with no allocation. What remains open:
+
+   - **No positive locality result.** Native and TLA evidence proves the scalar
+     capacity mechanism and boundary credits against a same-capacity reference;
+     it does not prove the wild values return to Legacy. The candidate failed
+     before those counters could be collected and is reachable only through an
+     explicit positive `DXMT9_DIRECT_SLOT_HEADROOM_BYTES` value.
+   - **No memory evidence, and the ring figure is large.** The calibration ceiling
+     is 48 MiB per slot and a mean-shaped plan commits 42.46 MiB of it
+     (21,788 B/draw x 2,048 draws). The compatibility ring is
+     `kCommandChunkCount = 32` slots wide, so worst-case whole-ring retention is
+     about **1.33 GiB**. Two things reduce the marginal cost against Legacy --
+     Legacy already accumulates a whole present per slot and `std::vector`
+     doubling rounds the same vectors up, and reserved-but-unwritten pages are
+     not resident -- but neither is a measurement and neither cancels the ring
+     figure. No wild peak-RSS delta against the exact-fit lane has been
+     collected. The 8 MiB failure and x86_64 unix allocator mean 32-bit address-
+     space exhaustion cannot be claimed. The next proof boundary is an aggregate
+     ring lease plus RSS/VM/address-domain telemetry, not a smaller guessed
+     default.
+   - **Failure atomicity is implemented but not fault-injected.** Capacity and
+     lookup topology are now staged in an isolated empty slot and adopted by
+     non-throwing swaps, so an exception leaves the live slot on exact-fit. The
+     missing evidence is deterministic allocation failure at every staged
+     dimension plus a real assembler/checkpoint/dedup/rollback/reuse fixture.
+   - **A coordinator-only first span still costs one rotation.** A span with no
+     draws provisions zero draw storage on purpose, so a following draw-bearing
+     source rotates once before the slot is provisioned against a plan that
+     actually draws. Sizing that span's slot from the full draw ceiling would
+     retain tens of megabytes on unknown demand; sizing it from the span itself
+     is the exact-fit bug. The conservative choice is taken and the residual
+     rotation is not claimed away. How often it occurs is part of the first-span
+     distribution below.
+   - **First-span distribution is still uncollected.** Budget-fixed provisioning
+     removes the *sensitivity* to the first span, so the distribution is no
+     longer needed to interpret the draw ceiling. It is still needed to size the
+     coordinator-only residual above and to attribute any surviving rotation.
+   - **The reference is not equally bounded.** Legacy's chunk command limit
+     (`DXMT9_DRAW_CHUNK_COMMAND_LIMIT`) defaults to unbounded, so Legacy seals
+     only at Present. Direct's budget is finite. For the measured workloads the
+     budget covers a whole present (GT1 741, GT2 1,678 draws) and no extra
+     boundary is expected, but a heavier frame would still take a genuine budget
+     rotation the reference lane does not take. Closing this needs one shared
+     finite chunk budget enforced by **both** lanes, and that changes the
+     reference lane's own cadence, so it is deliberately not done here without
+     wild evidence.
+   - **The per-draw reservation is what makes headroom expensive.** 21,740 B per
+     draw, 97% of it `FlatDrawStateRecord`, the two full constant snapshots,
+     `DrawUniformFixedPayloadRecord` and `DrawShaderLayoutContext`. The
+     constant-byte pair in particular is reserved at the full snapshot size
+     because the plan cannot know the usage-live prefix pre-effect, while the
+     appender writes only that prefix and dedups it. A tighter sound bound
+     there would let the budget rise without retention cost, and is the
+     follow-up worth doing before raising the budget again.
+   - **Boundary credits are proven only against a serial reference.**
+     `DirectSlotCapacityProvisioning` charges Direct and the reference in the
+     same step over the same source sequence; it does not compose with slot
+     reuse across generations, ordered-control session disposition, or
+     completion/reclaim.
 3. **The raw handle closure is re-marked per span.** `markArenaSourceResources`
    is now exact-once (it starts at the transaction's own command checkpoint),
    but `markChunkResourcesWithExactSeq(raw.resourceEntries)` still runs once per

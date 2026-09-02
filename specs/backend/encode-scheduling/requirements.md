@@ -1484,7 +1484,10 @@ A populated slot that cannot hold a span's exact reservation, including its
 coordinator dimensions, must publish the existing extent pre-effect and acquire
 a fresh empty final-slot transaction, bounded to one rotation per admission. It
 must never reserve-grow or copy the old final extent, and never degrade a
-direct span to draw-by-draw ordinary replay. Before any span has applied an
+direct span to draw-by-draw ordinary replay. The exact reservation is a
+*semantic* bound on what the transaction may append; it is not the slot's
+physical storage capacity, and it must never be used as one. R-BACK-2.104 owns
+that distinction. Before any span has applied an
 effect the raw is still wholly rollbackable and Legacy may own it once; after
 any span has committed or any separator has executed, a later failure is a
 typed fail-stop and never a whole-raw retry. Observability is count-only and
@@ -1521,6 +1524,29 @@ reimplements those actions is supporting evidence only. The production
 continuation, but binding that predicate alone does not establish transition
 isomorphism for the complete span lifecycle.
 
+The refinement must distinguish four properties that a single "capacity" word
+conflates, and must never let a lower one decide a higher one:
+
+1. **Per-transaction exact reservation.** The immutable plan a lease span may
+   append, conserved exactly in the command/draw/run/PSO dimensions and a
+   conservative upper bound elsewhere. Semantic.
+2. **Physical slot capacity.** The storage a final slot's vectors have
+   allocated. Purely allocational, always at least (1), and free to exceed it.
+3. **Forced reference capacity boundaries.** The points where storage genuinely
+   cannot continue: the u32 payload-index ceiling, the configured chunk command
+   and payload limits, and a source whose own exact plan exceeds the slot
+   budget. A publication here is legitimate and must be typed as such.
+4. **Metal command-buffer and render-pass boundaries.** Present, ordered
+   controls, flush, map-wait, stretch splits and the semantic publication
+   points. These are the observable cadence.
+
+Storage rotation is a (2)/(3) event and must not be treated as a (4) event.
+Direct must introduce no command-buffer or render-pass boundary beyond the
+same-capacity serial reference unless a typed forced-capacity proof under (3)
+justifies it, and that proof must name which bound was reached. Counting a
+rotation under another publication reason, or reporting the cadence only as an
+aggregate, does not discharge this obligation.
+
 Exact final-storage evidence is data-level rather than temporal. A bounded
 native differential must compare the serial reference with Direct lease replay
 for the complete ordered command stream, projected next state, every populated
@@ -1535,3 +1561,96 @@ This composed algebra, model/code binding, and native differential are
 necessary but do not prove Metal behavior or pixels. A deterministic Render
 Tape or Metal readback oracle and supervised wild locality/performance evidence
 remain required before a newly introduced span policy may become default-on.
+
+**R-BACK-2.104** A final slot's physical storage capacity must be provisioned
+once, from a bounded budget, at the only address-safe moment: while the slot is
+empty in **every** direct dimension, not merely in its command headers.
+Provisioning is an allocation decision and must create no command-buffer,
+render-pass, publication or semantic boundary, and must leave producer
+identity, span-witness succession, Present ordering, ordered-control cuts and
+every failure disposition unchanged.
+
+A populated slot must never be reserve-grown, reallocated, rehashed or copied.
+This covers the uniform lookup bucket tables explicitly: they are sized rather
+than reserved, a later growth rehashes an already published prefix, and the
+routine reserve helpers cannot provision them because their rebuild clears the
+tables when the record vectors are empty. A dedicated empty-only provisioning
+operation must size them at the provisioned bucket count while leaving the
+`next` vectors at size zero with reserved capacity.
+
+Provisioning must never under-reserve. A source whose own exact plan exceeds
+the budget is reserved exactly and owns its slot; the following source is then
+a **genuine budget rotation** under R-BACK-2.103 clause (3), and must be
+reported as such rather than hidden.
+
+The budget must be bounded, priced against the real per-draw final-slot record
+sizes, and justified against the reference lane's own retained high-water
+rather than chosen as a round number. It must demonstrably admit more than one
+adjacent source of the measured mean span size; a budget that admits exactly
+one reproduces the exact-fit behaviour it exists to remove and is inert.
+
+**The draw dimension must be budget-fixed, not proportional to the first span.**
+A rule that sizes the slot from whichever span happened to arrive on it fails in
+both directions and is invisible in the rotation counters: a short leading span
+under-provisions the slot for every source after it, and a leading span above
+the proportional bound reserves the slot exactly, restoring the regression while
+being reported as a legitimate at-budget source. Every in-budget first span must
+therefore provision the same priced ceiling, and the classification "this source
+is at or beyond the budget" must be a property of the source against that
+ceiling, decided once in the shared reducer, not re-derived at a call site --
+in particular a span with no draws at all must never be counted as at-budget.
+A source that does not draw provisions no draw storage; a full draw ceiling must
+not be committed on the strength of a span whose draw demand is unknown.
+
+The non-draw coordinator dimensions must remain proportional to the source's own
+coordinator use, with small typed floors so a Clear- or Present-bearing adjacent
+source does not rotate on a coordinator dimension alone, and must not be scaled
+by the draw ratio. An untouched dimension may receive only its documented small
+floor; it must never grow with the draw budget.
+
+**The retained-byte ceiling must bound the whole provisioning plan**, including
+the per-draw payload arena, the coordinator rows and the command headers those
+rows occupy -- not the draw-record dimensions alone. A source carrying a non-zero
+per-draw payload must be charged for that payload in the draw ceiling itself, so
+that it buys fewer draws rather than a larger slot; the retained-byte function
+the ceiling is derived against must be the same function the regression asserts
+with a non-zero payload. The single exception is a source whose own exact plan
+already exceeds the ceiling: never under-reserve, reserve exactly, and classify
+it as at-budget.
+
+The declared ceiling is **per slot**. The requirement must state the whole-ring
+retention (`kCommandChunkCount` times the per-slot figure) explicitly wherever
+the per-slot figure appears, and must not present reservation as free on the
+grounds that unwritten pages are not resident. Per-slot arithmetic is not a
+ring-wide admission contract: promotion requires a bounded aggregate retained-
+capacity policy and measurements of resident memory, virtual memory, and the
+relevant Wine address domains. Until those exist, unset and malformed policy
+input must resolve to zero and positive provisioning remains opt-in only.
+
+Provisioning must also be failure-atomic. Every allocation and lookup-table
+size change must be staged outside the live slot and adopted only after the
+complete capacity set succeeds. An exception or allocation failure must leave
+the live slot byte-identical to the exact-fit lane; partial vector capacity or
+partial lookup topology must never become assembler input. Allocation-failure
+injection must cover every staged dimension before promotion.
+
+The derived per-draw dimensions -- constant bytes and the three uniform
+lookup bucket triples -- must be computed once from the combined draw total by
+the same shared function the producer plan and the admission predicate use,
+never summed or maxed componentwise. The per-draw byte price must be
+conservative against that shared function, including the power-of-two rounding
+in the uniform lookup bucket count.
+
+The default and an explicit disable must restore byte-identical exact-fit
+reservation, and the override must accept only a decimal byte count: a malformed
+or signed value must keep the disabled default rather than wrap, and a positive
+value too small to express
+provisioning at all must clamp into range rather than silently degrade to
+exact fit under an enabled name.
+
+Observability is count-only and perf-gated: slots provisioned, failure-atomic
+staging attempts that failed (targets zero), provisioning declined because the
+slot was not empty in every dimension (targets zero), and sources at or beyond
+the budget (the expected residual). These counters
+describe the mechanism; they must not be used to argue that a boundary did not
+happen.

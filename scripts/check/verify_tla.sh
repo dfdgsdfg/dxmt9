@@ -22,6 +22,7 @@ normal_models=(
   CpuReadySessionProgress
   DceChunkLookahead
   DirectChunkSlotContinuation
+  DirectSlotCapacityProvisioning
   DrawPsoIdentity
   DrawableToken
   EncodeSchedulingProgress
@@ -59,10 +60,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=47
+expected_normal_count=48
 expected_progress_count=1
-expected_counterexample_count=87
-expected_cfg_count=135
+expected_counterexample_count=89
+expected_cfg_count=138
 progress_model=CpuPipelineLifecycle
 progress_cfg_name="$progress_model.progress.cfg"
 
@@ -108,6 +109,13 @@ counterexample_models=(
   # disciplines a divisible raw needs and that an indivisible one never did:
   # the active-raw span witness, the post-separator fail-stop cut, and the
   # explicit draw-run closure at a cut.
+  # Empty-slot storage provisioning. Removing provisioning restores exact-fit
+  # reservation, which is the measured HEAD regression: every adjacent source
+  # rotates and Direct publishes more often than a same-capacity serial
+  # reference. Removing the empty-only discipline buys capacity by
+  # reallocating an already published extent.
+  "DirectSlotCapacityProvisioning|.exact-fit.counterexample|Invariant BoundaryCreditsNotExceeded is violated"
+  "DirectSlotCapacityProvisioning|.grow-populated.counterexample|Invariant NoGrowWhilePopulated is violated"
   "ReplayEmissionPlanIslands|.span-identity.counterexample|Invariant EachRecordEmittedOnce is violated"
   "ReplayEmissionPlanIslands|.separator-cut.counterexample|Invariant NoLegacyRetryAfterSeparator is violated"
   "ReplayEmissionPlanIslands|.run-closure.counterexample|Invariant RunClosedAcrossSeparator is violated"
