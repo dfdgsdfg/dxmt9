@@ -35,6 +35,7 @@
 #include <exception>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <sstream>
 #include <utility>
 #include <vector>
@@ -3892,18 +3893,34 @@ CommandQueue::beginDirectChunkSlotReplay(
     }
     if (payload->commandsEmpty()) {
       continuation = false;
+      const core::CpuReadyTape::SourceRef sourceRef{
+          .id = control.sourceId, .storage = control.storage};
+      // Everything below is gated on the budget, not merely written to be
+      // semantically identical when it is off. `compatibilityPayloadIndex` is
+      // a tape lookup and `directSlotCapacityLedgerQualifiesReuse` walks all
+      // 31 vector capacities; the exact-fit lane's contract is that it does no
+      // provisioning work at all, so it must not pay for either.
+      const std::optional<std::size_t> payloadIndex =
+          provisionPolicy.budget.enabled()
+              ? cpuReadyTape_.compatibilityPayloadIndex(sourceRef)
+              : std::nullopt;
+      // R-BACK-2.105: the ledger entry may only be trusted to describe this
+      // payload's current storage when it is identity-qualified. Everything
+      // the reducer cannot see about the aggregate transaction is decided
+      // here, once, and handed to it as one boolean.
+      const bool reuseQualified = payloadIndex &&
+          *payloadIndex < directSlotCapacityLedger_.entries.size() &&
+          core::directSlotCapacityLedgerQualifiesReuse(
+              directSlotCapacityLedger_.entries[*payloadIndex],
+              directSlotCapacityLedger_.stagedBytes, *payload);
       // R-BACK-2.104: the one address-safe moment to give this slot storage
       // headroom. The shared reducer owns the decision; production, the native
       // truth table and the TLA binding all consume it.
       const auto storage = core::directSlotStorageTransition(
           *payload, capacity, provisionPolicy.budget,
-          allowRotation && !rotated);
+          allowRotation && !rotated, reuseQualified);
       switch (storage.action) {
       case core::DirectSlotStorageAction::ProvisionEmpty: {
-        const core::CpuReadyTape::SourceRef sourceRef{
-            .id = control.sourceId, .storage = control.storage};
-        const auto payloadIndex =
-            cpuReadyTape_.compatibilityPayloadIndex(sourceRef);
         bool provisioned = false;
         if (payloadIndex &&
             *payloadIndex < directSlotCapacityLedger_.entries.size()) {
@@ -3957,6 +3974,14 @@ CommandQueue::beginDirectChunkSlotReplay(
                   provisioned = static_cast<bool>(receipt);
                 }
               }
+              if (provisioned) {
+                // "Provisioned" must mean "the assembler's reserve() is now a
+                // no-op", not merely "an allocation happened". Without this the
+                // empty arm has no structural or capacity check at all.
+                DXMT_ASSERT(core::directSlotPhysicalCapacityCovers(
+                                *payload, storage.provision) &&
+                            "provisioning must completely cover its own plan");
+              }
             } else {
               perf::countDirectSlotCapacityLeaseDenied();
             }
@@ -3984,6 +4009,40 @@ CommandQueue::beginDirectChunkSlotReplay(
           }
         } else {
           perf::countDirectChunkSlotSlotProvisionFailed();
+        }
+        break;
+      }
+      case core::DirectSlotStorageAction::ReuseProvisionedEmpty: {
+        // R-BACK-2.105. The reclaimed payload's retained capacity already
+        // covers this plan in every physical dimension, so there is nothing
+        // to allocate and nothing for the aggregate lease to settle: the
+        // ledger entry still describes exactly these bytes. Skipping the
+        // reconciliation snapshot, the staged credit and the capacity
+        // generation advance is not an optimisation of the transaction, it is
+        // the absence of a transaction.
+        //
+        // The one thing reclaim does destroy is the lookup families' logical
+        // extent, restored here without allocating.
+        const bool restored =
+            core::restoreDirectSlotLookupTables(*payload, storage.provision);
+        DXMT_ASSERT(restored &&
+                    "reuse predicate must imply complete physical coverage");
+        if (restored) {
+          perf::countDirectChunkSlotSlotProvisionReused();
+          if (storage.sourceExceedsBudget) {
+            perf::countDirectChunkSlotSlotProvisionSourceExceedsBudget();
+          }
+        } else {
+          // Unreachable given the predicate. The restore may have changed
+          // lookup logical extents before detecting drift, so continuing into
+          // the assembler would violate failure atomicity in release builds.
+          perf::countDirectChunkSlotSlotProvisionReuseRejected();
+          requestSchedulingStopLocked();
+          return {
+              .status = DirectChunkSlotReplayStatus::FailStopped,
+              .failureReason =
+                  DirectChunkSlotReplayFailureReason::StorageRestoreRejected,
+          };
         }
         break;
       }

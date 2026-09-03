@@ -2253,7 +2253,7 @@ Physical aggregate accounting includes every retained vector, including
 `readbackRecords` grown by exact-fit/legacy reuse. Readback remains fail-closed
 for provisioning because the direct assembler has no readback appender and its
 provision price intentionally excludes that dimension.
-The first wild gate rejected the candidate before locality could be measured.
+The historical first wild gate rejected the candidate before locality could be measured.
 GT1 with the 48 MiB calibration value and with an explicit 8 MiB value both
 stopped after the frame-0 Clear/Present with the same Wine null-read page fault
 and no draws or encode chunks. Re-running 8 MiB after failure-atomic staging
@@ -2263,9 +2263,83 @@ binaries with exact zero completed 2,913 frames. This isolates the failure to
 positive provisioning but does not identify its cause: no allocator failure,
 RSS/VM sample, low-address sample or crash backtrace was captured, and unix-side
 storage uses the x86_64 allocator.
-Address-space exhaustion is therefore only a hypothesis. The mechanism remains
-opt-in until a ring-wide retained-capacity contract, failure injection, memory
-evidence, and positive GT1/GT2 locality runs exist.
+Address-space exhaustion was therefore only a hypothesis. The ring-wide lease,
+failure injection, and a same-build positive GT1 memory/locality qualification
+now exist; `gap.md` records their bounded result. The mechanism remains opt-in
+because aggregate denials and the remaining CB/pass locality gap still fail
+promotion, and GT2 has not yet been qualified on this reuse policy.
+
+### Retained-capacity reuse on a reclaimed payload (R-BACK-2.105)
+
+The 64 compatibility payloads are persistent, and reclaim retains their
+storage: `ChunkSlot::clearCommands()` calls `clear()` on every vector, which
+drops each size to zero and keeps each capacity. A reclaimed payload is
+therefore empty in every direct dimension **and already holds the storage its
+previous provision bought**. Re-staging a fresh topology into it frees and
+re-allocates that storage inside the queue's critical section and swaps in a
+payload physically indistinguishable from the one it discarded.
+
+The empty arm therefore has two outcomes, decided by the same pure reducer:
+`ProvisionEmpty` as above, and `ReuseProvisionedEmpty`, which allocates
+nothing, settles no aggregate lease, and advances no capacity generation. Three
+premises are required together, and each is independently modelled:
+
+1. **Complete physical coverage, per dimension.**
+   `directSlotEmptyStorageReusable` reads the capacity of every vector
+   `TransactionalChunkSlotAssembler::reserve()` will touch -- all 31, including
+   `readbackRecords`, which the populated-slot admission predicate covers only
+   through an unrelated structural early return. A scalar byte total is not
+   sufficient: bytes can be present while one dimension's buffer is not.
+   Production disables the assembler's per-append capacity guard for range
+   builds, and the prepare-time conservation check runs after every append, so
+   a false positive here is unrecoverable.
+2. **Retention complete across reclaim.** Reclaim detaches the payload's
+   `drawShaderLayouts` vector under the queue mutex so last-owner destructors
+   do not re-enter the resource pool there. This is the only provisioned
+   dimension reclaim detaches, so without a second half the reuse predicate
+   could never hold. The buffer therefore makes a round trip: it is
+   swapped out with a default-constructed local -- so the payload's vector is
+   left specified empty with capacity zero rather than relying on the
+   unspecified state of a moved-from `std::vector` -- emptied with the mutex
+   released, and swapped back by `ChunkSlot::restoreResourceOwnerStorage` after
+   the relock and after the Reclaiming identity and seq are revalidated. The
+   swap out and the swap back are each O(1) and allocate nothing; the clear is
+   O(number of layout rows) and runs entirely outside the mutex, which is where
+   it already ran before this requirement. During that window the payload's
+   `detachedResourceOwnerRetainedBytes` carries the detached allocation into
+   `compatibilityPayloadRetainedBytes`, so aggregate reconciliation observes
+   the same physical total before detach, during destruction, and after the
+   storage is restored.
+3. **An identity-qualified ledger entry.** Reuse skips the aggregate lease
+   entirely, which is sound only while the ledger entry still describes the
+   payload exactly: a valid generation, no staged credit outstanding, and
+   recorded bytes equal to the payload's actual physical retained bytes. A
+   payload provisioned once can later grow by ordinary exact-fit reservation on
+   a source whose lease was denied; a smaller plan arriving after the next
+   reclaim would then find complete physical coverage while the ledger still
+   described the pre-growth bytes. `directSlotCapacityLedgerQualifiesReuse` is
+   the shared predicate, and the pure reducer takes its result as an explicit
+   parameter that defaults to `false`, so every caller without a ledger is
+   fail-closed on `ProvisionEmpty`.
+
+Reclaim also destroys the three uniform lookup families' logical extent while
+keeping their storage, so reuse restores it through the existing empty-only
+`ChunkSlot::provisionEmptyDrawUniformLookup` primitive: `assign(n, v)` with
+`n <= capacity()` and `chunkSlotReserveAtLeast` with `capacity() >= required`
+are both allocation-free. `directSlotPhysicalCapacityCovers` is asserted after
+that restore and after a successful staged commit, so "provisioned" means "the
+assembler's `reserve()` is now a no-op" rather than "an allocation happened".
+
+`direct_chunkslot_slot_provision_reused` counts the arm;
+`direct_chunkslot_slot_provision_reuse_rejected` is the predicate-versus-restore
+drift guard and must stay zero. Neither the disabled lane nor the exact-fit
+lane can reach either: the reuse arm exists only under an enabled budget.
+
+There are two related inventories: 31 `ChunkSlot` vectors are cleared and
+covered by the physical predicate, while provisioning owns 30 allocation
+points -- 21 storage vectors and nine lookup arrays. `readbackRecords` is the
+31st vector and remains fail-closed for provisioning because this direct
+assembler has no readback appender.
 
 The one term Direct reserves more conservatively than Legacy retains is the
 constant-byte pair: the plan must bound it at `sizeof(VertexShaderConstants)`

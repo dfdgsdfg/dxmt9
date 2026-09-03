@@ -4088,6 +4088,7 @@ bool QueueLifecycleController::completeInlineChunk(
   }
 
   bool reclaimBegan = false;
+  // R-BACK-2.105 owner-buffer round trip; see reclaimCompletedTapeHead().
   std::vector<DrawShaderLayoutContext> deferredReleases;
   std::optional<CpuReadyTape::DetachedArenaOwner> arenaOwner;
   finishInline(slotIndex, seqId, [&] {
@@ -4157,6 +4158,8 @@ bool QueueLifecycleController::completeInlineChunk(
                                             qmxEnabled, qmxSegStart);
       return false;
     }
+    // Identity revalidated above; give the emptied buffer back.
+    reclaimingPayload->restoreResourceOwnerStorage(deferredReleases);
     reclaimingPayload->seqId = 0;
     reclaimed = submissionBinding_.cpuReadyTape->finishReclaim(
         source.id, source.storage);
@@ -4528,6 +4531,13 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
   const bool qmxEnabled = dxmt9::queueMutexSplitEnabled();
   auto qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
                                  : std::chrono::steady_clock::time_point{};
+  // R-BACK-2.105: this buffer makes one round trip. It is swapped out under the
+  // mutex (O(1)), emptied outside it -- O(layout rows), and exactly where that
+  // work already happened -- so last-owner destructors do not re-enter the
+  // resource pool under the lock, then swapped back after the relock so the
+  // payload keeps its retained `drawShaderLayouts` capacity. Neither swap
+  // allocates, and the buffer is never touched concurrently with a
+  // `compatibilityPayloadRetainedBytes` capacity read.
   std::vector<DrawShaderLayoutContext> deferredReleases;
   std::optional<CpuReadyTape::DetachedArenaOwner> arenaOwner;
   const auto head = submissionBinding_.cpuReadyTape->oldestResident();
@@ -4618,6 +4628,8 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
       poisonTapeFailureLocked();
       return false;
     }
+    // Identity revalidated above; give the emptied buffer back.
+    payload->restoreResourceOwnerStorage(deferredReleases);
     payload->seqId = 0;
     sourceReclaimed = submissionBinding_.cpuReadyTape->finishReclaim(
         head->source.id, head->source.storage);

@@ -870,6 +870,13 @@ struct ChunkSlot {
   std::vector<GenerateMipmapsDesc> generateMipmapsRecords;
   std::vector<PresentCommandRecord> presentRecords;
 
+  // Physical bytes temporarily owned by the out-of-lock resource-owner
+  // release buffer. Reconciliation may inspect every compatibility payload
+  // while this payload is Reclaiming, so retained-byte accounting must remain
+  // exact across the detach/restore window rather than observing a temporary
+  // zero-capacity drawShaderLayouts vector.
+  std::size_t detachedResourceOwnerRetainedBytes = 0;
+
   bool commandsEmpty() const noexcept {
     return commandHeaders.empty();
   }
@@ -890,11 +897,68 @@ struct ChunkSlot {
     return true;
   }
 
-  // VertexDeclSnapshot retains core buffers. Detach it before clearing a slot
-  // under the queue mutex so a last-owner Buffer destructor can re-enter the
-  // backend resource pool only after that mutex is released.
+  // VertexDeclSnapshot retains core buffers. Detach them before clearing a
+  // slot under the queue mutex so a last-owner Buffer destructor can re-enter
+  // the backend resource pool only after that mutex is released.
+  //
+  // The transfer is a swap with a default-constructed local, not
+  // `return std::move(drawShaderLayouts)`. The standard leaves a moved-from
+  // `std::vector` valid but unspecified, and R-BACK-2.105 needs the
+  // post-condition to be exact: after this returns, `drawShaderLayouts` is
+  // specified empty with capacity 0, and the original allocation is
+  // deterministically owned by the returned vector. `restoreResourceOwnerStorage`
+  // relies on both halves of that.
+  //
+  // Surrendering the buffer matters because `drawShaderLayouts` is the only
+  // provisioned dimension reclaim detaches. Without the round trip a
+  // reclaimed payload would therefore be the one shape a complete physical-
+  // capacity coverage predicate can never accept. The caller empties this
+  // vector with the mutex released and hands the storage back through
+  // `restoreResourceOwnerStorage` after the relock.
   std::vector<DrawShaderLayoutContext> detachResourceOwners() {
-    return std::move(drawShaderLayouts);
+    DXMT_ASSERT(detachedResourceOwnerRetainedBytes == 0 &&
+                "resource-owner storage may have only one detached owner");
+    detachedResourceOwnerRetainedBytes =
+        drawShaderLayouts.capacity() >
+                std::numeric_limits<std::size_t>::max() /
+                    sizeof(DrawShaderLayoutContext)
+            ? std::numeric_limits<std::size_t>::max()
+            : drawShaderLayouts.capacity() * sizeof(DrawShaderLayoutContext);
+    std::vector<DrawShaderLayoutContext> owners;
+    using std::swap;
+    swap(drawShaderLayouts, owners);
+    return owners;
+  }
+
+  // Second half of the reclaim round trip (R-BACK-2.105). `owners` must
+  // already have been emptied outside the queue mutex -- that is where the
+  // last-owner destructors ran, at a cost proportional to the number of layout
+  // rows -- and this payload's own vector must still be the specified-empty,
+  // capacity-zero shell `detachResourceOwners()` swapped in. The swap back is
+  // O(1) and frees nothing, so the retained capacity survives reclaim without
+  // any allocation or copy inside the critical section.
+  //
+  // Deliberately a no-op rather than an assertion when either premise fails:
+  // forfeiting the capacity degrades the next use to a full reprovision, which
+  // is exactly the pre-R-BACK-2.105 behaviour and always correct.
+  void restoreResourceOwnerStorage(
+      std::vector<DrawShaderLayoutContext>& owners) noexcept {
+    if (!owners.empty() || !drawShaderLayouts.empty() ||
+        drawShaderLayouts.capacity() != 0) {
+      return;
+    }
+    using std::swap;
+    swap(drawShaderLayouts, owners);
+    detachedResourceOwnerRetainedBytes = 0;
+  }
+
+  // Failure-path counterpart used only after the detached vector and its
+  // allocation have actually been destroyed without a restore. Normal
+  // reclaim always restores; an abandoned round trip poisons the queue.
+  void abandonDetachedResourceOwnerStorage() noexcept {
+    DXMT_ASSERT(drawShaderLayouts.empty() &&
+                drawShaderLayouts.capacity() == 0);
+    detachedResourceOwnerRetainedBytes = 0;
   }
 
   void clearCommands() {

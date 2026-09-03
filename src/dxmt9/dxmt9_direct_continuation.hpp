@@ -1204,6 +1204,267 @@ inline constexpr bool directContinuationAppendFits(
       capacity >= current + extra;
 }
 
+// ---------------------------------------------------------------------------
+// Complete physical-capacity coverage (R-BACK-2.105).
+//
+// `directContinuationAdmission` answers "may this source extend the populated
+// slot"; the two predicates below answer the strictly physical question that
+// question presupposes: is every `std::vector` operation
+// `TransactionalChunkSlotAssembler::reserve()` is about to perform provably a
+// no-op on this payload?
+//
+// That has to be its own predicate because production disables the assembler's
+// per-append capacity guard for range builds
+// (`TransactionalChunkSlotAssembler::tryAppendDirectDraw`, gated on
+// `directRangeBuild_`, which `beginDirectChunkSlotReplay` always sets). The
+// only later guard is the prepare-time conservation check, which runs AFTER
+// every append -- i.e. after storage would already have moved. A false positive
+// here is therefore unrecoverable, so these arms mirror `reserve()`'s own call
+// list and its callees' branch conditions one-for-one rather than paraphrasing
+// them.
+//
+// Unlike `directContinuationAdmission` this covers `readbackRecords` too:
+// admission gets away with omitting it only because a non-zero readback plan is
+// already a structural rejection, and a predicate that must be callable on the
+// empty arm cannot inherit that early return.
+
+// One uniform lookup family. Mirrors `ChunkSlot::reserveDrawUniformStageLookup`
+// and `ChunkSlot::reserveDrawUniformPayloadLookup` branch for branch: `next`
+// must not grow (`detail::chunkSlotReserveAtLeast` grows GEOMETRICALLY, which
+// would move a published prefix's chain storage), and the rebuild must not
+// fire, because a rebuild `assign`s the bucket tables and rehashes every
+// already-interned record.
+template <typename Record>
+inline bool directSlotLookupCovers(
+    const std::vector<Record>& records,
+    const std::vector<std::uint32_t>& heads,
+    const std::vector<std::uint32_t>& tails,
+    const std::vector<std::uint32_t>& next,
+    std::size_t additional) noexcept {
+  if (additional == 0) {
+    // `reserveDrawUniform*Lookup(0)` returns immediately, so demanding room
+    // would be a false negative rather than a safety property.
+    return true;
+  }
+  if (additional > std::numeric_limits<std::size_t>::max() - records.size()) {
+    return false;
+  }
+  const auto total = records.size() + additional;
+  if (next.capacity() < total) {
+    return false;
+  }
+  auto bucketCount = detail::chunkSlotUniformLookupBucketCount(total);
+  if (bucketCount < heads.size()) {
+    bucketCount = heads.size();
+  }
+  return heads.size() >= bucketCount && heads.size() == tails.size() &&
+      next.size() == records.size();
+}
+
+// `reserve()`'s own clear-rect accumulation precondition. It is the one
+// arm that can fail on a slot whose vectors are all large enough.
+inline bool directSlotClearRectAccumulationFits(
+    const ChunkSlot& slot) noexcept {
+  std::size_t clearRectCount = 0;
+  for (const auto& clear : slot.clearRecords) {
+    if (clear.rects.size() >
+        std::numeric_limits<std::size_t>::max() - clearRectCount) {
+      return false;
+    }
+    clearRectCount += clear.rects.size();
+  }
+  return true;
+}
+
+// True only when every physical vector `reserve()` touches already holds
+// `plan`, so the whole reservation is a no-op and no published row moves.
+// This is the post-condition of a successful provision or reuse, and the
+// pre-condition the direct append path relies on.
+inline bool directSlotPhysicalCapacityCovers(
+    const ChunkSlot& slot, const SourcePayloadCapacity& plan) noexcept {
+  if (slot.prefetchedPipelinesSealed() || !slot.drawStateStorageConsistent() ||
+      !slot.commandPayloadsInRange() ||
+      !directSlotClearRectAccumulationFits(slot)) {
+    return false;
+  }
+  const auto fits = [](const auto& values, std::size_t extra) noexcept {
+    return directContinuationAppendFits(values.size(), extra,
+                                        values.capacity());
+  };
+  if (!fits(slot.commandHeaders, plan.commandHeaders) ||
+      !fits(slot.drawHotStates, plan.drawHotStates) ||
+      !fits(slot.drawShaderLayouts, plan.drawShaderLayouts) ||
+      !fits(slot.drawDebugSnapshots, plan.drawDebugSnapshots) ||
+      !fits(slot.drawPsoSubviews, plan.drawPsoSubviews) ||
+      !fits(slot.drawUniformFixedPayloads, plan.drawUniformFixedPayloads) ||
+      !fits(slot.drawUniformVertexConstants,
+            plan.drawUniformVertexConstants) ||
+      !fits(slot.drawUniformVertexConstantBytes,
+            plan.drawUniformVertexConstantBytes) ||
+      !fits(slot.drawUniformPixelConstants, plan.drawUniformPixelConstants) ||
+      !fits(slot.drawUniformPixelConstantBytes,
+            plan.drawUniformPixelConstantBytes) ||
+      !fits(slot.drawUniformPayloads, plan.drawUniformPayloads) ||
+      !fits(slot.drawParams, plan.drawParams) ||
+      !fits(slot.drawPayloadArena, plan.drawPayloadBytes) ||
+      !fits(slot.drawRunRecords, plan.drawRunRecords) ||
+      !fits(slot.clearRecords, plan.clearRecords) ||
+      !fits(slot.surfaceCopyRecords, plan.surfaceCopyRecords) ||
+      !fits(slot.stretchRectRecords, plan.stretchRectRecords) ||
+      // Covered here and nowhere else; see the header comment above.
+      !fits(slot.readbackRecords, plan.readbackRecords) ||
+      !fits(slot.colorFillRecords, plan.colorFillRecords) ||
+      !fits(slot.depthResolveRecords, plan.depthResolveRecords) ||
+      !fits(slot.generateMipmapsRecords, plan.generateMipmapsRecords) ||
+      !fits(slot.presentRecords, plan.presentRecords)) {
+    return false;
+  }
+  // `reserve()` gates ALL THREE lookup families on the payload dimension
+  // alone, so a zero-payload plan touches none of them.
+  if (plan.drawUniformPayloads == 0) {
+    return true;
+  }
+  return directSlotLookupCovers(slot.drawUniformPayloads,
+                                slot.drawUniformPayloadLookupHeads,
+                                slot.drawUniformPayloadLookupTails,
+                                slot.drawUniformPayloadLookupNext,
+                                plan.drawUniformPayloads) &&
+      directSlotLookupCovers(slot.drawUniformVertexConstants,
+                             slot.drawUniformVertexConstantsLookupHeads,
+                             slot.drawUniformVertexConstantsLookupTails,
+                             slot.drawUniformVertexConstantsLookupNext,
+                             plan.drawUniformVertexConstants) &&
+      directSlotLookupCovers(slot.drawUniformPixelConstants,
+                             slot.drawUniformPixelConstantsLookupHeads,
+                             slot.drawUniformPixelConstantsLookupTails,
+                             slot.drawUniformPixelConstantsLookupNext,
+                             plan.drawUniformPixelConstants);
+}
+
+// The reuse arm's pre-condition.
+//
+// A reclaimed compatibility payload is empty in every direct dimension but is
+// NOT byte-identical to a fresh one: `ChunkSlot::clearCommands` calls `clear()`
+// on ~30 vectors, which drops every size to zero and retains every capacity.
+// The three lookup families' bucket tables therefore keep their storage but
+// lose their logical `assign`ed extent, so `directSlotPhysicalCapacityCovers`
+// is false on such a payload even when nothing needs to be allocated.
+//
+// This predicate is the same complete coverage question asked one step
+// earlier: it reads bucket-table CAPACITY where the post-condition reads size,
+// because `restoreDirectSlotLookupTables` below re-establishes the logical
+// extent with no allocation. Every other dimension is checked identically.
+inline bool directSlotEmptyStorageReusable(
+    const ChunkSlot& slot, const SourcePayloadCapacity& plan) noexcept {
+  if (!chunkSlotDirectStorageEmpty(slot) || slot.prefetchedPipelinesSealed() ||
+      !slot.drawStateStorageConsistent() || !slot.commandPayloadsInRange()) {
+    return false;
+  }
+  // Reuse must cover the full provisioning plan, not merely the arriving
+  // source's exact plan. Accepting partial coverage would silently restore
+  // exact-fit behaviour for every source after this one -- the regression
+  // R-BACK-2.104 exists to remove -- while still reporting a reuse.
+  //
+  // Every dimension is empty, so `directContinuationAppendFits(0, extra, cap)`
+  // reduces to `cap >= extra`; the plain arms are therefore identical to the
+  // post-condition's and only the bucket tables are read differently.
+  const auto fits = [](const auto& values, std::size_t extra) noexcept {
+    return values.capacity() >= extra;
+  };
+  if (!fits(slot.commandHeaders, plan.commandHeaders) ||
+      !fits(slot.drawHotStates, plan.drawHotStates) ||
+      !fits(slot.drawShaderLayouts, plan.drawShaderLayouts) ||
+      !fits(slot.drawDebugSnapshots, plan.drawDebugSnapshots) ||
+      !fits(slot.drawPsoSubviews, plan.drawPsoSubviews) ||
+      !fits(slot.drawUniformFixedPayloads, plan.drawUniformFixedPayloads) ||
+      !fits(slot.drawUniformVertexConstants, plan.drawUniformVertexConstants) ||
+      !fits(slot.drawUniformVertexConstantBytes,
+            plan.drawUniformVertexConstantBytes) ||
+      !fits(slot.drawUniformPixelConstants, plan.drawUniformPixelConstants) ||
+      !fits(slot.drawUniformPixelConstantBytes,
+            plan.drawUniformPixelConstantBytes) ||
+      !fits(slot.drawUniformPayloads, plan.drawUniformPayloads) ||
+      !fits(slot.drawParams, plan.drawParams) ||
+      !fits(slot.drawPayloadArena, plan.drawPayloadBytes) ||
+      !fits(slot.drawRunRecords, plan.drawRunRecords) ||
+      !fits(slot.clearRecords, plan.clearRecords) ||
+      !fits(slot.surfaceCopyRecords, plan.surfaceCopyRecords) ||
+      !fits(slot.stretchRectRecords, plan.stretchRectRecords) ||
+      !fits(slot.readbackRecords, plan.readbackRecords) ||
+      !fits(slot.colorFillRecords, plan.colorFillRecords) ||
+      !fits(slot.depthResolveRecords, plan.depthResolveRecords) ||
+      !fits(slot.generateMipmapsRecords, plan.generateMipmapsRecords) ||
+      !fits(slot.presentRecords, plan.presentRecords)) {
+    return false;
+  }
+  if (plan.drawUniformPayloads == 0) {
+    return true;
+  }
+  // Bucket tables are read by CAPACITY: `restoreDirectSlotLookupTables` below
+  // re-`assign`s their logical extent, and `assign(n, v)` with
+  // `n <= capacity()` allocates nothing.
+  const auto lookupCapacity = [](const std::vector<std::uint32_t>& heads,
+                                 const std::vector<std::uint32_t>& tails,
+                                 const std::vector<std::uint32_t>& next,
+                                 std::size_t count) noexcept {
+    if (count == 0) {
+      return true;
+    }
+    const auto buckets = detail::chunkSlotUniformLookupBucketCount(count);
+    return heads.capacity() >= buckets && tails.capacity() >= buckets &&
+        next.capacity() >= count;
+  };
+  return lookupCapacity(slot.drawUniformPayloadLookupHeads,
+                        slot.drawUniformPayloadLookupTails,
+                        slot.drawUniformPayloadLookupNext,
+                        plan.drawUniformPayloads) &&
+      lookupCapacity(slot.drawUniformVertexConstantsLookupHeads,
+                     slot.drawUniformVertexConstantsLookupTails,
+                     slot.drawUniformVertexConstantsLookupNext,
+                     plan.drawUniformVertexConstants) &&
+      lookupCapacity(slot.drawUniformPixelConstantsLookupHeads,
+                     slot.drawUniformPixelConstantsLookupTails,
+                     slot.drawUniformPixelConstantsLookupNext,
+                     plan.drawUniformPixelConstants);
+}
+
+// Is the aggregate ledger entry for one physical payload still an exact,
+// identity-qualified description of that payload's storage? Shared by
+// production and the native counterexample so the two cannot drift.
+//
+// `generation == 0` is the ledger's "no entry" sentinel, so it never
+// qualifies. A non-zero `stagedBytes` means some payload holds an outstanding
+// lease and the aggregate is mid-transaction. And `retainedBytes` must equal
+// the payload's ACTUAL physical retained bytes: any exact-fit growth the
+// assembler performed after the last settled provision shows up exactly here.
+inline bool directSlotCapacityLedgerQualifiesReuse(
+    const DirectSlotCapacityLeaseEntry& entry, std::uint64_t stagedBytes,
+    const ChunkSlot& payload) noexcept {
+  return stagedBytes == 0 && entry.generation != 0 &&
+      entry.retainedBytes ==
+          static_cast<std::uint64_t>(directSlotPhysicalRetainedBytes(payload));
+}
+
+// Re-establish the three lookup families' logical extent on an empty payload
+// whose bucket-table CAPACITY already covers `plan`. Routed through the
+// production `ChunkSlot` primitive rather than reimplemented, so the reuse arm
+// and the staged-provisioning arm cannot drift apart.
+//
+// `assign(n, v)` with `n <= capacity()` and `chunkSlotReserveAtLeast` with
+// `capacity() >= required` are both allocation-free, which is why this may run
+// under the queue mutex on a payload the aggregate lease has already priced.
+inline bool restoreDirectSlotLookupTables(
+    ChunkSlot& slot, const SourcePayloadCapacity& plan) noexcept {
+  try {
+    slot.provisionEmptyDrawUniformLookup(plan.drawUniformPayloads,
+                                         plan.drawUniformVertexConstants,
+                                         plan.drawUniformPixelConstants);
+  } catch (...) {
+    return false;
+  }
+  return directSlotPhysicalCapacityCovers(slot, plan);
+}
+
 // Pure production admission predicate.  `extra` is the immutable final
 // capacity plan for the source being considered; it is not a count of raw
 // records. APPLY_STATE and constant setters are state-only and therefore do
@@ -1399,6 +1660,18 @@ enum class DirectSlotStorageAction : std::uint8_t {
   // Slot is empty in every direct dimension: reserve the provisioning plan
   // once, here, where no published row can be moved by the allocation.
   ProvisionEmpty,
+  // Slot is empty in every direct dimension AND the physical storage a prior
+  // provision left behind already covers this plan completely. A reclaimed
+  // compatibility payload is exactly this shape: `clearCommands()` drops every
+  // size to zero and retains every capacity, so re-staging a fresh topology
+  // would free and re-malloc storage that is already correct. Restore the
+  // lookup families' logical extent -- allocation-free -- and construct.
+  //
+  // Distinct from `ProvisionEmpty` because it makes NO aggregate-lease
+  // transaction: no reconciliation snapshot, no staged credit, no capacity
+  // generation advance. The ledger entry already describes these bytes,
+  // because nothing about the payload's physical capacity changed.
+  ReuseProvisionedEmpty,
   // Slot carries no commands but is not empty in every dimension. Reserve
   // nothing extra and let the transaction's own exact reservation stand.
   ProvisionSkippedNonEmpty,
@@ -1423,24 +1696,36 @@ struct DirectSlotStorageDecision {
   // Meaningful only for ProvisionEmpty.
   SourcePayloadCapacity provision{};
   bool populated = false;
-  // ProvisionEmpty only: the source's own exact plan was at or beyond the
-  // provisioning ceiling, so the slot was reserved exactly and the next source
+  // ProvisionEmpty / ReuseProvisionedEmpty only: the source's own exact plan
+  // was at or beyond the provisioning ceiling, so the slot was reserved exactly and the next source
   // is a genuine budget rotation. Classified here rather than re-derived at the
   // call site, so a coordinator-only span cannot be counted as at-budget.
   bool sourceExceedsBudget = false;
 
   constexpr bool constructsIntoCurrentSlot() const noexcept {
     return action == DirectSlotStorageAction::ProvisionEmpty ||
+        action == DirectSlotStorageAction::ReuseProvisionedEmpty ||
         action == DirectSlotStorageAction::ProvisionSkippedNonEmpty ||
         action == DirectSlotStorageAction::ProvisionDisabled ||
         action == DirectSlotStorageAction::AppendInPlace;
   }
 };
 
+// `reuseQualified` is the one input the reducer cannot derive: whether the
+// aggregate ledger entry for THIS physical payload is still identity-qualified
+// for its current storage -- a valid generation whose recorded retained bytes
+// equal the payload's actual physical retained bytes, with no staged credit
+// outstanding. Physical coverage alone is not enough to license skipping the
+// lease: a payload can be provisioned once, then grow by ordinary exact-fit
+// assembler reservation on a later source whose lease was denied, and a
+// smaller plan arriving after the next reclaim would find complete coverage
+// while the ledger still described the pre-growth bytes. Defaulting it to
+// `false` keeps every caller that does not own a ledger fail-closed on
+// `ProvisionEmpty`.
 inline DirectSlotStorageDecision directSlotStorageTransition(
     const ChunkSlot& slot, const SourcePayloadCapacity& extra,
     const DirectSlotProvisionBudget& budget,
-    bool rotationAllowed) noexcept {
+    bool rotationAllowed, bool reuseQualified = false) noexcept {
   DirectSlotStorageDecision decision{};
   decision.populated = !slot.commandsEmpty();
   if (!decision.populated) {
@@ -1456,10 +1741,19 @@ inline DirectSlotStorageDecision directSlotStorageTransition(
       decision.action = DirectSlotStorageAction::ProvisionSkippedNonEmpty;
       return decision;
     }
-    decision.action = DirectSlotStorageAction::ProvisionEmpty;
     decision.provision = directSlotProvisionPlan(extra, budget);
     decision.sourceExceedsBudget =
         directSlotSourceExceedsProvisionBudget(extra, budget);
+    // R-BACK-2.105: a reclaimed payload keeps the capacity its previous
+    // provision bought. Reprovisioning it is a redundant free+malloc of the
+    // whole ~30-vector topology -- up to the declared per-payload ceiling --
+    // inside the queue's critical section, and it produces a payload that is
+    // physically indistinguishable from the one being discarded.
+    decision.action =
+        reuseQualified &&
+                directSlotEmptyStorageReusable(slot, decision.provision)
+            ? DirectSlotStorageAction::ReuseProvisionedEmpty
+            : DirectSlotStorageAction::ProvisionEmpty;
     return decision;
   }
   decision.admission = directContinuationAdmission(slot, extra).disposition;

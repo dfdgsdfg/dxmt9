@@ -2368,6 +2368,8 @@ constexpr CounterEntry kCounterTable[] = {
     {"direct_chunkslot_slot_provisioned", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotSlotProvisioned, nullptr, nullptr, 0.0},
     {"direct_chunkslot_slot_provision_failed", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotSlotProvisionFailed, nullptr, nullptr, 0.0},
     {"direct_chunkslot_slot_provision_skipped_nonempty", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotSlotProvisionSkippedNonEmpty, nullptr, nullptr, 0.0},
+    {"direct_chunkslot_slot_provision_reused", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotSlotProvisionReused, nullptr, nullptr, 0.0},
+    {"direct_chunkslot_slot_provision_reuse_rejected", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotSlotProvisionReuseRejected, nullptr, nullptr, 0.0},
     {"direct_chunkslot_slot_provision_source_exceeds_budget", CounterEntry::Kind::UnsignedCount, &Counters::directChunkSlotSlotProvisionSourceExceedsBudget, nullptr, nullptr, 0.0},
     {"direct_slot_capacity_lease_denials", CounterEntry::Kind::UnsignedCount, &Counters::directSlotCapacityLeaseDenials, nullptr, nullptr, 0.0},
     {"direct_slot_capacity_lease_rollbacks", CounterEntry::Kind::UnsignedCount, &Counters::directSlotCapacityLeaseRollbacks, nullptr, nullptr, 0.0},

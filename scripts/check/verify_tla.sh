@@ -63,8 +63,8 @@ normal_models=(
 
 expected_normal_count=49
 expected_progress_count=1
-expected_counterexample_count=92
-expected_cfg_count=142
+expected_counterexample_count=95
+expected_cfg_count=145
 progress_model=CpuPipelineLifecycle
 progress_cfg_name="$progress_model.progress.cfg"
 
@@ -118,6 +118,14 @@ counterexample_models=(
   # reallocating an already published extent.
   "DirectSlotCapacityProvisioning|.exact-fit.counterexample|Invariant BoundaryCreditsNotExceeded is violated"
   "DirectSlotCapacityProvisioning|.grow-populated.counterexample|Invariant NoGrowWhilePopulated is violated"
+  # R-BACK-2.105 retained-capacity reuse. Three independent premises: adopting
+  # a sufficient reclaimed payload at all, requiring its retention to be
+  # complete in every dimension rather than sufficient by byte total, and
+  # requiring the aggregate ledger entry to still describe it exactly before
+  # reuse skips the lease.
+  "DirectSlotCapacityProvisioning|.no-reuse.counterexample|Invariant NoRedundantReprovision is violated"
+  "DirectSlotCapacityProvisioning|.detached-owner-storage.counterexample|Invariant ReuseRequiresCompleteRetention is violated"
+  "DirectSlotCapacityProvisioning|.stale-ledger-reuse.counterexample|Invariant ReuseIsLedgerQualified is violated"
   "DirectSlotAggregateCapacityLease|.partial-adoption.counterexample|Invariant AdoptionIsAtomic is violated"
   "DirectSlotAggregateCapacityLease|.leaked-credit.counterexample|Invariant RetainedCreditConserved is violated"
   "ReplayEmissionPlanIslands|.span-identity.counterexample|Invariant EachRecordEmittedOnce is violated"

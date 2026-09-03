@@ -116,6 +116,11 @@ struct Counters {
   std::atomic<std::uint64_t> directChunkSlotSlotProvisioned{0};
   std::atomic<std::uint64_t> directChunkSlotSlotProvisionFailed{0};
   std::atomic<std::uint64_t> directChunkSlotSlotProvisionSkippedNonEmpty{0};
+  // R-BACK-2.105 retained-capacity reuse. `reused` is an empty-slot arm that
+  // allocated nothing and settled no aggregate lease; `reuse_rejected` is the
+  // predicate-vs-restore drift guard and must stay zero.
+  std::atomic<std::uint64_t> directChunkSlotSlotProvisionReused{0};
+  std::atomic<std::uint64_t> directChunkSlotSlotProvisionReuseRejected{0};
   std::atomic<std::uint64_t> directChunkSlotSlotProvisionSourceExceedsBudget{0};
   std::atomic<std::uint64_t> directSlotCapacityLeaseDenials{0};
   std::atomic<std::uint64_t> directSlotCapacityLeaseRollbacks{0};

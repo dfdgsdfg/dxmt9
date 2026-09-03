@@ -284,6 +284,9 @@ void consecutiveMeanSizedSourcesShareOneProvisionedSlot() {
       const auto decision = directSlotStorageTransition(
           slot, source, budget, /*rotationAllowed=*/true);
       if (i == 0) {
+        // Reuse is fail-closed without an identity-qualified ledger entry
+        // (R-BACK-2.105), and this pure case owns no ledger, so the empty arm
+        // stays `ProvisionEmpty`.
         check(!decision.populated &&
                   decision.action == DirectSlotStorageAction::ProvisionEmpty,
               "the first source provisions the empty slot");
@@ -1023,6 +1026,378 @@ void aggregateReconciliationIncludesReusedReadbackCapacity() {
         "reused readback capacity is reconciled before aggregate stage denial");
 }
 
+
+// ---------------------------------------------------------------------------
+// R-BACK-2.105 — retained-capacity reuse on a reclaimed compatibility payload.
+
+// The production reclaim pair, exactly as `QueueLifecycleController` runs it:
+// move the owner rows out under the queue mutex, clear the payload, destroy
+// the owners with the mutex released, then move the emptied buffer back after
+// the relock. Modelled here as one function because only the ORDER matters to
+// the storage question under test.
+void reclaimPayload(ChunkSlot& slot) {
+  // Swap out (O(1), leaves the payload's vector specified empty with capacity
+  // zero), clear the rest of the payload, release the mutex, destroy the
+  // owners, relock and revalidate, then swap the storage back.
+  const auto retainedBytes = directSlotPhysicalRetainedBytes(slot);
+  auto deferredReleases = slot.detachResourceOwners();
+  check(directSlotPhysicalRetainedBytes(slot) == retainedBytes,
+        "retained-byte accounting includes detached owner storage");
+  slot.clearCommands();
+  check(directSlotPhysicalRetainedBytes(slot) == retainedBytes,
+        "clearing logical contents keeps detached capacity accounted");
+  // ... queue mutex released here in production ...
+  deferredReleases.clear();
+  check(directSlotPhysicalRetainedBytes(slot) == retainedBytes,
+        "the empty detached allocation remains accounted before restore");
+  // ... relocked and identity-revalidated here ...
+  slot.restoreResourceOwnerStorage(deferredReleases);
+  check(directSlotPhysicalRetainedBytes(slot) == retainedBytes,
+        "restoring owner storage preserves the exact physical total");
+}
+
+std::array<std::size_t, 30> capacitiesOf(const ChunkSlot& slot) {
+  const auto& t = topologyOf(slot);
+  std::array<std::size_t, 30> capacities{};
+  for (std::size_t i = 0; i < capacities.size(); ++i) {
+    capacities[i] = t[i].capacity;
+  }
+  return capacities;
+}
+
+// Fact (B)+(C1): `clearCommands()` retains every capacity, and the owner
+// round trip is what keeps `drawShaderLayouts` -- the only provisioned
+// dimension reclaim detaches -- from being the one exception. Without the
+// restore half, a reclaimed payload could never satisfy complete physical
+// coverage.
+void reclaimRetainsEveryProvisionedCapacity() {
+  const auto budget = candidateBudget();
+  const auto source = exactSpanPlan(112, /*clears=*/1, /*presents=*/1);
+  const auto plan = directSlotProvisionPlan(source, budget);
+
+  ChunkSlot slot;
+  provision(slot, plan);
+  appendExactPlan(slot, source);
+  const auto beforeCapacities = capacitiesOf(slot);
+  const auto layoutsData = slot.drawShaderLayouts.data();
+
+  reclaimPayload(slot);
+
+  check(chunkSlotDirectStorageEmpty(slot),
+        "a reclaimed payload is empty in every direct dimension");
+  check(capacitiesOf(slot) == beforeCapacities,
+        "reclaim retains every provisioned dimension's capacity, including "
+        "drawShaderLayouts");
+  check(slot.drawShaderLayouts.data() == layoutsData,
+        "the owner buffer that comes back is the same allocation");
+
+  // The half that proves the restore is load-bearing rather than decorative.
+  ChunkSlot detachedOnly;
+  provision(detachedOnly, plan);
+  appendExactPlan(detachedOnly, source);
+  {
+    auto owners = detachedOnly.detachResourceOwners();
+    detachedOnly.clearCommands();
+    owners.clear();
+    // deliberately never restored
+  }
+  detachedOnly.abandonDetachedResourceOwnerStorage();
+  check(detachedOnly.drawShaderLayouts.empty() &&
+            detachedOnly.drawShaderLayouts.capacity() == 0,
+        "the swap-based detach leaves the payload's vector specified empty "
+        "with capacity zero -- the shape a bytes-only skip rule would miss");
+  check(!directSlotEmptyStorageReusable(detachedOnly, plan),
+        "a payload whose layout buffer was surrendered is not reusable");
+}
+
+// The redundant reprovision this requirement removes: a reclaimed payload
+// whose retained storage already covers the plan must be reused in place, and
+// the reuse must leave every allocation exactly where it was.
+void reclaimedPayloadIsReusedWithoutReallocation() {
+  const auto budget = candidateBudget();
+  const auto source = exactSpanPlan(112, /*clears=*/1, /*presents=*/1);
+  const auto plan = directSlotProvisionPlan(source, budget);
+
+  ChunkSlot slot;
+  provision(slot, plan);
+  appendExactPlan(slot, source);
+  reclaimPayload(slot);
+
+  check(directSlotEmptyStorageReusable(slot, plan),
+        "a reclaimed payload's retained storage covers the same plan again");
+  check(!directSlotPhysicalCapacityCovers(slot, plan),
+        "but its lookup tables lost their logical extent to clearCommands(), "
+        "so the post-condition does not hold until they are restored");
+
+  const auto decision = directSlotStorageTransition(
+      slot, source, budget, /*rotationAllowed=*/true,
+      /*reuseQualified=*/true);
+  check(decision.action == DirectSlotStorageAction::ReuseProvisionedEmpty &&
+            decision.constructsIntoCurrentSlot(),
+        "a qualified reclaimed payload reuses its storage instead of "
+        "re-staging an identical topology");
+  check(decision.provision.drawParams == plan.drawParams,
+        "reuse carries the same provisioning plan as the arm it replaces");
+
+  const auto before = topologyOf(slot);
+  check(restoreDirectSlotLookupTables(slot, decision.provision),
+        "the lookup restore establishes complete physical coverage");
+  const auto after = topologyOf(slot);
+  for (std::size_t i = 0; i < before.size(); ++i) {
+    check(before[i].data == after[i].data &&
+              before[i].capacity == after[i].capacity,
+          "restoring the lookup tables allocates nothing and moves nothing");
+  }
+  check(directSlotPhysicalCapacityCovers(slot, decision.provision),
+        "reuse implies the assembler's reserve() is a no-op");
+
+  // And the whole point: the source now appends in place instead of rotating.
+  appendExactPlan(slot, source);
+  check(directContinuationAdmission(slot, source).admitted(),
+        "the reused slot still admits the adjacent source");
+}
+
+// The per-dimension anti-drift gate. Remove the retained allocation from
+// exactly one of the 30 enumerated provisioning dimensions after reclaim and
+// reuse must refuse. Binding the sweep to DirectSlotProvisionAllocation::Count
+// keeps the fixture synchronized with that allocation inventory; a newly added
+// ChunkSlot vector must first join the inventory before this sweep can cover it.
+void reuseRequiresEveryDimensionIndependently() {
+  const auto budget = candidateBudget();
+  // A non-zero per-draw payload matters: with `drawPayloadBytes == 0` the
+  // arena dimension is vacuous and shrinking it could never be observed, so
+  // the sweep would silently pass over one of the thirty.
+  const auto source = exactSpanPlan(112, /*clears=*/1, /*presents=*/1,
+                                    /*payloadBytesPerDraw=*/64);
+  const auto plan = directSlotProvisionPlan(source, budget);
+  check(plan.drawPayloadBytes != 0 && plan.surfaceCopyRecords != 0 &&
+            plan.generateMipmapsRecords != 0 && plan.presentRecords != 0,
+        "every swept dimension must be non-zero or the sweep is vacuous");
+
+  const auto releaseCapacity = [](ChunkSlot& slot, std::size_t index) {
+    // `shrink_to_fit()` is a non-binding request. Every dimension is empty
+    // after reclaim, so swapping with a default vector deterministically
+    // removes the allocation and changes nothing else.
+    std::array<void (*)(ChunkSlot&), 30> shrinkers = {
+        [](ChunkSlot& s) { decltype(s.commandHeaders){}.swap(s.commandHeaders); },
+        [](ChunkSlot& s) { decltype(s.drawHotStates){}.swap(s.drawHotStates); },
+        [](ChunkSlot& s) { decltype(s.drawShaderLayouts){}.swap(s.drawShaderLayouts); },
+        [](ChunkSlot& s) { decltype(s.drawDebugSnapshots){}.swap(s.drawDebugSnapshots); },
+        [](ChunkSlot& s) { decltype(s.drawPsoSubviews){}.swap(s.drawPsoSubviews); },
+        [](ChunkSlot& s) { decltype(s.drawUniformFixedPayloads){}.swap(s.drawUniformFixedPayloads); },
+        [](ChunkSlot& s) { decltype(s.drawUniformVertexConstants){}.swap(s.drawUniformVertexConstants); },
+        [](ChunkSlot& s) { decltype(s.drawUniformVertexConstantBytes){}.swap(s.drawUniformVertexConstantBytes); },
+        [](ChunkSlot& s) { decltype(s.drawUniformPixelConstants){}.swap(s.drawUniformPixelConstants); },
+        [](ChunkSlot& s) { decltype(s.drawUniformPixelConstantBytes){}.swap(s.drawUniformPixelConstantBytes); },
+        [](ChunkSlot& s) { decltype(s.drawUniformPayloads){}.swap(s.drawUniformPayloads); },
+        [](ChunkSlot& s) { decltype(s.drawParams){}.swap(s.drawParams); },
+        [](ChunkSlot& s) { decltype(s.drawPayloadArena){}.swap(s.drawPayloadArena); },
+        [](ChunkSlot& s) { decltype(s.drawRunRecords){}.swap(s.drawRunRecords); },
+        [](ChunkSlot& s) { decltype(s.clearRecords){}.swap(s.clearRecords); },
+        [](ChunkSlot& s) { decltype(s.surfaceCopyRecords){}.swap(s.surfaceCopyRecords); },
+        [](ChunkSlot& s) { decltype(s.stretchRectRecords){}.swap(s.stretchRectRecords); },
+        [](ChunkSlot& s) { decltype(s.colorFillRecords){}.swap(s.colorFillRecords); },
+        [](ChunkSlot& s) { decltype(s.depthResolveRecords){}.swap(s.depthResolveRecords); },
+        [](ChunkSlot& s) { decltype(s.generateMipmapsRecords){}.swap(s.generateMipmapsRecords); },
+        [](ChunkSlot& s) { decltype(s.presentRecords){}.swap(s.presentRecords); },
+        [](ChunkSlot& s) { decltype(s.drawUniformPayloadLookupHeads){}.swap(s.drawUniformPayloadLookupHeads); },
+        [](ChunkSlot& s) { decltype(s.drawUniformPayloadLookupTails){}.swap(s.drawUniformPayloadLookupTails); },
+        [](ChunkSlot& s) { decltype(s.drawUniformPayloadLookupNext){}.swap(s.drawUniformPayloadLookupNext); },
+        [](ChunkSlot& s) {
+          decltype(s.drawUniformVertexConstantsLookupHeads){}.swap(
+              s.drawUniformVertexConstantsLookupHeads);
+        },
+        [](ChunkSlot& s) {
+          decltype(s.drawUniformVertexConstantsLookupTails){}.swap(
+              s.drawUniformVertexConstantsLookupTails);
+        },
+        [](ChunkSlot& s) {
+          decltype(s.drawUniformVertexConstantsLookupNext){}.swap(
+              s.drawUniformVertexConstantsLookupNext);
+        },
+        [](ChunkSlot& s) {
+          decltype(s.drawUniformPixelConstantsLookupHeads){}.swap(
+              s.drawUniformPixelConstantsLookupHeads);
+        },
+        [](ChunkSlot& s) {
+          decltype(s.drawUniformPixelConstantsLookupTails){}.swap(
+              s.drawUniformPixelConstantsLookupTails);
+        },
+        [](ChunkSlot& s) {
+          decltype(s.drawUniformPixelConstantsLookupNext){}.swap(
+              s.drawUniformPixelConstantsLookupNext);
+        },
+    };
+    shrinkers[index](slot);
+  };
+
+  static_assert(static_cast<std::size_t>(
+                    DirectSlotProvisionAllocation::Count) == 30,
+                "the shrink sweep must cover every provisioned dimension");
+  for (std::size_t i = 0;
+       i < static_cast<std::size_t>(DirectSlotProvisionAllocation::Count);
+       ++i) {
+    ChunkSlot slot;
+    provision(slot, plan);
+    appendExactPlan(slot, source);
+    reclaimPayload(slot);
+    check(directSlotEmptyStorageReusable(slot, plan),
+          "the reclaimed payload is reusable before the dimension is shrunk");
+    releaseCapacity(slot, i);
+    check(!directSlotEmptyStorageReusable(slot, plan),
+          "shrinking any single provisioned dimension refuses reuse");
+    const auto decision = directSlotStorageTransition(
+        slot, source, budget, /*rotationAllowed=*/true,
+        /*reuseQualified=*/true);
+    check(decision.action == DirectSlotStorageAction::ProvisionEmpty,
+          "an incompletely covered payload falls back to staged provisioning");
+  }
+}
+
+// Counterexample for the stale-ledger premise. A payload provisioned once and
+// then grown by ordinary exact-fit assembler reservation retains MORE bytes
+// than the ledger recorded. After a reclaim a smaller plan finds complete
+// physical coverage, so coverage alone would license a reuse that skips a
+// ledger the aggregate can no longer trust.
+void staleLedgerEntryMustNotQualifyReuse() {
+  const auto budget = candidateBudget();
+  const auto source = exactSpanPlan(112, /*clears=*/1, /*presents=*/1);
+  const auto plan = directSlotProvisionPlan(source, budget);
+
+  ChunkSlot slot;
+  provision(slot, plan);
+  const DirectSlotCapacityLeaseEntry settled{
+      .generation = 1,
+      .retainedBytes =
+          static_cast<std::uint64_t>(directSlotPhysicalRetainedBytes(slot)),
+  };
+  check(directSlotCapacityLedgerQualifiesReuse(settled, 0, slot),
+        "a settled entry qualifies its own payload");
+
+  // Exact-fit growth on a dimension the provision did not cover: a readback
+  // reservation is the shape `provisionEmptyDirectSlotStorage` never makes and
+  // `TransactionalChunkSlotAssembler::reserve()` still performs.
+  slot.readbackRecords.reserve(8);
+  check(!directSlotCapacityLedgerQualifiesReuse(settled, 0, slot),
+        "exact-fit growth after the last settled provision disqualifies the "
+        "ledger entry");
+
+  reclaimPayload(slot);
+  check(directSlotEmptyStorageReusable(slot, plan),
+        "the grown payload still covers the plan physically -- coverage alone "
+        "cannot see the stale ledger");
+  const auto qualified = directSlotCapacityLedgerQualifiesReuse(settled, 0,
+                                                                slot);
+  check(!qualified, "and the ledger entry is still stale after reclaim");
+  const auto decision = directSlotStorageTransition(
+      slot, source, budget, /*rotationAllowed=*/true, qualified);
+  check(decision.action == DirectSlotStorageAction::ProvisionEmpty,
+        "an unqualified payload must reprovision so the aggregate lease is "
+        "reconciled, not silently reuse a stale ledger");
+
+  // The other two disqualifiers, each independently.
+  check(!directSlotCapacityLedgerQualifiesReuse(
+            DirectSlotCapacityLeaseEntry{.generation = 0,
+                                         .retainedBytes = settled.retainedBytes},
+            0, slot),
+        "generation 0 is the no-entry sentinel and never qualifies");
+  const DirectSlotCapacityLeaseEntry current{
+      .generation = 2,
+      .retainedBytes =
+          static_cast<std::uint64_t>(directSlotPhysicalRetainedBytes(slot)),
+  };
+  check(directSlotCapacityLedgerQualifiesReuse(current, 0, slot) &&
+            !directSlotCapacityLedgerQualifiesReuse(current, 1, slot),
+        "an outstanding staged lease disqualifies reuse");
+}
+
+// The default-off and exact-fit lanes must be untouched: no reuse arm exists
+// without an enabled budget, and the reducer is fail-closed for every caller
+// that does not supply a qualified ledger.
+void reuseIsAbsentFromTheExactFitLane() {
+  DirectSlotProvisionBudget disabled{};
+  disabled.maxBytes = 0;
+  const auto source = exactSpanPlan(112);
+  ChunkSlot slot;
+  provision(slot, source);
+  appendExactPlan(slot, source);
+  reclaimPayload(slot);
+  const auto decision = directSlotStorageTransition(
+      slot, source, disabled, /*rotationAllowed=*/true,
+      /*reuseQualified=*/true);
+  check(decision.action == DirectSlotStorageAction::ProvisionDisabled,
+        "a disabled budget never reaches the reuse arm");
+
+  const auto budget = candidateBudget();
+  const auto plan = directSlotProvisionPlan(source, budget);
+  ChunkSlot enabledSlot;
+  provision(enabledSlot, plan);
+  appendExactPlan(enabledSlot, source);
+  reclaimPayload(enabledSlot);
+  const auto unqualified = directSlotStorageTransition(
+      enabledSlot, source, budget, /*rotationAllowed=*/true);
+  check(unqualified.action == DirectSlotStorageAction::ProvisionEmpty,
+        "the reuse qualifier defaults to false, so every caller without a "
+        "ledger stays on the staged arm");
+}
+
+// The lookup arm is the half `clearCommands()` invalidates, so it gets its own
+// rows rather than only being covered by the sweep above.
+void lookupRestoreIsExactAndAllocationFree() {
+  const auto budget = candidateBudget();
+  const auto source = exactSpanPlan(112);
+  const auto plan = directSlotProvisionPlan(source, budget);
+  const auto buckets =
+      detail::chunkSlotUniformLookupBucketCount(plan.drawUniformPayloads);
+
+  ChunkSlot slot;
+  provision(slot, plan);
+  reclaimPayload(slot);
+  check(slot.drawUniformPayloadLookupHeads.empty() &&
+            slot.drawUniformPayloadLookupHeads.capacity() >= buckets,
+        "reclaim clears the bucket tables' extent and keeps their storage");
+
+  const auto heads = slot.drawUniformPayloadLookupHeads.data();
+  const auto tails = slot.drawUniformPayloadLookupTails.data();
+  check(restoreDirectSlotLookupTables(slot, plan), "restore succeeds");
+  check(slot.drawUniformPayloadLookupHeads.size() == buckets &&
+            slot.drawUniformPayloadLookupTails.size() == buckets &&
+            slot.drawUniformPayloadLookupNext.empty(),
+        "the restored tables carry the provisioned bucket count and an empty "
+        "next chain");
+  check(slot.drawUniformPayloadLookupHeads.data() == heads &&
+            slot.drawUniformPayloadLookupTails.data() == tails,
+        "the restore reuses the retained bucket storage");
+  for (const auto head : slot.drawUniformPayloadLookupHeads) {
+    check(head == detail::kChunkSlotInvalidUniformIndex,
+          "every restored bucket is the empty sentinel, so no stale chain "
+          "survives reclaim");
+  }
+
+  // Missing bucket storage is a refusal, not a silent rebuild: growing the
+  // tables later would rehash a published prefix. Use an empty-vector swap so
+  // the negative witness does not depend on allocator over-reservation.
+  ChunkSlot shortTables;
+  provision(shortTables, plan);
+  reclaimPayload(shortTables);
+  decltype(shortTables.drawUniformPayloadLookupHeads){}.swap(
+      shortTables.drawUniformPayloadLookupHeads);
+  check(!directSlotEmptyStorageReusable(shortTables, plan),
+        "missing bucket capacity refuses reuse");
+
+  // A zero-payload plan touches no lookup family at all, mirroring
+  // `TransactionalChunkSlotAssembler::reserve()`'s own gate.
+  const auto coordinatorOnly = exactSpanPlan(0, /*clears=*/1, /*presents=*/1);
+  const auto coordinatorPlan = directSlotProvisionPlan(coordinatorOnly, budget);
+  check(coordinatorPlan.drawUniformPayloads == 0, "the span draws nothing");
+  ChunkSlot bare;
+  provision(bare, coordinatorPlan);
+  reclaimPayload(bare);
+  check(directSlotEmptyStorageReusable(bare, coordinatorPlan) &&
+            directSlotPhysicalCapacityCovers(bare, coordinatorPlan),
+        "a coordinator-only plan needs no lookup storage in either predicate");
+}
+
 }  // namespace
 
 int main() {
@@ -1049,6 +1424,12 @@ int main() {
   aggregateLeaseConservesGenerationAndCredit();
   typedLeaseTransactionCommitsOrRollsBack();
   aggregateReconciliationIncludesReusedReadbackCapacity();
+  reclaimRetainsEveryProvisionedCapacity();
+  reclaimedPayloadIsReusedWithoutReallocation();
+  reuseRequiresEveryDimensionIndependently();
+  staleLedgerEntryMustNotQualifyReuse();
+  reuseIsAbsentFromTheExactFitLane();
+  lookupRestoreIsExactAndAllocationFree();
   if (failures != 0) {
     std::fprintf(stderr, "%d check(s) failed\n", failures);
     return EXIT_FAILURE;

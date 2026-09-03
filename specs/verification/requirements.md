@@ -286,7 +286,7 @@ commit, completion ordering, and wake/progress premises.
 
 Storage capacity must be modelled as a quantity, not a boolean premise, and the
 model must distinguish the per-transaction exact reservation from the slot's
-physical capacity (R-BACK-2.103, R-BACK-2.104). It must cover empty-slot
+physical capacity (R-BACK-2.103, R-BACK-2.104, R-BACK-2.105). It must cover empty-slot
 provisioning, the prohibition on growing a populated slot, slot-generation
 advance across a publication, and **boundary credits** against a
 same-capacity serial reference consuming the identical source sequence: Direct
@@ -324,6 +324,20 @@ aggregate credit. Native injection through the real production primitive must
 bind every allocation point and exact rollback topology; opt-in Mach RSS/VM/
 physical-footprint and low-4-GiB mapped/largest-gap evidence owns the memory
 binding. TLC success alone cannot discharge either obligation.
+
+Reclaimed-payload reuse must be a distinct transition rather than an
+unobservable shortcut around provisioning. The model must retain physical
+capacity per payload across reclaim and permit allocation-free reuse only when
+every final-slot allocation dimension covers the new plan, any owner-bearing
+storage detached for out-of-lock destruction has returned, and the payload's
+generation-qualified ledger exactly matches its current retained bytes with no
+staged credit. Independent expected-failure configurations must make redundant
+reprovisioning, incomplete detached storage, and stale-ledger reuse observable.
+The native binding must enumerate the production allocation inventory, prove
+allocation/address stability across reuse and lookup restoration, and exercise
+the actual reclaim round trip. A same-build wild run with non-zero reuse owns
+reachability and memory/locality evidence; it does not replace the formal or
+native premises and does not by itself promote the default-off policy.
 
 A separate weak-fair progress configuration must prove that an admitted raw
 eventually settles, fails terminally, or takes one pre-effect compatibility

@@ -306,6 +306,8 @@ void countDirectChunkSlotContinuationCapacityRotated();
 void countDirectChunkSlotSlotProvisioned();
 void countDirectChunkSlotSlotProvisionFailed();
 void countDirectChunkSlotSlotProvisionSkippedNonEmpty();
+void countDirectChunkSlotSlotProvisionReused();
+void countDirectChunkSlotSlotProvisionReuseRejected();
 void countDirectChunkSlotSlotProvisionSourceExceedsBudget();
 void countDirectSlotCapacityLeaseDenied();
 void recordDirectSlotCapacityLease(std::uint64_t retainedBytes,

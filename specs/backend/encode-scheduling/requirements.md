@@ -1691,3 +1691,37 @@ slot was not empty in every dimension (targets zero), and sources at or beyond
 the budget (the expected residual). These counters
 describe the mechanism; they must not be used to argue that a boundary did not
 happen.
+
+**R-BACK-2.105** Reclaim must preserve a compatibility payload's complete
+provisioned physical capacity without destroying resource owners while the
+queue mutex is held. An empty payload may skip R-BACK-2.104 reprovisioning only
+when all of the following hold at the same identity-qualified instant:
+
+1. every vector and lookup-family allocation touched by final-slot assembly
+   physically covers the new provision plan;
+2. owner-bearing storage detached for out-of-lock destruction has completed
+   its round trip back to the same reclaiming payload, while an immutable byte
+   witness keeps aggregate retained-capacity accounting exact throughout the
+   detached window; and
+3. the payload's non-zero capacity generation has no staged credit and its
+   retained-byte ledger exactly equals the payload's current physical retained
+   bytes.
+
+The reuse outcome must be a typed reducer result distinct from provisioning.
+It allocates no storage, acquires or settles no aggregate lease, and advances
+no capacity generation. Reclaim-cleared lookup tables may regain only their
+logical empty extent, using already retained storage; the post-condition is
+that final-slot assembly performs no allocation, rehash or address-changing
+growth for the plan.
+
+Loss of any premise must fail closed to the existing failure-atomic
+provisioning path before semantic effect. The exact-fit/default-off lane must
+perform no payload-index lookup, capacity scan, ledger query or reuse-counter
+write. Model and native evidence must independently cover redundant
+reprovision, incomplete owner-storage retention and a stale ledger after
+exact-fit growth. Wild promotion additionally requires non-zero reuse,
+zero reuse rejection and zero allocation/lease failures while preserving the
+existing command-buffer, render-pass, completion and pixel gates.
+The allocation/lease-failure clause is evaluable only after denial and
+adopt/allocation outcomes are reported separately; until then the counter
+split recorded in `gap.md` is a promotion prerequisite rather than evidence.

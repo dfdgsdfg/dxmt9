@@ -667,6 +667,7 @@ class CommandQueue {
     BuildGenerationUnavailable,
     RotationPublicationRejected,
     StructuralRejected,
+    StorageRestoreRejected,
     AssemblerRejected,
   };
 

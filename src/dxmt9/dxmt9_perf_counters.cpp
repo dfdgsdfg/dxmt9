@@ -493,6 +493,14 @@ void countDirectChunkSlotSlotProvisionSkippedNonEmpty() {
   add(counters().directChunkSlotSlotProvisionSkippedNonEmpty);
 }
 
+void countDirectChunkSlotSlotProvisionReused() {
+  add(counters().directChunkSlotSlotProvisionReused);
+}
+
+void countDirectChunkSlotSlotProvisionReuseRejected() {
+  add(counters().directChunkSlotSlotProvisionReuseRejected);
+}
+
 void countDirectChunkSlotSlotProvisionSourceExceedsBudget() {
   add(counters().directChunkSlotSlotProvisionSourceExceedsBudget);
 }

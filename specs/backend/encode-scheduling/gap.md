@@ -102,8 +102,8 @@ append, so it is not on the cost path this requirement targets.
 | Exhaustive classifier truth table | `dxmt9-replay-emission-plan-spec` -- every emission-class sequence of length 1..5 (3,905 cases), plus all 21 live record kinds through the whole-range gate, plus the executable span partition |
 | TLA+ | `specs/verification/tla/ReplayEmissionPlanIslands.tla` with four deliberate-regression configurations (span identity, raw-local witness versus slot aggregate, separator cut, run closure), registered in `scripts/check/verify_tla.sh` |
 | Model-code binding | `dxmt9-replay-emission-plan-islands-spec` -- truth table over the production `compatibilitySpanAdmission`, plus one translated trace per `.counterexample.cfg` |
-| Storage capacity model | `specs/verification/tla/DirectSlotCapacityProvisioning.tla` -- capacity as a quantity, empty-slot provisioning, slot generation, and boundary credits against a same-capacity serial reference, with `exact-fit` and `grow-populated` expected failures |
-| Storage capacity model-code binding | `dxmt9-direct-slot-provisioning-spec` -- the production `directSlotStorageTransition` reducer, `directSlotProvisionPlan`, move-only `LeaseHeld` / off-slot `StagedDirectSlot` two-phase transaction, 64-payload aggregate lease ledger and priced budget, including every 21 vector + nine lookup allocation failure, exact pointer/capacity/topology rollback, replacement/denial/reuse/leak cases, and consecutive mean-sized sources |
+| Storage capacity model | `specs/verification/tla/DirectSlotCapacityProvisioning.tla` -- capacity as a quantity, empty-slot provisioning, persistent retained capacity across reclaim, slot generation, and boundary credits against a same-capacity serial reference, with `exact-fit`, `grow-populated`, `no-reuse`, `detached-owner-storage`, and `stale-ledger-reuse` expected failures |
+| Storage capacity model-code binding | `dxmt9-direct-slot-provisioning-spec` -- the production `directSlotStorageTransition` reducer, `directSlotProvisionPlan`, move-only `LeaseHeld` / off-slot `StagedDirectSlot` two-phase transaction, 64-payload aggregate lease ledger and priced budget, including every 21 vector + nine lookup allocation failure, exact pointer/capacity/topology rollback, replacement/denial/reuse/leak cases, allocation-free lookup restoration, complete retained-dimension coverage, detached owner-storage round trip, stale-ledger rejection, and consecutive mean-sized sources |
 | Production differential | `dxmt9-cpu-ready-production-routing-spec` -- a compatibility-cut raw against the Legacy lane, comparing the **concatenated per-command `effectiveCommandDigest` sequence** across every source the raw published (ordered command kind, draw parameters, binding-override and binding-snapshot payload bytes, coordinator descriptors), not a command total; plus a populated identity-qualified slot followed by `Direct -> TriangleFan -> Direct`, the Present-tail span, the coordinator-bearing span, both capacity rotations, and the non-terminal/duplicate Present whole-raw fallbacks with their published source order |
 
 **Open, and not claimed (`R-BACK-2.103` / `R-VERIF-2.25`):**
@@ -158,16 +158,22 @@ model/code closure gaps, not claims delegated to the wild gate.
    set once while it is empty, so adjacent in-budget sources append in place
    with no allocation. What remains open:
 
-   - **No positive locality result.** Native and TLA evidence proves the scalar
-     capacity mechanism and boundary credits against a same-capacity reference;
-     it does not prove the wild values return to Legacy. The corrected 5 MiB
-     smoke was intentionally read only as a correctness gate: just two slots
-     were provisioned, while 20,704 aggregate-lease denials and 18,127 capacity
-     rotations remained. Provisioning is reachable only through an explicit
-     positive `DXMT9_DIRECT_SLOT_HEADROOM_BYTES` value.
-   - **No wild memory evidence, and the payload aggregate is large.** The
-     calibration ceiling is 48 MiB per physical payload and a mean-shaped plan
-     commits 42.46 MiB of it (21,788 B/draw x 2,048 draws).
+   - **Positive locality improved, but is not promoted.** Native and TLA
+     evidence proves the scalar capacity mechanism and boundary credits against
+     a same-capacity reference. The first corrected 5 MiB smoke was only a
+     correctness gate: two slots were provisioned while 20,704 aggregate-lease
+     denials and 18,127 capacity rotations remained. The later same-build
+     R-BACK-2.105 qualification below is non-vacuous and reduces GT1
+     CB/present by 12.3% and pass/present by 7.8% at a 64 MiB aggregate ceiling,
+     but 6,502 denials and 14,102 rotations remain and the result is still far
+     above Legacy locality. Provisioning therefore remains reachable only
+     through explicit positive headroom values.
+   - **Bounded wild memory evidence exists, but the payload aggregate is
+     large.** The
+     calibration ceiling is 48 MiB per physical payload and a mean-shaped
+     2,048-draw plan commits 42.46 MiB of it. The conservative ceiling prices
+     each draw at 21,788 B; the actual power-of-two lookup topology at exactly
+     2,048 draws uses fewer buckets than that worst-case rate.
      `queueCompatibility(32)` owns 64 persistent payloads, so logical worst-case
      retention is about **2.65 GiB**. Two things reduce the marginal cost against Legacy --
      Legacy already accumulates a whole present per slot and `std::vector`
@@ -175,8 +181,11 @@ model/code closure gaps, not claims delegated to the wild gate.
      not resident -- but neither is a measurement and neither cancels the ring
      figure. The bounded aggregate lease, deterministic staging-failure matrix,
      and opt-in Mach RSS/VM/physical-footprint plus low-4-GiB mapped/largest-gap
-     counters are now native-bound; no wild delta against exact fit has been
-     collected. The 8 MiB failure and x86_64 unix allocator mean 32-bit address-
+     counters are now native-bound. In the same-build 64 MiB qualification,
+     peak RSS stayed within 0.3 MiB of exact fit and peak physical footprint
+     rose by about 16.3 MiB; the resolved policy values are not yet embedded in
+     `result.json`, and one GT1 triplet is not a retention-policy promotion.
+     The historical 8 MiB failure and x86_64 unix allocator mean 32-bit address-
      space exhaustion cannot be claimed.
    - **The staging transaction is queue-integrated, but promotion remains
      open.** Production computes a `Plan`, acquires the move-only `LeaseHeld`
@@ -188,9 +197,11 @@ model/code closure gaps, not claims delegated to the wild gate.
      allocation failure at all 30 production dimensions (21 storage vectors
      plus 9 lookup arrays), verify pointer/capacity/topology rollback and
      reused readback-capacity denial, and compile-time pin the linear typed
-     surface. A real queue-level assembler/checkpoint/dedup/reuse differential
-     and no-boundary integration proof are still missing, so this transaction
-     result is not an encode-scheduling promotion claim.
+     surface. Production routing and the same-build wild run now exercise the
+     queue-integrated reuse path; an all-family final-storage differential and
+     a composed no-boundary proof across publication/completion/reclaim remain
+     missing, so this transaction result is not an encode-scheduling promotion
+     claim.
    - **A coordinator-only first span still costs one rotation.** A span with no
      draws provisions zero draw storage on purpose, so a following draw-bearing
      source rotates once before the slot is provisioned against a plan that
@@ -212,7 +223,7 @@ model/code closure gaps, not claims delegated to the wild gate.
      finite chunk budget enforced by **both** lanes, and that changes the
      reference lane's own cadence, so it is deliberately not done here without
      wild evidence.
-   - **The per-draw reservation is what makes headroom expensive.** 21,740 B per
+   - **The per-draw reservation is what makes headroom expensive.** 21,788 B per
      draw, 97% of it `FlatDrawStateRecord`, the two full constant snapshots,
      `DrawUniformFixedPayloadRecord` and `DrawShaderLayoutContext`. The
      constant-byte pair in particular is reserved at the full snapshot size
@@ -222,10 +233,139 @@ model/code closure gaps, not claims delegated to the wild gate.
      follow-up worth doing before raising the budget again.
    - **Boundary credits are proven only against a serial reference.**
      `DirectSlotCapacityProvisioning` charges Direct and the reference in the
-     same step over the same source sequence; it does not compose with slot
-     reuse across generations, ordered-control session disposition, or
-     completion/reclaim.
-3. **The raw handle closure is re-marked per span.** `markArenaSourceResources`
+     same step over the same source sequence; it does not compose with
+     ordered-control session disposition or completion/reclaim. Slot reuse
+     across generations is now inside the model (`R-BACK-2.105` below); the
+     other two are not.
+   - **Same-build retained-reuse qualification passed, not promotion.** Three
+     120-second GT1 no-gputrace runs on 2026-09-03 carry identical hashes and
+     sizes for all five staged artifacts:
+     `direct-slot-headroom0-control-samebuild`,
+     `direct-slot-headroom5m-aggregate12m-samebuild`, and
+     `direct-slot-headroom5m-aggregate64m-reuse`. The results were:
+
+     | Aggregate policy | presents/s | CB/present | pass/present | provisioned | reused | denied |
+     |---|---:|---:|---:|---:|---:|---:|
+     | exact-fit control | 24.806 | 11.916 | 17.856 | 0 | 0 | 0 |
+     | 12 MiB | 25.050 | 11.546 | 17.609 | 2 | 3,539 | 16,946 |
+     | 64 MiB | 24.983 | 10.455 | 16.468 | 59 | 10,523 | 6,502 |
+
+     Both positive lanes report zero reuse rejection, lease rollback, replay
+     failure, process-memory query failure and GPU command-buffer error. The
+     64 MiB lane therefore reduces CB/present by 12.3%, render passes by 7.8%,
+     estimated tile preservation per present by 5.5%, and measured GPU
+     command-buffer time per present by 10.4% against the same-build exact-fit
+     control. Peak RSS stays within 0.3 MiB of control; peak physical footprint
+     rises from 1,398.9 MiB to 1,415.2 MiB (about 16.3 MiB). The presents/s
+     spread is only 1.0% and is not an FPS claim.
+
+     This proves the reuse arm is non-vacuous and removes repeated allocation:
+     only 59 payload provisions serve 10,523 subsequent reuses at 64 MiB. It
+     does not promote headroom: 6,502 aggregate denials and 14,102 capacity
+     rotations remain, while CB/pass locality remains far above the Legacy
+     target. The run artifact still does not record the resolved headroom
+     values inside `result.json`; they are recoverable only from the supervised
+     command and artifact name. Making those policy values first-class artifact
+     metadata remains required before a default change.
+   - **Four denial causes still collapse into one counter.**
+     `direct_slot_capacity_lease_denials` is written from two call sites
+     covering aggregate-limit denial, snapshot invalidity, and reconciliation
+     rejection, while adopt rejection lands in
+     `direct_chunkslot_slot_provision_failed` beside a genuine `bad_alloc`. A
+     threshold on it cannot separate "the aggregate is too small" (raise it)
+     from "the ledger reconciliation is broken" (fix it). In both 2026-09-03
+     runs the two happen to coincide, but that is a coincidence, not a
+     contract. Splitting them, plus a direct
+     `payloads_provisioned`/`_peak` gauge so the working-set number above is a
+     reading rather than an inference, is the minimum that makes a denial
+     actionable.
+   - **`process_memory_low4_*` cannot test the exhaustion hypothesis on this
+     runtime.** The 64 MiB run reports
+     `low4_mapped_bytes = low4_mapped_peak_bytes = 4 GiB - 4 KiB` with a
+     largest gap of 4,096 -- constant between current and peak, i.e. the Wine
+     preloader's static WoW64 reservation, not dxmt9 pressure. The metric
+     saturates before dxmt9 allocates anything, so it is not evidence for or
+     against the 32-bit exhaustion hypothesis and a gate on it would be
+     vacuous. Re-pointing it at the 32-bit PE process is the open work.
+   - **Three integer/pricing defects are recorded, none load-bearing for
+     reuse.** `directSlotProvisionCoordinatorBytes` and
+     `directSlotProvisionRetainedBytes` use unchecked `*`/`+` while
+     `directSlotProvisionCoordinator` deliberately saturates to `SIZE_MAX` and
+     `chunkSlotPhysicalRetainedBytes` saturates too, so the two figures the
+     lease compares have different overflow disciplines. `kDirectSlotWorstCaseBytesPerDraw` prices the lookup triples at four buckets
+     per record, which is right for `draws >= 2` and wrong at exactly one draw,
+     where `chunkSlotUniformLookupBucketCount`'s floor of 8 makes it eight. And
+     `DXMT9_DISABLE_DRAW_UNIFORM_PAYLOAD_DEDUP=1` desynchronises the payload
+     family's `next` chain from its record count, which makes every
+     populated-slot continuation capacity-reject -- the exact regression
+     R-BACK-2.104 removes, reintroduced by a perf-diagnostic env. All three are
+     out of scope here and none affects the reuse predicate, which reads actual
+     capacities.
+3. **Retained-capacity reuse removes the redundant reprovision, and is
+   default-off with it (`R-BACK-2.105`).** A reclaimed compatibility payload
+   keeps the storage its previous provision bought, so re-staging a fresh
+   topology into it was a free-and-re-malloc of the whole 31-vector
+   topology -- up to the declared per-payload ceiling -- inside the queue's
+   critical section, producing a payload physically indistinguishable from the
+   one discarded. The empty arm now has a typed `ReuseProvisionedEmpty`
+   outcome gated on complete per-dimension physical coverage, complete
+   retention across reclaim, and an identity-qualified ledger entry. What is
+   proven and what is not:
+
+   - **Proven in the model.** `DirectSlotCapacityProvisioning` gained payload
+     retention and three counterexample configurations, one per premise:
+     `.no-reuse` (adopting a sufficient payload at all),
+     `.detached-owner-storage` (bytes-only sufficiency over a payload that lost
+     one dimension to `detachResourceOwners`), and `.stale-ledger-reuse` (reuse
+     skipping the lease while the ledger describes pre-growth bytes after a
+     denied lease). All three, and the main configuration, were checked with
+     TLC on 2026-09-03.
+   - **Proven natively.** A per-dimension retained-allocation removal sweep over
+     all 30 currently enumerated provisioned
+     dimensions, an allocation-and-address-stability check across the lookup
+     restore, the reclaim round trip, and the stale-ledger counterexample. The
+     sweep is bound to `DirectSlotProvisionAllocation::Count`, so changes to
+     the current allocation inventory fail its static assertion. An entirely
+     new `ChunkSlot` vector is not discoverable by C++ reflection: it must join
+     that inventory, the capacity predicates, retained-byte pricing and this
+     sweep together.
+   - **Exercised in a same-build wild qualification.** The 12 MiB and 64 MiB
+     runs above execute the reuse arm 3,539 and 10,523 times respectively with
+     zero rejection. Reuse itself produces the same physical shape as a fresh
+     provision; its locality effect comes from avoiding the aggregate lease's
+     old-plus-staged double charge, so already provisioned payloads keep serving
+     adjacent sources even when a fresh replacement would be denied. The runs
+     establish fewer provisions and better locality, but they do not directly
+     time allocator or queue-critical-section work.
+   - **The reclaim round trip is a new lifecycle coupling.** The
+     `drawShaderLayouts` buffer is swapped out under the queue mutex, emptied
+     with the mutex released, and swapped back after the relock and after the
+     Reclaiming identity/seq are revalidated, at both reclaim sites. The two
+     swaps are O(1) and allocate nothing; the owner destruction is
+     O(layout rows) and stays outside the mutex, exactly where it was before.
+     What is new is that a payload's retained capacity now depends on the
+     second half running. While that buffer is detached, the payload carries
+     its allocation size in `detachedResourceOwnerRetainedBytes`, so an
+     all-payload aggregate snapshot sees an exact retained total throughout
+     the unlocked destruction window. `restoreResourceOwnerStorage` retains a
+     defensive no-op for a violated local premise, but that is not a production
+     compatibility fallback: an identity/seq mismatch after detach poisons the
+     Tape and returns before restore. The detached byte witness remains
+     meaningful only during the live round trip; an intentionally abandoned
+     test path clears it through `abandonDetachedResourceOwnerStorage` after
+     destroying the detached allocation.
+   - **The whole-payload alternative was rejected, and why is worth
+     recording.** Clearing the entire payload in the unlocked window is
+     simpler, but `CpuReadyTape::compatibilityPayloadRetainedBytes` reads every
+     payload's vector capacities under the queue mutex, including a Reclaiming
+     one. `clear()` writes only sizes and `capacity()` reads only the other two
+     pointers, so the values would not tear -- but it is still concurrent
+     access to the same container object, and the reuse predicate's soundness
+     rests on those capacity reads. The selected round trip instead exposes an
+     immutable scalar byte witness while the owner vector is outside the slot;
+     capacity reconciliation never reads that detached vector.
+
+4. **The raw handle closure is re-marked per span.** `markArenaSourceResources`
    is now exact-once (it starts at the transaction's own command checkpoint),
    but `markChunkResourcesWithExactSeq(raw.resourceEntries)` still runs once per
    span. That is deliberate -- retention is sequence-qualified and each span
@@ -235,13 +375,13 @@ model/code closure gaps, not claims delegated to the wild gate.
    would remove it. PSO prefetch is already exact-once by construction:
    `prefetchSlotPipelines` starts at `slot.prefetchedPipelineCommandCursor()`
    and never rescans an earlier span's commands or the semantic raw.
-4. **Ordered-control spans are untested end-to-end.** The
+5. **Ordered-control spans are untested end-to-end.** The
    `releaseCpuReadySessionBeforeOrderedControl` path publishes the current
    chunk, so a suffix span opens on an empty slot and never consults the
    witness -- but only while `cpuReadySessionLaneEnabled_` is true. With that
    lane off the suffix span is a same-raw continuation and takes the witness
    path. Only the compatibility-range cut has a production differential.
-5. **`DirectOversized` remains unreachable** from this lane: it is an
+6. **`DirectOversized` remains unreachable** from this lane: it is an
    Arena-lane disposition, and `emissionPlanDisposition` never produces it.
    `LegacySegmented` is likewise production-unreachable from this router: it is
    produced only for `EmissionPlanReason::Coverage`, and the coverage fold is
@@ -250,7 +390,7 @@ model/code closure gaps, not claims delegated to the wild gate.
    alphabet as the typed report of exactly that, and the legacy whole-raw
    classifier still produces it for a multi-segment plan, so it is not dead in
    the test lane.
-6. **`classifyDirectChunkSlotReplay` is production-dead but deliberately
+7. **`classifyDirectChunkSlotReplay` is production-dead but deliberately
    retained.** No production call site remains; routing goes through
    `planReplayEmission` + `emissionPlanDisposition`. It is kept, and now
    documented in-header as legacy/test-only, because it is the independent
@@ -261,7 +401,7 @@ model/code closure gaps, not claims delegated to the wild gate.
    it out of the production header and into the spec support surface) or retire
    it together with the assertions it backs. Doing so is a bounded but separate
    change; it was deliberately not folded into this one.
-7. **Present ordering has no wild evidence.** The `PresentOrdering` block is
+8. **Present ordering has no wild evidence.** The `PresentOrdering` block is
    pinned by the pure classifier truth table and by two production routing
    fixtures (`Draw, Present, Draw` and a duplicate Present), both asserting
    compatibility routing and the exact published source order. Whether either
@@ -269,7 +409,7 @@ model/code closure gaps, not claims delegated to the wild gate.
    fail-closed, so the cost of it never firing is zero and the cost of it
    firing is one whole-raw compatibility replay.
 
-8. **Default-on is provisional, not promoted evidence.** The enclosing
+9. **Default-on is provisional, not promoted evidence.** The enclosing
    `DXMT9_DIRECT_CHUNK_SLOT_REPLAY` selector was already policy-default-on when
    lease spans replaced whole-raw routing. Until the R-BACK-2.103 composed
    refinement, complete native differential, deterministic GPU oracle, and

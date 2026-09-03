@@ -29,6 +29,7 @@ inline std::size_t chunkSlotPhysicalRetainedBytes(
   add(bytes(slot.commandHeaders.capacity(), sizeof(MetalCommandHeader)));
   add(bytes(slot.drawHotStates.capacity(), sizeof(FlatDrawStateRecord)));
   add(bytes(slot.drawShaderLayouts.capacity(), sizeof(DrawShaderLayoutContext)));
+  add(slot.detachedResourceOwnerRetainedBytes);
   add(bytes(slot.drawDebugSnapshots.capacity(), sizeof(DrawDebugSnapshot)));
   add(bytes(slot.drawPsoSubviews.capacity(), sizeof(DrawPsoSubview)));
   add(bytes(slot.drawUniformFixedPayloads.capacity(),
