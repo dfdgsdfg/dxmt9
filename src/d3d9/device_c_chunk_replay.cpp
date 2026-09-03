@@ -1944,7 +1944,7 @@ int32_t replayEmissionSpans(
     auto begin = queue.beginDirectChunkSlotReplay(
         raw.replaySeq, span.capacity, span.plannedBytes, producerIdentity,
         span.recordCount, span.drawCount, span.leaseOrdinal,
-        span.finalLeaseSpan, /*allowRotation=*/true, controlMode);
+        span.finalLeaseSpan, /*allowRotation=*/false, controlMode);
     if (begin.status !=
             dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Ready ||
         !begin.lease) {
@@ -2229,7 +2229,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
       }
       const auto disposition =
           dxmt9::d3d9::emissionPlanDisposition(plan, /*captureOrTrace=*/false);
-      if (!plan.spansExecutable() || plan.leaseOwningSpanCount() == 0) {
+      if (!plan.spansExecutable() || plan.leaseOwningSpanCount() == 0 ||
+          !plan.rotationFreeProductionEligible()) {
         // Two pre-effect populations, both wholly compatibility-owned:
         //
         //  * `!spansExecutable()` -- a lease-owning span would have had to
@@ -2244,6 +2245,12 @@ int32_t replayPlannedChunk(D9CDevice* device,
         //  * no lease-owning span -- no island-eligible draw anywhere. This is
         //    the state-only / all-compatibility population and it keeps
         //    exactly the ownership it had before spans existed.
+        //  * not rotation-free -- a second Direct lease, or an ordinary
+        //    prefix before the only lease, could encounter capacity rejection
+        //    after an earlier span already had effects. Publishing the
+        //    populated prefix to make room caused a reproducible GT1 visual
+        //    corruption; until rotation owns a complete incoming first-draw
+        //    and resource witness, the serial whole-raw lane is authoritative.
         if (directReplayObservabilityEnabled) {
           dxmt9::perf::countDirectChunkSlotReplayCheapRejected();
         }

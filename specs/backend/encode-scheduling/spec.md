@@ -2122,13 +2122,15 @@ flowchart LR
 The formal state carries the raw and span cursors, active-raw witness, slot
 generation, capacity vector, construction extent, open draw run, parked
 Present, effect cut, receipt, resource sequence, settlement, and completion.
-Capacity rotation is a generation transition to a fresh destination, not a
-fallback and not permission to copy or resize an already populated final
-extent. It is a **storage** event, never by itself a Metal one: a rotation adds
-a command-buffer and render-pass boundary the same-capacity serial reference
-does not have, so it may only be reached from a typed forced-capacity bound
-(R-BACK-2.103 clause 3), never from a slot that was simply reserved to fit the
-previous source exactly.
+Capacity rotation is modeled as a generation transition to a fresh destination,
+but it is not currently a production action. Although it originates as a
+**storage** event, publishing the populated prefix adds a command-buffer and
+render-pass boundary the same-capacity serial reference does not have. The
+production adapter therefore admits only a plan whose first executable span is
+its sole Direct lease and passes `allowRotation = false`; capacity rejection is
+a pre-effect whole-raw serial fallback. Re-enabling rotation requires both a
+typed forced-capacity bound (R-BACK-2.103 clause 3) and a complete incoming
+first-draw/resource witness.
 
 ### Empty-slot storage provisioning (R-BACK-2.104)
 

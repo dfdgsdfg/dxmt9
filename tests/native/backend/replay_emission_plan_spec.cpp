@@ -935,6 +935,8 @@ void presentOrderingIsClassifiedBeforeAnyEffect() {
               plan.leaseSpans.front().presentTrailingCoordinator &&
               plan.leaseSpans.front().containsTerminalPresent,
           "the span reports one trailing, terminal Present");
+    check(plan.rotationFreeProductionEligible(),
+          "one leading Direct lease with a Present tail is rotation-free");
   }
 
   // 5. Present after a compatibility cut. The cut ends the first span, so the
@@ -1221,6 +1223,17 @@ void compatibilityRangeDoesNotPoisonNeighbouringSpans() {
             plan.leaseSpans[2].leaseOrdinal == 1u &&
             plan.leaseSpans[2].finalLeaseSpan,
         "the compatibility range is an ordinary span between two direct ones");
+  check(!plan.rotationFreeProductionEligible(),
+        "multiple Direct leases fail closed before production effects");
+
+  const std::array prefixSpecs{upDrawRecord(), islandDrawRecord()};
+  const auto prefixFixture = makeValidatedFixture(prefixSpecs);
+  const auto prefixPlan = dxmt9::d3d9::planReplayEmission(
+      prefixFixture.view(), 15u, 4096u);
+  check(prefixPlan.partitioned() && prefixPlan.leaseOwningSpanCount() == 1u &&
+            !prefixPlan.leaseSpans.front().ownsLease &&
+            !prefixPlan.rotationFreeProductionEligible(),
+        "an ordinary prefix before the only Direct lease fails closed");
 }
 
 void aRawWithNoIslandOwnsNoLease() {

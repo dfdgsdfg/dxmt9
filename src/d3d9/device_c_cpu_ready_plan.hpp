@@ -437,6 +437,18 @@ struct ReplayEmissionPlan {
     }
     return count;
   }
+
+  // Production may execute the plan without publishing a populated prefix
+  // only when the first executable span owns the plan's sole Direct lease.
+  // A later Direct begin can be capacity-rejected after an earlier ordinary
+  // span has already had effects, so it cannot fall back whole-raw. Publishing
+  // the populated prefix to make room is not a storage-only action: it creates
+  // an observable command-buffer/pass boundary and is therefore excluded
+  // until rotation carries a complete first-draw/resource witness.
+  bool rotationFreeProductionEligible() const noexcept {
+    return spansExecutable() && leaseOwningSpanCount() == 1u &&
+           !leaseSpans.empty() && leaseSpans.front().ownsLease;
+  }
 };
 
 // Pure, allocation-bounded, pre-effect. Complete wire validity is supplied by

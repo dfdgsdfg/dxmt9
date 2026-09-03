@@ -1484,10 +1484,15 @@ closed at every island and coordinator cut, and explicitly at a span boundary
 the assembler never sees, so `Draw, Draw, <cut>, Draw` produces two run records.
 
 A populated slot that cannot hold a span's exact reservation, including its
-coordinator dimensions, must publish the existing extent pre-effect and acquire
-a fresh empty final-slot transaction, bounded to one rotation per admission. It
-must never reserve-grow or copy the old final extent, and never degrade a
-direct span to draw-by-draw ordinary replay. The exact reservation is a
+coordinator dimensions, must not publish the existing extent merely to obtain
+storage. If no effect of the incoming raw has occurred, the complete raw must
+fall back once to the authoritative serial path while the populated prefix
+remains open. Production may execute a span plan without rotation only when
+the first executable span owns the plan's sole Direct lease; plans with a later
+or second Direct lease must fall back whole before effects. A future rotation
+policy must first carry a complete incoming first-draw/resource witness and a
+typed forced-reference-capacity proof. It must never reserve-grow or copy the
+old final extent. The exact reservation is a
 *semantic* bound on what the transaction may append; it is not the slot's
 physical storage capacity, and it must never be used as one. R-BACK-2.104 owns
 that distinction. Before any span has applied an
@@ -1517,7 +1522,7 @@ and storage generations, assembler checkpoint, reserved and constructed SoA
 dimensions, open draw-run state, irreversible-effect cut, parked Present,
 destination receipt, per-span sequence-qualified resource closure, source
 settlement, completion, and reclaim. It must cover more than one separator,
-capacity rotation onto a fresh slot, slot reuse, an ordered control with the
+capacity-rotation rejection before effects, slot reuse, an ordered control with the
 CPU-ready session lane both enabled and disabled, and failure before and after
 each effect boundary. Under explicit replay-worker, encode-worker, completion,
 and reclaim fairness assumptions, every admitted raw must eventually settle,
@@ -1559,11 +1564,12 @@ conflates, and must never let a lower one decide a higher one:
    points. These are the observable cadence.
 
 Storage rotation is a (2)/(3) event and must not be treated as a (4) event.
-Direct must introduce no command-buffer or render-pass boundary beyond the
-same-capacity serial reference unless a typed forced-capacity proof under (3)
-justifies it, and that proof must name which bound was reached. Counting a
-rotation under another publication reason, or reporting the cadence only as an
-aggregate, does not discharge this obligation.
+Production must introduce no command-buffer or render-pass boundary beyond the
+same-capacity serial reference. Rotation therefore remains fail-closed unless
+a typed forced-capacity proof under (3) names the reached bound and a complete
+incoming first-draw/resource witness proves that publishing the prefix cannot
+alter rendering. Counting a rotation under another publication reason, or
+reporting the cadence only as an aggregate, does not discharge this obligation.
 
 Exact final-storage evidence is data-level rather than temporal. A bounded
 native differential must compare the serial reference with Direct lease replay
@@ -1571,7 +1577,7 @@ for the complete ordered command stream, projected next state, every populated
 `ChunkSlot` SoA and payload range, state and uniform generations, draw-run
 boundaries, resource and sequence identities, Present disposition, completion,
 and failure result. It must exercise every Direct-capable coordinator family,
-multiple cuts, capacity rotation, and the configured maximum local boundary
+multiple cuts, capacity-rotation rejection, and the configured maximum local boundary
 values. Planned reservation must equal or conservatively bound every append,
 and no final SoA vector or nested payload may grow after reservation.
 
