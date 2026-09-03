@@ -516,6 +516,107 @@ deterministic Metal readback oracle provides the exact route/pixel identity
 evidence. These artifacts use the `direct-slot-ledger-fixed-*` suffix under
 `experiments/output/` and are intentionally untracked.
 
+### Compatibility-lane draw-run island batching (2026-09-04)
+
+The rotation-free Direct subset is deliberately narrow, and everything outside
+it replays through the ordinary sink: a whole raw whose plan is not
+`rotationFreeProductionEligible`, every exact `CompatibilityRange`, every
+ordered-control and compatibility separator span, and every raw at all under
+`DXMT9_DIRECT_CHUNK_SLOT_REPLAY=0` or `DXMT_TRACE_RENDER`. The corrected copy
+ledger recorded in the wild matrix above shows that is most of the measured
+workloads: only GT2 selects a non-vacuous Direct lane.
+
+That sink called the queue **once per draw**. Each `DeviceReplaySink::draw`
+reached `submitDirectReplayDrawFromCurrentState`, which found no active Arena or
+Direct destination and fell through to `upperDevice_->submitDrawRun(..., 1 draw)`
+-- one `CommandQueue::mutex_` acquisition, one `ensureWritingSlot`, one
+`maybeCommitDrawChunk` decision, one command header, one `DrawRunRecord` and one
+`FlatDrawStateRecord` copy for every single D3D9 draw record.
+
+Consecutive ordinary draws now accumulate into a bounded source-local batch of
+stateful runs and reach the queue through one outer `submitDrawRunBatch`
+submission. A physical slot-capacity split may still reacquire internally.
+The decision for the current run is the pure
+`compatibilityDrawBatchAdmission`
+(`include/dxmt9/core_compat_draw_batch.hpp`): a draw may extend the open run only
+when its `CompatibilityDrawBatchIdentity` -- the nine binding-agnostic
+draw-state cache generations, the live stream buffers/offsets/strides, the index
+binding and the per-draw alpha-test trio -- is bit-identical to the run's. The
+comparison is against the *pending* run, never a history, so `A -> B -> A`
+retains three runs but publishes them in one outer queue submission.
+
+What this is **not**: it does not touch Direct multi-lease eligibility,
+`rotationFreeProductionEligible`, populated-slot rotation, or any
+`R-BACK-2.102` disposition. It introduces no queue lease, no new final-slot
+transaction and no carrier: an admitted extension appends one `DrawParam` and
+one `DrawParamPayloadView`; when identity changes, the current run's canonical
+state/uniforms are retained in a bounded value entry and a new run begins.
+The flat draw/payload arrays avoid per-draw allocations, while the queue copies
+each retained run into final storage under one writer submission.
+
+Ordering safety rests on three cuts, all of which publish before anything else
+can run:
+
+* `replayResolvedChunk` classifies each record through the shared
+  `ImportedRecordReplayInfo` projection. Only a resource-free, non-barrier
+  `ConstantUpload` (`PureProjection`) may execute while an island is open;
+  `StateApply`, coordinators, ordered controls, resource/surface operations,
+  UP/TriangleFan draws and unknown records are `ObservableEffect` and cut
+  before projection or dispatch. Thus no record that can mutate the cached
+  canonical state or resource closure borrowed by the run executes across it;
+  a `ConstantUpload` may only advance the live shadow, and the next draw's
+  generation-qualified identity decides whether that projection was a no-op.
+* `submitCompatibilityReplayDrawBatched` closes the current run whenever the
+  identity moves, and refuses to read the open run's cache at all unless every
+  captured generation is still unmoved -- which is exactly the condition under
+  which `cachedBaseDrawStateForSubmissionBatch()` would be a content-preserving
+  hit. A bounded total-draw ceiling flushes the retained runs as one batch.
+* Every `Device` queue submission boundary (`submitDrawRunInternal`,
+  `submitDirectReplayDrawFromCurrentState`, and the public `clear`/`presentEx`
+  entry points) publishes first, and a scope guard
+  in `replayResolvedChunk` publishes on every early return, including the
+  failure returns -- the run holds `DrawParamPayloadView` spans into the replay
+  scratch, which dies with that call.
+
+Command-buffer and render-pass counts cannot rise from this policy: the batch
+does not add any command or pass boundary, and all retained runs are appended
+under the same outer queue submission (an internal capacity split may commit a
+slot and reacquire). It does not promise fewer DrawRun records
+when state changes; its direct target is queue mutex/acquisition overhead.
+
+**Evidence today.** `dxmt9-compat-draw-batch-spec` -- an exhaustive truth table
+over the admission predicate (batchable x open-depth x identity, plus a 6x6
+identity-class matrix in which each class differs in exactly one dimension), and
+a model of the production cut discipline over every record stream of length 1..5
+(9,330 cases, including no-op and changed constant projections) asserting
+exact-order conservation, single-identity runs, run maximality with a recorded
+cut cause, and one outer queue submission per published batch. Named shapes pin
+`A -> B -> A`, a no-op constant inside an island, a changed constant cutting on
+the next draw, a resource-bearing record between two identical draws, a UP draw,
+and the ceiling split.
+
+**Open, and not claimed.** There is no wild, GPU-readback or locality evidence
+for this lane yet, and no A/B on any workload. The counters below exist to
+supply it and target the obvious shape -- `replay_compat_draw_batch_draws /
+replay_compat_draw_batches` is the draws-per-queue-acquisition ratio, and
+`replay_compat_draw_batch_unbatched_draws` is the residual per-draw fallback:
+
+| Counter | Meaning |
+|---|---|
+| `replay_compat_draw_batches` | Published source-local compatibility batches, i.e. outer queue submissions for ordinary draw islands. |
+| `replay_compat_draw_batch_draws` | Draws those runs folded. |
+| `replay_compat_draw_batch_multi` | Runs holding more than one draw. |
+| `replay_compat_draw_batch_max_draws` | Largest run observed. |
+| `replay_compat_draw_batch_starts` / `_extends` | Runs opened / draws admitted to an open run. |
+| `replay_compat_draw_batch_unbatched_draws` | Draws still submitted one at a time (UP, TriangleFan, render trace). |
+| `replay_compat_draw_batch_cut_identity` / `_capacity` / `_unbatchable` | Mutually exclusive publication causes. |
+
+The identity is deliberately conservative: a real constant change between two
+draws bumps a uniform generation and cuts the run, so a workload whose producer
+emits constants between every draw will show a ratio near `1.0` and is
+unchanged. Whether the ratio is materially above `1.0` on GT1/GT2/GT3/SFIV is
+unmeasured, so no performance claim is made here.
+
 ## Current status correction (2026-08-21)
 
 The production proof-core adapter and its fail-closed enforcement are

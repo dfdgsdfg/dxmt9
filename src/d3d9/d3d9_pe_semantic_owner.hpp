@@ -165,12 +165,21 @@ inline bool checkedSizeMultiply(std::size_t lhs, std::size_t rhs,
 struct PeSemanticIdentitySet {
   // A record has at most 64 wire-visible handles; the extra slots cover the
   // direct typed pins retained by the owner but intentionally omitted from
-  // the record-local wire handle table.
+  // the record-local wire handle table.  Wire visibility is a per-entry flag
+  // rather than a second set: one walk then answers the retention question and
+  // the final-wire handle count together, so admission and emission cannot
+  // disagree about which identities a record carries.
   std::array<D9CWireObjectIdentity, 80u> values{};
   std::array<const void*, 80u> objects{};
+  std::array<bool, 80u> wireVisible{};
   std::size_t count = 0u;
+  std::size_t wireCount = 0u;
 
-  bool add(const PeWireObjectRef& ref, std::uint32_t kind) noexcept {
+  // `inserted` reports a newly seen identity that owns an object, so a caller
+  // applies its per-identity retention work exactly once per record.
+  bool add(const PeWireObjectRef& ref, std::uint32_t kind, bool wire,
+           bool& inserted) noexcept {
+    inserted = false;
     if (!ref.object) {
       return ref.identity.kind == 0u && ref.identity.generation == 0u &&
              ref.identity.objectId == 0u;
@@ -179,13 +188,24 @@ struct PeSemanticIdentitySet {
     for (std::size_t i = 0u; i < count; ++i) {
       if (values[i].kind == ref.identity.kind &&
           values[i].objectId == ref.identity.objectId) {
-        return values[i].generation == ref.identity.generation &&
-               objects[i] == ref.object;
+        if (values[i].generation != ref.identity.generation ||
+            objects[i] != ref.object) {
+          return false;
+        }
+        if (wire && !wireVisible[i]) {
+          wireVisible[i] = true;
+          ++wireCount;
+        }
+        return true;
       }
     }
     if (count == values.size()) return false;
-    values[count++] = ref.identity;
-    objects[count - 1u] = ref.object;
+    values[count] = ref.identity;
+    objects[count] = ref.object;
+    wireVisible[count] = wire;
+    if (wire) ++wireCount;
+    ++count;
+    inserted = true;
     return true;
   }
 };
@@ -343,78 +363,126 @@ inline bool admissionPayloadBytes(const PeSemanticRecordInput& input,
 
 }  // namespace detail
 
-inline bool planPeSemanticAdmission(const PeSemanticRecordInput& input,
-                                    PeSemanticAdmissionPlan& out) noexcept {
+// Producer role facts. They are pure functions of the producer kind, so the
+// prepared witness resolves them once instead of re-deriving the same boolean
+// chains inside header validation.
+constexpr bool isPeSemanticConstantProducer(
+    PeSemanticProducerKind producer) noexcept {
+  return producer == PeSemanticProducerKind::VsFloatConstant ||
+         producer == PeSemanticProducerKind::VsIntConstant ||
+         producer == PeSemanticProducerKind::VsBoolConstant ||
+         producer == PeSemanticProducerKind::PsFloatConstant ||
+         producer == PeSemanticProducerKind::PsIntConstant ||
+         producer == PeSemanticProducerKind::PsBoolConstant;
+}
+
+constexpr bool isPeSemanticUpProducer(
+    PeSemanticProducerKind producer) noexcept {
+  return producer == PeSemanticProducerKind::DrawPrimitiveUp ||
+         producer == PeSemanticProducerKind::DrawIndexedPrimitiveUp;
+}
+
+// One identity walk over the immutable input.  `onUniqueRetained` is invoked
+// exactly once per newly seen retained identity that owns an object, in
+// admission order, with the owner-facing pin kind (0 surface, 1 texture,
+// 2 buffer, 3 shader, 4 declaration, 5 query).  An observer that returns false
+// rejects the whole plan, which is how the owner folds its retention-delta and
+// generation-alias proof into this same pass instead of walking the record a
+// second time.
+template <typename OnUniqueRetained>
+  requires std::is_nothrow_invocable_r_v<bool, OnUniqueRetained&,
+                                         const PeWireObjectRef&, std::size_t>
+inline bool planPeSemanticAdmissionWith(
+    const PeSemanticRecordInput& input, PeSemanticAdmissionPlan& out,
+    OnUniqueRetained&& onUniqueRetained) noexcept {
   out = {};
   out.recordType = input.recordType;
-  // One wire set and one retention set keep the planner's fixed stack bounded
+  // One wire/retention set keeps the planner's fixed stack bounded
   // independently of the six handle kinds; kind remains part of identity.
-  detail::PeSemanticIdentitySet wirePins{};
-  detail::PeSemanticIdentitySet retainedPins{};
-  const auto direct = [&](const PeWireObjectRef& ref,
-                          std::uint32_t kind) noexcept {
-    return wirePins.add(ref, kind);
+  detail::PeSemanticIdentitySet pins{};
+  auto&& observe = onUniqueRetained;
+  const auto retained = [&](const PeWireObjectRef& ref, std::uint32_t kind,
+                            std::size_t pinKind, bool wire) noexcept {
+    bool inserted = false;
+    if (!pins.add(ref, kind, wire, inserted)) return false;
+    if (!inserted) return true;
+    if (out.uniquePinCounts[pinKind] ==
+        std::numeric_limits<std::uint32_t>::max()) return false;
+    ++out.uniquePinCounts[pinKind];
+    return observe(ref, pinKind);
   };
-  if (!retainedPins.add(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE) ||
-      !retainedPins.add(input.surface1, D9C_CHUNK_HANDLE_KIND_SURFACE) ||
-      !retainedPins.add(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE) ||
-      !retainedPins.add(input.texture1, D9C_CHUNK_HANDLE_KIND_TEXTURE) ||
-      !retainedPins.add(input.buffer0, D9C_CHUNK_HANDLE_KIND_BUFFER) ||
-      !retainedPins.add(input.buffer1, D9C_CHUNK_HANDLE_KIND_BUFFER) ||
-      !retainedPins.add(input.shader0, D9C_CHUNK_HANDLE_KIND_SHADER) ||
-      !retainedPins.add(input.shader1, D9C_CHUNK_HANDLE_KIND_SHADER) ||
-      !retainedPins.add(input.declaration, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) ||
-      !retainedPins.add(input.query, D9C_CHUNK_HANDLE_KIND_QUERY)) return false;
+  // Every direct slot is already retained above, so this ordinarily only
+  // raises the wire-visible flag. It still routes through `retained` so a
+  // future producer that exposes a reference outside the ten direct slots
+  // cannot become wire-visible without also being counted and retained.
+  const auto direct = [&](const PeWireObjectRef& ref, std::uint32_t kind,
+                          std::size_t pinKind) noexcept {
+    return retained(ref, kind, pinKind, true);
+  };
+  if (!retained(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u, false) ||
+      !retained(input.surface1, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u, false) ||
+      !retained(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u, false) ||
+      !retained(input.texture1, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u, false) ||
+      !retained(input.buffer0, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u, false) ||
+      !retained(input.buffer1, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u, false) ||
+      !retained(input.shader0, D9C_CHUNK_HANDLE_KIND_SHADER, 3u, false) ||
+      !retained(input.shader1, D9C_CHUNK_HANDLE_KIND_SHADER, 3u, false) ||
+      !retained(input.declaration, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, 4u,
+                false) ||
+      !retained(input.query, D9C_CHUNK_HANDLE_KIND_QUERY, 5u, false)) {
+    return false;
+  }
   bool directValid = true;
   switch (input.producer) {
     case PeSemanticProducerKind::Present:
     case PeSemanticProducerKind::ColorFill:
-      directValid = direct(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE);
+      directValid = direct(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u);
       break;
     case PeSemanticProducerKind::GenerateMipmaps:
-      directValid = direct(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
+      directValid = direct(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u);
       break;
     case PeSemanticProducerKind::StretchRect:
     case PeSemanticProducerKind::UpdateSurface:
     case PeSemanticProducerKind::Readback:
-      directValid = direct(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE) &&
-                    direct(input.surface1, D9C_CHUNK_HANDLE_KIND_SURFACE);
+      directValid = direct(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u) &&
+                    direct(input.surface1, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u);
       break;
     case PeSemanticProducerKind::UpdateTexture:
-      directValid = direct(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE) &&
-                    direct(input.texture1, D9C_CHUNK_HANDLE_KIND_TEXTURE);
+      directValid = direct(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u) &&
+                    direct(input.texture1, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u);
       break;
     case PeSemanticProducerKind::QueryIssue:
-      directValid = direct(input.query, D9C_CHUNK_HANDLE_KIND_QUERY);
+      directValid = direct(input.query, D9C_CHUNK_HANDLE_KIND_QUERY, 5u);
       break;
     case PeSemanticProducerKind::ReszDepthResolve:
-      directValid = direct(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE) &&
-                    direct(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
+      directValid = direct(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u) &&
+                    direct(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u);
       break;
     default:
       break;
   }
   if (!directValid) return false;
-  const auto sparse = [&](auto rows, std::uint32_t kind,
+  const auto sparse = [&](auto rows, std::uint32_t kind, std::size_t pinKind,
                           std::size_t sparseKind) noexcept {
     std::uint32_t count = 0u;
     if (!detail::checkedSizeToU32(rows.size(), count)) return false;
     out.sparseCounts[sparseKind] = count;
     for (const auto& row : rows) {
       if (!row.wire.valid) continue;
-      if (!wirePins.add(row.object, kind) ||
-          !retainedPins.add(row.object, kind)) return false;
+      if (!retained(row.object, kind, pinKind, true)) return false;
     }
     return true;
   };
   const auto& s = input.sparse;
-  if (!sparse(s.textures, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u) ||
-      !sparse(s.streams, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u) ||
-      !sparse(s.shaders, D9C_CHUNK_HANDLE_KIND_SHADER, 3u) ||
-      !sparse(s.vertexInputs, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, 4u) ||
-      !sparse(s.indexBuffers, D9C_CHUNK_HANDLE_KIND_BUFFER, 5u) ||
-      !sparse(s.renderTargets, D9C_CHUNK_HANDLE_KIND_SURFACE, 6u) ||
-      !sparse(s.depthStencils, D9C_CHUNK_HANDLE_KIND_SURFACE, 7u)) return false;
+  if (!sparse(s.textures, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u, 1u) ||
+      !sparse(s.streams, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u, 2u) ||
+      !sparse(s.shaders, D9C_CHUNK_HANDLE_KIND_SHADER, 3u, 3u) ||
+      !sparse(s.vertexInputs, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, 4u, 4u) ||
+      !sparse(s.indexBuffers, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u, 5u) ||
+      !sparse(s.renderTargets, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u, 6u) ||
+      !sparse(s.depthStencils, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u, 7u)) {
+    return false;
+  }
   const auto storeSparseCount = [&](std::size_t index,
                                     std::size_t count) noexcept {
     std::uint32_t bounded = 0u;
@@ -457,22 +525,75 @@ inline bool planPeSemanticAdmission(const PeSemanticRecordInput& input,
       !addBytes(s.psBoolConstants.registerBytes.size()) ||
       !addBytes(s.upIndexData.size()) || !addBytes(s.upVertexData.size())) return false;
   if (!detail::checkedSizeToU32(semanticBytes, out.semanticBytes) ||
-      !detail::checkedSizeToU32(wirePins.count, out.handleCount)) return false;
-  for (std::size_t i = 0u; i < retainedPins.count; ++i) {
-    const auto kind = retainedPins.values[i].kind;
-    if (kind > D9C_CHUNK_HANDLE_KIND_QUERY) return false;
-    const auto pinKind = kind == D9C_CHUNK_HANDLE_KIND_SURFACE
-        ? 0u
-        : kind == D9C_CHUNK_HANDLE_KIND_TEXTURE
-            ? 1u
-            : static_cast<std::size_t>(kind);
-    if (out.uniquePinCounts[pinKind] ==
-        std::numeric_limits<std::uint32_t>::max()) return false;
-    ++out.uniquePinCounts[pinKind];
-  }
+      !detail::checkedSizeToU32(pins.wireCount, out.handleCount)) return false;
   out.valid = true;
   return true;
 }
+
+inline bool planPeSemanticAdmission(const PeSemanticRecordInput& input,
+                                    PeSemanticAdmissionPlan& out) noexcept {
+  return planPeSemanticAdmissionWith(
+      input, out,
+      [](const PeWireObjectRef&, std::size_t) noexcept { return true; });
+}
+
+// Why a prepared record exists at all: admission, retention, header
+// validation, and emission accounting each used to re-derive the same facts
+// from the same immutable input against the same unchanged owner state.  This
+// is the single call-local witness that computes them once.  It is produced by
+// PeSemanticBatchOwner::prepareAdmission(), consumed by the transactional
+// append, and never stored: it borrows nothing and outlives no call.
+//
+// It is deliberately not accepted by any mutating entry point.  The owner
+// re-prepares internally, so a forged witness cannot admit a record; the
+// public form exists so capacity/retention truth tables are testable without
+// exposing owner internals.
+enum class PeSemanticAdmissionOutcome : std::uint8_t {
+  Admissible,
+  Unavailable,
+  Malformed,
+  Capacity,
+};
+
+struct PeSemanticPreparedRecord {
+  PeSemanticAdmissionPlan plan{};
+  // Owner-qualified retention delta: how many novel typed pins per kind this
+  // record adds beyond the pins the destination chunk already holds.
+  std::array<std::uint32_t, 6u> retentionDeltas{};
+
+  // Destination/role facts resolved once from the static schema tables.
+  const RecordRule* rule = nullptr;
+  PeSemanticProducerKind producer = PeSemanticProducerKind::DrawPrimitive;
+  bool producerMatchesRecordType = false;
+  bool constantProducer = false;
+  bool upProducer = false;
+
+  // The destination frontier the plan was proved against.  Append refuses a
+  // witness whose destination has moved, so a stale witness fails closed
+  // instead of committing an unproven layout.
+  std::size_t recordCount = 0u;
+  std::size_t emissionHandleCount = 0u;
+  std::size_t emissionPayloadBytes = 0u;
+
+  // Reusable exact-emission offsets produced by the capacity proof.
+  std::size_t payloadOffset = 0u;
+  std::size_t nextEmissionPayloadBytes = 0u;
+  std::size_t nextEmissionHandleCount = 0u;
+  std::size_t wireBytes = 0u;
+  bool admissible = false;
+
+  bool valid() const noexcept {
+    return admissible && plan.valid && rule != nullptr;
+  }
+  bool admissibleAt(std::size_t records, std::size_t handles,
+                    std::size_t payloadBytes) const noexcept {
+    return valid() && recordCount == records &&
+           emissionHandleCount == handles &&
+           emissionPayloadBytes == payloadBytes;
+  }
+};
+
+static_assert(std::is_trivially_copyable_v<PeSemanticPreparedRecord>);
 
 struct PeSemanticRecordSlot {
   PeSemanticProducerKind producer = PeSemanticProducerKind::DrawPrimitive;
@@ -633,15 +754,44 @@ struct PeSemanticBatchStorage {
   std::array<D9CDrawPacketTransform, MaxSparseValues> transforms{};
   std::array<D9CCommandChunkWireLight, MaxSparseValues> lights{};
   std::array<D9CCommandChunkWireLightEnable, MaxSparseValues> lightEnables{};
-  // Fixed contiguous compatibility output. It is storage-owned so exact
-  // emission never allocates after construction and remains valid through
-  // bridge/capture settlement.
+  // Canonical D9C V2 role-layout backing.  These three regions are not a
+  // seal-time rendering of the typed arenas above: admission writes each
+  // accepted record's final wire record header, its final handle entries and
+  // its fully serialized payload bytes here, at the exact in-role position the
+  // sealed chunk gives them.  Sealing therefore finalizes a header and two
+  // bounded table offsets instead of replaying every record.
+  //
+  // A sealed chunk places the payload at `WIRE_HEADER + records*RHS +
+  // handles*HES`, which is unknown while records are admitted. The canonical
+  // payload therefore lives in a physically separate fixed arena; this is
+  // important because an ExactFixed destination may be the owner's `wire`
+  // arena and may overlap the maximum-prefix staging address. Separating the
+  // arenas makes retry/re-emission read-only with respect to canonical bytes.
+  static constexpr std::size_t maxWireRecords = MaxRecords;
+  // A record's wire handle table is bounded by the per-record emission dedup
+  // frame, so this is the exact worst case rather than a guess.
+  static constexpr std::size_t maxWireHandles = MaxRecords * 64u;
+  static constexpr std::size_t wirePayloadBase =
+      ((sizeof(D9CCommandChunkWireHeader) +
+        maxWireRecords * sizeof(D9CCommandChunkWireRecordHeader) +
+        maxWireHandles * sizeof(D9CCommandChunkWireHandleEntry) + 15u) /
+       16u) * 16u;
+  // Generous, deliberately loose payload ceiling: every constant/UP byte, every
+  // clear rectangle, every sparse row of all seventeen kinds, plus each
+  // record's own fixed head, section table and alignment padding.
+  static constexpr std::size_t maxWirePayloadBytes =
+      MaxSemanticBytes + MaxRects * sizeof(D9CRect) +
+      MaxSparseValues * 1024u +
+      MaxRecords * (sizeof(D9CCommandChunkWireDrawHeader) +
+                    D9C_COMMAND_CHUNK_SECTION_COUNT *
+                        sizeof(D9CCommandChunkWireSectionDesc) + 8u) +
+      64u;
   static constexpr std::size_t maxWireBytes =
-      MaxSemanticBytes + MaxSparseValues * 1024u +
-      MaxRecords * sizeof(D9CCommandChunkWireRecordHeader) +
-      MaxPins * 6u * sizeof(D9CCommandChunkWireHandleEntry) +
-      sizeof(D9CCommandChunkWireHeader) + 64u;
-  std::array<std::byte, maxWireBytes> wire{};
+      wirePayloadBase + maxWirePayloadBytes;
+  std::array<D9CCommandChunkWireRecordHeader, maxWireRecords> wireRecords{};
+  std::array<D9CCommandChunkWireHandleEntry, maxWireHandles> wireHandles{};
+  alignas(16) std::array<std::byte, maxWirePayloadBytes> canonicalPayload{};
+  alignas(16) std::array<std::byte, maxWireBytes> wire{};
 };
 
 // The template capacities make overflow tests cheap while the defaults cover
@@ -710,14 +860,13 @@ class PeSemanticBatchOwner final {
   }
 
  private:
-  // Pure CapacityPre query. The same qualified-dedup/count result is consumed
-  // by appendOwnedRecord, so admission and cadence cannot disagree about
-  // duplicate identities or variable-byte capacity.
-  bool canAdmitPreparedStorage(
-      const PeSemanticAdmissionPlan& plan,
-      const std::array<std::uint32_t, 6u>& retentionDeltas) const noexcept {
+  // Pure CapacityPre proof over an already-planned record.  It also publishes
+  // the exact emission frontier it computed, so the transactional append and
+  // its settlement never realign or re-plan the same layout.
+  bool proveCapacity(PeSemanticPreparedRecord& witness) const noexcept {
+    const auto& plan = witness.plan;
     if (!ready_ || !plan.valid || recordCount_ >= MaxRecords) return false;
-    const auto* rule = recordRule(plan.recordType);
+    const auto* rule = witness.rule;
     if (!rule || plan.payloadBytes == 0u) return false;
     for (std::size_t i = 0u; i < plan.sparseCounts.size(); ++i) {
       if (plan.sparseCounts[i] > MaxSparseValues - sparseCounts_.values[i])
@@ -728,12 +877,12 @@ class PeSemanticBatchOwner final {
     const auto fitsPins = [](std::size_t used, std::size_t add) noexcept {
       return add <= MaxPins - used;
     };
-    if (!fitsPins(surfaceCount_, retentionDeltas[0]) ||
-        !fitsPins(textureCount_, retentionDeltas[1]) ||
-        !fitsPins(bufferCount_, retentionDeltas[2]) ||
-        !fitsPins(shaderCount_, retentionDeltas[3]) ||
-        !fitsPins(declarationCount_, retentionDeltas[4]) ||
-        !fitsPins(queryCount_, retentionDeltas[5])) return false;
+    if (!fitsPins(surfaceCount_, witness.retentionDeltas[0]) ||
+        !fitsPins(textureCount_, witness.retentionDeltas[1]) ||
+        !fitsPins(bufferCount_, witness.retentionDeltas[2]) ||
+        !fitsPins(shaderCount_, witness.retentionDeltas[3]) ||
+        !fitsPins(declarationCount_, witness.retentionDeltas[4]) ||
+        !fitsPins(queryCount_, witness.retentionDeltas[5])) return false;
     std::size_t aligned = 0u;
     if (!alignEmission(emissionPayloadBytes_, rule->payloadAlignment, aligned) ||
         plan.payloadBytes > std::numeric_limits<std::size_t>::max() - aligned) {
@@ -743,23 +892,115 @@ class PeSemanticBatchOwner final {
     const auto nextHandles = emissionHandleCount_ + plan.handleCount;
     if (nextPayload > std::numeric_limits<std::uint32_t>::max() ||
         nextHandles > std::numeric_limits<std::uint32_t>::max()) return false;
+    // The canonical role-layout backing is proved here, before any byte of
+    // this record is materialized. A chunk that cannot be staged is a
+    // CapacityPre rejection, never a late seal failure.
+    if (!fitsStagedWire(nextHandles, nextPayload)) return false;
     const auto layout = planExactCommandChunkLayout(
         static_cast<std::uint32_t>(recordCount_ + 1u),
         static_cast<std::uint32_t>(nextHandles),
         static_cast<std::uint32_t>(nextPayload));
-    return layout.valid() &&
-           layout.totalBytes <= D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES;
+    if (!layout.valid() ||
+        layout.totalBytes > D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES) {
+      return false;
+    }
+    witness.payloadOffset = aligned;
+    witness.nextEmissionPayloadBytes = nextPayload;
+    witness.nextEmissionHandleCount = nextHandles;
+    witness.wireBytes = layout.totalBytes;
+    return true;
   }
 
-  bool canAdmitStorage(const PeSemanticRecordInput& input) const noexcept {
-    PeSemanticAdmissionPlan plan{};
-    std::array<std::uint32_t, 6u> deltas{};
-    return planPeSemanticAdmission(input, plan) &&
-           computeRetentionDeltas(input, deltas) &&
-           canAdmitPreparedStorage(plan, deltas);
+  // Fold one record's identity dedup into the owner's retention question.  It
+  // runs once per newly seen identity, and rejects a generation or pointer
+  // alias of an already-pinned object exactly where the old separate retention
+  // walk did.
+  bool accumulateRetentionDelta(const PeWireObjectRef& ref, std::size_t pinKind,
+                                std::array<std::uint32_t, 6u>& out) const noexcept {
+    bool existing = false;
+    switch (pinKind) {
+      case 0u:
+        if (!findOrValidateExistingPin(
+                storage_->surfaceIdentityIndex, storage_->surfaceObjectIndex,
+                storage_->surfaces, surfaceCount_, ref.identity, ref.object,
+                existing)) return false;
+        break;
+      case 1u:
+        if (!findOrValidateExistingPin(
+                storage_->textureIdentityIndex, storage_->textureObjectIndex,
+                storage_->textures, textureCount_, ref.identity, ref.object,
+                existing)) return false;
+        break;
+      case 2u:
+        if (!findOrValidateExistingPin(
+                storage_->bufferIdentityIndex, storage_->bufferObjectIndex,
+                storage_->buffers, bufferCount_, ref.identity, ref.object,
+                existing)) return false;
+        break;
+      case 3u:
+        if (!findOrValidateExistingPin(
+                storage_->shaderIdentityIndex, storage_->shaderObjectIndex,
+                storage_->shaders, shaderCount_, ref.identity, ref.object,
+                existing)) return false;
+        break;
+      case 4u:
+        if (!findOrValidateExistingPin(
+                storage_->declarationIdentityIndex,
+                storage_->declarationObjectIndex, storage_->declarations,
+                declarationCount_, ref.identity, ref.object, existing))
+          return false;
+        break;
+      case 5u:
+        if (!findOrValidateExistingPin(
+                storage_->queryIdentityIndex, storage_->queryObjectIndex,
+                storage_->queries, queryCount_, ref.identity, ref.object,
+                existing)) return false;
+        break;
+      default:
+        return false;
+    }
+    if (!existing) {
+      if (out[pinKind] == std::numeric_limits<std::uint32_t>::max())
+        return false;
+      ++out[pinKind];
+    }
+    return true;
   }
 
  public:
+  // Observation-only preparation.  One pass over the immutable input answers
+  // layout, per-kind retention delta, destination role, and exact emission
+  // frontier; the transactional append then consumes those facts instead of
+  // re-deriving them.  This is also the live CapacityPre predicate: an
+  // `Admissible` outcome is exactly the old private canAdmitStorage() answer.
+  PeSemanticAdmissionOutcome prepareAdmission(
+      const PeSemanticRecordInput& input,
+      PeSemanticPreparedRecord& witness) const noexcept {
+    witness = {};
+    if (!ready_) return PeSemanticAdmissionOutcome::Unavailable;
+    witness.producer = input.producer;
+    witness.rule = recordRule(input.recordType);
+    const auto* policy = peSemanticProducerPolicy(input.recordType);
+    witness.producerMatchesRecordType =
+        policy != nullptr && policy->kind == input.producer;
+    witness.constantProducer = isPeSemanticConstantProducer(input.producer);
+    witness.upProducer = isPeSemanticUpProducer(input.producer);
+    if (!planPeSemanticAdmissionWith(
+            input, witness.plan,
+            [&](const PeWireObjectRef& ref, std::size_t pinKind) noexcept {
+              return accumulateRetentionDelta(ref, pinKind,
+                                              witness.retentionDeltas);
+            })) {
+      return PeSemanticAdmissionOutcome::Malformed;
+    }
+    witness.recordCount = recordCount_;
+    witness.emissionHandleCount = emissionHandleCount_;
+    witness.emissionPayloadBytes = emissionPayloadBytes_;
+    if (!proveCapacity(witness)) return PeSemanticAdmissionOutcome::Capacity;
+    witness.admissible = true;
+    return PeSemanticAdmissionOutcome::Admissible;
+  }
+
   // A typed adapter used by producer-family call sites. It intentionally
   // aliases admission rather than exposing the owner internals to producers.
   bool appendOwnedRecord(const PeSemanticRecordInput& input) noexcept {
@@ -771,24 +1012,29 @@ class PeSemanticBatchOwner final {
   // leave tryAppendOwnedRecord(), so there is no caller-visible TOCTOU seam.
   template <typename Commit>
     requires std::is_nothrow_invocable_r_v<bool, Commit&>
-  bool appendPreparedRecord(
-                         const PeSemanticRecordInput& input,
-                         const PeSemanticAdmissionPlan& prepared,
-                         const std::array<std::uint32_t, 6u>& deltas,
-                         Commit&& commit) noexcept {
+  bool appendPreparedRecord(const PeSemanticRecordInput& input,
+                            const PeSemanticPreparedRecord& prepared,
+                            Commit&& commit) noexcept {
     return recordAdmission([&]() noexcept {
       lastAdmissionFailure_ = AdmissionFailure::None;
       if (!ready_) {
         lastAdmissionFailure_ = AdmissionFailure::Unavailable;
         return false;
       }
-      if (!canAdmitPreparedStorage(prepared, deltas)) {
+      // Nothing between prepareAdmission() and here mutates the destination,
+      // so this is an invariant guard rather than a second capacity pass: a
+      // witness that describes another record, or was proved against another
+      // frontier, fails closed.
+      if (prepared.producer != input.producer ||
+          prepared.plan.recordType != input.recordType ||
+          !prepared.admissibleAt(recordCount_, emissionHandleCount_,
+                                 emissionPayloadBytes_)) {
         lastAdmissionFailure_ = AdmissionFailure::Header;
         return false;
       }
       const auto checkpoint = checkpointState();
       retainedCheckpoint_ = checkpoint.retained;
-      if (!validAdmissionHeader(input)) {
+      if (!validAdmissionHeader(input, prepared)) {
         lastAdmissionFailure_ = AdmissionFailure::Header;
         rollback(checkpoint);
         return false;
@@ -815,7 +1061,12 @@ class PeSemanticBatchOwner final {
         rollback(checkpoint);
         return false;
       }
-      if (!cacheEmissionMetrics(slot, prepared)) {
+      if (!materializeCanonicalRecord(slot, prepared)) {
+        lastAdmissionFailure_ = AdmissionFailure::EmissionMetrics;
+        rollback(checkpoint);
+        return false;
+      }
+      if (!cacheEmissionMetrics(prepared)) {
         lastAdmissionFailure_ = AdmissionFailure::EmissionMetrics;
         rollback(checkpoint);
         return false;
@@ -841,18 +1092,21 @@ class PeSemanticBatchOwner final {
     requires std::is_nothrow_invocable_r_v<bool, Commit&>
   bool tryAppendOwnedRecord(const PeSemanticRecordInput& input,
                             Commit&& commit) noexcept {
-    PeSemanticAdmissionPlan prepared{};
-    std::array<std::uint32_t, 6u> deltas{};
-    if (!planPeSemanticAdmission(input, prepared) ||
-        !computeRetentionDeltas(input, deltas)) {
-      lastAdmissionFailure_ = AdmissionFailure::Header;
-      return false;
+    PeSemanticPreparedRecord prepared{};
+    switch (prepareAdmission(input, prepared)) {
+      case PeSemanticAdmissionOutcome::Admissible:
+        break;
+      case PeSemanticAdmissionOutcome::Unavailable:
+        lastAdmissionFailure_ = AdmissionFailure::Unavailable;
+        return false;
+      case PeSemanticAdmissionOutcome::Malformed:
+        lastAdmissionFailure_ = AdmissionFailure::Header;
+        return false;
+      case PeSemanticAdmissionOutcome::Capacity:
+        lastAdmissionFailure_ = AdmissionFailure::Capacity;
+        return false;
     }
-    if (!canAdmitPreparedStorage(prepared, deltas)) {
-      lastAdmissionFailure_ = AdmissionFailure::Capacity;
-      return false;
-    }
-    return appendPreparedRecord(input, prepared, deltas,
+    return appendPreparedRecord(input, prepared,
                                 std::forward<Commit>(commit));
   }
 
@@ -881,51 +1135,10 @@ class PeSemanticBatchOwner final {
   // Admission is atomic.  Every counter and every typed pin is restored when
   // any validation, arena, or retain operation fails.
   bool admit(const PeSemanticRecordInput& input) noexcept {
-    return recordAdmission([&]() noexcept {
-      lastAdmissionFailure_ = AdmissionFailure::None;
-      if (!ready_) {
-        lastAdmissionFailure_ = AdmissionFailure::Unavailable;
-        return false;
-      }
-      const auto checkpoint = checkpointState();
-      retainedCheckpoint_ = checkpoint.retained;
-      if (!validAdmissionHeader(input)) {
-        lastAdmissionFailure_ = AdmissionFailure::Header;
-        rollback(checkpoint);
-        return false;
-      }
-      if (!copyFixedValues(input)) {
-        lastAdmissionFailure_ = AdmissionFailure::Fixed;
-        rollback(checkpoint);
-        return false;
-      }
-      auto& slot = storage_->records[recordCount_];
-      if (!copyDirectPins(input, slot)) {
-        lastAdmissionFailure_ = AdmissionFailure::DirectPins;
-        rollback(checkpoint);
-        return false;
-      }
-      if (!copySparse(input, slot)) {
-        if (lastAdmissionFailure_ == AdmissionFailure::None)
-          lastAdmissionFailure_ = AdmissionFailure::Sparse;
-        rollback(checkpoint);
-        return false;
-      }
-      if (!copyVariablePayloads(input, slot)) {
-        lastAdmissionFailure_ = AdmissionFailure::VariablePayload;
-        rollback(checkpoint);
-        return false;
-      }
-      if (!cacheEmissionMetrics(slot)) {
-        lastAdmissionFailure_ = AdmissionFailure::EmissionMetrics;
-        rollback(checkpoint);
-        return false;
-      }
-      ++recordCount_;
-      lastSourceOrdinal_ = input.sourceOrdinal;
-      lastRecordOrdinal_ = input.recordOrdinal;
-      return true;
-    });
+    // Keep the test/oracle entry point on the same prepared production path.
+    // There is no second legacy materialization route to drift from the
+    // canonical role bytes emitted by ExactFixed.
+    return tryAppendOwnedRecord(input, []() noexcept { return true; });
   }
 
   // Destructive reset used by Reset/teardown/discard. It drops both current
@@ -997,6 +1210,13 @@ class PeSemanticBatchOwner final {
                                    sparseCounts_.values[kLights]);
     lastClearedBytes_ += clearUsed(storage_->lightEnables,
                                    sparseCounts_.values[kLightEnables]);
+    lastClearedBytes_ += clearUsed(storage_->wireRecords, recordCount_);
+    lastClearedBytes_ += clearUsed(storage_->wireHandles, emissionHandleCount_);
+    if (emissionPayloadBytes_ != 0u) {
+      std::fill_n(storage_->canonicalPayload.begin(),
+                  emissionPayloadBytes_, std::byte{0});
+      lastClearedBytes_ += emissionPayloadBytes_;
+    }
     recordCount_ = 0u;
     semanticBytes_ = 0u;
     emissionHandleCount_ = 0u;
@@ -1195,7 +1415,7 @@ class PeSemanticBatchOwner final {
         payloadRegion.size() < plan.payloadBytes) {
       return false;
     }
-    if (!writeEmission(plan, recordRegion, handleRegion, payloadRegion)) {
+    if (!copyCanonicalRoles(plan, recordRegion, handleRegion, payloadRegion)) {
       return false;
     }
     out.transport = makeTransport(plan,
@@ -1210,8 +1430,9 @@ class PeSemanticBatchOwner final {
   }
 
   // Canonical contiguous D9C V2 target used by the default production and
-  // capture lanes. It traverses the same immutable slots and handle identities
-  // as emitSegmented(), and therefore cannot drift in order or alignment.
+  // capture lanes. Admission has already materialized the immutable role
+  // bytes. ExactFixed therefore only writes the final header and gathers the
+  // three fixed roles; it never replays semantic records or recomputes them.
   bool emitExactFixed(std::span<std::byte> destination,
                       PeSemanticExactFixedEmission& out) const noexcept {
     out = {};
@@ -1231,7 +1452,7 @@ class PeSemanticBatchOwner final {
                                          plan.handleBytes());
       auto payload = destination.subspan(plan.header.payloadArenaOffset,
                                          plan.payloadBytes);
-      if (!writeEmission(plan, records, handles, payload)) return false;
+      if (!copyCanonicalRoles(plan, records, handles, payload)) return false;
       out.transport = makeTransport(plan, records, handles, payload, 0u, 0u);
       if (!producerIdentity(out.transport.producerIdentity)) return false;
       out.wire = std::span<const std::byte>(destination.data(), plan.wireBytes);
@@ -1269,51 +1490,25 @@ class PeSemanticBatchOwner final {
     return true;
   }
 
-  // Production segmented target backed by the same fixed wire arena.  The
-  // three role regions are disjoint and remain owned by this immutable owner
-  // until bridge settlement; no temporary allocation or legacy builder is
-  // involved.  Capture callers deliberately use emitExactFixed() instead.
+  // Production segmented target aliases the fixed role regions materialized
+  // at admission. Capture callers deliberately use emitExactFixed() instead.
   bool emitSegmented(PeSemanticSegmentedEmission& out,
                      std::uint64_t renderTapeCaptureToken = 0u,
                      std::uint64_t renderTapeEventOrdinal = 0u) const noexcept {
     out = {};
     EmissionPlan plan{};
     if (!buildEmissionPlan(plan)) return false;
-    std::size_t cursor = 0u;
-    std::size_t recordOffset = 0u;
-    std::size_t handleOffset = 0u;
-    std::size_t payloadOffset = 0u;
-    if (!alignEmission(cursor, alignof(D9CCommandChunkWireRecordHeader),
-                       recordOffset) ||
-        recordOffset > storage_->wire.size() ||
-        plan.recordBytes() > storage_->wire.size() - recordOffset) return false;
-    cursor = recordOffset + plan.recordBytes();
-    if (!alignEmission(cursor, alignof(D9CCommandChunkWireHandleEntry),
-                       handleOffset) ||
-        handleOffset > storage_->wire.size() ||
-        plan.handleBytes() > storage_->wire.size() - handleOffset) return false;
-    cursor = handleOffset + plan.handleBytes();
-    if (!alignEmission(cursor, alignof(std::max_align_t), payloadOffset) ||
-        payloadOffset > storage_->wire.size() ||
-        plan.payloadBytes > storage_->wire.size() - payloadOffset) return false;
-    if (!writeEmission(
-            plan,
-            std::span<std::byte>(storage_->wire).subspan(recordOffset,
-                                                          plan.recordBytes()),
-            std::span<std::byte>(storage_->wire).subspan(handleOffset,
-                                                          plan.handleBytes()),
-            std::span<std::byte>(storage_->wire).subspan(payloadOffset,
-                                                          plan.payloadBytes))) {
-      return false;
-    }
+    const auto records = std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(storage_->wireRecords.data()),
+        plan.recordBytes());
+    const auto handles = std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(storage_->wireHandles.data()),
+        plan.handleBytes());
+    const auto payload = std::span<const std::byte>(
+        storage_->canonicalPayload.data(), plan.payloadBytes);
     out.transport = makeTransport(
         plan,
-        std::span<std::byte>(storage_->wire).subspan(recordOffset,
-                                                      plan.recordBytes()),
-        std::span<std::byte>(storage_->wire).subspan(handleOffset,
-                                                      plan.handleBytes()),
-        std::span<std::byte>(storage_->wire).subspan(payloadOffset,
-                                                      plan.payloadBytes),
+        records, handles, payload,
         renderTapeCaptureToken, renderTapeEventOrdinal);
     if (!producerIdentity(out.transport.producerIdentity)) return false;
     out.wireBytes = plan.wireBytes;
@@ -1414,6 +1609,12 @@ class PeSemanticBatchOwner final {
   // over-provisioned; probing is bounded by this compile-time constant and
   // never allocates.
   static constexpr std::size_t kPinIndexCapacity = MaxPins * 4u + 1u;
+
+  static bool fitsStagedWire(std::size_t handleCount,
+                             std::size_t payloadBytes) noexcept {
+    return handleCount <= Storage::maxWireHandles &&
+           payloadBytes <= Storage::maxWirePayloadBytes;
+  }
 
   using PinIndexEntry = PeSemanticPinIndexEntry;
 
@@ -1864,36 +2065,27 @@ class PeSemanticBatchOwner final {
   bool buildEmissionPlan(EmissionPlan& out) const noexcept {
     out = {};
     if (!ready_ || recordCount_ == 0u || recordCount_ > MaxRecords) return false;
-    std::size_t payloadEnd = 0u;
+    // The semantic walk and payload serializer run at admission. At seal we
+    // only validate the already materialized role headers and derive the final
+    // outer layout, whose offsets depend on the final aggregate counts.
     for (std::size_t i = 0u; i < recordCount_; ++i) {
-      const auto& slot = storage_->records[i];
-      const auto* rule = recordRule(slot.recordType);
-      if (!rule) return false;
-      EmissionHandleContext handles{};
-      if (!visitRecordHandles(slot, [&](const D9CWireObjectIdentity& id) noexcept {
-            return handles.add(id);
-          })) return false;
-      std::size_t bytes = 0u;
-      std::size_t aligned = 0u;
-      if (!payloadSize(slot, bytes) ||
-          !alignEmission(payloadEnd, rule->payloadAlignment, aligned) ||
-          bytes > std::numeric_limits<std::size_t>::max() - aligned ||
-          out.handleCount > std::numeric_limits<std::size_t>::max() - handles.count) {
+      const auto& record = storage_->wireRecords[i];
+      if (!recordRule(record.type) ||
+          record.payloadOffset > emissionPayloadBytes_ ||
+          record.payloadSize > emissionPayloadBytes_ - record.payloadOffset ||
+          record.firstHandle > emissionHandleCount_ ||
+          record.handleCount > emissionHandleCount_ - record.firstHandle) {
         return false;
       }
-      out.records[i] = {.payloadOffset = aligned,
-                        .payloadBytes = bytes,
-                        .firstHandle = out.handleCount,
-                        .handleCount = handles.count};
-      payloadEnd = aligned + bytes;
-      out.handleCount += handles.count;
+      out.records[i] = {.payloadOffset = record.payloadOffset,
+                        .payloadBytes = record.payloadSize,
+                        .firstHandle = record.firstHandle,
+                        .handleCount = record.handleCount};
     }
     out.recordCount = recordCount_;
-    out.payloadBytes = payloadEnd;
-    if (out.handleCount != emissionHandleCount_ ||
-        out.payloadBytes != emissionPayloadBytes_) {
-      return false;
-    }
+    out.handleCount = emissionHandleCount_;
+    out.payloadBytes = emissionPayloadBytes_;
+    if (!fitsStagedWire(out.handleCount, out.payloadBytes)) return false;
     if (out.recordCount > std::numeric_limits<std::uint32_t>::max() ||
         out.handleCount > std::numeric_limits<std::uint32_t>::max() ||
         out.payloadBytes > std::numeric_limits<std::uint32_t>::max()) return false;
@@ -2373,50 +2565,79 @@ class PeSemanticBatchOwner final {
     return false;
   }
 
-  bool writeEmission(const EmissionPlan& plan,
-                     std::span<std::byte> recordRegion,
-                     std::span<std::byte> handleRegion,
-                     std::span<std::byte> payloadRegion) const noexcept {
+  // Materialize one record's canonical D9C V2 role bytes while the source
+  // slot is still being admitted. The payload's relative offsets and the
+  // record-local/global handle ordinals are already known from the prepared
+  // witness; only the outer chunk offsets remain frontier-dependent.
+  bool materializeCanonicalRecord(
+      const PeSemanticRecordSlot& slot,
+      const PeSemanticPreparedRecord& prepared) noexcept {
+    if (!prepared.valid() || prepared.recordCount != recordCount_ ||
+        prepared.emissionHandleCount != emissionHandleCount_ ||
+        prepared.emissionPayloadBytes != emissionPayloadBytes_ ||
+        prepared.plan.handleCount > kMaxRecordHandles ||
+        prepared.payloadOffset > Storage::maxWirePayloadBytes ||
+        prepared.plan.payloadBytes >
+            Storage::maxWirePayloadBytes - prepared.payloadOffset ||
+        prepared.emissionHandleCount > Storage::maxWireHandles ||
+        recordCount_ >= Storage::maxWireRecords) {
+      return false;
+    }
+    EmissionHandleContext handles{};
+    if (!visitRecordHandles(slot, [&](const D9CWireObjectIdentity& identity) noexcept {
+          return handles.add(identity);
+        }) || handles.count != prepared.plan.handleCount) {
+      return false;
+    }
+    if (prepared.payloadOffset > Storage::maxWirePayloadBytes ||
+        prepared.plan.payloadBytes >
+            Storage::maxWirePayloadBytes - prepared.payloadOffset) {
+      return false;
+    }
+    auto payload = std::span<std::byte>(storage_->canonicalPayload).subspan(
+        prepared.payloadOffset, prepared.plan.payloadBytes);
+    std::fill(payload.begin(), payload.end(), std::byte{0});
+    if (!writeRecordPayload(slot, payload, prepared.emissionHandleCount,
+                            handles)) {
+      return false;
+    }
+    for (std::size_t i = 0u; i < handles.count; ++i) {
+      storage_->wireHandles[prepared.emissionHandleCount + i] = {
+          .kind = handles.identities[i].kind,
+          .generation = handles.identities[i].generation,
+          .objectId = handles.identities[i].objectId,
+      };
+    }
+    storage_->wireRecords[recordCount_] = {
+        .type = slot.recordType,
+        .flags = slot.recordFlags,
+        .payloadOffset = static_cast<std::uint32_t>(prepared.payloadOffset),
+        .payloadSize = static_cast<std::uint32_t>(prepared.plan.payloadBytes),
+        .firstHandle = static_cast<std::uint32_t>(prepared.emissionHandleCount),
+        .handleCount = static_cast<std::uint32_t>(handles.count),
+        .reserved0 = 0u,
+        .reserved1 = 0u,
+    };
+    return true;
+  }
+
+  bool copyCanonicalRoles(const EmissionPlan& plan,
+                          std::span<std::byte> recordRegion,
+                          std::span<std::byte> handleRegion,
+                          std::span<std::byte> payloadRegion) const noexcept {
     if (recordRegion.size() < plan.recordBytes() ||
         handleRegion.size() < plan.handleBytes() ||
-        payloadRegion.size() < plan.payloadBytes) return false;
-    std::fill(payloadRegion.begin(), payloadRegion.begin() + plan.payloadBytes,
-              std::byte{0});
-    for (std::size_t i = 0u; i < plan.recordCount; ++i) {
-      const auto& slot = storage_->records[i];
-      EmissionHandleContext handles{};
-      if (!visitRecordHandles(slot, [&](const D9CWireObjectIdentity& id) noexcept {
-            return handles.add(id);
-          }) || handles.count != plan.records[i].handleCount) return false;
-      for (std::size_t j = 0u; j < handles.count; ++j) {
-        const auto wire = D9CCommandChunkWireHandleEntry{
-            .kind = handles.identities[j].kind,
-            .generation = handles.identities[j].generation,
-            .objectId = handles.identities[j].objectId,
-        };
-        std::memcpy(handleRegion.data() +
-                        (plan.records[i].firstHandle + j) * sizeof(wire),
-                    &wire, sizeof(wire));
-      }
-      const auto wireRecord = D9CCommandChunkWireRecordHeader{
-          .type = slot.recordType,
-          .flags = slot.recordFlags,
-          .payloadOffset = static_cast<std::uint32_t>(plan.records[i].payloadOffset),
-          .payloadSize = static_cast<std::uint32_t>(plan.records[i].payloadBytes),
-          .firstHandle = static_cast<std::uint32_t>(plan.records[i].firstHandle),
-          .handleCount = static_cast<std::uint32_t>(plan.records[i].handleCount),
-          .reserved0 = 0u,
-          .reserved1 = 0u,
-      };
-      std::memcpy(recordRegion.data() + i * sizeof(wireRecord), &wireRecord,
-                  sizeof(wireRecord));
-      auto recordPayload = payloadRegion.subspan(plan.records[i].payloadOffset,
-                                                 plan.records[i].payloadBytes);
-      if (!writeRecordPayload(slot, recordPayload,
-                              plan.records[i].firstHandle, handles)) {
-        return false;
-      }
+        payloadRegion.size() < plan.payloadBytes ||
+        !fitsStagedWire(plan.handleCount, plan.payloadBytes)) {
+      return false;
     }
+    std::memcpy(recordRegion.data(), storage_->wireRecords.data(),
+                plan.recordBytes());
+    std::memcpy(handleRegion.data(), storage_->wireHandles.data(),
+                plan.handleBytes());
+    std::memmove(payloadRegion.data(),
+                 storage_->canonicalPayload.data(),
+                 plan.payloadBytes);
     return true;
   }
 
@@ -2500,6 +2721,9 @@ class PeSemanticBatchOwner final {
     bytes += sparseCounts_.values[kLights] * sizeof(storage_->lights[0]);
     bytes += sparseCounts_.values[kLightEnables] *
         sizeof(storage_->lightEnables[0]);
+    bytes += recordCount_ * sizeof(storage_->wireRecords[0]);
+    bytes += emissionHandleCount_ * sizeof(storage_->wireHandles[0]);
+    bytes += emissionPayloadBytes_;
     return bytes;
   }
 
@@ -2561,6 +2785,9 @@ class PeSemanticBatchOwner final {
   }
 
   void rollback(const StateCheckpoint& checkpoint) noexcept {
+    const auto recordsBeforeRollback = recordCount_;
+    const auto handlesBeforeRollback = emissionHandleCount_;
+    const auto payloadBeforeRollback = emissionPayloadBytes_;
     retainer_.rollback(checkpoint.retained);
     recordCount_ = checkpoint.records;
     semanticBytes_ = checkpoint.semanticBytes;
@@ -2579,38 +2806,36 @@ class PeSemanticBatchOwner final {
     if (recordCount_ < MaxRecords) {
       storage_->records[recordCount_] = {};
     }
+    for (std::size_t i = checkpoint.records;
+         i < std::min(recordsBeforeRollback, Storage::maxWireRecords); ++i) {
+      storage_->wireRecords[i] = {};
+    }
+    for (std::size_t i = checkpoint.emissionHandles;
+         i < std::min(handlesBeforeRollback, Storage::maxWireHandles); ++i) {
+      storage_->wireHandles[i] = {};
+    }
+    if (checkpoint.emissionPayloadBytes < payloadBeforeRollback &&
+        checkpoint.emissionPayloadBytes < Storage::maxWirePayloadBytes) {
+      const auto count = std::min(
+          payloadBeforeRollback - checkpoint.emissionPayloadBytes,
+          Storage::maxWirePayloadBytes - checkpoint.emissionPayloadBytes);
+      std::fill_n(storage_->canonicalPayload.begin() +
+                      checkpoint.emissionPayloadBytes,
+                  count, std::byte{0});
+    }
     rebuildPinIndexes();
   }
 
-  bool cacheEmissionMetrics(const PeSemanticRecordSlot& slot,
-                            const PeSemanticAdmissionPlan& prepared) noexcept {
-    const auto* rule = recordRule(slot.recordType);
-    if (!rule || !prepared.valid) return false;
-    std::size_t bytes = 0u;
-    std::size_t aligned = 0u;
-    if (prepared.payloadBytes == 0u ||
-        !alignEmission(emissionPayloadBytes_, rule->payloadAlignment, aligned) ||
-        prepared.payloadBytes > std::numeric_limits<std::size_t>::max() - aligned ||
-        emissionHandleCount_ > std::numeric_limits<std::size_t>::max() -
-            prepared.handleCount) {
+  // Settlement of the prepared witness. The capacity proof already aligned and
+  // bounded this record's frontier, so publication is an assignment guarded by
+  // the same destination-identity check the append entry made.
+  bool cacheEmissionMetrics(const PeSemanticPreparedRecord& prepared) noexcept {
+    if (!prepared.admissibleAt(recordCount_, emissionHandleCount_,
+                               emissionPayloadBytes_)) {
       return false;
     }
-    bytes = prepared.payloadBytes;
-    const auto nextPayloadBytes = aligned + bytes;
-    const auto nextHandleCount = emissionHandleCount_ + prepared.handleCount;
-    if (recordCount_ + 1u > std::numeric_limits<std::uint32_t>::max() ||
-        nextPayloadBytes > std::numeric_limits<std::uint32_t>::max() ||
-        nextHandleCount > std::numeric_limits<std::uint32_t>::max()) {
-      return false;
-    }
-    const auto layout = planExactCommandChunkLayout(
-        static_cast<std::uint32_t>(recordCount_ + 1u),
-        static_cast<std::uint32_t>(nextHandleCount),
-        static_cast<std::uint32_t>(nextPayloadBytes));
-    if (!layout.valid() || layout.totalBytes > D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES)
-      return false;
-    emissionPayloadBytes_ = nextPayloadBytes;
-    emissionHandleCount_ = nextHandleCount;
+    emissionPayloadBytes_ = prepared.nextEmissionPayloadBytes;
+    emissionHandleCount_ = prepared.nextEmissionHandleCount;
     return true;
   }
 
@@ -2680,93 +2905,6 @@ class PeSemanticBatchOwner final {
     return true;
   }
 
-  bool computeRetentionDeltas(
-      const PeSemanticRecordInput& input,
-      std::array<std::uint32_t, 6u>& out) const noexcept {
-    out = {};
-    // The kind is part of each identity key, so one sequential set preserves
-    // cross-kind distinctions without reserving six 80-entry frames.
-    detail::PeSemanticIdentitySet seen{};
-    const auto add = [&](const PeWireObjectRef& ref, std::uint32_t kind,
-                         std::size_t pinKind) noexcept {
-      if (!seen.add(ref, kind)) return false;
-      if (!ref.object) return true;
-      bool existing = false;
-      switch (pinKind) {
-        case 0u:
-          if (!findOrValidateExistingPin(
-                  storage_->surfaceIdentityIndex, storage_->surfaceObjectIndex,
-                  storage_->surfaces, surfaceCount_, ref.identity, ref.object,
-                  existing)) return false;
-          break;
-        case 1u:
-          if (!findOrValidateExistingPin(
-                  storage_->textureIdentityIndex, storage_->textureObjectIndex,
-                  storage_->textures, textureCount_, ref.identity, ref.object,
-                  existing)) return false;
-          break;
-        case 2u:
-          if (!findOrValidateExistingPin(
-                  storage_->bufferIdentityIndex, storage_->bufferObjectIndex,
-                  storage_->buffers, bufferCount_, ref.identity, ref.object,
-                  existing)) return false;
-          break;
-        case 3u:
-          if (!findOrValidateExistingPin(
-                  storage_->shaderIdentityIndex, storage_->shaderObjectIndex,
-                  storage_->shaders, shaderCount_, ref.identity, ref.object,
-                  existing)) return false;
-          break;
-        case 4u:
-          if (!findOrValidateExistingPin(
-                  storage_->declarationIdentityIndex,
-                  storage_->declarationObjectIndex, storage_->declarations,
-                  declarationCount_, ref.identity, ref.object, existing))
-            return false;
-          break;
-        case 5u:
-          if (!findOrValidateExistingPin(
-                  storage_->queryIdentityIndex, storage_->queryObjectIndex,
-                  storage_->queries, queryCount_, ref.identity, ref.object,
-                  existing)) return false;
-          break;
-        default:
-          return false;
-      }
-      if (!existing) {
-        if (out[pinKind] == std::numeric_limits<std::uint32_t>::max())
-          return false;
-        ++out[pinKind];
-      }
-      return true;
-    };
-    if (!add(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u) ||
-        !add(input.surface1, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u) ||
-        !add(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u) ||
-        !add(input.texture1, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u) ||
-        !add(input.buffer0, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u) ||
-        !add(input.buffer1, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u) ||
-        !add(input.shader0, D9C_CHUNK_HANDLE_KIND_SHADER, 3u) ||
-        !add(input.shader1, D9C_CHUNK_HANDLE_KIND_SHADER, 3u) ||
-        !add(input.declaration, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, 4u) ||
-        !add(input.query, D9C_CHUNK_HANDLE_KIND_QUERY, 5u)) return false;
-    const auto sparse = [&](auto rows, std::uint32_t kind,
-                            std::size_t pinKind) noexcept {
-      for (const auto& row : rows) {
-        if (row.wire.valid && !add(row.object, kind, pinKind)) return false;
-      }
-      return true;
-    };
-    const auto& s = input.sparse;
-    return sparse(s.textures, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u) &&
-           sparse(s.streams, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u) &&
-           sparse(s.shaders, D9C_CHUNK_HANDLE_KIND_SHADER, 3u) &&
-           sparse(s.vertexInputs, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, 4u) &&
-           sparse(s.indexBuffers, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u) &&
-           sparse(s.renderTargets, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u) &&
-           sparse(s.depthStencils, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u);
-  }
-
   template <typename PinArray>
   static void clearPins(PinArray& pins, std::size_t from,
                         std::size_t& count) noexcept {
@@ -2774,33 +2912,23 @@ class PeSemanticBatchOwner final {
     count = from;
   }
 
-  static bool kindMatches(const PeSemanticRecordInput& input) noexcept {
-    const auto* policy = peSemanticProducerPolicy(input.recordType);
-    return policy && policy->kind == input.producer;
-  }
-
-  bool validAdmissionHeader(const PeSemanticRecordInput& input) const noexcept {
+  // Owner-state-dependent header validation. The role/rule facts are resolved
+  // once by the prepared witness; only the destination-relative checks below
+  // depend on the owner, so a prepared append never re-reads the static tables.
+  bool validAdmissionHeader(const PeSemanticRecordInput& input,
+                            const RecordRule* rule, bool producerMatches,
+                            bool constantProducer,
+                            bool upProducer) const noexcept {
     if (recordCount_ >= MaxRecords || input.sourceOrdinal == 0u ||
-        input.recordOrdinal == 0u || !kindMatches(input)) return false;
+        input.recordOrdinal == 0u || !producerMatches) return false;
     if (recordCount_ != 0u &&
         (input.recordOrdinal <= storage_->records[recordCount_ - 1u].recordOrdinal ||
          input.sourceOrdinal <= storage_->records[recordCount_ - 1u].sourceOrdinal)) {
       return false;
     }
-    const auto* rule = recordRule(input.recordType);
     if (!rule || (input.recordFlags & ~rule->allowedRecordFlags) != 0u) {
       return false;
     }
-    const bool constantProducer =
-        input.producer == PeSemanticProducerKind::VsFloatConstant ||
-        input.producer == PeSemanticProducerKind::VsIntConstant ||
-        input.producer == PeSemanticProducerKind::VsBoolConstant ||
-        input.producer == PeSemanticProducerKind::PsFloatConstant ||
-        input.producer == PeSemanticProducerKind::PsIntConstant ||
-        input.producer == PeSemanticProducerKind::PsBoolConstant;
-    const bool upProducer =
-        input.producer == PeSemanticProducerKind::DrawPrimitiveUp ||
-        input.producer == PeSemanticProducerKind::DrawIndexedPrimitiveUp;
     if ((!constantProducer && !input.constantBytes.empty()) ||
         (!upProducer && (!input.sparse.upIndexData.empty() ||
                          !input.sparse.upVertexData.empty())) ||
@@ -2844,6 +2972,24 @@ class PeSemanticBatchOwner final {
         return false;
     }
     return false;
+  }
+
+  bool validAdmissionHeader(const PeSemanticRecordInput& input) const noexcept {
+    const auto* policy = peSemanticProducerPolicy(input.recordType);
+    return validAdmissionHeader(
+        input, recordRule(input.recordType),
+        policy != nullptr && policy->kind == input.producer,
+        isPeSemanticConstantProducer(input.producer),
+        isPeSemanticUpProducer(input.producer));
+  }
+
+  bool validAdmissionHeader(
+      const PeSemanticRecordInput& input,
+      const PeSemanticPreparedRecord& prepared) const noexcept {
+    return validAdmissionHeader(input, prepared.rule,
+                                prepared.producerMatchesRecordType,
+                                prepared.constantProducer,
+                                prepared.upProducer);
   }
 
   bool copyFixedValues(const PeSemanticRecordInput& input) noexcept {

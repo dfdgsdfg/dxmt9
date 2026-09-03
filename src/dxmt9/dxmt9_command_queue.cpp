@@ -3366,13 +3366,26 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
                                  const core::DrawUniformPayload& uniforms,
                                  std::span<const core::DrawParam> draws,
                                  std::span<const core::DrawParamPayloadView> payloads) {
-  for (std::size_t i = 0; i < draws.size(); ++i) {
-    perf::countSubmitDraw();
-  }
-  PerfScope scope(perf::countSubmitDrawCpuTime);
-  if (appendActiveArenaDrawRun(state, uniforms, draws, payloads) !=
-      ActiveArenaAppendResult::Inactive) {
-    return;
+  core::DrawRunBatchEntry entry{
+      .state = &state, .uniforms = &uniforms, .draws = draws,
+      .payloads = payloads};
+  (void)submitDrawRunBatch(
+      std::span<const core::DrawRunBatchEntry>(&entry, 1u));
+}
+
+bool CommandQueue::submitDrawRunBatch(
+    std::span<const core::DrawRunBatchEntry> entries) {
+  if (entries.empty()) {
+    // Preserve the old ingress contract: an unsupported draw-run call still
+    // rejects an active Direct destination even when its span is empty.
+    if (activeDirectChunkSlotBuild_.load(std::memory_order_acquire)) {
+      (void)appendActiveDirectChunkSlot(
+          [](DirectChunkSlotBuildContext&,
+             core::TransactionalChunkSlotAssembler&) noexcept {
+            return false;
+          });
+    }
+    return !activeDirectChunkSlotBuild_.load(std::memory_order_acquire);
   }
   if (activeDirectChunkSlotBuild_.load(std::memory_order_acquire)) {
     (void)appendActiveDirectChunkSlot(
@@ -3380,15 +3393,47 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
            core::TransactionalChunkSlotAssembler&) noexcept {
           return false;
         });
-    return;
+    return false;
   }
-  if (draws.empty()) {
-    return;
+  std::size_t drawCount = 0;
+  for (const auto& entry : entries) {
+    if (!entry.valid()) continue;
+    if (drawCount > std::numeric_limits<std::size_t>::max() -
+                       entry.draws.size()) {
+      return false;
+    }
+    drawCount += entry.draws.size();
+  }
+  if (drawCount == 0) return true;
+  for (std::size_t i = 0; i < drawCount; ++i) perf::countSubmitDraw();
+  PerfScope scope(perf::countSubmitDrawCpuTime);
+
+  // An active Arena owns a private destination and must retain its existing
+  // append path. It is never mixed with the ordinary compatibility batch.
+  if (activeArenaBuild_.load(std::memory_order_acquire)) {
+    bool handled = false;
+    for (const auto& entry : entries) {
+      if (!entry.valid()) continue;
+      const auto result = appendActiveArenaDrawRun(
+          *entry.state, *entry.uniforms, entry.draws, entry.payloads);
+      if (result == ActiveArenaAppendResult::Inactive) {
+        // Ownership must not change halfway through one batch. A mixed
+        // destination would either duplicate or silently drop a prefix.
+        if (handled) {
+          arenaBuildPoisoned_.store(true, std::memory_order_release);
+          return false;
+        }
+        break;
+      }
+      handled = true;
+      if (result == ActiveArenaAppendResult::Failed) return false;
+    }
+    if (handled) return true;
   }
   auto& scratch = drawSubmitScratch();
   ScopedDrawSubmitScratchUse scratchUse(scratch);
-  scratch.bindingSnapshots.reserve(draws.size());
-  scratch.snapshotPayloads.reserve(draws.size());
+  scratch.bindingSnapshots.reserve(drawCount);
+  scratch.snapshotPayloads.reserve(drawCount);
   // Per-draw-run hot entry. Heap-allocation invariant per
   // codebase_conventions.rules.md; debug-only guard, no-op unless
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 build flag and env are both set.
@@ -3402,53 +3447,51 @@ void CommandQueue::submitDrawRun(core::CanonicalDrawState state,
   // single "hold" duration would not be meaningful. Only the acquire-wait
   // for this initial lock is recorded.
   QueueMutexProbeScope qmxScope(qmxBegin, "submit_draw_run", /*skipHold=*/true);
-  std::span<const core::DrawParamPayloadView> effectivePayloads{};
-  {
-    PerfScope stageScope(perf::countSubmitDrawRunBindingSnapshotCpuTime);
-    effectivePayloads =
-        snapshotDrawRunBindingPayloads(pool_,
-                                       state.hot,
-                                       draws,
-                                       payloads,
-                                       scratch.bindingSnapshots,
-                                       scratch.snapshotPayloads);
-  }
-  std::size_t pendingPayloadBytes = 0;
-  {
-    PerfScope stageScope(perf::countSubmitDrawRunPayloadBytesCpuTime);
-    pendingPayloadBytes = drawRunPayloadBytes(draws, effectivePayloads);
-  }
-  {
-    PerfScope stageScope(perf::countSubmitDrawRunSlotPrepareCpuTime);
-    ensureWritingSlotUnlocked(*this, lock);
-    maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock, pendingPayloadBytes);
-  }
-  {
-    PerfScope stageScope(perf::countSubmitDrawRunResourceMarkCpuTime);
-    const std::uint64_t seqId = seqIdForMark(*this, 0);
-    // Chunk handle tables retain the logical BufferHandle once per chunk, but
-    // a DYNAMIC + DISCARD buffer can rotate through several concrete Metal
-    // backings inside that chunk. Always stamp the per-draw snapshot backing
-    // before replay reaches a later DISCARD, even when logical per-draw
-    // marking is suppressed by the chunk importer.
-    markDrawBindingSnapshotResources(pool_, effectivePayloads, seqId);
-    if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
-      pool_.markDrawResources(state.hot, seqId);
-      markDrawBindingOverrideResources(pool_, effectivePayloads, seqId);
+  for (const auto& entry : entries) {
+    if (!entry.valid()) return false;
+    std::span<const core::DrawParamPayloadView> effectivePayloads{};
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunBindingSnapshotCpuTime);
+      effectivePayloads = snapshotDrawRunBindingPayloads(
+          pool_, entry.state->hot, entry.draws, entry.payloads,
+          scratch.bindingSnapshots, scratch.snapshotPayloads);
+    }
+    std::size_t pendingPayloadBytes = 0;
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunPayloadBytesCpuTime);
+      pendingPayloadBytes = drawRunPayloadBytes(entry.draws, effectivePayloads);
+    }
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunSlotPrepareCpuTime);
+      ensureWritingSlotUnlocked(*this, lock);
+      if (stop_) return false;
+      maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock,
+                                           pendingPayloadBytes);
+    }
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunResourceMarkCpuTime);
+      const std::uint64_t seqId = seqIdForMark(*this, 0);
+      markDrawBindingSnapshotResources(pool_, effectivePayloads, seqId);
+      if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
+        pool_.markDrawResources(entry.state->hot, seqId);
+        markDrawBindingOverrideResources(pool_, effectivePayloads, seqId);
+      }
+    }
+    currentBackBuffer_ = entry.state->hot.colorAttachments[0].handle;
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunAppendCpuTime);
+      DXMT_ASSERT_OWNED_BY_OR_LOCKED(writingSlotOwnership_, lock.owns_lock());
+      noteCurrentSlotCommandAppendStartedUnlocked(*this);
+      currentSlotUnlocked(*this).appendDrawRun(
+          std::move(*entry.state), *entry.uniforms, entry.draws,
+          effectivePayloads);
+    }
+    {
+      PerfScope stageScope(perf::countSubmitDrawRunChunkCommitCpuTime);
+      (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
     }
   }
-  currentBackBuffer_ = state.hot.colorAttachments[0].handle;
-  {
-    PerfScope stageScope(perf::countSubmitDrawRunAppendCpuTime);
-    DXMT_ASSERT_OWNED_BY_OR_LOCKED(writingSlotOwnership_, lock.owns_lock());
-    noteCurrentSlotCommandAppendStartedUnlocked(*this);
-    currentSlotUnlocked(*this).appendDrawRun(
-        std::move(state), uniforms, draws, effectivePayloads);
-  }
-  {
-    PerfScope stageScope(perf::countSubmitDrawRunChunkCommitCpuTime);
-    (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
-  }
+  return !stop_;
 }
 
 

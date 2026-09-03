@@ -3868,16 +3868,8 @@ void Device::submitDrawRunInternalFromCurrentState(
 }
 
 
-DirectReplayDrawResult Device::submitDirectReplayDrawFromCurrentState(
-    DrawParam draw, DrawParamPayloadView payload,
-    const DirectReplayDrawAppendCapability* appendCapability) {
-  if (draw.primitiveType == PrimitiveType::TriangleFan) {
-    return {D3DERR_INVALIDCALL,
-            DirectReplayDrawDisposition::LegacyPreEffectFailure};
-  }
-
-  draw.primitiveType = canonicalPrimitiveType(draw.primitiveType);
-  const auto& cached = cachedBaseDrawStateForSubmissionBatch();
+DrawBindingOverride Device::compatibilityDrawBindingOverride(
+    const DrawParam& draw, const CachedBaseDrawState& cached) const noexcept {
   DrawBindingOverride bindingOverride{};
   for (u32 stream = 0; stream < kMaxStreams; ++stream) {
     if (!state_.streamBuffers[stream]) {
@@ -3904,6 +3896,256 @@ DirectReplayDrawResult Device::submitDirectReplayDrawFromCurrentState(
   bindingOverride.alphaTestRef =
       flatStateOr(cached.hot.renderStates, RS_ALPHA_REF, 0u);
   bindingOverride.alphaTestStateValid = true;
+  return bindingOverride;
+}
+
+std::array<u64, kCompatibilityDrawBatchGenerationCount>
+Device::compatibilityDrawBatchGenerations() const noexcept {
+  using Gen = CompatibilityDrawBatchGeneration;
+  const auto slot = [](Gen value) noexcept {
+    return static_cast<std::size_t>(value);
+  };
+  std::array<u64, kCompatibilityDrawBatchGenerationCount> generations{};
+  generations[slot(Gen::StableState)] = drawStableStateGeneration_;
+  generations[slot(Gen::ShaderLayout)] = drawShaderLayoutGeneration_;
+  generations[slot(Gen::Uniform)] = drawUniformGeneration_;
+  generations[slot(Gen::VertexShaderConstant)] =
+      drawVertexShaderConstantGeneration_;
+  generations[slot(Gen::PixelShaderConstant)] =
+      drawPixelShaderConstantGeneration_;
+  generations[slot(Gen::UniformNonConstant)] =
+      drawUniformNonConstantGeneration_;
+  generations[slot(Gen::RenderStateFlat)] = drawRenderStateFlatGeneration_;
+  generations[slot(Gen::TextureStageStateFlat)] =
+      drawTextureStageStateFlatGeneration_;
+  generations[slot(Gen::SamplerStateFlat)] = drawSamplerStateFlatGeneration_;
+  return generations;
+}
+
+CompatibilityDrawBatchIdentity Device::compatibilityDrawBatchIdentity(
+    const DrawParam& draw,
+    const DrawBindingOverride& binding) const noexcept {
+  CompatibilityDrawBatchIdentity identity{};
+  identity.generations = compatibilityDrawBatchGenerations();
+  for (u32 stream = 0; stream < kMaxStreams; ++stream) {
+    identity.streamBuffers[stream] = binding.streams[stream].buffer.value;
+    identity.streamOffsets[stream] = binding.streams[stream].offset;
+    // `refreshShaderLayoutExtraStreamStrides` reads the LIVE stride for every
+    // stream >= 1 regardless of whether a buffer is bound, so the override's
+    // (bound-only) stride is not a complete witness for the shader layout.
+    identity.streamStrides[stream] = state_.streamStrides[stream];
+  }
+  identity.streamMask = binding.streamMask;
+  identity.indexBuffer = binding.indexBuffer.value;
+  identity.indexType = static_cast<std::uint32_t>(binding.indexType);
+  identity.indexed = draw.indexed;
+  identity.indexBufferValid = binding.indexBufferValid;
+  identity.alphaTestEnable = binding.alphaTestEnable;
+  identity.alphaTestFunc = binding.alphaTestFunc;
+  identity.alphaTestRef = binding.alphaTestRef;
+  identity.alphaTestStateValid = binding.alphaTestStateValid;
+  return identity;
+}
+
+CompatibilityDrawBatchFlushStatus
+Device::flushCompatibilityReplayDrawBatch() noexcept {
+  if (compatBatchDraws_.empty() || compatBatchFlushing_) {
+    return compatBatchFailed_ ? CompatibilityDrawBatchFlushStatus::Failed
+                              : CompatibilityDrawBatchFlushStatus::Empty;
+  }
+  // The pending run is retired on every exit, thrown or not: leaving it behind
+  // after a failed publish would let a later flush submit the same draws twice,
+  // and leaving `compatBatchFlushing_` set would disable batching for the rest
+  // of the process. Clearing keeps the vectors' capacity, so a steady-state
+  // island pays no allocation.
+  compatBatchFlushing_ = true;
+  struct FlushScope {
+    Device* device;
+    ~FlushScope() {
+      device->compatBatchDraws_.clear();
+      device->compatBatchPayloads_.clear();
+      device->compatBatchRuns_.clear();
+      device->compatBatchEntries_.clear();
+      device->compatBatchIdentity_ = {};
+      device->compatBatchFlushing_ = false;
+    }
+  } flushScope{this};
+  const auto draws = static_cast<std::uint64_t>(compatBatchDraws_.size());
+  try {
+    // A Device without an upper provider has nowhere to publish final wire.
+    if (!upperDevice_) {
+      compatBatchFailed_ = true;
+      return CompatibilityDrawBatchFlushStatus::Failed;
+    }
+    compatBatchEntries_.reserve(compatBatchRuns_.size());
+    for (auto& run : compatBatchRuns_) {
+      compatBatchEntries_.push_back(DrawRunBatchEntry{
+          .state = &run.state,
+          .uniforms = &run.uniforms,
+          .draws = std::span<const DrawParam>(
+              compatBatchDraws_.data() + run.firstDraw, run.drawCount),
+          .payloads = std::span<const DrawParamPayloadView>(
+              compatBatchPayloads_.data() + run.firstDraw, run.drawCount),
+      });
+    }
+    // One source-local publication carries all stateful runs. The production
+    // DeviceImpl maps this to one CommandQueue transaction; the base virtual
+    // hook remains a safe compatibility fallback for test providers.
+    if (!upperDevice_->submitDrawRunBatch(compatBatchEntries_)) {
+      compatBatchFailed_ = true;
+      return CompatibilityDrawBatchFlushStatus::Failed;
+    }
+    dxmt9::perf::countCompatibilityDrawBatchPublished(draws);
+    return CompatibilityDrawBatchFlushStatus::Published;
+  } catch (...) {
+    compatBatchFailed_ = true;
+    return CompatibilityDrawBatchFlushStatus::Failed;
+  }
+}
+
+DirectReplayDrawResult Device::submitCompatibilityReplayDrawBatched(
+    DrawParam draw, DrawParamPayloadView payload) {
+  // UP/TriangleFan and tracing still need an isolated effect. Ordinary draws
+  // are retained as a bounded sequence of stateful runs and published in one
+  // queue transaction at the next observable/control cut.
+  const bool batchable =
+      draw.primitiveType != PrimitiveType::TriangleFan &&
+      payload.userVertexData.empty() && payload.userIndexData.empty() &&
+      !renderTraceEnabled();
+  if (!batchable) {
+    const auto decision = core::compatibilityDrawBatchAdmission(
+        /*batchable=*/false,
+        static_cast<std::uint32_t>(compatBatchDraws_.size()),
+        compatBatchIdentity_, compatBatchIdentity_);
+    dxmt9::perf::countCompatibilityDrawBatchDecision(
+        decision.admission, decision.cut);
+    const auto flush = flushCompatibilityReplayDrawBatch();
+    if (flush == CompatibilityDrawBatchFlushStatus::Failed) {
+      return {D3DERR_DEVICELOST,
+              DirectReplayDrawDisposition::AcceptedFailStop};
+    }
+    return submitDirectReplayDrawFromCurrentState(draw, payload, nullptr);
+  }
+
+  draw.primitiveType = canonicalPrimitiveType(draw.primitiveType);
+  if (draw.indexed) {
+    draw.indexType = state_.indexType;
+  }
+
+  // The cache may rebuild between stateful runs. The prior run owns a copied
+  // canonical state, so that rebuild closes only the run, not the whole source
+  // batch. This is the key difference from the old identical-state island.
+  const bool openRunCacheIntact =
+      !compatBatchRuns_.empty() && drawStateCacheBindingAgnostic_.valid &&
+      compatBatchIdentity_.generations == compatibilityDrawBatchGenerations();
+  const auto& cachedForOverride = openRunCacheIntact
+      ? drawStateCacheBindingAgnostic_
+      : cachedBaseDrawStateForSubmissionBatch();
+  const auto bindingOverride =
+      compatibilityDrawBindingOverride(draw, cachedForOverride);
+  const auto identity = compatibilityDrawBatchIdentity(draw, bindingOverride);
+
+  // The old helper's capacity is per identical-state run. Capacity for this
+  // source-local batch is the total flat draw storage, handled below; use the
+  // full uint32 range here so an identity change only closes the current run.
+  const bool capacityCut =
+      compatBatchDraws_.size() >= core::kCompatibilityDrawBatchMaxDraws;
+  const auto decision = capacityCut
+      ? core::CompatibilityDrawBatchDecision{
+            core::CompatibilityDrawBatchAdmission::FlushAndStart,
+            core::CompatibilityDrawBatchCut::Capacity}
+      : core::compatibilityDrawBatchAdmission(
+            /*batchable=*/true,
+            compatBatchRuns_.empty()
+                ? 0u
+                : static_cast<std::uint32_t>(
+                      compatBatchRuns_.back().drawCount),
+            compatBatchIdentity_, identity,
+            std::numeric_limits<std::uint32_t>::max());
+  dxmt9::perf::countCompatibilityDrawBatchDecision(decision.admission,
+                                                   decision.cut);
+  if (capacityCut) {
+    const auto flush = flushCompatibilityReplayDrawBatch();
+    if (flush == CompatibilityDrawBatchFlushStatus::Failed) {
+      return {D3DERR_DEVICELOST,
+              DirectReplayDrawDisposition::AcceptedFailStop};
+    }
+    // The flush scope retired the old runs. The current cache is already the
+    // state for this incoming draw and is borrowed only while constructing its
+    // new owned run below.
+  }
+  const bool newRun = compatBatchRuns_.empty() ||
+      decision.admission == core::CompatibilityDrawBatchAdmission::FlushAndStart;
+  if (compatBatchRuns_.empty()) {
+    try {
+      compatBatchDraws_.reserve(core::kCompatibilityDrawBatchMaxDraws);
+      compatBatchPayloads_.reserve(core::kCompatibilityDrawBatchMaxDraws);
+      compatBatchRuns_.reserve(core::kCompatibilityDrawBatchMaxDraws);
+      compatBatchEntries_.reserve(core::kCompatibilityDrawBatchMaxDraws);
+    } catch (...) {
+      compatBatchFailed_ = true;
+      return {D3DERR_DEVICELOST,
+              DirectReplayDrawDisposition::AcceptedFailStop};
+    }
+  }
+  try {
+    if (newRun) {
+      DXMT_ASSERT(cachedForOverride.fullUniformsValid);
+      CompatibilityBatchRun run{
+          .state = CanonicalDrawState{
+              cachedForOverride.hot,
+              cachedForOverride.shaderLayout,
+              makeDrawDebugSnapshot(
+                  DrawCallArgs{draw.primitiveType, draw.primitiveCount,
+                               draw.startVertex, draw.baseVertexIndex,
+                               draw.startIndex, draw.indexType},
+                  cachedForOverride.hot)},
+          .uniforms = cachedForOverride.uniforms,
+          .bindingOverride = bindingOverride,
+          .firstDraw = compatBatchDraws_.size(),
+          .drawCount = 0,
+      };
+      compatBatchRuns_.push_back(std::move(run));
+      compatBatchIdentity_ = identity;
+    }
+    auto& run = compatBatchRuns_.back();
+    payload.bindingOverrideData = drawBindingOverrideBytes(run.bindingOverride);
+    compatBatchDraws_.push_back(draw);
+    compatBatchPayloads_.push_back(payload);
+    ++run.drawCount;
+  } catch (...) {
+    // A partial stateful batch cannot safely fall back after a source-local
+    // publication has begun. Retire it and fail closed instead.
+    compatBatchFailed_ = true;
+    return {D3DERR_DEVICELOST,
+            DirectReplayDrawDisposition::AcceptedFailStop};
+  }
+  if (activeOcclusionQuery_) {
+    activeOcclusionCount_ += draw.primitiveCount;
+  }
+  ++submittedSequenceId_;
+  DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
+  return {D3D_OK, DirectReplayDrawDisposition::Appended};
+}
+
+DirectReplayDrawResult Device::submitDirectReplayDrawFromCurrentState(
+    DrawParam draw, DrawParamPayloadView payload,
+    const DirectReplayDrawAppendCapability* appendCapability) {
+  // Every queue submission funnel publishes an open compatibility run first, so
+  // no later path can overtake draws the sink has already accepted.
+  if (flushCompatibilityReplayDrawBatch() ==
+      CompatibilityDrawBatchFlushStatus::Failed) {
+    return {D3DERR_DEVICELOST,
+            DirectReplayDrawDisposition::AcceptedFailStop};
+  }
+  if (draw.primitiveType == PrimitiveType::TriangleFan) {
+    return {D3DERR_INVALIDCALL,
+            DirectReplayDrawDisposition::LegacyPreEffectFailure};
+  }
+
+  draw.primitiveType = canonicalPrimitiveType(draw.primitiveType);
+  const auto& cached = cachedBaseDrawStateForSubmissionBatch();
+  const auto bindingOverride = compatibilityDrawBindingOverride(draw, cached);
   payload.bindingOverrideData = drawBindingOverrideBytes(bindingOverride);
 
   if (renderTraceEnabled()) {
@@ -3930,7 +4172,9 @@ DirectReplayDrawResult Device::submitDirectReplayDrawFromCurrentState(
   DXMT_ASSERT(cached.fullUniformsValid);
   const auto disposition = appendCapability
       ? appendCapability->append(input)
-      : upperDevice_->submitDirectReplayDraw(input);
+      : upperDevice_
+            ? upperDevice_->submitDirectReplayDraw(input)
+            : DirectReplayDrawDisposition::AcceptedFailStop;
   if (appendCapability) {
     if (disposition != DirectReplayDrawDisposition::Appended) {
       return {disposition == DirectReplayDrawDisposition::AcceptedFailStop
@@ -3963,6 +4207,14 @@ void Device::submitDrawRunInternal(
     CanonicalDrawState state, const DrawUniformPayload &uniforms,
     std::span<const DrawParam> draws,
     std::span<const DrawParamPayloadView> payloads) {
+  // Queue submission funnel: publish an open compatibility draw-run island
+  // before any later submission can overtake the draws it already accepted.
+  // Re-entrant from the flush itself, which the flush's own guard absorbs.
+  if (flushCompatibilityReplayDrawBatch() ==
+      CompatibilityDrawBatchFlushStatus::Failed) {
+    deviceLost_ = true;
+    return;
+  }
   if (draws.empty()) {
     return;
   }
@@ -4029,6 +4281,10 @@ void Device::submitDrawRunInternal(
   }
 
   const auto drawCount = static_cast<u64>(draws.size());
+  if (!upperDevice_) {
+    deviceLost_ = true;
+    return;
+  }
   if (activeOcclusionQuery_) {
     for (const auto &draw : draws) {
       activeOcclusionCount_ += draw.primitiveCount;

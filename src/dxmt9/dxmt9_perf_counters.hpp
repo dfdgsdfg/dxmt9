@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dxmt9_session_finalize_cause.hpp"
+#include "dxmt9/core_compat_draw_batch.hpp"
 
 #include <array>
 #include <cstddef>
@@ -329,6 +330,14 @@ void countReplaySpanSameRawAdmitted();
 void countReplaySpanSameRawRejected();
 void countReplaySpanPlanRejected();
 void countReplaySpanSeparatorFailStop();
+
+// Compatibility-lane draw-run island batching (see
+// include/dxmt9/core_compat_draw_batch.hpp). `published` counts queue
+// acquisitions: one per island, however many draws it folded.
+void countCompatibilityDrawBatchPublished(std::uint64_t draws);
+void countCompatibilityDrawBatchDecision(
+    core::CompatibilityDrawBatchAdmission admission,
+    core::CompatibilityDrawBatchCut cut);
 void countRingArenaHeapFallback(RingArenaKind kind, std::uint64_t bytes);
 
 void countSubmitDraw();

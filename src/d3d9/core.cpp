@@ -241,6 +241,14 @@ HResult Device::presentEx(const Rect* sourceRect, const Rect* destRect, Handle d
   if (deviceLost_) {
     return D3DERR_DEVICELOST;
   }
+  // Publish an ordinary replay island before snapshotting or issuing any
+  // Present side effect. A failed publication is observable at this public
+  // boundary; it must not be converted into a successful empty Present.
+  if (flushCompatibilityReplayDrawBatch() ==
+      CompatibilityDrawBatchFlushStatus::Failed) {
+    deviceLost_ = true;
+    return D3DERR_DEVICELOST;
+  }
   auto desc = snapshotSwapDesc();
   // R-BACK-2.51(g) — consume the per-present pacing flag set by the
   // chunk-replay path (see setNextPresentPacedByOrdinal() doc). Any caller
@@ -443,6 +451,9 @@ HResult Device::checkDeviceMultiSampleType(Format format, MultiSampleType type) 
 }
 
 void Device::submitPresentInternal(const SwapDesc& desc) {
+  // `presentEx` publishes the compatibility island before taking the snapshot
+  // used here. Replay also cuts before dispatching a Present record.
+  DXMT_ASSERT(!compatibilityReplayDrawBatchPending());
   if (renderTraceEnabled()) {
     emitRenderTrace("present seq=%llu window=0x%llx size=%ux%u fmt=%u windowed=%d interval=%u",
                     static_cast<unsigned long long>(submittedSequenceId_ + 1),

@@ -905,8 +905,9 @@ void testSourceContracts(const std::filesystem::path &root) {
            &deviceImplementation, &sourcePayload, &sourcePayloadHeader}) {
     checkNotContains(*productionSurface, "DrawRunSubmission",
                      "retired draw carrier type is absent from production");
-    checkNotContains(*productionSurface, "submitDrawRunBatch",
-                     "retired draw carrier submit surface is absent");
+    // Source-local compatibility batching is a typed borrowed view, not a
+    // retained carrier; its batch ingress is intentionally part of the
+    // production surface.
     checkNotContains(*productionSurface, "appendDrawRunBatch",
                      "retired draw carrier append surface is absent");
   }

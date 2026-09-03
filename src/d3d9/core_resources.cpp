@@ -651,6 +651,14 @@ ClearDesc Device::snapshotClearDesc(const ClearDesc &desc) const {
 }
 
 HResult Device::clear(const ClearDesc &desc) {
+  // Flush before mutating CPU-visible attachment shadows. If publication
+  // fails, Clear must be externally visible as failure and must not leave a
+  // shadow mutation whose GPU command was never submitted.
+  if (flushCompatibilityReplayDrawBatch() ==
+      CompatibilityDrawBatchFlushStatus::Failed) {
+    deviceLost_ = true;
+    return D3DERR_DEVICELOST;
+  }
   auto snapshot = snapshotClearDesc(desc);
   if (snapshot.clearColor) {
     for (const auto &attachment : snapshot.colorAttachments) {
@@ -833,6 +841,9 @@ void Device::invalidateDefaultPoolResources() {
 }
 
 void Device::submitClearInternal(const ClearDesc &desc) {
+  // `clear` publishes the compatibility island before mutating attachment
+  // shadows. Replay likewise cuts before dispatching a Clear record.
+  DXMT_ASSERT(!compatibilityReplayDrawBatchPending());
   if (detail::renderTraceEnabled()) {
     detail::emitRenderTrace(
         "clear seq=%llu color=%d depth=%d stencil=%d color0=0x%llx "

@@ -573,6 +573,50 @@ void countReplaySpanSeparatorFailStop() {
   add(counters().replaySpanSeparatorFailStops);
 }
 
+void countCompatibilityDrawBatchPublished(std::uint64_t draws) {
+  if (!enabled()) return;
+  add(counters().compatDrawBatchesPublished);
+  addEnabledNonZero(counters().compatDrawBatchDraws, draws);
+  if (draws > 1u) add(counters().compatDrawBatchMultiDrawBatches);
+  updateMax(counters().compatDrawBatchMaxDraws, draws);
+}
+
+void countCompatibilityDrawBatchDecision(
+    core::CompatibilityDrawBatchAdmission admission,
+    core::CompatibilityDrawBatchCut cut) {
+  if (!enabled()) return;
+  switch (admission) {
+  case core::CompatibilityDrawBatchAdmission::Start:
+    add(counters().compatDrawBatchStarts);
+    break;
+  case core::CompatibilityDrawBatchAdmission::Extend:
+    add(counters().compatDrawBatchExtends);
+    break;
+  case core::CompatibilityDrawBatchAdmission::FlushAndStart:
+    add(counters().compatDrawBatchStarts);
+    break;
+  case core::CompatibilityDrawBatchAdmission::Unbatchable:
+    add(counters().compatDrawBatchUnbatchedDraws);
+    break;
+  case core::CompatibilityDrawBatchAdmission::Count:
+    break;
+  }
+  switch (cut) {
+  case core::CompatibilityDrawBatchCut::Identity:
+    add(counters().compatDrawBatchCutIdentity);
+    break;
+  case core::CompatibilityDrawBatchCut::Capacity:
+    add(counters().compatDrawBatchCutCapacity);
+    break;
+  case core::CompatibilityDrawBatchCut::Unbatchable:
+    add(counters().compatDrawBatchCutUnbatchable);
+    break;
+  case core::CompatibilityDrawBatchCut::None:
+  case core::CompatibilityDrawBatchCut::Count:
+    break;
+  }
+}
+
 void countRingArenaHeapFallback(RingArenaKind kind, std::uint64_t bytes) {
   if (!enabled()) return;
   add(counters().ringArenaHeapFallbackCount);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dxmt9/assert.hpp"
+#include "dxmt9/core_compat_draw_batch.hpp"
 #include "dxmt9/core_constants.hpp"
 
 #include <algorithm>
@@ -1082,6 +1083,23 @@ struct DrawParamPayloadView {
   std::span<const u8> userIndexData{};
   std::span<const u8> bindingOverrideData{};
   std::span<const u8> bindingSnapshotData{};
+};
+
+// A bounded collection of ordinary draw runs published as one queue
+// transaction.  Each entry owns its canonical state in the caller and borrows
+// only for the duration of submitDrawRunBatch(); the queue copies every entry
+// into its final ChunkSlot before returning.  Keeping the state per entry is
+// important: source-local batching must not require identical state/uniform
+// generations or copy a per-draw state carrier.
+struct DrawRunBatchEntry {
+  CanonicalDrawState* state = nullptr;
+  const DrawUniformPayload* uniforms = nullptr;
+  std::span<const DrawParam> draws{};
+  std::span<const DrawParamPayloadView> payloads{};
+
+  bool valid() const noexcept {
+    return state != nullptr && uniforms != nullptr && !draws.empty();
+  }
 };
 
 // Synchronous direct-replay input.  The state and uniform pointers borrow the
@@ -2325,6 +2343,39 @@ class Device : public std::enable_shared_from_this<Device> {
   DirectReplayDrawResult submitDirectReplayDrawFromCurrentState(
       DrawParam draw, DrawParamPayloadView payload = {},
       const DirectReplayDrawAppendCapability* appendCapability = nullptr);
+  // Compatibility-lane source-local batching. Every draw the ordinary replay
+  // sink owns -- i.e. every draw NOT handed to a Direct final-slot lease or an
+  // Arena source -- enters here instead of taking one queue acquisition of its
+  // own. Consecutive identical draws share a run; state-changing draws close
+  // that run and open another retained run. At the next ordered/effect cut all
+  // retained runs reach the queue through one `submitDrawRunBatch` transaction.
+  //
+  // Each retained run owns its canonical state/uniform snapshot and holds
+  // DrawParamPayloadView spans owned by the caller's replay scratch, so the
+  // caller MUST publish it before that scratch dies and before replaying any
+  // record that can mutate device state. `flushCompatibilityReplayDrawBatch`
+  // is idempotent, so an unconditional flush at every cut is correct.
+  DirectReplayDrawResult submitCompatibilityReplayDrawBatched(
+      DrawParam draw, DrawParamPayloadView payload = {});
+  // Publish an open island. Idempotent, total and `noexcept`: a throwing
+  // publish is caught, retires the island and is reported as `Failed` so a
+  // caller can never mistake it for success. Re-entering from inside a publish
+  // (the funnels below call this, and the publish itself goes through one of
+  // them on a device with no upper device) reports `Empty`.
+  CompatibilityDrawBatchFlushStatus
+  flushCompatibilityReplayDrawBatch() noexcept;
+  bool compatibilityReplayDrawBatchPending() const noexcept {
+    return !compatBatchDraws_.empty();
+  }
+  // Sticky: set by a failed publish and by a failed island start. The replay
+  // boundary reads it so an allocation or publish failure becomes a replay
+  // failure rather than a silently shorter command stream.
+  bool compatibilityReplayDrawBatchFailed() const noexcept {
+    return compatBatchFailed_;
+  }
+  void clearCompatibilityReplayDrawBatchFailure() noexcept {
+    compatBatchFailed_ = false;
+  }
   HResult present();
   HResult reset(const PresentParameters& params);
   HResult checkDeviceMultiSampleType(Format format, MultiSampleType type) const;
@@ -2473,6 +2524,21 @@ class Device : public std::enable_shared_from_this<Device> {
   const CachedBaseDrawState& cachedBaseDrawState(bool includeIndexBuffer);
   const CachedBaseDrawState& cachedBaseDrawStateForSubmissionBatch();
 
+  // Identity of the canonical run the *current* device state would produce for
+  // `draw`, folded from the binding-agnostic cache generations plus the live
+  // stream/index binding. Pure over `state_` and the generation counters: it
+  // resolves no handle, touches no queue and does not refresh the cache.
+  CompatibilityDrawBatchIdentity compatibilityDrawBatchIdentity(
+      const DrawParam& draw, const DrawBindingOverride& binding) const noexcept;
+  // Live values of the nine draw-state cache generations, in the fixed
+  // CompatibilityDrawBatchGeneration order. Equal to a pending run's captured
+  // copy exactly when cachedBaseDrawStateForSubmissionBatch() would be a
+  // content-preserving hit.
+  std::array<u64, kCompatibilityDrawBatchGenerationCount>
+  compatibilityDrawBatchGenerations() const noexcept;
+  DrawBindingOverride compatibilityDrawBindingOverride(
+      const DrawParam& draw, const CachedBaseDrawState& cached) const noexcept;
+
   AdapterInfo adapter_{};
   BackendLimits limits_{};
   DeviceCaps caps_{};
@@ -2511,6 +2577,31 @@ class Device : public std::enable_shared_from_this<Device> {
   CachedBaseDrawState drawStateCacheWithIndex_{};
   CachedBaseDrawState drawStateCacheNoIndex_{};
   CachedBaseDrawState drawStateCacheBindingAgnostic_{};
+  // Pending compatibility source-local batch. Each run retains its own
+  // canonical state/uniform snapshot, while the flat draw/payload arrays keep
+  // the hot representation DOD-shaped and avoid one allocation per draw.
+  // `compatBatchRuns_` is bounded and reserved before its first append, so
+  // payload binding spans remain stable until publication. A batch is flushed
+  // on an observable/control boundary or after the bounded draw ceiling; the
+  // queue then appends every stateful run under one writer transaction.
+  struct CompatibilityBatchRun {
+    CanonicalDrawState state{};
+    DrawUniformPayload uniforms{};
+    DrawBindingOverride bindingOverride{};
+    std::size_t firstDraw = 0;
+    std::size_t drawCount = 0;
+  };
+  std::vector<CompatibilityBatchRun> compatBatchRuns_{};
+  std::vector<DrawParam> compatBatchDraws_{};
+  std::vector<DrawParamPayloadView> compatBatchPayloads_{};
+  std::vector<DrawRunBatchEntry> compatBatchEntries_{};
+  CompatibilityDrawBatchIdentity compatBatchIdentity_{};
+  // Re-entrancy guard: the flush itself submits a draw run, and every queue
+  // submission funnel flushes first.
+  bool compatBatchFlushing_ = false;
+  // Sticky publication/allocation failure. Cleared only by the replay boundary
+  // that reported it.
+  bool compatBatchFailed_ = false;
   std::array<BatchMissSemanticProbeEntry, 8> drawStateCacheBatchMissSemanticProbe_{};
   u32 drawStateCacheBatchMissSemanticProbeCursor_ = 0;
   std::array<BatchMissShaderConstantHashMemoEntry, 16>

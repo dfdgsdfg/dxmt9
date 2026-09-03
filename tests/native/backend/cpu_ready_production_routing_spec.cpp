@@ -1133,10 +1133,29 @@ struct RoutingDevice final : dxmt9::Device {
                      const DrawUniformPayload& uniforms,
                      std::span<const DrawParam> draws,
                      std::span<const DrawParamPayloadView> payloads) override {
-    ++drawCalls;
-    ++ordinaryDrawCalls;
-    lastDrawRunSize = static_cast<std::uint32_t>(draws.size());
+    // Count DRAWS, not calls: the ordinary lane folds consecutive
+    // identical-state draws into one run, so a call is a queue acquisition and
+    // no longer a draw. `ordinaryDrawRunSubmissions` is the acquisition count.
+    const auto count = static_cast<std::uint32_t>(draws.size());
+    drawCalls += count;
+    ordinaryDrawCalls += count;
+    ++ordinaryDrawRunSubmissions;
+    lastDrawRunSize = count;
     queue_.submitDrawRun(std::move(state), uniforms, draws, payloads);
+  }
+
+  bool submitDrawRunBatch(
+      std::span<const dxmt9::core::DrawRunBatchEntry> entries) override {
+    std::uint32_t count = 0;
+    for (const auto& entry : entries) {
+      if (!entry.valid()) continue;
+      count += static_cast<std::uint32_t>(entry.draws.size());
+    }
+    drawCalls += count;
+    ordinaryDrawCalls += count;
+    ++ordinaryDrawRunSubmissions;
+    lastDrawRunSize = count;
+    return queue_.submitDrawRunBatch(entries);
   }
 
   DirectReplayDrawDisposition submitDirectReplayDraw(
@@ -1163,6 +1182,7 @@ struct RoutingDevice final : dxmt9::Device {
   std::atomic<std::uint32_t> clearCalls{0};
   std::atomic<std::uint32_t> drawCalls{0};
   std::atomic<std::uint32_t> ordinaryDrawCalls{0};
+  std::atomic<std::uint32_t> ordinaryDrawRunSubmissions{0};
   std::atomic<std::uint32_t> presentCalls{0};
   std::uint32_t lastDrawRunSize = 0;
   std::uint64_t lastPresentSeqId = 0;
@@ -2811,9 +2831,13 @@ void directAdmissionRejectionPreservesLegacyDrawBatchGrouping() {
   // A capacity-rejected continuation is still pre-effect. Keep the populated
   // prefix in place and hand the whole raw to the authoritative serial batch
   // path; storage pressure must not manufacture a publication boundary.
+  // The two draws bind DIFFERENT buffers, so the ordinary lane must cut
+  // between them: two runs, one acquisition, and a writing slot holding the
+  // retained Clear plus both of them.
   check(fixture.routing->drawCalls == 2u &&
             fixture.routing->ordinaryDrawCalls == 2u &&
-            fixture.routing->lastDrawRunSize == 1u &&
+            fixture.routing->ordinaryDrawRunSubmissions == 1u &&
+            fixture.routing->lastDrawRunSize == 2u &&
             dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
                 fixture.routing->queue_) == 3u,
         "a capacity-rejected span falls back whole without rotating the prefix");
@@ -2821,6 +2845,61 @@ void directAdmissionRejectionPreservesLegacyDrawBatchGrouping() {
   dxmt9::d3d9::releaseRetainedWrappers(raw);
   dxmt9c_buffer_release(buffer);
   dxmt9c_buffer_release(secondBuffer);
+}
+
+// The ordinary (non-Direct) production path must retain state-separated runs
+// without publishing each one independently. This is the regression shape the
+// identical-state island could not address: A -> B -> A has three final
+// DrawRun records, but one source-local queue transaction.
+void ordinarySourceBatchPreservesStateRunsWithOneAcquisition() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/false);
+  auto* bufferA = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  auto* bufferB = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(bufferA != nullptr && bufferB != nullptr,
+        "ordinary source batch A/B buffers construct");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identityA = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, bufferA);
+  const auto identityB = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, bufferB);
+  const auto wire = makeWireFixture(std::array{
+      drawRecord(identityA, 0u), drawRecord(identityB, 1u),
+      drawRecord(identityA, 2u)});
+  auto raw = makeRaw(wire, 76u, false, &registry);
+  raw.cpuReadyTapePlanningEnabled = false;
+  dxmt9::d3d9::ImportedChunkView imported;
+  check(validateCommandChunk(wire.bytes, wire.envelope, &imported).valid(),
+        "ordinary source batch A/B/A fixture validates");
+
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
+            fixture.routing->drawCalls == 3u &&
+            fixture.routing->ordinaryDrawCalls == 3u &&
+            fixture.routing->ordinaryDrawRunSubmissions == 1u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+                fixture.routing->queue_) == 3u,
+        "ordinary A/B/A retains three runs with one queue acquisition");
+  const auto first = dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
+      fixture.routing->queue_, 0u);
+  const auto second = dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
+      fixture.routing->queue_, 1u);
+  const auto third = dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
+      fixture.routing->queue_, 2u);
+  // Stream bindings are intentionally excluded from binding-agnostic `hot`;
+  // the production queue decodes and copies them from each run's payload.
+  check(first.hot == second.hot && second.hot == third.hot &&
+            first.payload != second.payload && first.payload == third.payload,
+        "ordinary A/B/A preserves state separation in typed binding payloads");
+
+  fixture.routing->present(SwapDesc{});
+  const auto completion = dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+      fixture.routing->queue_);
+  check(completion.reclaimed && completion.commandCount == 4u,
+        "ordinary A/B/A completion retains all three ordered runs");
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(bufferA);
+  dxmt9c_buffer_release(bufferB);
 }
 
 void populatedSlotDrawApplyDrawUsesCarrierFreeContinuation() {
@@ -2957,13 +3036,21 @@ void populatedSlotInsufficientCapacityFallsBackBeforeEffects() {
   const std::array records{drawRecord(identity, 0u), drawRecord(identity, 1u)};
   auto raw = makeRaw(makeWireFixture(records), 75u, false, &registry);
   raw.cpuReadyTapePlanningEnabled = false;
+  // Both records bind the same buffer at the same offset/stride with nothing
+  // between them, so the whole-raw ordinary fallback folds them into ONE
+  // queue acquisition carrying two draws. The fallback itself is unchanged:
+  // two draws replay, in order, through the authoritative serial path.
   check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
             fixture.routing->drawCalls == 2u &&
             fixture.routing->ordinaryDrawCalls == 2u &&
-            fixture.routing->lastDrawRunSize == 1u,
+            fixture.routing->ordinaryDrawRunSubmissions == 1u &&
+            fixture.routing->lastDrawRunSize == 2u,
         "insufficient continuation capacity falls back whole before effects");
+  // The seven-draw prefix is still the slot's first command and the fallback
+  // appended after it, so no rotation published anything. Two commands, not
+  // three: the fallback's two draws share one run.
   check(dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
-            fixture.routing->queue_) == 3u,
+            fixture.routing->queue_) == 2u,
         "capacity rejection preserves the populated prefix without rotation");
   dxmt9::d3d9::releaseRetainedWrappers(raw);
   dxmt9c_buffer_release(buffer);
@@ -3809,6 +3896,7 @@ int main() {
     ordinaryUnsupportedClearRangeStaysCompatibilityOwned();
     ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics();
     directAdmissionRejectionPreservesLegacyDrawBatchGrouping();
+    ordinarySourceBatchPreservesStateRunsWithOneAcquisition();
     populatedSlotDrawApplyDrawUsesCarrierFreeContinuation();
     populatedSlotInsufficientCapacityFallsBackBeforeEffects();
     populatedSlotProducerIdentityGapFallsBackBeforeEffects();

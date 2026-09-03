@@ -329,6 +329,16 @@ test('dxmt9-direct-source-lifecycle-spec',
      direct_source_lifecycle_spec,
      env: dxmt9_native_test_env)
 
+compat_draw_batch_spec = executable(
+  'dxmt9-compat-draw-batch-spec',
+  'compat_draw_batch_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+
+test('dxmt9-compat-draw-batch-spec',
+     compat_draw_batch_spec,
+     env: dxmt9_native_test_env)
+
 process_memory_observer_spec = executable(
   'dxmt9-process-memory-observer-spec',
   'process_memory_observer_spec.cpp',

@@ -143,6 +143,16 @@ struct Counters {
   std::atomic<std::uint64_t> replaySpanSameRawRejected{0};
   std::atomic<std::uint64_t> replaySpanPlanRejected{0};
   std::atomic<std::uint64_t> replaySpanSeparatorFailStops{0};
+  std::atomic<std::uint64_t> compatDrawBatchesPublished{0};
+  std::atomic<std::uint64_t> compatDrawBatchDraws{0};
+  std::atomic<std::uint64_t> compatDrawBatchMultiDrawBatches{0};
+  std::atomic<std::uint64_t> compatDrawBatchMaxDraws{0};
+  std::atomic<std::uint64_t> compatDrawBatchStarts{0};
+  std::atomic<std::uint64_t> compatDrawBatchExtends{0};
+  std::atomic<std::uint64_t> compatDrawBatchUnbatchedDraws{0};
+  std::atomic<std::uint64_t> compatDrawBatchCutIdentity{0};
+  std::atomic<std::uint64_t> compatDrawBatchCutCapacity{0};
+  std::atomic<std::uint64_t> compatDrawBatchCutUnbatchable{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackCount{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackBytes{0};
   std::atomic<std::uint64_t> ringArenaHeapFallbackCountArgbuf{0};

@@ -435,6 +435,12 @@ class CommandQueue {
                      const core::DrawUniformPayload& uniforms,
                      std::span<const core::DrawParam> draws,
                      std::span<const core::DrawParamPayloadView> payloads = {});
+  // Publish a bounded collection of stateful ordinary draw runs through one
+  // outer queue-writer submission. Entries retain their own canonical state,
+  // so this is not the old one-state carrier and does not require identical
+  // draw identities. A physical slot-capacity split may still unlock/relock
+  // internally through QueueLifecycleController.
+  bool submitDrawRunBatch(std::span<const core::DrawRunBatchEntry> entries);
   core::DirectReplayDrawDisposition submitDirectReplayDraw(
       const core::DirectReplayDrawInput& input) noexcept;
 

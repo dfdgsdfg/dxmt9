@@ -537,6 +537,21 @@ public:
     batchCurrentDraw_ = value;
   }
 
+  // Publish any open compatibility draw-run island. Every cut goes through
+  // here: an observable record cut, the end of the replay range, and every
+  // early return. Pure ConstantUpload projections are the one exception and
+  // may execute while the island remains open. Idempotent, so an unconditional
+  // call is correct.
+  //
+  // The run borrows `bindingSnapshots_` spans, so it must not outlive this
+  // sink's caller -- `DrawBatchScope` in replayResolvedChunk enforces that on
+  // every exit path, including the failure returns.
+  bool flushDrawBatch() noexcept {
+    if (directFinalDraws_ || !device_) return true;
+    return device_->dev().flushCompatibilityReplayDrawBatch() !=
+           dxmt9::core::CompatibilityDrawBatchFlushStatus::Failed;
+  }
+
   bool startIrreversibleEffect() noexcept {
     return transaction_ && transaction_->startIrreversibleEffect();
   }
@@ -920,6 +935,21 @@ public:
   }
 
   std::int32_t draw(const dxmt9::d3d9::SparseDrawCall& call) override {
+    if (!call.payload.userVertexData.empty() ||
+        !call.payload.userIndexData.empty()) {
+      // A UP draw carries its own vertex/index bytes and replays through the
+      // legacy sink, so it can never ride a batched run; publish first so the
+      // serial order the app issued is preserved exactly. The record walk
+      // already cut here for a UP *record*; this covers any other ingress.
+      if (!flushDrawBatch()) {
+        return dxmt9::core::D3DERR_DEVICELOST;
+      }
+      if (!directFinalDraws_) {
+        dxmt9::perf::countCompatibilityDrawBatchDecision(
+            dxmt9::core::CompatibilityDrawBatchAdmission::Unbatchable,
+            dxmt9::core::CompatibilityDrawBatchCut::None);
+      }
+    }
     if (!call.payload.userIndexData.empty()) {
       return device_->dev().drawIndexedPrimitiveUP(
           call.param.primitiveType, call.param.primitiveCount,
@@ -943,19 +973,39 @@ public:
       // A private Direct/Arena destination remains rollbackable until commit.
       // The ordinary serial path publishes directly into final queue storage,
       // so its effect cut must precede the synchronous borrowed-state call.
+      // Batching does not move that cut: an accepted draw is accounted here,
+      // exactly where an unbatched one would have been submitted.
       if (!directFinalDraws_ && !startIrreversibleEffect()) {
         return dxmt9::core::D3DERR_DEVICELOST;
+      }
+      if (!directFinalDraws_) {
+        // Ordinary lane: fold consecutive identical-state draws into one
+        // queue acquisition instead of taking one per draw. The run is cut by
+        // the record walk below before anything can mutate device state.
+        return device_->dev()
+            .submitCompatibilityReplayDrawBatched(draw, payload)
+            .result;
       }
       const auto result =
           device_->dev().submitDirectReplayDrawFromCurrentState(
               draw, payload, directRangeAppender_);
-      if (directFinalDraws_ &&
-          result.disposition !=
+      if (result.disposition !=
               dxmt9::core::DirectReplayDrawDisposition::Appended &&
           !startIrreversibleEffect()) {
         return dxmt9::core::D3DERR_DEVICELOST;
       }
       return result.result;
+    }
+    if (!flushDrawBatch()) {
+      return dxmt9::core::D3DERR_DEVICELOST;
+    }
+    if (!directFinalDraws_) {
+      // The record walker only sends a non-batchable draw here for
+      // TriangleFan (or a state-block recording). Both use the legacy
+      // one-draw submission path and must be visible in the residual counter.
+      dxmt9::perf::countCompatibilityDrawBatchDecision(
+          dxmt9::core::CompatibilityDrawBatchAdmission::Unbatchable,
+          dxmt9::core::CompatibilityDrawBatchCut::None);
     }
     auto payload = call.payload;
     if (!attachCapturedBindingSnapshot(draw, payload)) {
@@ -1278,11 +1328,29 @@ int32_t replayResolvedChunk(
   // final queue storage instead of materializing an intermediate carrier.
   const bool directFinalDraws = arenaLease != nullptr ||
       activeDirectChunkSlotPath;
+  // A previous ordinary replay may have failed while publishing its pending
+  // island. That failure was consumed by the replay boundary which returned
+  // an error; start the next independent boundary with a clean sticky bit.
+  device->dev().clearCompatibilityReplayDrawBatchFailure();
   DeviceReplaySink sink(
       device, pacedByPresentOrdinal, &replayScratch.bindingSnapshots,
       raw.bufferSnapshots,
       raw.bufferSnapshotsCaptured, directFinalDraws, transaction,
       directRangeAppender);
+  // A pending compatibility draw-run island holds DrawParamPayloadView spans
+  // into `replayScratch`, which dies with this call, and its canonical state
+  // borrows the device's binding-agnostic cache. Observable records cut the
+  // run before dispatch, but the failure returns below do not, so bind final
+  // publication to the scope rather than to each return.
+  struct DrawBatchScope {
+    DeviceReplaySink* sink;
+    ~DrawBatchScope() {
+      // Publishing from a destructor must not throw. The device retires the
+      // pending run either way, and a throwing publish only reaches here on an
+      // exit that is already returning a failure.
+      (void)sink->flushDrawBatch();
+    }
+  } drawBatchScope{&sink};
   std::size_t activeSegment = 0;
   std::size_t activeSource = 0;
   std::size_t activeSourceSegment = 0;
@@ -1361,8 +1429,30 @@ int32_t replayResolvedChunk(
                              static_cast<std::uint32_t>(index),
                              record.wire.header.type);
     }
+    const auto replayInfo = replayInfoForCommandRecordType(
+        record.wire.header.type);
     const bool batchableDraw = recordCanBatchDraw(device, record.wire);
+    const auto recordClass =
+        dxmt9::core::classifyCompatibilityDrawBatchRecord({
+        .batchableDraw = batchableDraw,
+        .mutatesDeviceState = replayInfo.mutatesDeviceState,
+        .referencesResources = replayInfo.referencesResources,
+        .barrier = replayInfo.barrier,
+        .stateBlockRecording = device->stateBlockRecording,
+    });
     sink.setBatchCurrentDraw(batchableDraw);
+    if (dxmt9::core::compatibilityDrawBatchRecordCutsIsland(recordClass)) {
+      // Only a pure ConstantUpload projection may remain inside an open
+      // compatibility island. StateApply, coordinators, ordered controls,
+      // resource/surface operations, UP/TriangleFan and unknown records are
+      // observable or resource-bearing and cut before dispatch.
+      if (!sink.flushDrawBatch()) {
+        return commitChunkFail("chunk-replay-batch-flush",
+                               static_cast<std::uint32_t>(index),
+                               record.wire.header.type,
+                               dxmt9::core::D3DERR_DEVICELOST);
+      }
+    }
     if (captureIdentity && batchableDraw) {
       if (arenaLease) {
         const std::array recordIndex{static_cast<std::uint32_t>(index)};
@@ -1427,8 +1517,6 @@ int32_t replayResolvedChunk(
             static_cast<std::uint32_t>(index))) {
       captureIdentity = false;
     }
-    const auto replayInfo = replayInfoForCommandRecordType(
-        record.wire.header.type);
     const bool stateOnly =
         replayInfo.category == ImportedRecordReplayCategory::ConstantUpload ||
         replayInfo.category == ImportedRecordReplayCategory::StateApply;
@@ -1470,6 +1558,11 @@ int32_t replayResolvedChunk(
       (activeSource + 1u != arenaSources.size() ||
        activeSourceSegment + 1u != arenaSources.back().segmentCount)) {
     return commitChunkFail("chunk-replay-source-incomplete");
+  }
+  if (!sink.flushDrawBatch()) {
+    return commitChunkFail("chunk-replay-batch-flush-end",
+                           static_cast<std::uint32_t>(rangeEnd), 0u,
+                           dxmt9::core::D3DERR_DEVICELOST);
   }
   if (range.countAdmit) {
     dxmt9::perf::countChunkAdmit();

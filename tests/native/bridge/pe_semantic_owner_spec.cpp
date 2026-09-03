@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
+#include <vector>
 
 struct RefCounter { std::uint32_t refs = 1u; };
 struct D9CSurface : RefCounter {};
@@ -251,6 +252,36 @@ void partialRectClearMatchesCanonicalBuilder() {
         "partial-rect semantic clear equals canonical bytes");
   owner.reset();
   canonical.resetAndReleaseRetained();
+}
+
+void largeCanonicalPayloadSurvivesRepeatedExactEmission() {
+  DefaultOwner owner;
+  std::array<std::byte, 4096u> constants{};
+  for (std::size_t i = 0u; i < constants.size(); ++i)
+    constants[i] = static_cast<std::byte>((i * 37u) & 0xffu);
+  for (std::uint64_t ordinal = 1u; ordinal <= Owner::maxRecords; ++ordinal) {
+    auto input = base(PeSemanticProducerKind::VsFloatConstant, ordinal, ordinal);
+    input.setConst.registerCount = 256u;
+    input.constantBytes = constants;
+    check(owner.admit(input), "large canonical payload admission");
+  }
+  std::size_t handles = 0u;
+  std::size_t payload = 0u;
+  std::size_t wire = 0u;
+  check(owner.emissionMetrics(handles, payload, wire) && payload > 65536u,
+        "large canonical payload crosses the former staging overlap");
+  std::vector<std::byte> first(wire);
+  std::vector<std::byte> second(wire);
+  PeSemanticExactFixedEmission firstEmission;
+  PeSemanticExactFixedEmission secondEmission;
+  check(owner.emitExactFixed(first, firstEmission) && firstEmission.valid() &&
+            owner.emitExactFixed(second, secondEmission) && secondEmission.valid() &&
+            firstEmission.wireBytes == secondEmission.wireBytes &&
+            std::equal(first.begin(), first.end(), second.begin()) &&
+            std::equal(firstEmission.wire.begin(), firstEmission.wire.end(),
+                       secondEmission.wire.begin()),
+        "repeated large ExactFixed emission preserves canonical bytes");
+  owner.reset();
 }
 
 void duplicateSurfacePinSmoke() {
@@ -510,6 +541,210 @@ void capacityFailureIsPreEffectAndRetryableAfterBoundary() {
   owner.reset();
   check(first.refs == 1u && second.refs == 1u,
         "capacity retry fixture releases both typed pins");
+}
+
+// Truth table for the call-local prepared witness. Every row states the
+// destination shape, the record, and the exact admission outcome plus the
+// retention delta the same pass must publish. The table is the binding between
+// the CapacityPre predicate and the transactional append: an `Admissible` row
+// is precisely the answer the removed private canAdmitStorage() gave.
+void preparedAdmissionWitnessTruthTable() {
+  using Outcome = PeSemanticAdmissionOutcome;
+  Owner owner;
+  D9CSurface surface;
+  D9CSurface aliasObject;
+  PeSemanticPreparedRecord witness{};
+
+  auto fresh = base(PeSemanticProducerKind::Present, 1u, 1u);
+  fresh.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0x9a1u, 3u);
+  check(owner.prepareAdmission(fresh, witness) == Outcome::Admissible &&
+            witness.valid() && witness.rule != nullptr &&
+            witness.producerMatchesRecordType && !witness.constantProducer &&
+            !witness.upProducer && witness.plan.handleCount == 1u &&
+            witness.plan.uniquePinCounts[0] == 1u &&
+            witness.retentionDeltas[0] == 1u && witness.recordCount == 0u &&
+            witness.emissionHandleCount == 0u &&
+            witness.emissionPayloadBytes == 0u && witness.payloadOffset == 0u &&
+            witness.nextEmissionHandleCount == 1u && witness.wireBytes != 0u,
+        "novel identity prepares one retained pin and one wire handle");
+  check(owner.size() == 0u && owner.retainedCount() == 0u,
+        "preparation is observation-only and mutates no owner state");
+
+  check(owner.tryAppendOwnedRecord(fresh, []() noexcept { return true; }),
+        "prepared witness fixture admits its first record");
+  auto warm = base(PeSemanticProducerKind::Present, 2u, 2u);
+  warm.surface0 = fresh.surface0;
+  check(owner.prepareAdmission(warm, witness) == Outcome::Admissible &&
+            witness.retentionDeltas[0] == 0u && witness.plan.handleCount == 1u &&
+            witness.recordCount == 1u && witness.emissionHandleCount == 1u &&
+            witness.nextEmissionHandleCount == 2u &&
+            witness.payloadOffset >= witness.emissionPayloadBytes &&
+            witness.nextEmissionPayloadBytes ==
+                witness.payloadOffset + witness.plan.payloadBytes,
+        "an already-pinned identity costs zero retention and keeps its handle");
+
+  auto generationStale = base(PeSemanticProducerKind::Present, 3u, 3u);
+  generationStale.surface0 =
+      localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0x9a1u, 4u);
+  check(owner.prepareAdmission(generationStale, witness) == Outcome::Malformed &&
+            !witness.valid(),
+        "a stale generation of a pinned object id is refused before any effect");
+
+  auto pointerAlias = base(PeSemanticProducerKind::Present, 3u, 3u);
+  pointerAlias.surface0 =
+      localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&aliasObject, 0x9a1u, 3u);
+  check(owner.prepareAdmission(pointerAlias, witness) == Outcome::Malformed,
+        "a pointer alias of a pinned identity is refused before any effect");
+
+  auto forgedKind = base(PeSemanticProducerKind::Present, 3u, 3u);
+  forgedKind.surface0 =
+      localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&aliasObject, 0x9a2u, 1u);
+  forgedKind.surface0.identity.kind = D9C_CHUNK_HANDLE_KIND_TEXTURE;
+  check(owner.prepareAdmission(forgedKind, witness) == Outcome::Malformed,
+        "a kind-forged direct reference never reaches the capacity proof");
+
+  auto zeroGeneration = base(PeSemanticProducerKind::Present, 3u, 3u);
+  zeroGeneration.surface0 =
+      localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&aliasObject, 0x9a3u, 0u);
+  check(owner.prepareAdmission(zeroGeneration, witness) == Outcome::Malformed,
+        "a zero-generation identity is malformed, not a capacity question");
+
+  // The record rule is a destination fact, so an unknown record type is
+  // refused by the capacity proof rather than by the identity plan.
+  auto unknownType = base(PeSemanticProducerKind::Present, 3u, 3u);
+  unknownType.surface0 =
+      localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&aliasObject, 0x9a4u, 1u);
+  unknownType.recordType = 0xffffffffu;
+  check(owner.prepareAdmission(unknownType, witness) == Outcome::Capacity &&
+            witness.rule == nullptr && !witness.producerMatchesRecordType,
+        "an unresolvable record rule fails the capacity proof");
+
+  // One row past Owner's sparse arena (MaxSparseValues == 8), still well
+  // inside the render-state section rule, so this is a destination question.
+  std::array<D9CCommandChunkWireRenderState, 9u> renderStates{};
+  auto sparseOverflow = base(PeSemanticProducerKind::DrawPrimitive, 3u, 3u);
+  sparseOverflow.sparse.renderStates = renderStates;
+  check(owner.prepareAdmission(sparseOverflow, witness) == Outcome::Capacity,
+        "a sparse arena that cannot fit the destination is a capacity answer");
+
+  std::array<std::byte, 256u> constantBytes{};
+  auto byteOverflow = base(PeSemanticProducerKind::VsFloatConstant, 3u, 3u);
+  byteOverflow.setConst.registerCount = 16u;
+  byteOverflow.constantBytes = constantBytes;
+  check(owner.prepareAdmission(byteOverflow, witness) == Outcome::Capacity,
+        "variable bytes beyond the destination arena are a capacity answer");
+
+  std::array<D9CRect, 9u> rects{};
+  auto rectOverflow = base(PeSemanticProducerKind::Clear, 3u, 3u);
+  rectOverflow.clear.rectCount = static_cast<std::uint32_t>(rects.size());
+  rectOverflow.clearRects = rects;
+  check(owner.prepareAdmission(rectOverflow, witness) == Outcome::Capacity,
+        "clear rectangles beyond the destination arena are a capacity answer");
+
+  // Record capacity, then the CapacityPre flush that makes the same record
+  // admissible again.
+  for (std::uint64_t ordinal = owner.size() + 1u; ordinal <= Owner::maxRecords;
+       ++ordinal) {
+    auto filler = base(PeSemanticProducerKind::Present, ordinal, ordinal);
+    filler.surface0 = fresh.surface0;
+    check(owner.tryAppendOwnedRecord(filler, []() noexcept { return true; }),
+          "record-capacity fixture fills the destination chunk");
+  }
+  auto overflow = base(PeSemanticProducerKind::Present,
+                       Owner::maxRecords + 1u, Owner::maxRecords + 1u);
+  overflow.surface0 = fresh.surface0;
+  check(owner.prepareAdmission(overflow, witness) == Outcome::Capacity &&
+            !owner.tryAppendOwnedRecord(overflow,
+                                        []() noexcept { return true; }) &&
+            owner.lastAdmissionFailure() ==
+                Owner::AdmissionFailure::Capacity &&
+            owner.size() == Owner::maxRecords,
+        "a full destination rejects pre-effect with the capacity code");
+  check(owner.settle() &&
+            owner.prepareAdmission(overflow, witness) == Outcome::Admissible &&
+            owner.tryAppendOwnedRecord(overflow, []() noexcept { return true; }),
+        "the CapacityPre boundary makes the identical record admissible again");
+  owner.reset();
+  check(surface.refs == 1u && aliasObject.refs == 1u,
+        "prepared-witness truth table leaves the typed ledger balanced");
+
+  // Pin capacity is a destination fact of its own: the plan is well formed and
+  // the retention delta is real, but the chunk has no room for a novel pin.
+  using PinBound = PeSemanticBatchOwner<4u, 1u, 4096u, 4u, 4u>;
+  PinBound pinBound;
+  D9CSurface pinned;
+  D9CSurface novel;
+  auto first = base(PeSemanticProducerKind::Present, 1u, 1u);
+  first.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&pinned, 0x9b1u, 1u);
+  check(pinBound.tryAppendOwnedRecord(first, []() noexcept { return true; }),
+        "pin-capacity fixture admits the only available pin");
+  auto second = base(PeSemanticProducerKind::Present, 2u, 2u);
+  second.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&novel, 0x9b2u, 1u);
+  PeSemanticPreparedRecord pinWitness{};
+  check(pinBound.prepareAdmission(second, pinWitness) == Outcome::Capacity &&
+            pinWitness.plan.valid && pinWitness.retentionDeltas[0] == 1u &&
+            !pinWitness.admissible && novel.refs == 1u,
+        "an exhausted pin budget is a capacity answer over a well-formed plan");
+  pinBound.reset();
+  check(pinned.refs == 1u && novel.refs == 1u,
+        "pin-capacity fixture releases every typed pin");
+
+  // Allocation fault: the owner never published readiness, so preparation
+  // reports it without reading the bounded storage at all.
+  Owner unavailable(Owner::FailConstructionForTesting{});
+  PeSemanticPreparedRecord unavailableWitness{};
+  check(unavailable.prepareAdmission(fresh, unavailableWitness) ==
+                Outcome::Unavailable &&
+            !unavailableWitness.valid() &&
+            unavailableWitness.rule == nullptr &&
+            !unavailable.tryAppendOwnedRecord(fresh,
+                                              []() noexcept { return true; }) &&
+            unavailable.lastAdmissionFailure() ==
+                Owner::AdmissionFailure::Unavailable,
+        "an allocation-faulted owner reports Unavailable before any plan work");
+}
+
+// The witness is the only frontier arithmetic in the append path, so both
+// settlement outcomes must agree with it exactly: a rejected settlement
+// restores the captured frontier and a durable one publishes the proved one.
+void preparedWitnessSettlementAndRollback() {
+  using Outcome = PeSemanticAdmissionOutcome;
+  Owner owner;
+  D9CSurface surface;
+  auto input = base(PeSemanticProducerKind::Present, 1u, 1u);
+  input.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0x9c1u, 2u);
+  PeSemanticPreparedRecord witness{};
+  check(owner.prepareAdmission(input, witness) == Outcome::Admissible &&
+            witness.admissibleAt(0u, 0u, 0u),
+        "settlement fixture prepares against the empty destination");
+
+  check(!owner.tryAppendOwnedRecord(input, []() noexcept { return false; }) &&
+            owner.size() == witness.recordCount && owner.retainedCount() == 0u &&
+            surface.refs == 1u,
+        "a rejected settlement rolls the record and its typed retain back");
+  std::size_t handles = 0u;
+  std::size_t payload = 0u;
+  std::size_t wire = 0u;
+  check(resolvePeSemanticCadenceMetrics(owner, handles, payload, wire) &&
+            handles == witness.emissionHandleCount &&
+            payload == witness.emissionPayloadBytes,
+        "rollback restores exactly the frontier the witness captured");
+
+  check(owner.tryAppendOwnedRecord(input, []() noexcept { return true; }) &&
+            owner.emissionMetrics(handles, payload, wire) &&
+            handles == witness.nextEmissionHandleCount &&
+            payload == witness.nextEmissionPayloadBytes &&
+            wire == witness.wireBytes && surface.refs == 2u,
+        "a durable settlement publishes the proved frontier without replanning");
+
+  PeSemanticExactFixedEmission emission{};
+  check(owner.emitExactFixed(emission) && emission.valid() &&
+            emission.wireBytes == witness.wireBytes &&
+            emission.transport.header.handleCount ==
+                witness.nextEmissionHandleCount,
+        "the emitted chunk matches the witness the capacity proof produced");
+  owner.reset();
+  check(surface.refs == 1u, "settlement fixture releases its typed retain");
 }
 
 void collisionCopyOverflowAndRetry() {
@@ -1175,8 +1410,11 @@ int main() {
     repeatedIdentityUsesBatchGlobalRetentionDelta();
     retentionIdentityAndPointerAliasesReject();
     capacityFailureIsPreEffectAndRetryableAfterBoundary();
+    preparedAdmissionWitnessTruthTable();
+    preparedWitnessSettlementAndRollback();
     classificationAndLifetime();
     partialRectClearMatchesCanonicalBuilder();
+    largeCanonicalPayloadSurvivesRepeatedExactEmission();
     collisionCopyOverflowAndRetry();
     emissionSmoke();
     producerIdentityFollowsSettlementAndSourceRange();

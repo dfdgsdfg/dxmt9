@@ -198,6 +198,16 @@ class Device {
                              const core::DrawUniformPayload&,
                              std::span<const core::DrawParam>,
                              std::span<const core::DrawParamPayloadView>) {}
+  virtual bool submitDrawRunBatch(
+      std::span<const core::DrawRunBatchEntry> entries) {
+    for (const auto& entry : entries) {
+      if (entry.valid()) {
+        submitDrawRun(*entry.state, *entry.uniforms, entry.draws,
+                      entry.payloads);
+      }
+    }
+    return true;
+  }
   // Direct replay borrows Device cache values synchronously and materializes
   // them once in the final Arena/ChunkSlot destination before returning.
   virtual core::DirectReplayDrawDisposition submitDirectReplayDraw(
