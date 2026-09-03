@@ -383,6 +383,28 @@ struct CommandQueueArenaLeaseTestAccess {
         slot.drawUniformPixelConstantsLookupNext, kDrawHeadroom);
   }
 
+  static void enableDirectLifecycleObservation(CommandQueue& queue) {
+    queue.pipelineLifecycleObserver_ =
+        std::make_unique<dxmt9::queue::PipelineLifecycleObserver>(true, true);
+    queue.bindSelfLifecycle({});
+  }
+
+  static queue::DirectSourceLifecycleState directLifecycleState(
+      CommandQueue& commandQueue) {
+    std::lock_guard lock(commandQueue.mutex_);
+    return commandQueue.pipelineLifecycleObserver_
+        ? commandQueue.pipelineLifecycleObserver_->directState()
+        : queue::DirectSourceLifecycleState{};
+  }
+
+  static queue::DirectSourceLifecycleError directLifecycleError(
+      CommandQueue& commandQueue) {
+    std::lock_guard lock(commandQueue.mutex_);
+    return commandQueue.pipelineLifecycleObserver_
+        ? commandQueue.pipelineLifecycleObserver_->directError()
+        : queue::DirectSourceLifecycleError::InvalidTransition;
+  }
+
   static bool stopped(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.stop_;
@@ -2243,6 +2265,81 @@ void populatedIdentityAggregateDoesNotRejectSameRawSecondSpan() {
   dxmt9c_buffer_release(buffer);
 }
 
+void compatibilityPrefixDirectContinuationOwnsPhysicalCredit() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/true);
+  dxmt9::CommandQueueArenaLeaseTestAccess::enableDirectLifecycleObservation(
+      fixture.routing->queue_);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr,
+        "mixed-source lifecycle fixture buffer constructs");
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+
+  // This prefix is compatibility-owned and therefore intentionally has no
+  // Direct semantic row. The next raw appends a Direct span into the same
+  // physical payload; its first observed sibling must represent that existing
+  // payload's one physical credit owner.
+  const std::array prefixDraws{DrawParam{}};
+  const std::array prefixPayloads{DrawParamPayloadView{}};
+  fixture.routing->queue_.submitDrawRun(
+      CanonicalDrawState{}, DrawUniformPayload{}, prefixDraws, prefixPayloads);
+  dxmt9::CommandQueueArenaLeaseTestAccess::reserveDirectContinuationHeadroom(
+      fixture.routing->queue_);
+
+  auto fanRecord = drawRecord(identity, 1u);
+  D9CCommandChunkWireDrawHeader fanHeader{};
+  std::memcpy(&fanHeader, fanRecord.payload.data(), sizeof(fanHeader));
+  fanHeader.primitiveType = 6u;
+  std::memcpy(fanRecord.payload.data(), &fanHeader, sizeof(fanHeader));
+  auto raw = makeRaw(
+      makeWireFixture(std::array{
+          drawRecord(identity, 0u), fanRecord, drawRecord(identity, 2u)}),
+      132u, false, &registry);
+  raw.cpuReadyTapePlanningEnabled = false;
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK,
+        "Direct span appends after an ordinary compatibility prefix");
+  const auto admitted =
+      dxmt9::CommandQueueArenaLeaseTestAccess::directLifecycleState(
+          fixture.routing->queue_);
+  const auto physicalOwners = static_cast<std::size_t>(
+      admitted.records[0].physicalCreditOwner) +
+      static_cast<std::size_t>(admitted.records[1].physicalCreditOwner);
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::directLifecycleError(
+            fixture.routing->queue_) ==
+            dxmt9::queue::DirectSourceLifecycleError::None &&
+            admitted.recordCount == 2u &&
+            admitted.records[0].physicalCreditOwner &&
+            admitted.records[0].aggregateCredit != 0u &&
+            physicalOwners == 1u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+                fixture.routing->queue_) == 4u,
+        "first observed Direct sibling group represents exactly one physical owner");
+
+  fixture.routing->present(SwapDesc{});
+  const auto completion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+  const auto reclaimed =
+      dxmt9::CommandQueueArenaLeaseTestAccess::directLifecycleState(
+          fixture.routing->queue_);
+  check(completion.reclaimed &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::directLifecycleError(
+                fixture.routing->queue_) ==
+                dxmt9::queue::DirectSourceLifecycleError::None &&
+            reclaimed.recordCount == 2u &&
+            reclaimed.records[0].phase ==
+                dxmt9::queue::DirectSourcePhase::Reclaimed &&
+            reclaimed.records[1].phase ==
+                dxmt9::queue::DirectSourcePhase::Reclaimed,
+        "mixed physical owner preserves FIFO completion and reclaim");
+
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(buffer);
+}
+
 // The same records through the Legacy lane must produce the same ordered
 // command kinds and the same draw parameters/payload bytes. This is the
 // production differential for a multi-span raw: the span partition is a
@@ -3241,11 +3338,17 @@ void directChunkSlotRollbackAndPostEffectFailureAreFailSafe() {
   SourcePayloadCapacity capacity{};
   capacity.commandHeaders = 1;
   capacity.clearRecords = 1;
+  const auto producerIdentity = [](std::uint64_t ordinal) {
+    return CpuReadyProducerIdentity{
+        ordinal, ordinal, ordinal, ordinal};
+  };
 
   dxmt9::CommandQueue rollbackQueue(
       dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  dxmt9::CommandQueueArenaLeaseTestAccess::enableDirectLifecycleObservation(
+      rollbackQueue);
   auto rollback = rollbackQueue.beginDirectChunkSlotReplay(
-      81u, capacity, sizeof(ClearDesc));
+      81u, capacity, sizeof(ClearDesc), producerIdentity(81u));
   check(rollback.status ==
                 dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Ready &&
             rollback.lease.has_value(),
@@ -3254,14 +3357,30 @@ void directChunkSlotRollbackAndPostEffectFailureAreFailSafe() {
   check(rollback.lease->rollbackPreEffect() &&
             dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
                 rollbackQueue) == 0u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::directLifecycleError(
+                rollbackQueue) ==
+                dxmt9::queue::DirectSourceLifecycleError::None &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::directLifecycleState(
+                rollbackQueue).recordCount == 0u &&
             !dxmt9::CommandQueueArenaLeaseTestAccess::stopped(rollbackQueue),
-        "pre-effect rollback restores the exact writing-slot checkpoint");
+        "pre-effect rollback restores the slot and removes its Direct ledger row");
+  rollbackQueue.submitClear(ClearDesc{});
+  rollbackQueue.submitPresent(SwapDesc{});
+  const auto rollbackFallback =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(rollbackQueue);
+  check(rollbackFallback.reclaimed &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::directLifecycleError(
+                rollbackQueue) ==
+                dxmt9::queue::DirectSourceLifecycleError::None &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::directLifecycleState(
+                rollbackQueue).recordCount == 0u,
+        "compatibility Publish after rollback is ignored without a RolledBack leak");
 
   dxmt9::CommandQueue unsettledQueue(
       dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
   {
     auto unsettled = unsettledQueue.beginDirectChunkSlotReplay(
-        83u, capacity, sizeof(ClearDesc));
+        83u, capacity, sizeof(ClearDesc), producerIdentity(83u));
     check(unsettled.lease.has_value(),
           "post-effect unsettled fixture acquires direct destination ownership");
     unsettled.lease->markSemanticEffectsStarted();
@@ -3275,7 +3394,7 @@ void directChunkSlotRollbackAndPostEffectFailureAreFailSafe() {
   dxmt9::CommandQueue failStopQueue(
       dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
   auto failStop = failStopQueue.beginDirectChunkSlotReplay(
-      82u, capacity, sizeof(ClearDesc));
+      82u, capacity, sizeof(ClearDesc), producerIdentity(82u));
   check(failStop.lease.has_value(),
         "post-effect fail-stop fixture acquires direct destination ownership");
   failStop.lease->markSemanticEffectsStarted();
@@ -3294,7 +3413,7 @@ void directChunkSlotRollbackAndPostEffectFailureAreFailSafe() {
         "publication, rollback, or retry");
 
   const auto unsupported = failStopQueue.beginDirectChunkSlotReplay(
-      0u, capacity, sizeof(ClearDesc));
+      0u, capacity, sizeof(ClearDesc), producerIdentity(82u));
   check(unsupported.status ==
             dxmt9::CommandQueue::DirectChunkSlotReplayStatus::LegacyUnsupported,
         "invalid pre-effect admission retains a typed Legacy disposition");
@@ -3304,11 +3423,15 @@ void directChunkSlotCapabilityLifetimeIsTerminalSafe() {
   SourcePayloadCapacity capacity{};
   capacity.commandHeaders = 1u;
   capacity.clearRecords = 1u;
+  const auto producerIdentity = [](std::uint64_t ordinal) {
+    return CpuReadyProducerIdentity{
+        ordinal, ordinal, ordinal, ordinal};
+  };
 
   dxmt9::CommandQueue commitQueue(
       dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
   auto commit = commitQueue.beginDirectChunkSlotReplay(
-      84u, capacity, sizeof(ClearDesc));
+      84u, capacity, sizeof(ClearDesc), producerIdentity(84u));
   check(commit.lease.has_value(),
         "capability lifetime commit fixture acquires a direct lease");
   const auto* committedCapability =
@@ -3326,7 +3449,7 @@ void directChunkSlotCapabilityLifetimeIsTerminalSafe() {
   dxmt9::CommandQueue rollbackQueue(
       dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
   auto rollback = rollbackQueue.beginDirectChunkSlotReplay(
-      85u, capacity, sizeof(ClearDesc));
+      85u, capacity, sizeof(ClearDesc), producerIdentity(85u));
   check(rollback.lease.has_value(),
         "capability lifetime rollback fixture acquires a direct lease");
   const auto* rolledBackCapability =
@@ -3342,7 +3465,7 @@ void directChunkSlotCapabilityLifetimeIsTerminalSafe() {
   dxmt9::CommandQueue moveQueue(
       dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
   auto source = moveQueue.beginDirectChunkSlotReplay(
-      86u, capacity, sizeof(ClearDesc));
+      86u, capacity, sizeof(ClearDesc), producerIdentity(86u));
   check(source.lease.has_value(),
         "capability lifetime move fixture acquires a direct lease");
   const auto* movedFromCapability = source.lease->borrowDirectRangeAppender();
@@ -3702,6 +3825,7 @@ int main() {
     ordinaryDrawApplyStateDrawUsesCarrierFreeDirectPath();
     compatibilityCutSplitsTheRawIntoTwoLeaseSpans();
     populatedIdentityAggregateDoesNotRejectSameRawSecondSpan();
+    compatibilityPrefixDirectContinuationOwnsPhysicalCredit();
     compatibilityCutMatchesLegacyDrawSemantics();
     drawApplyStateDrawWithPresentUsesOneLeaseSpan();
     nonTerminalPresentFallsBackToCompatibilityInSourceOrder();

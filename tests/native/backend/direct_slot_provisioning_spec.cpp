@@ -22,6 +22,28 @@
 
 using namespace dxmt9::core;
 
+namespace dxmt9 {
+
+struct DirectSpanAdmissionWitnessTestAccess {
+  static core::DirectSpanAdmissionWitness mint(
+      const CommandQueue* factory,
+      core::DirectSpanAdmissionIdentity identity) noexcept {
+    return core::DirectSpanAdmissionWitness(
+        core::DirectSpanAdmissionWitness::FactoryIdentity(factory),
+        identity);
+  }
+
+  static core::DirectSpanAdmissionConsume consume(
+      core::DirectSpanAdmissionWitness&& witness,
+      const CommandQueue* factory,
+      const core::DirectSpanAdmissionIdentity& identity) noexcept {
+    return std::move(witness).consume(
+        core::DirectSpanAdmissionWitness::FactoryIdentity(factory), identity);
+  }
+};
+
+}  // namespace dxmt9
+
 namespace {
 
 template <typename Staged>
@@ -64,6 +86,15 @@ static_assert(!LvalueCommit<StagedDirectSlot>);
 static_assert(!ExternalLeaseCommit<StagedDirectSlot, LeaseHeld>);
 static_assert(!StageWithoutLease<StagedDirectSlot>);
 static_assert(!StageFromLeaseLvalue<StagedDirectSlot>);
+static_assert(!std::is_copy_constructible_v<DirectSpanAdmissionWitness>);
+static_assert(!std::is_copy_assignable_v<DirectSpanAdmissionWitness>);
+static_assert(std::is_nothrow_move_constructible_v<
+              DirectSpanAdmissionWitness>);
+static_assert(!std::is_move_assignable_v<DirectSpanAdmissionWitness>);
+static_assert(!std::is_copy_constructible_v<
+              DetachedCompatibilityOwnerToken>);
+static_assert(std::is_nothrow_move_constructible_v<
+              DetachedCompatibilityOwnerToken>);
 
 int failures = 0;
 
@@ -192,42 +223,79 @@ struct VectorTopology {
                          const VectorTopology&) = default;
 };
 
-std::array<VectorTopology, 30> topologyOf(const ChunkSlot& slot) {
+std::array<VectorTopology, kDirectChunkSlotPhysicalDimensionCount> topologyOf(
+    const ChunkSlot& slot) {
   const auto entry = [](const auto& values) {
     return VectorTopology{values.data(), values.size(), values.capacity()};
   };
-  return {
-      entry(slot.commandHeaders),
-      entry(slot.drawHotStates),
-      entry(slot.drawShaderLayouts),
-      entry(slot.drawDebugSnapshots),
-      entry(slot.drawPsoSubviews),
-      entry(slot.drawUniformFixedPayloads),
-      entry(slot.drawUniformVertexConstants),
-      entry(slot.drawUniformVertexConstantBytes),
-      entry(slot.drawUniformPixelConstants),
-      entry(slot.drawUniformPixelConstantBytes),
-      entry(slot.drawUniformPayloads),
-      entry(slot.drawParams),
-      entry(slot.drawPayloadArena),
-      entry(slot.drawRunRecords),
-      entry(slot.clearRecords),
-      entry(slot.surfaceCopyRecords),
-      entry(slot.stretchRectRecords),
-      entry(slot.colorFillRecords),
-      entry(slot.depthResolveRecords),
-      entry(slot.generateMipmapsRecords),
-      entry(slot.presentRecords),
-      entry(slot.drawUniformPayloadLookupHeads),
-      entry(slot.drawUniformPayloadLookupTails),
-      entry(slot.drawUniformPayloadLookupNext),
-      entry(slot.drawUniformVertexConstantsLookupHeads),
-      entry(slot.drawUniformVertexConstantsLookupTails),
-      entry(slot.drawUniformVertexConstantsLookupNext),
-      entry(slot.drawUniformPixelConstantsLookupHeads),
-      entry(slot.drawUniformPixelConstantsLookupTails),
-      entry(slot.drawUniformPixelConstantsLookupNext),
-  };
+  return {{
+#define DXMT9_TEST_TOPOLOGY_DIMENSION(                                     \
+    region, plan, storage, element, physical, provision, allocation,       \
+    lookup, owner)                                                         \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PHYSICAL_##physical(entry(slot.storage),)
+      DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_TEST_TOPOLOGY_DIMENSION)
+#undef DXMT9_TEST_TOPOLOGY_DIMENSION
+  }};
+}
+
+using CapacityShrinker = void (*)(ChunkSlot&);
+
+constexpr std::array<CapacityShrinker,
+                     kDirectChunkSlotPhysicalDimensionCount>
+    kPhysicalCapacityShrinkers = {{
+#define DXMT9_TEST_PHYSICAL_SHRINKER(                                      \
+    region, plan, storage, element, physical, provision, allocation,       \
+    lookup, owner)                                                         \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PHYSICAL_##physical(                      \
+      +[](ChunkSlot& slot) { decltype(slot.storage){}.swap(slot.storage); },)
+        DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(
+            DXMT9_TEST_PHYSICAL_SHRINKER)
+#undef DXMT9_TEST_PHYSICAL_SHRINKER
+    }};
+
+constexpr std::array<CapacityShrinker,
+                     kDirectChunkSlotProvisionDimensionCount>
+    kProvisionCapacityShrinkers = {{
+#define DXMT9_TEST_PROVISION_SHRINKER(                                     \
+    region, plan, storage, element, physical, provision, allocation,       \
+    lookup, owner)                                                         \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PROVISION_##provision(                    \
+      +[](ChunkSlot& slot) { decltype(slot.storage){}.swap(slot.storage); },)
+        DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(
+            DXMT9_TEST_PROVISION_SHRINKER)
+#undef DXMT9_TEST_PROVISION_SHRINKER
+    }};
+
+void schemaInventoryIsClosedAndRoleTagged() {
+  check(kSourcePayloadRegionCount == 32,
+        "the schema preserves 32 semantic plan regions");
+  check(kDirectChunkSlotDimensions.size() == 32,
+        "every semantic region has one descriptor row");
+  check(kDirectChunkSlotPhysicalDimensionCount == 31 &&
+            kPhysicalCapacityShrinkers.size() == 31,
+        "the schema preserves 31 physical ChunkSlot vectors");
+  check(kDirectChunkSlotProvisionDimensionCount == 30 &&
+            kProvisionCapacityShrinkers.size() == 30 &&
+            static_cast<std::size_t>(
+                DirectSlotProvisionAllocation::Count) == 30,
+        "the schema preserves exactly 30 staged allocation and fault sites");
+  check(kDirectChunkSlotDimensions[
+            static_cast<std::size_t>(SourcePayloadRegion::ReadbackRecords)]
+                .provision == DirectChunkSlotProvisionRole::CoverageOnly,
+        "readback is a physical coverage-only structural rejection");
+  check(kDirectChunkSlotDimensions[
+            static_cast<std::size_t>(SourcePayloadRegion::ClearRects)]
+                .physical == DirectChunkSlotPhysicalRole::SemanticOnly,
+        "clear rects remain a semantic arena region without a ChunkSlot vector");
+  check(kDirectChunkSlotDimensions[
+            static_cast<std::size_t>(SourcePayloadRegion::DrawShaderLayouts)]
+                .owner == DirectChunkSlotOwnerRole::Detached,
+        "drawShaderLayouts is the sole detached-owner row");
+  std::size_t detached = 0;
+  for (const auto& dimension : kDirectChunkSlotDimensions) {
+    detached += dimension.owner == DirectChunkSlotOwnerRole::Detached;
+  }
+  check(detached == 1, "the schema declares exactly one detached owner");
 }
 
 std::array<std::vector<std::uint32_t>, 9> lookupValuesOf(
@@ -1030,6 +1098,26 @@ void aggregateReconciliationIncludesReusedReadbackCapacity() {
 // ---------------------------------------------------------------------------
 // R-BACK-2.105 — retained-capacity reuse on a reclaimed compatibility payload.
 
+DetachedCompatibilityOwnerIdentity detachedIdentity(
+    ChunkSlot& slot, u64 seqId = 11,
+    std::uint32_t storageGeneration = 13,
+    u64 capacityGeneration = 17) {
+  const auto receipt = DetachedCapacityReceipt::ledgerQualified(
+      9, capacityGeneration, directSlotPhysicalRetainedBytes(slot));
+  slot.admissionCapacityReceipt = receipt;
+  return {
+      .payload = &slot,
+      .seqId = seqId,
+      .sourceIndex = 3,
+      .sourceGeneration = 5,
+      .firstPage = 7,
+      .pageCount = 1,
+      .storageGeneration = storageGeneration,
+      .payloadIndex = 9,
+      .capacityReceipt = receipt,
+  };
+}
+
 // The production reclaim pair, exactly as `QueueLifecycleController` runs it:
 // move the owner rows out under the queue mutex, clear the payload, destroy
 // the owners with the mutex released, then move the emptied buffer back after
@@ -1040,25 +1128,32 @@ void reclaimPayload(ChunkSlot& slot) {
   // zero), clear the rest of the payload, release the mutex, destroy the
   // owners, relock and revalidate, then swap the storage back.
   const auto retainedBytes = directSlotPhysicalRetainedBytes(slot);
-  auto deferredReleases = slot.detachResourceOwners();
+  const auto identity = detachedIdentity(slot);
+  auto deferredReleases = slot.detachResourceOwners(identity);
+  check(deferredReleases.valid(),
+        "detach returns one identity-qualified move-only owner token");
   check(directSlotPhysicalRetainedBytes(slot) == retainedBytes,
         "retained-byte accounting includes detached owner storage");
   slot.clearCommands();
   check(directSlotPhysicalRetainedBytes(slot) == retainedBytes,
         "clearing logical contents keeps detached capacity accounted");
   // ... queue mutex released here in production ...
-  deferredReleases.clear();
+  check(deferredReleases.destroyOwners(),
+        "the token destroys retained rows without surrendering allocation");
   check(directSlotPhysicalRetainedBytes(slot) == retainedBytes,
         "the empty detached allocation remains accounted before restore");
   // ... relocked and identity-revalidated here ...
-  slot.restoreResourceOwnerStorage(deferredReleases);
+  check(std::move(deferredReleases).restore(slot, identity) ==
+            DetachedCompatibilityOwnerDisposition::Restored,
+        "rvalue restore consumes the exact revalidated token");
   check(directSlotPhysicalRetainedBytes(slot) == retainedBytes,
         "restoring owner storage preserves the exact physical total");
 }
 
-std::array<std::size_t, 30> capacitiesOf(const ChunkSlot& slot) {
+std::array<std::size_t, kDirectChunkSlotPhysicalDimensionCount> capacitiesOf(
+    const ChunkSlot& slot) {
   const auto& t = topologyOf(slot);
-  std::array<std::size_t, 30> capacities{};
+  std::array<std::size_t, kDirectChunkSlotPhysicalDimensionCount> capacities{};
   for (std::size_t i = 0; i < capacities.size(); ++i) {
     capacities[i] = t[i].capacity;
   }
@@ -1096,12 +1191,14 @@ void reclaimRetainsEveryProvisionedCapacity() {
   provision(detachedOnly, plan);
   appendExactPlan(detachedOnly, source);
   {
-    auto owners = detachedOnly.detachResourceOwners();
+    const auto identity = detachedIdentity(detachedOnly);
+    auto owners = detachedOnly.detachResourceOwners(identity);
     detachedOnly.clearCommands();
-    owners.clear();
-    // deliberately never restored
+    check(owners.destroyOwners(), "detached-only rows are destroyed");
+    check(std::move(owners).abandon(detachedOnly) ==
+              DetachedCompatibilityOwnerDisposition::Abandoned,
+          "explicit abandon consumes a token whose allocation is forfeited");
   }
-  detachedOnly.abandonDetachedResourceOwnerStorage();
   check(detachedOnly.drawShaderLayouts.empty() &&
             detachedOnly.drawShaderLayouts.capacity() == 0,
         "the swap-based detach leaves the payload's vector specified empty "
@@ -1157,6 +1254,185 @@ void reclaimedPayloadIsReusedWithoutReallocation() {
         "the reused slot still admits the adjacent source");
 }
 
+// Complete physical coverage has 31 rows, one more than provisioning:
+// readback is never staged but must be checked non-vacuously so a future
+// appender cannot turn the structural rejection into an unsafe omission.
+void completePhysicalCoverageRequiresAll31Rows() {
+  const auto stagedPlan = allAllocationDimensionsPlan();
+  auto coveragePlan = stagedPlan;
+  coveragePlan.readbackRecords = 1;
+  check(coveragePlan.readbackRecords != 0,
+        "the coverage-only readback row is non-vacuous");
+
+  for (std::size_t i = 0; i < kPhysicalCapacityShrinkers.size(); ++i) {
+    ChunkSlot slot;
+    provision(slot, stagedPlan);
+    slot.readbackRecords.reserve(coveragePlan.readbackRecords);
+    check(directSlotPhysicalCapacityCovers(slot, coveragePlan),
+          "all 31 physical rows cover the complete plan before shrinking");
+    kPhysicalCapacityShrinkers[i](slot);
+    check(!directSlotPhysicalCapacityCovers(slot, coveragePlan),
+          "shrinking any physical row independently rejects coverage");
+  }
+  check(directContinuationAdmission(ChunkSlot{}, coveragePlan)
+            .structuralRejected(),
+        "non-zero readback remains structurally rejected before capacity");
+}
+
+void directSpanAdmissionWitnessIsLinearAndGenerationQualified() {
+  const auto* factoryOwner = reinterpret_cast<const dxmt9::CommandQueue*>(
+      static_cast<std::uintptr_t>(1));
+  ChunkSlot payload;
+  SourcePayloadCapacity plan{};
+  plan.commandHeaders = 1;
+  plan.drawHotStates = 1;
+  payload.commandHeaders.reserve(23);
+  payload.drawHotStates.reserve(29);
+  DirectSpanAdmissionIdentity identity{
+      .destination = &payload,
+      .storageAction = DirectSpanStorageAction::Provisioned,
+      .capacityReceipt = DirectSpanCapacityReceipt::ledgerQualified(
+          9, 17, 31),
+      .producerInterval = {
+          .kind = dxmt9::core::DirectSpanProducerIntervalKind::Qualified,
+          .firstEventOrdinal = 7,
+          .lastEventOrdinal = 11,
+          .firstSourceOrdinal = 13,
+          .lastSourceOrdinal = 17,
+      },
+      .capacityEvidence = directSpanCapacityEvidence(payload, plan),
+      .rawOrdinal = 2,
+      .spanOrdinal = 1,
+      .sourceOrdinal = 3,
+      .seqId = 3,
+      .buildGeneration = 5,
+      .sourceGeneration = 7,
+      .storageGeneration = 11,
+      .sourceIndex = 13,
+      .controlIndex = 17,
+      .firstPage = 19,
+      .pageCount = 1,
+  };
+
+  auto source = dxmt9::DirectSpanAdmissionWitnessTestAccess::mint(
+      factoryOwner, identity);
+  auto moved = std::move(source);
+  check(!source.valid() && moved.valid(),
+        "moving the witness transfers its only live admission");
+
+  const auto* otherFactoryOwner = reinterpret_cast<const dxmt9::CommandQueue*>(
+      static_cast<std::uintptr_t>(2));
+  auto wrongIssuer = dxmt9::DirectSpanAdmissionWitnessTestAccess::mint(
+      factoryOwner, identity);
+  check(dxmt9::DirectSpanAdmissionWitnessTestAccess::consume(
+            std::move(wrongIssuer), otherFactoryOwner, identity) ==
+            DirectSpanAdmissionConsume::Stale &&
+            !wrongIssuer.valid(),
+        "a distinct factory cannot consume the witness, and the failed "
+        "attempt consumes it");
+  check(dxmt9::DirectSpanAdmissionWitnessTestAccess::consume(
+            std::move(wrongIssuer), otherFactoryOwner, identity) ==
+            DirectSpanAdmissionConsume::AlreadyConsumed,
+        "a wrong-issuer witness remains single-use after the stale rejection");
+
+  check(dxmt9::DirectSpanAdmissionWitnessTestAccess::consume(
+            std::move(moved), factoryOwner, identity) ==
+            DirectSpanAdmissionConsume::Consumed,
+        "the exact admission identity consumes once");
+  check(dxmt9::DirectSpanAdmissionWitnessTestAccess::consume(
+            std::move(moved), factoryOwner, identity) ==
+            DirectSpanAdmissionConsume::AlreadyConsumed,
+        "double consume fails closed");
+
+  auto stale = dxmt9::DirectSpanAdmissionWitnessTestAccess::mint(
+      factoryOwner, identity);
+  auto staleIdentity = identity;
+  ++staleIdentity.capacityEvidence.physicalCapacity.drawHotStates;
+  check(dxmt9::DirectSpanAdmissionWitnessTestAccess::consume(
+            std::move(stale), factoryOwner, staleIdentity) ==
+            DirectSpanAdmissionConsume::Stale,
+        "changed non-header capacity rejects a stale witness");
+
+  auto aba = dxmt9::DirectSpanAdmissionWitnessTestAccess::mint(
+      factoryOwner, identity);
+  auto abaIdentity = identity;
+  ++abaIdentity.storageGeneration;
+  check(dxmt9::DirectSpanAdmissionWitnessTestAccess::consume(
+            std::move(aba), factoryOwner, abaIdentity) ==
+            DirectSpanAdmissionConsume::Stale,
+        "the same payload address under a new storage generation rejects ABA");
+}
+
+void detachedOwnerTokenRejectsMismatchUntilExplicitAbandon() {
+  const auto source = exactSpanPlan(2);
+  ChunkSlot slot;
+  provision(slot, source);
+  appendExactPlan(slot, source);
+  const auto identity = detachedIdentity(slot);
+  const auto retained = directSlotPhysicalRetainedBytes(slot);
+  QueueDirectSlotCapacityLeaseLedger ledger{};
+  ledger.retainedBytes = retained;
+  ledger.entries[identity.payloadIndex] = {
+      .generation = identity.capacityReceipt.generation(),
+      .retainedBytes = retained,
+  };
+  const auto ledgerBefore = ledger;
+  auto downgraded = identity;
+  downgraded.capacityReceipt = DetachedCapacityReceipt::exactFitUnqualified();
+  check(!slot.detachResourceOwners(downgraded).valid(),
+        "a qualified physical receipt cannot be downgraded at detach");
+  auto token = slot.detachResourceOwners(identity);
+  auto moved = std::move(token);
+  check(!token.valid() && moved.valid(),
+        "detached owner identity and allocation move together");
+  slot.clearCommands();
+  check(moved.destroyOwners(), "detached owner rows are destroyed explicitly");
+  auto stale = identity;
+  ++stale.storageGeneration;
+  check(std::move(moved).restore(slot, stale) ==
+            DetachedCompatibilityOwnerDisposition::Rejected,
+        "stale storage identity refuses restore without consuming the token");
+  check(moved.valid() && slot.detachedOwnerMarker.active() &&
+            directSlotPhysicalRetainedBytes(slot) == retained &&
+            ledger.retainedBytes == ledgerBefore.retainedBytes &&
+            ledger.entries == ledgerBefore.entries,
+        "a restore mismatch neither completes reclaim nor loses ledger bytes");
+  check(std::move(moved).abandon(slot) ==
+            DetachedCompatibilityOwnerDisposition::Abandoned,
+        "the poisoned path must explicitly abandon after revalidation fails");
+  check(!slot.detachedOwnerMarker.active() &&
+            directSlotPhysicalRetainedBytes(slot) < retained &&
+            ledger.retainedBytes == ledgerBefore.retainedBytes &&
+            ledger.entries == ledgerBefore.entries,
+        "explicit abandon releases storage but preserves the poisoned ledger "
+        "receipt for fail-closed reconciliation");
+}
+
+void detachedOwnerTokenKeepsOwnershipAfterAbandonReject() {
+  ChunkSlot slot;
+  const auto source = exactSpanPlan(2);
+  provision(slot, source);
+  appendExactPlan(slot, source);
+  const auto identity = detachedIdentity(slot);
+  auto token = slot.detachResourceOwners(identity);
+  check(token.valid() && token.destroyOwners(),
+        "fault fixture detaches and destroys compatibility owners");
+  slot.clearCommands();
+  ++slot.detachedOwnerMarker.serial;
+  check(std::move(token).restore(slot, identity) ==
+            DetachedCompatibilityOwnerDisposition::Rejected,
+        "stale marker rejects restore");
+  check(token.valid() &&
+            std::move(token).abandon(slot) ==
+                DetachedCompatibilityOwnerDisposition::Rejected,
+        "stale marker rejects explicit abandon");
+  check(token.valid() && slot.detachedOwnerMarker.active(),
+        "a rejected abandon preserves the live token and marker");
+  // Token teardown must remain safe in release builds when no explicit
+  // abandon can be proven. The queue-level poisoned-retention path keeps this
+  // same token alive until queue teardown in production.
+}
+
 // The per-dimension anti-drift gate. Remove the retained allocation from
 // exactly one of the 30 enumerated provisioning dimensions after reclaim and
 // reuse must refuse. Binding the sweep to DirectSlotProvisionAllocation::Count
@@ -1174,63 +1450,6 @@ void reuseRequiresEveryDimensionIndependently() {
             plan.generateMipmapsRecords != 0 && plan.presentRecords != 0,
         "every swept dimension must be non-zero or the sweep is vacuous");
 
-  const auto releaseCapacity = [](ChunkSlot& slot, std::size_t index) {
-    // `shrink_to_fit()` is a non-binding request. Every dimension is empty
-    // after reclaim, so swapping with a default vector deterministically
-    // removes the allocation and changes nothing else.
-    std::array<void (*)(ChunkSlot&), 30> shrinkers = {
-        [](ChunkSlot& s) { decltype(s.commandHeaders){}.swap(s.commandHeaders); },
-        [](ChunkSlot& s) { decltype(s.drawHotStates){}.swap(s.drawHotStates); },
-        [](ChunkSlot& s) { decltype(s.drawShaderLayouts){}.swap(s.drawShaderLayouts); },
-        [](ChunkSlot& s) { decltype(s.drawDebugSnapshots){}.swap(s.drawDebugSnapshots); },
-        [](ChunkSlot& s) { decltype(s.drawPsoSubviews){}.swap(s.drawPsoSubviews); },
-        [](ChunkSlot& s) { decltype(s.drawUniformFixedPayloads){}.swap(s.drawUniformFixedPayloads); },
-        [](ChunkSlot& s) { decltype(s.drawUniformVertexConstants){}.swap(s.drawUniformVertexConstants); },
-        [](ChunkSlot& s) { decltype(s.drawUniformVertexConstantBytes){}.swap(s.drawUniformVertexConstantBytes); },
-        [](ChunkSlot& s) { decltype(s.drawUniformPixelConstants){}.swap(s.drawUniformPixelConstants); },
-        [](ChunkSlot& s) { decltype(s.drawUniformPixelConstantBytes){}.swap(s.drawUniformPixelConstantBytes); },
-        [](ChunkSlot& s) { decltype(s.drawUniformPayloads){}.swap(s.drawUniformPayloads); },
-        [](ChunkSlot& s) { decltype(s.drawParams){}.swap(s.drawParams); },
-        [](ChunkSlot& s) { decltype(s.drawPayloadArena){}.swap(s.drawPayloadArena); },
-        [](ChunkSlot& s) { decltype(s.drawRunRecords){}.swap(s.drawRunRecords); },
-        [](ChunkSlot& s) { decltype(s.clearRecords){}.swap(s.clearRecords); },
-        [](ChunkSlot& s) { decltype(s.surfaceCopyRecords){}.swap(s.surfaceCopyRecords); },
-        [](ChunkSlot& s) { decltype(s.stretchRectRecords){}.swap(s.stretchRectRecords); },
-        [](ChunkSlot& s) { decltype(s.colorFillRecords){}.swap(s.colorFillRecords); },
-        [](ChunkSlot& s) { decltype(s.depthResolveRecords){}.swap(s.depthResolveRecords); },
-        [](ChunkSlot& s) { decltype(s.generateMipmapsRecords){}.swap(s.generateMipmapsRecords); },
-        [](ChunkSlot& s) { decltype(s.presentRecords){}.swap(s.presentRecords); },
-        [](ChunkSlot& s) { decltype(s.drawUniformPayloadLookupHeads){}.swap(s.drawUniformPayloadLookupHeads); },
-        [](ChunkSlot& s) { decltype(s.drawUniformPayloadLookupTails){}.swap(s.drawUniformPayloadLookupTails); },
-        [](ChunkSlot& s) { decltype(s.drawUniformPayloadLookupNext){}.swap(s.drawUniformPayloadLookupNext); },
-        [](ChunkSlot& s) {
-          decltype(s.drawUniformVertexConstantsLookupHeads){}.swap(
-              s.drawUniformVertexConstantsLookupHeads);
-        },
-        [](ChunkSlot& s) {
-          decltype(s.drawUniformVertexConstantsLookupTails){}.swap(
-              s.drawUniformVertexConstantsLookupTails);
-        },
-        [](ChunkSlot& s) {
-          decltype(s.drawUniformVertexConstantsLookupNext){}.swap(
-              s.drawUniformVertexConstantsLookupNext);
-        },
-        [](ChunkSlot& s) {
-          decltype(s.drawUniformPixelConstantsLookupHeads){}.swap(
-              s.drawUniformPixelConstantsLookupHeads);
-        },
-        [](ChunkSlot& s) {
-          decltype(s.drawUniformPixelConstantsLookupTails){}.swap(
-              s.drawUniformPixelConstantsLookupTails);
-        },
-        [](ChunkSlot& s) {
-          decltype(s.drawUniformPixelConstantsLookupNext){}.swap(
-              s.drawUniformPixelConstantsLookupNext);
-        },
-    };
-    shrinkers[index](slot);
-  };
-
   static_assert(static_cast<std::size_t>(
                     DirectSlotProvisionAllocation::Count) == 30,
                 "the shrink sweep must cover every provisioned dimension");
@@ -1243,7 +1462,7 @@ void reuseRequiresEveryDimensionIndependently() {
     reclaimPayload(slot);
     check(directSlotEmptyStorageReusable(slot, plan),
           "the reclaimed payload is reusable before the dimension is shrunk");
-    releaseCapacity(slot, i);
+    kProvisionCapacityShrinkers[i](slot);
     check(!directSlotEmptyStorageReusable(slot, plan),
           "shrinking any single provisioned dimension refuses reuse");
     const auto decision = directSlotStorageTransition(
@@ -1401,6 +1620,7 @@ void lookupRestoreIsExactAndAllocationFree() {
 }  // namespace
 
 int main() {
+  schemaInventoryIsClosedAndRoleTagged();
   exactFitReservationRejectsEveryAdjacentSource();
   consecutiveMeanSizedSourcesShareOneProvisionedSlot();
   populatedSlotIsNeverReallocated();
@@ -1426,6 +1646,10 @@ int main() {
   aggregateReconciliationIncludesReusedReadbackCapacity();
   reclaimRetainsEveryProvisionedCapacity();
   reclaimedPayloadIsReusedWithoutReallocation();
+  completePhysicalCoverageRequiresAll31Rows();
+  directSpanAdmissionWitnessIsLinearAndGenerationQualified();
+  detachedOwnerTokenRejectsMismatchUntilExplicitAbandon();
+  detachedOwnerTokenKeepsOwnershipAfterAbandonReject();
   reuseRequiresEveryDimensionIndependently();
   staleLedgerEntryMustNotQualifyReuse();
   reuseIsAbsentFromTheExactFitLane();

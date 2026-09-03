@@ -8,7 +8,7 @@ tags: [specs, backend, encode-scheduling, gap]
 # Encode Scheduling Gap
 
 This is the detailed owner for `R-BACK-2.35`–`R-BACK-2.50`,
-`R-BACK-2.57`–`R-BACK-2.67`, and `R-BACK-2.76`–`R-BACK-2.103`. The parent
+`R-BACK-2.57`–`R-BACK-2.67`, and `R-BACK-2.76`–`R-BACK-2.105`. The parent
 [backend gap](../gap.md) keeps only a routing summary. Historical experiments
 remain in `docs/perfomance/`.
 
@@ -19,7 +19,7 @@ remain in `docs/perfomance/`.
 | `TransactionalChunkSlotAssembler` (`R-BACK-2.85`) | The transaction now owns either a bounded Arena payload block or the ordinary queue-owned compatibility `ChunkSlot`. The latter checkpoints every final SoA/payload range, including the aggregate nested Clear rect prefix, and uniform locator; reserves the planner's complete upper bound before replay; enforces that bound on each typed append; transfers owned direct Clear rect vectors without post-reservation allocation; and rebuilds uniform lookup state on rollback. Production commits bind private move-only `ArenaCommitEvidence` to the exact raw/source/sequence/build/storage/control witness and the seq-qualified resource closure digest. `pipelineReplayFailureMayRollback` is the shared production/test cut: pre-effect partial construction restores the exact prefix, while post-effect identity, append, or injected commit failure abandons rollback and fail-stops without a Legacy retry. | Broader bounded x64/x86 Wine allocation/retain/bridge/capture fault injection remains open. |
 | Fixed-role `SegmentedTransportV1` and later `ExactFixed` CPU Tape emission (`R-BACK-2.90`–`2.94`) | opt-in bridge transport, pooled Unix live-region owner, production chunk settlement owner, and bounded host model binding implemented; production Tape roles/default promotion open | The PE/WoW64/Unix path validates three borrowed fixed regions and atomically adopts one aligned move-only pooled Unix extent. It retains three scatter copies, but eliminates the three independent region allocations; exact ledger release follows the admitting sink across worker threads. Contiguous V2 remains the default and at-most-once fallback. The all-family production transaction now spans PendingDelta generation, CapacityPre/Post, retainer checkpoint, seal/bridge, capture disposition, and reset. The host immutable semantic owner independently freezes exact role extents and emits a byte-identical 21-family ExactFixed extent. `tla/SegmentedTransportV1.tla` models the later CPU-ready Tape roles. | Bind the immutable semantic owner itself to production final-wire construction and real CPU-ready queue transitions. Add pooled-storage TLA, Wine fault, GPU/readback, wild locality, and performance evidence before changing either default. |
 | Arena/ordinary direct replay to final storage (`R-BACK-2.86`–`2.87`) | Eligible Arena and ordinary synchronous draw records call `submitDirectReplayDrawFromCurrentState` and construct final payload SoAs without `DrawRunSubmission`. Ordinary replay does not require `DXMT9_CPU_READY_TAPE`: a source-wide emission plan partitions one validated logical source into direct draw/state islands, typed coordinator locators, ordered-control cuts, and compatibility ranges. Draw → APPLY_STATE → Draw is pinned carrier-free. Since `R-BACK-2.102`, Clear, a lease-trailing single Present, copy/fill/resolve/mipmap coordinators, and the islands around them construct into exact final-slot lease spans; ordered controls and UP/TriangleFan compatibility ranges execute through the ordinary sink at their exact serial positions without demoting unrelated islands. A non-trailing or duplicate Present remains a whole-raw typed pre-effect fallback, as do capture/trace, invalid, and overflowing plans. No DrawRun/Arena compatibility carrier remains. The stable provider publishes the completed `OwnedRawFinalChunkSlot` to the dedicated encode thread; a fused direct cursor remains an optional future placement. The prior owner ledger measured the now-retired carrier at `15.852 MB/Present` and `0.643 ms/Present`; this is historical attribution, not current evidence or a critical-path claim. | Add wild visual/locality/performance evidence for the source-wide lease-span policy, including rotation cadence and Present ordering, while retaining explicit fail-closed capture, invalid, overflow, and post-effect failure dispositions. Fused-worker lifecycle/progress and broader Wine allocation/retain/bridge/capture fault injection, WSI evidence, and the ordered-control end-to-end differential remain separate gaps. CPU-ready Tape is independently default off. |
-| Pipeline ownership/progress observer (`R-BACK-2.88`) | `CpuPipelineOwnership.tla` separates `GPUInFlight -> Completed -> Reclaimed`; its companion `CpuPipelineLifecycle.tla` binds the contiguous GPU-completion frontier independently from the finish-thread waterline. Production emits the Arena publish edge, identity-qualified physical batch index/count for every source in multi-source dequeue/submit/completion, explicit finish advance, actual reclaim, and pending-completion poison evidence. Observer-only occupancy accounting cannot poison or otherwise change queue behavior. Native coverage pins missing second-source, stale batch snapshot, split-frontier, writer-frontier reclaim, and fail-stop cases. | This is a bounded queue/Tape projection, not full lifecycle isomorphism. PE import, selected-parallel child/join, receipt detail, C++ atomic ordering, GPU/wild equivalence, and promotion remain open. |
+| Pipeline ownership/progress observer (`R-BACK-2.88`) | `CpuPipelineOwnership.tla` separates `GPUInFlight -> Completed -> Reclaimed`; its companion `CpuPipelineLifecycle.tla` binds the contiguous GPU-completion frontier independently from the finish-thread waterline. Production emits the Arena publish edge, identity-qualified physical batch index/count for every source in multi-source dequeue/submit/completion, explicit finish advance, actual reclaim, and pending-completion poison evidence. Observer-only occupancy accounting cannot poison or otherwise change queue behavior. Native coverage pins missing second-source, stale batch snapshot, split-frontier, writer-frontier reclaim, and fail-stop cases. The Direct projection begins at successful admission-witness consumption and now binds real Encode/Complete/Detach/Restore-or-Poison/Reclaim transitions with full locators; the complete exactly-one-owner sibling batch reduces against scratch state before the ledger or sink is exposed. A poisoned detached token remains retained on mismatch. | This remains a bounded queue/Tape projection, not an unbounded cross-runtime proof. RawOwned import and plan are abstract model states rather than fabricated runtime observations. Selected-parallel child/join, ordered-control driver execution, broader C++ atomic ordering, GPU/wild equivalence, and promotion remain open. |
 | Typed replay/encode borrows (`R-BACK-2.89`) | The ordinary Unix queue encode API now passes a non-copyable/non-movable `GenerationQualifiedSourceBorrow` plus a trivially-copyable `WorkerOwnedSourceSnapshot`. FrameGraph planning and observation receive only queue-issued `SynchronousSourceBorrowBatch` values: construction is private, issuance freezes and prevalidates exact source/storage generations while holding the queue mutex, and an active epoch pins those locators against reclaim. Unlocked payload/command projections check only the atomic epoch and frozen identity, never the queue-owned Tape; the caller relocks and revalidates every exact Tape generation before deactivation. The visitor and Ready-prefix selector paths use allocation-free templates/thunks. `GenerationQualifiedSourceBorrow` no longer returns a `SourcePayloadView`; its checked `visitPayload` callback receives the noncopyable `SynchronousSourcePayloadBorrow`, whose public surface is limited to checked synchronous projections. Native pins reject public/default/forged construction and capability copying, and cover nested reentry, concurrent reclaim rejection, post-callback generation mismatch, and stale-after-reclaim rejection. This is runtime protocol enforcement, not a claim that C++ can prevent deliberately retaining an address obtained from a returned command/span projection; such escape remains a contract violation and undefined lifetime use. Production DCE issues a batch spanning the selected FIFO sources only when successor lookahead is exposed; the no-expose path retains zero lookahead. CPU-ready session replay uses the same batch capability. The encoder and FrameGraph backend derive any planner spans inside the batch callback, and no lookahead span is retained in a session, partition, selected-child, observer, submission, or completion object. The compatibility span remains only for synchronous native planner seams. | Keep the inventory pinned across replay, serial, DCE/lookahead, session, partition, selected-parallel, observer, and completion callbacks; PE/import/receipt/device-loss owner evidence remains bounded to the existing observer abstractions, while asynchronous GPU/wild equivalence and promotion remain open. |
 | End-to-end source composition, carrier retirement, and materialization floor (`R-BACK-2.95`–`2.100`, `R-ARCH-7.11`–`7.24`) | Production PE descriptors carry a closed event/source interval through authenticated Raw storage, Arena or ordinary final-storage publication, queue residency generations, synchronous replay/encode borrows, early payload retirement, completion, and reclaim. Import closes asynchronous ownership through one complete Unix `RawOwned` copy; replay queues move leases rather than source bytes. Every source owns one fixed-capacity sparse state checkpoint and one shared pure transaction phase relation. Ordinary, Direct, and Arena replay preserve exact record order, restore state plus private destination before the effect cut, require a destination receipt before state commit, and fail-stop without retry after an ordered-control/command/publication effect. `DrawRunSubmission`, its state-lane/helpers, snapshot/batch APIs, source adapter, scratch vectors, carrier counters, and carrier-only tests are removed; source audits pin the absence. The stable `OwnedRawFinalChunkSlot` provider is the current queue-owned final representation: Replay/materialization constructs it transactionally and the dedicated encode thread consumes it. | Complete the final-slot/direct effective-stream, next-state, final-storage, resource/completion, and failure differential; re-run the owner-qualified ledger and prove the R-ARCH-7.24 floor. The fused serial cursor, if pursued, is an optional provider that may later remove the final-slot handoff and dedicated encode thread after its own all-family lifecycle/progress and economy evidence. Add C++ atomic, Wine/GPU, wild, and sidecar audit evidence. |
 
@@ -108,16 +108,15 @@ append, so it is not on the cost path this requirement targets.
 
 **Open, and not claimed (`R-BACK-2.103` / `R-VERIF-2.25`):**
 
-The existing `ReplayEmissionPlanIslands` model is the minimal three-span safety
-slice. It intentionally does not compose the executable span cursor with slot
-generation, capacity rotation, ordered-control session disposition,
-publication/completion/reclaim, or weak-fair progress. Its native binding
-shares the production `compatibilitySpanAdmission` predicate; the remaining
-begin/separator/commit/failure actions are still mirrored in a test-only state
-machine rather than consumed from a shared production reducer. Exact SoA
-contents are covered by focused transaction and production differentials, not
-by an all-family final-storage differential. These are explicit formal and
-model/code closure gaps, not claims delegated to the wild gate.
+The existing `ReplayEmissionPlanIslands` model remains the minimal three-span
+safety slice. It intentionally does not compose the executable span cursor with
+slot generation, capacity rotation, ordered-control session disposition,
+publication/completion/reclaim, or weak-fair progress. Those broader lifecycle
+edges are now owned by the shared `DirectSourceLifecycle` reducer and its
+production observer binding. Exact SoA contents are covered by focused
+transaction and production differentials, not yet by an all-family
+final-storage differential. These remaining formal and model/code closure gaps
+are not claims delegated to the wild gate.
 
 1. **Positive-headroom correctness is repaired; locality is not promoted.**
    The 2026-09-02 GT1 48 MiB and 8 MiB candidates stopped before drawing in a
@@ -320,15 +319,17 @@ model/code closure gaps, not claims delegated to the wild gate.
      skipping the lease while the ledger describes pre-growth bytes after a
      denied lease). All three, and the main configuration, were checked with
      TLC on 2026-09-03.
-   - **Proven natively.** A per-dimension retained-allocation removal sweep over
-     all 30 currently enumerated provisioned
-     dimensions, an allocation-and-address-stability check across the lookup
-     restore, the reclaim round trip, and the stale-ledger counterexample. The
-     sweep is bound to `DirectSlotProvisionAllocation::Count`, so changes to
-     the current allocation inventory fail its static assertion. An entirely
-     new `ChunkSlot` vector is not discoverable by C++ reflection: it must join
-     that inventory, the capacity predicates, retained-byte pricing and this
-     sweep together.
+   - **Proven natively.** The shared compile-time schema asserts 32 semantic
+     rows, 31 physical rows, and 30 staged/fault rows. Coverage gives the
+     readback-only row non-zero demand and removes retained allocation from all
+     31 physical dimensions independently; fault injection still visits the
+     exact 30 production staging sites. The suite additionally pins lookup
+     restore address stability, witness move/stale/ABA/double-consume, detached
+     token move/destroy/restore rejection/explicit abandon, ledger
+     conservation, the reclaim round trip, and stale-ledger rejection. An
+     entirely new `ChunkSlot` vector must join that schema before production or
+     tests can compile, rather than relying on C++ reflection or parallel
+     hand-maintained inventories.
    - **Exercised in a same-build wild qualification.** The 12 MiB and 64 MiB
      runs above execute the reuse arm 3,539 and 10,523 times respectively with
      zero rejection. Reuse itself produces the same physical shape as a fresh
@@ -337,23 +338,53 @@ model/code closure gaps, not claims delegated to the wild gate.
      adjacent sources even when a fresh replacement would be denied. The runs
      establish fewer provisions and better locality, but they do not directly
      time allocator or queue-critical-section work.
-   - **The reclaim round trip is a new lifecycle coupling.** The
-     `drawShaderLayouts` buffer is swapped out under the queue mutex, emptied
-     with the mutex released, and swapped back after the relock and after the
-     Reclaiming identity/seq are revalidated, at both reclaim sites. The two
-     swaps are O(1) and allocate nothing; the owner destruction is
-     O(layout rows) and stays outside the mutex, exactly where it was before.
-     What is new is that a payload's retained capacity now depends on the
-     second half running. While that buffer is detached, the payload carries
-     its allocation size in `detachedResourceOwnerRetainedBytes`, so an
-     all-payload aggregate snapshot sees an exact retained total throughout
-     the unlocked destruction window. `restoreResourceOwnerStorage` retains a
-     defensive no-op for a violated local premise, but that is not a production
-     compatibility fallback: an identity/seq mismatch after detach poisons the
-     Tape and returns before restore. The detached byte witness remains
-     meaningful only during the live round trip; an intentionally abandoned
-     test path clears it through `abandonDetachedResourceOwnerStorage` after
-     destroying the detached allocation.
+   - **The reclaim round trip is a new lifecycle coupling.** The sole detached
+     row, `drawShaderLayouts`, moves into a generation-qualified move-only
+     `DetachedCompatibilityOwnerToken` under the queue mutex, is emptied with
+     the mutex released, and returns only through an rvalue restore after the
+     relock and complete payload/source/sequence/Tape/capacity-ledger identity
+     revalidation. A marker preserves retained-byte pricing while detached.
+     Restore mismatch leaves the token live, poisons the Tape, explicitly
+     abandons the allocation, and returns without completing reclaim; there is
+     no silent defensive reclaim or compatibility fallback.
+   - **Phase B bounded lifecycle and terminal runtime binding implemented.** The shared `DirectSourceLifecycle` reducer now carries witness
+     generation and single consumption, exact source order, destination
+     publication, effect/no-fallback, encode/completion, detached credit,
+     explicit restore or poisoned abandon, and reclaim. The admission witness
+     binds the final destination slot plus slot/source/storage generations,
+     and shared sibling spans acquire one behavioral physical credit owner at
+     import. The production projection begins at successful witness admission;
+     RawOwned import and planning remain abstract reducer states rather than
+     fabricated runtime events. Production owner-observer boundaries bind real
+     admission, destination receipt before Direct physical commit, publication
+     only after Tape seal under the queue mutex, and Encode, Complete, Detach,
+     Restore-or-Poison, and Reclaim edges with full locators and atomic sibling
+     reduction: the complete sibling event batch and exactly-one physical
+     owner rule preflight against scratch lifecycle state before either the
+     queue ledger or observer sink is exposed. A compatibility-owned prefix has
+     no fabricated Direct row; the first appended Direct sibling represents
+     the physical owner. Pre-effect rollback removes its ledger/reducer row as
+     one transaction, allowing the compatibility publication without a stale
+     `RolledBack` record. A poisoned detached token remains retained on
+     mismatch. The
+     native truth tables invoke the same reducer for terminal cases, and the
+     exact Metal Draw/Clear/Draw/Present oracle passes pixels and
+     completion/reclaim identity on the observer-enabled path. Observer-disabled
+     cost is proven separately by the native production source-contract pin:
+     each admission/publication/terminal site pays one cached-Boolean branch,
+     constructs no event, copies no sink facade, and allocates no ledger. The
+     2026-09-03 Metal-capable validation run passed 783/783 non-TLA Meson
+     entries. The
+     bounded two-source/two-slot TLA projection covers separator and
+     ordered-control modes, Present, pre-admission rotation/reuse, weak-fair
+     settlement, a checked lifecycle progress property, and fourteen independent
+     stale, duplicate, reorder, retry, reclaim, credit, restore, adoption, and
+     shared-owner, production-admission-order, and post-effect-destination
+     counterexamples. The configuration inventory is wired into
+     `dxmt9-verify-tla`; the complete 161-configuration inventory passed on
+     2026-09-03 with 50 production safety, two fair-progress, and 109 deliberate
+     expected-failure configurations. Ordered-control
+     driver execution, wild locality/performance, and promotion remain open.
    - **The whole-payload alternative was rejected, and why is worth
      recording.** Clearing the entire payload in the unlocked window is
      simpler, but `CpuReadyTape::compatibilityPayloadRetainedBytes` reads every

@@ -319,6 +319,16 @@ test('dxmt9-direct-slot-provisioning-spec',
      direct_slot_provisioning_spec,
      env: dxmt9_native_test_env)
 
+direct_source_lifecycle_spec = executable(
+  'dxmt9-direct-source-lifecycle-spec',
+  'direct_source_lifecycle_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+
+test('dxmt9-direct-source-lifecycle-spec',
+     direct_source_lifecycle_spec,
+     env: dxmt9_native_test_env)
+
 process_memory_observer_spec = executable(
   'dxmt9-process-memory-observer-spec',
   'process_memory_observer_spec.cpp',

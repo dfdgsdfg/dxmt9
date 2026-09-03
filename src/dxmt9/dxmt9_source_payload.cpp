@@ -1186,7 +1186,8 @@ bool TransactionalChunkSlotAssembler::reserve() noexcept {
     auto& slot = *directSlot_;
     if (slot.prefetchedPipelinesSealed() ||
         !slot.drawStateStorageConsistent() ||
-        !slot.commandPayloadsInRange()) {
+        !slot.commandPayloadsInRange() ||
+        slot.detachedOwnerMarker.active()) {
       state_ = State::Failed;
       return false;
     }
@@ -1199,51 +1200,20 @@ bool TransactionalChunkSlotAssembler::reserve() noexcept {
       }
       clearRectCount += clear.rects.size();
     }
+#define DXMT9_DIRECT_CHECKPOINT_VALUE_Vector(plan, storage) \
+  .plan = slot.storage.size(),
+#define DXMT9_DIRECT_CHECKPOINT_VALUE_SemanticOnly(plan, storage) \
+  .plan = clearRectCount,
+#define DXMT9_DIRECT_CHECKPOINT_FIELD(                                  \
+    region, plan, storage, element, physical, provision, allocation,    \
+    lookup, owner)                                                       \
+  DXMT9_DIRECT_CHECKPOINT_VALUE_##physical(plan, storage)
     directCheckpoint_ = {
-        .commandHeaders = slot.commandHeaders.size(),
-        .drawHotStates = slot.drawHotStates.size(),
-        .drawShaderLayouts = slot.drawShaderLayouts.size(),
-        .drawDebugSnapshots = slot.drawDebugSnapshots.size(),
-        .drawPsoSubviews = slot.drawPsoSubviews.size(),
-        .drawUniformFixedPayloads = slot.drawUniformFixedPayloads.size(),
-        .drawUniformVertexConstants = slot.drawUniformVertexConstants.size(),
-        .drawUniformVertexConstantBytes =
-            slot.drawUniformVertexConstantBytes.size(),
-        .drawUniformPixelConstants = slot.drawUniformPixelConstants.size(),
-        .drawUniformPixelConstantBytes =
-            slot.drawUniformPixelConstantBytes.size(),
-        .drawUniformPayloads = slot.drawUniformPayloads.size(),
-        .drawUniformPayloadLookupHeads =
-            slot.drawUniformPayloadLookupHeads.size(),
-        .drawUniformPayloadLookupTails =
-            slot.drawUniformPayloadLookupTails.size(),
-        .drawUniformPayloadLookupNext =
-            slot.drawUniformPayloadLookupNext.size(),
-        .drawUniformVertexConstantsLookupHeads =
-            slot.drawUniformVertexConstantsLookupHeads.size(),
-        .drawUniformVertexConstantsLookupTails =
-            slot.drawUniformVertexConstantsLookupTails.size(),
-        .drawUniformVertexConstantsLookupNext =
-            slot.drawUniformVertexConstantsLookupNext.size(),
-        .drawUniformPixelConstantsLookupHeads =
-            slot.drawUniformPixelConstantsLookupHeads.size(),
-        .drawUniformPixelConstantsLookupTails =
-            slot.drawUniformPixelConstantsLookupTails.size(),
-        .drawUniformPixelConstantsLookupNext =
-            slot.drawUniformPixelConstantsLookupNext.size(),
-        .drawParams = slot.drawParams.size(),
-        .drawPayloadBytes = slot.drawPayloadArena.size(),
-        .drawRunRecords = slot.drawRunRecords.size(),
-        .clearRecords = slot.clearRecords.size(),
-        .clearRects = clearRectCount,
-        .surfaceCopyRecords = slot.surfaceCopyRecords.size(),
-        .stretchRectRecords = slot.stretchRectRecords.size(),
-        .readbackRecords = slot.readbackRecords.size(),
-        .colorFillRecords = slot.colorFillRecords.size(),
-        .depthResolveRecords = slot.depthResolveRecords.size(),
-        .generateMipmapsRecords = slot.generateMipmapsRecords.size(),
-        .presentRecords = slot.presentRecords.size(),
+        DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_DIRECT_CHECKPOINT_FIELD)
     };
+#undef DXMT9_DIRECT_CHECKPOINT_FIELD
+#undef DXMT9_DIRECT_CHECKPOINT_VALUE_SemanticOnly
+#undef DXMT9_DIRECT_CHECKPOINT_VALUE_Vector
     directClearRectCount_ = clearRectCount;
     directLastUniformFixedHandle_ = slot.lastUniformFixedHandle;
     directLastUniformVertexConstantsHandle_ =
@@ -1258,34 +1228,15 @@ bool TransactionalChunkSlotAssembler::reserve() noexcept {
       values.reserve(values.size() + extra);
     };
     try {
-      reserve(slot.commandHeaders, directCapacity_.commandHeaders);
-      reserve(slot.drawHotStates, directCapacity_.drawHotStates);
-      reserve(slot.drawShaderLayouts, directCapacity_.drawShaderLayouts);
-      reserve(slot.drawDebugSnapshots, directCapacity_.drawDebugSnapshots);
-      reserve(slot.drawPsoSubviews, directCapacity_.drawPsoSubviews);
-      reserve(slot.drawUniformFixedPayloads,
-              directCapacity_.drawUniformFixedPayloads);
-      reserve(slot.drawUniformVertexConstants,
-              directCapacity_.drawUniformVertexConstants);
-      reserve(slot.drawUniformVertexConstantBytes,
-              directCapacity_.drawUniformVertexConstantBytes);
-      reserve(slot.drawUniformPixelConstants,
-              directCapacity_.drawUniformPixelConstants);
-      reserve(slot.drawUniformPixelConstantBytes,
-              directCapacity_.drawUniformPixelConstantBytes);
-      reserve(slot.drawUniformPayloads, directCapacity_.drawUniformPayloads);
-      reserve(slot.drawParams, directCapacity_.drawParams);
-      reserve(slot.drawPayloadArena, directCapacity_.drawPayloadBytes);
-      reserve(slot.drawRunRecords, directCapacity_.drawRunRecords);
-      reserve(slot.clearRecords, directCapacity_.clearRecords);
-      reserve(slot.surfaceCopyRecords, directCapacity_.surfaceCopyRecords);
-      reserve(slot.stretchRectRecords, directCapacity_.stretchRectRecords);
-      reserve(slot.readbackRecords, directCapacity_.readbackRecords);
-      reserve(slot.colorFillRecords, directCapacity_.colorFillRecords);
-      reserve(slot.depthResolveRecords, directCapacity_.depthResolveRecords);
-      reserve(slot.generateMipmapsRecords,
-              directCapacity_.generateMipmapsRecords);
-      reserve(slot.presentRecords, directCapacity_.presentRecords);
+#define DXMT9_DIRECT_RESERVE_FIELD(                                      \
+    region, plan, storage, element, physical, provision, allocation,    \
+    lookup, owner)                                                       \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PROVISION_##provision(                  \
+      DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PHYSICAL_##physical(                \
+          DXMT9_DIRECT_CHUNK_SLOT_EXPAND_ORDINARY_##lookup(              \
+              reserve(slot.storage, directCapacity_.plan);)))
+      DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_DIRECT_RESERVE_FIELD)
+#undef DXMT9_DIRECT_RESERVE_FIELD
       if (directCapacity_.drawUniformPayloads != 0) {
         slot.reserveDrawUniformPayloadLookup(
             slot.drawUniformPayloads.size() +
@@ -1355,6 +1306,25 @@ bool TransactionalChunkSlotAssembler::prepare() noexcept {
     // Per-draw appends therefore do not make capacity/publication decisions;
     // this single prepare-time invariant catches a missing/duplicated draw or
     // a deduplicated uniform dimension escaping its planned upper bound.
+    bool rangeDimensionsReady = true;
+#define DXMT9_DIRECT_WITHIN_VALUE_Vector(plan, storage)                  \
+  rangeDimensionsReady =                                                    \
+      rangeDimensionsReady &&                                               \
+      within(slot.storage.size(), directCheckpoint_.plan, directCapacity_.plan);
+#define DXMT9_DIRECT_WITHIN_VALUE_SemanticOnly(plan, storage)             \
+  rangeDimensionsReady =                                                    \
+      rangeDimensionsReady &&                                               \
+      within(directClearRectCount_, directCheckpoint_.plan,                 \
+             directCapacity_.plan);
+#define DXMT9_DIRECT_WITHIN_FIELD(                                         \
+    region, plan, storage, element, physical, provision, allocation,       \
+    lookup, owner)                                                         \
+  DXMT9_DIRECT_WITHIN_VALUE_##physical(plan, storage)
+    DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_DIRECT_WITHIN_FIELD)
+#undef DXMT9_DIRECT_WITHIN_FIELD
+#undef DXMT9_DIRECT_WITHIN_VALUE_SemanticOnly
+#undef DXMT9_DIRECT_WITHIN_VALUE_Vector
+
     rangeCountsReady =
         outerBinding_.has_value() &&
         outerBinding_->rangeRecordCount == directRangeRecordCount_ &&
@@ -1374,70 +1344,7 @@ bool TransactionalChunkSlotAssembler::prepare() noexcept {
         delta(slot.drawRunRecords.size(), directCheckpoint_.drawRunRecords) ==
             directRunCommandCount_ &&
         delta(slot.drawPsoSubviews.size(), directCheckpoint_.drawPsoSubviews) ==
-            directRunCommandCount_ &&
-        within(slot.commandHeaders.size(), directCheckpoint_.commandHeaders,
-               directCapacity_.commandHeaders) &&
-        within(slot.drawHotStates.size(), directCheckpoint_.drawHotStates,
-               directCapacity_.drawHotStates) &&
-        within(slot.drawShaderLayouts.size(),
-               directCheckpoint_.drawShaderLayouts,
-               directCapacity_.drawShaderLayouts) &&
-        within(slot.drawDebugSnapshots.size(),
-               directCheckpoint_.drawDebugSnapshots,
-               directCapacity_.drawDebugSnapshots) &&
-        within(slot.drawPsoSubviews.size(), directCheckpoint_.drawPsoSubviews,
-               directCapacity_.drawPsoSubviews) &&
-        within(slot.drawRunRecords.size(), directCheckpoint_.drawRunRecords,
-               directCapacity_.drawRunRecords) &&
-        within(slot.drawUniformFixedPayloads.size(),
-               directCheckpoint_.drawUniformFixedPayloads,
-               directCapacity_.drawUniformFixedPayloads) &&
-        within(slot.drawUniformVertexConstants.size(),
-               directCheckpoint_.drawUniformVertexConstants,
-               directCapacity_.drawUniformVertexConstants) &&
-        within(slot.drawUniformVertexConstantBytes.size(),
-               directCheckpoint_.drawUniformVertexConstantBytes,
-               directCapacity_.drawUniformVertexConstantBytes) &&
-        within(slot.drawUniformPixelConstants.size(),
-               directCheckpoint_.drawUniformPixelConstants,
-               directCapacity_.drawUniformPixelConstants) &&
-        within(slot.drawUniformPixelConstantBytes.size(),
-               directCheckpoint_.drawUniformPixelConstantBytes,
-               directCapacity_.drawUniformPixelConstantBytes) &&
-        within(slot.drawUniformPayloads.size(),
-               directCheckpoint_.drawUniformPayloads,
-               directCapacity_.drawUniformPayloads) &&
-        within(slot.drawUniformPayloadLookupHeads.size(),
-               directCheckpoint_.drawUniformPayloadLookupHeads,
-               directCapacity_.drawUniformPayloadLookupHeads) &&
-        within(slot.drawUniformPayloadLookupTails.size(),
-               directCheckpoint_.drawUniformPayloadLookupTails,
-               directCapacity_.drawUniformPayloadLookupTails) &&
-        within(slot.drawUniformPayloadLookupNext.size(),
-               directCheckpoint_.drawUniformPayloadLookupNext,
-               directCapacity_.drawUniformPayloadLookupNext) &&
-        within(slot.drawUniformVertexConstantsLookupHeads.size(),
-               directCheckpoint_.drawUniformVertexConstantsLookupHeads,
-               directCapacity_.drawUniformVertexConstantsLookupHeads) &&
-        within(slot.drawUniformVertexConstantsLookupTails.size(),
-               directCheckpoint_.drawUniformVertexConstantsLookupTails,
-               directCapacity_.drawUniformVertexConstantsLookupTails) &&
-        within(slot.drawUniformVertexConstantsLookupNext.size(),
-               directCheckpoint_.drawUniformVertexConstantsLookupNext,
-               directCapacity_.drawUniformVertexConstantsLookupNext) &&
-        within(slot.drawUniformPixelConstantsLookupHeads.size(),
-               directCheckpoint_.drawUniformPixelConstantsLookupHeads,
-               directCapacity_.drawUniformPixelConstantsLookupHeads) &&
-        within(slot.drawUniformPixelConstantsLookupTails.size(),
-               directCheckpoint_.drawUniformPixelConstantsLookupTails,
-               directCapacity_.drawUniformPixelConstantsLookupTails) &&
-        within(slot.drawUniformPixelConstantsLookupNext.size(),
-               directCheckpoint_.drawUniformPixelConstantsLookupNext,
-               directCapacity_.drawUniformPixelConstantsLookupNext) &&
-        within(slot.drawParams.size(), directCheckpoint_.drawParams,
-               directCapacity_.drawParams) &&
-        within(slot.drawPayloadArena.size(), directCheckpoint_.drawPayloadBytes,
-               directCapacity_.drawPayloadBytes);
+            directRunCommandCount_ && rangeDimensionsReady;
   }
   if ((state_ != State::Reserved && state_ != State::Building) ||
       !destinationReady || !rangeCountsReady) {
@@ -1510,35 +1417,18 @@ void TransactionalChunkSlotAssembler::rollback() noexcept {
   }
   if (directSlot_) {
     auto& slot = *directSlot_;
-    slot.commandHeaders.resize(directCheckpoint_.commandHeaders);
-    slot.drawHotStates.resize(directCheckpoint_.drawHotStates);
-    slot.drawShaderLayouts.resize(directCheckpoint_.drawShaderLayouts);
-    slot.drawDebugSnapshots.resize(directCheckpoint_.drawDebugSnapshots);
-    slot.drawPsoSubviews.resize(directCheckpoint_.drawPsoSubviews);
-    slot.drawUniformFixedPayloads.resize(
-        directCheckpoint_.drawUniformFixedPayloads);
-    slot.drawUniformVertexConstants.resize(
-        directCheckpoint_.drawUniformVertexConstants);
-    slot.drawUniformVertexConstantBytes.resize(
-        directCheckpoint_.drawUniformVertexConstantBytes);
-    slot.drawUniformPixelConstants.resize(
-        directCheckpoint_.drawUniformPixelConstants);
-    slot.drawUniformPixelConstantBytes.resize(
-        directCheckpoint_.drawUniformPixelConstantBytes);
-    slot.drawUniformPayloads.resize(directCheckpoint_.drawUniformPayloads);
-    slot.drawParams.resize(directCheckpoint_.drawParams);
-    slot.drawPayloadArena.resize(directCheckpoint_.drawPayloadBytes);
-    slot.drawRunRecords.resize(directCheckpoint_.drawRunRecords);
-    slot.clearRecords.resize(directCheckpoint_.clearRecords);
-    directClearRectCount_ = directCheckpoint_.clearRects;
-    slot.surfaceCopyRecords.resize(directCheckpoint_.surfaceCopyRecords);
-    slot.stretchRectRecords.resize(directCheckpoint_.stretchRectRecords);
-    slot.readbackRecords.resize(directCheckpoint_.readbackRecords);
-    slot.colorFillRecords.resize(directCheckpoint_.colorFillRecords);
-    slot.depthResolveRecords.resize(directCheckpoint_.depthResolveRecords);
-    slot.generateMipmapsRecords.resize(
-        directCheckpoint_.generateMipmapsRecords);
-    slot.presentRecords.resize(directCheckpoint_.presentRecords);
+#define DXMT9_DIRECT_ROLLBACK_VALUE_Vector(plan, storage) \
+    slot.storage.resize(directCheckpoint_.plan);
+#define DXMT9_DIRECT_ROLLBACK_VALUE_SemanticOnly(plan, storage) \
+    directClearRectCount_ = directCheckpoint_.plan;
+#define DXMT9_DIRECT_ROLLBACK_FIELD(                                  \
+    region, plan, storage, element, physical, provision, allocation,  \
+    lookup, owner)                                                     \
+  DXMT9_DIRECT_ROLLBACK_VALUE_##physical(plan, storage)
+    DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_DIRECT_ROLLBACK_FIELD)
+#undef DXMT9_DIRECT_ROLLBACK_FIELD
+#undef DXMT9_DIRECT_ROLLBACK_VALUE_SemanticOnly
+#undef DXMT9_DIRECT_ROLLBACK_VALUE_Vector
     slot.lastUniformFixedHandle = directLastUniformFixedHandle_;
     slot.lastUniformVertexConstantsHandle =
         directLastUniformVertexConstantsHandle_;
@@ -1724,47 +1614,41 @@ bool TransactionalChunkSlotAssembler::tryAppendDirectDraw(
         }
         payloadBytes += bytes.size();
       }
-      if (!directRangeBuild_ &&
-          (!fits(slot.commandHeaders.size(), directCheckpoint_.commandHeaders,
-                 extendRun ? 0u : 1u, directCapacity_.commandHeaders) ||
-           !fits(slot.drawHotStates.size(), directCheckpoint_.drawHotStates,
-                 extendRun ? 0u : 1u, directCapacity_.drawHotStates) ||
-           !fits(slot.drawShaderLayouts.size(),
-                 directCheckpoint_.drawShaderLayouts, extendRun ? 0u : 1u,
-                 directCapacity_.drawShaderLayouts) ||
-           !fits(slot.drawDebugSnapshots.size(),
-                 directCheckpoint_.drawDebugSnapshots, extendRun ? 0u : 1u,
-                 directCapacity_.drawDebugSnapshots) ||
-           !fits(slot.drawPsoSubviews.size(),
-                 directCheckpoint_.drawPsoSubviews, extendRun ? 0u : 1u,
-                 directCapacity_.drawPsoSubviews) ||
-           !fits(slot.drawUniformFixedPayloads.size(),
-                 directCheckpoint_.drawUniformFixedPayloads, 1u,
-                 directCapacity_.drawUniformFixedPayloads) ||
-           !fits(slot.drawUniformVertexConstants.size(),
-                 directCheckpoint_.drawUniformVertexConstants, 1u,
-                 directCapacity_.drawUniformVertexConstants) ||
-           !fits(slot.drawUniformVertexConstantBytes.size(),
-                 directCheckpoint_.drawUniformVertexConstantBytes,
-                 sizeof(VertexShaderConstants),
-                 directCapacity_.drawUniformVertexConstantBytes) ||
-           !fits(slot.drawUniformPixelConstants.size(),
-                 directCheckpoint_.drawUniformPixelConstants, 1u,
-                 directCapacity_.drawUniformPixelConstants) ||
-           !fits(slot.drawUniformPixelConstantBytes.size(),
-                 directCheckpoint_.drawUniformPixelConstantBytes,
-                 sizeof(PixelShaderConstants),
-                 directCapacity_.drawUniformPixelConstantBytes) ||
-           !fits(slot.drawUniformPayloads.size(),
-                 directCheckpoint_.drawUniformPayloads, 1u,
-                 directCapacity_.drawUniformPayloads) ||
-           !fits(slot.drawParams.size(), directCheckpoint_.drawParams, 1u,
-                 directCapacity_.drawParams) ||
-           !fits(slot.drawPayloadArena.size(),
-                 directCheckpoint_.drawPayloadBytes, payloadBytes,
-                 directCapacity_.drawPayloadBytes) ||
-           !fits(slot.drawRunRecords.size(), directCheckpoint_.drawRunRecords,
-                 extendRun ? 0u : 1u, directCapacity_.drawRunRecords))) {
+      SourcePayloadCapacity drawAppend{};
+      drawAppend.commandHeaders = extendRun ? 0u : 1u;
+      drawAppend.drawHotStates = extendRun ? 0u : 1u;
+      drawAppend.drawShaderLayouts = extendRun ? 0u : 1u;
+      drawAppend.drawDebugSnapshots = extendRun ? 0u : 1u;
+      drawAppend.drawPsoSubviews = extendRun ? 0u : 1u;
+      drawAppend.drawUniformFixedPayloads = 1u;
+      drawAppend.drawUniformVertexConstants = 1u;
+      drawAppend.drawUniformVertexConstantBytes = sizeof(VertexShaderConstants);
+      drawAppend.drawUniformPixelConstants = 1u;
+      drawAppend.drawUniformPixelConstantBytes = sizeof(PixelShaderConstants);
+      drawAppend.drawUniformPayloads = 1u;
+      drawAppend.drawParams = 1u;
+      drawAppend.drawPayloadBytes = payloadBytes;
+      drawAppend.drawRunRecords = extendRun ? 0u : 1u;
+      bool drawAppendFits = true;
+#define DXMT9_DIRECT_FITS_VALUE_Vector(plan, storage)                      \
+  drawAppendFits = drawAppendFits &&                                        \
+      fits(slot.storage.size(), directCheckpoint_.plan, drawAppend.plan,     \
+           directCapacity_.plan);
+#define DXMT9_DIRECT_FITS_VALUE_SemanticOnly(plan, storage)                 \
+  drawAppendFits = drawAppendFits &&                                        \
+      fits(directClearRectCount_, directCheckpoint_.plan, drawAppend.plan,  \
+           directCapacity_.plan);
+#define DXMT9_DIRECT_FITS_FIELD(                                             \
+    region, plan, storage, element, physical, provision, allocation,       \
+    lookup, owner)                                                         \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PHYSICAL_##physical(                      \
+      DXMT9_DIRECT_CHUNK_SLOT_EXPAND_ORDINARY_##lookup(                    \
+          DXMT9_DIRECT_FITS_VALUE_##physical(plan, storage)))
+      DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_DIRECT_FITS_FIELD)
+#undef DXMT9_DIRECT_FITS_FIELD
+#undef DXMT9_DIRECT_FITS_VALUE_SemanticOnly
+#undef DXMT9_DIRECT_FITS_VALUE_Vector
+      if (!directRangeBuild_ && !drawAppendFits) {
         return fail();
       }
       const auto finalBaseBytes = sizeof(DrawParam) +

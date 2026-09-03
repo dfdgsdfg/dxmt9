@@ -1015,6 +1015,43 @@ void testDirectChunkSlotReserveHappensInTheConstructor() {
   }
 }
 
+void testDirectChunkSlotReserveFollowsDimensionSchema() {
+  ChunkSlot slot;
+  SourcePayloadCapacity capacity{};
+#define DXMT9_TEST_RESERVE_CAPACITY(                                      \
+    region, plan, storage, element, physical, provision, allocation,      \
+    lookup, owner)                                                        \
+  capacity.plan = 1;
+  DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_TEST_RESERVE_CAPACITY)
+#undef DXMT9_TEST_RESERVE_CAPACITY
+
+  TransactionalChunkSlotAssembler assembler(slot, capacity);
+  check(assembler.state() == TransactionalChunkSlotAssembler::State::Reserved,
+        "the schema-sized direct reservation must reach Reserved");
+#define DXMT9_TEST_RESERVED_DIMENSION(                                     \
+    region, plan, storage, element, physical, provision, allocation,        \
+    lookup, owner)                                                          \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PROVISION_##provision(                     \
+      DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PHYSICAL_##physical(                   \
+          DXMT9_DIRECT_CHUNK_SLOT_EXPAND_ORDINARY_##lookup(                 \
+              check(slot.storage.capacity() >= capacity.plan,              \
+                    "every staged physical schema row is reserved"));))
+  DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_TEST_RESERVED_DIMENSION)
+#undef DXMT9_TEST_RESERVED_DIMENSION
+  check(slot.readbackRecords.capacity() == 0 &&
+            slot.clearRecords.capacity() >= capacity.clearRecords,
+        "coverage-only rows stay out of exact-fit reserve while staged rows "
+        "remain reserved");
+  check(slot.drawUniformPayloadLookupNext.capacity() >=
+            capacity.drawUniformPayloadLookupNext &&
+            slot.drawUniformVertexConstantsLookupNext.capacity() >=
+                capacity.drawUniformVertexConstantsLookupNext &&
+            slot.drawUniformPixelConstantsLookupNext.capacity() >=
+                capacity.drawUniformPixelConstantsLookupNext,
+        "generated lookup-next rows retain exact-fit reservation headroom");
+  assembler.rollback();
+}
+
 void testProductionCommitRequiresTypedEvidence() {
   SourcePayloadCapacity capacity{};
   capacity.commandHeaders = 1;
@@ -1129,6 +1166,7 @@ int main() {
     testCopyMaterializationRegistryOwnershipAndDisabledPath();
     testTransactionalAssemblerRollbackReclaimsDestination();
     testDirectChunkSlotReserveHappensInTheConstructor();
+    testDirectChunkSlotReserveFollowsDimensionSchema();
     testProductionCommitRequiresTypedEvidence();
     testArenaChainMapsOneLogicalCommandSpaceWithoutGather();
     testPublishRejectsInvalidCommandRanges();

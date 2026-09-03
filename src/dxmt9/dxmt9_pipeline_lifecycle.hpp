@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dxmt9/progress_predicates.hpp"
+#include "dxmt9_direct_source_lifecycle.hpp"
 
 #include <array>
 #include <atomic>
@@ -566,6 +567,7 @@ enum class PipelineObservationError : std::uint8_t {
   InvalidDisposition,
   InvalidPhysicalBatch,
   IncompletePhysicalBatch,
+  DirectLifecycleMismatch,
 };
 
 constexpr bool pipelineStageOwnsQueueCredit(PipelineStage stage) noexcept {
@@ -1362,6 +1364,9 @@ struct PipelineLifecycleObserverSink {
   using FinalizeFn = void (*)(void*, std::uint64_t,
                               std::uint32_t) noexcept;
   FinalizeFn finalizeFn = nullptr;
+  DirectSourceLifecycleObserverFn directFn = nullptr;
+  using DirectFailFn = void (*)(void*) noexcept;
+  DirectFailFn directFailFn = nullptr;
   // These callbacks address the nullable cold facts sidecar. They are not
   // consulted by queue/source records on the disabled path.
   using RecordFactsFn = void (*)(void*, std::uint64_t, std::uint64_t,
@@ -1395,6 +1400,17 @@ inline void emitPipelineLifecycleEvent(
   if (sink.fn) {
     sink.fn(sink.context, event);
   }
+}
+
+inline void emitDirectSourceLifecycleEvent(
+    PipelineLifecycleObserverSink sink,
+    const DirectSourceLifecycleEvent& event) noexcept {
+  if (sink.directFn) sink.directFn(sink.context, event);
+}
+
+inline void failDirectSourceLifecycleObserver(
+    PipelineLifecycleObserverSink sink) noexcept {
+  if (sink.directFailFn) sink.directFailFn(sink.context);
 }
 
 inline void emitPipelineControlObservation(
@@ -1473,6 +1489,8 @@ class PipelineLifecycleObserver {
     return {.context = this,
             .fn = &observeOwnerFromSink,
             .finalizeFn = &finalizeFromSink,
+            .directFn = &observeDirectFromSink,
+            .directFailFn = &failDirectFromSink,
             .recordFactsFn = &recordFactsFromSink,
             .recordIdentityFn = &recordIdentityFromSink,
             .lookupFn = &lookupFromSink,
@@ -1509,6 +1527,25 @@ class PipelineLifecycleObserver {
     ++state_.eventCount;
   }
 
+  void observeDirect(const DirectSourceLifecycleEvent& event) noexcept {
+    if (directError_ != DirectSourceLifecycleError::None) return;
+    directError_ = reduceDirectSourceLifecycle(directState_, event);
+    if (directError_ != DirectSourceLifecycleError::None) {
+      if (error_ == PipelineObservationError::None) {
+        error_ = PipelineObservationError::DirectLifecycleMismatch;
+      }
+    }
+  }
+
+  void failDirectObserverClosed() noexcept {
+    if (directError_ == DirectSourceLifecycleError::None) {
+      directError_ = DirectSourceLifecycleError::InvalidTransition;
+    }
+    if (error_ == PipelineObservationError::None) {
+      error_ = PipelineObservationError::DirectLifecycleMismatch;
+    }
+  }
+
   PipelineControlObserverSink productionControlSink() noexcept {
     return {.context = this, .fn = &observeControlFromSink};
   }
@@ -1520,6 +1557,22 @@ class PipelineLifecycleObserver {
   constexpr const PipelineLifecycleObserverState& state() const noexcept {
     return state_;
   }
+  constexpr DirectSourceLifecycleError directError() const noexcept {
+    return directError_;
+  }
+  constexpr const DirectSourceLifecycleState& directState() const noexcept {
+    return directState_;
+  }
+
+  // Cold diagnostic window reset. Production queue tests use this only after
+  // a full flush so the already-bound sink keeps the same stable address.
+  void resetObservationWindow() noexcept {
+    state_ = {};
+    directState_ = {};
+    error_ = PipelineObservationError::None;
+    directError_ = DirectSourceLifecycleError::None;
+    if (sidecar_) sidecar_->clear();
+  }
 
  private:
   static void observeFromSink(void* context,
@@ -1530,6 +1583,15 @@ class PipelineLifecycleObserver {
   static void observeOwnerFromSink(
       void* context, const PipelineLifecycleEvent& event) noexcept {
     static_cast<PipelineLifecycleObserver*>(context)->observeOwnerEvent(event);
+  }
+
+  static void observeDirectFromSink(
+      void* context, const DirectSourceLifecycleEvent& event) noexcept {
+    static_cast<PipelineLifecycleObserver*>(context)->observeDirect(event);
+  }
+
+  static void failDirectFromSink(void* context) noexcept {
+    static_cast<PipelineLifecycleObserver*>(context)->failDirectObserverClosed();
   }
 
   static void finalizeFromSink(void* context, std::uint64_t physicalBatchId,
@@ -1595,7 +1657,9 @@ class PipelineLifecycleObserver {
   }
 
   PipelineLifecycleObserverState state_{};
+  DirectSourceLifecycleState directState_{};
   PipelineObservationError error_ = PipelineObservationError::None;
+  DirectSourceLifecycleError directError_ = DirectSourceLifecycleError::None;
   std::unique_ptr<PipelineLifecycleSidecar> sidecar_{};
   bool requireEndToEndIdentity_ = false;
 };

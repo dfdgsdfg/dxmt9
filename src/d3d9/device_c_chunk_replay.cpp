@@ -1931,10 +1931,20 @@ int32_t replayEmissionSpans(
       continue;
     }
 
+    auto controlMode = dxmt9::queue::DirectSourceControlMode::Ordinary;
+    if (span.firstSegmentIndex != 0u &&
+        span.firstSegmentIndex <= plan.segments.size()) {
+      const auto precedingKind =
+          plan.segments[span.firstSegmentIndex - 1u].kind;
+      controlMode = precedingKind ==
+              dxmt9::d3d9::EmissionSegmentKind::OrderedControlLocator
+          ? dxmt9::queue::DirectSourceControlMode::OrderedControl
+          : dxmt9::queue::DirectSourceControlMode::Separator;
+    }
     auto begin = queue.beginDirectChunkSlotReplay(
         raw.replaySeq, span.capacity, span.plannedBytes, producerIdentity,
         span.recordCount, span.drawCount, span.leaseOrdinal,
-        span.finalLeaseSpan, /*allowRotation=*/true);
+        span.finalLeaseSpan, /*allowRotation=*/true, controlMode);
     if (begin.status !=
             dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Ready ||
         !begin.lease) {
@@ -2021,19 +2031,29 @@ int32_t replayEmissionSpans(
     // Explicit cut at the span end. Coordinator appends already seal the open
     // run implicitly, but a span boundary is a cut the assembler never sees,
     // and `Draw, Draw, <cut>, Draw` must produce two run records, not one.
+    lease.markSemanticEffectsStarted();
     lease.closeDirectRun();
     const auto destinationTicket = lease.ticket();
     const auto destinationControlIndex = lease.controlIndex();
+    const auto destinationReceipt = publishedReplayReceipt(
+        transaction, destinationTicket, destinationControlIndex,
+        dxmt9::d3d9::ReplayDestinationKind::DirectChunkSlot);
+    if (!transaction.receiveDestination(destinationReceipt)) {
+      outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::CommitFailed;
+      (void)transaction.failStop();
+      return commitChunkFail("chunk-span-state-commit", span.firstRecordIndex);
+    }
+    // Accept the replay receipt while the destination is still Writing. The
+    // queue mutex serializes this handoff with the subsequent sealAndPublish;
+    // its queue-owned Publish edge is therefore never overtaken by encode.
+    lease.observeAcceptedDestination();
     if (lease.commit(raw.resourceEntries) !=
         dxmt9::CommandQueue::DirectChunkSlotReplayStatus::Committed) {
       outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::CommitFailed;
       (void)transaction.failStop();
       return commitChunkFail("chunk-span-commit", span.firstRecordIndex);
     }
-    const auto destinationReceipt = publishedReplayReceipt(
-        transaction, destinationTicket, destinationControlIndex,
-        dxmt9::d3d9::ReplayDestinationKind::DirectChunkSlot);
-    if (!commitReplayTransaction(transaction, destinationReceipt)) {
+    if (!transaction.commit()) {
       outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::CommitFailed;
       return commitChunkFail("chunk-span-state-commit", span.firstRecordIndex);
     }

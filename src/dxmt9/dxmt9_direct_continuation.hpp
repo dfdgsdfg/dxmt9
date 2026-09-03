@@ -8,9 +8,252 @@
 #include <cstdint>
 #include <limits>
 #include <new>
+#include <type_traits>
 #include <utility>
 
+namespace dxmt9 {
+class CommandQueue;
+struct DirectSpanAdmissionWitnessTestAccess;
+}
+
 namespace dxmt9::core {
+
+enum class DirectSpanStorageAction : std::uint8_t {
+  ExactFit,
+  Provisioned,
+  ReusedProvisioned,
+  AppendInPlace,
+  Rotated,
+};
+
+enum class DirectSpanCapacityReceiptKind : std::uint8_t {
+  ExactFitUnqualified,
+  LedgerQualified,
+};
+
+class DirectSpanCapacityReceipt {
+ public:
+  static constexpr DirectSpanCapacityReceipt exactFitUnqualified() noexcept {
+    return {};
+  }
+
+  static constexpr DirectSpanCapacityReceipt ledgerQualified(
+      std::uint32_t payloadIndex, std::uint64_t generation,
+      std::uint64_t retainedBytes) noexcept {
+    DirectSpanCapacityReceipt result;
+    result.kind_ = DirectSpanCapacityReceiptKind::LedgerQualified;
+    result.payloadIndex_ = payloadIndex;
+    result.generation_ = generation;
+    result.retainedBytes_ = retainedBytes;
+    return result;
+  }
+
+  constexpr DirectSpanCapacityReceiptKind kind() const noexcept {
+    return kind_;
+  }
+  constexpr bool qualified() const noexcept {
+    return kind_ == DirectSpanCapacityReceiptKind::LedgerQualified;
+  }
+  constexpr std::uint32_t payloadIndex() const noexcept {
+    return payloadIndex_;
+  }
+  constexpr std::uint64_t generation() const noexcept { return generation_; }
+  constexpr std::uint64_t retainedBytes() const noexcept {
+    return retainedBytes_;
+  }
+  constexpr bool valid() const noexcept {
+    return kind_ == DirectSpanCapacityReceiptKind::ExactFitUnqualified ||
+        (payloadIndex_ != std::numeric_limits<std::uint32_t>::max() &&
+         generation_ != 0 && retainedBytes_ != 0);
+  }
+
+  friend constexpr bool operator==(const DirectSpanCapacityReceipt&,
+                                   const DirectSpanCapacityReceipt&) = default;
+
+ private:
+  DirectSpanCapacityReceiptKind kind_ =
+      DirectSpanCapacityReceiptKind::ExactFitUnqualified;
+  std::uint32_t payloadIndex_ = std::numeric_limits<std::uint32_t>::max();
+  std::uint64_t generation_ = 0;
+  std::uint64_t retainedBytes_ = 0;
+};
+
+enum class DirectSpanProducerIntervalKind : std::uint8_t {
+  Unqualified = 0,
+  Qualified,
+};
+
+struct DirectSpanProducerInterval {
+  DirectSpanProducerIntervalKind kind =
+      DirectSpanProducerIntervalKind::Unqualified;
+  std::uint64_t firstEventOrdinal = 0;
+  std::uint64_t lastEventOrdinal = 0;
+  std::uint64_t firstSourceOrdinal = 0;
+  std::uint64_t lastSourceOrdinal = 0;
+
+  constexpr bool valid() const noexcept {
+    return kind == DirectSpanProducerIntervalKind::Unqualified
+        ? firstEventOrdinal == 0 && lastEventOrdinal == 0 &&
+            firstSourceOrdinal == 0 && lastSourceOrdinal == 0
+        : firstEventOrdinal != 0 && lastEventOrdinal >= firstEventOrdinal &&
+            firstSourceOrdinal != 0 && lastSourceOrdinal >= firstSourceOrdinal;
+  }
+
+  friend constexpr bool operator==(const DirectSpanProducerInterval&,
+                                   const DirectSpanProducerInterval&) = default;
+};
+
+struct DirectSpanCapacityEvidence {
+  SourcePayloadCapacity plan{};
+  SourcePayloadCapacity physicalCapacity{};
+
+  friend constexpr bool operator==(const DirectSpanCapacityEvidence&,
+                                   const DirectSpanCapacityEvidence&) = default;
+};
+
+inline DirectSpanCapacityEvidence directSpanCapacityEvidence(
+    const ChunkSlot& slot, const SourcePayloadCapacity& plan) noexcept {
+  DirectSpanCapacityEvidence evidence{.plan = plan};
+#define DXMT9_SNAPSHOT_DIRECT_SPAN_CAPACITY(                               \
+    region, planMember, storage, element, physical, provision, allocation, \
+    lookup, owner)                                                         \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PHYSICAL_##physical(                      \
+      evidence.physicalCapacity.planMember = slot.storage.capacity();)
+  DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_SNAPSHOT_DIRECT_SPAN_CAPACITY)
+#undef DXMT9_SNAPSHOT_DIRECT_SPAN_CAPACITY
+  return evidence;
+}
+
+inline constexpr bool directSpanCapacityEvidenceCoversPlan(
+    const DirectSpanCapacityEvidence& evidence) noexcept {
+  bool covers = evidence.plan.commandHeaders != 0;
+#define DXMT9_VALIDATE_DIRECT_SPAN_CAPACITY(                               \
+    region, planMember, storage, element, physical, provision, allocation, \
+    lookup, owner)                                                         \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PHYSICAL_##physical(                      \
+      DXMT9_DIRECT_CHUNK_SLOT_EXPAND_ORDINARY_##lookup(                    \
+          covers = covers && evidence.physicalCapacity.planMember >=       \
+              evidence.plan.planMember;))
+  DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_VALIDATE_DIRECT_SPAN_CAPACITY)
+#undef DXMT9_VALIDATE_DIRECT_SPAN_CAPACITY
+  // Lookup-table plan members describe logical topology rather than direct
+  // `reserve(extra)` arguments. Their exact capacities remain in the witness
+  // (and are therefore stale-sensitive), but exact-fit admission is allowed
+  // to build them during its one admitted storage action.
+  return covers;
+}
+
+struct DirectSpanAdmissionIdentity {
+  const ChunkSlot* destination = nullptr;
+  std::uint32_t schemaRevision = kDirectChunkSlotSchemaRevision;
+  DirectSpanStorageAction storageAction = DirectSpanStorageAction::ExactFit;
+  bool rotatedBeforeAdmission = false;
+  DirectSpanCapacityReceipt capacityReceipt{};
+  DirectSpanProducerInterval producerInterval{};
+  DirectSpanCapacityEvidence capacityEvidence{};
+  std::uint64_t rawOrdinal = 0;
+  std::uint32_t spanOrdinal = 0;
+  std::uint64_t sourceOrdinal = 0;
+  std::uint64_t seqId = 0;
+  std::uint64_t buildGeneration = 0;
+  std::uint64_t sourceGeneration = 0;
+  std::uint64_t storageGeneration = 0;
+  std::uint32_t sourceIndex = std::numeric_limits<std::uint32_t>::max();
+  std::uint32_t controlIndex = std::numeric_limits<std::uint32_t>::max();
+  std::uint32_t firstPage = std::numeric_limits<std::uint32_t>::max();
+  std::uint32_t pageCount = 0;
+
+  constexpr bool valid() const noexcept {
+    return destination != nullptr &&
+        schemaRevision == kDirectChunkSlotSchemaRevision &&
+        capacityReceipt.valid() && producerInterval.valid() &&
+        directSpanCapacityEvidenceCoversPlan(capacityEvidence) &&
+        rawOrdinal != 0 &&
+        sourceOrdinal != 0 && seqId != 0 && buildGeneration != 0 &&
+        sourceGeneration != 0 && storageGeneration != 0 &&
+        sourceIndex != std::numeric_limits<std::uint32_t>::max() &&
+        controlIndex != std::numeric_limits<std::uint32_t>::max() &&
+        firstPage != std::numeric_limits<std::uint32_t>::max() &&
+        pageCount != 0;
+  }
+
+  friend constexpr bool operator==(const DirectSpanAdmissionIdentity&,
+                                   const DirectSpanAdmissionIdentity&) =
+      default;
+};
+
+enum class DirectSpanAdmissionConsume : std::uint8_t {
+  Consumed,
+  Invalid,
+  Stale,
+  AlreadyConsumed,
+};
+
+// Linear proof that one Direct span was admitted against one exact physical
+// payload identity. Only CommandQueue's private factory may mint it. Moving
+// transfers the single consume edge; stale/ABA and a second consume are typed
+// failures, never permission to retry semantic replay.
+class DirectSpanAdmissionWitness final {
+  friend class dxmt9::CommandQueue;
+  friend struct dxmt9::DirectSpanAdmissionWitnessTestAccess;
+
+  struct FactoryIdentity {
+    explicit FactoryIdentity(const dxmt9::CommandQueue* owner) noexcept
+        : owner(owner) {}
+    const dxmt9::CommandQueue* owner = nullptr;
+  };
+
+  DirectSpanAdmissionWitness(FactoryIdentity factory,
+                             DirectSpanAdmissionIdentity identity) noexcept
+      : identity_(identity) {
+    issuer_ = factory.owner;
+  }
+
+ public:
+  DirectSpanAdmissionWitness() = default;
+  DirectSpanAdmissionWitness(const DirectSpanAdmissionWitness&) = delete;
+  DirectSpanAdmissionWitness& operator=(
+      const DirectSpanAdmissionWitness&) = delete;
+  DirectSpanAdmissionWitness(DirectSpanAdmissionWitness&& other) noexcept
+      : identity_(other.identity_), issuer_(other.issuer_),
+        consumed_(other.consumed_) {
+    other.identity_ = {};
+    other.issuer_ = nullptr;
+    other.consumed_ = true;
+  }
+  DirectSpanAdmissionWitness& operator=(DirectSpanAdmissionWitness&&) = delete;
+
+  bool valid() const noexcept { return !consumed_ && identity_.valid(); }
+
+  DirectSpanAdmissionConsume consume(
+      FactoryIdentity issuer,
+      const DirectSpanAdmissionIdentity& current) && noexcept {
+    if (consumed_) {
+      return DirectSpanAdmissionConsume::AlreadyConsumed;
+    }
+    consumed_ = true;
+    if (!identity_.valid()) {
+      identity_ = {};
+      return DirectSpanAdmissionConsume::Invalid;
+    }
+    const bool matches = issuer_ != nullptr && issuer.owner == issuer_ &&
+        identity_ == current;
+    identity_ = {};
+    issuer_ = nullptr;
+    return matches ? DirectSpanAdmissionConsume::Consumed
+                   : DirectSpanAdmissionConsume::Stale;
+  }
+
+ private:
+  DirectSpanAdmissionIdentity identity_{};
+  const dxmt9::CommandQueue* issuer_ = nullptr;
+  bool consumed_ = false;
+};
+
+static_assert(!std::is_copy_constructible_v<DirectSpanAdmissionWitness>);
+static_assert(!std::is_copy_assignable_v<DirectSpanAdmissionWitness>);
+static_assert(std::is_nothrow_move_constructible_v<
+              DirectSpanAdmissionWitness>);
 
 // A populated compatibility ChunkSlot may be extended only by a plan whose
 // final representation is already completely reserved.  Keep the result
@@ -282,37 +525,16 @@ inline constexpr std::size_t kDirectSlotMinHeadroomBytes =
 // This is one payload. Queue compatibility owns two payloads per control.
 inline constexpr std::size_t directSlotProvisionRetainedBytes(
     const SourcePayloadCapacity& plan) noexcept {
-  return plan.commandHeaders * sizeof(MetalCommandHeader) +
-      plan.drawHotStates * sizeof(FlatDrawStateRecord) +
-      plan.drawShaderLayouts * sizeof(DrawShaderLayoutContext) +
-      plan.drawDebugSnapshots * sizeof(DrawDebugSnapshot) +
-      plan.drawPsoSubviews * sizeof(DrawPsoSubview) +
-      plan.drawUniformFixedPayloads * sizeof(DrawUniformFixedPayloadRecord) +
-      plan.drawUniformVertexConstants *
-          sizeof(DrawUniformVertexConstantsRecord) +
-      plan.drawUniformVertexConstantBytes +
-      plan.drawUniformPixelConstants * sizeof(DrawUniformPixelConstantsRecord) +
-      plan.drawUniformPixelConstantBytes +
-      plan.drawUniformPayloads * sizeof(DrawUniformPayloadRecord) +
-      plan.drawParams * sizeof(DrawParam) + plan.drawPayloadBytes +
-      plan.drawRunRecords * sizeof(DrawRunCommandRecord) +
-      (plan.drawUniformPayloadLookupHeads +
-       plan.drawUniformPayloadLookupTails +
-       plan.drawUniformPayloadLookupNext +
-       plan.drawUniformVertexConstantsLookupHeads +
-       plan.drawUniformVertexConstantsLookupTails +
-       plan.drawUniformVertexConstantsLookupNext +
-       plan.drawUniformPixelConstantsLookupHeads +
-       plan.drawUniformPixelConstantsLookupTails +
-       plan.drawUniformPixelConstantsLookupNext) *
-          sizeof(std::uint32_t) +
-      plan.clearRecords * sizeof(ClearDesc) +
-      plan.surfaceCopyRecords * sizeof(SurfaceCopyDesc) +
-      plan.stretchRectRecords * sizeof(StretchRectDesc) +
-      plan.colorFillRecords * sizeof(ColorFillDesc) +
-      plan.depthResolveRecords * sizeof(DepthResolveDesc) +
-      plan.generateMipmapsRecords * sizeof(GenerateMipmapsDesc) +
-      plan.presentRecords * sizeof(PresentCommandRecord);
+  std::size_t total = 0;
+#define DXMT9_PRICE_STAGED_CHUNK_SLOT_DIMENSION(                           \
+    region, planMember, storage, element, physical, provision, allocation, \
+    lookup, owner)                                                         \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PROVISION_##provision(                    \
+      total += plan.planMember * sizeof(element);)
+  DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(
+      DXMT9_PRICE_STAGED_CHUNK_SLOT_DIMENSION)
+#undef DXMT9_PRICE_STAGED_CHUNK_SLOT_DIMENSION
+  return total;
 }
 
 // Retained bytes of the storage a physical compatibility payload actually
@@ -456,58 +678,40 @@ inline constexpr SourcePayloadCapacity directSlotProvisionPlan(
 // reserve: it inspects one vector, and provisioning must not move storage any
 // other published row still occupies.
 inline bool chunkSlotDirectStorageEmpty(const ChunkSlot& slot) noexcept {
-  return slot.commandHeaders.empty() && slot.drawHotStates.empty() &&
-      slot.drawShaderLayouts.empty() && slot.drawDebugSnapshots.empty() &&
-      slot.drawPsoSubviews.empty() && slot.drawUniformFixedPayloads.empty() &&
-      slot.drawUniformVertexConstants.empty() &&
-      slot.drawUniformVertexConstantBytes.empty() &&
-      slot.drawUniformPixelConstants.empty() &&
-      slot.drawUniformPixelConstantBytes.empty() &&
-      slot.drawUniformPayloads.empty() &&
-      slot.drawUniformPayloadLookupNext.empty() &&
-      slot.drawUniformVertexConstantsLookupNext.empty() &&
-      slot.drawUniformPixelConstantsLookupNext.empty() &&
-      slot.drawParams.empty() && slot.drawPayloadArena.empty() &&
-      slot.drawRunRecords.empty() && slot.clearRecords.empty() &&
-      slot.surfaceCopyRecords.empty() && slot.stretchRectRecords.empty() &&
-      slot.readbackRecords.empty() && slot.colorFillRecords.empty() &&
-      slot.depthResolveRecords.empty() &&
-      slot.generateMipmapsRecords.empty() && slot.presentRecords.empty();
+  if (slot.detachedOwnerMarker.active()) {
+    return false;
+  }
+  bool empty = true;
+#define DXMT9_EMPTY_CHUNK_SLOT_Ordinary(storage) empty = empty && slot.storage.empty();
+#define DXMT9_EMPTY_CHUNK_SLOT_Head(storage)
+#define DXMT9_EMPTY_CHUNK_SLOT_Tail(storage)
+#define DXMT9_EMPTY_CHUNK_SLOT_Next(storage) empty = empty && slot.storage.empty();
+#define DXMT9_CHECK_EMPTY_CHUNK_SLOT_DIMENSION(                            \
+    region, plan, storage, element, physical, provision, allocation,       \
+    lookup, owner)                                                         \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PHYSICAL_##physical(                      \
+      DXMT9_EMPTY_CHUNK_SLOT_##lookup(storage))
+  DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(
+      DXMT9_CHECK_EMPTY_CHUNK_SLOT_DIMENSION)
+#undef DXMT9_CHECK_EMPTY_CHUNK_SLOT_DIMENSION
+#undef DXMT9_EMPTY_CHUNK_SLOT_Next
+#undef DXMT9_EMPTY_CHUNK_SLOT_Tail
+#undef DXMT9_EMPTY_CHUNK_SLOT_Head
+#undef DXMT9_EMPTY_CHUNK_SLOT_Ordinary
+  return empty;
 }
 
 enum class DirectSlotProvisionAllocation : std::uint8_t {
-  CommandHeaders,
-  DrawHotStates,
-  DrawShaderLayouts,
-  DrawDebugSnapshots,
-  DrawPsoSubviews,
-  DrawUniformFixedPayloads,
-  DrawUniformVertexConstants,
-  DrawUniformVertexConstantBytes,
-  DrawUniformPixelConstants,
-  DrawUniformPixelConstantBytes,
-  DrawUniformPayloads,
-  DrawParams,
-  DrawPayloadArena,
-  DrawRunRecords,
-  ClearRecords,
-  SurfaceCopyRecords,
-  StretchRectRecords,
-  ColorFillRecords,
-  DepthResolveRecords,
-  GenerateMipmapsRecords,
-  PresentRecords,
-  PayloadLookupHeads,
-  PayloadLookupTails,
-  PayloadLookupNext,
-  VertexLookupHeads,
-  VertexLookupTails,
-  VertexLookupNext,
-  PixelLookupHeads,
-  PixelLookupTails,
-  PixelLookupNext,
+#define DXMT9_DECLARE_PROVISION_ALLOCATION(                               \
+    region, plan, storage, element, physical, provision, allocation,       \
+    lookup, owner)                                                         \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PROVISION_##provision(allocation,)
+  DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_DECLARE_PROVISION_ALLOCATION)
+#undef DXMT9_DECLARE_PROVISION_ALLOCATION
   Count,
 };
+static_assert(static_cast<std::size_t>(DirectSlotProvisionAllocation::Count) ==
+              kDirectChunkSlotProvisionDimensionCount);
 
 struct DirectSlotProvisionFault {
   void* context = nullptr;
@@ -544,142 +748,51 @@ inline bool provisionEmptyDirectSlotStorage(
     }
     values.reserve(required);
   };
-  const auto lookup = [&](std::vector<std::uint32_t>& heads,
-                          std::vector<std::uint32_t>& tails,
-                          std::vector<std::uint32_t>& next,
-                          std::size_t count,
-                          DirectSlotProvisionAllocation headAllocation,
-                          DirectSlotProvisionAllocation tailAllocation,
-                          DirectSlotProvisionAllocation nextAllocation) {
-    if (count == 0) {
+  const auto lookupTable = [&](std::vector<std::uint32_t>& values,
+                               std::size_t required,
+                               DirectSlotProvisionAllocation allocation) {
+    if (required == 0) {
       return;
     }
-    const auto buckets = detail::chunkSlotUniformLookupBucketCount(count);
-    if (fault.shouldFail(headAllocation)) {
+    if (fault.shouldFail(allocation)) {
       throw std::bad_alloc{};
     }
-    heads.assign(buckets, detail::kChunkSlotInvalidUniformIndex);
-    if (fault.shouldFail(tailAllocation)) {
-      throw std::bad_alloc{};
-    }
-    tails.assign(buckets, detail::kChunkSlotInvalidUniformIndex);
-    if (fault.shouldFail(nextAllocation)) {
-      throw std::bad_alloc{};
-    }
-    next.reserve(count);
+    values.assign(required, detail::kChunkSlotInvalidUniformIndex);
   };
   try {
-    reserve(staged.commandHeaders, plan.commandHeaders,
-            DirectSlotProvisionAllocation::CommandHeaders);
-    reserve(staged.drawHotStates, plan.drawHotStates,
-            DirectSlotProvisionAllocation::DrawHotStates);
-    reserve(staged.drawShaderLayouts, plan.drawShaderLayouts,
-            DirectSlotProvisionAllocation::DrawShaderLayouts);
-    reserve(staged.drawDebugSnapshots, plan.drawDebugSnapshots,
-            DirectSlotProvisionAllocation::DrawDebugSnapshots);
-    reserve(staged.drawPsoSubviews, plan.drawPsoSubviews,
-            DirectSlotProvisionAllocation::DrawPsoSubviews);
-    reserve(staged.drawUniformFixedPayloads, plan.drawUniformFixedPayloads,
-            DirectSlotProvisionAllocation::DrawUniformFixedPayloads);
-    reserve(staged.drawUniformVertexConstants,
-            plan.drawUniformVertexConstants,
-            DirectSlotProvisionAllocation::DrawUniformVertexConstants);
-    reserve(staged.drawUniformVertexConstantBytes,
-            plan.drawUniformVertexConstantBytes,
-            DirectSlotProvisionAllocation::DrawUniformVertexConstantBytes);
-    reserve(staged.drawUniformPixelConstants, plan.drawUniformPixelConstants,
-            DirectSlotProvisionAllocation::DrawUniformPixelConstants);
-    reserve(staged.drawUniformPixelConstantBytes,
-            plan.drawUniformPixelConstantBytes,
-            DirectSlotProvisionAllocation::DrawUniformPixelConstantBytes);
-    reserve(staged.drawUniformPayloads, plan.drawUniformPayloads,
-            DirectSlotProvisionAllocation::DrawUniformPayloads);
-    reserve(staged.drawParams, plan.drawParams,
-            DirectSlotProvisionAllocation::DrawParams);
-    reserve(staged.drawPayloadArena, plan.drawPayloadBytes,
-            DirectSlotProvisionAllocation::DrawPayloadArena);
-    reserve(staged.drawRunRecords, plan.drawRunRecords,
-            DirectSlotProvisionAllocation::DrawRunRecords);
-    reserve(staged.clearRecords, plan.clearRecords,
-            DirectSlotProvisionAllocation::ClearRecords);
-    reserve(staged.surfaceCopyRecords, plan.surfaceCopyRecords,
-            DirectSlotProvisionAllocation::SurfaceCopyRecords);
-    reserve(staged.stretchRectRecords, plan.stretchRectRecords,
-            DirectSlotProvisionAllocation::StretchRectRecords);
-    reserve(staged.colorFillRecords, plan.colorFillRecords,
-            DirectSlotProvisionAllocation::ColorFillRecords);
-    reserve(staged.depthResolveRecords, plan.depthResolveRecords,
-            DirectSlotProvisionAllocation::DepthResolveRecords);
-    reserve(staged.generateMipmapsRecords, plan.generateMipmapsRecords,
-            DirectSlotProvisionAllocation::GenerateMipmapsRecords);
-    reserve(staged.presentRecords, plan.presentRecords,
-            DirectSlotProvisionAllocation::PresentRecords);
-    lookup(staged.drawUniformPayloadLookupHeads,
-           staged.drawUniformPayloadLookupTails,
-           staged.drawUniformPayloadLookupNext, plan.drawUniformPayloads,
-           DirectSlotProvisionAllocation::PayloadLookupHeads,
-           DirectSlotProvisionAllocation::PayloadLookupTails,
-           DirectSlotProvisionAllocation::PayloadLookupNext);
-    lookup(staged.drawUniformVertexConstantsLookupHeads,
-           staged.drawUniformVertexConstantsLookupTails,
-           staged.drawUniformVertexConstantsLookupNext,
-           plan.drawUniformVertexConstants,
-           DirectSlotProvisionAllocation::VertexLookupHeads,
-           DirectSlotProvisionAllocation::VertexLookupTails,
-           DirectSlotProvisionAllocation::VertexLookupNext);
-    lookup(staged.drawUniformPixelConstantsLookupHeads,
-           staged.drawUniformPixelConstantsLookupTails,
-           staged.drawUniformPixelConstantsLookupNext,
-           plan.drawUniformPixelConstants,
-           DirectSlotProvisionAllocation::PixelLookupHeads,
-           DirectSlotProvisionAllocation::PixelLookupTails,
-           DirectSlotProvisionAllocation::PixelLookupNext);
+#define DXMT9_PROVISION_Ordinary(storage, required, allocation)            \
+  reserve(staged.storage, required, allocation);
+#define DXMT9_PROVISION_Head(storage, required, allocation)                \
+  lookupTable(staged.storage, required, allocation);
+#define DXMT9_PROVISION_Tail(storage, required, allocation)                \
+  lookupTable(staged.storage, required, allocation);
+#define DXMT9_PROVISION_Next(storage, required, allocation)                \
+  reserve(staged.storage, required, allocation);
+#define DXMT9_PROVISION_CHUNK_SLOT_DIMENSION(                              \
+    region, planMember, storage, element, physical, provision, allocation, \
+    lookup, owner)                                                         \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PROVISION_##provision(                    \
+      DXMT9_PROVISION_##lookup(                                           \
+          storage, plan.planMember, DirectSlotProvisionAllocation::allocation))
+    DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(
+        DXMT9_PROVISION_CHUNK_SLOT_DIMENSION)
+#undef DXMT9_PROVISION_CHUNK_SLOT_DIMENSION
+#undef DXMT9_PROVISION_Next
+#undef DXMT9_PROVISION_Tail
+#undef DXMT9_PROVISION_Head
+#undef DXMT9_PROVISION_Ordinary
   } catch (...) {
     return false;
   }
 
   using std::swap;
-  swap(slot.commandHeaders, staged.commandHeaders);
-  swap(slot.drawHotStates, staged.drawHotStates);
-  swap(slot.drawShaderLayouts, staged.drawShaderLayouts);
-  swap(slot.drawDebugSnapshots, staged.drawDebugSnapshots);
-  swap(slot.drawPsoSubviews, staged.drawPsoSubviews);
-  swap(slot.drawUniformFixedPayloads, staged.drawUniformFixedPayloads);
-  swap(slot.drawUniformVertexConstants, staged.drawUniformVertexConstants);
-  swap(slot.drawUniformVertexConstantBytes,
-       staged.drawUniformVertexConstantBytes);
-  swap(slot.drawUniformPixelConstants, staged.drawUniformPixelConstants);
-  swap(slot.drawUniformPixelConstantBytes,
-       staged.drawUniformPixelConstantBytes);
-  swap(slot.drawUniformPayloads, staged.drawUniformPayloads);
-  swap(slot.drawUniformPayloadLookupHeads,
-       staged.drawUniformPayloadLookupHeads);
-  swap(slot.drawUniformPayloadLookupTails,
-       staged.drawUniformPayloadLookupTails);
-  swap(slot.drawUniformPayloadLookupNext,
-       staged.drawUniformPayloadLookupNext);
-  swap(slot.drawUniformVertexConstantsLookupHeads,
-       staged.drawUniformVertexConstantsLookupHeads);
-  swap(slot.drawUniformVertexConstantsLookupTails,
-       staged.drawUniformVertexConstantsLookupTails);
-  swap(slot.drawUniformVertexConstantsLookupNext,
-       staged.drawUniformVertexConstantsLookupNext);
-  swap(slot.drawUniformPixelConstantsLookupHeads,
-       staged.drawUniformPixelConstantsLookupHeads);
-  swap(slot.drawUniformPixelConstantsLookupTails,
-       staged.drawUniformPixelConstantsLookupTails);
-  swap(slot.drawUniformPixelConstantsLookupNext,
-       staged.drawUniformPixelConstantsLookupNext);
-  swap(slot.drawParams, staged.drawParams);
-  swap(slot.drawPayloadArena, staged.drawPayloadArena);
-  swap(slot.drawRunRecords, staged.drawRunRecords);
-  swap(slot.clearRecords, staged.clearRecords);
-  swap(slot.surfaceCopyRecords, staged.surfaceCopyRecords);
-  swap(slot.stretchRectRecords, staged.stretchRectRecords);
-  swap(slot.colorFillRecords, staged.colorFillRecords);
-  swap(slot.depthResolveRecords, staged.depthResolveRecords);
-  swap(slot.generateMipmapsRecords, staged.generateMipmapsRecords);
-  swap(slot.presentRecords, staged.presentRecords);
+#define DXMT9_SWAP_CHUNK_SLOT_DIMENSION(                                   \
+    region, plan, storage, element, physical, provision, allocation,       \
+    lookup, owner)                                                         \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PHYSICAL_##physical(                      \
+      swap(slot.storage, staged.storage);)
+  DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_SWAP_CHUNK_SLOT_DIMENSION)
+#undef DXMT9_SWAP_CHUNK_SLOT_DIMENSION
   return true;
 }
 
@@ -1036,47 +1149,14 @@ class StagedDirectSlot {
 
   static void swapStorage(ChunkSlot& lhs, ChunkSlot& rhs) noexcept {
     using std::swap;
-    swap(lhs.commandHeaders, rhs.commandHeaders);
-    swap(lhs.drawHotStates, rhs.drawHotStates);
-    swap(lhs.drawShaderLayouts, rhs.drawShaderLayouts);
-    swap(lhs.drawDebugSnapshots, rhs.drawDebugSnapshots);
-    swap(lhs.drawPsoSubviews, rhs.drawPsoSubviews);
-    swap(lhs.drawUniformFixedPayloads, rhs.drawUniformFixedPayloads);
-    swap(lhs.drawUniformVertexConstants, rhs.drawUniformVertexConstants);
-    swap(lhs.drawUniformVertexConstantBytes,
-         rhs.drawUniformVertexConstantBytes);
-    swap(lhs.drawUniformPixelConstants, rhs.drawUniformPixelConstants);
-    swap(lhs.drawUniformPixelConstantBytes,
-         rhs.drawUniformPixelConstantBytes);
-    swap(lhs.drawUniformPayloads, rhs.drawUniformPayloads);
-    swap(lhs.drawUniformPayloadLookupHeads,
-         rhs.drawUniformPayloadLookupHeads);
-    swap(lhs.drawUniformPayloadLookupTails,
-         rhs.drawUniformPayloadLookupTails);
-    swap(lhs.drawUniformPayloadLookupNext, rhs.drawUniformPayloadLookupNext);
-    swap(lhs.drawUniformVertexConstantsLookupHeads,
-         rhs.drawUniformVertexConstantsLookupHeads);
-    swap(lhs.drawUniformVertexConstantsLookupTails,
-         rhs.drawUniformVertexConstantsLookupTails);
-    swap(lhs.drawUniformVertexConstantsLookupNext,
-         rhs.drawUniformVertexConstantsLookupNext);
-    swap(lhs.drawUniformPixelConstantsLookupHeads,
-         rhs.drawUniformPixelConstantsLookupHeads);
-    swap(lhs.drawUniformPixelConstantsLookupTails,
-         rhs.drawUniformPixelConstantsLookupTails);
-    swap(lhs.drawUniformPixelConstantsLookupNext,
-         rhs.drawUniformPixelConstantsLookupNext);
-    swap(lhs.drawParams, rhs.drawParams);
-    swap(lhs.drawPayloadArena, rhs.drawPayloadArena);
-    swap(lhs.drawRunRecords, rhs.drawRunRecords);
-    swap(lhs.clearRecords, rhs.clearRecords);
-    swap(lhs.surfaceCopyRecords, rhs.surfaceCopyRecords);
-    swap(lhs.stretchRectRecords, rhs.stretchRectRecords);
-    swap(lhs.readbackRecords, rhs.readbackRecords);
-    swap(lhs.colorFillRecords, rhs.colorFillRecords);
-    swap(lhs.depthResolveRecords, rhs.depthResolveRecords);
-    swap(lhs.generateMipmapsRecords, rhs.generateMipmapsRecords);
-    swap(lhs.presentRecords, rhs.presentRecords);
+#define DXMT9_SWAP_STAGED_CHUNK_SLOT_DIMENSION(                            \
+    region, plan, storage, element, physical, provision, allocation,       \
+    lookup, owner)                                                         \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PHYSICAL_##physical(                      \
+      swap(lhs.storage, rhs.storage);)
+    DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(
+        DXMT9_SWAP_STAGED_CHUNK_SLOT_DIMENSION)
+#undef DXMT9_SWAP_STAGED_CHUNK_SLOT_DIMENSION
   }
 
   LeaseHeld lease_{};
@@ -1284,41 +1364,27 @@ inline bool directSlotPhysicalCapacityCovers(
     const ChunkSlot& slot, const SourcePayloadCapacity& plan) noexcept {
   if (slot.prefetchedPipelinesSealed() || !slot.drawStateStorageConsistent() ||
       !slot.commandPayloadsInRange() ||
-      !directSlotClearRectAccumulationFits(slot)) {
+      !directSlotClearRectAccumulationFits(slot) ||
+      slot.detachedOwnerMarker.active()) {
     return false;
   }
   const auto fits = [](const auto& values, std::size_t extra) noexcept {
     return directContinuationAppendFits(values.size(), extra,
                                         values.capacity());
   };
-  if (!fits(slot.commandHeaders, plan.commandHeaders) ||
-      !fits(slot.drawHotStates, plan.drawHotStates) ||
-      !fits(slot.drawShaderLayouts, plan.drawShaderLayouts) ||
-      !fits(slot.drawDebugSnapshots, plan.drawDebugSnapshots) ||
-      !fits(slot.drawPsoSubviews, plan.drawPsoSubviews) ||
-      !fits(slot.drawUniformFixedPayloads, plan.drawUniformFixedPayloads) ||
-      !fits(slot.drawUniformVertexConstants,
-            plan.drawUniformVertexConstants) ||
-      !fits(slot.drawUniformVertexConstantBytes,
-            plan.drawUniformVertexConstantBytes) ||
-      !fits(slot.drawUniformPixelConstants, plan.drawUniformPixelConstants) ||
-      !fits(slot.drawUniformPixelConstantBytes,
-            plan.drawUniformPixelConstantBytes) ||
-      !fits(slot.drawUniformPayloads, plan.drawUniformPayloads) ||
-      !fits(slot.drawParams, plan.drawParams) ||
-      !fits(slot.drawPayloadArena, plan.drawPayloadBytes) ||
-      !fits(slot.drawRunRecords, plan.drawRunRecords) ||
-      !fits(slot.clearRecords, plan.clearRecords) ||
-      !fits(slot.surfaceCopyRecords, plan.surfaceCopyRecords) ||
-      !fits(slot.stretchRectRecords, plan.stretchRectRecords) ||
-      // Covered here and nowhere else; see the header comment above.
-      !fits(slot.readbackRecords, plan.readbackRecords) ||
-      !fits(slot.colorFillRecords, plan.colorFillRecords) ||
-      !fits(slot.depthResolveRecords, plan.depthResolveRecords) ||
-      !fits(slot.generateMipmapsRecords, plan.generateMipmapsRecords) ||
-      !fits(slot.presentRecords, plan.presentRecords)) {
-    return false;
+#define DXMT9_COVER_ORDINARY_CHUNK_SLOT_DIMENSION(storage, planMember)      \
+  if (!fits(slot.storage, plan.planMember)) {                              \
+    return false;                                                          \
   }
+#define DXMT9_COVER_CHUNK_SLOT_DIMENSION(                                  \
+    region, planMember, storage, element, physical, provision, allocation, \
+    lookup, owner)                                                         \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PHYSICAL_##physical(                      \
+      DXMT9_DIRECT_CHUNK_SLOT_EXPAND_ORDINARY_##lookup(                    \
+          DXMT9_COVER_ORDINARY_CHUNK_SLOT_DIMENSION(storage, planMember)))
+  DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_COVER_CHUNK_SLOT_DIMENSION)
+#undef DXMT9_COVER_CHUNK_SLOT_DIMENSION
+#undef DXMT9_COVER_ORDINARY_CHUNK_SLOT_DIMENSION
   // `reserve()` gates ALL THREE lookup families on the payload dimension
   // alone, so a zero-payload plan touches none of them.
   if (plan.drawUniformPayloads == 0) {
@@ -1371,32 +1437,19 @@ inline bool directSlotEmptyStorageReusable(
   const auto fits = [](const auto& values, std::size_t extra) noexcept {
     return values.capacity() >= extra;
   };
-  if (!fits(slot.commandHeaders, plan.commandHeaders) ||
-      !fits(slot.drawHotStates, plan.drawHotStates) ||
-      !fits(slot.drawShaderLayouts, plan.drawShaderLayouts) ||
-      !fits(slot.drawDebugSnapshots, plan.drawDebugSnapshots) ||
-      !fits(slot.drawPsoSubviews, plan.drawPsoSubviews) ||
-      !fits(slot.drawUniformFixedPayloads, plan.drawUniformFixedPayloads) ||
-      !fits(slot.drawUniformVertexConstants, plan.drawUniformVertexConstants) ||
-      !fits(slot.drawUniformVertexConstantBytes,
-            plan.drawUniformVertexConstantBytes) ||
-      !fits(slot.drawUniformPixelConstants, plan.drawUniformPixelConstants) ||
-      !fits(slot.drawUniformPixelConstantBytes,
-            plan.drawUniformPixelConstantBytes) ||
-      !fits(slot.drawUniformPayloads, plan.drawUniformPayloads) ||
-      !fits(slot.drawParams, plan.drawParams) ||
-      !fits(slot.drawPayloadArena, plan.drawPayloadBytes) ||
-      !fits(slot.drawRunRecords, plan.drawRunRecords) ||
-      !fits(slot.clearRecords, plan.clearRecords) ||
-      !fits(slot.surfaceCopyRecords, plan.surfaceCopyRecords) ||
-      !fits(slot.stretchRectRecords, plan.stretchRectRecords) ||
-      !fits(slot.readbackRecords, plan.readbackRecords) ||
-      !fits(slot.colorFillRecords, plan.colorFillRecords) ||
-      !fits(slot.depthResolveRecords, plan.depthResolveRecords) ||
-      !fits(slot.generateMipmapsRecords, plan.generateMipmapsRecords) ||
-      !fits(slot.presentRecords, plan.presentRecords)) {
-    return false;
+#define DXMT9_REUSE_ORDINARY_CHUNK_SLOT_DIMENSION(storage, planMember)      \
+  if (!fits(slot.storage, plan.planMember)) {                              \
+    return false;                                                          \
   }
+#define DXMT9_REUSE_CHUNK_SLOT_DIMENSION(                                  \
+    region, planMember, storage, element, physical, provision, allocation, \
+    lookup, owner)                                                         \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PHYSICAL_##physical(                      \
+      DXMT9_DIRECT_CHUNK_SLOT_EXPAND_ORDINARY_##lookup(                    \
+          DXMT9_REUSE_ORDINARY_CHUNK_SLOT_DIMENSION(storage, planMember)))
+  DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_REUSE_CHUNK_SLOT_DIMENSION)
+#undef DXMT9_REUSE_CHUNK_SLOT_DIMENSION
+#undef DXMT9_REUSE_ORDINARY_CHUNK_SLOT_DIMENSION
   if (plan.drawUniformPayloads == 0) {
     return true;
   }
@@ -1550,54 +1603,20 @@ inline DirectContinuationAdmissionResult directContinuationAdmission(
                         std::size_t capacity) noexcept {
     return directContinuationAppendFits(current, add, capacity);
   };
-  if (!fits(slot.commandHeaders.size(), extra.commandHeaders,
-            slot.commandHeaders.capacity()) ||
-      !fits(slot.drawHotStates.size(), extra.drawHotStates,
-            slot.drawHotStates.capacity()) ||
-      !fits(slot.drawShaderLayouts.size(), extra.drawShaderLayouts,
-            slot.drawShaderLayouts.capacity()) ||
-      !fits(slot.drawDebugSnapshots.size(), extra.drawDebugSnapshots,
-            slot.drawDebugSnapshots.capacity()) ||
-      !fits(slot.drawPsoSubviews.size(), extra.drawPsoSubviews,
-            slot.drawPsoSubviews.capacity()) ||
-      !fits(slot.drawUniformFixedPayloads.size(),
-            extra.drawUniformFixedPayloads,
-            slot.drawUniformFixedPayloads.capacity()) ||
-      !fits(slot.drawUniformVertexConstants.size(),
-            extra.drawUniformVertexConstants,
-            slot.drawUniformVertexConstants.capacity()) ||
-      !fits(slot.drawUniformVertexConstantBytes.size(),
-            extra.drawUniformVertexConstantBytes,
-            slot.drawUniformVertexConstantBytes.capacity()) ||
-      !fits(slot.drawUniformPixelConstants.size(),
-            extra.drawUniformPixelConstants,
-            slot.drawUniformPixelConstants.capacity()) ||
-      !fits(slot.drawUniformPixelConstantBytes.size(),
-            extra.drawUniformPixelConstantBytes,
-            slot.drawUniformPixelConstantBytes.capacity()) ||
-      !fits(slot.drawUniformPayloads.size(), extra.drawUniformPayloads,
-            slot.drawUniformPayloads.capacity()) ||
-      !fits(slot.drawParams.size(), extra.drawParams, slot.drawParams.capacity()) ||
-      !fits(slot.drawPayloadArena.size(), extra.drawPayloadBytes,
-            slot.drawPayloadArena.capacity()) ||
-      !fits(slot.drawRunRecords.size(), extra.drawRunRecords,
-            slot.drawRunRecords.capacity()) ||
-      !fits(slot.clearRecords.size(), extra.clearRecords,
-            slot.clearRecords.capacity()) ||
-      !fits(slot.surfaceCopyRecords.size(), extra.surfaceCopyRecords,
-            slot.surfaceCopyRecords.capacity()) ||
-      !fits(slot.stretchRectRecords.size(), extra.stretchRectRecords,
-            slot.stretchRectRecords.capacity()) ||
-      !fits(slot.colorFillRecords.size(), extra.colorFillRecords,
-            slot.colorFillRecords.capacity()) ||
-      !fits(slot.depthResolveRecords.size(), extra.depthResolveRecords,
-            slot.depthResolveRecords.capacity()) ||
-      !fits(slot.generateMipmapsRecords.size(), extra.generateMipmapsRecords,
-            slot.generateMipmapsRecords.capacity()) ||
-      !fits(slot.presentRecords.size(), extra.presentRecords,
-            slot.presentRecords.capacity())) {
-    return {DirectContinuationAdmission::CapacityRejected};
+#define DXMT9_ADMIT_ORDINARY_CHUNK_SLOT_DIMENSION(storage, planMember)      \
+  if (!fits(slot.storage.size(), extra.planMember,                         \
+            slot.storage.capacity())) {                                   \
+    return {DirectContinuationAdmission::CapacityRejected};                \
   }
+#define DXMT9_ADMIT_CHUNK_SLOT_DIMENSION(                                  \
+    region, planMember, storage, element, physical, provision, allocation, \
+    lookup, owner)                                                         \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PHYSICAL_##physical(                      \
+      DXMT9_DIRECT_CHUNK_SLOT_EXPAND_ORDINARY_##lookup(                    \
+          DXMT9_ADMIT_ORDINARY_CHUNK_SLOT_DIMENSION(storage, planMember)))
+  DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_ADMIT_CHUNK_SLOT_DIMENSION)
+#undef DXMT9_ADMIT_CHUNK_SLOT_DIMENSION
+#undef DXMT9_ADMIT_ORDINARY_CHUNK_SLOT_DIMENSION
 
   // The assembler's lookup reserve may resize `next` or rebuild bucket
   // heads. Both operations are forbidden after this pre-effect admission.

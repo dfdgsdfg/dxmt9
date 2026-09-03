@@ -367,38 +367,12 @@ class ArenaByteBuffer {
 };
 
 enum class SourcePayloadRegion : std::uint8_t {
-  CommandHeaders,
-  DrawHotStates,
-  DrawShaderLayouts,
-  DrawDebugSnapshots,
-  DrawPsoSubviews,
-  DrawUniformFixedPayloads,
-  DrawUniformVertexConstants,
-  DrawUniformVertexConstantBytes,
-  DrawUniformPixelConstants,
-  DrawUniformPixelConstantBytes,
-  DrawUniformPayloads,
-  DrawUniformPayloadLookupHeads,
-  DrawUniformPayloadLookupTails,
-  DrawUniformPayloadLookupNext,
-  DrawUniformVertexConstantsLookupHeads,
-  DrawUniformVertexConstantsLookupTails,
-  DrawUniformVertexConstantsLookupNext,
-  DrawUniformPixelConstantsLookupHeads,
-  DrawUniformPixelConstantsLookupTails,
-  DrawUniformPixelConstantsLookupNext,
-  DrawParams,
-  DrawPayloadBytes,
-  DrawRunRecords,
-  ClearRecords,
-  ClearRects,
-  SurfaceCopyRecords,
-  StretchRectRecords,
-  ReadbackRecords,
-  ColorFillRecords,
-  DepthResolveRecords,
-  GenerateMipmapsRecords,
-  PresentRecords,
+#define DXMT9_DECLARE_SOURCE_PAYLOAD_REGION(                               \
+    region, plan, storage, element, physical, provision, allocation,       \
+    lookup, owner)                                                         \
+  region,
+  DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_DECLARE_SOURCE_PAYLOAD_REGION)
+#undef DXMT9_DECLARE_SOURCE_PAYLOAD_REGION
   Count,
 };
 
@@ -407,39 +381,49 @@ inline constexpr std::size_t kSourcePayloadRegionCount =
 static_assert(kSourcePayloadRegionCount == 32);
 
 struct SourcePayloadCapacity {
-  std::size_t commandHeaders = 0;
-  std::size_t drawHotStates = 0;
-  std::size_t drawShaderLayouts = 0;
-  std::size_t drawDebugSnapshots = 0;
-  std::size_t drawPsoSubviews = 0;
-  std::size_t drawUniformFixedPayloads = 0;
-  std::size_t drawUniformVertexConstants = 0;
-  std::size_t drawUniformVertexConstantBytes = 0;
-  std::size_t drawUniformPixelConstants = 0;
-  std::size_t drawUniformPixelConstantBytes = 0;
-  std::size_t drawUniformPayloads = 0;
-  std::size_t drawUniformPayloadLookupHeads = 0;
-  std::size_t drawUniformPayloadLookupTails = 0;
-  std::size_t drawUniformPayloadLookupNext = 0;
-  std::size_t drawUniformVertexConstantsLookupHeads = 0;
-  std::size_t drawUniformVertexConstantsLookupTails = 0;
-  std::size_t drawUniformVertexConstantsLookupNext = 0;
-  std::size_t drawUniformPixelConstantsLookupHeads = 0;
-  std::size_t drawUniformPixelConstantsLookupTails = 0;
-  std::size_t drawUniformPixelConstantsLookupNext = 0;
-  std::size_t drawParams = 0;
-  std::size_t drawPayloadBytes = 0;
-  std::size_t drawRunRecords = 0;
-  std::size_t clearRecords = 0;
-  std::size_t clearRects = 0;
-  std::size_t surfaceCopyRecords = 0;
-  std::size_t stretchRectRecords = 0;
-  std::size_t readbackRecords = 0;
-  std::size_t colorFillRecords = 0;
-  std::size_t depthResolveRecords = 0;
-  std::size_t generateMipmapsRecords = 0;
-  std::size_t presentRecords = 0;
+#define DXMT9_DECLARE_SOURCE_PAYLOAD_CAPACITY(                             \
+    region, plan, storage, element, physical, provision, allocation,       \
+    lookup, owner)                                                         \
+  std::size_t plan = 0;
+  DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_DECLARE_SOURCE_PAYLOAD_CAPACITY)
+#undef DXMT9_DECLARE_SOURCE_PAYLOAD_CAPACITY
+
+  friend constexpr bool operator==(const SourcePayloadCapacity&,
+                                   const SourcePayloadCapacity&) = default;
 };
+
+inline constexpr std::array<DirectChunkSlotDimensionDescriptor,
+                            kSourcePayloadRegionCount>
+    kDirectChunkSlotDimensions = {{
+#define DXMT9_DESCRIBE_CHUNK_SLOT_DIMENSION(                               \
+    region, plan, storage, element, physical, provision, allocation,       \
+    lookup, owner)                                                         \
+  {#plan, DirectChunkSlotPhysicalRole::physical,                           \
+   DirectChunkSlotProvisionRole::provision,                               \
+   DirectChunkSlotLookupRole::lookup, DirectChunkSlotOwnerRole::owner},
+        DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(
+            DXMT9_DESCRIBE_CHUNK_SLOT_DIMENSION)
+#undef DXMT9_DESCRIBE_CHUNK_SLOT_DIMENSION
+    }};
+
+inline constexpr std::size_t kDirectChunkSlotPhysicalDimensionCount = [] {
+  std::size_t count = 0;
+  for (const auto& dimension : kDirectChunkSlotDimensions) {
+    count += dimension.physical == DirectChunkSlotPhysicalRole::Vector;
+  }
+  return count;
+}();
+
+inline constexpr std::size_t kDirectChunkSlotProvisionDimensionCount = [] {
+  std::size_t count = 0;
+  for (const auto& dimension : kDirectChunkSlotDimensions) {
+    count += dimension.provision == DirectChunkSlotProvisionRole::Staged;
+  }
+  return count;
+}();
+
+static_assert(kDirectChunkSlotPhysicalDimensionCount == 31);
+static_assert(kDirectChunkSlotProvisionDimensionCount == 30);
 
 // Fixed portion of ClearDesc. The nested rect vector is represented by the
 // separate ClearRects region; command views and construction land in the next

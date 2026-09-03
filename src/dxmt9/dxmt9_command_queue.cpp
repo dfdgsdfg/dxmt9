@@ -3710,21 +3710,17 @@ CommandQueue::DirectChunkSlotReplayLease::DirectChunkSlotReplayLease(
     DirectChunkSlotReplayLease&& other) noexcept
     : queue_(other.queue_), ticket_(other.ticket_),
       controlIndex_(other.controlIndex_), effectsStarted_(other.effectsStarted_),
+      directPayload_(other.directPayload_),
       directAssembler_(other.directAssembler_),
-      directContext_(other.directContext_), ownerThread_(other.ownerThread_),
-      directRangeAppendLive_(other.directRangeAppendLive_) {
+      directContext_(other.directContext_),
+      admissionWitness_(std::move(other.admissionWitness_)),
+      ownerThread_(other.ownerThread_),
+      directRangeAppendLive_(other.directRangeAppendLive_),
+      admissionConsumed_(other.admissionConsumed_) {
   if (directRangeAppendLive_) {
     CommandQueue::armDirectReplayDrawAppender(directRangeAppender_, this);
   }
-  other.queue_ = nullptr;
-  other.ticket_ = {};
-  other.controlIndex_ = std::numeric_limits<std::size_t>::max();
-  other.effectsStarted_ = false;
-  other.directAssembler_ = nullptr;
-  other.directContext_ = nullptr;
-  other.directRangeAppender_.disarm();
-  other.ownerThread_ = {};
-  other.directRangeAppendLive_ = false;
+  other.disarm();
 }
 
 CommandQueue::DirectChunkSlotReplayLease&
@@ -3736,23 +3732,157 @@ CommandQueue::DirectChunkSlotReplayLease::operator=(
   ticket_ = other.ticket_;
   controlIndex_ = other.controlIndex_;
   effectsStarted_ = other.effectsStarted_;
+  directPayload_ = other.directPayload_;
   directAssembler_ = other.directAssembler_;
   directContext_ = other.directContext_;
+  admissionWitness_.~DirectSpanAdmissionWitness();
+  new (&admissionWitness_)
+      core::DirectSpanAdmissionWitness(std::move(other.admissionWitness_));
   ownerThread_ = other.ownerThread_;
   directRangeAppendLive_ = other.directRangeAppendLive_;
+  admissionConsumed_ = other.admissionConsumed_;
   if (directRangeAppendLive_) {
     CommandQueue::armDirectReplayDrawAppender(directRangeAppender_, this);
   }
-  other.queue_ = nullptr;
-  other.ticket_ = {};
-  other.controlIndex_ = std::numeric_limits<std::size_t>::max();
-  other.effectsStarted_ = false;
-  other.directAssembler_ = nullptr;
-  other.directContext_ = nullptr;
-  other.directRangeAppender_.disarm();
-  other.ownerThread_ = {};
-  other.directRangeAppendLive_ = false;
+  other.disarm();
   return *this;
+}
+
+bool CommandQueue::DirectChunkSlotReplayLease::consumeAdmissionWitness()
+    noexcept {
+  if (admissionConsumed_) {
+    return true;
+  }
+  if (!queue_ || !directPayload_ || !directContext_) {
+    return false;
+  }
+  const auto capacityReceipt = directContext_->capacityReceipt;
+  if (directContext_->capacityReceipt.qualified()) {
+    const core::CpuReadyTape::SourceRef source{
+        .id = ticket_.id, .storage = ticket_.storage};
+    const auto payloadIndex = queue_->cpuReadyTape_.compatibilityPayloadIndex(source);
+    if (!payloadIndex ||
+        *payloadIndex != capacityReceipt.payloadIndex() ||
+        *payloadIndex >= queue_->directSlotCapacityLedger_.entries.size()) {
+      return false;
+    }
+    const auto& entry = queue_->directSlotCapacityLedger_.entries[*payloadIndex];
+    if (entry.generation != capacityReceipt.generation() ||
+        entry.retainedBytes != capacityReceipt.retainedBytes()) {
+      return false;
+    }
+  }
+  const core::DirectSpanAdmissionIdentity current{
+      .destination = directPayload_,
+      .storageAction = directContext_->admittedStorageAction,
+      .rotatedBeforeAdmission = directContext_->rotatedBeforeAdmission,
+      .capacityReceipt = capacityReceipt,
+      .producerInterval = directContext_->producerInterval,
+      .capacityEvidence = core::directSpanCapacityEvidence(
+          *directPayload_, directContext_->admittedPlan),
+      .rawOrdinal = ticket_.rawOrdinal,
+      .spanOrdinal = directContext_->spanOrdinal,
+      .sourceOrdinal = ticket_.sourceOrdinal,
+      .seqId = ticket_.seqId,
+      .buildGeneration = ticket_.buildGeneration,
+      .sourceGeneration = ticket_.id.generation,
+      .storageGeneration = ticket_.storage.generation,
+      .sourceIndex = ticket_.id.index,
+      .controlIndex = static_cast<std::uint32_t>(controlIndex_),
+      .firstPage = ticket_.storage.firstPage,
+      .pageCount = ticket_.storage.pageCount,
+  };
+  admissionConsumed_ = std::move(admissionWitness_).consume(
+                           core::DirectSpanAdmissionWitness::FactoryIdentity(
+                               queue_),
+                           current) ==
+      core::DirectSpanAdmissionConsume::Consumed;
+  if (admissionConsumed_ && queue_->directLifecycleObservationEnabled_) {
+    // The witness consumption is the single serialized admission handoff.
+    // Emit the one cold semantic edge here, where admission is real, rather
+    // than batching a speculative prefix in begin(). Rejected raws
+    // never consume this witness and therefore are not claimed by this
+    // admitted-source ledger.
+    // beginDirectChunkSlotReplay holds the queue mutex while consuming this
+    // witness, so use the lock-held helper for this first projection batch.
+    observeLifecycleLocked(queue::DirectSourceAction::AdmitWitness, false);
+  }
+  return admissionConsumed_;
+}
+
+void CommandQueue::DirectChunkSlotReplayLease::emitLifecycleEvent(
+    queue::DirectSourceAction action, bool hasPresent) noexcept {
+  // Ledger-qualified admissions carry exact aggregate bytes. Exact-fit is an
+  // explicit unqualified receipt, so its lifecycle projection carries one
+  // indivisible qualitative credit rather than pretending allocator growth
+  // observed after admission was pre-priced.
+  // `continuation` is the admission's physical-owner bit: a same-raw span
+  // and a cross-raw append both share the already-populated payload, while a
+  // fresh empty slot (including a bounded rotation) owns the new credit.
+  const bool physicalCreditOwner = !directContext_->continuation;
+  const auto physicalCredit = directContext_->capacityReceipt.qualified()
+      ? directContext_->capacityReceipt.retainedBytes()
+      : 1u;
+  queue_->queueLifecycle_.observeDirectLifecycleLocked(
+      queue::DirectSourceLifecycleEvent{
+          .identity = {
+              .rawOrdinal = ticket_.rawOrdinal,
+              .spanOrdinal = directContext_->spanOrdinal,
+              .sourceOrdinal = ticket_.sourceOrdinal,
+              .seqId = ticket_.seqId,
+              .sourceGeneration = ticket_.id.generation,
+              .storageGeneration = ticket_.storage.generation,
+              .destinationSlot = static_cast<std::uint32_t>(controlIndex_),
+              .sourceIndex = ticket_.id.index,
+              .firstPage = ticket_.storage.firstPage,
+              .pageCount = ticket_.storage.pageCount,
+          },
+          .action = action,
+          .controlMode = directContext_->controlMode,
+          .creditKind = directContext_->capacityReceipt.qualified()
+              ? queue::DirectSourceCreditKind::RetainedBytes
+              : queue::DirectSourceCreditKind::Qualitative,
+          .schemaRevision = core::kDirectChunkSlotSchemaRevision,
+          .witnessGeneration = ticket_.buildGeneration,
+          .retainedCredit = physicalCreditOwner ? physicalCredit : 0u,
+          .physicalCreditOwner = physicalCreditOwner,
+          .hasPresent = hasPresent,
+      },
+      physicalCredit);
+}
+
+void CommandQueue::DirectChunkSlotReplayLease::observeLifecycleLocked(
+    queue::DirectSourceAction action, bool hasPresent) noexcept {
+  if (!queue_ || !directPayload_ || !directContext_) {
+    return;
+  }
+  emitLifecycleEvent(action, hasPresent);
+}
+
+void CommandQueue::DirectChunkSlotReplayLease::observeLifecycleEnabled(
+    queue::DirectSourceAction action, bool hasPresent) noexcept {
+  if (!queue_ || !directPayload_ || !directContext_) {
+    return;
+  }
+  // Replay and queue workers share the direct ledger. Serialize every
+  // replay-side projection with queue terminal transitions; the disabled
+  // path returned above remains a single cached-bit test with no lock/event.
+  std::lock_guard lock(queue_->mutex_);
+  observeLifecycleLocked(action, hasPresent);
+}
+
+void CommandQueue::DirectChunkSlotReplayLease::disarm() noexcept {
+  queue_ = nullptr;
+  ticket_ = {};
+  controlIndex_ = std::numeric_limits<std::size_t>::max();
+  effectsStarted_ = false;
+  directPayload_ = nullptr;
+  directAssembler_ = nullptr;
+  directContext_ = nullptr;
+  directRangeAppender_.disarm();
+  ownerThread_ = {};
+  directRangeAppendLive_ = false;
+  admissionConsumed_ = false;
 }
 
 CommandQueue::DirectChunkSlotReplayStatus
@@ -3760,17 +3890,14 @@ CommandQueue::DirectChunkSlotReplayLease::commit(
     std::span<const core::ChunkHandleEntry> resources) noexcept {
   if (!queue_) return DirectChunkSlotReplayStatus::FailStopped;
   auto* queue = queue_;
+  if (!consumeAdmissionWitness()) {
+    (void)queue->abortDirectChunkSlotReplay(ticket_, controlIndex_, true);
+    disarm();
+    return DirectChunkSlotReplayStatus::FailStopped;
+  }
   const auto status = queue->commitDirectChunkSlotReplay(
       ticket_, controlIndex_, resources);
-  queue_ = nullptr;
-  ticket_ = {};
-  controlIndex_ = std::numeric_limits<std::size_t>::max();
-  effectsStarted_ = false;
-  directRangeAppender_.disarm();
-  directAssembler_ = nullptr;
-  directContext_ = nullptr;
-  ownerThread_ = {};
-  directRangeAppendLive_ = false;
+  disarm();
   return status;
 }
 
@@ -3779,34 +3906,29 @@ bool CommandQueue::DirectChunkSlotReplayLease::rollbackPreEffect() noexcept {
       !queue::pipelineReplayFailureMayRollback(effectsStarted_)) {
     return false;
   }
+  const bool admitted = consumeAdmissionWitness();
+  if (admitted && queue_->directLifecycleObservationEnabled_) {
+    observeLifecycleEnabled(queue::DirectSourceAction::RollbackPreEffect);
+  }
   const bool rolledBack = queue_->abortDirectChunkSlotReplay(
-      ticket_, controlIndex_, false);
-  queue_ = nullptr;
-  ticket_ = {};
-  controlIndex_ = std::numeric_limits<std::size_t>::max();
-  directRangeAppender_.disarm();
-  directAssembler_ = nullptr;
-  directContext_ = nullptr;
-  ownerThread_ = {};
-  directRangeAppendLive_ = false;
+      ticket_, controlIndex_, !admitted);
+  disarm();
   return rolledBack;
 }
 
 void CommandQueue::DirectChunkSlotReplayLease::settle() noexcept {
   if (!queue_) return;
-  const bool failStop =
+  const bool admitted = consumeAdmissionWitness();
+  const bool failStop = !admitted ||
       !queue::pipelineReplayFailureMayRollback(effectsStarted_);
+  if (admitted && queue_->directLifecycleObservationEnabled_) {
+    observeLifecycleEnabled(
+        failStop ? queue::DirectSourceAction::FailStop
+                 : queue::DirectSourceAction::RollbackPreEffect);
+  }
   (void)queue_->abortDirectChunkSlotReplay(
       ticket_, controlIndex_, failStop);
-  queue_ = nullptr;
-  ticket_ = {};
-  controlIndex_ = std::numeric_limits<std::size_t>::max();
-  effectsStarted_ = false;
-  directRangeAppender_.disarm();
-  directAssembler_ = nullptr;
-  directContext_ = nullptr;
-  ownerThread_ = {};
-  directRangeAppendLive_ = false;
+  disarm();
 }
 
 void CommandQueue::armDirectReplayDrawAppender(
@@ -3825,7 +3947,8 @@ CommandQueue::beginDirectChunkSlotReplay(
     std::size_t rangeDrawCount,
     std::uint32_t spanOrdinal,
     bool finalSpan,
-    bool allowRotation) noexcept {
+    bool allowRotation,
+    queue::DirectSourceControlMode controlMode) noexcept {
   if (rawOrdinal == 0 || plannedBytes == 0 || capacity.commandHeaders == 0 ||
       !producerIdentity.importable() ||
       ((rangeRecordCount == 0) != (rangeDrawCount == 0)) ||
@@ -3864,6 +3987,10 @@ CommandQueue::beginDirectChunkSlotReplay(
   core::SourcePayloadBlock* payload = nullptr;
   bool continuation = false;
   bool rotated = false;
+  core::DirectSpanStorageAction admittedStorageAction =
+      core::DirectSpanStorageAction::ExactFit;
+  core::DirectSpanCapacityReceipt capacityReceipt =
+      core::DirectSpanCapacityReceipt::exactFitUnqualified();
   const auto& provisionPolicy = directSlotProvisionPolicy();
   for (;;) {
     ensureWritingSlotUnlocked(*this, lock);
@@ -4001,6 +4128,11 @@ CommandQueue::beginDirectChunkSlotReplay(
           }
         }
         if (provisioned) {
+          admittedStorageAction = core::DirectSpanStorageAction::Provisioned;
+          const auto& entry = directSlotCapacityLedger_.entries[*payloadIndex];
+          capacityReceipt = core::DirectSpanCapacityReceipt::ledgerQualified(
+              static_cast<std::uint32_t>(*payloadIndex), entry.generation,
+              entry.retainedBytes);
           perf::countDirectChunkSlotSlotProvisioned();
           if (storage.sourceExceedsBudget) {
             // The source is its own budget: no adjacent source can share this
@@ -4028,6 +4160,12 @@ CommandQueue::beginDirectChunkSlotReplay(
         DXMT_ASSERT(restored &&
                     "reuse predicate must imply complete physical coverage");
         if (restored) {
+          admittedStorageAction =
+              core::DirectSpanStorageAction::ReusedProvisioned;
+          const auto& entry = directSlotCapacityLedger_.entries[*payloadIndex];
+          capacityReceipt = core::DirectSpanCapacityReceipt::ledgerQualified(
+              static_cast<std::uint32_t>(*payloadIndex), entry.generation,
+              entry.retainedBytes);
           perf::countDirectChunkSlotSlotProvisionReused();
           if (storage.sourceExceedsBudget) {
             perf::countDirectChunkSlotSlotProvisionSourceExceedsBudget();
@@ -4111,6 +4249,17 @@ CommandQueue::beginDirectChunkSlotReplay(
         allowRotation && !rotated);
     if (storage.action == core::DirectSlotStorageAction::AppendInPlace) {
       continuation = true;
+      admittedStorageAction = core::DirectSpanStorageAction::AppendInPlace;
+      // A continuation shares the physical source's admission receipt. Read
+      // the persisted value from the payload rather than re-deriving it from
+      // the current budget mode; otherwise a qualified owner can silently
+      // become an unqualified sibling when the budget is disabled.
+      if (payload->admissionCapacityReceipt.qualified()) {
+        const auto& receipt = payload->admissionCapacityReceipt;
+        capacityReceipt = core::DirectSpanCapacityReceipt::ledgerQualified(
+            receipt.payloadIndex(), receipt.generation(),
+            receipt.retainedBytes());
+      }
       perf::countDirectChunkSlotContinuationAdmitted();
       break;
     }
@@ -4175,6 +4324,41 @@ CommandQueue::beginDirectChunkSlotReplay(
   context.expectedRangeRecordCount = rangeRecordCount;
   context.spanOrdinal = spanOrdinal;
   context.finalSpan = finalSpan;
+  context.admittedStorageAction = admittedStorageAction;
+  context.rotatedBeforeAdmission = rotated;
+  context.capacityReceipt = capacityReceipt;
+  if (!continuation) {
+    if (payload->admissionCapacityReceipt.qualified() &&
+        !capacityReceipt.qualified()) {
+      // A stale qualified receipt is never downgraded to an exact-fit claim.
+      // The old physical allocation remains provenance-bearing until a
+      // matching qualified admission revalidates it.
+      requestSchedulingStopLocked();
+      directChunkSlotBuildContext_.reset();
+      return {
+          .status = DirectChunkSlotReplayStatus::FailStopped,
+          .failureReason =
+              DirectChunkSlotReplayFailureReason::StructuralRejected,
+      };
+    }
+    payload->admissionCapacityReceipt =
+        capacityReceipt.qualified()
+            ? core::DetachedCapacityReceipt::ledgerQualified(
+                  capacityReceipt.payloadIndex(), capacityReceipt.generation(),
+                  capacityReceipt.retainedBytes())
+            : core::DetachedCapacityReceipt::exactFitUnqualified();
+  }
+  context.producerInterval = {
+      .kind = producerIdentity.absent()
+          ? core::DirectSpanProducerIntervalKind::Unqualified
+          : core::DirectSpanProducerIntervalKind::Qualified,
+      .firstEventOrdinal = producerIdentity.firstEventOrdinal,
+      .lastEventOrdinal = producerIdentity.lastEventOrdinal,
+      .firstSourceOrdinal = producerIdentity.firstSourceOrdinal,
+      .lastSourceOrdinal = producerIdentity.lastSourceOrdinal,
+  };
+  context.controlMode = controlMode;
+  context.admittedPlan = capacity;
   context.assembler.emplace(*payload, capacity, rangeRecordCount,
                             rangeDrawCount);
   // Baseline AFTER the assembler constructor, which performs this span's
@@ -4184,7 +4368,8 @@ CommandQueue::beginDirectChunkSlotReplay(
   // exists to say that a *reservation was wrong*, i.e. that an append grew
   // final storage the plan had already sized. Only a growth beyond the planned
   // reserve may set it.
-  context.reservedCommandHeaderCapacity = payload->commandHeaders.capacity();
+  context.admittedCapacityEvidence =
+      core::directSpanCapacityEvidence(*payload, capacity);
   const bool bound = context.assembler->good() &&
       context.assembler->bindOuter(
           core::TransactionalChunkSlotAssembler::OuterBinding{
@@ -4212,11 +4397,50 @@ CommandQueue::beginDirectChunkSlotReplay(
     };
   }
   activeDirectChunkSlotBuild_.store(&context, std::memory_order_release);
+  core::DirectSpanAdmissionIdentity admissionIdentity{
+      .destination = payload,
+      .storageAction = context.admittedStorageAction,
+      .rotatedBeforeAdmission = context.rotatedBeforeAdmission,
+      .capacityReceipt = context.capacityReceipt,
+      .producerInterval = context.producerInterval,
+      .capacityEvidence = context.admittedCapacityEvidence,
+      .rawOrdinal = ticket.rawOrdinal,
+      .spanOrdinal = spanOrdinal,
+      .sourceOrdinal = ticket.sourceOrdinal,
+      .seqId = ticket.seqId,
+      .buildGeneration = ticket.buildGeneration,
+      .sourceGeneration = ticket.id.generation,
+      .storageGeneration = ticket.storage.generation,
+      .sourceIndex = ticket.id.index,
+      .controlIndex = static_cast<std::uint32_t>(controlIndex),
+      .firstPage = ticket.storage.firstPage,
+      .pageCount = ticket.storage.pageCount,
+  };
+  core::DirectSpanAdmissionWitness admissionWitness(
+      core::DirectSpanAdmissionWitness::FactoryIdentity(this),
+      admissionIdentity);
+  DirectChunkSlotReplayLease lease(
+      *this, ticket, controlIndex, payload,
+      context.assembler ? &*context.assembler : nullptr, &context,
+      std::move(admissionWitness));
+  // Consume the one-shot admission proof at the exact pre-effect handoff.
+  // Appends may legitimately grow exact-fit lookup storage, so re-validating
+  // the admission snapshot after construction would confuse the authorized
+  // storage action with an ABA/stale witness.
+  if (!lease.consumeAdmissionWitness()) {
+    context.assembler->rollback();
+    activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
+    directChunkSlotBuildContext_.reset();
+    lease.disarm();
+    return {
+        .status = DirectChunkSlotReplayStatus::LegacyPreEffectFailure,
+        .failureReason =
+            DirectChunkSlotReplayFailureReason::StructuralRejected,
+    };
+  }
   return {
       .status = DirectChunkSlotReplayStatus::Ready,
-      .lease = DirectChunkSlotReplayLease(
-          *this, ticket, controlIndex,
-          context.assembler ? &*context.assembler : nullptr, &context),
+      .lease = std::move(lease),
   };
 }
 
@@ -4317,6 +4541,46 @@ CommandQueue::commitDirectChunkSlotReplay(
   const auto pendingPresentDesc = context->pendingPresentDesc;
   const auto pendingPresentBoundaryPolicy =
       context->pendingPresentBoundaryPolicy;
+  const auto emitDirect = [&](queue::DirectSourceAction action,
+                              bool hasPresent = false) noexcept {
+    const auto physicalCredit = context->capacityReceipt.qualified()
+        ? context->capacityReceipt.retainedBytes()
+        : 1u;
+    queueLifecycle_.observeDirectLifecycleLocked(
+        queue::DirectSourceLifecycleEvent{
+            .identity = {
+                .rawOrdinal = ticket.rawOrdinal,
+                .spanOrdinal = context->spanOrdinal,
+                .sourceOrdinal = ticket.sourceOrdinal,
+                .seqId = ticket.seqId,
+                .sourceGeneration = ticket.id.generation,
+                .storageGeneration = ticket.storage.generation,
+                .destinationSlot = static_cast<std::uint32_t>(controlIndex),
+                .sourceIndex = ticket.id.index,
+                .firstPage = ticket.storage.firstPage,
+                .pageCount = ticket.storage.pageCount,
+            },
+            .action = action,
+            .controlMode = context->controlMode,
+            .creditKind = context->capacityReceipt.qualified()
+                ? queue::DirectSourceCreditKind::RetainedBytes
+                : queue::DirectSourceCreditKind::Qualitative,
+            .schemaRevision = core::kDirectChunkSlotSchemaRevision,
+            .witnessGeneration = ticket.buildGeneration,
+            .retainedCredit = !context->continuation
+                ? (context->capacityReceipt.qualified()
+                       ? context->capacityReceipt.retainedBytes()
+                       : 1u)
+                : 0u,
+            .physicalCreditOwner = !context->continuation,
+            .hasPresent = hasPresent,
+        },
+        physicalCredit);
+  };
+  const auto observeDirect = [&](queue::DirectSourceAction action,
+                                 bool hasPresent = false) noexcept {
+    if (directLifecycleObservationEnabled_) emitDirect(action, hasPresent);
+  };
   const auto failStop = [&]() noexcept {
     core::PresentId stashedPresentId{};
     const bool removeStashedPresentToken = context->presentTokenStashed;
@@ -4324,6 +4588,7 @@ CommandQueue::commitDirectChunkSlotReplay(
       stashedPresentId = context->pendingPresentId;
       context->presentTokenStashed = false;
     }
+    observeDirect(queue::DirectSourceAction::FailStop, hasPendingPresent);
     context->assembler->abandonFailStop();
     activeDirectChunkSlotBuild_.store(nullptr, std::memory_order_release);
     directChunkSlotBuildContext_.reset();
@@ -4389,9 +4654,8 @@ CommandQueue::commitDirectChunkSlotReplay(
   // predicate keeps writes inside it, so the destination must not have
   // reallocated. Reported rather than enforced: the transaction is already
   // consistent, and a non-zero row means a reservation was wrong.
-  if (context->reservedCommandHeaderCapacity != 0 &&
-      payload->commandHeaders.capacity() !=
-          context->reservedCommandHeaderCapacity) {
+  if (core::directSpanCapacityEvidence(*payload, context->admittedPlan) !=
+      context->admittedCapacityEvidence) {
     perf::countReplaySpanSoaGrowthAfterReserve();
   }
   ArenaResourceRetainDigest retained;
@@ -4421,7 +4685,7 @@ CommandQueue::commitDirectChunkSlotReplay(
   // for a later span of the same raw the witness admits the immediate
   // successor without advancing the interval, which the closed +1 rule
   // cannot express and must not be relaxed to.
-  if (!cpuReadyTape_.extendCompatibilityProducerIdentity(
+    if (!cpuReadyTape_.extendCompatibilityProducerIdentity(
           core::CpuReadyPublicationTicket{
               .id = ticket.id,
               .storage = ticket.storage,
@@ -4446,7 +4710,8 @@ CommandQueue::commitDirectChunkSlotReplay(
         core::metalqueue::CompatibilityPublicationIdentity{
             .rawOrdinal = ticket.rawOrdinal,
             .sourceOrdinal = ticket.sourceOrdinal,
-        });
+        },
+        {}, /*suppressDirectLifecyclePublish=*/false);
   }
   if (!published) {
     return failStop();
@@ -8173,6 +8438,11 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
   pipelineLifecycleObservationEnabled_ =
       pipelineLifecycleObserver_ != nullptr ||
       schedulingProgressWatchdog_.enabled();
+  pipelineLifecycleSink_ = pipelineLifecycleObserver_
+      ? pipelineLifecycleObserver_->productionSink()
+      : dxmt9::queue::PipelineLifecycleObserverSink{};
+  directLifecycleObservationEnabled_ =
+      pipelineLifecycleSink_.directFn != nullptr;
   queueLifecycle_.bindTrackedSubmissionState({
       .writingSlot = &writingSlot_,
       .writeIndex = &writeIndex_,
@@ -8188,6 +8458,7 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
       .lastCommittedSeqId = &lastCommittedSeqId_,
       .slots = std::span<core::ChunkSlotControl>(slots_.data(), slots_.size()),
       .cpuReadyTape = &cpuReadyTape_,
+      .directSlotCapacityLedger = &directSlotCapacityLedger_,
       .mutex = &mutex_,
       .writeCv = &writeCv_,
       .encodeCv = &encodeCv_,
@@ -8199,9 +8470,7 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
       .submissionDiagnostics = &submissionDiagnostics_,
       .schedulingProgressWatchdog = &schedulingProgressWatchdog_,
       .resolveSurfaceFlags = std::move(resolveSurfaceFlags),
-      .pipelineLifecycleObserver = pipelineLifecycleObserver_
-          ? pipelineLifecycleObserver_->productionSink()
-          : dxmt9::queue::PipelineLifecycleObserverSink{},
+      .pipelineLifecycleObserver = pipelineLifecycleSink_,
       .pipelineControlObserver = pipelineLifecycleObserver_
           ? pipelineLifecycleObserver_->productionControlSink()
           : dxmt9::queue::PipelineControlObserverSink{},

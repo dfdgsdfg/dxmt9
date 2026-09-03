@@ -24,6 +24,7 @@ normal_models=(
   DirectChunkSlotContinuation
   DirectSlotAggregateCapacityLease
   DirectSlotCapacityProvisioning
+  DirectSourceLifecycle
   DrawPsoIdentity
   DrawableToken
   EncodeSchedulingProgress
@@ -61,12 +62,14 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=49
-expected_progress_count=1
-expected_counterexample_count=95
-expected_cfg_count=145
-progress_model=CpuPipelineLifecycle
-progress_cfg_name="$progress_model.progress.cfg"
+expected_normal_count=50
+expected_progress_count=2
+expected_counterexample_count=109
+expected_cfg_count=161
+progress_configs=(
+  CpuPipelineLifecycle.progress
+  DirectSourceLifecycle.progress
+)
 
 # Generated TLA vocabulary modules are checked against their production enum
 # sources.  A stale module is a vocabulary drift, not a harmless documentation
@@ -106,6 +109,20 @@ trap cleanup EXIT
 # selects `<model>.tla`; the suffix selects `<model><suffix>.cfg`, so one model
 # may carry several independent broken premises.
 counterexample_models=(
+  "DirectSourceLifecycle|.stale-witness.counterexample|Invariant WitnessIsFresh is violated"
+  "DirectSourceLifecycle|.duplicate-witness.counterexample|Invariant WitnessConsumedOnce is violated"
+  "DirectSourceLifecycle|.source-reorder.counterexample|Invariant ExactFifoSourceOrder is violated"
+  "DirectSourceLifecycle|.admission-reorder.counterexample|Invariant ProductionAdmissionFifo is violated"
+  "DirectSourceLifecycle|.double-emission.counterexample|Invariant ExactlyOnce is violated"
+  "DirectSourceLifecycle|.post-effect-retry.counterexample|Invariant NoFallbackAfterEffect is violated"
+  "DirectSourceLifecycle|.post-effect-destination.counterexample|Invariant DestinationStableAfterEffect is violated"
+  "DirectSourceLifecycle|.early-reclaim.counterexample|Invariant CompletionBeforeReclaim is violated"
+  "DirectSourceLifecycle|.phantom-credit.counterexample|Invariant CreditConservation is violated"
+  "DirectSourceLifecycle|.leaked-credit.counterexample|Invariant CreditConservation is violated"
+  "DirectSourceLifecycle|.missing-restore.counterexample|Invariant RestoreBeforeReclaim is violated"
+  "DirectSourceLifecycle|.partial-adoption.counterexample|Invariant AdoptionIsAtomic is violated"
+  "DirectSourceLifecycle|.poison-reclaim.counterexample|Invariant RestoreBeforeReclaim is violated"
+  "DirectSourceLifecycle|.duplicate-shared-credit.counterexample|Invariant SharedSlotCreditOwnedOnce is violated"
   # Lease-span replay of one raw. Each row deletes exactly one of the three
   # disciplines a divisible raw needs and that an indivisible one never did:
   # the active-raw span witness, separation of its raw-local interval from the
@@ -341,7 +358,9 @@ actual_counterexamples="$inventory_dir/actual.counterexamples"
   for model in "${normal_models[@]}"; do
     printf '%s\n' "$model.cfg"
   done
-  printf '%s\n' "$progress_cfg_name"
+  for progress_config in "${progress_configs[@]}"; do
+    printf '%s\n' "$progress_config.cfg"
+  done
   printf '%s\n' "${counterexample_cfg_names[@]}"
 } | sort >"$expected_cfgs"
 inventory_duplicates="$(sort "$expected_cfgs" | uniq -d)"
@@ -354,15 +373,18 @@ find "$tla_dir" -maxdepth 1 -type f -name '*.cfg' -exec basename {} \; | sort >"
 find "$tla_dir" -maxdepth 1 -type f -name '*.counterexample.cfg' -exec basename {} \; | sort >"$actual_counterexamples"
 printf '%s\n' "${counterexample_cfg_names[@]}" | sort >"$declared_counterexamples"
 
-# The progress pair is mandatory even when both files disappear together;
+# Each progress pair is mandatory even when both files disappear together;
 # otherwise the safety inventory can pass while the temporal proof silently
-# vanishes.  A second progress configuration is also inventory drift.
-progress_spec="$tla_dir/$progress_model.tla"
-progress_cfg="$tla_dir/$progress_cfg_name"
-if [[ ! -f "$progress_spec" || ! -f "$progress_cfg" ]]; then
-  echo "lifecycle progress configuration pair is missing: $progress_model.tla + $progress_cfg_name" >&2
-  exit 1
-fi
+# vanishes.
+for progress_config in "${progress_configs[@]}"; do
+  progress_model="${progress_config%.progress}"
+  progress_spec="$tla_dir/$progress_model.tla"
+  progress_cfg="$tla_dir/$progress_config.cfg"
+  if [[ ! -f "$progress_spec" || ! -f "$progress_cfg" ]]; then
+    echo "lifecycle progress configuration pair is missing: $progress_model.tla + $progress_config.cfg" >&2
+    exit 1
+  fi
+done
 actual_progress_count="$(find "$tla_dir" -maxdepth 1 -type f -name '*.progress.cfg' | wc -l | tr -d '[:space:]')"
 if (( actual_progress_count != expected_progress_count )); then
   echo "lifecycle progress configuration count drifted: expected $expected_progress_count, found $actual_progress_count" >&2
@@ -437,12 +459,17 @@ for model in "${normal_models[@]}"; do
   unset metadir
 done
 
-metadir="$(mktemp -d)"
-echo "=== $progress_cfg_name ==="
-"${tlc_cmd[@]}" -workers "$tlc_workers" -metadir "$metadir" \
-  -config "$progress_cfg" "$progress_spec"
-rm -rf "$metadir"
-unset metadir
+for progress_config in "${progress_configs[@]}"; do
+  progress_model="${progress_config%.progress}"
+  progress_spec="$tla_dir/$progress_model.tla"
+  progress_cfg="$tla_dir/$progress_config.cfg"
+  metadir="$(mktemp -d)"
+  echo "=== $progress_config.cfg ==="
+  "${tlc_cmd[@]}" -workers "$tlc_workers" -metadir "$metadir" \
+    -config "$progress_cfg" "$progress_spec"
+  rm -rf "$metadir"
+  unset metadir
+done
 
 for row in "${counterexample_models[@]}"; do
   model="${row%%|*}"

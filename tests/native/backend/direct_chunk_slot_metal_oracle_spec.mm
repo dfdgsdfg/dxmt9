@@ -1,8 +1,9 @@
 // Concrete production oracle for the ordinary Direct ChunkSlot route.
 //
 // Each child process creates the real dxmt9::Device after selecting one
-// DXMT9_DIRECT_CHUNK_SLOT_REPLAY value, replays the same Draw chunk, and
-// reads the resulting offscreen texture back from Metal. The Direct child also
+// DXMT9_DIRECT_CHUNK_SLOT_REPLAY value, replays a noncommutative
+// Draw/flush/Clear/flush/Draw/Present sequence, and reads the resulting
+// offscreen texture back from Metal at every cut. The Direct child also
 // runs a separate forced-commit probe: the existing production test seam can
 // fire only from commitDirectChunkSlotReplay, so a fail-stop result proves the
 // ordinary route was entered before the uninstrumented pixel run.
@@ -20,12 +21,14 @@
 
 #include <array>
 #include <algorithm>
+#include <chrono>
 #include <cerrno>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <span>
 #include <sstream>
@@ -43,6 +46,13 @@ namespace dxmt9 {
 // and the queue watermarks needed to compare command/resource/completion
 // identity; it does not add a production observer or alter the hot path.
 struct CommandQueueArenaLeaseTestAccess {
+  static bool beginDirectLifecycleObservation(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    if (!queue.pipelineLifecycleObserver_) return false;
+    queue.pipelineLifecycleObserver_->resetObservationWindow();
+    return true;
+  }
+
   static void forceNextDirectChunkSlotCommitFailure(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     queue.testOnlyForceNextDirectChunkSlotCommitFailure_ = true;
@@ -51,6 +61,54 @@ struct CommandQueueArenaLeaseTestAccess {
   static bool stopped(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.stop_;
+  }
+
+  static bool directLifecycleMissingTerminalMatchFailsClosed(
+      CommandQueue& queue) {
+    std::uint64_t sourceGeneration = 0u;
+    std::uint64_t storageGeneration = 0u;
+    std::uint64_t seqId = 0u;
+    std::uint32_t sourceIndex = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t firstPage = std::numeric_limits<std::uint32_t>::max();
+    std::uint32_t pageCount = 0u;
+    std::size_t controlIndex = std::numeric_limits<std::size_t>::max();
+    {
+      std::lock_guard lock(queue.mutex_);
+      if (!queue.pipelineLifecycleObserver_ ||
+          queue.pipelineLifecycleObserver_->directState().recordCount == 0u) {
+        return false;
+      }
+      const auto& record = queue.pipelineLifecycleObserver_->directState()
+                               .records[0];
+      sourceGeneration = record.identity.sourceGeneration;
+      storageGeneration = record.identity.storageGeneration;
+      seqId = record.identity.seqId;
+      sourceIndex = record.identity.sourceIndex;
+      firstPage = record.identity.firstPage;
+      pageCount = record.identity.pageCount;
+      controlIndex = record.identity.destinationSlot;
+    }
+    if (sourceGeneration == 0u || storageGeneration == 0u || seqId == 0u) {
+      return false;
+    }
+    // Keep the source generations valid but change the sequence locator. This
+    // exercises the production terminal adapter's admitted-source
+    // missing-match path, rather than calling the observer callback directly.
+    const auto wrongSeq = seqId == std::numeric_limits<std::uint64_t>::max()
+        ? seqId - 1u : seqId + 1u;
+    std::lock_guard lock(queue.mutex_);
+    queue.queueLifecycle_.observeDirectLifecycleForSourceLocked(
+        core::CpuReadyTape::SourceRef{
+            .id = {.index = sourceIndex, .generation = sourceGeneration},
+            .storage = {.firstPage = firstPage, .pageCount = pageCount,
+                        .generation = storageGeneration}},
+        controlIndex, wrongSeq, queue::DirectSourceAction::Encode,
+        /*requireMatch=*/false);
+    const auto error = queue.pipelineLifecycleObserver_
+        ? queue.pipelineLifecycleObserver_->directError()
+        : queue::DirectSourceLifecycleError::None;
+    return queue.pipelineLifecycleObserver_ &&
+        error != queue::DirectSourceLifecycleError::None;
   }
 
   static std::uint64_t lastCommittedSeqId(CommandQueue& queue) {
@@ -69,6 +127,59 @@ struct CommandQueueArenaLeaseTestAccess {
     }
     return queue.slots_[*queue.writingSlot_].commandCount();
   }
+
+  static bool directLifecycleComplete(CommandQueue& queue,
+                                      bool expectPresent) {
+    std::lock_guard lock(queue.mutex_);
+    if (!queue.pipelineLifecycleObserver_ ||
+        queue.pipelineLifecycleObserver_->directError() !=
+            queue::DirectSourceLifecycleError::None) {
+      return false;
+    }
+    const auto& state = queue.pipelineLifecycleObserver_->directState();
+    if (state.recordCount != 2u) {
+      return false;
+    }
+    for (std::size_t i = 0; i < state.recordCount; ++i) {
+      const auto& record = state.records[i];
+      if (record.phase != queue::DirectSourcePhase::Reclaimed ||
+          !record.completed || record.poisoned || record.detachedCredit != 0u ||
+          record.publicationCount != 1u) {
+        return false;
+      }
+    }
+    const auto& first = state.records[0];
+    const auto& last = state.records[1];
+    return (first.identity.rawOrdinal < last.identity.rawOrdinal ||
+            (first.identity.rawOrdinal == last.identity.rawOrdinal &&
+             first.identity.spanOrdinal < last.identity.spanOrdinal)) &&
+           first.identity.sourceOrdinal <= last.identity.sourceOrdinal &&
+           first.physicalCreditOwner && last.physicalCreditOwner &&
+           !first.hasPresent && last.hasPresent == expectPresent &&
+           state.lastReclaimedRawOrdinal == last.identity.rawOrdinal &&
+           state.lastReclaimedSpanOrdinal == last.identity.spanOrdinal &&
+           state.lastReclaimedSourceOrdinal == last.identity.sourceOrdinal;
+  }
+
+  static bool waitForDirectLifecycleReclaim(CommandQueue& queue) {
+    std::unique_lock lock(queue.mutex_);
+    const auto deadline = std::chrono::steady_clock::now() +
+        std::chrono::seconds(5);
+    while (std::chrono::steady_clock::now() < deadline) {
+      if (queue.pipelineLifecycleObserver_ &&
+          queue.pipelineLifecycleObserver_->directError() ==
+              queue::DirectSourceLifecycleError::None) {
+        const auto& state = queue.pipelineLifecycleObserver_->directState();
+        if (state.recordCount == 2u &&
+            state.records[0].phase == queue::DirectSourcePhase::Reclaimed &&
+            state.records[1].phase == queue::DirectSourcePhase::Reclaimed) {
+          return true;
+        }
+      }
+      queue.writeCv_.wait_for(lock, std::chrono::milliseconds(1));
+    }
+    return false;
+  }
 };
 
 }  // namespace dxmt9
@@ -81,8 +192,12 @@ constexpr std::uint32_t kTriangleFvf = 0x0044u; // D3DFVF_XYZRHW | DIFFUSE.
 // A8R8G8B8 is read back from the BGRA8Unorm Metal backing in byte order
 // B,G,R,A. The triangle covers every pixel center in the 16x16 viewport, so
 // this is a full-image oracle rather than a non-zero smoke check.
-constexpr std::array<std::uint8_t, 4> kExpectedPixelBytes{
+constexpr std::array<std::uint8_t, 4> kFirstDrawPixelBytes{
     0x56u, 0x34u, 0x12u, 0xffu};
+constexpr std::array<std::uint8_t, 4> kClearPixelBytes{
+    0xc3u, 0xb2u, 0xa1u, 0xffu};
+constexpr std::array<std::uint8_t, 4> kFinalDrawPixelBytes{
+    0xefu, 0xcdu, 0xabu, 0xffu};
 
 struct TriangleVertex {
   float x;
@@ -123,7 +238,8 @@ void retainOracleObject(std::uint32_t kind, void* object) noexcept {
 
 WireFixture makeTriangleDrawChunk(
     const D9CWireObjectIdentity& bufferIdentity,
-    const D9CWireObjectIdentity& surfaceIdentity) {
+    const D9CWireObjectIdentity& surfaceIdentity,
+    bool appendPresent = false) {
   D9CCommandChunkWireDrawHeader draw{
       .primitiveType = 4u, // D3DPT_TRIANGLELIST.
       .primitiveCount = 1u,
@@ -205,14 +321,29 @@ WireFixture makeTriangleDrawChunk(
   std::memcpy(payload.data() + inputOffset, &input, sizeof(input));
   std::memcpy(payload.data() + targetOffset, &target, sizeof(target));
   std::memcpy(payload.data() + viewportOffset, &viewport, sizeof(viewport));
-  const D9CCommandChunkWireRecordHeader record{
-      .type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
-      .flags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
-      .payloadOffset = 0u,
-      .payloadSize = static_cast<std::uint32_t>(payload.size()),
-      .firstHandle = 0u,
-      .handleCount = 2u,
-  };
+  std::vector<D9CCommandChunkWireRecordHeader> records{
+      D9CCommandChunkWireRecordHeader{
+          .type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+          .flags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+          .payloadOffset = 0u,
+          .payloadSize = static_cast<std::uint32_t>(payload.size()),
+          .firstHandle = 0u,
+          .handleCount = 2u,
+      }};
+  if (appendPresent) {
+    const auto presentOffset = alignUp(
+        payload.size(), alignof(D9CCommandChunkWirePresent));
+    payload.resize(presentOffset + sizeof(D9CCommandChunkWirePresent));
+    const D9CCommandChunkWirePresent present{};
+    std::memcpy(payload.data() + presentOffset, &present, sizeof(present));
+    records.push_back({
+        .type = D9C_COMMAND_RECORD_PRESENT,
+        .flags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+        .payloadOffset = static_cast<std::uint32_t>(presentOffset),
+        .payloadSize = sizeof(present),
+        .firstHandle = 2u,
+    });
+  }
   const std::array handles{
       dxmt9::d3d9::wireHandleEntry(bufferIdentity),
       dxmt9::d3d9::wireHandleEntry(surfaceIdentity),
@@ -223,12 +354,12 @@ WireFixture makeTriangleDrawChunk(
       .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
       .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
       .recordTableOffset = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
-      .recordCount = 1u,
+      .recordCount = static_cast<std::uint32_t>(records.size()),
       .handleCount = static_cast<std::uint32_t>(handles.size()),
       .payloadArenaSize = static_cast<std::uint32_t>(payload.size()),
   };
   header.handleTableOffset = static_cast<std::uint32_t>(alignUp(
-      header.recordTableOffset + sizeof(record),
+      header.recordTableOffset + records.size() * sizeof(records[0]),
       alignof(D9CCommandChunkWireHandleEntry)));
   header.payloadArenaOffset = static_cast<std::uint32_t>(alignUp(
       header.handleTableOffset + handles.size() * sizeof(handles[0]),
@@ -237,15 +368,15 @@ WireFixture makeTriangleDrawChunk(
   WireFixture result;
   result.bytes.resize(header.payloadArenaOffset + payload.size());
   std::memcpy(result.bytes.data(), &header, sizeof(header));
-  std::memcpy(result.bytes.data() + header.recordTableOffset, &record,
-              sizeof(record));
+  std::memcpy(result.bytes.data() + header.recordTableOffset, records.data(),
+              records.size() * sizeof(records[0]));
   std::memcpy(result.bytes.data() + header.handleTableOffset, handles.data(),
               sizeof(handles));
   std::memcpy(result.bytes.data() + header.payloadArenaOffset, payload.data(),
               payload.size());
   result.envelope = {
       .version = D9C_COMMAND_CHUNK_VERSION,
-      .recordCount = 1u,
+      .recordCount = static_cast<std::uint32_t>(records.size()),
       .handleCount = static_cast<std::uint32_t>(handles.size()),
   };
   return result;
@@ -253,12 +384,26 @@ WireFixture makeTriangleDrawChunk(
 
 dxmt9::d3d9::RawCommandChunk makeRaw(const WireFixture& fixture,
                                      dxmt9::d3d9::WireObjectRegistry& registry,
-                                     D9CBuffer& buffer, D9CSurface& surface) {
+                                     D9CBuffer& buffer, D9CSurface& surface,
+                                     std::uint64_t rawOrdinal = 1u) {
+  dxmt9::d3d9::ImportedChunkView imported;
+  const auto validation = dxmt9::d3d9::validateCommandChunk(
+      fixture.bytes, fixture.envelope, &imported);
+  check(validation.valid(),
+        "production Draw raw chunk validates before owned preflight: status=" +
+            std::to_string(static_cast<unsigned>(validation.status)) +
+            " record=" + std::to_string(validation.failedRecordIndex));
   dxmt9::d3d9::RawCommandChunk raw;
   check(dxmt9::d3d9::prepareOffloadChunk(
             fixture.bytes, fixture.envelope, registry, retainOracleObject, raw),
         "production Draw raw chunk passes owned preflight");
-  raw.replaySeq = 1u;
+  raw.replaySeq = rawOrdinal;
+  raw.producerIdentity = {
+      .firstEventOrdinal = rawOrdinal,
+      .lastEventOrdinal = rawOrdinal,
+      .firstSourceOrdinal = rawOrdinal,
+      .lastSourceOrdinal = rawOrdinal,
+  };
   raw.cpuReadyTapePlanningEnabled = false;
   raw.resourceEntries.push_back({
       .kind = dxmt9::core::ChunkHandleKind::Buffer,
@@ -299,22 +444,7 @@ struct ProductionFixture {
         cDevice.get(), 3u * sizeof(TriangleVertex), 0u, kTriangleFvf, 0u);
     check(buffer != nullptr && buffer->obj,
           "production triangle vertex buffer constructs");
-    void* vertexBytes = nullptr;
-    check(dxmt9c_buffer_lock(buffer, 0u, 3u * sizeof(TriangleVertex),
-                             &vertexBytes, 0u) == dxmt9::core::D3D_OK &&
-              vertexBytes != nullptr,
-          "production triangle vertex buffer lock succeeds");
-    constexpr std::array vertices{
-        // This right triangle covers every 16x16 pixel center. Keeping the
-        // diffuse value constant makes the readback an exact fixture oracle,
-        // rather than comparing interpolation at a partially covered edge.
-        TriangleVertex{0.0f, 0.0f, 0.5f, 1.0f, 0xff123456u},
-        TriangleVertex{32.0f, 0.0f, 0.5f, 1.0f, 0xff123456u},
-        TriangleVertex{0.0f, 32.0f, 0.5f, 1.0f, 0xff123456u},
-    };
-    std::memcpy(vertexBytes, vertices.data(), sizeof(vertices));
-    check(dxmt9c_buffer_unlock(buffer) == dxmt9::core::D3D_OK,
-          "production triangle vertex buffer unlock succeeds");
+    setVertices(0xff123456u);
     const D9CViewport viewport{
         .x = 0u, .y = 0u, .width = kWidth, .height = kHeight,
         .minZ = 0.0f, .maxZ = 1.0f};
@@ -329,6 +459,25 @@ struct ProductionFixture {
                               0u) == dxmt9::core::D3D_OK,
           "production triangle target clears to a deterministic black seed");
     upperRaw->flush();
+  }
+
+  void setVertices(std::uint32_t color) {
+    void* vertexBytes = nullptr;
+    check(dxmt9c_buffer_lock(buffer, 0u, 3u * sizeof(TriangleVertex),
+                             &vertexBytes, 0u) == dxmt9::core::D3D_OK &&
+              vertexBytes != nullptr,
+          "production triangle vertex buffer lock succeeds");
+    const std::array vertices{
+        // This right triangle covers every 16x16 pixel center. Keeping the
+        // diffuse value constant makes the readback an exact fixture oracle,
+        // rather than comparing interpolation at a partially covered edge.
+        TriangleVertex{0.0f, 0.0f, 0.5f, 1.0f, color},
+        TriangleVertex{32.0f, 0.0f, 0.5f, 1.0f, color},
+        TriangleVertex{0.0f, 32.0f, 0.5f, 1.0f, color},
+    };
+    std::memcpy(vertexBytes, vertices.data(), sizeof(vertices));
+    check(dxmt9c_buffer_unlock(buffer) == dxmt9::core::D3D_OK,
+          "production triangle vertex buffer unlock succeeds");
   }
 
   ~ProductionFixture() {
@@ -374,6 +523,9 @@ void directCommitProbe(WMT::Device metalDevice) {
       D9C_CHUNK_HANDLE_KIND_SURFACE, fixture.surface);
   const auto wire = makeTriangleDrawChunk(identity, surfaceIdentity);
   auto raw = makeRaw(wire, registry, *fixture.buffer, *fixture.surface);
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::beginDirectLifecycleObservation(
+            fixture.upperRaw->queue()),
+        "production lifecycle observer is bound for commit-failure negative");
   dxmt9::CommandQueueArenaLeaseTestAccess::forceNextDirectChunkSlotCommitFailure(
       fixture.upperRaw->queue());
   const auto hr = dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw);
@@ -381,6 +533,10 @@ void directCommitProbe(WMT::Device metalDevice) {
             dxmt9::CommandQueueArenaLeaseTestAccess::stopped(
                 fixture.upperRaw->queue()),
         "forced commit seam proves the production Direct route reached its commit");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::
+            directLifecycleMissingTerminalMatchFailsClosed(
+                fixture.upperRaw->queue()),
+        "production Direct replay-receipt adapter fails closed on a missing admitted match");
   dxmt9::d3d9::releaseRetainedWrappers(raw);
 }
 
@@ -406,6 +562,40 @@ std::uint64_t pixelDigest(std::span<const std::byte> pixels) noexcept {
   return digest;
 }
 
+std::vector<std::byte> readbackPixels(
+    ProductionFixture& fixture,
+    const std::array<std::uint8_t, 4>& expected,
+    std::string_view label) {
+  dxmt9::core::ReadbackPixels readback;
+  check(fixture.upperRaw->readbackSurface(
+            dxmt9::core::ReadbackDesc{
+                .source = fixture.surface->obj->handle()},
+            readback),
+        std::string(label) + " Metal offscreen readback succeeds");
+  const std::size_t expectedBytes =
+      static_cast<std::size_t>(kWidth) * kHeight * 4u;
+  check(readback.pitch >= kWidth * 4u &&
+            readback.bytes.size() >=
+                static_cast<std::size_t>(readback.pitch) * kHeight,
+        std::string(label) + " readback has a bounded row span");
+  std::vector<std::byte> pixels(expectedBytes);
+  for (std::uint32_t row = 0u; row < kHeight; ++row) {
+    std::memcpy(pixels.data() + static_cast<std::size_t>(row) * kWidth * 4u,
+                readback.bytes.data() +
+                    static_cast<std::size_t>(row) * readback.pitch,
+                kWidth * 4u);
+  }
+  for (std::size_t pixel = 0u; pixel < kWidth * kHeight; ++pixel) {
+    const auto offset = pixel * expected.size();
+    for (std::size_t component = 0u; component < expected.size(); ++component) {
+      check(static_cast<std::uint8_t>(pixels[offset + component]) ==
+                expected[component],
+            std::string(label) + " every pixel matches its exact BGRA value");
+    }
+  }
+  return pixels;
+}
+
 void printPixelQuad(std::ostream& out, std::span<const std::byte> pixels,
                     std::size_t offset) {
   out << '[';
@@ -418,6 +608,7 @@ void printPixelQuad(std::ostream& out, std::span<const std::byte> pixels,
 
 ChildResult runChild(bool expectedDirect) {
   setenv("DXMT9_DIRECT_CHUNK_SLOT_REPLAY", expectedDirect ? "1" : "0", 1);
+  setenv("DXMT9_PERF_PIPELINE_LIFECYCLE_OBSERVER", "1", 1);
   unsetenv("DXMT_TRACE_RENDER");
   check(directSelection() == expectedDirect,
         "production resolver selects the requested explicit env mode");
@@ -436,35 +627,57 @@ ChildResult runChild(bool expectedDirect) {
     ProductionFixture fixture(metalDevice);
     check(fixture.upperRaw->supportsDirectChunkSlotReplay() == expectedDirect,
           "real production device capability matches selected env mode");
+    if (expectedDirect) {
+      check(dxmt9::CommandQueueArenaLeaseTestAccess::
+                beginDirectLifecycleObservation(fixture.upperRaw->queue()),
+            "production lifecycle observer is bound before queue startup");
+    }
     dxmt9::d3d9::WireObjectRegistry registry;
     const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER,
                                           fixture.buffer);
     const auto surfaceIdentity = registry.insert(
         D9C_CHUNK_HANDLE_KIND_SURFACE, fixture.surface);
     const auto wire = makeTriangleDrawChunk(identity, surfaceIdentity);
-    auto raw = makeRaw(wire, registry, *fixture.buffer, *fixture.surface);
-    check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) ==
+    auto firstRaw = makeRaw(wire, registry, *fixture.buffer, *fixture.surface,
+                            1u);
+    check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), firstRaw) ==
               dxmt9::core::D3D_OK,
-          "unforced production Draw replay succeeds");
+          "first production Draw replay succeeds");
+    fixture.upperRaw->flush();
+    (void)readbackPixels(fixture, kFirstDrawPixelBytes, "first Draw cut");
+
+    check(dxmt9c_device_clear(fixture.cDevice.get(), 0u, nullptr, 1u,
+                              0xffa1b2c3u, 1.0f, 0u) ==
+              dxmt9::core::D3D_OK,
+          "middle noncommutative Clear succeeds");
+    fixture.upperRaw->flush();
+    (void)readbackPixels(fixture, kClearPixelBytes, "middle Clear cut");
+
+    fixture.setVertices(0xffabcdefu);
+    const auto finalWire = makeTriangleDrawChunk(
+        identity, surfaceIdentity, /*appendPresent=*/true);
+    auto finalRaw = makeRaw(finalWire, registry, *fixture.buffer,
+                            *fixture.surface, 2u);
+    check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), finalRaw) ==
+              dxmt9::core::D3D_OK,
+          "final production Draw replay succeeds after rotation/reuse cut");
     const auto& queue = fixture.upperRaw->queue();
     const auto commandCount =
         dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
             const_cast<dxmt9::CommandQueue&>(queue));
-    check(commandCount == 1u,
-          "same Draw semantic input creates one production command");
+    // The trailing Present publishes the slot immediately, so the encoder
+    // may consume it before this sample. Compare the normalized count across
+    // child modes below; exact Draw+Present ordering is pinned by the wire
+    // fixture and the committed/completed sequence.
     fixture.upperRaw->flush();
-
-    dxmt9::core::ReadbackPixels readback;
-    check(fixture.upperRaw->readbackSurface(
-              dxmt9::core::ReadbackDesc{.source = fixture.surface->obj->handle()},
-              readback),
-          "production Metal offscreen readback succeeds");
-    const std::size_t expectedBytes =
-        static_cast<std::size_t>(kWidth) * kHeight * 4u;
-    check(readback.pitch >= kWidth * 4u &&
-              readback.bytes.size() >=
-                  static_cast<std::size_t>(readback.pitch) * kHeight,
-          "readback has a bounded row span");
+    if (expectedDirect) {
+      check(dxmt9::CommandQueueArenaLeaseTestAccess::waitForDirectLifecycleReclaim(
+                const_cast<dxmt9::CommandQueue&>(queue)),
+            "production Direct lifecycle drains through finishReclaim");
+      check(dxmt9::CommandQueueArenaLeaseTestAccess::directLifecycleComplete(
+                const_cast<dxmt9::CommandQueue&>(queue), true),
+            "production observer reduces both Direct sources through Present and encoded completion");
+    }
     ChildResult result;
     result.direct = expectedDirect;
     result.directCommitProved = expectedDirect;
@@ -480,26 +693,13 @@ ChildResult runChild(bool expectedDirect) {
     result.completedSeq =
         dxmt9::CommandQueueArenaLeaseTestAccess::completedSeqId(
             const_cast<dxmt9::CommandQueue&>(queue));
-    result.pixels.resize(expectedBytes);
-    for (std::uint32_t row = 0u; row < kHeight; ++row) {
-      std::memcpy(result.pixels.data() +
-                      static_cast<std::size_t>(row) * kWidth * 4u,
-                  readback.bytes.data() +
-                      static_cast<std::size_t>(row) * readback.pitch,
-                  kWidth * 4u);
-    }
-    check(result.pixels.size() == expectedBytes,
+    result.pixels = readbackPixels(
+        fixture, kFinalDrawPixelBytes, "final Draw/Present cut");
+    check(result.pixels.size() ==
+              static_cast<std::size_t>(kWidth) * kHeight * 4u,
           "Metal readback contains exactly one 16x16 RGBA image");
-    for (std::size_t pixel = 0u; pixel < kWidth * kHeight; ++pixel) {
-      const auto offset = pixel * kExpectedPixelBytes.size();
-      for (std::size_t component = 0u;
-           component < kExpectedPixelBytes.size(); ++component) {
-        check(static_cast<std::uint8_t>(result.pixels[offset + component]) ==
-                  kExpectedPixelBytes[component],
-              "Metal readback every pixel matches the expected BGRA color");
-      }
-    }
-    dxmt9::d3d9::releaseRetainedWrappers(raw);
+    dxmt9::d3d9::releaseRetainedWrappers(finalRaw);
+    dxmt9::d3d9::releaseRetainedWrappers(firstRaw);
     return result;
   }
 }

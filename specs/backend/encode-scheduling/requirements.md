@@ -23,7 +23,7 @@ another:
 | Submission boundary | A command buffer or jointly committed command-buffer group enters Metal execution. |
 
 The requirements `R-BACK-2.35` through `R-BACK-2.50`, `R-BACK-2.57`
-through `R-BACK-2.67`, and `R-BACK-2.76` through `R-BACK-2.103` are
+through `R-BACK-2.67`, and `R-BACK-2.76` through `R-BACK-2.105` are
 authoritative here.
 
 ## 1. Producer / Encode Overlap
@@ -1493,7 +1493,12 @@ physical storage capacity, and it must never be used as one. R-BACK-2.104 owns
 that distinction. Before any span has applied an
 effect the raw is still wholly rollbackable and Legacy may own it once; after
 any span has committed or any separator has executed, a later failure is a
-typed fail-stop and never a whole-raw retry. Observability is count-only and
+typed fail-stop and never a whole-raw retry. Once successful admission has
+created an observable Direct lifecycle row, pre-effect rollback must erase the
+row and restore the exact prior admission frontier atomically. A single-row
+rollback must target the current tail and reject without mutation otherwise;
+multi-sibling cancellation must preflight and remove the complete tail group.
+Observability is count-only and
 perf-gated, covering draws and commands per lease, ordinary fallback draws and
 post-reserve storage growth (both targeting zero), state projections, island,
 coordinator and cut counts, and each typed rejection.
@@ -1526,6 +1531,16 @@ reimplements those actions is supporting evidence only. The production
 `compatibilitySpanAdmission` predicate remains the authority for same-raw
 continuation, but binding that predicate alone does not establish transition
 isomorphism for the complete span lifecycle.
+
+Each successful admission must mint exactly one private-factory,
+generation-qualified, move-only `DirectSpanAdmissionWitness`. The replay lease
+must consume it exactly once at the pre-effect destination handoff; copy,
+double consume, stale identity, and same-address ABA must fail closed.
+Consumption must compare the typed destination slot, admitted storage action,
+schema revision, exact or ledger-qualified capacity receipt, producer interval,
+raw/source/sequence identity, slot/source/storage generations, Tape location,
+and the exact plan plus every physical capacity dimension in constant-time
+straight-line code; it must not rescan a plan or do per-draw proof work.
 
 The refinement must distinguish four properties that a single "capacity" word
 conflates, and must never let a lower one decide a higher one:
@@ -1663,6 +1678,17 @@ topology, unchanged lease generation/retained credit, released staged credit,
 and successful exact-fit replacement after the denial. Tests must also cover
 aggregate denial, successful replacement, payload reuse and no leaked credit.
 
+One compile-time role-tagged dimension schema must own the inventory consumed
+by capacity pricing, coverage, clear/swap, staging reserve, fault enumeration,
+and native test generation. It must contain exactly 32 semantic plan regions,
+31 physical vectors, and 30 staged allocation/fault rows. `readbackRecords` is
+the sole coverage-only physical row and remains structurally rejected for
+Direct replay; Clear is semantic-only; the three lookup families retain their
+explicit head/tail/next behavior; and `drawShaderLayouts` is the sole detached
+owner row. Production predicates and reserve/adopt operations must expand at
+compile time into straight-line field access, never iterate a runtime
+descriptor table.
+
 Promotion evidence must include an explicit low-frequency, opt-in unix-side
 observer of Mach task resident bytes, virtual bytes and physical footprint,
 plus mapped bytes and largest free gap in `[0, 4 GiB)`. Map walking must use
@@ -1700,9 +1726,9 @@ when all of the following hold at the same identity-qualified instant:
 1. every vector and lookup-family allocation touched by final-slot assembly
    physically covers the new provision plan;
 2. owner-bearing storage detached for out-of-lock destruction has completed
-   its round trip back to the same reclaiming payload, while an immutable byte
-   witness keeps aggregate retained-capacity accounting exact throughout the
-   detached window; and
+   its round trip back to the same reclaiming payload, while a move-only
+   `DetachedCompatibilityOwnerToken` keeps aggregate retained-capacity
+   accounting exact throughout the detached window; and
 3. the payload's non-zero capacity generation has no staged credit and its
    retained-byte ledger exactly equals the payload's current physical retained
    bytes.
@@ -1713,6 +1739,15 @@ no capacity generation. Reclaim-cleared lookup tables may regain only their
 logical empty extent, using already retained storage; the post-condition is
 that final-slot assembly performs no allocation, rehash or address-changing
 growth for the plan.
+
+The detached token must bind the payload identity, source/sequence/Tape
+location, source and storage generations, physical payload index, capacity
+generation, explicit exact-fit-or-qualified ledger receipt, retained bytes,
+and a named typed `DrawShaderLayout` allocation identity. Restore and abandon
+are explicit rvalue-only dispositions after
+revalidation. A mismatch must preserve the live token and ledger evidence,
+poison the queue, and return without completing reclaim; it must never silently
+free or restore storage as a compatibility fallback.
 
 Loss of any premise must fail closed to the existing failure-atomic
 provisioning path before semantic effect. The exact-fit/default-off lane must

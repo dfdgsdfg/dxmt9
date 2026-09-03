@@ -50,6 +50,45 @@ std::optional<CpuReadyProducerIdentity> pipelineProducerIdentity(
   return source.valid() ? tape.inspectProducerIdentity(source) : std::nullopt;
 }
 
+std::optional<DetachedCompatibilityOwnerIdentity>
+detachedCompatibilityOwnerIdentity(
+    const CpuReadyTape& tape,
+    const QueueDirectSlotCapacityLeaseLedger* ledger,
+    CpuReadyTape::SourceRef source, u64 seqId,
+    const ChunkSlot& payload) noexcept {
+  const auto payloadIndex = tape.compatibilityPayloadIndex(source);
+  if (!source.valid() || seqId == 0 || !payloadIndex ||
+      *payloadIndex > std::numeric_limits<std::uint32_t>::max()) {
+    return std::nullopt;
+  }
+  const auto receipt = payload.admissionCapacityReceipt;
+  if (!receipt.valid() ||
+      (receipt.qualified() &&
+       (receipt.payloadIndex() != *payloadIndex || ledger == nullptr ||
+        receipt.payloadIndex() >= ledger->entries.size() ||
+        ledger->entries[receipt.payloadIndex()].generation !=
+            receipt.generation() ||
+        ledger->entries[receipt.payloadIndex()].retainedBytes !=
+            receipt.retainedBytes() || ledger->stagedBytes != 0 ||
+        (!payload.detachedOwnerMarker.active() &&
+         !directSlotCapacityLedgerQualifiesReuse(
+             ledger->entries[receipt.payloadIndex()], ledger->stagedBytes,
+             payload))))) {
+    return std::nullopt;
+  }
+  return DetachedCompatibilityOwnerIdentity{
+      .payload = &payload,
+      .seqId = seqId,
+      .sourceIndex = source.id.index,
+      .sourceGeneration = source.id.generation,
+      .firstPage = source.storage.firstPage,
+      .pageCount = source.storage.pageCount,
+      .storageGeneration = source.storage.generation,
+      .payloadIndex = static_cast<std::uint32_t>(*payloadIndex),
+      .capacityReceipt = receipt,
+  };
+}
+
 constexpr ::dxmt9::queue::PipelineIdentity pipelineIdentity(
     const CpuReadySourceMetadata& identity,
     CpuReadyProducerIdentity producerIdentity,
@@ -1631,6 +1670,25 @@ void QueueLifecycleController::recordNoEnqueueFirstPublishSlotShapeBeforePublish
 
 void QueueLifecycleController::observeTransition(const QueueTransitionRecord& record) const {
   const auto lifecycleEvent = classifyTransition(record);
+  if (directLifecycleObserverEnabled()) {
+    const auto source = record.beforeSourceId.valid() &&
+            record.beforeStorage.valid()
+        ? CpuReadyTape::SourceRef{.id = record.beforeSourceId,
+                                  .storage = record.beforeStorage}
+        : CpuReadyTape::SourceRef{.id = record.afterSourceId,
+                                  .storage = record.afterStorage};
+    if (source.valid() && record.slotIndex.has_value()) {
+      if (lifecycleEvent == QueueLifecycleEvent::EncodeCommit) {
+        observeDirectLifecycleForSourceLocked(
+            source, *record.slotIndex, record.eventSeqId,
+            ::dxmt9::queue::DirectSourceAction::Encode);
+      } else if (lifecycleEvent == QueueLifecycleEvent::GpuComplete) {
+        observeDirectLifecycleForSourceLocked(
+            source, *record.slotIndex, record.eventSeqId,
+            ::dxmt9::queue::DirectSourceAction::Complete);
+      }
+    }
+  }
   if (pipelineLifecycleObserverEnabled()) {
     if (lifecycleEvent == QueueLifecycleEvent::EncodeDequeue &&
         !record.batchReadySources.empty()) {
@@ -2324,7 +2382,30 @@ void QueueLifecycleController::bindTrackedSubmissionState(SubmissionBinding bind
       binding.pipelineLifecycleObserver.fn != nullptr ||
       (binding.schedulingProgressWatchdog != nullptr &&
        binding.schedulingProgressWatchdog->enabled());
+  binding.directLifecycleObservationEnabled =
+      binding.pipelineLifecycleObserver.directFn != nullptr;
+  if (binding.directLifecycleObservationEnabled) {
+    directLifecycleLedger_ = std::make_unique<DirectLifecycleLedger>();
+  } else {
+    directLifecycleLedger_.reset();
+  }
   submissionBinding_ = binding;
+}
+
+bool QueueLifecycleController::retainPoisonedCompatibilityOwner(
+    DetachedCompatibilityOwnerToken&& token) noexcept {
+  if (!token.valid()) return false;
+  const auto payloadIndex = token.identity().payloadIndex;
+  if (payloadIndex >= poisonedCompatibilityOwners_.size()) return false;
+  auto& retained = poisonedCompatibilityOwners_[payloadIndex];
+  if (retained) {
+    // Two live detached owners for one compatibility payload are themselves
+    // an identity violation. Keep the first quarantine authoritative.
+    DXMT_ASSERT(false && "duplicate poisoned compatibility payload");
+    return false;
+  }
+  retained.emplace(std::move(token));
+  return true;
 }
 
 std::uint64_t SynchronousSourceBorrowWitness::activate(
@@ -2510,6 +2591,234 @@ void QueueLifecycleController::recordPipelineSourceArrival(
   emitPipelineLifecycleEvent(sink, lifecycleEvent);
   if (watchdog) {
     watchdog->notePipelineEvent(lifecycleEvent);
+  }
+}
+
+void QueueLifecycleController::observeDirectLifecycleLocked(
+    const ::dxmt9::queue::DirectSourceLifecycleEvent& candidate,
+    std::uint64_t physicalCredit) const noexcept {
+  if (!directLifecycleLedger_) return;
+  const auto& sink = submissionBinding_.pipelineLifecycleObserver;
+  if (!sink.directFn) return;
+  DXMT_ASSERT(submissionBinding_.mutex != nullptr);
+  auto& ledger = *directLifecycleLedger_;
+  std::size_t recordIndex = ledger.count;
+  for (std::size_t i = 0; i < ledger.count; ++i) {
+    if (ledger.sources[i].identity == candidate.identity) {
+      recordIndex = i;
+      break;
+    }
+  }
+  const bool inserting = recordIndex == ledger.count;
+  auto event = candidate;
+  if (inserting && event.action ==
+                       ::dxmt9::queue::DirectSourceAction::AdmitWitness) {
+    // The physical compatibility payload can already contain an ordinary
+    // prefix, which intentionally has no Direct lifecycle row. In that mixed
+    // case the first observed Direct sibling represents the existing physical
+    // owner; later Direct siblings sharing the exact payload key remain
+    // creditless. This keeps the observer's behavioral credit complete
+    // without fabricating a compatibility semantic event.
+    bool observedPhysicalOwner = false;
+    for (std::size_t i = 0; i < ledger.count; ++i) {
+      observedPhysicalOwner |= ledger.sources[i].physicalCreditOwner &&
+          ::dxmt9::queue::detail::directPhysicalCreditKeyEqual(
+              ledger.sources[i].identity, event.identity);
+    }
+    event.physicalCreditOwner = !observedPhysicalOwner;
+    event.retainedCredit = event.physicalCreditOwner ? physicalCredit : 0u;
+    event.stagedCredit = 0u;
+    event.detachedCredit = 0u;
+  } else if (!inserting) {
+    // Admission owns the diagnostic credit decision. Replay-side EffectCut,
+    // receipt, rollback, and fail-stop calls reuse it instead of re-deriving
+    // ownership from whether the production append was a continuation.
+    const auto& prior = ledger.sources[recordIndex];
+    event.physicalCreditOwner = prior.physicalCreditOwner;
+    event.retainedCredit = prior.retainedCredit;
+    event.stagedCredit = prior.stagedCredit;
+    event.detachedCredit = prior.detachedCredit;
+  }
+  if ((inserting &&
+       event.action != ::dxmt9::queue::DirectSourceAction::AdmitWitness) ||
+      (!inserting &&
+       event.action == ::dxmt9::queue::DirectSourceAction::AdmitWitness) ||
+      (inserting && ledger.count >= ledger.sources.size())) {
+    ::dxmt9::queue::failDirectSourceLifecycleObserver(sink);
+    return;
+  }
+
+  auto nextReducerState = ledger.reducerState;
+  const std::array batch{event};
+  if (::dxmt9::queue::reduceDirectSourceLifecycleBatch(
+          nextReducerState, batch) !=
+      ::dxmt9::queue::DirectSourceLifecycleError::None) {
+    ::dxmt9::queue::failDirectSourceLifecycleObserver(sink);
+    return;
+  }
+
+  ::dxmt9::queue::emitDirectSourceLifecycleEvent(sink, event);
+  ledger.reducerState = nextReducerState;
+  if (event.action ==
+      ::dxmt9::queue::DirectSourceAction::RollbackPreEffect) {
+    for (std::size_t i = recordIndex + 1; i < ledger.count; ++i) {
+      ledger.sources[i - 1] = ledger.sources[i];
+    }
+    ledger.sources[--ledger.count] = {};
+  } else {
+    ledger.sources[recordIndex] = event;
+    if (inserting) ++ledger.count;
+  }
+}
+
+void QueueLifecycleController::observeDirectLifecycleForSourceLocked(
+    CpuReadyTape::SourceRef source, std::size_t controlIndex, u64 seqId,
+    ::dxmt9::queue::DirectSourceAction action,
+    bool requireMatch, bool hasPresent) const noexcept {
+  if (!directLifecycleLedger_) return;
+  const auto& sink = submissionBinding_.pipelineLifecycleObserver;
+  if (!sink.directFn) return;
+  if (!source.valid() || seqId == 0u ||
+      (controlIndex != std::numeric_limits<std::size_t>::max() &&
+       controlIndex > std::numeric_limits<std::uint32_t>::max())) {
+    if (requireMatch) {
+      ::dxmt9::queue::failDirectSourceLifecycleObserver(sink);
+    }
+    return;
+  }
+  DXMT_ASSERT(submissionBinding_.mutex != nullptr);
+  auto& ledger = *directLifecycleLedger_;
+  // A terminal adapter call for an ordinary compatibility source has no
+  // direct record and is intentionally ignored. Once admission has recorded
+  // the source's immutable generations, however, a missing exact locator is
+  // a direct-routing contract fault and must close the observer.
+  bool admittedDirectSource = false;
+  for (std::size_t i = 0; i < ledger.count; ++i) {
+    const auto& prior = ledger.sources[i].identity;
+    if (prior.sourceIndex == source.id.index &&
+        prior.sourceGeneration == source.id.generation &&
+        prior.firstPage == source.storage.firstPage &&
+        prior.pageCount == source.storage.pageCount &&
+        prior.storageGeneration == source.storage.generation) {
+      admittedDirectSource = true;
+      break;
+    }
+  }
+  requireMatch = requireMatch || admittedDirectSource;
+  bool ambiguousGroup = false;
+  for (std::size_t i = 0; i < ledger.count; ++i) {
+    const auto& identity = ledger.sources[i].identity;
+    if (identity.seqId != seqId ||
+        identity.sourceGeneration != source.id.generation ||
+        identity.storageGeneration != source.storage.generation) {
+      continue;
+    }
+    if (identity.sourceIndex != source.id.index ||
+        identity.firstPage != source.storage.firstPage ||
+        identity.pageCount != source.storage.pageCount ||
+        (controlIndex != std::numeric_limits<std::size_t>::max() &&
+         identity.destinationSlot != static_cast<std::uint32_t>(controlIndex))) {
+      ambiguousGroup = true;
+      break;
+    }
+  }
+  if (ambiguousGroup) {
+    ::dxmt9::queue::failDirectSourceLifecycleObserver(sink);
+    return;
+  }
+  std::array<std::size_t, ::dxmt9::queue::kMaxObservedDirectSources>
+      matches{};
+  std::array<::dxmt9::queue::DirectSourceLifecycleEvent,
+             ::dxmt9::queue::kMaxObservedDirectSources>
+      nextEvents{};
+  std::size_t matchCount = 0;
+  for (std::size_t i = 0; i < ledger.count; ++i) {
+    const auto prior = ledger.sources[i];
+    const auto& identity = prior.identity;
+    if (identity.seqId != seqId ||
+        identity.sourceIndex != source.id.index ||
+        identity.sourceGeneration != source.id.generation ||
+        identity.storageGeneration != source.storage.generation ||
+        identity.firstPage != source.storage.firstPage ||
+        identity.pageCount != source.storage.pageCount ||
+        (controlIndex != std::numeric_limits<std::size_t>::max() &&
+         identity.destinationSlot != static_cast<std::uint32_t>(controlIndex))) {
+      continue;
+    }
+    if (matchCount == matches.size()) {
+      ::dxmt9::queue::failDirectSourceLifecycleObserver(sink);
+      return;
+    }
+    matches[matchCount] = i;
+    auto& next = nextEvents[matchCount];
+    next = prior;
+    next.action = action;
+    if (action == ::dxmt9::queue::DirectSourceAction::Publish) {
+      next.hasPresent = hasPresent;
+    }
+    const auto aggregate = prior.retainedCredit <=
+            std::numeric_limits<std::uint64_t>::max() - prior.stagedCredit &&
+            prior.retainedCredit + prior.stagedCredit <=
+                std::numeric_limits<std::uint64_t>::max() -
+                    prior.detachedCredit
+        ? prior.retainedCredit + prior.stagedCredit + prior.detachedCredit
+        : 0u;
+    if (action == ::dxmt9::queue::DirectSourceAction::Detach) {
+      next.retainedCredit = 0u;
+      next.stagedCredit = 0u;
+      next.detachedCredit = prior.physicalCreditOwner ? aggregate : 0u;
+    } else if (action == ::dxmt9::queue::DirectSourceAction::Restore ||
+               action == ::dxmt9::queue::DirectSourceAction::PoisonAbandon) {
+      next.retainedCredit = prior.physicalCreditOwner ? aggregate : 0u;
+      next.stagedCredit = 0u;
+      next.detachedCredit = 0u;
+    } else if (action == ::dxmt9::queue::DirectSourceAction::Reclaim) {
+      next.retainedCredit = prior.physicalCreditOwner ? aggregate : 0u;
+      next.stagedCredit = 0u;
+      next.detachedCredit = 0u;
+    }
+    ++matchCount;
+  }
+  if (requireMatch && matchCount == 0) {
+    // This adapter is used as a terminal handoff for an admitted direct
+    // source. A missing locator is an observer contract fault; do not
+    // fabricate an event or silently claim that the edge happened.
+    ::dxmt9::queue::failDirectSourceLifecycleObserver(sink);
+    return;
+  }
+  auto nextReducerState = ledger.reducerState;
+  const std::span siblingBatch(nextEvents.data(), matchCount);
+  if (matchCount != 0 &&
+      ::dxmt9::queue::reduceDirectSourceLifecycleBatch(
+          nextReducerState, siblingBatch,
+          /*requireSinglePhysicalCreditOwner=*/true) !=
+          ::dxmt9::queue::DirectSourceLifecycleError::None) {
+    // The shared reducer validates the complete sibling sequence, including
+    // the exactly-one physical-credit owner rule, against scratch state.
+    // Neither observer is exposed until every transition accepts.
+    ::dxmt9::queue::failDirectSourceLifecycleObserver(sink);
+    return;
+  }
+  // All sibling rows have passed the transition checks. Only now expose and
+  // apply the group, so a malformed member cannot leave a partially adopted
+  // terminal transition in either the sink or the queue-owned ledger.
+  for (std::size_t i = 0; i < matchCount; ++i) {
+    ::dxmt9::queue::emitDirectSourceLifecycleEvent(sink, nextEvents[i]);
+  }
+  for (std::size_t i = 0; i < matchCount; ++i) {
+    ledger.sources[matches[i]] = nextEvents[i];
+  }
+  ledger.reducerState = nextReducerState;
+  if (action == ::dxmt9::queue::DirectSourceAction::Reclaim) {
+    // Reclaimed rows no longer describe resident state. Remove the complete
+    // matched sibling group so the diagnostic ledger is bounded by residency.
+    for (std::size_t i = matchCount; i != 0; --i) {
+      const auto removeAt = matches[i - 1];
+      for (std::size_t j = removeAt + 1; j < ledger.count; ++j) {
+        ledger.sources[j - 1] = ledger.sources[j];
+      }
+      ledger.sources[--ledger.count] = {};
+    }
   }
 }
 
@@ -2984,7 +3293,9 @@ bool QueueLifecycleController::commitCurrentChunk(
     std::unique_lock<std::mutex>& lock,
     size_t inflightLimit,
     const std::function<void(ChunkSlot&)>& onBeforePublish,
-    CompatibilityPublicationIdentity identity) {
+    CompatibilityPublicationIdentity identity,
+    const std::function<void()>& onAfterPublish,
+    bool suppressDirectLifecyclePublish) {
   // TLA+: QueueLifecycleRefinement / CommitEmpty or CommitPublish.
   DXMT_ASSERT(lock.owns_lock());
   static_cast<void>(lock);
@@ -3169,6 +3480,22 @@ bool QueueLifecycleController::commitCurrentChunk(
       writingPayload->seqId = 0;
       poisonTapeFailureLocked();
       return;
+    }
+    if (onAfterPublish) {
+      onAfterPublish();
+    }
+    // Direct non-Present spans remain in this writing slot until a later
+    // queue boundary. Their Publish edge belongs here, after Tape's real
+    // sealAndPublish, rather than at replay-transaction receipt commit.
+    if (!suppressDirectLifecyclePublish &&
+        directLifecycleObserverEnabled()) {
+      observeDirectLifecycleForSourceLocked(
+          CpuReadyTape::SourceRef{.id = slot.sourceId,
+                                  .storage = slot.storage},
+          publishedSlotIndex, slot.seqId,
+          ::dxmt9::queue::DirectSourceAction::Publish,
+          /*requireMatch=*/false,
+          !writingPayload->presentRecords.empty());
     }
     if (const auto metadata = submissionBinding_.cpuReadyTape->sourceMetadata(
             slot.sourceId, slot.storage, CpuReadyTape::State::Ready)) {
@@ -4040,6 +4367,8 @@ bool QueueLifecycleController::completeInlineChunk(
   // (poisonTapeFailureLocked()) before the unlock are left unbracketed, same
   // as reclaimCompletedTapeHead().
   const bool qmxEnabled = dxmt9::queueMutexSplitEnabled();
+  const bool directLifecycleProjectionEnabled =
+      directLifecycleObserverEnabled();
   auto qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
                                  : std::chrono::steady_clock::time_point{};
 
@@ -4089,17 +4418,35 @@ bool QueueLifecycleController::completeInlineChunk(
 
   bool reclaimBegan = false;
   // R-BACK-2.105 owner-buffer round trip; see reclaimCompletedTapeHead().
-  std::vector<DrawShaderLayoutContext> deferredReleases;
+  std::optional<DetachedCompatibilityOwnerToken> deferredReleases;
   std::optional<CpuReadyTape::DetachedArenaOwner> arenaOwner;
+  if (directLifecycleProjectionEnabled) {
+    observeDirectLifecycleForSourceLocked(
+        source, slotIndex, seqId,
+        ::dxmt9::queue::DirectSourceAction::Encode);
+  }
   finishInline(slotIndex, seqId, [&] {
     // TLA+: QueueLifecycleRefinement / EncodeCompleteInline.
     const bool completedInline =
         submissionBinding_.cpuReadyTape->completeInline(
             source.id, source.storage);
     DXMT_ASSERT(completedInline);
-    if (!completedInline ||
-        !submissionBinding_.cpuReadyTape->beginReclaim(
+    if (!completedInline) {
+      poisonTapeFailureLocked();
+      return;
+    }
+    if (directLifecycleProjectionEnabled) {
+      observeDirectLifecycleForSourceLocked(
+          source, slotIndex, seqId,
+          ::dxmt9::queue::DirectSourceAction::Complete);
+    }
+    if (!submissionBinding_.cpuReadyTape->beginReclaim(
             source.id, source.storage)) {
+      if (directLifecycleProjectionEnabled) {
+        observeDirectLifecycleForSourceLocked(
+            source, slotIndex, seqId,
+            ::dxmt9::queue::DirectSourceAction::FailStop);
+      }
       poisonTapeFailureLocked();
       return;
     }
@@ -4113,7 +4460,25 @@ bool QueueLifecycleController::completeInlineChunk(
         poisonTapeFailureLocked();
         return;
       }
-      deferredReleases = reclaimingPayload->detachResourceOwners();
+      const auto ownerIdentity = detachedCompatibilityOwnerIdentity(
+          *submissionBinding_.cpuReadyTape,
+          submissionBinding_.directSlotCapacityLedger, source, seqId,
+          *reclaimingPayload);
+      if (!ownerIdentity) {
+        poisonTapeFailureLocked();
+        return;
+      }
+      auto detached = reclaimingPayload->detachResourceOwners(*ownerIdentity);
+      if (!detached.valid()) {
+        poisonTapeFailureLocked();
+        return;
+      }
+      deferredReleases.emplace(std::move(detached));
+      if (directLifecycleProjectionEnabled) {
+        observeDirectLifecycleForSourceLocked(
+            source, slotIndex, seqId,
+            ::dxmt9::queue::DirectSourceAction::Detach);
+      }
       reclaimingPayload->clearCommands();
     } else {
       auto detached =
@@ -4139,7 +4504,8 @@ bool QueueLifecycleController::completeInlineChunk(
   dxmt9::noteQueueMutexSegmentIfEnabled("run_encode_loop/inline_reclaim",
                                         qmxEnabled, qmxSegStart);
   lock.unlock();
-  deferredReleases.clear();
+  const bool compatibilityOwnersDestroyed =
+      !deferredReleases || deferredReleases->destroyOwners();
   if (arenaOwner) {
     arenaOwner->destroy();
   }
@@ -4153,13 +4519,58 @@ bool QueueLifecycleController::completeInlineChunk(
         submissionBinding_.cpuReadyTape->reclaimingPayload(
             source.id, source.storage);
     if (!reclaimingPayload || reclaimingPayload->seqId != seqId) {
+      // The payload locator is already unusable, so abandon cannot be
+      // attempted against it. Preserve the detached owner under the
+      // fail-stopped queue before returning; an active token must not reach
+      // its destructor merely because post-unlock revalidation lost the
+      // payload record.
+      if (deferredReleases &&
+          retainPoisonedCompatibilityOwner(std::move(*deferredReleases))) {
+        deferredReleases.reset();
+      }
       poisonTapeFailureLocked();
       dxmt9::noteQueueMutexSegmentIfEnabled("run_encode_loop/inline_reclaim",
                                             qmxEnabled, qmxSegStart);
       return false;
     }
-    // Identity revalidated above; give the emptied buffer back.
-    reclaimingPayload->restoreResourceOwnerStorage(deferredReleases);
+    const auto currentIdentity = detachedCompatibilityOwnerIdentity(
+        *submissionBinding_.cpuReadyTape,
+        submissionBinding_.directSlotCapacityLedger, source, seqId,
+        *reclaimingPayload);
+    const bool restored = compatibilityOwnersDestroyed && currentIdentity &&
+        deferredReleases &&
+        std::move(*deferredReleases)
+                .restore(*reclaimingPayload, *currentIdentity) ==
+            DetachedCompatibilityOwnerDisposition::Restored;
+    if (!restored) {
+      const auto abandoned = deferredReleases
+          ? std::move(*deferredReleases).abandon(*reclaimingPayload)
+          : DetachedCompatibilityOwnerDisposition::Rejected;
+      if (abandoned == DetachedCompatibilityOwnerDisposition::Abandoned) {
+        if (directLifecycleProjectionEnabled) {
+          observeDirectLifecycleForSourceLocked(
+              source, slotIndex, seqId,
+              ::dxmt9::queue::DirectSourceAction::PoisonAbandon);
+        }
+        deferredReleases.reset();
+      } else if (deferredReleases &&
+                 retainPoisonedCompatibilityOwner(
+                     std::move(*deferredReleases))) {
+        // Keep the detached allocation under the stopped queue owner. It is
+        // deliberately not reclaimed or re-routed after revalidation fails.
+        deferredReleases.reset();
+      }
+      poisonTapeFailureLocked();
+      dxmt9::noteQueueMutexSegmentIfEnabled(
+          "run_encode_loop/inline_reclaim", qmxEnabled, qmxSegStart);
+      return false;
+    }
+    deferredReleases.reset();
+    if (directLifecycleProjectionEnabled) {
+      observeDirectLifecycleForSourceLocked(
+          source, slotIndex, seqId,
+          ::dxmt9::queue::DirectSourceAction::Restore);
+    }
     reclaimingPayload->seqId = 0;
     reclaimed = submissionBinding_.cpuReadyTape->finishReclaim(
         source.id, source.storage);
@@ -4174,6 +4585,11 @@ bool QueueLifecycleController::completeInlineChunk(
     dxmt9::noteQueueMutexSegmentIfEnabled("run_encode_loop/inline_reclaim",
                                           qmxEnabled, qmxSegStart);
     return false;
+  }
+  if (directLifecycleProjectionEnabled) {
+    observeDirectLifecycleForSourceLocked(
+        source, slotIndex, seqId,
+        ::dxmt9::queue::DirectSourceAction::Reclaim);
   }
   recordCpuReadyTapeStats(*submissionBinding_.cpuReadyTape);
   perf::countCpuReadyTapeReclaimWakeup();
@@ -4529,6 +4945,8 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
   // paths (poisonTapeFailureLocked()) are left unbracketed: they are
   // fail-stop paths, not steady-state per-present traffic.
   const bool qmxEnabled = dxmt9::queueMutexSplitEnabled();
+  const bool directLifecycleProjectionEnabled =
+      directLifecycleObserverEnabled();
   auto qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
                                  : std::chrono::steady_clock::time_point{};
   // R-BACK-2.105: this buffer makes one round trip. It is swapped out under the
@@ -4538,7 +4956,7 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
   // payload keeps its retained `drawShaderLayouts` capacity. Neither swap
   // allocates, and the buffer is never touched concurrently with a
   // `compatibilityPayloadRetainedBytes` capacity read.
-  std::vector<DrawShaderLayoutContext> deferredReleases;
+  std::optional<DetachedCompatibilityOwnerToken> deferredReleases;
   std::optional<CpuReadyTape::DetachedArenaOwner> arenaOwner;
   const auto head = submissionBinding_.cpuReadyTape->oldestResident();
   if (!head || head->seqId != seqId ||
@@ -4593,10 +5011,35 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
     auto* payload = submissionBinding_.cpuReadyTape->reclaimingPayload(
         head->source.id, head->source.storage);
     if (!payload || payload->seqId != seqId) {
+      // There is no valid payload on which an explicit abandon can run.
+      // Retain the detached owner before fail-stop so release builds never
+      // depend on an active token's destructor to resolve ownership.
+      if (deferredReleases &&
+          retainPoisonedCompatibilityOwner(std::move(*deferredReleases))) {
+        deferredReleases.reset();
+      }
       poisonTapeFailureLocked();
       return false;
     }
-    deferredReleases = payload->detachResourceOwners();
+    const auto ownerIdentity = detachedCompatibilityOwnerIdentity(
+        *submissionBinding_.cpuReadyTape,
+        submissionBinding_.directSlotCapacityLedger, head->source, seqId,
+        *payload);
+    if (!ownerIdentity) {
+      poisonTapeFailureLocked();
+      return false;
+    }
+    auto detached = payload->detachResourceOwners(*ownerIdentity);
+    if (!detached.valid()) {
+      poisonTapeFailureLocked();
+      return false;
+    }
+    deferredReleases.emplace(std::move(detached));
+    if (directLifecycleProjectionEnabled) {
+      observeDirectLifecycleForSourceLocked(
+          head->source, std::numeric_limits<std::size_t>::max(), seqId,
+          ::dxmt9::queue::DirectSourceAction::Detach);
+    }
     payload->clearCommands();
   } else {
     auto detached =
@@ -4612,7 +5055,8 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
   dxmt9::noteQueueMutexSegmentIfEnabled("run_finish_loop/retire", qmxEnabled,
                                         qmxSegStart);
   lock.unlock();
-  deferredReleases.clear();
+  const bool compatibilityOwnersDestroyed =
+      !deferredReleases || deferredReleases->destroyOwners();
   if (arenaOwner) {
     arenaOwner->destroy();
   }
@@ -4625,11 +5069,54 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
     auto* payload = submissionBinding_.cpuReadyTape->reclaimingPayload(
         head->source.id, head->source.storage);
     if (!payload || payload->seqId != seqId) {
+      // The post-unlock locator can no longer authorize restore or abandon.
+      // Preserve the still-active token under its payload-index quarantine;
+      // letting the local optional destruct would free the allocation while
+      // the detached marker remains authoritative.
+      if (deferredReleases &&
+          retainPoisonedCompatibilityOwner(std::move(*deferredReleases))) {
+        deferredReleases.reset();
+      }
       poisonTapeFailureLocked();
       return false;
     }
-    // Identity revalidated above; give the emptied buffer back.
-    payload->restoreResourceOwnerStorage(deferredReleases);
+    const auto currentIdentity = detachedCompatibilityOwnerIdentity(
+        *submissionBinding_.cpuReadyTape,
+        submissionBinding_.directSlotCapacityLedger, head->source, seqId,
+        *payload);
+    const bool restored = compatibilityOwnersDestroyed && currentIdentity &&
+        deferredReleases &&
+        std::move(*deferredReleases).restore(*payload, *currentIdentity) ==
+            DetachedCompatibilityOwnerDisposition::Restored;
+    if (!restored) {
+      const auto abandoned = deferredReleases
+          ? std::move(*deferredReleases).abandon(*payload)
+          : DetachedCompatibilityOwnerDisposition::Rejected;
+      if (abandoned == DetachedCompatibilityOwnerDisposition::Abandoned) {
+        if (directLifecycleProjectionEnabled) {
+          observeDirectLifecycleForSourceLocked(
+              head->source, std::numeric_limits<std::size_t>::max(), seqId,
+              ::dxmt9::queue::DirectSourceAction::PoisonAbandon);
+        }
+        deferredReleases.reset();
+      } else if (deferredReleases &&
+                 retainPoisonedCompatibilityOwner(
+                     std::move(*deferredReleases))) {
+        // Preserve ownership until an explicit abandon is possible; the
+        // queue is already fail-stopped, so retaining it is the safe result.
+        deferredReleases.reset();
+      }
+      poisonTapeFailureLocked();
+      dxmt9::noteQueueMutexSegmentIfEnabled("run_finish_loop/retire",
+                                            qmxEnabled, qmxSegStart);
+      return false;
+    }
+    deferredReleases.reset();
+    if (directLifecycleProjectionEnabled) {
+      observeDirectLifecycleForSourceLocked(
+          head->source, std::numeric_limits<std::size_t>::max(), seqId,
+          ::dxmt9::queue::DirectSourceAction::Restore);
+    }
     payload->seqId = 0;
     sourceReclaimed = submissionBinding_.cpuReadyTape->finishReclaim(
         head->source.id, head->source.storage);
@@ -4644,6 +5131,11 @@ bool QueueLifecycleController::reclaimCompletedTapeHead(
     dxmt9::noteQueueMutexSegmentIfEnabled("run_finish_loop/retire", qmxEnabled,
                                           qmxSegStart);
     return false;
+  }
+  if (directLifecycleProjectionEnabled) {
+    observeDirectLifecycleForSourceLocked(
+        head->source, std::numeric_limits<std::size_t>::max(), seqId,
+        ::dxmt9::queue::DirectSourceAction::Reclaim);
   }
   // This counter is observer-only accounting.  Some compatibility/inline
   // completion paths publish directly to completedSeqQueue without passing
@@ -5407,6 +5899,12 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
         .after = afterCommitState,
         .slotIndex = source.slotIndex,
         .eventSeqId = source.seqId,
+        .beforeSlotState = source.locatorBacked()
+            ? std::optional<ChunkSlot::State>(ChunkSlot::State::Encoding)
+            : std::nullopt,
+        .afterSlotState = source.locatorBacked()
+            ? std::optional<ChunkSlot::State>(ChunkSlot::State::Free)
+            : std::nullopt,
         .pipelineOwner = source.pipelineOwner,
         .beforeSourceId = source.source.id,
         .beforeStorage = source.source.storage,

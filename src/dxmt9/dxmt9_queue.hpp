@@ -3,6 +3,7 @@
 #include "dxmt9_backend_types.hpp"
 #include "dxmt9_capture.hpp"
 #include "dxmt9_cpu_ready_tape.hpp"
+#include "dxmt9_direct_continuation.hpp"
 #include "dxmt9_post_encode_retirement.hpp"
 #include "dxmt9_pipeline_lifecycle.hpp"
 #include "render/encode_scheduling_progress.hpp"
@@ -1469,6 +1470,7 @@ class QueueLifecycleController {
     u64* lastCommittedSeqId = nullptr;
     std::span<ChunkSlotControl> slots;
     CpuReadyTape* cpuReadyTape = nullptr;
+    QueueDirectSlotCapacityLeaseLedger* directSlotCapacityLedger = nullptr;
     std::mutex* mutex = nullptr;
     std::condition_variable* writeCv = nullptr;
     std::condition_variable* encodeCv = nullptr;
@@ -1487,6 +1489,10 @@ class QueueLifecycleController {
     // Resolved once when this binding is installed. Queue event producers use
     // this cached bit to avoid an unconditional call into the owner observer.
     bool pipelineLifecycleObservationEnabled = false;
+    // Direct terminal/publication sites use their own cached gate. The
+    // generic pipeline observer can be enabled by the watchdog alone, which
+    // must not make the Direct adapter copy its sink or build events.
+    bool directLifecycleObservationEnabled = false;
   };
 
   void bindTrackedSubmissionState(SubmissionBinding binding);
@@ -1520,6 +1526,21 @@ class QueueLifecycleController {
       std::uint64_t physicalBatchId = 0,
       std::uint32_t batchIndex = 0,
       std::uint32_t batchCount = 1) const noexcept;
+  // Admission/publication code forwards Direct semantic edges here. Terminal
+  // edges are emitted by this controller at the actual queue ownership
+  // boundary, so the generic observer never has to infer them.
+  // Caller must hold submissionBinding_.mutex (the queue mutex). Keeping
+  // this helper explicitly lock-scoped makes replay/terminal projection use
+  // the same serialization domain.
+  void observeDirectLifecycleLocked(
+      const ::dxmt9::queue::DirectSourceLifecycleEvent& event,
+      std::uint64_t physicalCredit) const noexcept;
+  void observeDirectLifecycleForSourceLocked(
+      CpuReadyTape::SourceRef source, std::size_t controlIndex,
+      u64 seqId, ::dxmt9::queue::DirectSourceAction action,
+      bool requireMatch = false, bool hasPresent = false) const noexcept;
+  bool retainPoisonedCompatibilityOwner(
+      DetachedCompatibilityOwnerToken&& token) noexcept;
   // R-BACK-2.65 / SessionCapacityLease: publish every transition that can
   // reduce the physical residency excluded from a new session lease. Callers
   // hold the queue scheduling mutex, so the generation and the capacity
@@ -1547,7 +1568,9 @@ class QueueLifecycleController {
   bool commitCurrentChunk(std::unique_lock<std::mutex>& lock,
                           size_t inflightLimit,
                           const std::function<void(ChunkSlot&)>& onBeforePublish = {},
-                          CompatibilityPublicationIdentity identity = {});
+                          CompatibilityPublicationIdentity identity = {},
+                          const std::function<void()>& onAfterPublish = {},
+                          bool suppressDirectLifecyclePublish = false);
   // TLA+: EncodeDequeue.
   bool dequeueReadySlot(std::unique_lock<std::mutex>& lock,
                         ReadySlotSnapshot& out);
@@ -1822,6 +1845,9 @@ class QueueLifecycleController {
   bool pipelineLifecycleObserverEnabled() const noexcept {
     return submissionBinding_.pipelineLifecycleObservationEnabled;
   }
+  bool directLifecycleObserverEnabled() const noexcept {
+    return submissionBinding_.directLifecycleObservationEnabled;
+  }
   void observePipelineOwnerTransition(const QueueTransitionRecord& record,
                                       QueueLifecycleEvent event) const noexcept;
   void observePipelinePoisonStop() const noexcept;
@@ -1935,6 +1961,27 @@ class QueueLifecycleController {
              ::dxmt9::queue::kMaxObservedPipelineSources>
       physicalBatchReclaimMembers_{};
   std::size_t physicalBatchReclaimMemberCount_ = 0;
+  struct DirectLifecycleLedger {
+    std::array<::dxmt9::queue::DirectSourceLifecycleEvent,
+                ::dxmt9::queue::kMaxObservedDirectSources>
+        sources{};
+    std::size_t count = 0;
+    ::dxmt9::queue::DirectSourceLifecycleState reducerState{};
+  };
+  // A failed restore must keep the detached allocation alive until its
+  // ownership can be explicitly abandoned. One cold retention cell exists
+  // per bounded compatibility payload and is keyed by the token's payload
+  // index; it is never consulted by scheduling or rendering paths.
+  std::array<std::optional<DetachedCompatibilityOwnerToken>,
+             ::dxmt9::core::kDirectSlotCapacityPayloadCount>
+      poisonedCompatibilityOwners_{};
+  // Direct lifecycle state is diagnostic-only and allocated only when the
+  // cached observer gate is enabled; the disabled queue retains no per-source
+  // storage and no per-draw allocation/copy cost.
+  std::unique_ptr<DirectLifecycleLedger> directLifecycleLedger_{};
+  // Replay admission and queue terminal work run on different threads. Every
+  // cold Direct ledger/observer mutation is serialized by the existing queue
+  // mutex; no second lock or observer state enters the rendering hot path.
   // Completed sources retain queue credit until the finish thread performs
   // Tape reclaim. This count is separate from completedSeq (finish
   // waterline) and completedQueue depth (notification FIFO).

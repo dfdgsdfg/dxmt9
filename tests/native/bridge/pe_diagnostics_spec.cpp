@@ -623,6 +623,110 @@ void testSourceContracts(const std::filesystem::path &root) {
       commandQueueHeader,
       "bool pipelineLifecycleObservationEnabled_ = false;",
       "command queue caches its pipeline observer gate once");
+  checkContains(
+      queueHeader,
+      "bool directLifecycleObservationEnabled = false;",
+      "queue binding caches the nullable Direct observer branch");
+  checkContains(
+      queueHeader,
+      "return submissionBinding_.directLifecycleObservationEnabled;",
+      "queue lifecycle reads Direct enablement from cached binding state");
+  checkContains(
+      commandQueueHeader,
+      "bool directLifecycleObservationEnabled_ = false;",
+      "command queue caches Direct observer enablement once");
+  checkContains(
+      queueLifecycle,
+      "binding.directLifecycleObservationEnabled =\n      binding.pipelineLifecycleObserver.directFn != nullptr;",
+      "lifecycle binding resolves the Direct gate from the nullable sink");
+
+  const auto directTransitionBegin = queueLifecycle.find(
+      "void QueueLifecycleController::observeTransition(");
+  const auto directTransitionEnd = directTransitionBegin == std::string::npos
+      ? std::string::npos
+      : queueLifecycle.find(
+            "void QueueLifecycleController::observePipelineOwnerTransition(",
+            directTransitionBegin);
+  check(directTransitionBegin != std::string::npos &&
+            directTransitionEnd != std::string::npos,
+        "Direct transition source contract has a bounded body");
+  const std::string_view directTransitionBody(
+      queueLifecycle.data() + directTransitionBegin,
+      directTransitionEnd - directTransitionBegin);
+  checkBefore(
+      directTransitionBody,
+      "if (directLifecycleObserverEnabled()) {",
+      "observeDirectLifecycleForSourceLocked(",
+      "Encode/Complete construction stays behind the cached Direct branch");
+
+  const auto directCommitBegin = queueLifecycle.find(
+      "bool QueueLifecycleController::commitCurrentChunk(");
+  const auto directCommitEnd = directCommitBegin == std::string::npos
+      ? std::string::npos
+      : queueLifecycle.find(
+            "bool QueueLifecycleController::dequeueReadySlot(",
+            directCommitBegin);
+  check(directCommitBegin != std::string::npos &&
+            directCommitEnd != std::string::npos,
+        "Direct publication source contract has a bounded body");
+  const std::string_view directCommitBody(
+      queueLifecycle.data() + directCommitBegin,
+      directCommitEnd - directCommitBegin);
+  checkBefore(
+      directCommitBody,
+      "if (!suppressDirectLifecyclePublish &&\n        directLifecycleObserverEnabled()) {",
+      "observeDirectLifecycleForSourceLocked(",
+      "Publish construction stays behind the cached Direct branch");
+
+  const auto checkDirectTerminalBody = [&](std::string_view beginMarker,
+                                           std::string_view endMarker,
+                                           std::string_view message) {
+    const auto begin = queueLifecycle.find(beginMarker);
+    const auto end = begin == std::string::npos
+        ? std::string::npos
+        : queueLifecycle.find(endMarker, begin);
+    check(begin != std::string::npos && end != std::string::npos, message);
+    const std::string_view body(queueLifecycle.data() + begin, end - begin);
+    checkBefore(
+        body,
+        "const bool directLifecycleProjectionEnabled =\n      directLifecycleObserverEnabled();",
+        "observeDirectLifecycleForSourceLocked(",
+        message);
+    checkContains(
+        body, "if (directLifecycleProjectionEnabled) {",
+        message);
+  };
+  checkDirectTerminalBody(
+      "bool QueueLifecycleController::completeInlineChunk(",
+      "bool QueueLifecycleController::drainCompletedSequence(",
+      "inline Direct terminal events share one cached disabled-path branch");
+  checkDirectTerminalBody(
+      "bool QueueLifecycleController::reclaimCompletedTapeHead(",
+      "void QueueLifecycleController::waitForSequence(",
+      "finish-thread Direct terminal events share one cached disabled-path branch");
+
+  const auto directAdapterBegin = queueLifecycle.find(
+      "void QueueLifecycleController::observeDirectLifecycleForSourceLocked(");
+  const auto directAdapterEnd = directAdapterBegin == std::string::npos
+      ? std::string::npos
+      : queueLifecycle.find(
+            "void QueueLifecycleController::recordPipelineSourcePublication(",
+            directAdapterBegin);
+  check(directAdapterBegin != std::string::npos &&
+            directAdapterEnd != std::string::npos,
+        "Direct terminal adapter source contract has a bounded body");
+  const std::string_view directAdapterBody(
+      queueLifecycle.data() + directAdapterBegin,
+      directAdapterEnd - directAdapterBegin);
+  checkBefore(
+      directAdapterBody,
+      "if (!directLifecycleLedger_) return;",
+      "const auto& sink = submissionBinding_.pipelineLifecycleObserver;",
+      "Direct terminal adapter touches no sink facade while disabled");
+  checkNotContains(
+      directAdapterBody,
+      "const auto sink = submissionBinding_.pipelineLifecycleObserver;",
+      "Direct terminal adapter does not copy its sink facade");
   const auto flushBegin = recorder.find(
       "HRESULT D3D9DeviceImpl::flushPendingCommandChunk(");
   const auto flushEnd = flushBegin == std::string::npos

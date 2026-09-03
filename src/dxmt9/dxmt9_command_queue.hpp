@@ -690,12 +690,20 @@ class CommandQueue {
     // alive. The capability is lease-owned and is invalidated by every
     // terminal settle operation; callers cannot retain destination storage.
     const core::DirectReplayDrawAppendCapability*
-    borrowDirectRangeAppender() const noexcept {
-      return directRangeAppendLive_ && directRangeAppender_
+    borrowDirectRangeAppender() noexcept {
+      return directRangeAppendLive_ && consumeAdmissionWitness() &&
+              directRangeAppender_
                  ? &directRangeAppender_
                  : nullptr;
     }
-    void markSemanticEffectsStarted() noexcept { effectsStarted_ = true; }
+    void markSemanticEffectsStarted() noexcept {
+      if (!effectsStarted_) {
+        effectsStarted_ = true;
+        if (queue_ && queue_->directLifecycleObservationEnabled_) {
+          observeLifecycleEnabled(queue::DirectSourceAction::EffectCut);
+        }
+      }
+    }
     // Seal the open DrawRunCommandRecord at an island or coordinator cut, so
     // draws either side of the cut can never merge into one run record. Every
     // borrowed coordinator append below does this implicitly; the explicit
@@ -714,34 +722,60 @@ class CommandQueue {
     DirectChunkSlotReplayStatus commit(
         std::span<const core::ChunkHandleEntry> resources) noexcept;
     bool rollbackPreEffect() noexcept;
+    // The replay transaction calls this only after accepting this exact
+    // destination. Receipt is span-local; later physical-source terminal
+    // transitions may apply to all sibling spans as an atomic group.
+    void observeAcceptedDestination() noexcept {
+      if (queue_ && queue_->directLifecycleObservationEnabled_) {
+        observeLifecycleEnabled(
+            queue::DirectSourceAction::DestinationReceipt);
+      }
+    }
 
    private:
     friend class CommandQueue;
     DirectChunkSlotReplayLease(
         CommandQueue& queue, core::CpuReadyPublicationTicket ticket,
         std::size_t controlIndex,
+        core::ChunkSlot* payload,
         core::TransactionalChunkSlotAssembler* assembler,
-        DirectChunkSlotBuildContext* context) noexcept
+        DirectChunkSlotBuildContext* context,
+        core::DirectSpanAdmissionWitness&& admissionWitness) noexcept
         : queue_(&queue), ticket_(ticket), controlIndex_(controlIndex),
-          directAssembler_(assembler), directContext_(context),
+          directPayload_(payload), directAssembler_(assembler),
+          directContext_(context),
+          admissionWitness_(std::move(admissionWitness)),
           ownerThread_(std::this_thread::get_id()),
-          directRangeAppendLive_(assembler != nullptr && context != nullptr) {
+          directRangeAppendLive_(payload != nullptr && assembler != nullptr &&
+                                 context != nullptr &&
+                                 admissionWitness_.valid()) {
       if (directRangeAppendLive_) {
         CommandQueue::armDirectReplayDrawAppender(
             directRangeAppender_, this);
       }
     }
+    bool consumeAdmissionWitness() noexcept;
+    void emitLifecycleEvent(queue::DirectSourceAction action,
+                            bool hasPresent) noexcept;
+    void observeLifecycleLocked(queue::DirectSourceAction action,
+                                bool hasPresent) noexcept;
+    void observeLifecycleEnabled(queue::DirectSourceAction action,
+                                 bool hasPresent = false) noexcept;
+    void disarm() noexcept;
     void settle() noexcept;
 
     CommandQueue* queue_ = nullptr;
     core::CpuReadyPublicationTicket ticket_{};
     std::size_t controlIndex_ = std::numeric_limits<std::size_t>::max();
     bool effectsStarted_ = false;
+    core::ChunkSlot* directPayload_ = nullptr;
     core::TransactionalChunkSlotAssembler* directAssembler_ = nullptr;
     DirectChunkSlotBuildContext* directContext_ = nullptr;
+    core::DirectSpanAdmissionWitness admissionWitness_{};
     core::DirectReplayDrawAppendCapability directRangeAppender_{};
     std::thread::id ownerThread_{};
     bool directRangeAppendLive_ = false;
+    bool admissionConsumed_ = false;
   };
 
   struct DirectChunkSlotReplayBeginResult {
@@ -776,7 +810,9 @@ class CommandQueue {
       std::size_t rangeDrawCount = 0,
       std::uint32_t spanOrdinal = 0,
       bool finalSpan = true,
-      bool allowRotation = false) noexcept;
+      bool allowRotation = false,
+      queue::DirectSourceControlMode controlMode =
+          queue::DirectSourceControlMode::Ordinary) noexcept;
   CpuReadyArenaBeginResult beginCpuReadyArenaSource(
       std::uint64_t rawOrdinal,
       const core::ArenaSourcePayloadLayout& layout,
@@ -1345,10 +1381,16 @@ class CommandQueue {
   core::metalqueue::QueueLifecycleController queueLifecycle_{};
   std::unique_ptr<dxmt9::queue::PipelineLifecycleObserver>
       pipelineLifecycleObserver_{};
+  // Cached generic pipeline sink. Direct leases do not copy this facade;
+  // their separate bool below gates all Direct diagnostic construction.
+  dxmt9::queue::PipelineLifecycleObserverSink pipelineLifecycleSink_{};
   // Resolved once during lifecycle binding so hot source-admission paths do
   // not make an unconditional out-of-line observer call when diagnostics are
   // disabled.
   bool pipelineLifecycleObservationEnabled_ = false;
+  // Direct lease events have their own opt-in gate: the disabled integration
+  // point pays one cached-bool branch and constructs no diagnostic event.
+  bool directLifecycleObservationEnabled_ = false;
   // Cold, opt-in diagnostics are held by the binary-local registry. They are
   // intentionally not queue-owned: several live devices must not overwrite
   // or dangle a process-wide installation.
@@ -1755,10 +1797,15 @@ class CommandQueue {
     // of the exact active raw may extend a populated slot.
     std::uint32_t spanOrdinal = 0;
     bool finalSpan = true;
-    // Destination command-header capacity observed at admission. R-BACK-2.86
-    // forbids reallocating an earlier final extent, so a different capacity at
-    // commit means an append grew reserved storage inside the transaction.
-    std::size_t reservedCommandHeaderCapacity = 0;
+    core::DirectSpanStorageAction admittedStorageAction =
+        core::DirectSpanStorageAction::ExactFit;
+    bool rotatedBeforeAdmission = false;
+    core::DirectSpanCapacityReceipt capacityReceipt{};
+    core::DirectSpanProducerInterval producerInterval{};
+    queue::DirectSourceControlMode controlMode =
+        queue::DirectSourceControlMode::Ordinary;
+    core::SourcePayloadCapacity admittedPlan{};
+    core::DirectSpanCapacityEvidence admittedCapacityEvidence{};
     // Present is staged by submitPresent, but remains coordinator-owned until
     // direct assembler evidence has committed the same final ChunkSlot.
     core::PresentId pendingPresentId{};

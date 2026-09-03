@@ -284,6 +284,27 @@ must remove each of the span witness, separator effect cut, run closure,
 Present-ordering gate, capacity bound, slot-generation reset, receipt-before-
 commit, completion ordering, and wake/progress premises.
 
+The rotation/provision/adoption sequence must complete before admission and
+before the effect cut. Its admission witness must bind the final destination
+slot and the slot, source, and storage generations observed there; destination
+identity must remain stable through completion and detached-owner settlement
+until reclaim releases the slot. Shared semantic spans backed by one physical
+allocation must account for that credit behaviorally, with independent orphan
+and duplicate-owner counterexamples when the claim is made.
+
+The production-observer projection must model pre-effect cancellation after
+successful admission as row absence with restoration of the preceding
+admission frontier, not as a retained terminal row. The model-code truth table
+must reject a non-tail cancellation without state mutation and must accept a
+complete sibling group only as one tail-ordered atomic reduction. The existing
+post-effect retry counterexample must remain independent and continue to violate
+the no-fallback-after-effect invariant.
+Cancellation and compatibility execution are distinct refinement steps: row
+erasure releases the Direct destination immediately, while compatibility
+publication and settlement advance the shared source FIFO only when every
+preceding source has reached the corresponding frontier. The model must not
+fabricate Direct completion or restore events for that external fallback.
+
 Storage capacity must be modelled as a quantity, not a boolean premise, and the
 model must distinguish the per-transaction exact reservation from the slot's
 physical capacity (R-BACK-2.103, R-BACK-2.104, R-BACK-2.105). It must cover empty-slot
@@ -305,6 +326,15 @@ beside it so the model *chooses* to grow. The reference in this model is a
 same-capacity serial slot rather than the production Legacy lane, whose chunk
 command limit is unbounded by default; parity against an unbounded reference is
 an explicit open obligation, not a discharged one.
+
+The native model/code binding must derive its inventory from the same
+compile-time role-tagged schema as production and assert exactly 32 semantic
+regions, 31 physical capacity rows, and 30 staged allocation/fault rows. It
+must exercise readback coverage non-vacuously while retaining its structural
+rejection, preserve the lookup-family special cases, and prove that only the
+shader-layout row may detach. Production reserve, pricing, coverage, clear,
+swap, and fault operations must expand to straight-line field access; a runtime
+descriptor loop is not equivalent evidence for the hot path.
 
 The scalar-capacity refinement is not allocator or process-memory evidence.
 Its promotion obligation must compose the 64 physical compatibility payloads
@@ -338,6 +368,30 @@ allocation/address stability across reuse and lookup restoration, and exercise
 the actual reclaim round trip. A same-build wild run with non-zero reuse owns
 reachability and memory/locality evidence; it does not replace the formal or
 native premises and does not by itself promote the default-off policy.
+
+Admission and detached-owner capabilities require explicit linearity evidence.
+A private-factory move-only admission witness must be minted once after
+admission and consumed once at the pre-effect destination handoff; moved-from,
+stale non-command capacity, wrong issuer, same-address ABA, and double-consume
+cases must fail closed. The move-only detached-owner token must bind the full
+payload/source/sequence/Tape identity, storage and capacity generations, an
+explicit exact-fit-or-qualified receipt, bytes, and a named typed
+`DrawShaderLayout` allocation identity; restore rejection must retain the
+token until explicit poisoned-path abandon and must not complete reclaim.
+Native tests must bind these concrete fields and ledger conservation. The
+formal lifecycle projection must expose matching witness-consumption and
+token-disposition states with independent stale/duplicate, reorder,
+post-effect retry, early reclaim, phantom/leaked credit, missing restore, and
+partial-adoption counterexamples.
+
+The Direct source lifecycle must have one pure reducer shared by production
+observer boundaries and native truth tables. It must cover RawOwned import,
+plan/admission, effect cut, destination receipt/publication, encode/completion,
+detach, restore or explicit poisoned abandon, and reclaim. A bounded
+two-source/two-slot refinement must include separator/ordered-control modes,
+Present, rotation/reuse, weak-fair settlement, exact FIFO and exactly-once
+invariants, no fallback after effect, completion-before-reclaim, and aggregate
+retained plus staged plus detached credit conservation.
 
 A separate weak-fair progress configuration must prove that an admitted raw
 eventually settles, fails terminally, or takes one pre-effect compatibility
@@ -624,6 +678,16 @@ return, false same-address adoption without reclaim transfer, stale
 sidecar/locator use, retry after an effect, completion before child join,
 double reclaim, and missing capacity wake. Component models remain useful but
 cannot substitute for this composed trace.
+
+For the bounded Direct runtime projection, `RawOwned` import and plan are
+abstract model states rather than emitted runtime observations. The production
+trace begins at successful `DirectSpanAdmissionWitness` admission and must not
+fabricate Raw/Plan events. From that point, destination receipt precedes the
+Direct physical commit, publication follows Tape seal under the queue mutex,
+and Encode, Complete, Detach, Restore-or-Poison, and Reclaim must be bound to
+their real owner transitions with full locator and atomic sibling validation.
+On revalidation failure, a poisoned detached token remains retained until its
+explicit terminal disposition.
 
 **R-VERIF-7.10** Replay projection must have a model/code isomorphism over a
 bounded persistent state, immutable source, source-local working state,

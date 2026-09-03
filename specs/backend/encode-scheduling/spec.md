@@ -2157,6 +2157,14 @@ destruction; rollback never acquires a queue lock. Sequentially reserving the
 live slot and catching an exception is invalid because it exposes a partially
 provisioned topology to replay.
 
+`dxmt9_chunk_slot_dimensions.hpp` is the compile-time inventory for this
+transaction. Its 32 semantic rows project to 31 physical vectors and 30 staged
+allocation/fault rows: Clear has no physical row, readback is the one
+coverage-only row, the lookup head/tail/next rows retain specialized sizing,
+and `drawShaderLayouts` alone carries detached-owner storage. X-macro expansion
+generates straight-line reserve, capacity, retained-byte, clear/swap, fault,
+and test inventories; production never loops the descriptor table.
+
 The queue-wide lease ledger charges old retained capacity plus the complete
 staging candidate during replacement. Its narrow two-phase API keeps the queue
 mutex dominant for the entire capability lifetime and performs no lock
@@ -2297,19 +2305,19 @@ premises are required together, and each is independently modelled:
    `drawShaderLayouts` vector under the queue mutex so last-owner destructors
    do not re-enter the resource pool there. This is the only provisioned
    dimension reclaim detaches, so without a second half the reuse predicate
-   could never hold. The buffer therefore makes a round trip: it is
-   swapped out with a default-constructed local -- so the payload's vector is
-   left specified empty with capacity zero rather than relying on the
-   unspecified state of a moved-from `std::vector` -- emptied with the mutex
-   released, and swapped back by `ChunkSlot::restoreResourceOwnerStorage` after
-   the relock and after the Reclaiming identity and seq are revalidated. The
-   swap out and the swap back are each O(1) and allocate nothing; the clear is
-   O(number of layout rows) and runs entirely outside the mutex, which is where
-   it already ran before this requirement. During that window the payload's
-   `detachedResourceOwnerRetainedBytes` carries the detached allocation into
-   `compatibilityPayloadRetainedBytes`, so aggregate reconciliation observes
-   the same physical total before detach, during destruction, and after the
-   storage is restored.
+   could never hold. `ChunkSlot::detachResourceOwners` therefore mints one
+   move-only `DetachedCompatibilityOwnerToken` and swaps the buffer out with a
+   default-constructed local, leaving a specified empty shell. The token binds
+   payload/source/sequence/Tape identity, source and storage generations,
+   physical payload index, capacity generation, the qualified ledger receipt,
+   retained bytes, and a named typed `DrawShaderLayout` allocation identity.
+   Its owner rows are emptied
+   with the mutex released; after the relock, an rvalue restore revalidates the
+   complete identity before its O(1), allocation-free swap. A mismatch leaves
+   the token live, explicitly abandons only on the poisoned terminal path, and
+   returns without finishing reclaim. The payload marker prices the detached
+   allocation throughout the window, so aggregate reconciliation observes the
+   same physical total before detach, during destruction, and after restore.
 3. **An identity-qualified ledger entry.** Reuse skips the aggregate lease
    entirely, which is sound only while the ledger entry still describes the
    payload exactly: a valid generation, no staged credit outstanding, and
@@ -2335,11 +2343,56 @@ assembler's `reserve()` is now a no-op" rather than "an allocation happened".
 drift guard and must stay zero. Neither the disabled lane nor the exact-fit
 lane can reach either: the reuse arm exists only under an enabled budget.
 
-There are two related inventories: 31 `ChunkSlot` vectors are cleared and
-covered by the physical predicate, while provisioning owns 30 allocation
-points -- 21 storage vectors and nine lookup arrays. `readbackRecords` is the
-31st vector and remains fail-closed for provisioning because this direct
-assembler has no readback appender.
+The shared dimension schema makes the two related inventories auditable: all
+31 `ChunkSlot` vectors are cleared and covered by the physical predicate,
+while only 30 participate in staged provisioning. `readbackRecords` is the
+31st vector and remains fail-closed for provisioning because this Direct
+assembler has no readback appender. Native coverage gives that row non-zero
+demand before shrinking each of the 31 rows independently, so the check is not
+vacuous.
+
+The lease returned after admission also owns a private-factory move-only
+`DirectSpanAdmissionWitness`. It records the typed destination, schema,
+storage action, explicit exact-fit/ledger receipt, producer interval, exact
+raw/source/sequence and Tape generations, plus the full admitted plan and
+physical-capacity snapshot. Admission consumes it once at the pre-effect
+destination handoff; stale non-header capacity, ABA, wrong issuer, moved-from,
+and double-consume cases fail closed in straight-line constant time without
+per-draw proof work.
+
+The admitted capacity receipt is also persisted with the physical
+`ChunkSlot` owner. Reclaim constructs its detached-owner identity from that
+persisted receipt and source/storage identity; it does not re-derive a ledger
+qualification after admission or silently downgrade a qualified receipt to
+exact-fit. A missing, mismatched, or stale receipt rejects detach/restore and
+poisons the transaction.
+
+`DirectSourceLifecycle` is the shared cold reducer for the Direct source path:
+RawOwned import, plan, witness admission, effect cut, destination
+receipt/publication, encode/completion, and the reducer's explicit terminal
+detach/restore-or-poison/reclaim cases. `RawOwned` import and plan are abstract
+model states; the production projection begins at successful
+`DirectSpanAdmissionWitness` admission and does not fabricate Raw/Plan events.
+The production owner observers bind successful admission, destination receipt
+before the Direct physical commit, publication only after Tape seal under the
+queue mutex, and the real Encode/Complete/Detach/Restore-or-Poison/Reclaim
+edges. Terminal events carry the full source/storage/sequence locator and are
+accepted only after the shared transactional batch reducer accepts every
+sibling and exactly one physical-credit owner against scratch lifecycle state;
+neither the queue ledger nor observer sink is touched before that complete
+preflight accepts. If an ordinary compatibility prefix already owns the final
+payload, the first observed Direct sibling represents its one physical credit;
+later Direct siblings remain creditless. Pre-effect rollback removes the Direct
+ledger and reducer row transactionally, so compatibility publication cannot
+encounter a terminal `RolledBack` residue. A poisoned
+detached token is retained when revalidation fails. The native truth tables and
+exact Metal Draw/Clear/Draw/Present oracle exercise the same reducer and
+terminal contract on the observer-enabled path. The observer-disabled cost
+claim is narrower and native: a cached Boolean guards event construction and
+helper entry, the sink facade is not copied, and no observer ledger is
+allocated. Exact-fit uses an explicit unqualified unit credit; a
+ledger-qualified admission carries its exact retained-byte receipt, and both
+preserve retained plus staged plus detached conservation.
 
 The one term Direct reserves more conservatively than Legacy retains is the
 constant-byte pair: the plan must bound it at `sizeof(VertexShaderConstants)`
@@ -2374,7 +2427,7 @@ layers.
 | Tape layout and ABA | `SegmentedTransportV1.tla` now covers the fixed-role semantic-batch handoff, complete reservation/adoption, exact contiguous emission, checkpoint rollback, FIFO settlement, and wake protocol; broader physical multi-segment packing, jumbo/non-wrapping page layout, generation rejection, ordered reclaim, and oversize rollback remain separate obligations |
 | Fixed-role `SegmentedTransportV1` / later `ExactFixed` (`R-BACK-2.90`–`2.94`) | opt-in fixed-region bridge plus host immutable-owner/21-family ExactFixed binding; bounded TLA model and six expected-failure configurations; production CPU-ready Tape role binding and promotion evidence remain open |
 | End-to-end source lease/facade/completion/materialization composition (R-BACK-2.95–2.100, R-ARCH-7.11–7.24) | Production PE emission carries a closed event/source interval through authenticated Raw ownership, direct or Arena publication, the generation-qualified lifecycle sidecar, completion, and reclaim. `CpuPipelineLifecycle` and native truth tables reject partial and cross-raw duplicate identity. Current import closes ownership with Unix `RawOwned` storage before bridge return; same-address adoption remains invalid without a negotiated shared lease. `ReplayProjectionTransaction` plus the production `ReplayTransaction`/sparse undo journal bind exact source-order projection, pre-effect state/destination rollback, receipt-before-commit, and post-effect no-retry fail-stop. The `DrawRunSubmission` carrier, its batch APIs/adapters/scratch, and carrier-specific counters/tests are retired from production; synchronous direct or ordinary final-storage ingress replaces them. Universal fused all-family cursor execution, optimizer-policy proof binding, the complete ordinary/direct differential, and a fresh four-boundary ledger audit remain open. Broader atomic-order, Wine/GPU, and promotion evidence remain separate. |
-| Source-range emission plan and lease lifecycle (`R-BACK-2.101`–`2.103`, `R-VERIF-2.25`) | `ReplayEmissionPlanIslands` proves the smallest three-span safety slice and its native binding calls production `compatibilitySpanAdmission`; the production planner itself has a bounded exhaustive class truth table and a focused serial differential. The composed multi-cut/rotation/ordered-control/slot-generation progress model, shared production span reducer, complete SoA differential, GPU oracle, and wild locality/performance evidence remain open. |
+| Source-range emission plan and lease lifecycle (`R-BACK-2.101`–`2.103`, `R-VERIF-2.25`) | `ReplayEmissionPlanIslands` retains the smallest three-span slice. `DirectSourceLifecycle` adds the shared production/native reducer, bounded two-source/two-slot separator and ordered-control projection, Present, pre-admission rotation/reuse, behavioral physical-credit ownership for shared semantic spans, weak-fair settlement, exact FIFO/once/no-fallback/completion-before-reclaim/credit invariants, and fourteen independent expected failures. Native lifecycle coverage binds the reducer; existing `dxmt9-replay-emission-plan-spec` / `dxmt9-replay-emission-plan-islands-spec` own production multi-cut coverage. The production projection begins at successful witness admission, which now enforces the same raw/span/source FIFO predicate as abstract import; RawOwned import and planning remain abstract model states. The model carries a distinct production-admission FIFO invariant and reorder counterexample. The observer-enabled Metal oracle executes exact Draw/Clear/Draw cut pixels, a trailing Present, completion identity, and Direct forced-commit fail-stop. Production terminal events bind the real Encode/Complete/Detach/Restore-or-Poison/Reclaim edges with full locators and preflight the complete exactly-one-owner sibling batch through the shared reducer before exposing the queue ledger or sink; compatibility-prefix ownership and rollback-to-compatibility are pinned on the production queue path, and a poisoned token remains retained on mismatch. The separate observer-disabled source-contract pin proves one cached branch with no event/sink-copy/ledger work. Native Direct lifecycle and queue-routing cases pass. The complete 161-configuration TLC inventory passes with 50 production safety, two fair-progress, and 109 deliberate expected-failure configurations; ordered-control driver execution and supervised wild locality/performance remain open. |
 | CPU-ready admission and session progress | native admission policy specs cover exact Writing/headroom qualification, real lease charge, stale identity, the complete typed drain matrix, unlocked wait, semantic-drain priority, and exact Ready over admission/writer pressure. The production join spec fills all 31 Ready controls and composes the real replay-drain queue with a direct real `QueueLifecycleController::waitForSequence` call, proving one Present plus seven admission escapes and 23 exact producer-fence escapes cover the complete fence in FIFO order without a capacity-generation transition. Exact-head at-most-once tokens, target coverage, restore eligibility, ownership conservation, admission retry, completion-fence return, and distinct counters are pinned through production CVs. GT2 r17 binds the actual reserve path, records 672 producer-wait escapes, returns from reserve, and publishes a fully settled 147-segment v2 sidecar with zero watchdog/GPU errors. Four sibling cases retain Present, non-Arena, ordinary-capacity, and high-water ineligibility without token consumption; generation retry retains priority. Seeded `EncodeSchedulingProgress` composes admission progress followed by the post-admission producer fence and return. |
 | Pass streaming | planner specs cover the allocation-free exact four-command proof, malformed/unsupported shapes, identity/attachment/alias hazards, complete coverage, and the unchanged universal validator. Production specs cover default-off natural replay, exact joined replay, render-pass begin/end `3 -> 2`, one removed mid-chunk split, stale pre-effect restore, ordered-release and stop drains, pending-carrier capture-start drain through the full capture predicate, one observer, natural FIFO completion, receipt-backed retirement/reclaim, and the independent 8+1 bounded-window edge. |
 | Ordered session completion | existing `EncodeSessionCompletion.tla` and completion-source native spec; extend with source-qualified command attribution, multi-block tape pins, generation advance after source-granular completion, and joint groups |

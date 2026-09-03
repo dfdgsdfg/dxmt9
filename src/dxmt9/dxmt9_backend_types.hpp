@@ -2,6 +2,7 @@
 
 #include "dxmt9/core.hpp"
 #include "dxmt9/assert.hpp"
+#include "dxmt9_chunk_slot_dimensions.hpp"
 #include "dxmt9_perf_counters.hpp"
 
 #include <algorithm>
@@ -820,10 +821,178 @@ void chunkSlotReserveAtLeast(Vector& storage, std::size_t required) {
 
 }  // namespace detail
 
+struct ChunkSlot;
+
+enum class DetachedCapacityReceiptKind : std::uint8_t {
+  ExactFitUnqualified,
+  LedgerQualified,
+};
+
+class DetachedCapacityReceipt {
+ public:
+  static constexpr DetachedCapacityReceipt exactFitUnqualified() noexcept {
+    return {};
+  }
+
+  static constexpr DetachedCapacityReceipt ledgerQualified(
+      std::uint32_t payloadIndex, u64 generation,
+      u64 retainedBytes) noexcept {
+    DetachedCapacityReceipt result;
+    result.kind_ = DetachedCapacityReceiptKind::LedgerQualified;
+    result.payloadIndex_ = payloadIndex;
+    result.generation_ = generation;
+    result.retainedBytes_ = retainedBytes;
+    return result;
+  }
+
+  constexpr DetachedCapacityReceiptKind kind() const noexcept {
+    return kind_;
+  }
+  constexpr bool qualified() const noexcept {
+    return kind_ == DetachedCapacityReceiptKind::LedgerQualified;
+  }
+  constexpr u64 generation() const noexcept { return generation_; }
+  constexpr u64 retainedBytes() const noexcept { return retainedBytes_; }
+  constexpr std::uint32_t payloadIndex() const noexcept {
+    return payloadIndex_;
+  }
+  constexpr bool valid() const noexcept {
+    return kind_ == DetachedCapacityReceiptKind::ExactFitUnqualified ||
+        (payloadIndex_ != std::numeric_limits<std::uint32_t>::max() &&
+         generation_ != 0 && retainedBytes_ != 0);
+  }
+
+  friend constexpr bool operator==(const DetachedCapacityReceipt&,
+                                   const DetachedCapacityReceipt&) = default;
+
+ private:
+  DetachedCapacityReceiptKind kind_ =
+      DetachedCapacityReceiptKind::ExactFitUnqualified;
+  std::uint32_t payloadIndex_ = std::numeric_limits<std::uint32_t>::max();
+  u64 generation_ = 0;
+  u64 retainedBytes_ = 0;
+};
+
+struct DetachedCompatibilityOwnerIdentity {
+  const ChunkSlot* payload = nullptr;
+  u64 seqId = 0;
+  std::uint32_t sourceIndex = std::numeric_limits<std::uint32_t>::max();
+  u64 sourceGeneration = 0;
+  std::uint32_t firstPage = std::numeric_limits<std::uint32_t>::max();
+  std::uint32_t pageCount = 0;
+  u64 storageGeneration = 0;
+  std::uint32_t payloadIndex = std::numeric_limits<std::uint32_t>::max();
+  DetachedCapacityReceipt capacityReceipt{};
+
+  bool valid() const noexcept {
+    return payload != nullptr && seqId != 0 &&
+        sourceIndex != std::numeric_limits<std::uint32_t>::max() &&
+        sourceGeneration != 0 &&
+        firstPage != std::numeric_limits<std::uint32_t>::max() &&
+        pageCount != 0 && storageGeneration != 0 &&
+        payloadIndex != std::numeric_limits<std::uint32_t>::max() &&
+        capacityReceipt.valid();
+  }
+
+  friend bool operator==(const DetachedCompatibilityOwnerIdentity&,
+                         const DetachedCompatibilityOwnerIdentity&) = default;
+};
+
+enum class DetachedCompatibilityOwnerDisposition : std::uint8_t {
+  Restored,
+  Abandoned,
+  Rejected,
+};
+
+struct DrawShaderLayoutAllocationIdentity {
+  const DrawShaderLayoutContext* first = nullptr;
+  std::size_t capacity = 0;
+
+  constexpr bool valid() const noexcept {
+    return capacity == 0 ? first == nullptr : first != nullptr;
+  }
+
+  friend constexpr bool operator==(
+      const DrawShaderLayoutAllocationIdentity&,
+      const DrawShaderLayoutAllocationIdentity&) = default;
+};
+
+// Linear out-of-lock owner for the sole detached ChunkSlot vector. The token
+// keeps the allocation and its immutable identity together; restore and
+// abandon are explicit consuming rvalue operations after revalidation.
+class DetachedCompatibilityOwnerToken final {
+ public:
+  DetachedCompatibilityOwnerToken() = default;
+  ~DetachedCompatibilityOwnerToken() {
+    // A poisoned queue may retain this token when both revalidation and
+    // explicit abandon are unavailable. Release the retained owners safely
+    // at final queue teardown; correctness must never depend on an assert
+    // firing in a debug build.
+    if (active_) {
+      owners_.clear();
+      disarm();
+    }
+  }
+  DetachedCompatibilityOwnerToken(
+      const DetachedCompatibilityOwnerToken&) = delete;
+  DetachedCompatibilityOwnerToken& operator=(
+      const DetachedCompatibilityOwnerToken&) = delete;
+  DetachedCompatibilityOwnerToken(
+      DetachedCompatibilityOwnerToken&& other) noexcept;
+  DetachedCompatibilityOwnerToken& operator=(
+      DetachedCompatibilityOwnerToken&&) = delete;
+
+  bool valid() const noexcept { return active_ && identity_.valid(); }
+  bool ownersDestroyed() const noexcept { return ownersDestroyed_; }
+  std::size_t retainedBytes() const noexcept { return retainedBytes_; }
+  DrawShaderLayoutAllocationIdentity allocationIdentity() const noexcept {
+    return allocationIdentity_;
+  }
+  const DetachedCompatibilityOwnerIdentity& identity() const noexcept {
+    return identity_;
+  }
+
+  // Runs the retained row destructors while preserving the vector allocation.
+  // Production calls this only with the queue mutex released.
+  bool destroyOwners() noexcept;
+
+  DetachedCompatibilityOwnerDisposition restore(
+      ChunkSlot& payload,
+      const DetachedCompatibilityOwnerIdentity& current) && noexcept;
+  DetachedCompatibilityOwnerDisposition abandon(
+      ChunkSlot& payload) && noexcept;
+
+ private:
+  friend struct ChunkSlot;
+  DetachedCompatibilityOwnerToken(
+      ChunkSlot& payload, DetachedCompatibilityOwnerIdentity identity,
+      u64 serial, std::size_t retainedBytes,
+      std::vector<DrawShaderLayoutContext>& owners) noexcept;
+  void disarm() noexcept;
+
+  ChunkSlot* payload_ = nullptr;
+  DetachedCompatibilityOwnerIdentity identity_{};
+  u64 serial_ = 0;
+  std::size_t retainedBytes_ = 0;
+  DrawShaderLayoutAllocationIdentity allocationIdentity_{};
+  std::vector<DrawShaderLayoutContext> owners_{};
+  bool ownersDestroyed_ = false;
+  bool active_ = false;
+};
+
+static_assert(!std::is_copy_constructible_v<
+              DetachedCompatibilityOwnerToken>);
+static_assert(std::is_nothrow_move_constructible_v<
+              DetachedCompatibilityOwnerToken>);
+
 struct ChunkSlot {
   enum class State { Free, Writing, Pending, Encoding, Retiring, GPU };
 
   u64 seqId = 0;
+  // Physical admission provenance survives semantic spans and reclaim. The
+  // detached-owner token must carry the receipt minted at admission; it may
+  // not re-derive a qualified receipt from a later ledger snapshot.
+  DetachedCapacityReceipt admissionCapacityReceipt{};
   dxmt9::perf::ChunkPublishReason publishReason =
       dxmt9::perf::ChunkPublishReason::Unknown;
   bool pipelinePrefetchSealed = false;
@@ -844,7 +1013,8 @@ struct ChunkSlot {
   std::vector<u8> drawUniformPixelConstantBytes;
   std::vector<DrawUniformPayloadRecord> drawUniformPayloads;
   // Slot-local hash chains for uniform interning; indices point into
-  // drawUniformPayloads.
+  // drawUniformPayloads. The schema tags the three lookup triples so reserve
+  // and restore keep their specialized semantics.
   std::vector<std::uint32_t> drawUniformPayloadLookupHeads;
   std::vector<std::uint32_t> drawUniformPayloadLookupTails;
   std::vector<std::uint32_t> drawUniformPayloadLookupNext;
@@ -869,13 +1039,16 @@ struct ChunkSlot {
   std::vector<DepthResolveDesc> depthResolveRecords;
   std::vector<GenerateMipmapsDesc> generateMipmapsRecords;
   std::vector<PresentCommandRecord> presentRecords;
+  struct DetachedOwnerMarker {
+    DetachedCompatibilityOwnerIdentity identity{};
+    u64 serial = 0;
+    std::size_t retainedBytes = 0;
+    DrawShaderLayoutAllocationIdentity allocationIdentity{};
 
-  // Physical bytes temporarily owned by the out-of-lock resource-owner
-  // release buffer. Reconciliation may inspect every compatibility payload
-  // while this payload is Reclaiming, so retained-byte accounting must remain
-  // exact across the detach/restore window rather than observing a temporary
-  // zero-capacity drawShaderLayouts vector.
-  std::size_t detachedResourceOwnerRetainedBytes = 0;
+    bool active() const noexcept { return serial != 0; }
+  };
+  DetachedOwnerMarker detachedOwnerMarker{};
+  u64 nextDetachedOwnerSerial = 1;
 
   bool commandsEmpty() const noexcept {
     return commandHeaders.empty();
@@ -906,100 +1079,64 @@ struct ChunkSlot {
   // `std::vector` valid but unspecified, and R-BACK-2.105 needs the
   // post-condition to be exact: after this returns, `drawShaderLayouts` is
   // specified empty with capacity 0, and the original allocation is
-  // deterministically owned by the returned vector. `restoreResourceOwnerStorage`
-  // relies on both halves of that.
+  // deterministically owned by the returned token. Its rvalue restore relies
+  // on both halves of that.
   //
   // Surrendering the buffer matters because `drawShaderLayouts` is the only
   // provisioned dimension reclaim detaches. Without the round trip a
   // reclaimed payload would therefore be the one shape a complete physical-
   // capacity coverage predicate can never accept. The caller empties this
   // vector with the mutex released and hands the storage back through
-  // `restoreResourceOwnerStorage` after the relock.
-  std::vector<DrawShaderLayoutContext> detachResourceOwners() {
-    DXMT_ASSERT(detachedResourceOwnerRetainedBytes == 0 &&
+  // `DetachedCompatibilityOwnerToken::restore` after the relock.
+  DetachedCompatibilityOwnerToken detachResourceOwners(
+      DetachedCompatibilityOwnerIdentity identity) {
+    DXMT_ASSERT(!detachedOwnerMarker.active() &&
                 "resource-owner storage may have only one detached owner");
-    detachedResourceOwnerRetainedBytes =
+    if (detachedOwnerMarker.active() || !identity.valid() ||
+        identity.payload != this || nextDetachedOwnerSerial == 0 ||
+        identity.capacityReceipt != admissionCapacityReceipt) {
+      return {};
+    }
+    const std::size_t retainedBytes =
         drawShaderLayouts.capacity() >
                 std::numeric_limits<std::size_t>::max() /
                     sizeof(DrawShaderLayoutContext)
             ? std::numeric_limits<std::size_t>::max()
             : drawShaderLayouts.capacity() * sizeof(DrawShaderLayoutContext);
+    const u64 serial = nextDetachedOwnerSerial++;
+    if (nextDetachedOwnerSerial == 0) {
+      nextDetachedOwnerSerial = 0;
+    }
+    detachedOwnerMarker = {
+        .identity = identity,
+        .serial = serial,
+        .retainedBytes = retainedBytes,
+        .allocationIdentity = {
+            .first = drawShaderLayouts.data(),
+            .capacity = drawShaderLayouts.capacity(),
+        },
+    };
     std::vector<DrawShaderLayoutContext> owners;
     using std::swap;
     swap(drawShaderLayouts, owners);
-    return owners;
-  }
-
-  // Second half of the reclaim round trip (R-BACK-2.105). `owners` must
-  // already have been emptied outside the queue mutex -- that is where the
-  // last-owner destructors ran, at a cost proportional to the number of layout
-  // rows -- and this payload's own vector must still be the specified-empty,
-  // capacity-zero shell `detachResourceOwners()` swapped in. The swap back is
-  // O(1) and frees nothing, so the retained capacity survives reclaim without
-  // any allocation or copy inside the critical section.
-  //
-  // Deliberately a no-op rather than an assertion when either premise fails:
-  // forfeiting the capacity degrades the next use to a full reprovision, which
-  // is exactly the pre-R-BACK-2.105 behaviour and always correct.
-  void restoreResourceOwnerStorage(
-      std::vector<DrawShaderLayoutContext>& owners) noexcept {
-    if (!owners.empty() || !drawShaderLayouts.empty() ||
-        drawShaderLayouts.capacity() != 0) {
-      return;
-    }
-    using std::swap;
-    swap(drawShaderLayouts, owners);
-    detachedResourceOwnerRetainedBytes = 0;
-  }
-
-  // Failure-path counterpart used only after the detached vector and its
-  // allocation have actually been destroyed without a restore. Normal
-  // reclaim always restores; an abandoned round trip poisons the queue.
-  void abandonDetachedResourceOwnerStorage() noexcept {
-    DXMT_ASSERT(drawShaderLayouts.empty() &&
-                drawShaderLayouts.capacity() == 0);
-    detachedResourceOwnerRetainedBytes = 0;
+    return DetachedCompatibilityOwnerToken(
+        *this, identity, serial, retainedBytes, owners);
   }
 
   void clearCommands() {
     publishReason = dxmt9::perf::ChunkPublishReason::Unknown;
     pipelinePrefetchSealed = false;
     pipelinePrefetchCommandCursor = 0;
-    commandHeaders.clear();
-    drawHotStates.clear();
-    drawShaderLayouts.clear();
-    drawDebugSnapshots.clear();
-    drawPsoSubviews.clear();
-    drawUniformFixedPayloads.clear();
-    drawUniformVertexConstants.clear();
-    drawUniformVertexConstantBytes.clear();
-    drawUniformPixelConstants.clear();
-    drawUniformPixelConstantBytes.clear();
-    drawUniformPayloads.clear();
-    drawUniformPayloadLookupHeads.clear();
-    drawUniformPayloadLookupTails.clear();
-    drawUniformPayloadLookupNext.clear();
-    drawUniformVertexConstantsLookupHeads.clear();
-    drawUniformVertexConstantsLookupTails.clear();
-    drawUniformVertexConstantsLookupNext.clear();
-    drawUniformPixelConstantsLookupHeads.clear();
-    drawUniformPixelConstantsLookupTails.clear();
-    drawUniformPixelConstantsLookupNext.clear();
+#define DXMT9_CLEAR_CHUNK_SLOT_VECTOR(                                      \
+    region, plan, storage, element, physical, provision, allocation,        \
+    lookup, owner)                                                          \
+  DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PHYSICAL_##physical(storage.clear();)
+    DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_CLEAR_CHUNK_SLOT_VECTOR)
+#undef DXMT9_CLEAR_CHUNK_SLOT_VECTOR
     lastUniformFixedHandle = {};
     lastUniformVertexConstantsHandle = {};
     lastUniformPixelConstantsHandle = {};
     lastUniformHandle = {};
-    drawParams.clear();
-    drawPayloadArena.clear();
-    drawRunRecords.clear();
-    clearRecords.clear();
-    surfaceCopyRecords.clear();
-    stretchRectRecords.clear();
-    readbackRecords.clear();
-    colorFillRecords.clear();
-    depthResolveRecords.clear();
-    generateMipmapsRecords.clear();
-    presentRecords.clear();
   }
 
   template <typename Record>
@@ -2420,5 +2557,87 @@ struct ChunkSlot {
     return range.offset <= payloadSize && range.size <= payloadSize - range.offset;
   }
 };
+
+inline DetachedCompatibilityOwnerToken::DetachedCompatibilityOwnerToken(
+    ChunkSlot& payload, DetachedCompatibilityOwnerIdentity identity,
+    u64 serial, std::size_t retainedBytes,
+    std::vector<DrawShaderLayoutContext>& owners) noexcept
+    : payload_(&payload), identity_(identity), serial_(serial),
+      retainedBytes_(retainedBytes),
+      allocationIdentity_{owners.data(), owners.capacity()}, active_(true) {
+  using std::swap;
+  swap(owners_, owners);
+}
+
+inline DetachedCompatibilityOwnerToken::DetachedCompatibilityOwnerToken(
+    DetachedCompatibilityOwnerToken&& other) noexcept
+    : payload_(other.payload_), identity_(other.identity_),
+      serial_(other.serial_), retainedBytes_(other.retainedBytes_),
+      allocationIdentity_(other.allocationIdentity_),
+      ownersDestroyed_(other.ownersDestroyed_), active_(other.active_) {
+  using std::swap;
+  swap(owners_, other.owners_);
+  other.disarm();
+}
+
+inline bool DetachedCompatibilityOwnerToken::destroyOwners() noexcept {
+  if (!valid() || ownersDestroyed_) {
+    return false;
+  }
+  owners_.clear();
+  ownersDestroyed_ = true;
+  return DrawShaderLayoutAllocationIdentity{
+             owners_.data(), owners_.capacity()} == allocationIdentity_;
+}
+
+inline DetachedCompatibilityOwnerDisposition
+DetachedCompatibilityOwnerToken::restore(
+    ChunkSlot& payload,
+    const DetachedCompatibilityOwnerIdentity& current) && noexcept {
+  const auto& marker = payload.detachedOwnerMarker;
+  if (!valid() || !ownersDestroyed_ || payload_ != &payload ||
+      identity_ != current || marker.identity != identity_ ||
+      marker.serial != serial_ || marker.retainedBytes != retainedBytes_ ||
+      marker.allocationIdentity != allocationIdentity_ || !owners_.empty() ||
+      DrawShaderLayoutAllocationIdentity{
+          owners_.data(), owners_.capacity()} != allocationIdentity_ ||
+      !payload.drawShaderLayouts.empty() ||
+      payload.drawShaderLayouts.capacity() != 0) {
+    return DetachedCompatibilityOwnerDisposition::Rejected;
+  }
+  using std::swap;
+  swap(payload.drawShaderLayouts, owners_);
+  payload.detachedOwnerMarker = {};
+  disarm();
+  return DetachedCompatibilityOwnerDisposition::Restored;
+}
+
+inline DetachedCompatibilityOwnerDisposition
+DetachedCompatibilityOwnerToken::abandon(ChunkSlot& payload) && noexcept {
+  const auto& marker = payload.detachedOwnerMarker;
+  if (!valid() || payload_ != &payload || marker.identity != identity_ ||
+      marker.serial != serial_ || marker.retainedBytes != retainedBytes_ ||
+      marker.allocationIdentity != allocationIdentity_ ||
+      !payload.drawShaderLayouts.empty() ||
+      payload.drawShaderLayouts.capacity() != 0) {
+    return DetachedCompatibilityOwnerDisposition::Rejected;
+  }
+  std::vector<DrawShaderLayoutContext> abandoned;
+  using std::swap;
+  swap(abandoned, owners_);
+  payload.detachedOwnerMarker = {};
+  disarm();
+  return DetachedCompatibilityOwnerDisposition::Abandoned;
+}
+
+inline void DetachedCompatibilityOwnerToken::disarm() noexcept {
+  payload_ = nullptr;
+  identity_ = {};
+  serial_ = 0;
+  retainedBytes_ = 0;
+  allocationIdentity_ = {};
+  ownersDestroyed_ = false;
+  active_ = false;
+}
 
 }  // namespace dxmt9::core
