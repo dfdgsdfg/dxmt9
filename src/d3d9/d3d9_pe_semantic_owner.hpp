@@ -2543,6 +2543,18 @@ class PeSemanticBatchOwner final {
     return true;
   }
 
+  static bool zeroPaddingTo(std::span<std::byte> destination,
+                            std::size_t& cursor,
+                            std::size_t aligned) noexcept {
+    if (cursor > aligned || aligned > destination.size()) return false;
+    if (cursor != aligned) {
+      std::fill(destination.begin() + cursor,
+                destination.begin() + aligned, std::byte{0});
+      cursor = aligned;
+    }
+    return true;
+  }
+
   template <typename T>
   static bool writeTypedSection(
       std::uint16_t kind, std::span<const T> values,
@@ -2556,9 +2568,10 @@ class PeSemanticBatchOwner final {
     if (!rule || values.size() > rule->maxCount ||
         sizeof(T) != rule->elementSize ||
         !alignEmission(cursor, rule->payloadAlignment, aligned) ||
-        aligned > payload.size() || values.size_bytes() > payload.size() - aligned ||
-        sectionIndex == descs.size()) return false;
-    cursor = aligned;
+        aligned > payload.size() ||
+        values.size_bytes() > payload.size() - aligned ||
+        sectionIndex == descs.size() ||
+        !zeroPaddingTo(payload, cursor, aligned)) return false;
     std::memcpy(payload.data() + cursor, values.data(), values.size_bytes());
     descs[sectionIndex++] = {
         .kind = kind,
@@ -2587,10 +2600,10 @@ class PeSemanticBatchOwner final {
         sizeof(Wire) != rule->elementSize ||
         !alignEmission(cursor, rule->payloadAlignment, aligned) ||
         aligned > payload.size() || wireBytes > payload.size() - aligned ||
-        sectionIndex == descs.size()) {
+        sectionIndex == descs.size() ||
+        !zeroPaddingTo(payload, cursor, aligned)) {
       return false;
     }
-    cursor = aligned;
     for (const auto& source : values) {
       Wire value = source.wire;
       if constexpr (requires(Wire wire) { wire.reserved0; }) {
@@ -2660,8 +2673,8 @@ class PeSemanticBatchOwner final {
     if (!rule || bytes.size() > rule->maxCount ||
         !alignEmission(cursor, rule->payloadAlignment, aligned) ||
         aligned > payload.size() || bytes.size() > payload.size() - aligned ||
-        sectionIndex == descs.size()) return false;
-    cursor = aligned;
+        sectionIndex == descs.size() ||
+        !zeroPaddingTo(payload, cursor, aligned)) return false;
     std::memcpy(payload.data() + cursor, bytes.data(), bytes.size());
     descs[sectionIndex++] = {
         .kind = kind,
@@ -2728,8 +2741,8 @@ class PeSemanticBatchOwner final {
         aligned > payload.size() ||
         sizeof(range) + bytes.count > payload.size() - aligned ||
         sectionIndex == descs.size() || bytes.offset > MaxSemanticBytes ||
-        bytes.count > MaxSemanticBytes - bytes.offset) return false;
-    cursor = aligned;
+        bytes.count > MaxSemanticBytes - bytes.offset ||
+        !zeroPaddingTo(payload, cursor, aligned)) return false;
     if (!writeValue(payload, cursor, range)) return false;
     const auto source = std::span<const std::byte>(
         storage_->constantBytes.data() + bytes.offset, bytes.count);
@@ -3011,14 +3024,14 @@ class PeSemanticBatchOwner final {
     auto payload = std::span<std::byte>(storage_->canonicalPayload).subspan(
         prepared.payloadOffset, prepared.plan.payloadBytes);
     // Payload alignment belongs to the canonical payload role and is emitted
-    // verbatim by both segmented and ExactFixed paths. Initialize the real
-    // inter-record gap explicitly rather than relying on storage construction
-    // or a prior reset to have cleared it.
+    // verbatim by both segmented and ExactFixed paths. Initialize only the
+    // real inter-record gap explicitly; writeRecordPayload clears each
+    // record-local alignment gap as it advances and overwrites every payload
+    // value, so a wholesale per-record fill is unnecessary.
     std::fill(storage_->canonicalPayload.begin() +
                   prepared.emissionPayloadBytes,
               storage_->canonicalPayload.begin() + prepared.payloadOffset,
               std::byte{0});
-    std::fill(payload.begin(), payload.end(), std::byte{0});
     if (!writeRecordPayload(slot, payload, prepared.emissionHandleCount,
                             handles)) {
       return false;

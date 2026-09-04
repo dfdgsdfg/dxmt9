@@ -2,6 +2,7 @@
 #include "d3d9_pe_recorder_transaction.hpp"
 #include "d3d9_pe_recorder.hpp"
 #include "d3d9_pe_semantic_owner_phase_observer.hpp"
+#include "device_c_chunk_validate.hpp"
 
 #include <algorithm>
 #include <array>
@@ -317,6 +318,172 @@ void largeCanonicalPayloadSurvivesRepeatedExactEmission() {
                        secondEmission.wire.begin()),
         "repeated large ExactFixed emission preserves canonical bytes");
   owner.reset();
+}
+
+void exactPaddingWriterAdversarial() {
+  using AdversarialOwner = PeSemanticBatchOwner<4u, 8u, 512u, 8u, 8u>;
+  AdversarialOwner owner;
+  const std::array<D9CCommandChunkWireRenderState, 1u> renderStates{{
+      {.state = 7u, .value = 11u},
+  }};
+  std::array<std::byte, 6u> largeIndex{};
+  for (std::size_t i = 0u; i < largeIndex.size(); ++i)
+    largeIndex[i] = static_cast<std::byte>((i * 13u + 3u) & 0xffu);
+  std::array<std::byte, 127u> largeVertex{};
+  for (std::size_t i = 0u; i < largeVertex.size(); ++i)
+    largeVertex[i] = static_cast<std::byte>((i * 17u + 5u) & 0xffu);
+  const std::array<std::byte, 16u> constants{{
+      std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0x44},
+      std::byte{0x55}, std::byte{0x66}, std::byte{0x77}, std::byte{0x88},
+      std::byte{0x99}, std::byte{0xaa}, std::byte{0xbb}, std::byte{0xcc},
+      std::byte{0xdd}, std::byte{0xee}, std::byte{0xf0}, std::byte{0x01},
+  }};
+  SparseStateInput sparse{};
+  sparse.renderStates = renderStates;
+  sparse.vsFloatConstants = {
+      .startRegister = 3u, .registerCount = 1u, .registerBytes = constants};
+  sparse.upIndexData = largeIndex;
+  sparse.upVertexData = largeVertex;
+
+  auto large = base(PeSemanticProducerKind::DrawIndexedPrimitiveUp, 1u, 1u);
+  large.draw.primitiveType = 4u;
+  large.draw.numVertices = static_cast<std::uint32_t>(largeVertex.size());
+  large.draw.primitiveCount = 1u;
+  large.draw.stride = 1u;
+  large.draw.indexFormat = 101u;
+  large.sparse = sparse;
+  D9CSurface surface;
+  auto small = base(PeSemanticProducerKind::Present, 2u, 2u);
+  small.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0x710u);
+  check(owner.admit(large) && owner.admit(small),
+        "mixed-alignment large-then-small records admit");
+
+  CommandChunkBuilder canonical;
+  check(appendSparseRecord(canonical, large.recordType, large.draw, sparse) &&
+            appendPresent(canonical, small.present, small.surface0),
+        "mixed-alignment canonical records emit");
+  const auto sealed = canonical.seal();
+  std::vector<std::byte> exact(sealed.blob.size() + 32u, std::byte{0xa5});
+  PeSemanticExactFixedEmission exactEmission{};
+  check(sealed.valid() && owner.emitExactFixed(exact, exactEmission) &&
+            exactEmission.wireBytes == sealed.blob.size() &&
+            std::equal(sealed.blob.begin(), sealed.blob.end(),
+                       exactEmission.wire.begin()) &&
+            std::all_of(exact.begin() + exactEmission.wireBytes, exact.end(),
+                        [](std::byte value) { return value == std::byte{0xa5}; }),
+        "prefilled ExactFixed destination preserves canonical bytes and tail");
+
+  D9CCommandChunkWireRecordHeader firstRecord{};
+  D9CCommandChunkWireRecordHeader secondRecord{};
+  const auto& header = exactEmission.transport.header;
+  const auto envelope = dxmt9::d3d9::CommandChunkEnvelope{
+      .version = D9C_COMMAND_CHUNK_VERSION,
+      .recordCount = header.recordCount,
+      .handleCount = header.handleCount,
+      .producerIdentity = exactEmission.transport.producerIdentity};
+  dxmt9::d3d9::ImportedChunkView imported;
+  check(dxmt9::d3d9::validateCommandChunk(exactEmission.wire, envelope,
+                                          &imported)
+            .valid(),
+        "mixed-alignment ExactFixed output passes the production validator");
+  std::memcpy(&firstRecord,
+              exact.data() + header.recordTableOffset,
+              sizeof(firstRecord));
+  std::memcpy(&secondRecord,
+              exact.data() + header.recordTableOffset + sizeof(firstRecord),
+              sizeof(secondRecord));
+  const auto firstEnd = static_cast<std::size_t>(header.payloadArenaOffset) +
+      firstRecord.payloadOffset + firstRecord.payloadSize;
+  const auto secondStart = static_cast<std::size_t>(header.payloadArenaOffset) +
+      secondRecord.payloadOffset;
+  check(firstRecord.payloadSize > secondRecord.payloadSize &&
+            secondStart > firstEnd &&
+        std::all_of(exact.begin() + firstEnd, exact.begin() + secondStart,
+                        [](std::byte value) { return value == std::byte{0}; }),
+        "mixed section alignment emits a zeroed inter-record gap");
+
+  const auto firstImportedRecord = imported.record(0u);
+  const D9CCommandChunkWireSectionDesc* upIndexDesc = nullptr;
+  const D9CCommandChunkWireSectionDesc* upVertexDesc = nullptr;
+  for (const auto& desc : firstImportedRecord.sections) {
+    if (desc.kind == D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA)
+      upIndexDesc = &desc;
+    if (desc.kind == D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA)
+      upVertexDesc = &desc;
+  }
+  check(upIndexDesc != nullptr && upVertexDesc != nullptr &&
+            upIndexDesc->byteSize == largeIndex.size() &&
+            upIndexDesc->byteSize % 4u != 0u &&
+            upVertexDesc->byteSize == largeVertex.size(),
+        "validated indexed UP record exposes both raw data sections");
+  const auto firstPayloadStart = static_cast<std::size_t>(header.payloadArenaOffset) +
+      firstRecord.payloadOffset;
+  const auto indexEnd = firstPayloadStart + upIndexDesc->payloadOffset +
+      upIndexDesc->byteSize;
+  const auto vertexStart = firstPayloadStart + upVertexDesc->payloadOffset;
+  check(vertexStart > indexEnd &&
+            std::all_of(exact.begin() + indexEnd, exact.begin() + vertexStart,
+                        [](std::byte value) { return value == std::byte{0}; }),
+        "validated indexed UP record zeroes the internal index-to-vertex gap");
+
+  std::array<std::byte, 1024u> segmentedRecords{};
+  std::array<std::byte, 1024u> segmentedHandles{};
+  std::array<std::byte, 4096u> segmentedPayload{};
+  std::fill(segmentedRecords.begin(), segmentedRecords.end(), std::byte{0x5a});
+  std::fill(segmentedHandles.begin(), segmentedHandles.end(), std::byte{0x5a});
+  std::fill(segmentedPayload.begin(), segmentedPayload.end(), std::byte{0x5a});
+  PeSemanticSegmentedEmission segmented{};
+  check(owner.emitSegmented(segmentedRecords, segmentedHandles, segmentedPayload,
+                            segmented) &&
+            std::equal(exact.begin() + header.recordTableOffset,
+                       exact.begin() + header.recordTableOffset +
+                           segmented.transport.recordBytes,
+                       segmentedRecords.begin()) &&
+            std::equal(exact.begin() + header.handleTableOffset,
+                       exact.begin() + header.handleTableOffset +
+                           segmented.transport.handleBytes,
+                       segmentedHandles.begin()) &&
+            std::equal(exact.begin() + header.payloadArenaOffset,
+                       exact.begin() + header.payloadArenaOffset +
+                           segmented.transport.payloadBytes,
+                       segmentedPayload.begin()),
+        "ExactFixed and segmented roles preserve identical bytes and order");
+  check(dxmt9::d3d9::validateSegmentedCommandChunk(
+            segmented.transport,
+            std::span<const std::byte>(segmentedRecords.data(),
+                                       segmented.transport.recordBytes),
+            std::span<const std::byte>(segmentedHandles.data(),
+                                       segmented.transport.handleBytes),
+            std::span<const std::byte>(segmentedPayload.data(),
+                                       segmented.transport.payloadBytes),
+            envelope)
+            .valid(),
+        "mixed-alignment segmented output passes the production validator");
+
+  AdversarialOwner rollbackOwner;
+  check(!rollbackOwner.tryAppendOwnedRecord(
+              large, []() noexcept { return false; }) &&
+            rollbackOwner.size() == 0u,
+        "failed settlement rolls back the large canonical record");
+  auto retrySmall = small;
+  retrySmall.sourceOrdinal = 3u;
+  retrySmall.recordOrdinal = 3u;
+  check(rollbackOwner.admit(retrySmall),
+        "small record retries after a rolled-back large record");
+  CommandChunkBuilder retryCanonical;
+  check(appendPresent(retryCanonical, retrySmall.present, retrySmall.surface0),
+        "retry canonical small record emits");
+  const auto retrySealed = retryCanonical.seal();
+  PeSemanticExactFixedEmission retryEmission{};
+  check(retrySealed.valid() && rollbackOwner.emitExactFixed(retryEmission) &&
+            retrySealed.blob.size() == retryEmission.wireBytes &&
+            std::equal(retrySealed.blob.begin(), retrySealed.blob.end(),
+                       retryEmission.wire.begin()),
+        "retry after failure does not expose stale large-record payload bytes");
+  rollbackOwner.reset();
+  retryCanonical.resetAndReleaseRetained();
+  owner.reset();
+  canonical.resetAndReleaseRetained();
 }
 
 void duplicateSurfacePinSmoke() {
@@ -1922,6 +2089,7 @@ int main() {
     classificationAndLifetime();
     partialRectClearMatchesCanonicalBuilder();
     largeCanonicalPayloadSurvivesRepeatedExactEmission();
+    exactPaddingWriterAdversarial();
     collisionCopyOverflowAndRetry();
     emissionSmoke();
     producerIdentityFollowsSettlementAndSourceRange();
