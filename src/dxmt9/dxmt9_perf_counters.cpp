@@ -573,6 +573,34 @@ void countReplaySpanSeparatorFailStop() {
   add(counters().replaySpanSeparatorFailStops);
 }
 
+void recordReplayEmissionPlanObservation(
+    const ReplayEmissionPlanObservation& observation) {
+  if (!enabled()) {
+    return;
+  }
+  auto& c = counters();
+  addEnabledNonZero(c.replayEmissionPlanCalls, observation.planCalls);
+  addEnabledNonZero(c.replayEmissionPlanWorkCalls,
+                    observation.workPlanCalls);
+  addEnabledNonZero(c.replayEmissionPlanChildTimingCalls,
+                    observation.childTimingPlanCalls);
+  addEnabledNonZero(c.replayEmissionPlanRecords, observation.records);
+  addEnabledNonZero(c.replayEmissionPlanTotalNs, observation.totalNs);
+  addEnabledNonZero(c.replayEmissionPlanComputeCalls,
+                    observation.computeCalls);
+  addEnabledNonZero(c.replayEmissionPlanComputeNs, observation.computeNs);
+  addEnabledNonZero(c.replayEmissionPlanApplyCalls, observation.applyCalls);
+  addEnabledNonZero(c.replayEmissionPlanApplyNs, observation.applyNs);
+  addEnabledNonZero(c.replayEmissionPlanApplyFailures,
+                    observation.applyFailures);
+  addEnabledNonZero(c.replayEmissionPlanCapacityDimensionCheckVisits,
+                    observation.capacityDimensionCheckVisits);
+  addEnabledNonZero(c.replayEmissionPlanCapacityDimensionAddVisits,
+                    observation.capacityDimensionAddVisits);
+  addEnabledNonZero(c.replayEmissionPlanCapacityDimensionNonzeroVisits,
+                    observation.capacityDimensionNonzeroVisits);
+}
+
 void countCompatibilityDrawBatchPublished(std::uint64_t draws) {
   if (!enabled()) return;
   add(counters().compatDrawBatchesPublished);

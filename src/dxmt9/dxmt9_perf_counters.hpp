@@ -334,6 +334,33 @@ void countReplaySpanSameRawRejected();
 void countReplaySpanPlanRejected();
 void countReplaySpanSeparatorFailStop();
 
+// Heavy opt-in source-planner attribution. The planner keeps this observation
+// in a file-local TLS aggregate and publishes it once per raw source, so the
+// normal path has no per-record atomic writes. The split is enabled only when
+// both DXMT_PERF_COUNTERS and DXMT9_PERF_REPLAY_EMISSION_PLAN_SPLIT are set.
+// Per-record work-shape counters and clocks require the additional
+// DXMT9_PERF_RECORD_CAPACITY_DELTA_WORK and
+// DXMT9_PERF_RECORD_CAPACITY_DELTA_TIMING gates; none of these diagnostic
+// runs is an FPS promotion sample.
+struct ReplayEmissionPlanObservation {
+  std::uint64_t planCalls = 0;
+  std::uint64_t workPlanCalls = 0;
+  std::uint64_t childTimingPlanCalls = 0;
+  std::uint64_t records = 0;
+  std::uint64_t totalNs = 0;
+  std::uint64_t computeCalls = 0;
+  std::uint64_t computeNs = 0;
+  std::uint64_t applyCalls = 0;
+  std::uint64_t applyNs = 0;
+  std::uint64_t applyFailures = 0;
+  std::uint64_t capacityDimensionCheckVisits = 0;
+  std::uint64_t capacityDimensionAddVisits = 0;
+  std::uint64_t capacityDimensionNonzeroVisits = 0;
+};
+
+void recordReplayEmissionPlanObservation(
+    const ReplayEmissionPlanObservation& observation);
+
 // Compatibility-lane draw-run island batching (see
 // include/dxmt9/core_compat_draw_batch.hpp). `published` counts queue
 // acquisitions: one per island, however many draws it folded.

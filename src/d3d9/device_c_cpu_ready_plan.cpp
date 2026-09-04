@@ -3,12 +3,89 @@
 // Only this translation unit needs the shared derived-dimension helper; the
 // planner header must not pull the whole direct-continuation surface in.
 #include "../dxmt9/dxmt9_direct_continuation.hpp"
+#include "../dxmt9/dxmt9_perf_counters.hpp"
 
+#include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 
 namespace dxmt9::d3d9 {
 namespace {
+
+struct ReplayEmissionPlanDiagnosticState {
+  perf::ReplayEmissionPlanObservation observation{};
+  bool timeChildren = false;
+};
+
+thread_local ReplayEmissionPlanDiagnosticState*
+    gReplayEmissionPlanDiagnostic = nullptr;
+
+bool environmentFlagSet(const char* name) noexcept {
+  const char* env = std::getenv(name);
+  return env && env[0] != '\0' && env[0] != '0';
+}
+
+// Namespace-scope initialization happens when the unix provider is loaded,
+// after the launcher has fixed its environment. Keeping these as immutable
+// bytes avoids both an out-of-line gate call and a function-local static guard
+// on every raw source in the disabled production path.
+const bool kReplayEmissionPlanSplitEnabled =
+    environmentFlagSet("DXMT_PERF_COUNTERS") &&
+    environmentFlagSet("DXMT9_PERF_REPLAY_EMISSION_PLAN_SPLIT");
+const bool kRecordCapacityDeltaWorkEnabled =
+    kReplayEmissionPlanSplitEnabled &&
+    environmentFlagSet("DXMT9_PERF_RECORD_CAPACITY_DELTA_WORK");
+const bool kRecordCapacityDeltaTimingEnabled =
+    kRecordCapacityDeltaWorkEnabled &&
+    environmentFlagSet("DXMT9_PERF_RECORD_CAPACITY_DELTA_TIMING");
+
+class ReplayEmissionPlanDiagnosticActivation {
+ public:
+  explicit ReplayEmissionPlanDiagnosticActivation(
+      ReplayEmissionPlanDiagnosticState& state) noexcept
+      : previous_(gReplayEmissionPlanDiagnostic) {
+    gReplayEmissionPlanDiagnostic = &state;
+  }
+
+  ReplayEmissionPlanDiagnosticActivation(
+      const ReplayEmissionPlanDiagnosticActivation&) = delete;
+  ReplayEmissionPlanDiagnosticActivation& operator=(
+      const ReplayEmissionPlanDiagnosticActivation&) = delete;
+
+  ~ReplayEmissionPlanDiagnosticActivation() {
+    gReplayEmissionPlanDiagnostic = previous_;
+  }
+
+ private:
+  ReplayEmissionPlanDiagnosticState* previous_;
+};
+
+class ReplayEmissionPlanDiagnosticScope {
+ public:
+  ReplayEmissionPlanDiagnosticScope() noexcept
+      : start_(std::chrono::steady_clock::now()) {
+    ++gReplayEmissionPlanDiagnostic->observation.planCalls;
+  }
+
+  ReplayEmissionPlanDiagnosticScope(
+      const ReplayEmissionPlanDiagnosticScope&) = delete;
+  ReplayEmissionPlanDiagnosticScope& operator=(
+      const ReplayEmissionPlanDiagnosticScope&) = delete;
+
+  ~ReplayEmissionPlanDiagnosticScope() {
+    const auto elapsed = std::chrono::steady_clock::now() - start_;
+    gReplayEmissionPlanDiagnostic->observation.totalNs +=
+        static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed)
+                .count());
+    perf::recordReplayEmissionPlanObservation(
+        gReplayEmissionPlanDiagnostic->observation);
+  }
+
+ private:
+  std::chrono::steady_clock::time_point start_;
+};
 
 bool addCount(std::size_t& target, std::size_t value) noexcept {
   if (value > std::numeric_limits<std::uint32_t>::max() - target) {
@@ -338,17 +415,66 @@ RecordCapacityDelta computeRecordCapacityDeltaImpl(
   return delta;
 }
 
+template <bool Observe>
+RecordCapacityDelta computeRecordCapacityDeltaForPlan(
+    const ImportedRecordView& record) noexcept {
+  if constexpr (!Observe) {
+    return computeRecordCapacityDeltaImpl(record);
+  } else {
+    auto& observation = gReplayEmissionPlanDiagnostic->observation;
+    ++observation.computeCalls;
+    if (!gReplayEmissionPlanDiagnostic->timeChildren) {
+      return computeRecordCapacityDeltaImpl(record);
+    }
+    const auto start = std::chrono::steady_clock::now();
+    auto delta = computeRecordCapacityDeltaImpl(record);
+    observation.computeNs += static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - start)
+            .count());
+    return delta;
+  }
+}
+
+template <bool Observe>
 bool applyRecordCapacityDeltaImpl(core::SourcePayloadCapacity& target,
                                   std::size_t& drawCount,
                                   const RecordCapacityDelta& delta) noexcept {
+  std::chrono::steady_clock::time_point start{};
+  bool timed = false;
+  if constexpr (Observe) {
+    ++gReplayEmissionPlanDiagnostic->observation.applyCalls;
+    timed = gReplayEmissionPlanDiagnostic->timeChildren;
+    if (timed) {
+      start = std::chrono::steady_clock::now();
+    }
+  }
+  const auto finish = [&](bool success) noexcept {
+    if constexpr (Observe) {
+      auto& observation = gReplayEmissionPlanDiagnostic->observation;
+      if (timed) {
+        observation.applyNs += static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - start)
+                .count());
+      }
+      if (!success) {
+        ++observation.applyFailures;
+      }
+    }
+    return success;
+  };
+
   if (delta.result != RecordCapacityDeltaResult::StateOnly &&
       delta.result != RecordCapacityDeltaResult::GpuProducing) {
-    return false;
+    return finish(false);
   }
 
   constexpr auto kMax =
       static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max());
-  if (drawCount > kMax || delta.drawCount > kMax - drawCount) return false;
+  if (drawCount > kMax || delta.drawCount > kMax - drawCount) {
+    return finish(false);
+  }
 
   // Check every dimension before mutating the destination. This retains the
   // old accumulator's checked uint32 contract. Both production destinations
@@ -357,19 +483,35 @@ bool applyRecordCapacityDeltaImpl(core::SourcePayloadCapacity& target,
 #define DXMT9_CHECK_RECORD_CAPACITY_DELTA(                                \
     region, plan, storage, element, physical, provision, allocation,       \
     lookup, owner)                                                         \
-  if (target.plan > kMax || delta.capacity.plan > kMax - target.plan)       \
-    return false;
+  do {                                                                      \
+    if constexpr (Observe) {                                                \
+      ++gReplayEmissionPlanDiagnostic->observation                            \
+            .capacityDimensionCheckVisits;                                  \
+    }                                                                         \
+    if (target.plan > kMax || delta.capacity.plan > kMax - target.plan) {   \
+      return finish(false);                                                  \
+    }                                                                         \
+  } while (false);
   DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_CHECK_RECORD_CAPACITY_DELTA)
 #undef DXMT9_CHECK_RECORD_CAPACITY_DELTA
 
 #define DXMT9_ADD_RECORD_CAPACITY_DELTA(                                  \
     region, plan, storage, element, physical, provision, allocation,       \
     lookup, owner)                                                         \
-  target.plan += delta.capacity.plan;
+  do {                                                                      \
+    if constexpr (Observe) {                                                \
+      auto& observation = gReplayEmissionPlanDiagnostic->observation;       \
+      ++observation.capacityDimensionAddVisits;                             \
+      if (delta.capacity.plan != 0) {                                       \
+        ++observation.capacityDimensionNonzeroVisits;                       \
+      }                                                                     \
+    }                                                                         \
+    target.plan += delta.capacity.plan;                                     \
+  } while (false);
   DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_ADD_RECORD_CAPACITY_DELTA)
 #undef DXMT9_ADD_RECORD_CAPACITY_DELTA
   drawCount += delta.drawCount;
-  return true;
+  return finish(true);
 }
 
 bool addDerivedDrawCapacity(core::SourcePayloadCapacity& capacity,
@@ -694,10 +836,11 @@ RecordCapacityDelta computeRecordCapacityDelta(
 bool applyRecordCapacityDelta(core::SourcePayloadCapacity& target,
                               std::size_t& drawCount,
                               const RecordCapacityDelta& delta) noexcept {
-  return applyRecordCapacityDeltaImpl(target, drawCount, delta);
+  return applyRecordCapacityDeltaImpl<false>(target, drawCount, delta);
 }
 
-ReplayEmissionPlan planReplayEmission(
+template <bool Observe>
+ReplayEmissionPlan planReplayEmissionImpl(
     const ImportedChunkView& imported, RawOrdinal rawOrdinal,
     std::size_t pageSize) noexcept {
   if (rawOrdinal == 0 || pageSize == 0 ||
@@ -834,7 +977,7 @@ ReplayEmissionPlan planReplayEmission(
       // Decode and measure this record once. The same checked delta is then
       // applied to both accumulators; before this, each application parsed
       // draw headers/sections independently and could drift on a new field.
-      const auto delta = computeRecordCapacityDelta(record);
+      const auto delta = computeRecordCapacityDeltaForPlan<Observe>(record);
       switch (delta.result) {
       case DirectRecordResult::Invalid:
         return emissionReject(rawOrdinal, EmissionPlanReason::MalformedView);
@@ -846,9 +989,10 @@ ReplayEmissionPlan planReplayEmission(
       case DirectRecordResult::GpuProducing:
         break;
       }
-      if (!applyRecordCapacityDelta(pendingCapacity, pendingDrawCount,
-                                    delta) ||
-          !applyRecordCapacityDelta(aggregate, aggregateDrawCount, delta)) {
+      if (!applyRecordCapacityDeltaImpl<Observe>(pendingCapacity,
+                                                 pendingDrawCount, delta) ||
+          !applyRecordCapacityDeltaImpl<Observe>(aggregate, aggregateDrawCount,
+                                                 delta)) {
         return emissionReject(rawOrdinal, EmissionPlanReason::Overflow);
       }
       break;
@@ -859,7 +1003,7 @@ ReplayEmissionPlan planReplayEmission(
       }
       core::SourcePayloadCapacity locator{};
       std::size_t locatorDraws = 0;
-      const auto delta = computeRecordCapacityDelta(record);
+      const auto delta = computeRecordCapacityDeltaForPlan<Observe>(record);
       if (delta.result != DirectRecordResult::GpuProducing ||
           delta.drawCount != 0 || locatorDraws != 0) {
         // Returning here rather than continuing keeps the partition and the
@@ -871,8 +1015,10 @@ ReplayEmissionPlan planReplayEmission(
                 ? EmissionPlanReason::Overflow
                 : EmissionPlanReason::MalformedView);
       }
-      if (!applyRecordCapacityDelta(locator, locatorDraws, delta) ||
-          !applyRecordCapacityDelta(aggregate, aggregateDrawCount, delta)) {
+      if (!applyRecordCapacityDeltaImpl<Observe>(locator, locatorDraws,
+                                                 delta) ||
+          !applyRecordCapacityDeltaImpl<Observe>(aggregate, aggregateDrawCount,
+                                                 delta)) {
         // A checked application can overflow an existing accumulator even
         // though the record-local delta itself was valid. Preserve the old
         // overflow fallback in that case.
@@ -1010,6 +1156,47 @@ ReplayEmissionPlan planReplayEmission(
   plan.aggregatePlannedBytes = layout->usedBytes;
   plan.leaseBlock = EmissionLeaseBlock::None;
   return plan;
+}
+
+namespace {
+
+ReplayEmissionPlan planReplayEmissionObserved(
+    const ImportedChunkView& imported, RawOrdinal rawOrdinal,
+    std::size_t pageSize) noexcept __attribute__((noinline, cold));
+
+ReplayEmissionPlan planReplayEmissionObserved(
+    const ImportedChunkView& imported, RawOrdinal rawOrdinal,
+    std::size_t pageSize) noexcept {
+  ReplayEmissionPlanDiagnosticState diagnostic{};
+  diagnostic.observation.records = imported.records.size();
+  const bool observeChildren = kRecordCapacityDeltaWorkEnabled;
+  diagnostic.observation.workPlanCalls = observeChildren ? 1u : 0u;
+  diagnostic.timeChildren = kRecordCapacityDeltaTimingEnabled;
+  diagnostic.observation.childTimingPlanCalls =
+      diagnostic.timeChildren ? 1u : 0u;
+  ReplayEmissionPlanDiagnosticActivation activation(diagnostic);
+  ReplayEmissionPlanDiagnosticScope scope;
+  const auto plan = observeChildren
+      ? planReplayEmissionImpl<true>(imported, rawOrdinal, pageSize)
+      : planReplayEmissionImpl<false>(imported, rawOrdinal, pageSize);
+  // `scope` owns totalNs and publishes after this function returns. Keep the
+  // plan named so the scope remains alive through all planner work.
+  return plan;
+}
+
+}  // namespace
+
+ReplayEmissionPlan planReplayEmission(
+    const ImportedChunkView& imported, RawOrdinal rawOrdinal,
+    std::size_t pageSize) noexcept {
+  // Keep the production path free of diagnostic state, clocks, and per-record
+  // branches. The enabled path is intentionally a separate template
+  // instantiation so the compiler can remove all observer code from the
+  // normal planner.
+  if (!kReplayEmissionPlanSplitEnabled) {
+    return planReplayEmissionImpl<false>(imported, rawOrdinal, pageSize);
+  }
+  return planReplayEmissionObserved(imported, rawOrdinal, pageSize);
 }
 
 DirectChunkSlotReplayDisposition emissionPlanDisposition(

@@ -143,6 +143,21 @@ struct Counters {
   std::atomic<std::uint64_t> replaySpanSameRawRejected{0};
   std::atomic<std::uint64_t> replaySpanPlanRejected{0};
   std::atomic<std::uint64_t> replaySpanSeparatorFailStops{0};
+  // Heavy opt-in planReplayEmission / RecordCapacityDelta attribution. These
+  // are published once per raw source from a producer-local aggregate.
+  std::atomic<std::uint64_t> replayEmissionPlanCalls{0};
+  std::atomic<std::uint64_t> replayEmissionPlanWorkCalls{0};
+  std::atomic<std::uint64_t> replayEmissionPlanChildTimingCalls{0};
+  std::atomic<std::uint64_t> replayEmissionPlanRecords{0};
+  std::atomic<std::uint64_t> replayEmissionPlanTotalNs{0};
+  std::atomic<std::uint64_t> replayEmissionPlanComputeCalls{0};
+  std::atomic<std::uint64_t> replayEmissionPlanComputeNs{0};
+  std::atomic<std::uint64_t> replayEmissionPlanApplyCalls{0};
+  std::atomic<std::uint64_t> replayEmissionPlanApplyNs{0};
+  std::atomic<std::uint64_t> replayEmissionPlanApplyFailures{0};
+  std::atomic<std::uint64_t> replayEmissionPlanCapacityDimensionCheckVisits{0};
+  std::atomic<std::uint64_t> replayEmissionPlanCapacityDimensionAddVisits{0};
+  std::atomic<std::uint64_t> replayEmissionPlanCapacityDimensionNonzeroVisits{0};
   std::atomic<std::uint64_t> compatDrawBatchesPublished{0};
   std::atomic<std::uint64_t> compatDrawBatchDraws{0};
   std::atomic<std::uint64_t> compatDrawBatchMultiDrawBatches{0};
