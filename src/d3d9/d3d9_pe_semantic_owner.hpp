@@ -12,6 +12,7 @@
 #include "d3d9_pe_producer_views.hpp"
 #include "d3d9_pe_retainer.hpp"
 #include "d3d9_pe_semantic_tokens.hpp"
+#include "d3d9_pe_semantic_owner_phase_observer.hpp"
 #include "dxmt9/copy_materialization_ledger.hpp"
 
 #include <algorithm>
@@ -139,6 +140,66 @@ struct PeSemanticAdmissionPlan {
 };
 
 static_assert(std::is_trivially_copyable_v<PeSemanticAdmissionPlan>);
+
+inline constexpr std::size_t kPeSemanticMaxRecordHandles = 64u;
+
+// The bounded record-local handle order is both an emission input and a
+// prepared admission witness.  Keeping this as the existing emission context
+// avoids a second identity representation while making the witness
+// pointer-free and trivially copyable.
+struct PeSemanticEmissionHandleContext {
+  std::array<D9CWireObjectIdentity, kPeSemanticMaxRecordHandles> identities{};
+  std::size_t count = 0u;
+
+  // Planning overwrites every identity below the active frontier through
+  // appendKnownUnique(). Reset only that frontier: inactive identities are
+  // never consumed, so clearing this roughly 1 KiB array would duplicate the
+  // prepared-record value initialization on every admission.
+  void resetFrontier() noexcept { count = 0u; }
+
+  bool add(const D9CWireObjectIdentity& identity) noexcept {
+    for (std::size_t i = 0u; i < count; ++i) {
+      if (identities[i].kind == identity.kind &&
+          identities[i].generation == identity.generation &&
+          identities[i].objectId == identity.objectId) {
+        return true;
+      }
+    }
+    if (count == identities.size()) return false;
+    identities[count++] = identity;
+    return true;
+  }
+
+  // The caller may use this only after PeSemanticIdentitySet::add() has
+  // reported `newlyWireVisible`: that proof establishes that this identity is
+  // not already present in the wire witness.  Keep this path bounds-only so
+  // admission does not linearly deduplicate a second time; a full witness
+  // fails closed without writing past its fixed storage.
+  bool appendKnownUnique(const D9CWireObjectIdentity& identity) noexcept {
+    if (count >= identities.size()) return false;
+    identities[count++] = identity;
+    return true;
+  }
+
+  bool indexOf(const D9CWireObjectIdentity& identity,
+               std::size_t& out) const noexcept {
+    for (std::size_t i = 0u; i < count; ++i) {
+      if (identities[i].kind == identity.kind &&
+          identities[i].generation == identity.generation &&
+          identities[i].objectId == identity.objectId) {
+        out = i;
+        return true;
+      }
+    }
+    return false;
+  }
+};
+
+static_assert(std::is_trivially_copyable_v<PeSemanticEmissionHandleContext>);
+static_assert(sizeof(PeSemanticEmissionHandleContext) <=
+              sizeof(D9CWireObjectIdentity) * kPeSemanticMaxRecordHandles +
+                  std::max(sizeof(std::size_t),
+                           alignof(D9CWireObjectIdentity)));
 
 // Per-attempt facts that depend on the destination chunk.  The much larger
 // PeSemanticRecordInput remains staged once and immutable; normal admission
@@ -269,11 +330,14 @@ struct PeSemanticIdentitySet {
   std::size_t count = 0u;
   std::size_t wireCount = 0u;
 
-  // `inserted` reports a newly seen identity that owns an object, so a caller
-  // applies its per-identity retention work exactly once per record.
+  // `newlyRetained` reports a newly seen identity that owns an object, while
+  // `newlyWireVisible` reports the first encounter that makes it part of the
+  // record-local wire table.  The latter is separate because a direct pin is
+  // retained before a later sparse binding can promote the same identity.
   bool add(const PeWireObjectRef& ref, std::uint32_t kind, bool wire,
-           bool& inserted) noexcept {
-    inserted = false;
+           bool& newlyRetained, bool& newlyWireVisible) noexcept {
+    newlyRetained = false;
+    newlyWireVisible = false;
     if (!ref.object) {
       return ref.identity.kind == 0u && ref.identity.generation == 0u &&
              ref.identity.objectId == 0u;
@@ -289,6 +353,7 @@ struct PeSemanticIdentitySet {
         if (wire && !wireVisible[i]) {
           wireVisible[i] = true;
           ++wireCount;
+          newlyWireVisible = true;
         }
         return true;
       }
@@ -297,9 +362,12 @@ struct PeSemanticIdentitySet {
     values[count] = ref.identity;
     objects[count] = ref.object;
     wireVisible[count] = wire;
-    if (wire) ++wireCount;
+    if (wire) {
+      ++wireCount;
+      newlyWireVisible = true;
+    }
     ++count;
-    inserted = true;
+    newlyRetained = true;
     return true;
   }
 };
@@ -491,8 +559,10 @@ template <PeSemanticRecordInputLike Input, typename OnUniqueRetained>
                                          const PeWireObjectRef&, std::size_t>
 inline bool planPeSemanticAdmissionWith(
     const Input& input, PeSemanticAdmissionPlan& out,
-    OnUniqueRetained&& onUniqueRetained) noexcept {
+    OnUniqueRetained&& onUniqueRetained,
+    PeSemanticEmissionHandleContext* wireWitness = nullptr) noexcept {
   out = {};
+  if (wireWitness != nullptr) wireWitness->resetFrontier();
   if (!validPeSemanticInput(input)) return false;
   const auto& staged = stagedPeSemanticInput(input);
   out.recordType = peSemanticRecordType(input);
@@ -502,9 +572,12 @@ inline bool planPeSemanticAdmissionWith(
   auto&& observe = onUniqueRetained;
   const auto retained = [&](const PeWireObjectRef& ref, std::uint32_t kind,
                             std::size_t pinKind, bool wire) noexcept {
-    bool inserted = false;
-    if (!pins.add(ref, kind, wire, inserted)) return false;
-    if (!inserted) return true;
+    bool newlyRetained = false;
+    bool newlyWireVisible = false;
+    if (!pins.add(ref, kind, wire, newlyRetained, newlyWireVisible)) return false;
+    if (newlyWireVisible && wireWitness != nullptr &&
+        !wireWitness->appendKnownUnique(ref.identity)) return false;
+    if (!newlyRetained) return true;
     if (out.uniquePinCounts[pinKind] ==
         std::numeric_limits<std::uint32_t>::max()) return false;
     ++out.uniquePinCounts[pinKind];
@@ -657,6 +730,9 @@ enum class PeSemanticAdmissionOutcome : std::uint8_t {
 
 struct PeSemanticPreparedRecord {
   PeSemanticAdmissionPlan plan{};
+  // Exact first-seen wire identity/order produced by the admission walk. It
+  // borrows nothing and is consumed only by the private append transaction.
+  PeSemanticEmissionHandleContext wireHandles{};
   // Owner-qualified retention delta: how many novel typed pins per kind this
   // record adds beyond the pins the destination chunk already holds.
   std::array<std::uint32_t, 6u> retentionDeltas{};
@@ -906,6 +982,7 @@ class PeSemanticBatchOwner final {
     None,
     Unavailable,
     Capacity,
+    Malformed,
     Header,
     Fixed,
     DirectPins,
@@ -927,6 +1004,7 @@ class PeSemanticBatchOwner final {
   using Storage = PeSemanticBatchStorage<MaxRecords, MaxPins,
                                          MaxSemanticBytes, MaxRects,
                                          MaxSparseValues>;
+  using EmissionHandleContext = PeSemanticEmissionHandleContext;
   static constexpr std::size_t maxRecords = MaxRecords;
   static constexpr std::size_t maxPins = MaxPins;
   static constexpr std::size_t maxSemanticBytes = MaxSemanticBytes;
@@ -957,6 +1035,13 @@ class PeSemanticBatchOwner final {
   bool constructionSucceeded() const noexcept { return ready_; }
   AdmissionFailure lastAdmissionFailure() const noexcept {
     return lastAdmissionFailure_;
+  }
+
+  // Set once, after the cold diagnostics owner has been constructed.  The
+  // pointer is nullable and is not consulted unless the explicit phase
+  // observer is enabled, leaving the default owner transaction unchanged.
+  void setPhaseObserver(PeSemanticOwnerPhaseObserver* observer) noexcept {
+    phaseObserver_ = observer;
   }
 
  private:
@@ -1089,11 +1174,12 @@ class PeSemanticBatchOwner final {
     witness.constantProducer = isPeSemanticConstantProducer(staged.producer);
     witness.upProducer = isPeSemanticUpProducer(staged.producer);
     if (!planPeSemanticAdmissionWith(
-            input, witness.plan,
-            [&](const PeWireObjectRef& ref, std::size_t pinKind) noexcept {
+        input, witness.plan,
+        [&](const PeWireObjectRef& ref, std::size_t pinKind) noexcept {
               return accumulateRetentionDelta(ref, pinKind,
                                               witness.retentionDeltas);
-            })) {
+            },
+        &witness.wireHandles)) {
       return PeSemanticAdmissionOutcome::Malformed;
     }
     witness.recordCount = recordCount_;
@@ -1114,11 +1200,28 @@ class PeSemanticBatchOwner final {
  private:
   // Owner-local implementation. The pure facts and qualified deltas never
   // leave tryAppendOwnedRecord(), so there is no caller-visible TOCTOU seam.
-  template <PeSemanticRecordInputLike Input, typename Commit>
+  template <bool Observe, PeSemanticRecordInputLike Input, typename Commit>
     requires std::is_nothrow_invocable_r_v<bool, Commit&>
   bool appendPreparedRecord(const Input& input,
                             const PeSemanticPreparedRecord& prepared,
                             Commit&& commit) noexcept {
+    const auto runPhase = [&](PeSemanticOwnerPhase phase,
+                              auto&& operation) noexcept {
+      if constexpr (Observe) {
+        auto scope = phaseObserver_->child(phase);
+        return operation();
+      } else {
+        return operation();
+      }
+    };
+    const auto rollbackPhase = [&](const StateCheckpoint& checkpoint) noexcept {
+      if constexpr (Observe) {
+        auto scope = phaseObserver_->child(PeSemanticOwnerPhase::Rollback);
+        rollback(checkpoint);
+      } else {
+        rollback(checkpoint);
+      }
+    };
     return recordAdmission([&]() noexcept {
       lastAdmissionFailure_ = AdmissionFailure::None;
       if (!ready_) {
@@ -1141,46 +1244,54 @@ class PeSemanticBatchOwner final {
       retainedCheckpoint_ = checkpoint.retained;
       if (!validAdmissionHeader(input, prepared)) {
         lastAdmissionFailure_ = AdmissionFailure::Header;
-        rollback(checkpoint);
+        rollbackPhase(checkpoint);
         return false;
       }
-      if (!copyFixedValues(input)) {
-        lastAdmissionFailure_ = AdmissionFailure::Fixed;
-        rollback(checkpoint);
+      if (!runPhase(PeSemanticOwnerPhase::FixedDirectPinCopy,
+                    [&]() noexcept {
+                      if (!copyFixedValues(input)) {
+                        lastAdmissionFailure_ = AdmissionFailure::Fixed;
+                        return false;
+                      }
+                      if (!copyDirectPins(input, storage_->records[recordCount_])) {
+                        lastAdmissionFailure_ = AdmissionFailure::DirectPins;
+                        return false;
+                      }
+                      return true;
+                    })) {
+        rollbackPhase(checkpoint);
         return false;
       }
       auto& slot = storage_->records[recordCount_];
-      if (!copyDirectPins(input, slot)) {
-        lastAdmissionFailure_ = AdmissionFailure::DirectPins;
-        rollback(checkpoint);
-        return false;
-      }
-      if (!copySparse(input, slot)) {
+      if (!runPhase(PeSemanticOwnerPhase::SparseVariableCopy,
+                    [&]() noexcept {
+                      if (!copySparse(input, slot)) return false;
+                      if (!copyVariablePayloads(input, slot)) {
+                        lastAdmissionFailure_ = AdmissionFailure::VariablePayload;
+                        return false;
+                      }
+                      return true;
+                    })) {
         if (lastAdmissionFailure_ == AdmissionFailure::None)
           lastAdmissionFailure_ = AdmissionFailure::Sparse;
-        rollback(checkpoint);
+        rollbackPhase(checkpoint);
         return false;
       }
-      if (!copyVariablePayloads(input, slot)) {
-        lastAdmissionFailure_ = AdmissionFailure::VariablePayload;
-        rollback(checkpoint);
-        return false;
-      }
-      if (!materializeCanonicalRecord(slot, prepared)) {
+      if (!runPhase(PeSemanticOwnerPhase::CanonicalMaterializationMetrics,
+                    [&]() noexcept {
+                      return materializeCanonicalRecord(slot, prepared) &&
+                             cacheEmissionMetrics(prepared);
+                    })) {
         lastAdmissionFailure_ = AdmissionFailure::EmissionMetrics;
-        rollback(checkpoint);
-        return false;
-      }
-      if (!cacheEmissionMetrics(prepared)) {
-        lastAdmissionFailure_ = AdmissionFailure::EmissionMetrics;
-        rollback(checkpoint);
+        rollbackPhase(checkpoint);
         return false;
       }
       ++recordCount_;
       auto&& callback = commit;
-      if (!callback()) {
+      if (!runPhase(PeSemanticOwnerPhase::PendingDeltaSettlement,
+                    [&]() noexcept { return callback(); })) {
         lastAdmissionFailure_ = AdmissionFailure::Settlement;
-        rollback(checkpoint);
+        rollbackPhase(checkpoint);
         return false;
       }
       lastSourceOrdinal_ = peSemanticSourceOrdinal(input);
@@ -1197,6 +1308,17 @@ class PeSemanticBatchOwner final {
     requires std::is_nothrow_invocable_r_v<bool, Commit&>
   bool tryAppendOwnedRecord(const Input& input,
                             Commit&& commit) noexcept {
+    if (phaseObserver_) {
+      return tryAppendOwnedRecordObserved(input, std::forward<Commit>(commit));
+    }
+    return tryAppendOwnedRecordUnobserved(input, std::forward<Commit>(commit));
+  }
+
+ private:
+  template <PeSemanticRecordInputLike Input, typename Commit>
+    requires std::is_nothrow_invocable_r_v<bool, Commit&>
+  bool tryAppendOwnedRecordUnobserved(const Input& input,
+                                      Commit&& commit) noexcept {
     PeSemanticPreparedRecord prepared{};
     switch (prepareAdmission(input, prepared)) {
       case PeSemanticAdmissionOutcome::Admissible:
@@ -1205,16 +1327,82 @@ class PeSemanticBatchOwner final {
         lastAdmissionFailure_ = AdmissionFailure::Unavailable;
         return false;
       case PeSemanticAdmissionOutcome::Malformed:
-        lastAdmissionFailure_ = AdmissionFailure::Header;
+        lastAdmissionFailure_ = AdmissionFailure::Malformed;
         return false;
       case PeSemanticAdmissionOutcome::Capacity:
         lastAdmissionFailure_ = AdmissionFailure::Capacity;
         return false;
     }
-    return appendPreparedRecord(input, prepared,
-                                std::forward<Commit>(commit));
+    return appendPreparedRecord<false>(input, prepared,
+                                       std::forward<Commit>(commit));
   }
 
+  static PeSemanticOwnerOutcome phaseOutcome(AdmissionFailure failure) noexcept {
+    switch (failure) {
+    case AdmissionFailure::Unavailable: return PeSemanticOwnerOutcome::Unavailable;
+    case AdmissionFailure::Capacity: return PeSemanticOwnerOutcome::Capacity;
+    case AdmissionFailure::Malformed: return PeSemanticOwnerOutcome::Malformed;
+    case AdmissionFailure::Header: return PeSemanticOwnerOutcome::Header;
+    case AdmissionFailure::Fixed: return PeSemanticOwnerOutcome::Fixed;
+    case AdmissionFailure::DirectPins: return PeSemanticOwnerOutcome::DirectPins;
+    case AdmissionFailure::Sparse:
+    case AdmissionFailure::SparseSchema:
+    case AdmissionFailure::SparseArena:
+    case AdmissionFailure::SparseTextures:
+    case AdmissionFailure::SparseStreams:
+    case AdmissionFailure::SparseShaders:
+    case AdmissionFailure::SparseVertexInputs:
+    case AdmissionFailure::SparseIndexBuffers:
+    case AdmissionFailure::SparseRenderTargets:
+    case AdmissionFailure::SparseDepthStencils:
+      return PeSemanticOwnerOutcome::Sparse;
+    case AdmissionFailure::VariablePayload:
+      return PeSemanticOwnerOutcome::VariablePayload;
+    case AdmissionFailure::EmissionMetrics:
+      return PeSemanticOwnerOutcome::EmissionMetrics;
+    case AdmissionFailure::Settlement:
+      return PeSemanticOwnerOutcome::Settlement;
+    case AdmissionFailure::None: break;
+    }
+    return PeSemanticOwnerOutcome::Other;
+  }
+
+  template <PeSemanticRecordInputLike Input, typename Commit>
+    requires std::is_nothrow_invocable_r_v<bool, Commit&>
+  bool tryAppendOwnedRecordObserved(const Input& input,
+                                    Commit&& commit) noexcept {
+    auto parent = phaseObserver_->beginAppend();
+    PeSemanticPreparedRecord prepared{};
+    PeSemanticAdmissionOutcome outcome;
+    {
+      auto phase = phaseObserver_->child(PeSemanticOwnerPhase::PrepareAdmission);
+      outcome = prepareAdmission(input, prepared);
+    }
+    if (outcome != PeSemanticAdmissionOutcome::Admissible) {
+      switch (outcome) {
+      case PeSemanticAdmissionOutcome::Unavailable:
+        lastAdmissionFailure_ = AdmissionFailure::Unavailable;
+        break;
+      case PeSemanticAdmissionOutcome::Malformed:
+        lastAdmissionFailure_ = AdmissionFailure::Malformed;
+        break;
+      case PeSemanticAdmissionOutcome::Capacity:
+        lastAdmissionFailure_ = AdmissionFailure::Capacity;
+        break;
+      case PeSemanticAdmissionOutcome::Admissible: break;
+      }
+      phaseObserver_->recordOutcome(phaseOutcome(lastAdmissionFailure_));
+      return false;
+    }
+    const bool accepted = appendPreparedRecord<true>(
+        input, prepared, std::forward<Commit>(commit));
+    phaseObserver_->recordOutcome(
+        accepted ? PeSemanticOwnerOutcome::Accepted
+                 : phaseOutcome(lastAdmissionFailure_));
+    return accepted;
+  }
+
+ public:
   // Compatibility adapter for existing cold/oracle callers.
   template <PeSemanticRecordInputLike Input, typename Commit>
     requires std::is_nothrow_invocable_r_v<bool, Commit&>
@@ -1261,12 +1449,26 @@ class PeSemanticBatchOwner final {
   // entry without another AddRef. This keeps settlement O(1) in owner state
   // plus the retainer's bounded epoch sweep, matching CommandChunkBuilder.
   bool settle() noexcept {
+    if (phaseObserver_) return settleObserved();
+    return settleUnobserved();
+  }
+
+  template <bool Observe>
+  bool settleBody() noexcept {
+    if constexpr (Observe) {
+      auto phase = phaseObserver_->beginOperation(
+          PeSemanticOwnerPhase::SettleClear);
+      return settleBody<false>();
+    }
     if (!ready_ || recordCount_ == 0u) return false;
     retainer_.endEpoch();
     clearChunkState();
     ++settledChunks_;
     return true;
   }
+
+  bool settleObserved() noexcept { return settleBody<true>(); }
+  bool settleUnobserved() noexcept { return settleBody<false>(); }
 
  private:
   void clearChunkState() noexcept {
@@ -1513,6 +1715,41 @@ class PeSemanticBatchOwner final {
                      PeSemanticSegmentedEmission& out,
                      std::uint64_t renderTapeCaptureToken = 0u,
                      std::uint64_t renderTapeEventOrdinal = 0u) const noexcept {
+    if (phaseObserver_)
+      return emitSegmentedExternalObserved(recordRegion, handleRegion,
+                                           payloadRegion, out,
+                                           renderTapeCaptureToken,
+                                           renderTapeEventOrdinal);
+    return emitSegmentedExternalUnobserved(recordRegion, handleRegion,
+                                            payloadRegion, out,
+                                            renderTapeCaptureToken,
+                                            renderTapeEventOrdinal);
+  }
+
+  template <bool Observe>
+  bool emitSegmentedExternalCore(
+      std::span<std::byte> recordRegion, std::span<std::byte> handleRegion,
+      std::span<std::byte> payloadRegion, PeSemanticSegmentedEmission& out,
+      std::uint64_t renderTapeCaptureToken,
+      std::uint64_t renderTapeEventOrdinal) const noexcept {
+    if constexpr (Observe) {
+      auto parent = phaseObserver_->beginOperation(
+          PeSemanticOwnerPhase::EmitSegmentedExternalCopy);
+      return emitSegmentedExternalBody<true>(
+          recordRegion, handleRegion, payloadRegion, out,
+          renderTapeCaptureToken, renderTapeEventOrdinal);
+    }
+    return emitSegmentedExternalBody<false>(
+        recordRegion, handleRegion, payloadRegion, out,
+        renderTapeCaptureToken, renderTapeEventOrdinal);
+  }
+
+  template <bool Observe>
+  bool emitSegmentedExternalBody(
+      std::span<std::byte> recordRegion, std::span<std::byte> handleRegion,
+      std::span<std::byte> payloadRegion, PeSemanticSegmentedEmission& out,
+      std::uint64_t renderTapeCaptureToken,
+      std::uint64_t renderTapeEventOrdinal) const noexcept {
     out = {};
     EmissionPlan plan{};
     if (!buildEmissionPlan(plan) ||
@@ -1521,7 +1758,14 @@ class PeSemanticBatchOwner final {
         payloadRegion.size() < plan.payloadBytes) {
       return false;
     }
-    if (!copyCanonicalRoles(plan, recordRegion, handleRegion, payloadRegion)) {
+    if constexpr (Observe) {
+      auto roleCopy = phaseObserver_->child(
+          PeSemanticOwnerPhase::EmitSegmentedExternalRoleCopy);
+      if (!copyCanonicalRoles(plan, recordRegion, handleRegion, payloadRegion)) {
+        return false;
+      }
+    } else if (!copyCanonicalRoles(plan, recordRegion, handleRegion,
+                                   payloadRegion)) {
       return false;
     }
     out.transport = makeTransport(plan,
@@ -1535,6 +1779,24 @@ class PeSemanticBatchOwner final {
     return out.valid();
   }
 
+  bool emitSegmentedExternalObserved(
+      std::span<std::byte> recordRegion, std::span<std::byte> handleRegion,
+      std::span<std::byte> payloadRegion, PeSemanticSegmentedEmission& out,
+      std::uint64_t captureToken, std::uint64_t eventOrdinal) const noexcept {
+    return emitSegmentedExternalCore<true>(
+        recordRegion, handleRegion, payloadRegion, out, captureToken,
+        eventOrdinal);
+  }
+
+  bool emitSegmentedExternalUnobserved(
+      std::span<std::byte> recordRegion, std::span<std::byte> handleRegion,
+      std::span<std::byte> payloadRegion, PeSemanticSegmentedEmission& out,
+      std::uint64_t captureToken, std::uint64_t eventOrdinal) const noexcept {
+    return emitSegmentedExternalCore<false>(
+        recordRegion, handleRegion, payloadRegion, out, captureToken,
+        eventOrdinal);
+  }
+
   // Canonical contiguous D9C V2 target used by the default production and
   // capture lanes. Admission has already materialized the immutable role
   // bytes. ExactFixed therefore only writes the final header and gathers the
@@ -1542,54 +1804,9 @@ class PeSemanticBatchOwner final {
   bool emitExactFixed(std::span<std::byte> destination,
                       PeSemanticExactFixedEmission& out) const noexcept {
     out = {};
-    EmissionPlan plan{};
-    if (!buildEmissionPlan(plan) || destination.size() < plan.wireBytes ||
-        reinterpret_cast<std::uintptr_t>(destination.data()) %
-                alignof(D9CCommandChunkWireHandleEntry) != 0u) {
-      return false;
-    }
-    const auto emit = [&]() noexcept {
-      std::memcpy(destination.data(), &plan.header, sizeof(plan.header));
-      auto records = destination.subspan(plan.header.recordTableOffset,
-                                         plan.recordBytes());
-      auto handles = destination.subspan(plan.header.handleTableOffset,
-                                         plan.handleBytes());
-      auto payload = destination.subspan(plan.header.payloadArenaOffset,
-                                         plan.payloadBytes);
-      // Every role is copied in full below. Only layout alignment gaps need
-      // initialization; do not zero-fill the complete contiguous destination.
-      const auto zeroGap = [&](std::size_t begin, std::size_t end) noexcept {
-        if (begin > end || end > plan.wireBytes) return false;
-        std::fill(destination.begin() + begin, destination.begin() + end,
-                  std::byte{0});
-        return true;
-      };
-      if (!zeroGap(sizeof(plan.header), plan.header.recordTableOffset) ||
-          !zeroGap(plan.header.recordTableOffset + plan.recordBytes(),
-                   plan.header.handleTableOffset) ||
-          !zeroGap(plan.header.handleTableOffset + plan.handleBytes(),
-                   plan.header.payloadArenaOffset)) {
-        return false;
-      }
-      if (!copyCanonicalRoles(plan, records, handles, payload)) return false;
-      out.transport = makeTransport(plan, records, handles, payload, 0u, 0u);
-      if (!producerIdentity(out.transport.producerIdentity)) return false;
-      out.wire = std::span<const std::byte>(destination.data(), plan.wireBytes);
-      out.wireBytes = plan.wireBytes;
-      return out.valid();
-    };
-    auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
-        dxmt9::core::CopyMaterializationOwner::Pe);
-    if (!ledger) return emit();
-    dxmt9::core::CopyMaterializationEvent event(
-        ledger, dxmt9::core::CopyMaterializationClass::PeWireFinal,
-        plan.wireBytes);
-    if (!emit()) {
-      event.cancel();
-      return false;
-    }
-    event.commit();
-    return true;
+    if (phaseObserver_)
+      return emitExactFixedObserved(destination, out);
+    return emitExactFixedUnobserved(destination, out);
   }
 
   bool emitExactFixed(PeSemanticExactFixedEmission& out) const noexcept {
@@ -1614,6 +1831,29 @@ class PeSemanticBatchOwner final {
   bool emitSegmented(PeSemanticSegmentedEmission& out,
                      std::uint64_t renderTapeCaptureToken = 0u,
                      std::uint64_t renderTapeEventOrdinal = 0u) const noexcept {
+    if (phaseObserver_)
+      return emitSegmentedAliasObserved(out, renderTapeCaptureToken,
+                                        renderTapeEventOrdinal);
+    return emitSegmentedAliasUnobserved(out, renderTapeCaptureToken,
+                                        renderTapeEventOrdinal);
+  }
+
+  template <bool Observe>
+  bool emitSegmentedAliasCore(
+      PeSemanticSegmentedEmission& out, std::uint64_t captureToken,
+      std::uint64_t eventOrdinal) const noexcept {
+    if constexpr (Observe) {
+      auto parent = phaseObserver_->beginOperation(
+          PeSemanticOwnerPhase::EmitSegmentedAliasView);
+      return emitSegmentedAliasBody<true>(out, captureToken, eventOrdinal);
+    }
+    return emitSegmentedAliasBody<false>(out, captureToken, eventOrdinal);
+  }
+
+  template <bool Observe>
+  bool emitSegmentedAliasBody(
+      PeSemanticSegmentedEmission& out, std::uint64_t captureToken,
+      std::uint64_t eventOrdinal) const noexcept {
     out = {};
     EmissionPlan plan{};
     if (!buildEmissionPlan(plan)) return false;
@@ -1628,10 +1868,22 @@ class PeSemanticBatchOwner final {
     out.transport = makeTransport(
         plan,
         records, handles, payload,
-        renderTapeCaptureToken, renderTapeEventOrdinal);
+        captureToken, eventOrdinal);
     if (!producerIdentity(out.transport.producerIdentity)) return false;
     out.wireBytes = plan.wireBytes;
     return out.valid();
+  }
+
+  bool emitSegmentedAliasObserved(
+      PeSemanticSegmentedEmission& out, std::uint64_t captureToken,
+      std::uint64_t eventOrdinal) const noexcept {
+    return emitSegmentedAliasCore<true>(out, captureToken, eventOrdinal);
+  }
+
+  bool emitSegmentedAliasUnobserved(
+      PeSemanticSegmentedEmission& out, std::uint64_t captureToken,
+      std::uint64_t eventOrdinal) const noexcept {
+    return emitSegmentedAliasCore<false>(out, captureToken, eventOrdinal);
   }
 
   const PeSemanticRecordSlot& record(std::size_t index) const noexcept {
@@ -1721,7 +1973,8 @@ class PeSemanticBatchOwner final {
     std::array<std::size_t, 17u> values{};
   };
 
-  static constexpr std::size_t kMaxRecordHandles = 64u;
+  static constexpr std::size_t kMaxRecordHandles =
+      kPeSemanticMaxRecordHandles;
   // Pin admission is on the producer hot path. Keep exact identity and
   // object-id membership in fixed, typed open-addressed tables so a repeated
   // warm pin does not scan every prior pin. The table is deliberately
@@ -1763,36 +2016,84 @@ class PeSemanticBatchOwner final {
     }
   };
 
-  struct EmissionHandleContext {
-    std::array<D9CWireObjectIdentity, kMaxRecordHandles> identities{};
-    std::size_t count = 0u;
-
-    bool add(const D9CWireObjectIdentity& identity) noexcept {
-      for (std::size_t i = 0u; i < count; ++i) {
-        if (identities[i].kind == identity.kind &&
-            identities[i].generation == identity.generation &&
-            identities[i].objectId == identity.objectId) {
-          return true;
-        }
-      }
-      if (count == identities.size()) return false;
-      identities[count++] = identity;
-      return true;
-    }
-
-    bool indexOf(const D9CWireObjectIdentity& identity,
-                 std::size_t& out) const noexcept {
-      for (std::size_t i = 0u; i < count; ++i) {
-        if (identities[i].kind == identity.kind &&
-            identities[i].generation == identity.generation &&
-            identities[i].objectId == identity.objectId) {
-          out = i;
-          return true;
-        }
-      }
+  template <bool Observe>
+  bool emitExactFixedCore(const EmissionPlan& plan,
+                          std::span<std::byte> destination,
+                          PeSemanticExactFixedEmission& out) const noexcept {
+    if (destination.size() < plan.wireBytes ||
+        reinterpret_cast<std::uintptr_t>(destination.data()) %
+                alignof(D9CCommandChunkWireHandleEntry) != 0u) {
       return false;
     }
-  };
+    const auto emit = [&]() noexcept {
+      std::memcpy(destination.data(), &plan.header, sizeof(plan.header));
+      auto records = destination.subspan(plan.header.recordTableOffset,
+                                         plan.recordBytes());
+      auto handles = destination.subspan(plan.header.handleTableOffset,
+                                         plan.handleBytes());
+      auto payload = destination.subspan(plan.header.payloadArenaOffset,
+                                         plan.payloadBytes);
+      const auto zeroGap = [&](std::size_t begin, std::size_t end) noexcept {
+        if (begin > end || end > plan.wireBytes) return false;
+        std::fill(destination.begin() + begin, destination.begin() + end,
+                  std::byte{0});
+        return true;
+      };
+      if (!zeroGap(sizeof(plan.header), plan.header.recordTableOffset) ||
+          !zeroGap(plan.header.recordTableOffset + plan.recordBytes(),
+                   plan.header.handleTableOffset) ||
+          !zeroGap(plan.header.handleTableOffset + plan.handleBytes(),
+                   plan.header.payloadArenaOffset)) {
+        return false;
+      }
+      if constexpr (Observe) {
+        auto roleCopy = phaseObserver_->child(
+            PeSemanticOwnerPhase::EmitExactFixedRoleCopy);
+        if (!copyCanonicalRoles(plan, records, handles, payload)) return false;
+      } else if (!copyCanonicalRoles(plan, records, handles, payload)) {
+        return false;
+      }
+      out.transport = makeTransport(plan, records, handles, payload, 0u, 0u);
+      if (!producerIdentity(out.transport.producerIdentity)) return false;
+      out.wire = std::span<const std::byte>(destination.data(), plan.wireBytes);
+      out.wireBytes = plan.wireBytes;
+      return out.valid();
+    };
+    auto* const ledger = dxmt9::core::activeCopyMaterializationLedger(
+        dxmt9::core::CopyMaterializationOwner::Pe);
+    if (!ledger) return emit();
+    dxmt9::core::CopyMaterializationEvent event(
+        ledger, dxmt9::core::CopyMaterializationClass::PeWireFinal,
+        plan.wireBytes);
+    if (!emit()) {
+      event.cancel();
+      return false;
+    }
+    event.commit();
+    return true;
+  }
+
+  bool emitExactFixedObserved(
+      std::span<std::byte> destination,
+      PeSemanticExactFixedEmission& out) const noexcept {
+    auto parent = phaseObserver_->beginOperation(
+        PeSemanticOwnerPhase::EmitExactFixed);
+    EmissionPlan plan{};
+    {
+      auto buildPlan = phaseObserver_->child(
+          PeSemanticOwnerPhase::EmitExactFixedBuildPlan);
+      if (!buildEmissionPlan(plan)) return false;
+    }
+    return emitExactFixedCore<true>(plan, destination, out);
+  }
+
+  bool emitExactFixedUnobserved(
+      std::span<std::byte> destination,
+      PeSemanticExactFixedEmission& out) const noexcept {
+    EmissionPlan plan{};
+    if (!buildEmissionPlan(plan)) return false;
+    return emitExactFixedCore<false>(plan, destination, out);
+  }
 
   static std::size_t pinHash(const D9CWireObjectIdentity& identity,
                              bool includeGeneration) noexcept {
@@ -2702,10 +3003,9 @@ class PeSemanticBatchOwner final {
         recordCount_ >= Storage::maxWireRecords) {
       return false;
     }
-    EmissionHandleContext handles{};
-    if (!visitRecordHandles(slot, [&](const D9CWireObjectIdentity& identity) noexcept {
-          return handles.add(identity);
-        }) || handles.count != prepared.plan.handleCount) {
+    const auto& handles = prepared.wireHandles;
+    if (handles.count != prepared.plan.handleCount ||
+        handles.count > kMaxRecordHandles) {
       return false;
     }
     auto payload = std::span<std::byte>(storage_->canonicalPayload).subspan(
@@ -3696,6 +3996,7 @@ class PeSemanticBatchOwner final {
   std::uint64_t lastSourceOrdinal_ = 0u;
   AdmissionFailure lastAdmissionFailure_ = AdmissionFailure::None;
   std::uint64_t lastRecordOrdinal_ = 0u;
+  PeSemanticOwnerPhaseObserver* phaseObserver_ = nullptr;
   dxmt9::core::CopyMaterializationLedger* admissionLedger_ = nullptr;
   mutable dxmt9::core::CopyMaterializationLedger* exactWireLedger_ = nullptr;
   mutable std::size_t exactWireRetainedBytes_ = 0u;

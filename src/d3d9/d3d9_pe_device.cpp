@@ -1698,6 +1698,9 @@ void D3D9DeviceImpl::notePeStatsDecimationPresent() {
     ++diagnostics_->peStatsDecimationPresents_;
     if (diagnostics_->peStatsDecimationPresents_ % 60 == 0) {
         logPeStatsDecimation();
+        if (diagnostics_->gates.semanticOwnerPhaseSplit) {
+            logPeSemanticOwnerPhaseSplit();
+        }
     }
 }
 

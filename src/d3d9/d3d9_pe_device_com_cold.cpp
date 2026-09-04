@@ -97,6 +97,11 @@ D3D9DeviceImpl::D3D9DeviceImpl(D9CDevice* dev, IDirect3D9Ex* factory,
           this, dxmt9PeResolvedDiagnosticsConfig()))
     , creationWindow_(window)
     , implicitSwapchainFlagsShadow_(implicitSwapchainFlags) {
+    if (semanticRecorderState_ && diagnostics_ &&
+        diagnostics_->gates.semanticOwnerPhaseSplit) {
+        semanticRecorderState_->owner.setPhaseObserver(
+            &diagnostics_->semanticOwnerPhaseObserver);
+    }
     stateBlockContext_.device = this;
     bufferContext_.device = this;
     surfaceTextureContext_.device = this;
@@ -207,6 +212,14 @@ D3D9DeviceImpl::~D3D9DeviceImpl() {
     logVsConstSetterRangePerf("destructor");
     logPeRecorderStats("destructor", true);
     logPeStatsDecimation();
+    if (diagnostics_ && diagnostics_->gates.semanticOwnerPhaseSplit) {
+        logPeSemanticOwnerPhaseSplit();
+    }
+    // diagnostics_ is destroyed before semanticRecorderState_ (reverse member
+    // order); detach the owner before either member can outlive the other.
+    if (semanticRecorderState_) {
+        semanticRecorderState_->owner.setPhaseObserver(nullptr);
+    }
     if (diagnostics_ && diagnostics_->peCopyMaterializationReportPresents_ != 0u &&
         diagnostics_->peCopyMaterializationReportPresents_ % 60u != 0u) {
         logPeCopyMaterializationLedger();

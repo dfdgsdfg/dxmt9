@@ -3134,6 +3134,52 @@ void D3D9DeviceImpl::logPeStatsDecimation() {
         appendTypeText.c_str());
 }
 
+void D3D9DeviceImpl::logPeSemanticOwnerPhaseSplit() {
+    if (!diagnostics_ || !diagnostics_->gates.semanticOwnerPhaseSplit) {
+        return;
+    }
+    const auto& stats = diagnostics_->semanticOwnerPhaseObserver.stats();
+    dxmt9DeviceInfoLog(
+        "[dxmt9-pe-semantic-owner-phase] schema=1 decimation=%u "
+        "append_events=%llu append_sampled=%llu operation_sampled=%llu "
+        "operation_events=%llu "
+        "null_calibration_samples=%llu "
+        "null_calibration_ms=%.3f outcomes=accepted:%llu,unavailable:%llu,"
+        "capacity:%llu,malformed:%llu,header:%llu,fixed:%llu,direct_pins:%llu,"
+        "sparse:%llu,variable:%llu,emission:%llu,settlement:%llu,other:%llu",
+        stats.decimationN,
+        static_cast<unsigned long long>(stats.appendEvents),
+        static_cast<unsigned long long>(stats.appendSampled),
+        static_cast<unsigned long long>(stats.operationSampled),
+        static_cast<unsigned long long>(stats.operationEvents),
+        static_cast<unsigned long long>(stats.nullCalibrationSamples),
+        static_cast<double>(stats.nullCalibrationNs) / 1.0e6,
+        static_cast<unsigned long long>(stats.outcomes[0]),
+        static_cast<unsigned long long>(stats.outcomes[1]),
+        static_cast<unsigned long long>(stats.outcomes[2]),
+        static_cast<unsigned long long>(stats.outcomes[3]),
+        static_cast<unsigned long long>(stats.outcomes[4]),
+        static_cast<unsigned long long>(stats.outcomes[5]),
+        static_cast<unsigned long long>(stats.outcomes[6]),
+        static_cast<unsigned long long>(stats.outcomes[7]),
+        static_cast<unsigned long long>(stats.outcomes[8]),
+        static_cast<unsigned long long>(stats.outcomes[9]),
+        static_cast<unsigned long long>(stats.outcomes[10]),
+        static_cast<unsigned long long>(stats.outcomes[11]));
+    for (std::size_t i = 0; i < stats.phases.size(); ++i) {
+        const auto& phase = stats.phases[i];
+        dxmt9DeviceInfoLog(
+            "[dxmt9-pe-semantic-owner-phase] schema=1 phase=%s events=%llu "
+            "sampled=%llu sampled_ms=%.3f max_ms=%.3f",
+            dxmt9::d3d9::pe::peSemanticOwnerPhaseName(
+                static_cast<dxmt9::d3d9::pe::PeSemanticOwnerPhase>(i)),
+            static_cast<unsigned long long>(phase.events),
+            static_cast<unsigned long long>(phase.samples),
+            static_cast<double>(phase.totalNs) / 1.0e6,
+            static_cast<double>(phase.maxNs) / 1.0e6);
+    }
+}
+
 void D3D9DeviceImpl::startPeThreadSamplerIfRequested() {
     if (!dxmt9PeThreadSamplerEnabled()) {
         return;

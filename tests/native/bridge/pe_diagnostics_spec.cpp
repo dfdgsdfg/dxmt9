@@ -90,6 +90,8 @@ void testOptionalOwnerAllocationAndConfig() {
       PeDiagnosticsConfig{.debugLog = true},
       PeDiagnosticsConfig{.scalarSemanticObserver = true},
       PeDiagnosticsConfig{.copyMaterializationLedger = true},
+      PeDiagnosticsConfig{.statsDecimationN = 17,
+                          .semanticOwnerPhaseSplit = true},
       PeDiagnosticsConfig{.moduleMap = true, .threadSampler = true},
       PeDiagnosticsConfig{.moduleMap = true, .debugLog = true},
       PeDiagnosticsConfig{.threadSampler = true, .debugLog = true},
@@ -122,6 +124,8 @@ void testOptionalOwnerAllocationAndConfig() {
                   config.scalarSemanticObserver &&
               diagnostics->config.copyMaterializationLedger ==
                   config.copyMaterializationLedger &&
+              diagnostics->config.semanticOwnerPhaseSplit ==
+                  config.semanticOwnerPhaseSplit &&
               diagnostics->config.threadSamplerHz == config.threadSamplerHz,
           "the owner preserves the resolved immutable diagnostic config");
     const bool scopeExpected =
@@ -135,7 +139,10 @@ void testOptionalOwnerAllocationAndConfig() {
               diagnostics->gates.scalarSemanticObserver ==
                   config.scalarSemanticObserver &&
               diagnostics->gates.copyMaterializationLedger ==
-                  config.copyMaterializationLedger,
+                  config.copyMaterializationLedger &&
+              diagnostics->gates.semanticOwnerPhaseSplit ==
+                  (config.semanticOwnerPhaseSplit &&
+                   config.statsDecimationN != 0u),
           "observer-only gates remain independently cached");
     check(static_cast<bool>(diagnostics->scalarSemanticTokens) ==
               config.scalarSemanticObserver,
@@ -298,6 +305,8 @@ void testSourceContracts(const std::filesystem::path &root) {
       readTextFile(root / "src/d3d9/d3d9_pe_chunk_builder.cpp");
   const auto semanticOwner =
       readTextFile(root / "src/d3d9/d3d9_pe_semantic_owner.hpp");
+  const auto semanticOwnerObserver = readTextFile(
+      root / "src/d3d9/d3d9_pe_semantic_owner_phase_observer.hpp");
   const auto peConstShadow =
       readTextFile(root / "src/d3d9/d3d9_pe_const_shadow.hpp");
   const auto providerReplay =
@@ -1023,6 +1032,43 @@ void testSourceContracts(const std::filesystem::path &root) {
       "semantic admission records its chunk-owned typed representation");
   checkContains(semanticOwner, "CopyMaterializationClass::PeWireFinal",
                 "ExactFixed emission records its physical final wire");
+  const auto materializeStart = semanticOwner.find(
+      "bool materializeCanonicalRecord(");
+  const auto materializeEnd = materializeStart == std::string::npos
+      ? std::string::npos
+      : semanticOwner.find("\n  bool copyCanonicalRoles", materializeStart);
+  check(materializeStart != std::string::npos &&
+            materializeEnd != std::string::npos &&
+            materializeEnd > materializeStart,
+        "canonical materialization source contract has a bounded body");
+  const auto materialize = semanticOwner.substr(
+      materializeStart, materializeEnd - materializeStart);
+  checkContains(materialize, "prepared.wireHandles",
+                "canonical materialization consumes the prepared wire witness");
+  checkNotContains(materialize, "visitRecordHandles(",
+                   "canonical materialization has no second record identity walk");
+  checkContains(semanticOwner, "wireWitness->resetFrontier();",
+                "wire witness planning resets only its active frontier");
+  checkNotContains(semanticOwner, "*wireWitness = {};",
+                   "wire witness planning does not clear inactive identity storage");
+  checkContains(semanticOwnerObserver, "priorActiveParentSampled_",
+                "phase scope restores the prior parent sampling state");
+  checkNotContains(semanticOwnerObserver, "endAppend",
+                   "phase observer has no manual stale-state reset API");
+  checkNotContains(semanticOwner, "std::optional<PeSemanticOwnerPhaseObserver::Scope>",
+                   "segmented and settle diagnostics construct no optional scope");
+  checkContains(semanticOwner,
+                "PeSemanticOwnerPhase::EmitSegmentedExternalRoleCopy",
+                "external segmented emission has a distinct copy child phase");
+  checkContains(semanticOwner,
+                "PeSemanticOwnerPhase::EmitSegmentedAliasView",
+                "alias segmented emission has a distinct parent phase");
+  checkContains(semanticOwner, "emitExactFixedCore<true>",
+                "observed ExactFixed uses the shared emission core");
+  checkContains(semanticOwner, "emitExactFixedCore<false>",
+                "unobserved ExactFixed uses the shared emission core");
+  checkContains(deviceCold, "semanticRecorderState_->owner.setPhaseObserver(nullptr)",
+                "device teardown detaches the cold owner observer before member destruction");
   checkContains(peConstShadow, "CopyMaterializationOwner::Pe",
                 "PE constant shadow copy sites explicitly select the PE owner");
   checkNotContains(peConstShadow, "CopyMaterializationOwner::Unix",

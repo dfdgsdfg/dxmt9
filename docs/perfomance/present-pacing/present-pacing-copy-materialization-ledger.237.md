@@ -159,6 +159,66 @@ the intervening source change only moved six continuation counters into the
 shutdown report table and did not change the measured hot path. Repeated
 matched runs remain necessary before assigning a stable observer cost.
 
+### Calibrated semantic-owner phase split (2026-09-04)
+
+The owner ledger above is intentionally inclusive and updates a high-frequency
+clocked ledger on every admission. It therefore establishes ownership and byte
+volume, but does not isolate product CPU cost. A matched GT2 direction check
+used `DXMT9_PE_STATS_DECIMATION=127` with the new phase observer OFF and ON.
+Both runs completed without chunk rejects or GPU errors; the healthy populations
+were 1,594 and 1,587 Presents, so the pair is directional evidence rather than
+a promotion-quality A/B.
+
+After subtracting the measured empty clock-pair cost, the ON run attributed:
+
+| Semantic-owner phase | calibrated ms / Present |
+|---|---:|
+| prepare admission | 1.045 |
+| fixed values and direct pins | 0.277 |
+| sparse and variable copy | 1.255 |
+| canonical materialization and metrics | 1.098 |
+| PendingDelta settlement callback | 0.415 |
+| settle and clear | 0.641 |
+| ExactFixed plan | 0.018 |
+| ExactFixed role copy | 0.057 |
+| ExactFixed inclusive parent | 0.099 |
+
+The child rows are individually calibrated; parent and child rows remain
+inclusive and must not be added together. This corrects the interpretation of
+the earlier `0.908 ms/Present` ExactFixed ledger row: that diagnostic remains a
+valid owner/byte ledger, but its clock and atomic work dominate this short
+operation and it is not a product-cost estimate. Removing the contiguous gather
+is therefore no longer the first PE optimization. The next bounded candidate is
+to eliminate repeated sparse/identity work between admission, typed copy, and
+canonical materialization while preserving the prepared witness, qualified
+retention, rollback, and byte-equivalence contracts.
+
+The first implementation of that witness was deliberately rejected: it
+preserved canonical bytes, but repeated a linear deduplication inside the
+admission pass and merely moved work from materialization to preparation. The
+corrected implementation records the identity only when the admission set
+reports its first wire-visible promotion, uses a bounds-only append under that
+proof, and resets only the active witness frontier. A clean follow-up GT2 run
+completed with zero rejects/errors and the following calibrated direction:
+
+| Semantic-owner phase | pre-witness ms / Present | corrected witness ms / Present |
+|---|---:|---:|
+| prepare admission | 1.045 | 1.262 |
+| fixed values and direct pins | 0.277 | 0.338 |
+| sparse and variable copy | 1.255 | 1.094 |
+| canonical materialization and metrics | 1.098 | 0.913 |
+| PendingDelta settlement callback | 0.415 | 0.379 |
+| five child phases above | 4.090 | 3.987 |
+| ExactFixed inclusive parent | 0.099 | 0.091 |
+
+The populations were 1,587 and 1,624 Presents and the result-file values were
+25.359 and 25.948 FPS. Their approximately 2.3% difference prevents a matched
+promotion claim; the useful evidence is narrower: the corrected witness no
+longer shifts the aggregate child cost upward, removes the second handle-order
+traversal, and moves the remaining PE target to sparse typed-copy plus canonical
+payload construction. One run performed while a native rebuild was active is
+explicitly excluded from this comparison.
+
 ## Matched GT2 CPU and cadence
 
 | Route | Presents | CB / Present | Pass / Present | PE builder + seals ms / Present | Bridge raw ms / Present | GPU upload ms / Present | Producer profile weight | Encode profile weight |
@@ -197,22 +257,26 @@ FPS gain.
    measured, removable CPU materialization class. Expand carrier-free replay
    only through exact source-qualified destination construction; ordered
    control and unsupported producer families remain fail-closed.
-2. **PE final emission and segmented transport.** `ExactFixed` final emission
-   measures `1.252 MB/Present` and `0.908 ms/Present`. It is still required by
-   the default and capture paths, so it is not yet a removable copy. A later
-   all-family segmented promotion must first preserve exact wire bytes,
-   rollback, and capture equivalence. The inclusive semantic-owner admission
-   time (`2.564 ms/Present`) is transaction work and must not be added to the
-   memcpy ledger as if it were another copy.
-3. **Unix backend GPU upload.** This necessary transfer is
+2. **PE sparse copy and canonical materialization.** The corrected prepared
+   identity/order witness removes the second handle-order traversal. The clean
+   follow-up still attributes about `1.094` and `0.913 ms/Present` to sparse
+   typed copy and canonical construction. Any further fusion must keep retain,
+   rollback, PendingDelta, and exact-wire equivalence mandatory and must not
+   recreate a second identity set or per-record full-array clear.
+3. **PE final emission and segmented transport.** `ExactFixed` still moves
+   `1.252 MB/Present`, but the calibrated phase split measures only about
+   `0.099 ms/Present` inclusive (`0.057 ms/Present` in role copies). It remains
+   useful as a representation simplification, especially outside capture, but
+   is no longer the leading CPU-performance candidate.
+4. **Unix backend GPU upload.** This necessary transfer is
    `12.241 MB/Present` and `1.068 ms/Present` in the current GT2 evidence. A
    later GPU-side investigation needs source-qualified reuse or hoisting
    evidence and the GPU correctness oracle before trying to remove it.
-4. **PE/Unix raw ownership handoff.** The bridge carries
+5. **PE/Unix raw ownership handoff.** The bridge carries
    `1.252 MB/Present` for `0.043 ms/Present`. Its byte volume is visible, but
    its measured CPU cost is too small to justify weakening the pointer-free
    ownership boundary without a byte-identity proof.
-5. **Queue and mutation staging.** Queue finalization is
+6. **Queue and mutation staging.** Queue finalization is
    `0.008 ms/Present` in the current run; prior queue/mutation evidence is also
    below the T2d promotion threshold. It does not justify reserve-copy-commit
    work without a measured waiting victim.

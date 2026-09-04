@@ -1,16 +1,19 @@
 #include "d3d9_pe_semantic_owner.hpp"
 #include "d3d9_pe_recorder_transaction.hpp"
 #include "d3d9_pe_recorder.hpp"
+#include "d3d9_pe_semantic_owner_phase_observer.hpp"
 
 #include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 #include <vector>
 
 struct RefCounter { std::uint32_t refs = 1u; };
@@ -178,6 +181,31 @@ void classificationAndLifetime() {
   }
   check(owner.size() == 21u && owner.retainedCount() == 3u,
         "all-family owner retains each typed identity exactly once");
+  const auto canonical = canonicalBuilder.seal();
+  PeSemanticExactFixedEmission ownerEmission{};
+  check(canonical.valid() && owner.emitExactFixed(ownerEmission) &&
+            ownerEmission.valid() && canonical.blob.size() == ownerEmission.wire.size() &&
+            std::equal(canonical.blob.begin(), canonical.blob.end(),
+                       ownerEmission.wire.begin()),
+        "all-family owner bytes match canonical builder final wire");
+  check(ownerEmission.transport.header.recordCount == 21u &&
+            ownerEmission.transport.header.handleCount != 0u,
+        "all-family owner final wire has qualified contiguous roles");
+  PeSemanticOwnerPhaseObserver allFamilyObserver(1u);
+  owner.setPhaseObserver(&allFamilyObserver);
+  alignas(8) std::array<std::byte, 8192u> observedExact;
+  std::fill(observedExact.begin(), observedExact.end(), std::byte{0x5a});
+  PeSemanticExactFixedEmission observedEmission{};
+  check(owner.emitExactFixed(observedExact, observedEmission) &&
+            observedEmission.wireBytes == ownerEmission.wireBytes &&
+            std::equal(ownerEmission.wire.begin(), ownerEmission.wire.end(),
+                       observedEmission.wire.begin()) &&
+            std::all_of(observedExact.begin() + observedEmission.wireBytes,
+                        observedExact.end(), [](std::byte value) {
+                          return value == std::byte{0x5a};
+                        }),
+        "observed all-family ExactFixed preserves bytes and canary");
+  owner.setPhaseObserver(nullptr);
   std::size_t visited = 0u;
   check(owner.visitOwnedRecords([&](PeSemanticProducerKind kind,
                                     const PeSemanticRecordSlot& slot) noexcept {
@@ -358,6 +386,211 @@ void pureAdmissionPlanDeduplicatesQualifiedBindings() {
   check(owner.emitExactFixed(bytes, emission) && emission.transport.header.handleCount == 1u,
         "prepared admission emits one qualified final-wire handle");
   owner.reset();
+}
+
+void preparedWireWitnessPreservesOrderAndQualifiedDedup() {
+  Owner owner;
+  D9CTexture texture;
+  D9CBuffer buffer;
+  const auto textureRef = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+      &texture, 0x631u, 7u);
+  const auto bufferRef = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(
+      &buffer, 0x631u, 8u);
+  std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>, 1u>
+      textures{{{.wire = {.slot = 0u, .valid = 1u}, .object = textureRef}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>, 1u>
+      streams{{{.wire = {.slot = 1u, .valid = 1u}, .object = bufferRef}}};
+  auto input = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+  // The direct texture pin is retained but is not independently wire-visible
+  // for a draw; sparse texture[0] makes the same identity wire-visible.
+  input.texture0 = textureRef;
+  input.sparse.textures = textures;
+  input.sparse.streams = streams;
+
+  PeSemanticPreparedRecord witness{};
+  check(owner.prepareAdmission(input, witness) ==
+            PeSemanticAdmissionOutcome::Admissible &&
+            witness.wireHandles.count == 2u &&
+            witness.wireHandles.identities[0].kind == textureRef.identity.kind &&
+            witness.wireHandles.identities[0].generation ==
+                textureRef.identity.generation &&
+            witness.wireHandles.identities[0].objectId ==
+                textureRef.identity.objectId &&
+            witness.wireHandles.identities[1].kind == bufferRef.identity.kind &&
+            witness.wireHandles.identities[1].generation ==
+                bufferRef.identity.generation &&
+            witness.wireHandles.identities[1].objectId ==
+                bufferRef.identity.objectId,
+        "prepared witness captures first-seen sparse wire order with direct dedup");
+  check(owner.tryAppendOwnedRecord(input, []() noexcept { return true; }),
+        "qualified wire witness fixture admits");
+  alignas(8) std::array<std::byte, 4096u> bytes{};
+  PeSemanticExactFixedEmission emission{};
+  check(owner.emitExactFixed(bytes, emission) && emission.valid() &&
+            emission.transport.header.handleCount == 2u,
+        "qualified wire witness emits both distinct kind identities");
+  D9CCommandChunkWireHandleEntry handles[2u]{};
+  std::memcpy(handles, bytes.data() + emission.transport.header.handleTableOffset,
+              sizeof(handles));
+  check(handles[0].kind == textureRef.identity.kind &&
+            handles[0].generation == textureRef.identity.generation &&
+            handles[0].objectId == textureRef.identity.objectId &&
+            handles[1].kind == bufferRef.identity.kind &&
+            handles[1].generation == bufferRef.identity.generation &&
+            handles[1].objectId == bufferRef.identity.objectId,
+        "materialized handles equal the prepared qualified order byte-for-byte");
+  owner.reset();
+  check(texture.refs == 1u && buffer.refs == 1u,
+        "qualified wire witness rollback/reset balances both typed retains");
+}
+
+void knownUniqueWireWitnessAppendIsBounded() {
+  PeSemanticEmissionHandleContext context{};
+  const D9CWireObjectIdentity first{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE, .generation = 1u, .objectId = 0x651u};
+  check(context.add(first), "compatibility wire witness add accepts first identity");
+  check(context.add(first) && context.count == 1u,
+        "compatibility wire witness add still deduplicates identities");
+  std::size_t firstIndex = 0u;
+  check(context.indexOf(first, firstIndex) && firstIndex == 0u,
+        "compatibility wire witness index lookup still finds identity");
+  for (std::size_t i = context.count; i < context.identities.size(); ++i) {
+    check(context.appendKnownUnique({
+              .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+              .generation = 1u,
+              .objectId = static_cast<std::uint32_t>(0x651u + i)}),
+          "known-unique wire witness append accepts bounded identity");
+  }
+  const auto countAtCapacity = context.count;
+  check(!context.appendKnownUnique(first) && context.count == countAtCapacity,
+        "known-unique wire witness append fails closed at capacity");
+}
+
+void planningReusesStaleWireWitnessStorage() {
+  D9CTexture texture;
+  D9CBuffer buffer;
+  const auto textureRef = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+      &texture, 0x661u, 7u);
+  const auto bufferRef = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(
+      &buffer, 0x662u, 8u);
+  std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>, 1u>
+      textures{{{.wire = {.slot = 0u, .valid = 1u}, .object = textureRef}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>, 1u>
+      streams{{{.wire = {.slot = 1u, .valid = 1u}, .object = bufferRef}}};
+  auto input = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+  input.sparse.textures = textures;
+  input.sparse.streams = streams;
+
+  const D9CWireObjectIdentity stale{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 0xfeedu,
+      .objectId = 0xbeefu};
+  PeSemanticEmissionHandleContext context{};
+  context.identities.fill(stale);
+  context.count = context.identities.size();
+  PeSemanticAdmissionPlan plan{};
+  check(planPeSemanticAdmissionWith(
+            input, plan,
+            [](const PeWireObjectRef&, std::size_t) noexcept { return true; },
+            &context),
+        "planning resets a stale wire witness frontier");
+  check(context.count == 2u &&
+            context.identities[0].kind == textureRef.identity.kind &&
+            context.identities[0].generation == textureRef.identity.generation &&
+            context.identities[0].objectId == textureRef.identity.objectId &&
+            context.identities[1].kind == bufferRef.identity.kind &&
+            context.identities[1].generation == bufferRef.identity.generation &&
+            context.identities[1].objectId == bufferRef.identity.objectId,
+        "planning restores first-seen qualified wire order from stale storage");
+  const std::array<D9CCommandChunkWireHandleEntry, 2u> expected{{
+      {.kind = textureRef.identity.kind,
+       .generation = textureRef.identity.generation,
+       .objectId = textureRef.identity.objectId},
+      {.kind = bufferRef.identity.kind,
+       .generation = bufferRef.identity.generation,
+       .objectId = bufferRef.identity.objectId},
+  }};
+  check(std::memcmp(context.identities.data(), expected.data(),
+                    sizeof(expected)) == 0,
+        "planning restores canonical active handle bytes");
+  check(std::all_of(context.identities.begin() + context.count,
+                    context.identities.end(),
+                    [&](const auto& identity) { return identity.kind == stale.kind &&
+                        identity.generation == stale.generation &&
+                        identity.objectId == stale.objectId; }),
+        "planning does not require inactive identity storage to be zeroed");
+}
+
+void preparedWireWitnessTracksFirstWirePromotion() {
+  Owner owner;
+  CommandChunkBuilder canonical;
+  D9CSurface surface;
+  D9CTexture texture;
+  const auto surfaceRef = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &surface, 0x641u, 3u);
+  const auto textureRef = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+      &texture, 0x642u, 4u);
+  std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>, 2u>
+      textures{{
+          {.wire = {.slot = 0u, .valid = 1u}, .object = textureRef},
+          {.wire = {.slot = 1u, .valid = 1u}, .object = textureRef},
+      }};
+  std::array<SparseBindingInput<D9CCommandChunkWireRenderTargetBinding>, 1u>
+      renderTargets{{
+          {.wire = {.slot = 0u, .valid = 1u}, .object = surfaceRef},
+      }};
+  auto input = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+  // The direct surface pin is retained but is not wire-visible for a draw.
+  // Sparse texture[0] is the first wire encounter; renderTargets[0] then
+  // promotes the preinserted surface and must append it second.
+  input.surface0 = surfaceRef;
+  input.sparse.textures = textures;
+  input.sparse.renderTargets = renderTargets;
+
+  PeSemanticPreparedRecord witness{};
+  check(owner.prepareAdmission(input, witness) ==
+                PeSemanticAdmissionOutcome::Admissible &&
+            witness.plan.uniquePinCounts[0] == 1u &&
+            witness.plan.uniquePinCounts[1] == 1u &&
+            witness.plan.handleCount == 2u && witness.wireHandles.count == 2u &&
+            witness.wireHandles.identities[0].kind == textureRef.identity.kind &&
+            witness.wireHandles.identities[0].generation == textureRef.identity.generation &&
+            witness.wireHandles.identities[0].objectId == textureRef.identity.objectId &&
+            witness.wireHandles.identities[1].kind == surfaceRef.identity.kind &&
+            witness.wireHandles.identities[1].generation == surfaceRef.identity.generation &&
+            witness.wireHandles.identities[1].objectId == surfaceRef.identity.objectId &&
+            surface.refs == 1u && texture.refs == 1u,
+        "prepared witness records first wire promotion after direct retention");
+  check(appendSparseRecord(canonical, input.recordType, input.draw, input.sparse),
+        "promotion fixture canonical sparse emission");
+  check(owner.tryAppendOwnedRecord(input, []() noexcept { return true; }),
+        "promotion fixture owner admission");
+  alignas(8) std::array<std::byte, 4096u> bytes{};
+  PeSemanticExactFixedEmission emission{};
+  const auto sealed = canonical.seal();
+  check(sealed.valid() && owner.emitExactFixed(bytes, emission) &&
+            emission.valid() && emission.wireBytes == sealed.blob.size() &&
+            std::equal(sealed.blob.begin(), sealed.blob.end(),
+                       emission.wire.begin()),
+        "promotion fixture final bytes equal canonical oracle");
+  D9CCommandChunkWireHandleEntry handles[2u]{};
+  std::memcpy(handles, bytes.data() + emission.transport.header.handleTableOffset,
+              sizeof(handles));
+  check(handles[0].kind == textureRef.identity.kind &&
+            handles[0].generation == textureRef.identity.generation &&
+            handles[0].objectId == textureRef.identity.objectId &&
+            handles[1].kind == surfaceRef.identity.kind &&
+            handles[1].generation == surfaceRef.identity.generation &&
+            handles[1].objectId == surfaceRef.identity.objectId,
+        "promotion fixture final handle order is texture then surface");
+  check(surface.refs == 3u && texture.refs == 3u,
+        "promotion fixture retains each duplicate sparse identity once");
+  owner.reset();
+  check(surface.refs == 2u && texture.refs == 2u,
+        "promotion fixture owner reset releases its typed retains");
+  canonical.resetAndReleaseRetained();
+  check(surface.refs == 1u && texture.refs == 1u,
+        "promotion fixture canonical reset releases its typed retains");
 }
 
 void admissionArithmeticRejectsOverflow() {
@@ -1493,11 +1726,160 @@ void ownerQualifiedMaterializationLedger() {
   owner.reset();
   check(surface.refs == 1u, "ledger fixture releases its warm pin");
 }
+
+void calibratedOwnerPhaseObserver() {
+  using ObservedOwner = PeSemanticBatchOwner<4u, 2u, 4096u, 4u, 4u>;
+  dxmt9::core::CopyMaterializationLedger copyLedger;
+  dxmt9::core::ScopedCopyMaterializationLedger copyScope(
+      dxmt9::core::CopyMaterializationOwner::Pe, copyLedger);
+  PeSemanticOwnerPhaseObserver observer(2u);
+  ObservedOwner owner;
+  owner.setPhaseObserver(&observer);
+  D9CSurface surface;
+  auto input = base(PeSemanticProducerKind::Present, 0x701u, 0x702u);
+  input.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0x703u);
+  check(owner.tryAppendOwnedRecord(input, []() noexcept { return true; }),
+        "observer fixture records accepted admission");
+  auto rollbackInput = input;
+  rollbackInput.sourceOrdinal = 0x704u;
+  rollbackInput.recordOrdinal = 0x705u;
+  check(owner.tryAppendOwnedRecord(rollbackInput, []() noexcept { return false; }) == false,
+        "observer fixture records settlement rollback");
+  PeSemanticExactFixedEmission exact{};
+  PeSemanticSegmentedEmission segmented{};
+  std::array<std::byte, 1024u> externalRecords{};
+  std::array<std::byte, 1024u> externalHandles{};
+  std::array<std::byte, 4096u> externalPayload{};
+  PeSemanticSegmentedEmission external{};
+  check(owner.emitExactFixed(exact) && owner.emitSegmented(segmented) &&
+            owner.emitSegmented(externalRecords, externalHandles, externalPayload,
+                                external),
+        "observer fixture emits both transport forms");
+  check(segmented.transport.recordBytes == external.transport.recordBytes &&
+            segmented.transport.handleBytes == external.transport.handleBytes &&
+            segmented.transport.payloadBytes == external.transport.payloadBytes &&
+            std::equal(externalRecords.begin(),
+                       externalRecords.begin() + segmented.transport.recordBytes,
+                       reinterpret_cast<const std::byte*>(static_cast<std::uintptr_t>(
+                           d9cWireHandleValue(segmented.transport.records)))) &&
+            std::equal(externalHandles.begin(),
+                       externalHandles.begin() + segmented.transport.handleBytes,
+                       reinterpret_cast<const std::byte*>(static_cast<std::uintptr_t>(
+                           d9cWireHandleValue(segmented.transport.handles)))) &&
+            std::equal(externalPayload.begin(),
+                       externalPayload.begin() + segmented.transport.payloadBytes,
+                       reinterpret_cast<const std::byte*>(static_cast<std::uintptr_t>(
+                           d9cWireHandleValue(segmented.transport.payload)))),
+        "external segmented copy preserves the true alias role bytes");
+  check(owner.settle(), "observer fixture settles and clears");
+  const auto admitted = copyLedger.snapshot(
+      dxmt9::core::CopyMaterializationClass::PeSemanticOwnerAdmission);
+  const auto exactWire = copyLedger.snapshot(
+      dxmt9::core::CopyMaterializationClass::PeWireFinal);
+  check(admitted.calls == 1u && admitted.retainedBytes == 0u &&
+            exactWire.calls == 1u && exactWire.bytes == exact.wireBytes &&
+            exactWire.retainedBytes == 0u,
+        "phase observation coexists with unchanged admission/final-wire ledger rows");
+  const auto& stats = observer.stats();
+  const auto phase = [&](PeSemanticOwnerPhase value) ->
+      const PeSemanticOwnerPhaseMetric& {
+    return stats.phases[static_cast<std::size_t>(value)];
+  };
+  check(stats.appendEvents == 2u && stats.appendSampled == 1u &&
+            stats.operationEvents == 4u && stats.operationSampled == 0u &&
+            stats.nullCalibrationSamples == 1u &&
+            stats.outcomes[static_cast<std::size_t>(PeSemanticOwnerOutcome::Accepted)] == 1u &&
+            stats.outcomes[static_cast<std::size_t>(PeSemanticOwnerOutcome::Settlement)] == 1u,
+        "observer uses one deterministic parent decision and fixed outcomes");
+  check(phase(PeSemanticOwnerPhase::TryAppendOwnedRecord).events == 2u &&
+            phase(PeSemanticOwnerPhase::PrepareAdmission).events == 2u &&
+            phase(PeSemanticOwnerPhase::Rollback).events == 1u &&
+            phase(PeSemanticOwnerPhase::EmitExactFixed).events == 1u &&
+            phase(PeSemanticOwnerPhase::EmitExactFixedBuildPlan).events == 1u &&
+            phase(PeSemanticOwnerPhase::EmitSegmentedAliasView).events == 1u &&
+            phase(PeSemanticOwnerPhase::EmitSegmentedExternalCopy).events == 1u &&
+            phase(PeSemanticOwnerPhase::EmitSegmentedExternalRoleCopy).events == 1u &&
+            phase(PeSemanticOwnerPhase::SettleClear).events == 1u,
+        "observer covers owner and transport lifecycle phases");
+  check(phase(PeSemanticOwnerPhase::PrepareAdmission).samples == 1u &&
+            phase(PeSemanticOwnerPhase::FixedDirectPinCopy).samples == 1u &&
+            phase(PeSemanticOwnerPhase::PendingDeltaSettlement).samples == 1u &&
+            phase(PeSemanticOwnerPhase::Rollback).samples == 1u,
+        "child timers are parent-gated and sampled inclusively");
+}
+
+void observerScopeRestoresNestedState() {
+  PeSemanticOwnerPhaseObserver sampledObserver(1u);
+  {
+    auto outer = sampledObserver.beginAppend();
+    check(outer.sampled(), "N=1 parent scope samples");
+    {
+      auto nested = sampledObserver.beginOperation(
+          PeSemanticOwnerPhase::SettleClear);
+      check(nested.sampled(), "nested operation samples independently");
+    }
+    auto child = sampledObserver.child(PeSemanticOwnerPhase::Rollback);
+    check(child.sampled(), "outer sampled state is restored after nested stop");
+  }
+  for (int i = 0; i < 2; ++i) {
+    auto repeated = sampledObserver.beginOperation(
+        PeSemanticOwnerPhase::EmitSegmentedAliasView);
+    check(repeated.sampled(), "N=1 repeated operation samples");
+  }
+  check(sampledObserver.stats().operationEvents == 3u &&
+            sampledObserver.stats().operationSampled == 3u,
+        "N=1 operation denominator and samples remain complete");
+
+  PeSemanticOwnerPhaseObserver unsampledObserver(2u);
+  {
+    auto outer = unsampledObserver.beginAppend();
+    check(!outer.sampled(), "first decimated parent is unsampled");
+    auto moved = std::move(outer);
+    {
+      auto nested = unsampledObserver.beginOperation(
+          PeSemanticOwnerPhase::SettleClear);
+      check(!nested.sampled(), "nested unsampled operation remains disabled");
+    }
+    auto child = unsampledObserver.child(PeSemanticOwnerPhase::Rollback);
+    check(!child.sampled(), "unsampled parent state is restored after nesting");
+  }
+  {
+    auto repeated = unsampledObserver.beginAppend();
+    check(repeated.sampled(), "moved unsampled scope restores for next parent");
+  }
+  check(unsampledObserver.stats().appendEvents == 2u &&
+            unsampledObserver.stats().appendSampled == 1u,
+        "moved and nested scopes do not leave stale parent state");
+}
+
+void observerSeparatesPrepareMalformedFromHeader() {
+  using ObservedOwner = PeSemanticBatchOwner<4u, 2u, 4096u, 4u, 4u>;
+  PeSemanticOwnerPhaseObserver observer(1u);
+  ObservedOwner owner;
+  owner.setPhaseObserver(&observer);
+  PeSemanticRecordInputView malformed{};
+  check(!owner.tryAppendOwnedRecord(malformed, []() noexcept { return true; }) &&
+            owner.lastAdmissionFailure() == ObservedOwner::AdmissionFailure::Malformed,
+        "prepare malformed input is classified distinctly");
+  D9CSurface surface;
+  auto header = base(PeSemanticProducerKind::Present, 0u, 1u);
+  header.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0x704u);
+  check(!owner.tryAppendOwnedRecord(header, []() noexcept { return true; }) &&
+            owner.lastAdmissionFailure() == ObservedOwner::AdmissionFailure::Header,
+        "post-plan header rejection remains classified as Header");
+  check(observer.stats().outcomes[
+             static_cast<std::size_t>(PeSemanticOwnerOutcome::Malformed)] == 1u &&
+            observer.stats().outcomes[
+             static_cast<std::size_t>(PeSemanticOwnerOutcome::Header)] == 1u,
+        "observer outcome ledger preserves malformed and header denominators");
+}
 }  // namespace
 
 int main() {
   try {
     static_assert(sizeof(PeSemanticAdmissionPlan) <= 256u);
+    static_assert(std::is_trivially_copyable_v<PeSemanticEmissionHandleContext>);
+    static_assert(sizeof(PeSemanticEmissionHandleContext) <= 1088u);
     static_assert(sizeof(PeSemanticRecordInput) >= 800u);
     static_assert(sizeof(PeSemanticRecordDestinationContext) <= 32u);
     static_assert(sizeof(PeSemanticRecordInputView) <= 40u);
@@ -1521,6 +1903,10 @@ int main() {
     duplicateSurfacePinSmoke();
     qualifiedBufferReferenceLookup();
     pureAdmissionPlanDeduplicatesQualifiedBindings();
+    preparedWireWitnessPreservesOrderAndQualifiedDedup();
+    knownUniqueWireWitnessAppendIsBounded();
+    planningReusesStaleWireWitnessStorage();
+    preparedWireWitnessTracksFirstWirePromotion();
     admissionArithmeticRejectsOverflow();
     pendingDeltaViewRejectsStaleTicket();
     transactionalAdmissionRollsBackWithoutLeakingPins();
@@ -1548,6 +1934,9 @@ int main() {
     committedLeaseQualificationUsesOwnerPins();
     productionOwnerProjectionBindsColdLedger();
     ownerQualifiedMaterializationLedger();
+    calibratedOwnerPhaseObserver();
+    observerScopeRestoresNestedState();
+    observerSeparatesPrepareMalformedFromHeader();
   } catch (const Failure& failure) {
     std::cerr << "pe_semantic_owner_spec failed: " << failure.what() << '\n';
     return 1;

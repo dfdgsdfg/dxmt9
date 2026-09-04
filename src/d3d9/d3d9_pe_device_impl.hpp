@@ -406,6 +406,17 @@ inline bool dxmt9PeScalarSemanticObserverEnabled() {
     return enabled;
 }
 
+// Calibrated owner phase timing is intentionally a conjunction: unlike the
+// ordinary semantic-owner path it must never arm without an explicit
+// decimation rate.  The returned value is process-constant, so owner call
+// sites only test their nullable observer pointer when this is off.
+inline bool dxmt9PeSemanticOwnerPhaseSplitEnabled() {
+    static const bool enabled =
+        dxmt9::util::getenvFlag("DXMT9_PE_SEMANTIC_OWNER_PHASE_SPLIT") &&
+        dxmt9PeStatsDecimationN() != 0u;
+    return enabled;
+}
+
 inline std::uint32_t dxmt9PeThreadSamplerHz() {
     static const std::uint32_t hz = [] {
         // Unset, unparseable, and 0 all fall back to the default rather than
@@ -432,6 +443,7 @@ inline PeDiagnosticsConfig dxmt9PeResolvedDiagnosticsConfig() {
         .scalarSemanticObserver = dxmt9PeScalarSemanticObserverEnabled(),
         .copyMaterializationLedger =
             dxmt9::core::copyMaterializationLedgerEnabled(),
+        .semanticOwnerPhaseSplit = dxmt9PeSemanticOwnerPhaseSplitEnabled(),
         .threadSamplerHz = dxmt9PeThreadSamplerHz(),
     };
 }
@@ -1962,6 +1974,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     // final line is also emitted unconditionally from the destructor so the
     // last partial interval is never lost. No-op when decimation is off.
     void notePeStatsDecimationPresent();
+    void logPeSemanticOwnerPhaseSplit();
     void notePeCopyMaterializationPresent();
     void logPeCopyMaterializationLedger();
     void recordDrawPrimitiveUPCopy(std::uint32_t vertexBytes);

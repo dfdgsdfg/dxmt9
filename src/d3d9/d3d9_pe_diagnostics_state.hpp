@@ -4,6 +4,7 @@
 #include "d3d9_pe_recorder.hpp"
 #include "d3d9_pe_semantic_tokens.hpp"
 #include "d3d9_pe_stats_decimation.hpp"
+#include "d3d9_pe_semantic_owner_phase_observer.hpp"
 #include "dxmt9/copy_materialization_ledger.hpp"
 #include "dxmt9/device_c.h"
 
@@ -31,12 +32,14 @@ struct PeDiagnosticsConfig {
   bool debugLog = false;
   bool scalarSemanticObserver = false;
   bool copyMaterializationLedger = false;
+  bool semanticOwnerPhaseSplit = false;
   std::uint32_t threadSamplerHz = 250;
 
   constexpr bool enabled() const noexcept {
     return recorderStats || recorderChunkLog || statsDecimationN != 0 ||
            vsConstSetterRange || moduleMap || threadSampler || debugLog ||
-           scalarSemanticObserver || copyMaterializationLedger;
+           scalarSemanticObserver || copyMaterializationLedger ||
+           (semanticOwnerPhaseSplit && statsDecimationN != 0u);
   }
 
   constexpr bool chunkCommitTimingEnabled() const noexcept {
@@ -58,11 +61,13 @@ struct PeDiagnosticsFeatureGates {
   bool debugLog = false;
   bool scalarSemanticObserver = false;
   bool copyMaterializationLedger = false;
+  bool semanticOwnerPhaseSplit = false;
 
   constexpr bool any() const noexcept {
     return callScope || hotSetterTimer || chunkCommitTiming ||
            vsConstSetterRange || moduleMap || threadSampler || debugLog ||
-           scalarSemanticObserver || copyMaterializationLedger;
+           scalarSemanticObserver || copyMaterializationLedger ||
+           semanticOwnerPhaseSplit;
   }
 
   static constexpr PeDiagnosticsFeatureGates fromConfig(
@@ -78,6 +83,8 @@ struct PeDiagnosticsFeatureGates {
         .debugLog = config.debugLog,
         .scalarSemanticObserver = config.scalarSemanticObserver,
         .copyMaterializationLedger = config.copyMaterializationLedger,
+        .semanticOwnerPhaseSplit = config.semanticOwnerPhaseSplit &&
+            config.statsDecimationN != 0u,
     };
   }
 };
@@ -184,7 +191,11 @@ struct PeDiagnosticsState {
         allFamilySemanticTokens(resolved.scalarSemanticObserver
             ? std::make_unique<
                   dxmt9::d3d9::pe::PeAllFamilySemanticTokenLedger>()
-            : nullptr) {}
+            : nullptr),
+        semanticOwnerPhaseObserver(resolved.semanticOwnerPhaseSplit &&
+                                        resolved.statsDecimationN != 0u
+                                        ? resolved.statsDecimationN
+                                        : 0u) {}
 
   static constexpr std::size_t kPeAppendTypeBuckets = 8;
   static std::size_t peAppendTypeBucket(std::uint32_t type) noexcept {
@@ -227,6 +238,7 @@ struct PeDiagnosticsState {
   // PeRecorderState, D3D9DeviceImpl, or child wrapper layout on x86/x64.
   std::unique_ptr<dxmt9::d3d9::pe::PeAllFamilySemanticTokenLedger>
       allFamilySemanticTokens{};
+  dxmt9::d3d9::pe::PeSemanticOwnerPhaseObserver semanticOwnerPhaseObserver;
   VsConstSetterRangePerf vsConstSetterRangePerf_{};
   PeRecorderStats peRecorderStats_{};
   PeDecimatedScopeStats peChunkAppendDecimatedStats_{};
