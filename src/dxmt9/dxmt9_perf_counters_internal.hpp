@@ -868,6 +868,13 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticReuseProbeHitDistance2{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticReuseProbeHitDistance3To4{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticReuseProbeHitDistance5To8{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticObserverSamples{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticObserverSame{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticObserverChanged{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticObserverShaderLayout{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticObserverUniformGeneration{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticObserverUniformPayload{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticObserverResourceIdentity{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterUnknown{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterMutableState{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterDrawPacket{0};
@@ -1956,6 +1963,16 @@ struct Counters {
   std::atomic<std::uint64_t> commitChunkPhaseMarkSortNs{0};
   std::atomic<std::uint64_t> commitChunkPhaseMarkHandles{0};
   std::atomic<std::uint64_t> commitChunkPhaseMarkBuffers{0};
+  std::atomic<std::uint64_t> resourceMarkOverlapIngressEntries{0};
+  std::atomic<std::uint64_t> resourceMarkOverlapPublishEntries{0};
+  std::atomic<std::uint64_t> resourceMarkOverlapUnique{0};
+  std::atomic<std::uint64_t> resourceMarkOverlapIngressDuplicates{0};
+  std::atomic<std::uint64_t> resourceMarkOverlapPublishDuplicates{0};
+  std::atomic<std::uint64_t> resourceMarkOverlapCovered{0};
+  std::atomic<std::uint64_t> resourceMarkOverlapStale{0};
+  std::atomic<std::uint64_t> resourceMarkOverlapNoIngress{0};
+  std::atomic<std::uint64_t> resourceMarkOverlapCollisionProbes{0};
+  std::atomic<std::uint64_t> resourceMarkOverlapOverflow{0};
   std::atomic<std::uint64_t> commitChunkPhaseEnqueueNs{0};
   std::atomic<std::uint64_t> commitChunkPhasePresentWaitNs{0};
   // R-BACK-43.6 frozen-ticket re-stamp protocol

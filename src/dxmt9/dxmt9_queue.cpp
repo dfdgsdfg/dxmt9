@@ -1059,17 +1059,55 @@ void QueueLifecycleController::resetNoEnqueueGapProgressLocked() {
   noEnqueueGapCommitChunkCompletedReplayCpuBeforePublishNs_ = 0;
   noEnqueueGapCommitChunkActiveReplayCpuBeforePublishNs_ = 0;
   noEnqueueGapCommitChunkInterReplayGapBeforePublishNs_ = 0;
+  noEnqueueGapCommitChunkReplayStartTime_ = {};
+  noEnqueueGapCommitChunkReplayActive_ = false;
+  noEnqueueGapCommitChunkReplayPublished_ = false;
+  noEnqueueGapCommitChunkReplayShape_.reset();
 }
 
-void QueueLifecycleController::recordNoEnqueueWaitGapToCommitPublish() {
+void QueueLifecycleController::recordNoEnqueueWaitGapToCommitPublish(
+    bool publishContainsPresent) {
   std::lock_guard lock(pendingCompletionMutex_);
   const auto now = std::chrono::steady_clock::now();
+  // A replay callback can first flush a non-Present capacity slot and publish
+  // its Present later in the same callback. The first publication closes the
+  // general no-enqueue window, but it must not prevent the later exact Present
+  // edge from settling the still-active replay shape.
+  bool settledActiveReplayAtPresent = false;
+  if (publishContainsPresent && noEnqueueGapCommitChunkReplayActive_ &&
+      !noEnqueueGapCommitChunkReplayPublished_) {
+    noEnqueueGapCommitChunkActiveReplayCpuBeforePublishNs_ =
+        static_cast<std::uint64_t>(std::chrono::duration_cast<
+            std::chrono::nanoseconds>(now -
+                                      noEnqueueGapCommitChunkReplayStartTime_)
+                                       .count());
+    noEnqueueGapCommitChunkReplayPublished_ = true;
+    settledActiveReplayAtPresent = true;
+  }
+  if (publishContainsPresent && noEnqueueGapCommitChunkReplayShape_) {
+    const auto& shape = *noEnqueueGapCommitChunkReplayShape_;
+    perf::countCompletionNoEnqueueCommitChunkRecordShapeBeforePublish(
+        shape.recordCount,
+        shape.drawRecords,
+        shape.constRecords,
+        shape.applyStateRecords,
+        shape.clearRecords,
+        shape.presentRecords,
+        shape.surfaceRecords,
+        shape.queryRecords,
+        shape.otherRecords);
+    noEnqueueGapCommitChunkReplayShape_.reset();
+  }
   if (completionWaitActive_) {
     perf::countCompletionWaitCommitPublish();
     completionWaitCommitPublishTime_ = now;
   }
   if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{} ||
       noEnqueueGapCommitPublishRecorded_) {
+    if (settledActiveReplayAtPresent) {
+      perf::countCompletionNoEnqueueCommitChunkActiveReplayCpuBeforePublish(
+          noEnqueueGapCommitChunkActiveReplayCpuBeforePublishNs_);
+    }
     return;
   }
   const auto elapsed = now - lastNoEnqueueCompletionWaitEnd_;
@@ -1568,34 +1606,106 @@ void QueueLifecycleController::recordCpuReadySupplyDequeuedLocked(
       perf::CpuReadySupplyStage::PublishToEncodeDequeue);
 }
 
-void QueueLifecycleController::recordNoEnqueueWaitGapToCommitChunkReplayStart() {
+void QueueLifecycleController::recordNoEnqueueWaitGapToCommitChunkReplayStart(
+    const NoEnqueueCommitChunkRecordShape* shape) {
   std::lock_guard lock(pendingCompletionMutex_);
+  const auto now = std::chrono::steady_clock::now();
+  if (!completionGapReplayActive_) {
+    completionGapReplayStartTime_ = now;
+    completionGapReplayActive_ = true;
+    completionGapReplayShape_ =
+        shape ? std::optional<NoEnqueueCommitChunkRecordShape>(*shape)
+              : std::nullopt;
+  }
   if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{}) {
     return;
   }
-  if (!noEnqueueGapCommitPublishRecorded_) {
-    ++noEnqueueGapCommitChunkReplayStartsBeforePublish_;
-  }
-  if (noEnqueueGapCommitChunkReplayStartRecorded_) {
+  if (noEnqueueGapCommitPublishRecorded_) {
     return;
   }
-  const auto elapsed = std::chrono::steady_clock::now() - lastNoEnqueueCompletionWaitEnd_;
-  perf::countCompletionNoEnqueueWaitToCommitChunkReplayStart(
-      static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
-  noEnqueueGapCommitChunkReplayStartRecorded_ = true;
+  ++noEnqueueGapCommitChunkReplayStartsBeforePublish_;
+  if (!noEnqueueGapCommitChunkReplayStartRecorded_) {
+    const auto elapsed = now - lastNoEnqueueCompletionWaitEnd_;
+    perf::countCompletionNoEnqueueWaitToCommitChunkReplayStart(
+        static_cast<std::uint64_t>(std::chrono::duration_cast<
+            std::chrono::nanoseconds>(elapsed).count()));
+    noEnqueueGapCommitChunkReplayStartRecorded_ = true;
+  }
+  if (!noEnqueueGapCommitChunkReplayActive_) {
+    noEnqueueGapCommitChunkReplayStartTime_ =
+        completionGapReplayStartTime_ > lastNoEnqueueCompletionWaitEnd_
+            ? completionGapReplayStartTime_
+            : lastNoEnqueueCompletionWaitEnd_;
+    noEnqueueGapCommitChunkReplayActive_ = true;
+    noEnqueueGapCommitChunkReplayPublished_ = false;
+    noEnqueueGapCommitChunkReplayShape_ = completionGapReplayShape_;
+  }
 }
 
-void QueueLifecycleController::recordNoEnqueueWaitGapToCommitChunkReplayEnd() {
+void QueueLifecycleController::recordNoEnqueueWaitGapToCommitChunkReplayEnd(
+    bool replaySucceeded) {
   std::lock_guard lock(pendingCompletionMutex_);
-  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{}) {
-    return;
-  }
   const auto now = std::chrono::steady_clock::now();
-  if (!noEnqueueGapCommitPublishRecorded_) {
+  const bool replayEndedInNoEnqueueWindow =
+      lastNoEnqueueCompletionWaitEnd_ !=
+          std::chrono::steady_clock::time_point{} &&
+      !noEnqueueGapCommitPublishRecorded_;
+  if (noEnqueueGapCommitPublishRecorded_) {
+    // The general window was closed at the first successful publish. A later
+    // Present publish may already have settled this replay; otherwise its full
+    // shape is not wholly before that first publish and must be dropped.
+    noEnqueueGapCommitChunkReplayActive_ = false;
+    noEnqueueGapCommitChunkReplayPublished_ = false;
+    noEnqueueGapCommitChunkReplayStartTime_ = {};
+    noEnqueueGapCommitChunkReplayShape_.reset();
+  } else if (replayEndedInNoEnqueueWindow) {
     ++noEnqueueGapCommitChunkReplayEndsBeforePublish_;
     noEnqueueGapLastCommitChunkReplayEndTime_ = now;
+    if (noEnqueueGapCommitChunkReplayActive_) {
+      if (replaySucceeded && !noEnqueueGapCommitChunkReplayPublished_) {
+        // Clip a replay that began during the preceding GPU wait to the
+        // no-enqueue window. The worker's full duration belongs to the
+        // completion-wait observer, not this post-wait attribution.
+        noEnqueueGapCommitChunkCompletedReplayCpuBeforePublishNs_ +=
+            static_cast<std::uint64_t>(std::chrono::duration_cast<
+                std::chrono::nanoseconds>(
+                now - noEnqueueGapCommitChunkReplayStartTime_).count());
+      }
+      // A completed non-Present replay is reported at its end.  An active
+      // replay that published inside its callback is reported by publish,
+      // which set replayPublished_ before this callback returned.
+      if (replaySucceeded && !noEnqueueGapCommitChunkReplayPublished_ &&
+          noEnqueueGapCommitChunkReplayShape_) {
+        const auto& shape = *noEnqueueGapCommitChunkReplayShape_;
+        perf::countCompletionNoEnqueueCommitChunkRecordShapeBeforePublish(
+            shape.recordCount,
+            shape.drawRecords,
+            shape.constRecords,
+            shape.applyStateRecords,
+            shape.clearRecords,
+            shape.presentRecords,
+            shape.surfaceRecords,
+            shape.queryRecords,
+            shape.otherRecords);
+      }
+      noEnqueueGapCommitChunkReplayActive_ = false;
+      noEnqueueGapCommitChunkReplayPublished_ = false;
+      noEnqueueGapCommitChunkReplayStartTime_ = {};
+      noEnqueueGapCommitChunkReplayShape_.reset();
+    }
+    if (!replaySucceeded) {
+      noEnqueueGapCommitChunkReplayShape_.reset();
+    }
   }
-  if (noEnqueueGapCommitChunkReplayEndRecorded_) {
+
+  if (completionGapReplayActive_) {
+    completionGapReplayActive_ = false;
+    completionGapReplayStartTime_ = {};
+    completionGapReplayShape_.reset();
+  }
+
+  if (!replayEndedInNoEnqueueWindow ||
+      noEnqueueGapCommitChunkReplayEndRecorded_) {
     return;
   }
   const auto elapsed = now - lastNoEnqueueCompletionWaitEnd_;
@@ -1604,27 +1714,11 @@ void QueueLifecycleController::recordNoEnqueueWaitGapToCommitChunkReplayEnd() {
   noEnqueueGapCommitChunkReplayEndRecorded_ = true;
 }
 
-void QueueLifecycleController::recordNoEnqueueCommitChunkReplayCpuBeforePublish(
-    std::uint64_t nanoseconds) {
-  std::lock_guard lock(pendingCompletionMutex_);
-  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{} ||
-      noEnqueueGapCommitPublishRecorded_) {
-    return;
-  }
-  noEnqueueGapCommitChunkCompletedReplayCpuBeforePublishNs_ += nanoseconds;
-}
-
-void QueueLifecycleController::recordNoEnqueueCommitChunkActiveReplayCpuBeforePublish(
-    std::uint64_t nanoseconds) {
-  std::lock_guard lock(pendingCompletionMutex_);
-  if (lastNoEnqueueCompletionWaitEnd_ == std::chrono::steady_clock::time_point{} ||
-      noEnqueueGapCommitPublishRecorded_) {
-    return;
-  }
-  noEnqueueGapCommitChunkActiveReplayCpuBeforePublishNs_ =
-      std::max(noEnqueueGapCommitChunkActiveReplayCpuBeforePublishNs_, nanoseconds);
-}
-
+/*
+ * Keep the shape API for callers that already have a post-replay projection.
+ * Production replay reports successful non-present chunks at replay end and
+ * keeps only the outstanding shape for a callback that publishes inline.
+ */
 void QueueLifecycleController::recordNoEnqueueCommitChunkRecordShapeBeforePublish(
     const NoEnqueueCommitChunkRecordShape& shape) {
   std::lock_guard lock(pendingCompletionMutex_);
@@ -1642,6 +1736,7 @@ void QueueLifecycleController::recordNoEnqueueCommitChunkRecordShapeBeforePublis
       shape.surfaceRecords,
       shape.queryRecords,
       shape.otherRecords);
+  noEnqueueGapCommitChunkReplayShape_.reset();
 }
 
 void QueueLifecycleController::recordNoEnqueueFirstPublishSlotShapeBeforePublish(
@@ -3442,13 +3537,11 @@ bool QueueLifecycleController::commitCurrentChunk(
 
   const size_t publishedSlotIndex = **writingSlot;
   const u64 publishedSeqId = nextSeqId->load(std::memory_order_relaxed);
+  const auto firstPublishShape =
+      summarizeNoEnqueueFirstPublishSlotShape(*writingPayload);
   observeCommitWait(publishedSlotIndex, slot.seqId, inflightLimit);
-  recordNoEnqueueCommitPublishWaitBeforePublish(static_cast<std::uint64_t>(
-      std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
-  recordNoEnqueueFirstPublishSlotShapeBeforePublish(
-      summarizeNoEnqueueFirstPublishSlotShape(*writingPayload));
-  recordNoEnqueueWaitGapToCommitPublish();
   bool sealed = false;
+  std::uint64_t onBeforePublishCpuNanoseconds = 0;
   commitPublish(publishedSlotIndex, publishedSeqId, inflightLimit, [&] {
     slot.seqId = nextSeqId->load(std::memory_order_relaxed);
     writingPayload->seqId = slot.seqId;
@@ -3456,9 +3549,9 @@ bool QueueLifecycleController::commitCurrentChunk(
     if (onBeforePublish) {
       onBeforePublish(*writingPayload);
     }
-    recordNoEnqueueCommitPublishOnBeforePublishCpu(static_cast<std::uint64_t>(
+    onBeforePublishCpuNanoseconds = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
-            std::chrono::steady_clock::now() - onBeforePublishStart).count()));
+            std::chrono::steady_clock::now() - onBeforePublishStart).count());
     const std::uint64_t sourceOrdinal =
         identity.valid() ? identity.sourceOrdinal : slot.seqId;
     const std::uint64_t rawOrdinal =
@@ -3547,6 +3640,17 @@ bool QueueLifecycleController::commitCurrentChunk(
                                   ->lastPublicationFailure()));
     return false;
   }
+  // Attribute only a successful Tape publication. In particular, an active
+  // replay interval is classified as an inline Present only when the exact
+  // published slot contains Present; a capacity/flush publication must not
+  // consume the replay's Present-bearing shape.
+  recordNoEnqueueCommitPublishOnBeforePublishCpu(
+      onBeforePublishCpuNanoseconds);
+  recordNoEnqueueCommitPublishWaitBeforePublish(static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(waitElapsed).count()));
+  recordNoEnqueueFirstPublishSlotShapeBeforePublish(firstPublishShape);
+  recordNoEnqueueWaitGapToCommitPublish(
+      firstPublishShape.presentCommands != 0);
   noteCpuReadyCapacityProgress();
   return true;
 }
@@ -6132,6 +6236,21 @@ bool QueueLifecycleController::processOnePendingCompletion() {
       if (enqueuesDuringWait == 0) {
         lastNoEnqueueCompletionWaitEnd_ = completed;
         resetNoEnqueueGapProgressLocked();
+        // A replay may have started while the completion thread was waiting.
+        // The new no-enqueue window observes only the suffix after the wait
+        // ended, while the global interval remains owned by the worker until
+        // its replay-end callback.
+        if (completionGapReplayActive_) {
+          noEnqueueGapCommitChunkReplayStartTime_ =
+              completionGapReplayStartTime_ > completed
+                  ? completionGapReplayStartTime_
+                  : completed;
+          noEnqueueGapCommitChunkReplayActive_ = true;
+          noEnqueueGapCommitChunkReplayPublished_ = false;
+          noEnqueueGapCommitChunkReplayStartsBeforePublish_ = 1u;
+          noEnqueueGapCommitChunkReplayStartRecorded_ = true;
+          noEnqueueGapCommitChunkReplayShape_ = completionGapReplayShape_;
+        }
       }
     }
     if (encodeCv) {

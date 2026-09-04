@@ -1748,12 +1748,10 @@ class QueueLifecycleController {
   void recordCpuReadySupplyDequeued(
       CpuReadyTape::PayloadKind sourceClass, CpuReadySourceId sourceId,
       CpuReadyStorageRef storage, std::uint32_t controlIndex, u64 seqId);
-  void recordNoEnqueueWaitGapToCommitChunkReplayStart();
-  void recordNoEnqueueWaitGapToCommitChunkReplayEnd();
-  void recordNoEnqueueCommitChunkReplayCpuBeforePublish(
-      std::uint64_t nanoseconds);
-  void recordNoEnqueueCommitChunkActiveReplayCpuBeforePublish(
-      std::uint64_t nanoseconds);
+  void recordNoEnqueueWaitGapToCommitChunkReplayStart(
+      const NoEnqueueCommitChunkRecordShape* shape = nullptr);
+  void recordNoEnqueueWaitGapToCommitChunkReplayEnd(
+      bool replaySucceeded);
   void recordNoEnqueueCommitChunkRecordShapeBeforePublish(
       const NoEnqueueCommitChunkRecordShape& shape);
   void recordNoEnqueueFirstPublishSlotShapeBeforePublish(
@@ -1830,7 +1828,7 @@ class QueueLifecycleController {
   CommandBufferDiagnostics summarizeSubmissionSources(
       const QueueSubmissionRecord& record,
       std::span<const QueueCompletionSource> sources) const;
-  void recordNoEnqueueWaitGapToCommitPublish();
+  void recordNoEnqueueWaitGapToCommitPublish(bool publishContainsPresent);
   void recordNoEnqueueCommitPublishWaitBeforePublish(
       std::uint64_t nanoseconds);
   void recordNoEnqueueCommitPublishOnBeforePublishCpu(
@@ -2180,6 +2178,21 @@ class QueueLifecycleController {
   std::uint64_t noEnqueueGapCommitChunkCompletedReplayCpuBeforePublishNs_ = 0;
   std::uint64_t noEnqueueGapCommitChunkActiveReplayCpuBeforePublishNs_ = 0;
   std::uint64_t noEnqueueGapCommitChunkInterReplayGapBeforePublishNs_ = 0;
+  std::chrono::steady_clock::time_point
+      noEnqueueGapCommitChunkReplayStartTime_{};
+  bool noEnqueueGapCommitChunkReplayActive_ = false;
+  bool noEnqueueGapCommitChunkReplayPublished_ = false;
+  std::optional<NoEnqueueCommitChunkRecordShape>
+      noEnqueueGapCommitChunkReplayShape_{};
+  // The replay worker can span the end of a GPU completion wait.  Keep the
+  // worker's actual outstanding interval separate from the per no-enqueue
+  // window projection so resetting that window cannot lose an in-flight
+  // replay.  The projection is re-seeded at the wait-end timestamp.
+  std::chrono::steady_clock::time_point
+      completionGapReplayStartTime_{};
+  bool completionGapReplayActive_ = false;
+  std::optional<NoEnqueueCommitChunkRecordShape>
+      completionGapReplayShape_{};
   std::unique_ptr<CpuReadySupplyObservation[]>
       cpuReadySupplyObservations_{};
   u64 nextCpuReadySupplyObservationToken_ = 1u;

@@ -924,10 +924,10 @@ class CommandQueue {
   void cancelCpuReadySupplyReplayEntry(
       core::CpuReadyTape::PayloadKind sourceClass,
       core::metalqueue::CpuReadySupplyObservationToken attemptToken);
-  void noteCommitChunkReplayStartForCompletionGap();
-  void noteCommitChunkReplayEndForCompletionGap(std::uint64_t replayNanoseconds);
-  void noteCommitChunkReplayCpuBeforePublish(std::uint64_t nanoseconds);
-  void noteCommitChunkActiveReplayCpuBeforePublish(std::uint64_t nanoseconds);
+  void noteCommitChunkReplayStartForCompletionGap(
+      const core::metalqueue::NoEnqueueCommitChunkRecordShape* shape = nullptr);
+  void noteCommitChunkReplayEndForCompletionGap(
+      std::uint64_t replayNanoseconds, bool replaySucceeded);
   void noteCommitChunkRecordShapeForCompletionGap(
       const core::metalqueue::NoEnqueueCommitChunkRecordShape& shape);
   void prefetchCurrentWritingSlotPipelines();

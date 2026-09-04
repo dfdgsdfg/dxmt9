@@ -19,6 +19,7 @@
 namespace {
 
 using dxmt9::d3d9::ImportedChunkView;
+using dxmt9::d3d9::ImportedRecordView;
 using dxmt9::d3d9::OrderedControlDisposition;
 using dxmt9::d3d9::OrderedControlKind;
 using dxmt9::d3d9::RawCommandChunk;
@@ -1163,6 +1164,108 @@ void directChunkSlotRangeGateAndExactPlan() {
         "APPLY_STATE-only range remains without a direct source");
 }
 
+void recordCapacityDeltaMatchesSourcePlanAndFailsAtomically() {
+  const std::array records{drawRecord(),
+                           drawRecord(D9C_COMMAND_RECORD_APPLY_STATE),
+                           clearRecord(2u)};
+  const auto fixture = makeValidatedFixture(records);
+  const auto imported = fixture.view();
+
+  const auto drawDelta =
+      dxmt9::d3d9::computeRecordCapacityDelta(imported.record(0));
+  const auto stateDelta =
+      dxmt9::d3d9::computeRecordCapacityDelta(imported.record(1));
+  const auto clearDelta =
+      dxmt9::d3d9::computeRecordCapacityDelta(imported.record(2));
+  check(drawDelta.result ==
+            dxmt9::d3d9::RecordCapacityDeltaResult::GpuProducing &&
+            drawDelta.drawCount == 1u &&
+            drawDelta.capacity.commandHeaders == 1u,
+        "a draw produces one checked capacity delta and one draw");
+  check(stateDelta.result ==
+            dxmt9::d3d9::RecordCapacityDeltaResult::StateOnly &&
+            stateDelta.drawCount == 0u && stateDelta.capacity ==
+                dxmt9::core::SourcePayloadCapacity{},
+        "state-only records produce an empty capacity delta");
+  check(clearDelta.result ==
+            dxmt9::d3d9::RecordCapacityDeltaResult::GpuProducing &&
+            clearDelta.drawCount == 0u &&
+            clearDelta.capacity.commandHeaders == 1u &&
+            clearDelta.capacity.clearRecords == 1u &&
+            clearDelta.capacity.clearRects == 2u,
+        "a coordinator produces its complete capacity delta once");
+
+  dxmt9::core::SourcePayloadCapacity accumulated{};
+  std::size_t drawCount = 0;
+  check(dxmt9::d3d9::applyRecordCapacityDelta(accumulated, drawCount,
+                                               drawDelta) &&
+            dxmt9::d3d9::applyRecordCapacityDelta(accumulated, drawCount,
+                                                   stateDelta) &&
+            dxmt9::d3d9::applyRecordCapacityDelta(accumulated, drawCount,
+                                                   clearDelta),
+        "valid deltas apply to both pending and aggregate-style accumulators");
+  const auto plan = dxmt9::d3d9::planReplayEmission(imported, 61u, 4096u);
+  check(plan.partitioned() && plan.aggregateCapacity.commandHeaders ==
+                accumulated.commandHeaders &&
+            plan.aggregateCapacity.clearRecords == accumulated.clearRecords &&
+            plan.aggregateCapacity.clearRects == accumulated.clearRects &&
+            plan.directDrawCount == drawCount,
+        "source-wide plan agrees with the shared delta fold");
+
+  const D9CCommandChunkWireRecordHeader malformedHeader{
+      .type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE};
+  const ImportedRecordView malformedRecord{
+      .header = malformedHeader,
+      .payload = std::span<const std::byte>{},
+  };
+  const auto malformedDelta =
+      dxmt9::d3d9::computeRecordCapacityDelta(malformedRecord);
+  check(malformedDelta.result ==
+            dxmt9::d3d9::RecordCapacityDeltaResult::Invalid &&
+            !dxmt9::d3d9::applyRecordCapacityDelta(accumulated, drawCount,
+                                                   malformedDelta),
+        "a malformed record cannot be applied as a capacity delta");
+
+  const auto beforeOverflow = accumulated;
+  auto overflowTarget = accumulated;
+  overflowTarget.commandHeaders =
+      std::numeric_limits<std::uint32_t>::max();
+  const auto beforeDrawCount = drawCount;
+  check(!dxmt9::d3d9::applyRecordCapacityDelta(overflowTarget, drawCount,
+                                                drawDelta) &&
+            overflowTarget.commandHeaders ==
+                std::numeric_limits<std::uint32_t>::max() &&
+            drawCount == beforeDrawCount,
+        "capacity overflow is rejected without partially mutating the target");
+  check(beforeOverflow.commandHeaders == accumulated.commandHeaders,
+        "the source accumulator remains unchanged by another target failure");
+
+  auto invalidTarget = accumulated;
+  invalidTarget.commandHeaders =
+      static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) +
+      1u;
+  const auto invalidTargetBefore = invalidTarget;
+  check(!dxmt9::d3d9::applyRecordCapacityDelta(invalidTarget, drawCount,
+                                                drawDelta) &&
+            invalidTarget == invalidTargetBefore &&
+            drawCount == beforeDrawCount,
+        "an already out-of-domain target fails closed without unsigned underflow");
+
+  auto validTarget = accumulated;
+  auto invalidDrawCount =
+      static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max()) +
+      1u;
+  const auto validTargetBefore = validTarget;
+  check(!dxmt9::d3d9::applyRecordCapacityDelta(
+            validTarget, invalidDrawCount, drawDelta) &&
+            validTarget == validTargetBefore &&
+            invalidDrawCount ==
+                static_cast<std::size_t>(
+                    std::numeric_limits<std::uint32_t>::max()) +
+                    1u,
+        "an already out-of-domain draw count fails closed without unsigned underflow");
+}
+
 }  // namespace
 
 int main() {
@@ -1185,6 +1288,7 @@ int main() {
     oversizeAndOverflowFallbackBeforeReplay();
     directChunkSlotWholeRawDispositionsAreTypedAndPreEffect();
     directChunkSlotRangeGateAndExactPlan();
+    recordCapacityDeltaMatchesSourcePlanAndFailsAtomically();
   } catch (const std::exception& error) {
     std::cerr << "cpu_ready_plan_spec failed: " << error.what() << '\n';
     return 1;

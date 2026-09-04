@@ -248,13 +248,7 @@ bool addDrawCapacities(
                          kArenaDrawPayloadAppendAlignment);
 }
 
-enum class DirectRecordResult {
-  StateOnly,
-  GpuProducing,
-  Invalid,
-  Overflow,
-  Unsupported,
-};
+using DirectRecordResult = RecordCapacityDeltaResult;
 
 DirectRecordResult addDirectRecordCapacity(
     core::SourcePayloadCapacity& capacity,
@@ -334,6 +328,48 @@ DirectRecordResult addDirectRecordCapacity(
   default:
     return DirectRecordResult::Unsupported;
   }
+}
+
+RecordCapacityDelta computeRecordCapacityDeltaImpl(
+    const ImportedRecordView& record) noexcept {
+  RecordCapacityDelta delta{};
+  delta.result = addDirectRecordCapacity(delta.capacity, delta.drawCount,
+                                         record);
+  return delta;
+}
+
+bool applyRecordCapacityDeltaImpl(core::SourcePayloadCapacity& target,
+                                  std::size_t& drawCount,
+                                  const RecordCapacityDelta& delta) noexcept {
+  if (delta.result != RecordCapacityDeltaResult::StateOnly &&
+      delta.result != RecordCapacityDeltaResult::GpuProducing) {
+    return false;
+  }
+
+  constexpr auto kMax =
+      static_cast<std::size_t>(std::numeric_limits<std::uint32_t>::max());
+  if (drawCount > kMax || delta.drawCount > kMax - drawCount) return false;
+
+  // Check every dimension before mutating the destination. This retains the
+  // old accumulator's checked uint32 contract. Both production destinations
+  // are plan-local; if either application fails, the enclosing plan is
+  // rejected before either accumulator becomes externally visible.
+#define DXMT9_CHECK_RECORD_CAPACITY_DELTA(                                \
+    region, plan, storage, element, physical, provision, allocation,       \
+    lookup, owner)                                                         \
+  if (target.plan > kMax || delta.capacity.plan > kMax - target.plan)       \
+    return false;
+  DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_CHECK_RECORD_CAPACITY_DELTA)
+#undef DXMT9_CHECK_RECORD_CAPACITY_DELTA
+
+#define DXMT9_ADD_RECORD_CAPACITY_DELTA(                                  \
+    region, plan, storage, element, physical, provision, allocation,       \
+    lookup, owner)                                                         \
+  target.plan += delta.capacity.plan;
+  DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_ADD_RECORD_CAPACITY_DELTA)
+#undef DXMT9_ADD_RECORD_CAPACITY_DELTA
+  drawCount += delta.drawCount;
+  return true;
 }
 
 bool addDerivedDrawCapacity(core::SourcePayloadCapacity& capacity,
@@ -650,6 +686,17 @@ ReplayEmissionPlan emissionReject(RawOrdinal rawOrdinal,
 
 }  // namespace
 
+RecordCapacityDelta computeRecordCapacityDelta(
+    const ImportedRecordView& record) noexcept {
+  return computeRecordCapacityDeltaImpl(record);
+}
+
+bool applyRecordCapacityDelta(core::SourcePayloadCapacity& target,
+                              std::size_t& drawCount,
+                              const RecordCapacityDelta& delta) noexcept {
+  return applyRecordCapacityDeltaImpl(target, drawCount, delta);
+}
+
 ReplayEmissionPlan planReplayEmission(
     const ImportedChunkView& imported, RawOrdinal rawOrdinal,
     std::size_t pageSize) noexcept {
@@ -784,10 +831,11 @@ ReplayEmissionPlan planReplayEmission(
         pendingFirstRecord = i;
         pendingOpen = true;
       }
-      std::size_t localDraws = pendingDrawCount;
-      const auto localResult =
-          addDirectRecordCapacity(pendingCapacity, localDraws, record);
-      switch (localResult) {
+      // Decode and measure this record once. The same checked delta is then
+      // applied to both accumulators; before this, each application parsed
+      // draw headers/sections independently and could drift on a new field.
+      const auto delta = computeRecordCapacityDelta(record);
+      switch (delta.result) {
       case DirectRecordResult::Invalid:
         return emissionReject(rawOrdinal, EmissionPlanReason::MalformedView);
       case DirectRecordResult::Overflow:
@@ -798,14 +846,11 @@ ReplayEmissionPlan planReplayEmission(
       case DirectRecordResult::GpuProducing:
         break;
       }
-      pendingDrawCount = localDraws;
-      // The aggregate mirrors the same append into the shared reservation.
-      std::size_t totalDraws = aggregateDrawCount;
-      if (addDirectRecordCapacity(aggregate, totalDraws, record) !=
-          localResult) {
-        return emissionReject(rawOrdinal, EmissionPlanReason::MalformedView);
+      if (!applyRecordCapacityDelta(pendingCapacity, pendingDrawCount,
+                                    delta) ||
+          !applyRecordCapacityDelta(aggregate, aggregateDrawCount, delta)) {
+        return emissionReject(rawOrdinal, EmissionPlanReason::Overflow);
       }
-      aggregateDrawCount = totalDraws;
       break;
     }
     case EmissionRecordRole::Coordinator: {
@@ -814,23 +859,24 @@ ReplayEmissionPlan planReplayEmission(
       }
       core::SourcePayloadCapacity locator{};
       std::size_t locatorDraws = 0;
-      std::size_t ignoredDraws = 0;
-      const auto locatorResult =
-          addDirectRecordCapacity(locator, locatorDraws, record);
-      const auto aggregateResult =
-          addDirectRecordCapacity(aggregate, ignoredDraws, record);
-      if (locatorResult != aggregateResult ||
-          locatorResult != DirectRecordResult::GpuProducing ||
-          locatorDraws != 0 || ignoredDraws != 0) {
+      const auto delta = computeRecordCapacityDelta(record);
+      if (delta.result != DirectRecordResult::GpuProducing ||
+          delta.drawCount != 0 || locatorDraws != 0) {
         // Returning here rather than continuing keeps the partition and the
         // capacity accounting in agreement: a skipped locator would leave a
         // coverage hole that reports the wrong typed reason.
         return emissionReject(
             rawOrdinal,
-            locatorResult == DirectRecordResult::Overflow ||
-                    aggregateResult == DirectRecordResult::Overflow
+            delta.result == DirectRecordResult::Overflow
                 ? EmissionPlanReason::Overflow
                 : EmissionPlanReason::MalformedView);
+      }
+      if (!applyRecordCapacityDelta(locator, locatorDraws, delta) ||
+          !applyRecordCapacityDelta(aggregate, aggregateDrawCount, delta)) {
+        // A checked application can overflow an existing accumulator even
+        // though the record-local delta itself was valid. Preserve the old
+        // overflow fallback in that case.
+        return emissionReject(rawOrdinal, EmissionPlanReason::Overflow);
       }
       push(EmissionSegment{
           .kind = EmissionSegmentKind::CoordinatorLocator,

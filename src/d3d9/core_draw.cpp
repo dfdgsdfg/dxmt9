@@ -3,6 +3,7 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_d3d9_bytecode.hpp"
+#include "d3d9_snapshot_miss_observer.hpp"
 #include "../dxmt9/dxmt9_perf_counters.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
@@ -3372,6 +3373,22 @@ Device::cachedBaseDrawState(bool includeIndexBuffer) {
       baseState.indexBuffer.reset();
     }
     const bool hadCachedState = cache.valid;
+    const bool observeSemanticMiss =
+        hadCachedState && batchMissSemanticReuseProbeEnabled();
+    FlatDrawStateKey previousSemanticKey{};
+    DrawShaderLayoutContext previousSemanticShaderLayout{};
+    dxmt9::d3d9::SnapshotMissUniformGenerations previousSemanticGenerations{};
+    u64 previousSemanticUniformPayloadHash = 0;
+    if (observeSemanticMiss) {
+      previousSemanticKey = cache.hot.key;
+      previousSemanticShaderLayout = cache.shaderLayout;
+      previousSemanticGenerations = {
+          .aggregate = cache.uniformGeneration,
+          .vertexConstants = cache.vertexShaderConstantGeneration,
+          .pixelConstants = cache.pixelShaderConstantGeneration,
+      };
+      previousSemanticUniformPayloadHash = cache.uniformPayloadHash;
+    }
     const auto previousVertexConstantGeneration =
         cache.vertexShaderConstantGeneration;
     const auto previousPixelConstantGeneration =
@@ -3439,6 +3456,21 @@ Device::cachedBaseDrawState(bool includeIndexBuffer) {
     cache.textureStageStateFlatGeneration = drawTextureStageStateFlatGeneration_;
     cache.samplerStateFlatGeneration = drawSamplerStateFlatGeneration_;
     cache.valid = true;
+    if (observeSemanticMiss) {
+      const auto comparison = dxmt9::d3d9::compareSnapshotMissSemantics(
+          previousSemanticShaderLayout, cache.shaderLayout, previousSemanticKey,
+          cache.hot.key, previousSemanticGenerations,
+          dxmt9::d3d9::SnapshotMissUniformGenerations{
+              .aggregate = cache.uniformGeneration,
+              .vertexConstants = cache.vertexShaderConstantGeneration,
+              .pixelConstants = cache.pixelShaderConstantGeneration,
+          },
+          previousSemanticUniformPayloadHash, cache.uniformPayloadHash);
+      dxmt9::perf::countD3D9SnapshotCacheBatchMissSemanticObservation(
+          comparison.sameSemantic(), comparison.shaderLayoutChanged,
+          comparison.uniformGenerationChanged, comparison.uniformPayloadChanged,
+          comparison.resourceIdentityChanged);
+    }
     drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
   }
   return cache;

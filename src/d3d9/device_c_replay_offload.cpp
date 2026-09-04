@@ -41,6 +41,87 @@ static_assert(alignof(D9CCommandChunkWireHandleEntry) <= kRegionAlignment);
 static_assert(sizeof(D9CCommandChunkWireRecordHeader) % kRegionAlignment == 0u);
 static_assert(sizeof(D9CCommandChunkWireHandleEntry) % kRegionAlignment == 0u);
 
+bool offloadReplayLifecycleObserverEnabled() noexcept {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_OFFLOAD_REPLAY_LIFECYCLE");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
+// The completion-gap observer consumes the immutable record mix, not the
+// replay sink's mutable state. Keep this scan behind an explicit observer gate
+// in addition to the perf gate: it is a diagnostic attribution pass and must
+// not become a second record walk in ordinary perf measurements.
+std::optional<dxmt9::core::metalqueue::NoEnqueueCommitChunkRecordShape>
+summarizeReplayChunkRecordShape(const RawCommandChunk& raw) noexcept {
+  if (!raw.preflightValidated) return std::nullopt;
+
+  ImportedChunkView imported;
+  const CommandChunkEnvelope envelope{
+      .version = raw.wireVersion,
+      .recordCount = raw.recordCount,
+      .handleCount = raw.handleCount,
+  };
+  const bool importedOk = raw.segmentedTransport
+      ? importPrevalidatedSegmentedCommandChunk(
+            raw.wireHeader, raw.segmentedRegions.recordsBytes(),
+            raw.segmentedRegions.handlesBytes(),
+            raw.segmentedRegions.payloadBytes(), envelope, imported)
+      : importPrevalidatedCommandChunk(
+            std::span<const std::byte>(
+                reinterpret_cast<const std::byte*>(raw.recordBlob.data()),
+                raw.recordBlob.size()),
+            envelope, imported);
+  if (!importedOk) return std::nullopt;
+
+  dxmt9::core::metalqueue::NoEnqueueCommitChunkRecordShape shape{
+      .recordCount = imported.records.size()};
+  for (const auto& record : imported.records) {
+    switch (record.type) {
+    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
+    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
+      ++shape.drawRecords;
+      break;
+    case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+    case D9C_COMMAND_RECORD_SET_VS_CONST_I:
+    case D9C_COMMAND_RECORD_SET_VS_CONST_B:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_I:
+    case D9C_COMMAND_RECORD_SET_PS_CONST_B:
+      ++shape.constRecords;
+      break;
+    case D9C_COMMAND_RECORD_APPLY_STATE:
+      ++shape.applyStateRecords;
+      break;
+    case D9C_COMMAND_RECORD_CLEAR:
+      ++shape.clearRecords;
+      break;
+    case D9C_COMMAND_RECORD_PRESENT:
+      ++shape.presentRecords;
+      break;
+    case D9C_COMMAND_RECORD_STRETCH_RECT:
+    case D9C_COMMAND_RECORD_COLOR_FILL:
+    case D9C_COMMAND_RECORD_UPDATE_TEXTURE:
+    case D9C_COMMAND_RECORD_UPDATE_SURFACE:
+    case D9C_COMMAND_RECORD_RESZ_DEPTH_RESOLVE:
+    case D9C_COMMAND_RECORD_GENERATE_MIPMAPS:
+      ++shape.surfaceRecords;
+      break;
+    case D9C_COMMAND_RECORD_QUERY_ISSUE:
+    case D9C_COMMAND_RECORD_READBACK:
+      ++shape.queryRecords;
+      break;
+    default:
+      ++shape.otherRecords;
+      break;
+    }
+  }
+  return shape;
+}
+
 }  // namespace
 
 SegmentedCommandChunkRegions::SegmentedCommandChunkRegions(
@@ -878,6 +959,27 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
       continue;
     }
     auto& chunk = item.chunk;
+    // Completion-gap attribution is anchored to the worker's FIFO replay
+    // interval. Start/end are paired even when replay throws or returns a
+    // failure. The lifecycle controller owns the outstanding interval so a
+    // Present emitted inside replay is classified at its real publish edge;
+    // immutable record shape is handed to the lifecycle controller up front;
+    // it is reported at replay end, or at an inline Present publish edge.
+    auto upper = (device && device->iface) ? device->dev().upperDevice()
+                                           : nullptr;
+    auto* lifecycleQueue = upper ? &upper->queue() : nullptr;
+    const bool observeCompletionGap =
+        lifecycleQueue && dxmt9::perf::enabled() &&
+        offloadReplayLifecycleObserverEnabled();
+    const auto replayShape = observeCompletionGap
+        ? summarizeReplayChunkRecordShape(chunk)
+        : std::optional<dxmt9::core::metalqueue::NoEnqueueCommitChunkRecordShape>{};
+    std::chrono::steady_clock::time_point replayStart{};
+    if (observeCompletionGap) {
+      lifecycleQueue->noteCommitChunkReplayStartForCompletionGap(
+          replayShape ? &*replayShape : nullptr);
+      replayStart = std::chrono::steady_clock::now();
+    }
     int32_t hr = dxmt9::core::D3D_OK;
     try {
       hr = replay_ ? replay_(device, chunk)
@@ -886,6 +988,15 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
       hr = dxmt9::core::E_OUTOFMEMORY;
     } catch (...) {
       hr = dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    std::uint64_t replayNanoseconds = 0;
+    if (observeCompletionGap) {
+      replayNanoseconds = static_cast<std::uint64_t>(
+          std::chrono::duration_cast<std::chrono::nanoseconds>(
+              std::chrono::steady_clock::now() - replayStart)
+              .count());
+      lifecycleQueue->noteCommitChunkReplayEndForCompletionGap(
+          replayNanoseconds, hr >= 0);
     }
     if (hr < 0) {
       // Fail-stop is visible before any completion notification. A producer

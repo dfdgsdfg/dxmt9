@@ -167,6 +167,39 @@ struct DirectChunkSlotRangePlan {
   }
 };
 
+// Per-record capacity contribution used by source-wide emission planning.
+// The contribution is computed from the imported record once, then applied to
+// each accumulator that needs the same semantic result (pending island and
+// aggregate reservation, for example). Keeping the result separate from its
+// destination prevents the two passes from independently decoding the record
+// and drifting in their malformed/overflow decisions.
+enum class RecordCapacityDeltaResult : std::uint8_t {
+  StateOnly,
+  GpuProducing,
+  Invalid,
+  Overflow,
+  Unsupported,
+};
+
+struct RecordCapacityDelta {
+  RecordCapacityDeltaResult result = RecordCapacityDeltaResult::Invalid;
+  core::SourcePayloadCapacity capacity{};
+  std::size_t drawCount = 0;
+};
+
+static_assert(std::is_trivially_copyable_v<RecordCapacityDelta>);
+static_assert(std::is_standard_layout_v<RecordCapacityDelta>);
+
+// Pure, allocation-free record classification and capacity accounting. The
+// returned capacity is a delta, not a cumulative total. Applying it is
+// checked against the same uint32 wire bounds as the legacy accumulator.
+RecordCapacityDelta computeRecordCapacityDelta(
+    const ImportedRecordView& record) noexcept;
+
+bool applyRecordCapacityDelta(core::SourcePayloadCapacity& target,
+                              std::size_t& drawCount,
+                              const RecordCapacityDelta& delta) noexcept;
+
 // First pass over an already imported source. Complete validity is supplied by
 // validateCommandChunk before import; this pass performs no layout
 // construction, allocation, queue admission, state mutation, or resource

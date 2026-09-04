@@ -17,6 +17,7 @@
 #include "dxmt9_presenter.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9_resource_initializer.hpp"
+#include "dxmt9_resource_mark_observer.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_ring_arena.hpp"
 #include "framegraph/fg_builder.hpp"
@@ -45,6 +46,64 @@
 #endif
 namespace dxmt9 {
 namespace {
+
+bool resourceMarkOverlapObserverEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_PERF_RESOURCE_MARK_OVERLAP");
+    return env && env[0] != '\0' && env[0] != '0';
+  }();
+  return enabled;
+}
+
+resources::ResourceMarkOverlapLedger& resourceMarkOverlapLedger() {
+  static resources::ResourceMarkOverlapLedger ledger;
+  return ledger;
+}
+
+void recordResourceMarkObservation(
+    resources::ResourceMarkObservationPhase phase, std::uint64_t seqId,
+    core::ChunkHandleEntry entry, std::uint64_t bufferBacking = 0) {
+  const auto observation = resourceMarkOverlapLedger().observe(
+      phase,
+      resources::ResourceMarkObservationKey{
+          .kind = entry.kind,
+          .handle = entry.handle.value,
+          .bufferBacking = bufferBacking,
+      },
+      seqId);
+  if (phase == resources::ResourceMarkObservationPhase::Ingress) {
+    perf::countResourceMarkOverlapIngress();
+  } else {
+    perf::countResourceMarkOverlapPublish();
+  }
+  if (observation.newIdentity) {
+    perf::countResourceMarkOverlapUnique();
+  }
+  if (observation.samePhaseDuplicate) {
+    if (phase == resources::ResourceMarkObservationPhase::Ingress) {
+      perf::countResourceMarkOverlapIngressDuplicate();
+    } else {
+      perf::countResourceMarkOverlapPublishDuplicate();
+    }
+  }
+  if (observation.covered) {
+    perf::countResourceMarkOverlapCovered();
+  }
+  if (observation.stale) {
+    perf::countResourceMarkOverlapStale();
+  }
+  if (observation.noIngress) {
+    perf::countResourceMarkOverlapNoIngress();
+  }
+  if (observation.collisionProbes != 0) {
+    perf::countResourceMarkOverlapCollisionProbes(
+        observation.collisionProbes);
+  }
+  if (observation.overflow) {
+    perf::countResourceMarkOverlapOverflow();
+  }
+}
+
 void recordCpuReadyTapeStats(const core::CpuReadyTape& tape) {
   const auto& stats = tape.stats();
   perf::recordCpuReadyTapeStats(
@@ -2270,7 +2329,12 @@ void markChunkResourcesWithExactSeq(
     resources::Pool& pool,
     std::span<const core::ChunkHandleEntry> entries,
     std::uint64_t seqId) {
+  const bool observeMarks = resourceMarkOverlapObserverEnabled();
   for (const auto& entry : entries) {
+    if (observeMarks) {
+      recordResourceMarkObservation(
+          resources::ResourceMarkObservationPhase::Ingress, seqId, entry);
+    }
     switch (entry.kind) {
     case core::ChunkHandleKind::Texture:
       pool.markTextureUse(entry.handle, seqId);
@@ -2621,13 +2685,30 @@ std::span<const core::DrawParamPayloadView> snapshotDrawRunBindingPayloads(
 void markDrawBindingOverrideResource(resources::Pool& pool,
                                      const core::DrawBindingOverride& binding,
                                      std::uint64_t seqId) {
+  const bool observeMarks = resourceMarkOverlapObserverEnabled();
   for (std::uint32_t stream = 0; stream < core::kMaxStreams; ++stream) {
     if ((binding.streamMask & (1u << stream)) == 0) {
       continue;
     }
+    if (observeMarks) {
+      recordResourceMarkObservation(
+          resources::ResourceMarkObservationPhase::Ingress, seqId,
+          core::ChunkHandleEntry{
+              .kind = core::ChunkHandleKind::Buffer,
+              .handle = binding.streams[stream].buffer,
+          });
+    }
     pool.markBufferUse(binding.streams[stream].buffer, seqId);
   }
   if (binding.indexBufferValid) {
+    if (observeMarks) {
+      recordResourceMarkObservation(
+          resources::ResourceMarkObservationPhase::Ingress, seqId,
+          core::ChunkHandleEntry{
+              .kind = core::ChunkHandleKind::Buffer,
+              .handle = binding.indexBuffer,
+          });
+    }
     pool.markBufferUse(binding.indexBuffer, seqId);
   }
 }
@@ -2635,15 +2716,34 @@ void markDrawBindingOverrideResource(resources::Pool& pool,
 void markDrawBindingSnapshotResource(resources::Pool& pool,
                                      const core::DrawBindingSnapshot& binding,
                                      std::uint64_t seqId) {
+  const bool observeMarks = resourceMarkOverlapObserverEnabled();
   for (std::uint32_t stream = 0; stream < core::kMaxStreams; ++stream) {
     if ((binding.streamMask & (1u << stream)) == 0) {
       continue;
+    }
+    if (observeMarks) {
+      recordResourceMarkObservation(
+          resources::ResourceMarkObservationPhase::Ingress, seqId,
+          core::ChunkHandleEntry{
+              .kind = core::ChunkHandleKind::Buffer,
+              .handle = binding.streams[stream].buffer,
+          },
+          binding.streams[stream].snapshot.metalHandle);
     }
     pool.markBufferSnapshotUse(binding.streams[stream].buffer,
                                binding.streams[stream].snapshot,
                                seqId);
   }
   if (binding.indexSnapshotValid) {
+    if (observeMarks) {
+      recordResourceMarkObservation(
+          resources::ResourceMarkObservationPhase::Ingress, seqId,
+          core::ChunkHandleEntry{
+              .kind = core::ChunkHandleKind::Buffer,
+              .handle = binding.indexBuffer,
+          },
+          binding.indexSnapshot.metalHandle);
+    }
     pool.markBufferSnapshotUse(binding.indexBuffer,
                                binding.indexSnapshot,
                                seqId);
@@ -2892,10 +2992,30 @@ Presenter::AcquireParams makePresentAcquireParams(const core::SwapDesc& desc) {
 }
 
 void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slot) {
+  const bool observeMarks = resourceMarkOverlapObserverEnabled();
+  if (!observeMarks) {
+    for (std::size_t i = 0; i < slot.commandCount(); ++i) {
+      const auto sourceCommand = core::SourcePayloadView(slot).commandAt(i);
+      visitSourceCommandResources(
+          sourceCommand,
+          [&](const core::SourceCommandResourceRef& resource) {
+            markVisitedResource(pool, resource, slot.seqId);
+          });
+    }
+    return;
+  }
   for (std::size_t i = 0; i < slot.commandCount(); ++i) {
     const auto sourceCommand = core::SourcePayloadView(slot).commandAt(i);
     visitSourceCommandResources(sourceCommand,
                                 [&](const core::SourceCommandResourceRef& resource) {
+                                  const auto& entry = resource.entry;
+                                  recordResourceMarkObservation(
+                                      resources::ResourceMarkObservationPhase::PublishScan,
+                                      slot.seqId, entry,
+                                      entry.kind == core::ChunkHandleKind::Buffer &&
+                                              resource.hasBufferSnapshot
+                                          ? resource.bufferSnapshot.metalHandle
+                                          : 0);
                                   markVisitedResource(pool, resource, slot.seqId);
                                 });
   }
@@ -3155,25 +3275,17 @@ void CommandQueue::cancelCpuReadySupplyReplayEntry(
   queueLifecycle_.cancelCpuReadySupplyReplayEntry(sourceClass, attemptToken);
 }
 
-void CommandQueue::noteCommitChunkReplayStartForCompletionGap() {
+void CommandQueue::noteCommitChunkReplayStartForCompletionGap(
+    const core::metalqueue::NoEnqueueCommitChunkRecordShape* shape) {
   queueLifecycle_.recordCompletionWaitCommitChunkReplayStart();
-  queueLifecycle_.recordNoEnqueueWaitGapToCommitChunkReplayStart();
+  queueLifecycle_.recordNoEnqueueWaitGapToCommitChunkReplayStart(shape);
 }
 
 void CommandQueue::noteCommitChunkReplayEndForCompletionGap(
-    std::uint64_t replayNanoseconds) {
+    std::uint64_t replayNanoseconds, bool replaySucceeded) {
   queueLifecycle_.recordCompletionWaitCommitChunkReplayEnd(replayNanoseconds);
-  queueLifecycle_.recordNoEnqueueWaitGapToCommitChunkReplayEnd();
-}
-
-void CommandQueue::noteCommitChunkReplayCpuBeforePublish(
-    std::uint64_t nanoseconds) {
-  queueLifecycle_.recordNoEnqueueCommitChunkReplayCpuBeforePublish(nanoseconds);
-}
-
-void CommandQueue::noteCommitChunkActiveReplayCpuBeforePublish(
-    std::uint64_t nanoseconds) {
-  queueLifecycle_.recordNoEnqueueCommitChunkActiveReplayCpuBeforePublish(nanoseconds);
+  queueLifecycle_.recordNoEnqueueWaitGapToCommitChunkReplayEnd(
+      replaySucceeded);
 }
 
 void CommandQueue::noteCommitChunkRecordShapeForCompletionGap(
@@ -3618,6 +3730,32 @@ bool CommandQueue::submitDrawRunBatch(
         dedup(scratch.segmentBufferHandles);
         dedup(scratch.segmentTextureHandles);
         dedup(scratch.segmentSurfaceHandles);
+        if (resourceMarkOverlapObserverEnabled()) {
+          for (const auto handle : scratch.segmentBufferHandles) {
+            recordResourceMarkObservation(
+                resources::ResourceMarkObservationPhase::Ingress, seqId,
+                core::ChunkHandleEntry{
+                    .kind = core::ChunkHandleKind::Buffer,
+                    .handle = handle,
+                });
+          }
+          for (const auto handle : scratch.segmentTextureHandles) {
+            recordResourceMarkObservation(
+                resources::ResourceMarkObservationPhase::Ingress, seqId,
+                core::ChunkHandleEntry{
+                    .kind = core::ChunkHandleKind::Texture,
+                    .handle = handle,
+                });
+          }
+          for (const auto handle : scratch.segmentSurfaceHandles) {
+            recordResourceMarkObservation(
+                resources::ResourceMarkObservationPhase::Ingress, seqId,
+                core::ChunkHandleEntry{
+                    .kind = core::ChunkHandleKind::Surface,
+                    .handle = handle,
+                });
+          }
+        }
         pool_.markBufferUsesBatch(scratch.segmentBufferHandles, seqId);
         pool_.markTextureUsesBatch(scratch.segmentTextureHandles, seqId);
         pool_.markSurfaceUsesBatch(scratch.segmentSurfaceHandles, seqId);

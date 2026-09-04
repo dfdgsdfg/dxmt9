@@ -172,6 +172,15 @@ dod_replay_observer_spec = executable(
 
 test('dxmt9-dod-replay-observer-spec', dod_replay_observer_spec)
 
+resource_mark_snapshot_observer_spec = executable(
+  'dxmt9-resource-mark-snapshot-observer-spec',
+  'resource_mark_snapshot_observer_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+
+test('dxmt9-resource-mark-snapshot-observer-spec',
+     resource_mark_snapshot_observer_spec)
+
 # R-BACK-2.88 / R-VERIF-2.23 bounded source-to-reclaim lifecycle observer.
 # Uses production pure predicates plus a deterministic condition-variable fake
 # backend; no Metal device, sleep, or polling.

@@ -3475,6 +3475,68 @@ void countD3D9SnapshotCacheBatchMissSemanticReuseProbe(bool hit,
   }
 }
 
+void countD3D9SnapshotCacheBatchMissSemanticObservation(
+    bool sameSemantic, bool shaderLayoutChanged,
+    bool uniformGenerationChanged, bool uniformPayloadChanged,
+    bool resourceIdentityChanged) {
+  auto& c = counters();
+  add(c.d3d9SnapshotCacheBatchMissSemanticObserverSamples);
+  add(sameSemantic ? c.d3d9SnapshotCacheBatchMissSemanticObserverSame
+                   : c.d3d9SnapshotCacheBatchMissSemanticObserverChanged);
+  if (shaderLayoutChanged) {
+    add(c.d3d9SnapshotCacheBatchMissSemanticObserverShaderLayout);
+  }
+  if (uniformGenerationChanged) {
+    add(c.d3d9SnapshotCacheBatchMissSemanticObserverUniformGeneration);
+  }
+  if (uniformPayloadChanged) {
+    add(c.d3d9SnapshotCacheBatchMissSemanticObserverUniformPayload);
+  }
+  if (resourceIdentityChanged) {
+    add(c.d3d9SnapshotCacheBatchMissSemanticObserverResourceIdentity);
+  }
+}
+
+void countResourceMarkOverlapIngress(std::uint64_t entries) {
+  add(counters().resourceMarkOverlapIngressEntries, entries);
+}
+
+void countResourceMarkOverlapPublish(std::uint64_t entries) {
+  add(counters().resourceMarkOverlapPublishEntries, entries);
+}
+
+void countResourceMarkOverlapUnique() {
+  add(counters().resourceMarkOverlapUnique);
+}
+
+void countResourceMarkOverlapIngressDuplicate() {
+  add(counters().resourceMarkOverlapIngressDuplicates);
+}
+
+void countResourceMarkOverlapPublishDuplicate() {
+  add(counters().resourceMarkOverlapPublishDuplicates);
+}
+
+void countResourceMarkOverlapCovered() {
+  add(counters().resourceMarkOverlapCovered);
+}
+
+void countResourceMarkOverlapStale() {
+  add(counters().resourceMarkOverlapStale);
+}
+
+void countResourceMarkOverlapNoIngress() {
+  add(counters().resourceMarkOverlapNoIngress);
+}
+
+void countResourceMarkOverlapCollisionProbes(std::uint64_t probes) {
+  add(counters().resourceMarkOverlapCollisionProbes, probes);
+}
+
+void countResourceMarkOverlapOverflow() {
+  add(counters().resourceMarkOverlapOverflow);
+}
+
 void countD3D9DrawStateCacheMissReason(std::uint32_t reasonMask) {
   auto& c = counters();
   if (reasonMask == dxmt9::core::DrawStateInvalidationUnknown) {

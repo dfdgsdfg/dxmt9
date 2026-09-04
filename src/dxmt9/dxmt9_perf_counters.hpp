@@ -1042,6 +1042,14 @@ void countD3D9SnapshotCacheBatchMissUniformVsConstHashMemoStore();
 void countD3D9SnapshotCacheBatchMissUniformPsConstHashMemoStore();
 void countD3D9SnapshotCacheBatchMissSemanticReuseProbe(bool hit,
                                                        std::uint32_t distance);
+// Opt-in semantic classification of a batch snapshot-cache miss. These
+// counters are intentionally separate from the reuse-probe history: this
+// observer compares the previous lane snapshot with the rebuilt snapshot and
+// reports which semantic dimensions changed, without affecting cache use.
+void countD3D9SnapshotCacheBatchMissSemanticObservation(
+    bool sameSemantic, bool shaderLayoutChanged,
+    bool uniformGenerationChanged, bool uniformPayloadChanged,
+    bool resourceIdentityChanged);
 void countD3D9SnapshotUniformBuildCall();
 void countD3D9SnapshotUniformBuildVsConstCopyCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotUniformBuildPsConstCopyCpuTime(std::uint64_t nanoseconds);
@@ -2004,6 +2012,19 @@ void countCommitChunkPhaseMarkSortCpuTime(std::uint64_t nanoseconds);
 // per-handle / per-buffer figure. Same env gate as the phase timers above.
 void countCommitChunkPhaseMarkHandles(std::uint64_t handleCount);
 void countCommitChunkPhaseMarkBuffers(std::uint64_t bufferCount);
+// Opt-in bounded overlap ledger for the ingress handle walk versus the final
+// slot publish scan. The normal path only evaluates its cached enable flag at
+// the caller; no identity or storage is created while disabled.
+void countResourceMarkOverlapIngress(std::uint64_t entries = 1);
+void countResourceMarkOverlapPublish(std::uint64_t entries = 1);
+void countResourceMarkOverlapUnique();
+void countResourceMarkOverlapIngressDuplicate();
+void countResourceMarkOverlapPublishDuplicate();
+void countResourceMarkOverlapCovered();
+void countResourceMarkOverlapStale();
+void countResourceMarkOverlapNoIngress();
+void countResourceMarkOverlapCollisionProbes(std::uint64_t probes);
+void countResourceMarkOverlapOverflow();
 void countCommitChunkPhaseEnqueueCpuTime(std::uint64_t nanoseconds);
 void countCommitChunkPhasePresentWaitTime(std::uint64_t nanoseconds);
 // R-BACK-43.6 — frozen-ticket re-stamp observability. Called once per

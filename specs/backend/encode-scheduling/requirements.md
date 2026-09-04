@@ -1413,6 +1413,19 @@ under-reserves and would force an append to resize final storage inside the
 transaction, which R-BACK-2.86 forbids. Per-island capacity remains exact and
 is descriptive; only the aggregate is a reservation.
 
+Production must decode each imported record into one immutable
+`RecordCapacityDelta` and apply that same value to the segment-local and
+aggregate capacities. Each destination update is all-or-nothing. The two
+accumulators remain private to one plan transaction, and failure of either
+application rejects the complete plan, so no partially updated pair can become
+externally visible. The delta is the sole per-record capacity authority:
+no second switch or independently maintained count fold may recompute either
+view. A malformed record or checked-add overflow rejects without changing any
+capacity dimension. Native model-code binding must pin the delta for every
+record topology and prove both all-or-nothing application and equality between
+the accumulated per-segment and aggregate views where the dimensions are
+additive.
+
 The plan must be pure: no handle resolution, queue state, D3D shadow mutation,
 resource marking, or Metal effect, and no allocation beyond one caught segment
 reservation bounded by the producer's raw record cap. Model-code binding is an

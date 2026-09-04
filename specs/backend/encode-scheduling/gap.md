@@ -1258,6 +1258,64 @@ contract. More local waiting or source-identity carrying is not supported by
 the evidence. Full evidence is recorded in
 [`present-pacing-cpu-ready-next-source-intent.239.md`](../../../docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md).
 
+## Replay/publish residual attribution (2026-09-04)
+
+The backing-qualified GT2 diagnostic
+[`result.json`](../../../experiments/output/app-d3d9-3dmark05-gt2-resource-backing-waterline-observer-20260904/result.json)
+observed 17,605,210 publish resource visits. An equal-or-newer ingress mark
+covered 16,951,430 (96.2864%), while 653,770 were stale and 10 had no ingress
+proof. Broad removal of the publish walk is therefore unsound. The same run
+reported 17,207,380 exact within-publish duplicates. A bounded, heap-free exact
+set was then tested on texture/surface identities and buffer identities carrying
+the same captured Metal backing, while generic buffer handles remained
+unmerged. The production-shaped run passed with zero set overflow and skipped
+9,766,493 marks, but `prepare_slot_resource_mark_cpu_ms` increased from
+`0.738` to `0.924 ms/Present` (+25.2%) against the earlier clean run. This was
+not a matched A/B, and later runs exposed unrelated host load, so it does not
+quantify the set's cost. It is nevertheless insufficient promotion evidence
+and the set was reverted. The diagnostic
+[`result.json`](../../../experiments/output/app-d3d9-3dmark05-gt2-publish-exact-dedup-20260904/result.json)
+retains those run values, but only the staged binary hash is recorded, not a
+Git revision; it is therefore rejection evidence rather than a reproducible
+current-HEAD comparison. The publish walk remains authoritative until a plan
+can reuse an already-built source closure without adding a second hot lookup
+structure.
+
+The snapshot-miss observer rejected whole-miss reuse as the next optimization.
+The retained diagnostic
+[`result.json`](../../../experiments/output/app-d3d9-3dmark05-gt2-resource-snapshot-observer-20260904/result.json)
+recorded 9,211 sampled misses: every sample changed shader layout or resource
+identity and 7,895 also changed uniform payload. Generation-only churn is
+distinguished but was not the production shape. The resource-overlap rows in
+that older artifact predate the backing-qualified ledger and are not evidence
+for the resource result above. After moving attribution behind successful Tape
+publication and requiring Present to settle an active replay, the corrected
+no-enqueue diagnostic
+[`result.json`](../../../experiments/output/app-d3d9-3dmark05-gt2-offload-lifecycle-corrected-20260904/result.json)
+recorded 5,766 shapes: exactly 5,245 draw-bearing chunks plus 521 Present
+chunks, with no state-only/unclassified remainder. Across 521 completed
+no-enqueue windows it attributed 15,861.366 ms of completed replay CPU and
+1,087.231 ms of replay CPU still active at the successful Present publish.
+The run completed 527 Presents with zero GPU command-buffer errors, chunk
+rejects, or missing pipelines, at `3.998` command buffers and `15.837` render
+passes per Present.
+These are diagnostic observations, not source-identity proof or FPS promotion
+evidence: this observer attributes a bounded worker interval and immutable
+record shape. Replay start/end and the immutable
+shape scan are therefore explicitly gated by
+`DXMT9_PERF_OFFLOAD_REPLAY_LIFECYCLE`; ordinary perf runs perform no lifecycle
+lock, clock read, second import, or record walk for this observer. The rejected
+dedup run nevertheless
+completed 1,167 Presents with zero GPU command-buffer errors, chunk rejects, or
+missing pipelines, and preserved `3.999` command buffers and `15.764` render
+passes per Present; locality was neutral while CPU economics remained
+unproven. The final observer-default-off correctness run
+[`result.json`](../../../experiments/output/app-d3d9-3dmark05-gt2-residual-observers-default-off-20260904/result.json)
+also returned normally with zero GPU command-buffer errors, chunk rejects, or
+missing pipelines and measured `3.999` command buffers and `15.731` render
+passes per Present. Its FPS and CPU timing are not promotion evidence because
+the host carried concurrent high CPU load.
+
 ## Producer↔queue mutex concurrency (opened 2026-08-20)
 
 GT2 attribution (`docs/perfomance/state-churn-encode/state-churn-encode-append-decomposition.28.md`)
