@@ -475,6 +475,43 @@ struct CommandQueueArenaLeaseTestAccess {
     return result;
   }
 
+  static std::vector<core::Handle> writingDrawOverrideBuffers(
+      CommandQueue& queue, std::size_t commandIndex = 0u) {
+    std::lock_guard lock(queue.mutex_);
+    std::vector<core::Handle> result;
+    if (!queue.writingSlot_) return result;
+    const core::SourcePayloadView view(
+        *queue.slots_[*queue.writingSlot_].payload);
+    if (commandIndex >= view.commandCount()) return result;
+    const auto command = view.commandAt(commandIndex).command;
+    for (const auto& param : command.drawParams) {
+      const auto bytes = core::drawPayloadRangeBytes(
+          param.bindingOverrideRange, command.drawPayloadBytes);
+      if (bytes.size() != sizeof(core::DrawBindingOverride)) {
+        result.push_back({});
+        continue;
+      }
+      core::DrawBindingOverride binding{};
+      std::memcpy(&binding, bytes.data(), sizeof(binding));
+      result.push_back((binding.streamMask & 1u) != 0u
+                           ? binding.streams[0].buffer
+                           : core::Handle{});
+    }
+    return result;
+  }
+
+  static std::uint64_t bufferLastUsedSeqId(CommandQueue& queue,
+                                            core::Handle handle) {
+    std::lock_guard lock(queue.mutex_);
+    const auto* record = queue.pool_.findBuffer(handle.value);
+    return record ? record->lastUsedSeqId : 0u;
+  }
+
+  static bool bufferAlive(CommandQueue& queue, core::Handle handle) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.pool_.findBuffer(handle.value) != nullptr;
+  }
+
   static void forceNextBatchBuilderFailure(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     queue.testOnlyForceNextCpuReadyArenaBuilderFailure_ = true;
@@ -2831,15 +2868,15 @@ void directAdmissionRejectionPreservesLegacyDrawBatchGrouping() {
   // A capacity-rejected continuation is still pre-effect. Keep the populated
   // prefix in place and hand the whole raw to the authoritative serial batch
   // path; storage pressure must not manufacture a publication boundary.
-  // The two draws bind DIFFERENT buffers, so the ordinary lane must cut
-  // between them: two runs, one acquisition, and a writing slot holding the
-  // retained Clear plus both of them.
+  // The two draws bind different buffers through per-draw overrides, so the
+  // ordinary queue may fold them into one compatible final-slot run while
+  // retaining the populated Clear prefix.
   check(fixture.routing->drawCalls == 2u &&
             fixture.routing->ordinaryDrawCalls == 2u &&
             fixture.routing->ordinaryDrawRunSubmissions == 1u &&
             fixture.routing->lastDrawRunSize == 2u &&
             dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
-                fixture.routing->queue_) == 3u,
+                fixture.routing->queue_) == 2u,
         "a capacity-rejected span falls back whole without rotating the prefix");
 
   dxmt9::d3d9::releaseRetainedWrappers(raw);
@@ -2847,11 +2884,11 @@ void directAdmissionRejectionPreservesLegacyDrawBatchGrouping() {
   dxmt9c_buffer_release(secondBuffer);
 }
 
-// The ordinary (non-Direct) production path must retain state-separated runs
-// without publishing each one independently. This is the regression shape the
-// identical-state island could not address: A -> B -> A has three final
-// DrawRun records, but one source-local queue transaction.
-void ordinarySourceBatchPreservesStateRunsWithOneAcquisition() {
+// The ordinary (non-Direct) production path must fold adjacent final-slot
+// compatible entries even when their concrete stream bindings form A -> B ->
+// A. Binding overrides are per draw, so one canonical state/DrawRun remains
+// semantically complete and the queue must not consult older history.
+void ordinarySourceBatchFoldsBindingAbaWithOneAcquisition() {
   RuntimeFixture fixture(/*rejectAfterClear=*/false,
                          /*segmentSerial=*/false,
                          /*directChunkSlot=*/false);
@@ -2878,28 +2915,38 @@ void ordinarySourceBatchPreservesStateRunsWithOneAcquisition() {
             fixture.routing->ordinaryDrawCalls == 3u &&
             fixture.routing->ordinaryDrawRunSubmissions == 1u &&
             dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
-                fixture.routing->queue_) == 3u,
-        "ordinary A/B/A retains three runs with one queue acquisition");
-  const auto first = dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
-      fixture.routing->queue_, 0u);
-  const auto second = dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
-      fixture.routing->queue_, 1u);
-  const auto third = dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawDigest(
-      fixture.routing->queue_, 2u);
-  // Stream bindings are intentionally excluded from binding-agnostic `hot`;
-  // the production queue decodes and copies them from each run's payload.
-  check(first.hot == second.hot && second.hot == third.hot &&
-            first.payload != second.payload && first.payload == third.payload,
-        "ordinary A/B/A preserves state separation in typed binding payloads");
+                fixture.routing->queue_) == 1u,
+        "ordinary binding A/B/A folds into one final-slot run and one queue acquisition");
+  const auto bindings =
+      dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawOverrideBuffers(
+          fixture.routing->queue_);
+  check(bindings.size() == 3u &&
+            bindings[0] == bufferA->obj->handle() &&
+            bindings[1] == bufferB->obj->handle() &&
+            bindings[2] == bufferA->obj->handle(),
+        "folded A/B/A preserves every concrete binding override in order");
+
+  const auto handleA = bufferA->obj->handle();
+  const auto handleB = bufferB->obj->handle();
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::bufferLastUsedSeqId(
+            fixture.routing->queue_, handleA) == 1u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::bufferLastUsedSeqId(
+                fixture.routing->queue_, handleB) == 1u,
+        "every distinct folded binding is stamped with the open slot ticket");
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(bufferA);
+  dxmt9c_buffer_release(bufferB);
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::bufferAlive(
+            fixture.routing->queue_, handleA) &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::bufferAlive(
+                fixture.routing->queue_, handleB),
+        "folded bindings remain alive until their stamped slot completes");
 
   fixture.routing->present(SwapDesc{});
   const auto completion = dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
       fixture.routing->queue_);
-  check(completion.reclaimed && completion.commandCount == 4u,
-        "ordinary A/B/A completion retains all three ordered runs");
-  dxmt9::d3d9::releaseRetainedWrappers(raw);
-  dxmt9c_buffer_release(bufferA);
-  dxmt9c_buffer_release(bufferB);
+  check(completion.reclaimed && completion.commandCount == 2u,
+        "ordinary A/B/A completion retains one folded run plus Present");
 }
 
 void populatedSlotDrawApplyDrawUsesCarrierFreeContinuation() {
@@ -3896,7 +3943,7 @@ int main() {
     ordinaryUnsupportedClearRangeStaysCompatibilityOwned();
     ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics();
     directAdmissionRejectionPreservesLegacyDrawBatchGrouping();
-    ordinarySourceBatchPreservesStateRunsWithOneAcquisition();
+    ordinarySourceBatchFoldsBindingAbaWithOneAcquisition();
     populatedSlotDrawApplyDrawUsesCarrierFreeContinuation();
     populatedSlotInsufficientCapacityFallsBackBeforeEffects();
     populatedSlotProducerIdentityGapFallsBackBeforeEffects();

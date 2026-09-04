@@ -160,9 +160,14 @@ All production APPLY_STATE and draw forms now use the same value-owned path.
 typed values into bounded semantic arenas, acquires qualified pins, and settles
 the exact represented `PendingDelta`. No runtime branch can construct
 `SparseStatePlan`, select `CommandChunkBuilder`, or restore a compatibility
-layout. The semantic owner emits either contiguous ExactFixed or negotiated
-segmented roles and is also the authority for buffer hazards and Render Tape
-pending leases.
+layout. The full PE descriptor is staged once and then borrowed by
+a 40-byte-or-smaller input view with a 32-byte-or-smaller destination overlay;
+only draw sparse spans are copied for destination selection, with a bounded
+rebuild after CapacityPre. The semantic owner emits either contiguous
+ExactFixed or negotiated segmented roles and is also the authority for buffer
+hazards and Render Tape pending leases. ExactFixed no longer zero-fills its
+whole destination: it copies every canonical role byte and explicitly zeros
+only computed alignment gaps.
 
 `dxmt9-pe-producer-differential-spec` runs the compatibility producer and plan
 producer over the fixed and randomized all-category corpus and requires exact
@@ -171,7 +176,21 @@ also pins pre-finalization rejection, builder failure/retry, source-witness
 rejection, and exact accepted consumption. `dxmt9-chunk-record-allocation-spec`
 pins zero system allocations across repeated warm plan prepare/materialize
 cycles. Destination-chunk stream/index cases and full snapshots remain in the
-same differential corpus.
+same differential corpus. `dxmt9-pe-semantic-owner-spec` additionally drives
+the borrowed view through all 21 producer rows against canonical V2 bytes,
+checks a nonzero destination/staged canary, and injects CapacityPre plus
+settlement failure before retry. Current-toolchain x64/x86 recorder objects
+compile; their `appendSemanticRecord` stack frames are 0x138 and 0xe8 bytes,
+respectively, which excludes a whole local descriptor copy.
+
+A same-build GT2 diagnostic pair isolates the remaining transport choice. The
+contiguous ExactFixed run records 23.355 benchmark FPS, 6.847 ms/Present in PE
+append/emit work, and 5.360 ms/Present in total bridge calls; negotiated
+segmented roles record 23.835 FPS, 6.561 ms/Present, and 5.207 ms/Present.
+The single-run FPS delta is not promotion evidence, but the phase deltas show
+that the final contiguous copy is only a small part of the producer wall. The
+larger residual remains repeated semantic planning/retention/materialization,
+not the PE-to-Unix representation alone.
 
 The residual is evidence, not a second implementation: the plan/builder corpus
 remains for differential and Bootstrap verification, while production has one

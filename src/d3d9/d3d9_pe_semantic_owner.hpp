@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <array>
+#include <concepts>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -139,6 +140,99 @@ struct PeSemanticAdmissionPlan {
 
 static_assert(std::is_trivially_copyable_v<PeSemanticAdmissionPlan>);
 
+// Per-attempt facts that depend on the destination chunk.  The much larger
+// PeSemanticRecordInput remains staged once and immutable; normal admission
+// borrows it through PeSemanticRecordInputView and overlays only these values.
+// Draws may point sparse at a destination-context projection owned by the
+// recorder.  A CapacityPre rebase is the only path that rebuilds that bounded
+// projection.
+struct PeSemanticRecordDestinationContext {
+  std::uint32_t recordType = 0u;
+  std::uint64_t sourceOrdinal = 0u;
+  std::uint64_t recordOrdinal = 0u;
+  const SparseStateInput* sparse = nullptr;
+};
+
+struct PeSemanticRecordInputView {
+  const PeSemanticRecordInput* staged = nullptr;
+  PeSemanticRecordDestinationContext destination{};
+
+  bool valid() const noexcept {
+    return staged != nullptr && destination.sparse != nullptr;
+  }
+};
+
+inline PeSemanticRecordInputView borrowPeSemanticRecordInput(
+    const PeSemanticRecordInput& input) noexcept {
+  return {
+      .staged = &input,
+      .destination = {
+          .recordType = input.recordType,
+          .sourceOrdinal = input.sourceOrdinal,
+          .recordOrdinal = input.recordOrdinal,
+          .sparse = &input.sparse,
+      },
+  };
+}
+
+inline bool validPeSemanticInput(const PeSemanticRecordInput&) noexcept {
+  return true;
+}
+inline bool validPeSemanticInput(const PeSemanticRecordInputView& input) noexcept {
+  return input.valid();
+}
+inline const PeSemanticRecordInput& stagedPeSemanticInput(
+    const PeSemanticRecordInput& input) noexcept {
+  return input;
+}
+inline const PeSemanticRecordInput& stagedPeSemanticInput(
+    const PeSemanticRecordInputView& input) noexcept {
+  return *input.staged;
+}
+inline std::uint32_t peSemanticRecordType(
+    const PeSemanticRecordInput& input) noexcept {
+  return input.recordType;
+}
+inline std::uint32_t peSemanticRecordType(
+    const PeSemanticRecordInputView& input) noexcept {
+  return input.destination.recordType;
+}
+inline std::uint64_t peSemanticSourceOrdinal(
+    const PeSemanticRecordInput& input) noexcept {
+  return input.sourceOrdinal;
+}
+inline std::uint64_t peSemanticSourceOrdinal(
+    const PeSemanticRecordInputView& input) noexcept {
+  return input.destination.sourceOrdinal;
+}
+inline std::uint64_t peSemanticRecordOrdinal(
+    const PeSemanticRecordInput& input) noexcept {
+  return input.recordOrdinal;
+}
+inline std::uint64_t peSemanticRecordOrdinal(
+    const PeSemanticRecordInputView& input) noexcept {
+  return input.destination.recordOrdinal;
+}
+inline const SparseStateInput& peSemanticSparse(
+    const PeSemanticRecordInput& input) noexcept {
+  return input.sparse;
+}
+inline const SparseStateInput& peSemanticSparse(
+    const PeSemanticRecordInputView& input) noexcept {
+  return *input.destination.sparse;
+}
+
+static_assert(std::is_trivially_copyable_v<PeSemanticRecordDestinationContext>);
+static_assert(std::is_trivially_copyable_v<PeSemanticRecordInputView>);
+static_assert(sizeof(PeSemanticRecordDestinationContext) <= 32u);
+static_assert(sizeof(PeSemanticRecordInputView) <= 40u);
+static_assert(sizeof(PeSemanticRecordInputView) < sizeof(PeSemanticRecordInput));
+
+template <typename Input>
+concept PeSemanticRecordInputLike =
+    std::same_as<std::remove_cvref_t<Input>, PeSemanticRecordInput> ||
+    std::same_as<std::remove_cvref_t<Input>, PeSemanticRecordInputView>;
+
 namespace detail {
 
 inline bool checkedSizeToU32(std::size_t value, std::uint32_t& out) noexcept {
@@ -229,16 +323,19 @@ inline bool addAdmissionSection(std::uint16_t kind, std::size_t count,
   return checkedSizeAdd(aligned, bytes, cursor);
 }
 
-inline bool admissionPayloadBytes(const PeSemanticRecordInput& input,
+template <PeSemanticRecordInputLike Input>
+inline bool admissionPayloadBytes(const Input& input,
                                   std::size_t& out) noexcept {
   out = 0u;
-  switch (input.producer) {
+  if (!validPeSemanticInput(input)) return false;
+  const auto& staged = stagedPeSemanticInput(input);
+  switch (staged.producer) {
     case PeSemanticProducerKind::DrawPrimitive:
     case PeSemanticProducerKind::DrawIndexedPrimitive:
     case PeSemanticProducerKind::DrawPrimitiveUp:
     case PeSemanticProducerKind::DrawIndexedPrimitiveUp:
     case PeSemanticProducerKind::ApplyState: {
-      const auto& s = input.sparse;
+      const auto& s = peSemanticSparse(input);
       const std::size_t sectionCount =
           !s.renderStates.empty() + !s.textures.empty() + !s.streams.empty() +
           !s.shaders.empty() + !s.vertexInputs.empty() + !s.indexBuffers.empty() +
@@ -337,20 +434,20 @@ inline bool admissionPayloadBytes(const PeSemanticRecordInput& input,
     case PeSemanticProducerKind::PsIntConstant:
     case PeSemanticProducerKind::PsBoolConstant:
       return checkedSizeAdd(sizeof(D9CCommandChunkWireSetConst),
-                            input.constantBytes.size(), out);
+                            staged.constantBytes.size(), out);
     case PeSemanticProducerKind::Clear: {
       std::size_t rectBytes = 0u;
-      return checkedSizeMultiply(input.clearRects.size(), sizeof(D9CRect),
+      return checkedSizeMultiply(staged.clearRects.size(), sizeof(D9CRect),
                                  rectBytes) &&
              checkedSizeAdd(sizeof(D9CCommandChunkWireClear), rectBytes, out);
     }
-    case PeSemanticProducerKind::Present: out = sizeof(input.present); return true;
-    case PeSemanticProducerKind::StretchRect: out = sizeof(input.stretchRect); return true;
-    case PeSemanticProducerKind::ColorFill: out = sizeof(input.colorFill); return true;
+    case PeSemanticProducerKind::Present: out = sizeof(staged.present); return true;
+    case PeSemanticProducerKind::StretchRect: out = sizeof(staged.stretchRect); return true;
+    case PeSemanticProducerKind::ColorFill: out = sizeof(staged.colorFill); return true;
     case PeSemanticProducerKind::UpdateTexture:
       out = sizeof(D9CCommandChunkWireUpdateTexture); return true;
-    case PeSemanticProducerKind::UpdateSurface: out = sizeof(input.updateSurface); return true;
-    case PeSemanticProducerKind::QueryIssue: out = sizeof(input.queryIssue); return true;
+    case PeSemanticProducerKind::UpdateSurface: out = sizeof(staged.updateSurface); return true;
+    case PeSemanticProducerKind::QueryIssue: out = sizeof(staged.queryIssue); return true;
     case PeSemanticProducerKind::Readback: out = sizeof(D9CCommandChunkWireReadback); return true;
     case PeSemanticProducerKind::ReszDepthResolve:
       out = sizeof(D9CCommandChunkWireReszDepthResolve); return true;
@@ -389,14 +486,16 @@ constexpr bool isPeSemanticUpProducer(
 // rejects the whole plan, which is how the owner folds its retention-delta and
 // generation-alias proof into this same pass instead of walking the record a
 // second time.
-template <typename OnUniqueRetained>
+template <PeSemanticRecordInputLike Input, typename OnUniqueRetained>
   requires std::is_nothrow_invocable_r_v<bool, OnUniqueRetained&,
                                          const PeWireObjectRef&, std::size_t>
 inline bool planPeSemanticAdmissionWith(
-    const PeSemanticRecordInput& input, PeSemanticAdmissionPlan& out,
+    const Input& input, PeSemanticAdmissionPlan& out,
     OnUniqueRetained&& onUniqueRetained) noexcept {
   out = {};
-  out.recordType = input.recordType;
+  if (!validPeSemanticInput(input)) return false;
+  const auto& staged = stagedPeSemanticInput(input);
+  out.recordType = peSemanticRecordType(input);
   // One wire/retention set keeps the planner's fixed stack bounded
   // independently of the six handle kinds; kind remains part of identity.
   detail::PeSemanticIdentitySet pins{};
@@ -419,44 +518,44 @@ inline bool planPeSemanticAdmissionWith(
                           std::size_t pinKind) noexcept {
     return retained(ref, kind, pinKind, true);
   };
-  if (!retained(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u, false) ||
-      !retained(input.surface1, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u, false) ||
-      !retained(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u, false) ||
-      !retained(input.texture1, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u, false) ||
-      !retained(input.buffer0, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u, false) ||
-      !retained(input.buffer1, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u, false) ||
-      !retained(input.shader0, D9C_CHUNK_HANDLE_KIND_SHADER, 3u, false) ||
-      !retained(input.shader1, D9C_CHUNK_HANDLE_KIND_SHADER, 3u, false) ||
-      !retained(input.declaration, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, 4u,
+  if (!retained(staged.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u, false) ||
+      !retained(staged.surface1, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u, false) ||
+      !retained(staged.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u, false) ||
+      !retained(staged.texture1, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u, false) ||
+      !retained(staged.buffer0, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u, false) ||
+      !retained(staged.buffer1, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u, false) ||
+      !retained(staged.shader0, D9C_CHUNK_HANDLE_KIND_SHADER, 3u, false) ||
+      !retained(staged.shader1, D9C_CHUNK_HANDLE_KIND_SHADER, 3u, false) ||
+      !retained(staged.declaration, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, 4u,
                 false) ||
-      !retained(input.query, D9C_CHUNK_HANDLE_KIND_QUERY, 5u, false)) {
+      !retained(staged.query, D9C_CHUNK_HANDLE_KIND_QUERY, 5u, false)) {
     return false;
   }
   bool directValid = true;
-  switch (input.producer) {
+  switch (staged.producer) {
     case PeSemanticProducerKind::Present:
     case PeSemanticProducerKind::ColorFill:
-      directValid = direct(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u);
+      directValid = direct(staged.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u);
       break;
     case PeSemanticProducerKind::GenerateMipmaps:
-      directValid = direct(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u);
+      directValid = direct(staged.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u);
       break;
     case PeSemanticProducerKind::StretchRect:
     case PeSemanticProducerKind::UpdateSurface:
     case PeSemanticProducerKind::Readback:
-      directValid = direct(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u) &&
-                    direct(input.surface1, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u);
+      directValid = direct(staged.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u) &&
+                    direct(staged.surface1, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u);
       break;
     case PeSemanticProducerKind::UpdateTexture:
-      directValid = direct(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u) &&
-                    direct(input.texture1, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u);
+      directValid = direct(staged.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u) &&
+                    direct(staged.texture1, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u);
       break;
     case PeSemanticProducerKind::QueryIssue:
-      directValid = direct(input.query, D9C_CHUNK_HANDLE_KIND_QUERY, 5u);
+      directValid = direct(staged.query, D9C_CHUNK_HANDLE_KIND_QUERY, 5u);
       break;
     case PeSemanticProducerKind::ReszDepthResolve:
-      directValid = direct(input.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u) &&
-                    direct(input.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u);
+      directValid = direct(staged.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u) &&
+                    direct(staged.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u);
       break;
     default:
       break;
@@ -473,7 +572,7 @@ inline bool planPeSemanticAdmissionWith(
     }
     return true;
   };
-  const auto& s = input.sparse;
+  const auto& s = peSemanticSparse(input);
   if (!sparse(s.textures, D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u, 1u) ||
       !sparse(s.streams, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u, 2u) ||
       !sparse(s.shaders, D9C_CHUNK_HANDLE_KIND_SHADER, 3u, 3u) ||
@@ -502,8 +601,8 @@ inline bool planPeSemanticAdmissionWith(
       !storeSparseCount(16u, s.lightEnables.size())) return false;
   std::uint32_t boundedRectCount = 0u;
   std::uint32_t boundedConstantBytes = 0u;
-  if (!detail::checkedSizeToU32(input.clearRects.size(), boundedRectCount) ||
-      !detail::checkedSizeToU32(input.constantBytes.size(), boundedConstantBytes)) {
+  if (!detail::checkedSizeToU32(staged.clearRects.size(), boundedRectCount) ||
+      !detail::checkedSizeToU32(staged.constantBytes.size(), boundedConstantBytes)) {
     return false;
   }
   std::size_t payloadBytes = 0u;
@@ -530,7 +629,8 @@ inline bool planPeSemanticAdmissionWith(
   return true;
 }
 
-inline bool planPeSemanticAdmission(const PeSemanticRecordInput& input,
+template <PeSemanticRecordInputLike Input>
+inline bool planPeSemanticAdmission(const Input& input,
                                     PeSemanticAdmissionPlan& out) noexcept {
   return planPeSemanticAdmissionWith(
       input, out,
@@ -973,18 +1073,21 @@ class PeSemanticBatchOwner final {
   // frontier; the transactional append then consumes those facts instead of
   // re-deriving them.  This is also the live CapacityPre predicate: an
   // `Admissible` outcome is exactly the old private canAdmitStorage() answer.
+  template <PeSemanticRecordInputLike Input>
   PeSemanticAdmissionOutcome prepareAdmission(
-      const PeSemanticRecordInput& input,
+      const Input& input,
       PeSemanticPreparedRecord& witness) const noexcept {
     witness = {};
     if (!ready_) return PeSemanticAdmissionOutcome::Unavailable;
-    witness.producer = input.producer;
-    witness.rule = recordRule(input.recordType);
-    const auto* policy = peSemanticProducerPolicy(input.recordType);
+    if (!validPeSemanticInput(input)) return PeSemanticAdmissionOutcome::Malformed;
+    const auto& staged = stagedPeSemanticInput(input);
+    witness.producer = staged.producer;
+    witness.rule = recordRule(peSemanticRecordType(input));
+    const auto* policy = peSemanticProducerPolicy(peSemanticRecordType(input));
     witness.producerMatchesRecordType =
-        policy != nullptr && policy->kind == input.producer;
-    witness.constantProducer = isPeSemanticConstantProducer(input.producer);
-    witness.upProducer = isPeSemanticUpProducer(input.producer);
+        policy != nullptr && policy->kind == staged.producer;
+    witness.constantProducer = isPeSemanticConstantProducer(staged.producer);
+    witness.upProducer = isPeSemanticUpProducer(staged.producer);
     if (!planPeSemanticAdmissionWith(
             input, witness.plan,
             [&](const PeWireObjectRef& ref, std::size_t pinKind) noexcept {
@@ -1003,16 +1106,17 @@ class PeSemanticBatchOwner final {
 
   // A typed adapter used by producer-family call sites. It intentionally
   // aliases admission rather than exposing the owner internals to producers.
-  bool appendOwnedRecord(const PeSemanticRecordInput& input) noexcept {
+  template <PeSemanticRecordInputLike Input>
+  bool appendOwnedRecord(const Input& input) noexcept {
     return admit(input);
   }
 
  private:
   // Owner-local implementation. The pure facts and qualified deltas never
   // leave tryAppendOwnedRecord(), so there is no caller-visible TOCTOU seam.
-  template <typename Commit>
+  template <PeSemanticRecordInputLike Input, typename Commit>
     requires std::is_nothrow_invocable_r_v<bool, Commit&>
-  bool appendPreparedRecord(const PeSemanticRecordInput& input,
+  bool appendPreparedRecord(const Input& input,
                             const PeSemanticPreparedRecord& prepared,
                             Commit&& commit) noexcept {
     return recordAdmission([&]() noexcept {
@@ -1025,8 +1129,9 @@ class PeSemanticBatchOwner final {
       // so this is an invariant guard rather than a second capacity pass: a
       // witness that describes another record, or was proved against another
       // frontier, fails closed.
-      if (prepared.producer != input.producer ||
-          prepared.plan.recordType != input.recordType ||
+      const auto& staged = stagedPeSemanticInput(input);
+      if (prepared.producer != staged.producer ||
+          prepared.plan.recordType != peSemanticRecordType(input) ||
           !prepared.admissibleAt(recordCount_, emissionHandleCount_,
                                  emissionPayloadBytes_)) {
         lastAdmissionFailure_ = AdmissionFailure::Header;
@@ -1078,8 +1183,8 @@ class PeSemanticBatchOwner final {
         rollback(checkpoint);
         return false;
       }
-      lastSourceOrdinal_ = input.sourceOrdinal;
-      lastRecordOrdinal_ = input.recordOrdinal;
+      lastSourceOrdinal_ = peSemanticSourceOrdinal(input);
+      lastRecordOrdinal_ = peSemanticRecordOrdinal(input);
       return true;
     });
   }
@@ -1088,9 +1193,9 @@ class PeSemanticBatchOwner final {
   // The producer settlement callback runs while the admission checkpoint is
   // still live, so any settlement failure rolls back atomically without
   // adding checkpoint state to the small owner shell.
-  template <typename Commit>
+  template <PeSemanticRecordInputLike Input, typename Commit>
     requires std::is_nothrow_invocable_r_v<bool, Commit&>
-  bool tryAppendOwnedRecord(const PeSemanticRecordInput& input,
+  bool tryAppendOwnedRecord(const Input& input,
                             Commit&& commit) noexcept {
     PeSemanticPreparedRecord prepared{};
     switch (prepareAdmission(input, prepared)) {
@@ -1111,9 +1216,9 @@ class PeSemanticBatchOwner final {
   }
 
   // Compatibility adapter for existing cold/oracle callers.
-  template <typename Commit>
+  template <PeSemanticRecordInputLike Input, typename Commit>
     requires std::is_nothrow_invocable_r_v<bool, Commit&>
-  bool appendOwnedRecord(const PeSemanticRecordInput& input,
+  bool appendOwnedRecord(const Input& input,
                          Commit&& commit) noexcept {
     return tryAppendOwnedRecord(input, std::forward<Commit>(commit));
   }
@@ -1134,7 +1239,8 @@ class PeSemanticBatchOwner final {
 
   // Admission is atomic.  Every counter and every typed pin is restored when
   // any validation, arena, or retain operation fails.
-  bool admit(const PeSemanticRecordInput& input) noexcept {
+  template <PeSemanticRecordInputLike Input>
+  bool admit(const Input& input) noexcept {
     // Keep the test/oracle entry point on the same prepared production path.
     // There is no second legacy materialization route to drift from the
     // canonical role bytes emitted by ExactFixed.
@@ -1443,8 +1549,6 @@ class PeSemanticBatchOwner final {
       return false;
     }
     const auto emit = [&]() noexcept {
-      std::fill(destination.begin(), destination.begin() + plan.wireBytes,
-                std::byte{0});
       std::memcpy(destination.data(), &plan.header, sizeof(plan.header));
       auto records = destination.subspan(plan.header.recordTableOffset,
                                          plan.recordBytes());
@@ -1452,6 +1556,21 @@ class PeSemanticBatchOwner final {
                                          plan.handleBytes());
       auto payload = destination.subspan(plan.header.payloadArenaOffset,
                                          plan.payloadBytes);
+      // Every role is copied in full below. Only layout alignment gaps need
+      // initialization; do not zero-fill the complete contiguous destination.
+      const auto zeroGap = [&](std::size_t begin, std::size_t end) noexcept {
+        if (begin > end || end > plan.wireBytes) return false;
+        std::fill(destination.begin() + begin, destination.begin() + end,
+                  std::byte{0});
+        return true;
+      };
+      if (!zeroGap(sizeof(plan.header), plan.header.recordTableOffset) ||
+          !zeroGap(plan.header.recordTableOffset + plan.recordBytes(),
+                   plan.header.handleTableOffset) ||
+          !zeroGap(plan.header.handleTableOffset + plan.handleBytes(),
+                   plan.header.payloadArenaOffset)) {
+        return false;
+      }
       if (!copyCanonicalRoles(plan, records, handles, payload)) return false;
       out.transport = makeTransport(plan, records, handles, payload, 0u, 0u);
       if (!producerIdentity(out.transport.producerIdentity)) return false;
@@ -2589,13 +2708,16 @@ class PeSemanticBatchOwner final {
         }) || handles.count != prepared.plan.handleCount) {
       return false;
     }
-    if (prepared.payloadOffset > Storage::maxWirePayloadBytes ||
-        prepared.plan.payloadBytes >
-            Storage::maxWirePayloadBytes - prepared.payloadOffset) {
-      return false;
-    }
     auto payload = std::span<std::byte>(storage_->canonicalPayload).subspan(
         prepared.payloadOffset, prepared.plan.payloadBytes);
+    // Payload alignment belongs to the canonical payload role and is emitted
+    // verbatim by both segmented and ExactFixed paths. Initialize the real
+    // inter-record gap explicitly rather than relying on storage construction
+    // or a prior reset to have cleared it.
+    std::fill(storage_->canonicalPayload.begin() +
+                  prepared.emissionPayloadBytes,
+              storage_->canonicalPayload.begin() + prepared.payloadOffset,
+              std::byte{0});
     std::fill(payload.begin(), payload.end(), std::byte{0});
     if (!writeRecordPayload(slot, payload, prepared.emissionHandleCount,
                             handles)) {
@@ -2915,44 +3037,50 @@ class PeSemanticBatchOwner final {
   // Owner-state-dependent header validation. The role/rule facts are resolved
   // once by the prepared witness; only the destination-relative checks below
   // depend on the owner, so a prepared append never re-reads the static tables.
-  bool validAdmissionHeader(const PeSemanticRecordInput& input,
+  template <PeSemanticRecordInputLike Input>
+  bool validAdmissionHeader(const Input& input,
                             const RecordRule* rule, bool producerMatches,
                             bool constantProducer,
                             bool upProducer) const noexcept {
-    if (recordCount_ >= MaxRecords || input.sourceOrdinal == 0u ||
-        input.recordOrdinal == 0u || !producerMatches) return false;
+    if (!validPeSemanticInput(input)) return false;
+    const auto& staged = stagedPeSemanticInput(input);
+    const auto& sparse = peSemanticSparse(input);
+    const auto sourceOrdinal = peSemanticSourceOrdinal(input);
+    const auto recordOrdinal = peSemanticRecordOrdinal(input);
+    if (recordCount_ >= MaxRecords || sourceOrdinal == 0u ||
+        recordOrdinal == 0u || !producerMatches) return false;
     if (recordCount_ != 0u &&
-        (input.recordOrdinal <= storage_->records[recordCount_ - 1u].recordOrdinal ||
-         input.sourceOrdinal <= storage_->records[recordCount_ - 1u].sourceOrdinal)) {
+        (recordOrdinal <= storage_->records[recordCount_ - 1u].recordOrdinal ||
+         sourceOrdinal <= storage_->records[recordCount_ - 1u].sourceOrdinal)) {
       return false;
     }
-    if (!rule || (input.recordFlags & ~rule->allowedRecordFlags) != 0u) {
+    if (!rule || (staged.recordFlags & ~rule->allowedRecordFlags) != 0u) {
       return false;
     }
-    if ((!constantProducer && !input.constantBytes.empty()) ||
-        (!upProducer && (!input.sparse.upIndexData.empty() ||
-                         !input.sparse.upVertexData.empty())) ||
-        (input.producer != PeSemanticProducerKind::Clear &&
-         !input.clearRects.empty())) {
+    if ((!constantProducer && !staged.constantBytes.empty()) ||
+        (!upProducer && (!sparse.upIndexData.empty() ||
+                         !sparse.upVertexData.empty())) ||
+        (staged.producer != PeSemanticProducerKind::Clear &&
+         !staged.clearRects.empty())) {
       return false;
     }
-    switch (input.producer) {
+    switch (staged.producer) {
       case PeSemanticProducerKind::Present:
-        return input.surface0.valid();
+        return staged.surface0.valid();
       case PeSemanticProducerKind::StretchRect:
       case PeSemanticProducerKind::UpdateSurface:
       case PeSemanticProducerKind::Readback:
-        return input.surface0.valid() && input.surface1.valid();
+        return staged.surface0.valid() && staged.surface1.valid();
       case PeSemanticProducerKind::ColorFill:
-        return input.surface0.valid();
+        return staged.surface0.valid();
       case PeSemanticProducerKind::UpdateTexture:
-        return input.texture0.valid() && input.texture1.valid();
+        return staged.texture0.valid() && staged.texture1.valid();
       case PeSemanticProducerKind::QueryIssue:
-        return input.query.valid();
+        return staged.query.valid();
       case PeSemanticProducerKind::ReszDepthResolve:
-        return input.surface0.valid() && input.texture0.valid();
+        return staged.surface0.valid() && staged.texture0.valid();
       case PeSemanticProducerKind::GenerateMipmaps:
-        return input.texture0.valid();
+        return staged.texture0.valid();
       case PeSemanticProducerKind::DrawPrimitive:
       case PeSemanticProducerKind::DrawIndexedPrimitive:
       case PeSemanticProducerKind::DrawPrimitiveUp:
@@ -2967,24 +3095,27 @@ class PeSemanticBatchOwner final {
       case PeSemanticProducerKind::PsBoolConstant:
         return validConstantInput(input);
       case PeSemanticProducerKind::Clear:
-        return input.clear.rectCount == input.clearRects.size();
+        return staged.clear.rectCount == staged.clearRects.size();
       case PeSemanticProducerKind::Count:
         return false;
     }
     return false;
   }
 
-  bool validAdmissionHeader(const PeSemanticRecordInput& input) const noexcept {
-    const auto* policy = peSemanticProducerPolicy(input.recordType);
+  template <PeSemanticRecordInputLike Input>
+  bool validAdmissionHeader(const Input& input) const noexcept {
+    const auto& staged = stagedPeSemanticInput(input);
+    const auto* policy = peSemanticProducerPolicy(peSemanticRecordType(input));
     return validAdmissionHeader(
-        input, recordRule(input.recordType),
-        policy != nullptr && policy->kind == input.producer,
-        isPeSemanticConstantProducer(input.producer),
-        isPeSemanticUpProducer(input.producer));
+        input, recordRule(peSemanticRecordType(input)),
+        policy != nullptr && policy->kind == staged.producer,
+        isPeSemanticConstantProducer(staged.producer),
+        isPeSemanticUpProducer(staged.producer));
   }
 
+  template <PeSemanticRecordInputLike Input>
   bool validAdmissionHeader(
-      const PeSemanticRecordInput& input,
+      const Input& input,
       const PeSemanticPreparedRecord& prepared) const noexcept {
     return validAdmissionHeader(input, prepared.rule,
                                 prepared.producerMatchesRecordType,
@@ -2992,35 +3123,40 @@ class PeSemanticBatchOwner final {
                                 prepared.upProducer);
   }
 
-  bool copyFixedValues(const PeSemanticRecordInput& input) noexcept {
+  template <PeSemanticRecordInputLike Input>
+  bool copyFixedValues(const Input& input) noexcept {
+    const auto& staged = stagedPeSemanticInput(input);
     auto& slot = storage_->records[recordCount_];
-    slot.producer = input.producer;
-    slot.recordType = input.recordType;
-    slot.recordFlags = input.recordFlags;
-    slot.sourceOrdinal = input.sourceOrdinal;
-    slot.recordOrdinal = input.recordOrdinal;
-    slot.draw = input.draw;
-    slot.setConst = input.setConst;
-    slot.clear = input.clear;
-    slot.present = input.present;
-    slot.stretchRect = input.stretchRect;
-    slot.colorFill = input.colorFill;
-    slot.updateSurface = input.updateSurface;
-    slot.queryIssue = input.queryIssue;
-    slot.updateFlags = input.updateFlags;
-    slot.reszFlags = input.reszFlags;
-    slot.mipmapFlags = input.mipmapFlags;
+    slot.producer = staged.producer;
+    slot.recordType = peSemanticRecordType(input);
+    slot.recordFlags = staged.recordFlags;
+    slot.sourceOrdinal = peSemanticSourceOrdinal(input);
+    slot.recordOrdinal = peSemanticRecordOrdinal(input);
+    slot.draw = staged.draw;
+    slot.setConst = staged.setConst;
+    slot.clear = staged.clear;
+    slot.present = staged.present;
+    slot.stretchRect = staged.stretchRect;
+    slot.colorFill = staged.colorFill;
+    slot.updateSurface = staged.updateSurface;
+    slot.queryIssue = staged.queryIssue;
+    slot.updateFlags = staged.updateFlags;
+    slot.reszFlags = staged.reszFlags;
+    slot.mipmapFlags = staged.mipmapFlags;
     return true;
   }
 
-  static bool validConstantInput(const PeSemanticRecordInput& input) noexcept {
-    const bool boolean = input.producer == PeSemanticProducerKind::VsBoolConstant ||
-                         input.producer == PeSemanticProducerKind::PsBoolConstant;
+  template <PeSemanticRecordInputLike Input>
+  static bool validConstantInput(const Input& input) noexcept {
+    const auto& staged = stagedPeSemanticInput(input);
+    const bool boolean = staged.producer == PeSemanticProducerKind::VsBoolConstant ||
+                         staged.producer == PeSemanticProducerKind::PsBoolConstant;
     const auto elementBytes = boolean ? 4u : 16u;
     const auto expected = static_cast<std::uint64_t>(
-        input.setConst.registerCount) * elementBytes;
+        staged.setConst.registerCount) * elementBytes;
     const auto limit = boolean ? 16u : 256u;
-    return input.setConst.registerCount <= limit && expected == input.constantBytes.size();
+    return staged.setConst.registerCount <= limit &&
+           expected == staged.constantBytes.size();
   }
 
   template <typename Object, typename Identity>
@@ -3129,8 +3265,10 @@ class PeSemanticBatchOwner final {
     return hasObject ? out.valid() : !hasIdentity;
   }
 
-  bool copyDirectPins(const PeSemanticRecordInput& input,
+  template <PeSemanticRecordInputLike Input>
+  bool copyDirectPins(const Input& input,
                       PeSemanticRecordSlot& slot) noexcept {
+    const auto& staged = stagedPeSemanticInput(input);
     const auto retainSurface = [this](D9CSurface* p,
                                       D3D9PePendingCommandRetainer::Acquired&) {
       return retainer_.retainSurface(p, retainedCheckpoint_);
@@ -3155,30 +3293,30 @@ class PeSemanticBatchOwner final {
                                     D3D9PePendingCommandRetainer::Acquired&) {
       return retainer_.retainQuery(p, retainedCheckpoint_);
     };
-    return pin<D9CSurface, PeSemanticSurfaceIdentity>(input.surface0,
+    return pin<D9CSurface, PeSemanticSurfaceIdentity>(staged.surface0,
                                                        storage_->surfaces, surfaceCount_, slot.surface0,
                                                        retainSurface) &&
-           pin<D9CSurface, PeSemanticSurfaceIdentity>(input.surface1,
+           pin<D9CSurface, PeSemanticSurfaceIdentity>(staged.surface1,
                                                        storage_->surfaces, surfaceCount_, slot.surface1,
                                                        retainSurface) &&
-           pin<D9CTexture, PeSemanticTextureIdentity>(input.texture0,
+           pin<D9CTexture, PeSemanticTextureIdentity>(staged.texture0,
                                                        storage_->textures, textureCount_, slot.texture0,
                                                        retainTexture) &&
-           pin<D9CTexture, PeSemanticTextureIdentity>(input.texture1,
+           pin<D9CTexture, PeSemanticTextureIdentity>(staged.texture1,
                                                        storage_->textures, textureCount_, slot.texture1,
                                                        retainTexture) &&
-           pin<D9CBuffer, PeSemanticBufferIdentity>(input.buffer0, storage_->buffers, bufferCount_,
+           pin<D9CBuffer, PeSemanticBufferIdentity>(staged.buffer0, storage_->buffers, bufferCount_,
                                                      slot.buffer0, retainBuffer) &&
-           pin<D9CBuffer, PeSemanticBufferIdentity>(input.buffer1, storage_->buffers, bufferCount_,
+           pin<D9CBuffer, PeSemanticBufferIdentity>(staged.buffer1, storage_->buffers, bufferCount_,
                                                      slot.buffer1, retainBuffer) &&
-           pin<D9CShader, PeSemanticShaderIdentity>(input.shader0, storage_->shaders, shaderCount_,
+           pin<D9CShader, PeSemanticShaderIdentity>(staged.shader0, storage_->shaders, shaderCount_,
                                                      slot.shader0, retainShader) &&
-           pin<D9CShader, PeSemanticShaderIdentity>(input.shader1, storage_->shaders, shaderCount_,
+           pin<D9CShader, PeSemanticShaderIdentity>(staged.shader1, storage_->shaders, shaderCount_,
                                                      slot.shader1, retainShader) &&
            pin<D9CVertexDecl, PeSemanticDeclarationIdentity>(
-               input.declaration, storage_->declarations, declarationCount_, slot.declaration,
+               staged.declaration, storage_->declarations, declarationCount_, slot.declaration,
                retainDeclaration) &&
-           pin<D9CQuery, PeSemanticQueryIdentity>(input.query, storage_->queries, queryCount_,
+           pin<D9CQuery, PeSemanticQueryIdentity>(staged.query, storage_->queries, queryCount_,
                                                   slot.query, retainQuery);
   }
 
@@ -3207,9 +3345,10 @@ class PeSemanticBatchOwner final {
     return true;
   }
 
-  bool copySparse(const PeSemanticRecordInput& input,
+  template <PeSemanticRecordInputLike Input>
+  bool copySparse(const Input& input,
                   PeSemanticRecordSlot& slot) noexcept {
-    const auto& s = input.sparse;
+    const auto& s = peSemanticSparse(input);
     const auto withinSchema = [](std::uint16_t kind,
                                  std::size_t count) noexcept {
       const auto* rule = sectionRule(kind);
@@ -3262,45 +3401,48 @@ class PeSemanticBatchOwner final {
     return copyBindingSparse(s, slot);
   }
 
-  bool copyVariablePayloads(const PeSemanticRecordInput& input,
+  template <PeSemanticRecordInputLike Input>
+  bool copyVariablePayloads(const Input& input,
                             PeSemanticRecordSlot& slot) noexcept {
-    slot.vsFloatConstant = {.startRegister = input.sparse.vsFloatConstants.startRegister,
-                            .registerCount = input.sparse.vsFloatConstants.registerCount};
-    slot.vsIntConstant = {.startRegister = input.sparse.vsIntConstants.startRegister,
-                          .registerCount = input.sparse.vsIntConstants.registerCount};
-    slot.vsBoolConstant = {.startRegister = input.sparse.vsBoolConstants.startRegister,
-                           .registerCount = input.sparse.vsBoolConstants.registerCount};
-    slot.psFloatConstant = {.startRegister = input.sparse.psFloatConstants.startRegister,
-                            .registerCount = input.sparse.psFloatConstants.registerCount};
-    slot.psIntConstant = {.startRegister = input.sparse.psIntConstants.startRegister,
-                          .registerCount = input.sparse.psIntConstants.registerCount};
-    slot.psBoolConstant = {.startRegister = input.sparse.psBoolConstants.startRegister,
-                           .registerCount = input.sparse.psBoolConstants.registerCount};
-    if (!appendBytes(input.constantBytes, storage_->constantBytes, semanticBytes_,
+    const auto& staged = stagedPeSemanticInput(input);
+    const auto& sparse = peSemanticSparse(input);
+    slot.vsFloatConstant = {.startRegister = sparse.vsFloatConstants.startRegister,
+                            .registerCount = sparse.vsFloatConstants.registerCount};
+    slot.vsIntConstant = {.startRegister = sparse.vsIntConstants.startRegister,
+                          .registerCount = sparse.vsIntConstants.registerCount};
+    slot.vsBoolConstant = {.startRegister = sparse.vsBoolConstants.startRegister,
+                           .registerCount = sparse.vsBoolConstants.registerCount};
+    slot.psFloatConstant = {.startRegister = sparse.psFloatConstants.startRegister,
+                            .registerCount = sparse.psFloatConstants.registerCount};
+    slot.psIntConstant = {.startRegister = sparse.psIntConstants.startRegister,
+                          .registerCount = sparse.psIntConstants.registerCount};
+    slot.psBoolConstant = {.startRegister = sparse.psBoolConstants.startRegister,
+                           .registerCount = sparse.psBoolConstants.registerCount};
+    if (!appendBytes(staged.constantBytes, storage_->constantBytes, semanticBytes_,
                      slot.constantBytes) ||
-        !appendBytes(input.sparse.vsFloatConstants.registerBytes,
+        !appendBytes(sparse.vsFloatConstants.registerBytes,
                      storage_->constantBytes, semanticBytes_, slot.vsFloatConstants) ||
-        !appendBytes(input.sparse.vsIntConstants.registerBytes,
+        !appendBytes(sparse.vsIntConstants.registerBytes,
                      storage_->constantBytes, semanticBytes_, slot.vsIntConstants) ||
-        !appendBytes(input.sparse.vsBoolConstants.registerBytes,
+        !appendBytes(sparse.vsBoolConstants.registerBytes,
                      storage_->constantBytes, semanticBytes_, slot.vsBoolConstants) ||
-        !appendBytes(input.sparse.psFloatConstants.registerBytes,
+        !appendBytes(sparse.psFloatConstants.registerBytes,
                      storage_->constantBytes, semanticBytes_, slot.psFloatConstants) ||
-        !appendBytes(input.sparse.psIntConstants.registerBytes,
+        !appendBytes(sparse.psIntConstants.registerBytes,
                      storage_->constantBytes, semanticBytes_, slot.psIntConstants) ||
-        !appendBytes(input.sparse.psBoolConstants.registerBytes,
+        !appendBytes(sparse.psBoolConstants.registerBytes,
                      storage_->constantBytes, semanticBytes_, slot.psBoolConstants) ||
-        !appendBytes(input.sparse.upIndexData, storage_->constantBytes, semanticBytes_,
+        !appendBytes(sparse.upIndexData, storage_->constantBytes, semanticBytes_,
                      slot.upIndexBytes) ||
-        !appendBytes(input.sparse.upVertexData, storage_->constantBytes, semanticBytes_,
+        !appendBytes(sparse.upVertexData, storage_->constantBytes, semanticBytes_,
                      slot.upVertexBytes)) return false;
-    if (!input.clearRects.empty()) {
-      if (input.clearRects.size() > MaxRects - rectCount_) return false;
+    if (!staged.clearRects.empty()) {
+      if (staged.clearRects.size() > MaxRects - rectCount_) return false;
       slot.clearRects = {.offset = static_cast<std::uint32_t>(rectCount_),
-                         .count = static_cast<std::uint32_t>(input.clearRects.size())};
-      std::copy(input.clearRects.begin(), input.clearRects.end(),
+                         .count = static_cast<std::uint32_t>(staged.clearRects.size())};
+      std::copy(staged.clearRects.begin(), staged.clearRects.end(),
                 storage_->rects.begin() + rectCount_);
-      rectCount_ += input.clearRects.size();
+      rectCount_ += staged.clearRects.size();
     }
     return true;
   }

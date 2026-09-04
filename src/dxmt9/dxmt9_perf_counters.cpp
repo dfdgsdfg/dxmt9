@@ -762,6 +762,10 @@ void countChunkPublishReason(ChunkPublishReason reason,
     count = &c.chunkPublishReasonDirectCapacityRotation;
     commands = &c.chunkPublishCommandsDirectCapacityRotation;
     break;
+  case ChunkPublishReason::EarlyPrefix:
+    count = &c.chunkPublishReasonEarlyPrefix;
+    commands = &c.chunkPublishCommandsEarlyPrefix;
+    break;
   // DrawContinuation is retained for counter-table numbering stability and
   // folded into the Unknown bucket.
   case ChunkPublishReason::DrawContinuation:
@@ -811,6 +815,51 @@ void countChunkPublishPresentPrePresentOpportunityTail(
 
 void countCpuReadySessionPendingStarted() {
   add(counters().cpuReadySessionPendingStarted);
+}
+
+void countCpuReadyEarlyPrefixCandidate() {
+  add(counters().cpuReadyEarlyPrefixCandidates);
+}
+
+void countCpuReadyEarlyPrefixPublished() {
+  add(counters().cpuReadyEarlyPrefixPublished);
+}
+
+void countCpuReadyEarlyPrefixFallback(CpuReadyEarlyPrefixFallback reason) {
+  auto& c = counters();
+  switch (reason) {
+  case CpuReadyEarlyPrefixFallback::AlreadyPublished:
+    add(c.cpuReadyEarlyPrefixFallbackAlreadyPublished);
+    break;
+  case CpuReadyEarlyPrefixFallback::NoTailCredit:
+    add(c.cpuReadyEarlyPrefixFallbackNoTailCredit);
+    break;
+  case CpuReadyEarlyPrefixFallback::OrderedControl:
+    add(c.cpuReadyEarlyPrefixFallbackOrderedControl);
+    break;
+  case CpuReadyEarlyPrefixFallback::Ineligible:
+    add(c.cpuReadyEarlyPrefixFallbackIneligible);
+    break;
+  case CpuReadyEarlyPrefixFallback::Capacity:
+    add(c.cpuReadyEarlyPrefixFallbackCapacity);
+    break;
+  }
+}
+
+void countCpuReadyEarlyPrefixTailReserved() {
+  add(counters().cpuReadyEarlyPrefixTailReserved);
+}
+
+void countCpuReadyEarlyPrefixSessionParked() {
+  add(counters().cpuReadyEarlyPrefixSessionParked);
+}
+
+void countCpuReadyEarlyPrefixSessionJoined() {
+  add(counters().cpuReadyEarlyPrefixSessionJoined);
+}
+
+void countCpuReadyEarlyPrefixSessionJoinFailedPreEffect() {
+  add(counters().cpuReadyEarlyPrefixSessionJoinFailedPreEffect);
 }
 
 void countEncodePartitionPlan(bool explicitPlan,
@@ -3133,6 +3182,20 @@ void countHazardProbe(bool bloomOverlap, bool exactOverlap) {
 
 
 
+
+void countSubmitDrawRunBatchInputRuns(std::uint64_t runs) {
+  if (runs != 0) {
+    add(counters().submitDrawRunBatchInputRuns, runs);
+  }
+}
+
+void countSubmitDrawRunBatchEmittedRun() {
+  add(counters().submitDrawRunBatchEmittedRuns);
+}
+
+void countSubmitDrawRunBatchSegment() {
+  add(counters().submitDrawRunBatchSegments);
+}
 
 void countSubmitDrawRunBindingSnapshotCpuTime(std::uint64_t nanoseconds) {
   auto& c = counters();

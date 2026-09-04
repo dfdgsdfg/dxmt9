@@ -446,6 +446,36 @@ class HandleArena {
   }
 
   template <typename Fn>
+  std::size_t updateMany(std::span<const u64> handleValues, Fn&& fn) {
+    std::unique_lock lock(mutex_);
+    std::size_t updated = 0;
+    for (const auto handleValue : handleValues) {
+      auto* record = findUnlocked(handleValue);
+      if (!record) {
+        continue;
+      }
+      fn(*record);
+      ++updated;
+    }
+    return updated;
+  }
+
+  template <typename Fn>
+  std::size_t updateMany(std::span<const core::Handle> handles, Fn&& fn) {
+    std::unique_lock lock(mutex_);
+    std::size_t updated = 0;
+    for (const auto handle : handles) {
+      auto* record = findUnlocked(handle.value);
+      if (!record) {
+        continue;
+      }
+      fn(*record);
+      ++updated;
+    }
+    return updated;
+  }
+
+  template <typename Fn>
   bool inspect(u64 handleValue, Fn&& fn) const {
     std::shared_lock lock(mutex_);
     const auto* record = findUnlocked(handleValue);
@@ -907,6 +937,9 @@ struct Pool {
                              u64 seqId);
   void markTextureUse(core::Handle handle, u64 seqId);
   void markSurfaceUse(core::Handle handle, u64 seqId);
+  void markBufferUsesBatch(std::span<const core::Handle> handles, u64 seqId);
+  void markTextureUsesBatch(std::span<const core::Handle> handles, u64 seqId);
+  void markSurfaceUsesBatch(std::span<const core::Handle> handles, u64 seqId);
 
   core::ChunkBufferBindingSnapshot captureChunkBufferBinding(
       core::Handle handle) const noexcept;

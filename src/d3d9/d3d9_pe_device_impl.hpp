@@ -1090,7 +1090,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     void clearSemanticRecordInput() noexcept;
 
     bool settleSemanticRecord(
-        const dxmt9::d3d9::pe::PeSemanticRecordInput& input,
+        const dxmt9::d3d9::pe::PeSemanticRecordInputView& input,
         std::uint64_t recordOrdinal) noexcept;
     HRESULT appendSemanticRecord(std::uint32_t type, std::size_t bytes);
     HRESULT retryPendingSemanticChunk();

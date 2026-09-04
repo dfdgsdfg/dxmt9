@@ -18,6 +18,7 @@ normal_models=(
   CpuPipelineLifecycle
   CpuPipelineOwnership
   CpuReadyActiveHeadLookahead
+  CpuReadyEarlyPrefix
   CpuReadySemanticTransfer
   CpuReadySessionProgress
   DceChunkLookahead
@@ -62,10 +63,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=50
+expected_normal_count=51
 expected_progress_count=2
 expected_counterexample_count=109
-expected_cfg_count=161
+expected_cfg_count=162
 progress_configs=(
   CpuPipelineLifecycle.progress
   DirectSourceLifecycle.progress

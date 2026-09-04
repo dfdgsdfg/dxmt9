@@ -2446,18 +2446,19 @@ class Device : public std::enable_shared_from_this<Device> {
   void registerTexture(const std::shared_ptr<Texture>& texture);
   void registerSurface(const std::shared_ptr<Surface>& surface);
   void invalidateDefaultPoolResources();
-  void submitClearInternal(const ClearDesc& desc);
-  void submitDrawRunInternal(CanonicalDrawState state, const DrawUniformPayload& uniforms,
-                             std::span<const DrawParam> draws,
-                             std::span<const DrawParamPayloadView> payloads = {});
-  void submitDrawRunInternalFromCurrentState(
+  HResult submitClearInternal(const ClearDesc& desc);
+  HResult submitDrawRunInternal(CanonicalDrawState state,
+                                const DrawUniformPayload& uniforms,
+                                std::span<const DrawParam> draws,
+                                std::span<const DrawParamPayloadView> payloads = {});
+  HResult submitDrawRunInternalFromCurrentState(
       std::span<const DrawParam> draws,
       std::span<const DrawParamPayloadView> payloads = {});
-  void submitDrawRunInternalFromState(
+  HResult submitDrawRunInternalFromState(
       DeviceState baseState,
       std::span<const DrawParam> draws,
       std::span<const DrawParamPayloadView> payloads = {});
-  void submitPresentInternal(const SwapDesc& desc);
+  HResult submitPresentInternal(const SwapDesc& desc);
   void maybeCaptureExperimentFrame();
   u32 experimentCaptureRequestedCount() const;
   void recordExperimentCaptureSkip(const std::string& capturePath,

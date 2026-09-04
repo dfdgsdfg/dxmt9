@@ -3063,11 +3063,11 @@ bool drawStateInvalidationAffectsShaderLayout(u32 reasonMask) noexcept {
          (reasonMask & kShaderLayoutMask) != 0;
 }
 
-void Device::submitDrawRunInternalFromState(
+HResult Device::submitDrawRunInternalFromState(
     DeviceState baseState, std::span<const DrawParam> draws,
     std::span<const DrawParamPayloadView> payloads) {
   if (draws.empty()) {
-    return;
+    return D3D_OK;
   }
   if (!drawRunUsesBoundIndexBuffer(draws, payloads)) {
     baseState.indexBuffer.reset();
@@ -3093,7 +3093,7 @@ void Device::submitDrawRunInternalFromState(
       std::move(shaderLayout),
       std::move(debug),
   };
-  submitDrawRunInternal(std::move(state), uniforms, draws, payloads);
+  return submitDrawRunInternal(std::move(state), uniforms, draws, payloads);
 }
 
 void Device::invalidateDrawStateCache(u32 reasonMask) noexcept {
@@ -3846,11 +3846,11 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
   return cache;
 }
 
-void Device::submitDrawRunInternalFromCurrentState(
+HResult Device::submitDrawRunInternalFromCurrentState(
     std::span<const DrawParam> draws,
     std::span<const DrawParamPayloadView> payloads) {
   if (draws.empty()) {
-    return;
+    return D3D_OK;
   }
   const auto &cached =
       cachedBaseDrawState(drawRunUsesBoundIndexBuffer(draws, payloads));
@@ -3864,7 +3864,8 @@ void Device::submitDrawRunInternalFromCurrentState(
                        draws.front().indexType},
           cached.hot),
   };
-  submitDrawRunInternal(std::move(state), cached.uniforms, draws, payloads);
+  return submitDrawRunInternal(std::move(state), cached.uniforms, draws,
+                               payloads);
 }
 
 
@@ -4153,8 +4154,11 @@ DirectReplayDrawResult Device::submitDirectReplayDrawFromCurrentState(
                              DrawDebugSnapshot{}};
     const std::span<const DrawParam> draws(&draw, 1u);
     const std::span<const DrawParamPayloadView> payloads(&payload, 1u);
-    submitDrawRunInternal(std::move(state), cached.uniforms, draws, payloads);
-    return {D3D_OK, DirectReplayDrawDisposition::LegacyUnsupported};
+    const auto hr = submitDrawRunInternal(std::move(state), cached.uniforms,
+                                          draws, payloads);
+    return {hr, hr != D3D_OK
+                ? DirectReplayDrawDisposition::AcceptedFailStop
+                : DirectReplayDrawDisposition::LegacyUnsupported};
   }
 
   const DirectReplayDrawInput input{
@@ -4203,7 +4207,7 @@ DirectReplayDrawResult Device::submitDirectReplayDrawFromCurrentState(
   return {D3D_OK, disposition};
 }
 
-void Device::submitDrawRunInternal(
+HResult Device::submitDrawRunInternal(
     CanonicalDrawState state, const DrawUniformPayload &uniforms,
     std::span<const DrawParam> draws,
     std::span<const DrawParamPayloadView> payloads) {
@@ -4213,10 +4217,10 @@ void Device::submitDrawRunInternal(
   if (flushCompatibilityReplayDrawBatch() ==
       CompatibilityDrawBatchFlushStatus::Failed) {
     deviceLost_ = true;
-    return;
+    return D3DERR_DEVICELOST;
   }
   if (draws.empty()) {
-    return;
+    return D3D_OK;
   }
   const auto firstPayload = drawPayloadAt(payloads, 0);
   state.debug = makeDrawDebugSnapshot(
@@ -4283,7 +4287,7 @@ void Device::submitDrawRunInternal(
   const auto drawCount = static_cast<u64>(draws.size());
   if (!upperDevice_) {
     deviceLost_ = true;
-    return;
+    return D3DERR_DEVICELOST;
   }
   if (activeOcclusionQuery_) {
     for (const auto &draw : draws) {
@@ -4293,6 +4297,7 @@ void Device::submitDrawRunInternal(
   upperDevice_->submitDrawRun(std::move(state), uniforms, draws, payloads);
   submittedSequenceId_ += drawCount;
   DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
+  return D3D_OK;
 }
 
 
@@ -4343,8 +4348,7 @@ HResult Device::drawPrimitiveRun(std::span<const DrawParam> draws,
         std::span<const u8>(indexPayload.data(), indexPayload.size());
   }
 
-  submitDrawRunInternalFromCurrentState(normalized, payloads);
-  return D3D_OK;
+  return submitDrawRunInternalFromCurrentState(normalized, payloads);
 }
 
 HResult Device::drawPrimitive(PrimitiveType type, u32 primitiveCount,
@@ -4366,19 +4370,20 @@ HResult Device::drawPrimitive(PrimitiveType type, u32 primitiveCount,
         .userIndexData =
             std::span<const u8>(upIndexScratch_.data(), upIndexScratch_.size()),
     };
-    submitDrawRunInternalFromCurrentState(
+    const auto hr = submitDrawRunInternalFromCurrentState(
         std::span<const DrawParam>(&draw, 1),
         std::span<const DrawParamPayloadView>(&payload, 1));
     if (state_.inScene) {
       // No-op; draw submission is immediate in the core harness.
     }
-    return D3D_OK;
+    return hr;
   }
-  submitDrawRunInternalFromCurrentState(std::span<const DrawParam>(&draw, 1));
+  const auto hr =
+      submitDrawRunInternalFromCurrentState(std::span<const DrawParam>(&draw, 1));
   if (state_.inScene) {
     // No-op; draw submission is immediate in the core harness.
   }
-  return D3D_OK;
+  return hr;
 }
 
 HResult Device::drawIndexedPrimitive(PrimitiveType type, u32 primitiveCount,
@@ -4407,13 +4412,12 @@ HResult Device::drawIndexedPrimitive(PrimitiveType type, u32 primitiveCount,
         .userIndexData =
             std::span<const u8>(upIndexScratch_.data(), upIndexScratch_.size()),
     };
-    submitDrawRunInternalFromCurrentState(
+    const auto hr = submitDrawRunInternalFromCurrentState(
         std::span<const DrawParam>(&draw, 1),
         std::span<const DrawParamPayloadView>(&payload, 1));
-    return D3D_OK;
+    return hr;
   }
-  submitDrawRunInternalFromCurrentState(std::span<const DrawParam>(&draw, 1));
-  return D3D_OK;
+  return submitDrawRunInternalFromCurrentState(std::span<const DrawParam>(&draw, 1));
 }
 
 HResult Device::drawPrimitiveUP(PrimitiveType type, u32 primitiveCount,
@@ -4446,19 +4450,17 @@ HResult Device::drawPrimitiveUP(PrimitiveType type, u32 primitiveCount,
         .userVertexData =
             std::span<const u8>(decomposed.data(), decomposed.size()),
     };
-    submitDrawRunInternalFromState(
+    return submitDrawRunInternalFromState(
         drawState, std::span<const DrawParam>(&draw, 1),
         std::span<const DrawParamPayloadView>(&payload, 1));
-    return D3D_OK;
   } else {
     const DrawParamPayloadView payload{
         .userVertexData = std::span<const u8>(upVertexScratch_.data(),
                                               upVertexScratch_.size()),
     };
-    submitDrawRunInternalFromState(
+    return submitDrawRunInternalFromState(
         drawState, std::span<const DrawParam>(&draw, 1),
         std::span<const DrawParamPayloadView>(&payload, 1));
-    return D3D_OK;
   }
 }
 
@@ -4499,10 +4501,9 @@ HResult Device::drawIndexedPrimitiveUP(PrimitiveType type, u32 primitiveCount,
       .userIndexData =
           std::span<const u8>(upIndexScratch_.data(), upIndexScratch_.size()),
   };
-  submitDrawRunInternalFromState(
+  return submitDrawRunInternalFromState(
       drawState, std::span<const DrawParam>(&draw, 1),
       std::span<const DrawParamPayloadView>(&payload, 1));
-  return D3D_OK;
 }
 
 // Determinism: for a fixed `DeviceState` value, repeated calls produce

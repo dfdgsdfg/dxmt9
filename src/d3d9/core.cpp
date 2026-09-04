@@ -258,7 +258,11 @@ HResult Device::presentEx(const Rect* sourceRect, const Rect* destRect, Handle d
   desc.pacedByPresentOrdinal = nextPresentPacedByOrdinal_;
   nextPresentPacedByOrdinal_ = false;
   const bool synchronizePresent = desc.displaySyncEnabled;
-  submitPresentInternal(desc);
+  const auto submitResult = submitPresentInternal(desc);
+  if (submitResult != D3D_OK) {
+    deviceLost_ = true;
+    return submitResult;
+  }
   // Immediate presents must not synchronously wait for the Metal presenter:
   // some windowed apps submit before their message pump has made a drawable
   // available, and waiting here can deadlock that first frame.
@@ -450,9 +454,16 @@ HResult Device::checkDeviceMultiSampleType(Format format, MultiSampleType type) 
   return D3D_OK;
 }
 
-void Device::submitPresentInternal(const SwapDesc& desc) {
+HResult Device::submitPresentInternal(const SwapDesc& desc) {
   // `presentEx` publishes the compatibility island before taking the snapshot
   // used here. Replay also cuts before dispatching a Present record.
+  if (deviceLost_ ||
+      flushCompatibilityReplayDrawBatch() ==
+          CompatibilityDrawBatchFlushStatus::Failed ||
+      !upperDevice_) {
+    deviceLost_ = true;
+    return D3DERR_DEVICELOST;
+  }
   DXMT_ASSERT(!compatibilityReplayDrawBatchPending());
   if (renderTraceEnabled()) {
     emitRenderTrace("present seq=%llu window=0x%llx size=%ux%u fmt=%u windowed=%d interval=%u",
@@ -469,6 +480,7 @@ void Device::submitPresentInternal(const SwapDesc& desc) {
   // SeqIdSafety: a submission can advance the current sequence, but never
   // below the completed sequence.
   DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
+  return D3D_OK;
 }
 
 }  // namespace dxmt9::core

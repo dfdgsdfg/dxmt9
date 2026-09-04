@@ -546,6 +546,10 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
                               kCommandChunkCount)),
       device_(device),
       cpuReadySessionLaneEnabled_(cpuReadySessionLaneEnabled),
+      cpuReadyEarlyPrefixLaneEnabled_(
+          core::metalqueue::cpuReadyEarlyPrefixEnvEnabled(
+              std::getenv("DXMT9_CPU_READY_TAPE"),
+              std::getenv("DXMT9_CPU_READY_EARLY_PREFIX"))),
       renderPartitionConfig_(renderPartitionConfig),
       encodeExecutionTopology_(encodeExecutionTopology),
       limits_(limits),
@@ -2432,8 +2436,17 @@ std::size_t drawRunPayloadBytes(
 }
 
 struct DrawSubmitScratch {
+  struct PreparedEntry {
+    core::DrawRunBatchEntry entry{};
+    std::size_t payloadBytes = 0;
+  };
   std::vector<core::DrawBindingSnapshot> bindingSnapshots;
   std::vector<core::DrawParamPayloadView> snapshotPayloads;
+  std::vector<PreparedEntry> preparedEntries;
+  std::vector<bool> segmentExtends;
+  std::vector<core::Handle> segmentBufferHandles;
+  std::vector<core::Handle> segmentTextureHandles;
+  std::vector<core::Handle> segmentSurfaceHandles;
   bool inUse = false;
 };
 
@@ -2453,6 +2466,11 @@ public:
   ~ScopedDrawSubmitScratchUse() {
     scratch_.bindingSnapshots.clear();
     scratch_.snapshotPayloads.clear();
+    scratch_.preparedEntries.clear();
+    scratch_.segmentExtends.clear();
+    scratch_.segmentBufferHandles.clear();
+    scratch_.segmentTextureHandles.clear();
+    scratch_.segmentSurfaceHandles.clear();
     scratch_.inUse = false;
   }
 
@@ -2553,11 +2571,15 @@ std::span<const core::DrawParamPayloadView> snapshotDrawRunBindingPayloads(
     std::span<const core::DrawParam> draws,
     std::span<const core::DrawParamPayloadView> payloads,
     std::vector<core::DrawBindingSnapshot>& bindingSnapshots,
-    std::vector<core::DrawParamPayloadView>& snapshotPayloads) {
-  bindingSnapshots.clear();
-  snapshotPayloads.clear();
-  bindingSnapshots.reserve(draws.size());
-  snapshotPayloads.reserve(draws.size());
+    std::vector<core::DrawParamPayloadView>& snapshotPayloads,
+    bool appendToScratch = false) {
+  const std::size_t payloadStart = snapshotPayloads.size();
+  if (!appendToScratch) {
+    bindingSnapshots.clear();
+    snapshotPayloads.clear();
+  }
+  bindingSnapshots.reserve(bindingSnapshots.size() + draws.size());
+  snapshotPayloads.reserve(snapshotPayloads.size() + draws.size());
 
   bool anyPayloadChanged = false;
   for (std::size_t i = 0; i < draws.size(); ++i) {
@@ -2584,11 +2606,16 @@ std::span<const core::DrawParamPayloadView> snapshotDrawRunBindingPayloads(
   }
 
   if (!anyPayloadChanged) {
-    bindingSnapshots.clear();
-    snapshotPayloads.clear();
+    if (!appendToScratch) {
+      bindingSnapshots.clear();
+      snapshotPayloads.clear();
+    } else {
+      snapshotPayloads.resize(payloadStart);
+    }
     return payloads;
   }
-  return snapshotPayloads;
+  return std::span<const core::DrawParamPayloadView>(
+      snapshotPayloads.data() + payloadStart, draws.size());
 }
 
 void markDrawBindingOverrideResource(resources::Pool& pool,
@@ -3100,39 +3127,6 @@ bool maybeCommitDrawChunkUnlocked(
   return committed;
 }
 
-bool maybeCommitDrawPayloadArenaUnlocked(
-    CommandQueue& q,
-    resources::Pool& pool,
-    std::unique_lock<std::mutex>& lock,
-    std::size_t pendingPayloadBytes) {
-  const std::size_t limit = drawPayloadArenaLimitBytes();
-  if (limit == 0 || pendingPayloadBytes == 0 || !q.writingSlot_) {
-    return false;
-  }
-
-  auto& slot = currentSlotUnlocked(q);
-  if (slot.commandsEmpty()) {
-    return false;
-  }
-  if (slot.drawPayloadArena.size() <= limit &&
-      pendingPayloadBytes <= limit - slot.drawPayloadArena.size()) {
-    return false;
-  }
-
-  const bool committed = q.queueLifecycle_.commitCurrentChunk(
-      lock, kMaxQueuedChunks, [&q, &pool](core::ChunkSlot& publishSlot) {
-        prepareSlotForPublish(q, pool, publishSlot,
-                              perf::ChunkPublishReason::PayloadLimit);
-      });
-  if (committed) {
-    if (q.skipDrawResourceMarking_) {
-      q.forceDrawResourceMarkingAfterSplit_ = true;
-    }
-    ensureWritingSlotUnlocked(q, lock);
-  }
-  return committed;
-}
-
 }  // namespace
 
 void CommandQueue::setSkipDrawResourceMarking(bool skip) {
@@ -3396,6 +3390,7 @@ bool CommandQueue::submitDrawRunBatch(
     return false;
   }
   std::size_t drawCount = 0;
+  std::size_t inputRunCount = 0;
   for (const auto& entry : entries) {
     if (!entry.valid()) continue;
     if (drawCount > std::numeric_limits<std::size_t>::max() -
@@ -3403,6 +3398,7 @@ bool CommandQueue::submitDrawRunBatch(
       return false;
     }
     drawCount += entry.draws.size();
+    ++inputRunCount;
   }
   if (drawCount == 0) return true;
   for (std::size_t i = 0; i < drawCount; ++i) perf::countSubmitDraw();
@@ -3430,6 +3426,7 @@ bool CommandQueue::submitDrawRunBatch(
     }
     if (handled) return true;
   }
+  perf::countSubmitDrawRunBatchInputRuns(inputRunCount);
   auto& scratch = drawSubmitScratch();
   ScopedDrawSubmitScratchUse scratchUse(scratch);
   scratch.bindingSnapshots.reserve(drawCount);
@@ -3447,49 +3444,226 @@ bool CommandQueue::submitDrawRunBatch(
   // single "hold" duration would not be meaningful. Only the acquire-wait
   // for this initial lock is recorded.
   QueueMutexProbeScope qmxScope(qmxBegin, "submit_draw_run", /*skipHold=*/true);
-  for (const auto& entry : entries) {
-    if (!entry.valid()) return false;
+  scratch.preparedEntries.clear();
+  scratch.preparedEntries.reserve(entries.size());
+  for (const auto& source : entries) {
+    if (!source.valid()) return false;
     std::span<const core::DrawParamPayloadView> effectivePayloads{};
     {
       PerfScope stageScope(perf::countSubmitDrawRunBindingSnapshotCpuTime);
       effectivePayloads = snapshotDrawRunBindingPayloads(
-          pool_, entry.state->hot, entry.draws, entry.payloads,
-          scratch.bindingSnapshots, scratch.snapshotPayloads);
+          pool_, source.state->hot, source.draws, source.payloads,
+          scratch.bindingSnapshots, scratch.snapshotPayloads,
+          /*appendToScratch=*/true);
     }
-    std::size_t pendingPayloadBytes = 0;
+    std::size_t payloadBytes = 0;
     {
       PerfScope stageScope(perf::countSubmitDrawRunPayloadBytesCpuTime);
-      pendingPayloadBytes = drawRunPayloadBytes(entry.draws, effectivePayloads);
+      payloadBytes = drawRunPayloadBytes(source.draws, effectivePayloads);
     }
+    scratch.preparedEntries.push_back({
+        .entry = {.state = source.state,
+                  .uniforms = source.uniforms,
+                  .draws = source.draws,
+                  .payloads = effectivePayloads},
+        .payloadBytes = payloadBytes,
+    });
+  }
+
+  bool compatibleRunOpen = false;
+  std::size_t segmentStart = 0;
+  while (segmentStart < scratch.preparedEntries.size()) {
     {
       PerfScope stageScope(perf::countSubmitDrawRunSlotPrepareCpuTime);
       ensureWritingSlotUnlocked(*this, lock);
       if (stop_) return false;
-      maybeCommitDrawPayloadArenaUnlocked(*this, pool_, lock,
-                                           pendingPayloadBytes);
     }
+    auto& slot = currentSlotUnlocked(*this);
+    std::size_t segmentEnd = segmentStart;
+    std::size_t segmentDraws = 0;
+    std::size_t segmentPayloadBytes = 0;
+    std::size_t segmentRuns = 0;
+    const core::DrawRunBatchEntry* previous = nullptr;
+    scratch.segmentExtends.clear();
+    scratch.segmentExtends.reserve(scratch.preparedEntries.size() - segmentStart);
+    while (segmentEnd < scratch.preparedEntries.size()) {
+      const auto& prepared = scratch.preparedEntries[segmentEnd];
+      const auto& entry = prepared.entry;
+      const bool extends = segmentEnd == segmentStart
+          ? compatibleRunOpen && slot.lastDrawRunCompatible(*entry.state)
+          : core::drawStatesCompatibleForDrawRunBatch(
+                previous->state->hot, entry.state->hot) &&
+              core::shaderLayoutsCompatibleForDrawRunBatch(
+                  previous->state->shaderLayout, entry.state->shaderLayout);
+      if (segmentDraws > std::numeric_limits<std::size_t>::max() -
+                             entry.draws.size() ||
+          segmentPayloadBytes > std::numeric_limits<std::size_t>::max() -
+                                    prepared.payloadBytes) {
+        return false;
+      }
+      const auto nextDraws = segmentDraws + entry.draws.size();
+      const auto nextPayloadBytes = segmentPayloadBytes + prepared.payloadBytes;
+      const auto nextRuns = segmentRuns + (extends ? 0u : 1u);
+      const auto commandLimit = drawChunkCommandLimit();
+      const auto payloadLimit = drawPayloadArenaLimitBytes();
+      if ((commandLimit != 0 &&
+           (nextRuns > commandLimit ||
+            slot.commandCount() > commandLimit - nextRuns)) ||
+          (payloadLimit != 0 &&
+           (nextPayloadBytes > payloadLimit ||
+            slot.drawPayloadArena.size() > payloadLimit - nextPayloadBytes)) ||
+          !slot.canAppendDrawRunBatch(
+              nextDraws, nextPayloadBytes, segmentEnd - segmentStart + 1u,
+              /*appendState=*/false) ||
+          !core::detail::chunkSlotCanAppendU32Range(
+              slot.commandHeaders.size(), nextRuns) ||
+          !core::detail::chunkSlotCanAppendU32Range(
+              slot.drawRunRecords.size(), nextRuns) ||
+          !core::detail::chunkSlotCanAppendU32Range(
+              slot.drawPsoSubviews.size(), nextRuns) ||
+          !core::detail::chunkSlotCanAppendU32Range(
+              slot.drawHotStates.size(), nextRuns) ||
+          !core::detail::chunkSlotCanAppendU32Range(
+              slot.drawShaderLayouts.size(), nextRuns) ||
+          !core::detail::chunkSlotCanAppendU32Range(
+              slot.drawDebugSnapshots.size(), nextRuns)) {
+        break;
+      }
+      segmentDraws = nextDraws;
+      segmentPayloadBytes = nextPayloadBytes;
+      segmentRuns = nextRuns;
+      previous = &entry;
+      scratch.segmentExtends.push_back(extends);
+      ++segmentEnd;
+    }
+    if (segmentEnd == segmentStart) {
+      if (slot.commandsEmpty()) return false;
+      const auto& blocked = scratch.preparedEntries[segmentStart];
+      const auto payloadLimit = drawPayloadArenaLimitBytes();
+      const bool payloadBlocked =
+          payloadLimit != 0 &&
+          (blocked.payloadBytes > payloadLimit ||
+           slot.drawPayloadArena.size() >
+               payloadLimit - std::min(payloadLimit, blocked.payloadBytes));
+      const bool committed = queueLifecycle_.commitCurrentChunk(
+          lock, kMaxQueuedChunks, [this, payloadBlocked](core::ChunkSlot& publishSlot) {
+            prepareSlotForPublish(*this, pool_, publishSlot,
+                                  payloadBlocked
+                                      ? perf::ChunkPublishReason::PayloadLimit
+                                      : perf::ChunkPublishReason::DrawLimit);
+          });
+      if (!committed) return false;
+      if (payloadBlocked && skipDrawResourceMarking_) {
+        forceDrawResourceMarkingAfterSplit_ = true;
+      }
+      compatibleRunOpen = false;
+      continue;
+    }
+
+    if (!slot.reserveDrawRunBatchStorage(
+            segmentDraws, segmentPayloadBytes, segmentRuns,
+            segmentEnd - segmentStart, /*appendState=*/segmentRuns != 0u)) {
+      return false;
+    }
+    perf::countSubmitDrawRunBatchSegment();
+
     {
       PerfScope stageScope(perf::countSubmitDrawRunResourceMarkCpuTime);
       const std::uint64_t seqId = seqIdForMark(*this, 0);
-      markDrawBindingSnapshotResources(pool_, effectivePayloads, seqId);
+      scratch.segmentBufferHandles.clear();
+      scratch.segmentTextureHandles.clear();
+      scratch.segmentSurfaceHandles.clear();
+      scratch.segmentBufferHandles.reserve(
+          (segmentEnd - segmentStart) * (core::kMaxStreams + 1u));
+      scratch.segmentTextureHandles.reserve(
+          (segmentEnd - segmentStart) * core::kMaxTextureStages);
+      scratch.segmentSurfaceHandles.reserve(
+          (segmentEnd - segmentStart) * (core::kMaxRenderTargets + 1u));
+      for (std::size_t i = segmentStart; i < segmentEnd; ++i) {
+        const auto& entry = scratch.preparedEntries[i].entry;
+        const bool extends = scratch.segmentExtends[i - segmentStart];
+        markDrawBindingSnapshotResources(pool_, entry.payloads, seqId);
+        if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
+          if (!extends) {
+            const auto& hot = entry.state->hot;
+            if (hot.indexBuffer) scratch.segmentBufferHandles.push_back(hot.indexBuffer);
+            for (const auto handle : hot.streamBuffers) {
+              if (handle) scratch.segmentBufferHandles.push_back(handle);
+            }
+            for (const auto handle : hot.textures) {
+              if (handle) scratch.segmentTextureHandles.push_back(handle);
+            }
+            for (const auto& attachment : hot.colorAttachments) {
+              if (attachment.handle) scratch.segmentSurfaceHandles.push_back(attachment.handle);
+            }
+            if (hot.depthStencil.handle) {
+              scratch.segmentSurfaceHandles.push_back(hot.depthStencil.handle);
+            }
+          }
+          markDrawBindingOverrideResources(pool_, entry.payloads, seqId);
+        }
+      }
       if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
-        pool_.markDrawResources(entry.state->hot, seqId);
-        markDrawBindingOverrideResources(pool_, effectivePayloads, seqId);
+        const auto dedup = [](std::vector<core::Handle>& values) {
+          std::sort(values.begin(), values.end(),
+                    [](const core::Handle a, const core::Handle b) {
+                      return a.value < b.value;
+                    });
+          values.erase(std::unique(values.begin(), values.end(),
+                                   [](const core::Handle a, const core::Handle b) {
+                                     return a.value == b.value;
+                                   }),
+                       values.end());
+        };
+        dedup(scratch.segmentBufferHandles);
+        dedup(scratch.segmentTextureHandles);
+        dedup(scratch.segmentSurfaceHandles);
+        pool_.markBufferUsesBatch(scratch.segmentBufferHandles, seqId);
+        pool_.markTextureUsesBatch(scratch.segmentTextureHandles, seqId);
+        pool_.markSurfaceUsesBatch(scratch.segmentSurfaceHandles, seqId);
       }
     }
-    currentBackBuffer_ = entry.state->hot.colorAttachments[0].handle;
     {
       PerfScope stageScope(perf::countSubmitDrawRunAppendCpuTime);
       DXMT_ASSERT_OWNED_BY_OR_LOCKED(writingSlotOwnership_, lock.owns_lock());
-      noteCurrentSlotCommandAppendStartedUnlocked(*this);
-      currentSlotUnlocked(*this).appendDrawRun(
-          std::move(*entry.state), *entry.uniforms, entry.draws,
-          effectivePayloads);
+      for (std::size_t i = segmentStart; i < segmentEnd; ++i) {
+        const auto& entry = scratch.preparedEntries[i].entry;
+        // Preflight derived this witness against the same Writing slot while
+        // this mutex remained held. No command or split can interpose within
+        // the reserved segment, so re-running the topology/state comparison
+        // here would be redundant work rather than a stronger proof.
+        const bool extends = scratch.segmentExtends[i - segmentStart];
+        noteCurrentSlotCommandAppendStartedUnlocked(*this);
+        const bool appended = extends
+            ? currentSlotUnlocked(*this).appendCompatibleDrawRunEntryUnchecked(
+                  *entry.state, *entry.uniforms, entry.draws, entry.payloads,
+                  {}, /*alreadyReserved=*/true,
+                  scratch.preparedEntries[i].payloadBytes)
+            : currentSlotUnlocked(*this).appendDrawRun(
+                  *entry.state, *entry.uniforms, entry.draws, entry.payloads,
+                  {}, /*stampUniformHandle=*/true,
+                  /*alreadyReserved=*/true,
+                  scratch.preparedEntries[i].payloadBytes);
+        if (!appended) {
+          // A segment is preflighted and reserved before its first semantic
+          // write. Failure here therefore means an internal witness drift,
+          // and an earlier entry may already be resident in the Writing slot.
+          // Stop the queue so that partial state can never be published.
+          requestSchedulingStopLocked();
+          return false;
+        }
+        if (!extends) perf::countSubmitDrawRunBatchEmittedRun();
+        compatibleRunOpen = true;
+        currentBackBuffer_ = entry.state->hot.colorAttachments[0].handle;
+      }
     }
     {
       PerfScope stageScope(perf::countSubmitDrawRunChunkCommitCpuTime);
-      (void)maybeCommitDrawChunkUnlocked(*this, pool_, lock);
+      if (maybeCommitDrawChunkUnlocked(*this, pool_, lock)) {
+        compatibleRunOpen = false;
+      }
     }
+    segmentStart = segmentEnd;
   }
   return !stop_;
 }
@@ -4827,6 +5001,9 @@ CommandQueue::beginCpuReadyArenaSource(
       arenaBuildContext_.has_value()) {
     return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
   }
+  if (writingSlot_ && cpuReadyEarlyPrefixPublishedThisFrame_) {
+    return {.status = CpuReadyArenaBeginStatus::CompatibilityTailOwned};
+  }
   if (writingSlot_) {
     (void)queueLifecycle_.commitCurrentChunk(
         lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
@@ -4977,6 +5154,9 @@ CommandQueue::beginCpuReadyArenaSources(
   if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
       arenaBuildContext_.has_value()) {
     return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+  }
+  if (writingSlot_ && cpuReadyEarlyPrefixPublishedThisFrame_) {
+    return {.status = CpuReadyArenaBeginStatus::CompatibilityTailOwned};
   }
   if (writingSlot_) {
     (void)queueLifecycle_.commitCurrentChunk(
@@ -7330,11 +7510,19 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
           // (a different file).
           QueueMutexProbeScope qmxScope(
               qmxBegin, "submit_present_sync_on_submit", /*skipHold=*/true);
-          queueLifecycle_.commitCurrentChunk(
-              lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
-                prepareSlotForPublish(*this, pool_, slot,
-                                      perf::ChunkPublishReason::PresentAcquire);
-              });
+          // The early-prefix experiment already owns this exact Writing slot
+          // as its reserved Present tail. Keep it intact across the blocking
+          // acquire so the prefix cannot consume a second, unreserved
+          // publication credit. Gate-off executes the historical call
+          // unchanged.
+          if (!cpuReadyEarlyPrefixPublishedThisFrame_) {
+            queueLifecycle_.commitCurrentChunk(
+                lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
+                  prepareSlotForPublish(
+                      *this, pool_, slot,
+                      perf::ChunkPublishReason::PresentAcquire);
+                });
+          }
         }
         auto token = presenter->acquireDrawable(makePresentAcquireParams(queuedDesc));
         queuedDesc.drawableTokenRequired = true;
@@ -7393,6 +7581,9 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
           prepareSlotForPublish(*this, pool_, slot,
                                 perf::ChunkPublishReason::Present);
         });
+    if (published) {
+      cpuReadyEarlyPrefixPublishedThisFrame_ = false;
+    }
     presentSeqId = lastCommittedSeqId_;
   }
   if (!published) {
@@ -7411,6 +7602,99 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
   applyPublishedPresentBoundary(presentSeqId, queuedDesc, boundaryPolicy);
   noteCopyMaterializationPublishedPresent();
   return presentSeqId;
+}
+
+bool CommandQueue::publishEarlyCpuReadyPrefix(
+    bool containsOrderedControl) noexcept {
+  // Preserve the stable path's shape: gate-off does not take the queue mutex,
+  // touch counters, inspect slot storage, or publish anything.
+  if (!cpuReadyEarlyPrefixLaneEnabled_) {
+    return false;
+  }
+  perf::countCpuReadyEarlyPrefixCandidate();
+
+  const auto qmxBegin = queueMutexProbeBegin();
+  std::unique_lock lock(mutex_);
+  QueueMutexProbeScope qmxScope(
+      qmxBegin, "publish_early_cpu_ready_prefix", /*skipHold=*/true);
+
+  const bool hasWriter = writingSlot_.has_value() &&
+      *writingSlot_ < slots_.size();
+  const auto* slot = hasWriter ? &slots_[*writingSlot_] : nullptr;
+  const auto* payload = slot ? slot->payload : nullptr;
+  const std::size_t successorIndex =
+      slots_.empty() ? 0u : (writeIndex_ + 1u) % slots_.size();
+  const core::metalqueue::CpuReadyEarlyPrefixSnapshot snapshot{
+      .tapeEnabled = cpuReadySessionLaneEnabled_,
+      .experimentEnabled = cpuReadyEarlyPrefixLaneEnabled_,
+      .alreadyPublished = cpuReadyEarlyPrefixPublishedThisFrame_,
+      .containsOrderedControl = containsOrderedControl,
+      .compatibilityWritingSource = hasWriter && payload &&
+          slot->state == core::ChunkSlot::State::Writing,
+      .hasCommands = payload && !payload->commandsEmpty(),
+      .hasPresent = payload && !payload->presentRecords.empty(),
+      .activeStrictSource =
+          arenaAdmissionActive_.load(std::memory_order_acquire) ||
+          activeDirectChunkSlotBuild_.load(std::memory_order_acquire) != nullptr,
+      .inflightCount = inflightCount_,
+      .inflightLimit = kMaxQueuedChunks,
+      .successorControlSlotFree = !slots_.empty() &&
+          slots_[successorIndex].state == core::ChunkSlot::State::Free,
+      .successorTapeCapacity = cpuReadyTape_.canReserve(),
+  };
+  const auto decision =
+      core::metalqueue::decideCpuReadyEarlyPrefix(snapshot);
+  using Decision = core::metalqueue::CpuReadyEarlyPrefixDecision;
+  using Fallback = perf::CpuReadyEarlyPrefixFallback;
+  switch (decision) {
+  case Decision::Disabled:
+    return false;
+  case Decision::AlreadyPublished:
+    perf::countCpuReadyEarlyPrefixFallback(Fallback::AlreadyPublished);
+    return false;
+  case Decision::NoTailCredit:
+    perf::countCpuReadyEarlyPrefixFallback(Fallback::NoTailCredit);
+    return false;
+  case Decision::OrderedControl:
+    perf::countCpuReadyEarlyPrefixFallback(Fallback::OrderedControl);
+    return false;
+  case Decision::Ineligible:
+    perf::countCpuReadyEarlyPrefixFallback(Fallback::Ineligible);
+    return false;
+  case Decision::Capacity:
+    perf::countCpuReadyEarlyPrefixFallback(Fallback::Capacity);
+    return false;
+  case Decision::Publish:
+    break;
+  }
+
+  // kMaxQueuedChunks - 1 is a non-waiting proof because the pure policy just
+  // established inflightCount_ below that bound while this mutex is held.
+  const bool published = queueLifecycle_.commitCurrentChunk(
+      lock, kMaxQueuedChunks - 1u,
+      [this](core::ChunkSlot& publishedSlot) {
+        prepareSlotForPublish(*this, pool_, publishedSlot,
+                              perf::ChunkPublishReason::EarlyPrefix);
+      });
+  if (!published) {
+    perf::countCpuReadyEarlyPrefixFallback(Fallback::Capacity);
+    return false;
+  }
+
+  // The preflight proved both Tape and control-slot capacity. Acquiring the
+  // tail now, under the same mutex and before returning to replay, turns that
+  // credit into an actual unique Writing owner. Any disagreement is allocator
+  // corruption after observable publication, so fail-stop rather than run an
+  // unowned-tail experiment.
+  if (!queueLifecycle_.ensureWriterSlot(lock, kMaxQueuedChunks)) {
+    perf::countCpuReadyEarlyPrefixSessionJoinFailedPreEffect();
+    queueLifecycle_.poisonTapeFailureLocked();
+    return false;
+  }
+  cpuReadyEarlyPrefixPublishedThisFrame_ = true;
+  perf::countCpuReadyEarlyPrefixPublished();
+  perf::countCpuReadyEarlyPrefixTailReserved();
+  return true;
 }
 
 void CommandQueue::applyPublishedPresentBoundary(

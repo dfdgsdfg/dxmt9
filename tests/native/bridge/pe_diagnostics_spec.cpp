@@ -912,7 +912,7 @@ void testSourceContracts(const std::filesystem::path &root) {
                      "retired draw carrier append surface is absent");
   }
   const auto directReplayEnd = coreDraw.find(
-      "void Device::submitDrawRunInternal(", directReplayBegin);
+      "HResult Device::submitDrawRunInternal(", directReplayBegin);
   check(directReplayEnd != std::string::npos,
         "direct replay source contract has a bounded body");
   const std::string_view directReplayBody(

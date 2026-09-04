@@ -111,13 +111,18 @@ Candidate = Normalize(LiveShadow, PendingDelta, explicit draw/control input)
 
 Ordinary draws and APPLY_STATE prepare one bounded `SparseStateInput` from the
 live shadow and binding view. The input is borrowed only across the immediate
-`appendRecord` call. CapacityPre may flush while those recorder-owned scratch
-spans remain stable; `appendOwnedRecord` then validates destination-chunk
-stream/index selection, copies the selected values into the mandatory semantic
-owner's typed arenas, acquires kind-qualified pins, and commits the record
-atomically. Only that accepted admission consumes pending categories or dirty
-constant ranges. The older two-pass `SparseStatePlan` stays in the native
-differential corpus and is not selectable by production code.
+`appendRecord` call. The recorder stages the full `PeSemanticRecordInput` once;
+append borrows that immutable value through `PeSemanticRecordInputView` and
+overlays only record type, source/record ordinals, and a pointer to the
+effective sparse view. Non-draw rows therefore make no second descriptor copy.
+Draw rows copy only `SparseStateInput` into recorder-owned destination storage,
+and a CapacityPre destination change performs one bounded sparse rebase while
+the original scratch spans remain stable. `appendOwnedRecord` then validates
+destination-chunk stream/index selection, copies the selected values into the
+mandatory semantic owner's typed arenas, acquires kind-qualified pins, and
+commits the record atomically. Only that accepted admission consumes pending
+categories or dirty constant ranges. The older two-pass `SparseStatePlan` stays
+in the native differential corpus and is not selectable by production code.
 
 Only accepted settlement through the consume capability may perform:
 
@@ -612,7 +617,10 @@ evidence; the full record walk is reserved for final emission validation. Its
 pure visitors provide negotiated segmented fixed-role
 emission for normal bridge transport and contiguous ExactFixed emission for
 capture/compatibility, with identical record-local dedup, generation-qualified
-identities, payload alignment, and copied arenas. Construction failure is
+identities, payload alignment, and copied arenas. ExactFixed copies the complete
+header, record, handle, and canonical payload roles and explicitly zeros only
+the computed alignment gaps; it does not pre-zero the full destination extent.
+Construction failure is
 fail-closed at device creation. Admission, seal, and transport failure never
 select a compatibility builder. The owner's exact typed pins also issue Render
 Tape pending-chunk leases and answer buffer-hazard queries, so those consumers

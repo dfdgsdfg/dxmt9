@@ -192,6 +192,7 @@ struct Counters {
   std::atomic<std::uint64_t> chunkPublishReasonPresentSplitBefore{0};
   std::atomic<std::uint64_t> chunkPublishReasonSemanticBoundary{0};
   std::atomic<std::uint64_t> chunkPublishReasonDirectCapacityRotation{0};
+  std::atomic<std::uint64_t> chunkPublishReasonEarlyPrefix{0};
   std::atomic<std::uint64_t> chunkPublishCommandsUnknown{0};
   std::atomic<std::uint64_t> chunkPublishCommandsDrawLimit{0};
   std::atomic<std::uint64_t> chunkPublishCommandsPayloadLimit{0};
@@ -203,6 +204,7 @@ struct Counters {
   std::atomic<std::uint64_t> chunkPublishCommandsPresentSplitBefore{0};
   std::atomic<std::uint64_t> chunkPublishCommandsSemanticBoundary{0};
   std::atomic<std::uint64_t> chunkPublishCommandsDirectCapacityRotation{0};
+  std::atomic<std::uint64_t> chunkPublishCommandsEarlyPrefix{0};
   // Tape-gated CPU-ready session join lane (DXMT9_CPU_READY_TAPE):
   std::atomic<std::uint64_t> encodePartitionIdentitySelections{0};
   std::atomic<std::uint64_t> encodePartitionExplicitSelections{0};
@@ -350,6 +352,17 @@ struct Counters {
   std::atomic<std::uint64_t> parallelPassAdapterSelectionArithmetic{0};
   std::atomic<std::uint64_t> parallelPassAdapterSelectionInvalidCandidateOrdinal{0};
   std::atomic<std::uint64_t> cpuReadySessionPendingStarted{0};
+  std::atomic<std::uint64_t> cpuReadyEarlyPrefixCandidates{0};
+  std::atomic<std::uint64_t> cpuReadyEarlyPrefixPublished{0};
+  std::atomic<std::uint64_t> cpuReadyEarlyPrefixFallbackAlreadyPublished{0};
+  std::atomic<std::uint64_t> cpuReadyEarlyPrefixFallbackNoTailCredit{0};
+  std::atomic<std::uint64_t> cpuReadyEarlyPrefixFallbackOrderedControl{0};
+  std::atomic<std::uint64_t> cpuReadyEarlyPrefixFallbackIneligible{0};
+  std::atomic<std::uint64_t> cpuReadyEarlyPrefixFallbackCapacity{0};
+  std::atomic<std::uint64_t> cpuReadyEarlyPrefixTailReserved{0};
+  std::atomic<std::uint64_t> cpuReadyEarlyPrefixSessionParked{0};
+  std::atomic<std::uint64_t> cpuReadyEarlyPrefixSessionJoined{0};
+  std::atomic<std::uint64_t> cpuReadyEarlyPrefixSessionJoinFailedPreEffect{0};
   std::atomic<std::uint64_t> cpuReadySessionHeadAppended{0};
   std::atomic<std::uint64_t> cpuReadySessionArenaHeadAppended{0};
   std::atomic<std::uint64_t> cpuReadySessionTailSubmitted{0};
@@ -669,6 +682,9 @@ struct Counters {
   std::atomic<std::uint64_t> encodeSlotPsoPrefetchDrawHandleSlotOverflow{0};
   std::atomic<std::uint64_t> submitDrawRunBindingSnapshotCpuNs{0};
   std::atomic<std::uint64_t> submitDrawRunBindingSnapshotCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchInputRuns{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchEmittedRuns{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchSegments{0};
   std::atomic<std::uint64_t> submitDrawRunPayloadBytesCpuNs{0};
   std::atomic<std::uint64_t> submitDrawRunPayloadBytesCpuMaxNs{0};
   std::atomic<std::uint64_t> submitDrawRunSlotPrepareCpuNs{0};

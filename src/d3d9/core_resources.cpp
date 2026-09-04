@@ -654,6 +654,10 @@ HResult Device::clear(const ClearDesc &desc) {
   // Flush before mutating CPU-visible attachment shadows. If publication
   // fails, Clear must be externally visible as failure and must not leave a
   // shadow mutation whose GPU command was never submitted.
+  if (deviceLost_ || !upperDevice_) {
+    deviceLost_ = true;
+    return D3DERR_DEVICELOST;
+  }
   if (flushCompatibilityReplayDrawBatch() ==
       CompatibilityDrawBatchFlushStatus::Failed) {
     deviceLost_ = true;
@@ -763,8 +767,7 @@ HResult Device::clear(const ClearDesc &desc) {
       }
     }
   }
-  submitClearInternal(snapshot);
-  return D3D_OK;
+  return submitClearInternal(snapshot);
 }
 
 HResult Device::issueQuery(const std::shared_ptr<Query> &query, bool begin) {
@@ -840,9 +843,16 @@ void Device::invalidateDefaultPoolResources() {
   invalidateWeak(surfaces_);
 }
 
-void Device::submitClearInternal(const ClearDesc &desc) {
+HResult Device::submitClearInternal(const ClearDesc &desc) {
   // `clear` publishes the compatibility island before mutating attachment
   // shadows. Replay likewise cuts before dispatching a Clear record.
+  if (deviceLost_ ||
+      flushCompatibilityReplayDrawBatch() ==
+          CompatibilityDrawBatchFlushStatus::Failed ||
+      !upperDevice_) {
+    deviceLost_ = true;
+    return D3DERR_DEVICELOST;
+  }
   DXMT_ASSERT(!compatibilityReplayDrawBatchPending());
   if (detail::renderTraceEnabled()) {
     detail::emitRenderTrace(
@@ -862,6 +872,7 @@ void Device::submitClearInternal(const ClearDesc &desc) {
   // SeqIdSafety: a submission can advance the current sequence, but never
   // below the completed sequence.
   DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
+  return D3D_OK;
 }
 
 u32 Device::experimentCaptureRequestedCount() const {

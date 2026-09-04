@@ -339,6 +339,30 @@ test('dxmt9-compat-draw-batch-spec',
      compat_draw_batch_spec,
      env: dxmt9_native_test_env)
 
+compat_draw_batch_failure_spec = executable(
+  'dxmt9-compat-draw-batch-failure-spec',
+  'compat_draw_batch_failure_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-compat-draw-batch-failure-spec',
+     compat_draw_batch_failure_spec,
+     env: dxmt9_native_test_env)
+
+draw_run_batch_fold_spec = executable(
+  'dxmt9-draw-run-batch-fold-spec',
+  'draw_run_batch_fold_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-draw-run-batch-fold-spec',
+     draw_run_batch_fold_spec,
+     env: dxmt9_native_test_env)
+
 process_memory_observer_spec = executable(
   'dxmt9-process-memory-observer-spec',
   'process_memory_observer_spec.cpp',
@@ -868,6 +892,17 @@ replay_offload_queue_spec = executable(
 )
 
 test('dxmt9-replay-offload-queue-spec', replay_offload_queue_spec,
+     env: dxmt9_native_test_env)
+
+cpu_ready_early_prefix_spec = executable(
+  'dxmt9-cpu-ready-early-prefix-spec',
+  'cpu_ready_early_prefix_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-cpu-ready-early-prefix-spec', cpu_ready_early_prefix_spec,
      env: dxmt9_native_test_env)
 
 presence_table_spec = executable(

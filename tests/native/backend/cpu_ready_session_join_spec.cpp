@@ -389,6 +389,17 @@ struct CommandQueueArenaLeaseTestAccess {
     queue.cpuReadySessionLaneEnabled_ = true;
   }
 
+  static void enableCpuReadyEarlyPrefixLane(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    queue.cpuReadySessionLaneEnabled_ = true;
+    queue.cpuReadyEarlyPrefixLaneEnabled_ = true;
+  }
+
+  static bool publishEarlyCpuReadyPrefix(CommandQueue& queue,
+                                         bool orderedControl = false) {
+    return queue.publishEarlyCpuReadyPrefix(orderedControl);
+  }
+
   static bool supplyReplayEntryPending(
       CommandQueue& queue, core::CpuReadyTape::PayloadKind sourceClass,
       core::metalqueue::CpuReadySupplyObservationToken attemptToken) {
@@ -2063,7 +2074,250 @@ void productionLoopJoinsMixedSourcesOnStopDrain() {
 template <typename Predicate>
 bool waitUntil(Predicate&& predicate,
                std::chrono::milliseconds timeout =
-                   std::chrono::milliseconds(2000)) {
+                   std::chrono::milliseconds(2000));
+
+void productionLoopParksEarlyPrefixAndJoinsPresentTail() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  dxmt9::CommandQueueArenaLeaseTestAccess::enableCpuReadyEarlyPrefixLane(
+      queue);
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+
+  queue.submitClear(ClearDesc{});
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::publishEarlyCpuReadyPrefix(
+            queue),
+        "eligible compatibility prefix must publish with a reserved tail");
+  const auto prefix = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(prefix.size() == 1u && !prefix.front().hasPresent,
+        "early publication must expose exactly one non-Present source");
+  SourcePayloadCapacity interveningCapacity{};
+  interveningCapacity.commandHeaders = 1u;
+  interveningCapacity.clearRecords = 1u;
+  const auto interveningSegment = makeSourcePayloadLayout(
+      interveningCapacity, 4096u, 64u);
+  check(interveningSegment.has_value(),
+        "intervening admission fixture must have a valid layout");
+  const std::array interveningSegments{*interveningSegment};
+  const auto interveningLayout = makeArenaSourcePayloadLayout(
+      interveningSegments, 4096u, interveningSegment->pageCount);
+  const auto interveningBegin = interveningLayout
+      ? queue.beginCpuReadyArenaSource(900u, *interveningLayout)
+      : dxmt9::CommandQueue::CpuReadyArenaBeginResult{};
+  check(interveningLayout.has_value() && !interveningBegin.has_value() &&
+            interveningBegin.status == dxmt9::CommandQueue::
+                CpuReadyArenaBeginStatus::CompatibilityTailOwned,
+        "reserved compatibility Writing tail must exclude intervening strict "
+        "admission");
+  const std::array interveningBatchLayouts{*interveningLayout,
+                                            *interveningLayout};
+  const auto interveningBatchBegin =
+      queue.beginCpuReadyArenaSources(899u, interveningBatchLayouts);
+  check(!interveningBatchBegin.has_value() &&
+            interveningBatchBegin.status == dxmt9::CommandQueue::
+                CpuReadyArenaBeginStatus::CompatibilityTailOwned,
+        "reserved compatibility Writing tail must exclude intervening "
+        "strict batch admission");
+  fixture.publishArenaClear(901u);
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(queue) == 1u,
+        "intervening Direct candidate must replay into the reserved tail "
+        "without a second publication");
+  check(!dxmt9::CommandQueueArenaLeaseTestAccess::
+             publishEarlyCpuReadyPrefix(queue),
+        "a second non-Present candidate must not replace the reserved tail");
+  check(!dxmt9::CommandQueueArenaLeaseTestAccess::stopped(queue),
+        "reserved-tail admission fallback must fail closed without stopping");
+
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::runCpuReadySessionEncodeLoop(
+        queue);
+  });
+  try {
+    check(waitUntil([&] {
+            return backendState->observedBackendCalls.load(
+                       std::memory_order_acquire) == 1u;
+          }),
+          "early prefix must encode before a future source exists");
+    check(!backendState->firstRecordPostCommitRan.load(
+              std::memory_order_acquire),
+          "early prefix must remain unsubmitted while parked");
+
+    check(queue.submitPresent(SwapDesc{}) != 0u,
+          "reserved compatibility tail must publish its Present");
+    check(waitUntil([&] {
+            return backendState->firstRecordPostCommitRan.load(
+                std::memory_order_acquire);
+          }),
+          "Present tail must join and submit the parked session");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  check(backendState->calls.size() == 2u &&
+            backendState->calls[0].seqId == prefix.front().seqId &&
+            !backendState->calls[0].arena &&
+            !backendState->calls[1].arena &&
+            backendState->calls[1].seqId == prefix.front().seqId + 1u &&
+            backendState->calls[1].session == backendState->calls[0].session &&
+            backendState->calls[0].deferSessionFinalization &&
+            !backendState->calls[1].deferSessionFinalization,
+        "prefix and Present tail must preserve FIFO identity in one session");
+  check(backendState->backendCallCountAtFirstRecordSubmit.load(
+            std::memory_order_relaxed) == 2u,
+        "one physical submit must contain both source callbacks");
+  check(backendState->calls[0].sessionSource.has_value() &&
+            backendState->calls[1].sessionSource.has_value(),
+        "joined sources must retain completion identities");
+
+  std::array<dxmt9::core::metalqueue::QueueCompletionSource, 2> sources{
+      *backendState->calls[0].sessionSource,
+      *backendState->calls[1].sessionSource,
+  };
+  check(!sources[0].hasPresent && sources[1].hasPresent &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+                queue, sources),
+        "joined submission must retain both identity-qualified completions");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, sources) == sources.size() &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::completedSeqId(queue) ==
+                sources.back().seqId,
+        "one completion must expand and reclaim prefix then Present exactly once");
+}
+
+void productionLoopFoldsEarlyPrefixBehindOrdinaryPendingSession() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  // Publish an ordinary source before arming the experiment. The early source
+  // must therefore arrive behind an already compatible session carrier.
+  fixture.publishArenaClear(1u);
+  dxmt9::CommandQueueArenaLeaseTestAccess::enableCpuReadyEarlyPrefixLane(
+      queue);
+  queue.submitClear(ClearDesc{});
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::publishEarlyCpuReadyPrefix(
+            queue),
+        "early source behind an ordinary source must reserve its tail");
+
+  const auto prefix = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(prefix.size() == 2u && prefix[0].seqId == 1u &&
+            prefix[1].seqId == 2u && !prefix[0].hasPresent &&
+            !prefix[1].hasPresent,
+        "ordinary then early sources must remain FIFO and non-Present");
+
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::runCpuReadySessionEncodeLoop(
+        queue);
+  });
+  try {
+    check(waitUntil([&] {
+            return backendState->observedBackendCalls.load(
+                       std::memory_order_acquire) == 2u;
+          }),
+          "ordinary and early sources must both encode before Present");
+    check(!backendState->firstRecordPostCommitRan.load(
+              std::memory_order_acquire),
+          "folded early source must not submit before its Present tail");
+    check(backendState->calls.size() == 2u &&
+              backendState->calls[0].session != 0u &&
+              backendState->calls[1].session == backendState->calls[0].session &&
+              backendState->calls[0].seqId == prefix[0].seqId &&
+              backendState->calls[1].seqId == prefix[1].seqId &&
+              backendState->calls[0].arena && !backendState->calls[1].arena &&
+              backendState->calls[0].deferSessionFinalization &&
+              backendState->calls[1].deferSessionFinalization,
+          "early source must fold into the ordinary deferred carrier");
+
+    check(queue.submitPresent(SwapDesc{}) != 0u,
+          "folded early source must preserve the reserved Present tail");
+    check(waitUntil([&] {
+            return backendState->firstRecordPostCommitRan.load(
+                std::memory_order_acquire);
+          }),
+          "Present tail must submit the folded carrier");
+    check(backendState->calls.size() == 3u &&
+              backendState->calls[2].session == backendState->calls[0].session &&
+              backendState->calls[2].seqId == prefix[1].seqId + 1u &&
+              !backendState->calls[2].deferSessionFinalization,
+          "Present tail must close the folded carrier");
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+  } catch (...) {
+    dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+    encodeThread.join();
+    throw;
+  }
+
+  check(backendState->calls.size() == 3u &&
+            backendState->backendCallCountAtFirstRecordSubmit.load(
+                std::memory_order_relaxed) == 3u,
+        "folded carrier must submit all source callbacks together");
+  std::array sources{*backendState->calls[0].sessionSource,
+                     *backendState->calls[1].sessionSource,
+                     *backendState->calls[2].sessionSource};
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, sources),
+        "folded carrier must retain both completion identities");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, sources) == sources.size(),
+        "folded carrier must complete and reclaim both sources once");
+}
+
+void productionLoopCleansEarlyPrefixCarrierBeforePresentOnStop() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  dxmt9::CommandQueueArenaLeaseTestAccess::enableCpuReadyEarlyPrefixLane(
+      queue);
+  queue.submitClear(ClearDesc{});
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::publishEarlyCpuReadyPrefix(
+            queue),
+        "cleanup fixture must publish an early prefix");
+
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+  std::thread encodeThread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::runCpuReadySessionEncodeLoop(
+        queue);
+  });
+  check(waitUntil([&] {
+          return backendState->observedBackendCalls.load(
+                     std::memory_order_acquire) == 1u;
+        }),
+        "cleanup fixture must encode the prefix before stop");
+  check(waitUntil([&] {
+          return dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(queue) ==
+              0u;
+        }),
+        "cleanup fixture must dequeue the parked prefix before stop");
+
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::stopped(queue),
+        "pre-effect stop must terminate the scheduling loop");
+  check(!backendState->firstRecordPostCommitRan.load(
+                std::memory_order_acquire),
+        "pre-effect stop must not submit the unjoined carrier");
+  check(backendState->calls.size() == 1u &&
+            backendState->calls[0].sessionSource.has_value(),
+        "pre-effect stop must retain the parked source identity");
+  std::array source{*backendState->calls[0].sessionSource};
+  check(!dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+                queue, source),
+        "pre-effect stop must not publish a completion receipt");
+}
+
+template <typename Predicate>
+bool waitUntil(Predicate&& predicate,
+               std::chrono::milliseconds timeout) {
   const auto deadline = std::chrono::steady_clock::now() + timeout;
   while (!predicate()) {
     if (std::chrono::steady_clock::now() >= deadline) {
@@ -7235,6 +7489,9 @@ int main() {
     productionOrderedControlForwardRawWakesIdleCoordinator();
     productionLoopJoinsMultipleArenaSourcesOnStopDrain();
     productionLoopJoinsMixedSourcesOnStopDrain();
+    productionLoopParksEarlyPrefixAndJoinsPresentTail();
+    productionLoopFoldsEarlyPrefixBehindOrdinaryPendingSession();
+    productionLoopCleansEarlyPrefixCarrierBeforePresentOnStop();
     productionLoopPlansSeparateBThenASourcesIntoOneCarrier();
     productionLoopCanonicalizesNaturalCarrierBeforeReorderedComposite();
     productionLoopPlansFreshRepeatedSourceWindow();

@@ -24,6 +24,7 @@
 #include "dxmt9/copy_materialization_ledger.hpp"
 #include "dxmt9_capture.hpp"
 #include "dxmt9_direct_continuation.hpp"
+#include "dxmt9_early_prefix_policy.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9/wsi_surface_protocol.hpp"
 #include "dxmt9_hud.hpp"
@@ -585,6 +586,10 @@ class CommandQueue {
     Ready,
     TemporaryPressure,
     RecoverableFailure,
+    // A default-off early prefix already acquired the compatibility Writing
+    // source that must remain the frame's Present tail. Replay must use that
+    // owner through the Legacy path; it must not wait or flush it.
+    CompatibilityTailOwned,
     Stopped,
     Corrupt,
     Invalid,
@@ -926,6 +931,13 @@ class CommandQueue {
   void noteCommitChunkRecordShapeForCompletionGap(
       const core::metalqueue::NoEnqueueCommitChunkRecordShape& shape);
   void prefetchCurrentWritingSlotPipelines();
+  // Default-off CPU-ready experiment. Called only after one complete raw
+  // source has replayed successfully; publication is a no-op unless a
+  // Present-tail credit and its successor Writing owner are both provable.
+  bool publishEarlyCpuReadyPrefix(bool containsOrderedControl) noexcept;
+  bool cpuReadyEarlyPrefixEnabled() const noexcept {
+    return cpuReadyEarlyPrefixLaneEnabled_;
+  }
   void submitClear(const core::ClearDesc& desc);
   void submitSurfaceCopy(const core::SurfaceCopyDesc& desc);
   void submitStretchRect(const core::StretchRectDesc& desc);
@@ -2100,6 +2112,10 @@ class CommandQueue {
 
   WMT::Device device_{};
   bool cpuReadySessionLaneEnabled_ = false;
+  bool cpuReadyEarlyPrefixLaneEnabled_ = false;
+  // Producer-frame state, guarded by mutex_. It is set only after the prefix
+  // and the successor compatibility Writing owner exist atomically.
+  bool cpuReadyEarlyPrefixPublishedThisFrame_ = false;
   render::RenderPartitionConfig renderPartitionConfig_{};
   render::EncodeExecutionTopology encodeExecutionTopology_ =
       render::kStableOwnedRawSlotTopology;

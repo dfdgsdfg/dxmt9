@@ -158,7 +158,7 @@ def main() -> int:
         ("tokens->canConsumeProjected(", producer_cpp),
         ("tokens->consumeProjected(", producer_cpp),
         ("semanticOwner->nextRecordOrdinal()", device_recorder),
-        ("input.recordOrdinal", device_recorder),
+        ("inputView.destination.recordOrdinal", device_recorder),
         ("semanticTokens->canRecord(", device_impl),
         ("semanticTokens->record(", device_impl),
         ("scalarSemanticObserver()", device_impl + device_recorder),

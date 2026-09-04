@@ -584,6 +584,16 @@ under the same outer queue submission (an internal capacity split may commit a
 slot and reacquire). It does not promise fewer DrawRun records
 when state changes; its direct target is queue mutex/acquisition overhead.
 
+The queue now performs a second, final-storage-local fold over those retained
+runs. Adjacent entries accepted by the existing draw-state and shader-layout
+compatibility predicates share one canonical state and one `DrawRun` record;
+each entry still interns its own uniform and every copied param carries that
+handle. Base resources are marked once per emitted group, while concrete
+binding overrides and dynamic snapshots retain per-draw marking. A slot split
+or intervening command closes the group, and the comparison never searches
+past the open tail, so semantic `A -> B -> A` remains three runs while binding
+override `A -> B -> A` may occupy one compatible run.
+
 **Evidence today.** `dxmt9-compat-draw-batch-spec` -- an exhaustive truth table
 over the admission predicate (batchable x open-depth x identity, plus a 6x6
 identity-class matrix in which each class differs in exactly one dimension), and
@@ -595,9 +605,34 @@ cut cause, and one outer queue submission per published batch. Named shapes pin
 the next draw, a resource-bearing record between two identical draws, a UP draw,
 and the ceiling split.
 
-**Open, and not claimed.** There is no wild, GPU-readback or locality evidence
-for this lane yet, and no A/B on any workload. The counters below exist to
-supply it and target the obvious shape -- `replay_compat_draw_batch_draws /
+`dxmt9-draw-run-batch-fold-spec` adds the final-slot differential and ownership
+layer: folded versus serial effective draw streams, per-entry uniform handles,
+caller-payload lifetime, semantic `A -> B -> A`, pre-mutation capacity and stale
+topology/storage-fault failure, and conservation of one base-resource mark per
+emitted run without dropping any override/snapshot mark. Production routing
+additionally pins binding-override `A -> B -> A` as one final run with all
+three concrete handles preserved and completion/reclaim unchanged.
+
+Production additionally precomputes effective payload views and byte counts,
+partitions one submission into physical-slot-local segments, reserves all SoA
+dimensions once per segment, and consumes a queue-local compatibility witness
+without a second topology check. New base-state resource handles are
+deduplicated and marked under one arena lock per resource kind; dynamic
+snapshot and override marks retain their exact per-binding path. A failed
+post-reserve append is terminal, so a partially materialized segment cannot be
+published.
+
+**Wild evidence, not a promotion claim.** One same-build GT2 spot check
+(`gt2-bulk-stable-20260904`) preserves 3.999 command buffers and 15.759 render
+passes per Present. It folds 1,520 input runs into 537 final runs through 28.0
+physical segments per Present. Compared with the immediately preceding GT2
+diagnostic run, append falls from about 4.41 to 4.16 ms/Present and resource
+marking from about 1.01 to 0.75 ms/Present; the authoritative `.3dr` result is
+24.226 FPS and is a one-run spot check. The correct historical comparator is
+the former bulk append cost of about 3.36 ms/Present, not the 0.03 ms/Present
+single-run counter, so roughly 0.8 ms/Present of append economics remains.
+GPU-readback differential and repeated performance evidence remain open. The
+counters below target the shape -- `replay_compat_draw_batch_draws /
 replay_compat_draw_batches` is the draws-per-queue-acquisition ratio, and
 `replay_compat_draw_batch_unbatched_draws` is the residual per-draw fallback:
 
@@ -610,12 +645,15 @@ replay_compat_draw_batches` is the draws-per-queue-acquisition ratio, and
 | `replay_compat_draw_batch_starts` / `_extends` | Runs opened / draws admitted to an open run. |
 | `replay_compat_draw_batch_unbatched_draws` | Draws still submitted one at a time (UP, TriangleFan, render trace). |
 | `replay_compat_draw_batch_cut_identity` / `_capacity` / `_unbatchable` | Mutually exclusive publication causes. |
+| `submit_draw_run_batch_input_runs` | Carrier-free ordinary run entries presented to final-slot append. |
+| `submit_draw_run_batch_emitted_runs` | Compatible final-slot groups actually emitted after adjacent folding and physical splits. |
+| `submit_draw_run_batch_segments` | Physical-slot-local preflight/reservation segments. |
 
 The identity is deliberately conservative: a real constant change between two
 draws bumps a uniform generation and cuts the run, so a workload whose producer
 emits constants between every draw will show a ratio near `1.0` and is
-unchanged. Whether the ratio is materially above `1.0` on GT1/GT2/GT3/SFIV is
-unmeasured, so no performance claim is made here.
+unchanged. GT2 proves a materially larger folding ratio, but repeated workload
+evidence is still required before making a performance claim.
 
 ## Current status correction (2026-08-21)
 
@@ -702,6 +740,7 @@ recorded in the replay-harness gap.
 | Area | Status | Current evidence | Missing implementation or evidence |
 |---|---|---|---|
 | CPU-ready publication boundary (`R-BACK-2.35`–`2.41`) | Direct/StateOnly routing and serial arena consumption implemented behind default-off promotion gate | Commit admission fixes the cutover decision once per raw entry. Gate-off preserves the historical synchronous combined resource-mark/backing-capture operation, worker Legacy replay without planning, and the compatibility publication cap of `kMaxQueuedChunks` GPU-inflight sources. With `DXMT9_CPU_READY_TAPE=1`, admission instead persists the validated raw blob, resolved objects, deduplicated resource identities, captured buffer backings, wrapper retention, and raw residency; the replay worker then plans each complete raw chunk once. `StateOnly` replays without a ticket or mark, eligible Direct chunks acquire a sized strict Tape lease, construct typed arena payload in place, and apply exact `seqId` marks before Ready visibility; planned Legacy/Inline mark before replay, and post-semantic Direct failure is fail-stop with no semantic fallback. Only the replay worker may wait for Direct admission pressure. `SourcePayloadView` carries both legacy and arena payloads through the common backend and serial partition cursor. Gate-off DCE retains its bounded Legacy successor window; when Tape is on, the session lane (`runCpuReadySessionEncodeLoop`) takes worker priority and admits Arena sources into shared-session submissions with exact Tape completion identity. DCE+session release is not yet composed. Native evidence covers Direct planner-to-publish-to-consume-to-completion/reclaim, StateOnly/no-ticket, pressure wakeup, post-semantic fail-stop, compatibility inflight backpressure, and process-separated gate-off synchronous combined admission. | Keep the runtime gate default off until `R-BACK-2.50` formal/equivalence, wild visual/locality, and no-gputrace overlap/performance gates pass. Quantify whether direct construction reduces producer/replay cost without increasing command-buffer or render-pass shape. Sources exceeding the streaming source/page/segment hard caps and synchronous Inline paths intentionally retain compatibility payload construction; TriangleFan worst-case sizing is covered by Direct planning. Production multi-segment-plus-Present FrameGraph/session/Presenter evidence, explicit production partition subdivision, parallel render encoding, and Metal 4 segmentation remain separate work; cross-source session admission for both source kinds is tracked in the EncodeSession row below. |
+| Bounded early-prefix publication (`R-BACK-2.106`) | implemented behind `DXMT9_CPU_READY_TAPE=1` plus default-off `DXMT9_CPU_READY_EARLY_PREFIX=1`; correctness/progress mechanism passes, locality promotion fails | The queue proves and acquires one successor Writing tail before publishing a non-Present compatibility prefix. The session lane parks one unsubmitted carrier and joins only the final Present tail. An EarlyPrefix behind an ordinary pending carrier now folds into that carrier; pre-effect rejection clears the carrier/admission and releases its lease without a completion receipt. Strict Arena admission cannot steal the reserved tail and instead replays into that compatibility owner. The reducer, production lifecycle fixture, and `CpuReadyEarlyPrefix.tla` cover ordinary-pending fold, stop cleanup, FIFO/once, and one-submission ownership. The first two GT2 attempts exposed the former ordinary-pending fail-stop after three Presents; corrected `gt2-early-prefix-fixed-20260904` completes 1,541 Presents with 1,540 prefixes, 1,532 joins, zero pre-effect join failures, zero rejects, and zero GPU errors. | The corrected wild run still fails R-BACK-2.50 locality: command buffers change 3.999 -> 4.003, render passes 15.759 -> 17.070, and tile preservation 102.52 -> 129.69 MiB/Present. `render_pass_color_proof_block_no_lookahead` rises from 0 to 1.663/Present because a prefix can end inside a logical pass before its future tail exists. Keep both gates default off. Promotion requires a source-tail closed-pass witness, future-tail lookahead, or proven pass suspend/resume; FPS (24.615 versus the 24.226 one-run control) is irrelevant while locality fails. |
 | CPU-ready source residency/admission (`R-BACK-2.60`, `R-BACK-2.65`, `R-VERIF-2.14`) | split physical-residency and encoded-work accounting, ordered-tail Writing no-double-count, and bounded denied-first-lease pressure progress implemented behind the default-off Direct gate | `SessionCapacityLeaseState` still reserves the full physical source/page/byte/block/Ready/retention/ticket headroom before representation. A typed Tape snapshot separates older unavailable states from one unique current-generation ordered-tail Writing publication; only an exact claim within successor headroom is credited at first acquisition, while invalid identity/arithmetic fail-stops before the generation waiter. `classifyFirstLeaseCapacityWait` gives capacity generation priority, then permits each exact already-resident non-Present Direct Arena `ordinaryDirect` Ready head to execute standalone at most once when a real Arena admission waiter would otherwise close the completion/reclaim cycle. A changed FIFO head owns a new finite token even without generation progress; the same identity never repeats, fixed Tape bounds limit total escapes, and no pressure-created release event exists. Native production-loop evidence covers a multi-source batch whose complete real control predicate requires at least two distinct FIFO head drains in one unchanged generation, exact admission retry/drain return, ownership conservation, and the ineligible sibling matrix without sleeps or polling, alongside the existing 31 Ready / 511-page + one Writing one-session trace and exact 128-source cap. `SessionCapacityLease.tla` retains detailed lease/refcount ownership; seeded `EncodeSchedulingProgress.tla` composes the two-head pressure cycle. The H239 same-build GT2 Tape-on lane reaches 634 peak pages with three admission waits totaling 18.698 ms, so the prior startup/progress blocker remains closed. | The H239 GT2 pair supersedes H238 for promotion: Tape-on changes command buffers `3.9995 -> 4.0131`, render passes `15.7691 -> 15.9505`, and tile preservation `103.537 -> 108.089 MiB/Present`. Keep `DXMT9_CPU_READY_TAPE` default off; do not continue the GT1/GT3/SFIV promotion matrix until all three locality metrics are non-increasing. |
 | Unified Arena source representation (`R-BACK-2.40`, `R-BACK-2.45`–`2.46`, `R-BACK-2.49`, `R-BACK-2.60`, `R-BACK-2.62`) | production multi-segment construction and Present implemented behind the default-off Direct gate / admission and end-to-end evidence fail promotion | The Direct planner emits an exact raw-record range table and packed `ArenaSourcePayloadLayout`, including dedicated jumbo segments. One strict Tape reservation owns all segment builders, publishes or aborts them atomically, exposes them as one logical `SourcePayloadView`, and reclaims them under one source/ticket/`seqId`/completion identity. Production replay flushes pending DrawRun batches at exact segment edges and visits every raw record once. A single final Present may be built in the Arena source while Query routes Legacy, Readback routes synchronous Inline, `UpdateTexture` routes Legacy, and non-final or multiple Present records route Legacy. Native specs cover packing, multi-segment ownership, Present publication, token abort, and source-qualified FrameGraph input. Clean H233 shows that removing the oversize bypass without reserving session headroom converts full-Arena sources into pressure-driven session fragmentation; the fixed headroom/cap policy is now implemented in the residency owner above. | Add a production multi-segment-plus-Present fixture through FrameGraph, shared EncodeSession, and Presenter; add Arena-source PSO-prefetch parity and source-qualified diagnostic evidence; prove that segment edges do not alter DAG, pass, submission, or completion shape. Keep `DXMT9_CPU_READY_TAPE` default off and legacy rollback intact until `R-BACK-2.50` passes. |
 | Scoped FIFO replay drain (`R-BACK-2.51(d)`, `R-BACK-2.61`) | buffer lock/unlock scope implemented / promotion pending | A device-owned ledger canonicalizes shared-wrapper aliases by core-buffer identity, admission captures backing generations and raw residency, and buffer lock/unlock wait only for the relevant replay target with conservative terminal handling. Deterministic native and process-separated OFF/ON byte-identity evidence is present. A 2026-08-18 GT2 site measurement on `226922a2` shows the fence is effectively harvested: total drain wait `0.33 ms/present` (~0.9% of frame), with the historically dominant `dxmt9c_buffer_lock` down to `0.063 ms/present` (bypass counters active: 15,236 DISCARD / 52,400 NOOVERWRITE) and the largest residual being one global `get_swap_chain` wait per present at `0.249 ms/present`. | Complete wild/conformance promotion and paired performance attribution (the 2026-08-18 measurement sizes the win as small); broaden canonical access summaries beyond the current buffer lock/unlock allowlist only when another synchronous consumer needs it. |

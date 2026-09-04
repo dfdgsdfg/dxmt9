@@ -211,6 +211,9 @@ enum class ChunkPublishReason : std::uint8_t {
   // reservation, so the span published the existing extent and retried
   // against a fresh empty slot instead of degrading to draw-by-draw replay.
   DirectCapacityRotation,
+  // Default-off CPU-ready experiment: one immutable non-Present frame prefix
+  // published only after reserving the compatibility Present tail.
+  EarlyPrefix,
 };
 
 enum class ChunkPublishTailCommandKind : std::uint8_t {
@@ -418,6 +421,20 @@ enum class CpuReadyRetainedHeadRejectReason : std::uint8_t {
   ReservationRace,
 };
 void countCpuReadySessionPendingStarted();
+enum class CpuReadyEarlyPrefixFallback : std::uint8_t {
+  AlreadyPublished = 0,
+  NoTailCredit,
+  OrderedControl,
+  Ineligible,
+  Capacity,
+};
+void countCpuReadyEarlyPrefixCandidate();
+void countCpuReadyEarlyPrefixPublished();
+void countCpuReadyEarlyPrefixFallback(CpuReadyEarlyPrefixFallback reason);
+void countCpuReadyEarlyPrefixTailReserved();
+void countCpuReadyEarlyPrefixSessionParked();
+void countCpuReadyEarlyPrefixSessionJoined();
+void countCpuReadyEarlyPrefixSessionJoinFailedPreEffect();
 void countEncodePartitionPlan(bool explicitPlan,
                               std::uint64_t rangeCount,
                               std::uint64_t drawRangeCount,
@@ -958,6 +975,9 @@ void countShaderVariantKeyHashCpuTime(std::uint64_t nanoseconds);
 void countRenderPassBegin();
 void countRenderPassEnd(EncoderSplitReason reason);
 void countHazardProbe(bool bloomOverlap, bool exactOverlap);
+void countSubmitDrawRunBatchInputRuns(std::uint64_t runs);
+void countSubmitDrawRunBatchEmittedRun();
+void countSubmitDrawRunBatchSegment();
 void countSubmitDrawRunBindingSnapshotCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunPayloadBytesCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunSlotPrepareCpuTime(std::uint64_t nanoseconds);

@@ -326,6 +326,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
   EncodeSessionSourceList pendingSources;
   encoders::EncodeChunkSession pendingSession;
   render::EncodeSessionAdmissionState pendingAdmission{};
+  bool pendingEarlyPrefix = false;
   render::SessionCapacityLeaseState capacityLeaseState{};
   bool exactReplaySingleSource = false;
   bool activeRetainedHeadSingleSourceFallback = false;
@@ -554,6 +555,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
 
   auto submitPendingRecordLocked =
       [&pendingRecord, &pendingSources, &pendingSession, &pendingAdmission,
+       &pendingEarlyPrefix,
        &releaseCapacityLease,
        &finalizePendingSessionForSubmitLocked, &submitRecordLocked](
           std::unique_lock<std::mutex>& lock,
@@ -577,8 +579,28 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         pendingSources.clear();
         pendingSession.reset();
         pendingAdmission = {};
+        pendingEarlyPrefix = false;
         releaseCapacityLease();
         return true;
+      };
+
+  auto abandonEarlyPrefixPreEffectLocked =
+      [this, &pendingRecord, &pendingSources, &pendingSession,
+       &pendingAdmission, &pendingEarlyPrefix,
+       &releaseCapacityLease]() noexcept {
+        DXMT_ASSERT(pendingEarlyPrefix);
+        perf::countCpuReadyEarlyPrefixSessionJoinFailedPreEffect();
+        // Destroying the unsubmitted carrier/session is the rollback edge.
+        // The retained source identities intentionally remain terminally
+        // owned by the stopped queue; they must never be reported complete
+        // without GPU execution.
+        pendingRecord.reset();
+        pendingSources.clear();
+        pendingSession.reset();
+        pendingAdmission = {};
+        pendingEarlyPrefix = false;
+        releaseCapacityLease();
+        requestSchedulingStopLocked();
       };
 
   auto processNextReleaseLocked =
@@ -661,6 +683,19 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
   while (true) {
     std::unique_lock lock(mutex_);
 
+    const auto earlyWakeAction =
+        core::metalqueue::decideCpuReadyEarlySessionAction(
+            pendingEarlyPrefix, stop_,
+            sessionReleaseState_.hasPending() ||
+                queueLifecycle_.producerSequenceWaitActive(),
+            !cpuReadyTape_.readyEmpty(), /*nextAppendable=*/true,
+            /*nextHasFinalPresentTail=*/false);
+    if (earlyWakeAction ==
+        core::metalqueue::CpuReadyEarlySessionAction::FailPreEffect) {
+      abandonEarlyPrefixPreEffectLocked();
+      return;
+    }
+
     if (processNextReleaseLocked(lock)) {
       if (testOnlyPauseAfterNextSessionReleaseAck_) {
         testOnlyPauseAfterNextSessionReleaseAck_ = false;
@@ -701,6 +736,10 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
 
     if (pendingRecord.has_value() && cpuReadyTape_.readyEmpty()) {
       if (stop_) {
+        if (pendingEarlyPrefix) {
+          abandonEarlyPrefixPreEffectLocked();
+          return;
+        }
         if (!submitPendingRecordLocked(
                 lock, encoders::SessionFinalizeCause::Drain)) {
           abortCpuReadySessionFailOpen("shutdown drain release");
@@ -813,6 +852,16 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                       retainedHeadRejection = perf::
                           CpuReadyRetainedHeadRejectReason::
                               TerminalSuffixOwned;
+                      return false;
+                    }
+                    if (const auto* legacy = payload.legacyPayload();
+                        legacy && legacy->publishReason ==
+                            perf::ChunkPublishReason::EarlyPrefix) {
+                      // The experiment exists to encode and park this source
+                      // before its reserved Writing successor publishes.
+                      // Retaining the head would erase the intended overlap.
+                      retainedHeadRejection = perf::
+                          CpuReadyRetainedHeadRejectReason::SourceCompatibility;
                       return false;
                     }
                     ResolvedPublishedSource candidate{
@@ -3235,6 +3284,10 @@ multi_source_window_complete:
         }
       }
       const bool sourceIsArena = commonSource.payload.isArena();
+      const bool sourceIsEarlyPrefix =
+          commonSource.payload.legacyPayload() &&
+          commonSource.payload.legacyPayload()->publishReason ==
+              perf::ChunkPublishReason::EarlyPrefix;
       const bool sourceHasFinalPresentTail =
           render::sessionSourceHasFinalPresentTail(commonSource.payload);
       const bool sourceCanStartSession =
@@ -3242,6 +3295,16 @@ multi_source_window_complete:
       bool sourceCanAppendToPending =
           render::sessionSourceCanAppendToPending(
               commonSource.payload, static_cast<bool>(pendingSession));
+      const auto earlySourceAction =
+          core::metalqueue::decideCpuReadyEarlySessionAction(
+              pendingEarlyPrefix, stop_, /*orderedRelease=*/false,
+              /*hasNextSource=*/true, sourceCanAppendToPending,
+              sourceHasFinalPresentTail);
+      if (earlySourceAction ==
+          core::metalqueue::CpuReadyEarlySessionAction::FailPreEffect) {
+        abandonEarlyPrefixPreEffectLocked();
+        return;
+      }
 
       if (pendingRecord.has_value() && !sourceCanAppendToPending) {
         perf::countCpuReadySessionReleased(
@@ -3262,6 +3325,10 @@ multi_source_window_complete:
                       *pendingSession),
               initializer_ &&
                   initializer_->hasPendingUploadsUnlocked())) {
+        if (pendingEarlyPrefix) {
+          abandonEarlyPrefixPreEffectLocked();
+          return;
+        }
         perf::countCpuReadySessionReleased(
             perf::CpuReadySessionReleaseReason::InitializerWait);
         if (!submitPendingRecordLocked(
@@ -3287,6 +3354,10 @@ multi_source_window_complete:
             encoders::canAppendEncodeChunkSessionSource(
                 *pendingSession, candidate);
         if (!queueSourcesCanAppend || !sessionSourcesCanAppend) {
+          if (pendingEarlyPrefix) {
+            abandonEarlyPrefixPreEffectLocked();
+            return;
+          }
           perf::countCpuReadySessionReleased(
               perf::CpuReadySessionReleaseReason::FailPath);
           if (!submitPendingRecordLocked(
@@ -3299,13 +3370,37 @@ multi_source_window_complete:
           appendToPending = false;
         }
       }
+      // An early-prefix source is normally required to start the one
+      // unsubmitted experimental carrier.  If an ordinary compatible session
+      // is already pending, however, this source has not had any Metal effect
+      // yet and can safely fold into that carrier.  Treating this as a join
+      // failure would stop the queue merely because the producer published the
+      // prefix after an older FIFO source.
+      const bool foldEarlyPrefixIntoPending =
+          sourceIsEarlyPrefix && !pendingEarlyPrefix && appendToPending;
       bool startPending = !pendingRecord.has_value() && sourceCanStartSession &&
                           capacityLeaseState.lease().valid();
+      if (sourceIsEarlyPrefix && !foldEarlyPrefixIntoPending &&
+          (!startPending || pendingEarlyPrefix)) {
+        // No Metal encoding has occurred for this source yet. A published
+        // experimental prefix may never take the standalone path.
+        if (pendingEarlyPrefix) {
+          abandonEarlyPrefixPreEffectLocked();
+          return;
+        }
+        perf::countCpuReadyEarlyPrefixSessionJoinFailedPreEffect();
+        requestSchedulingStopLocked();
+        return;
+      }
       QueueCompletionSource appendRetained{};
       bool appendRetainedValid = false;
       if (appendToPending) {
         if (!retainedSourceForIndex(lock, sourceIndex, source,
                                     appendRetained)) {
+          if (pendingEarlyPrefix) {
+            abandonEarlyPrefixPreEffectLocked();
+            return;
+          }
           perf::countCpuReadySessionReleased(
               perf::CpuReadySessionReleaseReason::FailPath);
           if (!submitPendingRecordLocked(
@@ -3330,6 +3425,12 @@ multi_source_window_complete:
         } else {
           startRetainedValid = true;
         }
+      }
+      if (sourceIsEarlyPrefix && !foldEarlyPrefixIntoPending &&
+          !startPending) {
+        perf::countCpuReadyEarlyPrefixSessionJoinFailedPreEffect();
+        requestSchedulingStopLocked();
+        return;
       }
 
       encoders::EncodeChunkOptions options{};
@@ -3405,7 +3506,18 @@ multi_source_window_complete:
             resolvedLookahead[0], std::move(options), resolvedCount > 1u);
       }
       if (!submission.has_value()) {
+        if (sourceIsEarlyPrefix && !foldEarlyPrefixIntoPending) {
+          perf::countCpuReadyEarlyPrefixSessionJoinFailedPreEffect();
+          pendingSession.reset();
+          releaseCapacityLease();
+          requestSchedulingStopLocked();
+          return;
+        }
         if (appendToPending) {
+          if (pendingEarlyPrefix) {
+            abandonEarlyPrefixPreEffectLocked();
+            return;
+          }
           perf::countCpuReadySessionReleased(
               perf::CpuReadySessionReleaseReason::FailPath);
           if (!submitPendingRecordLocked(
@@ -3467,9 +3579,14 @@ multi_source_window_complete:
           continue;
         }
         pendingSources.clear();
+        pendingEarlyPrefix = sourceIsEarlyPrefix;
         if (!pendingSources.append(startRetained)) {
           DXMT_ASSERT(false && "first encoded session source must be valid");
           pendingRecord = std::move(*submission);
+          if (pendingEarlyPrefix) {
+            abandonEarlyPrefixPreEffectLocked();
+            return;
+          }
           perf::countCpuReadySessionReleased(
               perf::CpuReadySessionReleaseReason::FailPath);
           if (!submitPendingRecordLocked(
@@ -3482,6 +3599,10 @@ multi_source_window_complete:
         pendingAdmission = {};
         if (!render::appendSessionAdmission(
                 pendingAdmission, sourceAdmission, admissionLimits)) {
+          if (pendingEarlyPrefix) {
+            abandonEarlyPrefixPreEffectLocked();
+            return;
+          }
           perf::countCpuReadySessionReleased(
               perf::CpuReadySessionReleaseReason::FailPath);
           if (!submitPendingRecordLocked(
@@ -3495,6 +3616,9 @@ multi_source_window_complete:
         (void)tryRetireEncodedSource(
             sourceIndex, commonSource, sourceAdmission, startRetained);
         perf::countCpuReadySessionPendingStarted();
+        if (sourceIsEarlyPrefix) {
+          perf::countCpuReadyEarlyPrefixSessionParked();
+        }
         continue;
       }
 
@@ -3518,6 +3642,10 @@ multi_source_window_complete:
                 appendRetained, appendCommittedPendingTail,
                 sourceHasFinalPresentTail ? nullptr : &mergedSources);
         if (!merged) {
+          if (pendingEarlyPrefix) {
+            abandonEarlyPrefixPreEffectLocked();
+            return;
+          }
           perf::countCpuReadySessionReleased(
               perf::CpuReadySessionReleaseReason::FailPath);
           if (!appendRetainedValid || !submission->commandBuffer) {
@@ -3565,12 +3693,22 @@ multi_source_window_complete:
         if (pendingSession &&
             !encoders::retainEncodeChunkSessionUntilSubmissionComplete(
                 std::move(pendingSession), *submission)) {
+          if (pendingEarlyPrefix) {
+            perf::countCpuReadyEarlyPrefixSessionJoinFailedPreEffect();
+          }
           abortCpuReadySessionFailOpen("merged tail session retain failed");
         }
         if (!submitRecordLocked(lock, *submission)) {
+          if (pendingEarlyPrefix) {
+            perf::countCpuReadyEarlyPrefixSessionJoinFailedPreEffect();
+          }
           abortCpuReadySessionFailOpen("merged tail submit failed");
         }
         perf::countCpuReadySessionTailSubmitted();
+        if (pendingEarlyPrefix) {
+          perf::countCpuReadyEarlyPrefixSessionJoined();
+        }
+        pendingEarlyPrefix = false;
         pendingSession.reset();
         pendingAdmission = {};
         releaseCapacityLease();

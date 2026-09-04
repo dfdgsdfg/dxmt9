@@ -1508,6 +1508,20 @@ perf-gated, covering draws and commands per lease, ordinary fallback draws and
 post-reserve storage growth (both targeting zero), state projections, island,
 coordinator and cut counts, and each typed rejection.
 
+The authoritative ordinary fallback may submit several carrier-free
+`DrawRunBatchEntry` values under one outer queue writer transaction. Adjacent
+entries may share one final `DrawRunCommandRecord` and canonical state only
+when `drawStatesCompatibleForDrawRunBatch` and
+`shaderLayoutsCompatibleForDrawRunBatch` both accept them. The comparison is
+against the open final-slot run, never older history; an intervening command,
+physical slot split, or incompatible entry starts a new run. Every input
+entry's uniform payload must still be interned and its resulting handle stamped
+into every copied `DrawParam`. Queue resource stamping marks the shared base
+state once per emitted compatible group and visits every concrete binding
+override and dynamic-binding snapshot once per input draw. Capacity or append
+failure must retain the existing source order and the same pre-effect versus
+fail-stop disposition as the unfused ordinary path.
+
 **R-BACK-2.103** Source-range lease replay must have one composed refinement
 boundary from the immutable raw through executable span selection, final-slot
 construction, publication, completion, and reclaim. The reference behavior is
@@ -1766,3 +1780,28 @@ existing command-buffer, render-pass, completion and pixel gates.
 The allocation/lease-failure clause is evaluable only after denial and
 adopt/allocation outcomes are reported separately; until then the counter
 split recorded in `gap.md` is a promotion prerequisite rather than evidence.
+
+**R-BACK-2.106** The default-off early-prefix experiment may publish at most
+one non-Present compatibility source per producer frame. Before that source
+becomes Ready, the queue must prove and then acquire a distinct successor
+Writing owner while preserving one unused compatibility inflight credit for
+the eventual Present-bearing tail. Failure to prove the inflight credit,
+control slot, Tape capacity, source eligibility, or ordered-control absence
+must retain the existing Present-only source without publication.
+
+The encode consumer may represent the early prefix only inside its single
+queue-owned unsubmitted `EncodeSession`. It may append later FIFO sources, but
+only a final Present tail may submit that carrier. An ordered release,
+non-appendable source, initializer boundary, stop, or metadata/merge failure
+must destroy the unsubmitted carrier and fail-stop before GPU visibility; it
+must never submit the prefix separately or increase command-buffer or
+render-pass count. Completion and reclaim remain qualified by each original
+source/storage/sequence identity and expand exactly once in FIFO order after
+the joined submission.
+
+The disabled path must take no queue lock, allocate no tail source, publish no
+source, and write no experiment counter. Typed evidence must distinguish
+candidate, publication, repeated-frame, tail-credit, ordered-control,
+ineligible and capacity outcomes, plus tail reservation, parked join, joined
+submission and pre-effect join failure. Promotion remains subject to
+R-BACK-2.50; native/model mechanism proof is not wild evidence.

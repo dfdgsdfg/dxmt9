@@ -2,6 +2,7 @@
 #include "d3d9_pe_recorder_transaction.hpp"
 #include "d3d9_pe_recorder.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -109,9 +110,10 @@ void classificationAndLifetime() {
       case PeSemanticProducerKind::Clear: in.clear.rectCount = 0u; break;
       case PeSemanticProducerKind::Count: break;
     }
+    const auto inputView = borrowPeSemanticRecordInput(in);
     PeSemanticAdmissionPlan admission{};
-    if (!planPeSemanticAdmission(in, admission) ||
-        !owner.tryAppendOwnedRecord(in, []() noexcept { return true; })) {
+    if (!planPeSemanticAdmission(inputView, admission) ||
+        !owner.tryAppendOwnedRecord(inputView, []() noexcept { return true; })) {
       std::cerr << "semantic admission failed for producer "
                 << static_cast<unsigned>(row.kind) << "\n";
       throw Failure("every semantic producer row admits a typed slot");
@@ -185,7 +187,8 @@ void classificationAndLifetime() {
         "all-family typed records have a pure visitor");
   check(surface.refs == 3u && texture.refs == 3u && query.refs == 3u,
         "pins are acquired at admission");
-  alignas(8) std::array<std::byte, 8192u> exact{};
+  alignas(8) std::array<std::byte, 8192u> exact;
+  std::fill(exact.begin(), exact.end(), std::byte{0xa5});
   PeSemanticExactFixedEmission exactEmission;
   check(owner.emitExactFixed(exact, exactEmission),
         "all 21 typed records emit through ExactFixed");
@@ -216,8 +219,12 @@ void classificationAndLifetime() {
   const auto sealed = canonicalBuilder.seal();
   check(sealed.valid() && sealed.blob.size() == exactEmission.wireBytes &&
             std::equal(sealed.blob.begin(), sealed.blob.end(),
-                       exactEmission.wire.begin()),
-        "owner ExactFixed bytes equal canonical builder bytes");
+                       exactEmission.wire.begin()) &&
+            std::all_of(exact.begin() + exactEmission.wireBytes, exact.end(),
+                        [](std::byte value) {
+                          return value == std::byte{0xa5};
+                        }),
+        "owner ExactFixed bytes equal canonical builder bytes and preserve the tail canary");
   owner.reset();
   check(surface.refs == 2u && texture.refs == 2u && buffer.refs == 1u &&
             shader.refs == 1u && decl.refs == 1u && query.refs == 2u,
@@ -412,6 +419,113 @@ void transactionalAdmissionRollsBackWithoutLeakingPins() {
         "same input remains retryable after pre-effect rollback");
   owner.reset();
   check(surface.refs == 1u, "prepared retry releases its typed retain");
+}
+
+void borrowedViewCapacityRebaseAndSettlementFault() {
+  using Tiny = PeSemanticBatchOwner<1u, 2u, 4096u, 4u, 4u>;
+  Tiny owner;
+  D9CSurface first;
+  D9CSurface second;
+  auto filler = base(PeSemanticProducerKind::Present, 1u, 1u);
+  filler.surface0 =
+      localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&first, 0x721u, 3u);
+  check(owner.admit(filler), "borrowed-view capacity fixture fills the owner");
+
+  struct StagedCanary {
+    std::array<std::byte, 16u> before{};
+    PeSemanticRecordInput input{};
+    std::array<std::byte, 16u> after{};
+  } stagedCanary;
+  std::fill(stagedCanary.before.begin(), stagedCanary.before.end(),
+            std::byte{0x5a});
+  std::fill(stagedCanary.after.begin(), stagedCanary.after.end(),
+            std::byte{0xa5});
+  stagedCanary.input = base(PeSemanticProducerKind::Present, 0u, 0u);
+  const auto effectiveRecordType = stagedCanary.input.recordType;
+  stagedCanary.input.recordType = 0u;
+  stagedCanary.input.surface0 =
+      localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&second, 0x722u, 4u);
+  const auto stagedSparse = &stagedCanary.input.sparse;
+  auto inputView = borrowPeSemanticRecordInput(stagedCanary.input);
+  inputView.destination.recordType = effectiveRecordType;
+  inputView.destination.sourceOrdinal = 2u;
+  inputView.destination.recordOrdinal = 2u;
+
+  std::uint32_t settlementCalls = 0u;
+  check(!owner.tryAppendOwnedRecord(inputView, [&]() noexcept {
+          ++settlementCalls;
+          return true;
+        }) &&
+            owner.lastAdmissionFailure() == Tiny::AdmissionFailure::Capacity &&
+            settlementCalls == 0u && second.refs == 1u,
+        "CapacityPre rejects the borrowed view before settlement or retention");
+  check(owner.settle(), "CapacityPre settles the prior destination");
+
+  check(!owner.tryAppendOwnedRecord(inputView, [&]() noexcept {
+          ++settlementCalls;
+          return false;
+        }) &&
+            settlementCalls == 1u && owner.size() == 0u && second.refs == 1u,
+        "settlement fault rolls the rebased borrowed view back atomically");
+  check(owner.tryAppendOwnedRecord(inputView, [&]() noexcept {
+          ++settlementCalls;
+          return true;
+        }) &&
+            settlementCalls == 2u && owner.size() == 1u &&
+            owner.record(0u).sourceOrdinal == 2u &&
+            owner.record(0u).recordOrdinal == 2u && second.refs == 2u,
+        "the same staged input and overlay retry durably after rollback");
+  check(stagedCanary.input.sourceOrdinal == 0u &&
+            stagedCanary.input.recordOrdinal == 0u &&
+            stagedCanary.input.recordType == 0u &&
+            &stagedCanary.input.sparse == stagedSparse &&
+            std::all_of(stagedCanary.before.begin(), stagedCanary.before.end(),
+                        [](std::byte value) {
+                          return value == std::byte{0x5a};
+                        }) &&
+            std::all_of(stagedCanary.after.begin(), stagedCanary.after.end(),
+                        [](std::byte value) {
+                          return value == std::byte{0xa5};
+                        }),
+        "borrowed admission never mutates the staged descriptor or its canaries");
+  owner.reset();
+  check(first.refs == 1u && second.refs == 1u,
+        "borrowed-view capacity/fault fixture balances typed retention");
+}
+
+void borrowedViewSparseOverlayMatchesCanonicalBytes() {
+  Owner owner;
+  std::array<D9CCommandChunkWireRenderState, 1u> stagedRows{{{7u, 11u}}};
+  std::array<D9CCommandChunkWireRenderState, 1u> destinationRows{{{7u, 29u}}};
+  auto staged = base(PeSemanticProducerKind::DrawPrimitive, 0u, 0u);
+  staged.draw.primitiveCount = 3u;
+  staged.sparse.renderStates = stagedRows;
+  auto destinationSparse = staged.sparse;
+  destinationSparse.renderStates = destinationRows;
+  auto inputView = borrowPeSemanticRecordInput(staged);
+  inputView.destination.sourceOrdinal = 1u;
+  inputView.destination.recordOrdinal = 1u;
+  inputView.destination.sparse = &destinationSparse;
+  check(owner.tryAppendOwnedRecord(inputView,
+                                   []() noexcept { return true; }),
+        "borrowed view admits the destination sparse overlay");
+
+  CommandChunkBuilder canonical;
+  check(appendSparseRecord(canonical, inputView.destination.recordType,
+                           staged.draw, destinationSparse),
+        "canonical builder admits the destination sparse overlay");
+  const auto sealed = canonical.seal();
+  alignas(8) std::array<std::byte, 4096u> exact;
+  std::fill(exact.begin(), exact.end(), std::byte{0xcc});
+  PeSemanticExactFixedEmission emission{};
+  check(sealed.valid() && owner.emitExactFixed(exact, emission) &&
+            sealed.blob.size() == emission.wireBytes &&
+            std::equal(sealed.blob.begin(), sealed.blob.end(),
+                       emission.wire.begin()) &&
+            stagedRows[0].value == 11u && destinationRows[0].value == 29u,
+        "sparse overlay emits canonical bytes without mutating staged rows");
+  owner.reset();
+  canonical.resetAndReleaseRetained();
 }
 
 void admissionFactsAreNotAcceptedByProductionApi() {
@@ -1384,6 +1498,11 @@ void ownerQualifiedMaterializationLedger() {
 int main() {
   try {
     static_assert(sizeof(PeSemanticAdmissionPlan) <= 256u);
+    static_assert(sizeof(PeSemanticRecordInput) >= 800u);
+    static_assert(sizeof(PeSemanticRecordDestinationContext) <= 32u);
+    static_assert(sizeof(PeSemanticRecordInputView) <= 40u);
+    static_assert(sizeof(PeSemanticRecordInputView) * 20u <
+                  sizeof(PeSemanticRecordInput));
     static_assert(sizeof(DefaultOwner) <= 512u);
     check(sizeof(DefaultOwner) <= 512u && DefaultOwner{}.constructionSucceeded(),
           "default owner shell stays within the size budget");
@@ -1405,6 +1524,8 @@ int main() {
     admissionArithmeticRejectsOverflow();
     pendingDeltaViewRejectsStaleTicket();
     transactionalAdmissionRollsBackWithoutLeakingPins();
+    borrowedViewCapacityRebaseAndSettlementFault();
+    borrowedViewSparseOverlayMatchesCanonicalBytes();
     admissionFactsAreNotAcceptedByProductionApi();
     immediateAppendClosesSpanMutationGap();
     repeatedIdentityUsesBatchGlobalRetentionDelta();

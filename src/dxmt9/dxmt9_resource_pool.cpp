@@ -1143,6 +1143,32 @@ void Pool::markDrawResources(const core::FlatDrawStateRecord& hot, u64 seqId) {
   markSurfaceUse(hot.depthStencil.handle, seqId);
 }
 
+void Pool::markBufferUsesBatch(std::span<const core::Handle> handles,
+                               u64 seqId) {
+  bufferArena_.updateMany(handles, [seqId](BufferRecord& rec) {
+    rec.lastUsedSeqId = markStampUpper(rec.lastUsedSeqId, seqId);
+    if (rec.hasVersionedBacking() && rec.renameActiveIndex < rec.renameRing.size()) {
+      auto& active = rec.renameRing[rec.renameActiveIndex];
+      active.lastUsedSeqId = markStampUpper(active.lastUsedSeqId, seqId);
+      DXMT_ASSERT(active.lastUsedSeqId <= rec.lastUsedSeqId);
+    }
+  });
+}
+
+void Pool::markTextureUsesBatch(std::span<const core::Handle> handles,
+                                u64 seqId) {
+  textureArena_.updateMany(handles, [seqId](TextureRecord& rec) {
+    rec.lastUsedSeqId = markStampUpper(rec.lastUsedSeqId, seqId);
+  });
+}
+
+void Pool::markSurfaceUsesBatch(std::span<const core::Handle> handles,
+                                u64 seqId) {
+  surfaceArena_.updateMany(handles, [seqId](SurfaceRecord& rec) {
+    rec.lastUsedSeqId = markStampUpper(rec.lastUsedSeqId, seqId);
+  });
+}
+
 void Pool::markClearResources(const core::ClearDesc& desc, u64 seqId) {
   if (desc.clearColor) {
     for (const auto& attachment : desc.colorAttachments) {

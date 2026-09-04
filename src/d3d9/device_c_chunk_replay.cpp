@@ -1214,6 +1214,43 @@ bool importRawChunk(const dxmt9::d3d9::RawCommandChunk& raw,
   return dxmt9::d3d9::importPrevalidatedCommandChunk(bytes, envelope, imported);
 }
 
+bool rawContainsOrderedControl(
+    const dxmt9::d3d9::RawCommandChunk& raw) noexcept {
+  dxmt9::d3d9::ImportedChunkView imported;
+  if (!importRawChunk(raw, imported)) {
+    // This raw was already replayed from the same immutable view. Treat an
+    // unexpected second import failure as an ordered boundary so the
+    // experiment fails closed without publishing a prefix.
+    return true;
+  }
+  return std::any_of(
+      imported.records.begin(), imported.records.end(),
+      [](const D9CCommandChunkWireRecordHeader& record) {
+        switch (record.type) {
+        case D9C_COMMAND_RECORD_QUERY_ISSUE:
+        case D9C_COMMAND_RECORD_READBACK:
+        case D9C_COMMAND_RECORD_UPDATE_TEXTURE:
+          return true;
+        default:
+          return false;
+        }
+      });
+}
+
+void maybePublishEarlyCpuReadyPrefix(
+    D9CDevice* device, const dxmt9::d3d9::RawCommandChunk& raw) noexcept {
+  if (!device || raw.hasPresent || !device->dev().upperDevice()) {
+    return;
+  }
+  auto& queue = device->dev().upperDevice()->queue();
+  // The stable path pays one cached Boolean only. In particular it does not
+  // reconstruct ImportedChunkView or scan records when the experiment is off.
+  if (!queue.cpuReadyEarlyPrefixEnabled()) {
+    return;
+  }
+  (void)queue.publishEarlyCpuReadyPrefix(rawContainsOrderedControl(raw));
+}
+
 // One executable slice of the raw. The default value is the whole raw, which
 // is what every pre-span caller passes. A lease-span driver replays the raw as
 // several consecutive ranges; record ordinals stay raw-absolute so the
@@ -1342,15 +1379,20 @@ int32_t replayResolvedChunk(
   // borrows the device's binding-agnostic cache. Observable records cut the
   // run before dispatch, but the failure returns below do not, so bind final
   // publication to the scope rather than to each return.
+  bool drawBatchFlushFailed = false;
   struct DrawBatchScope {
     DeviceReplaySink* sink;
-    ~DrawBatchScope() {
-      // Publishing from a destructor must not throw. The device retires the
-      // pending run either way, and a throwing publish only reaches here on an
-      // exit that is already returning a failure.
-      (void)sink->flushDrawBatch();
+    bool* failed;
+    ~DrawBatchScope() noexcept {
+      // Publishing from a destructor must not throw. The sticky device bit is
+      // checked by the enclosing replay boundary after this scope unwinds;
+      // retaining the local flag documents that this result is intentional,
+      // rather than a discarded status from a best-effort destructor.
+      if (!sink->flushDrawBatch()) {
+        *failed = true;
+      }
     }
-  } drawBatchScope{&sink};
+  } drawBatchScope{&sink, &drawBatchFlushFailed};
   std::size_t activeSegment = 0;
   std::size_t activeSource = 0;
   std::size_t activeSourceSegment = 0;
@@ -1869,13 +1911,27 @@ bool commitReplayTransaction(
   return true;
 }
 
+// A replay sink owns the final batch flush in an RAII scope so every early
+// return retires borrowed spans.  Destructors cannot change an already
+// evaluated return value, therefore the enclosing replay boundary must turn
+// the sink's sticky publication failure into a hard replay failure before it
+// commits the transaction.
+int32_t checkReplayBatchFailure(D9CDevice* device, int32_t hr) noexcept {
+  if (failed(hr) || !device ||
+      !device->dev().compatibilityReplayDrawBatchFailed()) {
+    return hr;
+  }
+  return commitChunkFail("chunk-replay-batch-flush-scope",
+                        0xffffffffu, 0u, dxmt9::core::D3DERR_DEVICELOST);
+}
+
 int32_t replayCompatibilityChunk(
     D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
     bool pacedByPresentOrdinal, bool containsOrderedControls = false) {
   auto& transaction = beginReplayTransaction(device, raw);
-  const auto hr = replayResolvedChunk(
+  const auto hr = checkReplayBatchFailure(device, replayResolvedChunk(
       device, raw, pacedByPresentOrdinal, transaction, nullptr, {},
-      containsOrderedControls);
+      containsOrderedControls));
   if (failed(hr)) {
     (void)rollbackReplayTransaction(device, transaction);
     return hr;
@@ -2000,10 +2056,10 @@ int32_t replayEmissionSpans(
       auto& transaction = beginReplayTransaction(
           device, raw, /*compatibilitySourceCount=*/1u,
           span.firstRecordIndex);
-      const auto hr = replayResolvedChunk(
+      const auto hr = checkReplayBatchFailure(device, replayResolvedChunk(
           device, raw, pacedByPresentOrdinal, transaction, nullptr, {},
           spanHasOrderedControl, {}, /*activeDirectChunkSlotPath=*/false,
-          nullptr, range);
+          nullptr, range));
       if (failed(hr)) {
         outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::ReplayFailed;
         if (separatorEffectsStarted) {
@@ -2544,6 +2600,16 @@ int32_t replayPlannedChunk(D9CDevice* device,
       !begin.has_value()) {
     logAdmissionFailure(static_cast<std::uint32_t>(begin.status),
                         begin.stopReason);
+    if (begin.status == dxmt9::CommandQueue::CpuReadyArenaBeginStatus::
+                            CompatibilityTailOwned) {
+      // The prior early publication already reserved the only admissible
+      // frame tail. This raw has applied no effects, so route it into that
+      // exact compatibility owner rather than publishing or waiting for a
+      // separate Arena source.
+      supplyReplayEntry.cancel();
+      markLegacyResources(device, raw);
+      return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal);
+    }
     if (segmentSerial && begin.status ==
             dxmt9::CommandQueue::CpuReadyArenaBeginStatus::RecoverableFailure) {
       // Admission and builder construction happen before replay invokes any
@@ -2789,6 +2855,8 @@ int32_t dxmt9::d3d9::replayRawChunk(D9CDevice* d, dxmt9::d3d9::RawCommandChunk& 
   countDurationSince(replayCpuStart, dxmt9::perf::countOffloadReplayCpuTime);
   if (failed(hr)) {
     dxmt9::perf::countCommandChunkReject();
+  } else {
+    maybePublishEarlyCpuReadyPrefix(d, chunk);
   }
   return hr;
 }
@@ -2882,6 +2950,7 @@ int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
         d, raw, /*pacedByPresentOrdinal=*/false,
         /*allowDirectArena=*/false);
     if (!failed(hr)) {
+      maybePublishEarlyCpuReadyPrefix(d, raw);
       if (auto* observer = d->mutationCompositionObserver.get()) {
         // Inline replay is the rollback lane for commit offload and for
         // synchronous readback chunks; bind the same Render Tape snapshot
@@ -3336,6 +3405,7 @@ static int32_t dxmt9c_device_commit_chunk_impl(
         d, raw, /*pacedByPresentOrdinal=*/false,
         /*allowDirectArena=*/false);
     if (!failed(hr)) {
+      maybePublishEarlyCpuReadyPrefix(d, raw);
       if (auto* observer = d->mutationCompositionObserver.get()) {
         // Inline replay is the rollback lane for commit offload and for
         // synchronous readback chunks; bind the same snapshot identity and
