@@ -756,6 +756,7 @@ void countChunkPublishPresentPrePresentOpportunity(std::uint64_t commandCount,
                                                    std::uint64_t residencyNanoseconds,
                                                    bool presentIsTail);
 void countEncodeSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds);
+void countEncodeSlotPsoPrefetchInvocation();
 void countEncodeSlotPsoPrefetchCommands(std::uint64_t count);
 void countEncodeSlotPsoPrefetchCandidates(std::uint64_t count = 1);
 void countEncodeSlotPsoPrefetchTileCandidates(std::uint64_t count = 1);
@@ -1003,8 +1004,10 @@ void countRenderPassBegin();
 void countRenderPassEnd(EncoderSplitReason reason);
 void countHazardProbe(bool bloomOverlap, bool exactOverlap);
 void countSubmitDrawRunBatchInputRuns(std::uint64_t runs);
+void countSubmitDrawRunBatchCall();
 void countSubmitDrawRunBatchEmittedRun();
 void countSubmitDrawRunBatchSegment();
+void countSubmitDrawRunBatchResourceMarkUniqueEntries(std::uint64_t entries);
 void countSubmitDrawRunBindingSnapshotCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunPayloadBytesCpuTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunSlotPrepareCpuTime(std::uint64_t nanoseconds);

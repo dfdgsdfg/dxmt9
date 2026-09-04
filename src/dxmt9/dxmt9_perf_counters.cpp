@@ -2292,6 +2292,10 @@ void countEncodeSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds) {
   recordRing(c.encodeSlotPsoPrefetchCpuRing, nanoseconds);
 }
 
+void countEncodeSlotPsoPrefetchInvocation() {
+  add(counters().encodeSlotPsoPrefetchInvocations);
+}
+
 void countEncodeSlotPsoPrefetchCommands(std::uint64_t count) {
   add(counters().encodeSlotPsoPrefetchCommands, count);
 }
@@ -3217,12 +3221,22 @@ void countSubmitDrawRunBatchInputRuns(std::uint64_t runs) {
   }
 }
 
+void countSubmitDrawRunBatchCall() {
+  add(counters().submitDrawRunBatchCalls);
+}
+
 void countSubmitDrawRunBatchEmittedRun() {
   add(counters().submitDrawRunBatchEmittedRuns);
 }
 
 void countSubmitDrawRunBatchSegment() {
   add(counters().submitDrawRunBatchSegments);
+}
+
+void countSubmitDrawRunBatchResourceMarkUniqueEntries(std::uint64_t entries) {
+  if (entries != 0) {
+    add(counters().submitDrawRunBatchResourceMarkUniqueEntries, entries);
+  }
 }
 
 void countSubmitDrawRunBindingSnapshotCpuTime(std::uint64_t nanoseconds) {

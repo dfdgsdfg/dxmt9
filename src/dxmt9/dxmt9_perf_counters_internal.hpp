@@ -622,6 +622,7 @@ struct Counters {
   std::atomic<std::uint64_t> chunkPublishPresentPrePresentOpportunityDrawOnly{0};
   std::atomic<std::uint64_t> encodeSlotPsoPrefetchCpuNs{0};
   std::atomic<std::uint64_t> encodeSlotPsoPrefetchCpuMaxNs{0};
+  std::atomic<std::uint64_t> encodeSlotPsoPrefetchInvocations{0};
   std::atomic<std::uint64_t> encodeSlotPsoPrefetchCommands{0};
   std::atomic<std::uint64_t> encodeSlotPsoPrefetchCandidates{0};
   std::atomic<std::uint64_t> encodeSlotPsoPrefetchTileCandidates{0};
@@ -697,9 +698,11 @@ struct Counters {
   std::atomic<std::uint64_t> encodeSlotPsoPrefetchDrawHandleSlotOverflow{0};
   std::atomic<std::uint64_t> submitDrawRunBindingSnapshotCpuNs{0};
   std::atomic<std::uint64_t> submitDrawRunBindingSnapshotCpuMaxNs{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchCalls{0};
   std::atomic<std::uint64_t> submitDrawRunBatchInputRuns{0};
   std::atomic<std::uint64_t> submitDrawRunBatchEmittedRuns{0};
   std::atomic<std::uint64_t> submitDrawRunBatchSegments{0};
+  std::atomic<std::uint64_t> submitDrawRunBatchResourceMarkUniqueEntries{0};
   std::atomic<std::uint64_t> submitDrawRunPayloadBytesCpuNs{0};
   std::atomic<std::uint64_t> submitDrawRunPayloadBytesCpuMaxNs{0};
   std::atomic<std::uint64_t> submitDrawRunSlotPrepareCpuNs{0};

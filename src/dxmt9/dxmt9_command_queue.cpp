@@ -913,6 +913,7 @@ encoders::EncodeContext CommandQueue::makeEncodeContext() {
 }
 
 void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot, bool seal) {
+  perf::countEncodeSlotPsoPrefetchInvocation();
   DXMT_ASSERT(!slot.prefetchedPipelinesSealed() &&
               "prefetchSlotPipelines called after slot prefetch seal");
   tracePsoPrefetchStage("begin", slot);
@@ -3538,6 +3539,9 @@ bool CommandQueue::submitDrawRunBatch(
     }
     if (handled) return true;
   }
+  // Counts ordinary queue-batch transactions only; the Arena-owned path
+  // returns above before acquiring this compatibility-batch mutex.
+  perf::countSubmitDrawRunBatchCall();
   perf::countSubmitDrawRunBatchInputRuns(inputRunCount);
   auto& scratch = drawSubmitScratch();
   ScopedDrawSubmitScratchUse scratchUse(scratch);
@@ -3730,6 +3734,13 @@ bool CommandQueue::submitDrawRunBatch(
         dedup(scratch.segmentBufferHandles);
         dedup(scratch.segmentTextureHandles);
         dedup(scratch.segmentSurfaceHandles);
+        // These are the unique buffer/texture/surface handles passed to the
+        // batch marker after per-segment deduplication. Per-draw snapshot and
+        // override marks are intentionally outside this denominator.
+        perf::countSubmitDrawRunBatchResourceMarkUniqueEntries(
+            static_cast<std::uint64_t>(scratch.segmentBufferHandles.size()) +
+            static_cast<std::uint64_t>(scratch.segmentTextureHandles.size()) +
+            static_cast<std::uint64_t>(scratch.segmentSurfaceHandles.size()));
         if (resourceMarkOverlapObserverEnabled()) {
           for (const auto handle : scratch.segmentBufferHandles) {
             recordResourceMarkObservation(
