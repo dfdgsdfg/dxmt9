@@ -4,8 +4,8 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-08-30
-source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md
+updated: 2026-09-05
+source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-identity-frontier.240.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
 
@@ -28,6 +28,13 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 [index-cache-locality](../index-cache-locality/index.md); the per-CB encode story by [state-churn-encode](../state-churn-encode/index.md).
 
 ## Latest Conclusions
+
+For the current semantic-owner PE implementation, use the
+[2026-09-05 admission-frontier evidence](present-pacing-pe-identity-frontier.240.md).
+It removes a verified 1,688-byte i386 initialization call per admission and
+passes native/wild smoke gates. Single-run OFF FPS moves 26.936 to 27.338;
+stable FPS gain remains unproved. Sparse staging/canonical materialization
+remain open. Older PE cost rankings below describe earlier implementations.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|

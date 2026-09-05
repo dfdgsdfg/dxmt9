@@ -11,6 +11,7 @@
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <new>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
@@ -686,6 +687,134 @@ void planningReusesStaleWireWitnessStorage() {
                         identity.generation == stale.generation &&
                         identity.objectId == stale.objectId; }),
         "planning does not require inactive identity storage to be zeroed");
+}
+
+void identitySetUsesAnActiveFrontier() {
+  using IdentitySet = detail::PeSemanticIdentitySet;
+  static_assert(!std::is_copy_constructible_v<IdentitySet>);
+  static_assert(!std::is_copy_assignable_v<IdentitySet>);
+  static_assert(!std::is_move_constructible_v<IdentitySet>);
+  static_assert(!std::is_move_assignable_v<IdentitySet>);
+  D9CSurface surface;
+  D9CSurface alias;
+  IdentitySet prior{};
+  const D9CWireObjectIdentity staleIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 0xa5u,
+      .objectId = 0x811u};
+  for (std::size_t i = 0u; i < prior.values.size(); ++i) {
+    prior.values[i] = staleIdentity;
+    prior.objects[i] = &surface;
+    prior.wireVisible[i] = true;
+  }
+  prior.count = 0u;
+  prior.wireCount = 0u;
+  std::array<std::byte, sizeof(IdentitySet)> priorBytes{};
+  std::memcpy(priorBytes.data(), &prior, sizeof(prior));
+  alignas(IdentitySet) std::array<std::byte, sizeof(IdentitySet)> storage{};
+  std::memcpy(storage.data(), priorBytes.data(), priorBytes.size());
+  auto* set = ::new (storage.data()) IdentitySet{};
+  const auto valuesBegin = offsetof(IdentitySet, values);
+  const auto arraysEnd = offsetof(IdentitySet, wireVisible) +
+                         sizeof(set->wireVisible);
+  check(set->count == 0u && set->wireCount == 0u,
+        "identity admission starts with an empty active frontier");
+  check(std::memcmp(storage.data() + valuesBegin,
+                    priorBytes.data() + valuesBegin,
+                    arraysEnd - valuesBegin) == 0,
+        "identity admission does not clear adversarial inactive storage");
+
+  bool newlyRetained = true;
+  bool newlyWireVisible = true;
+  check(set->add(PeWireObjectRef{}, D9C_CHUNK_HANDLE_KIND_SURFACE, false,
+                 newlyRetained, newlyWireVisible) &&
+            !newlyRetained && !newlyWireVisible && set->count == 0u,
+        "empty null refs remain valid without entering the frontier");
+  const auto surfaceRef = PeWireObjectRef{
+      .identity = {.kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+                   .generation = 3u,
+                   .objectId = 0x811u},
+      .object = &surface};
+  const auto nullObject = PeWireObjectRef{
+      .identity = surfaceRef.identity,
+      .object = nullptr};
+  check(!set->add(nullObject, D9C_CHUNK_HANDLE_KIND_SURFACE, false,
+                  newlyRetained, newlyWireVisible) && set->count == 0u,
+        "nonempty null refs fail closed without entering the frontier");
+  check(set->add(surfaceRef, D9C_CHUNK_HANDLE_KIND_SURFACE, false,
+                 newlyRetained, newlyWireVisible) && newlyRetained &&
+            !newlyWireVisible && set->count == 1u && set->wireCount == 0u,
+        "new direct pins publish a completely written retained entry");
+  check(set->add(surfaceRef, D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                 newlyRetained, newlyWireVisible) && !newlyRetained &&
+            newlyWireVisible && set->count == 1u && set->wireCount == 1u,
+        "duplicate sparse encounter promotes a retained identity to wire");
+  check(set->add(surfaceRef, D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                 newlyRetained, newlyWireVisible) && !newlyRetained &&
+            !newlyWireVisible && set->count == 1u && set->wireCount == 1u,
+        "duplicate wire encounter does not promote twice");
+
+  const auto generationCollision = PeWireObjectRef{
+      .identity = {.kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+                   .generation = 4u,
+                   .objectId = surfaceRef.identity.objectId},
+      .object = &surface};
+  check(!set->add(generationCollision, D9C_CHUNK_HANDLE_KIND_SURFACE, false,
+                  newlyRetained, newlyWireVisible) && set->count == 1u,
+        "generation collision fails closed without advancing the frontier");
+  const auto pointerCollision = PeWireObjectRef{
+      .identity = surfaceRef.identity,
+      .object = &alias};
+  check(!set->add(pointerCollision, D9C_CHUNK_HANDLE_KIND_SURFACE, false,
+                  newlyRetained, newlyWireVisible) && set->count == 1u,
+        "object pointer collision fails closed without advancing the frontier");
+  const auto crossKind = PeWireObjectRef{
+      .identity = {.kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                   .generation = surfaceRef.identity.generation,
+                   .objectId = surfaceRef.identity.objectId},
+      .object = &surface};
+  check(set->add(crossKind, D9C_CHUNK_HANDLE_KIND_TEXTURE, true,
+                 newlyRetained, newlyWireVisible) && newlyRetained &&
+            newlyWireVisible && set->count == 2u && set->wireCount == 2u,
+        "same object id across kinds remains a distinct wire identity");
+
+  const auto retry = PeWireObjectRef{
+      .identity = {.kind = D9C_CHUNK_HANDLE_KIND_BUFFER,
+                   .generation = 1u,
+                   .objectId = 0x812u},
+      .object = &surface};
+  check(set->add(retry, D9C_CHUNK_HANDLE_KIND_BUFFER, false,
+                 newlyRetained, newlyWireVisible) && newlyRetained &&
+            !newlyWireVisible && set->count == 3u,
+        "a valid admission retries after a rejected identity collision");
+  while (set->count < set->values.size()) {
+    const auto ref = PeWireObjectRef{
+        .identity = {.kind = D9C_CHUNK_HANDLE_KIND_QUERY,
+                     .generation = 1u,
+                     .objectId = static_cast<std::uint32_t>(0x900u + set->count)},
+        .object = &surface};
+    check(set->add(ref, D9C_CHUNK_HANDLE_KIND_QUERY, true, newlyRetained,
+                   newlyWireVisible) && newlyRetained && newlyWireVisible,
+          "unique identities fill the bounded admission frontier");
+  }
+  const auto countAtCapacity = set->count;
+  const auto wireCountAtCapacity = set->wireCount;
+  check(set->add(surfaceRef, D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                 newlyRetained, newlyWireVisible) && !newlyRetained &&
+            !newlyWireVisible && set->count == countAtCapacity &&
+            set->wireCount == wireCountAtCapacity,
+        "existing identities remain admissible at full capacity");
+  const auto overflow = PeWireObjectRef{
+      .identity = {.kind = D9C_CHUNK_HANDLE_KIND_QUERY,
+                   .generation = 1u,
+                   .objectId = 0xfffu},
+      .object = &surface};
+  check(!set->add(overflow, D9C_CHUNK_HANDLE_KIND_QUERY, true,
+                  newlyRetained, newlyWireVisible) &&
+            set->count == countAtCapacity &&
+            set->wireCount == countAtCapacity - 1u,
+        "identity capacity failure leaves the active frontier unchanged");
+  set->~IdentitySet();
 }
 
 void preparedWireWitnessTracksFirstWirePromotion() {
@@ -2073,6 +2202,7 @@ int main() {
     preparedWireWitnessPreservesOrderAndQualifiedDedup();
     knownUniqueWireWitnessAppendIsBounded();
     planningReusesStaleWireWitnessStorage();
+    identitySetUsesAnActiveFrontier();
     preparedWireWitnessTracksFirstWirePromotion();
     admissionArithmeticRejectsOverflow();
     pendingDeltaViewRejectsStaleTicket();

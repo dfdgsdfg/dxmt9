@@ -324,11 +324,21 @@ struct PeSemanticIdentitySet {
   // rather than a second set: one walk then answers the retention question and
   // the final-wire handle count together, so admission and emission cannot
   // disagree about which identities a record carries.
-  std::array<D9CWireObjectIdentity, 80u> values{};
-  std::array<const void*, 80u> objects{};
-  std::array<bool, 80u> wireVisible{};
-  std::size_t count = 0u;
-  std::size_t wireCount = 0u;
+  // The arrays deliberately have no member initializers.  Admission only
+  // inspects the active [0, count) frontier, and the append below writes every
+  // field of a new entry before publishing count; value-initializing the
+  // inactive arrays would otherwise clear 1,680 bytes per prepare on x86.
+  std::array<D9CWireObjectIdentity, 80u> values;
+  std::array<const void*, 80u> objects;
+  std::array<bool, 80u> wireVisible;
+  std::size_t count;
+  std::size_t wireCount;
+
+  PeSemanticIdentitySet() noexcept : count(0u), wireCount(0u) {}
+  PeSemanticIdentitySet(const PeSemanticIdentitySet&) = delete;
+  PeSemanticIdentitySet& operator=(const PeSemanticIdentitySet&) = delete;
+  PeSemanticIdentitySet(PeSemanticIdentitySet&&) = delete;
+  PeSemanticIdentitySet& operator=(PeSemanticIdentitySet&&) = delete;
 
   // `newlyRetained` reports a newly seen identity that owns an object, while
   // `newlyWireVisible` reports the first encounter that makes it part of the
@@ -359,6 +369,8 @@ struct PeSemanticIdentitySet {
       }
     }
     if (count == values.size()) return false;
+    // Publish count only after all active identity/object/visibility fields
+    // are fully written; every scan above is confined to the active frontier.
     values[count] = ref.identity;
     objects[count] = ref.object;
     wireVisible[count] = wire;
