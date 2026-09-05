@@ -255,6 +255,20 @@ struct PeDiagnosticsState {
     stats.phaseOffset = 2;
     return stats;
   }();
+  // Independently sampled populations: distinct residues reduce collisions,
+  // but differing event counts mean nested samples can still overlap. Their
+  // inclusive times are attribution, not additive production cost.
+  PeDecimatedScopeStats peDrawPacketDestinationDecimatedStats_ = [] {
+    PeDecimatedScopeStats stats{};
+    stats.phaseOffset = 3;
+    return stats;
+  }();
+  PeDecimatedScopeStats peDrawPacketContextDecimatedStats_ = [] {
+    PeDecimatedScopeStats stats{};
+    stats.phaseOffset = 4;
+    return stats;
+  }();
+  PeDecimatedSampleNesting peCompactSampleNesting_{};
   std::uint64_t peStatsDecimationPresents_ = 0;
   std::uint64_t peCopyMaterializationReportPresents_ = 0;
   dxmt9::d3d9::pe::PeThreadSampler *peThreadSampler_ = nullptr;

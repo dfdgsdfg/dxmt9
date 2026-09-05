@@ -31,6 +31,27 @@ void check(bool condition, std::string_view message) {
   }
 }
 
+void testCompactSampleNesting() {
+  PeDecimatedSampleNesting nesting{};
+  {
+    PeDecimatedSampleNesting::Scope outer(nesting, true);
+    check(nesting.activeSamples == 1u && nesting.nestedSamples == 0u,
+          "top-level sample is not a collision");
+    {
+      PeDecimatedSampleNesting::Scope unsampled(nesting, false);
+      check(nesting.activeSamples == 1u && nesting.nestedSamples == 0u,
+            "unsampled child does not fabricate a collision");
+      PeDecimatedSampleNesting::Scope inner(nesting, true);
+      check(nesting.activeSamples == 2u && nesting.nestedSamples == 1u,
+            "independent sampled child records one collision");
+    }
+    check(nesting.activeSamples == 1u,
+          "nested exit restores the outer sampling frontier");
+  }
+  check(nesting.activeSamples == 0u && nesting.nestedSamples == 1u,
+        "scope exit closes active sampling but retains collision evidence");
+}
+
 std::string readTextFile(const std::filesystem::path &path) {
   std::ifstream file(path);
   check(static_cast<bool>(file), "source-contract input exists");
@@ -381,6 +402,9 @@ void testSourceContracts(const std::filesystem::path &root) {
            "peEntryStateDecimatedStats_", "peDrawPhaseSwvpDecimatedStats_",
            "peDrawPhaseRecordDecimatedStats_",
            "peDrawPacketDecimatedStats_", "peStatsDecimationPresents_",
+           "peDrawPacketDestinationDecimatedStats_",
+           "peDrawPacketContextDecimatedStats_",
+           "peCompactSampleNesting_",
            "peThreadSampler_", "peThreadSamplerPresents_",
            "peThreadSamplerPresentThreadChecked_",
            "peRecorderStatsLastLoggedCommitCount_",
@@ -1043,8 +1067,10 @@ void testSourceContracts(const std::filesystem::path &root) {
         "canonical materialization source contract has a bounded body");
   const auto materialize = semanticOwner.substr(
       materializeStart, materializeEnd - materializeStart);
-  checkContains(materialize, "prepared.wireHandles",
+  checkContains(materialize, "prepared.identityWitness",
                 "canonical materialization consumes the prepared wire witness");
+  checkNotContains(materialize, "prepared.wireHandles",
+                   "prepared materialization has no duplicate identity table");
   checkNotContains(materialize, "visitRecordHandles(",
                    "canonical materialization has no second record identity walk");
   checkContains(semanticOwner, "wireWitness->resetFrontier();",
@@ -1053,6 +1079,26 @@ void testSourceContracts(const std::filesystem::path &root) {
                    "wire witness planning does not clear inactive identity storage");
   checkContains(semanticOwnerObserver, "priorActiveParentSampled_",
                 "phase scope restores the prior parent sampling state");
+  checkContains(semanticOwnerObserver, "settlementMetric_->totalNs += elapsed",
+                "settlement families reuse the aggregate elapsed sample");
+  checkContains(deviceOwner, "buildSparseStatePlanForRecord",
+                "the compact production state route is present");
+  const auto compactStart = deviceOwner.find(
+      "bool D3D9DeviceImpl::buildSparseStatePlanForRecord(");
+  const auto compactEnd = deviceOwner.find(
+      "\nbool D3D9DeviceImpl::checkedByteCount(", compactStart);
+  check(compactStart != std::string::npos && compactEnd != std::string::npos,
+        "compact preparation has a bounded source contract");
+  const auto compact = deviceOwner.substr(compactStart, compactEnd - compactStart);
+  checkContains(compact, "config.statsDecimationN != 0u",
+                "compact preparation checks the cached decimation gate");
+  checkContains(compact, "diagnostics_->peDrawPacketDecimatedStats_",
+                "compact preparation feeds the existing state-build metric");
+  checkNotContains(compact, "DxmtPeDecimatedScopeGuard",
+                   "compact production caller constructs no diagnostic guard");
+  checkBefore(compact, "config.statsDecimationN != 0u",
+              "dxmt9PeObserveCompactScope(",
+              "compact observer is outlined behind the cached gate");
   checkNotContains(semanticOwnerObserver, "endAppend",
                    "phase observer has no manual stale-state reset API");
   checkNotContains(semanticOwner, "std::optional<PeSemanticOwnerPhaseObserver::Scope>",
@@ -1223,6 +1269,7 @@ void operator delete(void *storage, std::size_t) noexcept {
 int main(int argc, char **argv) {
   try {
     check(argc == 2, "project source root argument is present");
+    testCompactSampleNesting();
     testOptionalOwnerAllocationAndConfig();
     testNullableDiagnosticDispatchAndClock();
     testCopyMaterializationReportSnapshotValue();

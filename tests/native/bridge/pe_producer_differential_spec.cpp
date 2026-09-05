@@ -1448,6 +1448,182 @@ void productionOwnerPlanRollbackRebaseAndStaleAuthority() {
         "stale recorder capability cannot reuse an armed plan");
 }
 
+void compactDestinationResolversAreExhaustiveAndLazy() {
+  static D9CBuffer resolverBuffers[3];
+  pe::PeBindingView bindings{};
+  for (std::uint32_t slot = 0u; slot < 3u; ++slot) {
+    bindings.streams[slot].buffer =
+        publishedRef(&resolverBuffers[slot], D9C_CHUNK_HANDLE_KIND_BUFFER);
+  }
+
+  // Every small selected/bound/retained mask is covered by the same pure
+  // production resolver used by the compact destination path. Selected slots
+  // never invoke retention, and unbound slots never invoke it either.
+  for (std::uint32_t selected = 0u; selected < 8u; ++selected) {
+    for (std::uint32_t bound = 0u; bound < 8u; ++bound) {
+      for (std::uint32_t retainedMask = 0u; retainedMask < 8u;
+           ++retainedMask) {
+        for (std::uint32_t slot = 0u; slot < 3u; ++slot) {
+          if ((bound & (1u << slot)) == 0u) {
+            bindings.streams[slot].buffer = {};
+          } else {
+            bindings.streams[slot].buffer = publishedRef(
+                &resolverBuffers[slot], D9C_CHUNK_HANDLE_KIND_BUFFER);
+          }
+        }
+        std::size_t calls = 0u;
+        const auto retained =
+            [retainedMask, &calls](std::uint32_t slot,
+                                   const pe::BufferRef&) noexcept {
+              ++calls;
+              return (retainedMask & (1u << slot)) != 0u;
+            };
+        const std::uint32_t actual = pe::resolveSparseStreamMask(
+            selected, bindings, retained);
+        const std::uint32_t expected =
+            selected | (bound & ~selected & ~retainedMask);
+        check(actual == expected,
+              "compact stream resolver preserves selected/bound/retained masks");
+        check(calls == static_cast<std::size_t>(std::popcount(bound & ~selected)),
+              "compact stream resolver queries only bound unselected slots");
+      }
+    }
+  }
+
+  const auto index = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  for (bool indexed : {false, true}) {
+    for (bool selected : {false, true}) {
+      for (bool known : {false, true}) {
+        for (bool changed : {false, true}) {
+          for (bool bound : {false, true}) {
+            for (bool retainedValue : {false, true}) {
+              std::size_t calls = 0u;
+              const auto retained =
+                  [retainedValue, &calls](const pe::BufferRef&) noexcept {
+                    ++calls;
+                    return retainedValue;
+                  };
+              const bool actual = pe::resolveSparseIndexBuffer(
+                  indexed, selected, known, changed ? 2u : 1u, 1u,
+                  bound ? index : pe::BufferRef{}, retained);
+              const bool forced = selected || !known || changed;
+              const bool expected = indexed &&
+                  (forced || (bound && !retainedValue));
+              check(actual == expected,
+                    "compact index resolver preserves all emission reasons");
+              const std::size_t expectedCalls =
+                  indexed && !forced && bound ? 1u : 0u;
+              check(calls == expectedCalls,
+                    "compact index resolver queries retention only when needed");
+            }
+          }
+        }
+      }
+    }
+  }
+
+  // The typed plan overload re-resolves on every destination, so an A/B/A
+  // retention change cannot reuse a stale destination answer.
+  Fixture f = baseDraw("typed compact destination A/B/A",
+                       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  f.shadow.writer().pendingStreamMask() = 0u;
+  f.bindings.streams[0].buffer = {};
+  f.bindings.streams[1].buffer =
+      publishedRef(&resolverBuffers[0], D9C_CHUNK_HANDLE_KIND_BUFFER);
+  f.bindings.indexBuffer = index;
+  f.shadow.writer().pendingIb() = false;
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken ownerThread;
+  std::uint64_t epoch = 11u;
+  pe::RecorderLockGuard guard(mutex, false);
+  const auto access = guard.capability(ownerThread, epoch);
+  pe::SparseStatePlan plan;
+  check(pe::buildSparseStatePlan(access, f.shadow, f.constants, f.bindings,
+                                 {}, f.params, false, false, plan),
+        "typed compact destination plan prepares");
+  pe::PeChunkContext chunk{};
+  chunk.indexBufferKnown = true;
+  chunk.submittedIndexBufferWire =
+      d9cWireHandleValue(toWireHandle(f.bindings.indexBuffer.object));
+  bool retainAll = false;
+  std::size_t calls = 0u;
+  const auto retained =
+      [&retainAll, &calls](std::uint32_t,
+                           const pe::BufferRef&) noexcept {
+        ++calls;
+        return retainAll;
+      };
+  check(pe::finalizeSparseStatePlanChunkContext(access, chunk, plan, retained) &&
+            plan.streamMask == (1u << 1u) && plan.indexBuffer,
+        "typed compact resolver resolves destination A");
+  retainAll = true;
+  check(pe::finalizeSparseStatePlanChunkContext(access, chunk, plan, retained) &&
+            plan.streamMask == 0u && !plan.indexBuffer,
+        "typed compact resolver resolves destination B");
+  retainAll = false;
+  check(pe::finalizeSparseStatePlanChunkContext(access, chunk, plan, retained) &&
+            plan.streamMask == (1u << 1u) && plan.indexBuffer && calls == 6u,
+        "typed compact resolver re-resolves destination A after B");
+}
+
+void compactObserverOnOffBytesAndPendingDifferential() {
+  Fixture f;
+  f.name = "compact observer on/off differential";
+  const auto render = renderStateSlotKey(7u);
+  const auto stage = textureStageIndexKey(0u);
+  const auto type = textureStageStateTypeKey(1u);
+  SamplerIndex sampler{};
+  SamplerStateType samplerType{};
+  check(samplerIndexKey(0u, sampler) && samplerStateTypeKey(1u, samplerType),
+        "compact observer fixture keys are valid");
+  f.shadow.writer().pendingRenderStatesTyped().set(render, 0x12u);
+  f.shadow.writer().pendingTssTyped().set(stage, type, 0x34u);
+  f.shadow.writer().pendingSamplerStatesTyped().set(sampler, samplerType,
+                                                    0x56u);
+  f.params.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
+
+  const auto unobserved = runOwnerPlanLane(f);
+
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken ownerThread;
+  std::uint64_t epoch = 13u;
+  pe::RecorderLockGuard guard(mutex, false);
+  const auto access = guard.capability(ownerThread, epoch);
+  pe::SparseStatePlan plan;
+  check(pe::buildSparseStatePlan(access, f.shadow, f.constants, f.bindings,
+                                 {}, f.params, false, false, plan),
+        "compact observer plan prepares");
+  pe::PeScalarSemanticTokenLedger tokens;
+  check(tokens.record(pe::ScalarSemanticCategory::RenderState, rawSlot(render)) &&
+            tokens.record(pe::ScalarSemanticCategory::TextureStageState,
+                          rawSlot(stage), rawSlot(type)) &&
+            tokens.record(pe::ScalarSemanticCategory::SamplerState,
+                          rawSlot(sampler), rawSlot(samplerType)),
+        "compact observer fixture records all scalar tokens");
+  pe::PeSemanticBatchOwner<> owner;
+  const auto accepted = pe::settleRecorderAppend({
+      .phase = pe::AppendSettlement::Prepared,
+      .appendSucceeded = true,
+  });
+  check(owner.tryAppendSparseStatePlan(
+            access, plan, pe::PeSemanticProducerKind::ApplyState,
+            f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+            [&]() noexcept {
+              return pe::acceptSparseStatePlan(
+                  f.shadow, f.constants, plan, accepted, &tokens, 1u,
+                  plan.pendingTicket);
+            }),
+        "compact observer owner accepts the same plan");
+  pe::PeSemanticExactFixedEmission exact;
+  check(owner.emitExactFixed(exact) && exact.valid() &&
+            std::vector<std::byte>(exact.wire.begin(), exact.wire.end()) ==
+                unobserved.bytes && tokens.empty() &&
+            f.shadow.pendingRenderStatesTyped().empty() &&
+            f.shadow.pendingTssTyped().empty() &&
+            f.shadow.pendingSamplerStatesTyped().empty(),
+        "observer-on bytes and PendingDelta match observer-off settlement");
+}
+
 // --- fixed-seed randomized corpus -----------------------------------------
 
 // --- UP draw records -------------------------------------------------------
@@ -1716,6 +1892,8 @@ int main() {
     sparseSettlementNormalAndOversizedAreExact();
     sparsePlanFailureRetryAndSourceWitness();
     productionOwnerPlanRollbackRebaseAndStaleAuthority();
+    compactDestinationResolversAreExhaustiveAndLazy();
+    compactObserverOnOffBytesAndPendingDifferential();
     upDrawCarriesVertexPayload();
     upDrawWithDirtyState();
     upIndexedDrawCarriesBothPayloads();

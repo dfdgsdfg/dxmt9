@@ -3092,6 +3092,10 @@ void D3D9DeviceImpl::logPeStatsDecimation() {
         "const_setter_events=%llu const_setter_sampled=%llu const_setter_sampled_ms=%.3f "
         "const_flush_events=%llu const_flush_sampled=%llu const_flush_sampled_ms=%.3f "
         "draw_packet_events=%llu draw_packet_sampled=%llu draw_packet_sampled_ms=%.3f "
+        "draw_packet_destination_events=%llu draw_packet_destination_sampled=%llu "
+        "draw_packet_destination_sampled_ms=%.3f "
+        "draw_packet_context_events=%llu draw_packet_context_sampled=%llu "
+        "draw_packet_context_sampled_ms=%.3f compact_nested_samples=%llu "
         "identity_getter_calls=%llu null_scope_sampled=%llu null_scope_ms=%.3f "
         "entry_const_events=%llu entry_const_sampled=%llu entry_const_ms=%.3f "
         "entry_draw_events=%llu entry_draw_sampled=%llu entry_draw_ms=%.3f "
@@ -3113,6 +3117,22 @@ void D3D9DeviceImpl::logPeStatsDecimation() {
         static_cast<unsigned long long>(diagnostics_->peDrawPacketDecimatedStats_.events),
         static_cast<unsigned long long>(diagnostics_->peDrawPacketDecimatedStats_.sampled),
         static_cast<double>(diagnostics_->peDrawPacketDecimatedStats_.sampledNs) / 1.0e6,
+        static_cast<unsigned long long>(
+            diagnostics_->peDrawPacketDestinationDecimatedStats_.events),
+        static_cast<unsigned long long>(
+            diagnostics_->peDrawPacketDestinationDecimatedStats_.sampled),
+        static_cast<double>(
+            diagnostics_->peDrawPacketDestinationDecimatedStats_.sampledNs) /
+            1.0e6,
+        static_cast<unsigned long long>(
+            diagnostics_->peDrawPacketContextDecimatedStats_.events),
+        static_cast<unsigned long long>(
+            diagnostics_->peDrawPacketContextDecimatedStats_.sampled),
+        static_cast<double>(
+            diagnostics_->peDrawPacketContextDecimatedStats_.sampledNs) /
+            1.0e6,
+        static_cast<unsigned long long>(
+            diagnostics_->peCompactSampleNesting_.nestedSamples),
         static_cast<unsigned long long>(
             dxmt9::d3d9::pe::wireIdentityGetterCallCount()),
         static_cast<unsigned long long>(peDecimatedNullScopeStats().sampled),
@@ -3177,6 +3197,19 @@ void D3D9DeviceImpl::logPeSemanticOwnerPhaseSplit() {
             static_cast<unsigned long long>(phase.samples),
             static_cast<double>(phase.totalNs) / 1.0e6,
             static_cast<double>(phase.maxNs) / 1.0e6);
+    }
+    for (std::size_t i = 0; i < stats.settlements.size(); ++i) {
+        const auto& settlement = stats.settlements[i];
+        dxmt9DeviceInfoLog(
+            "[dxmt9-pe-semantic-owner-phase] schema=1 settlement_family=%s "
+            "events=%llu sampled=%llu sampled_ms=%.3f max_ms=%.3f",
+            dxmt9::d3d9::pe::peSemanticOwnerSettlementFamilyName(
+                static_cast<dxmt9::d3d9::pe::PeSemanticOwnerSettlementFamily>(
+                    i)),
+            static_cast<unsigned long long>(settlement.events),
+            static_cast<unsigned long long>(settlement.samples),
+            static_cast<double>(settlement.totalNs) / 1.0e6,
+            static_cast<double>(settlement.maxNs) / 1.0e6);
     }
 }
 

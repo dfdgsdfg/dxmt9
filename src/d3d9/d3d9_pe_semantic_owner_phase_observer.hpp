@@ -81,6 +81,41 @@ enum class PeSemanticOwnerOutcome : std::uint8_t {
   Count,
 };
 
+enum class PeSemanticOwnerSettlementFamily : std::uint8_t {
+  SparseDraw,
+  SparseIndexedDraw,
+  SparseApply,
+  Constant,
+  OtherGeneric,
+  Count,
+};
+
+[[nodiscard]] constexpr const char* peSemanticOwnerSettlementFamilyName(
+    PeSemanticOwnerSettlementFamily family) noexcept {
+  switch (family) {
+  case PeSemanticOwnerSettlementFamily::SparseDraw:
+    return "sparse_draw";
+  case PeSemanticOwnerSettlementFamily::SparseIndexedDraw:
+    return "sparse_indexed_draw";
+  case PeSemanticOwnerSettlementFamily::SparseApply:
+    return "sparse_apply";
+  case PeSemanticOwnerSettlementFamily::Constant:
+    return "constant";
+  case PeSemanticOwnerSettlementFamily::OtherGeneric:
+    return "other_generic";
+  case PeSemanticOwnerSettlementFamily::Count:
+    break;
+  }
+  return "unknown";
+}
+
+struct PeSemanticOwnerSettlementMetric {
+  std::uint64_t events = 0u;
+  std::uint64_t samples = 0u;
+  std::uint64_t totalNs = 0u;
+  std::uint64_t maxNs = 0u;
+};
+
 struct PeSemanticOwnerPhaseStats {
   static constexpr std::size_t kPhaseCount =
       static_cast<std::size_t>(PeSemanticOwnerPhase::Count);
@@ -96,6 +131,10 @@ struct PeSemanticOwnerPhaseStats {
   std::uint64_t nullCalibrationNs = 0u;
   std::array<std::uint64_t, kOutcomeCount> outcomes{};
   std::array<PeSemanticOwnerPhaseMetric, kPhaseCount> phases{};
+  static constexpr std::size_t kSettlementFamilyCount =
+      static_cast<std::size_t>(PeSemanticOwnerSettlementFamily::Count);
+  std::array<PeSemanticOwnerSettlementMetric, kSettlementFamilyCount>
+      settlements{};
 };
 
 class PeSemanticOwnerPhaseObserver final {
@@ -114,9 +153,11 @@ class PeSemanticOwnerPhaseObserver final {
     Scope() noexcept = default;
     Scope(PeSemanticOwnerPhaseObserver* observer,
           PeSemanticOwnerPhase phase, bool parent = false,
-          bool appendParent = true) noexcept
+          bool appendParent = true,
+          PeSemanticOwnerSettlementFamily settlementFamily =
+              PeSemanticOwnerSettlementFamily::Count) noexcept
         : observer_(observer), phase_(phase), parent_(parent),
-          appendParent_(appendParent) {
+          appendParent_(appendParent), settlementFamily_(settlementFamily) {
       if (!observer_) return;
       if (parent_) {
         priorActiveParentSampled_ = observer_->activeParentSampled_;
@@ -124,6 +165,11 @@ class PeSemanticOwnerPhaseObserver final {
       }
       auto& metric = observer_->stats_.phases[static_cast<std::size_t>(phase_)];
       ++metric.events;
+      const auto familyIndex = static_cast<std::size_t>(settlementFamily_);
+      if (familyIndex < PeSemanticOwnerPhaseStats::kSettlementFamilyCount) {
+        settlementMetric_ = &observer_->stats_.settlements[familyIndex];
+        ++settlementMetric_->events;
+      }
       if (parent_) {
         if (appendParent) {
           ++observer_->stats_.appendEvents;
@@ -161,11 +207,13 @@ class PeSemanticOwnerPhaseObserver final {
     Scope(Scope&& other) noexcept
         : observer_(other.observer_), phase_(other.phase_),
           parent_(other.parent_), appendParent_(other.appendParent_),
+          settlementFamily_(other.settlementFamily_),
           priorActiveParentSampled_(other.priorActiveParentSampled_),
           sampled_(other.sampled_),
-          started_(other.started_) {
+          started_(other.started_), settlementMetric_(other.settlementMetric_) {
       other.observer_ = nullptr;
       other.parent_ = false;
+      other.settlementMetric_ = nullptr;
     }
 
     void stop() noexcept {
@@ -179,6 +227,12 @@ class PeSemanticOwnerPhaseObserver final {
         ++metric.samples;
         metric.totalNs += elapsed;
         if (elapsed > metric.maxNs) metric.maxNs = elapsed;
+        if (settlementMetric_) {
+          ++settlementMetric_->samples;
+          settlementMetric_->totalNs += elapsed;
+          if (elapsed > settlementMetric_->maxNs)
+            settlementMetric_->maxNs = elapsed;
+        }
       }
       if (parent_) {
         observer_->activeParentSampled_ = priorActiveParentSampled_;
@@ -197,9 +251,12 @@ class PeSemanticOwnerPhaseObserver final {
     PeSemanticOwnerPhase phase_ = PeSemanticOwnerPhase::TryAppendOwnedRecord;
     bool parent_ = false;
     bool appendParent_ = true;
+    PeSemanticOwnerSettlementFamily settlementFamily_ =
+        PeSemanticOwnerSettlementFamily::Count;
     bool priorActiveParentSampled_ = false;
     bool sampled_ = false;
     Clock::time_point started_{};
+    PeSemanticOwnerSettlementMetric* settlementMetric_ = nullptr;
   };
 
   [[nodiscard]] Scope beginAppend() noexcept {
@@ -212,6 +269,12 @@ class PeSemanticOwnerPhaseObserver final {
 
   [[nodiscard]] Scope child(PeSemanticOwnerPhase phase) noexcept {
     return Scope(this, phase);
+  }
+
+  [[nodiscard]] Scope beginSettlement(
+      PeSemanticOwnerSettlementFamily family) noexcept {
+    return Scope(this, PeSemanticOwnerPhase::PendingDeltaSettlement, false,
+                 true, family);
   }
 
   void recordOutcome(PeSemanticOwnerOutcome outcome) noexcept {

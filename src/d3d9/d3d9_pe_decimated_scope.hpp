@@ -118,3 +118,16 @@ inline void dxmt9PeArmDecimatedScope(DxmtPeDecimatedScopeGuard& guard,
   }
   guard.t0 = std::chrono::steady_clock::now();
 }
+
+// Enter only after the device's cached diagnostic gate. Keep the scope object,
+// null calibration, and nesting bookkeeping out of the disabled caller frame.
+// The callable is the same production body on both paths, not a second route.
+template <typename Body>
+[[gnu::noinline]] decltype(auto) dxmt9PeObserveCompactScope(
+    PeDecimatedScopeStats& stats, PeDecimatedSampleNesting& nesting,
+    Body&& body) noexcept(noexcept(body())) {
+  DxmtPeDecimatedScopeGuard scope;
+  dxmt9PeArmDecimatedScope(scope, &stats);
+  PeDecimatedSampleNesting::Scope nested(nesting, scope.stats != nullptr);
+  return body();
+}

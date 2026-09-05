@@ -10,6 +10,29 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## End-to-end immutable source composition
 
+### PE compact destination and identity refinement (2026-09-05)
+
+R-CORE-REC-7.17–7.19 add calibrated compact/destination/family attribution,
+gate the no-effect scalar walks outside observer-off traversal, and consolidate
+record-local identity/pin/wire authority. The production typed lazy destination
+resolver is bound to 512 three-stream and 64 IB boolean combinations with exact
+query counts, A/B/A re-resolution, and observer bytes/PendingDelta differentials.
+Owner fixtures cover 80/64 active frontiers, retained-only wire promotion,
+collisions, canonical emission and rollback/retry. Existing recorder/ticket
+negatives remain. Review follow-up gates new scope construction outside the
+disabled path, pins sampled/unsampled nesting restoration, and checks all five
+settlement family classifications and exact interval conservation. Pure
+retention-spy tests and actual qualified-owner lookup tests remain separate;
+their full Windows device-envelope composition is not natively pinned.
+All four builds, native 18/18, x86_64 4/4 and existing TLC
+(144.02s) pass. No temporal model changed: native value/ownership refinement
+and release codegen are separate from existing acceptance/settlement proofs.
+GT2 OFF/ON direction runs pass with zero errors, but final ON does not establish
+diagnostic performance neutrality. Low-perturbation attribution, repeat FPS,
+full Windows envelope, broader fault and pixel gates remain open. Mutable source-plan
+count/schema checks are preserved, not reclassified as reusable proof. See
+[H245](../../docs/perfomance/present-pacing/present-pacing-pe-compact-reuse.245.md).
+
 ### PE prepared representation refinement (2026-09-05)
 
 R-CORE-REC-7.14–7.16 keep the existing admission/settlement protocol while

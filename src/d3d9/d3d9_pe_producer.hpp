@@ -26,6 +26,7 @@
 #include "d3d9_pe_batch.hpp"
 #include "d3d9_pe_semantic_tokens.hpp"
 #include "d3d9_pe_state_shadow.hpp"
+#include "d3d9_pe_wire_handle.hpp"
 #include "dxmt9/device_c.h"
 #include "util/config/config.hpp"
 
@@ -90,6 +91,46 @@ bool finalizeSparseStatePlanChunkContext(const PeChunkContext& chunk,
 bool finalizeSparseStatePlanChunkContext(
     const RecorderLockCapability& access, const PeChunkContext& chunk,
     SparseStatePlan& plan) noexcept;
+
+// Production compact path: bind the current semantic owner directly through
+// a typed call-local callback. Unlike PeChunkContext's compatibility mask, the
+// callback is never stored and is reached only for bound, unselected streams
+// or an indexed buffer whose known/changed/selected predicates did not already
+// force emission. CapacityPre therefore re-resolves fresh each time.
+template <typename Retention>
+  requires std::is_nothrow_invocable_r_v<
+      bool, Retention&, std::uint32_t, const BufferRef&>
+bool finalizeSparseStatePlanChunkContext(
+    const RecorderLockCapability& access, const PeChunkContext& chunk,
+    SparseStatePlan& plan, Retention&& retained) noexcept {
+  if (!plan.validFor(access) || plan.draw.recordType == 0u) {
+    return false;
+  }
+  bool finalized = false;
+  const bool invoked = plan.withBindingSource(
+      [&](const PeBindingView& bindings) noexcept {
+        plan.streamMask = plan.fullSnapshot
+            ? plan.selectedStreamMask
+            : resolveSparseStreamMask(plan.selectedStreamMask, bindings,
+                                      retained);
+        if (plan.draw.recordType ==
+            D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
+          const std::uint64_t wire = d9cWireHandleValue(
+              toWireHandle(bindings.indexBuffer.object));
+          plan.indexBuffer = resolveSparseIndexBuffer(
+              true, plan.selectedIndexBuffer, chunk.indexBufferKnown,
+              chunk.submittedIndexBufferWire, wire, bindings.indexBuffer,
+              [&](const BufferRef& buffer) noexcept {
+                return retained(0u, buffer);
+              });
+        } else {
+          plan.indexBuffer = false;
+        }
+        plan.chunkContextFinalized = true;
+        finalized = true;
+      });
+  return invoked && finalized && plan.validFor(access);
+}
 
 // Pass 2: materializes every selected row directly into the builder's final
 // payload and retains binding handles through the active-record checkpoint.

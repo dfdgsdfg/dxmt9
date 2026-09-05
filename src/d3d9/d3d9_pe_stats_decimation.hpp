@@ -26,6 +26,30 @@ struct PeDecimatedScopeStats {
   std::uint32_t phaseOffset = 0;
 };
 
+// Cold attribution-only nesting witness. A collision counts an independently
+// sampled child inside another sampled scope; it is not a time correction.
+struct PeDecimatedSampleNesting {
+  std::uint32_t activeSamples = 0;
+  std::uint64_t nestedSamples = 0;
+
+  struct Scope {
+    PeDecimatedSampleNesting& owner;
+    bool sampled;
+    Scope(PeDecimatedSampleNesting& owner, bool sampled) noexcept
+        : owner(owner), sampled(sampled) {
+      if (sampled) {
+        if (owner.activeSamples != 0u) ++owner.nestedSamples;
+        ++owner.activeSamples;
+      }
+    }
+    Scope(const Scope&) = delete;
+    Scope& operator=(const Scope&) = delete;
+    ~Scope() {
+      if (sampled) --owner.activeSamples;
+    }
+  };
+};
+
 // HAZARD -- phase-locked nesting. Sampling is deterministic (`events % n ==
 // phaseOffset`), not random, so two independently-armed scopes that increment
 // once per call on the *same* calls fire on exactly the same call ordinals at
@@ -41,7 +65,10 @@ struct PeDecimatedScopeStats {
 // So: an independently-armed scope nested inside another must not share its
 // phase. Give the inner one a distinct `phaseOffset` (any value in [1, n) --
 // 1 suffices, and works for every N >= 2). Assigned so far: const_setter 1,
-// draw_packet 2; everything else is phase 0. Sub-scopes that are deliberately
+// draw_packet 2, destination 3, context 4; everything else is phase 0. Different
+// event populations can still collide; compact scopes report their sampled
+// nesting count rather than treating distinct phases as non-overlap proof.
+// Sub-scopes that are deliberately
 // parent-gated (DxmtPeDecimatedPhaseTimer) are a different thing and are fine;
 // they cost their parent one clock pair each, which is a known, subtractable
 // constant rather than a hidden whole-instrument echo.

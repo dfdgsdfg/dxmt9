@@ -30,6 +30,26 @@ Release codegen and GT2 direction evidence are tracked in
 | Heterogeneous semantic projection (`R-CORE-REC-7.4`–`7.5`) | The existing default-off `DXMT9_PE_SCALAR_SEMANTIC_OBSERVER` gate allocates a separate all-family cold ledger; the mandatory production owner is independent of diagnostics and adds one heap-owner pointer to `D3D9DeviceImpl`. One producer table covers 21 exact record families. The common append envelope issues an observer source ordinal before CapacityPre when observation is enabled and, after semantic-owner admission, records exact category/record-key/payload value and every full wire identity. Effect-unknown bridge failure retains accepted tokens until discard; capture materialized/rejected/skipped settles only after acceptance. The table generates `PeRecorderSemanticProjectionTable.tla`; the owning model plus ten counterexample configs and exhaustive native all-row/field/differential/lifecycle tests execute shared predicates. | Typed chunk reserve/unique-retain/capture-throw injection, bounded Wine all-family faults, and wild observer evidence remain open. An observer-enabled single record above the 16 MiB proof arena or above 64 qualified identities intentionally fails stop; the cold oracle does not prove PE COM behavior, bridge ABI effects, allocator failure, or pixels. |
 | Calibrated semantic-owner phase observer (`DXMT9_PE_SEMANTIC_OWNER_PHASE_SPLIT`) | ✅ implemented as a nullable `PeDiagnosticsState` observer, qualified by nonzero `DXMT9_PE_STATS_DECIMATION`; one deterministic parent sample and explicit null clock-pair calibration cover append admission/rollback/outcomes, ExactFixed plan/role-copy, external segmented copy/role-copy, true segmented alias view, and settle/clear. Native coverage pins nested/stale-state restoration, child gating, malformed-vs-header outcomes, and owner-vs-canonical all-family final-wire bytes. A 2026-09-04 GT2 `N=127` direction check completed with zero rejects/errors and attributed about `1.045 ms/P` to prepare, `1.255 ms/P` to sparse/variable copy, `1.098 ms/P` to canonical materialization, and only `0.099 ms/P` to the inclusive ExactFixed parent after null-pair correction. The corrected prepared wire witness now records first wire-visible promotion order in the admission identity pass, uses a proof-qualified bounds-only append, resets only its active frontier, and removes the later handle-order traversal. Native canonical-byte/refcount tests include direct non-wire surface retention followed by duplicate texture and promoted surface wire order. A clean follow-up attributed `1.262`, `1.094`, `0.913`, and `0.091 ms/P` to prepare, sparse/variable copy, canonical materialization, and ExactFixed; the five admission child phases changed from `4.090` to `3.987 ms/P`. | ⚠️ diagnostic evidence only: the initial OFF/ON healthy populations were 1,594/1,587 and the witness comparison populations were 1,587/1,624, so repeat matched runs remain required for a promotion claim. One rebuild-contaminated run is excluded. The evidence demotes ExactFixed-only removal and leaves sparse typed-copy/canonical construction as the larger PE target; no default transport or rendering semantic change is authorized by this observer. |
 
+## Compact attribution and dependency-qualified reuse (R-CORE-REC-7.17–7.19)
+
+Implemented with bounded evidence: compact preparation/destination scopes,
+family-qualified settlement, observer-off scalar-walk removal, typed lazy
+destination resolution, and one admission-local identity/pin/wire-order table.
+Independent review's disabled-scope finding is corrected with gated outlined
+observers and inlined production bodies. Cold sampled-nesting counts expose
+overlap; native family classification/interval conservation pins cover all five
+rows, including a separate generic rollback fixture.
+All four builds, native 18/18, x86_64 4/4 and existing TLC checks pass. PE32
+admission frames shrink about 0.75KiB but still probe. GT2 OFF/ON candidate
+direction runs pass with zero errors and about 4 CB/P, 15.77 passes/P. Source
+count/mask/schema recomputation remains intentional while SparseStatePlan is
+publicly mutable; private producer-issued selection is required before that
+validation can be elided. Final observed GT2 is slower than baseline ON;
+low-perturbation attribution, repeat FPS promotion and broader Wine fault/pixel
+coverage remain open. See
+[H245](../../../docs/perfomance/present-pacing/present-pacing-pe-compact-reuse.245.md);
+H244 is the prior checkpoint, not proof of these changes.
+
 ## Direct canonical value admission (R-CORE-REC-7.11)
 
 The owner now writes ten scalar sparse categories, standalone/embedded

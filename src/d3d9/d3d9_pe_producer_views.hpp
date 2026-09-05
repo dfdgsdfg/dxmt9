@@ -95,6 +95,51 @@ struct PeChunkContext {
   bool indexBufferRetained = false;
 };
 
+// Pure compact destination resolvers. They take a typed lazy retention
+// callback so production can bind the current semantic owner while native
+// tests can use a counting spy. The callback is reached only after the
+// source-selected mask, binding presence, and all non-retention index reasons
+// have been resolved.
+template <typename Retention>
+  requires std::is_nothrow_invocable_r_v<
+      bool, Retention&, std::uint32_t, const BufferRef&>
+std::uint32_t resolveSparseStreamMask(
+    std::uint32_t selectedStreamMask, const PeBindingView& bindings,
+    Retention&& retained) noexcept {
+  std::uint32_t result = selectedStreamMask;
+  std::uint32_t candidates =
+      (D9C_DRAW_PACKET_MAX_STREAMS >= 32u
+           ? 0xffffffffu
+           : (1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u) &
+      ~selectedStreamMask;
+  while (candidates != 0u) {
+    const auto slot = static_cast<std::uint32_t>(
+        std::countr_zero(candidates));
+    candidates &= candidates - 1u;
+    const auto& stream = bindings.streams[slot];
+    if (stream.buffer.object != nullptr && !retained(slot, stream.buffer)) {
+      result |= 1u << slot;
+    }
+  }
+  return result;
+}
+
+template <typename Retention>
+  requires std::is_nothrow_invocable_r_v<bool, Retention&, const BufferRef&>
+bool resolveSparseIndexBuffer(bool indexedDraw, bool selectedIndexBuffer,
+                              bool indexBufferKnown,
+                              std::uint64_t submittedIndexBufferWire,
+                              std::uint64_t currentIndexBufferWire,
+                              const BufferRef& indexBuffer,
+                              Retention&& retained) noexcept {
+  if (!indexedDraw) return false;
+  if (selectedIndexBuffer || !indexBufferKnown ||
+      submittedIndexBufferWire != currentIndexBufferWire) {
+    return true;
+  }
+  return indexBuffer.object != nullptr && !retained(indexBuffer);
+}
+
 // (c) Draw payloads. Borrowed for the producer call and the append that
 // consumes its output. Never stored.
 struct PeDrawPayloads {

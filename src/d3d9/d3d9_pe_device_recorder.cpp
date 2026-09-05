@@ -294,7 +294,7 @@ HRESULT D3D9DeviceImpl::appendSemanticRecord(
     // the staged descriptor directly; only draw stream/index spans are copied
     // into the recorder-owned overlay. CapacityPre calls this again after the
     // destination changes, without copying the full staged input.
-    const auto rebaseInputView = [&]() noexcept {
+    const auto rebase = [&]() __attribute__((always_inline)) noexcept {
         if (constantFamily) {
             stagedConstantInput.recordType = type;
             stagedConstantInput.sourceOrdinal =
@@ -327,10 +327,38 @@ HRESULT D3D9DeviceImpl::appendSemanticRecord(
             const bool destinationDependent =
                 type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
                 type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
-            return destinationDependent
-                ? dxmt9::d3d9::pe::finalizeSparseStatePlanChunkContext(
-                      access, currentChunkContext(), plan)
-                : plan.chunkContextFinalized;
+            if (!destinationDependent) return plan.chunkContextFinalized;
+            // Compact plans resolve only destination-dependent facts here.
+            // The generic currentChunkContext() keeps its full retention walk
+            // for the compatibility/full-snapshot path.
+            const auto resolve = [](const auto& access, auto& plan,
+                                    const auto* semanticOwner, bool indexKnown,
+                                    std::uint64_t indexWire)
+                __attribute__((always_inline)) noexcept {
+                dxmt9::d3d9::pe::PeChunkContext chunk{};
+                chunk.indexBufferKnown = indexKnown;
+                chunk.submittedIndexBufferWire = indexWire;
+                const auto retained =
+                    [semanticOwner](
+                        std::uint32_t,
+                        const dxmt9::d3d9::pe::BufferRef& buffer) noexcept {
+                      return semanticOwner->referencesBuffer(buffer);
+                    };
+                return dxmt9::d3d9::pe::finalizeSparseStatePlanChunkContext(
+                    access, chunk, plan, retained);
+            };
+            if (diagnostics_ && diagnostics_->config.statsDecimationN != 0u) {
+                return dxmt9PeObserveCompactScope(
+                    diagnostics_->peDrawPacketContextDecimatedStats_,
+                    diagnostics_->peCompactSampleNesting_, [&]() noexcept {
+                        return resolve(access, plan, semanticOwner,
+                                       submittedIndexBufferKnown_,
+                                       submittedIndexBufferWireValue_);
+                    });
+            }
+            return resolve(access, plan, semanticOwner,
+                           submittedIndexBufferKnown_,
+                           submittedIndexBufferWireValue_);
         }
         inputView.destination.recordType = type;
         inputView.destination.sourceOrdinal =
@@ -361,6 +389,14 @@ HRESULT D3D9DeviceImpl::appendSemanticRecord(
             currentChunkContext(), recorderState_.peState,
             recorderState_.peBindingView, params,
             recorderState_.peSparseScratch, destinationSparse);
+    };
+    const auto rebaseInputView = [&]() noexcept {
+        if (diagnostics_ && diagnostics_->config.statsDecimationN != 0u) {
+            return dxmt9PeObserveCompactScope(
+                diagnostics_->peDrawPacketDestinationDecimatedStats_,
+                diagnostics_->peCompactSampleNesting_, rebase);
+        }
+        return rebase();
     };
     const auto sourceOrdinal = [&]() noexcept {
         return constantFamily

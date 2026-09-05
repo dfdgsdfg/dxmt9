@@ -379,8 +379,8 @@ void preparedBindingFamilyMatrix(const char* family, MakeValid makeValid,
             prepared.bindingOccurrences.count,
         [&](const PeSemanticBindingLocator& locator) noexcept {
           return locator.wireValid && locator.hasPin &&
-                 locator.mappingOrdinal < prepared.pinMapping.count &&
-                 prepared.pinMapping.entries[locator.mappingOrdinal].pin == 0u &&
+                 locator.mappingOrdinal < prepared.identityWitness.count &&
+                 prepared.identityWitness.entries[locator.mappingOrdinal].pin == 0u &&
                  locator.wireIndex == 0u;
         });
     for (std::size_t i = 0u; i < prepared.bindingOccurrences.count; ++i) {
@@ -389,7 +389,7 @@ void preparedBindingFamilyMatrix(const char* family, MakeValid makeValid,
     }
     check(preparedOutcome == PeSemanticAdmissionOutcome::Admissible &&
               prepared.bindingOccurrences.count == RowCount &&
-              prepared.pinMapping.count == 1u && prepared.wireHandles.count == 1u &&
+              prepared.identityWitness.count == 1u && prepared.identityWitness.wireCount == 1u &&
               occurrenceMappingConsumedShape,
           "seven-family prepared occurrence mapping has one deduped wire pin");
     CommandChunkBuilder canonical;
@@ -1370,16 +1370,16 @@ void preparedWireWitnessPreservesOrderAndQualifiedDedup() {
   PeSemanticPreparedRecord witness{};
   check(owner.prepareAdmission(input, witness) ==
             PeSemanticAdmissionOutcome::Admissible &&
-            witness.wireHandles.count == 2u &&
-            witness.wireHandles.identities[0].kind == textureRef.identity.kind &&
-            witness.wireHandles.identities[0].generation ==
+            witness.identityWitness.wireCount == 2u &&
+            witness.identityWitness.wireIdentity(0).kind == textureRef.identity.kind &&
+            witness.identityWitness.wireIdentity(0).generation ==
                 textureRef.identity.generation &&
-            witness.wireHandles.identities[0].objectId ==
+            witness.identityWitness.wireIdentity(0).objectId ==
                 textureRef.identity.objectId &&
-            witness.wireHandles.identities[1].kind == bufferRef.identity.kind &&
-            witness.wireHandles.identities[1].generation ==
+            witness.identityWitness.wireIdentity(1).kind == bufferRef.identity.kind &&
+            witness.identityWitness.wireIdentity(1).generation ==
                 bufferRef.identity.generation &&
-            witness.wireHandles.identities[1].objectId ==
+            witness.identityWitness.wireIdentity(1).objectId ==
                 bufferRef.identity.objectId,
         "prepared witness captures first-seen sparse wire order with direct dedup");
   check(owner.tryAppendOwnedRecord(input, []() noexcept { return true; }),
@@ -1641,13 +1641,13 @@ void preparedWireWitnessTracksFirstWirePromotion() {
                 PeSemanticAdmissionOutcome::Admissible &&
             witness.plan.uniquePinCounts[0] == 1u &&
             witness.plan.uniquePinCounts[1] == 1u &&
-            witness.plan.handleCount == 2u && witness.wireHandles.count == 2u &&
-            witness.wireHandles.identities[0].kind == textureRef.identity.kind &&
-            witness.wireHandles.identities[0].generation == textureRef.identity.generation &&
-            witness.wireHandles.identities[0].objectId == textureRef.identity.objectId &&
-            witness.wireHandles.identities[1].kind == surfaceRef.identity.kind &&
-            witness.wireHandles.identities[1].generation == surfaceRef.identity.generation &&
-            witness.wireHandles.identities[1].objectId == surfaceRef.identity.objectId &&
+            witness.plan.handleCount == 2u && witness.identityWitness.wireCount == 2u &&
+            witness.identityWitness.wireIdentity(0).kind == textureRef.identity.kind &&
+            witness.identityWitness.wireIdentity(0).generation == textureRef.identity.generation &&
+            witness.identityWitness.wireIdentity(0).objectId == textureRef.identity.objectId &&
+            witness.identityWitness.wireIdentity(1).kind == surfaceRef.identity.kind &&
+            witness.identityWitness.wireIdentity(1).generation == surfaceRef.identity.generation &&
+            witness.identityWitness.wireIdentity(1).objectId == surfaceRef.identity.objectId &&
             surface.refs == 1u && texture.refs == 1u,
         "prepared witness records first wire promotion after direct retention");
   check(appendSparseRecord(canonical, input.recordType, input.draw, input.sparse),
@@ -1680,6 +1680,65 @@ void preparedWireWitnessTracksFirstWirePromotion() {
   canonical.resetAndReleaseRetained();
   check(surface.refs == 1u && texture.refs == 1u,
         "promotion fixture canonical reset releases its typed retains");
+}
+
+void preparedIdentityWitnessUsesBoundedActivePrefixes() {
+  PeSemanticPreparedIdentityWitness witness{};
+  std::array<D9CSurface, 80u> surfaces{};
+  bool newlyRetained = false;
+  bool newlyWireVisible = false;
+  for (std::size_t i = 0u; i < surfaces.size(); ++i) {
+    const auto ref = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+        &surfaces[i], static_cast<std::uint32_t>(0x900u + i), 1u);
+    check(witness.add(ref, D9C_CHUNK_HANDLE_KIND_SURFACE, false,
+                     newlyRetained, newlyWireVisible) && newlyRetained &&
+              !newlyWireVisible,
+          "prepared identity witness fills the 80-entry retain frontier");
+  }
+  check(witness.count == 80u && witness.wireCount == 0u,
+        "retained-only identities do not consume wire ordinals");
+  const auto first = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &surfaces[0], 0x900u, 1u);
+  check(witness.add(first, D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                   newlyRetained, newlyWireVisible) && !newlyRetained &&
+            newlyWireVisible && witness.wireCount == 1u &&
+            witness.wireOrdinals[0] == 0u,
+        "first wire promotion records retained identity ordinal");
+  for (std::size_t i = 1u; i < 64u; ++i) {
+    const auto ref = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+        &surfaces[i], static_cast<std::uint32_t>(0x900u + i), 1u);
+    check(witness.add(ref, D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                     newlyRetained, newlyWireVisible) && !newlyRetained &&
+              newlyWireVisible && witness.wireOrdinals[i] == i,
+          "wire promotion preserves first-wire order independently");
+  }
+  const auto wireCountBefore = witness.wireCount;
+  const auto retainedCountBefore = witness.count;
+  const auto overflowWire = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &surfaces[64], 0x940u, 1u);
+  check(!witness.add(overflowWire, D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                     newlyRetained, newlyWireVisible) &&
+            witness.count == retainedCountBefore &&
+            witness.wireCount == wireCountBefore,
+        "wire frontier overflow fails closed without publishing a pin");
+  const auto staleGeneration = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &surfaces[0], 0x900u, 2u);
+  check(!witness.add(staleGeneration, D9C_CHUNK_HANDLE_KIND_SURFACE, false,
+                    newlyRetained, newlyWireVisible) &&
+            witness.count == retainedCountBefore,
+        "stale generation collision fails closed");
+  D9CSurface alias;
+  const auto wrongObject = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &alias, 0x900u, 1u);
+  check(!witness.add(wrongObject, D9C_CHUNK_HANDLE_KIND_SURFACE, false,
+                    newlyRetained, newlyWireVisible) &&
+            witness.count == retainedCountBefore,
+        "wrong object collision fails closed");
+  const PeWireObjectRef nullRef{};
+  check(witness.add(nullRef, D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                   newlyRetained, newlyWireVisible) && !newlyRetained &&
+            !newlyWireVisible && witness.count == retainedCountBefore,
+        "null identity remains outside both active prefixes");
 }
 
 void admissionArithmeticRejectsOverflow() {
@@ -2175,12 +2234,13 @@ void preparedAdmissionReinitializesReusedWitness() {
         lhs.nextEmissionPayloadBytes != rhs.nextEmissionPayloadBytes ||
         lhs.nextEmissionHandleCount != rhs.nextEmissionHandleCount ||
         lhs.wireBytes != rhs.wireBytes || lhs.admissible != rhs.admissible ||
-        lhs.wireHandles.count != rhs.wireHandles.count) {
+        lhs.identityWitness.count != rhs.identityWitness.count ||
+        lhs.identityWitness.wireCount != rhs.identityWitness.wireCount) {
       return false;
     }
-    for (std::size_t i = 0u; i < lhs.wireHandles.count; ++i) {
-      const auto& left = lhs.wireHandles.identities[i];
-      const auto& right = rhs.wireHandles.identities[i];
+    for (std::size_t i = 0u; i < lhs.identityWitness.wireCount; ++i) {
+      const auto& left = lhs.identityWitness.wireIdentity(i);
+      const auto& right = rhs.identityWitness.wireIdentity(i);
       if (left.kind != right.kind || left.generation != right.generation ||
           left.objectId != right.objectId) {
         return false;
@@ -2193,7 +2253,7 @@ void preparedAdmissionReinitializesReusedWitness() {
   larger.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&first, 0xa01u, 1u);
   larger.surface1 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&second, 0xa02u, 1u);
   check(owner.prepareAdmission(larger, witness) == Outcome::Admissible &&
-            witness.valid() && witness.wireHandles.count == 2u &&
+            witness.valid() && witness.identityWitness.wireCount == 2u &&
             witness.plan.handleCount == 2u,
         "reused-witness fixture starts with two first-seen wire identities");
 
@@ -2201,10 +2261,10 @@ void preparedAdmissionReinitializesReusedWitness() {
   smaller.surface0 =
       localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&replacement, 0xa03u, 2u);
   check(owner.prepareAdmission(smaller, witness) == Outcome::Admissible &&
-            witness.valid() && witness.wireHandles.count == 1u &&
+            witness.valid() && witness.identityWitness.wireCount == 1u &&
             witness.plan.handleCount == 1u &&
-            witness.wireHandles.identities[0].objectId == 0xa03u &&
-            witness.wireHandles.identities[0].generation == 2u,
+            witness.identityWitness.wireIdentity(0).objectId == 0xa03u &&
+            witness.identityWitness.wireIdentity(0).generation == 2u,
         "valid-to-valid reuse resets the active wire frontier and identity");
   PeSemanticPreparedRecord freshSmaller{};
   check(owner.prepareAdmission(smaller, freshSmaller) == Outcome::Admissible &&
@@ -2214,14 +2274,14 @@ void preparedAdmissionReinitializesReusedWitness() {
   // The second identity from `larger` remains physically in the bounded
   // witness array, but its stale tail is outside the count and cannot affect
   // the smaller record's plan or later append.
-  check(witness.wireHandles.identities[1].objectId == 0xa02u &&
-            witness.wireHandles.identities[1].generation == 1u,
+  check(witness.identityWitness.entries[1].identity.objectId == 0xa02u &&
+            witness.identityWitness.entries[1].identity.generation == 1u,
         "valid-to-valid reuse leaves only an inactive stale tail");
 
   auto malformed = smaller;
   malformed.surface0.identity.generation = 0u;
   check(owner.prepareAdmission(malformed, witness) == Outcome::Malformed &&
-            !witness.valid() && witness.wireHandles.count == 0u &&
+            !witness.valid() && witness.identityWitness.wireCount == 0u &&
             !witness.plan.valid && witness.plan.handleCount == 0u &&
             witness.retentionDeltas[0] == 0u,
         "valid-to-malformed reuse invalidates the prepared witness");
@@ -2230,7 +2290,7 @@ void preparedAdmissionReinitializesReusedWitness() {
             samePrepared(witness, freshMalformed),
         "early malformed reuse matches a fresh witness across active facts");
   check(owner.prepareAdmission(smaller, witness) == Outcome::Admissible &&
-            witness.valid() && witness.wireHandles.count == 1u &&
+            witness.valid() && witness.identityWitness.wireCount == 1u &&
             witness.plan.handleCount == 1u,
         "a failed malformed preparation can be followed by a valid one");
   PeSemanticPreparedRecord freshAfterMalformed{};
@@ -2276,10 +2336,10 @@ void preparedAdmissionReinitializesReusedWitness() {
             witness.plan.sparseCounts[1] == 1u &&
             witness.plan.sparseCounts[6] == 1u &&
             witness.retentionDeltas[1] == 1u &&
-            witness.wireHandles.count == 1u &&
-            witness.wireHandles.identities[0].kind ==
+            witness.identityWitness.wireCount == 1u &&
+            witness.identityWitness.wireIdentity(0).kind ==
                 partialTextures[0].object.identity.kind &&
-            witness.wireHandles.identities[0].objectId ==
+            witness.identityWitness.wireIdentity(0).objectId ==
                 partialTextures[0].object.identity.objectId,
         "planner Malformed preserves the pre-failure active wire prefix");
   PeSemanticPreparedRecord freshPartialMalformed{};
@@ -2299,7 +2359,7 @@ void preparedAdmissionReinitializesReusedWitness() {
   auto capacity = base(PeSemanticProducerKind::DrawPrimitive, 3u, 3u);
   capacity.sparse.renderStates = renderStates;
   check(owner.prepareAdmission(capacity, witness) == Outcome::Capacity &&
-            !witness.valid() && witness.wireHandles.count == 0u &&
+            !witness.valid() && witness.identityWitness.wireCount == 0u &&
             witness.plan.valid,
         "valid-to-capacity reuse remains inadmissible with a well-formed plan");
   PeSemanticPreparedRecord freshCapacity{};
@@ -2307,7 +2367,7 @@ void preparedAdmissionReinitializesReusedWitness() {
             samePrepared(witness, freshCapacity),
         "capacity reuse matches a fresh witness across all active facts");
   check(owner.prepareAdmission(smaller, witness) == Outcome::Admissible &&
-            witness.valid() && witness.wireHandles.count == 1u,
+            witness.valid() && witness.identityWitness.wireCount == 1u,
         "a failed capacity preparation can be followed by a valid one");
   PeSemanticPreparedRecord freshAfterCapacity{};
   check(owner.prepareAdmission(smaller, freshAfterCapacity) ==
@@ -2329,7 +2389,7 @@ void preparedAdmissionReinitializesReusedWitness() {
       localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&novel, 0xa06u, 1u);
   check(pinBound.prepareAdmission(handleCapacity, witness) == Outcome::Capacity &&
             witness.plan.valid && !witness.admissible &&
-            witness.wireHandles.count == 1u &&
+            witness.identityWitness.wireCount == 1u &&
             witness.retentionDeltas[0] == 1u,
         "handle-bearing Capacity retains the candidate wire prefix");
   PeSemanticPreparedRecord freshHandleCapacity{};
@@ -2349,13 +2409,13 @@ void preparedAdmissionReinitializesReusedWitness() {
   Owner unavailable(Owner::FailConstructionForTesting{});
   check(unavailable.prepareAdmission(smaller, witness) == Outcome::Unavailable &&
             !witness.valid() && witness.rule == nullptr &&
-            witness.wireHandles.count == 0u && !witness.plan.valid &&
+            witness.identityWitness.wireCount == 0u && !witness.plan.valid &&
             witness.plan.handleCount == 0u,
         "valid-to-unavailable reuse clears the witness before early return");
   check(samePrepared(witness, cleared),
         "Unavailable resets every active fact to a fresh empty witness");
   check(owner.prepareAdmission(smaller, witness) == Outcome::Admissible &&
-            witness.valid() && witness.wireHandles.count == 1u,
+            witness.valid() && witness.identityWitness.wireCount == 1u,
         "an unavailable preparation does not poison later valid reuse");
   PeSemanticPreparedRecord freshAfterUnavailable{};
   check(owner.prepareAdmission(smaller, freshAfterUnavailable) ==
@@ -3986,6 +4046,64 @@ void calibratedOwnerPhaseObserver() {
             phase(PeSemanticOwnerPhase::PendingDeltaSettlement).samples == 1u &&
             phase(PeSemanticOwnerPhase::Rollback).samples == 1u,
         "child timers are parent-gated and sampled inclusively");
+  const auto& family = stats.settlements[static_cast<std::size_t>(
+      PeSemanticOwnerSettlementFamily::OtherGeneric)];
+  const auto& aggregate = phase(PeSemanticOwnerPhase::PendingDeltaSettlement);
+  check(family.events == aggregate.events &&
+            family.samples == aggregate.samples &&
+            family.totalNs == aggregate.totalNs &&
+            family.maxNs == aggregate.maxNs,
+        "family attribution reuses the exact aggregate interval, including rollback");
+  for (std::size_t i = 0u; i < stats.settlements.size() - 1u; ++i) {
+    check(stats.settlements[i].events == 0u &&
+              stats.settlements[i].samples == 0u,
+          "unvisited settlement families do not fabricate samples");
+  }
+}
+
+void observerSettlementFamilyTruthTable() {
+  PeSemanticOwnerPhaseObserver observer(1u);
+  PeSemanticSparsePlanRecordInput sparse{};
+  const std::array producers{
+      PeSemanticProducerKind::DrawPrimitive,
+      PeSemanticProducerKind::DrawIndexedPrimitive,
+      PeSemanticProducerKind::ApplyState};
+  const std::array families{
+      PeSemanticOwnerSettlementFamily::SparseDraw,
+      PeSemanticOwnerSettlementFamily::SparseIndexedDraw,
+      PeSemanticOwnerSettlementFamily::SparseApply};
+  {
+    auto parent = observer.beginAppend();
+    for (std::size_t i = 0u; i < producers.size(); ++i) {
+      sparse.producer = producers[i];
+      check(peSemanticOwnerSettlementFamily(sparse) == families[i],
+            "typed sparse input selects its exact settlement family");
+      auto scope = observer.beginSettlement(peSemanticOwnerSettlementFamily(sparse));
+    }
+    PeSemanticConstantRecordInput constant{};
+    check(peSemanticOwnerSettlementFamily(constant) ==
+              PeSemanticOwnerSettlementFamily::Constant,
+          "typed constants select their own settlement family");
+    {
+      auto scope = observer.beginSettlement(peSemanticOwnerSettlementFamily(constant));
+    }
+    const auto generic = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+    check(peSemanticOwnerSettlementFamily(generic) ==
+              PeSemanticOwnerSettlementFamily::OtherGeneric,
+          "generic input is not mislabeled as a compact draw");
+    auto scope = observer.beginSettlement(peSemanticOwnerSettlementFamily(generic));
+  }
+  std::uint64_t totalNs = 0u;
+  for (const auto& family : observer.stats().settlements) {
+    check(family.events == 1u && family.samples == 1u,
+          "each selected family reuses one aggregate interval");
+    totalNs += family.totalNs;
+  }
+  const auto& aggregate = observer.stats().phases[static_cast<std::size_t>(
+      PeSemanticOwnerPhase::PendingDeltaSettlement)];
+  check(aggregate.events == 5u && aggregate.samples == 5u &&
+            aggregate.totalNs == totalNs,
+        "all family intervals exactly partition aggregate settlement");
 }
 
 void observerScopeRestoresNestedState() {
@@ -4088,6 +4206,7 @@ int main() {
     planningReusesStaleWireWitnessStorage();
     identitySetUsesAnActiveFrontier();
     preparedWireWitnessTracksFirstWirePromotion();
+    preparedIdentityWitnessUsesBoundedActivePrefixes();
     admissionArithmeticRejectsOverflow();
     preparedLayoutCoversEverySparseAndVariableSection();
     pendingDeltaViewRejectsStaleTicket();
@@ -4134,6 +4253,7 @@ int main() {
     productionOwnerProjectionBindsColdLedger();
     ownerQualifiedMaterializationLedger();
     calibratedOwnerPhaseObserver();
+    observerSettlementFamilyTruthTable();
     observerScopeRestoresNestedState();
     observerSeparatesPrepareMalformedFromHeader();
   } catch (const Failure& failure) {

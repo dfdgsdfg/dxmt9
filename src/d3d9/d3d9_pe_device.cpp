@@ -1495,22 +1495,30 @@ void D3D9DeviceImpl::populateBindingView(dxmt9::d3d9::pe::PeBindingView& view,
 }
 
 dxmt9::d3d9::pe::PeChunkContext D3D9DeviceImpl::currentChunkContext() const {
-    dxmt9::d3d9::pe::PeChunkContext chunk{};
-    for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-        const auto* semanticOwner = semanticBatchOwner();
-        const bool retained = semanticOwner &&
-            semanticOwner->referencesBuffer(
-                recorderState_.peBindingView.streams[slot].buffer);
-        if (retained) {
-            chunk.retainedStreamMask |= 1u << slot;
+    const auto resolve = [&]() __attribute__((always_inline)) {
+        dxmt9::d3d9::pe::PeChunkContext chunk{};
+        for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+            const auto* semanticOwner = semanticBatchOwner();
+            const bool retained = semanticOwner &&
+                semanticOwner->referencesBuffer(
+                    recorderState_.peBindingView.streams[slot].buffer);
+            if (retained) {
+                chunk.retainedStreamMask |= 1u << slot;
+            }
         }
+        chunk.indexBufferKnown = submittedIndexBufferKnown_;
+        chunk.submittedIndexBufferWire = submittedIndexBufferWireValue_;
+        chunk.indexBufferRetained = semanticBatchOwner() &&
+            semanticBatchOwner()->referencesBuffer(
+                recorderState_.peBindingView.indexBuffer);
+        return chunk;
+    };
+    if (diagnostics_ && diagnostics_->config.statsDecimationN != 0u) {
+        return dxmt9PeObserveCompactScope(
+            diagnostics_->peDrawPacketContextDecimatedStats_,
+            diagnostics_->peCompactSampleNesting_, resolve);
     }
-    chunk.indexBufferKnown = submittedIndexBufferKnown_;
-    chunk.submittedIndexBufferWire = submittedIndexBufferWireValue_;
-    chunk.indexBufferRetained = semanticBatchOwner() &&
-        semanticBatchOwner()->referencesBuffer(
-            recorderState_.peBindingView.indexBuffer);
-    return chunk;
+    return resolve();
 }
 
 bool D3D9DeviceImpl::buildSparseStateForRecord(
@@ -1560,18 +1568,31 @@ bool D3D9DeviceImpl::buildSparseStatePlanForRecord(
     if (!semanticRecorderState_) {
         return false;
     }
-    auto& plan = semanticRecorderState_->stagedSparsePlan;
-    if (params.recordType == 0u ||
-        dxmt9::d3d9::pe::dxmt9PeFullSnapshotEnabled()) {
-        if (plan.prepared) plan.invalidate();
-        return false;
+    const auto prepare = [](D3D9DeviceImpl& self, const auto& access,
+                            const auto& params, bool inlineConstDelta)
+        __attribute__((always_inline)) {
+        auto& plan = self.semanticRecorderState_->stagedSparsePlan;
+        if (params.recordType == 0u ||
+            dxmt9::d3d9::pe::dxmt9PeFullSnapshotEnabled()) {
+            if (plan.prepared) plan.invalidate();
+            return false;
+        }
+        const bool isDraw = params.recordType != D9C_COMMAND_RECORD_APPLY_STATE;
+        self.populateBindingView(self.recorderState_.peBindingView, false, isDraw);
+        return dxmt9::d3d9::pe::buildSparseStatePlan(
+            access, self.recorderState_.peState, self.recorderState_.peConsts,
+            self.recorderState_.peBindingView, self.recorderState_.peSparsePayloads, params,
+            false, inlineConstDelta, plan);
+    };
+    if (diagnostics_ && diagnostics_->config.statsDecimationN != 0u) {
+        // Keep the existing draw_packet key on the actual compact plan route.
+        return dxmt9PeObserveCompactScope(
+            diagnostics_->peDrawPacketDecimatedStats_,
+            diagnostics_->peCompactSampleNesting_, [&]() {
+                return prepare(*this, access, params, inlineConstDelta);
+            });
     }
-    const bool isDraw = params.recordType != D9C_COMMAND_RECORD_APPLY_STATE;
-    populateBindingView(recorderState_.peBindingView, false, isDraw);
-    return dxmt9::d3d9::pe::buildSparseStatePlan(
-        access, recorderState_.peState, recorderState_.peConsts,
-        recorderState_.peBindingView, recorderState_.peSparsePayloads, params,
-        false, inlineConstDelta, plan);
+    return prepare(*this, access, params, inlineConstDelta);
 }
 
 UINT D3D9DeviceImpl::primitiveVertexCount(D3DPRIMITIVETYPE type, UINT primitiveCount) {

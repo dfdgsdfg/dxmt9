@@ -701,3 +701,33 @@ Only committed canonical metadata or equivalent qualified ownership metadata
 may serve later visitors. Native differential tests must cover all seven
 binding families, duplicate/promotion/null cases, source mutation, partial
 acquisition and settlement rollback, reset/reuse, and both emission forms.
+
+**R-CORE-REC-7.17** Calibrated PE attribution must include compact source
+preparation and destination qualification before owner admission, and distinguish
+settlement populations by producer family. Aggregate admission timings must not
+be presented as measurements of work outside their scope. Disabled observation
+must perform no clock reads, allocation, or diagnostic payload construction;
+enabled rows must expose event/sample counts and empty-clock calibration.
+Nested sampling must not silently charge child instrumentation as caller work.
+Independently sampled nested scopes must expose collision counts or prevent
+overlap; a null-pair subtraction alone does not remove a child's instrument.
+
+**R-CORE-REC-7.18** Compact source selection and destination qualification may
+be reused only under their issuing recorder/source authority and declared
+PendingDelta, binding, and destination dependencies. Required pending-state
+consumption remains after durable record construction. Skipping observer-only
+validation must preserve observer-enabled validation and atomic rejection.
+Selection reuse must not trust a caller-mutable flag, preserve a borrow beyond
+append, or accept stale authority after CapacityPre, failure, reset, or source
+mutation. Unchanged-input reuse and changed-dependency rejection must be bound
+to production predicates by bounded exhaustive/native refinement.
+
+**R-CORE-REC-7.19** Record-local identity deduplication, predicted physical pin
+assignment, and first wire-visible ordering may share one qualified active-prefix
+authority. Retained-only order and wire-visible order remain distinct. Every
+occurrence must retain its null/inactive/qualified disposition, and deduplication
+must reject kind/generation/object collisions without publishing partial pins
+or bytes. Consolidation must preserve canonical byte order, logical quotas,
+rollback/retry, committed visitors, and both transport forms. Native ownership
+and byte differentials plus PE32/PE64 release frame/code inspection must qualify
+the change; a smaller source type alone is not evidence of lower runtime cost.

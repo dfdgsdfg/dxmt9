@@ -447,41 +447,47 @@ static bool acceptSparseStatePlanWithSources(
     return tokens->project(category, key, index, value, recordOrdinal,
                            tuple) && tokens->canConsumeProjected(tuple);
   };
-  bool scalarValid = true;
-  shadow.pendingRenderStatesTyped().forEach(
-      [&](RenderStateSlot key, std::uint32_t value) {
-        std::uint32_t live = 0u;
-        scalarValid = scalarValid &&
-            (!state.fullSnapshot ||
-             (shadow.renderStateShadowTyped().get(key, live) &&
-              live == value)) &&
-            validateToken(ScalarSemanticCategory::RenderState,
-                          rawSlot(key), 0u, value);
-      });
-  shadow.pendingTssTyped().forEach(
-      [&](TextureStageIndex stage, TextureStageStateType type,
-          std::uint32_t value) {
-        std::uint32_t live = 0u;
-        scalarValid = scalarValid &&
-            (!state.fullSnapshot ||
-             (shadow.tssShadowTyped().get(stage, type, live) &&
-              live == value)) &&
-            validateToken(ScalarSemanticCategory::TextureStageState,
-                          rawSlot(stage), rawSlot(type), value);
-      });
-  shadow.pendingSamplerStatesTyped().forEach(
-      [&](SamplerIndex sampler, SamplerStateType type,
-          std::uint32_t value) {
-        std::uint32_t live = 0u;
-        scalarValid = scalarValid &&
-            (!state.fullSnapshot ||
-             (shadow.samplerStateShadowTyped().get(sampler, type, live) &&
-              live == value)) &&
-            validateToken(ScalarSemanticCategory::SamplerState,
-                          rawSlot(sampler), rawSlot(type), value);
-      });
-  if (!scalarValid) {
-    return false;
+  // For a normal compact record with no scalar observer, these walks only
+  // revalidate values whose producer-owned masks/counts already selected the
+  // record and have no semantic effect. Full snapshots still compare live
+  // values, while the observer path still projects and authenticates tokens.
+  if (state.fullSnapshot || tokens) {
+    bool scalarValid = true;
+    shadow.pendingRenderStatesTyped().forEach(
+        [&](RenderStateSlot key, std::uint32_t value) {
+          std::uint32_t live = 0u;
+          scalarValid = scalarValid &&
+              (!state.fullSnapshot ||
+               (shadow.renderStateShadowTyped().get(key, live) &&
+                live == value)) &&
+              validateToken(ScalarSemanticCategory::RenderState,
+                            rawSlot(key), 0u, value);
+        });
+    shadow.pendingTssTyped().forEach(
+        [&](TextureStageIndex stage, TextureStageStateType type,
+            std::uint32_t value) {
+          std::uint32_t live = 0u;
+          scalarValid = scalarValid &&
+              (!state.fullSnapshot ||
+               (shadow.tssShadowTyped().get(stage, type, live) &&
+                live == value)) &&
+              validateToken(ScalarSemanticCategory::TextureStageState,
+                            rawSlot(stage), rawSlot(type), value);
+        });
+    shadow.pendingSamplerStatesTyped().forEach(
+        [&](SamplerIndex sampler, SamplerStateType type,
+            std::uint32_t value) {
+          std::uint32_t live = 0u;
+          scalarValid = scalarValid &&
+              (!state.fullSnapshot ||
+               (shadow.samplerStateShadowTyped().get(sampler, type, live) &&
+                live == value)) &&
+              validateToken(ScalarSemanticCategory::SamplerState,
+                            rawSlot(sampler), rawSlot(type), value);
+        });
+    if (!scalarValid) {
+      return false;
+    }
   }
 
   for (std::size_t i = 0u; i < std::size(acceptedConstants); ++i) {

@@ -708,6 +708,38 @@ twelve open-addressed pin-index arrays; rollback still restores indexes and
 retains. Pin-index clearing, warm-retainer scans, and contiguous final gather
 remain explicit costs.
 
+R-CORE-REC-7.17–7.19 refine this implementation without changing the transport
+or threading boundary. Attribution separates compact source preparation,
+destination qualification, and producer-family settlement. These observations
+remain cold and calibrated; the aggregate owner scope does not include work
+that preceded admission. New inline probes dispatch to an outlined diagnostic
+scope only after the cached gate; their disabled production body must not
+construct a timer or carry its destructor. Independently sampled compact scopes
+retain a cold nesting counter, reported as `compact_nested_samples`; it exposes
+overlap, not a correction that makes inclusive times additive.
+Observer-disabled scalar validation may be omitted
+only where the compact source contract proves it has no semantic effect.
+Required dirty-range checks and PendingDelta consumption are not diagnostics.
+
+Selection reuse is dependency-qualified: producer-issued source authority may
+carry already-established category counts and masks, while destination-dependent
+stream/index selection must be requalified for a changed chunk. Prefer a
+single synchronous resolver/witness over a persistent cache. If cached state
+is introduced, every mutation, reset, failed append, and CapacityPre edge must
+have explicit invalidation and bounded model-code evidence. Public mutable
+selection fields or a copied numeric epoch alone do not establish authority.
+
+An admission-local identity authority may combine deduplication, predicted pins,
+and wire-promotion ordinals. It must distinguish first retention from first wire
+visibility, and publish complete entries before their active frontier advances.
+This is not permission to remove the canonical wire identity table or qualified
+physical pins needed after the call. Bounded exhaustive native traces must
+compare reuse with recomputation for stale/wrong-owner authority, destination
+rebase, A/B/A bindings, null/inactive occurrences, retained-only promotion,
+partial acquisition, and settlement failure/retry. Existing recorder models
+still own transaction order; value/identity refinement and release codegen are
+separate acceptance obligations, followed by matched runtime direction checks.
+
 The optional owner-qualified copy/materialization ledger binds this same
 transaction at its two physical ownership boundaries. A successful admission
 records the increase in live typed record, pin, and canonical-role

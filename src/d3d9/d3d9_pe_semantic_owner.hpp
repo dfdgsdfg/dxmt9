@@ -214,10 +214,9 @@ static_assert(std::is_trivially_copyable_v<PeSemanticBindingOccurrencePlan>);
 
 inline constexpr std::size_t kPeSemanticMaxRecordHandles = 64u;
 
-// The bounded record-local handle order is both an emission input and a
-// prepared admission witness.  Keeping this as the existing emission context
-// avoids a second identity representation while making the witness
-// pointer-free and trivially copyable.
+// Standalone emission context retained for generic callers and differential
+// tests. Prepared records use PeSemanticPreparedIdentityWitness below so the
+// qualified identity is stored only once.
 struct PeSemanticEmissionHandleContext {
   std::array<D9CWireObjectIdentity, kPeSemanticMaxRecordHandles> identities;
   std::size_t count = 0u;
@@ -262,12 +261,11 @@ static_assert(sizeof(PeSemanticEmissionHandleContext) <=
                   std::max(sizeof(std::size_t),
                            alignof(D9CWireObjectIdentity)));
 
-// Admission-local qualified mapping.  Each entry is written once while the
-// owner checks the destination indexes, then append/materialization consume it
-// without repeating owner hash probes or rebuilding record-local handle order.
-// The bounded linear walk is over at most the 80 identities already present in
-// the admission set; it never scans the owner pin tables or wire handles.
-struct PeSemanticPreparedPinMapping {
+// The sole prepared-admission identity authority. Identity entries retain
+// first-retain order; wireOrdinals records first-wire promotion order without
+// copying identities. The active prefixes are bounded and all writes precede
+// their frontier updates, so null/inactive tails remain untouched.
+struct PeSemanticPreparedIdentityWitness {
   struct Entry {
     D9CWireObjectIdentity identity;
     const void* object;
@@ -276,10 +274,11 @@ struct PeSemanticPreparedPinMapping {
   };
 
   std::array<Entry, 80u> entries;
+  std::array<std::uint32_t, kPeSemanticMaxRecordHandles> wireOrdinals;
   std::size_t count = 0u;
+  std::size_t wireCount = 0u;
 
-  // Even value-initialization must leave inactive entries untouched.
-  PeSemanticPreparedPinMapping() noexcept {}
+  PeSemanticPreparedIdentityWitness() noexcept {}
 
   static bool sameIdentity(const D9CWireObjectIdentity& left,
                            const D9CWireObjectIdentity& right) noexcept {
@@ -287,31 +286,81 @@ struct PeSemanticPreparedPinMapping {
            left.objectId == right.objectId;
   }
 
-  void reset() noexcept { count = 0u; }
+  void reset() noexcept {
+    count = 0u;
+    wireCount = 0u;
+  }
 
-  bool add(const PeWireObjectRef& ref, std::uint32_t pin) noexcept {
-    if (count >= entries.size()) return false;
-    entries[count++] = {.identity = ref.identity,
-                        .object = ref.object,
-                        .pin = pin,
-                        .wireIndex = kPeSemanticNoSlot};
+  bool add(const PeWireObjectRef& ref, std::uint32_t kind, bool wire,
+           bool& newlyRetained, bool& newlyWireVisible,
+           std::size_t* identityOrdinal = nullptr) noexcept {
+    newlyRetained = false;
+    newlyWireVisible = false;
+    if (!ref.object) {
+      return ref.identity.kind == 0u && ref.identity.generation == 0u &&
+             ref.identity.objectId == 0u;
+    }
+    if (!ref.valid(kind)) return false;
+    for (std::size_t i = 0u; i < count; ++i) {
+      auto& entry = entries[i];
+      if (entry.identity.kind == ref.identity.kind &&
+          entry.identity.objectId == ref.identity.objectId) {
+        if (entry.identity.generation != ref.identity.generation ||
+            entry.object != ref.object) {
+          return false;
+        }
+        if (wire && entry.wireIndex == kPeSemanticNoSlot) {
+          if (wireCount >= wireOrdinals.size()) return false;
+          wireOrdinals[wireCount] = static_cast<std::uint32_t>(i);
+          entry.wireIndex = static_cast<std::uint32_t>(wireCount);
+          ++wireCount;
+          newlyWireVisible = true;
+        }
+        if (identityOrdinal) *identityOrdinal = i;
+        return true;
+      }
+    }
+    if (count >= entries.size() || (wire && wireCount >= wireOrdinals.size()))
+      return false;
+    entries[count] = {.identity = ref.identity,
+                      .object = ref.object,
+                      .pin = kPeSemanticNoSlot,
+                      .wireIndex = kPeSemanticNoSlot};
+    const auto ordinal = count;
+    if (identityOrdinal) *identityOrdinal = ordinal;
+    if (wire) {
+      wireOrdinals[wireCount] = static_cast<std::uint32_t>(ordinal);
+      entries[ordinal].wireIndex = static_cast<std::uint32_t>(wireCount);
+      ++wireCount;
+      newlyWireVisible = true;
+    }
+    ++count;
+    newlyRetained = true;
     return true;
   }
 
-  bool setWireIndex(std::size_t identityOrdinal,
-                   std::uint32_t wireIndex) noexcept {
+  bool setPin(std::size_t identityOrdinal, std::uint32_t pin) noexcept {
     if (identityOrdinal >= count) return false;
-    entries[identityOrdinal].wireIndex = wireIndex;
+    entries[identityOrdinal].pin = pin;
     return true;
+  }
+
+  Entry* findPin(const PeWireObjectRef& ref) noexcept {
+    for (std::size_t i = 0u; i < count; ++i) {
+      auto& entry = entries[i];
+      if (sameIdentity(entry.identity, ref.identity) &&
+          entry.object == ref.object)
+        return &entry;
+    }
+    return nullptr;
   }
 
   const Entry* findPin(const PeWireObjectRef& ref) const noexcept {
     for (std::size_t i = 0u; i < count; ++i) {
       const auto& entry = entries[i];
       if (sameIdentity(entry.identity, ref.identity) &&
-          entry.object == ref.object) {
+          entry.object == ref.object)
         return &entry;
-      }
     }
     return nullptr;
   }
@@ -328,9 +377,20 @@ struct PeSemanticPreparedPinMapping {
     }
     return false;
   }
+
+  const Entry* wireEntry(std::size_t wireOrdinal) const noexcept {
+    if (wireOrdinal >= wireCount ||
+        wireOrdinals[wireOrdinal] >= count)
+      return nullptr;
+    return &entries[wireOrdinals[wireOrdinal]];
+  }
+
+  const D9CWireObjectIdentity& wireIdentity(std::size_t wireOrdinal) const noexcept {
+    return wireEntry(wireOrdinal)->identity;
+  }
 };
 
-static_assert(std::is_trivially_copyable_v<PeSemanticPreparedPinMapping>);
+static_assert(std::is_trivially_copyable_v<PeSemanticPreparedIdentityWitness>);
 
 // Per-attempt facts that depend on the destination chunk.  The much larger
 // PeSemanticRecordInput remains staged once and immutable; normal admission
@@ -546,6 +606,26 @@ concept PeSemanticConstantInputLike =
 template <typename Input>
 concept PeSemanticSparsePlanInputLike = std::same_as<
     std::remove_cvref_t<Input>, PeSemanticSparsePlanRecordInput>;
+
+template <typename Input>
+constexpr PeSemanticOwnerSettlementFamily peSemanticOwnerSettlementFamily(
+    const Input& input) noexcept {
+  if constexpr (PeSemanticSparsePlanInputLike<Input>) {
+    switch (peSemanticProducer(input)) {
+    case PeSemanticProducerKind::DrawPrimitive:
+      return PeSemanticOwnerSettlementFamily::SparseDraw;
+    case PeSemanticProducerKind::DrawIndexedPrimitive:
+      return PeSemanticOwnerSettlementFamily::SparseIndexedDraw;
+    case PeSemanticProducerKind::ApplyState:
+      return PeSemanticOwnerSettlementFamily::SparseApply;
+    default:
+      break;
+    }
+  } else if constexpr (PeSemanticConstantInputLike<Input>) {
+    return PeSemanticOwnerSettlementFamily::Constant;
+  }
+  return PeSemanticOwnerSettlementFamily::OtherGeneric;
+}
 
 template <typename Input>
 concept PeSemanticOwnedRecordInputLike = PeSemanticRecordInputLike<Input> ||
@@ -1055,17 +1135,21 @@ constexpr bool isPeSemanticUpProducer(
 // generation-alias proof into this same pass instead of walking the record a
 // second time.
 template <PeSemanticRecordInputLike Input, typename OnUniqueRetained>
-  requires std::is_nothrow_invocable_r_v<bool, OnUniqueRetained&,
-                                         const PeWireObjectRef&, std::size_t>
-inline bool planPeSemanticAdmissionWith(
+  requires (std::is_nothrow_invocable_r_v<bool, OnUniqueRetained&,
+                                          const PeWireObjectRef&, std::size_t> ||
+            std::is_nothrow_invocable_r_v<bool, OnUniqueRetained&,
+                                          const PeWireObjectRef&, std::size_t,
+                                          std::size_t>)
+inline bool planPeSemanticAdmissionWithIdentity(
     const Input& input, PeSemanticAdmissionPlan& out,
     OnUniqueRetained&& onUniqueRetained,
+    PeSemanticPreparedIdentityWitness& identityWitness,
     PeSemanticEmissionHandleContext* wireWitness = nullptr,
-    PeSemanticPreparedPinMapping* pinWitness = nullptr,
     PeSemanticPreparedSparseLayout* sparseLayoutWitness = nullptr,
     PeSemanticBindingOccurrencePlan* bindingWitness = nullptr) noexcept {
   out = {};
   if (wireWitness != nullptr) wireWitness->resetFrontier();
+  identityWitness.reset();
   if (sparseLayoutWitness != nullptr) sparseLayoutWitness->reset();
   if (bindingWitness != nullptr) bindingWitness->reset();
   if (!validPeSemanticInput(input)) return false;
@@ -1076,9 +1160,10 @@ inline bool planPeSemanticAdmissionWith(
                                  : &localSparseLayout;
   if (!detail::preparePeSemanticSparseLayout(input, *sparseLayout)) return false;
   out.recordType = peSemanticRecordType(input);
-  // One wire/retention set keeps the planner's fixed stack bounded
-  // independently of the six handle kinds; kind remains part of identity.
-  detail::PeSemanticIdentitySet pins;
+  // The caller supplies the sole active-prefix identity authority. Generic
+  // wrappers may mirror it into standalone differential witnesses, but this
+  // helper never carries a second identity table.
+  auto& identities = identityWitness;
   auto&& observe = onUniqueRetained;
   const auto retained = [&](const PeWireObjectRef& ref, std::uint32_t kind,
                             std::size_t pinKind, bool wire,
@@ -1086,23 +1171,26 @@ inline bool planPeSemanticAdmissionWith(
     bool newlyRetained = false;
     bool newlyWireVisible = false;
     std::size_t identityOrdinal = 0u;
-    if (!pins.add(ref, kind, wire, newlyRetained, newlyWireVisible,
-                  &identityOrdinal)) return false;
+    if (!identities.add(ref, kind, wire, newlyRetained, newlyWireVisible,
+                         &identityOrdinal)) return false;
     if (newlyWireVisible && wireWitness != nullptr &&
         !wireWitness->appendKnownUnique(ref.identity)) return false;
     if (newlyRetained) {
       if (out.uniquePinCounts[pinKind] ==
           std::numeric_limits<std::uint32_t>::max()) return false;
       ++out.uniquePinCounts[pinKind];
-      if (!observe(ref, pinKind)) return false;
+      if constexpr (std::is_nothrow_invocable_r_v<
+                        bool, decltype(observe)&, const PeWireObjectRef&,
+                        std::size_t, std::size_t>) {
+        if (!observe(ref, pinKind, identityOrdinal)) return false;
+      } else {
+        if (!observe(ref, pinKind)) return false;
+      }
     }
     if (mappingOrdinal != nullptr) *mappingOrdinal = identityOrdinal;
-    // Identity-set insertion and the unique-retain callback publish entries
-    // in the same order. Wire promotion can therefore address that ordinal
-    // directly, including a retained-only direct pin promoted much later.
-    return !newlyWireVisible || pinWitness == nullptr ||
-           pinWitness->setWireIndex(identityOrdinal,
-               static_cast<std::uint32_t>(pins.wireCount - 1u));
+    // Identity insertion and callback publication share first-retain order;
+    // the combined witness records wire promotion directly in wireOrdinals.
+    return true;
   };
   // Every direct slot is already retained above, so this ordinarily only
   // raises the wire-visible flag. It still routes through `retained` so a
@@ -1172,19 +1260,19 @@ inline bool planPeSemanticAdmissionWith(
       std::size_t mappingOrdinal = kPeSemanticNoSlot;
       if (row.wire.valid) {
         if (!retained(row.object, kind, pinKind, true,
-                      row.object.object != nullptr && pinWitness != nullptr
+                      row.object.object != nullptr
                           ? &mappingOrdinal
                           : nullptr)) return false;
         if (mappingOrdinal != kPeSemanticNoSlot &&
-            mappingOrdinal >= pinWitness->count) return false;
+            mappingOrdinal >= identities.count) return false;
       }
       if (bindingWitness != nullptr) {
         if (bindingWitness->count >= bindingWitness->values.size() ||
             occurrence > std::numeric_limits<std::uint32_t>::max()) return false;
         const auto localWireIndex =
-            mappingOrdinal == kPeSemanticNoSlot || pinWitness == nullptr
+            mappingOrdinal == kPeSemanticNoSlot
                 ? D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX
-                : pinWitness->entries[mappingOrdinal].wireIndex;
+                : identities.entries[mappingOrdinal].wireIndex;
         bindingWitness->values[bindingWitness->count++] = {
             .mappingOrdinal = mappingOrdinal == kPeSemanticNoSlot
                                   ? kPeSemanticNoSlot
@@ -1251,9 +1339,36 @@ inline bool planPeSemanticAdmissionWith(
       !addBytes(s.psBoolConstants.registerBytes.size()) ||
       !addBytes(s.upIndexData.size()) || !addBytes(s.upVertexData.size())) return false;
   if (!detail::checkedSizeToU32(semanticBytes, out.semanticBytes) ||
-      !detail::checkedSizeToU32(pins.wireCount, out.handleCount)) return false;
+      !detail::checkedSizeToU32(
+          identities.wireCount, out.handleCount)) return false;
   out.valid = true;
   return true;
+}
+
+template <PeSemanticRecordInputLike Input, typename OnUniqueRetained>
+  requires (std::is_nothrow_invocable_r_v<bool, OnUniqueRetained&,
+                                          const PeWireObjectRef&, std::size_t> ||
+            std::is_nothrow_invocable_r_v<bool, OnUniqueRetained&,
+                                          const PeWireObjectRef&, std::size_t,
+                                          std::size_t>)
+inline bool planPeSemanticAdmissionWith(
+    const Input& input, PeSemanticAdmissionPlan& out,
+    OnUniqueRetained&& onUniqueRetained,
+    PeSemanticEmissionHandleContext* wireWitness = nullptr,
+    PeSemanticPreparedSparseLayout* sparseLayoutWitness = nullptr,
+    PeSemanticBindingOccurrencePlan* bindingWitness = nullptr,
+    PeSemanticPreparedIdentityWitness* identityWitness = nullptr) noexcept {
+  if (identityWitness != nullptr) {
+    return planPeSemanticAdmissionWithIdentity(
+        input, out, static_cast<OnUniqueRetained&&>(onUniqueRetained),
+        *identityWitness,
+        wireWitness, sparseLayoutWitness, bindingWitness);
+  }
+  PeSemanticPreparedIdentityWitness localIdentityWitness;
+  return planPeSemanticAdmissionWithIdentity(
+      input, out, static_cast<OnUniqueRetained&&>(onUniqueRetained),
+      localIdentityWitness,
+      wireWitness, sparseLayoutWitness, bindingWitness);
 }
 
 template <PeSemanticRecordInputLike Input>
@@ -1287,10 +1402,9 @@ struct PeSemanticPreparedRecord {
   PeSemanticAdmissionPlan plan;
   PeSemanticPreparedSparseLayout sparseLayout;
   PeSemanticBindingOccurrencePlan bindingOccurrences;
-  // Exact first-seen wire identity/order produced by the admission walk. It
-  // is consumed only by the private append transaction.
-  PeSemanticEmissionHandleContext wireHandles;
-  PeSemanticPreparedPinMapping pinMapping;
+  // Sole private admission-local identity authority: entries retain first
+  // identity order while wireOrdinals preserves first wire promotion order.
+  PeSemanticPreparedIdentityWitness identityWitness;
   // Owner-qualified retention delta: how many novel typed pins per kind this
   // record adds beyond the pins the destination chunk already holds.
   std::array<std::uint32_t, 6u> retentionDeltas{};
@@ -1327,8 +1441,7 @@ struct PeSemanticPreparedRecord {
     plan.valid = false;
     sparseLayout.reset();
     bindingOccurrences.reset();
-    wireHandles.resetFrontier();
-    pinMapping.reset();
+    identityWitness.reset();
     retentionDeltas.fill(0u);
     rule = nullptr;
     producer = PeSemanticProducerKind::DrawPrimitive;
@@ -1718,7 +1831,8 @@ class PeSemanticBatchOwner final {
   // walk did.
   bool accumulateRetentionDelta(
       const PeWireObjectRef& ref, std::size_t pinKind,
-      PeSemanticPreparedRecord& witness) const noexcept {
+      PeSemanticPreparedRecord& witness,
+      std::size_t identityOrdinal) const noexcept {
     auto& out = witness.retentionDeltas;
     bool existing = false;
     std::size_t currentCount = 0u;
@@ -1777,7 +1891,8 @@ class PeSemanticBatchOwner final {
         return false;
       ++out[pinKind];
     }
-    return witness.pinMapping.add(ref, static_cast<std::uint32_t>(pin));
+    return witness.identityWitness.setPin(identityOrdinal,
+                                          static_cast<std::uint32_t>(pin));
   }
 
  public:
@@ -1809,11 +1924,13 @@ class PeSemanticBatchOwner final {
     witness.upProducer = isPeSemanticUpProducer(staged.producer);
     if (!planPeSemanticAdmissionWith(
         input, witness.plan,
-        [&](const PeWireObjectRef& ref, std::size_t pinKind) noexcept {
-              return accumulateRetentionDelta(ref, pinKind, witness);
+        [&](const PeWireObjectRef& ref, std::size_t pinKind,
+            std::size_t identityOrdinal) noexcept {
+              return accumulateRetentionDelta(ref, pinKind, witness,
+                                              identityOrdinal);
             },
-        &witness.wireHandles, &witness.pinMapping, &witness.sparseLayout,
-        &witness.bindingOccurrences)) {
+        nullptr, &witness.sparseLayout, &witness.bindingOccurrences,
+        &witness.identityWitness)) {
       return PeSemanticAdmissionOutcome::Malformed;
     }
     witness.recordCount = recordCount_;
@@ -1850,7 +1967,7 @@ class PeSemanticBatchOwner final {
     witness.plan.semanticBytes = witness.sparseLayout.semanticDelta;
     witness.plan.sparseCounts = witness.sparseLayout.quotaDeltas;
 
-    detail::PeSemanticIdentitySet identities;
+    auto& identities = witness.identityWitness;
     const auto retain = [&](const PeWireObjectRef& ref, std::uint32_t kind,
                             std::size_t pinKind,
                             PeSemanticBindingLocator& locator,
@@ -1860,19 +1977,12 @@ class PeSemanticBatchOwner final {
       std::size_t mappingOrdinal = 0u;
       if (!identities.add(ref, kind, true, newlyRetained, newlyWireVisible,
                           &mappingOrdinal)) return false;
-      if (newlyWireVisible &&
-          !witness.wireHandles.appendKnownUnique(ref.identity)) return false;
       if (newlyRetained) {
         if (witness.plan.uniquePinCounts[pinKind] ==
             std::numeric_limits<std::uint32_t>::max()) return false;
         ++witness.plan.uniquePinCounts[pinKind];
-        if (!accumulateRetentionDelta(ref, pinKind, witness)) return false;
-      }
-      if (newlyWireVisible &&
-          !witness.pinMapping.setWireIndex(
-              mappingOrdinal,
-              static_cast<std::uint32_t>(identities.wireCount - 1u))) {
-        return false;
+        if (!accumulateRetentionDelta(ref, pinKind, witness, mappingOrdinal))
+          return false;
       }
       locator = {
           .mappingOrdinal = ref.object == nullptr
@@ -1880,7 +1990,7 @@ class PeSemanticBatchOwner final {
               : static_cast<std::uint32_t>(mappingOrdinal),
           .wireIndex = ref.object == nullptr
               ? D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX
-              : witness.pinMapping.entries[mappingOrdinal].wireIndex,
+              : identities.entries[mappingOrdinal].wireIndex,
           .occurrence = static_cast<std::uint32_t>(occurrence),
           .wireValid = true,
           .hasPin = ref.object != nullptr,
@@ -2159,8 +2269,16 @@ class PeSemanticBatchOwner final {
       }
       ++recordCount_;
       auto&& callback = commit;
-      if (!runPhase(PeSemanticOwnerPhase::PendingDeltaSettlement,
-                    [&]() noexcept { return callback(); })) {
+      const bool settled = [&]() noexcept {
+        if constexpr (Observe) {
+          auto settlement = phaseObserver_->beginSettlement(
+              peSemanticOwnerSettlementFamily(input));
+          return callback();
+        } else {
+          return callback();
+        }
+      }();
+      if (!settled) {
         lastAdmissionFailure_ = AdmissionFailure::Settlement;
         rollbackPhase(checkpoint);
         return false;
@@ -3378,7 +3496,7 @@ class PeSemanticBatchOwner final {
                     const PeSemanticPreparedRecord& prepared,
                     std::size_t globalFirst, std::uint32_t& out) const noexcept {
     std::uint32_t local = kPeSemanticNoSlot;
-    if (!prepared.pinMapping.findWire(kind, pin, local) ||
+    if (!prepared.identityWitness.findWire(kind, pin, local) ||
         globalFirst + local > std::numeric_limits<std::uint32_t>::max()) {
       return false;
     }
@@ -3470,14 +3588,19 @@ class PeSemanticBatchOwner final {
                            value.reserved0 = 0u;
                          value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
                          if (value.valid && locator.hasPin) {
-                           if (locator.mappingOrdinal >= prepared.pinMapping.count ||
-                               prepared.pinMapping.entries[locator.mappingOrdinal].object !=
+                           if (locator.mappingOrdinal >= prepared.identityWitness.count ||
+                               !PeSemanticPreparedIdentityWitness::sameIdentity(
+                                   prepared.identityWitness.entries[
+                                       locator.mappingOrdinal]
+                                       .identity,
+                                   source.object.identity) ||
+                               prepared.identityWitness.entries[locator.mappingOrdinal].object !=
                                    source.object.object)
                              return false;
                            const auto local = locator.wireIndex;
                            if (local == kPeSemanticNoSlot ||
-                               local >= prepared.wireHandles.count ||
-                               prepared.pinMapping.entries[locator.mappingOrdinal].wireIndex !=
+                               local >= prepared.identityWitness.wireCount ||
+                               prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex !=
                                    local ||
                                globalFirst + local >
                                    std::numeric_limits<std::uint32_t>::max())
@@ -3675,15 +3798,15 @@ class PeSemanticBatchOwner final {
                 value.reserved0 = 0u;
               value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
               if (locator.hasPin) {
-                if (locator.mappingOrdinal >= prepared.pinMapping.count)
+                if (locator.mappingOrdinal >= prepared.identityWitness.count)
                   return false;
                 const auto& mapping =
-                    prepared.pinMapping.entries[locator.mappingOrdinal];
-                if (!PeSemanticPreparedPinMapping::sameIdentity(
+                    prepared.identityWitness.entries[locator.mappingOrdinal];
+                if (!PeSemanticPreparedIdentityWitness::sameIdentity(
                         mapping.identity, ref.identity) ||
                     mapping.object != ref.object ||
                     locator.wireIndex != mapping.wireIndex ||
-                    mapping.wireIndex >= prepared.wireHandles.count ||
+                    mapping.wireIndex >= prepared.identityWitness.wireCount ||
                     globalFirst + mapping.wireIndex >
                         std::numeric_limits<std::uint32_t>::max()) return false;
                 value.handleIndex = static_cast<std::uint32_t>(
@@ -4128,9 +4251,9 @@ class PeSemanticBatchOwner final {
         recordCount_ >= Storage::maxWireRecords) {
       return false;
     }
-    const auto& handles = prepared.wireHandles;
-    if (handles.count != prepared.plan.handleCount ||
-        handles.count > kMaxRecordHandles) {
+    const auto& handles = prepared.identityWitness;
+    if (handles.wireCount != prepared.plan.handleCount ||
+        handles.wireCount > kMaxRecordHandles) {
       return false;
     }
     auto payload = std::span<std::byte>(storage_->canonicalPayload).subspan(
@@ -4148,11 +4271,13 @@ class PeSemanticBatchOwner final {
                             prepared)) {
       return false;
     }
-    for (std::size_t i = 0u; i < handles.count; ++i) {
+    for (std::size_t i = 0u; i < handles.wireCount; ++i) {
+      const auto* const entry = handles.wireEntry(i);
+      if (entry == nullptr) return false;
       storage_->wireHandles[prepared.emissionHandleCount + i] = {
-          .kind = handles.identities[i].kind,
-          .generation = handles.identities[i].generation,
-          .objectId = handles.identities[i].objectId,
+          .kind = entry->identity.kind,
+          .generation = entry->identity.generation,
+          .objectId = entry->identity.objectId,
       };
     }
     storage_->wireRecords[recordCount_] = {
@@ -4161,7 +4286,7 @@ class PeSemanticBatchOwner final {
         .payloadOffset = static_cast<std::uint32_t>(prepared.payloadOffset),
         .payloadSize = static_cast<std::uint32_t>(prepared.plan.payloadBytes),
         .firstHandle = static_cast<std::uint32_t>(prepared.emissionHandleCount),
-        .handleCount = static_cast<std::uint32_t>(handles.count),
+        .handleCount = static_cast<std::uint32_t>(handles.wireCount),
         .reserved0 = 0u,
         .reserved1 = 0u,
     };
@@ -4748,7 +4873,7 @@ class PeSemanticBatchOwner final {
                    const PeSemanticPreparedRecord& prepared,
                    Retain retain,
                    std::uint32_t* wireIndex = nullptr,
-                   const PeSemanticPreparedPinMapping::Entry*
+                   const PeSemanticPreparedIdentityWitness::Entry*
                        qualifiedMapping = nullptr) noexcept {
     if (wireIndex) *wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     if (!ref.object) {
@@ -4764,16 +4889,16 @@ class PeSemanticBatchOwner final {
     if (!identity.valid()) return false;
     const auto* mapping = qualifiedMapping;
     if (mapping != nullptr) {
-      if (!PeSemanticPreparedPinMapping::sameIdentity(mapping->identity,
+      if (!PeSemanticPreparedIdentityWitness::sameIdentity(mapping->identity,
                                                       ref.identity) ||
           mapping->object != ref.object) return false;
     } else {
-      mapping = prepared.pinMapping.findPin(ref);
+      mapping = prepared.identityWitness.findPin(ref);
     }
     if (!mapping) return false;
     const auto preparedPin = mapping->pin;
     if (wireIndex) {
-      if (mapping->wireIndex >= prepared.wireHandles.count) return false;
+      if (mapping->wireIndex >= prepared.identityWitness.wireCount) return false;
       *wireIndex = mapping->wireIndex;
     }
     const std::size_t index = preparedPin;
@@ -5125,8 +5250,8 @@ class PeSemanticBatchOwner final {
       std::uint32_t acquired = kPeSemanticNoSlot;
       std::uint32_t wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
       const auto* mapping = locator->hasPin
-          ? (locator->mappingOrdinal < prepared.pinMapping.count
-                 ? &prepared.pinMapping.entries[locator->mappingOrdinal]
+          ? (locator->mappingOrdinal < prepared.identityWitness.count
+                 ? &prepared.identityWitness.entries[locator->mappingOrdinal]
                  : nullptr)
           : nullptr;
       if (locator->hasPin && mapping == nullptr) return false;
@@ -5353,13 +5478,13 @@ class PeSemanticBatchOwner final {
           std::uint32_t pin = kPeSemanticNoSlot;
           std::uint32_t wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
           if (!ref.valid() ||
-              locator.mappingOrdinal >= prepared.pinMapping.count ||
+              locator.mappingOrdinal >= prepared.identityWitness.count ||
               !pinPrepared<D9CTexture, PeSemanticTextureIdentity>(
                   ref, storage_->textures, textureCount_, pin, prepared,
                   retainTextureFn(), &wireIndex,
-                  &prepared.pinMapping.entries[locator.mappingOrdinal]) ||
-              prepared.pinMapping.entries[locator.mappingOrdinal].pin != pin ||
-              prepared.pinMapping.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
+                  &prepared.identityWitness.entries[locator.mappingOrdinal]) ||
+              prepared.identityWitness.entries[locator.mappingOrdinal].pin != pin ||
+              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
               locator.wireIndex != wireIndex)
             return false;
         }
@@ -5391,13 +5516,13 @@ class PeSemanticBatchOwner final {
           std::uint32_t pin = kPeSemanticNoSlot;
           std::uint32_t wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
           if (!ref.valid() ||
-              locator.mappingOrdinal >= prepared.pinMapping.count ||
+              locator.mappingOrdinal >= prepared.identityWitness.count ||
               !pinPrepared<D9CBuffer, PeSemanticBufferIdentity>(
                   ref, storage_->buffers, bufferCount_, pin, prepared,
                   retainBufferFn(), &wireIndex,
-                  &prepared.pinMapping.entries[locator.mappingOrdinal]) ||
-              prepared.pinMapping.entries[locator.mappingOrdinal].pin != pin ||
-              prepared.pinMapping.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
+                  &prepared.identityWitness.entries[locator.mappingOrdinal]) ||
+              prepared.identityWitness.entries[locator.mappingOrdinal].pin != pin ||
+              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
               locator.wireIndex != wireIndex)
             return false;
         }
@@ -5429,13 +5554,13 @@ class PeSemanticBatchOwner final {
           std::uint32_t pin = kPeSemanticNoSlot;
           std::uint32_t wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
           if (!ref.valid() ||
-              locator.mappingOrdinal >= prepared.pinMapping.count ||
+              locator.mappingOrdinal >= prepared.identityWitness.count ||
               !pinPrepared<D9CShader, PeSemanticShaderIdentity>(
                   ref, storage_->shaders, shaderCount_, pin, prepared,
                   retainShaderFn(), &wireIndex,
-                  &prepared.pinMapping.entries[locator.mappingOrdinal]) ||
-              prepared.pinMapping.entries[locator.mappingOrdinal].pin != pin ||
-              prepared.pinMapping.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
+                  &prepared.identityWitness.entries[locator.mappingOrdinal]) ||
+              prepared.identityWitness.entries[locator.mappingOrdinal].pin != pin ||
+              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
               locator.wireIndex != wireIndex)
             return false;
         }
@@ -5467,13 +5592,13 @@ class PeSemanticBatchOwner final {
           std::uint32_t pin = kPeSemanticNoSlot;
           std::uint32_t wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
           if (!ref.valid() ||
-              locator.mappingOrdinal >= prepared.pinMapping.count ||
+              locator.mappingOrdinal >= prepared.identityWitness.count ||
               !pinPrepared<D9CVertexDecl, PeSemanticDeclarationIdentity>(
                   ref, storage_->declarations, declarationCount_, pin,
                   prepared, retainDeclarationFn(), &wireIndex,
-                  &prepared.pinMapping.entries[locator.mappingOrdinal]) ||
-              prepared.pinMapping.entries[locator.mappingOrdinal].pin != pin ||
-              prepared.pinMapping.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
+                  &prepared.identityWitness.entries[locator.mappingOrdinal]) ||
+              prepared.identityWitness.entries[locator.mappingOrdinal].pin != pin ||
+              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
               locator.wireIndex != wireIndex)
             return false;
         }
@@ -5507,13 +5632,13 @@ class PeSemanticBatchOwner final {
           std::uint32_t pin = kPeSemanticNoSlot;
           std::uint32_t wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
           if (!ref.valid() ||
-              locator.mappingOrdinal >= prepared.pinMapping.count ||
+              locator.mappingOrdinal >= prepared.identityWitness.count ||
               !pinPrepared<D9CBuffer, PeSemanticBufferIdentity>(
                   ref, storage_->buffers, bufferCount_, pin, prepared,
                   retainBufferFn(), &wireIndex,
-                  &prepared.pinMapping.entries[locator.mappingOrdinal]) ||
-              prepared.pinMapping.entries[locator.mappingOrdinal].pin != pin ||
-              prepared.pinMapping.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
+                  &prepared.identityWitness.entries[locator.mappingOrdinal]) ||
+              prepared.identityWitness.entries[locator.mappingOrdinal].pin != pin ||
+              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
               locator.wireIndex != wireIndex)
             return false;
         }
@@ -5545,13 +5670,13 @@ class PeSemanticBatchOwner final {
           std::uint32_t pin = kPeSemanticNoSlot;
           std::uint32_t wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
           if (!ref.valid() ||
-              locator.mappingOrdinal >= prepared.pinMapping.count ||
+              locator.mappingOrdinal >= prepared.identityWitness.count ||
               !pinPrepared<D9CSurface, PeSemanticSurfaceIdentity>(
                   ref, storage_->surfaces, surfaceCount_, pin, prepared,
                   retainSurfaceFn(), &wireIndex,
-                  &prepared.pinMapping.entries[locator.mappingOrdinal]) ||
-              prepared.pinMapping.entries[locator.mappingOrdinal].pin != pin ||
-              prepared.pinMapping.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
+                  &prepared.identityWitness.entries[locator.mappingOrdinal]) ||
+              prepared.identityWitness.entries[locator.mappingOrdinal].pin != pin ||
+              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
               locator.wireIndex != wireIndex)
             return false;
         }
@@ -5583,13 +5708,13 @@ class PeSemanticBatchOwner final {
           std::uint32_t pin = kPeSemanticNoSlot;
           std::uint32_t wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
           if (!ref.valid() ||
-              locator.mappingOrdinal >= prepared.pinMapping.count ||
+              locator.mappingOrdinal >= prepared.identityWitness.count ||
               !pinPrepared<D9CSurface, PeSemanticSurfaceIdentity>(
                   ref, storage_->surfaces, surfaceCount_, pin, prepared,
                   retainSurfaceFn(), &wireIndex,
-                  &prepared.pinMapping.entries[locator.mappingOrdinal]) ||
-              prepared.pinMapping.entries[locator.mappingOrdinal].pin != pin ||
-              prepared.pinMapping.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
+                  &prepared.identityWitness.entries[locator.mappingOrdinal]) ||
+              prepared.identityWitness.entries[locator.mappingOrdinal].pin != pin ||
+              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
               locator.wireIndex != wireIndex)
             return false;
         }
