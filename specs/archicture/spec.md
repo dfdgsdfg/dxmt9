@@ -1026,6 +1026,14 @@ application-to-Replay publication, and Replay-to-encode Ready publication.
 The first two execute on the same calling thread until the raw queue adopts
 the source. A Unix-owned function is not necessarily worker-executed.
 
+The optimization objective (R-ARCH-6.22–6.23) is to perform only the work needed
+to safely fix semantics and lifetime on the application thread, then interpret
+and construct each reusable fact as few times as possible through execution.
+It is not simply to enter Unix sooner. Calling-thread cost includes both PE
+recording and synchronous Unix admission; total pipeline work and critical-path
+latency must also be measured so an earlier return cannot conceal duplicated
+worker work or displaced waits.
+
 | Stage | Required work | Work that does not belong here by default |
 |---|---|---|
 | PE recording | D3D9-visible validation/state and PendingDelta meaning; canonical sparse bytes; qualified identities and bridge-duration lifetime | Unix object resolution, pass planning, final `ChunkSlot` SoA, Metal bindings |
@@ -1037,6 +1045,24 @@ This is an execution-placement contract, not a requirement to introduce another
 queue. Representation ownership remains R-ARCH-7.8/7.20–7.24. Fused or parallel
 providers must refine the same source semantics and retain their separate
 eligibility/economy gates; the stable serial topology is unchanged.
+
+Single derivation is dependency-qualified, not a prohibition on all later
+checks or transformations. Wire bounds validation, resource-version admission,
+final execution-layout construction, and Metal lowering discharge different
+obligations. Within each obligation, downstream consumers reuse valid results
+instead of expanding the same state, resolving the same admitted identity, or
+building an equivalent carrier again. A changed state/backing generation or
+destination capacity/retention context invalidates only the dependent witness;
+failure/retry must never reuse a stale one. Necessary ownership copies and
+distinct trust-boundary checks remain explicit, ledger-attributed exceptions,
+not silent claims of zero-copy or globally one-pass execution.
+
+Bounded wire batches and final Slot SoA are ownership/consumption contracts,
+not requirements for extra intermediate materializations or proof of performance
+superiority. Any added queue, persistent representation, or repeated prepass
+needs a named obligation or measured end-to-end benefit. Representation changes
+alone must not be reported as offload, and safety/refinement evidence alone
+must not be reported as economic acceptance.
 
 The synchronous admission witness fixes the source interval, used byte extents,
 resource identities/lifetimes, concrete backing versions, and drain/publication
@@ -1083,6 +1109,11 @@ automatic proof of a newly relocated phase. Reports must use the R-ARCH-6.17
 phase/population attribution and R-ARCH-7.7 ledger, then verify unchanged command
 order, pixels where affected, locality, latency, and memory before claiming an
 end-to-end gain. The [architecture gap](gap.md) records missing integration.
+R-ARCH-6.22–6.23 acceptance must additionally identify each synchronous
+obligation and each derivation's producer, consumers, dependencies, and reuse
+or repetition counts. Native reuse-versus-recompute/fault tests must pin both
+unchanged inputs and invalidation by source/generation/destination changes;
+stateful reuse follows the same R-VERIF-1.5–1.8 refinement and oracle gates.
 
 ### 6.7 Safe Batch Cuts And Bounded Policy Optimization
 

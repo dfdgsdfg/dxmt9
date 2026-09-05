@@ -350,6 +350,26 @@ not evidence of original producer supply or batching benefit. Cost-model error,
 observer overhead, memory/latency bounds, locality, and held-out workload results
 must be reported before an offline policy result can support runtime promotion.
 
+**R-ARCH-6.22** The calling application thread, including synchronous Unix
+calls, must limit submission work to safely fixing D3D9-visible semantics,
+immutable replayable bytes, ordered identity, lifetime, and the required
+failure/publication outcome. Other synchronous work requires an explicit
+placement reason and R-ARCH-6.17 economy evidence; crossing the ABI earlier is
+not itself an optimization. This minimum-work objective must not weaken
+R-ARCH-6.13/6.16 or permit one bridge call per ordinary D3D9 operation.
+
+**R-ARCH-6.23** From recording through execution, each reusable semantic
+derivation must have one authoritative producer and declared source, state,
+resource/backing-generation, and destination dependencies as applicable.
+Consumers must reuse its valid result or identity-qualified witness rather
+than re-derive equivalent facts solely because a representation, binary, or
+thread boundary was crossed. Revalidation, recomputation, or additional
+materialization must name the distinct trust, lifetime, changed-dependency,
+failure, or measured economy obligation it serves and be attributable under
+R-ARCH-6.17/7.7. Mandatory Unix input validation and Metal-specific lowering
+remain distinct responsibilities; a PE witness is not permission to skip them.
+Reuse must not extend borrowed storage lifetime or validate a stale generation.
+
 ---
 
 ## 7. Minimal-Copy Policy
