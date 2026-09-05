@@ -55,6 +55,8 @@ class RecorderBorrow final {
            lane_ != RecorderAccessLane::Denied;
   }
 
+  bool validFor(const RecorderLockCapability& capability) const noexcept;
+
   template <typename Fn>
     requires std::is_nothrow_invocable_v<Fn&&, T&>
   bool with(Fn&& fn) const noexcept {
@@ -128,6 +130,14 @@ class RecorderLockCapability final {
   friend class RecorderBorrow;
   friend class RecorderLockGuard;
 };
+
+template <typename T>
+bool RecorderBorrow<T>::validFor(
+    const RecorderLockCapability& capability) const noexcept {
+  return valid() && capability.valid() && epoch_ == capability.epoch_ &&
+         issuedEpoch_ == capability.issuedEpoch_ &&
+         lane_ == capability.lane_;
+}
 
 template <typename T>
 void RecorderBorrow<T>::bind(const RecorderLockCapability& capability,

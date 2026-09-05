@@ -21,6 +21,7 @@
 #include "d3d9_pe_producer.hpp"
 #include "d3d9_pe_const_shadow.hpp"
 #include "d3d9_pe_producer_views.hpp"
+#include "d3d9_pe_semantic_owner.hpp"
 #include "d3d9_pe_wire_handle.hpp"
 
 #include <array>
@@ -314,6 +315,61 @@ LaneResult runPlanLane(const Fixture& fixture) {
       ? pe::appendApplyStatePlan(builder, plan.drawFlags, plan)
       : pe::appendSparseStatePlan(builder, params.recordType, plan);
   return finishLane(builder, ok);
+}
+
+LaneResult runOwnerPlanLane(const Fixture& fixture) {
+  Fixture source = fixture;
+  const auto canonicalResult = runPlanLane(fixture);
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken ownerThread;
+  std::uint64_t epoch = 1u;
+  pe::RecorderLockGuard guard(mutex, false);
+  const auto access = guard.capability(ownerThread, epoch);
+  pe::SparseStatePlan plan;
+  pe::PeDrawParams params = source.params;
+  if (params.recordType == 0u)
+    params.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
+  if (!pe::buildSparseStatePlan(
+          access, source.shadow, source.constants, source.bindings,
+          source.payloads, params, false, source.inlineConstDelta, plan)) {
+    return {};
+  }
+  if ((params.recordType == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
+       params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) &&
+      !pe::finalizeSparseStatePlanChunkContext(access, source.chunk, plan)) {
+    return {};
+  }
+  pe::PeSemanticBatchOwner<> owner;
+  const auto producer = params.recordType == D9C_COMMAND_RECORD_APPLY_STATE
+      ? pe::PeSemanticProducerKind::ApplyState
+      : (params.recordType == D9C_COMMAND_RECORD_DRAW_PRIMITIVE
+             ? pe::PeSemanticProducerKind::DrawPrimitive
+             : pe::PeSemanticProducerKind::DrawIndexedPrimitive);
+  LaneResult result;
+  const auto settlement = pe::settleRecorderAppend({
+      .phase = pe::AppendSettlement::Prepared,
+      .appendSucceeded = true,
+  });
+  result.ok = owner.tryAppendSparseStatePlan(
+      access, plan, producer, params.recordType,
+      D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+      [&]() noexcept {
+        return pe::acceptSparseStatePlan(
+            source.shadow, source.constants, plan, settlement, nullptr, 1u,
+            plan.pendingTicket);
+      });
+  if (!result.ok) return result;
+  std::size_t wireBytes = 0u;
+  if (!owner.emissionMetrics(result.handleCount, result.payloadBytes,
+                             wireBytes)) return {};
+  result.recordCount = owner.size();
+  result.retainedObjectCount = owner.retainedCount();
+  pe::PeSemanticExactFixedEmission exact;
+  if (!owner.emitExactFixed(exact) || !exact.valid()) return {};
+  result.bytes.assign(exact.wire.begin(), exact.wire.end());
+  check(result.bytes == canonicalResult.bytes,
+        source.name + ": production owner plan differs from plan builder");
+  return result;
 }
 
 // --- goldens ---------------------------------------------------------------
@@ -972,6 +1028,160 @@ void inlineConstDeltaSingleRange() {
   requirePinnedOutput(f);
 }
 
+void productionOwnerPlanAllCategoryDifferential() {
+  Fixture f = baseDraw("production owner compact plan all-category",
+                       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  f.inlineConstDelta = true;
+  f.params.baseVertex = -3;
+  f.params.minVertex = 2u;
+  f.params.numVertices = 33u;
+  f.params.startIndex = 5u;
+  f.shadow.writer().pendingRenderStatesTyped().set(
+      renderStateSlotKey(7u), 0x12345678u);
+  f.shadow.writer().pendingTextureMask() = 0x7u;
+  f.shadow.writer().pendingStreamMask() = 0x3u;
+  f.shadow.writer().pendingVs() = true;
+  f.shadow.writer().pendingPs() = true;
+  f.shadow.writer().pendingVdecl() = true;
+  f.shadow.writer().pendingIb() = true;
+  f.shadow.writer().pendingRtMask() = 0x3u;
+  f.shadow.writer().pendingDs() = true;
+  f.shadow.writer().pendingViewport() = true;
+  f.shadow.writer().pendingScissor() = true;
+  f.shadow.writer().pendingMaterial() = true;
+  f.shadow.writer().pendingClipPlaneMask() = 0x3u;
+  f.shadow.writer().pendingLightSlotMask() = 0x3u;
+  f.shadow.writer().pendingLightEnableValidMask() = 0x3u;
+  f.shadow.writer().pendingLightEnableMask() = 0x1u;
+  f.shadow.writer().pendingTssTyped().set(
+      textureStageIndexKey(1u), textureStageStateTypeKey(2u), 0x77u);
+  SamplerIndex sampler{};
+  SamplerStateType samplerType{};
+  check(samplerIndexKey(1u, sampler) &&
+            samplerStateTypeKey(2u, samplerType),
+        "all-category sampler key is valid");
+  f.shadow.writer().pendingSamplerStatesTyped().set(
+      sampler, samplerType, 0x88u);
+  f.shadow.writer().pendingTransformsTyped().set(
+      transformStateKey(kD3dTsView), identityTransformMatrix());
+  f.shadow.writer().viewportShadow() =
+      D9CViewport{3u, 4u, 800u, 600u, 0.1f, 0.9f};
+  f.shadow.writer().scissorShadow() = D9CRect{5, 6, 700, 500};
+  f.shadow.writer().materialShadow().diffuse =
+      D9CColorRGBA{0.2f, 0.4f, 0.6f, 0.8f};
+  f.shadow.writer().materialShadow().power = 17.0f;
+  f.shadow.writer().clipPlaneShadow()[0] = 1.0f;
+  f.shadow.writer().clipPlaneShadow()[5] = 2.0f;
+  f.shadow.writer().lightShadow()[0].type = 1u;
+  f.shadow.writer().lightShadow()[0].diffuse =
+      D9CColorRGBA{0.1f, 0.3f, 0.5f, 0.7f};
+  f.shadow.writer().lightShadow()[1].range = 123.0f;
+  f.bindings.textures[0] =
+      publishedRef(&tex0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
+  f.bindings.textures[1] = f.bindings.textures[0];
+  f.bindings.textures[2] = {};
+  f.bindings.streams[0].buffer =
+      publishedRef(&vb0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  f.bindings.streams[1].buffer = f.bindings.streams[0].buffer;
+  f.bindings.streams[1].offset = 128u;
+  f.bindings.streams[1].stride = 16u;
+  f.bindings.vs = publishedRef(&vsObj, D9C_CHUNK_HANDLE_KIND_SHADER);
+  f.bindings.ps = publishedRef(&psObj, D9C_CHUNK_HANDLE_KIND_SHADER);
+  f.bindings.vdecl =
+      publishedRef(&vdecl0, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL);
+  f.bindings.indexBuffer =
+      publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  f.bindings.renderTargets[0] =
+      publishedRef(&rt0, D9C_CHUNK_HANDLE_KIND_SURFACE);
+  f.bindings.renderTargets[1] = f.bindings.renderTargets[0];
+  f.bindings.depthStencil =
+      publishedRef(&ds0, D9C_CHUNK_HANDLE_KIND_SURFACE);
+
+  struct ConstantSpec {
+    ConstShadow* shadow;
+    std::size_t elementBytes;
+    std::uint32_t registers;
+  };
+  const ConstantSpec constants[] = {
+      {&f.constants.vsConstF, 16u, 256u},
+      {&f.constants.vsConstI, 16u, 16u},
+      {&f.constants.vsConstB, 4u, 16u},
+      {&f.constants.psConstF, 16u, 224u},
+      {&f.constants.psConstI, 16u, 16u},
+      {&f.constants.psConstB, 4u, 16u},
+  };
+  std::uint32_t seed = 3u;
+  for (const auto& constant : constants) {
+    constant.shadow->values.assign(
+        constant.registers * constant.elementBytes,
+        static_cast<std::uint8_t>(seed));
+    constant.shadow->dirtyElems.assign(constant.registers, 0u);
+    constant.shadow->dirtyStart = seed % 2u;
+    constant.shadow->dirtyEnd = constant.shadow->dirtyStart + 1u;
+    ++seed;
+  }
+  const auto direct = runDirectDrawLane(f);
+  const auto planned = runPlanLane(f);
+  const auto owned = runOwnerPlanLane(f);
+  check(direct.ok && planned.ok && owned.ok &&
+            direct.bytes == planned.bytes && planned.bytes == owned.bytes &&
+            direct.recordCount == owned.recordCount &&
+            direct.handleCount == owned.handleCount &&
+            direct.payloadBytes == owned.payloadBytes &&
+            direct.retainedObjectCount == owned.retainedObjectCount,
+        "production owner compact plan equals direct and builder goldens");
+}
+
+void productionOwnerExplicitSnapshotRoutePreserved() {
+  Fixture f = baseDraw("production owner explicit snapshot route",
+                       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  f.forceFullSnapshot = true;
+  f.bindings.indexBuffer =
+      publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  const auto direct = runDirectDrawLane(f);
+
+  PeConstShadowBlock planConstants = f.constants;
+  pe::SparseStatePlan plan;
+  check(pe::buildSparseStatePlan(
+            recorderAccess(), f.shadow, planConstants, f.bindings,
+            f.payloads, f.params, true, false, plan) &&
+            pe::finalizeSparseStatePlanChunkContext(f.chunk, plan),
+        "explicit snapshot compact witness prepares for route rejection");
+  pe::PeSemanticBatchOwner<> owner;
+  check(!owner.tryAppendSparseStatePlan(
+            recorderAccess(), plan,
+            pe::PeSemanticProducerKind::DrawIndexedPrimitive,
+            f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+            []() noexcept { return true; }) && owner.size() == 0u,
+        "production compact owner rejects the explicit full-snapshot route");
+
+  PeConstShadowBlock explicitConstants = f.constants;
+  pe::SparseStateInput sparse{};
+  D9CCommandChunkWireDrawHeader draw{};
+  check(pe::buildSparseState(
+            f.shadow, explicitConstants, f.bindings, f.payloads, f.params,
+            true, false, sharedScratch(), draw, sparse) &&
+            pe::addChunkContextSections(
+                f.chunk, f.shadow, f.bindings, f.params, sharedScratch(),
+                sparse),
+        "explicit snapshot retains the generic value-owned preparation route");
+  pe::PeSemanticRecordInput input{};
+  input.producer = pe::PeSemanticProducerKind::DrawIndexedPrimitive;
+  input.recordType = f.params.recordType;
+  input.sourceOrdinal = 1u;
+  input.recordOrdinal = 1u;
+  input.draw = draw;
+  input.sparse = sparse;
+  check(owner.tryAppendOwnedRecord(
+            input, []() noexcept { return true; }),
+        "generic owner still accepts the explicit full-snapshot envelope");
+  pe::PeSemanticExactFixedEmission exact;
+  check(direct.ok && owner.emitExactFixed(exact) && exact.valid() &&
+            std::vector<std::byte>(exact.wire.begin(), exact.wire.end()) ==
+                direct.bytes,
+        "explicit generic owner bytes equal the independent direct golden");
+}
+
 void inlineConstAppendFailurePreservesDirtyRange() {
   Fixture f = baseDraw("inline const append failure retry",
                        D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
@@ -1142,6 +1352,100 @@ void sparsePlanFailureRetryAndSourceWitness() {
             shadow.pendingRenderStatesTyped().empty() &&
             shadow.pendingTextureMask() == 0u,
         "durable plan consumes exactly its emitted PendingDelta");
+}
+
+void productionOwnerPlanRollbackRebaseAndStaleAuthority() {
+  Fixture f = baseDraw("owner plan rollback/rebase fixture",
+                       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  f.bindings.indexBuffer =
+      publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  f.bindings.streams[1].buffer =
+      publishedRef(&vb1, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  f.bindings.streams[1].offset = 96u;
+  f.bindings.streams[1].stride = 24u;
+
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken ownerThread;
+  std::uint64_t epoch = 7u;
+  pe::RecorderLockGuard guard(mutex, false);
+  const auto access = guard.capability(ownerThread, epoch);
+  pe::SparseStatePlan plan;
+  check(pe::buildSparseStatePlan(access, f.shadow, f.constants, f.bindings,
+                                 {}, f.params, false, false, plan),
+        "production owner plan fixture prepares");
+  pe::PeChunkContext firstDestination{};
+  check(pe::finalizeSparseStatePlanChunkContext(
+            access, firstDestination, plan) &&
+            (plan.streamMask & (1u << 1u)) != 0u && plan.indexBuffer,
+        "first destination adds missing stream and index dependencies");
+  pe::PeChunkContext rebasedDestination{};
+  rebasedDestination.retainedStreamMask = (1u << 0u) | (1u << 1u);
+  rebasedDestination.indexBufferKnown = true;
+  rebasedDestination.submittedIndexBufferWire =
+      d9cWireHandleValue(toWireHandle(f.bindings.indexBuffer.object));
+  rebasedDestination.indexBufferRetained = true;
+  check(pe::finalizeSparseStatePlanChunkContext(
+            access, rebasedDestination, plan) &&
+            plan.streamMask == plan.selectedStreamMask &&
+            !plan.indexBuffer && !plan.selectedIndexBuffer,
+        "destination rebase discards prior chunk-only dependency decisions");
+
+  pe::PeSemanticBatchOwner<> owner;
+  check(!owner.tryAppendSparseStatePlan(
+            access, plan,
+            pe::PeSemanticProducerKind::DrawIndexedPrimitive,
+            f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+            []() noexcept { return false; }) &&
+            owner.size() == 0u && owner.retainedCount() == 0u,
+        "failed owner settlement rolls back record, pins, and ledgers");
+  check(owner.tryAppendSparseStatePlan(
+            access, plan,
+            pe::PeSemanticProducerKind::DrawIndexedPrimitive,
+            f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+            []() noexcept { return true; }) && owner.size() == 1u,
+        "same plan retries through the sole owner transaction");
+
+  PeHotStateShadow staleShadow{};
+  staleShadow.writer().pendingRenderStatesTyped().set(
+      renderStateSlotKey(3u), 9u);
+  PeConstShadowBlock staleConstants{};
+  pe::SparseStatePlan stalePlan;
+  pe::PeDrawParams apply{};
+  apply.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
+  check(pe::buildSparseStatePlan(access, staleShadow, staleConstants,
+                                 f.bindings, {}, apply, false, false,
+                                 stalePlan),
+        "stale-ticket plan prepares");
+  staleShadow.writer().pendingRenderStatesTyped().set(
+      renderStateSlotKey(4u), 10u);
+  pe::PeSemanticBatchOwner<> staleOwner;
+  check(!staleOwner.tryAppendSparseStatePlan(
+            access, stalePlan, pe::PeSemanticProducerKind::ApplyState,
+            apply.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+            []() noexcept { return true; }) && staleOwner.size() == 0u,
+        "stale PendingDelta ticket rejects before owner mutation");
+  std::recursive_mutex otherMutex;
+  dxmt9::core::ThreadOwnershipToken otherOwnerThread;
+  std::uint64_t otherEpoch = epoch;
+  pe::RecorderLockGuard otherGuard(otherMutex, false);
+  const auto otherAccess =
+      otherGuard.capability(otherOwnerThread, otherEpoch);
+  check(plan.validFor(access) && !plan.validFor(otherAccess) &&
+            !owner.tryAppendSparseStatePlan(
+                otherAccess, plan,
+                pe::PeSemanticProducerKind::DrawIndexedPrimitive,
+                f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+                2u, 2u, []() noexcept { return true; }) &&
+            owner.size() == 1u,
+        "same numeric epoch from another recorder cannot authorize a plan");
+  ++epoch;
+  check(!plan.validFor(access) &&
+            !owner.tryAppendSparseStatePlan(
+                access, plan,
+                pe::PeSemanticProducerKind::DrawIndexedPrimitive,
+                f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+                2u, 2u, []() noexcept { return true; }),
+        "stale recorder capability cannot reuse an armed plan");
 }
 
 // --- fixed-seed randomized corpus -----------------------------------------
@@ -1406,9 +1710,12 @@ int main() {
     indexBufferPendingOnly();
     inlineConstDeltaAllSixRanges();
     inlineConstDeltaSingleRange();
+    productionOwnerPlanAllCategoryDifferential();
+    productionOwnerExplicitSnapshotRoutePreserved();
     inlineConstAppendFailurePreservesDirtyRange();
     sparseSettlementNormalAndOversizedAreExact();
     sparsePlanFailureRetryAndSourceWitness();
+    productionOwnerPlanRollbackRebaseAndStaleAuthority();
     upDrawCarriesVertexPayload();
     upDrawWithDirtyState();
     upIndexedDrawCarriesBothPayloads();

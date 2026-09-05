@@ -1109,10 +1109,19 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         std::uint32_t recordType,
         const D9CCommandChunkWireSetConst& setConst,
         std::span<const std::byte> constantBytes) noexcept;
+    void armSemanticSparsePlan(
+        dxmt9::d3d9::pe::PeSemanticProducerKind producer,
+        std::uint32_t recordType) noexcept;
     void clearSemanticRecordInput() noexcept;
 
     bool settleSemanticRecord(
         const dxmt9::d3d9::pe::PeSemanticRecordInputView& input,
+        std::uint64_t recordOrdinal) noexcept;
+    bool settleSemanticConstantRecord(
+        const dxmt9::d3d9::pe::PeSemanticConstantRecordInput& input,
+        std::uint64_t recordOrdinal) noexcept;
+    bool settleSemanticSparsePlan(
+        const dxmt9::d3d9::pe::SparseStatePlan& plan,
         std::uint64_t recordOrdinal) noexcept;
     HRESULT appendSemanticRecord(std::uint32_t type, std::size_t bytes);
     HRESULT retryPendingSemanticChunk();
@@ -1172,6 +1181,10 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     bool buildSparseStateForRecord(
         const dxmt9::d3d9::pe::PeDrawParams& params,
         bool forceFullSnapshot = false,
+        bool inlineConstDelta = false);
+    bool buildSparseStatePlanForRecord(
+        const dxmt9::d3d9::pe::RecorderLockCapability& access,
+        const dxmt9::d3d9::pe::PeDrawParams& params,
         bool inlineConstDelta = false);
     static UINT primitiveVertexCount(D3DPRIMITIVETYPE type, UINT primitiveCount);
 
@@ -2196,9 +2209,11 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         // precedes negotiation, capacity accounting, and either flush edge;
         // Reset recovery does not append and remains able to clear poison.
         if (recorderState_.stateBlockTransaction.isPoisoned()) {
+            clearSemanticRecordInput();
             return D3DERR_DEVICELOST;
         }
         if (!recorderState_.commandChunkNegotiated || bytes == 0u || bytes > 0xffffffffull) {
+            clearSemanticRecordInput();
             return recorderState_.commandChunkNegotiated ? D3DERR_INVALIDCALL
                                            : D3DERR_NOTAVAILABLE;
         }
@@ -2208,17 +2223,22 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         // owner is a construction invariant failure; never fall back to a
         // second builder after semantic state may have been prepared.
         if (!semanticOwner) {
+            clearSemanticRecordInput();
             return D3DERR_NOTAVAILABLE;
         }
         if (recorderState_.chunkTransaction.retryable() &&
             recorderState_.chunkTransaction.retryAtSeal()) {
             const HRESULT retryHr = retryPendingSemanticChunk();
-            if (FAILED(retryHr)) return retryHr;
+            if (FAILED(retryHr)) {
+                clearSemanticRecordInput();
+                return retryHr;
+            }
         }
         const std::uint64_t semanticSourceOrdinal = allFamilyTokens
             ? allFamilyTokens->beginSource(type)
             : 0u;
         if (allFamilyTokens && semanticSourceOrdinal == 0u) {
+            clearSemanticRecordInput();
             return D3DERR_INVALIDCALL;
         }
         const auto recordCountBefore = semanticOwner->size();
@@ -2256,6 +2276,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
             !recorderState_.stateBlockTransaction.isPoisoned()) {
             allFamilyTokens->preserveForRetry(semanticSourceOrdinal);
         }
+        if (FAILED(semanticHr)) clearSemanticRecordInput();
         if (FAILED(semanticHr) && dxmt9PeRecorderChunkLogEnabled()) {
             dxmt9DeviceInfoLog(
                 "pe_semantic_append_failed device=%p type=%u bytes=%zu "

@@ -29,6 +29,16 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+The latest bounded refinement is
+[prepared emission / compact producer integration](present-pacing-pe-prepared-emission.244.md).
+Prepared layouts, narrow constants, and direct canonical bindings pass native
+and existing TLA checks. GT2 OFF is neutral (26.872 → 26.919 FPS), ON is
+25.564 → 26.748, with zero errors and about 4 CB/P. Five sampled admission
+children fall about 12.2%, but PendingDelta settlement grows and the inclusive
+parent is neutral. These single runs do not establish FPS recovery or close
+the broader post-v0.1.1 investigation. The earlier admission-reuse checkpoint
+is preserved below for attribution.
+
 For the current semantic-owner PE implementation, use the
 [2026-09-05 admission-reuse evidence](present-pacing-pe-admission-reuse.243.md),
 following [direct canonical payload](present-pacing-pe-direct-canonical.242.md).
@@ -89,6 +99,7 @@ remaining branches are:
 ## Recent Leaf Documents
 
 - [present-pacing-pe-admission-reuse.243 - Qualified Pin/Wire Reuse and Active-Prefix Staging](present-pacing-pe-admission-reuse.243.md)
+- [present-pacing-pe-prepared-emission.244 - Prepared Layouts, Narrow Constants, and Compact Source Admission](present-pacing-pe-prepared-emission.244.md)
 - [present-pacing-pe-direct-canonical.242 - Direct Canonical Value Payload](present-pacing-pe-direct-canonical.242.md)
 - [present-pacing-cpu-ready-next-source-intent.239 - Replay-FIFO Intent Is Safe but Does Not Recover Tape Locality](present-pacing-cpu-ready-next-source-intent.239.md)
 - [present-pacing-cpu-ready-active-head-locality.238 - Active-Session Lookahead Closes the Local Hold Gap but Not Tape Locality](present-pacing-cpu-ready-active-head-locality.238.md)

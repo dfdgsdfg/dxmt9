@@ -12,9 +12,11 @@ related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; 
 # 3DMark05 GT2 Performance — Current Baseline
 
 The latest bounded PE refinement check is
-[admission reuse / active-prefix staging](present-pacing/present-pacing-pe-admission-reuse.243.md):
-GT2 OFF 27.304 to 27.527 benchmark FPS, about 4 CB/P, zero errors, and no stable
-FPS gain established. This is not a full CPU re-profile. The August owner split
+[prepared emission / compact source admission](present-pacing/present-pacing-pe-prepared-emission.244.md),
+following [admission reuse](present-pacing/present-pacing-pe-admission-reuse.243.md):
+GT2 OFF 26.872 to 26.919 benchmark FPS, about 4 CB/P, zero errors, and no stable
+FPS gain established. Five sampled admission child phases decrease while
+PendingDelta settlement increases. This is not a full CPU re-profile. The August owner split
 below predates the mandatory semantic-owner changes; its 10.6% PE share must
 not be applied to current HEAD or used to close the post-v0.1.1 investigation.
 

@@ -57,6 +57,9 @@ PeWireObjectRef wireRef(void* object, std::uint32_t kind, std::uint64_t id) {
 
 struct FamilyFixture {
   D9CTexture sourceTexture, destinationTexture;
+  D9CBuffer buffer;
+  D9CShader shader;
+  D9CVertexDecl declaration;
   D9CSurface sourceSurface, destinationSurface;
   D9CQuery query;
   TextureRef sourceTextureRef{qualifyLocalRef<TextureRef>(
@@ -69,6 +72,12 @@ struct FamilyFixture {
       wireRef(&destinationSurface, D9C_CHUNK_HANDLE_KIND_SURFACE, 0xc400u))};
   QueryRef queryRef{qualifyLocalRef<QueryRef>(
       wireRef(&query, D9C_CHUNK_HANDLE_KIND_QUERY, 0xc500u))};
+  BufferRef bufferRef{qualifyLocalRef<BufferRef>(
+      wireRef(&buffer, D9C_CHUNK_HANDLE_KIND_BUFFER, 0xc600u))};
+  ShaderRef shaderRef{qualifyLocalRef<ShaderRef>(
+      wireRef(&shader, D9C_CHUNK_HANDLE_KIND_SHADER, 0xc700u))};
+  DeclarationRef declarationRef{qualifyLocalRef<DeclarationRef>(
+      wireRef(&declaration, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, 0xc800u))};
   std::array<std::byte, 16u> wideConstant{};
   std::array<std::byte, 4u> boolConstant{};
   std::array<std::byte, 12u> vertices{};
@@ -80,9 +89,51 @@ struct FamilyFixture {
   bool emit(PeSemanticProducerKind kind, CommandChunkBuilder& builder) noexcept {
     using Kind = PeSemanticProducerKind;
     switch (kind) {
-      case Kind::DrawPrimitive:
-        return appendSparseRecord(builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
-            D9CCommandChunkWireDrawHeader{.primitiveType = 4u, .primitiveCount = 1u}, {});
+      case Kind::DrawPrimitive: {
+        // Keep one independent canonical row for every handle-bearing sparse
+        // family in the batch oracle. The owner under test only receives the
+        // validated bytes/identities from this record, so this catches a
+        // family omission without sharing its prepared layout implementation.
+        const std::array textures = {SparseBindingInput<
+            D9CCommandChunkWireTextureBinding>{
+            .wire = {.slot = 3u, .valid = 1u}, .object = sourceTextureRef}};
+        const std::array streams = {SparseBindingInput<
+            D9CCommandChunkWireStreamBinding>{
+            .wire = {.slot = 4u, .valid = 1u, .offset = 8u, .stride = 16u,
+                     .frequency = 1u}, .object = bufferRef}};
+        const std::array shaders = {SparseBindingInput<
+            D9CCommandChunkWireShaderBinding>{
+            .wire = {.stage = D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX,
+                     .valid = 1u}, .object = shaderRef}};
+        const std::array vertexInputs = {SparseBindingInput<
+            D9CCommandChunkWireVertexInput>{
+            .wire = {.valid = 1u,
+                     .kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION},
+            .object = declarationRef}};
+        const std::array indexBuffers = {SparseBindingInput<
+            D9CCommandChunkWireIndexBinding>{
+            .wire = {.valid = 1u}, .object = bufferRef}};
+        const std::array renderTargets = {SparseBindingInput<
+            D9CCommandChunkWireRenderTargetBinding>{
+            .wire = {.slot = 2u, .valid = 1u}, .object = sourceSurfaceRef}};
+        const std::array depthStencils = {SparseBindingInput<
+            D9CCommandChunkWireDepthStencilBinding>{
+            .wire = {.valid = 1u}, .object = sourceSurfaceRef}};
+        const SparseStateInput sparse{
+            .textures = textures,
+            .streams = streams,
+            .shaders = shaders,
+            .vertexInputs = vertexInputs,
+            .indexBuffers = indexBuffers,
+            .renderTargets = renderTargets,
+            .depthStencils = depthStencils,
+        };
+        return appendSparseRecord(
+            builder, D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+            D9CCommandChunkWireDrawHeader{.primitiveType = 4u,
+                                          .primitiveCount = 1u},
+            sparse);
+      }
       case Kind::DrawIndexedPrimitive:
         return appendSparseRecord(builder, D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
             D9CCommandChunkWireDrawHeader{.primitiveType = 4u, .numVertices = 3u,
@@ -140,6 +191,7 @@ struct FamilyFixture {
   }
   bool refsBalanced() const noexcept {
     return sourceTexture.refs == 1u && destinationTexture.refs == 1u &&
+           buffer.refs == 1u && shader.refs == 1u && declaration.refs == 1u &&
            sourceSurface.refs == 1u && destinationSurface.refs == 1u &&
            query.refs == 1u;
   }
@@ -160,6 +212,25 @@ void exactFixedMatchesCanonicalAllFamilyWire() {
   ImportedChunkView imported;
   check(validateCommandChunk(canonical, envelope, &imported).valid(),
         "all-family source validates");
+  const auto allBindingRows = imported.record(0u);
+  constexpr std::array<std::uint16_t, 7u> bindingKinds{
+      D9C_COMMAND_CHUNK_SECTION_TEXTURE,
+      D9C_COMMAND_CHUNK_SECTION_STREAM,
+      D9C_COMMAND_CHUNK_SECTION_SHADER,
+      D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT,
+      D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER,
+      D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET,
+      D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL};
+  check(allBindingRows.sections.size() == bindingKinds.size(),
+        "all seven canonical binding families are present in one row");
+  for (std::size_t index = 0u; index < bindingKinds.size(); ++index) {
+    const auto section = allBindingRows.section(index);
+    check(section.descriptor.kind == bindingKinds[index] &&
+              section.descriptor.count == 1u &&
+              std::any_of(section.payload.begin(), section.payload.end(),
+                          [](std::byte value) { return value != std::byte{}; }),
+          "canonical binding family row retains ordered nonzero values");
+  }
 
   D9CCommandChunkSegmentedTransportV1 role{};
   role.header = imported.header;
@@ -202,6 +273,18 @@ void exactFixedMatchesCanonicalAllFamilyWire() {
             plan.recordCount == imported.records.size() &&
             plan.handleCount == imported.handles.size(),
         "pure plan preserves canonical unique handles");
+  std::size_t priorPayloadEnd = 0u;
+  for (std::size_t index = 0u; index < plan.recordCount; ++index) {
+    const auto& planned = plan.records[index];
+    const auto* rule = recordRule(imported.records[index].type);
+    check(rule != nullptr &&
+              planned.payloadOffset % rule->payloadAlignment == 0u &&
+              planned.payloadOffset >= priorPayloadEnd,
+          "pure batch plan preserves each record's canonical alignment");
+    priorPayloadEnd = planned.payloadOffset + planned.payloadBytes;
+  }
+  check(plan.payloadBytes == priorPayloadEnd && plan.payloadBytes != 0u,
+        "pure batch plan exposes a nonzero contiguous payload frontier");
   alignas(8) std::array<std::byte, 16384u> destination{};
   ExactFixedEmission emission;
   auto forgedPlan = plan;
@@ -492,21 +575,20 @@ void hotStagingFamiliesResetAuthorityAndPreserveAcceptedBytes() {
   std::array<std::byte, 16u> acceptedBytes{};
   acceptedBytes[0] = std::byte{0xa1};
   acceptedBytes[15] = std::byte{0xb2};
+  PeSemanticConstantRecordInput stagedConstant;
   stagePeSemanticConstantInput(
-      staged, family, valid, PeSemanticProducerKind::VsFloatConstant,
+      stagedConstant, family, valid, PeSemanticProducerKind::VsFloatConstant,
       D9C_COMMAND_RECORD_SET_VS_CONST_F,
       D9CCommandChunkWireSetConst{.startRegister = 3u, .registerCount = 1u},
       acceptedBytes);
   check(valid && family == PeSemanticStagingFamily::Constant &&
-            staged.setConst.startRegister == 3u &&
-            staged.constantBytes.data() == acceptedBytes.data() &&
-            staged.sparse.renderStates.empty() && staged.clearRects.empty() &&
-            staged.surface0.object == nullptr,
-        "constant adapter clears draw sparse and direct-ref frontiers");
+            stagedConstant.setConst.startRegister == 3u &&
+            stagedConstant.constantBytes.data() == acceptedBytes.data(),
+        "constant adapter publishes a narrow input without sparse or ref authority");
 
-  PeSemanticRecordInputView accepted = borrowPeSemanticRecordInput(staged);
-  accepted.destination.sourceOrdinal = 1u;
-  accepted.destination.recordOrdinal = 1u;
+  auto accepted = stagedConstant;
+  accepted.sourceOrdinal = 1u;
+  accepted.recordOrdinal = 1u;
   using Owner = PeSemanticBatchOwner<4u, 8u, 1024u, 4u, 8u>;
   Owner owner;
   check(owner.admit(accepted), "constant adapter input is accepted");
@@ -646,6 +728,19 @@ void admitStagedAndFreshGeneric(const PeSemanticRecordInput& staged,
   compareSemanticOwnerBytes(actual, expected, message);
 }
 
+void admitStagedAndFreshGeneric(PeSemanticConstantRecordInput staged,
+                                PeSemanticRecordInput generic,
+                                std::uint64_t ordinal,
+                                StagingCompareOwner& actual,
+                                StagingCompareOwner& expected,
+                                std::string_view message) {
+  staged.sourceOrdinal = staged.recordOrdinal = ordinal;
+  generic.sourceOrdinal = generic.recordOrdinal = ordinal;
+  check(actual.admit(staged), "narrow staged constant input admits");
+  check(expected.admit(generic), "fresh generic constant input admits");
+  compareSemanticOwnerBytes(actual, expected, message);
+}
+
 void stagedFamiliesClearColdAuthoritiesAndMatchGenericAdmission() {
   using namespace dxmt9::d3d9::pe;
   const D9CCommandChunkWireDrawHeader draw{
@@ -714,6 +809,7 @@ void stagedFamiliesClearColdAuthoritiesAndMatchGenericAdmission() {
 
   StagingAuthorityFixture constantFixture;
   constantFixture.seedColdAuthorities();
+  PeSemanticConstantRecordInput stagedConstant;
   family = PeSemanticStagingFamily::Cold;
   std::array<std::byte, 16u> constantA{};
   std::array<std::byte, 16u> constantB{};
@@ -726,18 +822,14 @@ void stagedFamiliesClearColdAuthoritiesAndMatchGenericAdmission() {
   const D9CCommandChunkWireSetConst setB{
       .startRegister = 8u, .registerCount = 1u};
   stagePeSemanticConstantInput(
-      constantFixture.staged, family, valid,
+      stagedConstant, family, valid,
       PeSemanticProducerKind::VsFloatConstant,
       D9C_COMMAND_RECORD_SET_VS_CONST_F, setA, constantA);
   check(valid && family == PeSemanticStagingFamily::Constant &&
-            constantFixture.staged.constantBytes.data() == constantA.data() &&
-            constantFixture.staged.sparse.renderStates.empty() &&
-            constantFixture.staged.sparse.upVertexData.empty() &&
-            constantFixture.staged.sparse.upIndexData.empty() &&
-            constantFixture.staged.draw.primitiveType == 0u &&
-            constantFixture.staged.clearRects.empty(),
-        "Cold to Constant replaces old sparse and rect authorities");
-  checkNoStaleSemanticAuthority(constantFixture.staged, true);
+            stagedConstant.constantBytes.data() == constantA.data() &&
+            constantFixture.staged.surface0.object != nullptr &&
+            !constantFixture.staged.sparse.upVertexData.empty(),
+        "narrow constant staging cannot read dormant generic cold authorities");
 
   StagingCompareOwner constantActual;
   StagingCompareOwner constantExpected;
@@ -746,12 +838,12 @@ void stagedFamiliesClearColdAuthoritiesAndMatchGenericAdmission() {
   genericA.recordType = D9C_COMMAND_RECORD_SET_VS_CONST_F;
   genericA.setConst = setA;
   genericA.constantBytes = constantA;
-  admitStagedAndFreshGeneric(constantFixture.staged, genericA, 1u,
+  admitStagedAndFreshGeneric(stagedConstant, genericA, 1u,
                              constantActual, constantExpected,
                              "constant A bytes match fresh generic admission");
 
   stagePeSemanticConstantInput(
-      constantFixture.staged, family, valid,
+      stagedConstant, family, valid,
       PeSemanticProducerKind::PsFloatConstant,
       D9C_COMMAND_RECORD_SET_PS_CONST_F, setB, constantB);
   PeSemanticRecordInput genericB{};
@@ -759,12 +851,12 @@ void stagedFamiliesClearColdAuthoritiesAndMatchGenericAdmission() {
   genericB.recordType = D9C_COMMAND_RECORD_SET_PS_CONST_F;
   genericB.setConst = setB;
   genericB.constantBytes = constantB;
-  admitStagedAndFreshGeneric(constantFixture.staged, genericB, 2u,
+  admitStagedAndFreshGeneric(stagedConstant, genericB, 2u,
                              constantActual, constantExpected,
                              "constant B bytes match fresh generic admission");
 
   stagePeSemanticConstantInput(
-      constantFixture.staged, family, valid,
+      stagedConstant, family, valid,
       PeSemanticProducerKind::VsFloatConstant,
       D9C_COMMAND_RECORD_SET_VS_CONST_F, setA, constantA);
   PeSemanticRecordInput genericAgainA{};
@@ -772,9 +864,13 @@ void stagedFamiliesClearColdAuthoritiesAndMatchGenericAdmission() {
   genericAgainA.recordType = D9C_COMMAND_RECORD_SET_VS_CONST_F;
   genericAgainA.setConst = setA;
   genericAgainA.constantBytes = constantA;
-  admitStagedAndFreshGeneric(constantFixture.staged, genericAgainA, 3u,
+  admitStagedAndFreshGeneric(stagedConstant, genericAgainA, 3u,
                              constantActual, constantExpected,
                              "constant A-B-A bytes match generic admission");
+  check(constantActual.retainedCount() == 0u &&
+            constantFixture.surface0.refs == 1u &&
+            constantFixture.texture0.refs == 1u,
+        "dormant generic refs do not leak into narrow constant admission");
 }
 }  // namespace
 

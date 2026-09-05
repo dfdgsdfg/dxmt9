@@ -13,11 +13,20 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.14 through R-CORE-REC-7.16 are implemented with integrated
+native verification. They reuse prepared section/layout facts, specialize
+typed constants, and emit canonical binding rows directly. Ordinary draws and
+delta APPLY_STATE consume compact source plans through the same owner. The
+old oracle-only compact-plan restriction is superseded by the capability-bound
+source contract; a second production `CommandChunkBuilder` remains forbidden.
+Release codegen and GT2 direction evidence are tracked in
+[H244](../../../docs/perfomance/present-pacing/present-pacing-pe-prepared-emission.244.md).
+
 | Area | Current implementation truth | Required closure |
 |---|---|---|
 | Fixed-role `SegmentedTransportV1` and later `ExactFixed` CPU Tape emission (`R-CORE-REC-7.6`–`7.8`) | mandatory all-family production semantic owner, admission-time canonical D9C V2 role backing, opt-in PE→Unix fixed-region transport, and bounded direct-Arena `CpuReadySemanticTransfer` owner implemented | One prepared admission witness combines qualified identity dedup, retention deltas, capacity, and exact role frontiers. Admission constructs immutable canonical record/handle/payload roles; scalar and variable values no longer require duplicate typed arenas (R-CORE-REC-7.11), while bindings retain their typed ownership. Seal does not replay semantic slots. The segmented alias overload exposes canonical roles directly; the external-region overload copies them into caller-provided regions. Contiguous ExactFixed remains a canonical-roles-to-contiguous-wire gather because aggregate record and handle counts determine tight offsets. The negotiated 144-byte segmented descriptor carries the immutable producer interval and remains selected only by `DXMT9_PE_SEGMENTED_TRANSPORT`. CPU-ready pooled storage and broader Wine/GPU/locality evidence remain separate promotion work. |
 | PE final wire blob (`R-CORE-REC-7.1`–`7.2.1`) | `PeSemanticBatchOwner` is the sole production owner for all 21 producer rows, exact typed pins, PendingDelta settlement, buffer hazards, Render Tape pending leases, ExactFixed capture, and negotiated segmented emission. Device construction fails closed when its bounded storage cannot be established; append/seal/transport failure has no legacy production fallback. `CommandChunkBuilder`, `PePrewireChunkTransaction`, and `PeOwnedRecordCandidate` remain differential or Bootstrap test oracles only. The owner-qualified ledger now records successful typed admission and contiguous ExactFixed emission, cancels rolled-back admissions, and releases retained extents on settlement/reset. | Focused owner/batch/commit/capture native tests and current-toolchain x64/x86 PE builds pass. The 2026-09-01 GT2 Tape-off ledger-enabled run passed 1,647 Presents with zero rejects/errors, `3.999` CB/P and `15.761` passes/P; builder/seal rows were absent, while admission measured `2.564ms/P` inclusive and ExactFixed `0.908ms/P`. A ledger-disabled direction check passed 1,693 Presents at `26.150 FPS`, `3.9994` CB/P, and `15.7631` passes/P with zero rejects/errors and no ledger rows. Admission includes retain and PendingDelta settlement and is not directly comparable with the retired memcpy-only builder row; the adjacent single-run FPS delta is not a promotion claim. Bounded Wine all-family fault evidence and supervised GT1/GT2/GT3/SFIV correctness/locality runs remain required. Larger debug `DXMT9_PE_CHUNK_MAX_RECORDS` values above the fixed 256-record owner bound fail closed. |
-| Typed recorder borrow/lock capability (`R-CORE-REC-7.3`) | `RecorderLockCapability`, `RecorderBorrow<T>`, and non-movable `SparseStatePlan` remain production-shaped differential-oracle types, but the promoted runtime no longer constructs a compact plan. Production prepares one recorder-owned `SparseStateInput` under `PeRecorderGuard` and synchronously transfers values into canonical payload and typed binding ownership before the guard can end. Reset/poison/teardown still advance the recorder transaction epoch; native exhaustive capability and stale-epoch negatives continue to protect the oracle used for byte-equivalence checks. | Wine Reset fault evidence remains required. The source audit must keep `buildSparseStatePlanForRecord` and every plan-selection branch absent from `D3D9DeviceImpl`; C++ cannot reject a deliberately retained raw reference inside an arbitrary test callback. |
+| Typed recorder borrow/lock capability (`R-CORE-REC-7.3`, `7.14`) | Normal DrawPrimitive, DrawIndexedPrimitive, and delta APPLY_STATE now prepare a recorder-owned non-movable `SparseStatePlan` and synchronously admit it through the sole semantic owner. Borrow qualification checks issuing recorder, epoch, lane, and PendingDelta frontier. CapacityPre re-finalizes destination-dependent stream/index selection. Successful/failed exits revoke active borrows; failed partial builds revoke via RAII. UP/full-snapshot and other explicit sparse forms keep the same owner's generic adapter. | Native owner-versus-independent-builder tests cover all-category values, source identity, same-epoch wrong-recorder rejection, stale epoch/ticket, destination rebase, and settlement rollback/retry. Broader Wine Reset/fault/capture evidence remains required; C++ cannot reject a deliberately retained raw reference inside an arbitrary callback. |
 | Heterogeneous semantic projection (`R-CORE-REC-7.4`–`7.5`) | The existing default-off `DXMT9_PE_SCALAR_SEMANTIC_OBSERVER` gate allocates a separate all-family cold ledger; the mandatory production owner is independent of diagnostics and adds one heap-owner pointer to `D3D9DeviceImpl`. One producer table covers 21 exact record families. The common append envelope issues an observer source ordinal before CapacityPre when observation is enabled and, after semantic-owner admission, records exact category/record-key/payload value and every full wire identity. Effect-unknown bridge failure retains accepted tokens until discard; capture materialized/rejected/skipped settles only after acceptance. The table generates `PeRecorderSemanticProjectionTable.tla`; the owning model plus ten counterexample configs and exhaustive native all-row/field/differential/lifecycle tests execute shared predicates. | Typed chunk reserve/unique-retain/capture-throw injection, bounded Wine all-family faults, and wild observer evidence remain open. An observer-enabled single record above the 16 MiB proof arena or above 64 qualified identities intentionally fails stop; the cold oracle does not prove PE COM behavior, bridge ABI effects, allocator failure, or pixels. |
 | Calibrated semantic-owner phase observer (`DXMT9_PE_SEMANTIC_OWNER_PHASE_SPLIT`) | ✅ implemented as a nullable `PeDiagnosticsState` observer, qualified by nonzero `DXMT9_PE_STATS_DECIMATION`; one deterministic parent sample and explicit null clock-pair calibration cover append admission/rollback/outcomes, ExactFixed plan/role-copy, external segmented copy/role-copy, true segmented alias view, and settle/clear. Native coverage pins nested/stale-state restoration, child gating, malformed-vs-header outcomes, and owner-vs-canonical all-family final-wire bytes. A 2026-09-04 GT2 `N=127` direction check completed with zero rejects/errors and attributed about `1.045 ms/P` to prepare, `1.255 ms/P` to sparse/variable copy, `1.098 ms/P` to canonical materialization, and only `0.099 ms/P` to the inclusive ExactFixed parent after null-pair correction. The corrected prepared wire witness now records first wire-visible promotion order in the admission identity pass, uses a proof-qualified bounds-only append, resets only its active frontier, and removes the later handle-order traversal. Native canonical-byte/refcount tests include direct non-wire surface retention followed by duplicate texture and promoted surface wire order. A clean follow-up attributed `1.262`, `1.094`, `0.913`, and `0.091 ms/P` to prepare, sparse/variable copy, canonical materialization, and ExactFixed; the five admission child phases changed from `4.090` to `3.987 ms/P`. | ⚠️ diagnostic evidence only: the initial OFF/ON healthy populations were 1,594/1,587 and the witness comparison populations were 1,587/1,624, so repeat matched runs remain required for a promotion claim. One rebuild-contaminated run is excluded. The evidence demotes ExactFixed-only removal and leaves sparse typed-copy/canonical construction as the larger PE target; no default transport or rendering semantic change is authorized by this observer. |
 
@@ -25,8 +34,9 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 The owner now writes ten scalar sparse categories, standalone/embedded
 constants, UP bytes, and Clear rectangles directly into canonical payload.
-Duplicate value arrays and their copy/clear work are removed; seven binding
-arenas and six qualified pin families remain. Logical quotas and chunk cadence
+Duplicate value arrays and their copy/clear work were removed in this slice;
+the later prepared-emission slice also removes seven binding arenas while
+preserving six qualified pin families. Logical quotas and chunk cadence
 are unchanged, and the admission ledger excludes removed physical staging.
 Thirteen focused native specs, the x86_64 owner spec and install-name audit,
 all four canonical builds, and existing TLA checks pass. Native differential
@@ -48,7 +58,7 @@ transport decision.
 
 ## Admission reuse and active-prefix refinement (R-CORE-REC-7.12–7.13)
 
-Admission preserves an identity ordinal and prepares qualified typed pin and
+This slice introduced an identity ordinal and prepared qualified typed pin and
 local wire indices. Append consumes the prepared pin mapping; canonical sparse
 binding emission reads the already-resolved local ordinal from private binding
 metadata. Draw/UP/ApplyState and six constant kinds use bounded staging
@@ -73,6 +83,41 @@ prepared mapping remain bounded linear scans, pin-index clearing and warm
 retainer work remain, and contiguous ExactFixed still gathers canonical roles.
 Wine all-family fault/capture/visual coverage and repeat performance promotion
 are not closed by native refinement or one GT2 OFF/ON pair.
+
+## Prepared layout, narrow constants, and compact source admission (R-CORE-REC-7.14–7.16)
+
+One active-prefix section layout supplies canonical offsets and logical quota
+deltas. Binding occurrences consume the prepared identity-mapping ordinal for
+typed pin acquisition and direct canonical emission; committed visitors read
+canonical rows and qualified pins, not a duplicate binding arena. Null,
+inactive, duplicate, retained-only promotion, and warm-retry authority remain
+distinct. All six standalone constant families use a closed input and small
+prepared witness; generic oracle inputs retain their original foreign-field
+acceptance behavior. Normal draw/delta plans feed the same transaction without
+materializing full sparse scratch rows.
+
+All four canonical builds, 18 focused native tests, x86_64 owner/batch/producer
+differential and install-name checks, and existing TLA checks pass at the
+integrated checkpoint. Release PE32 inspection exposed a compiler-merged
+5,208-byte admission frame shared with constants; input-specialized out-of-line
+witness bodies reduce the unobserved constant body's local reservation to
+100 bytes. Generic/plan bodies still need about 5 KiB and a stack probe; this
+is an explicit cost, not a claim of zero-cost prepared types. Final direction
+measurements and exact build/codegen receipts belong to H244. GT2 candidate
+OFF/ON runs pass with 1,684/1,674 Presents, zero rejects/errors, and about
+4 CB/P. OFF FPS is effectively neutral (26.872 → 26.919); lower sampled
+admission phases do not establish a stable FPS gain. Broader/repeat promotion
+are not replaced by this direction pair. Independent integrated review found
+no production-reachable blocker. Dynamic device-envelope coverage, randomized
+compact-owner FVF/repeated-rebase byte checks, and independent constant-range
+end validation for manually forged plans remain evidence/hardening gaps;
+production plan construction already validates those end bounds.
+
+This does not make every unusual generic input newly well-formed. Inherited
+slot/stage/value validation gaps and broader Wine fault/capture/visual evidence
+remain separate work; this refinement must not silently tighten that accepted
+domain. Transport defaults, queue policy, logical quotas, and chunk cadence
+remain unchanged.
 
 ## Bounded common fault envelope (2026-08-31)
 

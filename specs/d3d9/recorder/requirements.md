@@ -670,3 +670,34 @@ warm-retainer settlement, logical quotas, failure disposition, and source
 ordering must remain unchanged. Native byte/ownership differential checks and
 release PE callsite inspection are required; lower clearing/copy counts alone
 do not establish lower runtime cost or an FPS gain.
+
+**R-CORE-REC-7.14** A synchronous prepared emission witness must preserve the
+exact active section order, counts, offsets, alignment, payload extent, logical
+quota deltas, and destination identity proved during admission. Later writers
+must consume that witness rather than reconstruct a second layout from the
+same source. A compact shadow plan may feed the mandatory semantic owner under
+one recorder capability; this does not re-enable a production compatibility
+builder or permit a borrow to survive append. CapacityPre must requalify the
+destination-dependent stream/index selection without consuming pending state.
+Capability qualification includes the issuing recorder identity, not merely an
+equal numeric epoch or access lane from another recorder.
+Malformed, stale, incomplete, or over-capacity plans must reject atomically.
+
+**R-CORE-REC-7.15** Producer-family specialization may omit irrelevant resource
+and sparse work only when the typed family input establishes its absence.
+Standalone constants must retain the same range/size validation, canonical
+bytes, logical quotas, ordinals, failure disposition, and exact pending-range
+settlement as generic admission. Generic/oracle inputs with foreign fields
+must not silently lose represented data. Family changes and failed retries
+must not revive stale input authority or choose a second transaction owner.
+
+**R-CORE-REC-7.16** Binding occurrences may write canonical wire rows directly
+using admission-qualified pin and wire locators. A locator binds the exact
+input occurrence, kind, generation, object identity, null disposition, and
+destination frontier; an unqualified index is insufficient. Removing a typed
+binding arena must preserve committed resource visits, pending-chunk leases,
+buffer hazards, first wire-visible order, and unique retain multiplicity.
+Only committed canonical metadata or equivalent qualified ownership metadata
+may serve later visitors. Native differential tests must cover all seven
+binding families, duplicate/promotion/null cases, source mutation, partial
+acquisition and settlement rollback, reset/reuse, and both emission forms.

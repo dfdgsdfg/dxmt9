@@ -10,6 +10,31 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## End-to-end immutable source composition
 
+### PE prepared representation refinement (2026-09-05)
+
+R-CORE-REC-7.14–7.16 keep the existing admission/settlement protocol while
+reusing active section layouts, narrowing constant inputs, and replacing
+duplicate binding-row storage with qualified occurrence metadata and canonical
+rows. The integrated compact-plan implementation passes all four canonical
+builds, 18 focused native specs, and x86_64 owner/batch/producer differential
+and install-name checks (4/4). Tests cover all six constant kinds, all seven
+binding families, byte ownership, capacity, rollback/retry, failure precedence,
+observer populations, nonzero all-category compact-plan values, destination
+rebase, and stale ticket/epoch/same-epoch wrong-recorder authority. Existing
+TLA checks pass in 155.19 seconds; no model changed, so the new byte and source
+refinement evidence is native rather than a new temporal proof. Release PE32
+inspection also pins small constant witness frames after outlining; generic
+and plan frames still require stack probes. Broader Wine fault/capture/pixel
+coverage remains open. Matched GT2 candidate OFF/ON runs pass with zero errors,
+about 4 CB/P, and effectively neutral OFF FPS. Independent review found no
+production-reachable blocker, but dynamic D3D9DeviceImpl envelope coverage,
+broader randomized compact-owner byte differentials (including FVF/repeated
+rebase), and forged-plan constant-end-bound rejection remain open. Production
+buildSparseStatePlan validates those end bounds before admission; the owner
+layout helper does not independently repeat that check. Repeat promotion
+evidence remains distinct from these bounded checks. See
+[H244](../../docs/perfomance/present-pacing/present-pacing-pe-prepared-emission.244.md).
+
 ### PE final-wire closure slice (2026-09-02)
 
 The PE recorder now carries an explicit ticket-scoped immutable

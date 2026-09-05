@@ -18,6 +18,18 @@ constexpr std::uint32_t lowMask(std::uint32_t count) noexcept {
   return count >= 32u ? 0xffffffffu : (1u << count) - 1u;
 }
 
+struct SparseStatePlanBuildGuard {
+  explicit SparseStatePlanBuildGuard(SparseStatePlan& value) noexcept
+      : plan(value) {}
+
+  SparseStatePlan& plan;
+  bool published = false;
+
+  ~SparseStatePlanBuildGuard() {
+    if (!published) plan.invalidate();
+  }
+};
+
 bool prepareConstantRanges(PeConstShadowBlock& constants,
                            bool inlineConstDelta,
                            SparseStatePlan& plan) noexcept {
@@ -87,9 +99,11 @@ bool buildSparseStatePlan(const RecorderLockCapability& access,
                           bool inlineConstDelta,
                           SparseStatePlan& plan) noexcept {
   if (params.recordType == 0u) {
+    plan.invalidate();
     return false;
   }
   plan.reset();
+  SparseStatePlanBuildGuard buildGuard{plan};
   if (!plan.bindSources(access, shadow, constants, bindings)) {
     return false;
   }
@@ -238,6 +252,7 @@ bool buildSparseStatePlan(const RecorderLockCapability& access,
       params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
   plan.chunkContextFinalized = !destinationDependent;
   plan.prepared = true;
+  buildGuard.published = true;
   return true;
 }
 
@@ -249,6 +264,10 @@ bool finalizeSparseStatePlanChunkContext(const PeChunkContext& chunk,
   bool finalized = false;
   return plan.withBindingSource(
       [&](const PeBindingView& bindings) noexcept {
+        // CapacityPre may move the destination more than once. Rebuild the
+        // destination-only contribution from its pass-1 baseline each time;
+        // never carry stream/index decisions from the prior chunk forward.
+        plan.streamMask = plan.selectedStreamMask;
         if (!plan.fullSnapshot) {
           for (std::uint32_t slot = 0u;
                slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
@@ -278,14 +297,12 @@ bool finalizeSparseStatePlanChunkContext(const PeChunkContext& chunk,
       }) && finalized;
 }
 
-std::size_t sparseStatePlanConstantPayloadBytes(
-    const SparseStatePlan& plan) noexcept {
-  return plan.vsFloatConstants.registerBytes.size() +
-         plan.vsIntConstants.registerBytes.size() +
-         plan.vsBoolConstants.registerBytes.size() +
-         plan.psFloatConstants.registerBytes.size() +
-         plan.psIntConstants.registerBytes.size() +
-         plan.psBoolConstants.registerBytes.size();
+bool finalizeSparseStatePlanChunkContext(
+    const RecorderLockCapability& access, const PeChunkContext& chunk,
+    SparseStatePlan& plan) noexcept {
+  return plan.validFor(access) &&
+         finalizeSparseStatePlanChunkContext(chunk, plan) &&
+         plan.validFor(access);
 }
 
 std::size_t sparseStateInputConstantPayloadBytes(

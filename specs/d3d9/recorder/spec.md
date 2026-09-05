@@ -17,7 +17,7 @@ does not yet satisfy it.
 |---|---|---|
 | COM validation, app-visible state, getters | `D3D9DeviceImpl` in `src/d3d9/d3d9_pe_device_impl.hpp` and its cold COM TUs | Metal objects, unix queue state |
 | State-domain value types and typed keys | `src/d3d9/d3d9_pe_state_shadow.hpp`, `d3d9_pe_const_shadow.hpp` | COM lifetime, capture journaling |
-| Sparse normalization | production `buildSparseState` prepares one borrowed `SparseStateInput`; `PeSemanticBatchOwner::appendOwnedRecord` owns canonical payload and typed bindings. `SparseStatePlan` remains a differential oracle only | final-wire tables, handle retention, or pending consumption during preparation |
+| Sparse normalization | a recorder-capability-bound compact shadow plan or bounded `SparseStateInput` feeds one prepared section/identity witness; `PeSemanticBatchOwner` owns canonical payload and qualified pins | a second production builder, retention or pending consumption during pure preparation |
 | Record/chunk transaction | mandatory `PeProductionSemanticRecorderState` / `PeSemanticBatchOwner` and `D3D9DeviceImpl::appendRecord` / `flushPendingCommandChunk`; `CommandChunkBuilder` is limited to tests and Render Tape bootstrap construction | D3D9 getter authority, Metal execution |
 | PE local pinning | the semantic owner's kind-qualified pin arenas and bounded retainer own physical retain/rollback | Render Tape logical settlement |
 | Wire registry resolution | `WireObjectRegistry` in `src/d3d9/device_c_chunk_registry.*` | PE wrapper-pointer identity |
@@ -109,20 +109,18 @@ Preparing a record computes a non-owning candidate projection:
 Candidate = Normalize(LiveShadow, PendingDelta, explicit draw/control input)
 ```
 
-Ordinary draws and APPLY_STATE prepare one bounded `SparseStateInput` from the
-live shadow and binding view. The input is borrowed only across the immediate
-`appendRecord` call. The recorder stages the full `PeSemanticRecordInput` once;
-append borrows that immutable value through `PeSemanticRecordInputView` and
-overlays only record type, source/record ordinals, and a pointer to the
-effective sparse view. Non-draw rows therefore make no second descriptor copy.
-Draw rows copy only `SparseStateInput` into recorder-owned destination storage,
-and a CapacityPre destination change performs one bounded sparse rebase while
-the original scratch spans remain stable. `appendOwnedRecord` then validates
-destination-chunk stream/index selection, writes selected scalar values into
-canonical payload and bindings into typed owned arenas, acquires qualified pins, and
-commits the record atomically. Only that accepted admission consumes pending
-categories or dirty constant ranges. The older two-pass `SparseStatePlan` stays
-in the native differential corpus and is not selectable by production code.
+Ordinary draws and APPLY_STATE may prepare a compact, non-movable shadow plan
+under a recorder capability. The owner consumes it synchronously; selected
+values need not first be copied into `PeSparseScratch`. Bounded sparse views
+remain supported for oversized and explicit-input producers through the same
+owner, not a compatibility builder. Preparation binds source validity,
+destination stream/index selection, section layout, qualified identity order,
+and logical quotas. A CapacityPre destination change requalifies destination
+facts without consuming the input or pending state. Append writes canonical
+values and bindings, acquires qualified pins, and accepts exact PendingDelta
+settlement atomically. No plan or derived borrow survives that append or the
+recorder guard. `CommandChunkBuilder` remains a native/bootstrap oracle; a
+compact source representation is not permission to select it in production.
 
 Only accepted settlement through the consume capability may perform:
 
@@ -267,9 +265,9 @@ checkpoint even though it is owned outside the builder.
 | owner record commit succeeds | record becomes durable in the semantic owner | pins owned by that owner | remove exactly represented entries | success or continue to capacity settlement |
 | post-append capacity commit is effect-unknown | sealed accepted record remains owned for Reset/teardown cleanup, not ordinary retry | pins retained | entries remain represented by the accepted record, not reintroduced as a duplicate | failure and recorder poison |
 
-Production `buildSparseState`, oracle-only `buildSparseStatePlan`, and every
-typed `prepare*Batch` are non-consuming. Production
-`acceptPreparedSparseState`, oracle-only `acceptSparseStatePlan`,
+Both sparse-view and compact-plan preparation and every
+typed `prepare*Batch` are non-consuming. Their corresponding exact
+`acceptPreparedSparseState` / `acceptSparseStatePlan` settlement,
 `acceptInlineConstantDelta`, standalone constant flush, and the four oversized
 adapters consume only through an Accepted `AppendPlan`; Failed and Discarded
 plans retain pending state and the prepared retry witness.
@@ -487,16 +485,17 @@ backend chunk retains remain private and do not alter public COM refcount
 observations. The prepare/accept boundary is non-reentrant: preparation reads
 into reusable scratch, and only acceptance settles pending state, so a failed
 append cannot erase a later mutation.
-Prepared sparse rows are admitted one at a time into the semantic owner's
-canonical payload and owned binding arenas. The owner exposes no mutable
-final-wire span: binding rows become kind-qualified pins, while pointer-free
-scalar rows and constant/UP/rectangle tails are serialized directly from the
-call-local input into the canonical payload (R-CORE-REC-7.11). Final ExactFixed
-or segmented emission visits only committed immutable roles. A failure restores
-logical quotas, binding arenas, pins, and the active record to one checkpoint.
-`PeSparseScratch` and `SparseStateInput` are production preparation scratch for
-ordinary draws/APPLY_STATE as well as oversized, Render Tape, and SWVP forms;
-they own no final-wire lifetime and do not survive admission.
+Prepared sparse rows are admitted into the semantic owner's canonical payload.
+The owner exposes no mutable final-wire span: qualified occurrence mappings
+connect binding rows to typed pins and wire ordinals; scalar rows and
+constant/UP/rectangle tails serialize directly from the synchronous input.
+Final ExactFixed or segmented emission visits only committed immutable roles.
+A failure restores logical quotas, pins, and the active record to one
+checkpoint. Ordinary DrawPrimitive, DrawIndexedPrimitive, and delta APPLY_STATE
+may use the recorder-bound compact plan; UP, full-snapshot, oversized, and
+other explicit sparse forms retain `PeSparseScratch` / `SparseStateInput`.
+Both adapters use the same owner and transaction. Neither source form owns
+final-wire lifetime or survives synchronous admission.
 
 ## 6. Shared predicates and counterexamples
 
@@ -608,7 +607,7 @@ layout while preserving the existing warm-retainer policy.
 Production constructs one mandatory chunk-scoped `PeSemanticBatchOwner` with
 the device and uses it as the sole final-wire transaction. `appendRecord`
 admits all 21 producer rows into typed record slots, constructs pointer-free
-payload in canonical role backing, owns typed binding rows, and acquires
+payload and binding rows in canonical role backing, and acquires
 kind-qualified physical pins at admission.
 Admission checkpoints source/record ordinals and all arena/pin frontiers and
 rolls back atomically on collision or bounded overflow; successful settlement
@@ -639,7 +638,7 @@ read `peSemanticSparse(input)` so a prepared destination overlay is honored,
 and consume variable tails before the synchronous admission call returns.
 No call-local pointer is retained. After admission, wire emission, capture,
 retry, and cold semantic projection read canonical roles; lifetime and buffer
-hazard visitors read the unchanged qualified pins and binding metadata.
+hazard visitors read the unchanged qualified pins and canonical binding rows.
 Failed admission exposes no new record and restores all logical frontiers and
 retains. A later success must overwrite its complete payload and alignment
 gaps, including any uncommitted bytes left by a failed attempt.
@@ -657,19 +656,50 @@ rollback, identity collisions, null unbinding, and cross-family/chunk reuse.
 These are representation refinements of the existing admission/settlement
 protocol, not new queue transitions or a relaxation of failure atomicity.
 
+R-CORE-REC-7.14 through R-CORE-REC-7.16 extend that witness to section layout
+and input occurrences. Pure preparation fixes active descriptors and their
+canonical offsets once. The private writer consumes those descriptors and
+quota deltas rather than independently reconstructing them. A compact source
+plan must keep its typed recorder borrow valid until acceptance, including the
+issuing recorder's identity, epoch, and access lane; explicit
+sparse inputs use the same writer with synchronous source views. The prepared
+record is not the complete future immutable batch required by R-CORE-REC-7.2.1.
+
+Constant-family admission may skip resource and sparse preparation only for a
+typed input that proves those fields absent. Generic input/oracle adapters
+must preserve their previous accepted bytes and failure behavior, including
+unusual extra fields; classification alone must not discard them. Binding
+occurrence locators bind qualified identity, typed pin, wire ordinal, source
+position, and destination generation/frontiers. Canonical binding rows may
+replace duplicate typed wire-row arenas, but committed lease/hazard visitors
+must still observe exactly the previous resource closure. A retained-only
+direct reference is not made wire-visible merely by this representation change.
+
+Verification first uses actual-owner versus independent canonical-builder
+bytes and ownership over bounded section masks, all producer/binding families,
+source/cross-family A/B/A, stale capability, partial acquisition and settlement
+failure/retry, CapacityPre rebase, and reset/reuse. Existing recorder TLA models
+own transaction ordering, while native refinement owns descriptors and bytes;
+neither proves Wine COM or final pixels. Release PE callsite inspection and
+matched GT2 OFF/ON checks follow the native/formal layer. Logical quotas,
+transport defaults, queue policy, and chunk cadence remain frozen.
+
 The implementation preserves the identity-set ordinal during admission and
 uses it to assign a wire ordinal without a second post-plan identity walk.
 `PeSemanticPreparedPinMapping` stores qualified identity/object, predicted typed
-pin, and local wire ordinal for the active prefix. `pinPrepared` consumes one
-bounded mapping lookup; sparse rows keep its local wire ordinal in their
-private wire metadata, and canonical binding emission applies the destination
-handle-table base without resolving identity again. Direct control records
-use the prepared kind/pin pair. The mapping remains linear over at most 80
+pin, and local wire ordinal for the active prefix. Sparse occurrences preserve
+that mapping ordinal for acquisition and canonical emission; direct control
+records may use a bounded mapping lookup. Canonical binding emission applies
+the destination handle-table base without resolving identity again. The
+mapping remains linear over at most 80
 record identities; it does not eliminate record-local deduplication or prove
 an asymptotic improvement over chunk-global hash lookup.
 
 Draw/UP/ApplyState and standalone constants use family-specific staging
-adapters. Same-family calls overwrite active fields; family changes clear
+adapters. Standalone constants use a closed input without dormant generic
+resource fields. Compact-plan revocation invalidates borrows and active
+frontiers; unrelated constant/control calls must not reconstruct the full
+plan product. Same-family calls overwrite active fields; family changes clear
 inactive fixed heads, direct refs, and variable spans before publishing
 validity. Ten lower-frequency control callsites retain generic staging.
 Prepared constructors initialize scalar frontiers, not inactive arrays.
@@ -680,8 +710,8 @@ remain explicit costs.
 
 The optional owner-qualified copy/materialization ledger binds this same
 transaction at its two physical ownership boundaries. A successful admission
-records the increase in live typed record, pin, binding, and canonical-role
-extents as `materialize.pe.semantic-owner-admission`; removed scalar/variable
+records the increase in live typed record, pin, and canonical-role
+extents as `materialize.pe.semantic-owner-admission`; removed scalar/variable/binding
 staging consumes logical quota but contributes no physical copied bytes. Rollback records
 nothing, and settlement/reset releases the retained extent. Contiguous
 ExactFixed emission records `materialize.pe.wire-final` and retains only the

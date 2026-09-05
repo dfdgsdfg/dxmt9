@@ -87,6 +87,9 @@ bool buildSparseStatePlan(const RecorderLockCapability& access,
 // belongs inside the append emitter because CapacityPre may flush first.
 bool finalizeSparseStatePlanChunkContext(const PeChunkContext& chunk,
                                          SparseStatePlan& plan) noexcept;
+bool finalizeSparseStatePlanChunkContext(
+    const RecorderLockCapability& access, const PeChunkContext& chunk,
+    SparseStatePlan& plan) noexcept;
 
 // Pass 2: materializes every selected row directly into the builder's final
 // payload and retains binding handles through the active-record checkpoint.
@@ -106,8 +109,6 @@ bool acceptSparseStatePlan(PeHotStateShadow& shadow,
                            std::uint64_t recordOrdinal = 0u,
                            PendingDeltaTicket transactionTicket = {}) noexcept;
 
-std::size_t sparseStatePlanConstantPayloadBytes(
-    const SparseStatePlan& plan) noexcept;
 std::size_t sparseStateInputConstantPayloadBytes(
     const SparseStateInput& state) noexcept;
 

@@ -159,6 +159,465 @@ bool ownerSegmentedRolesEqualExact(const PeSemanticExactFixedEmission& exact,
                          segmented.transport.payloadBytes).begin());
 }
 
+void genericConstantRetainsForeignDirectAuthority() {
+  // Family-specific production staging proves these fields absent. The public
+  // generic envelope did not: specialization must retain its old semantics.
+  constexpr std::array producers{
+      PeSemanticProducerKind::VsFloatConstant,
+      PeSemanticProducerKind::VsIntConstant,
+      PeSemanticProducerKind::VsBoolConstant,
+      PeSemanticProducerKind::PsFloatConstant,
+      PeSemanticProducerKind::PsIntConstant,
+      PeSemanticProducerKind::PsBoolConstant};
+  const std::array<std::byte, 16u> values{};
+  for (const auto producer : producers) {
+    D9CTexture texture;
+    Owner owner;
+    CommandChunkBuilder canonical;
+    auto input = base(producer, 1u, 1u);
+    input.setConst.registerCount = 1u;
+    const bool boolean = producer == PeSemanticProducerKind::VsBoolConstant ||
+                         producer == PeSemanticProducerKind::PsBoolConstant;
+    input.constantBytes = std::span<const std::byte>(values).first(
+        boolean ? 4u : 16u);
+    input.texture0 = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(&texture, 0xf14u);
+    check(owner.admit(input) && owner.retainedCount() == 1u && texture.refs == 2u,
+          "generic constant preserves a retained-only foreign direct ref");
+    check(appendCanonicalSemanticRecord(canonical, input),
+          "generic constant canonical fixture emits");
+    PeSemanticExactFixedEmission exact{};
+    check(equalCanonicalOwnerBytes(owner, canonical, exact) &&
+              exact.transport.header.handleCount == 0u,
+          "retained-only constant ref does not become a wire-visible ref");
+    owner.reset();
+    check(texture.refs == 1u, "generic constant reset releases its direct ref");
+    check(!owner.tryAppendOwnedRecord(input, []() noexcept { return false; }) &&
+              owner.size() == 0u && owner.retainedCount() == 0u &&
+              texture.refs == 1u,
+          "generic constant failed settlement rolls its foreign retain back");
+    input.texture0.identity.kind = D9C_CHUNK_HANDLE_KIND_BUFFER;
+    check(!owner.admit(input) && owner.retainedCount() == 0u,
+          "generic constant does not skip malformed foreign direct refs");
+  }
+}
+
+template <PeSemanticProducerKind Producer>
+void typedConstantAdmissionDifferential() {
+  constexpr bool boolean = Producer == PeSemanticProducerKind::VsBoolConstant ||
+                           Producer == PeSemanticProducerKind::PsBoolConstant;
+  constexpr std::size_t registerBytes = boolean ? 4u : 16u;
+  using ConstantOwner = PeSemanticBatchOwner<3u, 1u, 3u * registerBytes, 1u, 1u>;
+  ConstantOwner owner;
+  CommandChunkBuilder canonical;
+  std::array<std::byte, registerBytes> values{};
+  PeSemanticTypedConstantInput<Producer> input{};
+  input.setConst.startRegister = 1u;
+  input.setConst.registerCount = 1u;
+  input.constantBytes = values;
+  for (std::uint64_t ordinal = 1u; ordinal <= 3u; ++ordinal) {
+    values.fill(ordinal == 2u ? std::byte{0x52} : std::byte{0x31});
+    input.sourceOrdinal = input.recordOrdinal = ordinal;
+    check(owner.appendOwnedRecord(input, []() noexcept { return true; }) &&
+              owner.retainedCount() == 0u,
+          "typed constant A/B/A commits without acquiring resource pins");
+    check(appendSetConstants(canonical, peSemanticRecordTypeForProducer(Producer),
+                             input.setConst.startRegister,
+                             input.setConst.registerCount, values),
+          "independent constant oracle commits the same A/B/A value");
+  }
+  values.fill(std::byte{0xee});
+  PeSemanticExactFixedEmission exact{};
+  check(equalCanonicalOwnerBytes(owner, canonical, exact),
+        "typed constant A/B/A owns exact bytes before source mutation");
+  PeSemanticSegmentedEmission segmented{};
+  check(owner.emitSegmented(segmented) &&
+            ownerSegmentedRolesEqualExact(exact, segmented),
+        "typed constant segmented roles equal contiguous oracle bytes");
+  input.sourceOrdinal = input.recordOrdinal = 4u;
+  bool callbackEntered = false;
+  check(!owner.appendOwnedRecord(input, [&]() noexcept {
+          callbackEntered = true;
+          return true;
+        }) && !callbackEntered && owner.size() == 3u,
+        "typed constant capacity failure occurs before settlement");
+  owner.reset();
+  input.sourceOrdinal = input.recordOrdinal = 1u;
+  check(!owner.appendOwnedRecord(input, []() noexcept { return false; }) &&
+            owner.size() == 0u && owner.retainedCount() == 0u,
+        "typed constant callback failure rolls back the same owner transaction");
+  check(owner.appendOwnedRecord(input, []() noexcept { return true; }),
+        "typed constant failed settlement can retry the unchanged ordinal");
+  owner.reset();
+  input.constantBytes = std::span<const std::byte>(values).first(registerBytes - 1u);
+  check(!owner.admit(input) && owner.size() == 0u,
+        "typed constant byte extent mismatch fails closed");
+  input.constantBytes = values;
+  input.setConst.registerCount = std::numeric_limits<std::uint32_t>::max();
+  check(!owner.admit(input) && owner.size() == 0u,
+        "typed constant register-count overflow fails closed");
+  input.setConst.registerCount = 1u;
+  input.sourceOrdinal = 0u;
+  check(!owner.admit(input) && owner.size() == 0u,
+        "typed constant cannot bypass source identity validation");
+
+  // Specialization is representation-only: retain the generic owner's
+  // count/byte policy rather than introducing a new start+count restriction.
+  ConstantOwner genericOwner;
+  input.sourceOrdinal = input.recordOrdinal = 1u;
+  input.setConst.startRegister = std::numeric_limits<std::uint32_t>::max();
+  auto generic = base(Producer, 1u, 1u);
+  generic.setConst = input.setConst;
+  generic.constantBytes = input.constantBytes;
+  check(owner.admit(input) == genericOwner.admit(generic) && owner.size() == 1u,
+        "typed constant preserves generic start-register acceptance policy");
+  PeSemanticExactFixedEmission typedExtent{}, genericExtent{};
+  check(owner.emitExactFixed(typedExtent) &&
+            genericOwner.emitExactFixed(genericExtent) &&
+            typedExtent.wireBytes == genericExtent.wireBytes &&
+            std::memcmp(typedExtent.wire.data(), genericExtent.wire.data(),
+                        typedExtent.wireBytes) == 0,
+        "typed constant preserves generic bytes for the full accepted domain");
+
+  for (unsigned scenario = 0u; scenario < 5u; ++scenario) {
+    ConstantOwner typedObserved, genericObserved;
+    PeSemanticOwnerPhaseObserver typedObserver(1u), genericObserver(1u);
+    typedObserved.setPhaseObserver(&typedObserver);
+    genericObserved.setPhaseObserver(&genericObserver);
+    input.sourceOrdinal = input.recordOrdinal = 1u;
+    input.setConst.registerCount = 1u;
+    if (scenario == 2u || scenario == 3u) input.sourceOrdinal = 0u;
+    if (scenario == 3u)
+      input.setConst.registerCount = std::numeric_limits<std::uint32_t>::max();
+    generic = base(Producer, input.sourceOrdinal, input.recordOrdinal);
+    generic.setConst = input.setConst;
+    generic.constantBytes = input.constantBytes;
+    const auto settle = [scenario]() noexcept { return scenario != 1u; };
+    if (scenario == 4u) {
+      for (std::uint64_t ordinal = 1u; ordinal <= 3u; ++ordinal) {
+        input.sourceOrdinal = input.recordOrdinal = ordinal;
+        generic.sourceOrdinal = generic.recordOrdinal = ordinal;
+        check(typedObserved.appendOwnedRecord(input, settle) &&
+                  genericObserved.appendOwnedRecord(generic, settle),
+              "observed constant capacity fixture fills both representations");
+      }
+      input.sourceOrdinal = generic.sourceOrdinal = 0u;
+    }
+    check(typedObserved.appendOwnedRecord(input, settle) ==
+              genericObserved.appendOwnedRecord(generic, settle) &&
+              typedObserved.lastAdmissionFailure() ==
+                  genericObserved.lastAdmissionFailure() &&
+              typedObserver.stats().outcomes == genericObserver.stats().outcomes,
+          "typed constant preserves outcome and failure-precedence accounting");
+    for (std::size_t phase = 0u;
+         phase < PeSemanticOwnerPhaseStats::kPhaseCount; ++phase) {
+      check(typedObserver.stats().phases[phase].events ==
+                genericObserver.stats().phases[phase].events &&
+                typedObserver.stats().phases[phase].samples ==
+                genericObserver.stats().phases[phase].samples,
+            "typed constant preserves observer phase populations");
+    }
+  }
+}
+
+void inactiveBindingMetadataRemainsNonAuthoritative() {
+  D9CTexture texture;
+  Owner owner;
+  CommandChunkBuilder canonical;
+  const std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>, 1u>
+      rows{{{.wire = {.slot = 3u, .valid = 0u},
+               .object = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+                   &texture, 0xf16u)}}};
+  auto input = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+  input.draw.primitiveCount = 1u;
+  input.sparse.textures = rows;
+  check(owner.admit(input) && owner.retainedCount() == 0u && texture.refs == 1u,
+        "inactive binding row cannot acquire authority from object metadata");
+  check(appendCanonicalSemanticRecord(canonical, input),
+        "inactive binding canonical fixture emits");
+  PeSemanticExactFixedEmission exact{};
+  check(equalCanonicalOwnerBytes(owner, canonical, exact),
+        "inactive occurrence retains canonical ignored-metadata behavior");
+}
+
+template <typename Wire, std::size_t RowCount, typename Object,
+          std::uint32_t Kind,
+          typename MakeValid, typename MakeNull, typename MakeInactive,
+          typename Configure, typename SetDirect>
+void preparedBindingFamilyMatrix(const char* family, MakeValid makeValid,
+                                 MakeNull makeNull, MakeInactive makeInactive,
+                                 Configure configure, SetDirect setDirect) {
+  using Row = SparseBindingInput<Wire>;
+  Object object;
+  Object pointerAlias;
+  const auto ref = localRef<Kind>(&object, 0xb00u + RowCount, 7u);
+
+  std::array<Row, RowCount> validRows{};
+  for (std::size_t i = 0u; i < validRows.size(); ++i) {
+    validRows[i] = {.wire = makeValid(i), .object = ref};
+  }
+
+  const auto makeInput = [&](std::uint64_t ordinal) {
+    auto input = base(PeSemanticProducerKind::DrawPrimitive, ordinal,
+                      ordinal);
+    input.draw.primitiveCount = 1u;
+    configure(input.sparse, std::span<const Row>(validRows));
+    setDirect(input, ref);
+    return input;
+  };
+
+  // A valid sparse row is authoritative even when the same qualified object
+  // is also present in a retained-only direct slot. This is the duplicate
+  // identity case for singleton sparse schemas as well as for multi-row ones.
+  {
+    Owner owner;
+    auto input = makeInput(1u);
+    PeSemanticPreparedRecord prepared{};
+    const auto preparedOutcome = owner.prepareAdmission(input, prepared);
+    bool occurrenceMappingConsumedShape = std::all_of(
+        prepared.bindingOccurrences.values.begin(),
+        prepared.bindingOccurrences.values.begin() +
+            prepared.bindingOccurrences.count,
+        [&](const PeSemanticBindingLocator& locator) noexcept {
+          return locator.wireValid && locator.hasPin &&
+                 locator.mappingOrdinal < prepared.pinMapping.count &&
+                 prepared.pinMapping.entries[locator.mappingOrdinal].pin == 0u &&
+                 locator.wireIndex == 0u;
+        });
+    for (std::size_t i = 0u; i < prepared.bindingOccurrences.count; ++i) {
+      if (prepared.bindingOccurrences.values[i].occurrence != i)
+        occurrenceMappingConsumedShape = false;
+    }
+    check(preparedOutcome == PeSemanticAdmissionOutcome::Admissible &&
+              prepared.bindingOccurrences.count == RowCount &&
+              prepared.pinMapping.count == 1u && prepared.wireHandles.count == 1u &&
+              occurrenceMappingConsumedShape,
+          "seven-family prepared occurrence mapping has one deduped wire pin");
+    CommandChunkBuilder canonical;
+    check(owner.admit(input) && owner.retainedCount() == 1u &&
+              appendCanonicalSemanticRecord(canonical, input),
+          family);
+    PeSemanticExactFixedEmission exact{};
+    check(equalCanonicalOwnerBytes(owner, canonical, exact),
+          "seven-family valid row matches canonical ExactFixed bytes");
+    PeSemanticSegmentedEmission segmented{};
+    check(owner.emitSegmented(segmented) &&
+              ownerSegmentedRolesEqualExact(exact, segmented),
+          "seven-family valid row matches canonical segmented bytes");
+    std::size_t visited = 0u;
+    owner.visitCommittedPendingChunkLeases(
+        [&](const CommittedPendingChunkLease&) noexcept { ++visited; });
+    check(visited == 1u && owner.visitCommittedPendingChunkLease(
+                              ref,
+                              [](const CommittedPendingChunkLease&) noexcept {
+                                return true;
+                              }),
+          "seven-family committed sparse visitor exposes one qualified lease");
+    canonical.resetAndReleaseRetained();
+    const auto warmRefs = object.refs;
+    check(owner.settle() && owner.retainedCount() == 1u,
+          "seven-family successful settlement retains a warm pin");
+    auto retry = makeInput(2u);
+    CommandChunkBuilder retryCanonical;
+    check(owner.admit(retry) && owner.retainedCount() == 1u &&
+              appendCanonicalSemanticRecord(retryCanonical, retry),
+          "seven-family warm retry admits the same qualified object");
+    PeSemanticExactFixedEmission retryExact{};
+    check(equalCanonicalOwnerBytes(owner, retryCanonical, retryExact),
+          "seven-family warm retry preserves canonical bytes");
+    retryCanonical.resetAndReleaseRetained();
+    check(object.refs == warmRefs,
+          "seven-family warm retry avoids a duplicate retain");
+    owner.reset();
+    check(object.refs == 1u,
+          "seven-family warm retry reset releases the owner pin exactly once");
+  }
+
+  // Null rows carry a canonical unbind and must not acquire a physical pin.
+  {
+    Owner owner;
+    std::array<Row, 1u> rows{{{.wire = makeNull(), .object = {}}}};
+    auto input = base(PeSemanticProducerKind::DrawPrimitive, 3u, 3u);
+    configure(input.sparse, std::span<const Row>(rows));
+    CommandChunkBuilder canonical;
+    check(owner.admit(input) && owner.retainedCount() == 0u &&
+              appendCanonicalSemanticRecord(canonical, input),
+          "seven-family valid-null row admits without a pin");
+    PeSemanticExactFixedEmission exact{};
+    PeSemanticSegmentedEmission segmented{};
+    check(equalCanonicalOwnerBytes(owner, canonical, exact) &&
+              exact.transport.header.handleCount == 0u &&
+              owner.emitSegmented(segmented) &&
+              ownerSegmentedRolesEqualExact(exact, segmented),
+          "seven-family valid-null row preserves exact and segmented bytes");
+    check(!owner.visitCommittedPendingChunkLease(
+              ref, [](const CommittedPendingChunkLease&) noexcept {
+                return true;
+              }),
+          "seven-family valid-null row has no committed lease authority");
+    canonical.resetAndReleaseRetained();
+    owner.reset();
+  }
+
+  // Inactive rows deliberately retain non-null metadata to prove that the
+  // wire-valid bit, rather than a borrowed wrapper, controls authority.
+  {
+    Owner owner;
+    std::array<Row, 1u> rows{{{.wire = makeInactive(), .object = ref}}};
+    auto input = base(PeSemanticProducerKind::DrawPrimitive, 4u, 4u);
+    configure(input.sparse, std::span<const Row>(rows));
+    CommandChunkBuilder canonical;
+    check(owner.admit(input) && owner.retainedCount() == 0u &&
+              object.refs == 1u &&
+              appendCanonicalSemanticRecord(canonical, input),
+          "seven-family inactive row ignores nonnull metadata");
+    PeSemanticExactFixedEmission exact{};
+    check(equalCanonicalOwnerBytes(owner, canonical, exact) &&
+              exact.transport.header.handleCount == 0u,
+          "seven-family inactive row preserves canonical no-handle bytes");
+    canonical.resetAndReleaseRetained();
+    owner.reset();
+  }
+
+  // Keep all rejection assertions on one accepted prefix so rollback is
+  // observable without introducing any new malformed-generic policy.
+  {
+    Owner owner;
+    auto accepted = makeInput(5u);
+    check(owner.admit(accepted) && object.refs == 2u,
+          "seven-family identity fixture admits its accepted prefix");
+
+    auto wrongKind = makeInput(6u);
+    configure(wrongKind.sparse, std::span<const Row>(validRows));
+    auto wrongKindRows = validRows;
+    wrongKindRows[0].object.identity.kind =
+        Kind == D9C_CHUNK_HANDLE_KIND_TEXTURE
+            ? D9C_CHUNK_HANDLE_KIND_BUFFER
+            : D9C_CHUNK_HANDLE_KIND_TEXTURE;
+    configure(wrongKind.sparse, std::span<const Row>(wrongKindRows));
+    setDirect(wrongKind, ref);
+    check(!owner.admit(wrongKind) && object.refs == 2u,
+          "seven-family wrong-kind identity rejects without mutation");
+
+    auto stale = makeInput(7u);
+    auto staleRows = validRows;
+    ++staleRows[0].object.identity.generation;
+    configure(stale.sparse, std::span<const Row>(staleRows));
+    setDirect(stale, ref);
+    check(!owner.admit(stale) && object.refs == 2u,
+          "seven-family stale-generation identity rejects without mutation");
+
+    auto alias = makeInput(8u);
+    auto aliasRows = validRows;
+    aliasRows[0].object.object = &pointerAlias;
+    configure(alias.sparse, std::span<const Row>(aliasRows));
+    setDirect(alias, ref);
+    check(!owner.admit(alias) && object.refs == 2u && pointerAlias.refs == 1u,
+          "seven-family same-id different-pointer identity rejects atomically");
+    owner.reset();
+    check(object.refs == 1u && pointerAlias.refs == 1u,
+          "seven-family identity rejection rollback balances retains");
+  }
+}
+
+void preparedBindingSevenFamilyMatrix() {
+  preparedBindingFamilyMatrix<D9CCommandChunkWireTextureBinding, 2u,
+                              D9CTexture, D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+      "texture family admits valid duplicate rows",
+      [](std::size_t i) {
+        return D9CCommandChunkWireTextureBinding{.slot = static_cast<std::uint32_t>(i),
+                                                 .valid = 1u};
+      },
+      [] { return D9CCommandChunkWireTextureBinding{
+          .slot = 0u, .valid = 1u,
+          .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX}; },
+      [] { return D9CCommandChunkWireTextureBinding{.slot = 0u, .valid = 0u}; },
+      [](SparseStateInput& sparse, auto rows) { sparse.textures = rows; },
+      [](PeSemanticRecordInput& input, const auto& ref) { input.texture0 = ref; });
+
+  preparedBindingFamilyMatrix<D9CCommandChunkWireStreamBinding, 2u,
+                              D9CBuffer, D9C_CHUNK_HANDLE_KIND_BUFFER>(
+      "stream family admits valid duplicate rows",
+      [](std::size_t i) {
+        return D9CCommandChunkWireStreamBinding{
+            .slot = static_cast<std::uint32_t>(i), .valid = 1u,
+            .offset = 8u, .stride = 16u, .frequency = 1u};
+      },
+      [] { return D9CCommandChunkWireStreamBinding{
+          .slot = 0u, .valid = 1u,
+          .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX}; },
+      [] { return D9CCommandChunkWireStreamBinding{.slot = 0u, .valid = 0u}; },
+      [](SparseStateInput& sparse, auto rows) { sparse.streams = rows; },
+      [](PeSemanticRecordInput& input, const auto& ref) { input.buffer0 = ref; });
+
+  preparedBindingFamilyMatrix<D9CCommandChunkWireShaderBinding, 2u,
+                              D9CShader, D9C_CHUNK_HANDLE_KIND_SHADER>(
+      "shader family admits valid duplicate rows",
+      [](std::size_t i) {
+        return D9CCommandChunkWireShaderBinding{
+            .stage = static_cast<std::uint32_t>(i), .valid = 1u};
+      },
+      [] { return D9CCommandChunkWireShaderBinding{
+          .stage = D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX, .valid = 1u,
+          .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX}; },
+      [] { return D9CCommandChunkWireShaderBinding{
+          .stage = D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX, .valid = 0u}; },
+      [](SparseStateInput& sparse, auto rows) { sparse.shaders = rows; },
+      [](PeSemanticRecordInput& input, const auto& ref) { input.shader0 = ref; });
+
+  preparedBindingFamilyMatrix<D9CCommandChunkWireVertexInput, 1u,
+                              D9CVertexDecl, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL>(
+      "vertex-input family admits valid duplicate identity",
+      [](std::size_t) {
+        return D9CCommandChunkWireVertexInput{
+            .valid = 1u, .kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION};
+      },
+      [] { return D9CCommandChunkWireVertexInput{
+          .valid = 1u, .kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF,
+          .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX}; },
+      [] { return D9CCommandChunkWireVertexInput{
+          .valid = 0u, .kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF}; },
+      [](SparseStateInput& sparse, auto rows) { sparse.vertexInputs = rows; },
+      [](PeSemanticRecordInput& input, const auto& ref) {
+        input.declaration = ref;
+      });
+
+  preparedBindingFamilyMatrix<D9CCommandChunkWireIndexBinding, 1u,
+                              D9CBuffer, D9C_CHUNK_HANDLE_KIND_BUFFER>(
+      "index-buffer family admits valid duplicate identity",
+      [](std::size_t) { return D9CCommandChunkWireIndexBinding{.valid = 1u}; },
+      [] { return D9CCommandChunkWireIndexBinding{
+          .valid = 1u, .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX}; },
+      [] { return D9CCommandChunkWireIndexBinding{.valid = 0u}; },
+      [](SparseStateInput& sparse, auto rows) { sparse.indexBuffers = rows; },
+      [](PeSemanticRecordInput& input, const auto& ref) { input.buffer0 = ref; });
+
+  preparedBindingFamilyMatrix<D9CCommandChunkWireRenderTargetBinding, 2u,
+                              D9CSurface, D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      "render-target family admits valid duplicate rows",
+      [](std::size_t i) {
+        return D9CCommandChunkWireRenderTargetBinding{
+            .slot = static_cast<std::uint32_t>(i), .valid = 1u};
+      },
+      [] { return D9CCommandChunkWireRenderTargetBinding{
+          .slot = 0u, .valid = 1u,
+          .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX}; },
+      [] { return D9CCommandChunkWireRenderTargetBinding{.slot = 0u, .valid = 0u}; },
+      [](SparseStateInput& sparse, auto rows) { sparse.renderTargets = rows; },
+      [](PeSemanticRecordInput& input, const auto& ref) { input.surface0 = ref; });
+
+  preparedBindingFamilyMatrix<D9CCommandChunkWireDepthStencilBinding, 1u,
+                              D9CSurface, D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      "depth-stencil family admits valid duplicate identity",
+      [](std::size_t) {
+        return D9CCommandChunkWireDepthStencilBinding{.valid = 1u};
+      },
+      [] { return D9CCommandChunkWireDepthStencilBinding{
+          .valid = 1u, .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX}; },
+      [] { return D9CCommandChunkWireDepthStencilBinding{.valid = 0u}; },
+      [](SparseStateInput& sparse, auto rows) { sparse.depthStencils = rows; },
+      [](PeSemanticRecordInput& input, const auto& ref) { input.surface0 = ref; });
+}
+
 void classificationAndLifetime() {
   Owner owner;
   CommandChunkBuilder canonicalBuilder;
@@ -298,6 +757,262 @@ void classificationAndLifetime() {
   canonicalBuilder.resetAndReleaseRetained();
   check(surface.refs == 1u && texture.refs == 1u && query.refs == 1u,
         "canonical comparison builder releases every retain");
+}
+
+void preparedLayoutCoversEverySparseAndVariableSection() {
+  using LayoutOwner = PeSemanticBatchOwner<4u, 16u, 4096u, 8u, 8u>;
+  LayoutOwner owner;
+  CommandChunkBuilder canonical;
+  D9CTexture texture;
+  D9CBuffer buffer;
+  D9CShader shader;
+  D9CVertexDecl declaration;
+  D9CSurface surface;
+  const auto textureRef = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+      &texture, 0x1101u, 7u);
+  const auto bufferRef = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(
+      &buffer, 0x1102u, 8u);
+  const auto shaderRef = localRef<D9C_CHUNK_HANDLE_KIND_SHADER>(
+      &shader, 0x1103u, 9u);
+  const auto declarationRef = localRef<D9C_CHUNK_HANDLE_KIND_VERTEX_DECL>(
+      &declaration, 0x1104u, 10u);
+  const auto surfaceRef = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &surface, 0x1105u, 11u);
+
+  std::array<D9CCommandChunkWireRenderState, 1u> renderStates{{
+      D9CCommandChunkWireRenderState{7u, 0x101u}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>, 1u> textures{{
+      SparseBindingInput<D9CCommandChunkWireTextureBinding>{
+      {.slot = 3u, .valid = 1u}, textureRef}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>, 1u> streams{{
+      SparseBindingInput<D9CCommandChunkWireStreamBinding>{
+      {.slot = 4u, .valid = 1u, .offset = 8u, .stride = 16u,
+       .frequency = 1u}, bufferRef}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireShaderBinding>, 1u> shaders{{
+      SparseBindingInput<D9CCommandChunkWireShaderBinding>{
+      {.stage = D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX, .valid = 1u},
+      shaderRef}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireVertexInput>, 1u> vertexInputs{{
+      SparseBindingInput<D9CCommandChunkWireVertexInput>{
+      {.valid = 1u, .kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION},
+      declarationRef}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireIndexBinding>, 1u> indexBuffers{{
+      SparseBindingInput<D9CCommandChunkWireIndexBinding>{
+      {.valid = 1u}, bufferRef}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireRenderTargetBinding>, 1u>
+      renderTargets{{SparseBindingInput<D9CCommandChunkWireRenderTargetBinding>{
+          {.slot = 2u, .valid = 1u}, surfaceRef}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireDepthStencilBinding>, 1u>
+      depthStencils{{SparseBindingInput<D9CCommandChunkWireDepthStencilBinding>{
+          {.valid = 1u}, surfaceRef}}};
+  std::array<D9CViewport, 1u> viewports{{
+      D9CViewport{3u, 5u, 127u, 91u, 0.25f, 0.75f}}};
+  std::array<D9CRect, 1u> scissors{{D9CRect{11, 13, 47, 61}}};
+  std::array<D9CMaterial, 1u> materials{{D9CMaterial{
+      .diffuse = {0.125f, 0.25f, 0.5f, 1.0f}, .power = 17.0f}}};
+  std::array<D9CCommandChunkWireClipPlane, 1u> clipPlanes{{D9CCommandChunkWireClipPlane{
+      .slot = 2u, .values = {0.5f, 0.25f, -1.0f, 2.0f}}}};
+  std::array<D9CDrawPacketTextureStageState, 1u> textureStageStates{{
+      D9CDrawPacketTextureStageState{1u, 2u, 5u}}};
+  std::array<D9CDrawPacketSamplerState, 1u> samplerStates{{
+      D9CDrawPacketSamplerState{3u, 4u, 2u}}};
+  std::array<D9CDrawPacketTransform, 1u> transforms{{D9CDrawPacketTransform{
+      .state = 2u,
+                                                  .matrix = {.m = {1.0f}}}}};
+  transforms[0].matrix.m[7] = 0.5f;
+  transforms[0].matrix.m[15] = 2.0f;
+  std::array<D9CCommandChunkWireLight, 1u> lights{{D9CCommandChunkWireLight{.slot = 3u,
+                                               .light = {.type = 1u,
+                                                         .range = 23.0f}}}};
+  std::array<D9CCommandChunkWireLightEnable, 1u> lightEnables{{
+      D9CCommandChunkWireLightEnable{3u, 1u}}};
+  const std::array<std::byte, 16u> vsFloat{
+      std::byte{0x11}, std::byte{0x12}, std::byte{0x13}, std::byte{0x14},
+      std::byte{0x15}, std::byte{0x16}, std::byte{0x17}, std::byte{0x18},
+      std::byte{0x19}, std::byte{0x1a}, std::byte{0x1b}, std::byte{0x1c},
+      std::byte{0x1d}, std::byte{0x1e}, std::byte{0x1f}, std::byte{0x20}};
+  const std::array<std::byte, 16u> vsInt = {
+      std::byte{0x21}, std::byte{0x22}, std::byte{0x23}, std::byte{0x24},
+      std::byte{0x25}, std::byte{0x26}, std::byte{0x27}, std::byte{0x28},
+      std::byte{0x29}, std::byte{0x2a}, std::byte{0x2b}, std::byte{0x2c},
+      std::byte{0x2d}, std::byte{0x2e}, std::byte{0x2f}, std::byte{0x30}};
+  const std::array<std::byte, 4u> vsBool{
+      std::byte{0x31}, std::byte{0x32}, std::byte{0x33}, std::byte{0x34}};
+  const std::array<std::byte, 16u> psFloat = vsFloat;
+  const std::array<std::byte, 16u> psInt = vsInt;
+  const std::array<std::byte, 4u> psBool = vsBool;
+  const std::array<std::byte, 6u> upIndex{
+      std::byte{0xa1}, std::byte{0xa2}, std::byte{0xa3}, std::byte{0xa4},
+      std::byte{0xa5}, std::byte{0xa6}};
+  const std::array<std::byte, 12u> upVertex{
+      std::byte{0xb1}, std::byte{0xb2}, std::byte{0xb3}, std::byte{0xb4},
+      std::byte{0xb5}, std::byte{0xb6}, std::byte{0xb7}, std::byte{0xb8},
+      std::byte{0xb9}, std::byte{0xba}, std::byte{0xbb}, std::byte{0xbc}};
+
+  const SparseStateInput sparse{
+      .renderStates = renderStates,
+      .textures = textures,
+      .streams = streams,
+      .shaders = shaders,
+      .vertexInputs = vertexInputs,
+      .indexBuffers = indexBuffers,
+      .renderTargets = renderTargets,
+      .depthStencils = depthStencils,
+      .viewports = viewports,
+      .scissors = scissors,
+      .materials = materials,
+      .clipPlanes = clipPlanes,
+      .textureStageStates = textureStageStates,
+      .samplerStates = samplerStates,
+      .transforms = transforms,
+      .lights = lights,
+      .lightEnables = lightEnables,
+      .vsFloatConstants = {2u, 1u, vsFloat},
+      .vsIntConstants = {3u, 1u, vsInt},
+      .vsBoolConstants = {4u, 1u, vsBool},
+      .psFloatConstants = {5u, 1u, psFloat},
+      .psIntConstants = {6u, 1u, psInt},
+      .psBoolConstants = {7u, 1u, psBool},
+      .upIndexData = upIndex,
+      .upVertexData = upVertex,
+  };
+  auto input = base(PeSemanticProducerKind::DrawIndexedPrimitiveUp, 1u, 1u);
+  input.draw.primitiveType = 4u;
+  input.draw.numVertices = 3u;
+  input.draw.primitiveCount = 1u;
+  input.draw.stride = 4u;
+  input.draw.indexFormat = 101u;
+  input.sparse = sparse;
+
+  PeSemanticPreparedRecord witness{};
+  check(owner.prepareAdmission(input, witness) ==
+            PeSemanticAdmissionOutcome::Admissible && witness.plan.valid,
+        "one prepared layout admits every sparse and variable section");
+  check(witness.plan.handleCount == 5u && witness.plan.payloadBytes != 0u &&
+            witness.plan.semanticBytes ==
+                vsFloat.size() + vsInt.size() + vsBool.size() +
+                    psFloat.size() + psInt.size() + psBool.size() +
+                    upIndex.size() + upVertex.size(),
+        "prepared layout accounts for qualified handles and semantic bytes");
+  for (const auto count : witness.plan.sparseCounts)
+    check(count == 1u, "prepared layout publishes every sparse category count");
+
+  check(owner.admit(input) && appendSparseRecord(
+            canonical, input.recordType, input.draw, input.sparse),
+        "prepared all-section input enters the independent canonical oracle");
+  PeSemanticExactFixedEmission exact{};
+  check(equalCanonicalOwnerBytes(owner, canonical, exact),
+        "prepared all-section bytes equal CommandChunkBuilder output");
+  PeSemanticSegmentedEmission segmented{};
+  check(owner.emitSegmented(segmented) &&
+            ownerSegmentedRolesEqualExact(exact, segmented),
+        "prepared all-section contiguous and segmented output agree");
+
+  dxmt9::d3d9::ImportedChunkView imported;
+  const auto envelope = dxmt9::d3d9::CommandChunkEnvelope{
+      .version = D9C_COMMAND_CHUNK_VERSION,
+      .recordCount = exact.transport.header.recordCount,
+      .handleCount = exact.transport.header.handleCount,
+      .producerIdentity = exact.transport.producerIdentity};
+  check(dxmt9::d3d9::validateCommandChunk(exact.wire, envelope, &imported).valid() &&
+            imported.record(0u).sections.size() == D9C_COMMAND_CHUNK_SECTION_COUNT,
+        "prepared layout validates with all 25 sections in schema order");
+  const auto record = imported.record(0u);
+  for (std::size_t index = 0u; index < record.sections.size(); ++index) {
+    const auto section = record.section(index);
+    const auto* rule = dxmt9::d3d9::sectionRule(section.descriptor.kind);
+    check(section.descriptor.kind == index + 1u && rule != nullptr &&
+              section.descriptor.payloadOffset % rule->payloadAlignment == 0u &&
+              section.descriptor.byteSize != 0u &&
+              std::any_of(section.payload.begin(), section.payload.end(),
+                          [](std::byte value) { return value != std::byte{}; }),
+          "prepared section order, alignment, and nonzero values are retained");
+  }
+  check(record.section(0u).descriptor.count == 1u &&
+            record.section(1u).descriptor.count == 1u &&
+            record.section(2u).descriptor.count == 1u &&
+            record.section(3u).descriptor.count == 1u &&
+            record.section(4u).descriptor.count == 1u &&
+            record.section(5u).descriptor.count == 1u &&
+            record.section(6u).descriptor.count == 1u &&
+            record.section(7u).descriptor.count == 1u &&
+            record.section(17u).descriptor.count == 1u &&
+            record.section(23u).descriptor.count == upIndex.size() &&
+            record.section(24u).descriptor.count == upVertex.size(),
+        "all seven binding families and constant/UP counts remain logical");
+
+  // Every binding family accepts a canonical nullable row without creating a
+  // physical pin. This is deliberately separate from the populated matrix so
+  // a null unbind cannot be hidden by a neighboring retained identity.
+  std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>, 1u>
+      nullTextures{{{.wire = {.slot = 0u, .valid = 1u,
+                               .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX}}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>, 1u>
+      nullStreams{{{.wire = {.slot = 0u, .valid = 1u,
+                             .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX}}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireShaderBinding>, 1u>
+      nullShaders{{{.wire = {.stage = 0u, .valid = 1u,
+                             .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX}}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireVertexInput>, 1u>
+      nullVertexInputs{{{.wire = {.valid = 1u, .kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF,
+                                  .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX}}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireIndexBinding>, 1u>
+      nullIndexBuffers{{{.wire = {.valid = 1u,
+                                  .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX}}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireRenderTargetBinding>, 1u>
+      nullRenderTargets{{{.wire = {.slot = 0u, .valid = 1u,
+                                   .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX}}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireDepthStencilBinding>, 1u>
+      nullDepthStencils{{{.wire = {.valid = 1u,
+                                   .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX}}}};
+  const auto nullable = [&](auto configure, std::string_view message) {
+    LayoutOwner nullableOwner;
+    CommandChunkBuilder nullableCanonical;
+    auto nullInput = base(PeSemanticProducerKind::DrawPrimitive, 2u, 2u);
+    SparseStateInput nullSparse{};
+    configure(nullSparse);
+    nullInput.sparse = nullSparse;
+    check(nullableOwner.admit(nullInput) && nullableOwner.retainedCount() == 0u &&
+              appendSparseRecord(nullableCanonical, nullInput.recordType,
+                                 nullInput.draw, nullInput.sparse),
+          message);
+    PeSemanticExactFixedEmission nullableEmission{};
+    check(equalCanonicalOwnerBytes(nullableOwner, nullableCanonical,
+                                   nullableEmission) &&
+              nullableEmission.transport.header.handleCount == 0u,
+          "nullable binding bytes equal the canonical no-handle row");
+  };
+  nullable([&](SparseStateInput& value) { value.textures = nullTextures; },
+           "nullable texture row admits");
+  nullable([&](SparseStateInput& value) { value.streams = nullStreams; },
+           "nullable stream row admits");
+  nullable([&](SparseStateInput& value) { value.shaders = nullShaders; },
+           "nullable shader row admits");
+  nullable([&](SparseStateInput& value) { value.vertexInputs = nullVertexInputs; },
+           "nullable vertex-input row admits");
+  nullable([&](SparseStateInput& value) { value.indexBuffers = nullIndexBuffers; },
+           "nullable index-buffer row admits");
+  nullable([&](SparseStateInput& value) { value.renderTargets = nullRenderTargets; },
+           "nullable render-target row admits");
+  nullable([&](SparseStateInput& value) { value.depthStencils = nullDepthStencils; },
+           "nullable depth-stencil row admits");
+
+  // MaxSparseValues is a logical per-category quota, not a global count.
+  using CategoryOwner = PeSemanticBatchOwner<4u, 8u, 4096u, 8u, 1u>;
+  CategoryOwner quota;
+  check(quota.admit(input), "one row in each sparse category fits its quota");
+  auto extra = input;
+  extra.sourceOrdinal = extra.recordOrdinal = 2u;
+  check(!quota.admit(extra) &&
+            quota.lastAdmissionFailure() == CategoryOwner::AdmissionFailure::Capacity &&
+            quota.size() == 1u,
+        "logical per-category sparse quota rejects cumulative rows");
+  owner.reset();
+  canonical.resetAndReleaseRetained();
+  quota.reset();
+  check(texture.refs == 1u && buffer.refs == 1u && shader.refs == 1u &&
+            declaration.refs == 1u && surface.refs == 1u,
+        "all-family prepared layout reset releases every typed pin");
 }
 
 void partialRectClearMatchesCanonicalBuilder() {
@@ -981,7 +1696,8 @@ void admissionArithmeticRejectsOverflow() {
   std::array<D9CViewport, 1u> viewport{};
   auto draw = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
   draw.sparse.viewports = viewport;
-  check(detail::admissionPayloadBytes(draw, result),
+  PeSemanticPreparedSparseLayout layout;
+  check(detail::preparePeSemanticSparseLayout(draw, layout) && layout.valid,
         "payload planner accepts a physically valid typed section");
 
   if constexpr (sizeof(std::size_t) > sizeof(std::uint32_t)) {
@@ -2152,8 +2868,6 @@ void directCanonicalLedgerExcludesDuplicateStaging() {
   const auto expectedAdmissionBytes =
       sizeof(PeSemanticRecordSlot) +
       sizeof(PeSemanticPhysicalPin<D9CTexture, PeSemanticTextureIdentity>) +
-      sizeof(PeSemanticOwnedBinding<D9CCommandChunkWireTextureBinding,
-                                    PeSemanticTextureIdentity>) +
       static_cast<std::size_t>(segmented.transport.header.recordCount) *
           sizeof(D9CCommandChunkWireRecordHeader) +
       static_cast<std::size_t>(segmented.transport.header.handleCount) *
@@ -2162,7 +2876,7 @@ void directCanonicalLedgerExcludesDuplicateStaging() {
   check(admitted.calls == 1u && admitted.bytes == expectedAdmissionBytes &&
             admitted.retainedBytes == admitted.bytes &&
             admitted.retainedBytesPeak == admitted.bytes,
-        "direct admission ledger excludes scalar and constant duplicate staging");
+        "direct admission ledger excludes scalar, constant, and binding duplicate staging");
 
   constexpr auto kNoDuplicateStaging = std::array{
       dxmt9::core::CopyMaterializationClass::PeBuilderTemporary,
@@ -3375,6 +4089,7 @@ int main() {
     identitySetUsesAnActiveFrontier();
     preparedWireWitnessTracksFirstWirePromotion();
     admissionArithmeticRejectsOverflow();
+    preparedLayoutCoversEverySparseAndVariableSection();
     pendingDeltaViewRejectsStaleTicket();
     transactionalAdmissionRollsBackWithoutLeakingPins();
     borrowedViewCapacityRebaseAndSettlementFault();
@@ -3391,6 +4106,15 @@ int main() {
     directCanonicalQuotaAndSettlementRefinement();
     directCanonicalLedgerExcludesDuplicateStaging();
     preparedWitnessSettlementAndRollback();
+    genericConstantRetainsForeignDirectAuthority();
+    typedConstantAdmissionDifferential<PeSemanticProducerKind::VsFloatConstant>();
+    typedConstantAdmissionDifferential<PeSemanticProducerKind::VsIntConstant>();
+    typedConstantAdmissionDifferential<PeSemanticProducerKind::VsBoolConstant>();
+    typedConstantAdmissionDifferential<PeSemanticProducerKind::PsFloatConstant>();
+    typedConstantAdmissionDifferential<PeSemanticProducerKind::PsIntConstant>();
+    typedConstantAdmissionDifferential<PeSemanticProducerKind::PsBoolConstant>();
+    inactiveBindingMetadataRemainsNonAuthoritative();
+    preparedBindingSevenFamilyMatrix();
     classificationAndLifetime();
     partialRectClearMatchesCanonicalBuilder();
     emptyClearSpanMatchesCanonicalAndResetReuse();

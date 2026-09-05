@@ -26,6 +26,7 @@
 #include "dxmt9/pe_recorder_lock.hpp"
 
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -138,13 +139,30 @@ struct SparseStatePlan {
     std::construct_at(this);
   }
 
+  void invalidate() noexcept {
+    prepared = false;
+    chunkContextFinalized = false;
+    pendingDelta = {};
+    pendingTicket = {};
+    sourceShadow_.invalidate();
+    sourceConstants_.invalidate();
+    sourceBindings_.invalidate();
+  }
+
   bool bindSources(const RecorderLockCapability& access,
                    const PeHotStateShadow& shadow,
                    PeConstShadowBlock& constants,
                    const PeBindingView& bindings) noexcept {
-    return access.bind(sourceShadow_, shadow) &&
+    return access.valid() && access.bind(sourceShadow_, shadow) &&
            access.bind(sourceConstants_, constants) &&
            access.bind(sourceBindings_, bindings);
+  }
+
+  bool validFor(const RecorderLockCapability& access) const noexcept {
+    return prepared && pendingDelta.valid() && pendingTicket.valid() &&
+           sourceShadow_.validFor(access) &&
+           sourceConstants_.validFor(access) &&
+           sourceBindings_.validFor(access);
   }
 
   template <typename Fn>
@@ -238,6 +256,87 @@ struct SparseStatePlan {
   RecorderBorrow<PeConstShadowBlock> sourceConstants_{};
   RecorderBorrow<const PeBindingView> sourceBindings_{};
 };
+
+inline std::uint32_t sparseStatePlanSectionCount(
+    const SparseStatePlan& plan) noexcept {
+  std::uint32_t count = 0u;
+  const auto add = [&count](bool present) noexcept {
+    count += present ? 1u : 0u;
+  };
+  add(plan.renderStateCount != 0u);
+  add(plan.textureMask != 0u);
+  add(plan.streamMask != 0u);
+  add(plan.shaderMask != 0u);
+  add(plan.vertexInput);
+  add(plan.indexBuffer);
+  add(plan.renderTargetMask != 0u);
+  add(plan.depthStencil);
+  add(plan.viewport);
+  add(plan.scissor);
+  add(plan.material);
+  add(plan.clipPlaneMask != 0u);
+  add(plan.textureStageStateCount != 0u);
+  add(plan.samplerStateCount != 0u);
+  add(plan.transformCount != 0u);
+  add(plan.lightMask != 0u);
+  add(plan.lightEnableMask != 0u);
+  add(plan.vsFloatConstants.present());
+  add(plan.vsIntConstants.present());
+  add(plan.vsBoolConstants.present());
+  add(plan.psFloatConstants.present());
+  add(plan.psIntConstants.present());
+  add(plan.psBoolConstants.present());
+  add(!plan.payloads.upIndex.empty());
+  add(!plan.payloads.upVertex.empty());
+  return count;
+}
+
+inline std::size_t sparseStatePlanConstantPayloadBytes(
+    const SparseStatePlan& plan) noexcept {
+  return plan.vsFloatConstants.registerBytes.size() +
+         plan.vsIntConstants.registerBytes.size() +
+         plan.vsBoolConstants.registerBytes.size() +
+         plan.psFloatConstants.registerBytes.size() +
+         plan.psIntConstants.registerBytes.size() +
+         plan.psBoolConstants.registerBytes.size();
+}
+
+inline D9CCommandChunkWireDrawHeader sparseStatePlanDrawHeader(
+    const SparseStatePlan& plan) noexcept {
+  D9CCommandChunkWireDrawHeader header{};
+  header.flags = plan.drawFlags;
+  switch (plan.draw.recordType) {
+    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+      header.primitiveType = plan.draw.primitiveType;
+      header.startVertex = plan.draw.startVertex;
+      header.primitiveCount = plan.draw.primitiveCount;
+      break;
+    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+      header.primitiveType = plan.draw.primitiveType;
+      header.baseVertex = plan.draw.baseVertex;
+      header.minVertex = plan.draw.minVertex;
+      header.numVertices = plan.draw.numVertices;
+      header.startIndex = plan.draw.startIndex;
+      header.primitiveCount = plan.draw.primitiveCount;
+      break;
+    case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
+      header.primitiveType = plan.draw.primitiveType;
+      header.primitiveCount = plan.draw.primitiveCount;
+      header.stride = plan.draw.stride;
+      break;
+    case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
+      header.primitiveType = plan.draw.primitiveType;
+      header.minVertex = plan.draw.minVertex;
+      header.numVertices = plan.draw.numVertices;
+      header.primitiveCount = plan.draw.primitiveCount;
+      header.stride = plan.draw.stride;
+      header.indexFormat = plan.draw.indexFormat;
+      break;
+    default:
+      break;
+  }
+  return header;
+}
 
 static_assert(!std::is_copy_constructible_v<SparseStatePlan> &&
               !std::is_move_constructible_v<SparseStatePlan> &&

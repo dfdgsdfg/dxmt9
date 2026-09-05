@@ -12,6 +12,7 @@ enum class PeSemanticStagingFamily : std::uint8_t {
   Cold,
   Draw,
   Constant,
+  SparsePlan,
 };
 
 // Hot producers overwrite only the fields their family can publish.  The
@@ -62,6 +63,27 @@ inline void stagePeSemanticDrawInput(
   valid = true;
 }
 
+inline void stagePeSemanticConstantInput(
+    dxmt9::d3d9::pe::PeSemanticConstantRecordInput& staged,
+    PeSemanticStagingFamily& family, bool& valid,
+    dxmt9::d3d9::pe::PeSemanticProducerKind producer,
+    std::uint32_t recordType, const D9CCommandChunkWireSetConst& setConst,
+    std::span<const std::byte> constantBytes) noexcept {
+  valid = false;
+  staged.producer = producer;
+  staged.recordType = recordType;
+  staged.recordFlags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE;
+  staged.sourceOrdinal = 0u;
+  staged.recordOrdinal = 0u;
+  staged.setConst = setConst;
+  staged.constantBytes = constantBytes;
+  family = PeSemanticStagingFamily::Constant;
+  valid = true;
+}
+
+// Generic staging remains available to cold/oracle fixtures whose full input
+// envelope is itself the authority. Production constant arming selects the
+// narrow overload above.
 inline void stagePeSemanticConstantInput(
     dxmt9::d3d9::pe::PeSemanticRecordInput& staged,
     PeSemanticStagingFamily& family, bool& valid,
@@ -123,6 +145,10 @@ struct PeProductionSemanticRecorderState {
   // dependent draw spans are projected into destinationSparse. Generic cold
   // controls may still assign the complete input value.
   dxmt9::d3d9::pe::PeSemanticRecordInput stagedInput{};
+  dxmt9::d3d9::pe::PeSemanticConstantRecordInput stagedConstantInput{};
+  dxmt9::d3d9::pe::SparseStatePlan stagedSparsePlan{};
+  dxmt9::d3d9::pe::PeSemanticProducerKind stagedSparsePlanProducer =
+      dxmt9::d3d9::pe::PeSemanticProducerKind::DrawPrimitive;
   dxmt9::d3d9::pe::SparseStateInput destinationSparse{};
   std::uint64_t sourceOrdinalHint = 0u;
   PeSemanticStagingFamily stagedFamily = PeSemanticStagingFamily::None;
