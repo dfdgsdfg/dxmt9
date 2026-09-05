@@ -30,15 +30,17 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 ## Latest Conclusions
 
 For the current semantic-owner PE implementation, use the
-[2026-09-05 direct canonical payload evidence](present-pacing-pe-direct-canonical.242.md),
-following the [prepared-witness reset](present-pacing-pe-prepared-reset.241.md).
-Scalar/constant/UP/Clear intermediate value storage is removed, saving about
-1.96 MiB of native production-alias fixed capacity while preserving logical
-quotas, pins, and wire bytes. Native/TLA and GT2 OFF/ON checks pass. OFF FPS
-moves 26.874 to 27.383, but the sampled sparse/canonical phase sum does not
-improve; no stable CPU/FPS gain is established. Binding staging/pin lookup and
-contiguous final gather remain. Older PE cost rankings below describe earlier
-implementations.
+[2026-09-05 admission-reuse evidence](present-pacing-pe-admission-reuse.243.md),
+following [direct canonical payload](present-pacing-pe-direct-canonical.242.md).
+Prepared pin/wire ordinals, hot family staging, and active-prefix settlement
+pass native/TLA and GT2 OFF/ON checks. Sampled fixed/pin, sparse, and settlement
+costs decrease; canonical construction is nearly unchanged. OFF FPS moves
+27.304 to 27.527 (+0.82%) and ON 25.929 to 26.463 (+2.06%), with about 4 CB/P
+and zero errors. These single runs do not establish a stable FPS gain.
+Bounded dedup/mapping scans, twelve pin-index clears, warm retention, generic
+cold controls, and contiguous gather remain. The earlier 1.96 MiB value-arena
+removal is retained. Older PE cost rankings below describe earlier code, not
+a current PE symbol profile or attribution of the post-v0.1.1 regression.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
@@ -86,6 +88,8 @@ remaining branches are:
 
 ## Recent Leaf Documents
 
+- [present-pacing-pe-admission-reuse.243 - Qualified Pin/Wire Reuse and Active-Prefix Staging](present-pacing-pe-admission-reuse.243.md)
+- [present-pacing-pe-direct-canonical.242 - Direct Canonical Value Payload](present-pacing-pe-direct-canonical.242.md)
 - [present-pacing-cpu-ready-next-source-intent.239 - Replay-FIFO Intent Is Safe but Does Not Recover Tape Locality](present-pacing-cpu-ready-next-source-intent.239.md)
 - [present-pacing-cpu-ready-active-head-locality.238 - Active-Session Lookahead Closes the Local Hold Gap but Not Tape Locality](present-pacing-cpu-ready-active-head-locality.238.md)
 - [present-pacing-cpu-ready-tape-promotion-gate.237 - CPU-Ready Tape Restores Progress but Misses the Locality Gate](present-pacing-cpu-ready-tape-promotion-gate.237.md)

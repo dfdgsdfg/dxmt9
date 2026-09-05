@@ -651,3 +651,22 @@ Existing recorder transition models retain authority over append/settlement
 ordering; they do not prove payload bytes or Wine/Metal behavior. Transport,
 queue policy, and chunk-size promotion require independent evidence and must
 not be coupled to removal of intermediate PE value storage.
+
+**R-CORE-REC-7.12** Admission may resolve each qualified object and its local
+wire-handle mapping once and carry a bounded, call-local prepared witness into
+append. Reuse must remain bound to the same destination frontiers and input;
+it must preserve kind, generation, pointer collision rejection, first-seen wire
+order, null unbinding, unique retain multiplicity, and all-or-nothing rollback.
+The witness is not a new asynchronous owner or bridge ABI. Reuse must not make
+uncommitted pins or handles visible to hazard, capture, or emission consumers.
+
+**R-CORE-REC-7.13** Family-specific input staging and active-prefix storage reuse
+must initialize every field before any consumer reads it. Inactive array tails,
+old family fields, and cleared index entries confer no authority. A/B/A family
+changes, reset/reuse, failed partial admission, and settlement failure/retry must
+produce the same canonical bytes and retain/release effects as fresh storage.
+Clearing may be reduced only when validity/frontier discipline replaces it;
+warm-retainer settlement, logical quotas, failure disposition, and source
+ordering must remain unchanged. Native byte/ownership differential checks and
+release PE callsite inspection are required; lower clearing/copy counts alone
+do not establish lower runtime cost or an FPS gain.

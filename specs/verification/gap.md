@@ -24,9 +24,15 @@ Production admission now uses one owner-local transactional operation: it
 computes pure facts and six batch-global retention deltas internally, then
 copies and settles immediately; wire handle counts remain record-local
 because `EmissionHandleContext` resets per record.
-Semantic-owner arena copies and final-wire bytes remain distinct required
-lifetimes, cold observer re-emission remains instrumentation, and fresh
-copy-ledger reconciliation plus Wine/GPU/pixel/locality evidence remain open.
+R-CORE-REC-7.11 removes duplicate scalar/variable value arenas; canonical
+payload owns those bytes after admission, while typed pins and binding metadata
+remain distinct ownership information. R-CORE-REC-7.12–7.13 now reuse prepared
+pin/wire ordinals, stage hot families separately, and revoke active prefixes
+instead of clearing inactive value storage. Native byte/ownership differential
+tests bind those representation changes; existing recorder TLA transitions
+continue to own acceptance/settlement and do not prove wire values. Cold
+observer re-emission remains instrumentation, and fresh copy-ledger
+reconciliation plus broader Wine/GPU/pixel/locality evidence remain open.
 
 The production identity spine now composes PE semantic acceptance through
 terminal reclaim. PE ExactFixed and segmented descriptors carry a closed

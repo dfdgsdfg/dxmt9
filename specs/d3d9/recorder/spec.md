@@ -612,7 +612,8 @@ payload in canonical role backing, owns typed binding rows, and acquires
 kind-qualified physical pins at admission.
 Admission checkpoints source/record ordinals and all arena/pin frontiers and
 rolls back atomically on collision or bounded overflow; successful settlement
-ends the retainer warm epoch while clearing only used record/pin/arena ranges,
+ends the retainer warm epoch while invalidating committed prefixes and clearing
+pin indexes,
 whereas Reset/discard releases every current and warm pin. Admission maintains
 O(1) record-local handle/payload frontiers for cadence and transaction
 evidence; the full record walk is reserved for final emission validation. Its
@@ -642,6 +643,40 @@ hazard visitors read the unchanged qualified pins and binding metadata.
 Failed admission exposes no new record and restores all logical frontiers and
 retains. A later success must overwrite its complete payload and alignment
 gaps, including any uncommitted bytes left by a failed attempt.
+
+R-CORE-REC-7.12 and R-CORE-REC-7.13 permit a smaller admission implementation:
+resolve qualified identities and local wire mapping into the private prepared
+witness, consume those facts during append, and stage only the active producer
+family. Neither a prepared pin index nor a reused binding row grants authority
+outside the exact destination transaction. Each active field must be written
+before publishing its frontier; inactive tails are not read, serialized, or
+retained. Settlement may invalidate prefixes instead of erasing their bytes,
+but must still end the warm-retainer epoch and invalidate every lookup path.
+The native differential oracle must include partial acquisition and settlement
+rollback, identity collisions, null unbinding, and cross-family/chunk reuse.
+These are representation refinements of the existing admission/settlement
+protocol, not new queue transitions or a relaxation of failure atomicity.
+
+The implementation preserves the identity-set ordinal during admission and
+uses it to assign a wire ordinal without a second post-plan identity walk.
+`PeSemanticPreparedPinMapping` stores qualified identity/object, predicted typed
+pin, and local wire ordinal for the active prefix. `pinPrepared` consumes one
+bounded mapping lookup; sparse rows keep its local wire ordinal in their
+private wire metadata, and canonical binding emission applies the destination
+handle-table base without resolving identity again. Direct control records
+use the prepared kind/pin pair. The mapping remains linear over at most 80
+record identities; it does not eliminate record-local deduplication or prove
+an asymptotic improvement over chunk-global hash lookup.
+
+Draw/UP/ApplyState and standalone constants use family-specific staging
+adapters. Same-family calls overwrite active fields; family changes clear
+inactive fixed heads, direct refs, and variable spans before publishing
+validity. Ten lower-frequency control callsites retain generic staging.
+Prepared constructors initialize scalar frontiers, not inactive arrays.
+Settlement revokes record/pin/binding/wire/payload prefixes and clears the
+twelve open-addressed pin-index arrays; rollback still restores indexes and
+retains. Pin-index clearing, warm-retainer scans, and contiguous final gather
+remain explicit costs.
 
 The optional owner-qualified copy/materialization ledger binds this same
 transaction at its two physical ownership boundaries. A successful admission

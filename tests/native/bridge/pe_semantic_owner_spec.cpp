@@ -696,9 +696,10 @@ void knownUniqueWireWitnessAppendIsBounded() {
   check(context.add(first), "compatibility wire witness add accepts first identity");
   check(context.add(first) && context.count == 1u,
         "compatibility wire witness add still deduplicates identities");
-  std::size_t firstIndex = 0u;
-  check(context.indexOf(first, firstIndex) && firstIndex == 0u,
-        "compatibility wire witness index lookup still finds identity");
+  check(context.identities[0].kind == first.kind &&
+            context.identities[0].generation == first.generation &&
+            context.identities[0].objectId == first.objectId,
+        "wire witness keeps the first identity at its known ordinal");
   for (std::size_t i = context.count; i < context.identities.size(); ++i) {
     check(context.appendKnownUnique({
               .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE,
@@ -2382,6 +2383,306 @@ void collisionCopyOverflowAndRetry() {
   owner.reset();
   }
 
+// R-CORE-REC-7.12/7.13 bounded refinement: keep these sequences deliberately
+// small, but make every accepted/rejected transition observable through the
+// public owner surface. In particular, a failed sparse pin after an earlier
+// pin and a failed settlement after an accepted prefix must not leave either
+// an ownership or an index bucket authoritative.
+void r712R713BoundedIdentityAndLifecycleRefinement() {
+  {
+    Owner owner;
+    D9CTexture texture;
+    D9CSurface surface;
+    const auto textureRef = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+        &texture, 0xc01u, 4u);
+    const auto surfaceRef = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+        &surface, 0xc02u, 5u);
+    std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>, 2u>
+        textures{{
+            {.wire = {.slot = 0u, .valid = 1u}, .object = textureRef},
+            {.wire = {.slot = 1u, .valid = 1u}, .object = textureRef},
+        }};
+    std::array<SparseBindingInput<D9CCommandChunkWireRenderTargetBinding>, 1u>
+        targets{{{.wire = {.slot = 0u, .valid = 1u}, .object = surfaceRef}}};
+    auto input = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+    input.texture0 = textureRef;  // retained direct, then promoted by sparse.
+    input.surface0 = surfaceRef;  // retained direct, then promoted by sparse.
+    input.sparse.textures = textures;
+    input.sparse.renderTargets = targets;
+    CommandChunkBuilder canonical;
+    check(owner.admit(input) && owner.retainedCount() == 2u &&
+              texture.refs == 2u && surface.refs == 2u,
+          "direct and duplicate sparse handles retain each identity once");
+    check(appendCanonicalSemanticRecord(canonical, input),
+          "duplicate direct and sparse handles enter the canonical oracle");
+    PeSemanticExactFixedEmission emission{};
+    check(equalCanonicalOwnerBytes(owner, canonical, emission) &&
+              emission.transport.header.handleCount == 2u,
+          "duplicate direct and sparse handles emit two first-seen identities");
+    D9CCommandChunkWireHandleEntry handles[2u]{};
+    std::memcpy(handles,
+                emission.wire.data() + emission.transport.header.handleTableOffset,
+                sizeof(handles));
+    check(handles[0].kind == textureRef.identity.kind &&
+              handles[0].generation == textureRef.identity.generation &&
+              handles[0].objectId == textureRef.identity.objectId &&
+              handles[1].kind == surfaceRef.identity.kind &&
+              handles[1].generation == surfaceRef.identity.generation &&
+              handles[1].objectId == surfaceRef.identity.objectId,
+          "retained-only direct identities become wire-visible in sparse order");
+    owner.reset();
+    canonical.resetAndReleaseRetained();
+    check(texture.refs == 1u && surface.refs == 1u,
+          "duplicate direct and sparse reset balances both typed retains");
+  }
+
+  {
+    Owner owner;
+    std::array<SparseBindingInput<D9CCommandChunkWireShaderBinding>, 2u>
+        nullShaders{{
+            {.wire = {.stage = D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX,
+                      .valid = 1u,
+                      .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX}},
+            {.wire = {.stage = D9C_COMMAND_CHUNK_SHADER_STAGE_PIXEL,
+                      .valid = 1u,
+                      .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX}},
+        }};
+    auto input = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+    input.sparse.shaders = nullShaders;
+    CommandChunkBuilder canonical;
+    check(owner.admit(input) && owner.retainedCount() == 0u &&
+              appendCanonicalSemanticRecord(canonical, input),
+          "null sparse bindings represent unbinding without a physical pin");
+    PeSemanticExactFixedEmission emission{};
+    check(equalCanonicalOwnerBytes(owner, canonical, emission) &&
+              emission.transport.header.handleCount == 0u,
+          "null unbinding preserves canonical bytes without handles");
+    owner.reset();
+    canonical.resetAndReleaseRetained();
+  }
+
+  {
+    using Tiny = PeSemanticBatchOwner<4u, 2u, 4096u, 4u, 4u>;
+    Tiny owner;
+    D9CSurface first;
+    D9CSurface alias;
+    auto accepted = base(PeSemanticProducerKind::Present, 1u, 1u);
+    accepted.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+        &first, 0xc11u, 7u);
+    CommandChunkBuilder canonical;
+    check(owner.admit(accepted) && appendCanonicalSemanticRecord(canonical, accepted),
+          "identity collision fixture admits its canonical prefix");
+    PeSemanticExactFixedEmission before{};
+    check(equalCanonicalOwnerBytes(owner, canonical, before),
+          "identity collision fixture captures the accepted prefix bytes");
+    const std::vector<std::byte> beforeBytes(before.wire.begin(), before.wire.end());
+    auto wrongKind = accepted;
+    wrongKind.sourceOrdinal = wrongKind.recordOrdinal = 2u;
+    wrongKind.surface0.identity.kind = D9C_CHUNK_HANDLE_KIND_TEXTURE;
+    auto staleGeneration = accepted;
+    staleGeneration.sourceOrdinal = staleGeneration.recordOrdinal = 2u;
+    staleGeneration.surface0.identity.generation = 8u;
+    auto pointerAlias = accepted;
+    pointerAlias.sourceOrdinal = pointerAlias.recordOrdinal = 2u;
+    pointerAlias.surface0.object = &alias;
+    check(!owner.admit(wrongKind) && !owner.admit(staleGeneration) &&
+              !owner.admit(pointerAlias) && owner.size() == 1u &&
+              first.refs == 3u && alias.refs == 1u,
+          "wrong kind generation and same-id pointer aliases reject atomically");
+    PeSemanticExactFixedEmission after{};
+    check(equalCanonicalOwnerBytes(owner, canonical, after) &&
+              after.wireBytes == beforeBytes.size() &&
+              std::equal(beforeBytes.begin(), beforeBytes.end(), after.wire.begin()),
+          "rejected identity aliases preserve accepted bytes and ownership");
+    owner.reset();
+    canonical.resetAndReleaseRetained();
+    check(first.refs == 1u && alias.refs == 1u,
+          "identity alias rejection releases no speculative retain");
+  }
+
+  {
+    using PinBound = PeSemanticBatchOwner<4u, 1u, 4096u, 4u, 4u>;
+    PinBound owner;
+    D9CSurface pinned;
+    D9CSurface novel;
+    auto first = base(PeSemanticProducerKind::Present, 1u, 1u);
+    first.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&pinned, 0xc21u);
+    auto duplicate = first;
+    duplicate.sourceOrdinal = duplicate.recordOrdinal = 2u;
+    auto newIdentity = first;
+    newIdentity.sourceOrdinal = newIdentity.recordOrdinal = 3u;
+    newIdentity.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&novel, 0xc22u);
+    check(owner.admit(first) && owner.admit(duplicate) && owner.size() == 2u &&
+              owner.retainedCount() == 1u && pinned.refs == 2u,
+          "full pin capacity still accepts an existing duplicate identity");
+    check(!owner.admit(newIdentity) && owner.size() == 2u && novel.refs == 1u &&
+              owner.lastAdmissionFailure() == PinBound::AdmissionFailure::Capacity,
+          "full pin capacity rejects a new identity before retain");
+    owner.reset();
+    check(pinned.refs == 1u && novel.refs == 1u,
+          "full-capacity duplicate/new distinction leaves a balanced ledger");
+  }
+
+  {
+    Owner owner;
+    D9CTexture first;
+    D9CVertexDecl invalid;
+    const auto firstRef = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+        &first, 0xc31u, 1u);
+    const auto invalidRef = localRef<D9C_CHUNK_HANDLE_KIND_VERTEX_DECL>(
+        &invalid, 0xc32u, 1u);
+    std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>, 1u>
+        textures{{{.wire = {.slot = 0u, .valid = 1u}, .object = firstRef}}};
+    std::array<SparseBindingInput<D9CCommandChunkWireVertexInput>, 1u> inputs{{
+        {.wire = {.valid = 1u, .kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF},
+         .object = invalidRef},
+    }};
+    auto input = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+    input.sparse.textures = textures;
+    input.sparse.vertexInputs = inputs;
+    check(!owner.admit(input) && owner.size() == 0u &&
+              owner.lastAdmissionFailure() == Owner::AdmissionFailure::SparseVertexInputs &&
+              owner.retainedCount() == 0u && first.refs == 1u && invalid.refs == 1u,
+          "partial sparse pin acquisition rolls back every speculative retain");
+    inputs[0].object = {};
+    CommandChunkBuilder canonical;
+    check(owner.admit(input) && appendCanonicalSemanticRecord(canonical, input),
+          "partial sparse pin fixture retries after removing the invalid object");
+    PeSemanticExactFixedEmission emission{};
+    check(equalCanonicalOwnerBytes(owner, canonical, emission) &&
+              emission.transport.header.handleCount == 1u && first.refs == 3u,
+          "partial sparse pin retry matches canonical bytes and one texture pin");
+    owner.reset();
+    canonical.resetAndReleaseRetained();
+    check(first.refs == 1u && invalid.refs == 1u,
+          "partial sparse pin rollback and retry release exactly once");
+  }
+
+  {
+    using IndexOwner = PeSemanticBatchOwner<4u, 8u, 4096u, 4u, 4u>;
+    IndexOwner owner;
+    D9CBuffer acceptedBuffer;
+    D9CBuffer retryBuffer;
+    D9CBuffer probeBuffer;
+    const auto acceptedRef = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(
+        &acceptedBuffer, 0xc41u, 3u);
+    // This bounded owner has a 33-entry index. These IDs deliberately hash the
+    // retry identity into the accepted bucket and the probe into the next one.
+    const auto retryRef = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(
+        &retryBuffer, 0xc2au, 4u);
+    const auto probeRef = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(
+        &probeBuffer, 0xc15u, 5u);
+    std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>, 1u>
+        acceptedStreams{{{.wire = {.slot = 0u, .valid = 1u},
+                          .object = acceptedRef}}};
+    std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>, 1u>
+        retryStreams{{{.wire = {.slot = 1u, .valid = 1u},
+                       .object = retryRef}}};
+    std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>, 1u>
+        probeStreams{{{.wire = {.slot = 2u, .valid = 1u},
+                       .object = probeRef}}};
+    auto accepted = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+    accepted.sparse.streams = acceptedStreams;
+    auto retry = base(PeSemanticProducerKind::DrawPrimitive, 2u, 2u);
+    retry.sparse.streams = retryStreams;
+    auto probe = base(PeSemanticProducerKind::DrawPrimitive, 2u, 2u);
+    probe.sparse.streams = probeStreams;
+    check(owner.admit(accepted), "settlement retry fixture admits its prefix");
+    check(!owner.tryAppendOwnedRecord(retry, []() noexcept { return false; }) &&
+              owner.size() == 1u && owner.retainedCount() == 1u &&
+              acceptedBuffer.refs == 2u && retryBuffer.refs == 1u &&
+              owner.referencesBuffer(acceptedRef) &&
+              !owner.referencesBuffer(retryRef),
+          "failed settlement removes the speculative pin and stale index authority");
+    bool uncommittedLease = false;
+    check(!owner.visitCommittedPendingChunkLease(
+              retryRef, [&](const CommittedPendingChunkLease&) noexcept {
+                uncommittedLease = true;
+                return true;
+              }) && !uncommittedLease,
+          "failed settlement does not expose an uncommitted wire handle");
+    check(owner.tryAppendOwnedRecord(probe, []() noexcept { return true; }) &&
+              owner.referencesBuffer(acceptedRef) && owner.referencesBuffer(probeRef) &&
+              owner.retainedCount() == 2u && probeBuffer.refs == 2u,
+          "rollback clears stale buckets before accepting a new probe identity");
+    retry.sourceOrdinal = retry.recordOrdinal = 3u;
+    check(owner.tryAppendOwnedRecord(retry, []() noexcept { return true; }) &&
+              owner.referencesBuffer(acceptedRef) && owner.referencesBuffer(retryRef) &&
+              owner.retainedCount() == 3u && retryBuffer.refs == 2u,
+          "settlement retry reacquires the removed identity exactly once");
+    CommandChunkBuilder canonical;
+    check(appendCanonicalSemanticRecord(canonical, accepted) &&
+              appendCanonicalSemanticRecord(canonical, probe) &&
+              appendCanonicalSemanticRecord(canonical, retry),
+          "settlement retry fixture enters all accepted records in the oracle");
+    PeSemanticExactFixedEmission emission{};
+    check(equalCanonicalOwnerBytes(owner, canonical, emission),
+          "failed settlement retry preserves exact accepted-prefix and suffix bytes");
+    owner.reset();
+    canonical.resetAndReleaseRetained();
+    check(acceptedBuffer.refs == 1u && probeBuffer.refs == 1u &&
+              retryBuffer.refs == 1u,
+          "failed settlement retry leaves all buffer retains balanced");
+  }
+
+  {
+    Owner owner;
+    D9CTexture texture;
+    D9CViewport viewport{3u, 5u, 127u, 91u, 0.25f, 0.75f};
+    D9CCommandChunkWireRenderState renderState{7u, 0x1111u};
+    std::array<D9CCommandChunkWireRenderState, 1u> renderStates{{renderState}};
+    std::array<D9CViewport, 1u> viewports{{viewport}};
+    std::array<std::byte, 4u> constantBytes{{
+        std::byte{0x21}, std::byte{0x22}, std::byte{0x23}, std::byte{0x24}}};
+    const auto textureRef = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+        &texture, 0xc51u, 1u);
+    std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>, 1u>
+        familyTextures{{{.wire = {.slot = 0u, .valid = 1u},
+                         .object = textureRef}}};
+    auto familyA = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+    familyA.sparse.renderStates = renderStates;
+    familyA.sparse.textures = familyTextures;
+    auto familyB = base(PeSemanticProducerKind::VsBoolConstant, 2u, 2u);
+    familyB.setConst.registerCount = 1u;
+    familyB.constantBytes = constantBytes;
+    auto familyA2 = base(PeSemanticProducerKind::DrawPrimitive, 3u, 3u);
+    familyA2.sparse.viewports = viewports;
+    CommandChunkBuilder canonical;
+    check(appendCanonicalSemanticRecord(canonical, familyA) && owner.admit(familyA),
+          "family A first record admits and copies canonical values");
+    renderStates[0].value = 0xeeeeu;
+    check(appendCanonicalSemanticRecord(canonical, familyB) && owner.admit(familyB),
+          "family B record admits between family A records");
+    constantBytes.fill(std::byte{0xee});
+    check(appendCanonicalSemanticRecord(canonical, familyA2) && owner.admit(familyA2),
+          "family A second record admits with a different active category");
+    viewports[0].width = 999u;
+    PeSemanticExactFixedEmission emission{};
+    PeSemanticSegmentedEmission segmented{};
+    check(equalCanonicalOwnerBytes(owner, canonical, emission) &&
+              owner.emitSegmented(segmented) && ownerSegmentedRolesEqualExact(emission, segmented) &&
+              owner.retainedCount() == 1u && texture.refs == 3u,
+          "bounded family A/B/A sequence preserves bytes and one warmable pin");
+    check(owner.settle() && owner.retainedCount() == 1u && texture.refs == 3u,
+          "settlement clears the active family prefix while preserving warm retention");
+    canonical.resetAndReleaseRetained();
+    auto reused = base(PeSemanticProducerKind::Present, 4u, 4u);
+    D9CSurface surface;
+    reused.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0xc52u, 2u);
+    check(owner.admit(reused), "settled owner accepts a new family after reset of active ranges");
+    CommandChunkBuilder reusedCanonical;
+    check(appendCanonicalSemanticRecord(reusedCanonical, reused),
+          "post-settle reuse enters the fresh family in the oracle");
+    PeSemanticExactFixedEmission reusedEmission{};
+    check(equalCanonicalOwnerBytes(owner, reusedCanonical, reusedEmission),
+          "post-settle reuse has no authority from prior A/B/A family ranges");
+    owner.reset();
+    reusedCanonical.resetAndReleaseRetained();
+    check(texture.refs == 1u && surface.refs == 1u,
+          "settle then reset releases warm and new family pins exactly once");
+  }
+}
+
 void emissionSmoke() {
   Owner owner;
   D9CSurface surface;
@@ -3096,6 +3397,7 @@ int main() {
     largeCanonicalPayloadSurvivesRepeatedExactEmission();
     exactPaddingWriterAdversarial();
     collisionCopyOverflowAndRetry();
+    r712R713BoundedIdentityAndLifecycleRefinement();
     emissionSmoke();
     producerIdentityFollowsSettlementAndSourceRange();
     semanticBridgePreRetryPreservesOwnerBytes();

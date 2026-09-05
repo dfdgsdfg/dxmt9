@@ -1,9 +1,11 @@
 #include "d3d9_pe_semantic_batch.hpp"
 #include "d3d9_pe_batch.hpp"
 #include "d3d9_pe_chunk_builder.hpp"
+#include "d3d9_pe_semantic_recorder_state.hpp"
 #include "device_c_chunk_validate.hpp"
 
 #include <array>
+#include <algorithm>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -450,6 +452,330 @@ void callLocalPilotTransactionPlanAndEmission() {
           "all semantic producer rows are classified");
   }
 }
+
+void hotStagingFamiliesResetAuthorityAndPreserveAcceptedBytes() {
+  using namespace dxmt9::d3d9::pe;
+  PeSemanticRecordInput staged{};
+  PeSemanticStagingFamily family = PeSemanticStagingFamily::None;
+  bool valid = false;
+  std::array<D9CCommandChunkWireRenderState, 1u> renderStates{
+      D9CCommandChunkWireRenderState{.state = 9u, .value = 0x1234u}};
+  const SparseStateInput drawSparse{.renderStates = renderStates};
+  const D9CCommandChunkWireDrawHeader firstDraw{
+      .primitiveType = 4u, .primitiveCount = 1u};
+  D9CSurface staleSurface;
+  std::array<std::byte, 4u> staleConstant{};
+  staged.surface0 = qualifyLocalRef<SurfaceRef>(wireRef(
+      &staleSurface, D9C_CHUNK_HANDLE_KIND_SURFACE, 0xca11u));
+  staged.setConst.registerCount = 1u;
+  staged.constantBytes = staleConstant;
+  stagePeSemanticDrawInput(
+      staged, family, valid, PeSemanticProducerKind::DrawPrimitive,
+      D9C_COMMAND_RECORD_DRAW_PRIMITIVE, firstDraw, drawSparse);
+  check(valid && family == PeSemanticStagingFamily::Draw &&
+            staged.draw.primitiveType == 4u &&
+            staged.sparse.renderStates.size() == 1u &&
+            staged.constantBytes.empty() && staged.clearRects.empty() &&
+            staged.surface0.object == nullptr,
+        "draw adapter publishes only its initialized sparse frontier");
+
+  const D9CCommandChunkWireDrawHeader secondDraw{
+      .primitiveType = 5u, .primitiveCount = 2u};
+  stagePeSemanticDrawInput(
+      staged, family, valid, PeSemanticProducerKind::DrawIndexedPrimitive,
+      D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE, secondDraw, {});
+  check(valid && staged.draw.primitiveType == 5u &&
+            staged.draw.primitiveCount == 2u && staged.sparse.renderStates.empty() &&
+            staged.constantBytes.empty() && staged.surface0.object == nullptr,
+        "same-family draw reuse replaces sparse values without stale authority");
+
+  std::array<std::byte, 16u> acceptedBytes{};
+  acceptedBytes[0] = std::byte{0xa1};
+  acceptedBytes[15] = std::byte{0xb2};
+  stagePeSemanticConstantInput(
+      staged, family, valid, PeSemanticProducerKind::VsFloatConstant,
+      D9C_COMMAND_RECORD_SET_VS_CONST_F,
+      D9CCommandChunkWireSetConst{.startRegister = 3u, .registerCount = 1u},
+      acceptedBytes);
+  check(valid && family == PeSemanticStagingFamily::Constant &&
+            staged.setConst.startRegister == 3u &&
+            staged.constantBytes.data() == acceptedBytes.data() &&
+            staged.sparse.renderStates.empty() && staged.clearRects.empty() &&
+            staged.surface0.object == nullptr,
+        "constant adapter clears draw sparse and direct-ref frontiers");
+
+  PeSemanticRecordInputView accepted = borrowPeSemanticRecordInput(staged);
+  accepted.destination.sourceOrdinal = 1u;
+  accepted.destination.recordOrdinal = 1u;
+  using Owner = PeSemanticBatchOwner<4u, 8u, 1024u, 4u, 8u>;
+  Owner owner;
+  check(owner.admit(accepted), "constant adapter input is accepted");
+  const auto originalBytes = acceptedBytes;
+  acceptedBytes[0] = std::byte{0x5a};
+  PeSemanticExactFixedEmission emission;
+  check(owner.emitExactFixed(emission), "accepted constant emits exact bytes");
+  check(std::search(emission.wire.begin(), emission.wire.end(),
+                    originalBytes.begin(), originalBytes.end()) !=
+            emission.wire.end(),
+        "accepted bytes remain immutable after source mutation");
+
+  stagePeSemanticDrawInput(
+      staged, family, valid, PeSemanticProducerKind::DrawPrimitive,
+      D9C_COMMAND_RECORD_DRAW_PRIMITIVE, firstDraw, {});
+  check(valid && family == PeSemanticStagingFamily::Draw &&
+            staged.constantBytes.empty() && staged.setConst.registerCount == 0u &&
+            staged.sparse.renderStates.empty(),
+        "A/B/A family transition clears prior constant bytes");
+}
+
+struct StagingAuthorityFixture {
+  D9CSurface surface0, surface1;
+  D9CTexture texture0, texture1;
+  D9CBuffer buffer0, buffer1;
+  D9CShader shader0, shader1;
+  D9CVertexDecl declaration;
+  D9CQuery query;
+  std::array<std::byte, 16u> oldConstant{};
+  std::array<D9CRect, 1u> oldRects{{D9CRect{10, 11, 12, 13}}};
+  std::array<D9CCommandChunkWireRenderState, 1u> oldRenderStates{{{21u, 22u}}};
+  std::array<std::byte, 4u> oldUpVertices{};
+  std::array<std::byte, 4u> oldUpIndices{};
+  PeSemanticRecordInput staged{};
+
+  void seedColdAuthorities() {
+    using namespace dxmt9::d3d9::pe;
+    staged.producer = PeSemanticProducerKind::Present;
+    staged.recordType = D9C_COMMAND_RECORD_PRESENT;
+    staged.recordFlags = 0x55u;
+    staged.sourceOrdinal = 77u;
+    staged.recordOrdinal = 88u;
+    staged.draw.primitiveType = 6u;
+    staged.setConst = {.startRegister = 7u, .registerCount = 2u};
+    staged.clear = {.flags = 0x11u, .colorARGB = 0x22334455u, .z = 0.5f};
+    staged.present.hwnd = 0x1234u;
+    staged.stretchRect.srcRect = D9CRect{1, 2, 3, 4};
+    staged.colorFill.colorARGB = 0xaabbccddu;
+    staged.updateSurface.srcRect = D9CRect{5, 6, 7, 8};
+    staged.queryIssue.flags = 9u;
+    staged.updateFlags = 10u;
+    staged.reszFlags = 11u;
+    staged.mipmapFlags = 12u;
+    staged.surface0 = qualifyLocalRef<SurfaceRef>(wireRef(
+        &surface0, D9C_CHUNK_HANDLE_KIND_SURFACE, 0xf001u));
+    staged.surface1 = qualifyLocalRef<SurfaceRef>(wireRef(
+        &surface1, D9C_CHUNK_HANDLE_KIND_SURFACE, 0xf002u));
+    staged.texture0 = qualifyLocalRef<TextureRef>(wireRef(
+        &texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xf003u));
+    staged.texture1 = qualifyLocalRef<TextureRef>(wireRef(
+        &texture1, D9C_CHUNK_HANDLE_KIND_TEXTURE, 0xf004u));
+    staged.buffer0 = qualifyLocalRef<BufferRef>(wireRef(
+        &buffer0, D9C_CHUNK_HANDLE_KIND_BUFFER, 0xf005u));
+    staged.buffer1 = qualifyLocalRef<BufferRef>(wireRef(
+        &buffer1, D9C_CHUNK_HANDLE_KIND_BUFFER, 0xf006u));
+    staged.shader0 = qualifyLocalRef<ShaderRef>(wireRef(
+        &shader0, D9C_CHUNK_HANDLE_KIND_SHADER, 0xf007u));
+    staged.shader1 = qualifyLocalRef<ShaderRef>(wireRef(
+        &shader1, D9C_CHUNK_HANDLE_KIND_SHADER, 0xf008u));
+    staged.declaration = qualifyLocalRef<DeclarationRef>(wireRef(
+        &declaration, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, 0xf009u));
+    staged.query = qualifyLocalRef<QueryRef>(wireRef(
+        &query, D9C_CHUNK_HANDLE_KIND_QUERY, 0xf00au));
+    staged.sparse.renderStates = oldRenderStates;
+    staged.sparse.upVertexData = oldUpVertices;
+    staged.sparse.upIndexData = oldUpIndices;
+    staged.constantBytes = oldConstant;
+    staged.clearRects = oldRects;
+  }
+};
+
+void checkNoStaleSemanticAuthority(const PeSemanticRecordInput& staged,
+                                  bool constantFamily = false) {
+  if (!constantFamily) {
+    check(staged.setConst.startRegister == 0u &&
+              staged.setConst.registerCount == 0u && staged.constantBytes.empty(),
+          "staging clears stale constant authority outside constant family");
+  }
+  check(staged.clear.flags == 0u && staged.clear.colorARGB == 0u &&
+            staged.clear.z == 0.0f,
+        "staging clears stale clear authority");
+  check(staged.present.hwnd == 0u && staged.stretchRect.srcRect.left == 0 &&
+            staged.colorFill.colorARGB == 0u &&
+            staged.updateSurface.srcRect.left == 0 &&
+            staged.queryIssue.flags == 0u && staged.updateFlags == 0u &&
+            staged.reszFlags == 0u && staged.mipmapFlags == 0u,
+        "staging clears stale cold fixed authorities");
+  check(staged.surface0.object == nullptr && staged.surface1.object == nullptr &&
+            staged.texture0.object == nullptr && staged.texture1.object == nullptr &&
+            staged.buffer0.object == nullptr && staged.buffer1.object == nullptr &&
+            staged.shader0.object == nullptr && staged.shader1.object == nullptr &&
+            staged.declaration.object == nullptr && staged.query.object == nullptr,
+        "staging clears all ten stale typed refs");
+  check(staged.clearRects.empty(), "staging clears stale rectangle spans");
+}
+
+using StagingCompareOwner =
+    PeSemanticBatchOwner<8u, 32u, 4096u, 8u, 32u>;
+
+void compareSemanticOwnerBytes(const StagingCompareOwner& actual,
+                               const StagingCompareOwner& expected,
+                               std::string_view message) {
+  PeSemanticExactFixedEmission actualEmission;
+  PeSemanticExactFixedEmission expectedEmission;
+  check(actual.emitExactFixed(actualEmission) &&
+            expected.emitExactFixed(expectedEmission),
+        "staged and generic owners emit exact bytes");
+  check(actualEmission.wireBytes == expectedEmission.wireBytes &&
+            std::equal(actualEmission.wire.begin(), actualEmission.wire.end(),
+                       expectedEmission.wire.begin()),
+        message);
+}
+
+void admitStagedAndFreshGeneric(const PeSemanticRecordInput& staged,
+                                PeSemanticRecordInput generic,
+                                std::uint64_t ordinal,
+                                StagingCompareOwner& actual,
+                                StagingCompareOwner& expected,
+                                std::string_view message) {
+  auto view = borrowPeSemanticRecordInput(staged);
+  view.destination.sourceOrdinal = ordinal;
+  view.destination.recordOrdinal = ordinal;
+  generic.sourceOrdinal = ordinal;
+  generic.recordOrdinal = ordinal;
+  check(actual.admit(view), "staged input admits");
+  check(expected.admit(generic), "fresh generic input admits");
+  compareSemanticOwnerBytes(actual, expected, message);
+}
+
+void stagedFamiliesClearColdAuthoritiesAndMatchGenericAdmission() {
+  using namespace dxmt9::d3d9::pe;
+  const D9CCommandChunkWireDrawHeader draw{
+      .primitiveType = 4u, .numVertices = 3u, .primitiveCount = 1u};
+  const D9CCommandChunkWireDrawHeader changedDraw{
+      .primitiveType = 5u, .numVertices = 6u, .primitiveCount = 2u};
+  std::array<D9CCommandChunkWireRenderState, 1u> drawStates{{{31u, 32u}}};
+  std::array<D9CCommandChunkWireRenderState, 1u> applyStates{{{41u, 42u}}};
+  const SparseStateInput drawSparse{.renderStates = drawStates};
+  const SparseStateInput applySparse{.renderStates = applyStates};
+
+  StagingAuthorityFixture fixture;
+  fixture.seedColdAuthorities();
+  PeSemanticStagingFamily family = PeSemanticStagingFamily::Cold;
+  bool valid = false;
+  stagePeSemanticDrawInput(
+      fixture.staged, family, valid, PeSemanticProducerKind::DrawPrimitive,
+      D9C_COMMAND_RECORD_DRAW_PRIMITIVE, draw, drawSparse);
+  check(valid && family == PeSemanticStagingFamily::Draw &&
+            fixture.staged.sparse.renderStates.data() == drawStates.data() &&
+            fixture.staged.sparse.upVertexData.empty() &&
+            fixture.staged.sparse.upIndexData.empty() &&
+            fixture.staged.constantBytes.empty() &&
+            fixture.staged.clearRects.empty(),
+        "Cold to Draw replaces old sparse and variable authorities");
+  checkNoStaleSemanticAuthority(fixture.staged);
+
+  StagingCompareOwner actual;
+  StagingCompareOwner expected;
+  PeSemanticRecordInput genericDraw{};
+  genericDraw.producer = PeSemanticProducerKind::DrawPrimitive;
+  genericDraw.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
+  genericDraw.draw = draw;
+  genericDraw.sparse = drawSparse;
+  admitStagedAndFreshGeneric(fixture.staged, genericDraw, 1u, actual, expected,
+                             "Draw bytes match fresh generic admission");
+
+  stagePeSemanticDrawInput(
+      fixture.staged, family, valid,
+      PeSemanticProducerKind::DrawIndexedPrimitive,
+      D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE, changedDraw, {});
+  check(valid && family == PeSemanticStagingFamily::Draw &&
+            fixture.staged.draw.primitiveType == changedDraw.primitiveType &&
+            fixture.staged.sparse.renderStates.empty(),
+        "same-family Draw change replaces every active field");
+  PeSemanticRecordInput genericChangedDraw{};
+  genericChangedDraw.producer = PeSemanticProducerKind::DrawIndexedPrimitive;
+  genericChangedDraw.recordType = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+  genericChangedDraw.draw = changedDraw;
+  admitStagedAndFreshGeneric(fixture.staged, genericChangedDraw, 2u, actual,
+                             expected,
+                             "same-family Draw bytes match generic admission");
+
+  stagePeSemanticDrawInput(
+      fixture.staged, family, valid, PeSemanticProducerKind::ApplyState,
+      D9C_COMMAND_RECORD_APPLY_STATE, {}, applySparse);
+  check(valid && family == PeSemanticStagingFamily::Draw &&
+            fixture.staged.sparse.renderStates.data() == applyStates.data(),
+        "ApplyState remains in the draw-family staging frontier");
+  PeSemanticRecordInput genericApply{};
+  genericApply.producer = PeSemanticProducerKind::ApplyState;
+  genericApply.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
+  genericApply.sparse = applySparse;
+  admitStagedAndFreshGeneric(fixture.staged, genericApply, 3u, actual, expected,
+                             "ApplyState bytes match fresh generic admission");
+
+  StagingAuthorityFixture constantFixture;
+  constantFixture.seedColdAuthorities();
+  family = PeSemanticStagingFamily::Cold;
+  std::array<std::byte, 16u> constantA{};
+  std::array<std::byte, 16u> constantB{};
+  constantA[0] = std::byte{0xa1};
+  constantA[15] = std::byte{0xb2};
+  constantB[0] = std::byte{0xc3};
+  constantB[15] = std::byte{0xd4};
+  const D9CCommandChunkWireSetConst setA{
+      .startRegister = 3u, .registerCount = 1u};
+  const D9CCommandChunkWireSetConst setB{
+      .startRegister = 8u, .registerCount = 1u};
+  stagePeSemanticConstantInput(
+      constantFixture.staged, family, valid,
+      PeSemanticProducerKind::VsFloatConstant,
+      D9C_COMMAND_RECORD_SET_VS_CONST_F, setA, constantA);
+  check(valid && family == PeSemanticStagingFamily::Constant &&
+            constantFixture.staged.constantBytes.data() == constantA.data() &&
+            constantFixture.staged.sparse.renderStates.empty() &&
+            constantFixture.staged.sparse.upVertexData.empty() &&
+            constantFixture.staged.sparse.upIndexData.empty() &&
+            constantFixture.staged.draw.primitiveType == 0u &&
+            constantFixture.staged.clearRects.empty(),
+        "Cold to Constant replaces old sparse and rect authorities");
+  checkNoStaleSemanticAuthority(constantFixture.staged, true);
+
+  StagingCompareOwner constantActual;
+  StagingCompareOwner constantExpected;
+  PeSemanticRecordInput genericA{};
+  genericA.producer = PeSemanticProducerKind::VsFloatConstant;
+  genericA.recordType = D9C_COMMAND_RECORD_SET_VS_CONST_F;
+  genericA.setConst = setA;
+  genericA.constantBytes = constantA;
+  admitStagedAndFreshGeneric(constantFixture.staged, genericA, 1u,
+                             constantActual, constantExpected,
+                             "constant A bytes match fresh generic admission");
+
+  stagePeSemanticConstantInput(
+      constantFixture.staged, family, valid,
+      PeSemanticProducerKind::PsFloatConstant,
+      D9C_COMMAND_RECORD_SET_PS_CONST_F, setB, constantB);
+  PeSemanticRecordInput genericB{};
+  genericB.producer = PeSemanticProducerKind::PsFloatConstant;
+  genericB.recordType = D9C_COMMAND_RECORD_SET_PS_CONST_F;
+  genericB.setConst = setB;
+  genericB.constantBytes = constantB;
+  admitStagedAndFreshGeneric(constantFixture.staged, genericB, 2u,
+                             constantActual, constantExpected,
+                             "constant B bytes match fresh generic admission");
+
+  stagePeSemanticConstantInput(
+      constantFixture.staged, family, valid,
+      PeSemanticProducerKind::VsFloatConstant,
+      D9C_COMMAND_RECORD_SET_VS_CONST_F, setA, constantA);
+  PeSemanticRecordInput genericAgainA{};
+  genericAgainA.producer = PeSemanticProducerKind::VsFloatConstant;
+  genericAgainA.recordType = D9C_COMMAND_RECORD_SET_VS_CONST_F;
+  genericAgainA.setConst = setA;
+  genericAgainA.constantBytes = constantA;
+  admitStagedAndFreshGeneric(constantFixture.staged, genericAgainA, 3u,
+                             constantActual, constantExpected,
+                             "constant A-B-A bytes match generic admission");
+}
 }  // namespace
 
 int main() {
@@ -460,6 +786,8 @@ int main() {
     ownershipAndFailureCutsFailClosed();
     preWireCandidateOwnershipAndRetry();
     callLocalPilotTransactionPlanAndEmission();
+    hotStagingFamiliesResetAuthorityAndPreserveAcceptedBytes();
+    stagedFamiliesClearColdAuthoritiesAndMatchGenericAdmission();
   } catch (const Failure& failure) {
     std::cerr << "pe_semantic_batch_spec failed: " << failure.what() << '\n';
     return 1;

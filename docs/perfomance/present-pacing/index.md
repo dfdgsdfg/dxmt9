@@ -4,14 +4,17 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-08-30
-source: docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md
+updated: 2026-09-05
+source: docs/perfomance/present-pacing/present-pacing-pe-admission-reuse.243.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest tracked row: `H239` - exact replay-FIFO next-source intent is implemented and proved, but it is never selected in GT2; the remaining Tape locality gap is bounded replay/store-action equivalence, not missing source identity.
+Latest evidence: `243` - PE admission reuse and active-prefix staging pass
+native/TLA and GT2 direction checks; local sampled costs improve, but the
+single-run OFF FPS delta is only +0.82% and does not establish promotion.
+The CPU-ready Tape locality gap remains an independent workstream.
 
 ## Start Here
 
@@ -22,6 +25,9 @@ Latest tracked row: `H239` - exact replay-FIFO next-source intent is implemented
 
 ## Recent Leaf Documents
 
+- [present-pacing-pe-admission-reuse.243 - Qualified Pin/Wire Reuse and Active-Prefix Staging](present-pacing-pe-admission-reuse.243.md)
+- [present-pacing-pe-direct-canonical.242 - Direct Canonical Value Payload](present-pacing-pe-direct-canonical.242.md)
+- [present-pacing-pe-prepared-reset.241 - Prepared-Witness Reset](present-pacing-pe-prepared-reset.241.md)
 - [present-pacing-cpu-ready-next-source-intent.239 - Replay-FIFO Intent Is Safe but Does Not Recover Tape Locality](present-pacing-cpu-ready-next-source-intent.239.md)
 - [present-pacing-cpu-ready-active-head-locality.238 - Active-Session Lookahead Closes the Local Hold Gap but Not Tape Locality](present-pacing-cpu-ready-active-head-locality.238.md)
 - [present-pacing-cpu-ready-tape-promotion-gate.237 - CPU-Ready Tape Restores Progress but Misses the Locality Gate](present-pacing-cpu-ready-tape-promotion-gate.237.md)

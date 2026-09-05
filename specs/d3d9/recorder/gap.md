@@ -42,8 +42,37 @@ GT2 candidate OFF/ON completes 1,713/1,638 Presents with zero rejects or
 GPU/pipeline failures and about 4 CB/P. The sampled sparse/canonical phase sum
 does not improve, so no CPU/FPS gain is established by these single runs.
 This does not close broader Wine all-family fault/capture/visual evidence or
-promote segmented transport. Binding staging and qualified-pin lookup remain
-separate structural work.
+promote segmented transport. The subsequent admission-reuse refinement below
+reduces binding resolution and active-storage clearing without changing this
+transport decision.
+
+## Admission reuse and active-prefix refinement (R-CORE-REC-7.12–7.13)
+
+Admission preserves an identity ordinal and prepares qualified typed pin and
+local wire indices. Append consumes the prepared pin mapping; canonical sparse
+binding emission reads the already-resolved local ordinal from private binding
+metadata. Draw/UP/ApplyState and six constant kinds use bounded staging
+adapters. Prepared witnesses leave inactive arrays untouched, fixed record
+heads are written per producer family, and settlement invalidates committed
+prefixes instead of clearing record/pin/binding/wire/payload arrays. The twelve
+pin-index arrays still clear and warm-retainer settlement is unchanged.
+
+Thirteen focused native specs, x86_64 owner/batch and install-name checks,
+all four canonical builds, and existing TLA checks pass. Added differential
+tests cover cold-family stale refs/spans, family A/B/A, source mutation,
+retained-only wire promotion, null binding, kind/generation/pointer collision,
+pin capacity, partial sparse acquisition rollback, and settlement failure/retry.
+Release PE32 codegen removes the append witness's 1,028-byte zeroing call;
+Draw staging copies a 252-byte sparse descriptor plus its fixed head instead
+of an 844-byte generic product, while ten cold control callsites remain generic.
+
+Runtime evidence and exact limitations are tracked in
+[the admission-reuse leaf](../../../docs/perfomance/present-pacing/present-pacing-pe-admission-reuse.243.md).
+This is not complete removal of PE metadata work: record-local dedup and the
+prepared mapping remain bounded linear scans, pin-index clearing and warm
+retainer work remain, and contiguous ExactFixed still gathers canonical roles.
+Wine all-family fault/capture/visual coverage and repeat performance promotion
+are not closed by native refinement or one GT2 OFF/ON pair.
 
 ## Bounded common fault envelope (2026-08-31)
 

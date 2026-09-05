@@ -1099,6 +1099,16 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         dxmt9::d3d9::pe::PeSemanticProducerKind producer,
         std::uint32_t recordType,
         const dxmt9::d3d9::pe::PeSemanticRecordInput& input) noexcept;
+    void armSemanticRecord(
+        dxmt9::d3d9::pe::PeSemanticProducerKind producer,
+        std::uint32_t recordType,
+        const D9CCommandChunkWireDrawHeader& draw,
+        const dxmt9::d3d9::pe::SparseStateInput& sparse) noexcept;
+    void armSemanticRecord(
+        dxmt9::d3d9::pe::PeSemanticProducerKind producer,
+        std::uint32_t recordType,
+        const D9CCommandChunkWireSetConst& setConst,
+        std::span<const std::byte> constantBytes) noexcept;
     void clearSemanticRecordInput() noexcept;
 
     bool settleSemanticRecord(

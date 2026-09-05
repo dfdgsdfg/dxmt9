@@ -148,8 +148,10 @@ inline constexpr std::size_t kPeSemanticMaxRecordHandles = 64u;
 // avoids a second identity representation while making the witness
 // pointer-free and trivially copyable.
 struct PeSemanticEmissionHandleContext {
-  std::array<D9CWireObjectIdentity, kPeSemanticMaxRecordHandles> identities{};
+  std::array<D9CWireObjectIdentity, kPeSemanticMaxRecordHandles> identities;
   std::size_t count = 0u;
+
+  PeSemanticEmissionHandleContext() noexcept {}
 
   // Planning overwrites every identity below the active frontier through
   // appendKnownUnique(). Reset only that frontier: inactive identities are
@@ -181,18 +183,6 @@ struct PeSemanticEmissionHandleContext {
     return true;
   }
 
-  bool indexOf(const D9CWireObjectIdentity& identity,
-               std::size_t& out) const noexcept {
-    for (std::size_t i = 0u; i < count; ++i) {
-      if (identities[i].kind == identity.kind &&
-          identities[i].generation == identity.generation &&
-          identities[i].objectId == identity.objectId) {
-        out = i;
-        return true;
-      }
-    }
-    return false;
-  }
 };
 
 static_assert(std::is_trivially_copyable_v<PeSemanticEmissionHandleContext>);
@@ -200,6 +190,76 @@ static_assert(sizeof(PeSemanticEmissionHandleContext) <=
               sizeof(D9CWireObjectIdentity) * kPeSemanticMaxRecordHandles +
                   std::max(sizeof(std::size_t),
                            alignof(D9CWireObjectIdentity)));
+
+// Admission-local qualified mapping.  Each entry is written once while the
+// owner checks the destination indexes, then append/materialization consume it
+// without repeating owner hash probes or rebuilding record-local handle order.
+// The bounded linear walk is over at most the 80 identities already present in
+// the admission set; it never scans the owner pin tables or wire handles.
+struct PeSemanticPreparedPinMapping {
+  struct Entry {
+    D9CWireObjectIdentity identity;
+    const void* object;
+    std::uint32_t pin;
+    std::uint32_t wireIndex;
+  };
+
+  std::array<Entry, 80u> entries;
+  std::size_t count = 0u;
+
+  // Even value-initialization must leave inactive entries untouched.
+  PeSemanticPreparedPinMapping() noexcept {}
+
+  static bool sameIdentity(const D9CWireObjectIdentity& left,
+                           const D9CWireObjectIdentity& right) noexcept {
+    return left.kind == right.kind && left.generation == right.generation &&
+           left.objectId == right.objectId;
+  }
+
+  void reset() noexcept { count = 0u; }
+
+  bool add(const PeWireObjectRef& ref, std::uint32_t pin) noexcept {
+    if (count >= entries.size()) return false;
+    entries[count++] = {.identity = ref.identity,
+                        .object = ref.object,
+                        .pin = pin,
+                        .wireIndex = kPeSemanticNoSlot};
+    return true;
+  }
+
+  bool setWireIndex(std::size_t identityOrdinal,
+                   std::uint32_t wireIndex) noexcept {
+    if (identityOrdinal >= count) return false;
+    entries[identityOrdinal].wireIndex = wireIndex;
+    return true;
+  }
+
+  const Entry* findPin(const PeWireObjectRef& ref) const noexcept {
+    for (std::size_t i = 0u; i < count; ++i) {
+      const auto& entry = entries[i];
+      if (sameIdentity(entry.identity, ref.identity) &&
+          entry.object == ref.object) {
+        return &entry;
+      }
+    }
+    return nullptr;
+  }
+
+  bool findWire(std::uint32_t kind, std::uint32_t pin,
+                std::uint32_t& out) const noexcept {
+    for (std::size_t i = 0u; i < count; ++i) {
+      const auto& entry = entries[i];
+      if (entry.identity.kind == kind && entry.pin == pin &&
+          entry.wireIndex != kPeSemanticNoSlot) {
+        out = entry.wireIndex;
+        return true;
+      }
+    }
+    return false;
+  }
+};
+
+static_assert(std::is_trivially_copyable_v<PeSemanticPreparedPinMapping>);
 
 // Per-attempt facts that depend on the destination chunk.  The much larger
 // PeSemanticRecordInput remains staged once and immutable; normal admission
@@ -345,7 +405,8 @@ struct PeSemanticIdentitySet {
   // record-local wire table.  The latter is separate because a direct pin is
   // retained before a later sparse binding can promote the same identity.
   bool add(const PeWireObjectRef& ref, std::uint32_t kind, bool wire,
-           bool& newlyRetained, bool& newlyWireVisible) noexcept {
+           bool& newlyRetained, bool& newlyWireVisible,
+           std::size_t* identityOrdinal = nullptr) noexcept {
     newlyRetained = false;
     newlyWireVisible = false;
     if (!ref.object) {
@@ -365,6 +426,7 @@ struct PeSemanticIdentitySet {
           ++wireCount;
           newlyWireVisible = true;
         }
+        if (identityOrdinal) *identityOrdinal = i;
         return true;
       }
     }
@@ -374,6 +436,7 @@ struct PeSemanticIdentitySet {
     values[count] = ref.identity;
     objects[count] = ref.object;
     wireVisible[count] = wire;
+    if (identityOrdinal) *identityOrdinal = count;
     if (wire) {
       ++wireCount;
       newlyWireVisible = true;
@@ -572,7 +635,8 @@ template <PeSemanticRecordInputLike Input, typename OnUniqueRetained>
 inline bool planPeSemanticAdmissionWith(
     const Input& input, PeSemanticAdmissionPlan& out,
     OnUniqueRetained&& onUniqueRetained,
-    PeSemanticEmissionHandleContext* wireWitness = nullptr) noexcept {
+    PeSemanticEmissionHandleContext* wireWitness = nullptr,
+    PeSemanticPreparedPinMapping* pinWitness = nullptr) noexcept {
   out = {};
   if (wireWitness != nullptr) wireWitness->resetFrontier();
   if (!validPeSemanticInput(input)) return false;
@@ -580,20 +644,29 @@ inline bool planPeSemanticAdmissionWith(
   out.recordType = peSemanticRecordType(input);
   // One wire/retention set keeps the planner's fixed stack bounded
   // independently of the six handle kinds; kind remains part of identity.
-  detail::PeSemanticIdentitySet pins{};
+  detail::PeSemanticIdentitySet pins;
   auto&& observe = onUniqueRetained;
   const auto retained = [&](const PeWireObjectRef& ref, std::uint32_t kind,
                             std::size_t pinKind, bool wire) noexcept {
     bool newlyRetained = false;
     bool newlyWireVisible = false;
-    if (!pins.add(ref, kind, wire, newlyRetained, newlyWireVisible)) return false;
+    std::size_t identityOrdinal = 0u;
+    if (!pins.add(ref, kind, wire, newlyRetained, newlyWireVisible,
+                  &identityOrdinal)) return false;
     if (newlyWireVisible && wireWitness != nullptr &&
         !wireWitness->appendKnownUnique(ref.identity)) return false;
-    if (!newlyRetained) return true;
-    if (out.uniquePinCounts[pinKind] ==
-        std::numeric_limits<std::uint32_t>::max()) return false;
-    ++out.uniquePinCounts[pinKind];
-    return observe(ref, pinKind);
+    if (newlyRetained) {
+      if (out.uniquePinCounts[pinKind] ==
+          std::numeric_limits<std::uint32_t>::max()) return false;
+      ++out.uniquePinCounts[pinKind];
+      if (!observe(ref, pinKind)) return false;
+    }
+    // Identity-set insertion and the unique-retain callback publish entries
+    // in the same order. Wire promotion can therefore address that ordinal
+    // directly, including a retained-only direct pin promoted much later.
+    return !newlyWireVisible || pinWitness == nullptr ||
+           pinWitness->setWireIndex(identityOrdinal,
+               static_cast<std::uint32_t>(pins.wireCount - 1u));
   };
   // Every direct slot is already retained above, so this ordinarily only
   // raises the wire-visible flag. It still routes through `retained` so a
@@ -727,7 +800,8 @@ inline bool planPeSemanticAdmission(const Input& input,
 // from the same immutable input against the same unchanged owner state.  This
 // is the single call-local witness that computes them once.  It is produced by
 // PeSemanticBatchOwner::prepareAdmission(), consumed by the transactional
-// append, and never stored: it borrows nothing and outlives no call.
+// append, and never stored: its pointer fields only qualify the current input
+// and it outlives no call or ownership boundary.
 //
 // It is deliberately not accepted by any mutating entry point.  The owner
 // re-prepares internally, so a forged witness cannot admit a record; the
@@ -741,10 +815,11 @@ enum class PeSemanticAdmissionOutcome : std::uint8_t {
 };
 
 struct PeSemanticPreparedRecord {
-  PeSemanticAdmissionPlan plan{};
+  PeSemanticAdmissionPlan plan;
   // Exact first-seen wire identity/order produced by the admission walk. It
-  // borrows nothing and is consumed only by the private append transaction.
-  PeSemanticEmissionHandleContext wireHandles{};
+  // is consumed only by the private append transaction.
+  PeSemanticEmissionHandleContext wireHandles;
+  PeSemanticPreparedPinMapping pinMapping;
   // Owner-qualified retention delta: how many novel typed pins per kind this
   // record adds beyond the pins the destination chunk already holds.
   std::array<std::uint32_t, 6u> retentionDeltas{};
@@ -770,6 +845,8 @@ struct PeSemanticPreparedRecord {
   std::size_t wireBytes = 0u;
   bool admissible = false;
 
+  PeSemanticPreparedRecord() noexcept {}
+
   // Reused preparation destinations need their scalar validity/frontier state
   // reset, but the planner owns the full plan reset and the wire context only
   // consumes identities below its active count. Keeping those bounded tails
@@ -778,6 +855,7 @@ struct PeSemanticPreparedRecord {
   void resetForAdmission() noexcept {
     plan.valid = false;
     wireHandles.resetFrontier();
+    pinMapping.reset();
     retentionDeltas.fill(0u);
     rule = nullptr;
     producer = PeSemanticProducerKind::DrawPrimitive;
@@ -1125,56 +1203,68 @@ class PeSemanticBatchOwner final {
   // runs once per newly seen identity, and rejects a generation or pointer
   // alias of an already-pinned object exactly where the old separate retention
   // walk did.
-  bool accumulateRetentionDelta(const PeWireObjectRef& ref, std::size_t pinKind,
-                                std::array<std::uint32_t, 6u>& out) const noexcept {
+  bool accumulateRetentionDelta(
+      const PeWireObjectRef& ref, std::size_t pinKind,
+      PeSemanticPreparedRecord& witness) const noexcept {
+    auto& out = witness.retentionDeltas;
     bool existing = false;
+    std::size_t currentCount = 0u;
+    std::size_t existingPin = 0u;
     switch (pinKind) {
       case 0u:
         if (!findOrValidateExistingPin(
                 storage_->surfaceIdentityIndex, storage_->surfaceObjectIndex,
                 storage_->surfaces, surfaceCount_, ref.identity, ref.object,
-                existing)) return false;
+                existing, existingPin)) return false;
+        currentCount = surfaceCount_;
         break;
       case 1u:
         if (!findOrValidateExistingPin(
                 storage_->textureIdentityIndex, storage_->textureObjectIndex,
                 storage_->textures, textureCount_, ref.identity, ref.object,
-                existing)) return false;
+                existing, existingPin)) return false;
+        currentCount = textureCount_;
         break;
       case 2u:
         if (!findOrValidateExistingPin(
                 storage_->bufferIdentityIndex, storage_->bufferObjectIndex,
                 storage_->buffers, bufferCount_, ref.identity, ref.object,
-                existing)) return false;
+                existing, existingPin)) return false;
+        currentCount = bufferCount_;
         break;
       case 3u:
         if (!findOrValidateExistingPin(
                 storage_->shaderIdentityIndex, storage_->shaderObjectIndex,
                 storage_->shaders, shaderCount_, ref.identity, ref.object,
-                existing)) return false;
+                existing, existingPin)) return false;
+        currentCount = shaderCount_;
         break;
       case 4u:
         if (!findOrValidateExistingPin(
                 storage_->declarationIdentityIndex,
                 storage_->declarationObjectIndex, storage_->declarations,
-                declarationCount_, ref.identity, ref.object, existing))
+                declarationCount_, ref.identity, ref.object, existing,
+                existingPin))
           return false;
+        currentCount = declarationCount_;
         break;
       case 5u:
         if (!findOrValidateExistingPin(
                 storage_->queryIdentityIndex, storage_->queryObjectIndex,
                 storage_->queries, queryCount_, ref.identity, ref.object,
-                existing)) return false;
+                existing, existingPin)) return false;
+        currentCount = queryCount_;
         break;
       default:
         return false;
     }
+    const auto pin = existing ? existingPin : currentCount + out[pinKind];
     if (!existing) {
       if (out[pinKind] == std::numeric_limits<std::uint32_t>::max())
         return false;
       ++out[pinKind];
     }
-    return true;
+    return witness.pinMapping.add(ref, static_cast<std::uint32_t>(pin));
   }
 
  public:
@@ -1207,10 +1297,9 @@ class PeSemanticBatchOwner final {
     if (!planPeSemanticAdmissionWith(
         input, witness.plan,
         [&](const PeWireObjectRef& ref, std::size_t pinKind) noexcept {
-              return accumulateRetentionDelta(ref, pinKind,
-                                              witness.retentionDeltas);
+              return accumulateRetentionDelta(ref, pinKind, witness);
             },
-        &witness.wireHandles)) {
+        &witness.wireHandles, &witness.pinMapping)) {
       return PeSemanticAdmissionOutcome::Malformed;
     }
     witness.recordCount = recordCount_;
@@ -1284,7 +1373,8 @@ class PeSemanticBatchOwner final {
                         lastAdmissionFailure_ = AdmissionFailure::Fixed;
                         return false;
                       }
-                      if (!copyDirectPins(input, storage_->records[recordCount_])) {
+                      if (!copyDirectPins(input, storage_->records[recordCount_],
+                                          prepared)) {
                         lastAdmissionFailure_ = AdmissionFailure::DirectPins;
                         return false;
                       }
@@ -1296,7 +1386,7 @@ class PeSemanticBatchOwner final {
       auto& slot = storage_->records[recordCount_];
       if (!runPhase(PeSemanticOwnerPhase::SparseVariableCopy,
                     [&]() noexcept {
-                      if (!copySparse(input, slot)) return false;
+                      if (!copySparse(input, slot, prepared)) return false;
                       if (!copyVariablePayloads(input, slot)) {
                         lastAdmissionFailure_ = AdmissionFailure::VariablePayload;
                         return false;
@@ -1350,7 +1440,7 @@ class PeSemanticBatchOwner final {
     requires std::is_nothrow_invocable_r_v<bool, Commit&>
   bool tryAppendOwnedRecordUnobserved(const Input& input,
                                       Commit&& commit) noexcept {
-    PeSemanticPreparedRecord prepared{};
+    PeSemanticPreparedRecord prepared;
     switch (prepareAdmission(input, prepared)) {
       case PeSemanticAdmissionOutcome::Admissible:
         break;
@@ -1403,7 +1493,7 @@ class PeSemanticBatchOwner final {
   bool tryAppendOwnedRecordObserved(const Input& input,
                                     Commit&& commit) noexcept {
     auto parent = phaseObserver_->beginAppend();
-    PeSemanticPreparedRecord prepared{};
+    PeSemanticPreparedRecord prepared;
     PeSemanticAdmissionOutcome outcome;
     {
       auto phase = phaseObserver_->child(PeSemanticOwnerPhase::PrepareAdmission);
@@ -1506,34 +1596,13 @@ class PeSemanticBatchOwner final {
     releaseLedgerRetention();
     lastClearedBytes_ = 0u;
     if (!ready_) return;
-    lastClearedBytes_ += clearUsed(storage_->records, recordCount_);
-    lastClearedBytes_ += clearUsed(storage_->surfaces, surfaceCount_);
-    lastClearedBytes_ += clearUsed(storage_->textures, textureCount_);
-    lastClearedBytes_ += clearUsed(storage_->buffers, bufferCount_);
-    lastClearedBytes_ += clearUsed(storage_->shaders, shaderCount_);
-    lastClearedBytes_ += clearUsed(storage_->declarations, declarationCount_);
-    lastClearedBytes_ += clearUsed(storage_->queries, queryCount_);
-    lastClearedBytes_ += clearUsed(storage_->texturesArena,
-                                   sparseCounts_.values[kTextures]);
-    lastClearedBytes_ += clearUsed(storage_->streamsArena,
-                                   sparseCounts_.values[kStreams]);
-    lastClearedBytes_ += clearUsed(storage_->shadersArena,
-                                   sparseCounts_.values[kShaders]);
-    lastClearedBytes_ += clearUsed(storage_->vertexInputsArena,
-                                   sparseCounts_.values[kVertexInputs]);
-    lastClearedBytes_ += clearUsed(storage_->indexBuffersArena,
-                                   sparseCounts_.values[kIndexBuffers]);
-    lastClearedBytes_ += clearUsed(storage_->renderTargetsArena,
-                                   sparseCounts_.values[kRenderTargets]);
-    lastClearedBytes_ += clearUsed(storage_->depthStencilsArena,
-                                   sparseCounts_.values[kDepthStencils]);
-    lastClearedBytes_ += clearUsed(storage_->wireRecords, recordCount_);
-    lastClearedBytes_ += clearUsed(storage_->wireHandles, emissionHandleCount_);
-    if (emissionPayloadBytes_ != 0u) {
-      std::fill_n(storage_->canonicalPayload.begin(),
-                  emissionPayloadBytes_, std::byte{0});
-      lastClearedBytes_ += emissionPayloadBytes_;
-    }
+    // Counts and validity frontiers revoke the old values. Every successful
+    // producer overwrites the complete published prefix before its count is
+    // advanced, while canonical materialization writes all bytes (including
+    // alignment gaps). Only open-addressing indexes still require clearing;
+    // leaving inactive records, pins, bindings, and wire tails untouched avoids
+    // a large settlement memset without granting stale storage authority.
+    lastClearedBytes_ += clearPinIndexes();
     recordCount_ = 0u;
     semanticBytes_ = 0u;
     emissionHandleCount_ = 0u;
@@ -1542,14 +1611,6 @@ class PeSemanticBatchOwner final {
     sparseCounts_ = {};
     surfaceCount_ = textureCount_ = bufferCount_ = shaderCount_ =
         declarationCount_ = queryCount_ = 0u;
-    clearPinIndexes();
-  }
-
-  template <typename Array>
-  static std::size_t clearUsed(Array& values, std::size_t count) noexcept {
-    count = std::min(count, values.size());
-    std::fill_n(values.begin(), count, typename Array::value_type{});
-    return count * sizeof(typename Array::value_type);
   }
 
  public:
@@ -2145,15 +2206,16 @@ class PeSemanticBatchOwner final {
   }
 
   template <std::size_t N>
-  static void clearPinIndex(PinIndex<N>& index) noexcept {
+  static std::size_t clearPinIndex(PinIndex<N>& index) noexcept {
     for (auto& entry : index) entry = {};
+    return N * sizeof(typename PinIndex<N>::value_type);
   }
 
   template <typename PinArray, std::size_t N>
   static void rebuildPinIndex(const PinArray& pins, std::size_t count,
                               PinIndex<N>& exact, PinIndex<N>& object) noexcept {
-    clearPinIndex(exact);
-    clearPinIndex(object);
+    (void)clearPinIndex(exact);
+    (void)clearPinIndex(object);
     for (std::size_t i = 0u; i < count; ++i) {
       if (!pins[i].valid()) continue;
       (void)insertPinIndex(exact, pins[i].identity.value,
@@ -2163,19 +2225,19 @@ class PeSemanticBatchOwner final {
     }
   }
 
-  void clearPinIndexes() noexcept {
-    clearPinIndex(storage_->surfaceIdentityIndex);
-    clearPinIndex(storage_->surfaceObjectIndex);
-    clearPinIndex(storage_->textureIdentityIndex);
-    clearPinIndex(storage_->textureObjectIndex);
-    clearPinIndex(storage_->bufferIdentityIndex);
-    clearPinIndex(storage_->bufferObjectIndex);
-    clearPinIndex(storage_->shaderIdentityIndex);
-    clearPinIndex(storage_->shaderObjectIndex);
-    clearPinIndex(storage_->declarationIdentityIndex);
-    clearPinIndex(storage_->declarationObjectIndex);
-    clearPinIndex(storage_->queryIdentityIndex);
-    clearPinIndex(storage_->queryObjectIndex);
+  std::size_t clearPinIndexes() noexcept {
+    return clearPinIndex(storage_->surfaceIdentityIndex) +
+           clearPinIndex(storage_->surfaceObjectIndex) +
+           clearPinIndex(storage_->textureIdentityIndex) +
+           clearPinIndex(storage_->textureObjectIndex) +
+           clearPinIndex(storage_->bufferIdentityIndex) +
+           clearPinIndex(storage_->bufferObjectIndex) +
+           clearPinIndex(storage_->shaderIdentityIndex) +
+           clearPinIndex(storage_->shaderObjectIndex) +
+           clearPinIndex(storage_->declarationIdentityIndex) +
+           clearPinIndex(storage_->declarationObjectIndex) +
+           clearPinIndex(storage_->queryIdentityIndex) +
+           clearPinIndex(storage_->queryObjectIndex);
   }
 
   void rebuildPinIndexes() noexcept {
@@ -2584,7 +2646,8 @@ class PeSemanticBatchOwner final {
       std::span<std::byte> payload, std::size_t& cursor,
       std::array<D9CCommandChunkWireSectionDesc,
                  D9C_COMMAND_CHUNK_SECTION_COUNT>& descs,
-      std::size_t& sectionIndex, const EmissionHandleContext& handles,
+      std::size_t& sectionIndex,
+      const PeSemanticPreparedRecord& prepared,
       std::size_t globalFirst) const noexcept {
     if (values.empty()) return true;
     const auto* rule = sectionRule(kind);
@@ -2605,12 +2668,10 @@ class PeSemanticBatchOwner final {
       }
       value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
       if (value.valid && source.hasPin) {
-        D9CWireObjectIdentity identity{};
-        if (!bindingIdentity(source, identity)) {
-          return false;
-        }
-        std::size_t local = 0u;
-        if (!handles.indexOf(identity, local) ||
+        // copyBindingSparse already consumed the qualified pin witness. Its
+        // private wire row holds the record-local ordinal, never caller bits.
+        const auto local = source.wire.handleIndex;
+        if (local >= prepared.wireHandles.count ||
             globalFirst + local > std::numeric_limits<std::uint32_t>::max()) {
           return false;
         }
@@ -2708,12 +2769,10 @@ class PeSemanticBatchOwner final {
   }
 
   bool directHandle(std::uint32_t kind, std::uint32_t pin,
-                    const EmissionHandleContext& handles,
+                    const PeSemanticPreparedRecord& prepared,
                     std::size_t globalFirst, std::uint32_t& out) const noexcept {
-    D9CWireObjectIdentity identity{};
-    std::size_t local = 0u;
-    if (!directIdentity(kind, pin, identity) ||
-        !handles.indexOf(identity, local) ||
+    std::uint32_t local = kPeSemanticNoSlot;
+    if (!prepared.pinMapping.findWire(kind, pin, local) ||
         globalFirst + local > std::numeric_limits<std::uint32_t>::max()) {
       return false;
     }
@@ -2757,7 +2816,7 @@ class PeSemanticBatchOwner final {
   bool writeSparsePayload(const Input& input, const PeSemanticRecordSlot& slot,
                           std::span<std::byte> payload,
                           std::size_t globalFirst,
-                          const EmissionHandleContext& handles) const noexcept {
+                          const PeSemanticPreparedRecord& prepared) const noexcept {
     const auto& sparse = peSemanticSparse(input);
     const auto count = sparseSectionCount(slot);
     if (count > D9C_COMMAND_CHUNK_SECTION_COUNT) return false;
@@ -2822,19 +2881,19 @@ class PeSemanticBatchOwner final {
     if (!writeTypedSection(D9C_COMMAND_CHUNK_SECTION_RENDER_STATE,
                            sparse.renderStates, payload, cursor, descs, sectionIndex) ||
         !writeBindingSection(D9C_COMMAND_CHUNK_SECTION_TEXTURE, textures, payload, cursor,
-                             descs, sectionIndex, handles, globalFirst) ||
+                             descs, sectionIndex, prepared, globalFirst) ||
         !writeBindingSection(D9C_COMMAND_CHUNK_SECTION_STREAM, streams, payload, cursor,
-                             descs, sectionIndex, handles, globalFirst) ||
+                             descs, sectionIndex, prepared, globalFirst) ||
         !writeBindingSection(D9C_COMMAND_CHUNK_SECTION_SHADER, shaders, payload, cursor,
-                             descs, sectionIndex, handles, globalFirst) ||
+                             descs, sectionIndex, prepared, globalFirst) ||
         !writeBindingSection(D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT, vertexInputs, payload,
-                             cursor, descs, sectionIndex, handles, globalFirst) ||
+                             cursor, descs, sectionIndex, prepared, globalFirst) ||
         !writeBindingSection(D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER, indexBuffers, payload,
-                             cursor, descs, sectionIndex, handles, globalFirst) ||
+                             cursor, descs, sectionIndex, prepared, globalFirst) ||
         !writeBindingSection(D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET, renderTargets, payload,
-                             cursor, descs, sectionIndex, handles, globalFirst) ||
+                             cursor, descs, sectionIndex, prepared, globalFirst) ||
         !writeBindingSection(D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL, depthStencils, payload,
-                             cursor, descs, sectionIndex, handles, globalFirst) ||
+                             cursor, descs, sectionIndex, prepared, globalFirst) ||
         !writeTypedSection(D9C_COMMAND_CHUNK_SECTION_VIEWPORT,
                            sparse.viewports, payload, cursor, descs, sectionIndex) ||
         !writeTypedSection(D9C_COMMAND_CHUNK_SECTION_SCISSOR,
@@ -2884,7 +2943,7 @@ class PeSemanticBatchOwner final {
   bool writeRecordPayload(const Input& input, const PeSemanticRecordSlot& slot,
                           std::span<std::byte> payload,
                           std::size_t globalFirst,
-                          const EmissionHandleContext& handles) const noexcept {
+                          const PeSemanticPreparedRecord& prepared) const noexcept {
     const auto& staged = stagedPeSemanticInput(input);
     std::size_t cursor = 0u;
     switch (slot.producer) {
@@ -2893,7 +2952,7 @@ class PeSemanticBatchOwner final {
       case PeSemanticProducerKind::DrawPrimitiveUp:
       case PeSemanticProducerKind::DrawIndexedPrimitiveUp:
       case PeSemanticProducerKind::ApplyState:
-        return writeSparsePayload(input, slot, payload, globalFirst, handles);
+        return writeSparsePayload(input, slot, payload, globalFirst, prepared);
       case PeSemanticProducerKind::VsFloatConstant:
       case PeSemanticProducerKind::VsIntConstant:
       case PeSemanticProducerKind::VsBoolConstant:
@@ -2929,7 +2988,7 @@ class PeSemanticBatchOwner final {
       case PeSemanticProducerKind::Present: {
         auto fixed = slot.present;
         fixed.sourceHandleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
-        if (!directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface0, handles,
+        if (!directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface0, prepared,
                           globalFirst, fixed.sourceHandleIndex) ||
             !writeValue(payload, cursor, fixed)) return false;
         return cursor == payload.size();
@@ -2937,9 +2996,9 @@ class PeSemanticBatchOwner final {
       case PeSemanticProducerKind::StretchRect: {
         auto fixed = slot.stretchRect;
         fixed.reserved0 = 0u;
-        if (!directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface0, handles,
+        if (!directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface0, prepared,
                           globalFirst, fixed.srcHandleIndex) ||
-            !directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface1, handles,
+            !directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface1, prepared,
                           globalFirst, fixed.dstHandleIndex) ||
             !writeValue(payload, cursor, fixed)) return false;
         return cursor == payload.size();
@@ -2947,57 +3006,57 @@ class PeSemanticBatchOwner final {
       case PeSemanticProducerKind::ColorFill: {
         auto fixed = slot.colorFill;
         fixed.reserved0 = 0u;
-        if (!directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface0, handles,
+        if (!directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface0, prepared,
                           globalFirst, fixed.surfaceHandleIndex) ||
             !writeValue(payload, cursor, fixed)) return false;
         return cursor == payload.size();
       }
       case PeSemanticProducerKind::UpdateTexture: {
         D9CCommandChunkWireUpdateTexture fixed{};
-        if (!directHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE, slot.texture0, handles,
+        if (!directHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE, slot.texture0, prepared,
                           globalFirst, fixed.srcHandleIndex) ||
-            !directHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE, slot.texture1, handles,
+            !directHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE, slot.texture1, prepared,
                           globalFirst, fixed.dstHandleIndex) ||
             !writeValue(payload, cursor, fixed)) return false;
         return cursor == payload.size();
       }
       case PeSemanticProducerKind::UpdateSurface: {
         auto fixed = slot.updateSurface;
-        if (!directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface0, handles,
+        if (!directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface0, prepared,
                           globalFirst, fixed.srcHandleIndex) ||
-            !directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface1, handles,
+            !directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface1, prepared,
                           globalFirst, fixed.dstHandleIndex) ||
             !writeValue(payload, cursor, fixed)) return false;
         return cursor == payload.size();
       }
       case PeSemanticProducerKind::QueryIssue: {
         auto fixed = slot.queryIssue;
-        if (!directHandle(D9C_CHUNK_HANDLE_KIND_QUERY, slot.query, handles,
+        if (!directHandle(D9C_CHUNK_HANDLE_KIND_QUERY, slot.query, prepared,
                           globalFirst, fixed.queryHandleIndex) ||
             !writeValue(payload, cursor, fixed)) return false;
         return cursor == payload.size();
       }
       case PeSemanticProducerKind::Readback: {
         D9CCommandChunkWireReadback fixed{};
-        if (!directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface0, handles,
+        if (!directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface0, prepared,
                           globalFirst, fixed.srcHandleIndex) ||
-            !directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface1, handles,
+            !directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface1, prepared,
                           globalFirst, fixed.dstHandleIndex) ||
             !writeValue(payload, cursor, fixed)) return false;
         return cursor == payload.size();
       }
       case PeSemanticProducerKind::ReszDepthResolve: {
         D9CCommandChunkWireReszDepthResolve fixed{};
-        if (!directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface0, handles,
+        if (!directHandle(D9C_CHUNK_HANDLE_KIND_SURFACE, slot.surface0, prepared,
                           globalFirst, fixed.msaaDepthHandleIndex) ||
-            !directHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE, slot.texture0, handles,
+            !directHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE, slot.texture0, prepared,
                           globalFirst, fixed.intzDestHandleIndex) ||
             !writeValue(payload, cursor, fixed)) return false;
         return cursor == payload.size();
       }
       case PeSemanticProducerKind::GenerateMipmaps: {
         D9CCommandChunkWireGenerateMipmaps fixed{};
-        if (!directHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE, slot.texture0, handles,
+        if (!directHandle(D9C_CHUNK_HANDLE_KIND_TEXTURE, slot.texture0, prepared,
                           globalFirst, fixed.textureHandleIndex) ||
             !writeValue(payload, cursor, fixed)) return false;
         return cursor == payload.size();
@@ -3045,7 +3104,7 @@ class PeSemanticBatchOwner final {
               storage_->canonicalPayload.begin() + prepared.payloadOffset,
               std::byte{0});
     if (!writeRecordPayload(input, slot, payload, prepared.emissionHandleCount,
-                            handles)) {
+                            prepared)) {
       return false;
     }
     for (std::size_t i = 0u; i < handles.count; ++i) {
@@ -3312,7 +3371,7 @@ class PeSemanticBatchOwner final {
       const PinIndex<kPinIndexCapacity>& objectIndex,
       const PinArray& pins, std::size_t count,
       const D9CWireObjectIdentity& identity, const void* object,
-      bool& existing) const noexcept {
+      bool& existing, std::size_t& existingPin) const noexcept {
     std::size_t objectPin = 0u;
     const bool objectFound =
         findPinIndex(objectIndex, identity, false, objectPin);
@@ -3331,6 +3390,7 @@ class PeSemanticBatchOwner final {
       return false;
     }
     existing = true;
+    existingPin = objectPin;
     return true;
   }
 
@@ -3439,17 +3499,50 @@ class PeSemanticBatchOwner final {
     slot.recordFlags = staged.recordFlags;
     slot.sourceOrdinal = peSemanticSourceOrdinal(input);
     slot.recordOrdinal = peSemanticRecordOrdinal(input);
-    slot.draw = staged.draw;
-    slot.setConst = staged.setConst;
-    slot.clear = staged.clear;
-    slot.present = staged.present;
-    slot.stretchRect = staged.stretchRect;
-    slot.colorFill = staged.colorFill;
-    slot.updateSurface = staged.updateSurface;
-    slot.queryIssue = staged.queryIssue;
-    slot.updateFlags = staged.updateFlags;
-    slot.reszFlags = staged.reszFlags;
-    slot.mipmapFlags = staged.mipmapFlags;
+    // The slot is recycled by settlement. Initialize only the fixed family
+    // consumed by this producer; every other family is outside its published
+    // authority and is deliberately left untouched.
+    switch (staged.producer) {
+      case PeSemanticProducerKind::DrawPrimitive:
+      case PeSemanticProducerKind::DrawIndexedPrimitive:
+      case PeSemanticProducerKind::DrawPrimitiveUp:
+      case PeSemanticProducerKind::DrawIndexedPrimitiveUp:
+      case PeSemanticProducerKind::ApplyState:
+        slot.draw = staged.draw;
+        break;
+      case PeSemanticProducerKind::VsFloatConstant:
+      case PeSemanticProducerKind::VsIntConstant:
+      case PeSemanticProducerKind::VsBoolConstant:
+      case PeSemanticProducerKind::PsFloatConstant:
+      case PeSemanticProducerKind::PsBoolConstant:
+      case PeSemanticProducerKind::PsIntConstant:
+        slot.setConst = staged.setConst;
+        break;
+      case PeSemanticProducerKind::Clear:
+        slot.clear = staged.clear;
+        break;
+      case PeSemanticProducerKind::Present:
+        slot.present = staged.present;
+        break;
+      case PeSemanticProducerKind::StretchRect:
+        slot.stretchRect = staged.stretchRect;
+        break;
+      case PeSemanticProducerKind::ColorFill:
+        slot.colorFill = staged.colorFill;
+        break;
+      case PeSemanticProducerKind::UpdateSurface:
+        slot.updateSurface = staged.updateSurface;
+        break;
+      case PeSemanticProducerKind::QueryIssue:
+        slot.queryIssue = staged.queryIssue;
+        break;
+      case PeSemanticProducerKind::UpdateTexture:
+      case PeSemanticProducerKind::Readback:
+      case PeSemanticProducerKind::ReszDepthResolve:
+      case PeSemanticProducerKind::GenerateMipmaps:
+      case PeSemanticProducerKind::Count:
+        break;
+    }
     return true;
   }
 
@@ -3498,8 +3591,12 @@ class PeSemanticBatchOwner final {
 
   template <typename Object, typename Identity, typename Ref, typename PinArray,
             typename Retain>
-  bool pin(Ref ref, PinArray& pins, std::size_t& count, std::uint32_t& out,
-           Retain retain) noexcept {
+  bool pinPrepared(Ref ref, PinArray& pins, std::size_t& count,
+                   std::uint32_t& out,
+                   const PeSemanticPreparedRecord& prepared,
+                   Retain retain,
+                   std::uint32_t* wireIndex = nullptr) noexcept {
+    if (wireIndex) *wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
     if (!ref.object) {
       if (ref.identity.kind != 0u || ref.identity.generation != 0u ||
           ref.identity.objectId != 0u) {
@@ -3511,24 +3608,25 @@ class PeSemanticBatchOwner final {
     if (!ref.valid()) return false;
     const Identity identity{.value = ref.identity};
     if (!identity.valid()) return false;
-    auto& exactIndex = exactPinIndex<Object, Identity>();
-    auto& objectIndex = objectPinIndex<Object, Identity>();
-    std::size_t existing = 0u;
-    if (findPinIndex(objectIndex, identity.value, false, existing)) {
-      // The object-id index also rejects a stale generation for the same
-      // object identity. An exact hit is the only duplicate admitted.
-      std::size_t exact = 0u;
-      if (!findPinIndex(exactIndex, identity.value, true, exact) ||
-          exact != existing || pins[existing].object != ref.object) {
+    const auto* mapping = prepared.pinMapping.findPin(ref);
+    if (!mapping) return false;
+    const auto preparedPin = mapping->pin;
+    if (wireIndex) {
+      if (mapping->wireIndex >= prepared.wireHandles.count) return false;
+      *wireIndex = mapping->wireIndex;
+    }
+    const std::size_t index = preparedPin;
+    if (index < count) {
+      if (!pins[index].valid() || pins[index].object != ref.object ||
+          pins[index].identity.value.kind != identity.value.kind ||
+          pins[index].identity.value.generation != identity.value.generation ||
+          pins[index].identity.value.objectId != identity.value.objectId) {
         return false;
       }
-      out = static_cast<std::uint32_t>(existing);
+      out = preparedPin;
       return true;
     }
-    if (findPinIndex(exactIndex, identity.value, true, existing)) {
-      return false;
-    }
-    const std::size_t index = count;
+    if (index != count) return false;
     const bool warmObject = [&]() noexcept {
       if constexpr (std::is_same_v<Object, D9CSurface>)
         return retainer_.containsSurface(static_cast<D9CSurface*>(ref.object));
@@ -3550,6 +3648,8 @@ class PeSemanticBatchOwner final {
                                     retainedCheckpoint_)) return false;
     pins[index] = {.object = static_cast<Object*>(ref.object),
                    .identity = identity};
+    auto& exactIndex = exactPinIndex<Object, Identity>();
+    auto& objectIndex = objectPinIndex<Object, Identity>();
     if (!insertPinIndex(exactIndex, identity.value,
                         static_cast<std::uint32_t>(index)) ||
         !insertPinIndex(objectIndex, identity.value,
@@ -3574,7 +3674,8 @@ class PeSemanticBatchOwner final {
 
   template <PeSemanticRecordInputLike Input>
   bool copyDirectPins(const Input& input,
-                      PeSemanticRecordSlot& slot) noexcept {
+                      PeSemanticRecordSlot& slot,
+                      const PeSemanticPreparedRecord& prepared) noexcept {
     const auto& staged = stagedPeSemanticInput(input);
     const auto retainSurface = [this](D9CSurface* p,
                                       D3D9PePendingCommandRetainer::Acquired&) {
@@ -3600,31 +3701,36 @@ class PeSemanticBatchOwner final {
                                     D3D9PePendingCommandRetainer::Acquired&) {
       return retainer_.retainQuery(p, retainedCheckpoint_);
     };
-    return pin<D9CSurface, PeSemanticSurfaceIdentity>(staged.surface0,
-                                                       storage_->surfaces, surfaceCount_, slot.surface0,
-                                                       retainSurface) &&
-           pin<D9CSurface, PeSemanticSurfaceIdentity>(staged.surface1,
-                                                       storage_->surfaces, surfaceCount_, slot.surface1,
-                                                       retainSurface) &&
-           pin<D9CTexture, PeSemanticTextureIdentity>(staged.texture0,
-                                                       storage_->textures, textureCount_, slot.texture0,
-                                                       retainTexture) &&
-           pin<D9CTexture, PeSemanticTextureIdentity>(staged.texture1,
-                                                       storage_->textures, textureCount_, slot.texture1,
-                                                       retainTexture) &&
-           pin<D9CBuffer, PeSemanticBufferIdentity>(staged.buffer0, storage_->buffers, bufferCount_,
-                                                     slot.buffer0, retainBuffer) &&
-           pin<D9CBuffer, PeSemanticBufferIdentity>(staged.buffer1, storage_->buffers, bufferCount_,
-                                                     slot.buffer1, retainBuffer) &&
-           pin<D9CShader, PeSemanticShaderIdentity>(staged.shader0, storage_->shaders, shaderCount_,
-                                                     slot.shader0, retainShader) &&
-           pin<D9CShader, PeSemanticShaderIdentity>(staged.shader1, storage_->shaders, shaderCount_,
-                                                     slot.shader1, retainShader) &&
-           pin<D9CVertexDecl, PeSemanticDeclarationIdentity>(
-               staged.declaration, storage_->declarations, declarationCount_, slot.declaration,
-               retainDeclaration) &&
-           pin<D9CQuery, PeSemanticQueryIdentity>(staged.query, storage_->queries, queryCount_,
-                                                  slot.query, retainQuery);
+    return pinPrepared<D9CSurface, PeSemanticSurfaceIdentity>(
+               staged.surface0, storage_->surfaces, surfaceCount_, slot.surface0,
+               prepared, retainSurface) &&
+           pinPrepared<D9CSurface, PeSemanticSurfaceIdentity>(
+               staged.surface1, storage_->surfaces, surfaceCount_, slot.surface1,
+               prepared, retainSurface) &&
+           pinPrepared<D9CTexture, PeSemanticTextureIdentity>(
+               staged.texture0, storage_->textures, textureCount_, slot.texture0,
+               prepared, retainTexture) &&
+           pinPrepared<D9CTexture, PeSemanticTextureIdentity>(
+               staged.texture1, storage_->textures, textureCount_, slot.texture1,
+               prepared, retainTexture) &&
+           pinPrepared<D9CBuffer, PeSemanticBufferIdentity>(
+               staged.buffer0, storage_->buffers, bufferCount_, slot.buffer0,
+               prepared, retainBuffer) &&
+           pinPrepared<D9CBuffer, PeSemanticBufferIdentity>(
+               staged.buffer1, storage_->buffers, bufferCount_, slot.buffer1,
+               prepared, retainBuffer) &&
+           pinPrepared<D9CShader, PeSemanticShaderIdentity>(
+               staged.shader0, storage_->shaders, shaderCount_, slot.shader0,
+               prepared, retainShader) &&
+           pinPrepared<D9CShader, PeSemanticShaderIdentity>(
+               staged.shader1, storage_->shaders, shaderCount_, slot.shader1,
+               prepared, retainShader) &&
+           pinPrepared<D9CVertexDecl, PeSemanticDeclarationIdentity>(
+               staged.declaration, storage_->declarations, declarationCount_,
+               slot.declaration, prepared, retainDeclaration) &&
+           pinPrepared<D9CQuery, PeSemanticQueryIdentity>(
+               staged.query, storage_->queries, queryCount_, slot.query, prepared,
+               retainQuery);
   }
 
   template <typename T>
@@ -3653,7 +3759,8 @@ class PeSemanticBatchOwner final {
 
   template <PeSemanticRecordInputLike Input>
   bool copySparse(const Input& input,
-                  PeSemanticRecordSlot& slot) noexcept {
+                  PeSemanticRecordSlot& slot,
+                  const PeSemanticPreparedRecord& prepared) noexcept {
     const auto& s = peSemanticSparse(input);
     const auto withinSchema = [](std::uint16_t kind,
                                  std::size_t count) noexcept {
@@ -3704,7 +3811,7 @@ class PeSemanticBatchOwner final {
       lastAdmissionFailure_ = AdmissionFailure::SparseArena;
       return false;
     }
-    return copyBindingSparse(s, slot);
+    return copyBindingSparse(s, slot, prepared);
   }
 
   template <PeSemanticRecordInputLike Input>
@@ -3739,6 +3846,7 @@ class PeSemanticBatchOwner final {
                             slot.psBoolConstants) ||
         !appendLogicalBytes(sparse.upIndexData, slot.upIndexBytes) ||
         !appendLogicalBytes(sparse.upVertexData, slot.upVertexBytes)) return false;
+    slot.clearRects = {};
     if (!staged.clearRects.empty()) {
       if (rectCount_ > MaxRects || staged.clearRects.size() > MaxRects - rectCount_ ||
           staged.clearRects.size() > std::numeric_limits<std::uint32_t>::max()) return false;
@@ -3750,35 +3858,36 @@ class PeSemanticBatchOwner final {
   }
 
   bool copyBindingSparse(const SparseStateInput& s,
-                         PeSemanticRecordSlot& slot) noexcept {
+                         PeSemanticRecordSlot& slot,
+                         const PeSemanticPreparedRecord& prepared) noexcept {
     // The typed sparse arenas are copied by the small per-family routines
     // below.  They validate the source's kind before asking the retainer for a
     // pin, so an invalid/foreign binding cannot leak a retain.
-    if (!copyTextures(s.textures, slot)) {
+    if (!copyTextures(s.textures, slot, prepared)) {
       lastAdmissionFailure_ = AdmissionFailure::SparseTextures;
       return false;
     }
-    if (!copyStreams(s.streams, slot)) {
+    if (!copyStreams(s.streams, slot, prepared)) {
       lastAdmissionFailure_ = AdmissionFailure::SparseStreams;
       return false;
     }
-    if (!copyShaders(s.shaders, slot)) {
+    if (!copyShaders(s.shaders, slot, prepared)) {
       lastAdmissionFailure_ = AdmissionFailure::SparseShaders;
       return false;
     }
-    if (!copyVertexInputs(s.vertexInputs, slot)) {
+    if (!copyVertexInputs(s.vertexInputs, slot, prepared)) {
       lastAdmissionFailure_ = AdmissionFailure::SparseVertexInputs;
       return false;
     }
-    if (!copyIndexBuffers(s.indexBuffers, slot)) {
+    if (!copyIndexBuffers(s.indexBuffers, slot, prepared)) {
       lastAdmissionFailure_ = AdmissionFailure::SparseIndexBuffers;
       return false;
     }
-    if (!copyRenderTargets(s.renderTargets, slot)) {
+    if (!copyRenderTargets(s.renderTargets, slot, prepared)) {
       lastAdmissionFailure_ = AdmissionFailure::SparseRenderTargets;
       return false;
     }
-    if (!copyDepthStencils(s.depthStencils, slot)) {
+    if (!copyDepthStencils(s.depthStencils, slot, prepared)) {
       lastAdmissionFailure_ = AdmissionFailure::SparseDepthStencils;
       return false;
     }
@@ -3786,18 +3895,23 @@ class PeSemanticBatchOwner final {
   }
 
   bool copyTextures(std::span<const SparseBindingInput<D9CCommandChunkWireTextureBinding>> source,
-                    PeSemanticRecordSlot& slot) noexcept {
+                    PeSemanticRecordSlot& slot,
+                    const PeSemanticPreparedRecord& prepared) noexcept {
     if (source.size() > MaxSparseValues - sparseCounts_.values[kTextures]) return false;
     const auto start = sparseCounts_.values[kTextures];
     for (const auto& item : source) {
       auto& out = storage_->texturesArena[sparseCounts_.values[kTextures]++];
       out.wire = item.wire;
+      out.pin = kPeSemanticNoSlot;
+      out.hasPin = false;
       if (item.wire.valid) {
         auto ref = TextureRef{};
         if (!typedOptionalRef(item.object, ref)) return false;
         if (ref.object) {
-          if (!ref.valid() || !pin<D9CTexture, PeSemanticTextureIdentity>(ref, storage_->textures, textureCount_, out.pin,
-                                                         retainTextureFn())) return false;
+          if (!ref.valid() ||
+              !pinPrepared<D9CTexture, PeSemanticTextureIdentity>(
+                  ref, storage_->textures, textureCount_, out.pin, prepared,
+                  retainTextureFn(), &out.wire.handleIndex)) return false;
           out.hasPin = true;
         }
       }
@@ -3808,18 +3922,23 @@ class PeSemanticBatchOwner final {
   }
 
   bool copyStreams(std::span<const SparseBindingInput<D9CCommandChunkWireStreamBinding>> source,
-                   PeSemanticRecordSlot& slot) noexcept {
+                   PeSemanticRecordSlot& slot,
+                   const PeSemanticPreparedRecord& prepared) noexcept {
     if (source.size() > MaxSparseValues - sparseCounts_.values[kStreams]) return false;
     const auto start = sparseCounts_.values[kStreams];
     for (const auto& item : source) {
       auto& out = storage_->streamsArena[sparseCounts_.values[kStreams]++];
       out.wire = item.wire;
+      out.pin = kPeSemanticNoSlot;
+      out.hasPin = false;
       if (item.wire.valid) {
         auto ref = BufferRef{};
         if (!typedOptionalRef(item.object, ref)) return false;
         if (ref.object) {
-          if (!ref.valid() || !pin<D9CBuffer, PeSemanticBufferIdentity>(ref, storage_->buffers, bufferCount_, out.pin,
-                                                         retainBufferFn())) return false;
+          if (!ref.valid() ||
+              !pinPrepared<D9CBuffer, PeSemanticBufferIdentity>(
+                  ref, storage_->buffers, bufferCount_, out.pin, prepared,
+                  retainBufferFn(), &out.wire.handleIndex)) return false;
           out.hasPin = true;
         }
       }
@@ -3830,18 +3949,23 @@ class PeSemanticBatchOwner final {
   }
 
   bool copyShaders(std::span<const SparseBindingInput<D9CCommandChunkWireShaderBinding>> source,
-                   PeSemanticRecordSlot& slot) noexcept {
+                   PeSemanticRecordSlot& slot,
+                   const PeSemanticPreparedRecord& prepared) noexcept {
     if (source.size() > MaxSparseValues - sparseCounts_.values[kShaders]) return false;
     const auto start = sparseCounts_.values[kShaders];
     for (const auto& item : source) {
       auto& out = storage_->shadersArena[sparseCounts_.values[kShaders]++];
       out.wire = item.wire;
+      out.pin = kPeSemanticNoSlot;
+      out.hasPin = false;
       if (item.wire.valid) {
         auto ref = ShaderRef{};
         if (!typedOptionalRef(item.object, ref)) return false;
         if (ref.object) {
-          if (!ref.valid() || !pin<D9CShader, PeSemanticShaderIdentity>(ref, storage_->shaders, shaderCount_, out.pin,
-                                                         retainShaderFn())) return false;
+          if (!ref.valid() ||
+              !pinPrepared<D9CShader, PeSemanticShaderIdentity>(
+                  ref, storage_->shaders, shaderCount_, out.pin, prepared,
+                  retainShaderFn(), &out.wire.handleIndex)) return false;
           out.hasPin = true;
         }
       }
@@ -3852,18 +3976,23 @@ class PeSemanticBatchOwner final {
   }
 
   bool copyVertexInputs(std::span<const SparseBindingInput<D9CCommandChunkWireVertexInput>> source,
-                        PeSemanticRecordSlot& slot) noexcept {
+                        PeSemanticRecordSlot& slot,
+                        const PeSemanticPreparedRecord& prepared) noexcept {
     if (source.size() > MaxSparseValues - sparseCounts_.values[kVertexInputs]) return false;
     const auto start = sparseCounts_.values[kVertexInputs];
     for (const auto& item : source) {
       auto& out = storage_->vertexInputsArena[sparseCounts_.values[kVertexInputs]++];
       out.wire = item.wire;
+      out.pin = kPeSemanticNoSlot;
+      out.hasPin = false;
       if (item.wire.valid && item.wire.kind == D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION) {
         auto ref = DeclarationRef{};
         if (!typedOptionalRef(item.object, ref)) return false;
         if (ref.object) {
-          if (!ref.valid() || !pin<D9CVertexDecl, PeSemanticDeclarationIdentity>(ref, storage_->declarations, declarationCount_, out.pin,
-                                                                   retainDeclarationFn())) return false;
+          if (!ref.valid() ||
+              !pinPrepared<D9CVertexDecl, PeSemanticDeclarationIdentity>(
+                  ref, storage_->declarations, declarationCount_, out.pin,
+                  prepared, retainDeclarationFn(), &out.wire.handleIndex)) return false;
           out.hasPin = true;
         }
       } else if (item.wire.valid && item.wire.kind == D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF && item.object.object) {
@@ -3876,18 +4005,23 @@ class PeSemanticBatchOwner final {
   }
 
   bool copyIndexBuffers(std::span<const SparseBindingInput<D9CCommandChunkWireIndexBinding>> source,
-                        PeSemanticRecordSlot& slot) noexcept {
+                        PeSemanticRecordSlot& slot,
+                        const PeSemanticPreparedRecord& prepared) noexcept {
     if (source.size() > MaxSparseValues - sparseCounts_.values[kIndexBuffers]) return false;
     const auto start = sparseCounts_.values[kIndexBuffers];
     for (const auto& item : source) {
       auto& out = storage_->indexBuffersArena[sparseCounts_.values[kIndexBuffers]++];
       out.wire = item.wire;
+      out.pin = kPeSemanticNoSlot;
+      out.hasPin = false;
       if (item.wire.valid) {
         auto ref = BufferRef{};
         if (!typedOptionalRef(item.object, ref)) return false;
         if (ref.object) {
-          if (!ref.valid() || !pin<D9CBuffer, PeSemanticBufferIdentity>(ref, storage_->buffers, bufferCount_, out.pin,
-                                                         retainBufferFn())) return false;
+          if (!ref.valid() ||
+              !pinPrepared<D9CBuffer, PeSemanticBufferIdentity>(
+                  ref, storage_->buffers, bufferCount_, out.pin, prepared,
+                  retainBufferFn(), &out.wire.handleIndex)) return false;
           out.hasPin = true;
         }
       }
@@ -3898,18 +4032,23 @@ class PeSemanticBatchOwner final {
   }
 
   bool copyRenderTargets(std::span<const SparseBindingInput<D9CCommandChunkWireRenderTargetBinding>> source,
-                         PeSemanticRecordSlot& slot) noexcept {
+                         PeSemanticRecordSlot& slot,
+                         const PeSemanticPreparedRecord& prepared) noexcept {
     if (source.size() > MaxSparseValues - sparseCounts_.values[kRenderTargets]) return false;
     const auto start = sparseCounts_.values[kRenderTargets];
     for (const auto& item : source) {
       auto& out = storage_->renderTargetsArena[sparseCounts_.values[kRenderTargets]++];
       out.wire = item.wire;
+      out.pin = kPeSemanticNoSlot;
+      out.hasPin = false;
       if (item.wire.valid) {
         auto ref = SurfaceRef{};
         if (!typedOptionalRef(item.object, ref)) return false;
         if (ref.object) {
-          if (!ref.valid() || !pin<D9CSurface, PeSemanticSurfaceIdentity>(ref, storage_->surfaces, surfaceCount_, out.pin,
-                                                          retainSurfaceFn())) return false;
+          if (!ref.valid() ||
+              !pinPrepared<D9CSurface, PeSemanticSurfaceIdentity>(
+                  ref, storage_->surfaces, surfaceCount_, out.pin, prepared,
+                  retainSurfaceFn(), &out.wire.handleIndex)) return false;
           out.hasPin = true;
         }
       }
@@ -3920,18 +4059,23 @@ class PeSemanticBatchOwner final {
   }
 
   bool copyDepthStencils(std::span<const SparseBindingInput<D9CCommandChunkWireDepthStencilBinding>> source,
-                         PeSemanticRecordSlot& slot) noexcept {
+                         PeSemanticRecordSlot& slot,
+                         const PeSemanticPreparedRecord& prepared) noexcept {
     if (source.size() > MaxSparseValues - sparseCounts_.values[kDepthStencils]) return false;
     const auto start = sparseCounts_.values[kDepthStencils];
     for (const auto& item : source) {
       auto& out = storage_->depthStencilsArena[sparseCounts_.values[kDepthStencils]++];
       out.wire = item.wire;
+      out.pin = kPeSemanticNoSlot;
+      out.hasPin = false;
       if (item.wire.valid) {
         auto ref = SurfaceRef{};
         if (!typedOptionalRef(item.object, ref)) return false;
         if (ref.object) {
-          if (!ref.valid() || !pin<D9CSurface, PeSemanticSurfaceIdentity>(ref, storage_->surfaces, surfaceCount_, out.pin,
-                                                          retainSurfaceFn())) return false;
+          if (!ref.valid() ||
+              !pinPrepared<D9CSurface, PeSemanticSurfaceIdentity>(
+                  ref, storage_->surfaces, surfaceCount_, out.pin, prepared,
+                  retainSurfaceFn(), &out.wire.handleIndex)) return false;
           out.hasPin = true;
         }
       }

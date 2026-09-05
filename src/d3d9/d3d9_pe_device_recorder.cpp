@@ -23,18 +23,49 @@ void D3D9DeviceImpl::armSemanticRecord(
     std::uint32_t recordType,
     const dxmt9::d3d9::pe::PeSemanticRecordInput& input) noexcept {
     if (!semanticRecorderState_) return;
+    semanticRecorderState_->inputValid = false;
     auto& staged = semanticRecorderState_->stagedInput;
     staged = input;
     staged.producer = producer;
     staged.recordType = recordType;
     staged.sourceOrdinal = 0u;
     staged.recordOrdinal = 0u;
+    semanticRecorderState_->stagedFamily = PeSemanticStagingFamily::Cold;
     semanticRecorderState_->sourceOrdinalHint = 0u;
     semanticRecorderState_->inputValid = true;
 }
 
+void D3D9DeviceImpl::armSemanticRecord(
+    dxmt9::d3d9::pe::PeSemanticProducerKind producer,
+    std::uint32_t recordType,
+    const D9CCommandChunkWireDrawHeader& draw,
+    const dxmt9::d3d9::pe::SparseStateInput& sparse) noexcept {
+    if (!semanticRecorderState_) return;
+    stagePeSemanticDrawInput(
+        semanticRecorderState_->stagedInput,
+        semanticRecorderState_->stagedFamily,
+        semanticRecorderState_->inputValid, producer, recordType, draw, sparse);
+    semanticRecorderState_->sourceOrdinalHint = 0u;
+}
+
+void D3D9DeviceImpl::armSemanticRecord(
+    dxmt9::d3d9::pe::PeSemanticProducerKind producer,
+    std::uint32_t recordType,
+    const D9CCommandChunkWireSetConst& setConst,
+    std::span<const std::byte> constantBytes) noexcept {
+    if (!semanticRecorderState_) return;
+    stagePeSemanticConstantInput(
+        semanticRecorderState_->stagedInput,
+        semanticRecorderState_->stagedFamily,
+        semanticRecorderState_->inputValid, producer, recordType, setConst,
+        constantBytes);
+    semanticRecorderState_->sourceOrdinalHint = 0u;
+}
+
 void D3D9DeviceImpl::clearSemanticRecordInput() noexcept {
     if (!semanticRecorderState_) return;
+    // Keep the family frontier for reuse: the next same-family arm rewrites
+    // every active field, while inputValid gates the unpublished staging.
     semanticRecorderState_->inputValid = false;
     semanticRecorderState_->sourceOrdinalHint = 0u;
 }
@@ -1229,11 +1260,10 @@ HRESULT D3D9DeviceImpl::appendSetConstRecord(uint32_t recordType, UINT start, UI
     if (!policy) return D3DERR_INVALIDCALL;
     armSemanticRecord(
         policy->kind, recordType,
-        dxmt9::d3d9::pe::PeSemanticRecordInput{
-            .setConst = D9CCommandChunkWireSetConst{
-                .startRegister = start, .registerCount = count},
-            .constantBytes = std::span<const std::byte>(
-                reinterpret_cast<const std::byte*>(data), payloadBytes)});
+        D9CCommandChunkWireSetConst{
+            .startRegister = start, .registerCount = count},
+        std::span<const std::byte>(reinterpret_cast<const std::byte*>(data),
+                                   payloadBytes));
 
     // The stable header+payload estimate keeps the prior capacity-precheck
     // behavior, so chunk seal cadence is unchanged. Both guards above are
@@ -1346,9 +1376,7 @@ HRESULT D3D9DeviceImpl::chunkBarrierFlush() {
         armSemanticRecord(
             dxmt9::d3d9::pe::PeSemanticProducerKind::ApplyState,
             D9C_COMMAND_RECORD_APPLY_STATE,
-            dxmt9::d3d9::pe::PeSemanticRecordInput{
-                .draw = recorderState_.peSparseHeader,
-                .sparse = recorderState_.peSparseState});
+            recorderState_.peSparseHeader, recorderState_.peSparseState);
         // The stable cadence estimate keeps seal boundaries unchanged.
         const HRESULT appendHr = appendRecord(
             D9C_COMMAND_RECORD_APPLY_STATE,
@@ -1373,9 +1401,7 @@ HRESULT D3D9DeviceImpl::appendSingleCategoryApplyState(Fill fill) {
     armSemanticRecord(
         dxmt9::d3d9::pe::PeSemanticProducerKind::ApplyState,
         D9C_COMMAND_RECORD_APPLY_STATE,
-        dxmt9::d3d9::pe::PeSemanticRecordInput{
-            .draw = recorderState_.peSparseHeader,
-            .sparse = recorderState_.peSparseState});
+        recorderState_.peSparseHeader, recorderState_.peSparseState);
     return appendRecord(
         D9C_COMMAND_RECORD_APPLY_STATE,
         kStableApplyStateCadenceBytes);
@@ -1461,9 +1487,7 @@ HRESULT D3D9DeviceImpl::drainOversizedPendingStateAsApplyStateRecords() {
     armSemanticRecord(
         dxmt9::d3d9::pe::PeSemanticProducerKind::ApplyState,
         D9C_COMMAND_RECORD_APPLY_STATE,
-        dxmt9::d3d9::pe::PeSemanticRecordInput{
-            .draw = recorderState_.peSparseHeader,
-            .sparse = recorderState_.peSparseState});
+        recorderState_.peSparseHeader, recorderState_.peSparseState);
     const HRESULT hr = appendRecord(
         D9C_COMMAND_RECORD_APPLY_STATE,
         kStableApplyStateCadenceBytes);

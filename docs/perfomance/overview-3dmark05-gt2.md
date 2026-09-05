@@ -4,12 +4,19 @@ workload: 3DMark05 GT2
 title: "3DMark05 GT2 Performance — Current Baseline"
 type: root-overview
 status: current
-updated: 2026-08-25
+updated: 2026-09-05
 source: experiments/output/app-d3d9-3dmark05-current-cap-gt2-r1-20260825; traces/app-d3d9-3dmark05-current-bottleneck-gt2-clean-cpu-r2-20260825/analysis/xctrace-cpu-thread-summary.md; traces/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825/analysis/pe-sampler.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt2-r1-20260725; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.41.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
 ---
 
 # 3DMark05 GT2 Performance — Current Baseline
+
+The latest bounded PE refinement check is
+[admission reuse / active-prefix staging](present-pacing/present-pacing-pe-admission-reuse.243.md):
+GT2 OFF 27.304 to 27.527 benchmark FPS, about 4 CB/P, zero errors, and no stable
+FPS gain established. This is not a full CPU re-profile. The August owner split
+below predates the mandatory semantic-owner changes; its 10.6% PE share must
+not be applied to current HEAD or used to close the post-v0.1.1 investigation.
 
 > **Current-cap check on 2026-08-25 at `e32da591`: `28.311` sampled FPS.**
 > The one completed no-gputrace run records `1,840` frames over `64.993s`, wall

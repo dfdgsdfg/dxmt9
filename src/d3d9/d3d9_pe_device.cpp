@@ -1788,9 +1788,7 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT st
     armSemanticRecord(
         dxmt9::d3d9::pe::PeSemanticProducerKind::DrawPrimitive,
         D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
-        dxmt9::d3d9::pe::PeSemanticRecordInput{
-            .draw = recorderState_.peSparseHeader,
-            .sparse = recorderState_.peSparseState});
+        recorderState_.peSparseHeader, recorderState_.peSparseState);
     return appendRecord(
         D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
         kStableDrawPrimitiveCadenceBytes +
@@ -1830,9 +1828,7 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveRecord(D3DPRIMITIVETYPE type,
     armSemanticRecord(
         dxmt9::d3d9::pe::PeSemanticProducerKind::DrawIndexedPrimitive,
         D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
-        dxmt9::d3d9::pe::PeSemanticRecordInput{
-            .draw = recorderState_.peSparseHeader,
-            .sparse = recorderState_.peSparseState});
+        recorderState_.peSparseHeader, recorderState_.peSparseState);
     return appendRecord(
         D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
         kStableDrawIndexedPrimitiveCadenceBytes +
@@ -1952,9 +1948,7 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveUPRecordWithFvf(D3DPRIMITIVETYPE type
     armSemanticRecord(
         dxmt9::d3d9::pe::PeSemanticProducerKind::DrawPrimitiveUp,
         D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP,
-        dxmt9::d3d9::pe::PeSemanticRecordInput{
-            .draw = recorderState_.peSparseHeader,
-            .sparse = recorderState_.peSparseState});
+        recorderState_.peSparseHeader, recorderState_.peSparseState);
 
     // The stable header+payload estimate keeps chunk seal cadence unchanged.
     // No chunk-context step:
@@ -2087,9 +2081,7 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveUPRecordWithFvf(D3DPRIMITIVETY
     armSemanticRecord(
         dxmt9::d3d9::pe::PeSemanticProducerKind::DrawIndexedPrimitiveUp,
         D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP,
-        dxmt9::d3d9::pe::PeSemanticRecordInput{
-            .draw = recorderState_.peSparseHeader,
-            .sparse = recorderState_.peSparseState});
+        recorderState_.peSparseHeader, recorderState_.peSparseState);
 
     // No chunk-context step and, critically, no index-buffer section: an
     // indexed UP draw carries its indices inline and binds no index buffer.
