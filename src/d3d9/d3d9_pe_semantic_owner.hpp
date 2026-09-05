@@ -770,6 +770,30 @@ struct PeSemanticPreparedRecord {
   std::size_t wireBytes = 0u;
   bool admissible = false;
 
+  // Reused preparation destinations need their scalar validity/frontier state
+  // reset, but the planner owns the full plan reset and the wire context only
+  // consumes identities below its active count. Keeping those bounded tails
+  // intact avoids a second whole-witness clear without exposing stale state to
+  // any admission or emission consumer.
+  void resetForAdmission() noexcept {
+    plan.valid = false;
+    wireHandles.resetFrontier();
+    retentionDeltas.fill(0u);
+    rule = nullptr;
+    producer = PeSemanticProducerKind::DrawPrimitive;
+    producerMatchesRecordType = false;
+    constantProducer = false;
+    upProducer = false;
+    recordCount = 0u;
+    emissionHandleCount = 0u;
+    emissionPayloadBytes = 0u;
+    payloadOffset = 0u;
+    nextEmissionPayloadBytes = 0u;
+    nextEmissionHandleCount = 0u;
+    wireBytes = 0u;
+    admissible = false;
+  }
+
   bool valid() const noexcept {
     return admissible && plan.valid && rule != nullptr;
   }
@@ -923,9 +947,6 @@ struct PeSemanticBatchStorage {
   PeSemanticPinIndex<pinIndexCapacity> declarationObjectIndex{};
   PeSemanticPinIndex<pinIndexCapacity> queryIdentityIndex{};
   PeSemanticPinIndex<pinIndexCapacity> queryObjectIndex{};
-  std::array<std::byte, MaxSemanticBytes> constantBytes{};
-  std::array<D9CRect, MaxRects> rects{};
-  std::array<D9CCommandChunkWireRenderState, MaxSparseValues> renderStates{};
   std::array<PeSemanticOwnedBinding<D9CCommandChunkWireTextureBinding, PeSemanticTextureIdentity>, MaxSparseValues> texturesArena{};
   std::array<PeSemanticOwnedBinding<D9CCommandChunkWireStreamBinding, PeSemanticBufferIdentity>, MaxSparseValues> streamsArena{};
   std::array<PeSemanticOwnedBinding<D9CCommandChunkWireShaderBinding, PeSemanticShaderIdentity>, MaxSparseValues> shadersArena{};
@@ -933,15 +954,6 @@ struct PeSemanticBatchStorage {
   std::array<PeSemanticOwnedBinding<D9CCommandChunkWireIndexBinding, PeSemanticBufferIdentity>, MaxSparseValues> indexBuffersArena{};
   std::array<PeSemanticOwnedBinding<D9CCommandChunkWireRenderTargetBinding, PeSemanticSurfaceIdentity>, MaxSparseValues> renderTargetsArena{};
   std::array<PeSemanticOwnedBinding<D9CCommandChunkWireDepthStencilBinding, PeSemanticSurfaceIdentity>, MaxSparseValues> depthStencilsArena{};
-  std::array<D9CViewport, MaxSparseValues> viewports{};
-  std::array<D9CRect, MaxSparseValues> scissors{};
-  std::array<D9CMaterial, MaxSparseValues> materials{};
-  std::array<D9CCommandChunkWireClipPlane, MaxSparseValues> clipPlanes{};
-  std::array<D9CDrawPacketTextureStageState, MaxSparseValues> textureStageStates{};
-  std::array<D9CDrawPacketSamplerState, MaxSparseValues> samplerStates{};
-  std::array<D9CDrawPacketTransform, MaxSparseValues> transforms{};
-  std::array<D9CCommandChunkWireLight, MaxSparseValues> lights{};
-  std::array<D9CCommandChunkWireLightEnable, MaxSparseValues> lightEnables{};
   // Canonical D9C V2 role-layout backing.  These three regions are not a
   // seal-time rendering of the typed arenas above: admission writes each
   // accepted record's final wire record header, its final handle entries and
@@ -983,8 +995,9 @@ struct PeSemanticBatchStorage {
 };
 
 // The template capacities make overflow tests cheap while the defaults cover
-// the ordinary bounded recorder chunk.  Sparse arrays are typed arenas; they
-// are not a byte serialization of SparseStateInput.
+// the ordinary bounded recorder chunk. Binding arrays retain ownership and
+// handle remapping; scalar rows and variable tails serialize directly into
+// canonicalPayload.
 template <std::size_t MaxRecords = 64u, std::size_t MaxPins = 256u,
           std::size_t MaxSemanticBytes = 1u << 20u,
           std::size_t MaxRects = 1024u, std::size_t MaxSparseValues = 2048u>
@@ -1174,9 +1187,15 @@ class PeSemanticBatchOwner final {
   PeSemanticAdmissionOutcome prepareAdmission(
       const Input& input,
       PeSemanticPreparedRecord& witness) const noexcept {
-    witness = {};
-    if (!ready_) return PeSemanticAdmissionOutcome::Unavailable;
-    if (!validPeSemanticInput(input)) return PeSemanticAdmissionOutcome::Malformed;
+    witness.resetForAdmission();
+    if (!ready_) {
+      witness.plan = {};
+      return PeSemanticAdmissionOutcome::Unavailable;
+    }
+    if (!validPeSemanticInput(input)) {
+      witness.plan = {};
+      return PeSemanticAdmissionOutcome::Malformed;
+    }
     const auto& staged = stagedPeSemanticInput(input);
     witness.producer = staged.producer;
     witness.rule = recordRule(peSemanticRecordType(input));
@@ -1291,7 +1310,7 @@ class PeSemanticBatchOwner final {
       }
       if (!runPhase(PeSemanticOwnerPhase::CanonicalMaterializationMetrics,
                     [&]() noexcept {
-                      return materializeCanonicalRecord(slot, prepared) &&
+                      return materializeCanonicalRecord(input, slot, prepared) &&
                              cacheEmissionMetrics(prepared);
                     })) {
         lastAdmissionFailure_ = AdmissionFailure::EmissionMetrics;
@@ -1494,10 +1513,6 @@ class PeSemanticBatchOwner final {
     lastClearedBytes_ += clearUsed(storage_->shaders, shaderCount_);
     lastClearedBytes_ += clearUsed(storage_->declarations, declarationCount_);
     lastClearedBytes_ += clearUsed(storage_->queries, queryCount_);
-    lastClearedBytes_ += clearUsed(storage_->constantBytes, semanticBytes_);
-    lastClearedBytes_ += clearUsed(storage_->rects, rectCount_);
-    lastClearedBytes_ += clearUsed(storage_->renderStates,
-                                   sparseCounts_.values[kRenderStates]);
     lastClearedBytes_ += clearUsed(storage_->texturesArena,
                                    sparseCounts_.values[kTextures]);
     lastClearedBytes_ += clearUsed(storage_->streamsArena,
@@ -1512,24 +1527,6 @@ class PeSemanticBatchOwner final {
                                    sparseCounts_.values[kRenderTargets]);
     lastClearedBytes_ += clearUsed(storage_->depthStencilsArena,
                                    sparseCounts_.values[kDepthStencils]);
-    lastClearedBytes_ += clearUsed(storage_->viewports,
-                                   sparseCounts_.values[kViewports]);
-    lastClearedBytes_ += clearUsed(storage_->scissors,
-                                   sparseCounts_.values[kScissors]);
-    lastClearedBytes_ += clearUsed(storage_->materials,
-                                   sparseCounts_.values[kMaterials]);
-    lastClearedBytes_ += clearUsed(storage_->clipPlanes,
-                                   sparseCounts_.values[kClipPlanes]);
-    lastClearedBytes_ += clearUsed(storage_->textureStageStates,
-                                   sparseCounts_.values[kTextureStageStates]);
-    lastClearedBytes_ += clearUsed(storage_->samplerStates,
-                                   sparseCounts_.values[kSamplerStates]);
-    lastClearedBytes_ += clearUsed(storage_->transforms,
-                                   sparseCounts_.values[kTransforms]);
-    lastClearedBytes_ += clearUsed(storage_->lights,
-                                   sparseCounts_.values[kLights]);
-    lastClearedBytes_ += clearUsed(storage_->lightEnables,
-                                   sparseCounts_.values[kLightEnables]);
     lastClearedBytes_ += clearUsed(storage_->wireRecords, recordCount_);
     lastClearedBytes_ += clearUsed(storage_->wireHandles, emissionHandleCount_);
     if (emissionPayloadBytes_ != 0u) {
@@ -1914,21 +1911,6 @@ class PeSemanticBatchOwner final {
   const PeSemanticPhysicalPin<D9CQuery, PeSemanticQueryIdentity>&
   queryPin(std::size_t index) const noexcept { return storage_->queries[index]; }
 
-  std::span<const std::byte> constantBytes(const PeSemanticRecordSlot& slot) const noexcept {
-    return {storage_->constantBytes.data() + slot.constantBytes.offset,
-            slot.constantBytes.count};
-  }
-  std::span<const D9CRect> clearRects(const PeSemanticRecordSlot& slot) const noexcept {
-    return {storage_->rects.data() + slot.clearRects.offset, slot.clearRects.count};
-  }
-  std::span<const std::byte> upIndexBytes(const PeSemanticRecordSlot& slot) const noexcept {
-    return {storage_->constantBytes.data() + slot.upIndexBytes.offset,
-            slot.upIndexBytes.count};
-  }
-  std::span<const std::byte> upVertexBytes(const PeSemanticRecordSlot& slot) const noexcept {
-    return {storage_->constantBytes.data() + slot.upVertexBytes.offset,
-            slot.upVertexBytes.count};
-  }
   std::span<const PeSemanticOwnedBinding<
       D9CCommandChunkWireTextureBinding, PeSemanticTextureIdentity>>
   textureBindings(const PeSemanticRecordSlot& slot) const noexcept {
@@ -2742,6 +2724,7 @@ class PeSemanticBatchOwner final {
   bool writeConstantSection(
       std::uint16_t kind, const PeSemanticArenaRange& bytes,
       const D9CCommandChunkWireConstantRange& range,
+      std::span<const std::byte> source,
       std::span<std::byte> payload, std::size_t& cursor,
       std::array<D9CCommandChunkWireSectionDesc,
                  D9C_COMMAND_CHUNK_SECTION_COUNT>& descs,
@@ -2752,12 +2735,11 @@ class PeSemanticBatchOwner final {
     if (!rule || !alignEmission(cursor, rule->payloadAlignment, aligned) ||
         aligned > payload.size() ||
         sizeof(range) + bytes.count > payload.size() - aligned ||
-        sectionIndex == descs.size() || bytes.offset > MaxSemanticBytes ||
+        source.size() != bytes.count || sectionIndex == descs.size() ||
+        bytes.offset > MaxSemanticBytes ||
         bytes.count > MaxSemanticBytes - bytes.offset ||
         !zeroPaddingTo(payload, cursor, aligned)) return false;
     if (!writeValue(payload, cursor, range)) return false;
-    const auto source = std::span<const std::byte>(
-        storage_->constantBytes.data() + bytes.offset, bytes.count);
     if (cursor > payload.size() || source.size() > payload.size() - cursor) return false;
     std::memcpy(payload.data() + cursor, source.data(), source.size());
     cursor += source.size();
@@ -2771,12 +2753,36 @@ class PeSemanticBatchOwner final {
     return true;
   }
 
-  bool writeSparsePayload(const PeSemanticRecordSlot& slot,
+  template <PeSemanticRecordInputLike Input>
+  bool writeSparsePayload(const Input& input, const PeSemanticRecordSlot& slot,
                           std::span<std::byte> payload,
                           std::size_t globalFirst,
                           const EmissionHandleContext& handles) const noexcept {
+    const auto& sparse = peSemanticSparse(input);
     const auto count = sparseSectionCount(slot);
     if (count > D9C_COMMAND_CHUNK_SECTION_COUNT) return false;
+    const auto matches = [](std::size_t sourceCount,
+                            const PeSemanticArenaRange& range) noexcept {
+      return sourceCount == range.count;
+    };
+    if (!matches(sparse.renderStates.size(), slot.renderStates) ||
+        !matches(sparse.viewports.size(), slot.viewports) ||
+        !matches(sparse.scissors.size(), slot.scissors) ||
+        !matches(sparse.materials.size(), slot.materials) ||
+        !matches(sparse.clipPlanes.size(), slot.clipPlanes) ||
+        !matches(sparse.textureStageStates.size(), slot.textureStageStates) ||
+        !matches(sparse.samplerStates.size(), slot.samplerStates) ||
+        !matches(sparse.transforms.size(), slot.transforms) ||
+        !matches(sparse.lights.size(), slot.lights) ||
+        !matches(sparse.lightEnables.size(), slot.lightEnables) ||
+        !matches(sparse.vsFloatConstants.registerBytes.size(), slot.vsFloatConstants) ||
+        !matches(sparse.vsIntConstants.registerBytes.size(), slot.vsIntConstants) ||
+        !matches(sparse.vsBoolConstants.registerBytes.size(), slot.vsBoolConstants) ||
+        !matches(sparse.psFloatConstants.registerBytes.size(), slot.psFloatConstants) ||
+        !matches(sparse.psIntConstants.registerBytes.size(), slot.psIntConstants) ||
+        !matches(sparse.psBoolConstants.registerBytes.size(), slot.psBoolConstants) ||
+        !matches(sparse.upIndexData.size(), slot.upIndexBytes) ||
+        !matches(sparse.upVertexData.size(), slot.upVertexBytes)) return false;
     D9CCommandChunkWireDrawHeader draw = slot.draw;
     draw.sectionCount = static_cast<std::uint32_t>(count);
     draw.sectionTableOffset = sizeof(draw);
@@ -2814,9 +2820,7 @@ class PeSemanticBatchOwner final {
         D9CCommandChunkWireDepthStencilBinding, PeSemanticSurfaceIdentity>>(
         storage_->depthStencilsArena.data() + slot.depthStencils.offset, slot.depthStencils.count);
     if (!writeTypedSection(D9C_COMMAND_CHUNK_SECTION_RENDER_STATE,
-                           std::span<const D9CCommandChunkWireRenderState>(
-                               storage_->renderStates.data() + slot.renderStates.offset,
-                               slot.renderStates.count), payload, cursor, descs, sectionIndex) ||
+                           sparse.renderStates, payload, cursor, descs, sectionIndex) ||
         !writeBindingSection(D9C_COMMAND_CHUNK_SECTION_TEXTURE, textures, payload, cursor,
                              descs, sectionIndex, handles, globalFirst) ||
         !writeBindingSection(D9C_COMMAND_CHUNK_SECTION_STREAM, streams, payload, cursor,
@@ -2832,66 +2836,56 @@ class PeSemanticBatchOwner final {
         !writeBindingSection(D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL, depthStencils, payload,
                              cursor, descs, sectionIndex, handles, globalFirst) ||
         !writeTypedSection(D9C_COMMAND_CHUNK_SECTION_VIEWPORT,
-                           std::span<const D9CViewport>(
-                               storage_->viewports.data() + slot.viewports.offset,
-                               slot.viewports.count), payload, cursor, descs, sectionIndex) ||
+                           sparse.viewports, payload, cursor, descs, sectionIndex) ||
         !writeTypedSection(D9C_COMMAND_CHUNK_SECTION_SCISSOR,
-                           std::span<const D9CRect>(storage_->scissors.data() + slot.scissors.offset,
-                                                    slot.scissors.count), payload, cursor, descs, sectionIndex) ||
+                           sparse.scissors, payload, cursor, descs, sectionIndex) ||
         !writeTypedSection(D9C_COMMAND_CHUNK_SECTION_MATERIAL,
-                           std::span<const D9CMaterial>(storage_->materials.data() + slot.materials.offset,
-                                                        slot.materials.count), payload, cursor, descs, sectionIndex) ||
+                           sparse.materials, payload, cursor, descs, sectionIndex) ||
         !writeTypedSection(D9C_COMMAND_CHUNK_SECTION_CLIP_PLANE,
-                           std::span<const D9CCommandChunkWireClipPlane>(
-                               storage_->clipPlanes.data() + slot.clipPlanes.offset,
-                               slot.clipPlanes.count), payload, cursor, descs, sectionIndex) ||
+                           sparse.clipPlanes, payload, cursor, descs, sectionIndex) ||
         !writeTypedSection(D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE,
-                           std::span<const D9CDrawPacketTextureStageState>(
-                               storage_->textureStageStates.data() + slot.textureStageStates.offset,
-                               slot.textureStageStates.count), payload, cursor, descs, sectionIndex) ||
+                           sparse.textureStageStates, payload, cursor, descs, sectionIndex) ||
         !writeTypedSection(D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE,
-                           std::span<const D9CDrawPacketSamplerState>(
-                               storage_->samplerStates.data() + slot.samplerStates.offset,
-                               slot.samplerStates.count), payload, cursor, descs, sectionIndex) ||
+                           sparse.samplerStates, payload, cursor, descs, sectionIndex) ||
         !writeTypedSection(D9C_COMMAND_CHUNK_SECTION_TRANSFORM,
-                           std::span<const D9CDrawPacketTransform>(
-                               storage_->transforms.data() + slot.transforms.offset,
-                               slot.transforms.count), payload, cursor, descs, sectionIndex) ||
+                           sparse.transforms, payload, cursor, descs, sectionIndex) ||
         !writeTypedSection(D9C_COMMAND_CHUNK_SECTION_LIGHT,
-                           std::span<const D9CCommandChunkWireLight>(
-                               storage_->lights.data() + slot.lights.offset,
-                               slot.lights.count), payload, cursor, descs, sectionIndex) ||
+                           sparse.lights, payload, cursor, descs, sectionIndex) ||
         !writeTypedSection(D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE,
-                           std::span<const D9CCommandChunkWireLightEnable>(
-                               storage_->lightEnables.data() + slot.lightEnables.offset,
-                               slot.lightEnables.count), payload, cursor, descs, sectionIndex) ||
+                           sparse.lightEnables, payload, cursor, descs, sectionIndex) ||
         !writeConstantSection(D9C_COMMAND_CHUNK_SECTION_VS_CONST_F, slot.vsFloatConstants,
-                              slot.vsFloatConstant, payload, cursor, descs, sectionIndex) ||
+                              slot.vsFloatConstant, sparse.vsFloatConstants.registerBytes,
+                              payload, cursor, descs, sectionIndex) ||
         !writeConstantSection(D9C_COMMAND_CHUNK_SECTION_VS_CONST_I, slot.vsIntConstants,
-                              slot.vsIntConstant, payload, cursor, descs, sectionIndex) ||
+                              slot.vsIntConstant, sparse.vsIntConstants.registerBytes,
+                              payload, cursor, descs, sectionIndex) ||
         !writeConstantSection(D9C_COMMAND_CHUNK_SECTION_VS_CONST_B, slot.vsBoolConstants,
-                              slot.vsBoolConstant, payload, cursor, descs, sectionIndex) ||
+                              slot.vsBoolConstant, sparse.vsBoolConstants.registerBytes,
+                              payload, cursor, descs, sectionIndex) ||
         !writeConstantSection(D9C_COMMAND_CHUNK_SECTION_PS_CONST_F, slot.psFloatConstants,
-                              slot.psFloatConstant, payload, cursor, descs, sectionIndex) ||
+                              slot.psFloatConstant, sparse.psFloatConstants.registerBytes,
+                              payload, cursor, descs, sectionIndex) ||
         !writeConstantSection(D9C_COMMAND_CHUNK_SECTION_PS_CONST_I, slot.psIntConstants,
-                              slot.psIntConstant, payload, cursor, descs, sectionIndex) ||
+                              slot.psIntConstant, sparse.psIntConstants.registerBytes,
+                              payload, cursor, descs, sectionIndex) ||
         !writeConstantSection(D9C_COMMAND_CHUNK_SECTION_PS_CONST_B, slot.psBoolConstants,
-                              slot.psBoolConstant, payload, cursor, descs, sectionIndex) ||
+                              slot.psBoolConstant, sparse.psBoolConstants.registerBytes,
+                              payload, cursor, descs, sectionIndex) ||
         !writeBytesSection(D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA,
-                           std::span<const std::byte>(storage_->constantBytes.data() + slot.upIndexBytes.offset,
-                                                       slot.upIndexBytes.count), payload, cursor, descs, sectionIndex) ||
+                           sparse.upIndexData, payload, cursor, descs, sectionIndex) ||
         !writeBytesSection(D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA,
-                           std::span<const std::byte>(storage_->constantBytes.data() + slot.upVertexBytes.offset,
-                                                       slot.upVertexBytes.count), payload, cursor, descs, sectionIndex)) return false;
+                           sparse.upVertexData, payload, cursor, descs, sectionIndex)) return false;
     if (sectionIndex != count || cursor != payload.size()) return false;
     std::memcpy(payload.data() + draw.sectionTableOffset, descs.data(), tableBytes);
     return true;
   }
 
-  bool writeRecordPayload(const PeSemanticRecordSlot& slot,
+  template <PeSemanticRecordInputLike Input>
+  bool writeRecordPayload(const Input& input, const PeSemanticRecordSlot& slot,
                           std::span<std::byte> payload,
                           std::size_t globalFirst,
                           const EmissionHandleContext& handles) const noexcept {
+    const auto& staged = stagedPeSemanticInput(input);
     std::size_t cursor = 0u;
     switch (slot.producer) {
       case PeSemanticProducerKind::DrawPrimitive:
@@ -2899,21 +2893,24 @@ class PeSemanticBatchOwner final {
       case PeSemanticProducerKind::DrawPrimitiveUp:
       case PeSemanticProducerKind::DrawIndexedPrimitiveUp:
       case PeSemanticProducerKind::ApplyState:
-        return writeSparsePayload(slot, payload, globalFirst, handles);
+        return writeSparsePayload(input, slot, payload, globalFirst, handles);
       case PeSemanticProducerKind::VsFloatConstant:
       case PeSemanticProducerKind::VsIntConstant:
       case PeSemanticProducerKind::VsBoolConstant:
       case PeSemanticProducerKind::PsFloatConstant:
       case PeSemanticProducerKind::PsIntConstant:
       case PeSemanticProducerKind::PsBoolConstant:
-        return writeValue(payload, cursor, slot.setConst) &&
-               slot.constantBytes.offset <= MaxSemanticBytes &&
-               slot.constantBytes.count <= MaxSemanticBytes - slot.constantBytes.offset &&
-               cursor + slot.constantBytes.count <= payload.size() &&
-               (std::memcpy(payload.data() + cursor,
-                            storage_->constantBytes.data() + slot.constantBytes.offset,
-                            slot.constantBytes.count),
-                cursor += slot.constantBytes.count, cursor == payload.size());
+        if (!writeValue(payload, cursor, slot.setConst) ||
+            slot.constantBytes.offset > MaxSemanticBytes ||
+            slot.constantBytes.count > MaxSemanticBytes - slot.constantBytes.offset ||
+            staged.constantBytes.size() != slot.constantBytes.count ||
+            cursor > payload.size() ||
+            slot.constantBytes.count > payload.size() - cursor) return false;
+        if (slot.constantBytes.count != 0u)
+          std::memcpy(payload.data() + cursor, staged.constantBytes.data(),
+                      slot.constantBytes.count);
+        cursor += slot.constantBytes.count;
+        return cursor == payload.size();
       case PeSemanticProducerKind::Clear: {
         auto fixed = slot.clear;
         fixed.rectCount = slot.clearRects.count;
@@ -2921,9 +2918,10 @@ class PeSemanticBatchOwner final {
         if (!writeValue(payload, cursor, fixed) ||
             slot.clearRects.offset > MaxRects ||
             slot.clearRects.count > MaxRects - slot.clearRects.offset ||
+            staged.clearRects.size() != slot.clearRects.count ||
             slot.clearRects.count * sizeof(D9CRect) > payload.size() - cursor) return false;
         std::memcpy(payload.data() + cursor,
-                    storage_->rects.data() + slot.clearRects.offset,
+                    staged.clearRects.data(),
                     slot.clearRects.count * sizeof(D9CRect));
         cursor += slot.clearRects.count * sizeof(D9CRect);
         return cursor == payload.size();
@@ -3014,7 +3012,9 @@ class PeSemanticBatchOwner final {
   // slot is still being admitted. The payload's relative offsets and the
   // record-local/global handle ordinals are already known from the prepared
   // witness; only the outer chunk offsets remain frontier-dependent.
+  template <PeSemanticRecordInputLike Input>
   bool materializeCanonicalRecord(
+      const Input& input,
       const PeSemanticRecordSlot& slot,
       const PeSemanticPreparedRecord& prepared) noexcept {
     if (!prepared.valid() || prepared.recordCount != recordCount_ ||
@@ -3044,7 +3044,7 @@ class PeSemanticBatchOwner final {
                   prepared.emissionPayloadBytes,
               storage_->canonicalPayload.begin() + prepared.payloadOffset,
               std::byte{0});
-    if (!writeRecordPayload(slot, payload, prepared.emissionHandleCount,
+    if (!writeRecordPayload(input, slot, payload, prepared.emissionHandleCount,
                             handles)) {
       return false;
     }
@@ -3136,10 +3136,6 @@ class PeSemanticBatchOwner final {
     bytes += shaderCount_ * sizeof(storage_->shaders[0]);
     bytes += declarationCount_ * sizeof(storage_->declarations[0]);
     bytes += queryCount_ * sizeof(storage_->queries[0]);
-    bytes += semanticBytes_;
-    bytes += rectCount_ * sizeof(storage_->rects[0]);
-    bytes += sparseCounts_.values[kRenderStates] *
-        sizeof(storage_->renderStates[0]);
     bytes += sparseCounts_.values[kTextures] *
         sizeof(storage_->texturesArena[0]);
     bytes += sparseCounts_.values[kStreams] *
@@ -3154,20 +3150,6 @@ class PeSemanticBatchOwner final {
         sizeof(storage_->renderTargetsArena[0]);
     bytes += sparseCounts_.values[kDepthStencils] *
         sizeof(storage_->depthStencilsArena[0]);
-    bytes += sparseCounts_.values[kViewports] * sizeof(storage_->viewports[0]);
-    bytes += sparseCounts_.values[kScissors] * sizeof(storage_->scissors[0]);
-    bytes += sparseCounts_.values[kMaterials] * sizeof(storage_->materials[0]);
-    bytes += sparseCounts_.values[kClipPlanes] *
-        sizeof(storage_->clipPlanes[0]);
-    bytes += sparseCounts_.values[kTextureStageStates] *
-        sizeof(storage_->textureStageStates[0]);
-    bytes += sparseCounts_.values[kSamplerStates] *
-        sizeof(storage_->samplerStates[0]);
-    bytes += sparseCounts_.values[kTransforms] *
-        sizeof(storage_->transforms[0]);
-    bytes += sparseCounts_.values[kLights] * sizeof(storage_->lights[0]);
-    bytes += sparseCounts_.values[kLightEnables] *
-        sizeof(storage_->lightEnables[0]);
     bytes += recordCount_ * sizeof(storage_->wireRecords[0]);
     bytes += emissionHandleCount_ * sizeof(storage_->wireHandles[0]);
     bytes += emissionPayloadBytes_;
@@ -3645,28 +3627,27 @@ class PeSemanticBatchOwner final {
                                                   slot.query, retainQuery);
   }
 
-  template <typename T, std::size_t N>
-  bool appendSparse(std::span<const T> source, std::array<T, N>& arena,
-                    std::size_t& used, PeSemanticArenaRange& range) noexcept {
+  template <typename T>
+  bool appendLogicalSparse(std::span<const T> source, std::size_t& used,
+                           PeSemanticArenaRange& range) noexcept {
     if (source.empty()) { range = {}; return true; }
-    if (source.size() > MaxSparseValues - used) return false;
-    range = {.offset = static_cast<std::uint32_t>(used),
-             .count = static_cast<std::uint32_t>(source.size())};
-    std::copy(source.begin(), source.end(), arena.begin() + used);
+    if (used > MaxSparseValues || source.size() > MaxSparseValues - used ||
+        source.size() > std::numeric_limits<std::uint32_t>::max()) return false;
+    // Keep the slot range as schema metadata; scalar rows have no owner arena.
+    range = {.offset = 0u, .count = static_cast<std::uint32_t>(source.size())};
     used += source.size();
     return true;
   }
 
-  bool appendBytes(std::span<const std::byte> source,
-                   std::array<std::byte, MaxSemanticBytes>& arena,
-                   std::size_t& used, PeSemanticArenaRange& range) noexcept {
+  bool appendLogicalBytes(std::span<const std::byte> source,
+                          PeSemanticArenaRange& range) noexcept {
     if (source.empty()) { range = {}; return true; }
-    if (source.size() > MaxSemanticBytes - used ||
+    if (semanticBytes_ > MaxSemanticBytes ||
+        source.size() > MaxSemanticBytes - semanticBytes_ ||
         source.size() > std::numeric_limits<std::uint32_t>::max()) return false;
-    range = {.offset = static_cast<std::uint32_t>(used),
-             .count = static_cast<std::uint32_t>(source.size())};
-    std::copy(source.begin(), source.end(), arena.begin() + used);
-    used += source.size();
+    // semanticBytes_ remains the logical quota frontier, not a byte arena.
+    range = {.offset = 0u, .count = static_cast<std::uint32_t>(source.size())};
+    semanticBytes_ += source.size();
     return true;
   }
 
@@ -3710,16 +3691,16 @@ class PeSemanticBatchOwner final {
       lastAdmissionFailure_ = AdmissionFailure::SparseSchema;
       return false;
     }
-    if (!appendSparse(s.renderStates, storage_->renderStates, sparseCounts_.values[kRenderStates], slot.renderStates) ||
-        !appendSparse(s.viewports, storage_->viewports, sparseCounts_.values[kViewports], slot.viewports) ||
-        !appendSparse(s.scissors, storage_->scissors, sparseCounts_.values[kScissors], slot.scissors) ||
-        !appendSparse(s.materials, storage_->materials, sparseCounts_.values[kMaterials], slot.materials) ||
-        !appendSparse(s.clipPlanes, storage_->clipPlanes, sparseCounts_.values[kClipPlanes], slot.clipPlanes) ||
-        !appendSparse(s.textureStageStates, storage_->textureStageStates, sparseCounts_.values[kTextureStageStates], slot.textureStageStates) ||
-        !appendSparse(s.samplerStates, storage_->samplerStates, sparseCounts_.values[kSamplerStates], slot.samplerStates) ||
-        !appendSparse(s.transforms, storage_->transforms, sparseCounts_.values[kTransforms], slot.transforms) ||
-        !appendSparse(s.lights, storage_->lights, sparseCounts_.values[kLights], slot.lights) ||
-        !appendSparse(s.lightEnables, storage_->lightEnables, sparseCounts_.values[kLightEnables], slot.lightEnables)) {
+    if (!appendLogicalSparse(s.renderStates, sparseCounts_.values[kRenderStates], slot.renderStates) ||
+        !appendLogicalSparse(s.viewports, sparseCounts_.values[kViewports], slot.viewports) ||
+        !appendLogicalSparse(s.scissors, sparseCounts_.values[kScissors], slot.scissors) ||
+        !appendLogicalSparse(s.materials, sparseCounts_.values[kMaterials], slot.materials) ||
+        !appendLogicalSparse(s.clipPlanes, sparseCounts_.values[kClipPlanes], slot.clipPlanes) ||
+        !appendLogicalSparse(s.textureStageStates, sparseCounts_.values[kTextureStageStates], slot.textureStageStates) ||
+        !appendLogicalSparse(s.samplerStates, sparseCounts_.values[kSamplerStates], slot.samplerStates) ||
+        !appendLogicalSparse(s.transforms, sparseCounts_.values[kTransforms], slot.transforms) ||
+        !appendLogicalSparse(s.lights, sparseCounts_.values[kLights], slot.lights) ||
+        !appendLogicalSparse(s.lightEnables, sparseCounts_.values[kLightEnables], slot.lightEnables)) {
       lastAdmissionFailure_ = AdmissionFailure::SparseArena;
       return false;
     }
@@ -3743,30 +3724,26 @@ class PeSemanticBatchOwner final {
                           .registerCount = sparse.psIntConstants.registerCount};
     slot.psBoolConstant = {.startRegister = sparse.psBoolConstants.startRegister,
                            .registerCount = sparse.psBoolConstants.registerCount};
-    if (!appendBytes(staged.constantBytes, storage_->constantBytes, semanticBytes_,
-                     slot.constantBytes) ||
-        !appendBytes(sparse.vsFloatConstants.registerBytes,
-                     storage_->constantBytes, semanticBytes_, slot.vsFloatConstants) ||
-        !appendBytes(sparse.vsIntConstants.registerBytes,
-                     storage_->constantBytes, semanticBytes_, slot.vsIntConstants) ||
-        !appendBytes(sparse.vsBoolConstants.registerBytes,
-                     storage_->constantBytes, semanticBytes_, slot.vsBoolConstants) ||
-        !appendBytes(sparse.psFloatConstants.registerBytes,
-                     storage_->constantBytes, semanticBytes_, slot.psFloatConstants) ||
-        !appendBytes(sparse.psIntConstants.registerBytes,
-                     storage_->constantBytes, semanticBytes_, slot.psIntConstants) ||
-        !appendBytes(sparse.psBoolConstants.registerBytes,
-                     storage_->constantBytes, semanticBytes_, slot.psBoolConstants) ||
-        !appendBytes(sparse.upIndexData, storage_->constantBytes, semanticBytes_,
-                     slot.upIndexBytes) ||
-        !appendBytes(sparse.upVertexData, storage_->constantBytes, semanticBytes_,
-                     slot.upVertexBytes)) return false;
+    if (!appendLogicalBytes(staged.constantBytes, slot.constantBytes) ||
+        !appendLogicalBytes(sparse.vsFloatConstants.registerBytes,
+                            slot.vsFloatConstants) ||
+        !appendLogicalBytes(sparse.vsIntConstants.registerBytes,
+                            slot.vsIntConstants) ||
+        !appendLogicalBytes(sparse.vsBoolConstants.registerBytes,
+                            slot.vsBoolConstants) ||
+        !appendLogicalBytes(sparse.psFloatConstants.registerBytes,
+                            slot.psFloatConstants) ||
+        !appendLogicalBytes(sparse.psIntConstants.registerBytes,
+                            slot.psIntConstants) ||
+        !appendLogicalBytes(sparse.psBoolConstants.registerBytes,
+                            slot.psBoolConstants) ||
+        !appendLogicalBytes(sparse.upIndexData, slot.upIndexBytes) ||
+        !appendLogicalBytes(sparse.upVertexData, slot.upVertexBytes)) return false;
     if (!staged.clearRects.empty()) {
-      if (staged.clearRects.size() > MaxRects - rectCount_) return false;
-      slot.clearRects = {.offset = static_cast<std::uint32_t>(rectCount_),
+      if (rectCount_ > MaxRects || staged.clearRects.size() > MaxRects - rectCount_ ||
+          staged.clearRects.size() > std::numeric_limits<std::uint32_t>::max()) return false;
+      slot.clearRects = {.offset = 0u,
                          .count = static_cast<std::uint32_t>(staged.clearRects.size())};
-      std::copy(staged.clearRects.begin(), staged.clearRects.end(),
-                storage_->rects.begin() + rectCount_);
       rectCount_ += staged.clearRects.size();
     }
     return true;
@@ -4011,7 +3988,7 @@ class PeSemanticBatchOwner final {
   std::size_t semanticBytes_ = 0u;
   // Cached emission frontiers are updated with each admission and restored by
   // rollback. They are intentionally separate from semanticBytes_, which is
-  // the borrowed-variable arena cursor rather than wire payload size.
+  // the preserved logical variable-byte quota, not physical wire payload size.
   std::size_t emissionHandleCount_ = 0u;
   std::size_t emissionPayloadBytes_ = 0u;
   std::size_t rectCount_ = 0u;

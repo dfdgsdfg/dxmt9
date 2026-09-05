@@ -17,7 +17,7 @@ does not yet satisfy it.
 |---|---|---|
 | COM validation, app-visible state, getters | `D3D9DeviceImpl` in `src/d3d9/d3d9_pe_device_impl.hpp` and its cold COM TUs | Metal objects, unix queue state |
 | State-domain value types and typed keys | `src/d3d9/d3d9_pe_state_shadow.hpp`, `d3d9_pe_const_shadow.hpp` | COM lifetime, capture journaling |
-| Sparse normalization | production `buildSparseState` prepares one borrowed `SparseStateInput`; `PeSemanticBatchOwner::appendOwnedRecord` copies it into bounded typed arenas. `SparseStatePlan` remains a differential oracle only | final-wire tables, handle retention, or pending consumption during preparation |
+| Sparse normalization | production `buildSparseState` prepares one borrowed `SparseStateInput`; `PeSemanticBatchOwner::appendOwnedRecord` owns canonical payload and typed bindings. `SparseStatePlan` remains a differential oracle only | final-wire tables, handle retention, or pending consumption during preparation |
 | Record/chunk transaction | mandatory `PeProductionSemanticRecorderState` / `PeSemanticBatchOwner` and `D3D9DeviceImpl::appendRecord` / `flushPendingCommandChunk`; `CommandChunkBuilder` is limited to tests and Render Tape bootstrap construction | D3D9 getter authority, Metal execution |
 | PE local pinning | the semantic owner's kind-qualified pin arenas and bounded retainer own physical retain/rollback | Render Tape logical settlement |
 | Wire registry resolution | `WireObjectRegistry` in `src/d3d9/device_c_chunk_registry.*` | PE wrapper-pointer identity |
@@ -118,8 +118,8 @@ effective sparse view. Non-draw rows therefore make no second descriptor copy.
 Draw rows copy only `SparseStateInput` into recorder-owned destination storage,
 and a CapacityPre destination change performs one bounded sparse rebase while
 the original scratch spans remain stable. `appendOwnedRecord` then validates
-destination-chunk stream/index selection, copies the selected values into the
-mandatory semantic owner's typed arenas, acquires kind-qualified pins, and
+destination-chunk stream/index selection, writes selected scalar values into
+canonical payload and bindings into typed owned arenas, acquires qualified pins, and
 commits the record atomically. Only that accepted admission consumes pending
 categories or dirty constant ranges. The older two-pass `SparseStatePlan` stays
 in the native differential corpus and is not selectable by production code.
@@ -488,10 +488,12 @@ observations. The prepare/accept boundary is non-reentrant: preparation reads
 into reusable scratch, and only acceptance settles pending state, so a failed
 append cannot erase a later mutation.
 Prepared sparse rows are admitted one at a time into the semantic owner's
-typed arenas. The owner exposes no mutable final-wire span: binding rows become
-kind-qualified pins, payload ranges use bounded typed copies, and final
-ExactFixed or segmented emission visits only committed immutable records. A
-failure rolls arenas, pins, and the active record back to one checkpoint.
+canonical payload and owned binding arenas. The owner exposes no mutable
+final-wire span: binding rows become kind-qualified pins, while pointer-free
+scalar rows and constant/UP/rectangle tails are serialized directly from the
+call-local input into the canonical payload (R-CORE-REC-7.11). Final ExactFixed
+or segmented emission visits only committed immutable roles. A failure restores
+logical quotas, binding arenas, pins, and the active record to one checkpoint.
 `PeSparseScratch` and `SparseStateInput` are production preparation scratch for
 ordinary draws/APPLY_STATE as well as oversized, Render Tape, and SWVP forms;
 they own no final-wire lifetime and do not survive admission.
@@ -605,9 +607,9 @@ layout while preserving the existing warm-retainer policy.
 
 Production constructs one mandatory chunk-scoped `PeSemanticBatchOwner` with
 the device and uses it as the sole final-wire transaction. `appendRecord`
-admits all 21 producer rows into typed
-record slots, copies only constant/UP byte payloads plus typed sparse and
-rectangle arenas, and acquires kind-qualified physical pins at admission.
+admits all 21 producer rows into typed record slots, constructs pointer-free
+payload in canonical role backing, owns typed binding rows, and acquires
+kind-qualified physical pins at admission.
 Admission checkpoints source/record ordinals and all arena/pin frontiers and
 rolls back atomically on collision or bounded overflow; successful settlement
 ends the retainer warm epoch while clearing only used record/pin/arena ranges,
@@ -617,7 +619,7 @@ evidence; the full record walk is reserved for final emission validation. Its
 pure visitors provide negotiated segmented fixed-role
 emission for normal bridge transport and contiguous ExactFixed emission for
 capture/compatibility, with identical record-local dedup, generation-qualified
-identities, payload alignment, and copied arenas. ExactFixed copies the complete
+identities and payload alignment. ExactFixed copies the complete
 header, record, handle, and canonical payload roles and explicitly zeros only
 the computed alignment gaps; it does not pre-zero the full destination extent.
 Construction failure is
@@ -626,10 +628,26 @@ select a compatibility builder. The owner's exact typed pins also issue Render
 Tape pending-chunk leases and answer buffer-hazard queries, so those consumers
 cannot observe a different ownership graph.
 
+Direct canonical admission separates a logical quota from a physical owner.
+The scalar sparse range counts, semantic byte count (constants and UP), and
+rectangle count still consume exactly the previous bounded admission budget;
+removing their intermediate arrays must not enlarge chunks or change
+CapacityPre/CapacityPost. The same prepared witness binds the input to the
+destination record, handle, and canonical payload frontiers. Private serializers
+read `peSemanticSparse(input)` so a prepared destination overlay is honored,
+and consume variable tails before the synchronous admission call returns.
+No call-local pointer is retained. After admission, wire emission, capture,
+retry, and cold semantic projection read canonical roles; lifetime and buffer
+hazard visitors read the unchanged qualified pins and binding metadata.
+Failed admission exposes no new record and restores all logical frontiers and
+retains. A later success must overwrite its complete payload and alignment
+gaps, including any uncommitted bytes left by a failed attempt.
+
 The optional owner-qualified copy/materialization ledger binds this same
 transaction at its two physical ownership boundaries. A successful admission
-records the increase in live typed record, pin, sparse, rectangle, and variable
-payload extents as `materialize.pe.semantic-owner-admission`; rollback records
+records the increase in live typed record, pin, binding, and canonical-role
+extents as `materialize.pe.semantic-owner-admission`; removed scalar/variable
+staging consumes logical quota but contributes no physical copied bytes. Rollback records
 nothing, and settlement/reset releases the retained extent. Contiguous
 ExactFixed emission records `materialize.pe.wire-final` and retains only the
 owner-internal final wire until settlement/reset. Re-emission counts repeated
@@ -651,6 +669,15 @@ chunk. Capture always selects contiguous ExactFixed because its existing
 consumer requires it; normal segmented transport is selected only when the
 negotiated bridge accepts it. Segmented-transport promotion and CPU-ready Tape
 integration remain independent workstreams.
+
+The direct-payload refinement obligation is executable native byte/ownership
+differential testing, not a new queue protocol. Bounded category masks and
+accepted/rejected/retried source sequences must use the actual owner and the
+canonical builder oracle, including source mutation after acceptance and
+mixed scalar/binding payloads. Existing `PeRecorderTransition`,
+`PeRecorderCommit`, and `PeRecorderSettlement` models continue to own unchanged
+acceptance and settlement transitions. Their green result does not establish
+wire byte identity, Wine fault behavior, or a pixel/performance promotion.
 
 `RecorderBorrow<T>` and `RecorderLockCapability` are proof-carrying API shapes,
 not new owners. They carry the recorder epoch and transaction identity, have no

@@ -5,7 +5,7 @@ title: "Present-Pacing — display sync, frame latency, and the wallclock cap - 
 type: domain-overview
 status: current
 updated: 2026-09-05
-source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-identity-frontier.240.md
+source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
 
@@ -30,11 +30,15 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 ## Latest Conclusions
 
 For the current semantic-owner PE implementation, use the
-[2026-09-05 admission-frontier evidence](present-pacing-pe-identity-frontier.240.md).
-It removes a verified 1,688-byte i386 initialization call per admission and
-passes native/wild smoke gates. Single-run OFF FPS moves 26.936 to 27.338;
-stable FPS gain remains unproved. Sparse staging/canonical materialization
-remain open. Older PE cost rankings below describe earlier implementations.
+[2026-09-05 direct canonical payload evidence](present-pacing-pe-direct-canonical.242.md),
+following the [prepared-witness reset](present-pacing-pe-prepared-reset.241.md).
+Scalar/constant/UP/Clear intermediate value storage is removed, saving about
+1.96 MiB of native production-alias fixed capacity while preserving logical
+quotas, pins, and wire bytes. Native/TLA and GT2 OFF/ON checks pass. OFF FPS
+moves 26.874 to 27.383, but the sampled sparse/canonical phase sum does not
+improve; no stable CPU/FPS gain is established. Binding staging/pin lookup and
+contiguous final gather remain. Older PE cost rankings below describe earlier
+implementations.
 
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|

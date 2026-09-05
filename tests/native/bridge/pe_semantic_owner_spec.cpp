@@ -68,6 +68,97 @@ PeSemanticRecordInput base(PeSemanticProducerKind producer,
           .sourceOrdinal = source, .recordOrdinal = ordinal};
 }
 
+template <PeSemanticRecordInputLike Input>
+bool appendCanonicalSemanticRecord(CommandChunkBuilder& builder,
+                                   const Input& input) {
+  const auto& staged = stagedPeSemanticInput(input);
+  switch (staged.producer) {
+    case PeSemanticProducerKind::Present:
+      return appendPresent(builder, staged.present, staged.surface0);
+    case PeSemanticProducerKind::StretchRect:
+      return appendStretchRect(builder, staged.stretchRect, staged.surface0,
+                               staged.surface1);
+    case PeSemanticProducerKind::ColorFill:
+      return appendColorFill(builder, staged.colorFill, staged.surface0);
+    case PeSemanticProducerKind::UpdateTexture:
+      return appendUpdateTexture(builder, staged.texture0, staged.texture1);
+    case PeSemanticProducerKind::UpdateSurface:
+      return appendUpdateSurface(builder, staged.updateSurface, staged.surface0,
+                                 staged.surface1);
+    case PeSemanticProducerKind::QueryIssue:
+      return appendQueryIssue(builder, staged.queryIssue.flags, staged.query);
+    case PeSemanticProducerKind::Readback:
+      return appendReadback(builder, staged.surface0, staged.surface1);
+    case PeSemanticProducerKind::ReszDepthResolve:
+      return appendReszDepthResolve(builder, staged.surface0, staged.texture0);
+    case PeSemanticProducerKind::GenerateMipmaps:
+      return appendGenerateMipmaps(builder, staged.texture0);
+    case PeSemanticProducerKind::VsFloatConstant:
+    case PeSemanticProducerKind::VsIntConstant:
+    case PeSemanticProducerKind::VsBoolConstant:
+    case PeSemanticProducerKind::PsFloatConstant:
+    case PeSemanticProducerKind::PsIntConstant:
+    case PeSemanticProducerKind::PsBoolConstant:
+      return appendSetConstants(builder, staged.recordType,
+                                staged.setConst.startRegister,
+                                staged.setConst.registerCount,
+                                staged.constantBytes);
+    case PeSemanticProducerKind::Clear:
+      return appendClear(builder, staged.clear, staged.clearRects);
+    case PeSemanticProducerKind::DrawPrimitive:
+    case PeSemanticProducerKind::DrawIndexedPrimitive:
+    case PeSemanticProducerKind::DrawPrimitiveUp:
+    case PeSemanticProducerKind::DrawIndexedPrimitiveUp:
+    case PeSemanticProducerKind::ApplyState:
+      return appendSparseRecord(builder, peSemanticRecordType(input),
+                                staged.draw, peSemanticSparse(input));
+    case PeSemanticProducerKind::Count:
+      return false;
+  }
+  return false;
+}
+
+template <typename TestedOwner>
+bool equalCanonicalOwnerBytes(const TestedOwner& owner,
+                              CommandChunkBuilder& canonical,
+                              PeSemanticExactFixedEmission& exact) {
+  const auto sealed = canonical.seal();
+  return sealed.valid() && owner.emitExactFixed(exact) && exact.valid() &&
+         sealed.blob.size() == exact.wireBytes &&
+         std::equal(sealed.blob.begin(), sealed.blob.end(), exact.wire.begin());
+}
+
+bool ownerSegmentedRolesEqualExact(const PeSemanticExactFixedEmission& exact,
+                                   const PeSemanticSegmentedEmission& segmented) {
+  const auto& header = exact.transport.header;
+  const auto role = [](const D9CWireHandle& handle, std::uint32_t bytes) {
+    return std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(static_cast<std::uintptr_t>(
+            d9cWireHandleValue(handle))),
+        bytes);
+  };
+  const auto exactRecords = exact.wire.subspan(header.recordTableOffset,
+                                                segmented.transport.recordBytes);
+  const auto exactHandles = exact.wire.subspan(header.handleTableOffset,
+                                                segmented.transport.handleBytes);
+  const auto exactPayload = exact.wire.subspan(header.payloadArenaOffset,
+                                                segmented.transport.payloadBytes);
+  return segmented.transport.header.recordCount == header.recordCount &&
+         segmented.transport.header.handleCount == header.handleCount &&
+         segmented.transport.header.payloadArenaSize ==
+             header.payloadArenaSize &&
+         segmented.wireBytes == exact.wireBytes &&
+         std::equal(exactRecords.begin(), exactRecords.end(),
+                    role(segmented.transport.records,
+                         segmented.transport.recordBytes).begin()) &&
+         std::equal(exactHandles.begin(), exactHandles.end(),
+                    role(segmented.transport.handles,
+                         segmented.transport.handleBytes).begin()) &&
+         std::equal(exactPayload.begin(), exactPayload.end(),
+                    role(segmented.transport.payload,
+                         segmented.transport.payloadBytes).begin());
+}
+
 void classificationAndLifetime() {
   Owner owner;
   CommandChunkBuilder canonicalBuilder;
@@ -123,63 +214,8 @@ void classificationAndLifetime() {
                 << static_cast<unsigned>(row.kind) << "\n";
       throw Failure("every semantic producer row admits a typed slot");
     }
-    bool canonical = false;
-    switch (row.kind) {
-      case PeSemanticProducerKind::Present:
-        canonical = appendPresent(canonicalBuilder, in.present, in.surface0);
-        break;
-      case PeSemanticProducerKind::StretchRect:
-        canonical = appendStretchRect(canonicalBuilder, in.stretchRect,
-                                      in.surface0, in.surface1);
-        break;
-      case PeSemanticProducerKind::ColorFill:
-        canonical = appendColorFill(canonicalBuilder, in.colorFill, in.surface0);
-        break;
-      case PeSemanticProducerKind::UpdateTexture:
-        canonical = appendUpdateTexture(canonicalBuilder, in.texture0, in.texture1);
-        break;
-      case PeSemanticProducerKind::UpdateSurface:
-        canonical = appendUpdateSurface(canonicalBuilder, in.updateSurface,
-                                        in.surface0, in.surface1);
-        break;
-      case PeSemanticProducerKind::QueryIssue:
-        canonical = appendQueryIssue(canonicalBuilder, in.queryIssue.flags, in.query);
-        break;
-      case PeSemanticProducerKind::Readback:
-        canonical = appendReadback(canonicalBuilder, in.surface0, in.surface1);
-        break;
-      case PeSemanticProducerKind::ReszDepthResolve:
-        canonical = appendReszDepthResolve(canonicalBuilder, in.surface0, in.texture0);
-        break;
-      case PeSemanticProducerKind::GenerateMipmaps:
-        canonical = appendGenerateMipmaps(canonicalBuilder, in.texture0);
-        break;
-      case PeSemanticProducerKind::VsFloatConstant:
-      case PeSemanticProducerKind::VsIntConstant:
-      case PeSemanticProducerKind::VsBoolConstant:
-      case PeSemanticProducerKind::PsFloatConstant:
-      case PeSemanticProducerKind::PsIntConstant:
-      case PeSemanticProducerKind::PsBoolConstant:
-        canonical = appendSetConstants(canonicalBuilder, in.recordType,
-                                       in.setConst.startRegister,
-                                       in.setConst.registerCount,
-                                       in.constantBytes);
-        break;
-      case PeSemanticProducerKind::Clear:
-        canonical = appendClear(canonicalBuilder, in.clear, in.clearRects);
-        break;
-      case PeSemanticProducerKind::DrawPrimitive:
-      case PeSemanticProducerKind::DrawIndexedPrimitive:
-      case PeSemanticProducerKind::DrawPrimitiveUp:
-      case PeSemanticProducerKind::DrawIndexedPrimitiveUp:
-      case PeSemanticProducerKind::ApplyState:
-        canonical = appendSparseRecord(canonicalBuilder, in.recordType, in.draw,
-                                       in.sparse);
-        break;
-      case PeSemanticProducerKind::Count:
-        break;
-    }
-    check(canonical, "canonical builder emits every semantic producer row");
+    check(appendCanonicalSemanticRecord(canonicalBuilder, in),
+          "canonical builder emits every semantic producer row");
   }
   check(owner.size() == 21u && owner.retainedCount() == 3u,
         "all-family owner retains each typed identity exactly once");
@@ -287,6 +323,47 @@ void partialRectClearMatchesCanonicalBuilder() {
             std::equal(sealed.blob.begin(), sealed.blob.end(),
                        emission.wire.begin()),
         "partial-rect semantic clear equals canonical bytes");
+  owner.reset();
+  canonical.resetAndReleaseRetained();
+}
+
+void emptyClearSpanMatchesCanonicalAndResetReuse() {
+  Owner owner;
+  CommandChunkBuilder canonical;
+  auto empty = base(PeSemanticProducerKind::Clear, 1u, 1u);
+  check(owner.admit(empty) && appendCanonicalSemanticRecord(canonical, empty),
+        "default empty clear rect span admits and emits");
+  PeSemanticExactFixedEmission first{};
+  check(equalCanonicalOwnerBytes(owner, canonical, first),
+        "default empty clear rect span matches canonical bytes");
+  std::array<std::byte, 4096u> firstBytes{};
+  std::copy(first.wire.begin(), first.wire.begin() + first.wireBytes,
+            firstBytes.begin());
+  owner.reset();
+  canonical.resetAndReleaseRetained();
+
+  const std::array<D9CRect, 1u> rects{{{3, 5, 17, 23}}};
+  auto populated = base(PeSemanticProducerKind::Clear, 2u, 2u);
+  populated.clear.rectCount = 1u;
+  populated.clearRects = rects;
+  check(owner.admit(populated) &&
+            appendCanonicalSemanticRecord(canonical, populated),
+        "clear rect span populates reusable owner state");
+  PeSemanticExactFixedEmission populatedEmission{};
+  check(equalCanonicalOwnerBytes(owner, canonical, populatedEmission),
+        "populated clear rect span matches canonical bytes");
+  owner.reset();
+  canonical.resetAndReleaseRetained();
+
+  auto reused = base(PeSemanticProducerKind::Clear, 3u, 3u);
+  check(owner.admit(reused) && appendCanonicalSemanticRecord(canonical, reused),
+        "default empty clear rect span re-admits after reset");
+  PeSemanticExactFixedEmission reusedEmission{};
+  check(equalCanonicalOwnerBytes(owner, canonical, reusedEmission) &&
+            reusedEmission.wireBytes == first.wireBytes &&
+            std::equal(firstBytes.begin(), firstBytes.begin() + first.wireBytes,
+                       reusedEmission.wire.begin()),
+        "post-reset empty clear reuse matches the original canonical bytes");
   owner.reset();
   canonical.resetAndReleaseRetained();
 }
@@ -1077,17 +1154,21 @@ void admissionFactsAreNotAcceptedByProductionApi() {
 
 void immediateAppendClosesSpanMutationGap() {
   Owner owner;
+  CommandChunkBuilder canonical;
   std::array<std::byte, 4u> source{
       std::byte{0x11}, std::byte{0x22}, std::byte{0x33}, std::byte{0x44}};
   auto input = base(PeSemanticProducerKind::VsBoolConstant, 1u, 1u);
   input.setConst.registerCount = 1u;
   input.constantBytes = source;
-  check(owner.tryAppendOwnedRecord(input, []() noexcept { return true; }),
+  check(appendCanonicalSemanticRecord(canonical, input) &&
+            owner.tryAppendOwnedRecord(input, []() noexcept { return true; }),
         "immediate operation copies span content before returning");
   source[0] = std::byte{0x7f};
-  check(owner.constantBytes(owner.record(0u))[0] == std::byte{0x11},
-        "post-operation span mutation cannot alter owned semantic bytes");
+  PeSemanticExactFixedEmission exact{};
+  check(equalCanonicalOwnerBytes(owner, canonical, exact),
+        "post-operation span mutation cannot alter owned canonical payload");
   owner.reset();
+  canonical.resetAndReleaseRetained();
 }
 
 void repeatedIdentityUsesBatchGlobalRetentionDelta() {
@@ -1347,6 +1428,786 @@ void preparedAdmissionWitnessTruthTable() {
         "an allocation-faulted owner reports Unavailable before any plan work");
 }
 
+void preparedAdmissionReinitializesReusedWitness() {
+  using Outcome = PeSemanticAdmissionOutcome;
+  Owner owner;
+  D9CSurface first;
+  D9CSurface second;
+  D9CSurface replacement;
+  PeSemanticPreparedRecord witness{};
+
+  const auto samePrepared = [](const PeSemanticPreparedRecord& lhs,
+                               const PeSemanticPreparedRecord& rhs) {
+    if (lhs.plan.valid != rhs.plan.valid ||
+        lhs.plan.recordType != rhs.plan.recordType ||
+        lhs.plan.handleCount != rhs.plan.handleCount ||
+        lhs.plan.payloadBytes != rhs.plan.payloadBytes ||
+        lhs.plan.rectCount != rhs.plan.rectCount ||
+        lhs.plan.semanticBytes != rhs.plan.semanticBytes ||
+        lhs.plan.sparseCounts != rhs.plan.sparseCounts ||
+        lhs.plan.uniquePinCounts != rhs.plan.uniquePinCounts ||
+        lhs.retentionDeltas != rhs.retentionDeltas || lhs.rule != rhs.rule ||
+        lhs.producer != rhs.producer ||
+        lhs.producerMatchesRecordType != rhs.producerMatchesRecordType ||
+        lhs.constantProducer != rhs.constantProducer ||
+        lhs.upProducer != rhs.upProducer ||
+        lhs.recordCount != rhs.recordCount ||
+        lhs.emissionHandleCount != rhs.emissionHandleCount ||
+        lhs.emissionPayloadBytes != rhs.emissionPayloadBytes ||
+        lhs.payloadOffset != rhs.payloadOffset ||
+        lhs.nextEmissionPayloadBytes != rhs.nextEmissionPayloadBytes ||
+        lhs.nextEmissionHandleCount != rhs.nextEmissionHandleCount ||
+        lhs.wireBytes != rhs.wireBytes || lhs.admissible != rhs.admissible ||
+        lhs.wireHandles.count != rhs.wireHandles.count) {
+      return false;
+    }
+    for (std::size_t i = 0u; i < lhs.wireHandles.count; ++i) {
+      const auto& left = lhs.wireHandles.identities[i];
+      const auto& right = rhs.wireHandles.identities[i];
+      if (left.kind != right.kind || left.generation != right.generation ||
+          left.objectId != right.objectId) {
+        return false;
+      }
+    }
+    return true;
+  };
+
+  auto larger = base(PeSemanticProducerKind::StretchRect, 1u, 1u);
+  larger.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&first, 0xa01u, 1u);
+  larger.surface1 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&second, 0xa02u, 1u);
+  check(owner.prepareAdmission(larger, witness) == Outcome::Admissible &&
+            witness.valid() && witness.wireHandles.count == 2u &&
+            witness.plan.handleCount == 2u,
+        "reused-witness fixture starts with two first-seen wire identities");
+
+  auto smaller = base(PeSemanticProducerKind::Present, 2u, 2u);
+  smaller.surface0 =
+      localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&replacement, 0xa03u, 2u);
+  check(owner.prepareAdmission(smaller, witness) == Outcome::Admissible &&
+            witness.valid() && witness.wireHandles.count == 1u &&
+            witness.plan.handleCount == 1u &&
+            witness.wireHandles.identities[0].objectId == 0xa03u &&
+            witness.wireHandles.identities[0].generation == 2u,
+        "valid-to-valid reuse resets the active wire frontier and identity");
+  PeSemanticPreparedRecord freshSmaller{};
+  check(owner.prepareAdmission(smaller, freshSmaller) == Outcome::Admissible &&
+            samePrepared(witness, freshSmaller),
+        "valid-to-valid reuse matches a fresh witness across all active facts");
+
+  // The second identity from `larger` remains physically in the bounded
+  // witness array, but its stale tail is outside the count and cannot affect
+  // the smaller record's plan or later append.
+  check(witness.wireHandles.identities[1].objectId == 0xa02u &&
+            witness.wireHandles.identities[1].generation == 1u,
+        "valid-to-valid reuse leaves only an inactive stale tail");
+
+  auto malformed = smaller;
+  malformed.surface0.identity.generation = 0u;
+  check(owner.prepareAdmission(malformed, witness) == Outcome::Malformed &&
+            !witness.valid() && witness.wireHandles.count == 0u &&
+            !witness.plan.valid && witness.plan.handleCount == 0u &&
+            witness.retentionDeltas[0] == 0u,
+        "valid-to-malformed reuse invalidates the prepared witness");
+  PeSemanticPreparedRecord freshMalformed{};
+  check(owner.prepareAdmission(malformed, freshMalformed) == Outcome::Malformed &&
+            samePrepared(witness, freshMalformed),
+        "early malformed reuse matches a fresh witness across active facts");
+  check(owner.prepareAdmission(smaller, witness) == Outcome::Admissible &&
+            witness.valid() && witness.wireHandles.count == 1u &&
+            witness.plan.handleCount == 1u,
+        "a failed malformed preparation can be followed by a valid one");
+  PeSemanticPreparedRecord freshAfterMalformed{};
+  check(owner.prepareAdmission(smaller, freshAfterMalformed) ==
+                Outcome::Admissible &&
+            samePrepared(witness, freshAfterMalformed),
+        "early malformed reuse recovers the complete active witness");
+
+  PeSemanticRecordInputView nullView{};
+  PeSemanticPreparedRecord cleared{};
+  check(owner.prepareAdmission(nullView, witness) == Outcome::Malformed &&
+            samePrepared(witness, cleared),
+        "a null input view clears the reused witness on early Malformed");
+  check(owner.prepareAdmission(smaller, witness) == Outcome::Admissible,
+        "an early null-view Malformed can be followed by a valid preparation");
+  PeSemanticPreparedRecord freshAfterNullView{};
+  check(owner.prepareAdmission(smaller, freshAfterNullView) ==
+                Outcome::Admissible &&
+            samePrepared(witness, freshAfterNullView),
+        "null-view recovery matches a fresh witness across all active facts");
+
+  check(owner.tryAppendOwnedRecord(smaller, []() noexcept { return true; }),
+        "partial-malformed fixture publishes an earlier valid wire identity");
+  D9CTexture partialTexture;
+  std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>, 1u>
+      partialTextures{{
+          {.wire = {.slot = 0u, .valid = 1u},
+           .object = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+               &partialTexture, 0xa04u, 1u)},
+      }};
+  std::array<SparseBindingInput<D9CCommandChunkWireRenderTargetBinding>, 1u>
+      partialTargets{{
+          {.wire = {.slot = 0u, .valid = 1u}, .object = smaller.surface0},
+      }};
+  partialTargets[0].object.identity.generation = 3u;
+  auto partialMalformed = base(PeSemanticProducerKind::DrawPrimitive, 4u, 4u);
+  partialMalformed.surface0 = smaller.surface0;
+  partialMalformed.sparse.textures = partialTextures;
+  partialMalformed.sparse.renderTargets = partialTargets;
+  check(owner.prepareAdmission(partialMalformed, witness) == Outcome::Malformed &&
+            !witness.valid() && witness.plan.recordType ==
+                                     partialMalformed.recordType &&
+            witness.plan.sparseCounts[1] == 1u &&
+            witness.plan.sparseCounts[6] == 1u &&
+            witness.retentionDeltas[1] == 1u &&
+            witness.wireHandles.count == 1u &&
+            witness.wireHandles.identities[0].kind ==
+                partialTextures[0].object.identity.kind &&
+            witness.wireHandles.identities[0].objectId ==
+                partialTextures[0].object.identity.objectId,
+        "planner Malformed preserves the pre-failure active wire prefix");
+  PeSemanticPreparedRecord freshPartialMalformed{};
+  check(owner.prepareAdmission(partialMalformed, freshPartialMalformed) ==
+                Outcome::Malformed &&
+            samePrepared(witness, freshPartialMalformed),
+        "partial planner Malformed matches a fresh witness across active facts");
+  check(owner.prepareAdmission(smaller, witness) == Outcome::Admissible,
+        "partial planner Malformed can be followed by a valid preparation");
+  PeSemanticPreparedRecord freshAfterPartial{};
+  check(owner.prepareAdmission(smaller, freshAfterPartial) ==
+                Outcome::Admissible &&
+            samePrepared(witness, freshAfterPartial),
+        "partial-malformed recovery matches a fresh witness across all active facts");
+
+  std::array<D9CCommandChunkWireRenderState, 9u> renderStates{};
+  auto capacity = base(PeSemanticProducerKind::DrawPrimitive, 3u, 3u);
+  capacity.sparse.renderStates = renderStates;
+  check(owner.prepareAdmission(capacity, witness) == Outcome::Capacity &&
+            !witness.valid() && witness.wireHandles.count == 0u &&
+            witness.plan.valid,
+        "valid-to-capacity reuse remains inadmissible with a well-formed plan");
+  PeSemanticPreparedRecord freshCapacity{};
+  check(owner.prepareAdmission(capacity, freshCapacity) == Outcome::Capacity &&
+            samePrepared(witness, freshCapacity),
+        "capacity reuse matches a fresh witness across all active facts");
+  check(owner.prepareAdmission(smaller, witness) == Outcome::Admissible &&
+            witness.valid() && witness.wireHandles.count == 1u,
+        "a failed capacity preparation can be followed by a valid one");
+  PeSemanticPreparedRecord freshAfterCapacity{};
+  check(owner.prepareAdmission(smaller, freshAfterCapacity) ==
+                Outcome::Admissible &&
+            samePrepared(witness, freshAfterCapacity),
+        "capacity recovery matches a fresh witness across all active facts");
+
+  using PinBound = PeSemanticBatchOwner<4u, 1u, 4096u, 4u, 4u>;
+  PinBound pinBound;
+  D9CSurface pinned;
+  D9CSurface novel;
+  auto pinFirst = base(PeSemanticProducerKind::Present, 5u, 5u);
+  pinFirst.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&pinned, 0xa05u, 1u);
+  check(pinBound.tryAppendOwnedRecord(pinFirst,
+                                      []() noexcept { return true; }),
+        "handle-bearing capacity fixture fills the pin budget");
+  auto handleCapacity = base(PeSemanticProducerKind::Present, 6u, 6u);
+  handleCapacity.surface0 =
+      localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&novel, 0xa06u, 1u);
+  check(pinBound.prepareAdmission(handleCapacity, witness) == Outcome::Capacity &&
+            witness.plan.valid && !witness.admissible &&
+            witness.wireHandles.count == 1u &&
+            witness.retentionDeltas[0] == 1u,
+        "handle-bearing Capacity retains the candidate wire prefix");
+  PeSemanticPreparedRecord freshHandleCapacity{};
+  check(pinBound.prepareAdmission(handleCapacity, freshHandleCapacity) ==
+                Outcome::Capacity &&
+            samePrepared(witness, freshHandleCapacity),
+        "handle-bearing capacity reuse matches a fresh witness");
+  pinBound.reset();
+  check(pinBound.prepareAdmission(handleCapacity, witness) == Outcome::Admissible,
+        "a capacity-failed witness can be reused after its boundary");
+  PeSemanticPreparedRecord freshAfterHandleCapacity{};
+  check(pinBound.prepareAdmission(handleCapacity, freshAfterHandleCapacity) ==
+                Outcome::Admissible &&
+            samePrepared(witness, freshAfterHandleCapacity),
+        "post-capacity recovery matches a fresh witness");
+
+  Owner unavailable(Owner::FailConstructionForTesting{});
+  check(unavailable.prepareAdmission(smaller, witness) == Outcome::Unavailable &&
+            !witness.valid() && witness.rule == nullptr &&
+            witness.wireHandles.count == 0u && !witness.plan.valid &&
+            witness.plan.handleCount == 0u,
+        "valid-to-unavailable reuse clears the witness before early return");
+  check(samePrepared(witness, cleared),
+        "Unavailable resets every active fact to a fresh empty witness");
+  check(owner.prepareAdmission(smaller, witness) == Outcome::Admissible &&
+            witness.valid() && witness.wireHandles.count == 1u,
+        "an unavailable preparation does not poison later valid reuse");
+  PeSemanticPreparedRecord freshAfterUnavailable{};
+  check(owner.prepareAdmission(smaller, freshAfterUnavailable) ==
+                Outcome::Admissible &&
+            samePrepared(witness, freshAfterUnavailable),
+        "unavailable recovery matches a fresh witness across all active facts");
+  owner.reset();
+  check(replacement.refs == 1u,
+        "the reused-witness fixture releases pins before local objects expire");
+}
+
+void directCanonicalScalarAndConstantMasks() {
+  Owner owner;
+  CommandChunkBuilder canonical;
+  std::array<D9CCommandChunkWireRenderState, 1u> renderStates{{{7u, 11u}}};
+  std::array<D9CViewport, 1u> viewports{};
+  std::array<D9CRect, 1u> scissors{};
+  std::array<D9CMaterial, 1u> materials{};
+  std::array<D9CCommandChunkWireClipPlane, 1u> clipPlanes{};
+  std::array<D9CDrawPacketTextureStageState, 1u> textureStageStates{};
+  std::array<D9CDrawPacketSamplerState, 1u> samplerStates{};
+  std::array<D9CDrawPacketTransform, 1u> transforms{};
+  std::array<D9CCommandChunkWireLight, 1u> lights{};
+  std::array<D9CCommandChunkWireLightEnable, 1u> lightEnables{};
+
+  // Nonzero, category-distinct values reject an accidental zero-fill or a
+  // same-sized wrong-section copy, not only missing section descriptors.
+  viewports[0] = {3u, 5u, 127u, 91u, 0.25f, 0.75f};
+  scissors[0] = {11, 13, 47, 61};
+  materials[0].diffuse = {0.125f, 0.25f, 0.5f, 1.0f};
+  materials[0].power = 17.0f;
+  clipPlanes[0].slot = 2u;
+  clipPlanes[0].values[0] = 0.5f;
+  clipPlanes[0].values[3] = -3.0f;
+  textureStageStates[0] = {1u, 2u, 5u};
+  samplerStates[0] = {3u, 4u, 2u};
+  transforms[0].state = 2u;
+  transforms[0].matrix.m[0] = 1.0f;
+  transforms[0].matrix.m[7] = 0.5f;
+  transforms[0].matrix.m[15] = 2.0f;
+  lights[0].slot = 3u;
+  lights[0].light.type = 1u;
+  lights[0].light.diffuse = {0.25f, 0.5f, 0.75f, 1.0f};
+  lights[0].light.range = 23.0f;
+  lightEnables[0] = {3u, 1u};
+
+  std::size_t scalarCases = 0u;
+  for (std::size_t mask = 0u; mask < (1u << 10u); ++mask) {
+    auto input = base(PeSemanticProducerKind::DrawPrimitive,
+                      0x1000u + mask, 0x2000u + mask);
+    input.draw.primitiveCount = static_cast<std::uint32_t>(mask + 1u);
+    if (mask & (1u << 0u)) input.sparse.renderStates = renderStates;
+    if (mask & (1u << 1u)) input.sparse.viewports = viewports;
+    if (mask & (1u << 2u)) input.sparse.scissors = scissors;
+    if (mask & (1u << 3u)) input.sparse.materials = materials;
+    if (mask & (1u << 4u)) input.sparse.clipPlanes = clipPlanes;
+    if (mask & (1u << 5u))
+      input.sparse.textureStageStates = textureStageStates;
+    if (mask & (1u << 6u)) input.sparse.samplerStates = samplerStates;
+    if (mask & (1u << 7u)) input.sparse.transforms = transforms;
+    if (mask & (1u << 8u)) input.sparse.lights = lights;
+    if (mask & (1u << 9u)) input.sparse.lightEnables = lightEnables;
+
+    check(owner.admit(input), "every scalar sparse mask admits");
+    check(appendCanonicalSemanticRecord(canonical, input),
+          "every scalar sparse mask admits in the canonical oracle");
+    PeSemanticExactFixedEmission exact{};
+    check(equalCanonicalOwnerBytes(owner, canonical, exact),
+          "every scalar sparse mask has exact canonical bytes");
+    if (mask != 0u && (mask & (mask - 1u)) == 0u) {
+      using CategoryQuotaOwner = PeSemanticBatchOwner<2u, 8u, 128u, 4u, 1u>;
+      CategoryQuotaOwner quotaOwner;
+      check(quotaOwner.admit(input), "each scalar category fits its logical quota");
+      auto extra = input;
+      ++extra.sourceOrdinal;
+      ++extra.recordOrdinal;
+      check(!quotaOwner.admit(extra) &&
+                quotaOwner.lastAdmissionFailure() ==
+                    CategoryQuotaOwner::AdmissionFailure::Capacity &&
+                equalCanonicalOwnerBytes(quotaOwner, canonical, exact),
+            "each scalar category rejects cumulative plus-one and preserves bytes");
+    }
+    ++scalarCases;
+    owner.reset();
+    canonical.resetAndReleaseRetained();
+  }
+  check(scalarCases == (1u << 10u),
+        "scalar refinement covers all 2^10 section-presence masks");
+
+  std::array<std::byte, 16u> vsFloatBytes{};
+  std::array<std::byte, 16u> vsIntBytes{};
+  std::array<std::byte, 4u> vsBoolBytes{};
+  std::array<std::byte, 16u> psFloatBytes{};
+  std::array<std::byte, 16u> psIntBytes{};
+  std::array<std::byte, 4u> psBoolBytes{};
+  for (std::size_t i = 0u; i < vsFloatBytes.size(); ++i) {
+    vsFloatBytes[i] = static_cast<std::byte>(0x10u + i);
+    vsIntBytes[i] = static_cast<std::byte>(0x30u + i);
+    psFloatBytes[i] = static_cast<std::byte>(0x50u + i);
+    psIntBytes[i] = static_cast<std::byte>(0x70u + i);
+  }
+  for (std::size_t i = 0u; i < vsBoolBytes.size(); ++i) {
+    vsBoolBytes[i] = static_cast<std::byte>(0x90u + i);
+    psBoolBytes[i] = static_cast<std::byte>(0xb0u + i);
+  }
+  std::size_t constantCases = 0u;
+  for (std::size_t mask = 0u; mask < (1u << 6u); ++mask) {
+    auto input = base(PeSemanticProducerKind::DrawPrimitive,
+                      0x3000u + mask, 0x4000u + mask);
+    if (mask & (1u << 0u)) {
+      input.sparse.vsFloatConstants = {
+          .startRegister = 1u, .registerCount = 1u, .registerBytes = vsFloatBytes};
+    }
+    if (mask & (1u << 1u)) {
+      input.sparse.vsIntConstants = {
+          .startRegister = 2u, .registerCount = 1u, .registerBytes = vsIntBytes};
+    }
+    if (mask & (1u << 2u)) {
+      input.sparse.vsBoolConstants = {
+          .startRegister = 3u, .registerCount = 1u, .registerBytes = vsBoolBytes};
+    }
+    if (mask & (1u << 3u)) {
+      input.sparse.psFloatConstants = {
+          .startRegister = 4u, .registerCount = 1u, .registerBytes = psFloatBytes};
+    }
+    if (mask & (1u << 4u)) {
+      input.sparse.psIntConstants = {
+          .startRegister = 5u, .registerCount = 1u, .registerBytes = psIntBytes};
+    }
+    if (mask & (1u << 5u)) {
+      input.sparse.psBoolConstants = {
+          .startRegister = 6u, .registerCount = 1u, .registerBytes = psBoolBytes};
+    }
+
+    check(owner.admit(input), "every embedded constant mask admits");
+    check(appendCanonicalSemanticRecord(canonical, input),
+          "every embedded constant mask admits in the canonical oracle");
+    PeSemanticExactFixedEmission exact{};
+    check(equalCanonicalOwnerBytes(owner, canonical, exact),
+          "every embedded constant mask has exact canonical bytes");
+    ++constantCases;
+    owner.reset();
+    canonical.resetAndReleaseRetained();
+  }
+  check(constantCases == (1u << 6u),
+        "constant refinement covers all 2^6 embedded-range masks");
+
+  // Exhaust all length-three words over two payload values, including A/B/A.
+  // One mutable source buffer is reused and overwritten after every admission.
+  for (std::uint32_t word = 0u; word < 8u; ++word) {
+    std::array<std::byte, 4u> values{};
+    for (std::uint32_t step = 0u; step < 3u; ++step) {
+      values.fill(((word >> step) & 1u) ? std::byte{0x22} : std::byte{0x11});
+      auto input = base(PeSemanticProducerKind::VsBoolConstant, step + 1u, step + 1u);
+      input.setConst.registerCount = 1u;
+      input.constantBytes = values;
+      check(appendCanonicalSemanticRecord(canonical, input) && owner.admit(input),
+            "each bounded A/B value word admits in source order");
+      values.fill(std::byte{0xee});
+    }
+    PeSemanticExactFixedEmission exact{};
+    PeSemanticSegmentedEmission segmented{};
+    check(equalCanonicalOwnerBytes(owner, canonical, exact) &&
+              owner.emitSegmented(segmented) &&
+              ownerSegmentedRolesEqualExact(exact, segmented),
+          "each bounded value sequence owns exact bytes after source overwrite");
+    owner.reset();
+    canonical.resetAndReleaseRetained();
+  }
+}
+
+void directCanonicalMutationAndPendingRefinement() {
+  Owner owner;
+  CommandChunkBuilder canonical;
+  PeAllFamilySemanticTokenLedger pending;
+  D9CTexture bindingTexture;
+  D9CTexture replacementTexture;
+
+  std::array<std::byte, 4u> standaloneBytes{
+      std::byte{0x11}, std::byte{0x12}, std::byte{0x13}, std::byte{0x14}};
+  auto first = base(PeSemanticProducerKind::VsBoolConstant, 0u, 0u);
+  first.setConst.registerCount = 1u;
+  first.constantBytes = standaloneBytes;
+  first.sourceOrdinal = pending.beginSource(first.recordType);
+  first.recordOrdinal = 101u;
+  check(first.sourceOrdinal != 0u &&
+            appendCanonicalSemanticRecord(canonical, first) && owner.admit(first) &&
+            projectLastCommittedSemanticRecord(owner, pending),
+        "A admission accepts and projects its standalone constant witness");
+  standaloneBytes[0] = std::byte{0xa1};
+  standaloneBytes[1] = std::byte{0xa2};
+
+  std::array<D9CCommandChunkWireRenderState, 1u> stagedRows{{{7u, 19u}}};
+  std::array<D9CCommandChunkWireRenderState, 1u> destinationRows{{{7u, 29u}}};
+  std::array<std::byte, 4u> embeddedBytes{
+      std::byte{0x21}, std::byte{0x22}, std::byte{0x23}, std::byte{0x24}};
+  std::array<std::byte, 2u> upIndexBytes{};
+  std::array<std::byte, 3u> upVertexBytes{
+      std::byte{0x41}, std::byte{0x42}, std::byte{0x43}};
+  std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>, 1u>
+      textureBindings{{{
+          .wire = {.slot = 0u, .valid = 1u},
+          .object = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+              &bindingTexture, 0xc101u, 7u),
+      }}};
+  auto stagedSecond = base(PeSemanticProducerKind::DrawIndexedPrimitiveUp, 0u, 0u);
+  stagedSecond.draw.primitiveType = 1u;
+  stagedSecond.draw.primitiveCount = 1u;
+  stagedSecond.draw.numVertices = 1u;
+  stagedSecond.draw.stride = 3u;
+  stagedSecond.draw.indexFormat = 101u;
+  stagedSecond.sparse.renderStates = stagedRows;
+  stagedSecond.sparse.vsBoolConstants = {
+      .startRegister = 3u, .registerCount = 1u, .registerBytes = embeddedBytes};
+  stagedSecond.sparse.upIndexData = upIndexBytes;
+  stagedSecond.sparse.upVertexData = upVertexBytes;
+  auto destinationSparse = stagedSecond.sparse;
+  destinationSparse.renderStates = destinationRows;
+  destinationSparse.textures = textureBindings;
+  auto second = borrowPeSemanticRecordInput(stagedSecond);
+  second.destination.sourceOrdinal = pending.beginSource(stagedSecond.recordType);
+  second.destination.recordOrdinal = 202u;
+  second.destination.sparse = &destinationSparse;
+  check(second.destination.sourceOrdinal != 0u,
+        "B issues a source ordinal");
+  check(appendCanonicalSemanticRecord(canonical, second),
+        "B canonical oracle accepts mixed binding plus scalar state");
+  check(owner.admit(second), "B owner accepts mixed binding plus scalar state");
+  check(projectLastCommittedSemanticRecord(owner, pending),
+        "B projects mixed binding plus scalar state");
+  destinationRows[0].value = 0x2au;
+  textureBindings[0].wire.slot = 4u;
+  textureBindings[0].object = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+      &replacementTexture, 0xc102u, 8u);
+  embeddedBytes[0] = std::byte{0xb1};
+  upIndexBytes[0] = std::byte{0xb2};
+  upVertexBytes[0] = std::byte{0xb3};
+
+  std::array<D9CRect, 1u> clearRects{{{1, 2, 3, 4}}};
+  auto third = base(PeSemanticProducerKind::Clear, 0u, 0u);
+  third.clear.rectCount = 1u;
+  third.clearRects = clearRects;
+  third.sourceOrdinal = pending.beginSource(third.recordType);
+  third.recordOrdinal = 303u;
+  check(third.sourceOrdinal != 0u &&
+            appendCanonicalSemanticRecord(canonical, third) && owner.admit(third) &&
+            projectLastCommittedSemanticRecord(owner, pending),
+        "A admission accepts and projects its clear-rectangle witness");
+  clearRects[0] = {};
+
+  // These mutations happen after all three admissions and immediately before
+  // the final emission. The expected builder bytes were already copied at each
+  // admission, so only an owner that materializes canonical payload eagerly
+  // can preserve the A/B/A sequence.
+  standaloneBytes[2] = std::byte{0xc1};
+  destinationRows[0].value = 0x3au;
+  embeddedBytes[1] = std::byte{0xc2};
+  upIndexBytes[1] = std::byte{0xc3};
+  upVertexBytes[1] = std::byte{0xc4};
+  clearRects[0] = {};
+
+  PeSemanticExactFixedEmission exact{};
+  const auto sealed = canonical.seal();
+  check(sealed.valid() && owner.emitExactFixed(exact) && exact.valid() &&
+            sealed.blob.size() == exact.wireBytes &&
+            std::equal(sealed.blob.begin(), sealed.blob.end(), exact.wire.begin()),
+        "accepted A/B/A mutations preserve exact canonical serialized bytes");
+  PeSemanticSegmentedEmission segmented{};
+  check(owner.emitSegmented(segmented) &&
+            ownerSegmentedRolesEqualExact(exact, segmented),
+        "ExactFixed and segmented role views are byte-equivalent");
+
+  const auto& header = exact.transport.header;
+  const auto& producerIdentity = exact.transport.producerIdentity;
+  D9CCommandChunkWireHandleEntry handle{};
+  std::memcpy(&handle, exact.wire.data() + header.handleTableOffset,
+              sizeof(handle));
+  check(header.recordCount == 3u && header.handleCount == 1u &&
+            handle.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
+            handle.generation == 7u && handle.objectId == 0xc101u,
+        "serialized handle identity is distinct from source and record ordinals");
+  check(producerIdentity.firstEventOrdinal == 1u &&
+            producerIdentity.lastEventOrdinal == 1u &&
+            producerIdentity.firstSourceOrdinal == first.sourceOrdinal &&
+            producerIdentity.lastSourceOrdinal == third.sourceOrdinal,
+        "transport producer identity preserves the accepted source interval");
+  check(owner.record(0u).sourceOrdinal == first.sourceOrdinal &&
+            owner.record(0u).recordOrdinal == first.recordOrdinal &&
+            owner.record(1u).sourceOrdinal == second.destination.sourceOrdinal &&
+            owner.record(1u).recordOrdinal == second.destination.recordOrdinal &&
+            owner.record(2u).sourceOrdinal == third.sourceOrdinal &&
+            owner.record(2u).recordOrdinal == third.recordOrdinal,
+        "owner records preserve source and record ordinals through direct admission");
+  check(pending.acceptedCount() == 3u && pending.pendingCount() == 3u &&
+            pending.pending(0u).sourceOrdinal == first.sourceOrdinal &&
+            pending.pending(0u).recordOrdinal == first.recordOrdinal &&
+            pending.pending(1u).sourceOrdinal == second.destination.sourceOrdinal &&
+            pending.pending(1u).recordOrdinal == second.destination.recordOrdinal &&
+            pending.pending(2u).sourceOrdinal == third.sourceOrdinal &&
+            pending.pending(2u).recordOrdinal == third.recordOrdinal,
+        "PendingDelta-style semantic projection accepts each A/B/A record once");
+  check(owner.retainedCount() == 1u && bindingTexture.refs == 3u &&
+            replacementTexture.refs == 1u,
+        "accepted binding retains once per owner while the oracle holds its own retain");
+  owner.reset();
+  check(pending.settleCapture(PeSemanticCaptureDisposition::Skipped) &&
+            pending.pendingCount() == 0u && pending.settledCount() == 3u,
+        "accepted A/B/A PendingDelta witnesses settle exactly once");
+  canonical.resetAndReleaseRetained();
+  check(bindingTexture.refs == 1u && replacementTexture.refs == 1u,
+        "direct mutation refinement releases the retained multiplicity at reset");
+}
+
+void directCanonicalQuotaAndSettlementRefinement() {
+  {
+    using Tiny = PeSemanticBatchOwner<1u, 8u, 128u, 4u, 4u>;
+    Tiny owner;
+    D9CSurface surface;
+    auto exact = base(PeSemanticProducerKind::Present, 1u, 1u);
+    exact.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface,
+                                                              0xd001u, 1u);
+    PeSemanticPreparedRecord witness{};
+    check(owner.prepareAdmission(exact, witness) ==
+              PeSemanticAdmissionOutcome::Admissible,
+          "record quota exact fit prepares");
+    check(owner.admit(exact), "record quota exact fit admits");
+    auto plusOne = exact;
+    plusOne.sourceOrdinal = 2u;
+    plusOne.recordOrdinal = 2u;
+    check(!owner.admit(plusOne) &&
+              owner.lastAdmissionFailure() == Tiny::AdmissionFailure::Capacity &&
+              owner.size() == 1u,
+          "record quota plus-one rejects without disturbing the exact fit");
+    owner.reset();
+  }
+  {
+    using Tiny = PeSemanticBatchOwner<2u, 8u, 1u, 4u, 4u>;
+    Tiny owner;
+    std::array<std::byte, 1u> one{{std::byte{0x51}}};
+    auto exact = base(PeSemanticProducerKind::DrawPrimitiveUp, 1u, 1u);
+    exact.sparse.upVertexData = one;
+    check(owner.admit(exact), "semantic-byte quota exact fit admits");
+    auto plusOne = exact;
+    std::array<std::byte, 1u> another{{std::byte{0x52}}};
+    plusOne.sourceOrdinal = 2u;
+    plusOne.recordOrdinal = 2u;
+    plusOne.sparse.upVertexData = another;
+    check(!owner.admit(plusOne) &&
+              owner.lastAdmissionFailure() == Tiny::AdmissionFailure::Capacity &&
+              owner.size() == 1u,
+          "semantic-byte quota plus-one rejects before owner mutation");
+    owner.reset();
+  }
+  {
+    using Tiny = PeSemanticBatchOwner<2u, 8u, 128u, 1u, 4u>;
+    Tiny owner;
+    std::array<D9CRect, 1u> one{};
+    auto exact = base(PeSemanticProducerKind::Clear, 1u, 1u);
+    exact.clear.rectCount = 1u;
+    exact.clearRects = one;
+    check(owner.admit(exact), "rectangle quota exact fit admits");
+    auto plusOne = exact;
+    std::array<D9CRect, 1u> another{{{9, 10, 19, 20}}};
+    plusOne.sourceOrdinal = 2u;
+    plusOne.recordOrdinal = 2u;
+    plusOne.clear.rectCount = 1u;
+    plusOne.clearRects = another;
+    check(!owner.admit(plusOne) &&
+              owner.lastAdmissionFailure() == Tiny::AdmissionFailure::Capacity &&
+              owner.size() == 1u,
+          "rectangle quota plus-one rejects before owner mutation");
+    owner.reset();
+  }
+  {
+    using Tiny = PeSemanticBatchOwner<2u, 8u, 128u, 4u, 1u>;
+    Tiny owner;
+    std::array<D9CCommandChunkWireRenderState, 1u> one{{{1u, 2u}}};
+    auto exact = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+    exact.sparse.renderStates = one;
+    check(owner.admit(exact), "scalar sparse quota exact fit admits");
+    auto plusOne = exact;
+    std::array<D9CCommandChunkWireRenderState, 1u> another{{{3u, 4u}}};
+    plusOne.sourceOrdinal = 2u;
+    plusOne.recordOrdinal = 2u;
+    plusOne.sparse.renderStates = another;
+    check(!owner.admit(plusOne) &&
+              owner.lastAdmissionFailure() == Tiny::AdmissionFailure::Capacity &&
+              owner.size() == 1u,
+          "scalar sparse quota plus-one rejects before owner mutation");
+    owner.reset();
+  }
+  {
+    using Tiny = PeSemanticBatchOwner<2u, 1u, 128u, 4u, 4u>;
+    Tiny owner;
+    D9CSurface firstSurface;
+    D9CSurface secondSurface;
+    auto exact = base(PeSemanticProducerKind::Present, 1u, 1u);
+    exact.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+        &firstSurface, 0xd101u, 1u);
+    check(owner.admit(exact), "pin quota exact fit admits");
+    auto plusOne = exact;
+    plusOne.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+        &secondSurface, 0xd102u, 1u);
+    plusOne.sourceOrdinal = 2u;
+    plusOne.recordOrdinal = 2u;
+    check(!owner.admit(plusOne) &&
+              owner.lastAdmissionFailure() == Tiny::AdmissionFailure::Capacity &&
+              owner.size() == 1u && secondSurface.refs == 1u,
+          "pin quota plus-one rejects without retaining a novel object");
+    owner.reset();
+    check(firstSurface.refs == 1u && secondSurface.refs == 1u,
+          "pin quota exact/plus-one refinement balances retention");
+  }
+
+  using PrefixOwner = PeSemanticBatchOwner<4u, 4u, 4096u, 4u, 4u>;
+  PrefixOwner owner;
+  CommandChunkBuilder canonical;
+  D9CSurface prefixSurface;
+  D9CTexture retryTexture;
+  auto prefix = base(PeSemanticProducerKind::Present, 11u, 111u);
+  prefix.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &prefixSurface, 0xd201u, 1u);
+  std::array<D9CCommandChunkWireRenderState, 1u> retryRows{{{12u, 112u}}};
+  std::array<std::byte, 4u> retryConstants{
+      std::byte{0x41}, std::byte{0x42}, std::byte{0x43}, std::byte{0x44}};
+  std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>, 1u>
+      retryTextures{{{
+          .wire = {.slot = 0u, .valid = 1u},
+          .object = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(&retryTexture,
+                                                             0xd202u, 1u),
+      }}};
+  auto retry = base(PeSemanticProducerKind::DrawPrimitive, 12u, 112u);
+  retry.sparse.renderStates = retryRows;
+  retry.sparse.vsBoolConstants = {
+      .startRegister = 5u, .registerCount = 1u, .registerBytes = retryConstants};
+  retry.sparse.textures = retryTextures;
+  check(appendCanonicalSemanticRecord(canonical, prefix) && owner.admit(prefix),
+        "settlement prefix admits in owner and canonical oracle");
+  PeSemanticExactFixedEmission beforeFailure{};
+  check(owner.emitExactFixed(beforeFailure), "settlement prefix emits before retry");
+  std::array<std::byte, 4096u> prefixBytes{};
+  std::copy(beforeFailure.wire.begin(), beforeFailure.wire.end(),
+            prefixBytes.begin());
+  std::uint32_t settlementCalls = 0u;
+  check(!owner.tryAppendOwnedRecord(retry, [&]() noexcept {
+          ++settlementCalls;
+          return false;
+        }) &&
+            settlementCalls == 1u && owner.size() == 1u &&
+            owner.record(0u).sourceOrdinal == prefix.sourceOrdinal &&
+            owner.record(0u).recordOrdinal == prefix.recordOrdinal &&
+            owner.retainedCount() == 1u && retryTexture.refs == 1u,
+        "failed settlement rolls back while preserving the accepted prefix");
+  PeSemanticExactFixedEmission afterFailure{};
+  check(owner.emitExactFixed(afterFailure) &&
+            afterFailure.wireBytes == beforeFailure.wireBytes &&
+            afterFailure.wireBytes <= prefixBytes.size() &&
+            std::equal(prefixBytes.begin(), prefixBytes.begin() + afterFailure.wireBytes,
+                       afterFailure.wire.begin()),
+        "failed settlement preserves serialized prefix identity");
+  retryRows[0] = {.state = 13u, .value = 113u};
+  retryConstants[0] = std::byte{0x7f};
+  retryTextures[0].wire.slot = 3u;
+  check(retryTexture.refs == 1u,
+        "rejected mixed retry leaves its source pin available for mutation");
+  check(appendCanonicalSemanticRecord(canonical, retry) &&
+            owner.tryAppendOwnedRecord(retry, []() noexcept { return true; }),
+        "settlement retry accepts the mutated mixed Draw/APPLY_STATE record");
+  PeSemanticExactFixedEmission final{};
+  check(equalCanonicalOwnerBytes(owner, canonical, final),
+        "settlement retry preserves exact canonical prefix and suffix bytes");
+  check(owner.record(0u).sourceOrdinal == prefix.sourceOrdinal &&
+            owner.record(1u).sourceOrdinal == retry.sourceOrdinal &&
+            owner.retainedCount() == 2u && retryTexture.refs == 3u,
+        "settlement retry retains once in the owner and once in the oracle");
+  owner.reset();
+  canonical.resetAndReleaseRetained();
+  check(prefixSurface.refs == 1u && retryTexture.refs == 1u,
+        "failed settlement and retry leave the typed pin ledger balanced");
+}
+
+void directCanonicalLedgerExcludesDuplicateStaging() {
+  dxmt9::core::CopyMaterializationLedger ledger;
+  dxmt9::core::ScopedCopyMaterializationLedger observe(
+      dxmt9::core::CopyMaterializationOwner::Pe, ledger);
+  Owner owner;
+  D9CTexture texture;
+  std::array<D9CCommandChunkWireRenderState, 1u> renderStates{{{9u, 10u}}};
+  std::array<std::byte, 4u> embeddedBytes{
+      std::byte{0x61}, std::byte{0x62}, std::byte{0x63}, std::byte{0x64}};
+  std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>, 1u>
+      textures{{{
+          .wire = {.slot = 0u, .valid = 1u},
+          .object = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(&texture,
+                                                             0xe101u, 2u),
+      }}};
+  auto input = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+  input.sparse.renderStates = renderStates;
+  input.sparse.textures = textures;
+  input.sparse.vsBoolConstants = {
+      .startRegister = 2u, .registerCount = 1u, .registerBytes = embeddedBytes};
+  check(owner.admit(input), "ledger refinement admits one mixed direct record");
+  PeSemanticSegmentedEmission segmented{};
+  check(owner.emitSegmented(segmented) &&
+            segmented.transport.header.recordCount == 1u &&
+            segmented.transport.header.handleCount == 1u,
+        "ledger refinement derives canonical roles from segmented emission");
+  const auto admitted = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::PeSemanticOwnerAdmission);
+  const auto expectedAdmissionBytes =
+      sizeof(PeSemanticRecordSlot) +
+      sizeof(PeSemanticPhysicalPin<D9CTexture, PeSemanticTextureIdentity>) +
+      sizeof(PeSemanticOwnedBinding<D9CCommandChunkWireTextureBinding,
+                                    PeSemanticTextureIdentity>) +
+      static_cast<std::size_t>(segmented.transport.header.recordCount) *
+          sizeof(D9CCommandChunkWireRecordHeader) +
+      static_cast<std::size_t>(segmented.transport.header.handleCount) *
+          sizeof(D9CCommandChunkWireHandleEntry) +
+      segmented.transport.header.payloadArenaSize;
+  check(admitted.calls == 1u && admitted.bytes == expectedAdmissionBytes &&
+            admitted.retainedBytes == admitted.bytes &&
+            admitted.retainedBytesPeak == admitted.bytes,
+        "direct admission ledger excludes scalar and constant duplicate staging");
+
+  constexpr auto kNoDuplicateStaging = std::array{
+      dxmt9::core::CopyMaterializationClass::PeBuilderTemporary,
+      dxmt9::core::CopyMaterializationClass::PeSealRecords,
+      dxmt9::core::CopyMaterializationClass::PeSealHandles,
+      dxmt9::core::CopyMaterializationClass::PeSealPayload,
+      dxmt9::core::CopyMaterializationClass::PeSectionAppend,
+      dxmt9::core::CopyMaterializationClass::UpScratch,
+      dxmt9::core::CopyMaterializationClass::ArenaByteCopy,
+  };
+  for (const auto materializationClass : kNoDuplicateStaging) {
+    const auto snapshot = ledger.snapshot(materializationClass);
+    check(snapshot.calls == 0u && snapshot.bytes == 0u &&
+              snapshot.semanticCalls == 0u && snapshot.retainedBytes == 0u,
+          "eliminated duplicate staging remains absent from physical ledger");
+  }
+
+  PeSemanticExactFixedEmission exact{};
+  check(owner.emitExactFixed(exact),
+        "direct ledger refinement emits its canonical final wire");
+  const auto finalWire = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::PeWireFinal);
+  check(finalWire.calls == 1u && finalWire.bytes == exact.wireBytes &&
+            finalWire.retainedBytes == exact.wireBytes,
+        "final wire is the sole additional physical emission ledger row");
+  const auto repeated = input;
+  auto second = repeated;
+  second.sourceOrdinal = 2u;
+  second.recordOrdinal = 2u;
+  check(owner.admit(second) && owner.retainedCount() == 1u &&
+            texture.refs == 2u,
+        "repeated direct identity retains once while records remain distinct");
+  const auto admittedTwice = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::PeSemanticOwnerAdmission);
+  check(admittedTwice.calls == 2u && admittedTwice.retainedBytes != 0u,
+        "repeated admission records physical owner growth without pin duplication");
+  owner.reset();
+  check(texture.refs == 1u &&
+            ledger.snapshot(
+                dxmt9::core::CopyMaterializationClass::PeSemanticOwnerAdmission)
+                    .retainedBytes == 0u &&
+            ledger.snapshot(dxmt9::core::CopyMaterializationClass::PeWireFinal)
+                    .retainedBytes == 0u,
+        "ledger refinement reset releases the single retained object");
+}
+
 // The witness is the only frontier arithmetic in the append path, so both
 // settlement outcomes must agree with it exactly: a rejected settlement
 // restores the captured frontier and a durable one publishes the proved one.
@@ -1455,11 +2316,15 @@ void collisionCopyOverflowAndRetry() {
   auto constant = base(PeSemanticProducerKind::VsBoolConstant, 8u, 8u);
   constant.setConst.registerCount = 1u;
   constant.constantBytes = copiedBytes;
-  check(owner.admit(constant), "constant admission copies borrowed bytes");
+  CommandChunkBuilder constantCanonical;
+  check(appendCanonicalSemanticRecord(constantCanonical, constant) &&
+            owner.admit(constant), "constant admission copies borrowed bytes");
   copiedBytes[0] = std::byte{0x7f};
-  check(owner.constantBytes(owner.record(0u))[0] == std::byte{0x11},
-        "constant arena isolates borrowed input mutation");
+  PeSemanticExactFixedEmission constantExact{};
+  check(equalCanonicalOwnerBytes(owner, constantCanonical, constantExact),
+        "constant arena isolates borrowed input mutation in canonical payload");
   owner.reset();
+  constantCanonical.resetAndReleaseRetained();
 
   std::array<std::byte, 2u> up{std::byte{0x31}, std::byte{0x32}};
   std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>, 1u> sparseTexture{};
@@ -1470,14 +2335,18 @@ void collisionCopyOverflowAndRetry() {
   auto upRecord = base(PeSemanticProducerKind::DrawPrimitiveUp, 9u, 9u);
   upRecord.sparse.upVertexData = up;
   upRecord.sparse.textures = sparseTexture;
-  check(owner.admit(upRecord), "UP and sparse typed arenas admit");
+  CommandChunkBuilder upCanonical;
+  check(appendCanonicalSemanticRecord(upCanonical, upRecord) &&
+            owner.admit(upRecord), "UP and sparse typed arenas admit");
   up[0] = std::byte{0x7e};
   sparseTexture[0].wire.slot = 4u;
-  check(owner.upVertexBytes(owner.record(0u))[0] == std::byte{0x31} &&
-            owner.textureBindings(owner.record(0u)).size() == 1u &&
-            owner.textureBindings(owner.record(0u))[0].wire.slot == 0u,
-        "UP and sparse inputs are copied into owned arenas");
+  PeSemanticExactFixedEmission upExact{};
+  check(equalCanonicalOwnerBytes(owner, upCanonical, upExact) &&
+            upExact.transport.header.handleCount == 1u &&
+            upExact.transport.header.payloadArenaSize >= up.size(),
+        "UP and sparse inputs preserve owned canonical payload and binding section");
   owner.reset();
+  upCanonical.resetAndReleaseRetained();
   check(partialSource.refs == 1u, "sparse pin is released at reset");
 
   std::array<SparseBindingInput<D9CCommandChunkWireTextureBinding>, 1u>
@@ -2215,9 +3084,15 @@ int main() {
     retentionIdentityAndPointerAliasesReject();
     capacityFailureIsPreEffectAndRetryableAfterBoundary();
     preparedAdmissionWitnessTruthTable();
+    preparedAdmissionReinitializesReusedWitness();
+    directCanonicalScalarAndConstantMasks();
+    directCanonicalMutationAndPendingRefinement();
+    directCanonicalQuotaAndSettlementRefinement();
+    directCanonicalLedgerExcludesDuplicateStaging();
     preparedWitnessSettlementAndRollback();
     classificationAndLifetime();
     partialRectClearMatchesCanonicalBuilder();
+    emptyClearSpanMatchesCanonicalAndResetReuse();
     largeCanonicalPayloadSurvivesRepeatedExactEmission();
     exactPaddingWriterAdversarial();
     collisionCopyOverflowAndRetry();

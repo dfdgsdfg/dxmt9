@@ -512,9 +512,10 @@ satisfy this production boundary.
 
 The production recorder uses one mandatory bounded `PeSemanticBatchOwner` as
 its sole final-wire transaction. All 21 producer rows have typed record slots,
-kind-qualified physical pin arenas,
-source/record checkpoints, constant/UP byte arenas, rectangle storage, and
-sparse typed arenas. Admission is atomic and fail-closed for generation
+kind-qualified physical pin arenas, source/record checkpoints, and bounded
+canonical payload ownership. Logical constant/UP, rectangle, and sparse quotas
+remain admission constraints even when canonical payload bytes replace their
+intermediate typed storage under R-CORE-REC-7.11. Admission is atomic and fail-closed for generation
 collisions and capacity overflow; successful settlement preserves the bounded
 warm retainer epoch and clears used ranges, while Reset/discard releases every
 retain. Its typed `appendOwnedRecord` adapter and const emission visitors
@@ -623,3 +624,30 @@ call returns, the importer must establish complete Unix ownership through the
 named `copy.bridge.raw-owned` operation or a separately specified atomic
 shared-lease adoption protocol. PE must not prebuild backend-private
 `ChunkSlot`/Arena SoA, Unix resource resolutions, or Metal binding state.
+
+**R-CORE-REC-7.11** Pointer-free scalar sparse rows and variable payload tails
+may be constructed directly in the owner's canonical payload region during
+synchronous admission. No duplicate typed value arena is required after those
+bytes are committed. The source remains a call-local borrow under the recorder
+guard; no input pointer or span may enter a record slot, survive admission, or
+be consulted by seal, capture, retry, or segmented emission. Binding rows and
+kind-qualified pins retain their existing ownership contract.
+
+This representation change must preserve the logical semantic-byte, rectangle,
+and per-category sparse quotas, all record/handle ordinals, exact canonical
+bytes including padding, and CapacityPre/CapacityPost cadence. Physical
+materialization accounting must exclude removed staging rather than equating
+logical quota consumption with copied bytes. Commit exposes one complete
+record only after payload construction and PendingDelta acceptance; failure
+restores the previous committed prefix, logical frontiers, ordinals, and pin
+multiplicity. Unpublished tail bytes confer no authority and must be fully
+initialized before a subsequent successful admission exposes them.
+
+Bounded native differential refinement must compare the actual owner with the
+canonical builder oracle across all affected families, mixed scalar/binding
+records, A/B/A source mutation, malformed and capacity rejection, partial pin
+acquisition, settlement failure/retry, reset/reuse, and both emission forms.
+Existing recorder transition models retain authority over append/settlement
+ordering; they do not prove payload bytes or Wine/Metal behavior. Transport,
+queue policy, and chunk-size promotion require independent evidence and must
+not be coupled to removal of intermediate PE value storage.
