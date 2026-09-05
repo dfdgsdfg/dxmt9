@@ -687,11 +687,14 @@ sequenceDiagram
     CQ-->>App: return after queue ownership
 ```
 
-The bridge branch is two-phase since the commit-replay offload became the engine
-default (`R-BACK-2.51`): validation, import, wrapper retention and bulk resource
-marking stay synchronous on the app thread, and only record replay and slot
-publish are deferred to the worker. `Rec` builds `SparseStateInput` directly —
-there is no intermediate record format between the PE state shadow and the wire.
+The bridge branch is two-phase (`R-BACK-2.51`): validation, Unix byte ownership,
+wrapper retention, and backing capture stay on the application thread before
+Replay publication. Default/Legacy admission also performs combined resource
+marking; explicitly admitted CPU-ready paths use the narrower marking placement
+defined by that requirement. Replay and final-slot construction run on the
+worker. PE owns canonical semantic-source construction, not backend SoA.
+Crossing the ABI is not itself a thread handoff; §6.6 separates these boundaries
+and their required work without changing the current provider defaults.
 
 CPU-bound design rules:
 
@@ -888,7 +891,7 @@ flowchart TD
 |---|---|---|---|
 | Application / Wine API thread | D3D9-visible call order, PE validation, PE `DeviceState` mutation | Unix replay/encode worker, GPU execution of older chunks, finish thread | call Metal directly or keep backend-owned pointers |
 | PE recorder / bridge call frame | POD chunk construction, local wire blob lifetime | prior GPU work, async pipeline compilation | expose PE COM pointers or borrowed stack spans after return |
-| Commit synchronous half (app thread) | wire validation, unix-owned blob copy + wrapper retention, bulk resource marking, raw-queue push | worker replaying/encoding *older* chunks, GPU | hand off a record before validation and marking complete (`R-BACK-2.51(a)`) |
+| Commit synchronous half (app thread) | wire validation, Unix source ownership, resolved/retained wrappers, backing capture/residency, lane-required resource marking, atomic raw-queue/ledger publication | worker replaying/encoding *older* chunks, GPU | publish without the required admission witness; defer validation or marking outside the explicit `R-BACK-2.51(a)` contract (§6.6) |
 | Replay/materialization worker (device-owned) | FIFO Replay, transactional state projection, and carrier-free final `ChunkSlot` construction | application recording later chunks, encode-thread execution, and GPU execution of older command buffers | call Metal, publish partial final storage, or reorder sources |
 | Dedicated encode thread (stable serial topology) | Ready `ChunkSlot` consumption, logical pass/session, Metal encoding, submission identity | application recording and Replay/materialization of later sources | read PE state, mutate source storage, or reorder sources |
 | Fused Replay/encode worker (optional topology) | FIFO Replay, transactional state projection, direct cursor, logical pass/session, Metal encoding, submission identity | application recording later chunks and GPU execution of older command buffers | publish a complete draw SoA to a downstream encode thread or reorder sources |
@@ -1013,6 +1016,133 @@ independence liveness properties — `NoQueryWaitBlocksPresent`,
 under fairness on all six action families, with the `PacingOrdering`
 invariant `presentCompletedSeqId ≤ completedSeqId` as the only relation
 between the timelines.
+
+---
+
+### 6.6 CPU Handoff And Minimal Admission
+
+R-ARCH-6.12–6.17 distinguish three boundaries: PE-to-Unix ABI transfer,
+application-to-Replay publication, and Replay-to-encode Ready publication.
+The first two execute on the same calling thread until the raw queue adopts
+the source. A Unix-owned function is not necessarily worker-executed.
+
+| Stage | Required work | Work that does not belong here by default |
+|---|---|---|
+| PE recording | D3D9-visible validation/state and PendingDelta meaning; canonical sparse bytes; qualified identities and bridge-duration lifetime | Unix object resolution, pass planning, final `ChunkSlot` SoA, Metal bindings |
+| Synchronous Unix admission | Current wire validation; complete owned bytes; resolved/retained wrappers; backing versions/raw residency; lane-required marks; atomic queue/ledger adoption | Draw-island analysis, execution capacity planning, repeated state expansion, PSO scheduling |
+| Replay worker | FIFO semantic projection; final capacity/resource-closure plan; one transactional final-slot construction; ordered controls | A second wire serialization or a large temporary per-draw carrier |
+| Encode owner | Final indexed source consumption; session/pass state; encoder-local binding shadows; Metal lowering and submission | Re-importing PE wire or recreating the same resolved semantic state |
+
+This is an execution-placement contract, not a requirement to introduce another
+queue. Representation ownership remains R-ARCH-7.8/7.20–7.24. Fused or parallel
+providers must refine the same source semantics and retain their separate
+eligibility/economy gates; the stable serial topology is unchanged.
+
+The synchronous admission witness fixes the source interval, used byte extents,
+resource identities/lifetimes, concrete backing versions, and drain/publication
+outcome. A retained buffer wrapper does not freeze its contents: a draw queued
+before DISCARD must still read the earlier backing after the caller returns.
+Snapshot/residency and FIFO mutation contracts solve that obligation; moving a
+lookup to the worker without either is not an optimization of the same semantics.
+
+Current ownership copy and validation remain in
+`src/d3d9/device_c_replay_offload.cpp` (`prepareOffloadChunk`,
+`prepareSegmentedOffloadChunk`). In
+`src/d3d9/device_c_chunk_replay.cpp`,
+`persistResolvedResourcesAndCaptureBindings` also runs before the raw queue
+push, while `replayRawChunk` runs on the Replay worker. These are the concrete
+places to attribute synchronous cost; this specification does not claim they
+are already minimal. Validation of owned bytes remains mandatory under the
+current contract. Splitting cheap admission checks from deferred semantic
+validation requires an explicit failure-policy refinement, not merely a new
+worker callsite.
+
+Transfer batches amortize bridge, ownership, and wake costs while allowing
+Replay to start before a complete frame arrives. Their bounded publication
+policy is independent of draw islands, final-slot capacity, and Metal passes.
+A pressure-triggered source boundary must not become an implicit pass/CB split;
+required semantic boundaries and separately admitted submission policies still
+apply. A more frequent publication policy must account for both time waiting
+for publication and increased bridge/queue work. It must not add an always-on
+per-record clock merely to claim lower latency.
+
+Replay's indexed output keeps one minimal draw row and references shared
+state/uniform generations and resource sets, with Clear/Query/Present and other
+coordinator commands retained in order. A final source that aliases raw bytes
+retains their storage lease. Releasing redundant physical raw storage after an
+independent final projection is distinct from logical source/GPU completion;
+it needs explicit no-borrow/no-locator evidence and cannot release resource
+pins still needed by encode or GPU work.
+
+Acceptance is refinement-first under R-VERIF-1.5–1.8. The bounded model/native
+matrix must include caller mutation after return, draw-before-rename, stale
+generation, enqueue rejection, replay failure, direct-call drain, Present-only
+progress, and reclaim waking a blocked producer. Existing raw-queue, byte-identity,
+Present-ordinal, and source-lifecycle tests provide component evidence, not
+automatic proof of a newly relocated phase. Reports must use the R-ARCH-6.17
+phase/population attribution and R-ARCH-7.7 ledger, then verify unchanged command
+order, pixels where affected, locality, latency, and memory before claiming an
+end-to-end gain. The [architecture gap](gap.md) records missing integration.
+
+### 6.7 Safe Batch Cuts And Bounded Policy Optimization
+
+R-ARCH-6.18–6.21 separate three concerns:
+
+| Layer | Authority | Evidence |
+|---|---|---|
+| Admissibility | Pure bounded relation for a complete owned prefix, identity/version safety, capacities, and mandatory control boundaries | Shared reducer/native truth tables and bounded safety/progress refinement over permitted choices |
+| Deterministic reference | Maximal fitting prefix plus required flush/progress events; declared ABI/memory bounds | Exact-stream differential, oversized-record and allocation/publication fault cases |
+| Economy policy | Choice among admissible cuts using a declared latency/throughput/cost objective | Timing-qualified replay, bounded offline search, model calibration, then matched runtime gates |
+
+The abstract publication transition is
+`Writing -> SealedBatch + AdmissionWitness -> UnixOwnedBatch`.
+The witness proves replayability after caller return, not performance quality;
+it does not authorize a retained PE pointer or a new shared-memory ABI. An
+incremental reducer may maintain exact counts and version-qualified facts rather
+than rescan or rematerialize the whole prefix after each record. Pure planning
+does not itself own external resources: the concrete admission transaction
+establishes and consumes the lifetime capabilities under R-ARCH-6.13.
+
+The safety model allows nondeterministic choices among legal cuts and checks
+that every choice preserves the same accepted ordered commands, semantic payload
+bytes, resource versions, exactly-once effects, and required completion order.
+Comparison uses original producer-record identities: different cuts may change
+wire framing, local handle indices, and physical submission sequence numbers.
+Whole-wire byte equality applies to equivalent framing, not arbitrary regrouping.
+Specified failure prefixes remain governed by R-ARCH-6.16.
+Liveness separately requires the declared
+flush/terminal/wake actions and fairness; safety alone cannot exclude a policy
+that waits forever. Native binding must include a full batch followed by an
+oversized record, a final partial batch, Present-only progress, caller mutation,
+failed enqueue/retry, and stale generation. Type-separated physical regions
+still refer to one original-order record stream.
+
+For the restricted batch-count objective in R-ARCH-6.20, maximal-prefix greedy
+partitioning is optimal: any feasible first batch ends no later than the greedy
+cut; with fixed nonnegative additive sizes, removing that consumed prefix from
+the remaining batches cannot make them exceed capacity. Repeating the argument
+bounds the greedy batch count by any feasible ordered partition. This proof
+does not cover boundary-dependent state emission/dedup, variable call costs, or
+the benefit of starting Replay earlier. A deterministic record limit chosen by
+measurement is still an empirical policy parameter.
+
+For a known finite trace and independent additive batch costs, an exact offline
+reference can use `D(j) = min(D(i) + cost(i,j))` over feasible intervals `[i,j)`,
+with `D(0) = 0`. Pipeline overlap instead requires a model carrying stage
+availability, arrivals, waits, and memory occupancy; summing batch CPU costs is
+not a frame-time objective. Exhaustive search, dynamic programming, or a solver
+must state which model it solves. A fast-next-arrival trace and a long-next-gap
+trace can share the same observed prefix yet favor opposite cut decisions, so
+an online threshold has no unconditional future-optimality guarantee.
+
+Render Tape supplies immutable semantic inputs for differential policy tests.
+Economy replay additionally needs the timing evidence in R-ARCH-6.21, including
+whether observed arrivals already contain the old policy's back-pressure.
+Fixed recorded arrivals support an explicitly open-loop comparison, not a
+counterfactual claim about application feedback under the new policy. Simulated
+or solver-optimal results remain model evidence until calibrated and validated
+on held-out workloads and matched real runs. No new batching selector, timing
+probe, or production threshold is activated by this design.
 
 ---
 

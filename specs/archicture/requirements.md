@@ -242,6 +242,114 @@ replay and publication watermarks. These observations are pressure diagnostics,
 not substitutes for `completedSeqId`, `presentCompletedSeqId`, or ring-slot
 occupancy, and a wait displaced into them is a regression under `R-ARCH-6.9`.
 
+**R-ARCH-6.12** PE-to-Unix ABI entry and application-to-Replay worker
+publication must be specified as distinct boundaries. Work executed by a Unix
+function on the calling application thread remains application-thread work.
+Every submission stage must declare its execution owner independently of its
+representation owner. Moving a function between binaries is not evidence of
+offload. The stable final-slot topology retains its dedicated encode thread;
+alternative placement remains an explicit provider under R-ARCH-7.16–7.17.
+
+**R-ARCH-6.13** Before asynchronous publication, admission must establish an
+immutable source, its ordered identity, complete byte ownership, qualified
+resource lifetime, and the backing versions needed to replay the accepted
+commands. Wrapper retention alone must not stand in for byte-version safety;
+backing snapshots/residency or a proven ordered-mutation contract must prevent
+later writes, rename, destroy, or reuse from changing earlier commands. Queue
+adoption and required drain-ledger publication must have one atomic outcome.
+These facts form the admission witness, not an execution-layout plan. Each
+synchronous phase must name its ABI, lifetime, ordering, or failure obligation;
+additional execution planning needs a separately evidenced placement reason.
+
+**R-ARCH-6.14** Ordinary PE submission must publish bounded immutable command
+batches, not one bridge call per draw and not a mandatory whole-frame or
+render-pass aggregate. The selected policy must state record/byte bounds,
+ordered-control flush obligations, back-pressure, and any publication-age
+policy. Transfer boundaries must not by themselves force draw-run, render-pass,
+or command-buffer boundaries. Replay may group compatible ordered ranges across
+sources without concatenating their owned payloads, while preserving source
+identity and completion attribution. Changing batching requires supply-age,
+bridge/queue economy, memory, and locality evidence under R-ARCH-6.17.
+
+**R-ARCH-6.15** In the stable final-slot topology, Replay must construct the
+final indexed execution representation transactionally: minimal draw arguments,
+shared state/uniform generations, resource bindings, and ordered coordinator
+commands. Encode must consume that representation without re-importing PE wire
+or rebuilding an equivalent full per-draw state carrier. Encoder-local binding
+shadows and Metal-specific lowering remain encode responsibilities. An alias
+into raw storage must carry its owning lease; a locator-free final projection
+must own its values and resource dependencies. Early physical raw-storage
+retirement requires an explicit lifetime refinement and must not be reported
+as logical source completion or reclaim under R-ARCH-7.18.
+
+**R-ARCH-6.16** Moving work past worker publication must preserve its observable
+failure boundary. A synchronous malformed-input, stale-identity, allocation, or
+admission rejection must not silently become an accepted command followed by
+asynchronous poison. Existing R-BACK-2.51 validation/import, marking, scoped
+drain, and Present contracts remain normative until the owning requirement
+explicitly admits a narrower synchronous phase. Each relocation requires
+bounded ownership/progress refinement, model-code binding, native differential
+and fault evidence, applicable Wine/GPU oracles, then matched performance
+evidence under R-ARCH-7.10 and R-VERIF-1.5–1.8.
+
+**R-ARCH-6.17** CPU-boundary measurements must distinguish PE recording,
+same-thread Unix admission, Replay service, and encode service from their queue,
+lock, pacing, and GPU waits. Admission attribution must separate ownership copy,
+validation, resolve/retain, backing capture/residency, resource marking, and
+queue publication. Enabled observations must report source-qualified populations,
+records/draws/bytes per publication and queue acquisition, publication age,
+queue residence, occupancy/peak, and retained bytes. Reports must distinguish
+CPU service from elapsed wall time and sampling overhead; inclusive timings
+must not be summed as disjoint costs. Empty queues or worker idle alone do not
+identify PE computation as the bottleneck. Disabled instrumentation must follow
+the no-clock/no-allocation contract of R-ARCH-7.7.
+
+**R-ARCH-6.18** Batch-cut admissibility must be a bounded, deterministic
+relation over committed record order, owned byte extents, qualified resource
+and backing lifetime, destination capacity, and required control boundaries.
+The safety relation must not depend on a predicted workload class, future
+arrival, or measured FPS. A policy may select only admissible complete prefixes;
+typed physical regions must not reorder the logical record stream. Safety
+evidence must quantify over every permitted cut choice, not only one threshold
+configuration. Cross-policy equivalence must compare original producer-record
+identities and decoded command/payload/resource semantics, not identical batch
+framing, local handle indices, or physical queue sequence numbers.
+Progress evidence must additionally enforce mandatory flushes,
+terminal handling, and fair publication/reclaim so a policy cannot postpone
+accepted work indefinitely.
+
+**R-ARCH-6.19** The deterministic reference batching policy must use the
+maximal complete prefix fitting its declared record/byte/handle and ownership
+bounds, flushing earlier when the API/control or declared progress contract
+requires it. Capacity accounting must include headers, alignment, and all
+owned roles. An indivisible oversized record must take an explicitly supported
+atomic segmented representation or the specified failure path, never a partial
+publication. Bounds must state their ABI, memory-budget, or empirical origin;
+deterministic execution alone must not be called optimal parameter selection.
+This reference is an equivalence/economy baseline, not permission to replace
+current production cadence without R-ARCH-6.16 acceptance.
+
+**R-ARCH-6.20** Any batching optimality claim must identify its objective,
+feasible cuts, arrival/service model, and assumptions. Maximal-prefix batching
+may be claimed to minimize batch count only for fixed ordered indivisible
+records with nonnegative additive capacities, uniform per-batch cost, and no
+latency/overlap objective, evaluated within required-cut intervals. That claim
+must not be extended to state-dependent wire costs, pipeline makespan, or FPS
+without another proof. An online policy observing only the arrived prefix must
+not be described as universally optimal for unknown future arrivals and service
+costs. Offline exhaustive/DP/solver results establish optimality only inside
+their stated model; policy search must remain within R-ARCH-6.18 admissibility.
+
+**R-ARCH-6.21** Batching-economy experiments must pair immutable semantic replay
+with source/record-qualified timing evidence for producer arrival/publication,
+worker service and queue residence, and lock/pacing/back-pressure stalls.
+Reports must distinguish original API demand from arrival times already delayed
+by the measured policy, and open-loop replay from closed-loop application
+feedback. A Render Tape replay fed as fast as possible is a semantic oracle,
+not evidence of original producer supply or batching benefit. Cost-model error,
+observer overhead, memory/latency bounds, locality, and held-out workload results
+must be reported before an offline policy result can support runtime promotion.
+
 ---
 
 ## 7. Minimal-Copy Policy

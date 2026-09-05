@@ -350,6 +350,22 @@ since 2026-07-10**, `d45af067` — explicit `0` opts out) moves the record-repla
 worker (design: `docs/superpowers/specs/2026-07-05-commit-replay-offload-design.md`).
 The observable contract is `R-BACK-2.51`. The mechanics:
 
+The PE-to-Unix call still runs on the application thread. The actual offload
+boundary is atomic raw-queue/ledger publication after admission, not entry to
+the unixlib. [Architecture §6.6](../archicture/spec.md#66-cpu-handoff-and-minimal-admission)
+defines the minimum ownership/version witness, the synchronous-versus-worker
+work classification, and independent transport/Slot/pass boundaries
+(`R-ARCH-6.12`–`6.17`, `R-BACK-2.51(j)`). This contract does not defer existing
+validation, remove required resource marks, change failure disposition, or
+select a fused execution provider. Such relocation needs its own refinement
+and critical-path evidence.
+
+[Architecture §6.7](../archicture/spec.md#67-safe-batch-cuts-and-bounded-policy-optimization)
+separates policy-independent cut safety from a deterministic maximal-prefix
+reference and timing-qualified economy search (`R-ARCH-6.18`–`6.21`). Semantic
+Render Tape replay alone does not reproduce application arrival/back-pressure
+timing, and smaller source cuts do not authorize new Metal boundaries.
+
 Opaque-depth index reorder is an independent default-off provider. It no
 longer inherits the offload state: callers must explicitly set
 `DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE=1`.

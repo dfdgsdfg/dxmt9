@@ -346,15 +346,29 @@ wire copy plus its retained wrapper references — must be immutable from push
 until the replay worker consumes it, and must be consumed exactly once in FIFO
 order. No producer thread, direct device call, or diagnostic path may mutate a
 queued entry in place; any future scoped-drain or rename optimization that
-inspects queued entries must treat them as read-only. See
-`specs/backend/spec.md` §Commit-Replay Offload for the architecture. Verified
-by `dxmt9-replay-offload-queue-spec` (raw-queue FIFO/bound/drain-fence
+inspects queued entries must treat them as read-only.
+(j) *(Execution boundary and relocation.)* ABI entry is not worker publication:
+all synchronous Unix admission work remains application-thread work and must
+be attributed separately from Replay under R-ARCH-6.12–6.17. Clause (a)'s
+validation/import, backing safety, and lane-specific marking obligations remain
+in force; reducing them requires an explicit refinement preserving synchronous
+rejection versus deferred fail-stop, source order, resource byte identity, and
+drain/Present progress. Neither smaller transport batches nor earlier worker
+publication may implicitly create render-pass or command-buffer boundaries.
+Batch-cut safety must be independent of economy-policy predictions under
+R-ARCH-6.18–6.21; deterministic thresholds and offline model optima are not
+unconditional runtime performance guarantees.
+See `specs/backend/spec.md` §Commit-Replay Offload for the architecture.
+Existing clauses (a)–(i) have component evidence from
+`dxmt9-replay-offload-queue-spec` (raw-queue FIFO/bound/drain-fence
 rules), `dxmt9-present-ordinal-boundary-spec` (ordinal target math, planner
 policy mapping, capped-latency math, and the `PresentOrdinalGate` wait/abort
 mechanics), `dxmt9-present-boundary-policy-spec`
 (`resolvePresentBoundaryAction` per-present truth table), and the
 `PresentFrameLatency.tla` ordinal-variant invariants
-(`PresentOrdinalWaitIsomorphism`) checked by `dxmt9-verify-tla`. Clauses (g)
+(`PresentOrdinalWaitIsomorphism`) checked by `dxmt9-verify-tla`. This is not
+automatic evidence for a relocation under clause (j); its acceptance obligations
+are tracked in the architecture gap. Clauses (g)
 and (h) close the two boundary-pacing gaps that previously blocked promoting
 this flag to an engine default; the third blocker — offload-forced crashes in
 the former imported-record harnesses that looked like a replay-worker

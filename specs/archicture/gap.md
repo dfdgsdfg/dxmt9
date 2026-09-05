@@ -19,6 +19,13 @@ bodies. No state implementation fragment remains. The cold StateBlock/FVF and
 constant-validation helpers remain owned by the COM-cold TU. The audit excludes
 addresses, timestamps, archive order, relocations, and whole assembly hashes.
 
+## CPU handoff contract
+
+| Area | Status | Current evidence and remaining closure |
+|---|---|---|
+| Minimal synchronous admission and independent batch/thread boundaries (`R-ARCH-6.12`–`6.17`) | Partial; contract defined, relocation/economy evidence open | ABI entry, same-thread Unix admission, FIFO Replay, and final-slot encode are distinct existing stages. `prepareOffloadChunk` and `persistResolvedResourcesAndCaptureBindings` still execute before worker publication; current `R-BACK-2.51` validation, backing capture, and lane-specific marking remain required. Existing ownership/byte-identity/queue tests and phase counters are component evidence only. Remaining: complete synchronous-obligation classification, source-qualified service/wait/publication-age populations, and bounded model/code plus native fault evidence for each proposed relocation or early raw-storage retirement, followed by applicable Wine/GPU and matched locality/latency/memory/performance gates. No thread, batch, validation, or transport default is changed by this specification. |
+| Policy-independent safe cuts and batching economy (`R-ARCH-6.18`–`6.21`) | Specified; integrated evidence open | The deterministic admissibility relation, maximal-prefix reference, restricted greedy optimality assumptions, and timing-qualified offline search are defined in §6.7. Existing capacity/ownership tests and semantic Render Tape replay do not prove all permitted cut policies or reproduce application supply. Remaining: shared cut reducer/model-code binding; bounded all-choice safety and progress; oversized/final-partial/Present-only/fault negatives; producer-demand versus back-pressure timing evidence; calibrated open-/closed-loop cost models and held-out runtime economy gates. Current cadence remains unchanged. |
+
 ## Architecture Layer
 
 The final PE-device safety closure pins an honest 3,713-line compile-surface
