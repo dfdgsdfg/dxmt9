@@ -919,6 +919,27 @@ Neither instrumentation nor native equality establishes a faster replacement.
 Release codegen must verify that disabled admission does not execute diagnostic
 walks, and runtime distributions and FPS remain separately qualified evidence.
 
+R-CORE-REC-7.40 preserves compile-time information at the constant consumer:
+the normal setter knows its 4/16-byte register width and Live/Apply mode.
+Specialized execution must derive from the same transition semantics while
+allowing fixed-size byte operations and discarded result fields to disappear.
+The constant consumer projects only the actual byte-write effect: canonical
+`writePending` combined with post-materialization byte inequality. Compile-time
+evaluation checks all eight old-extent/equality/pending-membership tuples;
+the loop consumes the resulting constant, not a runtime table. Recording's
+checked callback remains shared across width and observer specializations.
+The checked generic operation remains a differential reference and serves
+inputs whose width or mode is not statically fixed. This is a local value
+refinement, not a new lifecycle or concurrency protocol.
+
+R-CORE-REC-7.41 narrows the compact destination-rebase operation to one lexical
+source qualification. Source metadata and pending-ticket checks may share that
+qualification with destination preparation; the retention callback still
+requires a post-callback validity check. A CapacityPre retry starts a fresh
+operation against the new destination. Owner admission, physical pin checks,
+emission and settlement retain their own invalidation-boundary contracts.
+This does not authorize a cached raw source spanning the whole append.
+
 The optional owner-qualified copy/materialization ledger binds this same
 transaction at its two physical ownership boundaries. A successful admission
 records the increase in live typed record, pin, and canonical-role

@@ -13,6 +13,48 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.40–7.41 are implemented with bounded native and linked-code evidence.
+All six constant setters use fixed 4/16-byte Live/Apply operations. Their actual
+byte-write effect is derived from the canonical plan with a compile-time check
+of all eight extent/equality/pending tuples. Linked PE32/PE64 register loops
+contain neither comparison/copy calls nor state-write table lookups; vector
+growth still allocates/copies when storage is insufficient. Recording shares
+one checked callback, and observed execution uses the same fixed-width body.
+
+Draw destination rebase shares one source qualification with copied transaction
+and current PendingDelta tickets. Failed ticket checks precede destination or
+retention effects. APPLY_STATE checks, post-retention requalification, and fresh
+CapacityPre rebase remain; there is no arbitrary preflight callback or cached
+borrow across those boundaries.
+
+Against `706866a4`, all four canonical builds pass, native PE tests pass 28/28,
+x86_64 provider-focused tests pass 8/8, and the unchanged TLA suite passes.
+Constant observer tests also pass in fresh processes at N=1 and N=127, checking
+event/sample/calibration/count-bucket populations and reference byte equality.
+Exhaustive bounded constant values/dirty/extent, unaligned and aliased input,
+warm storage, stale owner/epoch/ticket, callback invalidation, destination A/B/A
+and generic canonical bytes are pinned. PE32/PE64 exports and vtable/RTTI owners
+match; total DLL sizes increase by 6,144/5,632 bytes. This is not an FPS result.
+Hash-qualified receipts and linked disassembly are under
+`experiments/output/pe-hot-specialization-20260906/analysis/`, with final
+codegen in `candidate-projection-linked.json`.
+
+The final-build GT2 spot check
+`app-d3d9-3dmark05-pe-hot-specialization-gt2-r2-20260906` passes with 1,876
+Presents, zero chunk rejects, GPU command-buffer errors and no-pipeline skips.
+The 1,875 positive-wall samples average 29.048 FPS over 64,547.602 ms at
+1024x768 with Sikarugir/perf, PE decimation OFF and no GPU trace. This is
+harness health and one scene sample, not an A/B speedup or pixel oracle.
+The separate identity diagnostic below uses different instrumentation.
+
+R-CORE-REC-7.39 now has a real GT2 schema-3 sample at N=127: 21,755 measured
+compact preparations average 2.588 unique identities and 4.494 comparisons;
+sampled maxima are 17 and 136. Keep the production linear fold; the sample
+does not justify replacing it with a hash index. This is reconstructed
+successful-preparation work, not CPU time or a histogram. See
+[H248](../../../docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md)
+for population, artifact identity and evidence limits.
+
 R-CORE-REC-7.37–7.39 are implemented with bounded native/codegen evidence:
 constant comparison/update fusion, compile-time state-write row validation
 with a table-derived runtime reducer, and cold identity-distribution
@@ -37,8 +79,9 @@ Identity counts cover sampled successful preparations only; failed preparation
 is explicitly unmeasured, not zero work. Reconstruction does not run inside
 PrepareAdmission timing, but its cost is included in the admission parent.
 The linear identity strategy, transport and chunk cadence remain unchanged.
-Fresh workload distributions, Wine/pixel evidence and FPS attribution remain
-open. Local receipts are under
+Fresh workload distributions for this earlier implementation were open; H248
+above supplies a later GT2 sample. Broader workload tails, pixel evidence and
+FPS attribution remain open. Local receipts are under
 `experiments/output/pe-constant-transition-20260906/analysis/` (ignored artifacts,
 including `verification.md`, `candidate.json`, and `comparison.json`).
 

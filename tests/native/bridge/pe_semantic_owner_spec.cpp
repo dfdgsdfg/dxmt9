@@ -4759,6 +4759,212 @@ void compactAdmissionRejectsStaleSourceBeforeSettlement() {
         "compact stale source rejects before settlement or owner mutation");
 }
 
+// The compact append rebase performs its transaction/pending preflight inside
+// the same lexical source qualification as destination finalization. Keep the
+// callback and retry cases here because a source getter followed by the
+// finalizer would make the preflight proof a second, independently stale read.
+void compactFinalizerFusesLexicalQualification() {
+  PeHotStateShadow shadow{};
+  PeConstShadowBlock constants{};
+  PeBindingView bindings{};
+  PeDrawPayloads payloads{};
+  D9CBuffer stream;
+  bindings.streams[1].buffer =
+      localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&stream, 0xc01u, 3u);
+  PeDrawParams params{.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                      .primitiveType = 4u, .primitiveCount = 1u};
+  PeChunkContext chunk{};
+  SparseStatePlan plan;
+  SparseStatePlan pendingPlan;
+  SparseStatePlan ownerPlan;
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken ownerThread;
+  std::uint64_t epoch = 1u;
+  RecorderLockGuard guard(mutex, false);
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return buildSparseStatePlan(access, shadow, constants, bindings,
+                                      payloads, params, false, false, plan) &&
+                 buildSparseStatePlan(access, shadow, constants, bindings,
+                                      payloads, params, false, false,
+                                      pendingPlan) &&
+                 buildSparseStatePlan(access, shadow, constants, bindings,
+                                      payloads, params, false, false,
+                                      ownerPlan);
+        }),
+        "lexical finalizer fixtures prepare under one recorder authority");
+
+  const auto pendingTicket = pendingPlan.pendingTicket();
+  std::uint32_t retentionCalls = 0u;
+  const auto retained =
+      [&](std::uint32_t slot, const BufferRef& buffer) noexcept {
+        ++retentionCalls;
+        (void)slot;
+        (void)buffer;
+        return false;
+      };
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return finalizeSparseStatePlanChunkContext(access, chunk, plan,
+              retained, pendingTicket, shadow.pendingTicket());
+        }) &&
+            retentionCalls == 1u &&
+            plan.destination().streamMask == (1u << 1u),
+        "transaction/pending preflight and destination selection share one source qualification");
+
+  // The same source can be re-resolved for A/B/A destination-retention facts;
+  // no destination answer is carried across the callback boundary.
+  bool retainAll = true;
+  const auto changingRetention =
+      [&retainAll](std::uint32_t, const BufferRef&) noexcept {
+        return retainAll;
+      };
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return finalizeSparseStatePlanChunkContext(
+              access, chunk, plan, changingRetention,
+              pendingTicket, shadow.pendingTicket());
+        }) &&
+            plan.destination().streamMask == 0u,
+        "destination B requalification observes the changed retention answer");
+  retainAll = false;
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return finalizeSparseStatePlanChunkContext(
+              access, chunk, plan, changingRetention,
+              pendingTicket, shadow.pendingTicket());
+        }) &&
+            plan.destination().streamMask == (1u << 1u),
+        "destination A requalification does not reuse destination B state");
+
+  // A preflight rejection is pre-effect: neither retention nor destination
+  // publication is reached, and the source remains retryable.
+  std::uint32_t rejectedRetentionCalls = 0u;
+  const auto beforeRejectedDestination = plan.destination();
+  const PendingDeltaTicket wrongTicket{pendingTicket.generation + 1u};
+  const std::array<std::pair<PendingDeltaTicket, PendingDeltaTicket>, 4>
+      rejectedTickets{{{{}, pendingTicket}, {wrongTicket, pendingTicket},
+                       {pendingTicket, {}}, {pendingTicket, wrongTicket}}};
+  for (const auto& [transaction, current] : rejectedTickets) {
+    check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return !finalizeSparseStatePlanChunkContext(
+              access, chunk, plan,
+              [&](std::uint32_t, const BufferRef&) noexcept {
+                ++rejectedRetentionCalls;
+                return false;
+              },
+              transaction, current);
+        }) && rejectedRetentionCalls == 0u &&
+            plan.destination().streamMask == beforeRejectedDestination.streamMask &&
+            plan.destination().indexBuffer == beforeRejectedDestination.indexBuffer &&
+            plan.destination().chunkContextFinalized ==
+                beforeRejectedDestination.chunkContextFinalized,
+        "failed lexical preflight is pre-effect and callback-free");
+  }
+
+  std::recursive_mutex otherMutex;
+  dxmt9::core::ThreadOwnershipToken otherThread;
+  RecorderLockGuard otherGuard(otherMutex, false);
+  check(otherGuard.withCapability(otherThread, epoch,
+                                  [&](const auto& otherAccess) noexcept {
+          return !finalizeSparseStatePlanChunkContext(
+              otherAccess, chunk, ownerPlan, retained,
+              pendingTicket, shadow.pendingTicket());
+        }),
+        "same numeric epoch from another recorder cannot qualify the plan");
+
+  // Pending mutation must reject before exposing sources.
+  shadow.transition().setRenderState(RenderStateSlot::fromRaw(2u), 0x42u);
+  std::uint32_t staleRetentionCalls = 0u;
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return !finalizeSparseStatePlanChunkContext(
+              access, chunk, pendingPlan,
+              [&](std::uint32_t, const BufferRef&) noexcept {
+                ++staleRetentionCalls;
+                return false;
+              },
+              pendingTicket, shadow.pendingTicket());
+        }) && staleRetentionCalls == 0u,
+        "pending mutation rejects before retention callback");
+
+  // Retention is an invalidating callback boundary. The post-callback source
+  // requalification must reject, while a fresh epoch/source retry succeeds.
+  SparseStatePlan callbackPlan;
+  PeHotStateShadow callbackShadow{};
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return buildSparseStatePlan(access, callbackShadow, constants, bindings,
+                                      payloads, params, false, false,
+                                      callbackPlan);
+        }),
+        "retention callback fixture prepares a fresh source");
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return !finalizeSparseStatePlanChunkContext(
+              access, chunk, callbackPlan,
+              [&](std::uint32_t, const BufferRef&) noexcept {
+                ++epoch;
+                return false;
+              }, callbackPlan.pendingTicket(), callbackShadow.pendingTicket());
+        }),
+        "retention callback invalidation is rejected after callback");
+
+  SparseStatePlan retryPlan;
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return buildSparseStatePlan(access, callbackShadow, constants, bindings,
+                                      payloads, params, false, false,
+                                      retryPlan) &&
+              finalizeSparseStatePlanChunkContext(
+                  access, chunk, retryPlan,
+                  [](std::uint32_t, const BufferRef&) noexcept { return false; },
+                  retryPlan.pendingTicket(), callbackShadow.pendingTicket());
+        }),
+        "fresh epoch retry requalifies and finalizes after callback invalidation");
+
+  // The fused finalizer still emits the same canonical bytes as the generic
+  // producer for the unchanged source/destination facts.
+  PeSparseScratch genericScratch{};
+  D9CCommandChunkWireDrawHeader genericHeader{};
+  SparseStateInput genericState{};
+  PeConstShadowBlock genericConstants = constants;
+  check(buildSparseState(callbackShadow, genericConstants, bindings, payloads, params,
+                         false, false, genericScratch, genericHeader,
+                         genericState) &&
+            addChunkContextSections(chunk, callbackShadow, bindings, params,
+                                    genericScratch, genericState),
+        "generic canonical differential fixture prepares");
+  CommandChunkBuilder genericBuilder;
+  CommandChunkBuilder compactBuilder;
+  check(appendSparseRecord(genericBuilder, params.recordType, genericHeader,
+                           genericState) &&
+            guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+              return appendSparseStatePlan(access, compactBuilder,
+                                           params.recordType, retryPlan);
+            }),
+        "fused compact and generic canonical records append");
+  const auto genericSealed = genericBuilder.seal();
+  const auto compactSealed = compactBuilder.seal();
+  check(genericSealed.valid() && compactSealed.valid() &&
+            genericSealed.blob.size() == compactSealed.blob.size() &&
+            std::equal(genericSealed.blob.begin(), genericSealed.blob.end(),
+                       compactSealed.blob.begin()),
+        "fused qualification preserves canonical bytes");
+
+  SparseStatePlan staleEpochPlan;
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return buildSparseStatePlan(access, callbackShadow, constants, bindings,
+                                      payloads, params, false, false,
+                                      staleEpochPlan);
+        }),
+        "stale epoch fixture prepares under the current authority");
+  ++epoch;
+  std::uint32_t staleEpochRetentionCalls = 0u;
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return !finalizeSparseStatePlanChunkContext(
+              access, chunk, staleEpochPlan,
+              [&](std::uint32_t, const BufferRef&) noexcept {
+                ++staleEpochRetentionCalls;
+                return false;
+              },
+              staleEpochPlan.pendingTicket(), callbackShadow.pendingTicket());
+        }) && staleEpochRetentionCalls == 0u,
+        "a fresh capability cannot qualify a stale epoch plan");
+}
+
 // Exercise the actual compact producer at the schema's legal maximum binding
 // occurrence count. This uses an ordinary indexed draw rather than a snapshot
 // or a hand-built SparseStatePlan, so plan selection, destination finalization,
@@ -5294,6 +5500,7 @@ int main(int argc, char** argv) {
     observerSeparatesPrepareMalformedFromHeader();
     observedAdmissionReconstructionKeepsHotPathUnchanged();
     compactAdmissionRejectsStaleSourceBeforeSettlement();
+    compactFinalizerFusesLexicalQualification();
     realCompactSparseMaxFamilyDifferentialAndRollback(true);
     realCompactSparseMaxFamilyDifferentialAndRollback(false);
     runRealCompactRetainFaultChild(argv[0]);

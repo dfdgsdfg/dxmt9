@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <stdexcept>
 #include <string>
@@ -1003,8 +1004,13 @@ void testConstTransitionBoundedStateSpace() {
                   ConstShadow expected = initial;
                   ConstShadow actual = initial;
                   actual.reserveCapacity(3u * elemSize, 3u);
+                  const bool fixedWidth = elemSize == 4u || elemSize == 16u;
+                  ConstShadow fixed = initial;
+                  if (fixedWidth) fixed.reserveCapacity(3u * elemSize, 3u);
                   const auto* valueStorage = actual.values.data();
                   const auto* dirtyStorage = actual.dirtyElems.data();
+                  const auto* fixedValueStorage = fixed.values.data();
+                  const auto* fixedDirtyStorage = fixed.dirtyElems.data();
                   const auto phase = recording
                       ? dxmt9::d3d9::pe::RecorderPhase::Recording
                       : dxmt9::d3d9::pe::RecorderPhase::Live;
@@ -1024,6 +1030,20 @@ void testConstTransitionBoundedStateSpace() {
                   check(actual.values.data() == valueStorage &&
                             actual.dirtyElems.data() == dirtyStorage,
                         "bounded warm update does not reallocate either vector");
+                  if (!recording && fixedWidth) {
+                    if (elemSize == 4u) {
+                      applyConstShadowLiveFixedWidth<4u>(
+                          fixed, start, count, input.data());
+                    } else {
+                      applyConstShadowLiveFixedWidth<16u>(
+                          fixed, start, count, input.data());
+                    }
+                    checkConstShadowEquivalent(expected, fixed,
+                                               "fixed Live/Apply state-space row");
+                    check(fixed.values.data() == fixedValueStorage &&
+                              fixed.dirtyElems.data() == fixedDirtyStorage,
+                          "fixed warm update does not reallocate either vector");
+                  }
                 }
               }
             }
@@ -1031,6 +1051,204 @@ void testConstTransitionBoundedStateSpace() {
         }
       }
     }
+  }
+}
+
+template <std::size_t ElemSize>
+void testFixedConstLiveApplyEdges() {
+  constexpr std::uint32_t kWarmCount = 4u;
+  auto input = constTransitionBytes(ElemSize, 73u, kWarmCount);
+  ConstShadow generic;
+  ConstShadow fixed;
+  generic.reserveCapacity(kWarmCount * ElemSize, kWarmCount);
+  fixed.reserveCapacity(kWarmCount * ElemSize, kWarmCount);
+
+  // A one-byte offset exercises unaligned source loads while retaining all
+  // source bytes and bit patterns.
+  std::vector<std::uint8_t> unaligned(input.size() + 1u, 0u);
+  std::copy(input.begin(), input.end(), unaligned.begin() + 1u);
+  const auto genericSeed = reduceConstShadowTransition(
+      generic, dxmt9::d3d9::pe::RecorderPhase::Live,
+      ConstShadowTransitionMode::Apply, 0u, kWarmCount,
+      unaligned.data() + 1u, ElemSize);
+  applyConstShadowLiveFixedWidth<ElemSize>(
+      fixed, 0u, kWarmCount, unaligned.data() + 1u);
+  check(genericSeed.valid, "unaligned generic seed is valid");
+  checkConstShadowEquivalent(generic, fixed,
+                             "fixed unaligned source equivalence");
+
+  const auto* genericValues = generic.values.data();
+  const auto* genericDirty = generic.dirtyElems.data();
+  const auto* fixedValues = fixed.values.data();
+  const auto* fixedDirty = fixed.dirtyElems.data();
+  generic.clear();
+  fixed.clear();
+  const auto genericAlias = reduceConstShadowTransition(
+      generic, dxmt9::d3d9::pe::RecorderPhase::Live,
+      ConstShadowTransitionMode::Apply, 1u, 1u,
+      generic.values.data() + ElemSize, ElemSize);
+  applyConstShadowLiveFixedWidth<ElemSize>(
+      fixed, 1u, 1u, fixed.values.data() + ElemSize);
+  check(genericAlias.valid && !genericAlias.writesPending(),
+        "exact same-element alias is redundant");
+  checkConstShadowEquivalent(generic, fixed,
+                             "fixed exact same-element alias equivalence");
+  check(generic.values.data() == genericValues &&
+            generic.dirtyElems.data() == genericDirty &&
+            fixed.values.data() == fixedValues &&
+            fixed.dirtyElems.data() == fixedDirty,
+        "fixed warm storage remains stable");
+
+  const ConstShadow beforeNull = fixed;
+  applyConstShadowLiveFixedWidth<ElemSize>(fixed, 0u, 1u, nullptr);
+  checkConstShadowEquivalent(beforeNull, fixed,
+                             "fixed null input is non-mutating");
+
+  const auto beforeOverflow = fixed;
+  std::array<std::uint8_t, ElemSize> one{};
+  applyConstShadowLiveFixedWidth<ElemSize>(
+      fixed, std::numeric_limits<std::uint32_t>::max(), 1u, one.data());
+  checkConstShadowEquivalent(beforeOverflow, fixed,
+                             "fixed overflow input is non-mutating");
+}
+
+template <std::size_t ElemSize>
+void testFixedConstLiveApplyObservation() {
+  const auto n = peConstSetterDecimationN();
+  for (const std::uint32_t count : {1u, 2u, 4u, 8u, 16u, 64u}) {
+    auto input = constTransitionBytes(ElemSize, 91u, count);
+    ConstShadow expected;
+    ConstShadow actual;
+    (void)oldConstTransition(
+        expected, dxmt9::d3d9::pe::RecorderPhase::Live, true,
+        0u, count, input.data(), ElemSize);
+    const auto before = peConstSetterDecimatedStats();
+    const auto beforeBuckets = peConstSetterDecimatedBuckets();
+    const auto beforeNull = peDecimatedNullScopeStats();
+    if (n != 0u) {
+      applyConstShadowLiveFixedWidthObserved<ElemSize>(
+          actual, 0u, count, input.data());
+    } else {
+      applyConstShadowLiveFixedWidth<ElemSize>(
+          actual, 0u, count, input.data());
+    }
+    checkConstShadowEquivalent(expected, actual,
+                               "fixed observed bytes match reference");
+    const bool sampled = n != 0u &&
+        ((before.events + 1u) % n) == (before.phaseOffset % n);
+    const auto& after = peConstSetterDecimatedStats();
+    check(after.events == before.events + (n != 0u) &&
+              after.sampled == before.sampled + sampled &&
+              peDecimatedNullScopeStats().sampled == beforeNull.sampled + sampled,
+          "fixed observation preserves event, sample, and calibration population");
+    for (int bucket = 0; bucket < PeDecimatedBucketStats::kBuckets; ++bucket) {
+      const bool selected = bucket == PeDecimatedBucketStats::bucketFor(count);
+      const auto& current = peConstSetterDecimatedBuckets().bucket[bucket];
+      check(current.events == beforeBuckets.bucket[bucket].events +
+                  (selected && n != 0u) &&
+                current.sampled == beforeBuckets.bucket[bucket].sampled +
+                  (selected && sampled),
+            "fixed observation preserves the count bucket population");
+    }
+  }
+}
+
+template <std::size_t ElemSize>
+void testFixedConstLiveApplyDifferential() {
+  constexpr std::array<std::uint32_t, 6> counts{0u, 1u, 2u, 4u, 16u,
+                                                 64u};
+  for (const auto count : counts) {
+    const auto a = constTransitionBytes(ElemSize, 11u, count);
+    const auto b = constTransitionBytes(ElemSize, 29u, count);
+    ConstShadow generic;
+    ConstShadow fixed;
+    generic.reserveCapacity(64u * ElemSize, 64u);
+    fixed.reserveCapacity(64u * ElemSize, 64u);
+
+    auto compareApply = [&](std::uint32_t start, std::uint32_t applyCount,
+                            const std::vector<std::uint8_t>& bytes,
+                            std::string_view label) {
+      (void)reduceConstShadowTransition(
+          generic, dxmt9::d3d9::pe::RecorderPhase::Live,
+          ConstShadowTransitionMode::Apply, start, applyCount, bytes.data(),
+          ElemSize);
+      applyConstShadowLiveFixedWidth<ElemSize>(
+          fixed, start, applyCount, bytes.data());
+      checkConstShadowEquivalent(generic, fixed, label);
+    };
+
+    // Count zero is an intentional no-op even with an empty data span.
+    compareApply(0u, count, a, "fixed-width count matrix");
+
+    // Equal, fully changed, and partially changed writes all exercise the
+    // fixed-word path (including NaN and signed-zero bit patterns).
+    generic.clear();
+    fixed.clear();
+    compareApply(0u, count, a, "fixed-width initial materialization");
+    generic.clear();
+    fixed.clear();
+    compareApply(0u, count, a, "fixed-width equal write");
+
+    auto changed = b;
+    if (count != 0u) {
+      for (auto& byte : changed) byte ^= 0x5au;
+    }
+    generic.clear();
+    fixed.clear();
+    compareApply(0u, count, changed, "fixed-width changed write");
+
+    auto partial = a;
+    if (count != 0u) {
+      const auto middle = count / 2u;
+      partial[static_cast<std::size_t>(middle) * ElemSize] ^= 0x3cu;
+    }
+    generic.reset();
+    fixed.reset();
+    compareApply(0u, count, a, "fixed-width partial seed");
+    generic.clear();
+    fixed.clear();
+    compareApply(0u, count, partial, "fixed-width partial write");
+
+    if (count > 1u) {
+      generic.reset();
+      fixed.reset();
+      auto prefix = constTransitionBytes(ElemSize, 41u, 1u);
+      compareApply(0u, 1u, prefix, "fixed-width extension prefix");
+      generic.clear();
+      fixed.clear();
+      auto extension = constTransitionBytes(ElemSize, 53u, count);
+      std::copy(prefix.begin(), prefix.end(), extension.begin());
+      compareApply(0u, count, extension, "fixed-width extension");
+    }
+
+    // A-B-A keeps the final changed extent and pending union identical.
+    if (count != 0u) {
+      generic.reset();
+      fixed.reset();
+      compareApply(0u, count, a, "fixed-width A");
+      generic.clear();
+      fixed.clear();
+      compareApply(0u, count, b, "fixed-width B");
+      generic.clear();
+      fixed.clear();
+      compareApply(0u, count, a, "fixed-width A-B-A");
+    }
+
+    // Recording remains Observe-only and is intentionally checked through
+    // the canonical generic reducer, not the Live/Apply specialization.
+    generic.reset();
+    fixed.reset();
+    compareApply(0u, count, a, "fixed-width recording seed");
+    generic.clear();
+    const ConstShadow beforeRecording = generic;
+    const auto recording = reduceConstShadowTransition(
+        generic, dxmt9::d3d9::pe::RecorderPhase::Recording,
+        ConstShadowTransitionMode::Observe, 0u, count, b.data(), ElemSize);
+    check(recording.valid &&
+              (count == 0u || recording.writesRecorded()),
+          "fixed-width recording keeps explicit Observe permission");
+    checkConstShadowEquivalent(beforeRecording, generic,
+                               "fixed-width recording is non-mutating");
   }
 }
 
@@ -2930,6 +3148,12 @@ int main() {
     testSparseDrawAndApplyProducerMatrix();
     testConstTransitionDifferential();
     testConstTransitionBoundedStateSpace();
+    testFixedConstLiveApplyEdges<4u>();
+    testFixedConstLiveApplyEdges<16u>();
+    testFixedConstLiveApplyObservation<4u>();
+    testFixedConstLiveApplyObservation<16u>();
+    testFixedConstLiveApplyDifferential<4u>();
+    testFixedConstLiveApplyDifferential<16u>();
     testTouchConstShadowSemantics();
     testConstShadowFeedsConstantSections();
     testReferencesObjectRollbackAndOverflow();

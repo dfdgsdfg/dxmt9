@@ -610,9 +610,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetVertexShaderConstantF(UINT start, c
     if (FAILED(hr)) return hr;
     // Shadow-only: defer the record until the next flushPendingConsts()
     // (called before each draw record + at chunk commit).
-    return applyConstStateWrite(
+    return applyConstStateWriteFixed<sizeof(float) * 4u>(
         recorderState_.peConsts.vsConstF, &PeStateBlockConstRecorded::vsConstF,
-        start, count, pData, sizeof(float) * 4);
+        start, count, pData);
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetVertexShaderConstantI(UINT start, const INT* pData,
@@ -625,9 +625,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetVertexShaderConstantI(UINT start, c
     }
     const HRESULT hr = validateConstRangeFast(start, count, pData, kVsConstIMax);
     if (FAILED(hr)) return hr;
-    return applyConstStateWrite(
+    return applyConstStateWriteFixed<sizeof(int32_t) * 4u>(
         recorderState_.peConsts.vsConstI, &PeStateBlockConstRecorded::vsConstI,
-        start, count, pData, sizeof(int32_t) * 4);
+        start, count, pData);
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetVertexShaderConstantB(UINT start, const BOOL* pData,
@@ -640,9 +640,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetVertexShaderConstantB(UINT start, c
     }
     const HRESULT hr = validateConstRangeFast(start, count, pData, kVsConstBMax);
     if (FAILED(hr)) return hr;
-    return applyConstStateWrite(
+    return applyConstStateWriteFixed<sizeof(uint32_t)>(
         recorderState_.peConsts.vsConstB, &PeStateBlockConstRecorded::vsConstB,
-        start, count, pData, sizeof(uint32_t));
+        start, count, pData);
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetStreamSourceFreq(UINT stream, UINT freq) noexcept {
@@ -802,9 +802,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetPixelShaderConstantF(UINT start, co
     }
     const HRESULT hr = validateConstRangeFast(start, count, pData, kPsConstFMax);
     if (FAILED(hr)) return hr;
-    return applyConstStateWrite(
+    return applyConstStateWriteFixed<sizeof(float) * 4u>(
         recorderState_.peConsts.psConstF, &PeStateBlockConstRecorded::psConstF,
-        start, count, pData, sizeof(float) * 4);
+        start, count, pData);
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetPixelShaderConstantI(UINT start, const INT* pData,
@@ -817,9 +817,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetPixelShaderConstantI(UINT start, co
     }
     const HRESULT hr = validateConstRangeFast(start, count, pData, kPsConstIMax);
     if (FAILED(hr)) return hr;
-    return applyConstStateWrite(
+    return applyConstStateWriteFixed<sizeof(int32_t) * 4u>(
         recorderState_.peConsts.psConstI, &PeStateBlockConstRecorded::psConstI,
-        start, count, pData, sizeof(int32_t) * 4);
+        start, count, pData);
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetPixelShaderConstantB(UINT start, const BOOL* pData,
@@ -832,9 +832,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetPixelShaderConstantB(UINT start, co
     }
     const HRESULT hr = validateConstRangeFast(start, count, pData, kPsConstBMax);
     if (FAILED(hr)) return hr;
-    return applyConstStateWrite(
+    return applyConstStateWriteFixed<sizeof(uint32_t)>(
         recorderState_.peConsts.psConstB, &PeStateBlockConstRecorded::psConstB,
-        start, count, pData, sizeof(uint32_t));
+        start, count, pData);
 }
 
 HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::BeginScene() noexcept {

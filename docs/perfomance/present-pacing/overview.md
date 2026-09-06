@@ -29,7 +29,14 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
-The latest bounded refinement is
+The latest [identity diagnostic](present-pacing-pe-identity-distribution.248.md)
+uses the verified `706866a4` binaries: 21,755 sampled compact preparations have
+mean 2.588 unique identities / 4.494 comparisons, sampled maximum 17 / 136.
+Keep the linear lookup; this is a distribution decision, not an FPS claim.
+The historical PE CPU percentage below predates the semantic-owner changes
+and must not be used to close current PE optimization work.
+
+The earlier bounded refinement is
 [compact transaction / live borrow authority](present-pacing-pe-compact-refinement.247.md).
 Generation-qualified indexes, clean warm-index reuse, compact receipts, fused
 binding pin/emission, and lexical source access pass native 21/21 and x86_64

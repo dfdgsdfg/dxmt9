@@ -924,3 +924,32 @@ production witnesses and calls must not acquire diagnostic counters, storage,
 clock reads, or identity walks. Diagnostic reconstruction, if used, must be
 labelled and tested against the actual operation; its cost and counts are not
 product CPU time or permission to replace the linear lookup.
+
+**R-CORE-REC-7.40** Fixed-width constant setters may specialize the canonical
+transition for their known element width and recording phase. The ordinary
+4-byte and 16-byte Live/Apply paths must preserve the checked reference's
+bitwise values, grow-only materialized extent, zero-extension behavior, dirty
+membership and pending range, without independently maintained transition
+policy. Unused aggregate permission results must not require per-register
+production work. Native differential traces must cover equal, changed,
+partially changed and A/B/A updates; release PE32/PE64 evidence must inspect
+the linked production callers for per-element comparison/copy calls. Generic
+validation and the separate StateBlock recording domain remain authoritative
+for their inputs. Diagnostic code must remain cold when disabled.
+The Live/Apply byte-write projection must be checked at compile time against
+all old-extent/equality/pending-membership combinations of the canonical
+plan. A policy change that invalidates that projection must fail compilation;
+fixed-width specialization must not reintroduce runtime table lookup per
+register.
+
+**R-CORE-REC-7.41** Compact source qualification may be shared within one
+synchronous, non-invalidating operation rather than repeated by adjacent
+helpers. The authority must remain call-local and bound to the issuing
+recorder, capability epoch, PendingDelta ticket and current destination.
+Retention callbacks, CapacityPre retry, and other invalidating boundaries
+must still be followed by fresh qualification before dependent facts are
+accepted. Fusion must not expose unchecked borrowed getters, extend a borrow
+across a boundary, or weaken malformed, rollback or fail-stop behavior.
+Native counterexamples must include wrong-recorder, stale epoch/ticket,
+callback invalidation and destination A/B/A, alongside canonical-byte and
+failed-retry equivalence.

@@ -407,6 +407,12 @@ struct SparseStatePlan {
   friend bool finalizeSparseStatePlanChunkContext(
       const RecorderLockCapability&, const PeChunkContext&, SparseStatePlan&,
       Retention&&) noexcept;
+  template <typename Retention>
+    requires std::is_nothrow_invocable_r_v<
+        bool, Retention&, std::uint32_t, const BufferRef&>
+  friend bool finalizeSparseStatePlanChunkContext(
+      const RecorderLockCapability&, const PeChunkContext&, SparseStatePlan&,
+      Retention&&, PendingDeltaTicket, PendingDeltaTicket) noexcept;
 };
 
 inline std::uint32_t sparseStatePlanSectionCount(

@@ -101,11 +101,39 @@ template <typename Retention>
       bool, Retention&, std::uint32_t, const BufferRef&>
 bool finalizeSparseStatePlanChunkContext(
     const RecorderLockCapability& access, const PeChunkContext& chunk,
+    SparseStatePlan& plan, Retention&& retained,
+    PendingDeltaTicket transactionTicket, PendingDeltaTicket currentTicket) noexcept;
+
+template <typename Retention>
+  requires std::is_nothrow_invocable_r_v<
+      bool, Retention&, std::uint32_t, const BufferRef&>
+bool finalizeSparseStatePlanChunkContext(
+    const RecorderLockCapability& access, const PeChunkContext& chunk,
     SparseStatePlan& plan, Retention&& retained) noexcept {
+  return finalizeSparseStatePlanChunkContext(
+      access, chunk, plan, std::forward<Retention>(retained),
+      plan.pendingTicket(), plan.pendingTicket());
+}
+
+// Preflight consumes copied tickets, not an arbitrary callback that could
+// invalidate the freshly qualified source before destination resolution.
+// The caller reads both tickets inside its recorder guard. Actual source
+// qualification and the post-retention callback check remain mandatory.
+template <typename Retention>
+  requires std::is_nothrow_invocable_r_v<
+      bool, Retention&, std::uint32_t, const BufferRef&>
+bool finalizeSparseStatePlanChunkContext(
+    const RecorderLockCapability& access, const PeChunkContext& chunk,
+    SparseStatePlan& plan, Retention&& retained,
+    PendingDeltaTicket transactionTicket, PendingDeltaTicket currentTicket) noexcept {
   bool finalized = false;
   const bool invoked = plan.withQualifiedSources(
       access,
       [&](const SparseStatePlan::QualifiedSources& sources) noexcept {
+        if (!transactionTicket.valid() || !currentTicket.valid() ||
+            transactionTicket.generation != sources.source.pendingTicket.generation ||
+            currentTicket.generation != sources.source.pendingTicket.generation)
+          return;
         if (sources.source.draw.recordType == 0u) return;
         const auto& source = sources.source;
         const auto& bindings = sources.bindings;

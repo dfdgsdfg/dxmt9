@@ -309,6 +309,147 @@ inline bool constShadowTransitionElemEquals(
     return true;
 }
 
+// The six normal PE constant setters use only 4-byte BOOL or 16-byte float /
+// integer registers.  Keep this Live/Apply reducer separate from the checked
+// reference reducer below: the fixed-width path has no aggregate transition
+// result to construct, and its fixed-word operations are explicit so a release PE
+// build does not leave an external memcmp/memcpy call in the per-register
+// loop. StateWritePlan remains the sole authority for the transition policy.
+// Project the actual Live/Apply byte-write effect, not its unused aggregate
+// permissions. A table change that makes this effect depend on old extent or
+// pending membership must fail compilation rather than silently drift.
+inline constexpr bool kConstShadowLiveWritesChangedValue = []() consteval {
+    using namespace dxmt9::d3d9::pe;
+    constexpr bool changed = planRecorderStateWrite(StateWriteFacts{
+        .phase = RecorderPhase::Live,
+        .origin = WriteOrigin::ExplicitSet,
+        .liveContains = true,
+        .liveEquals = false,
+        .pendingContains = false,
+    }).writePending();
+    for (const bool contains : {false, true}) {
+        for (const bool equals : {false, true}) {
+            for (const bool pending : {false, true}) {
+                const auto plan = planRecorderStateWrite(StateWriteFacts{
+                    .phase = RecorderPhase::Live,
+                    .origin = WriteOrigin::ExplicitSet,
+                    .liveContains = contains,
+                    .liveEquals = equals,
+                    .pendingContains = pending,
+                });
+                if (!plan.valid() ||
+                    (plan.writePending() && !equals) != (changed && !equals)) {
+                    throw "constant Live/Apply effect no longer projects to equality";
+                }
+            }
+        }
+    }
+    return changed;
+}();
+
+inline std::uint32_t constShadowFixedLoadWord(
+    const std::uint8_t* source) noexcept {
+    std::uint32_t value = 0u;
+    __builtin_memcpy(&value, source, sizeof(value));
+    return value;
+}
+
+inline void constShadowFixedStoreWord(std::uint8_t* destination,
+                                      std::uint32_t value) noexcept {
+    __builtin_memcpy(destination, &value, sizeof(value));
+}
+
+template <std::size_t ElemSize>
+inline bool constShadowFixedElemEquals(const std::uint8_t* destination,
+                                       const std::uint8_t* source) noexcept {
+    static_assert(ElemSize == 4u || ElemSize == 16u);
+    if constexpr (ElemSize == 4u) {
+        return constShadowFixedLoadWord(destination) ==
+               constShadowFixedLoadWord(source);
+    } else {
+        return constShadowFixedLoadWord(destination) ==
+                   constShadowFixedLoadWord(source) &&
+               constShadowFixedLoadWord(destination + 4u) ==
+                   constShadowFixedLoadWord(source + 4u) &&
+               constShadowFixedLoadWord(destination + 8u) ==
+                   constShadowFixedLoadWord(source + 8u) &&
+               constShadowFixedLoadWord(destination + 12u) ==
+                   constShadowFixedLoadWord(source + 12u);
+    }
+}
+
+template <std::size_t ElemSize>
+inline void constShadowFixedElemCopy(std::uint8_t* destination,
+                                     const std::uint8_t* source) noexcept {
+    static_assert(ElemSize == 4u || ElemSize == 16u);
+    if constexpr (ElemSize == 4u) {
+        constShadowFixedStoreWord(destination,
+                                   constShadowFixedLoadWord(source));
+    } else {
+        constShadowFixedStoreWord(destination,
+                                   constShadowFixedLoadWord(source));
+        constShadowFixedStoreWord(destination + 4u,
+                                   constShadowFixedLoadWord(source + 4u));
+        constShadowFixedStoreWord(destination + 8u,
+                                   constShadowFixedLoadWord(source + 8u));
+        constShadowFixedStoreWord(destination + 12u,
+                                   constShadowFixedLoadWord(source + 12u));
+    }
+}
+
+template <std::size_t ElemSize>
+inline void applyConstShadowLiveFixedWidth(
+    ConstShadow& shadow, std::uint32_t start, std::uint32_t count,
+    const void* data) {
+    static_assert(ElemSize == 4u || ElemSize == 16u);
+    if (count == 0u || !data) return;
+
+    const std::uint64_t end64 = static_cast<std::uint64_t>(start) + count;
+    if (end64 > 0xffffffffull ||
+        ElemSize > 0xffffffffull / end64) {
+        return;
+    }
+    const std::size_t needed = static_cast<std::size_t>(end64) * ElemSize;
+    const std::size_t neededElems = static_cast<std::size_t>(end64);
+    if (shadow.values.size() < needed) shadow.values.resize(needed);
+    if (shadow.dirtyElems.size() < neededElems)
+        shadow.dirtyElems.resize(neededElems);
+
+    const auto* source = static_cast<const std::uint8_t*>(data);
+    bool changed = false;
+    std::uint32_t firstChanged = count;
+    std::uint32_t lastChanged = 0u;
+    for (std::uint32_t i = 0u; i < count; ++i) {
+        const std::uint32_t reg = start + i;
+        const std::size_t offset = static_cast<std::size_t>(reg) * ElemSize;
+        // Apply materializes before comparing: newly grown zero-filled
+        // registers keep the generic reducer's zero-extension dirty behavior.
+        const bool equals = constShadowFixedElemEquals<ElemSize>(
+            shadow.values.data() + offset,
+            source + static_cast<std::size_t>(i) * ElemSize);
+        if (!kConstShadowLiveWritesChangedValue || equals) continue;
+
+        const auto* element = source + static_cast<std::size_t>(i) * ElemSize;
+        constShadowFixedElemCopy<ElemSize>(shadow.values.data() + offset,
+                                           element);
+        shadow.dirtyElems[reg] = 1u;
+        changed = true;
+        firstChanged = std::min(firstChanged, i);
+        lastChanged = i + 1u;
+    }
+
+    if (!changed) return;
+    const std::uint32_t changedStart = start + firstChanged;
+    const std::uint32_t changedEnd = start + lastChanged;
+    if (!shadow.dirty()) {
+        shadow.dirtyStart = changedStart;
+        shadow.dirtyEnd = changedEnd;
+    } else {
+        shadow.dirtyStart = std::min(shadow.dirtyStart, changedStart);
+        shadow.dirtyEnd = std::max(shadow.dirtyEnd, changedEnd);
+    }
+}
+
 // Reduce and, in Apply mode, commit one constant-setter transition. Observe
 // mode is used by state-block recording: it evaluates the same model facts
 // without touching the live shadow. Apply mode materializes the requested
@@ -405,42 +546,62 @@ inline ConstShadowTransitionResult reduceConstShadowTransitionUnobserved(
     return result;
 }
 
+// Shared timer mechanics for the generic and fixed-width cold adapters. The
+// production setter constructs this only after the cached decimation gate
+// fires, so diagnostics-off Live/Apply has no timer object or clock read.
+struct ConstShadowSetterObservation {
+    PeDecimatedScopeStats* stats = nullptr;
+    std::uint32_t bucketCount = 0u;
+    std::chrono::steady_clock::time_point t0{};
+
+    explicit ConstShadowSetterObservation(std::uint32_t count) {
+        const auto n = peConstSetterDecimationN();
+        if (PeDecimatedScopeTimer::shouldSample(peConstSetterDecimatedStats(), n)) {
+            stats = &peConstSetterDecimatedStats();
+            bucketCount = count;
+            const auto n0 = std::chrono::steady_clock::now();
+            const auto n1 = std::chrono::steady_clock::now();
+            PeDecimatedScopeTimer::recordSample(
+                peDecimatedNullScopeStats(), static_cast<std::uint64_t>(
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(
+                        n1 - n0).count()));
+            t0 = std::chrono::steady_clock::now();
+        }
+        peConstSetterDecimatedBuckets().countEvent(count);
+    }
+
+    ~ConstShadowSetterObservation() {
+        if (!stats) return;
+        const auto elapsedNs = std::chrono::duration_cast<
+            std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - t0).count();
+        PeDecimatedScopeTimer::recordSample(
+            *stats, static_cast<std::uint64_t>(elapsedNs));
+        peConstSetterDecimatedBuckets().record(
+            bucketCount, static_cast<std::uint64_t>(elapsedNs));
+    }
+};
+
 // Keep timer state and calibration in a cold outlined adapter. The disabled
 // constant path constructs no diagnostic scope, even on a redundant write.
 __attribute__((noinline)) inline ConstShadowTransitionResult
 reduceConstShadowTransitionObserved(
     ConstShadow& shadow, std::uint32_t start, std::uint32_t count,
     const void* data, std::size_t elemSize) {
-    struct DecimatedScopeGuard {
-        PeDecimatedScopeStats* stats = nullptr;
-        std::uint32_t bucketCount = 0u;
-        std::chrono::steady_clock::time_point t0{};
-        ~DecimatedScopeGuard() {
-            if (!stats) return;
-            const auto elapsedNs = std::chrono::duration_cast<
-                std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - t0).count();
-            PeDecimatedScopeTimer::recordSample(
-                *stats, static_cast<std::uint64_t>(elapsedNs));
-            peConstSetterDecimatedBuckets().record(
-                bucketCount, static_cast<std::uint64_t>(elapsedNs));
-        }
-    } scope;
-    const auto n = peConstSetterDecimationN();
-    if (PeDecimatedScopeTimer::shouldSample(peConstSetterDecimatedStats(), n)) {
-        scope.stats = &peConstSetterDecimatedStats();
-        scope.bucketCount = count;
-        const auto n0 = std::chrono::steady_clock::now();
-        const auto n1 = std::chrono::steady_clock::now();
-        PeDecimatedScopeTimer::recordSample(
-            peDecimatedNullScopeStats(), static_cast<std::uint64_t>(
-                std::chrono::duration_cast<std::chrono::nanoseconds>(n1 - n0).count()));
-        scope.t0 = std::chrono::steady_clock::now();
-    }
-    peConstSetterDecimatedBuckets().countEvent(count);
+    ConstShadowSetterObservation observation(count);
     return reduceConstShadowTransitionUnobserved(
         shadow, dxmt9::d3d9::pe::RecorderPhase::Live,
         ConstShadowTransitionMode::Apply, start, count, data, elemSize);
+}
+
+template <std::size_t ElemSize>
+__attribute__((noinline)) inline void
+applyConstShadowLiveFixedWidthObserved(
+    ConstShadow& shadow, std::uint32_t start, std::uint32_t count,
+    const void* data) {
+    static_assert(ElemSize == 4u || ElemSize == 16u);
+    ConstShadowSetterObservation observation(count);
+    applyConstShadowLiveFixedWidth<ElemSize>(shadow, start, count, data);
 }
 
 inline ConstShadowTransitionResult reduceConstShadowTransition(

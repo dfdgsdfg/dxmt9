@@ -323,21 +323,24 @@ HRESULT D3D9DeviceImpl::appendSemanticRecord(
                 [&](const auto& access) noexcept {
                   const auto transactionTicket =
                       recorderState_.chunkTransaction.pendingTicket();
-                  const auto* const source = plan.source(access);
-                  if (!source || !transactionTicket.valid() ||
-                      transactionTicket.generation != source->pendingTicket.generation ||
-                      !recorderState_.peState.pendingTicketMatches(
-                          source->pendingTicket)) return false;
                   const bool destinationDependent =
                       type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
                       type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
-                  if (!destinationDependent)
+                  if (!destinationDependent) {
+                    const auto* const source = plan.source(access);
+                    if (!source || !transactionTicket.valid() ||
+                        transactionTicket.generation != source->pendingTicket.generation ||
+                        !recorderState_.peState.pendingTicketMatches(
+                            source->pendingTicket)) return false;
                     return plan.destination().chunkContextFinalized;
+                  }
                   // Compact plans resolve only destination-dependent facts here.
                   // The generic currentChunkContext() keeps its full retention walk
                   // for the compatibility/full-snapshot path.
                   const auto resolve = [](const auto& access, auto& plan,
                                           const auto* semanticOwner,
+                                          const auto transactionTicket,
+                                          const auto currentTicket,
                                           bool indexKnown,
                                           std::uint64_t indexWire)
                       __attribute__((always_inline)) noexcept {
@@ -351,18 +354,23 @@ HRESULT D3D9DeviceImpl::appendSemanticRecord(
                           return semanticOwner->referencesBuffer(buffer);
                         };
                     return dxmt9::d3d9::pe::finalizeSparseStatePlanChunkContext(
-                        access, chunk, plan, retained);
+                        access, chunk, plan, retained,
+                        transactionTicket, currentTicket);
                   };
                   if (diagnostics_ && diagnostics_->config.statsDecimationN != 0u) {
                     return dxmt9PeObserveCompactScope(
                         diagnostics_->peDrawPacketContextDecimatedStats_,
                         diagnostics_->peCompactSampleNesting_, [&]() noexcept {
                           return resolve(access, plan, semanticOwner,
+                                         transactionTicket,
+                                         recorderState_.peState.pendingTicket(),
                                          submittedIndexBufferKnown_,
                                          submittedIndexBufferWireValue_);
                         });
                   }
                   return resolve(access, plan, semanticOwner,
+                                 transactionTicket,
+                                 recorderState_.peState.pendingTicket(),
                                  submittedIndexBufferKnown_,
                                  submittedIndexBufferWireValue_);
                 });

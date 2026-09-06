@@ -2366,47 +2366,109 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                                       const std::uint8_t* src,
                                       std::size_t elemSize);
 
+    // Recording is cold and width-independent. Keep its callback outside the
+    // LiveApply template so width/observer specializations do not duplicate it.
+    HRESULT recordConstStateWrite(
+        ConstShadow& live,
+        StateBlockConstShadow PeStateBlockConstRecorded::* recordedMember,
+        std::uint32_t start, std::uint32_t count, const void* data,
+        std::size_t elemSize) noexcept {
+        using namespace dxmt9::d3d9::pe;
+        HRESULT recordingHr = D3DERR_INVALIDCALL;
+        const bool entered =
+            recorderState_.stateBlockTransaction.withRecordingWriter(
+                [&](auto& writer) noexcept {
+            StateBlockConstShadow& recorded =
+                writer.constants().*recordedMember;
+            try {
+                const auto transition = reduceConstShadowTransition(
+                    live, RecorderPhase::Recording,
+                    ConstShadowTransitionMode::Observe,
+                    start, count, data, elemSize);
+                if (!transition.valid || !transition.writesRecorded() ||
+                    transition.writesLive() || transition.writesPending()) {
+                    recordingHr = D3DERR_INVALIDCALL;
+                    return;
+                }
+                recorded.record(start, count, data, elemSize);
+                recordingHr = S_OK;
+            } catch (const std::bad_alloc&) {
+                recordingHr = E_OUTOFMEMORY;
+            }
+        });
+        return entered ? recordingHr : D3DERR_INVALIDCALL;
+    }
+
+    template <typename LiveApply>
+    HRESULT applyConstStateWriteImpl(
+        ConstShadow& live,
+        StateBlockConstShadow PeStateBlockConstRecorded::* recordedMember,
+        std::uint32_t start, std::uint32_t count, const void* data,
+        std::size_t elemSize, LiveApply&& applyLive) noexcept {
+        if (!recorderState_.stateBlockTransaction.writeAllowed()) {
+            return D3DERR_DEVICELOST;
+        }
+        if (count == 0u) return S_OK;
+        if (recorderState_.stateBlockTransaction.isRecording()) {
+            return recordConstStateWrite(
+                live, recordedMember, start, count, data, elemSize);
+        }
+
+        std::forward<LiveApply>(applyLive)(live, start, count, data);
+        return S_OK;
+    }
+
     HRESULT applyConstStateWrite(ConstShadow& live,
                                  StateBlockConstShadow PeStateBlockConstRecorded::*
                                      recordedMember,
                                  std::uint32_t start, std::uint32_t count,
                                  const void* data,
                                  std::size_t elemSize) noexcept {
-        using namespace dxmt9::d3d9::pe;
-        if (!recorderState_.stateBlockTransaction.writeAllowed()) {
-            return D3DERR_DEVICELOST;
+        if (elemSize == sizeof(std::uint32_t)) {
+            if (count != 0u && data && peConstSetterDecimationN() != 0u) {
+                return applyConstStateWriteFixed<sizeof(std::uint32_t), true>(
+                    live, recordedMember, start, count, data);
+            }
+            return applyConstStateWriteFixed<sizeof(std::uint32_t), false>(
+                live, recordedMember, start, count, data);
         }
-        if (count == 0u) return S_OK;
-        if (recorderState_.stateBlockTransaction.isRecording()) {
-            HRESULT recordingHr = D3DERR_INVALIDCALL;
-            const bool entered =
-                recorderState_.stateBlockTransaction.withRecordingWriter(
-                    [&](auto& writer) noexcept {
-                StateBlockConstShadow& recorded =
-                    writer.constants().*recordedMember;
-                try {
-                    const auto transition = reduceConstShadowTransition(
-                        live, RecorderPhase::Recording,
-                        ConstShadowTransitionMode::Observe,
-                        start, count, data, elemSize);
-                    if (!transition.valid || !transition.writesRecorded() ||
-                        transition.writesLive() || transition.writesPending()) {
-                        recordingHr = D3DERR_INVALIDCALL;
-                        return;
-                    }
-                    recorded.record(start, count, data, elemSize);
-                    recordingHr = S_OK;
-                } catch (const std::bad_alloc&) {
-                    recordingHr = E_OUTOFMEMORY;
+        if (elemSize == sizeof(float) * 4u) {
+            if (count != 0u && data && peConstSetterDecimationN() != 0u) {
+                return applyConstStateWriteFixed<sizeof(float) * 4u, true>(
+                    live, recordedMember, start, count, data);
+            }
+            return applyConstStateWriteFixed<sizeof(float) * 4u, false>(
+                live, recordedMember, start, count, data);
+        }
+        return applyConstStateWriteImpl(
+            live, recordedMember, start, count, data, elemSize,
+            [elemSize](ConstShadow& shadow, std::uint32_t applyStart,
+               std::uint32_t applyCount, const void* applyData) noexcept {
+                (void)reduceConstShadowTransition(
+                    shadow, dxmt9::d3d9::pe::RecorderPhase::Live,
+                    ConstShadowTransitionMode::Apply, applyStart,
+                    applyCount, applyData, elemSize);
+            });
+    }
+
+    template <std::size_t ElemSize, bool Observe = false>
+    HRESULT applyConstStateWriteFixed(
+        ConstShadow& live,
+        StateBlockConstShadow PeStateBlockConstRecorded::* recordedMember,
+        std::uint32_t start, std::uint32_t count, const void* data) noexcept {
+        static_assert(ElemSize == 4u || ElemSize == 16u);
+        return applyConstStateWriteImpl(
+            live, recordedMember, start, count, data, ElemSize,
+            [](ConstShadow& shadow, std::uint32_t applyStart,
+               std::uint32_t applyCount, const void* applyData) noexcept {
+                if constexpr (Observe) {
+                    applyConstShadowLiveFixedWidthObserved<ElemSize>(
+                        shadow, applyStart, applyCount, applyData);
+                } else {
+                    applyConstShadowLiveFixedWidth<ElemSize>(
+                        shadow, applyStart, applyCount, applyData);
                 }
             });
-            return entered ? recordingHr : D3DERR_INVALIDCALL;
-        }
-
-        (void)reduceConstShadowTransition(
-            live, RecorderPhase::Live, ConstShadowTransitionMode::Apply,
-            start, count, data, elemSize);
-        return S_OK;
     }
 
     static VsConstRangeChange analyzeConstShadowChange(

@@ -5,13 +5,17 @@ title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
 updated: 2026-09-06
-source: docs/perfomance/present-pacing/present-pacing-pe-compact-refinement.247.md
+source: docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest evidence: `247` - compact receipts, fused binding emission, index reuse,
+Latest diagnostic: [H248](present-pacing-pe-identity-distribution.248.md) measures
+2.588 unique identities / 4.494 comparisons per sampled compact GT2 preparation.
+Keep the small linear lookup; no hash or FPS promotion follows from this run.
+
+Prior refinement evidence: `247` - compact receipts, fused binding emission, index reuse,
 and live borrow authority pass bounded native verification. Ordinary PE append
 frames no longer probe. GT2 OFF pairs are 27.884/27.427 harmonic-mean FPS
 (-1.64%, substantial same-build variation); no FPS promotion is established.
@@ -26,6 +30,7 @@ The CPU-ready Tape locality gap remains an independent workstream.
 
 ## Recent Leaf Documents
 
+- [present-pacing-pe-identity-distribution.248 - Measured Small-Set Identity Decision](present-pacing-pe-identity-distribution.248.md)
 - [present-pacing-pe-compact-refinement.247 - Compact Transaction and Live Borrow Refinement](present-pacing-pe-compact-refinement.247.md)
 - [present-pacing-pe-plan-authority.246 - Private Plan Authority and Fused Retention](present-pacing-pe-plan-authority.246.md)
 - [present-pacing-pe-compact-reuse.245 - Compact Destination and Identity Reuse](present-pacing-pe-compact-reuse.245.md)

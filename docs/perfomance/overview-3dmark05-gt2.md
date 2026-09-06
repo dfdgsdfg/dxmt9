@@ -11,7 +11,12 @@ related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; 
 
 # 3DMark05 GT2 Performance — Current Baseline
 
-The latest bounded PE refinement is
+The latest [PE identity diagnostic](present-pacing/present-pacing-pe-identity-distribution.248.md)
+at `706866a4` finds mean 2.588 unique identities / 4.494 comparisons per sampled
+compact preparation. The linear strategy stays unchanged; instrumented FPS
+is not used for promotion or to validate the subsequent specialization work.
+
+The earlier bounded PE refinement is
 [compact transaction / live borrow authority](present-pacing/present-pacing-pe-compact-refinement.247.md),
 following [private plan / fused retention](present-pacing/present-pacing-pe-plan-authority.246.md).
 Normal index clears and unchanged warm-index rebuilds are removed, committed
