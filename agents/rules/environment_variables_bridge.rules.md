@@ -7,6 +7,27 @@ for global notes.
 
 ## PE bridge / recorder
 
+Constant-transition fusion changes the `const_setter` timing population:
+`DXMT9_PE_STATS_DECIMATION` now observes nonzero live setter reductions,
+including redundant writes, rather than only calls admitted to the old
+`touchConstShadow`. Explicit StateBlock recording is excluded. Compare the
+reported event/sample counts, not historical totals as if the populations were
+identical. Disabled reductions construct no timer scope; calibration and
+register-count buckets live in the outlined observed adapter.
+
+`DXMT9_PE_SEMANTIC_OWNER_PHASE_SPLIT` also emits
+`identity_distribution=reconstructed_sampled_only` rows for compact, generic
+and constant attempts. Sums and maxima describe sampled successful
+preparations, not an extrapolated workload total. `sampled_prepared` is the
+measured denominator; `sampled_unmeasured_failures` includes rejected
+preparation or failed reconstruction, and is not zero identity work. Append or
+settlement rejection after successful preparation can still have measured
+work. CapacityPre retry is another attempt. Valid constant attempts have zero
+identity work. Reconstruction is outside the PrepareAdmission child interval
+but inside the inclusive admission parent: that parent now includes diagnostic
+reconstruction cost and cannot be treated as product CPU time. The production
+linear lookup, witness layouts, retention and emitted bytes are unchanged.
+
 `DXMT9_OFFLOAD_COMMIT_REPLAY` and its inline rollback are stable producer-replay
 providers. `DXMT9_CPU_READY_TAPE` is the migration alias for the stable
 default-off streaming provider. Inline-constant delta remains an experimental

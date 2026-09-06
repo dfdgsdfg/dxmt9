@@ -1,6 +1,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <string_view>
 
@@ -199,36 +200,178 @@ constexpr bool matches(OriginRule expected, WriteOrigin actual) noexcept {
        actual == WriteOrigin::PriorValueOperation);
 }
 
+namespace detail {
+
+constexpr bool isKnownRecorderPhase(RecorderPhase value) noexcept {
+  return value == RecorderPhase::Live || value == RecorderPhase::Recording;
+}
+
+constexpr bool isKnownOriginRule(OriginRule value) noexcept {
+  return value == OriginRule::ExplicitSet ||
+      value == OriginRule::PriorValueOperation || value == OriginRule::Any;
+}
+
+constexpr bool isKnownTruthValue(TruthValue value) noexcept {
+  return value == TruthValue::False || value == TruthValue::True ||
+      value == TruthValue::Any;
+}
+
+constexpr bool isKnownSemanticRule(SemanticRule value) noexcept {
+  return value == SemanticRule::False || value == SemanticRule::True ||
+      value == SemanticRule::AnyNotEqualLive;
+}
+
+enum class StateWriteOriginClass : std::uint8_t {
+  ExplicitSet,
+  PriorValueOperation,
+  Unknown,
+};
+
+constexpr StateWriteOriginClass classifyOrigin(WriteOrigin value) noexcept {
+  return value == WriteOrigin::ExplicitSet
+      ? StateWriteOriginClass::ExplicitSet
+      : value == WriteOrigin::PriorValueOperation
+      ? StateWriteOriginClass::PriorValueOperation
+      : StateWriteOriginClass::Unknown;
+}
+
+constexpr bool matches(OriginRule expected,
+                       StateWriteOriginClass actual) noexcept {
+  return expected == OriginRule::Any ||
+      (expected == OriginRule::ExplicitSet &&
+       actual == StateWriteOriginClass::ExplicitSet) ||
+      (expected == OriginRule::PriorValueOperation &&
+       actual == StateWriteOriginClass::PriorValueOperation);
+}
+
+}  // namespace detail
+
+// This is deliberately a value-level check: it is also used by native tests
+// for malformed-row negative assertions.  A row's effect bits are immutable
+// consequences of its kind, while the semantic rule is the only kind-specific
+// part of the row that is evaluated against normalized live equality.
+constexpr bool stateWriteTableRowCanonical(
+    const StateWriteTableRow& row) noexcept {
+  if (!detail::isKnownRecorderPhase(row.phase) ||
+      !detail::isKnownOriginRule(row.origin) ||
+      !detail::isKnownTruthValue(row.liveEquals) ||
+      !detail::isKnownTruthValue(row.pendingContains) ||
+      !detail::isKnownSemanticRule(row.semanticTransition)) {
+    return false;
+  }
+
+  switch (row.kind) {
+    case StateWriteKind::NoOp:
+    case StateWriteKind::RetainPending:
+      return !row.writeLive && !row.writePending && !row.writeRecorded &&
+          !row.directOrderedCall &&
+          row.semanticTransition == SemanticRule::False;
+    case StateWriteKind::QueueDelta:
+      return row.writeLive && row.writePending && !row.writeRecorded &&
+          !row.directOrderedCall &&
+          row.semanticTransition == SemanticRule::True;
+    case StateWriteKind::RecordExplicit:
+      return !row.writeLive && !row.writePending && row.writeRecorded &&
+          !row.directOrderedCall &&
+          row.semanticTransition == SemanticRule::True;
+    case StateWriteKind::ApplyPriorValueOnly:
+      return row.writeLive && !row.writePending && !row.writeRecorded &&
+          row.directOrderedCall &&
+          row.semanticTransition == SemanticRule::AnyNotEqualLive;
+  }
+  return false;
+}
+
+constexpr bool stateWriteTableCanonical() noexcept {
+  for (const auto& row : kStateWriteTable) {
+    if (!stateWriteTableRowCanonical(row)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+static_assert(stateWriteTableCanonical(), "state-write table effect drift");
+
+namespace detail {
+
+struct StateWriteLutEntry {
+  StateWriteKind kind = StateWriteKind::NoOp;
+  bool semantic = false;
+  bool valid = false;
+};
+
+constexpr std::size_t stateWriteLutIndex(RecorderPhase phase,
+                                         StateWriteOriginClass origin,
+                                         bool liveEquals,
+                                         bool pendingContains) noexcept {
+  return (((static_cast<std::size_t>(phase) * 3u) +
+           static_cast<std::size_t>(origin)) *
+              2u +
+          static_cast<std::size_t>(liveEquals)) *
+             2u +
+         static_cast<std::size_t>(pendingContains);
+}
+
+constexpr StateWriteLutEntry stateWriteTableEntry(
+    RecorderPhase phase, StateWriteOriginClass origin, bool liveEquals,
+    bool pendingContains) noexcept {
+  for (const auto& row : kStateWriteTable) {
+    if (row.phase != phase || !matches(row.origin, origin) ||
+        !matches(row.liveEquals, liveEquals) ||
+        !matches(row.pendingContains, pendingContains)) {
+      continue;
+    }
+    const bool semantic = row.semanticTransition == SemanticRule::True ||
+        (row.semanticTransition == SemanticRule::AnyNotEqualLive &&
+         !liveEquals);
+    return StateWriteLutEntry{row.kind, semantic, true};
+  }
+  return {};
+}
+
+constexpr auto makeStateWriteLut() noexcept {
+  std::array<StateWriteLutEntry, 24> lut{};
+  for (std::uint8_t phase = 0; phase < 2; ++phase) {
+    for (std::uint8_t origin = 0; origin < 3; ++origin) {
+      for (std::uint8_t equal = 0; equal < 2; ++equal) {
+        for (std::uint8_t pending = 0; pending < 2; ++pending) {
+          const auto recorderPhase = static_cast<RecorderPhase>(phase);
+          const auto originClass =
+              static_cast<StateWriteOriginClass>(origin);
+          lut[stateWriteLutIndex(recorderPhase, originClass, equal != 0,
+                                 pending != 0)] =
+              stateWriteTableEntry(recorderPhase, originClass, equal != 0,
+                                   pending != 0);
+        }
+      }
+    }
+  }
+  return lut;
+}
+
+inline constexpr auto kStateWriteLut = makeStateWriteLut();
+
+}  // namespace detail
+
 // PeRecorderTransition!PlanRecorderStateWrite is the exact TLA+ twin.  The
 // liveEquals premise is meaningful only when the live table contains the key;
 // normalize the impossible pair to "different" so malformed/test facts fail
 // closed into a real write rather than dropping state.
 constexpr StateWritePlan
 planRecorderStateWrite(StateWriteFacts facts) noexcept {
-  const bool liveEquals = facts.liveContains && facts.liveEquals;
-  for (const auto& row : kStateWriteTable) {
-    if (row.phase != facts.phase || !matches(row.origin, facts.origin) ||
-        !matches(row.liveEquals, liveEquals) ||
-        !matches(row.pendingContains, facts.pendingContains)) {
-      continue;
-    }
-    const bool semantic = row.semanticTransition == SemanticRule::True ||
-        (row.semanticTransition == SemanticRule::AnyNotEqualLive &&
-         !liveEquals);
-    const StateWritePlan plan = StateWritePlan::fromKind(row.kind, semantic);
-    // The row remains the canonical model/code matrix.  Reject a row whose
-    // effect bits disagree with the kind-derived DOD queries rather than
-    // allowing an impossible public plan to be represented.
-    if (plan.writeLive() != row.writeLive ||
-        plan.writePending() != row.writePending ||
-        plan.writeRecorded() != row.writeRecorded ||
-        plan.directOrderedCall() != row.directOrderedCall ||
-        plan.semanticTransition() != semantic) {
-      return StateWritePlan::invalid();
-    }
-    return plan;
+  // Unknown phases had no matching row in the old ordered interpreter.  An
+  // unknown origin is intentionally classified into the bounded LUT class;
+  // the canonical Live/Any row accepts it, while Recording has no such row.
+  if (!detail::isKnownRecorderPhase(facts.phase)) {
+    return StateWritePlan::invalid();
   }
-  return StateWritePlan::invalid();
+  const bool liveEquals = facts.liveContains && facts.liveEquals;
+  const auto& entry = detail::kStateWriteLut[detail::stateWriteLutIndex(
+      facts.phase, detail::classifyOrigin(facts.origin), liveEquals,
+      facts.pendingContains)];
+  return entry.valid ? StateWritePlan(entry.kind, entry.semantic, true)
+                     : StateWritePlan::invalid();
 }
 
 struct AppendFacts {

@@ -4,6 +4,7 @@
 // intentionally separate from CopyMaterializationLedger: a phase is CPU
 // attribution, not a copy/materialization class.
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstddef>
@@ -94,6 +95,53 @@ enum class PeSemanticOwnerSettlementFamily : std::uint8_t {
   Count,
 };
 
+enum class PeSemanticOwnerAdmissionFamily : std::uint8_t {
+  Compact,
+  Generic,
+  Constant,
+  Count,
+};
+
+[[nodiscard]] constexpr const char* peSemanticOwnerAdmissionFamilyName(
+    PeSemanticOwnerAdmissionFamily family) noexcept {
+  switch (family) {
+  case PeSemanticOwnerAdmissionFamily::Compact: return "compact";
+  case PeSemanticOwnerAdmissionFamily::Generic: return "generic";
+  case PeSemanticOwnerAdmissionFamily::Constant: return "constant";
+  case PeSemanticOwnerAdmissionFamily::Count: break;
+  }
+  return "unknown";
+}
+
+// Cold-adapter output reconstructed after successful preparation. It is not a
+// production witness and never crosses the owner transaction boundary.
+struct PeSemanticOwnerAdmissionDistribution {
+  std::uint64_t bindingOccurrences = 0u;
+  std::uint64_t refOccurrences = 0u;
+  std::uint64_t uniqueIdentities = 0u;
+  std::uint64_t linearComparisons = 0u;
+};
+
+struct PeSemanticOwnerAdmissionMetric {
+  std::uint64_t attempts = 0u;
+  std::uint64_t sampledAttempts = 0u;
+  std::uint64_t accepted = 0u;
+  std::uint64_t rejected = 0u;
+  std::uint64_t sampledAccepted = 0u;
+  std::uint64_t sampledRejected = 0u;
+  std::uint64_t sampledPrepared = 0u;
+  std::uint64_t sampledUnmeasuredFailures = 0u;
+  std::uint64_t sampledZeroWork = 0u;
+  std::uint64_t sampledBindingOccurrences = 0u;
+  std::uint64_t sampledRefOccurrences = 0u;
+  std::uint64_t sampledUniqueIdentities = 0u;
+  std::uint64_t sampledLinearComparisons = 0u;
+  std::uint64_t maxBindingOccurrences = 0u;
+  std::uint64_t maxRefOccurrences = 0u;
+  std::uint64_t maxUniqueIdentities = 0u;
+  std::uint64_t maxLinearComparisons = 0u;
+};
+
 [[nodiscard]] constexpr const char* peSemanticOwnerSettlementFamilyName(
     PeSemanticOwnerSettlementFamily family) noexcept {
   switch (family) {
@@ -139,6 +187,10 @@ struct PeSemanticOwnerPhaseStats {
       static_cast<std::size_t>(PeSemanticOwnerSettlementFamily::Count);
   std::array<PeSemanticOwnerSettlementMetric, kSettlementFamilyCount>
       settlements{};
+  static constexpr std::size_t kAdmissionFamilyCount =
+      static_cast<std::size_t>(PeSemanticOwnerAdmissionFamily::Count);
+  std::array<PeSemanticOwnerAdmissionMetric, kAdmissionFamilyCount>
+      admissions{};
 };
 
 class PeSemanticOwnerPhaseObserver final {
@@ -284,6 +336,58 @@ class PeSemanticOwnerPhaseObserver final {
   void recordOutcome(PeSemanticOwnerOutcome outcome) noexcept {
     const auto index = static_cast<std::size_t>(outcome);
     if (index < stats_.outcomes.size()) ++stats_.outcomes[index];
+  }
+
+  void recordAdmissionAttempt(PeSemanticOwnerAdmissionFamily family,
+                              bool sampled, bool prepared, bool accepted,
+                              bool measured) noexcept {
+    const auto index = static_cast<std::size_t>(family);
+    if (index >= PeSemanticOwnerPhaseStats::kAdmissionFamilyCount) return;
+    auto& metric = stats_.admissions[index];
+    ++metric.attempts;
+    if (accepted) {
+      ++metric.accepted;
+    } else {
+      ++metric.rejected;
+    }
+    if (!sampled) return;
+    ++metric.sampledAttempts;
+    if (accepted) {
+      ++metric.sampledAccepted;
+    } else {
+      ++metric.sampledRejected;
+    }
+    if (prepared && measured) {
+      ++metric.sampledPrepared;
+    } else {
+      ++metric.sampledUnmeasuredFailures;
+    }
+  }
+
+  void recordAdmissionDistribution(
+      PeSemanticOwnerAdmissionFamily family,
+      const PeSemanticOwnerAdmissionDistribution& distribution) noexcept {
+    const auto index = static_cast<std::size_t>(family);
+    if (index >= PeSemanticOwnerPhaseStats::kAdmissionFamilyCount) return;
+    auto& metric = stats_.admissions[index];
+    metric.sampledBindingOccurrences += distribution.bindingOccurrences;
+    metric.sampledRefOccurrences += distribution.refOccurrences;
+    metric.sampledUniqueIdentities += distribution.uniqueIdentities;
+    metric.sampledLinearComparisons += distribution.linearComparisons;
+    metric.maxBindingOccurrences =
+        std::max(metric.maxBindingOccurrences, distribution.bindingOccurrences);
+    metric.maxRefOccurrences =
+        std::max(metric.maxRefOccurrences, distribution.refOccurrences);
+    metric.maxUniqueIdentities =
+        std::max(metric.maxUniqueIdentities, distribution.uniqueIdentities);
+    metric.maxLinearComparisons = std::max(metric.maxLinearComparisons,
+                                           distribution.linearComparisons);
+    if (distribution.bindingOccurrences == 0u &&
+        distribution.refOccurrences == 0u &&
+        distribution.uniqueIdentities == 0u &&
+        distribution.linearComparisons == 0u) {
+      ++metric.sampledZeroWork;
+    }
   }
 
   [[nodiscard]] const PeSemanticOwnerPhaseStats& stats() const noexcept {

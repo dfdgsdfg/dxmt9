@@ -682,6 +682,17 @@ constexpr PeSemanticOwnerSettlementFamily peSemanticOwnerSettlementFamily(
 }
 
 template <typename Input>
+constexpr PeSemanticOwnerAdmissionFamily peSemanticOwnerAdmissionFamily(
+    const Input&) noexcept {
+  if constexpr (PeSemanticSparsePlanInputLike<Input>)
+    return PeSemanticOwnerAdmissionFamily::Compact;
+  else if constexpr (PeSemanticConstantInputLike<Input>)
+    return PeSemanticOwnerAdmissionFamily::Constant;
+  else
+    return PeSemanticOwnerAdmissionFamily::Generic;
+}
+
+template <typename Input>
 concept PeSemanticOwnedRecordInputLike = PeSemanticRecordInputLike<Input> ||
     PeSemanticConstantInputLike<Input> || PeSemanticSparsePlanInputLike<Input>;
 
@@ -1583,6 +1594,143 @@ struct PeSemanticPreparedConstantRecord {
 
 static_assert(std::is_trivially_copyable_v<PeSemanticPreparedConstantRecord>);
 static_assert(sizeof(PeSemanticPreparedConstantRecord) <= 112u);
+
+namespace detail {
+
+struct PeSemanticOwnerAdmissionReconstruction {
+  std::array<D9CWireObjectIdentity, 80u> identities;
+  std::array<const void*, 80u> objects;
+  std::size_t count = 0u;
+  PeSemanticOwnerAdmissionDistribution distribution{};
+
+  bool observe(const PeWireObjectRef& ref, std::uint32_t kind) noexcept {
+    ++distribution.refOccurrences;
+    if (!ref.object) return true;
+    if (!ref.valid(kind)) return false;
+    for (std::size_t i = 0u; i < count; ++i) {
+      ++distribution.linearComparisons;
+      if (identities[i].kind == ref.identity.kind &&
+          identities[i].objectId == ref.identity.objectId) {
+        return identities[i].generation == ref.identity.generation &&
+               objects[i] == ref.object;
+      }
+    }
+    if (count == identities.size()) return false;
+    identities[count] = ref.identity;
+    objects[count] = ref.object;
+    ++count;
+    ++distribution.uniqueIdentities;
+    return true;
+  }
+};
+
+template <typename Input, std::size_t IdentityCapacity, typename AdmissionPlanT>
+bool reconstructPeSemanticOwnerAdmission(
+    const Input& input,
+    const PeSemanticPreparedRecordT<IdentityCapacity, AdmissionPlanT>& prepared,
+    PeSemanticOwnerAdmissionDistribution& out) noexcept {
+  out = {};
+  if constexpr (PeSemanticSparsePlanInputLike<Input>) {
+    std::array<bool, IdentityCapacity> seen{};
+    out.bindingOccurrences = prepared.bindingOccurrences.count;
+    out.refOccurrences = prepared.bindingOccurrences.count;
+    for (std::size_t i = 0u; i < prepared.bindingOccurrences.count; ++i) {
+      const auto& locator = prepared.bindingOccurrences.values[i];
+      if (!locator.hasPin) continue;
+      if (locator.mappingOrdinal >= prepared.identityWitness.count ||
+          locator.mappingOrdinal >= IdentityCapacity) return false;
+      const auto ordinal = static_cast<std::size_t>(locator.mappingOrdinal);
+      if (!seen[ordinal]) {
+        if (ordinal != out.uniqueIdentities) return false;
+        out.linearComparisons += ordinal;
+        seen[ordinal] = true;
+        ++out.uniqueIdentities;
+      } else {
+        out.linearComparisons += ordinal + 1u;
+      }
+    }
+    return out.uniqueIdentities == prepared.identityWitness.count;
+  } else {
+    PeSemanticOwnerAdmissionReconstruction reconstruction;
+    const auto& staged = stagedPeSemanticInput(input);
+    const auto direct = [&](const PeWireObjectRef& ref, std::uint32_t kind) noexcept {
+      return reconstruction.observe(ref, kind);
+    };
+    if (!direct(staged.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE) ||
+        !direct(staged.surface1, D9C_CHUNK_HANDLE_KIND_SURFACE) ||
+        !direct(staged.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE) ||
+        !direct(staged.texture1, D9C_CHUNK_HANDLE_KIND_TEXTURE) ||
+        !direct(staged.buffer0, D9C_CHUNK_HANDLE_KIND_BUFFER) ||
+        !direct(staged.buffer1, D9C_CHUNK_HANDLE_KIND_BUFFER) ||
+        !direct(staged.shader0, D9C_CHUNK_HANDLE_KIND_SHADER) ||
+        !direct(staged.shader1, D9C_CHUNK_HANDLE_KIND_SHADER) ||
+        !direct(staged.declaration, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) ||
+        !direct(staged.query, D9C_CHUNK_HANDLE_KIND_QUERY)) return false;
+    switch (staged.producer) {
+    case PeSemanticProducerKind::Present:
+    case PeSemanticProducerKind::ColorFill:
+      if (!direct(staged.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE)) return false;
+      break;
+    case PeSemanticProducerKind::GenerateMipmaps:
+      if (!direct(staged.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE)) return false;
+      break;
+    case PeSemanticProducerKind::StretchRect:
+    case PeSemanticProducerKind::UpdateSurface:
+    case PeSemanticProducerKind::Readback:
+      if (!direct(staged.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE) ||
+          !direct(staged.surface1, D9C_CHUNK_HANDLE_KIND_SURFACE)) return false;
+      break;
+    case PeSemanticProducerKind::UpdateTexture:
+      if (!direct(staged.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE) ||
+          !direct(staged.texture1, D9C_CHUNK_HANDLE_KIND_TEXTURE)) return false;
+      break;
+    case PeSemanticProducerKind::QueryIssue:
+      if (!direct(staged.query, D9C_CHUNK_HANDLE_KIND_QUERY)) return false;
+      break;
+    case PeSemanticProducerKind::ReszDepthResolve:
+      if (!direct(staged.surface0, D9C_CHUNK_HANDLE_KIND_SURFACE) ||
+          !direct(staged.texture0, D9C_CHUNK_HANDLE_KIND_TEXTURE)) return false;
+      break;
+    default: break;
+    }
+    const auto& sparse = peSemanticSparse(input);
+    const auto rows = [&](auto values, std::uint32_t kind) noexcept {
+      for (const auto& row : values) {
+        if (row.wire.valid && !direct(row.object, kind)) return false;
+      }
+      return true;
+    };
+    if (!rows(sparse.textures, D9C_CHUNK_HANDLE_KIND_TEXTURE) ||
+        !rows(sparse.streams, D9C_CHUNK_HANDLE_KIND_BUFFER) ||
+        !rows(sparse.shaders, D9C_CHUNK_HANDLE_KIND_SHADER) ||
+        !rows(sparse.vertexInputs, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) ||
+        !rows(sparse.indexBuffers, D9C_CHUNK_HANDLE_KIND_BUFFER) ||
+        !rows(sparse.renderTargets, D9C_CHUNK_HANDLE_KIND_SURFACE) ||
+        !rows(sparse.depthStencils, D9C_CHUNK_HANDLE_KIND_SURFACE)) return false;
+    out.bindingOccurrences = prepared.bindingOccurrences.count;
+    out.refOccurrences = reconstruction.distribution.refOccurrences;
+    out.uniqueIdentities = reconstruction.distribution.uniqueIdentities;
+    out.linearComparisons = reconstruction.distribution.linearComparisons;
+    if (reconstruction.count != prepared.identityWitness.count) return false;
+    for (std::size_t i = 0u; i < reconstruction.count; ++i) {
+      const auto& entry = prepared.identityWitness.entries[i];
+      if (!prepared.identityWitness.sameIdentity(
+              reconstruction.identities[i], entry.identity) ||
+          reconstruction.objects[i] != entry.object) return false;
+    }
+    return true;
+  }
+}
+
+inline bool reconstructPeSemanticOwnerAdmission(
+    const PeSemanticConstantRecordInput&,
+    const PeSemanticPreparedConstantRecord&,
+    PeSemanticOwnerAdmissionDistribution& out) noexcept {
+  out = {};
+  return true;
+}
+
+}  // namespace detail
 
 struct PeSemanticRecordSlot {
   PeSemanticProducerKind producer = PeSemanticProducerKind::DrawPrimitive;
@@ -2694,9 +2842,15 @@ class PeSemanticBatchOwner final {
                            PeSemanticProductionPreparedRecord>>;
     Prepared prepared;
     PeSemanticAdmissionOutcome outcome;
+    PeSemanticOwnerAdmissionDistribution distribution{};
+    bool measured = false;
     {
       auto phase = phaseObserver_->child(PeSemanticOwnerPhase::PrepareAdmission);
       outcome = prepareAdmission(input, prepared);
+    }
+    if (parent.sampled() && outcome == PeSemanticAdmissionOutcome::Admissible) {
+      measured = detail::reconstructPeSemanticOwnerAdmission(
+          input, prepared, distribution);
     }
     if (outcome != PeSemanticAdmissionOutcome::Admissible) {
       switch (outcome) {
@@ -2712,6 +2866,9 @@ class PeSemanticBatchOwner final {
       case PeSemanticAdmissionOutcome::Admissible: break;
       }
       phaseObserver_->recordOutcome(phaseOutcome(lastAdmissionFailure_));
+      phaseObserver_->recordAdmissionAttempt(
+          peSemanticOwnerAdmissionFamily(input), parent.sampled(), false, false,
+          false);
       return false;
     }
     const bool accepted = appendPreparedRecord<true>(
@@ -2719,6 +2876,13 @@ class PeSemanticBatchOwner final {
     phaseObserver_->recordOutcome(
         accepted ? PeSemanticOwnerOutcome::Accepted
                  : phaseOutcome(lastAdmissionFailure_));
+    phaseObserver_->recordAdmissionAttempt(
+        peSemanticOwnerAdmissionFamily(input), parent.sampled(), true, accepted,
+        measured);
+    if (parent.sampled() && measured) {
+      phaseObserver_->recordAdmissionDistribution(
+          peSemanticOwnerAdmissionFamily(input), distribution);
+    }
     return accepted;
   }
 

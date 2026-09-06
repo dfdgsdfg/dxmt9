@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dxmt9/copy_materialization_ledger.hpp"
+#include "d3d9_pe_transition_algebra.hpp"
 
 #include "d3d9_pe_stats_decimation.hpp"
 #include "dxmt9/device_c.h"
@@ -230,19 +231,18 @@ struct PeStateBlockConstRecorded {
     }
 };
 
-// DXMT9_PE_STATS_DECIMATION diagnostic (const_setter scope): touchConstShadow
-// is a free function shared by all six VS/PS const-shadow call sites in
+// DXMT9_PE_STATS_DECIMATION diagnostic (const_setter scope): the fused
+// constant transition reducer is shared by all six VS/PS const-shadow call sites in
 // d3d9_pe_device.cpp, so the accumulator and its cached env value live as
 // function-local statics here (a single instance per process, guaranteed by
 // the ODR for this inline function) rather than as a device-class member.
 // D3D9DeviceImpl::logPeStatsDecimation() reaches it via
 // peConstSetterDecimatedStats().
 //
-// phaseOffset is 1, not 0, and that is load-bearing: touchConstShadow is
-// called exactly once per const-setter entry point, so this scope's event
-// counter advances in lockstep with the entry scope's
-// (peEntryConstDecimatedStats_). Sharing phase 0 would make both sample the
-// same calls forever and bury this scope's entire instrument inside the entry
+// phaseOffset is 1, not 0: valid nonzero live setters now include redundant
+// writes in this scope (the former touch-only population excluded them).
+// Sharing phase 0 could make both scopes sample the same calls and bury this
+// scope's entire instrument inside the entry
 // scope's span -- the failure documented at the top of
 // d3d9_pe_stats_decimation.hpp.
 inline PeDecimatedScopeStats& peConstSetterDecimatedStats() {
@@ -279,111 +279,193 @@ inline std::uint32_t peConstSetterDecimationN() {
     return n;
 }
 
+enum class ConstShadowTransitionMode : std::uint8_t {
+    Observe,
+    Apply,
+};
+
+struct ConstShadowTransitionResult {
+    // Aggregate model permissions, not changed-byte counters. In particular
+    // an absent zero register permits materialization without becoming dirty.
+    bool valid = true;
+    bool writeLive = false;
+    bool writePending = false;
+    bool writeRecorded = false;
+
+    bool writesLive() const noexcept { return writeLive; }
+    bool writesPending() const noexcept { return writePending; }
+    bool writesRecorded() const noexcept { return writeRecorded; }
+};
+
+inline bool constShadowTransitionElemEquals(
+    const ConstShadow& shadow, std::size_t offset, bool liveContains,
+    const std::uint8_t* source, std::size_t elemSize) noexcept {
+    if (liveContains) {
+        return std::memcmp(shadow.values.data() + offset, source, elemSize) == 0;
+    }
+    for (std::size_t i = 0; i < elemSize; ++i) {
+        if (source[i] != 0u) return false;
+    }
+    return true;
+}
+
+// Reduce and, in Apply mode, commit one constant-setter transition. Observe
+// mode is used by state-block recording: it evaluates the same model facts
+// without touching the live shadow. Apply mode materializes the requested
+// extent first (resize is allocation-free after PeConstShadowBlock's bounded
+// warm reservation), then copies only differing QueueDelta elements while
+// reducing. This generic helper may allocate for an unreserved test shadow;
+// keep the former touch helper's exception contract, not an implicit terminate.
+inline ConstShadowTransitionResult reduceConstShadowTransitionUnobserved(
+    ConstShadow& shadow, dxmt9::d3d9::pe::RecorderPhase phase,
+    ConstShadowTransitionMode mode, std::uint32_t start,
+    std::uint32_t count, const void* data, std::size_t elemSize) {
+    ConstShadowTransitionResult result{};
+    if (count == 0u) return result;
+    if (!data || elemSize == 0u) {
+        result.valid = false;
+        return result;
+    }
+    if (mode == ConstShadowTransitionMode::Apply &&
+        phase != dxmt9::d3d9::pe::RecorderPhase::Live) {
+        result.valid = false;
+        return result;
+    }
+
+    const auto* source = static_cast<const std::uint8_t*>(data);
+    const std::uint64_t end64 = static_cast<std::uint64_t>(start) + count;
+    if (end64 > 0xffffffffull || elemSize > 0xffffffffull / end64) {
+        result.valid = false;
+        return result;
+    }
+    const std::uint64_t needed64 = end64 * elemSize;
+    const std::size_t oldValueSize = shadow.values.size();
+    const std::size_t oldElemSize = shadow.dirtyElems.size();
+    const std::size_t needed = static_cast<std::size_t>(needed64);
+    const std::size_t neededElems = static_cast<std::size_t>(end64);
+    if (mode == ConstShadowTransitionMode::Apply) {
+        if (shadow.values.size() < needed) shadow.values.resize(needed);
+        if (shadow.dirtyElems.size() < neededElems)
+            shadow.dirtyElems.resize(neededElems);
+    }
+
+    bool changed = false;
+    std::uint32_t firstChanged = count;
+    std::uint32_t lastChanged = 0u;
+    for (std::uint32_t i = 0u; i < count; ++i) {
+        const std::uint32_t reg = start + i;
+        const std::size_t offset = static_cast<std::size_t>(reg) * elemSize;
+        const bool liveContains = oldValueSize >= offset + elemSize;
+        // One comparison serves both the old wrapper's permission decision
+        // and touch's byte update. An absent zero register requests extent
+        // materialization through the model, but matches resize's zero fill
+        // and must not gain a pending dirty bit.
+        const bool equals = constShadowTransitionElemEquals(
+            shadow, offset,
+            mode == ConstShadowTransitionMode::Apply || liveContains,
+            source + static_cast<std::size_t>(i) * elemSize, elemSize);
+        const auto plan = dxmt9::d3d9::pe::planRecorderStateWrite(
+            dxmt9::d3d9::pe::StateWriteFacts{
+                .phase = phase,
+                .origin = dxmt9::d3d9::pe::WriteOrigin::ExplicitSet,
+                .liveContains = liveContains,
+                .liveEquals = equals,
+                .pendingContains =
+                    reg < oldElemSize && shadow.dirtyElems[reg] != 0u,
+            });
+        result.valid = result.valid && plan.valid();
+        result.writeLive = result.writeLive || plan.writeLive();
+        result.writePending = result.writePending || plan.writePending();
+        result.writeRecorded = result.writeRecorded || plan.writeRecorded();
+
+        if (mode != ConstShadowTransitionMode::Apply ||
+            !plan.writePending() || equals) {
+            continue;
+        }
+        const auto* element = source + static_cast<std::size_t>(i) * elemSize;
+        std::memcpy(shadow.values.data() + offset, element, elemSize);
+        shadow.dirtyElems[reg] = 1u;
+        changed = true;
+        firstChanged = std::min(firstChanged, i);
+        lastChanged = i + 1u;
+    }
+
+    if (mode == ConstShadowTransitionMode::Apply && changed) {
+        const std::uint32_t changedStart = start + firstChanged;
+        const std::uint32_t changedEnd = start + lastChanged;
+        if (!shadow.dirty()) {
+            shadow.dirtyStart = changedStart;
+            shadow.dirtyEnd = changedEnd;
+        } else {
+            shadow.dirtyStart =
+                std::min(shadow.dirtyStart, changedStart);
+            shadow.dirtyEnd = std::max(shadow.dirtyEnd, changedEnd);
+        }
+    }
+    return result;
+}
+
+// Keep timer state and calibration in a cold outlined adapter. The disabled
+// constant path constructs no diagnostic scope, even on a redundant write.
+__attribute__((noinline)) inline ConstShadowTransitionResult
+reduceConstShadowTransitionObserved(
+    ConstShadow& shadow, std::uint32_t start, std::uint32_t count,
+    const void* data, std::size_t elemSize) {
+    struct DecimatedScopeGuard {
+        PeDecimatedScopeStats* stats = nullptr;
+        std::uint32_t bucketCount = 0u;
+        std::chrono::steady_clock::time_point t0{};
+        ~DecimatedScopeGuard() {
+            if (!stats) return;
+            const auto elapsedNs = std::chrono::duration_cast<
+                std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now() - t0).count();
+            PeDecimatedScopeTimer::recordSample(
+                *stats, static_cast<std::uint64_t>(elapsedNs));
+            peConstSetterDecimatedBuckets().record(
+                bucketCount, static_cast<std::uint64_t>(elapsedNs));
+        }
+    } scope;
+    const auto n = peConstSetterDecimationN();
+    if (PeDecimatedScopeTimer::shouldSample(peConstSetterDecimatedStats(), n)) {
+        scope.stats = &peConstSetterDecimatedStats();
+        scope.bucketCount = count;
+        const auto n0 = std::chrono::steady_clock::now();
+        const auto n1 = std::chrono::steady_clock::now();
+        PeDecimatedScopeTimer::recordSample(
+            peDecimatedNullScopeStats(), static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(n1 - n0).count()));
+        scope.t0 = std::chrono::steady_clock::now();
+    }
+    peConstSetterDecimatedBuckets().countEvent(count);
+    return reduceConstShadowTransitionUnobserved(
+        shadow, dxmt9::d3d9::pe::RecorderPhase::Live,
+        ConstShadowTransitionMode::Apply, start, count, data, elemSize);
+}
+
+inline ConstShadowTransitionResult reduceConstShadowTransition(
+    ConstShadow& shadow, dxmt9::d3d9::pe::RecorderPhase phase,
+    ConstShadowTransitionMode mode, std::uint32_t start,
+    std::uint32_t count, const void* data, std::size_t elemSize) {
+    if (mode == ConstShadowTransitionMode::Apply &&
+        phase == dxmt9::d3d9::pe::RecorderPhase::Live &&
+        count != 0u && data && elemSize != 0u &&
+        peConstSetterDecimationN() != 0u) {
+        return reduceConstShadowTransitionObserved(
+            shadow, start, count, data, elemSize);
+    }
+    return reduceConstShadowTransitionUnobserved(
+        shadow, phase, mode, start, count, data, elemSize);
+}
+
 inline void touchConstShadow(ConstShadow& shadow,
                              std::uint32_t start,
                              std::uint32_t count,
                              const void* data,
                              std::size_t elemSize) {
-    // Decimated timing: sample only every Nth call so the CPU cost of
-    // measuring is itself negligible (see d3d9_pe_stats_decimation.hpp).
-    // Independent of DXMT9_PE_RECORDER_STATS. Guard covers every exit path
-    // (including the early returns below) via RAII.
-    struct DecimatedScopeGuard {
-        PeDecimatedScopeStats* stats = nullptr;
-        std::uint32_t bucketCount = 0;
-        std::chrono::steady_clock::time_point t0{};
-        ~DecimatedScopeGuard() {
-            if (stats) {
-                const auto elapsedNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                    std::chrono::steady_clock::now() - t0).count();
-                PeDecimatedScopeTimer::recordSample(
-                    *stats, static_cast<std::uint64_t>(elapsedNs));
-                peConstSetterDecimatedBuckets().record(
-                    bucketCount, static_cast<std::uint64_t>(elapsedNs));
-            }
-        }
-    } decimatedScope;
-    const std::uint32_t decimationN = peConstSetterDecimationN();
-    if (decimationN != 0 &&
-        PeDecimatedScopeTimer::shouldSample(peConstSetterDecimatedStats(), decimationN)) {
-        decimatedScope.stats = &peConstSetterDecimatedStats();
-        decimatedScope.bucketCount = count;
-        // Calibration sample: an empty region timed with the same clock pair.
-        {
-            const auto n0 = std::chrono::steady_clock::now();
-            const auto n1 = std::chrono::steady_clock::now();
-            PeDecimatedScopeTimer::recordSample(
-                peDecimatedNullScopeStats(),
-                static_cast<std::uint64_t>(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(n1 - n0).count()));
-        }
-        decimatedScope.t0 = std::chrono::steady_clock::now();
-    }
-    if (decimationN != 0) {
-        peConstSetterDecimatedBuckets().countEvent(count);
-    }
-    const std::uint64_t needed64 =
-        (static_cast<std::uint64_t>(start) + count) * elemSize;
-    if (needed64 > 0xffffffffull) {
-        return;
-    }
-    const auto needed = static_cast<std::size_t>(needed64);
-    // Captured BEFORE the resize below: true only when this call's whole
-    // span was already materialized by a previous call. A freshly-extended
-    // region is zero-filled by resize() and must NOT take the bulk
-    // early-out below -- an all-zero write into it has to fall through to
-    // the per-element loop, which is what makes it alias the zero-fill and
-    // stay clean (see the (d)/(e) cases in
-    // testTouchConstShadowSemantics()).
-    const bool alreadyCovered = shadow.values.size() >= needed;
-    if (shadow.values.size() < needed) {
-        shadow.values.resize(needed);
-    }
-    const std::size_t neededElems = static_cast<std::size_t>(start) + count;
-    if (shadow.dirtyElems.size() < neededElems) {
-        shadow.dirtyElems.resize(neededElems);
-    }
-    const auto offset = static_cast<std::size_t>(start) * elemSize;
-    const auto bytes = static_cast<std::size_t>(count) * elemSize;
-    bool changed = false;
-    std::uint32_t firstChanged = count;
-    std::uint32_t lastChanged = 0;
-    if (bytes != 0 && data) {
-        auto* dst = shadow.values.data() + offset;
-        const auto* src = static_cast<const std::uint8_t*>(data);
-        // Bulk-span early-out: one vectorized compare over the whole span
-        // instead of per-element memcmp/memcpy calls. Only valid when the
-        // span was already materialized (alreadyCovered) -- see the
-        // comment above. When it fires and the span is unchanged, this is
-        // observably identical to the per-element loop finding every
-        // element equal: no dirtyElems writes, no merged-range update.
-        if (alreadyCovered && std::memcmp(dst, src, bytes) == 0) {
-            return;
-        }
-        for (std::uint32_t i = 0; i < count; ++i) {
-            const auto elemOffset = static_cast<std::size_t>(i) * elemSize;
-            if (std::memcmp(dst + elemOffset, src + elemOffset, elemSize) == 0) {
-                continue;
-            }
-            std::memcpy(dst + elemOffset, src + elemOffset, elemSize);
-            shadow.dirtyElems[static_cast<std::size_t>(start) + i] = 1;
-            changed = true;
-            firstChanged = std::min<std::uint32_t>(firstChanged, i);
-            lastChanged = i + 1u;
-        }
-    }
-    if (!changed) {
-        return;
-    }
-    const std::uint32_t changedStart = start + firstChanged;
-    const std::uint32_t end = start + lastChanged;
-    if (!shadow.dirty()) {
-        shadow.dirtyStart = changedStart;
-        shadow.dirtyEnd = end;
-    } else {
-        shadow.dirtyStart = std::min<std::uint32_t>(shadow.dirtyStart, changedStart);
-        shadow.dirtyEnd = std::max<std::uint32_t>(shadow.dirtyEnd, end);
-    }
+    (void)reduceConstShadowTransition(
+        shadow, dxmt9::d3d9::pe::RecorderPhase::Live,
+        ConstShadowTransitionMode::Apply, start, count, data, elemSize);
 }
 
 // R-BACK-2.52(b),(d) (DXMT9_PE_INLINE_CONST_DELTA fold): consume `shadow`'s

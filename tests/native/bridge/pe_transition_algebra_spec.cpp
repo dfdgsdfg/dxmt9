@@ -53,6 +53,46 @@ static_assert(!kContradictoryAppend.valid() &&
               !kContradictoryAppend.recordDurable() &&
               !kContradictoryAppend.retainPreparedProjection());
 
+constexpr pe::StateWriteTableRow kMalformedEffectRow{
+    .phase = pe::RecorderPhase::Live,
+    .origin = pe::OriginRule::Any,
+    .liveEquals = pe::TruthValue::False,
+    .pendingContains = pe::TruthValue::Any,
+    .kind = pe::StateWriteKind::QueueDelta,
+    .writeLive = false,
+    .writePending = true,
+    .writeRecorded = false,
+    .directOrderedCall = false,
+    .semanticTransition = pe::SemanticRule::True,
+};
+constexpr pe::StateWriteTableRow kMalformedSemanticRow{
+    .phase = pe::RecorderPhase::Recording,
+    .origin = pe::OriginRule::ExplicitSet,
+    .liveEquals = pe::TruthValue::Any,
+    .pendingContains = pe::TruthValue::Any,
+    .kind = pe::StateWriteKind::RecordExplicit,
+    .writeLive = false,
+    .writePending = false,
+    .writeRecorded = true,
+    .directOrderedCall = false,
+    .semanticTransition = pe::SemanticRule::False,
+};
+constexpr pe::StateWriteTableRow kMalformedEnumRow{
+    .phase = static_cast<pe::RecorderPhase>(0xffu),
+    .origin = pe::OriginRule::Any,
+    .liveEquals = pe::TruthValue::False,
+    .pendingContains = pe::TruthValue::Any,
+    .kind = pe::StateWriteKind::QueueDelta,
+    .writeLive = true,
+    .writePending = true,
+    .writeRecorded = false,
+    .directOrderedCall = false,
+    .semanticTransition = pe::SemanticRule::True,
+};
+static_assert(!pe::stateWriteTableRowCanonical(kMalformedEffectRow));
+static_assert(!pe::stateWriteTableRowCanonical(kMalformedSemanticRow));
+static_assert(!pe::stateWriteTableRowCanonical(kMalformedEnumRow));
+
 int failures = 0;
 
 void check(bool condition, const char* message) {
@@ -64,11 +104,69 @@ void check(bool condition, const char* message) {
 
 bool samePlan(const pe::StateWritePlan& a,
               const pe::StateWritePlan& b) {
-  return a.kind() == b.kind() && a.writeLive() == b.writeLive() &&
+  return a.valid() == b.valid() && a.kind() == b.kind() &&
+      a.writeLive() == b.writeLive() &&
       a.writePending() == b.writePending() &&
       a.writeRecorded() == b.writeRecorded() &&
       a.directOrderedCall() == b.directOrderedCall() &&
       a.semanticTransition() == b.semanticTransition();
+}
+
+struct LegacyStateWritePlan {
+  pe::StateWriteKind kind = pe::StateWriteKind::NoOp;
+  bool valid = false;
+  bool writeLive = false;
+  bool writePending = false;
+  bool writeRecorded = false;
+  bool directOrderedCall = false;
+  bool semanticTransition = false;
+};
+
+// Independent pre-LUT interpreter.  It intentionally repeats the old
+// ordered scan and derives effects from the kind, so the production reducer
+// cannot pass this check merely by calling itself.
+LegacyStateWritePlan oldPlanRecorderStateWrite(pe::StateWriteFacts facts) {
+  const bool liveEquals = facts.liveContains && facts.liveEquals;
+  for (const auto& row : pe::kStateWriteTable) {
+    if (row.phase != facts.phase || !pe::matches(row.origin, facts.origin) ||
+        !pe::matches(row.liveEquals, liveEquals) ||
+        !pe::matches(row.pendingContains, facts.pendingContains)) {
+      continue;
+    }
+    const bool semantic = row.semanticTransition == pe::SemanticRule::True ||
+        (row.semanticTransition == pe::SemanticRule::AnyNotEqualLive &&
+         !liveEquals);
+    LegacyStateWritePlan plan{
+        .kind = row.kind,
+        .valid = true,
+        .writeLive = row.kind == pe::StateWriteKind::QueueDelta ||
+            row.kind == pe::StateWriteKind::ApplyPriorValueOnly,
+        .writePending = row.kind == pe::StateWriteKind::QueueDelta,
+        .writeRecorded = row.kind == pe::StateWriteKind::RecordExplicit,
+        .directOrderedCall =
+            row.kind == pe::StateWriteKind::ApplyPriorValueOnly,
+        .semanticTransition = semantic,
+    };
+    if (plan.writeLive != row.writeLive ||
+        plan.writePending != row.writePending ||
+        plan.writeRecorded != row.writeRecorded ||
+        plan.directOrderedCall != row.directOrderedCall ||
+        plan.semanticTransition != semantic) {
+      return {};
+    }
+    return plan;
+  }
+  return {};
+}
+
+bool samePlan(const pe::StateWritePlan& actual,
+              const LegacyStateWritePlan& expected) {
+  return actual.valid() == expected.valid && actual.kind() == expected.kind &&
+      actual.writeLive() == expected.writeLive &&
+      actual.writePending() == expected.writePending &&
+      actual.writeRecorded() == expected.writeRecorded &&
+      actual.directOrderedCall() == expected.directOrderedCall &&
+      actual.semanticTransition() == expected.semanticTransition;
 }
 
 struct QualifiedKey {
@@ -107,65 +205,77 @@ pe::StateWritePlan write(Domains& domains, QualifiedKey key, int value,
 }
 
 void exhaustiveStateTruthTable() {
-  constexpr pe::RecorderPhase phases[] = {
-      pe::RecorderPhase::Live, pe::RecorderPhase::Recording};
-  constexpr pe::WriteOrigin origins[] = {
-      pe::WriteOrigin::ExplicitSet, pe::WriteOrigin::PriorValueOperation};
+  for (unsigned phaseRaw = 0; phaseRaw <= 0xffu; ++phaseRaw) {
+    for (unsigned originRaw = 0; originRaw <= 0xffu; ++originRaw) {
+      const auto phase = static_cast<pe::RecorderPhase>(phaseRaw);
+      const auto origin = static_cast<pe::WriteOrigin>(originRaw);
+      for (unsigned bits = 0; bits < 8u; ++bits) {
+        const bool liveContains = (bits & 1u) != 0u;
+        const bool liveEquals = (bits & 2u) != 0u;
+        const bool pendingContains = (bits & 4u) != 0u;
+        const auto plan = pe::planRecorderStateWrite({
+            .phase = phase,
+            .origin = origin,
+            .liveContains = liveContains,
+            .liveEquals = liveEquals,
+            .pendingContains = pendingContains,
+        });
+        check(samePlan(
+                  plan,
+                  oldPlanRecorderStateWrite({
+                      .phase = phase,
+                      .origin = origin,
+                      .liveContains = liveContains,
+                      .liveEquals = liveEquals,
+                      .pendingContains = pendingContains,
+                  })),
+              "LUT reducer matches independent ordered interpreter");
+        const bool normalizedEquals = liveContains && liveEquals;
+        if (phase == pe::RecorderPhase::Live) {
+          if (normalizedEquals) {
+            check(!plan.writeLive() && !plan.writePending(),
+                  "equal live writes never create duplicate effects");
+            check(plan.kind() == (pendingContains
+                                    ? pe::StateWriteKind::RetainPending
+                                    : pe::StateWriteKind::NoOp),
+                  "equal live write distinguishes pending obligation");
+          } else {
+            check(plan.kind() == pe::StateWriteKind::QueueDelta &&
+                      plan.writeLive() && plan.writePending(),
+                  "changed live write queues one delta");
+          }
+          check(!plan.writeRecorded() && !plan.directOrderedCall(),
+                "live writes do not touch recording-only domains");
+        } else if (phase == pe::RecorderPhase::Recording &&
+                   origin == pe::WriteOrigin::ExplicitSet) {
+          check(plan.kind() == pe::StateWriteKind::RecordExplicit &&
+                    plan.writeRecorded() && !plan.writeLive() &&
+                    !plan.writePending() && !plan.directOrderedCall() &&
+                    plan.semanticTransition(),
+                "recording explicit write is record-only");
+        } else if (phase == pe::RecorderPhase::Recording &&
+                   origin == pe::WriteOrigin::PriorValueOperation) {
+          check(plan.kind() == pe::StateWriteKind::ApplyPriorValueOnly &&
+                    plan.writeLive() && !plan.writePending() &&
+                    !plan.writeRecorded() && plan.directOrderedCall(),
+                "prior-value write changes live but never recorded set");
+        } else {
+          check(!plan.valid(),
+                "unknown phase/origin remains invalid outside Live Any row");
+        }
 
-  for (auto phase : phases) {
-    for (auto origin : origins) {
-        for (unsigned bits = 0; bits < 16u; ++bits) {
-          const bool liveContains = (bits & 1u) != 0u;
-          const bool liveEquals = (bits & 2u) != 0u;
-          const bool pendingContains = (bits & 4u) != 0u;
-          const auto plan = pe::planRecorderStateWrite({
+        if (!liveContains && liveEquals) {
+          auto normalized = pe::planRecorderStateWrite({
               .phase = phase,
               .origin = origin,
-              .liveContains = liveContains,
-              .liveEquals = liveEquals,
+              .liveContains = false,
+              .liveEquals = false,
               .pendingContains = pendingContains,
           });
-          const bool normalizedEquals = liveContains && liveEquals;
-          if (phase == pe::RecorderPhase::Live) {
-            if (normalizedEquals) {
-              check(!plan.writeLive() && !plan.writePending(),
-                    "equal live writes never create duplicate effects");
-              check(plan.kind() == (pendingContains
-                                      ? pe::StateWriteKind::RetainPending
-                                      : pe::StateWriteKind::NoOp),
-                    "equal live write distinguishes pending obligation");
-            } else {
-              check(plan.kind() == pe::StateWriteKind::QueueDelta &&
-                        plan.writeLive() && plan.writePending(),
-                    "changed live write queues one delta");
-            }
-            check(!plan.writeRecorded() && !plan.directOrderedCall(),
-                  "live writes do not touch recording-only domains");
-          } else if (origin == pe::WriteOrigin::ExplicitSet) {
-            check(plan.kind() == pe::StateWriteKind::RecordExplicit &&
-                      plan.writeRecorded() && !plan.writeLive() &&
-                      !plan.writePending() && !plan.directOrderedCall() &&
-                      plan.semanticTransition(),
-                  "recording explicit write is record-only");
-          } else {
-            check(plan.kind() == pe::StateWriteKind::ApplyPriorValueOnly &&
-                      plan.writeLive() && !plan.writePending() &&
-                      !plan.writeRecorded() && plan.directOrderedCall(),
-                  "prior-value write changes live but never recorded set");
-          }
-
-          if (!liveContains && liveEquals) {
-            auto normalized = pe::planRecorderStateWrite({
-                .phase = phase,
-                .origin = origin,
-                .liveContains = false,
-                .liveEquals = false,
-                .pendingContains = pendingContains,
-            });
-            check(samePlan(plan, normalized),
-                  "impossible equality tuple normalizes to different");
-          }
+          check(samePlan(plan, normalized),
+                "impossible equality tuple normalizes to different");
         }
+      }
     }
   }
 }

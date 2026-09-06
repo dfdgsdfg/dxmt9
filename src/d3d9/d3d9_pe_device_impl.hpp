@@ -2377,7 +2377,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
             return D3DERR_DEVICELOST;
         }
         if (count == 0u) return S_OK;
-        const auto* bytes = static_cast<const std::uint8_t*>(data);
         if (recorderState_.stateBlockTransaction.isRecording()) {
             HRESULT recordingHr = D3DERR_INVALIDCALL;
             const bool entered =
@@ -2386,32 +2385,14 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                 StateBlockConstShadow& recorded =
                     writer.constants().*recordedMember;
                 try {
-                    for (std::uint32_t i = 0u; i < count; ++i) {
-                        const std::uint32_t reg = start + i;
-                        const std::size_t offset =
-                            static_cast<std::size_t>(reg) * elemSize;
-                        const bool liveContains =
-                            live.values.size() >= offset + elemSize;
-                        const bool pendingContains =
-                            reg < live.dirtyElems.size() &&
-                            live.dirtyElems[reg] != 0u;
-                        const StateWritePlan plan = planRecorderStateWrite(
-                            StateWriteFacts{
-                                .phase = RecorderPhase::Recording,
-                                .origin = WriteOrigin::ExplicitSet,
-                                .liveContains = liveContains,
-                                .liveEquals =
-                                    liveContains && constShadowElemEquals(
-                                        live, reg, bytes +
-                                            static_cast<std::size_t>(i) * elemSize,
-                                        elemSize),
-                                .pendingContains = pendingContains,
-                            });
-                        if (!plan.writeRecorded() || plan.writeLive() ||
-                            plan.writePending()) {
-                            recordingHr = D3DERR_INVALIDCALL;
-                            return;
-                        }
+                    const auto transition = reduceConstShadowTransition(
+                        live, RecorderPhase::Recording,
+                        ConstShadowTransitionMode::Observe,
+                        start, count, data, elemSize);
+                    if (!transition.valid || !transition.writesRecorded() ||
+                        transition.writesLive() || transition.writesPending()) {
+                        recordingHr = D3DERR_INVALIDCALL;
+                        return;
                     }
                     recorded.record(start, count, data, elemSize);
                     recordingHr = S_OK;
@@ -2422,26 +2403,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
             return entered ? recordingHr : D3DERR_INVALIDCALL;
         }
 
-        bool touch = false;
-        for (std::uint32_t i = 0u; i < count; ++i) {
-            const std::uint32_t reg = start + i;
-            const std::size_t offset =
-                static_cast<std::size_t>(reg) * elemSize;
-            const bool liveContains = live.values.size() >= offset + elemSize;
-            const bool pendingContains =
-                reg < live.dirtyElems.size() && live.dirtyElems[reg] != 0u;
-            const StateWritePlan plan = planRecorderStateWrite(StateWriteFacts{
-                .phase = RecorderPhase::Live,
-                .origin = WriteOrigin::ExplicitSet,
-                .liveContains = liveContains,
-                .liveEquals = liveContains && constShadowElemEquals(
-                    live, reg,
-                    bytes + static_cast<std::size_t>(i) * elemSize, elemSize),
-                .pendingContains = pendingContains,
-            });
-            touch = touch || plan.writePending();
-        }
-        if (touch) touchConstShadow(live, start, count, data, elemSize);
+        (void)reduceConstShadowTransition(
+            live, RecorderPhase::Live, ConstShadowTransitionMode::Apply,
+            start, count, data, elemSize);
         return S_OK;
     }
 

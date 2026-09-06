@@ -891,3 +891,36 @@ acquisition, retain/fault order, canonical bounds, and post-callback validity
 remain mandatory. Null and duplicate occurrences, cross-family aliases,
 stale identity, partial acquisition, and failed settlement must refine the
 checked reference path in bytes, ownership, and retry behavior.
+
+**R-CORE-REC-7.37** Ordinary constant setters must consume comparison and state
+transition results in the shadow update instead of discarding per-register
+facts and independently deriving them again. The production-used helper must
+preserve bitwise values, materialized extent, existing pending obligations,
+exact dirty registers and merged range, and the separate StateBlock recording
+domain. First writes of zero into an absent extent must retain the established
+zero-extension semantics. Warm bounded updates must not add allocation or a
+large per-call staging product. Native reference traces must exercise the same
+helper as production across all six constant families, equality, partial writes,
+A/B/A, extent growth, and explicit recording; timing instrumentation must stay
+gated and report its actual event population.
+
+**R-CORE-REC-7.38** Immutable state-write table consistency must be checked at
+compile time, not revalidated for each dynamic state write. The production
+reducer and model must continue to derive from one transition table; generated
+lookup or branch forms may replace the interpreter only when native exhaustive
+comparison preserves row precedence, normalized facts, effect bits, and invalid
+input behavior. Compile-time negative fixtures must reject inconsistent rows.
+This does not waive validation of mutable state or introduce an independent
+hand-maintained policy. Release PE32/PE64 evidence must identify eliminated
+runtime checks rather than infer zero cost from `constexpr` declarations.
+
+**R-CORE-REC-7.39** Record-local identity strategy changes require evidence of
+actual occurrence, unique-identity, and comparison-count distributions. The
+existing cold semantic-owner observer may collect bounded admission-attempt
+distributions with explicit family, sample population, outcome, and retry
+semantics. Nulls, duplicates, collisions, and capacity rejection must not change
+production identity order, retention, canonical bytes, or rollback. Disabled
+production witnesses and calls must not acquire diagnostic counters, storage,
+clock reads, or identity walks. Diagnostic reconstruction, if used, must be
+labelled and tested against the actual operation; its cost and counts are not
+product CPU time or permission to replace the linear lookup.

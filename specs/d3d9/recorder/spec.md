@@ -887,6 +887,38 @@ transaction order; these changes introduce no thread, wake, or lease transition.
 Concrete C++ value refinement, PE codegen, and later Wine/performance evidence
 remain separate layers.
 
+R-CORE-REC-7.37–7.39 separate constant value work, immutable rule validation,
+and identity-strategy evidence. Ordinary constant writes use a shared bounded
+comparison/transition/update helper; the explicit StateBlock recording branch
+remains separate. Materialized extent and dirty membership are independent:
+extending an absent range with zero bytes does not create changed registers.
+Bitwise floating-point values, existing pending obligations, and the emitted
+merged range remain identical to the serial reference. No new PE-to-Unix
+crossing, chunk boundary, or backend state representation is introduced.
+
+The canonical transition table remains the model/code source. Static checks
+establish row consistency, while a table-derived execution form consumes only
+dynamic facts at runtime. A separate old-interpreter reference checks the whole
+bounded input domain, including invalid enums and normalization. Constant
+native traces compare actual production-used helpers with the previous value
+algorithm. These are local value refinements; existing TLA models own lifecycle
+ordering, and no new concurrent protocol is implied.
+
+Identity statistics belong to the nullable cold semantic-owner observer under
+its existing phase-split/decimation gate. Observed attempts distinguish family,
+sample coverage, successful admission and rejection; a CapacityPre retry is
+another attempt. Only successful preparation supplies a complete distribution;
+failed preparation is unmeasured, while a later append failure may still have
+measured work. Compact reconstruction consumes first-retain ordinals from the
+existing binding witness; generic reconstruction checks immutable input order
+against the prepared identity prefix. Sums and maxima are labelled as sampled
+reconstruction, not executed instruction counts. Its work is outside the
+PrepareAdmission child interval but inside the inclusive admission parent.
+The linear production identity algorithm remains unchanged.
+Neither instrumentation nor native equality establishes a faster replacement.
+Release codegen must verify that disabled admission does not execute diagnostic
+walks, and runtime distributions and FPS remain separately qualified evidence.
+
 The optional owner-qualified copy/materialization ledger binds this same
 transaction at its two physical ownership boundaries. A successful admission
 records the increase in live typed record, pin, and canonical-role

@@ -13,6 +13,35 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.37–7.39 are implemented with bounded native/codegen evidence:
+constant comparison/update fusion, compile-time state-write row validation
+with a table-derived runtime reducer, and cold identity-distribution
+reconstruction. The constant helper preserves the old permission reduction
+and zero-extension dirty behavior without a second comparison; the diagnostic
+timer is outlined. The shared table's Live/Any behavior for unknown origins is
+preserved, not silently tightened.
+
+Validation against `e91e20c3`: all four canonical builds pass; native PE/wire
+tests pass 32/32, x86_64 provider-focused tests pass 9/9, and the unchanged TLA
+suite passes. Native evidence includes 524,288 reducer input tuples, six-family
+bounded constant value/dirty/extent states, sampled observer ON/OFF wire and
+retention equality, and compact max-family counts (45 distinct: 990 comparisons;
+39 unique with nulls/duplicates: 798). PE32/PE64 exports and vtable owners remain
+unchanged. Release objects no longer reference the runtime state-write table
+or the former separate comparison/touch calls in the constant setter chain;
+the unobserved constant helper has no timer relocation. Unobserved admission
+instruction counts and relocation targets are unchanged in all three families.
+These are static codegen checks, not a zero-cost or FPS claim.
+
+Identity counts cover sampled successful preparations only; failed preparation
+is explicitly unmeasured, not zero work. Reconstruction does not run inside
+PrepareAdmission timing, but its cost is included in the admission parent.
+The linear identity strategy, transport and chunk cadence remain unchanged.
+Fresh workload distributions, Wine/pixel evidence and FPS attribution remain
+open. Local receipts are under
+`experiments/output/pe-constant-transition-20260906/analysis/` (ignored artifacts,
+including `verification.md`, `candidate.json`, and `comparison.json`).
+
 R-CORE-REC-7.34–7.36 are implemented with bounded native/codegen evidence.
 Compact quota/variable staging reuses a private append/source-bound capability;
 the qualified payload writer constructs the draw header without a second

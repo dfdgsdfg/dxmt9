@@ -733,11 +733,310 @@ void testSparseDrawAndApplyProducerMatrix() {
 // pe_producer_differential_spec's stream-retention and six index-buffer fixtures,
 // which exercise the real production path rather than a staging helper.
 
+struct OldConstTransitionResult {
+  bool valid = true;
+  bool writeLive = false;
+  bool writePending = false;
+  bool writeRecorded = false;
+};
+
+bool oldConstElemEquals(const ConstShadow& shadow, std::uint32_t reg,
+                        const std::uint8_t* source, std::size_t elemSize) {
+  const std::size_t offset = static_cast<std::size_t>(reg) * elemSize;
+  if (shadow.values.size() >= offset + elemSize) {
+    return std::memcmp(shadow.values.data() + offset, source, elemSize) == 0;
+  }
+  for (std::size_t i = 0; i < elemSize; ++i) {
+    if (source[i] != 0u) return false;
+  }
+  return true;
+}
+
+// Independent pre-fusion wrapper+touch oracle.  Keep this deliberately local
+// to the differential test: it must not call the production reducer or touch
+// helper, otherwise the test could prove only that a function agrees with
+// itself.
+void oldTouchConstShadow(ConstShadow& shadow, std::uint32_t start,
+                         std::uint32_t count, const void* data,
+                         std::size_t elemSize) {
+  const std::uint64_t needed64 =
+      (static_cast<std::uint64_t>(start) + count) * elemSize;
+  if (needed64 > 0xffffffffull) return;
+  const std::size_t needed = static_cast<std::size_t>(needed64);
+  const bool alreadyCovered = shadow.values.size() >= needed;
+  if (shadow.values.size() < needed) shadow.values.resize(needed);
+  const std::size_t neededElems = static_cast<std::size_t>(start) + count;
+  if (shadow.dirtyElems.size() < neededElems) {
+    shadow.dirtyElems.resize(neededElems);
+  }
+  const auto* source = static_cast<const std::uint8_t*>(data);
+  const std::size_t bytes = static_cast<std::size_t>(count) * elemSize;
+  if (bytes == 0u || !source) return;
+  auto* destination = shadow.values.data() +
+                      static_cast<std::size_t>(start) * elemSize;
+  if (alreadyCovered && std::memcmp(destination, source, bytes) == 0) return;
+  bool changed = false;
+  std::uint32_t firstChanged = count;
+  std::uint32_t lastChanged = 0u;
+  for (std::uint32_t i = 0u; i < count; ++i) {
+    const std::size_t offset = static_cast<std::size_t>(i) * elemSize;
+    if (std::memcmp(destination + offset, source + offset, elemSize) == 0)
+      continue;
+    std::memcpy(destination + offset, source + offset, elemSize);
+    shadow.dirtyElems[static_cast<std::size_t>(start) + i] = 1u;
+    changed = true;
+    firstChanged = std::min(firstChanged, i);
+    lastChanged = i + 1u;
+  }
+  if (!changed) return;
+  const std::uint32_t changedStart = start + firstChanged;
+  const std::uint32_t changedEnd = start + lastChanged;
+  if (!shadow.dirty()) {
+    shadow.dirtyStart = changedStart;
+    shadow.dirtyEnd = changedEnd;
+  } else {
+    shadow.dirtyStart = std::min(shadow.dirtyStart, changedStart);
+    shadow.dirtyEnd = std::max(shadow.dirtyEnd, changedEnd);
+  }
+}
+
+OldConstTransitionResult oldConstTransition(
+    ConstShadow& shadow, dxmt9::d3d9::pe::RecorderPhase phase,
+    bool apply, std::uint32_t start, std::uint32_t count, const void* data,
+    std::size_t elemSize) {
+  OldConstTransitionResult result{};
+  if (count == 0u) return result;
+  const auto* source = static_cast<const std::uint8_t*>(data);
+  for (std::uint32_t i = 0u; i < count; ++i) {
+    const std::uint32_t reg = start + i;
+    const auto plan = dxmt9::d3d9::pe::planRecorderStateWrite({
+        .phase = phase,
+        .origin = dxmt9::d3d9::pe::WriteOrigin::ExplicitSet,
+        .liveContains = shadow.values.size() >=
+                        (static_cast<std::size_t>(reg) + 1u) * elemSize,
+        .liveEquals = oldConstElemEquals(
+            shadow, reg, source + static_cast<std::size_t>(i) * elemSize,
+            elemSize),
+        .pendingContains = reg < shadow.dirtyElems.size() &&
+                           shadow.dirtyElems[reg] != 0u,
+    });
+    result.valid = result.valid && plan.valid();
+    result.writeLive = result.writeLive || plan.writeLive();
+    result.writePending = result.writePending || plan.writePending();
+    result.writeRecorded = result.writeRecorded || plan.writeRecorded();
+  }
+  if (apply && result.writePending) {
+    oldTouchConstShadow(shadow, start, count, data, elemSize);
+  }
+  return result;
+}
+
+void checkConstShadowEquivalent(const ConstShadow& expected,
+                                const ConstShadow& actual,
+                                std::string_view label) {
+  check(expected.values == actual.values,
+        std::string(label) + ": bytes differ");
+  check(expected.dirtyElems == actual.dirtyElems,
+        std::string(label) + ": dirty elements differ");
+  check(expected.dirtyStart == actual.dirtyStart &&
+            expected.dirtyEnd == actual.dirtyEnd,
+        std::string(label) + ": dirty extent differs");
+}
+
+std::vector<std::uint8_t> constTransitionBytes(std::size_t elemSize,
+                                               std::uint32_t seed,
+                                               std::uint32_t count) {
+  std::vector<std::uint8_t> bytes(static_cast<std::size_t>(count) * elemSize);
+  constexpr std::array<std::uint32_t, 6> bitPatterns{
+      0u, 0x80000000u, 0x7fc00001u, 0x00000001u, 0xffffffffu, 0x3f800000u};
+  for (std::uint32_t i = 0u; i < count; ++i) {
+    for (std::size_t part = 0u; part < elemSize; part += sizeof(std::uint32_t)) {
+      const std::uint32_t bits = bitPatterns[(seed + i + part / 4u) %
+                                             bitPatterns.size()];
+      const std::size_t remaining = std::min<std::size_t>(
+          sizeof(bits), elemSize - part);
+      std::memcpy(bytes.data() + static_cast<std::size_t>(i) * elemSize + part,
+                  &bits, remaining);
+    }
+  }
+  return bytes;
+}
+
+void testConstTransitionDifferential() {
+  constexpr std::array<std::size_t, 6> elemSizes{16u, 16u, 4u,
+                                                   16u, 16u, 4u};
+  for (std::size_t family = 0u; family < elemSizes.size(); ++family) {
+    const std::size_t elemSize = elemSizes[family];
+    ConstShadow oldShadow;
+    ConstShadow fusedShadow;
+    auto apply = [&](std::uint32_t start, std::uint32_t count,
+                     const std::vector<std::uint8_t>& bytes,
+                     std::string_view label) {
+      const auto oldResult = oldConstTransition(
+          oldShadow, dxmt9::d3d9::pe::RecorderPhase::Live, true, start,
+          count, bytes.data(), elemSize);
+      const auto fusedResult = reduceConstShadowTransition(
+          fusedShadow, dxmt9::d3d9::pe::RecorderPhase::Live,
+          ConstShadowTransitionMode::Apply, start, count, bytes.data(),
+          elemSize);
+      check(oldResult.valid == fusedResult.valid &&
+                oldResult.writeLive == fusedResult.writesLive() &&
+                oldResult.writePending == fusedResult.writesPending() &&
+                oldResult.writeRecorded == fusedResult.writesRecorded(),
+            std::string(label) + ": reducer result differs");
+      checkConstShadowEquivalent(oldShadow, fusedShadow, label);
+    };
+
+    const auto zeros = std::vector<std::uint8_t>(elemSize * 2u, 0u);
+    apply(0u, 2u, zeros, "fresh zero materialization");
+    check(fusedShadow.values.size() == elemSize * 2u &&
+              fusedShadow.dirtyStart == 0u && fusedShadow.dirtyEnd == 0u,
+          "fresh zero write materializes extent without dirty");
+
+    auto a = constTransitionBytes(elemSize, 1u, 2u);
+    auto b = constTransitionBytes(elemSize, 2u, 2u);
+    apply(0u, 2u, a, "A write");
+    oldShadow.clear();
+    fusedShadow.clear();
+    apply(0u, 2u, b, "B write");
+    oldShadow.clear();
+    fusedShadow.clear();
+    apply(0u, 2u, a, "A-B-A write");
+    check(fusedShadow.dirtyStart == 0u && fusedShadow.dirtyEnd == 2u,
+          "A-B-A preserves the changed dirty extent");
+    apply(0u, 1u, constTransitionBytes(elemSize, 4u, 1u),
+          "short overwrite keeps longer live and dirty tail");
+    check(fusedShadow.values.size() == elemSize * 2u &&
+              fusedShadow.dirtyElems.size() == 2u &&
+              fusedShadow.dirtyElems[1] == 1u,
+          "short write neither truncates materialized values nor pending tail");
+
+    oldShadow.clear();
+    fusedShadow.clear();
+    auto one = constTransitionBytes(elemSize, 3u, 1u);
+    apply(2u, 1u, one, "sparse extension");
+    check(fusedShadow.values.size() == elemSize * 3u &&
+              fusedShadow.dirtyStart == 2u && fusedShadow.dirtyEnd == 3u,
+          "sparse extension materializes only the changed extent");
+    oldShadow.clear();
+    fusedShadow.clear();
+    apply(2u, 1u,
+          std::vector<std::uint8_t>(elemSize, 0u),
+          "sparse zero overwrite");
+    const auto oldAliasResult = oldConstTransition(
+        oldShadow, dxmt9::d3d9::pe::RecorderPhase::Live, true, 2u, 1u,
+        oldShadow.values.data() + 2u * elemSize, elemSize);
+    const auto fusedAliasResult = reduceConstShadowTransition(
+        fusedShadow, dxmt9::d3d9::pe::RecorderPhase::Live,
+        ConstShadowTransitionMode::Apply, 2u, 1u,
+        fusedShadow.values.data() + 2u * elemSize, elemSize);
+    check(oldAliasResult.writePending == fusedAliasResult.writesPending(),
+          "in-place alias reducer result is stable");
+    checkConstShadowEquivalent(oldShadow, fusedShadow,
+                               "in-place alias write");
+
+    const auto recordingOld = oldConstTransition(
+        oldShadow, dxmt9::d3d9::pe::RecorderPhase::Recording, false, 0u, 1u,
+        one.data(), elemSize);
+    const auto recordingFused = reduceConstShadowTransition(
+        fusedShadow, dxmt9::d3d9::pe::RecorderPhase::Recording,
+        ConstShadowTransitionMode::Observe, 0u, 1u, one.data(), elemSize);
+    check(recordingOld.valid == recordingFused.valid &&
+              recordingOld.writeLive == recordingFused.writesLive() &&
+              recordingOld.writePending == recordingFused.writesPending() &&
+              recordingOld.writeRecorded == recordingFused.writesRecorded(),
+          "recording branch keeps explicit-record reducer semantics");
+    checkConstShadowEquivalent(oldShadow, fusedShadow,
+                               "recording leaves live bytes and pending intact");
+
+    oldShadow.reset();
+    fusedShadow.reset();
+    for (std::uint32_t start = 0u; start < 4u; ++start) {
+      for (std::uint32_t count = 0u; count <= 4u - start; ++count) {
+        const auto bytes = constTransitionBytes(
+            elemSize, family * 17u + start * 5u + count, count);
+        apply(start, count, bytes, "exhaustive bounded range");
+        if (((start + count) % 3u) == 0u) {
+          oldShadow.clear();
+          fusedShadow.clear();
+        }
+      }
+    }
+  }
+}
+
+void testConstTransitionBoundedStateSpace() {
+  // Exhaust the three-register value/dirty/extent abstraction, not only a
+  // hand-selected execution trace. Float lanes are compared as raw bits.
+  constexpr std::array<std::size_t, 6> elemSizes{16u, 16u, 4u, 16u, 16u, 4u};
+  for (const auto elemSize : elemSizes) {
+    for (std::uint32_t extent = 0u; extent <= 3u; ++extent) {
+      std::uint32_t combinations = 1u;
+      for (std::uint32_t i = 0u; i < extent; ++i) combinations *= 3u;
+      for (std::uint32_t values = 0u; values < combinations; ++values) {
+        for (std::uint32_t dirty = 0u; dirty < (1u << extent); ++dirty) {
+          ConstShadow initial;
+          initial.values.resize(extent * elemSize);
+          initial.dirtyElems.resize(extent);
+          auto digits = values;
+          for (std::uint32_t reg = 0u; reg < extent; ++reg) {
+            const auto value = digits % 3u;
+            digits /= 3u;
+            if (value != 0u) {
+              const auto bytes = constTransitionBytes(elemSize, value, 1u);
+              std::memcpy(initial.values.data() + reg * elemSize,
+                          bytes.data(), elemSize);
+            }
+            if ((dirty & (1u << reg)) != 0u) {
+              initial.dirtyElems[reg] = 1u;
+              if (!initial.dirty()) initial.dirtyStart = reg;
+              initial.dirtyEnd = reg + 1u;
+            }
+          }
+          for (std::uint32_t start = 0u; start < 3u; ++start) {
+            for (std::uint32_t count = 0u; count <= 3u - start; ++count) {
+              for (std::uint32_t pattern = 0u; pattern < 3u; ++pattern) {
+                auto input = pattern == 0u
+                    ? std::vector<std::uint8_t>(count * elemSize)
+                    : constTransitionBytes(elemSize, pattern, count);
+                for (const bool recording : {false, true}) {
+                  ConstShadow expected = initial;
+                  ConstShadow actual = initial;
+                  actual.reserveCapacity(3u * elemSize, 3u);
+                  const auto* valueStorage = actual.values.data();
+                  const auto* dirtyStorage = actual.dirtyElems.data();
+                  const auto phase = recording
+                      ? dxmt9::d3d9::pe::RecorderPhase::Recording
+                      : dxmt9::d3d9::pe::RecorderPhase::Live;
+                  const auto oldResult = oldConstTransition(
+                      expected, phase, !recording, start, count,
+                      input.data(), elemSize);
+                  const auto result = reduceConstShadowTransition(
+                      actual, phase, recording ? ConstShadowTransitionMode::Observe
+                                               : ConstShadowTransitionMode::Apply,
+                      start, count, input.data(), elemSize);
+                  check(result.valid == oldResult.valid &&
+                            result.writesLive() == oldResult.writeLive &&
+                            result.writesPending() == oldResult.writePending &&
+                            result.writesRecorded() == oldResult.writeRecorded,
+                        "bounded state-space reducer effects agree");
+                  checkConstShadowEquivalent(expected, actual, "bounded state space");
+                  check(actual.values.data() == valueStorage &&
+                            actual.dirtyElems.data() == dirtyStorage,
+                        "bounded warm update does not reallocate either vector");
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 // Pins touchConstShadow's exact per-call semantics (dirty range, dirtyElems,
-// and the zero-fill aliasing boundary on a freshly-extended region) at the
-// pre-optimization baseline. A bulk-span memcmp early-out and pre-sized
-// shadow storage are only safe to add if every one of these behaviors is
-// unchanged afterward.
+// and the zero-fill aliasing boundary on a freshly-extended region) after the
+// fused reducer. These remain the contract independently of its implementation.
 void testTouchConstShadowSemantics() {
   // (a) fully redundant re-set: no dirty, values unchanged.
   {
@@ -790,7 +1089,7 @@ void testTouchConstShadowSemantics() {
   // resize() zero-fills the newly materialized bytes, so all-zero input
   // compares equal to the zero-fill and the base implementation's
   // per-element loop finds nothing changed. This is the zero-fill aliasing
-  // boundary the optimization must reproduce exactly.
+  // boundary the reducer must reproduce exactly.
   {
     ConstShadow shadow;
     std::array<float, 8> vz{};  // all zero
@@ -807,9 +1106,8 @@ void testTouchConstShadowSemantics() {
   // (e) span extension: a prior shorter set, then a longer set overlapping
   // the old (already-materialized, matching) region and a newly-extended
   // (zero-filled, differing) region. Only the newly-extended register must
-  // be marked dirty -- this is exactly the case a bulk-span early-out must
-  // NOT take, because the span was not already fully covered before this
-  // call's resize.
+  // be marked dirty -- this is exactly the case where the reducer must not
+  // treat the newly materialized zero-filled span as a redundant write.
   {
     ConstShadow shadow;
     std::array<float, 4> vinit{1.0f, 2.0f, 3.0f, 4.0f};
@@ -2630,6 +2928,8 @@ int main() {
     testInvalidIdentityAndExplicitRollback();
     testNonDrawProducerMatrix();
     testSparseDrawAndApplyProducerMatrix();
+    testConstTransitionDifferential();
+    testConstTransitionBoundedStateSpace();
     testTouchConstShadowSemantics();
     testConstShadowFeedsConstantSections();
     testReferencesObjectRollbackAndOverflow();

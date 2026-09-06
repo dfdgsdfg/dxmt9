@@ -3211,6 +3211,41 @@ void D3D9DeviceImpl::logPeSemanticOwnerPhaseSplit() {
             static_cast<double>(settlement.totalNs) / 1.0e6,
             static_cast<double>(settlement.maxNs) / 1.0e6);
     }
+    for (std::size_t i = 0; i < stats.admissions.size(); ++i) {
+        const auto& admission = stats.admissions[i];
+        dxmt9DeviceInfoLog(
+            "[dxmt9-pe-semantic-owner-phase] schema=3 "
+            "identity_distribution=reconstructed_sampled_only family=%s "
+            "sampling=every_%uth_admission attempts_total=%llu "
+            "attempts_sampled=%llu accepted_total=%llu rejected_total=%llu "
+            "accepted_sampled=%llu rejected_sampled=%llu "
+            "sampled_prepared=%llu sampled_unmeasured_failures=%llu "
+            "sampled_zero_work=%llu sampled_binding_occurrences=%llu "
+            "sampled_ref_occurrences=%llu sampled_unique_identities=%llu "
+            "sampled_linear_comparisons=%llu max_binding_occurrences=%llu "
+            "max_ref_occurrences=%llu max_unique_identities=%llu "
+            "max_linear_comparisons=%llu",
+            dxmt9::d3d9::pe::peSemanticOwnerAdmissionFamilyName(
+                static_cast<dxmt9::d3d9::pe::PeSemanticOwnerAdmissionFamily>(i)),
+            stats.decimationN,
+            static_cast<unsigned long long>(admission.attempts),
+            static_cast<unsigned long long>(admission.sampledAttempts),
+            static_cast<unsigned long long>(admission.accepted),
+            static_cast<unsigned long long>(admission.rejected),
+            static_cast<unsigned long long>(admission.sampledAccepted),
+            static_cast<unsigned long long>(admission.sampledRejected),
+            static_cast<unsigned long long>(admission.sampledPrepared),
+            static_cast<unsigned long long>(admission.sampledUnmeasuredFailures),
+            static_cast<unsigned long long>(admission.sampledZeroWork),
+            static_cast<unsigned long long>(admission.sampledBindingOccurrences),
+            static_cast<unsigned long long>(admission.sampledRefOccurrences),
+            static_cast<unsigned long long>(admission.sampledUniqueIdentities),
+            static_cast<unsigned long long>(admission.sampledLinearComparisons),
+            static_cast<unsigned long long>(admission.maxBindingOccurrences),
+            static_cast<unsigned long long>(admission.maxRefOccurrences),
+            static_cast<unsigned long long>(admission.maxUniqueIdentities),
+            static_cast<unsigned long long>(admission.maxLinearComparisons));
+    }
 }
 
 void D3D9DeviceImpl::startPeThreadSamplerIfRequested() {

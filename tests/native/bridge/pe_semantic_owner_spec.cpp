@@ -4497,6 +4497,155 @@ void observerSeparatesPrepareMalformedFromHeader() {
         "observer outcome ledger preserves malformed and header denominators");
 }
 
+void observedAdmissionReconstructionKeepsHotPathUnchanged() {
+  using ComparedOwner = PeSemanticBatchOwner<6u, 8u, 4096u, 4u, 4u>;
+  D9CSurface first;
+  D9CSurface second;
+  auto input = base(PeSemanticProducerKind::StretchRect, 0x901u, 0x901u);
+  input.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&first, 0x901u);
+  input.surface1 = input.surface0;
+
+  ComparedOwner enabled;
+  ComparedOwner disabled;
+  PeSemanticOwnerPhaseObserver observer(2u);
+  enabled.setPhaseObserver(&observer);
+  check(enabled.tryAppendOwnedRecord(input, []() noexcept { return true; }) &&
+            disabled.tryAppendOwnedRecord(input, []() noexcept { return true; }) &&
+            enabled.retainedCount() == disabled.retainedCount() &&
+            first.refs == 3u,
+        "cold admission observation preserves retention and enabled/off ownership");
+  PeSemanticExactFixedEmission enabledWire{}, disabledWire{};
+  check(enabled.emitExactFixed(enabledWire) && disabled.emitExactFixed(disabledWire) &&
+            enabledWire.wireBytes == disabledWire.wireBytes &&
+            std::memcmp(enabledWire.wire.data(), disabledWire.wire.data(),
+                        enabledWire.wireBytes) == 0,
+        "cold admission observation preserves enabled/off canonical bytes");
+
+  auto distinct = input;
+  distinct.sourceOrdinal = distinct.recordOrdinal = 0x902u;
+  distinct.surface1 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&second, 0x902u);
+  check(enabled.tryAppendOwnedRecord(distinct, []() noexcept { return true; }),
+        "cold adapter accepts a distinct identity reference");
+  check(disabled.tryAppendOwnedRecord(distinct, []() noexcept { return true; }) &&
+            enabled.emitExactFixed(enabledWire) && disabled.emitExactFixed(disabledWire) &&
+            enabled.retainedCount() == disabled.retainedCount() &&
+            enabledWire.wireBytes == disabledWire.wireBytes &&
+            std::memcmp(enabledWire.wire.data(), disabledWire.wire.data(),
+                        enabledWire.wireBytes) == 0,
+        "sampled reconstruction preserves enabled/off bytes and retention too");
+  const auto& generic = observer.stats().admissions[static_cast<std::size_t>(
+      PeSemanticOwnerAdmissionFamily::Generic)];
+  check(generic.attempts == 2u && generic.sampledAttempts == 1u &&
+            generic.sampledPrepared == 1u && generic.sampledAccepted == 1u &&
+            generic.sampledRefOccurrences == 12u &&
+            generic.sampledUniqueIdentities == 2u &&
+            generic.sampledLinearComparisons == 4u &&
+            generic.maxLinearComparisons == 4u,
+        "reconstruction reports independent duplicate/distinct counts with sampling denominators");
+
+  PeSemanticOwnerPhaseObserver failedObserver(1u);
+  ComparedOwner failed;
+  failed.setPhaseObserver(&failedObserver);
+  auto collision = base(PeSemanticProducerKind::StretchRect, 0x903u, 0x903u);
+  collision.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&first, 0x903u);
+  collision.surface1 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&second, 0x903u);
+  check(!failed.tryAppendOwnedRecord(collision, []() noexcept { return true; }),
+        "identity collision remains a failed, unmeasured preparation");
+  const auto& failedStats = failedObserver.stats().admissions[static_cast<std::size_t>(
+      PeSemanticOwnerAdmissionFamily::Generic)];
+  check(failedStats.sampledAttempts == 1u &&
+            failedStats.sampledUnmeasuredFailures == 1u &&
+            failedStats.sampledPrepared == 0u &&
+            failedStats.sampledLinearComparisons == 0u,
+        "failed preparation is not presented as an estimated comparison distribution");
+
+  using CapacityOwner = PeSemanticBatchOwner<1u, 8u, 4096u, 4u, 4u>;
+  CapacityOwner capacityOwner;
+  PeSemanticOwnerPhaseObserver capacityObserver(1u);
+  capacityOwner.setPhaseObserver(&capacityObserver);
+  check(capacityOwner.tryAppendOwnedRecord(input,
+                                           []() noexcept { return true; }),
+        "capacity fixture accepts its first prepared record");
+  auto overCapacity = input;
+  overCapacity.sourceOrdinal = overCapacity.recordOrdinal = 0x906u;
+  check(!capacityOwner.tryAppendOwnedRecord(
+             overCapacity, []() noexcept { return true; }),
+        "capacity fixture rejects an unmeasured failed preparation");
+  const auto& capacityStats = capacityObserver.stats().admissions[static_cast<std::size_t>(
+      PeSemanticOwnerAdmissionFamily::Generic)];
+  check(capacityStats.sampledAttempts == 2u &&
+            capacityStats.sampledPrepared == 1u &&
+            capacityStats.sampledUnmeasuredFailures == 1u &&
+            capacityStats.sampledRejected == 1u,
+        "capacity rejection keeps sampled preparation and failure denominators separate");
+
+  PeSemanticOwnerPhaseObserver constantObserver(1u);
+  ComparedOwner constantOwner;
+  constantOwner.setPhaseObserver(&constantObserver);
+  PeSemanticConstantRecordInput constant{};
+  constant.producer = PeSemanticProducerKind::VsFloatConstant;
+  constant.recordType = peSemanticRecordTypeForProducer(constant.producer);
+  constant.sourceOrdinal = constant.recordOrdinal = 0x904u;
+  std::array<std::byte, 16u> constantBytes{};
+  constant.setConst.registerCount = 1u;
+  constant.constantBytes = constantBytes;
+  check(constantOwner.tryAppendOwnedRecord(constant,
+                                           []() noexcept { return true; }),
+        "constant preparation remains a valid zero-work observation");
+  const auto& constantStats = constantObserver.stats().admissions[static_cast<std::size_t>(
+      PeSemanticOwnerAdmissionFamily::Constant)];
+  check(constantStats.sampledPrepared == 1u &&
+            constantStats.sampledZeroWork == 1u &&
+            constantStats.sampledUnmeasuredFailures == 0u,
+        "constant zero work is distinguished from an unmeasured failure");
+
+  using CompactOwner = PeSemanticBatchOwner<2u, 8u, 4096u, 4u, 8u>;
+  CompactOwner compactOwner;
+  PeSemanticOwnerPhaseObserver compactObserver(1u);
+  compactOwner.setPhaseObserver(&compactObserver);
+  PeHotStateShadow compactShadow{};
+  PeConstShadowBlock compactConstants{};
+  PeBindingView compactBindings{};
+  PeDrawPayloads compactPayloads{};
+  D9CTexture compactTexture;
+  compactBindings.textures[0] = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+      &compactTexture, 0x905u);
+  compactShadow.writer().pendingTextureMask() = 1u;
+  PeDrawParams compactParams{.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                             .primitiveType = 4u,
+                             .primitiveCount = 1u};
+  PeChunkContext compactChunk{};
+  SparseStatePlan compactPlan;
+  std::recursive_mutex compactMutex;
+  dxmt9::core::ThreadOwnershipToken compactThread;
+  std::uint64_t compactEpoch = 1u;
+  RecorderLockGuard compactGuard(compactMutex, false);
+  check(compactGuard.withCapability(
+            compactThread, compactEpoch, [&](const auto& access) noexcept {
+              if (!buildSparseStatePlan(access, compactShadow, compactConstants,
+                                         compactBindings, compactPayloads,
+                                         compactParams, false, false,
+                                         compactPlan) ||
+                  !finalizeSparseStatePlanChunkContext(access, compactChunk,
+                                                       compactPlan))
+                return false;
+              return compactOwner.tryAppendSparseStatePlan(
+                  access, compactPlan, PeSemanticProducerKind::DrawPrimitive,
+                  compactParams.recordType,
+                  D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 0x905u, 0x905u,
+                  []() noexcept { return true; });
+            }),
+        "real compact preparation feeds the cold distribution adapter");
+  const auto& compactStats = compactObserver.stats().admissions[static_cast<std::size_t>(
+      PeSemanticOwnerAdmissionFamily::Compact)];
+  check(compactStats.sampledPrepared == 1u &&
+            compactStats.sampledBindingOccurrences == 1u &&
+            compactStats.sampledRefOccurrences == 1u &&
+            compactStats.sampledUniqueIdentities == 1u &&
+            compactStats.sampledLinearComparisons == 0u,
+        "compact reconstruction reports binding/reference/identity work independently");
+}
+
 void compactAppendQuotaProofAndRollback() {
   // Use the real immutable compact plan, not the generic sparse adapter whose
   // copy path retains its own quota checks. Isolate each removed check: one
@@ -4792,6 +4941,25 @@ void realCompactSparseMaxFamilyDifferentialAndRollback(bool allDistinct,
           preparedMaxWitness =
               owner.prepareAdmission(witnessInput, prepared) ==
               PeSemanticAdmissionOutcome::Admissible;
+          if (preparedMaxWitness) {
+            PeSemanticOwnerAdmissionDistribution distribution{};
+            check(detail::reconstructPeSemanticOwnerAdmission(
+                      witnessInput, prepared, distribution) &&
+                      distribution.bindingOccurrences == 45u &&
+                      distribution.refOccurrences == 45u &&
+                      distribution.uniqueIdentities == (allDistinct ? 45u : 39u) &&
+                      distribution.linearComparisons == (allDistinct ? 990u : 798u),
+                  "max-family reconstruction matches independent linear comparison count");
+            // 45 distinct insertions cost 0+...+44. The mixed fixture has
+            // 39 insertions plus duplicate hits at ordinals 0,18,36:
+            // 0+...+38 + 1+19+37 = 798; its three nulls cost no comparisons.
+            const auto saved = prepared.bindingOccurrences.values[1].mappingOrdinal;
+            prepared.bindingOccurrences.values[1].mappingOrdinal = 999u;
+            check(!detail::reconstructPeSemanticOwnerAdmission(
+                      witnessInput, prepared, distribution),
+                  "stale occurrence identity cannot become measured zero work");
+            prepared.bindingOccurrences.values[1].mappingOrdinal = saved;
+          }
           preparedIdentityCount = prepared.identityWitness.count;
           preparedWireCount = prepared.identityWitness.wireCount;
           preparedOccurrenceCount = prepared.bindingOccurrences.count;
@@ -5124,6 +5292,7 @@ int main(int argc, char** argv) {
     observedSettlementChildrenSampleAtN1();
     observerScopeRestoresNestedState();
     observerSeparatesPrepareMalformedFromHeader();
+    observedAdmissionReconstructionKeepsHotPathUnchanged();
     compactAdmissionRejectsStaleSourceBeforeSettlement();
     realCompactSparseMaxFamilyDifferentialAndRollback(true);
     realCompactSparseMaxFamilyDifferentialAndRollback(false);
