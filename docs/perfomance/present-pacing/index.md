@@ -4,16 +4,17 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-09-05
-source: docs/perfomance/present-pacing/present-pacing-pe-admission-reuse.243.md
+updated: 2026-09-06
+source: docs/perfomance/present-pacing/present-pacing-pe-compact-refinement.247.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest evidence: `243` - PE admission reuse and active-prefix staging pass
-native/TLA and GT2 direction checks; local sampled costs improve, but the
-single-run OFF FPS delta is only +0.82% and does not establish promotion.
+Latest evidence: `247` - compact receipts, fused binding emission, index reuse,
+and live borrow authority pass bounded native verification. Ordinary PE append
+frames no longer probe. GT2 OFF pairs are 27.884/27.427 harmonic-mean FPS
+(-1.64%, substantial same-build variation); no FPS promotion is established.
 The CPU-ready Tape locality gap remains an independent workstream.
 
 ## Start Here
@@ -25,6 +26,10 @@ The CPU-ready Tape locality gap remains an independent workstream.
 
 ## Recent Leaf Documents
 
+- [present-pacing-pe-compact-refinement.247 - Compact Transaction and Live Borrow Refinement](present-pacing-pe-compact-refinement.247.md)
+- [present-pacing-pe-plan-authority.246 - Private Plan Authority and Fused Retention](present-pacing-pe-plan-authority.246.md)
+- [present-pacing-pe-compact-reuse.245 - Compact Destination and Identity Reuse](present-pacing-pe-compact-reuse.245.md)
+- [present-pacing-pe-prepared-emission.244 - Prepared Emission and Compact Producer Integration](present-pacing-pe-prepared-emission.244.md)
 - [present-pacing-pe-admission-reuse.243 - Qualified Pin/Wire Reuse and Active-Prefix Staging](present-pacing-pe-admission-reuse.243.md)
 - [present-pacing-pe-direct-canonical.242 - Direct Canonical Value Payload](present-pacing-pe-direct-canonical.242.md)
 - [present-pacing-pe-prepared-reset.241 - Prepared-Witness Reset](present-pacing-pe-prepared-reset.241.md)

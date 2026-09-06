@@ -750,3 +750,45 @@ contains-then-retain sequence. Lookup reuse must be synchronous and private to
 the retainer operation; it must not expose an index that can survive mutation
 or table rebuild. Warm hits at the capacity ceiling remain admissible; a novel
 acquisition at that ceiling must fail before AddRef or index publication.
+
+**R-CORE-REC-7.22** Chunk-boundary pin-index invalidation may avoid clearing
+inactive storage, and warm-retainer settlement may avoid rebuilding an unchanged
+index. Neither refinement may change the warm epoch, release multiplicity,
+generation/object collision rejection, capacity, or rollback outcome. Every
+lookup after reset must reject old entries. Reuse, collision, partial acquisition,
+rollback, and any generation-wrap or tombstone-reclamation path must have bounded
+native differential evidence. Ordinary admission and settlement must not allocate.
+
+**R-CORE-REC-7.23** Compact producer admission may use schema-bounded witness
+storage and a minimal committed record receipt instead of a generic all-family
+record product. Removing metadata must preserve logical quotas, source/record
+identity, canonical bytes, committed resource visits, capture, and retry.
+Generic/UP/control inputs must retain their complete semantics; compatibility
+inspection may reconstruct metadata from committed canonical roles but must not
+require the production compact path to maintain a second value representation.
+Release PE32 and PE64 code generation, not source type size alone, qualifies the
+stack-footprint result.
+
+**R-CORE-REC-7.24** After non-mutating capacity and identity preparation, compact
+binding acquisition and canonical row emission may share one traversal under the
+existing append checkpoint. A failed pin, malformed row, or failed settlement
+must publish neither partial bytes nor resource authority, and must restore the
+previous committed prefix and retain multiplicity. First-seen wire order, null
+unbinding, all seven binding families, and unique-acquisition fault order remain
+unchanged. Borrowed input must remain qualified throughout the traversal.
+
+**R-CORE-REC-7.25** Access to a recorder borrow and value-bearing mutation or
+settlement of a compact plan must require current matching recorder access, not
+merely the epoch and lane recorded when the borrow was issued. A public
+no-capability visitor, source-facts accessor, or finalizer must not bypass that
+requirement. Metadata-only access may return copied scalar facts or tickets,
+but not live shadow views or borrowed payload spans. The capability-issuing API
+must keep access lexically inside its live guard; non-copyability alone is insufficient
+when a factory can return a capability beyond the guard. Reacquisition may reuse
+an unchanged source borrow only under fresh matching access and all existing
+source/dependency checks. No new allocation, atomic, or mutex operation is
+permitted on the ordinary single-producer lane solely to enforce this contract.
+Revoke-only invalidation may remain access-free: it must only remove plan/borrow
+authority, never read borrowed storage, rebind a source, alter source values, or
+publish/settle a record. Its caller still obeys recorder confinement. This permits
+failure cleanup after epoch poison without manufacturing fresh mutation authority.

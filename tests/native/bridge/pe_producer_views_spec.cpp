@@ -11,6 +11,7 @@
 #include <array>
 #include <cstdint>
 #include <iostream>
+#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <span>
@@ -55,8 +56,38 @@ concept HasMutableSparsePlanSourceView = requires(Plan& plan) {
 };
 
 template <typename Plan>
+concept HasUnqualifiedSparsePlanSource = requires(const Plan& plan) {
+  plan.source();
+};
+
+template <typename Plan>
 concept HasMutableSparsePlanDestinationView = requires(Plan& plan) {
   (plan.destination().streamMask) = std::uint32_t{0u};
+};
+
+template <typename Plan>
+concept HasUnqualifiedSparsePlanVisitor = requires(Plan& plan) {
+  plan.withBindingSource([](const pe::PeBindingView&) noexcept {
+  });
+};
+
+template <typename Plan>
+concept HasUnqualifiedSparsePlanEmitVisitor = requires(Plan& plan) {
+  plan.withEmitSources([](const PeHotStateShadow&,
+                          const pe::PeBindingView&) noexcept {});
+};
+
+template <typename Plan>
+concept HasUnqualifiedSparsePlanSettlementVisitor = requires(Plan& plan) {
+  plan.withSettlementSources([](const PeHotStateShadow&,
+                                PeConstShadowBlock&,
+                                const pe::PeBindingView&) noexcept {});
+};
+
+template <typename Plan>
+concept HasUnqualifiedSparsePlanFinalizer = requires(
+    Plan& plan, const pe::PeChunkContext& chunk) {
+  pe::finalizeSparseStatePlanChunkContext(chunk, plan);
 };
 
 void viewsAreTriviallyCopyable() {
@@ -69,8 +100,9 @@ void viewsAreTriviallyCopyable() {
 
 void sparsePlanAuthorityHasNoPublicWriter() {
   static_assert(std::is_same_v<
-                decltype(std::declval<const pe::SparseStatePlan&>().source()),
-                const pe::SparseStatePlan::SourceFacts&>);
+                decltype(std::declval<const pe::SparseStatePlan&>().source(
+                    std::declval<const pe::RecorderLockCapability&>())),
+                const pe::SparseStatePlan::SourceFacts*>);
   static_assert(std::is_same_v<decltype(std::declval<const pe::SparseStatePlan&>()
                                             .destination()),
                                const pe::SparseStatePlan::DestinationFacts&>);
@@ -78,13 +110,77 @@ void sparsePlanAuthorityHasNoPublicWriter() {
   static_assert(!HasPublicSparsePlanBindSources<pe::SparseStatePlan>);
   static_assert(!HasPublicSparsePlanSourceWrite<pe::SparseStatePlan>);
   static_assert(!HasMutableSparsePlanSourceView<pe::SparseStatePlan>);
+  static_assert(!HasUnqualifiedSparsePlanSource<pe::SparseStatePlan>);
   static_assert(!HasMutableSparsePlanDestinationView<pe::SparseStatePlan>);
+  static_assert(!HasUnqualifiedSparsePlanVisitor<pe::SparseStatePlan>);
+  static_assert(!HasUnqualifiedSparsePlanEmitVisitor<pe::SparseStatePlan>);
+  static_assert(!HasUnqualifiedSparsePlanSettlementVisitor<pe::SparseStatePlan>);
+  static_assert(!HasUnqualifiedSparsePlanFinalizer<pe::SparseStatePlan>);
   static_assert(!std::is_copy_constructible_v<pe::SparseStatePlan>);
   static_assert(!std::is_copy_assignable_v<pe::SparseStatePlan>);
   static_assert(!std::is_move_constructible_v<pe::SparseStatePlan>);
   static_assert(!std::is_move_assignable_v<pe::SparseStatePlan>);
-  check(!pe::SparseStatePlan{}.source().prepared,
-        "unpublished sparse plan has no producer authority");
+  check(!pe::SparseStatePlan{}.prepared() &&
+            pe::SparseStatePlan{}.recordType() == 0u &&
+            pe::SparseStatePlan{}.drawFlags() == 0u &&
+            !pe::SparseStatePlan{}.pendingTicket().valid(),
+        "unpublished sparse plan exposes only copied metadata");
+}
+
+void sparsePlanSourceRequiresFreshMatchingAuthority() {
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken owner;
+  dxmt9::core::ThreadOwnershipToken wrongOwner;
+  std::uint64_t epoch = 1u;
+  pe::RecorderLockGuard guard(mutex, false);
+  pe::RecorderLockGuard wrongOwnerGuard(mutex, false);
+  PeHotStateShadow shadow{};
+  PeConstShadowBlock constants{};
+  pe::PeBindingView bindings{};
+  pe::PeDrawParams params{};
+  params.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
+  pe::SparseStatePlan plan{};
+
+  check(guard.withCapability(
+            owner, epoch, [&](const auto& access) noexcept {
+              return pe::buildSparseStatePlan(
+                  access, shadow, constants, bindings, {}, params, false,
+                  false, plan);
+            }),
+        "source test plan prepares under its owner");
+  check(guard.withCapability(
+            owner, epoch, [&](const auto& access) noexcept {
+              const auto* const source = plan.source(access);
+              return source != nullptr && source->draw.recordType ==
+                  D9C_COMMAND_RECORD_APPLY_STATE;
+            }),
+        "a fresh capability reacquires the qualified source");
+
+  bool wrongOwnerVisited = false;
+  check(!wrongOwnerGuard.withCapability(
+              wrongOwner, epoch,
+              [&](const auto& access) noexcept {
+                wrongOwnerVisited = plan.source(access) != nullptr;
+                return wrongOwnerVisited;
+              }) &&
+            !wrongOwnerVisited,
+        "same epoch pointer/value from another owner cannot qualify source");
+
+  ++epoch;
+  check(!guard.withCapability(
+              owner, epoch,
+              [&](const auto& access) noexcept {
+                return plan.source(access) != nullptr;
+              }),
+        "a stale source cannot be exposed through a newer epoch");
+  check(guard.withCapability(
+            owner, epoch, [&](const auto& access) noexcept {
+              return pe::buildSparseStatePlan(
+                         access, shadow, constants, bindings, {}, params, false,
+                         false, plan) &&
+                     plan.source(access) != nullptr;
+            }),
+        "rebuilding under fresh authority restores source access");
 }
 
 void payloadsAreEmptyByDefault() {
@@ -279,7 +375,7 @@ void acceptedScalarProjectionConsumesExactValues() {
       .appendSucceeded = true,
   });
   check(!pe::acceptPreparedSparseState(shadow, constants, state, accepted,
-                                       nullptr, 11u),
+                                      nullptr, 11u),
         "default production preflight rejects scalar value mismatch");
   check(pending.contains(key) && constants.vsConstF.dirty() && tokens.size() == 1u,
         "default value mismatch preserves scalar, constant, and observer state");
@@ -488,6 +584,7 @@ int main() {
   try {
     viewsAreTriviallyCopyable();
     sparsePlanAuthorityHasNoPublicWriter();
+    sparsePlanSourceRequiresFreshMatchingAuthority();
     payloadsAreEmptyByDefault();
     semanticInputConstantCadenceMatchesSelectedBytes();
     defaultBindingViewIsAllNull();

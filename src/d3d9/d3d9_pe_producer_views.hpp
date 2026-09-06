@@ -192,53 +192,69 @@ struct SparseStatePlan {
   }
 
   bool validFor(const RecorderLockCapability& access) const noexcept {
-    return source_.prepared && source_.pendingDelta.valid() &&
-           source_.pendingTicket.valid() &&
+    // Qualify every borrowed source against the fresh authority before
+    // consulting PendingDeltaView, which dereferences the borrowed shadow.
+    return source_.prepared && source_.pendingTicket.valid() &&
            sourceShadow_.validFor(access) &&
            sourceConstants_.validFor(access) &&
-           sourceBindings_.validFor(access);
+           sourceBindings_.validFor(access) && source_.pendingDelta.valid();
   }
 
   template <typename Fn>
-    requires std::is_nothrow_invocable_v<Fn&&, const PeBindingView&>
-  bool withBindingSource(Fn&& fn) const noexcept {
-    return sourceBindings_.with(std::forward<Fn>(fn));
+    requires (std::is_nothrow_invocable_v<Fn&&, const PeBindingView&> &&
+              std::is_same_v<std::invoke_result_t<Fn&&, const PeBindingView&>,
+                             void>)
+  bool withBindingSource(const RecorderLockCapability& access,
+                         Fn&& fn) const noexcept {
+    return validFor(access) &&
+           sourceBindings_.with(access, std::forward<Fn>(fn));
   }
 
   template <typename Fn>
-    requires std::is_nothrow_invocable_v<
-        Fn&&, const PeHotStateShadow&, const PeBindingView&>
-  bool withEmitSources(Fn&& fn) const noexcept {
+    requires (std::is_nothrow_invocable_v<
+                  Fn&&, const PeHotStateShadow&, const PeBindingView&> &&
+              std::is_same_v<std::invoke_result_t<
+                                 Fn&&, const PeHotStateShadow&,
+                                 const PeBindingView&>, void>)
+  bool withEmitSources(const RecorderLockCapability& access,
+                       Fn&& fn) const noexcept {
+    if (!validFor(access)) return false;
     bool invoked = false;
-    const bool shadowValid = sourceShadow_.with(
-        [&](const PeHotStateShadow& shadow) noexcept {
+    const bool sourceValid = sourceShadow_.with(
+        access, [&](const PeHotStateShadow& shadow) noexcept {
           (void)sourceBindings_.with(
-              [&](const PeBindingView& bindings) noexcept {
+              access, [&](const PeBindingView& bindings) noexcept {
                 std::forward<Fn>(fn)(shadow, bindings);
                 invoked = true;
               });
         });
-    return shadowValid && invoked;
+    return sourceValid && invoked;
   }
 
   template <typename Fn>
-    requires std::is_nothrow_invocable_v<
-        Fn&&, const PeHotStateShadow&, PeConstShadowBlock&,
-        const PeBindingView&>
-  bool withSettlementSources(Fn&& fn) const noexcept {
+    requires (std::is_nothrow_invocable_v<
+                  Fn&&, const PeHotStateShadow&, PeConstShadowBlock&,
+                  const PeBindingView&> &&
+              std::is_same_v<std::invoke_result_t<
+                                 Fn&&, const PeHotStateShadow&,
+                                 PeConstShadowBlock&, const PeBindingView&>,
+                             void>)
+  bool withSettlementSources(const RecorderLockCapability& access,
+                             Fn&& fn) const noexcept {
+    if (!validFor(access)) return false;
     bool invoked = false;
-    const bool shadowValid = sourceShadow_.with(
-        [&](const PeHotStateShadow& shadow) noexcept {
+    const bool sourceValid = sourceShadow_.with(
+        access, [&](const PeHotStateShadow& shadow) noexcept {
           (void)sourceConstants_.with(
-              [&](PeConstShadowBlock& constants) noexcept {
+              access, [&](PeConstShadowBlock& constants) noexcept {
                 (void)sourceBindings_.with(
-                    [&](const PeBindingView& bindings) noexcept {
+                    access, [&](const PeBindingView& bindings) noexcept {
                       std::forward<Fn>(fn)(shadow, constants, bindings);
                       invoked = true;
                     });
               });
         });
-    return shadowValid && invoked;
+    return sourceValid && invoked;
   }
 
   struct SourceFacts {
@@ -281,7 +297,19 @@ struct SparseStatePlan {
     bool chunkContextFinalized = false;
   };
 
-  const SourceFacts& source() const noexcept { return source_; }
+  const SourceFacts* source(const RecorderLockCapability& access) const noexcept {
+    return validFor(access) ? &source_ : nullptr;
+  }
+
+  // These values are copied metadata used by preflight/revoke paths. They do
+  // not expose any borrowed spans or PendingDeltaView.
+  bool prepared() const noexcept { return source_.prepared; }
+  std::uint32_t recordType() const noexcept { return source_.draw.recordType; }
+  std::uint32_t drawFlags() const noexcept { return source_.drawFlags; }
+  PendingDeltaTicket pendingTicket() const noexcept {
+    return source_.pendingTicket;
+  }
+
   const DestinationFacts& destination() const noexcept { return destination_; }
 
  private:
@@ -314,8 +342,6 @@ struct SparseStatePlan {
                                    const PeDrawPayloads&, const PeDrawParams&,
                                    bool, bool, SparseStatePlan&) noexcept;
   friend bool finalizeSparseStatePlanChunkContext(
-      const PeChunkContext&, SparseStatePlan&) noexcept;
-  friend bool finalizeSparseStatePlanChunkContext(
       const RecorderLockCapability&, const PeChunkContext&,
       SparseStatePlan&) noexcept;
   template <typename Retention>
@@ -327,13 +353,12 @@ struct SparseStatePlan {
 };
 
 inline std::uint32_t sparseStatePlanSectionCount(
-    const SparseStatePlan& plan) noexcept {
+    const SparseStatePlan::SourceFacts& source,
+    const SparseStatePlan::DestinationFacts& destination) noexcept {
   std::uint32_t count = 0u;
   const auto add = [&count](bool present) noexcept {
     count += present ? 1u : 0u;
   };
-  const auto& source = plan.source();
-  const auto& destination = plan.destination();
   add(source.renderStateCount != 0u);
   add(source.textureMask != 0u);
   add(destination.streamMask != 0u);
@@ -363,8 +388,7 @@ inline std::uint32_t sparseStatePlanSectionCount(
 }
 
 inline std::size_t sparseStatePlanConstantPayloadBytes(
-    const SparseStatePlan& plan) noexcept {
-  const auto& source = plan.source();
+    const SparseStatePlan::SourceFacts& source) noexcept {
   return source.vsFloatConstants.registerBytes.size() +
          source.vsIntConstants.registerBytes.size() +
          source.vsBoolConstants.registerBytes.size() +
@@ -374,9 +398,8 @@ inline std::size_t sparseStatePlanConstantPayloadBytes(
 }
 
 inline D9CCommandChunkWireDrawHeader sparseStatePlanDrawHeader(
-    const SparseStatePlan& plan) noexcept {
+    const SparseStatePlan::SourceFacts& source) noexcept {
   D9CCommandChunkWireDrawHeader header{};
-  const auto& source = plan.source();
   header.flags = source.drawFlags;
   switch (source.draw.recordType) {
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:

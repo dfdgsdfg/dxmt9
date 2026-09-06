@@ -479,9 +479,9 @@ bool appendVisitedSection(
   return true;
 }
 
-std::uint32_t planSectionCount(const SparseStatePlan& plan) noexcept {
-  const auto& source = plan.source();
-  const auto& destination = plan.destination();
+std::uint32_t planSectionCount(
+    const SparseStatePlan::SourceFacts& source,
+    const SparseStatePlan::DestinationFacts& destination) noexcept {
   std::uint32_t count = 0u;
   const auto add = [&count](bool present) noexcept {
     count += present ? 1u : 0u;
@@ -515,8 +515,8 @@ std::uint32_t planSectionCount(const SparseStatePlan& plan) noexcept {
 }
 
 D9CCommandChunkWireDrawHeader planDrawHeader(
-    const SparseStatePlan& plan, std::uint32_t flags) noexcept {
-  const auto& source = plan.source();
+    const SparseStatePlan::SourceFacts& source,
+    std::uint32_t flags) noexcept {
   D9CCommandChunkWireDrawHeader header{};
   header.flags = flags;
   switch (source.draw.recordType) {
@@ -554,13 +554,12 @@ D9CCommandChunkWireDrawHeader planDrawHeader(
 
 bool appendSparsePlanRecordWithSources(
     CommandChunkBuilder& builder, std::uint32_t type,
-    std::uint32_t flags, const SparseStatePlan& plan,
+    std::uint32_t flags, const SparseStatePlan::SourceFacts& source,
+    const SparseStatePlan::DestinationFacts& destination,
     const PeHotStateShadow& shadow,
     const PeBindingView& bindings) noexcept {
-  const auto& source = plan.source();
-  const auto& destination = plan.destination();
   const auto* record = recordRule(type);
-  const auto count = planSectionCount(plan);
+  const auto count = planSectionCount(source, destination);
   if (!record || (record->ruleFlags & RecordRuleSparseState) == 0u ||
       !source.prepared || !destination.chunkContextFinalized ||
       source.draw.recordType != type ||
@@ -588,7 +587,7 @@ bool appendSparsePlanRecordWithSources(
     return false;
   }
 
-  auto draw = planDrawHeader(plan, flags);
+  auto draw = planDrawHeader(source, flags);
   draw.sectionCount = count;
   draw.sectionTableOffset = sizeof(draw);
   draw.sectionPayloadOffset =
@@ -910,32 +909,45 @@ bool appendSparsePlanRecordWithSources(
   return true;
 }
 
-bool appendSparsePlanRecord(CommandChunkBuilder& builder,
+bool appendSparsePlanRecord(const RecorderLockCapability& access,
+                            CommandChunkBuilder& builder,
                             std::uint32_t type,
                             std::uint32_t flags,
-                            const SparseStatePlan& plan) noexcept {
+                            const SparseStatePlan& plan,
+                            const SparseStatePlan::SourceFacts& source,
+                            const SparseStatePlan::DestinationFacts& destination)
+    noexcept {
   bool appended = false;
   return plan.withEmitSources(
+      access,
       [&](const PeHotStateShadow& shadow,
           const PeBindingView& bindings) noexcept {
         appended = appendSparsePlanRecordWithSources(
-            builder, type, flags, plan, shadow, bindings);
+            builder, type, flags, source, destination, shadow, bindings);
       }) && appended;
 }
 
 }  // namespace
 
-bool appendSparseStatePlan(CommandChunkBuilder& builder,
+bool appendSparseStatePlan(const RecorderLockCapability& access,
+                           CommandChunkBuilder& builder,
                            std::uint32_t type,
                            const SparseStatePlan& plan) noexcept {
-  return appendSparsePlanRecord(builder, type, plan.source().drawFlags, plan);
+  const auto* const source = plan.source(access);
+  return source && appendSparsePlanRecord(access, builder, type,
+                                           source->drawFlags, plan, *source,
+                                           plan.destination());
 }
 
-bool appendApplyStatePlan(CommandChunkBuilder& builder,
+bool appendApplyStatePlan(const RecorderLockCapability& access,
+                          CommandChunkBuilder& builder,
                           std::uint32_t flags,
                           const SparseStatePlan& plan) noexcept {
-  return appendSparsePlanRecord(builder, D9C_COMMAND_RECORD_APPLY_STATE,
-                                flags, plan);
+  const auto* const source = plan.source(access);
+  return source &&
+         appendSparsePlanRecord(access, builder,
+                                D9C_COMMAND_RECORD_APPLY_STATE, flags, plan,
+                                *source, plan.destination());
 }
 
 }  // namespace dxmt9::d3d9::pe

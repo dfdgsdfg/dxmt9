@@ -1,6 +1,7 @@
 #include "d3d9_pe_semantic_owner.hpp"
 #include "d3d9_pe_recorder_transaction.hpp"
 #include "d3d9_pe_recorder.hpp"
+#include "d3d9_pe_producer.hpp"
 #include "d3d9_pe_semantic_owner_phase_observer.hpp"
 #include "device_c_chunk_validate.hpp"
 
@@ -8,13 +9,17 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <iostream>
 #include <limits>
+#include <mutex>
 #include <new>
+#include <sys/wait.h>
 #include <stdexcept>
 #include <string_view>
 #include <type_traits>
+#include <unistd.h>
 #include <utility>
 #include <vector>
 
@@ -66,6 +71,44 @@ PeSemanticRecordInput base(PeSemanticProducerKind producer,
       static_cast<std::size_t>(producer)];
   return {.producer = producer, .recordType = row.recordType,
           .sourceOrdinal = source, .recordOrdinal = ordinal};
+}
+
+template <typename Owner>
+bool ownerUpVertexPrefix(const Owner& owner,
+                         std::span<const std::byte> expected) {
+  PeSemanticExactFixedEmission emission{};
+  if (!owner.emitExactFixed(emission) || emission.transport.header.recordCount != 1u)
+    return false;
+  const auto& header = emission.transport.header;
+  D9CCommandChunkWireRecordHeader record{};
+  std::memcpy(&record, emission.wire.data() + header.recordTableOffset,
+              sizeof(record));
+  if (record.payloadOffset > header.payloadArenaSize ||
+      record.payloadSize > header.payloadArenaSize - record.payloadOffset)
+    return false;
+  const auto payload = emission.wire.subspan(
+      header.payloadArenaOffset + record.payloadOffset, record.payloadSize);
+  if (payload.size() < sizeof(D9CCommandChunkWireDrawHeader)) return false;
+  D9CCommandChunkWireDrawHeader draw{};
+  std::memcpy(&draw, payload.data(), sizeof(draw));
+  if (draw.sectionTableOffset > payload.size() ||
+      draw.sectionCount > D9C_COMMAND_CHUNK_SECTION_COUNT ||
+      draw.sectionCount * sizeof(D9CCommandChunkWireSectionDesc) >
+          payload.size() - draw.sectionTableOffset)
+    return false;
+  for (std::size_t i = 0u; i < draw.sectionCount; ++i) {
+    D9CCommandChunkWireSectionDesc desc{};
+    std::memcpy(&desc, payload.data() + draw.sectionTableOffset +
+                    i * sizeof(desc), sizeof(desc));
+    if (desc.kind != D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA) continue;
+    if (desc.payloadOffset > payload.size() ||
+        desc.byteSize > payload.size() - desc.payloadOffset ||
+        expected.size() > desc.byteSize)
+      return false;
+    return std::memcmp(payload.data() + desc.payloadOffset, expected.data(),
+                       expected.size()) == 0;
+  }
+  return expected.empty();
 }
 
 template <PeSemanticRecordInputLike Input>
@@ -382,6 +425,52 @@ void bindingOccurrenceStorageUsesActiveFrontier() {
             plan->values[0].wireIndex == D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX &&
             plan->values[0].wireValid && !plan->values[0].hasPin,
         "reused active binding locator writes every nullable field");
+}
+
+void compactIdentityWitnessBoundMatchesSevenFamilies() {
+  static_assert(kPeSemanticMaxBindingOccurrences ==
+                D9C_DRAW_PACKET_MAX_TEXTURES + D9C_DRAW_PACKET_MAX_STREAMS +
+                2u + 1u + 1u + D9C_DRAW_PACKET_MAX_RENDER_TARGETS + 1u);
+  D9CSurface object;
+  PeSemanticCompactPreparedRecord prepared;
+  auto& witness = prepared.identityWitness;
+  bool newlyRetained = false;
+  bool newlyWireVisible = false;
+  for (std::size_t i = 0u; i < witness.entries.size(); ++i) {
+    const PeWireObjectRef ref{
+        .identity = {.kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+                     .generation = 1u,
+                     .objectId = static_cast<std::uint32_t>(0xc800u + i)},
+        .object = &object};
+    check(witness.add(ref, D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                      newlyRetained, newlyWireVisible) && newlyRetained &&
+              newlyWireVisible,
+          "compact witness admits every seven-family binding occurrence");
+  }
+  const auto count = witness.count;
+  const PeWireObjectRef overflow{
+      .identity = {.kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+                   .generation = 1u,
+                   .objectId = 0xc900u},
+      .object = &object};
+  check(count == 45u && witness.wireCount == 45u &&
+            !witness.add(overflow, D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                         newlyRetained, newlyWireVisible) &&
+            witness.count == count && witness.wireCount == count,
+        "compact witness fails closed at the exact seven-family bound");
+}
+
+void compactSparsePreparationSelectsSchemaWitness() {
+  Owner owner;
+  PeSemanticSparsePlanRecordInput input{};
+  PeSemanticCompactPreparedRecord compact;
+  check(owner.prepareAdmission(input, compact) ==
+            PeSemanticAdmissionOutcome::Malformed,
+        "sparse-plan preparation instantiates the 45-entry witness path");
+  check(compact.identityWitness.entryCapacity ==
+            kPeSemanticMaxBindingOccurrences &&
+            compact.identityWitness.count == 0u,
+        "compact sparse preparation leaves its bounded witness inactive on reject");
 }
 
 template <typename Wire, std::size_t RowCount, typename Object,
@@ -750,7 +839,7 @@ void classificationAndLifetime() {
   owner.setPhaseObserver(nullptr);
   std::size_t visited = 0u;
   check(owner.visitOwnedRecords([&](PeSemanticProducerKind kind,
-                                    const PeSemanticRecordSlot& slot) noexcept {
+                                    const PeSemanticRecordReceipt& slot) noexcept {
           ++visited;
           return kind == slot.producer;
         }) && visited == 21u,
@@ -2971,7 +3060,7 @@ void directCanonicalLedgerExcludesDuplicateStaging() {
   const auto admitted = ledger.snapshot(
       dxmt9::core::CopyMaterializationClass::PeSemanticOwnerAdmission);
   const auto expectedAdmissionBytes =
-      sizeof(PeSemanticRecordSlot) +
+      sizeof(PeSemanticRecordReceipt) +
       sizeof(PeSemanticPhysicalPin<D9CTexture, PeSemanticTextureIdentity>) +
       static_cast<std::size_t>(segmented.transport.header.recordCount) *
           sizeof(D9CCommandChunkWireRecordHeader) +
@@ -3180,27 +3269,143 @@ void collisionCopyOverflowAndRetry() {
   owner.reset();
 
   owner.admit(upRecord);
-  check(owner.record(0u).upVertexBytes.offset == 0u &&
+  check(ownerUpVertexPrefix(owner, up) &&
             partialSource.refs == 2u,
-        "retry reacquires a released sparse pin at offset zero");
+        "retry reacquires a released sparse pin with canonical UP bytes");
   const std::array<std::byte, 3u> overflowingUp{};
   auto failedUp = upRecord;
   failedUp.sourceOrdinal = 10u;
   failedUp.recordOrdinal = 10u;
   failedUp.sparse.upVertexData = overflowingUp;
   check(!owner.admit(failedUp) && owner.size() == 1u &&
-            owner.record(0u).upVertexBytes.offset == 0u,
+            ownerUpVertexPrefix(owner, up),
         "UP arena overflow rolls back the attempted admission");
   owner.reset();
   check(partialSource.refs == 1u, "failed UP admission leaves no leaked pin");
   auto finalRetry = upRecord;
   finalRetry.sourceOrdinal = 1u;
   finalRetry.recordOrdinal = 1u;
-  check(owner.admit(finalRetry) && owner.record(0u).upVertexBytes.offset == 0u &&
+  check(owner.admit(finalRetry) && ownerUpVertexPrefix(owner, up) &&
             partialSource.refs == 2u,
-        "reset/retry restarts UP offsets and reacquires the pin");
+        "reset/retry restores canonical UP prefix and reacquires the pin");
   owner.reset();
+}
+
+// R-CORE-REC-7.22: index generations revoke a whole inactive pin table in
+// constant work. Keep this trace deliberately bounded and compare each
+// transition with the reference rule (a reset means no active pin; a retry
+// of a warm object owns exactly one retain). Collision and failed settlement
+// must not make stale buckets authoritative.
+void pinIndexGenerationReferenceTrace() {
+  using Tiny = PeSemanticBatchOwner<8u, 2u, 4096u, 4u, 4u>;
+  Tiny owner;
+  D9CBuffer first;
+  D9CBuffer second;
+  const auto firstRef = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(
+      &first, 0xd01u, 3u);
+  const auto secondRef = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(
+      &second, 0xd02u, 4u);
+
+  std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>, 1u>
+      firstRows{{{.wire = {.slot = 0u, .valid = 1u}, .object = firstRef}}};
+  std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>, 1u>
+      secondRows{{{.wire = {.slot = 0u, .valid = 1u}, .object = secondRef}}};
+  auto firstInput = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+  firstInput.sparse.streams = firstRows;
+  check(owner.admit(firstInput) && owner.referencesBuffer(firstRef) &&
+            first.refs == 2u,
+        "generation trace admits the reference model's first live pin");
+  check(owner.settle() && owner.clearedBytesLastBoundary() == 0u &&
+            !owner.referencesBuffer(firstRef),
+        "normal boundary revokes stale pin indexes without a full clear");
+
+  // The retainer keeps the physical pin warm, but the owner index must still
+  // reject the old chunk's slot before a new record publishes it.
+  firstInput.sourceOrdinal = firstInput.recordOrdinal = 1u;
+  check(owner.admit(firstInput) && owner.referencesBuffer(firstRef) &&
+            first.refs == 2u && owner.retainedCount() == 1u,
+        "reset/reuse requalifies a warm object without another AddRef");
+
+  auto failed = base(PeSemanticProducerKind::DrawPrimitive, 2u, 2u);
+  failed.sparse.streams = secondRows;
+  check(!owner.tryAppendOwnedRecord(failed, []() noexcept { return false; }) &&
+            owner.referencesBuffer(firstRef) &&
+            !owner.referencesBuffer(secondRef) && second.refs == 1u,
+        "rollback revokes a partially acquired collision-free suffix");
+  failed.sourceOrdinal = failed.recordOrdinal = 2u;
+  check(owner.tryAppendOwnedRecord(failed, []() noexcept { return true; }) &&
+            owner.referencesBuffer(secondRef) && second.refs == 2u,
+        "post-rollback retry publishes only the fresh qualified pin");
+
+  auto generationCollision =
+      base(PeSemanticProducerKind::DrawPrimitive, 3u, 3u);
+  firstRows[0].object.identity.generation = 9u;
+  generationCollision.sparse.streams = firstRows;
+  check(!owner.admit(generationCollision) && owner.size() == 2u &&
+            first.refs == 2u,
+        "generation collision remains rejected after index reuse");
+  owner.reset();
+  check(owner.clearedBytesLastBoundary() == 0u && first.refs == 1u &&
+            second.refs == 1u && owner.retainedCount() == 0u,
+        "reset releases physical pins while leaving no stale index authority");
+
+  // Churn the same object through many reset/reuse cycles. The old bucket is
+  // a logical empty after each reset, while the exact and object-id probes
+  // still reject generation and pointer aliases once the new pin is live.
+  D9CSurface alias;
+  for (std::uint32_t cycle = 0u; cycle < 32u; ++cycle) {
+    firstRows[0].object = firstRef;
+    auto churn = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+    churn.sparse.streams = firstRows;
+    check(owner.admit(churn) && first.refs == 2u,
+          "reset churn admits the reused identity");
+    owner.reset();
+    check(owner.clearedBytesLastBoundary() == 0u && first.refs == 1u,
+          "reset churn invalidates old buckets without a table clear");
+    check(owner.admit(churn), "reset churn re-admits after stale invalidation");
+    auto staleGeneration = churn;
+    staleGeneration.sourceOrdinal = staleGeneration.recordOrdinal = 2u;
+    auto staleStream = churn.sparse.streams[0];
+    staleStream.object.identity.generation = 8u;
+    staleGeneration.sparse.streams = std::span(&staleStream, 1u);
+    auto pointerAlias = churn;
+    pointerAlias.sourceOrdinal = pointerAlias.recordOrdinal = 3u;
+    auto aliasStream = churn.sparse.streams[0];
+    aliasStream.object.object = &alias;
+    pointerAlias.sparse.streams = std::span(&aliasStream, 1u);
+    check(!owner.admit(staleGeneration) && !owner.admit(pointerAlias) &&
+              first.refs == 2u && alias.refs == 1u,
+          "reset churn preserves exact and object collision rejection");
+    owner.reset();
+    if (cycle == 31u)
+      check(!owner.visitCommittedPendingChunkLease(
+                 PeWireObjectRef{.identity = firstRef.identity,
+                                 .object = &first},
+                 [](const CommittedPendingChunkLease&) noexcept { return true; }),
+            "final churn reset exposes no stale committed pin");
   }
+
+  using WrapOwner = PeSemanticBatchOwner<4u, 2u, 4096u, 4u, 4u>;
+  WrapOwner::PinIndexGenerationForTesting nearWrap{
+      std::numeric_limits<std::uint32_t>::max()};
+  WrapOwner wrapOwner(nearWrap);
+  D9CSurface surface;
+  auto present = base(PeSemanticProducerKind::Present, 1u, 1u);
+  present.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0xd03u);
+  check(wrapOwner.admit(present) && wrapOwner.settle() &&
+            wrapOwner.clearedBytesLastBoundary() != 0u &&
+            !wrapOwner.visitCommittedPendingChunkLease(
+                PeWireObjectRef{.identity = present.surface0.identity,
+                                .object = &surface},
+                [](const CommittedPendingChunkLease&) noexcept { return true; }),
+        "generation wrap takes the bounded physical-clear slow path");
+  check(wrapOwner.admit(present) && surface.refs == 2u &&
+            wrapOwner.retainedCount() == 1u,
+        "generation wrap resets the index domain before warm retry");
+  wrapOwner.reset();
+  check(surface.refs == 1u,
+        "generation-wrap retry keeps release multiplicity exact");
+}
 
 // R-CORE-REC-7.12/7.13 bounded refinement: keep these sequences deliberately
 // small, but make every accepted/rejected transition observable through the
@@ -3802,8 +4007,8 @@ void settledOwnerCannotExposePriorRanges() {
   check(owner.admit(prior), "stale-range source admission");
   PeSemanticExactFixedEmission priorEmission;
   check(owner.emitExactFixed(priorEmission), "stale-range source emission");
-  check(owner.settle() && owner.clearedBytesLastBoundary() != 0u,
-        "settlement clears used source ranges only");
+  check(owner.settle() && owner.clearedBytesLastBoundary() == 0u,
+        "settlement invalidates the source frontier without capacity clears");
 
   auto next = base(PeSemanticProducerKind::Present, 2u, 2u);
   next.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0x933u);
@@ -4084,7 +4289,9 @@ void calibratedOwnerPhaseObserver() {
             phase(PeSemanticOwnerPhase::EmitSegmentedAliasView).events == 1u &&
             phase(PeSemanticOwnerPhase::EmitSegmentedExternalCopy).events == 1u &&
             phase(PeSemanticOwnerPhase::EmitSegmentedExternalRoleCopy).events == 1u &&
-            phase(PeSemanticOwnerPhase::SettleClear).events == 1u,
+            phase(PeSemanticOwnerPhase::SettleClear).events == 1u &&
+            phase(PeSemanticOwnerPhase::SettleRetainerEpoch).events == 1u &&
+            phase(PeSemanticOwnerPhase::SettleOwnerReset).events == 1u,
         "observer covers owner and transport lifecycle phases");
   check(phase(PeSemanticOwnerPhase::PrepareAdmission).samples == 1u &&
             phase(PeSemanticOwnerPhase::FixedDirectPinCopy).samples == 1u &&
@@ -4149,6 +4356,27 @@ void observerSettlementFamilyTruthTable() {
   check(aggregate.events == 5u && aggregate.samples == 5u &&
             aggregate.totalNs == totalNs,
         "all family intervals exactly partition aggregate settlement");
+}
+
+void observedSettlementChildrenSampleAtN1() {
+  using ObservedOwner = PeSemanticBatchOwner<2u, 2u, 4096u, 2u, 2u>;
+  PeSemanticOwnerPhaseObserver observer(1u);
+  ObservedOwner owner;
+  owner.setPhaseObserver(&observer);
+  D9CSurface surface;
+  auto input = base(PeSemanticProducerKind::Present, 0x761u, 0x762u);
+  input.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0x763u);
+  check(owner.tryAppendOwnedRecord(input, []() noexcept { return true; }) &&
+            owner.settle(),
+        "N=1 observed owner settles one accepted record");
+  const auto& stats = observer.stats();
+  const auto& retainer = stats.phases[static_cast<std::size_t>(
+      PeSemanticOwnerPhase::SettleRetainerEpoch)];
+  const auto& reset = stats.phases[static_cast<std::size_t>(
+      PeSemanticOwnerPhase::SettleOwnerReset)];
+  check(retainer.events == 1u && retainer.samples == 1u &&
+            reset.events == 1u && reset.samples == 1u,
+        "N=1 observed settlement samples both gated child phases");
 }
 
 void observerScopeRestoresNestedState() {
@@ -4216,10 +4444,415 @@ void observerSeparatesPrepareMalformedFromHeader() {
              static_cast<std::size_t>(PeSemanticOwnerOutcome::Header)] == 1u,
         "observer outcome ledger preserves malformed and header denominators");
 }
+
+// Exercise the actual compact producer at the schema's legal maximum binding
+// occurrence count. This uses an ordinary indexed draw rather than a snapshot
+// or a hand-built SparseStatePlan, so plan selection, destination finalization,
+// compact admission, and the generic builder oracle consume live shadows.
+void realCompactSparseMaxFamilyDifferentialAndRollback(bool allDistinct,
+                                                        bool faultChild = false) {
+  using RealOwner = PeSemanticBatchOwner<4u, 64u, 1u << 20u, 16u, 128u>;
+
+  PeHotStateShadow shadow{};
+  PeConstShadowBlock constants{};
+  PeBindingView bindings{};
+  PeChunkContext chunk{};
+  PeDrawPayloads payloads{};
+  PeDrawParams params{
+      .recordType = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+      .primitiveType = 4u,
+      .baseVertex = -7,
+      .minVertex = 3u,
+      .numVertices = 37u,
+      .startIndex = 11u,
+      .primitiveCount = 9u,
+  };
+
+  std::array<D9CTexture, D9C_DRAW_PACKET_MAX_TEXTURES> textures{};
+  std::array<D9CBuffer, D9C_DRAW_PACKET_MAX_STREAMS + 1u> buffers{};
+  std::array<D9CShader, 2u> shaders{};
+  D9CVertexDecl declaration;
+  D9CBuffer indexBuffer;
+  std::array<D9CSurface, D9C_DRAW_PACKET_MAX_RENDER_TARGETS + 1u>
+      surfaces{};
+  D9CSurface depthStencil;
+  D9CTexture prefixTexture;
+
+  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
+    if (!allDistinct && slot == 0u) continue;  // Null occurrence variant.
+    bindings.textures[slot] = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+        &textures[slot], 0x1000u + slot);
+  }
+  if (!allDistinct) bindings.textures[2u] = bindings.textures[1u];
+  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
+    if (!allDistinct && slot == 0u) continue;
+    bindings.streams[slot].buffer = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(
+        &buffers[slot], 0x2000u + slot);
+  }
+  if (!allDistinct) bindings.streams[2u].buffer = bindings.streams[1u].buffer;
+  bindings.vs = localRef<D9C_CHUNK_HANDLE_KIND_SHADER>(&shaders[0], 0x3000u);
+  bindings.ps = localRef<D9C_CHUNK_HANDLE_KIND_SHADER>(&shaders[1], 0x3001u);
+  bindings.vdecl = localRef<D9C_CHUNK_HANDLE_KIND_VERTEX_DECL>(
+      &declaration, 0x4000u);
+  bindings.indexBuffer =
+      localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&indexBuffer, 0x5000u);
+  for (std::uint32_t slot = 0u;
+       slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
+    if (!allDistinct && slot == 0u) continue;
+    bindings.renderTargets[slot] = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+        &surfaces[slot], 0x6000u + slot);
+  }
+  if (!allDistinct) bindings.renderTargets[2u] = bindings.renderTargets[1u];
+  bindings.depthStencil = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &depthStencil, 0x7000u);
+
+  shadow.writer().pendingTextureMask() =
+      (1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u;
+  shadow.writer().pendingStreamMask() =
+      (1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u;
+  shadow.writer().pendingVs() = true;
+  shadow.writer().pendingPs() = true;
+  shadow.writer().pendingVdecl() = true;
+  shadow.writer().pendingIb() = true;
+  shadow.writer().pendingRtMask() =
+      (1u << D9C_DRAW_PACKET_MAX_RENDER_TARGETS) - 1u;
+  shadow.writer().pendingDs() = true;
+
+  // Keep a real compact-plan record committed before the max-family attempt;
+  // a failed late acquisition must preserve this exact prefix byte-for-byte.
+  PeHotStateShadow prefixShadow{};
+  PeConstShadowBlock prefixConstants{};
+  PeBindingView prefixBindings{};
+  prefixBindings.textures[0] = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+      &prefixTexture, 0x1800u);
+  prefixShadow.writer().pendingTextureMask() = 1u;
+  PeDrawParams prefixParams{.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                            .primitiveType = 4u,
+                            .startVertex = 1u,
+                            .primitiveCount = 1u};
+  PeDrawPayloads prefixPayloads{};
+  PeChunkContext prefixChunk{};
+  const PeHotStateShadow oraclePrefixShadow = prefixShadow;
+  const PeConstShadowBlock oraclePrefixConstants = prefixConstants;
+  const PeHotStateShadow oracleMaxShadow = shadow;
+  const PeConstShadowBlock oracleMaxConstants = constants;
+
+  // Build the independent generic producer oracle before owner settlement
+  // consumes the pending delta. Drain builder retention before owner checks.
+  CommandChunkBuilder oracle;
+  std::vector<std::byte> oracleBytes;
+  if (!faultChild) {
+    PeSparseScratch prefixOracleScratch{};
+    PeSparseScratch oracleScratch{};
+    PeConstShadowBlock prefixOracleConstants = prefixConstants;
+    PeConstShadowBlock oracleConstants = constants;
+    SparseStateInput prefixOracleState{};
+    SparseStateInput oracleState{};
+    D9CCommandChunkWireDrawHeader prefixOracleHeader{};
+    D9CCommandChunkWireDrawHeader oracleHeader{};
+    check(buildSparseState(prefixShadow, prefixOracleConstants, prefixBindings,
+                           prefixPayloads, prefixParams, false, false,
+                           prefixOracleScratch, prefixOracleHeader,
+                           prefixOracleState) &&
+              appendSparseRecord(oracle, prefixParams.recordType,
+                                 prefixOracleHeader, prefixOracleState) &&
+              buildSparseState(shadow, oracleConstants, bindings, payloads,
+                               params, false, false, oracleScratch, oracleHeader,
+                               oracleState) &&
+              appendSparseRecord(oracle, params.recordType, oracleHeader,
+                                 oracleState),
+          "real compact max-family generic producer oracle emits");
+    const auto oracleSealed = oracle.seal();
+    check(oracleSealed.valid() && oracleSealed.blob.size() != 0u,
+          "real compact max-family oracle seals canonical bytes");
+    oracleBytes.assign(oracleSealed.blob.begin(), oracleSealed.blob.end());
+    oracle.resetAndReleaseRetained();
+  }
+
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken ownerThread;
+  std::uint64_t epoch = 1u;
+  RecorderLockGuard guard(mutex, false);
+  RealOwner owner;
+  check(owner.constructionSucceeded(),
+        "real compact max-family owner has sufficient bounded capacity");
+
+  SparseStatePlan prefixPlan;
+  SparseStatePlan maxPlan;
+  PeSemanticCompactPreparedRecord prepared{};
+  std::size_t preparedIdentityCount = 0u;
+  std::size_t preparedWireCount = 0u;
+  std::size_t preparedOccurrenceCount = 0u;
+  bool preparedMaxWitness = false;
+  bool maxPlanBuilt = false;
+  bool maxPlanFinalized = false;
+  const bool built = guard.withCapability(
+      ownerThread, epoch, [&](const auto& access) noexcept {
+        if (!buildSparseStatePlan(access, prefixShadow, prefixConstants,
+                                  prefixBindings, prefixPayloads, prefixParams,
+                                  false, false, prefixPlan) ||
+            !finalizeSparseStatePlanChunkContext(access, prefixChunk,
+                                                 prefixPlan)) {
+          return false;
+        }
+        const auto accepted = settleRecorderAppend(
+            {.phase = AppendSettlement::Prepared, .appendSucceeded = true});
+        if (!owner.tryAppendSparseStatePlan(
+                access, prefixPlan, PeSemanticProducerKind::DrawPrimitive,
+                prefixParams.recordType,
+                D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u, [&]() noexcept {
+                  return acceptSparseStatePlan(
+                      access, prefixShadow, prefixConstants, prefixPlan,
+                      accepted, nullptr, 1u);
+                })) {
+          return false;
+        }
+        maxPlanBuilt = buildSparseStatePlan(
+            access, shadow, constants, bindings, payloads, params, false,
+            false, maxPlan);
+        maxPlanFinalized = maxPlanBuilt &&
+            finalizeSparseStatePlanChunkContext(access, chunk, maxPlan);
+        if (maxPlanFinalized) {
+          const PeSemanticSparsePlanRecordInput witnessInput{
+              .access = &access,
+              .sparsePlan = &maxPlan,
+              .producer = PeSemanticProducerKind::DrawIndexedPrimitive,
+              .recordType = params.recordType,
+              .recordFlags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+              .sourceOrdinal = 2u,
+              .recordOrdinal = 2u,
+          };
+          preparedMaxWitness =
+              owner.prepareAdmission(witnessInput, prepared) ==
+              PeSemanticAdmissionOutcome::Admissible;
+          preparedIdentityCount = prepared.identityWitness.count;
+          preparedWireCount = prepared.identityWitness.wireCount;
+          preparedOccurrenceCount = prepared.bindingOccurrences.count;
+        }
+        return maxPlanFinalized;
+      });
+  check(built && maxPlanBuilt && maxPlanFinalized && owner.size() == 1u,
+        "real compact max-family plan builds under live recorder access");
+  check(preparedMaxWitness && preparedOccurrenceCount == 45u &&
+            preparedIdentityCount == (allDistinct ? 45u : 39u) &&
+            preparedWireCount == (allDistinct ? 45u : 39u),
+        "compact prepared witness records 45 live family occurrences and identities");
+
+  PeSemanticExactFixedEmission prefixEmission{};
+  check(owner.emitExactFixed(prefixEmission),
+        "real compact prefix emits before late settlement fault");
+  const std::vector<std::byte> prefixBytes(prefixEmission.wire.begin(),
+                                           prefixEmission.wire.end());
+  const auto prefixTextureRefs = prefixTexture.refs;
+
+  bool faultHandled = false;
+  bool settlementReached = false;
+  if (faultChild) {
+    const bool faulted = guard.withCapability(
+        ownerThread, epoch, [&](const auto& access) noexcept {
+          return !owner.tryAppendSparseStatePlan(
+              access, maxPlan, PeSemanticProducerKind::DrawIndexedPrimitive,
+              params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 2u, 2u,
+              [&]() noexcept {
+                settlementReached = true;
+                return true;
+              });
+        });
+    check(faulted &&
+              owner.lastAdmissionFailure() ==
+                  RealOwner::AdmissionFailure::SparseDepthStencils &&
+              !settlementReached,
+          "fresh-process retain fault reaches the final depth-stencil family before settlement");
+    faultHandled = true;
+  }
+
+  // Reject after compact admission has acquired the max-family pins. This is
+  // the late/partial-AddRef path: preserve the committed prefix and release
+  // every newly acquired unique family pin before retrying the same plan.
+  const auto rejected = settleRecorderAppend(
+      {.phase = AppendSettlement::Prepared, .appendSucceeded = false});
+  const bool rejectedAppend = !faultHandled && guard.withCapability(
+      ownerThread, epoch, [&](const auto& access) noexcept {
+        return !owner.tryAppendSparseStatePlan(
+            access, maxPlan, PeSemanticProducerKind::DrawIndexedPrimitive,
+            params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 2u, 2u,
+            [&]() noexcept {
+              return acceptSparseStatePlan(access, shadow, constants, maxPlan,
+                                           rejected, nullptr, 2u);
+            });
+      });
+  check((faultHandled || rejectedAppend) && owner.size() == 1u &&
+            owner.retainedCount() == 1u && prefixTexture.refs == prefixTextureRefs,
+        "late max-family settlement fault preserves committed prefix");
+  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot)
+    check(textures[slot].refs == 1u,
+          "late max-family texture AddRef rolls back completely");
+  for (auto& object : buffers)
+    check(object.refs == 1u,
+          "late max-family buffer AddRef rolls back completely");
+  for (auto& object : shaders)
+    check(object.refs == 1u,
+          "late max-family shader AddRef rolls back completely");
+  check(declaration.refs == 1u && indexBuffer.refs == 1u,
+        "late max-family declaration/index AddRef rolls back completely");
+  for (auto& object : surfaces)
+    check(object.refs == 1u,
+          "late max-family render-target AddRef rolls back completely");
+  check(depthStencil.refs == 1u,
+        "late max-family depth-stencil AddRef rolls back completely");
+  PeSemanticExactFixedEmission afterFault{};
+  check(owner.emitExactFixed(afterFault) &&
+            afterFault.wireBytes == prefixBytes.size() &&
+            std::equal(prefixBytes.begin(), prefixBytes.end(),
+                       afterFault.wire.begin()),
+        "late max-family fault leaves owner canonical prefix unchanged");
+
+  if (faultChild) {
+    check(faultHandled &&
+              owner.lastAdmissionFailure() ==
+                  RealOwner::AdmissionFailure::SparseDepthStencils &&
+              !settlementReached,
+          "fresh-process retain fault reaches the final depth-stencil family before settlement");
+    check(owner.size() == 1u && owner.retainedCount() == 1u &&
+              prefixTexture.refs == prefixTextureRefs,
+          "final depth-stencil fault preserves the committed prefix");
+    for (std::uint32_t slot = 0u;
+         slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot)
+      check(textures[slot].refs == 1u,
+            "final depth-stencil fault rolls back every texture AddRef");
+    for (auto& object : buffers)
+      check(object.refs == 1u,
+            "final depth-stencil fault rolls back every buffer AddRef");
+    for (auto& object : shaders)
+      check(object.refs == 1u,
+            "final depth-stencil fault rolls back every shader AddRef");
+    check(declaration.refs == 1u && indexBuffer.refs == 1u,
+          "final depth-stencil fault rolls back declaration/index AddRef");
+    for (auto& object : surfaces)
+      check(object.refs == 1u,
+            "final depth-stencil fault rolls back every render-target AddRef");
+    check(depthStencil.refs == 1u,
+          "final depth-stencil fault rolls back depth-stencil AddRef");
+
+    PeSparseScratch childPrefixScratch{};
+    PeSparseScratch childMaxScratch{};
+    PeConstShadowBlock childPrefixConstants = oraclePrefixConstants;
+    PeConstShadowBlock childMaxConstants = oracleMaxConstants;
+    SparseStateInput childPrefixState{};
+    SparseStateInput childMaxState{};
+    D9CCommandChunkWireDrawHeader childPrefixHeader{};
+    D9CCommandChunkWireDrawHeader childMaxHeader{};
+    CommandChunkBuilder childOracle;
+    check(buildSparseState(oraclePrefixShadow, childPrefixConstants,
+                           prefixBindings, prefixPayloads, prefixParams, false,
+                           false, childPrefixScratch, childPrefixHeader,
+                           childPrefixState) &&
+              appendSparseRecord(childOracle, prefixParams.recordType,
+                                 childPrefixHeader, childPrefixState) &&
+              buildSparseState(oracleMaxShadow, childMaxConstants, bindings,
+                               payloads, params, false, false, childMaxScratch,
+                               childMaxHeader, childMaxState) &&
+              appendSparseRecord(childOracle, params.recordType, childMaxHeader,
+                                 childMaxState),
+          "post-fault generic producer oracle emits after fault budget consumption");
+    const auto childSealed = childOracle.seal();
+    check(childSealed.valid(), "post-fault generic oracle seals");
+    oracleBytes.assign(childSealed.blob.begin(), childSealed.blob.end());
+    childOracle.resetAndReleaseRetained();
+
+    const auto accepted = settleRecorderAppend(
+        {.phase = AppendSettlement::Prepared, .appendSucceeded = true});
+    const bool retried = guard.withCapability(
+        ownerThread, epoch, [&](const auto& access) noexcept {
+          return owner.tryAppendSparseStatePlan(
+              access, maxPlan, PeSemanticProducerKind::DrawIndexedPrimitive,
+              params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 2u, 2u,
+              [&]() noexcept {
+                return acceptSparseStatePlan(access, shadow, constants, maxPlan,
+                                             accepted, nullptr, 2u);
+              });
+        });
+    PeSemanticExactFixedEmission childFinal{};
+    check(retried && owner.size() == 2u &&
+              owner.emitExactFixed(childFinal) &&
+              childFinal.wireBytes == oracleBytes.size() &&
+              std::equal(oracleBytes.begin(), oracleBytes.end(),
+                         childFinal.wire.begin()),
+          "post-fault clean retry equals the delayed generic oracle");
+    owner.reset();
+    check(prefixTexture.refs == 1u,
+          "post-fault retry reset releases the committed prefix pin");
+    return;
+  }
+
+  const auto accepted = settleRecorderAppend(
+      {.phase = AppendSettlement::Prepared, .appendSucceeded = true});
+  const bool retried = guard.withCapability(
+      ownerThread, epoch, [&](const auto& access) noexcept {
+        return owner.tryAppendSparseStatePlan(
+            access, maxPlan, PeSemanticProducerKind::DrawIndexedPrimitive,
+            params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 2u, 2u,
+            [&]() noexcept {
+              return acceptSparseStatePlan(access, shadow, constants, maxPlan,
+                                           accepted, nullptr, 2u);
+            });
+      });
+  PeSemanticExactFixedEmission finalEmission{};
+  check(retried && owner.size() == 2u && owner.emitExactFixed(finalEmission) &&
+            finalEmission.wireBytes == oracleBytes.size() &&
+            std::equal(oracleBytes.begin(), oracleBytes.end(),
+                       finalEmission.wire.begin()),
+        "real compact max-family retry equals generic producer oracle bytes");
+  owner.reset();
+  check(prefixTexture.refs == 1u,
+        "real compact max-family reset releases the committed prefix pin");
+}
+
+void runRealCompactRetainFaultChild(const char* executable) {
+  const auto pid = fork();
+  check(pid >= 0, "real compact retain fault fixture forks a child");
+  if (pid == 0) {
+    setenv("DXMT9_PE_RECORDER_FAULT", "retain_acquire=45", 1);
+    execlp(executable, executable, "--real-compact-retain-fault-child",
+           static_cast<char*>(nullptr));
+    _exit(127);
+  }
+  int status = 0;
+  check(waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+            WEXITSTATUS(status) == 0,
+        "real compact final depth-stencil retain fault child succeeds");
+}
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
+  if (argc > 1 &&
+      std::strcmp(argv[1], "--real-compact-retain-fault-child") == 0) {
+    try {
+      realCompactSparseMaxFamilyDifferentialAndRollback(true, true);
+    } catch (const Failure& failure) {
+      std::cerr << "pe_semantic_owner_spec fault child failed: "
+                << failure.what() << '\n';
+      return 1;
+    }
+    return 0;
+  }
   try {
+    static_assert(kPeSemanticMaxBindingOccurrences == 45u);
+    static_assert(sizeof(PeSemanticCompactIdentityWitness) <
+                  sizeof(PeSemanticPreparedIdentityWitness));
+    static_assert(sizeof(PeSemanticCompactPreparedRecord) <
+                  sizeof(PeSemanticPreparedRecord));
+    static_assert(PeSemanticCompactIdentityWitness::entryCapacity == 45u);
+    static_assert(sizeof(PeSemanticSparsePlanRecordStaging) <
+                  sizeof(PeSemanticRecordSlot));
+    static_assert(sizeof(PeSemanticConstantRecordStaging) <
+                  sizeof(PeSemanticRecordSlot));
+    static_assert(sizeof(PeSemanticSparsePlanRecordStaging) ==
+                  sizeof(D9CCommandChunkWireDrawHeader));
+    static_assert(sizeof(PeSemanticConstantRecordStaging) ==
+                  sizeof(D9CCommandChunkWireSetConst));
+    static_assert(sizeof(PeSemanticRecordReceipt) <
+                  sizeof(PeSemanticRecordSlot));
     static_assert(sizeof(PeSemanticAdmissionPlan) <= 256u);
     static_assert(std::is_trivially_copyable_v<PeSemanticEmissionHandleContext>);
     static_assert(sizeof(PeSemanticEmissionHandleContext) <= 1088u);
@@ -4243,6 +4876,8 @@ int main() {
     }
     static_assert(!std::is_copy_constructible_v<Owner>);
     static_assert(!std::is_move_constructible_v<Owner>);
+    compactIdentityWitnessBoundMatchesSevenFamilies();
+    compactSparsePreparationSelectsSchemaWitness();
     duplicateSurfacePinSmoke();
     qualifiedBufferReferenceLookup();
     pureAdmissionPlanDeduplicatesQualifiedBindings();
@@ -4286,6 +4921,7 @@ int main() {
     largeCanonicalPayloadSurvivesRepeatedExactEmission();
     exactPaddingWriterAdversarial();
     collisionCopyOverflowAndRetry();
+    pinIndexGenerationReferenceTrace();
     r712R713BoundedIdentityAndLifecycleRefinement();
     emissionSmoke();
     producerIdentityFollowsSettlementAndSourceRange();
@@ -4300,8 +4936,12 @@ int main() {
     ownerQualifiedMaterializationLedger();
     calibratedOwnerPhaseObserver();
     observerSettlementFamilyTruthTable();
+    observedSettlementChildrenSampleAtN1();
     observerScopeRestoresNestedState();
     observerSeparatesPrepareMalformedFromHeader();
+    realCompactSparseMaxFamilyDifferentialAndRollback(true);
+    realCompactSparseMaxFamilyDifferentialAndRollback(false);
+    runRealCompactRetainFaultChild(argv[0]);
   } catch (const Failure& failure) {
     std::cerr << "pe_semantic_owner_spec failed: " << failure.what() << '\n';
     return 1;

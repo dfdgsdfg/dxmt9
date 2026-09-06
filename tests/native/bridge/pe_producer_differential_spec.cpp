@@ -81,13 +81,24 @@ namespace {
 
 namespace pe = dxmt9::d3d9::pe;
 
-const pe::RecorderLockCapability& recorderAccess() {
-  static std::recursive_mutex mutex;
-  static dxmt9::core::ThreadOwnershipToken owner;
-  static std::uint64_t epoch = 1u;
-  static pe::RecorderLockGuard guard(mutex, false);
-  static const auto access = guard.capability(owner, epoch);
-  return access;
+struct TestRecorderDomain {
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken owner;
+  std::uint64_t epoch = 1u;
+};
+
+TestRecorderDomain& testRecorderDomain() {
+  // The domain must not be a function-template static: each distinct lambda
+  // type would otherwise become a different recorder on reacquisition.
+  static TestRecorderDomain domain;
+  return domain;
+}
+
+template <typename Fn>
+bool withRecorderAccess(Fn&& fn) {
+  auto& domain = testRecorderDomain();
+  pe::RecorderLockGuard guard(domain.mutex, false);
+  return guard.withCapability(domain.owner, domain.epoch, std::forward<Fn>(fn));
 }
 
 struct TestFailure : std::runtime_error {
@@ -297,23 +308,26 @@ LaneResult runPlanLane(const Fixture& fixture) {
     params.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
   }
   pe::SparseStatePlan plan{};
-  if (!pe::buildSparseStatePlan(
-          recorderAccess(), fixture.shadow, constants, fixture.bindings,
-          fixture.payloads,
-          params, fixture.forceFullSnapshot, fixture.inlineConstDelta,
-          plan)) {
-    return LaneResult{};
-  }
-  const bool destinationDependent =
-      params.recordType == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
-      params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
-  if (destinationDependent &&
-      !pe::finalizeSparseStatePlanChunkContext(fixture.chunk, plan)) {
-    return LaneResult{};
-  }
-  const bool ok = params.recordType == D9C_COMMAND_RECORD_APPLY_STATE
-      ? pe::appendApplyStatePlan(builder, plan.source().drawFlags, plan)
-      : pe::appendSparseStatePlan(builder, params.recordType, plan);
+  bool ok = withRecorderAccess([&](const auto& access) noexcept {
+    if (!pe::buildSparseStatePlan(
+            access, fixture.shadow, constants, fixture.bindings,
+            fixture.payloads, params, fixture.forceFullSnapshot,
+            fixture.inlineConstDelta, plan)) {
+      return false;
+    }
+    const bool destinationDependent =
+        params.recordType == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
+        params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+    if (destinationDependent &&
+        !pe::finalizeSparseStatePlanChunkContext(access, fixture.chunk, plan)) {
+      return false;
+    }
+    const auto* const source = plan.source(access);
+    return source && (params.recordType == D9C_COMMAND_RECORD_APPLY_STATE
+        ? pe::appendApplyStatePlan(access, builder, source->drawFlags, plan)
+        : pe::appendSparseStatePlan(access, builder, params.recordType, plan));
+  });
+  if (!ok) return LaneResult{};
   return finishLane(builder, ok);
 }
 
@@ -324,19 +338,24 @@ LaneResult runOwnerPlanLane(const Fixture& fixture) {
   dxmt9::core::ThreadOwnershipToken ownerThread;
   std::uint64_t epoch = 1u;
   pe::RecorderLockGuard guard(mutex, false);
-  const auto access = guard.capability(ownerThread, epoch);
   pe::SparseStatePlan plan;
   pe::PeDrawParams params = source.params;
   if (params.recordType == 0u)
     params.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
-  if (!pe::buildSparseStatePlan(
-          access, source.shadow, source.constants, source.bindings,
-          source.payloads, params, false, source.inlineConstDelta, plan)) {
-    return {};
-  }
-  if ((params.recordType == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
-       params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) &&
-      !pe::finalizeSparseStatePlanChunkContext(access, source.chunk, plan)) {
+  bool built = false;
+  const bool accessed = guard.withCapability(
+      ownerThread, epoch, [&](const auto& access) noexcept {
+    built = pe::buildSparseStatePlan(
+        access, source.shadow, source.constants, source.bindings,
+        source.payloads, params, false, source.inlineConstDelta, plan);
+    if (built &&
+        (params.recordType == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
+         params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE)) {
+      built = pe::finalizeSparseStatePlanChunkContext(access, source.chunk, plan);
+    }
+    return built;
+  });
+  if (!accessed || !built) {
     return {};
   }
   pe::PeSemanticBatchOwner<> owner;
@@ -350,13 +369,17 @@ LaneResult runOwnerPlanLane(const Fixture& fixture) {
       .phase = pe::AppendSettlement::Prepared,
       .appendSucceeded = true,
   });
-  result.ok = owner.tryAppendSparseStatePlan(
-      access, plan, producer, params.recordType,
-      D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
-      [&]() noexcept {
-        return pe::acceptSparseStatePlan(
-            source.shadow, source.constants, plan, settlement, nullptr, 1u,
-            plan.source().pendingTicket);
+  result.ok = guard.withCapability(
+      ownerThread, epoch, [&](const auto& access) noexcept {
+        return owner.tryAppendSparseStatePlan(
+            access, plan, producer, params.recordType,
+            D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+            [&]() noexcept {
+              const auto* const checkedSource = plan.source(access);
+              return checkedSource && pe::acceptSparseStatePlan(
+                  access, source.shadow, source.constants, plan, settlement,
+                  nullptr, 1u, checkedSource->pendingTicket);
+            });
       });
   if (!result.ok) return result;
   std::size_t wireBytes = 0u;
@@ -1247,20 +1270,32 @@ void productionOwnerSelectionDifferentialAcrossFamilies() {
       dxmt9::core::ThreadOwnershipToken ownerThread;
       std::uint64_t epoch = 101u + family * 64u + selection;
       pe::RecorderLockGuard guard(mutex, false);
-      const auto access = guard.capability(ownerThread, epoch);
       PeConstShadowBlock constants = f.constants;
       pe::SparseStatePlan plan;
-      check(pe::buildSparseStatePlan(
+      bool prepared = false;
+      const bool accessed = guard.withCapability(
+          ownerThread, epoch, [&](const auto& access) noexcept {
+            prepared = pe::buildSparseStatePlan(
                 access, f.shadow, constants, f.bindings, f.payloads, f.params,
-                false, false, plan),
+                false, false, plan);
+            if (prepared &&
+                recordTypes[family] != D9C_COMMAND_RECORD_APPLY_STATE) {
+              prepared = pe::finalizeSparseStatePlanChunkContext(
+                  access, f.chunk, plan);
+            }
+            return prepared;
+          });
+      check(accessed && prepared,
             "owner source selection plan prepares");
-      if (recordTypes[family] != D9C_COMMAND_RECORD_APPLY_STATE) {
-        check(pe::finalizeSparseStatePlanChunkContext(access, f.chunk, plan),
-              "owner source selection destination prepares");
-      }
       pe::PeSemanticPreparedSparseLayout layout{};
-      check(pe::detail::preparePeSemanticSparsePlanLayout(plan, layout) &&
-                layout.valid,
+      const bool layoutPrepared = guard.withCapability(
+          ownerThread, epoch, [&](const auto& access) noexcept {
+            const auto* const source = plan.source(access);
+            return source &&
+                   pe::detail::preparePeSemanticSparsePlanLayout(
+                       *source, plan.destination(), layout);
+          });
+      check(layoutPrepared && layout.valid,
             "owner source selection quotas prepare");
       pe::PeSparseScratch scratch{};
       PeHotStateShadow independentShadow = f.shadow;
@@ -1315,17 +1350,25 @@ void productionOwnerExplicitSnapshotRoutePreserved() {
 
   PeConstShadowBlock planConstants = f.constants;
   pe::SparseStatePlan plan;
-  check(pe::buildSparseStatePlan(
-            recorderAccess(), f.shadow, planConstants, f.bindings,
-            f.payloads, f.params, true, false, plan) &&
-            pe::finalizeSparseStatePlanChunkContext(f.chunk, plan),
+  const bool compactPrepared = withRecorderAccess(
+      [&](const auto& access) noexcept {
+        return pe::buildSparseStatePlan(
+                   access, f.shadow, planConstants, f.bindings, f.payloads,
+                   f.params, true, false, plan) &&
+               pe::finalizeSparseStatePlanChunkContext(access, f.chunk, plan);
+      });
+  check(compactPrepared,
         "explicit snapshot compact witness prepares for route rejection");
   pe::PeSemanticBatchOwner<> owner;
-  check(!owner.tryAppendSparseStatePlan(
-            recorderAccess(), plan,
-            pe::PeSemanticProducerKind::DrawIndexedPrimitive,
-            f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
-            []() noexcept { return true; }) && owner.size() == 0u,
+  const bool compactOwnerRejected = withRecorderAccess(
+      [&](const auto& access) noexcept {
+        return !owner.tryAppendSparseStatePlan(
+                   access, plan,
+                   pe::PeSemanticProducerKind::DrawIndexedPrimitive,
+                   f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u,
+                   1u, []() noexcept { return true; }) && owner.size() == 0u;
+      });
+  check(compactOwnerRejected,
         "production compact owner rejects the explicit full-snapshot route");
 
   PeConstShadowBlock explicitConstants = f.constants;
@@ -1473,58 +1516,145 @@ void sparsePlanFailureRetryAndSourceWitness() {
   shadow.writer().pendingTextureMask() = 1u << 2u;
   PeConstShadowBlock constants{};
   pe::SparseStatePlan plan{};
-  check(pe::buildSparseStatePlan(recorderAccess(), shadow, constants,
-                                 f.bindings, {}, f.params, false, false, plan),
+  check(withRecorderAccess([&](const auto& access) noexcept {
+          return pe::buildSparseStatePlan(access, shadow, constants,
+                                          f.bindings, {}, f.params, false,
+                                          false, plan);
+        }),
         "compact plan preparation succeeds");
   bool sourceIdentityMatches = false;
-  check(plan.withSettlementSources(
-            [&](const PeHotStateShadow& borrowedShadow,
-                PeConstShadowBlock& borrowedConstants,
-                const pe::PeBindingView& borrowedBindings) noexcept {
-              sourceIdentityMatches = &borrowedShadow == &shadow &&
-                  &borrowedConstants == &constants &&
-                  &borrowedBindings == &f.bindings;
-            }) && sourceIdentityMatches &&
+  check(withRecorderAccess([&](const auto& access) noexcept {
+          return plan.withSettlementSources(
+              access,
+              [&](const PeHotStateShadow& borrowedShadow,
+                  PeConstShadowBlock& borrowedConstants,
+                  const pe::PeBindingView& borrowedBindings) noexcept {
+                sourceIdentityMatches = &borrowedShadow == &shadow &&
+                    &borrowedConstants == &constants &&
+                    &borrowedBindings == &f.bindings;
+              });
+        }) && sourceIdentityMatches &&
             sizeof(pe::SparseStatePlan) < 512u,
         "compact plan carries bounded borrowed source witnesses only");
 
   pe::CommandChunkBuilder builder;
-  check(!pe::appendSparseStatePlan(builder, f.params.recordType, plan),
+  check(!withRecorderAccess([&](const auto& access) noexcept {
+          return pe::appendSparseStatePlan(access, builder, f.params.recordType,
+                                           plan);
+        }),
         "draw plan cannot materialize before destination chunk finalization");
   check(shadow.pendingRenderStatesTyped().size() == 1u &&
             shadow.pendingTextureMask() == (1u << 2u),
         "pre-materialization rejection preserves PendingDelta");
-  check(pe::finalizeSparseStatePlanChunkContext(f.chunk, plan),
+  check(withRecorderAccess([&](const auto& access) noexcept {
+          return pe::finalizeSparseStatePlanChunkContext(access, f.chunk,
+                                                         plan);
+        }),
         "chunk-context finalization succeeds after CapacityPre");
 
   check(builder.beginRecord(D9C_COMMAND_RECORD_CLEAR),
         "active-record injection occupies the builder");
-  check(!pe::appendSparseStatePlan(builder, f.params.recordType, plan),
+  check(!withRecorderAccess([&](const auto& access) noexcept {
+          return pe::appendSparseStatePlan(access, builder, f.params.recordType,
+                                           plan);
+        }),
         "builder failure rejects direct final-payload materialization");
   const auto failed = pe::settleRecorderAppend({
       .phase = pe::AppendSettlement::Prepared,
       .appendSucceeded = false,
   });
-  check(!pe::acceptSparseStatePlan(shadow, constants, plan, failed) &&
+  check(!withRecorderAccess([&](const auto& access) noexcept {
+          return pe::acceptSparseStatePlan(access, shadow, constants, plan,
+                                           failed);
+        }) &&
             shadow.pendingRenderStatesTyped().size() == 1u &&
             shadow.pendingTextureMask() == (1u << 2u),
         "failed plan append preserves exact retry witnesses");
 
   builder.rollbackRecord();
-  check(pe::appendSparseStatePlan(builder, f.params.recordType, plan),
+  check(withRecorderAccess([&](const auto& access) noexcept {
+          return pe::appendSparseStatePlan(access, builder, f.params.recordType,
+                                           plan);
+        }),
         "same compact plan retries successfully");
   const auto accepted = pe::settleRecorderAppend({
       .phase = pe::AppendSettlement::Prepared,
       .appendSucceeded = true,
   });
   PeHotStateShadow wrongSource = shadow;
-  check(!pe::acceptSparseStatePlan(wrongSource, constants, plan, accepted) &&
+  check(!withRecorderAccess([&](const auto& access) noexcept {
+          return pe::acceptSparseStatePlan(access, wrongSource, constants,
+                                           plan, accepted);
+        }) &&
             shadow.pendingRenderStatesTyped().size() == 1u,
         "accept rejects a source binding different from the emitted witness");
-  check(pe::acceptSparseStatePlan(shadow, constants, plan, accepted) &&
+  check(withRecorderAccess([&](const auto& access) noexcept {
+          return pe::acceptSparseStatePlan(access, shadow, constants, plan,
+                                           accepted);
+        }) &&
             shadow.pendingRenderStatesTyped().empty() &&
             shadow.pendingTextureMask() == 0u,
         "durable plan consumes exactly its emitted PendingDelta");
+
+  // Indexed compact settlement must collect the source receipt while the
+  // admission capability is live, before settlement consumes the plan's
+  // borrowed PendingDelta/dependency witness.
+  Fixture indexed = baseDraw("indexed receipt before compact settlement",
+                             D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  indexed.bindings.indexBuffer =
+      publishedRef(&ib1, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  indexed.shadow.writer().pendingIb() = true;
+  std::recursive_mutex receiptMutex;
+  dxmt9::core::ThreadOwnershipToken receiptOwnerThread;
+  std::uint64_t receiptEpoch = 1u;
+  pe::RecorderLockGuard receiptGuard(receiptMutex, false);
+  pe::SparseStatePlan receiptPlan;
+  check(receiptGuard.withCapability(
+            receiptOwnerThread, receiptEpoch,
+            [&](const auto& access) noexcept {
+              return pe::buildSparseStatePlan(
+                         access, indexed.shadow, indexed.constants,
+                         indexed.bindings, indexed.payloads, indexed.params,
+                         false, false, receiptPlan) &&
+                     pe::finalizeSparseStatePlanChunkContext(
+                         access, indexed.chunk, receiptPlan);
+            }) &&
+            receiptPlan.destination().indexBuffer,
+        "indexed compact receipt plan selects its index dependency");
+  pe::PeSemanticBatchOwner<> receiptBatchOwner;
+  const auto receiptSettlement = pe::settleRecorderAppend({
+      .phase = pe::AppendSettlement::Prepared,
+      .appendSucceeded = true,
+  });
+  std::uint64_t receiptWire = 0u;
+  bool receiptBound = false;
+  check(receiptGuard.withCapability(
+            receiptOwnerThread, receiptEpoch,
+            [&](const auto& access) noexcept {
+              const bool receiptReady = receiptPlan.withBindingSource(
+                  access,
+                  [&](const pe::PeBindingView& bindings) noexcept {
+                    receiptWire = d9cWireHandleValue(
+                        toWireHandle(bindings.indexBuffer.object));
+                    receiptBound = bindings.indexBuffer.object != nullptr;
+                  });
+              return receiptReady && receiptBatchOwner.tryAppendSparseStatePlan(
+                                         access, receiptPlan,
+                                         pe::PeSemanticProducerKind::DrawIndexedPrimitive,
+                                         indexed.params.recordType,
+                                         D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+                                         1u, 1u, [&]() noexcept {
+                                           return pe::acceptSparseStatePlan(
+                                               access, indexed.shadow,
+                                               indexed.constants, receiptPlan,
+                                               receiptSettlement, nullptr, 1u,
+                                               receiptPlan.pendingTicket());
+                                         });
+            }) &&
+            receiptBound &&
+            receiptWire ==
+                d9cWireHandleValue(toWireHandle(indexed.bindings.indexBuffer.object)),
+        "indexed receipt is captured before compact settlement");
 }
 
 void productionOwnerPlanRollbackRebaseAndStaleAuthority() {
@@ -1537,28 +1667,31 @@ void productionOwnerPlanRollbackRebaseAndStaleAuthority() {
   f.bindings.streams[1].offset = 96u;
   f.bindings.streams[1].stride = 24u;
 
-  std::recursive_mutex mutex;
-  dxmt9::core::ThreadOwnershipToken ownerThread;
-  std::uint64_t epoch = 7u;
-  pe::RecorderLockGuard guard(mutex, false);
-  const auto access = guard.capability(ownerThread, epoch);
   pe::SparseStatePlan plan;
   pe::SparseStatePlan unpublished;
   pe::PeSemanticBatchOwner<> unpublishedOwner;
-  check(!unpublishedOwner.tryAppendSparseStatePlan(
-            access, unpublished,
-            pe::PeSemanticProducerKind::DrawIndexedPrimitive,
-            f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
-            []() noexcept { return true; }) && unpublishedOwner.size() == 0u,
+  check(withRecorderAccess([&](const auto& access) noexcept {
+          return !unpublishedOwner.tryAppendSparseStatePlan(
+                     access, unpublished,
+                     pe::PeSemanticProducerKind::DrawIndexedPrimitive,
+                     f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+                     1u, 1u, []() noexcept { return true; }) &&
+                 unpublishedOwner.size() == 0u;
+        }),
         "owner rejects an unpublished plan without a forgeable validity flag");
-  check(pe::buildSparseStatePlan(access, f.shadow, f.constants, f.bindings,
-                                 {}, f.params, false, false, plan),
+  check(withRecorderAccess([&](const auto& access) noexcept {
+          return pe::buildSparseStatePlan(access, f.shadow, f.constants,
+                                          f.bindings, {}, f.params, false,
+                                          false, plan);
+        }),
         "production owner plan fixture prepares");
   pe::PeChunkContext firstDestination{};
-  check(pe::finalizeSparseStatePlanChunkContext(
-            access, firstDestination, plan) &&
+  check(withRecorderAccess([&](const auto& access) noexcept {
+          return pe::finalizeSparseStatePlanChunkContext(
+                     access, firstDestination, plan) &&
             (plan.destination().streamMask & (1u << 1u)) != 0u &&
-                plan.destination().indexBuffer,
+                plan.destination().indexBuffer;
+        }),
         "first destination adds missing stream and index dependencies");
   pe::PeChunkContext rebasedDestination{};
   rebasedDestination.retainedStreamMask = (1u << 0u) | (1u << 1u);
@@ -1566,25 +1699,32 @@ void productionOwnerPlanRollbackRebaseAndStaleAuthority() {
   rebasedDestination.submittedIndexBufferWire =
       d9cWireHandleValue(toWireHandle(f.bindings.indexBuffer.object));
   rebasedDestination.indexBufferRetained = true;
-  check(pe::finalizeSparseStatePlanChunkContext(
-            access, rebasedDestination, plan) &&
-            plan.destination().streamMask == plan.source().selectedStreamMask &&
-            !plan.destination().indexBuffer && !plan.source().selectedIndexBuffer,
+  check(withRecorderAccess([&](const auto& access) noexcept {
+          const auto* const source = plan.source(access);
+          return source && pe::finalizeSparseStatePlanChunkContext(
+                     access, rebasedDestination, plan) &&
+            plan.destination().streamMask == source->selectedStreamMask &&
+            !plan.destination().indexBuffer && !source->selectedIndexBuffer;
+        }),
         "destination rebase discards prior chunk-only dependency decisions");
 
   pe::PeSemanticBatchOwner<> owner;
-  check(!owner.tryAppendSparseStatePlan(
-            access, plan,
-            pe::PeSemanticProducerKind::DrawIndexedPrimitive,
-            f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
-            []() noexcept { return false; }) &&
+  check(!withRecorderAccess([&](const auto& access) noexcept {
+          return owner.tryAppendSparseStatePlan(
+                     access, plan,
+                     pe::PeSemanticProducerKind::DrawIndexedPrimitive,
+                     f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+                     1u, 1u, []() noexcept { return false; });
+        }) &&
             owner.size() == 0u && owner.retainedCount() == 0u,
         "failed owner settlement rolls back record, pins, and ledgers");
-  check(owner.tryAppendSparseStatePlan(
-            access, plan,
-            pe::PeSemanticProducerKind::DrawIndexedPrimitive,
-            f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
-            []() noexcept { return true; }) && owner.size() == 1u,
+  check(withRecorderAccess([&](const auto& access) noexcept {
+          return owner.tryAppendSparseStatePlan(
+                     access, plan,
+                     pe::PeSemanticProducerKind::DrawIndexedPrimitive,
+                     f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+                     1u, 1u, []() noexcept { return true; });
+        }) && owner.size() == 1u,
         "same plan retries through the sole owner transaction");
 
   PeHotStateShadow staleShadow{};
@@ -1594,17 +1734,21 @@ void productionOwnerPlanRollbackRebaseAndStaleAuthority() {
   pe::SparseStatePlan stalePlan;
   pe::PeDrawParams apply{};
   apply.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
-  check(pe::buildSparseStatePlan(access, staleShadow, staleConstants,
-                                 f.bindings, {}, apply, false, false,
-                                 stalePlan),
+  check(withRecorderAccess([&](const auto& access) noexcept {
+          return pe::buildSparseStatePlan(access, staleShadow, staleConstants,
+                                          f.bindings, {}, apply, false, false,
+                                          stalePlan);
+        }),
         "stale-ticket plan prepares");
   staleShadow.writer().pendingRenderStatesTyped().set(
       renderStateSlotKey(4u), 10u);
   pe::PeSemanticBatchOwner<> staleOwner;
-  check(!staleOwner.tryAppendSparseStatePlan(
-            access, stalePlan, pe::PeSemanticProducerKind::ApplyState,
-            apply.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
-            []() noexcept { return true; }) && staleOwner.size() == 0u,
+  check(!withRecorderAccess([&](const auto& access) noexcept {
+          return staleOwner.tryAppendSparseStatePlan(
+                     access, stalePlan, pe::PeSemanticProducerKind::ApplyState,
+                     apply.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u,
+                     1u, []() noexcept { return true; });
+        }) && staleOwner.size() == 0u,
         "stale PendingDelta ticket rejects before owner mutation");
   check(staleShadow.pendingRenderStatesTyped().size() == 2u &&
             staleShadow.pendingRenderStatesTyped().contains(
@@ -1614,26 +1758,29 @@ void productionOwnerPlanRollbackRebaseAndStaleAuthority() {
         "stale ticket rejection preserves both old and newer pending keys");
   std::recursive_mutex otherMutex;
   dxmt9::core::ThreadOwnershipToken otherOwnerThread;
-  std::uint64_t otherEpoch = epoch;
+  std::uint64_t otherEpoch = testRecorderDomain().epoch;
   pe::RecorderLockGuard otherGuard(otherMutex, false);
-  const auto otherAccess =
-      otherGuard.capability(otherOwnerThread, otherEpoch);
-  check(plan.validFor(access) && !plan.validFor(otherAccess) &&
-            !owner.tryAppendSparseStatePlan(
-                otherAccess, plan,
-                pe::PeSemanticProducerKind::DrawIndexedPrimitive,
-                f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
-                2u, 2u, []() noexcept { return true; }) &&
-            owner.size() == 1u,
+  const bool wrongOwner = otherGuard.withCapability(
+      otherOwnerThread, otherEpoch, [&](const auto& otherAccess) noexcept {
+        return withRecorderAccess([&](const auto& access) noexcept {
+          return plan.validFor(access) && !plan.validFor(otherAccess) &&
+                 !owner.tryAppendSparseStatePlan(
+                     otherAccess, plan,
+                     pe::PeSemanticProducerKind::DrawIndexedPrimitive,
+                     f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+                     2u, 2u, []() noexcept { return true; });
+        });
+      });
+  check(wrongOwner && owner.size() == 1u,
         "same numeric epoch from another recorder cannot authorize a plan");
-  ++epoch;
-  check(!plan.validFor(access) &&
-            !owner.tryAppendSparseStatePlan(
-                access, plan,
-                pe::PeSemanticProducerKind::DrawIndexedPrimitive,
-                f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
-                2u, 2u, []() noexcept { return true; }),
-        "stale recorder capability cannot reuse an armed plan");
+  ++testRecorderDomain().epoch;
+  check(!withRecorderAccess([&](const auto& access) noexcept {
+          return owner.tryAppendSparseStatePlan(
+              access, plan, pe::PeSemanticProducerKind::DrawIndexedPrimitive,
+              f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 2u, 2u,
+              []() noexcept { return true; });
+        }),
+        "fresh capability cannot authorize a plan from the previous epoch");
 }
 
 void productionOwnerRejectsMutatedSourcesAtomically() {
@@ -1655,15 +1802,16 @@ void productionOwnerRejectsMutatedSourcesAtomically() {
   dxmt9::core::ThreadOwnershipToken ownerThread;
   std::uint64_t epoch = 211u;
   pe::RecorderLockGuard guard(mutex, false);
-  const auto access = guard.capability(ownerThread, epoch);
   PeConstShadowBlock constants = constantFixture.constants;
   pe::SparseStatePlan staleConstants;
-  check(pe::buildSparseStatePlan(
-                access, constantFixture.shadow, constants,
-                constantFixture.bindings, constantFixture.payloads,
-                constantFixture.params, false, true, staleConstants),
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return pe::buildSparseStatePlan(
+              access, constantFixture.shadow, constants,
+              constantFixture.bindings, constantFixture.payloads,
+              constantFixture.params, false, true, staleConstants);
+        }),
         "constant mutation plan prepares");
-  const auto originalTicket = staleConstants.source().pendingTicket;
+  const auto originalTicket = staleConstants.pendingTicket();
   constants.vsConstF.dirtyStart = 1u;
   constants.vsConstF.dirtyEnd = 2u;
   constants.vsConstF.values[16u] = 0x77u;
@@ -1672,15 +1820,18 @@ void productionOwnerRejectsMutatedSourcesAtomically() {
       .phase = pe::AppendSettlement::Prepared,
       .appendSucceeded = true,
   });
-  check(!constantOwner.tryAppendSparseStatePlan(
-                access, staleConstants, pe::PeSemanticProducerKind::ApplyState,
-                constantFixture.params.recordType,
-                D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
-                [&]() noexcept {
-                  return pe::acceptSparseStatePlan(
-                      constantFixture.shadow, constants, staleConstants,
-                      accepted, nullptr, 1u, originalTicket);
-                }) &&
+  check(!guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+                return constantOwner.tryAppendSparseStatePlan(
+                    access, staleConstants,
+                    pe::PeSemanticProducerKind::ApplyState,
+                    constantFixture.params.recordType,
+                    D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+                    [&]() noexcept {
+                      return pe::acceptSparseStatePlan(
+                          access, constantFixture.shadow, constants,
+                          staleConstants, accepted, nullptr, 1u, originalTicket);
+                    });
+              }) &&
             constantOwner.size() == 0u &&
             constantFixture.shadow.pendingRenderStatesTyped().size() == 1u &&
             constants.vsConstF.dirty() && constants.vsConstF.dirtyStart == 1u &&
@@ -1690,22 +1841,26 @@ void productionOwnerRejectsMutatedSourcesAtomically() {
   // Rebuild against the newer range and prove the retry settles exactly the
   // current source, including the unchanged pending ticket.
   pe::SparseStatePlan currentConstants;
-  check(pe::buildSparseStatePlan(
-                access, constantFixture.shadow, constants,
-                constantFixture.bindings, constantFixture.payloads,
-                constantFixture.params, false, true, currentConstants),
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return pe::buildSparseStatePlan(
+              access, constantFixture.shadow, constants,
+              constantFixture.bindings, constantFixture.payloads,
+              constantFixture.params, false, true, currentConstants);
+        }),
         "new constant range plan prepares");
-  check(constantOwner.tryAppendSparseStatePlan(
-                access, currentConstants,
-                pe::PeSemanticProducerKind::ApplyState,
-                constantFixture.params.recordType,
-                D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 2u, 2u,
-                [&]() noexcept {
-                  return pe::acceptSparseStatePlan(
-                      constantFixture.shadow, constants, currentConstants,
-                      accepted, nullptr, 2u,
-                      currentConstants.source().pendingTicket);
-                }) &&
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+                return constantOwner.tryAppendSparseStatePlan(
+                    access, currentConstants,
+                    pe::PeSemanticProducerKind::ApplyState,
+                    constantFixture.params.recordType,
+                    D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 2u, 2u,
+                    [&]() noexcept {
+                      return pe::acceptSparseStatePlan(
+                          access, constantFixture.shadow, constants,
+                          currentConstants, accepted, nullptr, 2u,
+                          currentConstants.pendingTicket());
+                    });
+              }) &&
             constantOwner.size() == 1u &&
             constantFixture.shadow.pendingRenderStatesTyped().empty() &&
             !constants.vsConstF.dirty(),
@@ -1721,9 +1876,11 @@ void productionOwnerRejectsMutatedSourcesAtomically() {
         publishedRef(&tex1, D9C_CHUNK_HANDLE_KIND_TEXTURE);
     PeConstShadowBlock localConstants = f.constants;
     pe::SparseStatePlan plan;
-    if (!pe::buildSparseStatePlan(access, f.shadow, localConstants,
-                                  f.bindings, f.payloads, f.params, false,
-                                  false, plan)) {
+    if (!guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return pe::buildSparseStatePlan(access, f.shadow, localConstants,
+                                          f.bindings, f.payloads, f.params,
+                                          false, false, plan);
+        })) {
       return false;
     }
     if (generationMismatch) {
@@ -1734,14 +1891,16 @@ void productionOwnerRejectsMutatedSourcesAtomically() {
       f.bindings.textures[1].identity = f.bindings.textures[0].identity;
     }
     pe::PeSemanticBatchOwner<> owner;
-    return !owner.tryAppendSparseStatePlan(
-               access, plan, pe::PeSemanticProducerKind::ApplyState,
-               f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
-               [&]() noexcept {
-                 return pe::acceptSparseStatePlan(
-                     f.shadow, localConstants, plan, accepted, nullptr, 1u,
-                     plan.source().pendingTicket);
-               }) &&
+    return !guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+               return owner.tryAppendSparseStatePlan(
+                   access, plan, pe::PeSemanticProducerKind::ApplyState,
+                   f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u,
+                   1u, [&]() noexcept {
+                     return pe::acceptSparseStatePlan(
+                         access, f.shadow, localConstants, plan, accepted,
+                         nullptr, 1u, plan.pendingTicket());
+                   });
+             }) &&
         owner.size() == 0u &&
         f.shadow.pendingTextureMask() == 0x3u;
   };
@@ -1839,10 +1998,12 @@ void compactDestinationResolversAreExhaustiveAndLazy() {
   dxmt9::core::ThreadOwnershipToken ownerThread;
   std::uint64_t epoch = 11u;
   pe::RecorderLockGuard guard(mutex, false);
-  const auto access = guard.capability(ownerThread, epoch);
   pe::SparseStatePlan plan;
-  check(pe::buildSparseStatePlan(access, f.shadow, f.constants, f.bindings,
-                                 {}, f.params, false, false, plan),
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return pe::buildSparseStatePlan(access, f.shadow, f.constants,
+                                          f.bindings, {}, f.params, false,
+                                          false, plan);
+        }),
         "typed compact destination plan prepares");
   pe::PeChunkContext chunk{};
   chunk.indexBufferKnown = true;
@@ -1856,17 +2017,26 @@ void compactDestinationResolversAreExhaustiveAndLazy() {
         ++calls;
         return retainAll;
       };
-  check(pe::finalizeSparseStatePlanChunkContext(access, chunk, plan, retained) &&
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return pe::finalizeSparseStatePlanChunkContext(access, chunk, plan,
+                                                         retained);
+        }) &&
             plan.destination().streamMask == (1u << 1u) &&
                 plan.destination().indexBuffer,
         "typed compact resolver resolves destination A");
   retainAll = true;
-  check(pe::finalizeSparseStatePlanChunkContext(access, chunk, plan, retained) &&
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return pe::finalizeSparseStatePlanChunkContext(access, chunk, plan,
+                                                         retained);
+        }) &&
             plan.destination().streamMask == 0u &&
                 !plan.destination().indexBuffer,
         "typed compact resolver resolves destination B");
   retainAll = false;
-  check(pe::finalizeSparseStatePlanChunkContext(access, chunk, plan, retained) &&
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return pe::finalizeSparseStatePlanChunkContext(access, chunk, plan,
+                                                         retained);
+        }) &&
             plan.destination().streamMask == (1u << 1u) &&
                 plan.destination().indexBuffer && calls == 6u,
         "typed compact resolver re-resolves destination A after B");
@@ -1894,10 +2064,12 @@ void compactObserverOnOffBytesAndPendingDifferential() {
   dxmt9::core::ThreadOwnershipToken ownerThread;
   std::uint64_t epoch = 13u;
   pe::RecorderLockGuard guard(mutex, false);
-  const auto access = guard.capability(ownerThread, epoch);
   pe::SparseStatePlan plan;
-  check(pe::buildSparseStatePlan(access, f.shadow, f.constants, f.bindings,
-                                 {}, f.params, false, false, plan),
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return pe::buildSparseStatePlan(access, f.shadow, f.constants,
+                                          f.bindings, {}, f.params, false,
+                                          false, plan);
+        }),
         "compact observer plan prepares");
   pe::PeScalarSemanticTokenLedger tokens;
   check(tokens.record(pe::ScalarSemanticCategory::RenderState, rawSlot(render)) &&
@@ -1911,14 +2083,16 @@ void compactObserverOnOffBytesAndPendingDifferential() {
       .phase = pe::AppendSettlement::Prepared,
       .appendSucceeded = true,
   });
-  check(owner.tryAppendSparseStatePlan(
-            access, plan, pe::PeSemanticProducerKind::ApplyState,
-            f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
-            [&]() noexcept {
-              return pe::acceptSparseStatePlan(
-                  f.shadow, f.constants, plan, accepted, &tokens, 1u,
-                  plan.source().pendingTicket);
-            }),
+  check(guard.withCapability(ownerThread, epoch, [&](const auto& access) noexcept {
+          return owner.tryAppendSparseStatePlan(
+              access, plan, pe::PeSemanticProducerKind::ApplyState,
+              f.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+              [&]() noexcept {
+                return pe::acceptSparseStatePlan(
+                    access, f.shadow, f.constants, plan, accepted, &tokens, 1u,
+                    plan.pendingTicket());
+              });
+        }),
         "compact observer owner accepts the same plan");
   pe::PeSemanticExactFixedEmission exact;
   check(owner.emitExactFixed(exact) && exact.valid() &&

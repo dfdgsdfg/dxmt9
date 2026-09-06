@@ -24,7 +24,7 @@ void D3D9DeviceImpl::armSemanticRecord(
     const dxmt9::d3d9::pe::PeSemanticRecordInput& input) noexcept {
     if (!semanticRecorderState_) return;
     semanticRecorderState_->inputValid = false;
-    if (semanticRecorderState_->stagedSparsePlan.source().prepared)
+    if (semanticRecorderState_->stagedSparsePlan.prepared())
         semanticRecorderState_->stagedSparsePlan.invalidate();
     auto& staged = semanticRecorderState_->stagedInput;
     staged = input;
@@ -43,7 +43,7 @@ void D3D9DeviceImpl::armSemanticRecord(
     const D9CCommandChunkWireDrawHeader& draw,
     const dxmt9::d3d9::pe::SparseStateInput& sparse) noexcept {
     if (!semanticRecorderState_) return;
-    if (semanticRecorderState_->stagedSparsePlan.source().prepared)
+    if (semanticRecorderState_->stagedSparsePlan.prepared())
         semanticRecorderState_->stagedSparsePlan.invalidate();
     stagePeSemanticDrawInput(
         semanticRecorderState_->stagedInput,
@@ -58,7 +58,7 @@ void D3D9DeviceImpl::armSemanticRecord(
     const D9CCommandChunkWireSetConst& setConst,
     std::span<const std::byte> constantBytes) noexcept {
     if (!semanticRecorderState_) return;
-    if (semanticRecorderState_->stagedSparsePlan.source().prepared)
+    if (semanticRecorderState_->stagedSparsePlan.prepared())
         semanticRecorderState_->stagedSparsePlan.invalidate();
     stagePeSemanticConstantInput(
         semanticRecorderState_->stagedConstantInput,
@@ -74,7 +74,7 @@ void D3D9DeviceImpl::armSemanticSparsePlan(
     if (!semanticRecorderState_) return;
     semanticRecorderState_->inputValid = false;
     auto& plan = semanticRecorderState_->stagedSparsePlan;
-    if (!plan.source().prepared || plan.source().draw.recordType != recordType) {
+    if (!plan.prepared() || plan.recordType() != recordType) {
         plan.invalidate();
         return;
     }
@@ -90,7 +90,7 @@ void D3D9DeviceImpl::clearSemanticRecordInput() noexcept {
     // every active field, while inputValid gates the unpublished staging.
     semanticRecorderState_->inputValid = false;
     semanticRecorderState_->sourceOrdinalHint = 0u;
-    if (semanticRecorderState_->stagedSparsePlan.source().prepared)
+    if (semanticRecorderState_->stagedSparsePlan.prepared())
         semanticRecorderState_->stagedSparsePlan.invalidate();
 }
 
@@ -142,8 +142,7 @@ bool D3D9DeviceImpl::settleSemanticRecord(
         .phase = dxmt9::d3d9::pe::AppendSettlement::Prepared,
         .appendSucceeded = true,
     });
-    if (!appendPlan.valid() || !appendPlan.consumeRepresentedPending() ||
-        !appendPlan.recordDurable() ||
+    if (!appendPlan.valid() ||
         !dxmt9::d3d9::pe::acceptPreparedSparseState(
             recorderState_.peState, recorderState_.peConsts, sparse,
             appendPlan, scalarSemanticObserver(), recordOrdinal,
@@ -236,6 +235,7 @@ bool D3D9DeviceImpl::settleSemanticConstantRecord(
 }
 
 bool D3D9DeviceImpl::settleSemanticSparsePlan(
+    const dxmt9::d3d9::pe::RecorderLockCapability& access,
     const dxmt9::d3d9::pe::SparseStatePlan& plan,
     std::uint64_t recordOrdinal) noexcept {
     const auto appendPlan = dxmt9::d3d9::pe::settleRecorderAppend({
@@ -244,15 +244,17 @@ bool D3D9DeviceImpl::settleSemanticSparsePlan(
     });
     const auto transactionTicket =
         recorderState_.chunkTransaction.pendingTicket();
-    if (!plan.source().pendingTicket.valid() || !transactionTicket.valid() ||
-        transactionTicket.generation != plan.source().pendingTicket.generation ||
+    const auto pendingTicket = plan.pendingTicket();
+    if (!pendingTicket.valid() || !transactionTicket.valid() ||
+        transactionTicket.generation != pendingTicket.generation ||
         !recorderState_.peState.pendingTicketMatches(
-            plan.source().pendingTicket)) {
+            pendingTicket)) {
         return false;
     }
     return dxmt9::d3d9::pe::acceptSparseStatePlan(
-        recorderState_.peState, recorderState_.peConsts, plan, appendPlan,
-        scalarSemanticObserver(), recordOrdinal, plan.source().pendingTicket);
+        access, recorderState_.peState, recorderState_.peConsts, plan,
+        appendPlan, scalarSemanticObserver(), recordOrdinal,
+        pendingTicket);
 }
 
 bool D3D9DeviceImpl::observeCommittedSemanticOwnerRecord() noexcept {
@@ -314,53 +316,56 @@ HRESULT D3D9DeviceImpl::appendSemanticRecord(
             sparsePlanRecordOrdinal = semanticOwner->nextRecordOrdinal();
             PeRecorderGuard planGuard(recorderState_.recorderMutex,
                                       recorderState_.recorderLockRequired);
-            const auto access = planGuard.capability(
-                recorderState_.recorderOwnership,
-                recorderState_.stateBlockTransaction.capabilityEpoch());
             auto& plan = semanticRecorderState_->stagedSparsePlan;
-            const auto transactionTicket =
-                recorderState_.chunkTransaction.pendingTicket();
-            if (!plan.validFor(access) || !transactionTicket.valid() ||
-                transactionTicket.generation !=
-                    plan.source().pendingTicket.generation ||
-                !recorderState_.peState.pendingTicketMatches(
-                    plan.source().pendingTicket)) return false;
-            const bool destinationDependent =
-                type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
-                type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
-            if (!destinationDependent)
-                return plan.destination().chunkContextFinalized;
-            // Compact plans resolve only destination-dependent facts here.
-            // The generic currentChunkContext() keeps its full retention walk
-            // for the compatibility/full-snapshot path.
-            const auto resolve = [](const auto& access, auto& plan,
-                                    const auto* semanticOwner, bool indexKnown,
-                                    std::uint64_t indexWire)
-                __attribute__((always_inline)) noexcept {
-                dxmt9::d3d9::pe::PeChunkContext chunk{};
-                chunk.indexBufferKnown = indexKnown;
-                chunk.submittedIndexBufferWire = indexWire;
-                const auto retained =
-                    [semanticOwner](
-                        std::uint32_t,
-                        const dxmt9::d3d9::pe::BufferRef& buffer) noexcept {
-                      return semanticOwner->referencesBuffer(buffer);
-                    };
-                return dxmt9::d3d9::pe::finalizeSparseStatePlanChunkContext(
-                    access, chunk, plan, retained);
-            };
-            if (diagnostics_ && diagnostics_->config.statsDecimationN != 0u) {
-                return dxmt9PeObserveCompactScope(
-                    diagnostics_->peDrawPacketContextDecimatedStats_,
-                    diagnostics_->peCompactSampleNesting_, [&]() noexcept {
-                        return resolve(access, plan, semanticOwner,
-                                       submittedIndexBufferKnown_,
-                                       submittedIndexBufferWireValue_);
-                    });
-            }
-            return resolve(access, plan, semanticOwner,
-                           submittedIndexBufferKnown_,
-                           submittedIndexBufferWireValue_);
+            return planGuard.withCapability(
+                recorderState_.recorderOwnership,
+                recorderState_.stateBlockTransaction.capabilityEpoch(),
+                [&](const auto& access) noexcept {
+                  const auto transactionTicket =
+                      recorderState_.chunkTransaction.pendingTicket();
+                  const auto* const source = plan.source(access);
+                  if (!source || !transactionTicket.valid() ||
+                      transactionTicket.generation != source->pendingTicket.generation ||
+                      !recorderState_.peState.pendingTicketMatches(
+                          source->pendingTicket)) return false;
+                  const bool destinationDependent =
+                      type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
+                      type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+                  if (!destinationDependent)
+                    return plan.destination().chunkContextFinalized;
+                  // Compact plans resolve only destination-dependent facts here.
+                  // The generic currentChunkContext() keeps its full retention walk
+                  // for the compatibility/full-snapshot path.
+                  const auto resolve = [](const auto& access, auto& plan,
+                                          const auto* semanticOwner,
+                                          bool indexKnown,
+                                          std::uint64_t indexWire)
+                      __attribute__((always_inline)) noexcept {
+                    dxmt9::d3d9::pe::PeChunkContext chunk{};
+                    chunk.indexBufferKnown = indexKnown;
+                    chunk.submittedIndexBufferWire = indexWire;
+                    const auto retained =
+                        [semanticOwner](
+                            std::uint32_t,
+                            const dxmt9::d3d9::pe::BufferRef& buffer) noexcept {
+                          return semanticOwner->referencesBuffer(buffer);
+                        };
+                    return dxmt9::d3d9::pe::finalizeSparseStatePlanChunkContext(
+                        access, chunk, plan, retained);
+                  };
+                  if (diagnostics_ && diagnostics_->config.statsDecimationN != 0u) {
+                    return dxmt9PeObserveCompactScope(
+                        diagnostics_->peDrawPacketContextDecimatedStats_,
+                        diagnostics_->peCompactSampleNesting_, [&]() noexcept {
+                          return resolve(access, plan, semanticOwner,
+                                         submittedIndexBufferKnown_,
+                                         submittedIndexBufferWireValue_);
+                        });
+                  }
+                  return resolve(access, plan, semanticOwner,
+                                 submittedIndexBufferKnown_,
+                                 submittedIndexBufferWireValue_);
+                });
         }
         inputView.destination.recordType = type;
         inputView.destination.sourceOrdinal =
@@ -474,38 +479,68 @@ HRESULT D3D9DeviceImpl::appendSemanticRecord(
         return D3DERR_INVALIDCALL;
     }
     bool semanticSettlement = true;
-    auto commitSemanticRecord = [&]() noexcept {
-        semanticSettlement = constantFamily
-            ? settleSemanticConstantRecord(stagedConstantInput,
-                                           recordOrdinal())
-            : (sparsePlanFamily
-                   ? settleSemanticSparsePlan(
-                         semanticRecorderState_->stagedSparsePlan,
-                         recordOrdinal())
-                   : settleSemanticRecord(inputView, recordOrdinal()));
+    bool hasIndexedReceipt = false;
+    std::uint64_t indexedReceiptWire = 0u;
+    bool indexedReceiptBound = false;
+    auto commitSemanticRecord =
+        [&](const dxmt9::d3d9::pe::RecorderLockCapability* access)
+        noexcept {
+        const bool indexedReceiptCandidate =
+            sparsePlanFamily && access != nullptr &&
+            semanticRecorderState_->stagedSparsePlanProducer ==
+                dxmt9::d3d9::pe::PeSemanticProducerKind::DrawIndexedPrimitive &&
+            semanticRecorderState_->stagedSparsePlan.destination().indexBuffer;
+        bool indexedReceiptReady = !indexedReceiptCandidate;
+        if (indexedReceiptCandidate) {
+            // Receipt extraction is a source-borrow operation. It must finish
+            // before settlement consumes the pending source and invalidates
+            // the plan's dependency witness.
+            indexedReceiptReady =
+                semanticRecorderState_->stagedSparsePlan.withBindingSource(
+                    *access,
+                    [&](const dxmt9::d3d9::pe::PeBindingView& bindings) noexcept {
+                      indexedReceiptWire = d9cWireHandleValue(
+                          toWireHandle(bindings.indexBuffer.object));
+                      indexedReceiptBound = bindings.indexBuffer.object != nullptr;
+                    });
+        }
+        semanticSettlement = indexedReceiptReady &&
+            (constantFamily
+                 ? settleSemanticConstantRecord(stagedConstantInput,
+                                                recordOrdinal())
+                 : (sparsePlanFamily
+                        ? (access != nullptr && settleSemanticSparsePlan(
+                              *access,
+                              semanticRecorderState_->stagedSparsePlan,
+                              recordOrdinal()))
+                        : settleSemanticRecord(inputView, recordOrdinal())));
+        hasIndexedReceipt = indexedReceiptCandidate && indexedReceiptReady &&
+                            semanticSettlement;
         return semanticSettlement;
     };
     const auto admitSemanticRecord = [&]() noexcept {
         if (constantFamily) {
             return semanticOwner->tryAppendOwnedRecord(
                 stagedConstantInput,
-                [&]() noexcept { return commitSemanticRecord(); });
+                [&]() noexcept { return commitSemanticRecord(nullptr); });
         }
         if (sparsePlanFamily) {
             PeRecorderGuard planGuard(recorderState_.recorderMutex,
                                       recorderState_.recorderLockRequired);
-            const auto access = planGuard.capability(
+            return planGuard.withCapability(
                 recorderState_.recorderOwnership,
-                recorderState_.stateBlockTransaction.capabilityEpoch());
-            return semanticOwner->tryAppendSparseStatePlan(
-                access, semanticRecorderState_->stagedSparsePlan,
-                semanticRecorderState_->stagedSparsePlanProducer, type,
-                D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, sourceOrdinal(),
-                recordOrdinal(),
-                [&]() noexcept { return commitSemanticRecord(); });
+                recorderState_.stateBlockTransaction.capabilityEpoch(),
+                [&](const auto& access) noexcept {
+                  return semanticOwner->tryAppendSparseStatePlan(
+                      access, semanticRecorderState_->stagedSparsePlan,
+                      semanticRecorderState_->stagedSparsePlanProducer, type,
+                      D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, sourceOrdinal(),
+                      recordOrdinal(),
+                      [&]() noexcept { return commitSemanticRecord(&access); });
+                });
         }
         return semanticOwner->tryAppendOwnedRecord(
-            inputView, [&]() noexcept { return commitSemanticRecord(); });
+            inputView, [&]() noexcept { return commitSemanticRecord(nullptr); });
     };
     bool admitted = admitSemanticRecord();
     if (!admitted &&
@@ -569,22 +604,7 @@ HRESULT D3D9DeviceImpl::appendSemanticRecord(
             semanticSettlement ? 1u : 0u,
             static_cast<unsigned>(semanticOwner->lastAdmissionFailure()));
     }
-    bool hasIndexedReceipt = false;
-    std::uint64_t indexedReceiptWire = 0u;
-    bool indexedReceiptBound = false;
-    if (admitted && sparsePlanFamily &&
-        semanticRecorderState_->stagedSparsePlanProducer ==
-            dxmt9::d3d9::pe::PeSemanticProducerKind::DrawIndexedPrimitive &&
-        semanticRecorderState_->stagedSparsePlan.destination().indexBuffer) {
-        hasIndexedReceipt =
-            semanticRecorderState_->stagedSparsePlan.withBindingSource(
-                [&](const dxmt9::d3d9::pe::PeBindingView& bindings) noexcept {
-                    indexedReceiptWire = d9cWireHandleValue(
-                        toWireHandle(bindings.indexBuffer.object));
-                    indexedReceiptBound =
-                        bindings.indexBuffer.object != nullptr;
-                });
-    } else if (admitted && !constantFamily && !sparsePlanFamily &&
+    if (admitted && !constantFamily && !sparsePlanFamily &&
                stagedInput.producer ==
                    dxmt9::d3d9::pe::PeSemanticProducerKind::DrawIndexedPrimitive &&
                inputView.destination.sparse->indexBuffers.size() == 1u) {
@@ -633,7 +653,7 @@ HRESULT D3D9DeviceImpl::appendSemanticRecord(
     // The semantic owner has already applied destination-chunk selection to
     // the sparse overlay. Advance the indexed-draw witness only after the
     // owner transaction is durable.
-    if (hasIndexedReceipt) {
+    if (admitted && hasIndexedReceipt) {
         submittedIndexBufferWireValue_ = indexedReceiptWire;
         submittedIndexBufferKnown_ = indexedReceiptBound;
     }
@@ -1617,10 +1637,12 @@ HRESULT D3D9DeviceImpl::chunkBarrierFlush() {
     if (explicitSnapshot) {
         builtExplicit = buildSparseStateForRecord(applyParams, false, false);
     } else {
-        const auto access = recorderLock.capability(
+        builtPlan = recorderLock.withCapability(
             recorderState_.recorderOwnership,
-            recorderState_.stateBlockTransaction.capabilityEpoch());
-        builtPlan = buildSparseStatePlanForRecord(access, applyParams, false);
+            recorderState_.stateBlockTransaction.capabilityEpoch(),
+            [&](const auto& access) noexcept {
+              return buildSparseStatePlanForRecord(access, applyParams, false);
+            });
     }
     if (builtPlan || builtExplicit) {
         recordPeApplyStateBuildCpu(buildEntryNs);

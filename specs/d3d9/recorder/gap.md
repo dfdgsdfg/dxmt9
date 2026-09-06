@@ -13,6 +13,22 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.22–7.25 are implemented with bounded native evidence: generation-
+qualified pin-index invalidation, unchanged clean warm-index reuse, compact
+witness/minimal receipts, transactional fused binding acquisition/emission,
+and lexical live-guard borrow access. Native 21/21 and x86_64 8/8 focused specs
+pass, including wrap/rollback/stale membership, retainer reference traces,
+wrong-owner/epoch/ticket rejection, and real producer max-family differential
+coverage. A fresh-process fault at the 45th binding's unique retain rejects
+before settlement, preserves the committed prefix, and retries byte-identically
+to the generic producer oracle. All four canonical builds and unchanged TLC
+checks pass. The latter checks the existing protocol, not the concrete C++
+index or driver behavior. PE32/PE64 release compact append frames are
+3,144/3,232 bytes and no longer probe. Fresh runtime qualification and its
+limitations are tracked in
+[H247](../../../docs/perfomance/present-pacing/present-pacing-pe-compact-refinement.247.md);
+broader Wine fault/capture and whole-scene pixel evidence remain open.
+
 R-CORE-REC-7.14 through R-CORE-REC-7.16 are implemented with integrated
 native verification. They reuse prepared section/layout facts, specialize
 typed constants, and emit canonical binding rows directly. Ordinary draws and
@@ -97,8 +113,9 @@ binding emission reads the already-resolved local ordinal from private binding
 metadata. Draw/UP/ApplyState and six constant kinds use bounded staging
 adapters. Prepared witnesses leave inactive arrays untouched, fixed record
 heads are written per producer family, and settlement invalidates committed
-prefixes instead of clearing record/pin/binding/wire/payload arrays. The twelve
-pin-index arrays still clear and warm-retainer settlement is unchanged.
+prefixes instead of clearing record/pin/binding/wire/payload arrays. At the H243
+checkpoint the twelve pin-index arrays still cleared and warm-retainer
+settlement was unchanged; R-CORE-REC-7.22 now supersedes that residual.
 
 Thirteen focused native specs, x86_64 owner/batch and install-name checks,
 all four canonical builds, and existing TLA checks pass. Added differential
@@ -112,8 +129,9 @@ of an 844-byte generic product, while ten cold control callsites remain generic.
 Runtime evidence and exact limitations are tracked in
 [the admission-reuse leaf](../../../docs/perfomance/present-pacing/present-pacing-pe-admission-reuse.243.md).
 This is not complete removal of PE metadata work: record-local dedup and the
-prepared mapping remain bounded linear scans, pin-index clearing and warm
-retainer work remain, and contiguous ExactFixed still gathers canonical roles.
+prepared mapping remain bounded linear scans and contiguous ExactFixed still
+gathers canonical roles. R-CORE-REC-7.22 removes ordinary pin-index clearing
+and redundant clean warm-index rebuilding, not the warm expiry scan itself.
 Wine all-family fault/capture/visual coverage and repeat performance promotion
 are not closed by native refinement or one GT2 OFF/ON pair.
 

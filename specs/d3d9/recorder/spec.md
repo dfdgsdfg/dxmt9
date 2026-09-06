@@ -753,6 +753,45 @@ refinement must compare the previous contains-then-retain behavior for warm,
 novel, null, cross-kind, capacity, reset/reuse, and failed partial acquisition.
 Neither this value refinement nor existing recorder TLA checks prove pixels.
 
+R-CORE-REC-7.22–7.25 refine the same transaction, not its transport or scheduling
+policy. Pin-index validity is independent of stale physical bytes: a reset may
+revoke index authority without clearing every inactive cell, but exact identity
+and object-alias indexes must agree after reset, collision, rollback, and reuse.
+Warm-retainer index reuse is permitted only while entry positions and lookup
+validity remain unchanged; epoch advancement and release policy do not change.
+Boundary attribution separates retainer epoch processing from owner reset under
+the existing cold sampled parent. These child intervals are not additive with
+their inclusive parent and do not add clocks or scopes to disabled execution.
+
+The compact input type can bound its own prepared identity storage by its seven
+binding families; it must not inherit generic retained-only capacity merely for
+implementation convenience. Committed canonical roles are the value authority.
+A smaller receipt retains source/record identity and any indispensable ownership
+facts, while cold compatibility inspection reconstructs removed metadata without
+consulting the original source. Logical sparse/constant/UP quotas remain exact.
+After pure preparation, binding pin acquisition and row emission may be fused
+inside the existing checkpoint. No partial payload, new pin, or ordinal becomes
+committed until the complete writer and PendingDelta settlement succeed.
+
+Recorder access must be issued and consumed lexically within a live guard.
+Every borrow visitor, source-facts accessor, compact destination finalizer, and
+compact settlement entry requires fresh matching access; a stored source epoch
+is not evidence that a mutex is still held. Reacquiring access does not waive
+pending-ticket, binding identity, or
+constant dependency validation. This is a source-level synchronous capability
+discipline, not protection against deliberately escaped raw C++ references.
+The source accessor returns no facts on failed qualification. Pure metadata
+preflight may use copied scalars or tickets, never an unqualified shadow view
+or constant/UP payload span. Checked facts may be reused within the same
+synchronous operation without repeating qualification for every field.
+The ordinary owner lane must remain allocation-free and avoid new atomic or
+mutex work. Native compile-negative tests close unsupported entry points, while
+bounded source/epoch/owner/reacquisition traces bind the admitted paths to the
+production predicates.
+Revoke-only invalidation is the deliberate exception: it clears local validity
+and borrow authority without touching borrowed storage or settling a record.
+Caller confinement still applies, including failure cleanup after epoch poison.
+
 An admission-local identity authority may combine deduplication, predicted pins,
 and wire-promotion ordinals. It must distinguish first retention from first wire
 visibility, and publish complete entries before their active frontier advances.

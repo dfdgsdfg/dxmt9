@@ -87,8 +87,6 @@ bool buildSparseStatePlan(const RecorderLockCapability& access,
 
 // Finalizes only the destination-chunk-dependent stream/index selection. This
 // belongs inside the append emitter because CapacityPre may flush first.
-bool finalizeSparseStatePlanChunkContext(const PeChunkContext& chunk,
-                                         SparseStatePlan& plan) noexcept;
 bool finalizeSparseStatePlanChunkContext(
     const RecorderLockCapability& access, const PeChunkContext& chunk,
     SparseStatePlan& plan) noexcept;
@@ -104,22 +102,24 @@ template <typename Retention>
 bool finalizeSparseStatePlanChunkContext(
     const RecorderLockCapability& access, const PeChunkContext& chunk,
     SparseStatePlan& plan, Retention&& retained) noexcept {
-  if (!plan.validFor(access) || plan.source_.draw.recordType == 0u) {
+  const auto* const source = plan.source(access);
+  if (!source || source->draw.recordType == 0u) {
     return false;
   }
   bool finalized = false;
   const bool invoked = plan.withBindingSource(
+      access,
       [&](const PeBindingView& bindings) noexcept {
-        plan.destination_.streamMask = plan.source_.fullSnapshot
-            ? plan.source_.selectedStreamMask
-            : resolveSparseStreamMask(plan.source_.selectedStreamMask, bindings,
+        plan.destination_.streamMask = source->fullSnapshot
+            ? source->selectedStreamMask
+            : resolveSparseStreamMask(source->selectedStreamMask, bindings,
                                       retained);
-        if (plan.source_.draw.recordType ==
+        if (source->draw.recordType ==
             D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
           const std::uint64_t wire = d9cWireHandleValue(
               toWireHandle(bindings.indexBuffer.object));
           plan.destination_.indexBuffer = resolveSparseIndexBuffer(
-              true, plan.source_.selectedIndexBuffer, chunk.indexBufferKnown,
+              true, source->selectedIndexBuffer, chunk.indexBufferKnown,
               chunk.submittedIndexBufferWire, wire, bindings.indexBuffer,
               [&](const BufferRef& buffer) noexcept {
                 return retained(0u, buffer);
@@ -135,15 +135,21 @@ bool finalizeSparseStatePlanChunkContext(
 
 // Pass 2: materializes every selected row directly into the builder's final
 // payload and retains binding handles through the active-record checkpoint.
-bool appendSparseStatePlan(CommandChunkBuilder& builder,
+// The access witness must be reacquired from the live recorder guard for this
+// pass; a plan's source epoch alone is not sufficient.
+bool appendSparseStatePlan(const RecorderLockCapability& access,
+                           CommandChunkBuilder& builder,
                            std::uint32_t type,
                            const SparseStatePlan& plan) noexcept;
-bool appendApplyStatePlan(CommandChunkBuilder& builder,
+bool appendApplyStatePlan(const RecorderLockCapability& access,
+                          CommandChunkBuilder& builder,
                           std::uint32_t flags,
                           const SparseStatePlan& plan) noexcept;
 
 // Accepts exactly the source witness selected and emitted by a durable plan.
-bool acceptSparseStatePlan(PeHotStateShadow& shadow,
+// Settlement mutates recorder state and therefore requires fresh access.
+bool acceptSparseStatePlan(const RecorderLockCapability& access,
+                           PeHotStateShadow& shadow,
                            PeConstShadowBlock& constants,
                            const SparseStatePlan& state,
                            const AppendPlan& plan,

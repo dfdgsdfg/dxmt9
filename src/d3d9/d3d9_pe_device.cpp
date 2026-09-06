@@ -1574,7 +1574,7 @@ bool D3D9DeviceImpl::buildSparseStatePlanForRecord(
         auto& plan = self.semanticRecorderState_->stagedSparsePlan;
         if (params.recordType == 0u ||
             dxmt9::d3d9::pe::dxmt9PeFullSnapshotEnabled()) {
-            if (plan.source().prepared) plan.invalidate();
+            if (plan.prepared()) plan.invalidate();
             return false;
         }
         const bool isDraw = params.recordType != D9C_COMMAND_RECORD_APPLY_STATE;
@@ -1839,19 +1839,30 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT st
                 dxmt9::d3d9::pe::sparseStateInputConstantPayloadBytes(
                     recorderState_.peSparseState));
     }
-    const auto access = recorderLock.capability(
+    std::size_t constantPayloadBytes = 0u;
+    const bool built = recorderLock.withCapability(
         recorderState_.recorderOwnership,
-        recorderState_.stateBlockTransaction.capabilityEpoch());
-    if (!buildSparseStatePlanForRecord(access, params, inlineConstDelta))
+        recorderState_.stateBlockTransaction.capabilityEpoch(),
+        [&](const auto& access) noexcept {
+          if (!buildSparseStatePlanForRecord(access, params,
+                                              inlineConstDelta)) {
+            return false;
+          }
+          const auto* const source =
+              semanticRecorderState_->stagedSparsePlan.source(access);
+          if (!source) return false;
+          constantPayloadBytes =
+              dxmt9::d3d9::pe::sparseStatePlanConstantPayloadBytes(*source);
+          return true;
+        });
+    if (!built)
         return D3DERR_INVALIDCALL;
     armSemanticSparsePlan(
         dxmt9::d3d9::pe::PeSemanticProducerKind::DrawPrimitive,
         D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
     return appendRecord(
         D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
-        kStableDrawPrimitiveCadenceBytes +
-            dxmt9::d3d9::pe::sparseStatePlanConstantPayloadBytes(
-                semanticRecorderState_->stagedSparsePlan));
+        kStableDrawPrimitiveCadenceBytes + constantPayloadBytes);
 }
 
 HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveRecord(D3DPRIMITIVETYPE type,
@@ -1893,19 +1904,30 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveRecord(D3DPRIMITIVETYPE type,
                 dxmt9::d3d9::pe::sparseStateInputConstantPayloadBytes(
                     recorderState_.peSparseState));
     }
-    const auto access = recorderLock.capability(
+    std::size_t constantPayloadBytes = 0u;
+    const bool built = recorderLock.withCapability(
         recorderState_.recorderOwnership,
-        recorderState_.stateBlockTransaction.capabilityEpoch());
-    if (!buildSparseStatePlanForRecord(access, params, inlineConstDelta))
+        recorderState_.stateBlockTransaction.capabilityEpoch(),
+        [&](const auto& access) noexcept {
+          if (!buildSparseStatePlanForRecord(access, params,
+                                              inlineConstDelta)) {
+            return false;
+          }
+          const auto* const source =
+              semanticRecorderState_->stagedSparsePlan.source(access);
+          if (!source) return false;
+          constantPayloadBytes =
+              dxmt9::d3d9::pe::sparseStatePlanConstantPayloadBytes(*source);
+          return true;
+        });
+    if (!built)
         return D3DERR_INVALIDCALL;
     armSemanticSparsePlan(
         dxmt9::d3d9::pe::PeSemanticProducerKind::DrawIndexedPrimitive,
         D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
     return appendRecord(
         D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
-        kStableDrawIndexedPrimitiveCadenceBytes +
-            dxmt9::d3d9::pe::sparseStatePlanConstantPayloadBytes(
-                semanticRecorderState_->stagedSparsePlan));
+        kStableDrawIndexedPrimitiveCadenceBytes + constantPayloadBytes);
 }
 
 bool D3D9DeviceImpl::pendingChunkReferencesBuffer(

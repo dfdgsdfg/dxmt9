@@ -26,6 +26,8 @@ enum class PeSemanticOwnerPhase : std::uint8_t {
   EmitSegmentedExternalRoleCopy,
   EmitSegmentedAliasView,
   SettleClear,
+  SettleRetainerEpoch,
+  SettleOwnerReset,
   Count,
 };
 
@@ -53,6 +55,8 @@ enum class PeSemanticOwnerPhase : std::uint8_t {
   case PeSemanticOwnerPhase::EmitSegmentedAliasView:
     return "emitSegmentedAliasView";
   case PeSemanticOwnerPhase::SettleClear: return "settleClear";
+  case PeSemanticOwnerPhase::SettleRetainerEpoch: return "settleRetainerEpoch";
+  case PeSemanticOwnerPhase::SettleOwnerReset: return "settleOwnerReset";
   case PeSemanticOwnerPhase::Count: break;
   }
   return "unknown";

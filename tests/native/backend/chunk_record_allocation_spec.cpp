@@ -371,20 +371,21 @@ void testWarmSparseStatePlanAllocations() {
   dxmt9::core::ThreadOwnershipToken recorderOwner;
   std::uint64_t recorderEpoch = 1u;
   dxmt9::d3d9::pe::RecorderLockGuard recorderGuard(recorderMutex, false);
-  const auto recorderAccess =
-      recorderGuard.capability(recorderOwner, recorderEpoch);
 
   const auto appendOne = [&]() {
     dxmt9::d3d9::pe::SparseStatePlan plan{};
-    if (!dxmt9::d3d9::pe::buildSparseStatePlan(
-            recorderAccess, shadow, constants, bindings, {}, params, false,
-            false, plan) ||
-        !dxmt9::d3d9::pe::appendApplyStatePlan(
-            builder, plan.source().drawFlags, plan)) {
-      return false;
-    }
-    builder.reset();
-    return true;
+    return recorderGuard.withCapability(
+        recorderOwner, recorderEpoch, [&](const auto& access) noexcept {
+          if (!dxmt9::d3d9::pe::buildSparseStatePlan(
+                  access, shadow, constants, bindings, {}, params, false,
+                  false, plan) ||
+              !dxmt9::d3d9::pe::appendApplyStatePlan(
+                  access, builder, plan.drawFlags(), plan)) {
+            return false;
+          }
+          builder.reset();
+          return true;
+        });
   };
   check(appendOne(), "compact sparse plan warm-up succeeds");
 

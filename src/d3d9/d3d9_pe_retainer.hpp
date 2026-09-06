@@ -261,6 +261,7 @@ public:
     // outstanding Acquired checkpoint can survive the compaction below.
     void endEpoch() noexcept {
         std::size_t write = 0;
+        bool expired = false;
         for (std::size_t read = 0; read < entries_.size(); ++read) {
             const Entry& entry = entries_[read];
             if (epoch_ - entry.lastTouchedEpoch <= kWarmEpochs) {
@@ -271,16 +272,16 @@ public:
                 continue;
             }
             release(entry);
+            expired = true;
         }
         entries_.resize(write);
+        // Expiry or compaction can invalidate index positions, and rollback
+        // leaves tombstones. Rebuild for any of those events; only an
+        // unchanged, clean warm set skips the bounded O(n) rebuild.
+        if (expired || index_.used != index_.occupied) {
+            index_.rebuildFrom(entries_);
+        }
         ++epoch_;
-        // The compaction above can move any surviving entry to a new index,
-        // so the accelerator must be rebuilt in full. `write <= entries_`'s
-        // pre-compaction size (no entries were added), so this never needs a
-        // slot array larger than what already exists — see RetentionIndex's
-        // comment for why that keeps this call allocation-free and endEpoch()
-        // genuinely noexcept.
-        index_.rebuildFrom(entries_);
     }
 
     void clear() {
@@ -308,24 +309,20 @@ private:
     // was written to catch). This table maps (kind, ptr) -> index into
     // `entries_` so the check is O(1) amortized. `entries_` stays the sole
     // storage of truth for retention/rollback/release; the index is a pure
-    // accelerator that is rebuilt (never left dangling) at every point that
-    // can move or drop entries:
+    // accelerator that is kept valid at every point that can move or drop
+    // entries:
     //   - `rollback()` only ever pops from the tail, so it erases exactly
     //     the popped keys (tombstones them) without touching the rest.
     //   - `endEpoch()` compacts `entries_` in place, which can change every
-    //     surviving entry's index, so it does one full `rebuildFrom()` —
-    //     itself O(n), no worse than the compaction loop it follows, and by
-    //     construction never grows past the pre-compaction capacity because
-    //     `write <= entries_.size()` (no entries are added), so the rebuild
-    //     never reallocates and `endEpoch()` stays genuinely `noexcept`.
+    //     surviving entry's index. It rebuilds after any expiry/compaction or
+    //     when rollback left tombstones; an unchanged clean warm set skips it.
     //   - `clear()` drops everything, so the index is cleared too.
     // Deletion uses tombstones rather than backward-shift because the only
     // deletion path (`rollback()`) is a record-build-failure path, not the
     // steady-state hot path (every `rollbackRecord()` caller in
     // `d3d9_pe_chunk_draw.cpp` / `d3d9_pe_chunk_nondraw.cpp` is a validation
     // failure branch) — tombstone accumulation between rollbacks is bounded
-    // by the (rare) failure rate, and `endEpoch()`'s full rebuild reclaims
-    // them on every chunk boundary regardless.
+    // by the (rare) failure rate, and the next epoch boundary reclaims them.
     struct RetentionIndex {
         enum class SlotState : std::uint8_t { Empty, Occupied, Tombstone };
         struct Slot {
@@ -366,9 +363,9 @@ private:
             for (;;) {
                 Slot& s = slots[idx];
                 if (s.state != SlotState::Occupied) {
+                    if (s.state == SlotState::Empty) ++used;
                     s = Slot{SlotState::Occupied, kind, ptr, index};
                     ++occupied;
-                    ++used;
                     return;
                 }
                 idx = (idx + 1u) & mask;

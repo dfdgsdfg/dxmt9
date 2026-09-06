@@ -6,6 +6,7 @@
 #include <iostream>
 #include <memory>
 #include <new>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -166,6 +167,150 @@ bool sameAddressDifferentKindsAreIndependent() {
   return okay && object.refs == 1u;
 }
 
+bool warmBoundaryAndTombstoneTrace() {
+  struct TinyReference {
+    enum : std::size_t { kCapacity = 4u };
+    std::array<D9CBuffer*, kCapacity> objects{};
+    std::array<std::uint64_t, kCapacity> touched{};
+    std::size_t size = 0u;
+    std::uint64_t epoch = 0u;
+
+    std::size_t beginAcquire() const noexcept { return size; }
+
+    bool retain(D9CBuffer* object) noexcept {
+      if (!object) return true;
+      for (std::size_t i = 0u; i < size; ++i) {
+        if (objects[i] == object) {
+          touched[i] = epoch;
+          return true;
+        }
+      }
+      if (size == kCapacity) return false;
+      objects[size] = object;
+      touched[size] = epoch;
+      ++size;
+      ++object->refs;
+      return true;
+    }
+
+    void rollback(std::size_t checkpoint) noexcept {
+      while (size > checkpoint) {
+        --objects[size - 1u]->refs;
+        --size;
+      }
+    }
+
+    void endEpoch() noexcept {
+      std::size_t write = 0u;
+      for (std::size_t read = 0u; read < size; ++read) {
+        if (epoch - touched[read] <= D3D9PePendingCommandRetainer::kWarmEpochs) {
+          objects[write] = objects[read];
+          touched[write] = touched[read];
+          ++write;
+        } else {
+          --objects[read]->refs;
+        }
+      }
+      size = write;
+      ++epoch;
+    }
+
+    void clear() noexcept {
+      while (size != 0u) {
+        --objects[size - 1u]->refs;
+        --size;
+      }
+    }
+  };
+
+  D9CBuffer actualA{};
+  D9CBuffer actualB{};
+  D9CBuffer actualC{};
+  D9CBuffer actualD{};
+  D9CBuffer referenceA{};
+  D9CBuffer referenceB{};
+  D9CBuffer referenceC{};
+  D9CBuffer referenceD{};
+  D3D9PePendingCommandRetainer actual(4u);
+  TinyReference reference;
+  auto equivalent = [&]() noexcept {
+    return actual.size() == reference.size &&
+           actualA.refs == referenceA.refs && actualB.refs == referenceB.refs &&
+           actualC.refs == referenceC.refs && actualD.refs == referenceD.refs;
+  };
+  auto acquire = [&]() noexcept {
+    return std::pair{actual.beginAcquire(), reference.beginAcquire()};
+  };
+  auto retain = [&](D9CBuffer* actualObject, D9CBuffer* referenceObject,
+                    auto& checkpoints) noexcept {
+    return actual.retainBuffer(actualObject, checkpoints.first) &&
+           reference.retain(referenceObject);
+  };
+  auto settle = [&]() noexcept {
+    actual.endEpoch();
+    reference.endEpoch();
+    return equivalent();
+  };
+
+  auto checkpoints = acquire();
+  if (!retain(&actualA, &referenceA, checkpoints) ||
+      !retain(&actualB, &referenceB, checkpoints) ||
+      !retain(&actualC, &referenceC, checkpoints) || !equivalent())
+    return false;
+  // The production condition structurally skips rebuild here: no entry
+  // moved or expired and used == occupied. Allocation counting is separate
+  // evidence that this clean-boundary trace also stays within reserved space.
+  gAllocationCount.store(0u, std::memory_order_relaxed);
+  gCountAllocations.store(true, std::memory_order_release);
+  const bool firstSettled = settle();
+  gCountAllocations.store(false, std::memory_order_release);
+  if (!firstSettled ||
+      gAllocationCount.load(std::memory_order_relaxed) != 0u)
+    return false;
+  checkpoints = acquire();
+  if (!retain(&actualA, &referenceA, checkpoints) ||
+      !retain(&actualC, &referenceC, checkpoints) || !settle())
+    return false;
+  // The middle entry expires after its second idle boundary and forces
+  // survivor movement; <= 1 keeps it alive through the preceding boundary.
+  checkpoints = acquire();
+  if (!retain(&actualA, &referenceA, checkpoints) ||
+      !retain(&actualC, &referenceC, checkpoints) || !settle() ||
+      actualB.refs != 1u || actual.size() != 2u)
+    return false;
+
+  checkpoints = acquire();
+  if (!retain(&actualD, &referenceD, checkpoints) || !settle()) return false;
+  checkpoints = acquire();
+  if (!retain(&actualA, &referenceA, checkpoints) ||
+      !retain(&actualC, &referenceC, checkpoints) || !settle())
+    return false;
+  // D is a tail entry, so its expiry does not move a survivor.
+  checkpoints = acquire();
+  if (!retain(&actualA, &referenceA, checkpoints) ||
+      !retain(&actualC, &referenceC, checkpoints) || !settle() ||
+      actualD.refs != 1u || actual.size() != 2u)
+    return false;
+
+  checkpoints = acquire();
+  if (!retain(&actualD, &referenceD, checkpoints) ||
+      !retain(&actualD, &referenceD, checkpoints) ||
+      !actual.retainBuffer(nullptr, checkpoints.first) ||
+      !reference.retain(nullptr) || actual.size() != reference.size ||
+      actualD.refs != referenceD.refs)
+    return false;
+  actual.rollback(checkpoints.first);
+  reference.rollback(checkpoints.second);
+  if (!equivalent() || actualD.refs != 1u) return false;
+  checkpoints = acquire();
+  if (!retain(&actualD, &referenceD, checkpoints) || !equivalent())
+    return false;
+  actual.clear();
+  reference.clear();
+  return equivalent() && actualA.refs == 1u && actualB.refs == 1u &&
+         actualC.refs == 1u && actualD.refs == 1u;
+}
+
 }  // namespace
 
 int main() {
@@ -177,6 +322,9 @@ int main() {
   }
   if (!check(sameAddressDifferentKindsAreIndependent(),
              "one opaque address retains two independent kind-qualified pins"))
+    return 1;
+  if (!check(warmBoundaryAndTombstoneTrace(),
+             "warm/tombstone reference preserves release and allocation bounds"))
     return 1;
 
   D3D9PePendingCommandRetainer retainer;

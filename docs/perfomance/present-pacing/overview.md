@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-05
+updated: 2026-09-06
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
@@ -30,6 +30,16 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 ## Latest Conclusions
 
 The latest bounded refinement is
+[compact transaction / live borrow authority](present-pacing-pe-compact-refinement.247.md).
+Generation-qualified indexes, clean warm-index reuse, compact receipts, fused
+binding pin/emission, and lexical source access pass native 21/21 and x86_64
+8/8. PE32/PE64 compact append frames no longer probe. Observer-off GT2 pair
+harmonic means are 27.884 baseline / 27.427 candidate (-1.64%), with zero
+errors and stable CB/pass shape. The slower candidate is retained; substantial
+same-build variation prevents a gain or neutrality claim. The physical/API
+refinement is implemented, but FPS promotion remains open.
+
+The preceding checkpoint is
 [prepared emission / compact producer integration](present-pacing-pe-prepared-emission.244.md).
 Prepared layouts, narrow constants, and direct canonical bindings pass native
 and existing TLA checks. GT2 OFF is neutral (26.872 → 26.919 FPS), ON is
@@ -39,7 +49,7 @@ parent is neutral. These single runs do not establish FPS recovery or close
 the broader post-v0.1.1 investigation. The earlier admission-reuse checkpoint
 is preserved below for attribution.
 
-For the current semantic-owner PE implementation, use the
+For the earlier semantic-owner PE implementation, see the
 [2026-09-05 admission-reuse evidence](present-pacing-pe-admission-reuse.243.md),
 following [direct canonical payload](present-pacing-pe-direct-canonical.242.md).
 Prepared pin/wire ordinals, hot family staging, and active-prefix settlement
@@ -47,8 +57,9 @@ pass native/TLA and GT2 OFF/ON checks. Sampled fixed/pin, sparse, and settlement
 costs decrease; canonical construction is nearly unchanged. OFF FPS moves
 27.304 to 27.527 (+0.82%) and ON 25.929 to 26.463 (+2.06%), with about 4 CB/P
 and zero errors. These single runs do not establish a stable FPS gain.
-Bounded dedup/mapping scans, twelve pin-index clears, warm retention, generic
-cold controls, and contiguous gather remain. The earlier 1.96 MiB value-arena
+Bounded dedup/mapping scans, warm expiry scanning, generic cold controls,
+and contiguous gather remain. H247 supersedes the twelve ordinary pin-index
+clears and redundant clean warm-index rebuilds. The earlier 1.96 MiB value-arena
 removal is retained. Older PE cost rankings below describe earlier code, not
 a current PE symbol profile or attribution of the post-v0.1.1 regression.
 

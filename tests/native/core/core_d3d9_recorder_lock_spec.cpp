@@ -39,6 +39,39 @@ constexpr std::uint32_t kD3DCreateMultithreaded = 0x00000004u;
 constexpr std::uint32_t kD3DCreateSoftwareVertexProcessing = 0x00000020u;
 constexpr std::uint32_t kD3DCreateHardwareVertexProcessing = 0x00000040u;
 
+template <typename Guard>
+concept HasPublicCapabilityFactory = requires(
+    Guard& guard, const dxmt9::core::ThreadOwnershipToken& owner,
+    const std::uint64_t& epoch) {
+  guard.capability(owner, epoch);
+};
+
+template <typename Guard, typename Capability>
+concept AcceptsNonBoolRecorderCallback = requires(
+    Guard& guard, const dxmt9::core::ThreadOwnershipToken& owner,
+    const std::uint64_t& epoch) {
+  guard.withCapability(owner, epoch,
+                       [](const Capability&) noexcept { return 1; });
+};
+
+template <typename Guard, typename Capability>
+concept AcceptsPointerRecorderCallback = requires(
+    Guard& guard, const dxmt9::core::ThreadOwnershipToken& owner,
+    const std::uint64_t& epoch) {
+  guard.withCapability(owner, epoch,
+                       [](const Capability&) noexcept -> const void* {
+                         return nullptr;
+                       });
+};
+
+template <typename Guard, typename Capability>
+concept AcceptsThrowingRecorderCallback = requires(
+    Guard& guard, const dxmt9::core::ThreadOwnershipToken& owner,
+    const std::uint64_t& epoch) {
+  guard.withCapability(owner, epoch,
+                       [](const Capability&) { return true; });
+};
+
 void testFlagSetLocksRegardlessOfEnv() {
   check(dxmt9::d3d9::pe::recorderLockRequired(
             kD3DCreateMultithreaded, false),
@@ -111,35 +144,90 @@ void testScopedBorrowEpochAndTypeClosure() {
                 !std::is_move_constructible_v<Borrow> &&
                 !std::is_copy_assignable_v<Borrow> &&
                 !std::is_move_assignable_v<Borrow>);
+  using Guard = dxmt9::d3d9::pe::RecorderLockGuard;
+  static_assert(!HasPublicCapabilityFactory<Guard>);
+  static_assert(!AcceptsNonBoolRecorderCallback<Guard, Capability>);
+  static_assert(!AcceptsPointerRecorderCallback<Guard, Capability>);
+  static_assert(!AcceptsThrowingRecorderCallback<Guard, Capability>);
 
   std::recursive_mutex mutex;
   dxmt9::core::ThreadOwnershipToken owner;
   std::uint64_t epoch = 7u;
   dxmt9::d3d9::pe::RecorderLockGuard guard(mutex, false);
-  const auto access = guard.capability(owner, epoch);
-  check(access.valid() &&
-            access.lane() == dxmt9::d3d9::pe::RecorderAccessLane::Owner,
-        "no-MT producer ownership issues the scoped production capability");
+  Borrow borrow;
+  const std::uint32_t value = 0x12345678u;
+  std::uint32_t observed = 0u;
+  const bool ownerAccess = guard.withCapability(
+      owner, epoch, [&](const auto& access) noexcept {
+        check(access.valid() &&
+                  access.lane() ==
+                      dxmt9::d3d9::pe::RecorderAccessLane::Owner,
+              "no-MT producer ownership issues the scoped production capability");
+        check(access.bind(borrow, value),
+              "valid access binds an immutable borrow");
+        return borrow.with(access, [&](const std::uint32_t& current) noexcept {
+          observed = current;
+        });
+      });
+  check(ownerAccess && observed == value,
+        "current-epoch borrow visits synchronously");
   {
     dxmt9::d3d9::pe::RecorderLockGuard lockedGuard(mutex, true);
-    const auto lockedAccess = lockedGuard.capability(owner, epoch);
-    check(lockedAccess.valid() &&
-              lockedAccess.lane() ==
-                  dxmt9::d3d9::pe::RecorderAccessLane::Locked,
+    check(lockedGuard.withCapability(
+              owner, epoch, [&](const auto& lockedAccess) noexcept {
+                return lockedAccess.valid() &&
+                       lockedAccess.lane() ==
+                           dxmt9::d3d9::pe::RecorderAccessLane::Locked;
+              }),
           "the multithreaded lane issues the same capability under its lock");
   }
-  const std::uint32_t value = 0x12345678u;
-  Borrow borrow;
-  check(access.bind(borrow, value), "valid access binds an immutable borrow");
-  std::uint32_t observed = 0u;
-  check(borrow.with([&](const std::uint32_t& current) noexcept {
-          observed = current;
-        }) && observed == value,
-        "current-epoch borrow visits synchronously");
+  dxmt9::d3d9::pe::RecorderLockGuard nestedMtGuard(mutex, true);
+  Borrow nestedBorrow;
+  check(nestedMtGuard.withCapability(
+            owner, epoch, [&](const auto& access) noexcept {
+              return access.bind(nestedBorrow, value) &&
+                     nestedMtGuard.withCapability(
+                         owner, epoch, [&](const auto& nestedAccess) noexcept {
+                           return nestedBorrow.with(
+                               nestedAccess,
+                               [&](const std::uint32_t&) noexcept {});
+                         });
+            }),
+        "nested multithreaded same-lane access can revisit a borrow");
+
+  dxmt9::d3d9::pe::RecorderLockGuard freshOwnerGuard(mutex, false);
+  Borrow freshBorrow;
+  check(freshOwnerGuard.withCapability(
+            owner, epoch, [&](const auto& freshAccess) noexcept {
+              return freshAccess.bind(freshBorrow, value) &&
+                     freshBorrow.with(
+                         freshAccess,
+                         [&](const std::uint32_t&) noexcept {});
+            }),
+        "fresh same-recorder same-lane access can revisit a borrow");
+  dxmt9::core::ThreadOwnershipToken otherOwner;
+  dxmt9::d3d9::pe::RecorderLockGuard otherGuard(mutex, false);
+  bool wrongOwnerVisited = false;
+  check(!otherGuard.withCapability(
+              otherOwner, epoch,
+              [&](const auto& otherAccess) noexcept {
+                return freshBorrow.with(
+                    otherAccess,
+                    [&](const std::uint32_t&) noexcept {
+                      wrongOwnerVisited = true;
+                    });
+              }) &&
+            !wrongOwnerVisited,
+        "same epoch address from another owner cannot visit a borrow");
+
   ++epoch;
-  check(!access.valid() && !borrow.valid() &&
-            !borrow.with([&](const std::uint32_t&) noexcept {}),
-        "epoch advance invalidates both mutation and source capabilities");
+  check(!borrow.valid() &&
+            !guard.withCapability(
+                owner, epoch, [&](const auto& access) noexcept {
+                  return borrow.with(access,
+                                     [&](const std::uint32_t&) noexcept {});
+                }),
+        "epoch advance invalidates the source borrow");
 }
 
 void testProductionGuardSerializesRecorderIntervals() {

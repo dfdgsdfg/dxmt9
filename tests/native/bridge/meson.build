@@ -47,13 +47,15 @@ pe_semantic_batch_spec = executable(
 
 test('dxmt9-pe-semantic-batch-spec', pe_semantic_batch_spec)
 
-# P1 host-only semantic owner coverage.  Admission copies typed fixed values,
+# P1 host-only semantic owner coverage. Admission copies typed fixed values,
 # constants/UP bytes, rectangles, and sparse rows while typed physical pins
-# stay owned until reset/settlement; no production producer is wired here.
+# stay owned until reset/settlement. The real sparse producer is wired here for
+# the compact max-family differential; the generic builder remains its oracle.
 pe_semantic_owner_spec = executable(
   'dxmt9-pe-semantic-owner-spec',
   [
     'pe_semantic_owner_spec.cpp',
+    '../../../src/d3d9/d3d9_pe_producer.cpp',
     '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
     '../../../src/d3d9/d3d9_pe_chunk_draw.cpp',
     '../../../src/d3d9/d3d9_pe_chunk_nondraw.cpp',

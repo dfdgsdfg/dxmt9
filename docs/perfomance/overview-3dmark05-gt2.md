@@ -11,18 +11,20 @@ related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; 
 
 # 3DMark05 GT2 Performance — Current Baseline
 
-The latest bounded PE refinement check is
-[inactive storage / private plan / fused retention](present-pacing/present-pacing-pe-plan-authority.246.md),
-following [compact destination / identity reuse](present-pacing/present-pacing-pe-compact-reuse.245.md).
-PE observers stay OFF for throughput comparison. The final GT2 pair is
-28.294/28.319 benchmark FPS versus the fresh inactive-initialization-only pair
-28.514/28.585 (harmonic means: 28.306 versus 28.550, -0.85%). Both final runs
-have zero errors, about 4 CB/P and 15.77 passes/P. Private plan and fused retain
-correctness are natively pinned, but their incremental FPS benefit or
-noise-qualified neutrality is not established. Two build-overlapped reference
-cells are excluded and retained explicitly. The locator initialization loop is
-gone; PE32/PE64 append frames still probe. H245's diagnostic envelope remains
-non-neutral, and calibrated phase sums are not product throughput.
+The latest bounded PE refinement is
+[compact transaction / live borrow authority](present-pacing/present-pacing-pe-compact-refinement.247.md),
+following [private plan / fused retention](present-pacing/present-pacing-pe-plan-authority.246.md).
+Normal index clears and unchanged warm-index rebuilds are removed, committed
+receipts replace the broad record product, and compact binding acquisition and
+canonical emission share one traversal. Native 21/21 and x86_64 8/8 pass.
+PE32/PE64 ordinary compact frames shrink to 3,144/3,232 bytes without a probe.
+With PE observers OFF, fresh GT2 baseline is 28.107/27.664 FPS and candidate is
+28.096/26.788 (pair harmonic means 27.884/27.427, -1.64%). All four cells have
+zero errors, about 4 CB/P and 15.77 passes/P. The slower candidate cell is
+retained; same-build spread reaches 4.88%. Gain, noise-qualified neutrality,
+and causal regression attribution are not established by these ordered pairs.
+This is bounded representation/API refinement, not FPS promotion. H245's
+diagnostic envelope remains non-neutral; sampled phase sums are not throughput.
 This is not a full CPU re-profile. The August owner split
 below predates the mandatory semantic-owner changes; its 10.6% PE share must
 not be applied to current HEAD or used to close the post-v0.1.1 investigation.

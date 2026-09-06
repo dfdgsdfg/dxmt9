@@ -38,9 +38,10 @@ constexpr RecorderAccessLane planRecorderAccess(
 class RecorderLockCapability;
 
 // A call-scope borrow is deliberately neither copyable nor movable.  It may
-// be visited only through a nothrow callback and rechecks the recorder epoch
-// before exposing the source for that callback.  SparseStatePlan embeds these
-// borrows, so the plan cannot be captured by value into deferred replay.
+// be visited only through a nothrow callback that supplies fresh matching
+// recorder access and rechecks the recorder epoch before exposing the source.
+// SparseStatePlan embeds these borrows, so the plan cannot be captured by
+// value into deferred replay.
 template <typename T>
 class RecorderBorrow final {
  public:
@@ -51,16 +52,18 @@ class RecorderBorrow final {
   RecorderBorrow& operator=(RecorderBorrow&&) = delete;
 
   bool valid() const noexcept {
-    return value_ != nullptr && epoch_ != nullptr && *epoch_ == issuedEpoch_ &&
+    return value_ != nullptr && owner_ != nullptr && epoch_ != nullptr &&
+           *epoch_ == issuedEpoch_ &&
            lane_ != RecorderAccessLane::Denied;
   }
 
   bool validFor(const RecorderLockCapability& capability) const noexcept;
 
   template <typename Fn>
-    requires std::is_nothrow_invocable_v<Fn&&, T&>
-  bool with(Fn&& fn) const noexcept {
-    if (!valid())
+    requires (std::is_nothrow_invocable_v<Fn&&, T&> &&
+              std::is_same_v<std::invoke_result_t<Fn&&, T&>, void>)
+  bool with(const RecorderLockCapability& access, Fn&& fn) const noexcept {
+    if (!validFor(access))
       return false;
     std::forward<Fn>(fn)(*value_);
     return true;
@@ -68,6 +71,7 @@ class RecorderBorrow final {
 
   void invalidate() noexcept {
     value_ = nullptr;
+    owner_ = nullptr;
     epoch_ = nullptr;
     issuedEpoch_ = 0u;
     lane_ = RecorderAccessLane::Denied;
@@ -77,6 +81,7 @@ class RecorderBorrow final {
   void bind(const RecorderLockCapability& capability, T& value) noexcept;
 
   T* value_ = nullptr;
+  const dxmt9::core::ThreadOwnershipToken* owner_ = nullptr;
   const std::uint64_t* epoch_ = nullptr;
   std::uint64_t issuedEpoch_ = 0u;
   RecorderAccessLane lane_ = RecorderAccessLane::Denied;
@@ -84,9 +89,11 @@ class RecorderBorrow final {
   friend class RecorderLockCapability;
 };
 
-// Mutation/settlement authority paired with RecorderBorrow.  Epoch ownership
-// remains in the recorder; Reset/poison advances it and every outstanding
-// capability then fails closed without retaining another owner.
+// Mutation/settlement authority paired with RecorderBorrow.  The only way to
+// obtain one is RecorderLockGuard::withCapability: its non-copyable witness is
+// constructed inside the synchronous callback and cannot outlive the guard.
+// Epoch ownership remains in the recorder; Reset/poison advances it and every
+// outstanding capability then fails closed without retaining another owner.
 class RecorderLockCapability final {
  public:
   RecorderLockCapability(const RecorderLockCapability&) = delete;
@@ -95,7 +102,7 @@ class RecorderLockCapability final {
   RecorderLockCapability& operator=(RecorderLockCapability&&) = delete;
 
   bool valid() const noexcept {
-    return epoch_ != nullptr && *epoch_ == issuedEpoch_ &&
+    return owner_ != nullptr && epoch_ != nullptr && *epoch_ == issuedEpoch_ &&
            lane_ != RecorderAccessLane::Denied;
   }
 
@@ -119,9 +126,11 @@ class RecorderLockCapability final {
 
  private:
   RecorderLockCapability(RecorderAccessLane lane,
+                         const dxmt9::core::ThreadOwnershipToken& owner,
                          const std::uint64_t& epoch) noexcept
-      : epoch_(&epoch), issuedEpoch_(epoch), lane_(lane) {}
+      : owner_(&owner), epoch_(&epoch), issuedEpoch_(epoch), lane_(lane) {}
 
+  const dxmt9::core::ThreadOwnershipToken* owner_ = nullptr;
   const std::uint64_t* epoch_ = nullptr;
   std::uint64_t issuedEpoch_ = 0u;
   RecorderAccessLane lane_ = RecorderAccessLane::Denied;
@@ -134,15 +143,20 @@ class RecorderLockCapability final {
 template <typename T>
 bool RecorderBorrow<T>::validFor(
     const RecorderLockCapability& capability) const noexcept {
-  return valid() && capability.valid() && epoch_ == capability.epoch_ &&
+  // Qualify the ownership domain before valid() dereferences the borrowed
+  // epoch witness. A mismatched owner must fail closed without consulting a
+  // source that belongs to another recorder.
+  return owner_ != nullptr && epoch_ != nullptr &&
+         owner_ == capability.owner_ && epoch_ == capability.epoch_ &&
          issuedEpoch_ == capability.issuedEpoch_ &&
-         lane_ == capability.lane_;
+         lane_ == capability.lane_ && capability.valid() && valid();
 }
 
 template <typename T>
 void RecorderBorrow<T>::bind(const RecorderLockCapability& capability,
                              T& value) noexcept {
   value_ = &value;
+  owner_ = capability.owner_;
   epoch_ = capability.epoch_;
   issuedEpoch_ = capability.issuedEpoch_;
   lane_ = capability.lane_;
@@ -171,16 +185,22 @@ class RecorderLockGuard final {
 
   bool ownsLock() const noexcept { return required_; }
 
-  RecorderLockCapability capability(
-      const dxmt9::core::ThreadOwnershipToken& owner,
-      const std::uint64_t& epoch) const noexcept {
-    return RecorderLockCapability(
-        planRecorderAccess({
-            .lockRequired = required_,
-            .lockHeld = ownsLock(),
-            .ownerThread = owner.ownedByCurrentThread(),
-        }),
-        epoch);
+  template <typename Fn>
+    requires (std::is_nothrow_invocable_v<
+                  Fn&&, const RecorderLockCapability&> &&
+              std::is_same_v<std::invoke_result_t<
+                                 Fn&&, const RecorderLockCapability&>, bool>)
+  bool withCapability(const dxmt9::core::ThreadOwnershipToken& owner,
+                      const std::uint64_t& epoch, Fn&& fn) const noexcept {
+    const auto lane = planRecorderAccess({
+        .lockRequired = required_,
+        .lockHeld = ownsLock(),
+        .ownerThread = owner.ownedByCurrentThread(),
+    });
+    if (lane == RecorderAccessLane::Denied)
+      return false;
+    const RecorderLockCapability access(lane, owner, epoch);
+    return std::forward<Fn>(fn)(access);
   }
 
  private:
