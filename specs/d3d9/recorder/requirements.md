@@ -836,3 +836,30 @@ empty destination or still-insufficient warm headroom must not spin, evict
 pins early, grow storage, or manufacture an empty epoch to admit the record.
 Mixed-kind/warm saturation, committed-prefix preservation, and retry after a
 legitimate epoch must have native counterexample and refinement evidence.
+
+**R-CORE-REC-7.31** Seal-time emission must consume the authoritative canonical
+roles without materializing unused per-record layout metadata. Removing a
+private layout projection must preserve final record-header validation,
+aggregate bounds, padding, exact contiguous bytes, segmented role spans,
+producer identity, and capture/retry behavior. PE32/PE64 release inspection
+must distinguish eliminated storage, initialization, and stack probes from
+unmeasured wall-time benefit.
+
+**R-CORE-REC-7.32** A prepared append may consume a private destination-bound
+capacity capability instead of repeating an unchanged quota/frontier proof.
+The capability must be issued only after complete admission validation, remain
+inside one synchronous append, and preserve atomic quota publication and
+rollback. No public trusted constructor or unchecked append API may expose it.
+Source/dependency requalification, payload/storage bounds, identity collisions,
+and checks after invalidating callbacks remain mandatory. Stale-frontier,
+capacity-dimension, partial-retain, and failed-settlement counterexamples must
+reject without changing the committed prefix or exact retry bytes.
+
+**R-CORE-REC-7.33** Compact PendingDelta settlement may skip empty categories
+and consume represented masks in bulk only as a refinement of the existing
+per-category consumer. It must preserve unrelated pending bits and constant
+ranges, full-snapshot behavior, source/ticket rejection, and observer-enabled
+validation. Production-used pure mask operations and bounded native
+differentials must cover empty, partial, full, repeated-value, and failed/retried
+settlement. The refinement must not add a second pending-state authority,
+allocation, atomic, mutex, or disabled diagnostic work.

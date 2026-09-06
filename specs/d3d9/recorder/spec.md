@@ -831,6 +831,29 @@ the new age, capacity, source-access, and metadata facts. They change neither
 the wire ABI nor Unix queue/encode policy. Missing runtime/codegen evidence is
 recorded in the recorder gap rather than inferred from passing model checks.
 
+R-CORE-REC-7.31–7.33 remove derived work without changing the transaction or
+transport. Seal retains aggregate layout facts and validates materialized wire
+headers, but does not store a second per-record layout that emission never
+reads. The canonical record/handle/payload regions remain authoritative for
+both ExactFixed and segmented output.
+
+Admission capacity reuse is private to one synchronous append. Its capability
+binds the proved destination frontier and logical quota deltas; only the
+owning append may consume it. The existing checkpoint still restores quota,
+pin, wire, and ordinal frontiers on failure. Reuse does not waive live source
+qualification or physical payload bounds, and cannot span a callback that
+invalidates its authority. Compact settlement consumes only represented state
+using the same pending tables and masks; empty-table skips and bulk bit
+operations do not introduce cached copies of pending state.
+
+The serial reference and exact-byte/refcount native differentials own these
+local refinements. Existing TLA models continue to own transaction order;
+these changes add no scheduling or lease/wake transition. Release codegen must
+confirm removed initialization and checks in the actual PE callsites. Existing
+cold sampled phase scopes remain the runtime attribution boundary; no per-draw
+clock/atomic is justified merely to demonstrate a proof. Native/codegen success
+does not establish Wine pixel correctness or an FPS improvement.
+
 The optional owner-qualified copy/materialization ledger binds this same
 transaction at its two physical ownership boundaries. A successful admission
 records the increase in live typed record, pin, and canonical-role

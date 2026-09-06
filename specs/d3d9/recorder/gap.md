@@ -13,6 +13,44 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.31–7.33 are implemented with bounded native/codegen evidence.
+Seal no longer stores the unused `EmissionPlan.records` projection, but still
+validates every canonical record header. Compact append consumes its private
+owner/witness-bound quota capability without repeating the 17 category bounds
+or semantic-byte bound. Generic/control pre-write and all post-serializer
+validity/frontier checks remain; this is not blanket removal of source or
+callback requalification. Empty typed-table clears return on the existing count,
+and compact PendingDelta settlement uses typed-domain bulk masks without adding
+another pending-state authority.
+
+All four canonical builds, native 30/30, x86_64 9/9 focused specs, and unchanged
+TLC checks pass. The production mask reducer is compared with the old per-slot
+reference over 5,242,880 bounded cases, all 32 bit positions including typed
+domain edges, and actual category consumers (including both light-enable
+masks). Native coverage includes empty/sparse/full table consumption, compact
+scalar/semantic quota exact-fit and plus-one denial, failed-settlement retry
+with byte-identical committed prefixes, private capability non-exposure, and
+contiguous/segmented extent rejection and byte equality. Existing stale-source,
+full-snapshot, all-family and final-binding retain-fault pins remain active.
+
+Release PE32/PE64 inspection against `09070a32` finds aggregate seal metadata
+shrinking from 4,160/8,272 to 64/80 bytes. The ExactFixed emission body's stack
+reservation shrinks from 4,188/8,352 to 92/168 bytes, removing both stack probes.
+`copySparsePlan` static instruction counts fall from 259/261 to 105/107, and
+`acceptSparseStatePlan` from 984/836 to 646/526. These are code-size observations,
+not executed-instruction or timing measurements. The outer compact witness
+frames remain 3,144/3,232 bytes; the nested transaction body reserves an extra
+12/16 bytes for capability plumbing, so zero-cost abstraction is not claimed.
+PE exports and vtable/RTTI ownership match the baseline. Hash-qualified local
+inspection and verification receipts are under
+`experiments/output/pe-seal-settlement-20260906/analysis/`.
+
+No fresh Wine/FPS or pixel promotion is claimed for this slice. The native
+reference binds local value/byte behavior; unchanged TLC checks the existing
+transaction protocol, not the concrete C++ mask implementation or arbitrary
+callbacks. Warm-retainer policy, transport selection, chunk cadence, and Unix
+scheduling are unchanged.
+
 R-CORE-REC-7.26–7.30 are implemented with bounded native/codegen evidence:
 lexical source-proof reuse, explicit compact-plan initialization, no-expiry
 retainer settlement, single-authority stream metadata, and aggregate

@@ -516,12 +516,8 @@ static bool acceptSparseStatePlanWithSources(
   consumer.acceptAllTextureStageStates();
   consumer.acceptAllSamplerStates();
   consumer.acceptAllTransforms();
-  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
-    if ((source.textureMask & (1u << slot)) != 0u) consumer.acceptTexture(slot);
-  }
-  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-    if ((destination.streamMask & (1u << slot)) != 0u) consumer.acceptStream(slot);
-  }
+  consumer.acceptTextureMask(source.textureMask);
+  consumer.acceptStreamMask(destination.streamMask);
   if ((source.shaderMask & 1u) != 0u) consumer.acceptVertexShader();
   if ((source.shaderMask & 2u) != 0u) consumer.acceptPixelShader();
   if (source.vertexInput) {
@@ -533,27 +529,14 @@ static bool acceptSparseStatePlanWithSources(
     }
   }
   if (destination.indexBuffer) consumer.acceptIndexBuffer();
-  for (std::uint32_t slot = 0u;
-       slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
-    if ((source.renderTargetMask & (1u << slot)) != 0u) {
-      consumer.acceptRenderTarget(slot);
-    }
-  }
+  consumer.acceptRenderTargetMask(source.renderTargetMask);
   if (source.depthStencil) consumer.acceptDepthStencil();
   if (source.viewport) consumer.acceptViewport();
   if (source.scissor) consumer.acceptScissor();
   if (source.material) consumer.acceptMaterial();
-  for (std::uint32_t slot = 0u; slot < 6u; ++slot) {
-    if ((source.clipPlaneMask & (1u << slot)) != 0u) {
-      consumer.acceptClipPlane(slot);
-    }
-  }
-  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_LIGHTS; ++slot) {
-    if ((source.lightMask & (1u << slot)) != 0u) consumer.acceptLight(slot);
-    if ((source.lightEnableMask & (1u << slot)) != 0u) {
-      consumer.acceptLightEnable(slot);
-    }
-  }
+  consumer.acceptClipPlaneMask(source.clipPlaneMask);
+  consumer.acceptLightMask(source.lightMask);
+  consumer.acceptLightEnableMask(source.lightEnableMask);
   return true;
 }
 

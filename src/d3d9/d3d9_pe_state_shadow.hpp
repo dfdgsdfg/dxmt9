@@ -102,6 +102,9 @@ public:
         --count;
     }
     void clear() noexcept {
+        if (count == 0u) {
+            return;
+        }
         occupied = {};
         count = 0;
     }
@@ -182,6 +185,9 @@ struct FixedStateMatrix {
         --count;
     }
     void clear() noexcept {
+        if (count == 0u) {
+            return;
+        }
         for (auto& row : rows) {
             row.clear();
         }
@@ -304,6 +310,9 @@ struct FixedTransformTable {
         --count;
     }
     void clear() noexcept {
+        if (count == 0u) {
+            return;
+        }
         occupied = {};
         count = 0;
     }
@@ -1424,6 +1433,18 @@ struct PendingDeltaTicket {
     constexpr bool valid() const noexcept { return generation != 0u; }
 };
 
+// Clear only represented in-domain bits.  The old per-slot consumers ignored
+// out-of-domain bits by construction; retaining that property is what makes a
+// bulk settlement a refinement rather than a broad PendingDelta clear.
+template <std::uint32_t SlotCount>
+constexpr std::uint32_t consumeRepresentedMask(
+    std::uint32_t pending, std::uint32_t represented) noexcept {
+    static_assert(SlotCount <= 32u);
+    constexpr std::uint32_t validMask =
+        SlotCount == 32u ? 0xffffffffu : (1u << SlotCount) - 1u;
+    return pending & ~(represented & validMask);
+}
+
 class PendingDelta {
 private:
     // Scalar pending categories stay flat and allocation-free. Keyed tables
@@ -2482,6 +2503,42 @@ public:
         }
         void acceptAllTransforms() noexcept {
             shadow_.PendingDelta::transforms_.clear();
+        }
+        void acceptTextureMask(std::uint32_t represented) noexcept {
+            shadow_.PendingDelta::pendingTextureMask_ =
+                consumeRepresentedMask<D9C_DRAW_PACKET_MAX_TEXTURES>(
+                    shadow_.PendingDelta::pendingTextureMask_, represented);
+        }
+        void acceptStreamMask(std::uint32_t represented) noexcept {
+            shadow_.PendingDelta::pendingStreamMask_ =
+                consumeRepresentedMask<D9C_DRAW_PACKET_MAX_STREAMS>(
+                    shadow_.PendingDelta::pendingStreamMask_, represented);
+        }
+        void acceptRenderTargetMask(std::uint32_t represented) noexcept {
+            shadow_.PendingDelta::pendingRtMask_ =
+                consumeRepresentedMask<D9C_DRAW_PACKET_MAX_RENDER_TARGETS>(
+                    shadow_.PendingDelta::pendingRtMask_, represented);
+        }
+        void acceptClipPlaneMask(std::uint32_t represented) noexcept {
+            shadow_.PendingDelta::pendingClipPlaneMask_ =
+                consumeRepresentedMask<6u>(
+                    shadow_.PendingDelta::pendingClipPlaneMask_, represented);
+        }
+        void acceptLightMask(std::uint32_t represented) noexcept {
+            shadow_.PendingDelta::pendingLightSlotMask_ =
+                consumeRepresentedMask<D9C_DRAW_PACKET_MAX_LIGHTS>(
+                    shadow_.PendingDelta::pendingLightSlotMask_, represented);
+        }
+        void acceptLightEnableMask(std::uint32_t represented) noexcept {
+            const auto pending = consumeRepresentedMask<
+                D9C_DRAW_PACKET_MAX_LIGHTS>(
+                shadow_.PendingDelta::pendingLightEnableValidMask_,
+                represented);
+            const auto enabled = consumeRepresentedMask<
+                D9C_DRAW_PACKET_MAX_LIGHTS>(
+                shadow_.PendingDelta::pendingLightEnableMask_, represented);
+            shadow_.PendingDelta::pendingLightEnableValidMask_ = pending;
+            shadow_.PendingDelta::pendingLightEnableMask_ = enabled;
         }
         void acceptTexture(std::uint32_t slot) noexcept {
             if (slot < D9C_DRAW_PACKET_MAX_TEXTURES)

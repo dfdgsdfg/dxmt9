@@ -619,6 +619,211 @@ void scalarCategoriesDirty() {
   requirePinnedOutput(f);
 }
 
+void compactPendingMaskAndEmptyTableDifferential() {
+  // Keep the reference deliberately independent of the production reducer:
+  // it models the old per-slot consumer and therefore also documents the
+  // required preservation of bits outside each typed domain.
+  const auto reference = [](std::uint32_t pending,
+                            std::uint32_t represented,
+                            std::uint32_t slotCount) noexcept {
+    for (std::uint32_t slot = 0u; slot < slotCount; ++slot) {
+      if ((represented & (1u << slot)) != 0u) {
+        pending &= ~(1u << slot);
+      }
+    }
+    return pending;
+  };
+  constexpr std::array<std::uint32_t, 5> slotCounts = {4u, 6u, 8u, 16u, 20u};
+  constexpr std::array<std::uint32_t, 4> highBits = {
+      0u, 0x80000000u, 0x60000000u, 0xf0000000u};
+  std::size_t maskCases = 0u;
+  for (const auto slotCount : slotCounts) {
+    for (std::uint32_t pendingLow = 0u; pendingLow < 256u; ++pendingLow) {
+      for (std::uint32_t representedLow = 0u; representedLow < 256u;
+           ++representedLow) {
+        for (const auto pendingHigh : highBits) {
+          for (const auto representedHigh : highBits) {
+            const auto pending = pendingLow | pendingHigh;
+            const auto represented = representedLow | representedHigh;
+            const auto expected = reference(pending, represented, slotCount);
+            switch (slotCount) {
+            case 4u:
+              check(consumeRepresentedMask<4u>(pending, represented) ==
+                        expected,
+                    "4-slot bulk mask reducer differs from per-slot reference");
+              break;
+            case 6u:
+              check(consumeRepresentedMask<6u>(pending, represented) ==
+                        expected,
+                    "6-slot bulk mask reducer differs from per-slot reference");
+              break;
+            case 8u:
+              check(consumeRepresentedMask<8u>(pending, represented) ==
+                        expected,
+                    "8-slot bulk mask reducer differs from per-slot reference");
+              break;
+            case 16u:
+              check(consumeRepresentedMask<16u>(pending, represented) ==
+                        expected,
+                    "16-slot bulk mask reducer differs from per-slot reference");
+              break;
+            case 20u:
+              check(consumeRepresentedMask<20u>(pending, represented) ==
+                        expected,
+                    "20-slot bulk mask reducer differs from per-slot reference");
+              break;
+            default:
+              check(false, "unexpected typed mask domain");
+            }
+            ++maskCases;
+          }
+        }
+      }
+    }
+  }
+  check(maskCases == 5u * 256u * 256u * 16u,
+        "bounded mask differential visited every planned case");
+
+  // The Cartesian low-byte sweep above is not exhaustive over 32-bit words.
+  // Check every bit's four (pending, represented) valuations as well, so the
+  // upper valid texture/stream slots and each exact domain edge are covered.
+  const auto bitwiseDomain = [&]<std::uint32_t Slots>() {
+    for (std::uint32_t bit = 0u; bit < 32u; ++bit) {
+      for (std::uint32_t p = 0u; p < 2u; ++p) {
+        for (std::uint32_t r = 0u; r < 2u; ++r) {
+          check(consumeRepresentedMask<Slots>(p << bit, r << bit) ==
+                    reference(p << bit, r << bit, Slots),
+                "every bit and typed domain edge refines per-slot clearing");
+        }
+      }
+    }
+  };
+  bitwiseDomain.template operator()<4u>();
+  bitwiseDomain.template operator()<6u>();
+  bitwiseDomain.template operator()<8u>();
+  bitwiseDomain.template operator()<16u>();
+  bitwiseDomain.template operator()<20u>();
+  bitwiseDomain.template operator()<0u>();
+  bitwiseDomain.template operator()<32u>();
+
+  // Pin the actual category wiring as well as the reducer: a light-enable
+  // update consumes both masks, while all consumers preserve unrelated bits.
+  PeHotStateShadow masks;
+  for (std::uint32_t bit = 0u; bit < 32u; ++bit) {
+    const std::uint32_t represented = 1u << bit;
+    auto writer = masks.writer();
+    writer.pendingTextureMask() = 0xffffffffu;
+    writer.pendingStreamMask() = 0xffffffffu;
+    writer.pendingRtMask() = 0xffffffffu;
+    writer.pendingClipPlaneMask() = 0xffffffffu;
+    writer.pendingLightSlotMask() = 0xffffffffu;
+    writer.pendingLightEnableValidMask() = 0xffffffffu;
+    writer.pendingLightEnableMask() = 0xaaaaaaaau;
+    auto consumer = masks.consume();
+    consumer.acceptTextureMask(represented);
+    consumer.acceptStreamMask(represented);
+    consumer.acceptRenderTargetMask(represented);
+    consumer.acceptClipPlaneMask(represented);
+    consumer.acceptLightMask(represented);
+    consumer.acceptLightEnableMask(represented);
+    check(masks.pendingTextureMask() == reference(
+              0xffffffffu, represented, D9C_DRAW_PACKET_MAX_TEXTURES) &&
+              masks.pendingStreamMask() == reference(
+                  0xffffffffu, represented, D9C_DRAW_PACKET_MAX_STREAMS) &&
+              masks.pendingRtMask() == reference(
+                  0xffffffffu, represented, D9C_DRAW_PACKET_MAX_RENDER_TARGETS) &&
+              masks.pendingClipPlaneMask() == reference(
+                  0xffffffffu, represented, 6u) &&
+              masks.pendingLightSlotMask() == reference(
+                  0xffffffffu, represented, D9C_DRAW_PACKET_MAX_LIGHTS) &&
+              masks.pendingLightEnableValidMask() == reference(
+                  0xffffffffu, represented, D9C_DRAW_PACKET_MAX_LIGHTS) &&
+              masks.pendingLightEnableMask() == reference(
+                  0xaaaaaaaau, represented, D9C_DRAW_PACKET_MAX_LIGHTS),
+          "production consumers bind the correct category and slot domain");
+  }
+
+  // The same consumer handles empty, sparse, and full typed tables.  The
+  // count guards are intentionally exercised through the production-facing
+  // consumer rather than by a test-only clear path.
+  PeHotStateShadow empty;
+  auto emptyConsumer = empty.consume();
+  emptyConsumer.acceptAllRenderStates();
+  emptyConsumer.acceptAllTextureStageStates();
+  emptyConsumer.acceptAllSamplerStates();
+  emptyConsumer.acceptAllTransforms();
+  check(!empty.hasPendingHotState(),
+        "empty compact settlement leaves all typed tables empty");
+
+  PeHotStateShadow sparse;
+  auto sparseWriter = sparse.writer();
+  sparseWriter.pendingRenderStatesTyped().set(renderStateSlotKey(7u), 7u);
+  sparseWriter.pendingTssTyped().set(textureStageIndexKey(2u),
+                                      textureStageStateTypeKey(3u), 23u);
+  SamplerIndex sparseSampler{};
+  SamplerStateType sparseSamplerType{};
+  check(samplerIndexKey(1u, sparseSampler) &&
+            samplerStateTypeKey(2u, sparseSamplerType),
+        "sparse compact sampler key is valid");
+  sparseWriter.pendingSamplerStatesTyped().set(sparseSampler,
+                                               sparseSamplerType, 12u);
+  sparseWriter.pendingTransformsTyped().set(transformStateKey(kD3dTsView),
+                                            identityTransformMatrix());
+  auto sparseConsumer = sparse.consume();
+  sparseConsumer.acceptAllRenderStates();
+  sparseConsumer.acceptAllTextureStageStates();
+  sparseConsumer.acceptAllSamplerStates();
+  sparseConsumer.acceptAllTransforms();
+  check(!sparse.hasPendingHotState(),
+        "sparse compact settlement clears each represented typed table");
+
+  PeHotStateShadow full;
+  auto fullWriter = full.writer();
+  for (std::uint32_t state = 0u; state < kPeRenderStateSlots; ++state) {
+    fullWriter.pendingRenderStatesTyped().set(renderStateSlotKey(state), state);
+  }
+  for (std::uint32_t stage = 0u; stage < kPeTextureStageSlots; ++stage) {
+    for (std::uint32_t type = 0u; type < kPeTextureStageStateSlots; ++type) {
+      fullWriter.pendingTssTyped().set(textureStageIndexKey(stage),
+                                       textureStageStateTypeKey(type),
+                                       stage * 64u + type);
+    }
+  }
+  for (std::uint32_t sampler = 0u; sampler < kPeSamplerSlots; ++sampler) {
+    for (std::uint32_t type = 0u; type < kPeSamplerStateSlots; ++type) {
+      SamplerIndex samplerKey{};
+      SamplerStateType typeKey{};
+      check(samplerIndexKey(samplerForSlot(SamplerIndex::fromRaw(sampler)),
+                            samplerKey) &&
+                samplerStateTypeKey(type, typeKey),
+            "full compact sampler key is valid");
+      fullWriter.pendingSamplerStatesTyped().set(samplerKey, typeKey,
+                                                 sampler * 16u + type);
+    }
+  }
+  fullWriter.pendingTransformsTyped().set(transformStateKey(kD3dTsView),
+                                          identityTransformMatrix());
+  fullWriter.pendingTransformsTyped().set(
+      transformStateKey(kD3dTsProjection), identityTransformMatrix());
+  for (std::uint32_t texture = kD3dTsTexture0;
+       texture <= kD3dTsTexture7; ++texture) {
+    fullWriter.pendingTransformsTyped().set(transformStateKey(texture),
+                                            identityTransformMatrix());
+  }
+  for (std::uint32_t world = kD3dTsWorld;
+       world < kD3dTsWorld + kPeTransformWorldSlots; ++world) {
+    fullWriter.pendingTransformsTyped().set(transformStateKey(world),
+                                            identityTransformMatrix());
+  }
+  auto fullConsumer = full.consume();
+  fullConsumer.acceptAllRenderStates();
+  fullConsumer.acceptAllTextureStageStates();
+  fullConsumer.acceptAllSamplerStates();
+  fullConsumer.acceptAllTransforms();
+  check(!full.hasPendingHotState(),
+        "full compact settlement clears every typed table");
+}
+
 void everyCategoryDirty() {
   Fixture f;
   f.name = "every category dirty";
@@ -2701,6 +2906,7 @@ int main() {
     emptyDelta();
     singleRenderStateDirty();
     scalarCategoriesDirty();
+    compactPendingMaskAndEmptyTableDifferential();
     everyCategoryDirty();
     attachmentsDirty();
     renderStatesAtCap();

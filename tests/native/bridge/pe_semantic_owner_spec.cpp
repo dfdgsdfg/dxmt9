@@ -52,6 +52,13 @@ using Owner = PeSemanticBatchOwner<22u, 8u, 128u, 8u, 8u>;
 using DefaultOwner = PeSemanticBatchOwner<>;
 using ProductionOwner = PeSemanticBatchOwner<256u, 256u, 1310720u, 1024u, 2048u>;
 
+template <typename T, typename = void>
+struct HasPublicPreparedAppendAuthority : std::false_type {};
+
+template <typename T>
+struct HasPublicPreparedAppendAuthority<
+    T, std::void_t<typename T::PreparedAppendAuthority>> : std::true_type {};
+
 struct Failure : std::runtime_error { using std::runtime_error::runtime_error; };
 void check(bool ok, std::string_view text) { if (!ok) throw Failure(std::string(text)); }
 
@@ -1411,6 +1418,51 @@ void exactPaddingWriterAdversarial() {
   retryCanonical.resetAndReleaseRetained();
   owner.reset();
   canonical.resetAndReleaseRetained();
+}
+
+void preparedAppendAuthorityAndSealBounds() {
+  Owner owner;
+  D9CSurface surface;
+  auto input = base(PeSemanticProducerKind::Present, 1u, 1u);
+  input.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0x7b1u, 1u);
+  check(owner.tryAppendOwnedRecord(input, []() noexcept { return true; }),
+        "authority fixture admits a bounded prepared record");
+
+  // The prepared append authority is private and has no public constructor or
+  // entry point; pure admission facts remain the only externally named plan.
+  static_assert(!HasPublicPreparedAppendAuthority<Owner>::value);
+
+  PeSemanticExactFixedEmission exact{};
+  std::array<std::byte, 1u> tooSmall{};
+  check(!owner.emitExactFixed(tooSmall, exact),
+        "ExactFixed rejects a destination below the sealed wire bounds");
+
+  alignas(8) std::array<std::byte, 4096u> exactBytes{};
+  check(owner.emitExactFixed(exactBytes, exact),
+        "ExactFixed accepts the complete sealed wire bounds");
+  std::array<std::byte, 4096u> records{};
+  std::array<std::byte, 4096u> handles{};
+  std::array<std::byte, 4096u> payload{};
+  PeSemanticSegmentedEmission segmented{};
+  check(!owner.emitSegmented(std::span<std::byte>(records).first(1u), handles,
+                             payload, segmented),
+        "segmented emission rejects a malformed record role bound");
+  check(!owner.emitSegmented(records, std::span<std::byte>(handles).first(1u),
+                             payload, segmented),
+        "segmented emission rejects a malformed handle role bound");
+  check(!owner.emitSegmented(records, handles,
+                             std::span<std::byte>(payload).first(1u),
+                             segmented),
+        "segmented emission rejects a malformed payload role bound");
+  check(owner.emitSegmented(records, handles, payload, segmented),
+        "segmented emission accepts the complete sealed role bounds");
+  PeSemanticSegmentedEmission alias{};
+  check(owner.emitSegmented(alias) && ownerSegmentedRolesEqualExact(exact, alias) &&
+            ownerSegmentedRolesEqualExact(exact, segmented),
+        "contiguous and segmented authority outputs preserve exact role bytes");
+  owner.reset();
+  check(surface.refs == 1u,
+        "authority and seal-bound fixture releases its retained pin");
 }
 
 void duplicateSurfacePinSmoke() {
@@ -4445,6 +4497,80 @@ void observerSeparatesPrepareMalformedFromHeader() {
         "observer outcome ledger preserves malformed and header denominators");
 }
 
+void compactAppendQuotaProofAndRollback() {
+  // Use the real immutable compact plan, not the generic sparse adapter whose
+  // copy path retains its own quota checks. Isolate each removed check: one
+  // scalar category's count, then the variable semantic-byte frontier.
+  using QuotaOwner = PeSemanticBatchOwner<4u, 8u, 16u, 8u, 1u>;
+  for (const bool variableBytes : {false, true}) {
+    QuotaOwner owner;
+    D9CSurface surface;
+    auto prefix = base(PeSemanticProducerKind::Present, 1u, 1u);
+    prefix.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface,
+                                                            0x7c1u, 1u);
+    check(owner.admit(prefix), "compact quota fixture retains its prefix");
+    PeSemanticExactFixedEmission prefixEmission{};
+    check(owner.emitExactFixed(prefixEmission), "compact quota prefix emits");
+    const std::vector<std::byte> prefixBytes(prefixEmission.wire.begin(),
+                                             prefixEmission.wire.end());
+
+    PeHotStateShadow shadow{};
+    PeConstShadowBlock constants{};
+    if (variableBytes) {
+      constants.vsConstF.values.assign(16u, 0x71u);
+      constants.vsConstF.dirtyElems.assign(1u, 1u);
+      constants.vsConstF.dirtyStart = 0u;
+      constants.vsConstF.dirtyEnd = 1u;
+    } else {
+      shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(7u),
+                                                      0x71u);
+    }
+    PeBindingView bindings{};
+    PeDrawPayloads payloads{};
+    PeDrawParams params{.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                        .primitiveType = 4u, .primitiveCount = 1u};
+    PeChunkContext chunk{};
+    SparseStatePlan plan;
+    std::recursive_mutex mutex;
+    dxmt9::core::ThreadOwnershipToken thread;
+    std::uint64_t epoch = 1u;
+    RecorderLockGuard guard(mutex, false);
+    std::uint32_t callbacks = 0u;
+    check(guard.withCapability(thread, epoch, [&](const auto& access) noexcept {
+      if (!buildSparseStatePlan(access, shadow, constants, bindings, payloads,
+                                params, false, variableBytes, plan) ||
+          !finalizeSparseStatePlanChunkContext(access, chunk, plan)) return false;
+      const auto append = [&](std::uint64_t ordinal, bool settle) noexcept {
+        return owner.tryAppendSparseStatePlan(
+            access, plan, PeSemanticProducerKind::DrawPrimitive, params.recordType,
+            D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, ordinal, ordinal,
+            [&]() noexcept { ++callbacks; return settle; });
+      };
+      if (append(2u, false) || callbacks != 1u || owner.size() != 1u)
+        return false;
+      PeSemanticExactFixedEmission afterRollback{};
+      if (!owner.emitExactFixed(afterRollback) ||
+          !std::ranges::equal(afterRollback.wire, prefixBytes)) return false;
+      if (!append(2u, true) || callbacks != 2u || owner.size() != 2u)
+        return false;
+      PeSemanticExactFixedEmission accepted{};
+      if (!owner.emitExactFixed(accepted)) return false;
+      const std::vector<std::byte> acceptedBytes(accepted.wire.begin(),
+                                                accepted.wire.end());
+      // The first record exactly fills this dimension. Plus one must fail in
+      // preparation, before the settlement callback or any committed mutation.
+      if (append(3u, true) || callbacks != 2u || owner.size() != 2u ||
+          owner.lastAdmissionFailure() != QuotaOwner::AdmissionFailure::Capacity)
+        return false;
+      PeSemanticExactFixedEmission afterCapacity{};
+      return owner.emitExactFixed(afterCapacity) &&
+             std::ranges::equal(afterCapacity.wire, acceptedBytes);
+    }), "compact quota capability preserves rollback, exact fit and CapacityPre");
+    owner.reset();
+    check(surface.refs == 1u, "compact quota retry balances prefix retention");
+  }
+}
+
 // Exercise the actual compact producer at the schema's legal maximum binding
 // occurrence count. This uses an ordinary indexed draw rather than a snapshot
 // or a hand-built SparseStatePlan, so plan selection, destination finalization,
@@ -4920,6 +5046,8 @@ int main(int argc, char** argv) {
     emptyClearSpanMatchesCanonicalAndResetReuse();
     largeCanonicalPayloadSurvivesRepeatedExactEmission();
     exactPaddingWriterAdversarial();
+    preparedAppendAuthorityAndSealBounds();
+    compactAppendQuotaProofAndRollback();
     collisionCopyOverflowAndRetry();
     pinIndexGenerationReferenceTrace();
     r712R713BoundedIdentityAndLifecycleRefinement();

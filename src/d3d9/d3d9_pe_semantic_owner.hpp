@@ -2041,6 +2041,35 @@ class PeSemanticBatchOwner final {
   }
 
  private:
+  // A call-local authority for the destination-relative facts proven by
+  // prepareAdmission().  The type and constructor stay private, so producers
+  // can provide inputs but cannot mint an unchecked append authority.  The
+  // witness pointer binds its logical quota deltas and original frontiers;
+  // the owner pointer binds the destination. Neither is copied into a second
+  // authority table. The token never escapes this synchronous append.
+  class PreparedAppendAuthority {
+   public:
+    PreparedAppendAuthority(const PreparedAppendAuthority&) = delete;
+    PreparedAppendAuthority& operator=(const PreparedAppendAuthority&) = delete;
+
+   private:
+    friend class PeSemanticBatchOwner;
+    PreparedAppendAuthority(const void* prepared,
+                            const PeSemanticBatchOwner& owner) noexcept
+        : prepared_(prepared), owner_(&owner) {}
+
+    bool binds(const auto& prepared,
+               const PeSemanticBatchOwner& owner) const noexcept {
+      return prepared_ == &prepared && owner_ == &owner &&
+             prepared.admissibleAt(owner.recordCount_,
+                                   owner.emissionHandleCount_,
+                                   owner.emissionPayloadBytes_);
+    }
+
+    const void* prepared_ = nullptr;
+    const PeSemanticBatchOwner* owner_ = nullptr;
+  };
+
   template <std::size_t IdentityCapacity>
   PeSemanticAdmissionOutcome prepareAdmissionQualified(
       const PeSemanticSparsePlanRecordInput& input,
@@ -2371,10 +2400,6 @@ class PeSemanticBatchOwner final {
         lastAdmissionFailure_ = AdmissionFailure::Unavailable;
         return false;
       }
-      // Nothing between prepareAdmission() and here mutates the destination,
-      // so this is an invariant guard rather than a second capacity pass: a
-      // witness that describes another record, or was proved against another
-      // frontier, fails closed.
       if (prepared.producer != peSemanticProducer(input) ||
           preparedRecordType(prepared) != peSemanticRecordType(input) ||
           !prepared.admissibleAt(recordCount_, emissionHandleCount_,
@@ -2389,6 +2414,11 @@ class PeSemanticBatchOwner final {
         rollbackPhase(checkpoint);
         return false;
       }
+      // Issue the destination-bound authority only after source/header
+      // requalification.  All prepared consumers below use this one proof;
+      // no public operation accepts the private token, and the token never
+      // crosses the settlement callback.
+      const PreparedAppendAuthority authority(&prepared, *this);
       using Staging = std::conditional_t<
           PeSemanticConstantInputLike<Input>,
           PeSemanticConstantRecordStaging,
@@ -2398,7 +2428,8 @@ class PeSemanticBatchOwner final {
       Staging slot;
       if (!runPhase(PeSemanticOwnerPhase::FixedDirectPinCopy,
                     [&]() noexcept {
-                      return copyPreparedFixedAndDirect(input, slot, prepared);
+                      return copyPreparedFixedAndDirect(input, slot, prepared,
+                                                        authority);
                     })) {
         rollbackPhase(checkpoint);
         return false;
@@ -2408,7 +2439,7 @@ class PeSemanticBatchOwner final {
       if (!runPhase(PeSemanticOwnerPhase::SparseVariableCopy,
                     [&]() noexcept {
                       return copyPreparedSparseAndVariable(input, slot,
-                                                           prepared);
+                                                           prepared, authority);
                     })) {
         if (lastAdmissionFailure_ == AdmissionFailure::None)
           lastAdmissionFailure_ = AdmissionFailure::Sparse;
@@ -2418,8 +2449,8 @@ class PeSemanticBatchOwner final {
       if (!runPhase(PeSemanticOwnerPhase::CanonicalMaterializationMetrics,
                     [&]() noexcept {
                       return materializePreparedCanonicalRecord(
-                                 input, slot, prepared) &&
-                             cacheEmissionMetrics(prepared);
+                                 input, slot, prepared, authority) &&
+                             cacheEmissionMetrics(prepared, authority);
                     })) {
         if (lastAdmissionFailure_ == AdmissionFailure::None)
           lastAdmissionFailure_ = AdmissionFailure::EmissionMetrics;
@@ -3153,15 +3184,7 @@ class PeSemanticBatchOwner final {
   template <std::size_t N>
   using PinIndex = PeSemanticPinIndex<N>;
 
-  struct EmissionRecordPlan {
-    std::size_t payloadOffset = 0u;
-    std::size_t payloadBytes = 0u;
-    std::size_t firstHandle = 0u;
-    std::size_t handleCount = 0u;
-  };
-
   struct EmissionPlan {
-    std::array<EmissionRecordPlan, MaxRecords> records{};
     D9CCommandChunkWireHeader header{};
     std::size_t recordCount = 0u;
     std::size_t handleCount = 0u;
@@ -3468,10 +3491,6 @@ class PeSemanticBatchOwner final {
           record.handleCount > emissionHandleCount_ - record.firstHandle) {
         return false;
       }
-      out.records[i] = {.payloadOffset = record.payloadOffset,
-                        .payloadBytes = record.payloadSize,
-                        .firstHandle = record.firstHandle,
-                        .handleCount = record.handleCount};
     }
     out.recordCount = recordCount_;
     out.handleCount = emissionHandleCount_;
@@ -4391,10 +4410,15 @@ class PeSemanticBatchOwner final {
   bool materializeCanonicalRecord(
       const Input& input,
       const auto& slot,
-      const auto& prepared) noexcept {
-    if (!prepared.valid() || prepared.recordCount != recordCount_ ||
-        prepared.emissionHandleCount != emissionHandleCount_ ||
-        prepared.emissionPayloadBytes != emissionPayloadBytes_ ||
+      const auto& prepared,
+      const PreparedAppendAuthority& authority) noexcept {
+    // Generic/control staging can acquire resources before reaching this
+    // point. Preserve its pre-write frontier guard, not merely the later
+    // post-serializer check. Compact staging has no callbacks before here.
+    if constexpr (PeSemanticRecordInputLike<Input>) {
+      if (!authority.binds(prepared, *this)) return false;
+    }
+    if (!prepared.valid() ||
         prepared.plan.handleCount > kMaxRecordHandles ||
         prepared.payloadOffset > Storage::maxWirePayloadBytes ||
         prepared.plan.payloadBytes >
@@ -4457,17 +4481,17 @@ class PeSemanticBatchOwner final {
               PeSemanticSparsePlanInputLike<Input>)
   bool materializePreparedCanonicalRecord(
       const Input& input, const auto& slot,
-      const auto& prepared) noexcept {
-    return materializeCanonicalRecord(input, slot, prepared);
+      const auto& prepared,
+      const PreparedAppendAuthority& authority) noexcept {
+    return materializeCanonicalRecord(input, slot, prepared, authority);
   }
 
   bool materializePreparedCanonicalRecord(
       const PeSemanticConstantRecordInput& input,
       const PeSemanticConstantRecordStaging& slot,
-      const PeSemanticPreparedConstantRecord& prepared) noexcept {
-    if (!prepared.valid() || prepared.recordCount != recordCount_ ||
-        prepared.emissionHandleCount != emissionHandleCount_ ||
-        prepared.emissionPayloadBytes != emissionPayloadBytes_ ||
+      const PeSemanticPreparedConstantRecord& prepared,
+      const PreparedAppendAuthority& authority) noexcept {
+    if (!authority.binds(prepared, *this) ||
         prepared.payloadOffset > Storage::maxWirePayloadBytes ||
         prepared.payloadBytes >
             Storage::maxWirePayloadBytes - prepared.payloadOffset ||
@@ -4673,22 +4697,22 @@ class PeSemanticBatchOwner final {
   // Settlement of the prepared witness. The capacity proof already aligned and
   // bounded this record's frontier, so publication is an assignment guarded by
   // the same destination-identity check the append entry made.
-  bool cacheEmissionMetrics(const auto& prepared) noexcept {
-    if (!prepared.admissibleAt(recordCount_, emissionHandleCount_,
-                               emissionPayloadBytes_)) {
-      return false;
-    }
+  bool cacheEmissionMetrics(
+      const auto& prepared,
+      const PreparedAppendAuthority& authority) noexcept {
+    // Resource acquisition inside the serializer can invoke callbacks. Keep
+    // the original post-source validity/frontier requalification; the removed
+    // quota recheck was in compact copySparsePlan, not in admissibleAt.
+    if (!authority.binds(prepared, *this)) return false;
     emissionPayloadBytes_ = prepared.nextEmissionPayloadBytes;
     emissionHandleCount_ = prepared.nextEmissionHandleCount;
     return true;
   }
 
   bool cacheEmissionMetrics(
-      const PeSemanticPreparedConstantRecord& prepared) noexcept {
-    if (!prepared.admissibleAt(recordCount_, emissionHandleCount_,
-                               emissionPayloadBytes_)) {
-      return false;
-    }
+      const PeSemanticPreparedConstantRecord& prepared,
+      const PreparedAppendAuthority& authority) noexcept {
+    if (!authority.binds(prepared, *this)) return false;
     emissionPayloadBytes_ = prepared.nextEmissionPayloadBytes;
     emissionHandleCount_ = prepared.nextEmissionHandleCount;
     return true;
@@ -5127,7 +5151,8 @@ class PeSemanticBatchOwner final {
   template <PeSemanticRecordInputLike Input>
   bool copyPreparedFixedAndDirect(
       const Input& input, PeSemanticRecordSlot& slot,
-      const auto& prepared) noexcept {
+      const auto& prepared,
+      const PreparedAppendAuthority&) noexcept {
     if (!copyFixedValues(input, slot)) {
       lastAdmissionFailure_ = AdmissionFailure::Fixed;
       return false;
@@ -5142,7 +5167,8 @@ class PeSemanticBatchOwner final {
   bool copyPreparedFixedAndDirect(
       const PeSemanticConstantRecordInput& input,
       PeSemanticConstantRecordStaging& slot,
-      const PeSemanticPreparedConstantRecord&) noexcept {
+      const PeSemanticPreparedConstantRecord&,
+      const PreparedAppendAuthority&) noexcept {
     if (copyFixedValues(input, slot)) return true;
     lastAdmissionFailure_ = AdmissionFailure::Fixed;
     return false;
@@ -5151,7 +5177,7 @@ class PeSemanticBatchOwner final {
   bool copyPreparedFixedAndDirect(
       const PeSemanticSparsePlanRecordInput& input,
       PeSemanticSparsePlanRecordStaging& slot,
-      const auto&) noexcept {
+      const auto&, const PreparedAppendAuthority&) noexcept {
     if (copyFixedValues(input, slot)) return true;
     lastAdmissionFailure_ = AdmissionFailure::Fixed;
     return false;
@@ -5303,15 +5329,19 @@ class PeSemanticBatchOwner final {
   }
 
   bool copySparsePlan(const PeSemanticSparsePlanRecordInput& input,
-                      const auto& prepared) noexcept {
+                      const auto& prepared,
+                      const PreparedAppendAuthority& authority) noexcept {
+    // The private authority carries the already-complete 17-category quota
+    // proof and the unchanged destination frontier. Source validity and the
+    // physical payload/handle checks remain in the serializer below; this
+    // path only publishes the proved logical deltas.
+    (void)authority;
     if (!input.valid() || !prepared.sparseLayout.valid) return false;
     const auto& quota = prepared.sparseLayout.quotaDeltas;
     const auto claim = [&](std::size_t kind) noexcept {
       if (kind >= quota.size()) return false;
       const auto count = static_cast<std::size_t>(quota[kind]);
       if (count == 0u) return true;
-      if (sparseCounts_.values[kind] > MaxSparseValues ||
-          count > MaxSparseValues - sparseCounts_.values[kind]) return false;
       sparseCounts_.values[kind] += count;
       return true;
     };
@@ -5336,14 +5366,16 @@ class PeSemanticBatchOwner final {
 
   bool copyVariablePayloads(
       const PeSemanticSparsePlanRecordInput& input,
-      PeSemanticSparsePlanRecordStaging&, const auto& prepared) noexcept {
+      PeSemanticSparsePlanRecordStaging&, const auto& prepared,
+      const PreparedAppendAuthority& authority) noexcept {
+    (void)authority;
     if (!input.valid()) return false;
     // Compact plans serialize these borrowed ranges directly from the plan;
     // only the aggregate logical quota is committed. Do not populate the
     // seven logical range fields or their six constant headers in staging.
-    if (semanticBytes_ > MaxSemanticBytes ||
-        prepared.sparseLayout.semanticDelta >
-            MaxSemanticBytes - semanticBytes_) return false;
+    // The authority binds the semantic frontier and the prepared delta. The
+    // physical payload bounds are still checked by materialization; this
+    // assignment only publishes the already-proven logical quota.
     semanticBytes_ += prepared.sparseLayout.semanticDelta;
     return true;
   }
@@ -5351,7 +5383,9 @@ class PeSemanticBatchOwner final {
   template <PeSemanticRecordInputLike Input>
   bool copyPreparedSparseAndVariable(
       const Input& input, PeSemanticRecordSlot& slot,
-      const auto& prepared) noexcept {
+      const auto& prepared,
+      const PreparedAppendAuthority& authority) noexcept {
+    (void)authority;
     if (!copySparse(input, slot, prepared)) return false;
     if (!copyVariablePayloads(input, slot)) {
       lastAdmissionFailure_ = AdmissionFailure::VariablePayload;
@@ -5363,7 +5397,8 @@ class PeSemanticBatchOwner final {
   bool copyPreparedSparseAndVariable(
       const PeSemanticConstantRecordInput& input,
       PeSemanticConstantRecordStaging& slot,
-      const PeSemanticPreparedConstantRecord&) noexcept {
+      const PeSemanticPreparedConstantRecord&,
+      const PreparedAppendAuthority&) noexcept {
     (void)slot;
     if (appendLogicalBytes(input.constantBytes)) return true;
     lastAdmissionFailure_ = AdmissionFailure::VariablePayload;
@@ -5373,13 +5408,14 @@ class PeSemanticBatchOwner final {
   bool copyPreparedSparseAndVariable(
       const PeSemanticSparsePlanRecordInput& input,
       PeSemanticSparsePlanRecordStaging& slot,
-      const auto& prepared) noexcept {
-    if (!copySparsePlan(input, prepared)) {
+      const auto& prepared,
+      const PreparedAppendAuthority& authority) noexcept {
+    if (!copySparsePlan(input, prepared, authority)) {
       if (lastAdmissionFailure_ == AdmissionFailure::None)
         lastAdmissionFailure_ = AdmissionFailure::Sparse;
       return false;
     }
-    if (!copyVariablePayloads(input, slot, prepared)) {
+    if (!copyVariablePayloads(input, slot, prepared, authority)) {
       lastAdmissionFailure_ = AdmissionFailure::VariablePayload;
       return false;
     }
