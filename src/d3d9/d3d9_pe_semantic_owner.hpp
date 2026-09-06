@@ -1905,8 +1905,45 @@ class PeSemanticBatchOwner final {
         !fitsPins(shaderCount_, witness.retentionDeltas[3]) ||
         !fitsPins(declarationCount_, witness.retentionDeltas[4]) ||
         !fitsPins(queryCount_, witness.retentionDeltas[5])) return false;
-    return proveEmissionCapacity(witness, plan.payloadBytes, plan.handleCount,
+    return proveAggregateRetentionCapacity(witness) &&
+           proveEmissionCapacity(witness, plan.payloadBytes, plan.handleCount,
                                  plan.semanticBytes);
+  }
+
+  template <std::size_t IdentityCapacity>
+  bool proveAggregateRetentionCapacity(
+      const PeSemanticPreparedRecordT<IdentityCapacity>& witness) const noexcept {
+    // Deltas are a disjoint partition of the bounded identity witness. Their
+    // sum is a safe upper bound: some new current-chunk pins are already warm.
+    // Ordinary records need no second identity walk or retainer hash lookup.
+    std::size_t upperBound = 0u;
+    for (const auto delta : witness.retentionDeltas) upperBound += delta;
+    if (retainer_.hasHeadroom(upperBound, warmRetainerCapacity)) return true;
+    if (!retainer_.hasHeadroom(0u, warmRetainerCapacity)) return false;
+
+    // Only a near-ceiling record needs exact warm membership. Consume the
+    // existing unique identity table rather than materializing/deduplicating
+    // another candidate list. This query neither refreshes an epoch nor
+    // consumes the unique-acquisition fault point.
+    const auto headroom = warmRetainerCapacity - retainer_.size();
+    std::size_t novel = 0u;
+    for (std::size_t i = 0u; i < witness.identityWitness.count; ++i) {
+      const auto& entry = witness.identityWitness.entries[i];
+      std::size_t currentCount = 0u;
+      switch (entry.identity.kind) {
+        case D9C_CHUNK_HANDLE_KIND_SURFACE: currentCount = surfaceCount_; break;
+        case D9C_CHUNK_HANDLE_KIND_TEXTURE: currentCount = textureCount_; break;
+        case D9C_CHUNK_HANDLE_KIND_BUFFER: currentCount = bufferCount_; break;
+        case D9C_CHUNK_HANDLE_KIND_SHADER: currentCount = shaderCount_; break;
+        case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL: currentCount = declarationCount_; break;
+        case D9C_CHUNK_HANDLE_KIND_QUERY: currentCount = queryCount_; break;
+        default: return false;
+      }
+      if (entry.pin < currentCount) continue;
+      if (!retainer_.containsWireObject(entry.identity.kind, entry.object) &&
+          ++novel > headroom) return false;
+    }
+    return true;
   }
 
   // Fold one record's identity dedup into the owner's retention question.  It
@@ -1988,12 +2025,29 @@ class PeSemanticBatchOwner final {
     witness.resetForAdmission();
     witness.plan = {};
     if (!ready_) return PeSemanticAdmissionOutcome::Unavailable;
-    const auto* source = input.qualifiedSource();
-    if (source == nullptr || source->fullSnapshot)
+    if (input.access == nullptr || input.sparsePlan == nullptr)
       return PeSemanticAdmissionOutcome::Malformed;
-    const auto& plan = *input.sparsePlan;
-    const auto& sourceFacts = *source;
-    const auto& destinationFacts = plan.destination();
+    PeSemanticAdmissionOutcome outcome =
+        PeSemanticAdmissionOutcome::Malformed;
+    const bool qualified = input.sparsePlan->withQualifiedSources(
+        *input.access,
+        [&](const SparseStatePlan::QualifiedSources& sources) noexcept {
+          if (sources.destination.chunkContextFinalized == false ||
+              sources.source.fullSnapshot ||
+              sources.source.draw.recordType != input.recordType) return;
+          outcome = prepareAdmissionQualified(input, witness, sources);
+        });
+    return qualified ? outcome : PeSemanticAdmissionOutcome::Malformed;
+  }
+
+ private:
+  template <std::size_t IdentityCapacity>
+  PeSemanticAdmissionOutcome prepareAdmissionQualified(
+      const PeSemanticSparsePlanRecordInput& input,
+      PeSemanticPreparedRecordT<IdentityCapacity>& witness,
+      const SparseStatePlan::QualifiedSources& sources) const noexcept {
+    const auto& sourceFacts = sources.source;
+    const auto& destinationFacts = sources.destination;
     witness.producer = input.producer;
     witness.rule = recordRule(input.recordType);
     const auto* policy = peSemanticProducerPolicy(input.recordType);
@@ -2055,9 +2109,9 @@ class PeSemanticBatchOwner final {
       return true;
     };
     bool sourcesValid = false;
-    const bool borrowed = plan.withEmitSources(*input.access,
-        [&](const PeHotStateShadow& shadow,
-            const PeBindingView& bindings) noexcept {
+    const auto& shadow = sources.shadow;
+    const auto& bindings = sources.bindings;
+    const bool borrowed = [&]() noexcept {
           const auto renderStates = sourceFacts.fullSnapshot
               ? shadow.renderStateShadowTyped()
               : sourceFacts.pendingDelta.pendingRenderStatesTyped();
@@ -2083,7 +2137,8 @@ class PeSemanticBatchOwner final {
               (sourceFacts.lightMask &
                ~((1u << D9C_DRAW_PACKET_MAX_LIGHTS) - 1u)) != 0u ||
               (sourceFacts.lightEnableMask &
-               ~((1u << D9C_DRAW_PACKET_MAX_LIGHTS) - 1u)) != 0u) return;
+               ~((1u << D9C_DRAW_PACKET_MAX_LIGHTS) - 1u)) != 0u)
+            return false;
           bool ok = true;
           const auto add = [&](const PeWireObjectRef& ref, std::uint32_t kind,
                                std::size_t pinKind, std::size_t family,
@@ -2093,7 +2148,7 @@ class PeSemanticBatchOwner final {
                 witness.bindingOccurrences.ranges[family].offset + occurrence];
             ok = retain(ref, kind, pinKind, locator, occurrence);
           };
-          if (!beginFamily(0u, std::popcount(sourceFacts.textureMask))) return;
+          if (!beginFamily(0u, std::popcount(sourceFacts.textureMask))) return false;
           std::size_t occurrence = 0u;
           for (std::uint32_t slot = 0u;
                slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
@@ -2101,9 +2156,9 @@ class PeSemanticBatchOwner final {
             add(bindings.textures[slot], D9C_CHUNK_HANDLE_KIND_TEXTURE,
                 1u, 0u, occurrence++);
           }
-          if (!ok) return;
+          if (!ok) return false;
           witness.bindingOccurrences.count += occurrence;
-          if (!beginFamily(1u, std::popcount(destinationFacts.streamMask))) return;
+          if (!beginFamily(1u, std::popcount(destinationFacts.streamMask))) return false;
           occurrence = 0u;
           for (std::uint32_t slot = 0u;
                slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
@@ -2111,9 +2166,9 @@ class PeSemanticBatchOwner final {
             add(bindings.streams[slot].buffer, D9C_CHUNK_HANDLE_KIND_BUFFER,
                 2u, 1u, occurrence++);
           }
-          if (!ok) return;
+          if (!ok) return false;
           witness.bindingOccurrences.count += occurrence;
-          if (!beginFamily(2u, std::popcount(sourceFacts.shaderMask))) return;
+          if (!beginFamily(2u, std::popcount(sourceFacts.shaderMask))) return false;
           occurrence = 0u;
           if ((sourceFacts.shaderMask & 1u) != 0u)
             add(bindings.vs, D9C_CHUNK_HANDLE_KIND_SHADER, 3u, 2u,
@@ -2121,9 +2176,9 @@ class PeSemanticBatchOwner final {
           if ((sourceFacts.shaderMask & 2u) != 0u)
             add(bindings.ps, D9C_CHUNK_HANDLE_KIND_SHADER, 3u, 2u,
                 occurrence++);
-          if (!ok) return;
+          if (!ok) return false;
           witness.bindingOccurrences.count += occurrence;
-          if (!beginFamily(3u, sourceFacts.vertexInput ? 1u : 0u)) return;
+          if (!beginFamily(3u, sourceFacts.vertexInput ? 1u : 0u)) return false;
           occurrence = 0u;
           if (sourceFacts.vertexInput) {
             const PeWireObjectRef ref =
@@ -2134,17 +2189,17 @@ class PeSemanticBatchOwner final {
             add(ref, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, 4u, 3u,
                 occurrence++);
           }
-          if (!ok) return;
+          if (!ok) return false;
           witness.bindingOccurrences.count += occurrence;
-          if (!beginFamily(4u, destinationFacts.indexBuffer ? 1u : 0u)) return;
+          if (!beginFamily(4u, destinationFacts.indexBuffer ? 1u : 0u)) return false;
           occurrence = 0u;
           if (destinationFacts.indexBuffer)
             add(bindings.indexBuffer, D9C_CHUNK_HANDLE_KIND_BUFFER, 2u, 4u,
                 occurrence++);
-          if (!ok) return;
+          if (!ok) return false;
           witness.bindingOccurrences.count += occurrence;
           if (!beginFamily(
-                         5u, std::popcount(sourceFacts.renderTargetMask))) return;
+                         5u, std::popcount(sourceFacts.renderTargetMask))) return false;
           occurrence = 0u;
           for (std::uint32_t slot = 0u;
                slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
@@ -2152,17 +2207,18 @@ class PeSemanticBatchOwner final {
             add(bindings.renderTargets[slot], D9C_CHUNK_HANDLE_KIND_SURFACE,
                 0u, 5u, occurrence++);
           }
-          if (!ok) return;
+          if (!ok) return false;
           witness.bindingOccurrences.count += occurrence;
-          if (!beginFamily(6u, sourceFacts.depthStencil ? 1u : 0u)) return;
+          if (!beginFamily(6u, sourceFacts.depthStencil ? 1u : 0u)) return false;
           occurrence = 0u;
           if (sourceFacts.depthStencil)
             add(bindings.depthStencil, D9C_CHUNK_HANDLE_KIND_SURFACE, 0u,
                 6u, occurrence++);
-          if (!ok) return;
+          if (!ok) return false;
           witness.bindingOccurrences.count += occurrence;
-          sourcesValid = true;
-        });
+      sourcesValid = true;
+      return true;
+    }();
     if (!borrowed || !sourcesValid ||
         !detail::checkedSizeToU32(identities.wireCount,
                                   witness.plan.handleCount)) {
@@ -2177,6 +2233,7 @@ class PeSemanticBatchOwner final {
     return PeSemanticAdmissionOutcome::Admissible;
   }
 
+ public:
   // Observation-only preparation. One pass over the immutable input answers
   // layout, retention deltas, and exact emission frontier.
   template <PeSemanticRecordInputLike Input>
@@ -3679,17 +3736,14 @@ class PeSemanticBatchOwner final {
     return sectionIndex == count && cursor == payload.size();
   }
 
-  bool writeSparsePlanPayload(
-      const PeSemanticSparsePlanRecordInput& input,
+  bool writeSparsePlanPayloadQualified(
       const PeSemanticSparsePlanRecordStaging& slot,
       std::span<std::byte> payload,
       std::size_t globalFirst,
-      const auto& prepared) noexcept {
-    const auto* source = input.qualifiedSource();
-    if (source == nullptr) return false;
-    const auto& plan = *input.sparsePlan;
-    const auto& sourceFacts = *source;
-    const auto& destinationFacts = plan.destination();
+      const auto& prepared,
+      const SparseStatePlan::QualifiedSources& sources) noexcept {
+    const auto& sourceFacts = sources.source;
+    const auto& destinationFacts = sources.destination;
     const auto& layout = prepared.sparseLayout;
     const auto count = static_cast<std::size_t>(layout.sectionCount);
     if (!layout.valid || count > D9C_COMMAND_CHUNK_SECTION_COUNT ||
@@ -3932,9 +3986,9 @@ class PeSemanticBatchOwner final {
           });
     };
     bool emitted = false;
-    const bool borrowed = plan.withEmitSources(*input.access,
-        [&](const PeHotStateShadow& shadow,
-            const PeBindingView& bindings) noexcept {
+    const auto& shadow = sources.shadow;
+    const auto& bindings = sources.bindings;
+    {
           const auto renderStates = sourceFacts.pendingDelta.pendingRenderStatesTyped();
           const auto tss = sourceFacts.pendingDelta.pendingTssTyped();
           const auto samplers = sourceFacts.pendingDelta.pendingSamplerStatesTyped();
@@ -3942,7 +3996,7 @@ class PeSemanticBatchOwner final {
           if (renderStates.size() != sourceFacts.renderStateCount ||
               tss.size() != sourceFacts.textureStageStateCount ||
               samplers.size() != sourceFacts.samplerStateCount ||
-              transforms.size() != sourceFacts.transformCount) return;
+              transforms.size() != sourceFacts.transformCount) return false;
           const auto visitRenderStates = [&](const auto& emit) noexcept {
             bool ok = true;
             renderStates.forEach(
@@ -4160,9 +4214,28 @@ class PeSemanticBatchOwner final {
                   sourceFacts.payloads.upIndex) &&
               raw(D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA,
                   sourceFacts.payloads.upVertex);
-        });
-    return borrowed && emitted && sectionIndex == count &&
+    }
+    return emitted && sectionIndex == count &&
            cursor == payload.size();
+  }
+
+  bool writeSparsePlanPayload(
+      const PeSemanticSparsePlanRecordInput& input,
+      const PeSemanticSparsePlanRecordStaging& slot,
+      std::span<std::byte> payload,
+      std::size_t globalFirst,
+      const auto& prepared) noexcept {
+    if (input.access == nullptr || input.sparsePlan == nullptr) return false;
+    bool written = false;
+    const bool qualified = input.sparsePlan->withQualifiedSources(
+        *input.access,
+        [&](const SparseStatePlan::QualifiedSources& sources) noexcept {
+          if (!sources.destination.chunkContextFinalized ||
+              sources.source.draw.recordType != input.recordType) return;
+          written = writeSparsePlanPayloadQualified(
+              slot, payload, globalFirst, prepared, sources);
+        });
+    return qualified && written;
   }
 
   bool writeConstantPayload(std::span<const std::byte> source,
@@ -4848,10 +4921,17 @@ class PeSemanticBatchOwner final {
   bool copyFixedValues(
       const PeSemanticSparsePlanRecordInput& input,
       PeSemanticSparsePlanRecordStaging& slot) noexcept {
-    const auto* source = input.qualifiedSource();
-    if (source == nullptr) return false;
-    slot.draw = sparseStatePlanDrawHeader(*source);
-    return true;
+    if (input.access == nullptr || input.sparsePlan == nullptr) return false;
+    bool copied = false;
+    const bool qualified = input.sparsePlan->withQualifiedSources(
+        *input.access,
+        [&](const SparseStatePlan::QualifiedSources& sources) noexcept {
+          if (!sources.destination.chunkContextFinalized ||
+              sources.source.draw.recordType != input.recordType) return;
+          slot.draw = sparseStatePlanDrawHeader(sources.source);
+          copied = true;
+        });
+    return qualified && copied;
   }
 
   template <PeSemanticRecordInputLike Input>

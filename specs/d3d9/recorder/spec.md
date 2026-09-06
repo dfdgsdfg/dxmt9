@@ -803,6 +803,34 @@ partial acquisition, and settlement failure/retry. Existing recorder models
 still own transaction order; value/identity refinement and release codegen are
 separate acceptance obligations, followed by matched runtime direction checks.
 
+R-CORE-REC-7.26–7.30 close residual intra-operation and capacity work. A compact
+operation may issue one lexical source bundle after live access and ticket
+qualification, then consume its facts without repeatedly issuing the same
+proof. An accepted result cannot cross a callback that can invalidate its
+sources without fresh qualification; the typed destination finalizer retains
+its post-callback check. Source mutation checks remain separate from owner/epoch
+checks. Reused plan
+storage initializes active facts and explicitly revokes absent fields before
+publishing validity, rather than relying on clearing an entire prior product.
+
+The retainer owns both age-summary validity and aggregate membership. A summary
+may bypass a no-expiry traversal, but uncertainty takes the serial scan and
+rebuild. Preparation uses pure aggregate headroom/membership facts in addition
+to per-kind current pin quotas. It must not touch an epoch, acquire a pin, or
+consume a fault point. Aggregate denial uses existing CapacityPre handling;
+warm retention is not shortened to force progress, and a retry is bounded even
+if committing the prior chunk does not free sufficient headroom.
+
+`PeBindingView` stream metadata is the live offset/stride authority. Temporary
+SWVP changes use scoped restoration instead of synchronizing a second array on
+every draw. The production override operation is also the native refinement
+subject; arbitrary Wine callbacks and final pixels remain outside that proof.
+These are PE-local value/ownership refinements: existing recorder TLA models
+continue to own commit/settlement ordering, while exhaustive native checks own
+the new age, capacity, source-access, and metadata facts. They change neither
+the wire ABI nor Unix queue/encode policy. Missing runtime/codegen evidence is
+recorded in the recorder gap rather than inferred from passing model checks.
+
 The optional owner-qualified copy/materialization ledger binds this same
 transaction at its two physical ownership boundaries. A successful admission
 records the increase in live typed record, pin, and canonical-role

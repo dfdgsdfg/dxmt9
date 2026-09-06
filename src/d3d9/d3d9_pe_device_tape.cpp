@@ -73,11 +73,8 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
             .payloadBytes = 1024u * 1024u,
             .sealedBytes = 1024u * 1024u,
         });
-        // The bootstrap is a checkpoint of the live PE shadow, not of the
-        // last draw packet. Rebuild every binding slot immediately before
-        // producing it so streams, null unbinds, and the current index
-        // binding are authoritative even when no draw made them pending.
-        populateBindingView(recorderState_.peBindingView, true, true);
+        // The bootstrap is a checkpoint of the live PE shadow. Binding
+        // metadata is kept authoritative at each state transition.
         const bool snapshotBuilt = dxmt9::d3d9::pe::buildFullSnapshotState(
             recorderState_.peState, recorderState_.peConsts, recorderState_.peBindingView, recorderState_.peSparseScratch,
             recorderState_.peSparseHeader, recorderState_.peSparseState);

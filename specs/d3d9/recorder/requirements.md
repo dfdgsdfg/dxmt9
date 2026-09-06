@@ -792,3 +792,47 @@ Revoke-only invalidation may remain access-free: it must only remove plan/borrow
 authority, never read borrowed storage, rebind a source, alter source values, or
 publish/settle a record. Its caller still obeys recorder confinement. This permits
 failure cleanup after epoch poison without manufacturing fresh mutation authority.
+
+**R-CORE-REC-7.26** A synchronous compact operation may qualify its source
+bundle once and reuse that proof within a closed lexical body. The bundle must
+bind all sources to one live recorder owner/epoch/lane and the pending ticket;
+it must not expose an unchecked public accessor or escaping capability. Public
+operation entry, CapacityPre rebase, and any invalidating callback boundary
+must acquire fresh qualification. Independently mutable binding, constant,
+and destination dependencies are not proved by access qualification alone.
+Native stale/wrong-owner/failure and byte-differential evidence, together with
+release callsite inspection, must demonstrate both safety and actual reuse.
+
+**R-CORE-REC-7.27** Reusing compact plan storage must explicitly initialize all
+readable facts before publishing prepared authority. Absent constant/UP spans,
+selection masks, destination facts, and failed partial preparation must not
+inherit a previous plan. Reducing whole-object clearing must preserve A/B/A,
+family changes, failed retry, and exact canonical emission without allocation.
+
+**R-CORE-REC-7.28** A warm-retainer no-expiry fast path must be justified by
+retainer-owned age facts and preserve the reference epoch arithmetic, release
+order/multiplicity, warm-hit refresh, and rollback behavior. Uncertain age or
+index facts must take the bounded reference scan/rebuild. No diagnostic-only
+counter, clock, or allocation may be added to disabled production execution.
+Exhaustive native traces must compare the optimized operation with the serial
+reference, including wrap, rollback touches, and full-capacity warm hits.
+
+**R-CORE-REC-7.29** PE stream offset/stride metadata must have one live value
+authority shared by setters, getters, StateBlock, and draw preparation. SWVP
+temporary overrides must be scoped and restore the prior values on success,
+rejection, and exceptional exits. Removing a duplicate view refresh must not
+change binding identity, pending-state consumption, UP reset semantics, or COM
+layout ownership. Native bounded override/reference checks must exercise the
+same helper used by production; Wine/SWVP pixel evidence remains separate.
+
+**R-CORE-REC-7.30** Capacity preparation must account for the bounded aggregate
+warm retainer as well as each kind's current-chunk pin quota. A novel pin that
+cannot fit must reject as capacity before AddRef, canonical writes, or pending
+settlement; an existing warm pin at the ceiling remains admissible. The proof
+must distinguish current pins, warm membership, duplicate occurrences, and
+null identities without consuming fault injection or refreshing warmth.
+CapacityPre may retry under the existing bounded commit/rebase protocol; an
+empty destination or still-insufficient warm headroom must not spin, evict
+pins early, grow storage, or manufacture an empty epoch to admit the record.
+Mixed-kind/warm saturation, committed-prefix preservation, and retry after a
+legitimate epoch must have native counterexample and refinement evidence.

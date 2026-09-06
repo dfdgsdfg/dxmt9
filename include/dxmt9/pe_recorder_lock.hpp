@@ -9,6 +9,8 @@
 
 namespace dxmt9::d3d9::pe {
 
+struct SparseStatePlan;
+
 enum class RecorderAccessLane : std::uint8_t {
   Denied,
   Owner,
@@ -80,6 +82,12 @@ class RecorderBorrow final {
  private:
   void bind(const RecorderLockCapability& capability, T& value) noexcept;
 
+  // SparseStatePlan first validates all of its borrows against one fresh
+  // capability, then forms a call-local aggregate view.  Keeping this access
+  // private prevents a caller from turning the borrow into an unchecked
+  // public getter or retaining a second authority token.
+  T* qualifiedValue() const noexcept { return value_; }
+
   T* value_ = nullptr;
   const dxmt9::core::ThreadOwnershipToken* owner_ = nullptr;
   const std::uint64_t* epoch_ = nullptr;
@@ -87,6 +95,7 @@ class RecorderBorrow final {
   RecorderAccessLane lane_ = RecorderAccessLane::Denied;
 
   friend class RecorderLockCapability;
+  friend struct SparseStatePlan;
 };
 
 // Mutation/settlement authority paired with RecorderBorrow.  The only way to

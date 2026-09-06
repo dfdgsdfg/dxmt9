@@ -102,24 +102,23 @@ template <typename Retention>
 bool finalizeSparseStatePlanChunkContext(
     const RecorderLockCapability& access, const PeChunkContext& chunk,
     SparseStatePlan& plan, Retention&& retained) noexcept {
-  const auto* const source = plan.source(access);
-  if (!source || source->draw.recordType == 0u) {
-    return false;
-  }
   bool finalized = false;
-  const bool invoked = plan.withBindingSource(
+  const bool invoked = plan.withQualifiedSources(
       access,
-      [&](const PeBindingView& bindings) noexcept {
-        plan.destination_.streamMask = source->fullSnapshot
-            ? source->selectedStreamMask
-            : resolveSparseStreamMask(source->selectedStreamMask, bindings,
+      [&](const SparseStatePlan::QualifiedSources& sources) noexcept {
+        if (sources.source.draw.recordType == 0u) return;
+        const auto& source = sources.source;
+        const auto& bindings = sources.bindings;
+        plan.destination_.streamMask = source.fullSnapshot
+            ? source.selectedStreamMask
+            : resolveSparseStreamMask(source.selectedStreamMask, bindings,
                                       retained);
-        if (source->draw.recordType ==
+        if (source.draw.recordType ==
             D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
           const std::uint64_t wire = d9cWireHandleValue(
               toWireHandle(bindings.indexBuffer.object));
           plan.destination_.indexBuffer = resolveSparseIndexBuffer(
-              true, source->selectedIndexBuffer, chunk.indexBufferKnown,
+              true, source.selectedIndexBuffer, chunk.indexBufferKnown,
               chunk.submittedIndexBufferWire, wire, bindings.indexBuffer,
               [&](const BufferRef& buffer) noexcept {
                 return retained(0u, buffer);
@@ -130,6 +129,9 @@ bool finalizeSparseStatePlanChunkContext(
         plan.destination_.chunkContextFinalized = true;
         finalized = true;
       });
+  // Retention is a callable destination provider and may cross an
+  // invalidating boundary.  Requalify after that callback before publishing
+  // the finalized destination facts.
   return invoked && finalized && plan.validFor(access);
 }
 
@@ -199,7 +201,7 @@ bool buildFullSnapshotState(
 // Must be called INSIDE the append emitter, after any CapacityPre flush has
 // resealed the chunk -- the retention answers are about the DESTINATION chunk.
 // `bindings.streams` must be authoritative for every slot, not just pending
-// ones; see populateBindingView's allStreams parameter.
+// ones; setters and scoped SWVP overrides maintain that single live authority.
 // The paired buildSparseState call records the effective disposition in
 // `out.fullSnapshot`. Under snapshot that call emits all 16 stream sections,
 // including null unbinds, and this function must then leave them alone: legacy's

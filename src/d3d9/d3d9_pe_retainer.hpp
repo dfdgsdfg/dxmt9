@@ -57,6 +57,8 @@ public:
     // An entry survives this many fully idle epochs before its pin is dropped.
     // 1 means "named in the epoch that just closed, or the one before it".
     static constexpr std::uint64_t kWarmEpochs = 1u;
+    static_assert(kWarmEpochs == 1u,
+                  "age summary is specialized for the two-epoch warm window");
 
     static constexpr std::size_t kDefaultCapacity = 256u;
 
@@ -98,6 +100,18 @@ public:
         std::size_t checkpoint = 0;
     };
 
+    // Testing-only epoch injection keeps the wrap trace bounded without a
+    // production clock or per-entry timer.
+    struct EpochForTesting {
+        std::uint64_t value = 0;
+    };
+
+    explicit D3D9PePendingCommandRetainer(
+        std::size_t capacity, EpochForTesting testingEpoch) noexcept
+        : D3D9PePendingCommandRetainer(capacity) {
+        epoch_ = testingEpoch.value;
+    }
+
     Acquired beginAcquire() const noexcept {
         return Acquired{entries_.size()};
     }
@@ -108,26 +122,44 @@ public:
         return entries_.size();
     }
 
+    // Pure aggregate headroom proof for bounded retain. The owner supplies
+    // the number of novel current-chunk pins after its own identity fold;
+    // this query only checks the reserved aggregate bound and the existing
+    // arena occupancy. It deliberately performs no index lookup, touch, or
+    // reference-count operation.
+    bool hasHeadroom(std::size_t add, std::size_t capacity) const noexcept {
+        return ready_ && capacity <= entries_.capacity() &&
+               entries_.size() <= capacity && add <= capacity - entries_.size();
+    }
+
+    // Pure qualified membership probe for the owner's near-ceiling path.
+    // Unknown kinds and null pointers are never entries and therefore return
+    // false without probing the index.
+    bool containsWireObject(std::uint32_t kind, const void* object) const noexcept {
+        return object != nullptr && isRetainable(kind) &&
+               index_.find(kind, object) != nullptr;
+    }
+
     // Read-only typed probes remain for destination queries and reference
     // tests. Admission uses the bounded retain overloads below so capacity
     // qualification and epoch touch share one lookup.
     bool containsSurface(D9CSurface* surface) const noexcept {
-        return contains(D9C_CHUNK_HANDLE_KIND_SURFACE, surface);
+        return containsWireObject(D9C_CHUNK_HANDLE_KIND_SURFACE, surface);
     }
     bool containsTexture(D9CTexture* texture) const noexcept {
-        return contains(D9C_CHUNK_HANDLE_KIND_TEXTURE, texture);
+        return containsWireObject(D9C_CHUNK_HANDLE_KIND_TEXTURE, texture);
     }
     bool containsBuffer(D9CBuffer* buffer) const noexcept {
-        return contains(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+        return containsWireObject(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
     }
     bool containsShader(D9CShader* shader) const noexcept {
-        return contains(D9C_CHUNK_HANDLE_KIND_SHADER, shader);
+        return containsWireObject(D9C_CHUNK_HANDLE_KIND_SHADER, shader);
     }
     bool containsVdecl(D9CVertexDecl* vdecl) const noexcept {
-        return contains(D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, vdecl);
+        return containsWireObject(D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, vdecl);
     }
     bool containsQuery(D9CQuery* query) const noexcept {
-        return contains(D9C_CHUNK_HANDLE_KIND_QUERY, query);
+        return containsWireObject(D9C_CHUNK_HANDLE_KIND_QUERY, query);
     }
 
     bool retainSurface(D9CSurface* surface, Acquired&) {
@@ -251,6 +283,10 @@ public:
             index_.erase(entry.kind, entry.ptr);
             release(entry);
             entries_.pop_back();
+            // Entries created since the checkpoint are stamped with the
+            // current epoch. Existing entries touched by the failed record
+            // intentionally keep their refreshed warm stamp.
+            --currentTouchedCount_;
         }
     }
 
@@ -260,11 +296,28 @@ public:
     // called with a record in flight — the caller rolls back first, so no
     // outstanding Acquired checkpoint can survive the compaction below.
     void endEpoch() noexcept {
+        // These counters partition entries whose last touch is in the
+        // current or immediately preceding epoch. With kWarmEpochs == 1,
+        // equality proves there is no expiry and leaves all index positions
+        // unchanged. The unsigned subtraction below remains authoritative
+        // when the proof is inconclusive, including at uint64 wrap.
+        if (currentTouchedCount_ + previousTouchedCount_ == entries_.size()) {
+            previousTouchedCount_ = currentTouchedCount_;
+            currentTouchedCount_ = 0u;
+            ++epoch_;
+            if (index_.used != index_.occupied) {
+                index_.rebuildFrom(entries_);
+            }
+            return;
+        }
+
         std::size_t write = 0;
         bool expired = false;
+        std::size_t survivingCurrent = 0u;
         for (std::size_t read = 0; read < entries_.size(); ++read) {
             const Entry& entry = entries_[read];
             if (epoch_ - entry.lastTouchedEpoch <= kWarmEpochs) {
+                if (entry.lastTouchedEpoch == epoch_) ++survivingCurrent;
                 if (write != read) {
                     entries_[write] = entry;
                 }
@@ -275,6 +328,8 @@ public:
             expired = true;
         }
         entries_.resize(write);
+        previousTouchedCount_ = survivingCurrent;
+        currentTouchedCount_ = 0u;
         // Expiry or compaction can invalidate index positions, and rollback
         // leaves tombstones. Rebuild for any of those events; only an
         // unchanged, clean warm set skips the bounded O(n) rebuild.
@@ -290,11 +345,23 @@ public:
         }
         entries_.clear();
         index_.clear();
+        currentTouchedCount_ = 0u;
+        previousTouchedCount_ = 0u;
     }
 
 private:
-    bool contains(std::uint32_t kind, void* object) const noexcept {
-        return object != nullptr && index_.find(kind, object) != nullptr;
+    static bool isRetainable(std::uint32_t kind) noexcept {
+        switch (kind) {
+        case D9C_CHUNK_HANDLE_KIND_TEXTURE:
+        case D9C_CHUNK_HANDLE_KIND_SURFACE:
+        case D9C_CHUNK_HANDLE_KIND_BUFFER:
+        case D9C_CHUNK_HANDLE_KIND_SHADER:
+        case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
+        case D9C_CHUNK_HANDLE_KIND_QUERY:
+            return true;
+        default:
+            return false;
+        }
     }
 
     struct Entry {
@@ -336,7 +403,7 @@ private:
         std::size_t occupied = 0;  // Occupied only.
         std::size_t used = 0;      // Occupied + Tombstone (load-factor input).
 
-        static std::size_t hashOf(std::uint32_t kind, void* ptr) noexcept {
+        static std::size_t hashOf(std::uint32_t kind, const void* ptr) noexcept {
             std::uint64_t h =
                 static_cast<std::uint64_t>(reinterpret_cast<std::uintptr_t>(ptr)) *
                 0x9E3779B97F4A7C15ull;
@@ -372,7 +439,7 @@ private:
             }
         }
 
-        const std::size_t* find(std::uint32_t kind, void* ptr) const noexcept {
+        const std::size_t* find(std::uint32_t kind, const void* ptr) const noexcept {
             if (slots.empty()) {
                 return nullptr;
             }
@@ -474,7 +541,7 @@ private:
         if (const std::size_t* found = index_.find(kind, ptr)) {
             // Already pinned — by this chunk or by a recent one. Refresh the
             // warmth stamp and cross nothing.
-            entries_[*found].lastTouchedEpoch = epoch_;
+            touch(entries_[*found]);
             return true;
         }
         // A bounded owner reserves both arenas up front.  Rejecting before
@@ -512,10 +579,20 @@ private:
             entries_.pop_back();
             throw;
         }
+        ++currentTouchedCount_;
         // Publish the entry (and its index) before taking ownership so a
         // failure above cannot leak an AddRef that rollback/clear cannot see.
         addRef(ptr);
         return true;
+    }
+
+    void touch(Entry& entry) noexcept {
+        if (entry.lastTouchedEpoch == epoch_) return;
+        if (epoch_ - entry.lastTouchedEpoch == 1u) {
+            --previousTouchedCount_;
+        }
+        entry.lastTouchedEpoch = epoch_;
+        ++currentTouchedCount_;
     }
 
     static void release(const Entry& entry) {
@@ -546,5 +623,7 @@ private:
     std::vector<Entry> entries_{};
     RetentionIndex index_{};
     std::uint64_t epoch_ = 0;
+    std::size_t currentTouchedCount_ = 0u;
+    std::size_t previousTouchedCount_ = 0u;
     bool ready_ = false;
 };

@@ -1100,32 +1100,25 @@ UINT D3D9DeviceImpl::softwareDrawInstanceCount() const {
     return count ? count : 1u;
 }
 
-HRESULT D3D9DeviceImpl::applySoftwareInstanceStreamOffsets(UINT instance,
-                                           UINT savedOffsets[16]) {
-    for (UINT stream = 0; stream < 16u; ++stream) {
-        savedOffsets[stream] = streamOff_[stream];
-    }
+HRESULT D3D9DeviceImpl::applySoftwareInstanceStreamOffsets(UINT instance) {
     for (UINT stream = 1; stream < 16u; ++stream) {
         if ((streamFreq_[stream] & D3DSTREAMSOURCE_INSTANCEDATA) == 0u) {
             continue;
         }
         const UINT divider = std::max<UINT>(streamFreq_[stream] & 0x3fffffffu, 1u);
         const UINT element = instance / divider;
-        const std::uint64_t offset =
-            static_cast<std::uint64_t>(streamOff_[stream]) +
-            static_cast<std::uint64_t>(element) * streamStr_[stream];
-        if (offset > 0xffffffffull) {
+        UINT offset = 0u;
+        if (!dxmt9::d3d9::pe::peSwvpCheckedInstanceOffset(
+                recorderState_.peBindingView.streams[stream].offset,
+                element,
+                recorderState_.peBindingView.streams[stream].stride,
+                offset)) {
             return D3DERR_INVALIDCALL;
         }
-        streamOff_[stream] = static_cast<UINT>(offset);
+        recorderState_.peBindingView.streams[stream].offset =
+            offset;
     }
     return S_OK;
-}
-
-void D3D9DeviceImpl::restoreSoftwareInstanceStreamOffsets(const UINT savedOffsets[16]) {
-    for (UINT stream = 0; stream < 16u; ++stream) {
-        streamOff_[stream] = savedOffsets[stream];
-    }
 }
 
 HRESULT D3D9DeviceImpl::describeSoftwareProgrammableDrawTarget(
@@ -1245,7 +1238,8 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpTransformBoundVertices(UINT startVertex,
     FvfProcessLayout dstLayout{};
     HRESULT hr = describeSoftwareFfpDrawTarget(outputFvf, srcLayout, dstLayout);
     if (hr != S_OK) return hr;
-    if (!streamSrc_[0] || streamStr_[0] < srcLayout.stride) {
+    if (!streamSrc_[0] ||
+        recorderState_.peBindingView.streams[0].stride < srcLayout.stride) {
         return S_FALSE;
     }
     std::uint32_t outputBytes = 0;
@@ -1288,8 +1282,9 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpDrawPrimitive(D3DPRIMITIVETYPE type,
     }
     out.primitiveType = softwareDrawExpandedPrimitiveType(type);
     for (UINT instance = 0; instance < instanceCount; ++instance) {
-        UINT savedOffsets[16]{};
-        HRESULT hr = applySoftwareInstanceStreamOffsets(instance, savedOffsets);
+        dxmt9::d3d9::pe::PeSwvpStreamOverrideGuard streamRestore(
+            recorderState_.peBindingView.streams);
+        HRESULT hr = applySoftwareInstanceStreamOffsets(instance);
         if (SUCCEEDED(hr)) {
             SoftwareFfpDrawData instanceDraw{};
             hr = trySoftwareFfpTransformBoundVertices(startVertex, vertexCount,
@@ -1311,7 +1306,6 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpDrawPrimitive(D3DPRIMITIVETYPE type,
                 }
             }
         }
-        restoreSoftwareInstanceStreamOffsets(savedOffsets);
         if (FAILED(hr) || hr == S_FALSE) {
             out = {};
             return hr;
@@ -1345,8 +1339,9 @@ HRESULT D3D9DeviceImpl::trySoftwareProgrammableDrawPrimitive(D3DPRIMITIVETYPE ty
     }
     out.primitiveType = softwareDrawExpandedPrimitiveType(type);
     for (UINT instance = 0; instance < instanceCount; ++instance) {
-        UINT savedOffsets[16]{};
-        HRESULT hr = applySoftwareInstanceStreamOffsets(instance, savedOffsets);
+        dxmt9::d3d9::pe::PeSwvpStreamOverrideGuard streamRestore(
+            recorderState_.peBindingView.streams);
+        HRESULT hr = applySoftwareInstanceStreamOffsets(instance);
         if (SUCCEEDED(hr)) {
             SoftwareFfpDrawData instanceDraw{};
             hr = trySoftwareProgrammableTransformBoundVertices(
@@ -1368,7 +1363,6 @@ HRESULT D3D9DeviceImpl::trySoftwareProgrammableDrawPrimitive(D3DPRIMITIVETYPE ty
                 }
             }
         }
-        restoreSoftwareInstanceStreamOffsets(savedOffsets);
         if (FAILED(hr) || hr == S_FALSE) {
             out = {};
             return hr;
@@ -1625,8 +1619,9 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpDrawIndexedPrimitive(D3DPRIMITIVETYPE type
         indexFormat = D3DFMT_INDEX32;
         out.primitiveType = softwareDrawExpandedPrimitiveType(type);
         for (UINT instance = 0; instance < instanceCount; ++instance) {
-            UINT savedOffsets[16]{};
-            hr = applySoftwareInstanceStreamOffsets(instance, savedOffsets);
+            dxmt9::d3d9::pe::PeSwvpStreamOverrideGuard streamRestore(
+                recorderState_.peBindingView.streams);
+            hr = applySoftwareInstanceStreamOffsets(instance);
             if (SUCCEEDED(hr)) {
                 SoftwareFfpDrawData instanceDraw{};
                 hr = trySoftwareFfpTransformBoundVertices(
@@ -1651,7 +1646,6 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpDrawIndexedPrimitive(D3DPRIMITIVETYPE type
                     }
                 }
             }
-            restoreSoftwareInstanceStreamOffsets(savedOffsets);
             if (FAILED(hr) || hr == S_FALSE) {
                 break;
             }
@@ -1720,8 +1714,9 @@ HRESULT D3D9DeviceImpl::trySoftwareProgrammableDrawIndexedPrimitive(
         indexFormat = D3DFMT_INDEX32;
         out.primitiveType = softwareDrawExpandedPrimitiveType(type);
         for (UINT instance = 0; instance < instanceCount; ++instance) {
-            UINT savedOffsets[16]{};
-            hr = applySoftwareInstanceStreamOffsets(instance, savedOffsets);
+            dxmt9::d3d9::pe::PeSwvpStreamOverrideGuard streamRestore(
+                recorderState_.peBindingView.streams);
+            hr = applySoftwareInstanceStreamOffsets(instance);
             if (SUCCEEDED(hr)) {
                 SoftwareFfpDrawData instanceDraw{};
                 hr = trySoftwareProgrammableTransformBoundVertices(
@@ -1746,7 +1741,6 @@ HRESULT D3D9DeviceImpl::trySoftwareProgrammableDrawIndexedPrimitive(
                     }
                 }
             }
-            restoreSoftwareInstanceStreamOffsets(savedOffsets);
             if (FAILED(hr) || hr == S_FALSE) {
                 break;
             }
@@ -1817,17 +1811,11 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpDrawPrimitiveUP(D3DPRIMITIVETYPE type,
     IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
     if (savedStream0) savedStream0->AddRef();
     const auto savedBindingStream0 = recorderState_.peBindingView.streams[0];
-    const UINT savedOffset0 = streamOff_[0];
-    const UINT savedStride0 = streamStr_[0];
     setRef(streamSrc_[0], srcBuffer);
-    streamOff_[0] = 0;
-    streamStr_[0] = stride;
     recorderState_.peBindingView.streams[0] = {
         validatedSource.wire(), 0u, stride};
     auto restoreStream = SwvpScopeGuard([&]() noexcept {
         setRef(streamSrc_[0], savedStream0);
-        streamOff_[0] = savedOffset0;
-        streamStr_[0] = savedStride0;
         recorderState_.peBindingView.streams[0] = savedBindingStream0;
         if (savedStream0) savedStream0->Release();
         savedStream0 = nullptr;
@@ -1903,17 +1891,11 @@ HRESULT D3D9DeviceImpl::trySoftwareProgrammableDrawPrimitiveUP(D3DPRIMITIVETYPE 
     IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
     if (savedStream0) savedStream0->AddRef();
     const auto savedBindingStream0 = recorderState_.peBindingView.streams[0];
-    const UINT savedOffset0 = streamOff_[0];
-    const UINT savedStride0 = streamStr_[0];
     setRef(streamSrc_[0], srcBuffer);
-    streamOff_[0] = 0;
-    streamStr_[0] = stride;
     recorderState_.peBindingView.streams[0] = {
         validatedSource.wire(), 0u, stride};
     auto restoreStream = SwvpScopeGuard([&]() noexcept {
         setRef(streamSrc_[0], savedStream0);
-        streamOff_[0] = savedOffset0;
-        streamStr_[0] = savedStride0;
         recorderState_.peBindingView.streams[0] = savedBindingStream0;
         if (savedStream0) savedStream0->Release();
         savedStream0 = nullptr;
@@ -1994,17 +1976,11 @@ HRESULT D3D9DeviceImpl::trySoftwareFfpDrawIndexedPrimitiveUP(D3DPRIMITIVETYPE ty
     IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
     if (savedStream0) savedStream0->AddRef();
     const auto savedBindingStream0 = recorderState_.peBindingView.streams[0];
-    const UINT savedOffset0 = streamOff_[0];
-    const UINT savedStride0 = streamStr_[0];
     setRef(streamSrc_[0], srcBuffer);
-    streamOff_[0] = 0;
-    streamStr_[0] = stride;
     recorderState_.peBindingView.streams[0] = {
         validatedSource.wire(), 0u, stride};
     auto restoreStream = SwvpScopeGuard([&]() noexcept {
         setRef(streamSrc_[0], savedStream0);
-        streamOff_[0] = savedOffset0;
-        streamStr_[0] = savedStride0;
         recorderState_.peBindingView.streams[0] = savedBindingStream0;
         if (savedStream0) savedStream0->Release();
         savedStream0 = nullptr;
@@ -2088,17 +2064,11 @@ HRESULT D3D9DeviceImpl::trySoftwareProgrammableDrawIndexedPrimitiveUP(
     IDirect3DVertexBuffer9* savedStream0 = streamSrc_[0];
     if (savedStream0) savedStream0->AddRef();
     const auto savedBindingStream0 = recorderState_.peBindingView.streams[0];
-    const UINT savedOffset0 = streamOff_[0];
-    const UINT savedStride0 = streamStr_[0];
     setRef(streamSrc_[0], srcBuffer);
-    streamOff_[0] = 0;
-    streamStr_[0] = stride;
     recorderState_.peBindingView.streams[0] = {
         validatedSource.wire(), 0u, stride};
     auto restoreStream = SwvpScopeGuard([&]() noexcept {
         setRef(streamSrc_[0], savedStream0);
-        streamOff_[0] = savedOffset0;
-        streamStr_[0] = savedStride0;
         recorderState_.peBindingView.streams[0] = savedBindingStream0;
         if (savedStream0) savedStream0->Release();
         savedStream0 = nullptr;

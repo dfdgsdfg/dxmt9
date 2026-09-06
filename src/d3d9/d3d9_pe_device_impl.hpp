@@ -73,6 +73,7 @@
 #include "d3d9_pe_semantic_recorder_state.hpp"
 #include "d3d9_pe_state_shadow.hpp"
 #include "d3d9_pe_stateblock_transaction.hpp"
+#include "d3d9_pe_swvp_stream_override.hpp"
 #include "d3d9_pe_stats_decimation.hpp"
 #include "d3d9_pe_thread_sampler.hpp"
 #include "d3d9_pe_wire_handle.hpp"
@@ -899,8 +900,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     IDirect3DVertexShader9*    vs_              = nullptr;
     IDirect3DPixelShader9*     ps_              = nullptr;
     IDirect3DVertexBuffer9*    streamSrc_[16]   = {};
-    UINT                       streamOff_[16]   = {};
-    UINT                       streamStr_[16]   = {};
     UINT                       streamFreq_[16]  = {};
     IDirect3DIndexBuffer9*     indexBuf_        = nullptr;
     std::uint64_t              submittedIndexBufferWireValue_ = 0;
@@ -1145,7 +1144,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                                     UINT offset,
                                     UINT stride) const {
         return stream < 16 && streamSrc_[stream] == buffer &&
-               streamOff_[stream] == offset && streamStr_[stream] == stride;
+               recorderState_.peBindingView.streams[stream].offset == offset &&
+               recorderState_.peBindingView.streams[stream].stride == stride;
     }
 
     dxmt9::d3d9::pe::PeRtExplicitMask currentRtExplicitMask() const;
@@ -1169,11 +1169,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
                                   std::uint32_t changedSpanRegs) noexcept;
 
     void logVsConstSetterRangePerf(const char* event);
-
-    // Build binding and retention views without transferring ownership.
-    void populateBindingView(dxmt9::d3d9::pe::PeBindingView& view,
-                             bool needAllSlots,
-                             bool allStreams = false) const;
 
     dxmt9::d3d9::pe::PeChunkContext currentChunkContext() const;
 
@@ -1331,10 +1326,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
 
     UINT softwareDrawInstanceCount() const;
 
-    HRESULT applySoftwareInstanceStreamOffsets(UINT instance,
-                                               UINT savedOffsets[16]);
-
-    void restoreSoftwareInstanceStreamOffsets(const UINT savedOffsets[16]);
+    HRESULT applySoftwareInstanceStreamOffsets(UINT instance);
 
     // SWVP draw preparation owns all candidate vectors until the public draw
     // has accepted the candidate. Keep the temporary UP stream override and
@@ -3207,8 +3199,8 @@ public:
             if (recorderState_.stateBlockTransaction.isRecording()) {
                 StateBlockStreamSourceValue value{};
                 value.buffer = {};
-                value.offset = streamOff_[stream];
-                value.stride = streamStr_[stream];
+                value.offset = recorderState_.peBindingView.streams[stream].offset;
+                value.stride = recorderState_.peBindingView.streams[stream].stride;
                 const auto recordedStream = stateBlockFixedSlotKey<
                     StateBlockApplyPhysicalStore::streamSources>(stream);
                 recorderState_.stateBlockTransaction.withRecordingWriter(
@@ -3259,8 +3251,6 @@ public:
         }
         recorderState_.peState.transition().bindStream(stream, [&]() noexcept {
             setRef(streamSrc_[stream], pBuf);
-            streamOff_[stream] = offset;
-            streamStr_[stream] = stride;
             recorderState_.peBindingView.streams[stream] = {
                 .buffer = validatedBuffer.wire(),
                 .offset = offset,

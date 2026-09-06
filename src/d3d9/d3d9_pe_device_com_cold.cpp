@@ -318,8 +318,8 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
                             StateBlockApplyPhysicalStore::streamSources>(slot),
                         StateBlockStreamSourceValue{
                                   .buffer = stateBlockBufferRef(streamSrc_[slot]),
-                                  .offset = streamOff_[slot],
-                                  .stride = streamStr_[slot],
+                                  .offset = recorderState_.peBindingView.streams[slot].offset,
+                                  .stride = recorderState_.peBindingView.streams[slot].stride,
                               });
                 }
             }
@@ -528,8 +528,8 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
             [&](std::size_t slot, const StateBlockStreamSourceValue& prior) {
                 StateBlockStreamSourceValue latest = prior;
                 latest.buffer = stateBlockBufferRef(streamSrc_[slot]);
-                latest.offset = streamOff_[slot];
-                latest.stride = streamStr_[slot];
+                latest.offset = recorderState_.peBindingView.streams[slot].offset;
+                latest.stride = recorderState_.peBindingView.streams[slot].stride;
                 refreshedWriter.streamSources().set(
                     stateBlockFixedSlotKey<
                         StateBlockApplyPhysicalStore::streamSources>(slot),
@@ -2733,8 +2733,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetStreamSource(UINT stream,
     IDirect3DVertexBuffer9* b = streamSrc_[stream];
     if (b) b->AddRef();
     *ppBuf = b;
-    if (pOffset) *pOffset = streamOff_[stream];
-    if (pStride) *pStride = streamStr_[stream];
+    if (pOffset) *pOffset = recorderState_.peBindingView.streams[stream].offset;
+    if (pStride) *pStride = recorderState_.peBindingView.streams[stream].stride;
     return S_OK;
 }
 
@@ -2828,6 +2828,12 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ProcessVertices(UINT srcStart, UINT ds
     // T2 device-lost gate: lost devices must report DEVICELOST before
     // any ProcessVertices validation or unsupported-path rejection.
     if (deviceNotReset_) return D3DERR_DEVICELOST;
+    std::array<UINT, D9C_DRAW_PACKET_MAX_STREAMS> streamOffsets{};
+    std::array<UINT, D9C_DRAW_PACKET_MAX_STREAMS> streamStrides{};
+    for (std::size_t stream = 0; stream < D9C_DRAW_PACKET_MAX_STREAMS; ++stream) {
+        streamOffsets[stream] = recorderState_.peBindingView.streams[stream].offset;
+        streamStrides[stream] = recorderState_.peBindingView.streams[stream].stride;
+    }
     const Context context{
         .device = dev_,
         .deviceIdentity = static_cast<IDirect3DDevice9*>(this),
@@ -2838,9 +2844,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ProcessVertices(UINT srcStart, UINT ds
             IDirect3DVertexBuffer9* const,
             D9C_DRAW_PACKET_MAX_STREAMS>{streamSrc_},
         .streamOffsets = std::span<
-            const UINT, D9C_DRAW_PACKET_MAX_STREAMS>{streamOff_},
+            const UINT, D9C_DRAW_PACKET_MAX_STREAMS>{streamOffsets},
         .streamStrides = std::span<
-            const UINT, D9C_DRAW_PACKET_MAX_STREAMS>{streamStr_},
+            const UINT, D9C_DRAW_PACKET_MAX_STREAMS>{streamStrides},
         .streamFrequencies = std::span<
             const UINT, D9C_DRAW_PACKET_MAX_STREAMS>{streamFreq_},
         .textures = std::span<
@@ -3631,8 +3637,6 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
                             recorderState_.stateBlockTransaction.takeStream(
                                 stateBlockStreamSlotKey(slot));
                         streamSrc_[slot] = staged.buffer.raw();
-                        streamOff_[slot] = staged.offset;
-                        streamStr_[slot] = staged.stride;
                         D3D9PeValidatedVertexBuffer validated{};
                         if (!validateForCommit([&] {
                                 return D3D9PeValidateVertexBuffer(

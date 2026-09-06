@@ -9,16 +9,17 @@
 
 #if defined(_WIN64)
 static_assert(sizeof(D3D9DeviceImpl) ==
-              106632 + sizeof(dxmt9::d3d9::pe::PeRecorderChunkTransaction));
+              106504 + sizeof(dxmt9::d3d9::pe::PeRecorderChunkTransaction));
 // Canonical artifact pins consumed by audit_d3d9_pe_abi_codegen.py. Keep the
 // expanded values beside the ownership-relative expression above so a change
 // to the transaction owner requires both PE ABI surfaces to be reviewed.
-static_assert(sizeof(D3D9DeviceImpl) == 106808);
+// Stream offset/stride now live only in PeBindingView (128 bytes removed).
+static_assert(sizeof(D3D9DeviceImpl) == 106680);
 static_assert(alignof(D3D9DeviceImpl) == 8);
 #elif defined(_WIN32)
 static_assert(sizeof(D3D9DeviceImpl) ==
-              105544 + sizeof(dxmt9::d3d9::pe::PeRecorderChunkTransaction));
-static_assert(sizeof(D3D9DeviceImpl) == 105664);
+              105416 + sizeof(dxmt9::d3d9::pe::PeRecorderChunkTransaction));
+static_assert(sizeof(D3D9DeviceImpl) == 105536);
 static_assert(alignof(D3D9DeviceImpl) == 8);
 #endif
 
@@ -1425,8 +1426,6 @@ bool D3D9DeviceImpl::clearPeStateTracking() {
     submittedIndexBufferWireValue_ = 0;
     submittedIndexBufferKnown_ = false;
     fvf_ = 0;
-    std::memset(streamOff_, 0, sizeof(streamOff_));
-    std::memset(streamStr_, 0, sizeof(streamStr_));
     // D3D9 default stream-source frequency divider is 1 (not 0,
     // which encodes an invalid value -- a zero divider with no
     // INDEXED/INSTANCE flag is rejected at Set time). Restoring 1
@@ -1472,26 +1471,6 @@ std::uint64_t D3D9DeviceImpl::currentPixelShaderHash() const noexcept {
     return SUCCEEDED(D3D9PeValidatePixelShader(
         ps_, static_cast<const IDirect3DDevice9*>(this), &validated))
         ? validated.localMetadata() : 0u;
-}
-
-void D3D9DeviceImpl::populateBindingView(dxmt9::d3d9::pe::PeBindingView& view,
-                         bool needAllSlots,
-                         bool allStreams) const {
-    // Object refs are admitted and cached only through the kind-qualified
-    // validation capabilities used by their public setters.  This helper
-    // therefore refreshes scalar binding metadata only; it never recovers
-    // a wire ref by convention-casting a public COM pointer.
-    (void)needAllSlots;
-    for (std::uint32_t slot = 0; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-        if (!needAllSlots && !allStreams &&
-            (recorderState_.peState.pendingStreamMask() & (1u << slot)) == 0) {
-            continue;
-        }
-        view.streams[slot].offset = streamOff_[slot];
-        view.streams[slot].stride = streamStr_[slot];
-    }
-    view.rtExplicitMask = currentRtExplicitMask();
-    view.fvf = fvf_;
 }
 
 dxmt9::d3d9::pe::PeChunkContext D3D9DeviceImpl::currentChunkContext() const {
@@ -1550,11 +1529,6 @@ bool D3D9DeviceImpl::buildSparseStateForRecord(
         }
         decimatedScope.t0 = std::chrono::steady_clock::now();
     }
-    const bool needAllSlots =
-        forceFullSnapshot || dxmt9::d3d9::pe::dxmt9PeFullSnapshotEnabled();
-    const bool isDraw =
-        recordType != D9C_COMMAND_RECORD_APPLY_STATE;
-    populateBindingView(recorderState_.peBindingView, needAllSlots, isDraw);
     return dxmt9::d3d9::pe::buildSparseState(
         recorderState_.peState, recorderState_.peConsts, recorderState_.peBindingView, recorderState_.peSparsePayloads, params,
         forceFullSnapshot, inlineConstDelta, recorderState_.peSparseScratch,
@@ -1577,8 +1551,6 @@ bool D3D9DeviceImpl::buildSparseStatePlanForRecord(
             if (plan.prepared()) plan.invalidate();
             return false;
         }
-        const bool isDraw = params.recordType != D9C_COMMAND_RECORD_APPLY_STATE;
-        self.populateBindingView(self.recorderState_.peBindingView, false, isDraw);
         return dxmt9::d3d9::pe::buildSparseStatePlan(
             access, self.recorderState_.peState, self.recorderState_.peConsts,
             self.recorderState_.peBindingView, self.recorderState_.peSparsePayloads, params,
@@ -2006,9 +1978,8 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveUPRecordWithFvf(D3DPRIMITIVETYPE type
         recorderState_.peBindingView.vs = {};
         recorderState_.peState.maintenance().pendingVs() = true;
     }
-    // The override window has to cover populateBindingView, which reads
-    // fvf_ / vdecl_ / vs_, so it wraps the whole state build exactly as it
-    // wrapped the fat-packet build before.
+    // The override window has to cover the whole state build so the temporary
+    // vertex-input and shader bindings are serialized into the draw packet.
     dxmt9::d3d9::pe::PeDrawParams params{};
     params.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP;
     params.primitiveType = static_cast<std::uint32_t>(type);

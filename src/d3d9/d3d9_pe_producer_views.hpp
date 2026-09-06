@@ -29,7 +29,6 @@
 #include <bit>
 #include <cstddef>
 #include <cstdint>
-#include <memory>
 #include <span>
 #include <tuple>
 #include <type_traits>
@@ -45,7 +44,7 @@ namespace dxmt9::d3d9::pe {
 using PeRtExplicitMask =
     std::array<bool, D9C_DRAW_PACKET_MAX_RENDER_TARGETS>;
 
-// The wire form of the device's streamSrc_ / streamOff_ / streamStr_ triple.
+// Qualified buffer identity plus the device's authoritative offset/stride.
 struct PeStreamBinding {
   BufferRef buffer{};
   std::uint32_t offset = 0u;
@@ -182,6 +181,9 @@ struct SparseStatePlan {
   SparseStatePlan& operator=(SparseStatePlan&&) = delete;
 
   void invalidate() noexcept {
+    // Revoke-only invalidation is deliberately cheap.  It runs on failed
+    // partial builds and after settlement; stale value fields are unreachable
+    // while prepared is false and are overwritten by the next build entry.
     source_.prepared = false;
     destination_.chunkContextFinalized = false;
     source_.pendingDelta = {};
@@ -198,63 +200,6 @@ struct SparseStatePlan {
            sourceShadow_.validFor(access) &&
            sourceConstants_.validFor(access) &&
            sourceBindings_.validFor(access) && source_.pendingDelta.valid();
-  }
-
-  template <typename Fn>
-    requires (std::is_nothrow_invocable_v<Fn&&, const PeBindingView&> &&
-              std::is_same_v<std::invoke_result_t<Fn&&, const PeBindingView&>,
-                             void>)
-  bool withBindingSource(const RecorderLockCapability& access,
-                         Fn&& fn) const noexcept {
-    return validFor(access) &&
-           sourceBindings_.with(access, std::forward<Fn>(fn));
-  }
-
-  template <typename Fn>
-    requires (std::is_nothrow_invocable_v<
-                  Fn&&, const PeHotStateShadow&, const PeBindingView&> &&
-              std::is_same_v<std::invoke_result_t<
-                                 Fn&&, const PeHotStateShadow&,
-                                 const PeBindingView&>, void>)
-  bool withEmitSources(const RecorderLockCapability& access,
-                       Fn&& fn) const noexcept {
-    if (!validFor(access)) return false;
-    bool invoked = false;
-    const bool sourceValid = sourceShadow_.with(
-        access, [&](const PeHotStateShadow& shadow) noexcept {
-          (void)sourceBindings_.with(
-              access, [&](const PeBindingView& bindings) noexcept {
-                std::forward<Fn>(fn)(shadow, bindings);
-                invoked = true;
-              });
-        });
-    return sourceValid && invoked;
-  }
-
-  template <typename Fn>
-    requires (std::is_nothrow_invocable_v<
-                  Fn&&, const PeHotStateShadow&, PeConstShadowBlock&,
-                  const PeBindingView&> &&
-              std::is_same_v<std::invoke_result_t<
-                                 Fn&&, const PeHotStateShadow&,
-                                 PeConstShadowBlock&, const PeBindingView&>,
-                             void>)
-  bool withSettlementSources(const RecorderLockCapability& access,
-                             Fn&& fn) const noexcept {
-    if (!validFor(access)) return false;
-    bool invoked = false;
-    const bool sourceValid = sourceShadow_.with(
-        access, [&](const PeHotStateShadow& shadow) noexcept {
-          (void)sourceConstants_.with(
-              access, [&](PeConstShadowBlock& constants) noexcept {
-                (void)sourceBindings_.with(
-                    access, [&](const PeBindingView& bindings) noexcept {
-                      std::forward<Fn>(fn)(shadow, constants, bindings);
-                      invoked = true;
-                    });
-              });
-        });
-    return sourceValid && invoked;
   }
 
   struct SourceFacts {
@@ -297,6 +242,100 @@ struct SparseStatePlan {
     bool chunkContextFinalized = false;
   };
 
+  // A synchronous, capability-qualified view of every source needed by an
+  // ordinary compact operation.  It is created only inside
+  // withQualifiedSources after the owner/epoch/lane/ticket checks have all
+  // passed, and is consumed by the callback before that operation returns.
+  // This lets a writer, finalizer, or settlement visitor reuse one lexical
+  // qualification instead of rechecking the same borrows for every source.
+  class QualifiedSources final {
+   public:
+    QualifiedSources(const QualifiedSources&) = delete;
+    QualifiedSources& operator=(const QualifiedSources&) = delete;
+    QualifiedSources(QualifiedSources&&) = delete;
+    QualifiedSources& operator=(QualifiedSources&&) = delete;
+
+    const SourceFacts& source;
+    const DestinationFacts& destination;
+    const PeHotStateShadow& shadow;
+    PeConstShadowBlock& constants;
+    const PeBindingView& bindings;
+
+   private:
+    QualifiedSources(const SourceFacts& source,
+                     const DestinationFacts& destination,
+                     const PeHotStateShadow& shadow,
+                     PeConstShadowBlock& constants,
+                     const PeBindingView& bindings) noexcept
+        : source(source),
+          destination(destination),
+          shadow(shadow),
+          constants(constants),
+          bindings(bindings) {}
+
+    friend struct SparseStatePlan;
+  };
+
+  template <typename Fn>
+    requires (std::is_nothrow_invocable_v<Fn&&, const QualifiedSources&> &&
+              std::is_same_v<std::invoke_result_t<Fn&&, const QualifiedSources&>,
+                             void>)
+  bool withQualifiedSources(const RecorderLockCapability& access,
+                            Fn&& fn) const noexcept {
+    // This is the one public-entry qualification for the whole synchronous
+    // operation.  The private borrow values below are used only after it has
+    // succeeded, and cannot be obtained by callers as unchecked getters.
+    if (!validFor(access)) return false;
+    const QualifiedSources sources{
+        source_, destination_, *sourceShadow_.qualifiedValue(),
+        *sourceConstants_.qualifiedValue(), *sourceBindings_.qualifiedValue()};
+    std::forward<Fn>(fn)(sources);
+    return true;
+  }
+
+  template <typename Fn>
+    requires (std::is_nothrow_invocable_v<Fn&&, const PeBindingView&> &&
+              std::is_same_v<std::invoke_result_t<Fn&&, const PeBindingView&>,
+                             void>)
+  bool withBindingSource(const RecorderLockCapability& access,
+                         Fn&& fn) const noexcept {
+    return withQualifiedSources(
+        access, [&](const QualifiedSources& sources) noexcept {
+          std::forward<Fn>(fn)(sources.bindings);
+        });
+  }
+
+  template <typename Fn>
+    requires (std::is_nothrow_invocable_v<
+                  Fn&&, const PeHotStateShadow&, const PeBindingView&> &&
+              std::is_same_v<std::invoke_result_t<
+                                 Fn&&, const PeHotStateShadow&,
+                                 const PeBindingView&>, void>)
+  bool withEmitSources(const RecorderLockCapability& access,
+                       Fn&& fn) const noexcept {
+    return withQualifiedSources(
+        access, [&](const QualifiedSources& sources) noexcept {
+          std::forward<Fn>(fn)(sources.shadow, sources.bindings);
+        });
+  }
+
+  template <typename Fn>
+    requires (std::is_nothrow_invocable_v<
+                  Fn&&, const PeHotStateShadow&, PeConstShadowBlock&,
+                  const PeBindingView&> &&
+              std::is_same_v<std::invoke_result_t<
+                                 Fn&&, const PeHotStateShadow&,
+                                 PeConstShadowBlock&, const PeBindingView&>,
+                             void>)
+  bool withSettlementSources(const RecorderLockCapability& access,
+                             Fn&& fn) const noexcept {
+    return withQualifiedSources(
+        access, [&](const QualifiedSources& sources) noexcept {
+          std::forward<Fn>(fn)(sources.shadow, sources.constants,
+                               sources.bindings);
+        });
+  }
+
   const SourceFacts* source(const RecorderLockCapability& access) const noexcept {
     return validFor(access) ? &source_ : nullptr;
   }
@@ -314,8 +353,26 @@ struct SparseStatePlan {
 
  private:
   void reset() noexcept {
-    std::destroy_at(this);
-    std::construct_at(this);
+    // Build entry is the only point that needs bounded initialization.  Draw
+    // parameters, payloads, counts, and masks are assigned unconditionally
+    // by the producer before any read.  Clear only OR-built/optional fields
+    // whose absent form must not inherit the previous plan.
+    // No caller can consume an unpublished plan. Successful preparation
+    // overwrites all three borrows and the pending ticket/view; the build
+    // guard fully revokes them on every failure. Do not clear and immediately
+    // overwrite those capability fields on the successful hot path.
+    source_.prepared = false;
+    destination_.chunkContextFinalized = false;
+    source_.drawFlags = 0u;
+    source_.renderTargetMask = 0u;
+    source_.shaderMask = 0u;
+    source_.vertexInputKind = 0u;
+    source_.vsFloatConstants = {};
+    source_.vsIntConstants = {};
+    source_.vsBoolConstants = {};
+    source_.psFloatConstants = {};
+    source_.psIntConstants = {};
+    source_.psBoolConstants = {};
   }
 
   bool bindSources(const RecorderLockCapability& access,

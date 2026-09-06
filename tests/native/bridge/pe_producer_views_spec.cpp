@@ -116,6 +116,10 @@ void sparsePlanAuthorityHasNoPublicWriter() {
   static_assert(!HasUnqualifiedSparsePlanEmitVisitor<pe::SparseStatePlan>);
   static_assert(!HasUnqualifiedSparsePlanSettlementVisitor<pe::SparseStatePlan>);
   static_assert(!HasUnqualifiedSparsePlanFinalizer<pe::SparseStatePlan>);
+  static_assert(!std::is_copy_constructible_v<
+                pe::SparseStatePlan::QualifiedSources>);
+  static_assert(!std::is_move_constructible_v<
+                pe::SparseStatePlan::QualifiedSources>);
   static_assert(!std::is_copy_constructible_v<pe::SparseStatePlan>);
   static_assert(!std::is_copy_assignable_v<pe::SparseStatePlan>);
   static_assert(!std::is_move_constructible_v<pe::SparseStatePlan>);
@@ -155,6 +159,21 @@ void sparsePlanSourceRequiresFreshMatchingAuthority() {
                   D9C_COMMAND_RECORD_APPLY_STATE;
             }),
         "a fresh capability reacquires the qualified source");
+  bool qualifiedVisited = false;
+  check(guard.withCapability(
+            owner, epoch, [&](const auto& access) noexcept {
+              return plan.withQualifiedSources(
+                  access, [&](const auto& sources) noexcept {
+                    qualifiedVisited =
+                        sources.source.draw.recordType ==
+                            D9C_COMMAND_RECORD_APPLY_STATE &&
+                        &sources.shadow == &shadow &&
+                        &sources.constants == &constants &&
+                        &sources.bindings == &bindings;
+                  });
+            }) &&
+            qualifiedVisited,
+        "one lexical view exposes all producer sources");
 
   bool wrongOwnerVisited = false;
   check(!wrongOwnerGuard.withCapability(

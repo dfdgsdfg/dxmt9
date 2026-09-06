@@ -2181,6 +2181,366 @@ void upIndexedDrawIgnoresDirtyIndexBuffer() {
   requirePinnedOutput(f);
 }
 
+// A device owns one SparseStatePlan scratch slot and rebuilds it for every
+// record. Keep this plan alive across a deliberately rich indexed-UP draw,
+// then rebuild it as an empty APPLY_STATE record: the second
+// packet must not carry any constant range, UP span, mask, or destination-chunk
+// decision from the first one.  The first packet uses all six constant
+// families so an omitted reset of any optional range is observable.
+void sparsePlanReuseClearsRichSourcesAndDestination() {
+  Fixture first = baseUpDraw("reused plan rich indexed-UP source",
+                             D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP);
+  first.params.numVertices = 4u;
+  first.params.indexFormat = 101u; // D3DFMT_INDEX16: 12 indices in 24 bytes.
+  first.inlineConstDelta = true;
+  first.payloads.upIndex = std::span<const std::byte>(upIndexBytes);
+  first.payloads.upVertex = std::span<const std::byte>(upVertexBytes);
+  first.shadow.writer().pendingRenderStatesTyped().set(
+      renderStateSlotKey(4u), 0x44u);
+  first.shadow.writer().pendingTextureMask() = 0x3u;
+  first.shadow.writer().pendingStreamMask() = 0x3u;
+  first.shadow.writer().pendingVdecl() = true;
+  first.shadow.writer().pendingFvf() = true;
+  first.shadow.writer().pendingIb() = true;
+  first.shadow.writer().pendingRtMask() = 0x1u;
+  first.shadow.writer().pendingDs() = true;
+  first.shadow.writer().pendingViewport() = true;
+  first.shadow.writer().pendingScissor() = true;
+  first.shadow.writer().pendingMaterial() = true;
+  first.shadow.writer().pendingClipPlaneMask() = 0x1u;
+  first.shadow.writer().pendingLightSlotMask() = 0x1u;
+  first.shadow.writer().pendingLightEnableValidMask() = 0x1u;
+  first.shadow.writer().lightShadow()[0].type = 1u;
+  first.bindings.textures[0] =
+      publishedRef(&tex0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
+  first.bindings.textures[1] =
+      publishedRef(&tex1, D9C_CHUNK_HANDLE_KIND_TEXTURE);
+  first.bindings.streams[0].buffer =
+      publishedRef(&vb0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  first.bindings.streams[1].buffer =
+      publishedRef(&vb1, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  first.bindings.vdecl =
+      publishedRef(&vdecl0, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL);
+  first.bindings.indexBuffer =
+      publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  first.bindings.renderTargets[0] =
+      publishedRef(&rt0, D9C_CHUNK_HANDLE_KIND_SURFACE);
+  first.bindings.depthStencil =
+      publishedRef(&ds0, D9C_CHUNK_HANDLE_KIND_SURFACE);
+
+  struct ConstantSpec {
+    ConstShadow* shadow;
+    std::size_t elementBytes;
+    std::uint32_t registers;
+  };
+  const ConstantSpec ranges[6] = {
+      {&first.constants.vsConstF, 16u, 256u},
+      {&first.constants.vsConstI, 16u, 16u},
+      {&first.constants.vsConstB, 4u, 16u},
+      {&first.constants.psConstF, 16u, 224u},
+      {&first.constants.psConstI, 16u, 16u},
+      {&first.constants.psConstB, 4u, 16u},
+  };
+  std::uint32_t seed = 1u;
+  for (const auto& range : ranges) {
+    range.shadow->values.assign(range.registers * range.elementBytes,
+                                static_cast<std::uint8_t>(seed));
+    range.shadow->dirtyElems.assign(range.registers, 0u);
+    range.shadow->dirtyStart = seed % 3u;
+    range.shadow->dirtyEnd = range.shadow->dirtyStart + 2u;
+    ++seed;
+  }
+
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken owner;
+  std::uint64_t epoch = 71u;
+  pe::RecorderLockGuard guard(mutex, false);
+  pe::SparseStatePlan plan{};
+  pe::CommandChunkBuilder firstBuilder;
+  check(guard.withCapability(owner, epoch, [&](const auto& access) noexcept {
+          if (!pe::buildSparseStatePlan(
+                  access, first.shadow, first.constants, first.bindings,
+                  first.payloads, first.params, false,
+                  first.inlineConstDelta, plan)) {
+            return false;
+          }
+          const auto* const source = plan.source(access);
+          check(source && source->vsFloatConstants.present() &&
+                 source->vsIntConstants.present() &&
+                 source->vsBoolConstants.present() &&
+                 source->psFloatConstants.present() &&
+                 source->psIntConstants.present() &&
+                 source->psBoolConstants.present() &&
+                 source->payloads.upIndex.data() == first.payloads.upIndex.data() &&
+                 source->payloads.upVertex.data() ==
+                     first.payloads.upVertex.data() &&
+                 source->textureMask == 0x3u &&
+                 source->selectedStreamMask == 0x3u &&
+                 plan.destination().streamMask == 0x3u &&
+                 !plan.destination().indexBuffer &&
+                 plan.destination().chunkContextFinalized,
+                "rich reused plan publishes all source and destination fields");
+          return pe::appendSparseStatePlan(
+              access, firstBuilder, first.params.recordType, plan);
+        }),
+        "rich UP plan prepares and emits through the reused plan");
+  const auto reusedFirst = finishLane(firstBuilder, true);
+  const auto freshFirst = runPlanLane(first);
+  const auto genericFirst = runDirectDrawLane(first);
+  check(reusedFirst.ok && freshFirst.ok && genericFirst.ok &&
+            reusedFirst.bytes == freshFirst.bytes &&
+            reusedFirst.bytes == genericFirst.bytes &&
+            reusedFirst.recordCount == freshFirst.recordCount &&
+            reusedFirst.handleCount == freshFirst.handleCount &&
+            reusedFirst.payloadBytes == freshFirst.payloadBytes,
+        "rich UP reuse matches fresh compact and independent generic bytes");
+
+  Fixture second;
+  second.name = "reused plan empty APPLY_STATE source";
+  second.params.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
+  second.inlineConstDelta = false;
+  pe::CommandChunkBuilder secondBuilder;
+  check(guard.withCapability(owner, epoch, [&](const auto& access) noexcept {
+          if (!pe::buildSparseStatePlan(
+                  access, second.shadow, second.constants, second.bindings,
+                  second.payloads, second.params, false,
+                  second.inlineConstDelta, plan)) {
+            return false;
+          }
+          const auto* const source = plan.source(access);
+          const bool noConstants =
+              source && !source->vsFloatConstants.present() &&
+              !source->vsIntConstants.present() &&
+              !source->vsBoolConstants.present() &&
+              !source->psFloatConstants.present() &&
+              !source->psIntConstants.present() &&
+              !source->psBoolConstants.present();
+          const bool noSources =
+              source && source->renderStateCount == 0u &&
+              source->textureStageStateCount == 0u &&
+              source->samplerStateCount == 0u && source->transformCount == 0u &&
+              source->textureMask == 0u && source->selectedStreamMask == 0u &&
+              source->drawFlags == 0u && source->renderTargetMask == 0u &&
+              source->clipPlaneMask == 0u && source->lightMask == 0u &&
+              source->lightEnableMask == 0u && source->shaderMask == 0u &&
+              !source->vertexInput && !source->selectedIndexBuffer &&
+              !source->depthStencil && !source->viewport &&
+              !source->scissor && !source->material &&
+              source->payloads.upIndex.empty() &&
+              source->payloads.upVertex.empty();
+          const auto& destination = plan.destination();
+          return noConstants && noSources && destination.streamMask == 0u &&
+                 !destination.indexBuffer && destination.chunkContextFinalized &&
+                 pe::appendApplyStatePlan(access, secondBuilder,
+                                          source->drawFlags, plan);
+        }),
+        "reused plan clears constants, payloads, masks, and destination facts");
+  const auto reusedSecond = finishLane(secondBuilder, true);
+  const auto freshSecond = runPlanLane(second);
+  const auto genericSecond = runDirectLane(second);
+  check(reusedSecond.ok && freshSecond.ok && genericSecond.ok &&
+            reusedSecond.bytes == freshSecond.bytes &&
+            reusedSecond.bytes == genericSecond.bytes &&
+            reusedSecond.recordCount == genericSecond.recordCount &&
+            reusedSecond.handleCount == genericSecond.handleCount &&
+            reusedSecond.payloadBytes == genericSecond.payloadBytes,
+        "empty APPLY_STATE retry matches compact and generic producers");
+}
+
+// The six-family case above proves presence-to-absence.  This bounded A-B-A
+// sequence additionally proves that changing families cannot leave a prior
+// range authoritative when the same plan is rebuilt a third time.
+void sparsePlanConstantFamilyABA() {
+  Fixture a;
+  a.name = "constant family A, VS float";
+  a.params.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
+  a.inlineConstDelta = true;
+  a.constants.vsConstF.values.assign(64u, 0x11u);
+  a.constants.vsConstF.dirtyElems.assign(4u, 0u);
+  a.constants.vsConstF.dirtyStart = 1u;
+  a.constants.vsConstF.dirtyEnd = 3u;
+
+  Fixture b;
+  b.name = "constant family B, PS bool";
+  b.params.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
+  b.inlineConstDelta = true;
+  b.constants.psConstB.values.assign(16u, 0x22u);
+  b.constants.psConstB.dirtyElems.assign(4u, 0u);
+  b.constants.psConstB.dirtyStart = 2u;
+  b.constants.psConstB.dirtyEnd = 4u;
+
+  Fixture aAgain;
+  aAgain.name = "constant family A again, VS float";
+  aAgain.params.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
+  aAgain.inlineConstDelta = true;
+  aAgain.constants.vsConstF.values.assign(64u, 0x33u);
+  aAgain.constants.vsConstF.dirtyElems.assign(4u, 0u);
+  aAgain.constants.vsConstF.dirtyStart = 0u;
+  aAgain.constants.vsConstF.dirtyEnd = 1u;
+
+  auto genericInline = [](const Fixture& fixture) {
+    pe::CommandChunkBuilder builder;
+    PeConstShadowBlock constants = fixture.constants;
+    pe::PeSparseScratch scratch{};
+    pe::SparseStateInput state{};
+    D9CCommandChunkWireDrawHeader header{};
+    if (!pe::buildSparseState(fixture.shadow, constants, fixture.bindings,
+                              fixture.payloads, fixture.params, false,
+                              fixture.inlineConstDelta, scratch, header,
+                              state)) {
+      return LaneResult{};
+    }
+    return finishLane(builder,
+                     pe::appendApplyState(builder, header.flags, state));
+  };
+
+  const std::array<Fixture*, 3> cases = {&a, &b, &aAgain};
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken owner;
+  std::uint64_t epoch = 83u;
+  pe::RecorderLockGuard guard(mutex, false);
+  pe::SparseStatePlan plan{};
+  for (Fixture* fixture : cases) {
+    pe::CommandChunkBuilder builder;
+    check(guard.withCapability(owner, epoch, [&](const auto& access) noexcept {
+            if (!pe::buildSparseStatePlan(
+                    access, fixture->shadow,
+                    fixture->constants,
+                    fixture->bindings, fixture->payloads, fixture->params, false,
+                    fixture->inlineConstDelta, plan)) {
+              return false;
+            }
+            const auto* const source = plan.source(access);
+            const bool expectA = fixture != &b;
+            return source && source->vsFloatConstants.present() == expectA &&
+                   source->psBoolConstants.present() == (fixture == &b) &&
+                   !source->vsIntConstants.present() &&
+                   !source->vsBoolConstants.present() &&
+                   !source->psFloatConstants.present() &&
+                   !source->psIntConstants.present() &&
+                   source->payloads.upIndex.empty() &&
+                   source->payloads.upVertex.empty() &&
+                   pe::appendApplyStatePlan(access, builder,
+                                            source->drawFlags, plan);
+          }),
+          "A-B-A constant family plan prepares and emits");
+    const auto reused = finishLane(builder, true);
+    const auto fresh = runPlanLane(*fixture);
+    const auto generic = genericInline(*fixture);
+    check(reused.ok && fresh.ok && generic.ok &&
+              reused.bytes == fresh.bytes && reused.bytes == generic.bytes &&
+              reused.handleCount == generic.handleCount &&
+              reused.payloadBytes == generic.payloadBytes,
+          fixture->name + ": A-B-A bytes match compact and generic paths");
+  }
+}
+
+void sparsePlanFailedPreparationCleanRetry() {
+  // Fail late enough that the plan has already selected several optional
+  // masks and entered constant preparation.  A failure at the initial
+  // section-cap check would not exercise reset of those partially prepared
+  // fields.
+  Fixture failed = baseDraw("failed compact plan preparation",
+                            D9C_COMMAND_RECORD_APPLY_STATE);
+  failed.inlineConstDelta = true;
+  failed.shadow.writer().pendingRenderStatesTyped().set(
+      renderStateSlotKey(7u), 0x507u);
+  failed.shadow.writer().pendingTextureMask() = 0x1u;
+  failed.shadow.writer().pendingVdecl() = true;
+  failed.bindings.textures[0] =
+      publishedRef(&tex0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
+  failed.bindings.vdecl =
+      publishedRef(&vdecl0, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL);
+  failed.constants.vsConstF.values.assign(16u, 0x44u);
+  failed.constants.vsConstF.dirtyElems.assign(256u, 0u);
+  failed.constants.vsConstF.dirtyStart = 256u;
+  failed.constants.vsConstF.dirtyEnd = 257u;
+  pe::SparseStatePlan plan{};
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken owner;
+  std::uint64_t epoch = 97u;
+  pe::RecorderLockGuard guard(mutex, false);
+  check(!guard.withCapability(owner, epoch, [&](const auto& access) noexcept {
+          return pe::buildSparseStatePlan(
+              access, failed.shadow, failed.constants, failed.bindings,
+              failed.payloads, failed.params, false, failed.inlineConstDelta,
+              plan);
+        }) &&
+            !plan.prepared() && !plan.pendingTicket().valid() &&
+            !plan.destination().chunkContextFinalized,
+        "partial preparation revokes the plan without publication");
+
+  Fixture clean;
+  clean.name = "clean retry after failed plan preparation";
+  clean.params.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
+  clean.shadow.writer().pendingRenderStatesTyped().set(
+      renderStateSlotKey(2u), 0x202u);
+  pe::CommandChunkBuilder builder;
+  check(guard.withCapability(owner, epoch, [&](const auto& access) noexcept {
+          if (!pe::buildSparseStatePlan(
+                  access, clean.shadow, clean.constants, clean.bindings,
+                  clean.payloads, clean.params, false, false, plan)) {
+            return false;
+          }
+          const auto* const source = plan.source(access);
+          return source && source->renderStateCount == 1u &&
+                 source->textureMask == 0u && source->selectedStreamMask == 0u &&
+                 source->shaderMask == 0u && !source->vertexInput &&
+                 source->drawFlags == 0u && plan.destination().streamMask == 0u &&
+                 !plan.destination().indexBuffer &&
+                 plan.destination().chunkContextFinalized &&
+                 pe::appendApplyStatePlan(access, builder,
+                                          source->drawFlags, plan);
+        }),
+        "same plan cleanly retries after failed preparation");
+  const auto retry = finishLane(builder, true);
+  const auto fresh = runPlanLane(clean);
+  const auto generic = runDirectLane(clean);
+  check(retry.ok && fresh.ok && generic.ok && retry.bytes == fresh.bytes &&
+            retry.bytes == generic.bytes &&
+            retry.recordCount == generic.recordCount &&
+            retry.handleCount == generic.handleCount &&
+            retry.payloadBytes == generic.payloadBytes,
+        "clean retry matches fresh compact and generic canonical bytes");
+}
+
+void sparsePlanFinalizerRejectsRetainedEpochInvalidation() {
+  Fixture f = baseDraw("retained callback invalidates finalizer epoch",
+                       D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  f.shadow.writer().pendingStreamMask() = 0u;
+  f.shadow.writer().pendingIb() = false;
+  f.chunk.retainedStreamMask = 0u;
+  f.chunk.indexBufferKnown = true;
+  f.chunk.indexBufferRetained = true;
+
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken owner;
+  std::uint64_t epoch = 109u;
+  pe::RecorderLockGuard guard(mutex, false);
+  pe::SparseStatePlan plan{};
+  bool callbackCalled = false;
+  std::size_t callbackCount = 0u;
+  check(guard.withCapability(owner, epoch, [&](const auto& access) noexcept {
+          if (!pe::buildSparseStatePlan(
+                  access, f.shadow, f.constants, f.bindings, f.payloads,
+                  f.params, false, false, plan)) {
+            return false;
+          }
+          const bool finalized = pe::finalizeSparseStatePlanChunkContext(
+              access, f.chunk, plan,
+              [&](std::uint32_t slot, const pe::BufferRef& buffer) noexcept {
+                callbackCalled = slot == 0u && buffer.object != nullptr;
+                ++callbackCount;
+                ++epoch;
+                return true;
+              });
+          return !finalized && !plan.validFor(access);
+        }),
+        "retained callback epoch invalidation rejects finalization");
+  check(callbackCalled && callbackCount == 1u,
+        "finalizer reached the custom retained callback before revalidation");
+}
+
 void upDrawUnderFullSnapshot() {
   Fixture f = baseUpDraw("UP draw under forceFullSnapshot",
                          D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP);
@@ -2380,6 +2740,10 @@ int main() {
     upDrawWithDirtyState();
     upIndexedDrawCarriesBothPayloads();
     upIndexedDrawIgnoresDirtyIndexBuffer();
+    sparsePlanReuseClearsRichSourcesAndDestination();
+    sparsePlanConstantFamilyABA();
+    sparsePlanFailedPreparationCleanRetry();
+    sparsePlanFinalizerRejectsRetainedEpochInvalidation();
     upDrawUnderFullSnapshot();
     upIndexedDrawUnderFullSnapshot();
     snapshotDrawKeepsEveryStreamSection();

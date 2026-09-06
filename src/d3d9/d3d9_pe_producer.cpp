@@ -565,22 +565,19 @@ bool acceptSparseStatePlan(const RecorderLockCapability& access,
                            PeScalarSemanticTokenLedger* tokens,
                            std::uint64_t recordOrdinal,
                            PendingDeltaTicket transactionTicket) noexcept {
-  const auto* const source = state.source(access);
-  if (!source) return false;
-  const auto& destination = state.destination();
   bool accepted = false;
-  return state.withSettlementSources(
+  const bool qualified = state.withQualifiedSources(
       access,
-      [&](const PeHotStateShadow& borrowedShadow,
-          PeConstShadowBlock& borrowedConstants,
-        const PeBindingView& bindings) noexcept {
-        if (&borrowedShadow != &shadow || &borrowedConstants != &constants) {
+      [&](const SparseStatePlan::QualifiedSources& sources) noexcept {
+        if (&sources.shadow != &shadow || &sources.constants != &constants) {
           return;
         }
         accepted = acceptSparseStatePlanWithSources(
-            shadow, constants, bindings, *source, destination, plan, tokens,
-            recordOrdinal, transactionTicket);
-      }) && accepted;
+            shadow, constants, sources.bindings, sources.source,
+            sources.destination, plan, tokens, recordOrdinal,
+            transactionTicket);
+      });
+  return qualified && accepted;
 }
 
 // Fills SparseStateInput straight from the shadows and the binding view.
@@ -925,7 +922,7 @@ bool buildSparseState(const PeHotStateShadow& shadow,
   // Release-safe, not just DXMT_ASSERT: every lane that runs under Wine is a
   // release build (b_ndebug=if-release), so an assert-only guard would compile
   // out of precisely the configuration where this bug class manifests --
-  // populateBindingView lives in the TU no native test can compile. Logged once
+  // Public binding setters live in the TU no native test can compile. Logged once
   // per process so a hot path cannot flood the log.
   const auto reportUnusableRef = [](const char* section) {
     static bool reported = false;

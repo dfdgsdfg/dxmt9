@@ -13,6 +13,45 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.26–7.30 are implemented with bounded native/codegen evidence:
+lexical source-proof reuse, explicit compact-plan initialization, no-expiry
+retainer settlement, single-authority stream metadata, and aggregate
+warm-retainer CapacityPre proof. Native 34/34 and x86_64 9/9 focused specs pass.
+The independent serial retainer model covers 393,216 five-action traces across
+three capacities and four starting epochs, including uint64 wrap, exact release
+order, warm touches, rollback, and clear. Plan reuse covers six constant
+families and UP spans followed by empty APPLY_STATE, constant-family A/B/A,
+late preparation failure/retry, and post-callback epoch invalidation. SWVP uses
+the tested scoped override helper (125 offset cells and 16 partial-update
+prefixes, plus exception/no-allocation checks). These are bounded refinements,
+not proofs of arbitrary callback behavior or full D3D9 COM execution.
+
+The new mixed-kind aggregate fixture failed before the aggregate proof was
+connected, then passed with pure CapacityPre denial, full-warm duplicate
+acceptance, committed-prefix preservation, and retry after a legitimate epoch.
+Normal headroom uses the six existing retention deltas; only near saturation
+does preparation inspect warm membership in the existing unique identity table.
+CapacityPre retry remains bounded and does not manufacture empty epochs.
+
+All four canonical builds and unchanged TLC checks pass. PE32/PE64 release
+`buildSparseStatePlan` no longer emits the 344/432-byte whole-plan memset;
+successful preparation overwrites borrow authority directly, while its failure
+guard retains full revocation. The qualified payload body has no nested
+`validFor` call; public operation and invalidating callback checks remain.
+Compact unobserved append stack reservations remain 3,144/3,232 bytes without
+stack probes. Removing duplicate stream metadata reduces device storage by
+128 bytes in both PE architectures; artifact export/vtable/RTTI ownership
+checks pass with updated layout pins. The zero-hot-codegen-delta audit is not
+an acceptance gate for these intentional hot-path changes. `ProcessVertices`
+still uses a bounded call-local offset/stride adapter for its existing context.
+Local inspection artifacts are under
+`experiments/output/pe-followup-20260906/analysis/`.
+
+Fresh Wine/SWVP correctness, low-perturbation phase attribution, and matched FPS
+evidence remain open; H247 is the preceding baseline, not runtime evidence for
+this follow-up. Existing TLC checks cover the recorder protocol, not the new
+concrete age counters, C++ layout, allocator behavior, or driver pixels.
+
 R-CORE-REC-7.22–7.25 are implemented with bounded native evidence: generation-
 qualified pin-index invalidation, unchanged clean warm-index reuse, compact
 witness/minimal receipts, transactional fused binding acquisition/emission,

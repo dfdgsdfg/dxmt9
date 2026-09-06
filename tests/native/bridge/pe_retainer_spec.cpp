@@ -1,9 +1,12 @@
 #include "d3d9_pe_retainer.hpp"
 
-#include <cstdint>
+#include <array>
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <new>
 #include <utility>
@@ -12,6 +15,60 @@
 namespace {
 std::atomic<bool> gCountAllocations{false};
 std::atomic<std::size_t> gAllocationCount{0u};
+
+struct ReleaseEvent {
+  std::uint8_t id = 0xffu;
+  std::uint32_t kind = 0u;
+};
+
+struct ReleaseTrace {
+  static constexpr std::size_t kMaxEvents = 64u;
+  static constexpr std::size_t kMaxBindings = 3u;
+
+  struct Binding {
+    void* object = nullptr;
+    std::uint8_t id = 0xffu;
+    std::uint32_t kind = 0u;
+  };
+
+  std::array<ReleaseEvent, kMaxEvents> events{};
+  std::array<Binding, kMaxBindings> bindings{};
+  std::size_t count = 0u;
+  bool overflow = false;
+
+  void reset() noexcept {
+    count = 0u;
+    overflow = false;
+  }
+
+  void bind(std::size_t index, std::uint32_t kind, void* object) noexcept {
+    bindings[index] = Binding{object, static_cast<std::uint8_t>(index), kind};
+  }
+
+  void recordId(std::uint8_t id, std::uint32_t kind) noexcept {
+    if (count == events.size()) {
+      overflow = true;
+      return;
+    }
+    events[count++] = ReleaseEvent{id, kind};
+  }
+
+  void recordActual(std::uint32_t kind, void* object) noexcept {
+    for (const auto& binding : bindings) {
+      if (binding.object == object && binding.kind == kind) {
+        recordId(binding.id, kind);
+        return;
+      }
+    }
+    overflow = true;
+  }
+};
+
+ReleaseTrace* gReleaseTrace = nullptr;
+
+void recordRelease(std::uint32_t kind, void* object) noexcept {
+  if (gReleaseTrace) gReleaseTrace->recordActual(kind, object);
+}
 }
 
 void* operator new(std::size_t size) {
@@ -63,26 +120,32 @@ std::uint32_t release(T* value) {
 
 extern "C" void dxmt9c_surface_addref(D9CSurface* value) { addRef(value); }
 extern "C" std::uint32_t dxmt9c_surface_release(D9CSurface* value) {
+  recordRelease(D9C_CHUNK_HANDLE_KIND_SURFACE, value);
   return release(value);
 }
 extern "C" void dxmt9c_texture_addref(D9CTexture* value) { addRef(value); }
 extern "C" std::uint32_t dxmt9c_texture_release(D9CTexture* value) {
+  recordRelease(D9C_CHUNK_HANDLE_KIND_TEXTURE, value);
   return release(value);
 }
 extern "C" void dxmt9c_buffer_addref(D9CBuffer* value) { addRef(value); }
 extern "C" std::uint32_t dxmt9c_buffer_release(D9CBuffer* value) {
+  recordRelease(D9C_CHUNK_HANDLE_KIND_BUFFER, value);
   return release(value);
 }
 extern "C" void dxmt9c_shader_addref(D9CShader* value) { addRef(value); }
 extern "C" std::uint32_t dxmt9c_shader_release(D9CShader* value) {
+  recordRelease(D9C_CHUNK_HANDLE_KIND_SHADER, value);
   return release(value);
 }
 extern "C" void dxmt9c_vdecl_addref(D9CVertexDecl* value) { addRef(value); }
 extern "C" std::uint32_t dxmt9c_vdecl_release(D9CVertexDecl* value) {
+  recordRelease(D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, value);
   return release(value);
 }
 extern "C" void dxmt9c_query_addref(D9CQuery* value) { addRef(value); }
 extern "C" std::uint32_t dxmt9c_query_release(D9CQuery* value) {
+  recordRelease(D9C_CHUNK_HANDLE_KIND_QUERY, value);
   return release(value);
 }
 
@@ -95,61 +158,247 @@ bool check(bool condition, const char* message) {
   return condition;
 }
 
-struct RetainTraceState {
-  D9CBuffer a{}, b{};
-  D9CQuery query{};
-  D3D9PePendingCommandRetainer retainer{3u};
-  D3D9PePendingCommandRetainer::Acquired checkpoint{};
-  bool active = false;
+struct SerialReferenceRetainer {
+  static constexpr std::size_t kResourceCount = 3u;
+  static constexpr std::uint64_t kWarmEpochs = 1u;
 
-  // Alphabet: A, B, Query, null, EndEpoch, Clear, Rollback. Starting a new
-  // record commits the prior record; no checkpoint survives epoch compaction.
-  bool step(unsigned op, std::size_t capacity, bool fused) {
-    if (op >= 4u) {
-      if (op == 6u && active) retainer.rollback(checkpoint);
-      active = false;
-      if (op == 4u) retainer.endEpoch();
-      if (op == 5u) retainer.clear();
-      return true;
+  struct Entry {
+    std::uint8_t id = 0xffu;
+    std::uint64_t touched = 0u;
+  };
+
+  std::array<Entry, kResourceCount> entries{};
+  std::array<std::uint32_t, kResourceCount> refs{1u, 1u, 1u};
+  std::size_t capacity = 0u;
+  std::size_t size = 0u;
+  std::uint64_t epoch = 0u;
+
+  SerialReferenceRetainer(std::size_t capacity_, std::uint64_t epoch_)
+      : capacity(capacity_), epoch(epoch_) {}
+
+  std::size_t beginAcquire() const noexcept { return size; }
+
+  bool contains(std::uint8_t id) const noexcept {
+    for (std::size_t i = 0u; i < size; ++i) {
+      if (entries[i].id == id) return true;
     }
-    checkpoint = retainer.beginAcquire();
-    active = true;
-    const auto kind = op == 2u ? D9C_CHUNK_HANDLE_KIND_QUERY
-                               : D9C_CHUNK_HANDLE_KIND_BUFFER;
-    void* object = op == 0u ? static_cast<void*>(&a)
-                   : op == 1u ? static_cast<void*>(&b)
-                   : op == 2u ? static_cast<void*>(&query) : nullptr;
-    if (fused)
-      return retainer.retainWireObject(kind, object, checkpoint, capacity);
-    // The old owner returns before its capacity probe for a null ref.
-    if (!object) return true;
-    const bool warm = op == 2u
-        ? retainer.containsQuery(&query)
-        : retainer.containsBuffer(static_cast<D9CBuffer*>(object));
-    return (warm || retainer.size() < capacity) &&
-           retainer.retainWireObject(kind, object, checkpoint);
+    return false;
+  }
+
+  bool retain(std::uint8_t id) noexcept {
+    for (std::size_t i = 0u; i < size; ++i) {
+      if (entries[i].id == id) {
+        entries[i].touched = epoch;
+        return true;
+      }
+    }
+    if (size == capacity) return false;
+    entries[size++] = Entry{id, epoch};
+    ++refs[id];
+    return true;
+  }
+
+  void rollback(std::size_t checkpoint, ReleaseTrace& releases) noexcept {
+    while (size > checkpoint) {
+      const auto id = entries[--size].id;
+      releases.recordId(id, D9C_CHUNK_HANDLE_KIND_BUFFER);
+      --refs[id];
+    }
+  }
+
+  void endEpoch(ReleaseTrace& releases) noexcept {
+    std::size_t write = 0u;
+    for (std::size_t read = 0u; read < size; ++read) {
+      const Entry entry = entries[read];
+      if (epoch - entry.touched <= kWarmEpochs) {
+        entries[write++] = entry;
+      } else {
+        releases.recordId(entry.id, D9C_CHUNK_HANDLE_KIND_BUFFER);
+        --refs[entry.id];
+      }
+    }
+    size = write;
+    ++epoch;
+  }
+
+  void clear(ReleaseTrace& releases) noexcept {
+    while (size != 0u) {
+      const auto id = entries[--size].id;
+      releases.recordId(id, D9C_CHUNK_HANDLE_KIND_BUFFER);
+      --refs[id];
+    }
   }
 };
 
-bool boundedTracesMatchReference(std::size_t capacity) {
-  // All length-four strings also cover every shorter prefix: 4 * 7^4 traces.
-  for (unsigned sequence = 0u; sequence < 7u * 7u * 7u * 7u; ++sequence) {
-    RetainTraceState reference, fused;
-    auto remaining = sequence;
-    for (unsigned depth = 0u; depth < 4u; ++depth) {
-      const auto op = remaining % 7u;
-      remaining /= 7u;
-      const bool expected = reference.step(op, capacity, false);
-      const bool actual = fused.step(op, capacity, true);
-      if (expected != actual || reference.retainer.size() != fused.retainer.size() ||
-          reference.a.refs != fused.a.refs || reference.b.refs != fused.b.refs ||
-          reference.query.refs != fused.query.refs) return false;
+enum class RetainAction : std::uint8_t {
+  RetainA,
+  RetainB,
+  RetainC,
+  Begin,
+  Commit,
+  Rollback,
+  EndEpoch,
+  Clear,
+};
+
+struct ActionResult {
+  bool actual = true;
+  bool expected = true;
+};
+
+struct RetainerTraceCase {
+  D9CBuffer a{}, b{}, c{};
+  std::array<D9CBuffer*, 3u> objects{&a, &b, &c};
+  D3D9PePendingCommandRetainer actual;
+  SerialReferenceRetainer expected;
+  D3D9PePendingCommandRetainer::Acquired actualCheckpoint{};
+  std::size_t expectedCheckpoint = 0u;
+  std::size_t capacity = 0u;
+  bool active = false;
+
+  RetainerTraceCase(std::size_t capacity_, std::uint64_t epoch)
+      : actual(capacity_, D3D9PePendingCommandRetainer::EpochForTesting{epoch}),
+        expected(capacity_, epoch), capacity(capacity_) {}
+
+  void begin() noexcept {
+    actualCheckpoint = actual.beginAcquire();
+    expectedCheckpoint = expected.beginAcquire();
+    active = true;
+  }
+
+  ActionResult step(RetainAction action, ReleaseTrace& actualReleases,
+                    ReleaseTrace& expectedReleases) {
+    actualReleases.reset();
+    expectedReleases.reset();
+    gReleaseTrace = &actualReleases;
+    ActionResult result{};
+    switch (action) {
+    case RetainAction::RetainA:
+    case RetainAction::RetainB:
+    case RetainAction::RetainC: {
+      if (!active) begin();
+      const auto id = static_cast<std::uint8_t>(action);
+      result.actual = actual.retainBuffer(objects[id], actualCheckpoint,
+                                          capacity);
+      result.expected = expected.retain(id);
+      break;
     }
-    reference.step(5u, capacity, false);
-    fused.step(5u, capacity, true);
-    if (reference.a.refs != 1u || reference.b.refs != 1u ||
-        reference.query.refs != 1u || fused.a.refs != 1u ||
-        fused.b.refs != 1u || fused.query.refs != 1u) return false;
+    case RetainAction::Begin:
+      active = false;
+      begin();
+      break;
+    case RetainAction::Commit:
+      active = false;
+      break;
+    case RetainAction::Rollback:
+      if (active) {
+        actual.rollback(actualCheckpoint);
+        expected.rollback(expectedCheckpoint, expectedReleases);
+      }
+      active = false;
+      break;
+    case RetainAction::EndEpoch:
+      active = false;
+      actual.endEpoch();
+      expected.endEpoch(expectedReleases);
+      break;
+    case RetainAction::Clear:
+      active = false;
+      actual.clear();
+      expected.clear(expectedReleases);
+      break;
+    }
+    gReleaseTrace = nullptr;
+    return result;
+  }
+
+  bool sameState() const noexcept {
+    if (actual.size() != expected.size) return false;
+    for (std::size_t i = 0u; i < objects.size(); ++i) {
+      if (actual.containsBuffer(objects[i]) != expected.contains(i) ||
+          objects[i]->refs != expected.refs[i])
+        return false;
+    }
+    return true;
+  }
+};
+
+bool sameReleaseTrace(const ReleaseTrace& actual,
+                      const ReleaseTrace& expected) noexcept {
+  if (actual.overflow || expected.overflow || actual.count != expected.count)
+    return false;
+  for (std::size_t i = 0u; i < actual.count; ++i) {
+    if (actual.events[i].id != expected.events[i].id ||
+        actual.events[i].kind != expected.events[i].kind)
+      return false;
+  }
+  return true;
+}
+
+bool boundedAgeSummaryTracesMatchSerialReference() {
+  // Five-step traces over {retain A, retain B, retain C, begin, commit,
+  // rollback, endEpoch, clear}: every shorter trace is a prefix. This is
+  // 8^5 sequences per capacity/epoch configuration, 393,216 total. The
+  // model intentionally excludes allocator failure, recorder fault injection,
+  // invalid handle kinds, and cross-kind pointer aliases; those have focused
+  // fixtures below or elsewhere in this spec.
+  constexpr std::array<std::size_t, 3u> kCapacities{1u, 2u, 3u};
+  constexpr std::array<std::uint64_t, 4u> kStartingEpochs{
+      0u, std::numeric_limits<std::uint64_t>::max() - 2u,
+      std::numeric_limits<std::uint64_t>::max() - 1u,
+      std::numeric_limits<std::uint64_t>::max()};
+  constexpr unsigned kActionCount = 8u;
+  constexpr unsigned kTraceLength = 5u;
+  constexpr std::size_t kSequenceCount = [] {
+    std::size_t count = 1u;
+    for (unsigned depth = 0u; depth < kTraceLength; ++depth)
+      count *= kActionCount;
+    return count;
+  }();
+  constexpr std::size_t kTraceCount = kCapacities.size() *
+      kStartingEpochs.size() * kSequenceCount;
+  static_assert(kTraceCount == 393216u);
+
+  ReleaseTrace actualReleases;
+  ReleaseTrace expectedReleases;
+  for (const auto capacity : kCapacities) {
+    for (const auto epoch : kStartingEpochs) {
+      for (std::size_t sequence = 0u; sequence < kSequenceCount; ++sequence) {
+        RetainerTraceCase trace(capacity, epoch);
+        actualReleases = ReleaseTrace{};
+        actualReleases.bind(0u, D9C_CHUNK_HANDLE_KIND_BUFFER, trace.objects[0]);
+        actualReleases.bind(1u, D9C_CHUNK_HANDLE_KIND_BUFFER, trace.objects[1]);
+        actualReleases.bind(2u, D9C_CHUNK_HANDLE_KIND_BUFFER, trace.objects[2]);
+        auto remaining = sequence;
+        bool matches = true;
+        for (unsigned depth = 0u; depth < kTraceLength; ++depth) {
+          const auto action = static_cast<RetainAction>(remaining % kActionCount);
+          remaining /= kActionCount;
+          const auto result =
+              trace.step(action, actualReleases, expectedReleases);
+          matches = result.actual == result.expected &&
+              trace.sameState() &&
+              sameReleaseTrace(actualReleases, expectedReleases);
+          if (!matches) {
+            std::cerr << "serial retainer mismatch: capacity=" << capacity
+                      << " epoch=" << epoch << " sequence=" << sequence
+                      << " depth=" << depth << '\n';
+            gReleaseTrace = nullptr;
+            return false;
+          }
+        }
+        const auto cleanup =
+            trace.step(RetainAction::Clear, actualReleases, expectedReleases);
+        if (cleanup.actual != cleanup.expected || !trace.sameState() ||
+            !sameReleaseTrace(actualReleases, expectedReleases)) {
+          std::cerr << "serial retainer cleanup mismatch: capacity="
+                    << capacity << " epoch=" << epoch
+                    << " sequence=" << sequence << '\n';
+          gReleaseTrace = nullptr;
+          return false;
+        }
+      }
+    }
   }
   return true;
 }
@@ -311,20 +560,154 @@ bool warmBoundaryAndTombstoneTrace() {
          actualC.refs == 1u && actualD.refs == 1u;
 }
 
+bool pureHeadroomAndMembershipTrace() {
+  D3D9PePendingCommandRetainer unavailable(
+      4u, D3D9PePendingCommandRetainer::ConstructionMode::FailForTesting);
+  D9CBuffer unavailableObject{};
+  if (unavailable.hasHeadroom(0u, 4u) ||
+      unavailable.containsWireObject(D9C_CHUNK_HANDLE_KIND_BUFFER,
+                                     &unavailableObject) ||
+      unavailable.containsWireObject(0u, &unavailableObject) ||
+      unavailable.containsWireObject(D9C_CHUNK_HANDLE_KIND_BUFFER, nullptr))
+    return false;
+
+  constexpr std::size_t kCapacity = 4u;
+  D3D9PePendingCommandRetainer retainer(kCapacity);
+  std::array<D9CBuffer, kCapacity> objects{};
+  std::array<D9CBuffer, kCapacity> unknown{};
+  for (std::size_t count = 0u; count <= kCapacity; ++count) {
+    if (count != 0u) {
+      auto acquired = retainer.beginAcquire();
+      if (!retainer.retainBuffer(&objects[count - 1u], acquired))
+        return false;
+    }
+    for (std::size_t capacity = 0u; capacity <= kCapacity + 1u;
+         ++capacity) {
+      for (std::size_t add = 0u; add <= kCapacity + 1u; ++add) {
+        const bool expected = retainer.constructionSucceeded() &&
+            capacity <= kCapacity && retainer.size() <= capacity &&
+            add <= capacity - retainer.size();
+        if (retainer.hasHeadroom(add, capacity) != expected) return false;
+      }
+    }
+    for (std::size_t i = 0u; i < count; ++i) {
+      if (!retainer.containsWireObject(D9C_CHUNK_HANDLE_KIND_BUFFER,
+                                       &objects[i]) ||
+          retainer.containsWireObject(D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                                      &unknown[i]))
+        return false;
+    }
+  }
+
+  // The pure probes remain allocation-free at a full aggregate ceiling. This
+  // is the mixed-kind/warm counterexample plan for main: each per-kind
+  // MaxPins quota may fit while one novel kind cannot fit the warm arena.
+  gAllocationCount.store(0u, std::memory_order_relaxed);
+  gCountAllocations.store(true, std::memory_order_release);
+  const bool fullWarm = retainer.hasHeadroom(0u, kCapacity) &&
+      !retainer.hasHeadroom(1u, kCapacity) &&
+      retainer.containsWireObject(D9C_CHUNK_HANDLE_KIND_BUFFER, &objects[0]);
+  gCountAllocations.store(false, std::memory_order_release);
+  if (!fullWarm || gAllocationCount.load(std::memory_order_relaxed) != 0u)
+    return false;
+
+  retainer.endEpoch();
+  if (!retainer.containsWireObject(D9C_CHUNK_HANDLE_KIND_BUFFER, &objects[0]) ||
+      !retainer.hasHeadroom(0u, kCapacity))
+    return false;
+  retainer.endEpoch();
+  retainer.endEpoch();
+  return !retainer.containsWireObject(D9C_CHUNK_HANDLE_KIND_BUFFER,
+                                      &objects[0]);
+}
+
+bool epochWrapTrace() {
+  struct Reference {
+    std::array<D9CBuffer*, 2u> objects{};
+    std::array<std::uint64_t, 2u> touched{};
+    std::size_t size = 0u;
+    std::uint64_t epoch = 0u;
+
+    explicit Reference(std::uint64_t start) : epoch(start) {}
+
+    void retain(D9CBuffer* object) noexcept {
+      for (std::size_t i = 0u; i < size; ++i) {
+        if (objects[i] == object) {
+          touched[i] = epoch;
+          return;
+        }
+      }
+      objects[size] = object;
+      touched[size++] = epoch;
+    }
+
+    void endEpoch() noexcept {
+      std::size_t write = 0u;
+      for (std::size_t read = 0u; read < size; ++read) {
+        if (epoch - touched[read] <=
+            D3D9PePendingCommandRetainer::kWarmEpochs) {
+          objects[write] = objects[read];
+          touched[write++] = touched[read];
+        }
+      }
+      size = write;
+      ++epoch;
+    }
+  };
+
+  D3D9PePendingCommandRetainer retainer(
+      4u, D3D9PePendingCommandRetainer::EpochForTesting{
+               std::numeric_limits<std::uint64_t>::max() - 1u});
+  Reference reference(std::numeric_limits<std::uint64_t>::max() - 1u);
+  D9CBuffer hot{};
+  D9CBuffer second{};
+  D9CBuffer referenceHot{};
+  D9CBuffer referenceSecond{};
+
+  auto acquire = retainer.beginAcquire();
+  if (!retainer.retainBuffer(&hot, acquire)) return false;
+  reference.retain(&referenceHot);
+  retainer.endEpoch();  // max - 1 -> max; hot is one epoch old.
+  reference.endEpoch();
+
+  acquire = retainer.beginAcquire();
+  if (!retainer.retainBuffer(&hot, acquire) ||
+      !retainer.retainBuffer(&second, acquire))
+    return false;
+  reference.retain(&referenceHot);
+  reference.retain(&referenceSecond);
+  retainer.endEpoch();  // max -> 0; both last touches cross the wrap.
+  reference.endEpoch();
+  if (hot.refs != 2u || second.refs != 2u || retainer.size() != reference.size)
+    return false;
+
+  retainer.endEpoch();  // 0: max-touch entries have unsigned age one.
+  reference.endEpoch();
+  if (hot.refs != 2u || second.refs != 2u || retainer.size() != reference.size)
+    return false;
+  retainer.endEpoch();  // 1: unsigned age two expires both, in arena order.
+  reference.endEpoch();
+  return hot.refs == 1u && second.refs == 1u &&
+         retainer.size() == reference.size && reference.size == 0u;
+}
+
 }  // namespace
 
 int main() {
-  for (std::size_t capacity = 0u; capacity <= 3u; ++capacity) {
-    if (!check(boundedTracesMatchReference(capacity),
-               "bounded fused trace matches contains-then-retain reference")) {
-      return 1;
-    }
-  }
+  if (!check(boundedAgeSummaryTracesMatchSerialReference(),
+             "bounded age-summary traces match an independent serial reference"))
+    return 1;
   if (!check(sameAddressDifferentKindsAreIndependent(),
              "one opaque address retains two independent kind-qualified pins"))
     return 1;
   if (!check(warmBoundaryAndTombstoneTrace(),
              "warm/tombstone reference preserves release and allocation bounds"))
+    return 1;
+  if (!check(pureHeadroomAndMembershipTrace(),
+             "pure aggregate headroom and qualified membership probes"))
+    return 1;
+  if (!check(epochWrapTrace(),
+             "warm expiry preserves unsigned uint64 epoch wrap semantics"))
     return 1;
 
   D3D9PePendingCommandRetainer retainer;
