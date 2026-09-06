@@ -731,3 +731,22 @@ or bytes. Consolidation must preserve canonical byte order, logical quotas,
 rollback/retry, committed visitors, and both transport forms. Native ownership
 and byte differentials plus PE32/PE64 release frame/code inspection must qualify
 the change; a smaller source type alone is not evidence of lower runtime cost.
+
+**R-CORE-REC-7.20** Reusable compact selection facts must be issued by the
+recorder producer and immutable to consumers. Read-only views must not expose
+a mutable plan, a public trusted setter, or a caller-supplied validity bit.
+Admission, emission, and settlement may reuse category counts, masks, and range
+metadata only while the exact source authority and each declared dependency
+remain valid. A recorder access epoch alone does not prove that borrowed
+constant or binding payloads are unchanged. Checks for independently mutable
+dependencies remain mandatory unless an equivalent mutation-qualified witness
+replaces them. CapacityPre must requalify only the destination-dependent
+selection without admitting stale source facts or consuming PendingDelta.
+
+**R-CORE-REC-7.21** A fused retainer lookup/acquisition must preserve the
+kind-qualified warm-object result, epoch refresh, capacity denial, unique
+AddRef fault point, and exact rollback/release multiplicity of the reference
+contains-then-retain sequence. Lookup reuse must be synchronous and private to
+the retainer operation; it must not expose an index that can survive mutation
+or table rebuild. Warm hits at the capacity ceiling remain admissible; a novel
+acquisition at that ceiling must fail before AddRef or index publication.

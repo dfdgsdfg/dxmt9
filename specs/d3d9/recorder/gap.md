@@ -32,6 +32,19 @@ Release codegen and GT2 direction evidence are tracked in
 
 ## Compact attribution and dependency-qualified reuse (R-CORE-REC-7.17–7.19)
 
+R-CORE-REC-7.20–7.21 are implemented with private producer-issued source facts,
+a separate destination overlay, and one bounded warm-retainer lookup/acquisition.
+Normal compact settlement reuses selection facts; borrow/ticket, four typed
+counts, mutable constant ranges, destination and identity/schema checks remain.
+Native coverage includes 192 ordinary-family/mask byte-and-quota differentials,
+compile-time writer/rebind closure, stale ticket/owner, constant-range and binding
+collision rejection, and 9,604 valid short retainer traces versus contains-then-
+retain. Capacity/duplicate/unique-fault and no-allocation pins remain separate.
+All four canonical builds, native 21/21, x86_64 7/7, and unchanged TLC pass.
+This is bounded value/ownership refinement, not a new concurrent model or proof
+of arbitrary borrowed bytes. Low-perturbation GT2 evidence and exclusions are
+tracked in [H246](../../../docs/perfomance/present-pacing/present-pacing-pe-plan-authority.246.md).
+
 Implemented with bounded evidence: compact preparation/destination scopes,
 family-qualified settlement, observer-off scalar-walk removal, typed lazy
 destination resolution, and one admission-local identity/pin/wire-order table.
@@ -41,10 +54,10 @@ overlap; native family classification/interval conservation pins cover all five
 rows, including a separate generic rollback fixture.
 All four builds, native 18/18, x86_64 4/4 and existing TLC checks pass. PE32
 admission frames shrink about 0.75KiB but still probe. GT2 OFF/ON candidate
-direction runs pass with zero errors and about 4 CB/P, 15.77 passes/P. Source
-count/mask/schema recomputation remains intentional while SparseStatePlan is
-publicly mutable; private producer-issued selection is required before that
-validation can be elided. Final observed GT2 is slower than baseline ON;
+direction runs pass with zero errors and about 4 CB/P, 15.77 passes/P. At that
+H245 checkpoint SparseStatePlan was publicly mutable and its source-selection
+recomputation remained necessary; H246 closes that writer surface without
+removing dependency or wire validation. H245 final observed GT2 is slower than baseline ON;
 low-perturbation attribution, repeat FPS promotion and broader Wine fault/pixel
 coverage remain open. See
 [H245](../../../docs/perfomance/present-pacing/present-pacing-pe-compact-reuse.245.md);

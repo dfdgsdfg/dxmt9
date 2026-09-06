@@ -686,8 +686,8 @@ transport defaults, queue policy, and chunk cadence remain frozen.
 
 The implementation preserves the identity-set ordinal during admission and
 uses it to assign a wire ordinal without a second post-plan identity walk.
-`PeSemanticPreparedPinMapping` stores qualified identity/object, predicted typed
-pin, and local wire ordinal for the active prefix. Sparse occurrences preserve
+`PeSemanticPreparedIdentityWitness` stores qualified identity/object, predicted
+typed pin, and local wire ordinal for the active prefix. Sparse occurrences preserve
 that mapping ordinal for acquisition and canonical emission; direct control
 records may use a bounded mapping lookup. Canonical binding emission applies
 the destination handle-table base without resolving identity again. The
@@ -728,6 +728,30 @@ single synchronous resolver/witness over a persistent cache. If cached state
 is introduced, every mutation, reset, failed append, and CapacityPre edge must
 have explicit invalidation and bounded model-code evidence. Public mutable
 selection fields or a copied numeric epoch alone do not establish authority.
+
+R-CORE-REC-7.20 separates producer-issued immutable source selection from the
+destination overlay. Consumers receive read-only facts, not a public writer
+or a test-only trusted constructor in the production API. The source proof
+names the issuing recorder, borrow epoch/lane, and PendingDelta frontier;
+constant dirty ranges and binding identities retain their distinct validation
+where that frontier does not version their mutation. Reuse removes duplicate
+derivation only within this authority, not mandatory Unix import validation.
+Reset, failed preparation, append completion, and PendingDelta frontier mutation
+revoke selection authority. This is not a general freeze of borrowed binding
+or constant bytes: their existing validation and synchronous recorder-lock
+discipline remain necessary. Destination retry recomputes stream/index qualification and may not
+revive an invalid source. Native bounded traces compare reuse with the
+recomputing reference, including wrong owner, stale ticket, same-epoch source
+mutation, destination A/B/A, null bindings, and failed settlement/retry.
+
+R-CORE-REC-7.21 keeps warm membership and acquisition inside one retainer
+operation. The existing kind-qualified lookup may refresh a warm epoch or
+admit a novel pin under the supplied capacity ceiling without a second probe.
+The operation owns fault injection and rollback, including index allocation
+failure; no cached lookup pointer escapes it. Native fake-object/refcount
+refinement must compare the previous contains-then-retain behavior for warm,
+novel, null, cross-kind, capacity, reset/reuse, and failed partial acquisition.
+Neither this value refinement nor existing recorder TLA checks prove pixels.
 
 An admission-local identity authority may combine deduplication, predicted pins,
 and wire-promotion ordinals. It must distinguish first retention from first wire

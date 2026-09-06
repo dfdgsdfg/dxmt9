@@ -16,6 +16,7 @@
 #include <span>
 #include <string_view>
 #include <type_traits>
+#include <utility>
 
 struct TestFailure : std::runtime_error {
   explicit TestFailure(std::string message)
@@ -30,12 +31,60 @@ void check(bool condition, std::string_view message) {
 
 namespace pe = dxmt9::d3d9::pe;
 
+template <typename Plan>
+concept HasPublicSparsePlanReset = requires(Plan& plan) {
+  plan.reset();
+};
+
+template <typename Plan>
+concept HasPublicSparsePlanBindSources = requires(
+    Plan& plan, const pe::RecorderLockCapability& access,
+    const PeHotStateShadow& shadow, PeConstShadowBlock& constants,
+    const pe::PeBindingView& bindings) {
+  plan.bindSources(access, shadow, constants, bindings);
+};
+
+template <typename Plan>
+concept HasPublicSparsePlanSourceWrite = requires(Plan& plan) {
+  (plan.source_.prepared) = true;
+};
+
+template <typename Plan>
+concept HasMutableSparsePlanSourceView = requires(Plan& plan) {
+  (plan.source().textureMask) = std::uint32_t{0u};
+};
+
+template <typename Plan>
+concept HasMutableSparsePlanDestinationView = requires(Plan& plan) {
+  (plan.destination().streamMask) = std::uint32_t{0u};
+};
+
 void viewsAreTriviallyCopyable() {
   static_assert(std::is_trivially_copyable_v<pe::PeStreamBinding>);
   static_assert(std::is_trivially_copyable_v<pe::PeBindingView>);
   static_assert(std::is_trivially_copyable_v<pe::PeChunkContext>);
   static_assert(std::is_trivially_copyable_v<pe::PeDrawParams>);
   check(true, "compile-time only");
+}
+
+void sparsePlanAuthorityHasNoPublicWriter() {
+  static_assert(std::is_same_v<
+                decltype(std::declval<const pe::SparseStatePlan&>().source()),
+                const pe::SparseStatePlan::SourceFacts&>);
+  static_assert(std::is_same_v<decltype(std::declval<const pe::SparseStatePlan&>()
+                                            .destination()),
+                               const pe::SparseStatePlan::DestinationFacts&>);
+  static_assert(!HasPublicSparsePlanReset<pe::SparseStatePlan>);
+  static_assert(!HasPublicSparsePlanBindSources<pe::SparseStatePlan>);
+  static_assert(!HasPublicSparsePlanSourceWrite<pe::SparseStatePlan>);
+  static_assert(!HasMutableSparsePlanSourceView<pe::SparseStatePlan>);
+  static_assert(!HasMutableSparsePlanDestinationView<pe::SparseStatePlan>);
+  static_assert(!std::is_copy_constructible_v<pe::SparseStatePlan>);
+  static_assert(!std::is_copy_assignable_v<pe::SparseStatePlan>);
+  static_assert(!std::is_move_constructible_v<pe::SparseStatePlan>);
+  static_assert(!std::is_move_assignable_v<pe::SparseStatePlan>);
+  check(!pe::SparseStatePlan{}.source().prepared,
+        "unpublished sparse plan has no producer authority");
 }
 
 void payloadsAreEmptyByDefault() {
@@ -438,6 +487,7 @@ void fullSnapshotScalarSettlementRoutes() {
 int main() {
   try {
     viewsAreTriviallyCopyable();
+    sparsePlanAuthorityHasNoPublicWriter();
     payloadsAreEmptyByDefault();
     semanticInputConstantCadenceMatchesSelectedBytes();
     defaultBindingViewIsAllNull();

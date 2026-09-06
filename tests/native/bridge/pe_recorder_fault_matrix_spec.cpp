@@ -157,12 +157,12 @@ void testRetainBoundaryRollback(const char* selector,
   check(pid >= 0, "retain fault fixture forks a fresh process");
   if (pid == 0) {
     setenv("DXMT9_PE_RECORDER_FAULT", selector, 1);
-    D3D9PePendingCommandRetainer retainer;
+    D3D9PePendingCommandRetainer retainer(2u);
     D9CBuffer first{};
     D9CBuffer second{};
     auto acquired = retainer.beginAcquire();
-    const bool firstResult = retainer.retainBuffer(&first, acquired);
-    const bool secondResult = retainer.retainBuffer(&second, acquired);
+    const bool firstResult = retainer.retainBuffer(&first, acquired, 2u);
+    const bool secondResult = retainer.retainBuffer(&second, acquired, 2u);
     const bool shape = firstResult == firstSucceeds &&
         secondResult == !firstSucceeds &&
         first.refs == (firstSucceeds ? 2u : 1u) &&
@@ -177,6 +177,35 @@ void testRetainBoundaryRollback(const char* selector,
   check(waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
             WEXITSTATUS(status) == 0,
         "typed retain fault rolls back pre-first and partial acquisitions");
+}
+
+void testRetainDuplicateAndCapacityDoNotConsumeBudget() {
+  const auto pid = fork();
+  check(pid >= 0, "duplicate/capacity fixture forks a fresh process");
+  if (pid == 0) {
+    setenv("DXMT9_PE_RECORDER_FAULT", "retain_acquire=1", 1);
+    D3D9PePendingCommandRetainer retainer(2u);
+    D9CBuffer first{};
+    D9CBuffer denied{};
+    D9CBuffer faulted{};
+    auto acquired = retainer.beginAcquire();
+    const bool firstResult = retainer.retainBuffer(&first, acquired, 1u);
+    const bool duplicateResult = retainer.retainBuffer(&first, acquired, 1u);
+    const bool capacityResult = retainer.retainBuffer(&denied, acquired, 1u);
+    // The capacity denial and warm duplicate must not consume the one
+    // successful-unique budget; the next novel retain reaches the fault.
+    const bool faultResult = retainer.retainBuffer(&faulted, acquired, 2u);
+    const bool shape = firstResult && duplicateResult && !capacityResult &&
+        !faultResult && first.refs == 2u && denied.refs == 1u &&
+        faulted.refs == 1u && retainer.size() == 1u;
+    retainer.rollback(acquired);
+    const bool rolledBack = first.refs == 1u && retainer.size() == 0u;
+    _exit(shape && rolledBack ? 0 : 1);
+  }
+  int status = 0;
+  check(waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
+            WEXITSTATUS(status) == 0,
+        "duplicate/capacity retain operations preserve the unique fault budget");
 }
 
 void testCaptureDispositions() {
@@ -218,6 +247,7 @@ int main() {
     testCapacityAndRetainRemainUnattempted();
     testRetainBoundaryRollback("retain_acquire=0", false);
     testRetainBoundaryRollback("retain_acquire=1", true);
+    testRetainDuplicateAndCapacityDoNotConsumeBudget();
     testBridgeCaptureResetEnvelope();
     testCaptureDispositions();
   } catch (const Failure &failure) {

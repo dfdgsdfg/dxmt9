@@ -339,6 +339,51 @@ void inactiveBindingMetadataRemainsNonAuthoritative() {
         "inactive occurrence retains canonical ignored-metadata behavior");
 }
 
+void bindingOccurrenceStorageUsesActiveFrontier() {
+  constexpr std::size_t locatorBytes =
+      sizeof(PeSemanticBindingLocator) * kPeSemanticMaxBindingOccurrences;
+  alignas(PeSemanticBindingOccurrencePlan)
+      std::array<std::byte, sizeof(PeSemanticBindingOccurrencePlan)> storage;
+  std::fill(storage.begin(), storage.end(), std::byte{0xa7});
+
+  auto* plan = ::new (storage.data()) PeSemanticBindingOccurrencePlan;
+  const auto locatorBytesView = [&]() noexcept {
+    return std::span<const std::byte>(
+        reinterpret_cast<const std::byte*>(plan->values.data()), locatorBytes);
+  };
+  check(std::all_of(locatorBytesView().begin(), locatorBytesView().end(),
+                    [](std::byte value) { return value == std::byte{0xa7}; }),
+        "inactive binding locator storage is not default-initialized");
+
+  plan->values[0] = {.mappingOrdinal = 3u,
+                     .wireIndex = 5u,
+                     .occurrence = 0u,
+                     .wireValid = true,
+                     .hasPin = true};
+  plan->count = 1u;
+  plan->reset();
+  check(plan->count == 0u && plan->values[0].mappingOrdinal == 3u &&
+            plan->values[0].wireIndex == 5u &&
+            plan->values[0].occurrence == 0u &&
+            plan->values[0].wireValid && plan->values[0].hasPin,
+        "active binding locator survives frontier reset for reuse");
+  const auto inactiveTail = locatorBytesView().subspan(sizeof(PeSemanticBindingLocator));
+  check(std::all_of(inactiveTail.begin(), inactiveTail.end(),
+                    [](std::byte value) { return value == std::byte{0xa7}; }),
+        "frontier reset leaves inactive binding locator tail untouched");
+
+  plan->values[0] = {.mappingOrdinal = kPeSemanticNoSlot,
+                     .wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+                     .occurrence = 0u,
+                     .wireValid = true,
+                     .hasPin = false};
+  plan->count = 1u;
+  check(plan->values[0].mappingOrdinal == kPeSemanticNoSlot &&
+            plan->values[0].wireIndex == D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX &&
+            plan->values[0].wireValid && !plan->values[0].hasPin,
+        "reused active binding locator writes every nullable field");
+}
+
 template <typename Wire, std::size_t RowCount, typename Object,
           std::uint32_t Kind,
           typename MakeValid, typename MakeNull, typename MakeInactive,
@@ -4233,6 +4278,7 @@ int main() {
     typedConstantAdmissionDifferential<PeSemanticProducerKind::PsIntConstant>();
     typedConstantAdmissionDifferential<PeSemanticProducerKind::PsBoolConstant>();
     inactiveBindingMetadataRemainsNonAuthoritative();
+    bindingOccurrenceStorageUsesActiveFrontier();
     preparedBindingSevenFamilyMatrix();
     classificationAndLifetime();
     partialRectClearMatchesCanonicalBuilder();

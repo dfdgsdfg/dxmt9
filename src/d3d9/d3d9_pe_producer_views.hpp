@@ -167,8 +167,10 @@ struct PeDrawParams {
 // Compact pass-1 result for the normal recorder path.  It deliberately owns
 // no section-sized wire storage: masks/counts select rows from the borrowed
 // source views, constant and UP ranges borrow their call-local bytes, and pass
-// 2 writes those rows directly into CommandChunkBuilder's final payload while
-// the recorder lock keeps the witnesses stable.
+// 2 writes those rows into the semantic owner's canonical payload. The source
+// facts are producer-issued; borrowed payload still requires the recorder
+// borrow/ticket and live dependency checks. CommandChunkBuilder remains the
+// independent compatibility oracle, not the production destination.
 //
 // PeSparseScratch remains below as an isolated compatibility/oversized-batch
 // owner.  It must not be embedded here or moved to a draw-call stack frame.
@@ -179,32 +181,19 @@ struct SparseStatePlan {
   SparseStatePlan(SparseStatePlan&&) = delete;
   SparseStatePlan& operator=(SparseStatePlan&&) = delete;
 
-  void reset() noexcept {
-    std::destroy_at(this);
-    std::construct_at(this);
-  }
-
   void invalidate() noexcept {
-    prepared = false;
-    chunkContextFinalized = false;
-    pendingDelta = {};
-    pendingTicket = {};
+    source_.prepared = false;
+    destination_.chunkContextFinalized = false;
+    source_.pendingDelta = {};
+    source_.pendingTicket = {};
     sourceShadow_.invalidate();
     sourceConstants_.invalidate();
     sourceBindings_.invalidate();
   }
 
-  bool bindSources(const RecorderLockCapability& access,
-                   const PeHotStateShadow& shadow,
-                   PeConstShadowBlock& constants,
-                   const PeBindingView& bindings) noexcept {
-    return access.valid() && access.bind(sourceShadow_, shadow) &&
-           access.bind(sourceConstants_, constants) &&
-           access.bind(sourceBindings_, bindings);
-  }
-
   bool validFor(const RecorderLockCapability& access) const noexcept {
-    return prepared && pendingDelta.valid() && pendingTicket.valid() &&
+    return source_.prepared && source_.pendingDelta.valid() &&
+           source_.pendingTicket.valid() &&
            sourceShadow_.validFor(access) &&
            sourceConstants_.validFor(access) &&
            sourceBindings_.validFor(access);
@@ -252,54 +241,89 @@ struct SparseStatePlan {
     return shadowValid && invoked;
   }
 
-  PeDrawParams draw{};
-  bool prepared = false;
-  bool fullSnapshot = false;
-  bool chunkContextFinalized = false;
-  // The producer's pending reads are authenticated to the exact frontier
-  // observed during pass 1.  A later setter invalidates this view and the
-  // settlement path rejects the stale plan rather than consuming newer state.
-  PeHotStateShadow::PendingDeltaView pendingDelta{};
-  // The plan may be prepared before the append emitter runs.  Keep the
-  // PendingDelta frontier it observed so a later setter cannot be erased by
-  // the plan's conditional settlement.
-  PendingDeltaTicket pendingTicket{};
-  std::uint32_t drawFlags = 0u;
+  struct SourceFacts {
+    PeDrawParams draw{};
+    bool prepared = false;
+    bool fullSnapshot = false;
+    PeHotStateShadow::PendingDeltaView pendingDelta{};
+    PendingDeltaTicket pendingTicket{};
+    std::uint32_t drawFlags = 0u;
+    std::uint32_t renderStateCount = 0u;
+    std::uint32_t textureStageStateCount = 0u;
+    std::uint32_t samplerStateCount = 0u;
+    std::uint32_t transformCount = 0u;
+    std::uint32_t textureMask = 0u;
+    std::uint32_t selectedStreamMask = 0u;
+    std::uint32_t renderTargetMask = 0u;
+    std::uint32_t clipPlaneMask = 0u;
+    std::uint32_t lightMask = 0u;
+    std::uint32_t lightEnableMask = 0u;
+    std::uint8_t shaderMask = 0u;
+    bool vertexInput = false;
+    std::uint8_t vertexInputKind = 0u;
+    bool selectedIndexBuffer = false;
+    bool depthStencil = false;
+    bool viewport = false;
+    bool scissor = false;
+    bool material = false;
+    SparseConstantRangeInput vsFloatConstants{};
+    SparseConstantRangeInput vsIntConstants{};
+    SparseConstantRangeInput vsBoolConstants{};
+    SparseConstantRangeInput psFloatConstants{};
+    SparseConstantRangeInput psIntConstants{};
+    SparseConstantRangeInput psBoolConstants{};
+    PeDrawPayloads payloads{};
+  };
 
-  std::uint32_t renderStateCount = 0u;
-  std::uint32_t textureStageStateCount = 0u;
-  std::uint32_t samplerStateCount = 0u;
-  std::uint32_t transformCount = 0u;
+  struct DestinationFacts {
+    std::uint32_t streamMask = 0u;
+    bool indexBuffer = false;
+    bool chunkContextFinalized = false;
+  };
 
-  std::uint32_t textureMask = 0u;
-  std::uint32_t selectedStreamMask = 0u;
-  std::uint32_t streamMask = 0u;
-  std::uint32_t renderTargetMask = 0u;
-  std::uint32_t clipPlaneMask = 0u;
-  std::uint32_t lightMask = 0u;
-  std::uint32_t lightEnableMask = 0u;
-  std::uint8_t shaderMask = 0u;
-  bool vertexInput = false;
-  std::uint8_t vertexInputKind = 0u;
-  bool selectedIndexBuffer = false;
-  bool indexBuffer = false;
-  bool depthStencil = false;
-  bool viewport = false;
-  bool scissor = false;
-  bool material = false;
-
-  SparseConstantRangeInput vsFloatConstants{};
-  SparseConstantRangeInput vsIntConstants{};
-  SparseConstantRangeInput vsBoolConstants{};
-  SparseConstantRangeInput psFloatConstants{};
-  SparseConstantRangeInput psIntConstants{};
-  SparseConstantRangeInput psBoolConstants{};
-  PeDrawPayloads payloads{};
+  const SourceFacts& source() const noexcept { return source_; }
+  const DestinationFacts& destination() const noexcept { return destination_; }
 
  private:
+  void reset() noexcept {
+    std::destroy_at(this);
+    std::construct_at(this);
+  }
+
+  bool bindSources(const RecorderLockCapability& access,
+                   const PeHotStateShadow& shadow,
+                   PeConstShadowBlock& constants,
+                   const PeBindingView& bindings) noexcept {
+    return access.valid() && access.bind(sourceShadow_, shadow) &&
+           access.bind(sourceConstants_, constants) &&
+           access.bind(sourceBindings_, bindings);
+  }
+
+  SourceFacts source_{};
+  DestinationFacts destination_{};
+
+  // Source borrows are private so no caller can replace the producer-issued
+  // witness or forge a plan by assigning a pointer/epoch pair.
   RecorderBorrow<const PeHotStateShadow> sourceShadow_{};
   RecorderBorrow<PeConstShadowBlock> sourceConstants_{};
   RecorderBorrow<const PeBindingView> sourceBindings_{};
+
+  friend bool buildSparseStatePlan(const RecorderLockCapability&,
+                                   const PeHotStateShadow&,
+                                   PeConstShadowBlock&, const PeBindingView&,
+                                   const PeDrawPayloads&, const PeDrawParams&,
+                                   bool, bool, SparseStatePlan&) noexcept;
+  friend bool finalizeSparseStatePlanChunkContext(
+      const PeChunkContext&, SparseStatePlan&) noexcept;
+  friend bool finalizeSparseStatePlanChunkContext(
+      const RecorderLockCapability&, const PeChunkContext&,
+      SparseStatePlan&) noexcept;
+  template <typename Retention>
+    requires std::is_nothrow_invocable_r_v<
+        bool, Retention&, std::uint32_t, const BufferRef&>
+  friend bool finalizeSparseStatePlanChunkContext(
+      const RecorderLockCapability&, const PeChunkContext&, SparseStatePlan&,
+      Retention&&) noexcept;
 };
 
 inline std::uint32_t sparseStatePlanSectionCount(
@@ -308,74 +332,78 @@ inline std::uint32_t sparseStatePlanSectionCount(
   const auto add = [&count](bool present) noexcept {
     count += present ? 1u : 0u;
   };
-  add(plan.renderStateCount != 0u);
-  add(plan.textureMask != 0u);
-  add(plan.streamMask != 0u);
-  add(plan.shaderMask != 0u);
-  add(plan.vertexInput);
-  add(plan.indexBuffer);
-  add(plan.renderTargetMask != 0u);
-  add(plan.depthStencil);
-  add(plan.viewport);
-  add(plan.scissor);
-  add(plan.material);
-  add(plan.clipPlaneMask != 0u);
-  add(plan.textureStageStateCount != 0u);
-  add(plan.samplerStateCount != 0u);
-  add(plan.transformCount != 0u);
-  add(plan.lightMask != 0u);
-  add(plan.lightEnableMask != 0u);
-  add(plan.vsFloatConstants.present());
-  add(plan.vsIntConstants.present());
-  add(plan.vsBoolConstants.present());
-  add(plan.psFloatConstants.present());
-  add(plan.psIntConstants.present());
-  add(plan.psBoolConstants.present());
-  add(!plan.payloads.upIndex.empty());
-  add(!plan.payloads.upVertex.empty());
+  const auto& source = plan.source();
+  const auto& destination = plan.destination();
+  add(source.renderStateCount != 0u);
+  add(source.textureMask != 0u);
+  add(destination.streamMask != 0u);
+  add(source.shaderMask != 0u);
+  add(source.vertexInput);
+  add(destination.indexBuffer);
+  add(source.renderTargetMask != 0u);
+  add(source.depthStencil);
+  add(source.viewport);
+  add(source.scissor);
+  add(source.material);
+  add(source.clipPlaneMask != 0u);
+  add(source.textureStageStateCount != 0u);
+  add(source.samplerStateCount != 0u);
+  add(source.transformCount != 0u);
+  add(source.lightMask != 0u);
+  add(source.lightEnableMask != 0u);
+  add(source.vsFloatConstants.present());
+  add(source.vsIntConstants.present());
+  add(source.vsBoolConstants.present());
+  add(source.psFloatConstants.present());
+  add(source.psIntConstants.present());
+  add(source.psBoolConstants.present());
+  add(!source.payloads.upIndex.empty());
+  add(!source.payloads.upVertex.empty());
   return count;
 }
 
 inline std::size_t sparseStatePlanConstantPayloadBytes(
     const SparseStatePlan& plan) noexcept {
-  return plan.vsFloatConstants.registerBytes.size() +
-         plan.vsIntConstants.registerBytes.size() +
-         plan.vsBoolConstants.registerBytes.size() +
-         plan.psFloatConstants.registerBytes.size() +
-         plan.psIntConstants.registerBytes.size() +
-         plan.psBoolConstants.registerBytes.size();
+  const auto& source = plan.source();
+  return source.vsFloatConstants.registerBytes.size() +
+         source.vsIntConstants.registerBytes.size() +
+         source.vsBoolConstants.registerBytes.size() +
+         source.psFloatConstants.registerBytes.size() +
+         source.psIntConstants.registerBytes.size() +
+         source.psBoolConstants.registerBytes.size();
 }
 
 inline D9CCommandChunkWireDrawHeader sparseStatePlanDrawHeader(
     const SparseStatePlan& plan) noexcept {
   D9CCommandChunkWireDrawHeader header{};
-  header.flags = plan.drawFlags;
-  switch (plan.draw.recordType) {
+  const auto& source = plan.source();
+  header.flags = source.drawFlags;
+  switch (source.draw.recordType) {
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
-      header.primitiveType = plan.draw.primitiveType;
-      header.startVertex = plan.draw.startVertex;
-      header.primitiveCount = plan.draw.primitiveCount;
+      header.primitiveType = source.draw.primitiveType;
+      header.startVertex = source.draw.startVertex;
+      header.primitiveCount = source.draw.primitiveCount;
       break;
     case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
-      header.primitiveType = plan.draw.primitiveType;
-      header.baseVertex = plan.draw.baseVertex;
-      header.minVertex = plan.draw.minVertex;
-      header.numVertices = plan.draw.numVertices;
-      header.startIndex = plan.draw.startIndex;
-      header.primitiveCount = plan.draw.primitiveCount;
+      header.primitiveType = source.draw.primitiveType;
+      header.baseVertex = source.draw.baseVertex;
+      header.minVertex = source.draw.minVertex;
+      header.numVertices = source.draw.numVertices;
+      header.startIndex = source.draw.startIndex;
+      header.primitiveCount = source.draw.primitiveCount;
       break;
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
-      header.primitiveType = plan.draw.primitiveType;
-      header.primitiveCount = plan.draw.primitiveCount;
-      header.stride = plan.draw.stride;
+      header.primitiveType = source.draw.primitiveType;
+      header.primitiveCount = source.draw.primitiveCount;
+      header.stride = source.draw.stride;
       break;
     case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
-      header.primitiveType = plan.draw.primitiveType;
-      header.minVertex = plan.draw.minVertex;
-      header.numVertices = plan.draw.numVertices;
-      header.primitiveCount = plan.draw.primitiveCount;
-      header.stride = plan.draw.stride;
-      header.indexFormat = plan.draw.indexFormat;
+      header.primitiveType = source.draw.primitiveType;
+      header.minVertex = source.draw.minVertex;
+      header.numVertices = source.draw.numVertices;
+      header.primitiveCount = source.draw.primitiveCount;
+      header.stride = source.draw.stride;
+      header.indexFormat = source.draw.indexFormat;
       break;
     default:
       break;

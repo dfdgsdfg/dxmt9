@@ -1574,7 +1574,7 @@ bool D3D9DeviceImpl::buildSparseStatePlanForRecord(
         auto& plan = self.semanticRecorderState_->stagedSparsePlan;
         if (params.recordType == 0u ||
             dxmt9::d3d9::pe::dxmt9PeFullSnapshotEnabled()) {
-            if (plan.prepared) plan.invalidate();
+            if (plan.source().prepared) plan.invalidate();
             return false;
         }
         const bool isDraw = params.recordType != D9C_COMMAND_RECORD_APPLY_STATE;

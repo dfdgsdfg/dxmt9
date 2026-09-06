@@ -10,6 +10,25 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## End-to-end immutable source composition
 
+### PE private selection and fused retention (2026-09-06)
+
+R-CORE-REC-7.20–7.21 require producer-issued immutable selection and a fused,
+kind-qualified warm lookup/acquisition. These are bounded value/ownership
+refinements of the existing recorder transaction, not new queue transitions.
+Inactive binding-locator storage has native canary/reset/null coverage plus
+the existing all-family byte/ownership differentials; PE32/PE64 release
+prologues confirm removal of the inactive initialization loop. Private-plan
+writer/rebind/noncopy/nonmove checks, 192 production-vs-reference family/mask
+byte/quota comparisons, and stale authority/constant-range/binding-collision
+negatives pass. Fused retention has 9,604 bounded length-four traces over seven
+operations and capacities 0–3, plus opaque cross-kind address, allocation-free
+ceiling, and fresh-process fault/refcount pins. Checkpoints do not cross epoch
+compaction. All four builds, native 21/21, x86_64 7/7, and unchanged TLC
+(154.84s) pass. These are concrete bounded refinements, not a new temporal model
+or a general freeze of borrowed constant/binding bytes. Full Windows envelope,
+broader Wine faults/pixels and repeat promotion remain separate. Low-perturbation GT2 checkpoints are
+tracked in [H246](../../docs/perfomance/present-pacing/present-pacing-pe-plan-authority.246.md).
+
 ### PE compact destination and identity refinement (2026-09-05)
 
 R-CORE-REC-7.17–7.19 add calibrated compact/destination/family attribution,
@@ -29,8 +48,9 @@ All four builds, native 18/18, x86_64 4/4 and existing TLC
 and release codegen are separate from existing acceptance/settlement proofs.
 GT2 OFF/ON direction runs pass with zero errors, but final ON does not establish
 diagnostic performance neutrality. Low-perturbation attribution, repeat FPS,
-full Windows envelope, broader fault and pixel gates remain open. Mutable source-plan
-count/schema checks are preserved, not reclassified as reusable proof. See
+full Windows envelope, broader fault and pixel gates remain open. That checkpoint
+preserved mutable source-plan checks; H246 separately closes source-selection
+authority while retaining dependency/schema validation. See
 [H245](../../docs/perfomance/present-pacing/present-pacing-pe-compact-reuse.245.md).
 
 ### PE prepared representation refinement (2026-09-05)

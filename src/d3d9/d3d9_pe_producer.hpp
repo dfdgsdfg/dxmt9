@@ -4,8 +4,9 @@
 //
 // buildSparseStatePlan is the ordinary PE recorder producer. It selects a
 // compact, non-consuming plan before CapacityPre; destination-chunk selection
-// is finalized afterwards and pass 2 writes directly into final builder
-// payload. buildSparseState/addChunkContextSections remain the value-owned
+// is finalized afterwards and production admission writes directly into the
+// semantic owner's canonical payload. The builder adapter remains a differential
+// oracle. buildSparseState/addChunkContextSections remain the value-owned
 // compatibility projection for oversized, Render Tape, and SWVP overrides.
 //
 // buildSparseState is a pure read of its inputs, including constant dirty
@@ -103,30 +104,30 @@ template <typename Retention>
 bool finalizeSparseStatePlanChunkContext(
     const RecorderLockCapability& access, const PeChunkContext& chunk,
     SparseStatePlan& plan, Retention&& retained) noexcept {
-  if (!plan.validFor(access) || plan.draw.recordType == 0u) {
+  if (!plan.validFor(access) || plan.source_.draw.recordType == 0u) {
     return false;
   }
   bool finalized = false;
   const bool invoked = plan.withBindingSource(
       [&](const PeBindingView& bindings) noexcept {
-        plan.streamMask = plan.fullSnapshot
-            ? plan.selectedStreamMask
-            : resolveSparseStreamMask(plan.selectedStreamMask, bindings,
+        plan.destination_.streamMask = plan.source_.fullSnapshot
+            ? plan.source_.selectedStreamMask
+            : resolveSparseStreamMask(plan.source_.selectedStreamMask, bindings,
                                       retained);
-        if (plan.draw.recordType ==
+        if (plan.source_.draw.recordType ==
             D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
           const std::uint64_t wire = d9cWireHandleValue(
               toWireHandle(bindings.indexBuffer.object));
-          plan.indexBuffer = resolveSparseIndexBuffer(
-              true, plan.selectedIndexBuffer, chunk.indexBufferKnown,
+          plan.destination_.indexBuffer = resolveSparseIndexBuffer(
+              true, plan.source_.selectedIndexBuffer, chunk.indexBufferKnown,
               chunk.submittedIndexBufferWire, wire, bindings.indexBuffer,
               [&](const BufferRef& buffer) noexcept {
                 return retained(0u, buffer);
               });
         } else {
-          plan.indexBuffer = false;
+          plan.destination_.indexBuffer = false;
         }
-        plan.chunkContextFinalized = true;
+        plan.destination_.chunkContextFinalized = true;
         finalized = true;
       });
   return invoked && finalized && plan.validFor(access);

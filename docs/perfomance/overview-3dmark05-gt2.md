@@ -4,7 +4,7 @@ workload: 3DMark05 GT2
 title: "3DMark05 GT2 Performance — Current Baseline"
 type: root-overview
 status: current
-updated: 2026-09-05
+updated: 2026-09-06
 source: experiments/output/app-d3d9-3dmark05-current-cap-gt2-r1-20260825; traces/app-d3d9-3dmark05-current-bottleneck-gt2-clean-cpu-r2-20260825/analysis/xctrace-cpu-thread-summary.md; traces/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825/analysis/pe-sampler.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt2-r1-20260725; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.41.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
 ---
@@ -12,15 +12,17 @@ related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; 
 # 3DMark05 GT2 Performance — Current Baseline
 
 The latest bounded PE refinement check is
-[compact destination / identity reuse](present-pacing/present-pacing-pe-compact-reuse.245.md),
-following [prepared emission](present-pacing/present-pacing-pe-prepared-emission.244.md)
-and [admission reuse](present-pacing/present-pacing-pe-admission-reuse.243.md):
-GT2 OFF 27.451 to 28.326 benchmark FPS (+3.2% direction only), final ON
-26.298 to 25.752, about 4 CB/P, zero errors. The reviewed diagnostic envelope
-is not performance-neutral; ON FPS is not product throughput. Dead observer-off walks and duplicate
-destination/identity work are reduced; PE32 frames shrink but still probe.
-Single runs and short calibrated phases do not establish stable FPS recovery
-or an isolated settlement speedup.
+[inactive storage / private plan / fused retention](present-pacing/present-pacing-pe-plan-authority.246.md),
+following [compact destination / identity reuse](present-pacing/present-pacing-pe-compact-reuse.245.md).
+PE observers stay OFF for throughput comparison. The final GT2 pair is
+28.294/28.319 benchmark FPS versus the fresh inactive-initialization-only pair
+28.514/28.585 (harmonic means: 28.306 versus 28.550, -0.85%). Both final runs
+have zero errors, about 4 CB/P and 15.77 passes/P. Private plan and fused retain
+correctness are natively pinned, but their incremental FPS benefit or
+noise-qualified neutrality is not established. Two build-overlapped reference
+cells are excluded and retained explicitly. The locator initialization loop is
+gone; PE32/PE64 append frames still probe. H245's diagnostic envelope remains
+non-neutral, and calibrated phase sums are not product throughput.
 This is not a full CPU re-profile. The August owner split
 below predates the mandatory semantic-owner changes; its 10.6% PE share must
 not be applied to current HEAD or used to close the post-v0.1.1 investigation.

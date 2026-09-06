@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <utility>
 #include <vector>
 
 // Flat wrapper-retention set. Entries are kept in one capacity-preserving
@@ -36,7 +37,8 @@
 // R-BACK-43.4 `producer-owned` (PE game thread). `entries_` and `epoch_` are
 // written and read only from the thread that drives the D3D9 recorder. This
 // class holds NO token of its own: it is a private member of
-// `CommandChunkBuilder`, itself private to `D3D9DeviceImpl`, and every path
+// `PeSemanticBatchOwner` (or the independent `CommandChunkBuilder` oracle),
+// itself private to `D3D9DeviceImpl`, and every production path
 // that reaches it passes `D3D9DeviceImpl::assertRecorderThreadConfined()`
 // first (18 recorder-guarded entry points, one per `PeRecorderGuard` site).
 // A construction-bound token here would be WRONG, not merely redundant: under
@@ -106,10 +108,9 @@ public:
         return entries_.size();
     }
 
-    // Typed warm-set probes let a bounded owner distinguish a duplicate
-    // already retained from a novel object when the retainer is at capacity.
-    // They do not mutate the index or allocate; the normal typed retain call
-    // below performs the epoch touch and remains the single ownership path.
+    // Read-only typed probes remain for destination queries and reference
+    // tests. Admission uses the bounded retain overloads below so capacity
+    // qualification and epoch touch share one lookup.
     bool containsSurface(D9CSurface* surface) const noexcept {
         return contains(D9C_CHUNK_HANDLE_KIND_SURFACE, surface);
     }
@@ -134,9 +135,21 @@ public:
                       [](D9CSurface* value) { dxmt9c_surface_addref(value); });
     }
 
+    bool retainSurface(D9CSurface* surface, Acquired&, std::size_t capacity) {
+        return retainBounded(
+            D9C_CHUNK_HANDLE_KIND_SURFACE, surface, capacity,
+            [](D9CSurface* value) { dxmt9c_surface_addref(value); });
+    }
+
     bool retainTexture(D9CTexture* texture, Acquired&) {
         return retain(D9C_CHUNK_HANDLE_KIND_TEXTURE, texture,
                       [](D9CTexture* value) { dxmt9c_texture_addref(value); });
+    }
+
+    bool retainTexture(D9CTexture* texture, Acquired&, std::size_t capacity) {
+        return retainBounded(
+            D9C_CHUNK_HANDLE_KIND_TEXTURE, texture, capacity,
+            [](D9CTexture* value) { dxmt9c_texture_addref(value); });
     }
 
     bool retainBuffer(D9CBuffer* buffer, Acquired&) {
@@ -144,9 +157,21 @@ public:
                       [](D9CBuffer* value) { dxmt9c_buffer_addref(value); });
     }
 
+    bool retainBuffer(D9CBuffer* buffer, Acquired&, std::size_t capacity) {
+        return retainBounded(
+            D9C_CHUNK_HANDLE_KIND_BUFFER, buffer, capacity,
+            [](D9CBuffer* value) { dxmt9c_buffer_addref(value); });
+    }
+
     bool retainShader(D9CShader* shader, Acquired&) {
         return retain(D9C_CHUNK_HANDLE_KIND_SHADER, shader,
                       [](D9CShader* value) { dxmt9c_shader_addref(value); });
+    }
+
+    bool retainShader(D9CShader* shader, Acquired&, std::size_t capacity) {
+        return retainBounded(
+            D9C_CHUNK_HANDLE_KIND_SHADER, shader, capacity,
+            [](D9CShader* value) { dxmt9c_shader_addref(value); });
     }
 
     bool retainVdecl(D9CVertexDecl* vdecl, Acquired&) {
@@ -154,9 +179,21 @@ public:
                       [](D9CVertexDecl* value) { dxmt9c_vdecl_addref(value); });
     }
 
+    bool retainVdecl(D9CVertexDecl* vdecl, Acquired&, std::size_t capacity) {
+        return retainBounded(
+            D9C_CHUNK_HANDLE_KIND_VERTEX_DECL, vdecl, capacity,
+            [](D9CVertexDecl* value) { dxmt9c_vdecl_addref(value); });
+    }
+
     bool retainQuery(D9CQuery* query, Acquired&) {
         return retain(D9C_CHUNK_HANDLE_KIND_QUERY, query,
                       [](D9CQuery* value) { dxmt9c_query_addref(value); });
+    }
+
+    bool retainQuery(D9CQuery* query, Acquired&, std::size_t capacity) {
+        return retainBounded(
+            D9C_CHUNK_HANDLE_KIND_QUERY, query, capacity,
+            [](D9CQuery* value) { dxmt9c_query_addref(value); });
     }
 
     bool retainWireObject(std::uint32_t kind, void* object,
@@ -174,6 +211,32 @@ public:
             return retainVdecl(static_cast<D9CVertexDecl*>(object), acquired);
         case D9C_CHUNK_HANDLE_KIND_QUERY:
             return retainQuery(static_cast<D9CQuery*>(object), acquired);
+        default:
+            return true;
+        }
+    }
+
+    bool retainWireObject(std::uint32_t kind, void* object,
+                          Acquired& acquired, std::size_t capacity) {
+        switch (kind) {
+        case D9C_CHUNK_HANDLE_KIND_TEXTURE:
+            return retainTexture(static_cast<D9CTexture*>(object), acquired,
+                                 capacity);
+        case D9C_CHUNK_HANDLE_KIND_SURFACE:
+            return retainSurface(static_cast<D9CSurface*>(object), acquired,
+                                 capacity);
+        case D9C_CHUNK_HANDLE_KIND_BUFFER:
+            return retainBuffer(static_cast<D9CBuffer*>(object), acquired,
+                                capacity);
+        case D9C_CHUNK_HANDLE_KIND_SHADER:
+            return retainShader(static_cast<D9CShader*>(object), acquired,
+                                capacity);
+        case D9C_CHUNK_HANDLE_KIND_VERTEX_DECL:
+            return retainVdecl(static_cast<D9CVertexDecl*>(object), acquired,
+                               capacity);
+        case D9C_CHUNK_HANDLE_KIND_QUERY:
+            return retainQuery(static_cast<D9CQuery*>(object), acquired,
+                               capacity);
         default:
             return true;
         }
@@ -391,6 +454,20 @@ private:
 
     template<typename T, typename AddRefFn>
     bool retain(std::uint32_t kind, T* ptr, AddRefFn&& addRef) {
+        return retainImpl(kind, ptr, false, 0u,
+                          std::forward<AddRefFn>(addRef));
+    }
+
+    template<typename T, typename AddRefFn>
+    bool retainBounded(std::uint32_t kind, T* ptr, std::size_t capacity,
+                       AddRefFn&& addRef) {
+        return retainImpl(kind, ptr, true, capacity,
+                          std::forward<AddRefFn>(addRef));
+    }
+
+    template<typename T, typename AddRefFn>
+    bool retainImpl(std::uint32_t kind, T* ptr, bool bounded,
+                    std::size_t capacity, AddRefFn&& addRef) {
         if (!ready_) {
             return false;
         }
@@ -402,6 +479,15 @@ private:
             // warmth stamp and cross nothing.
             entries_[*found].lastTouchedEpoch = epoch_;
             return true;
+        }
+        // A bounded owner reserves both arenas up front.  Rejecting before
+        // the fault point, AddRef, or index publication keeps admission
+        // capacity denial allocation-free and preserves unique-acquisition
+        // fault accounting.  The reservation check also prevents a caller
+        // from accidentally turning this bounded path into vector growth.
+        if (bounded &&
+            (capacity > entries_.capacity() || entries_.size() >= capacity)) {
+            return false;
         }
         // This is the one boundary where a new wire handle acquires its
         // producer-side pin.  A fault budget counts only these unique

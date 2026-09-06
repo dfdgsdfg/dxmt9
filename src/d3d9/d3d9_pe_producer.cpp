@@ -32,7 +32,7 @@ struct SparseStatePlanBuildGuard {
 
 bool prepareConstantRanges(PeConstShadowBlock& constants,
                            bool inlineConstDelta,
-                           SparseStatePlan& plan) noexcept {
+                           SparseStatePlan::SourceFacts& source) noexcept {
   if (!inlineConstDelta) {
     return true;
   }
@@ -42,12 +42,12 @@ bool prepareConstantRanges(PeConstShadowBlock& constants,
     std::size_t elementSize;
   };
   const ConstRange ranges[D9C_DRAW_PACKET_CONST_DELTA_COUNT] = {
-      {&constants.vsConstF, &plan.vsFloatConstants, 16u},
-      {&constants.vsConstI, &plan.vsIntConstants, 16u},
-      {&constants.vsConstB, &plan.vsBoolConstants, 4u},
-      {&constants.psConstF, &plan.psFloatConstants, 16u},
-      {&constants.psConstI, &plan.psIntConstants, 16u},
-      {&constants.psConstB, &plan.psBoolConstants, 4u},
+      {&constants.vsConstF, &source.vsFloatConstants, 16u},
+      {&constants.vsConstI, &source.vsIntConstants, 16u},
+      {&constants.vsConstB, &source.vsBoolConstants, 4u},
+      {&constants.psConstF, &source.psFloatConstants, 16u},
+      {&constants.psConstI, &source.psIntConstants, 16u},
+      {&constants.psConstB, &source.psBoolConstants, 4u},
   };
   for (std::uint32_t kind = 0u; kind < D9C_DRAW_PACKET_CONST_DELTA_COUNT;
        ++kind) {
@@ -107,28 +107,28 @@ bool buildSparseStatePlan(const RecorderLockCapability& access,
   if (!plan.bindSources(access, shadow, constants, bindings)) {
     return false;
   }
-  plan.pendingTicket = shadow.pendingTicket();
-  plan.pendingDelta = shadow.pendingDeltaView(plan.pendingTicket);
-  if (!plan.pendingDelta.valid()) {
+  plan.source_.pendingTicket = shadow.pendingTicket();
+  plan.source_.pendingDelta = shadow.pendingDeltaView(plan.source_.pendingTicket);
+  if (!plan.source_.pendingDelta.valid()) {
     return false;
   }
-  plan.draw = params;
-  plan.fullSnapshot =
+  plan.source_.draw = params;
+  plan.source_.fullSnapshot =
       forceFullSnapshot || dxmt9PeFullSnapshotEnabled();
-  plan.payloads = payloads;
+  plan.source_.payloads = payloads;
 
-  const auto renderStates = plan.fullSnapshot
+  const auto renderStates = plan.source_.fullSnapshot
       ? shadow.renderStateShadowTyped()
-      : plan.pendingDelta.pendingRenderStatesTyped();
-  const auto textureStageStates = plan.fullSnapshot
+      : plan.source_.pendingDelta.pendingRenderStatesTyped();
+  const auto textureStageStates = plan.source_.fullSnapshot
       ? shadow.tssShadowTyped()
-      : plan.pendingDelta.pendingTssTyped();
-  const auto samplerStates = plan.fullSnapshot
+      : plan.source_.pendingDelta.pendingTssTyped();
+  const auto samplerStates = plan.source_.fullSnapshot
       ? shadow.samplerStateShadowTyped()
-      : plan.pendingDelta.pendingSamplerStatesTyped();
-  const auto transforms = plan.fullSnapshot
+      : plan.source_.pendingDelta.pendingSamplerStatesTyped();
+  const auto transforms = plan.source_.fullSnapshot
       ? shadow.transformShadowTyped()
-      : plan.pendingDelta.pendingTransformsTyped();
+      : plan.source_.pendingDelta.pendingTransformsTyped();
   if (renderStates.size() > detail::sectionMaxCount(
           D9C_COMMAND_CHUNK_SECTION_RENDER_STATE) ||
       textureStageStates.size() > detail::sectionMaxCount(
@@ -139,72 +139,77 @@ bool buildSparseStatePlan(const RecorderLockCapability& access,
           D9C_COMMAND_CHUNK_SECTION_TRANSFORM)) {
     return false;
   }
-  plan.renderStateCount = renderStates.size();
-  plan.textureStageStateCount = textureStageStates.size();
-  plan.samplerStateCount = samplerStates.size();
-  plan.transformCount = transforms.size();
+  plan.source_.renderStateCount = renderStates.size();
+  plan.source_.textureStageStateCount = textureStageStates.size();
+  plan.source_.samplerStateCount = samplerStates.size();
+  plan.source_.transformCount = transforms.size();
 
-  plan.textureMask = plan.fullSnapshot
+  plan.source_.textureMask = plan.source_.fullSnapshot
       ? lowMask(D9C_DRAW_PACKET_MAX_TEXTURES)
-      : plan.pendingDelta.pendingTextureMask();
-  plan.selectedStreamMask = plan.fullSnapshot
+      : plan.source_.pendingDelta.pendingTextureMask();
+  plan.source_.selectedStreamMask = plan.source_.fullSnapshot
       ? lowMask(D9C_DRAW_PACKET_MAX_STREAMS)
-      : plan.pendingDelta.pendingStreamMask();
-  plan.streamMask = plan.selectedStreamMask;
-  if (plan.fullSnapshot || plan.pendingDelta.pendingVs()) {
-    plan.shaderMask |= 1u << D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX;
+      : plan.source_.pendingDelta.pendingStreamMask();
+  plan.destination_.streamMask = plan.source_.selectedStreamMask;
+  if (plan.source_.fullSnapshot || plan.source_.pendingDelta.pendingVs()) {
+    plan.source_.shaderMask |= 1u << D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX;
   }
-  if (plan.fullSnapshot || plan.pendingDelta.pendingPs()) {
-    plan.shaderMask |= 1u << D9C_COMMAND_CHUNK_SHADER_STAGE_PIXEL;
+  if (plan.source_.fullSnapshot || plan.source_.pendingDelta.pendingPs()) {
+    plan.source_.shaderMask |= 1u << D9C_COMMAND_CHUNK_SHADER_STAGE_PIXEL;
   }
-  plan.vertexInput = plan.fullSnapshot || plan.pendingDelta.pendingVdecl() ||
-                     plan.pendingDelta.pendingFvf();
-  if (plan.vertexInput) {
-    plan.vertexInputKind =
-        plan.fullSnapshot || plan.pendingDelta.pendingVdecl()
+  plan.source_.vertexInput = plan.source_.fullSnapshot ||
+                             plan.source_.pendingDelta.pendingVdecl() ||
+                             plan.source_.pendingDelta.pendingFvf();
+  if (plan.source_.vertexInput) {
+    plan.source_.vertexInputKind =
+        plan.source_.fullSnapshot || plan.source_.pendingDelta.pendingVdecl()
             ? D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION
             : D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF;
   }
-  plan.selectedIndexBuffer =
+  plan.source_.selectedIndexBuffer =
       params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE &&
-      plan.pendingDelta.pendingIb();
-  plan.indexBuffer = plan.selectedIndexBuffer;
+      plan.source_.pendingDelta.pendingIb();
+  plan.destination_.indexBuffer = plan.source_.selectedIndexBuffer;
 
-  if (plan.fullSnapshot) {
+  if (plan.source_.fullSnapshot) {
     for (std::uint32_t slot = 0u;
          slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
       if (bindings.rtExplicitMask[slot] ||
           bindings.renderTargets[slot].object != nullptr) {
-        plan.renderTargetMask |= 1u << slot;
+        plan.source_.renderTargetMask |= 1u << slot;
       }
     }
   } else {
-    plan.renderTargetMask = plan.pendingDelta.pendingRtMask();
+    plan.source_.renderTargetMask = plan.source_.pendingDelta.pendingRtMask();
   }
-  plan.depthStencil = plan.fullSnapshot || plan.pendingDelta.pendingDs();
-  plan.viewport = plan.fullSnapshot || plan.pendingDelta.pendingViewport();
-  plan.scissor = plan.fullSnapshot || plan.pendingDelta.pendingScissor();
-  plan.material = plan.fullSnapshot || plan.pendingDelta.pendingMaterial();
-  plan.clipPlaneMask = plan.fullSnapshot
+  plan.source_.depthStencil = plan.source_.fullSnapshot ||
+                              plan.source_.pendingDelta.pendingDs();
+  plan.source_.viewport = plan.source_.fullSnapshot ||
+                          plan.source_.pendingDelta.pendingViewport();
+  plan.source_.scissor = plan.source_.fullSnapshot ||
+                         plan.source_.pendingDelta.pendingScissor();
+  plan.source_.material = plan.source_.fullSnapshot ||
+                          plan.source_.pendingDelta.pendingMaterial();
+  plan.source_.clipPlaneMask = plan.source_.fullSnapshot
       ? lowMask(6u)
-      : plan.pendingDelta.pendingClipPlaneMask();
-  plan.lightMask = plan.fullSnapshot
+      : plan.source_.pendingDelta.pendingClipPlaneMask();
+  plan.source_.lightMask = plan.source_.fullSnapshot
       ? lowMask(D9C_DRAW_PACKET_MAX_LIGHTS)
-      : plan.pendingDelta.pendingLightSlotMask();
-  plan.lightEnableMask = plan.fullSnapshot
+      : plan.source_.pendingDelta.pendingLightSlotMask();
+  plan.source_.lightEnableMask = plan.source_.fullSnapshot
       ? lowMask(D9C_DRAW_PACKET_MAX_LIGHTS)
-      : plan.pendingDelta.pendingLightEnableValidMask();
+      : plan.source_.pendingDelta.pendingLightEnableValidMask();
 
-  if (!prepareConstantRanges(constants, inlineConstDelta, plan)) {
+  if (!prepareConstantRanges(constants, inlineConstDelta, plan.source_)) {
     return false;
   }
 
   constexpr auto allTextures = lowMask(D9C_DRAW_PACKET_MAX_TEXTURES);
   constexpr auto allStreams = lowMask(D9C_DRAW_PACKET_MAX_STREAMS);
-  if (plan.fullSnapshot ||
-      (plan.pendingDelta.pendingTextureMask() == allTextures &&
-       plan.pendingDelta.pendingStreamMask() == allStreams)) {
-    plan.drawFlags |= D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT;
+  if (plan.source_.fullSnapshot ||
+      (plan.source_.pendingDelta.pendingTextureMask() == allTextures &&
+       plan.source_.pendingDelta.pendingStreamMask() == allStreams)) {
+    plan.source_.drawFlags |= D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT;
   }
 
   const auto usable = [](const PeWireObjectRef& ref,
@@ -212,35 +217,35 @@ bool buildSparseStatePlan(const RecorderLockCapability& access,
     return ref.object == nullptr || ref.valid(kind);
   };
   for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
-    if ((plan.textureMask & (1u << slot)) != 0u &&
+    if ((plan.source_.textureMask & (1u << slot)) != 0u &&
         !usable(bindings.textures[slot], D9C_CHUNK_HANDLE_KIND_TEXTURE)) {
       return false;
     }
   }
   for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-    if ((plan.streamMask & (1u << slot)) != 0u &&
+    if ((plan.destination_.streamMask & (1u << slot)) != 0u &&
         !usable(bindings.streams[slot].buffer,
                 D9C_CHUNK_HANDLE_KIND_BUFFER)) {
       return false;
     }
   }
-  if (((plan.shaderMask & 1u) != 0u &&
+  if (((plan.source_.shaderMask & 1u) != 0u &&
        !usable(bindings.vs, D9C_CHUNK_HANDLE_KIND_SHADER)) ||
-      ((plan.shaderMask & 2u) != 0u &&
+      ((plan.source_.shaderMask & 2u) != 0u &&
        !usable(bindings.ps, D9C_CHUNK_HANDLE_KIND_SHADER)) ||
-      (plan.vertexInput &&
-       plan.vertexInputKind ==
+      (plan.source_.vertexInput &&
+       plan.source_.vertexInputKind ==
            D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION &&
        !usable(bindings.vdecl, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL)) ||
-      (plan.indexBuffer &&
+      (plan.destination_.indexBuffer &&
        !usable(bindings.indexBuffer, D9C_CHUNK_HANDLE_KIND_BUFFER)) ||
-      (plan.depthStencil &&
+      (plan.source_.depthStencil &&
        !usable(bindings.depthStencil, D9C_CHUNK_HANDLE_KIND_SURFACE))) {
     return false;
   }
   for (std::uint32_t slot = 0u;
        slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
-    if ((plan.renderTargetMask & (1u << slot)) != 0u &&
+    if ((plan.source_.renderTargetMask & (1u << slot)) != 0u &&
         !usable(bindings.renderTargets[slot],
                 D9C_CHUNK_HANDLE_KIND_SURFACE)) {
       return false;
@@ -250,15 +255,15 @@ bool buildSparseStatePlan(const RecorderLockCapability& access,
   const bool destinationDependent =
       params.recordType == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
       params.recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
-  plan.chunkContextFinalized = !destinationDependent;
-  plan.prepared = true;
+  plan.destination_.chunkContextFinalized = !destinationDependent;
+  plan.source_.prepared = true;
   buildGuard.published = true;
   return true;
 }
 
 bool finalizeSparseStatePlanChunkContext(const PeChunkContext& chunk,
                                          SparseStatePlan& plan) noexcept {
-  if (!plan.prepared || plan.draw.recordType == 0u) {
+  if (!plan.source_.prepared || plan.source_.draw.recordType == 0u) {
     return false;
   }
   bool finalized = false;
@@ -267,8 +272,8 @@ bool finalizeSparseStatePlanChunkContext(const PeChunkContext& chunk,
         // CapacityPre may move the destination more than once. Rebuild the
         // destination-only contribution from its pass-1 baseline each time;
         // never carry stream/index decisions from the prior chunk forward.
-        plan.streamMask = plan.selectedStreamMask;
-        if (!plan.fullSnapshot) {
+        plan.destination_.streamMask = plan.source_.selectedStreamMask;
+        if (!plan.source_.fullSnapshot) {
           for (std::uint32_t slot = 0u;
                slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
             const bool bound =
@@ -276,23 +281,23 @@ bool finalizeSparseStatePlanChunkContext(const PeChunkContext& chunk,
             const bool retained =
                 (chunk.retainedStreamMask & (1u << slot)) != 0u;
             if (bound && !retained) {
-              plan.streamMask |= 1u << slot;
+              plan.destination_.streamMask |= 1u << slot;
             }
           }
         }
-        if (plan.draw.recordType ==
+        if (plan.source_.draw.recordType ==
             D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
           const std::uint64_t wire = d9cWireHandleValue(
               toWireHandle(bindings.indexBuffer.object));
           const bool bound = bindings.indexBuffer.object != nullptr;
-          plan.indexBuffer = plan.selectedIndexBuffer ||
+          plan.destination_.indexBuffer = plan.source_.selectedIndexBuffer ||
               !chunk.indexBufferKnown ||
               chunk.submittedIndexBufferWire != wire ||
               (!chunk.indexBufferRetained && bound);
         } else {
-          plan.indexBuffer = false;
+          plan.destination_.indexBuffer = false;
         }
-        plan.chunkContextFinalized = true;
+        plan.destination_.chunkContextFinalized = true;
         finalized = true;
       }) && finalized;
 }
@@ -321,58 +326,52 @@ static bool acceptSparseStatePlanWithSources(
     const AppendPlan& plan, PeScalarSemanticTokenLedger* tokens,
     std::uint64_t recordOrdinal,
     PendingDeltaTicket transactionTicket) noexcept {
+  const auto& source = state.source();
+  const auto& destination = state.destination();
   const PendingDeltaTicket settlementTicket = transactionTicket.valid()
       ? transactionTicket
-      : state.pendingTicket;
+      : state.source().pendingTicket;
   if (!plan.valid() || !plan.consumeRepresentedPending() ||
-      !plan.recordDurable() || !state.prepared ||
-      !state.chunkContextFinalized || !state.pendingDelta.valid() ||
+      !plan.recordDurable() || !source.prepared ||
+      !destination.chunkContextFinalized || !source.pendingDelta.valid() ||
       (settlementTicket.valid() &&
        !shadow.pendingTicketMatches(settlementTicket))) {
     return false;
   }
 
-  const auto renderStates = state.fullSnapshot
+  const auto renderStates = source.fullSnapshot
       ? shadow.renderStateShadowTyped()
       : shadow.pendingRenderStatesTyped();
-  const auto textureStageStates = state.fullSnapshot
+  const auto textureStageStates = source.fullSnapshot
       ? shadow.tssShadowTyped()
       : shadow.pendingTssTyped();
-  const auto samplerStates = state.fullSnapshot
+  const auto samplerStates = source.fullSnapshot
       ? shadow.samplerStateShadowTyped()
       : shadow.pendingSamplerStatesTyped();
-  const auto transforms = state.fullSnapshot
+  const auto transforms = source.fullSnapshot
       ? shadow.transformShadowTyped()
       : shadow.pendingTransformsTyped();
-  if (renderStates.size() != state.renderStateCount ||
-      textureStageStates.size() != state.textureStageStateCount ||
-      samplerStates.size() != state.samplerStateCount ||
-      transforms.size() != state.transformCount) {
+  if (renderStates.size() != source.renderStateCount ||
+      textureStageStates.size() != source.textureStageStateCount ||
+      samplerStates.size() != source.samplerStateCount ||
+      transforms.size() != source.transformCount) {
     return false;
   }
 
-  const std::uint32_t expectedTextureMask = state.fullSnapshot
-      ? lowMask(D9C_DRAW_PACKET_MAX_TEXTURES)
-      : shadow.pendingTextureMask();
-  const std::uint32_t expectedSelectedStreamMask = state.fullSnapshot
-      ? lowMask(D9C_DRAW_PACKET_MAX_STREAMS)
-      : shadow.pendingStreamMask();
-  std::uint8_t expectedShaderMask = 0u;
-  if (state.fullSnapshot || shadow.pendingVs()) expectedShaderMask |= 1u;
-  if (state.fullSnapshot || shadow.pendingPs()) expectedShaderMask |= 2u;
-  const bool expectedVertexInput =
-      state.fullSnapshot || shadow.pendingVdecl() || shadow.pendingFvf();
-  const std::uint8_t expectedVertexInputKind =
-      state.fullSnapshot || shadow.pendingVdecl()
-          ? D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION
-          : D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF;
-  const bool expectedSelectedIndex =
-      state.draw.recordType ==
-          D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE &&
-      shadow.pendingIb();
-  std::uint32_t expectedRenderTargetMask = shadow.pendingRtMask();
-  if (state.fullSnapshot) {
-    expectedRenderTargetMask = 0u;
+  // Normal compact records reuse producer-issued source facts. Full snapshots
+  // intentionally cover the whole current state, so retain the live-state
+  // validation for that route only.
+  if (source.fullSnapshot) {
+    const auto expectedTextureMask = lowMask(D9C_DRAW_PACKET_MAX_TEXTURES);
+    const auto expectedSelectedStreamMask = lowMask(D9C_DRAW_PACKET_MAX_STREAMS);
+    const auto expectedShaderMask = std::uint8_t{3u};
+    const auto expectedVertexInputKind =
+        std::uint8_t{D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION};
+    const bool expectedSelectedIndex =
+        source.draw.recordType ==
+            D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE &&
+        shadow.pendingIb();
+    std::uint32_t expectedRenderTargetMask = 0u;
     for (std::uint32_t slot = 0u;
          slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
       if (bindings.rtExplicitMask[slot] ||
@@ -380,53 +379,44 @@ static bool acceptSparseStatePlanWithSources(
         expectedRenderTargetMask |= 1u << slot;
       }
     }
+    if (source.textureMask != expectedTextureMask ||
+        source.selectedStreamMask != expectedSelectedStreamMask ||
+        source.shaderMask != expectedShaderMask || !source.vertexInput ||
+        source.vertexInputKind != expectedVertexInputKind ||
+        source.selectedIndexBuffer != expectedSelectedIndex ||
+        source.renderTargetMask != expectedRenderTargetMask ||
+        !source.depthStencil || !source.viewport || !source.scissor ||
+        !source.material || source.clipPlaneMask != lowMask(6u) ||
+        source.lightMask != lowMask(D9C_DRAW_PACKET_MAX_LIGHTS) ||
+        source.lightEnableMask != lowMask(D9C_DRAW_PACKET_MAX_LIGHTS)) {
+      return false;
+    }
   }
   const std::uint32_t validStreamMask =
       lowMask(D9C_DRAW_PACKET_MAX_STREAMS);
-  if (state.textureMask != expectedTextureMask ||
-      state.selectedStreamMask != expectedSelectedStreamMask ||
-      (state.streamMask & state.selectedStreamMask) !=
-          state.selectedStreamMask ||
-      (state.streamMask & ~validStreamMask) != 0u ||
-      state.shaderMask != expectedShaderMask ||
-      state.vertexInput != expectedVertexInput ||
-      (state.vertexInput &&
-       state.vertexInputKind != expectedVertexInputKind) ||
-      state.selectedIndexBuffer != expectedSelectedIndex ||
-      state.renderTargetMask != expectedRenderTargetMask ||
-      state.depthStencil != (state.fullSnapshot || shadow.pendingDs()) ||
-      state.viewport != (state.fullSnapshot || shadow.pendingViewport()) ||
-      state.scissor != (state.fullSnapshot || shadow.pendingScissor()) ||
-      state.material != (state.fullSnapshot || shadow.pendingMaterial()) ||
-      state.clipPlaneMask !=
-          (state.fullSnapshot ? lowMask(6u)
-                              : shadow.pendingClipPlaneMask()) ||
-      state.lightMask !=
-          (state.fullSnapshot ? lowMask(D9C_DRAW_PACKET_MAX_LIGHTS)
-                              : shadow.pendingLightSlotMask()) ||
-      state.lightEnableMask !=
-          (state.fullSnapshot ? lowMask(D9C_DRAW_PACKET_MAX_LIGHTS)
-                              : shadow.pendingLightEnableValidMask())) {
+  if ((destination.streamMask & source.selectedStreamMask) !=
+          source.selectedStreamMask ||
+      (destination.streamMask & ~validStreamMask) != 0u) {
     return false;
   }
   const std::uint32_t addedStreams =
-      state.streamMask & ~state.selectedStreamMask;
+      destination.streamMask & ~source.selectedStreamMask;
   for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
     if ((addedStreams & (1u << slot)) != 0u &&
         bindings.streams[slot].buffer.object == nullptr) {
       return false;
     }
   }
-  if (state.indexBuffer &&
-      state.draw.recordType !=
+  if (destination.indexBuffer &&
+      source.draw.recordType !=
           D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
     return false;
   }
 
   const SparseConstantRangeInput* acceptedConstants[] = {
-      &state.vsFloatConstants, &state.vsIntConstants,
-      &state.vsBoolConstants,  &state.psFloatConstants,
-      &state.psIntConstants,   &state.psBoolConstants,
+      &source.vsFloatConstants, &source.vsIntConstants,
+      &source.vsBoolConstants,  &source.psFloatConstants,
+      &source.psIntConstants,   &source.psBoolConstants,
   };
   ConstShadow* constantShadows[] = {
       &constants.vsConstF, &constants.vsConstI, &constants.vsConstB,
@@ -447,17 +437,17 @@ static bool acceptSparseStatePlanWithSources(
     return tokens->project(category, key, index, value, recordOrdinal,
                            tuple) && tokens->canConsumeProjected(tuple);
   };
-  // For a normal compact record with no scalar observer, these walks only
-  // revalidate values whose producer-owned masks/counts already selected the
-  // record and have no semantic effect. Full snapshots still compare live
-  // values, while the observer path still projects and authenticates tokens.
-  if (state.fullSnapshot || tokens) {
+  // Normal compact records reuse producer-authenticated selection facts. Full
+  // snapshots still compare live values, while the observer path still
+  // projects and authenticates tokens; neither path treats a source borrow as
+  // proof that its payload bytes are immutable.
+  if (source.fullSnapshot || tokens) {
     bool scalarValid = true;
     shadow.pendingRenderStatesTyped().forEach(
         [&](RenderStateSlot key, std::uint32_t value) {
           std::uint32_t live = 0u;
           scalarValid = scalarValid &&
-              (!state.fullSnapshot ||
+              (!source.fullSnapshot ||
                (shadow.renderStateShadowTyped().get(key, live) &&
                 live == value)) &&
               validateToken(ScalarSemanticCategory::RenderState,
@@ -468,7 +458,7 @@ static bool acceptSparseStatePlanWithSources(
             std::uint32_t value) {
           std::uint32_t live = 0u;
           scalarValid = scalarValid &&
-              (!state.fullSnapshot ||
+              (!source.fullSnapshot ||
                (shadow.tssShadowTyped().get(stage, type, live) &&
                 live == value)) &&
               validateToken(ScalarSemanticCategory::TextureStageState,
@@ -479,7 +469,7 @@ static bool acceptSparseStatePlanWithSources(
             std::uint32_t value) {
           std::uint32_t live = 0u;
           scalarValid = scalarValid &&
-              (!state.fullSnapshot ||
+              (!source.fullSnapshot ||
                (shadow.samplerStateShadowTyped().get(sampler, type, live) &&
                 live == value)) &&
               validateToken(ScalarSemanticCategory::SamplerState,
@@ -539,40 +529,40 @@ static bool acceptSparseStatePlanWithSources(
   consumer.acceptAllSamplerStates();
   consumer.acceptAllTransforms();
   for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
-    if ((state.textureMask & (1u << slot)) != 0u) consumer.acceptTexture(slot);
+    if ((source.textureMask & (1u << slot)) != 0u) consumer.acceptTexture(slot);
   }
   for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-    if ((state.streamMask & (1u << slot)) != 0u) consumer.acceptStream(slot);
+    if ((destination.streamMask & (1u << slot)) != 0u) consumer.acceptStream(slot);
   }
-  if ((state.shaderMask & 1u) != 0u) consumer.acceptVertexShader();
-  if ((state.shaderMask & 2u) != 0u) consumer.acceptPixelShader();
-  if (state.vertexInput) {
-    if (state.vertexInputKind ==
+  if ((source.shaderMask & 1u) != 0u) consumer.acceptVertexShader();
+  if ((source.shaderMask & 2u) != 0u) consumer.acceptPixelShader();
+  if (source.vertexInput) {
+    if (source.vertexInputKind ==
         D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION) {
       consumer.acceptVertexDeclaration();
     } else {
       consumer.acceptFvf();
     }
   }
-  if (state.indexBuffer) consumer.acceptIndexBuffer();
+  if (destination.indexBuffer) consumer.acceptIndexBuffer();
   for (std::uint32_t slot = 0u;
        slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
-    if ((state.renderTargetMask & (1u << slot)) != 0u) {
+    if ((source.renderTargetMask & (1u << slot)) != 0u) {
       consumer.acceptRenderTarget(slot);
     }
   }
-  if (state.depthStencil) consumer.acceptDepthStencil();
-  if (state.viewport) consumer.acceptViewport();
-  if (state.scissor) consumer.acceptScissor();
-  if (state.material) consumer.acceptMaterial();
+  if (source.depthStencil) consumer.acceptDepthStencil();
+  if (source.viewport) consumer.acceptViewport();
+  if (source.scissor) consumer.acceptScissor();
+  if (source.material) consumer.acceptMaterial();
   for (std::uint32_t slot = 0u; slot < 6u; ++slot) {
-    if ((state.clipPlaneMask & (1u << slot)) != 0u) {
+    if ((source.clipPlaneMask & (1u << slot)) != 0u) {
       consumer.acceptClipPlane(slot);
     }
   }
   for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_LIGHTS; ++slot) {
-    if ((state.lightMask & (1u << slot)) != 0u) consumer.acceptLight(slot);
-    if ((state.lightEnableMask & (1u << slot)) != 0u) {
+    if ((source.lightMask & (1u << slot)) != 0u) consumer.acceptLight(slot);
+    if ((source.lightEnableMask & (1u << slot)) != 0u) {
       consumer.acceptLightEnable(slot);
     }
   }

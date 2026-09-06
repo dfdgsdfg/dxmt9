@@ -39,14 +39,25 @@ struct D9CShader : RefCounter {};
 struct D9CVertexDecl : RefCounter {};
 struct D9CQuery : RefCounter {};
 
+// The cross-kind address test treats its pointer as opaque at the C stub
+// boundary. Never dereference a Buffer object through a fabricated Query type.
+static RefCounter* aliasedCounter = nullptr;
+
+template<typename T>
+RefCounter& counter(T* value) {
+  if (static_cast<void*>(value) == static_cast<void*>(aliasedCounter))
+    return *aliasedCounter;
+  return *value;
+}
+
 template<typename T>
 void addRef(T* value) {
-  ++value->refs;
+  ++counter(value).refs;
 }
 
 template<typename T>
 std::uint32_t release(T* value) {
-  return --value->refs;
+  return --counter(value).refs;
 }
 
 extern "C" void dxmt9c_surface_addref(D9CSurface* value) { addRef(value); }
@@ -83,9 +94,91 @@ bool check(bool condition, const char* message) {
   return condition;
 }
 
+struct RetainTraceState {
+  D9CBuffer a{}, b{};
+  D9CQuery query{};
+  D3D9PePendingCommandRetainer retainer{3u};
+  D3D9PePendingCommandRetainer::Acquired checkpoint{};
+  bool active = false;
+
+  // Alphabet: A, B, Query, null, EndEpoch, Clear, Rollback. Starting a new
+  // record commits the prior record; no checkpoint survives epoch compaction.
+  bool step(unsigned op, std::size_t capacity, bool fused) {
+    if (op >= 4u) {
+      if (op == 6u && active) retainer.rollback(checkpoint);
+      active = false;
+      if (op == 4u) retainer.endEpoch();
+      if (op == 5u) retainer.clear();
+      return true;
+    }
+    checkpoint = retainer.beginAcquire();
+    active = true;
+    const auto kind = op == 2u ? D9C_CHUNK_HANDLE_KIND_QUERY
+                               : D9C_CHUNK_HANDLE_KIND_BUFFER;
+    void* object = op == 0u ? static_cast<void*>(&a)
+                   : op == 1u ? static_cast<void*>(&b)
+                   : op == 2u ? static_cast<void*>(&query) : nullptr;
+    if (fused)
+      return retainer.retainWireObject(kind, object, checkpoint, capacity);
+    // The old owner returns before its capacity probe for a null ref.
+    if (!object) return true;
+    const bool warm = op == 2u
+        ? retainer.containsQuery(&query)
+        : retainer.containsBuffer(static_cast<D9CBuffer*>(object));
+    return (warm || retainer.size() < capacity) &&
+           retainer.retainWireObject(kind, object, checkpoint);
+  }
+};
+
+bool boundedTracesMatchReference(std::size_t capacity) {
+  // All length-four strings also cover every shorter prefix: 4 * 7^4 traces.
+  for (unsigned sequence = 0u; sequence < 7u * 7u * 7u * 7u; ++sequence) {
+    RetainTraceState reference, fused;
+    auto remaining = sequence;
+    for (unsigned depth = 0u; depth < 4u; ++depth) {
+      const auto op = remaining % 7u;
+      remaining /= 7u;
+      const bool expected = reference.step(op, capacity, false);
+      const bool actual = fused.step(op, capacity, true);
+      if (expected != actual || reference.retainer.size() != fused.retainer.size() ||
+          reference.a.refs != fused.a.refs || reference.b.refs != fused.b.refs ||
+          reference.query.refs != fused.query.refs) return false;
+    }
+    reference.step(5u, capacity, false);
+    fused.step(5u, capacity, true);
+    if (reference.a.refs != 1u || reference.b.refs != 1u ||
+        reference.query.refs != 1u || fused.a.refs != 1u ||
+        fused.b.refs != 1u || fused.query.refs != 1u) return false;
+  }
+  return true;
+}
+
+bool sameAddressDifferentKindsAreIndependent() {
+  D9CBuffer object{};
+  aliasedCounter = &object;
+  D3D9PePendingCommandRetainer retainer(2u);
+  auto acquired = retainer.beginAcquire();
+  const bool okay = retainer.retainBuffer(&object, acquired, 2u) &&
+      retainer.retainQuery(reinterpret_cast<D9CQuery*>(&object), acquired, 2u) &&
+      object.refs == 3u && retainer.size() == 2u;
+  retainer.clear();
+  aliasedCounter = nullptr;
+  return okay && object.refs == 1u;
+}
+
 }  // namespace
 
 int main() {
+  for (std::size_t capacity = 0u; capacity <= 3u; ++capacity) {
+    if (!check(boundedTracesMatchReference(capacity),
+               "bounded fused trace matches contains-then-retain reference")) {
+      return 1;
+    }
+  }
+  if (!check(sameAddressDifferentKindsAreIndependent(),
+             "one opaque address retains two independent kind-qualified pins"))
+    return 1;
+
   D3D9PePendingCommandRetainer retainer;
   D9CQuery first{};
   D9CQuery second{};
@@ -427,6 +520,40 @@ int main() {
                "max-capacity retry retains every admitted handle")) {
       return 1;
     }
+    idx.clear();
+  }
+
+  // The bounded owner path is allocation-free through its reserved ceiling,
+  // including a warm duplicate and a novel denial at that ceiling.
+  {
+    constexpr std::size_t kCapacity = 3u;
+    D3D9PePendingCommandRetainer idx(kCapacity);
+    D9CBuffer first{}, second{}, third{}, denied{};
+    auto acquire = idx.beginAcquire();
+    idx.retainBuffer(&first, acquire, kCapacity);
+    idx.retainBuffer(&second, acquire, kCapacity);
+    idx.retainBuffer(&third, acquire, kCapacity);
+    idx.clear();
+    gAllocationCount.store(0u, std::memory_order_relaxed);
+    gCountAllocations.store(true, std::memory_order_release);
+    auto retry = idx.beginAcquire();
+    const bool firstResult = idx.retainBuffer(&first, retry, kCapacity);
+    const bool duplicateResult = idx.retainBuffer(&first, retry, kCapacity);
+    const bool secondResult = idx.retainBuffer(&second, retry, kCapacity);
+    const bool thirdResult = idx.retainBuffer(&third, retry, kCapacity);
+    const bool deniedResult = idx.retainBuffer(&denied, retry, kCapacity);
+    gCountAllocations.store(false, std::memory_order_release);
+    if (!check(firstResult && duplicateResult && secondResult && thirdResult &&
+                   !deniedResult,
+               "bounded reserve accepts warm/novel entries and denies over-capacity") ||
+        !check(gAllocationCount.load(std::memory_order_relaxed) == 0u,
+               "bounded warm-set retry and cap denial perform no allocations") ||
+        !check(first.refs == 2u && second.refs == 2u && third.refs == 2u &&
+                   denied.refs == 1u,
+               "bounded cap denial preserves exact AddRef multiplicity")) {
+      return 1;
+    }
+    idx.rollback(retry);
     idx.clear();
   }
 

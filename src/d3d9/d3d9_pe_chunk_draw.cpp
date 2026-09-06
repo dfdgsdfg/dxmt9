@@ -480,68 +480,71 @@ bool appendVisitedSection(
 }
 
 std::uint32_t planSectionCount(const SparseStatePlan& plan) noexcept {
+  const auto& source = plan.source();
+  const auto& destination = plan.destination();
   std::uint32_t count = 0u;
   const auto add = [&count](bool present) noexcept {
     count += present ? 1u : 0u;
   };
-  add(plan.renderStateCount != 0u);
-  add(plan.textureMask != 0u);
-  add(plan.streamMask != 0u);
-  add(plan.shaderMask != 0u);
-  add(plan.vertexInput);
-  add(plan.indexBuffer);
-  add(plan.renderTargetMask != 0u);
-  add(plan.depthStencil);
-  add(plan.viewport);
-  add(plan.scissor);
-  add(plan.material);
-  add(plan.clipPlaneMask != 0u);
-  add(plan.textureStageStateCount != 0u);
-  add(plan.samplerStateCount != 0u);
-  add(plan.transformCount != 0u);
-  add(plan.lightMask != 0u);
-  add(plan.lightEnableMask != 0u);
-  add(plan.vsFloatConstants.present());
-  add(plan.vsIntConstants.present());
-  add(plan.vsBoolConstants.present());
-  add(plan.psFloatConstants.present());
-  add(plan.psIntConstants.present());
-  add(plan.psBoolConstants.present());
-  add(!plan.payloads.upIndex.empty());
-  add(!plan.payloads.upVertex.empty());
+  add(source.renderStateCount != 0u);
+  add(source.textureMask != 0u);
+  add(destination.streamMask != 0u);
+  add(source.shaderMask != 0u);
+  add(source.vertexInput);
+  add(destination.indexBuffer);
+  add(source.renderTargetMask != 0u);
+  add(source.depthStencil);
+  add(source.viewport);
+  add(source.scissor);
+  add(source.material);
+  add(source.clipPlaneMask != 0u);
+  add(source.textureStageStateCount != 0u);
+  add(source.samplerStateCount != 0u);
+  add(source.transformCount != 0u);
+  add(source.lightMask != 0u);
+  add(source.lightEnableMask != 0u);
+  add(source.vsFloatConstants.present());
+  add(source.vsIntConstants.present());
+  add(source.vsBoolConstants.present());
+  add(source.psFloatConstants.present());
+  add(source.psIntConstants.present());
+  add(source.psBoolConstants.present());
+  add(!source.payloads.upIndex.empty());
+  add(!source.payloads.upVertex.empty());
   return count;
 }
 
 D9CCommandChunkWireDrawHeader planDrawHeader(
     const SparseStatePlan& plan, std::uint32_t flags) noexcept {
+  const auto& source = plan.source();
   D9CCommandChunkWireDrawHeader header{};
   header.flags = flags;
-  switch (plan.draw.recordType) {
+  switch (source.draw.recordType) {
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
-      header.primitiveType = plan.draw.primitiveType;
-      header.startVertex = plan.draw.startVertex;
-      header.primitiveCount = plan.draw.primitiveCount;
+      header.primitiveType = source.draw.primitiveType;
+      header.startVertex = source.draw.startVertex;
+      header.primitiveCount = source.draw.primitiveCount;
       break;
     case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
-      header.primitiveType = plan.draw.primitiveType;
-      header.baseVertex = plan.draw.baseVertex;
-      header.minVertex = plan.draw.minVertex;
-      header.numVertices = plan.draw.numVertices;
-      header.startIndex = plan.draw.startIndex;
-      header.primitiveCount = plan.draw.primitiveCount;
+      header.primitiveType = source.draw.primitiveType;
+      header.baseVertex = source.draw.baseVertex;
+      header.minVertex = source.draw.minVertex;
+      header.numVertices = source.draw.numVertices;
+      header.startIndex = source.draw.startIndex;
+      header.primitiveCount = source.draw.primitiveCount;
       break;
     case D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP:
-      header.primitiveType = plan.draw.primitiveType;
-      header.primitiveCount = plan.draw.primitiveCount;
-      header.stride = plan.draw.stride;
+      header.primitiveType = source.draw.primitiveType;
+      header.primitiveCount = source.draw.primitiveCount;
+      header.stride = source.draw.stride;
       break;
     case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP:
-      header.primitiveType = plan.draw.primitiveType;
-      header.minVertex = plan.draw.minVertex;
-      header.numVertices = plan.draw.numVertices;
-      header.primitiveCount = plan.draw.primitiveCount;
-      header.stride = plan.draw.stride;
-      header.indexFormat = plan.draw.indexFormat;
+      header.primitiveType = source.draw.primitiveType;
+      header.minVertex = source.draw.minVertex;
+      header.numVertices = source.draw.numVertices;
+      header.primitiveCount = source.draw.primitiveCount;
+      header.stride = source.draw.stride;
+      header.indexFormat = source.draw.indexFormat;
       break;
     default:
       break;
@@ -554,32 +557,34 @@ bool appendSparsePlanRecordWithSources(
     std::uint32_t flags, const SparseStatePlan& plan,
     const PeHotStateShadow& shadow,
     const PeBindingView& bindings) noexcept {
+  const auto& source = plan.source();
+  const auto& destination = plan.destination();
   const auto* record = recordRule(type);
   const auto count = planSectionCount(plan);
   if (!record || (record->ruleFlags & RecordRuleSparseState) == 0u ||
-      !plan.prepared || !plan.chunkContextFinalized ||
-      plan.draw.recordType != type ||
+      !source.prepared || !destination.chunkContextFinalized ||
+      source.draw.recordType != type ||
       count > D9C_COMMAND_CHUNK_SECTION_COUNT ||
-      std::popcount(plan.textureMask) > D9C_DRAW_PACKET_MAX_TEXTURES ||
-      std::popcount(plan.streamMask) > D9C_DRAW_PACKET_MAX_STREAMS ||
-      std::popcount(plan.renderTargetMask) >
+      std::popcount(source.textureMask) > D9C_DRAW_PACKET_MAX_TEXTURES ||
+      std::popcount(destination.streamMask) > D9C_DRAW_PACKET_MAX_STREAMS ||
+      std::popcount(source.renderTargetMask) >
           D9C_DRAW_PACKET_MAX_RENDER_TARGETS ||
-      std::popcount(plan.clipPlaneMask) > 6 ||
-      std::popcount(plan.lightMask) > D9C_DRAW_PACKET_MAX_LIGHTS ||
-      std::popcount(plan.lightEnableMask) >
+      std::popcount(source.clipPlaneMask) > 6 ||
+      std::popcount(source.lightMask) > D9C_DRAW_PACKET_MAX_LIGHTS ||
+      std::popcount(source.lightEnableMask) >
           D9C_DRAW_PACKET_MAX_LIGHTS ||
       !validConstant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_F,
-                     plan.vsFloatConstants) ||
+                     source.vsFloatConstants) ||
       !validConstant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_I,
-                     plan.vsIntConstants) ||
+                     source.vsIntConstants) ||
       !validConstant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_B,
-                     plan.vsBoolConstants) ||
+                     source.vsBoolConstants) ||
       !validConstant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_F,
-                     plan.psFloatConstants) ||
+                     source.psFloatConstants) ||
       !validConstant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_I,
-                     plan.psIntConstants) ||
+                     source.psIntConstants) ||
       !validConstant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_B,
-                     plan.psBoolConstants)) {
+                     source.psBoolConstants)) {
     return false;
   }
 
@@ -600,13 +605,13 @@ bool appendSparsePlanRecordWithSources(
   }
 
   std::uint32_t sectionIndex = 0u;
-  const auto renderStates = plan.fullSnapshot
+  const auto renderStates = source.fullSnapshot
       ? shadow.renderStateShadowTyped()
       : shadow.pendingRenderStatesTyped();
-  if (renderStates.size() != plan.renderStateCount ||
+  if (renderStates.size() != source.renderStateCount ||
       !appendVisitedSection<D9CCommandChunkWireRenderState>(
           builder, D9C_COMMAND_CHUNK_SECTION_RENDER_STATE,
-          plan.renderStateCount,
+          source.renderStateCount,
           [&](const auto& emit) noexcept {
             bool ok = true;
             renderStates.forEach(
@@ -623,11 +628,11 @@ bool appendSparsePlanRecordWithSources(
 
   if (!appendVisitedSection<D9CCommandChunkWireTextureBinding>(
           builder, D9C_COMMAND_CHUNK_SECTION_TEXTURE,
-          std::popcount(plan.textureMask),
+          std::popcount(source.textureMask),
           [&](const auto& emit) noexcept {
             for (std::uint32_t slot = 0u;
                  slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
-              if ((plan.textureMask & (1u << slot)) == 0u) continue;
+              if ((source.textureMask & (1u << slot)) == 0u) continue;
               D9CCommandChunkWireTextureBinding value{};
               value.slot = slot;
               value.valid = 1u;
@@ -643,11 +648,11 @@ bool appendSparsePlanRecordWithSources(
           descs, sectionIndex) ||
       !appendVisitedSection<D9CCommandChunkWireStreamBinding>(
           builder, D9C_COMMAND_CHUNK_SECTION_STREAM,
-          std::popcount(plan.streamMask),
+          std::popcount(destination.streamMask),
           [&](const auto& emit) noexcept {
             for (std::uint32_t slot = 0u;
                  slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-              if ((plan.streamMask & (1u << slot)) == 0u) continue;
+              if ((destination.streamMask & (1u << slot)) == 0u) continue;
               D9CCommandChunkWireStreamBinding value{};
               value.slot = slot;
               value.valid = 1u;
@@ -665,10 +670,10 @@ bool appendSparsePlanRecordWithSources(
           descs, sectionIndex) ||
       !appendVisitedSection<D9CCommandChunkWireShaderBinding>(
           builder, D9C_COMMAND_CHUNK_SECTION_SHADER,
-          std::popcount(plan.shaderMask),
+          std::popcount(source.shaderMask),
           [&](const auto& emit) noexcept {
             for (std::uint32_t stage = 0u; stage < 2u; ++stage) {
-              if ((plan.shaderMask & (1u << stage)) == 0u) continue;
+              if ((source.shaderMask & (1u << stage)) == 0u) continue;
               D9CCommandChunkWireShaderBinding value{};
               value.stage = stage;
               value.valid = 1u;
@@ -689,11 +694,11 @@ bool appendSparsePlanRecordWithSources(
 
   if (!appendVisitedSection<D9CCommandChunkWireVertexInput>(
           builder, D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT,
-          plan.vertexInput ? 1u : 0u,
+          source.vertexInput ? 1u : 0u,
           [&](const auto& emit) noexcept {
             D9CCommandChunkWireVertexInput value{};
             value.valid = 1u;
-            value.kind = plan.vertexInputKind;
+            value.kind = source.vertexInputKind;
             value.value = bindings.fvf;
             value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
             if (value.kind ==
@@ -708,7 +713,7 @@ bool appendSparsePlanRecordWithSources(
           descs, sectionIndex) ||
       !appendVisitedSection<D9CCommandChunkWireIndexBinding>(
           builder, D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER,
-          plan.indexBuffer ? 1u : 0u,
+          destination.indexBuffer ? 1u : 0u,
           [&](const auto& emit) noexcept {
             D9CCommandChunkWireIndexBinding value{};
             value.valid = 1u;
@@ -719,11 +724,11 @@ bool appendSparsePlanRecordWithSources(
           descs, sectionIndex) ||
       !appendVisitedSection<D9CCommandChunkWireRenderTargetBinding>(
           builder, D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET,
-          std::popcount(plan.renderTargetMask),
+          std::popcount(source.renderTargetMask),
           [&](const auto& emit) noexcept {
             for (std::uint32_t slot = 0u;
                  slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
-              if ((plan.renderTargetMask & (1u << slot)) == 0u) continue;
+              if ((source.renderTargetMask & (1u << slot)) == 0u) continue;
               D9CCommandChunkWireRenderTargetBinding value{};
               value.slot = slot;
               value.valid = 1u;
@@ -739,7 +744,7 @@ bool appendSparsePlanRecordWithSources(
           descs, sectionIndex) ||
       !appendVisitedSection<D9CCommandChunkWireDepthStencilBinding>(
           builder, D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL,
-          plan.depthStencil ? 1u : 0u,
+          source.depthStencil ? 1u : 0u,
           [&](const auto& emit) noexcept {
             D9CCommandChunkWireDepthStencilBinding value{};
             value.valid = 1u;
@@ -754,28 +759,28 @@ bool appendSparsePlanRecordWithSources(
 
   if (!appendVisitedSection<D9CViewport>(
           builder, D9C_COMMAND_CHUNK_SECTION_VIEWPORT,
-          plan.viewport ? 1u : 0u,
+          source.viewport ? 1u : 0u,
           [&](const auto& emit) noexcept {
             return emit(shadow.viewportShadow());
           }, descs, sectionIndex) ||
       !appendVisitedSection<D9CRect>(
           builder, D9C_COMMAND_CHUNK_SECTION_SCISSOR,
-          plan.scissor ? 1u : 0u,
+          source.scissor ? 1u : 0u,
           [&](const auto& emit) noexcept {
             return emit(shadow.scissorShadow());
           }, descs, sectionIndex) ||
       !appendVisitedSection<D9CMaterial>(
           builder, D9C_COMMAND_CHUNK_SECTION_MATERIAL,
-          plan.material ? 1u : 0u,
+          source.material ? 1u : 0u,
           [&](const auto& emit) noexcept {
             return emit(shadow.materialShadow());
           }, descs, sectionIndex) ||
       !appendVisitedSection<D9CCommandChunkWireClipPlane>(
           builder, D9C_COMMAND_CHUNK_SECTION_CLIP_PLANE,
-          std::popcount(plan.clipPlaneMask),
+          std::popcount(source.clipPlaneMask),
           [&](const auto& emit) noexcept {
             for (std::uint32_t slot = 0u; slot < 6u; ++slot) {
-              if ((plan.clipPlaneMask & (1u << slot)) == 0u) continue;
+              if ((source.clipPlaneMask & (1u << slot)) == 0u) continue;
               D9CCommandChunkWireClipPlane value{};
               value.slot = slot;
               std::memcpy(value.values,
@@ -789,21 +794,21 @@ bool appendSparsePlanRecordWithSources(
     return false;
   }
 
-  const auto textureStageStates = plan.fullSnapshot
+  const auto textureStageStates = source.fullSnapshot
       ? shadow.tssShadowTyped()
       : shadow.pendingTssTyped();
-  const auto samplerStates = plan.fullSnapshot
+  const auto samplerStates = source.fullSnapshot
       ? shadow.samplerStateShadowTyped()
       : shadow.pendingSamplerStatesTyped();
-  const auto transforms = plan.fullSnapshot
+  const auto transforms = source.fullSnapshot
       ? shadow.transformShadowTyped()
       : shadow.pendingTransformsTyped();
-  if (textureStageStates.size() != plan.textureStageStateCount ||
-      samplerStates.size() != plan.samplerStateCount ||
-      transforms.size() != plan.transformCount ||
+  if (textureStageStates.size() != source.textureStageStateCount ||
+      samplerStates.size() != source.samplerStateCount ||
+      transforms.size() != source.transformCount ||
       !appendVisitedSection<D9CDrawPacketTextureStageState>(
           builder, D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE,
-          plan.textureStageStateCount,
+          source.textureStageStateCount,
           [&](const auto& emit) noexcept {
             bool ok = true;
             textureStageStates.forEach(
@@ -816,7 +821,7 @@ bool appendSparsePlanRecordWithSources(
           }, descs, sectionIndex) ||
       !appendVisitedSection<D9CDrawPacketSamplerState>(
           builder, D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE,
-          plan.samplerStateCount,
+          source.samplerStateCount,
           [&](const auto& emit) noexcept {
             bool ok = true;
             samplerStates.forEach(
@@ -829,7 +834,7 @@ bool appendSparsePlanRecordWithSources(
           }, descs, sectionIndex) ||
       !appendVisitedSection<D9CDrawPacketTransform>(
           builder, D9C_COMMAND_CHUNK_SECTION_TRANSFORM,
-          plan.transformCount,
+          source.transformCount,
           [&](const auto& emit) noexcept {
             bool ok = true;
             transforms.forEach(
@@ -841,11 +846,11 @@ bool appendSparsePlanRecordWithSources(
           }, descs, sectionIndex) ||
       !appendVisitedSection<D9CCommandChunkWireLight>(
           builder, D9C_COMMAND_CHUNK_SECTION_LIGHT,
-          std::popcount(plan.lightMask),
+          std::popcount(source.lightMask),
           [&](const auto& emit) noexcept {
             for (std::uint32_t slot = 0u;
                  slot < D9C_DRAW_PACKET_MAX_LIGHTS; ++slot) {
-              if ((plan.lightMask & (1u << slot)) == 0u) continue;
+              if ((source.lightMask & (1u << slot)) == 0u) continue;
               if (!emit(D9CCommandChunkWireLight{
                       .slot = slot,
                       .reserved0 = 0u,
@@ -857,38 +862,38 @@ bool appendSparsePlanRecordWithSources(
           }, descs, sectionIndex) ||
       !appendVisitedSection<D9CCommandChunkWireLightEnable>(
           builder, D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE,
-          std::popcount(plan.lightEnableMask),
+          std::popcount(source.lightEnableMask),
           [&](const auto& emit) noexcept {
-            const std::uint32_t source = plan.fullSnapshot
+            const std::uint32_t lightEnableSource = source.fullSnapshot
                 ? shadow.lightEnableShadow()
                 : shadow.pendingLightEnableMask();
             for (std::uint32_t slot = 0u;
                  slot < D9C_DRAW_PACKET_MAX_LIGHTS; ++slot) {
-              if ((plan.lightEnableMask & (1u << slot)) == 0u) continue;
+              if ((source.lightEnableMask & (1u << slot)) == 0u) continue;
               if (!emit(D9CCommandChunkWireLightEnable{
                       .slot = slot,
-                      .enabled = (source & (1u << slot)) != 0u})) {
+                      .enabled = (lightEnableSource & (1u << slot)) != 0u})) {
                 return false;
               }
             }
             return true;
           }, descs, sectionIndex) ||
       !appendConstantSection(builder, D9C_COMMAND_CHUNK_SECTION_VS_CONST_F,
-                             plan.vsFloatConstants, descs, sectionIndex) ||
+                             source.vsFloatConstants, descs, sectionIndex) ||
       !appendConstantSection(builder, D9C_COMMAND_CHUNK_SECTION_VS_CONST_I,
-                             plan.vsIntConstants, descs, sectionIndex) ||
+                             source.vsIntConstants, descs, sectionIndex) ||
       !appendConstantSection(builder, D9C_COMMAND_CHUNK_SECTION_VS_CONST_B,
-                             plan.vsBoolConstants, descs, sectionIndex) ||
+                             source.vsBoolConstants, descs, sectionIndex) ||
       !appendConstantSection(builder, D9C_COMMAND_CHUNK_SECTION_PS_CONST_F,
-                             plan.psFloatConstants, descs, sectionIndex) ||
+                             source.psFloatConstants, descs, sectionIndex) ||
       !appendConstantSection(builder, D9C_COMMAND_CHUNK_SECTION_PS_CONST_I,
-                             plan.psIntConstants, descs, sectionIndex) ||
+                             source.psIntConstants, descs, sectionIndex) ||
       !appendConstantSection(builder, D9C_COMMAND_CHUNK_SECTION_PS_CONST_B,
-                             plan.psBoolConstants, descs, sectionIndex) ||
+                             source.psBoolConstants, descs, sectionIndex) ||
       !appendRawSection(builder, D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA,
-                        plan.payloads.upIndex, descs, sectionIndex) ||
+                        source.payloads.upIndex, descs, sectionIndex) ||
       !appendRawSection(builder, D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA,
-                        plan.payloads.upVertex, descs, sectionIndex)) {
+                        source.payloads.upVertex, descs, sectionIndex)) {
     builder.rollbackRecord();
     return false;
   }
@@ -923,7 +928,7 @@ bool appendSparsePlanRecord(CommandChunkBuilder& builder,
 bool appendSparseStatePlan(CommandChunkBuilder& builder,
                            std::uint32_t type,
                            const SparseStatePlan& plan) noexcept {
-  return appendSparsePlanRecord(builder, type, plan.drawFlags, plan);
+  return appendSparsePlanRecord(builder, type, plan.source().drawFlags, plan);
 }
 
 bool appendApplyStatePlan(CommandChunkBuilder& builder,

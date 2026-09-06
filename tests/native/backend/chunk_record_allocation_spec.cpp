@@ -380,7 +380,7 @@ void testWarmSparseStatePlanAllocations() {
             recorderAccess, shadow, constants, bindings, {}, params, false,
             false, plan) ||
         !dxmt9::d3d9::pe::appendApplyStatePlan(
-            builder, plan.drawFlags, plan)) {
+            builder, plan.source().drawFlags, plan)) {
       return false;
     }
     builder.reset();
