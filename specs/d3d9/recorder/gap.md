@@ -13,6 +13,36 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.34–7.36 are implemented with bounded native/codegen evidence.
+Compact quota/variable staging reuses a private append/source-bound capability;
+the qualified payload writer constructs the draw header without a second
+fixed-header staging product. Entry, destination, actual source consumption,
+and settlement checks remain. Production generic admission omits the six-entry
+unique-pin summary; compact admission also omits the duplicate 17-category
+quota array. Public inspection keeps both projections. The private typed
+`QualifiedBinding` binds the object actually consumed by pin installation;
+physical-pin validation, sequential acquisition, retain/fault order, pre-retain
+wire bounds, and rollback remain checked. Generic/control foreign sparse quota
+semantics are unchanged.
+
+Validation against `54da28ce`: all four canonical builds pass, native PE/wire
+tests pass 31/31, x86_64 provider-focused tests pass 9/9, and the unchanged
+recorder transaction TLA suite passes. Native fixtures include null/duplicate
+bindings, true stream/index aliasing, a shared-owner/reused-plan A/B/A trace,
+stale source rejection, max-family/fault rollback, and generic control foreign
+sparse capacity. Release PE32/PE64 exports and vtable/RTTI ownership match.
+The compact append entry's direct stack reservation changes from 3144 to 3056
+bytes on PE32 and 3232 to 3136 on PE64; neither gains a stack probe. Constant
+append entry instruction counts and stack reservations are unchanged. The
+compact quota helper no longer calls `SparseStatePlan::validFor`, and the
+fixed-header qualification instantiation is absent. Local hash-qualified
+receipts are in
+`experiments/output/pe-admission-authority-20260906/analysis/verification.md`
+and `codegen-comparison.json` in that directory. These are static/native
+results, not a new model of arbitrary callbacks or a Wine/pixel/FPS result.
+Fresh runtime direction checks remain open; no transport, cadence,
+warm-retainer lifetime, or Unix scheduling promotion is implied.
+
 R-CORE-REC-7.31–7.33 are implemented with bounded native/codegen evidence.
 Seal no longer stores the unused `EmissionPlan.records` projection, but still
 validates every canonical record header. Compact append consumes its private

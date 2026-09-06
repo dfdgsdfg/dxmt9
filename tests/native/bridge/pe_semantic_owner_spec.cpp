@@ -4571,6 +4571,45 @@ void compactAppendQuotaProofAndRollback() {
   }
 }
 
+void compactAdmissionRejectsStaleSourceBeforeSettlement() {
+  PeHotStateShadow shadow{};
+  PeConstShadowBlock constants{};
+  PeBindingView bindings{};
+  PeDrawPayloads payloads{};
+  PeDrawParams params{.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                      .primitiveType = 4u,
+                      .primitiveCount = 1u};
+  PeChunkContext chunk{};
+  SparseStatePlan plan;
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken ownerThread;
+  std::uint64_t epoch = 1u;
+  RecorderLockGuard guard(mutex, false);
+  Owner owner;
+  const bool built = guard.withCapability(
+      ownerThread, epoch, [&](const auto& access) noexcept {
+        return buildSparseStatePlan(access, shadow, constants, bindings, payloads,
+                                    params, false, false, plan) &&
+               finalizeSparseStatePlanChunkContext(access, chunk, plan);
+      });
+  check(built, "compact stale-source fixture builds a finalized plan");
+  plan.invalidate();
+  bool settled = false;
+  const bool accepted = guard.withCapability(
+      ownerThread, epoch, [&](const auto& access) noexcept {
+        return owner.tryAppendSparseStatePlan(
+            access, plan, PeSemanticProducerKind::DrawPrimitive,
+            params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+            [&]() noexcept {
+              settled = true;
+              return true;
+            });
+      });
+  check(!accepted && !settled && owner.size() == 0u &&
+            owner.lastAdmissionFailure() == Owner::AdmissionFailure::Malformed,
+        "compact stale source rejects before settlement or owner mutation");
+}
+
 // Exercise the actual compact producer at the schema's legal maximum binding
 // occurrence count. This uses an ordinary indexed draw rather than a snapshot
 // or a hand-built SparseStatePlan, so plan selection, destination finalization,
@@ -4709,7 +4748,9 @@ void realCompactSparseMaxFamilyDifferentialAndRollback(bool allDistinct,
   std::size_t preparedIdentityCount = 0u;
   std::size_t preparedWireCount = 0u;
   std::size_t preparedOccurrenceCount = 0u;
+  std::size_t preparedRetainedCount = 0u;
   bool preparedMaxWitness = false;
+  bool preparedQuotaAuthority = false;
   bool maxPlanBuilt = false;
   bool maxPlanFinalized = false;
   const bool built = guard.withCapability(
@@ -4754,6 +4795,11 @@ void realCompactSparseMaxFamilyDifferentialAndRollback(bool allDistinct,
           preparedIdentityCount = prepared.identityWitness.count;
           preparedWireCount = prepared.identityWitness.wireCount;
           preparedOccurrenceCount = prepared.bindingOccurrences.count;
+          for (const auto count : prepared.plan.uniquePinCounts)
+            preparedRetainedCount += count;
+          preparedQuotaAuthority =
+              prepared.sparseLayout.quotaDeltas[1u] ==
+              D9C_DRAW_PACKET_MAX_TEXTURES;
         }
         return maxPlanFinalized;
       });
@@ -4761,8 +4807,11 @@ void realCompactSparseMaxFamilyDifferentialAndRollback(bool allDistinct,
         "real compact max-family plan builds under live recorder access");
   check(preparedMaxWitness && preparedOccurrenceCount == 45u &&
             preparedIdentityCount == (allDistinct ? 45u : 39u) &&
-            preparedWireCount == (allDistinct ? 45u : 39u),
-        "compact prepared witness records 45 live family occurrences and identities");
+            preparedWireCount == (allDistinct ? 45u : 39u) &&
+            preparedQuotaAuthority &&
+            prepared.plan.sparseCounts == prepared.sparseLayout.quotaDeltas &&
+            preparedRetainedCount == preparedIdentityCount,
+            "compact preparation keeps quota authority in the layout witness");
 
   PeSemanticExactFixedEmission prefixEmission{};
   check(owner.emitExactFixed(prefixEmission),
@@ -4973,8 +5022,16 @@ int main(int argc, char** argv) {
                   sizeof(PeSemanticRecordSlot));
     static_assert(sizeof(PeSemanticConstantRecordStaging) <
                   sizeof(PeSemanticRecordSlot));
-    static_assert(sizeof(PeSemanticSparsePlanRecordStaging) ==
-                  sizeof(D9CCommandChunkWireDrawHeader));
+    static_assert(sizeof(PeSemanticSparsePlanRecordStaging) == 1u);
+    static_assert(std::is_same_v<PeSemanticCompactPreparedRecord::AdmissionPlan,
+                                 PeSemanticAdmissionPlan>);
+    static_assert(std::is_same_v<
+                  PeSemanticProductionCompactPreparedRecord::AdmissionPlan,
+                  PeSemanticCompactAdmissionPlan>);
+    static_assert(sizeof(PeSemanticCompactAdmissionPlan) + 23u * sizeof(std::uint32_t) ==
+                  sizeof(PeSemanticAdmissionPlan));
+    static_assert(sizeof(PeSemanticProductionAdmissionPlan) + 6u * sizeof(std::uint32_t) ==
+                  sizeof(PeSemanticAdmissionPlan));
     static_assert(sizeof(PeSemanticConstantRecordStaging) ==
                   sizeof(D9CCommandChunkWireSetConst));
     static_assert(sizeof(PeSemanticRecordReceipt) <
@@ -5067,6 +5124,7 @@ int main(int argc, char** argv) {
     observedSettlementChildrenSampleAtN1();
     observerScopeRestoresNestedState();
     observerSeparatesPrepareMalformedFromHeader();
+    compactAdmissionRejectsStaleSourceBeforeSettlement();
     realCompactSparseMaxFamilyDifferentialAndRollback(true);
     realCompactSparseMaxFamilyDifferentialAndRollback(false);
     runRealCompactRetainFaultChild(argv[0]);

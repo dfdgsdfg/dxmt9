@@ -206,6 +206,8 @@ struct LaneResult {
   std::size_t retainedObjectCount = 0;
 };
 
+Fixture baseDraw(const char* name, std::uint32_t recordType);
+
 // Counts and retention are read BEFORE seal(); the blob is copied out because
 // SealedCommandChunk::blob is a span into the builder, which is lane-local.
 LaneResult finishLane(pe::CommandChunkBuilder& builder, bool ok) {
@@ -393,6 +395,274 @@ LaneResult runOwnerPlanLane(const Fixture& fixture) {
   check(result.bytes == canonicalResult.bytes,
         source.name + ": production owner plan differs from plan builder");
   return result;
+}
+
+// The compact owner has one qualified identity/mapping authority for all
+// binding occurrences. Keep this matrix small, but make each row reach the
+// real SparseStatePlan -> PeSemanticBatchOwner path and compare it with the
+// independent CommandChunkBuilder producer. Each row uses a fresh owner and
+// plan; stateful A/B/A reuse is covered separately below.
+struct BindingRefCounts {
+  std::array<std::uint32_t, 10u> values{};
+};
+
+BindingRefCounts bindingRefCounts() noexcept {
+  return {{tex0.refs, tex1.refs, vb0.refs, vb1.refs, ib0.refs, ib1.refs,
+            vsObj.refs, psObj.refs, rt0.refs, ds0.refs}};
+}
+
+void requireBindingRefCounts(const BindingRefCounts& expected,
+                             const std::string& caseName) {
+  check(bindingRefCounts().values == expected.values,
+        caseName + ": compact/generic lanes must release every acquired pin");
+}
+
+void productionOwnerBindingAliasDifferential() {
+  // Shape 0 is a null/unbind APPLY_STATE (there is no destination-dependent
+  // stream/index qualification); the remaining shapes use an indexed draw so
+  // stream, index, shader, render-target, and depth rows all pass through the
+  // destination finalizer as well as owner admission.
+  for (std::uint32_t shape = 0u; shape < 4u; ++shape) {
+    const bool indexedDraw = shape != 0u;
+    Fixture f = baseDraw(
+        "owner binding aliases", indexedDraw
+            ? D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE
+            : D9C_COMMAND_RECORD_APPLY_STATE);
+    f.name = "owner binding aliases independent shape " +
+             std::to_string(shape);
+    f.shadow.writer().pendingTextureMask() = 0x7u;
+    f.shadow.writer().pendingStreamMask() = 0x3u;
+    f.shadow.writer().pendingVs() = true;
+    f.shadow.writer().pendingPs() = true;
+    f.shadow.writer().pendingRtMask() = 0x3u;
+    f.shadow.writer().pendingDs() = true;
+    f.shadow.writer().pendingIb() = indexedDraw;
+    f.chunk.retainedStreamMask = 0u;
+    f.chunk.indexBufferKnown = false;
+    f.chunk.indexBufferRetained = false;
+
+    const auto textureA = publishedRef(&tex0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
+    const auto textureB = publishedRef(&tex1, D9C_CHUNK_HANDLE_KIND_TEXTURE);
+    const auto bufferA = publishedRef(&vb0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+    const auto bufferB = publishedRef(&vb1, D9C_CHUNK_HANDLE_KIND_BUFFER);
+    const auto indexA = publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+    const auto indexB = publishedRef(&ib1, D9C_CHUNK_HANDLE_KIND_BUFFER);
+    const auto shaderA = publishedRef(&vsObj, D9C_CHUNK_HANDLE_KIND_SHADER);
+    const auto shaderB = publishedRef(&psObj, D9C_CHUNK_HANDLE_KIND_SHADER);
+    const auto surfaceA = publishedRef(&rt0, D9C_CHUNK_HANDLE_KIND_SURFACE);
+    const auto surfaceB = publishedRef(&ds0, D9C_CHUNK_HANDLE_KIND_SURFACE);
+
+    switch (shape) {
+    case 0u:
+      // The pending rows remain present and must encode null bindings, not
+      // be silently dropped by the compact occurrence mapper.
+      f.bindings = {};
+      break;
+    case 1u:
+      // One identity is repeated across each family and across the indexed
+      // stream/index roles; this is the warm/duplicate alias shape.
+      f.bindings.textures[0] = textureA;
+      f.bindings.textures[1] = textureA;
+      f.bindings.streams[0].buffer = bufferA;
+      f.bindings.streams[1].buffer = bufferA;
+      f.bindings.indexBuffer = bufferA;
+      f.bindings.vs = shaderA;
+      f.bindings.ps = shaderA;
+      f.bindings.renderTargets[0] = surfaceA;
+      f.bindings.renderTargets[1] = surfaceA;
+      f.bindings.depthStencil = surfaceA;
+      break;
+    case 2u:
+      // Distinct identities plus repeated aliases exercise exact wire bytes,
+      // deduplication, and retained-object multiplicity.
+      f.bindings.textures[0] = textureA;
+      f.bindings.textures[1] = textureB;
+      f.bindings.textures[2] = textureA;
+      f.bindings.streams[0].buffer = bufferA;
+      f.bindings.streams[1].buffer = bufferB;
+      f.bindings.indexBuffer = indexA;
+      f.bindings.vs = shaderA;
+      f.bindings.ps = shaderB;
+      f.bindings.renderTargets[0] = surfaceA;
+      f.bindings.renderTargets[1] = surfaceB;
+      f.bindings.depthStencil = surfaceA;
+      break;
+    default:
+      // Mixed null/duplicate occurrences keep all seven family ranges live.
+      // Reset the complete view so baseDraw's defaults cannot accidentally
+      // turn an intended null occurrence into a real binding.
+      f.bindings = {};
+      f.bindings.textures[1] = textureA;
+      f.bindings.textures[2] = textureA;
+      f.bindings.streams[0].buffer = bufferA;
+      f.bindings.indexBuffer = indexB;
+      f.bindings.ps = shaderA;
+      f.bindings.renderTargets[1] = surfaceB;
+      f.bindings.depthStencil = surfaceB;
+      break;
+    }
+
+    if (shape == 1u) {
+      const auto& stream = f.bindings.streams[0].buffer;
+      const auto& index = f.bindings.indexBuffer;
+      check(stream.object == index.object &&
+                stream.identity.kind == index.identity.kind &&
+                stream.identity.generation == index.identity.generation &&
+                stream.identity.objectId == index.identity.objectId,
+            f.name + ": shape1 must alias one buffer across stream/index");
+    }
+
+    const auto before = bindingRefCounts();
+    const auto generic = indexedDraw ? runDirectDrawLane(f) : runDirectLane(f);
+    requireBindingRefCounts(
+        before, f.name + ": independent builder refcount balance");
+    const auto owner = runOwnerPlanLane(f);
+    check(generic.ok && owner.ok && generic.bytes == owner.bytes &&
+              generic.recordCount == owner.recordCount &&
+              generic.handleCount == owner.handleCount &&
+              generic.payloadBytes == owner.payloadBytes &&
+              generic.retainedObjectCount == owner.retainedObjectCount,
+          f.name +
+              ": SparseStatePlan owner must match independent generic bytes, "
+              "wire counts, and retained identity count");
+    requireBindingRefCounts(
+        before, f.name + ": owner rollback/release refcount balance");
+  }
+}
+
+// Unlike the independent shape matrix above, this trace keeps one owner and
+// one non-movable SparseStatePlan across A -> B -> A. A and B are different
+// live wrapper objects with stable, published identities; A appears again as
+// the same live identity, so this never fabricates a generation change on a
+// still-live object. Each owner commit uses the real PendingDelta settlement,
+// and the accumulated exact wire is compared with one generic builder.
+void productionOwnerBindingAliasReusedPlanABA() {
+  std::array<Fixture, 3u> steps;
+  const auto configure = [](Fixture& f, const char* name, bool b) {
+    f = baseDraw(name, D9C_COMMAND_RECORD_APPLY_STATE);
+    f.bindings = {};
+    f.shadow.writer().pendingTextureMask() = 0x3u;
+    f.shadow.writer().pendingStreamMask() = 0x3u;
+    f.shadow.writer().pendingVs() = true;
+    f.shadow.writer().pendingPs() = true;
+    f.shadow.writer().pendingRtMask() = 0x3u;
+    f.shadow.writer().pendingDs() = true;
+    f.bindings.textures[0] = publishedRef(
+        b ? &tex1 : &tex0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
+    f.bindings.textures[1] = f.bindings.textures[0];
+    f.bindings.streams[0].buffer = publishedRef(
+        b ? &vb1 : &vb0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+    f.bindings.streams[1].buffer = f.bindings.streams[0].buffer;
+    f.bindings.vs = publishedRef(
+        b ? &psObj : &vsObj, D9C_CHUNK_HANDLE_KIND_SHADER);
+    f.bindings.ps = f.bindings.vs;
+    f.bindings.renderTargets[0] = publishedRef(
+        b ? &ds0 : &rt0, D9C_CHUNK_HANDLE_KIND_SURFACE);
+    f.bindings.renderTargets[1] = f.bindings.renderTargets[0];
+    f.bindings.depthStencil = f.bindings.renderTargets[0];
+  };
+  configure(steps[0], "shared owner A", false);
+  configure(steps[1], "shared owner B", true);
+  configure(steps[2], "shared owner A again", false);
+
+  const auto before = bindingRefCounts();
+  {
+    pe::CommandChunkBuilder genericBuilder;
+    pe::PeSemanticBatchOwner<> owner;
+    std::recursive_mutex mutex;
+    dxmt9::core::ThreadOwnershipToken ownerThread;
+    std::uint64_t epoch = 311u;
+    pe::RecorderLockGuard guard(mutex, false);
+    pe::SparseStatePlan plan;
+
+    for (std::size_t stepIndex = 0u; stepIndex < steps.size(); ++stepIndex) {
+      auto& step = steps[stepIndex];
+      PeConstShadowBlock genericConstants = step.constants;
+      pe::PeSparseScratch genericScratch{};
+      pe::SparseStateInput genericState{};
+      D9CCommandChunkWireDrawHeader genericHeader{};
+      check(pe::buildSparseState(
+                step.shadow, genericConstants, step.bindings, step.payloads,
+                step.params, false, false, genericScratch, genericHeader,
+                genericState) &&
+                pe::appendApplyState(genericBuilder, genericHeader.flags,
+                                     genericState),
+            step.name + ": generic A/B/A builder append succeeds");
+
+      const auto sourceOrdinal = static_cast<std::uint64_t>(stepIndex + 1u);
+      const auto settlement = pe::settleRecorderAppend({
+          .phase = pe::AppendSettlement::Prepared,
+          .appendSucceeded = true,
+      });
+      check(guard.withCapability(
+                ownerThread, epoch, [&](const auto& access) noexcept {
+                  if (!pe::buildSparseStatePlan(
+                          access, step.shadow, step.constants, step.bindings,
+                          step.payloads, step.params, false, false, plan)) {
+                    return false;
+                  }
+                  return owner.tryAppendSparseStatePlan(
+                      access, plan, pe::PeSemanticProducerKind::ApplyState,
+                      step.params.recordType,
+                      D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, sourceOrdinal,
+                      sourceOrdinal, [&]() noexcept {
+                        const auto* const checkedSource = plan.source(access);
+                        return checkedSource && pe::acceptSparseStatePlan(
+                            access, step.shadow, step.constants, plan,
+                            settlement, nullptr, sourceOrdinal,
+                            checkedSource->pendingTicket);
+                      });
+                }),
+            step.name + ": reused production plan settles successfully");
+    }
+
+    const auto generic = finishLane(genericBuilder, true);
+    std::size_t ownerHandles = 0u;
+    std::size_t ownerPayload = 0u;
+    std::size_t ownerWireBytes = 0u;
+    check(owner.emissionMetrics(ownerHandles, ownerPayload, ownerWireBytes),
+          "shared owner A/B/A metrics remain exact");
+    pe::PeSemanticExactFixedEmission exact;
+    check(owner.emitExactFixed(exact) && exact.valid() &&
+              generic.bytes.size() == exact.wireBytes &&
+              generic.bytes.size() == ownerWireBytes &&
+              std::equal(generic.bytes.begin(), generic.bytes.end(),
+                         exact.wire.begin()) &&
+              generic.recordCount == owner.size() &&
+              generic.handleCount == ownerHandles &&
+              generic.payloadBytes == ownerPayload &&
+              generic.retainedObjectCount == owner.retainedCount(),
+          "shared owner A/B/A exact wire and ownership match generic oracle");
+  }
+  requireBindingRefCounts(before,
+                          "shared owner A/B/A final release balance");
+}
+
+// A generic control envelope historically counts foreign sparse fields even
+// though its fixed wire payload does not emit draw sections. Compact quota
+// specialization must not accidentally replace that count with an empty
+// fixed-record layout.
+void genericControlForeignSparseQuotaPreserved() {
+  pe::PeSemanticBatchOwner<8u, 8u, 4096u, 8u, 2u> owner;
+  const std::array<D9CCommandChunkWireRenderState, 3u> states{};
+  pe::PeSemanticRecordInput input{
+      .producer = pe::PeSemanticProducerKind::Clear,
+      .recordType = D9C_COMMAND_RECORD_CLEAR,
+      .sourceOrdinal = 1u,
+      .recordOrdinal = 1u,
+  };
+  input.sparse.renderStates = states;
+  pe::PeSemanticPreparedRecord inspection;
+  check(owner.prepareAdmission(input, inspection) ==
+            pe::PeSemanticAdmissionOutcome::Capacity &&
+            inspection.plan.sparseCounts[0] == states.size(),
+        "generic control inspection counts foreign sparse quota");
+  check(!owner.admit(input) && owner.size() == 0u &&
+            owner.lastAdmissionFailure() == decltype(owner)::AdmissionFailure::Capacity,
+        "generic control production preserves foreign sparse capacity rejection");
+  input.sparse.renderStates = std::span(states).first(2u);
+  check(owner.admit(input) && owner.size() == 1u,
+        "generic control production accepts the exact foreign sparse quota");
 }
 
 // --- goldens ---------------------------------------------------------------
@@ -2934,6 +3204,9 @@ int main() {
     inlineConstDeltaSingleRange();
     productionOwnerPlanAllCategoryDifferential();
     productionOwnerSelectionDifferentialAcrossFamilies();
+    productionOwnerBindingAliasDifferential();
+    productionOwnerBindingAliasReusedPlanABA();
+    genericControlForeignSparseQuotaPreserved();
     productionOwnerExplicitSnapshotRoutePreserved();
     inlineConstAppendFailurePreservesDirtyRange();
     sparseSettlementNormalAndOversizedAreExact();

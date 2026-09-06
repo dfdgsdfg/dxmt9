@@ -854,6 +854,39 @@ cold sampled phase scopes remain the runtime attribution boundary; no per-draw
 clock/atomic is justified merely to demonstrate a proof. Native/codegen success
 does not establish Wine pixel correctness or an FPS improvement.
 
+R-CORE-REC-7.34–7.36 extend that reuse inside the compact append, not across
+new lifecycle boundaries. Private staging consumers may trust the source
+qualification already established in their callback-free region. The payload
+writer still qualifies borrowed values before reading them, and settlement
+obtains fresh access. Fixed draw-header construction belongs in that qualified
+writer when a separate staging copy would only repeat source qualification.
+CapacityPre and any invalidating callback terminate the earlier proof; generic
+and ordered-control adapters retain their checked entry points.
+
+The production witness contains only facts used for admission and emission.
+Its section layout owns compact category deltas; capacity proof and logical
+quota publication read that same representation. Oracle-only unique-pin
+summaries are reconstructed or collected only for inspection. This separation
+must not change current-chunk versus warm-retainer capacity accounting. Public
+full and compact inspection witnesses retain their projections; explicit
+production plan types omit the arrays instead of leaving zero-filled tails.
+Generic/control envelopes still carry their required foreign sparse quotas.
+The bounded identity witness prevents unique-count overflow without adding a
+replacement production summary; actual identity and retention capacities
+remain checked.
+
+Binding emission qualifies a source/mapping pair once, then a private typed
+consumer may reuse that fact without routing through the generic input
+validator. The consumer still checks the current physical pin or acquires the
+next pin in order under the active checkpoint. A token is synchronous and
+non-escaping; it is not a persistent identity cache or permission to skip
+callback invalidation, retain faults, or wire bounds. Bounded native traces
+compare the real compact producer with the checked reference and preserve
+exact failure/retry bytes and ownership. Existing TLA models continue to own
+transaction order; these changes introduce no thread, wake, or lease transition.
+Concrete C++ value refinement, PE codegen, and later Wine/performance evidence
+remain separate layers.
+
 The optional owner-qualified copy/materialization ledger binds this same
 transaction at its two physical ownership boundaries. A successful admission
 records the increase in live typed record, pin, and canonical-role

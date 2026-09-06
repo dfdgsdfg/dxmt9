@@ -863,3 +863,31 @@ validation. Production-used pure mask operations and bounded native
 differentials must cover empty, partial, full, repeated-value, and failed/retried
 settlement. The refinement must not add a second pending-state authority,
 allocation, atomic, mutex, or disabled diagnostic work.
+
+**R-CORE-REC-7.34** Compact append staging may reuse source qualification only
+inside a private synchronous region with no invalidating callback. Logical
+quota publication must not independently requalify an unchanged source, and
+fixed draw-header construction may share the qualified payload writer. Public
+entry, destination rebase, actual borrowed-value consumption, and settlement
+must retain their required fresh checks. No capability may escape the append
+or make a stale owner, epoch, ticket, or destination admissible. Generic and
+ordered-control failure guards remain unchanged.
+
+**R-CORE-REC-7.35** Production admission must not maintain derived metadata
+solely for a diagnostic or differential oracle. Compact quota preparation and
+publication must consume one authoritative category-delta representation;
+record-local unique-pin summaries may be projected for inspection without
+being accumulated by production. Removing those fields must preserve exact
+capacity decisions, identity deduplication, warm-retention deltas, wire order,
+and failed-append rollback. Release PE32/PE64 inspection must verify that the
+removed work is absent at production callsites, not merely in source types.
+
+**R-CORE-REC-7.36** A compact binding writer may consume a private typed
+qualified mapping rather than revalidate the same source identity through a
+generic pin API. Qualification must bind kind, generation, object, mapping,
+and wire ordinal before consumption; callers must not manufacture or retain
+unchecked tokens. Current physical-pin validation, sequential new-pin
+acquisition, retain/fault order, canonical bounds, and post-callback validity
+remain mandatory. Null and duplicate occurrences, cross-family aliases,
+stale identity, partial acquisition, and failed settlement must refine the
+checked reference path in bytes, ownership, and retry behavior.

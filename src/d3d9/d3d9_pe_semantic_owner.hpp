@@ -128,11 +128,45 @@ struct PeSemanticAdmissionPlan {
   std::uint32_t payloadBytes = 0u;
   std::uint32_t rectCount = 0u;
   std::uint32_t semanticBytes = 0u;
+  // Public differential/oracle projection; compact production quota consumers
+  // use PeSemanticPreparedSparseLayout::quotaDeltas as the sole authority.
   std::array<std::uint32_t, 17u> sparseCounts{};
+  // Public differential/oracle projection. Compact production witnesses use
+  // PeSemanticCompactAdmissionPlan instead of materializing this summary.
   std::array<std::uint32_t, 6u> uniquePinCounts{};
 };
 
 static_assert(std::is_trivially_copyable_v<PeSemanticAdmissionPlan>);
+
+// Generic production preparation still needs the full sparse quota projection
+// for foreign/non-compact producers, but its retention result is already
+// carried by the owner-local delta witness.  Keep the six-entry unique-pin
+// projection on the public oracle only.
+struct PeSemanticProductionAdmissionPlan {
+  bool valid = false;
+  std::uint32_t recordType = 0u;
+  std::uint32_t handleCount = 0u;
+  std::uint32_t payloadBytes = 0u;
+  std::uint32_t rectCount = 0u;
+  std::uint32_t semanticBytes = 0u;
+  std::array<std::uint32_t, 17u> sparseCounts{};
+};
+
+static_assert(std::is_trivially_copyable_v<PeSemanticProductionAdmissionPlan>);
+
+// Compact production preparation needs only the facts consumed by capacity
+// and emission. Sparse quota and unique-count projections remain in the public
+// oracle plan above, not in this hot-path witness.
+struct PeSemanticCompactAdmissionPlan {
+  bool valid = false;
+  std::uint32_t recordType = 0u;
+  std::uint32_t handleCount = 0u;
+  std::uint32_t payloadBytes = 0u;
+  std::uint32_t rectCount = 0u;
+  std::uint32_t semanticBytes = 0u;
+};
+
+static_assert(std::is_trivially_copyable_v<PeSemanticCompactAdmissionPlan>);
 
 // A prepared draw section is the complete destination-independent part of a
 // record's payload layout.  The source spans remain call-local; only their
@@ -1155,7 +1189,11 @@ constexpr bool isPeSemanticUpProducer(
 // rejects the whole plan, which is how the owner folds its retention-delta and
 // generation-alias proof into this same pass instead of walking the record a
 // second time.
-template <PeSemanticRecordInputLike Input, typename OnUniqueRetained,
+// The public oracle keeps the optional unique-count projection by default;
+// production preparation passes false so retention deltas remain the only
+// owner-facing result for that question.
+template <bool ProjectUniquePinCounts = true, PeSemanticRecordInputLike Input,
+          typename AdmissionPlanT, typename OnUniqueRetained,
           typename IdentityWitness>
   requires (std::is_nothrow_invocable_r_v<bool, OnUniqueRetained&,
                                           const PeWireObjectRef&, std::size_t> ||
@@ -1163,7 +1201,7 @@ template <PeSemanticRecordInputLike Input, typename OnUniqueRetained,
                                           const PeWireObjectRef&, std::size_t,
                                           std::size_t>)
 inline bool planPeSemanticAdmissionWithIdentity(
-    const Input& input, PeSemanticAdmissionPlan& out,
+    const Input& input, AdmissionPlanT& out,
     OnUniqueRetained&& onUniqueRetained,
     IdentityWitness& identityWitness,
     PeSemanticEmissionHandleContext* wireWitness = nullptr,
@@ -1198,9 +1236,11 @@ inline bool planPeSemanticAdmissionWithIdentity(
     if (newlyWireVisible && wireWitness != nullptr &&
         !wireWitness->appendKnownUnique(ref.identity)) return false;
     if (newlyRetained) {
-      if (out.uniquePinCounts[pinKind] ==
-          std::numeric_limits<std::uint32_t>::max()) return false;
-      ++out.uniquePinCounts[pinKind];
+      if constexpr (ProjectUniquePinCounts) {
+        if (out.uniquePinCounts[pinKind] ==
+            std::numeric_limits<std::uint32_t>::max()) return false;
+        ++out.uniquePinCounts[pinKind];
+      }
       if constexpr (std::is_nothrow_invocable_r_v<
                         bool, decltype(observe)&, const PeWireObjectRef&,
                         std::size_t, std::size_t>) {
@@ -1367,27 +1407,28 @@ inline bool planPeSemanticAdmissionWithIdentity(
   return true;
 }
 
-template <PeSemanticRecordInputLike Input, typename OnUniqueRetained>
+template <bool ProjectUniquePinCounts = true, PeSemanticRecordInputLike Input,
+          typename AdmissionPlanT, typename OnUniqueRetained>
   requires (std::is_nothrow_invocable_r_v<bool, OnUniqueRetained&,
                                           const PeWireObjectRef&, std::size_t> ||
             std::is_nothrow_invocable_r_v<bool, OnUniqueRetained&,
                                           const PeWireObjectRef&, std::size_t,
                                           std::size_t>)
 inline bool planPeSemanticAdmissionWith(
-    const Input& input, PeSemanticAdmissionPlan& out,
+    const Input& input, AdmissionPlanT& out,
     OnUniqueRetained&& onUniqueRetained,
     PeSemanticEmissionHandleContext* wireWitness = nullptr,
     PeSemanticPreparedSparseLayout* sparseLayoutWitness = nullptr,
     PeSemanticBindingOccurrencePlan* bindingWitness = nullptr,
     PeSemanticPreparedIdentityWitness* identityWitness = nullptr) noexcept {
   if (identityWitness != nullptr) {
-    return planPeSemanticAdmissionWithIdentity(
+    return planPeSemanticAdmissionWithIdentity<ProjectUniquePinCounts>(
         input, out, static_cast<OnUniqueRetained&&>(onUniqueRetained),
         *identityWitness,
         wireWitness, sparseLayoutWitness, bindingWitness);
   }
   PeSemanticPreparedIdentityWitness localIdentityWitness;
-  return planPeSemanticAdmissionWithIdentity(
+  return planPeSemanticAdmissionWithIdentity<ProjectUniquePinCounts>(
       input, out, static_cast<OnUniqueRetained&&>(onUniqueRetained),
       localIdentityWitness,
       wireWitness, sparseLayoutWitness, bindingWitness);
@@ -1420,11 +1461,13 @@ enum class PeSemanticAdmissionOutcome : std::uint8_t {
   Capacity,
 };
 
-template <std::size_t IdentityCapacity = 80u>
+template <std::size_t IdentityCapacity = 80u,
+          typename AdmissionPlanT = PeSemanticAdmissionPlan>
 struct PeSemanticPreparedRecordT {
+  using AdmissionPlan = AdmissionPlanT;
   using IdentityEntry =
       typename PeSemanticPreparedIdentityWitnessT<IdentityCapacity>::Entry;
-  PeSemanticAdmissionPlan plan;
+  AdmissionPlan plan;
   PeSemanticPreparedSparseLayout sparseLayout;
   PeSemanticBindingOccurrencePlan bindingOccurrences;
   // Sole private admission-local identity authority: entries retain first
@@ -1495,8 +1538,13 @@ struct PeSemanticPreparedRecordT {
 };
 
 using PeSemanticPreparedRecord = PeSemanticPreparedRecordT<80u>;
+using PeSemanticProductionPreparedRecord =
+    PeSemanticPreparedRecordT<80u, PeSemanticProductionAdmissionPlan>;
 using PeSemanticCompactPreparedRecord =
     PeSemanticPreparedRecordT<kPeSemanticMaxBindingOccurrences>;
+using PeSemanticProductionCompactPreparedRecord =
+    PeSemanticPreparedRecordT<kPeSemanticMaxBindingOccurrences,
+                              PeSemanticCompactAdmissionPlan>;
 
 static_assert(std::is_trivially_copyable_v<PeSemanticPreparedRecord>);
 static_assert(std::is_trivially_copyable_v<PeSemanticCompactPreparedRecord>);
@@ -1610,7 +1658,6 @@ static_assert(std::is_trivially_copyable_v<PeSemanticRecordSlot>);
 // all-family slot here would recreate the removed committed value product on
 // every append stack frame.
 struct PeSemanticSparsePlanRecordStaging {
-  D9CCommandChunkWireDrawHeader draw{};
 };
 
 struct PeSemanticConstantRecordStaging {
@@ -1884,14 +1931,23 @@ class PeSemanticBatchOwner final {
   // Pure CapacityPre proof over an already-planned record.  It also publishes
   // the exact emission frontier it computed, so the transactional append and
   // its settlement never realign or re-plan the same layout.
-  template <std::size_t IdentityCapacity>
+  template <bool UseLayoutQuota, std::size_t IdentityCapacity,
+            typename AdmissionPlanT>
   bool proveCapacity(
-      PeSemanticPreparedRecordT<IdentityCapacity>& witness) const noexcept {
+      PeSemanticPreparedRecordT<IdentityCapacity, AdmissionPlanT>& witness) const noexcept {
     const auto& plan = witness.plan;
-    if (!ready_ || !plan.valid || recordCount_ >= MaxRecords ||
-        !witness.rule || plan.payloadBytes == 0u) return false;
-    for (std::size_t i = 0u; i < plan.sparseCounts.size(); ++i) {
-      if (plan.sparseCounts[i] > MaxSparseValues - sparseCounts_.values[i])
+    const auto& quota = [&]() noexcept -> const auto& {
+      if constexpr (UseLayoutQuota)
+        return witness.sparseLayout.quotaDeltas;
+      else
+        return plan.sparseCounts;
+    }();
+    if (!ready_ || !plan.valid ||
+        (UseLayoutQuota && !witness.sparseLayout.valid) ||
+        recordCount_ >= MaxRecords || !witness.rule ||
+        plan.payloadBytes == 0u) return false;
+    for (std::size_t i = 0u; i < quota.size(); ++i) {
+      if (quota[i] > MaxSparseValues - sparseCounts_.values[i])
         return false;
     }
     if (plan.rectCount > MaxRects - rectCount_ ||
@@ -1910,9 +1966,9 @@ class PeSemanticBatchOwner final {
                                  plan.semanticBytes);
   }
 
-  template <std::size_t IdentityCapacity>
+  template <std::size_t IdentityCapacity, typename AdmissionPlanT>
   bool proveAggregateRetentionCapacity(
-      const PeSemanticPreparedRecordT<IdentityCapacity>& witness) const noexcept {
+      const PeSemanticPreparedRecordT<IdentityCapacity, AdmissionPlanT>& witness) const noexcept {
     // Deltas are a disjoint partition of the bounded identity witness. Their
     // sum is a safe upper bound: some new current-chunk pins are already warm.
     // Ordinary records need no second identity walk or retainer hash lookup.
@@ -1950,10 +2006,10 @@ class PeSemanticBatchOwner final {
   // runs once per newly seen identity, and rejects a generation or pointer
   // alias of an already-pinned object exactly where the old separate retention
   // walk did.
-  template <std::size_t IdentityCapacity>
+  template <std::size_t IdentityCapacity, typename AdmissionPlanT>
   bool accumulateRetentionDelta(
       const PeWireObjectRef& ref, std::size_t pinKind,
-      PeSemanticPreparedRecordT<IdentityCapacity>& witness,
+      PeSemanticPreparedRecordT<IdentityCapacity, AdmissionPlanT>& witness,
       std::size_t identityOrdinal) const noexcept {
     auto& out = witness.retentionDeltas;
     bool existing = false;
@@ -2018,10 +2074,10 @@ class PeSemanticBatchOwner final {
   }
 
  public:
-  template <std::size_t IdentityCapacity>
+  template <std::size_t IdentityCapacity, typename AdmissionPlanT>
   PeSemanticAdmissionOutcome prepareAdmission(
       const PeSemanticSparsePlanRecordInput& input,
-      PeSemanticPreparedRecordT<IdentityCapacity>& witness) const noexcept {
+      PeSemanticPreparedRecordT<IdentityCapacity, AdmissionPlanT>& witness) const noexcept {
     witness.resetForAdmission();
     witness.plan = {};
     if (!ready_) return PeSemanticAdmissionOutcome::Unavailable;
@@ -2054,9 +2110,13 @@ class PeSemanticBatchOwner final {
 
    private:
     friend class PeSemanticBatchOwner;
+    template <PeSemanticOwnedRecordInputLike Input>
     PreparedAppendAuthority(const void* prepared,
-                            const PeSemanticBatchOwner& owner) noexcept
-        : prepared_(prepared), owner_(&owner) {}
+                            const PeSemanticBatchOwner& owner,
+                            const Input& input) noexcept
+        : prepared_(prepared), owner_(&owner) {
+      if constexpr (PeSemanticSparsePlanInputLike<Input>) sourceInput_ = &input;
+    }
 
     bool binds(const auto& prepared,
                const PeSemanticBatchOwner& owner) const noexcept {
@@ -2066,14 +2126,41 @@ class PeSemanticBatchOwner final {
                                    owner.emissionPayloadBytes_);
     }
 
+    bool bindsSource(const PeSemanticSparsePlanRecordInput& input,
+                     const auto& prepared,
+                     const PeSemanticBatchOwner& owner) const noexcept {
+      return sourceInput_ == &input && binds(prepared, owner);
+    }
+
     const void* prepared_ = nullptr;
     const PeSemanticBatchOwner* owner_ = nullptr;
+    const PeSemanticSparsePlanRecordInput* sourceInput_ = nullptr;
   };
 
-  template <std::size_t IdentityCapacity>
+  // A binding mapping validated by the compact writer. Only the private
+  // qualified consumer below can consume this token; generic pinPrepared()
+  // remains fully checked for all other callers.
+  template <typename Object, typename Identity>
+  class QualifiedBinding {
+   private:
+    friend class PeSemanticBatchOwner;
+
+    QualifiedBinding() noexcept = default;
+
+    QualifiedBinding(Object* object, const D9CWireObjectIdentity& identity,
+                     std::uint32_t pin, std::uint32_t wire) noexcept
+        : object_(object), identity_(identity), pin_(pin), wire_(wire) {}
+
+    Object* object_ = nullptr;
+    D9CWireObjectIdentity identity_{};
+    std::uint32_t pin_ = kPeSemanticNoSlot;
+    std::uint32_t wire_ = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
+  };
+
+  template <std::size_t IdentityCapacity, typename AdmissionPlanT>
   PeSemanticAdmissionOutcome prepareAdmissionQualified(
       const PeSemanticSparsePlanRecordInput& input,
-      PeSemanticPreparedRecordT<IdentityCapacity>& witness,
+      PeSemanticPreparedRecordT<IdentityCapacity, AdmissionPlanT>& witness,
       const SparseStatePlan::QualifiedSources& sources) const noexcept {
     const auto& sourceFacts = sources.source;
     const auto& destinationFacts = sources.destination;
@@ -2092,7 +2179,9 @@ class PeSemanticBatchOwner final {
     witness.plan.recordType = input.recordType;
     witness.plan.payloadBytes = witness.sparseLayout.payloadBytes;
     witness.plan.semanticBytes = witness.sparseLayout.semanticDelta;
-    witness.plan.sparseCounts = witness.sparseLayout.quotaDeltas;
+    if constexpr (std::is_same_v<AdmissionPlanT, PeSemanticAdmissionPlan>) {
+      witness.plan.sparseCounts = witness.sparseLayout.quotaDeltas;
+    }
 
     auto& identities = witness.identityWitness;
     const auto retain = [&](const PeWireObjectRef& ref, std::uint32_t kind,
@@ -2105,9 +2194,13 @@ class PeSemanticBatchOwner final {
       if (!identities.add(ref, kind, true, newlyRetained, newlyWireVisible,
                           &mappingOrdinal)) return false;
       if (newlyRetained) {
-        if (witness.plan.uniquePinCounts[pinKind] ==
-            std::numeric_limits<std::uint32_t>::max()) return false;
-        ++witness.plan.uniquePinCounts[pinKind];
+        if constexpr (std::is_same_v<AdmissionPlanT, PeSemanticAdmissionPlan>) {
+          // Inspection only. Production is bounded by the identity witness
+          // and needs neither this summary nor another six-counter product.
+          if (witness.plan.uniquePinCounts[pinKind] ==
+              std::numeric_limits<std::uint32_t>::max()) return false;
+          ++witness.plan.uniquePinCounts[pinKind];
+        }
         if (!accumulateRetentionDelta(ref, pinKind, witness, mappingOrdinal))
           return false;
       }
@@ -2257,7 +2350,7 @@ class PeSemanticBatchOwner final {
     witness.recordCount = recordCount_;
     witness.emissionHandleCount = emissionHandleCount_;
     witness.emissionPayloadBytes = emissionPayloadBytes_;
-    if (!proveCapacity(witness)) return PeSemanticAdmissionOutcome::Capacity;
+    if (!proveCapacity<true>(witness)) return PeSemanticAdmissionOutcome::Capacity;
     witness.admissible = true;
     return PeSemanticAdmissionOutcome::Admissible;
   }
@@ -2265,10 +2358,11 @@ class PeSemanticBatchOwner final {
  public:
   // Observation-only preparation. One pass over the immutable input answers
   // layout, retention deltas, and exact emission frontier.
-  template <PeSemanticRecordInputLike Input>
+  template <std::size_t IdentityCapacity, typename AdmissionPlanT,
+            PeSemanticRecordInputLike Input>
   PeSemanticAdmissionOutcome prepareAdmission(
       const Input& input,
-      PeSemanticPreparedRecord& witness) const noexcept {
+      PeSemanticPreparedRecordT<IdentityCapacity, AdmissionPlanT>& witness) const noexcept {
     witness.resetForAdmission();
     if (!ready_) {
       witness.plan = {};
@@ -2286,7 +2380,8 @@ class PeSemanticBatchOwner final {
         policy != nullptr && policy->kind == staged.producer;
     witness.constantProducer = isPeSemanticConstantProducer(staged.producer);
     witness.upProducer = isPeSemanticUpProducer(staged.producer);
-    if (!planPeSemanticAdmissionWith(
+    if (!planPeSemanticAdmissionWith<
+            std::is_same_v<AdmissionPlanT, PeSemanticAdmissionPlan>>(
         input, witness.plan,
         [&](const PeWireObjectRef& ref, std::size_t pinKind,
             std::size_t identityOrdinal) noexcept {
@@ -2299,7 +2394,7 @@ class PeSemanticBatchOwner final {
     witness.recordCount = recordCount_;
     witness.emissionHandleCount = emissionHandleCount_;
     witness.emissionPayloadBytes = emissionPayloadBytes_;
-    if (!proveCapacity(witness)) return PeSemanticAdmissionOutcome::Capacity;
+    if (!proveCapacity<false>(witness)) return PeSemanticAdmissionOutcome::Capacity;
     witness.admissible = true;
     return PeSemanticAdmissionOutcome::Admissible;
   }
@@ -2359,9 +2454,9 @@ class PeSemanticBatchOwner final {
   }
 
  private:
-  template <std::size_t IdentityCapacity>
+  template <std::size_t IdentityCapacity, typename AdmissionPlanT>
   static std::uint32_t preparedRecordType(
-      const PeSemanticPreparedRecordT<IdentityCapacity>& prepared) noexcept {
+      const PeSemanticPreparedRecordT<IdentityCapacity, AdmissionPlanT>& prepared) noexcept {
     return prepared.plan.recordType;
   }
   static std::uint32_t preparedRecordType(
@@ -2418,7 +2513,9 @@ class PeSemanticBatchOwner final {
       // requalification.  All prepared consumers below use this one proof;
       // no public operation accepts the private token, and the token never
       // crosses the settlement callback.
-      const PreparedAppendAuthority authority(&prepared, *this);
+      // validAdmissionHeader() has just performed the fresh source proof;
+      // compact staging has no retain/callback frontier before its claims.
+      const PreparedAppendAuthority authority(&prepared, *this, input);
       using Staging = std::conditional_t<
           PeSemanticConstantInputLike<Input>,
           PeSemanticConstantRecordStaging,
@@ -2535,8 +2632,8 @@ class PeSemanticBatchOwner final {
     using Prepared = std::conditional_t<
         PeSemanticConstantInputLike<Input>, PeSemanticPreparedConstantRecord,
         std::conditional_t<PeSemanticSparsePlanInputLike<Input>,
-                           PeSemanticCompactPreparedRecord,
-                           PeSemanticPreparedRecord>>;
+                           PeSemanticProductionCompactPreparedRecord,
+                           PeSemanticProductionPreparedRecord>>;
     Prepared prepared;
     switch (prepareAdmission(input, prepared)) {
       case PeSemanticAdmissionOutcome::Admissible:
@@ -2593,8 +2690,8 @@ class PeSemanticBatchOwner final {
     using Prepared = std::conditional_t<
         PeSemanticConstantInputLike<Input>, PeSemanticPreparedConstantRecord,
         std::conditional_t<PeSemanticSparsePlanInputLike<Input>,
-                           PeSemanticCompactPreparedRecord,
-                           PeSemanticPreparedRecord>>;
+                           PeSemanticProductionCompactPreparedRecord,
+                           PeSemanticProductionPreparedRecord>>;
     Prepared prepared;
     PeSemanticAdmissionOutcome outcome;
     {
@@ -3761,13 +3858,14 @@ class PeSemanticBatchOwner final {
       std::size_t globalFirst,
       const auto& prepared,
       const SparseStatePlan::QualifiedSources& sources) noexcept {
+    (void)slot;
     const auto& sourceFacts = sources.source;
     const auto& destinationFacts = sources.destination;
     const auto& layout = prepared.sparseLayout;
     const auto count = static_cast<std::size_t>(layout.sectionCount);
     if (!layout.valid || count > D9C_COMMAND_CHUNK_SECTION_COUNT ||
         layout.payloadBytes != payload.size()) return false;
-    auto draw = slot.draw;
+    auto draw = sparseStatePlanDrawHeader(sourceFacts);
     draw.sectionCount = static_cast<std::uint32_t>(count);
     draw.sectionTableOffset = sizeof(draw);
     draw.sectionPayloadOffset = static_cast<std::uint32_t>(
@@ -3858,20 +3956,17 @@ class PeSemanticBatchOwner final {
                                      const PeWireObjectRef& source,
                                      const PeSemanticBindingLocator& locator,
                                      PinArray& pins, std::size_t& pinCount,
-                                     Retain retain) noexcept {
+                                     Retain retain,
+                                     std::uint32_t& wireIndex) noexcept {
               Ref ref{};
               if (!typedOptionalRef(source, ref)) return false;
-              std::uint32_t pin = kPeSemanticNoSlot;
-              std::uint32_t wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
-              if (!pinPrepared<Object, Identity>(
-                      ref, pins, pinCount, pin, prepared, retain, &wireIndex,
-                      &prepared.identityWitness.entries[locator.mappingOrdinal]))
+              QualifiedBinding<Object, Identity> binding;
+              if (!makeQualifiedBinding<Object, Identity>(
+                      ref, locator, prepared, globalFirst, binding))
                 return false;
-              return prepared.identityWitness.entries[locator.mappingOrdinal].pin ==
-                         pin &&
-                     prepared.identityWitness.entries[locator.mappingOrdinal]
-                             .wireIndex == wireIndex &&
-                     locator.wireIndex == wireIndex;
+              std::uint32_t pin = kPeSemanticNoSlot;
+              return pinPreparedQualifiedBinding<Object, Identity>(
+                  pins, pinCount, pin, &wireIndex, binding, retain);
             };
             const auto emit = [&](Wire value,
                                   const PeWireObjectRef& ref) noexcept {
@@ -3884,25 +3979,14 @@ class PeSemanticBatchOwner final {
                 value.reserved0 = 0u;
               value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
               if (locator->hasPin) {
-                if (locator->mappingOrdinal >= prepared.identityWitness.count)
-                  return false;
-                const auto& mapping =
-                    prepared.identityWitness.entries[locator->mappingOrdinal];
-                if (!std::remove_cvref_t<decltype(
-                    prepared.identityWitness)>::sameIdentity(
-                        mapping.identity, ref.identity) ||
-                    mapping.object != ref.object ||
-                    locator->wireIndex != mapping.wireIndex ||
-                    mapping.wireIndex >= prepared.identityWitness.wireCount ||
-                    globalFirst + mapping.wireIndex >
-                        std::numeric_limits<std::uint32_t>::max()) return false;
                 bool acquired = false;
+                std::uint32_t wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
                 if constexpr (std::is_same_v<Wire,
                                              D9CCommandChunkWireTextureBinding>) {
                   acquired = acquire.template operator()<
                       D9CTexture, PeSemanticTextureIdentity, TextureRef>(
                       ref, *locator, storage_->textures, textureCount_,
-                      retainTextureFn());
+                      retainTextureFn(), wireIndex);
                 } else if constexpr (std::is_same_v<
                                          Wire,
                                          D9CCommandChunkWireStreamBinding> ||
@@ -3912,14 +3996,14 @@ class PeSemanticBatchOwner final {
                   acquired = acquire.template operator()<
                       D9CBuffer, PeSemanticBufferIdentity, BufferRef>(
                       ref, *locator, storage_->buffers, bufferCount_,
-                      retainBufferFn());
+                      retainBufferFn(), wireIndex);
                 } else if constexpr (std::is_same_v<
                                          Wire,
                                          D9CCommandChunkWireShaderBinding>) {
                   acquired = acquire.template operator()<
                       D9CShader, PeSemanticShaderIdentity, ShaderRef>(
                       ref, *locator, storage_->shaders, shaderCount_,
-                      retainShaderFn());
+                      retainShaderFn(), wireIndex);
                 } else if constexpr (std::is_same_v<
                                          Wire,
                                          D9CCommandChunkWireVertexInput>) {
@@ -3927,12 +4011,12 @@ class PeSemanticBatchOwner final {
                       D9CVertexDecl, PeSemanticDeclarationIdentity,
                       DeclarationRef>(
                       ref, *locator, storage_->declarations, declarationCount_,
-                      retainDeclarationFn());
+                      retainDeclarationFn(), wireIndex);
                 } else {
                   acquired = acquire.template operator()<
                       D9CSurface, PeSemanticSurfaceIdentity, SurfaceRef>(
                       ref, *locator, storage_->surfaces, surfaceCount_,
-                      retainSurfaceFn());
+                      retainSurfaceFn(), wireIndex);
                 }
                 if (!acquired) {
                   if constexpr (std::is_same_v<
@@ -3964,7 +4048,7 @@ class PeSemanticBatchOwner final {
                   return false;
                 }
                 value.handleIndex = static_cast<std::uint32_t>(
-                    globalFirst + mapping.wireIndex);
+                    globalFirst + wireIndex);
               }
               std::memcpy(destination.data() + occurrence * sizeof(Wire),
                           &value, sizeof(Wire));
@@ -4847,10 +4931,12 @@ class PeSemanticBatchOwner final {
         isPeSemanticUpProducer(staged.producer));
   }
 
-  template <PeSemanticRecordInputLike Input>
+  template <PeSemanticRecordInputLike Input, std::size_t IdentityCapacity,
+            typename AdmissionPlanT>
   bool validAdmissionHeader(
       const Input& input,
-      const PeSemanticPreparedRecord& prepared) const noexcept {
+      const PeSemanticPreparedRecordT<IdentityCapacity, AdmissionPlanT>&
+          prepared) const noexcept {
     return validAdmissionHeader(input, prepared.rule,
                                 prepared.producerMatchesRecordType,
                                 prepared.constantProducer,
@@ -4945,17 +5031,11 @@ class PeSemanticBatchOwner final {
   bool copyFixedValues(
       const PeSemanticSparsePlanRecordInput& input,
       PeSemanticSparsePlanRecordStaging& slot) noexcept {
-    if (input.access == nullptr || input.sparsePlan == nullptr) return false;
-    bool copied = false;
-    const bool qualified = input.sparsePlan->withQualifiedSources(
-        *input.access,
-        [&](const SparseStatePlan::QualifiedSources& sources) noexcept {
-          if (!sources.destination.chunkContextFinalized ||
-              sources.source.draw.recordType != input.recordType) return;
-          slot.draw = sparseStatePlanDrawHeader(sources.source);
-          copied = true;
-        });
-    return qualified && copied;
+    (void)input;
+    (void)slot;
+    // The draw header is derived by writeSparsePlanPayloadQualified(), where
+    // the writer already owns the fresh qualified source callback.
+    return true;
   }
 
   template <PeSemanticRecordInputLike Input>
@@ -5069,6 +5149,65 @@ class PeSemanticBatchOwner final {
         !insertPinIndex(objectIndex, identity.value,
                         static_cast<std::uint32_t>(index), pinIndexGeneration_,
                         false)) {
+      return false;
+    }
+    ++count;
+    out = static_cast<std::uint32_t>(index);
+    return true;
+  }
+
+  template <typename Object, typename Identity, typename Ref, typename Prepared>
+  bool makeQualifiedBinding(const Ref& ref,
+                            const PeSemanticBindingLocator& locator,
+                            const Prepared& prepared, std::size_t globalFirst,
+                            QualifiedBinding<Object, Identity>& out) const noexcept {
+    if (locator.mappingOrdinal >= prepared.identityWitness.count) return false;
+    const auto& mapping = prepared.identityWitness.entries[locator.mappingOrdinal];
+    if (!std::remove_cvref_t<decltype(prepared.identityWitness)>::sameIdentity(
+            mapping.identity, ref.identity) ||
+        mapping.object != ref.object || locator.wireIndex != mapping.wireIndex ||
+        mapping.wireIndex >= prepared.identityWitness.wireCount ||
+        globalFirst > std::numeric_limits<std::uint32_t>::max() -
+                          mapping.wireIndex) {
+      return false;
+    }
+    out = QualifiedBinding<Object, Identity>(static_cast<Object*>(ref.object),
+                                             ref.identity, mapping.pin,
+                                             mapping.wireIndex);
+    return true;
+  }
+
+  template <typename Object, typename Identity, typename PinArray, typename Retain>
+  bool pinPreparedQualifiedBinding(
+      PinArray& pins, std::size_t& count, std::uint32_t& out,
+      std::uint32_t* wireIndex,
+      const QualifiedBinding<Object, Identity>& binding, Retain retain) noexcept {
+    if (wireIndex) *wireIndex = binding.wire_;
+    const std::size_t index = binding.pin_;
+    const Identity identity{.value = binding.identity_};
+    if (index < count) {
+      if (!pins[index].valid() || pins[index].object != binding.object_ ||
+          pins[index].identity.value.kind != identity.value.kind ||
+          pins[index].identity.value.generation != identity.value.generation ||
+          pins[index].identity.value.objectId != identity.value.objectId) {
+        return false;
+      }
+      out = static_cast<std::uint32_t>(index);
+      return true;
+    }
+    if (index != count || index == MaxPins ||
+        !retain(binding.object_, retainedCheckpoint_)) {
+      return false;
+    }
+    pins[index] = {.object = binding.object_, .identity = identity};
+    auto& exactIndex = exactPinIndex<Object, Identity>();
+    auto& objectIndex = objectPinIndex<Object, Identity>();
+    if (!insertPinIndex(exactIndex, identity.value,
+                        static_cast<std::uint32_t>(index),
+                        pinIndexGeneration_) ||
+        !insertPinIndex(objectIndex, identity.value,
+                        static_cast<std::uint32_t>(index),
+                        pinIndexGeneration_, false)) {
       return false;
     }
     ++count;
@@ -5335,8 +5474,8 @@ class PeSemanticBatchOwner final {
     // proof and the unchanged destination frontier. Source validity and the
     // physical payload/handle checks remain in the serializer below; this
     // path only publishes the proved logical deltas.
-    (void)authority;
-    if (!input.valid() || !prepared.sparseLayout.valid) return false;
+    if (!authority.bindsSource(input, prepared, *this) ||
+        !prepared.sparseLayout.valid) return false;
     const auto& quota = prepared.sparseLayout.quotaDeltas;
     const auto claim = [&](std::size_t kind) noexcept {
       if (kind >= quota.size()) return false;
@@ -5368,8 +5507,7 @@ class PeSemanticBatchOwner final {
       const PeSemanticSparsePlanRecordInput& input,
       PeSemanticSparsePlanRecordStaging&, const auto& prepared,
       const PreparedAppendAuthority& authority) noexcept {
-    (void)authority;
-    if (!input.valid()) return false;
+    if (!authority.bindsSource(input, prepared, *this)) return false;
     // Compact plans serialize these borrowed ranges directly from the plan;
     // only the aggregate logical quota is committed. Do not populate the
     // seven logical range fields or their six constant headers in staging.
