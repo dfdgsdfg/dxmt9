@@ -26,7 +26,11 @@ vtable/RTTI owners match; constant inner frames and dynamic TLS guard work
 shrink, while compact dispatch code grows. Bridge DLLs are byte-identical;
 the shared ledger header changes the Unix provider. See
 [H251](../../../docs/perfomance/present-pacing/present-pacing-pe-append-effects.251.md).
-Fresh wild correctness, current CPU attribution and FPS evidence remain open.
+A hash-qualified post-commit GT2 spot check passes with zero chunk/GPU/pipeline
+failures and close CB/pass ratios: 29.034 sampled FPS versus H250 28.846
+(+0.650%). One non-interleaved run with differing background CPU load does not
+establish gain or qualified neutrality. Whole-scene correctness, repeatability
+and current CPU attribution remain open.
 The unchanged cadence, wire ABI and queue policies are constraints, not
 inferred performance outcomes.
 

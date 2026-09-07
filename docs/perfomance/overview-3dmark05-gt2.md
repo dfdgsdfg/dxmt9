@@ -11,12 +11,13 @@ related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; 
 
 # 3DMark05 GT2 Performance — Current Baseline
 
-The latest implementation [H251](present-pacing/present-pacing-pe-append-effects.251.md)
+The latest runtime checkpoint [H251](present-pacing/present-pacing-pe-append-effects.251.md)
 refines compact section dispatch, constant rollback, disabled ledger access
-and recorder frontier reads. It has native/linked evidence, not a new FPS
-result. The latest runtime spot check remains
-[H250](present-pacing/present-pacing-pe-sparse-work.250.md): 28.846 sampled FPS,
-without a qualified gain or neutrality claim.
+and recorder frontier reads. Native/linked checks pass. Post-commit GT2 is
+29.034 sampled FPS versus [H250](present-pacing/present-pacing-pe-sparse-work.250.md)
+28.846 (+0.650%), with zero chunk/GPU/pipeline failures and close CB/pass
+ratios. One run with differing background CPU load does not establish gain
+or qualified neutrality; whole-scene correctness and CPU attribution remain open.
 
 The latest [PE identity diagnostic](present-pacing/present-pacing-pe-identity-distribution.248.md)
 at `706866a4` finds mean 2.588 unique identities / 4.494 comparisons per sampled

@@ -5,18 +5,21 @@ title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
 updated: 2026-09-07
-source: docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md; docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
+source: docs/perfomance/present-pacing/present-pacing-pe-append-effects.251.md; docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md; docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest implementation: [H251](present-pacing-pe-append-effects.251.md) adds
+Latest runtime checkpoint: [H251](present-pacing-pe-append-effects.251.md) adds
 active-section dispatch, concrete constant settlement with narrower rollback,
 constinit ledger overrides and fresh counts-only recorder bookkeeping.
-Native/linked evidence is separate from the still-open wild/FPS gate.
+Post-commit GT2 is 29.034 sampled FPS versus H250 28.846 (+0.650%), with zero
+chunk/GPU/pipeline failures and close CB/pass ratios. Native/linked checks
+pass; one run with differing background load does not establish an FPS gain
+or qualified neutrality. Whole-scene evidence and CPU attribution remain open.
 
-Latest runtime checkpoint: [H250](present-pacing-pe-sparse-work.250.md) limits
+Prior runtime checkpoint: [H250](present-pacing-pe-sparse-work.250.md) limits
 compact binding traversal, quota processing and constant bitmap clearing to
 active input. Native/TLA, sanitizer and linked PE checks pass. Post-commit GT2
 is 28.846 FPS versus H249 28.835 (+0.038%), with zero chunk/GPU/pipeline

@@ -3,9 +3,9 @@ domain: present-pacing
 workload: 3DMark05 GT2
 title: "PE active-section dispatch and closed append effects"
 type: evidence
-status: native-codegen
+status: native-codegen-and-single-run
 updated: 2026-09-07
-source: experiments/output/pe-append-effects-20260907/analysis
+source: experiments/output/pe-append-effects-20260907/analysis; experiments/output/app-d3d9-3dmark05-pe-append-effects-b83d59e1-gt2-r1-20260907; experiments/output/app-d3d9-3dmark05-pe-sparse-work-77518738-gt2-r1-20260907
 related: specs/d3d9/recorder/requirements.md; present-pacing-pe-sparse-work.250.md
 ---
 
@@ -16,7 +16,8 @@ related: specs/d3d9/recorder/requirements.md; present-pacing-pe-sparse-work.250.
 Base: `4a0ee6bf`, with H250 runtime `77518738`. R-CORE-REC-7.48–7.51
 refine existing synchronous PE transactions. Record cadence, wire ABI,
 segmented selection, source identity, queue scheduling and provider defaults
-are unchanged. This work contains no new FPS measurement.
+are unchanged. Implementation commit: `b83d59e1`; its post-commit GT2 spot
+check is recorded below separately from the native and linked evidence.
 
 1. Compact layout gates absent categories at the call site. The writer
    dispatches the existing prepared section inventory instead of invoking
@@ -115,10 +116,55 @@ oracle, and the source assertion tied to the previous TLS representation.
 The initially proposed token-plus-arbitrary-callback interface was rejected
 during main/independent review, not accepted as proof of closed effects.
 
-## Next gate
+## Post-commit GT2 spot check
 
-Measure the final hash-qualified build with PE observers off before comparing
-FPS. Section presence frequency, helper outlining, branch cost and remaining
-ledger lookup overhead require actual CPU attribution. H250's single GT2
-result and historical PE phase times cannot price these changes or establish
-a gain, neutrality, or completion of PE optimization.
+The clean `b83d59e1` worktree was checked through all three canonical staging
+builds, then run once through `run_experiment.py`. The artifact is
+`app-d3d9-3dmark05-pe-append-effects-b83d59e1-gt2-r1-20260907`; the reference is
+H250's `app-d3d9-3dmark05-pe-sparse-work-77518738-gt2-r1-20260907`.
+
+Both use named GT2, 1024x768, Sikarugir `sikarugir-cx-24.0.7`, perf/Warn,
+validation OFF, frame sampling ON, and PE decimation/recorder stats/semantic
+phase observation OFF. Copy/materialization observation is OFF; no GPU trace
+or PE sampler was run. Actual staged PE32/PE64/Unix hashes match the linked
+receipts above. The bridge DLLs match the reference, but the shared ledger
+header changes the Unix provider as well as the PE binaries.
+
+| Metric | H250 `77518738` | `b83d59e1` |
+|---|---:|---:|
+| Positive-wall sampled FPS | 28.846 | 29.034 |
+| Positive-wall sample count | 1,861 | 1,876 |
+| Sampled wall time (ms) | 64,514.336 | 64,614.120 |
+| Encoded Presents | 1,862 | 1,877 |
+| Command buffers / Present | 3.99946 | 3.99947 |
+| Render passes / Present | 15.77712 | 15.77890 |
+| Draw calls / Present | 1,683.132 | 1,681.425 |
+| GPU command-buffer time / Present (ms) | 2.050 | 2.032 |
+| Chunk rejects / GPU errors / no-pipeline skips | 0 / 0 / 0 | 0 / 0 / 0 |
+
+FPS is positive-wall sample count divided by summed frame wall time, not
+process elapsed FPS or a decoded `.3dr` score. The observed change is +0.650%.
+The run passes with exit 0, no timeout, no harness failures and zero pipeline
+draw/function/library/PSO failures. `actual.png` shows a coherent forest scene
+at overlay time 1:00.51; it is one frame, not whole-scene flicker or
+pixel-equivalence evidence. The runner recovered a fresh 3,346-byte `.3dr`,
+SHA-256 `57a6b792c3931b62157d539ad55bbd95a90565e9ae2749e4c6e15fff85057592`.
+`result.json`, `3dmark05-perf-frames.csv`, the generated summary and the
+analysis `wild-run-receipt.md` preserve the run and denominator.
+
+No other Wine or build task was present at preflight. One live snapshot
+showed WindowServer at 24.2% CPU and an Orca renderer at 18.6%, but not the
+high `duetexpertd`/`mds_stores` load seen in H250's snapshot. These are isolated
+observations, not continuous CPU traces or causal attribution. Background
+conditions therefore differ. This non-interleaved, one-run comparison does
+not establish an FPS gain or qualified neutrality. CB/pass shape is close;
+no strict locality promotion follows from these ratios.
+
+## Limits and next gate
+
+Matched repeatability, whole-scene correctness and current PE CPU attribution
+remain open. Section presence frequency, helper outlining, branch cost and
+remaining ledger lookup overhead require actual CPU attribution. This spot
+check and historical PE phase times cannot price the individual changes or
+establish completion of PE optimization. Provider defaults are unchanged;
+CPU-ready Tape promotion is outside this change.

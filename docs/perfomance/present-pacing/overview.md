@@ -29,16 +29,19 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
-The latest implementation [H251](present-pacing-pe-append-effects.251.md)
+The latest runtime checkpoint [H251](present-pacing-pe-append-effects.251.md)
 skips absent compact emitters, closes constant settlement effects before
 narrowing rollback, removes dynamic ledger TLS initialization checks and
 reads fresh owner frontiers without reconstructing unused wire sizes. It adds
 no persistent cache and changes no cadence, ABI or queue policy. Linked
 constant inner frames shrink, while active-section dispatch bodies grow;
-these are static work-shape findings, not a measured FPS gain. Fresh wild
-correctness and CPU attribution remain open.
+these are static work-shape findings, not a measured FPS gain. Post-commit
+GT2 is 29.034 sampled FPS versus H250 28.846 (+0.650%), with zero
+chunk/GPU/pipeline failures and close CB/pass ratios. One non-interleaved run
+with differing background load does not establish gain or qualified
+neutrality. Whole-scene correctness and current CPU attribution remain open.
 
-The latest runtime checkpoint [H250](present-pacing-pe-sparse-work.250.md)
+The prior runtime checkpoint [H250](present-pacing-pe-sparse-work.250.md)
 uses active-bit compact binding scans, pending-interval constant clearing and
 existing-section quota traversal. Four builds, native 29/29, x86_64 8/8,
 unchanged TLA and constant sanitizers pass. Linked PE32/PE64 eliminate the
