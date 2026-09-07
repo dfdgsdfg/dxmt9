@@ -74,11 +74,46 @@ struct D9CShader : RefCounter {};
 struct D9CVertexDecl : RefCounter {};
 struct D9CQuery : RefCounter {};
 
+// Native-only callback probe. It is inert unless a test arms it, and models
+// one synchronous reentrant source mutation after the first texture AddRef;
+// it does not make any claim about arbitrary Wine callbacks.
+struct CompactRetainMutationHook {
+  D9CTexture* trigger = nullptr;
+  dxmt9::d3d9::pe::PeWireObjectRef* target = nullptr;
+  void* pointerAlias = nullptr;
+  enum class Mutation : std::uint8_t { Kind, Generation, ObjectId, Pointer };
+  Mutation mutation = Mutation::Kind;
+  bool armed = false;
+};
+CompactRetainMutationHook compactRetainMutationHook;
+
 template <typename T> void addRef(T* value) { ++value->refs; }
 template <typename T> std::uint32_t release(T* value) { return --value->refs; }
 extern "C" void dxmt9c_surface_addref(D9CSurface* p) { addRef(p); }
 extern "C" std::uint32_t dxmt9c_surface_release(D9CSurface* p) { return release(p); }
-extern "C" void dxmt9c_texture_addref(D9CTexture* p) { addRef(p); }
+extern "C" void dxmt9c_texture_addref(D9CTexture* p) {
+  addRef(p);
+  auto& hook = compactRetainMutationHook;
+  if (!hook.armed || hook.trigger != p || hook.target == nullptr) return;
+  hook.armed = false;
+  switch (hook.mutation) {
+    case CompactRetainMutationHook::Mutation::Kind:
+      hook.target->identity.kind =
+          hook.target->identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE
+              ? D9C_CHUNK_HANDLE_KIND_TEXTURE
+              : D9C_CHUNK_HANDLE_KIND_SURFACE;
+      break;
+    case CompactRetainMutationHook::Mutation::Generation:
+      ++hook.target->identity.generation;
+      break;
+    case CompactRetainMutationHook::Mutation::ObjectId:
+      ++hook.target->identity.objectId;
+      break;
+    case CompactRetainMutationHook::Mutation::Pointer:
+      hook.target->object = hook.pointerAlias;
+      break;
+  }
+}
 extern "C" std::uint32_t dxmt9c_texture_release(D9CTexture* p) { return release(p); }
 extern "C" void dxmt9c_buffer_addref(D9CBuffer* p) { addRef(p); }
 extern "C" std::uint32_t dxmt9c_buffer_release(D9CBuffer* p) { return release(p); }
@@ -1026,6 +1061,207 @@ void preparedBindingSevenFamilyMatrix() {
       [] { return D9CCommandChunkWireDepthStencilBinding{.valid = 0u}; },
       [](SparseStateInput& sparse, auto rows) { sparse.depthStencils = rows; },
       [](PeSemanticRecordInput& input, const auto& ref) { input.surface0 = ref; });
+}
+
+void compactProducerBindingIdentityGuards() {
+  struct Fixture {
+    D9CTexture texture;
+    D9CBuffer stream;
+    D9CShader shader;
+    D9CVertexDecl declaration;
+    D9CBuffer index;
+    D9CSurface target;
+    D9CSurface depth;
+    D9CSurface pointerAlias;
+    PeHotStateShadow shadow{};
+    PeConstShadowBlock constants{};
+    PeBindingView bindings{};
+    PeDrawPayloads payloads{};
+    PeChunkContext chunk{};
+    SparseStatePlan plan;
+    PeDrawParams params{.recordType = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+                        .primitiveType = 4u, .primitiveCount = 1u};
+  };
+
+  const auto run = [&](std::size_t family,
+                       CompactRetainMutationHook::Mutation mutation,
+                       bool mutateDuringRetain) {
+    Fixture fixture;
+    fixture.bindings.textures[0] = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+        &fixture.texture, 0x2a01u);
+    fixture.bindings.streams[0].buffer = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(
+        &fixture.stream, 0x2a02u);
+    fixture.bindings.vs = localRef<D9C_CHUNK_HANDLE_KIND_SHADER>(
+        &fixture.shader, 0x2a03u);
+    fixture.bindings.vdecl = localRef<D9C_CHUNK_HANDLE_KIND_VERTEX_DECL>(
+        &fixture.declaration, 0x2a04u);
+    fixture.bindings.indexBuffer = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(
+        &fixture.index, 0x2a05u);
+    fixture.bindings.renderTargets[0] = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+        &fixture.target, 0x2a06u);
+    fixture.bindings.depthStencil = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+        &fixture.depth, 0x2a07u);
+    fixture.shadow.writer().pendingTextureMask() = 1u;
+    fixture.shadow.writer().pendingStreamMask() = 1u;
+    fixture.shadow.writer().pendingVs() = true;
+    fixture.shadow.writer().pendingVdecl() = true;
+    fixture.shadow.writer().pendingIb() = true;
+    fixture.shadow.writer().pendingRtMask() = 1u;
+    fixture.shadow.writer().pendingDs() = true;
+
+    PeSemanticRecordInput prefix = base(PeSemanticProducerKind::Present, 1u, 1u);
+    D9CSurface prefixSurface;
+    prefix.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+        &prefixSurface, 0x2affu);
+    Owner owner;
+    CommandChunkBuilder oracle;
+    PeSparseScratch scratch{};
+    D9CCommandChunkWireDrawHeader header{};
+    SparseStateInput sparse{};
+    check(appendCanonicalSemanticRecord(oracle, prefix) &&
+              buildSparseState(fixture.shadow, fixture.constants,
+                               fixture.bindings, fixture.payloads,
+                               fixture.params, false, false, scratch, header,
+                               sparse) &&
+              appendSparseRecord(oracle, fixture.params.recordType, header,
+                                 sparse),
+          "compact identity fixture builds its generic producer oracle");
+    const auto sealed = oracle.seal();
+    check(sealed.valid(), "compact identity fixture seals its oracle");
+    const std::vector<std::byte> expected(sealed.blob.begin(), sealed.blob.end());
+    oracle.resetAndReleaseRetained();
+    check(owner.admit(prefix), "compact identity fixture commits its prefix");
+    PeSemanticExactFixedEmission prefixEmission{};
+    check(owner.emitExactFixed(prefixEmission),
+          "compact identity fixture exposes its committed prefix");
+    const std::vector<std::byte> prefixBytes(prefixEmission.wire.begin(),
+                                             prefixEmission.wire.end());
+
+    PeWireObjectRef* target = nullptr;
+    switch (family) {
+      case 0u: target = &fixture.bindings.textures[0]; break;
+      case 1u: target = &fixture.bindings.streams[0].buffer; break;
+      case 2u: target = &fixture.bindings.vs; break;
+      case 3u: target = &fixture.bindings.vdecl; break;
+      case 4u: target = &fixture.bindings.indexBuffer; break;
+      case 5u: target = &fixture.bindings.renderTargets[0]; break;
+      case 6u: target = &fixture.bindings.depthStencil; break;
+      default: check(false, "compact identity fixture family is bounded");
+    }
+    const PeWireObjectRef saved = *target;
+    std::recursive_mutex mutex;
+    dxmt9::core::ThreadOwnershipToken thread;
+    std::uint64_t epoch = 0x2a00u + family;
+    RecorderLockGuard guard(mutex, false);
+    bool prepared = false;
+    bool settled = false;
+    const bool operated = guard.withCapability(
+        thread, epoch, [&](const auto& access) noexcept {
+          if (!buildSparseStatePlan(access, fixture.shadow, fixture.constants,
+                                    fixture.bindings, fixture.payloads,
+                                    fixture.params, false, false,
+                                    fixture.plan))
+            return false;
+          if (!finalizeSparseStatePlanChunkContext(access, fixture.chunk,
+                                                   fixture.plan))
+            return false;
+          const PeSemanticSparsePlanRecordInput input{
+              .access = &access,
+              .sparsePlan = &fixture.plan,
+              .producer = PeSemanticProducerKind::DrawIndexedPrimitive,
+              .recordType = fixture.params.recordType,
+              .recordFlags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+              .sourceOrdinal = 2u,
+              .recordOrdinal = 2u};
+          PeSemanticCompactPreparedRecord witness{};
+          prepared = owner.prepareAdmission(input, witness) ==
+                     PeSemanticAdmissionOutcome::Admissible;
+          if (!prepared) return false;
+          if (!mutateDuringRetain) {
+            switch (mutation) {
+              case CompactRetainMutationHook::Mutation::Kind:
+                target->identity.kind = target->identity.kind ==
+                        D9C_CHUNK_HANDLE_KIND_SURFACE
+                    ? D9C_CHUNK_HANDLE_KIND_TEXTURE
+                    : D9C_CHUNK_HANDLE_KIND_SURFACE;
+                break;
+              case CompactRetainMutationHook::Mutation::Generation:
+                target->identity.generation = 0u;
+                break;
+              case CompactRetainMutationHook::Mutation::ObjectId:
+                target->identity.objectId = 0u;
+                break;
+              case CompactRetainMutationHook::Mutation::Pointer:
+                target->object = nullptr;
+                break;
+            }
+          } else {
+            compactRetainMutationHook = {
+                .trigger = &fixture.texture,
+                .target = target,
+                .pointerAlias = &fixture.pointerAlias,
+                .mutation = mutation,
+                .armed = true};
+          }
+          return !owner.tryAppendSparseStatePlan(
+              access, fixture.plan, input.producer, input.recordType,
+              input.recordFlags, input.sourceOrdinal, input.recordOrdinal,
+              [&]() noexcept {
+                settled = true;
+                return true;
+              });
+        });
+    const bool targetChanged =
+        target->object != saved.object ||
+        target->identity.kind != saved.identity.kind ||
+        target->identity.generation != saved.identity.generation ||
+        target->identity.objectId != saved.identity.objectId;
+    const bool hookFired =
+        !mutateDuringRetain || (!compactRetainMutationHook.armed && targetChanged);
+    compactRetainMutationHook = {};
+    check(operated && prepared && hookFired && !settled && owner.size() == 1u,
+          mutateDuringRetain ? "late compact source mutation rejects atomically"
+                             : "pre-append compact malformed binding rejects");
+    PeSemanticExactFixedEmission afterReject{};
+    check(owner.emitExactFixed(afterReject) &&
+              afterReject.wireBytes == prefixBytes.size() &&
+              std::equal(prefixBytes.begin(), prefixBytes.end(),
+                         afterReject.wire.begin()),
+          "compact identity rejection preserves the committed prefix");
+    check(fixture.texture.refs == 1u && fixture.stream.refs == 1u &&
+              fixture.shader.refs == 1u && fixture.declaration.refs == 1u &&
+              fixture.index.refs == 1u && fixture.target.refs == 1u &&
+              fixture.depth.refs == 1u && prefixSurface.refs == 2u,
+          "compact identity rejection rolls back all physical pins");
+    *target = saved;
+    const bool retried = guard.withCapability(
+        thread, epoch, [&](const auto& access) noexcept {
+          return owner.tryAppendSparseStatePlan(
+              access, fixture.plan, PeSemanticProducerKind::DrawIndexedPrimitive,
+              fixture.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+              2u, 2u, []() noexcept { return true; });
+        });
+    PeSemanticExactFixedEmission finalEmission{};
+    check(retried && owner.emitExactFixed(finalEmission) &&
+              finalEmission.wireBytes == expected.size() &&
+              std::equal(expected.begin(), expected.end(),
+                         finalEmission.wire.begin()),
+          "compact identity retry equals the generic producer oracle");
+    owner.reset();
+    check(prefixSurface.refs == 1u, "compact identity retry reset balances prefix");
+  };
+
+  for (std::size_t family = 0u; family < 7u; ++family)
+    for (const auto mutation : {CompactRetainMutationHook::Mutation::Kind,
+                                CompactRetainMutationHook::Mutation::Generation,
+                                CompactRetainMutationHook::Mutation::ObjectId,
+                                CompactRetainMutationHook::Mutation::Pointer})
+      run(family, mutation, false);
+  for (const auto mutation : {CompactRetainMutationHook::Mutation::Kind,
+                              CompactRetainMutationHook::Mutation::Generation,
+                              CompactRetainMutationHook::Mutation::ObjectId,
+                              CompactRetainMutationHook::Mutation::Pointer})
+    run(6u, mutation, true);
 }
 
 void classificationAndLifetime() {
@@ -6686,6 +6922,7 @@ int main(int argc, char** argv) {
     inactiveBindingMetadataRemainsNonAuthoritative();
     bindingOccurrenceStorageUsesActiveFrontier();
     preparedBindingSevenFamilyMatrix();
+    compactProducerBindingIdentityGuards();
     classificationAndLifetime();
     partialRectClearMatchesCanonicalBuilder();
     emptyClearSpanMatchesCanonicalAndResetReuse();

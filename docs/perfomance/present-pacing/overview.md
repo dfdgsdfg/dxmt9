@@ -29,6 +29,12 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+Current refinement [H262](present-pacing-pe-compact-binding-validation.262.md)
+reuses admission identity validity without weakening full source equality or
+physical pin validation. Native checks and the deliberately failing equality
+mutant pass their expected verdicts. This is not yet a measured FPS/CPU gain;
+final linked-cost and actual PE qualification remain open.
+
 The latest diagnostic [H261](present-pacing-pe-binding-duplicates.261.md)
 separates null/unbound rows from duplicate pinned bindings. Actual 05/06 GT2
 samples contain 39,570 compact preparations and 103,369 pinned occurrences,

@@ -930,6 +930,15 @@ transaction order; these changes introduce no thread, wake, or lease transition.
 Concrete C++ value refinement, PE codegen, and later Wine/performance evidence
 remain separate layers.
 
+The compact writer need not reconstruct a temporary typed reference before
+that comparison: admission's identity fold has already validated kind,
+nonzero generation/object ID and object presence. Full equality with the
+current source carries those facts forward; it is not replaced by a cached
+answer. Section-local occurrence indexing reuses a checked active range and
+its row count, without rechecking the same family range on every row. The
+locator ordinal, null/pinned disposition, wire mapping and current physical
+pin remain independently checked. Generic input conversion is unchanged.
+
 R-CORE-REC-7.37–7.39 separate constant value work, immutable rule validation,
 and identity-strategy evidence. Ordinary constant writes use a shared bounded
 comparison/transition/update helper; the explicit StateBlock recording branch

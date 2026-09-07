@@ -892,6 +892,13 @@ remain mandatory. Null and duplicate occurrences, cross-family aliases,
 stale identity, partial acquisition, and failed settlement must refine the
 checked reference path in bytes, ownership, and retry behavior.
 
+Repeated raw-to-typed conversion may be omitted only when admission has
+already proved the expected kind and nonzero identity of that exact mapping,
+and emission still compares every current source identity field and object
+pointer against it. A checked section range may supply per-row bounds within
+that section; row ordinals and null/pinned disposition remain checked. Neither
+reuse permits a stale source after a retain callback or a changed physical pin.
+
 **R-CORE-REC-7.37** Ordinary constant setters must consume comparison and state
 transition results in the shadow update instead of discarding per-register
 facts and independently deriving them again. The production-used helper must

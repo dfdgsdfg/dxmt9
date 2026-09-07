@@ -13,6 +13,16 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.36 compact binding emission now omits the temporary raw-to-typed
+conversion while retaining full current-source/mapping equality, and reuses
+section-local checked ranges. Physical-pin, wire, retain/fault and rollback
+checks remain. [H262](../../../docs/perfomance/present-pacing/present-pacing-pe-compact-binding-validation.262.md)
+records 28 malformed-family cases, four late source-mutation cases, exact
+retry bytes, a failing source-equality negative control and restored native
+9/9 plus x86_64 5/5. This adds no cache, ABI or lifecycle transition. Final
+linked operation costs and actual PE/FPS/CPU qualification remain open;
+passing native checks and smaller DLLs do not prove runtime savings.
+
 R-CORE-REC-7.39's compact binding distribution now separates null/unbound,
 first pinned identity and duplicate pinned occurrence across the seven
 production families. Native tests cover all 2,187 one-row-per-family null/A/B

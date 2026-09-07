@@ -4313,36 +4313,26 @@ class PeSemanticBatchOwner final {
           kind, rows, rows * sizeof(Wire),
           static_cast<std::uint16_t>(sizeof(Wire)),
           [&](std::span<std::byte> destination) noexcept {
-            if (family >= prepared.bindingOccurrences.ranges.size())
+            if (family >= prepared.bindingOccurrences.ranges.size() ||
+                prepared.bindingOccurrences.count >
+                    prepared.bindingOccurrences.values.size())
               return false;
             const auto& range = prepared.bindingOccurrences.ranges[family];
             if (range.count != rows ||
-                range.offset + range.count >
-                    prepared.bindingOccurrences.count) return false;
+                range.offset > prepared.bindingOccurrences.count ||
+                range.count > prepared.bindingOccurrences.count - range.offset)
+              return false;
             std::size_t occurrence = 0u;
-            const auto locatorFor = [&](std::size_t at)
-                -> const PeSemanticBindingLocator* {
-              if (family >= prepared.bindingOccurrences.ranges.size())
-                return nullptr;
-              const auto& range = prepared.bindingOccurrences.ranges[family];
-              if (at >= range.count ||
-                  range.offset + at >= prepared.bindingOccurrences.count)
-                return nullptr;
-              return &prepared.bindingOccurrences.values[range.offset + at];
-            };
             const auto acquire = [&]<typename Object, typename Identity,
-                                     typename Ref,
                                      typename PinArray, typename Retain>(
                                      const PeWireObjectRef& source,
                                      const PeSemanticBindingLocator& locator,
                                      PinArray& pins, std::size_t& pinCount,
                                      Retain retain,
                                      std::uint32_t& wireIndex) noexcept {
-              Ref ref{};
-              if (!typedOptionalRef(source, ref)) return false;
               QualifiedBinding<Object, Identity> binding;
               if (!makeQualifiedBinding<Object, Identity>(
-                      ref, locator, prepared, globalFirst, binding))
+                      source, locator, prepared, globalFirst, binding))
                 return false;
               std::uint32_t pin = kPeSemanticNoSlot;
               return pinPreparedQualifiedBinding<Object, Identity>(
@@ -4351,21 +4341,21 @@ class PeSemanticBatchOwner final {
             const auto emit = [&](Wire value,
                                   const PeWireObjectRef& ref) noexcept {
               if (occurrence >= rows) return false;
-              const auto* locator = locatorFor(occurrence);
-              if (locator == nullptr) return false;
-              if (locator->occurrence != occurrence || !locator->wireValid ||
-                  locator->hasPin != (ref.object != nullptr)) return false;
+              const auto& locator = prepared.bindingOccurrences.values[
+                  range.offset + occurrence];
+              if (locator.occurrence != occurrence || !locator.wireValid ||
+                  locator.hasPin != (ref.object != nullptr)) return false;
               if constexpr (requires(Wire wire) { wire.reserved0; })
                 value.reserved0 = 0u;
               value.handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
-              if (locator->hasPin) {
+              if (locator.hasPin) {
                 bool acquired = false;
                 std::uint32_t wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
                 if constexpr (std::is_same_v<Wire,
                                              D9CCommandChunkWireTextureBinding>) {
                   acquired = acquire.template operator()<
-                      D9CTexture, PeSemanticTextureIdentity, TextureRef>(
-                      ref, *locator, storage_->textures, textureCount_,
+                      D9CTexture, PeSemanticTextureIdentity>(
+                      ref, locator, storage_->textures, textureCount_,
                       retainTextureFn(), wireIndex);
                 } else if constexpr (std::is_same_v<
                                          Wire,
@@ -4374,28 +4364,27 @@ class PeSemanticBatchOwner final {
                                          Wire,
                                          D9CCommandChunkWireIndexBinding>) {
                   acquired = acquire.template operator()<
-                      D9CBuffer, PeSemanticBufferIdentity, BufferRef>(
-                      ref, *locator, storage_->buffers, bufferCount_,
+                      D9CBuffer, PeSemanticBufferIdentity>(
+                      ref, locator, storage_->buffers, bufferCount_,
                       retainBufferFn(), wireIndex);
                 } else if constexpr (std::is_same_v<
                                          Wire,
                                          D9CCommandChunkWireShaderBinding>) {
                   acquired = acquire.template operator()<
-                      D9CShader, PeSemanticShaderIdentity, ShaderRef>(
-                      ref, *locator, storage_->shaders, shaderCount_,
+                      D9CShader, PeSemanticShaderIdentity>(
+                      ref, locator, storage_->shaders, shaderCount_,
                       retainShaderFn(), wireIndex);
                 } else if constexpr (std::is_same_v<
                                          Wire,
                                          D9CCommandChunkWireVertexInput>) {
                   acquired = acquire.template operator()<
-                      D9CVertexDecl, PeSemanticDeclarationIdentity,
-                      DeclarationRef>(
-                      ref, *locator, storage_->declarations, declarationCount_,
+                      D9CVertexDecl, PeSemanticDeclarationIdentity>(
+                      ref, locator, storage_->declarations, declarationCount_,
                       retainDeclarationFn(), wireIndex);
                 } else {
                   acquired = acquire.template operator()<
-                      D9CSurface, PeSemanticSurfaceIdentity, SurfaceRef>(
-                      ref, *locator, storage_->surfaces, surfaceCount_,
+                      D9CSurface, PeSemanticSurfaceIdentity>(
+                      ref, locator, storage_->surfaces, surfaceCount_,
                       retainSurfaceFn(), wireIndex);
                 }
                 if (!acquired) {
@@ -5637,8 +5626,11 @@ class PeSemanticBatchOwner final {
     return true;
   }
 
-  template <typename Object, typename Identity, typename Ref, typename Prepared>
-  bool makeQualifiedBinding(const Ref& ref,
+  // identityWitness.add() at compact admission proved the expected kind and
+  // nonzero generation/objectId; the mapping and fresh full source
+  // identity/pointer equality below are the typed validity proof here.
+  template <typename Object, typename Identity, typename Prepared>
+  bool makeQualifiedBinding(const PeWireObjectRef& ref,
                             const PeSemanticBindingLocator& locator,
                             const Prepared& prepared, std::size_t globalFirst,
                             QualifiedBinding<Object, Identity>& out) const noexcept {
