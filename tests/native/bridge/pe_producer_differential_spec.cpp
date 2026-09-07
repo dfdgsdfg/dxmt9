@@ -1630,6 +1630,275 @@ void productionOwnerPlanAllCategoryDifferential() {
         "production owner compact plan equals direct and builder goldens");
 }
 
+// The compact owner prepares mask-derived category counts once and must reuse
+// those qualified quotas through canonical emission. Exercise the empty,
+// sparse, and maximum bounded masks, then rebuild one non-movable plan A-B-A
+// while checking the accumulated bytes against the independent producer. The
+// final case uses the same production path with a deliberately small sparse
+// budget to pin that CapacityPre rejects before acquiring any physical pin.
+void productionOwnerCompactQuotaReuseAndCapacityPins() {
+  const auto makeFixture = [](const char* name, std::uint32_t textures,
+                              std::uint32_t streams, std::uint8_t shaders,
+                              std::uint32_t renderTargets,
+                              std::uint32_t clipPlanes, std::uint32_t lights,
+                              std::uint32_t lightEnables) {
+    Fixture f = baseDraw(name, D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+    f.bindings = {};
+    f.shadow.writer().pendingTextureMask() = textures;
+    f.shadow.writer().pendingStreamMask() = streams;
+    f.shadow.writer().pendingVs() = (shaders & 1u) != 0u;
+    f.shadow.writer().pendingPs() = (shaders & 2u) != 0u;
+    f.shadow.writer().pendingIb() = (streams | renderTargets) != 0u;
+    f.shadow.writer().pendingRtMask() = renderTargets;
+    f.shadow.writer().pendingDs() = renderTargets != 0u;
+    f.shadow.writer().pendingClipPlaneMask() = clipPlanes;
+    f.shadow.writer().pendingLightSlotMask() = lights;
+    f.shadow.writer().pendingLightEnableValidMask() = lightEnables;
+    f.shadow.writer().pendingLightEnableMask() = lightEnables;
+    for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_TEXTURES;
+         ++slot) {
+      if ((textures & (1u << slot)) != 0u)
+        f.bindings.textures[slot] =
+            publishedRef(&tex0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
+    }
+    for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_STREAMS;
+         ++slot) {
+      if ((streams & (1u << slot)) != 0u) {
+        f.bindings.streams[slot].buffer =
+            publishedRef(&vb0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+        f.bindings.streams[slot].offset = 8u * slot;
+        f.bindings.streams[slot].stride = 16u + slot;
+      }
+    }
+    if ((shaders & 1u) != 0u)
+      f.bindings.vs = publishedRef(&vsObj, D9C_CHUNK_HANDLE_KIND_SHADER);
+    if ((shaders & 2u) != 0u)
+      f.bindings.ps = publishedRef(&psObj, D9C_CHUNK_HANDLE_KIND_SHADER);
+    for (std::uint32_t slot = 0u;
+         slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
+      if ((renderTargets & (1u << slot)) != 0u)
+        f.bindings.renderTargets[slot] =
+            publishedRef(&rt0, D9C_CHUNK_HANDLE_KIND_SURFACE);
+    }
+    if (f.shadow.pendingDs())
+      f.bindings.depthStencil =
+          publishedRef(&ds0, D9C_CHUNK_HANDLE_KIND_SURFACE);
+    if (f.shadow.pendingIb())
+      f.bindings.indexBuffer =
+          publishedRef(&ib0, D9C_CHUNK_HANDLE_KIND_BUFFER);
+    f.chunk.indexBufferKnown = !f.shadow.pendingIb();
+    f.chunk.indexBufferRetained = !f.shadow.pendingIb();
+    return f;
+  };
+  constexpr std::uint32_t allTextures =
+      (1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u;
+  constexpr std::uint32_t allStreams =
+      (1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u;
+  constexpr std::uint32_t allRenderTargets =
+      (1u << D9C_DRAW_PACKET_MAX_RENDER_TARGETS) - 1u;
+  constexpr std::uint32_t allLights = (1u << D9C_DRAW_PACKET_MAX_LIGHTS) - 1u;
+  auto empty = makeFixture("compact quota empty masks", 0u, 0u, 0u, 0u, 0u,
+                           0u, 0u);
+  auto full = makeFixture("compact quota full masks", allTextures, allStreams,
+                          3u, allRenderTargets, 0x3fu, allLights, allLights);
+  auto sparse = makeFixture("compact quota sparse masks", 0x55555u, 0xaaaaU,
+                            3u, 0x9u, 0x15u, 0xa5u, 0x5au);
+  const auto before = bindingRefCounts();
+
+  // Keep each bounded shape's one-record canonical equivalence explicit. The
+  // sparse shape is also the reusable A side of the accumulated A-B-A trace.
+  for (const Fixture* fixture : {&empty, &sparse, &full}) {
+    const auto direct = runDirectDrawLane(*fixture);
+    const auto owner = runOwnerPlanLane(*fixture);
+    check(direct.ok && owner.ok && direct.bytes == owner.bytes &&
+              direct.recordCount == owner.recordCount &&
+              direct.handleCount == owner.handleCount &&
+              direct.payloadBytes == owner.payloadBytes,
+          std::string(fixture->name) +
+              ": compact quota shape preserves canonical bytes");
+    requireBindingRefCounts(
+        before, std::string(fixture->name) + ": one-record pins balance");
+  }
+
+  // Keep A mutable: settlement consumes its PendingDelta, and the same
+  // non-movable plan source is retried after a failed settlement below.
+  std::array<Fixture, 3u> steps = {sparse, full, sparse};
+  {
+    pe::CommandChunkBuilder genericBuilder;
+    pe::PeSemanticBatchOwner<> owner;
+    std::recursive_mutex mutex;
+    dxmt9::core::ThreadOwnershipToken ownerThread;
+    std::uint64_t epoch = 401u;
+    pe::RecorderLockGuard guard(mutex, false);
+    pe::SparseStatePlan plan;
+    for (std::size_t stepIndex = 0u; stepIndex < steps.size(); ++stepIndex) {
+      auto& fixture = steps[stepIndex];
+      PeConstShadowBlock genericConstants = fixture.constants;
+      pe::PeSparseScratch scratch{};
+      pe::SparseStateInput state{};
+      D9CCommandChunkWireDrawHeader header{};
+      check(pe::buildSparseState(
+                fixture.shadow, genericConstants, fixture.bindings,
+                fixture.payloads, fixture.params, false, false, scratch, header,
+                state) &&
+                pe::addChunkContextSections(
+                    fixture.chunk, fixture.shadow, fixture.bindings,
+                    fixture.params, scratch, state) &&
+                pe::appendSparseRecord(
+                    genericBuilder, fixture.params.recordType, header, state),
+            fixture.name + ": generic A-B-A append succeeds");
+
+      const auto sourceOrdinal = static_cast<std::uint64_t>(stepIndex + 1u);
+      check(guard.withCapability(
+                ownerThread, epoch, [&](const auto& access) noexcept {
+                  if (!pe::buildSparseStatePlan(
+                          access, fixture.shadow, fixture.constants,
+                          fixture.bindings, fixture.payloads, fixture.params,
+                          false, false, plan) ||
+                      !pe::finalizeSparseStatePlanChunkContext(
+                          access, fixture.chunk, plan))
+                    return false;
+                  const auto* source = plan.source(access);
+                  if (source == nullptr) return false;
+
+                  // A failed settlement must roll back all owner state and
+                  // physical pins so the exact same bytes can be retried.
+                  if (stepIndex == 0u) {
+                    const auto beforeFailure = bindingRefCounts();
+                    const auto failed = pe::settleRecorderAppend({
+                        .phase = pe::AppendSettlement::Prepared,
+                        .appendSucceeded = false,
+                    });
+                    const bool failedAppend = owner.tryAppendSparseStatePlan(
+                        access, plan,
+                        pe::PeSemanticProducerKind::DrawIndexedPrimitive,
+                        fixture.params.recordType,
+                        D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, sourceOrdinal,
+                        sourceOrdinal, [&]() noexcept {
+                          const auto* checkedSource = plan.source(access);
+                          return checkedSource && pe::acceptSparseStatePlan(
+                              access, fixture.shadow, fixture.constants, plan,
+                              failed, nullptr, sourceOrdinal,
+                              checkedSource->pendingTicket);
+                        });
+                    if (failedAppend || owner.size() != 0u ||
+                        owner.retainedCount() != 0u ||
+                        bindingRefCounts().values != beforeFailure.values)
+                      return false;
+                  }
+
+                  const auto accepted = pe::settleRecorderAppend({
+                      .phase = pe::AppendSettlement::Prepared,
+                      .appendSucceeded = true,
+                  });
+                  return owner.tryAppendSparseStatePlan(
+                      access, plan,
+                      pe::PeSemanticProducerKind::DrawIndexedPrimitive,
+                      fixture.params.recordType,
+                      D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, sourceOrdinal,
+                      sourceOrdinal, [&]() noexcept {
+                        const auto* checkedSource = plan.source(access);
+                        return checkedSource && pe::acceptSparseStatePlan(
+                            access, fixture.shadow, fixture.constants, plan,
+                            accepted, nullptr, sourceOrdinal,
+                            checkedSource->pendingTicket);
+                      });
+                }),
+            fixture.name + ": reused production plan appends");
+    }
+    const auto generic = finishLane(genericBuilder, true);
+    std::size_t ownerHandles = 0u;
+    std::size_t ownerPayload = 0u;
+    std::size_t ownerWireBytes = 0u;
+    check(owner.emissionMetrics(ownerHandles, ownerPayload, ownerWireBytes),
+          "compact quota A-B-A metrics remain exact");
+    pe::PeSemanticExactFixedEmission exact;
+    check(owner.emitExactFixed(exact) && exact.valid() &&
+              generic.bytes.size() == exact.wireBytes &&
+              generic.bytes.size() == ownerWireBytes &&
+              std::equal(generic.bytes.begin(), generic.bytes.end(),
+                         exact.wire.begin()) &&
+              generic.recordCount == owner.size() &&
+              generic.handleCount == ownerHandles &&
+              generic.payloadBytes == ownerPayload &&
+              generic.retainedObjectCount == owner.retainedCount(),
+          "compact quota A-B-A reuses prepared counts with exact bytes");
+  }
+  requireBindingRefCounts(before, "compact quota A-B-A pins balance");
+
+  // CapacityPre runs before compact binding acquisition. A full mask is large
+  // enough to exceed this owner in sparse quota while the generous remaining
+  // dimensions make this specifically a sparse-capacity fixture, not a
+  // generic record/payload/pin overflow.
+  constexpr std::size_t sparseLimit = 1u;
+  constexpr std::size_t rectLimit = 1024u;
+  using SparseCapacityOwner =
+      pe::PeSemanticBatchOwner<8u, 256u, 1u << 20u, rectLimit, sparseLimit>;
+  SparseCapacityOwner constrained;
+  std::recursive_mutex capacityMutex;
+  dxmt9::core::ThreadOwnershipToken capacityOwnerThread;
+  std::uint64_t capacityEpoch = 501u;
+  pe::RecorderLockGuard capacityGuard(capacityMutex, false);
+  pe::SparseStatePlan constrainedPlan;
+  check(capacityGuard.withCapability(
+            capacityOwnerThread, capacityEpoch,
+            [&](const auto& access) noexcept {
+              return pe::buildSparseStatePlan(
+                         access, full.shadow, full.constants, full.bindings,
+                         full.payloads, full.params, false, false,
+                         constrainedPlan) &&
+                     pe::finalizeSparseStatePlanChunkContext(
+                         access, full.chunk, constrainedPlan);
+            }),
+        "full compact quota capacity fixture prepares");
+  pe::PeSemanticProductionCompactPreparedRecord prepared;
+  const bool sparseOnlyCapacity = capacityGuard.withCapability(
+      capacityOwnerThread, capacityEpoch, [&](const auto& access) noexcept {
+        const pe::PeSemanticSparsePlanRecordInput input{
+            .access = &access,
+            .sparsePlan = &constrainedPlan,
+            .producer = pe::PeSemanticProducerKind::DrawIndexedPrimitive,
+            .recordType = full.params.recordType,
+            .recordFlags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+            .sourceOrdinal = 1u,
+            .recordOrdinal = 1u,
+        };
+        const auto outcome = constrained.prepareAdmission(input, prepared);
+        std::size_t pinDelta = 0u;
+        for (const auto delta : prepared.retentionDeltas) pinDelta += delta;
+        return outcome == pe::PeSemanticAdmissionOutcome::Capacity &&
+               prepared.sparseLayout.valid &&
+               prepared.sparseLayout.quotaDeltas[1u] > sparseLimit &&
+               prepared.plan.payloadBytes > 0u &&
+               prepared.plan.payloadBytes <
+                   D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES &&
+               prepared.plan.semanticBytes <=
+                   SparseCapacityOwner::maxSemanticBytes &&
+               prepared.plan.rectCount <= rectLimit &&
+               pinDelta <= SparseCapacityOwner::maxPins;
+      });
+  check(sparseOnlyCapacity,
+        "compact sparse capacity fixture rejects only its sparse quota");
+  bool settlementCalled = false;
+  const bool capacityRejected = capacityGuard.withCapability(
+      capacityOwnerThread, capacityEpoch, [&](const auto& access) noexcept {
+        return !constrained.tryAppendSparseStatePlan(
+                   access, constrainedPlan,
+                   pe::PeSemanticProducerKind::DrawIndexedPrimitive,
+                   full.params.recordType,
+                   D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+                   [&]() noexcept {
+                     settlementCalled = true;
+                     return true;
+                   }) &&
+               constrained.size() == 0u && constrained.retainedCount() == 0u;
+      });
+  check(capacityRejected && !settlementCalled,
+        "compact sparse capacity failure rejects before callbacks or pins");
+  requireBindingRefCounts(before,
+                          "compact sparse capacity failure pins balance");
+}
+
 void productionOwnerSelectionDifferentialAcrossFamilies() {
   // Keep this matrix intentionally small and exhaustive over the bounded
   // source choices that affect a compact plan: three producer families and
@@ -3203,6 +3472,7 @@ int main() {
     inlineConstDeltaAllSixRanges();
     inlineConstDeltaSingleRange();
     productionOwnerPlanAllCategoryDifferential();
+    productionOwnerCompactQuotaReuseAndCapacityPins();
     productionOwnerSelectionDifferentialAcrossFamilies();
     productionOwnerBindingAliasDifferential();
     productionOwnerBindingAliasReusedPlanABA();

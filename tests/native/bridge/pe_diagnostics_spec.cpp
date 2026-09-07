@@ -307,6 +307,48 @@ void testSourceContracts(const std::filesystem::path &root) {
   const auto deviceSource = device + deviceOwner;
   const auto recorder =
       readTextFile(root / "src/d3d9/d3d9_pe_device_recorder.cpp");
+  // R-CORE-REC-7.42–7.43: bind the native dispatch refinement to the real PE
+  // caller. These lexical checks complement linked branch inspection; they
+  // are not an execution oracle for the private COM device implementation.
+  const auto constFlushBegin = recorder.find(
+      "HRESULT D3D9DeviceImpl::flushConstShadow(");
+  const auto constDispatchBegin = recorder.find(
+      "HRESULT D3D9DeviceImpl::flushPendingConsts(", constFlushBegin);
+  const auto constDispatchEnd = recorder.find(
+      "HRESULT D3D9DeviceImpl::chunkBarrierFlush(", constDispatchBegin);
+  check(constFlushBegin != std::string::npos &&
+            constDispatchBegin != std::string::npos &&
+            constDispatchEnd != std::string::npos,
+        "constant flush and dispatch have bounded source bodies");
+  const std::string_view constFlushBody(
+      recorder.data() + constFlushBegin, constDispatchBegin - constFlushBegin);
+  checkContains(constFlushBody,
+                "const std::uint32_t dirtyRegs = observeVsRange\n"
+                "            ? countDirtyConstRegs(shadow, start, end)\n"
+                "            : 0u;",
+                "disabled range observation never counts dirty registers");
+  checkBefore(constFlushBody, "countDirtyConstRegs(shadow, start, end)",
+              "hr = appendSetConstRecord(",
+              "enabled diagnostic snapshots dirtiness before append settlement");
+  checkBefore(constFlushBody, "if (SUCCEEDED(hr) && observeVsRange) {",
+              "currentVertexShaderHash()",
+              "VS hash lookup follows the enabled successful-append guard");
+  checkBefore(constFlushBody, "if (SUCCEEDED(hr) && observeVsRange) {",
+              "currentPixelShaderHash()",
+              "PS hash lookup follows the enabled successful-append guard");
+  checkBefore(constFlushBody, "if (!shadow.dirty()) return S_OK;",
+              "const bool observeVsRange =",
+              "observed empty calls do not resolve the range observer");
+  const std::string_view constDispatchBody(
+      recorder.data() + constDispatchBegin, constDispatchEnd - constDispatchBegin);
+  checkContains(constDispatchBody,
+                "const bool observeEmptyFlushes = dxmt9PeStatsDecimationN() != 0u;",
+                "real dispatch retains all calls for decimated observation");
+  checkContains(constDispatchBody, "return dispatchPeConstFlushes(",
+                "real PE flush consumes the native-tested ordered dispatch");
+  checkNotContains(constDispatchBody,
+                   "[this](ConstShadow& shadow, std::size_t family) noexcept",
+                   "flush callback does not strengthen exception semantics");
   checkNotContains(deviceSource, "CommandChunkResetTarget::MutableOracle",
                    "production device has no mutable-oracle discard route");
   checkNotContains(deviceSource, "returnToMutableLayout",

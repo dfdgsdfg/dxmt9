@@ -1,5 +1,20 @@
 # Core device, FFP, format, shader translator, draw-state, and DOD specs.
 
+# R-CORE-REC-7.42–7.43: production-used constant flush dispatch and observer
+# gating refine the six-family serial reference without Wine or a GPU.
+pe_const_flush_spec = executable(
+  'dxmt9-pe-const-flush-spec',
+  'pe_const_flush_spec.cpp',
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src'),
+    include_directories('../../../src/d3d9'),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-pe-const-flush-spec', pe_const_flush_spec,
+     env: dxmt9_native_test_env)
+
 core_device_lifecycle_spec = executable(
   'dxmt9-core-device-lifecycle-spec',
   'core_device_lifecycle_spec.cpp',

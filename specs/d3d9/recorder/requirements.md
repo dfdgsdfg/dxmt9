@@ -953,3 +953,26 @@ across a boundary, or weaken malformed, rollback or fail-stop behavior.
 Native counterexamples must include wrong-recorder, stale epoch/ticket,
 callback invalidation and destination A/B/A, alongside canonical-byte and
 failed-retry equivalence.
+
+**R-CORE-REC-7.42** Disabled constant-flush range diagnostics must not scan
+dirty membership or resolve shader hashes. Enabled diagnostics must count
+dirty membership before append can settle it, and report the range only after
+successful append. Gating must preserve canonical bytes, pending state,
+failure disposition and the enabled observer's event population.
+
+**R-CORE-REC-7.43** An unobserved empty constant family may bypass the outlined
+flush operation using its existing dirty predicate. Dispatch must preserve
+VS float/int/bool then PS float/int/bool order, stop at the first failure, and
+evaluate each family's current state after preceding appends. It must not
+introduce a second mutable dirty authority. Decimated observation must retain
+the reference population, including empty calls. Bounded native refinement
+must compare emitted records, residual dirty state and failure prefixes for
+all six-family dirty combinations, including callback changes and retries.
+
+**R-CORE-REC-7.44** Compact canonical emission may reuse exact section counts
+from its prepared sparse-layout witness instead of recomputing mask counts.
+The witness must remain bound to the same qualified source and append; source
+freshness, section shape, bounds, retention, capacity and rollback checks remain
+authoritative. Empty, sparse and maximum masks, destination reuse, A/B/A and
+failed retry must preserve generic-reference canonical bytes. Linked PE32/PE64
+inspection must identify eliminated work separately from runtime speedup.

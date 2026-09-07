@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-06
+updated: 2026-09-07
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
@@ -28,6 +28,12 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 [index-cache-locality](../index-cache-locality/index.md); the per-CB encode story by [state-churn-encode](../state-churn-encode/index.md).
 
 ## Latest Conclusions
+
+The latest local refinement [H249](present-pacing-pe-flush-layout.249.md)
+removes disabled constant-flush work and repeated compact mask counting. Four
+builds, native 29/29, x86_64 8/8 and the unchanged TLA suite pass; linked
+PE32/PE64 writers lose six software-popcount expansions each. This is static
+and native evidence only; no new wild or observer-off FPS result is supplied.
 
 The latest [identity diagnostic](present-pacing-pe-identity-distribution.248.md)
 uses the verified `706866a4` binaries: 21,755 sampled compact preparations have

@@ -2378,6 +2378,10 @@ class PeSemanticBatchOwner final {
       };
       return true;
     };
+    // The prepared layout already qualified these seven mask-derived counts
+    // while proving the payload shape. Reuse that witness for occurrence
+    // ranges so admission and emission share one bounded count authority.
+    const auto& quota = witness.sparseLayout.quotaDeltas;
     bool sourcesValid = false;
     const auto& shadow = sources.shadow;
     const auto& bindings = sources.bindings;
@@ -2418,7 +2422,7 @@ class PeSemanticBatchOwner final {
                 witness.bindingOccurrences.ranges[family].offset + occurrence];
             ok = retain(ref, kind, pinKind, locator, occurrence);
           };
-          if (!beginFamily(0u, std::popcount(sourceFacts.textureMask))) return false;
+          if (!beginFamily(0u, quota[kTextures])) return false;
           std::size_t occurrence = 0u;
           for (std::uint32_t slot = 0u;
                slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
@@ -2428,7 +2432,7 @@ class PeSemanticBatchOwner final {
           }
           if (!ok) return false;
           witness.bindingOccurrences.count += occurrence;
-          if (!beginFamily(1u, std::popcount(destinationFacts.streamMask))) return false;
+          if (!beginFamily(1u, quota[kStreams])) return false;
           occurrence = 0u;
           for (std::uint32_t slot = 0u;
                slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
@@ -2438,7 +2442,7 @@ class PeSemanticBatchOwner final {
           }
           if (!ok) return false;
           witness.bindingOccurrences.count += occurrence;
-          if (!beginFamily(2u, std::popcount(sourceFacts.shaderMask))) return false;
+          if (!beginFamily(2u, quota[kShaders])) return false;
           occurrence = 0u;
           if ((sourceFacts.shaderMask & 1u) != 0u)
             add(bindings.vs, D9C_CHUNK_HANDLE_KIND_SHADER, 3u, 2u,
@@ -2468,8 +2472,7 @@ class PeSemanticBatchOwner final {
                 occurrence++);
           if (!ok) return false;
           witness.bindingOccurrences.count += occurrence;
-          if (!beginFamily(
-                         5u, std::popcount(sourceFacts.renderTargetMask))) return false;
+          if (!beginFamily(5u, quota[kRenderTargets])) return false;
           occurrence = 0u;
           for (std::uint32_t slot = 0u;
                slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
@@ -4417,13 +4420,13 @@ class PeSemanticBatchOwner final {
                   sourceFacts.renderStateCount, visitRenderStates) &&
               binding.template operator()<D9CCommandChunkWireTextureBinding>(
                   D9C_COMMAND_CHUNK_SECTION_TEXTURE,
-                  std::popcount(sourceFacts.textureMask), 0u, visitTextures) &&
+                  layout.quotaDeltas[kTextures], 0u, visitTextures) &&
               binding.template operator()<D9CCommandChunkWireStreamBinding>(
                   D9C_COMMAND_CHUNK_SECTION_STREAM,
-                  std::popcount(destinationFacts.streamMask), 1u, visitStreams) &&
+                  layout.quotaDeltas[kStreams], 1u, visitStreams) &&
               binding.template operator()<D9CCommandChunkWireShaderBinding>(
                   D9C_COMMAND_CHUNK_SECTION_SHADER,
-                  std::popcount(sourceFacts.shaderMask), 2u, visitShaders) &&
+                  layout.quotaDeltas[kShaders], 2u, visitShaders) &&
               binding.template operator()<D9CCommandChunkWireVertexInput>(
                   D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT,
                   sourceFacts.vertexInput ? 1u : 0u, 3u, visitVertexInput) &&
@@ -4432,7 +4435,7 @@ class PeSemanticBatchOwner final {
                   destinationFacts.indexBuffer ? 1u : 0u, 4u, visitIndex) &&
               binding.template operator()<D9CCommandChunkWireRenderTargetBinding>(
                   D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET,
-                  std::popcount(sourceFacts.renderTargetMask), 5u,
+                  layout.quotaDeltas[kRenderTargets], 5u,
                   visitRenderTargets) &&
               binding.template operator()<D9CCommandChunkWireDepthStencilBinding>(
                   D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL,
@@ -4449,7 +4452,7 @@ class PeSemanticBatchOwner final {
                   sourceFacts.material ? 1u : 0u, once(shadow.materialShadow())) &&
               visited.template operator()<D9CCommandChunkWireClipPlane>(
                   D9C_COMMAND_CHUNK_SECTION_CLIP_PLANE,
-                  std::popcount(sourceFacts.clipPlaneMask), visitClipPlanes) &&
+                  layout.quotaDeltas[kClipPlanes], visitClipPlanes) &&
               visited.template operator()<D9CDrawPacketTextureStageState>(
                   D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE,
                   sourceFacts.textureStageStateCount, visitTss) &&
@@ -4461,10 +4464,10 @@ class PeSemanticBatchOwner final {
                   sourceFacts.transformCount, visitTransforms) &&
               visited.template operator()<D9CCommandChunkWireLight>(
                   D9C_COMMAND_CHUNK_SECTION_LIGHT,
-                  std::popcount(sourceFacts.lightMask), visitLights) &&
+                  layout.quotaDeltas[kLights], visitLights) &&
               visited.template operator()<D9CCommandChunkWireLightEnable>(
                   D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE,
-                  std::popcount(sourceFacts.lightEnableMask), visitLightEnables) &&
+                  layout.quotaDeltas[kLightEnables], visitLightEnables) &&
               constant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_F,
                        sourceFacts.vsFloatConstants) &&
               constant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_I,

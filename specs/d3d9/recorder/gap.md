@@ -13,6 +13,30 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.42–7.44 are implemented with bounded native and linked-code
+evidence. VS range diagnostics gate dirty counting before append and shader
+lookup after successful append. Unobserved clean families bypass outlined
+flush; decimated observation preserves all six calls. The production-used
+dispatch matches the unconditional reference over 4,032 dirty/failure/mutation
+traces and retries at N=0/1/127, including accepted payloads, residual state,
+observer populations and exception propagation. Private PE diagnostic gating
+is pinned by source contracts and actual linked branches, not by a native COM
+execution fixture.
+
+Compact admission/emission reuse prepared-layout category counts without
+changing callback/source qualification, retention, capacity or rollback.
+Canonical differential evidence includes empty/sparse/full masks, actual
+A/B/A plan reuse, failed settlement followed by the same-plan retry, and
+sparse-only capacity denial before pin acquisition. All four canonical builds
+pass; native PE/audit tests pass 29/29, x86_64 focused tests pass 8/8, and the
+unchanged TLA suite passes. Existing constant observer tests also pass in fresh
+N=1 and N=127 processes. PE32/PE64 exports and vtable/RTTI ownership match;
+six software-popcount expansions disappear from each linked compact writer.
+The Unix provider and bridge DLLs remain byte-identical. See
+[H249](../../../docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md).
+No new Wine/wild, pixel or observer-off throughput evidence is supplied;
+static/native success is not an attributed FPS gain or provider promotion.
+
 R-CORE-REC-7.40–7.41 are implemented with bounded native and linked-code evidence.
 All six constant setters use fixed 4/16-byte Live/Apply operations. Their actual
 byte-write effect is derived from the canonical plan with a compile-time check

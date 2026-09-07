@@ -98,6 +98,47 @@ struct PeConstShadowBlock {
     }
 };
 
+// R-CORE-REC-7.43: empty flush dispatch is observable only through the
+// decimated flush-scope diagnostic. Keep that policy as a pure predicate so
+// the production sequence and its native exhaustive test share the same
+// decision table.
+constexpr bool peConstFlushDispatchRequired(bool observeEmpty,
+                                            bool dirty) noexcept {
+    return observeEmpty || dirty;
+}
+
+// R-CORE-REC-7.43: visit the six constant shadows in wire/API order. The
+// callback is only entered for dirty shadows unless the caller is observing
+// empty flushes; the caller-owned failure predicate stops at the first failed
+// dispatch. Dirtiness is checked immediately before each callback, so a
+// callback-side mutation is visible to the later families.
+template <typename Flush, typename Failure>
+auto dispatchPeConstFlushes(PeConstShadowBlock& shadows,
+                            bool observeEmpty,
+                            Flush&& flush,
+                            Failure&& failed)
+    -> decltype(flush(shadows.vsConstF, std::size_t{})) {
+    using Result = decltype(flush(shadows.vsConstF, std::size_t{}));
+    const auto dispatch = [&](ConstShadow& shadow, std::size_t family) -> Result {
+        if (!peConstFlushDispatchRequired(observeEmpty, shadow.dirty())) {
+            return Result{};
+        }
+        return flush(shadow, family);
+    };
+
+    Result result = dispatch(shadows.vsConstF, 0u);
+    if (failed(result)) return result;
+    result = dispatch(shadows.vsConstI, 1u);
+    if (failed(result)) return result;
+    result = dispatch(shadows.vsConstB, 2u);
+    if (failed(result)) return result;
+    result = dispatch(shadows.psConstF, 3u);
+    if (failed(result)) return result;
+    result = dispatch(shadows.psConstI, 4u);
+    if (failed(result)) return result;
+    return dispatch(shadows.psConstB, 5u);
+}
+
 // Wrapper-owned state-block constant snapshot.  `trackedElems` fixes the
 // register set at EndStateBlock; Capture refreshes bytes for those registers
 // only and never grows the set.  Values are byte-shaped so all six D3D9

@@ -940,6 +940,24 @@ operation against the new destination. Owner admission, physical pin checks,
 emission and settlement retain their own invalidation-boundary contracts.
 This does not authorize a cached raw source spanning the whole append.
 
+R-CORE-REC-7.42–7.44 remove redundant local work without changing the record
+stream. Constant flush range observation is gated before dirty counting or
+shader lookup. An observer-off dispatch reads each existing constant shadow's
+dirty predicate immediately before that family; enabled decimation retains
+the six-call population. Both paths share ordered dispatch and first-failure
+semantics, including state changes made by preceding append callbacks.
+
+Compact canonical emission consumes the section counts already owned by its
+prepared sparse layout. The layout does not confer authority beyond the
+existing qualified append: subsequent callback/source validation and counted
+section emission still apply. No new count cache, transport, lifetime or
+concurrency protocol is introduced. These are bounded local refinements,
+checked through production-used helpers and generic-byte differential tests;
+the existing TLA models continue to own transaction/lifecycle ordering. There
+is no new shader or Metal binding behavior requiring a distinct GPU oracle.
+Fresh workload correctness and observer-off performance remain separate
+integration evidence, not conclusions from static instruction removal.
+
 The optional owner-qualified copy/materialization ledger binds this same
 transaction at its two physical ownership boundaries. A successful admission
 records the increase in live typed record, pin, and canonical-role

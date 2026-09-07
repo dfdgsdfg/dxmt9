@@ -4,12 +4,16 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-09-06
-source: docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
+updated: 2026-09-07
+source: docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
+
+Latest local refinement: [H249](present-pacing-pe-flush-layout.249.md) gates
+disabled constant-flush diagnostics, skips unobserved empty flushes, and reuses
+prepared compact counts. Native/codegen checks pass; fresh FPS evidence is open.
 
 Latest diagnostic: [H248](present-pacing-pe-identity-distribution.248.md) measures
 2.588 unique identities / 4.494 comparisons per sampled compact GT2 preparation.
@@ -30,6 +34,7 @@ The CPU-ready Tape locality gap remains an independent workstream.
 
 ## Recent Leaf Documents
 
+- [present-pacing-pe-flush-layout.249 - Constant Flush and Prepared Count Refinement](present-pacing-pe-flush-layout.249.md)
 - [present-pacing-pe-identity-distribution.248 - Measured Small-Set Identity Decision](present-pacing-pe-identity-distribution.248.md)
 - [present-pacing-pe-compact-refinement.247 - Compact Transaction and Live Borrow Refinement](present-pacing-pe-compact-refinement.247.md)
 - [present-pacing-pe-plan-authority.246 - Private Plan Authority and Fused Retention](present-pacing-pe-plan-authority.246.md)

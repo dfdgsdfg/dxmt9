@@ -1564,6 +1564,9 @@ HRESULT D3D9DeviceImpl::flushConstShadow(ConstShadow& shadow, uint32_t recordTyp
         decimatedScope.t0 = std::chrono::steady_clock::now();
     }
     if (!shadow.dirty()) return S_OK;
+    const bool observeVsRange =
+        recordType == D9C_COMMAND_RECORD_SET_VS_CONST_F &&
+        dxmt9PerfVsConstSetterRangeEnabled();
     const std::int64_t flushEntryNs = dxmt9PeRecorderStatsEnabled()
         ? dxmt9SteadyClockNs(std::chrono::steady_clock::now())
         : 0;
@@ -1577,17 +1580,19 @@ HRESULT D3D9DeviceImpl::flushConstShadow(ConstShadow& shadow, uint32_t recordTyp
         const uint32_t count = end - start;
         const auto* data =
             shadow.values.data() + static_cast<std::size_t>(start) * elemSize;
-        const std::uint32_t dirtyRegs =
-            recordType == D9C_COMMAND_RECORD_SET_VS_CONST_F
-                ? countDirtyConstRegs(shadow, start, end)
-                : 0u;
+        // This count is diagnostic-only. Keep it before appendSetConstRecord
+        // so the callback observes the pre-append dirty state, but do not pay
+        // for the scan when VS range observation is disabled.
+        const std::uint32_t dirtyRegs = observeVsRange
+            ? countDirtyConstRegs(shadow, start, end)
+            : 0u;
         hr = appendSetConstRecord(
             recordType, start, count, data, elemSize);
         if (SUCCEEDED(hr)) {
             ++flushedRecords;
             flushedRegs += count;
         }
-        if (SUCCEEDED(hr) && recordType == D9C_COMMAND_RECORD_SET_VS_CONST_F) {
+        if (SUCCEEDED(hr) && observeVsRange) {
             recordVsConstSetterRange(VsConstSetterRangePhase::Flush,
                                      currentVertexShaderHash(),
                                      currentPixelShaderHash(),
@@ -1601,19 +1606,39 @@ HRESULT D3D9DeviceImpl::flushConstShadow(ConstShadow& shadow, uint32_t recordTyp
 }
 
 HRESULT D3D9DeviceImpl::flushPendingConsts() {
-    HRESULT hr = flushConstShadow(recorderState_.peConsts.vsConstF, D9C_COMMAND_RECORD_SET_VS_CONST_F, sizeof(float) * 4);
-    if (FAILED(hr)) return hr;
-    hr = flushConstShadow(recorderState_.peConsts.vsConstI, D9C_COMMAND_RECORD_SET_VS_CONST_I, sizeof(int32_t) * 4);
-    if (FAILED(hr)) return hr;
-    hr = flushConstShadow(recorderState_.peConsts.vsConstB, D9C_COMMAND_RECORD_SET_VS_CONST_B, sizeof(uint32_t));
-    if (FAILED(hr)) return hr;
-    hr = flushConstShadow(recorderState_.peConsts.psConstF, D9C_COMMAND_RECORD_SET_PS_CONST_F, sizeof(float) * 4);
-    if (FAILED(hr)) return hr;
-    hr = flushConstShadow(recorderState_.peConsts.psConstI, D9C_COMMAND_RECORD_SET_PS_CONST_I, sizeof(int32_t) * 4);
-    if (FAILED(hr)) return hr;
-    hr = flushConstShadow(recorderState_.peConsts.psConstB, D9C_COMMAND_RECORD_SET_PS_CONST_B, sizeof(uint32_t));
-    if (FAILED(hr)) return hr;
-    return S_OK;
+    const bool observeEmptyFlushes = dxmt9PeStatsDecimationN() != 0u;
+    return dispatchPeConstFlushes(
+        recorderState_.peConsts, observeEmptyFlushes,
+        [this](ConstShadow& shadow, std::size_t family) -> HRESULT {
+            switch (family) {
+            case 0u:
+                return flushConstShadow(
+                    shadow, D9C_COMMAND_RECORD_SET_VS_CONST_F,
+                    sizeof(float) * 4u);
+            case 1u:
+                return flushConstShadow(
+                    shadow, D9C_COMMAND_RECORD_SET_VS_CONST_I,
+                    sizeof(std::int32_t) * 4u);
+            case 2u:
+                return flushConstShadow(
+                    shadow, D9C_COMMAND_RECORD_SET_VS_CONST_B,
+                    sizeof(std::uint32_t));
+            case 3u:
+                return flushConstShadow(
+                    shadow, D9C_COMMAND_RECORD_SET_PS_CONST_F,
+                    sizeof(float) * 4u);
+            case 4u:
+                return flushConstShadow(
+                    shadow, D9C_COMMAND_RECORD_SET_PS_CONST_I,
+                    sizeof(std::int32_t) * 4u);
+            case 5u:
+                return flushConstShadow(
+                    shadow, D9C_COMMAND_RECORD_SET_PS_CONST_B,
+                    sizeof(std::uint32_t));
+            }
+            return D3DERR_INVALIDCALL;
+        },
+        [](HRESULT hr) noexcept { return FAILED(hr); });
 }
 
 HRESULT D3D9DeviceImpl::chunkBarrierFlush() {
