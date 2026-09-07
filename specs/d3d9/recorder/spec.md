@@ -975,6 +975,34 @@ production helpers. Existing transaction TLA models continue to own unchanged
 ordering; linked PE inspection and later wild evidence separately assess cost
 and integration. No new concurrency or GPU semantics are introduced.
 
+R-CORE-REC-7.48–7.51 reduce per-append protocol work without changing the
+canonical representation or chunk schedule. Absent compact sections bypass
+outlined emission, using the existing prepared inventory; malformed absent
+constant descriptors remain checked. A constant-only checkpoint is valid
+only with a closed settlement operation whose writable references exclude
+owner resource, quota and pin domains. Arbitrary callbacks continue through
+the full checkpoint. A smaller type is not proof of a smaller mutation set.
+
+Recorder frontier reads derive from the owner's currently committed counts.
+Append bookkeeping that does not use exact wire bytes may read these counts
+without rebuilding a wire layout. Reads are synchronous and repeated after
+destination-changing boundaries; copied counts confer no reusable admission
+authority. This avoids a persistent recorder cache or per-record generation
+counter. The checked exact-size query remains the reference and serves cold
+consumers. Initial destination-context finalization of compact draws remains
+mandatory.
+Exact emission bytes and historical cadence bytes remain separate quantities.
+Ledger overrides are thread-local test capabilities; their initialization
+must not impose a dynamic TLS guard on each disabled production append.
+
+These changes refine existing local transaction steps rather than introduce a
+new queue protocol. Production-bound native byte, failure, stale-identity and
+rollback traces are the bounded refinement layer; existing recorder TLA
+models continue to own ordering and lifetime. No new shader/Metal behavior
+requires a separate GPU fixture. Linked PE32/PE64 inspection must demonstrate
+the intended work removal, while fresh wild correctness and performance stay
+separate, explicitly open integration gates until measured.
+
 The optional owner-qualified copy/materialization ledger binds this same
 transaction at its two physical ownership boundaries. A successful admission
 records the increase in live typed record, pin, and canonical-role

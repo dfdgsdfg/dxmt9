@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -775,19 +776,28 @@ void testCopyMaterializationRegistryOwnershipAndDisabledPath() {
   using dxmt9::core::CopyMaterializationClass;
   using dxmt9::core::CopyMaterializationOwner;
 
+  const bool enabled = dxmt9::core::copyMaterializationLedgerEnabled();
+  const auto* coldPe = dxmt9::core::activeCopyMaterializationLedger(
+      CopyMaterializationOwner::Pe);
+  const auto* coldUnix = dxmt9::core::activeCopyMaterializationLedger(
+      CopyMaterializationOwner::Unix);
+  auto& registry = dxmt9::core::copyMaterializationLedgerRegistry();
+  auto& pe = registry.ledger(CopyMaterializationOwner::Pe);
+  auto& unix = registry.ledger(CopyMaterializationOwner::Unix);
+  check(coldPe == (enabled ? &pe : nullptr) &&
+            coldUnix == (enabled ? &unix : nullptr),
+        "cold production lookup resolves the cached owner pair");
+
   // Native tests run with the opt-in production gate unset.  This assertion
   // pins the disabled path to a cached null and therefore no ledger object.
-  if (!dxmt9::core::copyMaterializationLedgerEnabled()) {
-    check(dxmt9::core::activeCopyMaterializationLedger(CopyMaterializationOwner::Pe) ==
-              nullptr &&
+  if (!enabled) {
+    check(dxmt9::core::activeCopyMaterializationLedger(
+              CopyMaterializationOwner::Pe) == nullptr &&
               dxmt9::core::activeCopyMaterializationLedger(
                   CopyMaterializationOwner::Unix) == nullptr,
           "disabled ledger path returns null for both binary owners");
   }
 
-  auto& registry = dxmt9::core::copyMaterializationLedgerRegistry();
-  auto& pe = registry.ledger(CopyMaterializationOwner::Pe);
-  auto& unix = registry.ledger(CopyMaterializationOwner::Unix);
   check(&pe != &unix, "PE and Unix ledgers have distinct stable owners");
   const auto peBefore = pe.snapshot(CopyMaterializationClass::PeStateShadow);
   const auto unixBefore =
@@ -928,6 +938,18 @@ void testCopyMaterializationRegistryOwnershipAndDisabledPath() {
               CopyMaterializationOwner::Pe) ==
               (dxmt9::core::copyMaterializationLedgerEnabled() ? &pe : nullptr),
           "owner-qualified Unix sink does not intercept PE rows");
+
+    dxmt9::core::CopyMaterializationLedger nested;
+    {
+      dxmt9::core::ScopedCopyMaterializationLedger nestedObserve(
+          CopyMaterializationOwner::Unix, nested);
+      check(dxmt9::core::activeCopyMaterializationLedger(
+                CopyMaterializationOwner::Unix) == &nested,
+            "same-owner nested sink supersedes the outer sink");
+    }
+    check(dxmt9::core::activeCopyMaterializationLedger(
+              CopyMaterializationOwner::Unix) == &scoped,
+          "same-owner nested sink restores the outer sink");
   }
   const auto* restored = dxmt9::core::activeCopyMaterializationLedger(
       CopyMaterializationOwner::Unix);
@@ -935,6 +957,49 @@ void testCopyMaterializationRegistryOwnershipAndDisabledPath() {
                          ? &unix
                          : nullptr),
         "scoped test sink restores the binary registry or disabled path");
+
+  dxmt9::core::CopyMaterializationLedger threadLedger;
+  const auto* mainOverride = dxmt9::core::activeCopyMaterializationLedger(
+      CopyMaterializationOwner::Pe);
+  bool workerIgnoredMainOverride = false;
+  bool workerScopeRouted = false;
+  bool workerRestoredProduction = false;
+  {
+    dxmt9::core::CopyMaterializationLedger mainLedger;
+    dxmt9::core::ScopedCopyMaterializationLedger mainScope(
+        CopyMaterializationOwner::Pe, mainLedger);
+    std::thread worker([&] {
+      const auto* workerProduction =
+          dxmt9::core::activeCopyMaterializationLedger(
+              CopyMaterializationOwner::Pe);
+      workerIgnoredMainOverride = workerProduction != &mainLedger;
+      {
+        dxmt9::core::ScopedCopyMaterializationLedger workerScope(
+            CopyMaterializationOwner::Pe, threadLedger);
+        workerScopeRouted =
+            dxmt9::core::activeCopyMaterializationLedger(
+                CopyMaterializationOwner::Pe) == &threadLedger;
+        threadLedger.record(CopyMaterializationClass::PeStateShadow, 31u);
+      }
+      workerRestoredProduction =
+          dxmt9::core::activeCopyMaterializationLedger(
+              CopyMaterializationOwner::Pe) == workerProduction;
+    });
+    worker.join();
+    check(dxmt9::core::activeCopyMaterializationLedger(
+              CopyMaterializationOwner::Pe) == &mainLedger,
+          "main owner override survives a worker scope");
+  }
+  check(workerIgnoredMainOverride && workerScopeRouted &&
+            workerRestoredProduction,
+        "owner overrides remain isolated and restore production in each thread");
+  const auto threadSnapshot = threadLedger.snapshot(
+      CopyMaterializationClass::PeStateShadow);
+  check(threadSnapshot.calls == 1u && threadSnapshot.bytes == 31u,
+        "thread-local override records into a live ledger after scope teardown");
+  check(dxmt9::core::activeCopyMaterializationLedger(
+            CopyMaterializationOwner::Pe) == mainOverride,
+        "warm production lookup restores after the main scope");
 }
 
 void testTransactionalAssemblerRollbackReclaimsDestination() {

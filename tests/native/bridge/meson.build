@@ -71,6 +71,16 @@ pe_semantic_owner_spec = executable(
 
 test('dxmt9-pe-semantic-owner-spec', pe_semantic_owner_spec)
 
+# Closed constant-settlement effects: no owner mutation or callback authority.
+pe_constant_settlement_spec = executable(
+  'dxmt9-pe-constant-settlement-spec',
+  'pe_constant_settlement_spec.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src/d3d9')],
+  dependencies: [dxmt9_util_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-pe-constant-settlement-spec', pe_constant_settlement_spec)
+
 pe_aggregate_retainer_spec = executable(
   'dxmt9-pe-aggregate-retainer-spec',
   ['pe_aggregate_retainer_spec.cpp', '../../../src/d3d9/d3d9_pe_producer.cpp'],

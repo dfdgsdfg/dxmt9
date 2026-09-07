@@ -930,10 +930,12 @@ void testSourceContracts(const std::filesystem::path &root) {
                 "copy descriptor retains a named ownership/ABI reason");
   checkContains(copyLedger, "productionCopyMaterializationLedgers",
                 "disabled production lookup uses cached owner pointers");
-  checkContains(copyLedger, "gCopyMaterializationEffectiveOwnerLedgers",
-                "effective owner slots cache production pointers once");
-  checkNotContains(copyLedger, "if (auto* ledger =",
-                   "active production lookup has no test-then-production probe");
+  checkContains(copyLedger, "inline thread_local constinit",
+                "test overrides require no dynamic thread-local initializer");
+  checkContains(copyLedger, "gCopyMaterializationOverrideLedgers{}",
+                "thread-local overrides begin empty without production lookup");
+  checkNotContains(copyLedger, "gCopyMaterializationEffectiveOwnerLedgers",
+                   "production pointers are not dynamically initialized per thread");
   checkNotContains(copyLedger, "gCopyMaterializationTestOwnerLedgers.fill",
                    "test sinks remain owner-qualified rather than all-owner");
   const auto disabledPathBegin = copyLedger.find(

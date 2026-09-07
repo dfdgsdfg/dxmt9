@@ -4,12 +4,19 @@ workload: 3DMark05 GT2
 title: "3DMark05 GT2 Performance — Current Baseline"
 type: root-overview
 status: current
-updated: 2026-09-06
+updated: 2026-09-07
 source: experiments/output/app-d3d9-3dmark05-current-cap-gt2-r1-20260825; traces/app-d3d9-3dmark05-current-bottleneck-gt2-clean-cpu-r2-20260825/analysis/xctrace-cpu-thread-summary.md; traces/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825/analysis/pe-sampler.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt2-r1-20260725; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.41.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
 ---
 
 # 3DMark05 GT2 Performance — Current Baseline
+
+The latest implementation [H251](present-pacing/present-pacing-pe-append-effects.251.md)
+refines compact section dispatch, constant rollback, disabled ledger access
+and recorder frontier reads. It has native/linked evidence, not a new FPS
+result. The latest runtime spot check remains
+[H250](present-pacing/present-pacing-pe-sparse-work.250.md): 28.846 sampled FPS,
+without a qualified gain or neutrality claim.
 
 The latest [PE identity diagnostic](present-pacing/present-pacing-pe-identity-distribution.248.md)
 at `706866a4` finds mean 2.588 unique identities / 4.494 comparisons per sampled

@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+Latest implementation: [H251](present-pacing-pe-append-effects.251.md) adds
+active-section dispatch, concrete constant settlement with narrower rollback,
+constinit ledger overrides and fresh counts-only recorder bookkeeping.
+Native/linked evidence is separate from the still-open wild/FPS gate.
+
 Latest runtime checkpoint: [H250](present-pacing-pe-sparse-work.250.md) limits
 compact binding traversal, quota processing and constant bitmap clearing to
 active input. Native/TLA, sanitizer and linked PE checks pass. Post-commit GT2
@@ -44,6 +49,7 @@ The CPU-ready Tape locality gap remains an independent workstream.
 
 ## Recent Leaf Documents
 
+- [present-pacing-pe-append-effects.251 - Active Dispatch and Closed Append Effects](present-pacing-pe-append-effects.251.md)
 - [present-pacing-pe-sparse-work.250 - Active Sparse Work and Bounded Dirty Clearing](present-pacing-pe-sparse-work.250.md)
 - [present-pacing-pe-flush-layout.249 - Constant Flush and Prepared Count Refinement](present-pacing-pe-flush-layout.249.md)
 - [present-pacing-pe-identity-distribution.248 - Measured Small-Set Identity Decision](present-pacing-pe-identity-distribution.248.md)

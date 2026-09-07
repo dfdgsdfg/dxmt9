@@ -13,6 +13,23 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.48–7.51 specify active-section dispatch, effect-specific constant
+rollback, disabled-ledger TLS access and qualified emission-frontier reuse.
+They are implemented with bounded native and linked evidence. A concrete
+constant settlement operation excludes owner/callback authority before the
+checkpoint is narrowed; arbitrary callbacks keep the full checkpoint. Fresh
+counts-only reads add no persistent cache. Native PE/audit 30/30 and x86_64
+focused 9/9 pass, including failure/retry, retained prefix bytes, CapacityPre
+and nested/thread-local ledger overrides. Enabled/disabled ledger processes,
+four full builds and the unchanged TLA suite pass. PE32/PE64 exports and
+vtable/RTTI owners match; constant inner frames and dynamic TLS guard work
+shrink, while compact dispatch code grows. Bridge DLLs are byte-identical;
+the shared ledger header changes the Unix provider. See
+[H251](../../../docs/perfomance/present-pacing/present-pacing-pe-append-effects.251.md).
+Fresh wild correctness, current CPU attribution and FPS evidence remain open.
+The unchanged cadence, wire ABI and queue policies are constraints, not
+inferred performance outcomes.
+
 R-CORE-REC-7.45–7.47 are implemented with bounded native and linked-code
 evidence: compact texture/stream/RT traversal uses ascending active bits,
 constant settlement clears only the pending interval, and compact quotas

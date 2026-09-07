@@ -364,23 +364,21 @@ productionCopyMaterializationLedgers() noexcept {
 }
 
 // Native tests may install a deterministic sink for one synchronous scope;
-// production never uses this override. The effective owner slots are seeded
-// from the cached production pair, so the disabled path performs one pointer
-// read and leaves the existing call-site null branch to elide diagnostics.
-inline thread_local std::array<CopyMaterializationLedger*, 2>
-    gCopyMaterializationEffectiveOwnerLedgers = [] {
-      const auto* production = productionCopyMaterializationLedgers();
-      return std::array<CopyMaterializationLedger*, 2>{
-          production[copyMaterializationOwnerIndex(CopyMaterializationOwner::Pe)],
-          production[copyMaterializationOwnerIndex(
-              CopyMaterializationOwner::Unix)]};
-    }();
+// production never uses this override. Keep the test-only state constinit and
+// separate from the cached production pair: a disabled production lookup must
+// not run a dynamic TLS initializer before its null branch.
+inline thread_local constinit std::array<CopyMaterializationLedger*, 2>
+    gCopyMaterializationOverrideLedgers{};
 
 [[nodiscard]] inline CopyMaterializationLedger*
 activeCopyMaterializationLedger(
     CopyMaterializationOwner owner) noexcept {
-  return gCopyMaterializationEffectiveOwnerLedgers[
-      copyMaterializationOwnerIndex(owner)];
+  const auto ownerIndex = copyMaterializationOwnerIndex(owner);
+  if (auto* overrideLedger = gCopyMaterializationOverrideLedgers[
+          ownerIndex]) {
+    return overrideLedger;
+  }
+  return productionCopyMaterializationLedgers()[ownerIndex];
 }
 
 class ScopedCopyMaterializationLedger final {
@@ -388,14 +386,14 @@ public:
   ScopedCopyMaterializationLedger(CopyMaterializationOwner owner,
                                   CopyMaterializationLedger& ledger) noexcept
       : owner_(owner),
-        previous_(gCopyMaterializationEffectiveOwnerLedgers[
+        previous_(gCopyMaterializationOverrideLedgers[
             copyMaterializationOwnerIndex(owner)]) {
-    gCopyMaterializationEffectiveOwnerLedgers[
+    gCopyMaterializationOverrideLedgers[
         copyMaterializationOwnerIndex(owner)] = &ledger;
   }
 
   ~ScopedCopyMaterializationLedger() {
-    gCopyMaterializationEffectiveOwnerLedgers[
+    gCopyMaterializationOverrideLedgers[
         copyMaterializationOwnerIndex(owner_)] = previous_;
   }
 

@@ -1001,3 +1001,42 @@ remain authoritative. Native counterexamples must deny each sparse capacity
 dimension independently and preserve reference bytes and counters across
 empty/sparse/full reuse and retry. Active metadata must not outlive or drift
 from its prepared append.
+
+**R-CORE-REC-7.48** Compact layout and canonical writing may omit calls for
+absent sections and consume the prepared active-section inventory. Empty work
+must not require an outlined emitter call. This must preserve category order,
+padding, exact size, first-failure behavior and malformed absent-range
+rejection; absence must not suppress source validation. No independent mutable
+active mask or source lifetime extension is permitted. Native differential
+tests and linked PE32/PE64 inspection must distinguish semantic equivalence
+from eliminated calls and from unmeasured runtime benefit.
+
+**R-CORE-REC-7.49** A constant-only append may use a checkpoint limited to its
+actual mutation set only when a closed settlement capability cannot mutate
+other owner domains or reenter the owner. An arbitrary callback must retain
+the full transaction checkpoint. Failure before publication must preserve the
+previous canonical prefix, pending constants, ordinals, retention and retry
+behavior. Native comparison must exercise successful and failed settlement,
+generic retained-ref callback failure, and retry against the full-checkpoint reference.
+The optimization must not add per-register proofs or mutable effect metadata.
+
+**R-CORE-REC-7.50** A disabled copy/materialization ledger must not require a
+dynamic thread-local initializer check at each PE record admission. Production
+configuration remains process-cached; deterministic scoped overrides must
+preserve owner qualification, nested restoration and thread isolation. No
+unconditional clock, allocation, registry mutation or per-record environment
+lookup may replace the removed check. Enabled and disabled native processes
+and actual linked production callers must be inspected separately.
+
+**R-CORE-REC-7.51** Recorder transaction checkpoints and settlement may reuse
+an owner-issued emission frontier rather than recompute an unchanged layout.
+The projection must describe the issuing owner's current committed prefix;
+copied counts are not reusable admission authority. A fresh synchronous read
+after every invalidating flush, reset, retry or callback may replace a
+retained receipt and its invalidation machinery. Failed admission must settle
+against the restored frontier. Empty-owner handling,
+capacity fault disposition and the established cadence-byte policy must
+remain unchanged; cadence bytes are not interchangeable with exact wire size.
+Native A/B/A, callback failure and capacity-retry traces must compare the
+production-used projection to the checked reference. Any exposed reusable
+receipt additionally requires stale-owner/source rejection.

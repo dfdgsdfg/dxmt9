@@ -1116,9 +1116,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     bool settleSemanticRecord(
         const dxmt9::d3d9::pe::PeSemanticRecordInputView& input,
         std::uint64_t recordOrdinal) noexcept;
-    bool settleSemanticConstantRecord(
-        const dxmt9::d3d9::pe::PeSemanticConstantRecordInput& input,
-        std::uint64_t recordOrdinal) noexcept;
     bool settleSemanticSparsePlan(
         const dxmt9::d3d9::pe::RecorderLockCapability& access,
         const dxmt9::d3d9::pe::SparseStatePlan& plan,

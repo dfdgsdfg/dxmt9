@@ -369,6 +369,154 @@ void typedConstantAdmissionDifferential() {
   }
 }
 
+template <typename O, typename Callback>
+concept AcceptsConstantCallback = requires(
+    O& owner, const PeSemanticConstantRecordInput& input, Callback& callback) {
+  owner.tryAppendConstantRecord(input, callback);
+};
+
+static_assert(!AcceptsConstantCallback<Owner, decltype([]() noexcept {
+  return true;
+})>);
+
+void compactSectionGatingAndClosedConstantRollback() {
+  SparseStatePlan::SourceFacts source{};
+  SparseStatePlan::DestinationFacts destination{};
+  source.vsFloatConstants.startRegister = 3u;
+  PeSemanticPreparedSparseLayout malformedLayout{};
+  check(!detail::preparePeSemanticSparsePlanLayout(source, destination,
+                                                   malformedLayout),
+        "compact layout rejects malformed absent constant metadata");
+  std::array<std::byte, 4u> malformedUpBytes{};
+  auto malformedUp = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+  malformedUp.sparse.upVertexData = malformedUpBytes;
+  PeSemanticBatchOwner<4u, 4u, 1024u, 4u, 4u> malformedUpOwner;
+  check(!malformedUpOwner.admit(malformedUp) && malformedUpOwner.size() == 0u,
+        "non-UP sparse input cannot smuggle an UP payload section");
+
+  struct Family {
+    PeSemanticProducerKind producer;
+    ConstShadow PeConstShadowBlock::* shadow;
+    std::size_t bytes;
+  };
+  const std::array families{
+      Family{PeSemanticProducerKind::VsFloatConstant, &PeConstShadowBlock::vsConstF, 16u},
+      Family{PeSemanticProducerKind::VsIntConstant, &PeConstShadowBlock::vsConstI, 16u},
+      Family{PeSemanticProducerKind::VsBoolConstant, &PeConstShadowBlock::vsConstB, 4u},
+      Family{PeSemanticProducerKind::PsFloatConstant, &PeConstShadowBlock::psConstF, 16u},
+      Family{PeSemanticProducerKind::PsIntConstant, &PeConstShadowBlock::psConstI, 16u},
+      Family{PeSemanticProducerKind::PsBoolConstant, &PeConstShadowBlock::psConstB, 4u},
+  };
+  using ConstantOwner = PeSemanticBatchOwner<4u, 4u, 4096u, 4u, 4u>;
+  for (const auto& family : families) {
+    for (const bool observed : {false, true}) {
+      D9CSurface surface;
+      ConstantOwner narrow, full;
+      PeSemanticOwnerPhaseObserver narrowObserver(1u), fullObserver(1u);
+      if (observed) {
+        narrow.setPhaseObserver(&narrowObserver);
+        full.setPhaseObserver(&fullObserver);
+      }
+      auto prefix = base(PeSemanticProducerKind::Present, 1u, 1u);
+      prefix.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0xb101u);
+      CommandChunkBuilder canonical;
+      check(narrow.admit(prefix) && full.admit(prefix) &&
+                appendCanonicalSemanticRecord(canonical, prefix),
+            "constant rollback has an accepted resource-bearing prefix");
+      PeSemanticExactFixedEmission prefixEmission{};
+      check(narrow.emitExactFixed(prefixEmission), "capture constant prefix bytes");
+      std::vector<std::byte> committedBytes(prefixEmission.wire.begin(),
+                                             prefixEmission.wire.end());
+
+      PeConstShadowBlock narrowConstants, fullConstants;
+      PeHotStateShadow pending;
+      std::uint64_t ordinal = 2u;
+      // Stale ticket, wrong dirty range, malformed extent; then A/B/A and
+      // capacity failure. Every failure leaves the source reusable.
+      for (unsigned scenario = 0u; scenario < 7u; ++scenario) {
+        const std::byte value = scenario == 4u ? std::byte{0x52} : std::byte{0x31};
+        std::array<std::byte, 16u> values{};
+        values.fill(value);
+        auto& ns = narrowConstants.*family.shadow;
+        ns.values.assign(2u * family.bytes, static_cast<std::uint8_t>(value));
+        ns.dirtyElems = {0u, 1u};
+        ns.dirtyStart = 1u;
+        ns.dirtyEnd = 2u;
+        if (scenario == 1u) {
+          ns.dirtyElems = {1u, 0u};
+          ns.dirtyStart = 0u;
+          ns.dirtyEnd = 1u;
+        }
+        fullConstants.*family.shadow = ns;
+        const auto dirtyBefore = ns.dirtyElems;
+        PeSemanticConstantRecordInput input{};
+        input.producer = family.producer;
+        input.recordType = peSemanticRecordTypeForProducer(family.producer);
+        input.sourceOrdinal = input.recordOrdinal = ordinal;
+        input.setConst = {1u, 1u};
+        input.constantBytes = std::span<const std::byte>(values).first(
+            family.bytes - (scenario == 2u ? 1u : 0u));
+        const auto ticket = scenario == 0u ? PendingDeltaTicket{2u}
+                                          : pending.pendingTicket();
+        PeSemanticConstantSettlement narrowSettlement(narrowConstants, pending, ticket);
+        PeSemanticConstantSettlement fullSettlement(fullConstants, pending, ticket);
+        const bool accepted = narrow.tryAppendConstantRecord(input, narrowSettlement);
+        const bool reference = full.tryAppendOwnedRecord(input, [&]() noexcept {
+          return fullSettlement.settle(input.producer, input.setConst, input.constantBytes);
+        });
+        const bool expected = scenario >= 3u && scenario <= 5u;
+        check(accepted == expected && accepted == reference &&
+                  narrow.lastAdmissionFailure() == full.lastAdmissionFailure() &&
+                  narrow.size() == full.size() &&
+                  narrow.nextSourceOrdinal() == full.nextSourceOrdinal() &&
+                  narrow.nextRecordOrdinal() == full.nextRecordOrdinal(),
+              "closed settlement preserves full-checkpoint outcomes and identity");
+        check(narrow.retainedCount() == 1u && full.retainedCount() == 1u &&
+                  surface.refs == 4u,
+              "constant failure and success leave prefix pin ownership intact");
+        const auto& fs = fullConstants.*family.shadow;
+        check(ns.values == fs.values && ns.dirtyElems == fs.dirtyElems &&
+                  ns.dirtyStart == fs.dirtyStart && ns.dirtyEnd == fs.dirtyEnd &&
+                  (accepted ? !ns.dirty() : ns.dirtyElems == dirtyBefore),
+              "closed and full settlement preserve identical shadow effects");
+        if (accepted) {
+          check(appendSetConstants(canonical, input.recordType, 1u, 1u, input.constantBytes),
+                "constant oracle accepts successful A/B/A records");
+          ++ordinal;
+        }
+        PeSemanticExactFixedEmission exact{}, referenceExact{};
+        check(narrow.emitExactFixed(exact) && full.emitExactFixed(referenceExact) &&
+                  exact.wire.size() == referenceExact.wire.size() &&
+                  std::equal(exact.wire.begin(), exact.wire.end(),
+                             referenceExact.wire.begin()),
+              "closed and full checkpoints emit identical bytes");
+        if (!accepted) {
+          check(exact.wire.size() == committedBytes.size() &&
+                    std::equal(committedBytes.begin(), committedBytes.end(),
+                               exact.wire.begin()),
+                "failed constant settlement preserves its committed byte prefix");
+        }
+        committedBytes.assign(exact.wire.begin(), exact.wire.end());
+        PeSemanticSegmentedEmission segmented{};
+        check(narrow.emitSegmented(segmented) &&
+                  ownerSegmentedRolesEqualExact(exact, segmented),
+              "closed settlement preserves segmented transport roles");
+      }
+      PeSemanticExactFixedEmission finalExact{};
+      check(equalCanonicalOwnerBytes(narrow, canonical, finalExact),
+            "closed constant A/B/A matches the independent canonical builder");
+      if (observed) {
+        check(narrowObserver.stats().outcomes == fullObserver.stats().outcomes,
+              "real owner observer preserves settlement outcome populations");
+      }
+      narrow.reset();
+      full.reset();
+      canonical.resetAndReleaseRetained();
+      check(surface.refs == 1u, "closed rollback preserves balanced resource release");
+    }
+  }
+}
+
 void inactiveBindingMetadataRemainsNonAuthoritative() {
   D9CTexture texture;
   Owner owner;
@@ -4406,6 +4554,144 @@ void emptyOwnerStartsAtZeroCadence() {
   check(surface.refs == 1u, "cadence fixture releases its pin");
 }
 
+template <typename TestedOwner>
+bool emissionFrontierMatchesCheckedMetrics(const TestedOwner& owner) {
+  std::size_t metricHandles = 0u;
+  std::size_t metricPayload = 0u;
+  std::size_t metricWire = 0u;
+  const bool metrics = owner.emissionMetrics(
+      metricHandles, metricPayload, metricWire);
+  PeSemanticEmissionFrontier frontier{};
+  const bool projected = owner.emissionFrontier(frontier);
+  if (metrics != projected) return false;
+  return !metrics ||
+      (frontier.recordCount == owner.size() &&
+       frontier.handleCount == metricHandles &&
+       frontier.payloadBytes == metricPayload && metricWire != 0u);
+}
+
+void emissionFrontierDifferential() {
+  using DifferentialOwner = PeSemanticBatchOwner<8u, 8u, 4096u, 8u, 8u>;
+  DifferentialOwner unavailable(DifferentialOwner::FailConstructionForTesting{});
+  PeSemanticEmissionFrontier unavailableFrontier{
+      .recordCount = 7u, .handleCount = 7u, .payloadBytes = 7u};
+  check(!unavailable.emissionFrontier(unavailableFrontier) &&
+            unavailableFrontier.recordCount == 0u &&
+            unavailableFrontier.handleCount == 0u &&
+            unavailableFrontier.payloadBytes == 0u,
+        "unavailable owner rejects the live emission frontier");
+
+  DifferentialOwner empty;
+  PeSemanticEmissionFrontier emptyFrontier{
+      .recordCount = 9u, .handleCount = 9u, .payloadBytes = 9u};
+  check(!empty.emissionFrontier(emptyFrontier) && emptyFrontier.recordCount == 0u &&
+            emptyFrontier.handleCount == 0u && emptyFrontier.payloadBytes == 0u &&
+            resolvePeSemanticCadenceFrontier(empty, emptyFrontier.handleCount,
+                                             emptyFrontier.payloadBytes) &&
+            emptyFrontier.handleCount == 0u && emptyFrontier.payloadBytes == 0u,
+        "empty owner exposes only a valid zero cadence frontier");
+
+  D9CSurface surfaceA;
+  D9CSurface surfaceB;
+  auto makePresent = [](D9CSurface* surface, std::uint64_t ordinal,
+                        std::uint32_t objectId) {
+    auto input = base(PeSemanticProducerKind::Present, ordinal, ordinal);
+    input.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+        surface, objectId);
+    return input;
+  };
+  const auto a = makePresent(&surfaceA, 1u, 0xa01u);
+  const auto b = makePresent(&surfaceB, 2u, 0xb01u);
+  check(empty.admit(a) && emissionFrontierMatchesCheckedMetrics(empty),
+        "successful admission projection equals checked emission metrics");
+  CommandChunkBuilder canonicalA;
+  check(appendCanonicalSemanticRecord(canonicalA, a),
+        "canonical success fixture accepts A");
+  PeSemanticExactFixedEmission exactA{};
+  check(equalCanonicalOwnerBytes(empty, canonicalA, exactA),
+        "successful owner bytes equal canonical bytes");
+  const std::vector<std::byte> beforeRollback(
+      exactA.wire.begin(), exactA.wire.end());
+
+  check(!empty.tryAppendOwnedRecord(
+            b, []() noexcept { return false; }) &&
+            emissionFrontierMatchesCheckedMetrics(empty),
+        "failed admission restores the live emission frontier");
+  PeSemanticExactFixedEmission afterRollback{};
+  check(empty.emitExactFixed(afterRollback) &&
+            beforeRollback.size() == afterRollback.wire.size() &&
+            std::equal(beforeRollback.begin(), beforeRollback.end(),
+                       afterRollback.wire.begin()),
+        "failed admission preserves canonical prefix bytes");
+  std::size_t settledHandles = 0u;
+  std::size_t settledPayload = 0u;
+  std::size_t settledWire = 0u;
+  check(empty.settle() && !empty.emissionFrontier(emptyFrontier) &&
+            !empty.emissionMetrics(settledHandles, settledPayload, settledWire),
+        "settlement revokes the owner emission frontier");
+
+  DifferentialOwner resetOwner;
+  check(resetOwner.admit(a) && resetOwner.emissionFrontier(emptyFrontier),
+        "reset fixture publishes a live owner frontier");
+  resetOwner.reset();
+  check(!resetOwner.emissionFrontier(emptyFrontier) &&
+            emissionFrontierMatchesCheckedMetrics(resetOwner),
+        "reset revokes the owner emission frontier");
+
+  DifferentialOwner aba;
+  check(aba.admit(a) && aba.admit(b) && aba.admit(makePresent(&surfaceA, 3u, 0xa01u)) &&
+            emissionFrontierMatchesCheckedMetrics(aba),
+        "A-B-A owner frontier remains equivalent to checked metrics");
+  CommandChunkBuilder canonicalAba;
+  check(appendCanonicalSemanticRecord(canonicalAba, a) &&
+            appendCanonicalSemanticRecord(canonicalAba, b) &&
+            appendCanonicalSemanticRecord(
+                canonicalAba, makePresent(&surfaceA, 3u, 0xa01u)),
+        "canonical A-B-A fixture accepts every record");
+  PeSemanticExactFixedEmission exactAba{};
+  check(equalCanonicalOwnerBytes(aba, canonicalAba, exactAba),
+        "A-B-A owner bytes equal canonical bytes");
+
+  DifferentialOwner retry;
+  check(retry.admit(a) && !retry.tryAppendOwnedRecord(
+            b, []() noexcept { return false; }) &&
+            retry.tryAppendOwnedRecord(b, []() noexcept { return true; }) &&
+            emissionFrontierMatchesCheckedMetrics(retry),
+        "retry republishes a fresh live frontier after rollback");
+  CommandChunkBuilder canonicalRetry;
+  check(appendCanonicalSemanticRecord(canonicalRetry, a) &&
+            appendCanonicalSemanticRecord(canonicalRetry, b),
+        "canonical retry fixture accepts A-B");
+  PeSemanticExactFixedEmission exactRetry{};
+  check(equalCanonicalOwnerBytes(retry, canonicalRetry, exactRetry),
+        "retry owner bytes equal canonical bytes");
+
+  DifferentialOwner capacity;
+  for (std::uint64_t ordinal = 1u; ordinal <= 8u; ++ordinal)
+    check(capacity.admit(makePresent(&surfaceA, ordinal, 0xa01u)),
+          "capacity frontier fixture fills the bounded owner");
+  const auto denied = makePresent(&surfaceB, 9u, 0xb01u);
+  check(!capacity.admit(denied) &&
+            capacity.lastAdmissionFailure() == DifferentialOwner::AdmissionFailure::Capacity &&
+            emissionFrontierMatchesCheckedMetrics(capacity),
+        "capacity denial preserves the proven frontier");
+  check(capacity.settle() &&
+            resolvePeSemanticCadenceFrontier(capacity, settledHandles, settledPayload) &&
+            settledHandles == 0u && settledPayload == 0u &&
+            capacity.admit(denied) && emissionFrontierMatchesCheckedMetrics(capacity),
+        "CapacityPre settlement and same-record retry use fresh counts");
+  capacity.reset();
+  aba.reset();
+  retry.reset();
+  resetOwner.reset();
+  empty.reset();
+  canonicalA.resetAndReleaseRetained();
+  canonicalAba.resetAndReleaseRetained();
+  canonicalRetry.resetAndReleaseRetained();
+  check(surfaceA.refs == 1u && surfaceB.refs == 1u,
+        "frontier differential fixtures release all retained pins");
+}
+
 void committedLeaseQualificationUsesOwnerPins() {
   Owner owner;
   D9CSurface surface;
@@ -5771,6 +6057,7 @@ int main(int argc, char** argv) {
     typedConstantAdmissionDifferential<PeSemanticProducerKind::PsFloatConstant>();
     typedConstantAdmissionDifferential<PeSemanticProducerKind::PsIntConstant>();
     typedConstantAdmissionDifferential<PeSemanticProducerKind::PsBoolConstant>();
+    compactSectionGatingAndClosedConstantRollback();
     inactiveBindingMetadataRemainsNonAuthoritative();
     bindingOccurrenceStorageUsesActiveFrontier();
     preparedBindingSevenFamilyMatrix();
@@ -5792,6 +6079,7 @@ int main(int argc, char** argv) {
     warmRetainerCapacityDistinguishesNovelObjects();
     settledOwnerCannotExposePriorRanges();
     emptyOwnerStartsAtZeroCadence();
+    emissionFrontierDifferential();
     committedLeaseQualificationUsesOwnerPins();
     productionOwnerProjectionBindsColdLedger();
     ownerQualifiedMaterializationLedger();

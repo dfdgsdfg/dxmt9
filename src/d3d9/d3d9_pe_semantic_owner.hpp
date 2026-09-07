@@ -10,6 +10,7 @@
 // Compatibility builders remain test/bootstrap oracles, never fallbacks.
 
 #include "d3d9_pe_producer_views.hpp"
+#include "d3d9_pe_constant_settlement.hpp"
 #include "d3d9_pe_retainer.hpp"
 #include "d3d9_pe_sparse_iteration.hpp"
 #include "d3d9_pe_semantic_tokens.hpp"
@@ -1129,63 +1130,100 @@ inline bool preparePeSemanticSparsePlanLayout(
     return append(kind, range.registerCount, bytes,
                   std::numeric_limits<std::size_t>::max());
   };
-  if (!typed(D9C_COMMAND_CHUNK_SECTION_RENDER_STATE, source.renderStateCount,
-             sizeof(D9CCommandChunkWireRenderState), 0u) ||
-      !typed(D9C_COMMAND_CHUNK_SECTION_TEXTURE, std::popcount(source.textureMask),
-             sizeof(D9CCommandChunkWireTextureBinding), 1u) ||
-      !typed(D9C_COMMAND_CHUNK_SECTION_STREAM, std::popcount(destination.streamMask),
-             sizeof(D9CCommandChunkWireStreamBinding), 2u) ||
-      !typed(D9C_COMMAND_CHUNK_SECTION_SHADER, std::popcount(source.shaderMask),
-             sizeof(D9CCommandChunkWireShaderBinding), 3u) ||
-      !typed(D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT, source.vertexInput ? 1u : 0u,
-             sizeof(D9CCommandChunkWireVertexInput), 4u) ||
-      !typed(D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER, destination.indexBuffer ? 1u : 0u,
-             sizeof(D9CCommandChunkWireIndexBinding), 5u) ||
-      !typed(D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET,
-             std::popcount(source.renderTargetMask),
-             sizeof(D9CCommandChunkWireRenderTargetBinding), 6u) ||
-      !typed(D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL,
-             source.depthStencil ? 1u : 0u,
-             sizeof(D9CCommandChunkWireDepthStencilBinding), 7u) ||
-      !typed(D9C_COMMAND_CHUNK_SECTION_VIEWPORT, source.viewport ? 1u : 0u,
-             sizeof(D9CViewport), 8u) ||
-      !typed(D9C_COMMAND_CHUNK_SECTION_SCISSOR, source.scissor ? 1u : 0u,
-             sizeof(D9CRect), 9u) ||
-      !typed(D9C_COMMAND_CHUNK_SECTION_MATERIAL, source.material ? 1u : 0u,
-             sizeof(D9CMaterial), 10u) ||
-      !typed(D9C_COMMAND_CHUNK_SECTION_CLIP_PLANE,
-             std::popcount(source.clipPlaneMask),
-             sizeof(D9CCommandChunkWireClipPlane), 11u) ||
-      !typed(D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE,
-             source.textureStageStateCount,
-             sizeof(D9CDrawPacketTextureStageState), 12u) ||
-      !typed(D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE,
-             source.samplerStateCount, sizeof(D9CDrawPacketSamplerState), 13u) ||
-      !typed(D9C_COMMAND_CHUNK_SECTION_TRANSFORM, source.transformCount,
-             sizeof(D9CDrawPacketTransform), 14u) ||
-      !typed(D9C_COMMAND_CHUNK_SECTION_LIGHT, std::popcount(source.lightMask),
-             sizeof(D9CCommandChunkWireLight), 15u) ||
-      !typed(D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE,
-             std::popcount(source.lightEnableMask),
-             sizeof(D9CCommandChunkWireLightEnable), 16u) ||
-      !constant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_F,
-                source.vsFloatConstants) ||
-      !constant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_I,
-                source.vsIntConstants) ||
-      !constant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_B,
-                source.vsBoolConstants) ||
-      !constant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_F,
-                source.psFloatConstants) ||
-      !constant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_I,
-                source.psIntConstants) ||
-      !constant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_B,
-                source.psBoolConstants) ||
-      !append(D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA,
-              source.payloads.upIndex.size(), source.payloads.upIndex.size(),
-              std::numeric_limits<std::size_t>::max()) ||
-      !append(D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA,
-              source.payloads.upVertex.size(), source.payloads.upVertex.size(),
-              std::numeric_limits<std::size_t>::max()) ||
+  if ((source.renderStateCount != 0u &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_RENDER_STATE, source.renderStateCount,
+              sizeof(D9CCommandChunkWireRenderState), 0u)) ||
+      (source.textureMask != 0u &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_TEXTURE,
+              std::popcount(source.textureMask),
+              sizeof(D9CCommandChunkWireTextureBinding), 1u)) ||
+      (destination.streamMask != 0u &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_STREAM,
+              std::popcount(destination.streamMask),
+              sizeof(D9CCommandChunkWireStreamBinding), 2u)) ||
+      (source.shaderMask != 0u &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_SHADER, std::popcount(source.shaderMask),
+              sizeof(D9CCommandChunkWireShaderBinding), 3u)) ||
+      (source.vertexInput &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT, 1u,
+              sizeof(D9CCommandChunkWireVertexInput), 4u)) ||
+      (destination.indexBuffer &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER, 1u,
+              sizeof(D9CCommandChunkWireIndexBinding), 5u)) ||
+      (source.renderTargetMask != 0u &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET,
+              std::popcount(source.renderTargetMask),
+              sizeof(D9CCommandChunkWireRenderTargetBinding), 6u)) ||
+      (source.depthStencil &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL, 1u,
+              sizeof(D9CCommandChunkWireDepthStencilBinding), 7u)) ||
+      (source.viewport &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_VIEWPORT, 1u,
+              sizeof(D9CViewport), 8u)) ||
+      (source.scissor &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_SCISSOR, 1u, sizeof(D9CRect), 9u)) ||
+      (source.material &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_MATERIAL, 1u,
+              sizeof(D9CMaterial), 10u)) ||
+      (source.clipPlaneMask != 0u &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_CLIP_PLANE,
+              std::popcount(source.clipPlaneMask),
+              sizeof(D9CCommandChunkWireClipPlane), 11u)) ||
+      (source.textureStageStateCount != 0u &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE,
+              source.textureStageStateCount,
+              sizeof(D9CDrawPacketTextureStageState), 12u)) ||
+      (source.samplerStateCount != 0u &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE,
+              source.samplerStateCount, sizeof(D9CDrawPacketSamplerState), 13u)) ||
+      (source.transformCount != 0u &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_TRANSFORM, source.transformCount,
+              sizeof(D9CDrawPacketTransform), 14u)) ||
+      (source.lightMask != 0u &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_LIGHT, std::popcount(source.lightMask),
+              sizeof(D9CCommandChunkWireLight), 15u)) ||
+      (source.lightEnableMask != 0u &&
+       !typed(D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE,
+              std::popcount(source.lightEnableMask),
+              sizeof(D9CCommandChunkWireLightEnable), 16u)) ||
+      (source.vsFloatConstants.present()
+           ? !constant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_F,
+                       source.vsFloatConstants)
+           : (source.vsFloatConstants.startRegister != 0u ||
+              !source.vsFloatConstants.registerBytes.empty())) ||
+      (source.vsIntConstants.present()
+           ? !constant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_I,
+                       source.vsIntConstants)
+           : (source.vsIntConstants.startRegister != 0u ||
+              !source.vsIntConstants.registerBytes.empty())) ||
+      (source.vsBoolConstants.present()
+           ? !constant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_B,
+                       source.vsBoolConstants)
+           : (source.vsBoolConstants.startRegister != 0u ||
+              !source.vsBoolConstants.registerBytes.empty())) ||
+      (source.psFloatConstants.present()
+           ? !constant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_F,
+                       source.psFloatConstants)
+           : (source.psFloatConstants.startRegister != 0u ||
+              !source.psFloatConstants.registerBytes.empty())) ||
+      (source.psIntConstants.present()
+           ? !constant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_I,
+                       source.psIntConstants)
+           : (source.psIntConstants.startRegister != 0u ||
+              !source.psIntConstants.registerBytes.empty())) ||
+      (source.psBoolConstants.present()
+           ? !constant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_B,
+                       source.psBoolConstants)
+           : (source.psBoolConstants.startRegister != 0u ||
+              !source.psBoolConstants.registerBytes.empty())) ||
+      (!source.payloads.upIndex.empty() &&
+       !append(D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA,
+               source.payloads.upIndex.size(), source.payloads.upIndex.size(),
+               std::numeric_limits<std::size_t>::max())) ||
+      (!source.payloads.upVertex.empty() &&
+       !append(D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA,
+               source.payloads.upVertex.size(), source.payloads.upVertex.size(),
+               std::numeric_limits<std::size_t>::max())) ||
       !checkedSizeToU32(cursor, out.payloadBytes)) return false;
   const auto addSemantic = [&](std::size_t bytes) noexcept {
     if (bytes > std::numeric_limits<std::uint32_t>::max() -
@@ -1893,6 +1931,18 @@ struct PeSemanticExactFixedEmission {
                transport.producerIdentity.firstSourceOrdinal;
   }
 };
+
+// Live owner counters used by recorder cadence/checkpoint bookkeeping.  This
+// is a call-local projection, not a receipt or cached wire-layout authority.
+// Callers must read it again after mutation or a destination boundary; a
+// previously copied count is not evidence about the new owner state.
+struct PeSemanticEmissionFrontier {
+  std::size_t recordCount = 0u;
+  std::size_t handleCount = 0u;
+  std::size_t payloadBytes = 0u;
+};
+
+static_assert(std::is_trivially_copyable_v<PeSemanticEmissionFrontier>);
 
 struct PeSemanticPinIndexEntry {
   D9CWireObjectIdentity identity{};
@@ -2664,12 +2714,16 @@ class PeSemanticBatchOwner final {
 
   // Owner-local implementation. The pure facts and qualified deltas never
   // leave tryAppendOwnedRecord(), so there is no caller-visible TOCTOU seam.
-  template <bool Observe, PeSemanticOwnedRecordInputLike Input,
+  template <bool Observe, bool NarrowConstantRollback = false,
+            PeSemanticOwnedRecordInputLike Input,
             typename Prepared, typename Commit>
     requires std::is_nothrow_invocable_r_v<bool, Commit&>
   bool appendPreparedRecord(const Input& input,
                             const Prepared& prepared,
                             Commit&& commit) noexcept {
+    static_assert(!NarrowConstantRollback ||
+                  (!Observe && PeSemanticConstantInputLike<Input> &&
+                   std::is_same_v<Prepared, PeSemanticPreparedConstantRecord>));
     const auto runPhase = [&](PeSemanticOwnerPhase phase,
                               auto&& operation) noexcept {
       if constexpr (Observe) {
@@ -2679,7 +2733,7 @@ class PeSemanticBatchOwner final {
         return operation();
       }
     };
-    const auto rollbackPhase = [&](const StateCheckpoint& checkpoint) noexcept {
+    const auto rollbackPhase = [&](const auto& checkpoint) noexcept {
       if constexpr (Observe) {
         auto scope = phaseObserver_->child(PeSemanticOwnerPhase::Rollback);
         rollback(checkpoint);
@@ -2700,8 +2754,14 @@ class PeSemanticBatchOwner final {
         lastAdmissionFailure_ = AdmissionFailure::Header;
         return false;
       }
-      const auto checkpoint = checkpointState();
-      retainedCheckpoint_ = checkpoint.retained;
+      const auto checkpoint = [&]() noexcept {
+        if constexpr (NarrowConstantRollback)
+          return checkpointConstantState();
+        else
+          return checkpointState();
+      }();
+      if constexpr (!NarrowConstantRollback)
+        retainedCheckpoint_ = checkpoint.retained;
       if (!validAdmissionHeader(input, prepared)) {
         lastAdmissionFailure_ = AdmissionFailure::Header;
         rollbackPhase(checkpoint);
@@ -2800,6 +2860,21 @@ class PeSemanticBatchOwner final {
     return tryAppendOwnedRecordUnobserved(input, std::forward<Commit>(commit));
   }
 
+  // The concrete operation can only validate the pending ticket and clear one
+  // constant shadow. It has no owner or callback access, so the unobserved
+  // path can checkpoint only constant admission effects. Arbitrary callbacks
+  // still enter tryAppendOwnedRecord() and retain the full checkpoint.
+  bool tryAppendConstantRecord(
+      const PeSemanticConstantRecordInput& input,
+      PeSemanticConstantSettlement& settlement) noexcept {
+    if (phaseObserver_)
+      return tryAppendOwnedRecordObserved(input, [&]() noexcept {
+        return settlement.settle(input.producer, input.setConst,
+                                 input.constantBytes);
+      });
+    return tryAppendConstantRecordUnobserved(input, settlement);
+  }
+
   template <typename Commit>
     requires std::is_nothrow_invocable_r_v<bool, Commit&>
   bool tryAppendSparseStatePlan(
@@ -2848,6 +2923,29 @@ class PeSemanticBatchOwner final {
     }
     return appendPreparedRecord<false>(input, prepared,
                                        std::forward<Commit>(commit));
+  }
+
+  __attribute__((noinline)) bool tryAppendConstantRecordUnobserved(
+      const PeSemanticConstantRecordInput& input,
+      PeSemanticConstantSettlement& settlement) noexcept {
+    PeSemanticPreparedConstantRecord prepared;
+    switch (prepareAdmission(input, prepared)) {
+      case PeSemanticAdmissionOutcome::Admissible:
+        break;
+      case PeSemanticAdmissionOutcome::Unavailable:
+        lastAdmissionFailure_ = AdmissionFailure::Unavailable;
+        return false;
+      case PeSemanticAdmissionOutcome::Malformed:
+        lastAdmissionFailure_ = AdmissionFailure::Malformed;
+        return false;
+      case PeSemanticAdmissionOutcome::Capacity:
+        lastAdmissionFailure_ = AdmissionFailure::Capacity;
+        return false;
+    }
+    return appendPreparedRecord<false, true>(input, prepared, [&]() noexcept {
+      return settlement.settle(input.producer, input.setConst,
+                               input.constantBytes);
+    });
   }
 
   static PeSemanticOwnerOutcome phaseOutcome(AdmissionFailure failure) noexcept {
@@ -3227,6 +3325,26 @@ class PeSemanticBatchOwner final {
     return true;
   }
 
+  // Recorder checkpoints and cadence probes only need the maintained logical
+  // frontiers.  Keep exact wire planning in emissionMetrics() as the checked
+  // cold reference and in the final emitter, where wire bytes are consumed.
+  // Private admission proves the exact layout before publishing these counts;
+  // rollback/reset/settle restore or clear that already-proved frontier.
+  bool emissionFrontier(PeSemanticEmissionFrontier& out) const noexcept {
+    out = {};
+    if (!ready_ || recordCount_ == 0u ||
+        recordCount_ > std::numeric_limits<std::uint32_t>::max() ||
+        emissionHandleCount_ > std::numeric_limits<std::uint32_t>::max() ||
+        emissionPayloadBytes_ > std::numeric_limits<std::uint32_t>::max() ||
+        !fitsStagedWire(emissionHandleCount_, emissionPayloadBytes_)) {
+      return false;
+    }
+    out = {.recordCount = recordCount_,
+           .handleCount = emissionHandleCount_,
+           .payloadBytes = emissionPayloadBytes_};
+    return true;
+  }
+
   // Normal P2 target: records, handles, and payload are independently owned
   // fixed roles. No header or role padding is copied into those spans.
   bool emitSegmented(std::span<std::byte> recordRegion,
@@ -3459,6 +3577,13 @@ class PeSemanticBatchOwner final {
   }
 
  private:
+  struct ConstantStateCheckpoint {
+    std::size_t records = 0u;
+    std::size_t semanticBytes = 0u;
+    std::size_t emissionHandles = 0u;
+    std::size_t emissionPayloadBytes = 0u;
+  };
+
   struct StateCheckpoint {
     std::size_t records = 0u;
     std::size_t semanticBytes = 0u;
@@ -4302,7 +4427,7 @@ class PeSemanticBatchOwner final {
             return true;
           });
     };
-    bool emitted = false;
+    bool emitted = true;
     const auto& shadow = sources.shadow;
     const auto& bindings = sources.bindings;
     {
@@ -4461,76 +4586,112 @@ class PeSemanticBatchOwner final {
           const auto once = [](const auto& value) noexcept {
             return [&value](const auto& emit) noexcept { return emit(value); };
           };
-          emitted =
-              visited.template operator()<D9CCommandChunkWireRenderState>(
-                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE,
-                  sourceFacts.renderStateCount, visitRenderStates) &&
-              binding.template operator()<D9CCommandChunkWireTextureBinding>(
-                  D9C_COMMAND_CHUNK_SECTION_TEXTURE,
-                  layout.quotaDeltas[kTextures], 0u, visitTextures) &&
-              binding.template operator()<D9CCommandChunkWireStreamBinding>(
-                  D9C_COMMAND_CHUNK_SECTION_STREAM,
-                  layout.quotaDeltas[kStreams], 1u, visitStreams) &&
-              binding.template operator()<D9CCommandChunkWireShaderBinding>(
-                  D9C_COMMAND_CHUNK_SECTION_SHADER,
-                  layout.quotaDeltas[kShaders], 2u, visitShaders) &&
-              binding.template operator()<D9CCommandChunkWireVertexInput>(
-                  D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT,
-                  sourceFacts.vertexInput ? 1u : 0u, 3u, visitVertexInput) &&
-              binding.template operator()<D9CCommandChunkWireIndexBinding>(
-                  D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER,
-                  destinationFacts.indexBuffer ? 1u : 0u, 4u, visitIndex) &&
-              binding.template operator()<D9CCommandChunkWireRenderTargetBinding>(
-                  D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET,
-                  layout.quotaDeltas[kRenderTargets], 5u,
-                  visitRenderTargets) &&
-              binding.template operator()<D9CCommandChunkWireDepthStencilBinding>(
-                  D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL,
-                  sourceFacts.depthStencil ? 1u : 0u, 6u,
-                  visitDepthStencil) &&
-              visited.template operator()<D9CViewport>(
-                  D9C_COMMAND_CHUNK_SECTION_VIEWPORT,
-                  sourceFacts.viewport ? 1u : 0u, once(shadow.viewportShadow())) &&
-              visited.template operator()<D9CRect>(
-                  D9C_COMMAND_CHUNK_SECTION_SCISSOR,
-                  sourceFacts.scissor ? 1u : 0u, once(shadow.scissorShadow())) &&
-              visited.template operator()<D9CMaterial>(
-                  D9C_COMMAND_CHUNK_SECTION_MATERIAL,
-                  sourceFacts.material ? 1u : 0u, once(shadow.materialShadow())) &&
-              visited.template operator()<D9CCommandChunkWireClipPlane>(
-                  D9C_COMMAND_CHUNK_SECTION_CLIP_PLANE,
-                  layout.quotaDeltas[kClipPlanes], visitClipPlanes) &&
-              visited.template operator()<D9CDrawPacketTextureStageState>(
-                  D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE,
-                  sourceFacts.textureStageStateCount, visitTss) &&
-              visited.template operator()<D9CDrawPacketSamplerState>(
-                  D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE,
-                  sourceFacts.samplerStateCount, visitSamplers) &&
-              visited.template operator()<D9CDrawPacketTransform>(
-                  D9C_COMMAND_CHUNK_SECTION_TRANSFORM,
-                  sourceFacts.transformCount, visitTransforms) &&
-              visited.template operator()<D9CCommandChunkWireLight>(
-                  D9C_COMMAND_CHUNK_SECTION_LIGHT,
-                  layout.quotaDeltas[kLights], visitLights) &&
-              visited.template operator()<D9CCommandChunkWireLightEnable>(
-                  D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE,
-                  layout.quotaDeltas[kLightEnables], visitLightEnables) &&
-              constant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_F,
-                       sourceFacts.vsFloatConstants) &&
-              constant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_I,
-                       sourceFacts.vsIntConstants) &&
-              constant(D9C_COMMAND_CHUNK_SECTION_VS_CONST_B,
-                       sourceFacts.vsBoolConstants) &&
-              constant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_F,
-                       sourceFacts.psFloatConstants) &&
-              constant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_I,
-                       sourceFacts.psIntConstants) &&
-              constant(D9C_COMMAND_CHUNK_SECTION_PS_CONST_B,
-                       sourceFacts.psBoolConstants) &&
-              raw(D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA,
-                  sourceFacts.payloads.upIndex) &&
-              raw(D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA,
-                  sourceFacts.payloads.upVertex);
+          // Layout preparation publishes the active sections in canonical
+          // schema order. Consume exactly that inventory so absent categories
+          // do not enter a typed/binding/constant/raw helper at all. The
+          // prepared descriptor remains the authority for count/order/offset;
+          // each visitor only supplies bytes for the active descriptor.
+          for (std::size_t active = 0u; active < count && emitted; ++active) {
+            const auto kind = layout.sections[active].kind;
+            switch (kind) {
+            case D9C_COMMAND_CHUNK_SECTION_RENDER_STATE:
+              emitted = visited.template operator()<D9CCommandChunkWireRenderState>(
+                  kind, sourceFacts.renderStateCount, visitRenderStates);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_TEXTURE:
+              emitted = binding.template operator()<D9CCommandChunkWireTextureBinding>(
+                  kind, layout.quotaDeltas[kTextures], 0u, visitTextures);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_STREAM:
+              emitted = binding.template operator()<D9CCommandChunkWireStreamBinding>(
+                  kind, layout.quotaDeltas[kStreams], 1u, visitStreams);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_SHADER:
+              emitted = binding.template operator()<D9CCommandChunkWireShaderBinding>(
+                  kind, layout.quotaDeltas[kShaders], 2u, visitShaders);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT:
+              emitted = binding.template operator()<D9CCommandChunkWireVertexInput>(
+                  kind, 1u, 3u, visitVertexInput);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER:
+              emitted = binding.template operator()<D9CCommandChunkWireIndexBinding>(
+                  kind, 1u, 4u, visitIndex);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET:
+              emitted = binding.template operator()<D9CCommandChunkWireRenderTargetBinding>(
+                  kind, layout.quotaDeltas[kRenderTargets], 5u,
+                  visitRenderTargets);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL:
+              emitted = binding.template operator()<D9CCommandChunkWireDepthStencilBinding>(
+                  kind, 1u, 6u, visitDepthStencil);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_VIEWPORT:
+              emitted = visited.template operator()<D9CViewport>(
+                  kind, 1u, once(shadow.viewportShadow()));
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_SCISSOR:
+              emitted = visited.template operator()<D9CRect>(
+                  kind, 1u, once(shadow.scissorShadow()));
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_MATERIAL:
+              emitted = visited.template operator()<D9CMaterial>(
+                  kind, 1u, once(shadow.materialShadow()));
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_CLIP_PLANE:
+              emitted = visited.template operator()<D9CCommandChunkWireClipPlane>(
+                  kind, layout.quotaDeltas[kClipPlanes], visitClipPlanes);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE:
+              emitted = visited.template operator()<D9CDrawPacketTextureStageState>(
+                  kind, sourceFacts.textureStageStateCount, visitTss);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE:
+              emitted = visited.template operator()<D9CDrawPacketSamplerState>(
+                  kind, sourceFacts.samplerStateCount, visitSamplers);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_TRANSFORM:
+              emitted = visited.template operator()<D9CDrawPacketTransform>(
+                  kind, sourceFacts.transformCount, visitTransforms);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_LIGHT:
+              emitted = visited.template operator()<D9CCommandChunkWireLight>(
+                  kind, layout.quotaDeltas[kLights], visitLights);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE:
+              emitted = visited.template operator()<D9CCommandChunkWireLightEnable>(
+                  kind, layout.quotaDeltas[kLightEnables], visitLightEnables);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_VS_CONST_F:
+              emitted = constant(kind, sourceFacts.vsFloatConstants);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_VS_CONST_I:
+              emitted = constant(kind, sourceFacts.vsIntConstants);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_VS_CONST_B:
+              emitted = constant(kind, sourceFacts.vsBoolConstants);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_PS_CONST_F:
+              emitted = constant(kind, sourceFacts.psFloatConstants);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_PS_CONST_I:
+              emitted = constant(kind, sourceFacts.psIntConstants);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_PS_CONST_B:
+              emitted = constant(kind, sourceFacts.psBoolConstants);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_UP_INDEX_DATA:
+              emitted = raw(kind, sourceFacts.payloads.upIndex);
+              break;
+            case D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA:
+              emitted = raw(kind, sourceFacts.payloads.upVertex);
+              break;
+            default:
+              emitted = false;
+              break;
+            }
+          }
     }
     return emitted && sectionIndex == count &&
            cursor == payload.size();
@@ -4989,6 +5150,41 @@ class PeSemanticBatchOwner final {
             .pins = {surfaceCount_, textureCount_, bufferCount_, shaderCount_,
                      declarationCount_, queryCount_},
             .retained = retainer_.beginAcquire()};
+  }
+
+  ConstantStateCheckpoint checkpointConstantState() const noexcept {
+    return {.records = recordCount_,
+            .semanticBytes = semanticBytes_,
+            .emissionHandles = emissionHandleCount_,
+            .emissionPayloadBytes = emissionPayloadBytes_};
+  }
+
+  void rollback(const ConstantStateCheckpoint& checkpoint) noexcept {
+    const auto recordsBeforeRollback = recordCount_;
+    const auto handlesBeforeRollback = emissionHandleCount_;
+    const auto payloadBeforeRollback = emissionPayloadBytes_;
+    recordCount_ = checkpoint.records;
+    semanticBytes_ = checkpoint.semanticBytes;
+    emissionHandleCount_ = checkpoint.emissionHandles;
+    emissionPayloadBytes_ = checkpoint.emissionPayloadBytes;
+    if (recordCount_ < MaxRecords) storage_->records[recordCount_] = {};
+    for (std::size_t i = checkpoint.records;
+         i < std::min(recordsBeforeRollback, Storage::maxWireRecords); ++i) {
+      storage_->wireRecords[i] = {};
+    }
+    for (std::size_t i = checkpoint.emissionHandles;
+         i < std::min(handlesBeforeRollback, Storage::maxWireHandles); ++i) {
+      storage_->wireHandles[i] = {};
+    }
+    if (checkpoint.emissionPayloadBytes < payloadBeforeRollback &&
+        checkpoint.emissionPayloadBytes < Storage::maxWirePayloadBytes) {
+      const auto count = std::min(
+          payloadBeforeRollback - checkpoint.emissionPayloadBytes,
+          Storage::maxWirePayloadBytes - checkpoint.emissionPayloadBytes);
+      std::fill_n(storage_->canonicalPayload.begin() +
+                      checkpoint.emissionPayloadBytes,
+                  count, std::byte{0});
+    }
   }
 
   void rollback(const StateCheckpoint& checkpoint) noexcept {
@@ -6279,6 +6475,19 @@ bool projectLastCommittedSemanticRecord(
 // An empty owner has no emit-ready chunk, so emissionMetrics() correctly
 // returns false there; for cadence purposes that same state is the valid zero
 // frontier. Keep this distinction shared by production and native tests.
+template <typename Owner>
+bool resolvePeSemanticCadenceFrontier(const Owner& owner,
+                                      std::size_t& handles,
+                                      std::size_t& payload) noexcept {
+  handles = payload = 0u;
+  if (owner.size() == 0u) return true;
+  PeSemanticEmissionFrontier frontier{};
+  if (!owner.emissionFrontier(frontier)) return false;
+  handles = frontier.handleCount;
+  payload = frontier.payloadBytes;
+  return true;
+}
+
 template <typename Owner>
 bool resolvePeSemanticCadenceMetrics(const Owner& owner, std::size_t& handles,
                                      std::size_t& payload,
