@@ -61,6 +61,7 @@ The CPU-ready Tape locality gap remains an independent workstream.
 
 ## Recent Leaf Documents
 
+- [present-pacing-pe-constant-bitcompare.254 - Actual PE Attribution and Branch-Reduced Constant Equality](present-pacing-pe-constant-bitcompare.254.md)
 - [present-pacing-pe-canonical-authority.253 - Grouped Borrow and Single Pin Authority](present-pacing-pe-canonical-authority.253.md)
 - [present-pacing-pe-append-boundary.252 - Family Preparation and Production Ledger Routing](present-pacing-pe-append-boundary.252.md)
 - [present-pacing-pe-append-effects.251 - Active Dispatch and Closed Append Effects](present-pacing-pe-append-effects.251.md)

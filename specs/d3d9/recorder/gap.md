@@ -13,6 +13,16 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.40's 16-byte comparison now reduces unsigned XOR/OR instead of
+short-circuit word comparisons. Current 05/06 GT2 PE sampling identifies that
+loop as a bounded local candidate, not the whole producer bottleneck. Native
+9/9, x86_64 6/6 and observed native 2/2 pass; both linked PE images vectorize
+the comparison while preserving the copy/dirty policy and ABI. See
+[H254](../../../docs/perfomance/present-pacing/present-pacing-pe-constant-bitcompare.254.md).
+Candidate runtime PE attribution, CPU consumption, 05/06 FPS recovery and
+whole-scene correctness remain open. Historical and current profiles must not
+be mixed or treated as causal evidence from one run.
+
 R-CORE-REC-7.56–7.59 specify OFF inline-constant query elimination, grouped
 source-borrow authority, retained Live binding reuse and an authoritative
 single pin index. Implemented against `9cd8f989`, with four matched-toolchain

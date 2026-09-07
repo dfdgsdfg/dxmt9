@@ -418,14 +418,16 @@ inline bool constShadowFixedElemEquals(const std::uint8_t* destination,
         return constShadowFixedLoadWord(destination) ==
                constShadowFixedLoadWord(source);
     } else {
-        return constShadowFixedLoadWord(destination) ==
-                   constShadowFixedLoadWord(source) &&
-               constShadowFixedLoadWord(destination + 4u) ==
-                   constShadowFixedLoadWord(source + 4u) &&
-               constShadowFixedLoadWord(destination + 8u) ==
-                   constShadowFixedLoadWord(source + 8u) &&
-               constShadowFixedLoadWord(destination + 12u) ==
-                   constShadowFixedLoadWord(source + 12u);
+        const auto difference =
+            (constShadowFixedLoadWord(destination) ^
+             constShadowFixedLoadWord(source)) |
+            (constShadowFixedLoadWord(destination + 4u) ^
+             constShadowFixedLoadWord(source + 4u)) |
+            (constShadowFixedLoadWord(destination + 8u) ^
+             constShadowFixedLoadWord(source + 8u)) |
+            (constShadowFixedLoadWord(destination + 12u) ^
+             constShadowFixedLoadWord(source + 12u));
+        return difference == 0u;
     }
 }
 

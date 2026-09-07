@@ -932,6 +932,17 @@ The checked generic operation remains a differential reference and serves
 inputs whose width or mode is not statically fixed. This is a local value
 refinement, not a new lifecycle or concurrency protocol.
 
+The 16-byte equality operation may reduce four unsigned word XORs with OR
+instead of short-circuiting four comparisons. The reduction is zero exactly
+when all 128 bits agree; floating-point comparisons or NaN normalization are
+not substitutes. Loads remain unaligned-safe and bounded to the element,
+and changed-only copies, exact self-alias and pending obligations retain the
+reference behavior. This representation lets the target compiler choose
+integer SIMD without placing Darwin/ARM instructions in the x86 PE ABI.
+Linked PE32/PE64 evidence and actual Wine timing must decide the tradeoff:
+early differences no longer skip the other word loads, so fewer branches do
+not by themselves establish lower CPU time.
+
 R-CORE-REC-7.41 narrows the compact destination-rebase operation to one lexical
 source qualification. Source metadata and pending-ticket checks may share that
 qualification with destination preparation; the retention callback still

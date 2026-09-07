@@ -1054,6 +1054,99 @@ void testConstTransitionBoundedStateSpace() {
   }
 }
 
+void testFixedConstElemEqualsMatrix() {
+  constexpr std::size_t kElemBytes = 16u;
+  constexpr std::size_t kMaxAlignment = 15u;
+  constexpr std::size_t kStorageBytes = kElemBytes + kMaxAlignment;
+  std::array<std::uint8_t, kElemBytes> baseline{};
+  for (std::size_t i = 0u; i < baseline.size(); ++i) {
+    baseline[i] = static_cast<std::uint8_t>(0x31u + i * 17u);
+  }
+
+  // Exercise every possible byte alignment and every bit in the four-word
+  // element. The direct memcmp result is the byte-level oracle for the
+  // fixed-width reducer, including explicit first/last-word differences.
+  for (std::size_t alignment = 0u; alignment <= kMaxAlignment; ++alignment) {
+    std::array<std::uint8_t, kStorageBytes> destinationStorage{};
+    std::array<std::uint8_t, kStorageBytes> sourceStorage{};
+    auto* destination = destinationStorage.data() + alignment;
+    auto* source = sourceStorage.data() + ((alignment * 7u) % 16u);
+    std::memcpy(destination, baseline.data(), kElemBytes);
+    std::memcpy(source, baseline.data(), kElemBytes);
+
+    check(constShadowFixedElemEquals<16u>(destination, source) &&
+              std::memcmp(destination, source, kElemBytes) == 0,
+          "fixed 16-byte equality accepts aligned and unaligned equal input");
+    check(constShadowFixedElemEquals<16u>(destination, destination),
+          "fixed 16-byte equality accepts exact self-alias");
+
+    for (std::size_t bit = 0u; bit < kElemBytes * 8u; ++bit) {
+      std::memcpy(source, baseline.data(), kElemBytes);
+      source[bit / 8u] ^= static_cast<std::uint8_t>(1u << (bit % 8u));
+      const bool expected = std::memcmp(destination, source, kElemBytes) == 0;
+      check(constShadowFixedElemEquals<16u>(destination, source) == expected,
+            "fixed 16-byte equality matches memcmp for every bit");
+      if (bit == 0u || bit == 31u || bit == 96u || bit == 127u) {
+        check(!constShadowFixedElemEquals<16u>(destination, source),
+              "fixed 16-byte equality detects first/last-word differences");
+      }
+    }
+
+    // Compare the same unaligned source bytes through the generic reducer so
+    // the word-wise comparator remains state-equivalent, not just byte-equal.
+    ConstShadow generic;
+    ConstShadow fixed;
+    generic.reserveCapacity(kElemBytes, 1u);
+    fixed.reserveCapacity(kElemBytes, 1u);
+    const auto genericResult = reduceConstShadowTransition(
+        generic, dxmt9::d3d9::pe::RecorderPhase::Live,
+        ConstShadowTransitionMode::Apply, 0u, 1u, source, kElemBytes);
+    applyConstShadowLiveFixedWidth<16u>(fixed, 0u, 1u, source);
+    check(genericResult.valid, "fixed equality matrix generic reference is valid");
+    checkConstShadowEquivalent(generic, fixed,
+                               "fixed equality matrix generic reference");
+  }
+
+  // Keep the mixed equal/changed prefix and existing-dirty behavior coupled
+  // to the comparator oracle, including an exact self-alias after a clear.
+  std::array<std::uint8_t, 2u * kElemBytes + kMaxAlignment> mixedStorage{};
+  std::array<std::uint8_t, 2u * kElemBytes> seed{};
+  auto* mixed = mixedStorage.data() + 5u;
+  std::memcpy(seed.data(), baseline.data(), kElemBytes);
+  std::memcpy(seed.data() + kElemBytes, baseline.data(), kElemBytes);
+  std::memcpy(mixed, baseline.data(), kElemBytes);
+  std::memcpy(mixed + kElemBytes, baseline.data(), kElemBytes);
+  mixed[kElemBytes + 4u] ^= 0x80u;
+  mixed[kElemBytes + 12u] ^= 0x01u;
+  ConstShadow generic;
+  ConstShadow fixed;
+  generic.reserveCapacity(2u * kElemBytes, 2u);
+  fixed.reserveCapacity(2u * kElemBytes, 2u);
+  (void)reduceConstShadowTransition(
+      generic, dxmt9::d3d9::pe::RecorderPhase::Live,
+      ConstShadowTransitionMode::Apply, 0u, 2u, seed.data(), kElemBytes);
+  applyConstShadowLiveFixedWidth<16u>(fixed, 0u, 2u, seed.data());
+  generic.clear();
+  fixed.clear();
+  const auto genericMixed = reduceConstShadowTransition(
+      generic, dxmt9::d3d9::pe::RecorderPhase::Live,
+      ConstShadowTransitionMode::Apply, 0u, 2u, mixed, kElemBytes);
+  applyConstShadowLiveFixedWidth<16u>(fixed, 0u, 2u, mixed);
+  check(genericMixed.valid && generic.dirtyStart == fixed.dirtyStart &&
+            generic.dirtyEnd == fixed.dirtyEnd &&
+            generic.dirtyElems == fixed.dirtyElems && fixed.dirtyStart == 1u &&
+            fixed.dirtyEnd == 2u && fixed.dirtyElems[0] == 0u &&
+            fixed.dirtyElems[1] == 1u,
+        "fixed equality preserves mixed prefix and existing dirty state");
+  checkConstShadowEquivalent(generic, fixed,
+                             "fixed equality mixed update state");
+  const auto* selfAlias = fixed.values.data() + kElemBytes;
+  const auto beforeAlias = fixed;
+  applyConstShadowLiveFixedWidth<16u>(fixed, 1u, 1u, selfAlias);
+  checkConstShadowEquivalent(beforeAlias, fixed,
+                             "fixed equality exact self-alias preserves pending obligations");
+}
+
 template <std::size_t ElemSize>
 void testFixedConstLiveApplyEdges() {
   constexpr std::uint32_t kWarmCount = 4u;
@@ -3150,6 +3243,7 @@ int main() {
     testConstTransitionBoundedStateSpace();
     testFixedConstLiveApplyEdges<4u>();
     testFixedConstLiveApplyEdges<16u>();
+    testFixedConstElemEqualsMatrix();
     testFixedConstLiveApplyObservation<4u>();
     testFixedConstLiveApplyObservation<16u>();
     testFixedConstLiveApplyDifferential<4u>();
