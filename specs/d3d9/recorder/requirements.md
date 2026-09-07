@@ -1040,3 +1040,34 @@ remain unchanged; cadence bytes are not interchangeable with exact wire size.
 Native A/B/A, callback failure and capacity-retry traces must compare the
 production-used projection to the checked reference. Any exposed reusable
 receipt additionally requires stale-owner/source rejection.
+
+**R-CORE-REC-7.52** Disabled recorder fault injection must not compute its
+capacity-only prediction or query its limits. Owner availability and frontier
+validity failures remain unconditional. Enabled injection must preserve its
+existing payload-based threshold, pre-effect failure, and retry identity;
+that threshold must not be replaced with the distinct cadence-byte policy.
+
+**R-CORE-REC-7.53** Append family selection may precede construction of
+family-specific views, ordinals and callback environments. Constant appends
+must not prepare sparse/generic inputs. One shared transaction choreography
+must retain capacity pre/post behavior, retry, source ordinals, owner admission,
+pending settlement, observer events and HRESULT/fail-stop disposition. Native
+differential traces must exercise all families and failure edges; PE32/PE64
+linked inspection must prove that unused preparation actually disappears.
+
+**R-CORE-REC-7.54** Compact preparation must have one owner for sparse-layout
+initialization. Invalid or partially prepared witnesses must remain unusable
+across malformed, unavailable, capacity and retry outcomes. Adjacent logical
+quota publications may share one private authority check only while no
+callback or qualifying-frontier mutation intervenes. Source requalification
+and post-materialization checks remain authoritative. No persistent validity
+cache or unchecked public capability may replace these checks.
+
+**R-CORE-REC-7.55** Production semantic-owner ledger lookup may bypass native
+test-only TLS overrides through a statically selected access policy. The
+admission/emission transaction implementation must remain shared. Production
+configuration is process-cached and owner-qualified; disabled operation must
+not construct ledger events or perform TLS lookup. Override-aware native
+access must retain nested restoration and thread isolation. Both access
+policies must exercise real owner operations in fresh enabled/disabled tests;
+test-only dispatch must not silently replace the production path in evidence.

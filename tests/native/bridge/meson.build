@@ -70,6 +70,11 @@ pe_semantic_owner_spec = executable(
 )
 
 test('dxmt9-pe-semantic-owner-spec', pe_semantic_owner_spec)
+foreach ledger_gate : ['0', '1']
+  test('dxmt9-pe-semantic-owner-ledger-' + ledger_gate + '-spec',
+       pe_semantic_owner_spec,
+       env: ['DXMT9_PERF_COPY_MATERIALIZATION_LEDGER=' + ledger_gate])
+endforeach
 
 # Closed constant-settlement effects: no owner mutation or callback authority.
 pe_constant_settlement_spec = executable(
@@ -80,6 +85,20 @@ pe_constant_settlement_spec = executable(
   link_args: dxmt9_test_link_args,
 )
 test('dxmt9-pe-constant-settlement-spec', pe_constant_settlement_spec)
+
+pe_append_preparation_spec = executable(
+  'dxmt9-pe-append-preparation-spec',
+  ['pe_append_preparation_spec.cpp',
+   '../../../src/d3d9/d3d9_pe_producer.cpp',
+   '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
+   '../../../src/d3d9/d3d9_pe_chunk_draw.cpp',
+   '../../../src/d3d9/d3d9_pe_chunk_nondraw.cpp'],
+  include_directories: [dxmt9_inc, include_directories('../../../src/d3d9')],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  cpp_args: ['-DDXMT9_PE_SHADOW_TEST_SEAM=1'],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-pe-append-preparation-spec', pe_append_preparation_spec)
 
 pe_aggregate_retainer_spec = executable(
   'dxmt9-pe-aggregate-retainer-spec',
@@ -189,6 +208,12 @@ pe_diagnostics_spec = executable(
 test('dxmt9-pe-diagnostics-spec',
      pe_diagnostics_spec,
      args: [meson.project_source_root()])
+foreach ledger_gate : ['0', '1']
+  test('dxmt9-pe-diagnostics-ledger-' + ledger_gate + '-spec',
+       pe_diagnostics_spec,
+       args: [meson.project_source_root()],
+       env: ['DXMT9_PERF_COPY_MATERIALIZATION_LEDGER=' + ledger_gate])
+endforeach
 
 pe_recorder_fault_matrix_spec = executable(
   'dxmt9-pe-recorder-fault-matrix-spec',

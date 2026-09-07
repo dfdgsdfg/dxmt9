@@ -13,6 +13,22 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.52–7.55 cover fault-only prediction gating, family-specific append
+preparation, single-owner compact layout/quota work and production ledger
+routing without test-only TLS access. They are implemented with bounded
+native/linked evidence: four matched-toolchain full builds, native PE/audit
+36/36, x86_64 focused 14/14 and unchanged TLA pass. Fresh ledger OFF/ON tests
+exercise both real owner policies. Compact reuse/rollback, all six constant
+families, generic capacity/settlement failure and canonical-byte comparison
+pass. The single source transaction body is family-specialized; exports,
+vtable/RTTI owners and 12 public/internal hot-entry codegen metrics match.
+Individual append frames shrink, but both PE DLLs grow 29,184 bytes.
+The matched Unix provider and bridge DLLs remain byte-identical. See
+[H252](../../../docs/perfomance/present-pacing/present-pacing-pe-append-boundary.252.md),
+including rejected intermediate toolchain evidence. The private COM-device
+choreography is not an end-to-end native harness; whole-scene correctness,
+FPS neutrality/gain and current CPU attribution remain open.
+
 R-CORE-REC-7.48–7.51 specify active-section dispatch, effect-specific constant
 rollback, disabled-ledger TLS access and qualified emission-frontier reuse.
 They are implemented with bounded native and linked evidence. A concrete

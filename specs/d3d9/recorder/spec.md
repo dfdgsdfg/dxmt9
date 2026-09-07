@@ -995,6 +995,25 @@ Exact emission bytes and historical cadence bytes remain separate quantities.
 Ledger overrides are thread-local test capabilities; their initialization
 must not impose a dynamic TLS guard on each disabled production append.
 
+R-CORE-REC-7.52–7.55 narrow the next outer boundaries. The recorder always
+checks owner/frontier health, but computes fault-only capacity prediction only
+when injection is enabled. Payload-based fault prediction and cadence-byte
+flush decisions remain distinct. A single append choreography consumes a
+family-specific adapter selected before constructing its preparation state;
+constants do not construct generic/sparse input views or closures. Adapter
+specialization does not duplicate retry or failure policy.
+
+The compact layout planner owns initialization of its layout fields; the
+outer witness revokes validity before any failed preparation can expose stale
+facts. Consecutive logical quota claims may share private authority while the
+qualifying frontier is unchanged and no callback intervenes. Retention and
+materialization remain requalification boundaries. The production semantic
+owner selects a production-ledger access policy at compile time, while the
+override-aware native owner selects the scoped accessor. Both instantiate
+the same owner transaction body, without extra mutable owner cache state.
+Fresh-process native tests exercise production enabled/disabled behavior
+separately from nested/thread-local override semantics.
+
 These changes refine existing local transaction steps rather than introduce a
 new queue protocol. Production-bound native byte, failure, stale-identity and
 rollback traces are the bounded refinement layer; existing recorder TLA

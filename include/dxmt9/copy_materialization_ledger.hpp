@@ -381,6 +381,28 @@ activeCopyMaterializationLedger(
   return productionCopyMaterializationLedgers()[ownerIndex];
 }
 
+// Ledger routing is selected by the owning transaction at compile time.  The
+// production policy deliberately has no path to the native-only TLS override;
+// this keeps a scoped test sink from changing production attribution while
+// retaining one cached, owner-qualified pointer lookup.
+struct ProductionCopyMaterializationLedgerAccess final {
+  [[nodiscard]] static CopyMaterializationLedger* resolve(
+      CopyMaterializationOwner owner) noexcept {
+    const auto ownerIndex = copyMaterializationOwnerIndex(owner);
+    return productionCopyMaterializationLedgers()[ownerIndex];
+  }
+};
+
+// Native/default owners use the existing active accessor.  Its lookup remains
+// owner-qualified and therefore retains nested restoration and thread
+// isolation supplied by ScopedCopyMaterializationLedger.
+struct ScopedCopyMaterializationLedgerAccess final {
+  [[nodiscard]] static CopyMaterializationLedger* resolve(
+      CopyMaterializationOwner owner) noexcept {
+    return activeCopyMaterializationLedger(owner);
+  }
+};
+
 class ScopedCopyMaterializationLedger final {
 public:
   ScopedCopyMaterializationLedger(CopyMaterializationOwner owner,

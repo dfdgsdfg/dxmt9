@@ -6,6 +6,7 @@
  * recorder/cold-COM instantiations. */
 
 #include "d3d9_pe_device_impl.hpp"
+#include "d3d9_pe_append_preparation.hpp"
 
 #include <new>
 
@@ -214,53 +215,49 @@ HRESULT D3D9DeviceImpl::appendSemanticRecord(
     auto* const semanticOwner = semanticBatchOwner();
     if (!semanticOwner || !semanticRecorderState_) return D3DERR_NOTAVAILABLE;
 
+    return dxmt9::d3d9::pe::withPeSemanticAppendPreparation(
+        semanticRecorderState_->stagedFamily, semanticRecorderState_->stagedInput,
+        semanticRecorderState_->stagedConstantInput,
+        semanticRecorderState_->stagedSparsePlan,
+        semanticRecorderState_->stagedSparsePlanProducer,
+        [&](auto& preparation) {
+          return appendSemanticRecordPrepared(type, bytes, semanticOwner,
+                                              preparation);
+        });
+}
+
+template <typename Preparation>
+HRESULT D3D9DeviceImpl::appendSemanticRecordPrepared(
+    std::uint32_t type, std::size_t bytes,
+    PeProductionSemanticBatchOwner* semanticOwner,
+    Preparation& preparation) {
+    constexpr bool constantFamily =
+        dxmt9::d3d9::pe::isPeSemanticConstantAppendPreparation<Preparation>;
+    constexpr bool sparsePlanFamily =
+        dxmt9::d3d9::pe::isPeSemanticSparseAppendPreparation<Preparation>;
+
+    auto& stagedInput = semanticRecorderState_->stagedInput;
     const auto maxRecords = maxPendingCommandRecords();
     const auto maxBytes = maxPendingCommandBytes();
     const auto recordCountBefore = semanticOwner->size();
     const auto payloadBytesBefore = semanticRecorderState_->cadenceBytes;
-    const bool constantFamily =
-        semanticRecorderState_->stagedFamily ==
-        PeSemanticStagingFamily::Constant;
-    const bool sparsePlanFamily =
-        semanticRecorderState_->stagedFamily ==
-        PeSemanticStagingFamily::SparsePlan;
-    const auto& stagedInput = semanticRecorderState_->stagedInput;
-    auto& stagedConstantInput = semanticRecorderState_->stagedConstantInput;
-    dxmt9::d3d9::pe::PeSemanticRecordInputView inputView{
-        .staged = &stagedInput,
-        .destination = {
-            .recordType = type,
-            .sourceOrdinal = 0u,
-            .recordOrdinal = 0u,
-            .sparse = &stagedInput.sparse,
-        },
-    };
-    std::uint64_t sparsePlanSourceOrdinal = 0u;
-    std::uint64_t sparsePlanRecordOrdinal = 0u;
     // This is the only destination-context rebuild. The normal path borrows
     // the staged descriptor directly; only draw stream/index spans are copied
     // into the recorder-owned overlay. CapacityPre calls this again after the
     // destination changes, without copying the full staged input.
     const auto rebase = [&]() __attribute__((always_inline)) noexcept {
-        if (constantFamily) {
-            stagedConstantInput.recordType = type;
-            stagedConstantInput.sourceOrdinal =
-                semanticRecorderState_->sourceOrdinalHint != 0u
-                    ? semanticRecorderState_->sourceOrdinalHint
-                    : semanticOwner->nextSourceOrdinal();
-            stagedConstantInput.recordOrdinal =
-                semanticOwner->nextRecordOrdinal();
+        const auto source = semanticRecorderState_->sourceOrdinalHint != 0u
+            ? semanticRecorderState_->sourceOrdinalHint
+            : semanticOwner->nextSourceOrdinal();
+        const auto record = semanticOwner->nextRecordOrdinal();
+        if constexpr (constantFamily) {
+            preparation.setDestination(type, source, record);
             return true;
-        }
-        if (sparsePlanFamily) {
-            sparsePlanSourceOrdinal =
-                semanticRecorderState_->sourceOrdinalHint != 0u
-                    ? semanticRecorderState_->sourceOrdinalHint
-                    : semanticOwner->nextSourceOrdinal();
-            sparsePlanRecordOrdinal = semanticOwner->nextRecordOrdinal();
+        } else if constexpr (sparsePlanFamily) {
+            preparation.setDestination(type, source, record);
             PeRecorderGuard planGuard(recorderState_.recorderMutex,
                                       recorderState_.recorderLockRequired);
-            auto& plan = semanticRecorderState_->stagedSparsePlan;
+            auto& plan = *preparation.plan;
             return planGuard.withCapability(
                 recorderState_.recorderOwnership,
                 recorderState_.stateBlockTransaction.capabilityEpoch(),
@@ -271,11 +268,11 @@ HRESULT D3D9DeviceImpl::appendSemanticRecord(
                       type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
                       type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
                   if (!destinationDependent) {
-                    const auto* const source = plan.source(access);
-                    if (!source || !transactionTicket.valid() ||
-                        transactionTicket.generation != source->pendingTicket.generation ||
+                    const auto* const sourceFacts = plan.source(access);
+                    if (!sourceFacts || !transactionTicket.valid() ||
+                        transactionTicket.generation != sourceFacts->pendingTicket.generation ||
                         !recorderState_.peState.pendingTicketMatches(
-                            source->pendingTicket)) return false;
+                            sourceFacts->pendingTicket)) return false;
                     return plan.destination().chunkContextFinalized;
                   }
                   // Compact plans resolve only destination-dependent facts here.
@@ -318,36 +315,31 @@ HRESULT D3D9DeviceImpl::appendSemanticRecord(
                                  submittedIndexBufferKnown_,
                                  submittedIndexBufferWireValue_);
                 });
+        } else {
+            preparation.setDestination(type, source, record);
+            if (stagedInput.producer !=
+                    dxmt9::d3d9::pe::PeSemanticProducerKind::DrawPrimitive &&
+                stagedInput.producer !=
+                    dxmt9::d3d9::pe::PeSemanticProducerKind::DrawIndexedPrimitive) {
+              return true;
+            }
+            auto& destinationSparse = semanticRecorderState_->destinationSparse;
+            destinationSparse = stagedInput.sparse;
+            preparation.inputView.destination.sparse = &destinationSparse;
+            dxmt9::d3d9::pe::PeDrawParams params{};
+            params.recordType = type;
+            params.primitiveType = stagedInput.draw.primitiveType;
+            params.baseVertex = stagedInput.draw.baseVertex;
+            params.minVertex = stagedInput.draw.minVertex;
+            params.numVertices = stagedInput.draw.numVertices;
+            params.startVertex = stagedInput.draw.startVertex;
+            params.startIndex = stagedInput.draw.startIndex;
+            params.primitiveCount = stagedInput.draw.primitiveCount;
+            return addChunkContextSections(
+                currentChunkContext(), recorderState_.peState,
+                recorderState_.peBindingView, params,
+                recorderState_.peSparseScratch, destinationSparse);
         }
-        inputView.destination.recordType = type;
-        inputView.destination.sourceOrdinal =
-            semanticRecorderState_->sourceOrdinalHint != 0u
-                ? semanticRecorderState_->sourceOrdinalHint
-                : semanticOwner->nextSourceOrdinal();
-        inputView.destination.recordOrdinal = semanticOwner->nextRecordOrdinal();
-        inputView.destination.sparse = &stagedInput.sparse;
-        if (stagedInput.producer !=
-                dxmt9::d3d9::pe::PeSemanticProducerKind::DrawPrimitive &&
-            stagedInput.producer !=
-                dxmt9::d3d9::pe::PeSemanticProducerKind::DrawIndexedPrimitive) {
-            return true;
-        }
-        auto& destinationSparse = semanticRecorderState_->destinationSparse;
-        destinationSparse = stagedInput.sparse;
-        inputView.destination.sparse = &destinationSparse;
-        dxmt9::d3d9::pe::PeDrawParams params{};
-        params.recordType = type;
-        params.primitiveType = stagedInput.draw.primitiveType;
-        params.baseVertex = stagedInput.draw.baseVertex;
-        params.minVertex = stagedInput.draw.minVertex;
-        params.numVertices = stagedInput.draw.numVertices;
-        params.startVertex = stagedInput.draw.startVertex;
-        params.startIndex = stagedInput.draw.startIndex;
-        params.primitiveCount = stagedInput.draw.primitiveCount;
-        return addChunkContextSections(
-            currentChunkContext(), recorderState_.peState,
-            recorderState_.peBindingView, params,
-            recorderState_.peSparseScratch, destinationSparse);
     };
     const auto rebaseInputView = [&]() noexcept {
         if (diagnostics_ && diagnostics_->config.statsDecimationN != 0u) {
@@ -358,16 +350,20 @@ HRESULT D3D9DeviceImpl::appendSemanticRecord(
         return rebase();
     };
     const auto sourceOrdinal = [&]() noexcept {
-        return constantFamily
-            ? stagedConstantInput.sourceOrdinal
-            : (sparsePlanFamily ? sparsePlanSourceOrdinal
-                                : inputView.destination.sourceOrdinal);
+        if constexpr (constantFamily)
+            return preparation.input->sourceOrdinal;
+        else if constexpr (sparsePlanFamily)
+            return preparation.sourceOrdinal;
+        else
+            return preparation.inputView.destination.sourceOrdinal;
     };
     const auto recordOrdinal = [&]() noexcept {
-        return constantFamily
-            ? stagedConstantInput.recordOrdinal
-            : (sparsePlanFamily ? sparsePlanRecordOrdinal
-                                : inputView.destination.recordOrdinal);
+        if constexpr (constantFamily)
+            return preparation.input->recordOrdinal;
+        else if constexpr (sparsePlanFamily)
+            return preparation.recordOrdinal;
+        else
+            return preparation.inputView.destination.recordOrdinal;
     };
     const bool willFlushBeforeAppend = recordCountBefore != 0u &&
         (recordCountBefore >= maxRecords ||
@@ -436,47 +432,55 @@ HRESULT D3D9DeviceImpl::appendSemanticRecord(
     auto commitSemanticRecord =
         [&](const dxmt9::d3d9::pe::RecorderLockCapability* access)
         noexcept {
-        const bool indexedReceiptCandidate =
-            sparsePlanFamily && access != nullptr &&
-            semanticRecorderState_->stagedSparsePlanProducer ==
-                dxmt9::d3d9::pe::PeSemanticProducerKind::DrawIndexedPrimitive &&
-            semanticRecorderState_->stagedSparsePlan.destination().indexBuffer;
+        bool indexedReceiptCandidate = false;
+        if constexpr (sparsePlanFamily) {
+            indexedReceiptCandidate =
+                access != nullptr &&
+                preparation.producer ==
+                    dxmt9::d3d9::pe::PeSemanticProducerKind::DrawIndexedPrimitive &&
+                preparation.plan->destination().indexBuffer;
+        }
         bool indexedReceiptReady = !indexedReceiptCandidate;
         if (indexedReceiptCandidate) {
             // Receipt extraction is a source-borrow operation. It must finish
             // before settlement consumes the pending source and invalidates
             // the plan's dependency witness.
-            indexedReceiptReady =
-                semanticRecorderState_->stagedSparsePlan.withBindingSource(
+            if constexpr (sparsePlanFamily) {
+              indexedReceiptReady = preparation.plan->withBindingSource(
                     *access,
                     [&](const dxmt9::d3d9::pe::PeBindingView& bindings) noexcept {
                       indexedReceiptWire = d9cWireHandleValue(
                           toWireHandle(bindings.indexBuffer.object));
                       indexedReceiptBound = bindings.indexBuffer.object != nullptr;
                     });
+            }
         }
-        semanticSettlement = indexedReceiptReady &&
-            (sparsePlanFamily
-                 ? (access != nullptr && settleSemanticSparsePlan(
-                       *access, semanticRecorderState_->stagedSparsePlan,
-                       recordOrdinal()))
-                 : settleSemanticRecord(inputView, recordOrdinal()));
+        if constexpr (sparsePlanFamily) {
+            semanticSettlement = indexedReceiptReady && access != nullptr &&
+                settleSemanticSparsePlan(*access, *preparation.plan,
+                                         recordOrdinal());
+        } else if constexpr (
+            dxmt9::d3d9::pe::isPeSemanticGenericAppendPreparation<Preparation>) {
+            semanticSettlement = settleSemanticRecord(preparation.inputView,
+                                                      recordOrdinal());
+        } else {
+            semanticSettlement = false;
+        }
         hasIndexedReceipt = indexedReceiptCandidate && indexedReceiptReady &&
                             semanticSettlement;
         return semanticSettlement;
     };
     const auto admitSemanticRecord = [&]() noexcept {
-        if (constantFamily) {
+        if constexpr (constantFamily) {
             dxmt9::d3d9::pe::PeSemanticConstantSettlement settlement(
                 recorderState_.peConsts, recorderState_.peState,
                 recorderState_.chunkTransaction.pendingTicket());
             const bool accepted = semanticOwner->tryAppendConstantRecord(
-                stagedConstantInput, settlement);
+                *preparation.input, settlement);
             semanticSettlement = semanticOwner->lastAdmissionFailure() !=
                 PeProductionSemanticBatchOwner::AdmissionFailure::Settlement;
             return accepted;
-        }
-        if (sparsePlanFamily) {
+        } else if constexpr (sparsePlanFamily) {
             PeRecorderGuard planGuard(recorderState_.recorderMutex,
                                       recorderState_.recorderLockRequired);
             return planGuard.withCapability(
@@ -484,15 +488,16 @@ HRESULT D3D9DeviceImpl::appendSemanticRecord(
                 recorderState_.stateBlockTransaction.capabilityEpoch(),
                 [&](const auto& access) noexcept {
                   return semanticOwner->tryAppendSparseStatePlan(
-                      access, semanticRecorderState_->stagedSparsePlan,
-                      semanticRecorderState_->stagedSparsePlanProducer, type,
+                      access, *preparation.plan, preparation.producer, type,
                       D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, sourceOrdinal(),
                       recordOrdinal(),
                       [&]() noexcept { return commitSemanticRecord(&access); });
                 });
+        } else {
+            return semanticOwner->tryAppendOwnedRecord(
+                preparation.inputView,
+                [&]() noexcept { return commitSemanticRecord(nullptr); });
         }
-        return semanticOwner->tryAppendOwnedRecord(
-            inputView, [&]() noexcept { return commitSemanticRecord(nullptr); });
     };
     bool admitted = admitSemanticRecord();
     if (!admitted &&
@@ -556,15 +561,18 @@ HRESULT D3D9DeviceImpl::appendSemanticRecord(
             semanticSettlement ? 1u : 0u,
             static_cast<unsigned>(semanticOwner->lastAdmissionFailure()));
     }
-    if (admitted && !constantFamily && !sparsePlanFamily &&
-               stagedInput.producer ==
-                   dxmt9::d3d9::pe::PeSemanticProducerKind::DrawIndexedPrimitive &&
-               inputView.destination.sparse->indexBuffers.size() == 1u) {
-        const auto& index = inputView.destination.sparse->indexBuffers.front();
-        hasIndexedReceipt = true;
-        indexedReceiptWire = d9cWireHandleValue(
-            toWireHandle(index.object.object));
-        indexedReceiptBound = index.object.object != nullptr;
+    if constexpr (dxmt9::d3d9::pe::isPeSemanticGenericAppendPreparation<Preparation>) {
+        if (admitted &&
+            stagedInput.producer ==
+                dxmt9::d3d9::pe::PeSemanticProducerKind::DrawIndexedPrimitive &&
+            preparation.inputView.destination.sparse->indexBuffers.size() == 1u) {
+          const auto& index =
+              preparation.inputView.destination.sparse->indexBuffers.front();
+          hasIndexedReceipt = true;
+          indexedReceiptWire = d9cWireHandleValue(
+              toWireHandle(index.object.object));
+          indexedReceiptBound = index.object.object != nullptr;
+        }
     }
     clearSemanticRecordInput();
     std::size_t handles = 0u;
@@ -640,15 +648,18 @@ HRESULT D3D9DeviceImpl::appendSemanticRecordBoundary(
             *owner, handles, payload)) {
         return D3DERR_DEVICELOST;
     }
-    const std::size_t maxBytes = maxPendingCommandBytes();
-    const bool payloadWouldExceed =
-        payload > maxBytes || bytes > maxBytes - std::min(payload, maxBytes);
-    const bool willFlushBeforeAppend = owner->size() != 0u &&
-        (owner->size() >= maxPendingCommandRecords() || payloadWouldExceed);
     std::int32_t injectedFaultHr = 0;
     // This is the semantic lane's pre-effect capacity seam. No owner state
     // has changed, so the caller may retry the same source ordinal verbatim.
-    if (dxmt9PeRecorderFaultsEnabled() && willFlushBeforeAppend &&
+    const bool willFlushBeforeAppend =
+        dxmt9::d3d9::pe::peSemanticFaultWouldFlush(
+            dxmt9PeRecorderFaultsEnabled(), owner->size(), payload, bytes,
+            [&]() noexcept {
+              return dxmt9::d3d9::pe::PeSemanticAppendLimits{
+                  .maxRecords = maxPendingCommandRecords(),
+                  .maxBytes = maxPendingCommandBytes()};
+            });
+    if (willFlushBeforeAppend &&
         dxmt9PeConsumeRecorderFault(PeRecorderFaultPoint::CapacityPreReserve,
                                     injectedFaultHr)) {
         return static_cast<HRESULT>(injectedFaultHr);

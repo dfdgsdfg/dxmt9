@@ -13,9 +13,11 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 
 #include "dxmt9/core_snapshots.hpp"
+#include "dxmt9/copy_materialization_ledger.hpp"
 
 namespace {
 
@@ -188,6 +190,91 @@ void testCopyMaterializationReportSnapshotValue() {
     check(dxmt9::core::copyMaterializationSnapshotHasActivity(snapshot),
           "copy-materialization activity includes semantic and retained rows");
   }
+}
+
+void testCopyMaterializationLedgerAccessPolicies() {
+  using dxmt9::core::CopyMaterializationLedger;
+  using dxmt9::core::CopyMaterializationOwner;
+  using dxmt9::core::ProductionCopyMaterializationLedgerAccess;
+  using dxmt9::core::ScopedCopyMaterializationLedger;
+  using dxmt9::core::ScopedCopyMaterializationLedgerAccess;
+
+  static_assert(std::is_empty_v<ProductionCopyMaterializationLedgerAccess>);
+  static_assert(std::is_empty_v<ScopedCopyMaterializationLedgerAccess>);
+
+  const bool enabled = dxmt9::core::copyMaterializationLedgerEnabled();
+  auto &registry = dxmt9::core::copyMaterializationLedgerRegistry();
+  auto *productionPe = ProductionCopyMaterializationLedgerAccess::resolve(
+      CopyMaterializationOwner::Pe);
+  auto *productionUnix = ProductionCopyMaterializationLedgerAccess::resolve(
+      CopyMaterializationOwner::Unix);
+  check(productionPe ==
+                (enabled ? &registry.ledger(CopyMaterializationOwner::Pe)
+                         : nullptr) &&
+            productionUnix ==
+                (enabled ? &registry.ledger(CopyMaterializationOwner::Unix)
+                         : nullptr),
+        "production policy resolves the cached owner-qualified pair");
+
+  CopyMaterializationLedger outer;
+  CopyMaterializationLedger nested;
+  {
+    ScopedCopyMaterializationLedger outerScope(CopyMaterializationOwner::Pe,
+                                               outer);
+    check(ScopedCopyMaterializationLedgerAccess::resolve(
+              CopyMaterializationOwner::Pe) == &outer,
+          "scoped policy honors an active owner override");
+    check(ProductionCopyMaterializationLedgerAccess::resolve(
+              CopyMaterializationOwner::Pe) == productionPe,
+          "production policy ignores a scoped override");
+    {
+      ScopedCopyMaterializationLedger nestedScope(
+          CopyMaterializationOwner::Pe, nested);
+      check(ScopedCopyMaterializationLedgerAccess::resolve(
+                CopyMaterializationOwner::Pe) == &nested,
+            "scoped policy honors a nested override");
+      check(ProductionCopyMaterializationLedgerAccess::resolve(
+                CopyMaterializationOwner::Pe) == productionPe,
+            "production policy remains independent of nested overrides");
+    }
+    check(ScopedCopyMaterializationLedgerAccess::resolve(
+              CopyMaterializationOwner::Pe) == &outer,
+          "scoped policy restores its outer override");
+  }
+  check(ScopedCopyMaterializationLedgerAccess::resolve(
+            CopyMaterializationOwner::Pe) == productionPe,
+        "scoped policy restores the cached production route");
+
+  CopyMaterializationLedger mainOverride;
+  CopyMaterializationLedger workerOverride;
+  bool workerSawProduction = false;
+  bool workerSawScoped = false;
+  bool workerRestoredProduction = false;
+  {
+    ScopedCopyMaterializationLedger mainScope(CopyMaterializationOwner::Unix,
+                                              mainOverride);
+    std::thread worker([&] {
+      workerSawProduction =
+          ScopedCopyMaterializationLedgerAccess::resolve(
+              CopyMaterializationOwner::Unix) == productionUnix;
+      {
+        ScopedCopyMaterializationLedger workerScope(
+            CopyMaterializationOwner::Unix, workerOverride);
+        workerSawScoped = ScopedCopyMaterializationLedgerAccess::resolve(
+                              CopyMaterializationOwner::Unix) ==
+                          &workerOverride;
+      }
+      workerRestoredProduction =
+          ScopedCopyMaterializationLedgerAccess::resolve(
+              CopyMaterializationOwner::Unix) == productionUnix;
+    });
+    worker.join();
+    check(ScopedCopyMaterializationLedgerAccess::resolve(
+              CopyMaterializationOwner::Unix) == &mainOverride,
+          "scoped policy keeps the parent thread override isolated");
+  }
+  check(workerSawProduction && workerSawScoped && workerRestoredProduction,
+        "scoped policy preserves thread isolation and restoration");
 }
 
 void testNullableDiagnosticDispatchAndClock() {
@@ -930,6 +1017,25 @@ void testSourceContracts(const std::filesystem::path &root) {
                 "copy descriptor retains a named ownership/ABI reason");
   checkContains(copyLedger, "productionCopyMaterializationLedgers",
                 "disabled production lookup uses cached owner pointers");
+  checkContains(copyLedger, "struct ProductionCopyMaterializationLedgerAccess",
+                "production ledger routing is a named static policy");
+  checkContains(copyLedger, "struct ScopedCopyMaterializationLedgerAccess",
+                "native ledger routing is a named static policy");
+  check(countOccurrences(semanticOwner, "LedgerAccess::resolve(") == 3u,
+        "all owner admission and final-wire lookups share the selected policy");
+  checkNotContains(semanticOwner, "activeCopyMaterializationLedger(",
+                   "owner implementation cannot bypass the selected policy");
+  const auto productionPolicyBegin = copyLedger.find(
+      "struct ProductionCopyMaterializationLedgerAccess");
+  const auto productionPolicyEnd = copyLedger.find(
+      "struct ScopedCopyMaterializationLedgerAccess", productionPolicyBegin);
+  check(productionPolicyBegin != std::string::npos &&
+            productionPolicyEnd != std::string::npos &&
+            copyLedger.substr(productionPolicyBegin,
+                              productionPolicyEnd - productionPolicyBegin)
+                    .find("gCopyMaterializationOverrideLedgers") ==
+                std::string_view::npos,
+        "production policy has no test-only TLS dependency");
   checkContains(copyLedger, "inline thread_local constinit",
                 "test overrides require no dynamic thread-local initializer");
   checkContains(copyLedger, "gCopyMaterializationOverrideLedgers{}",
@@ -1315,6 +1421,7 @@ int main(int argc, char **argv) {
     check(argc == 2, "project source root argument is present");
     testCompactSampleNesting();
     testOptionalOwnerAllocationAndConfig();
+    testCopyMaterializationLedgerAccessPolicies();
     testNullableDiagnosticDispatchAndClock();
     testCopyMaterializationReportSnapshotValue();
     testStateBlockFaultSelector();

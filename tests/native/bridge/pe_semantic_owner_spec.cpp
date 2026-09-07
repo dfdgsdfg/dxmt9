@@ -1,4 +1,5 @@
 #include "d3d9_pe_semantic_owner.hpp"
+#include "d3d9_pe_semantic_recorder_state.hpp"
 #include "d3d9_pe_recorder_transaction.hpp"
 #include "d3d9_pe_recorder.hpp"
 #include "d3d9_pe_producer.hpp"
@@ -626,6 +627,84 @@ void compactSparsePreparationSelectsSchemaWitness() {
             kPeSemanticMaxBindingOccurrences &&
             compact.identityWitness.count == 0u,
         "compact sparse preparation leaves its bounded witness inactive on reject");
+}
+
+void compactPreparedLayoutReusesAbaAndRetriesMalformed() {
+  using Outcome = PeSemanticAdmissionOutcome;
+  Owner owner;
+  PeHotStateShadow shadowA{};
+  PeHotStateShadow shadowB{};
+  shadowA.writer().pendingRenderStatesTyped().set(renderStateSlotKey(7u),
+                                                  0x71u);
+  shadowB.writer().pendingTextureMask() = 1u;
+  PeConstShadowBlock constantsA{};
+  PeConstShadowBlock constantsB{};
+  PeBindingView bindingsA{};
+  PeBindingView bindingsB{};
+  D9CTexture textureB;
+  bindingsB.textures[0] = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(&textureB,
+                                                                  0xc7au);
+  PeDrawPayloads payloadsA{};
+  PeDrawPayloads payloadsB{};
+  PeDrawParams params{.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                      .primitiveType = 4u,
+                      .primitiveCount = 1u};
+  PeChunkContext chunkA{};
+  PeChunkContext chunkB{};
+  SparseStatePlan planA;
+  SparseStatePlan planB;
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken thread;
+  std::uint64_t epoch = 1u;
+  RecorderLockGuard guard(mutex, false);
+  const bool trace = guard.withCapability(
+      thread, epoch, [&](const auto& access) noexcept {
+        if (!buildSparseStatePlan(access, shadowA, constantsA, bindingsA,
+                                   payloadsA, params, false, false, planA) ||
+            !finalizeSparseStatePlanChunkContext(access, chunkA, planA) ||
+            !buildSparseStatePlan(access, shadowB, constantsB, bindingsB,
+                                  payloadsB, params, false, false, planB) ||
+            !finalizeSparseStatePlanChunkContext(access, chunkB, planB))
+          return false;
+        PeSemanticSparsePlanRecordInput inputA{
+            .access = &access,
+            .sparsePlan = &planA,
+            .producer = PeSemanticProducerKind::DrawPrimitive,
+            .recordType = params.recordType,
+            .recordFlags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+            .sourceOrdinal = 1u,
+            .recordOrdinal = 1u,
+        };
+        PeSemanticSparsePlanRecordInput inputB = inputA;
+        inputB.sparsePlan = &planB;
+        inputB.sourceOrdinal = 2u;
+        inputB.recordOrdinal = 2u;
+        PeSemanticCompactPreparedRecord witness{};
+        if (owner.prepareAdmission(inputA, witness) != Outcome::Admissible ||
+            witness.sparseLayout.quotaDeltas[0] != 1u)
+          return false;
+        const auto layoutA = witness.sparseLayout;
+        if (owner.prepareAdmission(inputB, witness) != Outcome::Admissible ||
+            witness.sparseLayout.quotaDeltas[0] != 0u ||
+            witness.sparseLayout.quotaDeltas[1] != 1u)
+          return false;
+        if (owner.prepareAdmission(inputA, witness) != Outcome::Admissible ||
+            witness.sparseLayout.sectionCount != layoutA.sectionCount ||
+            witness.sparseLayout.payloadBytes != layoutA.payloadBytes ||
+            witness.sparseLayout.semanticDelta != layoutA.semanticDelta ||
+            witness.sparseLayout.quotaDeltas != layoutA.quotaDeltas ||
+            witness.identityWitness.count != 0u)
+          return false;
+        auto malformed = inputA;
+        malformed.sparsePlan = nullptr;
+        if (owner.prepareAdmission(malformed, witness) != Outcome::Malformed ||
+            witness.valid() || witness.sparseLayout.valid)
+          return false;
+        return owner.prepareAdmission(inputA, witness) == Outcome::Admissible &&
+               witness.sparseLayout.quotaDeltas == layoutA.quotaDeltas;
+      });
+  check(trace,
+        "compact layout reuse resets A/B/A active quotas and retries after malformed input");
 }
 
 template <typename Wire, std::size_t RowCount, typename Object,
@@ -4855,6 +4934,69 @@ void ownerQualifiedMaterializationLedger() {
   check(surface.refs == 1u, "ledger fixture releases its warm pin");
 }
 
+void productionAndScopedOwnerLedgerPolicies() {
+  using namespace dxmt9::core;
+  using LiveOwner = PeSemanticBatchOwner<22u, 8u, 128u, 8u, 8u,
+                                        ProductionCopyMaterializationLedgerAccess>;
+  static_assert(sizeof(LiveOwner) == sizeof(Owner));
+  static_assert(std::is_same_v<PeProductionSemanticBatchOwner,
+      PeSemanticBatchOwner<256u, 256u, 1310720u, 1024u, 2048u,
+                           ProductionCopyMaterializationLedgerAccess>>);
+  constexpr auto admission = CopyMaterializationClass::PeSemanticOwnerAdmission;
+  constexpr auto finalWire = CopyMaterializationClass::PeWireFinal;
+  auto& production = copyMaterializationLedgerRegistry().ledger(
+      CopyMaterializationOwner::Pe);
+  const auto beforeAdmission = production.snapshot(admission);
+  const auto beforeWire = production.snapshot(finalWire);
+  CopyMaterializationLedger scoped;
+  ScopedCopyMaterializationLedger override(CopyMaterializationOwner::Pe, scoped);
+  D9CSurface surface;
+  auto input = base(PeSemanticProducerKind::Present, 0xc101u, 1u);
+  input.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0xc102u, 3u);
+  auto exercise = [&](auto& owner) {
+    check(owner.tryAppendOwnedRecord(input, []() noexcept { return true; }),
+          "both access policies accept the same source");
+    check(!owner.tryAppendOwnedRecord(input, []() noexcept { return false; }) &&
+              owner.size() == 1u,
+          "both access policies preserve settlement rollback and prior prefix");
+    PeSemanticExactFixedEmission first{};
+    PeSemanticExactFixedEmission repeated{};
+    check(owner.emitExactFixed(first), "policy owner emits canonical wire");
+    std::vector<std::byte> result(first.wire.begin(), first.wire.end());
+    check(owner.emitExactFixed(repeated) && repeated.wireBytes == result.size() &&
+              std::memcmp(repeated.wire.data(), result.data(), result.size()) == 0,
+          "policy owner repeated emission retains canonical bytes");
+    check(owner.settle(), "policy owner settles retained materialization");
+    owner.reset();
+    return result;
+  };
+  LiveOwner live;
+  const auto liveBytes = exercise(live);
+  check(scoped.snapshot(admission).calls == 0u &&
+            scoped.snapshot(finalWire).calls == 0u && surface.refs == 1u,
+        "production owner ignores TLS override and releases its pins");
+  const auto liveAdmission = production.snapshot(admission);
+  const auto liveWire = production.snapshot(finalWire);
+  const bool enabled = copyMaterializationLedgerEnabled();
+  check(liveAdmission.calls - beforeAdmission.calls == (enabled ? 1u : 0u) &&
+            liveWire.calls - beforeWire.calls == (enabled ? 2u : 0u) &&
+            liveWire.bytes - beforeWire.bytes ==
+                (enabled ? 2u * liveBytes.size() : 0u) &&
+            liveAdmission.retainedBytes == beforeAdmission.retainedBytes &&
+            liveWire.retainedBytes == beforeWire.retainedBytes,
+        "fresh production gate attributes only successful work and conserves retention");
+  Owner native;
+  check(exercise(native) == liveBytes && surface.refs == 1u,
+        "scoped and production policies preserve exact wire and resource ownership");
+  check(scoped.snapshot(admission).calls == 1u &&
+            scoped.snapshot(finalWire).calls == 2u &&
+            scoped.snapshot(admission).retainedBytes == 0u &&
+            scoped.snapshot(finalWire).retainedBytes == 0u &&
+            production.snapshot(admission).calls == liveAdmission.calls &&
+            production.snapshot(finalWire).calls == liveWire.calls,
+        "scoped owner keeps exact overrides without double production attribution");
+}
+
 void calibratedOwnerPhaseObserver() {
   using ObservedOwner = PeSemanticBatchOwner<4u, 2u, 4096u, 4u, 4u>;
   dxmt9::core::CopyMaterializationLedger copyLedger;
@@ -6021,6 +6163,7 @@ int main(int argc, char** argv) {
     static_assert(!std::is_move_constructible_v<Owner>);
     compactIdentityWitnessBoundMatchesSevenFamilies();
     compactSparsePreparationSelectsSchemaWitness();
+    compactPreparedLayoutReusesAbaAndRetriesMalformed();
     duplicateSurfacePinSmoke();
     qualifiedBufferReferenceLookup();
     pureAdmissionPlanDeduplicatesQualifiedBindings();
@@ -6083,6 +6226,7 @@ int main(int argc, char** argv) {
     committedLeaseQualificationUsesOwnerPins();
     productionOwnerProjectionBindsColdLedger();
     ownerQualifiedMaterializationLedger();
+    productionAndScopedOwnerLedgerPolicies();
     calibratedOwnerPhaseObserver();
     observerSettlementFamilyTruthTable();
     observedSettlementChildrenSampleAtN1();

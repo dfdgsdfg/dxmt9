@@ -184,7 +184,7 @@ struct PeLocalObjectIdentity {
 
 template <std::size_t MaxRecords, std::size_t MaxPins,
           std::size_t MaxSemanticBytes, std::size_t MaxRects,
-          std::size_t MaxSparseValues>
+          std::size_t MaxSparseValues, typename LedgerAccess>
 class PeSemanticBatchOwner;
 
 // A logical Render Tape pending-chunk lease may only be issued by a final-wire
@@ -209,7 +209,7 @@ class CommittedPendingChunkLease final {
  private:
   friend class CommandChunkBuilder;
   template <std::size_t, std::size_t, std::size_t, std::size_t,
-            std::size_t>
+            std::size_t, typename>
   friend class PeSemanticBatchOwner;
 
   explicit CommittedPendingChunkLease(PeWireObjectRef object) noexcept

@@ -130,7 +130,8 @@ inline void stagePeSemanticConstantInput(
 // optional diagnostics and capture owners: every negotiated PE device has one
 // transaction, while observers remain nullable and cold.
 using PeProductionSemanticBatchOwner = dxmt9::d3d9::pe::PeSemanticBatchOwner<
-    256u, 256u, 1310720u, 1024u, 2048u>;
+    256u, 256u, 1310720u, 1024u, 2048u,
+    dxmt9::core::ProductionCopyMaterializationLedgerAccess>;
 
 struct PeProductionSemanticRecorderState {
   PeProductionSemanticRecorderState() {

@@ -1578,8 +1578,18 @@ struct PeSemanticPreparedRecordT {
   // intact avoids a second whole-witness clear without exposing stale state to
   // any admission or emission consumer.
   void resetForAdmission() noexcept {
-    plan.valid = false;
     sparseLayout.reset();
+    resetAdmissionFrontier();
+  }
+
+  void resetForCompactAdmission() noexcept {
+    sparseLayout.valid = false;
+    resetAdmissionFrontier();
+  }
+
+ private:
+  void resetAdmissionFrontier() noexcept {
+    plan.valid = false;
     bindingOccurrences.reset();
     identityWitness.reset();
     retentionDeltas.fill(0u);
@@ -1598,6 +1608,7 @@ struct PeSemanticPreparedRecordT {
     admissible = false;
   }
 
+ public:
   bool valid() const noexcept {
     return admissible && plan.valid && rule != nullptr;
   }
@@ -2027,7 +2038,8 @@ struct PeSemanticBatchStorage {
 // scalar rows and variable tails serialize directly into canonicalPayload.
 template <std::size_t MaxRecords = 64u, std::size_t MaxPins = 256u,
           std::size_t MaxSemanticBytes = 1u << 20u,
-          std::size_t MaxRects = 1024u, std::size_t MaxSparseValues = 2048u>
+          std::size_t MaxRects = 1024u, std::size_t MaxSparseValues = 2048u,
+          typename LedgerAccess = dxmt9::core::ScopedCopyMaterializationLedgerAccess>
 class PeSemanticBatchOwner final {
  public:
   static_assert(MaxPins <= static_cast<std::size_t>(kPeSemanticNoSlot));
@@ -2311,7 +2323,10 @@ class PeSemanticBatchOwner final {
   PeSemanticAdmissionOutcome prepareAdmission(
       const PeSemanticSparsePlanRecordInput& input,
       PeSemanticPreparedRecordT<IdentityCapacity, AdmissionPlanT>& witness) const noexcept {
-    witness.resetForAdmission();
+    // The compact planner owns the complete layout reset.  Keep the outer
+    // witness invalid for early unavailable/malformed exits without clearing
+    // the planner's 17-entry quota/scalar product twice.
+    witness.resetForCompactAdmission();
     witness.plan = {};
     if (!ready_) return PeSemanticAdmissionOutcome::Unavailable;
     if (input.access == nullptr || input.sparsePlan == nullptr)
@@ -3449,7 +3464,7 @@ class PeSemanticBatchOwner final {
 
   bool emitExactFixed(PeSemanticExactFixedEmission& out) const noexcept {
     if (!emitExactFixed(std::span<std::byte>(storage_->wire), out)) return false;
-    auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+    auto* ledger = LedgerAccess::resolve(
         dxmt9::core::CopyMaterializationOwner::Pe);
     if (!ledger) return true;
     if (exactWireLedger_ && exactWireRetainedBytes_ != 0u) {
@@ -3678,7 +3693,7 @@ class PeSemanticBatchOwner final {
       out.wireBytes = plan.wireBytes;
       return out.valid();
     };
-    auto* const ledger = dxmt9::core::activeCopyMaterializationLedger(
+    auto* const ledger = LedgerAccess::resolve(
         dxmt9::core::CopyMaterializationOwner::Pe);
     if (!ledger) return emit();
     dxmt9::core::CopyMaterializationEvent event(
@@ -5099,7 +5114,7 @@ class PeSemanticBatchOwner final {
     requires std::is_nothrow_invocable_r_v<bool, Admit&>
   bool recordAdmission(Admit&& admit) noexcept {
     auto&& operation = admit;
-    auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
+    auto* ledger = LedgerAccess::resolve(
         dxmt9::core::CopyMaterializationOwner::Pe);
     if (!ledger) return operation();
 
@@ -5918,15 +5933,11 @@ class PeSemanticBatchOwner final {
     return true;
   }
 
-  bool copySparsePlan(const PeSemanticSparsePlanRecordInput& input,
-                      const auto& prepared,
-                      const PreparedAppendAuthority& authority) noexcept {
-    // The private authority carries the already-complete active-category quota
-    // proof and the unchanged destination frontier. Source validity and the
-    // physical payload/handle checks remain in the serializer below; this
-    // path only publishes the proved logical deltas.
-    if (!authority.bindsSource(input, prepared, *this) ||
-        !prepared.sparseLayout.valid) return false;
+  bool copySparsePlan(const auto& prepared) noexcept {
+    // The private authority has already proved the active-category quota and
+    // unchanged destination frontier. This first adjacent claim publishes only
+    // sparse logical counts; record/handle/payload emission frontiers remain
+    // untouched until materialization and cacheEmissionMetrics.
     const auto& quota = prepared.sparseLayout.quotaDeltas;
     if (!forEachPreparedSparseQuota(
             prepared.sparseLayout,
@@ -5946,11 +5957,7 @@ class PeSemanticBatchOwner final {
     return true;
   }
 
-  bool copyVariablePayloads(
-      const PeSemanticSparsePlanRecordInput& input,
-      PeSemanticSparsePlanRecordStaging&, const auto& prepared,
-      const PreparedAppendAuthority& authority) noexcept {
-    if (!authority.bindsSource(input, prepared, *this)) return false;
+  void claimCompactVariableQuota(const auto& prepared) noexcept {
     // Compact plans serialize these borrowed ranges directly from the plan;
     // only the aggregate logical quota is committed. Do not populate the
     // seven logical range fields or their six constant headers in staging.
@@ -5958,6 +5965,21 @@ class PeSemanticBatchOwner final {
     // physical payload bounds are still checked by materialization; this
     // assignment only publishes the already-proven logical quota.
     semanticBytes_ += prepared.sparseLayout.semanticDelta;
+  }
+
+  bool copyPreparedCompactSparseAndVariable(
+      const PeSemanticSparsePlanRecordInput& input,
+      const auto& prepared,
+      const PreparedAppendAuthority& authority) noexcept {
+    // These two logical claims are adjacent and callback-free. Bind the source
+    // once, then publish sparse counts followed by semantic bytes; the later
+    // serializer and emission-metric publication retain their own
+    // requalification checks.
+    if (!authority.bindsSource(input, prepared, *this) ||
+        !prepared.sparseLayout.valid)
+      return false;
+    if (!copySparsePlan(prepared)) return false;
+    claimCompactVariableQuota(prepared);
     return true;
   }
 
@@ -5988,16 +6010,12 @@ class PeSemanticBatchOwner final {
 
   bool copyPreparedSparseAndVariable(
       const PeSemanticSparsePlanRecordInput& input,
-      PeSemanticSparsePlanRecordStaging& slot,
+      PeSemanticSparsePlanRecordStaging&,
       const auto& prepared,
       const PreparedAppendAuthority& authority) noexcept {
-    if (!copySparsePlan(input, prepared, authority)) {
+    if (!copyPreparedCompactSparseAndVariable(input, prepared, authority)) {
       if (lastAdmissionFailure_ == AdmissionFailure::None)
         lastAdmissionFailure_ = AdmissionFailure::Sparse;
-      return false;
-    }
-    if (!copyVariablePayloads(input, slot, prepared, authority)) {
-      lastAdmissionFailure_ = AdmissionFailure::VariablePayload;
       return false;
     }
     return true;
@@ -6498,10 +6516,10 @@ bool resolvePeSemanticCadenceMetrics(const Owner& owner, std::size_t& handles,
 
 template <std::size_t MaxRecords, std::size_t MaxPins,
           std::size_t MaxSemanticBytes, std::size_t MaxRects,
-          std::size_t MaxSparseValues>
+          std::size_t MaxSparseValues, typename LedgerAccess>
 bool appendOwnedRecord(
     PeSemanticBatchOwner<MaxRecords, MaxPins, MaxSemanticBytes, MaxRects,
-                         MaxSparseValues>& owner,
+                         MaxSparseValues, LedgerAccess>& owner,
     const PeSemanticRecordInput& input) noexcept {
   return owner.appendOwnedRecord(input);
 }
