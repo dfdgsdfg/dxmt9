@@ -29,7 +29,16 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
-The latest optimization [H256](present-pacing-pe-autogen-bound-slots.256.md)
+The latest optimization [H257](present-pacing-pe-constant-copy.257.md)
+expresses changed 16-byte constants as one bounded copy; both linked PE images
+use two SIMD instructions instead of eight scalar copy instructions. Native,
+ABI and real x86/x64 setter/StateBlock checks pass. Sampler-OFF 05/06 GT2
+spot checks are 29.052/18.083 FPS with zero recorded renderer failures.
+The first 06 run was user-interfered and is excluded; its replacement rounds
+to README 18.1, while 05 remains below 30.1. Separate current PE self-PC
+profiles, CPU savings and repeatable recovery remain open. README is unchanged.
+
+The preceding optimization [H256](present-pacing-pe-autogen-bound-slots.256.md)
 elides immutable non-AUTOGEN slots before draw-time arrays/RTTI, with native
 bounded refinement, x86/x64 PE pixels and a detected missing-Apply mutant.
 Sampler-OFF 05/06 GT2 spot checks are 29.121/17.428 FPS versus README

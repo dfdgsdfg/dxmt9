@@ -13,6 +13,16 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.40's changed 16-byte materialization is now one bounded copy,
+with two linked SIMD instructions replacing eight scalar copy instructions
+in both PE images. Native value/differential, ABI and actual x86/x64
+setter/StateBlock checks pass. [H257](../../../docs/perfomance/present-pacing/present-pacing-pe-constant-copy.257.md)
+records sampler-OFF 05/06 GT2 spot checks at `5d764f37`: 29.052/18.083 FPS,
+with zero recorded renderer failures. 06 r1 is excluded for user interference;
+r2 rounds to README 18.1, but 05 remains below 30.1. Current full PE profiles,
+measured CPU savings and repeatable recovery remain open. The byte-copy
+change adds no new state transition or concurrency-proof claim.
+
 R-CORE-REC-7.60 immutable AUTOGEN-bound-slot elision is implemented, with
 bounded native refinement, linked PE empty-branch checks and x86/x64 PE
 setter/StateBlock mip readback. A deliberate missing Apply publication fails
