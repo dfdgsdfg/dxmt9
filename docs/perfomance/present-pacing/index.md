@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+Correctness prerequisite [H263](present-pacing-pe-retain-fault.263.md) restores
+the injected retain HRESULT through owner rollback. Twelve PE32/PE64 Wine
+fault/retry cases pass across inline OFF/ON. This proves public error/Live
+state behavior, not final draw pixels, an inline default change or CPU savings.
+
 Current refinement: [H262](present-pacing-pe-compact-binding-validation.262.md)
 removes duplicate compact typed-ref validation and per-row range lookup,
 retaining full source/pin/wire checks. Native counterexamples and the

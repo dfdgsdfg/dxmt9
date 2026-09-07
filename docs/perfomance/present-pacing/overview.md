@@ -29,6 +29,12 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H263](present-pacing-pe-retain-fault.263.md) fixes a pre-existing loss of
+injected retain HRESULT at the semantic-owner adapter. Twelve real PE fault
+cases pass across both widths and inline modes. The final-draw/pixel and
+repeatable-economy gates remain open; this cold correctness fix is not a
+performance gain or authority to promote inline constants.
+
 Current refinement [H262](present-pacing-pe-compact-binding-validation.262.md)
 reuses admission identity validity without weakening full source equality or
 physical pin validation. Native checks and the deliberately failing equality

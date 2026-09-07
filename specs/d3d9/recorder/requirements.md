@@ -565,6 +565,10 @@ failure, capture reject/throw, Reset recovery, and retry. It must assert exact
 HRESULT/poison disposition, no leaked retain, no partial blob publication, and
 no duplicate accepted command. An unavailable fault seam remains an explicit
 gap; ordinary successful Wine execution cannot replace it.
+An injected unique-retain failure must preserve its configured HRESULT through
+owner rollback to the failed public append. Its one-shot receipt must not leak
+into the next admission. Successful production append must not consume or
+query a diagnostic failure result.
 
 **R-CORE-REC-7.6** A future multi-record CPU-ready Tape producer must own one
 complete immutable semantic batch before transport begins. The batch must be

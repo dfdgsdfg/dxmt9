@@ -157,6 +157,12 @@ void testRetainBoundaryRollback(const char* selector,
   check(pid >= 0, "retain fault fixture forks a fresh process");
   if (pid == 0) {
     setenv("DXMT9_PE_RECORDER_FAULT", selector, 1);
+    constexpr auto fallback = static_cast<std::int32_t>(0x8876086cu);
+    const auto config = peRecorderFaultConfigFromString(selector);
+    const auto expected = config.hresult[static_cast<std::size_t>(
+        PeRecorderFaultPoint::RetainAcquire)];
+    const bool initiallyEmpty =
+        dxmt9PeRecorderAdmissionFailureHresult(fallback) == fallback;
     D3D9PePendingCommandRetainer retainer(2u);
     D9CBuffer first{};
     D9CBuffer second{};
@@ -171,7 +177,10 @@ void testRetainBoundaryRollback(const char* selector,
     retainer.rollback(acquired);
     const bool rolledBack = first.refs == 1u && second.refs == 1u &&
         retainer.size() == 0u;
-    _exit(shape && rolledBack ? 0 : 1);
+    const bool resultPreserved =
+        dxmt9PeRecorderAdmissionFailureHresult(fallback) == expected &&
+        dxmt9PeRecorderAdmissionFailureHresult(fallback) == fallback;
+    _exit(initiallyEmpty && shape && rolledBack && resultPreserved ? 0 : 1);
   }
   int status = 0;
   check(waitpid(pid, &status, 0) == pid && WIFEXITED(status) &&
@@ -247,6 +256,7 @@ int main() {
     testCapacityAndRetainRemainUnattempted();
     testRetainBoundaryRollback("retain_acquire=0", false);
     testRetainBoundaryRollback("retain_acquire=1", true);
+    testRetainBoundaryRollback("retain_acquire=0x80004003", false);
     testRetainDuplicateAndCapacityDoNotConsumeBudget();
     testBridgeCaptureResetEnvelope();
     testCaptureDispositions();

@@ -13,6 +13,17 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.5's unique-retain injected HRESULT now survives failed owner
+admission and successful recorder rollback. The cold receipt is consumed only
+on failed append exits; rollback/invariant failure retains fail-stop precedence.
+[H263](../../../docs/perfomance/present-pacing/present-pacing-pe-retain-fault.263.md)
+records the reproduced H262 failure with both original and extended fixtures,
+then 12 passing current PE32/PE64 Wine cases across inline OFF/ON and three
+retain selectors. Native one-shot rollback pins and staged-image qualification
+complement those runs. Public getters do not prove final draw constants/pixels;
+all-family Wine faults, capture/bridge ambiguity and private corrupt-frontier
+injection remain open. This is not an inline-mode promotion or CPU/FPS gain.
+
 R-CORE-REC-7.36 compact binding emission now omits the temporary raw-to-typed
 conversion while retaining full current-source/mapping equality, and reuses
 section-local checked ranges. Physical-pin, wire, retain/fault and rollback

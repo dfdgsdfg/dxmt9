@@ -540,6 +540,17 @@ other explicit sparse forms retain `PeSparseScratch` / `SparseStateInput`.
 Both adapters use the same owner and transaction. Neither source form owns
 final-wire lifetime or survives synchronous admission.
 
+An injected unique-retain rejection stores a cold one-shot HRESULT receipt
+because the typed retainer and owner admission APIs return only success/failure.
+`appendSemanticRecordPrepared` consumes that receipt only on a failed append
+exit, after attempting recorder rollback. Successful rollback of a rejected
+admission returns the injected HRESULT; successful admission with an invalid
+frontier, or failed rollback, takes fail-stop precedence. An empty rolled-back
+owner has no emission frontier and is a normal rejection shape; an invalid
+nonempty frontier is not hidden by the receipt. Invariant exits consume/discard
+the receipt too, preventing contamination of a later attempt. Successful
+production append never queries this diagnostic receipt.
+
 ## 6. Shared predicates and counterexamples
 
 Implementation must provide one host-buildable, production-used transition

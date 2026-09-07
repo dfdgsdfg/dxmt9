@@ -578,32 +578,38 @@ HRESULT D3D9DeviceImpl::appendSemanticRecordPrepared(
     dxmt9::d3d9::pe::PeSemanticEmissionFrontier frontier{};
     if (!semanticOwner->emissionFrontier(frontier)) {
         // A failed callback admission has already rolled back the owner and its
-        // typed pins. Only a successful admission with an invalid projection
-        // is an invariant failure requiring fail-stop.
-        (void)recorderState_.settleSemanticEmitter(
+        // typed pins. A successful admission with an invalid projection or
+        // an unsuccessful transaction rollback requires fail-stop.
+        const bool rolledBack = recorderState_.settleSemanticEmitter(
             false, semanticOwner->size(), priorHandles, priorPayload,
             semanticOwner->retainedCount());
-        if (admitted) {
+        const HRESULT rejectedHr =
+            dxmt9PeRecorderAdmissionFailureHresult(D3DERR_INVALIDCALL);
+        if (admitted || !rolledBack) {
             (void)recorderState_.chunkTransaction.poison();
             poisonStateBlockTransaction();
             return D3DERR_DEVICELOST;
         }
-        return D3DERR_INVALIDCALL;
+        // An empty rolled-back owner has no emission frontier. A nonempty
+        // invalid frontier must not be masked by the consumed fault receipt.
+        return semanticOwner->size() == 0u ? rejectedHr : D3DERR_INVALIDCALL;
     }
     handles = frontier.handleCount;
     payload = frontier.payloadBytes;
     if (!admitted || !recorderState_.settleSemanticEmitter(
                           admitted, semanticOwner->size(), handles, payload,
                           semanticOwner->retainedCount())) {
-        (void)recorderState_.settleSemanticEmitter(
+        const bool rolledBack = recorderState_.settleSemanticEmitter(
             false, semanticOwner->size(), priorHandles, priorPayload,
             semanticOwner->retainedCount());
-        if (admitted) {
+        const HRESULT rejectedHr =
+            dxmt9PeRecorderAdmissionFailureHresult(D3DERR_INVALIDCALL);
+        if (admitted || !rolledBack) {
             (void)recorderState_.chunkTransaction.poison();
             poisonStateBlockTransaction();
             return D3DERR_DEVICELOST;
         }
-        return D3DERR_INVALIDCALL;
+        return rejectedHr;
     }
     if (!observeCommittedSemanticOwnerRecord()) {
         (void)recorderState_.chunkTransaction.poison();

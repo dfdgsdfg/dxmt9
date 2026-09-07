@@ -253,6 +253,19 @@ inline bool dxmt9PeRecorderFaultsEnabled() noexcept {
   return enabled;
 }
 
+// Only the failed admission exit may consume this receipt, after rollback.
+// The retainer's bool result deliberately carries no diagnostic HRESULT;
+// the cold one-shot receipt preserves it without widening hot owner APIs.
+inline std::int32_t dxmt9PeRecorderAdmissionFailureHresult(
+    std::int32_t fallback) noexcept {
+  std::int32_t injectedResult;
+  if (dxmt9PeRecorderFaultsEnabled() &&
+      dxmt9PeTakeRecorderRetainFaultResult(injectedResult)) {
+    return injectedResult;
+  }
+  return fallback;
+}
+
 inline bool dxmt9PeConsumeRecorderFault(PeRecorderFaultPoint point,
                                         std::int32_t &result) noexcept {
   if (point == PeRecorderFaultPoint::RetainAcquire) {

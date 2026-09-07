@@ -163,6 +163,50 @@ void capacity_pre_reserve(const char *fault) {
   mark_reached(fault);
 }
 
+// R-BACK-2.52: the same public constant values must survive a failed draw
+// admission in both standalone and inline modes. Getters observe PE Live
+// state only; final replayed draw bytes are covered by the native replay
+// differential, not inferred from these getter checks.
+struct ConstantRetryValues {
+  float floats[8] = {1.25f, -2.0f, 3.5f, 4.0f,
+                     -5.0f, 6.25f, 7.0f, -8.5f};
+  int ints[8] = {17, -23, 31, -47, 59, -61, 73, -89};
+  BOOL bools[2] = {TRUE, FALSE};
+};
+
+void set_retry_constants(IDirect3DDevice9 *device,
+                         const ConstantRetryValues &values) {
+  CHECK_HR(device->SetVertexShaderConstantF(3, values.floats, 2), D3D_OK);
+  CHECK_HR(device->SetVertexShaderConstantI(3, values.ints, 2), D3D_OK);
+  CHECK_HR(device->SetVertexShaderConstantB(3, values.bools, 2), D3D_OK);
+  CHECK_HR(device->SetPixelShaderConstantF(3, values.floats, 2), D3D_OK);
+  CHECK_HR(device->SetPixelShaderConstantI(3, values.ints, 2), D3D_OK);
+  CHECK_HR(device->SetPixelShaderConstantB(3, values.bools, 2), D3D_OK);
+}
+
+void check_retry_constants(IDirect3DDevice9 *device,
+                           const ConstantRetryValues &expected) {
+  // Fresh sentinels per family prevent an unwritten output from inheriting
+  // a previous stage's matching values.
+  float vs_f[8] = {}, ps_f[8] = {};
+  int vs_i[8] = {}, ps_i[8] = {};
+  BOOL vs_b[2] = {}, ps_b[2] = {};
+  CHECK_HR(device->GetVertexShaderConstantF(3, vs_f, 2), D3D_OK);
+  CHECK_HR(device->GetVertexShaderConstantI(3, vs_i, 2), D3D_OK);
+  CHECK_HR(device->GetVertexShaderConstantB(3, vs_b, 2), D3D_OK);
+  CHECK_HR(device->GetPixelShaderConstantF(3, ps_f, 2), D3D_OK);
+  CHECK_HR(device->GetPixelShaderConstantI(3, ps_i, 2), D3D_OK);
+  CHECK_HR(device->GetPixelShaderConstantB(3, ps_b, 2), D3D_OK);
+  if (std::memcmp(vs_f, expected.floats, sizeof(vs_f)) ||
+      std::memcmp(ps_f, expected.floats, sizeof(ps_f)) ||
+      std::memcmp(vs_i, expected.ints, sizeof(vs_i)) ||
+      std::memcmp(ps_i, expected.ints, sizeof(ps_i)) ||
+      std::memcmp(vs_b, expected.bools, sizeof(vs_b)) ||
+      std::memcmp(ps_b, expected.bools, sizeof(ps_b))) {
+    fail_at(__LINE__, "draw admission must preserve all six Live constant families");
+  }
+}
+
 void retain_acquire(const char *fault) {
   Fixture fixture;
   if (!fixture.init("recorder_retain_acquire")) return;
@@ -181,12 +225,16 @@ void retain_acquire(const char *fault) {
   CHECK_HR(fixture.device->SetTexture(0, texture), D3D_OK);
   CHECK_HR(fixture.device->SetStreamSource(0, vertex_buffer, 0, 16), D3D_OK);
   CHECK_HR(fixture.device->SetFVF(D3DFVF_XYZRHW), D3D_OK);
+  const ConstantRetryValues constants;
+  set_retry_constants(fixture.device, constants);
   // The draw record contains both the texture and vertex-buffer identities.
   // retain_acquire=0 fails before either unique acquire; =1 fails after the
   // first and consequently exercises rollback of a partial retain.
   const HRESULT expected = fault_hr(fault, E_OUTOFMEMORY);
   CHECK_HR(fixture.device->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 1), expected);
+  check_retry_constants(fixture.device, constants);
   CHECK_HR(fixture.device->DrawPrimitive(D3DPT_TRIANGLELIST, 0, 1), D3D_OK);
+  check_retry_constants(fixture.device, constants);
   texture->Release();
   vertex_buffer->Release();
   mark_reached(fault);
