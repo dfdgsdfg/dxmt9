@@ -962,6 +962,22 @@ Neither instrumentation nor native equality establishes a faster replacement.
 Release codegen must verify that disabled admission does not execute diagnostic
 walks, and runtime distributions and FPS remain separately qualified evidence.
 
+For binding-validation economics, the same cold reconstruction splits compact
+occurrences into null/unbound, first pinned identity and duplicate pinned
+identity. It consumes the bounded contiguous family ranges in canonical order:
+texture, stream, shader, vertex input, index buffer, render target, depth
+stencil. A single record-wide ordinal set is shared by all families, including
+stream/index-buffer and render-target/depth-stencil repeats. Family rows
+report sums, records containing a duplicate and maximum duplicates per record;
+the compact record population also reports buckets for zero, one, two and
+three-or-more duplicates. Empty successful compact preparations belong to the
+zero bucket. Generic and constant attempts do not manufacture compact binding
+observations. Malformed ranges or locators make the observation unmeasured,
+without altering production acceptance. These are prepared-stream counts;
+later acquisition/settlement failure can prevent the corresponding helper
+calls from executing. No physical-pin check, callback, retain/fault order or
+owner lifetime policy is weakened by this observer.
+
 R-CORE-REC-7.40 preserves compile-time information at the constant consumer:
 the normal setter knows its 4/16-byte register width and Live/Apply mode.
 Specialized execution must derive from the same transition semantics while

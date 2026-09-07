@@ -3248,6 +3248,63 @@ void D3D9DeviceImpl::logPeSemanticOwnerPhaseSplit() {
             static_cast<unsigned long long>(admission.maxUniqueIdentities),
             static_cast<unsigned long long>(admission.maxLinearComparisons));
     }
+    constexpr const char* kBindingFamilyNames[] = {
+        "textures", "streams", "shaders", "vertex_inputs",
+        "index_buffers", "render_targets", "depth_stencils",
+    };
+    const auto& compact = stats.admissions[
+        static_cast<std::size_t>(
+            dxmt9::d3d9::pe::PeSemanticOwnerAdmissionFamily::Compact)];
+    if (compact.sampledBindingRecords != 0u) {
+        const auto recordsWithDuplicates = compact.compactDuplicateCountHistogram[1] +
+            compact.compactDuplicateCountHistogram[2] +
+            compact.compactDuplicateCountHistogram[3];
+        static_assert(std::size(kBindingFamilyNames) ==
+                      std::tuple_size_v<decltype(compact.sampledBindingOccurrencesByFamily)>);
+        for (std::size_t family = 0u;
+             family < compact.sampledBindingOccurrencesByFamily.size();
+             ++family) {
+            dxmt9DeviceInfoLog(
+                "[dxmt9-pe-semantic-owner-phase] schema=1 "
+                "binding_distribution=reconstructed_sampled_only binding_family=%s "
+                "sampled_reconstructed=1 "
+                "scope=attempted_preparation_after_successful_preparation "
+                "emission=not_committed_emission sampled_records=%llu "
+                "occurrences=%llu pinned=%llu first=%llu duplicates=%llu "
+                "records_with_duplicates=%llu max_duplicates_per_record=%llu",
+                kBindingFamilyNames[family],
+                static_cast<unsigned long long>(compact.sampledBindingRecords),
+                static_cast<unsigned long long>(
+                    compact.sampledBindingOccurrencesByFamily[family]),
+                static_cast<unsigned long long>(compact.sampledBindingPinnedByFamily[
+                    family]),
+                static_cast<unsigned long long>(compact.sampledBindingFirstByFamily[
+                    family]),
+                static_cast<unsigned long long>(
+                    compact.sampledBindingDuplicatesByFamily[family]),
+                static_cast<unsigned long long>(
+                    compact.sampledBindingDuplicateRecordsByFamily[family]),
+                static_cast<unsigned long long>(
+                    compact.maxBindingDuplicatesByFamily[family]));
+        }
+        dxmt9DeviceInfoLog(
+            "[dxmt9-pe-semantic-owner-phase] schema=1 "
+            "binding_distribution=reconstructed_sampled_only binding_family=all "
+            "sampled_reconstructed=1 "
+            "scope=attempted_preparation_after_successful_preparation "
+            "emission=not_committed_emission sampled_records=%llu "
+            "pinned=%llu duplicates=%llu records_with_duplicates=%llu "
+            "max_duplicates_per_record=%llu duplicate_count_histogram=0:%llu,1:%llu,2:%llu,3plus:%llu",
+            static_cast<unsigned long long>(compact.sampledBindingRecords),
+            static_cast<unsigned long long>(compact.sampledBindingPinned),
+            static_cast<unsigned long long>(compact.sampledBindingDuplicates),
+            static_cast<unsigned long long>(recordsWithDuplicates),
+            static_cast<unsigned long long>(compact.maxBindingDuplicatesPerRecord),
+            static_cast<unsigned long long>(compact.compactDuplicateCountHistogram[0]),
+            static_cast<unsigned long long>(compact.compactDuplicateCountHistogram[1]),
+            static_cast<unsigned long long>(compact.compactDuplicateCountHistogram[2]),
+            static_cast<unsigned long long>(compact.compactDuplicateCountHistogram[3]));
+    }
 }
 
 void D3D9DeviceImpl::startPeThreadSamplerIfRequested() {

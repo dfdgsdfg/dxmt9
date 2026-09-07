@@ -115,11 +115,20 @@ enum class PeSemanticOwnerAdmissionFamily : std::uint8_t {
 
 // Cold-adapter output reconstructed after successful preparation. It is not a
 // production witness and never crosses the owner transaction boundary.
+struct PeSemanticOwnerBindingDistribution {
+  std::uint64_t occurrences = 0u;
+  std::uint64_t pinned = 0u;
+  std::uint64_t first = 0u;
+  std::uint64_t duplicates = 0u;
+};
+
 struct PeSemanticOwnerAdmissionDistribution {
   std::uint64_t bindingOccurrences = 0u;
   std::uint64_t refOccurrences = 0u;
   std::uint64_t uniqueIdentities = 0u;
   std::uint64_t linearComparisons = 0u;
+  bool bindingsMeasured = false;
+  std::array<PeSemanticOwnerBindingDistribution, 7u> bindings{};
 };
 
 struct PeSemanticOwnerAdmissionMetric {
@@ -140,6 +149,17 @@ struct PeSemanticOwnerAdmissionMetric {
   std::uint64_t maxRefOccurrences = 0u;
   std::uint64_t maxUniqueIdentities = 0u;
   std::uint64_t maxLinearComparisons = 0u;
+  std::array<std::uint64_t, 7u> sampledBindingOccurrencesByFamily{};
+  std::array<std::uint64_t, 7u> sampledBindingPinnedByFamily{};
+  std::array<std::uint64_t, 7u> sampledBindingFirstByFamily{};
+  std::array<std::uint64_t, 7u> sampledBindingDuplicatesByFamily{};
+  std::array<std::uint64_t, 7u> sampledBindingDuplicateRecordsByFamily{};
+  std::array<std::uint64_t, 7u> maxBindingDuplicatesByFamily{};
+  std::array<std::uint64_t, 4u> compactDuplicateCountHistogram{};
+  std::uint64_t sampledBindingRecords = 0u;
+  std::uint64_t sampledBindingPinned = 0u;
+  std::uint64_t sampledBindingDuplicates = 0u;
+  std::uint64_t maxBindingDuplicatesPerRecord = 0u;
 };
 
 [[nodiscard]] constexpr const char* peSemanticOwnerSettlementFamilyName(
@@ -382,6 +402,32 @@ class PeSemanticOwnerPhaseObserver final {
         std::max(metric.maxUniqueIdentities, distribution.uniqueIdentities);
     metric.maxLinearComparisons = std::max(metric.maxLinearComparisons,
                                            distribution.linearComparisons);
+    if (distribution.bindingsMeasured) {
+      ++metric.sampledBindingRecords;
+      std::uint64_t recordDuplicates = 0u;
+      for (std::size_t family = 0u; family < distribution.bindings.size();
+           ++family) {
+        const auto& binding = distribution.bindings[family];
+        metric.sampledBindingOccurrencesByFamily[family] +=
+            binding.occurrences;
+        metric.sampledBindingPinnedByFamily[family] += binding.pinned;
+        metric.sampledBindingFirstByFamily[family] += binding.first;
+        metric.sampledBindingDuplicatesByFamily[family] += binding.duplicates;
+        metric.sampledBindingPinned += binding.pinned;
+        metric.sampledBindingDuplicates += binding.duplicates;
+        recordDuplicates += binding.duplicates;
+        if (binding.duplicates != 0u) {
+          ++metric.sampledBindingDuplicateRecordsByFamily[family];
+          metric.maxBindingDuplicatesByFamily[family] = std::max(
+              metric.maxBindingDuplicatesByFamily[family], binding.duplicates);
+        }
+      }
+      const auto histogramBucket =
+          recordDuplicates >= 3u ? 3u : static_cast<std::size_t>(recordDuplicates);
+      ++metric.compactDuplicateCountHistogram[histogramBucket];
+      metric.maxBindingDuplicatesPerRecord =
+          std::max(metric.maxBindingDuplicatesPerRecord, recordDuplicates);
+    }
     if (distribution.bindingOccurrences == 0u &&
         distribution.refOccurrences == 0u &&
         distribution.uniqueIdentities == 0u &&

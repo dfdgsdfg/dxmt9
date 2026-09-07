@@ -5551,7 +5551,8 @@ void observedAdmissionReconstructionKeepsHotPathUnchanged() {
             generic.sampledRefOccurrences == 12u &&
             generic.sampledUniqueIdentities == 2u &&
             generic.sampledLinearComparisons == 4u &&
-            generic.maxLinearComparisons == 4u,
+            generic.maxLinearComparisons == 4u &&
+            generic.sampledBindingRecords == 0u,
         "reconstruction reports independent duplicate/distinct counts with sampling denominators");
 
   PeSemanticOwnerPhaseObserver failedObserver(1u);
@@ -5607,11 +5608,13 @@ void observedAdmissionReconstructionKeepsHotPathUnchanged() {
       PeSemanticOwnerAdmissionFamily::Constant)];
   check(constantStats.sampledPrepared == 1u &&
             constantStats.sampledZeroWork == 1u &&
-            constantStats.sampledUnmeasuredFailures == 0u,
+            constantStats.sampledUnmeasuredFailures == 0u &&
+            constantStats.sampledBindingRecords == 0u,
         "constant zero work is distinguished from an unmeasured failure");
 
   using CompactOwner = PeSemanticBatchOwner<2u, 8u, 4096u, 4u, 8u>;
   CompactOwner compactOwner;
+  CompactOwner compactDisabled;
   PeSemanticOwnerPhaseObserver compactObserver(1u);
   compactOwner.setPhaseObserver(&compactObserver);
   PeHotStateShadow compactShadow{};
@@ -5644,6 +5647,11 @@ void observedAdmissionReconstructionKeepsHotPathUnchanged() {
                   access, compactPlan, PeSemanticProducerKind::DrawPrimitive,
                   compactParams.recordType,
                   D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 0x905u, 0x905u,
+                  []() noexcept { return true; }) &&
+                  compactDisabled.tryAppendSparseStatePlan(
+                  access, compactPlan, PeSemanticProducerKind::DrawPrimitive,
+                  compactParams.recordType,
+                  D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 0x905u, 0x905u,
                   []() noexcept { return true; });
             }),
         "real compact preparation feeds the cold distribution adapter");
@@ -5653,8 +5661,142 @@ void observedAdmissionReconstructionKeepsHotPathUnchanged() {
             compactStats.sampledBindingOccurrences == 1u &&
             compactStats.sampledRefOccurrences == 1u &&
             compactStats.sampledUniqueIdentities == 1u &&
-            compactStats.sampledLinearComparisons == 0u,
+            compactStats.sampledLinearComparisons == 0u &&
+            compactStats.sampledBindingRecords == 1u &&
+            compactStats.sampledBindingPinned == 1u &&
+            compactStats.sampledBindingDuplicates == 0u &&
+            compactStats.compactDuplicateCountHistogram[0] == 1u &&
+            compactStats.sampledBindingOccurrencesByFamily[0] == 1u &&
+            compactStats.sampledBindingFirstByFamily[0] == 1u,
         "compact reconstruction reports binding/reference/identity work independently");
+  check(compactOwner.emitExactFixed(enabledWire) &&
+            compactDisabled.emitExactFixed(disabledWire) &&
+            enabledWire.wireBytes == disabledWire.wireBytes &&
+            std::memcmp(enabledWire.wire.data(), disabledWire.wire.data(),
+                        enabledWire.wireBytes) == 0 &&
+            compactOwner.retainedCount() == compactDisabled.retainedCount() &&
+            compactTexture.refs == 3u,
+        "compact binding observation preserves exact wire and physical retention");
+}
+
+void compactBindingDistributionBoundedReference() {
+  // Classifier input is a prepared stream, not source validation authority.
+  // Enumerate one null/A/B row per family; equal tags in different kinds are
+  // distinct, while stream/IB and RT/depth may share an identity.
+  constexpr std::array<std::uint32_t, 7u> kinds{
+      D9C_CHUNK_HANDLE_KIND_TEXTURE, D9C_CHUNK_HANDLE_KIND_BUFFER,
+      D9C_CHUNK_HANDLE_KIND_SHADER, D9C_CHUNK_HANDLE_KIND_VERTEX_DECL,
+      D9C_CHUNK_HANDLE_KIND_BUFFER, D9C_CHUNK_HANDLE_KIND_SURFACE,
+      D9C_CHUNK_HANDLE_KIND_SURFACE};
+  std::array<int, 7u> objects{};
+  PeSemanticSparsePlanRecordInput input{};
+  PeSemanticOwnerPhaseObserver observer(1u);
+  std::array<std::uint64_t, 4u> expectedHistogram{};
+  for (std::uint32_t combination = 0u; combination < 2187u; ++combination) {
+    PeSemanticCompactPreparedRecord prepared;
+    prepared.bindingOccurrences.reset();
+    prepared.identityWitness.reset();
+    std::array<std::uint32_t, 7u> tags{};
+    std::array<std::size_t, 7u> ordinals{};
+    std::uint32_t digits = combination;
+    std::uint64_t pinned = 0u, unique = 0u, comparisons = 0u;
+    std::array<bool, 7u> first{};
+    for (std::size_t family = 0u; family < kinds.size(); ++family) {
+      tags[family] = digits % 3u;
+      digits /= 3u;
+      prepared.bindingOccurrences.ranges[family] = {
+          static_cast<std::uint32_t>(family), 1u};
+      auto& locator = prepared.bindingOccurrences.values[family];
+      locator = {.mappingOrdinal = kPeSemanticNoSlot,
+                 .wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+                 .occurrence = 0u, .wireValid = true,
+                 .hasPin = tags[family] != 0u};
+      if (tags[family] == 0u) continue;
+      ++pinned;
+      std::size_t prior = 0u;
+      for (; prior < family; ++prior)
+        if (kinds[prior] == kinds[family] && tags[prior] == tags[family]) break;
+      first[family] = prior == family;
+      const auto ordinal = first[family] ? unique++ : ordinals[prior];
+      ordinals[family] = ordinal;
+      comparisons += first[family] ? ordinal : ordinal + 1u;
+      locator.mappingOrdinal = locator.wireIndex = ordinal;
+      if (first[family]) {
+        prepared.identityWitness.entries[ordinal] = {
+            .identity = {.kind = kinds[family], .generation = 1u,
+                         .objectId = tags[family]},
+            .object = &objects[ordinal], .pin = static_cast<std::uint32_t>(ordinal),
+            .wireIndex = static_cast<std::uint32_t>(ordinal)};
+        prepared.identityWitness.wireOrdinals[ordinal] = ordinal;
+      }
+    }
+    prepared.bindingOccurrences.count = kinds.size();
+    prepared.identityWitness.count = prepared.identityWitness.wireCount = unique;
+    PeSemanticOwnerAdmissionDistribution distribution{};
+    check(detail::reconstructPeSemanticOwnerAdmission(input, prepared, distribution) &&
+              distribution.bindingsMeasured && distribution.bindingOccurrences == 7u &&
+              distribution.uniqueIdentities == unique &&
+              distribution.linearComparisons == comparisons,
+          "compact 3^7 classifier preserves independent first-identity order");
+    for (std::size_t family = 0u; family < kinds.size(); ++family) {
+      const auto& row = distribution.bindings[family];
+      check(row.occurrences == 1u && row.pinned == (tags[family] != 0u) &&
+                row.first == first[family] &&
+                row.duplicates == (tags[family] != 0u && !first[family]) &&
+                row.pinned == row.first + row.duplicates,
+            "same-kind cross-family duplicate belongs to later family; null is not a repeat");
+    }
+    const auto duplicates = pinned - unique;
+    ++expectedHistogram[std::min<std::uint64_t>(duplicates, 3u)];
+    observer.recordAdmissionAttempt(PeSemanticOwnerAdmissionFamily::Compact,
+                                    true, true, false, true);
+    observer.recordAdmissionDistribution(PeSemanticOwnerAdmissionFamily::Compact,
+                                         distribution);
+  }
+  const auto& metric = observer.stats().admissions[static_cast<std::size_t>(
+      PeSemanticOwnerAdmissionFamily::Compact)];
+  check(metric.sampledBindingRecords == 2187u && metric.sampledPrepared == 2187u &&
+            metric.sampledRejected == 2187u &&
+            metric.maxBindingDuplicatesPerRecord == 2u &&
+            metric.compactDuplicateCountHistogram == expectedHistogram &&
+            metric.sampledBindingPinned == metric.sampledUniqueIdentities +
+                                               metric.sampledBindingDuplicates,
+        "histogram measures prepared attempts even when later append rejects");
+
+  PeSemanticOwnerPhaseObserver repeatedObserver(1u);
+  for (std::uint32_t count = 0u; count <= 5u; ++count) {
+    PeSemanticCompactPreparedRecord prepared;
+    prepared.bindingOccurrences.reset();
+    prepared.identityWitness.reset();
+    prepared.bindingOccurrences.ranges[0] = {0u, count};
+    for (std::size_t family = 1u; family < kinds.size(); ++family)
+      prepared.bindingOccurrences.ranges[family] = {count, 0u};
+    prepared.bindingOccurrences.count = count;
+    prepared.identityWitness.count = prepared.identityWitness.wireCount = count != 0u;
+    if (count != 0u)
+      prepared.identityWitness.entries[0] = {
+          .identity = {.kind = kinds[0], .generation = 1u, .objectId = 1u},
+          .object = &objects[0], .pin = 0u, .wireIndex = 0u};
+    for (std::uint32_t row = 0u; row < count; ++row)
+      prepared.bindingOccurrences.values[row] = {
+          .mappingOrdinal = 0u, .wireIndex = 0u, .occurrence = row,
+          .wireValid = true, .hasPin = true};
+    PeSemanticOwnerAdmissionDistribution distribution{};
+    check(detail::reconstructPeSemanticOwnerAdmission(input, prepared, distribution),
+          "empty or repeated texture stream is measured");
+    repeatedObserver.recordAdmissionDistribution(PeSemanticOwnerAdmissionFamily::Compact,
+                                                 distribution);
+  }
+  const auto& repeated = repeatedObserver.stats().admissions[static_cast<std::size_t>(
+      PeSemanticOwnerAdmissionFamily::Compact)];
+  check(repeated.compactDuplicateCountHistogram ==
+            std::array<std::uint64_t, 4u>{2u, 1u, 1u, 2u} &&
+            repeated.sampledBindingPinned == 15u &&
+            repeated.sampledBindingDuplicates == 10u &&
+            repeated.sampledBindingDuplicateRecordsByFamily[0] == 4u &&
+            repeated.maxBindingDuplicatesByFamily[0] == 4u &&
+            repeated.maxBindingDuplicatesPerRecord == 4u,
+        "zero/one/two/three-plus buckets and duplicate-record/max counts conserve rows");
 }
 
 void compactAppendQuotaProofAndRollback() {
@@ -6167,6 +6309,17 @@ void realCompactSparseMaxFamilyDifferentialAndRollback(bool allDistinct,
                       distribution.uniqueIdentities == (allDistinct ? 45u : 39u) &&
                       distribution.linearComparisons == (allDistinct ? 990u : 798u),
                   "max-family reconstruction matches independent linear comparison count");
+            for (std::size_t family = 0u; family < 7u; ++family) {
+              const auto rows = prepared.bindingOccurrences.ranges[family].count;
+              const bool mixed = !allDistinct &&
+                  (family == 0u || family == 1u || family == 5u);
+              const auto& binding = distribution.bindings[family];
+              check(distribution.bindingsMeasured && binding.occurrences == rows &&
+                        binding.pinned == rows - mixed &&
+                        binding.first == rows - 2u * mixed &&
+                        binding.duplicates == mixed,
+                    "actual max-family prepared stream separates nulls from pinned duplicates");
+            }
             // 45 distinct insertions cost 0+...+44. The mixed fixture has
             // 39 insertions plus duplicate hits at ordinals 0,18,36:
             // 0+...+38 + 1+19+37 = 798; its three nulls cost no comparisons.
@@ -6176,6 +6329,52 @@ void realCompactSparseMaxFamilyDifferentialAndRollback(bool allDistinct,
                       witnessInput, prepared, distribution),
                   "stale occurrence identity cannot become measured zero work");
             prepared.bindingOccurrences.values[1].mappingOrdinal = saved;
+            const auto ranges = prepared.bindingOccurrences.ranges;
+            const auto total = prepared.bindingOccurrences.count;
+            prepared.bindingOccurrences.count = 0u;
+            check(!detail::reconstructPeSemanticOwnerAdmission(
+                      witnessInput, prepared, distribution) &&
+                      !distribution.bindingsMeasured,
+                  "range cannot read initialized or inactive rows beyond the published prefix");
+            prepared.bindingOccurrences.count = total;
+            prepared.bindingOccurrences.ranges[1].offset = 0u;
+            check(!detail::reconstructPeSemanticOwnerAdmission(
+                      witnessInput, prepared, distribution),
+                  "overlapping family ranges are unmeasured");
+            prepared.bindingOccurrences.ranges = ranges;
+            const auto occurrence = prepared.bindingOccurrences.values[1].occurrence;
+            prepared.bindingOccurrences.values[1].occurrence = 0u;
+            check(!detail::reconstructPeSemanticOwnerAdmission(
+                      witnessInput, prepared, distribution),
+                  "wrong family-local ordinal is unmeasured");
+            prepared.bindingOccurrences.values[1].occurrence = occurrence;
+            const auto pin = prepared.bindingOccurrences.values[1].hasPin;
+            prepared.bindingOccurrences.values[1].hasPin = false;
+            check(!detail::reconstructPeSemanticOwnerAdmission(
+                      witnessInput, prepared, distribution) &&
+                      !distribution.bindingsMeasured,
+                  "null with a live mapping cannot be treated as a harmless null row");
+            prepared.bindingOccurrences.values[1].hasPin = pin;
+            const auto valid = prepared.bindingOccurrences.values[1].wireValid;
+            prepared.bindingOccurrences.values[1].wireValid = false;
+            check(!detail::reconstructPeSemanticOwnerAdmission(
+                      witnessInput, prepared, distribution),
+                  "invalid wire occurrence is unmeasured");
+            prepared.bindingOccurrences.values[1].wireValid = valid;
+            const auto wire = prepared.bindingOccurrences.values[1].wireIndex;
+            prepared.bindingOccurrences.values[1].wireIndex =
+                D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
+            check(!detail::reconstructPeSemanticOwnerAdmission(
+                      witnessInput, prepared, distribution),
+                  "pinned wire mismatch is unmeasured");
+            prepared.bindingOccurrences.values[1].wireIndex = wire;
+            const auto wireCount = prepared.identityWitness.wireCount;
+            prepared.identityWitness.wireCount =
+                prepared.identityWitness.wireOrdinals.size() + 1u;
+            check(!detail::reconstructPeSemanticOwnerAdmission(
+                      witnessInput, prepared, distribution),
+                  "oversized wire prefix is unmeasured");
+            prepared.identityWitness.wireCount = wireCount;
           }
           preparedIdentityCount = prepared.identityWitness.count;
           preparedWireCount = prepared.identityWitness.wireCount;
@@ -6518,6 +6717,7 @@ int main(int argc, char** argv) {
     observerScopeRestoresNestedState();
     observerSeparatesPrepareMalformedFromHeader();
     observedAdmissionReconstructionKeepsHotPathUnchanged();
+    compactBindingDistributionBoundedReference();
     compactAdmissionRejectsStaleSourceBeforeSettlement();
     compactFinalizerFusesLexicalQualification();
     realCompactSparseMaxFamilyDifferentialAndRollback(true);

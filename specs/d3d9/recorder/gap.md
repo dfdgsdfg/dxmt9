@@ -13,6 +13,16 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.39's compact binding distribution now separates null/unbound,
+first pinned identity and duplicate pinned occurrence across the seven
+production families. Native tests cover all 2,187 one-row-per-family null/A/B
+combinations, cross-family reuse, per-record duplicate buckets, actual
+max-family canonical/retain equivalence and malformed active-prefix/locator
+rejection. Native focused 9/9 and x86_64 focused 5/5 pass; the observer uses
+the existing cold gate and changes no retention or validation policy.
+Fresh 05/06 distributions and linked disabled-path economics remain to be
+qualified before deciding whether validation reuse is worth implementing.
+
 R-CORE-REC-7.62's nonempty constant-range authority is implemented: all six
 fast public setters share a cap-qualified visitor with the fixed-width
 consumer, retaining the existing phase envelope and checked generic entry.

@@ -925,6 +925,16 @@ clock reads, or identity walks. Diagnostic reconstruction, if used, must be
 labelled and tested against the actual operation; its cost and counts are not
 product CPU time or permission to replace the linear lookup.
 
+Binding-validation reuse additionally requires separating null/unbound rows
+from pinned occurrences. Compact sampled preparations must identify first
+record-unique identities and repeated pinned occurrences across all seven
+binding families in emission order. A cross-family repeat belongs to the
+later family; per-family uniqueness must not erase that repeat. Counts must
+conserve `rows = nulls + pinned` and `pinned = first + duplicates`. Report
+sampled per-record duplicate buckets and family sums with their preparation
+denominator, not as actual committed pin-helper calls. Failed reconstruction
+must remain unmeasured and must never change the production append outcome.
+
 **R-CORE-REC-7.40** Fixed-width constant setters may specialize the canonical
 transition for their known element width and recording phase. The ordinary
 4-byte and 16-byte Live/Apply paths must preserve the checked reference's

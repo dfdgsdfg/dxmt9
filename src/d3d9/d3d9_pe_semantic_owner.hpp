@@ -1703,25 +1703,65 @@ bool reconstructPeSemanticOwnerAdmission(
     PeSemanticOwnerAdmissionDistribution& out) noexcept {
   out = {};
   if constexpr (PeSemanticSparsePlanInputLike<Input>) {
+    PeSemanticOwnerAdmissionDistribution reconstructed{};
     std::array<bool, IdentityCapacity> seen{};
-    out.bindingOccurrences = prepared.bindingOccurrences.count;
-    out.refOccurrences = prepared.bindingOccurrences.count;
-    for (std::size_t i = 0u; i < prepared.bindingOccurrences.count; ++i) {
-      const auto& locator = prepared.bindingOccurrences.values[i];
-      if (!locator.hasPin) continue;
-      if (locator.mappingOrdinal >= prepared.identityWitness.count ||
-          locator.mappingOrdinal >= IdentityCapacity) return false;
-      const auto ordinal = static_cast<std::size_t>(locator.mappingOrdinal);
-      if (!seen[ordinal]) {
-        if (ordinal != out.uniqueIdentities) return false;
-        out.linearComparisons += ordinal;
-        seen[ordinal] = true;
-        ++out.uniqueIdentities;
-      } else {
-        out.linearComparisons += ordinal + 1u;
+    const auto& occurrences = prepared.bindingOccurrences;
+    static_assert(std::tuple_size_v<decltype(occurrences.ranges)> ==
+                  std::tuple_size_v<decltype(reconstructed.bindings)>);
+    if (occurrences.count > occurrences.values.size() ||
+        prepared.identityWitness.count > IdentityCapacity ||
+        prepared.identityWitness.wireCount > prepared.identityWitness.wireOrdinals.size())
+      return false;
+    std::size_t cursor = 0u;
+    for (std::size_t family = 0u; family < occurrences.ranges.size();
+         ++family) {
+      const auto& range = occurrences.ranges[family];
+      if (range.offset != cursor || range.offset > occurrences.count ||
+          range.count > occurrences.count - range.offset)
+        return false;
+      auto& binding = reconstructed.bindings[family];
+      binding.occurrences = range.count;
+      for (std::size_t occurrence = 0u; occurrence < range.count;
+           ++occurrence) {
+        const auto& locator = occurrences.values[range.offset + occurrence];
+        if (locator.occurrence != occurrence || !locator.wireValid) return false;
+        if (!locator.hasPin) {
+          if (locator.mappingOrdinal != kPeSemanticNoSlot ||
+              locator.wireIndex != D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX)
+            return false;
+          continue;
+        }
+        if (locator.mappingOrdinal >= prepared.identityWitness.count ||
+            locator.mappingOrdinal >= IdentityCapacity)
+          return false;
+        const auto ordinal = static_cast<std::size_t>(locator.mappingOrdinal);
+        const auto& identity = prepared.identityWitness.entries[ordinal];
+        if (identity.object == nullptr ||
+            locator.wireIndex != identity.wireIndex ||
+            locator.wireIndex >= prepared.identityWitness.wireCount)
+          return false;
+        ++binding.pinned;
+        if (!seen[ordinal]) {
+          if (ordinal != reconstructed.uniqueIdentities) return false;
+          reconstructed.linearComparisons += ordinal;
+          seen[ordinal] = true;
+          ++reconstructed.uniqueIdentities;
+          ++binding.first;
+        } else {
+          reconstructed.linearComparisons += ordinal + 1u;
+          ++binding.duplicates;
+        }
       }
+      cursor += range.count;
     }
-    return out.uniqueIdentities == prepared.identityWitness.count;
+    if (cursor != occurrences.count ||
+        reconstructed.uniqueIdentities != prepared.identityWitness.count)
+      return false;
+    reconstructed.bindingOccurrences = cursor;
+    reconstructed.refOccurrences = cursor;
+    reconstructed.bindingsMeasured = true;
+    out = reconstructed;
+    return true;
   } else {
     PeSemanticOwnerAdmissionReconstruction reconstruction;
     const auto& staged = stagedPeSemanticInput(input);

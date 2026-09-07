@@ -28,6 +28,16 @@ but inside the inclusive admission parent: that parent now includes diagnostic
 reconstruction cost and cannot be treated as product CPU time. The production
 linear lookup, witness layouts, retention and emitted bytes are unchanged.
 
+The same gate additionally reports `binding_distribution=reconstructed_sampled_only`
+for compact preparations: per-family rows, pinned occurrences, first
+record-wide identities and duplicate pinned occurrences, plus per-record
+duplicate buckets (0, 1, 2, 3+). Null/unbound rows are not duplicates.
+Cross-family repeats are charged to the later family in emission order.
+These are sampled prepared-stream counts, not committed pin-helper calls;
+failed preparation/reconstruction is unmeasured, and later append failure
+does not invalidate a successfully reconstructed preparation. Do not infer
+product CPU savings from these counts or their inclusive parent timings.
+
 `DXMT9_OFFLOAD_COMMIT_REPLAY` and its inline rollback are stable producer-replay
 providers. `DXMT9_CPU_READY_TAPE` is the migration alias for the stable
 default-off streaming provider. Inline-constant delta remains an experimental
