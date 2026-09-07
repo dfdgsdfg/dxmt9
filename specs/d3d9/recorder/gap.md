@@ -13,6 +13,13 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.60 immutable AUTOGEN-bound-slot elision is implemented, with
+bounded native refinement, linked PE empty-branch checks and x86/x64 PE
+setter/StateBlock mip readback. A deliberate missing Apply publication fails
+the actual pixel oracle; the restored images pass. [H256](../../../docs/perfomance/present-pacing/present-pacing-pe-autogen-bound-slots.256.md)
+records scope and evidence. Wild CPU/FPS qualification remains open; native
+failure abstraction is not injected private-COM failure evidence.
+
 The optional PE sampler's complete self-PC reporting contract is implemented
 with native conservation, parser rejection and linked PE checks;
 [H255](../../../docs/perfomance/present-pacing/present-pacing-pe-full-selfpc.255.md)

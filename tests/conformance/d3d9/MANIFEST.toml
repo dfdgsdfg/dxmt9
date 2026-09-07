@@ -3214,6 +3214,36 @@ source = "tests/conformance/d3d9/evidence/sikarugir-cx-24.0.7-builtin-x64.json:1
 summary = "Historical 2026-05-24 evidence predates AUTOGEN promotion; current acceptance requires fresh builtin evidence for the real path."
 
 [[case]]
+executable = "d3d9_resources_x64.exe"
+source_file = "d3d9_resources.cpp"
+function = "resource_autogen_stateblock_apply_latest_mip"
+source = "specs/d3d9/recorder/requirements.md:R-CORE-REC-7.60"
+source_kind = "dxmt9-policy"
+license = "MIT"
+license_scope = "dxmt9"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "resource-wrappers"
+owner = "pe/recorder"
+requirements = ["R-TEST-12.13"]
+acceptance = ["A supported A8R8G8B8 AUTOGEN texture is sampled through an 8x8 offscreen draw/readback before and after level-0 writes without explicit mip generation or rebinding; ordinary and null transitions, StateBlock recording without live mutation, and Apply publish the expected binding and latest generated hidden mip."]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x86"
+status = "passing"
+source = "experiments/output/conformance-20260907-122714/results.json:1"
+summary = "H256 final image: four exact hidden-mip/ordinary pixels and binding checks pass, zero skips. A separate missing-Apply-publication mutant reads stale green instead of blue; restored image passes. App-local qualification remains open."
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "experiments/output/conformance-20260907-122759/results.json:1"
+summary = "H256 final image: four exact hidden-mip/ordinary pixels and binding checks pass, zero skips. App-local qualification remains open."
+
+[[case]]
 executable = "d3d9_stateblock_x64.exe"
 source_file = "d3d9_stateblock_matrix.cpp"
 function = "stateblock_state_management_matrix"

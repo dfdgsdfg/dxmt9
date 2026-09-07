@@ -4,6 +4,7 @@
 
 #include "d3d9_pe_device_impl.hpp"
 #include "d3d9_pe_append_preparation.hpp"
+#include "d3d9_pe_sparse_iteration.hpp"
 
 // QueryInterface is the key function, so the retained inline hot entries
 // (including D3D9DeviceImpl::Present) and the vtable are emitted by this TU.
@@ -19,8 +20,10 @@ static_assert(sizeof(D3D9DeviceImpl) == 106680);
 static_assert(alignof(D3D9DeviceImpl) == 8);
 #elif defined(_WIN32)
 static_assert(sizeof(D3D9DeviceImpl) ==
-              105416 + sizeof(dxmt9::d3d9::pe::PeRecorderChunkTransaction));
-static_assert(sizeof(D3D9DeviceImpl) == 105536);
+              105424 + sizeof(dxmt9::d3d9::pe::PeRecorderChunkTransaction));
+// The four-byte AUTOGEN mask consumes x64 padding; PE32 grows eight bytes
+// including alignment. No serialized or COM-vtable layout is affected.
+static_assert(sizeof(D3D9DeviceImpl) == 105544);
 static_assert(alignof(D3D9DeviceImpl) == 8);
 #endif
 
@@ -323,15 +326,18 @@ bool D3D9DeviceImpl::fragmentTextureStageSlot(DWORD stage, uint32_t& slot) noexc
 }
 
 HRESULT D3D9DeviceImpl::generateBoundAutogenMipmaps() noexcept {
+    const auto boundMask = boundAutogenTextureSlots_.mask();
+    if (boundMask == 0u) return S_OK;
     std::array<IDirect3DBaseTexture9*, D9C_DRAW_PACKET_MAX_TEXTURES> pending{};
     std::array<D9CTexture*, D9C_DRAW_PACKET_MAX_TEXTURES> raw{};
     std::array<dxmt9::d3d9::pe::TextureRef,
                D9C_DRAW_PACKET_MAX_TEXTURES> wire{};
     std::size_t count = 0u;
-    for (std::size_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
+    dxmt9::d3d9::pe::forEachSetBitAscending(
+        boundMask, [&](std::uint32_t slot) noexcept {
         auto* texture = textures_[slot];
         D9CTexture* candidate = nullptr;
-        if (!D3D9PeGetDirtyAutogenTexture(texture, &candidate)) continue;
+        if (!D3D9PeGetDirtyAutogenTexture(texture, &candidate)) return true;
         bool duplicate = false;
         for (std::size_t index = 0u; index < count; ++index) {
             if (raw[index] == candidate) {
@@ -345,7 +351,8 @@ HRESULT D3D9DeviceImpl::generateBoundAutogenMipmaps() noexcept {
             wire[count] = recorderState_.peBindingView.textures[slot];
             ++count;
         }
-    }
+        return true;
+    });
     if (count == 0u) return S_OK;
 
     for (std::size_t index = 0u; index < count; ++index) {
@@ -427,6 +434,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetTexture(DWORD stage,
         setRef(textures_[textureSlot], pTex);
         recorderState_.peBindingView.textures[textureSlot] =
             validatedTexture.wire();
+        boundAutogenTextureSlots_.publish(
+            textureSlot,
+            D3D9PeValidatedTextureAutogenEnabled(validatedTexture));
         applyCurrentPaletteToTexture(textures_[textureSlot]);
     });
     hotSetter.markDirty();
@@ -1415,6 +1425,7 @@ D9CSwapChain* D3D9DeviceImpl::borrowSwapChainHandle(UINT index) {
 }
 
 void D3D9DeviceImpl::releaseAllBound() {
+    boundAutogenTextureSlots_.clear();
     for (auto& t : textures_)   setRef(t, (IDirect3DBaseTexture9*)nullptr);
     setRef(vs_, (IDirect3DVertexShader9*)nullptr);
     setRef(ps_, (IDirect3DPixelShader9*)nullptr);

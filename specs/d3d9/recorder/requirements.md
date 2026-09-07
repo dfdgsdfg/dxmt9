@@ -1108,3 +1108,17 @@ compare exact bytes, queries, failure prefixes and retain/release counts with
 an independent reference over collision, partial acquisition, retry and wrap
 traces. Removing redundant index-consistency checks must not be presented as
 preserving detection of arbitrary memory corruption.
+
+**R-CORE-REC-7.60** Draw-time automatic-mipmap candidate discovery may skip
+texture slots proved ineligible by immutable creation metadata captured at
+the concrete membership gate. Outside terminal failure, a derived bounded
+slot mask must agree with every Live texture binding; normal publication,
+StateBlock Apply and reset must update it with binding ownership. Recording
+and failed setter validation must not publish candidate Live state. An
+unexpected Apply validation failure must
+clear the replaced slot's eligibility and follow the existing terminal policy.
+The mask must not cache Dirty, raw objects, wire identity or completion state.
+Eligible slots still read current Dirty state, deduplicate in first-slot order,
+use the exact bound wire identity and settle Clean only after accepted record
+append. Native exhaustive refinement and PE draw/readback traces must bind
+these publication and failure boundaries before performance qualification.

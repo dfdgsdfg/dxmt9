@@ -202,6 +202,21 @@ pe_thread_sampler_spec = executable(
 
 test('dxmt9-pe-thread-sampler-spec', pe_thread_sampler_spec)
 
+# Bounded native refinement for the PE autogen-mipmap binding mask and draw
+# settlement protocol. This target is host-only and has no Metal/GPU/Wine
+# dependency; the source contains its independent dense state oracle.
+pe_autogen_bound_slots_spec = executable(
+  'dxmt9-pe-autogen-bound-slots-spec',
+  'pe_autogen_bound_slots_spec.cpp',
+  include_directories: [
+    dxmt9_inc,
+    include_directories('../../../src/d3d9'),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-pe-autogen-bound-slots-spec', pe_autogen_bound_slots_spec)
+
 pe_diagnostics_spec = executable(
   'dxmt9-pe-diagnostics-spec',
   'pe_diagnostics_spec.cpp',

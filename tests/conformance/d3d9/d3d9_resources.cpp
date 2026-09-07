@@ -12,7 +12,9 @@
 #include <initguid.h>
 #include <d3d9.h>
 
+#include <cstddef>
 #include <cstdio>
+#include <cstdint>
 #include <cstdlib>
 
 namespace {
@@ -292,6 +294,192 @@ void check_autogen(Fixture *fixture) {
   release_if(texture);
 }
 
+bool fill_texture_level0(IDirect3DTexture9 *texture, UINT width, UINT height,
+                         D3DCOLOR color) {
+  D3DLOCKED_RECT locked = {};
+  if (FAILED(texture->LockRect(0, &locked, nullptr, 0))) return false;
+  for (UINT y = 0; y < height; ++y) {
+    auto *row = reinterpret_cast<D3DCOLOR *>(
+        static_cast<std::uint8_t *>(locked.pBits) +
+        static_cast<std::size_t>(y) * locked.Pitch);
+    for (UINT x = 0; x < width; ++x) row[x] = color;
+  }
+  return SUCCEEDED(texture->UnlockRect(0));
+}
+
+void resource_autogen_stateblock_apply_latest_mip() {
+  constexpr UINT kTextureSize = 64;
+  constexpr UINT kRenderSize = 8;
+  constexpr D3DCOLOR kRed = D3DCOLOR_ARGB(255, 255, 0, 0);
+  constexpr D3DCOLOR kGreen = D3DCOLOR_ARGB(255, 0, 255, 0);
+  constexpr D3DCOLOR kBlue = D3DCOLOR_ARGB(255, 0, 0, 255);
+  constexpr D3DCOLOR kYellow = D3DCOLOR_ARGB(255, 255, 255, 0);
+
+  Fixture fixture;
+  if (!fixture.init("resource_autogen_stateblock_apply_latest_mip")) return;
+
+  D3DDISPLAYMODE display_mode = {};
+  const HRESULT display_hr = fixture.d3d9->GetAdapterDisplayMode(
+      D3DADAPTER_DEFAULT, &display_mode);
+  CHECK_HR(display_hr, D3D_OK);
+  if (display_hr != D3D_OK) return;
+  const HRESULT format_hr = fixture.d3d9->CheckDeviceFormat(
+      D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, display_mode.Format,
+      D3DUSAGE_AUTOGENMIPMAP, D3DRTYPE_TEXTURE, D3DFMT_A8R8G8B8);
+  if (format_hr != D3D_OK) {
+    std::printf("SKIP:resource_autogen_stateblock_apply_latest_mip: "
+                "A8R8G8B8 AUTOGENMIPMAP unsupported (0x%08lx)\n",
+                static_cast<unsigned long>(format_hr));
+    ++skips;
+    return;
+  }
+
+  IDirect3DTexture9 *autogen = nullptr;
+  IDirect3DTexture9 *ordinary = nullptr;
+  IDirect3DSurface9 *render_target = nullptr;
+  IDirect3DSurface9 *readback = nullptr;
+  IDirect3DStateBlock9 *stateblock = nullptr;
+  const auto cleanup = [&]() {
+    release_if(stateblock);
+    release_if(readback);
+    release_if(render_target);
+    release_if(ordinary);
+    release_if(autogen);
+  };
+
+  CHECK_HR(fixture.device->CreateTexture(
+      kTextureSize, kTextureSize, 0, D3DUSAGE_AUTOGENMIPMAP,
+      D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &autogen, nullptr), D3D_OK);
+  CHECK(autogen != nullptr);
+  if (!autogen) {
+    cleanup();
+    return;
+  }
+  CHECK(fill_texture_level0(autogen, kTextureSize, kTextureSize, kRed));
+
+  CHECK_HR(fixture.device->CreateTexture(
+      kTextureSize, kTextureSize, 1, 0, D3DFMT_A8R8G8B8,
+      D3DPOOL_MANAGED, &ordinary, nullptr), D3D_OK);
+  CHECK(ordinary != nullptr);
+  if (!ordinary) {
+    cleanup();
+    return;
+  }
+  CHECK(fill_texture_level0(ordinary, kTextureSize, kTextureSize, kYellow));
+
+  CHECK_HR(fixture.device->CreateRenderTarget(
+      kRenderSize, kRenderSize, D3DFMT_A8R8G8B8, D3DMULTISAMPLE_NONE,
+      0, FALSE, &render_target, nullptr), D3D_OK);
+  CHECK_HR(fixture.device->CreateOffscreenPlainSurface(
+      kRenderSize, kRenderSize, D3DFMT_A8R8G8B8, D3DPOOL_SYSTEMMEM,
+      &readback, nullptr), D3D_OK);
+  CHECK(render_target != nullptr && readback != nullptr);
+  if (!render_target || !readback) {
+    cleanup();
+    return;
+  }
+
+  CHECK_HR(fixture.device->SetRenderTarget(0, render_target), D3D_OK);
+  CHECK_HR(fixture.device->SetDepthStencilSurface(nullptr), D3D_OK);
+  const D3DVIEWPORT9 viewport = {0, 0, kRenderSize, kRenderSize, 0.0f, 1.0f};
+  CHECK_HR(fixture.device->SetViewport(&viewport), D3D_OK);
+  CHECK_HR(fixture.device->SetFVF(D3DFVF_XYZRHW | D3DFVF_TEX1), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_ZENABLE, FALSE), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_LIGHTING, FALSE), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE),
+      D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE),
+      D3D_OK);
+  CHECK_HR(fixture.device->SetTextureStageState(
+      0, D3DTSS_COLOROP, D3DTOP_SELECTARG1), D3D_OK);
+  CHECK_HR(fixture.device->SetTextureStageState(
+      0, D3DTSS_COLORARG1, D3DTA_TEXTURE), D3D_OK);
+  CHECK_HR(fixture.device->SetTextureStageState(
+      0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1), D3D_OK);
+  CHECK_HR(fixture.device->SetTextureStageState(
+      0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE), D3D_OK);
+  CHECK_HR(fixture.device->SetSamplerState(0, D3DSAMP_MINFILTER,
+                                           D3DTEXF_POINT), D3D_OK);
+  CHECK_HR(fixture.device->SetSamplerState(0, D3DSAMP_MAGFILTER,
+                                           D3DTEXF_POINT), D3D_OK);
+  CHECK_HR(fixture.device->SetSamplerState(0, D3DSAMP_MIPFILTER,
+                                           D3DTEXF_POINT), D3D_OK);
+  CHECK_HR(fixture.device->SetSamplerState(0, D3DSAMP_ADDRESSU,
+                                           D3DTADDRESS_CLAMP), D3D_OK);
+  CHECK_HR(fixture.device->SetSamplerState(0, D3DSAMP_ADDRESSV,
+                                           D3DTADDRESS_CLAMP), D3D_OK);
+
+  const struct AutogenVertex {
+    float x, y, z, rhw;
+    float u, v;
+  } quad[] = {
+      {-0.5f, -0.5f, 0.5f, 1.0f, 0.0f, 0.0f},
+      { 7.5f, -0.5f, 0.5f, 1.0f, 1.0f, 0.0f},
+      {-0.5f,  7.5f, 0.5f, 1.0f, 0.0f, 1.0f},
+      { 7.5f,  7.5f, 0.5f, 1.0f, 1.0f, 1.0f},
+  };
+  const auto draw_and_check = [&](D3DCOLOR expected, const char *label) {
+    CHECK_HR(fixture.device->Clear(0, nullptr, D3DCLEAR_TARGET,
+                                    D3DCOLOR_ARGB(255, 0, 0, 0), 1.0f, 0),
+        D3D_OK);
+    CHECK_HR(fixture.device->BeginScene(), D3D_OK);
+    CHECK_HR(fixture.device->DrawPrimitiveUP(
+        D3DPT_TRIANGLESTRIP, 2, quad, sizeof(AutogenVertex)), D3D_OK);
+    CHECK_HR(fixture.device->EndScene(), D3D_OK);
+    CHECK_HR(fixture.device->GetRenderTargetData(render_target, readback),
+        D3D_OK);
+    D3DLOCKED_RECT locked = {};
+    const HRESULT lock_hr = readback->LockRect(
+        &locked, nullptr, D3DLOCK_READONLY);
+    CHECK_HR(lock_hr, D3D_OK);
+    if (SUCCEEDED(lock_hr)) {
+      const auto *row = static_cast<const std::uint8_t *>(locked.pBits) +
+          static_cast<std::size_t>(kRenderSize / 2u) * locked.Pitch;
+      const auto actual = reinterpret_cast<const D3DCOLOR *>(row)[
+          kRenderSize / 2u];
+      std::printf("%s pixel: actual=0x%08lx expected=0x%08lx\n", label,
+                  static_cast<unsigned long>(actual),
+                  static_cast<unsigned long>(expected));
+      CHECK(actual == expected);
+      CHECK_HR(readback->UnlockRect(), D3D_OK);
+    }
+  };
+  const auto check_bound = [&](IDirect3DBaseTexture9 *expected,
+                               const char *label) {
+    IDirect3DBaseTexture9 *bound = nullptr;
+    CHECK_HR(fixture.device->GetTexture(0, &bound), D3D_OK);
+    if (bound != expected) std::printf("%s binding changed\n", label);
+    CHECK(bound == expected);
+    release_if(bound);
+  };
+
+  CHECK_HR(fixture.device->SetTexture(0, autogen), D3D_OK);
+  check_bound(autogen, "initial AUTOGEN");
+  draw_and_check(kRed, "initial AUTOGEN");
+  CHECK(fill_texture_level0(autogen, kTextureSize, kTextureSize, kGreen));
+  draw_and_check(kGreen, "updated AUTOGEN while bound");
+
+  CHECK_HR(fixture.device->SetTexture(0, ordinary), D3D_OK);
+  check_bound(ordinary, "ordinary transition");
+  CHECK_HR(fixture.device->BeginStateBlock(), D3D_OK);
+  CHECK_HR(fixture.device->SetTexture(0, autogen), D3D_OK);
+  CHECK_HR(fixture.device->EndStateBlock(&stateblock), D3D_OK);
+  CHECK(stateblock != nullptr);
+  check_bound(ordinary, "EndStateBlock");
+  draw_and_check(kYellow, "ordinary after EndStateBlock");
+
+  CHECK(fill_texture_level0(autogen, kTextureSize, kTextureSize, kBlue));
+  CHECK_HR(fixture.device->SetTexture(0, nullptr), D3D_OK);
+  check_bound(nullptr, "null transition");
+  if (stateblock) {
+    CHECK_HR(stateblock->Apply(), D3D_OK);
+    check_bound(autogen, "Apply AUTOGEN");
+    draw_and_check(kBlue, "updated AUTOGEN after Apply");
+  }
+
+  cleanup();
+}
+
 void check_format_unknown(IDirect3DDevice9 *device) {
   IDirect3DSurface9 *surface =
       reinterpret_cast<IDirect3DSurface9 *>(static_cast<UINT_PTR>(0xdeadbeef));
@@ -321,6 +509,7 @@ void resource_getdc_lod_autogen_mipmap() {
 int main() {
   resource_container_level_desc_and_locks();
   resource_getdc_lod_autogen_mipmap();
+  resource_autogen_stateblock_apply_latest_mip();
 
   if (failures) {
     std::printf("d3d9_resources_x64: %d failure(s), %d skip(s)\n", failures, skips);

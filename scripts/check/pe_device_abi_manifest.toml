@@ -18,7 +18,7 @@ sizeof_host = 104320
 [device_layout]
 sizeof_x64 = 106680
 alignof_x64 = 8
-sizeof_x86 = 105536
+sizeof_x86 = 105544
 alignof_x86 = 8
 
 [layout]

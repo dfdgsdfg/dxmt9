@@ -403,6 +403,28 @@ generation remains live; live stale-generation rejection belongs to the unix
 
 ## 5. Hot/cold and observer boundary
 
+### Automatic-mipmap candidate elision
+
+For R-CORE-REC-7.60, `BoundAutogenTextureSlots` is a four-byte derived Live
+binding projection. The texture membership validator writes immutable
+AUTOGEN-enabled into the existing texture-local metadata bit; other object
+families retain their existing metadata meanings. No new COM/bridge signature
+or per-draw resource query is introduced. SetTexture publishes the bit with
+the validated wire binding; StateBlock Apply clears the replaced bit before
+release and publishes the validated replacement; reset clears all bits before
+releasing bindings. Recording and failed setters leave Live unchanged.
+
+An empty mask returns before candidate-array initialization and wrapper RTTI.
+Nonempty masks enumerate ascending slots and retain the existing live Dirty
+query, first-occurrence dedup, bound wire identity and append-before-Clean
+contract. This does not coalesce generation records, cache mutable Dirty or
+change the `AutogenMipGeneration` replay/failure model. A bounded exhaustive
+native reference checks binding/mask refinement and stale-Apply/dirty-cache
+counterexamples; PE readback tests close actual setter/Apply wiring. No pixel,
+driver scheduling or FPS proof follows from the value model alone.
+
+### Diagnostic ownership
+
 The release path is judged with every diagnostic disabled. `appendRecord`,
 state setters, draw construction, the builder, typed keys, and required pins are
 hot. Render Tape, PE call history, formatting, stack capture, failure reports,

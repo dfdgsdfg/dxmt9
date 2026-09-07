@@ -10,6 +10,10 @@ HRESULT D3D9PeValidateSurface(
         dxmt9::d3d9::pe::PeSurfaceQualification::Any) noexcept;
 HRESULT D3D9PeValidateTexture(
     IDirect3DBaseTexture9 *, const void *, D3D9PeValidatedTexture *) noexcept;
+constexpr bool D3D9PeValidatedTextureAutogenEnabled(
+    const D3D9PeValidatedTexture &validated) noexcept {
+  return (validated.localMetadata() & 1u) != 0u;
+}
 HRESULT D3D9PeValidateVertexBuffer(
     IDirect3DVertexBuffer9 *, const void *, D3D9PeValidatedVertexBuffer *) noexcept;
 HRESULT D3D9PeValidateIndexBuffer(

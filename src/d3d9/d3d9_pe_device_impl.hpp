@@ -46,6 +46,7 @@
 #include "d3d9_pe_child_factories.hpp"
 #include "d3d9_pe_child_scopes.hpp"
 #include "d3d9_pe_child_validation.hpp"
+#include "d3d9_pe_autogen_mipmap.hpp"
 #include "d3d9_pe_diagnostic_observer.hpp"
 #include "d3d9_pe_stateblock_shadow.hpp"
 #include "d3d9_pe_com_cache.hpp"
@@ -904,6 +905,9 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     IDirect3DIndexBuffer9*     indexBuf_        = nullptr;
     std::uint64_t              submittedIndexBufferWireValue_ = 0;
     bool                       submittedIndexBufferKnown_ = false;
+    dxmt9::d3d9::pe::BoundAutogenTextureSlots boundAutogenTextureSlots_{};
+    static_assert(dxmt9::d3d9::pe::BoundAutogenTextureSlots::kSlotCount ==
+                  D9C_DRAW_PACKET_MAX_TEXTURES);
     IDirect3DVertexDeclaration9* vdecl_         = nullptr;
     DWORD                      fvf_             = 0;
     /* Cache of implicit FVF→decl shadow objects. Wine's

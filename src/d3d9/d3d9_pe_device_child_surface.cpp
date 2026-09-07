@@ -3140,7 +3140,8 @@ HRESULT validateTextureKind(
     return D3DERR_INVALIDCALL;
   }
   D3D9PeValidatedObjectWriter::assign(
-      out, object, expectedOwnerDevice, impl->raw(), wire, 0u, kind);
+      out, object, expectedOwnerDevice, impl->raw(), wire,
+      impl->autogenState().value.enabled ? 1u : 0u, kind);
   return S_OK;
 }
 }  // namespace

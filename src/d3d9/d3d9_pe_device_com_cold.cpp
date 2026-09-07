@@ -3609,6 +3609,7 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
             [&]<Category category>(const auto& values) {
                 if constexpr (category == Category::textures) {
                     values.forEach([&](std::size_t slot, auto) {
+                        boundAutogenTextureSlots_.publish(slot, false);
                         if (textures_[slot]) textures_[slot]->Release();
                         textures_[slot] =
                             recorderState_.stateBlockTransaction.takeTexture(
@@ -3622,6 +3623,9 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
                             })) return;
                         recorderState_.peBindingView.textures[slot] =
                             validated.wire();
+                        boundAutogenTextureSlots_.publish(
+                            slot,
+                            D3D9PeValidatedTextureAutogenEnabled(validated));
                         if (replayThroughPe) {
                             recorderState_.peState.maintenance().pendingTextureMask() |=
                                 1u << slot;
