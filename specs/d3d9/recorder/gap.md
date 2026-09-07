@@ -20,8 +20,14 @@ checks remain. [H262](../../../docs/perfomance/present-pacing/present-pacing-pe-
 records 28 malformed-family cases, four late source-mutation cases, exact
 retry bytes, a failing source-equality negative control and restored native
 9/9 plus x86_64 5/5. This adds no cache, ABI or lifecycle transition. Final
-linked operation costs and actual PE/FPS/CPU qualification remain open;
-passing native checks and smaller DLLs do not prove runtime savings.
+PE32/PE64 scoped linked inspection and sampler-OFF 05/06 GT2 collection are
+complete: 29.960/18.231 FPS and approximate partial all-thread CPU of
+69.648/95.601 ms/frame, with zero reported renderer failures. Separate full
+profiles retain 1,366/851 PE samples without omissions or sampler failures;
+symbol ambiguity and unreported scene tails remain explicit in H262. These
+small, mixed single-run deltas do not demonstrate savings, neutrality or
+regression. Repeatable README recovery, PE-exclusive attribution and CPU
+reduction remain open; smaller DLLs do not prove runtime savings.
 
 R-CORE-REC-7.39's compact binding distribution now separates null/unbound,
 first pinned identity and duplicate pinned occurrence across the seven

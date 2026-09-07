@@ -32,8 +32,13 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 Current refinement [H262](present-pacing-pe-compact-binding-validation.262.md)
 reuses admission identity validity without weakening full source equality or
 physical pin validation. Native checks and the deliberately failing equality
-mutant pass their expected verdicts. This is not yet a measured FPS/CPU gain;
-final linked-cost and actual PE qualification remain open.
+mutant pass their expected verdicts. Final linked inspection and sampler-OFF
+05/06 GT2 collection give 29.960/18.231 FPS and approximate partial process
+CPU of 69.648/95.601 ms/frame. Separate full profiles retain 1,366/851 PE
+samples with zero sampler errors or omissions. Small mixed spot deltas do
+not prove gain, neutrality or regression; repeatable recovery and reduced
+CPU remain open. Inline-constant effective-state/fault equivalence is a
+useful next policy prerequisite, not authority to enable that lane.
 
 The latest diagnostic [H261](present-pacing-pe-binding-duplicates.261.md)
 separates null/unbound rows from duplicate pinned bindings. Actual 05/06 GT2
