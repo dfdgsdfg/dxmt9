@@ -20,8 +20,13 @@ durability and transaction identity checks remain. Bounded native combinations
 and two failing production mutants pass their expected verdicts; restored
 native 9/9 and x86_64 4/4 pass, with PE32/PE64 linked/layout evidence in
 [H259](../../../docs/perfomance/present-pacing/present-pacing-pe-settlement-refinement.259.md).
-Fresh Wine/CPU/FPS qualification remains pending; static work removal is not
-measured CPU savings, repeatable README recovery or whole-scene pixel evidence.
+Actual x86/x64 getter/StateBlock tests pass (five per width). Sampler-OFF
+05/06 GT2 spots at `c1368a6e` give 29.682/18.194 FPS with zero recorded
+renderer failures; separate full profiles retain all 1,430/854 PE samples
+without omissions or sampler failures. This closes collection for the change,
+not exact CPU attribution, measured savings, repeatable README recovery or
+whole-scene pixel evidence. Approximate partial all-thread CPU joins and
+symbol/scene-boundary limitations remain explicit in H259.
 
 R-CORE-REC-7.40's changed 16-byte materialization is now one bounded copy,
 with two linked SIMD instructions replacing eight scalar copy instructions

@@ -14,7 +14,10 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 Latest implementation: [H259](present-pacing-pe-settlement-refinement.259.md)
 consolidates compact settlement checks and skips absent constant work with
 producer-issued immutable presence. Native/refinement and linked-layout
-checks pass; fresh runtime CPU/FPS qualification remains pending.
+checks and actual x86/x64 getter/StateBlock tests pass. Sampler-OFF 05/06
+GT2 spots give 29.682/18.194 FPS, with zero recorded renderer failures;
+separate full profiles preserve all 1,430/854 PE samples. Measured gain,
+CPU reduction and repeatable README recovery remain unproven.
 
 Latest mechanism evidence: [H258](present-pacing-inline-constant-current.258.md)
 removes almost all standalone constant records through the current owner,

@@ -34,7 +34,12 @@ reuses immutable constant presence during compact settlement and consolidates
 duplicate current-ticket checks in a non-invalidating lexical interval.
 Native bounded combinations, deliberate failing mutants and linked PE checks
 pass without persistent storage growth; PE64's local stack grows 16 bytes.
-Fresh runtime CPU/FPS and PE-profile qualification remain pending.
+Actual x86/x64 getter/StateBlock tests pass. Sampler-OFF 05/06 GT2 spots give
+29.682/18.194 FPS and approximate partial process CPU of 70.153/95.428
+ms/frame, with zero recorded renderer failures. Separate full profiles retain
+all 1,430/854 PE samples without sampler failures or omitted buckets; symbol
+ambiguity and incomplete scene edges remain. These spots do not establish
+gain or CPU reduction. Both-target repeatable README recovery remains open.
 
 The latest mechanism check [H258](present-pacing-inline-constant-current.258.md)
 reopens inline constants on the current compact semantic owner: about 1,003
