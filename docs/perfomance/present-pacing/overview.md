@@ -32,8 +32,12 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 The latest local refinement [H249](present-pacing-pe-flush-layout.249.md)
 removes disabled constant-flush work and repeated compact mask counting. Four
 builds, native 29/29, x86_64 8/8 and the unchanged TLA suite pass; linked
-PE32/PE64 writers lose six software-popcount expansions each. This is static
-and native evidence only; no new wild or observer-off FPS result is supplied.
+PE32/PE64 writers lose six software-popcount expansions each. A hash-qualified
+post-commit GT2 run gives 28.835 FPS versus prior H248 29.048 (-0.73%), with
+zero chunk rejects, GPU errors or no-pipeline skips. CB/Present stays near 4
+and passes/Present near 15.77. This previous-day single-run comparison does
+not establish a speedup or an attributable regression; whole-scene pixel
+evidence remains open.
 
 The latest [identity diagnostic](present-pacing-pe-identity-distribution.248.md)
 uses the verified `706866a4` binaries: 21,755 sampled compact preparations have

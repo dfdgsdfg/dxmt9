@@ -3,9 +3,9 @@ domain: present-pacing
 workload: 3DMark05 GT2
 title: "PE constant-flush gating and prepared section-count reuse"
 type: evidence
-status: native-codegen-only
+status: native-codegen-and-single-run
 updated: 2026-09-07
-source: experiments/output/pe-flush-layout-20260907/analysis
+source: experiments/output/pe-flush-layout-20260907/analysis; experiments/output/app-d3d9-3dmark05-pe-flush-layout-66cbcbab-gt2-r1-20260907; experiments/output/app-d3d9-3dmark05-pe-hot-specialization-gt2-r2-20260906
 related: specs/d3d9/recorder/requirements.md; present-pacing-pe-identity-distribution.248.md
 ---
 
@@ -64,17 +64,56 @@ no runtime family-switch layer. Guarded static initialization remains cold.
 Exports and archive vtable/RTTI ownership match for both architectures. The
 Unix provider and both bridge DLLs remain byte-identical to baseline.
 
-Hash-qualified receipts, linked bodies and logs are in `source:` above:
+Hash-qualified receipts, linked bodies and logs are in the analysis directory:
 `baseline-linked.json`, `verified-linked.json`, `*-linked.asm`,
 `build-{native,unix,pe32,pe64}.log`, `native-tests.log`, `unix-tests.log`,
 `observer-n{1,127}.log`, and `tla.log`. Final PE32/PE64 SHA-256 values are
 `4af665c4dce352e0cc9313a705a5a11ba6e3c04e5eef1bca6e3eb88a6d17958f`
 and `80beffb53579b446552ad5628d6dcc4844724a7b513140b8e0fea71e0e75c115`.
 
+## Post-commit GT2 spot check
+
+Commit `66cbcbab` was rebuilt in all three canonical staging directories and
+run once through `run_experiment.py`. No concurrent Wine or build process was
+present at launch. The current artifact is
+`app-d3d9-3dmark05-pe-flush-layout-66cbcbab-gt2-r1-20260907`; the prior H248
+reference is `app-d3d9-3dmark05-pe-hot-specialization-gt2-r2-20260906`.
+
+Both use named GT2, 1024x768, Sikarugir `sikarugir-cx-24.0.7`, perf/Warn,
+validation OFF, frame sampling ON, and PE decimation/recorder stats/phase split
+OFF, without encoder breakdown or GPU trace. The benchmark result filename
+is auto-generated in the current run and explicit in the reference.
+
+| Metric | Prior H248 | `66cbcbab` |
+|---|---:|---:|
+| Positive-wall sampled FPS | 29.048 | 28.835 |
+| Positive-wall sample count | 1,875 | 1,863 |
+| Sampled wall time (ms) | 64,547.602 | 64,608.102 |
+| Encoded Presents | 1,876 | 1,864 |
+| Command buffers / Present | 3.99947 | 3.99946 |
+| Render passes / Present | 15.77132 | 15.77361 |
+| Draw calls / Present | 1,681.526 | 1,682.174 |
+| GPU command-buffer time / Present (ms) | 1.986 | 1.988 |
+| Chunk rejects / GPU errors / no-pipeline skips | 0 / 0 / 0 | 0 / 0 / 0 |
+
+FPS is positive-wall sample count divided by summed frame wall time, not
+process elapsed time or a decoded `.3dr` score. The observed delta is -0.73%.
+Both runs pass with exit 0, no timeout and no harness failures. The current
+`result.json` staged PE hashes match the final linked receipts above; provider
+and bridge hashes still match the reference. The fresh 3,356-byte `.3dr` was
+recovered with SHA-256
+`598ca666466ea639971650866b1931db94c72b9d004dc558eb5dc537f0530200`.
+`actual.png` shows a rendered GT2 scene; one captured frame is not a
+whole-scene flicker check or a pixel-equivalence oracle. Counter totals are in
+`result.json`; the generated `3dmark05-perf-frames.csv` and summary retain the
+sample denominator.
+
 ## Limits and next gate
 
-No Wine staging or wild run was performed. No FPS, current bottleneck share,
-pixel-oracle result or observer-off speedup is claimed. H248's workload sample
-predates these changes; its event frequencies are prioritization evidence,
-not saved CPU time. Next: matched observer-off GT2 correctness/locality and
-throughput evidence with staged artifact hashes before attributing a benefit.
+This is a single run against a previous-day sample, not an interleaved A/B
+experiment. The small negative delta establishes neither speedup nor a
+regression attributable to this change. Locality ratios remain close, but no
+strict locality or pixel-equivalence promotion is claimed. H248's event
+frequencies remain prioritization evidence, not saved CPU time. Matched
+repeatability and whole-scene correctness evidence remain open; this run does
+not measure the current PE bottleneck share.

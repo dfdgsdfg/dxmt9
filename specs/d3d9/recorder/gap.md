@@ -34,8 +34,12 @@ N=1 and N=127 processes. PE32/PE64 exports and vtable/RTTI ownership match;
 six software-popcount expansions disappear from each linked compact writer.
 The Unix provider and bridge DLLs remain byte-identical. See
 [H249](../../../docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md).
-No new Wine/wild, pixel or observer-off throughput evidence is supplied;
-static/native success is not an attributed FPS gain or provider promotion.
+The post-commit `66cbcbab` GT2 run passes with staged hashes matching these
+receipts: 28.835 sampled FPS versus prior H248 29.048 (-0.73%), no chunk
+rejects, GPU errors or no-pipeline skips, CB/Present near 4 and passes/Present
+near 15.77. This is one PE-observer-off, frame-sampling-on run, not an
+interleaved comparison. Repeatability and whole-scene pixel evidence remain
+open; neither an attributed FPS change nor provider promotion is established.
 
 R-CORE-REC-7.40–7.41 are implemented with bounded native and linked-code evidence.
 All six constant setters use fixed 4/16-byte Live/Apply operations. Their actual

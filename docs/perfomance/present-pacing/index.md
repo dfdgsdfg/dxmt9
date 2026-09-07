@@ -13,7 +13,9 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 Latest local refinement: [H249](present-pacing-pe-flush-layout.249.md) gates
 disabled constant-flush diagnostics, skips unobserved empty flushes, and reuses
-prepared compact counts. Native/codegen checks pass; fresh FPS evidence is open.
+prepared compact counts. Native/codegen checks pass. A post-commit GT2 spot
+check gives 28.835 FPS versus prior H248 29.048 (-0.73%); run health passes,
+but the single-run comparison establishes no attributed FPS gain.
 
 Latest diagnostic: [H248](present-pacing-pe-identity-distribution.248.md) measures
 2.588 unique identities / 4.494 comparisons per sampled compact GT2 preparation.
