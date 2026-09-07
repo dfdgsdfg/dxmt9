@@ -21,6 +21,7 @@
 #include "d3d9_pe_producer.hpp"
 #include "d3d9_pe_const_shadow.hpp"
 #include "d3d9_pe_producer_views.hpp"
+#include "d3d9_pe_sparse_iteration.hpp"
 #include "d3d9_pe_semantic_owner.hpp"
 #include "d3d9_pe_wire_handle.hpp"
 
@@ -869,6 +870,38 @@ void emptyDelta() {
   Fixture f;
   f.name = "empty delta";
   requirePinnedOutput(f);
+}
+
+void sparseSetBitIterationOrderAndShortCircuit() {
+  // The production callback is deliberately tiny, but this exhaustive
+  // bounded check pins the two observable properties needed by the compact
+  // producer: no inactive work and the same ascending first-failure order.
+  constexpr std::array<std::uint32_t, 5u> domains = {0u, 4u, 8u, 16u, 20u};
+  for (const auto domain : domains) {
+    const auto limit = 1u << domain;
+    for (std::uint32_t mask = 0u; mask < limit; ++mask) {
+      std::vector<std::uint32_t> visited;
+      check(pe::forEachSetBitAscending(
+                mask, [&](std::uint32_t slot) noexcept {
+                  visited.push_back(slot);
+                  return true;
+                }),
+            "set-bit iteration accepts every bounded mask");
+      std::vector<std::uint32_t> expected;
+      for (std::uint32_t slot = 0u; slot < domain; ++slot)
+        if ((mask & (1u << slot)) != 0u) expected.push_back(slot);
+      check(visited == expected,
+            "set-bit iteration preserves canonical ascending slot order");
+
+      std::size_t calls = 0u;
+      const bool completed = pe::forEachSetBitAscending(
+          mask, [&](std::uint32_t) noexcept { return ++calls < 2u; });
+      check(completed == (expected.size() <= 1u),
+            "set-bit iteration short-circuits at the first failing slot");
+      check(calls == (expected.size() < 2u ? expected.size() : 2u),
+            "set-bit iteration does no work after first failure");
+    }
+  }
 }
 
 void singleRenderStateDirty() {
@@ -3442,6 +3475,7 @@ void randomizedRecordSequences() {
 int main() {
   try {
     loadGoldens();
+    sparseSetBitIterationOrderAndShortCircuit();
     emptyDelta();
     singleRenderStateDirty();
     scalarCategoriesDirty();

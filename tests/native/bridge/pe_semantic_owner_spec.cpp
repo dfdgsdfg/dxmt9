@@ -1156,6 +1156,306 @@ void preparedLayoutCoversEverySparseAndVariableSection() {
         "all-family prepared layout reset releases every typed pin");
 }
 
+void preparedSparseQuotaUsesOnlyActiveSectionInventory() {
+  PeSemanticPreparedSparseLayout layout{};
+  layout.reset();
+  layout.sections[0] = {
+      .kind = D9C_COMMAND_CHUNK_SECTION_TEXTURE,
+      .elementSize = 1u,
+      .count = 3u,
+      .payloadOffset = 0u,
+      .byteSize = 3u,
+  };
+  layout.sections[1] = {
+      .kind = D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET,
+      .elementSize = 1u,
+      .count = 1u,
+      .payloadOffset = 3u,
+      .byteSize = 1u,
+  };
+  layout.sections[2] = {
+      .kind = D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA,
+      .elementSize = 1u,
+      .count = 7u,
+      .payloadOffset = 4u,
+      .byteSize = 7u,
+  };
+  layout.sectionCount = 3u;
+  layout.quotaDeltas[1u] = 3u;
+  layout.quotaDeltas[6u] = 1u;
+  layout.valid = true;
+  std::array<std::size_t, 2u> visited{};
+  std::array<std::uint32_t, 2u> counts{};
+  std::size_t count = 0u;
+  check(forEachPreparedSparseQuota(
+            layout, [&](std::size_t quota, std::uint32_t delta) noexcept {
+              if (count >= visited.size()) return false;
+              visited[count] = quota;
+              counts[count++] = delta;
+              return true;
+            }) &&
+            count == 2u && visited[0] == 1u && visited[1] == 6u &&
+            counts[0] == 3u && counts[1] == 1u,
+        "compact quota publication visits only active sparse categories");
+
+  layout.reset();
+  check(forEachPreparedSparseQuota(
+            layout, [&](std::size_t, std::uint32_t) noexcept {
+              return false;
+            }),
+        "empty compact layout performs no quota-category work");
+}
+
+void realCompactQuotaDenialAndLayoutReference() {
+  using QuotaOwner = PeSemanticBatchOwner<8u, 32u, 8192u, 8u, 1u>;
+  constexpr std::array<std::size_t, 17u> categories = {
+      0u,  1u,  2u,  3u,  4u,  5u,  6u,  7u,  8u,
+      9u,  10u, 11u, 12u, 13u, 14u, 15u, 16u};
+
+  for (const auto category : categories) {
+    QuotaOwner owner;
+    PeHotStateShadow shadow{};
+    PeConstShadowBlock constants{};
+    PeBindingView bindings{};
+    PeDrawPayloads payloads{};
+    PeChunkContext chunk{};
+    // Prevent context repair from adding an unrelated stream dimension to
+    // every case. Only the selected pending category may consume sparse quota.
+    chunk.retainedStreamMask = (1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u;
+    D9CTexture texture;
+    D9CBuffer buffer;
+    D9CShader shader;
+    D9CVertexDecl declaration;
+    D9CSurface surface;
+    D9CBuffer indexBuffer;
+    bindings.textures[0] =
+        localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(&texture, 0x1801u);
+    bindings.streams[0].buffer =
+        localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&buffer, 0x1802u);
+    bindings.vs = localRef<D9C_CHUNK_HANDLE_KIND_SHADER>(&shader, 0x1803u);
+    bindings.vdecl =
+        localRef<D9C_CHUNK_HANDLE_KIND_VERTEX_DECL>(&declaration, 0x1804u);
+    bindings.renderTargets[0] =
+        localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0x1805u);
+    bindings.depthStencil =
+        localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&surface, 0x1806u);
+    bindings.indexBuffer =
+        localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&indexBuffer, 0x1807u);
+
+    const bool indexed = category == 5u;
+    PeDrawParams params{
+        .recordType = indexed ? D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE
+                              : D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+        .primitiveType = 4u,
+        .primitiveCount = 1u,
+    };
+    switch (category) {
+      case 0u:
+        shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(1u),
+                                                       0x101u);
+        break;
+      case 1u: shadow.writer().pendingTextureMask() = 1u; break;
+      case 2u: shadow.writer().pendingStreamMask() = 1u; break;
+      case 3u: shadow.writer().pendingVs() = true; break;
+      case 4u: shadow.writer().pendingVdecl() = true; break;
+      case 5u: shadow.writer().pendingIb() = true; break;
+      case 6u: shadow.writer().pendingRtMask() = 1u; break;
+      case 7u: shadow.writer().pendingDs() = true; break;
+      case 8u: shadow.writer().pendingViewport() = true; break;
+      case 9u: shadow.writer().pendingScissor() = true; break;
+      case 10u: shadow.writer().pendingMaterial() = true; break;
+      case 11u: shadow.writer().pendingClipPlaneMask() = 1u; break;
+      case 12u:
+        shadow.writer().pendingTssTyped().set(textureStageIndexKey(0u),
+                                              textureStageStateTypeKey(0u),
+                                              0x112u);
+        break;
+      case 13u: {
+        SamplerIndex sampler{};
+        SamplerStateType type{};
+        check(samplerIndexKey(0u, sampler) &&
+                  samplerStateTypeKey(0u, type),
+              "all17 quota sampler keys are valid");
+        shadow.writer().pendingSamplerStatesTyped().set(sampler, type, 0x113u);
+        break;
+      }
+      case 14u:
+        shadow.writer().pendingTransformsTyped().set(
+            transformStateKey(kD3dTsView), identityTransformMatrix());
+        break;
+      case 15u: shadow.writer().pendingLightSlotMask() = 1u; break;
+      case 16u:
+        shadow.writer().pendingLightEnableValidMask() = 1u;
+        shadow.writer().pendingLightEnableMask() = 1u;
+        break;
+      default: check(false, "all17 quota category is bounded");
+    }
+
+    SparseStatePlan first;
+    SparseStatePlan second;
+    std::recursive_mutex mutex;
+    dxmt9::core::ThreadOwnershipToken thread;
+    RecorderLockGuard guard(mutex, false);
+    PeSemanticProductionCompactPreparedRecord prepared{};
+    const bool denied = guard.withCapability(
+        thread, 0x1800u + category, [&](const auto& access) noexcept {
+          if (!buildSparseStatePlan(access, shadow, constants, bindings,
+                                    payloads, params, false, false, first) ||
+              !finalizeSparseStatePlanChunkContext(access, chunk, first) ||
+              !owner.tryAppendSparseStatePlan(
+                  access, first,
+                  indexed ? PeSemanticProducerKind::DrawIndexedPrimitive
+                          : PeSemanticProducerKind::DrawPrimitive,
+                  params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u,
+                  1u, []() noexcept { return true; }))
+            return false;
+          if (!buildSparseStatePlan(access, shadow, constants, bindings,
+                                    payloads, params, false, false, second) ||
+              !finalizeSparseStatePlanChunkContext(access, chunk, second))
+            return false;
+          const PeSemanticSparsePlanRecordInput input{
+              .access = &access,
+              .sparsePlan = &second,
+              .producer = indexed ? PeSemanticProducerKind::DrawIndexedPrimitive
+                                  : PeSemanticProducerKind::DrawPrimitive,
+              .recordType = params.recordType,
+              .recordFlags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+              .sourceOrdinal = 2u,
+              .recordOrdinal = 2u,
+          };
+          if (owner.prepareAdmission(input, prepared) !=
+                  PeSemanticAdmissionOutcome::Capacity ||
+              !prepared.sparseLayout.valid)
+            return false;
+          for (std::size_t i = 0u; i < categories.size(); ++i) {
+            if (prepared.sparseLayout.quotaDeltas[i] !=
+                (i == category ? 1u : 0u))
+              return false;
+          }
+          return true;
+        });
+    check(denied,
+          "real compact prepareAdmission denies each active sparse dimension");
+    owner.reset();
+  }
+
+  // Build the actual production plan with every sparse quota category active,
+  // then compare its active-layout publication against an independent full17
+  // section walk. This does not use the active-set helper as its oracle.
+  PeHotStateShadow shadow{};
+  PeConstShadowBlock constants{};
+  PeBindingView bindings{};
+  PeDrawPayloads payloads{};
+  PeChunkContext chunk{};
+  std::array<D9CTexture, D9C_DRAW_PACKET_MAX_TEXTURES> textures{};
+  std::array<D9CBuffer, D9C_DRAW_PACKET_MAX_STREAMS> streams{};
+  std::array<D9CSurface, D9C_DRAW_PACKET_MAX_RENDER_TARGETS> targets{};
+  D9CShader vertexShader;
+  D9CShader pixelShader;
+  D9CVertexDecl declaration;
+  D9CBuffer indexBuffer;
+  D9CSurface depth;
+  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot)
+    bindings.textures[slot] = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+        &textures[slot], 0x1900u + slot);
+  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot)
+    bindings.streams[slot].buffer = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(
+        &streams[slot], 0x1a00u + slot);
+  for (std::uint32_t slot = 0u;
+       slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot)
+    bindings.renderTargets[slot] = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+        &targets[slot], 0x1b00u + slot);
+  shadow.writer().pendingRenderStatesTyped().set(renderStateSlotKey(1u),
+                                                  0x200u);
+  bindings.vs = localRef<D9C_CHUNK_HANDLE_KIND_SHADER>(&vertexShader, 0x1c01u);
+  bindings.ps = localRef<D9C_CHUNK_HANDLE_KIND_SHADER>(&pixelShader, 0x1c02u);
+  bindings.vdecl =
+      localRef<D9C_CHUNK_HANDLE_KIND_VERTEX_DECL>(&declaration, 0x1c03u);
+  bindings.indexBuffer =
+      localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&indexBuffer, 0x1c04u);
+  bindings.depthStencil =
+      localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&depth, 0x1c05u);
+  shadow.writer().pendingTextureMask() = (1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u;
+  shadow.writer().pendingStreamMask() = (1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u;
+  shadow.writer().pendingVs() = true;
+  shadow.writer().pendingPs() = true;
+  shadow.writer().pendingVdecl() = true;
+  shadow.writer().pendingIb() = true;
+  shadow.writer().pendingRtMask() =
+      (1u << D9C_DRAW_PACKET_MAX_RENDER_TARGETS) - 1u;
+  shadow.writer().pendingDs() = true;
+  shadow.writer().pendingViewport() = true;
+  shadow.writer().pendingScissor() = true;
+  shadow.writer().pendingMaterial() = true;
+  shadow.writer().pendingClipPlaneMask() = 0x3fu;
+  shadow.writer().pendingLightSlotMask() =
+      (1u << D9C_DRAW_PACKET_MAX_LIGHTS) - 1u;
+  shadow.writer().pendingLightEnableValidMask() =
+      (1u << D9C_DRAW_PACKET_MAX_LIGHTS) - 1u;
+  shadow.writer().pendingLightEnableMask() = 0x5au;
+  shadow.writer().pendingTssTyped().set(textureStageIndexKey(0u),
+                                        textureStageStateTypeKey(0u), 0x201u);
+  SamplerIndex sampler{};
+  SamplerStateType samplerType{};
+  check(samplerIndexKey(0u, sampler) && samplerStateTypeKey(0u, samplerType),
+        "all17 reference sampler keys are valid");
+  shadow.writer().pendingSamplerStatesTyped().set(sampler, samplerType, 0x202u);
+  shadow.writer().pendingTransformsTyped().set(
+      transformStateKey(kD3dTsView), identityTransformMatrix());
+  PeDrawParams params{.recordType = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+                      .primitiveType = 4u,
+                      .primitiveCount = 1u};
+  SparseStatePlan plan;
+  using ReferenceOwner = PeSemanticBatchOwner<8u, 64u, 8192u, 8u, 64u>;
+  ReferenceOwner owner;
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken thread;
+  RecorderLockGuard guard(mutex, false);
+  PeSemanticProductionCompactPreparedRecord prepared{};
+  check(guard.withCapability(
+            thread, 0x1d00u, [&](const auto& access) noexcept {
+              if (!buildSparseStatePlan(access, shadow, constants, bindings,
+                                        payloads, params, false, false, plan) ||
+                  !finalizeSparseStatePlanChunkContext(access, chunk, plan))
+                return false;
+              const PeSemanticSparsePlanRecordInput input{
+                  .access = &access,
+                  .sparsePlan = &plan,
+                  .producer = PeSemanticProducerKind::DrawIndexedPrimitive,
+                  .recordType = params.recordType,
+                  .recordFlags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+                  .sourceOrdinal = 1u,
+                  .recordOrdinal = 1u,
+              };
+              if (owner.prepareAdmission(input, prepared) !=
+                  PeSemanticAdmissionOutcome::Admissible)
+                return false;
+              std::array<std::uint32_t, 17u> reference{};
+              for (std::size_t i = 0u; i < prepared.sparseLayout.sectionCount;
+                   ++i) {
+                const auto kind = prepared.sparseLayout.sections[i].kind;
+                if (kind >= D9C_COMMAND_CHUNK_SECTION_RENDER_STATE &&
+                    kind <= D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE) {
+                  reference[kind - D9C_COMMAND_CHUNK_SECTION_RENDER_STATE] =
+                      prepared.sparseLayout.sections[i].count;
+                }
+              }
+              std::array<std::uint32_t, 17u> published{};
+              if (!forEachPreparedSparseQuota(
+                      prepared.sparseLayout,
+                      [&](std::size_t category, std::uint32_t delta) noexcept {
+                        published[category] += delta;
+                        return true;
+                      }))
+                return false;
+              return std::all_of(reference.begin(), reference.end(),
+                                 [](auto count) { return count != 0u; }) &&
+                     published == reference &&
+                     prepared.sparseLayout.quotaDeltas == reference;
+            }),
+        "actual all17 compact layout matches independent full17 quota reference");
+}
+
 void partialRectClearMatchesCanonicalBuilder() {
   Owner owner;
   const std::array<D9CRect, 2u> rects{{
@@ -5446,6 +5746,8 @@ int main(int argc, char** argv) {
     preparedIdentityWitnessUsesBoundedActivePrefixes();
     admissionArithmeticRejectsOverflow();
     preparedLayoutCoversEverySparseAndVariableSection();
+    preparedSparseQuotaUsesOnlyActiveSectionInventory();
+    realCompactQuotaDenialAndLayoutReference();
     pendingDeltaViewRejectsStaleTicket();
     transactionalAdmissionRollsBackWithoutLeakingPins();
     borrowedViewCapacityRebaseAndSettlementFault();

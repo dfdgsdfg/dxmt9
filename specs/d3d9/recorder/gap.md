@@ -13,6 +13,25 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.45–7.47 are implemented with bounded native and linked-code
+evidence: compact texture/stream/RT traversal uses ascending active bits,
+constant settlement clears only the pending interval, and compact quotas
+reuse the existing section inventory without new mutable metadata. All 17
+kind/quota mappings are compile-time pinned; real owner capacity tests isolate
+each dimension. All 256 eight-register membership masks, high-to-low and
+disjoint writes, A/B/A, failed retry, restored ranges and dirty reset refine
+full clearing. The six-family dispatch traces and generic canonical oracle
+remain intact. Main review fixed reset-before-clear and unrelated-stream
+denial masking; no illegal-state sentinel is counted as semantic evidence.
+
+Four full builds, native PE/audit 29/29, x86_64 focused 8/8, existing TLA and
+constant ASan/UBSan checks pass. Linked PE32/PE64 have no outlined set-bit
+iterator; exports and vtable/RTTI owners match. The provider and bridge DLLs
+are byte-identical. See
+[H250](../../../docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md).
+Fresh wild correctness, observer-off FPS and current PE attribution remain
+open. These changes do not modify transport, record cadence or queue policy.
+
 R-CORE-REC-7.42–7.44 are implemented with bounded native and linked-code
 evidence. VS range diagnostics gate dirty counting before append and shader
 lookup after successful append. Unobserved clean families bypass outlined

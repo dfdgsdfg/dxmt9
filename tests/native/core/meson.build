@@ -1,10 +1,11 @@
 # Core device, FFP, format, shader translator, draw-state, and DOD specs.
 
-# R-CORE-REC-7.42–7.43: production-used constant flush dispatch and observer
-# gating refine the six-family serial reference without Wine or a GPU.
+# R-CORE-REC-7.42–7.43/7.46: production constant writers, interval clear and
+# flush dispatch refine the six-family reference without Wine or a GPU.
 pe_const_flush_spec = executable(
   'dxmt9-pe-const-flush-spec',
   'pe_const_flush_spec.cpp',
+  dependencies: dxmt9_util_dep,
   include_directories: [
     dxmt9_inc,
     include_directories('../../../src'),

@@ -1,8 +1,10 @@
 #include "../../../src/d3d9/d3d9_pe_const_shadow.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdlib>
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <string_view>
@@ -14,6 +16,348 @@ void check(bool condition, std::string_view message) {
   if (!condition) {
     std::cerr << "FAIL: " << message << '\n';
     std::exit(1);
+  }
+}
+
+void clearConstShadowReference(ConstShadow& shadow) {
+  shadow.dirtyStart = shadow.dirtyEnd = 0u;
+  std::fill(shadow.dirtyElems.begin(), shadow.dirtyElems.end(),
+            std::uint8_t{0});
+}
+
+std::vector<std::uint8_t> constFlushTraceBytes(std::size_t elemSize,
+                                             std::uint32_t seed,
+                                             std::uint32_t count) {
+  std::vector<std::uint8_t> bytes(static_cast<std::size_t>(count) * elemSize);
+  for (std::size_t i = 0u; i < bytes.size(); ++i) {
+    bytes[i] = static_cast<std::uint8_t>(seed + i * 13u + 1u);
+  }
+  return bytes;
+}
+
+std::size_t constFlushTraceElementSize(std::size_t family) {
+  return family == 2u || family == 5u ? 4u : 16u;
+}
+
+std::uint32_t constFlushTraceHighRegister(std::size_t family) {
+  if (family == 0u) return 240u;
+  if (family == 3u) return 208u;
+  return 12u;
+}
+
+ConstShadow& constFlushTraceFamily(PeConstShadowBlock& shadows,
+                                   std::size_t family) {
+  switch (family) {
+  case 0u: return shadows.vsConstF;
+  case 1u: return shadows.vsConstI;
+  case 2u: return shadows.vsConstB;
+  case 3u: return shadows.psConstF;
+  case 4u: return shadows.psConstI;
+  default: return shadows.psConstB;
+  }
+}
+
+const ConstShadow& constFlushTraceFamily(const PeConstShadowBlock& shadows,
+                                         std::size_t family) {
+  switch (family) {
+  case 0u: return shadows.vsConstF;
+  case 1u: return shadows.vsConstI;
+  case 2u: return shadows.vsConstB;
+  case 3u: return shadows.psConstF;
+  case 4u: return shadows.psConstI;
+  default: return shadows.psConstB;
+  }
+}
+
+struct ConstFlushTraceRecord {
+  std::size_t family = 0u;
+  std::uint32_t start = 0u;
+  std::uint32_t count = 0u;
+  std::vector<std::uint8_t> bytes;
+
+  bool operator==(const ConstFlushTraceRecord&) const = default;
+};
+
+struct ConstFlushDifferentialTrace {
+  PeConstShadowBlock candidate;
+  PeConstShadowBlock reference;
+  std::vector<ConstFlushTraceRecord> candidateRecords;
+  std::vector<ConstFlushTraceRecord> referenceRecords;
+  std::vector<std::size_t> candidateCallbacks;
+  std::vector<std::size_t> referenceCallbacks;
+  std::size_t family = 0u;
+  std::size_t elemSize = 0u;
+
+  void compare() const {
+    for (std::size_t index = 0u; index < 6u; ++index) {
+      const auto& actual = constFlushTraceFamily(candidate, index);
+      const auto& expected = constFlushTraceFamily(reference, index);
+      check(actual.dirtyStart <= actual.dirtyEnd &&
+                actual.dirtyEnd <= actual.dirtyElems.size(),
+            "production writes preserve bounded dirty interval");
+      for (std::size_t reg = 0u; reg < actual.dirtyElems.size(); ++reg) {
+        check(actual.dirtyElems[reg] == 0u ||
+                  (actual.dirtyStart <= reg && reg < actual.dirtyEnd),
+              "production dirty interval contains every pending bit");
+      }
+      check(actual.values == expected.values,
+            "clear differential preserves materialized values");
+      check(actual.dirtyElems == expected.dirtyElems,
+            "clear differential preserves dirty bitmap membership");
+      check(actual.dirtyStart == expected.dirtyStart &&
+                actual.dirtyEnd == expected.dirtyEnd,
+            "clear differential preserves dirty interval");
+      check(actual.values.size() == expected.values.size() &&
+                actual.dirtyElems.size() == expected.dirtyElems.size(),
+            "clear differential preserves materialized extents");
+      check(actual.values.capacity() == expected.values.capacity() &&
+                actual.dirtyElems.capacity() == expected.dirtyElems.capacity(),
+            "clear differential preserves capacity");
+    }
+    check(candidateRecords == referenceRecords,
+          "clear differential preserves accepted flush payloads");
+    check(candidateCallbacks == referenceCallbacks,
+          "clear differential preserves flush diagnostic membership");
+  }
+
+  void apply(ConstShadow& shadow, std::uint32_t start, std::uint32_t count,
+             const std::vector<std::uint8_t>& bytes, bool fixedWidth) {
+    if (!fixedWidth) {
+      touchConstShadow(shadow, start, count, bytes.data(), elemSize);
+      return;
+    }
+    switch (elemSize) {
+    case 4u:
+      applyConstShadowLiveFixedWidth<4u>(shadow, start, count, bytes.data());
+      return;
+    case 16u:
+      applyConstShadowLiveFixedWidth<16u>(shadow, start, count, bytes.data());
+      return;
+    default:
+      check(false, "clear differential uses a supported constant width");
+    }
+  }
+
+  void write(std::uint32_t start, std::uint32_t count,
+             const std::vector<std::uint8_t>& bytes, bool fixedWidth) {
+    apply(constFlushTraceFamily(candidate, family), start, count, bytes,
+          fixedWidth);
+    apply(constFlushTraceFamily(reference, family), start, count, bytes,
+          fixedWidth);
+    compare();
+  }
+
+  void restore(StateBlockConstShadow& recorded) {
+    const auto publish = [&](ConstShadow& shadow) {
+      (void)recorded.forEachRange(
+          elemSize, [&](std::uint32_t start, std::uint32_t count,
+                        const std::uint8_t* bytes) {
+            const std::size_t begin = static_cast<std::size_t>(start) * elemSize;
+            const std::size_t end = begin + static_cast<std::size_t>(count) * elemSize;
+            if (shadow.values.size() < end) shadow.values.resize(end);
+            if (shadow.dirtyElems.size() <
+                static_cast<std::size_t>(start) + count) {
+              shadow.dirtyElems.resize(static_cast<std::size_t>(start) + count);
+            }
+            // This is the production StateBlockApply commit shape: restored
+            // ranges publish bytes first, then mark the complete tracked
+            // range pending even when a byte equals the live value.
+            std::memcpy(shadow.values.data() + begin, bytes, end - begin);
+            std::fill(shadow.dirtyElems.begin() + start,
+                      shadow.dirtyElems.begin() + start + count,
+                      std::uint8_t{1});
+            if (!shadow.dirty()) {
+              shadow.dirtyStart = start;
+              shadow.dirtyEnd = start + count;
+            } else {
+              shadow.dirtyStart = std::min(shadow.dirtyStart, start);
+              shadow.dirtyEnd = std::max(shadow.dirtyEnd, start + count);
+            }
+            return true;
+          });
+    };
+    publish(constFlushTraceFamily(candidate, family));
+    publish(constFlushTraceFamily(reference, family));
+    compare();
+  }
+
+  int flush(bool candidatePath, bool observeEmpty, int failureFamily) {
+    auto& shadows = candidatePath ? candidate : reference;
+    auto& callbacks = candidatePath ? candidateCallbacks : referenceCallbacks;
+    auto& records = candidatePath ? candidateRecords : referenceRecords;
+    return dispatchPeConstFlushes(
+        shadows, observeEmpty,
+        [&](ConstShadow& shadow, std::size_t flushFamily) {
+          callbacks.push_back(flushFamily);
+          if (!shadow.dirty()) return 0;
+          if (static_cast<int>(flushFamily) == failureFamily) return -9;
+          records.push_back(ConstFlushTraceRecord{
+              flushFamily, shadow.dirtyStart,
+              shadow.dirtyEnd - shadow.dirtyStart,
+              std::vector<std::uint8_t>(
+                  shadow.values.begin() +
+                      static_cast<std::size_t>(shadow.dirtyStart) *
+                          constFlushTraceElementSize(flushFamily),
+                  shadow.values.begin() +
+                      static_cast<std::size_t>(shadow.dirtyEnd) *
+                          constFlushTraceElementSize(flushFamily))});
+          if (candidatePath) {
+            shadow.clear();
+          } else {
+            clearConstShadowReference(shadow);
+          }
+          return 0;
+        },
+        [](int status) noexcept { return status < 0; });
+  }
+};
+
+void testConstShadowClearDifferential() {
+  // Keep this trace bounded but cover every production family and both
+  // fixed-width and generic reducer entry points. The reference differs only
+  // in using the former full-vector settlement operation.
+  for (const bool fixedWidth : {false, true}) {
+    for (std::size_t family = 0u; family < 6u; ++family) {
+      ConstFlushDifferentialTrace trace;
+      trace.family = family;
+      trace.elemSize = constFlushTraceElementSize(family);
+      const auto high = constFlushTraceHighRegister(family);
+
+      trace.write(high, 1u,
+                  constFlushTraceBytes(trace.elemSize, 3u, 1u), fixedWidth);
+      const auto candidateValuesCapacity =
+          constFlushTraceFamily(trace.candidate, family).values.capacity();
+      const auto candidateElemsCapacity =
+          constFlushTraceFamily(trace.candidate, family).dirtyElems.capacity();
+      check(constFlushTraceFamily(trace.candidate, family).dirty(),
+            "reset probe starts with pending high-register write");
+      trace.candidate.reset();
+      for (std::size_t resetFamily = 0u; resetFamily < 6u; ++resetFamily) {
+        auto& reference = constFlushTraceFamily(trace.reference, resetFamily);
+        reference.values.clear();
+        reference.dirtyElems.clear();
+        clearConstShadowReference(reference);
+      }
+      trace.compare();
+      check(constFlushTraceFamily(trace.candidate, family).values.size() == 0u &&
+                constFlushTraceFamily(trace.candidate, family).dirtyElems.size() == 0u,
+            "reset while dirty clears both materialized extents");
+      check(constFlushTraceFamily(trace.candidate, family).values.capacity() ==
+                candidateValuesCapacity &&
+                constFlushTraceFamily(trace.candidate, family).dirtyElems.capacity() ==
+                    candidateElemsCapacity,
+            "reset while dirty retains capacity");
+      trace.write(0u, 1u,
+                  constFlushTraceBytes(trace.elemSize, 4u, 1u), fixedWidth);
+      check(trace.flush(true, false, -1) == trace.flush(false, false, -1),
+            "post-reset low-write flush settles identically");
+      trace.compare();
+
+      trace.write(high, 1u,
+                  constFlushTraceBytes(trace.elemSize, 5u, 1u), fixedWidth);
+      check(trace.flush(true, false, -1) == trace.flush(false, false, -1),
+            "high-register flush settles identically");
+      trace.compare();
+
+      // Repeated low writes after a high-register materialization exercise the
+      // grow-only bitmap extent without reintroducing historical dirtiness.
+      for (std::uint32_t seed = 10u; seed < 14u; ++seed) {
+        trace.write(0u, 1u,
+                    constFlushTraceBytes(trace.elemSize, seed, 1u),
+                    fixedWidth);
+        check(trace.flush(true, false, -1) == trace.flush(false, false, -1),
+              "repeated low-write flush settles identically");
+        trace.compare();
+      }
+
+      trace.write(2u, 1u,
+                  constFlushTraceBytes(trace.elemSize, 21u, 1u), fixedWidth);
+      trace.write(high - 1u, 1u,
+                  constFlushTraceBytes(trace.elemSize, 22u, 1u), fixedWidth);
+      check(trace.flush(true, false, -1) == trace.flush(false, false, -1),
+            "disjoint writes retain one merged flush range");
+      trace.compare();
+
+      const auto equal = constFlushTraceBytes(trace.elemSize, 31u, 2u);
+      trace.write(4u, 2u, equal, fixedWidth);
+      check(trace.flush(true, false, -1) == trace.flush(false, false, -1),
+            "equal-write seed flush settles identically");
+      trace.write(4u, 2u, equal, fixedWidth);
+      check(trace.flush(true, false, -1) == trace.flush(false, false, -1),
+            "equal writes do not create a flush record");
+      trace.compare();
+
+      const auto a = constFlushTraceBytes(trace.elemSize, 41u, 1u);
+      const auto b = constFlushTraceBytes(trace.elemSize, 51u, 1u);
+      trace.write(8u, 1u, a, fixedWidth);
+      check(trace.flush(true, false, -1) == trace.flush(false, false, -1),
+            "A seed flush settles identically");
+      trace.write(8u, 1u, b, fixedWidth);
+      trace.write(8u, 1u, a, fixedWidth);
+      check(trace.flush(true, false, -1) == trace.flush(false, false, -1),
+            "A/B/A flush settles identically");
+      trace.compare();
+
+      trace.write(9u, 2u,
+                  constFlushTraceBytes(trace.elemSize, 61u, 2u), fixedWidth);
+      check(trace.flush(true, false, static_cast<int>(family)) ==
+                trace.flush(false, false, static_cast<int>(family)),
+            "failed flush preserves pending settlement for retry");
+      trace.compare();
+      check(constFlushTraceFamily(trace.candidate, family).dirty() &&
+                constFlushTraceFamily(trace.reference, family).dirty(),
+            "failed flush leaves the dirty interval pending");
+      check(trace.flush(true, false, -1) == trace.flush(false, false, -1),
+            "retry flush settles identically");
+      trace.compare();
+
+      StateBlockConstShadow recorded;
+      const auto restoredA = constFlushTraceBytes(trace.elemSize, 71u, 1u);
+      const auto restoredB = constFlushTraceBytes(trace.elemSize, 81u, 2u);
+      recorded.record(3u, 1u, restoredA.data(), trace.elemSize);
+      recorded.record(high - 3u, 2u, restoredB.data(), trace.elemSize);
+      trace.restore(recorded);
+      check(trace.flush(true, false, -1) == trace.flush(false, false, -1),
+            "StateBlock-like restored ranges flush identically");
+      trace.compare();
+    }
+  }
+}
+
+void testConstShadowClearValidMasks() {
+  // Every mask is a valid dirty membership: dirtyStart/dirtyEnd encloses the
+  // first and last pending bits, while holes inside that interval are clean.
+  // This compares the candidate against the old full-clear reference without
+  // manufacturing an impossible out-of-interval pending bit.
+  for (unsigned mask = 0u; mask < (1u << 8u); ++mask) {
+    ConstShadow candidate;
+    candidate.values.resize(8u, 0x5au);
+    candidate.dirtyElems.resize(8u, 0u);
+    std::uint32_t first = 8u;
+    std::uint32_t last = 0u;
+    for (std::uint32_t reg = 0u; reg < 8u; ++reg) {
+      if ((mask & (1u << reg)) == 0u) continue;
+      candidate.dirtyElems[reg] = 1u;
+      first = std::min(first, reg);
+      last = reg + 1u;
+    }
+    candidate.dirtyStart = mask == 0u ? 0u : first;
+    candidate.dirtyEnd = mask == 0u ? 0u : last;
+    ConstShadow reference = candidate;
+    const auto values = candidate.values;
+
+    candidate.clear();
+    clearConstShadowReference(reference);
+    check(candidate.values == values && candidate.values == reference.values,
+          "bounded clear preserves all materialized bytes");
+    check(candidate.dirtyElems == reference.dirtyElems,
+          "bounded clear matches full-clear bitmap membership");
+    check(std::all_of(candidate.dirtyElems.begin(), candidate.dirtyElems.end(),
+                      [](std::uint8_t value) { return value == 0u; }),
+          "bounded clear settles every valid membership mask");
+    check(candidate.dirtyStart == 0u && candidate.dirtyEnd == 0u &&
+              reference.dirtyStart == 0u && reference.dirtyEnd == 0u,
+          "bounded clear and reference reset zero bounds");
   }
 }
 
@@ -267,6 +611,8 @@ void testExceptionPropagation() {
 }  // namespace
 
 int main() {
+  testConstShadowClearDifferential();
+  testConstShadowClearValidMasks();
   testDispatchPredicateTruthTable();
   testDispatchSequenceExhaustiveMasks();
   testDispatchStopsAtFirstFailure();

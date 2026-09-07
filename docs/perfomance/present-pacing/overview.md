@@ -29,7 +29,15 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
-The latest local refinement [H249](present-pacing-pe-flush-layout.249.md)
+The latest local refinement [H250](present-pacing-pe-sparse-work.250.md)
+uses active-bit compact binding scans, pending-interval constant clearing and
+existing-section quota traversal. Four builds, native 29/29, x86_64 8/8,
+unchanged TLA and constant sanitizers pass. Linked PE32/PE64 eliminate the
+initial iterator outlining without new mutable state; exports/owners match
+and provider/bridge binaries are unchanged. Fresh wild correctness/FPS and
+current PE bottleneck attribution remain open.
+
+The latest runtime checkpoint [H249](present-pacing-pe-flush-layout.249.md)
 removes disabled constant-flush work and repeated compact mask counting. Four
 builds, native 29/29, x86_64 8/8 and the unchanged TLA suite pass; linked
 PE32/PE64 writers lose six software-popcount expansions each. A hash-qualified

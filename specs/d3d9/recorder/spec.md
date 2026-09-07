@@ -958,6 +958,23 @@ is no new shader or Metal binding behavior requiring a distinct GPU oracle.
 Fresh workload correctness and observer-off performance remain separate
 integration evidence, not conclusions from static instruction removal.
 
+R-CORE-REC-7.45–7.47 extend these local refinements to iteration extent. Sparse
+binding traversal follows ascending set bits, preserving the canonical order
+and first failing occurrence. Capacity checks and logical quota publication
+use the active categories of the already-prepared layout, not a separately
+maintained recorder cache. The layout remains append-local and carries no
+additional resource lifetime authority.
+
+Constant membership clearing uses the pending interval as an existing proof
+of the only potentially dirty registers. Setters, generic transitions and
+StateBlock restoration must all preserve containment; settlement clears the
+interval before resetting its bounds. Value storage remains grow-only until
+reset, and failed append performs no settlement. Bounded native comparison
+with full-universe traversal/full-bitmap clearing binds these optimizations to
+production helpers. Existing transaction TLA models continue to own unchanged
+ordering; linked PE inspection and later wild evidence separately assess cost
+and integration. No new concurrency or GPU semantics are introduced.
+
 The optional owner-qualified copy/materialization ledger binds this same
 transaction at its two physical ownership boundaries. A successful admission
 records the increase in live typed record, pin, and canonical-role

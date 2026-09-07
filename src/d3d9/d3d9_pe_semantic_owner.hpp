@@ -11,6 +11,7 @@
 
 #include "d3d9_pe_producer_views.hpp"
 #include "d3d9_pe_retainer.hpp"
+#include "d3d9_pe_sparse_iteration.hpp"
 #include "d3d9_pe_semantic_tokens.hpp"
 #include "d3d9_pe_semantic_owner_phase_observer.hpp"
 #include "dxmt9/copy_materialization_ledger.hpp"
@@ -206,6 +207,28 @@ struct PeSemanticPreparedSparseLayout {
 
 static_assert(std::is_trivially_copyable_v<PeSemanticPreparedSection>);
 static_assert(std::is_trivially_copyable_v<PeSemanticPreparedSparseLayout>);
+
+// The first seventeen canonical section kinds map one-to-one to the logical
+// sparse quota categories. The prepared section inventory is the immutable
+// active-set witness; constants and UP tails intentionally do not participate
+// in sparse quota publication.
+template <typename Visit>
+  requires std::is_nothrow_invocable_r_v<bool, Visit&, std::size_t,
+                                         std::uint32_t>
+bool forEachPreparedSparseQuota(
+    const PeSemanticPreparedSparseLayout& layout, Visit&& visit) noexcept {
+  if (layout.sectionCount > layout.sections.size()) return false;
+  for (std::size_t i = 0u; i < layout.sectionCount; ++i) {
+    const auto kind = layout.sections[i].kind;
+    if (kind < D9C_COMMAND_CHUNK_SECTION_RENDER_STATE ||
+        kind > D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE)
+      continue;
+    const auto quota = static_cast<std::size_t>(
+        kind - D9C_COMMAND_CHUNK_SECTION_RENDER_STATE);
+    if (!visit(quota, layout.quotaDeltas[quota])) return false;
+  }
+  return true;
+}
 
 // One row per binding occurrence. Unlike the former owned binding arenas it
 // carries no wire row copy: the source row is serialized directly while the
@@ -2094,10 +2117,22 @@ class PeSemanticBatchOwner final {
         (UseLayoutQuota && !witness.sparseLayout.valid) ||
         recordCount_ >= MaxRecords || !witness.rule ||
         plan.payloadBytes == 0u) return false;
-    for (std::size_t i = 0u; i < quota.size(); ++i) {
-      if (quota[i] > MaxSparseValues - sparseCounts_.values[i])
-        return false;
-    }
+    const auto quotaFits = [&]() noexcept {
+      if constexpr (UseLayoutQuota) {
+        return forEachPreparedSparseQuota(
+            witness.sparseLayout,
+            [&](std::size_t i, std::uint32_t count) noexcept {
+              return count <= MaxSparseValues - sparseCounts_.values[i];
+            });
+      } else {
+        for (std::size_t i = 0u; i < quota.size(); ++i) {
+          if (quota[i] > MaxSparseValues - sparseCounts_.values[i])
+            return false;
+        }
+        return true;
+      }
+    };
+    if (!quotaFits()) return false;
     if (plan.rectCount > MaxRects - rectCount_ ||
         plan.semanticBytes > MaxSemanticBytes - semanticBytes_) return false;
     const auto fitsPins = [](std::size_t used, std::size_t add) noexcept {
@@ -2424,22 +2459,30 @@ class PeSemanticBatchOwner final {
           };
           if (!beginFamily(0u, quota[kTextures])) return false;
           std::size_t occurrence = 0u;
-          for (std::uint32_t slot = 0u;
-               slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
-            if ((sourceFacts.textureMask & (1u << slot)) == 0u) continue;
-            add(bindings.textures[slot], D9C_CHUNK_HANDLE_KIND_TEXTURE,
-                1u, 0u, occurrence++);
-          }
+          if (!forEachSetBitAscending(
+                  sourceFacts.textureMask &
+                      ((1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u),
+                  [&](std::uint32_t slot) noexcept {
+                    add(bindings.textures[slot],
+                        D9C_CHUNK_HANDLE_KIND_TEXTURE, 1u, 0u,
+                        occurrence++);
+                    return ok;
+                  }))
+            return false;
           if (!ok) return false;
           witness.bindingOccurrences.count += occurrence;
           if (!beginFamily(1u, quota[kStreams])) return false;
           occurrence = 0u;
-          for (std::uint32_t slot = 0u;
-               slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-            if ((destinationFacts.streamMask & (1u << slot)) == 0u) continue;
-            add(bindings.streams[slot].buffer, D9C_CHUNK_HANDLE_KIND_BUFFER,
-                2u, 1u, occurrence++);
-          }
+          if (!forEachSetBitAscending(
+                  destinationFacts.streamMask &
+                      ((1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u),
+                  [&](std::uint32_t slot) noexcept {
+                    add(bindings.streams[slot].buffer,
+                        D9C_CHUNK_HANDLE_KIND_BUFFER, 2u, 1u,
+                        occurrence++);
+                    return ok;
+                  }))
+            return false;
           if (!ok) return false;
           witness.bindingOccurrences.count += occurrence;
           if (!beginFamily(2u, quota[kShaders])) return false;
@@ -2474,12 +2517,16 @@ class PeSemanticBatchOwner final {
           witness.bindingOccurrences.count += occurrence;
           if (!beginFamily(5u, quota[kRenderTargets])) return false;
           occurrence = 0u;
-          for (std::uint32_t slot = 0u;
-               slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
-            if ((sourceFacts.renderTargetMask & (1u << slot)) == 0u) continue;
-            add(bindings.renderTargets[slot], D9C_CHUNK_HANDLE_KIND_SURFACE,
-                0u, 5u, occurrence++);
-          }
+          if (!forEachSetBitAscending(
+                  sourceFacts.renderTargetMask &
+                      ((1u << D9C_DRAW_PACKET_MAX_RENDER_TARGETS) - 1u),
+                  [&](std::uint32_t slot) noexcept {
+                    add(bindings.renderTargets[slot],
+                        D9C_CHUNK_HANDLE_KIND_SURFACE, 0u, 5u,
+                        occurrence++);
+                    return ok;
+                  }))
+            return false;
           if (!ok) return false;
           witness.bindingOccurrences.count += occurrence;
           if (!beginFamily(6u, sourceFacts.depthStencil ? 1u : 0u)) return false;
@@ -4277,28 +4324,28 @@ class PeSemanticBatchOwner final {
             return ok;
           };
           const auto visitTextures = [&](const auto& emit) noexcept {
-            for (std::uint32_t source = 0u;
-                 source < D9C_DRAW_PACKET_MAX_TEXTURES; ++source) {
-              if ((sourceFacts.textureMask & (1u << source)) == 0u) continue;
-              D9CCommandChunkWireTextureBinding value{};
-              value.slot = source;
-              value.valid = 1u;
-              if (!emit(value, bindings.textures[source])) return false;
-            }
-            return true;
+            return forEachSetBitAscending(
+                sourceFacts.textureMask &
+                    ((1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u),
+                [&](std::uint32_t source) noexcept {
+                  D9CCommandChunkWireTextureBinding value{};
+                  value.slot = source;
+                  value.valid = 1u;
+                  return emit(value, bindings.textures[source]);
+                });
           };
           const auto visitStreams = [&](const auto& emit) noexcept {
-            for (std::uint32_t source = 0u;
-                 source < D9C_DRAW_PACKET_MAX_STREAMS; ++source) {
-              if ((destinationFacts.streamMask & (1u << source)) == 0u) continue;
-              D9CCommandChunkWireStreamBinding value{};
-              value.slot = source;
-              value.valid = 1u;
-              value.offset = bindings.streams[source].offset;
-              value.stride = bindings.streams[source].stride;
-              if (!emit(value, bindings.streams[source].buffer)) return false;
-            }
-            return true;
+            return forEachSetBitAscending(
+                destinationFacts.streamMask &
+                    ((1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u),
+                [&](std::uint32_t source) noexcept {
+                  D9CCommandChunkWireStreamBinding value{};
+                  value.slot = source;
+                  value.valid = 1u;
+                  value.offset = bindings.streams[source].offset;
+                  value.stride = bindings.streams[source].stride;
+                  return emit(value, bindings.streams[source].buffer);
+                });
           };
           const auto visitShaders = [&](const auto& emit) noexcept {
             for (std::uint32_t stage = 0u; stage < 2u; ++stage) {
@@ -4332,15 +4379,15 @@ class PeSemanticBatchOwner final {
             return emit(value, bindings.indexBuffer);
           };
           const auto visitRenderTargets = [&](const auto& emit) noexcept {
-            for (std::uint32_t source = 0u;
-                 source < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++source) {
-              if ((sourceFacts.renderTargetMask & (1u << source)) == 0u) continue;
-              D9CCommandChunkWireRenderTargetBinding value{};
-              value.slot = source;
-              value.valid = 1u;
-              if (!emit(value, bindings.renderTargets[source])) return false;
-            }
-            return true;
+            return forEachSetBitAscending(
+                sourceFacts.renderTargetMask &
+                    ((1u << D9C_DRAW_PACKET_MAX_RENDER_TARGETS) - 1u),
+                [&](std::uint32_t source) noexcept {
+                  D9CCommandChunkWireRenderTargetBinding value{};
+                  value.slot = source;
+                  value.valid = 1u;
+                  return emit(value, bindings.renderTargets[source]);
+                });
           };
           const auto visitDepthStencil = [&](const auto& emit) noexcept {
             if (!sourceFacts.depthStencil) return true;
@@ -4830,6 +4877,47 @@ class PeSemanticBatchOwner final {
   static constexpr std::size_t kTransforms = 14u;
   static constexpr std::size_t kLights = 15u;
   static constexpr std::size_t kLightEnables = 16u;
+
+  // The prepared section inventory is the sole active quota set. Keep its
+  // canonical kind-to-category mapping compile-time coupled to the existing
+  // owner counters so a schema reorder cannot silently publish the wrong
+  // sparse dimension.
+  static_assert(
+      D9C_COMMAND_CHUNK_SECTION_RENDER_STATE -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE == kRenderStates &&
+      D9C_COMMAND_CHUNK_SECTION_TEXTURE -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE == kTextures &&
+      D9C_COMMAND_CHUNK_SECTION_STREAM -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE == kStreams &&
+      D9C_COMMAND_CHUNK_SECTION_SHADER -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE == kShaders &&
+      D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE == kVertexInputs &&
+      D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE == kIndexBuffers &&
+      D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE == kRenderTargets &&
+      D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE == kDepthStencils &&
+      D9C_COMMAND_CHUNK_SECTION_VIEWPORT -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE == kViewports &&
+      D9C_COMMAND_CHUNK_SECTION_SCISSOR -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE == kScissors &&
+      D9C_COMMAND_CHUNK_SECTION_MATERIAL -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE == kMaterials &&
+      D9C_COMMAND_CHUNK_SECTION_CLIP_PLANE -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE == kClipPlanes &&
+      D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE ==
+              kTextureStageStates &&
+      D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE == kSamplerStates &&
+      D9C_COMMAND_CHUNK_SECTION_TRANSFORM -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE == kTransforms &&
+      D9C_COMMAND_CHUNK_SECTION_LIGHT -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE == kLights &&
+      D9C_COMMAND_CHUNK_SECTION_LIGHT_ENABLE -
+                  D9C_COMMAND_CHUNK_SECTION_RENDER_STATE == kLightEnables);
 
   std::size_t ownedMaterializedBytes() const noexcept {
     if (!ready_) return 0u;
@@ -5637,29 +5725,21 @@ class PeSemanticBatchOwner final {
   bool copySparsePlan(const PeSemanticSparsePlanRecordInput& input,
                       const auto& prepared,
                       const PreparedAppendAuthority& authority) noexcept {
-    // The private authority carries the already-complete 17-category quota
+    // The private authority carries the already-complete active-category quota
     // proof and the unchanged destination frontier. Source validity and the
     // physical payload/handle checks remain in the serializer below; this
     // path only publishes the proved logical deltas.
     if (!authority.bindsSource(input, prepared, *this) ||
         !prepared.sparseLayout.valid) return false;
     const auto& quota = prepared.sparseLayout.quotaDeltas;
-    const auto claim = [&](std::size_t kind) noexcept {
-      if (kind >= quota.size()) return false;
-      const auto count = static_cast<std::size_t>(quota[kind]);
-      if (count == 0u) return true;
-      sparseCounts_.values[kind] += count;
-      return true;
-    };
-    if (!claim(kRenderStates) || !claim(kTextures) ||
-        !claim(kStreams) || !claim(kShaders) ||
-        !claim(kVertexInputs) || !claim(kIndexBuffers) ||
-        !claim(kRenderTargets) || !claim(kDepthStencils) ||
-        !claim(kViewports) || !claim(kScissors) ||
-        !claim(kMaterials) || !claim(kClipPlanes) ||
-        !claim(kTextureStageStates) || !claim(kSamplerStates) ||
-        !claim(kTransforms) || !claim(kLights) ||
-        !claim(kLightEnables)) {
+    if (!forEachPreparedSparseQuota(
+            prepared.sparseLayout,
+            [&](std::size_t kind, std::uint32_t count) noexcept {
+              if (kind >= quota.size()) return false;
+              sparseCounts_.values[kind] +=
+                  static_cast<std::size_t>(count);
+              return true;
+            })) {
       lastAdmissionFailure_ = AdmissionFailure::SparseArena;
       return false;
     }

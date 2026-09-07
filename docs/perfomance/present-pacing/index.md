@@ -5,13 +5,18 @@ title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
 updated: 2026-09-07
-source: docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
+source: docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md; docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest local refinement: [H249](present-pacing-pe-flush-layout.249.md) gates
+Latest local refinement: [H250](present-pacing-pe-sparse-work.250.md) limits
+compact binding traversal, quota processing and constant bitmap clearing to
+active input. Native/TLA, sanitizer and linked PE checks pass; fresh wild/FPS
+evidence remains open. No new mutable cache or transport change is introduced.
+
+Latest runtime checkpoint: [H249](present-pacing-pe-flush-layout.249.md) gates
 disabled constant-flush diagnostics, skips unobserved empty flushes, and reuses
 prepared compact counts. Native/codegen checks pass. A post-commit GT2 spot
 check gives 28.835 FPS versus prior H248 29.048 (-0.73%); run health passes,
@@ -36,6 +41,7 @@ The CPU-ready Tape locality gap remains an independent workstream.
 
 ## Recent Leaf Documents
 
+- [present-pacing-pe-sparse-work.250 - Active Sparse Work and Bounded Dirty Clearing](present-pacing-pe-sparse-work.250.md)
 - [present-pacing-pe-flush-layout.249 - Constant Flush and Prepared Count Refinement](present-pacing-pe-flush-layout.249.md)
 - [present-pacing-pe-identity-distribution.248 - Measured Small-Set Identity Decision](present-pacing-pe-identity-distribution.248.md)
 - [present-pacing-pe-compact-refinement.247 - Compact Transaction and Live Borrow Refinement](present-pacing-pe-compact-refinement.247.md)

@@ -976,3 +976,28 @@ freshness, section shape, bounds, retention, capacity and rollback checks remain
 authoritative. Empty, sparse and maximum masks, destination reuse, A/B/A and
 failed retry must preserve generic-reference canonical bytes. Linked PE32/PE64
 inspection must identify eliminated work separately from runtime speedup.
+
+**R-CORE-REC-7.45** Sparse plan, admission and canonical emission may traverse
+only set binding bits, in ascending source-index order. Empty masks must do no
+element work. Mask bounds, first-failure ordering, null/duplicate identities,
+source qualification and callback invalidation must remain unchanged. Bounded
+native comparison must preserve the full-scan reference's byte order and
+failure prefix, including empty, sparse and maximum masks.
+
+**R-CORE-REC-7.46** Successful constant settlement may clear dirty membership
+only within the pending interval. All dirty membership must be contained in
+that interval before settlement; every production writer must preserve this
+invariant. Clearing must preserve materialized values and extents, and failed
+append must preserve pending membership for retry. Native refinement against
+full-bitmap clearing must cover high-to-low register reuse, disjoint updates,
+equal writes, A/B/A, restored state, reset and failed retry. No second mutable
+dirty authority or per-clear full-bitmap validation is permitted.
+
+**R-CORE-REC-7.47** Compact quota proof and publication may visit only active
+categories derived from the same prepared sparse-layout witness. Every
+nonzero delta must participate exactly once; inactive categories must remain
+unchanged. Generic admission, aggregate limits, source freshness and rollback
+remain authoritative. Native counterexamples must deny each sparse capacity
+dimension independently and preserve reference bytes and counters across
+empty/sparse/full reuse and retry. Active metadata must not outlive or drift
+from its prepared append.

@@ -1,5 +1,6 @@
 #include "d3d9_pe_producer.hpp"
 
+#include "d3d9_pe_sparse_iteration.hpp"
 #include "d3d9_pe_wire_handle.hpp"
 #include "dxmt9/assert.hpp"
 #include "util/log/log.hpp"
@@ -216,19 +217,19 @@ bool buildSparseStatePlan(const RecorderLockCapability& access,
                          std::uint32_t kind) noexcept {
     return ref.object == nullptr || ref.valid(kind);
   };
-  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
-    if ((plan.source_.textureMask & (1u << slot)) != 0u &&
-        !usable(bindings.textures[slot], D9C_CHUNK_HANDLE_KIND_TEXTURE)) {
-      return false;
-    }
-  }
-  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-    if ((plan.destination_.streamMask & (1u << slot)) != 0u &&
-        !usable(bindings.streams[slot].buffer,
-                D9C_CHUNK_HANDLE_KIND_BUFFER)) {
-      return false;
-    }
-  }
+  if (!forEachSetBitAscending(
+          plan.source_.textureMask & lowMask(D9C_DRAW_PACKET_MAX_TEXTURES),
+          [&](std::uint32_t slot) noexcept {
+            return usable(bindings.textures[slot],
+                          D9C_CHUNK_HANDLE_KIND_TEXTURE);
+          }) ||
+      !forEachSetBitAscending(
+          plan.destination_.streamMask & lowMask(D9C_DRAW_PACKET_MAX_STREAMS),
+          [&](std::uint32_t slot) noexcept {
+            return usable(bindings.streams[slot].buffer,
+                          D9C_CHUNK_HANDLE_KIND_BUFFER);
+          }))
+    return false;
   if (((plan.source_.shaderMask & 1u) != 0u &&
        !usable(bindings.vs, D9C_CHUNK_HANDLE_KIND_SHADER)) ||
       ((plan.source_.shaderMask & 2u) != 0u &&
@@ -243,14 +244,14 @@ bool buildSparseStatePlan(const RecorderLockCapability& access,
        !usable(bindings.depthStencil, D9C_CHUNK_HANDLE_KIND_SURFACE))) {
     return false;
   }
-  for (std::uint32_t slot = 0u;
-       slot < D9C_DRAW_PACKET_MAX_RENDER_TARGETS; ++slot) {
-    if ((plan.source_.renderTargetMask & (1u << slot)) != 0u &&
-        !usable(bindings.renderTargets[slot],
-                D9C_CHUNK_HANDLE_KIND_SURFACE)) {
-      return false;
-    }
-  }
+  if (!forEachSetBitAscending(
+          plan.source_.renderTargetMask &
+              lowMask(D9C_DRAW_PACKET_MAX_RENDER_TARGETS),
+          [&](std::uint32_t slot) noexcept {
+            return usable(bindings.renderTargets[slot],
+                          D9C_CHUNK_HANDLE_KIND_SURFACE);
+          }))
+    return false;
 
   const bool destinationDependent =
       params.recordType == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
@@ -389,12 +390,12 @@ static bool acceptSparseStatePlanWithSources(
   }
   const std::uint32_t addedStreams =
       destination.streamMask & ~source.selectedStreamMask;
-  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_STREAMS; ++slot) {
-    if ((addedStreams & (1u << slot)) != 0u &&
-        bindings.streams[slot].buffer.object == nullptr) {
-      return false;
-    }
-  }
+  if (!forEachSetBitAscending(
+          addedStreams & lowMask(D9C_DRAW_PACKET_MAX_STREAMS),
+          [&](std::uint32_t slot) noexcept {
+            return bindings.streams[slot].buffer.object != nullptr;
+          }))
+    return false;
   if (destination.indexBuffer &&
       source.draw.recordType !=
           D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {

@@ -25,13 +25,23 @@ struct ConstShadow {
         return dirtyEnd > dirtyStart;
     }
     void clear() {
+        if (!dirty()) {
+            dirtyStart = dirtyEnd = 0;
+            return;
+        }
+        // Every production writer grows this interval to contain each element
+        // it marks; clean holes inside the interval are valid. Keep the
+        // historical materialized extent untouched and settle only that
+        // bounded interval; the full dirtyElems vector may be much larger
+        // after a high-register write.
+        std::fill(dirtyElems.begin() + dirtyStart,
+                  dirtyElems.begin() + dirtyEnd, std::uint8_t{0});
         dirtyStart = dirtyEnd = 0;
-        std::fill(dirtyElems.begin(), dirtyElems.end(), std::uint8_t{0});
     }
     void reset() {
         values.clear();
         dirtyElems.clear();
-        clear();
+        dirtyStart = dirtyEnd = 0;
     }
 
     // Pre-allocate storage capacity (not size) to the caller-supplied
