@@ -5,7 +5,7 @@ title: "Public constant range authority removes duplicate Live guards"
 type: evidence
 status: verified-work-removal-gain-unproven
 updated: 2026-09-08
-source: experiments/output/pe-validated-constant-range-20260908/analysis; experiments/output/app-d3d9-3dmark{05,06}-pe-validated-range-58c67f27-gt2-{perf,sampler}-r1-20260908
+source: experiments/output/pe-validated-constant-range-20260908/analysis; experiments/output/app-d3d9-3dmark{05,06}-pe-validated-range-58c67f27-gt2-{perf,sampler}-r1-20260908; experiments/output/app-d3d9-3dmark06-pe-validated-range-58c67f27-gt2-perf-user-rerun-r2-20260908
 related: present-pacing-pe-settlement-refinement.259.md; ../../../specs/d3d9/recorder/spec.md
 ---
 
@@ -109,37 +109,47 @@ recorder stats, owner phase split and copy ledger are OFF. Offload stays ON.
 No build, test suite or other benchmark runs during the scenes. These are not
 observer-free measurements or proof of host isolation.
 
+The original 06 perf r1 (18.205 FPS) is excluded from performance decisions
+after the user reported computer use during 06 GT2 and requested a repeat.
+Its raw artifacts and original `perf-qualified.json` report remain preserved;
+`measurement-qualification.json` marks the exclusion and replacement. The
+table below uses the same-binary, same-recipe 06 `user-rerun-r2` at `223f840b`
+(documentation-only changes since `58c67f27`), not an average of the two runs.
+05 and the separate sampler runs are unchanged.
+
 | Product | Scene FPS | Rows / wall ms | CB / frame | Pass / frame | Draw / frame |
 |---|---:|---:|---:|---:|---:|
 | 05 GT2 | 29.810 | 1,926 / 64,608.214 | 4.001 | 15.786 | 1,681.702 |
-| 06 GT2 | 18.205 | 1,166 / 64,049.407 | 4.002 | 19.861 | 1,879.425 |
+| 06 GT2 | 18.277 | 1,170 / 64,015.071 | 4.002 | 19.859 | 1,880.217 |
 
 05 includes every positive-wall frame 1–1,926. 06 includes positive-wall
-rows with more than 100 draws, frames 994–2,159; only loading is excluded,
+rows with more than 100 draws, frames 999–2,168; only loading is excluded,
 not slow scene frames. These are renderer frame-log averages, not a decoded
 `.3dr` or the catalogue process-elapsed FPS. All five staged hashes match
 the final images and all eight chunk/GPU/pipeline/no-pipeline failure
 counters are zero. 05 exits normally; 06's permitted timeout closes the
-completed-scene result GUI. Summed GPU CB time is 1.998/11.887 ms/frame,
+completed-scene result GUI. Summed GPU CB time is 1.998/11.979 ms/frame,
 not GPU critical-path latency. No whole-scene pixel comparison is claimed.
 
 | Product | Partial CPU frame increments | Process CPU seconds / elapsed seconds | CPU ms / frame | Average cores | RSS peak KiB |
 |---|---:|---:|---:|---:|---:|
 | 05 GT2 | 1,892 | 132.17 / 62.318 | 69.857 | 2.121 | 3,310,404 |
-| 06 GT2 | 1,150 | 109.38 / 62.290 | 95.113 | 1.756 | 3,623,112 |
+| 06 GT2 | 1,116 | 106.33 / 60.325 | 95.278 | 1.763 | 3,799,072 |
 
 These are approximate partial joins across all process threads, not
-PE-exclusive times. `qualify_perf.py` and `perf-qualified.json` retain the
-exact populations, arithmetic, profile, health and binary qualification.
+PE-exclusive times. `qualify_perf.py`, the 05 entry in `perf-qualified.json`
+and the replacement `user-rerun-qualified.json` retain the exact populations,
+arithmetic, profile, health and binary qualification. The original 06 entry
+in `perf-qualified.json` is no longer performance-eligible.
 H259's qualified references are 29.682/18.220 FPS and partial CPU of
 70.153/95.472 ms/frame; its original interfered 06 perf r1 is excluded.
-Current differences are +0.43%/-0.08% FPS and -0.42%/-0.38% partial CPU.
+Current differences are +0.43%/+0.31% FPS and -0.42%/-0.20% partial CPU.
 Single sequential spots, different partial intervals and no controlled
 cooldown/order counterbalance do not establish gain, neutrality or reduced
 CPU consumption. RSS does not establish a memory regression or saving either.
 
 Historical README 30.1/18.1 also differs in the index-reorder setting. Current
-05 remains 0.96% below it and 06 is numerically 0.58% above; that is context,
+05 remains 0.96% below it and 06 is numerically 0.98% above; that is context,
 not a matched comparison or repeatable recovery. README is unchanged.
 
 ## Complete current PE profiles

@@ -33,9 +33,10 @@ The latest implementation [H260](present-pacing-pe-validated-constant-range.260.
 reuses public constant-range authority in the Live kernel without adding a
 setter call or persistent state. Native negative controls, final linked PE
 inspection and actual x86/x64 getter/StateBlock checks pass. Sampler-OFF
-05/06 GT2 gives 29.810/18.205 FPS and approximate partial process CPU of
-69.857/95.113 ms/frame, with zero renderer failures. Separate full profiles
-retain 1,420/866 PE samples without sampler failure or omission. Small deltas
+05/06 GT2 gives 29.810/18.277 FPS and approximate partial process CPU of
+69.857/95.278 ms/frame, with zero renderer failures. The requested same-binary
+06 repeat replaces its original perf run after reported computer use. Separate
+full profiles retain 1,420/866 PE samples without sampler failure or omission. Small deltas
 and imperfect partial joins do not establish gain or CPU reduction; repeatable
 README recovery remains open. Current owner retention/source checks remain
 authoritative, not removal candidates.
