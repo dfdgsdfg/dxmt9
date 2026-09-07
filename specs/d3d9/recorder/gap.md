@@ -29,8 +29,12 @@ constant ASan/UBSan checks pass. Linked PE32/PE64 have no outlined set-bit
 iterator; exports and vtable/RTTI owners match. The provider and bridge DLLs
 are byte-identical. See
 [H250](../../../docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md).
-Fresh wild correctness, observer-off FPS and current PE attribution remain
-open. These changes do not modify transport, record cadence or queue policy.
+A hash-qualified post-commit GT2 spot check has zero chunk/GPU/pipeline
+failures and close CB/pass ratios. PE-observer-off, frame-sampled FPS is
+28.846 versus H249 28.835 (+0.038%). A single run with observed background
+CPU load does not establish gain or neutrality; whole-scene correctness,
+repeatability and current PE attribution remain open. These changes do not
+modify transport, record cadence or queue policy.
 
 R-CORE-REC-7.42–7.44 are implemented with bounded native and linked-code
 evidence. VS range diagnostics gate dirty counting before append and shader

@@ -11,12 +11,15 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest local refinement: [H250](present-pacing-pe-sparse-work.250.md) limits
+Latest runtime checkpoint: [H250](present-pacing-pe-sparse-work.250.md) limits
 compact binding traversal, quota processing and constant bitmap clearing to
-active input. Native/TLA, sanitizer and linked PE checks pass; fresh wild/FPS
-evidence remains open. No new mutable cache or transport change is introduced.
+active input. Native/TLA, sanitizer and linked PE checks pass. Post-commit GT2
+is 28.846 FPS versus H249 28.835 (+0.038%), with zero chunk/GPU/pipeline
+failures and about 4 CB/Present. One run with observed background CPU load
+does not establish a gain or qualified neutrality; whole-scene evidence
+remains open. No new mutable cache or transport change is introduced.
 
-Latest runtime checkpoint: [H249](present-pacing-pe-flush-layout.249.md) gates
+Prior runtime checkpoint: [H249](present-pacing-pe-flush-layout.249.md) gates
 disabled constant-flush diagnostics, skips unobserved empty flushes, and reuses
 prepared compact counts. Native/codegen checks pass. A post-commit GT2 spot
 check gives 28.835 FPS versus prior H248 29.048 (-0.73%); run health passes,

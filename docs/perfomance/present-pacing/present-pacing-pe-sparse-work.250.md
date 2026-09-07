@@ -3,9 +3,9 @@ domain: present-pacing
 workload: 3DMark05 GT2
 title: "PE active sparse traversal and bounded dirty clearing"
 type: evidence
-status: native-codegen-verified
+status: native-codegen-and-single-run
 updated: 2026-09-07
-source: experiments/output/pe-sparse-work-20260907/analysis
+source: experiments/output/pe-sparse-work-20260907/analysis; experiments/output/app-d3d9-3dmark05-pe-sparse-work-77518738-gt2-r1-20260907; experiments/output/app-d3d9-3dmark05-pe-flush-layout-66cbcbab-gt2-r1-20260907
 related: specs/d3d9/recorder/requirements.md; present-pacing-pe-flush-layout.249.md
 ---
 
@@ -92,10 +92,53 @@ The analysis directory preserves `baseline-linked.json`, initial
 constant test link failure is retained; linking the existing `dxmt9_util_dep`
 supplies the production setter's `getenvU32` dependency without a test stub.
 
+## Post-commit GT2 spot check
+
+Implementation commit `77518738` was checked through all three canonical full
+staging builds, then run once through `run_experiment.py`. The current artifact
+is `app-d3d9-3dmark05-pe-sparse-work-77518738-gt2-r1-20260907`; the reference is
+H249's `app-d3d9-3dmark05-pe-flush-layout-66cbcbab-gt2-r1-20260907`.
+
+Both use named GT2, 1024x768, Sikarugir `sikarugir-cx-24.0.7`, perf/Warn,
+validation OFF, frame sampling ON, and PE decimation/recorder stats/semantic
+phase observation OFF, without encoder breakdown or GPU trace. The staged
+PE hashes match the final linked receipts above. The provider and bridge DLLs
+remain byte-identical to the reference; no concurrent Wine or build process
+was present before launch.
+
+| Metric | H249 `66cbcbab` | `77518738` |
+|---|---:|---:|
+| Positive-wall sampled FPS | 28.835 | 28.846 |
+| Positive-wall sample count | 1,863 | 1,861 |
+| Sampled wall time (ms) | 64,608.102 | 64,514.336 |
+| Encoded Presents | 1,864 | 1,862 |
+| Command buffers / Present | 3.99946 | 3.99946 |
+| Render passes / Present | 15.77361 | 15.77712 |
+| Draw calls / Present | 1,682.174 | 1,683.132 |
+| GPU command-buffer time / Present (ms) | 1.988 | 2.050 |
+| Chunk rejects / GPU errors / no-pipeline skips | 0 / 0 / 0 | 0 / 0 / 0 |
+
+FPS is positive-wall sample count divided by summed frame wall time, not
+process elapsed FPS or a decoded `.3dr` score. The observed change is +0.038%.
+The run passes with exit 0, no timeout, no harness failures, and zero pipeline
+draw/function/library/PSO failures. `actual.png` shows a rendered GT2 scene;
+it is one frame, not whole-scene flicker or pixel-equivalence evidence.
+The runner recovered a fresh 3,341-byte `.3dr`, SHA-256
+`e8753f4514075a4ac7471692a25e08fc7f2be09ebc5f7ebe988d0841a6b235e3`.
+`result.json`, `3dmark05-perf-frames.csv`, the summary, and the analysis
+`wild-run-receipt.md` preserve the run and denominator.
+
+One live process snapshot showed unrelated `duetexpertd` at 91.4% CPU and
+`mds_stores` at 60.3%; neither was interrupted. This is a confound, not an
+attribution of lost FPS or a sustained-load measurement. Together with the
+non-interleaved single-run comparison, it prevents claiming either a speedup
+or neutrality qualification. CB/pass shape is close; no strict locality
+promotion follows from these rounded ratios.
+
 ## Limits and next gate
 
-This is not a fresh FPS measurement or a claim that PE is exhausted. H248's
-historical event frequencies prioritize this work but cannot price its current
-CPU cost. Matched observer-off workload measurement, whole-scene correctness
-and current PE symbol attribution remain open. Transport/provider defaults,
+This spot check does not establish a measurable FPS gain or show that PE is
+exhausted. H248's historical event frequencies prioritize this work but cannot
+price its current CPU cost. Matched repeatability, whole-scene correctness and
+current PE symbol attribution remain open. Transport/provider defaults,
 inline-constant delta and CPU-ready Tape promotion are outside this change.
