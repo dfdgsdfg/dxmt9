@@ -29,7 +29,17 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
-The latest implementation [H254](present-pacing-pe-constant-bitcompare.254.md)
+The latest diagnostic [H255](present-pacing-pe-full-selfpc.255.md) closes
+top-32 self-PC output truncation: full 05/06 GT2 reports conserve all
+1,502/902 PE samples with zero omitted/overflow samples or sampler failures.
+64-byte symbol ambiguity and elapsed CPU attribution remain open. Separate
+sampler-OFF spot checks give 29.316/18.065 FPS, with zero recorded renderer
+errors and close CB/pass ratios. 06 rounds to README 18.1; 05 remains below
+30.1. Neither CPU savings nor repeatable recovery is demonstrated. Current
+single-index retention lookup is necessary; remove only proven duplicate
+work, not safety checks merely because their PC samples are visible.
+
+The preceding optimization [H254](present-pacing-pe-constant-bitcompare.254.md)
 vectorizes exact 16-byte constant equality in both linked PE images, with
 native and ABI checks passing. Fresh 05/06 GT2 spot checks give 29.500/17.958
 FPS, below README 30.1/18.1, with zero chunk/GPU/pipeline failures. Actual

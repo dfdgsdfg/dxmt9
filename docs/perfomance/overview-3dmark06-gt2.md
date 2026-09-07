@@ -11,14 +11,17 @@ related: docs/perfomance/overview-3dmark06-gt1.md; docs/perfomance/overview-3dma
 
 # 3DMark06 GT2 Performance — Current Bottleneck
 
-The latest [H254 PE check](present-pacing/present-pacing-pe-constant-bitcompare.254.md)
-at `6c3ca092` gives 17.958 scene FPS at 1280x720 versus the fresh pre-change
-17.926 (+0.18%) and README 18.1. Positive-wall rows with more than 100 draws
-exclude loading but retain slow scene frames. There are zero chunk/GPU/pipeline
-failures, 4.002 CB and 19.852 passes per scene frame. Separate actual PE PC
-sampling and partial process CPU measurements are recorded in the leaf.
-One run is not attributed gain or CPU reduction. The earlier phase/GPU
-ownership below belongs to its August build and is not a current re-profile.
+The latest [H255 PE check](present-pacing/present-pacing-pe-full-selfpc.255.md)
+at `b9713922` gives 18.065 scene FPS at 1280x720 with the PE sampler OFF,
+versus H254's 17.958 spot check and README 18.1. Positive-wall rows with more
+than 100 draws exclude loading but retain slow scene frames. There are zero
+recorded chunk/GPU/pipeline failures, 4.002 CB and 19.858 passes per scene
+frame. The separate full-report sampler preserves all 902 PE samples in
+472 buckets; exact CPU attribution and symbol-edge ambiguity remain open.
+One run rounding to 18.1 is not attributed gain, CPU reduction or repeatable
+recovery. Partial process CPU/RSS observations are retained in H255. The
+earlier phase/GPU ownership below belongs to its August build and is not a
+current re-profile.
 
 > **Historical verdict at `b4b77cb8`: replay and encode serialization are the
 > strongest measured owners.** GT2 is the best of these four scenes for a

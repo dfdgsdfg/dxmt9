@@ -17,9 +17,16 @@ The optional PE sampler's complete self-PC reporting contract is implemented
 with native conservation, parser rejection and linked PE checks;
 [H255](../../../docs/perfomance/present-pacing/present-pacing-pe-full-selfpc.255.md)
 owns the evidence. H254's default top-32 output covers only 344/1,459 PE samples
-in 05 GT2 and 221/922 in 06 GT2. Fresh full-distribution wild evidence remains
-pending; histogram overflow must not be conflated with omitted output. This
-is a measurement prerequisite, not another claimed optimization.
+in 05 GT2 and 221/922 in 06 GT2. Fresh `b9713922` wild reports preserve all
+1,502/902 PE samples in 634/472 buckets, with zero omission, overflow or
+sampler failures and passing module probes. Both runs have zero recorded
+chunk/GPU/pipeline failures. This closes output truncation, not symbol-edge
+ambiguity (406/271 samples), exact scene boundaries, CPU-cost attribution or
+FPS promotion; sampler runs are not README performance evidence.
+Separate sampler-OFF spot checks pass at 29.316/18.065 scene FPS with close
+CB/pass ratios and zero recorded chunk/GPU/pipeline failures. 06 rounds to
+README 18.1; 05 remains below 30.1. Both-target recovery, measured CPU savings
+and repeatability remain open; H255 retains partial process CPU/RSS evidence.
 
 R-CORE-REC-7.40's 16-byte comparison now reduces unsigned XOR/OR instead of
 short-circuit word comparisons. Current 05/06 GT2 PE sampling identifies that
