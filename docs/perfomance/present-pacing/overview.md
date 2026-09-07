@@ -29,6 +29,13 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H266](present-pacing-inline-constant-economy.266.md) repeats the current
+inline OFF/ON mechanism with matching images: FPS changes +1.49%/+0.88%
+for 05/06 GT2, but partial all-thread CPU/frame changes only +0.24%/-0.39%.
+Both fixed-order single pairs retain similar CB/pass rates and zero reported
+errors; they do not establish CPU savings, repeatable recovery or promotion.
+Default stays OFF.
+
 [H265](present-pacing-inline-constant-pixels.265.md) binds the real PE selector
 to executable SM3 pixels and exact append receipts across both PE widths and
 replay modes. All eight processes pass 576 sampled pixels. Omitting the

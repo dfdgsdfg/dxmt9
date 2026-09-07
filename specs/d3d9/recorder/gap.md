@@ -13,6 +13,12 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H266](../../../docs/perfomance/present-pacing/present-pacing-inline-constant-economy.266.md)
+records current-image 05/06 GT2 OFF/ON spots: FPS +1.49%/+0.88%, approximate
+partial all-thread CPU/frame +0.24%/-0.39%. The record-count mechanism is
+present, but these fixed-order single pairs neither establish PE CPU savings
+nor close the repeated-economy gate. Runtime default and README remain unchanged.
+
 [H265](../../../docs/perfomance/present-pacing/present-pacing-inline-constant-pixels.265.md)
 adds actual PE32/PE64 builtin SM3 pixel evidence across inline OFF/ON and
 synchronous/worker replay: 576 exact sampled pixels and qualified append,

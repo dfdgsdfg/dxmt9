@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H266](present-pacing-inline-constant-economy.266.md) measures current-image
+OFF/ON spots after the pixel prerequisite: 05 GT2 29.787/30.230 FPS and
+06 GT2 18.266/18.428. Partial all-thread CPU changes +0.24%/-0.39%, so reduced
+CPU consumption and default promotion remain unproved despite fewer records.
+
 [H265](present-pacing-inline-constant-pixels.265.md) adds real PE32/PE64
 OFF/ON and synchronous/worker pixel checks: 576 exact sampled pixels,
 qualified record counts and a deliberately failing production inline-BOOL
