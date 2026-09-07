@@ -5,7 +5,7 @@ title: "Current semantic-owner inline-constant economics"
 type: evidence
 status: mechanism-verified-not-promoted
 updated: 2026-09-08
-source: experiments/output/pe-inline-constant-current-20260907/analysis; experiments/output/app-d3d9-3dmark05-pe-inline-current-5d764f37-{off,on}-n127-r1-20260908; experiments/output/app-d3d9-3dmark{05,06}-pe-inline-current-5d764f37-{off,on}-perf-r1-20260908
+source: experiments/output/pe-inline-constant-current-20260907/analysis; experiments/output/app-d3d9-3dmark05-pe-inline-current-5d764f37-{off,on}-n127-r1-20260908; experiments/output/app-d3d9-3dmark{05,06}-pe-inline-current-5d764f37-{off,on}-perf-r1-20260908; experiments/output/app-d3d9-3dmark06-pe-current-8399032c-gt2-perf-user-rerun-20260908
 related: present-pacing-pe-constant-copy.257.md; present-pacing-inline-const-delta.201.md; ../../../specs/backend/spec.md
 ---
 
@@ -118,6 +118,30 @@ Sampled RSS peaks are 3,312,764/3,126,824 KiB for 05 and
 `perf-comparison.json` retains exact arithmetic, populations and identity
 checks. README remains unchanged; its index-reorder-ON historical profile is
 not a matched reference for these index-reorder-OFF measurements.
+
+### Requested 06 default-path repeat
+
+At documentation HEAD `8399032c`, a further 06 GT2 repeat uses the same
+frozen runtime, five artifact receipts and OFF perf recipe at 1280x720.
+Canonical build checks are no-ops; no build, tests or separate benchmark run
+during the scene. This does not rehabilitate the user-interfered H257 r1,
+which remains excluded from performance comparisons.
+
+The repeat measures **18.192 FPS** across 1,165 positive-wall heavy-draw
+frames (982–2,146), over 64,040.763 ms. The historical README 18.1 difference
+is +0.51%, not a matched code-gain claim. CB/pass/draw counts per frame are
+4.002/19.862/1,879.779; summed GPU CB time is 11.940 ms/frame. All eight
+retained renderer failure counters are zero and the runner passes; its
+permitted timeout closes the completed-scene result GUI. No `.3dr` is emitted.
+The capture at 0:34.56 shows a rendered forest, not whole-scene pixel proof.
+
+`qualified-measurement.json` and `qualify_rerun.py` in the new run directory
+retain calculation and identity checks. The two-second process observer joins
+1,112 frame increments, 106.51 CPU seconds and 60.355 elapsed seconds:
+95.782 CPU ms/frame, 1.765 average cores and 3,604,004 KiB sampled peak RSS.
+These remain approximate partial all-thread measurements, not PE-exclusive
+cost or evidence of CPU reduction. This repeat neither replaces the paired
+OFF/ON rows above nor changes README or the default-off decision.
 
 ## Next boundary
 
