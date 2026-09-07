@@ -13,6 +13,13 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H268](../../../docs/perfomance/present-pacing/present-pacing-pe-native-thread-cpu.268.md)
+adds a calibrated external native commit-thread CPU observer. Actual 05/06
+GT2 queries resolve one PID/start-qualified thread at 0.944/0.965 occupied
+cores in partial scene intervals. The collector adds no PE hot probe or
+runtime binary change. Game/Wine/synchronous Unix remain included;
+PE-exclusive CPU attribution and repeatable optimization savings stay open.
+
 [H267](../../../docs/perfomance/present-pacing/present-pacing-pe-constant-loop.267.md)
 implements R-CORE-REC-7.40's fixed-width Live loop with call-local post-resize
 backing borrows and a first-changed sentinel instead of a duplicate flag.

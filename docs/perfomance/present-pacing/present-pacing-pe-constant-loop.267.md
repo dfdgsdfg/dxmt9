@@ -174,6 +174,10 @@ justify deleting ownership checks or adding a duplicate cache.
 
 ## Next measurement boundary
 
+Subsequent [H268](present-pacing-pe-native-thread-cpu.268.md) implements and
+runtime-qualifies the external thread observer below; PE-exclusive attribution
+and repeated CPU savings remain open.
+
 Further small code reductions need better producer CPU attribution. The
 existing Unix `unix_commit_chunk_entry` Info marker supplies a native thread
 ID without a new PE hot probe; it is not the Win32 PE thread-ID namespace.

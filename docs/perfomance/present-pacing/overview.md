@@ -29,6 +29,13 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H268](present-pacing-pe-native-thread-cpu.268.md) resolves an external
+native commit-thread CPU view without a new PE probe or thread suspension.
+05/06 GT2 consume 33.826/52.550 ms per joined frame and 0.944/0.965 cores;
+the populations cover 65.4%/90.8% of scene frames. Game/Wine/synchronous Unix
+are included, so PE-exclusive attribution remains open. These are Info
+diagnostics, not FPS promotion or a product CPU saving.
+
 [H267](present-pacing-pe-constant-loop.267.md) removes repeated backing-pointer
 lookup and a redundant changed flag from the measured constant Live kernel.
 The pointer-only prototype was rejected for worse PE32 code; the final

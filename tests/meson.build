@@ -62,6 +62,17 @@ smoke = executable(
 
 test('dxmt9-smoke', smoke)
 
+if host_machine.system() == 'darwin'
+  test('dxmt9-thread-cpu-calibration', dxmt9_thread_cpu_tool,
+       args: ['--self-check'], timeout: 15)
+  test('dxmt9-thread-cpu-peer', python3,
+       args: [join_paths(meson.project_source_root(), 'tests/scripts/test_darwin_thread_cpu_peer.py'),
+              dxmt9_thread_cpu_tool.full_path()], timeout: 15)
+endif
+
+test('dxmt9-observe-darwin-thread-cpu', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_observe_darwin_thread_cpu.py')])
+
 test('dxmt9-d3d9-pe-process-vertices-split-audit', python3,
      args: [join_paths(meson.project_source_root(), 'scripts/check/audit_d3d9_pe_process_vertices_split.py')])
 

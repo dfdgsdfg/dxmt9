@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H268](present-pacing-pe-native-thread-cpu.268.md) adds externally queried
+native commit-thread CPU: 05/06 GT2 occupy 0.944/0.965 cores in qualified
+partial intervals. This includes game/Wine/synchronous Unix, not PE-exclusive
+time. Diagnostic-only; no runtime binary, README or provider-default change.
+
 [H267](present-pacing-pe-constant-loop.267.md) reduces the fixed-width Live
 constant loop to call-local backing borrows and one first-changed reduction.
 Both linked PE widths shrink; native dirty/change-mask refinement passes.
