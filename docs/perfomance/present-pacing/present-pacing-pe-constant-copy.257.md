@@ -5,7 +5,7 @@ title: "Bounded changed-constant copy"
 type: evidence
 status: correctness-verified-no-demonstrated-fps-gain
 updated: 2026-09-07
-source: experiments/output/pe-constant-copy-20260907/analysis; experiments/output/app-d3d9-3dmark05-pe-constant-copy-5d764f37-gt2-perf-r1-20260907; experiments/output/app-d3d9-3dmark06-pe-constant-copy-5d764f37-gt2-perf-{r1,r2}-20260907; experiments/output/app-d3d9-3dmark{05,06}-pe-constant-copy-5d764f37-gt2-sampler-r1-20260907
+source: experiments/output/pe-constant-copy-20260907/analysis; experiments/output/app-d3d9-3dmark05-pe-constant-copy-5d764f37-gt2-perf-r1-20260907; experiments/output/app-d3d9-3dmark06-pe-constant-copy-5d764f37-gt2-perf-{r1,r2,r3}-20260907; experiments/output/app-d3d9-3dmark{05,06}-pe-constant-copy-5d764f37-gt2-sampler-r1-20260907
 related: present-pacing-pe-autogen-bound-slots.256.md; present-pacing-pe-constant-bitcompare.254.md; ../../../specs/d3d9/recorder/spec.md
 ---
 
@@ -125,6 +125,31 @@ contended 06 value is not a causal baseline. Fewer static copy instructions
 have not demonstrated FPS gain, repeatable recovery or lower CPU consumption.
 The separate profiles below close collection for the committed change, not
 exact copy-cost attribution. README remains unchanged.
+
+### Additional requested 06 repeat
+
+At documentation HEAD `718472a5`, r3 repeats the unchanged `5d764f37`
+runtime at 1280x720 with the same perf profile, five staged artifact hashes
+and two-second process observer. Canonical build checks were no-ops before
+launch; no build, tests or separate benchmark ran during the scene. The
+existing r2 remains preserved, and user-interfered r1 remains excluded.
+
+R3 measures **18.254 FPS**, 1,170 positive-wall heavy-draw rows, frames
+990–2,159 over 64,094.613 ms. This is +0.85% versus the historical README
+18.1 reference, not a matched code-gain result. CB/pass/draw counts per frame
+are 4.002/19.862/1,879.119; summed GPU CB time is 11.889 ms/frame. Status is
+pass with zero retained renderer failure counters; the permitted timeout
+closes the completed-scene result GUI. The capture at 0:36.01 shows the
+rendered forest, not whole-scene pixel proof. No `.3dr` was emitted, so FPS
+comes from the frame log rather than the process-elapsed estimate.
+
+`06-perf-r3-measurements.json` retains the calculation and identity checks.
+The partial process join covers 1,146 frame increments and 109.80 CPU seconds
+over 62.396 seconds: 95.812 CPU ms/frame, 1.760 average cores and sampled RSS
+peak 3,469,608 KiB. As above, these are approximate all-thread measurements,
+not a PE-exclusive reduction or an isolated-host claim. R3 is a separate
+same-binary spot check; it does not replace r2 in `perf-measurements.json` or
+change README.
 
 ## Complete current PE profiles
 
