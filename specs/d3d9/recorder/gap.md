@@ -21,11 +21,13 @@ records 28 malformed-family cases, four late source-mutation cases, exact
 retry bytes, a failing source-equality negative control and restored native
 9/9 plus x86_64 5/5. This adds no cache, ABI or lifecycle transition. Final
 PE32/PE64 scoped linked inspection and sampler-OFF 05/06 GT2 collection are
-complete: 29.960/18.231 FPS and approximate partial all-thread CPU of
-69.648/95.601 ms/frame, with zero reported renderer failures. Separate full
+complete: 29.960/18.323 FPS and approximate partial all-thread CPU of
+69.648/94.621 ms/frame, with zero reported renderer failures. The 06 value
+is the same-binary user-requested repeat; its original is excluded after
+reported computer use. Separate full
 profiles retain 1,366/851 PE samples without omissions or sampler failures;
 symbol ambiguity and unreported scene tails remain explicit in H262. These
-small, mixed single-run deltas do not demonstrate savings, neutrality or
+small single-run deltas do not demonstrate savings, neutrality or
 regression. Repeatable README recovery, PE-exclusive attribution and CPU
 reduction remain open; smaller DLLs do not prove runtime savings.
 

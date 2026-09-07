@@ -16,8 +16,10 @@ removes duplicate compact typed-ref validation and per-row range lookup,
 retaining full source/pin/wire checks. Native counterexamples and the
 deliberately failing equality mutant pass their expected verdicts. Scoped
 linked inspection and sampler-OFF 05/06 GT2 collection are complete at
-29.960/18.231 FPS; separate profiles retain all 1,366/851 reported PE samples.
-Small mixed single-run deltas do not establish FPS or CPU savings.
+29.960/18.323 FPS; 06 uses the same-binary user-requested repeat, excluding
+the original after reported computer use. Separate profiles retain all
+1,366/851 reported PE samples. Small single-run deltas do not establish FPS
+or CPU savings.
 
 Latest candidate decision: [H261](present-pacing-pe-binding-duplicates.261.md)
 adds cold null/first/duplicate binding counts. Actual 05/06 GT2 samples contain

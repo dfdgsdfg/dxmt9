@@ -5,7 +5,7 @@ title: "Compact binding emission reuses admission identity validity"
 type: evidence
 status: measured-no-claimed-gain
 updated: 2026-09-08
-source: experiments/output/pe-compact-binding-validation-20260908/analysis; experiments/output/app-d3d9-3dmark{05,06}-pe-binding-validation-361a4797-gt2-{perf,sampler}-r1-20260908; experiments/output/app-d3d9-3dmark06-pe-current-bb57d01c-gt2-perf-user-rerun-r1-20260908
+source: experiments/output/pe-compact-binding-validation-20260908/analysis; experiments/output/app-d3d9-3dmark{05,06}-pe-binding-validation-361a4797-gt2-{perf,sampler}-r1-20260908; experiments/output/app-d3d9-3dmark06-pe-current-bb57d01c-gt2-perf-user-rerun-r1-20260908; experiments/output/app-d3d9-3dmark06-pe-binding-validation-361a4797-gt2-perf-user-rerun-r1-20260908
 related: present-pacing-pe-binding-duplicates.261.md; present-pacing-pe-validated-constant-range.260.md; ../../../specs/d3d9/recorder/spec.md
 ---
 
@@ -107,24 +107,31 @@ No concurrent build, native test or second Wine run executes during a scene.
 | Product | Scene frames | Scene wall | FPS | CB/frame | Pass/frame | Partial process CPU ms/frame |
 |---|---:|---:|---:|---:|---:|---:|
 | 05 GT2 | 1,935 | 64.587 s | 29.960 | 4.001 | 15.787 | 69.648 |
-| 06 GT2 | 1,169 | 64.123 s | 18.231 | 4.002 | 19.865 | 95.601 |
+| 06 GT2 (user-requested repeat) | 1,174 | 64.073 s | 18.323 | 4.002 | 19.864 | 94.621 |
+
+The 06 repeat supersedes the original perf run after reported computer use.
+The original remains archived but is excluded from performance decisions.
+The repeat stages the preserved H262 images, not the subsequent uncommitted
+recorder-fault work: all five staged hashes and the profile match the original.
+`user-rerun-recipe.json` and `qualify_06_user_rerun.py` retain that distinction.
 
 Positive-wall frames supply FPS; 06 additionally requires more than 100 draws
-to exclude loading, not slow scene frames. CPU joins cover 1,847/1,148 frame
-increments and 60.268/62.282 seconds respectively. These are approximate partial
+to exclude loading, not slow scene frames. CPU joins cover 1,847/1,136 frame
+increments and 60.268/61.148 seconds respectively. These are approximate partial
 all-thread process costs, not PE time or whole-scene CPU totals.
-`perf-qualified.json` and each run's `measurement-qualification.json` preserve
-the rules, exact denominators and five staged-image hashes.
+Each selected run's `measurement-qualification.json` preserves the rules,
+exact denominators and five staged-image hashes. The earlier aggregate
+`perf-qualified.json` still contains the superseded 06 spot, not the repeat.
 
 Both runs pass with eight reported renderer error counters at zero. 05 exits
 normally; 06's permitted timeout closes the completed result GUI. 05's last
 counter reports 1,936 Presents after logged frame 1,935. 06's last counter
-reports 2,160 while the log reaches frame 2,172; the error snapshot does not
+reports 2,160 while the log reaches frame 2,185; the error snapshot does not
 prove the unreported tail. No whole-scene pixel oracle is claimed.
 
 Against H260's 05 spot, FPS changes by +0.50% and approximate CPU/frame by
 -0.30%. Against the pre-change current-HEAD 06 repeat below, FPS changes by
--0.39% and CPU/frame by +0.47%. These small, mixed, single-run differences
++0.11% and CPU/frame by -0.56%. These small single-run differences
 prove neither improvement nor regression or neutrality. Historical README
 30.1/18.1 also uses a different index-reorder setting. Repeatable recovery and
 CPU-consumption reduction remain open; README is unchanged.
