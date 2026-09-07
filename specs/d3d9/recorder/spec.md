@@ -986,6 +986,16 @@ Linked PE32/PE64 evidence and actual Wine timing must decide the tradeoff:
 early differences no longer skip the other word loads, so fewer branches do
 not by themselves establish lower CPU time.
 
+The changed 16-byte element may be copied as one compile-time-sized byte
+operation instead of four ordered word copies. Caller input and private Live
+storage are separate owned ranges; exact self-alias is handled by equality
+before the copy. This must not introduce an alignment requirement, widen the
+read/write extent or reinterpret floating-point bits. The four-byte path,
+growth, dirty transitions and canonical wire output retain the same contract.
+Property tests pin source/destination offsets and boundary canaries; linked
+PE evidence must show the intended bounded load/store without a new library
+call. This changes value materialization, not the transition model.
+
 R-CORE-REC-7.41 narrows the compact destination-rebase operation to one lexical
 source qualification. Source metadata and pending-ticket checks may share that
 qualification with destination preparation; the retention callback still

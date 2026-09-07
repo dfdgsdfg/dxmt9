@@ -439,14 +439,10 @@ inline void constShadowFixedElemCopy(std::uint8_t* destination,
         constShadowFixedStoreWord(destination,
                                    constShadowFixedLoadWord(source));
     } else {
-        constShadowFixedStoreWord(destination,
-                                   constShadowFixedLoadWord(source));
-        constShadowFixedStoreWord(destination + 4u,
-                                   constShadowFixedLoadWord(source + 4u));
-        constShadowFixedStoreWord(destination + 8u,
-                                   constShadowFixedLoadWord(source + 8u));
-        constShadowFixedStoreWord(destination + 12u,
-                                   constShadowFixedLoadWord(source + 12u));
+        // Setter input and the private Live shadow are separate ranges.
+        // Preserve all bits and unaligned access while exposing one bounded
+        // transfer to the target compiler; exact self-alias skips this copy.
+        __builtin_memcpy(destination, source, ElemSize);
     }
 }
 

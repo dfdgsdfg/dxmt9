@@ -1147,6 +1147,87 @@ void testFixedConstElemEqualsMatrix() {
                              "fixed equality exact self-alias preserves pending obligations");
 }
 
+void testFixedConstElemCopyMatrix() {
+  constexpr std::size_t kElemBytes = 16u;
+  constexpr std::size_t kAlignments = 16u;
+  constexpr std::size_t kGuardBytes = 16u;
+  constexpr std::size_t kStorageBytes =
+      kGuardBytes + kElemBytes + (kAlignments - 1u) + kGuardBytes;
+  constexpr std::uint8_t kDestinationCanary = 0xc7u;
+  constexpr std::uint8_t kSourceCanary = 0x3du;
+  constexpr std::array<std::array<std::uint32_t, 4u>, 4u> bitPatterns = {{
+      {0x7fc00001u, 0x80000000u, 0x00000000u, 0x3f800000u},
+      {0x7fa00001u, 0x00000000u, 0x80000000u, 0xbf800000u},
+      {0x7fffffffu, 0xff800000u, 0x00000001u, 0x80000000u},
+      {0x00000000u, 0x80000000u, 0x7fc12345u, 0x3f000000u},
+  }};
+
+  std::array<std::uint8_t, kStorageBytes> destinationStorage{};
+  std::array<std::uint8_t, kStorageBytes> sourceStorage{};
+  std::array<std::uint8_t, kElemBytes> baseline{};
+  std::array<std::uint8_t, kElemBytes> variant{};
+  std::size_t copyChecks = 0u;
+
+  const auto checkCanaries = [&](const auto& storage, std::size_t offset,
+                                 std::uint8_t canary,
+                                 std::string_view label) {
+    for (std::size_t i = 0u; i < offset; ++i) {
+      check(storage[i] == canary, label);
+    }
+    for (std::size_t i = offset + kElemBytes; i < storage.size(); ++i) {
+      check(storage[i] == canary, label);
+    }
+  };
+
+  const auto checkCopy = [&](std::size_t destinationAlignment,
+                             std::size_t sourceAlignment,
+                             const std::uint8_t* bytes,
+                             std::string_view label) {
+    destinationStorage.fill(kDestinationCanary);
+    sourceStorage.fill(kSourceCanary);
+    const auto destinationOffset = kGuardBytes + destinationAlignment;
+    const auto sourceOffset = kGuardBytes + sourceAlignment;
+    auto* destination = destinationStorage.data() + destinationOffset;
+    auto* source = sourceStorage.data() + sourceOffset;
+    std::memcpy(source, bytes, kElemBytes);
+    const auto sourceBefore = sourceStorage;
+
+    constShadowFixedElemCopy<16u>(destination, source);
+    check(std::memcmp(destination, bytes, kElemBytes) == 0, label);
+    checkCanaries(destinationStorage, destinationOffset,
+                  kDestinationCanary, label);
+    check(sourceStorage == sourceBefore, label);
+    ++copyChecks;
+  };
+
+  for (std::size_t destinationAlignment = 0u;
+       destinationAlignment < kAlignments; ++destinationAlignment) {
+    for (std::size_t sourceAlignment = 0u; sourceAlignment < kAlignments;
+         ++sourceAlignment) {
+      for (const auto& words : bitPatterns) {
+        std::memcpy(baseline.data(), words.data(), kElemBytes);
+        checkCopy(destinationAlignment, sourceAlignment, baseline.data(),
+                  "fixed 16-byte copy preserves NaN/signed-zero bit pattern");
+      }
+
+      // Every source bit is changed once from a pattern containing NaNs,
+      // signed zero, and ordinary finite words. This is deliberately direct
+      // helper coverage; the reducer differential below remains its state
+      // oracle and is not reused as a copy oracle.
+      std::memcpy(baseline.data(), bitPatterns[0].data(), kElemBytes);
+      for (std::size_t bit = 0u; bit < kElemBytes * 8u; ++bit) {
+        variant = baseline;
+        variant[bit / 8u] ^= static_cast<std::uint8_t>(1u << (bit % 8u));
+        checkCopy(destinationAlignment, sourceAlignment, variant.data(),
+                  "fixed 16-byte copy preserves every single-bit variant");
+      }
+    }
+  }
+  check(copyChecks == kAlignments * kAlignments *
+                         (bitPatterns.size() + kElemBytes * 8u),
+        "fixed 16-byte copy matrix count is exact");
+}
+
 template <std::size_t ElemSize>
 void testFixedConstLiveApplyEdges() {
   constexpr std::uint32_t kWarmCount = 4u;
@@ -3244,6 +3325,7 @@ int main() {
     testFixedConstLiveApplyEdges<4u>();
     testFixedConstLiveApplyEdges<16u>();
     testFixedConstElemEqualsMatrix();
+    testFixedConstElemCopyMatrix();
     testFixedConstLiveApplyObservation<4u>();
     testFixedConstLiveApplyObservation<16u>();
     testFixedConstLiveApplyDifferential<4u>();
