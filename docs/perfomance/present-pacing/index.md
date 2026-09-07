@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H267](present-pacing-pe-constant-loop.267.md) reduces the fixed-width Live
+constant loop to call-local backing borrows and one first-changed reduction.
+Both linked PE widths shrink; native dirty/change-mask refinement passes.
+Runtime CPU/FPS savings remain unproved.
+
 [H266](present-pacing-inline-constant-economy.266.md) measures current-image
 OFF/ON spots after the pixel prerequisite: 05 GT2 29.787/30.230 FPS and
 06 GT2 18.266/18.428. Partial all-thread CPU changes +0.24%/-0.39%, so reduced

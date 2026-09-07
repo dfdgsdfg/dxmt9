@@ -13,6 +13,14 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H267](../../../docs/perfomance/present-pacing/present-pacing-pe-constant-loop.267.md)
+implements R-CORE-REC-7.40's fixed-width Live loop with call-local post-resize
+backing borrows and a first-changed sentinel instead of a duplicate flag.
+The 1,568-row dirty/change-mask differential, focused native 4/4 and x86_64
+5/5, linked PE32/PE64 audit and 144 real PE sampled pixels pass. No lifetime,
+wire or provider policy changes. Measured CPU savings and repeatable GT2
+recovery remain open; inline constants remain default-off.
+
 [H266](../../../docs/perfomance/present-pacing/present-pacing-inline-constant-economy.266.md)
 records current-image 05/06 GT2 OFF/ON spots: FPS +1.49%/+0.88%, approximate
 partial all-thread CPU/frame +0.24%/-0.39%. The record-count mechanism is

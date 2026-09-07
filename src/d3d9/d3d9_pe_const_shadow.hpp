@@ -501,8 +501,11 @@ inline void ValidatedConstWrite<ElemSize>::applyNonEmpty(
     if (shadow.dirtyElems.size() < neededElems)
         shadow.dirtyElems.resize(neededElems);
 
+    // Both stores are stable after materialization: the loop neither grows
+    // storage nor calls out. Keep these borrows local to this one write.
+    auto* const values = shadow.values.data();
+    auto* const dirtyElems = shadow.dirtyElems.data();
     const auto* source = static_cast<const std::uint8_t*>(data);
-    bool changed = false;
     std::uint32_t firstChanged = count;
     std::uint32_t lastChanged = 0u;
     for (std::uint32_t i = 0u; i < count; ++i) {
@@ -511,20 +514,21 @@ inline void ValidatedConstWrite<ElemSize>::applyNonEmpty(
         // Apply materializes before comparing: newly grown zero-filled
         // registers keep the generic reducer's zero-extension dirty behavior.
         const bool equals = constShadowFixedElemEquals<ElemSize>(
-            shadow.values.data() + offset,
+            values + offset,
             source + static_cast<std::size_t>(i) * ElemSize);
         if (!kConstShadowLiveWritesChangedValue || equals) continue;
 
         const auto* element = source + static_cast<std::size_t>(i) * ElemSize;
-        constShadowFixedElemCopy<ElemSize>(shadow.values.data() + offset,
+        constShadowFixedElemCopy<ElemSize>(values + offset,
                                            element);
-        shadow.dirtyElems[reg] = 1u;
-        changed = true;
+        dirtyElems[reg] = 1u;
         firstChanged = std::min(firstChanged, i);
         lastChanged = i + 1u;
     }
 
-    if (!changed) return;
+    // count is outside the visited index range, so it also represents the
+    // unchanged case without a second per-loop reduction flag.
+    if (firstChanged == count) return;
     const std::uint32_t changedStart = start + firstChanged;
     const std::uint32_t changedEnd = start + lastChanged;
     if (!shadow.dirty()) {

@@ -29,6 +29,12 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H267](present-pacing-pe-constant-loop.267.md) removes repeated backing-pointer
+lookup and a redundant changed flag from the measured constant Live kernel.
+The pointer-only prototype was rejected for worse PE32 code; the final
+sentinel version shrinks both PE widths with native mask equivalence.
+This is work-shape evidence, not yet measured CPU savings.
+
 [H266](present-pacing-inline-constant-economy.266.md) repeats the current
 inline OFF/ON mechanism with matching images: FPS changes +1.49%/+0.88%
 for 05/06 GT2, but partial all-thread CPU/frame changes only +0.24%/-0.39%.

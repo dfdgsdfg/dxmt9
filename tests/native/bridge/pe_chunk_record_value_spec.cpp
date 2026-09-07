@@ -1679,6 +1679,142 @@ void testValidatedConstWriteFactoryAndKernel() {
   testValidatedConstWriteFamily<4u, 16u>("PS boolean cap 16");
 }
 
+template <std::size_t ElemSize>
+std::vector<std::uint8_t> constMaskElement(std::uint8_t seed) {
+  std::vector<std::uint8_t> result(ElemSize);
+  for (std::size_t byte = 0u; byte < result.size(); ++byte) {
+    result[byte] = static_cast<std::uint8_t>(seed + byte * 29u + 0x31u);
+  }
+  return result;
+}
+
+template <std::size_t ElemSize>
+void testValidatedConstWriteChangedAndDirtyMasks() {
+  constexpr std::uint32_t kCount = 4u;
+  constexpr std::uint32_t kStartNonzero = 4u;
+  constexpr std::uint32_t kMaxRegisters = 16u;
+  using Write = ValidatedConstWrite<ElemSize>;
+
+  std::size_t matrixRows = 0u;
+  const auto runMatrix = [&](bool warm, std::uint32_t start,
+                             std::uint32_t priorMask,
+                             std::uint32_t changedMask) {
+    ConstShadow expected;
+    ConstShadow actual;
+    if (warm) {
+      actual.reserveCapacity(static_cast<std::size_t>(kMaxRegisters) * ElemSize,
+                             kMaxRegisters);
+    }
+
+    // Growth rows deliberately leave the write range absent. For the
+    // nonzero-start rows, the preceding four registers carry every prior
+    // dirty-membership mask while both vectors still need to grow for the
+    // incoming range. Warm rows materialize the write range and pin the
+    // reserved storage across repeated Live applies.
+    const std::uint32_t initialExtent = warm ? start + kCount : start;
+    expected.values.resize(static_cast<std::size_t>(initialExtent) * ElemSize);
+    expected.dirtyElems.resize(initialExtent);
+    actual.values.resize(static_cast<std::size_t>(initialExtent) * ElemSize);
+    actual.dirtyElems.resize(initialExtent);
+    for (std::uint32_t reg = 0u; reg < initialExtent; ++reg) {
+      const auto initial = constMaskElement<ElemSize>(
+          static_cast<std::uint8_t>(0x11u + reg));
+      std::memcpy(expected.values.data() +
+                      static_cast<std::size_t>(reg) * ElemSize,
+                  initial.data(), ElemSize);
+      std::memcpy(actual.values.data() +
+                      static_cast<std::size_t>(reg) * ElemSize,
+                  initial.data(), ElemSize);
+    }
+    const std::uint32_t dirtyBase = warm ? start : 0u;
+    for (std::uint32_t bit = 0u; bit < kCount; ++bit) {
+      if ((priorMask & (1u << bit)) == 0u) continue;
+      const auto reg = dirtyBase + bit;
+      expected.dirtyElems[reg] = 1u;
+      actual.dirtyElems[reg] = 1u;
+      if (!expected.dirty()) expected.dirtyStart = reg;
+      expected.dirtyEnd = reg + 1u;
+      if (!actual.dirty()) actual.dirtyStart = reg;
+      actual.dirtyEnd = reg + 1u;
+    }
+
+    const auto* warmValues = actual.values.data();
+    const auto* warmDirty = actual.dirtyElems.data();
+    std::vector<std::uint8_t> source(
+        static_cast<std::size_t>(kCount) * ElemSize, 0u);
+    for (std::uint32_t bit = 0u; bit < kCount; ++bit) {
+      if ((changedMask & (1u << bit)) == 0u && warm) {
+        const auto initial = constMaskElement<ElemSize>(
+            static_cast<std::uint8_t>(0x11u + start + bit));
+        std::memcpy(source.data() + static_cast<std::size_t>(bit) * ElemSize,
+                    initial.data(), ElemSize);
+      } else if ((changedMask & (1u << bit)) != 0u) {
+        const auto changed = constMaskElement<ElemSize>(
+            static_cast<std::uint8_t>(0x81u + start + bit));
+        std::memcpy(source.data() + static_cast<std::size_t>(bit) * ElemSize,
+                    changed.data(), ElemSize);
+      }
+    }
+    const auto sourceBefore = source;
+
+    const auto applyAndCompare = [&](std::string_view label) {
+      const auto oldResult = oldConstTransition(
+          expected, dxmt9::d3d9::pe::RecorderPhase::Live, true, start,
+          kCount, source.data(), ElemSize);
+      check(oldResult.valid, std::string(label) + ": oracle rejected row");
+      std::uint32_t visits = 0u;
+      const auto path = Write::template withCheckedRange<kMaxRegisters>(
+          start, kCount, source.data(),
+          [&](const auto& write) {
+            ++visits;
+            write.applyLive(actual);
+            return true;
+          },
+          [] { return false; }, [] { return false; });
+      check(path && visits == 1u,
+            std::string(label) + ": validated Live visitor was not singular");
+      checkConstShadowEquivalent(expected, actual, label);
+      check(source == sourceBefore,
+            std::string(label) + ": source bytes were modified");
+    };
+
+    applyAndCompare("validated fixed-width mask row");
+    expected.clear();
+    actual.clear();
+    applyAndCompare("validated fixed-width repeated mask row");
+    if (warm) {
+      check(actual.values.data() == warmValues &&
+                actual.dirtyElems.data() == warmDirty,
+            "reserved warm mask row changed storage pointers");
+    }
+    ++matrixRows;
+  };
+
+  // The empty short row starts at zero. Nonzero short rows start after four
+  // existing registers, allowing all 16 prior dirty masks while both target
+  // vectors grow. Warm rows cover both start positions and all 16 prior masks.
+  for (std::uint32_t changedMask = 0u; changedMask < (1u << kCount);
+       ++changedMask) {
+    runMatrix(false, 0u, 0u, changedMask);
+  }
+  for (std::uint32_t priorMask = 0u; priorMask < (1u << kCount);
+       ++priorMask) {
+    for (std::uint32_t changedMask = 0u; changedMask < (1u << kCount);
+         ++changedMask) {
+      runMatrix(false, kStartNonzero, priorMask, changedMask);
+      runMatrix(true, 0u, priorMask, changedMask);
+      runMatrix(true, kStartNonzero, priorMask, changedMask);
+    }
+  }
+  check(matrixRows == 784u,
+        "validated fixed-width mask matrix row count is exact");
+}
+
+void testValidatedConstWriteMaskMatrix() {
+  testValidatedConstWriteChangedAndDirtyMasks<4u>();
+  testValidatedConstWriteChangedAndDirtyMasks<16u>();
+}
+
 // Pins touchConstShadow's exact per-call semantics (dirty range, dirtyElems,
 // and the zero-fill aliasing boundary on a freshly-extended region) after the
 // fused reducer. These remain the contract independently of its implementation.
@@ -3584,6 +3720,7 @@ int main() {
     testFixedConstLiveApplyDifferential<4u>();
     testFixedConstLiveApplyDifferential<16u>();
     testValidatedConstWriteFactoryAndKernel();
+    testValidatedConstWriteMaskMatrix();
     testTouchConstShadowSemantics();
     testConstShadowFeedsConstantSections();
     testReferencesObjectRollbackAndOverflow();

@@ -1045,6 +1045,16 @@ Property tests pin source/destination offsets and boundary canaries; linked
 PE evidence must show the intended bounded load/store without a new library
 call. This changes value materialization, not the transition model.
 
+The fixed-width Live loop borrows the value and dirty-element backing pointers
+only after both grow-only materializations complete. No resize, callback or
+publication occurs until those call-local borrows expire. The first-changed
+index starts at `count`, outside the visited `[0, count)` range; it therefore
+also represents the unchanged outcome without a separate boolean reduction.
+This is the same R-CORE-REC-7.40 effect, including existing dirty obligations
+on an all-equal write. Independent dirty/change-mask differentials cover both
+growing and warm storage; linked PE code, not source-level pointer caching
+alone, decides whether this representation reduces repeated work.
+
 R-CORE-REC-7.41 narrows the compact destination-rebase operation to one lexical
 source qualification. Source metadata and pending-ticket checks may share that
 qualification with destination preparation; the retention callback still
