@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H269](present-pacing-pe-held-constant-value.269.md) rejects held-value
+constant fusion: smaller PE symbols add an equal-path argument reload; GT2
+spots show no economy benefit. Original runtime is retained, with stronger
+native bit/guard-page tests and separate equal/changed-path acceptance.
+
 [H268](present-pacing-pe-native-thread-cpu.268.md) adds externally queried
 native commit-thread CPU: 05/06 GT2 occupy 0.944/0.965 cores in qualified
 partial intervals. This includes game/Wine/synchronous Unix, not PE-exclusive

@@ -29,6 +29,12 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H269](present-pacing-pe-held-constant-value.269.md) rejects three held-value
+constant-loop shapes. The measured candidate removes a changed-only reload
+but adds a common PE32 source-argument read; 05/06 spots show no benefit.
+Production code is restored with byte-identical PE `.text`. Stronger native
+boundary tests and the rejection evidence remain; no CPU/FPS gain is claimed.
+
 [H268](present-pacing-pe-native-thread-cpu.268.md) resolves an external
 native commit-thread CPU view without a new PE probe or thread suspension.
 05/06 GT2 consume 33.826/52.550 ms per joined frame and 0.944/0.965 cores;

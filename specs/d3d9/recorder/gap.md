@@ -13,6 +13,13 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H269](../../../docs/perfomance/present-pacing/present-pacing-pe-held-constant-value.269.md)
+rejects held-value/cursor refinements after separate equal/changed-path PE
+inspection and GT2 spots without demonstrated economy. Production remains
+H267; restored PE `.text` is byte-identical. Native 4/16-byte alignment,
+bit-pattern and protected-page tests strengthen R-CORE-REC-7.40, but removal
+of its changed-source reload and repeatable CPU savings remain open.
+
 [H268](../../../docs/perfomance/present-pacing/present-pacing-pe-native-thread-cpu.268.md)
 adds a calibrated external native commit-thread CPU observer. Actual 05/06
 GT2 queries resolve one PID/start-qualified thread at 0.944/0.965 occupied

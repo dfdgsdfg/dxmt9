@@ -1045,6 +1045,14 @@ Property tests pin source/destination offsets and boundary canaries; linked
 PE evidence must show the intended bounded load/store without a new library
 call. This changes value materialization, not the transition model.
 
+Linked-code acceptance must distinguish equal-element work from changed-only
+materialization in both PE widths. Removing a changed-path source reload must
+not be described as unconditional savings if it introduces an argument reload
+or spill on every equal element. Whole-symbol byte/instruction totals include
+cold growth paths and are not dynamic cost. A proposed call-local held-value
+or cursor representation still needs bounded byte/dirty equivalence and actual
+runtime evidence; its source-level copy count is insufficient for promotion.
+
 The fixed-width Live loop borrows the value and dirty-element backing pointers
 only after both grow-only materializations complete. No resize, callback or
 publication occurs until those call-local borrows expire. The first-changed

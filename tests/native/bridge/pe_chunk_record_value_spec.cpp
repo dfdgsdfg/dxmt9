@@ -20,6 +20,11 @@
 #include <type_traits>
 #include <vector>
 
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
 static_assert(dxmt9::d3d9::pe::isWireSafePayloadValue<
                   D9CCommandChunkWireUpdateTexture>);
 static_assert(dxmt9::d3d9::pe::isWireSafePayloadValue<std::uint32_t>);
@@ -1085,119 +1090,46 @@ void testConstTransitionBoundedStateSpace() {
   }
 }
 
-void testFixedConstElemEqualsMatrix() {
-  constexpr std::size_t kElemBytes = 16u;
-  constexpr std::size_t kMaxAlignment = 15u;
-  constexpr std::size_t kStorageBytes = kElemBytes + kMaxAlignment;
-  std::array<std::uint8_t, kElemBytes> baseline{};
-  for (std::size_t i = 0u; i < baseline.size(); ++i) {
-    baseline[i] = static_cast<std::uint8_t>(0x31u + i * 17u);
+template <std::size_t ElemSize>
+std::array<std::array<std::uint32_t, ElemSize / sizeof(std::uint32_t)>, 4u>
+fixedConstElemRawPatterns() {
+  static_assert(ElemSize == 4u || ElemSize == 16u);
+  if constexpr (ElemSize == 4u) {
+    return {{{0x7fc00001u}, {0x7fa00001u}, {0x80000000u},
+             {0x00000000u}}};
+  } else {
+    return {{{0x7fc00001u, 0x80000000u, 0x00000000u, 0x3f800000u},
+             {0x7fa00001u, 0x00000000u, 0x80000000u, 0xbf800000u},
+             {0x7fffffffu, 0xff800000u, 0x00000001u, 0x80000000u},
+             {0x00000000u, 0x80000000u, 0x7fc12345u, 0x3f000000u}}};
   }
-
-  // Exercise every possible byte alignment and every bit in the four-word
-  // element. The direct memcmp result is the byte-level oracle for the
-  // fixed-width reducer, including explicit first/last-word differences.
-  for (std::size_t alignment = 0u; alignment <= kMaxAlignment; ++alignment) {
-    std::array<std::uint8_t, kStorageBytes> destinationStorage{};
-    std::array<std::uint8_t, kStorageBytes> sourceStorage{};
-    auto* destination = destinationStorage.data() + alignment;
-    auto* source = sourceStorage.data() + ((alignment * 7u) % 16u);
-    std::memcpy(destination, baseline.data(), kElemBytes);
-    std::memcpy(source, baseline.data(), kElemBytes);
-
-    check(constShadowFixedElemEquals<16u>(destination, source) &&
-              std::memcmp(destination, source, kElemBytes) == 0,
-          "fixed 16-byte equality accepts aligned and unaligned equal input");
-    check(constShadowFixedElemEquals<16u>(destination, destination),
-          "fixed 16-byte equality accepts exact self-alias");
-
-    for (std::size_t bit = 0u; bit < kElemBytes * 8u; ++bit) {
-      std::memcpy(source, baseline.data(), kElemBytes);
-      source[bit / 8u] ^= static_cast<std::uint8_t>(1u << (bit % 8u));
-      const bool expected = std::memcmp(destination, source, kElemBytes) == 0;
-      check(constShadowFixedElemEquals<16u>(destination, source) == expected,
-            "fixed 16-byte equality matches memcmp for every bit");
-      if (bit == 0u || bit == 31u || bit == 96u || bit == 127u) {
-        check(!constShadowFixedElemEquals<16u>(destination, source),
-              "fixed 16-byte equality detects first/last-word differences");
-      }
-    }
-
-    // Compare the same unaligned source bytes through the generic reducer so
-    // the word-wise comparator remains state-equivalent, not just byte-equal.
-    ConstShadow generic;
-    ConstShadow fixed;
-    generic.reserveCapacity(kElemBytes, 1u);
-    fixed.reserveCapacity(kElemBytes, 1u);
-    const auto genericResult = reduceConstShadowTransition(
-        generic, dxmt9::d3d9::pe::RecorderPhase::Live,
-        ConstShadowTransitionMode::Apply, 0u, 1u, source, kElemBytes);
-    applyConstShadowLiveFixedWidth<16u>(fixed, 0u, 1u, source);
-    check(genericResult.valid, "fixed equality matrix generic reference is valid");
-    checkConstShadowEquivalent(generic, fixed,
-                               "fixed equality matrix generic reference");
-  }
-
-  // Keep the mixed equal/changed prefix and existing-dirty behavior coupled
-  // to the comparator oracle, including an exact self-alias after a clear.
-  std::array<std::uint8_t, 2u * kElemBytes + kMaxAlignment> mixedStorage{};
-  std::array<std::uint8_t, 2u * kElemBytes> seed{};
-  auto* mixed = mixedStorage.data() + 5u;
-  std::memcpy(seed.data(), baseline.data(), kElemBytes);
-  std::memcpy(seed.data() + kElemBytes, baseline.data(), kElemBytes);
-  std::memcpy(mixed, baseline.data(), kElemBytes);
-  std::memcpy(mixed + kElemBytes, baseline.data(), kElemBytes);
-  mixed[kElemBytes + 4u] ^= 0x80u;
-  mixed[kElemBytes + 12u] ^= 0x01u;
-  ConstShadow generic;
-  ConstShadow fixed;
-  generic.reserveCapacity(2u * kElemBytes, 2u);
-  fixed.reserveCapacity(2u * kElemBytes, 2u);
-  (void)reduceConstShadowTransition(
-      generic, dxmt9::d3d9::pe::RecorderPhase::Live,
-      ConstShadowTransitionMode::Apply, 0u, 2u, seed.data(), kElemBytes);
-  applyConstShadowLiveFixedWidth<16u>(fixed, 0u, 2u, seed.data());
-  generic.clear();
-  fixed.clear();
-  const auto genericMixed = reduceConstShadowTransition(
-      generic, dxmt9::d3d9::pe::RecorderPhase::Live,
-      ConstShadowTransitionMode::Apply, 0u, 2u, mixed, kElemBytes);
-  applyConstShadowLiveFixedWidth<16u>(fixed, 0u, 2u, mixed);
-  check(genericMixed.valid && generic.dirtyStart == fixed.dirtyStart &&
-            generic.dirtyEnd == fixed.dirtyEnd &&
-            generic.dirtyElems == fixed.dirtyElems && fixed.dirtyStart == 1u &&
-            fixed.dirtyEnd == 2u && fixed.dirtyElems[0] == 0u &&
-            fixed.dirtyElems[1] == 1u,
-        "fixed equality preserves mixed prefix and existing dirty state");
-  checkConstShadowEquivalent(generic, fixed,
-                             "fixed equality mixed update state");
-  const auto* selfAlias = fixed.values.data() + kElemBytes;
-  const auto beforeAlias = fixed;
-  applyConstShadowLiveFixedWidth<16u>(fixed, 1u, 1u, selfAlias);
-  checkConstShadowEquivalent(beforeAlias, fixed,
-                             "fixed equality exact self-alias preserves pending obligations");
 }
 
-void testFixedConstElemCopyMatrix() {
-  constexpr std::size_t kElemBytes = 16u;
+// Compose the existing production primitives for direct byte/permission tests.
+// The Live/factory differential below separately pins the actual reducer.
+template <std::size_t ElemSize>
+bool updateFixedConstElemForTest(std::uint8_t* destination,
+                                 const std::uint8_t* source) {
+  if (constShadowFixedElemEquals<ElemSize>(destination, source)) return false;
+  constShadowFixedElemCopy<ElemSize>(destination, source);
+  return true;
+}
+
+template <std::size_t ElemSize>
+void testFixedConstElemCompareCopyMatrix() {
   constexpr std::size_t kAlignments = 16u;
   constexpr std::size_t kGuardBytes = 16u;
   constexpr std::size_t kStorageBytes =
-      kGuardBytes + kElemBytes + (kAlignments - 1u) + kGuardBytes;
+      kGuardBytes + ElemSize + (kAlignments - 1u) + kGuardBytes;
   constexpr std::uint8_t kDestinationCanary = 0xc7u;
   constexpr std::uint8_t kSourceCanary = 0x3du;
-  constexpr std::array<std::array<std::uint32_t, 4u>, 4u> bitPatterns = {{
-      {0x7fc00001u, 0x80000000u, 0x00000000u, 0x3f800000u},
-      {0x7fa00001u, 0x00000000u, 0x80000000u, 0xbf800000u},
-      {0x7fffffffu, 0xff800000u, 0x00000001u, 0x80000000u},
-      {0x00000000u, 0x80000000u, 0x7fc12345u, 0x3f000000u},
-  }};
+  const auto bitPatterns = fixedConstElemRawPatterns<ElemSize>();
 
   std::array<std::uint8_t, kStorageBytes> destinationStorage{};
   std::array<std::uint8_t, kStorageBytes> sourceStorage{};
-  std::array<std::uint8_t, kElemBytes> baseline{};
-  std::array<std::uint8_t, kElemBytes> variant{};
-  std::size_t copyChecks = 0u;
+  std::array<std::uint8_t, ElemSize> baseline{};
+  std::array<std::uint8_t, ElemSize> variant{};
+  std::size_t updateChecks = 0u;
 
   const auto checkCanaries = [&](const auto& storage, std::size_t offset,
                                  std::uint8_t canary,
@@ -1205,30 +1137,37 @@ void testFixedConstElemCopyMatrix() {
     for (std::size_t i = 0u; i < offset; ++i) {
       check(storage[i] == canary, label);
     }
-    for (std::size_t i = offset + kElemBytes; i < storage.size(); ++i) {
+    for (std::size_t i = offset + ElemSize; i < storage.size(); ++i) {
       check(storage[i] == canary, label);
     }
   };
 
-  const auto checkCopy = [&](std::size_t destinationAlignment,
-                             std::size_t sourceAlignment,
-                             const std::uint8_t* bytes,
-                             std::string_view label) {
+  const auto checkUpdate = [&](std::size_t destinationAlignment,
+                               std::size_t sourceAlignment,
+                               const std::uint8_t* bytes,
+                               std::string_view label) {
     destinationStorage.fill(kDestinationCanary);
     sourceStorage.fill(kSourceCanary);
     const auto destinationOffset = kGuardBytes + destinationAlignment;
     const auto sourceOffset = kGuardBytes + sourceAlignment;
     auto* destination = destinationStorage.data() + destinationOffset;
     auto* source = sourceStorage.data() + sourceOffset;
-    std::memcpy(source, bytes, kElemBytes);
+    std::memcpy(destination, baseline.data(), ElemSize);
+    std::memcpy(source, bytes, ElemSize);
     const auto sourceBefore = sourceStorage;
 
-    constShadowFixedElemCopy<16u>(destination, source);
-    check(std::memcmp(destination, bytes, kElemBytes) == 0, label);
+    const bool expectedChanged =
+        std::memcmp(destination, source, ElemSize) != 0;
+    const bool changed = updateFixedConstElemForTest<ElemSize>(
+        destination, source);
+    check(changed == expectedChanged, label);
+    check(std::memcmp(destination, expectedChanged ? bytes : baseline.data(),
+                      ElemSize) == 0,
+          label);
     checkCanaries(destinationStorage, destinationOffset,
                   kDestinationCanary, label);
     check(sourceStorage == sourceBefore, label);
-    ++copyChecks;
+    ++updateChecks;
   };
 
   for (std::size_t destinationAlignment = 0u;
@@ -1236,28 +1175,121 @@ void testFixedConstElemCopyMatrix() {
     for (std::size_t sourceAlignment = 0u; sourceAlignment < kAlignments;
          ++sourceAlignment) {
       for (const auto& words : bitPatterns) {
-        std::memcpy(baseline.data(), words.data(), kElemBytes);
-        checkCopy(destinationAlignment, sourceAlignment, baseline.data(),
-                  "fixed 16-byte copy preserves NaN/signed-zero bit pattern");
+        std::memcpy(baseline.data(), words.data(), ElemSize);
+        checkUpdate(destinationAlignment, sourceAlignment, baseline.data(),
+                    "fixed update accepts equal raw NaN/signed-zero pattern");
+
+        for (std::size_t bit = 0u; bit < ElemSize * 8u; ++bit) {
+          variant = baseline;
+          variant[bit / 8u] ^= static_cast<std::uint8_t>(1u << (bit % 8u));
+          checkUpdate(destinationAlignment, sourceAlignment, variant.data(),
+                      "fixed update detects every differing source bit");
+        }
       }
 
-      // Every source bit is changed once from a pattern containing NaNs,
-      // signed zero, and ordinary finite words. This is deliberately direct
-      // helper coverage; the reducer differential below remains its state
-      // oracle and is not reused as a copy oracle.
-      std::memcpy(baseline.data(), bitPatterns[0].data(), kElemBytes);
-      for (std::size_t bit = 0u; bit < kElemBytes * 8u; ++bit) {
-        variant = baseline;
-        variant[bit / 8u] ^= static_cast<std::uint8_t>(1u << (bit % 8u));
-        checkCopy(destinationAlignment, sourceAlignment, variant.data(),
-                  "fixed 16-byte copy preserves every single-bit variant");
-      }
+      // The helper borrows the source only for this exact-width operation;
+      // exact self-alias is supported, while partial overlap is intentionally
+      // outside this test's contract.
+      destinationStorage.fill(kDestinationCanary);
+      std::memcpy(destinationStorage.data() + kGuardBytes +
+                      destinationAlignment,
+                  baseline.data(), ElemSize);
+      auto* destination = destinationStorage.data() + kGuardBytes +
+                          destinationAlignment;
+      const auto beforeAlias = destinationStorage;
+      check(!updateFixedConstElemForTest<ElemSize>(destination,
+                                                         destination) &&
+                destinationStorage == beforeAlias,
+            "fixed update exact self-alias is unchanged");
     }
   }
-  check(copyChecks == kAlignments * kAlignments *
-                         (bitPatterns.size() + kElemBytes * 8u),
-        "fixed 16-byte copy matrix count is exact");
+  check(updateChecks == kAlignments * kAlignments * bitPatterns.size() *
+                             (1u + ElemSize * 8u),
+        "fixed update matrix count is exact");
 }
+
+#if defined(__unix__) || defined(__APPLE__)
+template <std::size_t ElemSize>
+void testFixedConstElemCompareCopyGuardPages() {
+  const auto pageSize = sysconf(_SC_PAGESIZE);
+  check(pageSize > 0 && static_cast<std::size_t>(pageSize) >= ElemSize,
+        "fixed update guard-page size is valid");
+#ifdef MAP_ANONYMOUS
+  constexpr int kAnonymous = MAP_ANONYMOUS;
+#else
+  constexpr int kAnonymous = MAP_ANON;
+#endif
+  const auto pageBytes = static_cast<std::size_t>(pageSize);
+  const auto regionBytes = pageBytes * 3u;
+  struct MappedRegion {
+    void* address;
+    std::size_t size;
+    ~MappedRegion() {
+      if (address != MAP_FAILED) munmap(address, size);
+    }
+  };
+  const auto mapRegion = [&]() {
+    return MappedRegion{mmap(nullptr, regionBytes, PROT_NONE,
+                             MAP_PRIVATE | kAnonymous, -1, 0),
+                        regionBytes};
+  };
+
+  auto sourceRegion = mapRegion();
+  auto destinationRegion = mapRegion();
+  check(sourceRegion.address != MAP_FAILED &&
+            destinationRegion.address != MAP_FAILED,
+        "fixed update guard-page reservations succeed");
+  auto* sourceMiddle = static_cast<std::uint8_t*>(sourceRegion.address) +
+                       pageBytes;
+  auto* destinationMiddle =
+      static_cast<std::uint8_t*>(destinationRegion.address) + pageBytes;
+  const std::array<std::uint32_t, ElemSize / sizeof(std::uint32_t)> words =
+      fixedConstElemRawPatterns<ElemSize>()[0];
+  std::array<std::uint8_t, ElemSize> baseline{};
+  std::memcpy(baseline.data(), words.data(), ElemSize);
+  const auto edgeOffsets = std::array<std::size_t, 2u>{
+      0u, pageBytes - ElemSize};
+  for (const auto edgeOffset : edgeOffsets) {
+    check(mprotect(sourceMiddle, pageBytes, PROT_READ | PROT_WRITE) == 0 &&
+              mprotect(destinationMiddle, pageBytes,
+                       PROT_READ | PROT_WRITE) == 0,
+          "fixed update exposes only the middle guard-page inputs");
+    auto* source = sourceMiddle + edgeOffset;
+    auto* destination = destinationMiddle + edgeOffset;
+    std::memcpy(source, baseline.data(), ElemSize);
+    std::memcpy(destination, baseline.data(), ElemSize);
+
+    check(mprotect(sourceMiddle, pageBytes, PROT_READ) == 0 &&
+              mprotect(destinationMiddle, pageBytes, PROT_READ) == 0,
+          "fixed update protects exact-width edge inputs");
+    check(!updateFixedConstElemForTest<ElemSize>(destination, source) &&
+              !updateFixedConstElemForTest<ElemSize>(destination,
+                                                           destination),
+          "fixed update equal readonly edge destination is not written");
+
+    check(mprotect(destinationMiddle, pageBytes,
+                   PROT_READ | PROT_WRITE) == 0 &&
+              mprotect(sourceMiddle, pageBytes, PROT_READ | PROT_WRITE) == 0,
+          "fixed update reopens the middle guard pages");
+    auto changed = baseline;
+    changed[0] ^= 0x01u;
+    std::memcpy(source, changed.data(), ElemSize);
+    check(mprotect(sourceMiddle, pageBytes, PROT_READ) == 0,
+          "fixed update protects changed source edge");
+    check(updateFixedConstElemForTest<ElemSize>(destination, source) &&
+              std::memcmp(destination, changed.data(), ElemSize) == 0,
+          "fixed update changed edge copies exactly one element");
+
+    check(mprotect(destinationMiddle, pageBytes, PROT_READ) == 0 &&
+              !updateFixedConstElemForTest<ElemSize>(destination,
+                                                           destination),
+          "fixed update changed readonly self-alias is not written");
+  }
+}
+#else
+template <std::size_t ElemSize>
+void testFixedConstElemCompareCopyGuardPages() {}
+#endif
 
 template <std::size_t ElemSize>
 void testFixedConstLiveApplyEdges() {
@@ -3713,8 +3745,10 @@ int main() {
     testConstTransitionBoundedStateSpace();
     testFixedConstLiveApplyEdges<4u>();
     testFixedConstLiveApplyEdges<16u>();
-    testFixedConstElemEqualsMatrix();
-    testFixedConstElemCopyMatrix();
+    testFixedConstElemCompareCopyMatrix<4u>();
+    testFixedConstElemCompareCopyMatrix<16u>();
+    testFixedConstElemCompareCopyGuardPages<4u>();
+    testFixedConstElemCompareCopyGuardPages<16u>();
     testFixedConstLiveApplyObservation<4u>();
     testFixedConstLiveApplyObservation<16u>();
     testFixedConstLiveApplyDifferential<4u>();
