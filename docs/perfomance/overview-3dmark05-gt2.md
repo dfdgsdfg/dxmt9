@@ -16,9 +16,12 @@ gates OFF constant-range queries, groups borrow authority, reuses qualified
 Live bindings and consolidates owner pin indexes. Four builds, native 39/39,
 x86_64 14/14 and unchanged TLA pass. Storage and DLL size shrink, but some
 individual functions grow; this is not runtime promotion. H251 remains the
-latest measured checkpoint.
+previous measured checkpoint. Post-commit H253 GT2 is 29.009 sampled FPS versus
+H251 29.034 (-0.084%), with zero chunk/GPU/pipeline failures and close CB/pass
+ratios. The comparison spans H252 and H253; a single run with observed
+background CPU contention establishes no attributed gain or qualified neutrality.
 
-The latest runtime checkpoint [H251](present-pacing/present-pacing-pe-append-effects.251.md)
+The previous runtime checkpoint [H251](present-pacing/present-pacing-pe-append-effects.251.md)
 refines compact section dispatch, constant rollback, disabled ledger access
 and recorder frontier reads. Native/linked checks pass. Post-commit GT2 is
 29.034 sampled FPS versus [H250](present-pacing/present-pacing-pe-sparse-work.250.md)

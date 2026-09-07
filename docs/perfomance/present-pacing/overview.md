@@ -34,9 +34,13 @@ removes OFF constant-range queries, duplicates in source borrow authority and
 paired owner pin indexes, and reuses strongly retained same-object Live
 bindings. Four builds, native 39/39, x86_64 14/14 and unchanged TLA pass.
 Cadence, ABI and queue policy stay unchanged. Storage/DLL savings and local
-code/stack growth are recorded in the leaf; there is no new runtime/FPS evidence.
+code/stack growth are recorded in the leaf. Post-commit GT2 is 29.009 sampled
+FPS versus H251 29.034 (-0.084%), with zero chunk/GPU/pipeline failures and
+close CB/pass ratios. The comparison includes H252 and H253; one run with
+background CPU contention establishes no attributed gain or qualified
+neutrality. Whole-scene correctness and current CPU attribution remain open.
 
-The latest runtime checkpoint [H251](present-pacing-pe-append-effects.251.md)
+The previous runtime checkpoint [H251](present-pacing-pe-append-effects.251.md)
 skips absent compact emitters, closes constant settlement effects before
 narrowing rollback, removes dynamic ledger TLS initialization checks and
 reads fresh owner frontiers without reconstructing unused wire sizes. It adds

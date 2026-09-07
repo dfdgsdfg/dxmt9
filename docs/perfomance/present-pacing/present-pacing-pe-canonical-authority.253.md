@@ -3,9 +3,9 @@ domain: present-pacing
 workload: 3DMark05 GT2
 title: "PE grouped borrow authority and single pin index"
 type: evidence
-status: native-and-linked-verified
+status: native-linked-and-wild-spotcheck
 updated: 2026-09-07
-source: experiments/output/pe-canonical-authority-20260907/analysis
+source: experiments/output/pe-canonical-authority-20260907/analysis; experiments/output/app-d3d9-3dmark05-pe-canonical-authority-f997e237-gt2-r1-20260907
 related: specs/d3d9/recorder/requirements.md; present-pacing-pe-append-boundary.252.md
 ---
 
@@ -112,7 +112,48 @@ symbol filter; no before/after PE32 setter count is claimed.
 
 The final Unix provider and both bridge DLLs are byte-identical to baseline.
 Static counts include cold paths and padding; they are not executed work,
-call-chain stack peaks or CPU time. No wild run, FPS result or promotion is
-part of H253. H251 remains the latest runtime checkpoint. Current PE CPU
-attribution, same-binding hit distribution and whole-scene Wine correctness
-remain separate integration evidence.
+call-chain stack peaks or CPU time. Current PE CPU attribution and same-binding
+hit distribution remain separate integration evidence.
+
+## Post-commit GT2 spot check
+
+One clean-tree run at `f997e237` uses Sikarugir cx-24.0.7, GT2 at 1024x768,
+the perf profile and frame sampling ON. PE decimation, recorder statistics,
+owner phase splitting and the copy ledger are OFF. There is no PE sampler,
+GPU trace or interleaved baseline. All five installed Wine-root artifact
+hashes match the staging/linked receipts. The provider and bridge DLLs also
+match the prior measured H251 build.
+
+| Metric | H251 `b83d59e1` | H253 `f997e237` |
+|---|---:|---:|
+| Positive-wall samples | 1,876 | 1,874 |
+| Sum sampled wall ms | 64,614.120 | 64,599.637 |
+| Sampled FPS | 29.034 | 29.009 |
+| Encoded Presents | 1,877 | 1,875 |
+| Command buffers / Present | 3.99947 | 3.99947 |
+| Render passes / Present | 15.77890 | 15.77493 |
+| Draw calls / Present | 1,681.425 | 1,680.949 |
+| GPU command-buffer ms / Present | 2.032 | 2.013 |
+
+Sampled FPS is positive-wall sample count divided by summed sample time;
+process elapsed time (73.073 seconds) is not its denominator. The unrounded
+FPS change is -0.0842%. This comparison includes H252 and H253, because H252
+has no separate runtime checkpoint; it cannot isolate H253's four changes.
+
+The run passes with exit 0, no timeout, no harness failures, and zero chunk
+rejects, GPU errors, no-pipeline skips or draw/function/library/PSO build
+failures. The recovered `.3dr` is retained, but its score is not the sampled
+FPS metric. `actual.png` shows a coherent GT2 forest frame at overlay 1:00.34;
+one frame does not establish whole-scene correctness or exclude flicker.
+
+No competing Wine/build process was observed at preflight. An in-run snapshot
+at scene-process elapsed 29 seconds records `duetexpertd` at 95.2% CPU and
+3DMark05 at 177.5%. This background load was absent from H251's one snapshot;
+neither snapshot is a continuous CPU profile. No background service was stopped.
+
+Verdict: bounded runtime-health evidence with close CB/pass ratios, not an
+attributed FPS gain, regression or noise-qualified neutrality. Whole-scene
+correctness, repeatability, hit distribution and current PE CPU attribution
+remain open. Exact command, counters, binary hashes and artifact provenance
+are in `analysis/wild-run-receipt.md`; logs and the process snapshot are kept
+beside it. README performance values are unchanged.

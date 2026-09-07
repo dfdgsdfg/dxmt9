@@ -26,8 +26,12 @@ shrink 6,144/2,560 bytes and owner backing loses 147,600 bytes, while some
 individual functions grow in code/stack. Exports and vtable/RTTI owners match;
 the Unix provider and bridges are byte-identical. See
 [H253](../../../docs/perfomance/present-pacing/present-pacing-pe-canonical-authority.253.md).
-No runtime promotion or FPS claim follows. Fresh Wine/wild correctness,
-same-binding hit distribution and current PE CPU attribution remain open.
+Post-commit GT2 at `f997e237` passes with zero chunk/GPU/pipeline failures and
+close CB/pass ratios: 29.009 sampled FPS versus H251 29.034 (-0.084%). This
+spans H252 and H253; one run with observed background CPU contention proves
+neither an attributed gain nor qualified neutrality. No runtime promotion
+follows. Whole-scene Wine correctness, repeatability, same-binding hit
+distribution and current PE CPU attribution remain open.
 
 R-CORE-REC-7.52–7.55 cover fault-only prediction gating, family-specific append
 preparation, single-owner compact layout/quota work and production ledger

@@ -5,7 +5,7 @@ title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
 updated: 2026-09-07
-source: docs/perfomance/present-pacing/present-pacing-pe-append-effects.251.md; docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md; docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
+source: docs/perfomance/present-pacing/present-pacing-pe-canonical-authority.253.md; docs/perfomance/present-pacing/present-pacing-pe-append-effects.251.md; docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md; docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
@@ -14,10 +14,13 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 Latest implementation: [H253](present-pacing-pe-canonical-authority.253.md)
 gates OFF constant-range queries, groups source authority, reuses retained
 Live bindings and replaces paired owner pin indexes with one checked relation.
-Native/linked verification and code/stack tradeoffs are recorded there; no new
-runtime result is claimed. H251 remains the latest measured checkpoint.
+Native/linked verification and code/stack tradeoffs are recorded there.
+Post-commit GT2 is 29.009 sampled FPS versus H251 29.034 (-0.084%), with zero
+chunk/GPU/pipeline failures and close CB/pass ratios. This spans H252 and H253;
+one run with background CPU contention is not an attributed gain or qualified
+neutrality. Whole-scene correctness and current CPU attribution remain open.
 
-Latest runtime checkpoint: [H251](present-pacing-pe-append-effects.251.md) adds
+Previous runtime checkpoint: [H251](present-pacing-pe-append-effects.251.md) adds
 active-section dispatch, concrete constant settlement with narrower rollback,
 constinit ledger overrides and fresh counts-only recorder bookkeeping.
 Post-commit GT2 is 29.034 sampled FPS versus H250 28.846 (+0.650%), with zero
