@@ -19,13 +19,16 @@ using dxmt9::d3d9::pe::kPeSamplerSelfPcMaxUsed;
 using dxmt9::d3d9::pe::kPeSamplerSelfPcSlots;
 using dxmt9::d3d9::pe::normalizePeSamplerModuleRanges;
 using dxmt9::d3d9::pe::PeSamplerModuleRange;
+using dxmt9::d3d9::pe::PeSamplerSelfPcCapture;
 using dxmt9::d3d9::pe::PeSamplerSelfPcTable;
 using dxmt9::d3d9::pe::PeSamplerTopBucket;
 using dxmt9::d3d9::pe::PeSamplerTopModule;
 using dxmt9::d3d9::pe::peSamplerBucketForPc;
+using dxmt9::d3d9::pe::copyPeSamplerSelfPcRows;
 using dxmt9::d3d9::pe::recordPeSamplerSelfPc;
 using dxmt9::d3d9::pe::selectTopPeSamplerModules;
 using dxmt9::d3d9::pe::selectTopPeSamplerSelfPc;
+using dxmt9::d3d9::pe::sortPeSamplerSelfPcRows;
 using dxmt9::d3d9::pe::clampPeSamplerHz;
 
 namespace {
@@ -150,6 +153,126 @@ bool testSelfPcHistogram() {
   return ok;
 }
 
+bool testSelfPcCaptureCoverage() {
+  PeSamplerSelfPcTable table;
+  recordPeSamplerSelfPc(table, 0x40000000ull);
+  recordPeSamplerSelfPc(table, 0x40000000ull);
+  recordPeSamplerSelfPc(table, 0x40000040ull);
+  recordPeSamplerSelfPc(table, 0x40000080ull);
+  recordPeSamplerSelfPc(table, 0x40000080ull);
+  recordPeSamplerSelfPc(table, 0x40000080ull);
+
+  PeSamplerTopBucket rows[4]{};
+  PeSamplerSelfPcCapture full{rows, 4u};
+  copyPeSamplerSelfPcRows(table, full);
+  bool ok = check(full.used == 3u && full.rowCount == 3u,
+                  "self-PC capture reports all stored buckets");
+  ok &= check(full.storedSamples == 6u && full.reportedSamples == 6u &&
+                  full.omittedSamples == 0u && full.complete,
+              "self-PC capture separates stored samples from omission");
+  sortPeSamplerSelfPcRows(rows, full.rowCount);
+  ok &= check(rows[0].bucket == 0x40000080ull && rows[0].samples == 3u &&
+                  rows[1].bucket == 0x40000000ull && rows[1].samples == 2u &&
+                  rows[2].bucket == 0x40000040ull && rows[2].samples == 1u,
+              "full self-PC rows sort by count then bucket");
+
+  PeSamplerTopBucket shortRows[2]{};
+  PeSamplerSelfPcCapture shortCapture{shortRows, 2u};
+  copyPeSamplerSelfPcRows(table, shortCapture);
+  ok &= check(shortCapture.used == 3u && shortCapture.rowCount == 2u &&
+                  shortCapture.reportedSamples + shortCapture.omittedSamples ==
+                      shortCapture.storedSamples &&
+                  shortCapture.omittedSamples != 0u && !shortCapture.complete,
+              "short self-PC capture reports exact omitted stored samples");
+
+  PeSamplerSelfPcCapture nullCapture{nullptr, 0u};
+  copyPeSamplerSelfPcRows(table, nullCapture);
+  ok &= check(nullCapture.rowCount == 0u && nullCapture.reportedSamples == 0u &&
+                  nullCapture.omittedSamples == 6u && !nullCapture.complete,
+              "null self-PC capture fails closed with exact omission");
+
+  PeSamplerTopBucket top32[32]{};
+  const std::size_t topRows =
+      selectTopPeSamplerSelfPc(table, top32, 32u);
+  std::uint64_t topSamples = 0u;
+  for (std::size_t i = 0u; i < topRows; ++i) {
+    topSamples += top32[i].samples;
+  }
+  ok &= check(topRows == 3u && topSamples == full.reportedSamples,
+              "default top-32 selection preserves full-report parity");
+
+  PeSamplerSelfPcTable tied;
+  recordPeSamplerSelfPc(tied, 0x30000100ull);
+  recordPeSamplerSelfPc(tied, 0x30000040ull);
+  recordPeSamplerSelfPc(tied, 0x30000200ull);
+  recordPeSamplerSelfPc(tied, 0x30000080ull);
+  PeSamplerTopBucket tiedRows[4]{};
+  PeSamplerSelfPcCapture tiedCapture{tiedRows, 4u};
+  copyPeSamplerSelfPcRows(tied, tiedCapture);
+  sortPeSamplerSelfPcRows(tiedRows, tiedCapture.rowCount);
+  ok &= check(tiedRows[0].bucket == 0x30000040ull &&
+                  tiedRows[1].bucket == 0x30000080ull &&
+                  tiedRows[2].bucket == 0x30000100ull &&
+                  tiedRows[3].bucket == 0x30000200ull,
+              "full self-PC rows use deterministic bucket tie breaks");
+
+  PeSamplerSelfPcTable empty;
+  PeSamplerSelfPcCapture emptyCapture{nullptr, 0u};
+  copyPeSamplerSelfPcRows(empty, emptyCapture);
+  ok &= check(emptyCapture.used == 0u && emptyCapture.rowCount == 0u &&
+                  emptyCapture.storedSamples == 0u && emptyCapture.complete,
+              "empty self-PC capture is complete without output storage");
+  return ok;
+}
+
+bool testSelfPcCaptureAtLoadCap() {
+  PeSamplerSelfPcTable table;
+  for (std::size_t i = 0u; i < kPeSamplerSelfPcMaxUsed; ++i) {
+    recordPeSamplerSelfPc(table, 0x50000000ull + i * 64ull);
+  }
+  recordPeSamplerSelfPc(table, 0x50000000ull);
+  recordPeSamplerSelfPc(table, 0x50000000ull);
+  recordPeSamplerSelfPc(table, 0x70000000ull);
+
+  std::vector<PeSamplerTopBucket> rows(kPeSamplerSelfPcMaxUsed);
+  PeSamplerSelfPcCapture capture{rows.data(), rows.size()};
+  copyPeSamplerSelfPcRows(table, capture);
+  bool ok = check(capture.used == kPeSamplerSelfPcMaxUsed &&
+                      capture.rowCount == kPeSamplerSelfPcMaxUsed &&
+                      capture.complete,
+                  "full self-PC capture reaches the exact table load cap");
+  ok &= check(capture.storedSamples == kPeSamplerSelfPcMaxUsed + 2u &&
+                  capture.reportedSamples == capture.storedSamples &&
+                  capture.omittedSamples == 0u && table.overflow == 1u,
+              "full self-PC capture keeps repeated buckets separate from overflow");
+  ok &= check(capture.reportedSamples + capture.omittedSamples +
+                      table.overflow ==
+                  kPeSamplerSelfPcMaxUsed + 3u,
+              "self-PC coverage sums reported omitted and overflow samples");
+  sortPeSamplerSelfPcRows(rows.data(), capture.rowCount);
+  PeSamplerTopBucket top[32]{};
+  const std::size_t topCount = selectTopPeSamplerSelfPc(table, top, 32u);
+  std::uint64_t reported = 0;
+  for (std::size_t i = 0; i < topCount; ++i) {
+    reported += top[i].samples;
+    ok &= check(top[i].bucket == rows[i].bucket &&
+                    top[i].samples == rows[i].samples,
+                "full sort preserves top-32 selection at exact load cap");
+  }
+  ok &= check(topCount == 32u && reported == 34u &&
+                  capture.storedSamples - reported ==
+                      kPeSamplerSelfPcMaxUsed - 32u,
+              "top-32 omission counts stored samples, not histogram overflow");
+  PeSamplerTopBucket untouched{123u, 456u};
+  PeSamplerSelfPcCapture noCapacity{&untouched, 0u};
+  copyPeSamplerSelfPcRows(table, noCapacity);
+  ok &= check(untouched.bucket == 123u && untouched.samples == 456u &&
+                  noCapacity.rowCount == 0u &&
+                  noCapacity.omittedSamples == capture.storedSamples,
+              "zero-capacity capture does not write through a non-null pointer");
+  return ok;
+}
+
 bool testDeterministicTieBreaks() {
   // Buckets: equal sample counts must order by ascending bucket address.
   PeSamplerSelfPcTable table;
@@ -217,6 +340,8 @@ int main() {
   testNormalizeSortsAndDropsUnusable();
   testClassifyPc();
   testSelfPcHistogram();
+  testSelfPcCaptureCoverage();
+  testSelfPcCaptureAtLoadCap();
   testDeterministicTieBreaks();
   testHzClamp();
   if (failures != 0) {

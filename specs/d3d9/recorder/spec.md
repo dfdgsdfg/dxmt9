@@ -425,6 +425,27 @@ invocation signature. Recording writers, binding transitions, and both child
 call-scope branches reject a potentially throwing callable at compile time;
 the constraint adds no runtime state or branch.
 
+The PE thread sampler is a diagnostic PC distribution, not an FPS or exclusive
+CPU-time measurement. Its default report keeps 32 self-PC buckets. An opt-in
+full report may export every stored bucket from the existing bounded table,
+without changing sampling, renderer state, or the disabled recorder path.
+Full-report storage belongs only to the enabled reporting call; no draw/state
+signature or hot owner may carry it. The sampler must resume the target before
+any aggregation lock, allocation, sorting or logging. A consistent histogram
+copy is taken under the sampler lock; full-report sorting and formatting occur
+after release, with no quadratic full-table top-N selection.
+
+Every coverage-aware report must distinguish printed samples, samples omitted
+from the report, and samples rejected by the histogram's storage cap. Their
+sum must equal the same snapshot's self-module sample count. The footer
+identifies printed/stored row counts and reporting mode; complete coverage
+requires zero omitted and overflow samples and no full-report allocation
+fallback. A coverage-aware header without its final footer is incomplete,
+not permission to reuse the preceding report as current evidence. Legacy logs
+remain readable with coverage marked unverified. Native conservation tests
+and parser malformed/truncation tests bind this reporting contract; they do
+not prove Win32 scheduler timing or rendering correctness.
+
 `PeRecorderState` owns the producer-owned live/pending shadow, the separate
 `StateBlockRecorded` domain, constant shadows, reusable binding/build scratch,
 command builder, lock witness, and protocol counters. Keeping the recorded

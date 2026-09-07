@@ -146,6 +146,11 @@ SAMPLER_BUCKET_RE = re.compile(
     r"\bselfpc\s+bucket=0x(?P<bucket>[0-9a-fA-F]+)\s+samples=(?P<samples>\d+)"
 )
 SAMPLER_OVERFLOW_RE = re.compile(r"\bselfpc_overflow=(?P<overflow>\d+)")
+SAMPLER_COVERAGE_RE = re.compile(
+    r"\bselfpc_summary mode=(top|full|full_fallback) "
+    r"rows=\d+ used=\d+ self_samples=\d+ reported_samples=\d+ "
+    r"omitted_samples=\d+ overflow_samples=\d+ complete=[01]$"
+)
 
 
 class SamplerReport:
@@ -155,6 +160,8 @@ class SamplerReport:
         self.self_module: Optional[str] = None
         self.buckets: list[tuple[int, int]] = []
         self.selfpc_overflow: int = 0
+        self.coverage: Optional[dict[str, object]] = None
+        self.coverage_errors: list[str] = []
 
     @property
     def samples(self) -> int:
@@ -190,6 +197,21 @@ def parse_sampler_log(path: Path) -> Optional[SamplerReport]:
     for line in lines[header_index + 1 :]:
         if SAMPLER_HEADER_RE.search(line):
             break  # defensive: a later group means our scan missed the last one
+        if "selfpc_summary" in line:
+            if report.coverage is not None:
+                report.coverage_errors.append("duplicate selfpc summary")
+            if not SAMPLER_COVERAGE_RE.search(line.rstrip()):
+                report.coverage_errors.append("malformed selfpc summary")
+            values: dict[str, object] = {
+                match["key"]: int(match["value"], 0)
+                for match in SAMPLER_KV_RE.finditer(line)
+            }
+            mode = re.search(r"\bmode=([a-z_]+)\b", line)
+            values["mode"] = mode[1] if mode else ""
+            report.coverage = values
+            continue
+        if report.coverage is not None:
+            report.coverage_errors.append("sampler row after final selfpc summary")
         self_module_match = SAMPLER_SELF_MODULE_RE.search(line)
         if self_module_match:
             report.self_module = self_module_match.group("module")
@@ -210,6 +232,60 @@ def parse_sampler_log(path: Path) -> Optional[SamplerReport]:
                 (module_match.group("module"), int(module_match.group("samples")))
             )
     return report
+
+
+def validate_sampler_coverage(report: SamplerReport) -> list[str]:
+    """Validate one snapshot, never fill its missing tail from an older group."""
+    errors = list(report.coverage_errors)
+    version = report.header.get("selfpc_coverage")
+    if version is None and report.coverage is None:
+        return errors  # Historical logs have no verifiable coverage contract.
+    if version != 1:
+        errors.append("unsupported or missing selfpc coverage version")
+    coverage = report.coverage
+    if coverage is None:
+        return errors + ["incomplete selfpc report: missing final summary"]
+    numeric = ("rows", "used", "self_samples", "reported_samples",
+               "omitted_samples", "overflow_samples", "complete")
+    if not all(isinstance(coverage.get(key), int) for key in numeric):
+        return errors + ["incomplete selfpc summary fields"]
+    mode = coverage.get("mode")
+    if mode not in ("top", "full", "full_fallback"):
+        errors.append("invalid selfpc reporting mode")
+    rows = coverage["rows"]
+    used = coverage["used"]
+    if not 0 <= rows <= used <= 3072:
+        errors.append("selfpc row/storage bounds violated")
+    if rows != len(report.buckets):
+        errors.append("selfpc printed row count mismatch")
+    if mode in ("top", "full_fallback") and rows > 32:
+        errors.append("top selfpc report exceeds 32 rows")
+    buckets = [bucket for bucket, _ in report.buckets]
+    if len(set(buckets)) != len(buckets) or any(bucket % 64 for bucket in buckets):
+        errors.append("duplicate or unaligned selfpc bucket")
+    if any(samples <= 0 for _, samples in report.buckets):
+        errors.append("selfpc bucket has no samples")
+    reported = sum(samples for _, samples in report.buckets)
+    omitted = coverage["omitted_samples"]
+    overflow = coverage["overflow_samples"]
+    total = coverage["self_samples"]
+    if (reported != coverage["reported_samples"]
+            or reported + omitted + overflow != total
+            or overflow != report.selfpc_overflow or total > report.samples):
+        errors.append("selfpc sample conservation mismatch")
+    if omitted < used - rows or (rows == used and omitted != 0):
+        errors.append("selfpc omitted rows/samples mismatch")
+    for name, samples in report.modules:
+        if name == report.self_module and samples != total:
+            errors.append("selfpc total differs from self-module sample count")
+    if mode == "full" and (rows != used or omitted != 0):
+        errors.append("full selfpc report omitted stored buckets")
+    expected_complete = int(omitted == 0 and overflow == 0 and mode != "full_fallback")
+    if coverage["complete"] != expected_complete:
+        errors.append("selfpc complete flag contradicts coverage")
+    if mode == "full_fallback":
+        errors.append("requested full selfpc report fell back after allocation failure")
+    return errors
 
 
 def sampler_module_rows(report: SamplerReport) -> list[dict[str, object]]:
@@ -335,7 +411,20 @@ def write_sampler_md(
             f"## Self-module PC buckets (`{self_module_name}` base=0x{self_base:x})"
         )
     lines.append("")
-    lines.append(f"- Buckets dropped to overflow: {report.selfpc_overflow}")
+    lines.append(f"- Samples dropped to histogram overflow: {report.selfpc_overflow}")
+    if report.coverage is None:
+        lines.append("- Self-PC coverage: unverified (legacy report without final summary)")
+    else:
+        coverage = report.coverage
+        lines.append(
+            f"- Self-PC coverage: {'complete' if coverage['complete'] else 'partial'}; "
+            f"mode={coverage['mode']}; rows={coverage['rows']}/{coverage['used']}"
+        )
+        lines.append(
+            f"- Self-PC samples: reported={coverage['reported_samples']}, "
+            f"omitted={coverage['omitted_samples']}, "
+            f"overflow={coverage['overflow_samples']}, total={coverage['self_samples']}"
+        )
     lines.append("")
     lines.append("| bucket | rva | samples | share_of_selfpc_top |")
     lines.append("|---|---|---|---|")
@@ -667,6 +756,12 @@ def run_sampler_mode(
             "DXMT_LOG_LEVEL=info?)",
             file=sys.stderr,
         )
+        return 1
+
+    coverage_errors = validate_sampler_coverage(report)
+    if coverage_errors:
+        for error in coverage_errors:
+            print(f"error: {error}", file=sys.stderr)
         return 1
 
     module_rows = sampler_module_rows(report)

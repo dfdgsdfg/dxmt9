@@ -193,6 +193,62 @@ struct PeSamplerTopBucket {
   std::uint64_t samples = 0;
 };
 
+// Caller-owned coverage for an optional complete self-PC report. The sampler
+// never owns or mutates the output storage outside snapshot(); this keeps the
+// 48 KiB diagnostic buffer out of the sampler object and its suspend loop.
+struct PeSamplerSelfPcCapture {
+  PeSamplerTopBucket* rows = nullptr;
+  std::size_t capacity = 0;
+  std::size_t rowCount = 0;
+  std::size_t used = 0;
+  std::uint64_t storedSamples = 0;
+  std::uint64_t reportedSamples = 0;
+  std::uint64_t omittedSamples = 0;
+  bool complete = false;
+};
+
+inline void copyPeSamplerSelfPcRows(const PeSamplerSelfPcTable& table,
+                                    PeSamplerSelfPcCapture& capture) noexcept {
+  capture.rowCount = 0;
+  capture.used = table.used;
+  capture.storedSamples = 0;
+  capture.reportedSamples = 0;
+  capture.omittedSamples = 0;
+  capture.complete = true;
+  for (std::size_t slot = 0; slot < kPeSamplerSelfPcSlots; ++slot) {
+    if (table.bucketPlusOne[slot] == 0 || table.samples[slot] == 0) {
+      continue;
+    }
+    const auto samples = table.samples[slot];
+    capture.storedSamples += samples;
+    if (capture.rowCount < capture.capacity && capture.rows != nullptr) {
+      capture.rows[capture.rowCount++] = {
+          table.bucketPlusOne[slot] - 1, samples};
+      capture.reportedSamples += samples;
+    } else {
+      capture.complete = false;
+    }
+  }
+  capture.omittedSamples = capture.storedSamples - capture.reportedSamples;
+  capture.complete = capture.complete && capture.rowCount == capture.used;
+}
+
+inline bool peSamplerTopBucketBetter(const PeSamplerTopBucket& left,
+                                     const PeSamplerTopBucket& right) noexcept {
+  return left.samples > right.samples ||
+         (left.samples == right.samples && left.bucket < right.bucket);
+}
+
+inline void sortPeSamplerSelfPcRows(PeSamplerTopBucket* rows,
+                                    std::size_t rowCount) noexcept {
+  if (rows == nullptr || rowCount < 2u) return;
+  std::sort(rows, rows + rowCount,
+            [](const PeSamplerTopBucket& left,
+               const PeSamplerTopBucket& right) noexcept {
+              return peSamplerTopBucketBetter(left, right);
+            });
+}
+
 struct PeSamplerTopModule {
   std::uint32_t nameIndex = 0;
   std::uint64_t samples = 0;
@@ -310,6 +366,11 @@ struct PeSamplerSnapshot {
   char moduleNames[kPeSamplerTopModules][kPeSamplerModuleNameMax]{};
   char selfModuleName[kPeSamplerModuleNameMax]{};
   std::size_t selfPcRows = 0;
+  std::size_t selfPcUsed = 0;
+  std::uint64_t selfPcStoredSamples = 0;
+  std::uint64_t selfPcModuleSamples = 0;
+  std::uint64_t selfPcReportedSamples = 0;
+  std::uint64_t selfPcOmittedSamples = 0;
   PeSamplerTopBucket topSelfPc[kPeSamplerTopSelfPcBuckets]{};
 };
 
@@ -407,7 +468,8 @@ class PeThreadSampler {
   DWORD targetThreadId() const noexcept { return targetThreadId_; }
   std::uint32_t intervalMs() const noexcept { return intervalMs_; }
 
-  void snapshot(PeSamplerSnapshot& out) const noexcept {
+  void snapshot(PeSamplerSnapshot& out,
+                PeSamplerSelfPcCapture* capture = nullptr) const noexcept {
     out = PeSamplerSnapshot{};
     out.hz = hz_;
     AcquireSRWLockShared(&lock_);
@@ -417,6 +479,11 @@ class PeThreadSampler {
     out.resumeFailures = resumeFailures_;
     out.selfPcOverflow = selfPc_.overflow;
     out.moduleTableReady = moduleTableReady_;
+    PeSamplerSelfPcCapture coverage =
+        capture != nullptr ? *capture : PeSamplerSelfPcCapture{};
+    copyPeSamplerSelfPcRows(selfPc_, coverage);
+    out.selfPcUsed = coverage.used;
+    out.selfPcStoredSamples = coverage.storedSamples;
     out.moduleRows = selectTopPeSamplerModules(samplesByModule_, nameCount_,
                                                out.topModules,
                                                kPeSamplerTopModules);
@@ -428,10 +495,21 @@ class PeThreadSampler {
       }
     }
     if (selfNameIndex_ != kPeSamplerInvalidIndex) {
+      if (selfNameIndex_ < nameCount_) {
+        out.selfPcModuleSamples = samplesByModule_[selfNameIndex_];
+      }
       std::memcpy(out.selfModuleName, names_[selfNameIndex_],
                   kPeSamplerModuleNameMax);
       out.selfPcRows = selectTopPeSamplerSelfPc(selfPc_, out.topSelfPc,
                                                 kPeSamplerTopSelfPcBuckets);
+      for (std::size_t i = 0; i < out.selfPcRows; ++i) {
+        out.selfPcReportedSamples += out.topSelfPc[i].samples;
+      }
+    }
+    out.selfPcOmittedSamples =
+        out.selfPcStoredSamples - out.selfPcReportedSamples;
+    if (capture != nullptr) {
+      *capture = coverage;
     }
     ReleaseSRWLockShared(&lock_);
   }
@@ -707,7 +785,18 @@ class PeThreadSampler {
   std::uint32_t hz() const noexcept { return 0; }
   unsigned long targetThreadId() const noexcept { return 0; }
   std::uint32_t intervalMs() const noexcept { return 0; }
-  void snapshot(PeSamplerSnapshot& out) const noexcept { out = PeSamplerSnapshot{}; }
+  void snapshot(PeSamplerSnapshot& out,
+                PeSamplerSelfPcCapture* capture = nullptr) const noexcept {
+    out = PeSamplerSnapshot{};
+    if (capture != nullptr) {
+      capture->rowCount = 0;
+      capture->used = 0;
+      capture->storedSamples = 0;
+      capture->reportedSamples = 0;
+      capture->omittedSamples = 0;
+      capture->complete = false;
+    }
+  }
 };
 
 }  // namespace dxmt9::d3d9::pe

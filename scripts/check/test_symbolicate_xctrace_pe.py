@@ -230,7 +230,89 @@ class SamplerLogModeTests(unittest.TestCase):
 
             md_text = output_md.read_text(encoding="utf-8")
             self.assertIn("base=0x10000000", md_text)
-            self.assertIn("Buckets dropped to overflow: 3", md_text)
+            self.assertIn("Samples dropped to histogram overflow: 3", md_text)
+            self.assertIn("coverage: unverified", md_text)
+
+    @staticmethod
+    def _coverage_log(mode: str = "full", used: int = 80,
+                      overflow: int = 0) -> str:
+        counts = [1 + i % 7 for i in range(used)]
+        rows = used if mode == "full" else min(used, 32)
+        reported = sum(counts[:rows])
+        omitted = sum(counts[rows:])
+        total = reported + omitted + overflow
+        lines = [module_map_log("0x10000500", "1"),
+                 f"[dxmt9-pe-sampler] info: presents=60 samples={total + 10} "
+                 "suspend_failures=0 ctx_failures=0 resume_failures=0 "
+                 "hz=250 module_table=1 selfpc_coverage=1",
+                 f"[dxmt9-pe-sampler] info: module=d3d9.dll samples={total}",
+                 "[dxmt9-pe-sampler] info: selfpc_module=d3d9.dll"]
+        lines.extend(f"[dxmt9-pe-sampler] info: selfpc bucket=0x{0x10000000 + 64 * i:x} "
+                     f"samples={counts[i]}" for i in range(rows))
+        lines += [f"[dxmt9-pe-sampler] info: selfpc_overflow={overflow}",
+                  f"[dxmt9-pe-sampler] info: selfpc_summary mode={mode} "
+                  f"rows={rows} used={used} self_samples={total} "
+                  f"reported_samples={reported} omitted_samples={omitted} "
+                  f"overflow_samples={overflow} "
+                  f"complete={int(omitted == 0 and overflow == 0 and mode != 'full_fallback')}"]
+        return "\n".join(lines) + "\n"
+
+    def test_complete_selfpc_export_at_storage_cap(self) -> None:
+        with tempfile.TemporaryDirectory() as td_str:
+            result, _, output_md, selfpc = self._run(
+                Path(td_str), self._coverage_log(used=3072))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            with selfpc.open(newline="", encoding="utf-8") as f:
+                rows = list(csv.DictReader(f))
+            self.assertEqual(len(rows), 3072)
+            self.assertEqual(sum(int(r["samples"]) for r in rows),
+                             sum(1 + i % 7 for i in range(3072)))
+            self.assertIn("coverage: complete; mode=full; rows=3072/3072",
+                          output_md.read_text())
+
+    def test_coverage_empty_top_and_overflow_are_distinct(self) -> None:
+        for mode, used, overflow, complete in (
+                ("full", 0, 0, True), ("top", 12, 0, True),
+                ("top", 80, 0, False), ("full", 80, 7, False)):
+            with self.subTest(mode=mode, used=used, overflow=overflow):
+                with tempfile.TemporaryDirectory() as td_str:
+                    result, _, md, _ = self._run(
+                        Path(td_str), self._coverage_log(mode, used, overflow))
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn(f"coverage: {'complete' if complete else 'partial'}",
+                                  md.read_text())
+                    self.assertIn(f"overflow={overflow}", md.read_text())
+
+    def test_coverage_malformed_or_truncated_tail_is_rejected(self) -> None:
+        valid = self._coverage_log()
+        truncated = "\n".join(valid.splitlines()[:-1]) + "\n"
+        cases = {
+            "missing footer after valid older group": valid + truncated,
+            "missing field": valid.replace("omitted_samples=0 ", ""),
+            "bad version": valid.replace("selfpc_coverage=1", "selfpc_coverage=2"),
+            "missing bucket": valid.replace(
+                "[dxmt9-pe-sampler] info: selfpc bucket=0x10000000 samples=1\n", ""),
+            "row count": valid.replace("rows=80", "rows=79"),
+            "sample conservation": valid.replace("omitted_samples=0", "omitted_samples=1"),
+            "overflow mismatch": valid.replace("overflow_samples=0", "overflow_samples=1"),
+            "false complete": valid.replace("complete=1", "complete=0"),
+            "malformed number": valid.replace("omitted_samples=0", "omitted_samples=0junk"),
+            "duplicated field": valid.replace("rows=80", "rows=80 rows=80"),
+            "duplicate bucket": valid.replace("bucket=0x10000040", "bucket=0x10000000"),
+            "unaligned bucket": valid.replace("bucket=0x10000000", "bucket=0x10000001"),
+            "over bound": valid.replace("used=80", "used=3073"),
+            "wrong mode": valid.replace("mode=full", "mode=other"),
+            "full omitted": self._coverage_log("top").replace("mode=top", "mode=full"),
+            "allocation fallback": self._coverage_log("full_fallback", used=12),
+            "duplicate footer": valid + valid.splitlines()[-1] + "\n",
+        }
+        for name, log in cases.items():
+            with self.subTest(name=name):
+                with tempfile.TemporaryDirectory() as td_str:
+                    result, output_csv, _, _ = self._run(Path(td_str), log)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("selfpc", result.stderr)
+                    self.assertFalse(output_csv.exists())
 
     def test_missing_module_map_leaves_rva_empty_but_succeeds(self) -> None:
         with tempfile.TemporaryDirectory() as td_str:

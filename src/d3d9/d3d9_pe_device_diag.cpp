@@ -17,6 +17,8 @@
 
 #include "d3d9_pe_device_impl.hpp"
 
+#include <new>
+
 namespace {
 
 void dxmt9WriteStderrLineAtomic(const char *line, std::size_t len) noexcept {
@@ -3284,11 +3286,31 @@ void D3D9DeviceImpl::logPeThreadSampler() {
     if (!diagnostics_ || !diagnostics_->peThreadSampler_) {
         return;
     }
+    static const bool fullSelfPc =
+        dxmt9::util::getenvFlag("DXMT9_PE_THREAD_SAMPLER_FULL_SELFPC");
+    std::unique_ptr<dxmt9::d3d9::pe::PeSamplerTopBucket[]> fullRows;
+    dxmt9::d3d9::pe::PeSamplerSelfPcCapture fullCapture{};
+    if (fullSelfPc) {
+        fullRows.reset(new (std::nothrow)
+                           dxmt9::d3d9::pe::PeSamplerTopBucket[
+                               dxmt9::d3d9::pe::kPeSamplerSelfPcMaxUsed]);
+        if (fullRows) {
+            fullCapture.rows = fullRows.get();
+            fullCapture.capacity =
+                dxmt9::d3d9::pe::kPeSamplerSelfPcMaxUsed;
+        }
+    }
     dxmt9::d3d9::pe::PeSamplerSnapshot snap;
-    diagnostics_->peThreadSampler_->snapshot(snap);
+    diagnostics_->peThreadSampler_->snapshot(
+        snap, fullRows ? &fullCapture : nullptr);
+    if (fullRows) {
+        dxmt9::d3d9::pe::sortPeSamplerSelfPcRows(
+            fullCapture.rows, fullCapture.rowCount);
+    }
     dxmt9PeThreadSamplerInfoLog(
         "presents=%llu samples=%llu suspend_failures=%llu "
-        "ctx_failures=%llu resume_failures=%llu hz=%u module_table=%u",
+        "ctx_failures=%llu resume_failures=%llu hz=%u module_table=%u "
+        "selfpc_coverage=1",
         static_cast<unsigned long long>(diagnostics_->peThreadSamplerPresents_),
         static_cast<unsigned long long>(snap.samples),
         static_cast<unsigned long long>(snap.suspendFailures),
@@ -3307,15 +3329,40 @@ void D3D9DeviceImpl::logPeThreadSampler() {
         // tool subtracts the right [dxmt9-pe-module-map] base for the RVA.
         dxmt9PeThreadSamplerInfoLog("selfpc_module=%s", snap.selfModuleName);
     }
-    for (std::size_t i = 0; i < snap.selfPcRows; ++i) {
+    const std::size_t reportRows = fullRows ? fullCapture.rowCount
+                                            : snap.selfPcRows;
+    for (std::size_t i = 0; i < reportRows; ++i) {
+        const auto& row = fullRows ? fullCapture.rows[i] : snap.topSelfPc[i];
         dxmt9PeThreadSamplerInfoLog(
             "selfpc bucket=0x%llx samples=%llu",
-            static_cast<unsigned long long>(snap.topSelfPc[i].bucket),
-            static_cast<unsigned long long>(snap.topSelfPc[i].samples));
+            static_cast<unsigned long long>(row.bucket),
+            static_cast<unsigned long long>(row.samples));
     }
     dxmt9PeThreadSamplerInfoLog(
         "selfpc_overflow=%llu",
         static_cast<unsigned long long>(snap.selfPcOverflow));
+    const char* mode = fullSelfPc ? (fullRows ? "full" : "full_fallback")
+                                  : "top";
+    const std::uint64_t reportedSamples =
+        fullRows ? fullCapture.reportedSamples : snap.selfPcReportedSamples;
+    const std::uint64_t omittedSamples =
+        fullRows ? fullCapture.omittedSamples : snap.selfPcOmittedSamples;
+    const bool complete = fullSelfPc
+        ? fullRows && fullCapture.complete && omittedSamples == 0u &&
+              snap.selfPcOverflow == 0u
+        : omittedSamples == 0u && snap.selfPcOverflow == 0u;
+    dxmt9PeThreadSamplerInfoLog(
+        "selfpc_summary mode=%s rows=%llu used=%llu self_samples=%llu "
+        "reported_samples=%llu omitted_samples=%llu overflow_samples=%llu "
+        "complete=%u",
+        mode,
+        static_cast<unsigned long long>(reportRows),
+        static_cast<unsigned long long>(snap.selfPcUsed),
+        static_cast<unsigned long long>(snap.selfPcModuleSamples),
+        static_cast<unsigned long long>(reportedSamples),
+        static_cast<unsigned long long>(omittedSamples),
+        static_cast<unsigned long long>(snap.selfPcOverflow),
+        complete ? 1u : 0u);
 }
 
 void D3D9DeviceImpl::logRenderTapeMutationFailure(

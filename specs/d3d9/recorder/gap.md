@@ -13,6 +13,14 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+The optional PE sampler's complete self-PC reporting contract is implemented
+with native conservation, parser rejection and linked PE checks;
+[H255](../../../docs/perfomance/present-pacing/present-pacing-pe-full-selfpc.255.md)
+owns the evidence. H254's default top-32 output covers only 344/1,459 PE samples
+in 05 GT2 and 221/922 in 06 GT2. Fresh full-distribution wild evidence remains
+pending; histogram overflow must not be conflated with omitted output. This
+is a measurement prerequisite, not another claimed optimization.
+
 R-CORE-REC-7.40's 16-byte comparison now reduces unsigned XOR/OR instead of
 short-circuit word comparisons. Current 05/06 GT2 PE sampling identifies that
 loop as a bounded local candidate, not the whole producer bottleneck. Native
