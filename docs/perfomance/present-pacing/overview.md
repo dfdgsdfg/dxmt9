@@ -29,6 +29,14 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+The latest diagnostic [H261](present-pacing-pe-binding-duplicates.261.md)
+separates null/unbound rows from duplicate pinned bindings. Actual 05/06 GT2
+samples contain 39,570 compact preparations and 103,369 pinned occurrences,
+with zero within-record duplicates in every family. Do not add the proposed
+duplicate-validation cache. This does not prove unsampled records or other
+workloads are duplicate-free, nor remove first-occurrence owner checks. No
+FPS or CPU saving follows from these observer-enabled runs.
+
 The latest implementation [H260](present-pacing-pe-validated-constant-range.260.md)
 reuses public constant-range authority in the Live kernel without adding a
 setter call or persistent state. Native negative controls, final linked PE

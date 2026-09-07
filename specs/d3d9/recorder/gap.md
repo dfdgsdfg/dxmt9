@@ -20,8 +20,14 @@ combinations, cross-family reuse, per-record duplicate buckets, actual
 max-family canonical/retain equivalence and malformed active-prefix/locator
 rejection. Native focused 9/9 and x86_64 focused 5/5 pass; the observer uses
 the existing cold gate and changes no retention or validation policy.
-Fresh 05/06 distributions and linked disabled-path economics remain to be
-qualified before deciding whether validation reuse is worth implementing.
+[H261](../../../docs/perfomance/present-pacing/present-pacing-pe-binding-duplicates.261.md)
+qualifies actual 05/06 GT2 samples: 39,570 compact preparations and 103,369
+pinned occurrences contain zero duplicates. The duplicate-cache candidate is
+rejected for these samples; unsampled records/tails and other workloads remain
+outside the claim. Twelve public-body metrics per PE width are unchanged;
+scoped owner-code evidence and diagnostic storage growth are explicit in the
+leaf. First-occurrence admission/emission proof reuse, product CPU savings and
+repeatable FPS recovery remain open. No production validation is removed.
 
 R-CORE-REC-7.62's nonempty constant-range authority is implemented: all six
 fast public setters share a cap-qualified visitor with the fixed-width

@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+Latest candidate decision: [H261](present-pacing-pe-binding-duplicates.261.md)
+adds cold null/first/duplicate binding counts. Actual 05/06 GT2 samples contain
+103,369 pinned occurrences and no within-record duplicates, so a duplicate
+validation cache is rejected for the observed populations. No hot validation
+is removed; this is not new FPS evidence.
+
 Latest implementation: [H260](present-pacing-pe-validated-constant-range.260.md)
 reuses public constant-range validation in the Live kernel. Native negative
 controls, final linked PE32/PE64 inspection and actual Wine checks pass.
