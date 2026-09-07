@@ -19,6 +19,10 @@ setter/StateBlock mip readback. A deliberate missing Apply publication fails
 the actual pixel oracle; the restored images pass. [H256](../../../docs/perfomance/present-pacing/present-pacing-pe-autogen-bound-slots.256.md)
 records scope and evidence. Wild CPU/FPS qualification remains open; native
 failure abstraction is not injected private-COM failure evidence.
+Sampler-OFF 05/06 GT2 spot checks at `c9bb5c56` pass with zero retained
+renderer failures at 29.121/17.428 FPS. The contended 06 run and unequal CPU
+intervals do not establish code gain, regression or neutrality. README
+recovery and measured CPU reduction remain open.
 
 The optional PE sampler's complete self-PC reporting contract is implemented
 with native conservation, parser rejection and linked PE checks;

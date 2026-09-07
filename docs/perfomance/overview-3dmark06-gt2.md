@@ -11,17 +11,17 @@ related: docs/perfomance/overview-3dmark06-gt1.md; docs/perfomance/overview-3dma
 
 # 3DMark06 GT2 Performance — Current Bottleneck
 
-The latest [H255 PE check](present-pacing/present-pacing-pe-full-selfpc.255.md)
-at `b9713922` gives 18.065 scene FPS at 1280x720 with the PE sampler OFF,
-versus H254's 17.958 spot check and README 18.1. Positive-wall rows with more
-than 100 draws exclude loading but retain slow scene frames. There are zero
-recorded chunk/GPU/pipeline failures, 4.002 CB and 19.858 passes per scene
-frame. The separate full-report sampler preserves all 902 PE samples in
-472 buckets; exact CPU attribution and symbol-edge ambiguity remain open.
-One run rounding to 18.1 is not attributed gain, CPU reduction or repeatable
-recovery. Partial process CPU/RSS observations are retained in H255. The
-earlier phase/GPU ownership below belongs to its August build and is not a
-current re-profile.
+The latest [H256 PE check](present-pacing/present-pacing-pe-autogen-bound-slots.256.md)
+at `c9bb5c56` gives 17.428 scene FPS at 1280x720 with the PE sampler OFF,
+versus H255's 18.065 spot check and README 18.1. Positive-wall rows with more
+than 100 draws exclude loading but retain slow scene frames. Zero retained
+chunk/GPU/pipeline failures, 4.002 CB and 19.860 passes per frame preserve the
+locality signature. Finder used approximately one CPU core during this run;
+the lower result does not establish code regression, neutrality or a gain.
+The immutable AUTOGEN elision has native and PE pixel/mutant evidence, not a
+demonstrated total CPU saving. H256 retains the full profiles and partial
+process CPU/RSS evidence. The earlier phase/GPU ownership below belongs to its
+August build and is not a current re-profile.
 
 > **Historical verdict at `b4b77cb8`: replay and encode serialization are the
 > strongest measured owners.** GT2 is the best of these four scenes for a

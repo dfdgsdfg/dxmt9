@@ -3,9 +3,9 @@ domain: present-pacing
 workload: 3DMark05 GT2; 3DMark06 GT2
 title: "Immutable bound-AUTOGEN slot elision"
 type: evidence
-status: correctness-verified-performance-open
+status: correctness-verified-no-demonstrated-fps-gain
 updated: 2026-09-07
-source: experiments/output/pe-autogen-bound-slots-20260907/analysis; experiments/output/conformance-20260907-122714; experiments/output/conformance-20260907-122759; experiments/output/conformance-20260907-122548
+source: experiments/output/pe-autogen-bound-slots-20260907/analysis; experiments/output/conformance-20260907-122714; experiments/output/conformance-20260907-122759; experiments/output/conformance-20260907-122548; experiments/output/app-d3d9-3dmark{05,06}-pe-autogen-c9bb5c56-gt2-{perf,sampler}-r1-20260907
 related: present-pacing-pe-full-selfpc.255.md; ../../../specs/d3d9/recorder/spec.md
 ---
 
@@ -88,6 +88,81 @@ Final PE64 SHA-256:
 Provider and both bridges are byte-identical to H255. Earlier test-build
 receipts and the mutant are not the final measurement hashes.
 
-Actual sampler-OFF 05/06 GT2 checks and separate full PE profiles are still
-required. No CPU reduction, FPS improvement or README recovery is claimed
-from static work removal and correctness tests alone.
+## Sampler-OFF performance spot checks
+
+Committed `c9bb5c56` has one sequential perf run per product on Sikarugir
+cx-24.0.7: 05 GT2 at 1024x768, 06 GT2 at 1280x720. Frame sampling is ON;
+PE sampler/full report/module map, detailed timers, phase split and copy
+ledger are OFF. No GPU trace, compilation or test suite runs alongside them.
+A read-only process CPU/RSS observer polls every two seconds, so these are
+not completely observer-free measurements. All five staging receipts match
+the final candidate/unchanged bridge hashes above. The index-cache selection
+is OFF, matching H255; the historical README configuration is not a fresh
+matched baseline.
+
+| Product | Scene FPS | H255 spot FPS | README FPS | Delta to README | Rows / wall ms | CB / frame | Pass / frame |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 05 GT2 | 29.121 | 29.316 | 30.1 | -3.25% | 1,883 / 64,662.305 | 4.001 | 15.788 |
+| 06 GT2 | 17.428 | 18.065 | 18.1 | -3.71% | 1,118 / 64,149.489 | 4.002 | 19.860 |
+
+05 includes every positive-wall row, frames 1–1,883. 06 includes positive-wall
+rows with more than 100 draws, frames 966–2,083, excluding loading but not
+slow scene frames. H255 deltas are -0.67%/-3.53%, not an attributed code
+regression or a neutrality result. Nix automatic GC and filesystem activity
+were observed before measurement; the initial GC exited before the OFF runs,
+but Finder returned to approximately 99–100% CPU during 06. A retained host
+snapshot and later renewed GC activity make this a contended 06 spot check.
+Those processes were not stopped or reconfigured. Do not explain all of the
+delta by contention without a controlled comparison, or call it a code win.
+
+Both catalogue results pass with zero retained chunk rejections, GPU errors,
+pipeline build failures and no-pipeline skips. 05 exits normally; 06's
+permitted timeout closes its result GUI after scene completion. Captures at
+0:59.93 / 0:30.54 show coherent forest frames, not whole-scene equivalence.
+Draw counts are 1,681.264/1,886.004 per frame and summed GPU CB times are
+1.997/11.970 ms per frame; summed CB time is not GPU critical-path latency.
+
+`perf-measurements.json` preserves partial, approximate frame/CPU joins:
+05 has 1,802 frame increments, 128.01 process CPU seconds over 60.275 elapsed
+seconds (71.038 CPU ms/frame, 2.124 average cores, RSS peak 3,466,188 KiB).
+06 has 1,096 increments, 109.67 CPU seconds over 62.275 elapsed seconds
+(100.064 CPU ms/frame, 1.761 cores, RSS peak 3,538,072 KiB). These include all
+process threads and unequal partial intervals, not PE-exclusive or matched
+baseline costs. They do not demonstrate lower CPU consumption.
+
+The local static removal and pixel/refinement proofs stand. FPS recovery,
+CPU savings and noise-qualified neutrality remain open; README is unchanged.
+
+## Separate complete PE profiles
+
+The same committed binaries have one diagnostic run per product with H255's
+250-Hz PE sampler, module map and FULL_SELFPC enabled, Info logging and frame
+sampling. Detailed timers, phase split and the copy ledger stay OFF. Their
+FPS is not performance evidence. Startup GC/file activity was observed before
+05, and Finder/automatic Nix activity persisted through the 06 diagnostic;
+sample shares are not controlled exclusive CPU timing.
+
+| Product | Last reported Present | Thread samples | PE samples | Buckets | Omitted / overflow | Unambiguous generation-function samples |
+|---|---:|---:|---:|---:|---:|---:|
+| 05 GT2 | 1,800 | 13,605 | 1,334 | 612 | 0 / 0 | 1 |
+| 06 GT2 | 1,380 | 14,252 | 1,015 | 537 | 0 / 0 | 0 |
+
+Every full group validates (30/23 groups), with zero suspend/context/resume
+failures and passing self-module probe containment. Symbol joins use the
+frozen final PE32 image. Both diagnostic catalogue results pass with zero
+retained renderer failure counters and matching five-artifact receipts; 06's
+permitted timeout closes the completed scene's GUI. Cross-symbol ambiguity leaves 355/291 samples
+unassigned; lexical family totals are not subsystem timings. The approximate
+06 scene-prefix subtraction starts from report 360 before first heavy frame
+371, retaining 1,012 PE/13,453 thread samples through report 1,380 in 535
+buckets. The last unreported tail is absent, and this is not H255's exact
+frame population. Different loading Present counts are not lost histogram
+samples; conservation is checked within each run.
+
+The outlined `generateBoundAutogenMipmaps` has 1/0 non-crossing samples versus
+H255's 14/9; `D3D9PeGetDirtyAutogenTexture` has none in the assigned samples.
+This is consistent with eliminating known-ineligible candidate work. Small
+counts, symbol layout and host load prohibit a CPU-ms saving estimate or a
+claim that the function is never called. The remaining profile still exposes
+constant shadow/copy and semantic-owner admission work; its correctness and
+ownership checks cannot be removed solely because they receive samples.

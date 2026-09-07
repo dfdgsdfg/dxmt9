@@ -29,7 +29,15 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
-The latest diagnostic [H255](present-pacing-pe-full-selfpc.255.md) closes
+The latest optimization [H256](present-pacing-pe-autogen-bound-slots.256.md)
+elides immutable non-AUTOGEN slots before draw-time arrays/RTTI, with native
+bounded refinement, x86/x64 PE pixels and a detected missing-Apply mutant.
+Sampler-OFF 05/06 GT2 spot checks are 29.121/17.428 FPS versus README
+30.1/18.1; both retain zero renderer failures and close CB/pass ratios.
+06 has observed Finder/host contention. Neither attributed CPU/FPS gain nor
+noise-qualified neutrality is demonstrated; the README is unchanged.
+
+The preceding diagnostic [H255](present-pacing-pe-full-selfpc.255.md) closes
 top-32 self-PC output truncation: full 05/06 GT2 reports conserve all
 1,502/902 PE samples with zero omitted/overflow samples or sampler failures.
 64-byte symbol ambiguity and elapsed CPU attribution remain open. Separate
