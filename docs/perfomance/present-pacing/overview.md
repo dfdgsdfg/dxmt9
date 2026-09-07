@@ -35,8 +35,10 @@ duplicate current-ticket checks in a non-invalidating lexical interval.
 Native bounded combinations, deliberate failing mutants and linked PE checks
 pass without persistent storage growth; PE64's local stack grows 16 bytes.
 Actual x86/x64 getter/StateBlock tests pass. Sampler-OFF 05/06 GT2 spots give
-29.682/18.194 FPS and approximate partial process CPU of 70.153/95.428
-ms/frame, with zero recorded renderer failures. Separate full profiles retain
+29.682/18.220 FPS and approximate partial process CPU of 70.153/95.472
+ms/frame, with zero recorded renderer failures. The 06 value uses the
+requested same-binary repeat after reported computer use; the original
+06 perf run is excluded from performance decisions. Separate full profiles retain
 all 1,430/854 PE samples without sampler failures or omitted buckets; symbol
 ambiguity and incomplete scene edges remain. These spots do not establish
 gain or CPU reduction. Both-target repeatable README recovery remains open.

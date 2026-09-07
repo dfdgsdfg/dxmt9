@@ -5,7 +5,7 @@ title: "Qualified compact settlement work removal"
 type: evidence
 status: verified-work-removal-gain-unproven
 updated: 2026-09-08
-source: experiments/output/pe-settlement-refinement-20260908/analysis; experiments/output/app-d3d9-3dmark{05,06}-pe-settlement-c1368a6e-gt2-{perf,sampler}-r1-20260908
+source: experiments/output/pe-settlement-refinement-20260908/analysis; experiments/output/app-d3d9-3dmark{05,06}-pe-settlement-c1368a6e-gt2-{perf,sampler}-r1-20260908; experiments/output/app-d3d9-3dmark06-pe-settlement-c1368a6e-gt2-perf-user-rerun-r2-20260908
 related: present-pacing-pe-constant-copy.257.md; present-pacing-inline-constant-current.258.md; ../../../specs/d3d9/recorder/spec.md
 ---
 
@@ -98,33 +98,44 @@ Offload stays ON. A PID-bound process CPU/RSS observer polls every two seconds;
 there is no concurrent build, test suite, other benchmark or GPU trace.
 This is neither observer-free nor proof of host isolation.
 
+The user's renewed report of computer use during 06 GT2 conservatively
+withdraws the original 06 perf r1 from performance decisions. Its raw files
+and original `perf-qualified.json` remain historical; the run-local
+`measurement-qualification.json` points to the replacement. The table below
+uses `perf-user-rerun-r2`, whose `user-rerun-qualified.json` checks the same
+five staged hashes and profile. The runner explicitly stages frozen H259
+artifacts from `analysis/user-rerun-staging/`; it does not rebuild or measure
+the next uncommitted validated-range implementation in the working tree.
+05 and the separate diagnostic sampler artifacts are unchanged.
+
 | Product | Scene FPS | Rows / wall ms | CB / frame | Pass / frame | Draw / frame |
 |---|---:|---:|---:|---:|---:|
 | 05 GT2 | 29.682 | 1,918 / 64,617.525 | 4.001 | 15.785 | 1,681.726 |
-| 06 GT2 | 18.194 | 1,165 / 64,033.464 | 4.002 | 19.863 | 1,880.198 |
+| 06 GT2 | 18.220 | 1,167 / 64,051.931 | 4.002 | 19.866 | 1,878.630 |
 
 05 includes all positive-wall frames 1–1,918; 06 includes positive-wall rows
-with more than 100 draws, frames 990–2,154. Loading is excluded, not slow
+with more than 100 draws, frames 1,014–2,180. Loading is excluded, not slow
 scene frames. FPS comes from the frame log, not process-elapsed performance
 or a decoded `.3dr`. All five staging receipts match the frozen images and
 all eight retained chunk/GPU/pipeline/no-pipeline failure counters are zero.
 05 exits normally; 06's permitted timeout closes its completed-scene result
-GUI. Saved captures at 1:00.29 and 0:36.28 show forest rendering; neither
-constitutes whole-scene pixel equivalence. Summed GPU CB times are
-1.994/11.910 ms/frame, not GPU critical-path latency.
+GUI. Saved captures are retained but do not constitute whole-scene pixel
+equivalence. Summed GPU CB times are 1.994/11.892 ms/frame, not GPU
+critical-path latency.
 
 | Product | Partial CPU frame increments | Process CPU seconds / elapsed seconds | CPU ms / frame | Average cores | RSS peak KiB |
 |---|---:|---:|---:|---:|---:|
 | 05 GT2 | 1,826 | 128.10 / 60.284 | 70.153 | 2.125 | 3,233,272 |
-| 06 GT2 | 1,111 | 106.02 / 60.292 | 95.428 | 1.758 | 3,298,592 |
+| 06 GT2 | 1,113 | 106.26 / 60.338 | 95.472 | 1.761 | 3,527,680 |
 
 These joins cover different partial intervals and all process threads, not
-PE-exclusive CPU. `qualify_perf.py` and `perf-qualified.json` retain exact
-arithmetic, populations, health and binary qualification.
+PE-exclusive CPU. `qualify_perf.py`, the original `perf-qualified.json` for
+05 and `user-rerun-qualified.json` for 06 retain exact arithmetic,
+populations, health and binary qualification.
 
 H258's preceding default-OFF spots are 29.631 FPS for 05 and the requested
-18.192 FPS repeat for 06. Current differences are +0.17%/+0.01%; approximate
-process CPU/frame differences are -0.16%/-0.37%. These single sequential
+18.192 FPS repeat for 06. Current differences are +0.17%/+0.15%; approximate
+process CPU/frame differences are -0.16%/-0.32%. These single sequential
 spots have no controlled cooldown/order counterbalance and do not establish
 gain, neutrality or reduced CPU consumption. H257's user-interfered 06 r1
 remains excluded. Current 06 exceeds historical README 18.1 numerically;
