@@ -29,6 +29,13 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+The latest implementation [H259](present-pacing-pe-settlement-refinement.259.md)
+reuses immutable constant presence during compact settlement and consolidates
+duplicate current-ticket checks in a non-invalidating lexical interval.
+Native bounded combinations, deliberate failing mutants and linked PE checks
+pass without persistent storage growth; PE64's local stack grows 16 bytes.
+Fresh runtime CPU/FPS and PE-profile qualification remain pending.
+
 The latest mechanism check [H258](present-pacing-inline-constant-current.258.md)
 reopens inline constants on the current compact semantic owner: about 1,003
 standalone constant records per Present become 0.9. Same-binary 05/06 GT2
@@ -39,7 +46,7 @@ observed constant wrapper. Keep default-off; current effective-state, fault,
 pixel and repeatable economy gates remain open. No runtime code or README
 change follows.
 
-The latest optimization [H257](present-pacing-pe-constant-copy.257.md)
+The preceding optimization [H257](present-pacing-pe-constant-copy.257.md)
 expresses changed 16-byte constants as one bounded copy; both linked PE images
 use two SIMD instructions instead of eight scalar copy instructions. Native,
 ABI and real x86/x64 setter/StateBlock checks pass. Sampler-OFF 05/06 GT2

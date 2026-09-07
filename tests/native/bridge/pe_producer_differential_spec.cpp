@@ -1663,6 +1663,403 @@ void productionOwnerPlanAllCategoryDifferential() {
         "production owner compact plan equals direct and builder goldens");
 }
 
+// R-CORE-REC-7.61: the producer-issued constant-range witness is one bit for the
+// whole six-family set: an inline plan with no selected range must not pay the
+// settlement loop, while an inline plan with any selected range must validate
+// and clear exactly the represented family rows. Exercise every bounded
+// presence mask through the real plan/finalize/owner/accept path. The direct
+// and plan-builder lanes remain the byte references; this test only observes
+// the owner transition and its source facts.
+struct InlineConstantFamilySpec {
+  ConstShadow PeConstShadowBlock::*shadow;
+  std::size_t elementBytes;
+};
+
+constexpr std::array<InlineConstantFamilySpec, 6u>
+    kInlineConstantFamilySpecs = {{
+        {&PeConstShadowBlock::vsConstF, 16u},
+        {&PeConstShadowBlock::vsConstI, 16u},
+        {&PeConstShadowBlock::vsConstB, 4u},
+        {&PeConstShadowBlock::psConstF, 16u},
+        {&PeConstShadowBlock::psConstI, 16u},
+        {&PeConstShadowBlock::psConstB, 4u},
+    }};
+
+ConstShadow& inlineConstantFamily(PeConstShadowBlock& constants,
+                                  std::size_t family) noexcept {
+  return constants.*kInlineConstantFamilySpecs[family].shadow;
+}
+
+const pe::SparseConstantRangeInput& inlineConstantSourceFamily(
+    const pe::SparseStatePlan::SourceFacts& source,
+    std::size_t family) noexcept {
+  switch (family) {
+  case 0u: return source.vsFloatConstants;
+  case 1u: return source.vsIntConstants;
+  case 2u: return source.vsBoolConstants;
+  case 3u: return source.psFloatConstants;
+  case 4u: return source.psIntConstants;
+  case 5u: return source.psBoolConstants;
+  }
+  return source.vsFloatConstants;
+}
+
+Fixture inlineConstantMaskFixture(bool inlineConstDelta,
+                                  std::uint32_t mask) {
+  Fixture f = baseDraw("inline constant range mask",
+                       D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
+  f.inlineConstDelta = inlineConstDelta;
+  f.shadow.writer().pendingRenderStatesTyped().set(
+      renderStateSlotKey(7u), 0x7000u + mask);
+  for (std::size_t family = 0u;
+       family < kInlineConstantFamilySpecs.size(); ++family) {
+    if ((mask & (1u << family)) == 0u) continue;
+    auto& shadow = inlineConstantFamily(f.constants, family);
+    const auto elementBytes = kInlineConstantFamilySpecs[family].elementBytes;
+    // Keep two elements materialized so stale-range rejection can move the
+    // live dirty interval from [0,1) to [1,2) without invalidating the
+    // producer's borrowed source span.
+    shadow.values.assign(elementBytes * 2u,
+                         static_cast<std::uint8_t>(0x20u + family));
+    shadow.dirtyElems = {1u, 0u};
+    shadow.dirtyStart = 0u;
+    shadow.dirtyEnd = 1u;
+  }
+  return f;
+}
+
+void productionOwnerInlineConstantRangeMaskMatrix() {
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken ownerThread;
+  std::uint64_t epoch = 31u;
+  pe::RecorderLockGuard guard(mutex, false);
+  std::size_t cases = 0u;
+  for (const bool inlineConstDelta : {false, true}) {
+    for (std::uint32_t mask = 0u; mask < 64u; ++mask) {
+      Fixture f = inlineConstantMaskFixture(inlineConstDelta, mask);
+      const auto direct = runDirectDrawLane(f);
+      const auto planned = runPlanLane(f);
+      check(direct.ok && planned.ok && direct.bytes == planned.bytes,
+            "six-family mask reference lanes agree");
+
+      pe::SparseStatePlan plan;
+      bool hasRanges = false;
+      std::array<bool, 6u> sourcePresence{};
+      check(guard.withCapability(
+                ownerThread, epoch, [&](const auto& access) noexcept {
+                  if (!pe::buildSparseStatePlan(
+                          access, f.shadow, f.constants, f.bindings,
+                          f.payloads, f.params, false, inlineConstDelta,
+                          plan) ||
+                      !pe::finalizeSparseStatePlanChunkContext(
+                          access, f.chunk, plan)) {
+                    return false;
+                  }
+                  const auto* source = plan.source(access);
+                  if (!source) return false;
+                  hasRanges = source->hasConstantRanges;
+                  for (std::size_t family = 0u; family < 6u; ++family) {
+                    sourcePresence[family] =
+                        inlineConstantSourceFamily(*source, family).present();
+                  }
+                  return true;
+                }),
+            "six-family mask plan prepares and finalizes");
+      const bool expectedHasRanges = inlineConstDelta && mask != 0u;
+      check(hasRanges == expectedHasRanges,
+            "hasConstantRanges follows inline mode and selected mask");
+      for (std::size_t family = 0u; family < 6u; ++family) {
+        check(sourcePresence[family] ==
+                  (inlineConstDelta && (mask & (1u << family)) != 0u),
+              "source range presence follows represented family");
+      }
+
+      pe::PeScalarSemanticTokenLedger tokens;
+      const auto render = renderStateSlotKey(7u);
+      check(tokens.record(pe::ScalarSemanticCategory::RenderState,
+                          rawSlot(render)),
+            "mask matrix records its render-state token");
+      pe::PeSemanticBatchOwner<> owner;
+      const auto accepted = pe::settleRecorderAppend({
+          .phase = pe::AppendSettlement::Prepared,
+          .appendSucceeded = true,
+      });
+      check(guard.withCapability(
+                ownerThread, epoch, [&](const auto& access) noexcept {
+                  return owner.tryAppendSparseStatePlan(
+                      access, plan,
+                      pe::PeSemanticProducerKind::DrawPrimitive,
+                      f.params.recordType,
+                      D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+                      [&]() noexcept {
+                        const auto* source = plan.source(access);
+                        return source && pe::acceptSparseStatePlan(
+                            access, f.shadow, f.constants, plan, accepted,
+                            &tokens, 1u, source->pendingTicket);
+                      });
+                }),
+            "six-family mask owner accepts its prepared plan");
+
+      pe::PeSemanticExactFixedEmission exact;
+      check(owner.size() == 1u && owner.emitExactFixed(exact) &&
+                exact.valid() &&
+                std::vector<std::byte>(exact.wire.begin(), exact.wire.end()) ==
+                    direct.bytes,
+            "six-family mask owner bytes match direct reference");
+      check(tokens.empty() && f.shadow.pendingRenderStatesTyped().empty(),
+            "six-family mask settles scalar PendingDelta and token exactly once");
+      for (std::size_t family = 0u; family < 6u; ++family) {
+        const auto& shadow = inlineConstantFamily(f.constants, family);
+        const bool expectedDirty = !inlineConstDelta &&
+            (mask & (1u << family)) != 0u;
+        check(shadow.dirty() == expectedDirty,
+              "represented constant family clears while unrepresented stays dirty");
+        if (!shadow.dirtyElems.empty()) {
+          check(shadow.dirtyElems[0] == (expectedDirty ? 1u : 0u) &&
+                    shadow.dirtyElems[1] == 0u,
+                "mask matrix preserves exact per-element dirty membership");
+        }
+      }
+      ++cases;
+    }
+  }
+  check(cases == 128u, "six-family mask matrix covers 64 masks in both modes");
+}
+
+void productionOwnerInlineConstantPlanReuseAndRangeRetries() {
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken ownerThread;
+  std::uint64_t epoch = 37u;
+  pe::RecorderLockGuard guard(mutex, false);
+  pe::SparseStatePlan plan;
+
+  const auto append = [&](Fixture& f, bool expectedHasRanges) {
+    bool observedHasRanges = false;
+    check(guard.withCapability(
+              ownerThread, epoch, [&](const auto& access) noexcept {
+                if (!pe::buildSparseStatePlan(
+                        access, f.shadow, f.constants, f.bindings,
+                        f.payloads, f.params, false, f.inlineConstDelta,
+                        plan) ||
+                    !pe::finalizeSparseStatePlanChunkContext(
+                        access, f.chunk, plan)) {
+                  return false;
+                }
+                const auto* source = plan.source(access);
+                if (!source) return false;
+                observedHasRanges = source->hasConstantRanges;
+                return true;
+              }),
+          "reused plan prepares each mode");
+    check(observedHasRanges == expectedHasRanges,
+          "reused plan resets producer constant-range witness");
+    const auto direct = runDirectDrawLane(f);
+    pe::PeSemanticBatchOwner<> owner;
+    const auto accepted = pe::settleRecorderAppend({
+        .phase = pe::AppendSettlement::Prepared,
+        .appendSucceeded = true,
+    });
+    check(guard.withCapability(
+              ownerThread, epoch, [&](const auto& access) noexcept {
+                return owner.tryAppendSparseStatePlan(
+                    access, plan,
+                    pe::PeSemanticProducerKind::DrawPrimitive,
+                    f.params.recordType,
+                    D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+                    [&]() noexcept {
+                      const auto* source = plan.source(access);
+                      return source && pe::acceptSparseStatePlan(
+                          access, f.shadow, f.constants, plan, accepted,
+                          nullptr, 1u, source->pendingTicket);
+                    });
+              }),
+          "reused plan owner append succeeds");
+    pe::PeSemanticExactFixedEmission exact;
+    check(owner.emitExactFixed(exact) && exact.valid() &&
+              std::vector<std::byte>(exact.wire.begin(), exact.wire.end()) ==
+                  direct.bytes,
+          "reused plan bytes match reference");
+  };
+
+  Fixture first = inlineConstantMaskFixture(true, 0x15u);
+  append(first, true);
+  for (std::size_t family = 0u; family < 6u; ++family) {
+    const auto& shadow = inlineConstantFamily(first.constants, family);
+    check(!shadow.dirty(),
+          "first reused plan settles only represented families");
+  }
+  Fixture second = inlineConstantMaskFixture(false, 0x2au);
+  append(second, false);
+  for (std::size_t family = 0u; family < 6u; ++family) {
+    check(inlineConstantFamily(second.constants, family).dirty() ==
+              ((0x2au & (1u << family)) != 0u),
+          "non-inline reused plan leaves dirty constant families pending");
+  }
+  Fixture third = inlineConstantMaskFixture(true, 0x2au);
+  append(third, true);
+  for (std::size_t family = 0u; family < 6u; ++family) {
+    check(!inlineConstantFamily(third.constants, family).dirty(),
+          "second inline reused plan settles all represented families");
+  }
+
+  for (std::size_t family = 0u; family < 6u; ++family) {
+    for (const bool clearRange : {false, true}) {
+      Fixture f = inlineConstantMaskFixture(true, 1u << family);
+      check(guard.withCapability(
+                ownerThread, epoch, [&](const auto& access) noexcept {
+                  return pe::buildSparseStatePlan(
+                             access, f.shadow, f.constants, f.bindings,
+                             f.payloads, f.params, false, true, plan) &&
+                      pe::finalizeSparseStatePlanChunkContext(
+                          access, f.chunk, plan);
+                }),
+            "represented family rejection plan prepares");
+      auto& shadow = inlineConstantFamily(f.constants, family);
+      if (clearRange) {
+        shadow.clear();
+      } else {
+        shadow.dirtyElems = {0u, 1u};
+        shadow.dirtyStart = 1u;
+        shadow.dirtyEnd = 2u;
+      }
+      pe::PeSemanticBatchOwner<> failedOwner;
+      const auto accepted = pe::settleRecorderAppend({
+          .phase = pe::AppendSettlement::Prepared,
+          .appendSucceeded = true,
+      });
+      check(!guard.withCapability(
+                ownerThread, epoch, [&](const auto& access) noexcept {
+                  return failedOwner.tryAppendSparseStatePlan(
+                      access, plan,
+                      pe::PeSemanticProducerKind::DrawPrimitive,
+                      f.params.recordType,
+                      D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+                      [&]() noexcept {
+                        const auto* source = plan.source(access);
+                        return source && pe::acceptSparseStatePlan(
+                            access, f.shadow, f.constants, plan, accepted,
+                            nullptr, 1u, source->pendingTicket);
+                      });
+                }) &&
+                failedOwner.size() == 0u &&
+                f.shadow.pendingRenderStatesTyped().size() == 1u,
+            "stale or cleared represented family rejects atomically");
+
+      // Repair the current source and retry through the same plan object.
+      shadow.dirtyElems = {1u, 0u};
+      shadow.dirtyStart = 0u;
+      shadow.dirtyEnd = 1u;
+      check(guard.withCapability(
+                ownerThread, epoch, [&](const auto& access) noexcept {
+                  return pe::buildSparseStatePlan(
+                             access, f.shadow, f.constants, f.bindings,
+                             f.payloads, f.params, false, true, plan) &&
+                      pe::finalizeSparseStatePlanChunkContext(
+                          access, f.chunk, plan);
+                }) &&
+                guard.withCapability(
+                    ownerThread, epoch, [&](const auto& access) noexcept {
+                      return failedOwner.tryAppendSparseStatePlan(
+                          access, plan,
+                          pe::PeSemanticProducerKind::DrawPrimitive,
+                          f.params.recordType,
+                          D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+                          [&]() noexcept {
+                            const auto* source = plan.source(access);
+                            return source && pe::acceptSparseStatePlan(
+                                access, f.shadow, f.constants, plan, accepted,
+                                nullptr, 1u, source->pendingTicket);
+                          });
+                    }),
+            "repaired represented family retries successfully");
+      check(failedOwner.size() == 1u && !shadow.dirty() &&
+                f.shadow.pendingRenderStatesTyped().empty(),
+            "repaired family settles exactly once");
+    }
+  }
+
+  // A token mismatch is a separate source witness failure: the constant
+  // range is current, but the scalar authority was recorded for another key.
+  Fixture tokenFixture = inlineConstantMaskFixture(true, 1u);
+  check(guard.withCapability(
+            ownerThread, epoch, [&](const auto& access) noexcept {
+              return pe::buildSparseStatePlan(
+                         access, tokenFixture.shadow, tokenFixture.constants,
+                         tokenFixture.bindings, tokenFixture.payloads,
+                         tokenFixture.params, false, true, plan) &&
+                  pe::finalizeSparseStatePlanChunkContext(
+                      access, tokenFixture.chunk, plan);
+            }),
+        "token mismatch plan prepares");
+  pe::PeScalarSemanticTokenLedger tokens;
+  check(tokens.record(pe::ScalarSemanticCategory::RenderState,
+                      rawSlot(renderStateSlotKey(8u))),
+        "token mismatch records wrong scalar key");
+  pe::PeSemanticBatchOwner<> tokenOwner;
+  const auto accepted = pe::settleRecorderAppend({
+      .phase = pe::AppendSettlement::Prepared,
+      .appendSucceeded = true,
+  });
+  const auto wrongTicket = PendingDeltaTicket{
+      plan.pendingTicket().generation + 1u};
+  check(!guard.withCapability(
+            ownerThread, epoch, [&](const auto& access) noexcept {
+              return tokenOwner.tryAppendSparseStatePlan(
+                  access, plan, pe::PeSemanticProducerKind::DrawPrimitive,
+                  tokenFixture.params.recordType,
+                  D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+                  [&]() noexcept {
+                    return pe::acceptSparseStatePlan(
+                        access, tokenFixture.shadow, tokenFixture.constants,
+                        plan, accepted, nullptr, 1u, wrongTicket);
+                  });
+            }) &&
+            tokenOwner.size() == 0u && tokenOwner.retainedCount() == 0u &&
+            tokenFixture.shadow.pendingRenderStatesTyped().size() == 1u &&
+            tokenFixture.constants.vsConstF.dirty() && !tokens.empty(),
+        "current plan with foreign transaction ticket rejects before settlement");
+  check(!guard.withCapability(
+              ownerThread, epoch, [&](const auto& access) noexcept {
+                return tokenOwner.tryAppendSparseStatePlan(
+                    access, plan,
+                    pe::PeSemanticProducerKind::DrawPrimitive,
+                    tokenFixture.params.recordType,
+                    D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+                    [&]() noexcept {
+                      const auto* source = plan.source(access);
+                      return source && pe::acceptSparseStatePlan(
+                          access, tokenFixture.shadow, tokenFixture.constants,
+                          plan, accepted, &tokens, 1u,
+                          source->pendingTicket);
+                    });
+              }) &&
+              tokenOwner.size() == 0u &&
+              tokenFixture.shadow.pendingRenderStatesTyped().size() == 1u &&
+              tokenFixture.constants.vsConstF.dirty(),
+          "token validation failure preserves all witnesses");
+  tokens.clear();
+  check(tokens.record(pe::ScalarSemanticCategory::RenderState,
+                      rawSlot(renderStateSlotKey(7u))) &&
+            guard.withCapability(
+                ownerThread, epoch, [&](const auto& access) noexcept {
+                  return tokenOwner.tryAppendSparseStatePlan(
+                      access, plan,
+                      pe::PeSemanticProducerKind::DrawPrimitive,
+                      tokenFixture.params.recordType,
+                      D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u, 1u,
+                      [&]() noexcept {
+                        const auto* source = plan.source(access);
+                        return source && pe::acceptSparseStatePlan(
+                            access, tokenFixture.shadow,
+                            tokenFixture.constants, plan, accepted, &tokens,
+                            1u, source->pendingTicket);
+                      });
+                }) &&
+            tokenOwner.size() == 1u && tokens.empty() &&
+            !tokenFixture.constants.vsConstF.dirty(),
+        "corrected token retries and settles exactly once");
+}
+
 // The compact owner prepares mask-derived category counts once and must reuse
 // those qualified quotas through canonical emission. Exercise the empty,
 // sparse, and maximum bounded masks, then rebuild one non-movable plan A-B-A
@@ -3506,6 +3903,8 @@ int main() {
     inlineConstDeltaAllSixRanges();
     inlineConstDeltaSingleRange();
     productionOwnerPlanAllCategoryDifferential();
+    productionOwnerInlineConstantRangeMaskMatrix();
+    productionOwnerInlineConstantPlanReuseAndRangeRetries();
     productionOwnerCompactQuotaReuseAndCapacityPins();
     productionOwnerSelectionDifferentialAcrossFamilies();
     productionOwnerBindingAliasDifferential();

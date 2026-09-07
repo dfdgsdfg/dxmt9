@@ -13,6 +13,16 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.61 compact settlement now reuses immutable producer-selected
+constant presence and consolidates duplicate current-ticket checks inside the
+non-invalidating lexical interval. All represented dirty-range, source/domain,
+durability and transaction identity checks remain. Bounded native combinations
+and two failing production mutants pass their expected verdicts; restored
+native 9/9 and x86_64 4/4 pass, with PE32/PE64 linked/layout evidence in
+[H259](../../../docs/perfomance/present-pacing/present-pacing-pe-settlement-refinement.259.md).
+Fresh Wine/CPU/FPS qualification remains pending; static work removal is not
+measured CPU savings, repeatable README recovery or whole-scene pixel evidence.
+
 R-CORE-REC-7.40's changed 16-byte materialization is now one bounded copy,
 with two linked SIMD instructions replacing eight scalar copy instructions
 in both PE images. Native value/differential, ABI and actual x86/x64

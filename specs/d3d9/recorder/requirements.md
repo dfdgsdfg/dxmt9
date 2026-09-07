@@ -1122,3 +1122,19 @@ Eligible slots still read current Dirty state, deduplicate in first-slot order,
 use the exact bound wire identity and settle Clean only after accepted record
 append. Native exhaustive refinement and PE draw/readback traces must bind
 these publication and failure boundaries before performance qualification.
+
+**R-CORE-REC-7.61** A qualified compact plan may carry a producer-issued
+immutable constant-presence fact to omit settlement work for absent ranges.
+It must describe the represented record, not current Live dirty state; plan
+reuse and failed preparation must not revive earlier presence. Every represented
+constant range still requires current dirty-range validation before any clear,
+because constants do not share PendingDelta's generation. Current source,
+recorder owner/epoch/lane, durable append and transaction-ticket qualification
+remain required before settlement effects. Repeated current-ticket checks may
+be consolidated only within the private synchronous interval that cannot
+mutate PendingDelta or invoke an invalidating callback before consumption.
+Native bounded refinement must cover all six-family presence combinations,
+OFF/ON reuse, stale range/ticket, token rejection and retry with exact bytes
+and pending-state effects. PE32/PE64 layout and linked-code evidence must
+establish the absence of new storage and actual removed work; source-level
+array declarations or fewer checks alone do not prove lower CPU cost.

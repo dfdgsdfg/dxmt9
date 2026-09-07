@@ -1116,6 +1116,25 @@ code/stack size, while Wine correctness and FPS remain separate integration
 evidence. A successful native test alone does not prove public COM behavior or
 whole-scene pixels.
 
+R-CORE-REC-7.61 applies the same lexical authority to compact settlement.
+`SparseStatePlan::SourceFacts::hasConstantRanges` records whether the producer
+selected any inline constant range, in existing metadata padding. It is reset
+at each build and published only with a completely prepared source; failed
+preparation revokes the entire source. Consumers receive only a const qualified
+view. Generic `SourceFacts` layout helpers continue to derive represented
+sections from actual ranges, not this private-plan optimization fact.
+The fact skips only absent constant validation/clear work. Present ranges
+still compare current dirty extents before clearing, independently of the
+PendingDelta ticket. Settlement validates fresh source/domain and the current
+transaction ticket before effects. The private interval to PendingDelta
+consumption contains no invalidating callback or PendingDelta writer; duplicate
+ticket checks within it are unnecessary. Adding either invalidator requires
+restoring qualification at that boundary. This refines local settlement, not
+thread ordering, queue policy, wire semantics or shader execution. Production-
+bound exhaustive native state/byte/failure tests own this refinement; existing
+recorder TLA models continue to own the unchanged ordering/lifetime protocol.
+Linked PE32/PE64 inspection and wild performance remain separate gates.
+
 The optional owner-qualified copy/materialization ledger binds this same
 transaction at its two physical ownership boundaries. A successful admission
 records the increase in live typed record, pin, and canonical-role

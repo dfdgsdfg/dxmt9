@@ -207,6 +207,8 @@ struct SparseStatePlan {
     PeDrawParams draw{};
     bool prepared = false;
     bool fullSnapshot = false;
+    // Producer-selected record contents, not a cache of mutable Live Dirty.
+    bool hasConstantRanges = false;
     PeHotStateShadow::PendingDeltaView pendingDelta{};
     PendingDeltaTicket pendingTicket{};
     std::uint32_t drawFlags = 0u;
@@ -236,6 +238,11 @@ struct SparseStatePlan {
     SparseConstantRangeInput psBoolConstants{};
     PeDrawPayloads payloads{};
   };
+
+  // Presence uses existing metadata padding in native and both PE layouts.
+  static_assert(offsetof(SourceFacts, hasConstantRanges) == 42u);
+  static_assert(offsetof(SourceFacts, pendingDelta) == 48u);
+  static_assert(sizeof(SourceFacts) == (sizeof(void*) == 8u ? 304u : 240u));
 
   struct DestinationFacts {
     std::uint32_t streamMask = 0u;
@@ -365,6 +372,7 @@ struct SparseStatePlan {
     source_.prepared = false;
     destination_.chunkContextFinalized = false;
     source_.drawFlags = 0u;
+    source_.hasConstantRanges = false;
     source_.renderTargetMask = 0u;
     source_.shaderMask = 0u;
     source_.vertexInputKind = 0u;

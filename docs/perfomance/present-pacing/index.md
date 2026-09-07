@@ -11,12 +11,16 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+Latest implementation: [H259](present-pacing-pe-settlement-refinement.259.md)
+consolidates compact settlement checks and skips absent constant work with
+producer-issued immutable presence. Native/refinement and linked-layout
+checks pass; fresh runtime CPU/FPS qualification remains pending.
+
 Latest mechanism evidence: [H258](present-pacing-inline-constant-current.258.md)
 removes almost all standalone constant records through the current owner,
 but 05/06 OFF/ON spots show only +1.25%/+0.91% FPS and no demonstrated CPU
 reduction. The mode stays default-off. [H257](present-pacing-pe-constant-copy.257.md)
-remains the latest runtime implementation; the current overview owns its
-measurement and profile conclusions.
+owns the preceding implementation's measurement and profile conclusions.
 
 Earlier implementation: [H254](present-pacing-pe-constant-bitcompare.254.md)
 replaces short-circuit 16-byte constant equality with a bitwise reduction;
@@ -76,6 +80,7 @@ The CPU-ready Tape locality gap remains an independent workstream.
 
 ## Recent Leaf Documents
 
+- [present-pacing-pe-settlement-refinement.259 - Qualified Compact Settlement Work Removal](present-pacing-pe-settlement-refinement.259.md)
 - [present-pacing-inline-constant-current.258 - Current Semantic-Owner Inline-Constant Economics](present-pacing-inline-constant-current.258.md)
 - [present-pacing-pe-constant-copy.257 - Bounded Changed-Constant Copy](present-pacing-pe-constant-copy.257.md)
 - [present-pacing-pe-autogen-bound-slots.256 - Immutable AUTOGEN Eligibility](present-pacing-pe-autogen-bound-slots.256.md)

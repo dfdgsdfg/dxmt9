@@ -50,14 +50,15 @@ bool prepareConstantRanges(PeConstShadowBlock& constants,
       {&constants.psConstI, &source.psIntConstants, 16u},
       {&constants.psConstB, &source.psBoolConstants, 4u},
   };
+  bool anyRange = false;
   for (std::uint32_t kind = 0u; kind < D9C_DRAW_PACKET_CONST_DELTA_COUNT;
        ++kind) {
-    auto& source = *ranges[kind].shadow;
-    if (!source.dirty()) {
+    auto& shadow = *ranges[kind].shadow;
+    if (!shadow.dirty()) {
       continue;
     }
-    const std::uint32_t start = source.dirtyStart;
-    const std::uint32_t count = source.dirtyEnd - source.dirtyStart;
+    const std::uint32_t start = shadow.dirtyStart;
+    const std::uint32_t count = shadow.dirtyEnd - shadow.dirtyStart;
     if (!d9c_draw_packet_const_delta_section_range_valid(kind, start, count)) {
       return false;
     }
@@ -65,17 +66,19 @@ bool prepareConstantRanges(PeConstShadowBlock& constants,
                         ranges[kind].elementSize;
     const auto bytes = static_cast<std::size_t>(count) *
                        ranges[kind].elementSize;
-    if (source.values.size() < offset + bytes) {
+    if (shadow.values.size() < offset + bytes) {
       return false;
     }
     *ranges[kind].out = SparseConstantRangeInput{
         .startRegister = start,
         .registerCount = count,
         .registerBytes = std::span<const std::byte>(
-            reinterpret_cast<const std::byte*>(source.values.data()) + offset,
+            reinterpret_cast<const std::byte*>(shadow.values.data()) + offset,
             bytes),
     };
+    anyRange = true;
   }
+  source.hasConstantRanges = anyRange;
   return true;
 }
 
@@ -411,10 +414,12 @@ static bool acceptSparseStatePlanWithSources(
       &constants.vsConstF, &constants.vsConstI, &constants.vsConstB,
       &constants.psConstF, &constants.psConstI, &constants.psConstB,
   };
-  for (std::size_t i = 0u; i < std::size(acceptedConstants); ++i) {
-    if (!constantRangeStillDirty(*constantShadows[i],
-                                 *acceptedConstants[i])) {
-      return false;
+  if (source.hasConstantRanges) {
+    for (std::size_t i = 0u; i < std::size(acceptedConstants); ++i) {
+      if (!constantRangeStillDirty(*constantShadows[i],
+                                  *acceptedConstants[i])) {
+        return false;
+      }
     }
   }
 
@@ -469,9 +474,11 @@ static bool acceptSparseStatePlanWithSources(
     }
   }
 
-  for (std::size_t i = 0u; i < std::size(acceptedConstants); ++i) {
-    if (acceptedConstants[i]->present()) {
-      constantShadows[i]->clear();
+  if (source.hasConstantRanges) {
+    for (std::size_t i = 0u; i < std::size(acceptedConstants); ++i) {
+      if (acceptedConstants[i]->present()) {
+        constantShadows[i]->clear();
+      }
     }
   }
 
@@ -508,10 +515,9 @@ static bool acceptSparseStatePlanWithSources(
     }
   }
 
-  if (settlementTicket.valid() &&
-      !shadow.pendingTicketMatches(settlementTicket)) {
-    return false;
-  }
+  // The entry check remains current: constant clears and the concrete token
+  // ledger above cannot mutate PendingDelta or call an invalidating callback.
+  // Keep this interval synchronous under the issuing recorder capability.
   auto consumer = shadow.consume();
   consumer.acceptAllRenderStates();
   consumer.acceptAllTextureStageStates();

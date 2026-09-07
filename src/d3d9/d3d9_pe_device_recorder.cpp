@@ -191,15 +191,13 @@ bool D3D9DeviceImpl::settleSemanticSparsePlan(
         recorderState_.chunkTransaction.pendingTicket();
     const auto pendingTicket = plan.pendingTicket();
     if (!pendingTicket.valid() || !transactionTicket.valid() ||
-        transactionTicket.generation != pendingTicket.generation ||
-        !recorderState_.peState.pendingTicketMatches(
-            pendingTicket)) {
+        transactionTicket.generation != pendingTicket.generation) {
         return false;
     }
     return dxmt9::d3d9::pe::acceptSparseStatePlan(
         access, recorderState_.peState, recorderState_.peConsts, plan,
         appendPlan, scalarSemanticObserver(), recordOrdinal,
-        pendingTicket);
+        transactionTicket);
 }
 
 bool D3D9DeviceImpl::observeCommittedSemanticOwnerRecord() noexcept {
