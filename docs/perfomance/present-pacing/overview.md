@@ -33,7 +33,10 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 lookup and a redundant changed flag from the measured constant Live kernel.
 The pointer-only prototype was rejected for worse PE32 code; the final
 sentinel version shrinks both PE widths with native mask equivalence.
-This is work-shape evidence, not yet measured CPU savings.
+Actual 05/06 GT2 spots are 29.989/18.270 FPS (06 rerun; desktop-use run excluded);
+partial process CPU/frame is 69.468/95.017 ms. Small FPS changes do not establish
+gain or regression. Full profiles retain 1,322/825 PE samples; producer-thread CPU
+attribution remains the next measurement gap, not a proven saving.
 
 [H266](present-pacing-inline-constant-economy.266.md) repeats the current
 inline OFF/ON mechanism with matching images: FPS changes +1.49%/+0.88%

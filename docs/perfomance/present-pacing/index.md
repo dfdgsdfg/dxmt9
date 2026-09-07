@@ -14,7 +14,9 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 [H267](present-pacing-pe-constant-loop.267.md) reduces the fixed-width Live
 constant loop to call-local backing borrows and one first-changed reduction.
 Both linked PE widths shrink; native dirty/change-mask refinement passes.
-Runtime CPU/FPS savings remain unproved.
+Current GT2 spots are 29.989/18.270 FPS (06 rerun; desktop-use run excluded);
+full stopped-PC reports preserve 1,322/825 PE samples. Small FPS changes and
+partial all-thread CPU changes do not establish savings or repeatable recovery.
 
 [H266](present-pacing-inline-constant-economy.266.md) measures current-image
 OFF/ON spots after the pixel prerequisite: 05 GT2 29.787/30.230 FPS and

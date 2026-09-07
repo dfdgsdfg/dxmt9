@@ -20,6 +20,11 @@ The 1,568-row dirty/change-mask differential, focused native 4/4 and x86_64
 5/5, linked PE32/PE64 audit and 144 real PE sampled pixels pass. No lifetime,
 wire or provider policy changes. Measured CPU savings and repeatable GT2
 recovery remain open; inline constants remain default-off.
+Current-image 05/06 GT2 spots pass at 29.989/18.270 FPS (06 rerun; desktop-use
+run excluded) and partial all-thread CPU/frame 69.468/95.017 ms; separate full
+profiles retain 1,322/825 PE samples. Small FPS differences do not establish
+gain/regression or close producer-exclusive CPU attribution; H267 records the exact populations and
+unreported tails.
 
 [H266](../../../docs/perfomance/present-pacing/present-pacing-inline-constant-economy.266.md)
 records current-image 05/06 GT2 OFF/ON spots: FPS +1.49%/+0.88%, approximate
