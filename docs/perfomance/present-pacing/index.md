@@ -13,10 +13,13 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 Latest implementation: [H260](present-pacing-pe-validated-constant-range.260.md)
 reuses public constant-range validation in the Live kernel. Native negative
-controls, final linked PE32/PE64 inspection and actual Wine checks pass;
-fresh CPU/FPS and complete PE profiles are pending. No runtime gain is claimed.
+controls, final linked PE32/PE64 inspection and actual Wine checks pass.
+Sampler-OFF 05/06 GT2 gives 29.810/18.205 FPS and partial process CPU of
+69.857/95.113 ms/frame; separate full profiles retain 1,420/866 PE samples.
+No renderer or sampler failures are recorded. Measured gain and repeatable
+README recovery remain unproven.
 
-Latest measured implementation: [H259](present-pacing-pe-settlement-refinement.259.md)
+Preceding measured implementation: [H259](present-pacing-pe-settlement-refinement.259.md)
 consolidates compact settlement checks and skips absent constant work with
 producer-issued immutable presence. Native/refinement and linked-layout
 checks and actual x86/x64 getter/StateBlock tests pass. Sampler-OFF 05/06

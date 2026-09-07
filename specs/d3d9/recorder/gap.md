@@ -22,8 +22,11 @@ restored native 12/12 and x86_64 6/6, linked PE32/PE64 caller/consumer costs
 and five actual Wine getter/StateBlock cases per width. No new setter call
 or persistent state is added; DLL and observed-wrapper size tradeoffs remain.
 The new native fixture does not exercise the private poisoned/Terminal PE
-adapter. Fresh CPU/FPS and complete PE profiles are pending; neither work
-removal nor these correctness checks establish reduced CPU or recovered FPS.
+adapter. Sampler-OFF 05/06 GT2 gives 29.810/18.205 FPS, with approximate
+partial all-thread CPU of 69.857/95.113 ms/frame and zero renderer failures.
+Separate profiles retain all 1,420/866 PE samples without sampler failures
+or omitted buckets. This closes collection, not exact PE attribution, reduced
+CPU, repeatable README recovery or whole-scene pixel equivalence.
 
 R-CORE-REC-7.61 compact settlement now reuses immutable producer-selected
 constant presence and consolidates duplicate current-ticket checks inside the

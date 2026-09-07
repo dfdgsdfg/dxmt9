@@ -29,7 +29,18 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
-The latest implementation [H259](present-pacing-pe-settlement-refinement.259.md)
+The latest implementation [H260](present-pacing-pe-validated-constant-range.260.md)
+reuses public constant-range authority in the Live kernel without adding a
+setter call or persistent state. Native negative controls, final linked PE
+inspection and actual x86/x64 getter/StateBlock checks pass. Sampler-OFF
+05/06 GT2 gives 29.810/18.205 FPS and approximate partial process CPU of
+69.857/95.113 ms/frame, with zero renderer failures. Separate full profiles
+retain 1,420/866 PE samples without sampler failure or omission. Small deltas
+and imperfect partial joins do not establish gain or CPU reduction; repeatable
+README recovery remains open. Current owner retention/source checks remain
+authoritative, not removal candidates.
+
+The preceding implementation [H259](present-pacing-pe-settlement-refinement.259.md)
 reuses immutable constant presence during compact settlement and consolidates
 duplicate current-ticket checks in a non-invalidating lexical interval.
 Native bounded combinations, deliberate failing mutants and linked PE checks

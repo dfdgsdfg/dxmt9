@@ -3,9 +3,9 @@ domain: present-pacing
 workload: 3DMark05 GT2; 3DMark06 GT2
 title: "Public constant range authority removes duplicate Live guards"
 type: evidence
-status: implementation-verified-runtime-pending
+status: verified-work-removal-gain-unproven
 updated: 2026-09-08
-source: experiments/output/pe-validated-constant-range-20260908/analysis
+source: experiments/output/pe-validated-constant-range-20260908/analysis; experiments/output/app-d3d9-3dmark{05,06}-pe-validated-range-58c67f27-gt2-{perf,sampler}-r1-20260908
 related: present-pacing-pe-settlement-refinement.259.md; ../../../specs/d3d9/recorder/spec.md
 ---
 
@@ -88,7 +88,7 @@ H259's exact hashes. `candidate-linked-validated-audit.txt`,
 `candidate-linked-validated-symbols.txt` and `final-linked-qualified.json`
 retain the disassembly, timestamp and metadata evidence.
 
-## Remaining measurement gate
+## Actual PE correctness
 
 Actual final-image Wine tests pass five cases per PE width: vertex constants,
 pixel shader get/set, pixel constants, constant Apply and cross-stage
@@ -99,10 +99,112 @@ cases have zero failures, skips, timeouts or missing verdicts; every staging
 sidecar matches the final images. This is getter/StateBlock evidence, not a
 draw or full poisoned-adapter matrix.
 
-Separate sampler-OFF 05/06 GT2 CPU/FPS spots plus complete PE profiles remain
-pending.
-H259's qualified references are 29.682/18.220 FPS and approximate partial
-all-thread CPU of 70.153/95.472 ms/frame. Its original interfered 06 perf r1
-is excluded. Historical README 30.1/18.1 also differs in the index-reorder
-setting; it is context, not a matched A/B. Guard removal alone establishes
-neither reduced CPU nor recovered FPS.
+## Sampler-OFF CPU/FPS spots
+
+Committed `58c67f27` uses Sikarugir cx-24.0.7, named GT2, 1024x768 for 05
+and 1280x720 for 06. The perf/Warn recipe enables frame sampling and a
+PID-bound two-second process CPU/RSS observer. Inline constants, segmented
+transport, opaque-depth index reorder, PE sampler/module map, decimation/full
+recorder stats, owner phase split and copy ledger are OFF. Offload stays ON.
+No build, test suite or other benchmark runs during the scenes. These are not
+observer-free measurements or proof of host isolation.
+
+| Product | Scene FPS | Rows / wall ms | CB / frame | Pass / frame | Draw / frame |
+|---|---:|---:|---:|---:|---:|
+| 05 GT2 | 29.810 | 1,926 / 64,608.214 | 4.001 | 15.786 | 1,681.702 |
+| 06 GT2 | 18.205 | 1,166 / 64,049.407 | 4.002 | 19.861 | 1,879.425 |
+
+05 includes every positive-wall frame 1–1,926. 06 includes positive-wall
+rows with more than 100 draws, frames 994–2,159; only loading is excluded,
+not slow scene frames. These are renderer frame-log averages, not a decoded
+`.3dr` or the catalogue process-elapsed FPS. All five staged hashes match
+the final images and all eight chunk/GPU/pipeline/no-pipeline failure
+counters are zero. 05 exits normally; 06's permitted timeout closes the
+completed-scene result GUI. Summed GPU CB time is 1.998/11.887 ms/frame,
+not GPU critical-path latency. No whole-scene pixel comparison is claimed.
+
+| Product | Partial CPU frame increments | Process CPU seconds / elapsed seconds | CPU ms / frame | Average cores | RSS peak KiB |
+|---|---:|---:|---:|---:|---:|
+| 05 GT2 | 1,892 | 132.17 / 62.318 | 69.857 | 2.121 | 3,310,404 |
+| 06 GT2 | 1,150 | 109.38 / 62.290 | 95.113 | 1.756 | 3,623,112 |
+
+These are approximate partial joins across all process threads, not
+PE-exclusive times. `qualify_perf.py` and `perf-qualified.json` retain the
+exact populations, arithmetic, profile, health and binary qualification.
+H259's qualified references are 29.682/18.220 FPS and partial CPU of
+70.153/95.472 ms/frame; its original interfered 06 perf r1 is excluded.
+Current differences are +0.43%/-0.08% FPS and -0.42%/-0.38% partial CPU.
+Single sequential spots, different partial intervals and no controlled
+cooldown/order counterbalance do not establish gain, neutrality or reduced
+CPU consumption. RSS does not establish a memory regression or saving either.
+
+Historical README 30.1/18.1 also differs in the index-reorder setting. Current
+05 remains 0.96% below it and 06 is numerically 0.58% above; that is context,
+not a matched comparison or repeatable recovery. README is unchanged.
+
+## Complete current PE profiles
+
+Separate 250-Hz sampler runs use the same five images, with Info logging,
+module mapping and full self-PC output. Detailed PE phase clocks stay OFF.
+The sampler perturbs execution; neither its FPS nor its frame time is
+performance evidence.
+
+| Product | Last reported Present | Thread samples | PE samples | Stored / printed buckets | Cross-symbol samples |
+|---|---:|---:|---:|---:|---:|
+| 05 GT2 | 1,860 | 13,534 | 1,420 | 636 / 636 | 369 |
+| 06 GT2 | 2,100 | 14,126 | 866 | 478 / 478 | 213 |
+
+All 31/35 cumulative groups pass coverage and conservation checks: no omitted
+or overflow samples, suspend/context/resume failure or target-thread mismatch.
+Module containment probes pass, with all eight renderer failure counters zero.
+Last reports are cumulative, not sums. For 06, subtracting the pre-heavy
+Present-960 report leaves 862 PE samples, 13,388 thread samples and 474
+buckets; the first heavy frame is 997. 05 has no earlier report to subtract.
+These are approximate scene prefixes; the final unreported tail remains
+outside the collection. Complete printed buckets do not mean whole-run coverage.
+
+The exact frozen PE32 image joins all 64-byte buckets. Cross-symbol buckets
+remain unassigned; interior padding, inlining and asynchronous Wine PC mapping
+still limit attribution. The H260 copy of `join_full_selfpc.py` classifies the
+new `ValidatedConstWrite` symbol with constants; H255's older lexical family
+classifier does not know that name. Narrow unambiguous counts below exclude
+nested lambdas and are not inclusive CPU costs or a performance ranking.
+
+| Linked symbol | 05 samples | 06 samples |
+|---|---:|---:|
+| `ValidatedConstWrite<16>::applyNonEmpty` | 88 | 48 |
+| `SetVertexShaderConstantF` | 55 | 36 |
+| `acceptSparseStatePlan` | 24 | 16 |
+| `buildSparseStatePlan` | 36 | 22 |
+| `preparePeSemanticSparsePlanLayout` | 41 | 17 |
+| `PeSemanticPreparedIdentityWitnessT<45>::add` | 21 | 13 |
+| `accumulateRetentionDelta<45>` | 57 | 42 |
+| `writeSparsePlanPayloadQualified` | 32 | 25 |
+
+`profiles-qualified.json`, full CSV/Markdown reports, symbol JSONs and
+scene-prefix reports retain the join. The small counts and changed symbol
+boundaries do not independently attribute CPU savings to removed guards.
+
+## Decision and next bounded gate
+
+Linked work removal, bounded native negative controls, actual PE correctness
+and fresh wild health pass. Both CPU/FPS spots and both full profiles are
+collected. Repeatable FPS recovery and reduced CPU remain unproven; no backend,
+provider or experimental default changes follow.
+
+Current source inspection does not justify deleting `accumulateRetentionDelta`:
+it runs once per record-unique identity and its `findOrValidateExistingPin`
+lookup proves current owner lifetime/identity. The near-ceiling aggregate
+capacity check and boundary source requalification are also authoritative.
+H255 already rejected a record-local hash table for the observed low unique
+count; a new stopped-PC sample is not a reason to revive that design.
+
+One conditional investigation remains in `src/d3d9/d3d9_pe_semantic_owner.hpp`:
+compact emission calls `makeQualifiedBinding` and
+`pinPreparedQualifiedBinding` for every occurrence, including duplicate
+record identities. Before adding per-attempt validation reuse, establish the
+actual duplicate-occurrence distribution and prove the typed pin prefix cannot
+change across retainer callbacks. Native witnesses must cover all seven binding
+families, A/B/A and null, generation/pointer aliases, acquisition failure,
+rollback/retry, exact bytes and retain counts. No elimination or gain is
+authorized by the present samples alone.
