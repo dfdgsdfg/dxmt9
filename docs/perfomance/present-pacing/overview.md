@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-07
+updated: 2026-09-08
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
@@ -28,6 +28,16 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 [index-cache-locality](../index-cache-locality/index.md); the per-CB encode story by [state-churn-encode](../state-churn-encode/index.md).
 
 ## Latest Conclusions
+
+The latest mechanism check [H258](present-pacing-inline-constant-current.258.md)
+reopens inline constants on the current compact semantic owner: about 1,003
+standalone constant records per Present become 0.9. Same-binary 05/06 GT2
+OFF/ON spots give 29.631→30.000 and 18.188→18.354 FPS (+1.25%/+0.91%),
+without demonstrated process CPU reduction. Diagnostic parent reductions are
+not product savings: they include child clocks/reconstruction and a different
+observed constant wrapper. Keep default-off; current effective-state, fault,
+pixel and repeatable economy gates remain open. No runtime code or README
+change follows.
 
 The latest optimization [H257](present-pacing-pe-constant-copy.257.md)
 expresses changed 16-byte constants as one bounded copy; both linked PE images

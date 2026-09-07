@@ -4,14 +4,21 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-09-07
+updated: 2026-09-08
 source: docs/perfomance/present-pacing/present-pacing-pe-constant-bitcompare.254.md; docs/perfomance/present-pacing/present-pacing-pe-canonical-authority.253.md; docs/perfomance/present-pacing/present-pacing-pe-append-effects.251.md; docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md; docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest implementation: [H254](present-pacing-pe-constant-bitcompare.254.md)
+Latest mechanism evidence: [H258](present-pacing-inline-constant-current.258.md)
+removes almost all standalone constant records through the current owner,
+but 05/06 OFF/ON spots show only +1.25%/+0.91% FPS and no demonstrated CPU
+reduction. The mode stays default-off. [H257](present-pacing-pe-constant-copy.257.md)
+remains the latest runtime implementation; the current overview owns its
+measurement and profile conclusions.
+
+Earlier implementation: [H254](present-pacing-pe-constant-bitcompare.254.md)
 replaces short-circuit 16-byte constant equality with a bitwise reduction;
 both linked PE images vectorize it, with native/ABI checks passing. One
 post-commit perf run per product gives 05 GT2 29.500 and 06 GT2 17.958 FPS
@@ -69,6 +76,9 @@ The CPU-ready Tape locality gap remains an independent workstream.
 
 ## Recent Leaf Documents
 
+- [present-pacing-inline-constant-current.258 - Current Semantic-Owner Inline-Constant Economics](present-pacing-inline-constant-current.258.md)
+- [present-pacing-pe-constant-copy.257 - Bounded Changed-Constant Copy](present-pacing-pe-constant-copy.257.md)
+- [present-pacing-pe-autogen-bound-slots.256 - Immutable AUTOGEN Eligibility](present-pacing-pe-autogen-bound-slots.256.md)
 - [present-pacing-pe-full-selfpc.255 - Complete Bounded PE Self-PC Reporting](present-pacing-pe-full-selfpc.255.md)
 - [present-pacing-pe-constant-bitcompare.254 - Actual PE Attribution and Branch-Reduced Constant Equality](present-pacing-pe-constant-bitcompare.254.md)
 - [present-pacing-pe-canonical-authority.253 - Grouped Borrow and Single Pin Authority](present-pacing-pe-canonical-authority.253.md)

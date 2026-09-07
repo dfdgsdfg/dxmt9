@@ -514,41 +514,48 @@ sequenceDiagram
 `DXMT9_PE_INLINE_CONST_DELTA=1` folds the shader-constant deltas a draw
 consumes into that draw's packet instead of emitting standalone
 `D9C_COMMAND_RECORD_SET_*_CONST_*` records. The observable contract is
-`R-BACK-2.52`. Motivation: H213
-(`docs/perfomance/present-pacing/present-pacing-decimated-pe-stats.200.md`)
-sized the PE const chain at `~5.1-5.6ms/present` in 3DMark05 GT1 — `~645`
-standalone const records per present whose cost is per-event funnel/walk
-logic under Rosetta, not byte volume — giving this fold a `~+10%` FPS
-ceiling. The mechanics:
+`R-BACK-2.52`. It removes separate owner admissions for constants consumed by
+the carrying draw, not setter shadow comparison, constant bytes, or Unix
+application. Historical recorder timings are not an additive current CPU
+budget; mechanism and observer-OFF performance evidence belong in the
+owning gap row. The mechanics:
 
-- **PE recorder** owns the fold: `buildDrawPrimitivePacket` consumes the six
-  const shadows' merged dirty ranges (`touchConstShadow` dedup and range
-  tracking are unchanged) directly into packet sections and marks them clean.
-  The pre-draw `flushConstShadow` record-emission step is skipped only for
-  ranges the packet carries. Non-draw const consumers (`ProcessVertices`,
-  chunk-barrier/chunk-end drains) keep the standalone-record flush path
-  verbatim, flag on or off.
+- **PE recorder** owns the fold: the ordinary Draw/DrawIndexed compact route
+  calls `buildSparseStatePlan` with the six shadows' merged dirty ranges.
+  `PeSemanticBatchOwner::tryAppendSparseStatePlan` materializes canonical
+  sections, then `acceptSparseStatePlan` validates and settles the represented
+  dirty ranges after durable admission. Preparation alone does not clear
+  constants; rejection preserves retry state. The explicit-full-snapshot
+  compatibility route uses `buildSparseState` and `acceptInlineConstantDelta`.
+  The pre-draw `flushPendingConsts` is skipped only on the folding route.
+  Non-draw consumers (`ProcessVertices`, chunk barriers/end drains) and UP
+  draw entry points retain standalone constant drains. The standalone owner
+  path uses `tryAppendConstantRecord`; both representations preserve the
+  same effective constants at each draw.
 - **Wire**: each section mirrors the `D9CCommandRecordSetConst` element-size
   rules (`float4`/`int4` = 16 bytes per register, bool = 4). Sections ride the
   existing variable draw-packet serialization; caps are the D3D9 register-file
   limits, so a section can never legally exceed one full register file.
 - **Unix importer** validates sections (range + payload length against the
   record header) before retention/apply, rejecting the chunk on violation like
-  any malformed packet, then applies sections to the server-side const shadow
-  immediately before the draw's state delta so ordering is isomorphic to the
-  standalone-record wire. The run coalescer treats a const-bearing packet as
-  state-delta-bearing (run break), which is exactly where the equivalent
-  standalone const record breaks a run today (`const_upload` is already the
-  dominant break class), satisfying R-BACK-2.52(f) with no coalescer change.
+  any malformed packet. `replaySparseRecord` applies canonical state and
+  constant sections before submitting the draw. Downstream draw-island/run
+  planning must preserve every represented constant transition and the
+  boundary constraint in `R-BACK-2.52(f)`; the old packet coalescer's historical
+  fix is not evidence for a later replay implementation.
 - **Failure behavior**: section validation failure is a chunk import rejection
   (`E_INVALIDARG` class) before any handle retention, identical to other
   packet bounds violations.
-- **Verification**: PE record byte-pinning specs (off path unchanged + new
-  section rows), an on/off replay-equivalence spec
-  (`pe_full_snapshot_equivalence_spec` pattern: same call stream, compare
-  server-side effective state per draw), ABI-hash lockstep rebuild, and
-  runtime judgment by decimated PE stats (`DXMT9_PE_STATS_DECIMATION`)
-  plus paired no-gputrace presents scouts.
+- **Verification**: producer differential tests bind the compact plan, real
+  owner admission, settlement and canonical emission; record validation and
+  replay tests cover section bounds and pre-draw application. Host fixtures
+  select their inline mode explicitly and do not prove the PE environment
+  selector. Promotion additionally requires effective-state-per-draw
+  equivalence through production replay, current failure/retry and pixel
+  evidence, ABI-matched PE runtime checks, and repeated observer-OFF
+  performance. Decimated owner timings are diagnostic only: the observed
+  wrapper differs from the unobserved constant specialization, and nested
+  clocks/reconstruction remain after null-pair correction.
 
 #### Encode Scheduling Integration
 
