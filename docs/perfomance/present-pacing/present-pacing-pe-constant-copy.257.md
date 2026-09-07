@@ -5,7 +5,7 @@ title: "Bounded changed-constant copy"
 type: evidence
 status: correctness-verified-no-demonstrated-fps-gain
 updated: 2026-09-07
-source: experiments/output/pe-constant-copy-20260907/analysis; experiments/output/app-d3d9-3dmark05-pe-constant-copy-5d764f37-gt2-perf-r1-20260907; experiments/output/app-d3d9-3dmark06-pe-constant-copy-5d764f37-gt2-perf-{r1,r2}-20260907
+source: experiments/output/pe-constant-copy-20260907/analysis; experiments/output/app-d3d9-3dmark05-pe-constant-copy-5d764f37-gt2-perf-r1-20260907; experiments/output/app-d3d9-3dmark06-pe-constant-copy-5d764f37-gt2-perf-{r1,r2}-20260907; experiments/output/app-d3d9-3dmark{05,06}-pe-constant-copy-5d764f37-gt2-sampler-r1-20260907
 related: present-pacing-pe-autogen-bound-slots.256.md; present-pacing-pe-constant-bitcompare.254.md; ../../../specs/d3d9/recorder/spec.md
 ---
 
@@ -123,6 +123,97 @@ are retained, but do not prove an interference-free run or CPU reduction.
 06 rounds to README 18.1 in this spot check; 05 remains below 30.1. H256's
 contended 06 value is not a causal baseline. Fewer static copy instructions
 have not demonstrated FPS gain, repeatable recovery or lower CPU consumption.
-The committed change's separate full PE self-PC profiles and exact copy-cost
-attribution remain open; H256's older histogram is selection evidence only.
-README remains unchanged.
+The separate profiles below close collection for the committed change, not
+exact copy-cost attribution. README remains unchanged.
+
+## Complete current PE profiles
+
+The same frozen images have separate 250-Hz full self-PC runs, with module
+mapping and Info logging enabled. Detailed timers, phase split and the copy
+ledger remain OFF. The sampler suspends the game thread; its FPS and derived
+sample weights are not performance or measured CPU-time evidence.
+
+| Product | Last reported Present | Thread samples | PE samples | Buckets | Omitted / overflow | Cross-symbol ambiguous samples |
+|---|---:|---:|---:|---:|---:|---:|
+| 05 GT2 | 1,800 | 13,555 | 1,378 | 633 | 0 / 0 | 358 |
+| 06 GT2 | 2,100 | 14,256 | 872 | 484 | 0 / 0 | 214 |
+
+All 30/35 report groups validate, module probes pass, and no target-thread
+mismatch or suspend/context/resume failure is present. Both catalogue results
+pass with matching five-artifact receipts and zero retained renderer failure
+counters. 06 uses the permitted completed-scene GUI timeout. The approximate
+06 scene-prefix subtraction starts at report 960 before first heavy frame
+998, retaining 869 PE/13,515 thread samples in 481 buckets through report
+2,100. The unreported tail is absent; this is not an exact scene interval.
+`profile-verdicts.json` records all checks and narrow symbol totals against
+the frozen PE32 hash, excluding nested lambdas from named parent totals.
+
+| Unambiguous outlined symbol | 05 samples | 06 samples |
+|---|---:|---:|
+| `applyConstShadowLiveFixedWidth<16>` | 86 | 44 |
+| `accumulateRetentionDelta<45,...>` | 66 | 25 |
+| `SetVertexShaderConstantF` | 48 | 35 |
+| `acceptSparseStatePlan` | 48 | 21 |
+| `buildSparseStatePlan` | 43 | 15 |
+| `PeSemanticPreparedIdentityWitnessT<45>::add` | 26 | 25 |
+| `writeSparsePlanPayloadQualified` | 26 | 24 |
+| `preparePeSemanticSparsePlanLayout` | 25 | 28 |
+
+These are PC counts, not inclusive stacks or an additive timing ledger. A
+64-byte bucket can also contain padding; source/disassembly inspection still
+matters. The fixed16 helper has 86/44 samples versus H256's 93/55, while its
+`0x23080` copy-plus-bookkeeping buckets have 8/3 versus 13/9. Different full
+populations, host load and moved instructions prohibit a causal saving claim.
+The comparison/setup bucket `0x23040` still holds 50/26 samples; copying is
+not the entire constant loop's cost. Module shares also cannot separate
+active CPU from waits or Wine's saved cross-boundary context.
+
+## Next bounded investigations
+
+The source audit identifies possible duplicate work, not proven FPS gains:
+
+- `acceptSparseStatePlanWithSources` checks the same PendingDelta ticket
+  before validation and again before consumption. The intervening constant
+  and concrete token-ledger operations cannot mutate `PeHotStateShadow`;
+  retain the initial authority check and test stale-owner/epoch, transaction
+  identity, token failure and retry before consolidating the later check.
+- The default inline-constant-OFF route still constructs two six-entry pointer
+  arrays and visits absent constant ranges during acceptance/clear. An
+  immutable presence guard could bypass that scaffolding, but ON mutable
+  dirty-range validation must remain: constants do not share the PendingDelta
+  generation witness. Linked code must establish that scaffolding survives
+  optimization before assigning value to its removal.
+- A public-entry-produced constant-range witness could avoid repeating
+  nonzero/null/overflow checks in the Live kernel. It must be bound to the
+  exact call and preserve the `writeAllowed`/Recording/zero-count envelope;
+  the generic checked helper remains the reference. This is conditional on
+  linked code and tests, not permission to bypass terminal state handling.
+
+The canonical retain lookup and identity validation are necessary ownership
+work. Their profile residency is not a reason to remove them. Actual CPU
+reduction and repeatable recovery of both README targets remain open.
+
+A larger mechanism probe should precede further instruction-only tuning:
+remeasure the existing default-off `DXMT9_PE_INLINE_CONST_DELTA` against its
+OFF control on these same binaries. OFF admits standalone constant records;
+ON folds ranges into the sparse draw's semantic-owner transaction and settles
+them through `acceptSparseStatePlanWithSources`. The generic compatibility
+route uses `acceptInlineConstantDelta`; those are not the same call site.
+Setter shadow comparison/copy does not disappear, and ON adds range
+preparation and mutable-constant validation. Native producer differential,
+record-value, binding-reuse, owner and importer/coalescer gates must remain
+green before a bounded current mechanism run. No default switch follows.
+
+[H214](present-pacing-inline-const-delta.201.md) confirmed fewer append/flush
+events on the July recorder but kept the flag opt-in after a noise-sized
+FPS result. Its historical uncalibrated timing estimate is not a current
+CPU saving. The later semantic-owner and compact-acceptance migration changes
+the transaction work being removed, justifying one fresh mechanism comparison
+rather than inheriting either the old ceiling or an assumed win. Pin index
+reorder OFF in both arms and keep phase-observer runs separate from FPS.
+
+README's 30.1/18.1 values entered at `a5671697` on August 29 before
+`8981494f` changed the shared perf-profile index-reorder default from ON to
+OFF. That is a configuration mismatch to preserve in any comparison, not a
+measured explanation for the remaining FPS gap. Re-enabling a backend option
+would not by itself establish a PE optimization gain.

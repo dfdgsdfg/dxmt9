@@ -19,9 +19,11 @@ in both PE images. Native value/differential, ABI and actual x86/x64
 setter/StateBlock checks pass. [H257](../../../docs/perfomance/present-pacing/present-pacing-pe-constant-copy.257.md)
 records sampler-OFF 05/06 GT2 spot checks at `5d764f37`: 29.052/18.083 FPS,
 with zero recorded renderer failures. 06 r1 is excluded for user interference;
-r2 rounds to README 18.1, but 05 remains below 30.1. Current full PE profiles,
-measured CPU savings and repeatable recovery remain open. The byte-copy
-change adds no new state transition or concurrency-proof claim.
+r2 rounds to README 18.1, but 05 remains below 30.1. Separate full profiles
+retain all 1,378/872 PE samples, with zero omission, overflow or sampler
+failures. Exact CPU attribution, measured savings and repeatable recovery
+remain open. The byte-copy change adds no new state transition or
+concurrency-proof claim.
 
 R-CORE-REC-7.60 immutable AUTOGEN-bound-slot elision is implemented, with
 bounded native refinement, linked PE empty-branch checks and x86/x64 PE

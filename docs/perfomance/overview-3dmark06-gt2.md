@@ -19,8 +19,10 @@ with more than 100 draws exclude loading but retain slow scene frames. Zero
 recorded chunk/GPU/pipeline failures, 4.002 CB and 19.861 passes per frame
 preserve the locality signature. Bounded constant copying has native, linked
 PE and actual setter/StateBlock evidence, not a measured CPU or FPS gain.
-Separate current PE profiles and repeatability remain open. The earlier
-phase/GPU ownership below belongs to its August build, not a current re-profile.
+Its separate full PE profile retains all 872 samples with no omission,
+overflow or sampler failures; 214 cross-symbol samples remain unassigned.
+CPU-cost attribution and repeatability remain open. The earlier phase/GPU
+ownership below belongs to its August build, not a current re-profile.
 
 > **Historical verdict at `b4b77cb8`: replay and encode serialization are the
 > strongest measured owners.** GT2 is the best of these four scenes for a
