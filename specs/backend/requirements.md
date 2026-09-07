@@ -384,10 +384,9 @@ flipped to ON on 2026-07-10 (`d45af067`) — see the `specs/backend/gap.md`
 **R-BACK-2.52** *(Inline const delta contract.)* The experimental-candidate
 inline-const-delta wire mode (`DXMT9_PE_INLINE_CONST_DELTA`, read once at first
 use) must
-(a) when the flag is unset, keep replay behavior identical, keep every
-pre-existing packet field at its pre-change offset, and append zero
-const-payload bytes (the fixed per-section `{valid,start,count}` header block
-is an additive tail whose cross-build safety clause (g) gates);
+(a) when the flag is unset, drain consumed dirty constant ranges as standalone
+canonical records before the draw, without adding inline constant sections;
+both modes use the same canonical wire schema and non-constant field layout;
 (b) when set, let `Draw*` records carry per-shadow merged
 constant-delta sections (VS/PS × float/int/bool, each `{valid, startRegister,
 registerCount}` plus payload, mirroring the `D9CCommandRecordSetConst`
@@ -404,11 +403,14 @@ constants (`ProcessVertices`, chunk-barrier and chunk-end const drains) — the
 inline path may fold only constants that the carrying draw consumes; (f) not
 introduce new draw-run break classes: a const-bearing packet may break a
 coalesced run at most where the equivalent standalone const record breaks it
-today; and (g) bump the PE/unix wire schema so the existing
-`DXMT9_WINEMETAL_CALL_ABI_HASH` handshake refuses mixed builds. Verified by
-the PE record byte-pinning specs (off-path unchanged plus new inline-section
-rows) and an on/off replay-equivalence spec following the
-`pe_full_snapshot_equivalence_spec` pattern.
+today; and (g) preserve the canonical section grammar and PE/unix schema
+agreement enforced by `DXMT9_WINEMETAL_CALL_ABI_HASH`. Selecting this existing
+representation is not a schema change; any future layout change must update
+the schema and reject mixed builds. Verification must connect real PE owner
+emission to production replay in both current direct and compatibility paths,
+checking all six effective constant files at each ordered draw against an
+independent reference. Raw wire equality, decoder-only sinks and uniform
+handle/hash equality alone cannot establish this representation equivalence.
 
 **R-BACK-2.53** *(Retired wire grammar absent.)* Production PE and unix code
 must not declare, advertise, negotiate, produce, import, or replay the retired

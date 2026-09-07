@@ -29,6 +29,13 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H264](present-pacing-inline-constant-replay.264.md) adds a bounded real
+producer→replay→Slot oracle: 256 route/mask executions, 1,024 ordered draws,
+independent six-family bytes/counts and a failing production BOOL mutant.
+Restored arm64 7/7 and x86_64 8/8 pass. This closes the stated native domain,
+not PE env-selector/worker/GPU coverage or the policy's CPU/FPS economy.
+Inline constants remain default-off.
+
 [H263](present-pacing-pe-retain-fault.263.md) fixes a pre-existing loss of
 injected retain HRESULT at the semantic-owner adapter. Twelve real PE fault
 cases pass across both widths and inline modes. The final-draw/pixel and

@@ -548,11 +548,17 @@ owning gap row. The mechanics:
   packet bounds violations.
 - **Verification**: producer differential tests bind the compact plan, real
   owner admission, settlement and canonical emission; record validation and
-  replay tests cover section bounds and pre-draw application. Host fixtures
-  select their inline mode explicitly and do not prove the PE environment
-  selector. Promotion additionally requires effective-state-per-draw
-  equivalence through production replay, current failure/retry and pixel
-  evidence, ABI-matched PE runtime checks, and repeated observer-OFF
+  replay tests cover section bounds and pre-draw application.
+  `dxmt9-inline-constant-replay-spec` connects both real owner representations
+  through `prepareOffloadChunk`/`replayRawChunk` to final `SourcePayloadView`
+  bytes in direct/CPU-ready and ordinary compatibility paths. Its bounded
+  64-family-mask domain pins repeated draws, A-B-A, partial/overlapping writes,
+  unchanged holes, bool normalization, draw identity and accepted-path receipts.
+  It is a synchronous native queue fixture with scanner-only shader refs,
+  not a worker-interleaving or GPU shader oracle. Host fixtures select inline
+  mode explicitly and do not prove the PE environment selector. Promotion
+  additionally requires broader consumer/boundary and failure/retry coverage,
+  deterministic pixels, ABI-matched PE runtime checks, and repeated observer-OFF
   performance. Decimated owner timings are diagnostic only: the observed
   wrapper differs from the unobserved constant specialization, and nested
   clocks/reconstruction remain after null-pair correction.

@@ -13,6 +13,15 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-BACK-2.52's native producer-to-final-Slot equivalence now covers 64
+six-family masks, explicit OFF/ON representations and direct/ordinary replay
+routes. [H264](../../../docs/perfomance/present-pacing/present-pacing-inline-constant-replay.264.md)
+records exact draw/byte/count receipts and a failing later-VS_BOOL mutation,
+then restored arm64 7/7 and x86_64 8/8. This is synchronous native production
+code, not PE COM/env-selector or Metal pixel evidence. Wider register/layout,
+consumer-boundary/failure traces and repeatable CPU/FPS economy remain open;
+inline default stays OFF.
+
 R-CORE-REC-7.5's unique-retain injected HRESULT now survives failed owner
 admission and successful recorder rollback. The cold receipt is consumed only
 on failed append exits; rollback/invariant failure retains fail-stop precedence.

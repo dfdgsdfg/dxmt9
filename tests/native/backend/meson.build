@@ -434,6 +434,27 @@ test('dxmt9-cpu-ready-production-routing-spec',
        'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
      ])
 
+# R-BACK-2.52 inline-constant replay equivalence.  The fixture drives the
+# production PE producer/semantic owner into ExactFixed, then uses the real
+# offload preparation/replay and SourcePayloadView to compare six constant
+# families at each logical draw under both direct-slot and compatibility paths.
+inline_constant_replay_spec = executable(
+  'dxmt9-inline-constant-replay-spec',
+  [
+    'inline_constant_replay_spec.cpp',
+    '../../../src/d3d9/d3d9_pe_producer.cpp',
+  ],
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  cpp_args: ['-DDXMT9_PE_SHADOW_TEST_SEAM=1'],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-inline-constant-replay-spec', inline_constant_replay_spec,
+     env: dxmt9_native_test_env_vars + [
+       'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
+     ])
+
 cpu_ready_session_join_spec = executable(
   'dxmt9-cpu-ready-session-join-spec',
   'cpu_ready_session_join_spec.cpp',
