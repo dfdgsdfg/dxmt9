@@ -29,6 +29,13 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H265](present-pacing-inline-constant-pixels.265.md) binds the real PE selector
+to executable SM3 pixels and exact append receipts across both PE widths and
+replay modes. All eight processes pass 576 sampled pixels. Omitting the
+production inline VS-bool update fails the two predicted B pixels, while
+standalone OFF and UP controls remain correct. No CPU/FPS gain or default
+promotion is inferred; wider consumer/layout and economy gates remain open.
+
 [H264](present-pacing-inline-constant-replay.264.md) adds a bounded real
 producer→replay→Slot oracle: 256 route/mask executions, 1,024 ordered draws,
 independent six-family bytes/counts and a failing production BOOL mutant.

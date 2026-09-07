@@ -11,11 +11,18 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H265](present-pacing-inline-constant-pixels.265.md) adds real PE32/PE64
+OFF/ON and synchronous/worker pixel checks: 576 exact sampled pixels,
+qualified record counts and a deliberately failing production inline-BOOL
+mutation with a passing OFF control. UP remains a standalone control.
+Wider boundaries and repeatable CPU economy remain open; default stays OFF.
+
 Native policy prerequisite [H264](present-pacing-inline-constant-replay.264.md)
 connects inline/standalone owner emission to final draw bytes across 64
 constant-family masks and both replay routes. A dropped production BOOL delta
-fails deterministically; restored arm64/x86_64 tests pass. Pixels, broader
-consumer boundaries and repeatable CPU savings remain open; default stays OFF.
+fails deterministically; restored arm64/x86_64 tests pass. Its native scope
+complements H265's bounded pixels; broader consumer boundaries and repeatable
+CPU savings remain open.
 
 Correctness prerequisite [H263](present-pacing-pe-retain-fault.263.md) restores
 the injected retain HRESULT through owner rollback. Twelve PE32/PE64 Wine

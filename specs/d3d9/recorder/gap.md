@@ -13,6 +13,17 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H265](../../../docs/perfomance/present-pacing/present-pacing-inline-constant-pixels.265.md)
+adds actual PE32/PE64 builtin SM3 pixel evidence across inline OFF/ON and
+synchronous/worker replay: 576 exact sampled pixels and qualified append,
+staged-image and device-teardown receipts. A dropped production inline VS-bool
+transition fails only the expected ordinary/indexed B samples; the same
+mutated provider's OFF control passes. UP stays a standalone-drain control.
+This closes the stated pixel/env-selector domain, not wider layouts, all
+boundaries/interleavings, CPU-ready/app-local coverage or repeated CPU savings.
+The implicit-backbuffer wrapper cycle discovered during fixture cleanup remains
+a separate production lifetime residual. Inline default stays OFF.
+
 R-BACK-2.52's native producer-to-final-Slot equivalence now covers 64
 six-family masks, explicit OFF/ON representations and direct/ordinary replay
 routes. [H264](../../../docs/perfomance/present-pacing/present-pacing-inline-constant-replay.264.md)

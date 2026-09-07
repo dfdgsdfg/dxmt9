@@ -1,0 +1,309 @@
+{
+  "schema": 1,
+  "scope": "Builtin Sikarugir cx-24.0.7; bounded actual PE SM3 pixels, not all layouts/interleavings/performance",
+  "source_head": "26f7d8fb",
+  "fixture_source": "tests/conformance/d3d9/d3d9_inline_constants.cpp",
+  "source_sha256": "607cb634ce8722cce010a5fb81ff8eeda93b38334f179f6cb27acd8334dbbb40",
+  "fixture_sha256": {
+    "x86": "c9630899dcc32b7d2bc95849a0bb538898e17b879c588f41141c351974caca92",
+    "x64": "4a926a132bf2e2c4e4f021c1cb45a9689425446f48e6cd287306d2b983326f39"
+  },
+  "runtime_images": {
+    "win32-x86-builtin/src/win32/d3d9.dll": {
+      "sha256": "66225accd97cfb6178f6bf7fb90b9e3e9f306d11f60ba07c3e144c47be4efe0e",
+      "bytes": 1906688
+    },
+    "win32-x86-builtin/src/winemetal/winemetal_dxmt9.dll": {
+      "sha256": "e31242c3d6c67e9a9f2cc9c9c49a06ad6d076b68d11801b41ce49be19a2067a7",
+      "bytes": 140800
+    },
+    "x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so": {
+      "sha256": "e4543457d6992f1a2a8a088a590e75170360d8938e4c4aeda582ab3b1da4a09a",
+      "bytes": 9786432
+    },
+    "win32-x64-builtin/src/win32/d3d9.dll": {
+      "sha256": "f4f9308eb5e5b225aee243eaf7b1be8ea8e09b9ffb72b01329900e2872f95f74",
+      "bytes": 1774592
+    },
+    "win32-x64-builtin/src/winemetal/winemetal_dxmt9.dll": {
+      "sha256": "cc46aabe669695132f29bd6836401006f343da23b07bae8a4c2aae987806c00b",
+      "bytes": 145920
+    }
+  },
+  "processes": 8,
+  "draws": 576,
+  "exact_sampled_pixels": 576,
+  "rows": [
+    {
+      "label": "x86-off-offload0-r5",
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 6,
+        "append_vsconst_calls": 19,
+        "append_psconst_calls": 19,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "draw_calls": 72,
+      "command_chunk_records": 118,
+      "worker_samples": 0,
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "qualification_sha256": "6bf660a878164367c2ae35b16339108e84573ba31f54b9d0300aa0ce28cbf671"
+    },
+    {
+      "label": "x86-on-offload0-r5",
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 6,
+        "append_vsconst_calls": 6,
+        "append_psconst_calls": 6,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "draw_calls": 72,
+      "command_chunk_records": 92,
+      "worker_samples": 0,
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "qualification_sha256": "bc2c98eb3bb536a7981cbe23cc6a80570bc640052d7697a5c5212fec1e9122ad"
+    },
+    {
+      "label": "x86-off-offload1-r5",
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 6,
+        "append_vsconst_calls": 19,
+        "append_psconst_calls": 19,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "draw_calls": 72,
+      "command_chunk_records": 118,
+      "worker_samples": 4,
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "qualification_sha256": "a45784dfff7e423e3f5e00484ba9f0b6f654b02e051f554c7a4997c14e85438a"
+    },
+    {
+      "label": "x86-on-offload1-r5",
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 6,
+        "append_vsconst_calls": 6,
+        "append_psconst_calls": 6,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "draw_calls": 72,
+      "command_chunk_records": 92,
+      "worker_samples": 4,
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "qualification_sha256": "4a1a62770502f7ed885e1c87f6799b97464ef33c1edaa86d43c116b20d7a3a58"
+    },
+    {
+      "label": "x64-off-offload0-r5",
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 6,
+        "append_vsconst_calls": 19,
+        "append_psconst_calls": 19,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "draw_calls": 72,
+      "command_chunk_records": 118,
+      "worker_samples": 0,
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "qualification_sha256": "c1471d231b5fa83ad04608a8cda3f19c86fd2fcfee99c1a7addacd0249c497d2"
+    },
+    {
+      "label": "x64-on-offload0-r5",
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 6,
+        "append_vsconst_calls": 6,
+        "append_psconst_calls": 6,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "draw_calls": 72,
+      "command_chunk_records": 92,
+      "worker_samples": 0,
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "qualification_sha256": "edfff175af1550b6cab04ba492fae82c1b7437a37c1b8c50398988522a6ecf86"
+    },
+    {
+      "label": "x64-off-offload1-r5",
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 6,
+        "append_vsconst_calls": 19,
+        "append_psconst_calls": 19,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "draw_calls": 72,
+      "command_chunk_records": 118,
+      "worker_samples": 4,
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "qualification_sha256": "88f7fb5898faf9e2c2bcdb73a5dbccdd39fbed2a42a75813cab67ef3bdd1ed60"
+    },
+    {
+      "label": "x64-on-offload1-r5",
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 6,
+        "append_vsconst_calls": 6,
+        "append_psconst_calls": 6,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "draw_calls": 72,
+      "command_chunk_records": 92,
+      "worker_samples": 4,
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "qualification_sha256": "e2641a3daaf165a2ae261e23c44922144d2edcf0d89e8bcb32f4b6411220badf"
+    }
+  ],
+  "expected_pixel_signatures": [
+    "PIXEL_SIGNATURE path=vb family=vs_float row=0 values=0xff293d52,0xff293d52,0xff47384f,0xff293d52 expected=0xff293d52,0xff293d52,0xff47384f,0xff293d52",
+    "PIXEL_SIGNATURE path=vb family=vs_int row=1 values=0xff293d52,0xff293d52,0xff4f3d52,0xff293d52 expected=0xff293d52,0xff293d52,0xff4f3d52,0xff293d52",
+    "PIXEL_SIGNATURE path=vb family=vs_bool row=2 values=0xff293d52,0xff293d52,0xff295752,0xff293d52 expected=0xff293d52,0xff293d52,0xff295752,0xff293d52",
+    "PIXEL_SIGNATURE path=vb family=ps_float row=3 values=0xff293d52,0xff293d52,0xff2e5247,0xff293d52 expected=0xff293d52,0xff293d52,0xff2e5247,0xff293d52",
+    "PIXEL_SIGNATURE path=vb family=ps_int row=4 values=0xff293d52,0xff293d52,0xff293d6e,0xff293d52 expected=0xff293d52,0xff293d52,0xff293d6e,0xff293d52",
+    "PIXEL_SIGNATURE path=vb family=ps_bool row=5 values=0xff293d52,0xff293d52,0xff3d3d52,0xff293d52 expected=0xff293d52,0xff293d52,0xff3d3d52,0xff293d52",
+    "PIXEL_SIGNATURE path=indexed family=vs_float row=6 values=0xff293d52,0xff293d52,0xff47384f,0xff293d52 expected=0xff293d52,0xff293d52,0xff47384f,0xff293d52",
+    "PIXEL_SIGNATURE path=indexed family=vs_int row=7 values=0xff293d52,0xff293d52,0xff4f3d52,0xff293d52 expected=0xff293d52,0xff293d52,0xff4f3d52,0xff293d52",
+    "PIXEL_SIGNATURE path=indexed family=vs_bool row=8 values=0xff293d52,0xff293d52,0xff295752,0xff293d52 expected=0xff293d52,0xff293d52,0xff295752,0xff293d52",
+    "PIXEL_SIGNATURE path=indexed family=ps_float row=9 values=0xff293d52,0xff293d52,0xff2e5247,0xff293d52 expected=0xff293d52,0xff293d52,0xff2e5247,0xff293d52",
+    "PIXEL_SIGNATURE path=indexed family=ps_int row=10 values=0xff293d52,0xff293d52,0xff293d6e,0xff293d52 expected=0xff293d52,0xff293d52,0xff293d6e,0xff293d52",
+    "PIXEL_SIGNATURE path=indexed family=ps_bool row=11 values=0xff293d52,0xff293d52,0xff3d3d52,0xff293d52 expected=0xff293d52,0xff293d52,0xff3d3d52,0xff293d52",
+    "PIXEL_SIGNATURE path=up family=vs_float row=12 values=0xff293d52,0xff293d52,0xff47384f,0xff293d52 expected=0xff293d52,0xff293d52,0xff47384f,0xff293d52",
+    "PIXEL_SIGNATURE path=up family=vs_int row=13 values=0xff293d52,0xff293d52,0xff4f3d52,0xff293d52 expected=0xff293d52,0xff293d52,0xff4f3d52,0xff293d52",
+    "PIXEL_SIGNATURE path=up family=vs_bool row=14 values=0xff293d52,0xff293d52,0xff295752,0xff293d52 expected=0xff293d52,0xff293d52,0xff295752,0xff293d52",
+    "PIXEL_SIGNATURE path=up family=ps_float row=15 values=0xff293d52,0xff293d52,0xff2e5247,0xff293d52 expected=0xff293d52,0xff293d52,0xff2e5247,0xff293d52",
+    "PIXEL_SIGNATURE path=up family=ps_int row=16 values=0xff293d52,0xff293d52,0xff293d6e,0xff293d52 expected=0xff293d52,0xff293d52,0xff293d6e,0xff293d52",
+    "PIXEL_SIGNATURE path=up family=ps_bool row=17 values=0xff293d52,0xff293d52,0xff3d3d52,0xff293d52 expected=0xff293d52,0xff293d52,0xff3d3d52,0xff293d52"
+  ],
+  "negative_control": {
+    "patch_artifact": "experiments/output/pe-inline-constant-pixels-20260908/analysis/negative-inline-vs-bool.patch",
+    "mutation": "Sparse DeviceReplaySink::setConstants: skip VS_CONST_B starting at register zero",
+    "mutated_provider": {
+      "sha256": "97a7d228061d894e4e3fab36c974c3b38615c59e0fb7829b9e3a790885eedbeb",
+      "bytes": 9786432
+    },
+    "staged_images_match": true,
+    "on_qualified": false,
+    "on_verdicts": {
+      "run_pixel_oracle": "fail"
+    },
+    "failed_pixel_rows": [
+      "PIXEL_SIGNATURE path=vb family=vs_bool row=2 values=0xff293d52,0xff293d52,0xff293d52,FAIL:427: color_near(actual, expected, 3u)",
+      "PIXEL_SIGNATURE path=indexed family=vs_bool row=8 values=0xff293d52,0xff293d52,0xff293d52,FAIL:427: color_near(actual, expected, 3u)"
+    ],
+    "off_qualified": true,
+    "restored_qualified": true,
+    "restored_provider_sha256": "e4543457d6992f1a2a8a088a590e75170360d8938e4c4aeda582ab3b1da4a09a",
+    "restored_source_sha256": "02a8ff6594ffd4b8a7e26394fb8052f1c4d7fc1b61f7322274e688accb4fda4d"
+  },
+  "raw_artifacts": "experiments/output/pe-inline-constant-pixels-20260908/analysis",
+  "native_tests": {
+    "arm64": "5/5",
+    "x86_64": "6/6"
+  },
+  "exclusions": [
+    "App-local",
+    "CPU-ready Tape",
+    "all register/layout/consumer/failure combinations",
+    "whole-image comparison",
+    "interleaving enumeration",
+    "CPU/FPS gain"
+  ],
+  "provenance_note": "Compact retained verdict; raw logs, run recipes and per-run qualifications are local experiment artifacts, not substituted by this summary."
+}

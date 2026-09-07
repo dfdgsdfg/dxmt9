@@ -556,9 +556,12 @@ owning gap row. The mechanics:
   unchanged holes, bool normalization, draw identity and accepted-path receipts.
   It is a synchronous native queue fixture with scanner-only shader refs,
   not a worker-interleaving or GPU shader oracle. Host fixtures select inline
-  mode explicitly and do not prove the PE environment selector. Promotion
-  additionally requires broader consumer/boundary and failure/retry coverage,
-  deterministic pixels, ABI-matched PE runtime checks, and repeated observer-OFF
+  mode explicitly and do not prove the PE environment selector. The separate
+  `d3d9_inline_constants` PE fixture executes SM3 A-A-B-A pixels for all six
+  files through ordinary/indexed draws and a standalone-UP control. Its OFF/ON
+  matrix requires actual append-count and staged-image receipts, not only the
+  selected environment. Promotion additionally requires broader register/layout,
+  consumer/boundary and failure/retry coverage, deployment breadth and repeated observer-OFF
   performance. Decimated owner timings are diagnostic only: the observed
   wrapper differs from the unobserved constant specialization, and nested
   clocks/reconstruction remain after null-pair correction.
