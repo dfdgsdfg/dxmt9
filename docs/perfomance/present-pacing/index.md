@@ -5,13 +5,21 @@ title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
 updated: 2026-09-07
-source: docs/perfomance/present-pacing/present-pacing-pe-canonical-authority.253.md; docs/perfomance/present-pacing/present-pacing-pe-append-effects.251.md; docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md; docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
+source: docs/perfomance/present-pacing/present-pacing-pe-constant-bitcompare.254.md; docs/perfomance/present-pacing/present-pacing-pe-canonical-authority.253.md; docs/perfomance/present-pacing/present-pacing-pe-append-effects.251.md; docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md; docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest implementation: [H253](present-pacing-pe-canonical-authority.253.md)
+Latest implementation: [H254](present-pacing-pe-constant-bitcompare.254.md)
+replaces short-circuit 16-byte constant equality with a bitwise reduction;
+both linked PE images vectorize it, with native/ABI checks passing. One
+post-commit perf run per product gives 05 GT2 29.500 and 06 GT2 17.958 FPS
+(prior 29.009/17.926), with zero chunk/GPU/pipeline failures. This is not
+attributed gain, README recovery or CPU-consumption reduction. The leaf owns
+actual PE sampling, instruction-layout joins and partial process CPU evidence.
+
+Previous implementation: [H253](present-pacing-pe-canonical-authority.253.md)
 gates OFF constant-range queries, groups source authority, reuses retained
 Live bindings and replaces paired owner pin indexes with one checked relation.
 Native/linked verification and code/stack tradeoffs are recorded there.

@@ -11,7 +11,15 @@ related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; 
 
 # 3DMark05 GT2 Performance — Current Baseline
 
-The latest implementation [H253](present-pacing/present-pacing-pe-canonical-authority.253.md)
+The latest implementation [H254](present-pacing/present-pacing-pe-constant-bitcompare.254.md)
+vectorizes bitwise 16-byte constant equality in both PE images. Native/ABI
+checks pass; the post-commit spot check is 29.500 sampled FPS versus 29.009
+previously (+1.69%), below README 30.1, with zero chunk/GPU/pipeline failures
+and 4.001 CB / 15.783 passes per frame. Single-run variation and baseline
+background CPU load prevent attribution. The leaf records fresh PE PC sampling
+and partial process CPU consumption; no measured CPU reduction is established.
+
+The previous implementation [H253](present-pacing/present-pacing-pe-canonical-authority.253.md)
 gates OFF constant-range queries, groups borrow authority, reuses qualified
 Live bindings and consolidates owner pin indexes. Four builds, native 39/39,
 x86_64 14/14 and unchanged TLA pass. Storage and DLL size shrink, but some

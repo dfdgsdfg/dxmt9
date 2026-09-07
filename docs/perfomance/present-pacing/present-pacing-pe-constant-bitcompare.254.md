@@ -3,9 +3,9 @@ domain: present-pacing
 workload: 3DMark05 GT2; 3DMark06 GT2
 title: "Current PE attribution and branch-reduced constant equality"
 type: evidence
-status: native-linked-verified-runtime-pending
+status: spot-checked-not-promoted
 updated: 2026-09-07
-source: experiments/output/pe-current-attribution-20260907/analysis; experiments/output/app-d3d9-3dmark05-pe-current-attribution-249718d0-gt2-sampler-r1-20260907; experiments/output/app-d3d9-3dmark06-pe-current-attribution-249718d0-gt2-perf-r1-20260907; experiments/output/app-d3d9-3dmark06-pe-current-attribution-249718d0-gt2-sampler-r1-20260907
+source: experiments/output/pe-current-attribution-20260907/analysis; experiments/output/app-d3d9-3dmark05-pe-current-attribution-249718d0-gt2-sampler-r1-20260907; experiments/output/app-d3d9-3dmark06-pe-current-attribution-249718d0-gt2-perf-r1-20260907; experiments/output/app-d3d9-3dmark06-pe-current-attribution-249718d0-gt2-sampler-r1-20260907; experiments/output/app-d3d9-3dmark{05,06}-pe-constant-bitcompare-6c3ca092-gt2-perf-r1-20260907; experiments/output/app-d3d9-3dmark{05,06}-pe-constant-bitcompare-6c3ca092-gt2-sampler-r1-20260907
 related: present-pacing-pe-canonical-authority.253.md; ../overview-3dmark06-gt2.md; ../../../specs/d3d9/recorder/requirements.md
 ---
 
@@ -96,7 +96,89 @@ Candidate PE32 SHA-256:
 PE64 SHA-256:
 `094f4c423bf4da5688d3ed4ee2c0c1e01d34b6bca2759ef8dd550021dd239ec8`.
 
-Runtime gates remain open: fewer branches can lose to the old early exit
-when the first word differs. Fresh actual PE sampling and no-sampler 05/06
-GT2 runs must price that tradeoff. This is not README FPS recovery, reduced
-process CPU consumption, whole-scene pixel proof or a completed PE optimization.
+## Post-commit wild spot checks
+
+Implementation commit is `6c3ca092`. Each product has one sequential perf run,
+with frame sampling ON, PE sampler/detailed timers/copy ledger OFF, and no
+GPU trace. Staged hashes match the linked receipts above; the Unix provider
+and bridge DLLs match the baseline. Resolution is 1024x768 for 05 and
+1280x720 for 06, with Sikarugir cx-24.0.7. A read-only external `ps` observer
+samples process CPU/RSS every two seconds; these are not observer-free runs.
+
+| Product | Baseline FPS | Candidate FPS | Delta | README FPS | Candidate rows / wall ms | CB / frame | Pass / frame |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| 05 GT2 | 29.009 | 29.500 | +1.69% | 30.1 | 1,905 / 64,577.248 | 4.001 | 15.783 |
+| 06 GT2 | 17.926 | 17.958 | +0.18% | 18.1 | 1,151 / 64,093.086 | 4.002 | 19.852 |
+
+05 includes every positive-wall frame; 06 additionally requires more than
+100 draws, as for both 06 references above. Initial slow scene frames stay
+included. GPU command-buffer time from those frame rows is 1.993/11.831ms
+per frame. This completion-attributed counter is not an exclusive GPU wall
+interval. The catalogue process-elapsed FPS and the 06 all-row/loading FPS
+are not used.
+
+Both runs pass with zero chunk rejections, GPU errors, pipeline-build failures
+and no-pipeline skips in their retained counter snapshots. 05 exits normally;
+06's accepted timeout closes the GUI after scene completion. Captured forest
+images at 0:59.45 / 0:30.70 are coherent at those instants, not whole-scene
+pixel or flicker proof. 05 emits a captured `.3dr`; 06 does not. Neither is
+substituted for the consistently defined frame metrics above.
+
+The 05 baseline had an observed `duetexpertd` CPU spike, whereas the candidate
+preflight did not. These single, ordered runs therefore establish neither an
+attributed gain nor noise-qualified neutrality. Both values remain below the
+README targets; the README is unchanged.
+
+### CPU-consumption observation
+
+`analysis/monitor_cpu.py` binds one discovered benchmark PID and records
+Darwin process CPU time, RSS and the latest renderer frame. The retained
+`candidate-measurements.json` is reproduced by `summarize_candidate.py`.
+Only advancing, draw-heavy endpoint pairs before the final frame are used;
+the final-frame pair is excluded because teardown/GUI time could precede
+the process sample. Log frame and process time are not an atomic observation.
+
+| Product | Observed frame increments (endpoints) | CPU seconds / elapsed seconds | Process CPU ms / frame | Average CPU cores | Sampled process RSS peak, KiB |
+|---|---:|---:|---:|---:|---:|
+| 05 GT2 | 1,180 (649–1,829) | 85.17 / 40.171 | 72.178 | 2.120 | 3,477,004 |
+| 06 GT2 | 1,136 (986–2,122) | 108.31 / 62.294 | 95.343 | 1.739 | 3,612,152 |
+
+These are partial-scene process totals across application, PE, Unix and all
+threads, not PE-exclusive costs or comparable intervals across products.
+There is no matched baseline CPU interval; no CPU or RSS reduction is claimed.
+The sampled RSS maximum is not an exact lifetime high-water mark.
+
+### Actual PE sampling after the change
+
+Separate candidate runs use the same 250-Hz sampler and Info logging, never
+FPS promotion. Both have zero suspend/context/resume failures, zero self-PC
+overflow and passing probe containment. The frozen candidate PE32 and
+`05-candidate-pe-symbols.json` / `06-candidate-pe-symbols.json` qualify
+the symbol joins with the staged image SHA-256.
+
+| Product | Candidate samples / last emitted Present | PE samples / thread share | EXE share | Bridge share | Reported self-PC samples / all PE samples |
+|---|---:|---:|---:|---:|---:|
+| 05 GT2 | 13,268 / 1,800 | 1,459 / 11.0% | 69.2% | 11.2% | 344 / 1,459 |
+| 06 GT2 | 14,140 / 2,100 | 922 / 6.5% | 74.8% | 10.1% | 221 / 922 |
+
+The 06 population includes loading and has a different endpoint from the
+baseline's 2,040; it is not a matched scene-only sample. 05 has the same last
+emitted Present, but different total populations and an unobserved final tail.
+Neither whole-module share nor partial top-32 bucket counts prove CPU savings.
+
+The candidate compare loop moved to RVA `0x22fc0`; it has 56/38 samples for
+05/06, versus 55/33 at the baseline compare loop's `0x23040`. Candidate
+`0x23000` now covers scalar copy/dirty work and `0x23040` covers post-loop
+range settlement. Comparing `0x23040` directly across builds would falsely
+report a large compare improvement. Even the symbol-qualified loop buckets
+cover different instruction mixtures; only linked codegen, not a runtime
+compare-cost win, is demonstrated. The unchanged extent guard is at `0x22e40`.
+
+### Remaining gate
+
+Fewer branches can lose to the old early exit when the first word differs.
+Current actual PE sampling must be read against each image's own instruction
+layout; moving a hot bucket is not removing its cost. A matched repeated
+control, with active-interval CPU measurements, is still required to attribute
+gain and close CPU-consumption/FPS recovery. This is not whole-scene pixel
+proof or a completed PE optimization.

@@ -4,14 +4,23 @@ workload: 3DMark06 GT2
 title: "3DMark06 GT2 Performance — Current Bottleneck"
 type: root-overview
 status: current
-updated: 2026-08-26
+updated: 2026-09-07
 source: experiments/output/app-d3d9-3dmark06-dxmt9-off-graphics-r1-20260826; experiments/output/app-d3d9-3dmark06-dxmt9-attribution-gt2-ui-r2-20260826; traces/3dmark06-dxmt9-bottleneck-20260826/gt2/frame1200.gputrace; traces/3dmark06-dxmt9-bottleneck-20260826/gt2/analysis/frame1200-counters-xcode.csv
 related: docs/perfomance/overview-3dmark06-gt1.md; docs/perfomance/overview-3dmark06-hdr1.md; docs/perfomance/overview-3dmark06-hdr2.md; specs/backend/gap.md
 ---
 
 # 3DMark06 GT2 Performance — Current Bottleneck
 
-> **Current verdict at `b4b77cb8`: replay and encode serialization are the
+The latest [H254 PE check](present-pacing/present-pacing-pe-constant-bitcompare.254.md)
+at `6c3ca092` gives 17.958 scene FPS at 1280x720 versus the fresh pre-change
+17.926 (+0.18%) and README 18.1. Positive-wall rows with more than 100 draws
+exclude loading but retain slow scene frames. There are zero chunk/GPU/pipeline
+failures, 4.002 CB and 19.852 passes per scene frame. Separate actual PE PC
+sampling and partial process CPU measurements are recorded in the leaf.
+One run is not attributed gain or CPU reduction. The earlier phase/GPU
+ownership below belongs to its August build and is not a current re-profile.
+
+> **Historical verdict at `b4b77cb8`: replay and encode serialization are the
 > strongest measured owners.** GT2 is the best of these four scenes for a
 > bounded replay/encode overlap or parallel-encode experiment; mixed GPU ALU,
 > texture, and buffer pressure is secondary.

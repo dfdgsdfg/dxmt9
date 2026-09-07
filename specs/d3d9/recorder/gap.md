@@ -19,9 +19,12 @@ loop as a bounded local candidate, not the whole producer bottleneck. Native
 9/9, x86_64 6/6 and observed native 2/2 pass; both linked PE images vectorize
 the comparison while preserving the copy/dirty policy and ABI. See
 [H254](../../../docs/perfomance/present-pacing/present-pacing-pe-constant-bitcompare.254.md).
-Candidate runtime PE attribution, CPU consumption, 05/06 FPS recovery and
-whole-scene correctness remain open. Historical and current profiles must not
-be mixed or treated as causal evidence from one run.
+Post-commit 05/06 GT2 spot checks pass at 29.500/17.958 sampled FPS, with zero
+chunk/GPU/pipeline failures, below README 30.1/18.1. Actual PE PC sampling and
+partial process CPU observations are retained in H254; attribution, measured
+CPU reduction, noise-qualified FPS recovery and whole-scene correctness remain
+open. Historical and current profiles must not be mixed or treated as causal
+evidence from one run.
 
 R-CORE-REC-7.56–7.59 specify OFF inline-constant query elimination, grouped
 source-borrow authority, retained Live binding reuse and an authoritative

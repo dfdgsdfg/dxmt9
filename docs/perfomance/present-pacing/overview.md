@@ -29,7 +29,16 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
-The latest implementation [H253](present-pacing-pe-canonical-authority.253.md)
+The latest implementation [H254](present-pacing-pe-constant-bitcompare.254.md)
+vectorizes exact 16-byte constant equality in both linked PE images, with
+native and ABI checks passing. Fresh 05/06 GT2 spot checks give 29.500/17.958
+FPS, below README 30.1/18.1, with zero chunk/GPU/pipeline failures. Actual
+250-Hz PE samples show no demonstrated compare-cost reduction: the loop moved
+to another RVA, and neither partial bucket counts nor module shares establish
+a runtime win. The leaf preserves partial process CPU/RSS observations;
+matched baseline intervals and repeated performance attribution remain open.
+
+The previous implementation [H253](present-pacing-pe-canonical-authority.253.md)
 removes OFF constant-range queries, duplicates in source borrow authority and
 paired owner pin indexes, and reuses strongly retained same-object Live
 bindings. Four builds, native 39/39, x86_64 14/14 and unchanged TLA pass.
