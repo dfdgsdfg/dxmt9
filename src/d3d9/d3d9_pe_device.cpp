@@ -3,6 +3,7 @@
  * state/draw/present definitions. */
 
 #include "d3d9_pe_device_impl.hpp"
+#include "d3d9_pe_append_preparation.hpp"
 
 // QueryInterface is the key function, so the retained inline hot entries
 // (including D3D9DeviceImpl::Present) and the vtable are emitted by this TU.
@@ -391,6 +392,18 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetTexture(DWORD stage,
     // anything else is D3DERR_INVALIDCALL.
     uint32_t textureSlot = 0;
     if (!fragmentTextureStageSlot(stage, textureSlot)) return D3DERR_INVALIDCALL;
+    const auto retainedBinding = dxmt9::d3d9::pe::PeSemanticRetainedBinding{
+        .ownerDevice = static_cast<const IDirect3DDevice9*>(this),
+        .publicIdentity = textures_[textureSlot],
+        .wire = recorderState_.peBindingView.textures[textureSlot],
+    };
+    if (dxmt9::d3d9::pe::peSemanticCanReuseRetainedBinding(
+            recorderState_.stateBlockTransaction.writeAllowed(),
+            recorderState_.stateBlockTransaction.isRecording(), pTex,
+            retainedBinding, static_cast<const IDirect3DDevice9*>(this),
+            D9C_CHUNK_HANDLE_KIND_TEXTURE)) {
+        return S_OK;
+    }
     D3D9PeValidatedTexture validatedTexture{};
     const HRESULT membershipHr = D3D9PeValidateTexture(
         pTex, static_cast<IDirect3DDevice9*>(this), &validatedTexture);
@@ -530,6 +543,18 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetVertexShader(IDirect3DVertexShader9
         [&](auto& hotSetter) __attribute__((always_inline)) noexcept
             -> HRESULT {
     dxmt9DeviceDebugLog("device_set_vertex_shader device=%p shader=%p", this, pVS);
+    const auto retainedBinding = dxmt9::d3d9::pe::PeSemanticRetainedBinding{
+        .ownerDevice = static_cast<const IDirect3DDevice9*>(this),
+        .publicIdentity = vs_,
+        .wire = recorderState_.peBindingView.vs,
+    };
+    if (dxmt9::d3d9::pe::peSemanticCanReuseRetainedBinding(
+            recorderState_.stateBlockTransaction.writeAllowed(),
+            recorderState_.stateBlockTransaction.isRecording(), pVS,
+            retainedBinding, static_cast<const IDirect3DDevice9*>(this),
+            D9C_CHUNK_HANDLE_KIND_SHADER)) {
+        return S_OK;
+    }
     D3D9PeValidatedVertexShader validatedShader{};
     const HRESULT membershipHr = D3D9PeValidateVertexShader(
         pVS, static_cast<IDirect3DDevice9*>(this), &validatedShader);
@@ -708,6 +733,18 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetIndices(IDirect3DIndexBuffer9* pIBu
         return peCall.finish("SetIndices", hr);
     };
     dxmt9DeviceDebugLog("device_set_indices device=%p ib=%p", this, pIBuf);
+    const auto retainedBinding = dxmt9::d3d9::pe::PeSemanticRetainedBinding{
+        .ownerDevice = static_cast<const IDirect3DDevice9*>(this),
+        .publicIdentity = indexBuf_,
+        .wire = recorderState_.peBindingView.indexBuffer,
+    };
+    if (dxmt9::d3d9::pe::peSemanticCanReuseRetainedBinding(
+            recorderState_.stateBlockTransaction.writeAllowed(),
+            recorderState_.stateBlockTransaction.isRecording(), pIBuf,
+            retainedBinding, static_cast<const IDirect3DDevice9*>(this),
+            D9C_CHUNK_HANDLE_KIND_BUFFER)) {
+        return peCall.finish("SetIndices", S_OK);
+    }
     D3D9PeValidatedIndexBuffer validatedBuffer{};
     const HRESULT membershipHr = D3D9PeValidateIndexBuffer(
         pIBuf, static_cast<IDirect3DDevice9*>(this), &validatedBuffer);
@@ -741,6 +778,18 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetPixelShader(IDirect3DPixelShader9* 
         [&](auto& hotSetter) __attribute__((always_inline)) noexcept
             -> HRESULT {
     dxmt9DeviceDebugLog("device_set_pixel_shader device=%p shader=%p", this, pPS);
+    const auto retainedBinding = dxmt9::d3d9::pe::PeSemanticRetainedBinding{
+        .ownerDevice = static_cast<const IDirect3DDevice9*>(this),
+        .publicIdentity = ps_,
+        .wire = recorderState_.peBindingView.ps,
+    };
+    if (dxmt9::d3d9::pe::peSemanticCanReuseRetainedBinding(
+            recorderState_.stateBlockTransaction.writeAllowed(),
+            recorderState_.stateBlockTransaction.isRecording(), pPS,
+            retainedBinding, static_cast<const IDirect3DDevice9*>(this),
+            D9C_CHUNK_HANDLE_KIND_SHADER)) {
+        return S_OK;
+    }
     D3D9PeValidatedPixelShader validatedShader{};
     const HRESULT membershipHr = D3D9PeValidatePixelShader(
         pPS, static_cast<IDirect3DDevice9*>(this), &validatedShader);
@@ -1808,8 +1857,11 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT st
         return appendRecord(
             D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
             kStableDrawPrimitiveCadenceBytes +
-                dxmt9::d3d9::pe::sparseStateInputConstantPayloadBytes(
-                    recorderState_.peSparseState));
+                dxmt9::d3d9::pe::peSemanticConstantPayloadBytes(
+                    inlineConstDelta, [&]() noexcept {
+                      return dxmt9::d3d9::pe::sparseStateInputConstantPayloadBytes(
+                          recorderState_.peSparseState);
+                    }));
     }
     std::size_t constantPayloadBytes = 0u;
     const bool built = recorderLock.withCapability(
@@ -1820,11 +1872,17 @@ HRESULT D3D9DeviceImpl::appendDrawPrimitiveRecord(D3DPRIMITIVETYPE type, UINT st
                                               inlineConstDelta)) {
             return false;
           }
-          const auto* const source =
-              semanticRecorderState_->stagedSparsePlan.source(access);
-          if (!source) return false;
-          constantPayloadBytes =
-              dxmt9::d3d9::pe::sparseStatePlanConstantPayloadBytes(*source);
+          if (inlineConstDelta) {
+            const auto* const source =
+                semanticRecorderState_->stagedSparsePlan.source(access);
+            if (!source) return false;
+            constantPayloadBytes =
+                dxmt9::d3d9::pe::peSemanticConstantPayloadBytes(
+                    true, [&]() noexcept {
+                      return dxmt9::d3d9::pe::sparseStatePlanConstantPayloadBytes(
+                          *source);
+                    });
+          }
           return true;
         });
     if (!built)
@@ -1873,8 +1931,11 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveRecord(D3DPRIMITIVETYPE type,
         return appendRecord(
             D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
             kStableDrawIndexedPrimitiveCadenceBytes +
-                dxmt9::d3d9::pe::sparseStateInputConstantPayloadBytes(
-                    recorderState_.peSparseState));
+                dxmt9::d3d9::pe::peSemanticConstantPayloadBytes(
+                    inlineConstDelta, [&]() noexcept {
+                      return dxmt9::d3d9::pe::sparseStateInputConstantPayloadBytes(
+                          recorderState_.peSparseState);
+                    }));
     }
     std::size_t constantPayloadBytes = 0u;
     const bool built = recorderLock.withCapability(
@@ -1885,11 +1946,17 @@ HRESULT D3D9DeviceImpl::appendDrawIndexedPrimitiveRecord(D3DPRIMITIVETYPE type,
                                               inlineConstDelta)) {
             return false;
           }
-          const auto* const source =
-              semanticRecorderState_->stagedSparsePlan.source(access);
-          if (!source) return false;
-          constantPayloadBytes =
-              dxmt9::d3d9::pe::sparseStatePlanConstantPayloadBytes(*source);
+          if (inlineConstDelta) {
+            const auto* const source =
+                semanticRecorderState_->stagedSparsePlan.source(access);
+            if (!source) return false;
+            constantPayloadBytes =
+                dxmt9::d3d9::pe::peSemanticConstantPayloadBytes(
+                    true, [&]() noexcept {
+                      return dxmt9::d3d9::pe::sparseStatePlanConstantPayloadBytes(
+                          *source);
+                    });
+          }
           return true;
         });
     if (!built)

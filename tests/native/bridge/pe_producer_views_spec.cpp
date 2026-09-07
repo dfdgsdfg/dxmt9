@@ -16,6 +16,7 @@
 #include <string>
 #include <span>
 #include <string_view>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -85,6 +86,41 @@ concept HasUnqualifiedSparsePlanSettlementVisitor = requires(Plan& plan) {
 };
 
 template <typename Plan>
+concept AcceptsEscapingSparsePlanSources = requires(
+    const Plan& plan, const pe::RecorderLockCapability& access) {
+  plan.withQualifiedSources(
+      access, [](const typename Plan::QualifiedSources& sources) noexcept
+          -> const void* { return &sources; });
+};
+
+template <typename Plan>
+concept AcceptsEscapingSparsePlanBinding = requires(
+    const Plan& plan, const pe::RecorderLockCapability& access) {
+  plan.withBindingSource(
+      access, [](const pe::PeBindingView& bindings) noexcept -> const void* {
+        return &bindings;
+      });
+};
+
+template <typename Plan>
+concept AcceptsEscapingSparsePlanEmit = requires(
+    const Plan& plan, const pe::RecorderLockCapability& access) {
+  plan.withEmitSources(
+      access, [](const PeHotStateShadow&, const pe::PeBindingView&) noexcept
+          -> const void* { return nullptr; });
+};
+
+template <typename Plan>
+concept AcceptsEscapingSparsePlanSettlement = requires(
+    const Plan& plan, const pe::RecorderLockCapability& access) {
+  plan.withSettlementSources(
+      access, [](const PeHotStateShadow&, PeConstShadowBlock&,
+                 const pe::PeBindingView&) noexcept -> const void* {
+        return nullptr;
+      });
+};
+
+template <typename Plan>
 concept HasUnqualifiedSparsePlanFinalizer = requires(
     Plan& plan, const pe::PeChunkContext& chunk) {
   pe::finalizeSparseStatePlanChunkContext(chunk, plan);
@@ -116,6 +152,10 @@ void sparsePlanAuthorityHasNoPublicWriter() {
   static_assert(!HasUnqualifiedSparsePlanEmitVisitor<pe::SparseStatePlan>);
   static_assert(!HasUnqualifiedSparsePlanSettlementVisitor<pe::SparseStatePlan>);
   static_assert(!HasUnqualifiedSparsePlanFinalizer<pe::SparseStatePlan>);
+  static_assert(!AcceptsEscapingSparsePlanSources<pe::SparseStatePlan>);
+  static_assert(!AcceptsEscapingSparsePlanBinding<pe::SparseStatePlan>);
+  static_assert(!AcceptsEscapingSparsePlanEmit<pe::SparseStatePlan>);
+  static_assert(!AcceptsEscapingSparsePlanSettlement<pe::SparseStatePlan>);
   static_assert(!std::is_copy_constructible_v<
                 pe::SparseStatePlan::QualifiedSources>);
   static_assert(!std::is_move_constructible_v<
@@ -200,6 +240,192 @@ void sparsePlanSourceRequiresFreshMatchingAuthority() {
                      plan.source(access) != nullptr;
             }),
         "rebuilding under fresh authority restores source access");
+}
+
+void sparsePlanGroupedBorrowMatchesIndependentDomain() {
+  struct IndependentDomain {
+    const dxmt9::core::ThreadOwnershipToken* owner = nullptr;
+    const std::uint64_t* epoch = nullptr;
+    std::uint64_t issuedEpoch = 0u;
+    pe::RecorderAccessLane lane = pe::RecorderAccessLane::Denied;
+    bool hasSources = false;
+    bool pendingTicketValid = false;
+
+    bool validFor(const dxmt9::core::ThreadOwnershipToken& candidateOwner,
+                  const std::uint64_t& candidateEpoch,
+                  std::uint64_t candidateEpochValue,
+                  pe::RecorderAccessLane candidateLane) const noexcept {
+      return hasSources && pendingTicketValid && owner == &candidateOwner &&
+             epoch == &candidateEpoch && issuedEpoch == candidateEpochValue &&
+             lane == candidateLane && lane != pe::RecorderAccessLane::Denied;
+    }
+  };
+
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken owner;
+  dxmt9::core::ThreadOwnershipToken otherOwner;
+  std::uint64_t epoch = 11u;
+  PeHotStateShadow shadow{};
+  PeConstShadowBlock constants{};
+  pe::PeBindingView bindings{};
+  pe::PeDrawParams params{};
+  params.recordType = D9C_COMMAND_RECORD_APPLY_STATE;
+  pe::SparseStatePlan plan{};
+  pe::RecorderLockGuard ownerGuard(mutex, false);
+
+  check(ownerGuard.withCapability(
+            owner, epoch, [&](const auto& access) noexcept {
+              return pe::buildSparseStatePlan(
+                  access, shadow, constants, bindings, {}, params, false,
+                  false, plan);
+            }),
+        "grouped borrow test prepares through the production plan");
+  const IndependentDomain reference{
+      .owner = &owner,
+      .epoch = &epoch,
+      .issuedEpoch = epoch,
+      .lane = pe::RecorderAccessLane::Owner,
+      .hasSources = true,
+      .pendingTicketValid = true,
+  };
+
+  auto compare = [&](const char* message,
+                     const dxmt9::core::ThreadOwnershipToken& candidateOwner,
+                     const std::uint64_t& candidateEpoch,
+                     std::uint64_t candidateEpochValue,
+                     pe::RecorderAccessLane candidateLane) {
+    pe::RecorderLockGuard candidateGuard(
+        mutex, candidateLane == pe::RecorderAccessLane::Locked);
+    bool production = false;
+    bool exactReferences = false;
+    const bool invoked = candidateGuard.withCapability(
+        candidateOwner, candidateEpoch, [&](const auto& access) noexcept {
+          production = plan.withQualifiedSources(
+              access, [&](const pe::SparseStatePlan::QualifiedSources& sources)
+                          noexcept {
+                            exactReferences = &sources.shadow == &shadow &&
+                                         &sources.constants == &constants &&
+                                         &sources.bindings == &bindings;
+                          });
+          return production;
+        });
+    const bool expected = reference.validFor(
+        candidateOwner, candidateEpoch, candidateEpochValue, candidateLane);
+    check(invoked == expected && production == expected &&
+              exactReferences == expected, message);
+  };
+
+  compare("fresh owner domain exposes all exact typed references", owner, epoch,
+          epoch, pe::RecorderAccessLane::Owner);
+  compare("wrong owner is rejected by the grouped domain", otherOwner, epoch,
+          epoch, pe::RecorderAccessLane::Owner);
+
+  std::uint64_t sameValueEpoch = epoch;
+  compare("same epoch value at another address is rejected", owner,
+          sameValueEpoch, sameValueEpoch, pe::RecorderAccessLane::Owner);
+
+  ++epoch;
+  compare("changed epoch at the same address is rejected", owner, epoch, epoch,
+          pe::RecorderAccessLane::Owner);
+  --epoch;
+  compare("owner-lane source is rejected in the locked lane", owner, epoch,
+          epoch, pe::RecorderAccessLane::Locked);
+
+#ifndef NDEBUG
+  // ThreadOwnershipToken is a debug-only affinity assertion; release keeps
+  // the existing caller-owned serialization contract, not this runtime check.
+  bool deniedCallbackEntered = false;
+  bool deniedResult = true;
+  std::thread deniedThread([&] {
+    deniedResult = ownerGuard.withCapability(
+        owner, epoch, [&](const auto& access) noexcept {
+          deniedCallbackEntered = true;
+          return plan.source(access) != nullptr;
+        });
+  });
+  deniedThread.join();
+  check(!deniedResult && !deniedCallbackEntered &&
+            !reference.validFor(owner, epoch, epoch,
+                                pe::RecorderAccessLane::Denied),
+        "a non-owner denied lane cannot expose grouped sources");
+#endif
+
+  // A producer mutation advances the PendingDelta ticket independently of
+  // the recorder epoch. The old three-borrow relation and the grouped domain
+  // must both reject the now-stale aggregate before any source is exposed.
+  const IndependentDomain invalidPendingReference = [&] {
+    auto copy = reference;
+    copy.pendingTicketValid = false;
+    return copy;
+  }();
+  {
+    auto invalidatesPending = shadow.writer();
+    (void)invalidatesPending;
+  }
+  bool invalidPendingExposed = true;
+  const bool invalidPendingInvoked = ownerGuard.withCapability(
+      owner, epoch, [&](const auto& access) noexcept {
+        invalidPendingExposed = plan.source(access) != nullptr;
+        return invalidPendingExposed;
+      });
+  check(!invalidPendingInvoked && !invalidPendingExposed &&
+            !invalidPendingReference.validFor(
+                owner, epoch, epoch, pe::RecorderAccessLane::Owner),
+        "stale PendingDelta ticket rejects the complete grouped source set");
+
+  // Invalidation is aggregate: no source can be exposed after reset, and a
+  // retry binds the exact same typed references under the fresh domain.
+  plan.invalidate();
+  const bool missing = ownerGuard.withCapability(
+      owner, epoch, [&](const auto& access) noexcept {
+        return plan.source(access) == nullptr &&
+               !plan.withQualifiedSources(
+                   access, [&](const pe::SparseStatePlan::QualifiedSources&)
+                               noexcept {});
+      });
+  check(missing, "aggregate invalidation rejects a missing source set");
+
+  bool retryReferencesMatch = false;
+  check(ownerGuard.withCapability(
+            owner, epoch, [&](const auto& access) noexcept {
+              return pe::buildSparseStatePlan(
+                         access, shadow, constants, bindings, {}, params, false,
+                         false, plan) &&
+                     plan.withQualifiedSources(
+                         access,
+                         [&](const pe::SparseStatePlan::QualifiedSources& sources)
+                             noexcept {
+                           retryReferencesMatch =
+                               &sources.shadow == &shadow &&
+                               &sources.constants == &constants &&
+                               &sources.bindings == &bindings;
+                         });
+            }) &&
+            retryReferencesMatch,
+        "aggregate source domain retries with exact typed references");
+
+  // Fail after the replacement domain is bound, not merely at the public
+  // zero-record check. The build guard must revoke every old source view.
+  int invalidTexture = 0;
+  bindings.textures[0].object = &invalidTexture;
+  check(ownerGuard.withCapability(
+            owner, epoch, [&](const auto& access) noexcept {
+              return !pe::buildSparseStatePlan(
+                         access, shadow, constants, bindings, {}, params, true,
+                         false, plan) &&
+                     plan.source(access) == nullptr &&
+                     !plan.withQualifiedSources(
+                         access, [](const auto&) noexcept {});
+            }),
+        "post-bind build failure revokes the complete previous source set");
+  bindings.textures[0] = {};
+  check(ownerGuard.withCapability(
+            owner, epoch, [&](const auto& access) noexcept {
+              return pe::buildSparseStatePlan(
+                  access, shadow, constants, bindings, {}, params, false,
+                  false, plan);
+            }),
+        "post-bind failure retries through fresh production qualification");
 }
 
 void payloadsAreEmptyByDefault() {
@@ -604,6 +830,7 @@ int main() {
     viewsAreTriviallyCopyable();
     sparsePlanAuthorityHasNoPublicWriter();
     sparsePlanSourceRequiresFreshMatchingAuthority();
+    sparsePlanGroupedBorrowMatchesIndependentDomain();
     payloadsAreEmptyByDefault();
     semanticInputConstantCadenceMatchesSelectedBytes();
     defaultBindingViewIsAllNull();

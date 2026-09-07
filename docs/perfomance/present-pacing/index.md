@@ -11,11 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-Latest implementation: [H252](present-pacing-pe-append-boundary.252.md)
-specializes outer append preparation, gates fault-only prediction, unifies
-compact reset/quota ownership and separates production ledger routing from
-test TLS. Native/linked verification is tracked there; no new runtime result
-is claimed. H251 below remains the latest measured checkpoint.
+Latest implementation: [H253](present-pacing-pe-canonical-authority.253.md)
+gates OFF constant-range queries, groups source authority, reuses retained
+Live bindings and replaces paired owner pin indexes with one checked relation.
+Native/linked verification and code/stack tradeoffs are recorded there; no new
+runtime result is claimed. H251 remains the latest measured checkpoint.
 
 Latest runtime checkpoint: [H251](present-pacing-pe-append-effects.251.md) adds
 active-section dispatch, concrete constant settlement with narrower rollback,
@@ -58,6 +58,7 @@ The CPU-ready Tape locality gap remains an independent workstream.
 
 ## Recent Leaf Documents
 
+- [present-pacing-pe-canonical-authority.253 - Grouped Borrow and Single Pin Authority](present-pacing-pe-canonical-authority.253.md)
 - [present-pacing-pe-append-boundary.252 - Family Preparation and Production Ledger Routing](present-pacing-pe-append-boundary.252.md)
 - [present-pacing-pe-append-effects.251 - Active Dispatch and Closed Append Effects](present-pacing-pe-append-effects.251.md)
 - [present-pacing-pe-sparse-work.250 - Active Sparse Work and Bounded Dirty Clearing](present-pacing-pe-sparse-work.250.md)

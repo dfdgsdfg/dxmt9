@@ -24,6 +24,48 @@
 #include <utility>
 #include <vector>
 
+namespace dxmt9::d3d9::pe {
+struct PeSemanticOwnerTestAccess {
+  enum class BufferHitCorruption : std::uint8_t {
+    Kind,
+    Generation,
+    PinOutsideLivePrefix,
+    PointerMismatch,
+  };
+
+  template <typename Owner>
+  static bool corruptBufferHit(Owner& owner,
+                               BufferHitCorruption corruption) noexcept {
+    if (owner.storage_ == nullptr || owner.bufferCount_ == 0u) return false;
+    const auto identity = owner.storage_->buffers[0].identity.value;
+    std::size_t pin = 0u;
+    const PeSemanticPinIndexEntry* hit = nullptr;
+    if (!Owner::findPinIndex(owner.storage_->bufferPinIndex, identity,
+                             owner.pinIndexGeneration_, pin, hit) ||
+        hit == nullptr) {
+      return false;
+    }
+    auto* mutableHit = const_cast<PeSemanticPinIndexEntry*>(hit);
+    switch (corruption) {
+      case BufferHitCorruption::Kind:
+        mutableHit->identity.kind = D9C_CHUNK_HANDLE_KIND_TEXTURE;
+        return true;
+      case BufferHitCorruption::Generation:
+        ++mutableHit->identity.generation;
+        return true;
+      case BufferHitCorruption::PinOutsideLivePrefix:
+        mutableHit->pin = static_cast<std::uint32_t>(owner.bufferCount_);
+        return true;
+      case BufferHitCorruption::PointerMismatch:
+        if (owner.bufferCount_ < 2u) return false;
+        mutableHit->pin = 1u;
+        return true;
+    }
+    return false;
+  }
+};
+}  // namespace dxmt9::d3d9::pe
+
 struct RefCounter { std::uint32_t refs = 1u; };
 struct D9CSurface : RefCounter {};
 struct D9CTexture : RefCounter {};
@@ -3929,8 +3971,8 @@ void pinIndexGenerationReferenceTrace() {
         "reset releases physical pins while leaving no stale index authority");
 
   // Churn the same object through many reset/reuse cycles. The old bucket is
-  // a logical empty after each reset, while the exact and object-id probes
-  // still reject generation and pointer aliases once the new pin is live.
+  // a logical empty after each reset, while one object-id probe still rejects
+  // generation and pointer aliases after validating the live typed prefix.
   D9CSurface alias;
   for (std::uint32_t cycle = 0u; cycle < 32u; ++cycle) {
     firstRows[0].object = firstRef;
@@ -3984,6 +4026,247 @@ void pinIndexGenerationReferenceTrace() {
   wrapOwner.reset();
   check(surface.refs == 1u,
         "generation-wrap retry keeps release multiplicity exact");
+}
+
+// R-CORE-REC-7.59: malformed existing hits must fail closed in both the
+// admission path and the dependency query; a missing objectId remains the only
+// case allowed to proceed to acquisition.
+void pinIndexMalformedHitReference() {
+  using Tested = PeSemanticBatchOwner<8u, 4u, 4096u, 4u, 4u>;
+  using Access = PeSemanticOwnerTestAccess;
+  constexpr std::array corruptions{
+      Access::BufferHitCorruption::Kind,
+      Access::BufferHitCorruption::Generation,
+      Access::BufferHitCorruption::PinOutsideLivePrefix,
+      Access::BufferHitCorruption::PointerMismatch,
+  };
+  for (const auto corruption : corruptions) {
+    Tested owner;
+    D9CBuffer first;
+    D9CBuffer second;
+    const auto firstRef = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&first, 1u);
+    const auto secondRef = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&second, 3u);
+    std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>, 2u> rows{{
+        {.wire = {.slot = 0u, .valid = 1u}, .object = firstRef},
+        {.wire = {.slot = 1u, .valid = 1u}, .object = secondRef},
+    }};
+    auto input = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+    input.sparse.streams = rows;
+    check(owner.admit(input) && owner.referencesBuffer(firstRef) &&
+              owner.referencesBuffer(secondRef),
+          "malformed-hit fixture publishes two live colliding pins");
+    PeSemanticExactFixedEmission before{};
+    check(owner.emitExactFixed(before),
+          "malformed-hit fixture captures the accepted byte prefix");
+    const std::vector<std::byte> beforeBytes(before.wire.begin(),
+                                             before.wire.end());
+    check(Access::corruptBufferHit(owner, corruption),
+          "private malformed-hit seam locates an existing entry");
+    auto retry = input;
+    retry.sourceOrdinal = retry.recordOrdinal = 2u;
+    check(!owner.admit(retry) && owner.size() == 1u && first.refs == 2u &&
+              second.refs == 2u && !owner.referencesBuffer(firstRef) &&
+              owner.referencesBuffer(secondRef),
+          "malformed existing hit rejects without changing bytes or refcounts");
+    PeSemanticExactFixedEmission after{};
+    check(owner.emitExactFixed(after) && after.wireBytes == beforeBytes.size() &&
+              std::equal(beforeBytes.begin(), beforeBytes.end(),
+                         after.wire.begin()),
+          "malformed-hit rejection preserves the accepted byte prefix");
+    owner.reset();
+    check(first.refs == 1u && second.refs == 1u,
+          "malformed-hit rejection leaves the typed retain ledger balanced");
+  }
+}
+
+// R-CORE-REC-7.59: an independent bounded reference for the authoritative
+// objectId table.  The model deliberately knows nothing about the owner's
+// probing or storage representation; it only applies the typed live-prefix
+// relation and the transaction commit/rollback rule.
+void pinIndexAuthoritativeReferenceSequence() {
+  // Five accepted stream rows must fit so this sequence isolates pin-index
+  // rejection/settlement, not the independent sparse-capacity policy.
+  using Tested = PeSemanticBatchOwner<8u, 4u, 4096u, 4u, 8u>;
+  Tested owner;
+  std::vector<PeSemanticRecordInput> accepted;
+  D9CBuffer first;
+  D9CBuffer second;
+  D9CBuffer third;
+  D9CBuffer fourth;
+  std::array<std::pair<D9CWireObjectIdentity, void*>, 4u> model{};
+  std::size_t modelCount = 0u;
+
+  constexpr auto referencePinBucket = [](std::uint64_t objectId) noexcept {
+    constexpr std::size_t capacity = Tested::maxPins * 4u + 1u;
+    return static_cast<std::size_t>(
+               objectId * 0x9e3779b185ebca87ull) % capacity;
+  };
+  check(referencePinBucket(1u) == referencePinBucket(3u),
+        "reference uses a genuine wrapped multiplicative hash collision");
+
+  const auto modelWouldAccept = [&](const BufferRef& ref) noexcept {
+    for (std::size_t i = 0u; i < modelCount; ++i) {
+      if (model[i].first.objectId != ref.identity.objectId) continue;
+      return model[i].first.kind == ref.identity.kind &&
+             model[i].first.generation == ref.identity.generation &&
+             model[i].second == ref.object;
+    }
+    return modelCount < model.size();
+  };
+  const auto modelCommit = [&](const BufferRef& ref) noexcept {
+    for (std::size_t i = 0u; i < modelCount; ++i) {
+      if (model[i].first.objectId == ref.identity.objectId) return;
+    }
+    model[modelCount++] = {ref.identity, ref.object};
+  };
+  const auto checkQueries = [&](const std::array<BufferRef, 4u>& refs) {
+    for (const auto& ref : refs) {
+      bool expected = false;
+      for (std::size_t i = 0u; i < modelCount; ++i) {
+        expected = model[i].first.kind == ref.identity.kind &&
+                   model[i].first.generation == ref.identity.generation &&
+                   model[i].first.objectId == ref.identity.objectId &&
+                   model[i].second == ref.object;
+        if (model[i].first.objectId == ref.identity.objectId) break;
+      }
+      check(owner.referencesBuffer(ref) == expected,
+            "reference model and owner agree on dependency queries");
+    }
+  };
+  const auto apply = [&](PeSemanticRecordInput input, const BufferRef& ref,
+                         std::span<const SparseBindingInput<
+                             D9CCommandChunkWireStreamBinding>> rows,
+                         bool settle) {
+    input.sparse.streams = rows;
+    const auto before = [&]() {
+      if (owner.size() == 0u) return std::vector<std::byte>{};
+      PeSemanticExactFixedEmission exact{};
+      check(owner.emitExactFixed(exact),
+            "accepted-prefix bytes remain queryable before the next trace step");
+      return std::vector<std::byte>(exact.wire.begin(), exact.wire.end());
+    }();
+    const bool expected = settle && modelWouldAccept(ref);
+    const bool actual = owner.tryAppendOwnedRecord(
+        input, [settle]() noexcept { return settle; });
+    check(actual == expected,
+          "authoritative objectId reference matches admission disposition");
+    if (actual) {
+      modelCommit(ref);
+      accepted.push_back(input);
+      // seal() consumes the canonical builder's append phase. Reconstruct
+      // each accepted prefix independently instead of appending after seal.
+      CommandChunkBuilder canonical;
+      for (const auto& prior : accepted) {
+        check(appendCanonicalSemanticRecord(canonical, prior),
+              "reference sequence appends accepted bytes independently");
+      }
+      PeSemanticExactFixedEmission exact{};
+      check(equalCanonicalOwnerBytes(owner, canonical, exact),
+            "authoritative objectId sequence preserves accepted bytes");
+    } else {
+      PeSemanticExactFixedEmission exact{};
+      check(owner.emitExactFixed(exact) && exact.wireBytes == before.size() &&
+                std::equal(before.begin(), before.end(), exact.wire.begin()),
+            "rejection and partial rollback preserve accepted bytes");
+    }
+    checkQueries({localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&first, 1u),
+                  localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&second, 1u, 2u),
+                  localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&third, 3u),
+                  localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&fourth, 4u)});
+  };
+
+  auto firstRef = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&first, 1u);
+  std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>, 1u> one{{{
+      .wire = {.slot = 0u, .valid = 1u}, .object = firstRef}}};
+  apply(base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u), firstRef, one,
+        true);
+
+  auto duplicate = base(PeSemanticProducerKind::DrawPrimitive, 2u, 2u);
+  apply(duplicate, firstRef, one, true);
+
+  auto generationAlias = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&second, 1u, 2u);
+  auto generationRows = one;
+  generationRows[0].object = generationAlias;
+  apply(base(PeSemanticProducerKind::DrawPrimitive, 3u, 3u), generationAlias,
+        generationRows, true);
+
+  auto pointerAlias = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&second, 1u);
+  auto pointerRows = one;
+  pointerRows[0].object = pointerAlias;
+  apply(base(PeSemanticProducerKind::DrawPrimitive, 4u, 4u), pointerAlias,
+        pointerRows, true);
+
+  // These IDs both map to bucket 9 after uint64 multiplication wraps for
+  // this 17-entry table, so this exercises real linear probing.
+  auto thirdRef = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&third, 3u);
+  auto thirdRows = one;
+  thirdRows[0].object = thirdRef;
+  apply(base(PeSemanticProducerKind::DrawPrimitive, 5u, 5u), thirdRef,
+        thirdRows, true);
+
+  auto fourthRef = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(&fourth, 4u);
+  std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>, 2u> partial{{
+      {.wire = {.slot = 0u, .valid = 1u}, .object = thirdRef},
+      {.wire = {.slot = 1u, .valid = 1u}, .object = fourthRef},
+  }};
+  apply(base(PeSemanticProducerKind::DrawPrimitive, 6u, 6u), fourthRef,
+        partial, false);
+  check(fourth.refs == 1u,
+        "partial acquisition rollback releases the uncommitted collision suffix");
+  apply(base(PeSemanticProducerKind::DrawPrimitive, 6u, 6u), fourthRef,
+        partial, true);
+  check(fourth.refs == 2u,
+        "partial acquisition retry retains the newly accepted identity once");
+
+  check(owner.settle(), "reference sequence settles its live prefix");
+  modelCount = 0u;
+  accepted.clear();
+  check(!owner.referencesBuffer(firstRef) && !owner.referencesBuffer(thirdRef),
+        "settlement revokes the shared index relation");
+  auto reuseRows = one;
+  apply(base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u), firstRef,
+        reuseRows, true);
+  check(first.refs == 2u,
+        "warm lifetime reuses the physical retain after index rebuild");
+  owner.reset();
+  accepted.clear();
+  check(first.refs == 1u && second.refs == 1u && third.refs == 1u &&
+            fourth.refs == 1u,
+        "reference sequence reset balances every physical retain");
+
+  using WrapOwner = PeSemanticBatchOwner<4u, 2u, 4096u, 4u, 4u>;
+  WrapOwner::PinIndexGenerationForTesting nearWrap{
+      std::numeric_limits<std::uint32_t>::max()};
+  WrapOwner wrapped(nearWrap);
+  D9CBuffer wrappedBuffer;
+  auto wrappedRef = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(
+      &wrappedBuffer, 0xe21u, 9u);
+  std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>, 1u>
+      wrappedRows{{{.wire = {.slot = 0u, .valid = 1u},
+                    .object = wrappedRef}}};
+  auto wrappedInput = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+  wrappedInput.sparse.streams = wrappedRows;
+  CommandChunkBuilder wrappedCanonical;
+  check(wrapped.admit(wrappedInput) && wrapped.referencesBuffer(wrappedRef) &&
+            wrappedBuffer.refs == 2u &&
+            appendCanonicalSemanticRecord(wrappedCanonical, wrappedInput),
+        "independent wrap trace admits and queries its live pin");
+  PeSemanticExactFixedEmission wrappedExact{};
+  check(equalCanonicalOwnerBytes(wrapped, wrappedCanonical, wrappedExact),
+        "stamp-wrap trace preserves accepted bytes");
+  // The independent builder also retains its wire handles. Release its
+  // ownership before measuring only the semantic owner's warm retain.
+  wrappedCanonical.resetAndReleaseRetained();
+  check(wrapped.settle() && wrapped.clearedBytesLastBoundary() != 0u &&
+            !wrapped.referencesBuffer(wrappedRef),
+        "stamp wrap physically clears the single authoritative table");
+  check(wrapped.admit(wrappedInput) && wrapped.referencesBuffer(wrappedRef) &&
+            wrappedBuffer.refs == 2u,
+        "stamp-wrap retry rebuilds one authoritative relation without AddRef");
+  wrapped.reset();
+  wrappedCanonical.resetAndReleaseRetained();
+  check(wrappedBuffer.refs == 1u,
+        "independent wrap trace balances its warm physical retain");
 }
 
 // R-CORE-REC-7.12/7.13 bounded refinement: keep these sequences deliberately
@@ -6213,6 +6496,8 @@ int main(int argc, char** argv) {
     compactAppendQuotaProofAndRollback();
     collisionCopyOverflowAndRetry();
     pinIndexGenerationReferenceTrace();
+    pinIndexMalformedHitReference();
+    pinIndexAuthoritativeReferenceSequence();
     r712R713BoundedIdentityAndLifecycleRefinement();
     emissionSmoke();
     producerIdentityFollowsSettlementAndSourceRange();

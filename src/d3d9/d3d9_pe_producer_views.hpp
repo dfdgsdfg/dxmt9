@@ -188,18 +188,19 @@ struct SparseStatePlan {
     destination_.chunkContextFinalized = false;
     source_.pendingDelta = {};
     source_.pendingTicket = {};
-    sourceShadow_.invalidate();
-    sourceConstants_.invalidate();
-    sourceBindings_.invalidate();
+    sourceDomain_.invalidate();
+    sourceShadow_ = nullptr;
+    sourceConstants_ = nullptr;
+    sourceBindings_ = nullptr;
   }
 
   bool validFor(const RecorderLockCapability& access) const noexcept {
     // Qualify every borrowed source against the fresh authority before
     // consulting PendingDeltaView, which dereferences the borrowed shadow.
     return source_.prepared && source_.pendingTicket.valid() &&
-           sourceShadow_.validFor(access) &&
-           sourceConstants_.validFor(access) &&
-           sourceBindings_.validFor(access) && source_.pendingDelta.valid();
+           sourceDomain_.validFor(access) && sourceShadow_ != nullptr &&
+           sourceConstants_ != nullptr && sourceBindings_ != nullptr &&
+           source_.pendingDelta.valid();
   }
 
   struct SourceFacts {
@@ -283,12 +284,12 @@ struct SparseStatePlan {
   bool withQualifiedSources(const RecorderLockCapability& access,
                             Fn&& fn) const noexcept {
     // This is the one public-entry qualification for the whole synchronous
-    // operation.  The private borrow values below are used only after it has
-    // succeeded, and cannot be obtained by callers as unchecked getters.
+    // operation. The private domain and typed pointers below are used only
+    // after it has succeeded, and cannot be obtained as unchecked getters.
     if (!validFor(access)) return false;
     const QualifiedSources sources{
-        source_, destination_, *sourceShadow_.qualifiedValue(),
-        *sourceConstants_.qualifiedValue(), *sourceBindings_.qualifiedValue()};
+        source_, destination_, *sourceShadow_, *sourceConstants_,
+        *sourceBindings_};
     std::forward<Fn>(fn)(sources);
     return true;
   }
@@ -358,7 +359,7 @@ struct SparseStatePlan {
     // by the producer before any read.  Clear only OR-built/optional fields
     // whose absent form must not inherit the previous plan.
     // No caller can consume an unpublished plan. Successful preparation
-    // overwrites all three borrows and the pending ticket/view; the build
+    // overwrites the domain, three pointers and pending ticket/view; the build
     // guard fully revokes them on every failure. Do not clear and immediately
     // overwrite those capability fields on the successful hot path.
     source_.prepared = false;
@@ -379,19 +380,30 @@ struct SparseStatePlan {
                    const PeHotStateShadow& shadow,
                    PeConstShadowBlock& constants,
                    const PeBindingView& bindings) noexcept {
-    return access.valid() && access.bind(sourceShadow_, shadow) &&
-           access.bind(sourceConstants_, constants) &&
-           access.bind(sourceBindings_, bindings);
+    if (!access.valid()) {
+      sourceDomain_.invalidate();
+      sourceShadow_ = nullptr;
+      sourceConstants_ = nullptr;
+      sourceBindings_ = nullptr;
+      return false;
+    }
+    sourceDomain_.bind(access);
+    sourceShadow_ = &shadow;
+    sourceConstants_ = &constants;
+    sourceBindings_ = &bindings;
+    return true;
   }
 
   SourceFacts source_{};
   DestinationFacts destination_{};
 
-  // Source borrows are private so no caller can replace the producer-issued
-  // witness or forge a plan by assigning a pointer/epoch pair.
-  RecorderBorrow<const PeHotStateShadow> sourceShadow_{};
-  RecorderBorrow<PeConstShadowBlock> sourceConstants_{};
-  RecorderBorrow<const PeBindingView> sourceBindings_{};
+  // One private domain qualifies all three typed source pointers.  Keeping
+  // the pointers typed prevents a raw/type-erased sink while ensuring that a
+  // partial bind can never leave one source qualified independently.
+  RecorderBorrowDomain sourceDomain_{};
+  const PeHotStateShadow* sourceShadow_ = nullptr;
+  PeConstShadowBlock* sourceConstants_ = nullptr;
+  const PeBindingView* sourceBindings_ = nullptr;
 
   friend bool buildSparseStatePlan(const RecorderLockCapability&,
                                    const PeHotStateShadow&,

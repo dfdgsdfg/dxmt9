@@ -1022,6 +1022,36 @@ requires a separate GPU fixture. Linked PE32/PE64 inspection must demonstrate
 the intended work removal, while fresh wild correctness and performance stay
 separate, explicitly open integration gates until measured.
 
+R-CORE-REC-7.56–7.59 consolidate local evidence rather than broaden its lifetime.
+An OFF inline-constant mode supplies zero cadence payload without reading its
+empty borrowed ranges; the enabled mode and all independent source validation
+boundaries remain unchanged. The three compact source pointers share one
+privately issued recorder domain instead of duplicating its owner/epoch/lane
+metadata. Every qualified operation still validates the current domain and
+PendingDelta; aggregate construction never combines separately issued borrows.
+
+Live same-binding reuse is limited to strong device-owned texture, shader and
+index-buffer bindings whose qualification remains valid while held. Recording
+still records the explicit setter, even when it equals Live state. Foreign and
+replacement inputs retain full validation; borrowed vertex declarations do not
+use the bypass. Poison and public argument validation remain outer contracts.
+
+The owner pin prefix is the authoritative full-identity store. A kind-local
+object-ID index locates a candidate row, never certifies its generation or
+pointer. Checked row comparison supplies that proof for admission and buffer
+dependency queries. Rollback and stamp-wrap rebuild the same index from the
+accepted prefix; no second exact-key table is maintained. Internal consistency
+is checked against that prefix, not another redundant index. This is a bounded
+single-writer representation refinement, not a memory-corruption detector.
+
+Production-used native truth tables and bounded lifecycle differentials own
+these changes; existing recorder/access/settlement TLA models retain their
+ordering and lifetime contracts. No queue, transport, shader or Metal action
+changes. Fresh PE32/PE64 linked evidence must check actual eliminated work and
+code/stack size, while Wine correctness and FPS remain separate integration
+evidence. A successful native test alone does not prove public COM behavior or
+whole-scene pixels.
+
 The optional owner-qualified copy/materialization ledger binds this same
 transaction at its two physical ownership boundaries. A successful admission
 records the increase in live typed record, pin, and canonical-role

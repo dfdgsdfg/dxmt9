@@ -11,10 +11,12 @@ related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; 
 
 # 3DMark05 GT2 Performance — Current Baseline
 
-The latest implementation [H252](present-pacing/present-pacing-pe-append-boundary.252.md)
-refines family-specific append preparation, compact ownership and production
-ledger access. Its native/linked evidence is separate from runtime promotion;
-H251 remains the latest measured checkpoint.
+The latest implementation [H253](present-pacing/present-pacing-pe-canonical-authority.253.md)
+gates OFF constant-range queries, groups borrow authority, reuses qualified
+Live bindings and consolidates owner pin indexes. Four builds, native 39/39,
+x86_64 14/14 and unchanged TLA pass. Storage and DLL size shrink, but some
+individual functions grow; this is not runtime promotion. H251 remains the
+latest measured checkpoint.
 
 The latest runtime checkpoint [H251](present-pacing/present-pacing-pe-append-effects.251.md)
 refines compact section dispatch, constant rollback, disabled ledger access

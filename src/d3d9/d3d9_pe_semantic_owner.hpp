@@ -1968,6 +1968,11 @@ static_assert(sizeof(PeSemanticPinIndexEntry) == 24u);
 template <std::size_t N>
 using PeSemanticPinIndex = std::array<PeSemanticPinIndexEntry, N>;
 
+// Native owner specs use one bounded friend seam to corrupt an existing
+// locator entry.  It is intentionally not a production API: malformed-hit
+// coverage must exercise the private relation without exposing raw storage.
+struct PeSemanticOwnerTestAccess;
+
 template <std::size_t MaxRecords, std::size_t MaxPins,
           std::size_t MaxSemanticBytes, std::size_t MaxRects,
           std::size_t MaxSparseValues>
@@ -1980,18 +1985,16 @@ struct PeSemanticBatchStorage {
   std::array<PeSemanticPhysicalPin<D9CShader, PeSemanticShaderIdentity>, MaxPins> shaders{};
   std::array<PeSemanticPhysicalPin<D9CVertexDecl, PeSemanticDeclarationIdentity>, MaxPins> declarations{};
   std::array<PeSemanticPhysicalPin<D9CQuery, PeSemanticQueryIdentity>, MaxPins> queries{};
-  PeSemanticPinIndex<pinIndexCapacity> surfaceIdentityIndex{};
-  PeSemanticPinIndex<pinIndexCapacity> surfaceObjectIndex{};
-  PeSemanticPinIndex<pinIndexCapacity> textureIdentityIndex{};
-  PeSemanticPinIndex<pinIndexCapacity> textureObjectIndex{};
-  PeSemanticPinIndex<pinIndexCapacity> bufferIdentityIndex{};
-  PeSemanticPinIndex<pinIndexCapacity> bufferObjectIndex{};
-  PeSemanticPinIndex<pinIndexCapacity> shaderIdentityIndex{};
-  PeSemanticPinIndex<pinIndexCapacity> shaderObjectIndex{};
-  PeSemanticPinIndex<pinIndexCapacity> declarationIdentityIndex{};
-  PeSemanticPinIndex<pinIndexCapacity> declarationObjectIndex{};
-  PeSemanticPinIndex<pinIndexCapacity> queryIdentityIndex{};
-  PeSemanticPinIndex<pinIndexCapacity> queryObjectIndex{};
+  // Each kind-local table is keyed by objectId.  The typed pin prefix is the
+  // authority; a table entry is only a locator checked against that prefix.
+  // There is intentionally no second exact-identity table whose consistency
+  // could drift from this one.
+  PeSemanticPinIndex<pinIndexCapacity> surfacePinIndex{};
+  PeSemanticPinIndex<pinIndexCapacity> texturePinIndex{};
+  PeSemanticPinIndex<pinIndexCapacity> bufferPinIndex{};
+  PeSemanticPinIndex<pinIndexCapacity> shaderPinIndex{};
+  PeSemanticPinIndex<pinIndexCapacity> declarationPinIndex{};
+  PeSemanticPinIndex<pinIndexCapacity> queryPinIndex{};
   // Canonical D9C V2 role-layout backing.  These three regions are not a
   // seal-time rendering of the typed arenas above: admission writes each
   // accepted record's final wire record header, its final handle entries and
@@ -2041,6 +2044,8 @@ template <std::size_t MaxRecords = 64u, std::size_t MaxPins = 256u,
           std::size_t MaxRects = 1024u, std::size_t MaxSparseValues = 2048u,
           typename LedgerAccess = dxmt9::core::ScopedCopyMaterializationLedgerAccess>
 class PeSemanticBatchOwner final {
+  friend struct PeSemanticOwnerTestAccess;
+
  public:
   static_assert(MaxPins <= static_cast<std::size_t>(kPeSemanticNoSlot));
 
@@ -2263,36 +2268,35 @@ class PeSemanticBatchOwner final {
     switch (pinKind) {
       case 0u:
         if (!findOrValidateExistingPin(
-                storage_->surfaceIdentityIndex, storage_->surfaceObjectIndex,
+                storage_->surfacePinIndex,
                 storage_->surfaces, surfaceCount_, ref.identity, ref.object,
                 existing, existingPin)) return false;
         currentCount = surfaceCount_;
         break;
       case 1u:
         if (!findOrValidateExistingPin(
-                storage_->textureIdentityIndex, storage_->textureObjectIndex,
+                storage_->texturePinIndex,
                 storage_->textures, textureCount_, ref.identity, ref.object,
                 existing, existingPin)) return false;
         currentCount = textureCount_;
         break;
       case 2u:
         if (!findOrValidateExistingPin(
-                storage_->bufferIdentityIndex, storage_->bufferObjectIndex,
+                storage_->bufferPinIndex,
                 storage_->buffers, bufferCount_, ref.identity, ref.object,
                 existing, existingPin)) return false;
         currentCount = bufferCount_;
         break;
       case 3u:
         if (!findOrValidateExistingPin(
-                storage_->shaderIdentityIndex, storage_->shaderObjectIndex,
+                storage_->shaderPinIndex,
                 storage_->shaders, shaderCount_, ref.identity, ref.object,
                 existing, existingPin)) return false;
         currentCount = shaderCount_;
         break;
       case 4u:
         if (!findOrValidateExistingPin(
-                storage_->declarationIdentityIndex,
-                storage_->declarationObjectIndex, storage_->declarations,
+                storage_->declarationPinIndex, storage_->declarations,
                 declarationCount_, ref.identity, ref.object, existing,
                 existingPin))
           return false;
@@ -2300,7 +2304,7 @@ class PeSemanticBatchOwner final {
         break;
       case 5u:
         if (!findOrValidateExistingPin(
-                storage_->queryIdentityIndex, storage_->queryObjectIndex,
+                storage_->queryPinIndex,
                 storage_->queries, queryCount_, ref.identity, ref.object,
                 existing, existingPin)) return false;
         currentCount = queryCount_;
@@ -3186,9 +3190,13 @@ class PeSemanticBatchOwner final {
   bool referencesBuffer(const BufferRef& ref) const noexcept {
     if (!ref.valid()) return false;
     std::size_t pin = 0u;
-    return findPinIndex(storage_->bufferIdentityIndex, ref.identity, true,
-                        pinIndexGeneration_, pin) &&
-        pin < bufferCount_ && storage_->buffers[pin].object == ref.object;
+    bool found = false;
+    if (!checkedPinHit(storage_->bufferPinIndex, storage_->buffers,
+                       bufferCount_, ref.identity, ref.object, found, pin) ||
+        !found) {
+      return false;
+    }
+    return true;
   }
 
   template <typename Visit>
@@ -3616,12 +3624,12 @@ class PeSemanticBatchOwner final {
 
   static constexpr std::size_t kMaxRecordHandles =
       kPeSemanticMaxRecordHandles;
-  // Pin admission is on the producer hot path. Keep exact identity and
-  // object-id membership in fixed, typed open-addressed tables so a repeated
-  // warm pin does not scan every prior pin. The table is deliberately
-  // over-provisioned; probing is bounded by this compile-time constant and
-  // never allocates. A nonzero generation qualifies a live bucket, allowing
-  // reset/rollback to revoke an inactive table without clearing its tail.
+  // Pin admission is on the producer hot path. Keep one kind-local object-ID
+  // table per typed pin arena so a repeated warm pin does not scan every
+  // prior pin. The table is deliberately over-provisioned; probing is bounded
+  // by this compile-time constant and never allocates. A nonzero generation
+  // qualifies a live bucket, allowing reset/rollback to revoke an inactive
+  // table without clearing its tail.
   static constexpr std::size_t kPinIndexCapacity = MaxPins * 4u + 1u;
 
   static bool fitsStagedWire(std::size_t handleCount,
@@ -3629,8 +3637,6 @@ class PeSemanticBatchOwner final {
     return handleCount <= Storage::maxWireHandles &&
            payloadBytes <= Storage::maxWirePayloadBytes;
   }
-
-  using PinIndexEntry = PeSemanticPinIndexEntry;
 
   template <std::size_t N>
   using PinIndex = PeSemanticPinIndex<N>;
@@ -3729,34 +3735,27 @@ class PeSemanticBatchOwner final {
     return emitExactFixedCore<false>(plan, destination, out);
   }
 
-  static std::size_t pinHash(const D9CWireObjectIdentity& identity,
-                             bool includeGeneration) noexcept {
-    std::uint64_t value = identity.objectId * 0x9e3779b185ebca87ull;
-    value ^= static_cast<std::uint64_t>(identity.kind) *
-             0xc2b2ae3d27d4eb4full;
-    if (includeGeneration) {
-      value ^= identity.generation + 0x165667b19e3779f9ull +
-               (value << 6u) + (value >> 2u);
-    }
-    return static_cast<std::size_t>(value);
+  static std::size_t pinHash(const D9CWireObjectIdentity& identity) noexcept {
+    return static_cast<std::size_t>(
+        identity.objectId * 0x9e3779b185ebca87ull);
   }
 
   template <std::size_t N>
   static bool findPinIndex(const PinIndex<N>& index,
                            const D9CWireObjectIdentity& identity,
-                           bool includeGeneration,
                            std::uint32_t generation,
-                           std::size_t& out) noexcept {
-    const std::size_t start = pinHash(identity, includeGeneration) % N;
+                           std::size_t& out,
+                           const PeSemanticPinIndexEntry*& outEntry) noexcept {
+    const std::size_t start = pinHash(identity) % N;
     for (std::size_t probe = 0u; probe < N; ++probe) {
       const auto& entry = index[(start + probe) % N];
       if (entry.generation != generation) return false;
-      const bool matches = entry.identity.kind == identity.kind &&
-          entry.identity.objectId == identity.objectId &&
-          (!includeGeneration ||
-           entry.identity.generation == identity.generation);
-      if (matches) {
+      // A matching objectId is a hit even when its payload is malformed. The
+      // caller validates kind, generation and pointer against the live
+      // typed prefix before using the pin.
+      if (entry.identity.objectId == identity.objectId) {
         out = entry.pin;
+        outEntry = &entry;
         return true;
       }
     }
@@ -3767,16 +3766,12 @@ class PeSemanticBatchOwner final {
   static bool insertPinIndex(PinIndex<N>& index,
                              const D9CWireObjectIdentity& identity,
                              std::uint32_t pin,
-                             std::uint32_t generation,
-                             bool includeGeneration = true) noexcept {
-    const std::size_t start = pinHash(identity, includeGeneration) % N;
+                             std::uint32_t generation) noexcept {
+    const std::size_t start = pinHash(identity) % N;
     for (std::size_t probe = 0u; probe < N; ++probe) {
       auto& entry = index[(start + probe) % N];
       if (entry.generation == 0u || entry.generation != generation ||
-          (entry.identity.kind == identity.kind &&
-           entry.identity.objectId == identity.objectId &&
-           (!includeGeneration ||
-            entry.identity.generation == identity.generation))) {
+          entry.identity.objectId == identity.objectId) {
         entry.identity = identity;
         entry.pin = pin;
         entry.generation = generation;
@@ -3794,30 +3789,22 @@ class PeSemanticBatchOwner final {
 
   template <typename PinArray, std::size_t N>
   static void rebuildPinIndex(const PinArray& pins, std::size_t count,
-                              PinIndex<N>& exact, PinIndex<N>& object,
+                              PinIndex<N>& index,
                               std::uint32_t generation) noexcept {
     for (std::size_t i = 0u; i < count; ++i) {
       if (!pins[i].valid()) continue;
-      (void)insertPinIndex(exact, pins[i].identity.value,
+      (void)insertPinIndex(index, pins[i].identity.value,
                            static_cast<std::uint32_t>(i), generation);
-      (void)insertPinIndex(object, pins[i].identity.value,
-                           static_cast<std::uint32_t>(i), generation, false);
     }
   }
 
   std::size_t clearPinIndexes() noexcept {
-    return clearPinIndex(storage_->surfaceIdentityIndex) +
-           clearPinIndex(storage_->surfaceObjectIndex) +
-           clearPinIndex(storage_->textureIdentityIndex) +
-           clearPinIndex(storage_->textureObjectIndex) +
-           clearPinIndex(storage_->bufferIdentityIndex) +
-           clearPinIndex(storage_->bufferObjectIndex) +
-           clearPinIndex(storage_->shaderIdentityIndex) +
-           clearPinIndex(storage_->shaderObjectIndex) +
-           clearPinIndex(storage_->declarationIdentityIndex) +
-           clearPinIndex(storage_->declarationObjectIndex) +
-           clearPinIndex(storage_->queryIdentityIndex) +
-           clearPinIndex(storage_->queryObjectIndex);
+    return clearPinIndex(storage_->surfacePinIndex) +
+           clearPinIndex(storage_->texturePinIndex) +
+           clearPinIndex(storage_->bufferPinIndex) +
+           clearPinIndex(storage_->shaderPinIndex) +
+           clearPinIndex(storage_->declarationPinIndex) +
+           clearPinIndex(storage_->queryPinIndex);
   }
 
   std::size_t invalidatePinIndexes() noexcept {
@@ -3836,22 +3823,21 @@ class PeSemanticBatchOwner final {
   void rebuildPinIndexes() noexcept {
     (void)invalidatePinIndexes();
     rebuildPinIndex(storage_->surfaces, surfaceCount_,
-                    storage_->surfaceIdentityIndex, storage_->surfaceObjectIndex,
+                    storage_->surfacePinIndex,
                     pinIndexGeneration_);
     rebuildPinIndex(storage_->textures, textureCount_,
-                    storage_->textureIdentityIndex, storage_->textureObjectIndex,
+                    storage_->texturePinIndex,
                     pinIndexGeneration_);
     rebuildPinIndex(storage_->buffers, bufferCount_,
-                    storage_->bufferIdentityIndex, storage_->bufferObjectIndex,
+                    storage_->bufferPinIndex,
                     pinIndexGeneration_);
     rebuildPinIndex(storage_->shaders, shaderCount_,
-                    storage_->shaderIdentityIndex, storage_->shaderObjectIndex,
+                    storage_->shaderPinIndex,
                     pinIndexGeneration_);
     rebuildPinIndex(storage_->declarations, declarationCount_,
-                    storage_->declarationIdentityIndex,
-                    storage_->declarationObjectIndex, pinIndexGeneration_);
+                    storage_->declarationPinIndex, pinIndexGeneration_);
     rebuildPinIndex(storage_->queries, queryCount_,
-                    storage_->queryIdentityIndex, storage_->queryObjectIndex,
+                    storage_->queryPinIndex,
                     pinIndexGeneration_);
   }
 
@@ -5269,32 +5255,40 @@ class PeSemanticBatchOwner final {
   }
 
   template <typename PinArray>
+  bool checkedPinHit(const PinIndex<kPinIndexCapacity>& index,
+                     const PinArray& pins, std::size_t count,
+                     const D9CWireObjectIdentity& identity,
+                     const void* object, bool& found,
+                     std::size_t& outPin) const noexcept {
+    const PeSemanticPinIndexEntry* hit = nullptr;
+    if (!findPinIndex(index, identity, pinIndexGeneration_, outPin, hit)) {
+      found = false;
+      return true;
+    }
+    // The table is only a locator.  The typed prefix is authoritative for
+    // every field, including the physical pointer, and malformed hits fail
+    // closed instead of becoming a new acquisition.
+    if (hit == nullptr || hit->identity.kind != identity.kind ||
+        hit->identity.generation != identity.generation ||
+        hit->identity.objectId != identity.objectId || outPin >= count ||
+        !pins[outPin].valid() || pins[outPin].object != object ||
+        pins[outPin].identity.value.kind != identity.kind ||
+        pins[outPin].identity.value.generation != identity.generation ||
+        pins[outPin].identity.value.objectId != identity.objectId) {
+      return false;
+    }
+    found = true;
+    return true;
+  }
+
+  template <typename PinArray>
   bool findOrValidateExistingPin(
-      const PinIndex<kPinIndexCapacity>& exactIndex,
-      const PinIndex<kPinIndexCapacity>& objectIndex,
+      const PinIndex<kPinIndexCapacity>& index,
       const PinArray& pins, std::size_t count,
       const D9CWireObjectIdentity& identity, const void* object,
       bool& existing, std::size_t& existingPin) const noexcept {
-    std::size_t objectPin = 0u;
-    const bool objectFound =
-        findPinIndex(objectIndex, identity, false, pinIndexGeneration_, objectPin);
-    std::size_t exactPin = 0u;
-    const bool exactFound =
-        findPinIndex(exactIndex, identity, true, pinIndexGeneration_, exactPin);
-    if (!objectFound) {
-      if (exactFound) return false;
-      existing = false;
-      return true;
-    }
-    if (!exactFound || exactPin != objectPin || objectPin >= count ||
-        pins[objectPin].object != object) {
-      // The object-id index deliberately rejects a generation or pointer
-      // alias, even when the full identity differs.
-      return false;
-    }
-    existing = true;
-    existingPin = objectPin;
-    return true;
+    return checkedPinHit(index, pins, count, identity, object, existing,
+                         existingPin);
   }
 
   template <typename PinArray>
@@ -5525,33 +5519,18 @@ class PeSemanticBatchOwner final {
   }
 
   template <typename Object, typename Identity>
-  PinIndex<kPinIndexCapacity>& exactPinIndex() noexcept {
+  PinIndex<kPinIndexCapacity>& pinIndex() noexcept {
     if constexpr (std::is_same_v<Object, D9CSurface>)
-      return storage_->surfaceIdentityIndex;
+      return storage_->surfacePinIndex;
     if constexpr (std::is_same_v<Object, D9CTexture>)
-      return storage_->textureIdentityIndex;
+      return storage_->texturePinIndex;
     if constexpr (std::is_same_v<Object, D9CBuffer>)
-      return storage_->bufferIdentityIndex;
+      return storage_->bufferPinIndex;
     if constexpr (std::is_same_v<Object, D9CShader>)
-      return storage_->shaderIdentityIndex;
+      return storage_->shaderPinIndex;
     if constexpr (std::is_same_v<Object, D9CVertexDecl>)
-      return storage_->declarationIdentityIndex;
-    return storage_->queryIdentityIndex;
-  }
-
-  template <typename Object, typename Identity>
-  PinIndex<kPinIndexCapacity>& objectPinIndex() noexcept {
-    if constexpr (std::is_same_v<Object, D9CSurface>)
-      return storage_->surfaceObjectIndex;
-    if constexpr (std::is_same_v<Object, D9CTexture>)
-      return storage_->textureObjectIndex;
-    if constexpr (std::is_same_v<Object, D9CBuffer>)
-      return storage_->bufferObjectIndex;
-    if constexpr (std::is_same_v<Object, D9CShader>)
-      return storage_->shaderObjectIndex;
-    if constexpr (std::is_same_v<Object, D9CVertexDecl>)
-      return storage_->declarationObjectIndex;
-    return storage_->queryObjectIndex;
+      return storage_->declarationPinIndex;
+    return storage_->queryPinIndex;
   }
 
   template <typename Object, typename Identity, typename Ref, typename PinArray,
@@ -5607,14 +5586,10 @@ class PeSemanticBatchOwner final {
       return false;
     pins[index] = {.object = static_cast<Object*>(ref.object),
                    .identity = identity};
-    auto& exactIndex = exactPinIndex<Object, Identity>();
-    auto& objectIndex = objectPinIndex<Object, Identity>();
-    if (!insertPinIndex(exactIndex, identity.value,
+    auto& indexTable = pinIndex<Object, Identity>();
+    if (!insertPinIndex(indexTable, identity.value,
                         static_cast<std::uint32_t>(index),
-                        pinIndexGeneration_) ||
-        !insertPinIndex(objectIndex, identity.value,
-                        static_cast<std::uint32_t>(index), pinIndexGeneration_,
-                        false)) {
+                        pinIndexGeneration_)) {
       return false;
     }
     ++count;
@@ -5666,14 +5641,10 @@ class PeSemanticBatchOwner final {
       return false;
     }
     pins[index] = {.object = binding.object_, .identity = identity};
-    auto& exactIndex = exactPinIndex<Object, Identity>();
-    auto& objectIndex = objectPinIndex<Object, Identity>();
-    if (!insertPinIndex(exactIndex, identity.value,
+    auto& indexTable = pinIndex<Object, Identity>();
+    if (!insertPinIndex(indexTable, identity.value,
                         static_cast<std::uint32_t>(index),
-                        pinIndexGeneration_) ||
-        !insertPinIndex(objectIndex, identity.value,
-                        static_cast<std::uint32_t>(index),
-                        pinIndexGeneration_, false)) {
+                        pinIndexGeneration_)) {
       return false;
     }
     ++count;

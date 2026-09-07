@@ -29,11 +29,12 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
-The latest implementation [H252](present-pacing-pe-append-boundary.252.md)
-removes inactive outer preparation and duplicate compact work, with a static
-production ledger policy that bypasses test TLS. It does not change cadence,
-ABI or queue policy. Verification and linked tradeoffs are recorded in the
-leaf; it supplies no new runtime/FPS evidence.
+The latest implementation [H253](present-pacing-pe-canonical-authority.253.md)
+removes OFF constant-range queries, duplicates in source borrow authority and
+paired owner pin indexes, and reuses strongly retained same-object Live
+bindings. Four builds, native 39/39, x86_64 14/14 and unchanged TLA pass.
+Cadence, ABI and queue policy stay unchanged. Storage/DLL savings and local
+code/stack growth are recorded in the leaf; there is no new runtime/FPS evidence.
 
 The latest runtime checkpoint [H251](present-pacing-pe-append-effects.251.md)
 skips absent compact emitters, closes constant settlement effects before

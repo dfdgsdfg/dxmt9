@@ -13,6 +13,22 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.56–7.59 specify OFF inline-constant query elimination, grouped
+source-borrow authority, retained Live binding reuse and an authoritative
+single pin index. Implemented against `9cd8f989`, with four matched-toolchain
+full builds, native 39/39, x86_64 focused 14/14 and unchanged TLA passing.
+Real owner traces preserve canonical bytes, dependency queries and physical
+retains across alias rejection, malformed hits, collisions, rollback/retry,
+warm reuse and wrap; producer traces cover grouped source freshness and
+post-bind failure. Live setter reuse has bounded value-level reference and
+linked evidence, not a private COM-device end-to-end harness. PE32/PE64 DLLs
+shrink 6,144/2,560 bytes and owner backing loses 147,600 bytes, while some
+individual functions grow in code/stack. Exports and vtable/RTTI owners match;
+the Unix provider and bridges are byte-identical. See
+[H253](../../../docs/perfomance/present-pacing/present-pacing-pe-canonical-authority.253.md).
+No runtime promotion or FPS claim follows. Fresh Wine/wild correctness,
+same-binding hit distribution and current PE CPU attribution remain open.
+
 R-CORE-REC-7.52–7.55 cover fault-only prediction gating, family-specific append
 preparation, single-owner compact layout/quota work and production ledger
 routing without test-only TLS access. They are implemented with bounded

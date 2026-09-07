@@ -39,11 +39,50 @@ constexpr RecorderAccessLane planRecorderAccess(
 
 class RecorderLockCapability;
 
+// The qualification facts are one shared witness for a group of typed
+// sources.  It intentionally contains no source pointer: callers pair it
+// with a typed pointer at the private owner boundary, then validate the
+// complete domain before dereferencing any source.
+class RecorderBorrowDomain final {
+ public:
+  RecorderBorrowDomain() noexcept = default;
+  RecorderBorrowDomain(const RecorderBorrowDomain&) = delete;
+  RecorderBorrowDomain& operator=(const RecorderBorrowDomain&) = delete;
+  RecorderBorrowDomain(RecorderBorrowDomain&&) = delete;
+  RecorderBorrowDomain& operator=(RecorderBorrowDomain&&) = delete;
+
+  bool valid() const noexcept {
+    return owner_ != nullptr && epoch_ != nullptr &&
+           *epoch_ == issuedEpoch_ && lane_ != RecorderAccessLane::Denied;
+  }
+
+  bool validFor(const RecorderLockCapability& capability) const noexcept;
+
+  void invalidate() noexcept {
+    owner_ = nullptr;
+    epoch_ = nullptr;
+    issuedEpoch_ = 0u;
+    lane_ = RecorderAccessLane::Denied;
+  }
+
+ private:
+  void bind(const RecorderLockCapability& capability) noexcept;
+
+  const dxmt9::core::ThreadOwnershipToken* owner_ = nullptr;
+  const std::uint64_t* epoch_ = nullptr;
+  std::uint64_t issuedEpoch_ = 0u;
+  RecorderAccessLane lane_ = RecorderAccessLane::Denied;
+
+  template <typename T>
+  friend class RecorderBorrow;
+  friend struct SparseStatePlan;
+};
+
 // A call-scope borrow is deliberately neither copyable nor movable.  It may
 // be visited only through a nothrow callback that supplies fresh matching
 // recorder access and rechecks the recorder epoch before exposing the source.
-// SparseStatePlan embeds these borrows, so the plan cannot be captured by
-// value into deferred replay.
+// Producer plans use the same domain shape with a private set of typed source
+// pointers, so a plan cannot be captured by value into deferred replay.
 template <typename T>
 class RecorderBorrow final {
  public:
@@ -54,9 +93,7 @@ class RecorderBorrow final {
   RecorderBorrow& operator=(RecorderBorrow&&) = delete;
 
   bool valid() const noexcept {
-    return value_ != nullptr && owner_ != nullptr && epoch_ != nullptr &&
-           *epoch_ == issuedEpoch_ &&
-           lane_ != RecorderAccessLane::Denied;
+    return value_ != nullptr && domain_.valid();
   }
 
   bool validFor(const RecorderLockCapability& capability) const noexcept;
@@ -73,26 +110,20 @@ class RecorderBorrow final {
 
   void invalidate() noexcept {
     value_ = nullptr;
-    owner_ = nullptr;
-    epoch_ = nullptr;
-    issuedEpoch_ = 0u;
-    lane_ = RecorderAccessLane::Denied;
+    domain_.invalidate();
   }
 
  private:
   void bind(const RecorderLockCapability& capability, T& value) noexcept;
 
-  // SparseStatePlan first validates all of its borrows against one fresh
-  // capability, then forms a call-local aggregate view.  Keeping this access
+  // A producer aggregate first validates its shared domain against one fresh
+  // capability, then forms a call-local aggregate view. Keeping this access
   // private prevents a caller from turning the borrow into an unchecked
   // public getter or retaining a second authority token.
   T* qualifiedValue() const noexcept { return value_; }
 
   T* value_ = nullptr;
-  const dxmt9::core::ThreadOwnershipToken* owner_ = nullptr;
-  const std::uint64_t* epoch_ = nullptr;
-  std::uint64_t issuedEpoch_ = 0u;
-  RecorderAccessLane lane_ = RecorderAccessLane::Denied;
+  RecorderBorrowDomain domain_{};
 
   friend class RecorderLockCapability;
   friend struct SparseStatePlan;
@@ -146,29 +177,38 @@ class RecorderLockCapability final {
 
   template <typename T>
   friend class RecorderBorrow;
+  friend class RecorderBorrowDomain;
   friend class RecorderLockGuard;
 };
 
-template <typename T>
-bool RecorderBorrow<T>::validFor(
+inline bool RecorderBorrowDomain::validFor(
     const RecorderLockCapability& capability) const noexcept {
-  // Qualify the ownership domain before valid() dereferences the borrowed
-  // epoch witness. A mismatched owner must fail closed without consulting a
-  // source that belongs to another recorder.
+  // Qualify the ownership domain before any source pointer is consulted.
   return owner_ != nullptr && epoch_ != nullptr &&
          owner_ == capability.owner_ && epoch_ == capability.epoch_ &&
          issuedEpoch_ == capability.issuedEpoch_ &&
          lane_ == capability.lane_ && capability.valid() && valid();
 }
 
-template <typename T>
-void RecorderBorrow<T>::bind(const RecorderLockCapability& capability,
-                             T& value) noexcept {
-  value_ = &value;
+inline void RecorderBorrowDomain::bind(
+    const RecorderLockCapability& capability) noexcept {
   owner_ = capability.owner_;
   epoch_ = capability.epoch_;
   issuedEpoch_ = capability.issuedEpoch_;
   lane_ = capability.lane_;
+}
+
+template <typename T>
+bool RecorderBorrow<T>::validFor(
+    const RecorderLockCapability& capability) const noexcept {
+  return domain_.validFor(capability) && value_ != nullptr;
+}
+
+template <typename T>
+void RecorderBorrow<T>::bind(const RecorderLockCapability& capability,
+                             T& value) noexcept {
+  value_ = &value;
+  domain_.bind(capability);
 }
 
 // The PE recorder is single-producer by default.  This guard is the one

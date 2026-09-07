@@ -1071,3 +1071,40 @@ not construct ledger events or perform TLS lookup. Override-aware native
 access must retain nested restoration and thread isolation. Both access
 policies must exercise real owner operations in fresh enabled/disabled tests;
 test-only dispatch must not silently replace the production path in evidence.
+
+**R-CORE-REC-7.56** Ordinary compact draws with inline constant deltas disabled
+must not qualify a source solely to sum the six necessarily empty constant
+ranges. Enabled inline deltas must retain exact payload accounting. Plan build,
+destination rebase, admission and settlement must retain their required fresh
+qualification. Native reuse/failure traces must preserve record bytes and
+historical cadence for both modes without a second cached payload count.
+
+**R-CORE-REC-7.57** Sources issued together from one recorder capability may
+share one private borrow-domain witness. The aggregate must retain all typed
+source pointers, owner identity, epoch identity/value and access lane, and must
+reject missing sources, wrong owners, stale epochs, denied/mismatched lanes and
+invalid PendingDelta tickets before exposing any source. Construction and
+invalidation must be atomic across the aggregate. Source exposure remains
+noncopyable, callback-scoped and freshly qualified at invalidating boundaries;
+no unchecked getter or cross-callback validity cache is permitted.
+
+**R-CORE-REC-7.58** Live setters may bypass membership reconstruction for an
+exactly identical, already-qualified and strongly retained binding. Poison,
+argument/slot validation and StateBlock Recording semantics must precede or
+exclude this bypass. The retained binding must prove stable owner/kind/identity
+until replacement; pointer equality alone is not authority for arbitrary or
+borrowed objects. Null, A/B/A, replacement/release, Recording, Reset and foreign
+object traces must preserve HRESULT, pending state, diagnostics and retain
+multiplicity. Borrowed vertex declarations are outside this optimization.
+
+**R-CORE-REC-7.59** A single kind-qualified object-ID-to-pin index may replace
+paired object-ID and exact-identity indexes only when it is authoritative for
+the live typed pin prefix. Every hit must validate its range, full identity
+(including generation) and object pointer against that prefix. Missing keys
+alone may acquire new pins; stale generation, pointer aliases and malformed
+hits must fail closed. Admission, dependency queries, rollback, rebuild, reset
+and stamp wrap must use the same relation. Native bounded refinement must
+compare exact bytes, queries, failure prefixes and retain/release counts with
+an independent reference over collision, partial acquisition, retry and wrap
+traces. Removing redundant index-consistency checks must not be presented as
+preserving detection of arbitrary memory corruption.
