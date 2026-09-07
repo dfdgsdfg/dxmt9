@@ -975,6 +975,19 @@ The checked generic operation remains a differential reference and serves
 inputs whose width or mode is not statically fixed. This is a local value
 refinement, not a new lifecycle or concurrency protocol.
 
+R-CORE-REC-7.62 qualifies the same fixed-width consumer at the public setter.
+`ValidatedConstWrite<ElemSize>::withCheckedRange` dispatches exactly one of
+empty, invalid, or a noncopyable const range. The private range binds the
+source pointer and start/end; its Live consumer accepts those scalar facts
+without repeating guards or storing another shadow. The public adapter still
+uses `applyConstStateWriteImpl` for write permission and Recording; the empty
+callback uses that same envelope and never issues nonempty authority. The
+checked generic fixed-width entry uses the maximum representable byte extent
+and retains its original rejection semantics. No unchecked raw consumer is
+public. Native range/value refinement, phase-model tests, actual PE cases and
+linked caller/consumer inspection have distinct scopes; none alone establishes
+CPU reduction or a new concurrency proof.
+
 The 16-byte equality operation may reduce four unsigned word XORs with OR
 instead of short-circuiting four comparisons. The reduction is zero exactly
 when all 128 bits agree; floating-point comparisons or NaN normalization are

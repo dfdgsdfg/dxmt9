@@ -129,6 +129,37 @@ using dxmt9::d3d9::pe::SparseBindingInput;
 using dxmt9::d3d9::pe::SparseStateInput;
 using dxmt9::d3d9::pe::cacheWireObjectRef;
 
+static_assert(!std::is_default_constructible_v<
+              ValidatedConstWrite<4u>>);
+static_assert(!std::is_copy_constructible_v<
+              ValidatedConstWrite<4u>>);
+static_assert(!std::is_move_constructible_v<
+              ValidatedConstWrite<4u>>);
+static_assert(!std::is_copy_assignable_v<
+              ValidatedConstWrite<4u>>);
+static_assert(!std::is_move_assignable_v<
+              ValidatedConstWrite<4u>>);
+static_assert(!std::is_aggregate_v<
+              ValidatedConstWrite<4u>>);
+static_assert(!std::is_constructible_v<
+              ValidatedConstWrite<4u>, std::uint32_t,
+              std::uint32_t, const void*>);
+static_assert(!std::is_default_constructible_v<
+              ValidatedConstWrite<16u>>);
+static_assert(!std::is_copy_constructible_v<
+              ValidatedConstWrite<16u>>);
+static_assert(!std::is_move_constructible_v<
+              ValidatedConstWrite<16u>>);
+static_assert(!std::is_copy_assignable_v<
+              ValidatedConstWrite<16u>>);
+static_assert(!std::is_move_assignable_v<
+              ValidatedConstWrite<16u>>);
+static_assert(!std::is_aggregate_v<
+              ValidatedConstWrite<16u>>);
+static_assert(!std::is_constructible_v<
+              ValidatedConstWrite<16u>, std::uint32_t,
+              std::uint32_t, const void*>);
+
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
 };
@@ -1424,6 +1455,228 @@ void testFixedConstLiveApplyDifferential() {
     checkConstShadowEquivalent(beforeRecording, generic,
                                "fixed-width recording is non-mutating");
   }
+}
+
+enum class ValidatedConstWritePath : std::uint8_t {
+  Valid,
+  Empty,
+  Invalid,
+};
+
+// Exercise the call-local checked factory independently from the public PE
+// setter wrappers. The generic oldConstTransition/reduce pair remains the
+// state oracle; this test only claims the factory's range admission and the
+// Live/Apply byte effect, not Terminal/Recording envelope behavior.
+template <std::size_t ElemSize, std::uint32_t MaxRegisters>
+void testValidatedConstWriteFamily(std::string_view family) {
+  using Write = ValidatedConstWrite<ElemSize>;
+  struct RangeCase {
+    std::uint32_t start;
+    std::uint32_t count;
+  };
+
+  ConstShadow actual;
+  actual.reserveCapacity(static_cast<std::size_t>(MaxRegisters) * ElemSize,
+                         MaxRegisters);
+  const auto* warmValues = actual.values.data();
+  const auto* warmDirty = actual.dirtyElems.data();
+  std::size_t validCallbacks = 0u;
+  std::size_t emptyCallbacks = 0u;
+  std::size_t invalidCallbacks = 0u;
+  std::size_t liveApplications = 0u;
+  std::size_t calls = 0u;
+
+  const auto invoke = [&](std::uint32_t start, std::uint32_t count,
+                          const void* data, ValidatedConstWritePath expected,
+                          std::string_view label) {
+    ++calls;
+    const ConstShadow before = actual;
+    const auto* beforeValues = actual.values.data();
+    const auto* beforeDirty = actual.dirtyElems.data();
+    ConstShadow reference = actual;
+    if (expected == ValidatedConstWritePath::Valid) {
+      const auto result = oldConstTransition(
+          reference, dxmt9::d3d9::pe::RecorderPhase::Live, true, start,
+          count, data, ElemSize);
+      check(result.valid, std::string(family) + ": valid reference rejected");
+    }
+
+    const auto validBefore = validCallbacks;
+    const auto emptyBefore = emptyCallbacks;
+    const auto invalidBefore = invalidCallbacks;
+    const auto liveBefore = liveApplications;
+    const auto path = Write::template withCheckedRange<MaxRegisters>(
+        start, count, data,
+        [&](const auto& write) -> ValidatedConstWritePath {
+          ++validCallbacks;
+          ++liveApplications;
+          write.applyLive(actual);
+          return ValidatedConstWritePath::Valid;
+        },
+        [&]() -> ValidatedConstWritePath {
+          ++emptyCallbacks;
+          return ValidatedConstWritePath::Empty;
+        },
+        [&]() -> ValidatedConstWritePath {
+          ++invalidCallbacks;
+          return ValidatedConstWritePath::Invalid;
+        });
+
+    check(path == expected, std::string(family) + ": factory path differs");
+    check(validCallbacks == validBefore +
+                                (expected == ValidatedConstWritePath::Valid) &&
+              emptyCallbacks == emptyBefore +
+                                (expected == ValidatedConstWritePath::Empty) &&
+              invalidCallbacks == invalidBefore +
+                                (expected == ValidatedConstWritePath::Invalid),
+          std::string(family) + ": callback was not invoked exactly once");
+    check(liveApplications == liveBefore +
+                                  (expected == ValidatedConstWritePath::Valid),
+          std::string(family) + ": invalid/empty path invoked Live");
+    if (expected == ValidatedConstWritePath::Valid) {
+      checkConstShadowEquivalent(reference, actual, label);
+    } else {
+      checkConstShadowEquivalent(before, actual, label);
+    }
+    check(actual.values.data() == beforeValues &&
+              actual.dirtyElems.data() == beforeDirty,
+          std::string(family) + ": warm storage pointer moved");
+  };
+
+  const auto invokeBytes = [&](std::uint32_t start, std::uint32_t count,
+                               const std::vector<std::uint8_t>& bytes,
+                               ValidatedConstWritePath expected,
+                               std::string_view label) {
+    check(bytes.size() == static_cast<std::size_t>(count) * ElemSize,
+          std::string(family) + ": source fixture has the wrong extent");
+    if (count == 0u) {
+      invoke(start, count, nullptr, expected, label);
+      return;
+    }
+    // The one-byte prefix deliberately makes the source unaligned. Valid
+    // ranges always receive their complete source span; only invalid probes
+    // below use the deliberately too-small one-byte fixture.
+    std::vector<std::uint8_t> unaligned(bytes.size() + 1u, 0xa5u);
+    std::copy(bytes.begin(), bytes.end(), unaligned.begin() + 1u);
+    invoke(start, count, unaligned.data() + 1u, expected, label);
+  };
+
+  const auto classify = [](std::uint32_t start, std::uint32_t count,
+                           std::uint32_t cap) {
+    if (count == 0u) return ValidatedConstWritePath::Empty;
+    return static_cast<std::uint64_t>(start) + count <= cap
+               ? ValidatedConstWritePath::Valid
+               : ValidatedConstWritePath::Invalid;
+  };
+
+  // Exhaustive small start/count domain, including all empty calls. The
+  // boundary cases below extend this with the full family caps and uint32
+  // end/overflow representatives.
+  for (std::uint32_t start = 0u; start <= 5u; ++start) {
+    for (std::uint32_t count = 0u; count <= 5u; ++count) {
+      const auto path = classify(start, count, MaxRegisters);
+      if (path == ValidatedConstWritePath::Invalid) {
+        const std::array<std::uint8_t, 1u> tooSmall{0x5au};
+        invoke(start, count, tooSmall.data(), path, family);
+      } else {
+        invokeBytes(start, count,
+                    constTransitionBytes(ElemSize, start * 13u + count,
+                                         count),
+                    path, family);
+      }
+    }
+  }
+
+  const std::array<RangeCase, 11u> boundaries{{
+      {0u, 0u},
+      {MaxRegisters, 0u},
+      {std::numeric_limits<std::uint32_t>::max(), 0u},
+      {0u, 1u},
+      {MaxRegisters - 1u, 1u},
+      {0u, MaxRegisters},
+      {1u, MaxRegisters - 1u},
+      {MaxRegisters, 1u},
+      {MaxRegisters - 1u, 2u},
+      {std::numeric_limits<std::uint32_t>::max(), 1u},
+      {std::numeric_limits<std::uint32_t>::max() - 1u, 2u},
+  }};
+  for (const auto range : boundaries) {
+    const auto path = classify(range.start, range.count, MaxRegisters);
+    if (path == ValidatedConstWritePath::Invalid) {
+      // The factory must reject this without dereferencing the deliberately
+      // too-small source, including when start+count overflows uint32_t.
+      const std::array<std::uint8_t, 1u> tooSmall{0xc3u};
+      invoke(range.start, range.count, tooSmall.data(), path, family);
+    } else {
+      invokeBytes(range.start, range.count,
+                  constTransitionBytes(ElemSize, range.start + range.count,
+                                       range.count),
+                  path, family);
+    }
+  }
+  invoke(0u, 1u, nullptr, ValidatedConstWritePath::Invalid,
+         std::string(family) + ": null nonempty source");
+
+  const auto a = constTransitionBytes(ElemSize, 0x31u, 2u);
+  const auto b = constTransitionBytes(ElemSize, 0x32u, 2u);
+  actual.reset();
+  invokeBytes(0u, 2u, a, ValidatedConstWritePath::Valid,
+              std::string(family) + ": A seed");
+  actual.clear();
+  invokeBytes(0u, 2u, a, ValidatedConstWritePath::Valid,
+              std::string(family) + ": equal A");
+  check(!actual.dirty(), std::string(family) + ": equal write became dirty");
+  actual.clear();
+  invokeBytes(0u, 2u, b, ValidatedConstWritePath::Valid,
+              std::string(family) + ": changed B");
+  check(actual.dirty(), std::string(family) + ": changed write stayed clean");
+  actual.clear();
+  invokeBytes(0u, 2u, a, ValidatedConstWritePath::Valid,
+              std::string(family) + ": A-B-A");
+  check(actual.dirtyStart == 0u && actual.dirtyEnd == 2u &&
+            actual.dirtyElems[0] != 0u && actual.dirtyElems[1] != 0u,
+        std::string(family) + ": A-B-A dirty membership differs");
+
+  // Sparse zero-extension must materialize the requested extent while
+  // retaining the generic reducer's absent-zero/no-dirty behavior.
+  actual.reset();
+  invokeBytes(MaxRegisters - 2u, 2u,
+              std::vector<std::uint8_t>(2u * ElemSize, 0u),
+              ValidatedConstWritePath::Valid,
+              std::string(family) + ": zero extension");
+  check(actual.values.size() == static_cast<std::size_t>(MaxRegisters) *
+                                     ElemSize &&
+            actual.dirtyElems.size() == MaxRegisters && !actual.dirty(),
+        std::string(family) + ": zero extension extent/dirty differs");
+
+  // Exact self-alias is safe because equality is checked before the fixed
+  // width copy; it must not perturb bytes, extent, or dirty membership.
+  actual.reset();
+  invokeBytes(0u, 2u, a, ValidatedConstWritePath::Valid,
+              std::string(family) + ": alias seed");
+  actual.clear();
+  const ConstShadow beforeAlias = actual;
+  const auto* alias = actual.values.data() + ElemSize;
+  invoke(1u, 1u, alias, ValidatedConstWritePath::Valid,
+         std::string(family) + ": exact self alias");
+  checkConstShadowEquivalent(beforeAlias, actual,
+                             std::string(family) + ": exact self alias state");
+  check(actual.values.data() == warmValues &&
+            actual.dirtyElems.data() == warmDirty,
+        std::string(family) + ": warm pointers changed after all kernels");
+
+  check(calls == 55u && validCallbacks + emptyCallbacks + invalidCallbacks == calls &&
+            liveApplications == validCallbacks,
+        std::string(family) + ": callback accounting total differs");
+}
+
+void testValidatedConstWriteFactoryAndKernel() {
+  testValidatedConstWriteFamily<16u, 256u>("VS float cap 256");
+  testValidatedConstWriteFamily<16u, 224u>("PS float cap 224");
+  testValidatedConstWriteFamily<16u, 16u>("VS integer cap 16");
+  testValidatedConstWriteFamily<4u, 16u>("VS boolean cap 16");
+  testValidatedConstWriteFamily<16u, 16u>("PS integer cap 16");
+  testValidatedConstWriteFamily<4u, 16u>("PS boolean cap 16");
 }
 
 // Pins touchConstShadow's exact per-call semantics (dirty range, dirtyElems,
@@ -3330,6 +3583,7 @@ int main() {
     testFixedConstLiveApplyObservation<16u>();
     testFixedConstLiveApplyDifferential<4u>();
     testFixedConstLiveApplyDifferential<16u>();
+    testValidatedConstWriteFactoryAndKernel();
     testTouchConstShadowSemantics();
     testConstShadowFeedsConstantSections();
     testReferencesObjectRollbackAndOverflow();

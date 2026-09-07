@@ -170,6 +170,10 @@ void test_shader_constant_apply(const struct d3d9_api *api)
         goto done_window;
 
     CHECK_HR(IDirect3DDevice9_BeginStateBlock(device), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(device, 1, NULL, 1),
+            D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(
+            device, 0xffffffffu, NULL, 0), D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(device, 0, vs_a, 1),
             D3D_OK);
     CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantI(device, 0, ps_i_a, 1),

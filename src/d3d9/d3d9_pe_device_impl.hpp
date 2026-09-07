@@ -2477,6 +2477,29 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
             });
     }
 
+    template <std::size_t ElemSize, std::uint32_t MaxRegisters>
+    HRESULT __attribute__((always_inline)) applyConstStateWriteValidated(
+        ConstShadow& live,
+        StateBlockConstShadow PeStateBlockConstRecorded::* recordedMember,
+        std::uint32_t start, std::uint32_t count, const void* data) noexcept {
+        return ValidatedConstWrite<ElemSize>::template withCheckedRange<MaxRegisters>(
+            start, count, data,
+            [&](const auto& write) __attribute__((always_inline)) -> HRESULT {
+                // Range authority does not grant phase permission. The same
+                // writeAllowed/Recording envelope still owns this dispatch.
+                return applyConstStateWriteImpl(
+                    live, recordedMember, start, count, data, ElemSize,
+                    [&](ConstShadow& shadow, auto, auto, auto) noexcept {
+                        write.applyLive(shadow);
+                    });
+            },
+            [&]() __attribute__((always_inline)) -> HRESULT {
+                return applyConstStateWriteFixed<ElemSize>(
+                    live, recordedMember, start, 0u, data);
+            },
+            []() noexcept -> HRESULT { return D3DERR_INVALIDCALL; });
+    }
+
     static VsConstRangeChange analyzeConstShadowChange(
         const ConstShadow& shadow,
         std::uint32_t start,
@@ -3144,18 +3167,6 @@ public:
     [[nodiscard]] static HRESULT validateConstRange(UINT start, UINT count,
                                                     const void* pData,
                                                     UINT maxRegisters);
-
-    // Keep the default-off virtual setter branch self-contained. The full
-    // validator above is a cold owner for diagnostics/getters; this identical
-    // checked kernel preserves the audited fast-path codegen.
-    [[nodiscard]] static inline HRESULT validateConstRangeFast(
-        UINT start, UINT count, const void* pData, UINT maxRegisters) noexcept {
-        if (count == 0) return S_OK;
-        if (!pData) return D3DERR_INVALIDCALL;
-        const uint64_t end = static_cast<uint64_t>(start) + count;
-        if (end > maxRegisters) return D3DERR_INVALIDCALL;
-        return S_OK;
-    }
 
     /// Read a contiguous range out of a PE const shadow.
     /// If the shadow has not been grown to cover [start, start+count),

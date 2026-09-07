@@ -40,7 +40,7 @@ retained_inline_helpers = [
   "maxPendingCommandBytes", "maxPendingCommandRecords", "setRecordedRef",
   "setRecordedStreamRef", "shadowedStreamSourceEquals", "PeCallScope",
   "PeHotStateSetterTimer", "withPeCallScope", "withPeCallAndHotStateSetter",
-  "validateConstRangeFast", "applyConstStateWrite",
+  "applyConstStateWriteValidated", "applyConstStateWrite",
   "prepareSoftwareDrawCandidate", "drawPrimitiveCore",
   "notePeDeviceCallAfterPresent", "pushPeCallScope", "notePeCallScopeReturn",
   "popPeCallScope"
@@ -81,7 +81,10 @@ symbols = [
   "DrawIndexedPrimitive", "Present", "appendRecord",
   "setRenderStateCore", "applyConstStateWrite"
 ]
-fast_path_symbols = ["SetVertexShaderConstantF", "SetPixelShaderConstantF"]
+fast_path_symbols = [
+  "SetVertexShaderConstantF", "SetVertexShaderConstantI", "SetVertexShaderConstantB",
+  "SetPixelShaderConstantF", "SetPixelShaderConstantI", "SetPixelShaderConstantB"
+]
 
 [forbidden_fields]
 unstable = ["address", "rva", "timestamp", "archive_order", "relocation", "assembly_hash"]

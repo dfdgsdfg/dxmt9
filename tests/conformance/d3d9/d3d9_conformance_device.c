@@ -1049,6 +1049,9 @@ void test_vertex_shader_constant(const struct d3d9_api *api)
     D3DCAPS9 caps;
     HWND window;
     HRESULT hr;
+    UINT vs_f_cap;
+    const UINT vs_i_cap = 16u;
+    const UINT vs_b_cap = 16u;
 
     d3d9 = api->create9(D3D_SDK_VERSION);
     if (!d3d9)
@@ -1068,6 +1071,7 @@ void test_vertex_shader_constant(const struct d3d9_api *api)
 
     memset(&caps, 0, sizeof(caps));
     CHECK_HR(IDirect3DDevice9_GetDeviceCaps(device, &caps), D3D_OK);
+    vs_f_cap = caps.MaxVertexShaderConst;
 
     CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(device, 0, floats, 2),
             D3D_OK);
@@ -1106,13 +1110,44 @@ void test_vertex_shader_constant(const struct d3d9_api *api)
     CHECK_HR(IDirect3DDevice9_GetVertexShaderConstantB(device, 0, NULL, 1),
             D3DERR_INVALIDCALL);
 
-    if (caps.MaxVertexShaderConst)
+    if (vs_f_cap)
     {
         CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(device,
-                caps.MaxVertexShaderConst, floats, 1), D3DERR_INVALIDCALL);
+                vs_f_cap, floats, 1), D3DERR_INVALIDCALL);
         CHECK_HR(IDirect3DDevice9_GetVertexShaderConstantF(device,
-                caps.MaxVertexShaderConst, out_f, 1), D3DERR_INVALIDCALL);
+                vs_f_cap, out_f, 1), D3DERR_INVALIDCALL);
     }
+
+    /* Zero-count validation accepts NULL and any start without touching state;
+     * the final register remains writable, while one-past and nonzero NULL
+     * ranges are rejected for each constant width. */
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(
+            device, 0xffffffffu, NULL, 0), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantI(
+            device, 0xffffffffu, NULL, 0), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantB(
+            device, 0xffffffffu, NULL, 0), D3D_OK);
+    if (vs_f_cap)
+    {
+        CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(
+                device, vs_f_cap - 1u, floats, 1), D3D_OK);
+        CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(
+                device, vs_f_cap, floats, 1), D3DERR_INVALIDCALL);
+        CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantF(
+                device, 1u, NULL, 1), D3DERR_INVALIDCALL);
+    }
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantI(
+            device, vs_i_cap - 1u, ints, 1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantI(
+            device, vs_i_cap, ints, 1), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantI(
+            device, 1u, NULL, 1), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantB(
+            device, vs_b_cap - 1u, bools, 1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantB(
+            device, vs_b_cap, bools, 1), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_SetVertexShaderConstantB(
+            device, 1u, NULL, 1), D3DERR_INVALIDCALL);
 
     IDirect3DDevice9_Release(device);
 done_window:
@@ -1233,6 +1268,9 @@ void test_pixel_shader_constant(const struct d3d9_api *api)
     IDirect3D9 *d3d9;
     HWND window;
     HRESULT hr;
+    const UINT ps_f_cap = 224u;
+    const UINT ps_i_cap = 16u;
+    const UINT ps_b_cap = 16u;
 
     d3d9 = api->create9(D3D_SDK_VERSION);
     if (!d3d9)
@@ -1286,6 +1324,34 @@ void test_pixel_shader_constant(const struct d3d9_api *api)
             D3DERR_INVALIDCALL);
     CHECK_HR(IDirect3DDevice9_GetPixelShaderConstantB(device, 0, NULL, 1),
             D3DERR_INVALIDCALL);
+
+    /* Keep the empty write independent of the initialized register values;
+     * exercise the exact final slot and the one-past/null rejection for all
+     * three pixel-shader constant widths. */
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantF(
+            device, 0xffffffffu, NULL, 0), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantI(
+            device, 0xffffffffu, NULL, 0), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantB(
+            device, 0xffffffffu, NULL, 0), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantF(
+            device, ps_f_cap - 1u, floats, 1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantF(
+            device, ps_f_cap, floats, 1), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantF(
+            device, 1u, NULL, 1), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantI(
+            device, ps_i_cap - 1u, ints, 1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantI(
+            device, ps_i_cap, ints, 1), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantI(
+            device, 1u, NULL, 1), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantB(
+            device, ps_b_cap - 1u, bools, 1), D3D_OK);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantB(
+            device, ps_b_cap, bools, 1), D3DERR_INVALIDCALL);
+    CHECK_HR(IDirect3DDevice9_SetPixelShaderConstantB(
+            device, 1u, NULL, 1), D3DERR_INVALIDCALL);
 
     IDirect3DDevice9_Release(device);
 done_window:

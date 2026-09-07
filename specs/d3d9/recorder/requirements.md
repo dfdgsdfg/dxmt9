@@ -1138,3 +1138,18 @@ OFF/ON reuse, stale range/ticket, token rejection and retry with exact bytes
 and pending-state effects. PE32/PE64 layout and linked-code evidence must
 establish the absence of new storage and actual removed work; source-level
 array declarations or fewer checks alone do not prove lower CPU cost.
+
+**R-CORE-REC-7.62** Public constant setters may pass call-local immutable
+nonempty range authority to the fixed-width Live consumer instead of repeating
+null and extent validation. The authority must bind the exact source pointer,
+start, end and element width, be issued only after overflow-safe register-cap
+validation, and neither escape the synchronous call nor add persistent storage.
+Empty writes must take their original no-op route, including arbitrary start
+and null input; failed nonempty validation must precede effects. Range authority
+must not bypass poison, phase write permission or StateBlock Recording routing.
+The generic checked entry and canonical transition remain authoritative for
+unqualified inputs. Bounded native tests must cover all six family caps,
+invalid/empty dispatch, bitwise values, zero extension, dirty membership,
+alias/reuse and boundary overflow. Linked PE32/PE64 evidence must qualify both
+caller and consumer costs, and actual PE conformance plus separate observer-OFF
+CPU/FPS and PE profiles must precede performance claims.

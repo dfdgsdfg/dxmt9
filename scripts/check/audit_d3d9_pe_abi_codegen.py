@@ -94,6 +94,16 @@ def count_owner_definitions(text: str, symbol: str) -> int:
     return len(re.findall(r"D3D9DeviceImpl::" + re.escape(symbol) + r"\s*\([^;]*\)\s*(?:noexcept\s*)?\{", text, re.S))
 
 
+def require_fast_constant_route(device: str, symbol: str) -> None:
+    # These six out-of-class definitions close at column zero. Do not let a
+    # later setter's marker satisfy a missing route in the requested body.
+    match = re.search(
+        r"D3D9DeviceImpl::" + re.escape(symbol) +
+        r"\([^;]*?\)\s*noexcept\s*\{(.*?)^\}", device, re.S | re.M)
+    if not match or "applyConstStateWriteValidated<" not in match.group(1):
+        fail(f"default-hot validated range route missing for {symbol}")
+
+
 def source_audit(manifest: dict) -> dict:
     impl = (ROOT / "src/d3d9/d3d9_pe_device_impl.hpp").read_text()
     device = (ROOT / "src/d3d9/d3d9_pe_device.cpp").read_text()
@@ -167,12 +177,7 @@ def source_audit(manifest: dict) -> dict:
         if f"static_assert(alignof(D3D9DeviceImpl) == {alignment});" not in device:
             fail(f"D3D9DeviceImpl {arch} alignof pin is missing")
     for fast_symbol in manifest["hot"]["fast_path_symbols"]:
-        if not re.search(
-            re.escape(fast_symbol) + r"\(.*?validateConstRangeFast",
-            device,
-            re.S,
-        ):
-            fail(f"default-hot fast-path proof missing for {fast_symbol}")
+        require_fast_constant_route(device, fast_symbol)
 
     owner_markers = {
         "query_interface": "D3D9DeviceImpl::QueryInterface",

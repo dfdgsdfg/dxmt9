@@ -13,6 +13,18 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.62's nonempty constant-range authority is implemented: all six
+fast public setters share a cap-qualified visitor with the fixed-width
+consumer, retaining the existing phase envelope and checked generic entry.
+[H260](../../../docs/perfomance/present-pacing/present-pacing-pe-validated-constant-range.260.md)
+retains 330 native factory/value cases, two failing production mutations,
+restored native 12/12 and x86_64 6/6, linked PE32/PE64 caller/consumer costs
+and five actual Wine getter/StateBlock cases per width. No new setter call
+or persistent state is added; DLL and observed-wrapper size tradeoffs remain.
+The new native fixture does not exercise the private poisoned/Terminal PE
+adapter. Fresh CPU/FPS and complete PE profiles are pending; neither work
+removal nor these correctness checks establish reduced CPU or recovered FPS.
+
 R-CORE-REC-7.61 compact settlement now reuses immutable producer-selected
 constant presence and consolidates duplicate current-ticket checks inside the
 non-invalidating lexical interval. All represented dirty-range, source/domain,

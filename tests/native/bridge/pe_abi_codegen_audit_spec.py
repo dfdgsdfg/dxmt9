@@ -23,6 +23,21 @@ def expect_failure(label: str, operation) -> None:
     raise AssertionError(f"negative fixture unexpectedly passed: {label}")
 
 
+fast_body = """
+HRESULT D3D9DeviceImpl::SetVertexShaderConstantF() noexcept {
+    return applyConstStateWriteValidated<16u, 256u>();
+}
+"""
+AUDIT.require_fast_constant_route(fast_body, "SetVertexShaderConstantF")
+expect_failure(
+    "a later setter cannot satisfy a missing validated route",
+    lambda: AUDIT.require_fast_constant_route(
+        fast_body.replace("applyConstStateWriteValidated", "unchecked") +
+        fast_body.replace("SetVertexShaderConstantF", "SetPixelShaderConstantF"),
+        "SetVertexShaderConstantF"),
+)
+
+
 x86_machine = {
     "system": "windows",
     "cpu_family": "x86",

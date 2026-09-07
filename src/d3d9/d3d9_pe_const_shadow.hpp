@@ -13,6 +13,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <utility>
 #include <vector>
 
 struct ConstShadow {
@@ -446,20 +447,56 @@ inline void constShadowFixedElemCopy(std::uint8_t* destination,
     }
 }
 
+// Call-local validation authority, not persistent shadow or wire storage.
+// Only the checked visitor can issue a nonempty range. Keep the payload and
+// extent together so a consumer cannot substitute independently checked data.
 template <std::size_t ElemSize>
-inline void applyConstShadowLiveFixedWidth(
-    ConstShadow& shadow, std::uint32_t start, std::uint32_t count,
-    const void* data) {
+class ValidatedConstWrite {
     static_assert(ElemSize == 4u || ElemSize == 16u);
-    if (count == 0u || !data) return;
+public:
+    ValidatedConstWrite(const ValidatedConstWrite&) = delete;
+    ValidatedConstWrite& operator=(const ValidatedConstWrite&) = delete;
 
-    const std::uint64_t end64 = static_cast<std::uint64_t>(start) + count;
-    if (end64 > 0xffffffffull ||
-        ElemSize > 0xffffffffull / end64) {
-        return;
+    template <std::uint32_t MaxRegisters, typename Visit, typename Empty,
+              typename Invalid>
+    // This visitor replaces the inlined public validator. Outlining it would
+    // materialize its three call-local closures at every public setter.
+    static __attribute__((always_inline)) decltype(auto) withCheckedRange(
+        std::uint32_t start, std::uint32_t count, const void* data,
+        Visit&& visit, Empty&& empty, Invalid&& invalid) {
+        static_assert(MaxRegisters <= 0xffffffffull / ElemSize);
+        if (count == 0u) return std::forward<Empty>(empty)();
+        if (!data) return std::forward<Invalid>(invalid)();
+        const std::uint64_t end = static_cast<std::uint64_t>(start) + count;
+        if (end > MaxRegisters) return std::forward<Invalid>(invalid)();
+        const ValidatedConstWrite write(start, static_cast<std::uint32_t>(end), data);
+        return std::forward<Visit>(visit)(write);
     }
-    const std::size_t needed = static_cast<std::size_t>(end64) * ElemSize;
-    const std::size_t neededElems = static_cast<std::size_t>(end64);
+
+    void applyLive(ConstShadow& shadow) const {
+        applyNonEmpty(shadow, start_, end_, data_);
+    }
+
+private:
+    ValidatedConstWrite(std::uint32_t start, std::uint32_t end,
+                        const void* data) noexcept
+        : start_(start), end_(end), data_(data) {}
+
+    static void applyNonEmpty(ConstShadow& shadow, std::uint32_t start,
+                              std::uint32_t end, const void* data);
+
+    const std::uint32_t start_;
+    const std::uint32_t end_;
+    const void* const data_;
+};
+
+template <std::size_t ElemSize>
+inline void ValidatedConstWrite<ElemSize>::applyNonEmpty(
+    ConstShadow& shadow, std::uint32_t start, std::uint32_t end,
+    const void* data) {
+    const std::uint32_t count = end - start;
+    const std::size_t needed = static_cast<std::size_t>(end) * ElemSize;
+    const std::size_t neededElems = end;
     if (shadow.values.size() < needed) shadow.values.resize(needed);
     if (shadow.dirtyElems.size() < neededElems)
         shadow.dirtyElems.resize(neededElems);
@@ -497,6 +534,17 @@ inline void applyConstShadowLiveFixedWidth(
         shadow.dirtyStart = std::min(shadow.dirtyStart, changedStart);
         shadow.dirtyEnd = std::max(shadow.dirtyEnd, changedEnd);
     }
+}
+
+// Checked generic/native entry retains its original null/empty/overflow
+// behavior. Public setters can reuse their stricter register-cap admission.
+template <std::size_t ElemSize>
+inline void applyConstShadowLiveFixedWidth(
+    ConstShadow& shadow, std::uint32_t start, std::uint32_t count,
+    const void* data) {
+    ValidatedConstWrite<ElemSize>::template withCheckedRange<0xffffffffu / ElemSize>(
+        start, count, data,
+        [&](const auto& write) { write.applyLive(shadow); }, [] {}, [] {});
 }
 
 // Reduce and, in Apply mode, commit one constant-setter transition. Observe
