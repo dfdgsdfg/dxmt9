@@ -30,6 +30,16 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H288](present-pacing-pe-retainer-component-cost.288.md) separates controlled
+index, expiry and non-final release costs using the current DLL's actual PE
+bodies. Six processes pass with compiler-qualified real retainer storage and
+real resources. Warm PE32 100-entry rebuild averages 1.705µs; interleaved
+124→100 expiry averages 5.583µs. A hypothetical rebuild at every H287 epoch
+is only 27/32µs per Present, not workload weighting, a bound or savings.
+The larger in-situ diagnostic epoch cost remains independently unattributed.
+No index rewrite, new FPS run or runtime promotion follows; whole-owner work
+and repeatable CPU economy remain the larger investigation gate.
+
 [H287](present-pacing-pe-retainer-epoch-shapes.287.md) separates sampled
 retainer expiry from rollback tombstones without changing the default path.
 About 94% of the 05/06 GT2 epoch samples rebuild after expiry; average sets

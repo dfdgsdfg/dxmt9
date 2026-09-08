@@ -13,6 +13,16 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H288](../../../docs/perfomance/present-pacing/present-pacing-pe-retainer-component-cost.288.md)
+partially closes H287's component-economy evidence gap: six actual PE32/PE64
+processes price loaded index/epoch bodies and non-final buffer/texture release,
+with real resources, unchanged product images and 16 parser pins. Warm PE32
+100-entry rebuild is 1.705µs; interleaved 124→100 expiry is 5.583µs. These are
+isolated QPC prices, not GT2 weighting, exclusive CPU or savings. In-situ
+per-kind/final-release costs, candidate lookup/rollback/collision economics,
+repeatable whole-PE economy and README recovery remain open. No index or
+lifetime implementation change, new TLA+ proof or promotion is claimed.
+
 [H287](../../../docs/perfomance/present-pacing/present-pacing-pe-retainer-epoch-shapes.287.md)
 implements R-CORE-REC-7.63's sampled retainer epoch projection and conserved,
 bounded distribution. Native 6+6 and six actual PE pixel processes pass;

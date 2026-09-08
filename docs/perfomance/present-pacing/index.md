@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H288](present-pacing-pe-retainer-component-cost.288.md) prices the actual
+loaded retainer bodies without changing production: warm PE32 100-entry
+rebuild is 1.705µs and interleaved 24-entry expiry is 5.583µs. Six PE32/PE64
+processes pass. This prices controlled fixtures, not GT2 CPU or savings;
+index/release rewrites and repeatable whole-PE economy remain unproven.
+
 [H287](present-pacing-pe-retainer-epoch-shapes.287.md) supplies conserved
 retainer epoch samples: expiry, not rollback tombstones, dominates the
 observed GT2 rebuilding. Native, actual PE pixels and unchanged default-code
