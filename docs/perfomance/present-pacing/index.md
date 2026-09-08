@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H274](present-pacing-inline-consumers.274.md) repeats inline OFF/ON economy
+with eight same-image Warn GT2 runs: 05 FPS +2.42%, process CPU/frame −0.49%;
+06 +0.24%/+0.15%, without a repeatable CPU saving. A cold capture-origin fix
+passes native rejection pins and four exact PE32/PE64 fresh-provider oracles;
+PE capture teardown still fails. Default stays OFF.
+
 [H273](present-pacing-pe-selected-masks.273.md) rejects three compact mask-reuse
 forms that trade the removed source reread for added PE32 spills. Original runtime
 remains; 108 native selection cases and fresh default-path GT2 CPU baselines

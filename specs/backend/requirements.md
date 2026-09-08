@@ -387,7 +387,7 @@ use) must
 (a) when the flag is unset, drain consumed dirty constant ranges as standalone
 canonical records before the draw, without adding inline constant sections;
 both modes use the same canonical wire schema and non-constant field layout;
-(b) when set, let `Draw*` records carry per-shadow merged
+(b) when set, let eligible bound Draw/DrawIndexed records carry per-shadow merged
 constant-delta sections (VS/PS × float/int/bool, each `{valid, startRegister,
 registerCount}` plus payload, mirroring the `D9CCommandRecordSetConst`
 element-size rules) instead of emitting standalone
@@ -398,9 +398,13 @@ before any state is applied or any handle is retained, rejecting the chunk on
 violation exactly like other malformed packets; (d) apply const sections with
 replay semantics observably equivalent to replaying the equivalent standalone
 const records immediately before the same draw, preserving chunk order;
-(e) keep standalone const records for every non-`Draw*` consumer of shader
-constants (`ProcessVertices`, chunk-barrier and chunk-end const drains) — the
-inline path may fold only constants that the carrying draw consumes; (f) not
+(e) preserve each consumer's authoritative state and ordering: chunk-barrier,
+chunk-end and UP/indexed-UP paths retain standalone constant drains;
+PE-local `ProcessVertices` must read the current live VS float/int/bool shadows
+without requiring their prior wire emission, and must not settle their pending
+recorder deltas merely by reading them. Folding may change representation, not
+the effective constant state available to this or a later consumer, including
+after a fixed-function/programmable shader switch; (f) not
 introduce new draw-run break classes: a const-bearing packet may break a
 coalesced run at most where the equivalent standalone const record breaks it
 today; and (g) preserve the canonical section grammar and PE/unix schema
@@ -411,6 +415,14 @@ emission to production replay in both current direct and compatibility paths,
 checking all six effective constant files at each ordered draw against an
 independent reference. Raw wire equality, decoder-only sinks and uniform
 handle/hash equality alone cannot establish this representation equivalence.
+Render Tape materialization must preserve the accepted representation's exact
+command bytes and ordered constant effects through capture and replay; OFF
+standalone and ON inline bundles are not required to be byte-identical to one
+another. Capture closure, wire shape, and actual output each require their own
+evidence. After canonical validation, origin discovery must not interpret an
+inline constant section as a fixed-stride resource-binding table. Its variable
+payload geometry does not by itself make a valid draw's resource origin
+malformed; canonical constant range/size rejection remains mandatory.
 
 **R-BACK-2.53** *(Retired wire grammar absent.)* Production PE and unix code
 must not declare, advertise, negotiate, produce, import, or replay the retired

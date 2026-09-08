@@ -235,10 +235,11 @@ HWND create_window() {
       nullptr, nullptr, nullptr, nullptr);
 }
 
-IDirect3DDevice9 *create_device(IDirect3D9 *d3d9, HWND window, HRESULT *last_hr) {
+IDirect3DDevice9 *create_device(IDirect3D9 *d3d9, HWND window, HRESULT *last_hr,
+                               unsigned back_buffer_height = 64) {
   D3DPRESENT_PARAMETERS pp = {};
   pp.BackBufferWidth = 64;
-  pp.BackBufferHeight = 64;
+  pp.BackBufferHeight = back_buffer_height;
   pp.BackBufferFormat = D3DFMT_A8R8G8B8;
   pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
   pp.hDeviceWindow = window;
@@ -257,9 +258,11 @@ IDirect3DDevice9 *create_device(IDirect3D9 *d3d9, HWND window, HRESULT *last_hr)
 
 struct Fixture {
   bool edge_layout = false;
+  bool capture_mode = false;
   unsigned rows = kPlainRows;
   unsigned height = kPlainHeight;
   unsigned path_count = kPlainPathCount;
+  unsigned device_height = 64;
   HWND window = nullptr;
   IDirect3D9 *d3d9 = nullptr;
   IDirect3DDevice9 *device = nullptr;
@@ -271,11 +274,15 @@ struct Fixture {
   IDirect3DVertexShader9 *vs = nullptr;
   IDirect3DPixelShader9 *ps = nullptr;
 
-  bool init(bool use_edge_layout = false) {
+  bool init(bool use_edge_layout = false, bool use_capture_mode = false) {
     edge_layout = use_edge_layout;
-    rows = edge_layout ? kEdgeRows : kPlainRows;
-    height = edge_layout ? kEdgeHeight : kPlainHeight;
-    path_count = edge_layout ? kEdgePathCount : kPlainPathCount;
+    capture_mode = use_capture_mode;
+    rows = capture_mode ? kRowsPerPath : (edge_layout ? kEdgeRows : kPlainRows);
+    height = capture_mode ? kRowsPerPath * 16u
+                          : (edge_layout ? kEdgeHeight : kPlainHeight);
+    path_count = capture_mode ? 1u
+                              : (edge_layout ? kEdgePathCount : kPlainPathCount);
+    device_height = capture_mode ? height : 64u;
     window = create_window();
     if (!window) {
       fail_at(__LINE__, "CreateWindowA failed");
@@ -287,22 +294,24 @@ struct Fixture {
       return false;
     }
     HRESULT create_hr = E_FAIL;
-    device = create_device(d3d9, window, &create_hr);
+    device = create_device(d3d9, window, &create_hr, device_height);
     if (!device) {
       std::printf("FAIL:%d: CreateDevice(HAL,HARDWARE_VERTEXPROCESSING) returned 0x%08lx\n",
           __LINE__, static_cast<unsigned long>(create_hr));
       ++failures;
       return false;
     }
-    CHECK_HR(device->CreateRenderTarget(kWidth, height, D3DFMT_A8R8G8B8,
-        D3DMULTISAMPLE_NONE, 0, FALSE, &render_target, nullptr), D3D_OK);
-    CHECK_HR(device->CreateOffscreenPlainSurface(kWidth, height, D3DFMT_A8R8G8B8,
-        D3DPOOL_SYSTEMMEM, &readback, nullptr), D3D_OK);
+    if (!capture_mode) {
+      CHECK_HR(device->CreateRenderTarget(kWidth, height, D3DFMT_A8R8G8B8,
+          D3DMULTISAMPLE_NONE, 0, FALSE, &render_target, nullptr), D3D_OK);
+      CHECK_HR(device->CreateOffscreenPlainSurface(kWidth, height, D3DFMT_A8R8G8B8,
+          D3DPOOL_SYSTEMMEM, &readback, nullptr), D3D_OK);
+    }
     CHECK_HR(device->CreateVertexShader(
         edge_layout ? kVertexShaderEdge : kVertexShader, &vs), D3D_OK);
     CHECK_HR(device->CreatePixelShader(
         edge_layout ? kPixelShaderEdge : kPixelShader, &ps), D3D_OK);
-    if (!render_target || !readback || !vs || !ps) return false;
+    if (!vs || !ps || (!capture_mode && (!render_target || !readback))) return false;
 
     const D3DVERTEXELEMENT9 elements[] = {
         {0, 0, D3DDECLTYPE_FLOAT4, D3DDECLMETHOD_DEFAULT,
@@ -363,10 +372,12 @@ struct Fixture {
       // Drop caller-owned default-pool references before Reset detaches the
       // bound target. Do not acquire an implicit backbuffer merely for cleanup:
       // that would introduce a separate swapchain/surface lifetime into this
-      // constant-state oracle. This reset follows the single pixel readback.
+      // constant-state oracle. Capture mode validates pixels from the
+      // Present-boundary source artifact instead of acquiring a backbuffer
+      // getter or issuing a post-Present readback.
       D3DPRESENT_PARAMETERS pp = {};
       pp.BackBufferWidth = 64;
-      pp.BackBufferHeight = 64;
+      pp.BackBufferHeight = device_height;
       pp.BackBufferFormat = D3DFMT_A8R8G8B8;
       pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
       pp.hDeviceWindow = window;
@@ -582,6 +593,30 @@ void print_and_check_row(const char *path, Family family, unsigned row,
   }
 }
 
+void print_capture_expected_row(Family family, unsigned row) {
+  const D3DCOLOR expected_b = kChanged[static_cast<unsigned>(family)];
+  std::printf("CAPTURE_EXPECTED_SIGNATURE family=%s row=%u values=",
+      family_name(family), row);
+  for (unsigned slot = 0; slot < 3; ++slot) {
+    const D3DCOLOR expected = slot == 1 ? expected_b : kBaseline;
+    std::printf("0x%08lx%s", static_cast<unsigned long>(expected), slot == 2 ? "" : ",");
+  }
+  std::printf(" expected=0x%08lx,0x%08lx,0x%08lx\n",
+      static_cast<unsigned long>(kBaseline),
+      static_cast<unsigned long>(expected_b),
+      static_cast<unsigned long>(kBaseline));
+}
+
+bool capture_environment_ready() {
+  const char *capture = std::getenv("DXMT9_RENDER_TAPE_CAPTURE");
+  const char *root = std::getenv("DXMT9_RENDER_TAPE_OUTPUT_ROOT");
+  if (capture && *capture && std::strcmp(capture, "0") != 0 && root && *root) return true;
+  std::printf("FAIL:capture selector requires DXMT9_RENDER_TAPE_CAPTURE and "
+      "DXMT9_RENDER_TAPE_OUTPUT_ROOT\n");
+  ++failures;
+  return false;
+}
+
 void print_edge_layout_receipt(const Fixture &fixture) {
   std::printf("selected-layout: edge\n");
   std::printf("layout: edge registers=VS c255/i15/b15 PS c223/i15/b15 scales=c4/c5\n");
@@ -659,6 +694,67 @@ void run_pixel_oracle(bool edge_layout = false) {
       }
     }
     CHECK_HR(fixture.readback->UnlockRect(), D3D_OK);
+  }
+}
+
+void run_capture_oracle() {
+  std::printf("capture-selector: capture\n");
+  const char *selected = std::getenv("DXMT9_PE_INLINE_CONST_DELTA");
+  std::printf("selected-env: DXMT9_PE_INLINE_CONST_DELTA=%s (reported only)\n",
+      selected ? selected : "<unset>");
+  std::printf("scope: Render Tape capture interval; 17 ordinary bound draws plus one indexed control; six A-B-A rows\n");
+  std::printf("capture-oracle: expected-only; actual pixels validated by external captured-source oracle\n");
+  if (!capture_environment_ready()) return;
+
+  Fixture fixture;
+  if (!fixture.init(false, true)) return;
+
+  CHECK_HR(fixture.device->SetDepthStencilSurface(nullptr), D3D_OK);
+  const D3DVIEWPORT9 viewport = {0, 0, kWidth, fixture.height, 0.0f, 1.0f};
+  CHECK_HR(fixture.device->SetViewport(&viewport), D3D_OK);
+  CHECK_HR(fixture.device->SetVertexDeclaration(fixture.declaration), D3D_OK);
+  CHECK_HR(fixture.device->SetVertexShader(fixture.vs), D3D_OK);
+  CHECK_HR(fixture.device->SetPixelShader(fixture.ps), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_ZENABLE, FALSE), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_LIGHTING, FALSE), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE), D3D_OK);
+  CHECK_HR(fixture.device->SetStreamSource(0, fixture.vertices, 0, sizeof(Vertex)), D3D_OK);
+  CHECK_HR(fixture.device->SetIndices(fixture.indices), D3D_OK);
+  set_baseline_constants(fixture.device, false);
+  for (unsigned family_index = 0; family_index < 6; ++family_index) {
+    set_family_value(fixture.device, static_cast<Family>(family_index), true, false);
+  }
+
+  // All resource creation and bootstrap state publication precede arming.
+  CHECK_HR(fixture.device->Clear(0, nullptr, D3DCLEAR_TARGET,
+      D3DCOLOR_ARGB(255, 0, 0, 0), 1.0f, 0), D3D_OK);
+  CHECK_HR(fixture.device->Present(nullptr, nullptr, nullptr, nullptr), D3D_OK);
+
+  // DISCARD does not preserve the prior Present's clear. Seed this captured
+  // interval explicitly so fresh replay also defines the uncovered pixels.
+  CHECK_HR(fixture.device->Clear(0, nullptr, D3DCLEAR_TARGET,
+      D3DCOLOR_ARGB(255, 0, 0, 0), 1.0f, 0), D3D_OK);
+  CHECK_HR(fixture.device->BeginScene(), D3D_OK);
+  set_baseline_constants(fixture.device, false);
+  for (unsigned family_index = 0; family_index < 6; ++family_index) {
+    const Family family = static_cast<Family>(family_index);
+    check_draw_hr(draw_slot(fixture, family_index, 0, 0), __LINE__);
+    set_family_value(fixture.device, family, true, false);
+    check_draw_hr(draw_slot(fixture, family_index, 1, 0), __LINE__);
+    set_family_value(fixture.device, family, false, false);
+    // The general production-provider grammar currently requires an indexed
+    // draw. Keep one explicit control, without changing the expected A pixel.
+    check_draw_hr(draw_slot(fixture, family_index, 2,
+        family_index == 5u ? 1u : 0u), __LINE__);
+  }
+  CHECK_HR(fixture.device->EndScene(), D3D_OK);
+  // Present #2 captures source/output bytes and closes the interval. The
+  // external driver checks those artifacts; the fixture adds no CPU readback.
+  CHECK_HR(fixture.device->Present(nullptr, nullptr, nullptr, nullptr), D3D_OK);
+
+  for (unsigned family_index = 0; family_index < 6; ++family_index) {
+    print_capture_expected_row(static_cast<Family>(family_index), family_index);
   }
 }
 
@@ -776,7 +872,8 @@ void run_stateblock_oracle(bool edge_layout = false) {
 
 int main() {
   const char *selected_case = std::getenv("DXMT9_TEST_INLINE_CONSTANT_CASE");
-  if (selected_case && std::strcmp(selected_case, "stateblock") != 0) {
+  if (selected_case && std::strcmp(selected_case, "stateblock") != 0 &&
+      std::strcmp(selected_case, "capture") != 0) {
     std::printf("FAIL: invalid DXMT9_TEST_INLINE_CONSTANT_CASE=%s\n",
         selected_case);
     return EXIT_FAILURE;
@@ -788,8 +885,15 @@ int main() {
         selected_layout);
     return EXIT_FAILURE;
   }
+  if (selected_case && std::strcmp(selected_case, "capture") == 0 && selected_layout) {
+    std::printf("FAIL: capture selector only supports the base SM3 layout; "
+        "DXMT9_TEST_INLINE_CONSTANT_LAYOUT=%s is not valid\n", selected_layout);
+    return EXIT_FAILURE;
+  }
   const bool edge_layout = selected_layout != nullptr;
-  if (selected_case) {
+  if (selected_case && std::strcmp(selected_case, "capture") == 0) {
+    run_capture_oracle();
+  } else if (selected_case) {
     run_stateblock_oracle(edge_layout);
   } else {
     run_pixel_oracle(edge_layout);
@@ -799,6 +903,10 @@ int main() {
     return EXIT_FAILURE;
   }
   std::printf("PASS:inline_constants\n");
-  std::printf("inline_constants: passed (real PE pixel oracle)\n");
+  if (selected_case && std::strcmp(selected_case, "capture") == 0) {
+    std::printf("inline_constants: capture submitted (external bundle oracle required)\n");
+  } else {
+    std::printf("inline_constants: passed (real PE pixel oracle)\n");
+  }
   return EXIT_SUCCESS;
 }

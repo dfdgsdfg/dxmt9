@@ -29,6 +29,16 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H274](present-pacing-inline-consumers.274.md) completes eight same-image
+Warn inline OFF/ON GT2 runs. Sample-weighted 05 FPS changes 29.413→30.124
+(+2.42%) while process CPU/frame changes −0.49%; 06 changes 18.131→18.174
+(+0.24%) with CPU +0.15%. Small-N counterbalancing is not a CPU-economy or
+README-recovery proof. A new PE capture oracle exposes a variable-section
+origin-lookup defect: the cold fix passes canonical negatives and four fresh
+PE32/PE64 bundle source/output oracles. The known backbuffer wrapper cycle
+still leaves two device refs, so capture conformance remains failing and the
+inline candidate remains default-off.
+
 [H273](present-pacing-pe-selected-masks.273.md) finds a real duplicate
 PendingDelta mask read but rejects all three reuse forms on linked PE32
 spill/address cost. Production is restored exactly, with stronger native

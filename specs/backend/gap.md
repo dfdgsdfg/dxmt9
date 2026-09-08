@@ -11,6 +11,17 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Backend Layer
 
+[H274](../../docs/perfomance/present-pacing/present-pacing-inline-consumers.274.md)
+corrects the R-BACK-2.52 ProcessVertices live-shadow consumer contract and
+fixes capture-origin traversal of canonically valid inline constant sections.
+Native descriptor/identity and malformed-input pins pass. Four PE32/PE64
+OFF/ON capture bundles pass exact fresh-provider source/output oracles, but
+all four PE processes still fail teardown with two device refs from the
+known swapchain/backbuffer wrapper cycle. That failure remains open; source
+content is not full capture conformance. Eight same-image Warn GT2 runs show
+a small 05 FPS signal but no material total-CPU saving or repeatable 06 gain.
+Consumer/switch/failure completeness and default promotion remain open.
+
 [H271](../../docs/perfomance/present-pacing/present-pacing-pe-transport-inline-boundaries.271.md)
 extends R-BACK-2.52 with sampled SM3 VS c255/PS c223, i15/b15 and indexed-UP
 coverage. A separate PE segmented empty-role defect is reproduced, fixed and

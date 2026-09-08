@@ -57,6 +57,14 @@ struct DrawSnapshot {
   friend bool operator==(const DrawSnapshot&, const DrawSnapshot&) = default;
 };
 
+struct CaptureIdentityReceipt {
+  std::uint64_t captureToken = 0u;
+  std::uint64_t eventOrdinal = 0u;
+  std::uint32_t emittedRecordCount = 0u;
+  D9CRenderTapeIdentityCaptureResult identity{};
+  std::vector<std::byte> identityBytes{};
+};
+
 std::vector<u8> bytesOf(const void* data, std::size_t size) {
   const auto* first = static_cast<const u8*>(data);
   return {first, first + size};
@@ -514,7 +522,9 @@ void appendStandaloneConstants(pe::PeSemanticBatchOwner<>& owner,
 std::vector<DrawSnapshot> produceAndReplay(bool inlineConstants, bool direct,
                                            std::uint32_t familyMask,
                                            std::uint32_t& directCalls,
-                                           std::uint32_t& ordinaryCalls) {
+                                           std::uint32_t& ordinaryCalls,
+                                           CaptureIdentityReceipt*
+                                               captureReceipt = nullptr) {
   RuntimeFixture fixture(/*cpuReady=*/direct, direct);
   D9CShader vs(&*fixture.cDevice);
   D9CShader ps(&*fixture.cDevice);
@@ -636,15 +646,40 @@ std::vector<DrawSnapshot> produceAndReplay(bool inlineConstants, bool direct,
             (!inlineConstants && imported.records.size() == 4u + expectedStandaloneCount &&
              standaloneCount == expectedStandaloneCount),
         "wire shape must distinguish inline sections from standalone records");
-  dxmt9::d3d9::RawCommandChunk raw;
-  check(dxmt9::d3d9::prepareOffloadChunk(
-            exact.wire, envelope, fixture.cDevice->wireObjects,
-            retainWireObject, raw),
-        "exact owner wire must pass production offload preparation");
-  raw.replaySeq = 1u;
-  raw.cpuReadyTapePlanningEnabled = direct;
-  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK,
-        "production replay must accept compact owner wire");
+  if (captureReceipt) {
+    check(direct, "capture identity binding requires direct arena replay");
+    check(captureReceipt->captureToken != 0u &&
+              captureReceipt->eventOrdinal != 0u,
+          "capture identity binding requires a token/event pair");
+    const D9CCommandChunk captureChunk{
+        .version = envelope.version,
+        .recordCount = envelope.recordCount,
+        .recordBytes = exact.wireBytes,
+        .records = toWireHandle(exact.wire.data()),
+        .handleCount = envelope.handleCount,
+        .handles = {},
+        .renderTapeCaptureToken = captureReceipt->captureToken,
+        .renderTapeEventOrdinal = captureReceipt->eventOrdinal,
+        .producerIdentity = envelope.producerIdentity,
+    };
+    captureReceipt->emittedRecordCount = envelope.recordCount;
+    check(dxmt9c_device_commit_chunk(fixture.cDevice.get(), &captureChunk) ==
+              D3D_OK,
+          "production descriptor commit must accept capture-bound owner wire");
+    check(dxmt9::d3d9::drainDeferredReplay(
+              fixture.cDevice.get(), "inline-constant-capture-binding"),
+          "capture-bound production commit must drain its replay worker");
+  } else {
+    dxmt9::d3d9::RawCommandChunk raw;
+    check(dxmt9::d3d9::prepareOffloadChunk(
+              exact.wire, envelope, fixture.cDevice->wireObjects,
+              retainWireObject, raw),
+          "exact owner wire must pass production offload preparation");
+    raw.replaySeq = 1u;
+    raw.cpuReadyTapePlanningEnabled = direct;
+    check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK,
+          "production replay must accept compact owner wire");
+  }
   fixture.routing->present(SwapDesc{});
   std::vector<DrawSnapshot> actual;
   const auto ready = dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
@@ -654,6 +689,57 @@ std::vector<DrawSnapshot> produceAndReplay(bool inlineConstants, bool direct,
     check(dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
               fixture.routing->queue_, actual),
           "ready source must complete");
+  }
+  if (captureReceipt) {
+    D9CRenderTapeIdentityCaptureResult query{};
+    check(dxmt9c_device_finish_render_tape_identity_capture(
+              fixture.cDevice.get(), captureReceipt->captureToken, &query,
+              nullptr, 0u) == D3D_OK &&
+              query.status == D9C_RENDER_TAPE_IDENTITY_CAPTURE_COMPLETE &&
+              query.captureToken == captureReceipt->captureToken &&
+              query.eventOrdinal == captureReceipt->eventOrdinal &&
+              query.sourceCount != 0u && query.rangeCount != 0u &&
+              query.settlementCount != 0u && query.byteCount != 0u,
+          "production capture identity must finish with nonzero source rows");
+    captureReceipt->identity = query;
+    captureReceipt->identityBytes.resize(
+        static_cast<std::size_t>(query.byteCount));
+    D9CRenderTapeIdentityCaptureResult copied{};
+    check(dxmt9c_device_finish_render_tape_identity_capture(
+              fixture.cDevice.get(), captureReceipt->captureToken, &copied,
+              captureReceipt->identityBytes.data(),
+              captureReceipt->identityBytes.size()) == D3D_OK &&
+              copied.status == D9C_RENDER_TAPE_IDENTITY_CAPTURE_COMPLETE &&
+              copied.byteCount == query.byteCount &&
+              copied.sourceCount == query.sourceCount &&
+              copied.rangeCount == query.rangeCount &&
+              copied.settlementCount == query.settlementCount,
+          "production capture identity exact copy must complete");
+    const auto sourceBytes = static_cast<std::size_t>(copied.sourceCount) *
+                             sizeof(D9CRenderTapeIdentitySourceEntry);
+    const auto rangeBytes = static_cast<std::size_t>(copied.rangeCount) *
+                            sizeof(D9CRenderTapeIdentityRangeEntry);
+    const auto settlementBytes =
+        static_cast<std::size_t>(copied.settlementCount) *
+        sizeof(D9CRenderTapeIdentitySettlementEntry);
+    check(copied.settlementTableOffset == sourceBytes + rangeBytes &&
+              copied.byteCount == sourceBytes + rangeBytes + settlementBytes,
+          "production capture identity rows must have exact table extent");
+    std::size_t sourceRecordCount = 0u;
+    for (std::size_t i = 0; i < copied.sourceCount; ++i) {
+      D9CRenderTapeIdentitySourceEntry source{};
+      std::memcpy(&source,
+                  captureReceipt->identityBytes.data() +
+                      i * sizeof(source),
+                  sizeof(source));
+      check(source.captureToken == captureReceipt->captureToken &&
+                source.eventOrdinal == captureReceipt->eventOrdinal &&
+                source.recordCount != 0u,
+            "production capture identity source rows retain token/event");
+      sourceRecordCount += source.recordCount;
+    }
+    check(sourceRecordCount == captureReceipt->emittedRecordCount,
+          "capture identity source rows cover the exact owner record count");
   }
   check(actual.size() == 4u, "replay must expose all four logical draws");
   const auto expectedDraws = expectedSnapshots(expected);
@@ -719,6 +805,37 @@ void runGateMatrix() {
   }
 }
 
+void runCaptureIdentityBindingCase() {
+  CaptureIdentityReceipt onReceipt{
+      .captureToken = 701u,
+      .eventOrdinal = 11u,
+  };
+  CaptureIdentityReceipt offReceipt{
+      .captureToken = 702u,
+      .eventOrdinal = 11u,
+  };
+  std::uint32_t onDirect = 0u;
+  std::uint32_t onOrdinary = 0u;
+  std::uint32_t offDirect = 0u;
+  std::uint32_t offOrdinary = 0u;
+  const auto on = produceAndReplay(true, true, 0x3fu, onDirect, onOrdinary,
+                                   &onReceipt);
+  const auto off = produceAndReplay(false, true, 0x3fu, offDirect,
+                                    offOrdinary, &offReceipt);
+  check(on == off,
+        "capture-bound inline and standalone draws preserve effective files");
+  check(onDirect == 4u && offDirect == 4u && onOrdinary == 0u &&
+            offOrdinary == 0u,
+        "capture-bound cases remain direct four-draw productions");
+  check(onReceipt.emittedRecordCount == 4u &&
+            offReceipt.emittedRecordCount == 22u &&
+            onReceipt.identity.sourceCount != 0u &&
+            offReceipt.identity.sourceCount != 0u &&
+            onReceipt.identity.captureToken == onReceipt.captureToken &&
+            offReceipt.identity.captureToken == offReceipt.captureToken,
+        "capture-bound identity rows distinguish inline and standalone wire shape");
+}
+
 void failedStandaloneAppendCanRetry() {
   // A standalone range whose bytes do not match its declared count must fail
   // admission without consuming dirty state. This does not claim late-section
@@ -765,6 +882,7 @@ int main() {
   try {
     failedStandaloneAppendCanRetry();
     runGateMatrix();
+    runCaptureIdentityBindingCase();
     return 0;
   } catch (const TestFailure& failure) {
     std::fprintf(stderr, "inline constant replay spec: %s\n", failure.what());

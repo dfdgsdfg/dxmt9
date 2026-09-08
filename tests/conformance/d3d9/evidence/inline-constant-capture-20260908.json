@@ -1,0 +1,337 @@
+{
+  "schema": 1,
+  "measured_date": "2026-09-08",
+  "status": "fail",
+  "source_head": "026d03bb",
+  "source_state": "uncommitted H274 cold origin-locator fix and capture fixture; exact file/image receipts below",
+  "scope": "PE32/PE64 builtin capture: six SM3 constant families, 17 ordinary draws plus one indexed control, explicit Clear and Present; exact bounded content/fresh-provider evidence, failing PE COM teardown. Not performance or default promotion.",
+  "source": {
+    "path": "tests/conformance/d3d9/d3d9_inline_constants.cpp",
+    "sha256": "459d45e66423649b6e27738162d6574722fb0fafe66495527825fbf52bf352b8"
+  },
+  "locator_source": {
+    "path": "src/d3d9/device_c_render_tape_origin_locator.cpp",
+    "sha256": "d87a1498cc0f69c576f4f9481d8aaae93cc1cfc25889582b45ac892d2eb875ca"
+  },
+  "content_qualified": true,
+  "provider_oracles_qualified": true,
+  "teardown_pass": false,
+  "failure": "Capture-internal swapchain/backbuffer wrapper cycle leaves two device refs after Reset in both modes and PE widths; final Release assertion is preserved.",
+  "post_fix_images": {
+    "build-win32-x86-builtin/src/win32/d3d9.dll": {
+      "sha256": "29de99c44ea270cbd8e1941347fd91adbcb6294967b5201e53f6f990edfdd4e6",
+      "bytes": 1907200
+    },
+    "build-win32-x86-builtin/src/winemetal/winemetal_dxmt9.dll": {
+      "sha256": "e31242c3d6c67e9a9f2cc9c9c49a06ad6d076b68d11801b41ce49be19a2067a7",
+      "bytes": 140800
+    },
+    "build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so": {
+      "sha256": "98f16a64a310aba5af5e6212098475e8d232fb54ffb128ea6fd3b4ebc27aa375",
+      "bytes": 9786984
+    },
+    "build-win32-x64-builtin/src/win32/d3d9.dll": {
+      "sha256": "5bac21c04368f5ca587c010d3e3eabcbe77dd963d2c59f78bee41748237a681d",
+      "bytes": 1775616
+    },
+    "build-win32-x64-builtin/src/winemetal/winemetal_dxmt9.dll": {
+      "sha256": "cc46aabe669695132f29bd6836401006f343da23b07bae8a4c2aae987806c00b",
+      "bytes": 145920
+    }
+  },
+  "runs": [
+    {
+      "arch": "x86",
+      "inline": "off",
+      "content_qualified": true,
+      "runner_pass": false,
+      "teardown_pass": false,
+      "remaining_device_refs": 2,
+      "exact_source_samples": 18,
+      "records": {
+        "apply_state": 1,
+        "clear": 1,
+        "draw_indexed_primitive": 1,
+        "draw_primitive": 17,
+        "present": 1,
+        "set_ps_const_b": 3,
+        "set_ps_const_f": 3,
+        "set_ps_const_i": 3,
+        "set_vs_const_b": 3,
+        "set_vs_const_f": 3,
+        "set_vs_const_i": 3
+      },
+      "sections": {
+        "index_buffer": 1,
+        "stream": 1
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "capture_qualified": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x86-off-r2/qualified.json",
+        "sha256": "d1897078a539c51d52867d8f4243f8a2695cca4c0ad098cd53f6774a86f7ad09"
+      },
+      "capture_recipe": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x86-off-r2/recipe.json",
+        "sha256": "d8d39a364e859cba2254e013de7c2d1947b7eb6f575ac97ddd06a83fe3cf531d"
+      },
+      "capture_log": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x86-off-r2/run.log",
+        "sha256": "fabb0835d584acecf6bfd55ec7e924509ccb5a83172bdf3efe9d682a34235ec1"
+      },
+      "provider_qualified": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x86-off-r2/provider-qualified.json",
+        "sha256": "cc762bb1a6cad4a8dbbe750a6809899fd7862ae26ae4ad9cd7ae0ee6c05f7ead"
+      },
+      "provider_recipe": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x86-off-r2/provider-recipe.json",
+        "sha256": "3b947c2d0cec59eb9875249d06a1e6deeb288beb266b30a5d0a337982af996d0"
+      },
+      "provider_source_and_output_digest": "299de44bf226e55e6c7a77717e1dac116a0a08f1ace056514195d77fe255cf16",
+      "provider_source_and_output_bytes_each": 24576,
+      "provider_objects_created_and_released": 6
+    },
+    {
+      "arch": "x86",
+      "inline": "on",
+      "content_qualified": true,
+      "runner_pass": false,
+      "teardown_pass": false,
+      "remaining_device_refs": 2,
+      "exact_source_samples": 18,
+      "records": {
+        "apply_state": 1,
+        "clear": 1,
+        "draw_indexed_primitive": 1,
+        "draw_primitive": 17,
+        "present": 1
+      },
+      "sections": {
+        "index_buffer": 1,
+        "ps_const_b": 3,
+        "ps_const_f": 3,
+        "ps_const_i": 3,
+        "stream": 1,
+        "vs_const_b": 3,
+        "vs_const_f": 3,
+        "vs_const_i": 3
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "capture_qualified": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x86-on-r2/qualified.json",
+        "sha256": "27fdf0ae0809eeeeb0ecb7bc45c332a4e47815075590a6d0f22be6d95554ce96"
+      },
+      "capture_recipe": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x86-on-r2/recipe.json",
+        "sha256": "f8a728e0909d0f2575d3f16c4df25312eeef8b31d3e8f8adcf14951fcc89279d"
+      },
+      "capture_log": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x86-on-r2/run.log",
+        "sha256": "396241e4be1b5db8a44bc70a4fe80161bb94c040b9bd25c925c6db5803834195"
+      },
+      "provider_qualified": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x86-on-r2/provider-qualified.json",
+        "sha256": "fdb72240b1b350959e199d9a7d1ec3624a8f3cb9fc35bd5c6a3a65db7807f2d4"
+      },
+      "provider_recipe": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x86-on-r2/provider-recipe.json",
+        "sha256": "cde4d5ca3f2bec84c419b24d69f133e2a2bf80283d6cb8c3d830bc6501ca120b"
+      },
+      "provider_source_and_output_digest": "299de44bf226e55e6c7a77717e1dac116a0a08f1ace056514195d77fe255cf16",
+      "provider_source_and_output_bytes_each": 24576,
+      "provider_objects_created_and_released": 6
+    },
+    {
+      "arch": "x64",
+      "inline": "off",
+      "content_qualified": true,
+      "runner_pass": false,
+      "teardown_pass": false,
+      "remaining_device_refs": 2,
+      "exact_source_samples": 18,
+      "records": {
+        "apply_state": 1,
+        "clear": 1,
+        "draw_indexed_primitive": 1,
+        "draw_primitive": 17,
+        "present": 1,
+        "set_ps_const_b": 3,
+        "set_ps_const_f": 3,
+        "set_ps_const_i": 3,
+        "set_vs_const_b": 3,
+        "set_vs_const_f": 3,
+        "set_vs_const_i": 3
+      },
+      "sections": {
+        "index_buffer": 1,
+        "stream": 1
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "capture_qualified": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x64-off-r2/qualified.json",
+        "sha256": "71a39922bcf5752caba05cff94cbbb543c098346eb1dd22e156b9f789649549c"
+      },
+      "capture_recipe": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x64-off-r2/recipe.json",
+        "sha256": "0790a5d4bac603c142f661cb1415610a520b4bbc53e166d8426f06308b7a884c"
+      },
+      "capture_log": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x64-off-r2/run.log",
+        "sha256": "141ed013516341862881d8bab599f9584df96ba82c8dee6f97c83c05f3ae6bfd"
+      },
+      "provider_qualified": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x64-off-r2/provider-qualified.json",
+        "sha256": "67fe77881902988ce31da0931a188b0aac935c43b56be8d7035e296f455030cd"
+      },
+      "provider_recipe": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x64-off-r2/provider-recipe.json",
+        "sha256": "fca864a19b3695034d3c98caf794d20b6ec2d1363685e20f7a8f8a523ab02980"
+      },
+      "provider_source_and_output_digest": "299de44bf226e55e6c7a77717e1dac116a0a08f1ace056514195d77fe255cf16",
+      "provider_source_and_output_bytes_each": 24576,
+      "provider_objects_created_and_released": 6
+    },
+    {
+      "arch": "x64",
+      "inline": "on",
+      "content_qualified": true,
+      "runner_pass": false,
+      "teardown_pass": false,
+      "remaining_device_refs": 2,
+      "exact_source_samples": 18,
+      "records": {
+        "apply_state": 1,
+        "clear": 1,
+        "draw_indexed_primitive": 1,
+        "draw_primitive": 17,
+        "present": 1
+      },
+      "sections": {
+        "index_buffer": 1,
+        "ps_const_b": 3,
+        "ps_const_f": 3,
+        "ps_const_i": 3,
+        "stream": 1,
+        "vs_const_b": 3,
+        "vs_const_f": 3,
+        "vs_const_i": 3
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "capture_qualified": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x64-on-r2/qualified.json",
+        "sha256": "8d33d2a8c4fa44cbbd2bd6e60c9d228073fa95ee4a51782bdaba42014529d3ec"
+      },
+      "capture_recipe": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x64-on-r2/recipe.json",
+        "sha256": "8bb8c9c41cf22064deb1cfafcabec0020b8c7afddcf8be85d49acfeaed8165f1"
+      },
+      "capture_log": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x64-on-r2/run.log",
+        "sha256": "3e028cdd455f78ff3651d29d4564f9578a6774a6f08fe3608394d3e9ff1dce76"
+      },
+      "provider_qualified": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x64-on-r2/provider-qualified.json",
+        "sha256": "ee3dd0ef128610a35047ad1c8da9fd000efe3d60c85f62549e3ce298d65d6b6b"
+      },
+      "provider_recipe": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/capture-x64-on-r2/provider-recipe.json",
+        "sha256": "fa31006637926f4e5d9dc5187b51adf8b81c722b3df43a99c9fa71ecf85f8742"
+      },
+      "provider_source_and_output_digest": "299de44bf226e55e6c7a77717e1dac116a0a08f1ace056514195d77fe255cf16",
+      "provider_source_and_output_bytes_each": 24576,
+      "provider_objects_created_and_released": 6
+    }
+  ],
+  "noncapture_regression": [
+    {
+      "arch": "x86",
+      "inline": "on",
+      "exact_samples": 72,
+      "teardown_pass": true,
+      "receipt": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/plain-x86-on-r1/qualification.json",
+        "sha256": "0f3768ecf6acfafa847c61349f62c024fad7b7149616f80c7f6c4813100f8495"
+      }
+    },
+    {
+      "arch": "x64",
+      "inline": "on",
+      "exact_samples": 72,
+      "teardown_pass": true,
+      "receipt": {
+        "path": "experiments/output/pe-inline-consumers-20260908/analysis/plain-x64-on-r1/qualification.json",
+        "sha256": "21f14613ff275cf1e01c558101a98bfaf7e05a15f99997965b417d6ff0d6ce59"
+      }
+    }
+  ],
+  "pre_fix_failures": {
+    "artifact_root": "experiments/output/pe-inline-consumers-20260908/analysis",
+    "groups": [
+      "capture-x86-off-r1",
+      "capture-x86-on-r1",
+      "capture-x64-off-r1",
+      "capture-x64-on-r1"
+    ],
+    "observed": "Both ON bundles abort origin preflight; OFF content qualifies. All four retain two device refs. The ordinary-only x86 OFF fresh-provider attempt is unsupported before execution, not an observed pixel mismatch.",
+    "native_semantic_red": {
+      "path": "experiments/output/pe-inline-consumers-20260908/analysis/origin-red-details.log",
+      "sha256": "9fdf44bc86613174ab79fdc1b5469784d47d64e34f9759c799e6914461fbd734"
+    }
+  },
+  "native_final": [
+    {
+      "path": "experiments/output/pe-inline-consumers-20260908/analysis/native-final.log",
+      "sha256": "1d941d46dcedcf86e1e15031376f60a4eadedc60ab8fb00ea5c0a5ef1cb723ec"
+    },
+    {
+      "path": "experiments/output/pe-inline-consumers-20260908/analysis/unix-final.log",
+      "sha256": "17f1a74989b767de661b658aea531ca340a590e034ad1ac90ccd880debdab9d9"
+    }
+  ],
+  "independent_cpu_matrix": {
+    "path": "experiments/output/pe-inline-consumers-20260908/analysis/cpu-matrix-qualified.json",
+    "sha256": "7818004a8b357b8241381447b628e4b40e3c7d01a4f35045e8f0516db7f8afa5"
+  },
+  "caveats": [
+    "The eight performance cells use frozen pre-origin-fix images; capture uses separately frozen post-fix images.",
+    "Fresh provider object conservation does not prove PE COM teardown.",
+    "General provider still requires an indexed draw; this fixture does not expand that grammar.",
+    "No new TLA transition or thread-interleaving proof; native model/code and Metal output evidence have distinct scopes.",
+    "Inline constants remain default-off."
+  ]
+}

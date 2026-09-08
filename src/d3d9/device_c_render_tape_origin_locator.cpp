@@ -29,8 +29,15 @@ bool sparseSectionBinding(const ImportedSectionView& section,
                          std::uint32_t handleIndex,
                          std::uint32_t& bindingSlot, bool& matched) noexcept {
   const auto kind = section.descriptor.kind;
-  const auto elementSize = section.descriptor.elementSize;
   matched = false;
+  // The imported chunk already passed canonical validation. Only these
+  // sections carry the texture/attachment origins this locator describes;
+  // inline constants use valid variable-width (elementSize == 0) payloads.
+  if (kind != D9C_COMMAND_CHUNK_SECTION_TEXTURE &&
+      kind != D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET &&
+      kind != D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL)
+    return true;
+  const auto elementSize = section.descriptor.elementSize;
   if (elementSize == 0u || section.payload.size() % elementSize != 0u)
     return false;
 

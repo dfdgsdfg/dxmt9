@@ -1575,6 +1575,44 @@ evidence = [
 ]
 
 [[case]]
+executable = "d3d9_inline_constants_x64.exe"
+source_file = "d3d9_inline_constants.cpp"
+function = "run_capture_oracle"
+source = "dxmt9-authored SM3 capture interval with external source/output oracle"
+source_kind = "dxmt9-policy"
+license = "MIT"
+license_scope = "dxmt9"
+lanes = ["builtin"]
+arches = ["x64"]
+area = "inline-constant-capture"
+owner = "pe/recorder"
+requirements = ["R-TEST-12.20"]
+acceptance = ["DXMT9_TEST_INLINE_CONSTANT_CASE=capture requires a Windows-absolute Render Tape output root and capture enabled; 64x96 implicit backbuffer, six SM3 constant families in A-B-A rows, explicit in-interval Clear, 17 ordinary draws and one indexed control", "Qualify OFF and ON separately with actual canonical bundle shape, 18 independent source pixel samples, fresh-provider strict source/output oracles, image identities and final device Release==0; printed expected signatures alone are not an oracle"]
+status = "failing"
+evidence = [
+  { lane = "builtin", arch = "x64", status = "failing", summary = "H274: post-origin-fix OFF/ON capture content and fresh-provider strict source/output digests pass; both PE processes fail final Release with two refs from the known capture-internal swapchain/backbuffer wrapper cycle. Content evidence is not an overall conformance pass; inline remains default-off", source = "tests/conformance/d3d9/evidence/inline-constant-capture-20260908.json:1" },
+]
+
+[[case]]
+executable = "d3d9_inline_constants_x86.exe"
+source_file = "d3d9_inline_constants.cpp"
+function = "run_capture_oracle"
+source = "dxmt9-authored SM3 capture interval with external source/output oracle"
+source_kind = "dxmt9-policy"
+license = "MIT"
+license_scope = "dxmt9"
+lanes = ["builtin"]
+arches = ["x86"]
+area = "inline-constant-capture"
+owner = "pe/recorder"
+requirements = ["R-TEST-12.20"]
+acceptance = ["DXMT9_TEST_INLINE_CONSTANT_CASE=capture requires a Windows-absolute Render Tape output root and capture enabled; 64x96 implicit backbuffer, six SM3 constant families in A-B-A rows, explicit in-interval Clear, 17 ordinary draws and one indexed control", "Qualify OFF and ON separately with actual canonical bundle shape, 18 independent source pixel samples, fresh-provider strict source/output oracles, image identities and final device Release==0; printed expected signatures alone are not an oracle"]
+status = "failing"
+evidence = [
+  { lane = "builtin", arch = "x86", status = "failing", summary = "H274: post-origin-fix OFF/ON capture content and fresh-provider strict source/output digests pass; both PE processes fail final Release with two refs from the known capture-internal swapchain/backbuffer wrapper cycle. Content evidence is not an overall conformance pass; inline remains default-off", source = "tests/conformance/d3d9/evidence/inline-constant-capture-20260908.json:1" },
+]
+
+[[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_query_stateblock.c"
 function = "test_stateblock_invalid_type_recording_invalid_calls"

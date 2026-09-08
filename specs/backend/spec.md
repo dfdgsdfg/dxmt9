@@ -528,10 +528,26 @@ owning gap row. The mechanics:
   constants; rejection preserves retry state. The explicit-full-snapshot
   compatibility route uses `buildSparseState` and `acceptInlineConstantDelta`.
   The pre-draw `flushPendingConsts` is skipped only on the folding route.
-  Non-draw consumers (`ProcessVertices`, chunk barriers/end drains) and UP
-  draw entry points retain standalone constant drains. The standalone owner
-  path uses `tryAppendConstantRecord`; both representations preserve the
-  same effective constants at each draw.
+  Chunk barriers/end drains and UP draw entry points retain standalone
+  constant drains. `ProcessVertices` is instead a PE-local live-shadow
+  consumer: `D3D9DeviceImpl::ProcessVertices` passes `recorderState_.peConsts`
+  to the interpreter in `d3d9_pe_process_vertices.cpp`. Its raw bridge buffer
+  locks drain already-published replay work, not pending PE constants. Reading
+  these shadows neither requires a wire flush nor settles their dirty ranges;
+  later draws/drains must continue to serialize them. The standalone owner
+  path uses `tryAppendConstantRecord`; the contract requires both representations
+  to preserve the same effective constants at each draw.
+- **Consumer boundaries**: query Issue does not consume shader constants;
+  query GetData and child Present/StateBlock operations use recorder-flush
+  boundaries. Fixed-function/programmable switches must preserve constants
+  for subsequent shader draws even when the current draw does not read them.
+  Render Tape uses exact canonical materialization, preserving the admitted
+  inline sections instead of rewriting them into a second constant stream.
+  Origin discovery operates on the canonically validated imported view and
+  applies texture/attachment binding strides only to those section kinds;
+  variable-sized constant payloads are not resource-binding tables.
+  These code paths are not evidence of their own correctness: the owning gap
+  separates live-shadow, switch, failure/retry and capture witnesses.
 - **Wire**: each section mirrors the `D9CCommandRecordSetConst` element-size
   rules (`float4`/`int4` = 16 bytes per register, bool = 4). Sections ride the
   existing variable draw-packet serialization; caps are the D3D9 register-file
