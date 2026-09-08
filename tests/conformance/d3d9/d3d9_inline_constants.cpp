@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 namespace {
 
@@ -385,6 +386,64 @@ void set_family_value(IDirect3DDevice9 *device, Family family, bool changed) {
   }
 }
 
+void check_family_value(IDirect3DDevice9 *device, Family family, bool changed,
+                        const char *checkpoint) {
+  switch (family) {
+    case Family::VsFloat: {
+      const float expected[4] = {
+          changed ? 0.20f : 0.08f, changed ? 0.10f : 0.12f,
+          changed ? 0.15f : 0.16f, 1.0f};
+      float actual[4] = {};
+      CHECK_HR(device->GetVertexShaderConstantF(0, actual, 1), D3D_OK);
+      check_at(__LINE__, std::memcmp(actual, expected, sizeof(actual)) == 0,
+               checkpoint);
+      break;
+    }
+    case Family::VsInt: {
+      const int expected[4] = {changed ? 1 : 0, 0, 0, 0};
+      int actual[4] = {};
+      CHECK_HR(device->GetVertexShaderConstantI(0, actual, 1), D3D_OK);
+      check_at(__LINE__, std::memcmp(actual, expected, sizeof(actual)) == 0,
+               checkpoint);
+      break;
+    }
+    case Family::VsBool: {
+      const BOOL expected[1] = {changed ? TRUE : FALSE};
+      BOOL actual[1] = {};
+      CHECK_HR(device->GetVertexShaderConstantB(0, actual, 1), D3D_OK);
+      check_at(__LINE__, std::memcmp(actual, expected, sizeof(actual)) == 0,
+               checkpoint);
+      break;
+    }
+    case Family::PsFloat: {
+      const float expected[4] = {
+          changed ? 0.10f : 0.08f, changed ? 0.20f : 0.12f,
+          changed ? 0.12f : 0.16f, 1.0f};
+      float actual[4] = {};
+      CHECK_HR(device->GetPixelShaderConstantF(0, actual, 1), D3D_OK);
+      check_at(__LINE__, std::memcmp(actual, expected, sizeof(actual)) == 0,
+               checkpoint);
+      break;
+    }
+    case Family::PsInt: {
+      const int expected[4] = {changed ? 1 : 0, 0, 0, 0};
+      int actual[4] = {};
+      CHECK_HR(device->GetPixelShaderConstantI(0, actual, 1), D3D_OK);
+      check_at(__LINE__, std::memcmp(actual, expected, sizeof(actual)) == 0,
+               checkpoint);
+      break;
+    }
+    case Family::PsBool: {
+      const BOOL expected[1] = {changed ? TRUE : FALSE};
+      BOOL actual[1] = {};
+      CHECK_HR(device->GetPixelShaderConstantB(0, actual, 1), D3D_OK);
+      check_at(__LINE__, std::memcmp(actual, expected, sizeof(actual)) == 0,
+               checkpoint);
+      break;
+    }
+  }
+}
+
 bool draw_slot(Fixture &fixture, unsigned row, unsigned slot, unsigned path) {
   const unsigned vertex = (row * 4u + slot) * 3u;
   if (path == 0) {
@@ -414,7 +473,7 @@ bool color_near(D3DCOLOR actual, D3DCOLOR expected, unsigned tolerance) {
 }
 
 void print_and_check_row(const char *path, Family family, unsigned row,
-                         const D3DLOCKED_RECT &locked) {
+                         const D3DLOCKED_RECT &locked, bool stateblock) {
   const auto *base = static_cast<const std::uint8_t *>(locked.pBits) +
       static_cast<std::size_t>(row * 16u + 4u) * locked.Pitch;
   const auto *pixels = reinterpret_cast<const D3DCOLOR *>(base);
@@ -423,14 +482,24 @@ void print_and_check_row(const char *path, Family family, unsigned row,
   for (unsigned slot = 0; slot < 4; ++slot) {
     const D3DCOLOR actual = pixels[slot * 16u + 4u];
     std::printf("0x%08lx%s", static_cast<unsigned long>(actual), slot == 3 ? "" : ",");
-    const D3DCOLOR expected = slot == 2 ? kChanged[static_cast<unsigned>(family)] : kBaseline;
+    const bool changed = stateblock ? slot == 1 : slot == 2;
+    const D3DCOLOR expected = changed ? kChanged[static_cast<unsigned>(family)]
+                                      : kBaseline;
     CHECK(color_near(actual, expected, 3u));
   }
-  std::printf(" expected=0x%08lx,0x%08lx,0x%08lx,0x%08lx\n",
-      static_cast<unsigned long>(kBaseline),
-      static_cast<unsigned long>(kBaseline),
-      static_cast<unsigned long>(kChanged[static_cast<unsigned>(family)]),
-      static_cast<unsigned long>(kBaseline));
+  if (stateblock) {
+    std::printf(" expected=0x%08lx,0x%08lx,0x%08lx,0x%08lx\n",
+        static_cast<unsigned long>(kBaseline),
+        static_cast<unsigned long>(kChanged[static_cast<unsigned>(family)]),
+        static_cast<unsigned long>(kBaseline),
+        static_cast<unsigned long>(kBaseline));
+  } else {
+    std::printf(" expected=0x%08lx,0x%08lx,0x%08lx,0x%08lx\n",
+        static_cast<unsigned long>(kBaseline),
+        static_cast<unsigned long>(kBaseline),
+        static_cast<unsigned long>(kChanged[static_cast<unsigned>(family)]),
+        static_cast<unsigned long>(kBaseline));
+  }
 }
 
 void run_pixel_oracle() {
@@ -492,7 +561,111 @@ void run_pixel_oracle() {
       const char *path_name = path == 0 ? "vb" : (path == 1 ? "indexed" : "up");
       for (unsigned family_index = 0; family_index < 6; ++family_index) {
         print_and_check_row(path_name, static_cast<Family>(family_index),
-            path * kRowsPerPath + family_index, locked);
+            path * kRowsPerPath + family_index, locked, false);
+      }
+    }
+    CHECK_HR(fixture.readback->UnlockRect(), D3D_OK);
+  }
+}
+
+void run_stateblock_oracle() {
+  std::printf("selected-case: stateblock\n");
+  const char *selected = std::getenv("DXMT9_PE_INLINE_CONST_DELTA");
+  std::printf("selected-env: DXMT9_PE_INLINE_CONST_DELTA=%s (reported only)\n",
+      selected ? selected : "<unset>");
+  std::printf("stateblock mode: expected slots=A,B,A,A; paths=DrawPrimitive,DrawIndexedPrimitive,DrawPrimitiveUP\n");
+
+  Fixture fixture;
+  if (!fixture.init()) return;
+
+  CHECK_HR(fixture.device->SetRenderTarget(0, fixture.render_target), D3D_OK);
+  CHECK_HR(fixture.device->SetDepthStencilSurface(nullptr), D3D_OK);
+  const D3DVIEWPORT9 viewport = {0, 0, kWidth, kHeight, 0.0f, 1.0f};
+  CHECK_HR(fixture.device->SetViewport(&viewport), D3D_OK);
+  CHECK_HR(fixture.device->SetVertexDeclaration(fixture.declaration), D3D_OK);
+  CHECK_HR(fixture.device->SetVertexShader(fixture.vs), D3D_OK);
+  CHECK_HR(fixture.device->SetPixelShader(fixture.ps), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_ZENABLE, FALSE), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_LIGHTING, FALSE), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE), D3D_OK);
+  CHECK_HR(fixture.device->Clear(0, nullptr, D3DCLEAR_TARGET,
+      D3DCOLOR_ARGB(255, 0, 0, 0), 1.0f, 0), D3D_OK);
+
+  set_baseline_constants(fixture.device);
+  CHECK_HR(fixture.device->BeginScene(), D3D_OK);
+  for (unsigned path = 0; path < kPathCount; ++path) {
+    if (path == 2) {
+      // UP is deliberately standalone: it has no stream or index binding.
+      CHECK_HR(fixture.device->SetStreamSource(0, nullptr, 0, 0), D3D_OK);
+      CHECK_HR(fixture.device->SetIndices(nullptr), D3D_OK);
+    } else {
+      CHECK_HR(fixture.device->SetStreamSource(0, fixture.vertices, 0, sizeof(Vertex)), D3D_OK);
+      CHECK_HR(fixture.device->SetIndices(fixture.indices), D3D_OK);
+    }
+    for (unsigned family_index = 0; family_index < 6; ++family_index) {
+      const Family family = static_cast<Family>(family_index);
+      const unsigned row = path * kRowsPerPath + family_index;
+      set_baseline_constants(fixture.device);
+      check_family_value(fixture.device, family, false,
+          "stateblock baseline family bytes");
+
+      HRESULT begin_hr = fixture.device->BeginStateBlock();
+      CHECK_HR(begin_hr, D3D_OK);
+      if (FAILED(begin_hr)) continue;
+      set_family_value(fixture.device, family, true);
+      check_family_value(fixture.device, family, false,
+          "stateblock recording leaves live family at A");
+
+      IDirect3DStateBlock9 *state_block = nullptr;
+      const HRESULT end_hr = fixture.device->EndStateBlock(&state_block);
+      CHECK_HR(end_hr, D3D_OK);
+      if (FAILED(end_hr) || !state_block) {
+        CHECK(state_block != nullptr);
+        if (state_block) release_resource(state_block, "stateblock");
+        continue;
+      }
+      check_family_value(fixture.device, family, false,
+          "stateblock EndStateBlock leaves live family at A");
+
+      check_draw_hr(draw_slot(fixture, row, 0, path), __LINE__);
+      CHECK_HR(state_block->Apply(), D3D_OK);
+      check_family_value(fixture.device, family, true,
+          "stateblock Apply restores captured B");
+      check_draw_hr(draw_slot(fixture, row, 1, path), __LINE__);
+
+      set_family_value(fixture.device, family, false);
+      check_family_value(fixture.device, family, false,
+          "stateblock explicit A is visible before Capture");
+      check_draw_hr(draw_slot(fixture, row, 2, path), __LINE__);
+
+      CHECK_HR(state_block->Capture(), D3D_OK);
+      check_family_value(fixture.device, family, false,
+          "stateblock Capture records live A");
+      set_family_value(fixture.device, family, true);
+      check_family_value(fixture.device, family, true,
+          "stateblock pending set exposes B before Apply");
+      CHECK_HR(state_block->Apply(), D3D_OK);
+      check_family_value(fixture.device, family, false,
+          "stateblock Apply restores captured A");
+      check_draw_hr(draw_slot(fixture, row, 3, path), __LINE__);
+
+      // The state block must not outlive the fixture's device/resource teardown.
+      release_resource(state_block, "stateblock");
+    }
+  }
+
+  CHECK_HR(fixture.device->EndScene(), D3D_OK);
+  CHECK_HR(fixture.device->GetRenderTargetData(fixture.render_target, fixture.readback), D3D_OK);
+  D3DLOCKED_RECT locked = {};
+  CHECK_HR(fixture.readback->LockRect(&locked, nullptr, D3DLOCK_READONLY), D3D_OK);
+  CHECK(locked.pBits != nullptr);
+  if (locked.pBits) {
+    for (unsigned path = 0; path < kPathCount; ++path) {
+      const char *path_name = path == 0 ? "vb" : (path == 1 ? "indexed" : "up");
+      for (unsigned family_index = 0; family_index < 6; ++family_index) {
+        print_and_check_row(path_name, static_cast<Family>(family_index),
+            path * kRowsPerPath + family_index, locked, true);
       }
     }
     CHECK_HR(fixture.readback->UnlockRect(), D3D_OK);
@@ -502,7 +675,17 @@ void run_pixel_oracle() {
 }  // namespace
 
 int main() {
-  run_pixel_oracle();
+  const char *selected_case = std::getenv("DXMT9_TEST_INLINE_CONSTANT_CASE");
+  if (selected_case && std::strcmp(selected_case, "stateblock") != 0) {
+    std::printf("FAIL: invalid DXMT9_TEST_INLINE_CONSTANT_CASE=%s\n",
+        selected_case);
+    return EXIT_FAILURE;
+  }
+  if (selected_case) {
+    run_stateblock_oracle();
+  } else {
+    run_pixel_oracle();
+  }
   if (failures) {
     std::printf("inline_constants: %d failure(s)\n", failures);
     return EXIT_FAILURE;

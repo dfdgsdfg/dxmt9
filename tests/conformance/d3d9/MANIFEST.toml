@@ -1549,9 +1549,11 @@ arches = ["x64"]
 area = "inline-constant-pixels"
 owner = "pe/recorder"
 requirements = ["R-TEST-12.20"]
-acceptance = ["R-BACK-2.52 bounded pixel oracle: real PE COM executes SM3 VS/PS float/int/bool A-A-B-A through ordinary/indexed draws and the UP standalone-drain control, checks independent colors from one final readback and device teardown; mode is reported but never selects expectations; candidate execution requires separate OFF/ON runs with actual append-count receipts"]
+acceptance = ["R-BACK-2.52 bounded pixel oracle: real PE COM executes SM3 VS/PS float/int/bool A-A-B-A through ordinary/indexed draws and the UP standalone-drain control, checks independent colors from one final readback and device teardown; mode is reported but never selects expectations; candidate execution requires separate OFF/ON runs with actual append-count receipts", "Test-only DXMT9_TEST_INLINE_CONSTANT_CASE=stateblock additionally checks all six families across recorded/nonmutating live state, Apply and Capture with A-B-A-A pixels and exact getters; qualify this separate mode with its own append counts, full-snapshot selection and teardown receipts"]
 status = "partial"
-evidence = [{ lane = "builtin", arch = "x64", status = "passing", summary = "H265: OFF/ON x sync/worker matrix passes 72 independent pixel samples per process with exact append counts and device Release zero; app-local remains unrun", source = "tests/conformance/d3d9/evidence/inline-constant-pixels-20260908.json:1" }]
+evidence = [
+  { lane = "builtin", arch = "x64", status = "passing", summary = "H270: eight processes cover recorded StateBlock OFF/ON x sync/worker plus original/StateBlock OFF/ON with full snapshot on worker; 576 exact sampled pixels, mode-qualified append counts, getters and zero device release. Linked H265 evidence retains the original OFF/ON x sync/worker matrix; other consumer and app-local coverage remains open", source = "tests/conformance/d3d9/evidence/inline-constant-boundaries-20260908.json:1" },
+]
 
 [[case]]
 executable = "d3d9_inline_constants_x86.exe"
@@ -1566,9 +1568,11 @@ arches = ["x86"]
 area = "inline-constant-pixels"
 owner = "pe/recorder"
 requirements = ["R-TEST-12.20"]
-acceptance = ["R-BACK-2.52 bounded pixel oracle: real PE COM executes SM3 VS/PS float/int/bool A-A-B-A through ordinary/indexed draws and the UP standalone-drain control, checks independent colors from one final readback and device teardown; mode is reported but never selects expectations; candidate execution requires separate OFF/ON runs with actual append-count receipts"]
+acceptance = ["R-BACK-2.52 bounded pixel oracle: real PE COM executes SM3 VS/PS float/int/bool A-A-B-A through ordinary/indexed draws and the UP standalone-drain control, checks independent colors from one final readback and device teardown; mode is reported but never selects expectations; candidate execution requires separate OFF/ON runs with actual append-count receipts", "Test-only DXMT9_TEST_INLINE_CONSTANT_CASE=stateblock additionally checks all six families across recorded/nonmutating live state, Apply and Capture with A-B-A-A pixels and exact getters; qualify this separate mode with its own append counts, full-snapshot selection and teardown receipts"]
 status = "partial"
-evidence = [{ lane = "builtin", arch = "x86", status = "passing", summary = "H265: OFF/ON x sync/worker matrix passes 72 independent pixel samples per process; production inline-bool mutant fails two predicted pixels and restored ON passes; app-local remains unrun", source = "tests/conformance/d3d9/evidence/inline-constant-pixels-20260908.json:1" }]
+evidence = [
+  { lane = "builtin", arch = "x86", status = "passing", summary = "H270: eight processes cover recorded StateBlock OFF/ON x sync/worker plus original/StateBlock OFF/ON with full snapshot on worker; 576 exact sampled pixels, mode-qualified append counts, getters and zero device release. Linked H265 evidence retains the original matrix and two predicted production-mutant pixel failures; no new mutation or app-local claim", source = "tests/conformance/d3d9/evidence/inline-constant-boundaries-20260908.json:1" },
+]
 
 [[case]]
 executable = "dxmt9-d3d9-conformance.exe"

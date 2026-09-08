@@ -1,0 +1,892 @@
+{
+  "schema": 1,
+  "status": "pass",
+  "source_head": "73d523d7",
+  "related_evidence": "tests/conformance/d3d9/evidence/inline-constant-pixels-20260908.json",
+  "scope": "Builtin Sikarugir; SM3 c0/i0/b0, six-family StateBlock recorded/capture/apply and full-snapshot pixels. No promotion, broader registers, FFP, ProcessVertices, Render Tape, or performance proof.",
+  "source": "tests/conformance/d3d9/d3d9_inline_constants.cpp",
+  "source_sha256": "286fe1270e40b174c20483282846d5caecffc75bfc9e63b85d96cd5a8ba55c08",
+  "processes": 16,
+  "exact_pixel_samples": 1152,
+  "qualification": "Main independently required exact colors, complete recipe matrix, append and staged-image receipts. Runtime image SHA values in individual runner receipts are 16-hex prefixes; full source/staged equality checks remain in raw qualification.json. No runtime source diff.",
+  "signature_sets": {
+    "plain": [
+      {
+        "path": "vb",
+        "family": "vs_float",
+        "row": 0,
+        "values": "0xff293d52,0xff293d52,0xff47384f,0xff293d52"
+      },
+      {
+        "path": "vb",
+        "family": "vs_int",
+        "row": 1,
+        "values": "0xff293d52,0xff293d52,0xff4f3d52,0xff293d52"
+      },
+      {
+        "path": "vb",
+        "family": "vs_bool",
+        "row": 2,
+        "values": "0xff293d52,0xff293d52,0xff295752,0xff293d52"
+      },
+      {
+        "path": "vb",
+        "family": "ps_float",
+        "row": 3,
+        "values": "0xff293d52,0xff293d52,0xff2e5247,0xff293d52"
+      },
+      {
+        "path": "vb",
+        "family": "ps_int",
+        "row": 4,
+        "values": "0xff293d52,0xff293d52,0xff293d6e,0xff293d52"
+      },
+      {
+        "path": "vb",
+        "family": "ps_bool",
+        "row": 5,
+        "values": "0xff293d52,0xff293d52,0xff3d3d52,0xff293d52"
+      },
+      {
+        "path": "indexed",
+        "family": "vs_float",
+        "row": 6,
+        "values": "0xff293d52,0xff293d52,0xff47384f,0xff293d52"
+      },
+      {
+        "path": "indexed",
+        "family": "vs_int",
+        "row": 7,
+        "values": "0xff293d52,0xff293d52,0xff4f3d52,0xff293d52"
+      },
+      {
+        "path": "indexed",
+        "family": "vs_bool",
+        "row": 8,
+        "values": "0xff293d52,0xff293d52,0xff295752,0xff293d52"
+      },
+      {
+        "path": "indexed",
+        "family": "ps_float",
+        "row": 9,
+        "values": "0xff293d52,0xff293d52,0xff2e5247,0xff293d52"
+      },
+      {
+        "path": "indexed",
+        "family": "ps_int",
+        "row": 10,
+        "values": "0xff293d52,0xff293d52,0xff293d6e,0xff293d52"
+      },
+      {
+        "path": "indexed",
+        "family": "ps_bool",
+        "row": 11,
+        "values": "0xff293d52,0xff293d52,0xff3d3d52,0xff293d52"
+      },
+      {
+        "path": "up",
+        "family": "vs_float",
+        "row": 12,
+        "values": "0xff293d52,0xff293d52,0xff47384f,0xff293d52"
+      },
+      {
+        "path": "up",
+        "family": "vs_int",
+        "row": 13,
+        "values": "0xff293d52,0xff293d52,0xff4f3d52,0xff293d52"
+      },
+      {
+        "path": "up",
+        "family": "vs_bool",
+        "row": 14,
+        "values": "0xff293d52,0xff293d52,0xff295752,0xff293d52"
+      },
+      {
+        "path": "up",
+        "family": "ps_float",
+        "row": 15,
+        "values": "0xff293d52,0xff293d52,0xff2e5247,0xff293d52"
+      },
+      {
+        "path": "up",
+        "family": "ps_int",
+        "row": 16,
+        "values": "0xff293d52,0xff293d52,0xff293d6e,0xff293d52"
+      },
+      {
+        "path": "up",
+        "family": "ps_bool",
+        "row": 17,
+        "values": "0xff293d52,0xff293d52,0xff3d3d52,0xff293d52"
+      }
+    ],
+    "stateblock": [
+      {
+        "path": "vb",
+        "family": "vs_float",
+        "row": 0,
+        "values": "0xff293d52,0xff47384f,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "vb",
+        "family": "vs_int",
+        "row": 1,
+        "values": "0xff293d52,0xff4f3d52,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "vb",
+        "family": "vs_bool",
+        "row": 2,
+        "values": "0xff293d52,0xff295752,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "vb",
+        "family": "ps_float",
+        "row": 3,
+        "values": "0xff293d52,0xff2e5247,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "vb",
+        "family": "ps_int",
+        "row": 4,
+        "values": "0xff293d52,0xff293d6e,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "vb",
+        "family": "ps_bool",
+        "row": 5,
+        "values": "0xff293d52,0xff3d3d52,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "indexed",
+        "family": "vs_float",
+        "row": 6,
+        "values": "0xff293d52,0xff47384f,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "indexed",
+        "family": "vs_int",
+        "row": 7,
+        "values": "0xff293d52,0xff4f3d52,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "indexed",
+        "family": "vs_bool",
+        "row": 8,
+        "values": "0xff293d52,0xff295752,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "indexed",
+        "family": "ps_float",
+        "row": 9,
+        "values": "0xff293d52,0xff2e5247,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "indexed",
+        "family": "ps_int",
+        "row": 10,
+        "values": "0xff293d52,0xff293d6e,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "indexed",
+        "family": "ps_bool",
+        "row": 11,
+        "values": "0xff293d52,0xff3d3d52,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "up",
+        "family": "vs_float",
+        "row": 12,
+        "values": "0xff293d52,0xff47384f,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "up",
+        "family": "vs_int",
+        "row": 13,
+        "values": "0xff293d52,0xff4f3d52,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "up",
+        "family": "vs_bool",
+        "row": 14,
+        "values": "0xff293d52,0xff295752,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "up",
+        "family": "ps_float",
+        "row": 15,
+        "values": "0xff293d52,0xff2e5247,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "up",
+        "family": "ps_int",
+        "row": 16,
+        "values": "0xff293d52,0xff293d6e,0xff293d52,0xff293d52"
+      },
+      {
+        "path": "up",
+        "family": "ps_bool",
+        "row": 17,
+        "values": "0xff293d52,0xff3d3d52,0xff293d52,0xff293d52"
+      }
+    ]
+  },
+  "runs": [
+    {
+      "case": "plain",
+      "arch": "x64",
+      "inline": "0",
+      "offload": "1",
+      "full_snapshot": "1",
+      "artifact": "experiments/output/pe-inline-boundary-economy-20260908/analysis/plain-x64-off-worker-snapshot1-r1",
+      "fixture": {
+        "sha256": "dd8641f5a7534ffed5e75838e5264c5bc277140515590e3b32b4a086005a5c5a",
+        "bytes": 111104
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 6,
+        "append_vsconst_calls": 19,
+        "append_psconst_calls": 19,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "records": 118,
+      "wire_bytes": 195440,
+      "device_release": 0,
+      "stateblock_releases": 0,
+      "runtime_images": {
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": "e4543457d6992f1a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/d3d9.dll": "3344c975a664ca7a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/winemetal_dxmt9.dll": "cc46aabe66969513"
+      }
+    },
+    {
+      "case": "plain",
+      "arch": "x64",
+      "inline": "1",
+      "offload": "1",
+      "full_snapshot": "1",
+      "artifact": "experiments/output/pe-inline-boundary-economy-20260908/analysis/plain-x64-on-worker-snapshot1-r1",
+      "fixture": {
+        "sha256": "dd8641f5a7534ffed5e75838e5264c5bc277140515590e3b32b4a086005a5c5a",
+        "bytes": 111104
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 6,
+        "append_vsconst_calls": 6,
+        "append_psconst_calls": 6,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "records": 92,
+      "wire_bytes": 195024,
+      "device_release": 0,
+      "stateblock_releases": 0,
+      "runtime_images": {
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": "e4543457d6992f1a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/d3d9.dll": "3344c975a664ca7a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/winemetal_dxmt9.dll": "cc46aabe66969513"
+      }
+    },
+    {
+      "case": "plain",
+      "arch": "x86",
+      "inline": "0",
+      "offload": "1",
+      "full_snapshot": "1",
+      "artifact": "experiments/output/pe-inline-boundary-economy-20260908/analysis/plain-x86-off-worker-snapshot1-r1",
+      "fixture": {
+        "sha256": "0a3e03a7ff4246b3cea1b821c5bb97485e324c15e1f102491cbc6d7e380cbbb8",
+        "bytes": 100864
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 6,
+        "append_vsconst_calls": 19,
+        "append_psconst_calls": 19,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "records": 118,
+      "wire_bytes": 195440,
+      "device_release": 0,
+      "stateblock_releases": 0,
+      "runtime_images": {
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/d3d9.dll": "413f19b269fbe833",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/winemetal_dxmt9.dll": "e31242c3d6c67e9a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": "e4543457d6992f1a"
+      }
+    },
+    {
+      "case": "plain",
+      "arch": "x86",
+      "inline": "1",
+      "offload": "1",
+      "full_snapshot": "1",
+      "artifact": "experiments/output/pe-inline-boundary-economy-20260908/analysis/plain-x86-on-worker-snapshot1-r1",
+      "fixture": {
+        "sha256": "0a3e03a7ff4246b3cea1b821c5bb97485e324c15e1f102491cbc6d7e380cbbb8",
+        "bytes": 100864
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 6,
+        "append_vsconst_calls": 6,
+        "append_psconst_calls": 6,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "records": 92,
+      "wire_bytes": 195024,
+      "device_release": 0,
+      "stateblock_releases": 0,
+      "runtime_images": {
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/d3d9.dll": "413f19b269fbe833",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/winemetal_dxmt9.dll": "e31242c3d6c67e9a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": "e4543457d6992f1a"
+      }
+    },
+    {
+      "case": "stateblock",
+      "arch": "x64",
+      "inline": "0",
+      "offload": "0",
+      "full_snapshot": "0",
+      "artifact": "experiments/output/pe-inline-boundary-economy-20260908/analysis/stateblock-x64-off-sync-snapshot0-r1",
+      "fixture": {
+        "sha256": "dd8641f5a7534ffed5e75838e5264c5bc277140515590e3b32b4a086005a5c5a",
+        "bytes": 111104
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 68,
+        "append_vsconst_calls": 37,
+        "append_psconst_calls": 37,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "records": 216,
+      "wire_bytes": 25704,
+      "device_release": 0,
+      "stateblock_releases": 18,
+      "runtime_images": {
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": "e4543457d6992f1a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/d3d9.dll": "3344c975a664ca7a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/winemetal_dxmt9.dll": "cc46aabe66969513"
+      }
+    },
+    {
+      "case": "stateblock",
+      "arch": "x64",
+      "inline": "0",
+      "offload": "1",
+      "full_snapshot": "0",
+      "artifact": "experiments/output/pe-inline-boundary-economy-20260908/analysis/stateblock-x64-off-worker-snapshot0-r1",
+      "fixture": {
+        "sha256": "dd8641f5a7534ffed5e75838e5264c5bc277140515590e3b32b4a086005a5c5a",
+        "bytes": 111104
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 68,
+        "append_vsconst_calls": 37,
+        "append_psconst_calls": 37,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "records": 216,
+      "wire_bytes": 25704,
+      "device_release": 0,
+      "stateblock_releases": 18,
+      "runtime_images": {
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": "e4543457d6992f1a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/d3d9.dll": "3344c975a664ca7a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/winemetal_dxmt9.dll": "cc46aabe66969513"
+      }
+    },
+    {
+      "case": "stateblock",
+      "arch": "x64",
+      "inline": "0",
+      "offload": "1",
+      "full_snapshot": "1",
+      "artifact": "experiments/output/pe-inline-boundary-economy-20260908/analysis/stateblock-x64-off-worker-snapshot1-r1",
+      "fixture": {
+        "sha256": "dd8641f5a7534ffed5e75838e5264c5bc277140515590e3b32b4a086005a5c5a",
+        "bytes": 111104
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 68,
+        "append_vsconst_calls": 37,
+        "append_psconst_calls": 37,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "records": 216,
+      "wire_bytes": 354112,
+      "device_release": 0,
+      "stateblock_releases": 18,
+      "runtime_images": {
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": "e4543457d6992f1a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/d3d9.dll": "3344c975a664ca7a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/winemetal_dxmt9.dll": "cc46aabe66969513"
+      }
+    },
+    {
+      "case": "stateblock",
+      "arch": "x64",
+      "inline": "1",
+      "offload": "0",
+      "full_snapshot": "0",
+      "artifact": "experiments/output/pe-inline-boundary-economy-20260908/analysis/stateblock-x64-on-sync-snapshot0-r1",
+      "fixture": {
+        "sha256": "dd8641f5a7534ffed5e75838e5264c5bc277140515590e3b32b4a086005a5c5a",
+        "bytes": 111104
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 68,
+        "append_vsconst_calls": 19,
+        "append_psconst_calls": 19,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "records": 180,
+      "wire_bytes": 25128,
+      "device_release": 0,
+      "stateblock_releases": 18,
+      "runtime_images": {
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": "e4543457d6992f1a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/d3d9.dll": "3344c975a664ca7a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/winemetal_dxmt9.dll": "cc46aabe66969513"
+      }
+    },
+    {
+      "case": "stateblock",
+      "arch": "x64",
+      "inline": "1",
+      "offload": "1",
+      "full_snapshot": "0",
+      "artifact": "experiments/output/pe-inline-boundary-economy-20260908/analysis/stateblock-x64-on-worker-snapshot0-r1",
+      "fixture": {
+        "sha256": "dd8641f5a7534ffed5e75838e5264c5bc277140515590e3b32b4a086005a5c5a",
+        "bytes": 111104
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 68,
+        "append_vsconst_calls": 19,
+        "append_psconst_calls": 19,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "records": 180,
+      "wire_bytes": 25128,
+      "device_release": 0,
+      "stateblock_releases": 18,
+      "runtime_images": {
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": "e4543457d6992f1a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/d3d9.dll": "3344c975a664ca7a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/winemetal_dxmt9.dll": "cc46aabe66969513"
+      }
+    },
+    {
+      "case": "stateblock",
+      "arch": "x64",
+      "inline": "1",
+      "offload": "1",
+      "full_snapshot": "1",
+      "artifact": "experiments/output/pe-inline-boundary-economy-20260908/analysis/stateblock-x64-on-worker-snapshot1-r1",
+      "fixture": {
+        "sha256": "dd8641f5a7534ffed5e75838e5264c5bc277140515590e3b32b4a086005a5c5a",
+        "bytes": 111104
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 68,
+        "append_vsconst_calls": 19,
+        "append_psconst_calls": 19,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "records": 180,
+      "wire_bytes": 353536,
+      "device_release": 0,
+      "stateblock_releases": 18,
+      "runtime_images": {
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": "e4543457d6992f1a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/d3d9.dll": "3344c975a664ca7a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/winemetal_dxmt9.dll": "cc46aabe66969513"
+      }
+    },
+    {
+      "case": "stateblock",
+      "arch": "x86",
+      "inline": "0",
+      "offload": "0",
+      "full_snapshot": "0",
+      "artifact": "experiments/output/pe-inline-boundary-economy-20260908/analysis/stateblock-x86-off-sync-snapshot0-r1",
+      "fixture": {
+        "sha256": "0a3e03a7ff4246b3cea1b821c5bb97485e324c15e1f102491cbc6d7e380cbbb8",
+        "bytes": 100864
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 68,
+        "append_vsconst_calls": 37,
+        "append_psconst_calls": 37,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "records": 216,
+      "wire_bytes": 25704,
+      "device_release": 0,
+      "stateblock_releases": 18,
+      "runtime_images": {
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/d3d9.dll": "413f19b269fbe833",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/winemetal_dxmt9.dll": "e31242c3d6c67e9a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": "e4543457d6992f1a"
+      }
+    },
+    {
+      "case": "stateblock",
+      "arch": "x86",
+      "inline": "0",
+      "offload": "1",
+      "full_snapshot": "0",
+      "artifact": "experiments/output/pe-inline-boundary-economy-20260908/analysis/stateblock-x86-off-worker-snapshot0-r1",
+      "fixture": {
+        "sha256": "0a3e03a7ff4246b3cea1b821c5bb97485e324c15e1f102491cbc6d7e380cbbb8",
+        "bytes": 100864
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 68,
+        "append_vsconst_calls": 37,
+        "append_psconst_calls": 37,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "records": 216,
+      "wire_bytes": 25704,
+      "device_release": 0,
+      "stateblock_releases": 18,
+      "runtime_images": {
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/d3d9.dll": "413f19b269fbe833",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/winemetal_dxmt9.dll": "e31242c3d6c67e9a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": "e4543457d6992f1a"
+      }
+    },
+    {
+      "case": "stateblock",
+      "arch": "x86",
+      "inline": "0",
+      "offload": "1",
+      "full_snapshot": "1",
+      "artifact": "experiments/output/pe-inline-boundary-economy-20260908/analysis/stateblock-x86-off-worker-snapshot1-r1",
+      "fixture": {
+        "sha256": "0a3e03a7ff4246b3cea1b821c5bb97485e324c15e1f102491cbc6d7e380cbbb8",
+        "bytes": 100864
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 68,
+        "append_vsconst_calls": 37,
+        "append_psconst_calls": 37,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "records": 216,
+      "wire_bytes": 354112,
+      "device_release": 0,
+      "stateblock_releases": 18,
+      "runtime_images": {
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/d3d9.dll": "413f19b269fbe833",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/winemetal_dxmt9.dll": "e31242c3d6c67e9a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": "e4543457d6992f1a"
+      }
+    },
+    {
+      "case": "stateblock",
+      "arch": "x86",
+      "inline": "1",
+      "offload": "0",
+      "full_snapshot": "0",
+      "artifact": "experiments/output/pe-inline-boundary-economy-20260908/analysis/stateblock-x86-on-sync-snapshot0-r1",
+      "fixture": {
+        "sha256": "0a3e03a7ff4246b3cea1b821c5bb97485e324c15e1f102491cbc6d7e380cbbb8",
+        "bytes": 100864
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 68,
+        "append_vsconst_calls": 19,
+        "append_psconst_calls": 19,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "records": 180,
+      "wire_bytes": 25128,
+      "device_release": 0,
+      "stateblock_releases": 18,
+      "runtime_images": {
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/d3d9.dll": "413f19b269fbe833",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/winemetal_dxmt9.dll": "e31242c3d6c67e9a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": "e4543457d6992f1a"
+      }
+    },
+    {
+      "case": "stateblock",
+      "arch": "x86",
+      "inline": "1",
+      "offload": "1",
+      "full_snapshot": "0",
+      "artifact": "experiments/output/pe-inline-boundary-economy-20260908/analysis/stateblock-x86-on-worker-r1",
+      "fixture": {
+        "sha256": "0a3e03a7ff4246b3cea1b821c5bb97485e324c15e1f102491cbc6d7e380cbbb8",
+        "bytes": 100864
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 68,
+        "append_vsconst_calls": 19,
+        "append_psconst_calls": 19,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "records": 180,
+      "wire_bytes": 25128,
+      "device_release": 0,
+      "stateblock_releases": 18,
+      "runtime_images": {
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/d3d9.dll": "413f19b269fbe833",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/winemetal_dxmt9.dll": "e31242c3d6c67e9a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": "e4543457d6992f1a"
+      }
+    },
+    {
+      "case": "stateblock",
+      "arch": "x86",
+      "inline": "1",
+      "offload": "1",
+      "full_snapshot": "1",
+      "artifact": "experiments/output/pe-inline-boundary-economy-20260908/analysis/stateblock-x86-on-worker-snapshot1-r1",
+      "fixture": {
+        "sha256": "0a3e03a7ff4246b3cea1b821c5bb97485e324c15e1f102491cbc6d7e380cbbb8",
+        "bytes": 100864
+      },
+      "health": {
+        "chunk_reject": 0,
+        "command_chunk_rejects": 0,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "append_counts": {
+        "append_draw_calls": 24,
+        "append_drawidx_calls": 24,
+        "append_drawup_calls": 24,
+        "append_applystate_calls": 68,
+        "append_vsconst_calls": 19,
+        "append_psconst_calls": 19,
+        "append_clear_calls": 1,
+        "append_other_calls": 1
+      },
+      "records": 180,
+      "wire_bytes": 353536,
+      "device_release": 0,
+      "stateblock_releases": 18,
+      "runtime_images": {
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/d3d9.dll": "413f19b269fbe833",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/winemetal_dxmt9.dll": "e31242c3d6c67e9a",
+        "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": "e4543457d6992f1a"
+      }
+    }
+  ]
+}

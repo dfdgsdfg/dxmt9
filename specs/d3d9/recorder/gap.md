@@ -13,6 +13,13 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H270](../../../docs/perfomance/present-pacing/present-pacing-inline-constant-boundaries.270.md)
+adds 16 actual PE StateBlock/full-snapshot processes with 1,152 exact sampled
+pixels and continuous external CPU envelopes. This is bounded R-BACK-2.52
+evidence, not promotion or proof for all consumers/layouts/failures. Linked
+inspection also rejects the proposed OFF-path constant-pointer-array cost:
+the compiler already eliminates those arrays in both PE widths.
+
 [H269](../../../docs/perfomance/present-pacing/present-pacing-pe-held-constant-value.269.md)
 rejects held-value/cursor refinements after separate equal/changed-path PE
 inspection and GT2 spots without demonstrated economy. Production remains

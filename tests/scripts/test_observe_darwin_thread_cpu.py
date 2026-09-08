@@ -30,6 +30,16 @@ def row(index=0):
     return dict(status="sample", snapshot=snapshot(index), frame_before=frame, frame_after=frame.copy())
 
 
+def qualify_envelope_rows(rows):
+    for value in rows:
+        snap = value['snapshot']
+        value.setdefault('selector', dict(device=1, native_tid=2**40+7, transport=1))
+        value.setdefault('log_metadata', dict(device=4, inode=9, modified_unix_ns=100))
+        value.setdefault('observer_begin_ns', snap['monotonic_begin_ns'])
+        value.setdefault('observer_end_ns', snap['monotonic_end_ns'])
+    return rows
+
+
 class ReceiptTests(unittest.TestCase):
     def test_large_native_id_preserved(self):
         value = snapshot()
@@ -97,6 +107,105 @@ class ReceiptTests(unittest.TestCase):
             observer.summarize([first, second], 100, 300)
         report = observer.summarize([first, row(1)], 100, 300)
         self.assertIsNone(report['selector'])
+
+    def test_envelope_includes_unstable_interior_and_reports_exclusions(self):
+        unstable = row(1)
+        unstable['frame_after']['frame'] += 1
+        prefix = row(0)
+        prefix['frame_before']['draws'] = prefix['frame_after']['draws'] = 2
+        samples = qualify_envelope_rows([row(0), unstable, row(2)])
+        suffix = row(3)
+        suffix['frame_before']['frame'] = suffix['frame_after']['frame'] = 300
+        report = observer.summarize_envelope(
+            [prefix, *samples, suffix], 100, 300)
+        self.assertEqual(report['status'], 'partial')
+        self.assertEqual(report['frames'], 100)
+        self.assertEqual(report['frame_span'], 100)
+        self.assertEqual(report['user_ns'], 2_000_000_000)
+        self.assertEqual(report['system_ns'], 20_000_000)
+        self.assertEqual(report['excluded_prefix']['rows'], 1)
+        self.assertEqual(report['excluded_suffix']['rows'], 1)
+        self.assertIn('not exact Present timestamps', report['endpoint_approximation'])
+        self.assertIn('game/Wine/synchronous Unix', report['qualification'])
+
+    def test_envelope_verifies_selector_and_log_provenance(self):
+        rows = [row(0), row(1), row(2)]
+        qualify_envelope_rows(rows)
+        report = observer.summarize_envelope(rows, 100, 300)
+        self.assertEqual(report['selector_provenance'], 'stable')
+        self.assertEqual(report['log_provenance'], 'stable-file-identity')
+
+    def test_envelope_rejects_internal_identity_counter_query_and_selector_changes(self):
+        cases = []
+        changed_identity = row(1)
+        changed_identity['frame_after']['frame'] += 1
+        changed_identity['snapshot']['pid'] += 1
+        cases.append(changed_identity)
+        changed_counter = row(1)
+        changed_counter['frame_after']['frame'] += 1
+        changed_counter['snapshot']['user_ns'] = 1
+        cases.append(changed_counter)
+        bad_query = row(1)
+        bad_query['frame_after']['frame'] += 1
+        bad_query['observer_begin_ns'] = 0
+        bad_query['observer_end_ns'] = 1
+        cases.append(bad_query)
+        changed_selector = row(1)
+        changed_selector['frame_after']['frame'] += 1
+        changed_selector['selector'] = dict(device=2, native_tid=2**40+7, transport=1)
+        cases.append(changed_selector)
+        for interior in cases:
+            first, last = row(0), row(2)
+            qualify_envelope_rows([first, interior, last])
+            with self.subTest(interior=interior), self.assertRaises(ValueError):
+                observer.summarize_envelope([first, interior, last], 100, 300)
+
+    def test_envelope_does_not_bridge_internal_query_error(self):
+        endpoints = qualify_envelope_rows([row(0), row(2)])
+        with self.assertRaisesRegex(ValueError, 'non-sample row'):
+            observer.summarize_envelope(
+                [endpoints[0], dict(status='query_error'), endpoints[1]], 100, 300)
+
+    def test_envelope_rejects_missing_selector_metadata_and_query_bounds(self):
+        for field in ('selector', 'log_metadata', 'observer_begin_ns', 'observer_end_ns'):
+            rows = qualify_envelope_rows([row(0), row(1), row(2)])
+            rows[1].pop(field)
+            with self.subTest(field=field), self.assertRaises(ValueError):
+                observer.summarize_envelope(rows, 100, 300)
+
+    def test_envelope_rejects_provenance_frame_and_typed_selector_changes(self):
+        cases = []
+        rows = qualify_envelope_rows([row(0), row(1), row(2)])
+        rows[1]['log_metadata']['inode'] += 1
+        cases.append(('log inode', rows))
+        rows = qualify_envelope_rows([row(0), row(1), row(2)])
+        rows[1]['frame_before']['wall_ms'] = float('nan')
+        cases.append(('nonfinite wall', rows))
+        rows = qualify_envelope_rows([row(0), row(1), row(2)])
+        rows[1]['selector']['transport'] = True
+        cases.append(('typed transport', rows))
+        for name, values in cases:
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                observer.summarize_envelope(values, 100, 300)
+
+    def test_envelope_rejects_monotonic_and_sample_regressions(self):
+        rows = qualify_envelope_rows([row(0), row(1), row(2)])
+        rows[1]['snapshot']['monotonic_begin_ns'] = 1
+        rows[1]['snapshot']['monotonic_end_ns'] = 2
+        with self.assertRaises(ValueError):
+            observer.summarize_envelope(rows, 100, 300)
+        rows = qualify_envelope_rows([row(0), row(1), row(2)])
+        rows[1]['frame_before']['frame'] = 90
+        with self.assertRaises(ValueError):
+            observer.summarize_envelope(rows, 100, 300)
+
+    def test_envelope_no_frame_progress_is_unmeasured(self):
+        static = row(1)
+        static['frame_before']['frame'] = static['frame_after']['frame'] = 100
+        report = observer.summarize_envelope(qualify_envelope_rows([row(0), static]), 100, 300)
+        self.assertEqual(report['status'], 'unmeasured')
+        self.assertEqual(report['frames'], 0)
+        self.assertEqual(report['rejected']['no_frame_progress'], 1)
 
 
 class LogTests(unittest.TestCase):

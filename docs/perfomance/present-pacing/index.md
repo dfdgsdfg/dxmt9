@@ -11,6 +11,10 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H270](present-pacing-inline-constant-boundaries.270.md) adds actual PE
+StateBlock/full-snapshot inline-constant pixels and continuous external CPU
+envelopes. The candidate remains default-off; records alone do not prove savings.
+
 [H269](present-pacing-pe-held-constant-value.269.md) rejects held-value
 constant fusion: smaller PE symbols add an equal-path argument reload; GT2
 spots show no economy benefit. Original runtime is retained, with stronger

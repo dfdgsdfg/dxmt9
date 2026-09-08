@@ -29,6 +29,13 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H270](present-pacing-inline-constant-boundaries.270.md) closes the bounded
+recorded-StateBlock/full-snapshot pixel matrix: 16 PE processes, 1,152 exact
+samples. External cumulative CPU envelopes avoid dropping unstable interior
+log observations. Eight retained Info GT2 diagnostics show only a small
+inclusive CPU signal (about 1–1.5%); the user-contaminated 06 OFF run is excluded
+and replaced. This does not promote inline constants or change runtime code.
+
 [H269](present-pacing-pe-held-constant-value.269.md) rejects three held-value
 constant-loop shapes. The measured candidate removes a changed-only reload
 but adds a common PE32 source-argument read; 05/06 spots show no benefit.
