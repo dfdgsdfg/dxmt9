@@ -40,6 +40,21 @@ d3d9_device_lifetime = executable(
   install: false,
 )
 
+draw_parent_arch = 'x64'
+if host_machine.cpu_family() == 'x86'
+  draw_parent_arch = 'x86'
+endif
+
+d3d9_draw_parent_economy = executable(
+  'd3d9_draw_parent_economy_' + draw_parent_arch,
+  'd3d9_draw_parent_economy.cpp',
+  dependencies: [
+    cpp.find_library('user32', required: true),
+    cpp.find_library('d3d9', required: true),
+  ],
+  install: false,
+)
+
 d3d9_exports = executable(
   'd3d9_exports_x64',
   'd3d9_exports.cpp',
@@ -222,6 +237,7 @@ alias_target(
   [
     d3d9_conformance,
     d3d9_device_lifetime,
+    d3d9_draw_parent_economy,
     d3d9_exports,
     d3d9_auxiliary,
     d3d9_inline_constants,

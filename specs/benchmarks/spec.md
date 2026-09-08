@@ -175,3 +175,66 @@ Use explicit `GetProcessTimes`, not an assumed thread-local
 falls back to process `times()`. The CPU metric includes any fixture/Wine/provider
 helper threads; calling-thread identity identifies the setter source, not
 exclusive CPU attribution. Native Darwin thread observation is a separate lane.
+
+## 8. Actual PE Draw-Parent Economy
+
+R-BENCH-7.1–7.4 add a standalone on-demand PE fixture,
+`tests/conformance/d3d9/d3d9_draw_parent_economy.cpp`. The public COM device
+owns a hardware-only 32×32 FFP offscreen target, managed VB/IB, event query
+and readback surface. It calls no Darwin or Metal API. The host driver
+`scripts/tools/run_pe_draw_parent_economy.py` owns canonical Wine staging,
+environment isolation and provenance; `summarize_pe_draw_parent_economy.py`
+owns fail-closed transcript qualification.
+The conformance manifest marks this auxiliary `on_demand = true`: ordinary
+suite runs omit it, while an explicit `--aux-exe` selection enables it. The
+dedicated driver always makes that selection, preventing a long timing matrix
+from silently joining routine conformance runs.
+
+The matrix has nine cases (`steady`, `viewport`, `viewport_scissor`, `scalar`,
+`stream_offset`, `six_constants`, `vs_f3_equal`, `vs_f3_changed`,
+`vs_f4_changed`) and three paths (`setters_only`, `primitive`, `indexed`):
+27 cells. Each group contains 32 iterations. Default timing uses 512 measured
+groups after eight warm groups, with test-only bounded overrides. Prebuilt
+alternating inputs avoid timed allocation; equal inputs have distinct source
+addresses. Exact getters check constant extents and surrounding registers.
+The six-family case changes one register per family; VS-F cases exercise
+three/four-register calls. These are fixture shapes, not a current workload
+population distribution.
+
+Each group establishes base state and executes Clear/BeginScene/seed draw
+before QPC. Draw paths clear the target again before QPC so the seed cannot
+make a dropped measured draw pass the pixel oracle. Only setter calls and
+the selected draw belong inside QPC.
+EndScene, event issue/drain and final getters/readback are outside. Process
+CPU reads bracket the complete row and are explicitly broader than the sum
+of QPC intervals. Raw ticks remain authoritative; rounded nanoseconds,
+zero-setter controls and timer cost must not become invented exclusive costs.
+
+A short separate trace uses the same group shape with recorder chunk logging.
+All fixture-owned records use flushed stderr, the recorder logger's stream;
+the canonical runner's separate stdout/stderr capture must not reorder markers
+and chunk events into a false temporal proof.
+`begin → timed_begin → timed_end → end` markers must be complete, ordered and
+identity-qualified by case/path/group; a recorder flush inside a timed pair
+rejects qualification. A trace proves only its observed run, not the absence
+of all scheduler interference in an observer-disabled run. The driver must
+preserve both kinds of evidence without treating traced values as economics.
+
+Structured `draw_parent_*` schema-1 receipts include exact row closure,
+raw QPC/process CPU values, PID/TID, both public vtable RVAs, HRESULT totals,
+getter/input checks, two pixel values and successful final teardown. The
+native script test `dxmt9-summarize-pe-draw-parent-economy` pins malformed,
+stale/mismatched and missing evidence rejection before any Wine measurement.
+The driver records source/build-option and five-runtime-image identities,
+fixture/tool/manifest hashes, effective runner environment digest and actual
+Wine runtime hashes. Output directories are new and immutable per invocation;
+shared Wine-root destinations are checked during that invocation, not later
+when they may have been restaged by another process.
+
+The scope remains warmed FFP with one stream and one triangle, without Present,
+programmable shaders, UP, StateBlock or allocation-failure paths. Pixel checks
+qualify VB/IB geometry and these selected states; constants are qualified by
+getters, not shader consumption. The existing programmable pixel/refinement
+lanes and wild CPU/FPS checks remain separate acceptance layers.
+The setter-only pixel is intentionally the seed draw; changed setter state
+is qualified by getters, not subsequent visual consumption.

@@ -536,6 +536,11 @@ test('dxmt9-summarize-pe-constant-economy', python3,
      workdir: meson.project_source_root(),
      suite: ['scripts'],
      is_parallel: false)
+test('dxmt9-summarize-pe-draw-parent-economy', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_pe_draw_parent_economy.py')],
+     workdir: meson.project_source_root(),
+     suite: ['scripts'],
+     is_parallel: false)
 test('dxmt9-summarize-3dmark05-perf-gates', python3,
      args: [join_paths(meson.project_source_root(), 'tests/scripts/test_summarize_3dmark05_perf_gates.py')],
      workdir: meson.project_source_root(),

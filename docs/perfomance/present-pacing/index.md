@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H298](present-pacing-pe-draw-parent-harness.298.md) checks in the public COM
+draw-parent harness with indexed and count-3/4 constant coverage. State/pixels,
+ordered no-flush traces and strict parsing pass. Three same-image repeats per
+PE width remain highly variable: this is functional evidence, not calibrated
+small-delta economics. Production images and README remain unchanged.
+
 [H297](present-pacing-pe-identity-call-abi.297.md) removes two unused compact
 identity-call arguments while preserving the shared generic transition.
 Native/TLA and actual PE32/PE64 pixel parity pass; four-repeat public-COM costs

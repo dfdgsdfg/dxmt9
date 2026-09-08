@@ -30,6 +30,15 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H298](present-pacing-pe-draw-parent-harness.298.md) extends actual public-parent
+coverage to indexed draws and VS-F counts 3/4 without a production change.
+The 27-cell fixture and strict ordered trace qualification pass in both PE
+widths, but longer timing accumulation fails repeatability: draw-row ranges
+are 14–273% on PE32 and 20–230% on PE64 across three same-image processes.
+Small private-helper savings cannot be judged from this calibration. Group
+interval distributions and drain/scheduling attribution precede the next
+economics decision; the last wild FPS evidence remains H297.
+
 [H297](present-pacing-pe-identity-call-abi.297.md) closes H295's dummy private
 identity-call arguments: PE32 explicit arguments shrink 6 to 4 and PE64 caller
 stack reservation shrinks 72 to 56 bytes. Generic live instruction counts and

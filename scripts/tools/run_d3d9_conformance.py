@@ -216,7 +216,7 @@ def _describe_head() -> str:
     return proc.stdout.strip() if proc.returncode == 0 else ""
 
 
-def load_manifest_cases(manifest_path: Path) -> dict[str, list[str]]:
+def load_manifest_cases(manifest_path: Path, *, include_on_demand: bool = True) -> dict[str, list[str]]:
     """Read MANIFEST.toml and return {executable_basename: [function, ...]}.
 
     The ordering inside each list reflects MANIFEST order so the runner
@@ -227,6 +227,8 @@ def load_manifest_cases(manifest_path: Path) -> dict[str, list[str]]:
     cases = data.get("case") or []
     by_exe: dict[str, list[str]] = {}
     for case in cases:
+        if case.get("on_demand", False) and not include_on_demand:
+            continue
         exe = case.get("executable")
         fn = case.get("function")
         if not isinstance(exe, str) or not isinstance(fn, str):
@@ -813,7 +815,7 @@ def main() -> int:
             print(f"[runner] WARNING: manifest not found at {args.manifest} — "
                   f"skipping aux executables", file=sys.stderr)
         else:
-            by_exe = load_manifest_cases(args.manifest)
+            by_exe = load_manifest_cases(args.manifest, include_on_demand=bool(args.aux_exe))
             aux_exes = sorted(
                 exe for exe in by_exe.keys() if exe not in CHUNKED_EXECUTABLES
             )

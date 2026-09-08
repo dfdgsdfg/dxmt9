@@ -50,6 +50,17 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   experiments/output/pe-constant-economy-<unique-id>`. `--pe-build-dir` selects
   a frozen runtime independently of the fixture for repeated comparisons;
   each output directory must be new. This stages shared Wine-root binaries.
+- `run_pe_draw_parent_economy.py` / `summarize_pe_draw_parent_economy.py` —
+  run and strictly qualify 27 public-COM setter/primitive/indexed cells under
+  Sikarugir. Use `scripts/run_python.sh scripts/tools/run_pe_draw_parent_economy.py
+  --arch x86 --output experiments/output/pe-draw-parent-<unique-id>`; run a
+  separate `--mode trace` invocation for recorder-boundary qualification. Raw QPC
+  covers only grouped setters/draws; process CPU includes setup, drains and
+  oracle work. No exclusive PE CPU, programmable-shader oracle or FPS claim.
+  Each new output directory retains fixture, source and full runtime identities;
+  invoking this driver stages shared Wine-root binaries.
+  The fixture is marked on-demand and does not run with the default conformance
+  auxiliary set.
 - `summarize_3dmark05_perf.py` — parse dxmt9 per-run perf logs into encoder,
   stream, indexed-probe, and per-frame sampling CSVs. Enable
   `DXMT9_PERF_FRAME_SAMPLING=1` or `run_3dmark05_perf_probe.sh --frame-sampling`

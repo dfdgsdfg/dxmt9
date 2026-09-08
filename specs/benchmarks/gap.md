@@ -20,6 +20,7 @@ sampling — but it does not satisfy the reproducible native benchmark contract.
 | Area | Status | Spec |
 |---|---|---|
 | `dxmt9-bench` harness | ❌ | R-BENCH-1.1 |
+| Actual PE draw-parent economy | ⚠️ H298 implements the on-demand 27-cell public-COM setter/primitive/indexed fixture, strict native parser and full-image/source/build receipts. PE32/PE64 state, pixels and ordered no-timed-flush traces pass; three same-image timing repeats per width fail stable calibration (draw-row range/median 14–273% / 20–230%). Per-group timing attribution, programmable shaders, UP, app-local and exclusive PE CPU remain open. No small-delta economics or FPS promotion. See `docs/perfomance/present-pacing/present-pacing-pe-draw-parent-harness.298.md`. | R-BENCH-7.1–7.4 |
 | Draw call throughput workload | ❌ | R-BENCH-2.2 |
 | Bridge operation budget counters | ⚠️ | `dxmt9-bridge-ops-spec` provides static opcode-budget evidence; workload-level runtime counters and benchmark JSON still required for R-BENCH-2.3-R-BENCH-2.5, R-BENCH-5.3 |
 | Architecture bottleneck/concurrency counter baselines | ⚠️ | The 2026-08-25 GT2 current-cap run and H236 join no-gputrace counters, clean Time Profiler producer/replay/encode ownership, a 250 Hz PE module/PC sample, and a Metal GPU interval sidecar. This is architecture evidence, not a committed deterministic `dxmt9-bench` workload, schema, threshold, or reference-stack baseline required by R-ARCH-2.6-R-ARCH-2.7, R-ARCH-6.*, R-BENCH-2.6. |

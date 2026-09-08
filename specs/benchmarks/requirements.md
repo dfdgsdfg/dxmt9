@@ -181,3 +181,33 @@ failed state/HRESULT checks, nonpositive or malformed timings and incomplete
 termination. Preserve matched image, fixture, environment and output hashes
 for repeated comparisons. Local setter economy complements, and must not
 replace, rendering refinement, actual GPU readback and wild CPU/FPS gates.
+
+## 7. Actual PE Draw-Parent Economy
+
+**R-BENCH-7.1** The draw-parent lane must exercise public `DrawPrimitive` and
+`DrawIndexedPrimitive` COM entry points in a qualified PE process, with a
+setter-only control. Record the loaded module, both vtable entry RVAs, PE
+architecture and full image identities. Private helper invocation and native
+host surrogates must not be reported as public-parent measurements.
+
+**R-BENCH-7.2** Warm, bounded groups must separate timed setters/draws from
+setup, seed draw, query issue, GPU drain and readback. Preserve raw QPC ticks,
+frequency and exact operation denominators; never automatically subtract the
+setter-only or empty-clock control. A separate trace run must verify balanced
+group boundaries and absence of recorder flushes inside every timed interval.
+Trace timing must not be mixed with observer-disabled timing.
+
+**R-BENCH-7.3** Every call must contribute to HRESULT validation. Outside the
+timed interval, independent input snapshots, initial/final getters, VB/IB
+bindings and exact pixel readback must qualify the selected fixture, followed
+by successful cleanup and final device Release zero. Constant counts 3 and 4
+must have exact range/canary checks. FFP pixels must not be presented as proof
+of programmable-shader constant consumption.
+
+**R-BENCH-7.4** The strict parser must reject incomplete, duplicate, unexpected
+or malformed cells, invalid identity/timing/state receipts and missing final
+termination. Report explicit process CPU ticks for the whole row, including
+setup, warm-up, drains and oracle work; this is not exclusive PE/thread CPU.
+Repeated results require matched fixture, recipe and runtime-image receipts.
+Local-parent timing does not establish a full-frame CPU/FPS improvement,
+stable run-to-run variance or performance-lane promotion.

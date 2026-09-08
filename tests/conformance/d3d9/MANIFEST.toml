@@ -11,6 +11,46 @@
 # Runtime evidence is recorded with [[case.evidence]] lane/arch tables.
 
 [[case]]
+executable = "d3d9_draw_parent_economy_x86.exe"
+on_demand = true
+source_file = "d3d9_draw_parent_economy.cpp"
+function = "runDrawParentEconomy"
+source = "dxmt9-authored public PE draw-parent economy matrix"
+source_kind = "dxmt9-policy"
+license = "MIT"
+license_scope = "dxmt9"
+lanes = ["builtin"]
+arches = ["x86"]
+area = "draw-parent-economy"
+owner = "pe/recorder"
+requirements = ["R-TEST-12.20"]
+acceptance = ["R-BENCH-7.1–7.4: strict parser qualifies 27 public COM setter/primitive/indexed cells, exact HRESULT/state/input/pixel checks and final Release zero; raw QPC and broader process CPU have explicit denominators and scope", "Separate trace qualifies recorder boundaries without using trace timings as economics; actual loaded public vtable, fixture, source/build-option and full runtime image identities are required; no shader-constant consumption or FPS promotion claim"]
+status = "partial"
+evidence = [
+  { lane = "builtin", arch = "x86", status = "passing", summary = "H298: five actual PE32 processes pass 135 cells including final on-demand integration trace; exact state/input/pixel, loaded public vtable and full provenance checks pass. Three same-image timing repeats remain noisy, so small-delta economics and exclusive PE CPU are unqualified", source = "docs/perfomance/present-pacing/present-pacing-pe-draw-parent-harness.298.md:1" },
+]
+
+[[case]]
+executable = "d3d9_draw_parent_economy_x64.exe"
+on_demand = true
+source_file = "d3d9_draw_parent_economy.cpp"
+function = "runDrawParentEconomy"
+source = "dxmt9-authored public PE draw-parent economy matrix"
+source_kind = "dxmt9-policy"
+license = "MIT"
+license_scope = "dxmt9"
+lanes = ["builtin"]
+arches = ["x64"]
+area = "draw-parent-economy"
+owner = "pe/recorder"
+requirements = ["R-TEST-12.20"]
+acceptance = ["R-BENCH-7.1–7.4: strict parser qualifies 27 public COM setter/primitive/indexed cells, exact HRESULT/state/input/pixel checks and final Release zero; raw QPC and broader process CPU have explicit denominators and scope", "Separate trace qualifies recorder boundaries without using trace timings as economics; actual loaded public vtable, fixture, source/build-option and full runtime image identities are required; no shader-constant consumption or FPS promotion claim"]
+status = "partial"
+evidence = [
+  { lane = "builtin", arch = "x64", status = "passing", summary = "H298: five actual PE64 processes pass 135 cells including final on-demand integration trace; exact state/input/pixel, loaded public vtable and full provenance checks pass. Three same-image timing repeats remain noisy, so small-delta economics and exclusive PE CPU are unqualified", source = "docs/perfomance/present-pacing/present-pacing-pe-draw-parent-harness.298.md:1" },
+]
+
+[[case]]
 executable = "dxmt9-d3d9-conformance.exe"
 source_file = "d3d9_conformance_device.c"
 function = "test_factory_validation_return_codes"
