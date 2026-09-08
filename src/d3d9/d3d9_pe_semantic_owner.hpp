@@ -1071,18 +1071,22 @@ inline bool preparePeSemanticSparsePlanLayout(
     const SparseStatePlan::SourceFacts& source,
     const SparseStatePlan::DestinationFacts& destination,
     PeSemanticPreparedSparseLayout& out) noexcept {
+  static_assert([] {
+    for (const auto& rule : kSectionRules) {
+      if (rule.payloadAlignment == 0u ||
+          sizeof(D9CCommandChunkWireDrawHeader) % rule.payloadAlignment != 0u ||
+          sizeof(D9CCommandChunkWireSectionDesc) % rule.payloadAlignment != 0u)
+        return false;
+    }
+    return true;
+  }(), "sparse layout bias must preserve every section alignment");
   out.reset();
-  const auto activeSections = sparseStatePlanSectionCount(source, destination);
-  if (activeSections > D9C_COMMAND_CHUNK_SECTION_COUNT) return false;
-  std::size_t cursor = sizeof(D9CCommandChunkWireDrawHeader);
-  std::size_t tableBytes = 0u;
-  if (!checkedSizeMultiply(activeSections,
-                           sizeof(D9CCommandChunkWireSectionDesc), tableBytes) ||
-      !checkedSizeAdd(cursor, tableBytes, cursor)) return false;
+  std::size_t cursor = 0u;
   const auto append = [&](std::uint16_t kind, std::size_t count,
                           std::size_t bytes, std::size_t quota) noexcept {
     if (count == 0u) return true;
-    if (out.sectionCount >= out.sections.size() ||
+    if (out.sectionCount >= D9C_COMMAND_CHUNK_SECTION_COUNT ||
+        out.sectionCount >= out.sections.size() ||
         (quota != std::numeric_limits<std::size_t>::max() &&
          quota >= out.quotaDeltas.size())) return false;
     const auto* rule = sectionRule(kind);
@@ -1223,8 +1227,22 @@ inline bool preparePeSemanticSparsePlanLayout(
       (!source.payloads.upVertex.empty() &&
        !append(D9C_COMMAND_CHUNK_SECTION_UP_VERTEX_DATA,
                source.payloads.upVertex.size(), source.payloads.upVertex.size(),
-               std::numeric_limits<std::size_t>::max())) ||
-      !checkedSizeToU32(cursor, out.payloadBytes)) return false;
+               std::numeric_limits<std::size_t>::max()))) return false;
+  std::size_t tableBytes = 0u;
+  std::size_t bias = 0u;
+  std::size_t payloadBytes = 0u;
+  if (!checkedSizeMultiply(static_cast<std::size_t>(out.sectionCount),
+                           sizeof(D9CCommandChunkWireSectionDesc), tableBytes) ||
+      !checkedSizeAdd(sizeof(D9CCommandChunkWireDrawHeader), tableBytes, bias) ||
+      !checkedSizeAdd(cursor, bias, payloadBytes) ||
+      !checkedSizeToU32(payloadBytes, out.payloadBytes))
+    return false;
+  for (std::size_t i = 0u; i < out.sectionCount; ++i) {
+    std::size_t shiftedOffset = 0u;
+    if (!checkedSizeAdd(out.sections[i].payloadOffset, bias, shiftedOffset) ||
+        !checkedSizeToU32(shiftedOffset, out.sections[i].payloadOffset))
+      return false;
+  }
   const auto addSemantic = [&](std::size_t bytes) noexcept {
     if (bytes > std::numeric_limits<std::uint32_t>::max() -
                     out.semanticDelta) return false;

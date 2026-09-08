@@ -8,6 +8,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -795,6 +796,402 @@ void compactPreparedLayoutReusesAbaAndRetriesMalformed() {
       });
   check(trace,
         "compact layout reuse resets A/B/A active quotas and retries after malformed input");
+}
+
+void compactSparsePlanLayoutDifferentialMatrix() {
+  using SourceFacts = SparseStatePlan::SourceFacts;
+  using DestinationFacts = SparseStatePlan::DestinationFacts;
+
+  const auto lowMask = [](unsigned width) noexcept {
+    return width >= 32u ? std::numeric_limits<std::uint32_t>::max()
+                        : ((1u << width) - 1u);
+  };
+  const auto maxCount = [](std::uint16_t kind) noexcept {
+    return dxmt9::d3d9::sectionRule(kind)->maxCount;
+  };
+
+  // This is deliberately a separate generic SparseStateInput projection. It
+  // feeds preparePeSemanticSparseLayout, rather than reproducing the compact
+  // helper's category walk, so descriptor order, alignment, and byte totals
+  // are checked against the existing canonical oracle.
+  const auto compareValid = [&](const SourceFacts& source,
+                                const DestinationFacts& destination,
+                                PeSparseScratch& scratch,
+                                std::string_view label) {
+    SparseStateInput sparse{};
+    sparse.fullSnapshot = source.fullSnapshot;
+    const auto span = [](auto& values, std::size_t count) {
+      using Value = typename std::remove_reference_t<decltype(values)>::value_type;
+      check(count <= values.size(), "layout oracle span has real backing storage");
+      return std::span<const Value>(values.data(), count);
+    };
+    sparse.renderStates = span(scratch.renderStates, source.renderStateCount);
+    sparse.textures = span(scratch.textures,
+                           std::popcount(source.textureMask));
+    sparse.streams = span(scratch.streams,
+                          std::popcount(destination.streamMask));
+    sparse.shaders = span(scratch.shaders, std::popcount(source.shaderMask));
+    sparse.vertexInputs = span(scratch.vertexInputs, source.vertexInput ? 1u : 0u);
+    sparse.indexBuffers = span(scratch.indexBuffers,
+                               destination.indexBuffer ? 1u : 0u);
+    sparse.renderTargets = span(scratch.renderTargets,
+                                std::popcount(source.renderTargetMask));
+    sparse.depthStencils = span(scratch.depthStencils,
+                                source.depthStencil ? 1u : 0u);
+    sparse.viewports = span(scratch.viewports, source.viewport ? 1u : 0u);
+    sparse.scissors = span(scratch.scissors, source.scissor ? 1u : 0u);
+    sparse.materials = span(scratch.materials, source.material ? 1u : 0u);
+    sparse.clipPlanes = span(scratch.clipPlanes,
+                             std::popcount(source.clipPlaneMask));
+    sparse.textureStageStates =
+        span(scratch.textureStageStates, source.textureStageStateCount);
+    sparse.samplerStates = span(scratch.samplerStates, source.samplerStateCount);
+    sparse.transforms = span(scratch.transforms, source.transformCount);
+    sparse.lights = span(scratch.lights, std::popcount(source.lightMask));
+    sparse.lightEnables =
+        span(scratch.lightEnables, std::popcount(source.lightEnableMask));
+    sparse.vsFloatConstants = source.vsFloatConstants;
+    sparse.vsIntConstants = source.vsIntConstants;
+    sparse.vsBoolConstants = source.vsBoolConstants;
+    sparse.psFloatConstants = source.psFloatConstants;
+    sparse.psIntConstants = source.psIntConstants;
+    sparse.psBoolConstants = source.psBoolConstants;
+    sparse.upIndexData = source.payloads.upIndex;
+    sparse.upVertexData = source.payloads.upVertex;
+
+    auto input = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+    input.draw.primitiveCount = 1u;
+    input.sparse = sparse;
+
+    PeSemanticPreparedSparseLayout generic{};
+    PeSemanticPreparedSparseLayout compact{};
+    const bool genericValid = detail::preparePeSemanticSparseLayout(input, generic);
+    const bool compactValid =
+        detail::preparePeSemanticSparsePlanLayout(source, destination, compact);
+    check(genericValid && compactValid, label);
+    check(compact.sectionCount == generic.sectionCount &&
+              compact.payloadBytes == generic.payloadBytes &&
+              compact.rectDelta == generic.rectDelta &&
+              compact.semanticDelta == generic.semanticDelta &&
+              compact.quotaDeltas == generic.quotaDeltas,
+          "compact sparse-plan layout matches generic counts and totals");
+    for (std::size_t i = 0u; i < compact.sectionCount; ++i) {
+      const auto& left = compact.sections[i];
+      const auto& right = generic.sections[i];
+      check(left.kind == right.kind && left.elementSize == right.elementSize &&
+                left.count == right.count &&
+                left.payloadOffset == right.payloadOffset &&
+                left.byteSize == right.byteSize,
+            "compact sparse-plan layout preserves canonical section descriptors");
+    }
+  };
+
+  std::array<std::byte, 4096u> vsFloatBytes{};
+  std::array<std::byte, 4096u> vsIntBytes{};
+  std::array<std::byte, 4096u> vsBoolBytes{};
+  std::array<std::byte, 4096u> psFloatBytes{};
+  std::array<std::byte, 4096u> psIntBytes{};
+  std::array<std::byte, 4096u> psBoolBytes{};
+  std::array<std::byte, 33u> upIndexBytes{};
+  std::array<std::byte, 35u> upVertexBytes{};
+
+  const auto setRange = [&](SparseConstantRangeInput& range,
+                            std::uint16_t kind, std::uint32_t start,
+                            std::uint32_t count,
+                            std::array<std::byte, 4096u>& bytes) {
+    range.startRegister = start;
+    range.registerCount = count;
+    const auto extent = static_cast<std::size_t>(count) *
+                        dxmt9::d3d9::sectionRule(kind)->elementSize;
+    check(extent <= bytes.size(), "layout constant span has real backing storage");
+    range.registerBytes = std::span<const std::byte>(bytes).first(extent);
+  };
+  const auto setRows = [](PeSparseScratch& scratch) {
+    for (std::size_t i = 0u; i < scratch.textures.size(); ++i)
+      scratch.textures[i].wire = {.slot = static_cast<std::uint32_t>(i),
+                                   .valid = 1u};
+    for (std::size_t i = 0u; i < scratch.streams.size(); ++i)
+      scratch.streams[i].wire = {.slot = static_cast<std::uint32_t>(i),
+                                  .valid = 1u};
+    for (std::size_t i = 0u; i < scratch.shaders.size(); ++i)
+      scratch.shaders[i].wire = {.stage = static_cast<std::uint32_t>(i),
+                                  .valid = 1u};
+    scratch.vertexInputs[0].wire = {
+        .valid = 1u, .kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF};
+    scratch.indexBuffers[0].wire = {.valid = 1u};
+    for (std::size_t i = 0u; i < scratch.renderTargets.size(); ++i)
+      scratch.renderTargets[i].wire = {.slot = static_cast<std::uint32_t>(i),
+                                       .valid = 1u};
+    scratch.depthStencils[0].wire = {.valid = 1u};
+  };
+
+  const auto makeEmpty = [&]() {
+    SourceFacts source{};
+    DestinationFacts destination{};
+    source.draw.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
+    return std::pair{source, destination};
+  };
+
+  // Empty, then all twenty-five schema categories at their exact canonical
+  // maxima, with all six constant families and both odd-sized UP tails.
+  {
+    auto [source, destination] = makeEmpty();
+    PeSparseScratch scratch{};
+    setRows(scratch);
+    compareValid(source, destination, scratch, "compact empty layout matches generic oracle");
+
+    source.renderStateCount = maxCount(D9C_COMMAND_CHUNK_SECTION_RENDER_STATE);
+    source.textureMask = lowMask(D9C_DRAW_PACKET_MAX_TEXTURES);
+    destination.streamMask = lowMask(D9C_DRAW_PACKET_MAX_STREAMS);
+    source.shaderMask = static_cast<std::uint8_t>(lowMask(2u));
+    source.vertexInput = true;
+    destination.indexBuffer = true;
+    source.renderTargetMask = lowMask(D9C_DRAW_PACKET_MAX_RENDER_TARGETS);
+    source.depthStencil = true;
+    source.viewport = source.scissor = source.material = true;
+    source.clipPlaneMask = lowMask(6u);
+    source.textureStageStateCount =
+        maxCount(D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE);
+    source.samplerStateCount = maxCount(D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE);
+    source.transformCount = maxCount(D9C_COMMAND_CHUNK_SECTION_TRANSFORM);
+    source.lightMask = source.lightEnableMask = lowMask(D9C_DRAW_PACKET_MAX_LIGHTS);
+    setRange(source.vsFloatConstants, D9C_COMMAND_CHUNK_SECTION_VS_CONST_F, 0u,
+             maxCount(D9C_COMMAND_CHUNK_SECTION_VS_CONST_F), vsFloatBytes);
+    setRange(source.vsIntConstants, D9C_COMMAND_CHUNK_SECTION_VS_CONST_I, 0u,
+             maxCount(D9C_COMMAND_CHUNK_SECTION_VS_CONST_I), vsIntBytes);
+    setRange(source.vsBoolConstants, D9C_COMMAND_CHUNK_SECTION_VS_CONST_B, 0u,
+             maxCount(D9C_COMMAND_CHUNK_SECTION_VS_CONST_B), vsBoolBytes);
+    setRange(source.psFloatConstants, D9C_COMMAND_CHUNK_SECTION_PS_CONST_F, 0u,
+             maxCount(D9C_COMMAND_CHUNK_SECTION_PS_CONST_F), psFloatBytes);
+    setRange(source.psIntConstants, D9C_COMMAND_CHUNK_SECTION_PS_CONST_I, 0u,
+             maxCount(D9C_COMMAND_CHUNK_SECTION_PS_CONST_I), psIntBytes);
+    setRange(source.psBoolConstants, D9C_COMMAND_CHUNK_SECTION_PS_CONST_B, 0u,
+             maxCount(D9C_COMMAND_CHUNK_SECTION_PS_CONST_B), psBoolBytes);
+    source.payloads.upIndex = std::span<const std::byte>(upIndexBytes).first(33u);
+    source.payloads.upVertex = std::span<const std::byte>(upVertexBytes).first(35u);
+    compareValid(source, destination, scratch, "compact full maxima layout matches generic oracle");
+  }
+
+  // Every scalar count is exercised at zero, one, and its schema maximum;
+  // every binding mask is exercised at zero, each individual bit, and full.
+  // Each case starts from the empty layout, making every one-bit transition
+  // independently observable without claiming a 2^25 Cartesian sweep.
+  const std::array scalarKinds{
+      D9C_COMMAND_CHUNK_SECTION_RENDER_STATE,
+      D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE,
+      D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE,
+      D9C_COMMAND_CHUNK_SECTION_TRANSFORM};
+  for (const auto kind : scalarKinds) {
+    const auto values = std::array<std::uint32_t, 3u>{0u, 1u, maxCount(kind)};
+    for (const auto count : values) {
+      auto [source, destination] = makeEmpty();
+      PeSparseScratch scratch{};
+      setRows(scratch);
+      switch (kind) {
+        case D9C_COMMAND_CHUNK_SECTION_RENDER_STATE: source.renderStateCount = count; break;
+        case D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE:
+          source.textureStageStateCount = count;
+          break;
+        case D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE: source.samplerStateCount = count; break;
+        case D9C_COMMAND_CHUNK_SECTION_TRANSFORM: source.transformCount = count; break;
+        default: break;
+      }
+      compareValid(source, destination, scratch,
+                   "compact scalar count transition matches generic oracle");
+    }
+  }
+
+  struct MaskCase {
+    unsigned width;
+    enum class Field : std::uint8_t {
+      Texture,
+      Shader,
+      RenderTarget,
+      ClipPlane,
+      Light,
+      LightEnable,
+    } field;
+  };
+  const std::array sourceMasks{
+      MaskCase{D9C_DRAW_PACKET_MAX_TEXTURES, MaskCase::Field::Texture},
+      MaskCase{2u, MaskCase::Field::Shader},
+      MaskCase{D9C_DRAW_PACKET_MAX_RENDER_TARGETS,
+               MaskCase::Field::RenderTarget},
+      MaskCase{6u, MaskCase::Field::ClipPlane},
+      MaskCase{D9C_DRAW_PACKET_MAX_LIGHTS, MaskCase::Field::Light},
+      MaskCase{D9C_DRAW_PACKET_MAX_LIGHTS, MaskCase::Field::LightEnable},
+  };
+  for (const auto mask : sourceMasks) {
+    const auto all = lowMask(mask.width);
+    for (unsigned bit = 0u; bit < mask.width; ++bit) {
+      for (const auto value : {0u, 1u << bit, all}) {
+        auto [source, destination] = makeEmpty();
+        PeSparseScratch scratch{};
+        setRows(scratch);
+        switch (mask.field) {
+          case MaskCase::Field::Texture: source.textureMask = value; break;
+          case MaskCase::Field::Shader: source.shaderMask = value; break;
+          case MaskCase::Field::RenderTarget:
+            source.renderTargetMask = value;
+            break;
+          case MaskCase::Field::ClipPlane: source.clipPlaneMask = value; break;
+          case MaskCase::Field::Light: source.lightMask = value; break;
+          case MaskCase::Field::LightEnable:
+            source.lightEnableMask = value;
+            break;
+        }
+        compareValid(source, destination, scratch,
+                     "compact source mask transition matches generic oracle");
+      }
+    }
+  }
+  for (unsigned bit = 0u; bit < D9C_DRAW_PACKET_MAX_STREAMS; ++bit) {
+    for (const auto value : {0u, 1u << bit, lowMask(D9C_DRAW_PACKET_MAX_STREAMS)}) {
+      auto [source, destination] = makeEmpty();
+      PeSparseScratch scratch{};
+      setRows(scratch);
+      destination.streamMask = value;
+      compareValid(source, destination, scratch,
+                   "compact destination stream mask transition matches generic oracle");
+    }
+  }
+
+  // Each constant family is independently exercised at one register and at
+  // its exact maximum, including a valid end-anchored range.
+  const std::array constantKinds{
+      D9C_COMMAND_CHUNK_SECTION_VS_CONST_F,
+      D9C_COMMAND_CHUNK_SECTION_VS_CONST_I,
+      D9C_COMMAND_CHUNK_SECTION_VS_CONST_B,
+      D9C_COMMAND_CHUNK_SECTION_PS_CONST_F,
+      D9C_COMMAND_CHUNK_SECTION_PS_CONST_I,
+      D9C_COMMAND_CHUNK_SECTION_PS_CONST_B};
+  for (const auto kind : constantKinds) {
+    for (const auto count : {1u, maxCount(kind)}) {
+      auto [source, destination] = makeEmpty();
+      PeSparseScratch scratch{};
+      setRows(scratch);
+      const auto start = maxCount(kind) - count;
+      switch (kind) {
+        case D9C_COMMAND_CHUNK_SECTION_VS_CONST_F:
+          setRange(source.vsFloatConstants, kind, start, count, vsFloatBytes); break;
+        case D9C_COMMAND_CHUNK_SECTION_VS_CONST_I:
+          setRange(source.vsIntConstants, kind, start, count, vsIntBytes); break;
+        case D9C_COMMAND_CHUNK_SECTION_VS_CONST_B:
+          setRange(source.vsBoolConstants, kind, start, count, vsBoolBytes); break;
+        case D9C_COMMAND_CHUNK_SECTION_PS_CONST_F:
+          setRange(source.psFloatConstants, kind, start, count, psFloatBytes); break;
+        case D9C_COMMAND_CHUNK_SECTION_PS_CONST_I:
+          setRange(source.psIntConstants, kind, start, count, psIntBytes); break;
+        case D9C_COMMAND_CHUNK_SECTION_PS_CONST_B:
+          setRange(source.psBoolConstants, kind, start, count, psBoolBytes); break;
+        default: break;
+      }
+      compareValid(source, destination, scratch,
+                   "compact constant family layout matches generic oracle");
+    }
+  }
+
+  // Exhaust all six constant-presence masks (2^6 = 64), using one register
+  // per selected family. This specifically exercises section-table rebase
+  // shifts caused by every subset of constant sections.
+  for (unsigned presence = 0u; presence < (1u << constantKinds.size());
+       ++presence) {
+    auto [source, destination] = makeEmpty();
+    PeSparseScratch scratch{};
+    setRows(scratch);
+    for (std::size_t i = 0u; i < constantKinds.size(); ++i) {
+      if ((presence & (1u << i)) == 0u) continue;
+      const auto kind = constantKinds[i];
+      switch (kind) {
+        case D9C_COMMAND_CHUNK_SECTION_VS_CONST_F:
+          setRange(source.vsFloatConstants, kind, 0u, 1u, vsFloatBytes); break;
+        case D9C_COMMAND_CHUNK_SECTION_VS_CONST_I:
+          setRange(source.vsIntConstants, kind, 0u, 1u, vsIntBytes); break;
+        case D9C_COMMAND_CHUNK_SECTION_VS_CONST_B:
+          setRange(source.vsBoolConstants, kind, 0u, 1u, vsBoolBytes); break;
+        case D9C_COMMAND_CHUNK_SECTION_PS_CONST_F:
+          setRange(source.psFloatConstants, kind, 0u, 1u, psFloatBytes); break;
+        case D9C_COMMAND_CHUNK_SECTION_PS_CONST_I:
+          setRange(source.psIntConstants, kind, 0u, 1u, psIntBytes); break;
+        case D9C_COMMAND_CHUNK_SECTION_PS_CONST_B:
+          setRange(source.psBoolConstants, kind, 0u, 1u, psBoolBytes); break;
+        default: break;
+      }
+    }
+    compareValid(source, destination, scratch,
+                 "compact six-constant presence mask matches generic oracle");
+  }
+
+  const std::array upSizes{0u, 1u, 3u, 5u, 17u};
+  for (const auto indexSize : upSizes) {
+    for (const auto vertexSize : upSizes) {
+      auto [source, destination] = makeEmpty();
+      PeSparseScratch scratch{};
+      setRows(scratch);
+      source.payloads.upIndex =
+          std::span<const std::byte>(upIndexBytes).first(indexSize);
+      source.payloads.upVertex =
+          std::span<const std::byte>(upVertexBytes).first(vertexSize);
+      compareValid(source, destination, scratch,
+                   "compact odd UP payload pair matches generic oracle");
+    }
+  }
+
+  // Malformed metadata uses only empty/real backing spans; no test fabricates
+  // an out-of-bounds span just to exercise a checked arithmetic branch.
+  const auto malformedConstant = [&](auto mutate, std::string_view label) {
+    auto [source, destination] = makeEmpty();
+    PeSparseScratch scratch{};
+    setRows(scratch);
+    mutate(source);
+    SparseStateInput sparse{};
+    sparse.vsFloatConstants = source.vsFloatConstants;
+    PeSemanticRecordInput input = base(PeSemanticProducerKind::DrawPrimitive, 1u, 1u);
+    input.draw.primitiveCount = 1u;
+    input.sparse = sparse;
+    PeSemanticPreparedSparseLayout generic{};
+    PeSemanticPreparedSparseLayout compact{};
+    const bool genericValid = detail::preparePeSemanticSparseLayout(input, generic);
+    const bool compactValid =
+        detail::preparePeSemanticSparsePlanLayout(source, destination, compact);
+    check(!genericValid && !compactValid && !generic.valid && !compact.valid,
+          label);
+  };
+  malformedConstant([&](SourceFacts& source) {
+    source.vsFloatConstants.registerCount =
+        maxCount(D9C_COMMAND_CHUNK_SECTION_VS_CONST_F);
+    source.vsFloatConstants.registerBytes = {};
+  }, "compact rejects constant byte/count mismatch");
+  malformedConstant([&](SourceFacts& source) {
+    source.vsFloatConstants.registerCount =
+        maxCount(D9C_COMMAND_CHUNK_SECTION_VS_CONST_F) + 1u;
+  }, "compact rejects constant count beyond schema maximum");
+  {
+    auto [source, destination] = makeEmpty();
+    source.vsFloatConstants.startRegister = 1u;
+    PeSemanticPreparedSparseLayout compact{};
+    compact.valid = true;
+    check(!detail::preparePeSemanticSparsePlanLayout(source, destination, compact) &&
+              !compact.valid,
+          "compact rejects absent constant bytes with nonzero start");
+  }
+  {
+    auto [source, destination] = makeEmpty();
+    source.renderStateCount = std::numeric_limits<std::uint32_t>::max();
+    PeSemanticPreparedSparseLayout compact{};
+    check(!detail::preparePeSemanticSparsePlanLayout(source, destination, compact) &&
+              !compact.valid,
+          "compact rejects UINT32_MAX scalar count beyond schema bound");
+  }
+  {
+    auto [source, destination] = makeEmpty();
+    source.vsFloatConstants.registerCount =
+        std::numeric_limits<std::uint32_t>::max();
+    PeSemanticPreparedSparseLayout compact{};
+    check(!detail::preparePeSemanticSparsePlanLayout(source, destination, compact) &&
+              !compact.valid,
+          "compact rejects UINT32_MAX constant count beyond schema bound");
+  }
 }
 
 template <typename Wire, std::size_t RowCount, typename Object,
@@ -7690,6 +8087,7 @@ int main(int argc, char** argv) {
     compactIdentityWitnessBoundMatchesSevenFamilies();
     compactSparsePreparationSelectsSchemaWitness();
     compactPreparedLayoutReusesAbaAndRetriesMalformed();
+    compactSparsePlanLayoutDifferentialMatrix();
     duplicateSurfacePinSmoke();
     qualifiedBufferReferenceLookup();
     pureAdmissionPlanDeduplicatesQualifiedBindings();

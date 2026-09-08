@@ -30,6 +30,14 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H283](present-pacing-pe-layout-category-rebase.283.md) replaces compact
+layout's fixed category-count prepass with checked active-descriptor rebasing.
+Native 7/7 + x86_64 4/4 and 192 actual-PE pixel samples pass. Linked call sites
+and stack state shrink. Eight GT2 spots give FPS +0.342%/−0.253% and process
+CPU/frame −0.121%/−0.030% for 05/06: descriptive, not attributed savings or
+statistical neutrality. Retain the local work-removal implementation; dynamic
+sparse/dense economics and README recovery remain open.
+
 [H282](present-pacing-pe-scalar-writer-authority.282.md) qualifies local scalar
 writer proof reuse but withdraws the runtime candidate: linked writer code
 and PE32 stack grow, while eight GT2 spots show FPS +0.584%/−0.545% and

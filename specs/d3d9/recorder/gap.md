@@ -13,6 +13,15 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H283](../../../docs/perfomance/present-pacing/present-pacing-pe-layout-category-rebase.283.md)
+implements a single compact layout category walk plus checked active-descriptor
+rebasing under R-CORE-REC-7.48/7.54. Native layout/transaction suites (7/7
+arm64, 4/4 x86_64) and 192 baseline-matched actual PE32/PE64 pixel samples
+pass. Compile-time schema alignment and checked size arithmetic preserve the
+wire layout; native does not runtime-stress a greater-than-4-GiB aggregate.
+Linked call sites and stack usage shrink, but repeatable whole-workload CPU
+savings and README recovery remain separate, open evidence gates.
+
 [H282](../../../docs/perfomance/present-pacing/present-pacing-pe-scalar-writer-authority.282.md)
 adds 32 scalar-category subset/failure/retry differentials under
 R-CORE-REC-7.34–7.36. Candidate native 7/7 and x86_64 4/4 pass, as do

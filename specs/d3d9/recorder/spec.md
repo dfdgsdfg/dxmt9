@@ -941,6 +941,18 @@ The bounded identity witness prevents unique-count overflow without adding a
 replacement production summary; actual identity and retention capacities
 remain checked.
 
+Compact section layout may construct payload-relative descriptors during
+one canonical category walk and then rebase the active descriptors by the
+actual header/table extent. This requires a compile-time schema proof that
+every section alignment divides both the draw-header and descriptor sizes;
+otherwise a simple bias addition is not an equivalent layout. Count, byte,
+alignment and aggregate `uint32_t` bounds remain checked before `valid` is
+published. Generic layout and serialization are the independent reference:
+active descriptor order, offsets, sizes, quota deltas, semantic bytes and final
+wire must remain exact. Descriptor rebasing must not read source state or
+invoke retention callbacks. This is a call-local arithmetic refinement, not
+a change to admission ownership, wire ABI or concurrent transaction order.
+
 Binding emission qualifies a source/mapping pair once, then a private typed
 consumer may reuse that fact without routing through the generic input
 validator. The consumer still checks the current physical pin or acquires the

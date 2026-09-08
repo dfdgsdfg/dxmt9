@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H283](present-pacing-pe-layout-category-rebase.283.md) removes compact
+layout's initial category-count walk with alignment-proven descriptor rebasing.
+Native layout/transaction differentials and actual PE32/PE64 pixels pass;
+linked call sites and stack usage shrink. Whole-workload CPU economy is a
+separate gate from this call-local work removal.
+
 [H282](present-pacing-pe-scalar-writer-authority.282.md) tests scalar writer
 admission-proof reuse. Eight GT2 spots give mixed economy while linked writer
 code grows; runtime is withdrawn. Thirty-two native subset/rollback cases
