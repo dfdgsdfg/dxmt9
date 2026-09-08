@@ -236,9 +236,15 @@ void D3D9DeviceImpl::recordVsConstSetterRange(VsConstSetterRangePhase phase,
                               std::uint32_t count,
                               std::uint32_t changedRegs,
                               std::uint32_t changedSpanRegs) noexcept {
-    if (!dxmt9PerfVsConstSetterRangeEnabled() || count == 0u) {
+    if (!dxmt9PerfVsConstSetterRangeEnabled()) {
         return;
     }
+    if (phase == VsConstSetterRangePhase::Call) {
+        recordVsConstSetterCallShape(
+            diagnostics_->vsConstSetterCallShapePerf_, count, changedRegs,
+            recorderState_.stateBlockTransaction.isRecording());
+    }
+    if (count == 0u) return;
     VsConstSetterRangeBucket* bucket = nullptr;
     for (auto& candidate : diagnostics_->vsConstSetterRangePerf_.buckets) {
         if (candidate.used) {
@@ -334,8 +340,45 @@ void D3D9DeviceImpl::logVsConstSetterRangePerf(const char* event) {
             static_cast<unsigned long long>(overflow.fullRangeEvents),
             static_cast<unsigned long long>(overflow.fullChangedEvents));
     }
+    for (std::size_t bucketIndex = 0u;
+         bucketIndex < diagnostics_->vsConstSetterCallShapePerf_.buckets.size();
+         ++bucketIndex) {
+        const auto &bucket =
+            diagnostics_->vsConstSetterCallShapePerf_.buckets[bucketIndex];
+        if (bucket.liveEqualEvents == 0u && bucket.liveMixedEvents == 0u &&
+            bucket.liveAllChangedEvents == 0u && bucket.recordingEvents == 0u)
+            continue;
+        dxmt9PerfLogStderrAtomic(
+            "[dxmt9-perf-vs-const-call-shape event=%s count=%u "
+            "live_equal_events=%llu live_mixed_events=%llu "
+            "live_all_changed_events=%llu recording_events=%llu "
+            "live_range_regs=%llu live_changed_regs=%llu "
+            "invalid_events=0 overflow_events=0]\n",
+            event ? event : "unknown", static_cast<unsigned>(bucketIndex + 1u),
+            static_cast<unsigned long long>(bucket.liveEqualEvents),
+            static_cast<unsigned long long>(bucket.liveMixedEvents),
+            static_cast<unsigned long long>(bucket.liveAllChangedEvents),
+            static_cast<unsigned long long>(bucket.recordingEvents),
+            static_cast<unsigned long long>(bucket.liveRangeRegs),
+            static_cast<unsigned long long>(bucket.liveChangedRegs));
+    }
+    const auto &shapeOverflow = diagnostics_->vsConstSetterCallShapePerf_.overflow;
+    if (shapeOverflow.invalidEvents != 0u || shapeOverflow.overflowEvents != 0u) {
+        dxmt9PerfLogStderrAtomic(
+            "[dxmt9-perf-vs-const-call-shape event=%s count=0 "
+            "live_equal_events=0 live_mixed_events=0 "
+            "live_all_changed_events=0 recording_events=0 live_range_regs=0 "
+            "live_changed_regs=0 invalid_events=%llu overflow_events=%llu "
+            "overflow_range_regs=%llu overflow_changed_regs=%llu]\n",
+            event ? event : "unknown",
+            static_cast<unsigned long long>(shapeOverflow.invalidEvents),
+            static_cast<unsigned long long>(shapeOverflow.overflowEvents),
+            static_cast<unsigned long long>(shapeOverflow.overflowRangeRegs),
+            static_cast<unsigned long long>(shapeOverflow.overflowChangedRegs));
+    }
     std::fflush(stderr);
     diagnostics_->vsConstSetterRangePerf_ = VsConstSetterRangePerf{};
+    diagnostics_->vsConstSetterCallShapePerf_ = VsConstSetterCallShapePerf{};
 }
 
 void D3D9DeviceImpl::logPeFirstCallAfterPresent(const char* callName,

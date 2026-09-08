@@ -28,6 +28,7 @@ RENDER_PASS_REENTRY_PREFIX = "[dxmt9-perf-render-pass-reentry "
 FRAME_PREFIX = "[dxmt9-perf-frame "
 ARGBUF_DELTA_SOURCE_PREFIX = "[dxmt9-perf-argbuf-payload-delta-source "
 VS_CONST_SETTER_RANGE_PREFIX = "[dxmt9-perf-vs-const-setter-range "
+VS_CONST_CALL_SHAPE_PREFIX = "[dxmt9-perf-vs-const-call-shape "
 PERF_PREFIX = "[dxmt9-perf] "
 BRIDGE_PREFIX = "[dxmt9-bridge-perf] "
 
@@ -2583,6 +2584,20 @@ VS_CONST_SETTER_RANGE_CSV_KEYS = (
     "overflow_changed_span_regs",
 )
 
+VS_CONST_CALL_SHAPE_CSV_KEYS = (
+    "count",
+    "live_equal_events",
+    "live_mixed_events",
+    "live_all_changed_events",
+    "recording_events",
+    "live_range_regs",
+    "live_changed_regs",
+    "invalid_events",
+    "overflow_events",
+    "overflow_range_regs",
+    "overflow_changed_regs",
+)
+
 RENDER_PASS_ACTION_GROUPS = (
     ("Color Load", (
         "render_pass_load_action_load",
@@ -2991,6 +3006,137 @@ def parse_vs_const_setter_range_lines(log_path: Path) -> list[dict[str, Any]]:
     return rows
 
 
+_VS_CONST_CALL_SHAPE_FIELDS = (
+    "count",
+    "live_equal_events",
+    "live_mixed_events",
+    "live_all_changed_events",
+    "recording_events",
+    "live_range_regs",
+    "live_changed_regs",
+    "invalid_events",
+    "overflow_events",
+)
+_VS_CONST_CALL_SHAPE_ERROR_FIELDS = (
+    "overflow_range_regs",
+    "overflow_changed_regs",
+)
+_UINT64_MAX = (1 << 64) - 1
+
+
+def _parse_uint64_token(raw: str, field: str) -> int:
+    if not raw or not raw.isascii() or not raw.isdigit():
+        raise ValueError(f"invalid {field} in VS const call-shape row")
+    value = int(raw, 10)
+    if value > _UINT64_MAX:
+        raise ValueError(f"{field} exceeds uint64 in VS const call-shape row")
+    return value
+
+
+def _parse_vs_const_call_shape_line(line: str) -> dict[str, Any]:
+    if not line.startswith(VS_CONST_CALL_SHAPE_PREFIX):
+        raise ValueError("not a VS const call-shape row")
+    if not line.rstrip().endswith("]"):
+        raise ValueError("truncated VS const call-shape row")
+    body = line[len(VS_CONST_CALL_SHAPE_PREFIX):].rstrip()[:-1]
+    tokens = body.split()
+    values: dict[str, str] = {}
+    for token in tokens:
+        if token.count("=") != 1:
+            raise ValueError("malformed VS const call-shape row")
+        key, raw = token.split("=", 1)
+        if not key or key in values:
+            raise ValueError("duplicate/missing key in VS const call-shape row")
+        values[key] = raw
+    required = {"event", *_VS_CONST_CALL_SHAPE_FIELDS}
+    if not required.issubset(values):
+        raise ValueError("missing/unknown key in VS const call-shape row")
+    extra = set(values) - required
+    if extra and extra != set(_VS_CONST_CALL_SHAPE_ERROR_FIELDS):
+        raise ValueError("missing/unknown key in VS const call-shape row")
+    if values["event"] not in {"present", "destructor"}:
+        raise ValueError("invalid event in VS const call-shape row")
+
+    row: dict[str, Any] = {"event": values["event"]}
+    for field in _VS_CONST_CALL_SHAPE_FIELDS:
+        row[field] = _parse_uint64_token(values[field], field)
+    for field in _VS_CONST_CALL_SHAPE_ERROR_FIELDS:
+        row[field] = _parse_uint64_token(values.get(field, "0"), field)
+
+    count = row["count"]
+    normal_fields = (
+        "live_equal_events",
+        "live_mixed_events",
+        "live_all_changed_events",
+        "recording_events",
+        "live_range_regs",
+        "live_changed_regs",
+    )
+    if count == 0:
+        if extra != set(_VS_CONST_CALL_SHAPE_ERROR_FIELDS):
+            raise ValueError("count-zero VS const call-shape row lacks overflow totals")
+        if any(row[field] != 0 for field in normal_fields):
+            raise ValueError("count-zero VS const call-shape row has population data")
+        if row["invalid_events"] == 0 and row["overflow_events"] == 0:
+            raise ValueError("count-zero VS const call-shape row has no error total")
+        return row
+    if count > 256:
+        raise ValueError("VS const call-shape count exceeds 256")
+    if row["invalid_events"] != 0 or row["overflow_events"] != 0:
+        raise ValueError("normal VS const call-shape row has error totals")
+    equal = row["live_equal_events"]
+    mixed = row["live_mixed_events"]
+    all_changed = row["live_all_changed_events"]
+    if count == 1 and mixed != 0:
+        raise ValueError("one-register VS const call shape cannot be mixed")
+    if row["live_range_regs"] != count * (equal + mixed + all_changed):
+        raise ValueError("VS const call-shape live-range sum is inconsistent")
+    lower = mixed + all_changed * count
+    upper = mixed * (count - 1) + all_changed * count
+    if not lower <= row["live_changed_regs"] <= upper:
+        raise ValueError("VS const call-shape changed-register bounds are inconsistent")
+    if row["overflow_range_regs"] != 0 or row["overflow_changed_regs"] != 0:
+        raise ValueError("normal VS const call-shape row has overflow registers")
+    return row
+
+
+def parse_vs_const_call_shape_lines(log_path: Path) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    if not log_path.exists():
+        return rows
+    for line in log_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        if line.startswith(VS_CONST_CALL_SHAPE_PREFIX):
+            rows.append(_parse_vs_const_call_shape_line(line))
+    return rows
+
+
+def _valid_vs_const_call_shape_aggregate_row(row: dict[str, Any]) -> bool:
+    try:
+        if set(row) != set(VS_CONST_CALL_SHAPE_CSV_KEYS):
+            return False
+        normalized = {key: row.get(key, 0) for key in VS_CONST_CALL_SHAPE_CSV_KEYS}
+        for key, value in normalized.items():
+            if isinstance(value, bool) or not isinstance(value, int):
+                return False
+            if value < 0 or value > _UINT64_MAX:
+                return False
+        _parse_vs_const_call_shape_line(
+            "[dxmt9-perf-vs-const-call-shape event=present "
+            + " ".join(f"{key}={value}" for key, value in normalized.items())
+            + "]"
+        )
+    except ValueError:
+        return False
+    return True
+
+
+def load_vs_const_call_shape_csv(path: Path) -> list[dict[str, Any]]:
+    rows = load_existing_csv(path)
+    if any(not _valid_vs_const_call_shape_aggregate_row(row) for row in rows):
+        raise ValueError(f"invalid VS const call-shape CSV: {path}")
+    return [{key: row.get(key, 0) for key in VS_CONST_CALL_SHAPE_CSV_KEYS} for row in rows]
+
+
 def sum_key(rows: list[dict[str, Any]], key: str) -> int | float:
     total: int | float = 0
     for row in rows:
@@ -3189,6 +3335,40 @@ def aggregate_vs_const_setter_ranges(rows: list[dict[str, Any]]) -> list[dict[st
         ),
         reverse=True,
     )
+
+
+def aggregate_vs_const_call_shapes(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Aggregate whole-log call-shape populations by bounded call count.
+
+    The native diagnostic emits separate interval rows for present and
+    destructor events.  The report deliberately combines those event scopes;
+    recording calls and count-zero error totals remain separate columns.
+    """
+    groups: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        if row.get("event") not in {"present", "destructor"}:
+            raise ValueError("invalid VS const call-shape event for aggregation")
+        count = parsed_int_value(row, "count")
+        if count is None or count < 0 or count > 256:
+            raise ValueError("invalid VS const call-shape count for aggregation")
+        group = groups.setdefault(
+            count,
+            {key: (count if key == "count" else 0)
+             for key in VS_CONST_CALL_SHAPE_CSV_KEYS},
+        )
+        for key in VS_CONST_CALL_SHAPE_CSV_KEYS:
+            value = parsed_int_value(row, key)
+            if value is None or value < 0 or value > _UINT64_MAX:
+                raise ValueError(f"invalid {key} for VS const call-shape aggregation")
+            if key != "count":
+                group[key] += value
+            if group[key] > _UINT64_MAX:
+                raise ValueError(f"{key} overflows uint64 during aggregation")
+    result = sorted(groups.values(), key=lambda item: item["count"])
+    for row in result:
+        if not _valid_vs_const_call_shape_aggregate_row(row):
+            raise ValueError("inconsistent VS const call-shape aggregate")
+    return result
 
 
 def append_pacing_cpu_stage_derived(
@@ -6677,6 +6857,8 @@ def write_markdown(
     argbuf_delta_source_csv: Path | None = None,
     vs_const_setter_ranges: list[dict[str, Any]] | None = None,
     vs_const_setter_range_csv: Path | None = None,
+    vs_const_call_shapes: list[dict[str, Any]] | None = None,
+    vs_const_call_shape_csv: Path | None = None,
 ) -> None:
     counters = result.get("dxmt9_perf_counters", {})
     bridge = result.get("dxmt9_bridge_counters", {})
@@ -6686,6 +6868,7 @@ def write_markdown(
     frame_rows = frame_rows or []
     argbuf_delta_sources = argbuf_delta_sources or []
     vs_const_setter_ranges = vs_const_setter_ranges or []
+    vs_const_call_shapes = vs_const_call_shapes or []
     present_encoded = counters.get("present_encoded")
     render_pass_reentry_summary_rows = render_pass_reentry_rows
     if isinstance(present_encoded, (int, float)) and present_encoded > 0:
@@ -6741,6 +6924,9 @@ def write_markdown(
     lines.append(f"- VS const setter range rows: `{len(vs_const_setter_ranges)}`")
     if vs_const_setter_range_csv is not None:
         lines.append(f"- VS const setter range CSV: `{vs_const_setter_range_csv}`")
+    lines.append(f"- VS const call-shape rows: `{len(vs_const_call_shapes)}`")
+    if vs_const_call_shape_csv is not None:
+        lines.append(f"- VS const call-shape CSV: `{vs_const_call_shape_csv}`")
     lines.append("")
 
     lines.append("## Run Counters")
@@ -8178,6 +8364,31 @@ def write_markdown(
             )
         lines.append("")
 
+    if vs_const_call_shapes:
+        lines.append("## VS Const Call Shapes")
+        lines.append("")
+        lines.append(
+            "This is a whole-log call population aggregated across `present` "
+            "and `destructor` events by call count; it is not an FPS or CPU "
+            "price. Recording events are reported separately from live "
+            "equal/mixed/all-changed populations."
+        )
+        lines.append("")
+        lines.append(
+            "| count | live_equal_events | live_mixed_events | "
+            "live_all_changed_events | recording_events | live_range_regs | "
+            "live_changed_regs | invalid_events | overflow_events | "
+            "overflow_range_regs | overflow_changed_regs |"
+        )
+        lines.append("|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|")
+        for row in vs_const_call_shapes:
+            lines.append(
+                "| " + " | ".join(
+                    f"`{fmt(row.get(key))}`" for key in VS_CONST_CALL_SHAPE_CSV_KEYS
+                ) + " |"
+            )
+        lines.append("")
+
     if encoders:
         lines.append("## Encoder Aggregates")
         lines.append("")
@@ -8653,6 +8864,7 @@ def main() -> int:
     frame_csv = output.parent / "3dmark05-perf-frames.csv"
     argbuf_delta_source_csv = output.parent / "3dmark05-perf-argbuf-payload-delta-sources.csv"
     vs_const_setter_range_csv = output.parent / "3dmark05-perf-vs-const-setter-ranges.csv"
+    vs_const_call_shape_csv = output.parent / "3dmark05-perf-vs-const-call-shapes.csv"
     log_path = run_dir / "dxmt9.log"
     encoders, streams = parse_encoder_lines(log_path)
     probe_draws = parse_probe_draw_lines(log_path)
@@ -8664,6 +8876,9 @@ def main() -> int:
     vs_const_setter_ranges = aggregate_vs_const_setter_ranges(
         parse_vs_const_setter_range_lines(log_path)
     )
+    vs_const_call_shapes = aggregate_vs_const_call_shapes(
+        parse_vs_const_call_shape_lines(log_path)
+    )
     if not log_path.exists():
         encoders = load_existing_csv(encoder_csv)
         streams = load_existing_csv(stream_csv)
@@ -8672,6 +8887,7 @@ def main() -> int:
         frame_rows = load_existing_csv(frame_csv)
         argbuf_delta_sources = load_existing_csv(argbuf_delta_source_csv)
         vs_const_setter_ranges = load_existing_csv(vs_const_setter_range_csv)
+        vs_const_call_shapes = load_vs_const_call_shape_csv(vs_const_call_shape_csv)
     enrich_encoder_rows(encoders)
     if log_path.exists() or not encoder_csv.exists():
         write_csv(encoder_csv, encoders, ENCODER_CSV_KEYS)
@@ -8695,6 +8911,12 @@ def main() -> int:
             vs_const_setter_ranges,
             VS_CONST_SETTER_RANGE_CSV_KEYS,
         )
+    if log_path.exists() or not vs_const_call_shape_csv.exists():
+        write_csv(
+            vs_const_call_shape_csv,
+            vs_const_call_shapes,
+            VS_CONST_CALL_SHAPE_CSV_KEYS,
+        )
     write_markdown(
         output,
         run_dir,
@@ -8713,6 +8935,8 @@ def main() -> int:
         argbuf_delta_source_csv,
         vs_const_setter_ranges,
         vs_const_setter_range_csv,
+        vs_const_call_shapes,
+        vs_const_call_shape_csv,
     )
     print(output)
     return 0

@@ -129,6 +129,64 @@ struct VsConstSetterRangePerf {
   std::array<VsConstSetterRangeOverflow, 3> overflow{};
 };
 
+struct VsConstSetterCallShapeBucket {
+  std::uint64_t liveEqualEvents = 0;
+  std::uint64_t liveMixedEvents = 0;
+  std::uint64_t liveAllChangedEvents = 0;
+  std::uint64_t recordingEvents = 0;
+  std::uint64_t liveRangeRegs = 0;
+  std::uint64_t liveChangedRegs = 0;
+};
+
+struct VsConstSetterCallShapeOverflow {
+  std::uint64_t invalidEvents = 0;
+  std::uint64_t overflowEvents = 0;
+  std::uint64_t overflowRangeRegs = 0;
+  std::uint64_t overflowChangedRegs = 0;
+};
+
+struct VsConstSetterCallShapePerf {
+  static constexpr std::size_t kBucketCount = 256;
+  std::array<VsConstSetterCallShapeBucket, kBucketCount> buckets{};
+  VsConstSetterCallShapeOverflow overflow{};
+};
+
+// Cold-only reducer for the VS constant setter call-shape population. The
+// caller supplies the pre-apply changed-register count; recording calls are
+// deliberately kept out of the live equal/mixed/all-changed populations.
+inline bool recordVsConstSetterCallShape(
+    VsConstSetterCallShapePerf &perf, std::uint32_t count,
+    std::uint32_t changedRegs, bool recording) noexcept {
+  if (count == 0u) {
+    ++perf.overflow.invalidEvents;
+    return false;
+  }
+  if (count > VsConstSetterCallShapePerf::kBucketCount) {
+    ++perf.overflow.overflowEvents;
+    perf.overflow.overflowRangeRegs += count;
+    perf.overflow.overflowChangedRegs += changedRegs;
+    return false;
+  }
+  if (changedRegs > count) {
+    ++perf.overflow.invalidEvents;
+    return false;
+  }
+  auto &bucket = perf.buckets[count - 1u];
+  if (recording) {
+    ++bucket.recordingEvents;
+    return true;
+  }
+  bucket.liveRangeRegs += count;
+  bucket.liveChangedRegs += changedRegs;
+  if (changedRegs == 0u)
+    ++bucket.liveEqualEvents;
+  else if (changedRegs == count)
+    ++bucket.liveAllChangedEvents;
+  else
+    ++bucket.liveMixedEvents;
+  return true;
+}
+
 struct PeInterAppendCallSiteLocalKey {
   std::uint32_t prevCallName = 0;
   std::uint32_t nextCallName = 0;
@@ -240,6 +298,7 @@ struct PeDiagnosticsState {
       allFamilySemanticTokens{};
   dxmt9::d3d9::pe::PeSemanticOwnerPhaseObserver semanticOwnerPhaseObserver;
   VsConstSetterRangePerf vsConstSetterRangePerf_{};
+  VsConstSetterCallShapePerf vsConstSetterCallShapePerf_{};
   PeRecorderStats peRecorderStats_{};
   PeDecimatedScopeStats peChunkAppendDecimatedStats_{};
   std::uint64_t peAppendTypeCounts_[kPeAppendTypeBuckets]{};

@@ -405,6 +405,158 @@ class Summarize3DMark05PerfTests(unittest.TestCase):
             self.assertIn("| `call` | `overflow` | `overflow` |", summary)
             self.assertIn("| `flush` | `0x111` | `0x222` |", summary)
 
+    def test_vs_const_call_shape_rows_validate_and_aggregate_across_events(self) -> None:
+        module = load_module()
+        with tempfile.TemporaryDirectory() as temp:
+            log_path = Path(temp) / "dxmt9.log"
+            log_path.write_text(
+                "\n".join(
+                    [
+                        "[dxmt9-perf-vs-const-call-shape event=present count=1 "
+                        "live_equal_events=2 live_mixed_events=0 "
+                        "live_all_changed_events=0 recording_events=0 "
+                        "live_range_regs=2 live_changed_regs=0 invalid_events=0 "
+                        "overflow_events=0]",
+                        "[dxmt9-perf-vs-const-call-shape event=destructor count=1 "
+                        "live_equal_events=0 live_mixed_events=0 "
+                        "live_all_changed_events=3 recording_events=0 "
+                        "live_range_regs=3 live_changed_regs=3 invalid_events=0 "
+                        "overflow_events=0]",
+                        "[dxmt9-perf-vs-const-call-shape event=present count=2 "
+                        "live_equal_events=0 live_mixed_events=1 "
+                        "live_all_changed_events=0 recording_events=0 "
+                        "live_range_regs=2 live_changed_regs=1 invalid_events=0 "
+                        "overflow_events=0]",
+                        "[dxmt9-perf-vs-const-call-shape event=destructor count=2 "
+                        "live_equal_events=0 live_mixed_events=0 "
+                        "live_all_changed_events=1 recording_events=0 "
+                        "live_range_regs=2 live_changed_regs=2 invalid_events=0 "
+                        "overflow_events=0]",
+                        "[dxmt9-perf-vs-const-call-shape event=present count=4 "
+                        "live_equal_events=0 live_mixed_events=0 "
+                        "live_all_changed_events=0 recording_events=5 "
+                        "live_range_regs=0 live_changed_regs=0 invalid_events=0 "
+                        "overflow_events=0]",
+                    ]
+                ) + "\n",
+                encoding="utf-8",
+            )
+            rows = module.parse_vs_const_call_shape_lines(log_path)
+            self.assertEqual(len(rows), 5)
+            self.assertEqual(rows[0]["event"], "present")
+            self.assertEqual(rows[2]["live_changed_regs"], 1)
+            aggregated = module.aggregate_vs_const_call_shapes(rows)
+            self.assertEqual([row["count"] for row in aggregated], [1, 2, 4])
+            self.assertEqual(aggregated[0]["live_equal_events"], 2)
+            self.assertEqual(aggregated[0]["live_all_changed_events"], 3)
+            self.assertEqual(aggregated[0]["live_range_regs"], 5)
+            self.assertEqual(aggregated[1]["live_mixed_events"], 1)
+            self.assertEqual(aggregated[1]["live_all_changed_events"], 1)
+            self.assertEqual(aggregated[1]["live_changed_regs"], 3)
+            self.assertEqual(aggregated[2]["recording_events"], 5)
+
+    def test_vs_const_call_shape_error_row_preserves_explicit_totals(self) -> None:
+        module = load_module()
+        with tempfile.TemporaryDirectory() as temp:
+            log_path = Path(temp) / "dxmt9.log"
+            log_path.write_text(
+                "[dxmt9-perf-vs-const-call-shape event=present count=0 "
+                "live_equal_events=0 live_mixed_events=0 live_all_changed_events=0 "
+                "recording_events=0 live_range_regs=0 live_changed_regs=0 "
+                "invalid_events=2 overflow_events=3 overflow_range_regs=257 "
+                "overflow_changed_regs=258]\n",
+                encoding="utf-8",
+            )
+            rows = module.parse_vs_const_call_shape_lines(log_path)
+            aggregated = module.aggregate_vs_const_call_shapes(rows)
+            self.assertEqual(aggregated, [{
+                "count": 0,
+                "live_equal_events": 0,
+                "live_mixed_events": 0,
+                "live_all_changed_events": 0,
+                "recording_events": 0,
+                "live_range_regs": 0,
+                "live_changed_regs": 0,
+                "invalid_events": 2,
+                "overflow_events": 3,
+                "overflow_range_regs": 257,
+                "overflow_changed_regs": 258,
+            }])
+
+    def test_vs_const_call_shape_rejects_malformed_and_impossible_rows(self) -> None:
+        module = load_module()
+        valid = (
+            "[dxmt9-perf-vs-const-call-shape event=present count=2 "
+            "live_equal_events=0 live_mixed_events=1 live_all_changed_events=0 "
+            "recording_events=0 live_range_regs=2 live_changed_regs=1 "
+            "invalid_events=0 overflow_events=0]"
+        )
+        bad_rows = (
+            valid.replace("live_range_regs=2", "live_range_regs=1"),
+            valid.replace("live_changed_regs=1", "live_changed_regs=0"),
+            valid.replace("count=2", "count=1"),
+            valid.replace("overflow_events=0", "overflow_events=1"),
+            valid.replace("live_mixed_events=1", "live_mixed_events=-1"),
+            valid.replace("live_changed_regs=1 ", ""),
+            valid.replace("count=2", "count=257"),
+            valid.replace("recording_events=0", "recording_events=18446744073709551616"),
+            valid.replace("event=present", "event=unknown"),
+            valid.replace("count=2", "count=2 count=2"),
+            valid[:-1],
+        )
+        for line in bad_rows:
+            with self.subTest(line=line):
+                with self.assertRaises(ValueError):
+                    module._parse_vs_const_call_shape_line(line)
+
+    def test_vs_const_call_shape_cli_writes_additive_artifact_and_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            temp_path = Path(temp)
+            temp_path.joinpath("result.json").write_text(
+                json.dumps({
+                    "status": "pass",
+                    "dxmt9_perf_counters": {"present_encoded": 1},
+                }),
+                encoding="utf-8",
+            )
+            temp_path.joinpath("dxmt9.log").write_text(
+                "[dxmt9-perf-vs-const-call-shape event=present count=2 "
+                "live_equal_events=1 live_mixed_events=0 live_all_changed_events=0 "
+                "recording_events=4 live_range_regs=2 live_changed_regs=0 "
+                "invalid_events=0 overflow_events=0]\n",
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [sys.executable, str(SCRIPT), str(temp_path)],
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            csv_path = temp_path / "3dmark05-perf-vs-const-call-shapes.csv"
+            self.assertTrue(csv_path.exists())
+            with csv_path.open(newline="", encoding="utf-8") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(rows[0]["count"], "2")
+            self.assertEqual(rows[0]["recording_events"], "4")
+            summary = temp_path.joinpath("3dmark05-perf-summary.md").read_text(
+                encoding="utf-8"
+            )
+            self.assertIn("## VS Const Call Shapes", summary)
+            self.assertIn("whole-log call population", summary)
+            self.assertIn("not an FPS or CPU price", summary)
+            self.assertIn("Recording events are reported separately", summary)
+            retained_csv = csv_path.read_bytes()
+            temp_path.joinpath("dxmt9.log").unlink()
+            fallback = subprocess.run(
+                [sys.executable, str(SCRIPT), str(temp_path)],
+                text=True, capture_output=True, check=False,
+            )
+            self.assertEqual(fallback.returncode, 0, fallback.stderr)
+            self.assertEqual(csv_path.read_bytes(), retained_csv)
+            self.assertIn("## VS Const Call Shapes",
+                          temp_path.joinpath("3dmark05-perf-summary.md").read_text())
+
     def test_render_pass_reentry_encoder_role_aggregation(self) -> None:
         module = load_module()
         encoders = [

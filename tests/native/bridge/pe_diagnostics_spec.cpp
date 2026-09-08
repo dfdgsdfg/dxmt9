@@ -305,6 +305,78 @@ void testNullableDiagnosticDispatchAndClock() {
         "enabled diagnostic clock path performs exactly one clock callback");
 }
 
+void testVsConstSetterCallShapeReducer() {
+  VsConstSetterCallShapePerf perf{};
+  for (const auto count : {1u, 2u, 4u, 256u}) {
+    check(recordVsConstSetterCallShape(perf, count, 0u, false),
+          "call-shape reducer accepts equal live ranges");
+    if (count > 1u) {
+      check(recordVsConstSetterCallShape(perf, count, 1u, false),
+            "call-shape reducer accepts mixed live ranges");
+    }
+    check(recordVsConstSetterCallShape(perf, count, count, false),
+          "call-shape reducer accepts all-changed live ranges");
+    check(recordVsConstSetterCallShape(perf, count, count / 2u, true),
+          "call-shape reducer accepts recording ranges separately");
+  }
+  check(perf.buckets[0].liveEqualEvents == 1u &&
+            perf.buckets[0].liveAllChangedEvents == 1u &&
+            perf.buckets[0].liveMixedEvents == 0u &&
+            perf.buckets[0].recordingEvents == 1u &&
+            perf.buckets[0].liveRangeRegs == 2u &&
+            perf.buckets[0].liveChangedRegs == 1u,
+        "one-register call shape keeps equal/all-changed classes distinct");
+  check(perf.buckets[1].liveEqualEvents == 1u &&
+            perf.buckets[1].liveMixedEvents == 1u &&
+            perf.buckets[1].liveAllChangedEvents == 1u &&
+            perf.buckets[1].recordingEvents == 1u &&
+            perf.buckets[1].liveRangeRegs == 6u &&
+            perf.buckets[1].liveChangedRegs == 3u,
+        "two-register call shape records all live classes and sums");
+  check(perf.buckets[3].liveEqualEvents == 1u &&
+            perf.buckets[3].liveMixedEvents == 1u &&
+            perf.buckets[3].liveAllChangedEvents == 1u &&
+            perf.buckets[3].recordingEvents == 1u &&
+            perf.buckets[3].liveRangeRegs == 12u &&
+            perf.buckets[3].liveChangedRegs == 5u,
+        "four-register call shape records all live classes and sums");
+  check(perf.buckets[255].liveEqualEvents == 1u &&
+            perf.buckets[255].liveMixedEvents == 1u &&
+            perf.buckets[255].liveAllChangedEvents == 1u &&
+            perf.buckets[255].recordingEvents == 1u &&
+            perf.buckets[255].liveRangeRegs == 768u &&
+            perf.buckets[255].liveChangedRegs == 257u,
+        "256-register call shape stays within the bounded sidecar");
+
+  const auto equalBeforeInvalid = perf.buckets[1].liveEqualEvents;
+  check(!recordVsConstSetterCallShape(perf, 0u, 0u, false),
+        "empty call shape is explicit invalid data");
+  check(!recordVsConstSetterCallShape(perf, 2u, 3u, false),
+        "changed-register overflow is explicit invalid data");
+  check(!recordVsConstSetterCallShape(perf, 257u, 257u, false),
+        "overlength call shape is explicit overflow data");
+  check(perf.overflow.invalidEvents == 2u &&
+            perf.overflow.overflowEvents == 1u &&
+            perf.overflow.overflowRangeRegs == 257u &&
+            perf.overflow.overflowChangedRegs == 257u &&
+            perf.buckets[1].liveEqualEvents == equalBeforeInvalid,
+        "invalid and overflow inputs do not corrupt valid rows");
+
+  perf = VsConstSetterCallShapePerf{};
+  check(perf.overflow.invalidEvents == 0u &&
+            perf.buckets[0].liveEqualEvents == 0u,
+        "call-shape interval reset clears all bounded populations");
+
+  auto diagnostics = makePeDiagnosticsState(
+      nullptr, PeDiagnosticsConfig{.vsConstSetterRange = true});
+  const auto beforeCalls = gAllocations.load(std::memory_order_relaxed);
+  check(recordVsConstSetterCallShape(
+            diagnostics->vsConstSetterCallShapePerf_, 4u, 2u, false),
+        "diagnostic-owned call-shape reducer accepts a cold update");
+  check(gAllocations.load(std::memory_order_relaxed) == beforeCalls,
+        "call-shape population performs no allocation after owner construction");
+}
+
 void testStateBlockFaultSelector() {
   const auto config = peStateBlockFaultConfigFromString(
       "capture_pre=0x80070057,bridge_pre=0x80004003,"
@@ -524,7 +596,8 @@ void testSourceContracts(const std::filesystem::path &root) {
       readTextFile(root / "src/d3d9/device_c_chunk_registry.cpp");
 
   for (const std::string_view field : {
-           "vsConstSetterRangePerf_", "peRecorderStats_",
+           "vsConstSetterRangePerf_", "vsConstSetterCallShapePerf_",
+           "peRecorderStats_",
            "peChunkAppendDecimatedStats_", "peAppendTypeCounts_",
            "peAppendTypeBytes_", "peConstFlushDecimatedStats_",
            "peEntryConstDecimatedStats_", "peEntryDrawDecimatedStats_",
@@ -988,6 +1061,17 @@ void testSourceContracts(const std::filesystem::path &root) {
   checkContains(deviceDiag,
                 "identity=%s classification=%s reason=%s",
                 "PE copy rows emit identity, classification, and reason");
+  checkContains(deviceDiag, "if (!dxmt9PerfVsConstSetterRangeEnabled())",
+                "VS call-shape population remains behind the existing range gate");
+  checkBefore(deviceDiag, "if (phase == VsConstSetterRangePhase::Call)",
+              "if (count == 0u) return;",
+              "VS call-shape population is restricted to the Call phase");
+  checkBefore(deviceDiag, "std::fflush(stderr);",
+              "diagnostics_->vsConstSetterRangePerf_ = VsConstSetterRangePerf{};",
+              "VS range diagnostics flush before interval reset");
+  checkBefore(deviceDiag, "std::fflush(stderr);",
+              "diagnostics_->vsConstSetterCallShapePerf_ = VsConstSetterCallShapePerf{};",
+              "VS call-shape diagnostics flush before interval reset");
   checkContains(queue, "identity=%s classification=%s reason=%s",
                 "Unix copy rows emit identity, classification, and reason");
   checkContains(queue, "copyMaterializationReportPresents_ != 0u",
@@ -1389,8 +1473,14 @@ void testSourceContracts(const std::filesystem::path &root) {
         "End has one backend call site");
   checkContains(misc, "ULONG refs_ = 1;",
                 "ordinary child COM wrappers retain non-atomic ownership");
-  checkContains(deviceSource, "ULONG        refs_    = 1;",
-                "the device retains ordinary non-atomic COM ownership");
+  checkContains(deviceSource, "std::atomic<ULONG> refs_{1};",
+                "the device retains atomic COM ownership");
+  checkContains(deviceSource,
+                "return refs_.fetch_add(1, std::memory_order_relaxed) + 1;",
+                "device AddRef uses relaxed atomic increment");
+  checkContains(deviceSource,
+                "const ULONG r = refs_.fetch_sub(1, std::memory_order_acq_rel) - 1;",
+                "device Release uses acquire-release atomic decrement");
   checkContains(registry, "WireRegistryRetainCallbackScope callbackScope;",
                 "registry retain callbacks keep a scoped re-entry guard");
   checkNotContains(registry,
@@ -1423,6 +1513,7 @@ int main(int argc, char **argv) {
     testOptionalOwnerAllocationAndConfig();
     testCopyMaterializationLedgerAccessPolicies();
     testNullableDiagnosticDispatchAndClock();
+    testVsConstSetterCallShapeReducer();
     testCopyMaterializationReportSnapshotValue();
     testStateBlockFaultSelector();
     testSourceContracts(argv[1]);
