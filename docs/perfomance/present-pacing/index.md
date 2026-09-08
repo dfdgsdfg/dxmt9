@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H299](present-pacing-pe-draw-parent-groups.299.md) retains 84,402 exact group
+samples. EndScene/query tails dominate this fixture's measured scopes, with
+one GetData call per group; broad timing-population shifts remain. This is
+diagnostic evidence, not PE/FPS improvement or calibrated helper economics.
+
 [H298](present-pacing-pe-draw-parent-harness.298.md) checks in the public COM
 draw-parent harness with indexed and count-3/4 constant coverage. State/pixels,
 ordered no-flush traces and strict parsing pass. Three same-image repeats per

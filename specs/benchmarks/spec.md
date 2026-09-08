@@ -231,6 +231,27 @@ Wine runtime hashes. Output directories are new and immutable per invocation;
 shared Wine-root destinations are checked during that invocation, not later
 when they may have been restaged by another process.
 
+R-BENCH-7.5 adds default-off `--group-detail`, isolated by the test-only
+`DXMT9_TEST_DRAW_PARENT_GROUP_DETAIL` control. Aggregate mode preserves
+schema 1. Detail mode uses schema 2 with `group_detail=1`, retaining all warm
+and measured intervals in preallocated bounded storage. A separate QPC pair
+brackets EndScene, event issue and the GetData/Sleep(0) loop; this is tail wall
+time, not GPU execution time or exclusive calling-thread CPU. The GetData
+count comes from the existing tail HRESULT aggregate, not another poll probe.
+Samples are emitted on stderr after the entire matrix's CPU captures and
+before its row results. The buffer is bounded by 27 rows × (8192 measured +
+128 warm groups); there is no allocation or sample output between groups.
+
+The parser binds each sample to its case/path/ordinal and warm/measured phase,
+checks exact coverage and measured-sum conservation, and retains the raw
+values. For each case/path/phase it reports count, sum, min, max and nearest-rank
+p50/p90/p99 (sorted value at `ceil(p*N/100)-1`); an empty warm phase has no
+quantiles. Slow groups remain in the sums and distributions. Detail and
+aggregate recipes have distinct provenance: buffering and additional tail
+clocks can affect subsequent scheduling even though neither executes inside
+the setter/draw QPC pair. A detail trace still requires
+all four existing markers and rejects any timed recorder flush.
+
 The scope remains warmed FFP with one stream and one triangle, without Present,
 programmable shaders, UP, StateBlock or allocation-failure paths. Pixel checks
 qualify VB/IB geometry and these selected states; constants are qualified by

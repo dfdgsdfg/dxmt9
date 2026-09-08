@@ -127,6 +127,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--arch", choices=("x86", "x64"), required=True)
     parser.add_argument("--mode", choices=("trace", "timing"), default="timing")
+    parser.add_argument("--group-detail", action="store_true",
+                        help="Retain each group and separately time its drain tail; diagnostic, not aggregate timing parity.")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--groups", type=int)
     parser.add_argument("--warm-groups", type=int)
@@ -191,6 +193,7 @@ def main() -> int:
                 "DXMT9_PE_CHUNK_MAX_BYTES": "1310720", "DXMT9_CPU_READY_TAPE": "0",
                 "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0", "DXMT9_PE_STATS_DECIMATION": "0",
                 "DXMT9_TEST_DRAW_PARENT_GROUPS": str(groups), "DXMT9_TEST_DRAW_PARENT_WARM_GROUPS": str(warm_groups),
+                "DXMT9_TEST_DRAW_PARENT_GROUP_DETAIL": "1" if args.group_detail else "0",
                 "DXMT9_TEST_DRAW_PARENT_TRACE": "1" if args.mode == "trace" else "0"}
     if args.mode == "trace":
         explicit["DXMT9_PE_RECORDER_CHUNK_LOG"] = "1"
@@ -206,6 +209,7 @@ def main() -> int:
     recipe = {"schema": "dxmt9-pe-draw-parent-economy-recipe-v1", "arch": args.arch,
               "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
               "mode": args.mode, "groups": groups, "warm_groups": warm_groups, "iterations": 32,
+              "group_detail": args.group_detail,
               "command": command, "env": explicit, "fixture": {"path": str(fixture), **identity(fixture)},
               "fixture_source": fixture_source_before, "images": {str(path): identity(path) for path in pe_images.values()},
               "production_images": {name: {"path": str(path), "identity": identity(path)}
@@ -232,7 +236,8 @@ def main() -> int:
         if verdicts != {"runDrawParentEconomy": "pass"}:
             raise ValueError("unexpected fixture verdict")
         parsed = parse_text((output / "run.log").read_text(), expected_arch=args.arch,
-                            expected_trace=args.mode == "trace", expected_groups=groups)
+                            expected_trace=args.mode == "trace", expected_groups=groups,
+                            expected_group_detail=args.group_detail)
         if parsed["binding"]["primitive_rva"] != selected_binding["primitive_rva"] or \
                 parsed["binding"]["indexed_rva"] != selected_binding["indexed_rva"]:
             raise ValueError("fixture binding does not match linked public COM slots")

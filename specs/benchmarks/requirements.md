@@ -211,3 +211,14 @@ setup, warm-up, drains and oracle work; this is not exclusive PE/thread CPU.
 Repeated results require matched fixture, recipe and runtime-image receipts.
 Local-parent timing does not establish a full-frame CPU/FPS improvement,
 stable run-to-run variance or performance-lane promotion.
+
+**R-BENCH-7.5** Optional group-detail diagnostics must retain every warm and
+measured QPC interval, its case/path/ordinal identity and the exact measured
+sum. Separately bracket the EndScene/event-issue/drain tail and report its
+GetData call count. Allocate storage before row timing and emit it only after
+the whole matrix's CPU captures; do not allocate or print samples inside
+groups. Reject missing,
+duplicate, misclassified or non-conserving samples. Publish unfiltered sums
+and explicitly defined quantiles without removing slow groups. Extra tail
+clocks and buffering are diagnostic perturbations, not observer-disabled
+timing parity or exclusive PE attribution.

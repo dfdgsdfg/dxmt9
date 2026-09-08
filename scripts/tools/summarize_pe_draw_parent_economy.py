@@ -15,9 +15,12 @@ SETTERS = {"steady": 0, "viewport": 1, "viewport_scissor": 2, "scalar": 4,
            "stream_offset": 1, "six_constants": 6, "vs_f3_equal": 1,
            "vs_f3_changed": 1, "vs_f4_changed": 1}
 UINT64_MAX = (1 << 64) - 1
-META_RE = re.compile(r"^draw_parent_meta schema=1 arch=(x86|x64) qpc_frequency=(\d+) "
-                     r"groups=(\d+) warm_groups=(\d+) iterations=(\d+) trace=(0|1) "
-                     r"pid=(\d+) tid=(\d+)$")
+META_V1_RE = re.compile(r"^draw_parent_meta schema=1 arch=(x86|x64) qpc_frequency=(\d+) "
+                        r"groups=(\d+) warm_groups=(\d+) iterations=(\d+) trace=(0|1) "
+                        r"pid=(\d+) tid=(\d+)$")
+META_V2_RE = re.compile(r"^draw_parent_meta schema=2 arch=(x86|x64) qpc_frequency=(\d+) "
+                        r"groups=(\d+) warm_groups=(\d+) iterations=(\d+) trace=(0|1) "
+                        r"group_detail=1 pid=(\d+) tid=(\d+)$")
 BINDING_RE = re.compile(r"^draw_parent_binding module=(.+) machine=(0x[0-9a-fA-F]+) "
                          r"primitive_rva=(0x[0-9a-fA-F]+) indexed_rva=(0x[0-9a-fA-F]+)$")
 ROW_RE = re.compile(
@@ -30,10 +33,13 @@ ROW_RE = re.compile(
     r"pid=(\d+) tid=(\d+)$")
 TRACE_RE = re.compile(r"^draw_parent_trace phase=(begin|timed_begin|timed_end|end) "
                       r"case=(\w+) path=(\w+) group=(\d+)$")
-FOOTER_RE = re.compile(r"^draw_parent_complete schema=1 rows=27 status=pass$")
+GROUP_RE = re.compile(r"^draw_parent_group case=(\w+) path=(\w+) group=(\d+) "
+                      r"measured=(0|1) qpc_ticks=(\d+) tail_qpc_ticks=(\d+) "
+                      r"tail_getdata_calls=(\d+)$")
 EXPECTED = {(case, path) for case in CASES for path in PATHS}
 KNOWN_HEALTH = ("draw_parent_meta", "draw_parent_binding", "draw_parent_row",
-                "draw_parent_trace", "draw_parent_release", "draw_parent_complete")
+                "draw_parent_group", "draw_parent_trace", "draw_parent_release",
+                "draw_parent_complete")
 
 
 def owned_lines(text: str) -> list[str]:
@@ -67,15 +73,43 @@ def uint(value: str, *, positive: bool = False) -> int:
     return result
 
 
+def distribution(values: list[int]) -> dict[str, int | None]:
+    if not values:
+        return {"min": None, "p50": None, "p90": None, "p99": None, "max": None,
+                "sum": 0, "count": 0}
+    ordered = sorted(values)
+    def nearest(percent: int) -> int:
+        return ordered[(percent * len(ordered) + 99) // 100 - 1]
+    total = sum(ordered)
+    if total > UINT64_MAX:
+        raise ValueError("distribution sum overflow")
+    return {"min": ordered[0], "p50": nearest(50), "p90": nearest(90),
+            "p99": nearest(99), "max": ordered[-1], "sum": total,
+            "count": len(ordered)}
+
+
+def bounded_sum(values: list[int], what: str) -> int:
+    total = sum(values)
+    if total > UINT64_MAX:
+        raise ValueError(f"{what} sum overflow")
+    return total
+
+
 def parse_text(text: str, *, expected_arch: str | None = None,
                expected_trace: bool | None = None,
-               expected_groups: int | None = None) -> dict:
+               expected_groups: int | None = None,
+               expected_group_detail: bool | None = None) -> dict:
     lines = owned_lines(text)
-    meta_match = [META_RE.fullmatch(line) for line in lines]
-    meta_match = [match for match in meta_match if match]
-    if len(meta_match) != 1 or sum(line.startswith("draw_parent_meta ") for line in lines) != 1:
+    meta_v1 = [META_V1_RE.fullmatch(line) for line in lines]
+    meta_v2 = [META_V2_RE.fullmatch(line) for line in lines]
+    meta_v1 = [match for match in meta_v1 if match]
+    meta_v2 = [match for match in meta_v2 if match]
+    if len(meta_v1) + len(meta_v2) != 1 or sum(line.startswith("draw_parent_meta ") for line in lines) != 1:
         raise ValueError("exactly one valid meta record required")
-    arch, frequency, groups, warm_groups, iterations, trace, pid, tid = meta_match[0].groups()
+    schema = 2 if meta_v2 else 1
+    group_detail = schema == 2
+    meta_match = meta_v2[0] if group_detail else meta_v1[0]
+    arch, frequency, groups, warm_groups, iterations, trace, pid, tid = meta_match.groups()
     frequency, groups, warm_groups, iterations, trace, pid, tid = (
         uint(frequency, positive=True), uint(groups), uint(warm_groups), uint(iterations),
         int(trace), uint(pid, positive=True), uint(tid, positive=True))
@@ -85,6 +119,8 @@ def parse_text(text: str, *, expected_arch: str | None = None,
         raise ValueError("trace mode mismatch")
     if expected_groups is not None and groups != expected_groups:
         raise ValueError("group count mismatch")
+    if expected_group_detail is not None and group_detail != expected_group_detail:
+        raise ValueError("group-detail mode mismatch")
     if not 1 <= groups <= 8192 or not 0 <= warm_groups <= 128 or iterations != 32:
         raise ValueError("invalid bounded meta")
 
@@ -99,6 +135,9 @@ def parse_text(text: str, *, expected_arch: str | None = None,
         raise ValueError("invalid binding target")
 
     rows = {}
+    groups_by_key = {}
+    group_sequence = []
+    group_indices = []
     traces = {}
     trace_sequence = []
     footer = release = 0
@@ -108,6 +147,30 @@ def parse_text(text: str, *, expected_arch: str | None = None,
             raise ValueError("blank record")
         if footer:
             raise ValueError("record after completion")
+        match = GROUP_RE.fullmatch(line)
+        if match:
+            if not group_detail:
+                raise ValueError("group detail is not valid in schema 1")
+            if rows:
+                raise ValueError("group detail must precede all row records")
+            case, path, ordinal, measured, qpc, tail, polls = match.groups()
+            ordinal, measured = uint(ordinal), int(measured)
+            qpc, tail, polls = uint(qpc), uint(tail), uint(polls, positive=True)
+            key = (case, path)
+            if key not in EXPECTED or ordinal >= warm_groups + groups:
+                raise ValueError("invalid group-detail identity")
+            if measured != int(ordinal >= warm_groups):
+                raise ValueError("invalid measured group flag")
+            group_key = (case, path, ordinal)
+            if group_key in groups_by_key or key in rows:
+                raise ValueError("duplicate or post-row group detail")
+            groups_by_key[group_key] = {"case": case, "path": path, "group": ordinal,
+                                        "measured": bool(measured), "qpc_ticks": qpc,
+                                        "tail_qpc_ticks": tail,
+                                        "tail_getdata_calls": polls}
+            group_sequence.append(group_key)
+            group_indices.append(index)
+            continue
         match = ROW_RE.fullmatch(line)
         if match:
             (case, path, row_groups, row_iterations, qpc, empty, calls, failures,
@@ -130,6 +193,16 @@ def parse_text(text: str, *, expected_arch: str | None = None,
             user_start, user_end, kernel_start, kernel_end = map(uint, (user_start, user_end, kernel_start, kernel_end))
             if user_end < user_start or kernel_end < kernel_start or row_pid != pid or row_tid != tid:
                 raise ValueError("non-monotonic CPU or identity mismatch")
+            if group_detail:
+                detail = [groups_by_key.get((case, path, ordinal))
+                          for ordinal in range(warm_groups + groups)]
+                if any(item is None for item in detail):
+                    raise ValueError("row is missing group detail")
+                measured_sum = bounded_sum(
+                    [item["qpc_ticks"] for item in detail if item["measured"]],
+                    "measured group QPC")
+                if measured_sum != qpc:
+                    raise ValueError("measured group QPC sum does not match row")
             rows[(case, path)] = {"case": case, "path": path, "groups": row_groups,
                                   "iterations": row_iterations, "qpc_ticks": qpc,
                                   "emptyqpc_ticks": empty, "calls": calls,
@@ -166,7 +239,9 @@ def parse_text(text: str, *, expected_arch: str | None = None,
             if set(rows) != EXPECTED:
                 raise ValueError("release before complete row matrix")
             continue
-        if line == "draw_parent_complete schema=1 rows=27 status=pass":
+        complete_line = ("draw_parent_complete schema=2 rows=27 status=pass"
+                         if group_detail else "draw_parent_complete schema=1 rows=27 status=pass")
+        if line == complete_line:
             if release != 1 or set(rows) != EXPECTED:
                 raise ValueError("completion before release or rows")
             footer += 1
@@ -177,6 +252,21 @@ def parse_text(text: str, *, expected_arch: str | None = None,
         raise ValueError(f"unexpected record: {line[:80]}")
     if set(rows) != EXPECTED or footer != 1 or release != 1 or complete_index != len(lines) - 1:
         raise ValueError("incomplete draw-parent receipt")
+    if group_detail:
+        expected_group_keys = {(case, path, ordinal)
+                               for case, path in EXPECTED
+                               for ordinal in range(warm_groups + groups)}
+        if set(groups_by_key) != expected_group_keys:
+            raise ValueError("group-detail set mismatch")
+        expected_group_sequence = [(case, path, ordinal)
+                                   for case in CASES for path in PATHS
+                                   for ordinal in range(warm_groups + groups)]
+        if group_sequence != expected_group_sequence:
+            raise ValueError("group-detail sequence mismatch")
+        if trace and (not traces or min(group_indices) <= max(traces.values())):
+            raise ValueError("traced group samples must follow the complete trace loop")
+    elif groups_by_key:
+        raise ValueError("group detail in schema 1")
     expected_markers = {(case, path, group, phase)
                         for case, path in EXPECTED for group in range(warm_groups + groups)
                         for phase in ("begin", "timed_begin", "timed_end", "end")}
@@ -191,7 +281,7 @@ def parse_text(text: str, *, expected_arch: str | None = None,
             raise ValueError("trace marker sequence mismatch")
         if not any(line.startswith("pe_recorder_chunk") for line in lines):
             raise ValueError("trace has no recorder chunk evidence outside timed pairs")
-        for case, path in EXPECTED:
+        for case, path in sorted(EXPECTED):
             for group in range(warm_groups + groups):
                 order = [traces[(case, path, group, phase)]
                          for phase in ("begin", "timed_begin", "timed_end", "end")]
@@ -201,7 +291,8 @@ def parse_text(text: str, *, expected_arch: str | None = None,
                     raise ValueError("chunk flush inside timed interval")
     elif traces or any(line.startswith("pe_recorder_chunk") for line in lines):
         raise ValueError("trace records in timing mode")
-    return {"schema": "dxmt9-pe-draw-parent-economy-v1", "meta": {
+    report = {"schema": "dxmt9-pe-draw-parent-economy-v2" if group_detail
+              else "dxmt9-pe-draw-parent-economy-v1", "meta": {
                 "arch": arch, "qpc_frequency": frequency, "groups": groups,
                 "warm_groups": warm_groups, "iterations": iterations, "trace": bool(trace),
                 "pid": pid, "tid": tid},
@@ -209,6 +300,25 @@ def parse_text(text: str, *, expected_arch: str | None = None,
                         "primitive_rva": int(primitive, 16), "indexed_rva": int(indexed, 16)},
             "rows": [rows[key] for key in sorted(rows)],
             "scope": "Raw QPC rows; CPU process time includes setup, warm groups, drains and oracle; no exclusive PE or FPS claim."}
+    if group_detail:
+        detail_rows = [groups_by_key[key] for key in expected_group_sequence]
+        report["group_rows"] = detail_rows
+        report["meta"]["group_detail"] = True
+        report["group_distributions"] = {}
+        for case, path in sorted(EXPECTED):
+            owned = [item for item in detail_rows
+                     if item["case"] == case and item["path"] == path]
+            phases = {}
+            for category, predicate in (("warm", lambda item: not item["measured"]),
+                                         ("measured", lambda item: item["measured"])):
+                selected = [item for item in owned if predicate(item)]
+                phases[category] = {
+                    "qpc_ticks": distribution([item["qpc_ticks"] for item in selected]),
+                    "tail_qpc_ticks": distribution([item["tail_qpc_ticks"] for item in selected]),
+                    "tail_getdata_calls": distribution([item["tail_getdata_calls"] for item in selected]),
+                }
+            report["group_distributions"][f"{case}/{path}"] = phases
+    return report
 
 
 def main() -> int:
@@ -218,12 +328,14 @@ def main() -> int:
     parser.add_argument("--arch", choices=("x86", "x64"))
     parser.add_argument("--trace", type=int, choices=(0, 1))
     parser.add_argument("--groups", type=int)
+    parser.add_argument("--group-detail", type=int, choices=(0, 1))
     args = parser.parse_args()
     try:
         data = args.log.read_bytes()
         report = parse_text(data.decode("utf-8"), expected_arch=args.arch,
                             expected_trace=None if args.trace is None else bool(args.trace),
-                            expected_groups=args.groups)
+                            expected_groups=args.groups,
+                            expected_group_detail=None if args.group_detail is None else bool(args.group_detail))
         report["source"] = {"path": str(args.log), "bytes": len(data),
                             "sha256": hashlib.sha256(data).hexdigest()}
     except (OSError, UnicodeError, ValueError) as error:

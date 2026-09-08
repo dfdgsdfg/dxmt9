@@ -1,4 +1,4 @@
-// H298 public D3D9 draw-parent economy conformance fixture.
+// H299 public D3D9 draw-parent economy conformance fixture.
 //
 // This is a checked-in, on-demand PE fixture.  It deliberately uses only
 // public IDirect3D9/IDirect3DDevice9 interfaces: the measured work is a small
@@ -21,6 +21,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <new>
 
 namespace {
 
@@ -29,7 +30,7 @@ constexpr UINT kIterations = 32u;
 constexpr DWORD kFvf = D3DFVF_XYZRHW | D3DFVF_DIFFUSE;
 constexpr UINT kVertexStride = 20u;
 constexpr UINT kSecondTriangleOffset = 3u * kVertexStride;
-constexpr char kWindowClass[] = "Dxmt9H298DrawParentEconomy";
+constexpr char kWindowClass[] = "Dxmt9H299DrawParentEconomy";
 
 template <std::size_t N>
 constexpr std::array<float, N> repeated(float value) noexcept {
@@ -67,7 +68,7 @@ struct WindowFixture {
     klass.lpszClassName = kWindowClass;
     atom = RegisterClassExA(&klass);
     if (atom == 0u && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
-    window = CreateWindowExA(0u, kWindowClass, "dxmt9-h298", WS_OVERLAPPED,
+    window = CreateWindowExA(0u, kWindowClass, "dxmt9-h299", WS_OVERLAPPED,
                              0, 0, kSize, kSize, nullptr, nullptr, instance,
                              nullptr);
     return window != nullptr;
@@ -120,6 +121,16 @@ struct Row {
   bool initial = false;
   bool finalState = false;
   bool inputs = false;
+};
+
+struct GroupSample {
+  const char* name = nullptr;
+  const char* path = nullptr;
+  std::uint64_t group = 0u;
+  bool measured = false;
+  std::uint64_t qpcTicks = 0u;
+  std::uint64_t tailQpcTicks = 0u;
+  std::uint64_t tailGetDataCalls = 0u;
 };
 
 struct Fixture {
@@ -647,8 +658,10 @@ bool inputsSnapshotValid(const Fixture& fixture,
 }
 
 bool runRow(Fixture& fixture, Case c, Path path, int warmGroups, int groups,
-            std::uint64_t emptyQpcTicks, bool trace,
-            const InputSnapshot& snapshot, Row& row) noexcept {
+            std::uint64_t emptyQpcTicks, bool trace, bool groupDetail,
+            GroupSample* groupSamples, std::size_t groupSampleCapacity,
+            std::size_t& groupSampleCount, const InputSnapshot& snapshot,
+            Row& row) noexcept {
   row.name = kCaseNames[static_cast<std::size_t>(c)];
   row.path = kPathNames[static_cast<std::size_t>(path)];
   row.groups = static_cast<std::uint64_t>(groups);
@@ -698,10 +711,37 @@ bool runRow(Fixture& fixture, Case c, Path path, int warmGroups, int groups,
       return false;
     }
     traceMarker(trace, "timed_end", row.name, row.path, group);
+    std::uint64_t tailStart = 0u;
+    if (groupDetail && (!qpcNow(tailStart) || tailStart < end)) {
+      std::fprintf(stderr, "FAIL: QueryPerformanceCounter(tail start)\n");
+      return false;
+    }
     CallAggregate tail{};
     tail.add(fixture.device->EndScene());
     const bool drained = tail.failures == 0u && issueAndDrain(fixture, tail);
     if (!drained || timed.failures != 0u || tail.failures != 0u) return false;
+    std::uint64_t tailEnd = 0u;
+    if (groupDetail && (!qpcNow(tailEnd) || tailEnd < tailStart)) {
+      std::fprintf(stderr, "FAIL: QueryPerformanceCounter(tail end)\n");
+      return false;
+    }
+    if (groupDetail) {
+      if (groupSamples == nullptr || groupSampleCount >= groupSampleCapacity ||
+          tail.calls < 3u) {
+        std::fprintf(stderr, "FAIL: draw-parent group sample storage\n");
+        return false;
+      }
+      // tail.calls is EndScene + Issue + every GetData poll; retain the
+      // derived poll count without adding a second per-poll counter.
+      GroupSample& sample = groupSamples[groupSampleCount++];
+      sample.name = row.name;
+      sample.path = row.path;
+      sample.group = static_cast<std::uint64_t>(group);
+      sample.measured = measured;
+      sample.qpcTicks = end - start;
+      sample.tailQpcTicks = tailEnd - tailStart;
+      sample.tailGetDataCalls = tail.calls - 2u;
+    }
     if (group == warmGroups + groups - 1) {
       CallAggregate finalGetters{};
       row.finalState = validateFinalState(fixture, c, c != Case::Steady,
@@ -712,10 +752,16 @@ bool runRow(Fixture& fixture, Case c, Path path, int warmGroups, int groups,
       if (!row.finalState || !row.pixelValid || !row.inputs) return false;
     }
     if (measured) {
+      const std::uint64_t drawTicks = end - start;
+      if (row.qpcTicks > std::numeric_limits<std::uint64_t>::max() -
+                              drawTicks) {
+        std::fprintf(stderr, "FAIL: draw-parent QPC sum overflow\n");
+        return false;
+      }
       row.calls += timed.calls;
       row.failures += timed.failures;
       row.statusBits |= timed.statusBits;
-      row.qpcTicks += end - start;
+      row.qpcTicks += drawTicks;
     }
     traceMarker(trace, "end", row.name, row.path, group);
   }
@@ -803,6 +849,22 @@ void printRow(const Row& row) noexcept {
       static_cast<unsigned long long>(row.cpuKernelEnd), row.pid, row.tid);
 }
 
+void printGroupSamples(const GroupSample* samples,
+                       std::size_t sampleCount) noexcept {
+  for (std::size_t i = 0u; i < sampleCount; ++i) {
+    const GroupSample& sample = samples[i];
+    std::fprintf(stderr,
+                 "draw_parent_group case=%s path=%s group=%llu measured=%d "
+                 "qpc_ticks=%llu tail_qpc_ticks=%llu tail_getdata_calls=%llu\n",
+                 sample.name, sample.path,
+                 static_cast<unsigned long long>(sample.group),
+                 sample.measured ? 1 : 0,
+                 static_cast<unsigned long long>(sample.qpcTicks),
+                 static_cast<unsigned long long>(sample.tailQpcTicks),
+                 static_cast<unsigned long long>(sample.tailGetDataCalls));
+  }
+}
+
 bool cleanup(Fixture& fixture) noexcept {
   bool valid = true;
   CallAggregate aggregate{};
@@ -859,14 +921,18 @@ int runDrawParentEconomy() {
   int groups = 512;
   int warmGroups = 8;
   int traceValue = 0;
+  int groupDetailValue = 0;
   if (!envBounded("DXMT9_TEST_DRAW_PARENT_GROUPS", 512, 1, 8192, groups) ||
       !envBounded("DXMT9_TEST_DRAW_PARENT_WARM_GROUPS", 8, 0, 128,
                   warmGroups) ||
-      !envBounded("DXMT9_TEST_DRAW_PARENT_TRACE", 0, 0, 1, traceValue)) {
+      !envBounded("DXMT9_TEST_DRAW_PARENT_TRACE", 0, 0, 1, traceValue) ||
+      !envBounded("DXMT9_TEST_DRAW_PARENT_GROUP_DETAIL", 0, 0, 1,
+                  groupDetailValue)) {
     std::fprintf(stderr, "FAIL: invalid draw-parent environment bounds\n");
     return 1;
   }
   const bool trace = traceValue != 0;
+  const bool groupDetail = groupDetailValue != 0;
   std::uint64_t emptyStart = 0u;
   std::uint64_t emptyEnd = 0u;
   if (!qpcNow(emptyStart) || !qpcNow(emptyEnd) || emptyEnd < emptyStart) {
@@ -875,13 +941,25 @@ int runDrawParentEconomy() {
   }
   const std::uint64_t emptyQpcTicks = emptyEnd - emptyStart;
   const char* arch = sizeof(void*) == 8u ? "x64" : "x86";
-  std::fprintf(stderr, "draw_parent_meta schema=1 arch=%s qpc_frequency=%llu groups=%d "
-              "warm_groups=%d iterations=%u trace=%d pid=%lu tid=%lu\n",
-              arch,
-              static_cast<unsigned long long>(qpcFrequency), groups,
-              warmGroups, kIterations, trace ? 1 : 0,
-              static_cast<unsigned long>(GetCurrentProcessId()),
-              static_cast<unsigned long>(GetCurrentThreadId()));
+  if (groupDetail) {
+    std::fprintf(stderr,
+                 "draw_parent_meta schema=2 arch=%s qpc_frequency=%llu "
+                 "groups=%d warm_groups=%d iterations=%u trace=%d "
+                 "group_detail=1 pid=%lu tid=%lu\n",
+                 arch, static_cast<unsigned long long>(qpcFrequency), groups,
+                 warmGroups, kIterations, trace ? 1 : 0,
+                 static_cast<unsigned long>(GetCurrentProcessId()),
+                 static_cast<unsigned long>(GetCurrentThreadId()));
+  } else {
+    std::fprintf(stderr,
+                 "draw_parent_meta schema=1 arch=%s qpc_frequency=%llu "
+                 "groups=%d warm_groups=%d iterations=%u trace=%d pid=%lu "
+                 "tid=%lu\n",
+                 arch, static_cast<unsigned long long>(qpcFrequency), groups,
+                 warmGroups, kIterations, trace ? 1 : 0,
+                 static_cast<unsigned long>(GetCurrentProcessId()),
+                 static_cast<unsigned long>(GetCurrentThreadId()));
+  }
   std::fflush(stderr);
 
   WindowFixture window{};
@@ -892,6 +970,21 @@ int runDrawParentEconomy() {
     return 1;
   }
 
+  const std::size_t groupCountPerRow =
+      static_cast<std::size_t>(warmGroups) + static_cast<std::size_t>(groups);
+  const std::size_t rowCount = kCaseNames.size() * kPathNames.size();
+  const std::size_t groupSampleCapacity =
+      groupDetail ? rowCount * groupCountPerRow : 0u;
+  GroupSample* groupSamples = nullptr;
+  if (groupDetail) {
+    groupSamples = new (std::nothrow) GroupSample[groupSampleCapacity];
+    if (!groupSamples) {
+      std::fprintf(stderr, "FAIL: draw-parent group sample allocation\n");
+      if (!cleanup(fixture)) std::fprintf(stderr, "FAIL: cleanup\n");
+      return 1;
+    }
+  }
+  std::size_t groupSampleCount = 0u;
   const InputSnapshot inputSnapshot = captureInputs(fixture);
   std::array<Row, 27u> rows{};
   std::size_t rowIndex = 0u;
@@ -900,7 +993,8 @@ int runDrawParentEconomy() {
        caseIndex < kCaseNames.size() && success; ++caseIndex) {
     for (const Path path : {Path::SettersOnly, Path::Primitive, Path::Indexed}) {
       if (!runRow(fixture, static_cast<Case>(caseIndex), path, warmGroups,
-                  groups, emptyQpcTicks, trace, inputSnapshot,
+                  groups, emptyQpcTicks, trace, groupDetail, groupSamples,
+                  groupSampleCapacity, groupSampleCount, inputSnapshot,
                   rows[rowIndex])) {
         success = false;
         break;
@@ -909,12 +1003,24 @@ int runDrawParentEconomy() {
     }
   }
   if (!success) {
+    delete[] groupSamples;
     if (!cleanup(fixture)) std::fprintf(stderr, "FAIL: cleanup\n");
     return 1;
   }
+  if (groupDetail && groupSampleCount != groupSampleCapacity) {
+    std::fprintf(stderr, "FAIL: incomplete draw-parent group samples\n");
+    delete[] groupSamples;
+    if (!cleanup(fixture)) std::fprintf(stderr, "FAIL: cleanup\n");
+    return 1;
+  }
+  if (groupDetail) printGroupSamples(groupSamples, groupSampleCount);
   for (const Row& row : rows) printRow(row);
+  delete[] groupSamples;
   if (!cleanup(fixture)) return 1;
-  std::fputs("draw_parent_complete schema=1 rows=27 status=pass\n", stderr);
+  if (groupDetail)
+    std::fputs("draw_parent_complete schema=2 rows=27 status=pass\n", stderr);
+  else
+    std::fputs("draw_parent_complete schema=1 rows=27 status=pass\n", stderr);
   return 0;
 }
 

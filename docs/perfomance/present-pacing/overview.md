@@ -30,6 +30,15 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H299](present-pacing-pe-draw-parent-groups.299.md) separates every group from
+its EndScene/query tail without changing production images. Ten PE processes
+pass 270 cells and conserve 84,402 samples. Tails occupy 97.54–98.46% of the
+two measured wall scopes, yet GetData completes in one call per group: the
+fixture's retry sleep is not the cause. Central populations shift across
+repeats, so outlier trimming or a median cannot qualify small helper savings.
+Subdivide the three tail calls before altering fixture pacing; no new product
+CPU/FPS or GPU-bottleneck claim follows.
+
 [H298](present-pacing-pe-draw-parent-harness.298.md) extends actual public-parent
 coverage to indexed draws and VS-F counts 3/4 without a production change.
 The 27-cell fixture and strict ordered trace qualification pass in both PE

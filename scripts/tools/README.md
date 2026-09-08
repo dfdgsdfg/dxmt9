@@ -61,6 +61,11 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   invoking this driver stages shared Wine-root binaries.
   The fixture is marked on-demand and does not run with the default conformance
   auxiliary set.
+  `--group-detail` enables a separate diagnostic recipe: retain every warm and
+  measured group, separately time the EndScene/query-drain tail, and report
+  unfiltered sums plus nearest-rank distributions. Extra clocks and buffering
+  are not observer-disabled timing parity; do not remove long groups to price
+  small changes.
 - `summarize_3dmark05_perf.py` — parse dxmt9 per-run perf logs into encoder,
   stream, indexed-probe, and per-frame sampling CSVs. Enable
   `DXMT9_PERF_FRAME_SAMPLING=1` or `run_3dmark05_perf_probe.sh --frame-sampling`
