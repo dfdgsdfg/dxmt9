@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-08
+updated: 2026-09-09
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
@@ -29,6 +29,14 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 [index-cache-locality](../index-cache-locality/index.md); the per-CB encode story by [state-churn-encode](../state-churn-encode/index.md).
 
 ## Latest Conclusions
+
+[H291](present-pacing-pe-current-hotpath.291.md) refreshes the current
+`627d9840` PE32 profiles: owner admission/emission and constants remain
+investigation targets, with cross-symbol samples unassigned and no CPU-time
+claim. A separate, fresh 06 GT2 OFF spot is 18.217 FPS (README +0.64%), with
+34 unreported full-health tail frames. Exact active descriptor-table copy is
+an unimplemented candidate requiring true multi-section PE economics; the
+existing multi-texture fixture has only one descriptor. Production is unchanged.
 
 [H290](present-pacing-pe-private-admission-proof.290.md) keeps a narrowly
 qualified duplicate source-proof removal. Seven warm matched-header append

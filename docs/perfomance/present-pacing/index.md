@@ -4,12 +4,17 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-09-08
+updated: 2026-09-09
 source: docs/perfomance/present-pacing/present-pacing-pe-constant-bitcompare.254.md; docs/perfomance/present-pacing/present-pacing-pe-canonical-authority.253.md; docs/perfomance/present-pacing/present-pacing-pe-append-effects.251.md; docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md; docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
+
+[H291](present-pacing-pe-current-hotpath.291.md) refreshes exact-image PE32
+profiles at `627d9840` and separately remeasures 06 GT2 at 18.217 FPS.
+Owner/constant work remains visible; descriptor-table batching is only a
+candidate, not an implemented or measured saving. Production is unchanged.
 
 [H290](present-pacing-pe-private-admission-proof.290.md) removes a duplicate
 private compact source qualification while keeping envelope and writer checks.

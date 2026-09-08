@@ -13,6 +13,16 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H291](../../../docs/perfomance/present-pacing/present-pacing-pe-current-hotpath.291.md)
+refreshes PE32 symbol evidence at `627d9840` without changing production.
+Owner admission/emission and constant work remain visible; the symbol groups
+are not exclusive CPU-time measurements. Exact active descriptor-table copy
+remains an unimplemented candidate. Its gate needs true multi-section loaded-PE
+writer and public-append economics, byte/failure/retry differentials and ABI
+layout locks; the existing multi-texture shapes still have one descriptor.
+The fresh 06 GT2 OFF spot is 18.217 FPS with 34 uncovered full-health tail
+frames, not repeatable CPU/FPS improvement.
+
 R-CORE-REC-7.65 private compact source-proof reuse is implemented.
 [H290](../../../docs/perfomance/present-pacing/present-pacing-pe-private-admission-proof.290.md)
 removes only the callback-free duplicate header qualification; envelope and
