@@ -3806,6 +3806,313 @@ void preparedIdentityWitnessUsesBoundedActivePrefixes() {
         "null identity remains outside both active prefixes");
 }
 
+void compactAlwaysWireIdentityInsertionMatchesActiveReference() {
+  using Witness = PeSemanticPreparedIdentityWitnessT<4u>;
+  Witness generic{};
+  Witness compact{};
+  D9CSurface surface{};
+  D9CTexture texture{};
+  D9CSurface alias{};
+
+  const auto sameActive = [](const Witness& left,
+                             const Witness& right) noexcept {
+    if (left.count != right.count || left.wireCount != right.wireCount)
+      return false;
+    for (std::size_t i = 0u; i < left.count; ++i) {
+      const auto& a = left.entries[i];
+      const auto& b = right.entries[i];
+      if (a.identity.kind != b.identity.kind ||
+          a.identity.generation != b.identity.generation ||
+          a.identity.objectId != b.identity.objectId || a.object != b.object ||
+          a.pin != b.pin || a.wireIndex != b.wireIndex)
+        return false;
+    }
+    for (std::size_t i = 0u; i < left.wireCount; ++i) {
+      if (left.wireOrdinals[i] != right.wireOrdinals[i]) return false;
+    }
+    return true;
+  };
+
+  const auto apply = [&](const PeWireObjectRef& ref, std::uint32_t kind,
+                         bool expectedSuccess, bool expectedRetained,
+                         bool expectedPromotion, bool expectOrdinal,
+                         std::size_t expectedOrdinal, std::string_view label) {
+    bool genericRetained = true;
+    bool genericPromotion = true;
+    bool compactRetained = true;
+    constexpr std::size_t kSentinel = 0x5au;
+    std::size_t genericOrdinal = kSentinel;
+    std::size_t compactOrdinal = kSentinel;
+    const bool genericSuccess = generic.add(
+        ref, kind, true, genericRetained, genericPromotion, &genericOrdinal);
+    const bool compactSuccess =
+        compact.addWire(ref, kind, compactRetained, &compactOrdinal);
+    check(genericSuccess == expectedSuccess && compactSuccess == expectedSuccess,
+          label);
+    check(genericRetained == expectedRetained &&
+              compactRetained == expectedRetained,
+          "always-wire insertion retains the same new-identity result");
+    check(genericPromotion == expectedPromotion,
+          "generic insertion retains its wire-promotion report");
+    if (expectOrdinal) {
+      check(genericOrdinal == expectedOrdinal && compactOrdinal == expectedOrdinal,
+            "always-wire insertion preserves the identity ordinal");
+    } else {
+      check(genericOrdinal == kSentinel && compactOrdinal == kSentinel,
+            "failed/null insertion does not publish an identity ordinal");
+    }
+    check(sameActive(generic, compact),
+          "always-wire insertion matches every active identity/wire field");
+  };
+
+  const PeWireObjectRef nullRef{};
+  apply(nullRef, D9C_CHUNK_HANDLE_KIND_SURFACE, true, false, false, false,
+        0u, "always-wire insertion accepts the canonical null reference");
+  PeWireObjectRef malformedNull{};
+  malformedNull.identity.kind = D9C_CHUNK_HANDLE_KIND_SURFACE;
+  apply(malformedNull, D9C_CHUNK_HANDLE_KIND_SURFACE, false, false, false,
+        false, 0u, "always-wire insertion rejects a typed null identity");
+  const auto surfaceRef = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &surface, 0x510u, 3u);
+  const auto zeroGeneration = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &surface, 0x50fu, 0u);
+  apply(zeroGeneration, D9C_CHUNK_HANDLE_KIND_SURFACE, false, false, false,
+        false, 0u, "always-wire insertion rejects a zero generation");
+  const auto zeroObjectId = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &surface, 0u, 3u);
+  apply(zeroObjectId, D9C_CHUNK_HANDLE_KIND_SURFACE, false, false, false,
+        false, 0u, "always-wire insertion rejects a zero object identity");
+  apply(surfaceRef, D9C_CHUNK_HANDLE_KIND_SURFACE, true, true, true, true,
+        0u, "always-wire insertion publishes a new surface");
+  apply(surfaceRef, D9C_CHUNK_HANDLE_KIND_SURFACE, true, false, false, true,
+        0u, "always-wire insertion deduplicates a repeated surface");
+  const auto textureRef = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+      &texture, 0x510u, 3u);
+  apply(textureRef, D9C_CHUNK_HANDLE_KIND_TEXTURE, true, true, true, true,
+        1u, "always-wire insertion preserves cross-kind identity separation");
+  const auto staleGeneration = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &surface, 0x510u, 4u);
+  apply(staleGeneration, D9C_CHUNK_HANDLE_KIND_SURFACE, false, false, false,
+        false, 0u, "always-wire insertion rejects a generation collision");
+  const auto pointerAlias = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &alias, 0x510u, 3u);
+  apply(pointerAlias, D9C_CHUNK_HANDLE_KIND_SURFACE, false, false, false, false,
+        0u, "always-wire insertion rejects a pointer collision");
+  const auto wrongKind = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+      &surface, 0x511u, 3u);
+  apply(wrongKind, D9C_CHUNK_HANDLE_KIND_SURFACE, false, false, false, false,
+        0u, "always-wire insertion rejects a kind mismatch");
+  D9CBuffer retryBuffer{};
+  const auto retryRef = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(
+      &retryBuffer, 0x512u, 3u);
+  apply(retryRef, D9C_CHUNK_HANDLE_KIND_BUFFER, true, true, true, true, 2u,
+        "always-wire insertion retries successfully after failed validation");
+
+  {
+    Witness directGeneric{};
+    Witness directCompact{};
+    bool genericRetained = false;
+    bool genericPromotion = false;
+    bool compactRetained = false;
+    bool compactPromotion = false;
+    constexpr std::size_t kDirectSentinel = 0x5au;
+    std::size_t genericOrdinal = kDirectSentinel;
+    std::size_t compactOrdinal = kDirectSentinel;
+    check(directGeneric.add(surfaceRef, D9C_CHUNK_HANDLE_KIND_SURFACE, false,
+                            genericRetained, genericPromotion,
+                            &genericOrdinal) &&
+              directCompact.add(surfaceRef,
+                                D9C_CHUNK_HANDLE_KIND_SURFACE, false,
+                                compactRetained, compactPromotion,
+                                &compactOrdinal) &&
+              genericRetained && compactRetained && !genericPromotion &&
+              !compactPromotion && genericOrdinal == 0u &&
+              compactOrdinal == 0u && sameActive(directGeneric, directCompact),
+          "generic direct-only seed remains available before compact promotion");
+    genericRetained = true;
+    genericPromotion = false;
+    compactRetained = true;
+    genericOrdinal = kDirectSentinel;
+    compactOrdinal = kDirectSentinel;
+    check(directGeneric.add(surfaceRef, D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                            genericRetained, genericPromotion,
+                            &genericOrdinal) &&
+              directCompact.addWire(surfaceRef,
+                                    D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                    compactRetained, &compactOrdinal) &&
+              !genericRetained && !compactRetained && genericPromotion &&
+              genericOrdinal == 0u && compactOrdinal == 0u &&
+              directGeneric.wireCount == 1u && directCompact.wireCount == 1u &&
+              directGeneric.wireOrdinals[0] == 0u &&
+              directCompact.wireOrdinals[0] == 0u &&
+              sameActive(directGeneric, directCompact),
+          "compact always-wire insertion preserves direct-to-wire promotion");
+  }
+
+  {
+    Witness genericCapacity{};
+    Witness compactCapacity{};
+    std::array<D9CSurface, 5u> surfaces{};
+    for (std::size_t i = 0u; i < 4u; ++i) {
+      const auto ref = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+          &surfaces[i], static_cast<std::uint32_t>(0x600u + i), 1u);
+      bool genericRetained = false;
+      bool genericPromotion = false;
+      bool compactRetained = false;
+      std::size_t genericOrdinal = 0u;
+      std::size_t compactOrdinal = 0u;
+      check(genericCapacity.add(ref, D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                                genericRetained, genericPromotion,
+                                &genericOrdinal) &&
+                compactCapacity.addWire(ref, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                        compactRetained, &compactOrdinal) &&
+                genericRetained && compactRetained && genericPromotion &&
+                genericOrdinal == i && compactOrdinal == i &&
+                sameActive(genericCapacity, compactCapacity),
+            "always-wire insertion fills matching bounded prefixes");
+    }
+    const auto overflow = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+        &surfaces[4], 0x604u, 1u);
+    bool genericRetained = true;
+    bool genericPromotion = true;
+    bool compactRetained = true;
+    constexpr std::size_t kSentinel = 0x5au;
+    std::size_t genericOrdinal = kSentinel;
+    std::size_t compactOrdinal = kSentinel;
+    check(!genericCapacity.add(overflow, D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                               genericRetained, genericPromotion,
+                               &genericOrdinal) &&
+              !compactCapacity.addWire(overflow,
+                                       D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                       compactRetained, &compactOrdinal) &&
+              !genericRetained && !compactRetained && !genericPromotion &&
+              genericOrdinal == kSentinel && compactOrdinal == kSentinel &&
+              sameActive(genericCapacity, compactCapacity),
+          "always-wire insertion fails closed at identity and wire capacity");
+  }
+
+  using WideWitness = PeSemanticPreparedIdentityWitnessT<80u>;
+  WideWitness genericWireCapacity{};
+  WideWitness compactWireCapacity{};
+  const auto sameWideActive = [](const WideWitness& left,
+                                 const WideWitness& right) noexcept {
+    if (left.count != right.count || left.wireCount != right.wireCount)
+      return false;
+    for (std::size_t i = 0u; i < left.count; ++i) {
+      const auto& a = left.entries[i];
+      const auto& b = right.entries[i];
+      if (a.identity.kind != b.identity.kind ||
+          a.identity.generation != b.identity.generation ||
+          a.identity.objectId != b.identity.objectId || a.object != b.object ||
+          a.pin != b.pin || a.wireIndex != b.wireIndex)
+        return false;
+    }
+    for (std::size_t i = 0u; i < left.wireCount; ++i) {
+      if (left.wireOrdinals[i] != right.wireOrdinals[i]) return false;
+    }
+    return true;
+  };
+  std::array<D9CSurface, 66u> wireCapacitySurfaces{};
+  for (std::size_t i = 0u; i < 64u; ++i) {
+    const auto ref = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+        &wireCapacitySurfaces[i], static_cast<std::uint32_t>(0x700u + i), 1u);
+    bool genericNew = false;
+    bool genericPromotion = false;
+    bool compactNew = false;
+    std::size_t genericIndex = 0u;
+    std::size_t compactIndex = 0u;
+    check(genericWireCapacity.add(ref, D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                                  genericNew, genericPromotion, &genericIndex) &&
+              compactWireCapacity.addWire(ref, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                          compactNew, &compactIndex) &&
+              genericNew && compactNew && genericPromotion &&
+              genericIndex == i && compactIndex == i,
+          "wire-capacity fixture fills both active wire prefixes");
+  }
+  const auto directOnly = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &wireCapacitySurfaces[64], 0x740u, 1u);
+  bool genericNew = false;
+  bool genericPromotion = false;
+  bool compactNew = false;
+  bool compactPromotion = false;
+  constexpr std::size_t kWideSentinel = 0x5au;
+  std::size_t genericIndex = 0u;
+  std::size_t compactIndex = 0u;
+  check(genericWireCapacity.add(directOnly, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                false, genericNew, genericPromotion,
+                                &genericIndex) &&
+            compactWireCapacity.add(directOnly,
+                                    D9C_CHUNK_HANDLE_KIND_SURFACE, false,
+                                    compactNew, compactPromotion,
+                                    &compactIndex) &&
+            genericNew && compactNew && !genericPromotion &&
+            !compactPromotion && genericIndex == 64u && compactIndex == 64u &&
+            genericWireCapacity.count == 65u &&
+            genericWireCapacity.wireCount == 64u &&
+            compactWireCapacity.count == 65u &&
+            compactWireCapacity.wireCount == 64u,
+        "direct-only identity remains insertable when wire capacity is full");
+  genericNew = true;
+  genericPromotion = true;
+  compactNew = true;
+  genericIndex = kWideSentinel;
+  compactIndex = kWideSentinel;
+  check(!genericWireCapacity.add(directOnly,
+                                 D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                                 genericNew, genericPromotion, &genericIndex) &&
+            !compactWireCapacity.addWire(directOnly,
+                                         D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                         compactNew, &compactIndex) &&
+            !genericNew && !compactNew && !genericPromotion &&
+            genericIndex == kWideSentinel && compactIndex == kWideSentinel &&
+            genericWireCapacity.count == 65u &&
+            genericWireCapacity.wireCount == 64u &&
+            compactWireCapacity.count == 65u &&
+            compactWireCapacity.wireCount == 64u &&
+            sameWideActive(genericWireCapacity, compactWireCapacity),
+        "always-wire insertion rejects direct-only promotion at wire capacity");
+  const auto directOnlyRetry = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+      &wireCapacitySurfaces[65], 0x741u, 1u);
+  genericNew = true;
+  genericPromotion = true;
+  compactNew = true;
+  genericIndex = kWideSentinel;
+  compactIndex = kWideSentinel;
+  check(!genericWireCapacity.add(directOnlyRetry,
+                                 D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                                 genericNew, genericPromotion, &genericIndex) &&
+            !compactWireCapacity.addWire(directOnlyRetry,
+                                         D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                         compactNew, &compactIndex) &&
+            !genericNew && !compactNew && !genericPromotion &&
+            genericIndex == kWideSentinel && compactIndex == kWideSentinel &&
+            genericWireCapacity.count == 65u &&
+            genericWireCapacity.wireCount == 64u &&
+            sameWideActive(genericWireCapacity, compactWireCapacity),
+        "new wire identity fails before insertion when only wire capacity is full");
+  genericNew = true;
+  genericPromotion = true;
+  compactNew = true;
+  compactPromotion = true;
+  genericIndex = kWideSentinel;
+  compactIndex = kWideSentinel;
+  check(genericWireCapacity.add(directOnlyRetry,
+                                D9C_CHUNK_HANDLE_KIND_SURFACE, false,
+                                genericNew, genericPromotion, &genericIndex) &&
+            compactWireCapacity.add(directOnlyRetry,
+                                    D9C_CHUNK_HANDLE_KIND_SURFACE, false,
+                                    compactNew, compactPromotion,
+                                    &compactIndex) &&
+            genericNew && compactNew && !genericPromotion &&
+            !compactPromotion && genericIndex == 65u && compactIndex == 65u &&
+            genericWireCapacity.count == 66u &&
+            genericWireCapacity.wireCount == 64u &&
+            compactWireCapacity.count == 66u &&
+            compactWireCapacity.wireCount == 64u &&
+            sameWideActive(genericWireCapacity, compactWireCapacity),
+        "direct-only insertion still succeeds after wire-capacity failure");
+}
+
 void admissionArithmeticRejectsOverflow() {
   std::size_t result = 0u;
   check(!detail::checkedSizeAdd(std::numeric_limits<std::size_t>::max(), 1u,
@@ -8677,6 +8984,7 @@ int main(int argc, char** argv) {
     identitySetUsesAnActiveFrontier();
     preparedWireWitnessTracksFirstWirePromotion();
     preparedIdentityWitnessUsesBoundedActivePrefixes();
+    compactAlwaysWireIdentityInsertionMatchesActiveReference();
     admissionArithmeticRejectsOverflow();
     preparedLayoutCoversEverySparseAndVariableSection();
     preparedSparseQuotaUsesOnlyActiveSectionInventory();

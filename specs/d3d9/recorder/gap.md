@@ -13,6 +13,15 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H295](../../../docs/perfomance/present-pacing/present-pacing-pe-compact-identity-insertion.295.md)
+implements R-CORE-REC-7.67 compact always-wire insertion through the shared
+identity transition, omitting the unused promotion result. Bounded native
+outcome/active-prefix/failure checks, both-width linked bodies, existing TLA
+regression and actual PE pixel parity pass. Four-repeat public-COM draw costs
+overlap; 05/06 GT2 spots are 30.136/18.205 FPS. Four final 06 frames lack the
+full health snapshot. No CPU/FPS gain or performance-neutrality proof follows;
+dummy outlined-helper ABI arguments and whole-parent economics remain open.
+
 [H294](../../../docs/perfomance/present-pacing/present-pacing-pe-public-com-parent.294.md)
 partially closes R-CORE-REC-7.66's loaded production-parent evidence gap with
 actual public COM setter/draw windows, not a matched-header owner surrogate.

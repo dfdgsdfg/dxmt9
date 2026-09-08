@@ -1279,3 +1279,16 @@ A separately compiled matched-header append is a surrogate, not the loaded
 production parent. Public-entry measurements must use the actual PE COM
 surface and qualify their setup, source cadence and completion boundaries;
 provider C calls that bypass the PE recorder do not substitute for this gate.
+
+**R-CORE-REC-7.67** Compact admission may specialize identity insertion for
+always-wire-visible inputs and omit an unused wire-promotion result. It must
+preserve the general insertion operation's success/failure result, retained
+identity result, output-ordinal behavior and active identity/wire prefixes.
+Null refs, duplicate refs, direct-to-wire promotion, kind/generation/pointer
+conflicts and identity/wire capacity failure must retain their existing order
+and effects. Generic admission must keep its direct-only and wire-promotion
+reporting behavior. Both entries must share the same identity transition;
+specialization must not create a second identity or retention authority.
+Bounded native transition differentials and linked PE32/PE64 call-site checks
+must precede actual-PE parent-cost qualification; removing an unused result
+alone does not establish CPU or FPS improvement.

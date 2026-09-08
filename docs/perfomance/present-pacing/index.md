@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H295](present-pacing-pe-compact-identity-insertion.295.md) removes compact
+identity insertion's unused wire-promotion output. Native/TLA and both-width
+PE pixels pass; four-repeat public-COM costs overlap. Clean GT2 spots are
+30.136/18.205 FPS, with four unreported full-health tail frames in 06.
+The local change stays; CPU/FPS savings and performance neutrality are unproven.
+
 [H294](present-pacing-pe-public-com-parent.294.md) adds actual loaded public
 COM draw-parent economics. Eight logging-OFF processes and four boundary traces
 pass, but costs are mixed; H293's surrogate percentages are not production

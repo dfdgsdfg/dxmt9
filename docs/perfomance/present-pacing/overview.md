@@ -30,6 +30,15 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H295](present-pacing-pe-compact-identity-insertion.295.md) retains a compact
+always-wire identity specialization sharing the generic transition. The actual
+PE32/PE64 helper drops unused promotion stores and three branches, with no
+parent frame growth. Native/TLA and actual PE pixels pass. Four-repeat public
+COM draw costs overlap; selected 05/06 GT2 spots are 30.136/18.205 FPS, near
+README, not an attributed gain. The final four 06 frames lack the full health
+snapshot. Two focus-affected 05 attempts are explicitly excluded. Whole-parent
+CPU savings and a narrower outlined signature remain unproven.
+
 [H294](present-pacing-pe-public-com-parent.294.md) measures actual public COM
 draw/state windows against preserved H293 images. Four traces prove no timed
 recorder flush; eight logging-OFF processes pass bounded getter/FFP-pixel checks.

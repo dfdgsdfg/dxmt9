@@ -356,11 +356,14 @@ struct PeSemanticPreparedIdentityWitnessT {
     wireCount = 0u;
   }
 
-  bool add(const PeWireObjectRef& ref, std::uint32_t kind, bool wire,
-           bool& newlyRetained, bool& newlyWireVisible,
-           std::size_t* identityOrdinal = nullptr) noexcept {
+ private:
+  template <bool AlwaysWire, bool ReportWirePromotion>
+  bool addImpl(const PeWireObjectRef& ref, std::uint32_t kind, bool wire,
+               bool& newlyRetained, bool* newlyWireVisible,
+               std::size_t* identityOrdinal) noexcept {
     newlyRetained = false;
-    newlyWireVisible = false;
+    if constexpr (ReportWirePromotion) *newlyWireVisible = false;
+    const bool wireVisible = AlwaysWire || wire;
     if (!ref.object) {
       return ref.identity.kind == 0u && ref.identity.generation == 0u &&
              ref.identity.objectId == 0u;
@@ -374,18 +377,19 @@ struct PeSemanticPreparedIdentityWitnessT {
             entry.object != ref.object) {
           return false;
         }
-        if (wire && entry.wireIndex == kPeSemanticNoSlot) {
+        if (wireVisible && entry.wireIndex == kPeSemanticNoSlot) {
           if (wireCount >= wireOrdinals.size()) return false;
           wireOrdinals[wireCount] = static_cast<std::uint32_t>(i);
           entry.wireIndex = static_cast<std::uint32_t>(wireCount);
           ++wireCount;
-          newlyWireVisible = true;
+          if constexpr (ReportWirePromotion) *newlyWireVisible = true;
         }
         if (identityOrdinal) *identityOrdinal = i;
         return true;
       }
     }
-    if (count >= entries.size() || (wire && wireCount >= wireOrdinals.size()))
+    if (count >= entries.size() ||
+        (wireVisible && wireCount >= wireOrdinals.size()))
       return false;
     entries[count] = {.identity = ref.identity,
                       .object = ref.object,
@@ -393,15 +397,30 @@ struct PeSemanticPreparedIdentityWitnessT {
                       .wireIndex = kPeSemanticNoSlot};
     const auto ordinal = count;
     if (identityOrdinal) *identityOrdinal = ordinal;
-    if (wire) {
+    if (wireVisible) {
       wireOrdinals[wireCount] = static_cast<std::uint32_t>(ordinal);
       entries[ordinal].wireIndex = static_cast<std::uint32_t>(wireCount);
       ++wireCount;
-      newlyWireVisible = true;
+      if constexpr (ReportWirePromotion) *newlyWireVisible = true;
     }
     ++count;
     newlyRetained = true;
     return true;
+  }
+
+ public:
+  bool add(const PeWireObjectRef& ref, std::uint32_t kind, bool wire,
+           bool& newlyRetained, bool& newlyWireVisible,
+           std::size_t* identityOrdinal = nullptr) noexcept {
+    return addImpl<false, true>(ref, kind, wire, newlyRetained,
+                                &newlyWireVisible, identityOrdinal);
+  }
+
+  bool addWire(const PeWireObjectRef& ref, std::uint32_t kind,
+               bool& newlyRetained,
+               std::size_t* identityOrdinal = nullptr) noexcept {
+    return addImpl<true, false>(ref, kind, true, newlyRetained, nullptr,
+                                identityOrdinal);
   }
 
   bool setPin(std::size_t identityOrdinal, std::uint32_t pin) noexcept {
@@ -2509,10 +2528,9 @@ class PeSemanticBatchOwner final {
                             PeSemanticBindingLocator& locator,
                             std::size_t occurrence) noexcept {
       bool newlyRetained = false;
-      bool newlyWireVisible = false;
       std::size_t mappingOrdinal = 0u;
-      if (!identities.add(ref, kind, true, newlyRetained, newlyWireVisible,
-                          &mappingOrdinal)) return false;
+      if (!identities.addWire(ref, kind, newlyRetained, &mappingOrdinal))
+        return false;
       if (newlyRetained) {
         if constexpr (std::is_same_v<AdmissionPlanT, PeSemanticAdmissionPlan>) {
           // Inspection only. Production is bounded by the identity witness

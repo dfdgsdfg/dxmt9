@@ -791,6 +791,17 @@ do not establish an additive decomposition of the draw path. QPC elapsed,
 supported Wine-reported CPU clocks and their resolution/availability must be
 reported separately; none alone proves exclusive PE CPU or whole-game FPS.
 
+R-CORE-REC-7.67 permits a compact identity-insertion entry with wire visibility
+fixed at compile time. It shares the general witness transition, but does not
+materialize the wire-promotion output unused by compact preparation. The
+identity/wire ordinal arrays, counts, physical-pin lookup and later source
+qualification remain unchanged. Native traces compare active fields rather
+than uninitialized inactive storage, including failure outputs and a previously
+direct-only identity promoted to wire visibility. This is a bounded local
+representation refinement, not a new resource-lifetime or concurrency protocol;
+existing recorder models retain publication/rollback ownership. Actual PE
+parent economics and pixel checks remain distinct integration gates.
+
 R-CORE-REC-7.64 permits a compact-only fusion of canonical binding rows and
 their first-use wire-handle entries. The private writer consumes the existing
 identity witness; a call-local emitted-prefix cursor distinguishes first use
