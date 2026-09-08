@@ -7,6 +7,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -1470,6 +1471,222 @@ void testFixedConstLiveApplyCountThree() {
   };
   runSequence(1u, "count-three middle A-A-B-A");
   runSequence(2u, "count-three last A-A-B-A");
+}
+
+#if defined(__unix__) || defined(__APPLE__)
+void testFixedConstLiveApplyCountThreeSourceGuardPages() {
+  constexpr std::size_t kElemSize = 16u;
+  constexpr std::uint32_t kStart = 1u;
+  constexpr std::uint32_t kCount = 3u;
+  constexpr std::uint32_t kExtent = 6u;
+  constexpr std::size_t kPayloadBytes = kCount * kElemSize;
+  const auto patterns = fixedConstElemRawPatterns<kElemSize>();
+  const auto pageSize = sysconf(_SC_PAGESIZE);
+  check(pageSize > 0 && static_cast<std::size_t>(pageSize) >= kPayloadBytes,
+        "count-three source guard page size is valid");
+#ifdef MAP_ANONYMOUS
+  constexpr int kAnonymous = MAP_ANONYMOUS;
+#else
+  constexpr int kAnonymous = MAP_ANON;
+#endif
+  const auto pageBytes = static_cast<std::size_t>(pageSize);
+  const auto regionBytes = pageBytes * 3u;
+  struct MappedRegion {
+    void* address;
+    std::size_t size;
+    ~MappedRegion() {
+      if (address != MAP_FAILED) munmap(address, size);
+    }
+  };
+  const auto sourceRegion = MappedRegion{
+      mmap(nullptr, regionBytes, PROT_NONE,
+           MAP_PRIVATE | kAnonymous, -1, 0),
+      regionBytes};
+  check(sourceRegion.address != MAP_FAILED,
+        "count-three source guard-page reservation succeeds");
+  auto* sourceMiddle = static_cast<std::uint8_t*>(sourceRegion.address) +
+                       pageBytes;
+
+  std::array<std::uint8_t, kPayloadBytes> payload{};
+  const auto copyPattern = [&](std::uint8_t* destination,
+                               std::size_t pattern) {
+    std::memcpy(destination, patterns[pattern].data(), kElemSize);
+  };
+  const auto makePayload = [&](std::uint32_t changedMask) {
+    for (std::uint32_t element = 0u; element < kCount; ++element) {
+      // Every selected register receives a distinct raw word pattern; the
+      // unselected registers retain the seeded baseline words.
+      copyPattern(payload.data() + element * kElemSize,
+                  (changedMask & (1u << element)) != 0u ? element + 1u : 0u);
+    }
+  };
+  const auto seed = [&](ConstShadow& shadow) {
+    shadow.reset();
+    shadow.reserveCapacity(kExtent * kElemSize, kExtent);
+    shadow.values.resize(kExtent * kElemSize);
+    shadow.dirtyElems.resize(kExtent);
+    for (std::uint32_t reg = 0u; reg < kExtent; ++reg) {
+      const auto pattern = reg >= kStart && reg < kStart + kCount
+          ? 0u
+          : reg % 4u;
+      copyPattern(shadow.values.data() + reg * kElemSize, pattern);
+    }
+  };
+
+  std::size_t guardChecks = 0u;
+  for (const auto sourceOffset :
+       std::array<std::size_t, 2u>{0u, pageBytes - kPayloadBytes}) {
+    for (std::uint32_t changedMask = 0u; changedMask < (1u << kCount);
+         ++changedMask) {
+      makePayload(changedMask);
+      check(mprotect(sourceMiddle, pageBytes,
+                     PROT_READ | PROT_WRITE) == 0,
+            "count-three source guard page opens for setup");
+      auto* source = sourceMiddle + sourceOffset;
+      std::memcpy(source, payload.data(), payload.size());
+      check(mprotect(sourceMiddle, pageBytes, PROT_READ) == 0,
+            "count-three source guard page protects exact payload");
+
+      ConstShadow expected;
+      ConstShadow actual;
+      seed(expected);
+      seed(actual);
+      const auto sourceBefore = payload;
+      const auto oldResult = oldConstTransition(
+          expected, dxmt9::d3d9::pe::RecorderPhase::Live, true, kStart,
+          kCount, source, kElemSize);
+      applyConstShadowLiveFixedWidth<16u>(
+          actual, kStart, kCount, source);
+      check(oldResult.valid,
+            "count-three source guard reference transition is valid");
+      checkConstShadowEquivalent(expected, actual,
+                                 "count-three source guard differential");
+      check(std::memcmp(source, sourceBefore.data(), kPayloadBytes) == 0,
+            "count-three source guard input remains immutable");
+      ++guardChecks;
+    }
+  }
+  check(guardChecks == 2u * (1u << kCount),
+        "count-three source guard matrix count is exact");
+}
+#else
+void testFixedConstLiveApplyCountThreeSourceGuardPages() {}
+#endif
+
+void testFixedConstLiveApplyCountThreeClearedSequences() {
+  constexpr std::size_t kElemSize = 16u;
+  constexpr std::uint32_t kStart = 1u;
+  constexpr std::uint32_t kCount = 3u;
+  constexpr std::uint32_t kExtent = 6u;
+  constexpr std::uint32_t kPriorDirtyMask = (1u << 0u) | (1u << 5u);
+  const auto patterns = fixedConstElemRawPatterns<kElemSize>();
+  std::array<std::uint8_t, kCount * kElemSize> payload{};
+  const auto copyPattern = [&](std::uint8_t* destination,
+                               std::size_t pattern) {
+    std::memcpy(destination, patterns[pattern].data(), kElemSize);
+  };
+  const auto makePayload = [&](std::uint32_t changedMask) {
+    for (std::uint32_t element = 0u; element < kCount; ++element) {
+      copyPattern(payload.data() + element * kElemSize,
+                  (changedMask & (1u << element)) != 0u ? element + 1u : 0u);
+    }
+  };
+  const auto seed = [&](ConstShadow& shadow) {
+    shadow.reset();
+    shadow.reserveCapacity(kExtent * kElemSize, kExtent);
+    shadow.values.resize(kExtent * kElemSize);
+    shadow.dirtyElems.resize(kExtent);
+    for (std::uint32_t reg = 0u; reg < kExtent; ++reg) {
+      const auto pattern = reg >= kStart && reg < kStart + kCount
+          ? 0u
+          : reg % 4u;
+      copyPattern(shadow.values.data() + reg * kElemSize, pattern);
+      shadow.dirtyElems[reg] =
+          (kPriorDirtyMask & (1u << reg)) != 0u ? std::uint8_t{1u}
+                                                : std::uint8_t{0u};
+    }
+    shadow.dirtyStart = 0u;
+    shadow.dirtyEnd = kExtent;
+  };
+  const auto checkOutside = [&](const ConstShadow& expected,
+                                const ConstShadow& actual,
+                                std::string_view label) {
+    for (const auto reg : std::array<std::uint32_t, 3u>{0u, 4u, 5u}) {
+      check(std::memcmp(actual.values.data() + reg * kElemSize,
+                        patterns[reg % 4u].data(), kElemSize) == 0,
+            std::string(label) + ": prior outside value changed");
+      check(std::memcmp(expected.values.data() + reg * kElemSize,
+                        actual.values.data() + reg * kElemSize,
+                        kElemSize) == 0,
+            std::string(label) + ": outside value changed");
+      check(expected.dirtyElems[reg] == actual.dirtyElems[reg],
+            std::string(label) + ": outside dirty obligation changed");
+    }
+  };
+  const auto apply = [&](ConstShadow& expected, ConstShadow& actual,
+                         std::string_view label) {
+    const auto sourceBefore = payload;
+    const auto oldResult = oldConstTransition(
+        expected, dxmt9::d3d9::pe::RecorderPhase::Live, true, kStart,
+        kCount, payload.data(), kElemSize);
+    applyConstShadowLiveFixedWidth<16u>(
+        actual, kStart, kCount, payload.data());
+    check(oldResult.valid, std::string(label) + ": reference is valid");
+    checkConstShadowEquivalent(expected, actual, label);
+    checkOutside(expected, actual, label);
+    check(payload == sourceBefore,
+          std::string(label) + ": input remains immutable");
+  };
+
+  std::size_t sequenceChecks = 0u;
+  for (std::uint32_t changedMask = 1u; changedMask < (1u << kCount);
+       ++changedMask) {
+    ConstShadow expected;
+    ConstShadow actual;
+    seed(expected);
+    seed(actual);
+
+    makePayload(0u);
+    apply(expected, actual, "count-three clear sequence A");
+    expected.clear();
+    actual.clear();
+    makePayload(0u);
+    apply(expected, actual, "count-three clear sequence clear-A");
+    check(!expected.dirty() && !actual.dirty(),
+          "count-three clear-A remains clean");
+
+    makePayload(changedMask);
+    apply(expected, actual, "count-three clear sequence B");
+    check(expected.dirtyStart == kStart +
+                                  std::countr_zero(changedMask) &&
+              expected.dirtyEnd ==
+                  kStart + 1u + (31u - std::countl_zero(changedMask)),
+          "count-three B dirty extent is the exact changed subset");
+    for (std::uint32_t element = 0u; element < kCount; ++element) {
+      check(expected.dirtyElems[kStart + element] ==
+                ((changedMask & (1u << element)) != 0u),
+            "count-three B dirty elements are the exact changed subset");
+    }
+    ++sequenceChecks;
+
+    expected.clear();
+    actual.clear();
+    makePayload(0u);
+    apply(expected, actual, "count-three clear sequence clear-A restore");
+    check(expected.dirtyStart == kStart +
+                                  std::countr_zero(changedMask) &&
+              expected.dirtyEnd ==
+                  kStart + 1u + (31u - std::countl_zero(changedMask)),
+          "count-three restore dirty extent is the exact changed subset");
+    for (std::uint32_t element = 0u; element < kCount; ++element) {
+      check(expected.dirtyElems[kStart + element] ==
+                ((changedMask & (1u << element)) != 0u),
+            "count-three restore dirty elements are the exact changed subset");
+    }
+    ++sequenceChecks;
+  }
+  check(sequenceChecks == 2u * ((1u << kCount) - 1u),
+        "count-three clear sequence matrix count is exact");
 }
 
 template <std::size_t ElemSize>
@@ -3931,6 +4148,8 @@ int main() {
     testFixedConstElemCompareCopyGuardPages<4u>();
     testFixedConstElemCompareCopyGuardPages<16u>();
     testFixedConstLiveApplyCountThree();
+    testFixedConstLiveApplyCountThreeSourceGuardPages();
+    testFixedConstLiveApplyCountThreeClearedSequences();
     testFixedConstLiveApplyObservation<4u>();
     testFixedConstLiveApplyObservation<16u>();
     testFixedConstLiveApplyDifferential<4u>();

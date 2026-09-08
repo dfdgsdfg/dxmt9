@@ -288,8 +288,17 @@ candidate. Production-bound native differentials and actual PE32/PE64
 baseline/candidate pixels pass. Eight fresh GT2 runs show small process-CPU
 trends but no robustly attributed benefit against added mismatch/fallback
 work. H278 runtime is restored; additive native/PE pins and the short-range
-acceptance contract remain. Controlled actual-PE setter economy, whole-scene
-rendering and repeatable performance evidence remain open.
+acceptance contract remain. [H280](../../../docs/perfomance/present-pacing/present-pacing-pe-constant-economy.280.md)
+subsequently implements controlled actual-PE setter economy and prices the
+equal/changed trade-off using explicitly process-scoped CPU. Whole-scene
+rendering and repeatable whole-workload savings remain open.
+[H281](../../../docs/perfomance/present-pacing/present-pacing-pe-three-register-single-pass.281.md)
+tests then withdraws a one-pass fixed-count replacement. Additive protected
+source and dirty-settlement refinement, PE32/PE64 codegen, 528 actual-PE
+economy cells, 192 matching pixel samples and four GT2 spots are available.
+Changed-count-three savings coexist with non-three float/int regressions and
+larger PE64 stack state; single-pair FPS/CPU trends do not close the net-economy
+gate. Original runtime and stronger additive tests are retained.
 
 R-CORE-REC-7.52–7.55 cover fault-only prediction gating, family-specific append
 preparation, single-owner compact layout/quota work and production ledger

@@ -1074,6 +1074,17 @@ outside-range dirty state, all change masks and exact self-alias; actual
 PE/GPU fixtures must exercise the selected length. Inspect both PE widths for
 new calls/spills and measure observer-OFF CPU/FPS before retaining a shortcut.
 
+A fixed-count body may instead compare and conditionally update each register
+once, with compile-time ordinals and the same first/last-changed range merge.
+It must not introduce a whole-range precomparison followed by a second generic
+walk on mismatch. Keep comparison results and payload borrows call-local;
+no persistent equality state or wider read is authorized. Protected-source
+tests must cover the complete selected range at both page edges, and native
+traces must cover dirty settlement between A/A and A/B/A writes as well as
+already-dirty writes. Price equal, changed and companion lengths independently;
+unrolling that adds stack traffic in either PE width is not presumed an
+improvement.
+
 Controlled actual-PE public-setter economy follows R-BENCH-6.1–6.4 in
 `specs/benchmarks/requirements.md`. It separates equal and changed call costs
 at known lengths without placing clocks in the production setter. Warm

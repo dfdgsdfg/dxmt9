@@ -30,14 +30,23 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H281](present-pacing-pe-three-register-single-pass.281.md) removes the mismatch
+rescan in a measured one-pass candidate. Eight actual-PE processes pass 528
+cells and PE32/PE64 pixels match 192 baseline samples. Count-three changed
+VS-F saves 1.0–2.5 ns on PE32, but count-one equal float/int costs 0.5–0.9 ns
+more; PE64 also regresses companion lengths and adds stack state. Single-pair
+05/06 spots show +1.31%/+0.55% FPS and -0.80%/-0.41% process CPU/frame,
+not robust attribution or an all-family net-economy proof. Runtime is withdrawn;
+additive source-boundary/dirty-settlement pins remain. README is unchanged.
+
 [H280](present-pacing-pe-constant-economy.280.md) closes the bounded actual-PE
 setter-economy harness gap. Eight matched-image processes pass 528 cells.
 Count-three VS-F equal calls save 1.4 ns in both PE widths, while changed calls
 cost 1.0–2.1 ns more on PE32 and 1.6–1.7 ns more on PE64. Wine's current-thread
 timing fallback is process-scoped; the final harness uses explicit process CPU
-and never claims PE/thread exclusivity. The runtime remains unchanged. Reusing
-comparison results without a second generic walk is the next bounded candidate,
-not a demonstrated whole-frame saving or README recovery.
+and never claims PE/thread exclusivity. The runtime remains unchanged. H281
+subsequently tests a one-pass replacement; it is not a demonstrated whole-frame
+saving or README recovery.
 
 [H279](present-pacing-pe-three-register-equality.279.md) tests then withdraws
 a bounded three-register equality shortcut. Native dirty/byte refinement and

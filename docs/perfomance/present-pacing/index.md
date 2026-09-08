@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H281](present-pacing-pe-three-register-single-pass.281.md) prices a one-pass
+three-register update: changed calls improve, but non-three float/int calls
+regress. Native and PE pixels pass; favorable single-pair GT2 spots do not
+establish net economy. Runtime is withdrawn; stronger boundary/dirty pins remain.
+
 [H280](present-pacing-pe-constant-economy.280.md) adds a qualified actual-PE
 setter economy harness. Eight PE32/PE64 processes price H279's equal-path
 saving and changed-path tax. An audited Wine thread-time/process-time fallback
