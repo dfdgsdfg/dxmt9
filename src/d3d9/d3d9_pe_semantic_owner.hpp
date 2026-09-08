@@ -2416,12 +2416,13 @@ class PeSemanticBatchOwner final {
   }
 
  private:
-  // A call-local authority for the destination-relative facts proven by
-  // prepareAdmission().  The type and constructor stay private, so producers
-  // can provide inputs but cannot mint an unchecked append authority.  The
-  // witness pointer binds its logical quota deltas and original frontiers;
-  // the owner pointer binds the destination. Neither is copied into a second
-  // authority table. The token never escapes this synchronous append.
+  // A call-local authority for the source and destination facts proven by the
+  // append-owned preparation pass. The type and constructor stay private, so
+  // producers can provide inputs but cannot mint an unchecked append
+  // authority. The witness pointer binds its logical quota deltas and
+  // original frontiers, the source pointer binds that exact input, and the
+  // owner pointer binds the destination. None is copied into a second
+  // authority table; the token never escapes this synchronous append.
   class PreparedAppendAuthority {
    public:
     PreparedAppendAuthority(const PreparedAppendAuthority&) = delete;
@@ -2850,12 +2851,12 @@ class PeSemanticBatchOwner final {
         rollbackPhase(checkpoint);
         return false;
       }
-      // Issue the destination-bound authority only after source/header
-      // requalification.  All prepared consumers below use this one proof;
-      // no public operation accepts the private token, and the token never
-      // crosses the settlement callback.
-      // validAdmissionHeader() has just performed the fresh source proof;
-      // compact staging has no retain/callback frontier before its claims.
+      // Issue the destination-bound authority only after the append-owned
+      // source proof and envelope validation. Compact staging has no
+      // retain/callback frontier, so no source mutation can intervene before
+      // writer entry; writeSparsePlanPayload() still performs fresh source
+      // qualification before reading payloads. No public operation accepts
+      // this token, and it never crosses the settlement callback.
       const PreparedAppendAuthority authority(&prepared, *this, input);
       using Staging = std::conditional_t<
           PeSemanticConstantInputLike<Input>,
@@ -5510,9 +5511,7 @@ class PeSemanticBatchOwner final {
   bool validAdmissionHeader(
       const PeSemanticSparsePlanRecordInput& input,
       const auto& prepared) const noexcept {
-    const auto* source = input.qualifiedSource();
-    return source != nullptr && !source->fullSnapshot &&
-           isPeSemanticSparseProducer(input.producer) &&
+    return isPeSemanticSparseProducer(input.producer) &&
            validAdmissionEnvelope(
                input.producer, input.recordType, input.recordFlags,
                input.sourceOrdinal, input.recordOrdinal, prepared.rule,

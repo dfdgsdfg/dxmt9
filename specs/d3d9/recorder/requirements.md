@@ -1243,3 +1243,15 @@ duplicate/null/first-use order, late retain/source failures, settlement rejectio
 and both emission forms.
 Actual PE32/PE64 writer and append economics must price the added per-occurrence
 work and live state as well as the removed pass before performance promotion.
+
+**R-CORE-REC-7.65** Compact private append may reuse the source qualification
+from its own successful preparation until the header check, provided no
+source-mutating or externally supplied callback intervenes. A public inspection
+witness must not authorize append. The header check must still reject illegal
+producer/type/flag combinations and zero or nonmonotonic source/record ordinals;
+destination frontier checks remain mandatory. Writer entry must freshly qualify
+the source before reading payloads, and retain-time identity checks and atomic
+rollback must remain intact. Native public-append counterexamples must distinguish
+source rejection from envelope rejection, preserve committed prefixes and refs,
+and prove clean retry in observed and unobserved paths. Linked PE code and actual
+PE append measurements must qualify any claimed cost reduction.

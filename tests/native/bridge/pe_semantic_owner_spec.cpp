@@ -7580,6 +7580,148 @@ void compactAdmissionRejectsStaleSourceBeforeSettlement() {
         "compact stale source rejects before settlement or owner mutation");
 }
 
+// The compact header still owns the append envelope even though its source
+// proof comes from the same callback-free preparation pass. Exercise the
+// public owned-record entry in both observer modes, preserving a committed
+// prefix and proving that every rejected envelope retries to the same
+// ExactFixed/segmented result.
+void compactPublicEnvelopeRejectsAndRetries() {
+  enum class Mutation : std::uint8_t {
+    ZeroSource,
+    ZeroRecord,
+    NonMonotonicSource,
+    NonMonotonicRecord,
+    IllegalFlags,
+    ProducerMismatch,
+    RecordTypeMismatch,
+  };
+  constexpr std::array mutations{
+      Mutation::ZeroSource, Mutation::ZeroRecord,
+      Mutation::NonMonotonicSource, Mutation::NonMonotonicRecord,
+      Mutation::IllegalFlags, Mutation::ProducerMismatch,
+      Mutation::RecordTypeMismatch};
+
+  for (const bool observed : {false, true}) {
+    for (const auto mutation : mutations) {
+      PeHotStateShadow shadow{};
+      PeConstShadowBlock constants{};
+      PeBindingView bindings{};
+      PeDrawPayloads payloads{};
+      PeDrawParams params{.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                          .primitiveType = 4u, .primitiveCount = 1u};
+      PeChunkContext chunk{};
+      SparseStatePlan plan;
+      Owner owner;
+      PeSemanticOwnerPhaseObserver observer(1u);
+      if (observed) owner.setPhaseObserver(&observer);
+
+      D9CSurface prefixSurface;
+      auto prefix = base(PeSemanticProducerKind::Present, 1u, 1u);
+      prefix.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+          &prefixSurface, 0xd651u);
+      check(owner.tryAppendOwnedRecord(prefix,
+                                       []() noexcept { return true; }),
+            "compact envelope fixture commits its prefix");
+      PeSemanticExactFixedEmission prefixEmission{};
+      check(owner.emitExactFixed(prefixEmission),
+            "compact envelope fixture captures its prefix");
+      const std::vector<std::byte> prefixBytes(prefixEmission.wire.begin(),
+                                                prefixEmission.wire.end());
+
+      std::recursive_mutex mutex;
+      dxmt9::core::ThreadOwnershipToken ownerThread;
+      const std::uint64_t epoch = 0xd650u;
+      RecorderLockGuard guard(mutex, false);
+      check(guard.withCapability(ownerThread, epoch,
+                                 [&](const auto& access) noexcept {
+                                   return buildSparseStatePlan(
+                                              access, shadow, constants,
+                                              bindings, payloads, params, false,
+                                              false, plan) &&
+                                          finalizeSparseStatePlanChunkContext(
+                                              access, chunk, plan);
+                                 }),
+            "compact envelope fixture finalizes its source plan");
+
+      const PeSemanticSparsePlanRecordInput valid{
+          .access = nullptr,
+          .sparsePlan = &plan,
+          .producer = PeSemanticProducerKind::DrawPrimitive,
+          .recordType = params.recordType,
+          .recordFlags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+          .sourceOrdinal = 2u,
+          .recordOrdinal = 2u};
+      auto invalid = valid;
+      bool expectMalformed = false;
+      switch (mutation) {
+        case Mutation::ZeroSource:
+          invalid.sourceOrdinal = 0u;
+          break;
+        case Mutation::ZeroRecord:
+          invalid.recordOrdinal = 0u;
+          break;
+        case Mutation::NonMonotonicSource:
+          invalid.sourceOrdinal = 1u;
+          break;
+        case Mutation::NonMonotonicRecord:
+          invalid.recordOrdinal = 1u;
+          break;
+        case Mutation::IllegalFlags:
+          invalid.recordFlags = 1u;
+          break;
+        case Mutation::ProducerMismatch:
+          invalid.producer = PeSemanticProducerKind::DrawIndexedPrimitive;
+          break;
+        case Mutation::RecordTypeMismatch:
+          invalid.recordType = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+          expectMalformed = true;
+          break;
+      }
+
+      bool settled = false;
+      const bool rejected = guard.withCapability(
+          ownerThread, epoch, [&](const auto& access) noexcept {
+            auto attempt = invalid;
+            attempt.access = &access;
+            return !owner.tryAppendOwnedRecord(
+                attempt, [&]() noexcept {
+                  settled = true;
+                  return true;
+                });
+          });
+      const auto expectedFailure =
+          expectMalformed ? Owner::AdmissionFailure::Malformed
+                          : Owner::AdmissionFailure::Header;
+      check(rejected && !settled && owner.size() == 1u &&
+                owner.lastAdmissionFailure() == expectedFailure,
+            "compact envelope rejection is pre-effect and classified");
+      PeSemanticExactFixedEmission afterReject{};
+      check(owner.emitExactFixed(afterReject) &&
+                afterReject.wireBytes == prefixBytes.size() &&
+                std::equal(prefixBytes.begin(), prefixBytes.end(),
+                           afterReject.wire.begin()),
+            "compact envelope rejection preserves its committed prefix");
+
+      const bool retried = guard.withCapability(
+          ownerThread, epoch, [&](const auto& access) noexcept {
+            auto attempt = valid;
+            attempt.access = &access;
+            return owner.tryAppendOwnedRecord(
+                attempt, []() noexcept { return true; });
+          });
+      PeSemanticExactFixedEmission finalExact{};
+      PeSemanticSegmentedEmission finalSegmented{};
+      check(retried && owner.emitExactFixed(finalExact) &&
+                owner.emitSegmented(finalSegmented) &&
+                ownerSegmentedRolesEqualExact(finalExact, finalSegmented),
+            "compact envelope retry preserves ExactFixed and segmented bytes");
+      owner.reset();
+      check(prefixSurface.refs == 1u,
+            "compact envelope retry reset balances the prefix pin");
+    }
+  }
+}
+
 // The compact append rebase performs its transaction/pending preflight inside
 // the same lexical source qualification as destination finalization. Keep the
 // callback and retry cases here because a source getter followed by the
@@ -8436,6 +8578,7 @@ int main(int argc, char** argv) {
     compactBindingDistributionBoundedReference();
     compactLayoutDistributionBoundedShapeTable();
     compactAdmissionRejectsStaleSourceBeforeSettlement();
+    compactPublicEnvelopeRejectsAndRetries();
     compactFinalizerFusesLexicalQualification();
     realCompactSparseMaxFamilyDifferentialAndRollback(true);
     realCompactSparseMaxFamilyDifferentialAndRollback(false);

@@ -30,6 +30,13 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H290](present-pacing-pe-private-admission-proof.290.md) keeps a narrowly
+qualified duplicate source-proof removal. Seven warm matched-header append
+shapes improve by 1.26–3.42% in PE32 and 2.09–8.68% in PE64, with native/TLA
+and actual PE pixel parity. GT2 spots are 29.809/18.264 FPS (README -0.97%/+0.90%);
+these do not establish a whole-game CPU/FPS gain. The final 34 06 frames are
+outside the full eight-counter health snapshot. README remains unchanged.
+
 [H289](present-pacing-pe-wire-publication-fusion.289.md) rejects the measured
 compact first-use handle fusion. Sixteen PE32/PE64 writer/append processes
 pass their oracles, as do native/TLA and actual PE pixel comparisons. Yet

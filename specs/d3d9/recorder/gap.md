@@ -13,6 +13,16 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.65 private compact source-proof reuse is implemented.
+[H290](../../../docs/perfomance/present-pacing/present-pacing-pe-private-admission-proof.290.md)
+removes only the callback-free duplicate header qualification; envelope and
+writer-time source checks remain. Four builds, eight focused native targets,
+full TLC, actual PE32/PE64 pixel parity, and eight append-economy processes pass.
+Seven warm append shapes improve in both widths; this is matched-header PE
+QPC, not exclusive CPU or loaded production-parent cost. GT2 spots are
+29.809/18.264 FPS; 06's last 34 frames remain outside the full health snapshot.
+Repeatable whole-game CPU/FPS improvement remains open.
+
 R-CORE-REC-7.64 compact first-use publication is not implemented in production.
 [H289](../../../docs/perfomance/present-pacing/present-pacing-pe-wire-publication-fusion.289.md)
 withdraws its prototype: eight native specs, TLA regression and actual PE pixel

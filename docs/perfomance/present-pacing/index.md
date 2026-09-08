@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H290](present-pacing-pe-private-admission-proof.290.md) removes a duplicate
+private compact source qualification while keeping envelope and writer checks.
+Seven warm append shapes improve in actual PE32/PE64 fixtures; native/TLA/pixels
+pass. GT2 spots are 29.809/18.264 FPS, not a repeatable FPS-gain claim.
+
 [H289](present-pacing-pe-wire-publication-fusion.289.md) withdraws compact
 first-use handle publication. Native/TLA and PE pixels pass, but 16 bounded
 PE processes show higher binding costs, including the separate matched-header

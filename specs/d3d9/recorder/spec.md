@@ -742,6 +742,20 @@ actual append/retry tests preserve source-mutation rejection, ownership and
 canonical bytes. Inspector corruption must not cause new per-binding product
 validation for a private, construction-proved fact.
 
+R-CORE-REC-7.65 separates private preparation's source proof from the append
+envelope proof. `PeSemanticBatchOwner::tryAppendOwnedRecordUnobserved` and its
+observed counterpart construct their witness locally; preparation performs no
+retain or external callback. The intervening ledger and diagnostic bookkeeping
+must not mutate the source. The compact `validAdmissionHeader` may therefore
+reuse that source proof, but still owns producer/flags/ordinal validation.
+`PreparedAppendAuthority` binds only this private input and destination; it is
+not permission to reuse a source across callbacks. `writeSparsePlanPayload`
+retains its fresh qualification, followed by current binding/pin checks and
+the existing rollback/settlement protocol. This removes a redundant synchronous
+proof, not a lifecycle transition; bounded native negative/differential checks
+bind the refinement, while existing recorder TLA models cover the unchanged
+protocol. Actual PE pixel and economy evidence remain separate layers.
+
 R-CORE-REC-7.64 permits a compact-only fusion of canonical binding rows and
 their first-use wire-handle entries. The private writer consumes the existing
 identity witness; a call-local emitted-prefix cursor distinguishes first use
