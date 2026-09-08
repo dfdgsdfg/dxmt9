@@ -11,12 +11,13 @@ related: docs/perfomance/overview-3dmark06-gt1.md; docs/perfomance/overview-3dma
 
 # 3DMark06 GT2 Performance — Current Bottleneck
 
-The latest [H296 PE check](present-pacing/present-pacing-pe-warm-pin-identity.296.md)
-gives 18.266 scene-sampled FPS at 1280x720, versus README 18.1 (+0.92%).
-All eight reported health counters are zero, but the final 57 scene frames
+The latest [H301 PE check](present-pacing/present-pacing-pe-qualified-pin-output.301.md)
+gives 18.357 scene-sampled FPS at 1280x720, versus README 18.1 (+1.42%).
+All eight reported health counters are zero, but the final three scene frames
 lack a full health snapshot. The normal post-scene GUI timeout is recorded.
-Native/TLA and both-width PE pixels pass; mixed four-repeat public-COM costs
-do not establish CPU improvement or neutrality. This single run does not
+Native/TLA and both-width public-COM checks pass; higher raw candidate costs
+in the uncalibrated drain-heavy fixture do not establish CPU improvement or
+neutrality. This single run does not
 replace the historical bottleneck attribution below.
 
 The earlier [H257 PE check](present-pacing/present-pacing-pe-constant-copy.257.md)

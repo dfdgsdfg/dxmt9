@@ -30,6 +30,16 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H301](present-pacing-pe-qualified-pin-output.301.md) closes the unused
+qualified-pin result with five explicit arguments instead of six, preserving
+wire output timing and every identity/retain/rollback guard. Five PE64 helper
+spans shrink 528 to 496 bytes; both-width caller setup is smaller. Native/TLA
+and 162 actual PE correctness cells pass. Higher raw candidate QPC/process
+totals remain warnings in the uncalibrated drain-heavy fixture. This local
+code removal does not prove CPU savings or performance neutrality.
+Fresh 05/06 GT2 spots are 30.200/18.357 FPS, near README 30.1/18.1. Three
+final 06 frames lack the full health snapshot; no FPS promotion follows.
+
 [H300](present-pacing-pe-draw-parent-tail.300.md) splits the three tail calls:
 GetData(FLUSH) takes 97.83–98.26% of outer-tail wall in four actual PE timing
 processes, completing in one call per group. All 270 cells and 56,322 tail

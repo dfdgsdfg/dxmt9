@@ -13,6 +13,17 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H301](../../../docs/perfomance/present-pacing/present-pacing-pe-qualified-pin-output.301.md)
+removes R-CORE-REC-7.36's unused private pin output and always-nonnull pointer
+branch without relaxing identity, retain or rollback guards. Four builds,
+12 native checks, existing TLA regression and both-width actual PE checks pass.
+All five linked helpers and their direct caller contexts show reduced output
+work. The drain-heavy public-COM candidate totals are higher; same-image
+variability and background-load evidence prevent causal attribution. This is
+bounded local removal, not CPU/FPS promotion or performance neutrality.
+Fresh 05/06 GT2 spots are 30.200/18.357 FPS; three final 06 frames remain outside
+the full health snapshot. Whole-parent and exclusive CPU savings remain open.
+
 [H297](../../../docs/perfomance/present-pacing/present-pacing-pe-identity-call-abi.297.md)
 closes R-CORE-REC-7.67's unused compact private-call arguments through the
 shared transition. Generic by-value visibility, aliased outputs and omitted

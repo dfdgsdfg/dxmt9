@@ -4430,9 +4430,8 @@ class PeSemanticBatchOwner final {
               if (!makeQualifiedBinding<Object, Identity>(
                       source, locator, prepared, globalFirst, binding))
                 return false;
-              std::uint32_t pin = kPeSemanticNoSlot;
               return pinPreparedQualifiedBinding<Object, Identity>(
-                  pins, pinCount, pin, &wireIndex, binding, retain);
+                  pins, pinCount, wireIndex, binding, retain);
             };
             const auto emit = [&](Wire value,
                                   const PeWireObjectRef& ref) noexcept {
@@ -5749,10 +5748,9 @@ class PeSemanticBatchOwner final {
 
   template <typename Object, typename Identity, typename PinArray, typename Retain>
   bool pinPreparedQualifiedBinding(
-      PinArray& pins, std::size_t& count, std::uint32_t& out,
-      std::uint32_t* wireIndex,
+      PinArray& pins, std::size_t& count, std::uint32_t& wireIndex,
       const QualifiedBinding<Object, Identity>& binding, Retain retain) noexcept {
-    if (wireIndex) *wireIndex = binding.wire_;
+    wireIndex = binding.wire_;
     const std::size_t index = binding.pin_;
     if (index < count) {
       if (!pins[index].valid() || pins[index].object != binding.object_ ||
@@ -5761,7 +5759,6 @@ class PeSemanticBatchOwner final {
           pins[index].identity.value.objectId != binding.identity_.objectId) {
         return false;
       }
-      out = static_cast<std::uint32_t>(index);
       return true;
     }
     // Warm hits only need the wire identity fields above. Materialize the
@@ -5780,7 +5777,6 @@ class PeSemanticBatchOwner final {
       return false;
     }
     ++count;
-    out = static_cast<std::uint32_t>(index);
     return true;
   }
 

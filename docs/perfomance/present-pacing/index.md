@@ -11,6 +11,14 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H301](present-pacing-pe-qualified-pin-output.301.md) removes the discarded
+qualified-pin output and optional-pointer branch. Linked PE32/PE64 work shrinks;
+native/TLA and public-COM correctness checks pass. Raw parent/process totals
+are higher in the uncalibrated completion-heavy fixture; reduced CPU cost and
+performance neutrality are not established.
+Fresh 05/06 GT2 spots are 30.200/18.357 FPS; the final three 06 frames lack
+full-health coverage. README is unchanged.
+
 [H300](present-pacing-pe-draw-parent-tail.300.md) attributes 97.83–98.26% of
 the fixture's tail to its single GetData(FLUSH) call, not EndScene or retry
 sleep. Internal wait/CPU attribution and calibrated small-helper economics

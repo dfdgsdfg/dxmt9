@@ -11,12 +11,13 @@ related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; 
 
 # 3DMark05 GT2 Performance — Current Baseline
 
-The latest [H296 PE check](present-pacing/present-pacing-pe-warm-pin-identity.296.md)
-gives 29.940 scene-sampled FPS at 1024x768, versus README 30.1 (-0.53%).
+The latest [H301 PE check](present-pacing/present-pacing-pe-qualified-pin-output.301.md)
+gives 30.200 scene-sampled FPS at 1024x768, versus README 30.1 (+0.33%).
 All eight recorded health counters are zero through the complete sampled
-interval. The warm-pin refinement passes bounded native/TLA, linked-code and
-both-width PE pixel checks; four-repeat public-COM timings are mixed. This
-single game run does not establish CPU/FPS improvement or neutrality. Earlier
+interval. The unused private pin-output removal passes bounded native/TLA,
+linked-code and both-width public-COM checks. Raw candidate parent/process
+costs are higher in the uncalibrated drain-heavy fixture. This single game
+run does not establish CPU/FPS improvement or neutrality. Earlier
 thread/phase attribution below belongs to its stated historical build.
 
 The earlier implementation [H254](present-pacing/present-pacing-pe-constant-bitcompare.254.md)
