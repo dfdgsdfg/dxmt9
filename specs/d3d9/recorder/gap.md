@@ -13,6 +13,17 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H284](../../../docs/perfomance/present-pacing/present-pacing-pe-layout-dynamic-economy.284.md)
+adds a sampled, bounded compact-layout distribution in the cold diagnostics
+owner; default hot metrics and complete priced-helper codegen stay unchanged.
+Native 9/9 arm64 and 4/4 x86_64, two qualified GT2 distribution runs and
+192 baseline-matched default-path PE pixels pass. Sixteen actual-DLL helper
+processes price H283 under R-CORE-REC-7.48/7.54's bounded refinement: the
+covered PE32 count-shape population saves about 9 ns/call, projecting only
+15–17 microseconds/Present. Mask/start/cache sequence, the unpriced 1% tail,
+deterministic sampling bias and in-situ whole-workload economy remain outside
+that result. No new lifecycle/TLC evidence or README recovery is claimed.
+
 [H283](../../../docs/perfomance/present-pacing/present-pacing-pe-layout-category-rebase.283.md)
 implements a single compact layout category walk plus checked active-descriptor
 rebasing under R-CORE-REC-7.48/7.54. Native layout/transaction suites (7/7

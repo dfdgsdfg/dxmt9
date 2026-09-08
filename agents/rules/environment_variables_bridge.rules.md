@@ -38,6 +38,21 @@ failed preparation/reconstruction is unmeasured, and later append failure
 does not invalidate a successfully reconstructed preparation. Do not infer
 product CPU savings from these counts or their inclusive parent timings.
 
+The same gate reports `compact_layout_distribution=sampled_prepared_before_append`:
+a 0–25 active-section histogram and at most 256 distinct 25-kind count vectors
+from the already prepared compact descriptors. This records successful
+preparation even when later append/settlement fails; it is not committed wire
+or all-family traffic. `prepared_total = complete + invalid + bounded_overflow`;
+overflow never evicts a retained shape or silently becomes an exact population.
+Header, shape rows and footer carry the same Present ordinal. Require a complete
+framed group, conserved totals and zero invalid/overflow before weighting a
+helper benchmark; difference complete interior groups to exclude startup/tail.
+Count vectors do not preserve mask positions, constant register starts or
+cache/arrival sequence. The fixed table is part of the optional diagnostics
+owner (including when allocated for another PE diagnostic), not recorder hot
+storage; the disabled path adds no clocks or descriptor scan. Inclusive parent
+timings include this observer work and must not be called product CPU time.
+
 `DXMT9_OFFLOAD_COMMIT_REPLAY` and its inline rollback are stable producer-replay
 providers. `DXMT9_CPU_READY_TAPE` is the migration alias for the stable
 default-off streaming provider. Inline-constant delta remains an experimental

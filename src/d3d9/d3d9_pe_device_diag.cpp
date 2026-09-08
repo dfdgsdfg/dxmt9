@@ -3348,6 +3348,74 @@ void D3D9DeviceImpl::logPeSemanticOwnerPhaseSplit() {
             static_cast<unsigned long long>(compact.compactDuplicateCountHistogram[2]),
             static_cast<unsigned long long>(compact.compactDuplicateCountHistogram[3]));
     }
+    const auto& compactLayout = stats.compactLayout;
+    static_assert(dxmt9::d3d9::kSectionRules.size() ==
+                  dxmt9::d3d9::pe::PeSemanticOwnerCompactLayoutMetric::
+                      kSectionKindCount);
+    static_assert([] {
+        for (std::size_t i = 0u; i < dxmt9::d3d9::kSectionRules.size(); ++i) {
+            for (std::size_t j = i + 1u;
+                 j < dxmt9::d3d9::kSectionRules.size(); ++j) {
+                if (dxmt9::d3d9::kSectionRules[i].kind ==
+                    dxmt9::d3d9::kSectionRules[j].kind)
+                    return false;
+            }
+        }
+        return true;
+    }());
+    std::string sectionKindOrder;
+    for (std::size_t i = 0u; i < dxmt9::d3d9::kSectionRules.size(); ++i) {
+        if (!sectionKindOrder.empty()) sectionKindOrder += ',';
+        sectionKindOrder += std::to_string(
+            static_cast<unsigned>(dxmt9::d3d9::kSectionRules[i].kind));
+    }
+    std::string sectionCountHistogram;
+    for (std::size_t i = 0u;
+         i < compactLayout.sectionCountHistogram.size(); ++i) {
+        if (!sectionCountHistogram.empty()) sectionCountHistogram += ',';
+        sectionCountHistogram += std::to_string(i);
+        sectionCountHistogram += ':';
+        sectionCountHistogram += std::to_string(
+            compactLayout.sectionCountHistogram[i]);
+    }
+    dxmt9DeviceInfoLog(
+        "[dxmt9-pe-semantic-owner-phase] schema=1 "
+        "compact_layout_distribution=sampled_prepared_before_append "
+        "sampling=every_%uth_admission presents=%llu kind_order=%s prepared_total=%llu "
+        "complete=%llu invalid=%llu bounded_overflow=%llu "
+        "incomplete=%u section_count_histogram=%s distinct_rows=%u",
+        stats.decimationN,
+        static_cast<unsigned long long>(diagnostics_->peStatsDecimationPresents_),
+        sectionKindOrder.c_str(),
+        static_cast<unsigned long long>(compactLayout.sampledPrepared),
+        static_cast<unsigned long long>(compactLayout.sampledComplete),
+        static_cast<unsigned long long>(compactLayout.sampledInvalid),
+        static_cast<unsigned long long>(compactLayout.sampledBoundedOverflow),
+        static_cast<unsigned>(compactLayout.sampledInvalid != 0u ||
+                             compactLayout.sampledBoundedOverflow != 0u),
+        sectionCountHistogram.c_str(), compactLayout.distinctShapeCount);
+    for (std::size_t i = 0u; i < compactLayout.distinctShapeCount; ++i) {
+        const auto& shape = compactLayout.shapes[i];
+        std::string sectionCounts;
+        for (std::size_t j = 0u; j < shape.sectionCounts.size(); ++j) {
+            if (!sectionCounts.empty()) sectionCounts += ',';
+            sectionCounts += std::to_string(shape.sectionCounts[j]);
+        }
+        dxmt9DeviceInfoLog(
+            "[dxmt9-pe-semantic-owner-phase] schema=1 "
+            "compact_layout_shape=distinct_sampled_prepared_before_append "
+            "presents=%llu shape_row=%zu occurrences=%llu counts=%s",
+            static_cast<unsigned long long>(diagnostics_->peStatsDecimationPresents_),
+            i, static_cast<unsigned long long>(shape.occurrences),
+            sectionCounts.c_str());
+    }
+    dxmt9DeviceInfoLog(
+        "[dxmt9-pe-semantic-owner-phase] schema=1 "
+        "compact_layout_distribution_footer=1 presents=%llu distinct_rows=%u "
+        "complete=%llu",
+        static_cast<unsigned long long>(diagnostics_->peStatsDecimationPresents_),
+        compactLayout.distinctShapeCount,
+        static_cast<unsigned long long>(compactLayout.sampledComplete));
 }
 
 void D3D9DeviceImpl::startPeThreadSamplerIfRequested() {

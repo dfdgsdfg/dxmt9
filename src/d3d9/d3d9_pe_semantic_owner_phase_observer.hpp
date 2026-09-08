@@ -9,6 +9,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <span>
 
 namespace dxmt9::d3d9::pe {
 
@@ -162,6 +163,33 @@ struct PeSemanticOwnerAdmissionMetric {
   std::uint64_t maxBindingDuplicatesPerRecord = 0u;
 };
 
+struct PeSemanticOwnerCompactLayoutShape {
+  static constexpr std::size_t kSectionKindCount = 25u;
+
+  std::array<std::uint32_t, kSectionKindCount> sectionCounts{};
+  std::uint64_t occurrences = 0u;
+};
+
+struct PeSemanticOwnerCompactLayoutMetric {
+  static constexpr std::size_t kSectionKindCount =
+      PeSemanticOwnerCompactLayoutShape::kSectionKindCount;
+  static constexpr std::size_t kSectionCountBucketCount = 26u;
+  static constexpr std::size_t kShapeCapacity = 256u;
+
+  // These counters describe sampled admissible preparations before the
+  // append/settlement outcome; complete is the subset retained in the bounded
+  // distinct-shape table, while invalid and boundedOverflow are disjoint
+  // terminal accounting buckets.
+  std::uint64_t sampledPrepared = 0u;
+  std::uint64_t sampledComplete = 0u;
+  std::uint64_t sampledInvalid = 0u;
+  std::uint64_t sampledBoundedOverflow = 0u;
+  std::array<std::uint64_t, kSectionCountBucketCount>
+      sectionCountHistogram{};
+  std::uint32_t distinctShapeCount = 0u;
+  std::array<PeSemanticOwnerCompactLayoutShape, kShapeCapacity> shapes{};
+};
+
 [[nodiscard]] constexpr const char* peSemanticOwnerSettlementFamilyName(
     PeSemanticOwnerSettlementFamily family) noexcept {
   switch (family) {
@@ -211,6 +239,7 @@ struct PeSemanticOwnerPhaseStats {
       static_cast<std::size_t>(PeSemanticOwnerAdmissionFamily::Count);
   std::array<PeSemanticOwnerAdmissionMetric, kAdmissionFamilyCount>
       admissions{};
+  PeSemanticOwnerCompactLayoutMetric compactLayout{};
 };
 
 class PeSemanticOwnerPhaseObserver final {
@@ -434,6 +463,69 @@ class PeSemanticOwnerPhaseObserver final {
         distribution.linearComparisons == 0u) {
       ++metric.sampledZeroWork;
     }
+  }
+
+  template <typename Descriptor, typename SchemaRule>
+  void recordCompactLayoutDistribution(
+      std::span<const Descriptor> descriptors,
+      std::size_t declaredSectionCount,
+      std::span<const SchemaRule> schemaRules) noexcept {
+    auto& metric = stats_.compactLayout;
+    ++metric.sampledPrepared;
+    if (schemaRules.size() !=
+            PeSemanticOwnerCompactLayoutMetric::kSectionKindCount ||
+        declaredSectionCount >=
+            PeSemanticOwnerCompactLayoutMetric::kSectionCountBucketCount ||
+        declaredSectionCount > descriptors.size()) {
+      if (declaredSectionCount <
+          PeSemanticOwnerCompactLayoutMetric::kSectionCountBucketCount)
+        ++metric.sectionCountHistogram[declaredSectionCount];
+      ++metric.sampledInvalid;
+      return;
+    }
+    ++metric.sectionCountHistogram[declaredSectionCount];
+    descriptors = descriptors.first(declaredSectionCount);
+
+    std::array<std::uint32_t,
+               PeSemanticOwnerCompactLayoutMetric::kSectionKindCount>
+        sectionCounts{};
+    std::array<bool, PeSemanticOwnerCompactLayoutMetric::kSectionKindCount>
+        seen{};
+    for (const auto& descriptor : descriptors) {
+      std::size_t schemaIndex = schemaRules.size();
+      for (std::size_t i = 0u; i < schemaRules.size(); ++i) {
+        if (schemaRules[i].kind == descriptor.kind) {
+          schemaIndex = i;
+          break;
+        }
+      }
+      if (schemaIndex >= sectionCounts.size() || seen[schemaIndex] ||
+          descriptor.count == 0u ||
+          descriptor.count > schemaRules[schemaIndex].maxCount ||
+          descriptor.elementSize != schemaRules[schemaIndex].elementSize) {
+        ++metric.sampledInvalid;
+        return;
+      }
+      seen[schemaIndex] = true;
+      sectionCounts[schemaIndex] = descriptor.count;
+    }
+
+    for (std::size_t i = 0u; i < metric.distinctShapeCount; ++i) {
+      auto& shape = metric.shapes[i];
+      if (shape.sectionCounts != sectionCounts) continue;
+      ++shape.occurrences;
+      ++metric.sampledComplete;
+      return;
+    }
+    if (metric.distinctShapeCount >=
+        PeSemanticOwnerCompactLayoutMetric::kShapeCapacity) {
+      ++metric.sampledBoundedOverflow;
+      return;
+    }
+    auto& shape = metric.shapes[metric.distinctShapeCount++];
+    shape.sectionCounts = sectionCounts;
+    shape.occurrences = 1u;
+    ++metric.sampledComplete;
   }
 
   [[nodiscard]] const PeSemanticOwnerPhaseStats& stats() const noexcept {

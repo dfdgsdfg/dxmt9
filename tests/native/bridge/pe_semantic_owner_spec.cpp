@@ -7110,6 +7110,17 @@ void observedAdmissionReconstructionKeepsHotPathUnchanged() {
             compactStats.sampledBindingOccurrencesByFamily[0] == 1u &&
             compactStats.sampledBindingFirstByFamily[0] == 1u,
         "compact reconstruction reports binding/reference/identity work independently");
+  const auto& compactLayout = compactObserver.stats().compactLayout;
+  check(compactLayout.sampledPrepared == 1u &&
+            compactLayout.sampledComplete == 1u &&
+            compactLayout.sampledInvalid == 0u &&
+            compactLayout.sampledBoundedOverflow == 0u &&
+            compactLayout.distinctShapeCount == 1u &&
+            compactLayout.shapes[0].occurrences == 1u &&
+            compactLayout.shapes[0].sectionCounts[1] == 1u &&
+            observer.stats().compactLayout.sampledPrepared == 0u &&
+            constantObserver.stats().compactLayout.sampledPrepared == 0u,
+        "real compact adapter records its layout without counting generic or constant attempts");
   check(compactOwner.emitExactFixed(enabledWire) &&
             compactDisabled.emitExactFixed(disabledWire) &&
             enabledWire.wireBytes == disabledWire.wireBytes &&
@@ -7238,6 +7249,88 @@ void compactBindingDistributionBoundedReference() {
             repeated.maxBindingDuplicatesByFamily[0] == 4u &&
             repeated.maxBindingDuplicatesPerRecord == 4u,
         "zero/one/two/three-plus buckets and duplicate-record/max counts conserve rows");
+}
+
+void compactLayoutDistributionBoundedShapeTable() {
+  using dxmt9::d3d9::SectionRule;
+  using dxmt9::d3d9::kSectionRules;
+  using Metric = PeSemanticOwnerCompactLayoutMetric;
+  const auto schema = std::span<const SectionRule>(kSectionRules);
+
+  PeSemanticOwnerPhaseObserver observer(1u);
+  const std::span<const PeSemanticPreparedSection> empty{};
+  observer.recordCompactLayoutDistribution(empty, 0u, schema);
+
+  std::array<PeSemanticPreparedSection, Metric::kSectionKindCount> full{};
+  for (std::size_t i = 0u; i < full.size(); ++i) {
+    full[i] = {.kind = kSectionRules[i].kind,
+               .elementSize = kSectionRules[i].elementSize,
+               .count = 1u,
+               .payloadOffset = 0u,
+               .byteSize = 0u};
+  }
+  observer.recordCompactLayoutDistribution(std::span<const PeSemanticPreparedSection>(full),
+                                           full.size(), schema);
+  observer.recordCompactLayoutDistribution(std::span<const PeSemanticPreparedSection>(full),
+                                           full.size(), schema);
+
+  std::array<PeSemanticPreparedSection, 2u> duplicate = {
+      full[0], full[0]};
+  observer.recordCompactLayoutDistribution(
+      std::span<const PeSemanticPreparedSection>(duplicate), duplicate.size(),
+      schema);
+  auto outOfBounds = full[0];
+  outOfBounds.kind = 0u;
+  observer.recordCompactLayoutDistribution(
+      std::span<const PeSemanticPreparedSection>(&outOfBounds, 1u), 1u,
+      schema);
+  observer.recordCompactLayoutDistribution(std::span<const PeSemanticPreparedSection>(full),
+                                           full.size() + 1u, schema);
+
+  const auto& metric = observer.stats().compactLayout;
+  check(metric.sampledPrepared == 6u && metric.sampledComplete == 3u &&
+            metric.sampledInvalid == 3u && metric.sampledBoundedOverflow == 0u &&
+            metric.distinctShapeCount == 2u &&
+            metric.sectionCountHistogram[0] == 1u &&
+            metric.sectionCountHistogram[1] == 1u &&
+            metric.sectionCountHistogram[2] == 1u &&
+            metric.sectionCountHistogram[Metric::kSectionKindCount] == 2u &&
+            metric.shapes[0].occurrences == 1u &&
+            metric.shapes[1].occurrences == 2u,
+        "compact layout zero/full/duplicate/invalid accounting is bounded and atomic");
+
+  PeSemanticOwnerPhaseObserver saturated(1u);
+  std::array<PeSemanticPreparedSection, 3u> pair{};
+  pair[0] = full[0];
+  pair[1] = full[1];
+  for (std::uint32_t renderStates = 1u; renderStates <= 64u;
+       ++renderStates) {
+    for (std::uint32_t textures = 1u; textures <= 4u; ++textures) {
+      pair[0].count = renderStates;
+      pair[1].count = textures;
+      saturated.recordCompactLayoutDistribution(
+          std::span<const PeSemanticPreparedSection>(pair).first(2u), 2u,
+          schema);
+    }
+  }
+  pair[2] = full[2];
+  saturated.recordCompactLayoutDistribution(
+      std::span<const PeSemanticPreparedSection>(pair), 3u, schema);
+  pair[0].count = 1u;
+  pair[1].count = 1u;
+  pair[2] = {};
+  saturated.recordCompactLayoutDistribution(
+      std::span<const PeSemanticPreparedSection>(pair).first(2u), 2u, schema);
+  const auto& saturatedMetric = saturated.stats().compactLayout;
+  check(saturatedMetric.sampledPrepared == 258u &&
+            saturatedMetric.sampledComplete == 257u &&
+            saturatedMetric.sampledInvalid == 0u &&
+            saturatedMetric.sampledBoundedOverflow == 1u &&
+            saturatedMetric.distinctShapeCount == Metric::kShapeCapacity &&
+            saturatedMetric.sectionCountHistogram[2] == 257u &&
+            saturatedMetric.sectionCountHistogram[3] == 1u &&
+            saturatedMetric.shapes[0].occurrences == 2u,
+        "compact layout shape table saturates, preserves duplicate keys, and conserves histogram rows");
 }
 
 void compactAppendQuotaProofAndRollback() {
@@ -8166,6 +8259,7 @@ int main(int argc, char** argv) {
     observerSeparatesPrepareMalformedFromHeader();
     observedAdmissionReconstructionKeepsHotPathUnchanged();
     compactBindingDistributionBoundedReference();
+    compactLayoutDistributionBoundedShapeTable();
     compactAdmissionRejectsStaleSourceBeforeSettlement();
     compactFinalizerFusesLexicalQualification();
     realCompactSparseMaxFamilyDifferentialAndRollback(true);

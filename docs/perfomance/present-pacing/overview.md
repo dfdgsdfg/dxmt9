@@ -30,13 +30,23 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H284](present-pacing-pe-layout-dynamic-economy.284.md) answers H283's
+bounded warm-helper economics gate. Sixteen actual-image PE32/PE64 processes
+pass; fresh GT2 observers retain 99% count-shape pricing coverage without
+overflow. PE32 weighted QPC cost is 30.459→21.436 ns for 05 and
+30.772→21.710 ns for 06, projecting only 0.0153/0.0171 ms per Present.
+These are helper-loop measurements and dimensional projections, not in-situ
+PE CPU or FPS savings. Native 9+4, 192 default-path pixels and scoped codegen
+checks qualify the cold observer. Whole-workload CPU economy and README
+recovery remain open; further layout-only work has a small measured budget.
+
 [H283](present-pacing-pe-layout-category-rebase.283.md) replaces compact
 layout's fixed category-count prepass with checked active-descriptor rebasing.
 Native 7/7 + x86_64 4/4 and 192 actual-PE pixel samples pass. Linked call sites
 and stack state shrink. Eight GT2 spots give FPS +0.342%/−0.253% and process
 CPU/frame −0.121%/−0.030% for 05/06: descriptive, not attributed savings or
-statistical neutrality. Retain the local work-removal implementation; dynamic
-sparse/dense economics and README recovery remain open.
+statistical neutrality. Retain the local work-removal implementation;
+H284 subsequently prices bounded dynamic shapes, while README recovery remains open.
 
 [H282](present-pacing-pe-scalar-writer-authority.282.md) qualifies local scalar
 writer proof reuse but withdraws the runtime candidate: linked writer code

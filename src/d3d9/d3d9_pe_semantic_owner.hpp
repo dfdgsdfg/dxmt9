@@ -3076,6 +3076,22 @@ class PeSemanticBatchOwner final {
     if (parent.sampled() && outcome == PeSemanticAdmissionOutcome::Admissible) {
       measured = detail::reconstructPeSemanticOwnerAdmission(
           input, prepared, distribution);
+      if constexpr (PeSemanticSparsePlanInputLike<Input>) {
+        static_assert(kSectionRules.size() ==
+                      PeSemanticOwnerCompactLayoutMetric::kSectionKindCount);
+        static_assert([] {
+          for (std::size_t i = 0u; i < kSectionRules.size(); ++i) {
+            for (std::size_t j = i + 1u; j < kSectionRules.size(); ++j) {
+              if (kSectionRules[i].kind == kSectionRules[j].kind) return false;
+            }
+          }
+          return true;
+        }());
+        const auto& layout = prepared.sparseLayout;
+        phaseObserver_->recordCompactLayoutDistribution(
+            std::span<const PeSemanticPreparedSection>(layout.sections),
+            layout.sectionCount, std::span<const SectionRule>(kSectionRules));
+      }
     }
     if (outcome != PeSemanticAdmissionOutcome::Admissible) {
       switch (outcome) {

@@ -11,6 +11,12 @@ related: present-pacing-pe-scalar-writer-authority.282.md; present-pacing-pe-spa
 
 # Single category walk for compact sparse layout
 
+Follow-up: [H284](present-pacing-pe-layout-dynamic-economy.284.md) subsequently
+measures the loaded production helper and sampled GT2 count-shape distribution.
+It confirms bounded warm-helper savings, projecting only 15–17 microseconds
+per Present on PE32; whole-workload CPU/FPS recovery is still unproven.
+The economy-unproven status below records H283's original evidence boundary.
+
 H283 replaces the first 25-category predicate walk in
 `detail::preparePeSemanticSparsePlanLayout`
 (`src/d3d9/d3d9_pe_semantic_owner.hpp`). Previously the helper counted active

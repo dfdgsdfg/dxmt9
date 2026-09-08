@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H284](present-pacing-pe-layout-dynamic-economy.284.md) measures the actual
+H283 DLL helper and weights it by fresh GT2 compact-preparation shapes.
+PE32 helper wall cost falls about 29.5% over the priced sample mass, but the
+projected saving is only 15–17 microseconds/Present. A cold bounded observer,
+native 9+4 and 192 default-path pixels pass; no whole-frame CPU/FPS claim.
+
 [H283](present-pacing-pe-layout-category-rebase.283.md) removes compact
 layout's initial category-count walk with alignment-proven descriptor rebasing.
 Native layout/transaction differentials and actual PE32/PE64 pixels pass;
