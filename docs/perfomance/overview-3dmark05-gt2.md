@@ -4,14 +4,22 @@ workload: 3DMark05 GT2
 title: "3DMark05 GT2 Performance — Current Baseline"
 type: root-overview
 status: current
-updated: 2026-09-07
+updated: 2026-09-09
 source: experiments/output/app-d3d9-3dmark05-current-cap-gt2-r1-20260825; traces/app-d3d9-3dmark05-current-bottleneck-gt2-clean-cpu-r2-20260825/analysis/xctrace-cpu-thread-summary.md; traces/app-d3d9-3dmark05-current-bottleneck-gt2-pe-symbol-r1-20260825/analysis/pe-sampler.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; experiments/output/app-d3d9-3dmark05-managed-generation-hash-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-managed-incremental-hash-default-gt2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-phase-latency2-r1-20260719; experiments/output/app-d3d9-3dmark05-gt2-immediate-default-{latency-r1,direct-cbuf-r1,direct-cbuf-r2}-20260719; experiments/output/app-d3d9-3dmark05-release-default-gt2-r1-20260725; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
 related: docs/perfomance/overview.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/overview-3dmark05-gt3.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.41.md; docs/perfomance/hidden-backend-storage/hidden-backend-storage-shape.42.md
 ---
 
 # 3DMark05 GT2 Performance — Current Baseline
 
-The latest implementation [H254](present-pacing/present-pacing-pe-constant-bitcompare.254.md)
+The latest [H296 PE check](present-pacing/present-pacing-pe-warm-pin-identity.296.md)
+gives 29.940 scene-sampled FPS at 1024x768, versus README 30.1 (-0.53%).
+All eight recorded health counters are zero through the complete sampled
+interval. The warm-pin refinement passes bounded native/TLA, linked-code and
+both-width PE pixel checks; four-repeat public-COM timings are mixed. This
+single game run does not establish CPU/FPS improvement or neutrality. Earlier
+thread/phase attribution below belongs to its stated historical build.
+
+The earlier implementation [H254](present-pacing/present-pacing-pe-constant-bitcompare.254.md)
 vectorizes bitwise 16-byte constant equality in both PE images. Native/ABI
 checks pass; the post-commit spot check is 29.500 sampled FPS versus 29.009
 previously (+1.69%), below README 30.1, with zero chunk/GPU/pipeline failures

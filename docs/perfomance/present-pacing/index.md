@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H296](present-pacing-pe-warm-pin-identity.296.md) removes warm-pin identity
+materialization while preserving the cold pre-retain snapshot. Native/TLA,
+exact bytes/refcounts and both-width PE pixels pass. Public-COM economics are
+mixed; 05/06 GT2 spots are 29.940/18.266 FPS, with 57 uncovered full-health
+tail frames in 06. Retained local code reduction is not CPU/FPS promotion.
+
 [H295](present-pacing-pe-compact-identity-insertion.295.md) removes compact
 identity insertion's unused wire-promotion output. Native/TLA and both-width
 PE pixels pass; four-repeat public-COM costs overlap. Clean GT2 spots are

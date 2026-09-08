@@ -13,6 +13,15 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H296](../../../docs/perfomance/present-pacing/present-pacing-pe-warm-pin-identity.296.md)
+refines R-CORE-REC-7.36: warm qualified-pin comparisons avoid a typed identity
+temporary; cold acquisition keeps its pre-retain snapshot. Seven-family exact
+bytes/refcounts, native/TLA and both-width PE pixels pass. Linked warm work
+shrinks, but four-repeat public-COM timings remain mixed (PE64 constant median
++9.96%, overlapping ranges). 05/06 GT2 spots are 29.940/18.266 FPS; 57 final
+06 frames lack full health counters. The local change is retained without
+CPU/FPS promotion, neutrality or general temporal-correctness claims.
+
 [H295](../../../docs/perfomance/present-pacing/present-pacing-pe-compact-identity-insertion.295.md)
 implements R-CORE-REC-7.67 compact always-wire insertion through the shared
 identity transition, omitting the unused promotion result. Bounded native

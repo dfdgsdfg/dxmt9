@@ -5736,17 +5736,20 @@ class PeSemanticBatchOwner final {
       const QualifiedBinding<Object, Identity>& binding, Retain retain) noexcept {
     if (wireIndex) *wireIndex = binding.wire_;
     const std::size_t index = binding.pin_;
-    const Identity identity{.value = binding.identity_};
     if (index < count) {
       if (!pins[index].valid() || pins[index].object != binding.object_ ||
-          pins[index].identity.value.kind != identity.value.kind ||
-          pins[index].identity.value.generation != identity.value.generation ||
-          pins[index].identity.value.objectId != identity.value.objectId) {
+          pins[index].identity.value.kind != binding.identity_.kind ||
+          pins[index].identity.value.generation != binding.identity_.generation ||
+          pins[index].identity.value.objectId != binding.identity_.objectId) {
         return false;
       }
       out = static_cast<std::uint32_t>(index);
       return true;
     }
+    // Warm hits only need the wire identity fields above. Materialize the
+    // typed identity after that branch, preserving the pre-retain snapshot
+    // needed for a new physical pin without copying it on every hit.
+    const Identity identity{.value = binding.identity_};
     if (index != count || index == MaxPins ||
         !retain(binding.object_, retainedCheckpoint_)) {
       return false;

@@ -921,6 +921,15 @@ pointer against it. A checked section range may supply per-row bounds within
 that section; row ordinals and null/pinned disposition remain checked. Neither
 reuse permits a stale source after a retain callback or a changed physical pin.
 
+A warm physical-pin hit may compare the qualified identity fields directly
+without first materializing a typed identity temporary. A new-pin path must
+still snapshot that identity before invoking retain; moving the snapshot past
+the callback is not an equivalent refinement. This local representation
+change must preserve all identity/object checks, wire ordinals, retain order,
+rollback and retry behavior. Bounded warm/new-pin native coverage and actual
+linked PE32/PE64 parent measurements qualify it independently of source-level
+temporary removal.
+
 **R-CORE-REC-7.37** Ordinary constant setters must consume comparison and state
 transition results in the shadow update instead of discarding per-register
 facts and independently deriving them again. The production-used helper must

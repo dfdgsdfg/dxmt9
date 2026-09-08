@@ -1025,6 +1025,15 @@ writer when a separate staging copy would only repeat source qualification.
 CapacityPre and any invalidating callback terminate the earlier proof; generic
 and ordered-control adapters retain their checked entry points.
 
+Within the qualified binding writer, an existing physical pin compares its
+current identity and object with the private mapping directly. Only a new pin
+needs a typed identity value for publication. That value is captured before
+retain, preserving the pre-callback snapshot; this is not permission to borrow
+mutable identity through the callback. The warm/new split changes neither
+transaction transitions nor authority. Seven-family warm repeats, stale-source
+failure/retry, wire/refcount differentials and actual PE parent economy remain
+separate correctness and performance gates.
+
 Scalar cardinality reuse includes empty categories: admission must reject
 stale zero-to-nonzero render-state, texture-stage, sampler and transform
 inventories even when an active-section visitor would skip them. A private

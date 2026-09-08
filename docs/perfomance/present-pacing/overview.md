@@ -30,6 +30,15 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H296](present-pacing-pe-warm-pin-identity.296.md) retains a bounded warm-pin
+identity refinement with cold pre-retain snapshot semantics unchanged. Real
+PE32 warm spills disappear; PE64 stack reservation shrinks. Native/TLA and
+actual pixel parity pass. Four-repeat public-COM ranges overlap but medians
+remain mixed, including PE64 constant +9.96%; neither savings nor neutrality
+is established. GT2 spots are 29.940/18.266 FPS against README 30.1/18.1,
+with 57 final 06 frames missing full health counters. Whole-parent economics
+and exclusive CPU reduction remain open.
+
 [H295](present-pacing-pe-compact-identity-insertion.295.md) retains a compact
 always-wire identity specialization sharing the generic transition. The actual
 PE32/PE64 helper drops unused promotion stores and three branches, with no

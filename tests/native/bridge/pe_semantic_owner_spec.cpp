@@ -1582,6 +1582,17 @@ void compactProducerBindingIdentityGuards() {
     check(sealed.valid(), "compact identity fixture seals its oracle");
     const std::vector<std::byte> expected(sealed.blob.begin(), sealed.blob.end());
     oracle.resetAndReleaseRetained();
+    check(appendCanonicalSemanticRecord(oracle, prefix) &&
+              appendSparseRecord(oracle, fixture.params.recordType, header,
+                                 sparse) &&
+              appendSparseRecord(oracle, fixture.params.recordType, header,
+                                 sparse),
+          "compact warm identity fixture builds its generic producer oracle");
+    const auto warmSealed = oracle.seal();
+    check(warmSealed.valid(), "compact warm identity fixture seals its oracle");
+    const std::vector<std::byte> warmExpected(warmSealed.blob.begin(),
+                                            warmSealed.blob.end());
+    oracle.resetAndReleaseRetained();
     check(owner.admit(prefix), "compact identity fixture commits its prefix");
     PeSemanticExactFixedEmission prefixEmission{};
     check(owner.emitExactFixed(prefixEmission),
@@ -1713,6 +1724,45 @@ void compactProducerBindingIdentityGuards() {
     check(owner.emitSegmented(segmented) &&
               ownerSegmentedRolesEqualExact(finalEmission, segmented),
           "compact identity retry preserves ExactFixed/segmented handle roles");
+
+    // Reuse the same qualified seven-family source after the successful
+    // retry. Preparation maps every identity to the already-live physical
+    // pin; the writer must take only warm hits, append one record, and avoid
+    // a second AddRef/retainer acquisition for every family.
+    const auto retainedBeforeWarm = owner.retainedCount();
+    const auto textureRefsBeforeWarm = fixture.texture.refs;
+    const auto streamRefsBeforeWarm = fixture.stream.refs;
+    const auto shaderRefsBeforeWarm = fixture.shader.refs;
+    const auto declarationRefsBeforeWarm = fixture.declaration.refs;
+    const auto indexRefsBeforeWarm = fixture.index.refs;
+    const auto targetRefsBeforeWarm = fixture.target.refs;
+    const auto depthRefsBeforeWarm = fixture.depth.refs;
+    const bool warmRepeat = guard.withCapability(
+        thread, epoch, [&](const auto& access) noexcept {
+          return owner.tryAppendSparseStatePlan(
+              access, fixture.plan, PeSemanticProducerKind::DrawIndexedPrimitive,
+              fixture.params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+              3u, 3u, []() noexcept { return true; });
+        });
+    PeSemanticExactFixedEmission warmEmission{};
+    check(warmRepeat && owner.size() == 3u &&
+              owner.emitExactFixed(warmEmission) &&
+              warmEmission.wireBytes > finalEmission.wireBytes &&
+              owner.retainedCount() == retainedBeforeWarm &&
+              fixture.texture.refs == textureRefsBeforeWarm &&
+              fixture.stream.refs == streamRefsBeforeWarm &&
+              fixture.shader.refs == shaderRefsBeforeWarm &&
+              fixture.declaration.refs == declarationRefsBeforeWarm &&
+              fixture.index.refs == indexRefsBeforeWarm &&
+              fixture.target.refs == targetRefsBeforeWarm &&
+              fixture.depth.refs == depthRefsBeforeWarm,
+          "compact identity warm repeat reuses all seven physical pins");
+    check(warmEmission.wireBytes == warmExpected.size() &&
+              std::equal(warmExpected.begin(), warmExpected.end(),
+                         warmEmission.wire.begin()) &&
+              owner.emitSegmented(segmented) &&
+              ownerSegmentedRolesEqualExact(warmEmission, segmented),
+          "compact warm identity repeat equals generic bytes and segmented roles");
     owner.reset();
     check(prefixSurface.refs == 1u, "compact identity retry reset balances prefix");
   };

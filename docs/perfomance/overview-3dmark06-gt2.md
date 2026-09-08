@@ -4,14 +4,22 @@ workload: 3DMark06 GT2
 title: "3DMark06 GT2 Performance — Current Bottleneck"
 type: root-overview
 status: current
-updated: 2026-09-07
+updated: 2026-09-09
 source: experiments/output/app-d3d9-3dmark06-dxmt9-off-graphics-r1-20260826; experiments/output/app-d3d9-3dmark06-dxmt9-attribution-gt2-ui-r2-20260826; traces/3dmark06-dxmt9-bottleneck-20260826/gt2/frame1200.gputrace; traces/3dmark06-dxmt9-bottleneck-20260826/gt2/analysis/frame1200-counters-xcode.csv
 related: docs/perfomance/overview-3dmark06-gt1.md; docs/perfomance/overview-3dmark06-hdr1.md; docs/perfomance/overview-3dmark06-hdr2.md; specs/backend/gap.md
 ---
 
 # 3DMark06 GT2 Performance — Current Bottleneck
 
-The latest [H257 PE check](present-pacing/present-pacing-pe-constant-copy.257.md)
+The latest [H296 PE check](present-pacing/present-pacing-pe-warm-pin-identity.296.md)
+gives 18.266 scene-sampled FPS at 1280x720, versus README 18.1 (+0.92%).
+All eight reported health counters are zero, but the final 57 scene frames
+lack a full health snapshot. The normal post-scene GUI timeout is recorded.
+Native/TLA and both-width PE pixels pass; mixed four-repeat public-COM costs
+do not establish CPU improvement or neutrality. This single run does not
+replace the historical bottleneck attribution below.
+
+The earlier [H257 PE check](present-pacing/present-pacing-pe-constant-copy.257.md)
 at `5d764f37` gives 18.083 scene FPS at 1280x720 with the PE sampler OFF,
 versus README 18.1 (-0.09%). This is the replacement r2; r1's 16.584 FPS is
 excluded after confirmed user activity during measurement. Positive-wall rows
