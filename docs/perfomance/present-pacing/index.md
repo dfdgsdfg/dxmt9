@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H287](present-pacing-pe-retainer-epoch-shapes.287.md) supplies conserved
+retainer epoch samples: expiry, not rollback tombstones, dominates the
+observed GT2 rebuilding. Native, actual PE pixels and unchanged default-code
+qualification pass. OFF FPS spots are 30.036/18.228; isolated index economy
+and repeatable whole-PE savings remain open.
+
 [H286](present-pacing-pe-binding-wire-authority.286.md) makes the prepared
 identity witness the sole local wire-ordinal authority. Smaller locator/stack
 and linked helper families retain native and real-PE pixel equivalence.

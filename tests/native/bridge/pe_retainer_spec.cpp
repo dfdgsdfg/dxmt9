@@ -255,6 +255,7 @@ struct RetainerTraceCase {
   std::size_t expectedCheckpoint = 0u;
   std::size_t capacity = 0u;
   bool active = false;
+  bool epochProjectionMatches = true;
 
   RetainerTraceCase(std::size_t capacity_, std::uint64_t epoch)
       : actual(capacity_, D3D9PePendingCommandRetainer::EpochForTesting{epoch}),
@@ -298,10 +299,41 @@ struct RetainerTraceCase {
       active = false;
       break;
     case RetainAction::EndEpoch:
+    {
       active = false;
+      const auto actualBefore = actual.epochSnapshot();
+      const auto expectedBeforeSize = expected.size;
+      const auto expectedBeforeEpoch = expected.epoch;
       actual.endEpoch();
       expected.endEpoch(expectedReleases);
+      const auto actualAfter = actual.epochSnapshot();
+      std::size_t expectedCurrentTouched = 0u;
+      std::size_t expectedPreviousTouched = 0u;
+      for (std::size_t i = 0u; i < expected.size; ++i) {
+        if (expected.entries[i].touched == expectedBeforeEpoch) {
+          ++expectedCurrentTouched;
+        } else if (expectedBeforeEpoch - expected.entries[i].touched == 1u) {
+          ++expectedPreviousTouched;
+        }
+      }
+      const auto projection = projectRetainerEpoch(actualBefore, actualAfter);
+      const auto expectedExpired = expectedBeforeSize - expected.size;
+      const auto expectedDisposition =
+          expectedExpired != 0u
+              ? RetainerEpochDisposition::ExpiryRebuild
+              : actualBefore.indexUsed != actualBefore.indexOccupied
+                    ? RetainerEpochDisposition::FastTombstoneRebuild
+                    : RetainerEpochDisposition::FastClean;
+      epochProjectionMatches =
+          epochProjectionMatches && projection.valid &&
+          projection.entries == expectedBeforeSize &&
+          projection.survivors == expected.size &&
+          projection.expired == expectedExpired &&
+          projection.disposition == expectedDisposition &&
+          actualBefore.currentTouched == expectedCurrentTouched &&
+          actualBefore.previousTouched == expectedPreviousTouched;
       break;
+    }
     case RetainAction::Clear:
       active = false;
       actual.clear();
@@ -313,7 +345,23 @@ struct RetainerTraceCase {
   }
 
   bool sameState() const noexcept {
-    if (actual.size() != expected.size) return false;
+    if (actual.size() != expected.size || !epochProjectionMatches) return false;
+    const auto snapshot = actual.epochSnapshot();
+    std::size_t currentTouched = 0u;
+    std::size_t previousTouched = 0u;
+    for (std::size_t i = 0u; i < expected.size; ++i) {
+      if (expected.entries[i].touched == expected.epoch) {
+        ++currentTouched;
+      } else if (expected.epoch - expected.entries[i].touched == 1u) {
+        ++previousTouched;
+      }
+    }
+    if (snapshot.entryCount != expected.size ||
+        snapshot.indexOccupied != expected.size ||
+        snapshot.currentTouched != currentTouched ||
+        snapshot.previousTouched != previousTouched ||
+        snapshot.epoch != expected.epoch)
+      return false;
     for (std::size_t i = 0u; i < objects.size(); ++i) {
       if (actual.containsBuffer(objects[i]) != expected.contains(i) ||
           objects[i]->refs != expected.refs[i])
@@ -691,6 +739,130 @@ bool epochWrapTrace() {
          retainer.size() == reference.size && reference.size == 0u;
 }
 
+bool epochSnapshotProjectionTrace() {
+  using Retainer = D3D9PePendingCommandRetainer;
+  using Snapshot = Retainer::EpochSnapshot;
+
+  {
+    Retainer empty(4u);
+    const auto before = empty.epochSnapshot();
+    empty.endEpoch();
+    const auto after = empty.epochSnapshot();
+    const auto projection = projectRetainerEpoch(before, after);
+    if (!check(projection.valid && projection.entries == 0u &&
+                   projection.survivors == 0u && projection.expired == 0u &&
+                   projection.disposition == RetainerEpochDisposition::FastClean,
+               "empty epoch snapshot projects as a clean zero-entry boundary"))
+      return false;
+  }
+
+  {
+    D9CBuffer first{};
+    D9CBuffer second{};
+    Retainer clean(4u);
+    auto acquire = clean.beginAcquire();
+    clean.retainBuffer(&first, acquire);
+    clean.retainBuffer(&second, acquire);
+    const auto before = clean.epochSnapshot();
+    clean.endEpoch();
+    const auto after = clean.epochSnapshot();
+    const auto projection = projectRetainerEpoch(before, after);
+    if (!check(projection.valid && projection.entries == 2u &&
+                   projection.survivors == 2u && projection.expired == 0u &&
+                   projection.disposition == RetainerEpochDisposition::FastClean,
+               "no-expiry epoch snapshot preserves entries and refs"))
+      return false;
+    clean.clear();
+  }
+
+  {
+    D9CBuffer first{};
+    D9CBuffer rolledBack{};
+    Retainer tombstones(4u);
+    auto acquire = tombstones.beginAcquire();
+    tombstones.retainBuffer(&first, acquire);
+    acquire = tombstones.beginAcquire();
+    tombstones.retainBuffer(&rolledBack, acquire);
+    tombstones.rollback(acquire);
+    const auto before = tombstones.epochSnapshot();
+    tombstones.endEpoch();
+    const auto after = tombstones.epochSnapshot();
+    const auto projection = projectRetainerEpoch(before, after);
+    if (!check(projection.valid && projection.expired == 0u &&
+                   projection.tombstonesBefore != 0u &&
+                   projection.disposition ==
+                       RetainerEpochDisposition::FastTombstoneRebuild,
+               "rollback tombstones classify as a tombstone-only rebuild"))
+      return false;
+    tombstones.clear();
+  }
+
+  {
+    D9CBuffer hot{};
+    D9CBuffer cold{};
+    Retainer expiry(4u);
+    auto acquire = expiry.beginAcquire();
+    expiry.retainBuffer(&hot, acquire);
+    expiry.retainBuffer(&cold, acquire);
+    expiry.endEpoch();
+    acquire = expiry.beginAcquire();
+    expiry.retainBuffer(&hot, acquire);
+    expiry.endEpoch();
+    const auto before = expiry.epochSnapshot();
+    expiry.endEpoch();
+    const auto after = expiry.epochSnapshot();
+    const auto projection = projectRetainerEpoch(before, after);
+    if (!check(projection.valid && projection.entries == 2u &&
+                   projection.survivors == 1u && projection.expired == 1u &&
+                   projection.disposition == RetainerEpochDisposition::ExpiryRebuild &&
+                   hot.refs == 2u && cold.refs == 1u,
+               "expiry compaction reports one survivor and one expired entry"))
+      return false;
+    expiry.clear();
+  }
+
+  {
+    Retainer wrapped(4u, Retainer::EpochForTesting{
+                                 std::numeric_limits<std::uint64_t>::max()});
+    const Snapshot before = wrapped.epochSnapshot();
+    wrapped.endEpoch();
+    const Snapshot after = wrapped.epochSnapshot();
+    const auto projection = projectRetainerEpoch(before, after);
+    if (!check(projection.valid && after.epoch == 0u,
+               "epoch projection accepts unsigned uint64 wrap"))
+      return false;
+  }
+
+  const Snapshot validBefore{2u, 1u, 1u, 2u, 2u, 4u, 7u};
+  Snapshot malformedAfter{2u, 0u, 1u, 2u, 2u, 4u, 7u};
+  if (!check(!projectRetainerEpoch(validBefore, malformedAfter).valid,
+             "projection rejects a non-advancing epoch"))
+    return false;
+  malformedAfter = Snapshot{3u, 0u, 1u, 3u, 3u, 4u, 8u};
+  if (!check(!projectRetainerEpoch(validBefore, malformedAfter).valid,
+             "projection rejects impossible post-index conservation"))
+    return false;
+  malformedAfter = Snapshot{2u, 0u, 1u, 2u, 2u, 3u, 8u};
+  if (!check(!projectRetainerEpoch(validBefore, malformedAfter).valid,
+             "projection rejects an index-slot capacity change"))
+    return false;
+  const Snapshot missingBefore{2u, 1u, 1u, 1u, 1u, 4u, 7u};
+  const Snapshot missingAfter{2u, 0u, 1u, 2u, 2u, 4u, 8u};
+  if (!check(!projectRetainerEpoch(missingBefore, missingAfter).valid,
+             "projection rejects missing pre-epoch index entries"))
+    return false;
+  const Snapshot overflowingBefore{
+      std::numeric_limits<std::uint64_t>::max(),
+      std::numeric_limits<std::uint64_t>::max(), 1u,
+      std::numeric_limits<std::uint64_t>::max(),
+      std::numeric_limits<std::uint64_t>::max(),
+      std::numeric_limits<std::uint64_t>::max(), 9u};
+  if (!check(!projectRetainerEpoch(overflowingBefore, malformedAfter).valid,
+             "projection rejects overflowing touched-count conservation"))
+    return false;
+  return true;
+}
+
 }  // namespace
 
 int main() {
@@ -708,6 +880,9 @@ int main() {
     return 1;
   if (!check(epochWrapTrace(),
              "warm expiry preserves unsigned uint64 epoch wrap semantics"))
+    return 1;
+  if (!check(epochSnapshotProjectionTrace(),
+             "cold retainer snapshots classify clean, tombstone, expiry, and malformed epochs"))
     return 1;
 
   D3D9PePendingCommandRetainer retainer;

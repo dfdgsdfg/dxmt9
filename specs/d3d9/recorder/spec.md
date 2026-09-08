@@ -775,6 +775,27 @@ twelve open-addressed pin-index arrays; rollback still restores indexes and
 retains. Pin-index clearing, warm-retainer scans, and contiguous final gather
 remain explicit costs.
 
+R-CORE-REC-7.63 observes retainer epoch maintenance only in the sampled branch
+of the outlined owner settlement adapter. A read-only diagnostic snapshot
+contains entry count, current/previous touched counts, index occupied/used/slot
+counts and epoch. It carries no identities or resource pointers and adds no
+field to the retainer. The existing child interval surrounds only `endEpoch`;
+snapshots and shape aggregation stay outside that timer, while the inclusive
+settle parent includes their diagnostic cost.
+
+A pure cold projection validates before/after conservation and classifies
+clean no-expiry, tombstone-only rebuild or expiry rebuild. A bounded distinct
+shape table retains entries, survivors, expired count, prior tombstones and
+index slot count. Valid totals and maxima include the overflow population;
+the row table and explicit overflow count partition it. Invalid observations
+are counted separately and never affect the real operation. Reports bind rows
+to their Present prefix and include a footer for completeness. Sampling uses
+the existing settlement-parent decision, not a new per-retain clock or counter.
+Native traces compare actual before/after snapshots with independent serial
+entry/age facts and verify decimation, rejection and table-overflow accounting.
+The observer does not change the concurrency/lifetime transition system;
+any future index optimization requires its own refinement and runtime economy.
+
 R-CORE-REC-7.17–7.19 refine this implementation without changing the transport
 or threading boundary. Attribution separates compact source preparation,
 destination qualification, and producer-family settlement. These observations

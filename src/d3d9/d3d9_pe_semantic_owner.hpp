@@ -3215,7 +3215,18 @@ class PeSemanticBatchOwner final {
       auto settlePhase = phaseObserver_->beginOperation(
           PeSemanticOwnerPhase::SettleClear);
       if (!ready_ || recordCount_ == 0u) return false;
-      {
+      if (settlePhase.sampled()) {
+        // The snapshots are cold and sit outside the child timer.  The
+        // unsampled branch below contains no snapshot construction at all.
+        const auto retainerBefore = retainer_.epochSnapshot();
+        {
+          auto retainerPhase = phaseObserver_->child(
+              PeSemanticOwnerPhase::SettleRetainerEpoch);
+          retainer_.endEpoch();
+        }
+        const auto retainerAfter = retainer_.epochSnapshot();
+        phaseObserver_->recordRetainerEpoch(retainerBefore, retainerAfter);
+      } else {
         auto retainerPhase = phaseObserver_->child(
             PeSemanticOwnerPhase::SettleRetainerEpoch);
         retainer_.endEpoch();

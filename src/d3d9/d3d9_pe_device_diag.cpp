@@ -3416,6 +3416,87 @@ void D3D9DeviceImpl::logPeSemanticOwnerPhaseSplit() {
         static_cast<unsigned long long>(diagnostics_->peStatsDecimationPresents_),
         compactLayout.distinctShapeCount,
         static_cast<unsigned long long>(compactLayout.sampledComplete));
+
+    const auto& retainer = stats.retainerEpoch;
+    const auto& retainerPhase = stats.phases[static_cast<std::size_t>(
+        dxmt9::d3d9::pe::PeSemanticOwnerPhase::SettleRetainerEpoch)];
+    dxmt9DeviceInfoLog(
+        "[dxmt9-pe-semantic-owner-phase] schema=1 "
+        "retainer_epoch_distribution=1 sampling=every_%uth_settlement "
+        "presents=%llu denominator_events=%llu denominator_samples=%llu "
+        "sampled_total=%llu valid=%llu invalid=%llu retained_complete=%llu "
+        "bounded_overflow=%llu max_entries=%llu max_survivors=%llu "
+        "max_expired=%llu max_tombstones_before=%llu max_index_slots=%llu "
+        "sum_entries=%llu sum_survivors=%llu sum_expired=%llu "
+        "sum_tombstones_before=%llu sum_index_slots=%llu "
+        "sampled_fast_clean=%llu sampled_fast_tombstone_rebuild=%llu "
+        "sampled_expiry_rebuild=%llu distinct_rows=%u",
+        stats.decimationN,
+        static_cast<unsigned long long>(diagnostics_->peStatsDecimationPresents_),
+        static_cast<unsigned long long>(retainerPhase.events),
+        static_cast<unsigned long long>(retainerPhase.samples),
+        static_cast<unsigned long long>(retainer.sampledTotal),
+        static_cast<unsigned long long>(retainer.valid),
+        static_cast<unsigned long long>(retainer.invalid),
+        static_cast<unsigned long long>(retainer.retainedComplete),
+        static_cast<unsigned long long>(retainer.boundedOverflow),
+        static_cast<unsigned long long>(retainer.maxEntries),
+        static_cast<unsigned long long>(retainer.maxSurvivors),
+        static_cast<unsigned long long>(retainer.maxExpired),
+        static_cast<unsigned long long>(retainer.maxTombstonesBefore),
+        static_cast<unsigned long long>(retainer.maxIndexSlots),
+        static_cast<unsigned long long>(retainer.sumEntries),
+        static_cast<unsigned long long>(retainer.sumSurvivors),
+        static_cast<unsigned long long>(retainer.sumExpired),
+        static_cast<unsigned long long>(retainer.sumTombstonesBefore),
+        static_cast<unsigned long long>(retainer.sumIndexSlots),
+        static_cast<unsigned long long>(retainer.sampledFastClean),
+        static_cast<unsigned long long>(retainer.sampledFastTombstoneRebuild),
+        static_cast<unsigned long long>(retainer.sampledExpiryRebuild),
+        retainer.distinctShapeCount);
+    for (std::size_t i = 0u; i < retainer.distinctShapeCount; ++i) {
+        const auto& shape = retainer.shapes[i];
+        dxmt9DeviceInfoLog(
+            "[dxmt9-pe-semantic-owner-phase] schema=1 "
+            "retainer_epoch_shape=1 presents=%llu shape_row=%zu "
+            "disposition=%s entries=%llu survivors=%llu expired=%llu "
+            "tombstones_before=%llu index_slots=%llu occurrences=%llu",
+            static_cast<unsigned long long>(
+                diagnostics_->peStatsDecimationPresents_),
+            i,
+            dxmt9::d3d9::pe::peSemanticOwnerRetainerEpochDispositionName(
+                shape.disposition),
+            static_cast<unsigned long long>(shape.entries),
+            static_cast<unsigned long long>(shape.survivors),
+            static_cast<unsigned long long>(shape.expired),
+            static_cast<unsigned long long>(shape.tombstonesBefore),
+            static_cast<unsigned long long>(shape.indexSlots),
+            static_cast<unsigned long long>(shape.occurrences));
+    }
+    dxmt9DeviceInfoLog(
+        "[dxmt9-pe-semantic-owner-phase] schema=1 "
+        "retainer_epoch_distribution_footer=1 presents=%llu "
+        "denominator_events=%llu denominator_samples=%llu valid=%llu "
+        "invalid=%llu retained_complete=%llu bounded_overflow=%llu "
+        "sum_entries=%llu sum_survivors=%llu sum_expired=%llu "
+        "sum_tombstones_before=%llu sum_index_slots=%llu "
+        "sampled_fast_clean=%llu sampled_fast_tombstone_rebuild=%llu "
+        "sampled_expiry_rebuild=%llu",
+        static_cast<unsigned long long>(diagnostics_->peStatsDecimationPresents_),
+        static_cast<unsigned long long>(retainerPhase.events),
+        static_cast<unsigned long long>(retainerPhase.samples),
+        static_cast<unsigned long long>(retainer.valid),
+        static_cast<unsigned long long>(retainer.invalid),
+        static_cast<unsigned long long>(retainer.retainedComplete),
+        static_cast<unsigned long long>(retainer.boundedOverflow),
+        static_cast<unsigned long long>(retainer.sumEntries),
+        static_cast<unsigned long long>(retainer.sumSurvivors),
+        static_cast<unsigned long long>(retainer.sumExpired),
+        static_cast<unsigned long long>(retainer.sumTombstonesBefore),
+        static_cast<unsigned long long>(retainer.sumIndexSlots),
+        static_cast<unsigned long long>(retainer.sampledFastClean),
+        static_cast<unsigned long long>(retainer.sampledFastTombstoneRebuild),
+        static_cast<unsigned long long>(retainer.sampledExpiryRebuild));
 }
 
 void D3D9DeviceImpl::startPeThreadSamplerIfRequested() {

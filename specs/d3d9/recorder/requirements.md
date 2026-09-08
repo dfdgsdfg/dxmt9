@@ -1209,3 +1209,18 @@ invalid/empty dispatch, bitwise values, zero extension, dirty membership,
 alias/reuse and boundary overflow. Linked PE32/PE64 evidence must qualify both
 caller and consumer costs, and actual PE conformance plus separate observer-OFF
 CPU/FPS and PE profiles must precede performance claims.
+
+**R-CORE-REC-7.63** Retainer-maintenance attribution must distinguish clean
+no-expiry, tombstone-only rebuild and expiry/compaction rebuild using
+retainer-owned before/after facts. Observations must preserve entry/survivor/
+expiry conservation, warm-age and index occupancy bounds, and unsigned epoch
+advance. Sampled valid, invalid and bounded-table-overflow populations must
+be explicit and reconcile with the timed retainer child population. Shape
+sampling and reporting must not alter retention, release order, rollback or
+settlement decisions. With diagnostics disabled, production execution must gain
+no diagnostic state, clocks, copies or scans; no diagnostic value may cross its
+hot signature.
+Native bounded checks must bind the observation to actual retainer operations,
+including expiry, tombstones, empty sets and epoch wrap, and pin sampling and
+overflow accounting. Shape frequencies alone must not be claimed as measured
+CPU savings or justify an unverified replacement of the reference index.

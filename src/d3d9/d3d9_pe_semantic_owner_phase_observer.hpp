@@ -4,6 +4,8 @@
 // intentionally separate from CopyMaterializationLedger: a phase is CPU
 // attribution, not a copy/materialization class.
 
+#include "d3d9_pe_retainer.hpp"
+
 #include <algorithm>
 #include <array>
 #include <chrono>
@@ -190,6 +192,52 @@ struct PeSemanticOwnerCompactLayoutMetric {
   std::array<PeSemanticOwnerCompactLayoutShape, kShapeCapacity> shapes{};
 };
 
+struct PeSemanticOwnerRetainerEpochShape {
+  RetainerEpochDisposition disposition = RetainerEpochDisposition::FastClean;
+  std::uint64_t entries = 0u;
+  std::uint64_t survivors = 0u;
+  std::uint64_t expired = 0u;
+  std::uint64_t tombstonesBefore = 0u;
+  std::uint64_t indexSlots = 0u;
+  std::uint64_t occurrences = 0u;
+};
+
+struct PeSemanticOwnerRetainerEpochMetric {
+  static constexpr std::size_t kShapeCapacity = 256u;
+
+  std::uint64_t sampledTotal = 0u;
+  std::uint64_t valid = 0u;
+  std::uint64_t invalid = 0u;
+  std::uint64_t retainedComplete = 0u;
+  std::uint64_t boundedOverflow = 0u;
+  std::uint64_t sumEntries = 0u;
+  std::uint64_t sumSurvivors = 0u;
+  std::uint64_t sumExpired = 0u;
+  std::uint64_t sumTombstonesBefore = 0u;
+  std::uint64_t sumIndexSlots = 0u;
+  std::uint64_t sampledFastClean = 0u;
+  std::uint64_t sampledFastTombstoneRebuild = 0u;
+  std::uint64_t sampledExpiryRebuild = 0u;
+  std::uint64_t maxEntries = 0u;
+  std::uint64_t maxSurvivors = 0u;
+  std::uint64_t maxExpired = 0u;
+  std::uint64_t maxTombstonesBefore = 0u;
+  std::uint64_t maxIndexSlots = 0u;
+  std::uint32_t distinctShapeCount = 0u;
+  std::array<PeSemanticOwnerRetainerEpochShape, kShapeCapacity> shapes{};
+};
+
+[[nodiscard]] constexpr const char* peSemanticOwnerRetainerEpochDispositionName(
+    RetainerEpochDisposition disposition) noexcept {
+  switch (disposition) {
+  case RetainerEpochDisposition::FastClean: return "fast_clean";
+  case RetainerEpochDisposition::FastTombstoneRebuild:
+    return "fast_tombstone_rebuild";
+  case RetainerEpochDisposition::ExpiryRebuild: return "expiry_rebuild";
+  }
+  return "invalid";
+}
+
 [[nodiscard]] constexpr const char* peSemanticOwnerSettlementFamilyName(
     PeSemanticOwnerSettlementFamily family) noexcept {
   switch (family) {
@@ -240,6 +288,7 @@ struct PeSemanticOwnerPhaseStats {
   std::array<PeSemanticOwnerAdmissionMetric, kAdmissionFamilyCount>
       admissions{};
   PeSemanticOwnerCompactLayoutMetric compactLayout{};
+  PeSemanticOwnerRetainerEpochMetric retainerEpoch{};
 };
 
 class PeSemanticOwnerPhaseObserver final {
@@ -526,6 +575,69 @@ class PeSemanticOwnerPhaseObserver final {
     shape.sectionCounts = sectionCounts;
     shape.occurrences = 1u;
     ++metric.sampledComplete;
+  }
+
+  void recordRetainerEpoch(
+      const D3D9PePendingCommandRetainer::EpochSnapshot& before,
+      const D3D9PePendingCommandRetainer::EpochSnapshot& after) noexcept {
+    auto& metric = stats_.retainerEpoch;
+    ++metric.sampledTotal;
+    const auto projection = projectRetainerEpoch(before, after);
+    if (!projection.valid) {
+      ++metric.invalid;
+      return;
+    }
+    ++metric.valid;
+    metric.sumEntries += projection.entries;
+    metric.sumSurvivors += projection.survivors;
+    metric.sumExpired += projection.expired;
+    metric.sumTombstonesBefore += projection.tombstonesBefore;
+    metric.sumIndexSlots += projection.indexSlots;
+    switch (projection.disposition) {
+    case RetainerEpochDisposition::FastClean:
+      ++metric.sampledFastClean;
+      break;
+    case RetainerEpochDisposition::FastTombstoneRebuild:
+      ++metric.sampledFastTombstoneRebuild;
+      break;
+    case RetainerEpochDisposition::ExpiryRebuild:
+      ++metric.sampledExpiryRebuild;
+      break;
+    }
+    metric.maxEntries = std::max(metric.maxEntries, projection.entries);
+    metric.maxSurvivors = std::max(metric.maxSurvivors, projection.survivors);
+    metric.maxExpired = std::max(metric.maxExpired, projection.expired);
+    metric.maxTombstonesBefore =
+        std::max(metric.maxTombstonesBefore, projection.tombstonesBefore);
+    metric.maxIndexSlots = std::max(metric.maxIndexSlots, projection.indexSlots);
+
+    for (std::size_t i = 0u; i < metric.distinctShapeCount; ++i) {
+      auto& shape = metric.shapes[i];
+      if (shape.disposition == projection.disposition &&
+          shape.entries == projection.entries &&
+          shape.survivors == projection.survivors &&
+          shape.expired == projection.expired &&
+          shape.tombstonesBefore == projection.tombstonesBefore &&
+          shape.indexSlots == projection.indexSlots) {
+        ++shape.occurrences;
+        ++metric.retainedComplete;
+        return;
+      }
+    }
+    if (metric.distinctShapeCount >=
+        PeSemanticOwnerRetainerEpochMetric::kShapeCapacity) {
+      ++metric.boundedOverflow;
+      return;
+    }
+    auto& shape = metric.shapes[metric.distinctShapeCount++];
+    shape.disposition = projection.disposition;
+    shape.entries = projection.entries;
+    shape.survivors = projection.survivors;
+    shape.expired = projection.expired;
+    shape.tombstonesBefore = projection.tombstonesBefore;
+    shape.indexSlots = projection.indexSlots;
+    shape.occurrences = 1u;
+    ++metric.retainedComplete;
   }
 
   [[nodiscard]] const PeSemanticOwnerPhaseStats& stats() const noexcept {

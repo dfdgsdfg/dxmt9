@@ -13,6 +13,17 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H287](../../../docs/perfomance/present-pacing/present-pacing-pe-retainer-epoch-shapes.287.md)
+implements R-CORE-REC-7.63's sampled retainer epoch projection and conserved,
+bounded distribution. Native 6+6 and six actual PE pixel processes pass;
+default retainer/settlement code is unchanged after switch-table-aware linked
+qualification. Interior 05/06 GT2 samples show 198/209 and 150/160 expiry
+rebuilds, no sampled tombstones, and 2048 index slots. Invalid/overflow counts
+are zero; this is attribution, not isolated index CPU or savings. Separate
+OFF spots are 30.036/18.228 FPS, with 53 unreported full-health tail frames
+in 06. Expiry/index economy, deterministic-sampling bias, repeatable PE CPU
+savings and README recovery remain open. No new TLA+ transition is claimed.
+
 [H286](../../../docs/perfomance/present-pacing/present-pacing-pe-binding-wire-authority.286.md)
 removes the occurrence's duplicate wire ordinal under R-CORE-REC-7.16;
 the private prepared identity witness is the single authority. Locator size

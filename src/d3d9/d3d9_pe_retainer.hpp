@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <utility>
 #include <vector>
 
@@ -106,6 +107,19 @@ public:
         std::uint64_t value = 0;
     };
 
+    // Cold diagnostic view.  This is deliberately a value projection: it
+    // carries no object identity or ownership and adds no state to the
+    // retainer itself.
+    struct EpochSnapshot {
+        std::uint64_t entryCount = 0u;
+        std::uint64_t currentTouched = 0u;
+        std::uint64_t previousTouched = 0u;
+        std::uint64_t indexOccupied = 0u;
+        std::uint64_t indexUsed = 0u;
+        std::uint64_t indexSlots = 0u;
+        std::uint64_t epoch = 0u;
+    };
+
     explicit D3D9PePendingCommandRetainer(
         std::size_t capacity, EpochForTesting testingEpoch) noexcept
         : D3D9PePendingCommandRetainer(capacity) {
@@ -120,6 +134,16 @@ public:
 
     std::size_t size() const noexcept {
         return entries_.size();
+    }
+
+    EpochSnapshot epochSnapshot() const noexcept {
+        return EpochSnapshot{
+            static_cast<std::uint64_t>(entries_.size()),
+            static_cast<std::uint64_t>(currentTouchedCount_),
+            static_cast<std::uint64_t>(previousTouchedCount_),
+            static_cast<std::uint64_t>(index_.occupied),
+            static_cast<std::uint64_t>(index_.used),
+            static_cast<std::uint64_t>(index_.slots.size()), epoch_};
     }
 
     // Pure aggregate headroom proof for bounded retain. The owner supplies
@@ -627,3 +651,62 @@ private:
     std::size_t previousTouchedCount_ = 0u;
     bool ready_ = false;
 };
+
+enum class RetainerEpochDisposition : std::uint8_t {
+    FastClean,
+    FastTombstoneRebuild,
+    ExpiryRebuild,
+};
+
+struct RetainerEpochProjection {
+    bool valid = false;
+    RetainerEpochDisposition disposition =
+        RetainerEpochDisposition::FastClean;
+    std::uint64_t entries = 0u;
+    std::uint64_t survivors = 0u;
+    std::uint64_t expired = 0u;
+    std::uint64_t tombstonesBefore = 0u;
+    std::uint64_t indexSlots = 0u;
+};
+
+// Pure cold validation of the before/after retainer facts.  The arithmetic is
+// intentionally unsigned, matching endEpoch() across uint64 wrap.
+inline RetainerEpochProjection projectRetainerEpoch(
+    const D3D9PePendingCommandRetainer::EpochSnapshot& before,
+    const D3D9PePendingCommandRetainer::EpochSnapshot& after) noexcept {
+    RetainerEpochProjection result{};
+    if (before.currentTouched > before.entryCount ||
+        before.previousTouched > before.entryCount ||
+        before.currentTouched >
+            std::numeric_limits<std::uint64_t>::max() -
+                before.previousTouched ||
+        before.currentTouched + before.previousTouched > before.entryCount ||
+        before.indexOccupied > before.indexUsed ||
+        before.indexUsed > before.indexSlots ||
+        before.indexOccupied != before.entryCount ||
+        after.entryCount != before.currentTouched + before.previousTouched ||
+        after.currentTouched != 0u ||
+        after.previousTouched != before.currentTouched ||
+        after.epoch != before.epoch + 1u ||
+        after.indexSlots != before.indexSlots ||
+        after.indexOccupied != after.entryCount ||
+        after.indexUsed != after.indexOccupied ||
+        after.indexOccupied > after.indexSlots) {
+        return result;
+    }
+
+    result.valid = true;
+    result.entries = before.entryCount;
+    result.survivors = after.entryCount;
+    result.expired = before.entryCount - after.entryCount;
+    result.tombstonesBefore = before.indexUsed - before.indexOccupied;
+    result.indexSlots = before.indexSlots;
+    if (result.expired != 0u) {
+        result.disposition = RetainerEpochDisposition::ExpiryRebuild;
+    } else if (result.tombstonesBefore != 0u) {
+        result.disposition = RetainerEpochDisposition::FastTombstoneRebuild;
+    } else {
+        result.disposition = RetainerEpochDisposition::FastClean;
+    }
+    return result;
+}

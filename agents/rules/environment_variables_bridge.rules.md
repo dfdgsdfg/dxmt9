@@ -53,6 +53,17 @@ owner (including when allocated for another PE diagnostic), not recorder hot
 storage; the disabled path adds no clocks or descriptor scan. Inclusive parent
 timings include this observer work and must not be called product CPU time.
 
+The same gate reports sampled retainer epoch shapes (R-CORE-REC-7.63): clean
+no-expiry, tombstone-only rebuild and expiry/compaction rebuild, with entries,
+survivors, expired entries, prior tombstones and index slot count. Before/after
+snapshots and bounded aggregation are outside `settleRetainerEpoch` timing
+but inside its inclusive settle parent. Sampling reuses the existing settle
+parent decision; it does not sample each retain. Require a complete
+Present-qualified header/rows/footer group, sample conservation and explicit
+invalid/overflow counts. Counts and timing are diagnostic populations, not
+observed whole-workload CPU savings. The retainer and disabled settlement
+gain no diagnostic fields, snapshot copies, clocks or scans.
+
 `DXMT9_OFFLOAD_COMMIT_REPLAY` and its inline rollback are stable producer-replay
 providers. `DXMT9_CPU_READY_TAPE` is the migration alias for the stable
 default-off streaming provider. Inline-constant delta remains an experimental

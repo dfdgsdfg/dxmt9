@@ -30,6 +30,16 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H287](present-pacing-pe-retainer-epoch-shapes.287.md) separates sampled
+retainer expiry from rollback tombstones without changing the default path.
+About 94% of the 05/06 GT2 epoch samples rebuild after expiry; average sets
+are about 124 entries, with 2048 index slots. No sampled tombstones or
+invalid/overflow rows occur. Native 6+6, 384 exact candidate pixel samples
+(OFF/ON combined), and switch-table-aware default code comparison pass.
+OFF spots are 30.036/18.228 FPS; 06 has 53 unreported full-health tail rows.
+Epoch timing still includes unseparated resource release, so neither these
+counts nor single FPS spots establish a CPU saving or README recovery.
+
 [H286](present-pacing-pe-binding-wire-authority.286.md) removes the binding
 locator's duplicate wire ordinal: private witness authority and actual source
 checks remain. Locator size falls 16→12 bytes, PE32 compact stack shrinks

@@ -6894,6 +6894,105 @@ void observedSettlementChildrenSampleAtN1() {
   check(retainer.events == 1u && retainer.samples == 1u &&
             reset.events == 1u && reset.samples == 1u,
         "N=1 observed settlement samples both gated child phases");
+  check(stats.retainerEpoch.sampledTotal == 1u &&
+            stats.retainerEpoch.valid == 1u &&
+            stats.retainerEpoch.invalid == 0u &&
+            stats.retainerEpoch.retainedComplete == 1u,
+        "sampled retainer settlement records one valid complete shape");
+
+  ObservedOwner emptyOwner;
+  PeSemanticOwnerPhaseObserver emptyObserver(1u);
+  emptyOwner.setPhaseObserver(&emptyObserver);
+  check(!emptyOwner.settle(), "empty owner keeps the existing false settlement path");
+  check(emptyObserver.stats().phases[static_cast<std::size_t>(
+            PeSemanticOwnerPhase::SettleRetainerEpoch)].events == 0u &&
+            emptyObserver.stats().retainerEpoch.sampledTotal == 0u,
+        "empty settlement does not fabricate a retainer epoch observation");
+
+  D9CSurface disabledSurface{};
+  PeSemanticOwnerPhaseObserver disabledObserver(0u);
+  ObservedOwner disabledOwner;
+  disabledOwner.setPhaseObserver(&disabledObserver);
+  auto disabledInput = base(PeSemanticProducerKind::Present, 0x765u, 0x766u);
+  disabledInput.surface0 =
+      localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&disabledSurface, 0x767u);
+  check(disabledOwner.tryAppendOwnedRecord(
+            disabledInput, []() noexcept { return true; }) &&
+            disabledOwner.settle(),
+        "disabled observer owner settlement succeeds");
+  check(disabledObserver.stats().phases[static_cast<std::size_t>(
+            PeSemanticOwnerPhase::SettleRetainerEpoch)].events == 1u &&
+            disabledObserver.stats().phases[static_cast<std::size_t>(
+                PeSemanticOwnerPhase::SettleRetainerEpoch)].samples == 0u &&
+            disabledObserver.stats().retainerEpoch.sampledTotal == 0u,
+        "N=0 disables retainer snapshots while preserving child events");
+}
+
+void retainerEpochObserverDistribution() {
+  using Snapshot = D3D9PePendingCommandRetainer::EpochSnapshot;
+  PeSemanticOwnerPhaseObserver observer(2u);
+  using Owner = PeSemanticBatchOwner<2u, 2u, 4096u, 2u, 2u>;
+  D9CSurface first{};
+  Owner owner;
+  owner.setPhaseObserver(&observer);
+  auto input = base(PeSemanticProducerKind::Present, 0x7a1u, 0x7a2u);
+  input.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(&first, 0x7a3u);
+  check(owner.tryAppendOwnedRecord(input, []() noexcept { return true; }) &&
+            owner.settle(),
+        "first decimated owner settlement succeeds");
+  input.sourceOrdinal = input.recordOrdinal = 0x7a4u;
+  check(owner.tryAppendOwnedRecord(input, []() noexcept { return true; }) &&
+            owner.settle(),
+        "second decimated owner settlement succeeds");
+  const auto& phase = observer.stats().phases[static_cast<std::size_t>(
+      PeSemanticOwnerPhase::SettleRetainerEpoch)];
+  check(phase.events == 2u && phase.samples == 1u &&
+            observer.stats().retainerEpoch.sampledTotal == 1u,
+        "retainer child preserves event denominator under decimation");
+
+  PeSemanticOwnerPhaseObserver distribution(1u);
+  for (std::uint64_t entries = 0u; entries <= 256u; ++entries) {
+    const auto slots = entries < 64u ? 64u : 512u;
+    const Snapshot before{entries, entries, 0u, entries, entries, slots, entries};
+    const Snapshot after{entries, 0u, entries, entries, entries, slots,
+                         entries + 1u};
+    distribution.recordRetainerEpoch(before, after);
+  }
+  const Snapshot repeatedBefore{0u, 0u, 0u, 0u, 0u, 64u, 0u};
+  const Snapshot repeatedAfter{0u, 0u, 0u, 0u, 0u, 64u, 1u};
+  distribution.recordRetainerEpoch(repeatedBefore, repeatedAfter);
+  const Snapshot malformedBefore{1u, 2u, 0u, 1u, 1u, 64u, 0u};
+  distribution.recordRetainerEpoch(malformedBefore, repeatedAfter);
+  const auto& metric = distribution.stats().retainerEpoch;
+  check(metric.sampledTotal == 259u && metric.valid == 258u &&
+            metric.invalid == 1u && metric.boundedOverflow == 1u &&
+            metric.retainedComplete == 257u && metric.distinctShapeCount == 256u &&
+            metric.maxEntries == 256u && metric.maxSurvivors == 256u &&
+            metric.sumEntries == 32896u && metric.sumSurvivors == 32896u &&
+            metric.sumEntries == metric.sumSurvivors && metric.sumExpired == 0u &&
+            metric.sampledFastClean == metric.valid &&
+            metric.sampledFastTombstoneRebuild == 0u &&
+            metric.sampledExpiryRebuild == 0u,
+        "retainer shape table counts invalid, overflow, and repeated known rows");
+  check(metric.shapes[0].occurrences == 2u,
+        "a known shape remains counted after bounded table saturation");
+
+  PeSemanticOwnerPhaseObserver aggregate(1u);
+  const Snapshot tombstoneBefore{2u, 2u, 0u, 2u, 3u, 64u, 0u};
+  const Snapshot tombstoneAfter{2u, 0u, 2u, 2u, 2u, 64u, 1u};
+  aggregate.recordRetainerEpoch(tombstoneBefore, tombstoneAfter);
+  const Snapshot expiryBefore{3u, 1u, 1u, 3u, 3u, 64u, 1u};
+  const Snapshot expiryAfter{2u, 0u, 1u, 2u, 2u, 64u, 2u};
+  aggregate.recordRetainerEpoch(expiryBefore, expiryAfter);
+  const auto& aggregateMetric = aggregate.stats().retainerEpoch;
+  check(aggregateMetric.sumEntries == 5u &&
+            aggregateMetric.sumSurvivors == 4u &&
+            aggregateMetric.sumExpired == 1u &&
+            aggregateMetric.sumTombstonesBefore == 1u &&
+            aggregateMetric.sumIndexSlots == 128u &&
+            aggregateMetric.sampledFastTombstoneRebuild == 1u &&
+            aggregateMetric.sampledExpiryRebuild == 1u,
+        "valid tombstone and expiry observations contribute aggregate sums");
 }
 
 void observerScopeRestoresNestedState() {
@@ -8291,6 +8390,7 @@ int main(int argc, char** argv) {
     calibratedOwnerPhaseObserver();
     observerSettlementFamilyTruthTable();
     observedSettlementChildrenSampleAtN1();
+    retainerEpochObserverDistribution();
     observerScopeRestoresNestedState();
     observerSeparatesPrepareMalformedFromHeader();
     observedAdmissionReconstructionKeepsHotPathUnchanged();
