@@ -11,10 +11,16 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H292](present-pacing-pe-descriptor-table.292.md) rejects an unconditional
+variable-size compact descriptor-table copy. Eight PE32/PE64 processes pass
+byte oracles, but one/two-section matched-header append regresses 8–18%; dense-table
+gains do not qualify it. Product changes are withdrawn; stronger native
+coverage remains. A small-table policy still requires separate economics.
+
 [H291](present-pacing-pe-current-hotpath.291.md) refreshes exact-image PE32
 profiles at `627d9840` and separately remeasures 06 GT2 at 18.217 FPS.
-Owner/constant work remains visible; descriptor-table batching is only a
-candidate, not an implemented or measured saving. Production is unchanged.
+Owner/constant work remains visible; its descriptor-table candidate is
+subsequently priced and rejected by H292. Production is unchanged.
 
 [H290](present-pacing-pe-private-admission-proof.290.md) removes a duplicate
 private compact source qualification while keeping envelope and writer checks.

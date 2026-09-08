@@ -217,6 +217,44 @@ bool ownerUpVertexPrefix(const Owner& owner,
   return expected.empty();
 }
 
+void checkCompactDescriptorPrefix(
+    const PeSemanticExactFixedEmission& emission,
+    const PeSemanticPreparedSparseLayout& layout, std::size_t recordIndex,
+    std::string_view label) {
+  const auto& header = emission.transport.header;
+  check(recordIndex < header.recordCount,
+        "compact descriptor fixture has its requested record");
+  const auto recordOffset = static_cast<std::size_t>(header.recordTableOffset) +
+                            recordIndex * sizeof(D9CCommandChunkWireRecordHeader);
+  check(recordOffset <= emission.wire.size() &&
+            sizeof(D9CCommandChunkWireRecordHeader) <=
+                emission.wire.size() - recordOffset,
+        "compact descriptor fixture bounds its record header");
+  D9CCommandChunkWireRecordHeader record{};
+  std::memcpy(&record, emission.wire.data() + recordOffset, sizeof(record));
+  const auto payloadOffset = static_cast<std::size_t>(header.payloadArenaOffset) +
+                             record.payloadOffset;
+  check(payloadOffset <= emission.wire.size() &&
+            record.payloadSize <= emission.wire.size() - payloadOffset,
+        "compact descriptor fixture bounds its payload");
+  const auto payload = emission.wire.subspan(payloadOffset, record.payloadSize);
+  check(payload.size() >= sizeof(D9CCommandChunkWireDrawHeader),
+        "compact descriptor fixture has a draw header");
+  D9CCommandChunkWireDrawHeader draw{};
+  std::memcpy(&draw, payload.data(), sizeof(draw));
+  check(draw.sectionCount == layout.sectionCount,
+        "compact descriptor count matches prepared active prefix");
+  const auto tableBytes = static_cast<std::size_t>(draw.sectionCount) *
+                          sizeof(D9CCommandChunkWireSectionDesc);
+  check(draw.sectionTableOffset <= payload.size() &&
+            tableBytes <= payload.size() - draw.sectionTableOffset,
+        "compact descriptor fixture bounds its active table");
+  check(tableBytes == 0u ||
+            std::memcmp(payload.data() + draw.sectionTableOffset,
+                        layout.sections.data(), tableBytes) == 0,
+        label);
+}
+
 template <PeSemanticRecordInputLike Input>
 bool appendCanonicalSemanticRecord(CommandChunkBuilder& builder,
                                    const Input& input) {
@@ -2053,10 +2091,22 @@ void compactScalarActiveInventoryDrawDifferential() {
         recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE
             ? PeSemanticProducerKind::DrawIndexedPrimitive
             : PeSemanticProducerKind::DrawPrimitive;
+    PeSemanticCompactPreparedRecord prepared{};
     const auto append = [&](bool callbackResult, bool& callbackEntered) {
       return guard.withCapability(
           thread, epoch,
           [&](const auto& access) noexcept {
+            const PeSemanticSparsePlanRecordInput input{
+                .access = &access,
+                .sparsePlan = &plan,
+                .producer = producer,
+                .recordType = recordType,
+                .recordFlags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+                .sourceOrdinal = 2u,
+                .recordOrdinal = 2u};
+            if (owner.prepareAdmission(input, prepared) !=
+                PeSemanticAdmissionOutcome::Admissible)
+              return false;
             return owner.tryAppendSparseStatePlan(
                 access, plan, producer, recordType,
                 D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 2u, 2u,
@@ -2086,11 +2136,18 @@ void compactScalarActiveInventoryDrawDifferential() {
     checkPending();
     const auto sealed = canonical.seal();
     PeSemanticExactFixedEmission finalEmission{};
+    PeSemanticSegmentedEmission finalSegmented{};
     check(sealed.valid() && owner.emitExactFixed(finalEmission) &&
+              owner.emitSegmented(finalSegmented) &&
               finalEmission.wireBytes == sealed.blob.size() &&
               std::equal(sealed.blob.begin(), sealed.blob.end(),
                          finalEmission.wire.begin()),
           "compact scalar active inventory matches generic final wire");
+    check(ownerSegmentedRolesEqualExact(finalEmission, finalSegmented),
+          "compact scalar retry preserves ExactFixed and segmented roles");
+    checkCompactDescriptorPrefix(
+        finalEmission, prepared.sparseLayout, 1u,
+        "compact scalar table bytes match the prepared active prefix");
     owner.reset();
     canonical.resetAndReleaseRetained();
     check(prefixSurface.refs == 1u && indexBuffer.refs == 1u,
@@ -2746,12 +2803,29 @@ void realCompactQuotaDenialAndLayoutReference() {
   shadow.writer().pendingSamplerStatesTyped().set(sampler, samplerType, 0x202u);
   shadow.writer().pendingTransformsTyped().set(
       transformStateKey(kD3dTsView), identityTransformMatrix());
+  const auto seedConstant = [](ConstShadow& shadow, std::size_t bytes,
+                               std::uint8_t value) {
+    shadow.values.assign(bytes, value);
+    shadow.dirtyElems.assign(1u, 1u);
+    shadow.dirtyStart = 0u;
+    shadow.dirtyEnd = 1u;
+  };
+  seedConstant(constants.vsConstF, 16u, 0x31u);
+  seedConstant(constants.vsConstI, 16u, 0x41u);
+  seedConstant(constants.vsConstB, 4u, 0x51u);
+  seedConstant(constants.psConstF, 16u, 0x61u);
+  seedConstant(constants.psConstI, 16u, 0x71u);
+  seedConstant(constants.psConstB, 4u, 0x81u);
   PeDrawParams params{.recordType = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
                       .primitiveType = 4u,
                       .primitiveCount = 1u};
   SparseStatePlan plan;
   using ReferenceOwner = PeSemanticBatchOwner<8u, 64u, 8192u, 8u, 64u>;
   ReferenceOwner owner;
+  CommandChunkBuilder canonical;
+  PeSparseScratch genericScratch{};
+  D9CCommandChunkWireDrawHeader genericHeader{};
+  SparseStateInput genericState{};
   std::recursive_mutex mutex;
   dxmt9::core::ThreadOwnershipToken thread;
   RecorderLockGuard guard(mutex, false);
@@ -2759,7 +2833,7 @@ void realCompactQuotaDenialAndLayoutReference() {
   check(guard.withCapability(
             thread, 0x1d00u, [&](const auto& access) noexcept {
               if (!buildSparseStatePlan(access, shadow, constants, bindings,
-                                        payloads, params, false, false, plan) ||
+                                        payloads, params, false, true, plan) ||
                   !finalizeSparseStatePlanChunkContext(access, chunk, plan))
                 return false;
               const PeSemanticSparsePlanRecordInput input{
@@ -2792,12 +2866,109 @@ void realCompactQuotaDenialAndLayoutReference() {
                         return true;
                       }))
                 return false;
-              return std::all_of(reference.begin(), reference.end(),
-                                 [](auto count) { return count != 0u; }) &&
-                     published == reference &&
-                     prepared.sparseLayout.quotaDeltas == reference;
+              if (!std::all_of(reference.begin(), reference.end(),
+                               [](auto count) { return count != 0u; }) ||
+                  prepared.sparseLayout.sectionCount != 23u ||
+                  published != reference ||
+                  prepared.sparseLayout.quotaDeltas != reference ||
+                  !buildSparseState(shadow, constants, bindings, payloads,
+                                    params, false, true, genericScratch,
+                                    genericHeader, genericState) ||
+                  !appendSparseRecord(canonical, params.recordType,
+                                      genericHeader, genericState))
+                return false;
+              return owner.tryAppendSparseStatePlan(
+                  access, plan, PeSemanticProducerKind::DrawIndexedPrimitive,
+                  params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u,
+                  1u, []() noexcept { return true; });
             }),
-        "actual all17 compact layout matches independent full17 quota reference");
+        "actual dense compact layout matches independent full17 quota reference");
+  const auto sealed = canonical.seal();
+  PeSemanticExactFixedEmission compactEmission{};
+  PeSemanticSegmentedEmission compactSegmented{};
+  check(sealed.valid() && owner.emitExactFixed(compactEmission) &&
+            owner.emitSegmented(compactSegmented) &&
+            ownerSegmentedRolesEqualExact(compactEmission, compactSegmented) &&
+            compactEmission.wireBytes == sealed.blob.size() &&
+            std::equal(sealed.blob.begin(), sealed.blob.end(),
+                       compactEmission.wire.begin()),
+        "dense compact indexed bytes match the generic builder oracle");
+  checkCompactDescriptorPrefix(
+      compactEmission, prepared.sparseLayout, 0u,
+      "dense compact table bytes match the prepared active prefix");
+  owner.reset();
+  canonical.resetAndReleaseRetained();
+
+  // Indexed-UP has no index-buffer section but contributes both raw UP tails,
+  // making 24 sections the maximum compact table reachable without a full
+  // snapshot or a forged source witness.
+  shadow.writer().pendingIb() = false;
+  const std::array<std::byte, 6u> upIndex{
+      std::byte{0xa1}, std::byte{0xa2}, std::byte{0xa3},
+      std::byte{0xa4}, std::byte{0xa5}, std::byte{0xa6}};
+  const std::array<std::byte, 12u> upVertex{
+      std::byte{0xb1}, std::byte{0xb2}, std::byte{0xb3}, std::byte{0xb4},
+      std::byte{0xb5}, std::byte{0xb6}, std::byte{0xb7}, std::byte{0xb8},
+      std::byte{0xb9}, std::byte{0xba}, std::byte{0xbb}, std::byte{0xbc}};
+  payloads.upIndex = upIndex;
+  payloads.upVertex = upVertex;
+  params.recordType = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE_UP;
+  params.numVertices = static_cast<std::uint32_t>(upVertex.size());
+  params.stride = 1u;
+  params.indexFormat = 101u;
+  SparseStatePlan upPlan;
+  ReferenceOwner upOwner;
+  CommandChunkBuilder upCanonical;
+  PeSparseScratch upGenericScratch{};
+  D9CCommandChunkWireDrawHeader upGenericHeader{};
+  SparseStateInput upGenericState{};
+  PeSemanticProductionCompactPreparedRecord upPrepared{};
+  check(guard.withCapability(
+            thread, 0x1d01u, [&](const auto& access) noexcept {
+              if (!buildSparseStatePlan(access, shadow, constants, bindings,
+                                        payloads, params, false, true,
+                                        upPlan) ||
+                  !finalizeSparseStatePlanChunkContext(access, chunk, upPlan))
+                return false;
+              const PeSemanticSparsePlanRecordInput input{
+                  .access = &access,
+                  .sparsePlan = &upPlan,
+                  .producer = PeSemanticProducerKind::DrawIndexedPrimitiveUp,
+                  .recordType = params.recordType,
+                  .recordFlags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+                  .sourceOrdinal = 1u,
+                  .recordOrdinal = 1u};
+              if (upOwner.prepareAdmission(input, upPrepared) !=
+                      PeSemanticAdmissionOutcome::Admissible ||
+                  upPrepared.sparseLayout.sectionCount != 24u ||
+                  !buildSparseState(shadow, constants, bindings, payloads,
+                                    params, false, true, upGenericScratch,
+                                    upGenericHeader, upGenericState) ||
+                  !appendSparseRecord(upCanonical, params.recordType,
+                                      upGenericHeader, upGenericState))
+                return false;
+              return upOwner.tryAppendSparseStatePlan(
+                  access, upPlan,
+                  PeSemanticProducerKind::DrawIndexedPrimitiveUp,
+                  params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 1u,
+                  1u, []() noexcept { return true; });
+            }),
+        "indexed-UP compact layout reaches the lawful 24-section maximum");
+  const auto upSealed = upCanonical.seal();
+  PeSemanticExactFixedEmission upExact{};
+  PeSemanticSegmentedEmission upSegmented{};
+  check(upSealed.valid() && upOwner.emitExactFixed(upExact) &&
+            upOwner.emitSegmented(upSegmented) &&
+            upExact.wireBytes == upSealed.blob.size() &&
+            std::equal(upSealed.blob.begin(), upSealed.blob.end(),
+                       upExact.wire.begin()) &&
+            ownerSegmentedRolesEqualExact(upExact, upSegmented),
+        "indexed-UP compact bytes and transport roles match the generic oracle");
+  checkCompactDescriptorPrefix(
+      upExact, upPrepared.sparseLayout, 0u,
+      "indexed-UP compact table bytes match the prepared active prefix");
+  upOwner.reset();
+  upCanonical.resetAndReleaseRetained();
 }
 
 void partialRectClearMatchesCanonicalBuilder() {

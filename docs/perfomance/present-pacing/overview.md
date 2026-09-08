@@ -30,13 +30,21 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H292](present-pacing-pe-descriptor-table.292.md) rejects general variable-size
+compact descriptor-table emission. PE32 one/two-section matched-header append
+grows 8.87%/8.27%; PE64 grows 18.33%/17.01%. Dense indexed/UP cases improve
+slightly, but neither fewer copies nor smaller helpers qualifies the general
+replacement. Native byte/rollback tests are retained; the whole product-header
+edit is withdrawn and no candidate GPU/wild promotion is claimed. Fixed-size
+small-table handling remains an unmeasured next hypothesis.
+
 [H291](present-pacing-pe-current-hotpath.291.md) refreshes the current
 `627d9840` PE32 profiles: owner admission/emission and constants remain
 investigation targets, with cross-symbol samples unassigned and no CPU-time
 claim. A separate, fresh 06 GT2 OFF spot is 18.217 FPS (README +0.64%), with
-34 unreported full-health tail frames. Exact active descriptor-table copy is
-an unimplemented candidate requiring true multi-section PE economics; the
-existing multi-texture fixture has only one descriptor. Production is unchanged.
+34 unreported full-health tail frames. Its descriptor-table candidate led to
+H292's true multi-section economics; the earlier multi-texture fixture had only
+one descriptor. Production is unchanged.
 
 [H290](present-pacing-pe-private-admission-proof.290.md) keeps a narrowly
 qualified duplicate source-proof removal. Seven warm matched-header append

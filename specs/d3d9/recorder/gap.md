@@ -13,6 +13,17 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H292](../../../docs/perfomance/present-pacing/present-pacing-pe-descriptor-table.292.md)
+rejects the unconditional variable-size compact descriptor-table copy allowed
+by R-CORE-REC-7.66. Independent native bytes/rollback coverage and eight actual
+PE processes pass, but one/two-section matched-header append regresses
+8.87%/8.27% on PE32 and 18.33%/17.01% on PE64; dense-table gains do not qualify
+the general replacement. The product-header edit is fully withdrawn. Native
+empty/multi/23-indexed/24-indexed-UP differentials, generic 25-section coverage
+and the optional contract remain. A small-table fixed-size policy, production
+parent cost and any new FPS gain remain unproven; no candidate GPU/wild
+promotion follows this failed economic gate.
+
 [H291](../../../docs/perfomance/present-pacing/present-pacing-pe-current-hotpath.291.md)
 refreshes PE32 symbol evidence at `627d9840` without changing production.
 Owner admission/emission and constant work remain visible; the symbol groups

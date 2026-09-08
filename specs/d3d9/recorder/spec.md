@@ -756,6 +756,26 @@ proof, not a lifecycle transition; bounded native negative/differential checks
 bind the refinement, while existing recorder TLA models cover the unchanged
 protocol. Actual PE pixel and economy evidence remain separate layers.
 
+R-CORE-REC-7.66 permits a single compact descriptor-table emission from the
+private prepared layout. `PeSemanticPreparedSection` retains payload-relative
+offsets and canonical order established by preparation; compile-time ABI locks
+bind its representation to `D9CCommandChunkWireSectionDesc`. The writer first
+checks the complete table range, then executes the same qualified section
+visitors and payload checks. Only after successful final count/cursor
+conservation may it copy the active prefix. Zero sections copy no table bytes;
+the unused bounded tail is not initialized or read for this operation.
+The table remains speculative and outside the public committed frontier until
+the normal append transaction accepts it. Neither callbacks nor retention
+receive a new view of partially emitted bytes. This is a value-materialization
+refinement inside the existing transaction, not a new queue/lifetime transition;
+native independent bytes and failure/retry traces bind the change while the
+existing recorder models retain ownership of publication and rollback.
+Performance qualification must include genuine cross-category multi-section
+inputs, not merely several rows in a single texture or stream section.
+Dense compact cases must respect producer gating: indexed-buffer and indexed-UP
+payload sections do not coexist. A generic full-schema oracle is not evidence
+that one compact producer can emit every schema section simultaneously.
+
 R-CORE-REC-7.64 permits a compact-only fusion of canonical binding rows and
 their first-use wire-handle entries. The private writer consumes the existing
 identity witness; a call-local emitted-prefix cursor distinguishes first use

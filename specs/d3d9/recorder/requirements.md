@@ -1255,3 +1255,22 @@ rollback must remain intact. Native public-append counterexamples must distingui
 source rejection from envelope rejection, preserve committed prefixes and refs,
 and prove clean retry in observed and unobserved paths. Linked PE code and actual
 PE append measurements must qualify any claimed cost reduction.
+
+**R-CORE-REC-7.66** Compact payload emission may copy its prepared active
+section-descriptor prefix as one exact table only after all section visitors
+and final cursor/count checks succeed. Prepared and wire descriptors must have
+compile-time identical size, alignment and field offsets, and both must be
+standard-layout and trivially copyable. The complete destination table range
+must be checked before payload emission; inactive descriptors must never be
+read or copied. Source qualification, section kind/count/element-size/byte-size/
+offset validation, padding, resource identity/pin/remap checks and visitor order
+remain required. Delaying private table writes must not change committed
+frontiers, callbacks, retain/release multiplicity, failure classification,
+rollback bytes or retry behavior. No metadata may become observable before
+the existing append publication point. Native independent-builder differentials
+must cover empty, single, multi and maximally reachable compact tables plus
+late failure/retry, with the full-schema generic oracle retained separately.
+Impossible compact combinations must not be fabricated to fill a schema matrix.
+Actual PE32/PE64 economics must distinguish descriptor count from row count
+and loaded-writer cost from complete append cost; fewer source-level copies
+alone do not establish CPU or FPS improvement.
