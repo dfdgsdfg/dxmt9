@@ -30,6 +30,14 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H277](present-pacing-pe-pin-probe-cursor.277.md) removes repeated remainder
+arithmetic from owner pin-index probes without changing table/identity
+authority. Production-bound native cursor/modulo differentials and existing
+TLA pass. Linked compact retention bodies shrink from 743→598 instructions
+(PE32) and 753→510 (PE64); this is work-removal evidence, not a CPU/FPS saving.
+The initial miss-prefix reuse candidate was compiled away already and rejected.
+Fresh runtime economy remains open.
+
 [H276](present-pacing-pe-post-lifetime-profile.276.md) refreshes current-image
 05/06 GT2 PE profiles and separate CPU envelopes. The commit-entry thread
 occupies 0.950/0.966 cores, while `d3d9.dll` owns only 9.96%/5.97% of separate

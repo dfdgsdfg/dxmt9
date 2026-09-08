@@ -263,6 +263,15 @@ neither an attributed gain nor qualified neutrality. No runtime promotion
 follows. Whole-scene Wine correctness, repeatability, same-binding hit
 distribution and current PE CPU attribution remain open.
 
+[H277](../../../docs/perfomance/present-pacing/present-pacing-pe-pin-probe-cursor.277.md)
+adds a local R-CORE-REC-7.59 representation refinement: cyclic lookup/insertion
+visits the same bounded buckets without repeated remainder arithmetic. Actual
+private-function modulo differentials, six-family retention/byte traces,
+arm64/x86_64 focused tests and existing TLA pass. Full identity/pointer/prefix
+checks and lifetime policy remain unchanged. Linked PE work decreases; this
+does not close fresh wild economy, whole-scene pixels or broader concurrency
+evidence.
+
 R-CORE-REC-7.52–7.55 cover fault-only prediction gating, family-specific append
 preparation, single-owner compact layout/quota work and production ledger
 routing without test-only TLS access. They are implemented with bounded

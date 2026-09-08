@@ -11,6 +11,10 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H277](present-pacing-pe-pin-probe-cursor.277.md) replaces per-probe modulo
+with an equivalent cyclic pin-index cursor. Bounded native and linked PE32/
+PE64 evidence qualify the arithmetic change; fresh runtime economy is open.
+
 [H276](present-pacing-pe-post-lifetime-profile.276.md) refreshes current-image
 PE attribution and separate native-thread CPU: 05/06 GT2 commit threads use
 0.950/0.966 cores. Constant/owner work remains visible; new Present-cache and

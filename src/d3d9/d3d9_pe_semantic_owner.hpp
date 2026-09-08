@@ -3786,9 +3786,9 @@ class PeSemanticBatchOwner final {
                            std::uint32_t generation,
                            std::size_t& out,
                            const PeSemanticPinIndexEntry*& outEntry) noexcept {
-    const std::size_t start = pinHash(identity) % N;
+    std::size_t cursor = pinHash(identity) % N;
     for (std::size_t probe = 0u; probe < N; ++probe) {
-      const auto& entry = index[(start + probe) % N];
+      const auto& entry = index[cursor];
       if (entry.generation != generation) return false;
       // A matching objectId is a hit even when its payload is malformed. The
       // caller validates kind, generation and pointer against the live
@@ -3798,6 +3798,10 @@ class PeSemanticBatchOwner final {
         outEntry = &entry;
         return true;
       }
+      if (cursor == N - 1u)
+        cursor = 0u;
+      else
+        ++cursor;
     }
     return false;
   }
@@ -3807,9 +3811,9 @@ class PeSemanticBatchOwner final {
                              const D9CWireObjectIdentity& identity,
                              std::uint32_t pin,
                              std::uint32_t generation) noexcept {
-    const std::size_t start = pinHash(identity) % N;
+    std::size_t cursor = pinHash(identity) % N;
     for (std::size_t probe = 0u; probe < N; ++probe) {
-      auto& entry = index[(start + probe) % N];
+      auto& entry = index[cursor];
       if (entry.generation == 0u || entry.generation != generation ||
           entry.identity.objectId == identity.objectId) {
         entry.identity = identity;
@@ -3817,6 +3821,10 @@ class PeSemanticBatchOwner final {
         entry.generation = generation;
         return true;
       }
+      if (cursor == N - 1u)
+        cursor = 0u;
+      else
+        ++cursor;
     }
     return false;
   }

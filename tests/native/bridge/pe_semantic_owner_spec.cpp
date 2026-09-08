@@ -63,6 +63,19 @@ struct PeSemanticOwnerTestAccess {
     }
     return false;
   }
+
+  template <typename Owner, typename Index>
+  static bool findPin(const Index& index, const D9CWireObjectIdentity& identity,
+                      std::uint32_t generation, std::size_t& out,
+                      const PeSemanticPinIndexEntry*& entry) noexcept {
+    return Owner::findPinIndex(index, identity, generation, out, entry);
+  }
+
+  template <typename Owner, typename Index>
+  static bool insertPin(Index& index, const D9CWireObjectIdentity& identity,
+                        std::uint32_t pin, std::uint32_t generation) noexcept {
+    return Owner::insertPinIndex(index, identity, pin, generation);
+  }
 };
 }  // namespace dxmt9::d3d9::pe
 
@@ -3307,6 +3320,326 @@ void retentionIdentityAndPointerAliasesReject() {
   owner.reset();
   check(first.refs == 1u && alias.refs == 1u && crossKind.refs == 1u,
         "identity alias rejection leaves typed ledger balanced");
+}
+
+void retentionLookupMissUsesPerFamilyPrefix() {
+  enum class Family : std::uint8_t {
+    Surface,
+    Texture,
+    Buffer,
+    Shader,
+    Declaration,
+    Query,
+  };
+  constexpr std::array families{
+      Family::Surface, Family::Texture, Family::Buffer,
+      Family::Shader, Family::Declaration, Family::Query,
+  };
+
+  for (const auto family : families) {
+    Owner owner;
+    CommandChunkBuilder canonical;
+    D9CSurface firstSurface, secondSurface;
+    D9CTexture firstTexture, secondTexture;
+    D9CBuffer firstBuffer, secondBuffer;
+    D9CShader firstShader, secondShader;
+    D9CVertexDecl firstDeclaration, secondDeclaration;
+    D9CQuery firstQuery, secondQuery;
+    std::array<SparseBindingInput<D9CCommandChunkWireStreamBinding>, 1u>
+        streamRows{};
+    std::array<SparseBindingInput<D9CCommandChunkWireShaderBinding>, 1u>
+        shaderRows{};
+    std::array<SparseBindingInput<D9CCommandChunkWireVertexInput>, 1u>
+        declarationRows{};
+
+    const auto makeInput = [&](std::uint64_t ordinal,
+                               bool novel) noexcept {
+      auto input = base(
+          family == Family::Surface
+              ? PeSemanticProducerKind::Present
+              : family == Family::Texture
+                  ? PeSemanticProducerKind::GenerateMipmaps
+                  : family == Family::Query
+                      ? PeSemanticProducerKind::QueryIssue
+                      : PeSemanticProducerKind::DrawPrimitive,
+          ordinal, ordinal);
+      switch (family) {
+      case Family::Surface:
+        input.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+            novel ? &secondSurface : &firstSurface,
+            novel ? 0x8a1u : 0x7a1u);
+        break;
+      case Family::Texture:
+        input.texture0 = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
+            novel ? &secondTexture : &firstTexture,
+            novel ? 0x8a2u : 0x7a2u);
+        break;
+      case Family::Buffer:
+        streamRows[0] = {
+            .wire = {.slot = 0u, .valid = 1u},
+            .object = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(
+                novel ? &secondBuffer : &firstBuffer,
+                novel ? 0x8a3u : 0x7a3u)};
+        input.sparse.streams = streamRows;
+        break;
+      case Family::Shader:
+        shaderRows[0] = {
+            .wire = {.stage = 0u, .valid = 1u},
+            .object = localRef<D9C_CHUNK_HANDLE_KIND_SHADER>(
+                novel ? &secondShader : &firstShader,
+                novel ? 0x8a4u : 0x7a4u)};
+        input.sparse.shaders = shaderRows;
+        break;
+      case Family::Declaration:
+        declarationRows[0] = {
+            .wire = {.valid = 1u,
+                     .kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION},
+            .object = localRef<D9C_CHUNK_HANDLE_KIND_VERTEX_DECL>(
+                novel ? &secondDeclaration : &firstDeclaration,
+                novel ? 0x8a5u : 0x7a5u)};
+        input.sparse.vertexInputs = declarationRows;
+        break;
+      case Family::Query:
+        input.query = localRef<D9C_CHUNK_HANDLE_KIND_QUERY>(
+            novel ? &secondQuery : &firstQuery,
+            novel ? 0x8a6u : 0x7a6u);
+        break;
+      }
+      return input;
+    };
+
+    auto first = makeInput(1u, false);
+    check(owner.tryAppendOwnedRecord(first, []() noexcept { return true; }) &&
+              appendCanonicalSemanticRecord(canonical, first) &&
+              owner.retainedCount() == 1u,
+          "lookup-miss fixture establishes a nonempty physical-family prefix");
+    const auto firstRefs = [&]() noexcept {
+      switch (family) {
+      case Family::Surface: return firstSurface.refs;
+      case Family::Texture: return firstTexture.refs;
+      case Family::Buffer: return firstBuffer.refs;
+      case Family::Shader: return firstShader.refs;
+      case Family::Declaration: return firstDeclaration.refs;
+      case Family::Query: return firstQuery.refs;
+      }
+      return 0u;
+    };
+    check(firstRefs() == 3u,
+          "owner and canonical builder each retain the first family object");
+    PeSemanticExactFixedEmission beforeFailure{};
+    check(owner.emitExactFixed(beforeFailure),
+          "lookup-miss fixture captures the accepted prefix");
+    const std::vector<std::byte> beforeBytes(beforeFailure.wire.begin(),
+                                             beforeFailure.wire.end());
+
+    auto novel = makeInput(2u, true);
+    bool settlementReached = false;
+    check(!owner.tryAppendOwnedRecord(novel, [&]() noexcept {
+              settlementReached = true;
+              return false;
+            }) &&
+              settlementReached && owner.size() == 1u &&
+              owner.retainedCount() == 1u,
+          "novel lookup miss rolls back after a nonempty family prefix");
+    PeSemanticExactFixedEmission afterFailure{};
+    check(owner.emitExactFixed(afterFailure) &&
+              afterFailure.wireBytes == beforeBytes.size() &&
+              std::equal(beforeBytes.begin(), beforeBytes.end(),
+                         afterFailure.wire.begin()),
+          "lookup-miss rollback preserves the committed prefix bytes");
+    const auto secondRefsAfterRollback = [&]() noexcept {
+      switch (family) {
+      case Family::Surface: return secondSurface.refs;
+      case Family::Texture: return secondTexture.refs;
+      case Family::Buffer: return secondBuffer.refs;
+      case Family::Shader: return secondShader.refs;
+      case Family::Declaration: return secondDeclaration.refs;
+      case Family::Query: return secondQuery.refs;
+      }
+      return 0u;
+    };
+    check(secondRefsAfterRollback() == 1u,
+          "lookup-miss rollback releases the speculative novel object");
+
+    check(owner.tryAppendOwnedRecord(novel, []() noexcept { return true; }) &&
+              appendCanonicalSemanticRecord(canonical, novel) &&
+              owner.size() == 2u && owner.retainedCount() == 2u &&
+              secondRefsAfterRollback() == 3u,
+          "lookup miss retry publishes one new per-family pin");
+    auto duplicate = makeInput(3u, false);
+    check(owner.tryAppendOwnedRecord(duplicate,
+                                     []() noexcept { return true; }) &&
+              appendCanonicalSemanticRecord(canonical, duplicate) &&
+              owner.size() == 3u && owner.retainedCount() == 2u &&
+              firstRefs() == 3u && secondRefsAfterRollback() == 3u,
+          "A/B/A mixed hit miss duplicate sequence avoids duplicate retains");
+    PeSemanticExactFixedEmission finalEmission{};
+    check(equalCanonicalOwnerBytes(owner, canonical, finalEmission),
+          "A/B/A successful retry serializes the novel pin canonically");
+    owner.reset();
+    check(firstRefs() == 2u && secondRefsAfterRollback() == 2u,
+          "owner reset releases exactly its two physical pins");
+    canonical.resetAndReleaseRetained();
+    check(firstRefs() == 1u && secondRefsAfterRollback() == 1u,
+          "per-family lookup-miss retry balances both physical pins");
+  }
+}
+
+template <std::size_t N>
+void pinIndexCursorTrace(std::size_t fillCount, std::size_t desiredStart) {
+  using Tested = DefaultOwner;
+  using Access = PeSemanticOwnerTestAccess;
+  check(fillCount <= N && desiredStart < N,
+        "pin-index cursor trace stays within its table");
+  std::array<PeSemanticPinIndexEntry, N> actual{};
+  std::array<PeSemanticPinIndexEntry, N> reference{};
+  constexpr std::uint32_t generation = 7u;
+  const auto startFor = [](std::uint64_t objectId) noexcept {
+    const auto hash = static_cast<std::size_t>(
+        objectId * 0x9e3779b185ebca87ull);
+    return hash % N;
+  };
+  const auto identityFor = [](std::uint64_t objectId,
+                              std::uint32_t identityGeneration) {
+    return D9CWireObjectIdentity{.kind = D9C_CHUNK_HANDLE_KIND_BUFFER,
+                                 .generation = identityGeneration,
+                                 .objectId = objectId};
+  };
+  const auto referenceFind = [&](const auto& table,
+                                 const D9CWireObjectIdentity& identity,
+                                 std::uint32_t tableGeneration,
+                                 std::size_t& out,
+                                 const PeSemanticPinIndexEntry*& entry) {
+    const std::size_t start = startFor(identity.objectId);
+    for (std::size_t probe = 0u; probe < N; ++probe) {
+      const auto& candidate = table[(start + probe) % N];
+      if (candidate.generation != tableGeneration) return false;
+      if (candidate.identity.objectId == identity.objectId) {
+        out = candidate.pin;
+        entry = &candidate;
+        return true;
+      }
+    }
+    return false;
+  };
+  const auto referenceInsert = [&](auto& table,
+                                   const D9CWireObjectIdentity& identity,
+                                   std::uint32_t pin,
+                                   std::uint32_t tableGeneration) {
+    const std::size_t start = startFor(identity.objectId);
+    for (std::size_t probe = 0u; probe < N; ++probe) {
+      auto& candidate = table[(start + probe) % N];
+      if (candidate.generation == 0u ||
+          candidate.generation != tableGeneration ||
+          candidate.identity.objectId == identity.objectId) {
+        candidate = {.identity = identity,
+                     .pin = pin,
+                     .generation = tableGeneration};
+        return true;
+      }
+    }
+    return false;
+  };
+  const auto sameTable = [&]() {
+    for (std::size_t i = 0u; i < N; ++i) {
+      if (actual[i].identity.kind != reference[i].identity.kind ||
+          actual[i].identity.generation != reference[i].identity.generation ||
+          actual[i].identity.objectId != reference[i].identity.objectId ||
+          actual[i].pin != reference[i].pin ||
+          actual[i].generation != reference[i].generation)
+        return false;
+    }
+    return true;
+  };
+  const auto checkFind = [&](const D9CWireObjectIdentity& identity) {
+    std::size_t actualPin = std::numeric_limits<std::size_t>::max();
+    std::size_t referencePin = std::numeric_limits<std::size_t>::max();
+    const PeSemanticPinIndexEntry* actualEntry = nullptr;
+    const PeSemanticPinIndexEntry* referenceEntry = nullptr;
+    const bool actualFound = Access::findPin<Tested>(
+        actual, identity, generation, actualPin, actualEntry);
+    const bool expectedFound = referenceFind(
+        reference, identity, generation, referencePin, referenceEntry);
+    check(actualFound == expectedFound && actualPin == referencePin,
+          "private cursor lookup matches independent modulo reference");
+    if (actualFound) {
+      check(actualEntry >= actual.data() &&
+                actualEntry < actual.data() + actual.size() &&
+                referenceEntry >= reference.data() &&
+                referenceEntry < reference.data() + reference.size() &&
+                actualEntry - actual.data() ==
+                    referenceEntry - reference.data(),
+            "private cursor lookup returns the same wrapped slot");
+    } else {
+      check(actualEntry == nullptr && referenceEntry == nullptr,
+            "private cursor miss preserves null entry outputs");
+    }
+    check(sameTable(), "private cursor lookup leaves table bytes unchanged");
+  };
+  const auto checkInsert = [&](const D9CWireObjectIdentity& identity,
+                               std::uint32_t pin) {
+    const bool expected = referenceInsert(reference, identity, pin, generation);
+    const bool actualResult =
+        Access::insertPin<Tested>(actual, identity, pin, generation);
+    check(actualResult == expected && sameTable(),
+          "private cursor insertion matches independent modulo reference");
+  };
+
+  const auto emptyIdentity = identityFor(1u, generation);
+  checkFind(emptyIdentity);
+  const auto staleIdentity = identityFor(2u, generation);
+  actual[startFor(staleIdentity.objectId)] = {
+      .identity = staleIdentity, .pin = 3u, .generation = generation + 1u};
+  reference[startFor(staleIdentity.objectId)] =
+      actual[startFor(staleIdentity.objectId)];
+  checkFind(staleIdentity);
+  checkInsert(staleIdentity, 0x55u);
+  checkFind(staleIdentity);
+  actual.fill({});
+  reference.fill({});
+
+  std::array<std::uint64_t, N> collidingIds{};
+  std::size_t collidingCount = 0u;
+  std::uint64_t candidate = 1u;
+  while (collidingCount < fillCount) {
+    if (startFor(candidate) == desiredStart)
+      collidingIds[collidingCount++] = candidate;
+    ++candidate;
+  }
+  for (std::size_t i = 0u; i < fillCount; ++i) {
+    const auto identity = identityFor(collidingIds[i], generation);
+    checkInsert(identity, static_cast<std::uint32_t>(10u + i));
+    checkFind(identity);
+  }
+  if (fillCount != 0u) {
+    const auto overwrite = identityFor(collidingIds[0], generation + 1u);
+    checkInsert(overwrite, 0xabcdu);
+    checkFind(overwrite);
+  }
+  if (fillCount == N) {
+    while (startFor(candidate) != desiredStart) ++candidate;
+    const auto missing = identityFor(candidate, generation);
+    checkFind(missing);
+    check(!Access::insertPin<Tested>(actual, missing, 0xfeedu, generation),
+          "full cursor table rejects an exact-N miss");
+    check(!referenceInsert(reference, missing, 0xfeedu, generation) &&
+              sameTable(),
+          "full cursor table reference rejects the same exact-N miss");
+  }
+}
+
+void pinIndexCursorWrapDifferential() {
+  for (std::size_t start = 0u; start < 1u; ++start)
+    pinIndexCursorTrace<1u>(1u, start);
+  for (std::size_t start = 0u; start < 3u; ++start)
+    pinIndexCursorTrace<3u>(3u, start);
+  for (std::size_t start = 0u; start < 5u; ++start)
+    pinIndexCursorTrace<5u>(5u, start);
+  for (std::size_t start = 0u; start < 9u; ++start)
+    pinIndexCursorTrace<9u>(9u, start);
+  // Production owners use MaxPins=256, hence a 4*MaxPins+1 index. Exercise
+  // the wrap edge with a short collision chain rather than exhaustive fill.
+  pinIndexCursorTrace<1025u>(3u, 1024u);
 }
 
 void capacityFailureIsPreEffectAndRetryableAfterBoundary() {
@@ -7207,6 +7540,8 @@ int main(int argc, char** argv) {
     immediateAppendClosesSpanMutationGap();
     repeatedIdentityUsesBatchGlobalRetentionDelta();
     retentionIdentityAndPointerAliasesReject();
+    retentionLookupMissUsesPerFamilyPrefix();
+    pinIndexCursorWrapDifferential();
     capacityFailureIsPreEffectAndRetryableAfterBoundary();
     preparedAdmissionWitnessTruthTable();
     preparedAdmissionReinitializesReusedWitness();
