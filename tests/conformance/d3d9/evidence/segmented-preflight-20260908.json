@@ -1,0 +1,1315 @@
+{
+  "schema": 1,
+  "status": "pass",
+  "measured_date": "2026-09-08 KST",
+  "source_head": "8e9dc320",
+  "runtime_build": {
+    "head": "8e9dc320",
+    "source_diff_sha256": "52c12ed3aa4963efe2e85d724311fd26939848bd026c7bd726fd076c2d69d85a",
+    "images": {
+      "lib/wine/i386-windows/d3d9.dll": {
+        "sha256": "25ea1f40a0bfff633697e82222f84de0ac5cb6bcd291b371ec195662fbcf9f40",
+        "bytes": 1907200
+      },
+      "lib/wine/x86_64-windows/d3d9.dll": {
+        "sha256": "8f210d7984ed26006606b458a044995a700b7674eac3915ecca24fdb7cb1a9ca",
+        "bytes": 1775616
+      },
+      "lib/wine/i386-windows/winemetal_dxmt9.dll": {
+        "sha256": "e31242c3d6c67e9a9f2cc9c9c49a06ad6d076b68d11801b41ce49be19a2067a7",
+        "bytes": 140800
+      },
+      "lib/wine/x86_64-windows/winemetal_dxmt9.dll": {
+        "sha256": "cc46aabe669695132f29bd6836401006f343da23b07bae8a4c2aae987806c00b",
+        "bytes": 145920
+      },
+      "lib/wine/x86_64-unix/winemetal_dxmt9.so": {
+        "sha256": "6cdb885ad5aad7f59cba33bccf265109def8270215e04990d01b7f0d3e3e4fc2",
+        "bytes": 9786984
+      }
+    },
+    "build_options": {
+      "build": {
+        "sha256": "cd42f4d96f7f280e4dc29545053addd4c960f2250493aa4f4109012337c1d318",
+        "bytes": 17931
+      },
+      "build-x86_64-builtin": {
+        "sha256": "72a854c095eaacdf4b9131466c3157b12a1334eaeb402b05fabffeb416bb06ca",
+        "bytes": 17528
+      },
+      "build-win32-x64-builtin": {
+        "sha256": "e4ce3ef1949958a90384186d7ea42b784e13094e9cb485752d14104a2497ad5b",
+        "bytes": 19961
+      },
+      "build-win32-x86-builtin": {
+        "sha256": "881d46434deb9a07acabb0fa4354b5be14e5a3e560c0d1ff4723a0a034758f16",
+        "bytes": 19967
+      }
+    },
+    "origin": "H272 candidate at 8e9dc320 plus frozen runtime diff; all four canonical builds completed"
+  },
+  "related_evidence": "tests/conformance/d3d9/evidence/inline-constant-transport-boundaries-20260909.json",
+  "scope": "Bounded segmented admission acceptance/conservation and real PE edge-layout pixels. Not concurrent client mutation, all consumers/allocators, public OOM HRESULT, noise-qualified savings, or transport promotion.",
+  "defaults": "Segmented transport and inline constants remain default-off; README unchanged.",
+  "native": {
+    "expected_failure": "native-before-runtime-r2.log",
+    "focused": 9,
+    "x86_64_focused": 4,
+    "existing_tlc_seconds": 160.9,
+    "logs": {
+      "native-before-runtime-r2.log": {
+        "path": "experiments/output/pe-segmented-preflight-20260908/analysis/native-before-runtime-r2.log",
+        "sha256": "d0cf2604eab465c80b9b655bbbab376f68660f9983185ff278de4c5fdbc3a424"
+      },
+      "native-after-runtime.log": {
+        "path": "experiments/output/pe-segmented-preflight-20260908/analysis/native-after-runtime.log",
+        "sha256": "3612c92b5ad00e53e317e5efb92515309e78aaf63e550ed052ae9c48c11af8f6"
+      },
+      "native-final.log": {
+        "path": "experiments/output/pe-segmented-preflight-20260908/analysis/native-final.log",
+        "sha256": "4b4c4e48f942d0c3579ef6c95ce207527381103bae5965b8601c12744dc7987d"
+      },
+      "unix-final.log": {
+        "path": "experiments/output/pe-segmented-preflight-20260908/analysis/unix-final.log",
+        "sha256": "2710fd11f53d6ee71d007b9a7b27ee347cef44fd15a005f94d13f016c2dbe635"
+      },
+      "tla.log": {
+        "path": "experiments/output/pe-segmented-preflight-20260908/analysis/tla.log",
+        "sha256": "9b787dfe736efdc6faa0e95f54ad660a884d992c0e3699dea9d15017fd807cc4"
+      }
+    }
+  },
+  "pixels": {
+    "processes": 12,
+    "exact_samples": 1152,
+    "runs": [
+      {
+        "case": {
+          "arch": "x86",
+          "inline": "0",
+          "segmented": "0",
+          "offload": "1"
+        },
+        "recipe": {
+          "DXMT9_PE_INLINE_CONST_DELTA": "0",
+          "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+          "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+          "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+          "DXMT9_CPU_READY_TAPE": "0",
+          "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+          "DXMT9_PE_STATS_DECIMATION": "1",
+          "DXMT_PERF_COUNTERS": "1",
+          "DXMT_LOG_LEVEL": "info",
+          "DXMT_LOG_PATH": "none",
+          "WINEDEBUG": "-all",
+          "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+        },
+        "pixels": 96,
+        "fixture": {
+          "sha256": "1c4a23c1a001cddb93c675e8876872c920be4e826ef9cd19d73498dae3cbd5e7",
+          "bytes": 103424
+        },
+        "source": {
+          "sha256": "25d0d3904b98487887632189e2500cd04f422a63337ea0870333f95a9d85f3d3",
+          "bytes": 34457
+        },
+        "append_counts": {
+          "append_draw_calls": 24,
+          "append_drawidx_calls": 24,
+          "append_drawup_calls": 48,
+          "append_applystate_calls": 6,
+          "append_vsconst_calls": 25,
+          "append_psconst_calls": 25,
+          "append_clear_calls": 1,
+          "append_other_calls": 1
+        },
+        "negotiated_transport": "0x1",
+        "health": {
+          "chunk_reject": 0,
+          "command_chunk_rejects": 0,
+          "draw_skipped_no_pipeline": 0,
+          "gpu_command_buffer_errors": 0,
+          "pipeline_build_fail_draw": 0,
+          "pipeline_build_fail_function": 0,
+          "pipeline_build_fail_library": 0,
+          "pipeline_build_fail_pso": 0
+        },
+        "artifact": "experiments/output/pe-segmented-preflight-20260908/analysis/postfix-archx86-inline0-segmented0-offload1/qualification.json",
+        "log_sha256": "1cb3601b9669db71acb6da056f7f48f83b11beadbae7fbb16eef70864f2553b2",
+        "qualification_sha256": "bd43888ff8c8af3eb80ae2e40ee1f07d571b11bf9f358f57f7e7e76fae90c9cb",
+        "signatures_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+      },
+      {
+        "case": {
+          "arch": "x86",
+          "inline": "0",
+          "segmented": "1",
+          "offload": "1"
+        },
+        "recipe": {
+          "DXMT9_PE_INLINE_CONST_DELTA": "0",
+          "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+          "DXMT9_PE_SEGMENTED_TRANSPORT": "1",
+          "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+          "DXMT9_CPU_READY_TAPE": "0",
+          "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+          "DXMT9_PE_STATS_DECIMATION": "1",
+          "DXMT_PERF_COUNTERS": "1",
+          "DXMT_LOG_LEVEL": "info",
+          "DXMT_LOG_PATH": "none",
+          "WINEDEBUG": "-all",
+          "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+        },
+        "pixels": 96,
+        "fixture": {
+          "sha256": "1c4a23c1a001cddb93c675e8876872c920be4e826ef9cd19d73498dae3cbd5e7",
+          "bytes": 103424
+        },
+        "source": {
+          "sha256": "25d0d3904b98487887632189e2500cd04f422a63337ea0870333f95a9d85f3d3",
+          "bytes": 34457
+        },
+        "append_counts": {
+          "append_draw_calls": 24,
+          "append_drawidx_calls": 24,
+          "append_drawup_calls": 48,
+          "append_applystate_calls": 6,
+          "append_vsconst_calls": 25,
+          "append_psconst_calls": 25,
+          "append_clear_calls": 1,
+          "append_other_calls": 1
+        },
+        "negotiated_transport": "0x2",
+        "health": {
+          "chunk_reject": 0,
+          "command_chunk_rejects": 0,
+          "draw_skipped_no_pipeline": 0,
+          "gpu_command_buffer_errors": 0,
+          "pipeline_build_fail_draw": 0,
+          "pipeline_build_fail_function": 0,
+          "pipeline_build_fail_library": 0,
+          "pipeline_build_fail_pso": 0
+        },
+        "artifact": "experiments/output/pe-segmented-preflight-20260908/analysis/postfix-archx86-inline0-segmented1-offload1/qualification.json",
+        "log_sha256": "ed0b6ee2025ec35ee057dcf4708edfaea91c3c4976a2d1ad855159cc3d7a363e",
+        "qualification_sha256": "0e087aa8ae912e9e3326260f8b0394324a0a2108b362ed28af3da4ff74e6774a",
+        "signatures_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+      },
+      {
+        "case": {
+          "arch": "x86",
+          "inline": "0",
+          "segmented": "1",
+          "offload": "0"
+        },
+        "recipe": {
+          "DXMT9_PE_INLINE_CONST_DELTA": "0",
+          "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+          "DXMT9_PE_SEGMENTED_TRANSPORT": "1",
+          "DXMT9_OFFLOAD_COMMIT_REPLAY": "0",
+          "DXMT9_CPU_READY_TAPE": "0",
+          "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+          "DXMT9_PE_STATS_DECIMATION": "1",
+          "DXMT_PERF_COUNTERS": "1",
+          "DXMT_LOG_LEVEL": "info",
+          "DXMT_LOG_PATH": "none",
+          "WINEDEBUG": "-all",
+          "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+        },
+        "pixels": 96,
+        "fixture": {
+          "sha256": "1c4a23c1a001cddb93c675e8876872c920be4e826ef9cd19d73498dae3cbd5e7",
+          "bytes": 103424
+        },
+        "source": {
+          "sha256": "25d0d3904b98487887632189e2500cd04f422a63337ea0870333f95a9d85f3d3",
+          "bytes": 34457
+        },
+        "append_counts": {
+          "append_draw_calls": 24,
+          "append_drawidx_calls": 24,
+          "append_drawup_calls": 48,
+          "append_applystate_calls": 6,
+          "append_vsconst_calls": 25,
+          "append_psconst_calls": 25,
+          "append_clear_calls": 1,
+          "append_other_calls": 1
+        },
+        "negotiated_transport": "0x2",
+        "health": {
+          "chunk_reject": 0,
+          "command_chunk_rejects": 0,
+          "draw_skipped_no_pipeline": 0,
+          "gpu_command_buffer_errors": 0,
+          "pipeline_build_fail_draw": 0,
+          "pipeline_build_fail_function": 0,
+          "pipeline_build_fail_library": 0,
+          "pipeline_build_fail_pso": 0
+        },
+        "artifact": "experiments/output/pe-segmented-preflight-20260908/analysis/postfix-archx86-inline0-segmented1-offload0/qualification.json",
+        "log_sha256": "c5edb05e490ab38546306d3f60fe28ca6c4ee20e0b3ebf614fe60b9c17aa3962",
+        "qualification_sha256": "4f96ee2f7cab2b260f21649aff957a560348c14b5498b95c1437cade06fb4c96",
+        "signatures_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+      },
+      {
+        "case": {
+          "arch": "x86",
+          "inline": "1",
+          "segmented": "0",
+          "offload": "1"
+        },
+        "recipe": {
+          "DXMT9_PE_INLINE_CONST_DELTA": "1",
+          "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+          "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+          "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+          "DXMT9_CPU_READY_TAPE": "0",
+          "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+          "DXMT9_PE_STATS_DECIMATION": "1",
+          "DXMT_PERF_COUNTERS": "1",
+          "DXMT_LOG_LEVEL": "info",
+          "DXMT_LOG_PATH": "none",
+          "WINEDEBUG": "-all",
+          "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+        },
+        "pixels": 96,
+        "fixture": {
+          "sha256": "1c4a23c1a001cddb93c675e8876872c920be4e826ef9cd19d73498dae3cbd5e7",
+          "bytes": 103424
+        },
+        "source": {
+          "sha256": "25d0d3904b98487887632189e2500cd04f422a63337ea0870333f95a9d85f3d3",
+          "bytes": 34457
+        },
+        "append_counts": {
+          "append_draw_calls": 24,
+          "append_drawidx_calls": 24,
+          "append_drawup_calls": 48,
+          "append_applystate_calls": 6,
+          "append_vsconst_calls": 12,
+          "append_psconst_calls": 12,
+          "append_clear_calls": 1,
+          "append_other_calls": 1
+        },
+        "negotiated_transport": "0x1",
+        "health": {
+          "chunk_reject": 0,
+          "command_chunk_rejects": 0,
+          "draw_skipped_no_pipeline": 0,
+          "gpu_command_buffer_errors": 0,
+          "pipeline_build_fail_draw": 0,
+          "pipeline_build_fail_function": 0,
+          "pipeline_build_fail_library": 0,
+          "pipeline_build_fail_pso": 0
+        },
+        "artifact": "experiments/output/pe-segmented-preflight-20260908/analysis/postfix-archx86-inline1-segmented0-offload1/qualification.json",
+        "log_sha256": "44630e1a206082018775ddb3add6ca0cc99f12a3cc17c8fd853cdf483ce03791",
+        "qualification_sha256": "bc5fe43c0791d164136bfcee74b68a05bcc3f61a70a24fccc9338f71f65ba451",
+        "signatures_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+      },
+      {
+        "case": {
+          "arch": "x86",
+          "inline": "1",
+          "segmented": "1",
+          "offload": "1"
+        },
+        "recipe": {
+          "DXMT9_PE_INLINE_CONST_DELTA": "1",
+          "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+          "DXMT9_PE_SEGMENTED_TRANSPORT": "1",
+          "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+          "DXMT9_CPU_READY_TAPE": "0",
+          "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+          "DXMT9_PE_STATS_DECIMATION": "1",
+          "DXMT_PERF_COUNTERS": "1",
+          "DXMT_LOG_LEVEL": "info",
+          "DXMT_LOG_PATH": "none",
+          "WINEDEBUG": "-all",
+          "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+        },
+        "pixels": 96,
+        "fixture": {
+          "sha256": "1c4a23c1a001cddb93c675e8876872c920be4e826ef9cd19d73498dae3cbd5e7",
+          "bytes": 103424
+        },
+        "source": {
+          "sha256": "25d0d3904b98487887632189e2500cd04f422a63337ea0870333f95a9d85f3d3",
+          "bytes": 34457
+        },
+        "append_counts": {
+          "append_draw_calls": 24,
+          "append_drawidx_calls": 24,
+          "append_drawup_calls": 48,
+          "append_applystate_calls": 6,
+          "append_vsconst_calls": 12,
+          "append_psconst_calls": 12,
+          "append_clear_calls": 1,
+          "append_other_calls": 1
+        },
+        "negotiated_transport": "0x2",
+        "health": {
+          "chunk_reject": 0,
+          "command_chunk_rejects": 0,
+          "draw_skipped_no_pipeline": 0,
+          "gpu_command_buffer_errors": 0,
+          "pipeline_build_fail_draw": 0,
+          "pipeline_build_fail_function": 0,
+          "pipeline_build_fail_library": 0,
+          "pipeline_build_fail_pso": 0
+        },
+        "artifact": "experiments/output/pe-segmented-preflight-20260908/analysis/postfix-archx86-inline1-segmented1-offload1/qualification.json",
+        "log_sha256": "60c8eaf56dfe110c1d2815bd4ec9f27f70b4c5f859d67366b29aeb5270266beb",
+        "qualification_sha256": "17503a0adc990080404715a531dd8fe70340970d30b4817400cd9e476bb64652",
+        "signatures_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+      },
+      {
+        "case": {
+          "arch": "x86",
+          "inline": "1",
+          "segmented": "1",
+          "offload": "0"
+        },
+        "recipe": {
+          "DXMT9_PE_INLINE_CONST_DELTA": "1",
+          "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+          "DXMT9_PE_SEGMENTED_TRANSPORT": "1",
+          "DXMT9_OFFLOAD_COMMIT_REPLAY": "0",
+          "DXMT9_CPU_READY_TAPE": "0",
+          "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+          "DXMT9_PE_STATS_DECIMATION": "1",
+          "DXMT_PERF_COUNTERS": "1",
+          "DXMT_LOG_LEVEL": "info",
+          "DXMT_LOG_PATH": "none",
+          "WINEDEBUG": "-all",
+          "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+        },
+        "pixels": 96,
+        "fixture": {
+          "sha256": "1c4a23c1a001cddb93c675e8876872c920be4e826ef9cd19d73498dae3cbd5e7",
+          "bytes": 103424
+        },
+        "source": {
+          "sha256": "25d0d3904b98487887632189e2500cd04f422a63337ea0870333f95a9d85f3d3",
+          "bytes": 34457
+        },
+        "append_counts": {
+          "append_draw_calls": 24,
+          "append_drawidx_calls": 24,
+          "append_drawup_calls": 48,
+          "append_applystate_calls": 6,
+          "append_vsconst_calls": 12,
+          "append_psconst_calls": 12,
+          "append_clear_calls": 1,
+          "append_other_calls": 1
+        },
+        "negotiated_transport": "0x2",
+        "health": {
+          "chunk_reject": 0,
+          "command_chunk_rejects": 0,
+          "draw_skipped_no_pipeline": 0,
+          "gpu_command_buffer_errors": 0,
+          "pipeline_build_fail_draw": 0,
+          "pipeline_build_fail_function": 0,
+          "pipeline_build_fail_library": 0,
+          "pipeline_build_fail_pso": 0
+        },
+        "artifact": "experiments/output/pe-segmented-preflight-20260908/analysis/postfix-archx86-inline1-segmented1-offload0/qualification.json",
+        "log_sha256": "afdadd206f09b83a56b79b2de9cde23e1b75766b4de248e09bccbf6e1d3913c9",
+        "qualification_sha256": "15d75453110efbc85fde262f11d69ad1aea95710f9a4b5fba427c8fad0d096bb",
+        "signatures_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+      },
+      {
+        "case": {
+          "arch": "x64",
+          "inline": "0",
+          "segmented": "0",
+          "offload": "1"
+        },
+        "recipe": {
+          "DXMT9_PE_INLINE_CONST_DELTA": "0",
+          "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+          "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+          "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+          "DXMT9_CPU_READY_TAPE": "0",
+          "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+          "DXMT9_PE_STATS_DECIMATION": "1",
+          "DXMT_PERF_COUNTERS": "1",
+          "DXMT_LOG_LEVEL": "info",
+          "DXMT_LOG_PATH": "none",
+          "WINEDEBUG": "-all",
+          "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+        },
+        "pixels": 96,
+        "fixture": {
+          "sha256": "b1ebebe38e5e5796b95dceeb72dacc75b1a4e89d3750a446a3248c3ead961cfc",
+          "bytes": 114176
+        },
+        "source": {
+          "sha256": "25d0d3904b98487887632189e2500cd04f422a63337ea0870333f95a9d85f3d3",
+          "bytes": 34457
+        },
+        "append_counts": {
+          "append_draw_calls": 24,
+          "append_drawidx_calls": 24,
+          "append_drawup_calls": 48,
+          "append_applystate_calls": 6,
+          "append_vsconst_calls": 25,
+          "append_psconst_calls": 25,
+          "append_clear_calls": 1,
+          "append_other_calls": 1
+        },
+        "negotiated_transport": "0x1",
+        "health": {
+          "chunk_reject": 0,
+          "command_chunk_rejects": 0,
+          "draw_skipped_no_pipeline": 0,
+          "gpu_command_buffer_errors": 0,
+          "pipeline_build_fail_draw": 0,
+          "pipeline_build_fail_function": 0,
+          "pipeline_build_fail_library": 0,
+          "pipeline_build_fail_pso": 0
+        },
+        "artifact": "experiments/output/pe-segmented-preflight-20260908/analysis/postfix-archx64-inline0-segmented0-offload1/qualification.json",
+        "log_sha256": "c72d0fb71e767229b57c15b0dca2a286d43eb8597132084228a8a29c7d7b220d",
+        "qualification_sha256": "d6bc703137ee464a386a88871a70044671d98ebb2d4cd444b00692fe68a534bc",
+        "signatures_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+      },
+      {
+        "case": {
+          "arch": "x64",
+          "inline": "0",
+          "segmented": "1",
+          "offload": "1"
+        },
+        "recipe": {
+          "DXMT9_PE_INLINE_CONST_DELTA": "0",
+          "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+          "DXMT9_PE_SEGMENTED_TRANSPORT": "1",
+          "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+          "DXMT9_CPU_READY_TAPE": "0",
+          "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+          "DXMT9_PE_STATS_DECIMATION": "1",
+          "DXMT_PERF_COUNTERS": "1",
+          "DXMT_LOG_LEVEL": "info",
+          "DXMT_LOG_PATH": "none",
+          "WINEDEBUG": "-all",
+          "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+        },
+        "pixels": 96,
+        "fixture": {
+          "sha256": "b1ebebe38e5e5796b95dceeb72dacc75b1a4e89d3750a446a3248c3ead961cfc",
+          "bytes": 114176
+        },
+        "source": {
+          "sha256": "25d0d3904b98487887632189e2500cd04f422a63337ea0870333f95a9d85f3d3",
+          "bytes": 34457
+        },
+        "append_counts": {
+          "append_draw_calls": 24,
+          "append_drawidx_calls": 24,
+          "append_drawup_calls": 48,
+          "append_applystate_calls": 6,
+          "append_vsconst_calls": 25,
+          "append_psconst_calls": 25,
+          "append_clear_calls": 1,
+          "append_other_calls": 1
+        },
+        "negotiated_transport": "0x2",
+        "health": {
+          "chunk_reject": 0,
+          "command_chunk_rejects": 0,
+          "draw_skipped_no_pipeline": 0,
+          "gpu_command_buffer_errors": 0,
+          "pipeline_build_fail_draw": 0,
+          "pipeline_build_fail_function": 0,
+          "pipeline_build_fail_library": 0,
+          "pipeline_build_fail_pso": 0
+        },
+        "artifact": "experiments/output/pe-segmented-preflight-20260908/analysis/postfix-archx64-inline0-segmented1-offload1/qualification.json",
+        "log_sha256": "cb061ba62e07a1ab190409d2b366a0d8088251d7a382e78574963423b5005426",
+        "qualification_sha256": "b8750aa4b9b215d7c161ccee3a39f10e42b4452755448fc268a54ca0a9f5ba6b",
+        "signatures_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+      },
+      {
+        "case": {
+          "arch": "x64",
+          "inline": "0",
+          "segmented": "1",
+          "offload": "0"
+        },
+        "recipe": {
+          "DXMT9_PE_INLINE_CONST_DELTA": "0",
+          "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+          "DXMT9_PE_SEGMENTED_TRANSPORT": "1",
+          "DXMT9_OFFLOAD_COMMIT_REPLAY": "0",
+          "DXMT9_CPU_READY_TAPE": "0",
+          "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+          "DXMT9_PE_STATS_DECIMATION": "1",
+          "DXMT_PERF_COUNTERS": "1",
+          "DXMT_LOG_LEVEL": "info",
+          "DXMT_LOG_PATH": "none",
+          "WINEDEBUG": "-all",
+          "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+        },
+        "pixels": 96,
+        "fixture": {
+          "sha256": "b1ebebe38e5e5796b95dceeb72dacc75b1a4e89d3750a446a3248c3ead961cfc",
+          "bytes": 114176
+        },
+        "source": {
+          "sha256": "25d0d3904b98487887632189e2500cd04f422a63337ea0870333f95a9d85f3d3",
+          "bytes": 34457
+        },
+        "append_counts": {
+          "append_draw_calls": 24,
+          "append_drawidx_calls": 24,
+          "append_drawup_calls": 48,
+          "append_applystate_calls": 6,
+          "append_vsconst_calls": 25,
+          "append_psconst_calls": 25,
+          "append_clear_calls": 1,
+          "append_other_calls": 1
+        },
+        "negotiated_transport": "0x2",
+        "health": {
+          "chunk_reject": 0,
+          "command_chunk_rejects": 0,
+          "draw_skipped_no_pipeline": 0,
+          "gpu_command_buffer_errors": 0,
+          "pipeline_build_fail_draw": 0,
+          "pipeline_build_fail_function": 0,
+          "pipeline_build_fail_library": 0,
+          "pipeline_build_fail_pso": 0
+        },
+        "artifact": "experiments/output/pe-segmented-preflight-20260908/analysis/postfix-archx64-inline0-segmented1-offload0/qualification.json",
+        "log_sha256": "d6350f7526ac9646f3fd1050703921a1748f1c0f46c219755272606d9a7dfc94",
+        "qualification_sha256": "db91f463f245d971bd5c4cee632aec3c3c751113b3477d933e2b3039e1f75985",
+        "signatures_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+      },
+      {
+        "case": {
+          "arch": "x64",
+          "inline": "1",
+          "segmented": "0",
+          "offload": "1"
+        },
+        "recipe": {
+          "DXMT9_PE_INLINE_CONST_DELTA": "1",
+          "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+          "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+          "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+          "DXMT9_CPU_READY_TAPE": "0",
+          "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+          "DXMT9_PE_STATS_DECIMATION": "1",
+          "DXMT_PERF_COUNTERS": "1",
+          "DXMT_LOG_LEVEL": "info",
+          "DXMT_LOG_PATH": "none",
+          "WINEDEBUG": "-all",
+          "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+        },
+        "pixels": 96,
+        "fixture": {
+          "sha256": "b1ebebe38e5e5796b95dceeb72dacc75b1a4e89d3750a446a3248c3ead961cfc",
+          "bytes": 114176
+        },
+        "source": {
+          "sha256": "25d0d3904b98487887632189e2500cd04f422a63337ea0870333f95a9d85f3d3",
+          "bytes": 34457
+        },
+        "append_counts": {
+          "append_draw_calls": 24,
+          "append_drawidx_calls": 24,
+          "append_drawup_calls": 48,
+          "append_applystate_calls": 6,
+          "append_vsconst_calls": 12,
+          "append_psconst_calls": 12,
+          "append_clear_calls": 1,
+          "append_other_calls": 1
+        },
+        "negotiated_transport": "0x1",
+        "health": {
+          "chunk_reject": 0,
+          "command_chunk_rejects": 0,
+          "draw_skipped_no_pipeline": 0,
+          "gpu_command_buffer_errors": 0,
+          "pipeline_build_fail_draw": 0,
+          "pipeline_build_fail_function": 0,
+          "pipeline_build_fail_library": 0,
+          "pipeline_build_fail_pso": 0
+        },
+        "artifact": "experiments/output/pe-segmented-preflight-20260908/analysis/postfix-archx64-inline1-segmented0-offload1/qualification.json",
+        "log_sha256": "6d845c7dc4370c3de0ef63db4a294adb1c28f3fdf4067d00bc7c00bb313177da",
+        "qualification_sha256": "894418482dadaa9a6352eb028f308e7caf82990ec914c2772c96e47ca9ad38be",
+        "signatures_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+      },
+      {
+        "case": {
+          "arch": "x64",
+          "inline": "1",
+          "segmented": "1",
+          "offload": "1"
+        },
+        "recipe": {
+          "DXMT9_PE_INLINE_CONST_DELTA": "1",
+          "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+          "DXMT9_PE_SEGMENTED_TRANSPORT": "1",
+          "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+          "DXMT9_CPU_READY_TAPE": "0",
+          "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+          "DXMT9_PE_STATS_DECIMATION": "1",
+          "DXMT_PERF_COUNTERS": "1",
+          "DXMT_LOG_LEVEL": "info",
+          "DXMT_LOG_PATH": "none",
+          "WINEDEBUG": "-all",
+          "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+        },
+        "pixels": 96,
+        "fixture": {
+          "sha256": "b1ebebe38e5e5796b95dceeb72dacc75b1a4e89d3750a446a3248c3ead961cfc",
+          "bytes": 114176
+        },
+        "source": {
+          "sha256": "25d0d3904b98487887632189e2500cd04f422a63337ea0870333f95a9d85f3d3",
+          "bytes": 34457
+        },
+        "append_counts": {
+          "append_draw_calls": 24,
+          "append_drawidx_calls": 24,
+          "append_drawup_calls": 48,
+          "append_applystate_calls": 6,
+          "append_vsconst_calls": 12,
+          "append_psconst_calls": 12,
+          "append_clear_calls": 1,
+          "append_other_calls": 1
+        },
+        "negotiated_transport": "0x2",
+        "health": {
+          "chunk_reject": 0,
+          "command_chunk_rejects": 0,
+          "draw_skipped_no_pipeline": 0,
+          "gpu_command_buffer_errors": 0,
+          "pipeline_build_fail_draw": 0,
+          "pipeline_build_fail_function": 0,
+          "pipeline_build_fail_library": 0,
+          "pipeline_build_fail_pso": 0
+        },
+        "artifact": "experiments/output/pe-segmented-preflight-20260908/analysis/postfix-archx64-inline1-segmented1-offload1/qualification.json",
+        "log_sha256": "36c09e66fb6b5776b4e384583857206737341ff0956ba6d646567ee8c0b394cf",
+        "qualification_sha256": "e79ae538201305d4787b22b8f8777686ac9d1fda8608f7f91b7f4e1ac932cc9c",
+        "signatures_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+      },
+      {
+        "case": {
+          "arch": "x64",
+          "inline": "1",
+          "segmented": "1",
+          "offload": "0"
+        },
+        "recipe": {
+          "DXMT9_PE_INLINE_CONST_DELTA": "1",
+          "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+          "DXMT9_PE_SEGMENTED_TRANSPORT": "1",
+          "DXMT9_OFFLOAD_COMMIT_REPLAY": "0",
+          "DXMT9_CPU_READY_TAPE": "0",
+          "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+          "DXMT9_PE_STATS_DECIMATION": "1",
+          "DXMT_PERF_COUNTERS": "1",
+          "DXMT_LOG_LEVEL": "info",
+          "DXMT_LOG_PATH": "none",
+          "WINEDEBUG": "-all",
+          "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+        },
+        "pixels": 96,
+        "fixture": {
+          "sha256": "b1ebebe38e5e5796b95dceeb72dacc75b1a4e89d3750a446a3248c3ead961cfc",
+          "bytes": 114176
+        },
+        "source": {
+          "sha256": "25d0d3904b98487887632189e2500cd04f422a63337ea0870333f95a9d85f3d3",
+          "bytes": 34457
+        },
+        "append_counts": {
+          "append_draw_calls": 24,
+          "append_drawidx_calls": 24,
+          "append_drawup_calls": 48,
+          "append_applystate_calls": 6,
+          "append_vsconst_calls": 12,
+          "append_psconst_calls": 12,
+          "append_clear_calls": 1,
+          "append_other_calls": 1
+        },
+        "negotiated_transport": "0x2",
+        "health": {
+          "chunk_reject": 0,
+          "command_chunk_rejects": 0,
+          "draw_skipped_no_pipeline": 0,
+          "gpu_command_buffer_errors": 0,
+          "pipeline_build_fail_draw": 0,
+          "pipeline_build_fail_function": 0,
+          "pipeline_build_fail_library": 0,
+          "pipeline_build_fail_pso": 0
+        },
+        "artifact": "experiments/output/pe-segmented-preflight-20260908/analysis/postfix-archx64-inline1-segmented1-offload0/qualification.json",
+        "log_sha256": "1a34b4473f76acd5abe4d3a1d37f77fb1f0508ebc3a029475ba936027a2c9a81",
+        "qualification_sha256": "2e94cae1d803a368048184b874eee06518d97d474858e375ff228cf16d94a6f2",
+        "signatures_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+      }
+    ]
+  },
+  "cpu": {
+    "qualification": "Info-only segmented transport=1 CPU diagnostic: 05 baseline r2 vs candidate r1 and 06 baseline r1 vs candidate r1. No thermal or randomization control; deltas are descriptive, not promotion evidence.",
+    "caveats": "Diagnostics-only. Native CPU is the cumulative inclusive commit-entry thread: game/Wine/synchronous Unix and segmented Unix work are included, not PE-exclusive CPU or exact Present CPU. Stable log-frame endpoints and external query brackets are approximate; process rows are paired by the same observer iteration. Info logging is not Warn-profile FPS evidence and does not establish whole-scene pixel correctness, CPU savings, neutrality, or promotion. Error-counter health is not claimed for any uncovered tail after the last reported Present.",
+    "groups": {
+      "05": {
+        "fps_delta_percent": 0.28779248298840265,
+        "thread_delta_percent": -1.136105978311397,
+        "process_delta_percent": -0.793716805085598
+      },
+      "06": {
+        "fps_delta_percent": 0.8718675296144784,
+        "thread_delta_percent": -0.38271882456929474,
+        "process_delta_percent": -0.5648080860918725
+      }
+    },
+    "runs": [
+      {
+        "run": "app-d3d9-3dmark05-pe-segmented-preflight-8e9dc320-baseline-gt2-seg1-inline0-threadcpu-r2-20260908",
+        "product": "05",
+        "variant": "baseline",
+        "round": 2,
+        "fps": 29.711723052183277,
+        "scene_frames": 1919,
+        "scene_wall_ms": 64587.301,
+        "scene_first": 1,
+        "scene_last": 1919,
+        "envelope": {
+          "status": "partial",
+          "identity": [
+            14146,
+            44842886,
+            1788831776,
+            366319
+          ],
+          "selector": {
+            "device": 140475501805568,
+            "native_tid": 44842886,
+            "transport": 2
+          },
+          "selector_provenance": "stable",
+          "frames": 1852,
+          "frame_span": 1852,
+          "coverage_frames": 1852,
+          "scene_frames": 1918,
+          "coverage_fraction": 0.9655891553701773,
+          "user_ns": 57450960000,
+          "system_ns": 418692000,
+          "wall_ns": 61270892000,
+          "cpu_ns": 57869652000,
+          "cpu_ms": 57869.652,
+          "cpu_ms_per_frame": 31.24711231101512,
+          "average_cores": 0.9444884856580837,
+          "intervals": [
+            {
+              "first_frame": 2,
+              "last_frame": 1854,
+              "frames": 1852,
+              "user_ns": 57450960000,
+              "system_ns": 418692000,
+              "wall_ns": 61270892000
+            }
+          ],
+          "rejected": {},
+          "excluded_prefix": {
+            "rows": 2,
+            "statuses": {
+              "pending_selector": 2
+            }
+          },
+          "excluded_suffix": {
+            "rows": 0,
+            "statuses": {}
+          },
+          "endpoint_approximation": "Stable log-frame observations are approximate scene endpoints, not exact Present timestamps.",
+          "query_bounds": {
+            "max_query_ns": 100000000,
+            "first": {
+              "snapshot_begin_ns": 1159507830350000,
+              "snapshot_end_ns": 1159507830354000,
+              "query_duration_ns": 4000,
+              "observer_begin_ns": 1159507826643000,
+              "observer_end_ns": 1159507830629000,
+              "elapsed_ns": 3986000
+            },
+            "last": {
+              "snapshot_begin_ns": 1159569101246000,
+              "snapshot_end_ns": 1159569101254000,
+              "query_duration_ns": 8000,
+              "observer_begin_ns": 1159569098208000,
+              "observer_end_ns": 1159569101522000,
+              "elapsed_ns": 3314000
+            }
+          },
+          "log_provenance": "stable-file-identity",
+          "qualification": "Partial envelope producer native-thread CPU, including game/Wine/synchronous Unix; not PE-exclusive and not exact Present CPU. CPU is the cumulative delta between stable log-frame endpoints; endpoint and query bounds remain approximate. Caller-supplied log provenance does not establish causal ownership."
+        },
+        "process_same_iteration_envelope": {
+          "frames": 1852,
+          "cpu_seconds": 130.04,
+          "cpu_ms_per_frame": 70.21598272138228,
+          "wall_seconds": 61.27319375006482,
+          "average_cores": 2.122298382722419,
+          "peak_rss_kib": 3223776,
+          "clock_epoch_offset_seconds": -29.50697458302602,
+          "clock_offset_drift_seconds": 0.0034946671221405268,
+          "endpoint_frame_offsets": [
+            0,
+            0
+          ],
+          "paired_rows": 31,
+          "same_iteration": true
+        },
+        "per_frame": {
+          "command_buffers": 4.0010422094841065,
+          "render_pass_begin": 15.784783741532047,
+          "draw_calls": 1681.7087024491923,
+          "gpu_command_buffer_time_ms": 1.9883809275664408
+        },
+        "health": {
+          "chunk_reject": 0,
+          "command_chunk_rejects": 0,
+          "draw_skipped_no_pipeline": 0,
+          "gpu_command_buffer_errors": 0,
+          "pipeline_build_fail_draw": 0,
+          "pipeline_build_fail_function": 0,
+          "pipeline_build_fail_library": 0,
+          "pipeline_build_fail_pso": 0
+        },
+        "timeout": false,
+        "uncovered_tail_frames": 0,
+        "health_coverage": {
+          "counters_through_frame": 1920,
+          "last_logged_frame": 1919,
+          "uncovered_tail_frames": 0,
+          "health_proven_through_uncovered_tail": true
+        },
+        "counter_coverage": {
+          "reported_present_encoded": 1920,
+          "last_logged_frame": 1919
+        },
+        "evidence_sha256": {
+          "result.json": "921517904ef323a3484e514fb53e0393ccc47b875270d4072175d6426e03c9d2",
+          "measurement-qualification.json": "3d77af596aaeb236f7c2a800f29a0e85d9e3591fc929049631d97f7c851d8596",
+          "cpu-observer.jsonl": "762b1afc373177ad604482e195d766934c43d5f21a44508c8ad61d7009557229",
+          "native-thread-cpu.jsonl": "fc477b665d2d884c8486186d93139ee853709267e4f1c4960d2c03f569be98c9",
+          "3dmark05-perf-frames.csv": "207bd7570fae51b418b6e7b993c0df90a760d58fed9830e5ede8380bc7888de3"
+        }
+      },
+      {
+        "run": "app-d3d9-3dmark06-pe-segmented-preflight-8e9dc320-baseline-gt2-seg1-inline0-threadcpu-r1-20260908",
+        "product": "06",
+        "variant": "baseline",
+        "round": 1,
+        "fps": 18.010368103831613,
+        "scene_frames": 1154,
+        "scene_wall_ms": 64074.204,
+        "scene_first": 973,
+        "scene_last": 2126,
+        "envelope": {
+          "status": "partial",
+          "identity": [
+            15782,
+            44848408,
+            1788831860,
+            72806
+          ],
+          "selector": {
+            "device": 140356469424128,
+            "native_tid": 44848408,
+            "transport": 2
+          },
+          "selector_provenance": "stable",
+          "frames": 1116,
+          "frame_span": 1116,
+          "coverage_frames": 1116,
+          "scene_frames": 1153,
+          "coverage_fraction": 0.9679098005203816,
+          "user_ns": 58646456000,
+          "system_ns": 257175000,
+          "wall_ns": 61210404000,
+          "cpu_ns": 58903631000,
+          "cpu_ms": 58903.631,
+          "cpu_ms_per_frame": 52.78103136200717,
+          "average_cores": 0.9623140373326077,
+          "intervals": [
+            {
+              "first_frame": 980,
+              "last_frame": 2096,
+              "frames": 1116,
+              "user_ns": 58646456000,
+              "system_ns": 257175000,
+              "wall_ns": 61210404000
+            }
+          ],
+          "rejected": {},
+          "excluded_prefix": {
+            "rows": 14,
+            "statuses": {
+              "pending_selector": 12,
+              "sample": 2
+            }
+          },
+          "excluded_suffix": {
+            "rows": 75,
+            "statuses": {
+              "sample": 75
+            }
+          },
+          "endpoint_approximation": "Stable log-frame observations are approximate scene endpoints, not exact Present timestamps.",
+          "query_bounds": {
+            "max_query_ns": 100000000,
+            "first": {
+              "snapshot_begin_ns": 1159616031974000,
+              "snapshot_end_ns": 1159616031977000,
+              "query_duration_ns": 3000,
+              "observer_begin_ns": 1159616028941000,
+              "observer_end_ns": 1159616032185000,
+              "elapsed_ns": 3244000
+            },
+            "last": {
+              "snapshot_begin_ns": 1159677242381000,
+              "snapshot_end_ns": 1159677242384000,
+              "query_duration_ns": 3000,
+              "observer_begin_ns": 1159677239096000,
+              "observer_end_ns": 1159677242651000,
+              "elapsed_ns": 3555000
+            }
+          },
+          "log_provenance": "stable-file-identity",
+          "qualification": "Partial envelope producer native-thread CPU, including game/Wine/synchronous Unix; not PE-exclusive and not exact Present CPU. CPU is the cumulative delta between stable log-frame endpoints; endpoint and query bounds remain approximate. Caller-supplied log provenance does not establish causal ownership."
+        },
+        "process_same_iteration_envelope": {
+          "frames": 1116,
+          "cpu_seconds": 107.30000000000001,
+          "cpu_ms_per_frame": 96.14695340501794,
+          "wall_seconds": 61.21407483308576,
+          "average_cores": 1.7528648483633562,
+          "peak_rss_kib": 3218444,
+          "clock_epoch_offset_seconds": -29.509466832969338,
+          "clock_offset_drift_seconds": 0.0036799581721425056,
+          "endpoint_frame_offsets": [
+            0,
+            0
+          ],
+          "paired_rows": 31,
+          "same_iteration": true
+        },
+        "per_frame": {
+          "command_buffers": 4.001733102253033,
+          "render_pass_begin": 19.861351819757367,
+          "draw_calls": 1877.763431542461,
+          "gpu_command_buffer_time_ms": 11.956275563258231
+        },
+        "health": {
+          "chunk_reject": 0,
+          "command_chunk_rejects": 0,
+          "draw_skipped_no_pipeline": 0,
+          "gpu_command_buffer_errors": 0,
+          "pipeline_build_fail_draw": 0,
+          "pipeline_build_fail_function": 0,
+          "pipeline_build_fail_library": 0,
+          "pipeline_build_fail_pso": 0
+        },
+        "timeout": true,
+        "uncovered_tail_frames": 26,
+        "health_coverage": {
+          "counters_through_frame": 2100,
+          "last_logged_frame": 2126,
+          "uncovered_tail_frames": 26,
+          "health_proven_through_uncovered_tail": false
+        },
+        "counter_coverage": {
+          "reported_present_encoded": 2100,
+          "last_logged_frame": 2126
+        },
+        "evidence_sha256": {
+          "result.json": "9f5cbb7bd0628ff5f000533105c82740c5a6e31db79074d44788e605c188f11e",
+          "measurement-qualification.json": "dfad5754f33e349b23218b090f0a3f8f8e9ff5dde0af478743f4d80fc1a74cbb",
+          "cpu-observer.jsonl": "d873581c94a83702d597514e4ecf89523c6e215629b6c5f36c8cf276d2e735ed",
+          "native-thread-cpu.jsonl": "f945992b785e992d3af35d15fcfe1e18f56b035c77a512bcb22a97e93c9ea082",
+          "3dmark05-perf-frames.csv": "b1d8d86ae7102ad519a6afbd5cb2cf1fe9d93bb9683b5adbd9aac434c6942cea"
+        }
+      },
+      {
+        "run": "app-d3d9-3dmark05-pe-segmented-preflight-8e9dc320-candidate-gt2-seg1-inline0-threadcpu-r1-20260908",
+        "product": "05",
+        "variant": "candidate",
+        "round": 1,
+        "fps": 29.79723115769379,
+        "scene_frames": 1925,
+        "scene_wall_ms": 64603.318,
+        "scene_first": 1,
+        "scene_last": 1925,
+        "envelope": {
+          "status": "partial",
+          "identity": [
+            32681,
+            44912411,
+            1788832673,
+            715832
+          ],
+          "selector": {
+            "device": 140463287992320,
+            "native_tid": 44912411,
+            "transport": 2
+          },
+          "selector_provenance": "stable",
+          "frames": 1875,
+          "frame_span": 1875,
+          "coverage_frames": 1875,
+          "scene_frames": 1924,
+          "coverage_fraction": 0.9745322245322245,
+          "user_ns": 57520360000,
+          "system_ns": 402350000,
+          "wall_ns": 61292177000,
+          "cpu_ns": 57922710000,
+          "cpu_ms": 57922.71,
+          "cpu_ms_per_frame": 30.892112,
+          "average_cores": 0.9450261490956668,
+          "intervals": [
+            {
+              "first_frame": 7,
+              "last_frame": 1882,
+              "frames": 1875,
+              "user_ns": 57520360000,
+              "system_ns": 402350000,
+              "wall_ns": 61292177000
+            }
+          ],
+          "rejected": {},
+          "excluded_prefix": {
+            "rows": 3,
+            "statuses": {
+              "pending_selector": 2,
+              "sample": 1
+            }
+          },
+          "excluded_suffix": {
+            "rows": 0,
+            "statuses": {}
+          },
+          "endpoint_approximation": "Stable log-frame observations are approximate scene endpoints, not exact Present timestamps.",
+          "query_bounds": {
+            "max_query_ns": 100000000,
+            "first": {
+              "snapshot_begin_ns": 1160406634896000,
+              "snapshot_end_ns": 1160406634899000,
+              "query_duration_ns": 3000,
+              "observer_begin_ns": 1160406631538000,
+              "observer_end_ns": 1160406635118000,
+              "elapsed_ns": 3580000
+            },
+            "last": {
+              "snapshot_begin_ns": 1160467927076000,
+              "snapshot_end_ns": 1160467927079000,
+              "query_duration_ns": 3000,
+              "observer_begin_ns": 1160467924228000,
+              "observer_end_ns": 1160467927317000,
+              "elapsed_ns": 3089000
+            }
+          },
+          "log_provenance": "stable-file-identity",
+          "qualification": "Partial envelope producer native-thread CPU, including game/Wine/synchronous Unix; not PE-exclusive and not exact Present CPU. CPU is the cumulative delta between stable log-frame endpoints; endpoint and query bounds remain approximate. Caller-supplied log provenance does not establish causal ownership."
+        },
+        "process_same_iteration_envelope": {
+          "frames": 1875,
+          "cpu_seconds": 130.60999999999999,
+          "cpu_ms_per_frame": 69.65866666666666,
+          "wall_seconds": 61.294440667144954,
+          "average_cores": 2.1308620908912146,
+          "peak_rss_kib": 2946192,
+          "clock_epoch_offset_seconds": -29.538382458034903,
+          "clock_offset_drift_seconds": 0.0029614591039717197,
+          "endpoint_frame_offsets": [
+            0,
+            0
+          ],
+          "paired_rows": 31,
+          "same_iteration": true
+        },
+        "per_frame": {
+          "command_buffers": 4.001038961038961,
+          "render_pass_begin": 15.785454545454545,
+          "draw_calls": 1680.8529870129871,
+          "gpu_command_buffer_time_ms": 2.003225974025974
+        },
+        "health": {
+          "chunk_reject": 0,
+          "command_chunk_rejects": 0,
+          "draw_skipped_no_pipeline": 0,
+          "gpu_command_buffer_errors": 0,
+          "pipeline_build_fail_draw": 0,
+          "pipeline_build_fail_function": 0,
+          "pipeline_build_fail_library": 0,
+          "pipeline_build_fail_pso": 0
+        },
+        "timeout": false,
+        "uncovered_tail_frames": 0,
+        "health_coverage": {
+          "counters_through_frame": 1926,
+          "last_logged_frame": 1925,
+          "uncovered_tail_frames": 0,
+          "health_proven_through_uncovered_tail": true
+        },
+        "counter_coverage": {
+          "reported_present_encoded": 1926,
+          "last_logged_frame": 1925
+        },
+        "evidence_sha256": {
+          "result.json": "6075f4c6f76e1173111eb0452ff1ba3e7de585cf9773769a8ce2a57aa6e561e3",
+          "measurement-qualification.json": "af782313d0876025501a76a7192391d1e45acd95b2949837238a107a96e55cf4",
+          "cpu-observer.jsonl": "f7c878a496f881e542cff93f6293743aaa684ce60945966115b0676e9f45e10e",
+          "native-thread-cpu.jsonl": "5db7462cda46257c8f2d426493312ff5f6db9ffbf140aeff91fead980205fdf1",
+          "3dmark05-perf-frames.csv": "ab58a5bef02731eee14d9b023ce0448243a9d4327e53910d610bc63efa72d280"
+        }
+      },
+      {
+        "run": "app-d3d9-3dmark06-pe-segmented-preflight-8e9dc320-candidate-gt2-seg1-inline0-threadcpu-r1-20260908",
+        "product": "06",
+        "variant": "candidate",
+        "round": 1,
+        "fps": 18.167394655292963,
+        "scene_frames": 1164,
+        "scene_wall_ms": 64070.827,
+        "scene_first": 1013,
+        "scene_last": 2176,
+        "envelope": {
+          "status": "partial",
+          "identity": [
+            34080,
+            44918041,
+            1788832786,
+            458413
+          ],
+          "selector": {
+            "device": 140514965094400,
+            "native_tid": 44918041,
+            "transport": 2
+          },
+          "selector_provenance": "stable",
+          "frames": 1126,
+          "frame_span": 1126,
+          "coverage_frames": 1126,
+          "scene_frames": 1163,
+          "coverage_fraction": 0.9681857265692175,
+          "user_ns": 58949662000,
+          "system_ns": 254324000,
+          "wall_ns": 61228293000,
+          "cpu_ns": 59203986000,
+          "cpu_ms": 59203.986,
+          "cpu_ms_per_frame": 52.57902841918295,
+          "average_cores": 0.9669383727552228,
+          "intervals": [
+            {
+              "first_frame": 1043,
+              "last_frame": 2169,
+              "frames": 1126,
+              "user_ns": 58949662000,
+              "system_ns": 254324000,
+              "wall_ns": 61228293000
+            }
+          ],
+          "rejected": {},
+          "excluded_prefix": {
+            "rows": 15,
+            "statuses": {
+              "pending_selector": 13,
+              "sample": 2
+            }
+          },
+          "excluded_suffix": {
+            "rows": 74,
+            "statuses": {
+              "sample": 74
+            }
+          },
+          "endpoint_approximation": "Stable log-frame observations are approximate scene endpoints, not exact Present timestamps.",
+          "query_bounds": {
+            "max_query_ns": 100000000,
+            "first": {
+              "snapshot_begin_ns": 1160544308486000,
+              "snapshot_end_ns": 1160544308490000,
+              "query_duration_ns": 4000,
+              "observer_begin_ns": 1160544304938000,
+              "observer_end_ns": 1160544308679000,
+              "elapsed_ns": 3741000
+            },
+            "last": {
+              "snapshot_begin_ns": 1160605536783000,
+              "snapshot_end_ns": 1160605536787000,
+              "query_duration_ns": 4000,
+              "observer_begin_ns": 1160605533898000,
+              "observer_end_ns": 1160605536987000,
+              "elapsed_ns": 3089000
+            }
+          },
+          "log_provenance": "stable-file-identity",
+          "qualification": "Partial envelope producer native-thread CPU, including game/Wine/synchronous Unix; not PE-exclusive and not exact Present CPU. CPU is the cumulative delta between stable log-frame endpoints; endpoint and query bounds remain approximate. Caller-supplied log provenance does not establish causal ownership."
+        },
+        "process_same_iteration_envelope": {
+          "frames": 1126,
+          "cpu_seconds": 107.64999999999999,
+          "cpu_ms_per_frame": 95.60390763765541,
+          "wall_seconds": 61.23099129204638,
+          "average_cores": 1.7580966391112995,
+          "peak_rss_kib": 2950108,
+          "clock_epoch_offset_seconds": -29.542781583033502,
+          "clock_offset_drift_seconds": 0.003102916060015559,
+          "endpoint_frame_offsets": [
+            0,
+            0
+          ],
+          "paired_rows": 31,
+          "same_iteration": true
+        },
+        "per_frame": {
+          "command_buffers": 4.001718213058419,
+          "render_pass_begin": 19.86426116838488,
+          "draw_calls": 1878.2079037800688,
+          "gpu_command_buffer_time_ms": 11.916949312714776
+        },
+        "health": {
+          "chunk_reject": 0,
+          "command_chunk_rejects": 0,
+          "draw_skipped_no_pipeline": 0,
+          "gpu_command_buffer_errors": 0,
+          "pipeline_build_fail_draw": 0,
+          "pipeline_build_fail_function": 0,
+          "pipeline_build_fail_library": 0,
+          "pipeline_build_fail_pso": 0
+        },
+        "timeout": true,
+        "uncovered_tail_frames": 16,
+        "health_coverage": {
+          "counters_through_frame": 2160,
+          "last_logged_frame": 2176,
+          "uncovered_tail_frames": 16,
+          "health_proven_through_uncovered_tail": false
+        },
+        "counter_coverage": {
+          "reported_present_encoded": 2160,
+          "last_logged_frame": 2176
+        },
+        "evidence_sha256": {
+          "result.json": "5177ba4138650b3e3a7e955af5836aad90ef5aafae582097aed55311261d976b",
+          "measurement-qualification.json": "ec1b9e6fe31c7a8f8dc70c7ab6278507025d8a90d1ccaee6c90417dda202b350",
+          "cpu-observer.jsonl": "02bb68cba9ed623a278b461ee10bef3535fc789c3617d882eafc26c34df623d8",
+          "native-thread-cpu.jsonl": "555c2c1c4a777051ae97e9075ba803939fc219cbbd5ea9a888591914bfaa31c5",
+          "3dmark05-perf-frames.csv": "25e991ec9dd864d18d3d624867f6a4fb56a2959fee60320af90ed3c9f83f9ea1"
+        }
+      }
+    ],
+    "artifact": "experiments/output/pe-segmented-preflight-20260908/analysis/cpu-matrix-qualified.json",
+    "sha256": "d8519299ac1a2eaf231b5dd6098dc86d30bf6a1147ce39d713cba7a794025c6d"
+  }
+}

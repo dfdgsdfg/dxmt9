@@ -13,6 +13,20 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H272](../../../docs/perfomance/present-pacing/present-pacing-segmented-preflight.272.md)
+implements R-CORE-REC-7.10's geometry-only borrowed preflight and complete
+owned-byte semantic validation. Native rejection/conservation, protected-span,
+and owned-source isolation tests plus 12 PE32/PE64 processes / 1,152 exact
+edge-layout samples pass. Existing TLC remains a separate lifetime gate.
+Speculative allocation/copy for malformed bodies is intentional and bounded;
+public allocation-failure HRESULT qualification against R-CORE-REC-3.6 remains
+open because preparation still reports generic admission failure. Concurrent
+client mutation, broader consumers, and transport promotion are not closed.
+Single Info GT2 pairs show thread CPU −1.14%/−0.38%, process CPU
+−0.79%/−0.56%, and FPS +0.29%/+0.87% for 05/06. These descriptive deltas
+do not establish repeatable savings or README recovery; 06 has 26/16
+unreported tail frames. Defaults remain unchanged.
+
 [H271](../../../docs/perfomance/present-pacing/present-pacing-pe-transport-inline-boundaries.271.md)
 fixes a reproduced PE32/PE64 segmented failure: zero-length role spans kept
 nonzero arena tokens, and invalid emission selected an unmaterialized
@@ -26,9 +40,9 @@ promotion remain open.
 H271's same-image single transport pairs show no economy evidence:
 segmented inclusive commit-thread CPU +0.81%/+0.42% and Info FPS
 −0.69%/−0.87% for 05/06. These are not PE-exclusive or noise-qualified
-regression values. Segmented admission still repeats full semantic validation
-before/after copy; removing only the borrowed semantic walk requires a bounded
-geometry/identity gate and malformed/fault/owned-byte tests first.
+regression values. That stage identified duplicated pre/post-copy semantic
+validation; H272 supplies the bounded geometry/identity gate and
+malformed/fault/owned-byte tests for removing the borrowed semantic walk.
 
 [H270](../../../docs/perfomance/present-pacing/present-pacing-inline-constant-boundaries.270.md)
 adds 16 actual PE StateBlock/full-snapshot processes with 1,152 exact sampled

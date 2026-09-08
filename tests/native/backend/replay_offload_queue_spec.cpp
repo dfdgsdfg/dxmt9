@@ -71,6 +71,10 @@ std::span<const std::byte> segmentedRoleBytes(
           bytes};
 }
 
+std::uint32_t retainCalls = 0u;
+
+void countRetain(std::uint32_t, void*) noexcept { ++retainCalls; }
+
 void testSegmentedPrepareIsAllOrNothing() {
   using namespace dxmt9::d3d9;
   using namespace dxmt9::d3d9::pe;
@@ -381,6 +385,343 @@ void testSegmentedRegionPoolFailureAndEviction() {
             pool.cachedBytesForTest() <=
                 SegmentedCommandChunkRegionPool::kMaxCachedBytes,
         "bounded pool evicts a surplus free block without waiting");
+}
+
+void testSegmentedPrepareAdmissionMatrix() {
+  using namespace dxmt9::d3d9;
+  using namespace dxmt9::d3d9::pe;
+
+  constexpr std::size_t kSentinelBase = 100u;
+  for (unsigned geometryCase = 0u; geometryCase != 2u; ++geometryCase) {
+    for (unsigned bodyCase = 0u; bodyCase != 2u; ++bodyCase) {
+      for (unsigned allocationCase = 0u; allocationCase != 2u;
+           ++allocationCase) {
+        const bool geometryValid = geometryCase != 0u;
+        const bool bodyValid = bodyCase != 0u;
+        const bool allocationSucceeds = allocationCase != 0u;
+        D9CCommandChunkWireRecordHeader record{
+            .type = D9C_COMMAND_RECORD_CLEAR,
+            .flags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+            .payloadOffset = 0u,
+            .payloadSize = sizeof(D9CCommandChunkWireClear),
+            .firstHandle = 0u,
+            .handleCount = 0u,
+            .reserved0 = 0u,
+            .reserved1 = 0u,
+        };
+        D9CCommandChunkWireClear clear{
+            .flags = 1u,
+            .colorARGB = 0xff102030u,
+            .z = 1.0f,
+            .stencil = 0u,
+            .rectCount = 0u,
+            .rectOffset = bodyValid
+                ? static_cast<std::uint32_t>(sizeof(D9CCommandChunkWireClear))
+                : 0u,
+        };
+        const auto plan = planExactCommandChunkLayout(
+            1u, 0u, sizeof(D9CCommandChunkWireClear));
+        D9CCommandChunkSegmentedTransportV1 transport{
+            .header = D9CCommandChunkWireHeader{
+                .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+                .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+                .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+                .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+                .recordTableOffset = plan.recordTableOffset,
+                .recordCount = 1u,
+                .handleTableOffset = plan.handleTableOffset,
+                .handleCount = 0u,
+                .payloadArenaOffset = plan.payloadArenaOffset,
+                .payloadArenaSize = sizeof(clear),
+                .reserved0 = 0u,
+                .reserved1 = 0u,
+            },
+            .records = toWireHandle(&record),
+            .recordBytes = sizeof(record),
+            .recordReserved = 0u,
+            .handles = {},
+            .handleBytes = 0u,
+            .handleReserved = 0u,
+            .payload = toWireHandle(&clear),
+            .payloadBytes = sizeof(clear),
+            .payloadReserved = 0u,
+            .renderTapeCaptureToken = 0x1234u,
+            .renderTapeEventOrdinal = 0x5678u,
+            .producerIdentity = {
+                .firstEventOrdinal = 1u,
+                .lastEventOrdinal = 2u,
+                .firstSourceOrdinal = 3u,
+                .lastSourceOrdinal = 4u,
+            },
+        };
+        const auto records = segmentedRoleBytes(
+            transport.records, transport.recordBytes);
+        const auto payload = segmentedRoleBytes(
+            transport.payload, transport.payloadBytes);
+        if (!geometryValid) {
+          transport.recordBytes += sizeof(D9CCommandChunkWireRecordHeader);
+        }
+
+        WireObjectRegistry registry;
+        SegmentedCommandChunkRegionPool regionPool;
+        if (!allocationSucceeds) regionPool.failNextAllocationForTest();
+        RawCommandChunk output;
+        output.recordBytes = static_cast<std::uint32_t>(
+            kSentinelBase + geometryCase * 10u + bodyCase * 3u +
+            allocationCase);
+        const auto sentinel = output.recordBytes;
+        dxmt9::core::CopyMaterializationLedger ledger;
+        bool accepted = false;
+        const auto ownedBytes = records.size() + payload.size();
+        {
+          dxmt9::core::ScopedCopyMaterializationLedger observe(
+              dxmt9::core::CopyMaterializationOwner::Unix, ledger);
+          retainCalls = 0u;
+          accepted = prepareSegmentedOffloadChunk(
+              transport, records, {}, payload, regionPool, registry,
+              countRetain, output);
+          check(accepted == (geometryValid && bodyValid &&
+                             allocationSucceeds),
+                "segmented admission matrix acceptance is bounded by all gates");
+          const auto during = ledger.snapshot(
+              dxmt9::core::CopyMaterializationClass::BridgeRawOwnership);
+          if (accepted) {
+            check(output.segmentedRegions && output.preflightValidated &&
+                      during.calls == 1u && during.bytes == ownedBytes &&
+                      during.retainedBytes == ownedBytes,
+                  "accepted matrix cell publishes and charges owned storage");
+            releaseRetainedWrappers(output);
+          }
+        }
+        const auto copy = ledger.snapshot(
+            dxmt9::core::CopyMaterializationClass::BridgeRawOwnership);
+        check(retainCalls == 0u,
+              "CLEAR-only admission matrix never invokes a retain callback");
+        if (accepted) {
+          check(regionPool.allocationCountForTest() == 1u &&
+                    regionPool.cachedBlocksForTest() == 1u &&
+                    copy.calls == 1u && copy.bytes == ownedBytes &&
+                    copy.retainedBytes == 0u && output.recordBytes != sentinel,
+                "accepted matrix cell releases storage and ledger ownership");
+        } else {
+          const bool copiedBeforeReject = geometryValid && allocationSucceeds;
+          check(output.recordBytes == sentinel && !output.segmentedRegions &&
+                    copy.retainedBytes == 0u &&
+                    copy.calls == (copiedBeforeReject ? 1u : 0u) &&
+                    copy.bytes == (copiedBeforeReject ? ownedBytes : 0u) &&
+                    regionPool.allocationCountForTest() ==
+                        (copiedBeforeReject ? 1u : 0u) &&
+                    regionPool.cachedBlocksForTest() ==
+                        (copiedBeforeReject ? 1u : 0u),
+                "rejected matrix cell preserves output and conserves storage");
+        }
+      }
+    }
+  }
+}
+
+void testSegmentedPostCopyValidationAndRetainRollback() {
+  using namespace dxmt9::d3d9;
+  using namespace dxmt9::d3d9::pe;
+  retainCalls = 0u;
+
+  D9CCommandChunkWireRecordHeader record{
+      .type = D9C_COMMAND_RECORD_CLEAR,
+      .flags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+      .payloadOffset = 0u,
+      .payloadSize = sizeof(D9CCommandChunkWireClear),
+      .firstHandle = 0u,
+      .handleCount = 0u,
+      .reserved0 = 0u,
+      .reserved1 = 0u,
+  };
+  D9CCommandChunkWireClear invalidClear{
+      .flags = 1u,
+      .colorARGB = 0xff102030u,
+      .z = 1.0f,
+      .stencil = 0u,
+      .rectCount = 0u,
+      .rectOffset = 0u,
+  };
+  const auto plan = planExactCommandChunkLayout(
+      1u, 0u, sizeof(invalidClear));
+  D9CCommandChunkSegmentedTransportV1 invalidTransport{
+      .header = D9CCommandChunkWireHeader{
+          .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+          .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+          .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+          .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+          .recordTableOffset = plan.recordTableOffset,
+          .recordCount = 1u,
+          .handleTableOffset = plan.handleTableOffset,
+          .handleCount = 0u,
+          .payloadArenaOffset = plan.payloadArenaOffset,
+          .payloadArenaSize = sizeof(invalidClear),
+      },
+      .records = toWireHandle(&record),
+      .recordBytes = sizeof(record),
+      .payload = toWireHandle(&invalidClear),
+      .payloadBytes = sizeof(invalidClear),
+  };
+  const auto invalidRecords = segmentedRoleBytes(
+      invalidTransport.records, invalidTransport.recordBytes);
+  const auto invalidPayload = segmentedRoleBytes(
+      invalidTransport.payload, invalidTransport.payloadBytes);
+  WireObjectRegistry registry;
+  SegmentedCommandChunkRegionPool pool;
+  RawCommandChunk unchanged;
+  unchanged.recordBytes = 7u;
+  const auto unchangedBytes = unchanged.recordBlob;
+  dxmt9::core::CopyMaterializationLedger ledger;
+  {
+    dxmt9::core::ScopedCopyMaterializationLedger observe(
+        dxmt9::core::CopyMaterializationOwner::Unix, ledger);
+    check(!prepareSegmentedOffloadChunk(
+              invalidTransport, invalidRecords, {}, invalidPayload, pool,
+              registry, countRetain, unchanged),
+          "semantic body failure rejects after segmented copy");
+  }
+  const auto copiedBytes = invalidRecords.size() + invalidPayload.size();
+  const auto copy = ledger.snapshot(
+      dxmt9::core::CopyMaterializationClass::BridgeRawOwnership);
+  check(pool.allocationCountForTest() == 1u &&
+            pool.cachedBlocksForTest() == 1u &&
+            copy.calls == 1u && copy.bytes == copiedBytes &&
+            copy.retainedBytes == 0u && retainCalls == 0u,
+        "post-copy semantic rejection recycles storage without retaining");
+  check(unchanged.recordBlob == unchangedBytes && unchanged.recordBytes == 7u &&
+            !unchanged.segmentedRegions,
+        "post-copy semantic rejection leaves caller output unchanged");
+
+  auto invalidGeometryAndBody = invalidTransport;
+  invalidGeometryAndBody.recordBytes +=
+      sizeof(D9CCommandChunkWireRecordHeader);
+  RawCommandChunk invalidBothOutput;
+  invalidBothOutput.recordBytes = 13u;
+  const auto allocationBeforeInvalidBoth = pool.allocationCountForTest();
+  const auto hitsBeforeInvalidBoth = pool.hitCountForTest();
+  check(!prepareSegmentedOffloadChunk(
+            invalidGeometryAndBody, invalidRecords, {}, invalidPayload, pool,
+            registry, countRetain, invalidBothOutput) &&
+            pool.allocationCountForTest() == allocationBeforeInvalidBoth &&
+            pool.hitCountForTest() == hitsBeforeInvalidBoth &&
+            invalidBothOutput.recordBytes == 13u &&
+            !invalidBothOutput.segmentedRegions,
+        "invalid geometry dominates an invalid body before pool adoption");
+
+  SegmentedCommandChunkRegionPool invalidBothFailedPool;
+  invalidBothFailedPool.failNextAllocationForTest();
+  RawCommandChunk invalidBothFailedOutput;
+  invalidBothFailedOutput.recordBytes = 17u;
+  check(!prepareSegmentedOffloadChunk(
+            invalidGeometryAndBody, invalidRecords, {}, invalidPayload,
+            invalidBothFailedPool, registry, countRetain,
+            invalidBothFailedOutput) &&
+            invalidBothFailedPool.allocationCountForTest() == 0u &&
+            invalidBothFailedPool.hitCountForTest() == 0u &&
+            invalidBothFailedOutput.recordBytes == 17u &&
+            !invalidBothFailedOutput.segmentedRegions,
+        "invalid geometry stays fail-closed despite allocation failure seam");
+
+  SegmentedCommandChunkRegionPool failedPool;
+  failedPool.failNextAllocationForTest();
+  RawCommandChunk failedOutput;
+  failedOutput.recordBytes = 11u;
+  dxmt9::core::CopyMaterializationLedger failedLedger;
+  {
+    dxmt9::core::ScopedCopyMaterializationLedger observe(
+        dxmt9::core::CopyMaterializationOwner::Unix, failedLedger);
+    check(!prepareSegmentedOffloadChunk(
+              invalidTransport, invalidRecords, {}, invalidPayload, failedPool,
+              registry, countRetain, failedOutput),
+          "semantic-invalid geometry reaches bounded allocation failure");
+  }
+  const auto failedCopy = failedLedger.snapshot(
+      dxmt9::core::CopyMaterializationClass::BridgeRawOwnership);
+  check(failedPool.allocationCountForTest() == 0u &&
+            failedPool.cachedBlocksForTest() == 0u && failedCopy.calls == 0u &&
+            failedCopy.retainedBytes == 0u && failedOutput.recordBytes == 11u &&
+            !failedOutput.segmentedRegions,
+        "allocation failure leaves semantic-invalid output and ledger unchanged");
+
+  D9CCommandChunkWireRecordHeader presentRecord{
+      .type = D9C_COMMAND_RECORD_PRESENT,
+      .flags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+      .payloadOffset = 0u,
+      .payloadSize = sizeof(D9CCommandChunkWirePresent),
+      .firstHandle = 0u,
+      .handleCount = 1u,
+      .reserved0 = 0u,
+      .reserved1 = 0u,
+  };
+  D9CCommandChunkWirePresent present{
+      .hwnd = 0x1234u,
+      .flags = 0u,
+      .hasSrc = 1u,
+      .hasDst = 0u,
+      .sourceHandleIndex = 0u,
+      .src = D9CRect{0, 0, 1, 1},
+      .dst = D9CRect{0, 0, 1, 1},
+  };
+  D9CCommandChunkWireHandleEntry missingHandle{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = 1u,
+      .objectId = 1u,
+  };
+  const auto presentPlan = planExactCommandChunkLayout(
+      1u, 1u, sizeof(present));
+  D9CCommandChunkSegmentedTransportV1 missingTransport{
+      .header = D9CCommandChunkWireHeader{
+          .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+          .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+          .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+          .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+          .recordTableOffset = presentPlan.recordTableOffset,
+          .recordCount = 1u,
+          .handleTableOffset = presentPlan.handleTableOffset,
+          .handleCount = 1u,
+          .payloadArenaOffset = presentPlan.payloadArenaOffset,
+          .payloadArenaSize = sizeof(present),
+      },
+      .records = toWireHandle(&presentRecord),
+      .recordBytes = sizeof(presentRecord),
+      .handles = toWireHandle(&missingHandle),
+      .handleBytes = sizeof(missingHandle),
+      .payload = toWireHandle(&present),
+      .payloadBytes = sizeof(present),
+  };
+  const auto presentRecords = segmentedRoleBytes(
+      missingTransport.records, missingTransport.recordBytes);
+  const auto presentHandles = segmentedRoleBytes(
+      missingTransport.handles, missingTransport.handleBytes);
+  const auto presentPayload = segmentedRoleBytes(
+      missingTransport.payload, missingTransport.payloadBytes);
+  const auto allocationBefore = pool.allocationCountForTest();
+  const auto hitsBefore = pool.hitCountForTest();
+  const auto cachedBefore = pool.cachedBlocksForTest();
+  RawCommandChunk missingOutput;
+  missingOutput.recordBytes = 9u;
+  const auto missingBytes = missingOutput.recordBlob;
+  dxmt9::core::CopyMaterializationLedger missingLedger;
+  {
+    dxmt9::core::ScopedCopyMaterializationLedger observe(
+        dxmt9::core::CopyMaterializationOwner::Unix, missingLedger);
+    check(!prepareSegmentedOffloadChunk(
+              missingTransport, presentRecords, presentHandles, presentPayload,
+              pool, registry, countRetain, missingOutput),
+          "registry retain resolution failure rejects after copy");
+  }
+  const auto missingCopy = missingLedger.snapshot(
+      dxmt9::core::CopyMaterializationClass::BridgeRawOwnership);
+  check(pool.allocationCountForTest() == allocationBefore &&
+            pool.hitCountForTest() == hitsBefore + 1u &&
+            pool.cachedBlocksForTest() == cachedBefore &&
+            missingCopy.calls == 1u && missingCopy.retainedBytes == 0u &&
+            retainCalls == 0u && registry.activeCount() == 0u,
+        "registry failure recycles copied regions and rolls ledger back");
+  check(missingOutput.recordBlob == missingBytes &&
+            missingOutput.recordBytes == 9u && !missingOutput.segmentedRegions,
+        "registry failure leaves caller output unchanged");
 }
 
 void testSegmentedLedgerChargeSettlesOnOwningSinkAcrossThread() {
@@ -1227,6 +1568,8 @@ int main() {
   try {
     testSegmentedPrepareIsAllOrNothing();
     testSegmentedRegionPoolFailureAndEviction();
+    testSegmentedPrepareAdmissionMatrix();
+    testSegmentedPostCopyValidationAndRetainRollback();
     testSegmentedLedgerChargeSettlesOnOwningSinkAcrossThread();
     testFifoPushPop();
     testPopExposesOnlyAdoptedImmediateRawLookahead();

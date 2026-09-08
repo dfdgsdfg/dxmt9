@@ -29,6 +29,15 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H272](present-pacing-segmented-preflight.272.md) implements the segmented
+geometry/owned-semantics split. The eight-cell native acceptance checker,
+post-copy rejection counterexample, protected spans, existing TLC, and 1,152
+fresh PE pixel samples qualify the bounded change. Single Info GT2 pairs show
+thread CPU −1.14%/−0.38%, process CPU −0.79%/−0.56%, and FPS +0.29%/+0.87%
+for 05/06. This is directional, not noise-qualified saving or transport
+promotion. Full error-counter coverage of 06's 26/16-frame tails and the
+existing public OOM HRESULT contract remain open.
+
 [H271](present-pacing-pe-transport-inline-boundaries.271.md) finds and fixes
 the segmented empty-role token → unmaterialized ExactFixed fallback defect
 before timing the lane. Native counterexample, 12 fresh PE32/PE64 pixel
@@ -37,9 +46,8 @@ bounded coverage, not all consumers or default promotion. The transport
 comparison must price synchronous Unix admission as well as removed PE gather.
 The same-image single pairs show no savings: segmented inclusive thread CPU
 is +0.81%/+0.42% for 05/06 and Info FPS −0.69%/−0.87%. This is not a
-noise-qualified regression or promotion result. The next concrete candidate
-is segmented-only duplicate full semantic validation, retaining a pre-copy
-geometry gate and complete owned validation.
+noise-qualified regression or promotion result. Its duplicate semantic-walk
+candidate is implemented with bounded evidence in H272.
 
 [H270](present-pacing-inline-constant-boundaries.270.md) closes the bounded
 recorded-StateBlock/full-snapshot pixel matrix: 16 PE processes, 1,152 exact

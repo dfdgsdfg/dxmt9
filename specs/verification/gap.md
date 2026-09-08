@@ -10,6 +10,21 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## End-to-end immutable source composition
 
+### Segmented geometry/owned-semantics split (2026-09-08)
+
+R-CORE-REC-7.10 is bound to production preparation's finite
+geometry/body/allocation acceptance and storage/ledger conservation checks,
+with a failing-before/passing-after post-copy rejection test. Protected role
+pages prove the geometry helper does not read semantic bodies; existing
+post-admission source mutation pins owned-byte isolation. Twelve actual
+PE32/PE64 processes pass 1,152 exact edge-layout pixel samples across
+contiguous/segmented worker and segmented synchronous replay. Existing TLC
+passes (160.90s), but does not prove parsing, concurrent client mutation,
+allocator internals, or pixels. The native allocation seam does not prove the
+exported C ABI OOM HRESULT: generic admission rejection remains a separate
+R-CORE-REC-3.6 gap. See
+[H272](../../docs/perfomance/present-pacing/present-pacing-segmented-preflight.272.md).
+
 ### Segmented empty-role and high-register boundaries (2026-09-08)
 
 R-CORE-REC-7.6's absent-role token rule now has a failing-then-passing native

@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H272](present-pacing-segmented-preflight.272.md) removes the borrowed
+segmented semantic walk while retaining bounded geometry and complete owned
+validation. Native failure/conservation and 1,152 fresh PE pixel samples pass.
+Initial thread CPU deltas are −1.14%/−0.38% for 05/06 GT2; repeatable economy
+and default promotion remain open.
+
 [H271](present-pacing-pe-transport-inline-boundaries.271.md) fixes a real
 segmented empty-role/readback failure and adds high-register/indexed-UP pixel
 evidence. Twelve fresh post-fix processes pass; both candidates remain off by

@@ -15,6 +15,11 @@
 #include <string_view>
 #include <vector>
 
+#if defined(__unix__) || defined(__APPLE__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
+
 namespace {
 
 using dxmt9::d3d9::ImportedChunkView;
@@ -22,6 +27,8 @@ using dxmt9::d3d9::CommandChunkEnvelope;
 using dxmt9::d3d9::CommandChunkValidationScratch;
 using dxmt9::d3d9::CommandChunkValidationStatus;
 using dxmt9::d3d9::importPrevalidatedCommandChunk;
+using dxmt9::d3d9::validateSegmentedCommandChunk;
+using dxmt9::d3d9::validateSegmentedCommandChunkEnvelope;
 using dxmt9::d3d9::validateCommandChunk;
 
 struct TestFailure : std::runtime_error {
@@ -591,6 +598,45 @@ D9CWireHandle wireHandle(const void* value) {
                        static_cast<std::uint32_t>(bits >> 32u)};
 }
 
+void makeSegmentedParts(
+    const ChunkFixture& contiguous,
+    std::vector<std::byte>& records,
+    std::vector<std::byte>& handles,
+    std::vector<std::byte>& payload,
+    D9CCommandChunkSegmentedTransportV1& transport) {
+  const auto& header = contiguous.header();
+  const auto recordBytes = static_cast<std::size_t>(header.recordCount) *
+                           sizeof(D9CCommandChunkWireRecordHeader);
+  const auto handleBytes = static_cast<std::size_t>(header.handleCount) *
+                           sizeof(D9CCommandChunkWireHandleEntry);
+  records.resize(recordBytes);
+  handles.resize(handleBytes);
+  payload.resize(header.payloadArenaSize);
+  if (!records.empty()) {
+    std::memcpy(records.data(), contiguous.bytes.data() +
+                                      header.recordTableOffset,
+                records.size());
+  }
+  if (!handles.empty()) {
+    std::memcpy(handles.data(), contiguous.bytes.data() +
+                                      header.handleTableOffset,
+                handles.size());
+  }
+  if (!payload.empty()) {
+    std::memcpy(payload.data(), contiguous.bytes.data() +
+                                      header.payloadArenaOffset,
+                payload.size());
+  }
+  transport = {};
+  transport.header = header;
+  transport.records = wireHandle(records.data());
+  transport.recordBytes = static_cast<std::uint32_t>(records.size());
+  transport.handles = wireHandle(handles.data());
+  transport.handleBytes = static_cast<std::uint32_t>(handles.size());
+  transport.payload = wireHandle(payload.data());
+  transport.payloadBytes = static_cast<std::uint32_t>(payload.size());
+}
+
 void testSegmentedTransportSharesCanonicalValidation() {
   const D9CCommandChunkWireUpdateTexture update{0u, 1u};
   const RecordSpec spec{
@@ -602,39 +648,17 @@ void testSegmentedTransportSharesCanonicalValidation() {
       },
   };
   const auto contiguous = makeChunk(spec);
-  std::vector<D9CCommandChunkWireRecordHeader> records(1u);
-  std::vector<D9CCommandChunkWireHandleEntry> handles(2u);
-  std::vector<std::uint32_t> payload(2u);
-  std::memcpy(records.data(), contiguous.bytes.data() +
-                                  contiguous.header().recordTableOffset,
-              sizeof(records[0]));
-  std::memcpy(handles.data(), contiguous.bytes.data() +
-                                  contiguous.header().handleTableOffset,
-              handles.size() * sizeof(handles[0]));
-  std::memcpy(payload.data(), contiguous.bytes.data() +
-                                  contiguous.header().payloadArenaOffset,
-              sizeof(update));
-
+  std::vector<std::byte> records;
+  std::vector<std::byte> handles;
+  std::vector<std::byte> payload;
   D9CCommandChunkSegmentedTransportV1 segmented{};
-  segmented.header = contiguous.header();
-  segmented.records = wireHandle(records.data());
-  segmented.recordBytes = sizeof(records[0]);
-  segmented.handles = wireHandle(handles.data());
-  segmented.handleBytes =
-      static_cast<std::uint32_t>(handles.size() * sizeof(handles[0]));
-  segmented.payload = wireHandle(payload.data());
-  segmented.payloadBytes = sizeof(update);
+  makeSegmentedParts(contiguous, records, handles, payload, segmented);
   segmented.renderTapeCaptureToken = 0x1020304050607080ull;
   segmented.renderTapeEventOrdinal = 7u;
 
-  const auto recordBytes = std::span<const std::byte>(
-      reinterpret_cast<const std::byte*>(records.data()),
-      records.size() * sizeof(records[0]));
-  const auto handleBytes = std::span<const std::byte>(
-      reinterpret_cast<const std::byte*>(handles.data()),
-      handles.size() * sizeof(handles[0]));
-  const auto payloadBytes = std::span<const std::byte>(
-      reinterpret_cast<const std::byte*>(payload.data()), sizeof(update));
+  const auto recordBytes = std::span<const std::byte>(records);
+  const auto handleBytes = std::span<const std::byte>(handles);
+  const auto payloadBytes = std::span<const std::byte>(payload);
   ImportedChunkView view;
   check(validateSegmentedCommandChunk(
             segmented, recordBytes, handleBytes, payloadBytes,
@@ -659,6 +683,417 @@ void testSegmentedTransportSharesCanonicalValidation() {
             contiguous.envelope)
             .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
         "segmented virtual offsets retain canonical alignment gaps");
+}
+
+void testSegmentedEnvelopeValidation() {
+  const D9CCommandChunkWireUpdateTexture update{0u, 1u};
+  const RecordSpec spec{
+      .type = D9C_COMMAND_RECORD_UPDATE_TEXTURE,
+      .payload = bytesOf(update),
+      .handles = {
+          handle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x820000001ull),
+          handle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x820000002ull),
+      },
+  };
+  const auto contiguous = makeChunk(spec);
+  std::vector<std::byte> records;
+  std::vector<std::byte> handles;
+  std::vector<std::byte> payload;
+  D9CCommandChunkSegmentedTransportV1 segmented{};
+  makeSegmentedParts(contiguous, records, handles, payload, segmented);
+  const auto recordBytes = std::span<const std::byte>(records);
+  const auto handleBytes = std::span<const std::byte>(handles);
+  const auto payloadBytes = std::span<const std::byte>(payload);
+  check(validateSegmentedCommandChunkEnvelope(
+            segmented, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .valid(),
+        "segmented envelope accepts canonical metadata and live spans");
+
+  auto wrongRecordCount = segmented;
+  ++wrongRecordCount.header.recordCount;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongRecordCount, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
+        "segmented envelope checks the wire record count");
+  auto wrongHandleCount = segmented;
+  ++wrongHandleCount.header.handleCount;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongHandleCount, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
+        "segmented envelope checks the wire handle count");
+  auto wrongEnvelopeRecordCount = segmented;
+  auto wrongEnvelope = contiguous.envelope;
+  ++wrongEnvelope.recordCount;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongEnvelopeRecordCount, recordBytes, handleBytes, payloadBytes,
+            wrongEnvelope)
+            .status == CommandChunkValidationStatus::OuterCountMismatch,
+        "segmented envelope checks the producer envelope record count");
+  auto wrongEnvelopeHandleCount = segmented;
+  auto handleCountEnvelope = contiguous.envelope;
+  ++handleCountEnvelope.handleCount;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongEnvelopeHandleCount, recordBytes, handleBytes, payloadBytes,
+            handleCountEnvelope)
+            .status == CommandChunkValidationStatus::OuterCountMismatch,
+        "segmented envelope checks the producer envelope handle count");
+  auto wrongRecordBytes = segmented;
+  ++wrongRecordBytes.recordBytes;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongRecordBytes, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
+        "segmented envelope checks the record role extent");
+  auto wrongHandleBytes = segmented;
+  ++wrongHandleBytes.handleBytes;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongHandleBytes, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
+        "segmented envelope checks the handle role extent");
+  auto wrongPayloadBytes = segmented;
+  ++wrongPayloadBytes.payloadBytes;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongPayloadBytes, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
+        "segmented envelope checks the payload role extent");
+  auto wrongPayloadArenaSize = segmented;
+  ++wrongPayloadArenaSize.header.payloadArenaSize;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongPayloadArenaSize, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
+        "segmented envelope checks the payload arena size");
+
+  const auto shortRecords = recordBytes.first(recordBytes.size() - 1u);
+  check(validateSegmentedCommandChunkEnvelope(
+            segmented, shortRecords, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
+        "segmented envelope rejects a short record span");
+  const auto shortHandles = handleBytes.first(handleBytes.size() - 1u);
+  check(validateSegmentedCommandChunkEnvelope(
+            segmented, recordBytes, shortHandles, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
+        "segmented envelope rejects a short handle span");
+  const auto shortPayload = payloadBytes.first(payloadBytes.size() - 1u);
+  check(validateSegmentedCommandChunkEnvelope(
+            segmented, recordBytes, handleBytes, shortPayload,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
+        "segmented envelope rejects a short payload span");
+
+  auto wrongHeaderOffset = segmented;
+  ++wrongHeaderOffset.header.handleTableOffset;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongHeaderOffset, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
+        "segmented envelope checks the canonical handle-table offset");
+  auto wrongPayloadOffset = segmented;
+  ++wrongPayloadOffset.header.payloadArenaOffset;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongPayloadOffset, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
+        "segmented envelope checks the canonical payload offset");
+  auto wrongHeaderSize = segmented;
+  ++wrongHeaderSize.header.headerSize;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongHeaderSize, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
+        "segmented envelope checks the header size");
+  auto wrongRecordHeaderSize = segmented;
+  ++wrongRecordHeaderSize.header.recordHeaderSize;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongRecordHeaderSize, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::InvalidHeader,
+        "segmented envelope checks the record-header size");
+  auto wrongHandleEntrySize = segmented;
+  ++wrongHandleEntrySize.header.handleEntrySize;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongHandleEntrySize, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::InvalidHeader,
+        "segmented envelope checks the handle-entry size");
+  auto wrongWireVersion = segmented;
+  wrongWireVersion.header.version = 1u;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongWireVersion, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::OuterVersionMismatch,
+        "segmented envelope checks the wire version");
+  auto wrongEnvelopeVersion = segmented;
+  wrongEnvelopeVersion.header.version = D9C_COMMAND_CHUNK_WIRE_VERSION;
+  auto versionEnvelope = contiguous.envelope;
+  versionEnvelope.version = 1u;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongEnvelopeVersion, recordBytes, handleBytes, payloadBytes,
+            versionEnvelope)
+            .status == CommandChunkValidationStatus::OuterVersionMismatch,
+        "segmented envelope checks the envelope version");
+
+  auto wrongHeaderReserved = segmented;
+  wrongHeaderReserved.header.reserved0 = 1u;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongHeaderReserved, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonZeroReserved,
+        "segmented envelope checks header reserved fields");
+  auto wrongRoleReserved = segmented;
+  wrongRoleReserved.payloadReserved = 1u;
+  check(validateSegmentedCommandChunkEnvelope(
+            wrongRoleReserved, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
+        "segmented envelope checks role reserved fields");
+
+  struct MetadataMutation {
+    std::string_view name;
+    void (*mutate)(D9CCommandChunkSegmentedTransportV1&,
+                   CommandChunkEnvelope&);
+    CommandChunkValidationStatus status;
+  };
+  const std::array<MetadataMutation, 8u> metadataMutations{{
+      {"envelope-record-count",
+       [](D9CCommandChunkSegmentedTransportV1&,
+          CommandChunkEnvelope& value) { ++value.recordCount; },
+       CommandChunkValidationStatus::OuterCountMismatch},
+      {"envelope-handle-count",
+       [](D9CCommandChunkSegmentedTransportV1&,
+          CommandChunkEnvelope& value) { ++value.handleCount; },
+       CommandChunkValidationStatus::OuterCountMismatch},
+      {"header-reserved-0",
+       [](D9CCommandChunkSegmentedTransportV1& value,
+          CommandChunkEnvelope&) { value.header.reserved0 = 1u; },
+       CommandChunkValidationStatus::NonZeroReserved},
+      {"header-reserved-1",
+       [](D9CCommandChunkSegmentedTransportV1& value,
+          CommandChunkEnvelope&) { value.header.reserved1 = 1u; },
+       CommandChunkValidationStatus::NonZeroReserved},
+      {"record-reserved",
+       [](D9CCommandChunkSegmentedTransportV1& value,
+          CommandChunkEnvelope&) { value.recordReserved = 1u; },
+       CommandChunkValidationStatus::NonCanonicalChunkLayout},
+      {"handle-reserved",
+       [](D9CCommandChunkSegmentedTransportV1& value,
+          CommandChunkEnvelope&) { value.handleReserved = 1u; },
+       CommandChunkValidationStatus::NonCanonicalChunkLayout},
+      {"payload-reserved",
+       [](D9CCommandChunkSegmentedTransportV1& value,
+          CommandChunkEnvelope&) { value.payloadReserved = 1u; },
+       CommandChunkValidationStatus::NonCanonicalChunkLayout},
+      {"record-table-offset",
+       [](D9CCommandChunkSegmentedTransportV1& value,
+          CommandChunkEnvelope&) { ++value.header.recordTableOffset; },
+       CommandChunkValidationStatus::NonCanonicalChunkLayout},
+  }};
+  for (const auto& mutation : metadataMutations) {
+    auto candidate = segmented;
+    auto candidateEnvelope = contiguous.envelope;
+    mutation.mutate(candidate, candidateEnvelope);
+    check(validateSegmentedCommandChunkEnvelope(
+              candidate, recordBytes, handleBytes, payloadBytes,
+              candidateEnvelope)
+              .status == mutation.status,
+          mutation.name);
+  }
+
+  auto qualifiedIdentity = segmented;
+  qualifiedIdentity.producerIdentity = {
+      .firstEventOrdinal = 11u,
+      .lastEventOrdinal = 11u,
+      .firstSourceOrdinal = 17u,
+      .lastSourceOrdinal = 17u,
+  };
+  auto qualifiedEnvelope = contiguous.envelope;
+  qualifiedEnvelope.producerIdentity = qualifiedIdentity.producerIdentity;
+  check(validateSegmentedCommandChunkEnvelope(
+            qualifiedIdentity, recordBytes, handleBytes, payloadBytes,
+            qualifiedEnvelope)
+            .valid(),
+        "segmented envelope accepts a matching source-qualified identity");
+
+  const D9CCommandChunkWireClear clear{
+      .flags = 1u,
+      .colorARGB = 0xff123456u,
+      .z = 1.0f,
+      .stencil = 0u,
+      .rectCount = 0u,
+      .rectOffset = sizeof(D9CCommandChunkWireClear),
+  };
+  const auto zeroRoleChunk = makeChunk(RecordSpec{
+      .type = D9C_COMMAND_RECORD_CLEAR,
+      .payload = bytesOf(clear),
+  });
+  std::vector<std::byte> zeroRecords;
+  std::vector<std::byte> zeroHandles;
+  std::vector<std::byte> zeroPayload;
+  D9CCommandChunkSegmentedTransportV1 zeroRoleTransport{};
+  makeSegmentedParts(zeroRoleChunk, zeroRecords, zeroHandles, zeroPayload,
+                     zeroRoleTransport);
+  zeroRoleTransport.handles = {};
+  zeroRoleTransport.handleBytes = 0u;
+  check(validateSegmentedCommandChunkEnvelope(
+            zeroRoleTransport, std::span<const std::byte>(zeroRecords),
+            std::span<const std::byte>{}, std::span<const std::byte>(zeroPayload),
+            zeroRoleChunk.envelope)
+            .valid(),
+        "segmented envelope accepts a null token for a zero-length role");
+
+  auto invalidIdentity = segmented;
+  invalidIdentity.producerIdentity.firstEventOrdinal = 1u;
+  check(validateSegmentedCommandChunkEnvelope(
+            invalidIdentity, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::InvalidSourceIdentity,
+        "segmented envelope rejects an incomplete producer identity");
+  auto mismatchedIdentity = segmented;
+  mismatchedIdentity.producerIdentity = {
+      .firstEventOrdinal = 1u,
+      .lastEventOrdinal = 1u,
+      .firstSourceOrdinal = 1u,
+      .lastSourceOrdinal = 1u,
+  };
+  auto identityEnvelope = contiguous.envelope;
+  identityEnvelope.producerIdentity = {};
+  check(validateSegmentedCommandChunkEnvelope(
+            mismatchedIdentity, recordBytes, handleBytes, payloadBytes,
+            identityEnvelope)
+            .status == CommandChunkValidationStatus::InvalidSourceIdentity,
+        "segmented envelope rejects a producer identity mismatch");
+
+  auto unalignedStorage = std::vector<std::byte>(records.size() + 1u);
+  std::memcpy(unalignedStorage.data() + 1u, records.data(), records.size());
+  check(validateSegmentedCommandChunkEnvelope(
+            segmented,
+            std::span<const std::byte>(unalignedStorage).subspan(1u),
+            handleBytes, payloadBytes, contiguous.envelope)
+            .status == CommandChunkValidationStatus::InvalidAlignment,
+        "segmented envelope checks live record-span alignment");
+  auto unalignedHandles = std::vector<std::byte>(handles.size() + 1u);
+  std::memcpy(unalignedHandles.data() + 1u, handles.data(), handles.size());
+  check(validateSegmentedCommandChunkEnvelope(
+            segmented, recordBytes,
+            std::span<const std::byte>(unalignedHandles).subspan(1u),
+            payloadBytes, contiguous.envelope)
+            .status == CommandChunkValidationStatus::InvalidAlignment,
+        "segmented envelope checks live handle-span alignment");
+  auto unalignedPayload = std::vector<std::byte>(payload.size() + 1u);
+  std::memcpy(unalignedPayload.data() + 1u, payload.data(), payload.size());
+  check(validateSegmentedCommandChunkEnvelope(
+            segmented, recordBytes, handleBytes,
+            std::span<const std::byte>(unalignedPayload).subspan(1u),
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::InvalidAlignment,
+        "segmented envelope checks live payload-span alignment");
+  auto oversized = segmented;
+  oversized.header.payloadArenaSize =
+      D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES;
+  oversized.payloadBytes = oversized.header.payloadArenaSize;
+  const std::vector<std::byte> oversizedPayloadStorage(
+      static_cast<std::size_t>(oversized.payloadBytes));
+  const auto oversizedPayload = std::span<const std::byte>(
+      oversizedPayloadStorage.data(), oversizedPayloadStorage.size());
+  check(validateSegmentedCommandChunkEnvelope(
+            oversized, recordBytes, handleBytes, oversizedPayload,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::NonCanonicalChunkLayout,
+        "segmented envelope bounds the checked virtual total");
+
+  auto malformedBody = segmented;
+  D9CCommandChunkWireUpdateTexture malformedUpdate{};
+  std::memcpy(&malformedUpdate, payload.data(), sizeof(malformedUpdate));
+  malformedUpdate.dstHandleIndex = 2u;
+  std::memcpy(payload.data(), &malformedUpdate, sizeof(malformedUpdate));
+  check(validateSegmentedCommandChunkEnvelope(
+            malformedBody, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .valid(),
+        "segmented envelope does not inspect semantic record bodies");
+  check(validateSegmentedCommandChunk(
+            malformedBody, recordBytes, handleBytes, payloadBytes,
+            contiguous.envelope)
+            .status == CommandChunkValidationStatus::InvalidHandleReference,
+        "full segmented validation rejects the malformed record body");
+}
+
+void testSegmentedEnvelopeDoesNotReadRoleSpans() {
+#if !defined(__unix__) && !defined(__APPLE__)
+  return;
+#elif !defined(MAP_ANONYMOUS) && !defined(MAP_ANON)
+  return;
+#else
+  const auto pageSizeValue = sysconf(_SC_PAGESIZE);
+  check(pageSizeValue > 0, "POSIX page size is available");
+  const auto pageSize = static_cast<std::size_t>(pageSizeValue);
+  struct NoAccessPage {
+    std::size_t size = 0u;
+    void* address = MAP_FAILED;
+
+    explicit NoAccessPage(std::size_t pageSizeIn) : size(pageSizeIn) {
+#if defined(MAP_ANONYMOUS)
+      address = mmap(nullptr, size, PROT_NONE,
+                     MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+#else
+      address = mmap(nullptr, size, PROT_NONE, MAP_PRIVATE | MAP_ANON, -1, 0);
+#endif
+      check(address != MAP_FAILED, "no-access role page maps");
+    }
+
+    ~NoAccessPage() {
+      if (address != MAP_FAILED) (void)munmap(address, size);
+    }
+  };
+
+  const D9CCommandChunkWireUpdateTexture update{0u, 1u};
+  const RecordSpec spec{
+      .type = D9C_COMMAND_RECORD_UPDATE_TEXTURE,
+      .payload = bytesOf(update),
+      .handles = {
+          handle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x830000001ull),
+          handle(D9C_CHUNK_HANDLE_KIND_TEXTURE, 0x830000002ull),
+      },
+  };
+  const auto contiguous = makeChunk(spec);
+  const auto& header = contiguous.header();
+  const auto recordBytes = static_cast<std::size_t>(header.recordCount) *
+                           sizeof(D9CCommandChunkWireRecordHeader);
+  const auto handleBytes = static_cast<std::size_t>(header.handleCount) *
+                           sizeof(D9CCommandChunkWireHandleEntry);
+  check(recordBytes <= pageSize && handleBytes <= pageSize &&
+            header.payloadArenaSize <= pageSize,
+        "role extents fit in protected pages");
+  NoAccessPage recordsPage(pageSize);
+  NoAccessPage handlesPage(pageSize);
+  NoAccessPage payloadPage(pageSize);
+  const auto records = std::span<const std::byte>(
+      static_cast<const std::byte*>(recordsPage.address), recordBytes);
+  const auto handles = std::span<const std::byte>(
+      static_cast<const std::byte*>(handlesPage.address), handleBytes);
+  const auto payload = std::span<const std::byte>(
+      static_cast<const std::byte*>(payloadPage.address),
+      header.payloadArenaSize);
+  D9CCommandChunkSegmentedTransportV1 transport{};
+  transport.header = header;
+  transport.records = wireHandle(recordsPage.address);
+  transport.recordBytes = static_cast<std::uint32_t>(recordBytes);
+  transport.handles = wireHandle(handlesPage.address);
+  transport.handleBytes = static_cast<std::uint32_t>(handleBytes);
+  transport.payload = wireHandle(payloadPage.address);
+  transport.payloadBytes = header.payloadArenaSize;
+  check(validateSegmentedCommandChunkEnvelope(
+            transport, records, handles, payload, contiguous.envelope)
+            .valid(),
+        "segmented envelope validates protected role spans without reading them");
+#endif
 }
 
 struct RejectObservers {
@@ -865,6 +1300,8 @@ int main() {
     testFailedValidationDoesNotPublishViewOrAllocatePerRecord();
     testPrevalidatedViewReconstruction();
     testSegmentedTransportSharesCanonicalValidation();
+    testSegmentedEnvelopeValidation();
+    testSegmentedEnvelopeDoesNotReadRoleSpans();
     testTableAndSeededMalformedPropertyCorpus();
   } catch (const TestFailure& error) {
     std::cerr << "chunk_record_validation_spec failed: " << error.what()

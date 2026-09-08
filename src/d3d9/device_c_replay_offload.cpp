@@ -699,18 +699,18 @@ bool prepareSegmentedOffloadChunk(
       !out.retainedWrappers.empty() || !out.resolvedObjects.empty()) {
     return false;
   }
+  const auto descriptor = transport;
   const CommandChunkEnvelope envelope{
-      .version = transport.header.version,
-      .recordCount = transport.header.recordCount,
-      .handleCount = transport.header.handleCount,
-      .producerIdentity = transport.producerIdentity,
+      .version = descriptor.header.version,
+      .recordCount = descriptor.header.recordCount,
+      .handleCount = descriptor.header.handleCount,
+      .producerIdentity = descriptor.producerIdentity,
   };
-  // This pass is pre-effect and bounds the three client spans before any
-  // allocation, retain, or queue publication. The final semantic pass below
-  // runs on the copied regions, so every span retained by RawCommandChunk is
-  // owned by Unix.
-  if (!validateSegmentedCommandChunk(transport, records, handles, payload,
-                                     envelope)
+  // Bound storage before allocation without walking borrowed semantic bodies.
+  // Only the full owned-byte pass below authorizes retain/publication. A bad
+  // body may incur speculative copy work, but cannot publish or retain credit.
+  if (!validateSegmentedCommandChunkEnvelope(
+           descriptor, records, handles, payload, envelope)
            .valid()) {
     return false;
   }
@@ -750,7 +750,7 @@ bool prepareSegmentedOffloadChunk(
   const auto ownedHandles = candidate.segmentedRegions.handlesBytes();
   const auto ownedPayload = candidate.segmentedRegions.payloadBytes();
   ImportedChunkView view;
-  if (!validateSegmentedCommandChunk(transport, ownedRecords, ownedHandles,
+  if (!validateSegmentedCommandChunk(descriptor, ownedRecords, ownedHandles,
                                      ownedPayload, envelope, &view)
            .valid() ||
       !registry.resolveAndRetain(view.handles, candidate.resolvedObjects,
@@ -761,7 +761,7 @@ bool prepareSegmentedOffloadChunk(
     candidate.retainedWrappers[i] = {
         .kind = view.handles[i].kind, .ptr = candidate.resolvedObjects[i]};
   }
-  candidate.wireHeader = transport.header;
+  candidate.wireHeader = descriptor.header;
   candidate.segmentedTransport = true;
   candidate.wireVersion = envelope.version;
   candidate.recordCount = envelope.recordCount;
@@ -774,8 +774,8 @@ bool prepareSegmentedOffloadChunk(
       view.records.begin(), view.records.end(), [](const auto& record) {
         return record.type == D9C_COMMAND_RECORD_PRESENT;
       });
-  candidate.renderTapeCaptureToken = transport.renderTapeCaptureToken;
-  candidate.renderTapeEventOrdinal = transport.renderTapeEventOrdinal;
+  candidate.renderTapeCaptureToken = descriptor.renderTapeCaptureToken;
+  candidate.renderTapeEventOrdinal = descriptor.renderTapeEventOrdinal;
   if (auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
           dxmt9::core::CopyMaterializationOwner::Unix)) {
     candidate.bridgeRawLedgerCharge.retain(

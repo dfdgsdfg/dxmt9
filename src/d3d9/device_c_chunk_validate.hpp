@@ -113,6 +113,15 @@ CommandChunkValidationResult validateSegmentedCommandChunk(
     std::span<const std::byte> payload, const CommandChunkEnvelope& envelope,
     ImportedChunkView* out = nullptr) noexcept;
 
+// Validates only the producer identity, transport/header metadata, canonical
+// virtual layout, exact role extents, and live role-span geometry. It never
+// reads a record, handle, or payload body and performs no scratch allocation.
+CommandChunkValidationResult validateSegmentedCommandChunkEnvelope(
+    const D9CCommandChunkSegmentedTransportV1& transport,
+    std::span<const std::byte> records, std::span<const std::byte> handles,
+    std::span<const std::byte> payload,
+    const CommandChunkEnvelope& envelope) noexcept;
+
 bool importPrevalidatedSegmentedCommandChunk(
     const D9CCommandChunkWireHeader& header,
     std::span<const std::byte> records, std::span<const std::byte> handles,

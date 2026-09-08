@@ -632,6 +632,14 @@ call returns, the importer must establish complete Unix ownership through the
 named `copy.bridge.raw-owned` operation or a separately specified atomic
 shared-lease adoption protocol. PE must not prebuild backend-private
 `ChunkSlot`/Arena SoA, Unix resource resolutions, or Metal binding state.
+For segmented admission, Unix must freeze the descriptor and validate source
+identity, canonical metadata, checked total size, and all live role extents
+before allocating or copying. This geometry check must not inspect role bodies.
+Full semantic validation must run on the owned copy before any object retain
+or publication; successful validation of borrowed bytes is not authority for
+the copied source. Geometrically valid but semantically invalid input may incur
+bounded speculative storage/copy work, but rejection must leave the destination
+unchanged and return all tentative storage without retained ledger credit.
 
 **R-CORE-REC-7.11** Pointer-free scalar sparse rows and variable payload tails
 may be constructed directly in the owner's canonical payload region during

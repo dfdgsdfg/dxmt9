@@ -898,6 +898,74 @@ CommandChunkValidationResult validateCanonicalRegions(
   return CommandChunkValidationResult{.status = CommandChunkValidationStatus::Valid};
 }
 
+CommandChunkValidationResult validateSegmentedEnvelopeGeometry(
+    const D9CCommandChunkSegmentedTransportV1& transport,
+    std::span<const std::byte> records, std::span<const std::byte> handles,
+    std::span<const std::byte> payload,
+    const CommandChunkEnvelope& envelope) noexcept {
+  if (!commandChunkProducerIdentityImportable(transport.producerIdentity) ||
+      !commandChunkProducerIdentityEqual(transport.producerIdentity,
+                                         envelope.producerIdentity)) {
+    return failure(CommandChunkValidationStatus::InvalidSourceIdentity);
+  }
+  const auto& header = transport.header;
+  const auto expectedRecords =
+      static_cast<std::uint64_t>(header.recordCount) *
+      sizeof(D9CCommandChunkWireRecordHeader);
+  const auto expectedHandles =
+      static_cast<std::uint64_t>(header.handleCount) *
+      sizeof(D9CCommandChunkWireHandleEntry);
+  std::uint64_t handleOffset = 0u;
+  std::uint64_t payloadOffset = 0u;
+  std::uint64_t totalBytes = 0u;
+  if (!checkedAdd(header.headerSize, expectedRecords, handleOffset) ||
+      !alignUp(handleOffset, alignof(D9CCommandChunkWireHandleEntry),
+               handleOffset) ||
+      !checkedAdd(handleOffset, expectedHandles, payloadOffset) ||
+      !alignUp(payloadOffset, alignof(std::uint32_t), payloadOffset) ||
+      !checkedAdd(payloadOffset, header.payloadArenaSize, totalBytes) ||
+      totalBytes > D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES ||
+      transport.recordBytes != expectedRecords ||
+      transport.handleBytes != expectedHandles ||
+      transport.payloadBytes != header.payloadArenaSize ||
+      transport.recordReserved != 0u || transport.handleReserved != 0u ||
+      transport.payloadReserved != 0u ||
+      header.recordTableOffset != header.headerSize ||
+      header.handleTableOffset != handleOffset ||
+      header.payloadArenaOffset != payloadOffset ||
+      records.size() != expectedRecords || handles.size() != expectedHandles ||
+      payload.size() != header.payloadArenaSize) {
+    return failure(CommandChunkValidationStatus::NonCanonicalChunkLayout);
+  }
+  if (envelope.version != D9C_COMMAND_CHUNK_VERSION ||
+      header.version != envelope.version) {
+    return failure(CommandChunkValidationStatus::OuterVersionMismatch);
+  }
+  if (header.headerSize != D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE ||
+      header.recordHeaderSize != D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE ||
+      header.handleEntrySize != D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE) {
+    return failure(CommandChunkValidationStatus::InvalidHeader);
+  }
+  if (header.reserved0 != 0u || header.reserved1 != 0u) {
+    return failure(CommandChunkValidationStatus::NonZeroReserved);
+  }
+  if (header.recordCount != envelope.recordCount ||
+      header.handleCount != envelope.handleCount) {
+    return failure(CommandChunkValidationStatus::OuterCountMismatch);
+  }
+  if ((expectedRecords != 0u &&
+       !pointerAligned(records.data(), 0u,
+                       alignof(D9CCommandChunkWireRecordHeader))) ||
+      (expectedHandles != 0u &&
+       !pointerAligned(handles.data(), 0u,
+                       alignof(D9CCommandChunkWireHandleEntry))) ||
+      (header.payloadArenaSize != 0u &&
+       !pointerAligned(payload.data(), 0u, alignof(std::uint32_t)))) {
+    return failure(CommandChunkValidationStatus::InvalidAlignment);
+  }
+  return CommandChunkValidationResult{.status = CommandChunkValidationStatus::Valid};
+}
+
 }  // namespace
 
 ImportedSectionView ImportedRecordView::section(
@@ -1122,43 +1190,22 @@ CommandChunkValidationResult validateSegmentedCommandChunk(
     std::span<const std::byte> payload, const CommandChunkEnvelope& envelope,
     ImportedChunkView* out) noexcept {
   if (out) *out = {};
-  if (!commandChunkProducerIdentityImportable(transport.producerIdentity) ||
-      !commandChunkProducerIdentityEqual(transport.producerIdentity,
-                                         envelope.producerIdentity)) {
-    return failure(CommandChunkValidationStatus::InvalidSourceIdentity);
-  }
+  const auto envelopeResult = validateSegmentedEnvelopeGeometry(
+      transport, records, handles, payload, envelope);
+  if (!envelopeResult.valid()) return envelopeResult;
   const auto& header = transport.header;
-  const auto expectedRecords =
-      static_cast<std::uint64_t>(header.recordCount) *
-      sizeof(D9CCommandChunkWireRecordHeader);
-  const auto expectedHandles =
-      static_cast<std::uint64_t>(header.handleCount) *
-      sizeof(D9CCommandChunkWireHandleEntry);
-  std::uint64_t handleOffset = 0u;
-  std::uint64_t payloadOffset = 0u;
-  std::uint64_t totalBytes = 0u;
-  if (!checkedAdd(header.headerSize, expectedRecords, handleOffset) ||
-      !alignUp(handleOffset, alignof(D9CCommandChunkWireHandleEntry),
-               handleOffset) ||
-      !checkedAdd(handleOffset, expectedHandles, payloadOffset) ||
-      !alignUp(payloadOffset, alignof(std::uint32_t), payloadOffset) ||
-      !checkedAdd(payloadOffset, header.payloadArenaSize, totalBytes) ||
-      totalBytes > D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES ||
-      transport.recordBytes != expectedRecords ||
-      transport.handleBytes != expectedHandles ||
-      transport.payloadBytes != header.payloadArenaSize ||
-      transport.recordReserved != 0u || transport.handleReserved != 0u ||
-      transport.payloadReserved != 0u ||
-      header.recordTableOffset != header.headerSize ||
-      header.handleTableOffset != handleOffset ||
-      header.payloadArenaOffset != payloadOffset ||
-      records.size() != expectedRecords || handles.size() != expectedHandles ||
-      payload.size() != header.payloadArenaSize) {
-    return failure(CommandChunkValidationStatus::NonCanonicalChunkLayout);
-  }
   thread_local CommandChunkValidationScratch scratch;
   return validateCanonicalRegions(header, records, handles, payload, envelope,
                                   out, scratch);
+}
+
+CommandChunkValidationResult validateSegmentedCommandChunkEnvelope(
+    const D9CCommandChunkSegmentedTransportV1& transport,
+    std::span<const std::byte> records, std::span<const std::byte> handles,
+    std::span<const std::byte> payload,
+    const CommandChunkEnvelope& envelope) noexcept {
+  return validateSegmentedEnvelopeGeometry(transport, records, handles,
+                                           payload, envelope);
 }
 
 bool importPrevalidatedSegmentedCommandChunk(

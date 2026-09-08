@@ -1376,6 +1376,29 @@ emission aliases them. This is not a CPU-ready Tape default promotion.
 Segmented transport and later provider policy still require the layered gates
 in `R-VERIF-6.4` and the backend acceptance contract.
 
+Segmented Unix admission separates geometry from semantic authority.
+`prepareSegmentedOffloadChunk` snapshots the descriptor once and calls
+`validateSegmentedCommandChunkEnvelope` before pool acquisition. The latter
+checks identity, versions, reserved fields, exact region sizes, canonical
+offsets, alignment, and the 32 MiB virtual-wire bound without reading a role
+body or allocating validation scratch. The importer then copies the three
+regions and runs the full canonical validator on those owned bytes. Registry
+resolution/retention and publication follow only that successful owned pass.
+The saved transport address tokens describe the borrowed input, not relocated
+owned spans; token/extent pairing is checked by the C ABI entry point.
+
+A malformed body can now reach a bounded speculative pool allocation/copy;
+malformed geometry still cannot. Both semantic rejection and allocation
+failure remain the existing `segmented-chunk-admission` failure at the C entry
+point. Neither publishes a source or retains an object, and tentative storage
+is recycled. Diagnostic allocation/copy counts may differ from an earlier
+borrowed-body rejection. The finite native geometry/body/allocation/resolution
+matrix exercises this acceptance and conservation refinement through the
+production preparation function, while protected-span tests pin the no-read
+geometry boundary. The existing lifecycle model remains responsible for
+subsequent adoption, ordering, and reclaim; it does not prove the byte parser,
+allocator behavior, concurrent client mutation, or final pixels.
+
 ### 6.3 End-to-end source identity handoff
 
 The recorder is the first concrete owner in the architecture contract
