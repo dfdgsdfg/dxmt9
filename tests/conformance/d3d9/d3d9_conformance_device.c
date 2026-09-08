@@ -2485,6 +2485,8 @@ void test_set_stream_source_state(const struct d3d9_api *api)
     D3DCAPS9 caps;
     UINT offset;
     UINT stride;
+    ULONG refs_before;
+    ULONG refs_bound;
     HWND window;
     HRESULT hr;
 
@@ -2513,8 +2515,12 @@ void test_set_stream_source_state(const struct d3d9_api *api)
     if (FAILED(hr))
         goto done_device;
 
+    refs_before = get_refcount((IUnknown *)vertex_buffer);
+
     CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, vertex_buffer,
             4, 12), D3D_OK);
+    refs_bound = get_refcount((IUnknown *)vertex_buffer);
+    CHECK_TRUE(refs_bound == refs_before + 1);
 
     stream = NULL;
     offset = 0;
@@ -2525,6 +2531,58 @@ void test_set_stream_source_state(const struct d3d9_api *api)
     CHECK_TRUE(stream == vertex_buffer);
     CHECK_TRUE(offset == 4);
     CHECK_TRUE(stride == 12);
+    if (stream)
+    {
+        CHECK_TRUE(get_refcount((IUnknown *)vertex_buffer) == refs_bound + 1);
+        IDirect3DVertexBuffer9_Release(stream);
+        CHECK_TRUE(get_refcount((IUnknown *)vertex_buffer) == refs_bound);
+    }
+
+    /* Keep the same COM buffer retained while changing each part of the
+     * stream tuple.  Every GetStreamSource result carries its own reference;
+     * release it before the next setter so this also exercises the public
+     * reference contract rather than only the final layout. */
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, vertex_buffer,
+            8, 12), D3D_OK);
+    CHECK_TRUE(get_refcount((IUnknown *)vertex_buffer) == refs_bound);
+    stream = NULL;
+    offset = 0;
+    stride = 0;
+    CHECK_HR(IDirect3DDevice9_GetStreamSource(device, 0, &stream, &offset,
+            &stride), D3D_OK);
+    CHECK_TRUE(stream == vertex_buffer);
+    CHECK_TRUE(offset == 8);
+    CHECK_TRUE(stride == 12);
+    if (stream)
+        IDirect3DVertexBuffer9_Release(stream);
+
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, vertex_buffer,
+            8, 16), D3D_OK);
+    CHECK_TRUE(get_refcount((IUnknown *)vertex_buffer) == refs_bound);
+    stream = NULL;
+    offset = 0;
+    stride = 0;
+    CHECK_HR(IDirect3DDevice9_GetStreamSource(device, 0, &stream, &offset,
+            &stride), D3D_OK);
+    CHECK_TRUE(stream == vertex_buffer);
+    CHECK_TRUE(offset == 8);
+    CHECK_TRUE(stride == 16);
+    if (stream)
+        IDirect3DVertexBuffer9_Release(stream);
+
+    /* An exact repeated tuple must still return the same public state and a
+     * releasable getter reference. */
+    CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, vertex_buffer,
+            8, 16), D3D_OK);
+    CHECK_TRUE(get_refcount((IUnknown *)vertex_buffer) == refs_bound);
+    stream = NULL;
+    offset = 0;
+    stride = 0;
+    CHECK_HR(IDirect3DDevice9_GetStreamSource(device, 0, &stream, &offset,
+            &stride), D3D_OK);
+    CHECK_TRUE(stream == vertex_buffer);
+    CHECK_TRUE(offset == 8);
+    CHECK_TRUE(stride == 16);
     if (stream)
         IDirect3DVertexBuffer9_Release(stream);
 
@@ -2541,6 +2599,7 @@ void test_set_stream_source_state(const struct d3d9_api *api)
 
     CHECK_HR(IDirect3DDevice9_SetStreamSource(device, 0, NULL, 0, 0),
             D3D_OK);
+    CHECK_TRUE(get_refcount((IUnknown *)vertex_buffer) == refs_before);
     IDirect3DVertexBuffer9_Release(vertex_buffer);
 
 done_device:

@@ -6,10 +6,12 @@
 
 #include <array>
 #include <cstdint>
+#include <cstddef>
 #include <iostream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 
 namespace {
 
@@ -215,6 +217,313 @@ void retainedBindingDecisionTruthTable() {
         "A/B/A rebind requires the current retained proof");
 }
 
+constexpr std::size_t kStreamSlotCount = 17u;
+constexpr std::size_t kLiveStreamCount = 16u;
+
+struct StreamReuseState {
+  void* owner = nullptr;
+  std::array<void*, 2u> buffers{};
+  std::array<void*, 2u> rawBuffers{};
+  std::array<void*, kStreamSlotCount> bound{};
+  std::array<std::uint32_t, kStreamSlotCount> offsets{};
+  std::array<std::uint32_t, kStreamSlotCount> strides{};
+  // This tracks Live slot multiplicity only; Recording owner references are
+  // deliberately outside this bounded value model.
+  std::array<unsigned, 2u> retainedRefs{};
+  unsigned dirtyEffects = 0u;
+  unsigned recordingEffects = 0u;
+};
+
+struct StreamReuseStep {
+  std::size_t slot = 0u;
+  void* candidate = nullptr;
+  std::uint32_t offset = 0u;
+  std::uint32_t stride = 0u;
+  bool candidateValid = true;
+  bool malformedRetainedWire = false;
+  bool recording = false;
+  bool writeAllowed = true;
+  bool nullZero = false;
+  std::string_view label;
+};
+
+enum class StreamReuseResult { Ok, InvalidCall, DeviceLost };
+
+pe::PeSemanticRetainedBinding streamRetainedProof(
+    const StreamReuseState& state, std::size_t slot,
+    bool malformedWire) noexcept {
+  pe::PeSemanticRetainedBinding retained{.ownerDevice = state.owner,
+                                         .publicIdentity = state.bound[slot]};
+  for (std::size_t index = 0u; index != state.buffers.size(); ++index) {
+    if (state.bound[slot] != state.buffers[index]) continue;
+    retained.wire = validWire(D9C_CHUNK_HANDLE_KIND_BUFFER,
+                               state.rawBuffers[index], 1u,
+                               0x100u + index);
+    break;
+  }
+  if (malformedWire) {
+    retained.wire.identity.generation = 0u;
+  }
+  return retained;
+}
+
+void releaseRetained(StreamReuseState& state, void* prior) noexcept {
+  if (prior == nullptr) return;
+  for (std::size_t index = 0u; index != state.buffers.size(); ++index) {
+    if (prior == state.buffers[index] && state.retainedRefs[index] != 0u) {
+      --state.retainedRefs[index];
+    }
+  }
+}
+
+std::size_t bufferIndex(const StreamReuseState& state,
+                        void* candidate) noexcept {
+  for (std::size_t index = 0u; index != state.buffers.size(); ++index) {
+    if (candidate == state.buffers[index]) return index;
+  }
+  return state.buffers.size();
+}
+
+StreamReuseResult applyAlwaysValidate(StreamReuseState& state,
+                                      const StreamReuseStep& step) noexcept {
+  if (!step.writeAllowed) return StreamReuseResult::DeviceLost;
+  if (step.slot >= kLiveStreamCount) return StreamReuseResult::InvalidCall;
+  // Full validation precedes the Recording branch. An invalid/foreign
+  // candidate therefore has no dirty or Recording effect.
+  if (!step.candidateValid) return StreamReuseResult::InvalidCall;
+  if (step.recording) {
+    ++state.dirtyEffects;
+    ++state.recordingEffects;
+    return StreamReuseResult::Ok;
+  }
+
+  void* const prior = state.bound[step.slot];
+  const bool sameTuple = state.offsets[step.slot] == step.offset &&
+                         state.strides[step.slot] == step.stride;
+  if (step.candidate == prior && sameTuple) {
+    return StreamReuseResult::Ok;
+  }
+  if (step.candidate == nullptr && prior == nullptr && step.nullZero) {
+    return StreamReuseResult::Ok;
+  }
+
+  if (step.candidate == nullptr) {
+    releaseRetained(state, prior);
+    state.bound[step.slot] = nullptr;
+    if (!step.nullZero) {
+      state.offsets[step.slot] = step.offset;
+      state.strides[step.slot] = step.stride;
+    }
+    ++state.dirtyEffects;
+    return StreamReuseResult::Ok;
+  }
+
+  const std::size_t candidateIndex = bufferIndex(state, step.candidate);
+  if (candidateIndex == state.buffers.size()) {
+    return StreamReuseResult::InvalidCall;
+  }
+  if (step.candidate == prior) {
+    state.offsets[step.slot] = step.offset;
+    state.strides[step.slot] = step.stride;
+    ++state.dirtyEffects;
+    return StreamReuseResult::Ok;
+  }
+  releaseRetained(state, prior);
+  state.bound[step.slot] = step.candidate;
+  state.offsets[step.slot] = step.offset;
+  state.strides[step.slot] = step.stride;
+  ++state.retainedRefs[candidateIndex];
+  ++state.dirtyEffects;
+  return StreamReuseResult::Ok;
+}
+
+StreamReuseResult applyOptimized(StreamReuseState& state,
+                                 const StreamReuseStep& step,
+                                 bool* reused) noexcept {
+  *reused = false;
+  if (!step.writeAllowed) return StreamReuseResult::DeviceLost;
+  if (step.slot >= kLiveStreamCount) return StreamReuseResult::InvalidCall;
+
+  const auto retained =
+      streamRetainedProof(state, step.slot, step.malformedRetainedWire);
+  const bool guard = pe::peSemanticCanReuseRetainedBinding(
+      step.writeAllowed, step.recording, step.candidate, retained,
+      state.owner, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  if (!guard) {
+    return applyAlwaysValidate(state, step);
+  }
+
+  *reused = true;
+  // A retained stream hit has already passed Live/write/Recording checks.
+  // Exact tuple is a no-op; a tuple-only change updates the cached wire's
+  // metadata through bindStream without changing COM multiplicity.
+  if (state.offsets[step.slot] == step.offset &&
+      state.strides[step.slot] == step.stride) {
+    return StreamReuseResult::Ok;
+  }
+  state.offsets[step.slot] = step.offset;
+  state.strides[step.slot] = step.stride;
+  ++state.dirtyEffects;
+  return StreamReuseResult::Ok;
+}
+
+void checkStreamStatesEqual(const StreamReuseState& always,
+                            const StreamReuseState& optimized,
+                            std::string_view label) {
+  check(always.bound == optimized.bound,
+        std::string("stream bound differs: ") + std::string(label));
+  check(always.offsets == optimized.offsets &&
+            always.strides == optimized.strides,
+        std::string("stream tuple differs: ") + std::string(label));
+  check(always.retainedRefs == optimized.retainedRefs,
+        std::string("stream retained multiplicity differs: ") +
+            std::string(label));
+  check(always.dirtyEffects == optimized.dirtyEffects &&
+            always.recordingEffects == optimized.recordingEffects,
+        std::string("stream effects differ: ") + std::string(label));
+}
+
+void runStreamDifferential(StreamReuseState& always,
+                           StreamReuseState& optimized,
+                           const StreamReuseStep& step) {
+  const void* boundBefore =
+      step.slot < kLiveStreamCount ? optimized.bound[step.slot] : nullptr;
+  bool reused = false;
+  const auto optimizedResult = applyOptimized(optimized, step, &reused);
+  const auto alwaysResult = applyAlwaysValidate(always, step);
+  check(optimizedResult == alwaysResult,
+        std::string("stream result differs: ") + std::string(step.label));
+  checkStreamStatesEqual(always, optimized, step.label);
+  const bool expectedReuse =
+      step.writeAllowed && step.slot < kLiveStreamCount &&
+      step.candidateValid && !step.recording && step.candidate != nullptr &&
+      step.candidate == boundBefore &&
+      !step.malformedRetainedWire;
+  check(reused == expectedReuse,
+        std::string("stream retained-guard decision differs: ") +
+            std::string(step.label));
+}
+
+StreamReuseState emptyStreamState(void* owner, void* bufferA, void* bufferB,
+                                  void* rawA, void* rawB) noexcept {
+  return StreamReuseState{
+      .owner = owner,
+      .buffers = {bufferA, bufferB},
+      .rawBuffers = {rawA, rawB},
+  };
+}
+
+void retainedStreamBindingTupleDecisionTruthTable() {
+  int owner = 0;
+  int bufferA = 0;
+  int bufferB = 0;
+  int foreign = 0;
+  int rawA = 0;
+  int rawB = 0;
+  const auto initial = emptyStreamState(&owner, &bufferA, &bufferB, &rawA,
+                                        &rawB);
+  StreamReuseState always = initial;
+  StreamReuseState optimized = initial;
+  const std::array steps{
+      StreamReuseStep{0u, &bufferA, 4u, 12u, true, false, false, true,
+                      false, "slot 0 initial A"},
+      StreamReuseStep{1u, &bufferB, 8u, 16u, true, false, false, true,
+                      false, "slot 1 initial B"},
+      StreamReuseStep{0u, &bufferA, 4u, 12u, true, false, false, true,
+                      false, "slot 0 exact A"},
+      StreamReuseStep{0u, &bufferA, 8u, 12u, true, false, false, true,
+                      false, "slot 0 changed offset"},
+      StreamReuseStep{0u, &bufferA, 8u, 16u, true, false, false, true,
+                      false, "slot 0 changed stride"},
+      StreamReuseStep{0u, &bufferB, 8u, 16u, true, false, false, true,
+                      false, "slot 0 replacement B"},
+      StreamReuseStep{0u, &bufferA, 8u, 16u, true, false, false, true,
+                      false, "slot 0 A/B/A"},
+      StreamReuseStep{0u, nullptr, 0u, 0u, true, false, false, true, true,
+                      "slot 0 null zero preserves tuple"},
+      StreamReuseStep{0u, nullptr, 0u, 0u, true, false, false, true, true,
+                      "slot 0 repeated null zero no-op"},
+      StreamReuseStep{0u, nullptr, 3u, 5u, true, false, false, true, false,
+                      "slot 0 null nonzero stores tuple"},
+      StreamReuseStep{0u, nullptr, 3u, 5u, true, false, false, true, false,
+                      "slot 0 repeated null nonzero no-op"},
+      StreamReuseStep{0u, &bufferA, 3u, 5u, true, false, false, true, false,
+                      "slot 0 rebind after null"},
+      StreamReuseStep{0u, &bufferA, 3u, 5u, true, false, true, true, false,
+                      "recording exact A does not touch Live"},
+      StreamReuseStep{0u, &foreign, 3u, 5u, false, false, true, true, false,
+                      "invalid candidate rejected before Recording"},
+      StreamReuseStep{0u, &foreign, 3u, 5u, false, false, false, true, false,
+                      "foreign replacement falls through"},
+      StreamReuseStep{0u, &bufferA, 3u, 5u, true, true, false, true, false,
+                      "malformed retained wire falls through to validation"},
+      StreamReuseStep{0u, &bufferA, 3u, 5u, true, false, false, false, false,
+                      "write denied"},
+      StreamReuseStep{16u, &bufferA, 3u, 5u, true, false, false, true, false,
+                      "slot 16 rejected"},
+  };
+  for (const auto& step : steps) {
+    runStreamDifferential(always, optimized, step);
+    if (step.nullZero && step.slot == 0u) {
+      check(always.bound[0] == nullptr && always.offsets[0] == 8u &&
+                always.strides[0] == 16u,
+            "null (0,0) detaches without losing the cached tuple");
+    }
+  }
+
+  check(always.bound[0] == &bufferA && always.bound[1] == &bufferB,
+        "A/B/A keeps both Live stream bindings");
+  check(always.retainedRefs == std::array<unsigned, 2u>{1u, 1u},
+        "two stream slots retain exactly one reference per live buffer");
+  check(always.recordingEffects == 1u,
+        "valid Recording update has no Live reference effect");
+
+  // One-step matrix over reachable Live bindings. The optimized transition
+  // always uses the production guard, while the reference always validates
+  // the public candidate first; their complete state must agree on every row.
+  const std::array<void*, 3u> bindings{
+      nullptr, static_cast<void*>(&bufferA), static_cast<void*>(&bufferB)};
+  const std::array tuples{
+      std::pair<std::uint32_t, std::uint32_t>{0u, 0u},
+      std::pair<std::uint32_t, std::uint32_t>{4u, 12u},
+      std::pair<std::uint32_t, std::uint32_t>{8u, 16u},
+  };
+  const std::array<void*, 4u> candidates{
+      static_cast<void*>(&bufferA), static_cast<void*>(&bufferB), nullptr,
+      static_cast<void*>(&foreign)};
+  for (void* binding : bindings) {
+    for (const auto [oldOffset, oldStride] : tuples) {
+      for (void* candidate : candidates) {
+        for (const auto [offset, stride] : tuples) {
+          for (bool recording : {false, true}) {
+            for (bool writeAllowed : {false, true}) {
+              StreamReuseState matrixAlways =
+                  emptyStreamState(&owner, &bufferA, &bufferB, &rawA, &rawB);
+              matrixAlways.bound[0] = binding;
+              matrixAlways.offsets[0] = oldOffset;
+              matrixAlways.strides[0] = oldStride;
+              const auto oldIndex = bufferIndex(matrixAlways, binding);
+              if (oldIndex != matrixAlways.buffers.size()) {
+                matrixAlways.retainedRefs[oldIndex] = 1u;
+              }
+              StreamReuseState matrixOptimized = matrixAlways;
+              const StreamReuseStep step{
+                  0u, candidate, offset, stride, candidate != &foreign,
+                  binding != nullptr && candidate == binding &&
+                      oldIndex != matrixAlways.buffers.size() &&
+                      offset == oldOffset && stride == oldStride &&
+                      oldOffset == 4u,
+                  recording, writeAllowed, candidate == nullptr && offset == 0u &&
+                      stride == 0u, "one-step stream matrix"};
+              runStreamDifferential(matrixAlways, matrixOptimized, step);
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 void inlineConstantCadenceDecisionTruthTable() {
   constexpr std::size_t stableCadenceBytes = 64u;
   unsigned queries = 0u;
@@ -244,6 +553,7 @@ int main() {
   try {
     retainedBindingMatchesIndependentReference();
     retainedBindingDecisionTruthTable();
+    retainedStreamBindingTupleDecisionTruthTable();
     inlineConstantCadenceDecisionTruthTable();
   } catch (const Failure& failure) {
     std::cerr << failure.what() << '\n';

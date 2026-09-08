@@ -1129,6 +1129,11 @@ until replacement; pointer equality alone is not authority for arbitrary or
 borrowed objects. Null, A/B/A, replacement/release, Recording, Reset and foreign
 object traces must preserve HRESULT, pending state, diagnostics and retain
 multiplicity. Borrowed vertex declarations are outside this optimization.
+For a stream source, identical retained buffer identity may reuse membership
+qualification even when offset or stride changes; those layout changes must
+still execute the normal typed stream transition. Only equality of the entire
+buffer/offset/stride tuple permits a no-op. Null `(0, 0)` deactivation must
+preserve the cached layout, and Recording must retain its explicit write.
 
 **R-CORE-REC-7.59** A single kind-qualified object-ID-to-pin index may replace
 paired object-ID and exact-identity indexes only when it is authoritative for

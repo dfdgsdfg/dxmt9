@@ -30,6 +30,17 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H285](present-pacing-pe-stream-binding-reuse.285.md) removes repeated wrapper
+qualification for the same strongly retained stream VB. Offset/stride changes
+still perform the typed dirty transition; null/Recording/replacement retain
+full validation. Native 6+4, TLA regression and 8+8 actual stream COM tests
+pass, as do 20 exact baseline/candidate PE pixel observations. Eight actual-PE
+micro processes save 5.7–18.8 ns per targeted PE32 call, with code growth and a
+0.19 ns PE64 null-zero tax disclosed. Fresh sampler-OFF
+05/06 GT2 spots are 29.735/18.181 FPS; no whole-frame economy or README recovery
+claim follows. Separate full-self-PC profiles still identify owner admission
+and constant handling, not stream setters, as the larger PE-local groups.
+
 [H284](present-pacing-pe-layout-dynamic-economy.284.md) answers H283's
 bounded warm-helper economics gate. Sixteen actual-image PE32/PE64 processes
 pass; fresh GT2 observers retain 99% count-shape pricing coverage without

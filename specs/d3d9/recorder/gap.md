@@ -13,6 +13,24 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H285](../../../docs/perfomance/present-pacing/present-pacing-pe-stream-binding-reuse.285.md)
+implements R-CORE-REC-7.58's same-retained stream VB membership reuse. The
+offset/stride transition still marks pending state; null, Recording, foreign,
+replacement and malformed-wire inputs keep full validation. The 432-case
+native one-step domain and sequential trace bind the production predicate to
+an always-validate reference; native arm64 6/6, x86_64 4/4, existing TLC and
+actual PE32/PE64 stream COM suites (8/8 each) pass. Full Recording reference
+ownership, foreign-wrapper runtime injection and internal pending-mask
+introspection are not closed by those tests. Four baseline/candidate PE32/PE64
+FFP pixel processes match all 20 observations against independent expected
+colors, including
+same-VB offset return and stride changes; that fixture is an ignored artifact,
+not a checked-in test target. Warm COM economics improve on the targeted paths
+in both widths, with linked body growth and a small PE64
+null-zero cost disclosed. Candidate 05/06 GT2 spots pass at 29.735/18.181 FPS;
+workload hit weights, repeatable whole-PE CPU economy and README recovery
+remain open.
+
 [H284](../../../docs/perfomance/present-pacing/present-pacing-pe-layout-dynamic-economy.284.md)
 adds a sampled, bounded compact-layout distribution in the cold diagnostics
 owner; default hot metrics and complete priced-helper codegen stay unchanged.

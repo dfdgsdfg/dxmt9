@@ -53,6 +53,7 @@
 #include "d3d9_pe_capture_state.hpp"
 #include "d3d9_pe_commit_transition.hpp"
 #include "d3d9_pe_chunk_builder.hpp"
+#include "d3d9_pe_retained_binding.hpp"
 #include "d3d9_pe_decimated_scope.hpp"
 #include "d3d9_pe_diagnostics_state.hpp"
 #include "d3d9_pe_fvf_transaction.hpp"
@@ -3232,6 +3233,31 @@ public:
         dxmt9DeviceDebugLog("device_set_stream_source device=%p stream=%u buf=%p offset=%u stride=%u",
                             this, stream, pBuf, offset, stride);
         if (stream >= 16) return finishPeCall(D3DERR_INVALIDCALL);
+        if (pBuf != nullptr && streamSrc_[stream] == pBuf) {
+            auto& binding = recorderState_.peBindingView.streams[stream];
+            const auto retained = dxmt9::d3d9::pe::PeSemanticRetainedBinding{
+                .ownerDevice = static_cast<const IDirect3DDevice9*>(this),
+                .publicIdentity = streamSrc_[stream],
+                .wire = binding.buffer,
+            };
+            if (dxmt9::d3d9::pe::peSemanticCanReuseRetainedBinding(
+                    recorderState_.stateBlockTransaction.writeAllowed(),
+                    recorderState_.stateBlockTransaction.isRecording(), pBuf,
+                    retained, static_cast<const IDirect3DDevice9*>(this),
+                    D9C_CHUNK_HANDLE_KIND_BUFFER)) {
+                // The slot already owns this validated VB. Layout changes
+                // still dirty the stream, without reconstructing membership
+                // or changing the retained object/wire pair.
+                if (binding.offset != offset || binding.stride != stride) {
+                    recorderState_.peState.transition().bindStream(stream, [&]() noexcept {
+                        binding.offset = offset;
+                        binding.stride = stride;
+                    });
+                    hotSetter.markDirty();
+                }
+                return finishPeCall(S_OK);
+            }
+        }
         D3D9PeValidatedVertexBuffer validatedBuffer{};
         const HRESULT membershipHr = D3D9PeValidateVertexBuffer(
             pBuf, static_cast<IDirect3DDevice9*>(this), &validatedBuffer);

@@ -1212,11 +1212,22 @@ privately issued recorder domain instead of duplicating its owner/epoch/lane
 metadata. Every qualified operation still validates the current domain and
 PendingDelta; aggregate construction never combines separately issued borrows.
 
-Live same-binding reuse is limited to strong device-owned texture, shader and
-index-buffer bindings whose qualification remains valid while held. Recording
-still records the explicit setter, even when it equals Live state. Foreign and
-replacement inputs retain full validation; borrowed vertex declarations do not
+Live same-binding reuse is limited to strong device-owned texture, shader,
+vertex-buffer stream and index-buffer bindings whose qualification remains
+valid while held. Recording still records the explicit setter, even when it
+equals Live state. Foreign and replacement inputs retain full validation;
+borrowed vertex declarations do not
 use the bypass. Poison and public argument validation remain outer contracts.
+
+A stream slot's strong public VB reference and validated wire row form one
+retained binding. Matching that non-null object may bypass membership
+reconstruction, but offset/stride changes still use `bindStream` to update
+pending state and generation. Reuse neither acquires another reference nor
+changes the wire row. Full tuple equality alone is a no-op. Null deactivation
+preserves cached offset/stride; other null layouts and Recording retain the
+ordinary validated path. The guard checks wire shape, not arbitrary nonzero
+memory corruption: all normal bind, StateBlock, temporary-bind/restore and
+reset writers must preserve the strong-reference/wire correspondence.
 
 The owner pin prefix is the authoritative full-identity store. A kind-local
 object-ID index locates a candidate row, never certifies its generation or
