@@ -20,6 +20,7 @@ NEGOTIATION = re.compile(r"command chunk negotiation selected canonical transpor
 FRAME = re.compile(r"\[dxmt9-perf-frame frame=(\d+) wall_ms=([0-9.]+).*? draw_calls=(\d+) ")
 LIMIT = 8 * 1024 * 1024
 MAX_QUERY_NS = 100_000_000
+SUPPORTED_TRANSPORTS = (1, 2)
 
 
 class LiveLog:
@@ -104,8 +105,12 @@ def identity(value):
 
 
 class Observer:
-    def __init__(self, helper: Path, log: Path, pid: int):
+    def __init__(self, helper: Path, log: Path, pid: int, *, expected_transport: int = 1):
+        if (type(expected_transport) is not int or
+                expected_transport not in SUPPORTED_TRANSPORTS):
+            raise ValueError("expected transport must be integer 1 or 2")
         self.helper, self.pid = helper, pid
+        self.expected_transport = expected_transport
         self.log = LiveLog(log)
         self.target = None
 
@@ -114,8 +119,10 @@ class Observer:
         tid = self.log.native_tid
         if tid is None:
             return dict(status="pending_selector")
-        if self.log.negotiations != [1]:
-            raise ValueError("commit marker without a unique contiguous device negotiation receipt")
+        if self.log.negotiations != [self.expected_transport]:
+            raise ValueError(
+                "commit marker without a unique expected device negotiation receipt")
+        negotiated_transport = self.log.negotiations[0]
         begin = time.clock_gettime_ns(time.CLOCK_MONOTONIC)
         proc = subprocess.run([str(self.helper), "--pid", str(self.pid), "--tid", str(tid)],
                               capture_output=True, text=True, timeout=3)
@@ -142,7 +149,8 @@ class Observer:
         return dict(status="sample", snapshot=value, frame_before=before, frame_after=after,
                     observer_begin_ns=begin, observer_end_ns=end,
                     selector=dict(device=next(iter(self.log.selectors))[0],
-                                  native_tid=tid, transport=1), log_metadata=self.log.metadata)
+                                  native_tid=tid, transport=negotiated_transport),
+                    log_metadata=self.log.metadata)
 
 
 def summarize(rows, first_frame: int, last_frame: int):
@@ -167,10 +175,12 @@ def summarize(rows, first_frame: int, last_frame: int):
         current_selector = row.get('selector')
         if current_selector is None:
             selector_missing = True
-        elif selector is None:
-            selector = current_selector
-        elif current_selector != selector:
-            raise ValueError("mixed device selectors in one report")
+        else:
+            _selector_key(current_selector, value["native_tid"])
+            if selector is None:
+                selector = current_selector
+            elif current_selector != selector:
+                raise ValueError("mixed device selectors in one report")
         before, after = row.get("frame_before"), row.get("frame_after")
         if (not before or before != after or before["draws"] <= 100 or
                 before["wall_ms"] <= 0 or not first_frame <= before["frame"] < last_frame):
@@ -247,7 +257,8 @@ def _selector_key(selector, native_tid):
     tid = selector.get("native_tid")
     transport = selector.get("transport")
     if (type(device) is not int or device <= 0 or type(tid) is not int or tid <= 0 or
-            type(transport) is not int or transport != 1 or tid != native_tid):
+            type(transport) is not int or transport not in SUPPORTED_TRANSPORTS or
+            tid != native_tid):
         raise ValueError("invalid device selector")
     return (device, tid, transport)
 
@@ -458,15 +469,20 @@ def main():
     parser.add_argument("--log", required=True, type=Path)
     parser.add_argument("--helper", type=Path, default=Path("build/tools/dxmt9-thread-cpu"))
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--transport", dest="expected_transport", type=int,
+                        choices=SUPPORTED_TRANSPORTS, default=1,
+                        help="expected negotiated transport (1 or 2)")
     parser.add_argument("--samples", type=int, default=120)
     parser.add_argument("--interval", type=float, default=2.0)
     args = parser.parse_args()
     if args.pid <= 0 or not 1 <= args.samples <= 10000 or not 0.5 <= args.interval <= 60:
         parser.error("positive PID, 1..10000 samples and 0.5..60 second interval required")
-    observer = Observer(args.helper.resolve(), args.log, args.pid)
+    observer = Observer(args.helper.resolve(), args.log, args.pid,
+                        expected_transport=args.expected_transport)
     with args.output.open("x") as stream:
         header = dict(status="header", pid=args.pid, log=str(args.log.resolve()),
                       interval_seconds=args.interval,
+                      expected_transport=args.expected_transport,
                       log_provenance='caller-supplied; freshness metadata is not causal ownership proof',
                       helper_sha256=hashlib.sha256(args.helper.read_bytes()).hexdigest())
         print(json.dumps(header), file=stream, flush=True)

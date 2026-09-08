@@ -1329,6 +1329,12 @@ cap. Canonical D9C V2 contributes a 48-byte header, 32-byte record row,
 16-byte capture-token/event-ordinal pair followed by the 32-byte immutable
 producer event/source interval; its role byte counts exclude
 inter-table alignment, which the importer reconstructs from header offsets.
+The emitter normalizes every zero-length role to a zero address token; a
+non-null arena backing does not make an empty role present. PE validates the
+selected segmented descriptor before marking the seal successful. A rejected
+descriptor takes the existing failed-seal settlement and never falls through
+to an unmaterialized ExactFixed result. Selection remains the negotiated
+transport (or the explicit capture representation), not descriptor validity.
 The trusted in-process recorder pointer boundary ends at this owner;
 the transport and Tape contain only validated value metadata and owned
 pointer-free storage. `ReserveAll` reserves the complete fixed layout and all
@@ -1363,11 +1369,12 @@ adoption remain all-or-nothing. Pool contention never introduces a queue wait:
 acquire cold-allocates and recycle evicts. Contiguous V2 remains the default and
 the Render Tape capture representation. A host-only immutable
 owner/count-plan/ExactFixed fixture compares all 21 producer families
-byte-for-byte with validated contiguous V2. The production chunk settlement
-owner is now common to those families, but the immutable ExactFixed owner still
-does not construct their production final wire or emit into CPU-ready Tape;
-that later provider remains default-off until the layered gates in
-`R-VERIF-6.4` and the backend acceptance contract pass.
+byte-for-byte with validated contiguous V2. The production semantic owner
+constructs their canonical record/handle/payload roles during admission;
+ExactFixed gathers those roles for contiguous/capture output and segmented
+emission aliases them. This is not a CPU-ready Tape default promotion.
+Segmented transport and later provider policy still require the layered gates
+in `R-VERIF-6.4` and the backend acceptance contract.
 
 ### 6.3 End-to-end source identity handoff
 

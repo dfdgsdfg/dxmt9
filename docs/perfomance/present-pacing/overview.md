@@ -29,6 +29,18 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H271](present-pacing-pe-transport-inline-boundaries.271.md) finds and fixes
+the segmented empty-role token → unmaterialized ExactFixed fallback defect
+before timing the lane. Native counterexample, 12 fresh PE32/PE64 pixel
+processes, and existing TLC pass. High-register/INDEX16 UP samples strengthen
+bounded coverage, not all consumers or default promotion. The transport
+comparison must price synchronous Unix admission as well as removed PE gather.
+The same-image single pairs show no savings: segmented inclusive thread CPU
+is +0.81%/+0.42% for 05/06 and Info FPS −0.69%/−0.87%. This is not a
+noise-qualified regression or promotion result. The next concrete candidate
+is segmented-only duplicate full semantic validation, retaining a pre-copy
+geometry gate and complete owned validation.
+
 [H270](present-pacing-inline-constant-boundaries.270.md) closes the bounded
 recorded-StateBlock/full-snapshot pixel matrix: 16 PE processes, 1,152 exact
 samples. External cumulative CPU envelopes avoid dropping unstable interior

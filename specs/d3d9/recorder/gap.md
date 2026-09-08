@@ -13,6 +13,23 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H271](../../../docs/perfomance/present-pacing/present-pacing-pe-transport-inline-boundaries.271.md)
+fixes a reproduced PE32/PE64 segmented failure: zero-length role spans kept
+nonzero arena tokens, and invalid emission selected an unmaterialized
+ExactFixed result. Empty tokens are normalized; selected-emission rejection
+precedes successful seal/bridge entry. A failing native zero-handle owner
+test now passes, as do 12 fresh post-fix PE processes / 1,152 exact edge-register
+and indexed-UP samples across both transports. Fourteen separate pre-fix
+contiguous controls retain bounded StateBlock coverage. Neither transport nor
+inline defaults change; broader consumers/capture/failures and economy
+promotion remain open.
+H271's same-image single transport pairs show no economy evidence:
+segmented inclusive commit-thread CPU +0.81%/+0.42% and Info FPS
+−0.69%/−0.87% for 05/06. These are not PE-exclusive or noise-qualified
+regression values. Segmented admission still repeats full semantic validation
+before/after copy; removing only the borrowed semantic walk requires a bounded
+geometry/identity gate and malformed/fault/owned-byte tests first.
+
 [H270](../../../docs/perfomance/present-pacing/present-pacing-inline-constant-boundaries.270.md)
 adds 16 actual PE StateBlock/full-snapshot processes with 1,152 exact sampled
 pixels and continuous external CPU envelopes. This is bounded R-BACK-2.52

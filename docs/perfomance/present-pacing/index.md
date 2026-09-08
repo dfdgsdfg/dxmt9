@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H271](present-pacing-pe-transport-inline-boundaries.271.md) fixes a real
+segmented empty-role/readback failure and adds high-register/indexed-UP pixel
+evidence. Twelve fresh post-fix processes pass; both candidates remain off by
+default and CPU economy is a separate gate.
+
 [H270](present-pacing-inline-constant-boundaries.270.md) adds actual PE
 StateBlock/full-snapshot inline-constant pixels and continuous external CPU
 envelopes. The candidate remains default-off; records alone do not prove savings.

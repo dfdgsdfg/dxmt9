@@ -1,0 +1,1373 @@
+{
+  "schema": 1,
+  "measured_date": "2026-09-08 KST; 20260909 path suffix is a bookkeeping label, not the execution date",
+  "status": "pass",
+  "source_head": "21029d09",
+  "related_evidence": "tests/conformance/d3d9/evidence/inline-constant-boundaries-20260908.json",
+  "scope": "Sampled six-family SM3 high-register colors/getters and INDEX16 indexed-UP API; not all index patterns, shader layouts, StateBlock types, consumers, failures, capture or performance promotion.",
+  "source": "tests/conformance/d3d9/d3d9_inline_constants.cpp",
+  "source_sha256": "25d0d3904b98487887632189e2500cd04f422a63337ea0870333f95a9d85f3d3",
+  "postfix_runtime_build": {
+    "head": "21029d09",
+    "source_diff_sha256": "2ab24eb968a0fdd65cf0ebe15f2a20e422b38deedf40f780b10617988b9ce4a1",
+    "images": {
+      "lib/wine/i386-windows/d3d9.dll": {
+        "sha256": "d51cd9e9a891fd593f12028a7e2d938c720bd2560202ba591dd109a14a8c0567",
+        "bytes": 1906688
+      },
+      "lib/wine/x86_64-windows/d3d9.dll": {
+        "sha256": "d9d593a0a44665a4fb595dbd7274f1c81ca43ee3e830ed14159b5564e449076f",
+        "bytes": 1775104
+      },
+      "lib/wine/i386-windows/winemetal_dxmt9.dll": {
+        "sha256": "e31242c3d6c67e9a9f2cc9c9c49a06ad6d076b68d11801b41ce49be19a2067a7",
+        "bytes": 140800
+      },
+      "lib/wine/x86_64-windows/winemetal_dxmt9.dll": {
+        "sha256": "cc46aabe669695132f29bd6836401006f343da23b07bae8a4c2aae987806c00b",
+        "bytes": 145920
+      },
+      "lib/wine/x86_64-unix/winemetal_dxmt9.so": {
+        "sha256": "e4543457d6992f1a2a8a088a590e75170360d8938e4c4aeda582ab3b1da4a09a",
+        "bytes": 9786432
+      }
+    },
+    "canonical_builds": "Main observed all four meson compile commands exit 0 before this image freeze; no runtime edits allowed during comparisons"
+  },
+  "groups": {
+    "prefix_contiguous": {
+      "processes": 14,
+      "exact_samples": 1296,
+      "runs": [
+        {
+          "arch": "x86",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "0",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all"
+          },
+          "samples": 72,
+          "layout": "base",
+          "case": "plain",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 24,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 19,
+            "append_psconst_calls": 19,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/archx86-inline0-offload1-layoutbase-caseplain-segmented0/qualification.json",
+          "log_sha256": "b8c60147259b524caab2802b6a3156d5f573a5bf6e8a185130a786a02b8cff2d",
+          "qualification_sha256": "26a56e4f52cd842e6be8472e792d8da4d82402a343bfb32b307ff67d1b5579eb",
+          "signature_sha256": "8428ba0877467965dd7d1d08cfb64002b6999b6c2099391d6b1cac8b2ee574b9"
+        },
+        {
+          "arch": "x64",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "1",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all"
+          },
+          "samples": 72,
+          "layout": "base",
+          "case": "plain",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 24,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 6,
+            "append_psconst_calls": 6,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/archx64-inline1-offload1-layoutbase-caseplain-segmented0/qualification.json",
+          "log_sha256": "0249f7c5c47fe538a87c1b8728d1c9ad3d8d1a01930bf9dcc05c6c3d3998d8c1",
+          "qualification_sha256": "35cb235aa8192853cfb451c337a01c75db3c236550b9046ba21f90837f800eab",
+          "signature_sha256": "8428ba0877467965dd7d1d08cfb64002b6999b6c2099391d6b1cac8b2ee574b9"
+        },
+        {
+          "arch": "x86",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "0",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "0",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 25,
+            "append_psconst_calls": 25,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/archx86-inline0-offload0-layoutedge-caseplain-segmented0/qualification.json",
+          "log_sha256": "4ec0a423a9a60e50ff719526b7456046a3f03b6fc5852a17489e2644fd40a963",
+          "qualification_sha256": "7a0550c6e59128bca5727178cf01c92d54debec7119894b724c3b5362008cdcf",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x86",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "0",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 25,
+            "append_psconst_calls": 25,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/archx86-inline0-offload1-layoutedge-caseplain-segmented0/qualification.json",
+          "log_sha256": "e4eb5fe18d4ea2b8766c5640c8c2b400d07121394e71d1011a5045eb420e47c3",
+          "qualification_sha256": "0a328d46768b5bf91381917d90ad4954ce7d4f91c67ae1440e80059d04233073",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x86",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "0",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_CASE": "stateblock",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "stateblock",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 98,
+            "append_vsconst_calls": 49,
+            "append_psconst_calls": 49,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/archx86-inline0-offload1-layoutedge-casestateblock-segmented0/qualification.json",
+          "log_sha256": "4841831c4058d1e0eb0e47ff30bd4088ca8265125496e0f927f8dd68df002a3e",
+          "qualification_sha256": "6959bf8c53d096594398b99bc3f920f592990f64a1732873ed30546b2ad7471f",
+          "signature_sha256": "f81d8c69ecfb57a818e9316db6efdcf753b51a810dc032f46c6601127abf11f8"
+        },
+        {
+          "arch": "x86",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "1",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "0",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 12,
+            "append_psconst_calls": 12,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/archx86-inline1-offload0-layoutedge-caseplain-segmented0/qualification.json",
+          "log_sha256": "b4955865edc2d5a0ad7233bbf56ffc43d631916a3cdc0552cc74171a159baa7e",
+          "qualification_sha256": "cdbd6dfe5c1780821170c19b2ee25c0717f8609da32a54f3383107cf7ac75b14",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x86",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "1",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 12,
+            "append_psconst_calls": 12,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/edge-x86-on-worker-smoke/qualification.json",
+          "log_sha256": "bd5b20d84185db60f69f4573a3b1b534836ab674fe16ba57c3dc485e008ab335",
+          "qualification_sha256": "4ac80a14cd90e514934a3a68034539a36369ee141fc59b94ad87782a56b2cafc",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x86",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "1",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_CASE": "stateblock",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "stateblock",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 98,
+            "append_vsconst_calls": 31,
+            "append_psconst_calls": 31,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/archx86-inline1-offload1-layoutedge-casestateblock-segmented0/qualification.json",
+          "log_sha256": "24c3bfa98b654e92416bf1fd8932fd2460f8d11252a216fad37acb5b632b8691",
+          "qualification_sha256": "1ee1ae36d6d2eb76a2a140892e93c1ee3d35c11f6e18a7ca9aea133bf899d29c",
+          "signature_sha256": "f81d8c69ecfb57a818e9316db6efdcf753b51a810dc032f46c6601127abf11f8"
+        },
+        {
+          "arch": "x64",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "0",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "0",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 25,
+            "append_psconst_calls": 25,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/archx64-inline0-offload0-layoutedge-caseplain-segmented0/qualification.json",
+          "log_sha256": "45f891b4233bae7ef9413fc9f65cfe5cec3f4f75c6f37dffc137712e9a73090e",
+          "qualification_sha256": "9e9da6d57bd25530f19ad146d272c73ae1b26e02344d315843f52db388f08743",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x64",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "0",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 25,
+            "append_psconst_calls": 25,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/archx64-inline0-offload1-layoutedge-caseplain-segmented0/qualification.json",
+          "log_sha256": "eae98bb2ac80d70a19cc8c171c59a0339d2a7fbde9d39a71376486ec9831b91a",
+          "qualification_sha256": "88787620c89b29cfce86916ec3d07f5c8106e1834d9d82a3cec639256fb29561",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x64",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "0",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_CASE": "stateblock",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "stateblock",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 98,
+            "append_vsconst_calls": 49,
+            "append_psconst_calls": 49,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/archx64-inline0-offload1-layoutedge-casestateblock-segmented0/qualification.json",
+          "log_sha256": "bbed493a911e188af0bd3974544e3f1f4f03216b1d3073dc312b37efbf8c4e79",
+          "qualification_sha256": "4111f00e5682bae4a56aa6b6b3cd8f8650f6cda28b65631e1150eed4dd952aae",
+          "signature_sha256": "f81d8c69ecfb57a818e9316db6efdcf753b51a810dc032f46c6601127abf11f8"
+        },
+        {
+          "arch": "x64",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "1",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "0",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 12,
+            "append_psconst_calls": 12,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/archx64-inline1-offload0-layoutedge-caseplain-segmented0/qualification.json",
+          "log_sha256": "76293fa14ceb9f9d0cf2f453c23281964ecb13e78aad0bcf01bc41f49cf0e230",
+          "qualification_sha256": "9c5c8bbe30548053a80868b7330ba4c5ec2981dce2bd2803a1b79a8ee64aaf97",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x64",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "1",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 12,
+            "append_psconst_calls": 12,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/archx64-inline1-offload1-layoutedge-caseplain-segmented0/qualification.json",
+          "log_sha256": "f862839d6b66625afb55f3589ef5a26fe69b14ec2c3e1b5d92df2c353fcab921",
+          "qualification_sha256": "c73c3d97998e263db748c01012747006abcb07ada2b0f9e14ad85eb6eb8239f3",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x64",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "1",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_CASE": "stateblock",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "stateblock",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 98,
+            "append_vsconst_calls": 31,
+            "append_psconst_calls": 31,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/archx64-inline1-offload1-layoutedge-casestateblock-segmented0/qualification.json",
+          "log_sha256": "60e14006544cbd73e622659b93476409ff076e9e97c3c0d1bd44f268d49edee3",
+          "qualification_sha256": "8ea6a3c55b3d3882841fcfd0eae83511b927830691b481e6d5270d3c03d99f4c",
+          "signature_sha256": "f81d8c69ecfb57a818e9316db6efdcf753b51a810dc032f46c6601127abf11f8"
+        }
+      ]
+    },
+    "postfix": {
+      "processes": 12,
+      "exact_samples": 1152,
+      "runs": [
+        {
+          "arch": "x86",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "0",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 25,
+            "append_psconst_calls": 25,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/postfix-archx86-inline0-segmented0-offload1/qualification.json",
+          "log_sha256": "691404f696a6239c3f980f46c067a850e0cbd90118c8b7b7c9c034beafc5177e",
+          "qualification_sha256": "8b8f7fa6d2f1dc0918e6f0f64057024b33e313b898d262c2174614e9ae8ebdce",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x86",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "0",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "1",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x2",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 25,
+            "append_psconst_calls": 25,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/postfix-archx86-inline0-segmented1-offload1/qualification.json",
+          "log_sha256": "22a1f6c33255a943c41f29b53c8272a2fa8d86d23678d40582878bc29a2dcba2",
+          "qualification_sha256": "028b11868c7cf314bd1cc225b11f71dad2c923dc68e9e918300d2d124f4699d2",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x86",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "0",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "1",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "0",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x2",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 25,
+            "append_psconst_calls": 25,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/postfix-archx86-inline0-segmented1-offload0/qualification.json",
+          "log_sha256": "d2555010232d0024d8b4465e55d05ab91a6c3be94579c662fefdbd04660368b9",
+          "qualification_sha256": "d3d6b5c56b3f60b6842432639a361567490be3d70d4ec094036a83f3563be461",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x86",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "1",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 12,
+            "append_psconst_calls": 12,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/postfix-archx86-inline1-segmented0-offload1/qualification.json",
+          "log_sha256": "4d6d638e70cb9296245cb87e740e60c26eb6734234d6f287e7ddc64399892a30",
+          "qualification_sha256": "ba958c9ecbdbfeecaba7d095688c77110466f23d83ea2544707a97df74d759c4",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x86",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "1",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "1",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x2",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 12,
+            "append_psconst_calls": 12,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/postfix-archx86-inline1-segmented1-offload1/qualification.json",
+          "log_sha256": "744e2c49dcad443afcaab0bcf0924c63b10fa49346d10aefdd5ec235aa4809b1",
+          "qualification_sha256": "cd919566b93a7a8ca445a9a3c36c38fa02898bf793d78ceac4654aa541ed80e9",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x86",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "1",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "1",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "0",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x2",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 12,
+            "append_psconst_calls": 12,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/postfix-archx86-inline1-segmented1-offload0/qualification.json",
+          "log_sha256": "0054c77956bb1a603b9e89f003df83f9dd531eaef8732b4ee0a44428cc2f440a",
+          "qualification_sha256": "1252f1c3e5b8f23fa53660a486363eb1b0889d3fe8755a65594a2e0e57abf597",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x64",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "0",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 25,
+            "append_psconst_calls": 25,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/postfix-archx64-inline0-segmented0-offload1/qualification.json",
+          "log_sha256": "501b03bc3fdd9709a775cf1f6e3bf022e37d4a1649432befceed8b1a7f0c859f",
+          "qualification_sha256": "c5f9bd0ed8b6c0afc0940f164394869225a1ebd967a0ddc72ab76641b44b9edb",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x64",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "0",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "1",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x2",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 25,
+            "append_psconst_calls": 25,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/postfix-archx64-inline0-segmented1-offload1/qualification.json",
+          "log_sha256": "24b5a4375533db9b072258e2f4f24abe509db393b385c7e9f56d8fc7d096480b",
+          "qualification_sha256": "74ced8d63832d5542f402144488353922d54f10d92981ac272f24cae0a85c5c8",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x64",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "0",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "1",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "0",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x2",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 25,
+            "append_psconst_calls": 25,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/postfix-archx64-inline0-segmented1-offload0/qualification.json",
+          "log_sha256": "f3bb7b7f997be4ada900d9219a136a01af54371ecaf1f088b9abfadbc975c342",
+          "qualification_sha256": "448313d2dcda6b99da669aa25983a8338dfe91e1b2795c26f1412a66d8fa4961",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x64",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "1",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "0",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x1",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 12,
+            "append_psconst_calls": 12,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/postfix-archx64-inline1-segmented0-offload1/qualification.json",
+          "log_sha256": "60e7989d3138f2800b4ba824e945e087a252ceb43c28f9129c45687ee1c22d97",
+          "qualification_sha256": "77b3a8f45601474d0534a56ad597c98fe6fe89240bc5095c35be91a1f1cdef85",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x64",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "1",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "1",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "1",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x2",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 12,
+            "append_psconst_calls": 12,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/postfix-archx64-inline1-segmented1-offload1/qualification.json",
+          "log_sha256": "4ffe8a4278faefcd8060ed933a3b182c63c75a5012551c11dae20a869a77d5f4",
+          "qualification_sha256": "8d5559341d773896a9db1c8b894a6abb5df2688e8ca32a42e3691e4d0bb7ca4d",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        },
+        {
+          "arch": "x64",
+          "recipe": {
+            "DXMT9_PE_INLINE_CONST_DELTA": "1",
+            "DXMT9_PE_DRAW_FULL_SNAPSHOT": "0",
+            "DXMT9_PE_SEGMENTED_TRANSPORT": "1",
+            "DXMT9_OFFLOAD_COMMIT_REPLAY": "0",
+            "DXMT9_CPU_READY_TAPE": "0",
+            "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0",
+            "DXMT9_PE_STATS_DECIMATION": "1",
+            "DXMT_PERF_COUNTERS": "1",
+            "DXMT_LOG_LEVEL": "info",
+            "DXMT_LOG_PATH": "none",
+            "WINEDEBUG": "-all",
+            "DXMT9_TEST_INLINE_CONSTANT_LAYOUT": "edge"
+          },
+          "samples": 96,
+          "layout": "edge",
+          "case": "plain",
+          "negotiated_transport": "0x2",
+          "append_counts": {
+            "append_draw_calls": 24,
+            "append_drawidx_calls": 24,
+            "append_drawup_calls": 48,
+            "append_applystate_calls": 6,
+            "append_vsconst_calls": 12,
+            "append_psconst_calls": 12,
+            "append_clear_calls": 1,
+            "append_other_calls": 1
+          },
+          "health": {
+            "chunk_reject": 0,
+            "command_chunk_rejects": 0,
+            "draw_skipped_no_pipeline": 0,
+            "gpu_command_buffer_errors": 0,
+            "pipeline_build_fail_draw": 0,
+            "pipeline_build_fail_function": 0,
+            "pipeline_build_fail_library": 0,
+            "pipeline_build_fail_pso": 0
+          },
+          "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/postfix-archx64-inline1-segmented1-offload0/qualification.json",
+          "log_sha256": "d7810a09bbc07cb49cc678a832ff37ef2152e2d8ab254332b37a3480e8302ca2",
+          "qualification_sha256": "6de1b1b710d68ab6866702d93568026c81192602fabed906670f4942d1981b42",
+          "signature_sha256": "2d4430aab0065973b4fbecd2cdf8c7005c6b15af4436ba62dc221ea163b1c43e"
+        }
+      ]
+    }
+  },
+  "failed_controls": [
+    {
+      "arch": "x86",
+      "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/archx86-inline0-offload1-layoutedge-caseplain-segmented1",
+      "cause": "Malformed absent role selects never-emitted ExactFixed; final readback fails before pixel sampling",
+      "verdicts": {
+        "run_pixel_oracle": "fail"
+      },
+      "health": {
+        "chunk_reject": 1,
+        "command_chunk_rejects": 1,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "log_sha256": "e1f169b39a6df831c0d68ff72babc377510d6b91f63fd7411dd6ab3090c72994",
+      "staged_build": {
+        "artifacts": {
+          "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/d3d9.dll": {
+            "bytes": 1906688,
+            "sha256": "413f19b269fbe833",
+            "source": "/Users/dididi/workspaces/dxmt9/build-win32-x86-builtin/src/win32/d3d9.dll"
+          },
+          "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/i386-windows/winemetal_dxmt9.dll": {
+            "bytes": 140800,
+            "sha256": "e31242c3d6c67e9a",
+            "source": "/Users/dididi/workspaces/dxmt9/build-win32-x86-builtin/src/winemetal/winemetal_dxmt9.dll"
+          },
+          "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": {
+            "bytes": 9786432,
+            "sha256": "e4543457d6992f1a",
+            "source": "/Users/dididi/workspaces/dxmt9/build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so"
+          }
+        }
+      }
+    },
+    {
+      "arch": "x64",
+      "artifact": "experiments/output/pe-transport-inline-boundaries-20260909/analysis/edge-x64-segmented-repro",
+      "cause": "Malformed absent role selects never-emitted ExactFixed; final readback fails before pixel sampling",
+      "verdicts": {
+        "run_pixel_oracle": "fail"
+      },
+      "health": {
+        "chunk_reject": 1,
+        "command_chunk_rejects": 1,
+        "draw_skipped_no_pipeline": 0,
+        "gpu_command_buffer_errors": 0,
+        "pipeline_build_fail_draw": 0,
+        "pipeline_build_fail_function": 0,
+        "pipeline_build_fail_library": 0,
+        "pipeline_build_fail_pso": 0
+      },
+      "log_sha256": "e4bd69d98b6ff1c8bf13d16cd19947368e3efb77bb9abe05e6008bf10754e42a",
+      "staged_build": {
+        "artifacts": {
+          "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-unix/winemetal_dxmt9.so": {
+            "bytes": 9786432,
+            "sha256": "e4543457d6992f1a",
+            "source": "/Users/dididi/workspaces/dxmt9/build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so"
+          },
+          "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/d3d9.dll": {
+            "bytes": 1774080,
+            "sha256": "3344c975a664ca7a",
+            "source": "/Users/dididi/workspaces/dxmt9/build-win32-x64-builtin/src/win32/d3d9.dll"
+          },
+          "/Users/dididi/workspaces/dxmt9/experiments/wine/sikarugir-cx-24.0.7/lib/wine/x86_64-windows/winemetal_dxmt9.dll": {
+            "bytes": 145920,
+            "sha256": "cc46aabe66969513",
+            "source": "/Users/dididi/workspaces/dxmt9/build-win32-x64-builtin/src/winemetal/winemetal_dxmt9.dll"
+          }
+        }
+      }
+    }
+  ],
+  "images_by_stage": {
+    "prefix_contiguous": {
+      "x86": {
+        "/Users/dididi/workspaces/dxmt9/build-win32-x86-builtin/src/win32/d3d9.dll": {
+          "sha256": "413f19b269fbe8336633f271ece9e5ead72f17ef801add206f50528c7bcf40da",
+          "bytes": 1906688
+        },
+        "/Users/dididi/workspaces/dxmt9/build-win32-x86-builtin/src/winemetal/winemetal_dxmt9.dll": {
+          "sha256": "e31242c3d6c67e9a9f2cc9c9c49a06ad6d076b68d11801b41ce49be19a2067a7",
+          "bytes": 140800
+        },
+        "/Users/dididi/workspaces/dxmt9/build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so": {
+          "sha256": "e4543457d6992f1a2a8a088a590e75170360d8938e4c4aeda582ab3b1da4a09a",
+          "bytes": 9786432
+        }
+      },
+      "x64": {
+        "/Users/dididi/workspaces/dxmt9/build-win32-x64-builtin/src/win32/d3d9.dll": {
+          "sha256": "3344c975a664ca7a52a589c3a9cd781963899b02afd1cc6e2581f23d72361bff",
+          "bytes": 1774080
+        },
+        "/Users/dididi/workspaces/dxmt9/build-win32-x64-builtin/src/winemetal/winemetal_dxmt9.dll": {
+          "sha256": "cc46aabe669695132f29bd6836401006f343da23b07bae8a4c2aae987806c00b",
+          "bytes": 145920
+        },
+        "/Users/dididi/workspaces/dxmt9/build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so": {
+          "sha256": "e4543457d6992f1a2a8a088a590e75170360d8938e4c4aeda582ab3b1da4a09a",
+          "bytes": 9786432
+        }
+      }
+    },
+    "postfix": {
+      "x86": {
+        "/Users/dididi/workspaces/dxmt9/build-win32-x86-builtin/src/win32/d3d9.dll": {
+          "sha256": "d51cd9e9a891fd593f12028a7e2d938c720bd2560202ba591dd109a14a8c0567",
+          "bytes": 1906688
+        },
+        "/Users/dididi/workspaces/dxmt9/build-win32-x86-builtin/src/winemetal/winemetal_dxmt9.dll": {
+          "sha256": "e31242c3d6c67e9a9f2cc9c9c49a06ad6d076b68d11801b41ce49be19a2067a7",
+          "bytes": 140800
+        },
+        "/Users/dididi/workspaces/dxmt9/build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so": {
+          "sha256": "e4543457d6992f1a2a8a088a590e75170360d8938e4c4aeda582ab3b1da4a09a",
+          "bytes": 9786432
+        }
+      },
+      "x64": {
+        "/Users/dididi/workspaces/dxmt9/build-win32-x64-builtin/src/win32/d3d9.dll": {
+          "sha256": "d9d593a0a44665a4fb595dbd7274f1c81ca43ee3e830ed14159b5564e449076f",
+          "bytes": 1775104
+        },
+        "/Users/dididi/workspaces/dxmt9/build-win32-x64-builtin/src/winemetal/winemetal_dxmt9.dll": {
+          "sha256": "cc46aabe669695132f29bd6836401006f343da23b07bae8a4c2aae987806c00b",
+          "bytes": 145920
+        },
+        "/Users/dididi/workspaces/dxmt9/build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so": {
+          "sha256": "e4543457d6992f1a2a8a088a590e75170360d8938e4c4aeda582ab3b1da4a09a",
+          "bytes": 9786432
+        }
+      }
+    }
+  },
+  "fixtures_by_arch": {
+    "x86": {
+      "sha256": "1c4a23c1a001cddb93c675e8876872c920be4e826ef9cd19d73498dae3cbd5e7",
+      "bytes": 103424
+    },
+    "x64": {
+      "sha256": "b1ebebe38e5e5796b95dceeb72dacc75b1a4e89d3750a446a3248c3ead961cfc",
+      "bytes": 114176
+    }
+  }
+}

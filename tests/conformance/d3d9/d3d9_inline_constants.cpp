@@ -97,6 +97,30 @@ static const DWORD kVertexShader[] = {
     0x0000ffffu,
 };
 
+// Edge-layout VS: the changed float/int/bool families live at the register
+// caps while the c4/c5 scale constants remain the same executable sources.
+static const DWORD kVertexShaderEdge[] = {
+    D3DVS_VERSION(3, 0),
+    instruction(D3DSIO_DCL, 2), dcl_token(D3DDECLUSAGE_POSITION, 0),
+        dst_token(D3DSPR_INPUT, 0),
+    instruction(D3DSIO_DCL, 2), dcl_token(D3DDECLUSAGE_POSITION, 0),
+        dst_token(D3DSPR_OUTPUT, 0),
+    instruction(D3DSIO_DCL, 2), dcl_token(D3DDECLUSAGE_COLOR, 0),
+        dst_token(D3DSPR_OUTPUT, 1),
+    instruction(D3DSIO_MOV, 2), dst_token(D3DSPR_OUTPUT, 0), src_token(D3DSPR_INPUT, 0),
+    instruction(D3DSIO_MOV, 2), dst_token(D3DSPR_TEMP, 0), src_token(D3DSPR_CONST, 255),
+    instruction(D3DSIO_REP, 1), src_token(D3DSPR_CONSTINT, 15),
+    instruction(D3DSIO_ADD, 3), dst_token(D3DSPR_TEMP, 0),
+        src_token(D3DSPR_TEMP, 0), src_token(D3DSPR_CONST, 4),
+    instruction(D3DSIO_ENDREP, 0),
+    instruction(D3DSIO_IF, 1), src_token(D3DSPR_CONSTBOOL, 15),
+    instruction(D3DSIO_ADD, 3), dst_token(D3DSPR_TEMP, 0),
+        src_token(D3DSPR_TEMP, 0), src_token(D3DSPR_CONST, 5),
+    instruction(D3DSIO_ENDIF, 0),
+    instruction(D3DSIO_MOV, 2), dst_token(D3DSPR_OUTPUT, 1), src_token(D3DSPR_TEMP, 0),
+    0x0000ffffu,
+};
+
 // ps_3_0: v0 is the interpolated VS color.  It adds PS float plus executable
 // REP/IF contributions from PS integer and bool constant registers.
 static const DWORD kPixelShader[] = {
@@ -118,11 +142,35 @@ static const DWORD kPixelShader[] = {
     0x0000ffffu,
 };
 
+// Edge-layout PS: same executable c4/c5 scales, with the three changed
+// families sourced from the pixel-stage register caps.
+static const DWORD kPixelShaderEdge[] = {
+    D3DPS_VERSION(3, 0),
+    instruction(D3DSIO_DCL, 2), dcl_token(D3DDECLUSAGE_COLOR, 0),
+        dst_token(D3DSPR_INPUT, 0),
+    instruction(D3DSIO_MOV, 2), dst_token(D3DSPR_TEMP, 0), src_token(D3DSPR_INPUT, 0),
+    instruction(D3DSIO_ADD, 3), dst_token(D3DSPR_TEMP, 0),
+        src_token(D3DSPR_TEMP, 0), src_token(D3DSPR_CONST, 223),
+    instruction(D3DSIO_REP, 1), src_token(D3DSPR_CONSTINT, 15),
+    instruction(D3DSIO_ADD, 3), dst_token(D3DSPR_TEMP, 0),
+        src_token(D3DSPR_TEMP, 0), src_token(D3DSPR_CONST, 4),
+    instruction(D3DSIO_ENDREP, 0),
+    instruction(D3DSIO_IF, 1), src_token(D3DSPR_CONSTBOOL, 15),
+    instruction(D3DSIO_ADD, 3), dst_token(D3DSPR_TEMP, 0),
+        src_token(D3DSPR_TEMP, 0), src_token(D3DSPR_CONST, 5),
+    instruction(D3DSIO_ENDIF, 0),
+    instruction(D3DSIO_MOV, 2), dst_token(D3DSPR_COLOROUT, 0), src_token(D3DSPR_TEMP, 0),
+    0x0000ffffu,
+};
+
 constexpr unsigned kWidth = 64;
 constexpr unsigned kRowsPerPath = 6;
-constexpr unsigned kPathCount = 3;
-constexpr unsigned kRows = kRowsPerPath * kPathCount;
-constexpr unsigned kHeight = kRows * 16;
+constexpr unsigned kPlainPathCount = 3;
+constexpr unsigned kPlainRows = kRowsPerPath * kPlainPathCount;
+constexpr unsigned kPlainHeight = kPlainRows * 16;
+constexpr unsigned kEdgePathCount = 4;
+constexpr unsigned kEdgeRows = kRowsPerPath * kEdgePathCount;
+constexpr unsigned kEdgeHeight = kEdgeRows * 16;
 
 enum class Family : unsigned {
   VsFloat,
@@ -164,15 +212,16 @@ struct Vertex {
   float w;
 };
 
-Vertex make_vertex(unsigned row, unsigned slot, unsigned vertex) {
+Vertex make_vertex(unsigned row, unsigned slot, unsigned vertex,
+                   unsigned height = kPlainHeight) {
   const float left = -1.0f + 2.0f * static_cast<float>(slot * 16u) /
       static_cast<float>(kWidth);
   const float right = -1.0f + 2.0f * static_cast<float>((slot + 1u) * 16u) /
       static_cast<float>(kWidth);
   const float top = 1.0f - 2.0f * static_cast<float>(row * 16u) /
-      static_cast<float>(kHeight);
+      static_cast<float>(height);
   const float bottom = 1.0f - 2.0f * static_cast<float>((row + 1u) * 16u) /
-      static_cast<float>(kHeight);
+      static_cast<float>(height);
   if (vertex == 0) return {left, top, 0.5f, 1.0f};
   if (vertex == 1) return {right, top, 0.5f, 1.0f};
   return {left, bottom, 0.5f, 1.0f};
@@ -207,6 +256,10 @@ IDirect3DDevice9 *create_device(IDirect3D9 *d3d9, HWND window, HRESULT *last_hr)
 }
 
 struct Fixture {
+  bool edge_layout = false;
+  unsigned rows = kPlainRows;
+  unsigned height = kPlainHeight;
+  unsigned path_count = kPlainPathCount;
   HWND window = nullptr;
   IDirect3D9 *d3d9 = nullptr;
   IDirect3DDevice9 *device = nullptr;
@@ -218,7 +271,11 @@ struct Fixture {
   IDirect3DVertexShader9 *vs = nullptr;
   IDirect3DPixelShader9 *ps = nullptr;
 
-  bool init() {
+  bool init(bool use_edge_layout = false) {
+    edge_layout = use_edge_layout;
+    rows = edge_layout ? kEdgeRows : kPlainRows;
+    height = edge_layout ? kEdgeHeight : kPlainHeight;
+    path_count = edge_layout ? kEdgePathCount : kPlainPathCount;
     window = create_window();
     if (!window) {
       fail_at(__LINE__, "CreateWindowA failed");
@@ -237,12 +294,14 @@ struct Fixture {
       ++failures;
       return false;
     }
-    CHECK_HR(device->CreateRenderTarget(kWidth, kHeight, D3DFMT_A8R8G8B8,
+    CHECK_HR(device->CreateRenderTarget(kWidth, height, D3DFMT_A8R8G8B8,
         D3DMULTISAMPLE_NONE, 0, FALSE, &render_target, nullptr), D3D_OK);
-    CHECK_HR(device->CreateOffscreenPlainSurface(kWidth, kHeight, D3DFMT_A8R8G8B8,
+    CHECK_HR(device->CreateOffscreenPlainSurface(kWidth, height, D3DFMT_A8R8G8B8,
         D3DPOOL_SYSTEMMEM, &readback, nullptr), D3D_OK);
-    CHECK_HR(device->CreateVertexShader(kVertexShader, &vs), D3D_OK);
-    CHECK_HR(device->CreatePixelShader(kPixelShader, &ps), D3D_OK);
+    CHECK_HR(device->CreateVertexShader(
+        edge_layout ? kVertexShaderEdge : kVertexShader, &vs), D3D_OK);
+    CHECK_HR(device->CreatePixelShader(
+        edge_layout ? kPixelShaderEdge : kPixelShader, &ps), D3D_OK);
     if (!render_target || !readback || !vs || !ps) return false;
 
     const D3DVERTEXELEMENT9 elements[] = {
@@ -253,22 +312,22 @@ struct Fixture {
     CHECK_HR(device->CreateVertexDeclaration(elements, &declaration), D3D_OK);
     if (!declaration) return false;
 
-    constexpr unsigned kVertexCount = kRows * 4u * 3u;
-    CHECK_HR(device->CreateVertexBuffer(kVertexCount * sizeof(Vertex), 0,
+    const unsigned vertex_count = rows * 4u * 3u;
+    CHECK_HR(device->CreateVertexBuffer(vertex_count * sizeof(Vertex), 0,
         0, D3DPOOL_MANAGED, &vertices, nullptr), D3D_OK);
-    CHECK_HR(device->CreateIndexBuffer(kVertexCount * sizeof(std::uint16_t), 0,
+    CHECK_HR(device->CreateIndexBuffer(vertex_count * sizeof(std::uint16_t), 0,
         D3DFMT_INDEX16, D3DPOOL_MANAGED, &indices, nullptr), D3D_OK);
     if (!vertices || !indices) return false;
 
     Vertex *vertex_data = nullptr;
     CHECK_HR(vertices->Lock(0, 0, reinterpret_cast<void **>(&vertex_data), 0), D3D_OK);
     if (!vertex_data) return false;
-    for (unsigned row = 0; row < kRows; ++row) {
+    for (unsigned row = 0; row < rows; ++row) {
       for (unsigned slot = 0; slot < 4; ++slot) {
         const unsigned index = (row * 4u + slot) * 3u;
-        vertex_data[index + 0] = make_vertex(row, slot, 0);
-        vertex_data[index + 1] = make_vertex(row, slot, 1);
-        vertex_data[index + 2] = make_vertex(row, slot, 2);
+        vertex_data[index + 0] = make_vertex(row, slot, 0, height);
+        vertex_data[index + 1] = make_vertex(row, slot, 1, height);
+        vertex_data[index + 2] = make_vertex(row, slot, 2, height);
       }
     }
     CHECK_HR(vertices->Unlock(), D3D_OK);
@@ -276,7 +335,8 @@ struct Fixture {
     std::uint16_t *index_data = nullptr;
     CHECK_HR(indices->Lock(0, 0, reinterpret_cast<void **>(&index_data), 0), D3D_OK);
     if (!index_data) return false;
-    for (unsigned i = 0; i < kVertexCount; ++i) index_data[i] = static_cast<std::uint16_t>(i);
+    for (unsigned i = 0; i < vertex_count; ++i)
+      index_data[i] = static_cast<std::uint16_t>(i);
     CHECK_HR(indices->Unlock(), D3D_OK);
     return failures == 0;
   }
@@ -323,7 +383,7 @@ struct Fixture {
   }
 };
 
-void set_baseline_constants(IDirect3DDevice9 *device) {
+void set_baseline_constants(IDirect3DDevice9 *device, bool edge_layout = false) {
   const float vs_float[4] = {0.08f, 0.12f, 0.16f, 1.0f};
   const float vs_int_scale[4] = {0.15f, 0.0f, 0.0f, 0.0f};
   const float vs_bool_scale[4] = {0.0f, 0.10f, 0.0f, 0.0f};
@@ -335,66 +395,79 @@ void set_baseline_constants(IDirect3DDevice9 *device) {
   const int ps_int[4] = {0, 0, 0, 0};
   const BOOL ps_bool[1] = {FALSE};
 
-  CHECK_HR(device->SetVertexShaderConstantF(0, vs_float, 1), D3D_OK);
+  CHECK_HR(device->SetVertexShaderConstantF(edge_layout ? 255u : 0u,
+      vs_float, 1), D3D_OK);
   CHECK_HR(device->SetVertexShaderConstantF(4, vs_int_scale, 1), D3D_OK);
   CHECK_HR(device->SetVertexShaderConstantF(5, vs_bool_scale, 1), D3D_OK);
-  CHECK_HR(device->SetVertexShaderConstantI(0, vs_int, 1), D3D_OK);
-  CHECK_HR(device->SetVertexShaderConstantB(0, vs_bool, 1), D3D_OK);
-  CHECK_HR(device->SetPixelShaderConstantF(0, ps_float, 1), D3D_OK);
+  CHECK_HR(device->SetVertexShaderConstantI(edge_layout ? 15u : 0u,
+      vs_int, 1), D3D_OK);
+  CHECK_HR(device->SetVertexShaderConstantB(edge_layout ? 15u : 0u,
+      vs_bool, 1), D3D_OK);
+  CHECK_HR(device->SetPixelShaderConstantF(edge_layout ? 223u : 0u,
+      ps_float, 1), D3D_OK);
   CHECK_HR(device->SetPixelShaderConstantF(4, ps_int_scale, 1), D3D_OK);
   CHECK_HR(device->SetPixelShaderConstantF(5, ps_bool_scale, 1), D3D_OK);
-  CHECK_HR(device->SetPixelShaderConstantI(0, ps_int, 1), D3D_OK);
-  CHECK_HR(device->SetPixelShaderConstantB(0, ps_bool, 1), D3D_OK);
+  CHECK_HR(device->SetPixelShaderConstantI(edge_layout ? 15u : 0u,
+      ps_int, 1), D3D_OK);
+  CHECK_HR(device->SetPixelShaderConstantB(edge_layout ? 15u : 0u,
+      ps_bool, 1), D3D_OK);
 }
 
-void set_family_value(IDirect3DDevice9 *device, Family family, bool changed) {
+void set_family_value(IDirect3DDevice9 *device, Family family, bool changed,
+                      bool edge_layout = false) {
+  const UINT vs_float_register = edge_layout ? 255u : 0u;
+  const UINT ps_float_register = edge_layout ? 223u : 0u;
+  const UINT integer_register = edge_layout ? 15u : 0u;
   switch (family) {
     case Family::VsFloat: {
       const float changed_value[4] = {0.20f, 0.10f, 0.15f, 1.0f};
       const float base_value[4] = {0.08f, 0.12f, 0.16f, 1.0f};
       const float *value = changed ? changed_value : base_value;
-      CHECK_HR(device->SetVertexShaderConstantF(0, value, 1), D3D_OK);
+      CHECK_HR(device->SetVertexShaderConstantF(vs_float_register, value, 1), D3D_OK);
       break;
     }
     case Family::VsInt: {
       const int value[4] = {changed ? 1 : 0, 0, 0, 0};
-      CHECK_HR(device->SetVertexShaderConstantI(0, value, 1), D3D_OK);
+      CHECK_HR(device->SetVertexShaderConstantI(integer_register, value, 1), D3D_OK);
       break;
     }
     case Family::VsBool: {
       const BOOL value[1] = {changed ? TRUE : FALSE};
-      CHECK_HR(device->SetVertexShaderConstantB(0, value, 1), D3D_OK);
+      CHECK_HR(device->SetVertexShaderConstantB(integer_register, value, 1), D3D_OK);
       break;
     }
     case Family::PsFloat: {
       const float changed_value[4] = {0.10f, 0.20f, 0.12f, 1.0f};
       const float base_value[4] = {0.08f, 0.12f, 0.16f, 1.0f};
       const float *value = changed ? changed_value : base_value;
-      CHECK_HR(device->SetPixelShaderConstantF(0, value, 1), D3D_OK);
+      CHECK_HR(device->SetPixelShaderConstantF(ps_float_register, value, 1), D3D_OK);
       break;
     }
     case Family::PsInt: {
       const int value[4] = {changed ? 1 : 0, 0, 0, 0};
-      CHECK_HR(device->SetPixelShaderConstantI(0, value, 1), D3D_OK);
+      CHECK_HR(device->SetPixelShaderConstantI(integer_register, value, 1), D3D_OK);
       break;
     }
     case Family::PsBool: {
       const BOOL value[1] = {changed ? TRUE : FALSE};
-      CHECK_HR(device->SetPixelShaderConstantB(0, value, 1), D3D_OK);
+      CHECK_HR(device->SetPixelShaderConstantB(integer_register, value, 1), D3D_OK);
       break;
     }
   }
 }
 
 void check_family_value(IDirect3DDevice9 *device, Family family, bool changed,
-                        const char *checkpoint) {
+                        const char *checkpoint, bool edge_layout = false) {
+  const UINT vs_float_register = edge_layout ? 255u : 0u;
+  const UINT ps_float_register = edge_layout ? 223u : 0u;
+  const UINT integer_register = edge_layout ? 15u : 0u;
   switch (family) {
     case Family::VsFloat: {
       const float expected[4] = {
           changed ? 0.20f : 0.08f, changed ? 0.10f : 0.12f,
           changed ? 0.15f : 0.16f, 1.0f};
       float actual[4] = {};
-      CHECK_HR(device->GetVertexShaderConstantF(0, actual, 1), D3D_OK);
+      CHECK_HR(device->GetVertexShaderConstantF(vs_float_register, actual, 1), D3D_OK);
       check_at(__LINE__, std::memcmp(actual, expected, sizeof(actual)) == 0,
                checkpoint);
       break;
@@ -402,7 +475,7 @@ void check_family_value(IDirect3DDevice9 *device, Family family, bool changed,
     case Family::VsInt: {
       const int expected[4] = {changed ? 1 : 0, 0, 0, 0};
       int actual[4] = {};
-      CHECK_HR(device->GetVertexShaderConstantI(0, actual, 1), D3D_OK);
+      CHECK_HR(device->GetVertexShaderConstantI(integer_register, actual, 1), D3D_OK);
       check_at(__LINE__, std::memcmp(actual, expected, sizeof(actual)) == 0,
                checkpoint);
       break;
@@ -410,7 +483,7 @@ void check_family_value(IDirect3DDevice9 *device, Family family, bool changed,
     case Family::VsBool: {
       const BOOL expected[1] = {changed ? TRUE : FALSE};
       BOOL actual[1] = {};
-      CHECK_HR(device->GetVertexShaderConstantB(0, actual, 1), D3D_OK);
+      CHECK_HR(device->GetVertexShaderConstantB(integer_register, actual, 1), D3D_OK);
       check_at(__LINE__, std::memcmp(actual, expected, sizeof(actual)) == 0,
                checkpoint);
       break;
@@ -420,7 +493,7 @@ void check_family_value(IDirect3DDevice9 *device, Family family, bool changed,
           changed ? 0.10f : 0.08f, changed ? 0.20f : 0.12f,
           changed ? 0.12f : 0.16f, 1.0f};
       float actual[4] = {};
-      CHECK_HR(device->GetPixelShaderConstantF(0, actual, 1), D3D_OK);
+      CHECK_HR(device->GetPixelShaderConstantF(ps_float_register, actual, 1), D3D_OK);
       check_at(__LINE__, std::memcmp(actual, expected, sizeof(actual)) == 0,
                checkpoint);
       break;
@@ -428,7 +501,7 @@ void check_family_value(IDirect3DDevice9 *device, Family family, bool changed,
     case Family::PsInt: {
       const int expected[4] = {changed ? 1 : 0, 0, 0, 0};
       int actual[4] = {};
-      CHECK_HR(device->GetPixelShaderConstantI(0, actual, 1), D3D_OK);
+      CHECK_HR(device->GetPixelShaderConstantI(integer_register, actual, 1), D3D_OK);
       check_at(__LINE__, std::memcmp(actual, expected, sizeof(actual)) == 0,
                checkpoint);
       break;
@@ -436,7 +509,7 @@ void check_family_value(IDirect3DDevice9 *device, Family family, bool changed,
     case Family::PsBool: {
       const BOOL expected[1] = {changed ? TRUE : FALSE};
       BOOL actual[1] = {};
-      CHECK_HR(device->GetPixelShaderConstantB(0, actual, 1), D3D_OK);
+      CHECK_HR(device->GetPixelShaderConstantB(integer_register, actual, 1), D3D_OK);
       check_at(__LINE__, std::memcmp(actual, expected, sizeof(actual)) == 0,
                checkpoint);
       break;
@@ -451,10 +524,17 @@ bool draw_slot(Fixture &fixture, unsigned row, unsigned slot, unsigned path) {
   }
   if (path == 1) {
     return SUCCEEDED(fixture.device->DrawIndexedPrimitive(
-        D3DPT_TRIANGLELIST, 0, 0, kRows * 4u * 3u, vertex, 1));
+        D3DPT_TRIANGLELIST, 0, 0, fixture.rows * 4u * 3u, vertex, 1));
   }
-  Vertex up[3] = {make_vertex(row, slot, 0), make_vertex(row, slot, 1),
-                  make_vertex(row, slot, 2)};
+  Vertex up[3] = {make_vertex(row, slot, 0, fixture.height),
+                  make_vertex(row, slot, 1, fixture.height),
+                  make_vertex(row, slot, 2, fixture.height)};
+  if (path == 3 && fixture.edge_layout) {
+    const std::uint16_t indices[3] = {0u, 1u, 2u};
+    return SUCCEEDED(fixture.device->DrawIndexedPrimitiveUP(
+        D3DPT_TRIANGLELIST, 0, 3, 1, indices, D3DFMT_INDEX16, up,
+        sizeof(Vertex)));
+  }
   return SUCCEEDED(fixture.device->DrawPrimitiveUP(
       D3DPT_TRIANGLELIST, 1, up, sizeof(Vertex)));
 }
@@ -502,18 +582,31 @@ void print_and_check_row(const char *path, Family family, unsigned row,
   }
 }
 
-void run_pixel_oracle() {
+void print_edge_layout_receipt(const Fixture &fixture) {
+  std::printf("selected-layout: edge\n");
+  std::printf("layout: edge registers=VS c255/i15/b15 PS c223/i15/b15 scales=c4/c5\n");
+  std::printf("paths: vb,indexed,up,indexed_up index_format=INDEX16 draws=%u rows=%u\n",
+      fixture.path_count * kRowsPerPath * 4u,
+      fixture.path_count * kRowsPerPath);
+}
+
+void run_pixel_oracle(bool edge_layout = false) {
   const char *selected = std::getenv("DXMT9_PE_INLINE_CONST_DELTA");
   std::printf("selected-env: DXMT9_PE_INLINE_CONST_DELTA=%s (reported only)\n",
       selected ? selected : "<unset>");
-  std::printf("scope: real PE COM shader execution; paths=DrawPrimitive,DrawIndexedPrimitive,DrawPrimitiveUP\n");
+  if (edge_layout) {
+    std::printf("scope: real PE COM shader execution; paths=DrawPrimitive,DrawIndexedPrimitive,DrawPrimitiveUP,DrawIndexedPrimitiveUP\n");
+  } else {
+    std::printf("scope: real PE COM shader execution; paths=DrawPrimitive,DrawIndexedPrimitive,DrawPrimitiveUP\n");
+  }
 
   Fixture fixture;
-  if (!fixture.init()) return;
+  if (!fixture.init(edge_layout)) return;
+  if (edge_layout) print_edge_layout_receipt(fixture);
 
   CHECK_HR(fixture.device->SetRenderTarget(0, fixture.render_target), D3D_OK);
   CHECK_HR(fixture.device->SetDepthStencilSurface(nullptr), D3D_OK);
-  const D3DVIEWPORT9 viewport = {0, 0, kWidth, kHeight, 0.0f, 1.0f};
+  const D3DVIEWPORT9 viewport = {0, 0, kWidth, fixture.height, 0.0f, 1.0f};
   CHECK_HR(fixture.device->SetViewport(&viewport), D3D_OK);
   CHECK_HR(fixture.device->SetVertexDeclaration(fixture.declaration), D3D_OK);
   CHECK_HR(fixture.device->SetVertexShader(fixture.vs), D3D_OK);
@@ -527,11 +620,11 @@ void run_pixel_oracle() {
 
   CHECK_HR(fixture.device->SetStreamSource(0, fixture.vertices, 0, sizeof(Vertex)), D3D_OK);
   CHECK_HR(fixture.device->SetIndices(fixture.indices), D3D_OK);
-  set_baseline_constants(fixture.device);
+  set_baseline_constants(fixture.device, edge_layout);
   CHECK_HR(fixture.device->BeginScene(), D3D_OK);
 
-  for (unsigned path = 0; path < kPathCount; ++path) {
-    if (path == 2) {
+  for (unsigned path = 0; path < fixture.path_count; ++path) {
+    if (path >= 2) {
       CHECK_HR(fixture.device->SetStreamSource(0, nullptr, 0, 0), D3D_OK);
       CHECK_HR(fixture.device->SetIndices(nullptr), D3D_OK);
     } else {
@@ -543,9 +636,9 @@ void run_pixel_oracle() {
       const unsigned row = path * kRowsPerPath + family_index;
       check_draw_hr(draw_slot(fixture, row, 0, path), __LINE__);
       check_draw_hr(draw_slot(fixture, row, 1, path), __LINE__);
-      set_family_value(fixture.device, family, true);
+      set_family_value(fixture.device, family, true, edge_layout);
       check_draw_hr(draw_slot(fixture, row, 2, path), __LINE__);
-      set_family_value(fixture.device, family, false);
+      set_family_value(fixture.device, family, false, edge_layout);
       check_draw_hr(draw_slot(fixture, row, 3, path), __LINE__);
       // Every case ends at A, so the next family starts from the known baseline.
     }
@@ -557,8 +650,9 @@ void run_pixel_oracle() {
   CHECK_HR(fixture.readback->LockRect(&locked, nullptr, D3DLOCK_READONLY), D3D_OK);
   CHECK(locked.pBits != nullptr);
   if (locked.pBits) {
-    for (unsigned path = 0; path < kPathCount; ++path) {
-      const char *path_name = path == 0 ? "vb" : (path == 1 ? "indexed" : "up");
+    for (unsigned path = 0; path < fixture.path_count; ++path) {
+      const char *path_name = path == 0 ? "vb" :
+          (path == 1 ? "indexed" : (path == 2 ? "up" : "indexed_up"));
       for (unsigned family_index = 0; family_index < 6; ++family_index) {
         print_and_check_row(path_name, static_cast<Family>(family_index),
             path * kRowsPerPath + family_index, locked, false);
@@ -568,19 +662,24 @@ void run_pixel_oracle() {
   }
 }
 
-void run_stateblock_oracle() {
+void run_stateblock_oracle(bool edge_layout = false) {
   std::printf("selected-case: stateblock\n");
   const char *selected = std::getenv("DXMT9_PE_INLINE_CONST_DELTA");
   std::printf("selected-env: DXMT9_PE_INLINE_CONST_DELTA=%s (reported only)\n",
       selected ? selected : "<unset>");
-  std::printf("stateblock mode: expected slots=A,B,A,A; paths=DrawPrimitive,DrawIndexedPrimitive,DrawPrimitiveUP\n");
+  if (edge_layout) {
+    std::printf("stateblock mode: expected slots=A,B,A,A; paths=DrawPrimitive,DrawIndexedPrimitive,DrawPrimitiveUP,DrawIndexedPrimitiveUP\n");
+  } else {
+    std::printf("stateblock mode: expected slots=A,B,A,A; paths=DrawPrimitive,DrawIndexedPrimitive,DrawPrimitiveUP\n");
+  }
 
   Fixture fixture;
-  if (!fixture.init()) return;
+  if (!fixture.init(edge_layout)) return;
+  if (edge_layout) print_edge_layout_receipt(fixture);
 
   CHECK_HR(fixture.device->SetRenderTarget(0, fixture.render_target), D3D_OK);
   CHECK_HR(fixture.device->SetDepthStencilSurface(nullptr), D3D_OK);
-  const D3DVIEWPORT9 viewport = {0, 0, kWidth, kHeight, 0.0f, 1.0f};
+  const D3DVIEWPORT9 viewport = {0, 0, kWidth, fixture.height, 0.0f, 1.0f};
   CHECK_HR(fixture.device->SetViewport(&viewport), D3D_OK);
   CHECK_HR(fixture.device->SetVertexDeclaration(fixture.declaration), D3D_OK);
   CHECK_HR(fixture.device->SetVertexShader(fixture.vs), D3D_OK);
@@ -592,10 +691,10 @@ void run_stateblock_oracle() {
   CHECK_HR(fixture.device->Clear(0, nullptr, D3DCLEAR_TARGET,
       D3DCOLOR_ARGB(255, 0, 0, 0), 1.0f, 0), D3D_OK);
 
-  set_baseline_constants(fixture.device);
+  set_baseline_constants(fixture.device, edge_layout);
   CHECK_HR(fixture.device->BeginScene(), D3D_OK);
-  for (unsigned path = 0; path < kPathCount; ++path) {
-    if (path == 2) {
+  for (unsigned path = 0; path < fixture.path_count; ++path) {
+    if (path >= 2) {
       // UP is deliberately standalone: it has no stream or index binding.
       CHECK_HR(fixture.device->SetStreamSource(0, nullptr, 0, 0), D3D_OK);
       CHECK_HR(fixture.device->SetIndices(nullptr), D3D_OK);
@@ -606,16 +705,16 @@ void run_stateblock_oracle() {
     for (unsigned family_index = 0; family_index < 6; ++family_index) {
       const Family family = static_cast<Family>(family_index);
       const unsigned row = path * kRowsPerPath + family_index;
-      set_baseline_constants(fixture.device);
+      set_baseline_constants(fixture.device, edge_layout);
       check_family_value(fixture.device, family, false,
-          "stateblock baseline family bytes");
+          "stateblock baseline family bytes", edge_layout);
 
       HRESULT begin_hr = fixture.device->BeginStateBlock();
       CHECK_HR(begin_hr, D3D_OK);
       if (FAILED(begin_hr)) continue;
-      set_family_value(fixture.device, family, true);
+      set_family_value(fixture.device, family, true, edge_layout);
       check_family_value(fixture.device, family, false,
-          "stateblock recording leaves live family at A");
+          "stateblock recording leaves live family at A", edge_layout);
 
       IDirect3DStateBlock9 *state_block = nullptr;
       const HRESULT end_hr = fixture.device->EndStateBlock(&state_block);
@@ -626,28 +725,28 @@ void run_stateblock_oracle() {
         continue;
       }
       check_family_value(fixture.device, family, false,
-          "stateblock EndStateBlock leaves live family at A");
+          "stateblock EndStateBlock leaves live family at A", edge_layout);
 
       check_draw_hr(draw_slot(fixture, row, 0, path), __LINE__);
       CHECK_HR(state_block->Apply(), D3D_OK);
       check_family_value(fixture.device, family, true,
-          "stateblock Apply restores captured B");
+          "stateblock Apply restores captured B", edge_layout);
       check_draw_hr(draw_slot(fixture, row, 1, path), __LINE__);
 
-      set_family_value(fixture.device, family, false);
+      set_family_value(fixture.device, family, false, edge_layout);
       check_family_value(fixture.device, family, false,
-          "stateblock explicit A is visible before Capture");
+          "stateblock explicit A is visible before Capture", edge_layout);
       check_draw_hr(draw_slot(fixture, row, 2, path), __LINE__);
 
       CHECK_HR(state_block->Capture(), D3D_OK);
       check_family_value(fixture.device, family, false,
-          "stateblock Capture records live A");
-      set_family_value(fixture.device, family, true);
+          "stateblock Capture records live A", edge_layout);
+      set_family_value(fixture.device, family, true, edge_layout);
       check_family_value(fixture.device, family, true,
-          "stateblock pending set exposes B before Apply");
+          "stateblock pending set exposes B before Apply", edge_layout);
       CHECK_HR(state_block->Apply(), D3D_OK);
       check_family_value(fixture.device, family, false,
-          "stateblock Apply restores captured A");
+          "stateblock Apply restores captured A", edge_layout);
       check_draw_hr(draw_slot(fixture, row, 3, path), __LINE__);
 
       // The state block must not outlive the fixture's device/resource teardown.
@@ -661,8 +760,9 @@ void run_stateblock_oracle() {
   CHECK_HR(fixture.readback->LockRect(&locked, nullptr, D3DLOCK_READONLY), D3D_OK);
   CHECK(locked.pBits != nullptr);
   if (locked.pBits) {
-    for (unsigned path = 0; path < kPathCount; ++path) {
-      const char *path_name = path == 0 ? "vb" : (path == 1 ? "indexed" : "up");
+    for (unsigned path = 0; path < fixture.path_count; ++path) {
+      const char *path_name = path == 0 ? "vb" :
+          (path == 1 ? "indexed" : (path == 2 ? "up" : "indexed_up"));
       for (unsigned family_index = 0; family_index < 6; ++family_index) {
         print_and_check_row(path_name, static_cast<Family>(family_index),
             path * kRowsPerPath + family_index, locked, true);
@@ -681,10 +781,18 @@ int main() {
         selected_case);
     return EXIT_FAILURE;
   }
+  const char *selected_layout =
+      std::getenv("DXMT9_TEST_INLINE_CONSTANT_LAYOUT");
+  if (selected_layout && std::strcmp(selected_layout, "edge") != 0) {
+    std::printf("FAIL: invalid DXMT9_TEST_INLINE_CONSTANT_LAYOUT=%s\n",
+        selected_layout);
+    return EXIT_FAILURE;
+  }
+  const bool edge_layout = selected_layout != nullptr;
   if (selected_case) {
-    run_stateblock_oracle();
+    run_stateblock_oracle(edge_layout);
   } else {
-    run_pixel_oracle();
+    run_pixel_oracle(edge_layout);
   }
   if (failures) {
     std::printf("inline_constants: %d failure(s)\n", failures);

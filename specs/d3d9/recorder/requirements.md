@@ -588,6 +588,10 @@ producer event/source interval; role byte counts
 exclude inter-table alignment, which is reconstructed from canonical offsets.
 An overflow or invalid checked arithmetic result rejects before retention or
 publication.
+Each borrowed transport role must carry a zero address token if and only if
+its byte extent is zero, including empty spans backed by a nonempty arena.
+An invalid selected emission must not select a different, unmaterialized
+transport representation or enter the bridge with an empty outer chunk.
 
 **R-CORE-REC-7.7** The transport handoff must expose exactly three ordered
 roles: `ReserveRole`, `AdoptRole`, and `EmitRole`. `ReserveAll` reserves every

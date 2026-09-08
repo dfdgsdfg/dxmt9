@@ -11,6 +11,13 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Backend Layer
 
+[H271](../../docs/perfomance/present-pacing/present-pacing-pe-transport-inline-boundaries.271.md)
+extends R-BACK-2.52 with sampled SM3 VS c255/PS c223, i15/b15 and indexed-UP
+coverage. A separate PE segmented empty-role defect is reproduced, fixed and
+pinned before performance qualification; 12 fresh post-fix processes preserve
+pixels and append counts across the tested transports/replay policies. This
+does not close all layouts/consumers/capture or either default-promotion gate.
+
 | Area | Status | Notes |
 |---|---|---|
 | Application-to-Replay handoff economy (`R-BACK-2.51(j)`, `R-ARCH-6.12`–`6.17`) | Partial | The ABI/thread distinction and relocation gates are specified; existing synchronous validation/import, backing capture, and lane-specific marking remain unchanged. Complete phase/population attribution and per-relocation composed safety/progress, failure, locality, and economy evidence remain open. The owning tracker is [architecture gap](../archicture/gap.md#cpu-handoff-contract). |

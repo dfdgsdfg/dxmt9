@@ -10,6 +10,19 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## End-to-end immutable source composition
 
+### Segmented empty-role and high-register boundaries (2026-09-08)
+
+R-CORE-REC-7.6's absent-role token rule now has a failing-then-passing native
+production-owner pin, including caller-owned non-null empty spans, ExactFixed
+role parity and the production segmented-validity predicate. H271 reproduces
+the resulting empty-outer-chunk/readback failure on both PE widths and fixes
+the emitter plus selected-seal guard. Twelve fresh post-fix PE processes pass
+1,152 exact SM3 edge-register/indexed-UP samples across inline OFF/ON,
+contiguous/segmented worker and segmented sync replay. Existing TLC passes;
+it does not prove role bytes or final pixels. This is an absent-handle pin,
+not an independent zero-payload semantic case or general consumer/transport
+promotion. See [H271](../../docs/perfomance/present-pacing/present-pacing-pe-transport-inline-boundaries.271.md).
+
 ### PE private selection and fused retention (2026-09-06)
 
 R-CORE-REC-7.20–7.21 require producer-issued immutable selection and a fused,

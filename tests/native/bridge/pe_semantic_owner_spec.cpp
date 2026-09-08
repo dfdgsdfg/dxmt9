@@ -2029,6 +2029,70 @@ void emptyClearSpanMatchesCanonicalAndResetReuse() {
   canonical.resetAndReleaseRetained();
 }
 
+void segmentedAbsentRoleTokensMatchExactFixed() {
+  Owner owner;
+  auto clear = base(PeSemanticProducerKind::Clear, 1u, 1u);
+  check(owner.admit(clear), "zero-handle clear admits into the semantic owner");
+
+  PeSemanticExactFixedEmission exact{};
+  check(owner.emitExactFixed(exact) && exact.valid(),
+        "zero-handle clear emits through ExactFixed");
+
+  const auto roleTokenMatchesExtent = [](const D9CWireHandle& token,
+                                         std::uint32_t bytes) noexcept {
+    return (bytes == 0u) == (d9cWireHandleValue(token) == 0u);
+  };
+  check(roleTokenMatchesExtent(exact.transport.records,
+                               exact.transport.recordBytes) &&
+            roleTokenMatchesExtent(exact.transport.handles,
+                                   exact.transport.handleBytes) &&
+            roleTokenMatchesExtent(exact.transport.payload,
+                                   exact.transport.payloadBytes),
+        "ExactFixed normalizes every absent role token");
+
+  PeSemanticSegmentedEmission alias{};
+  check(owner.emitSegmented(alias) && alias.valid() &&
+            ownerSegmentedRolesEqualExact(exact, alias) &&
+            SegmentedCommandChunk{.transport = alias.transport,
+                                  .wireBytes = alias.wireBytes}
+                .valid(),
+        "zero-handle clear aliases the same role bytes as ExactFixed");
+  check(roleTokenMatchesExtent(alias.transport.records,
+                               alias.transport.recordBytes) &&
+            roleTokenMatchesExtent(alias.transport.handles,
+                                   alias.transport.handleBytes) &&
+            roleTokenMatchesExtent(alias.transport.payload,
+                                   alias.transport.payloadBytes),
+        "aliased segmented output normalizes every absent role token");
+
+  std::array<std::byte, 256u> records{};
+  std::array<std::byte, 256u> payload{};
+  std::byte emptyHandleSentinel{0x5a};
+  const std::span<std::byte> nonNullEmptyHandles(&emptyHandleSentinel, 0u);
+  PeSemanticSegmentedEmission external{};
+  check(owner.emitSegmented(records, nonNullEmptyHandles, payload, external) &&
+            external.valid() && ownerSegmentedRolesEqualExact(exact, external) &&
+            SegmentedCommandChunk{.transport = external.transport,
+                                  .wireBytes = external.wireBytes}
+                .valid(),
+        "external segmented output accepts a non-null zero-length handle role");
+  check(emptyHandleSentinel == std::byte{0x5a} &&
+            roleTokenMatchesExtent(external.transport.records,
+                                   external.transport.recordBytes) &&
+            roleTokenMatchesExtent(external.transport.handles,
+                                   external.transport.handleBytes) &&
+            roleTokenMatchesExtent(external.transport.payload,
+                                   external.transport.payloadBytes),
+        "external segmented output preserves the absent-role token invariant");
+  auto malformed = external.transport;
+  malformed.handles = toWireHandle(&emptyHandleSentinel);
+  check(!SegmentedCommandChunk{.transport = malformed,
+                               .wireBytes = external.wireBytes}
+                  .valid(),
+        "production segmented validity rejects a nonzero empty-role token");
+  owner.reset();
+}
+
 void largeCanonicalPayloadSurvivesRepeatedExactEmission() {
   DefaultOwner owner;
   std::array<std::byte, 4096u> constants{};
@@ -6926,6 +6990,7 @@ int main(int argc, char** argv) {
     classificationAndLifetime();
     partialRectClearMatchesCanonicalBuilder();
     emptyClearSpanMatchesCanonicalAndResetReuse();
+    segmentedAbsentRoleTokensMatchExactFixed();
     largeCanonicalPayloadSurvivesRepeatedExactEmission();
     exactPaddingWriterAdversarial();
     preparedAppendAuthorityAndSealBounds();

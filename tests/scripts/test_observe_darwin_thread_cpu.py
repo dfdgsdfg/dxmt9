@@ -30,10 +30,10 @@ def row(index=0):
     return dict(status="sample", snapshot=snapshot(index), frame_before=frame, frame_after=frame.copy())
 
 
-def qualify_envelope_rows(rows):
+def qualify_envelope_rows(rows, transport=1):
     for value in rows:
         snap = value['snapshot']
-        value.setdefault('selector', dict(device=1, native_tid=2**40+7, transport=1))
+        value.setdefault('selector', dict(device=1, native_tid=2**40+7, transport=transport))
         value.setdefault('log_metadata', dict(device=4, inode=9, modified_unix_ns=100))
         value.setdefault('observer_begin_ns', snap['monotonic_begin_ns'])
         value.setdefault('observer_end_ns', snap['monotonic_end_ns'])
@@ -107,6 +107,23 @@ class ReceiptTests(unittest.TestCase):
             observer.summarize([first, second], 100, 300)
         report = observer.summarize([first, row(1)], 100, 300)
         self.assertIsNone(report['selector'])
+
+    def test_transport_two_is_supported_and_mixed_or_typed_transport_rejected(self):
+        rows = qualify_envelope_rows([row(0), row(1), row(2)], transport=2)
+        report = observer.summarize_envelope(rows, 100, 300)
+        self.assertEqual(report['selector']['transport'], 2)
+        first, second = row(0), row(1)
+        first['selector'] = dict(device=1, native_tid=2**40+7, transport=1)
+        second['selector'] = dict(device=1, native_tid=2**40+7, transport=2)
+        with self.assertRaises(ValueError):
+            observer.summarize([first, second], 100, 300)
+        second['selector']['transport'] = True
+        with self.assertRaises(ValueError):
+            observer.summarize([first, second], 100, 300)
+        for expected in (0, 3, True, False):
+            with self.subTest(expected=expected), self.assertRaises(ValueError):
+                observer.Observer(Path('unused'), Path('unused'), 42,
+                                  expected_transport=expected)
 
     def test_envelope_includes_unstable_interior_and_reports_exclusions(self):
         unstable = row(1)
@@ -219,6 +236,27 @@ class LogTests(unittest.TestCase):
     def append(self, text):
         with self.path.open('a') as stream:
             stream.write(text)
+
+    def _negotiated_log(self, transport):
+        self.path.write_text(
+            f'command chunk negotiation selected canonical transport=0x{transport:x}\n'
+            'unix_commit_chunk_entry device=0x123 native_tid=0x10000000007\n')
+
+    def test_observer_accepts_requested_transport_two_and_emits_it(self):
+        self._negotiated_log(2)
+        result = mock.Mock(returncode=0, stdout=json.dumps(snapshot()), stderr='')
+        collector = observer.Observer(Path('unused'), self.path, 42, expected_transport=2)
+        with mock.patch.object(observer.subprocess, 'run', return_value=result), \
+                mock.patch.object(observer.time, 'clock_gettime_ns',
+                                  side_effect=[999_000_000, 1_002_000_000]):
+            sample = collector.sample()
+        self.assertEqual(sample['selector']['transport'], 2)
+
+    def test_observer_rejects_requested_actual_transport_mismatch(self):
+        self._negotiated_log(1)
+        collector = observer.Observer(Path('unused'), self.path, 42, expected_transport=2)
+        with self.assertRaisesRegex(ValueError, 'expected device negotiation'):
+            collector.sample()
 
     def test_incremental_marker_frame_and_partial_line(self):
         self.append('[dxmt9-device] info: unix_commit_chunk_entry device=0x123 native_tid=0x10000000007')

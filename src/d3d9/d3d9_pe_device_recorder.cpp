@@ -1263,20 +1263,16 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(
     dxmt9::d3d9::pe::SegmentedCommandChunk segmented{};
     dxmt9::d3d9::pe::PeSemanticSegmentedEmission semanticSegmented{};
     dxmt9::d3d9::pe::PeSemanticExactFixedEmission semanticExact{};
-    if (useSegmented) {
-        if (!semanticOwner->emitSegmented(semanticSegmented)) {
-            const auto sealPlan = dxmt9::d3d9::pe::settleRecorderCommit({
-                .phase = dxmt9::d3d9::pe::RecorderCommitPhase::Unsealed,
-                .event = dxmt9::d3d9::pe::RecorderCommitEvent::SealFailed,
-            });
-            (void)sealPlan;
-            (void)recorderState_.chunkTransaction.recordSealResult(false);
-            if (!recordCapacityPost(false)) return D3DERR_DEVICELOST;
-            return D3DERR_INVALIDCALL;
-        }
+    const bool emitted = useSegmented
+        ? semanticOwner->emitSegmented(semanticSegmented)
+        : semanticOwner->emitExactFixed(semanticExact);
+    if (useSegmented && emitted) {
         segmented.transport = semanticSegmented.transport;
         segmented.wireBytes = semanticSegmented.wireBytes;
-    } else if (!semanticOwner->emitExactFixed(semanticExact)) {
+    }
+    // A rejected segmented descriptor is a failed seal, not permission to
+    // submit the never-emitted ExactFixed alternative with zero record bytes.
+    if (!emitted || (useSegmented && !segmented.valid())) {
         const auto sealPlan = dxmt9::d3d9::pe::settleRecorderCommit({
             .phase = dxmt9::d3d9::pe::RecorderCommitPhase::Unsealed,
             .event = dxmt9::d3d9::pe::RecorderCommitEvent::SealFailed,
@@ -1286,8 +1282,8 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(
         if (!recordCapacityPost(false)) return D3DERR_DEVICELOST;
         return D3DERR_INVALIDCALL;
     }
-    if ((segmented.valid() && segmented.wireBytes > 0xffffffffull) ||
-        (!segmented.valid() && semanticExact.wireBytes > 0xffffffffull)) {
+    if ((useSegmented && segmented.wireBytes > 0xffffffffull) ||
+        (!useSegmented && semanticExact.wireBytes > 0xffffffffull)) {
         const auto sealPlan = dxmt9::d3d9::pe::settleRecorderCommit({
             .phase = dxmt9::d3d9::pe::RecorderCommitPhase::Unsealed,
             .event = dxmt9::d3d9::pe::RecorderCommitEvent::SealFailed,
@@ -1342,13 +1338,13 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(
     }
     D9CCommandChunk chunk{};
     chunk.version = D9C_COMMAND_CHUNK_VERSION;
-    if (!segmented.valid()) {
+    if (!useSegmented) {
         chunk.recordCount = semanticExact.transport.header.recordCount;
         chunk.recordBytes = semanticExact.wireBytes;
         chunk.records = toWireHandle(semanticExact.wire.data());
         chunk.handleCount = semanticExact.transport.header.handleCount;
         chunk.producerIdentity = semanticExact.transport.producerIdentity;
-    } else if (segmented.valid()) {
+    } else {
         chunk.recordCount = segmented.transport.header.recordCount;
         // This metadata chunk is used only for counters and the cold
         // settlement path; the segmented descriptor is the bridge payload.
@@ -1368,7 +1364,7 @@ HRESULT D3D9DeviceImpl::flushPendingCommandChunk(
         dxmt9::d3d9::pe::RecorderCommitPhase::Sealed;
     const HRESULT hr =
         commitPendingCommandChunk(reason, chunk, info, &settlementPhase,
-                                  segmented.valid() ? &segmented : nullptr);
+                                  useSegmented ? &segmented : nullptr);
     if (FAILED(hr) && !recordCapacityPost(false)) {
         return D3DERR_DEVICELOST;
     }

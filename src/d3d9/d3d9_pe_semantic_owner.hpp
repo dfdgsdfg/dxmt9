@@ -5034,15 +5034,18 @@ class PeSemanticBatchOwner final {
       const EmissionPlan& plan, std::span<const std::byte> records,
       std::span<const std::byte> handles, std::span<const std::byte> payload,
       std::uint64_t captureToken, std::uint64_t eventOrdinal) noexcept {
+    const auto roleToken = [](std::span<const std::byte> role) noexcept {
+      return role.empty() ? D9CWireHandle{} : toWireHandle(role.data());
+    };
     return {
         .header = plan.header,
-        .records = toWireHandle(records.data()),
+        .records = roleToken(records),
         .recordBytes = static_cast<std::uint32_t>(records.size()),
         .recordReserved = 0u,
-        .handles = toWireHandle(handles.data()),
+        .handles = roleToken(handles),
         .handleBytes = static_cast<std::uint32_t>(handles.size()),
         .handleReserved = 0u,
-        .payload = toWireHandle(payload.data()),
+        .payload = roleToken(payload),
         .payloadBytes = static_cast<std::uint32_t>(payload.size()),
         .payloadReserved = 0u,
         .renderTapeCaptureToken = captureToken,
