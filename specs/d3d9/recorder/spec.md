@@ -1202,6 +1202,18 @@ bound exhaustive native state/byte/failure tests own this refinement; existing
 recorder TLA models continue to own the unchanged ordering/lifetime protocol.
 Linked PE32/PE64 inspection and wild performance remain separate gates.
 
+Reusing call-local texture/stream selection for the full-snapshot flag is a
+permitted value refinement, not the current production choice.
+`prepareConstantRanges` reads constant storage and writes range facts only;
+it cannot mutate PendingDelta or call an invalidator. Flag publication must
+remain after successful range preparation. The selected stream mask is
+distinct from destination-dependent additions, which cannot turn a sparse
+source into a full snapshot. Failed preparation revokes authority and retry
+rebuilds these facts. The current producer retains the reread: an alternative
+must price register live ranges and spills, not just removed source accesses,
+and establish linked and measured economy on both PE widths. Evidence and
+rejected representations belong to [gap.md](gap.md).
+
 The optional owner-qualified copy/materialization ledger binds this same
 transaction at its two physical ownership boundaries. A successful admission
 records the increase in live typed record, pin, and canonical-role

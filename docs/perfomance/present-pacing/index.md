@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H273](present-pacing-pe-selected-masks.273.md) rejects three compact mask-reuse
+forms that trade the removed source reread for added PE32 spills. Original runtime
+remains; 108 native selection cases and fresh default-path GT2 CPU baselines
+are retained. No candidate Wine run or economy claim is made.
+
 [H272](present-pacing-segmented-preflight.272.md) removes the borrowed
 segmented semantic walk while retaining bounded geometry and complete owned
 validation. Native failure/conservation and 1,152 fresh PE pixel samples pass.

@@ -29,6 +29,13 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H273](present-pacing-pe-selected-masks.273.md) finds a real duplicate
+PendingDelta mask read but rejects all three reuse forms on linked PE32
+spill/address cost. Production is restored exactly, with stronger native
+selection/failure tests. Fresh default-path Info GT2 baselines are 29.549/18.070
+FPS and 31.284/52.825 ms inclusive commit-thread CPU per frame for 05/06.
+These are diagnostic baselines, not PE-exclusive costs or README promotion.
+
 [H272](present-pacing-segmented-preflight.272.md) implements the segmented
 geometry/owned-semantics split. The eight-cell native acceptance checker,
 post-copy rejection counterexample, protected spans, existing TLC, and 1,152

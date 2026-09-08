@@ -1172,6 +1172,18 @@ and pending-state effects. PE32/PE64 layout and linked-code evidence must
 establish the absence of new storage and actual removed work; source-level
 array declarations or fewer checks alone do not prove lower CPU cost.
 
+During compact source preparation, the full-snapshot flag may reuse the
+producer-selected texture and stream masks instead of rereading PendingDelta.
+This reuse is call-local and precedes destination-dependent stream expansion;
+it must not infer a full snapshot from the later destination mask. Constant
+range preparation must remain free of PendingDelta mutation and callbacks in
+this interval. A failed range preparation must not publish the flag or a usable
+plan; retry must recompute selection from the new source. No persistent mask
+cache or weakened source/retention qualification is permitted.
+Linked inspection must price added live ranges, spills and common-path work
+on both PE widths. Fewer source reads or a smaller PE64 body alone do not
+justify replacing a cheaper PE32 path.
+
 **R-CORE-REC-7.62** Public constant setters may pass call-local immutable
 nonempty range authority to the fixed-width Live consumer instead of repeating
 null and extent validation. The authority must bind the exact source pointer,

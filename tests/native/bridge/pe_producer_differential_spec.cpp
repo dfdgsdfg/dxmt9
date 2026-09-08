@@ -3619,7 +3619,10 @@ void sparsePlanFailedPreparationCleanRetry() {
   failed.inlineConstDelta = true;
   failed.shadow.writer().pendingRenderStatesTyped().set(
       renderStateSlotKey(7u), 0x507u);
-  failed.shadow.writer().pendingTextureMask() = 0x1u;
+  failed.shadow.writer().pendingTextureMask() =
+      (1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u;
+  failed.shadow.writer().pendingStreamMask() =
+      (1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u;
   failed.shadow.writer().pendingVdecl() = true;
   failed.bindings.textures[0] =
       publishedRef(&tex0, D9C_CHUNK_HANDLE_KIND_TEXTURE);
@@ -3634,12 +3637,19 @@ void sparsePlanFailedPreparationCleanRetry() {
   dxmt9::core::ThreadOwnershipToken owner;
   std::uint64_t epoch = 97u;
   pe::RecorderLockGuard guard(mutex, false);
-  check(!guard.withCapability(owner, epoch, [&](const auto& access) noexcept {
-          return pe::buildSparseStatePlan(
-              access, failed.shadow, failed.constants, failed.bindings,
-              failed.payloads, failed.params, false, failed.inlineConstDelta,
-              plan);
-        }) &&
+  bool failedSourceInaccessible = false;
+  std::uint32_t failedDrawFlags = 0u;
+  const bool failedBuild = guard.withCapability(
+      owner, epoch, [&](const auto& access) noexcept {
+        const bool built = pe::buildSparseStatePlan(
+            access, failed.shadow, failed.constants, failed.bindings,
+            failed.payloads, failed.params, false, failed.inlineConstDelta,
+            plan);
+        failedSourceInaccessible = plan.source(access) == nullptr;
+        failedDrawFlags = plan.drawFlags();
+        return built;
+      });
+  check(!failedBuild && failedSourceInaccessible && failedDrawFlags == 0u &&
             !plan.prepared() && !plan.pendingTicket().valid() &&
             !plan.destination().chunkContextFinalized,
         "partial preparation revokes the plan without publication");
@@ -3676,6 +3686,78 @@ void sparsePlanFailedPreparationCleanRetry() {
             retry.handleCount == generic.handleCount &&
             retry.payloadBytes == generic.payloadBytes,
         "clean retry matches fresh compact and generic canonical bytes");
+}
+
+void sparsePlanMaskSnapshotFlagParity() {
+  constexpr auto allTextures =
+      (1u << D9C_DRAW_PACKET_MAX_TEXTURES) - 1u;
+  constexpr auto allStreams = (1u << D9C_DRAW_PACKET_MAX_STREAMS) - 1u;
+  const std::array<std::uint32_t, 3u> maskChoices = {0u, 1u, allTextures};
+  const std::array<std::uint32_t, 3u> streamChoices = {0u, 1u, allStreams};
+  const std::array<std::uint32_t, 3u> recordTypes = {
+      D9C_COMMAND_RECORD_APPLY_STATE, D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+      D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE};
+
+  std::recursive_mutex mutex;
+  dxmt9::core::ThreadOwnershipToken owner;
+  std::uint64_t epoch = 103u;
+  pe::RecorderLockGuard guard(mutex, false);
+  pe::SparseStatePlan plan{};
+  const bool envFullSnapshot = pe::dxmt9PeFullSnapshotEnabled();
+  for (const auto recordType : recordTypes) {
+    for (const auto textureMask : maskChoices) {
+      for (const auto streamMask : streamChoices) {
+        for (const bool forceFullSnapshot : {false, true}) {
+          for (const bool inlineConstDelta : {false, true}) {
+            Fixture fixture = baseDraw(
+                "mask matrix", recordType);
+            fixture.shadow.writer().pendingTextureMask() = textureMask;
+            fixture.shadow.writer().pendingStreamMask() = streamMask;
+            fixture.forceFullSnapshot = forceFullSnapshot;
+            fixture.inlineConstDelta = inlineConstDelta;
+            const bool expectedFullSnapshot =
+                forceFullSnapshot || envFullSnapshot;
+            const auto expectedTextureMask =
+                expectedFullSnapshot ? allTextures : textureMask;
+            const auto expectedStreamMask =
+                expectedFullSnapshot ? allStreams : streamMask;
+            const bool expectedSnapshotFlag =
+                expectedFullSnapshot ||
+                (expectedTextureMask == allTextures &&
+                 expectedStreamMask == allStreams);
+            const std::string caseName =
+                "mask matrix record=" + std::to_string(recordType) +
+                " texture=" + std::to_string(textureMask) +
+                " stream=" + std::to_string(streamMask) +
+                " force=" + std::to_string(forceFullSnapshot) +
+                " inline=" + std::to_string(inlineConstDelta);
+            check(guard.withCapability(
+                      owner, epoch, [&](const auto& access) noexcept {
+                        if (!pe::buildSparseStatePlan(
+                                access, fixture.shadow, fixture.constants,
+                                fixture.bindings, fixture.payloads,
+                                fixture.params, forceFullSnapshot,
+                                inlineConstDelta, plan)) {
+                          return false;
+                        }
+                        const auto* const source = plan.source(access);
+                        const bool snapshotFlag =
+                            source &&
+                            (source->drawFlags &
+                             D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT) != 0u;
+                        return source &&
+                               source->fullSnapshot == expectedFullSnapshot &&
+                               source->textureMask == expectedTextureMask &&
+                               source->selectedStreamMask ==
+                                   expectedStreamMask &&
+                               snapshotFlag == expectedSnapshotFlag;
+                      }),
+                  caseName + ": selected masks and snapshot flag match");
+          }
+        }
+      }
+    }
+  }
 }
 
 void sparsePlanFinalizerRejectsRetainedEpochInvalidation() {
@@ -3925,6 +4007,7 @@ int main() {
     sparsePlanReuseClearsRichSourcesAndDestination();
     sparsePlanConstantFamilyABA();
     sparsePlanFailedPreparationCleanRetry();
+    sparsePlanMaskSnapshotFlagParity();
     sparsePlanFinalizerRejectsRetainedEpochInvalidation();
     upDrawUnderFullSnapshot();
     upIndexedDrawUnderFullSnapshot();

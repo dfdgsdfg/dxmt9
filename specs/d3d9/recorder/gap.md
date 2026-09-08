@@ -13,6 +13,16 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H273](../../../docs/perfomance/present-pacing/present-pacing-pe-selected-masks.273.md)
+rejects three compact mask-reuse representations after linked PE32 spill and
+common-path costs increase. Production remains unchanged. R-CORE-REC-7.61 gains
+108 native selection cases plus full-mask inline-failure/retry checks; native
+4/4 and x86_64 5/5 pass for the candidate and restored source. Fresh default
+Info GT2 baselines are 29.549/18.070 FPS and 31.284/52.825 ms inclusive native
+thread CPU per frame for 05/06, not PE-exclusive savings. 06 has 44 unreported
+tail frames. The duplicate read remains, pending a genuinely cheaper linked
+replacement; whole-record work reduction and repeatable CPU economy stay open.
+
 [H272](../../../docs/perfomance/present-pacing/present-pacing-segmented-preflight.272.md)
 implements R-CORE-REC-7.10's geometry-only borrowed preflight and complete
 owned-byte semantic validation. Native rejection/conservation, protected-span,
