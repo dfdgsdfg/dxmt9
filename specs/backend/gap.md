@@ -11,14 +11,23 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Backend Layer
 
+[H275](../../docs/perfomance/present-pacing/present-pacing-pe-cached-com-lifetime.275.md)
+closes the bounded PE Present/backbuffer cache cycle: capture-OFF controls
+confirm it was not capture-specific. Private allocation credits, parent-hold
+transitions and guarded borrowed aliases pass local native/ASan refinement,
+12 PE lifecycle processes and four PE32/PE64 OFF/ON captures with exact fresh
+source/output oracles and final Release zero. Exhaustive COM concurrency,
+broader Reset/family coverage and CPU/FPS neutrality remain separate gates.
+
 [H274](../../docs/perfomance/present-pacing/present-pacing-inline-consumers.274.md)
 corrects the R-BACK-2.52 ProcessVertices live-shadow consumer contract and
 fixes capture-origin traversal of canonically valid inline constant sections.
 Native descriptor/identity and malformed-input pins pass. Four PE32/PE64
 OFF/ON capture bundles pass exact fresh-provider source/output oracles, but
 all four PE processes still fail teardown with two device refs from the
-known swapchain/backbuffer wrapper cycle. That failure remains open; source
-content is not full capture conformance. Eight same-image Warn GT2 runs show
+known swapchain/backbuffer wrapper cycle. H275 above supplies the later scoped
+lifetime fix; H274's frozen source content alone was not full capture conformance.
+Eight same-image Warn GT2 runs show
 a small 05 FPS signal but no material total-CPU saving or repeatable 06 gain.
 Consumer/switch/failure completeness and default promotion remain open.
 

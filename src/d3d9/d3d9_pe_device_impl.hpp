@@ -848,7 +848,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         return cached;
     }
 
-    ULONG        refs_    = 1;
+    std::atomic<ULONG> refs_{1};
     D9CDevice*   dev_;
     IDirect3D9Ex* factory_;
     UINT         adapter_ = 0;
@@ -916,6 +916,8 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
      * we memoize by FVF. The map owns one reference per entry; entries
      * are released in releaseAllBound(). */
     std::unordered_map<DWORD, IDirect3DVertexDeclaration9*> fvfDeclCache_{};
+    // Borrowed from the canonical swap-chain/back-buffer allocation caches;
+    // guarded with those caches and cleared before their private credits.
     IDirect3DSurface9*         cachedBackBuffer0_ = nullptr;
     /* Per-swap-chain wrapper cache: Wine d3d9 contract
      * (test_swapchain_backbuffer_getter_policy) is that
@@ -2716,9 +2718,13 @@ public:
 
     /* ── IUnknown ── */
 
-    ULONG STDMETHODCALLTYPE AddRef()  noexcept override { return ++refs_; }
+    ULONG STDMETHODCALLTYPE AddRef()  noexcept override {
+        return refs_.fetch_add(1, std::memory_order_relaxed) + 1;
+    }
     ULONG STDMETHODCALLTYPE Release() noexcept override {
-        ULONG r = --refs_; if (!r) delete this; return r;
+        const ULONG r = refs_.fetch_sub(1, std::memory_order_acq_rel) - 1;
+        if (!r) delete this;
+        return r;
     }
     HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid, void** ppv) noexcept override;
 

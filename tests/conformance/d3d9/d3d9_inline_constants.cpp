@@ -10,6 +10,7 @@
 
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <initguid.h>
 #include <d3d9.h>
 
 #include <array>
@@ -758,6 +759,257 @@ void run_capture_oracle() {
   }
 }
 
+bool capture_enabled_for_lifecycle() {
+  const char *capture = std::getenv("DXMT9_RENDER_TAPE_CAPTURE");
+  return capture && *capture && std::strcmp(capture, "0") != 0;
+}
+
+enum class LifecycleCase {
+  Device,
+  Present,
+  PresentReset,
+};
+
+void run_present_lifecycle(LifecycleCase lifecycle_case) {
+  const bool reset_after_second_present =
+      lifecycle_case == LifecycleCase::PresentReset;
+  const bool device_only = lifecycle_case == LifecycleCase::Device;
+  const char *selector = device_only ? "device" :
+      (reset_after_second_present ? "present-reset" : "present");
+  std::printf("lifecycle-selector: %s\n", selector);
+  if (device_only) {
+    std::printf("scope: 64x64 device only; no Clear/Present/Reset; no resource getters\n");
+  } else {
+    std::printf("scope: 64x64 device; Clear->Present->Present%s; no resource getters\n",
+        reset_after_second_present ? "->Reset" : "");
+  }
+  if (capture_enabled_for_lifecycle()) {
+    std::printf("FAIL: lifecycle selector requires DXMT9_RENDER_TAPE_CAPTURE=0 or unset\n");
+    ++failures;
+    return;
+  }
+
+  HWND window = create_window();
+  if (!window) {
+    fail_at(__LINE__, "CreateWindowA failed");
+    return;
+  }
+  IDirect3D9 *d3d9 = Direct3DCreate9(D3D_SDK_VERSION);
+  if (!d3d9) {
+    fail_at(__LINE__, "Direct3DCreate9 failed");
+    DestroyWindow(window);
+    return;
+  }
+  HRESULT create_hr = E_FAIL;
+  IDirect3DDevice9 *device = create_device(d3d9, window, &create_hr);
+  if (!device) {
+    std::printf("FAIL:%d: CreateDevice(HAL,HARDWARE_VERTEXPROCESSING) returned 0x%08lx\n",
+        __LINE__, static_cast<unsigned long>(create_hr));
+    ++failures;
+    d3d9->Release();
+    DestroyWindow(window);
+    return;
+  }
+
+  if (!device_only) {
+    CHECK_HR(device->Clear(0, nullptr, D3DCLEAR_TARGET,
+        D3DCOLOR_ARGB(255, 0, 0, 0), 1.0f, 0), D3D_OK);
+    CHECK_HR(device->Present(nullptr, nullptr, nullptr, nullptr), D3D_OK);
+    CHECK_HR(device->Present(nullptr, nullptr, nullptr, nullptr), D3D_OK);
+  }
+  if (reset_after_second_present) {
+    D3DPRESENT_PARAMETERS pp = {};
+    pp.BackBufferWidth = 64;
+    pp.BackBufferHeight = 64;
+    pp.BackBufferFormat = D3DFMT_A8R8G8B8;
+    pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    pp.hDeviceWindow = window;
+    pp.Windowed = TRUE;
+    pp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+    CHECK_HR(device->Reset(&pp), D3D_OK);
+  }
+
+  const ULONG remaining = device->Release();
+  std::printf("REACHED:inline_constants:%s_final_release=%lu\n", selector,
+      static_cast<unsigned long>(remaining));
+  CHECK(remaining == 0);
+  d3d9->Release();
+  DestroyWindow(window);
+}
+
+void run_getter_lifecycle() {
+  std::printf("lifecycle-selector: getters\n");
+  std::printf("scope: 64x64 device; device/swapchain backbuffer cache identity; no Present/Reset\n");
+  if (capture_enabled_for_lifecycle()) {
+    std::printf("FAIL: lifecycle selector requires DXMT9_RENDER_TAPE_CAPTURE=0 or unset\n");
+    ++failures;
+    return;
+  }
+
+  HWND window = create_window();
+  if (!window) {
+    fail_at(__LINE__, "CreateWindowA failed");
+    return;
+  }
+  IDirect3D9 *d3d9 = Direct3DCreate9(D3D_SDK_VERSION);
+  if (!d3d9) {
+    fail_at(__LINE__, "Direct3DCreate9 failed");
+    DestroyWindow(window);
+    return;
+  }
+  HRESULT create_hr = E_FAIL;
+  IDirect3DDevice9 *device = create_device(d3d9, window, &create_hr);
+  if (!device) {
+    std::printf("FAIL:%d: CreateDevice(HAL,HARDWARE_VERTEXPROCESSING) returned 0x%08lx\n",
+        __LINE__, static_cast<unsigned long>(create_hr));
+    ++failures;
+    d3d9->Release();
+    DestroyWindow(window);
+    return;
+  }
+
+  IDirect3DSwapChain9 *swapchain = nullptr;
+  IDirect3DSurface9 *swapchain_backbuffer = nullptr;
+  IDirect3DSurface9 *device_backbuffer = nullptr;
+  IDirect3DSurface9 *render_target = nullptr;
+  CHECK_HR(device->GetSwapChain(0, &swapchain), D3D_OK);
+  if (swapchain) {
+    CHECK_HR(swapchain->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO,
+        &swapchain_backbuffer), D3D_OK);
+  }
+  CHECK_HR(device->GetBackBuffer(0, 0, D3DBACKBUFFER_TYPE_MONO,
+      &device_backbuffer), D3D_OK);
+  CHECK_HR(device->GetRenderTarget(0, &render_target), D3D_OK);
+  if (swapchain_backbuffer && device_backbuffer) {
+    CHECK(swapchain_backbuffer == device_backbuffer);
+  }
+  if (render_target && device_backbuffer) {
+    CHECK(render_target == device_backbuffer);
+  }
+
+  IDirect3DSurface9 *former_backbuffer = device_backbuffer;
+  if (render_target) render_target->Release();
+  if (device_backbuffer) device_backbuffer->Release();
+  if (swapchain_backbuffer) swapchain_backbuffer->Release();
+  if (swapchain) swapchain->Release();
+
+  IDirect3DSurface9 *reacquired_render_target = nullptr;
+  IDirect3DSwapChain9 *reacquired_swapchain = nullptr;
+  IDirect3DSurface9 *reacquired_backbuffer = nullptr;
+  CHECK_HR(device->GetRenderTarget(0, &reacquired_render_target), D3D_OK);
+  CHECK_HR(device->GetSwapChain(0, &reacquired_swapchain), D3D_OK);
+  if (reacquired_swapchain) {
+    CHECK_HR(reacquired_swapchain->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO,
+        &reacquired_backbuffer), D3D_OK);
+  }
+  if (former_backbuffer && reacquired_render_target) {
+    CHECK(reacquired_render_target == former_backbuffer);
+  }
+  if (former_backbuffer && reacquired_backbuffer) {
+    CHECK(reacquired_backbuffer == former_backbuffer);
+  }
+  if (reacquired_render_target) reacquired_render_target->Release();
+  if (reacquired_backbuffer) reacquired_backbuffer->Release();
+  if (reacquired_swapchain) reacquired_swapchain->Release();
+
+  const ULONG remaining = device->Release();
+  std::printf("REACHED:inline_constants:getters_final_release=%lu\n",
+      static_cast<unsigned long>(remaining));
+  CHECK(remaining == 0);
+  d3d9->Release();
+  DestroyWindow(window);
+}
+
+void run_additional_swapchain_lifecycle(bool swapchain_first) {
+  const char *selector = swapchain_first ? "additional-swapchain-first"
+                                         : "additional-surface-first";
+  std::printf("lifecycle-selector: %s\n", selector);
+  std::printf("scope: 64x64 device; CreateAdditionalSwapChain and repeated GetBackBuffer; release-order=%s; no Present/Reset\n",
+      swapchain_first ? "swapchain,surface,surface" : "surface,surface,swapchain");
+  if (capture_enabled_for_lifecycle()) {
+    std::printf("FAIL: lifecycle selector requires DXMT9_RENDER_TAPE_CAPTURE=0 or unset\n");
+    ++failures;
+    return;
+  }
+
+  HWND window = create_window();
+  if (!window) {
+    fail_at(__LINE__, "CreateWindowA failed");
+    return;
+  }
+  IDirect3D9 *d3d9 = Direct3DCreate9(D3D_SDK_VERSION);
+  if (!d3d9) {
+    fail_at(__LINE__, "Direct3DCreate9 failed");
+    DestroyWindow(window);
+    return;
+  }
+  HRESULT create_hr = E_FAIL;
+  IDirect3DDevice9 *device = create_device(d3d9, window, &create_hr);
+  if (!device) {
+    std::printf("FAIL:%d: CreateDevice(HAL,HARDWARE_VERTEXPROCESSING) returned 0x%08lx\n",
+        __LINE__, static_cast<unsigned long>(create_hr));
+    ++failures;
+    d3d9->Release();
+    DestroyWindow(window);
+    return;
+  }
+
+  D3DPRESENT_PARAMETERS pp = {};
+  pp.BackBufferWidth = 64;
+  pp.BackBufferHeight = 64;
+  pp.BackBufferFormat = D3DFMT_A8R8G8B8;
+  pp.SwapEffect = D3DSWAPEFFECT_DISCARD;
+  pp.hDeviceWindow = window;
+  pp.Windowed = TRUE;
+  pp.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+  IDirect3DSwapChain9 *additional = nullptr;
+  CHECK_HR(device->CreateAdditionalSwapChain(&pp, &additional), D3D_OK);
+
+  IDirect3DSurface9 *first_surface = nullptr;
+  IDirect3DSurface9 *second_surface = nullptr;
+  if (additional) {
+    CHECK_HR(additional->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO,
+        &first_surface), D3D_OK);
+    CHECK_HR(additional->GetBackBuffer(0, D3DBACKBUFFER_TYPE_MONO,
+        &second_surface), D3D_OK);
+  }
+  if (first_surface && second_surface) {
+    CHECK(first_surface == second_surface);
+  }
+
+  if (swapchain_first) {
+    if (additional) additional->Release();
+    if (first_surface) {
+      IDirect3DDevice9 *surface_device = nullptr;
+      CHECK_HR(first_surface->GetDevice(&surface_device), D3D_OK);
+      if (surface_device) {
+        CHECK(surface_device == device);
+        surface_device->Release();
+      }
+      IDirect3DSwapChain9 *surface_container = nullptr;
+      CHECK_HR(first_surface->GetContainer(IID_IDirect3DSwapChain9,
+          reinterpret_cast<void **>(&surface_container)), D3D_OK);
+      if (surface_container) {
+        CHECK(surface_container == additional);
+        surface_container->Release();
+      }
+    }
+    if (first_surface) first_surface->Release();
+    if (second_surface) second_surface->Release();
+  } else {
+    if (first_surface) first_surface->Release();
+    if (second_surface) second_surface->Release();
+    if (additional) additional->Release();
+  }
+
+  const ULONG remaining = device->Release();
+  std::printf("REACHED:inline_constants:%s_final_release=%lu\n", selector,
+      static_cast<unsigned long>(remaining));
+  CHECK(remaining == 0);
+  d3d9->Release();
+  DestroyWindow(window);
+}
+
 void run_stateblock_oracle(bool edge_layout = false) {
   std::printf("selected-case: stateblock\n");
   const char *selected = std::getenv("DXMT9_PE_INLINE_CONST_DELTA");
@@ -873,7 +1125,13 @@ void run_stateblock_oracle(bool edge_layout = false) {
 int main() {
   const char *selected_case = std::getenv("DXMT9_TEST_INLINE_CONSTANT_CASE");
   if (selected_case && std::strcmp(selected_case, "stateblock") != 0 &&
-      std::strcmp(selected_case, "capture") != 0) {
+      std::strcmp(selected_case, "capture") != 0 &&
+      std::strcmp(selected_case, "device") != 0 &&
+      std::strcmp(selected_case, "present") != 0 &&
+      std::strcmp(selected_case, "present-reset") != 0 &&
+      std::strcmp(selected_case, "getters") != 0 &&
+      std::strcmp(selected_case, "additional-surface-first") != 0 &&
+      std::strcmp(selected_case, "additional-swapchain-first") != 0) {
     std::printf("FAIL: invalid DXMT9_TEST_INLINE_CONSTANT_CASE=%s\n",
         selected_case);
     return EXIT_FAILURE;
@@ -890,9 +1148,34 @@ int main() {
         "DXMT9_TEST_INLINE_CONSTANT_LAYOUT=%s is not valid\n", selected_layout);
     return EXIT_FAILURE;
   }
+  if (selected_case &&
+      (std::strcmp(selected_case, "device") == 0 ||
+       std::strcmp(selected_case, "present") == 0 ||
+       std::strcmp(selected_case, "present-reset") == 0 ||
+       std::strcmp(selected_case, "getters") == 0 ||
+       std::strcmp(selected_case, "additional-surface-first") == 0 ||
+       std::strcmp(selected_case, "additional-swapchain-first") == 0) && selected_layout) {
+    std::printf("FAIL: lifecycle selector only supports the base layout; "
+        "DXMT9_TEST_INLINE_CONSTANT_LAYOUT=%s is not valid\n", selected_layout);
+    return EXIT_FAILURE;
+  }
   const bool edge_layout = selected_layout != nullptr;
   if (selected_case && std::strcmp(selected_case, "capture") == 0) {
     run_capture_oracle();
+  } else if (selected_case && std::strcmp(selected_case, "device") == 0) {
+    run_present_lifecycle(LifecycleCase::Device);
+  } else if (selected_case && std::strcmp(selected_case, "present") == 0) {
+    run_present_lifecycle(LifecycleCase::Present);
+  } else if (selected_case && std::strcmp(selected_case, "present-reset") == 0) {
+    run_present_lifecycle(LifecycleCase::PresentReset);
+  } else if (selected_case && std::strcmp(selected_case, "getters") == 0) {
+    run_getter_lifecycle();
+  } else if (selected_case &&
+             std::strcmp(selected_case, "additional-surface-first") == 0) {
+    run_additional_swapchain_lifecycle(false);
+  } else if (selected_case &&
+             std::strcmp(selected_case, "additional-swapchain-first") == 0) {
+    run_additional_swapchain_lifecycle(true);
   } else if (selected_case) {
     run_stateblock_oracle(edge_layout);
   } else {
@@ -905,6 +1188,14 @@ int main() {
   std::printf("PASS:inline_constants\n");
   if (selected_case && std::strcmp(selected_case, "capture") == 0) {
     std::printf("inline_constants: capture submitted (external bundle oracle required)\n");
+  } else if (selected_case &&
+             (std::strcmp(selected_case, "present") == 0 ||
+              std::strcmp(selected_case, "present-reset") == 0 ||
+              std::strcmp(selected_case, "device") == 0 ||
+              std::strcmp(selected_case, "getters") == 0 ||
+              std::strcmp(selected_case, "additional-surface-first") == 0 ||
+              std::strcmp(selected_case, "additional-swapchain-first") == 0)) {
+    std::printf("inline_constants: lifecycle passed (no pixel oracle)\n");
   } else {
     std::printf("inline_constants: passed (real PE pixel oracle)\n");
   }

@@ -3,6 +3,7 @@
  * IDirect3DVolumeTexture9 (and the inner IDirect3DVolume9 helper). */
 
 #include "d3d9_pe_child_factories.hpp"
+#include "d3d9_pe_cached_com_lifetime.hpp"
 #include "d3d9_pe_autogen_mipmap.hpp"
 #include "d3d9_pe_child_scopes.hpp"
 #include "d3d9_pe_child_validation.hpp"
@@ -775,7 +776,7 @@ static void releaseCachedLevelSurfaces(PeLevelSurfaceCache &cache) noexcept {
  */
 
 class D3D9SurfaceImpl final : public IDirect3DSurface9 {
-  ULONG refs_ = 1;
+  dxmt9::d3d9::pe::CachedComLifetime lifetime_{};
   D9CSurface *s_;
   IDirect3DDevice9 *device_;
   IUnknown *container_;
@@ -921,10 +922,6 @@ public:
     if (ownsHandle_) {
       dxmt9c_surface_release(s_);
     }
-    if (container_)
-      container_->Release();
-    if (device_)
-      device_->Release();
   }
 
   D9CSurface *raw() const { return s_; }
@@ -937,12 +934,42 @@ public:
     return wireObject_;
   }
 
-  ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
+  void acquireCacheCredit() noexcept {
+    (void)lifetime_.transition(dxmt9::d3d9::pe::CachedComAction::AcquireCache);
+  }
+  void releaseCacheCredit() noexcept {
+    const auto step =
+        lifetime_.transition(dxmt9::d3d9::pe::CachedComAction::ReleaseCache);
+    if (step.destroy) delete this;
+  }
+
+  ULONG STDMETHODCALLTYPE AddRef() noexcept override {
+    auto* const device = device_;
+    auto* const container = container_;
+    const auto step =
+        lifetime_.transition(dxmt9::d3d9::pe::CachedComAction::AcquireExternal);
+    // Cache-only resurrection is dominated by a live parent getter. Restore
+    // its holds before the getter publishes this external reference.
+    if (step.acquireParents) {
+      if (device) device->AddRef();
+      if (container) container->AddRef();
+    }
+    return step.externalRefs;
+  }
   ULONG STDMETHODCALLTYPE Release() noexcept override {
-    ULONG r = --refs_;
-    if (!r)
-      delete this;
-    return r;
+    auto* const device = device_;
+    auto* const container = container_;
+    const auto step =
+        lifetime_.transition(dxmt9::d3d9::pe::CachedComAction::ReleaseExternal);
+    // No member access after the decrement: cache eviction may delete this
+    // wrapper concurrently or reentrantly from container->Release(). The
+    // transferred parent holds keep callback contexts live through deletion.
+    if (step.destroy) delete this;
+    if (step.releaseParents) {
+      if (container) container->Release();
+      if (device) device->Release();
+    }
+    return step.externalRefs;
   }
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid,
                                            void **ppv) noexcept override {
@@ -3060,6 +3087,14 @@ IDirect3DSurface9 *CreatePeSurface(D9CSurface *surface,
   return peNewNoexcept<D3D9SurfaceImpl>(
       surface, device, container, recorder, diagnostics, trackDefaultPool,
       userMemory, userMemoryPitch);
+}
+
+void D3D9PeBackBufferCacheCredit::acquire(IDirect3DSurface9* object) noexcept {
+  static_cast<D3D9SurfaceImpl*>(object)->acquireCacheCredit();
+}
+
+void D3D9PeBackBufferCacheCredit::release(IDirect3DSurface9* object) noexcept {
+  static_cast<D3D9SurfaceImpl*>(object)->releaseCacheCredit();
 }
 
 IDirect3DTexture9 *CreatePeTexture(D9CTexture *texture,

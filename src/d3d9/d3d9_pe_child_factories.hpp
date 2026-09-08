@@ -53,3 +53,14 @@ IDirect3DSwapChain9Ex *CreatePeSwapChain(
     D9CSwapChain *, IDirect3DDevice9 *, D3D9PePresentationContext * = nullptr,
     D3D9PeDiagnosticObserver * = nullptr, bool = false,
     DWORD = 0, D3D9PeWsiBinding = {}) noexcept;
+
+// Internal canonical allocation credits. Only locally constructed wrappers
+// in the device/swap-chain caches may use these; they are not COM AddRef.
+struct D3D9PeSwapChainCacheCredit {
+  static void acquire(IDirect3DSwapChain9*) noexcept;
+  static void release(IDirect3DSwapChain9*) noexcept;
+};
+struct D3D9PeBackBufferCacheCredit {
+  static void acquire(IDirect3DSurface9*) noexcept;
+  static void release(IDirect3DSurface9*) noexcept;
+};

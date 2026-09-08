@@ -1413,6 +1413,7 @@ D9CSwapChain* D3D9DeviceImpl::borrowSwapChainHandle(UINT index) {
 }
 
 void D3D9DeviceImpl::releaseAllBound() {
+    cachedBackBuffer0_ = nullptr;
     boundAutogenTextureSlots_.clear();
     for (auto& t : textures_)   setRef(t, (IDirect3DBaseTexture9*)nullptr);
     setRef(vs_, (IDirect3DVertexShader9*)nullptr);
@@ -1434,11 +1435,10 @@ void D3D9DeviceImpl::releaseAllBound() {
     for (auto& explicitRt : rtSlotExplicit_) explicitRt = false;
     setRef(dsSurface_, (IDirect3DSurface9*)nullptr);
     dsSurfaceExplicit_ = false;
-    setRef(cachedBackBuffer0_, (IDirect3DSurface9*)nullptr);
-    for (auto& [idx, sc] : swapchainWrappers_) {
-        if (sc) sc->Release();
+    while (!swapchainWrappers_.empty()) {
+        auto entry = swapchainWrappers_.extract(swapchainWrappers_.begin());
+        D3D9PeSwapChainCacheCredit::release(entry.mapped());
     }
-    swapchainWrappers_.clear();
     for (auto& [idx, chain] : swapchainHandles_) {
         if (chain) dxmt9c_swapchain_release(chain);
     }
@@ -2413,7 +2413,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetRenderTarget(DWORD idx,
         return finishPeCall(S_OK);
     }
     if (idx == 0) {
-        setRef(cachedBackBuffer0_, (IDirect3DSurface9*)nullptr);
+        cachedBackBuffer0_ = nullptr;
     }
     const bool wasExplicit = rtSlotExplicit_[idx];
     const bool valueChanged = rtSlots_[idx] != pSurf;

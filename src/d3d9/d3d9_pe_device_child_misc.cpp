@@ -5,6 +5,7 @@
 #include "d3d9_pe_device_child.hpp"
 #include "d3d9_pe_validated_object_writer.hpp"
 #include "d3d9_pe_com_cache.hpp"
+#include "d3d9_pe_cached_com_lifetime.hpp"
 #include "d3d9_pe_stateblock_fault.hpp"
 #include "d3d9_pe_stateblock_transaction.hpp"
 #include "d3d9_pe_stateblock_value.hpp"
@@ -537,7 +538,7 @@ public:
  */
 
 class D3D9SwapChainImpl final : public IDirect3DSwapChain9Ex {
-  ULONG refs_ = 1;
+  dxmt9::d3d9::pe::CachedComLifetime lifetime_{};
   D9CSwapChain *sc_;
   IDirect3DDevice9 *device_;
   D3D9PePresentationContext *context_;
@@ -572,23 +573,40 @@ public:
 
   void setFlagsShadow(DWORD flags) { flagsShadow_ = flags; }
   ~D3D9SwapChainImpl() {
-    for (auto &entry : cachedBackBuffers_) {
-      if (entry.second)
-        entry.second->Release();
+    while (!cachedBackBuffers_.empty()) {
+      auto entry = cachedBackBuffers_.extract(cachedBackBuffers_.begin());
+      D3D9PeBackBufferCacheCredit::release(entry.mapped());
     }
-    cachedBackBuffers_.clear();
     dxmt9PeFinalizeAndReleaseWsiBinding(sc_, wsiBinding_);
     dxmt9c_swapchain_release(sc_);
-    if (device_)
-      device_->Release();
   }
 
-  ULONG STDMETHODCALLTYPE AddRef() noexcept override { return ++refs_; }
+  void acquireCacheCredit() noexcept {
+    (void)lifetime_.transition(dxmt9::d3d9::pe::CachedComAction::AcquireCache);
+  }
+  void releaseCacheCredit() noexcept {
+    const auto step =
+        lifetime_.transition(dxmt9::d3d9::pe::CachedComAction::ReleaseCache);
+    if (step.destroy) delete this;
+  }
+
+  ULONG STDMETHODCALLTYPE AddRef() noexcept override {
+    auto* const device = device_;
+    const auto step =
+        lifetime_.transition(dxmt9::d3d9::pe::CachedComAction::AcquireExternal);
+    // A zero-count cache hit is reached only from a live owning device getter.
+    if (step.acquireParents && device) device->AddRef();
+    return step.externalRefs;
+  }
   ULONG STDMETHODCALLTYPE Release() noexcept override {
-    ULONG r = --refs_;
-    if (!r)
-      delete this;
-    return r;
+    auto* const device = device_;
+    const auto step =
+        lifetime_.transition(dxmt9::d3d9::pe::CachedComAction::ReleaseExternal);
+    // Transfer the old parent hold to this call before making the wrapper
+    // cache-only. Device teardown may now reentrantly destroy this wrapper.
+    if (step.destroy) delete this;
+    if (step.releaseParents && device) device->Release();
+    return step.externalRefs;
   }
   HRESULT STDMETHODCALLTYPE QueryInterface(REFIID riid,
                                            void **ppv) noexcept override {
@@ -699,7 +717,8 @@ public:
       return nullptr;
     }
     IDirect3DSurface9* canonical = nullptr;
-    const auto insertStatus = D3D9PeCanonicalizeComCacheInsertion(
+    const auto insertStatus = D3D9PeCanonicalizeComCacheInsertion<
+        D3D9PeBackBufferCacheCredit>(
         cachedBackBuffers_, idx, surface, &canonical);
     if (insertStatus == D3D9PeComCacheInsertStatus::OutOfMemory ||
         insertStatus == D3D9PeComCacheInsertStatus::Failed) {
@@ -744,10 +763,11 @@ public:
       return E_OUTOFMEMORY;
     }
     // Wine d3d9: same idx must yield the same COM pointer across calls.
-    // Keep one internal reference so future Get* lookups can AddRef and
-    // return the cached pointer.
+    // Keep one allocation credit, not a public reference back to this
+    // container. Future live-parent getters may reacquire the public count.
     IDirect3DSurface9* canonical = nullptr;
-    const auto insertStatus = D3D9PeCanonicalizeComCacheInsertion(
+    const auto insertStatus = D3D9PeCanonicalizeComCacheInsertion<
+        D3D9PeBackBufferCacheCredit>(
         cachedBackBuffers_, idx, surface, &canonical);
     if (insertStatus == D3D9PeComCacheInsertStatus::OutOfMemory)
       return E_OUTOFMEMORY;
@@ -948,6 +968,14 @@ IDirect3DSwapChain9Ex *CreatePeSwapChain(D9CSwapChain *swapChain,
   }
   impl->setFlagsShadow(presentFlagsShadow);
   return impl;
+}
+
+void D3D9PeSwapChainCacheCredit::acquire(IDirect3DSwapChain9* object) noexcept {
+  static_cast<D3D9SwapChainImpl*>(object)->acquireCacheCredit();
+}
+
+void D3D9PeSwapChainCacheCredit::release(IDirect3DSwapChain9* object) noexcept {
+  static_cast<D3D9SwapChainImpl*>(object)->releaseCacheCredit();
 }
 
 HRESULT D3D9PeValidateVertexDecl(

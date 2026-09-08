@@ -890,7 +890,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetSwapChain(UINT index,
         return E_OUTOFMEMORY;
     }
     IDirect3DSwapChain9* canonical = nullptr;
-    const auto insertStatus = D3D9PeCanonicalizeComCacheInsertion(
+    const auto insertStatus = D3D9PeCanonicalizeComCacheInsertion<
+        D3D9PeSwapChainCacheCredit>(
         swapchainWrappers_, index,
         static_cast<IDirect3DSwapChain9*>(wrapper), &canonical);
     if (insertStatus == D3D9PeComCacheInsertStatus::OutOfMemory) {
@@ -1081,7 +1082,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetBackBuffer(UINT sc, UINT idx,
         // the rest of the device implementation (e.g. resetState
         // explicit-clear paths) without holding an extra reference
         // beyond the swap-chain cache.
-        setRef(cachedBackBuffer0_, *ppS);
+        cachedBackBuffer0_ = *ppS;
     }
     return bbHr;
 }
@@ -2013,6 +2014,9 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetRenderTarget(DWORD idx,
     const auto finishPeCall = [&](HRESULT hr) noexcept {
         return peCall.finish("GetRenderTarget", hr);
     };
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderState_.recorderMutex,
+                                 recorderState_.recorderLockRequired);
     if (!ppS) return finishPeCall(D3DERR_INVALIDCALL);
     dxmt9DeviceDebugLog("device_get_render_target device=%p idx=%u",
                         this, (unsigned)idx);

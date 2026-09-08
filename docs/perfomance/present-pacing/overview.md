@@ -29,6 +29,13 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H275](present-pacing-pe-cached-com-lifetime.275.md) separates canonical cache
+allocation credits from public COM refs. The Release-2 cycle is reproduced
+with ordinary capture-OFF Present, then eliminated in twelve PE32/PE64
+lifecycle runs. Four fresh OFF/ON captures now pass both teardown and exact
+provider source/output oracles. Bounded native/ASan and existing TLA regression
+pass; this is not exhaustive COM concurrency or a CPU/FPS improvement claim.
+
 [H274](present-pacing-inline-consumers.274.md) completes eight same-image
 Warn inline OFF/ON GT2 runs. Sample-weighted 05 FPS changes 29.413→30.124
 (+2.42%) while process CPU/frame changes −0.49%; 06 changes 18.131→18.174
@@ -36,8 +43,8 @@ Warn inline OFF/ON GT2 runs. Sample-weighted 05 FPS changes 29.413→30.124
 README-recovery proof. A new PE capture oracle exposes a variable-section
 origin-lookup defect: the cold fix passes canonical negatives and four fresh
 PE32/PE64 bundle source/output oracles. The known backbuffer wrapper cycle
-still leaves two device refs, so capture conformance remains failing and the
-inline candidate remains default-off.
+left two device refs in that frozen evidence; H275 supplies the later scoped
+fix. The inline candidate remains default-off.
 
 [H273](present-pacing-pe-selected-masks.273.md) finds a real duplicate
 PendingDelta mask read but rejects all three reuse forms on linked PE32

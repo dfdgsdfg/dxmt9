@@ -70,10 +70,22 @@ classDiagram
     IDirect3DResource9 <|-- Resources
 ```
 
-Every COM object is reference-counted. The internal implementation object is destroyed
-when the COM reference count reaches zero. Device children hold a back-reference to
-their owning device (incrementing its count), which is released in the child's
-destructor.
+Every COM object is reference-counted. Ordinary uncached children are destroyed
+at their last public release. Canonical PE swap-chain/back-buffer caches separate
+one private allocation credit from public references (`R-CORE-4.9.1`): the cache
+preserves wrapper/raw identity, not a reverse public reference to its owner.
+A publicly referenced child retains its parents; a cache-only child borrows
+them under cache-owner dominance. Allocation is destroyed only after both
+counts are zero, while logical Render Tape wrapper retirement follows that
+allocation destruction, not a transient public count of zero.
+
+Last-public-release effects transfer parent holds into local ownership before
+callbacks. Parent releases can reentrantly delete the child via cache eviction;
+no child storage may be accessed afterward. A cache-only reacquisition requires
+a live owning getter and the existing multithreaded recorder/cache guard. Atomic
+reference transitions alone do not prove that dominance or serialize cache-map
+access. Duplicate/failed insertion must consume the candidate's public and
+private credits separately, without publishing a dangling canonical alias.
 
 Factory and device objects also carry an `extended` creation flag. The concrete
 implementation may share one class for base and Ex objects, but

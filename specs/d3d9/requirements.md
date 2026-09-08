@@ -317,6 +317,20 @@ tests. The implementation may hold private backend handles for deferred
 execution, but those private retains must not change application-visible COM
 reference counts.
 
+**R-CORE-4.9.1** A canonical PE swap-chain/back-buffer cache must preserve
+wrapper allocation and generation-qualified raw identity without creating a
+parent-child public-reference cycle. Its private cache credit must not be
+included in the public COM count. A cache-only wrapper may regain a public
+reference only through a live, synchronized owning getter; the required parent
+references must be acquired before the result is published. The last public
+release must discharge those parent references exactly once, including when a
+parent release reentrantly evicts and destroys the cached child. Borrowed device
+aliases must be cleared before cache eviction. Cache teardown must detach an
+entry before releasing its credit. Native composition and actual PE tests must
+cover ordinary Present with capture disabled, getter identity, Reset, and both
+additional-swap-chain child/parent release orders; a passing capture or pixel
+oracle alone does not prove this lifetime contract.
+
 **R-CORE-4.10** Private data behaviour must be implemented by one common helper
 used by surfaces, textures, cube textures, volume textures, volumes, vertex
 buffers, and index buffers. `D3DSPD_IUNKNOWN` requires `SizeOfData ==
