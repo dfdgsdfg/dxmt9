@@ -30,6 +30,13 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H282](present-pacing-pe-scalar-writer-authority.282.md) qualifies local scalar
+writer proof reuse but withdraws the runtime candidate: linked writer code
+and PE32 stack grow, while eight GT2 spots show FPS +0.584%/−0.545% and
+process CPU/frame −0.434%/+0.279% for 05/06. These small mixed deltas establish
+neither savings nor regression. Native subset/failure pins and 192 exact
+PE32/PE64 pixel samples remain; README and production runtime are unchanged.
+
 [H281](present-pacing-pe-three-register-single-pass.281.md) removes the mismatch
 rescan in a measured one-pass candidate. Eight actual-PE processes pass 528
 cells and PE32/PE64 pixels match 192 baseline samples. Count-three changed

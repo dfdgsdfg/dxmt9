@@ -917,6 +917,18 @@ writer when a separate staging copy would only repeat source qualification.
 CapacityPre and any invalidating callback terminate the earlier proof; generic
 and ordered-control adapters retain their checked entry points.
 
+Scalar cardinality reuse includes empty categories: admission must reject
+stale zero-to-nonzero render-state, texture-stage, sampler and transform
+inventories even when an active-section visitor would skip them. A private
+writer may reuse an entry cardinality proof only across a callback-free
+interval; later retain callbacks still require the existing active-row
+pre-copy bounds and exact occurrence checks. Such reuse must not be presented
+as proof against arbitrary reentrant source mutation. Bounded native coverage
+compares all four-category presence subsets for ordinary/indexed draws with
+the independent generic builder, including preserved-prefix settlement
+failure and same-plan retry. Semantic proof and linked/runtime economy are
+separate gates; source-level check removal alone does not establish a saving.
+
 The production witness contains only facts used for admission and emission.
 Its section layout owns compact category deltas; capacity proof and logical
 quota publication read that same representation. Oracle-only unique-pin

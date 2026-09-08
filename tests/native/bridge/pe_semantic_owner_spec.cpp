@@ -1517,6 +1517,177 @@ void compactProducerRejectsStaleScalarRowCardinality() {
   }
 }
 
+void compactScalarActiveInventoryDrawDifferential() {
+  constexpr std::array<std::uint32_t, 2u> recordTypes{
+      D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+      D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE};
+  constexpr auto renderKey = renderStateSlotKey(17u);
+  constexpr auto tssStage = textureStageIndexKey(3u);
+  constexpr auto tssType = textureStageStateTypeKey(7u);
+  const auto transformKey = transformStateKey(kD3dTsProjection);
+  SamplerIndex samplerKey{};
+  SamplerStateType samplerTypeKey{};
+  check(samplerIndexKey(3u, samplerKey) && samplerStateTypeKey(5u, samplerTypeKey),
+        "compact scalar active-inventory keys are valid sparse slots");
+
+  const auto run = [&](std::uint32_t recordType, std::uint32_t mask) {
+    const bool indexed = recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+    PeHotStateShadow shadow{};
+    PeBindingView bindings{};
+    D9CBuffer indexBuffer;
+    auto writer = shadow.writer();
+    if ((mask & (1u << 0u)) != 0u) {
+      writer.pendingRenderStatesTyped().set(renderKey, 0x171u);
+    }
+    if ((mask & (1u << 1u)) != 0u) {
+      writer.pendingTssTyped().set(tssStage, tssType, 0x372u);
+    }
+    if ((mask & (1u << 2u)) != 0u) {
+      writer.pendingSamplerStatesTyped().set(samplerKey, samplerTypeKey, 0x573u);
+    }
+    D9CMatrix transform = identityTransformMatrix();
+    transform.m[0] = 2.0f;
+    transform.m[5] = 3.0f;
+    transform.m[10] = 4.0f;
+    if ((mask & (1u << 3u)) != 0u) {
+      writer.pendingTransformsTyped().set(transformKey, transform);
+    }
+    if (indexed) {
+      writer.pendingIb() = true;
+      bindings.indexBuffer = localRef<D9C_CHUNK_HANDLE_KIND_BUFFER>(
+          &indexBuffer, 0x2d70u + mask);
+    }
+
+    const auto expectedRenderCount = (mask & (1u << 0u)) != 0u;
+    const auto expectedTssCount = (mask & (1u << 1u)) != 0u;
+    const auto expectedSamplerCount = (mask & (1u << 2u)) != 0u;
+    const auto expectedTransformCount = (mask & (1u << 3u)) != 0u;
+    const auto checkPending = [&]() {
+      const auto render = shadow.pendingRenderStatesTyped();
+      const auto tss = shadow.pendingTssTyped();
+      const auto samplers = shadow.pendingSamplerStatesTyped();
+      const auto transforms = shadow.pendingTransformsTyped();
+      std::uint32_t value = 0u;
+      D9CMatrix observed{};
+      check(render.size() == expectedRenderCount &&
+                render.get(renderKey, value) == expectedRenderCount &&
+                (!expectedRenderCount || value == 0x171u) &&
+                tss.size() == expectedTssCount &&
+                tss.get(tssStage, tssType, value) == expectedTssCount &&
+                (!expectedTssCount || value == 0x372u) &&
+                samplers.size() == expectedSamplerCount &&
+                samplers.get(samplerKey, samplerTypeKey, value) ==
+                    expectedSamplerCount &&
+                (!expectedSamplerCount || value == 0x573u) &&
+                transforms.size() == expectedTransformCount &&
+                transforms.get(transformKey, observed) == expectedTransformCount &&
+                (!expectedTransformCount ||
+                 std::memcmp(&observed, &transform, sizeof(transform)) == 0),
+            "compact scalar pending inventory remains unchanged");
+    };
+    checkPending();
+
+    PeConstShadowBlock constants{};
+    PeDrawPayloads payloads{};
+    PeChunkContext chunk{};
+    PeDrawParams params{.recordType = recordType,
+                        .primitiveType = 4u,
+                        .baseVertex = -3,
+                        .minVertex = 2u,
+                        .numVertices = 19u,
+                        .startIndex = 5u,
+                        .primitiveCount = 3u};
+    SparseStatePlan plan;
+    std::recursive_mutex mutex;
+    dxmt9::core::ThreadOwnershipToken thread;
+    RecorderLockGuard guard(mutex, false);
+    const std::uint64_t epoch = 0x2d00u + recordType + mask;
+    const bool planned = guard.withCapability(
+        thread, epoch,
+        [&](const auto& access) noexcept {
+          return buildSparseStatePlan(access, shadow, constants, bindings,
+                                      payloads, params, false, false, plan) &&
+              finalizeSparseStatePlanChunkContext(access, chunk, plan);
+        });
+    check(planned, "compact scalar active inventory builds a qualified plan");
+
+    CommandChunkBuilder canonical;
+    D9CSurface prefixSurface;
+    auto prefix = base(PeSemanticProducerKind::Present, 1u, 1u);
+    prefix.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+        &prefixSurface, 0x2d80u + mask);
+    Owner owner;
+    check(owner.admit(prefix) && appendCanonicalSemanticRecord(canonical, prefix),
+          "compact scalar fixture commits its canonical prefix");
+    PeSemanticExactFixedEmission prefixEmission{};
+    check(owner.emitExactFixed(prefixEmission),
+          "compact scalar fixture emits its canonical prefix");
+    const std::vector<std::byte> prefixBytes(
+        prefixEmission.wire.begin(), prefixEmission.wire.end());
+
+    PeSparseScratch genericScratch{};
+    D9CCommandChunkWireDrawHeader genericHeader{};
+    SparseStateInput genericState{};
+    check(buildSparseState(shadow, constants, bindings, payloads, params, false,
+                           false, genericScratch, genericHeader, genericState) &&
+              appendSparseRecord(canonical, params.recordType, genericHeader,
+                                 genericState),
+          "compact scalar fixture builds the independent generic oracle");
+
+    const PeSemanticProducerKind producer =
+        recordType == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE
+            ? PeSemanticProducerKind::DrawIndexedPrimitive
+            : PeSemanticProducerKind::DrawPrimitive;
+    const auto append = [&](bool callbackResult, bool& callbackEntered) {
+      return guard.withCapability(
+          thread, epoch,
+          [&](const auto& access) noexcept {
+            return owner.tryAppendSparseStatePlan(
+                access, plan, producer, recordType,
+                D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 2u, 2u,
+                [&]() noexcept {
+                  callbackEntered = true;
+                  return callbackResult;
+                });
+          });
+    };
+
+    bool callbackEntered = false;
+    check(!append(false, callbackEntered) && callbackEntered &&
+              owner.size() == 1u && owner.retainedCount() == 1u &&
+              owner.lastAdmissionFailure() == Owner::AdmissionFailure::Settlement,
+          "compact scalar failed settlement rolls back without losing prefix");
+    PeSemanticExactFixedEmission afterFailure{};
+    check(owner.emitExactFixed(afterFailure) &&
+              afterFailure.wireBytes == prefixBytes.size() &&
+              std::equal(prefixBytes.begin(), prefixBytes.end(),
+                         afterFailure.wire.begin()),
+          "compact scalar failed settlement preserves prefix bytes");
+    checkPending();
+
+    callbackEntered = false;
+    check(append(true, callbackEntered) && callbackEntered && owner.size() == 2u,
+          "compact scalar retry settles after rollback");
+    checkPending();
+    const auto sealed = canonical.seal();
+    PeSemanticExactFixedEmission finalEmission{};
+    check(sealed.valid() && owner.emitExactFixed(finalEmission) &&
+              finalEmission.wireBytes == sealed.blob.size() &&
+              std::equal(sealed.blob.begin(), sealed.blob.end(),
+                         finalEmission.wire.begin()),
+          "compact scalar active inventory matches generic final wire");
+    owner.reset();
+    canonical.resetAndReleaseRetained();
+    check(prefixSurface.refs == 1u && indexBuffer.refs == 1u,
+          "compact scalar retry balances prefix resource references");
+  };
+  for (const auto recordType : recordTypes) {
+    for (std::uint32_t mask = 0u; mask < (1u << 4u); ++mask) {
+      run(recordType, mask);
+    }
+  }
+}
+
 void classificationAndLifetime() {
   Owner owner;
   CommandChunkBuilder canonicalBuilder;
@@ -7563,6 +7734,7 @@ int main(int argc, char** argv) {
     preparedBindingSevenFamilyMatrix();
     compactProducerBindingIdentityGuards();
     compactProducerRejectsStaleScalarRowCardinality();
+    compactScalarActiveInventoryDrawDifferential();
     classificationAndLifetime();
     partialRectClearMatchesCanonicalBuilder();
     emptyClearSpanMatchesCanonicalAndResetReuse();

@@ -13,6 +13,15 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H282](../../../docs/perfomance/present-pacing/present-pacing-pe-scalar-writer-authority.282.md)
+adds 32 scalar-category subset/failure/retry differentials under
+R-CORE-REC-7.34–7.36. Candidate native 7/7 and x86_64 4/4 pass, as do
+192 baseline-matched actual PE32/PE64 pixel samples. The callback-free
+writer-entry proof reuse is bounded; arbitrary retain reentrancy is not closed.
+Eight GT2 spots show mixed small CPU/FPS changes alongside larger linked
+writer code. Runtime is withdrawn and duplicate writer guards remain;
+repeatable net CPU economy and broader layout work removal remain open.
+
 [H273](../../../docs/perfomance/present-pacing/present-pacing-pe-selected-masks.273.md)
 rejects three compact mask-reuse representations after linked PE32 spill and
 common-path costs increase. Production remains unchanged. R-CORE-REC-7.61 gains

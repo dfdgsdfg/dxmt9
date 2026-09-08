@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H282](present-pacing-pe-scalar-writer-authority.282.md) tests scalar writer
+admission-proof reuse. Eight GT2 spots give mixed economy while linked writer
+code grows; runtime is withdrawn. Thirty-two native subset/rollback cases
+and PE32/PE64 pixel evidence remain. The duplicate layout category walk is
+the next unproven work-removal candidate.
+
 [H281](present-pacing-pe-three-register-single-pass.281.md) prices a one-pass
 three-register update: changed calls improve, but non-three float/int calls
 regress. Native and PE pixels pass; favorable single-pair GT2 spots do not
