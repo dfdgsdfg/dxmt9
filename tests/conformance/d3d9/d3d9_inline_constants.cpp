@@ -164,6 +164,42 @@ static const DWORD kPixelShaderEdge[] = {
     0x0000ffffu,
 };
 
+// Three-register float probes.  Both shaders consume all of c0/c1/c2 so a
+// count=3 public constant write must preserve middle and last registers.
+static const DWORD kVertexShaderThreeFloat[] = {
+    D3DVS_VERSION(3, 0),
+    instruction(D3DSIO_DCL, 2), dcl_token(D3DDECLUSAGE_POSITION, 0),
+        dst_token(D3DSPR_INPUT, 0),
+    instruction(D3DSIO_DCL, 2), dcl_token(D3DDECLUSAGE_POSITION, 0),
+        dst_token(D3DSPR_OUTPUT, 0),
+    instruction(D3DSIO_DCL, 2), dcl_token(D3DDECLUSAGE_COLOR, 0),
+        dst_token(D3DSPR_OUTPUT, 1),
+    instruction(D3DSIO_MOV, 2), dst_token(D3DSPR_OUTPUT, 0),
+        src_token(D3DSPR_INPUT, 0),
+    instruction(D3DSIO_ADD, 3), dst_token(D3DSPR_TEMP, 0),
+        src_token(D3DSPR_CONST, 0), src_token(D3DSPR_CONST, 1),
+    instruction(D3DSIO_ADD, 3), dst_token(D3DSPR_TEMP, 0),
+        src_token(D3DSPR_TEMP, 0), src_token(D3DSPR_CONST, 2),
+    instruction(D3DSIO_MOV, 2), dst_token(D3DSPR_OUTPUT, 1),
+        src_token(D3DSPR_TEMP, 0),
+    0x0000ffffu,
+};
+
+static const DWORD kPixelShaderThreeFloat[] = {
+    D3DPS_VERSION(3, 0),
+    instruction(D3DSIO_DCL, 2), dcl_token(D3DDECLUSAGE_COLOR, 0),
+        dst_token(D3DSPR_INPUT, 0),
+    instruction(D3DSIO_ADD, 3), dst_token(D3DSPR_TEMP, 0),
+        src_token(D3DSPR_INPUT, 0), src_token(D3DSPR_CONST, 0),
+    instruction(D3DSIO_ADD, 3), dst_token(D3DSPR_TEMP, 0),
+        src_token(D3DSPR_TEMP, 0), src_token(D3DSPR_CONST, 1),
+    instruction(D3DSIO_ADD, 3), dst_token(D3DSPR_TEMP, 0),
+        src_token(D3DSPR_TEMP, 0), src_token(D3DSPR_CONST, 2),
+    instruction(D3DSIO_MOV, 2), dst_token(D3DSPR_COLOROUT, 0),
+        src_token(D3DSPR_TEMP, 0),
+    0x0000ffffu,
+};
+
 constexpr unsigned kWidth = 64;
 constexpr unsigned kRowsPerPath = 6;
 constexpr unsigned kPlainPathCount = 3;
@@ -204,6 +240,18 @@ constexpr std::array<D3DCOLOR, 6> kChanged = {
     0xff2e5247u,  // PS float: (.18, .32, .28)
     0xff293d6eu,  // PS int:   (.16, .24, .43)
     0xff3d3d52u,  // PS bool:  (.24, .24, .32)
+};
+
+constexpr D3DCOLOR kThreeFloatBaseline = 0xff524757u;
+constexpr std::array<D3DCOLOR, 3> kThreeVsExpected = {
+    kThreeFloatBaseline,
+    0xff703866u,  // VS c1 only
+    0xff4d6147u,  // VS c2 only
+};
+constexpr std::array<D3DCOLOR, 3> kThreePsExpected = {
+    kThreeFloatBaseline,
+    0xff664266u,  // PS c1 only
+    0xff475c6bu,  // PS c2 only
 };
 
 struct Vertex {
@@ -274,6 +322,8 @@ struct Fixture {
   IDirect3DVertexDeclaration9 *declaration = nullptr;
   IDirect3DVertexShader9 *vs = nullptr;
   IDirect3DPixelShader9 *ps = nullptr;
+  IDirect3DVertexShader9 *three_vs = nullptr;
+  IDirect3DPixelShader9 *three_ps = nullptr;
 
   bool init(bool use_edge_layout = false, bool use_capture_mode = false) {
     edge_layout = use_edge_layout;
@@ -351,6 +401,12 @@ struct Fixture {
     return failures == 0;
   }
 
+  bool init_three_float_shaders() {
+    CHECK_HR(device->CreateVertexShader(kVertexShaderThreeFloat, &three_vs), D3D_OK);
+    CHECK_HR(device->CreatePixelShader(kPixelShaderThreeFloat, &three_ps), D3D_OK);
+    return three_vs != nullptr && three_ps != nullptr;
+  }
+
   ~Fixture() {
     if (device) {
       // Detach the explicitly created resources before dropping their public
@@ -362,6 +418,8 @@ struct Fixture {
       CHECK_HR(device->SetStreamSource(0, nullptr, 0, 0), D3D_OK);
       CHECK_HR(device->SetIndices(nullptr), D3D_OK);
     }
+    release_resource(three_ps, "three_ps");
+    release_resource(three_vs, "three_vs");
     release_resource(ps, "ps");
     release_resource(vs, "vs");
     release_resource(declaration, "declaration");
@@ -465,6 +523,41 @@ void set_family_value(IDirect3DDevice9 *device, Family family, bool changed,
       CHECK_HR(device->SetPixelShaderConstantB(integer_register, value, 1), D3D_OK);
       break;
     }
+  }
+}
+
+void set_three_float_values(IDirect3DDevice9 *device, bool vertex_stage,
+                            unsigned variant) {
+  static const float vs_values[3][3][4] = {
+      {{0.08f, 0.04f, 0.02f, 0.34f},
+       {0.02f, 0.08f, 0.04f, 0.33f},
+       {0.04f, 0.02f, 0.08f, 0.33f}},
+      {{0.08f, 0.04f, 0.02f, 0.34f},
+       {0.14f, 0.02f, 0.10f, 0.33f},
+       {0.04f, 0.02f, 0.08f, 0.33f}},
+      {{0.08f, 0.04f, 0.02f, 0.34f},
+       {0.02f, 0.08f, 0.04f, 0.33f},
+       {0.02f, 0.12f, 0.02f, 0.33f}},
+  };
+  static const float ps_values[3][3][4] = {
+      {{0.04f, 0.08f, 0.12f, 0.0f},
+       {0.08f, 0.04f, 0.06f, 0.0f},
+       {0.06f, 0.02f, 0.02f, 0.0f}},
+      {{0.04f, 0.08f, 0.12f, 0.0f},
+       {0.16f, 0.02f, 0.12f, 0.0f},
+       {0.06f, 0.02f, 0.02f, 0.0f}},
+      {{0.04f, 0.08f, 0.12f, 0.0f},
+       {0.08f, 0.04f, 0.06f, 0.0f},
+       {0.02f, 0.10f, 0.10f, 0.0f}},
+  };
+  CHECK(variant < 3u);
+  if (variant >= 3u) return;
+  const float (*values)[4] = vertex_stage ? vs_values[variant]
+                                           : ps_values[variant];
+  if (vertex_stage) {
+    CHECK_HR(device->SetVertexShaderConstantF(0, values[0], 3), D3D_OK);
+  } else {
+    CHECK_HR(device->SetPixelShaderConstantF(0, values[0], 3), D3D_OK);
   }
 }
 
@@ -594,6 +687,27 @@ void print_and_check_row(const char *path, Family family, unsigned row,
   }
 }
 
+void print_and_check_three_float_row(const char *stage, const char *change,
+                                     unsigned row, D3DCOLOR expected_changed,
+                                     const D3DLOCKED_RECT &locked) {
+  const auto *base = static_cast<const std::uint8_t *>(locked.pBits) +
+      static_cast<std::size_t>(row * 16u + 4u) * locked.Pitch;
+  const auto *pixels = reinterpret_cast<const D3DCOLOR *>(base);
+  std::printf("THREE_REG_PIXEL_SIGNATURE stage=%s case=%s row=%u values=",
+      stage, change, row);
+  for (unsigned slot = 0; slot < 4; ++slot) {
+    const D3DCOLOR expected = slot == 2 ? expected_changed : kThreeFloatBaseline;
+    const D3DCOLOR actual = pixels[slot * 16u + 4u];
+    std::printf("0x%08lx%s", static_cast<unsigned long>(actual), slot == 3 ? "" : ",");
+    CHECK(color_near(actual, expected, 3u));
+  }
+  std::printf(" expected=0x%08lx,0x%08lx,0x%08lx,0x%08lx\n",
+      static_cast<unsigned long>(kThreeFloatBaseline),
+      static_cast<unsigned long>(kThreeFloatBaseline),
+      static_cast<unsigned long>(expected_changed),
+      static_cast<unsigned long>(kThreeFloatBaseline));
+}
+
 void print_capture_expected_row(Family family, unsigned row) {
   const D3DCOLOR expected_b = kChanged[static_cast<unsigned>(family)];
   std::printf("CAPTURE_EXPECTED_SIGNATURE family=%s row=%u values=",
@@ -693,6 +807,73 @@ void run_pixel_oracle(bool edge_layout = false) {
         print_and_check_row(path_name, static_cast<Family>(family_index),
             path * kRowsPerPath + family_index, locked, false);
       }
+    }
+    CHECK_HR(fixture.readback->UnlockRect(), D3D_OK);
+  }
+}
+
+void run_three_float_oracle() {
+  static constexpr const char *kChangeNames[] = {
+      "unchanged_repeat", "middle_only", "last_only"};
+  std::printf("three-float-scope: VS-F and PS-F count=3 A-A-B-A; rows=6 cases=6\n");
+
+  Fixture fixture;
+  if (!fixture.init(false) || !fixture.init_three_float_shaders()) return;
+
+  CHECK_HR(fixture.device->SetRenderTarget(0, fixture.render_target), D3D_OK);
+  CHECK_HR(fixture.device->SetDepthStencilSurface(nullptr), D3D_OK);
+  const D3DVIEWPORT9 viewport = {0, 0, kWidth, fixture.height, 0.0f, 1.0f};
+  CHECK_HR(fixture.device->SetViewport(&viewport), D3D_OK);
+  CHECK_HR(fixture.device->SetVertexDeclaration(fixture.declaration), D3D_OK);
+  CHECK_HR(fixture.device->SetVertexShader(fixture.three_vs), D3D_OK);
+  CHECK_HR(fixture.device->SetPixelShader(fixture.three_ps), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_ZENABLE, FALSE), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_LIGHTING, FALSE), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE), D3D_OK);
+  CHECK_HR(fixture.device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE), D3D_OK);
+  CHECK_HR(fixture.device->Clear(0, nullptr, D3DCLEAR_TARGET,
+      D3DCOLOR_ARGB(255, 0, 0, 0), 1.0f, 0), D3D_OK);
+  CHECK_HR(fixture.device->SetStreamSource(0, fixture.vertices, 0, sizeof(Vertex)), D3D_OK);
+  CHECK_HR(fixture.device->SetIndices(fixture.indices), D3D_OK);
+  set_three_float_values(fixture.device, true, 0);
+  set_three_float_values(fixture.device, false, 0);
+  CHECK_HR(fixture.device->BeginScene(), D3D_OK);
+
+  for (unsigned case_index = 0; case_index < 3; ++case_index) {
+    set_three_float_values(fixture.device, true, 0);
+    check_draw_hr(draw_slot(fixture, case_index, 0, 0), __LINE__);
+    set_three_float_values(fixture.device, true, 0);
+    check_draw_hr(draw_slot(fixture, case_index, 1, 0), __LINE__);
+    set_three_float_values(fixture.device, true, case_index);
+    check_draw_hr(draw_slot(fixture, case_index, 2, 0), __LINE__);
+    set_three_float_values(fixture.device, true, 0);
+    check_draw_hr(draw_slot(fixture, case_index, 3, 0), __LINE__);
+  }
+  for (unsigned case_index = 0; case_index < 3; ++case_index) {
+    const unsigned row = 3u + case_index;
+    set_three_float_values(fixture.device, false, 0);
+    check_draw_hr(draw_slot(fixture, row, 0, 0), __LINE__);
+    set_three_float_values(fixture.device, false, 0);
+    check_draw_hr(draw_slot(fixture, row, 1, 0), __LINE__);
+    set_three_float_values(fixture.device, false, case_index);
+    check_draw_hr(draw_slot(fixture, row, 2, 0), __LINE__);
+    set_three_float_values(fixture.device, false, 0);
+    check_draw_hr(draw_slot(fixture, row, 3, 0), __LINE__);
+  }
+
+  CHECK_HR(fixture.device->EndScene(), D3D_OK);
+  CHECK_HR(fixture.device->GetRenderTargetData(fixture.render_target, fixture.readback), D3D_OK);
+  D3DLOCKED_RECT locked = {};
+  CHECK_HR(fixture.readback->LockRect(&locked, nullptr, D3DLOCK_READONLY), D3D_OK);
+  CHECK(locked.pBits != nullptr);
+  if (locked.pBits) {
+    for (unsigned case_index = 0; case_index < 3; ++case_index) {
+      print_and_check_three_float_row("vs_float", kChangeNames[case_index],
+          case_index, kThreeVsExpected[case_index], locked);
+    }
+    for (unsigned case_index = 0; case_index < 3; ++case_index) {
+      print_and_check_three_float_row("ps_float", kChangeNames[case_index],
+          3u + case_index, kThreePsExpected[case_index], locked);
     }
     CHECK_HR(fixture.readback->UnlockRect(), D3D_OK);
   }
@@ -1180,6 +1361,7 @@ int main() {
     run_stateblock_oracle(edge_layout);
   } else {
     run_pixel_oracle(edge_layout);
+    if (!edge_layout) run_three_float_oracle();
   }
   if (failures) {
     std::printf("inline_constants: %d failure(s)\n", failures);

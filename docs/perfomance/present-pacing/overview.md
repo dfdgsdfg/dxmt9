@@ -30,6 +30,12 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H279](present-pacing-pe-three-register-equality.279.md) adds a bounded
+three-register equality candidate after both shadow materializations. Native
+dirty/byte refinement and actual PE32/PE64 readback differentials pass. The
+equal path avoids the register loop, but mismatches add precomparison and
+PE32 fallback reloads; fresh CPU/FPS measurements must decide retention.
+
 [H278](present-pacing-pe-vs-constant-call-shape.278.md) separates current VS-F
 call equality from accumulated flush dirty spans. The bounded optional
 observer and strict CSV parser retain exact lengths even when the old

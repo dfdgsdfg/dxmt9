@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H279](present-pacing-pe-three-register-equality.279.md) tests an exact
+three-register equality shortcut. Bounded native and PE32/PE64 readback
+differentials pass; fallback register-allocation costs are recorded. Fresh
+CPU/FPS comparisons remain pending, so no economy benefit is claimed.
+
 [H278](present-pacing-pe-vs-constant-call-shape.278.md) adds a cold-only,
 exact-length VS setter population. Default-disabled PE32/PE64 setter and
 constant-kernel code stays unchanged. Both GT2 distributions favor testing

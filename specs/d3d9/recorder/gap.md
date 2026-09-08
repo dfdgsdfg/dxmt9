@@ -282,6 +282,15 @@ the old Call totals, including shader-key overflow. These counts narrow the
 next constant-kernel candidate; they do not implement an equality shortcut,
 prove CPU savings or close the remaining rendering/concurrency/economy gaps.
 
+[H279](../../../docs/perfomance/present-pacing/present-pacing-pe-three-register-equality.279.md)
+implements a bounded R-CORE-REC-7.40 three-register equality candidate after
+both shadow materializations. Production-bound native differentials and
+actual PE32/PE64 baseline/candidate sampled pixels pass. Existing dirty work
+is preserved; Recording, lifetime and four-byte bool paths are unchanged.
+Linked fallback reload costs remain explicit. Fresh economy evidence and
+whole-scene rendering qualification remain open; no performance promotion
+follows from the population or deterministic evidence.
+
 R-CORE-REC-7.52–7.55 cover fault-only prediction gating, family-specific append
 preparation, single-owner compact layout/quota work and production ledger
 routing without test-only TLS access. They are implemented with bounded

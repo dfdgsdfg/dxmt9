@@ -1291,6 +1291,187 @@ template <std::size_t ElemSize>
 void testFixedConstElemCompareCopyGuardPages() {}
 #endif
 
+void testFixedConstLiveApplyCountThree() {
+  constexpr std::size_t kElemSize = 16u;
+  constexpr std::uint32_t kStart = 1u;
+  constexpr std::uint32_t kCount = 3u;
+  constexpr std::uint32_t kExtent = 6u;
+  constexpr std::size_t kSourcePrefix = 16u;
+  constexpr std::size_t kSourceSuffix = 16u;
+  constexpr std::size_t kPayloadBytes = kCount * kElemSize;
+  constexpr std::uint8_t kSourceCanary = 0x3du;
+  const auto patterns = fixedConstElemRawPatterns<kElemSize>();
+
+  std::array<std::uint8_t, kPayloadBytes + kSourcePrefix + kSourceSuffix>
+      sourceStorage{};
+  std::array<std::uint8_t, kPayloadBytes> payload{};
+  std::array<std::uint8_t, kElemSize> patternBytes{};
+  const auto copyPattern = [&](std::uint8_t* destination,
+                               std::size_t pattern) {
+    std::memcpy(patternBytes.data(), patterns[pattern].data(), kElemSize);
+    std::memcpy(destination, patternBytes.data(), kElemSize);
+  };
+
+  const auto seed = [&](ConstShadow& shadow, std::uint32_t dirtyMask) {
+    shadow.reset();
+    shadow.reserveCapacity(kExtent * kElemSize, kExtent);
+    shadow.values.resize(kExtent * kElemSize);
+    shadow.dirtyElems.resize(kExtent);
+    for (std::uint32_t reg = 0u; reg < kExtent; ++reg) {
+      const auto pattern = reg >= kStart && reg < kStart + kCount
+          ? 0u
+          : reg % 4u;
+      copyPattern(shadow.values.data() + reg * kElemSize, pattern);
+      shadow.dirtyElems[reg] =
+          (dirtyMask & (1u << reg)) != 0u ? std::uint8_t{1u} : std::uint8_t{0u};
+    }
+    shadow.dirtyStart = kExtent;
+    shadow.dirtyEnd = 0u;
+    for (std::uint32_t reg = 0u; reg < kExtent; ++reg) {
+      if (shadow.dirtyElems[reg] == 0u) continue;
+      shadow.dirtyStart = std::min(shadow.dirtyStart, reg);
+      shadow.dirtyEnd = std::max(shadow.dirtyEnd, reg + 1u);
+    }
+    if (!shadow.dirty()) shadow.dirtyStart = shadow.dirtyEnd = 0u;
+  };
+
+  const auto makePayload = [&](std::uint32_t changedMask) {
+    for (std::uint32_t element = 0u; element < kCount; ++element) {
+      copyPattern(payload.data() + element * kElemSize,
+                  (changedMask & (1u << element)) != 0u ? 1u : 0u);
+    }
+  };
+
+  const std::array<std::uint8_t, kPayloadBytes> zeroPayload{};
+  ConstShadow zeroEqualExpected;
+  ConstShadow zeroEqualActual;
+  zeroEqualExpected.reserveCapacity(kExtent * kElemSize, kExtent);
+  zeroEqualActual.reserveCapacity(kExtent * kElemSize, kExtent);
+  const auto zeroEqualResult = oldConstTransition(
+      zeroEqualExpected, dxmt9::d3d9::pe::RecorderPhase::Live, true, kStart,
+      kCount, zeroPayload.data(), kElemSize);
+  applyConstShadowLiveFixedWidth<kElemSize>(
+      zeroEqualActual, kStart, kCount, zeroPayload.data());
+  check(zeroEqualResult.valid && !zeroEqualExpected.dirty(),
+        "count-three all-zero extension remains clean");
+  checkConstShadowEquivalent(zeroEqualExpected, zeroEqualActual,
+                             "count-three all-zero extension differential");
+
+  makePayload(0u);
+  ConstShadow zeroExpected;
+  ConstShadow zeroActual;
+  zeroExpected.reserveCapacity(kExtent * kElemSize, kExtent);
+  zeroActual.reserveCapacity(kExtent * kElemSize, kExtent);
+  const auto zeroResult = oldConstTransition(
+      zeroExpected, dxmt9::d3d9::pe::RecorderPhase::Live, true, kStart,
+      kCount, payload.data(), kElemSize);
+  applyConstShadowLiveFixedWidth<kElemSize>(
+      zeroActual, kStart, kCount, payload.data());
+  check(zeroResult.valid && zeroExpected.values.size() ==
+                              (kStart + kCount) * kElemSize,
+        "count-three zero-extension materializes the exact range");
+  checkConstShadowEquivalent(zeroExpected, zeroActual,
+                             "count-three zero-extension differential");
+
+  for (std::uint32_t dirtyMask = 0u; dirtyMask < (1u << kExtent);
+       ++dirtyMask) {
+    for (std::uint32_t changedMask = 0u; changedMask < (1u << kCount);
+         ++changedMask) {
+      for (std::size_t sourceOffset = 1u; sourceOffset <= 16u;
+           ++sourceOffset) {
+        makePayload(changedMask);
+        sourceStorage.fill(kSourceCanary);
+        std::memcpy(sourceStorage.data() + sourceOffset, payload.data(),
+                    payload.size());
+        const auto sourceBefore = sourceStorage;
+
+        ConstShadow expected;
+        ConstShadow actual;
+        seed(expected, dirtyMask);
+        seed(actual, dirtyMask);
+        const auto* expectedValues = expected.values.data();
+        const auto* expectedDirty = expected.dirtyElems.data();
+        const auto* actualValues = actual.values.data();
+        const auto* actualDirty = actual.dirtyElems.data();
+        const auto* source = sourceStorage.data() + sourceOffset;
+        const auto oldResult = oldConstTransition(
+            expected, dxmt9::d3d9::pe::RecorderPhase::Live, true, kStart,
+            kCount, source, kElemSize);
+        applyConstShadowLiveFixedWidth<kElemSize>(
+            actual, kStart, kCount, source);
+        check(oldResult.valid, "count-three reference row is valid");
+        checkConstShadowEquivalent(expected, actual,
+                                   "count-three changed-mask differential");
+        check(expected.values.data() == expectedValues &&
+                  expected.dirtyElems.data() == expectedDirty &&
+                  actual.values.data() == actualValues &&
+                  actual.dirtyElems.data() == actualDirty,
+              "count-three warm row does not grow storage");
+        for (std::uint32_t reg = 0u; reg < kExtent; ++reg) {
+          if (reg >= kStart && reg < kStart + kCount) continue;
+          std::array<std::uint8_t, kElemSize> outside{};
+          std::memcpy(outside.data(), patterns[reg % 4u].data(), kElemSize);
+          check(std::memcmp(actual.values.data() + reg * kElemSize,
+                            outside.data(), kElemSize) == 0,
+                "count-three surrounding destination canary is preserved");
+        }
+        check(sourceStorage == sourceBefore,
+              "count-three update leaves unaligned source bytes immutable");
+        for (std::size_t i = 0u; i < sourceOffset; ++i) {
+          check(sourceStorage[i] == kSourceCanary,
+                "count-three source prefix canary is preserved");
+        }
+        for (std::size_t i = sourceOffset + kPayloadBytes;
+             i < sourceStorage.size(); ++i) {
+          check(sourceStorage[i] == kSourceCanary,
+                "count-three source suffix canary is preserved");
+        }
+      }
+    }
+  }
+
+  const auto runSequence = [&](std::uint32_t changedElement,
+                               std::string_view label) {
+    ConstShadow expected;
+    ConstShadow actual;
+    seed(expected, (1u << 0u) | (1u << 5u));
+    seed(actual, (1u << 0u) | (1u << 5u));
+    const auto apply = [&](std::uint32_t patternMask,
+                           std::string_view step) {
+      makePayload(patternMask);
+      const auto sourceBefore = payload;
+      const auto oldResult = oldConstTransition(
+          expected, dxmt9::d3d9::pe::RecorderPhase::Live, true, kStart,
+          kCount, payload.data(), kElemSize);
+      applyConstShadowLiveFixedWidth<kElemSize>(
+          actual, kStart, kCount, payload.data());
+      check(oldResult.valid, std::string(label) + ": reference valid");
+      checkConstShadowEquivalent(expected, actual,
+                                 std::string(label) + ": " +
+                                     std::string(step));
+      check(payload == sourceBefore,
+            std::string(label) + ": source remains immutable");
+    };
+    apply(0u, "A");
+    apply(0u, "A-A no-store state");
+    apply(1u << changedElement, "B single-element change");
+    apply(0u, "A restoration");
+    const auto* aliasExpected = expected.values.data() + kStart * kElemSize;
+    const auto* aliasActual = actual.values.data() + kStart * kElemSize;
+    const auto aliasResult = oldConstTransition(
+        expected, dxmt9::d3d9::pe::RecorderPhase::Live, true, kStart,
+        kCount, aliasExpected, kElemSize);
+    applyConstShadowLiveFixedWidth<kElemSize>(
+        actual, kStart, kCount, aliasActual);
+    check(!aliasResult.writePending,
+          std::string(label) + ": exact self-alias is unchanged");
+    checkConstShadowEquivalent(expected, actual,
+                               std::string(label) + ": self-alias differential");
+  };
+  runSequence(1u, "count-three middle A-A-B-A");
+  runSequence(2u, "count-three last A-A-B-A");
+}
+
 template <std::size_t ElemSize>
 void testFixedConstLiveApplyEdges() {
   constexpr std::uint32_t kWarmCount = 4u;
@@ -3749,6 +3930,7 @@ int main() {
     testFixedConstElemCompareCopyMatrix<16u>();
     testFixedConstElemCompareCopyGuardPages<4u>();
     testFixedConstElemCompareCopyGuardPages<16u>();
+    testFixedConstLiveApplyCountThree();
     testFixedConstLiveApplyObservation<4u>();
     testFixedConstLiveApplyObservation<16u>();
     testFixedConstLiveApplyDifferential<4u>();

@@ -1063,6 +1063,17 @@ on an all-equal write. Independent dirty/change-mask differentials cover both
 growing and warm storage; linked PE code, not source-level pointer caching
 alone, decides whether this representation reduces repeated work.
 
+A fixed short-range specialization may prove exact byte equality after both
+materializations, then return without entering the per-register loop. It must
+leave all pre-existing dirty obligations intact and retain the reference
+changed-range and other-length paths. Equality uses bounded, unaligned-safe
+integer byte operations, not floating-point equality or a persistent cache.
+Population evidence selects candidate lengths; it does not price the added
+comparison on non-equal ranges. Native refinement must include nonzero start,
+outside-range dirty state, all change masks and exact self-alias; actual
+PE/GPU fixtures must exercise the selected length. Inspect both PE widths for
+new calls/spills and measure observer-OFF CPU/FPS before retaining a shortcut.
+
 R-CORE-REC-7.41 narrows the compact destination-rebase operation to one lexical
 source qualification. Source metadata and pending-ticket checks may share that
 qualification with destination preparation; the retention callback still
