@@ -11,11 +11,17 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H293](present-pacing-pe-descriptor-inline.293.md) rejects the fixed-granule
+follow-up as a general replacement. Inline copies remove H292's external-copy
+call, but PE64 small-table append still costs 11–15% more; dense cases improve.
+Four builds, native/TLA regression and eight actual PE processes pass their
+correctness gates. Product changes are withdrawn; no new FPS claim follows.
+
 [H292](present-pacing-pe-descriptor-table.292.md) rejects an unconditional
 variable-size compact descriptor-table copy. Eight PE32/PE64 processes pass
 byte oracles, but one/two-section matched-header append regresses 8–18%; dense-table
 gains do not qualify it. Product changes are withdrawn; stronger native
-coverage remains. A small-table policy still requires separate economics.
+coverage remains. H293 supplies the fixed-granule follow-up's separate economics.
 
 [H291](present-pacing-pe-current-hotpath.291.md) refreshes exact-image PE32
 profiles at `627d9840` and separately remeasures 06 GT2 at 18.217 FPS.

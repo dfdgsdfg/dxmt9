@@ -764,6 +764,10 @@ checks the complete table range, then executes the same qualified section
 visitors and payload checks. Only after successful final count/cursor
 conservation may it copy the active prefix. Zero sections copy no table bytes;
 the unused bounded tail is not initialized or read for this operation.
+The exact prefix may be emitted in fixed-size descriptor granules without
+changing this contract. A compiler-specific inline-copy primitive requires a
+portable fallback; linked PE code and small-table economics must verify the
+realization rather than inferring savings from source-level copy counts.
 The table remains speculative and outside the public committed frontier until
 the normal append transaction accepts it. Neither callbacks nor retention
 receive a new view of partially emitted bytes. This is a value-materialization

@@ -13,6 +13,18 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H293](../../../docs/perfomance/present-pacing/present-pacing-pe-descriptor-inline.293.md)
+also rejects the fixed-size inline realization of R-CORE-REC-7.66. Four builds,
+eight native specs, unchanged TLA regression and eight actual PE processes pass
+their correctness oracles. The descriptor loop has no external copy call, but
+PE64 one/two-section matched-header append still grows 11.55%/10.75%; PE32
+grows 2.80%/1.44%, with overlapping two-section ranges. Dense-case gains do
+not qualify a general replacement. The whole product-header edit is withdrawn;
+the optional fixed-granule contract and evidence remain. Loaded production-parent
+cost, count-qualified dispatch economics and any new FPS improvement remain open.
+Zero-section append cost is not descriptor-copy execution. No candidate pixel
+or wild promotion is claimed.
+
 [H292](../../../docs/perfomance/present-pacing/present-pacing-pe-descriptor-table.292.md)
 rejects the unconditional variable-size compact descriptor-table copy allowed
 by R-CORE-REC-7.66. Independent native bytes/rollback coverage and eight actual
@@ -20,9 +32,9 @@ PE processes pass, but one/two-section matched-header append regresses
 8.87%/8.27% on PE32 and 18.33%/17.01% on PE64; dense-table gains do not qualify
 the general replacement. The product-header edit is fully withdrawn. Native
 empty/multi/23-indexed/24-indexed-UP differentials, generic 25-section coverage
-and the optional contract remain. A small-table fixed-size policy, production
-parent cost and any new FPS gain remain unproven; no candidate GPU/wild
-promotion follows this failed economic gate.
+and the optional contract remain. H293 subsequently rejects a fixed-granule
+replacement; production-parent cost and any new FPS gain remain unproven.
+No candidate GPU/wild promotion follows this failed economic gate.
 
 [H291](../../../docs/perfomance/present-pacing/present-pacing-pe-current-hotpath.291.md)
 refreshes PE32 symbol evidence at `627d9840` without changing production.

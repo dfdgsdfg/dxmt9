@@ -1257,8 +1257,9 @@ and prove clean retry in observed and unobserved paths. Linked PE code and actua
 PE append measurements must qualify any claimed cost reduction.
 
 **R-CORE-REC-7.66** Compact payload emission may copy its prepared active
-section-descriptor prefix as one exact table only after all section visitors
-and final cursor/count checks succeed. Prepared and wire descriptors must have
+section-descriptor prefix as one exact table, including fixed-size descriptor
+granules, only after all section visitors and final cursor/count checks succeed.
+Prepared and wire descriptors must have
 compile-time identical size, alignment and field offsets, and both must be
 standard-layout and trivially copyable. The complete destination table range
 must be checked before payload emission; inactive descriptors must never be

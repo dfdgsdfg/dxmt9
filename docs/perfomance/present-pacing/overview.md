@@ -30,13 +30,22 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H293](present-pacing-pe-descriptor-inline.293.md) rejects a call-free,
+fixed-granule compact descriptor loop. Dense-table matched-header append
+improves, but small-table PE64 append grows 11–15%; PE32 small-input results
+are much closer. Eight actual PE processes pass independent byte oracles.
+The source change is fully withdrawn after native/TLA regression checks;
+zero-section append increases are not attributed to copy execution, and no
+candidate pixel or wild-FPS promotion follows. Whole production-parent cost
+and a qualified dispatch policy remain separate, unproven questions.
+
 [H292](present-pacing-pe-descriptor-table.292.md) rejects general variable-size
 compact descriptor-table emission. PE32 one/two-section matched-header append
 grows 8.87%/8.27%; PE64 grows 18.33%/17.01%. Dense indexed/UP cases improve
 slightly, but neither fewer copies nor smaller helpers qualifies the general
 replacement. Native byte/rollback tests are retained; the whole product-header
-edit is withdrawn and no candidate GPU/wild promotion is claimed. Fixed-size
-small-table handling remains an unmeasured next hypothesis.
+edit is withdrawn and no candidate GPU/wild promotion is claimed. H293's
+fixed-granule follow-up also fails the general-replacement economic gate.
 
 [H291](present-pacing-pe-current-hotpath.291.md) refreshes the current
 `627d9840` PE32 profiles: owner admission/emission and constants remain
