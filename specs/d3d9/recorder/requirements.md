@@ -717,6 +717,12 @@ Only committed canonical metadata or equivalent qualified ownership metadata
 may serve later visitors. Native differential tests must cover all seven
 binding families, duplicate/promotion/null cases, source mutation, partial
 acquisition and settlement rollback, reset/reuse, and both emission forms.
+The prepared identity witness must be the single authority for each local
+wire ordinal; an occurrence may refer to that witness by its checked mapping
+ordinal instead of storing a duplicate wire ordinal. Source identity/pointer,
+occurrence and null disposition, current physical pin, wire-count bounds and
+global remap overflow must remain checked before use. Removing the duplicate
+must not turn a malformed witness or stale source into accepted output.
 
 **R-CORE-REC-7.17** Calibrated PE attribution must include compact source
 preparation and destination qualification before owner admission, and distinguish

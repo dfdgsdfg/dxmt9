@@ -231,7 +231,8 @@ bool forEachPreparedSparseQuota(
   return true;
 }
 
-// One row per binding occurrence. Unlike the former owned binding arenas it
+// R-CORE-REC-7.16: one row per binding occurrence. Unlike the former owned
+// binding arenas it
 // carries no wire row copy: the source row is serialized directly while the
 // admission-qualified pin (whose typed owner record carries kind, generation,
 // and object identity) supplies the ownership witness and wire remap.
@@ -240,14 +241,13 @@ struct PeSemanticBindingLocator {
   // before advancing bindingOccurrences.count; inactive storage is never
   // initialized or consumed.
   std::uint32_t mappingOrdinal;
-  std::uint32_t wireIndex;
   std::uint32_t occurrence;
   bool wireValid;
   bool hasPin;
 };
 
 static_assert(std::is_trivially_copyable_v<PeSemanticBindingLocator>);
-static_assert(sizeof(PeSemanticBindingLocator) == 16u);
+static_assert(sizeof(PeSemanticBindingLocator) == 12u);
 
 inline constexpr std::size_t kPeSemanticMaxBindingOccurrences =
     static_cast<std::size_t>(sectionRule(D9C_COMMAND_CHUNK_SECTION_TEXTURE)->maxCount) +
@@ -1421,15 +1421,10 @@ inline bool planPeSemanticAdmissionWithIdentity(
       if (bindingWitness != nullptr) {
         if (bindingWitness->count >= bindingWitness->values.size() ||
             occurrence > std::numeric_limits<std::uint32_t>::max()) return false;
-        const auto localWireIndex =
-            mappingOrdinal == kPeSemanticNoSlot
-                ? D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX
-                : identities.entries[mappingOrdinal].wireIndex;
         bindingWitness->values[bindingWitness->count++] = {
             .mappingOrdinal = mappingOrdinal == kPeSemanticNoSlot
                                   ? kPeSemanticNoSlot
                                   : static_cast<std::uint32_t>(mappingOrdinal),
-            .wireIndex = localWireIndex,
             .occurrence = static_cast<std::uint32_t>(occurrence),
             .wireValid = static_cast<bool>(row.wire.valid),
             .hasPin = static_cast<bool>(row.wire.valid && row.object.object != nullptr),
@@ -1720,15 +1715,27 @@ bool reconstructPeSemanticOwnerAdmission(
     const PeSemanticPreparedRecordT<IdentityCapacity, AdmissionPlanT>& prepared,
     PeSemanticOwnerAdmissionDistribution& out) noexcept {
   out = {};
+  if (prepared.identityWitness.count > IdentityCapacity ||
+      prepared.identityWitness.count > prepared.identityWitness.entries.size() ||
+      prepared.identityWitness.wireCount >
+          prepared.identityWitness.wireOrdinals.size() ||
+      prepared.identityWitness.wireCount > prepared.identityWitness.count)
+    return false;
+  for (std::size_t wire = 0u; wire < prepared.identityWitness.wireCount;
+       ++wire) {
+    const auto ordinal = prepared.identityWitness.wireOrdinals[wire];
+    if (ordinal >= prepared.identityWitness.count ||
+        prepared.identityWitness.entries[ordinal].pin == kPeSemanticNoSlot ||
+        prepared.identityWitness.entries[ordinal].wireIndex != wire)
+      return false;
+  }
   if constexpr (PeSemanticSparsePlanInputLike<Input>) {
     PeSemanticOwnerAdmissionDistribution reconstructed{};
     std::array<bool, IdentityCapacity> seen{};
     const auto& occurrences = prepared.bindingOccurrences;
     static_assert(std::tuple_size_v<decltype(occurrences.ranges)> ==
                   std::tuple_size_v<decltype(reconstructed.bindings)>);
-    if (occurrences.count > occurrences.values.size() ||
-        prepared.identityWitness.count > IdentityCapacity ||
-        prepared.identityWitness.wireCount > prepared.identityWitness.wireOrdinals.size())
+    if (occurrences.count > occurrences.values.size())
       return false;
     std::size_t cursor = 0u;
     for (std::size_t family = 0u; family < occurrences.ranges.size();
@@ -1744,8 +1751,7 @@ bool reconstructPeSemanticOwnerAdmission(
         const auto& locator = occurrences.values[range.offset + occurrence];
         if (locator.occurrence != occurrence || !locator.wireValid) return false;
         if (!locator.hasPin) {
-          if (locator.mappingOrdinal != kPeSemanticNoSlot ||
-              locator.wireIndex != D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX)
+          if (locator.mappingOrdinal != kPeSemanticNoSlot)
             return false;
           continue;
         }
@@ -1755,8 +1761,11 @@ bool reconstructPeSemanticOwnerAdmission(
         const auto ordinal = static_cast<std::size_t>(locator.mappingOrdinal);
         const auto& identity = prepared.identityWitness.entries[ordinal];
         if (identity.object == nullptr ||
-            locator.wireIndex != identity.wireIndex ||
-            locator.wireIndex >= prepared.identityWitness.wireCount)
+            identity.pin == kPeSemanticNoSlot ||
+            identity.wireIndex == kPeSemanticNoSlot ||
+            identity.wireIndex >= prepared.identityWitness.wireCount ||
+            prepared.identityWitness.wireOrdinals[identity.wireIndex] !=
+                locator.mappingOrdinal)
           return false;
         ++binding.pinned;
         if (!seen[ordinal]) {
@@ -2518,9 +2527,6 @@ class PeSemanticBatchOwner final {
           .mappingOrdinal = ref.object == nullptr
               ? kPeSemanticNoSlot
               : static_cast<std::uint32_t>(mappingOrdinal),
-          .wireIndex = ref.object == nullptr
-              ? D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX
-              : identities.entries[mappingOrdinal].wireIndex,
           .occurrence = static_cast<std::uint32_t>(occurrence),
           .wireValid = true,
           .hasPin = ref.object != nullptr,
@@ -4170,11 +4176,11 @@ class PeSemanticBatchOwner final {
                                prepared.identityWitness.entries[locator.mappingOrdinal].object !=
                                    source.object.object)
                              return false;
-                           const auto local = locator.wireIndex;
+                           const auto& mapping =
+                               prepared.identityWitness.entries[locator.mappingOrdinal];
+                           const auto local = mapping.wireIndex;
                            if (local == kPeSemanticNoSlot ||
                                local >= prepared.identityWitness.wireCount ||
-                               prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex !=
-                                   local ||
                                globalFirst + local >
                                    std::numeric_limits<std::uint32_t>::max())
                              return false;
@@ -5683,7 +5689,7 @@ class PeSemanticBatchOwner final {
     const auto& mapping = prepared.identityWitness.entries[locator.mappingOrdinal];
     if (!std::remove_cvref_t<decltype(prepared.identityWitness)>::sameIdentity(
             mapping.identity, ref.identity) ||
-        mapping.object != ref.object || locator.wireIndex != mapping.wireIndex ||
+        mapping.object != ref.object ||
         mapping.wireIndex >= prepared.identityWitness.wireCount ||
         globalFirst > std::numeric_limits<std::uint32_t>::max() -
                           mapping.wireIndex) {
@@ -6146,8 +6152,7 @@ class PeSemanticBatchOwner final {
                   retainTextureFn(), &wireIndex,
                   &prepared.identityWitness.entries[locator.mappingOrdinal]) ||
               prepared.identityWitness.entries[locator.mappingOrdinal].pin != pin ||
-              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
-              locator.wireIndex != wireIndex)
+              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex)
             return false;
         }
       }
@@ -6184,8 +6189,7 @@ class PeSemanticBatchOwner final {
                   retainBufferFn(), &wireIndex,
                   &prepared.identityWitness.entries[locator.mappingOrdinal]) ||
               prepared.identityWitness.entries[locator.mappingOrdinal].pin != pin ||
-              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
-              locator.wireIndex != wireIndex)
+              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex)
             return false;
         }
       }
@@ -6222,8 +6226,7 @@ class PeSemanticBatchOwner final {
                   retainShaderFn(), &wireIndex,
                   &prepared.identityWitness.entries[locator.mappingOrdinal]) ||
               prepared.identityWitness.entries[locator.mappingOrdinal].pin != pin ||
-              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
-              locator.wireIndex != wireIndex)
+              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex)
             return false;
         }
       }
@@ -6260,8 +6263,7 @@ class PeSemanticBatchOwner final {
                   prepared, retainDeclarationFn(), &wireIndex,
                   &prepared.identityWitness.entries[locator.mappingOrdinal]) ||
               prepared.identityWitness.entries[locator.mappingOrdinal].pin != pin ||
-              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
-              locator.wireIndex != wireIndex)
+              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex)
             return false;
         }
       } else if (item.wire.valid && item.wire.kind == D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF && item.object.object) {
@@ -6300,8 +6302,7 @@ class PeSemanticBatchOwner final {
                   retainBufferFn(), &wireIndex,
                   &prepared.identityWitness.entries[locator.mappingOrdinal]) ||
               prepared.identityWitness.entries[locator.mappingOrdinal].pin != pin ||
-              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
-              locator.wireIndex != wireIndex)
+              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex)
             return false;
         }
       }
@@ -6338,8 +6339,7 @@ class PeSemanticBatchOwner final {
                   retainSurfaceFn(), &wireIndex,
                   &prepared.identityWitness.entries[locator.mappingOrdinal]) ||
               prepared.identityWitness.entries[locator.mappingOrdinal].pin != pin ||
-              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
-              locator.wireIndex != wireIndex)
+              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex)
             return false;
         }
       }
@@ -6376,8 +6376,7 @@ class PeSemanticBatchOwner final {
                   retainSurfaceFn(), &wireIndex,
                   &prepared.identityWitness.entries[locator.mappingOrdinal]) ||
               prepared.identityWitness.entries[locator.mappingOrdinal].pin != pin ||
-              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex ||
-              locator.wireIndex != wireIndex)
+              prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex != wireIndex)
             return false;
         }
       }

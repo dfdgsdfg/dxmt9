@@ -30,6 +30,16 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H286](present-pacing-pe-binding-wire-authority.286.md) removes the binding
+locator's duplicate wire ordinal: private witness authority and actual source
+checks remain. Locator size falls 16→12 bytes, PE32 compact stack shrinks
+184 bytes, and complete linked prepare/writer families shrink. Native 6+6
+and 192 baseline-matched candidate PE pixels pass. Sixteen actual-DLL helper
+processes price small savings, not whole-PE CPU economy: long PE32 binding
+means fall 3.2–4.0 ns, empty costs 0.88 ns, and PE64 results are mixed.
+Sampler-OFF GT2 spots are 29.607/18.176 FPS, with 16 unreported health-tail
+frames in 06; no repeatable FPS recovery is established.
+
 [H285](present-pacing-pe-stream-binding-reuse.285.md) removes repeated wrapper
 qualification for the same strongly retained stream VB. Offset/stride changes
 still perform the typed dirty transition; null/Recording/replacement retain

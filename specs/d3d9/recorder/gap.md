@@ -13,6 +13,19 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H286](../../../docs/perfomance/present-pacing/present-pacing-pe-binding-wire-authority.286.md)
+removes the occurrence's duplicate wire ordinal under R-CORE-REC-7.16;
+the private prepared identity witness is the single authority. Locator size
+falls 16→12 bytes, with source/pin/remap checks preserved. Native owner,
+ledger, batch, differential and retainer suites pass 6/6 on each native width;
+four actual-PE pixel processes match 192 candidate samples to baseline.
+Cold malformed-witness tests do not widen the mutating append API. Sixteen
+actual-DLL helper processes show small PE32 binding-path economy, with an
+empty-path cost and mixed PE64 results. No new lifecycle/TLC proof,
+all-family workload weighting or repeatable whole-PE CPU saving is claimed.
+Sampler-OFF 05/06 GT2 spots pass at 29.607/18.176 FPS; 06 has 16 frames
+outside the final health snapshot. README recovery remains open.
+
 [H285](../../../docs/perfomance/present-pacing/present-pacing-pe-stream-binding-reuse.285.md)
 implements R-CORE-REC-7.58's same-retained stream VB membership reuse. The
 offset/stride transition still marks pending state; null, Recording, foreign,

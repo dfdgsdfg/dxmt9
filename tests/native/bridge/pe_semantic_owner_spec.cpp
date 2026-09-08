@@ -646,14 +646,12 @@ void bindingOccurrenceStorageUsesActiveFrontier() {
         "inactive binding locator storage is not default-initialized");
 
   plan->values[0] = {.mappingOrdinal = 3u,
-                     .wireIndex = 5u,
                      .occurrence = 0u,
                      .wireValid = true,
                      .hasPin = true};
   plan->count = 1u;
   plan->reset();
   check(plan->count == 0u && plan->values[0].mappingOrdinal == 3u &&
-            plan->values[0].wireIndex == 5u &&
             plan->values[0].occurrence == 0u &&
             plan->values[0].wireValid && plan->values[0].hasPin,
         "active binding locator survives frontier reset for reuse");
@@ -663,13 +661,11 @@ void bindingOccurrenceStorageUsesActiveFrontier() {
         "frontier reset leaves inactive binding locator tail untouched");
 
   plan->values[0] = {.mappingOrdinal = kPeSemanticNoSlot,
-                     .wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
                      .occurrence = 0u,
                      .wireValid = true,
                      .hasPin = false};
   plan->count = 1u;
   check(plan->values[0].mappingOrdinal == kPeSemanticNoSlot &&
-            plan->values[0].wireIndex == D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX &&
             plan->values[0].wireValid && !plan->values[0].hasPin,
         "reused active binding locator writes every nullable field");
 }
@@ -1236,7 +1232,8 @@ void preparedBindingFamilyMatrix(const char* family, MakeValid makeValid,
           return locator.wireValid && locator.hasPin &&
                  locator.mappingOrdinal < prepared.identityWitness.count &&
                  prepared.identityWitness.entries[locator.mappingOrdinal].pin == 0u &&
-                 locator.wireIndex == 0u;
+                 prepared.identityWitness.entries[locator.mappingOrdinal].wireIndex ==
+                     0u;
         });
     for (std::size_t i = 0u; i < prepared.bindingOccurrences.count; ++i) {
       if (prepared.bindingOccurrences.values[i].occurrence != i)
@@ -4452,6 +4449,22 @@ void preparedAdmissionReinitializesReusedWitness() {
             witness.valid() && witness.identityWitness.wireCount == 2u &&
             witness.plan.handleCount == 2u,
         "reused-witness fixture starts with two first-seen wire identities");
+  {
+    PeSemanticOwnerAdmissionDistribution distribution{};
+    std::swap(witness.identityWitness.wireOrdinals[0],
+              witness.identityWitness.wireOrdinals[1]);
+    check(!detail::reconstructPeSemanticOwnerAdmission(larger, witness,
+                                                       distribution),
+          "generic observer rejects a reversed wire-ordinal permutation");
+    std::swap(witness.identityWitness.wireOrdinals[0],
+              witness.identityWitness.wireOrdinals[1]);
+    const auto identityCount = witness.identityWitness.count;
+    witness.identityWitness.count = witness.identityWitness.entries.size() + 1u;
+    check(!detail::reconstructPeSemanticOwnerAdmission(larger, witness,
+                                                       distribution),
+          "generic observer rejects an identity count beyond capacity");
+    witness.identityWitness.count = identityCount;
+  }
 
   auto smaller = base(PeSemanticProducerKind::Present, 2u, 2u);
   smaller.surface0 =
@@ -7160,7 +7173,6 @@ void compactBindingDistributionBoundedReference() {
           static_cast<std::uint32_t>(family), 1u};
       auto& locator = prepared.bindingOccurrences.values[family];
       locator = {.mappingOrdinal = kPeSemanticNoSlot,
-                 .wireIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
                  .occurrence = 0u, .wireValid = true,
                  .hasPin = tags[family] != 0u};
       if (tags[family] == 0u) continue;
@@ -7172,7 +7184,7 @@ void compactBindingDistributionBoundedReference() {
       const auto ordinal = first[family] ? unique++ : ordinals[prior];
       ordinals[family] = ordinal;
       comparisons += first[family] ? ordinal : ordinal + 1u;
-      locator.mappingOrdinal = locator.wireIndex = ordinal;
+      locator.mappingOrdinal = ordinal;
       if (first[family]) {
         prepared.identityWitness.entries[ordinal] = {
             .identity = {.kind = kinds[family], .generation = 1u,
@@ -7225,13 +7237,15 @@ void compactBindingDistributionBoundedReference() {
       prepared.bindingOccurrences.ranges[family] = {count, 0u};
     prepared.bindingOccurrences.count = count;
     prepared.identityWitness.count = prepared.identityWitness.wireCount = count != 0u;
-    if (count != 0u)
+    if (count != 0u) {
+      prepared.identityWitness.wireOrdinals[0] = 0u;
       prepared.identityWitness.entries[0] = {
           .identity = {.kind = kinds[0], .generation = 1u, .objectId = 1u},
           .object = &objects[0], .pin = 0u, .wireIndex = 0u};
+    }
     for (std::uint32_t row = 0u; row < count; ++row)
       prepared.bindingOccurrences.values[row] = {
-          .mappingOrdinal = 0u, .wireIndex = 0u, .occurrence = row,
+          .mappingOrdinal = 0u, .occurrence = row,
           .wireValid = true, .hasPin = true};
     PeSemanticOwnerAdmissionDistribution distribution{};
     check(detail::reconstructPeSemanticOwnerAdmission(input, prepared, distribution),
@@ -7843,6 +7857,25 @@ void realCompactSparseMaxFamilyDifferentialAndRollback(bool allDistinct,
                       distribution.uniqueIdentities == (allDistinct ? 45u : 39u) &&
                       distribution.linearComparisons == (allDistinct ? 990u : 798u),
                   "max-family reconstruction matches independent linear comparison count");
+            const auto firstWireOrdinal = prepared.identityWitness.wireOrdinals[0];
+            const auto secondWireOrdinal = prepared.identityWitness.wireOrdinals[1];
+            prepared.identityWitness.wireOrdinals[0] = secondWireOrdinal;
+            prepared.identityWitness.wireOrdinals[1] = firstWireOrdinal;
+            check(!detail::reconstructPeSemanticOwnerAdmission(
+                      witnessInput, prepared, distribution),
+                  "compact observer rejects a reversed wire-ordinal permutation");
+            prepared.identityWitness.wireOrdinals[0] = firstWireOrdinal;
+            prepared.identityWitness.wireOrdinals[1] = secondWireOrdinal;
+            const auto identityCount = prepared.identityWitness.count;
+            prepared.identityWitness.count =
+                prepared.identityWitness.entries.size() + 1u;
+            check(!detail::reconstructPeSemanticOwnerAdmission(
+                      witnessInput, prepared, distribution),
+                  "compact observer rejects an identity count beyond capacity");
+            prepared.identityWitness.count = identityCount;
+            check(detail::reconstructPeSemanticOwnerAdmission(
+                      witnessInput, prepared, distribution),
+                  "compact observer restores after witness corruption probes");
             for (std::size_t family = 0u; family < 7u; ++family) {
               const auto rows = prepared.bindingOccurrences.ranges[family].count;
               const bool mixed = !allDistinct &&
@@ -7895,13 +7928,16 @@ void realCompactSparseMaxFamilyDifferentialAndRollback(bool allDistinct,
                       witnessInput, prepared, distribution),
                   "invalid wire occurrence is unmeasured");
             prepared.bindingOccurrences.values[1].wireValid = valid;
-            const auto wire = prepared.bindingOccurrences.values[1].wireIndex;
-            prepared.bindingOccurrences.values[1].wireIndex =
+            const auto mappingOrdinal =
+                prepared.bindingOccurrences.values[1].mappingOrdinal;
+            const auto wire =
+                prepared.identityWitness.entries[mappingOrdinal].wireIndex;
+            prepared.identityWitness.entries[mappingOrdinal].wireIndex =
                 D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
             check(!detail::reconstructPeSemanticOwnerAdmission(
                       witnessInput, prepared, distribution),
-                  "pinned wire mismatch is unmeasured");
-            prepared.bindingOccurrences.values[1].wireIndex = wire;
+                  "mapping wire mismatch is unmeasured");
+            prepared.identityWitness.entries[mappingOrdinal].wireIndex = wire;
             const auto wireCount = prepared.identityWitness.wireCount;
             prepared.identityWitness.wireCount =
                 prepared.identityWitness.wireOrdinals.size() + 1u;

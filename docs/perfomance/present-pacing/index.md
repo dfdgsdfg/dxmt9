@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H286](present-pacing-pe-binding-wire-authority.286.md) makes the prepared
+identity witness the sole local wire-ordinal authority. Smaller locator/stack
+and linked helper families retain native and real-PE pixel equivalence.
+Actual-DLL micro measurements show small PE32 binding savings but an empty
+path cost and mixed PE64 results; no whole-frame economy claim follows.
+
 [H285](present-pacing-pe-stream-binding-reuse.285.md) reuses the strong Live
 VB's membership qualification in `SetStreamSource`, preserving typed layout
 updates. Eight actual-PE micro processes show lower same-VB setter cost;

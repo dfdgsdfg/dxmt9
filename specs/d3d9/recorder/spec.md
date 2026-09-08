@@ -729,6 +729,19 @@ replace duplicate typed wire-row arenas, but committed lease/hazard visitors
 must still observe exactly the previous resource closure. A retained-only
 direct reference is not made wire-visible merely by this representation change.
 
+`PeSemanticBindingLocator` carries only mapping ordinal, source occurrence and
+null/pin disposition. The active identity-witness entry owns the local wire
+ordinal for both generic and compact emission and diagnostic reconstruction.
+Resolving the mapping is bounds-checked before reading that entry; fresh
+source identity/pointer and physical-pin qualification remain separate checks.
+The public preparation result is inspection-only: no mutating public entry
+accepts it. Actual append owns and constructs its private call-local witness;
+retention callbacks receive no reference to it. Native negative cases corrupt
+the remaining inspection authority rather than an absent duplicate, while
+actual append/retry tests preserve source-mutation rejection, ownership and
+canonical bytes. Inspector corruption must not cause new per-binding product
+validation for a private, construction-proved fact.
+
 Verification first uses actual-owner versus independent canonical-builder
 bytes and ownership over bounded section masks, all producer/binding families,
 source/cross-family A/B/A, stale capability, partial acquisition and settlement
