@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H300](present-pacing-pe-draw-parent-tail.300.md) attributes 97.83–98.26% of
+the fixture's tail to its single GetData(FLUSH) call, not EndScene or retry
+sleep. Internal wait/CPU attribution and calibrated small-helper economics
+remain open; production images and README are unchanged.
+
 [H299](present-pacing-pe-draw-parent-groups.299.md) retains 84,402 exact group
 samples. EndScene/query tails dominate this fixture's measured scopes, with
 one GetData call per group; broad timing-population shifts remain. This is

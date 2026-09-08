@@ -30,6 +30,14 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H300](present-pacing-pe-draw-parent-tail.300.md) splits the three tail calls:
+GetData(FLUSH) takes 97.83–98.26% of outer-tail wall in four actual PE timing
+processes, completing in one call per group. All 270 cells and 56,322 tail
+supplements across ten processes qualify. This locates the expensive public
+boundary, not its internal waits or PE-exclusive CPU. Fewer fixture-level
+completion drains are a calibration candidate, not a production query change;
+unused pin-output removal still needs its own correctness/economics gates.
+
 [H299](present-pacing-pe-draw-parent-groups.299.md) separates every group from
 its EndScene/query tail without changing production images. Ten PE processes
 pass 270 cells and conserve 84,402 samples. Tails occupy 97.54–98.46% of the

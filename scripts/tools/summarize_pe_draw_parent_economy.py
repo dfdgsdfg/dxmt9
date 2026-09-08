@@ -21,6 +21,9 @@ META_V1_RE = re.compile(r"^draw_parent_meta schema=1 arch=(x86|x64) qpc_frequenc
 META_V2_RE = re.compile(r"^draw_parent_meta schema=2 arch=(x86|x64) qpc_frequency=(\d+) "
                         r"groups=(\d+) warm_groups=(\d+) iterations=(\d+) trace=(0|1) "
                         r"group_detail=1 pid=(\d+) tid=(\d+)$")
+META_V3_RE = re.compile(r"^draw_parent_meta schema=3 arch=(x86|x64) qpc_frequency=(\d+) "
+                        r"groups=(\d+) warm_groups=(\d+) iterations=(\d+) trace=(0|1) "
+                        r"group_detail=1 tail_detail=1 pid=(\d+) tid=(\d+)$")
 BINDING_RE = re.compile(r"^draw_parent_binding module=(.+) machine=(0x[0-9a-fA-F]+) "
                          r"primitive_rva=(0x[0-9a-fA-F]+) indexed_rva=(0x[0-9a-fA-F]+)$")
 ROW_RE = re.compile(
@@ -36,10 +39,13 @@ TRACE_RE = re.compile(r"^draw_parent_trace phase=(begin|timed_begin|timed_end|en
 GROUP_RE = re.compile(r"^draw_parent_group case=(\w+) path=(\w+) group=(\d+) "
                       r"measured=(0|1) qpc_ticks=(\d+) tail_qpc_ticks=(\d+) "
                       r"tail_getdata_calls=(\d+)$")
+TAIL_RE = re.compile(r"^draw_parent_tail case=(\w+) path=(\w+) group=(\d+) "
+                     r"end_scene_qpc_ticks=(\d+) issue_qpc_ticks=(\d+) "
+                     r"getdata_qpc_ticks=(\d+) other_qpc_ticks=(\d+)$")
 EXPECTED = {(case, path) for case in CASES for path in PATHS}
 KNOWN_HEALTH = ("draw_parent_meta", "draw_parent_binding", "draw_parent_row",
-                "draw_parent_group", "draw_parent_trace", "draw_parent_release",
-                "draw_parent_complete")
+                "draw_parent_group", "draw_parent_tail", "draw_parent_trace",
+                "draw_parent_release", "draw_parent_complete")
 
 
 def owned_lines(text: str) -> list[str]:
@@ -98,17 +104,22 @@ def bounded_sum(values: list[int], what: str) -> int:
 def parse_text(text: str, *, expected_arch: str | None = None,
                expected_trace: bool | None = None,
                expected_groups: int | None = None,
-               expected_group_detail: bool | None = None) -> dict:
+               expected_group_detail: bool | None = None,
+               expected_tail_detail: bool | None = None) -> dict:
     lines = owned_lines(text)
     meta_v1 = [META_V1_RE.fullmatch(line) for line in lines]
     meta_v2 = [META_V2_RE.fullmatch(line) for line in lines]
+    meta_v3 = [META_V3_RE.fullmatch(line) for line in lines]
     meta_v1 = [match for match in meta_v1 if match]
     meta_v2 = [match for match in meta_v2 if match]
-    if len(meta_v1) + len(meta_v2) != 1 or sum(line.startswith("draw_parent_meta ") for line in lines) != 1:
+    meta_v3 = [match for match in meta_v3 if match]
+    if (len(meta_v1) + len(meta_v2) + len(meta_v3) != 1
+            or sum(line.startswith("draw_parent_meta ") for line in lines) != 1):
         raise ValueError("exactly one valid meta record required")
-    schema = 2 if meta_v2 else 1
-    group_detail = schema == 2
-    meta_match = meta_v2[0] if group_detail else meta_v1[0]
+    schema = 3 if meta_v3 else (2 if meta_v2 else 1)
+    group_detail = schema >= 2
+    tail_detail = schema == 3
+    meta_match = meta_v3[0] if tail_detail else (meta_v2[0] if group_detail else meta_v1[0])
     arch, frequency, groups, warm_groups, iterations, trace, pid, tid = meta_match.groups()
     frequency, groups, warm_groups, iterations, trace, pid, tid = (
         uint(frequency, positive=True), uint(groups), uint(warm_groups), uint(iterations),
@@ -121,6 +132,8 @@ def parse_text(text: str, *, expected_arch: str | None = None,
         raise ValueError("group count mismatch")
     if expected_group_detail is not None and group_detail != expected_group_detail:
         raise ValueError("group-detail mode mismatch")
+    if expected_tail_detail is not None and tail_detail != expected_tail_detail:
+        raise ValueError("tail-detail mode mismatch")
     if not 1 <= groups <= 8192 or not 0 <= warm_groups <= 128 or iterations != 32:
         raise ValueError("invalid bounded meta")
 
@@ -138,6 +151,9 @@ def parse_text(text: str, *, expected_arch: str | None = None,
     groups_by_key = {}
     group_sequence = []
     group_indices = []
+    tails_by_key = {}
+    tail_sequence = []
+    pending_tail = None
     traces = {}
     trace_sequence = []
     footer = release = 0
@@ -147,6 +163,29 @@ def parse_text(text: str, *, expected_arch: str | None = None,
             raise ValueError("blank record")
         if footer:
             raise ValueError("record after completion")
+        if pending_tail is not None and not TAIL_RE.fullmatch(line):
+            raise ValueError("tail detail must immediately follow its group")
+        match = TAIL_RE.fullmatch(line)
+        if match:
+            if not tail_detail or pending_tail is None or rows:
+                raise ValueError("unexpected tail detail")
+            case, path, ordinal, end_scene, issue, getdata, other = match.groups()
+            ordinal = uint(ordinal)
+            values = [uint(value) for value in (end_scene, issue, getdata, other)]
+            key = (case, path, ordinal)
+            if key != pending_tail or key in tails_by_key:
+                raise ValueError("invalid or duplicate tail detail identity")
+            group = groups_by_key.get(key)
+            if group is None or bounded_sum(values, "tail component") != group["tail_qpc_ticks"]:
+                raise ValueError("tail detail sum does not match group")
+            tails_by_key[key] = {"case": case, "path": path, "group": ordinal,
+                                 "end_scene_qpc_ticks": values[0],
+                                 "issue_qpc_ticks": values[1],
+                                 "getdata_qpc_ticks": values[2],
+                                 "other_qpc_ticks": values[3]}
+            tail_sequence.append(key)
+            pending_tail = None
+            continue
         match = GROUP_RE.fullmatch(line)
         if match:
             if not group_detail:
@@ -170,6 +209,8 @@ def parse_text(text: str, *, expected_arch: str | None = None,
                                         "tail_getdata_calls": polls}
             group_sequence.append(group_key)
             group_indices.append(index)
+            if tail_detail:
+                pending_tail = group_key
             continue
         match = ROW_RE.fullmatch(line)
         if match:
@@ -239,8 +280,7 @@ def parse_text(text: str, *, expected_arch: str | None = None,
             if set(rows) != EXPECTED:
                 raise ValueError("release before complete row matrix")
             continue
-        complete_line = ("draw_parent_complete schema=2 rows=27 status=pass"
-                         if group_detail else "draw_parent_complete schema=1 rows=27 status=pass")
+        complete_line = f"draw_parent_complete schema={schema} rows=27 status=pass"
         if line == complete_line:
             if release != 1 or set(rows) != EXPECTED:
                 raise ValueError("completion before release or rows")
@@ -250,7 +290,8 @@ def parse_text(text: str, *, expected_arch: str | None = None,
         if line.startswith("draw_parent_meta ") or line.startswith("draw_parent_binding "):
             continue
         raise ValueError(f"unexpected record: {line[:80]}")
-    if set(rows) != EXPECTED or footer != 1 or release != 1 or complete_index != len(lines) - 1:
+    if (set(rows) != EXPECTED or footer != 1 or release != 1
+            or complete_index != len(lines) - 1 or pending_tail is not None):
         raise ValueError("incomplete draw-parent receipt")
     if group_detail:
         expected_group_keys = {(case, path, ordinal)
@@ -265,6 +306,11 @@ def parse_text(text: str, *, expected_arch: str | None = None,
             raise ValueError("group-detail sequence mismatch")
         if trace and (not traces or min(group_indices) <= max(traces.values())):
             raise ValueError("traced group samples must follow the complete trace loop")
+        if tail_detail:
+            if set(tails_by_key) != expected_group_keys or tail_sequence != expected_group_sequence:
+                raise ValueError("tail-detail set or sequence mismatch")
+    elif tails_by_key:
+        raise ValueError("tail detail without group detail")
     elif groups_by_key:
         raise ValueError("group detail in schema 1")
     expected_markers = {(case, path, group, phase)
@@ -291,8 +337,7 @@ def parse_text(text: str, *, expected_arch: str | None = None,
                     raise ValueError("chunk flush inside timed interval")
     elif traces or any(line.startswith("pe_recorder_chunk") for line in lines):
         raise ValueError("trace records in timing mode")
-    report = {"schema": "dxmt9-pe-draw-parent-economy-v2" if group_detail
-              else "dxmt9-pe-draw-parent-economy-v1", "meta": {
+    report = {"schema": f"dxmt9-pe-draw-parent-economy-v{schema}", "meta": {
                 "arch": arch, "qpc_frequency": frequency, "groups": groups,
                 "warm_groups": warm_groups, "iterations": iterations, "trace": bool(trace),
                 "pid": pid, "tid": tid},
@@ -318,6 +363,24 @@ def parse_text(text: str, *, expected_arch: str | None = None,
                     "tail_getdata_calls": distribution([item["tail_getdata_calls"] for item in selected]),
                 }
             report["group_distributions"][f"{case}/{path}"] = phases
+        if tail_detail:
+            detail_tails = [tails_by_key[key] for key in expected_group_sequence]
+            report["tail_rows"] = detail_tails
+            report["meta"]["tail_detail"] = True
+            report["tail_distributions"] = {}
+            for case, path in sorted(EXPECTED):
+                owned = [item for item in detail_tails
+                         if item["case"] == case and item["path"] == path]
+                phases = {}
+                for phase, measured in (("warm", False), ("measured", True)):
+                    selected = [item for item in owned
+                                if (item["group"] >= warm_groups) == measured]
+                    phases[phase] = {
+                        field: distribution([item[field] for item in selected])
+                        for field in ("end_scene_qpc_ticks", "issue_qpc_ticks",
+                                      "getdata_qpc_ticks", "other_qpc_ticks")
+                    }
+                report["tail_distributions"][f"{case}/{path}"] = phases
     return report
 
 
@@ -329,13 +392,15 @@ def main() -> int:
     parser.add_argument("--trace", type=int, choices=(0, 1))
     parser.add_argument("--groups", type=int)
     parser.add_argument("--group-detail", type=int, choices=(0, 1))
+    parser.add_argument("--tail-detail", type=int, choices=(0, 1))
     args = parser.parse_args()
     try:
         data = args.log.read_bytes()
         report = parse_text(data.decode("utf-8"), expected_arch=args.arch,
                             expected_trace=None if args.trace is None else bool(args.trace),
                             expected_groups=args.groups,
-                            expected_group_detail=None if args.group_detail is None else bool(args.group_detail))
+                            expected_group_detail=None if args.group_detail is None else bool(args.group_detail),
+                            expected_tail_detail=None if args.tail_detail is None else bool(args.tail_detail))
         report["source"] = {"path": str(args.log), "bytes": len(data),
                             "sha256": hashlib.sha256(data).hexdigest()}
     except (OSError, UnicodeError, ValueError) as error:

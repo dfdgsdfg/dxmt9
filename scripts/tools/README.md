@@ -66,6 +66,9 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   unfiltered sums plus nearest-rank distributions. Extra clocks and buffering
   are not observer-disabled timing parity; do not remove long groups to price
   small changes.
+  `--tail-detail` implies group detail and splits EndScene, event Issue and
+  accumulated GetData wall time, retaining a conserving control/retry remainder.
+  It is a separate diagnostic recipe; no production wait policy is modified.
 - `summarize_3dmark05_perf.py` — parse dxmt9 per-run perf logs into encoder,
   stream, indexed-probe, and per-frame sampling CSVs. Enable
   `DXMT9_PERF_FRAME_SAMPLING=1` or `run_3dmark05_perf_probe.sh --frame-sampling`

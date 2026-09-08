@@ -1,4 +1,4 @@
-// H299 public D3D9 draw-parent economy conformance fixture.
+// H300 public D3D9 draw-parent economy conformance fixture.
 //
 // This is a checked-in, on-demand PE fixture.  It deliberately uses only
 // public IDirect3D9/IDirect3DDevice9 interfaces: the measured work is a small
@@ -30,7 +30,7 @@ constexpr UINT kIterations = 32u;
 constexpr DWORD kFvf = D3DFVF_XYZRHW | D3DFVF_DIFFUSE;
 constexpr UINT kVertexStride = 20u;
 constexpr UINT kSecondTriangleOffset = 3u * kVertexStride;
-constexpr char kWindowClass[] = "Dxmt9H299DrawParentEconomy";
+constexpr char kWindowClass[] = "Dxmt9H300DrawParentEconomy";
 
 template <std::size_t N>
 constexpr std::array<float, N> repeated(float value) noexcept {
@@ -68,7 +68,7 @@ struct WindowFixture {
     klass.lpszClassName = kWindowClass;
     atom = RegisterClassExA(&klass);
     if (atom == 0u && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return false;
-    window = CreateWindowExA(0u, kWindowClass, "dxmt9-h299", WS_OVERLAPPED,
+    window = CreateWindowExA(0u, kWindowClass, "dxmt9-h300", WS_OVERLAPPED,
                              0, 0, kSize, kSize, nullptr, nullptr, instance,
                              nullptr);
     return window != nullptr;
@@ -131,6 +131,17 @@ struct GroupSample {
   std::uint64_t qpcTicks = 0u;
   std::uint64_t tailQpcTicks = 0u;
   std::uint64_t tailGetDataCalls = 0u;
+  bool tailDetail = false;
+  std::uint64_t endSceneQpcTicks = 0u;
+  std::uint64_t issueQpcTicks = 0u;
+  std::uint64_t getDataQpcTicks = 0u;
+  std::uint64_t otherQpcTicks = 0u;
+};
+
+struct TailDetail {
+  std::uint64_t endSceneQpcTicks = 0u;
+  std::uint64_t issueQpcTicks = 0u;
+  std::uint64_t getDataQpcTicks = 0u;
 };
 
 struct Fixture {
@@ -206,6 +217,12 @@ bool qpcNow(std::uint64_t& result) noexcept {
   LARGE_INTEGER value{};
   if (!QueryPerformanceCounter(&value) || value.QuadPart < 0) return false;
   result = static_cast<std::uint64_t>(value.QuadPart);
+  return true;
+}
+
+bool addQpcTicks(std::uint64_t& total, std::uint64_t ticks) noexcept {
+  if (total > std::numeric_limits<std::uint64_t>::max() - ticks) return false;
+  total += ticks;
   return true;
 }
 
@@ -437,12 +454,26 @@ void applyCase(Fixture& f, Case c, UINT iteration, CallAggregate& a) noexcept {
   }
 }
 
-bool drainEvent(Fixture& fixture, CallAggregate& a) noexcept {
+bool drainEvent(Fixture& fixture, CallAggregate& a,
+                TailDetail* detail = nullptr) noexcept {
   const ULONGLONG deadline = GetTickCount64() + 5000ull;
   for (;;) {
+    std::uint64_t start = 0u;
+    if (detail && !qpcNow(start)) {
+      std::fprintf(stderr, "FAIL: QueryPerformanceCounter(GetData start)\n");
+      return false;
+    }
     const HRESULT hr = fixture.eventQuery->GetData(nullptr, 0u,
                                                     D3DGETDATA_FLUSH);
     a.add(hr);
+    if (detail) {
+      std::uint64_t end = 0u;
+      if (!qpcNow(end) || end < start ||
+          !addQpcTicks(detail->getDataQpcTicks, end - start)) {
+        std::fprintf(stderr, "FAIL: GetData QPC span\n");
+        return false;
+      }
+    }
     if (hr == S_OK) return true;
     if (hr != S_FALSE || GetTickCount64() >= deadline) {
       std::fprintf(stderr, "FAIL: event query drain hr=0x%08lx\n",
@@ -453,10 +484,24 @@ bool drainEvent(Fixture& fixture, CallAggregate& a) noexcept {
   }
 }
 
-bool issueAndDrain(Fixture& fixture, CallAggregate& a) noexcept {
+bool issueAndDrain(Fixture& fixture, CallAggregate& a,
+                   TailDetail* detail = nullptr) noexcept {
+  std::uint64_t start = 0u;
+  if (detail && !qpcNow(start)) {
+    std::fprintf(stderr, "FAIL: QueryPerformanceCounter(Issue start)\n");
+    return false;
+  }
   a.add(fixture.eventQuery->Issue(D3DISSUE_END));
+  if (detail) {
+    std::uint64_t end = 0u;
+    if (!qpcNow(end) || end < start ||
+        !addQpcTicks(detail->issueQpcTicks, end - start)) {
+      std::fprintf(stderr, "FAIL: Issue QPC span\n");
+      return false;
+    }
+  }
   if (a.failures != 0u) return false;
-  return drainEvent(fixture, a);
+  return drainEvent(fixture, a, detail);
 }
 
 bool beginGroup(Fixture& fixture, Path path, CallAggregate& a) noexcept {
@@ -659,6 +704,7 @@ bool inputsSnapshotValid(const Fixture& fixture,
 
 bool runRow(Fixture& fixture, Case c, Path path, int warmGroups, int groups,
             std::uint64_t emptyQpcTicks, bool trace, bool groupDetail,
+            bool tailDetail,
             GroupSample* groupSamples, std::size_t groupSampleCapacity,
             std::size_t& groupSampleCount, const InputSnapshot& snapshot,
             Row& row) noexcept {
@@ -717,8 +763,26 @@ bool runRow(Fixture& fixture, Case c, Path path, int warmGroups, int groups,
       return false;
     }
     CallAggregate tail{};
+    TailDetail tailDetailData{};
+    TailDetail* tailDetailPtr = tailDetail ? &tailDetailData : nullptr;
+    std::uint64_t endSceneStart = 0u;
+    if (tailDetailPtr && !qpcNow(endSceneStart)) {
+      std::fprintf(stderr,
+                   "FAIL: QueryPerformanceCounter(EndScene start)\n");
+      return false;
+    }
     tail.add(fixture.device->EndScene());
-    const bool drained = tail.failures == 0u && issueAndDrain(fixture, tail);
+    if (tailDetailPtr) {
+      std::uint64_t endSceneEnd = 0u;
+      if (!qpcNow(endSceneEnd) || endSceneEnd < endSceneStart ||
+          !addQpcTicks(tailDetailData.endSceneQpcTicks,
+                        endSceneEnd - endSceneStart)) {
+        std::fprintf(stderr, "FAIL: EndScene QPC span\n");
+        return false;
+      }
+    }
+    const bool drained = tail.failures == 0u &&
+                         issueAndDrain(fixture, tail, tailDetailPtr);
     if (!drained || timed.failures != 0u || tail.failures != 0u) return false;
     std::uint64_t tailEnd = 0u;
     if (groupDetail && (!qpcNow(tailEnd) || tailEnd < tailStart)) {
@@ -741,6 +805,20 @@ bool runRow(Fixture& fixture, Case c, Path path, int warmGroups, int groups,
       sample.qpcTicks = end - start;
       sample.tailQpcTicks = tailEnd - tailStart;
       sample.tailGetDataCalls = tail.calls - 2u;
+      sample.tailDetail = tailDetail;
+      if (tailDetail) {
+        std::uint64_t componentTicks = tailDetailData.endSceneQpcTicks;
+        if (!addQpcTicks(componentTicks, tailDetailData.issueQpcTicks) ||
+            !addQpcTicks(componentTicks, tailDetailData.getDataQpcTicks) ||
+            componentTicks > sample.tailQpcTicks) {
+          std::fprintf(stderr, "FAIL: tail QPC component sum\n");
+          return false;
+        }
+        sample.endSceneQpcTicks = tailDetailData.endSceneQpcTicks;
+        sample.issueQpcTicks = tailDetailData.issueQpcTicks;
+        sample.getDataQpcTicks = tailDetailData.getDataQpcTicks;
+        sample.otherQpcTicks = sample.tailQpcTicks - componentTicks;
+      }
     }
     if (group == warmGroups + groups - 1) {
       CallAggregate finalGetters{};
@@ -862,6 +940,18 @@ void printGroupSamples(const GroupSample* samples,
                  static_cast<unsigned long long>(sample.qpcTicks),
                  static_cast<unsigned long long>(sample.tailQpcTicks),
                  static_cast<unsigned long long>(sample.tailGetDataCalls));
+    if (sample.tailDetail) {
+      std::fprintf(stderr,
+                   "draw_parent_tail case=%s path=%s group=%llu "
+                   "end_scene_qpc_ticks=%llu issue_qpc_ticks=%llu "
+                   "getdata_qpc_ticks=%llu other_qpc_ticks=%llu\n",
+                   sample.name, sample.path,
+                   static_cast<unsigned long long>(sample.group),
+                   static_cast<unsigned long long>(sample.endSceneQpcTicks),
+                   static_cast<unsigned long long>(sample.issueQpcTicks),
+                   static_cast<unsigned long long>(sample.getDataQpcTicks),
+                   static_cast<unsigned long long>(sample.otherQpcTicks));
+    }
   }
 }
 
@@ -922,17 +1012,27 @@ int runDrawParentEconomy() {
   int warmGroups = 8;
   int traceValue = 0;
   int groupDetailValue = 0;
+  int tailDetailValue = 0;
   if (!envBounded("DXMT9_TEST_DRAW_PARENT_GROUPS", 512, 1, 8192, groups) ||
       !envBounded("DXMT9_TEST_DRAW_PARENT_WARM_GROUPS", 8, 0, 128,
                   warmGroups) ||
       !envBounded("DXMT9_TEST_DRAW_PARENT_TRACE", 0, 0, 1, traceValue) ||
       !envBounded("DXMT9_TEST_DRAW_PARENT_GROUP_DETAIL", 0, 0, 1,
-                  groupDetailValue)) {
+                  groupDetailValue) ||
+      !envBounded("DXMT9_TEST_DRAW_PARENT_TAIL_DETAIL", 0, 0, 1,
+                  tailDetailValue)) {
     std::fprintf(stderr, "FAIL: invalid draw-parent environment bounds\n");
     return 1;
   }
   const bool trace = traceValue != 0;
   const bool groupDetail = groupDetailValue != 0;
+  const bool tailDetail = tailDetailValue != 0;
+  if (tailDetail && !groupDetail) {
+    std::fprintf(stderr,
+                 "FAIL: DXMT9_TEST_DRAW_PARENT_TAIL_DETAIL requires "
+                 "DXMT9_TEST_DRAW_PARENT_GROUP_DETAIL=1\n");
+    return 1;
+  }
   std::uint64_t emptyStart = 0u;
   std::uint64_t emptyEnd = 0u;
   if (!qpcNow(emptyStart) || !qpcNow(emptyEnd) || emptyEnd < emptyStart) {
@@ -941,7 +1041,16 @@ int runDrawParentEconomy() {
   }
   const std::uint64_t emptyQpcTicks = emptyEnd - emptyStart;
   const char* arch = sizeof(void*) == 8u ? "x64" : "x86";
-  if (groupDetail) {
+  if (tailDetail) {
+    std::fprintf(stderr,
+                 "draw_parent_meta schema=3 arch=%s qpc_frequency=%llu "
+                 "groups=%d warm_groups=%d iterations=%u trace=%d "
+                 "group_detail=1 tail_detail=1 pid=%lu tid=%lu\n",
+                 arch, static_cast<unsigned long long>(qpcFrequency), groups,
+                 warmGroups, kIterations, trace ? 1 : 0,
+                 static_cast<unsigned long>(GetCurrentProcessId()),
+                 static_cast<unsigned long>(GetCurrentThreadId()));
+  } else if (groupDetail) {
     std::fprintf(stderr,
                  "draw_parent_meta schema=2 arch=%s qpc_frequency=%llu "
                  "groups=%d warm_groups=%d iterations=%u trace=%d "
@@ -993,7 +1102,8 @@ int runDrawParentEconomy() {
        caseIndex < kCaseNames.size() && success; ++caseIndex) {
     for (const Path path : {Path::SettersOnly, Path::Primitive, Path::Indexed}) {
       if (!runRow(fixture, static_cast<Case>(caseIndex), path, warmGroups,
-                  groups, emptyQpcTicks, trace, groupDetail, groupSamples,
+                  groups, emptyQpcTicks, trace, groupDetail, tailDetail,
+                  groupSamples,
                   groupSampleCapacity, groupSampleCount, inputSnapshot,
                   rows[rowIndex])) {
         success = false;
@@ -1017,7 +1127,9 @@ int runDrawParentEconomy() {
   for (const Row& row : rows) printRow(row);
   delete[] groupSamples;
   if (!cleanup(fixture)) return 1;
-  if (groupDetail)
+  if (tailDetail)
+    std::fputs("draw_parent_complete schema=3 rows=27 status=pass\n", stderr);
+  else if (groupDetail)
     std::fputs("draw_parent_complete schema=2 rows=27 status=pass\n", stderr);
   else
     std::fputs("draw_parent_complete schema=1 rows=27 status=pass\n", stderr);

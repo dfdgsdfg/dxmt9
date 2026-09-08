@@ -129,6 +129,8 @@ def main() -> int:
     parser.add_argument("--mode", choices=("trace", "timing"), default="timing")
     parser.add_argument("--group-detail", action="store_true",
                         help="Retain each group and separately time its drain tail; diagnostic, not aggregate timing parity.")
+    parser.add_argument("--tail-detail", action="store_true",
+                        help="Also split EndScene, Issue and GetData wall scopes; implies --group-detail.")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--groups", type=int)
     parser.add_argument("--warm-groups", type=int)
@@ -142,6 +144,7 @@ def main() -> int:
     parser.add_argument("--wine-id", default="sikarugir-cx-24.0.7")
     parser.add_argument("--prefix", type=Path, default=ROOT / "experiments/prefixs/conf-d3d9-triangle")
     args = parser.parse_args()
+    args.group_detail = args.group_detail or args.tail_detail
     groups = args.groups if args.groups is not None else (2 if args.mode == "trace" else 512)
     warm_groups = args.warm_groups if args.warm_groups is not None else (1 if args.mode == "trace" else 8)
     if not 1 <= groups <= 8192 or not 0 <= warm_groups <= 128:
@@ -194,6 +197,7 @@ def main() -> int:
                 "DXMT9_OPTIMIZE_OPAQUE_DEPTH_INDEX_CACHE": "0", "DXMT9_PE_STATS_DECIMATION": "0",
                 "DXMT9_TEST_DRAW_PARENT_GROUPS": str(groups), "DXMT9_TEST_DRAW_PARENT_WARM_GROUPS": str(warm_groups),
                 "DXMT9_TEST_DRAW_PARENT_GROUP_DETAIL": "1" if args.group_detail else "0",
+                "DXMT9_TEST_DRAW_PARENT_TAIL_DETAIL": "1" if args.tail_detail else "0",
                 "DXMT9_TEST_DRAW_PARENT_TRACE": "1" if args.mode == "trace" else "0"}
     if args.mode == "trace":
         explicit["DXMT9_PE_RECORDER_CHUNK_LOG"] = "1"
@@ -210,6 +214,7 @@ def main() -> int:
               "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
               "mode": args.mode, "groups": groups, "warm_groups": warm_groups, "iterations": 32,
               "group_detail": args.group_detail,
+              "tail_detail": args.tail_detail,
               "command": command, "env": explicit, "fixture": {"path": str(fixture), **identity(fixture)},
               "fixture_source": fixture_source_before, "images": {str(path): identity(path) for path in pe_images.values()},
               "production_images": {name: {"path": str(path), "identity": identity(path)}
@@ -237,7 +242,8 @@ def main() -> int:
             raise ValueError("unexpected fixture verdict")
         parsed = parse_text((output / "run.log").read_text(), expected_arch=args.arch,
                             expected_trace=args.mode == "trace", expected_groups=groups,
-                            expected_group_detail=args.group_detail)
+                            expected_group_detail=args.group_detail,
+                            expected_tail_detail=args.tail_detail)
         if parsed["binding"]["primitive_rva"] != selected_binding["primitive_rva"] or \
                 parsed["binding"]["indexed_rva"] != selected_binding["indexed_rva"]:
             raise ValueError("fixture binding does not match linked public COM slots")

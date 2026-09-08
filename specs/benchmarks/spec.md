@@ -252,6 +252,23 @@ clocks can affect subsequent scheduling even though neither executes inside
 the setter/draw QPC pair. A detail trace still requires
 all four existing markers and rejects any timed recorder flush.
 
+R-BENCH-7.6 adds `--tail-detail` (implies `--group-detail`). Its test-only
+`DXMT9_TEST_DRAW_PARENT_TAIL_DETAIL` flag requires group detail and defaults
+off. Schema 3 adds `tail_detail=1` and one `draw_parent_tail` supplement
+immediately after each buffered group record. Three disjoint QPC scopes
+measure EndScene, event Issue and accumulated GetData calls. The difference
+between their sum and the outer tail is retained as `other_qpc_ticks`, which
+includes control, clock overhead and any retry sleep. The same bounded
+storage and delayed-output policy applies. Failed/non-monotonic clocks and
+arithmetic overflow reject the run, never omit a sample.
+
+The strict parser requires full identity/order coverage and exact component
+conservation, and reports separate warm/measured distributions per case/path.
+Schemas 1 and 2 and their parsed receipts remain supported without invented
+tail components. This diagnostic cannot distinguish work done within GetData
+from replay, queue or GPU waits without further evidence; neither its wall
+scope nor the whole-row process CPU value is exclusive PE execution time.
+
 The scope remains warmed FFP with one stream and one triangle, without Present,
 programmable shaders, UP, StateBlock or allocation-failure paths. Pixel checks
 qualify VB/IB geometry and these selected states; constants are qualified by

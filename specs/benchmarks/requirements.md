@@ -217,8 +217,17 @@ measured QPC interval, its case/path/ordinal identity and the exact measured
 sum. Separately bracket the EndScene/event-issue/drain tail and report its
 GetData call count. Allocate storage before row timing and emit it only after
 the whole matrix's CPU captures; do not allocate or print samples inside
-groups. Reject missing,
-duplicate, misclassified or non-conserving samples. Publish unfiltered sums
+groups. Reject missing, duplicate, misclassified or non-conserving samples.
+Publish unfiltered sums
 and explicitly defined quantiles without removing slow groups. Extra tail
 clocks and buffering are diagnostic perturbations, not observer-disabled
 timing parity or exclusive PE attribution.
+
+**R-BENCH-7.6** Optional tail-detail diagnostics must separately measure
+EndScene, event Issue and every GetData call within the existing outer tail.
+Their nonoverlapping tick sums plus an explicit control/retry/measurement
+remainder must equal that tail exactly. Preserve all samples and HRESULT,
+timeout and retry behavior, including a first-call S_OK. The parser must
+reject identity/order/version mixing, missing or duplicate components and
+non-conserving totals. Additional clocks qualify this as a distinct
+diagnostic recipe, not exclusive PE CPU or a production wait-policy change.

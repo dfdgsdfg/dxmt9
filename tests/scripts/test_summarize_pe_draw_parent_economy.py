@@ -41,10 +41,13 @@ def log(trace: bool = False) -> str:
     return "\n".join(lines)
 
 
-def detail_log(warm_groups: int = 1, trace: bool = False) -> str:
-    meta = ("draw_parent_meta schema=2 arch=x86 qpc_frequency=1000000 groups=2 "
+def detail_log(warm_groups: int = 1, trace: bool = False,
+               tail_detail: bool = False) -> str:
+    schema = 3 if tail_detail else 2
+    meta = (f"draw_parent_meta schema={schema} arch=x86 qpc_frequency=1000000 groups=2 "
             f"warm_groups={warm_groups} iterations=32 trace={'1' if trace else '0'} "
-            "group_detail=1 pid=123 tid=456")
+            + "group_detail=1 " + ("tail_detail=1 " if tail_detail else "")
+            + "pid=123 tid=456")
     lines = [meta,
              "draw_parent_binding module=C:\\windows\\system32\\d3d9.dll machine=0x14c primitive_rva=0x101b0 indexed_rva=0x10200"]
     # The fixture captures all group samples before emitting the buffered row
@@ -57,6 +60,14 @@ def detail_log(warm_groups: int = 1, trace: bool = False) -> str:
                 sample_lines.append(f"draw_parent_group case={case} path={path} group={ordinal} "
                                     f"measured={int(ordinal >= warm_groups)} qpc_ticks={qpc} "
                                     f"tail_qpc_ticks={ordinal + 2} tail_getdata_calls={ordinal + 1}")
+                if tail_detail:
+                    end_scene = ordinal
+                    getdata = int(ordinal != 0)
+                    other = ordinal + 2 - end_scene - getdata
+                    sample_lines.append(
+                        f"draw_parent_tail case={case} path={path} group={ordinal} "
+                        f"end_scene_qpc_ticks={end_scene} issue_qpc_ticks=0 "
+                        f"getdata_qpc_ticks={getdata} other_qpc_ticks={other}")
     if trace:
         # Recorder evidence and the complete trace loop precede buffered detail
         # samples, matching the fixture's no-in-timed-pair publication order.
@@ -70,7 +81,8 @@ def detail_log(warm_groups: int = 1, trace: bool = False) -> str:
         lines.extend(trace_lines)
     lines.extend(sample_lines)
     lines.extend(row(case, path) for case in module.CASES for path in module.PATHS)
-    lines.extend(("draw_parent_release refs=0", "draw_parent_complete schema=2 rows=27 status=pass"))
+    lines.extend(("draw_parent_release refs=0",
+                  f"draw_parent_complete schema={schema} rows=27 status=pass"))
     return "\n".join(lines)
 
 
@@ -99,6 +111,8 @@ class DrawParentEconomyParserTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--mode", result.stdout)
         self.assertIn("--group-detail", result.stdout)
+        self.assertIn("--tail-detail", result.stdout)
+        self.assertIn("--tail-detail", result.stdout)
 
     def test_runner_filenames_are_not_owned_records(self) -> None:
         text = ("[runner] exe=/tmp/d3d9_draw_parent_economy_x86.exe\n\n" + log() +
@@ -250,6 +264,93 @@ class DrawParentEconomyParserTests(unittest.TestCase):
         traced = module.parse_text(detail_log(trace=True), expected_group_detail=True,
                                    expected_trace=True)
         self.assertTrue(traced["meta"]["trace"])
+
+    def test_schema3_tail_detail_preserves_schema2_and_distributions(self) -> None:
+        schema2 = module.parse_text(detail_log(), expected_group_detail=True)
+        report = module.parse_text(detail_log(tail_detail=True), expected_group_detail=True,
+                                   expected_tail_detail=True)
+        self.assertEqual(report["schema"], "dxmt9-pe-draw-parent-economy-v3")
+        self.assertEqual(report["rows"], schema2["rows"])
+        self.assertEqual(report["group_rows"], schema2["group_rows"])
+        self.assertTrue(report["meta"]["group_detail"])
+        self.assertTrue(report["meta"]["tail_detail"])
+        self.assertEqual(len(report["tail_rows"]), 81)
+        self.assertEqual(report["tail_rows"][0], {
+            "case": "steady", "path": "setters_only", "group": 0,
+            "end_scene_qpc_ticks": 0, "issue_qpc_ticks": 0,
+            "getdata_qpc_ticks": 0, "other_qpc_ticks": 2})
+        self.assertEqual(report["tail_distributions"]["steady/setters_only"]["measured"]["end_scene_qpc_ticks"],
+                         {"min": 1, "p50": 1, "p90": 2, "p99": 2, "max": 2,
+                          "sum": 3, "count": 2})
+        traced = module.parse_text(detail_log(trace=True, tail_detail=True),
+                                   expected_group_detail=True, expected_tail_detail=True,
+                                   expected_trace=True)
+        self.assertEqual(len(traced["tail_rows"]), 81)
+
+    def test_schema3_tail_detail_fail_closed_mutations(self) -> None:
+        text = detail_log(tail_detail=True)
+        tail = ("draw_parent_tail case=steady path=setters_only group=0 "
+                "end_scene_qpc_ticks=0 issue_qpc_ticks=0 getdata_qpc_ticks=0 "
+                "other_qpc_ticks=2")
+        for old, new in (
+                ("schema=3", "schema=2"),
+                ("tail_detail=1", "tail_detail=0"),
+                ("draw_parent_complete schema=3", "draw_parent_complete schema=2"),
+                ("case=steady path=setters_only group=0", "case=unknown path=setters_only group=0"),
+                ("other_qpc_ticks=2", "other_qpc_ticks=1"),
+                ("end_scene_qpc_ticks=0", "end_scene_qpc_ticks=18446744073709551616"),
+        ):
+            with self.subTest(new=new), self.assertRaises(ValueError):
+                module.parse_text(text.replace(old, new, 1))
+        with self.assertRaises(ValueError):
+            module.parse_text(text.replace(tail + "\n", "", 1))
+        with self.assertRaises(ValueError):
+            module.parse_text(text.replace(tail, tail + "\n" + tail, 1))
+        lines = text.splitlines()
+        tail_index = next(index for index, line in enumerate(lines) if line == tail)
+        lines[tail_index], lines[tail_index + 2] = lines[tail_index + 2], lines[tail_index]
+        with self.assertRaises(ValueError):
+            module.parse_text("\n".join(lines))
+        with self.assertRaises(ValueError):
+            module.parse_text(detail_log(), expected_tail_detail=True)
+        with self.assertRaises(ValueError):
+            module.parse_text(log() + "\n" + tail)
+
+    def test_schema3_zero_tail_components_and_tail_failure_markers(self) -> None:
+        zero = detail_log(tail_detail=True)
+        report = module.parse_text(zero, expected_tail_detail=True)
+        self.assertEqual(report["tail_rows"][0]["end_scene_qpc_ticks"], 0)
+        self.assertEqual(report["tail_rows"][0]["issue_qpc_ticks"], 0)
+        for marker in ("FAIL: tail", "SKIP: tail", "[d3d9-pe] error: tail failure"):
+            with self.subTest(marker=marker), self.assertRaises(ValueError):
+                module.parse_text(zero + "\n" + marker)
+
+    def test_tail_warm_phase_is_separate_and_empty_warm_is_bounded(self) -> None:
+        text = detail_log(tail_detail=True)
+        text = text.replace("tail_qpc_ticks=2 tail_getdata_calls=1",
+                            "tail_qpc_ticks=25 tail_getdata_calls=1", 1)
+        text = text.replace("end_scene_qpc_ticks=0 issue_qpc_ticks=0",
+                            "end_scene_qpc_ticks=23 issue_qpc_ticks=0", 1)
+        report = module.parse_text(text, expected_tail_detail=True)
+        phases = report["tail_distributions"]["steady/setters_only"]
+        self.assertEqual(phases["warm"]["end_scene_qpc_ticks"]["sum"], 23)
+        self.assertEqual(phases["measured"]["end_scene_qpc_ticks"]["sum"], 3)
+        empty = module.parse_text(detail_log(warm_groups=0, tail_detail=True))
+        self.assertEqual(empty["tail_distributions"]["steady/setters_only"]["warm"]["getdata_qpc_ticks"],
+                         {"count": 0, "sum": 0, "min": None, "p50": None,
+                          "p90": None, "p99": None, "max": None})
+
+    def test_tail_only_identity_mismatch_and_component_sum_overflow_reject(self) -> None:
+        text = detail_log(tail_detail=True)
+        bad = text.replace("draw_parent_tail case=steady path=setters_only group=0",
+                           "draw_parent_tail case=steady path=primitive group=0", 1)
+        with self.assertRaises(ValueError):
+            module.parse_text(bad)
+        with self.assertRaises(ValueError):
+            module.parse_text(text.replace("end_scene_qpc_ticks=0 issue_qpc_ticks=0",
+                                          "end_scene_qpc_ticks=18446744073709551615 issue_qpc_ticks=1", 1))
+        with self.assertRaises(ValueError):
+            module.parse_text(text, expected_tail_detail=False)
 
     def test_detail_warm_is_not_measured_and_full_sequence_is_required(self) -> None:
         text = detail_log().replace("measured=0 qpc_ticks=0", "measured=0 qpc_ticks=97")
