@@ -3936,6 +3936,70 @@ void compactAlwaysWireIdentityInsertionMatchesActiveReference() {
         0u, "always-wire insertion publishes a new surface");
   apply(surfaceRef, D9C_CHUNK_HANDLE_KIND_SURFACE, true, false, false, true,
         0u, "always-wire insertion deduplicates a repeated surface");
+
+  // Generic add() snapshots wire before initializing aliased outputs.
+  {
+    Witness inputOutputAlias{}; bool wire = true, promotion = false;
+    constexpr std::size_t kAliasSentinel = 0x5au;
+    std::size_t ordinal = kAliasSentinel;
+    check(inputOutputAlias.add(surfaceRef, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                               wire, wire, promotion, &ordinal) && wire &&
+              promotion && ordinal == 0u && inputOutputAlias.count == 1u &&
+              inputOutputAlias.wireCount == 1u &&
+              inputOutputAlias.wireOrdinals[0] == 0u,
+          "generic add snapshots wire before newly-retained alias output");
+
+    Witness outputAlias{}; bool sharedOutput = false;
+    ordinal = kAliasSentinel;
+    check(outputAlias.add(surfaceRef, D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                          sharedOutput, sharedOutput, &ordinal) &&
+              sharedOutput && ordinal == 0u && outputAlias.count == 1u &&
+              outputAlias.wireCount == 1u,
+          "generic add preserves aliased retained/promotion outputs");
+
+    Witness promotionAlias{}; bool retained = false; wire = true;
+    ordinal = kAliasSentinel;
+    check(promotionAlias.add(surfaceRef, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                             wire, retained, wire, &ordinal) && retained &&
+              wire && ordinal == 0u && promotionAlias.count == 1u &&
+              promotionAlias.wireCount == 1u,
+          "generic add snapshots wire before promotion-output alias");
+
+    Witness omittedGeneric{}, omittedCompact{};
+    bool genericNew = false, genericPromotion = false, compactNew = false;
+    check(omittedGeneric.add(surfaceRef, D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                              genericNew, genericPromotion) && genericNew &&
+              genericPromotion && omittedGeneric.count == 1u &&
+              omittedGeneric.wireCount == 1u &&
+              omittedCompact.addWire(surfaceRef,
+                                     D9C_CHUNK_HANDLE_KIND_SURFACE,
+                                     compactNew) && compactNew &&
+              omittedCompact.count == 1u && omittedCompact.wireCount == 1u,
+          "generic and compact add preserve omitted ordinal on insertion");
+    genericNew = true;
+    genericPromotion = true;
+    compactNew = true;
+    check(omittedGeneric.add(surfaceRef, D9C_CHUNK_HANDLE_KIND_SURFACE, true,
+                             genericNew, genericPromotion) && !genericNew &&
+              !genericPromotion && omittedCompact.addWire(
+                  surfaceRef, D9C_CHUNK_HANDLE_KIND_SURFACE, compactNew) &&
+              !compactNew,
+          "generic and compact add preserve omitted ordinal on duplicate");
+    PeWireObjectRef malformedNull{};
+    malformedNull.identity.kind = D9C_CHUNK_HANDLE_KIND_SURFACE;
+    genericNew = true;
+    genericPromotion = true;
+    compactNew = true;
+    check(!omittedGeneric.add(malformedNull, D9C_CHUNK_HANDLE_KIND_SURFACE,
+                              true, genericNew, genericPromotion) &&
+              !genericNew && !genericPromotion &&
+              !omittedCompact.addWire(malformedNull,
+                                      D9C_CHUNK_HANDLE_KIND_SURFACE, compactNew) &&
+              !compactNew &&
+              omittedGeneric.count == 1u && omittedCompact.count == 1u,
+          "generic and compact add preserve omitted ordinal on malformed null");
+  }
+
   const auto textureRef = localRef<D9C_CHUNK_HANDLE_KIND_TEXTURE>(
       &texture, 0x510u, 3u);
   apply(textureRef, D9C_CHUNK_HANDLE_KIND_TEXTURE, true, true, true, true,

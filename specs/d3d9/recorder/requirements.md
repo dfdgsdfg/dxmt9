@@ -1301,3 +1301,12 @@ specialization must not create a second identity or retention authority.
 Bounded native transition differentials and linked PE32/PE64 call-site checks
 must precede actual-PE parent-cost qualification; removing an unused result
 alone does not establish CPU or FPS improvement.
+
+The specialized private call may omit unused runtime wire-policy arguments
+from its signature, not merely ignore their values in the callee. Generic
+visibility must remain a by-value snapshot taken before output initialization,
+including when the caller aliases that value with an output boolean. Optional
+argument forms must be closed at compile time; no empty runtime tag, borrowed
+policy object or second transition may replace the eliminated arguments.
+Native alias/null-ordinal cases and linked caller/callee checks must cover
+the narrower entry without inferring whole-parent savings from stack bytes.

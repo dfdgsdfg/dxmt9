@@ -27,6 +27,7 @@
 #include <memory>
 #include <new>
 #include <span>
+#include <tuple>
 #include <type_traits>
 #include <utility>
 
@@ -357,10 +358,28 @@ struct PeSemanticPreparedIdentityWitnessT {
   }
 
  private:
-  template <bool AlwaysWire, bool ReportWirePromotion>
-  bool addImpl(const PeWireObjectRef& ref, std::uint32_t kind, bool wire,
-               bool& newlyRetained, bool* newlyWireVisible,
-               std::size_t* identityOrdinal) noexcept {
+  template <bool AlwaysWire, bool ReportWirePromotion,
+            typename... RuntimeWireArgs>
+  bool addImpl(const PeWireObjectRef& ref, std::uint32_t kind,
+               bool& newlyRetained, std::size_t* identityOrdinal,
+               RuntimeWireArgs... runtimeWireArgs) noexcept {
+    static_assert(
+        (AlwaysWire && !ReportWirePromotion &&
+         sizeof...(RuntimeWireArgs) == 0u) ||
+        (!AlwaysWire && ReportWirePromotion &&
+         std::is_same_v<std::tuple<RuntimeWireArgs...>,
+                        std::tuple<bool, bool*>>),
+        "identity witness addImpl received an invalid wire argument pack");
+    bool wire = true;
+    bool* newlyWireVisible = nullptr;
+    if constexpr (!AlwaysWire) {
+      // These are by-value snapshots. In particular, the input wire value
+      // must survive when a caller aliases it with either output reference.
+      const auto runtime =
+          std::tuple<RuntimeWireArgs...>(runtimeWireArgs...);
+      wire = std::get<0>(runtime);
+      newlyWireVisible = std::get<1>(runtime);
+    }
     newlyRetained = false;
     if constexpr (ReportWirePromotion) *newlyWireVisible = false;
     const bool wireVisible = AlwaysWire || wire;
@@ -412,15 +431,14 @@ struct PeSemanticPreparedIdentityWitnessT {
   bool add(const PeWireObjectRef& ref, std::uint32_t kind, bool wire,
            bool& newlyRetained, bool& newlyWireVisible,
            std::size_t* identityOrdinal = nullptr) noexcept {
-    return addImpl<false, true>(ref, kind, wire, newlyRetained,
-                                &newlyWireVisible, identityOrdinal);
+    return addImpl<false, true>(ref, kind, newlyRetained, identityOrdinal,
+                                wire, &newlyWireVisible);
   }
 
   bool addWire(const PeWireObjectRef& ref, std::uint32_t kind,
                bool& newlyRetained,
                std::size_t* identityOrdinal = nullptr) noexcept {
-    return addImpl<true, false>(ref, kind, true, newlyRetained, nullptr,
-                                identityOrdinal);
+    return addImpl<true, false>(ref, kind, newlyRetained, identityOrdinal);
   }
 
   bool setPin(std::size_t identityOrdinal, std::uint32_t pin) noexcept {

@@ -30,6 +30,16 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H297](present-pacing-pe-identity-call-abi.297.md) closes H295's dummy private
+identity-call arguments: PE32 explicit arguments shrink 6 to 4 and PE64 caller
+stack reservation shrinks 72 to 56 bytes. Generic live instruction counts and
+the shared transition are preserved. Native/TLA and actual PE pixels pass.
+Four-repeat public-COM costs remain mixed, including PE32 viewport/scissor
+draw median +4.83% with overlapping ranges. Local removal does not establish
+exclusive CPU savings, general neutrality or FPS promotion.
+Fresh 05/06 GT2 spots are 30.132/18.242 FPS against README 30.1/18.1;
+28 final 06 frames remain outside the full health snapshot.
+
 [H296](present-pacing-pe-warm-pin-identity.296.md) retains a bounded warm-pin
 identity refinement with cold pre-retain snapshot semantics unchanged. Real
 PE32 warm spills disappear; PE64 stack reservation shrinks. Native/TLA and
@@ -46,7 +56,7 @@ parent frame growth. Native/TLA and actual PE pixels pass. Four-repeat public
 COM draw costs overlap; selected 05/06 GT2 spots are 30.136/18.205 FPS, near
 README, not an attributed gain. The final four 06 frames lack the full health
 snapshot. Two focus-affected 05 attempts are explicitly excluded. Whole-parent
-CPU savings and a narrower outlined signature remain unproven.
+CPU savings remain unproven; H297 subsequently closes the narrower signature.
 
 [H294](present-pacing-pe-public-com-parent.294.md) measures actual public COM
 draw/state windows against preserved H293 images. Four traces prove no timed

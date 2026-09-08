@@ -13,6 +13,17 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H297](../../../docs/perfomance/present-pacing/present-pacing-pe-identity-call-abi.297.md)
+closes R-CORE-REC-7.67's unused compact private-call arguments through the
+shared transition. Generic by-value visibility, aliased outputs and omitted
+ordinals are pinned natively; four builds, native/TLA and both-width actual PE
+pixels pass. Linked PE32 arguments shrink 6 to 4 and PE64 caller reservation
+shrinks 72 to 56 bytes. Four-repeat public-COM costs remain mixed: PE32
+viewport/scissor draw median +4.83% with overlapping ranges. This is retained
+local work removal, not CPU/FPS promotion or a neutrality proof.
+Fresh 05/06 GT2 spots are 30.132/18.242 FPS; 28 final 06 frames lack the full
+health snapshot. Whole-parent/exclusive CPU savings remain open.
+
 [H296](../../../docs/perfomance/present-pacing/present-pacing-pe-warm-pin-identity.296.md)
 refines R-CORE-REC-7.36: warm qualified-pin comparisons avoid a typed identity
 temporary; cold acquisition keeps its pre-retain snapshot. Seven-family exact
@@ -29,7 +40,8 @@ outcome/active-prefix/failure checks, both-width linked bodies, existing TLA
 regression and actual PE pixel parity pass. Four-repeat public-COM draw costs
 overlap; 05/06 GT2 spots are 30.136/18.205 FPS. Four final 06 frames lack the
 full health snapshot. No CPU/FPS gain or performance-neutrality proof follows;
-dummy outlined-helper ABI arguments and whole-parent economics remain open.
+H297 later closes the dummy outlined-helper arguments, while whole-parent
+economics remain open.
 
 [H294](../../../docs/perfomance/present-pacing/present-pacing-pe-public-com-parent.294.md)
 partially closes R-CORE-REC-7.66's loaded production-parent evidence gap with

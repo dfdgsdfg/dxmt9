@@ -802,6 +802,15 @@ representation refinement, not a new resource-lifetime or concurrency protocol;
 existing recorder models retain publication/rollback ownership. Actual PE
 parent economics and pixel checks remain distinct integration gates.
 
+The compact private specialization takes only identity inputs and consumed
+outputs. Generic runtime visibility and promotion reporting can be expressed
+as a compile-time-checked optional argument pack, absent from the compact
+signature. Generic visibility is copied before either output is cleared,
+preserving aliased caller-value semantics. Both forms still execute one
+identity-insertion algorithm. This is a PE-internal calling-contract change,
+not a COM or PE/unix wire ABI change; linked inspection must include argument
+setup and caller/callee frame effects in both PE widths.
+
 R-CORE-REC-7.64 permits a compact-only fusion of canonical binding rows and
 their first-use wire-handle entries. The private writer consumes the existing
 identity witness; a call-local emitted-prefix cursor distinguishes first use
