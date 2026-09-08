@@ -13,6 +13,14 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+R-CORE-REC-7.64 compact first-use publication is not implemented in production.
+[H289](../../../docs/perfomance/present-pacing/present-pacing-pe-wire-publication-fusion.289.md)
+withdraws its prototype: eight native specs, TLA regression and actual PE pixel
+parity pass, but loaded-writer and separate matched-header append economics
+do not justify promotion. Stronger speculative-suffix/role tests remain; the
+reference handle loop is retained. Any alternative still needs production
+append/settlement and workload-weighted economy, not just fewer source loops.
+
 [H288](../../../docs/perfomance/present-pacing/present-pacing-pe-retainer-component-cost.288.md)
 partially closes H287's component-economy evidence gap: six actual PE32/PE64
 processes price loaded index/epoch bodies and non-final buffer/texture release,

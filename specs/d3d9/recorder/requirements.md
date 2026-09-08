@@ -1224,3 +1224,22 @@ Native bounded checks must bind the observation to actual retainer operations,
 including expiry, tombstones, empty sets and epoch wrap, and pin sampling and
 overflow accounting. Shape frequencies alone must not be claimed as measured
 CPU savings or justify an unverified replacement of the reference index.
+
+**R-CORE-REC-7.64** Compact canonical binding emission may also write each
+record-local wire-handle identity at its first wire-visible occurrence, instead
+of traversing the identity witness again after payload emission. This requires
+the same canonical family/row order as preparation, monotonically complete
+first-use wire ordinals, no direct-only identity omitted by the compact visitor,
+and exactly one handle write per unique wire-visible identity. Null and duplicate
+occurrences must not create handles or change retain multiplicity. Current source,
+typed physical-pin, global-remap and storage-bound checks remain authoritative.
+Speculative handle writes must remain outside the committed frontier and be
+revoked on failed append, including failure before frontier publication; the
+prior canonical prefix, refs, ordinals and retry bytes must be preserved.
+Generic inputs (including generic UP/control emission) keep their complete
+reference path; selection is by compact input capability, not producer opcode.
+Bounded native differentials must cover all seven families,
+duplicate/null/first-use order, late retain/source failures, settlement rejection
+and both emission forms.
+Actual PE32/PE64 writer and append economics must price the added per-occurrence
+work and live state as well as the removed pass before performance promotion.

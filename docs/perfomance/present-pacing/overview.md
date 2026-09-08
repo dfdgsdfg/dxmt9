@@ -30,6 +30,13 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H289](present-pacing-pe-wire-publication-fusion.289.md) rejects the measured
+compact first-use handle fusion. Sixteen PE32/PE64 writer/append processes
+pass their oracles, as do native/TLA and actual PE pixel comparisons. Yet
+the twenty-texture matched-header append grows 4.56%/8.69%; the loaded writer
+also grows. These are distinct fixture costs, not actual production-parent
+or exclusive-CPU timing. Runtime is withdrawn, tests retained, no new FPS claim.
+
 [H288](present-pacing-pe-retainer-component-cost.288.md) separates controlled
 index, expiry and non-final release costs using the current DLL's actual PE
 bodies. Six processes pass with compiler-qualified real retainer storage and

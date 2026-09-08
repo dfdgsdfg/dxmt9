@@ -742,6 +742,20 @@ actual append/retry tests preserve source-mutation rejection, ownership and
 canonical bytes. Inspector corruption must not cause new per-binding product
 validation for a private, construction-proved fact.
 
+R-CORE-REC-7.64 permits a compact-only fusion of canonical binding rows and
+their first-use wire-handle entries. The private writer consumes the existing
+identity witness; a call-local emitted-prefix cursor distinguishes first use
+from duplicate use and must cover the exact wire-count at success. It is not a
+new identity or retention authority. The append checkpoint owns all speculative
+handle bytes, including writes made before `cacheEmissionMetrics` advances the
+frontier. Failure cleanup must not depend only on the advanced frontier, and
+must preserve the earlier committed prefix. Non-compact inputs, including
+generic UP/control inputs, retain the separate complete handle traversal;
+selection follows the input capability, not the producer opcode. This is a
+bounded representation refinement of the existing transaction, not a queue,
+wake or GPU-lifetime change. Native reference/fault and actual PE/pixel evidence
+remain distinct from economy.
+
 Verification first uses actual-owner versus independent canonical-builder
 bytes and ownership over bounded section masks, all producer/binding families,
 source/cross-family A/B/A, stale capability, partial acquisition and settlement

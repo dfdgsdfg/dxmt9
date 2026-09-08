@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H289](present-pacing-pe-wire-publication-fusion.289.md) withdraws compact
+first-use handle publication. Native/TLA and PE pixels pass, but 16 bounded
+PE processes show higher binding costs, including the separate matched-header
+append fixture. Production and README stay unchanged; stronger tests remain.
+
 [H288](present-pacing-pe-retainer-component-cost.288.md) prices the actual
 loaded retainer bodies without changing production: warm PE32 100-entry
 rebuild is 1.705µs and interleaved 24-entry expiry is 5.583µs. Six PE32/PE64

@@ -77,6 +77,13 @@ struct PeSemanticOwnerTestAccess {
                         std::uint32_t pin, std::uint32_t generation) noexcept {
     return Owner::insertPinIndex(index, identity, pin, generation);
   }
+
+  // R-CORE-REC-7.64: inspect speculative bytes without granting append authority.
+  template <typename Owner>
+  static D9CCommandChunkWireHandleEntry readWireHandle(
+      const Owner& owner, std::size_t index) noexcept {
+    return owner.storage_->wireHandles[index];
+  }
 };
 }  // namespace dxmt9::d3d9::pe
 
@@ -1635,6 +1642,16 @@ void compactProducerBindingIdentityGuards() {
               std::equal(prefixBytes.begin(), prefixBytes.end(),
                          afterReject.wire.begin()),
           "compact identity rejection preserves the committed prefix");
+    const auto unpublished = D9CCommandChunkWireHandleEntry{};
+    const auto prefixHandleCount = prefixEmission.transport.header.handleCount;
+    for (std::size_t i = 0u; i < 7u; ++i) {
+      const auto handle = PeSemanticOwnerTestAccess::readWireHandle(
+          owner, prefixHandleCount + i);
+      check(handle.kind == unpublished.kind &&
+                handle.generation == unpublished.generation &&
+                handle.objectId == unpublished.objectId,
+            "compact failed writer clears unpublished handle suffix");
+    }
     check(fixture.texture.refs == 1u && fixture.stream.refs == 1u &&
               fixture.shader.refs == 1u && fixture.declaration.refs == 1u &&
               fixture.index.refs == 1u && fixture.target.refs == 1u &&
@@ -1654,6 +1671,10 @@ void compactProducerBindingIdentityGuards() {
               std::equal(expected.begin(), expected.end(),
                          finalEmission.wire.begin()),
           "compact identity retry equals the generic producer oracle");
+    PeSemanticSegmentedEmission segmented{};
+    check(owner.emitSegmented(segmented) &&
+              ownerSegmentedRolesEqualExact(finalEmission, segmented),
+          "compact identity retry preserves ExactFixed/segmented handle roles");
     owner.reset();
     check(prefixSurface.refs == 1u, "compact identity retry reset balances prefix");
   };
@@ -8134,6 +8155,16 @@ void realCompactSparseMaxFamilyDifferentialAndRollback(bool allDistinct,
             std::equal(prefixBytes.begin(), prefixBytes.end(),
                        afterFault.wire.begin()),
         "late max-family fault leaves owner canonical prefix unchanged");
+  const auto unpublished = D9CCommandChunkWireHandleEntry{};
+  const auto prefixHandleCount = prefixEmission.transport.header.handleCount;
+  for (std::size_t i = 0u; i < preparedWireCount; ++i) {
+    const auto handle = PeSemanticOwnerTestAccess::readWireHandle(
+        owner, prefixHandleCount + i);
+    check(handle.kind == unpublished.kind &&
+              handle.generation == unpublished.generation &&
+              handle.objectId == unpublished.objectId,
+          "late max-family rollback clears unpublished handle suffix");
+  }
 
   if (faultChild) {
     check(faultHandled &&
@@ -8207,6 +8238,10 @@ void realCompactSparseMaxFamilyDifferentialAndRollback(bool allDistinct,
               std::equal(oracleBytes.begin(), oracleBytes.end(),
                          childFinal.wire.begin()),
           "post-fault clean retry equals the delayed generic oracle");
+    PeSemanticSegmentedEmission childSegmented{};
+    check(owner.emitSegmented(childSegmented) &&
+              ownerSegmentedRolesEqualExact(childFinal, childSegmented),
+          "post-fault retry preserves ExactFixed/segmented handle roles");
     owner.reset();
     check(prefixTexture.refs == 1u,
           "post-fault retry reset releases the committed prefix pin");
@@ -8231,6 +8266,10 @@ void realCompactSparseMaxFamilyDifferentialAndRollback(bool allDistinct,
             std::equal(oracleBytes.begin(), oracleBytes.end(),
                        finalEmission.wire.begin()),
         "real compact max-family retry equals generic producer oracle bytes");
+  PeSemanticSegmentedEmission segmented{};
+  check(owner.emitSegmented(segmented) &&
+            ownerSegmentedRolesEqualExact(finalEmission, segmented),
+        "real compact max-family retry preserves ExactFixed/segmented roles");
   owner.reset();
   check(prefixTexture.refs == 1u,
         "real compact max-family reset releases the committed prefix pin");
