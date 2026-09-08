@@ -1264,6 +1264,246 @@ void compactProducerBindingIdentityGuards() {
     run(6u, mutation, true);
 }
 
+void compactProducerRejectsStaleScalarRowCardinality() {
+  enum class ScalarFamily : std::uint8_t {
+    RenderState,
+    TextureStageState,
+    SamplerState,
+    Transform,
+  };
+  enum class CardinalityMutation : std::uint8_t {
+    ZeroToOne,
+    OneToZero,
+    OneToTwo,
+  };
+
+  constexpr std::array families{
+      ScalarFamily::RenderState,
+      ScalarFamily::TextureStageState,
+      ScalarFamily::SamplerState,
+      ScalarFamily::Transform,
+  };
+  constexpr std::array mutations{
+      CardinalityMutation::ZeroToOne,
+      CardinalityMutation::OneToZero,
+      CardinalityMutation::OneToTwo,
+  };
+
+  for (const auto family : families) {
+    for (const auto mutation : mutations) {
+      PeHotStateShadow shadow{};
+      auto writer = shadow.writer();
+      const auto setFirst = [&]() noexcept {
+        switch (family) {
+        case ScalarFamily::RenderState:
+          writer.pendingRenderStatesTyped().set(renderStateSlotKey(1u), 0x11u);
+          break;
+        case ScalarFamily::TextureStageState:
+          writer.pendingTssTyped().set(textureStageIndexKey(0u),
+                                       textureStageStateTypeKey(0u), 0x22u);
+          break;
+        case ScalarFamily::SamplerState: {
+          SamplerIndex sampler{};
+          SamplerStateType type{};
+          if (!samplerIndexKey(0u, sampler) ||
+              !samplerStateTypeKey(0u, type)) return false;
+          writer.pendingSamplerStatesTyped().set(sampler, type, 0x33u);
+          break;
+        }
+        case ScalarFamily::Transform:
+          writer.pendingTransformsTyped().set(transformStateKey(kD3dTsView),
+                                              identityTransformMatrix());
+          break;
+        }
+        return true;
+      };
+      const auto setSecond = [&]() noexcept {
+        switch (family) {
+        case ScalarFamily::RenderState:
+          writer.pendingRenderStatesTyped().set(renderStateSlotKey(2u), 0x12u);
+          break;
+        case ScalarFamily::TextureStageState:
+          writer.pendingTssTyped().set(textureStageIndexKey(1u),
+                                       textureStageStateTypeKey(0u), 0x23u);
+          break;
+        case ScalarFamily::SamplerState: {
+          SamplerIndex sampler{};
+          SamplerStateType type{};
+          if (!samplerIndexKey(1u, sampler) ||
+              !samplerStateTypeKey(0u, type)) return false;
+          writer.pendingSamplerStatesTyped().set(sampler, type, 0x34u);
+          break;
+        }
+        case ScalarFamily::Transform:
+          writer.pendingTransformsTyped().set(
+              transformStateKey(kD3dTsProjection), identityTransformMatrix());
+          break;
+        }
+        return true;
+      };
+      const auto clearFamily = [&]() noexcept {
+        switch (family) {
+        case ScalarFamily::RenderState:
+          writer.pendingRenderStatesTyped().clear();
+          break;
+        case ScalarFamily::TextureStageState:
+          writer.pendingTssTyped().clear();
+          break;
+        case ScalarFamily::SamplerState:
+          writer.pendingSamplerStatesTyped().clear();
+          break;
+        case ScalarFamily::Transform:
+          writer.pendingTransformsTyped().clear();
+          break;
+        }
+      };
+
+      const bool initialSet = mutation != CardinalityMutation::ZeroToOne;
+      const bool initialReady = !initialSet || setFirst();
+      check(initialReady, "scalar stale-row fixture creates valid typed keys");
+
+      D9CSurface prefixSurface;
+      auto prefix = base(PeSemanticProducerKind::Present, 1u, 1u);
+      prefix.surface0 = localRef<D9C_CHUNK_HANDLE_KIND_SURFACE>(
+          &prefixSurface, 0x2b01u);
+      Owner owner;
+      CommandChunkBuilder canonical;
+      check(owner.admit(prefix) && appendCanonicalSemanticRecord(canonical, prefix),
+            "scalar stale-row fixture commits its prefix");
+      PeSemanticExactFixedEmission prefixEmission{};
+      check(owner.emitExactFixed(prefixEmission),
+            "scalar stale-row fixture emits its committed prefix");
+      const std::vector<std::byte> prefixBytes(
+          prefixEmission.wire.begin(), prefixEmission.wire.end());
+
+      PeConstShadowBlock constants{};
+      PeBindingView bindings{};
+      PeDrawPayloads payloads{};
+      PeDrawParams params{.recordType = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                          .primitiveType = 4u,
+                          .primitiveCount = 1u};
+      PeChunkContext chunk{};
+      SparseStatePlan stalePlan;
+      SparseStatePlan retryPlan;
+      std::recursive_mutex mutex;
+      dxmt9::core::ThreadOwnershipToken thread;
+      RecorderLockGuard guard(mutex, false);
+      bool stalePreparedRejected = false;
+      bool staleSettled = false;
+      bool staleAccepted = false;
+      bool restored = false;
+      bool retried = false;
+      bool genericBuilt = false;
+      bool prefixPreserved = false;
+      PeSparseScratch genericScratch{};
+      D9CCommandChunkWireDrawHeader genericHeader{};
+      SparseStateInput genericState{};
+
+      const bool operated = guard.withCapability(
+          thread, 0x2b00u + static_cast<std::uint64_t>(family) * 4u +
+                      static_cast<std::uint64_t>(mutation),
+          [&](const auto& access) noexcept {
+            if (!buildSparseStatePlan(access, shadow, constants, bindings,
+                                      payloads, params, false, false,
+                                      stalePlan) ||
+                !finalizeSparseStatePlanChunkContext(access, chunk, stalePlan))
+              return false;
+
+            // The writer is retained from before preparation. Direct typed
+            // table edits intentionally do not bump the pending generation,
+            // leaving the plan ticket valid while its scalar cardinality is
+            // stale.
+            switch (mutation) {
+            case CardinalityMutation::ZeroToOne:
+              if (!setFirst()) return false;
+              break;
+            case CardinalityMutation::OneToZero:
+              clearFamily();
+              break;
+            case CardinalityMutation::OneToTwo:
+              if (!setSecond()) return false;
+              break;
+            }
+            if (shadow.pendingTicket().generation !=
+                    stalePlan.pendingTicket().generation ||
+                !stalePlan.validFor(access))
+              return false;
+            const PeSemanticSparsePlanRecordInput input{
+                .access = &access,
+                .sparsePlan = &stalePlan,
+                .producer = PeSemanticProducerKind::DrawPrimitive,
+                .recordType = params.recordType,
+                .recordFlags = D9C_COMMAND_CHUNK_RECORD_FLAG_NONE,
+                .sourceOrdinal = 2u,
+                .recordOrdinal = 2u,
+            };
+            PeSemanticProductionCompactPreparedRecord prepared{};
+            stalePreparedRejected =
+                owner.prepareAdmission(input, prepared) ==
+                PeSemanticAdmissionOutcome::Malformed;
+            staleAccepted = owner.tryAppendSparseStatePlan(
+                access, stalePlan, PeSemanticProducerKind::DrawPrimitive,
+                params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 2u, 2u,
+                [&]() noexcept {
+                  staleSettled = true;
+                  return true;
+                });
+            if (staleAccepted || staleSettled || owner.size() != 1u)
+              return false;
+            PeSemanticExactFixedEmission afterReject{};
+            prefixPreserved = owner.emitExactFixed(afterReject) &&
+                              afterReject.wireBytes == prefixBytes.size() &&
+                              std::equal(prefixBytes.begin(), prefixBytes.end(),
+                                         afterReject.wire.begin()) &&
+                              owner.lastAdmissionFailure() ==
+                                  Owner::AdmissionFailure::Malformed;
+            if (!prefixPreserved) return false;
+
+            // Restore one row through the same retained writer, then rebuild
+            // the plan. This is the exact retry path after the stale attempt.
+            clearFamily();
+            if (!setFirst()) return false;
+            restored = true;
+            if (!buildSparseStatePlan(access, shadow, constants, bindings,
+                                      payloads, params, false, false,
+                                      retryPlan) ||
+                !finalizeSparseStatePlanChunkContext(access, chunk, retryPlan))
+              return false;
+            retried = owner.tryAppendSparseStatePlan(
+                access, retryPlan, PeSemanticProducerKind::DrawPrimitive,
+                params.recordType, D9C_COMMAND_CHUNK_RECORD_FLAG_NONE, 2u, 2u,
+                []() noexcept { return true; });
+            genericBuilt =
+                buildSparseState(shadow, constants, bindings, payloads, params,
+                                 false, false, genericScratch, genericHeader,
+                                 genericState) &&
+                addChunkContextSections(chunk, shadow, bindings, params,
+                                        genericScratch, genericState) &&
+                appendSparseRecord(canonical, params.recordType, genericHeader,
+                                   genericState);
+            return retried && genericBuilt;
+          });
+      check(operated && stalePreparedRejected && !staleAccepted &&
+                !staleSettled && prefixPreserved && restored && retried &&
+                genericBuilt,
+            "stale scalar rows fail before settlement and retry after rebuild");
+      check(prefixPreserved,
+            "stale scalar rejection preserves the committed prefix bytes");
+      const auto sealed = canonical.seal();
+      PeSemanticExactFixedEmission finalEmission{};
+      check(sealed.valid() && owner.emitExactFixed(finalEmission) &&
+                finalEmission.wireBytes == sealed.blob.size() &&
+                std::equal(sealed.blob.begin(), sealed.blob.end(),
+                           finalEmission.wire.begin()),
+            "rebuilt scalar rows match the generic producer bytes exactly");
+      owner.reset();
+      canonical.resetAndReleaseRetained();
+      check(prefixSurface.refs == 1u,
+            "stale scalar rejection and retry balance prefix references");
+    }
+  }
+}
+
 void classificationAndLifetime() {
   Owner owner;
   CommandChunkBuilder canonicalBuilder;
@@ -6987,6 +7227,7 @@ int main(int argc, char** argv) {
     bindingOccurrenceStorageUsesActiveFrontier();
     preparedBindingSevenFamilyMatrix();
     compactProducerBindingIdentityGuards();
+    compactProducerRejectsStaleScalarRowCardinality();
     classificationAndLifetime();
     partialRectClearMatchesCanonicalBuilder();
     emptyClearSpanMatchesCanonicalAndResetReuse();

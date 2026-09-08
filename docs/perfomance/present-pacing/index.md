@@ -11,11 +11,23 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H276](present-pacing-pe-post-lifetime-profile.276.md) refreshes current-image
+PE attribution and separate native-thread CPU: 05/06 GT2 commit threads use
+0.950/0.966 cores. Constant/owner work remains visible; new Present-cache and
+size-guard deletions are not approved by these samples. No runtime promotion
+or README FPS update is made.
+
+[H275](present-pacing-pe-cached-com-lifetime.275.md) fixes the canonical cache /
+public COM-reference cycle, including ordinary capture-OFF Present. Bounded
+PE32/PE64 lifecycle and capture/provider pixel checks pass with Release zero;
+broader concurrency and failed-Reset proofs remain open.
+
 [H274](present-pacing-inline-consumers.274.md) repeats inline OFF/ON economy
 with eight same-image Warn GT2 runs: 05 FPS +2.42%, process CPU/frame −0.49%;
 06 +0.24%/+0.15%, without a repeatable CPU saving. A cold capture-origin fix
 passes native rejection pins and four exact PE32/PE64 fresh-provider oracles;
-PE capture teardown still fails. Default stays OFF.
+that frozen capture teardown failure is subsequently fixed by H275. The inline
+constant default stays OFF.
 
 [H273](present-pacing-pe-selected-masks.273.md) rejects three compact mask-reuse
 forms that trade the removed source reread for added PE32 spills. Original runtime

@@ -23,11 +23,21 @@ This domain owns the **CPU/sync side** of GT1 wallclock: why
 and which production-safe knobs can recover the slack without breaking
 visual sync.
 
-Every finding here moves *wallclock fps* directly, not GPU frame time. The
+This domain investigates wallclock throughput and CPU work; an attribution
+result or code reduction is not itself a measured FPS improvement. The
 GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-storage/index.md) /
 [index-cache-locality](../index-cache-locality/index.md); the per-CB encode story by [state-churn-encode](../state-churn-encode/index.md).
 
 ## Latest Conclusions
+
+[H276](present-pacing-pe-post-lifetime-profile.276.md) refreshes current-image
+05/06 GT2 PE profiles and separate CPU envelopes. The commit-entry thread
+occupies 0.950/0.966 cores, while `d3d9.dll` owns only 9.96%/5.97% of separate
+stopped-PC prefixes. Constant handling and owner admission/materialization
+remain visible; Present lookup is unpriced and an alias-only shortcut is
+invalidated by ordinary RT changes. No runtime/default or README change is
+made. A late launcher log append is detected, preserved and byte-prefix
+qualified; the separate CPU runs disable that lingering focus helper.
 
 [H275](present-pacing-pe-cached-com-lifetime.275.md) separates canonical cache
 allocation credits from public COM refs. The Release-2 cycle is reproduced
@@ -332,15 +342,18 @@ a current PE symbol profile or attribution of the post-v0.1.1 regression.
 The engine-default trio is promoted and the dead lanes are gone; the honest
 remaining branches are:
 
-- **Producer thread (dominant, but mostly outside PE):** H236 measures one full
-  producer core. The game executable owns `64.3%`; PE `d3d9.dll` owns `10.6%`
-  and has no remaining single large leaf. Broad recorder-local tuning is closed
-  as an FPS lane.
-- **Bridge/resource updates:** PE `winemetal.dll` owns `13.9%`. Keep only
-  structural work that removes buffer lock/unlock/upload traffic or bridge
-  crossings; another local cache needs a new exact hot symbol first.
-- **Replay and encode second ceilings:** replay and encode use approximately
-  `57%` and `60%` of separate cores. The live dxmt9 branches are replay
+- **Producer thread:** current-image H276 05/06 GT2 commit-thread envelopes use
+  0.950/0.966 cores. Separate stopped-PC prefixes are mostly game code
+  (69.14%/78.96%); PE owns 9.96%/5.97%. These are different measurements, not
+  additive PE-exclusive CPU budgets. Constant/owner work remains a bounded
+  target; no new single large PE leaf or complete optimization ceiling is proved.
+- **Bridge/resource updates:** current H276 bridge PCs own 11.53%/8.76% of
+  the respective stopped-PC prefixes. Remove measured work or crossings,
+  preserving mutation/lifetime ordering; a PC at the bridge does not price
+  bridge-local work versus synchronous Unix/wait time.
+- **Replay and encode second ceilings:** historical H236 replay and encode
+  observations were approximately `57%` and `60%` of separate cores, not a
+  fresh HEAD measurement. The live dxmt9 branches are replay
   snapshot/materialization elimination and safe CPU-stage overlap. Parallel
   render encoding remains non-default after duplicated CPU cost outweighed its
   chunk-wall reduction.
