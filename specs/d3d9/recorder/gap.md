@@ -273,6 +273,15 @@ Warn 05/06 GT2 spots (29.642/18.097 FPS) and separate exact-image PE profiles
 are recorded, but do not demonstrate material CPU savings or close
 whole-scene pixels, repeatable economy or broader concurrency evidence.
 
+[H278](../../../docs/perfomance/present-pacing/present-pacing-pe-vs-constant-call-shape.278.md)
+adds observation-only VS-F call equality by exact length under the existing
+range diagnostic gate. The actual cold classifier, strict parser, optional
+owner/no-allocation checks and PE32/PE64 default-disabled codegen checks pass.
+Whole-log populations preserve Recording separately and reconcile against
+the old Call totals, including shader-key overflow. These counts narrow the
+next constant-kernel candidate; they do not implement an equality shortcut,
+prove CPU savings or close the remaining rendering/concurrency/economy gaps.
+
 R-CORE-REC-7.52–7.55 cover fault-only prediction gating, family-specific append
 preparation, single-owner compact layout/quota work and production ledger
 routing without test-only TLS access. They are implemented with bounded

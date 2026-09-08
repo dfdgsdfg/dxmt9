@@ -30,6 +30,16 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H278](present-pacing-pe-vs-constant-call-shape.278.md) separates current VS-F
+call equality from accumulated flush dirty spans. The bounded optional
+observer and strict CSV parser retain exact lengths even when the old
+shader-key table overflows, with Recording calls separate. 05/06 GT2 have
+85.05%/79.73% three-register calls, 87.89%/93.05% of those equal. Default-OFF
+public setters and
+constant kernels are linked-identical after address normalization. These are
+population facts, not a measured benefit; a three-register shortcut needs its
+own PE32/PE64 differential/codegen and sampler-OFF economy gates.
+
 [H277](present-pacing-pe-pin-probe-cursor.277.md) removes repeated remainder
 arithmetic from owner pin-index probes without changing table/identity
 authority. Production-bound native cursor/modulo differentials and existing

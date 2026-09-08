@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H278](present-pacing-pe-vs-constant-call-shape.278.md) adds a cold-only,
+exact-length VS setter population. Default-disabled PE32/PE64 setter and
+constant-kernel code stays unchanged. Both GT2 distributions favor testing
+a three-register equal shortcut, not a general long-range scan; no runtime
+shortcut or CPU/FPS promotion follows from diagnostic counts.
+
 [H277](present-pacing-pe-pin-probe-cursor.277.md) replaces per-probe modulo
 with an equivalent cyclic pin-index cursor. Bounded native and linked PE32/
 PE64 evidence qualify the arithmetic change. Fresh 05/06 Warn spots are
