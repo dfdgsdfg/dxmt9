@@ -5,7 +5,7 @@ title: "Canonical cache credit and public COM lifetime"
 type: evidence
 status: partial
 updated: 2026-09-08
-source: experiments/output/pe-present-source-owner-20260908/analysis
+source: experiments/output/pe-present-source-owner-20260908/analysis; experiments/output/app-d3d9-3dmark{05,06}-pe-cached-com-37621df1-gt2-off-perf-r1-20260908
 related: present-pacing-inline-consumers.274.md; present-pacing-inline-constant-pixels.265.md
 ---
 
@@ -84,6 +84,37 @@ fixtures differ only by added lifecycle checks; capture/pixel bodies are
 unchanged. The baseline getter checks precede the additional reacquisition
 and held-child-query witnesses, which are independently qualified post-fix.
 
-CPU/FPS neutrality is a separate remaining gate. Inline constants stay
-default-off; README is unchanged. This ownership repair is not an FPS
-optimization claim.
+## Post-commit CPU/FPS spots
+
+Two fresh canonical runs measure `37621df1`, with both PE widths and Unix
+staged from the verified build. Sikarugir cx-24.0.7, perf/Warn, replay worker
+ON, contiguous transport, CPU-ready tape/index reorder/inline constants OFF;
+05 uses 1024×768 and 06 uses 1280×720. Frame sampling and two-second external
+process CPU sampling are enabled; detailed PE clocks, stopped-PC sampling and
+GPU tracing are disabled. No build, test or second benchmark overlaps either
+scene. Earlier desktop-use-contaminated 06 results are not used.
+
+| Scene | Frames / wall ms | FPS | Process CPU ms/frame | CPU frame coverage | CB / pass per frame |
+|---|---|---:|---:|---:|---|
+| 05 GT2 | 1,916 / 64,624.163 | 29.6484 | 69.8062 | 96.97% | 4.0010 / 15.7844 |
+| 06 GT2 | 1,160 / 64,036.352 | 18.1147 | 95.9144 | 96.64% | 4.0017 / 19.8621 |
+
+H274's earlier sample-weighted default-OFF observations were 29.4126/18.1313
+FPS and 70.5773/95.1972 CPU ms/frame. These new fixed-order spots are not a
+matched A/B: 05 CPU is lower and 06 CPU is higher, so they establish neither
+repeatable CPU savings nor neutrality. Historical README recipes also differ.
+Inline constants remain default-off and README is unchanged.
+
+CPU uses one cumulative same-PID first/last endpoint delta strictly inside
+the scene: 129.70 seconds over 1,858 frames for 05 and 107.52 seconds over
+1,121 frames for 06. It includes game, Wine, PE and Unix threads, not PE-only
+work. Centisecond timer resolution and polling/log alignment limit precision.
+Raw first/last observations, RSS in KiB, recipes and image hashes remain in
+`measurement-qualification.json` and `analysis/economy-qualified.json`.
+
+Both runner results pass. 05 exits normally; 06 uses the explicitly allowed
+result-GUI timeout after its complete scene (frames 1,035–2,194). Eight observed
+error counters are zero. The last periodic 06 Present counter is 2,160, so the
+34-frame unreported tail is not health-proven. Summed GPU CB time is
+2.0000/11.9214 ms/frame, not GPU critical-path latency. No whole-scene pixel
+equivalence or broad COM concurrency claim follows from these runs.

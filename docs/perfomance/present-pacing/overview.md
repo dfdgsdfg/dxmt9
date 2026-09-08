@@ -34,7 +34,10 @@ allocation credits from public COM refs. The Release-2 cycle is reproduced
 with ordinary capture-OFF Present, then eliminated in twelve PE32/PE64
 lifecycle runs. Four fresh OFF/ON captures now pass both teardown and exact
 provider source/output oracles. Bounded native/ASan and existing TLA regression
-pass; this is not exhaustive COM concurrency or a CPU/FPS improvement claim.
+pass. Post-commit default-mode spots are 29.648/18.115 FPS and
+69.806/95.914 process CPU ms/frame for 05/06 GT2. They show no clear throughput
+regression, but are not a paired neutrality/CPU-saving proof or exhaustive COM
+concurrency evidence; inline remains default-off.
 
 [H274](present-pacing-inline-consumers.274.md) completes eight same-image
 Warn inline OFF/ON GT2 runs. Sample-weighted 05 FPS changes 29.413→30.124
