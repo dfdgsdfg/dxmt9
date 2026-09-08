@@ -3,13 +3,18 @@ domain: present-pacing
 workload: 3DMark05 GT2; 3DMark06 GT2
 title: "PE three-register equality candidate"
 type: evidence
-status: correctness-qualified-economy-pending
+status: rejected-runtime-candidate-tests-retained
 updated: 2026-09-08
 source: experiments/output/pe-three-register-equality-20260908/analysis
 related: present-pacing-pe-vs-constant-call-shape.278.md; present-pacing-pe-held-constant-value.269.md
 ---
 
 # PE three-register equality candidate
+
+The runtime candidate at `6ffdf357` is withdrawn after the measurements below.
+The H278 runtime is restored; the new native/PE pixel pins and generic
+short-range acceptance contract remain. This is insufficient economy evidence,
+not a demonstrated rendering failure or a proven performance regression.
 
 ## Boundary and decision gate
 
@@ -83,11 +88,76 @@ per iteration. The equal-three path returns before that loop. Both bridges
 and the Unix provider remain byte-identical. The actual GT2 programs execute
 PE32 under Sikarugir, not arm64 PE.
 
-## Economy evidence
+## Fresh economy evidence
 
-Pending fresh sampler-OFF, detailed-observer-OFF 05/06 GT2 CPU/FPS comparisons
-against the frozen H278 images. `run_economy.py` records all five full image
-hashes, exact recipes, scene frame intervals and two-second process CPU
-endpoints. CPU is process-inclusive, not PE-exclusive. The candidate is not
-accepted as a performance improvement by code size, population or pixel
-evidence; README remains unchanged.
+Eight sequential runs compare the frozen H278 runtime with `6ffdf357`: two
+baseline then two candidate runs per product (06 first, then 05). These are
+fresh runs, separate from the earlier user-interrupted 06 measurement. There
+are no overlapping builds or tests. Sikarugir cx-24.0.7, 1024x768 (05) and
+1280x720 (06), perf/Warn, frame sampling and two-second process CPU observation
+are fixed. Offload replay is ON; detailed PE diagnostics, stopped-PC sampling,
+inline constants, segmented transport, CPU-ready Tape and index reorder are
+OFF. 06 uses the focus-free single-GT2 GUI selector and completes the scene
+before the allowed result-GUI timeout. All five actual staged image identities
+match each launch recipe.
+
+| Product / image | Scene FPS, r1 / r2 | Process CPU ms/frame, r1 / r2 | Scene frames, r1 / r2 |
+|---|---:|---:|---:|
+| 05 H278 | 29.774 / 29.821 | 69.592 / 69.514 | 1,922 / 1,925 |
+| 05 candidate | 29.686 / 29.827 | 69.369 / 69.312 | 1,917 / 1,927 |
+| 06 H278 | 18.142 / 18.047 | 94.982 / 95.631 | 1,162 / 1,155 |
+| 06 candidate | 18.163 / 18.183 | 95.115 / 95.146 | 1,163 / 1,164 |
+
+Mean candidate-minus-baseline changes are -0.139%/+0.434% FPS and
+-0.306%/-0.185% process CPU per frame for 05/06. That is approximately
+0.213/0.176 ms less process CPU per frame, not an isolated PE saving.
+The cumulative same-PID CPU endpoints cover 96.7–97.5% of scene frames;
+their phase coverage is not identical. No selected-interval CPU sums are
+used. Two observations per image, fixed A-A-B-B ordering and whole-process
+CPU cannot establish such a small attributed saving. The 06 baseline repeat
+spread is already about 0.5% FPS. No confidence interval, neutrality or
+material improvement is claimed.
+
+All eight complete useful scene intervals qualify independently from GUI
+process duration. Each has zero reported chunk/GPU/pipeline errors. 05 health
+snapshots cover the scene end; 06 leaves 43/31 baseline and 56/2 candidate
+tail frames after the last reported health snapshot. These tails are not
+claimed error-verified. CB/frame stays about 4.001 (05) / 4.002 (06), with
+passes/frame 15.785–15.789 / 19.850–19.862. Process RSS peaks also vary:
+05 baseline 3,284,804–3,293,560 KiB versus candidate 3,305,832–3,313,972 KiB;
+06 baseline 3,046,676–3,302,088 KiB versus candidate 3,381,516–3,833,740 KiB.
+No memory saving or causal attribution of that variation is established.
+
+`run_economy.py` records exact commands, environments and full hashes.
+`validate_measurements.py` independently re-derives every scene and cumulative
+CPU envelope, checks preserved raw artifact hashes and records
+`measurements-verified.json`. Run directories are
+`app-d3d9-3dmark{05,06}-pe-three-register-6ffdf357-{baseline,candidate}-gt2-off-perf-r{1,2}-20260908`.
+FPS is renderer scene sampling, not benchmark-owned `.3dr` scoring.
+
+## Disposition and restoration
+
+The data suggest a small CPU reduction but do not price it robustly against
+the mismatch precomparison and PE32 fallback reloads. Keep those extra costs
+out of the default path pending stronger evidence. Restore only the runtime
+shortcut, retaining all additive tests and the spec's acceptance conditions.
+README remains unchanged; the 05 30.1 FPS recovery target is still open.
+
+Both PE builds and the full Unix build are refreshed after restoration.
+Runtime source is identical to H278. `restored-images.json` verifies every
+PE image byte except two parsed COFF/debug-directory timestamps is identical
+to its frozen H278 image; full SHA-256 hashes remain distinct and preserved.
+The initial verifier fails when only COFF/export fields are masked: the second
+changing field is the parsed debug-directory timestamp, not an export field.
+It is corrected to inspect the actual PE directory; no arbitrary changed-byte
+masking is used. The bridges and Unix provider remain byte-identical. Focused
+native tests and actual PE pixel tests are rerun against the restored,
+restaged images.
+
+A future retry needs a controlled **actual PE public-setter** economy fixture
+that separates warm count-three A-A calls from changed calls and other lengths.
+The current three-register fixture is a pixel oracle, not a timer. The existing
+`perf_d3d9_probe.cpp` skeletal path uses 184 registers and includes payload
+generation/draw work, so it cannot price this shortcut without a new bounded
+mode. Do not infer that cost from host-only helper timing, aggregate setter
+diagnostics or call-population counts.

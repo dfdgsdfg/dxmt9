@@ -30,11 +30,13 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
-[H279](present-pacing-pe-three-register-equality.279.md) adds a bounded
-three-register equality candidate after both shadow materializations. Native
-dirty/byte refinement and actual PE32/PE64 readback differentials pass. The
-equal path avoids the register loop, but mismatches add precomparison and
-PE32 fallback reloads; fresh CPU/FPS measurements must decide retention.
+[H279](present-pacing-pe-three-register-equality.279.md) tests then withdraws
+a bounded three-register equality shortcut. Native dirty/byte refinement and
+PE32/PE64 pixel differentials pass. Eight fresh GT2 runs show mean FPS changes
+of -0.139%/+0.434% (05/06) and small process-CPU reductions, insufficient to
+robustly price mismatch precomparison and PE32 reloads. H278 runtime is
+restored; additive tests remain. Controlled actual-PE setter economy is the
+missing gate, not another whole-log call histogram.
 
 [H278](present-pacing-pe-vs-constant-call-shape.278.md) separates current VS-F
 call equality from accumulated flush dirty spans. The bounded optional

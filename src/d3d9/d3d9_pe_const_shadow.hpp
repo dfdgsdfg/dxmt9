@@ -504,23 +504,8 @@ inline void ValidatedConstWrite<ElemSize>::applyNonEmpty(
     // Both stores are stable after materialization: the loop neither grows
     // storage nor calls out. Keep these borrows local to this one write.
     auto* const values = shadow.values.data();
-    const auto* source = static_cast<const std::uint8_t*>(data);
-    if constexpr (ElemSize == 16u) {
-        // Three-register calls dominate the measured VS-F population. An
-        // exact-bit equal range cannot add dirty obligations; preserve all
-        // prior ones and leave the original changed-range loop untouched.
-        if (count == 3u) {
-            const auto* destination =
-                values + static_cast<std::size_t>(start) * ElemSize;
-            std::uint32_t difference = 0u;
-            for (std::size_t offset = 0u; offset < 48u; offset += 4u) {
-                difference |= constShadowFixedLoadWord(destination + offset) ^
-                              constShadowFixedLoadWord(source + offset);
-            }
-            if (difference == 0u) return;
-        }
-    }
     auto* const dirtyElems = shadow.dirtyElems.data();
+    const auto* source = static_cast<const std::uint8_t*>(data);
     std::uint32_t firstChanged = count;
     std::uint32_t lastChanged = 0u;
     for (std::uint32_t i = 0u; i < count; ++i) {
