@@ -30,6 +30,14 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H294](present-pacing-pe-public-com-parent.294.md) measures actual public COM
+draw/state windows against preserved H293 images. Four traces prove no timed
+recorder flush; eight logging-OFF processes pass bounded getter/FFP-pixel checks.
+Actual parent costs are mixed, not the surrogate's uniform small-input penalty:
+PE32 six-constant+draw grows 12.81%, while scalar rows improve with overlapping
+ranges. H293 remains withdrawn; two final traces restore all baseline images.
+Production cardinality/weighting, exclusive CPU and new FPS gains remain open.
+
 [H293](present-pacing-pe-descriptor-inline.293.md) rejects a call-free,
 fixed-granule compact descriptor loop. Dense-table matched-header append
 improves, but small-table PE64 append grows 11–15%; PE32 small-input results

@@ -1275,3 +1275,7 @@ Impossible compact combinations must not be fabricated to fill a schema matrix.
 Actual PE32/PE64 economics must distinguish descriptor count from row count
 and loaded-writer cost from complete append cost; fewer source-level copies
 alone do not establish CPU or FPS improvement.
+A separately compiled matched-header append is a surrogate, not the loaded
+production parent. Public-entry measurements must use the actual PE COM
+surface and qualify their setup, source cadence and completion boundaries;
+provider C calls that bypass the PE recorder do not substitute for this gate.

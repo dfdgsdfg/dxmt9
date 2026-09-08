@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H294](present-pacing-pe-public-com-parent.294.md) adds actual loaded public
+COM draw-parent economics. Eight logging-OFF processes and four boundary traces
+pass, but costs are mixed; H293's surrogate percentages are not production
+draw overhead. The candidate stays withdrawn, all baseline images are restored,
+and no new CPU/FPS gain is claimed.
+
 [H293](present-pacing-pe-descriptor-inline.293.md) rejects the fixed-granule
 follow-up as a general replacement. Inline copies remove H292's external-copy
 call, but PE64 small-table append still costs 11–15% more; dense cases improve.

@@ -13,6 +13,19 @@ is [d3d9/gap](../gap.md); formal evidence gaps also appear in
 
 ## Direct final-wire and capability workstreams
 
+[H294](../../../docs/perfomance/present-pacing/present-pacing-pe-public-com-parent.294.md)
+partially closes R-CORE-REC-7.66's loaded production-parent evidence gap with
+actual public COM setter/draw windows, not a matched-header owner surrogate.
+Four traces establish no timed recorder flush; eight logging-OFF processes
+pass twelve getter/FFP-pixel rows each. Costs are mixed: PE32 six-constant+draw
+grows 12.81%, while several other rows overlap or improve. This neither
+generalizes H293's surrogate penalties nor promotes its withdrawn candidate.
+Thirteen parser counterexamples and two baseline restoration traces pass;
+all five shared Wine images and product sources remain baseline. Production
+descriptor cardinality, dense/indexed/UP weighting, exclusive CPU and new FPS
+improvement remain open. These bounded FFP/getter checks are not a general
+shader-byte or resource-lifetime proof.
+
 [H293](../../../docs/perfomance/present-pacing/present-pacing-pe-descriptor-inline.293.md)
 also rejects the fixed-size inline realization of R-CORE-REC-7.66. Four builds,
 eight native specs, unchanged TLA regression and eight actual PE processes pass

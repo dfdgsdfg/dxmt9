@@ -780,6 +780,17 @@ Dense compact cases must respect producer gating: indexed-buffer and indexed-UP
 payload sections do not coexist. A generic full-schema oracle is not evidence
 that one compact producer can emit every schema section simultaneously.
 
+Whole-entry economy is a separate layer from the private writer and a
+matched-header append surrogate. A bounded actual-PE fixture may time public
+COM state/draw calls after legal state/resource setup and an untimed seed
+draw. Destination flush, submission, query drain, readback and setup stay
+outside the timed window; a separate diagnostic execution must establish
+that no capacity or other recorder flush occurred inside that window.
+API-mix names are not claims of exact descriptor counts. Setter-only controls
+do not establish an additive decomposition of the draw path. QPC elapsed,
+supported Wine-reported CPU clocks and their resolution/availability must be
+reported separately; none alone proves exclusive PE CPU or whole-game FPS.
+
 R-CORE-REC-7.64 permits a compact-only fusion of canonical binding rows and
 their first-use wire-handle entries. The private writer consumes the existing
 identity witness; a call-local emitted-prefix cursor distinguishes first use
