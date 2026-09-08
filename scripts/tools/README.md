@@ -37,6 +37,19 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   for calibration, invocation and measurement limits.
 - `summarize_index_cache_runtime.py` — summarize 3DMark05 encoder-only
   reordered-index-cache lookup/apply/reject telemetry for opt-in proof runs.
+- `summarize_pe_constant_economy.py` — strictly qualify the 66-cell actual-PE
+  `DXMT9_TEST_INLINE_CONSTANT_CASE=setter-economy` transcript, including raw
+  QPC/process CPU, exact state checks and successful teardown. Invoke
+  `scripts/run_python.sh scripts/tools/summarize_pe_constant_economy.py <log>`;
+  timings include the warm public setter and loop, not draw/flush or FPS.
+  Loaded-image/environment qualification remains the runner's responsibility.
+- `run_pe_constant_economy.py` — invoke the canonical conformance runner with
+  cold diagnostics disabled, then bind the strict setter matrix to full staged
+  image, fixture and output hashes. Example: `scripts/run_python.sh
+  scripts/tools/run_pe_constant_economy.py --arch x86 --output
+  experiments/output/pe-constant-economy-<unique-id>`. `--pe-build-dir` selects
+  a frozen runtime independently of the fixture for repeated comparisons;
+  each output directory must be new. This stages shared Wine-root binaries.
 - `summarize_3dmark05_perf.py` — parse dxmt9 per-run perf logs into encoder,
   stream, indexed-probe, and per-frame sampling CSVs. Enable
   `DXMT9_PERF_FRAME_SAMPLING=1` or `run_3dmark05_perf_probe.sh --frame-sampling`

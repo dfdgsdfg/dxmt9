@@ -13,6 +13,8 @@
 #include <initguid.h>
 #include <d3d9.h>
 
+#include "d3d9_constant_economy.hpp"
+
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -1312,7 +1314,8 @@ int main() {
       std::strcmp(selected_case, "present-reset") != 0 &&
       std::strcmp(selected_case, "getters") != 0 &&
       std::strcmp(selected_case, "additional-surface-first") != 0 &&
-      std::strcmp(selected_case, "additional-swapchain-first") != 0) {
+      std::strcmp(selected_case, "additional-swapchain-first") != 0 &&
+      std::strcmp(selected_case, "setter-economy") != 0) {
     std::printf("FAIL: invalid DXMT9_TEST_INLINE_CONSTANT_CASE=%s\n",
         selected_case);
     return EXIT_FAILURE;
@@ -1327,6 +1330,12 @@ int main() {
   if (selected_case && std::strcmp(selected_case, "capture") == 0 && selected_layout) {
     std::printf("FAIL: capture selector only supports the base SM3 layout; "
         "DXMT9_TEST_INLINE_CONSTANT_LAYOUT=%s is not valid\n", selected_layout);
+    return EXIT_FAILURE;
+  }
+  if (selected_case && std::strcmp(selected_case, "setter-economy") == 0 &&
+      selected_layout) {
+    std::printf("FAIL: setter-economy selector cannot be combined with "
+        "DXMT9_TEST_INLINE_CONSTANT_LAYOUT=%s\n", selected_layout);
     return EXIT_FAILURE;
   }
   if (selected_case &&
@@ -1357,6 +1366,11 @@ int main() {
   } else if (selected_case &&
              std::strcmp(selected_case, "additional-swapchain-first") == 0) {
     run_additional_swapchain_lifecycle(true);
+  } else if (selected_case && std::strcmp(selected_case, "setter-economy") == 0) {
+    Fixture fixture;
+    if (fixture.init(false)) {
+      if (!dxmt9::conformance::runConstantSetterEconomy(fixture.device)) ++failures;
+    }
   } else if (selected_case) {
     run_stateblock_oracle(edge_layout);
   } else {
@@ -1378,6 +1392,8 @@ int main() {
               std::strcmp(selected_case, "additional-surface-first") == 0 ||
               std::strcmp(selected_case, "additional-swapchain-first") == 0)) {
     std::printf("inline_constants: lifecycle passed (no pixel oracle)\n");
+  } else if (selected_case && std::strcmp(selected_case, "setter-economy") == 0) {
+    std::printf("inline_constants: setter economy passed (no pixel oracle)\n");
   } else {
     std::printf("inline_constants: passed (real PE pixel oracle)\n");
   }

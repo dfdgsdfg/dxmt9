@@ -26,5 +26,6 @@ sampling — but it does not satisfy the reproducible native benchmark contract.
 | PSO compile cold/warm workload | ❌ | R-BENCH-2.1 |
 | Reference stack baselines (WineD3D, D9VK+MoltenVK) | ⚠️ Wild 3DMark05/06 and SFIV baselines are recorded in `docs/perfomance/baselines/`; committed deterministic `dxmt9-bench` JSON baselines remain missing. | R-BENCH-3.1-R-BENCH-3.3 |
 | `bench_compare.sh` regression script | ❌ | R-BENCH-4.3 |
+| Actual PE constant-setter economy | ⚠️ Implemented and builtin PE32/PE64 qualified: H280's eight matched-image processes pass 528 cells, with explicit process CPU scope, source/getter checks, strict native parser, environment and image receipts. App-local execution and whole-workload CPU/FPS promotion remain open. This is separate from native `dxmt9-bench` and does not close its gaps. See `docs/perfomance/present-pacing/present-pacing-pe-constant-economy.280.md`. | R-BENCH-6.1–6.4 |
 
 ---

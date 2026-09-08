@@ -30,13 +30,22 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H280](present-pacing-pe-constant-economy.280.md) closes the bounded actual-PE
+setter-economy harness gap. Eight matched-image processes pass 528 cells.
+Count-three VS-F equal calls save 1.4 ns in both PE widths, while changed calls
+cost 1.0–2.1 ns more on PE32 and 1.6–1.7 ns more on PE64. Wine's current-thread
+timing fallback is process-scoped; the final harness uses explicit process CPU
+and never claims PE/thread exclusivity. The runtime remains unchanged. Reusing
+comparison results without a second generic walk is the next bounded candidate,
+not a demonstrated whole-frame saving or README recovery.
+
 [H279](present-pacing-pe-three-register-equality.279.md) tests then withdraws
 a bounded three-register equality shortcut. Native dirty/byte refinement and
 PE32/PE64 pixel differentials pass. Eight fresh GT2 runs show mean FPS changes
 of -0.139%/+0.434% (05/06) and small process-CPU reductions, insufficient to
 robustly price mismatch precomparison and PE32 reloads. H278 runtime is
-restored; additive tests remain. Controlled actual-PE setter economy is the
-missing gate, not another whole-log call histogram.
+restored; additive tests remain. The then-missing controlled actual-PE setter
+economy gate is now implemented by H280; whole-workload savings remain open.
 
 [H278](present-pacing-pe-vs-constant-call-shape.278.md) separates current VS-F
 call equality from accumulated flush dirty spans. The bounded optional

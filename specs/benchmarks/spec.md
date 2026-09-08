@@ -123,3 +123,55 @@ scripts/
 tests/
 └── bench.cpp               dxmt9-bench source
 ```
+
+## 7. Actual PE Constant-Setter Economy
+
+R-BENCH-6.1–6.4 define a separate Wine/PE lane. The PE executable owns only
+public COM calls, prebuilt value arrays and Windows timing APIs; no Darwin or
+Metal API crosses into PE. Reuse the existing conformance executable's device
+setup/teardown and add a test-only `setter-economy` selector with a separate
+translation unit. The default pixel, StateBlock, capture and lifecycle
+selectors remain unchanged. An economy run explicitly reports no pixel oracle.
+
+The bounded matrix uses all six VS/PS float/int/bool families, counts 1/3/4,
+equal/last-only/all-changed shapes, an additional count-three middle-only
+shape, and count-zero controls: 66 cells. Use 50 million measured calls and
+10,000 warm-up calls per cell. Inputs alternate two prebuilt arrays; equality
+uses identical bytes at distinct addresses, while changed cells start with
+the B state and alternate A/B. Materialize a six-register neighborhood before
+timing so growth is excluded and exact getters can pin surrounding values.
+Independent pre-call snapshots of both caller arrays qualify source immutability;
+the getter oracle must not use caller memory that a broken setter could mutate.
+No Draw, Present, flush or resource mutation belongs inside a measured cell.
+
+Select the COM family outside the measured loop. Accumulate all HRESULTs;
+read QPC and process user/kernel time only around the complete loop.
+Emit one structured cell receipt with raw timing values, denominators and
+state checks, `cpu_scope=process`, process/calling-thread identity, plus an
+exact cell-count footer. A strict host parser checks
+the complete matrix, identities and footer before producing per-call values.
+Zero-count controls are reported separately, never subtracted automatically.
+
+Run fresh processes with detailed recorder/range/stopped-PC observers disabled,
+using the canonical conformance runner and actual Wine staging receipts.
+Strip ambient Wine/DYLD overrides as well as renderer/Metal observers; record
+the effective environment digest passed to the canonical runner, its source
+hash and manifest hash, and the actual Wine Unix runtime image hashes. These
+receipts qualify the controlled fixture, not the entire host scheduling state.
+Repeated baseline/candidate processes must load the intended PE image. Timing
+includes public setter validation, the loop and warmed PendingDelta work, but
+does not cover later owner emission, dirty consumption, allocation, StateBlock
+recording or whole-frame scheduling. Timer resolution, warm-state bias and
+Wine translation and helper-thread CPU remain explicit limitations. Neither a local win nor a native
+helper microbenchmark alone promotes a renderer performance lane.
+
+The fixed call count must be calibrated against the actual Wine timer: initial
+one-million-call cells can be shorter than a CPU-time quantum, even when QPC
+is nonzero. Such pilot results do not qualify CPU economy. Fifty million calls
+lengthen this bounded workload without introducing clocks in the loop; raw
+CPU quantization and remaining measurement resolution must still be reported.
+Use explicit `GetProcessTimes`, not an assumed thread-local
+`GetThreadTimes(GetCurrentThread())`: the audited Sikarugir Darwin implementation
+falls back to process `times()`. The CPU metric includes any fixture/Wine/provider
+helper threads; calling-thread identity identifies the setter source, not
+exclusive CPU attribution. Native Darwin thread observation is a separate lane.

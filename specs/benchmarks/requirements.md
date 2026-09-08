@@ -151,3 +151,33 @@ vs Intel Mac), not per individual machine.
 the raw class counts used to derive ratios. At minimum: `d3d9_ops`,
 `chunk_commits`, `resource_ops`, `surface_ops`, `frame_waits`,
 `compat_fallback_ops`, and `total_bridge_ops`.
+
+## 6. Actual PE Setter Economy
+
+**R-BENCH-6.1** The PE setter economy lane must call the public D3D9 COM
+interface in a real PE process under the qualified Wine runtime. It is a
+separate on-demand lane, not the native provider benchmark. Record executable
+architecture and loaded DLL identities; host arm64 execution must not be
+reported as arm64 PE execution.
+
+**R-BENCH-6.2** Constant-setter timing must separate register family, range
+length and equality shape. Warm storage and prebuilt immutable inputs precede
+timing. Every measured call must contribute to HRESULT validation. Exact
+getters outside the timed loop must validate the initial/final values and
+surrounding registers. Equal inputs use distinct source addresses; changed
+inputs alternate so every call changes the intended register subset.
+
+**R-BENCH-6.3** Measure wall time and explicitly qualified CPU scope using
+Windows APIs outside the call loop, preserving raw ticks, frequency, call
+count and process/thread identity. The bounded lane uses `GetProcessTimes`;
+it must not claim thread-exclusive or PE-exclusive CPU. A Wine
+`GetThreadTimes` result must not be presumed thread-local without qualifying
+the actual runtime implementation. Do not add per-call clocks or renderer observers,
+subtract a zero-count control as an assumed overhead, or interpret warm
+setter-only timing as draw/flush, whole-frame CPU or FPS.
+
+**R-BENCH-6.4** Qualification must reject missing/duplicate/unexpected cells,
+failed state/HRESULT checks, nonpositive or malformed timings and incomplete
+termination. Preserve matched image, fixture, environment and output hashes
+for repeated comparisons. Local setter economy complements, and must not
+replace, rendering refinement, actual GPU readback and wild CPU/FPS gates.

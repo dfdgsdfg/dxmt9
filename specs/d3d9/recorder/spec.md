@@ -1074,6 +1074,11 @@ outside-range dirty state, all change masks and exact self-alias; actual
 PE/GPU fixtures must exercise the selected length. Inspect both PE widths for
 new calls/spills and measure observer-OFF CPU/FPS before retaining a shortcut.
 
+Controlled actual-PE public-setter economy follows R-BENCH-6.1–6.4 in
+`specs/benchmarks/requirements.md`. It separates equal and changed call costs
+at known lengths without placing clocks in the production setter. Warm
+setter-only results do not substitute for final-wire, draw or wild FPS gates.
+
 R-CORE-REC-7.41 narrows the compact destination-rebase operation to one lexical
 source qualification. Source metadata and pending-ticket checks may share that
 qualification with destination preparation; the retention callback still

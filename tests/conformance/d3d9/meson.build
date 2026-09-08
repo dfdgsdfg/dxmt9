@@ -58,7 +58,10 @@ if host_machine.cpu_family() == 'x86'
 endif
 d3d9_inline_constants = executable(
   'd3d9_inline_constants_' + inline_constants_arch,
-  'd3d9_inline_constants.cpp',
+  [
+    'd3d9_inline_constants.cpp',
+    'd3d9_constant_economy.cpp',
+  ],
   dependencies: [
     cpp.find_library('user32', required: true),
     cpp.find_library('d3d9', required: true),

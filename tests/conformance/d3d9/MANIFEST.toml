@@ -1576,6 +1576,44 @@ evidence = [
 
 [[case]]
 executable = "d3d9_inline_constants_x64.exe"
+source_file = "d3d9_constant_economy.cpp"
+function = "runConstantSetterEconomy"
+source = "dxmt9-authored public PE constant-setter economy matrix"
+source_kind = "dxmt9-policy"
+license = "MIT"
+license_scope = "dxmt9"
+lanes = ["app-local", "builtin"]
+arches = ["x64"]
+area = "constant-setter-economy"
+owner = "pe/recorder"
+requirements = ["R-TEST-12.20"]
+acceptance = ["R-BENCH-6.1–6.4: test-only setter-economy selector completes exactly 66 warmed public COM cells with independently checked alternating sources, all-HRESULT accumulation, exact initial/final six-register getters and final device Release zero", "Require the strict receipt parser and actual PE image/fixture/environment hashes; preserve raw QPC and explicit process CPU ticks with fixed call denominators. Timing is not thread-exclusive, a pixel oracle, dirty-consumption cost or an FPS/promotion result"]
+status = "partial"
+evidence = [
+  { lane = "builtin", arch = "x64", status = "passing", summary = "H280: four matched-image PE64 processes pass 264 process-scoped economy cells and successful teardown. Source/getter, environment, fixture and staged-image receipts qualify the matrix; app-local and whole-workload economy remain open", source = "docs/perfomance/present-pacing/present-pacing-pe-constant-economy.280.md:1" },
+]
+
+[[case]]
+executable = "d3d9_inline_constants_x86.exe"
+source_file = "d3d9_constant_economy.cpp"
+function = "runConstantSetterEconomy"
+source = "dxmt9-authored public PE constant-setter economy matrix"
+source_kind = "dxmt9-policy"
+license = "MIT"
+license_scope = "dxmt9"
+lanes = ["app-local", "builtin"]
+arches = ["x86"]
+area = "constant-setter-economy"
+owner = "pe/recorder"
+requirements = ["R-TEST-12.20"]
+acceptance = ["R-BENCH-6.1–6.4: test-only setter-economy selector completes exactly 66 warmed public COM cells with independently checked alternating sources, all-HRESULT accumulation, exact initial/final six-register getters and final device Release zero", "Require the strict receipt parser and actual PE image/fixture/environment hashes; preserve raw QPC and explicit process CPU ticks with fixed call denominators. Timing is not thread-exclusive, a pixel oracle, dirty-consumption cost or an FPS/promotion result"]
+status = "partial"
+evidence = [
+  { lane = "builtin", arch = "x86", status = "passing", summary = "H280: four matched-image PE32 processes pass 264 process-scoped economy cells and successful teardown. Source/getter, environment, fixture and staged-image receipts qualify the matrix; app-local and whole-workload economy remain open", source = "docs/perfomance/present-pacing/present-pacing-pe-constant-economy.280.md:1" },
+]
+
+[[case]]
+executable = "d3d9_inline_constants_x64.exe"
 source_file = "d3d9_inline_constants.cpp"
 function = "run_capture_oracle"
 source = "dxmt9-authored SM3 capture interval with external source/output oracle"
