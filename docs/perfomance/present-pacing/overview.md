@@ -36,7 +36,10 @@ authority. Production-bound native cursor/modulo differentials and existing
 TLA pass. Linked compact retention bodies shrink from 743→598 instructions
 (PE32) and 753→510 (PE64); this is work-removal evidence, not a CPU/FPS saving.
 The initial miss-prefix reuse candidate was compiled away already and rejected.
-Fresh runtime economy remains open.
+Fresh Warn spots are 29.642/18.097 FPS and 69.688/95.388 process CPU ms/frame;
+they do not demonstrate a material end-to-end saving. Separate exact-image PE
+profiles still show constant and sparse-state work. README recovery and
+repeatable CPU savings remain open.
 
 [H276](present-pacing-pe-post-lifetime-profile.276.md) refreshes current-image
 05/06 GT2 PE profiles and separate CPU envelopes. The commit-entry thread

@@ -268,9 +268,10 @@ adds a local R-CORE-REC-7.59 representation refinement: cyclic lookup/insertion
 visits the same bounded buckets without repeated remainder arithmetic. Actual
 private-function modulo differentials, six-family retention/byte traces,
 arm64/x86_64 focused tests and existing TLA pass. Full identity/pointer/prefix
-checks and lifetime policy remain unchanged. Linked PE work decreases; this
-does not close fresh wild economy, whole-scene pixels or broader concurrency
-evidence.
+checks and lifetime policy remain unchanged. Linked PE work decreases. Fresh
+Warn 05/06 GT2 spots (29.642/18.097 FPS) and separate exact-image PE profiles
+are recorded, but do not demonstrate material CPU savings or close
+whole-scene pixels, repeatable economy or broader concurrency evidence.
 
 R-CORE-REC-7.52–7.55 cover fault-only prediction gating, family-specific append
 preparation, single-owner compact layout/quota work and production ledger

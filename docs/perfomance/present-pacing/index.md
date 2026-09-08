@@ -13,7 +13,9 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 [H277](present-pacing-pe-pin-probe-cursor.277.md) replaces per-probe modulo
 with an equivalent cyclic pin-index cursor. Bounded native and linked PE32/
-PE64 evidence qualify the arithmetic change; fresh runtime economy is open.
+PE64 evidence qualify the arithmetic change. Fresh 05/06 Warn spots are
+29.642/18.097 FPS, without demonstrated end-to-end CPU savings; separate PE
+profiles preserve the next constant/owner investigation targets.
 
 [H276](present-pacing-pe-post-lifetime-profile.276.md) refreshes current-image
 PE attribution and separate native-thread CPU: 05/06 GT2 commit threads use
