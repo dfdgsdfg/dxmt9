@@ -11,6 +11,35 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Backend Layer
 
+The default-off `DXMT9_LOCK_SCOPE_REFINEMENT` candidate is governed by
+[bounded lock-scope refinement](lock-scope-refinement.md). Range-upload queue
+lock elision, exact captured-backing stamp batches and immutable replay
+preparation are implemented and native-verified; see
+[H308](../../docs/perfomance/present-pacing/present-pacing-lock-scope-refinement.308.md).
+Actual range bytes, retained input/final-Slot parity, stale Pool generations,
+live snapshot capacity and three-scalar-to-one-batch acquisitions are pinned.
+Full TLC passes, including the new bounded model and four negative controls;
+this does not close arbitrary MT or composed generation-reclaim behavior.
+[H309](../../docs/perfomance/present-pacing/present-pacing-lock-scope-wild.309.md)
+adds both PE cross-builds, the x86_64 provider, six runtime specs/audits and
+05/06 GT2 OFF/ON repeats. Four PE32/PE64 OFF/ON dynamic-VB DISCARD/NOOVERWRITE/
+DISCARD processes pass twelve exact readback samples in an experiment fixture.
+Range queue acquisitions disappear and non-app arena
+update acquisitions fall, but both 06 perf pairs are slower amid large repeat
+drift. Default promotion is withheld: CPU/latency/FPS non-regression is not
+established, even though an FPS gain is not required. Full-upload/managed
+rotation and actual final-slot reserve/append retain their existing locks.
+Broader rendered/concurrent correctness and lock-tail qualification remain open.
+[H310](../../docs/perfomance/present-pacing/present-pacing-payload-count-batch-cost.310.md)
+removes the post-capture recount with a checked source-local snapshot byte
+delta. Native/runtime mixed-role tests and 2,048 bounded arithmetic cells
+pass. [H311](../../docs/perfomance/present-pacing/present-pacing-lock-scope-attribution.311.md)
+reruns both the exact historical H309 provider and H310 at about 18 FPS in
+06 GT2; the earlier large decline is not reproduced or independently
+attributable to the lock candidate. Actual batch distribution, contended tails,
+broader correctness and stable cross-workload non-regression remain open;
+default OFF is unchanged.
+
 [H275](../../docs/perfomance/present-pacing/present-pacing-pe-cached-com-lifetime.275.md)
 closes the bounded PE Present/backbuffer cache cycle: capture-OFF controls
 confirm it was not capture-specific. Private allocation credits, parent-hold

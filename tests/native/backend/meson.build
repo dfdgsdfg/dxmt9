@@ -661,6 +661,20 @@ draw_seq_filter_spec = executable(
 
 test('dxmt9-draw-seq-filter-spec', draw_seq_filter_spec)
 
+upload_arena_lock_diag_spec = executable(
+  'dxmt9-upload-arena-lock-diag-spec',
+  ['upload_arena_lock_diag_spec.cpp',
+   '../../../src/dxmt9/dxmt9_upload_arena_lock_diag.cpp'],
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_util_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+  cpp_args: ['-UNDEBUG'],
+)
+test('dxmt9-upload-arena-lock-diag-spec', upload_arena_lock_diag_spec,
+     env: ['DXMT9_PERF_UPLOAD_ARENA_LOCK_SPLIT=1'])
+test('dxmt9-upload-arena-lock-diag-off-spec', upload_arena_lock_diag_spec,
+     env: ['DXMT9_PERF_UPLOAD_ARENA_LOCK_SPLIT=0'])
+
 resource_hazard_spec = executable(
   'dxmt9-resource-hazard-spec',
   'resource_hazard_spec.cpp',
@@ -670,6 +684,45 @@ resource_hazard_spec = executable(
 )
 
 test('dxmt9-resource-hazard-spec', resource_hazard_spec)
+
+buffer_use_batch_spec = executable(
+  'dxmt9-buffer-use-batch-spec',
+  'buffer_use_batch_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-buffer-use-batch-spec', buffer_use_batch_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT9_PERF_UPLOAD_ARENA_LOCK_SPLIT=1'])
+
+range_upload_lock_scope_spec = executable(
+  'dxmt9-range-upload-lock-scope-spec',
+  'range_upload_lock_scope_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+foreach mode : ['0', '1']
+  test('dxmt9-range-upload-lock-scope-' + mode + '-spec',
+       range_upload_lock_scope_spec,
+       env: dxmt9_native_test_env_vars + ['DXMT9_LOCK_SCOPE_REFINEMENT=' + mode],
+       timeout: 30)
+endforeach
+
+queue_lock_scope_refinement_spec = executable(
+  'dxmt9-queue-lock-scope-refinement-spec',
+  'queue_lock_scope_refinement_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+foreach mode : ['0', '1']
+  test('dxmt9-queue-lock-scope-refinement-' + mode + '-spec',
+       queue_lock_scope_refinement_spec,
+       env: dxmt9_native_test_env_vars + [
+         'DXMT9_LOCK_SCOPE_REFINEMENT=' + mode,
+         'DXMT9_PERF_UPLOAD_ARENA_LOCK_SPLIT=1'])
+endforeach
 
 render_pass_actions_spec = executable(
   'dxmt9-render-pass-actions-spec',

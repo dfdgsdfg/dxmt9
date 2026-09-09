@@ -140,10 +140,12 @@
 //    this lock claim and retains separate ordering/lifetime obligations.
 
 #include "dxmt9/core.hpp"
+#include "dxmt9_buffer_use_batch.hpp"
 #include "dxmt9_heap_manager.hpp"
 #include "dxmt9_managed_mutation_lease.hpp"
 #include "dxmt9_mark_reclaim_predicates.hpp"
 #include "dxmt9_resource_lifetime.hpp"
+#include "dxmt9_upload_arena_lock_diag.hpp"
 #include "../winemetal/Metal.hpp"
 
 #include <cstddef>
@@ -436,74 +438,107 @@ class HandleArena {
 
   template <typename Fn>
   bool update(u64 handleValue, Fn&& fn) {
-    std::unique_lock lock(mutex_);
-    auto* record = findUnlocked(handleValue);
-    if (!record) {
-      return false;
-    }
-    fn(*record);
-    return true;
+    return withExclusiveLock(UploadLockOperation::Update,
+                             [&]() {
+                               auto* record = findUnlocked(handleValue);
+                               if (!record) {
+                                 return false;
+                               }
+                               fn(*record);
+                               return true;
+                             });
   }
 
   template <typename Fn>
   std::size_t updateMany(std::span<const u64> handleValues, Fn&& fn) {
-    std::unique_lock lock(mutex_);
-    std::size_t updated = 0;
-    for (const auto handleValue : handleValues) {
-      auto* record = findUnlocked(handleValue);
-      if (!record) {
-        continue;
-      }
-      fn(*record);
-      ++updated;
-    }
-    return updated;
+    return withExclusiveLock(UploadLockOperation::UpdateMany,
+                             [&]() {
+                               std::size_t updated = 0;
+                               for (const auto handleValue : handleValues) {
+                                 auto* record = findUnlocked(handleValue);
+                                 if (!record) {
+                                   continue;
+                                 }
+                                 fn(*record);
+                                 ++updated;
+                               }
+                               return updated;
+                             });
   }
 
   template <typename Fn>
   std::size_t updateMany(std::span<const core::Handle> handles, Fn&& fn) {
-    std::unique_lock lock(mutex_);
-    std::size_t updated = 0;
-    for (const auto handle : handles) {
-      auto* record = findUnlocked(handle.value);
-      if (!record) {
-        continue;
-      }
-      fn(*record);
-      ++updated;
-    }
-    return updated;
+    return withExclusiveLock(UploadLockOperation::UpdateMany,
+                             [&]() {
+                               std::size_t updated = 0;
+                               for (const auto handle : handles) {
+                                 auto* record = findUnlocked(handle.value);
+                                 if (!record) {
+                                   continue;
+                                 }
+                                 fn(*record);
+                                 ++updated;
+                               }
+                               return updated;
+                             });
+  }
+
+  // Project each bounded input to a complete generation-qualified handle
+  // while retaining one exclusive arena lock for the entire walk.  The item
+  // itself is passed to the reducer so captured backing identity cannot escape
+  // as a raw record pointer or be reconstructed from a slot index later.
+  template <typename Item, typename Project, typename Fn>
+  std::size_t updateMany(std::span<const Item> items, Project&& project,
+                         Fn&& fn) {
+    return withExclusiveLock(UploadLockOperation::UpdateMany,
+                             [&]() {
+                               std::size_t updated = 0;
+                               for (const auto& item : items) {
+                                 const auto handleValue = project(item);
+                                 auto* record = findUnlocked(handleValue);
+                                 if (!record) {
+                                   continue;
+                                 }
+                                 fn(*record, item);
+                                 ++updated;
+                               }
+                               return updated;
+                             });
   }
 
   template <typename Fn>
   bool inspect(u64 handleValue, Fn&& fn) const {
-    std::shared_lock lock(mutex_);
-    const auto* record = findUnlocked(handleValue);
-    if (!record) {
-      return false;
-    }
-    fn(*record);
-    return true;
+    return withSharedLock(UploadLockOperation::Inspect,
+                          [&]() {
+                            const auto* record = findUnlocked(handleValue);
+                            if (!record) {
+                              return false;
+                            }
+                            fn(*record);
+                            return true;
+                          });
   }
 
   template <typename BeforeErase>
   void reclaimCompleted(u64 completedSeqId, BeforeErase&& beforeErase) {
-    std::unique_lock lock(mutex_);
-    for (std::size_t i = 0; i < slots_.size(); ++i) {
-      auto& slot = slots_[i];
-      if (!slot.record) {
-        continue;
-      }
-      auto& record = *slot.record;
-      // TLA+: ProducerMarkReclaim!Reclaim(r) / ResourceLifetime!FreeResource.
-      // This remains the one shared production reclaim predicate, so neither
-      // model nor its native truth table can drift from the actual gate.
-      if (canReclaimRecord(record.destroyPending, record.lastUsedSeqId,
-                           completedSeqId)) {
-        beforeErase(record);
-        releaseSlot(static_cast<u32>(i));
-      }
-    }
+    withExclusiveLock(UploadLockOperation::Reclaim,
+                      [&]() {
+                        for (std::size_t i = 0; i < slots_.size(); ++i) {
+                          auto& slot = slots_[i];
+                          if (!slot.record) {
+                            continue;
+                          }
+                          auto& record = *slot.record;
+                          // TLA+: ProducerMarkReclaim!Reclaim(r) /
+                          // ResourceLifetime!FreeResource.
+                          if (canReclaimRecord(record.destroyPending,
+                                               record.lastUsedSeqId,
+                                               completedSeqId)) {
+                            beforeErase(record);
+                            releaseSlot(static_cast<u32>(i));
+                          }
+                        }
+                      });
   }
 
   void clear() noexcept {
@@ -513,6 +548,34 @@ class HandleArena {
   }
 
  private:
+  template <typename Fn>
+  decltype(auto) withExclusiveLock(UploadLockOperation operation, Fn&& fn) {
+    if constexpr (Kind == ResourceHandleKind::Buffer) {
+      if (uploadArenaLockSplitEnabled()) {
+        UploadArenaUniqueLockScope lock(mutex_, UploadLockSite::BufferArena,
+                                        operation,
+                                        UploadLockMode::Exclusive);
+        return std::forward<Fn>(fn)();
+      }
+    }
+    std::unique_lock lock(mutex_);
+    return std::forward<Fn>(fn)();
+  }
+
+  template <typename Fn>
+  decltype(auto) withSharedLock(UploadLockOperation operation,
+                                Fn&& fn) const {
+    if constexpr (Kind == ResourceHandleKind::Buffer) {
+      if (uploadArenaLockSplitEnabled()) {
+        UploadArenaSharedLockScope lock(mutex_, UploadLockSite::BufferArena,
+                                        operation, UploadLockMode::Shared);
+        return std::forward<Fn>(fn)();
+      }
+    }
+    std::shared_lock lock(mutex_);
+    return std::forward<Fn>(fn)();
+  }
+
   struct DecodedHandle {
     u32 index = 0;
     u32 generation = 0;
@@ -935,6 +998,11 @@ struct Pool {
   void markBufferSnapshotUse(core::Handle handle,
                              const core::DrawBufferBindingSnapshot& snapshot,
                              u64 seqId);
+  // The builder admits only captured stamps and bounds the lock to 64 keys.
+  // Logical/current marks remain scalar flush fences; raw spans cannot bypass
+  // either admission rule.
+  void markBufferSnapshotUsesBatch(const BufferUseStampBatch& stamps,
+                                   u64 seqId);
   void markTextureUse(core::Handle handle, u64 seqId);
   void markSurfaceUse(core::Handle handle, u64 seqId);
   void markBufferUsesBatch(std::span<const core::Handle> handles, u64 seqId);

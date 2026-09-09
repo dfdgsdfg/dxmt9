@@ -7,6 +7,13 @@ string that is not `0`, unless documented otherwise.
 
 ## Backend selection
 
+`DXMT9_LOCK_SCOPE_REFINEMENT=1` is an experimental, default-off queue/resource
+locking candidate, not a provider mode. It elides the range-upload outer queue
+lock (arena locking remains), batches exact captured-backing stamps in bounded
+blocks, and moves immutable compatibility-batch preflight before queue locking.
+Live capture and final-slot mutation remain locked. See
+`specs/backend/lock-scope-refinement.md` for proof and promotion obligations.
+
 `DXMT9_RENDER_MODE`, the compatibility profile, and the feature-token names are
 stable provider contracts under `specs/backend/render-provider/spec.md`.
 `DXMT9_RENDER_PARTITION_MODE` is the stable partition-axis contract under

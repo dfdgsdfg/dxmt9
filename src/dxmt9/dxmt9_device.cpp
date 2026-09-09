@@ -2,8 +2,10 @@
 #include "../winemetal/Metal.hpp"
 #include "dxmt9_archive_prewarm.hpp"
 #include "dxmt9_blit_encoders.hpp"
+#include "dxmt9_lock_scope_policy.hpp"
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_render_scheduling.hpp"
+#include "dxmt9_upload_arena_lock_diag.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
 
@@ -282,7 +284,15 @@ class DeviceImpl final : public Device {
   }
   void unmapBuffer(core::BufferHandle) override {}
   void uploadBufferData(core::BufferHandle handle, std::span<const std::uint8_t> bytes) override {
-    std::lock_guard lock(queue_.mutex_);
+    if (!uploadArenaLockSplitEnabled()) {
+      std::lock_guard lock(queue_.mutex_);
+      queue_.pool().uploadBufferData(wmt_device_, handle.value, bytes.data(),
+                                     bytes.size(), queue_.completedSeqId_);
+      return;
+    }
+    UploadQueueLockScope lock(queue_.mutex_, UploadLockSite::QueueMutex,
+                              UploadLockOperation::UploadData,
+                              UploadLockMode::Exclusive);
     queue_.pool().uploadBufferData(wmt_device_, handle.value, bytes.data(),
                                    bytes.size(), queue_.completedSeqId_);
   }
@@ -294,7 +304,30 @@ class DeviceImpl final : public Device {
         byteCount > fullBytes.size() - static_cast<std::size_t>(offset)) {
       return;
     }
-    std::lock_guard lock(queue_.mutex_);
+    if (lockScopeRefinementEnabled()) {
+      // Range uploads mutate only the buffer record under its arena lock;
+      // Pool does not read the device or completion watermark for this path.
+      // Keep the call synchronous so the caller's source span remains valid.
+      const auto* rangeBytes =
+          byteCount == 0u ? nullptr : fullBytes.data() + offset;
+      queue_.pool().uploadBufferDataRange(
+          wmt_device_, handle.value, offset, rangeBytes,
+          static_cast<std::size_t>(byteCount), /*completedSeqId=*/0u);
+      return;
+    }
+    if (!uploadArenaLockSplitEnabled()) {
+      std::lock_guard lock(queue_.mutex_);
+      const auto* rangeBytes =
+          byteCount == 0u ? nullptr : fullBytes.data() + offset;
+      queue_.pool().uploadBufferDataRange(wmt_device_, handle.value, offset,
+                                          rangeBytes,
+                                          static_cast<std::size_t>(byteCount),
+                                          queue_.completedSeqId_);
+      return;
+    }
+    UploadQueueLockScope lock(queue_.mutex_, UploadLockSite::QueueMutex,
+                              UploadLockOperation::UploadRange,
+                              UploadLockMode::Exclusive);
     const auto* rangeBytes =
         byteCount == 0u ? nullptr : fullBytes.data() + offset;
     queue_.pool().uploadBufferDataRange(wmt_device_, handle.value, offset,

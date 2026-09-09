@@ -19,6 +19,11 @@ helper only; it is not a production backend input contract.
 classify stable provider modes, experimental candidates, diagnostics, and
 retired selectors independently from implementation and default state.
 
+**Bounded synchronization requirements `R-BACK-SYNC-1`–`R-BACK-SYNC-5` are
+owned by [lock-scope-refinement.md](lock-scope-refinement.md).** They constrain
+range-upload lock elision, captured-backing batches and immutable preparation;
+the experimental default-off candidate is not a provider promotion.
+
 ---
 
 ## 1. Correctness of Translation

@@ -989,6 +989,46 @@ void Pool::uploadTextureLevel(WMT::Device device,
       static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()));
 }
 
+namespace {
+
+// TLA+: ProducerMarkReclaim!StampMark(r) — this is the single reducer used by
+// scalar and bounded snapshot marking. A captured backing always raises the
+// logical record watermark, even when its concrete ring entry has already
+// rotated away; that logical stamp is what keeps the record resident. A
+// logical/current stamp additionally raises the backing that is active at the
+// instant the arena lock reaches the record.
+void applyBufferUseStamp(BufferRecord& rec, const BufferUseStamp& stamp,
+                         u64 seqId) {
+  rec.lastUsedSeqId = markStampUpper(rec.lastUsedSeqId, seqId);
+  if (!rec.hasVersionedBacking()) {
+    return;
+  }
+
+  if (stamp.backing == 0) {
+    if (rec.renameActiveIndex < rec.renameRing.size()) {
+      auto& active = rec.renameRing[rec.renameActiveIndex];
+      active.lastUsedSeqId = markStampUpper(active.lastUsedSeqId, seqId);
+      // TLA+: BufferBackingVersioning.LogicalWatermarkCoversEveryBacking.
+      DXMT_ASSERT(active.lastUsedSeqId <= rec.lastUsedSeqId);
+    }
+    return;
+  }
+
+  for (auto& entry : rec.renameRing) {
+    if (entry.buffer && entry.buffer.handle == stamp.backing) {
+      entry.lastUsedSeqId = markStampUpper(entry.lastUsedSeqId, seqId);
+      // TLA+: BufferBackingVersioning.LogicalWatermarkCoversEveryBacking.
+      DXMT_ASSERT(entry.lastUsedSeqId <= rec.lastUsedSeqId);
+      return;
+    }
+  }
+  // A missing captured backing is intentionally a logical-only mark. The
+  // caller's snapshot validation owns the validity proof; this branch keeps
+  // stale/rotated snapshots from suppressing the record lifetime stamp.
+}
+
+}  // namespace
+
 // TLA+: ProducerMarkReclaim!StampMark(r) — every mark* entry point below
 // writes the record watermark through the shared `markStampUpper` predicate,
 // which is the model's monotone max. The producer↔queue concurrency track
@@ -997,14 +1037,7 @@ void Pool::uploadTextureLevel(WMT::Device device,
 void Pool::markBufferUse(core::Handle handle, u64 seqId) {
   if (!handle) return;
   bufferArena_.update(handle.value, [seqId](BufferRecord& rec) {
-    rec.lastUsedSeqId = markStampUpper(rec.lastUsedSeqId, seqId);
-    if (rec.hasVersionedBacking() &&
-        rec.renameActiveIndex < rec.renameRing.size()) {
-      auto& active = rec.renameRing[rec.renameActiveIndex];
-      active.lastUsedSeqId = markStampUpper(active.lastUsedSeqId, seqId);
-      // TLA+: BufferBackingVersioning.LogicalWatermarkCoversEveryBacking.
-      DXMT_ASSERT(active.lastUsedSeqId <= rec.lastUsedSeqId);
-    }
+    applyBufferUseStamp(rec, BufferUseStamp{}, seqId);
   });
 }
 
@@ -1012,20 +1045,26 @@ void Pool::markBufferSnapshotUse(core::Handle handle,
                                  const core::DrawBufferBindingSnapshot& snapshot,
                                  u64 seqId) {
   if (!handle || !snapshot.valid()) return;
-  bufferArena_.update(handle.value, [seqId, snapshot](BufferRecord& rec) {
-    rec.lastUsedSeqId = markStampUpper(rec.lastUsedSeqId, seqId);
-    if (!rec.hasVersionedBacking()) {
-      return;
-    }
-    for (auto& entry : rec.renameRing) {
-      if (entry.buffer && entry.buffer.handle == snapshot.metalHandle) {
-        entry.lastUsedSeqId = markStampUpper(entry.lastUsedSeqId, seqId);
-        // TLA+: BufferBackingVersioning.LogicalWatermarkCoversEveryBacking.
-        DXMT_ASSERT(entry.lastUsedSeqId <= rec.lastUsedSeqId);
-        return;
-      }
-    }
+  const BufferUseStamp stamp{
+      .handle = handle,
+      .backing = snapshot.metalHandle,
+  };
+  bufferArena_.update(handle.value, [seqId, stamp](BufferRecord& rec) {
+    applyBufferUseStamp(rec, stamp, seqId);
   });
+}
+
+void Pool::markBufferSnapshotUsesBatch(const BufferUseStampBatch& stamps,
+                                       u64 seqId) {
+  if (stamps.empty()) {
+    return;
+  }
+  bufferArena_.updateMany(
+      stamps.span(),
+      [](const BufferUseStamp& stamp) { return stamp.handle.value; },
+      [seqId](BufferRecord& rec, const BufferUseStamp& stamp) {
+        applyBufferUseStamp(rec, stamp, seqId);
+      });
 }
 
 core::ChunkBufferBindingSnapshot

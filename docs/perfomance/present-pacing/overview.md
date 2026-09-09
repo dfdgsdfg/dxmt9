@@ -30,6 +30,72 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H311](present-pacing-lock-scope-attribution.311.md) finds that the exact
+historical H309 provider also recovers to about 18 FPS in 06 GT2, near H310.
+The earlier 5.95–9.31 FPS population is not a stable binary-specific deficit;
+run environment/execution state confounds its attribution. No isolated FPS
+gain is claimed for the payload fix. Measure actual batch construction,
+size, duplicates and flush causes next; retain semantic fences and default OFF.
+
+[H310](present-pacing-payload-count-batch-cost.310.md) replaces the extra
+post-capture payload-count walk with checked constant-time settlement from
+newly appended snapshots. Actual mixed-role queue tests and bounded arithmetic
+oracles pass. This removes duplicate work, not a measured amount of GT2 CPU
+time; actual batch population remains open, with the later FPS attribution
+follow-up in H311 above.
+
+[H309](present-pacing-lock-scope-wild.309.md) confirms fewer range-upload and
+non-app arena acquisitions, but withholds default promotion. 06 ON/OFF perf
+pairs are -27.2% and -9.2%, while OFF itself drifts markedly; neither a clean
+regression attribution nor non-regression is established. Diagnostic FPS is
+not a substitute for low-observer economics. FPS gain is unnecessary, but
+CPU/latency/FPS non-regression remains required. README is unchanged.
+
+[H308](present-pacing-lock-scope-refinement.308.md) implements range-upload
+queue lock elision, bounded concrete-backing stamps and pre-lock immutable
+replay preparation. Native ON/OFF checks pass, including three captured scalar
+acquisitions becoming one batch acquisition in the queue fixture. This is a
+default-off synchronization candidate, not measured CPU/FPS improvement.
+Live capture, exact Slot reserve/append and publication retain their locks.
+
+[H307](present-pacing-lock-contention-audit.307.md) prioritizes synchronization
+independently of FPS. Range upload consumes no queue watermark but holds the
+queue mutex around its arena-protected write. Replay ingress and publication
+still perform per-binding arena stamps outside the logical-handle batch path;
+H306 counts 20.7k/22.6k exclusive updates/P on a non-app TID. Existing samples
+confirm replay publication marking, not the exact source of every H306 update.
+Narrow unnecessary upload locking and investigate qualified stamp batching
+before changing mutex primitives. Full queue-holder coverage, exact duplicate
+rates and causal waiter/holder overlap are not yet measured.
+
+[H306](present-pacing-upload-arena-locks.306.md) closes the named lock timing
+gap with a default-off observer and four same-candidate diagnostic spots.
+Application upload acquisition is 1.123/0.905 ms/P and hold 0.418/0.382 ms/P
+for 05/06 GT2. Full-upload acquisition averages 114/118 microseconds per call;
+arena update averages under one microsecond acquisition but occurs 720/821
+times/P. Queue hold contains nested arena work: these are not additive savings.
+Native/TLA and evidence audits pass; no lock policy changes or FPS promotion.
+The next contract question is whether uploads can use the existing conservative
+completion-watermark protocol without the broad queue hold. This is unproven.
+
+[H305](present-pacing-app-thread-waits.305.md) narrows the supply question:
+native application/commit CPU is 33.511/55.889 ms per frame, or 0.924/0.954
+cores, in partial 05/06 GT2 CPU-only diagnostics. This includes game/Wine/PE
+and synchronous Unix, not just PE. Non-CPU remainders are 2.770/2.698 ms/frame,
+not removable wait budgets. Separate intrusive stack runs identify upload
+queue-mutex and buffer-arena contention, including upload acquisitions outside
+the existing queue-mutex split observer. H306 supplies their hold/acquisition split;
+no lock-removal or FPS promotion follows. 06 health tails remain uncovered.
+
+[H303](present-pacing-replay-baseline.303.md) moves attribution to replay on
+unchanged products. 05/06 GT2 contained counter windows measure 22.33/23.74 ms
+replay service and 15.25/36.31 ms input wait per Present, not native thread CPU.
+Writer/commit backpressure waits are zero. Separate diagnostic planning costs
+0.48/0.40 ms; compatibility state/materialization and final-Slot append deserve
+the next decomposition. Whole-scene perf spots are 25.480/16.448 FPS; lower
+results than H301 on identical products are not isolated code regressions.
+06 perf leaves 48 final frames without full health counters. README is unchanged.
+
 [H302](present-pacing-pe-completion-window.302.md) completes the fixture-only
 bounded producer-window lane. Phase-final completion, state/pixel/order checks,
 legacy schemas and all five production images are preserved. Thirty actual

@@ -7,6 +7,10 @@ tags: [specs, backend, spec]
 
 # Backend Spec
 
+For the bounded default-off upload/arena/replay synchronization candidate,
+see [lock-scope refinement](lock-scope-refinement.md). Final Slot mutation,
+sequence assignment and publication retain the queue synchronization protocol.
+
 ---
 
 ## 1. Module Structure

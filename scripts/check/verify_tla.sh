@@ -32,6 +32,7 @@ normal_models=(
   EncodeSessionCompletion
   EncoderLifecycle
   MutationComposition
+  LockScopeRefinement
   NoOverwriteByteRange
   ParallelDrawBinding
   ParallelPolicySelection
@@ -63,10 +64,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=51
+expected_normal_count=52
 expected_progress_count=2
-expected_counterexample_count=109
-expected_cfg_count=162
+expected_counterexample_count=113
+expected_cfg_count=167
 progress_configs=(
   CpuPipelineLifecycle.progress
   DirectSourceLifecycle.progress
@@ -185,6 +186,13 @@ counterexample_models=(
   "CpuPipelineLifecycle|.partial-source-identity.counterexample|Invariant EndToEndSourceIdentityExact is violated"
   # Full-shadow upload clobbers the in-flight NOOVERWRITE read range.
   "NoOverwriteByteRange|.counterexample|Invariant NoOverwriteReadPreserved is violated"
+  # The lock-scope refinement keeps logical handle generation, concrete
+  # backing, and pre-publication fences distinct.  These controls each remove
+  # one independently checked premise from R-BACK-SYNC-2/3.
+  "LockScopeRefinement|.wrong-backing-collapse.counterexample|Invariant CapturedBackingExact is violated"
+  "LockScopeRefinement|.missing-prepublish-flush.counterexample|Invariant PublicationRequiresFinalFlush is violated"
+  "LockScopeRefinement|.unretained-input.counterexample|Invariant PreparationRequiresRetainedInput is violated"
+  "LockScopeRefinement|.stale-destination.counterexample|Invariant EffectRequiresPostAcquireValidation is violated"
   # Pin-ordering premise removed: a reclaim frees a record the producer's
   # commit window still names. See
   # docs/superpowers/specs/2026-08-20-producer-queue-concurrency-design.md §4.

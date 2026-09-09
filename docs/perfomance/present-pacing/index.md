@@ -11,6 +11,53 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H311](present-pacing-lock-scope-attribution.311.md) reruns the exact H309
+provider and H310 on 06 GT2. Both recover to about 18 FPS, so the earlier large
+decline cannot be independently attributed to the lock candidate or its payload
+recount. Next: actual batch size/duplicate/flush-cause economics. Default OFF
+and README remain unchanged; this does not close all promotion gates.
+
+[H310](present-pacing-payload-count-batch-cost.310.md) removes the candidate's
+second payload-count walk using a checked source-local snapshot byte delta.
+Native/runtime tests and TLC pass; batch bookkeeping is investigated separately
+from GT2's unknown batch distribution. Default OFF and README are unchanged.
+
+[H309](present-pacing-lock-scope-wild.309.md) runs matched-image 05/06 GT2
+OFF/ON repeats and 06 lock diagnostics. Range queue acquisitions disappear
+and non-app arena update acquisitions fall, but both 06 perf pairs are slower
+amid large repeat drift. Non-regression is not established; keep default OFF.
+
+[H308](present-pacing-lock-scope-refinement.308.md) implements the three bounded
+lock-scope candidates behind default-off `DXMT9_LOCK_SCOPE_REFINEMENT`.
+Native tests pin real range bytes under queue contention, exact captured
+stamps and final-Slot parity; H309 supplies the later runtime/economy evidence.
+
+[H307](present-pacing-lock-contention-audit.307.md) identifies the next lock
+targets without a new run: range upload holds the queue mutex despite using
+no queue watermark; snapshot/override/publication walks take individual arena
+locks beyond the logical-handle batch path. H306 has 20.7k/22.6k non-app arena
+updates/P. Exact duplicate fraction and waiter-to-holder causal attribution
+remain open; preserve captured-backing identity and final-sequence stamping.
+
+[H306](present-pacing-upload-arena-locks.306.md) separates upload/arena
+acquisition from hold with a default-off observer. In 05/06 GT2, app upload
+acquisition is 1.123/0.905 ms/P and hold 0.418/0.382 ms/P. Arena operations
+are much more frequent but individually short; nested times are not additive.
+Native/TLA and four diagnostic spots pass their reported gates; no lock-removal
+or FPS promotion is established, and 06 health tails remain explicit.
+
+[H305](present-pacing-app-thread-waits.305.md) measures native application CPU:
+05/06 GT2 use 0.924/0.954 cores in partial CPU-only diagnostic envelopes.
+Upload queue-mutex and buffer-arena waits recur in separate stack samples;
+H306 subsequently splits their durations; PE-exclusive CPU remains unmeasured. Replay input wait is
+not application GPU wait. Products and README are unchanged.
+
+[H303](present-pacing-replay-baseline.303.md) establishes 05/06 GT2 replay
+service baselines: 22.33/23.74 ms per Present in explicit scene subwindows,
+not native CPU. Input waits remain large; diagnostic planning is 0.48/0.40 ms.
+Investigate compatibility state/materialization and final-Slot append next.
+Products are unchanged; lower FPS spots are not a code-regression attribution.
+
 [H302](present-pacing-pe-completion-window.302.md) adds bounded fixture-only
 completion windows. Thirty PE processes pass 810 correctness cells; all five
 product images are unchanged. Window 32 reduces median draw-mean repeat

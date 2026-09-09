@@ -8,6 +8,40 @@ tags: [specs, gap, verification]
 
 Domain-owned implementation and evidence gap tracker. Use the [root gap index](../gap.md) for cross-domain rollup.
 
+## Bounded lock-scope refinement (2026-09-09)
+
+`R-BACK-SYNC-1`–`R-BACK-SYNC-5` and the default-off candidate are owned by
+[lock-scope refinement](../backend/lock-scope-refinement.md). Native ON/OFF
+tests cover the actual range entry under queue contention, Shared buffer
+bytes, Pool stale-generation/exact-backing max stamps, final-Slot differential
+contents and live snapshot capacity. A concrete three-draw fixture pins three
+scalar captured-mark acquisitions OFF to one batch acquisition ON. The shared
+destination predicate covers all eight boolean rows.
+
+`LockScopeRefinement` is a bounded model with independent expected captured
+keys/waterlines and four executable negative controls. Full TLC passes:
+52 normal, two progress and 113 expected-counterexample configurations
+(260.93s); the new normal model has 24,297 distinct states. Its generation is fixed;
+generation reuse/reclaim is not composed into this model. Bounded flush
+fairness is not a proof of OS mutex fairness or end-to-end queue liveness.
+The manual native/model correspondence is not generated whole-program
+isomorphism. Publication-walk fence placement has code-review evidence but
+not a dedicated native concurrent publish/reclaim differential.
+[H309](../../docs/perfomance/present-pacing/present-pacing-lock-scope-wild.309.md)
+adds cross-runtime builds, six runtime specs/audits and 05/06 GT2 OFF/ON wild
+repeats with spot visual inspection. Lock acquisition work falls in the 06
+diagnostic pair. Four PE32/PE64 OFF/ON dynamic-VB DISCARD/NOOVERWRITE/DISCARD
+processes pass twelve exact readback samples; the experiment fixture is not
+an exhaustive GPU-overlap or MT oracle. The 06 low-observer perf is slower in
+both paired directions amid large repeat drift. CPU/latency/FPS non-regression and broader rendered/
+concurrent correctness are not closed; default OFF remains. This does not
+upgrade H308's bounded model to a complete timing or concurrency proof.
+[H310](../../docs/perfomance/present-pacing/present-pacing-payload-count-batch-cost.310.md)
+adds a shared checked snapshot-byte delta, 2,048 bounded arithmetic-oracle
+cells, overflow edges and actual multi-entry mixed-payload final-Slot tests.
+The full TLC suite still passes (213.84s); no transition model changed and
+no timing or exhaustive integer-domain proof is claimed.
+
 ## End-to-end immutable source composition
 
 ### Segmented geometry/owned-semantics split (2026-09-08)

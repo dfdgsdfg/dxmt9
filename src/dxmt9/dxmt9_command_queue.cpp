@@ -7,6 +7,7 @@
 #include "dxmt9_debug_trace.hpp"
 #include "dxmt9_device.hpp"
 #include "dxmt9_direct_continuation.hpp"
+#include "dxmt9_draw_payload_arithmetic.hpp"
 #include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_compat.hpp"
 #include "dxmt9_draw_encoder.hpp"
@@ -19,7 +20,9 @@
 #include "dxmt9_resource_initializer.hpp"
 #include "dxmt9_resource_mark_observer.hpp"
 #include "dxmt9_resource_pool.hpp"
+#include "dxmt9_lock_scope_policy.hpp"
 #include "dxmt9_ring_arena.hpp"
+#include "dxmt9_upload_arena_lock_diag.hpp"
 #include "framegraph/fg_builder.hpp"
 #include "framegraph/fg_multi_source_planner.hpp"
 #include "framegraph/fg_optimizer.hpp"
@@ -2508,6 +2511,8 @@ struct DrawSubmitScratch {
   std::vector<core::DrawBindingSnapshot> bindingSnapshots;
   std::vector<core::DrawParamPayloadView> snapshotPayloads;
   std::vector<PreparedEntry> preparedEntries;
+  // Candidate-only immutable pair plan; never derived from a live Slot.
+  std::vector<bool> preparedPairCompatible;
   std::vector<bool> segmentExtends;
   std::vector<core::Handle> segmentBufferHandles;
   std::vector<core::Handle> segmentTextureHandles;
@@ -2532,6 +2537,7 @@ public:
     scratch_.bindingSnapshots.clear();
     scratch_.snapshotPayloads.clear();
     scratch_.preparedEntries.clear();
+    scratch_.preparedPairCompatible.clear();
     scratch_.segmentExtends.clear();
     scratch_.segmentBufferHandles.clear();
     scratch_.segmentTextureHandles.clear();
@@ -2714,9 +2720,9 @@ void markDrawBindingOverrideResource(resources::Pool& pool,
   }
 }
 
-void markDrawBindingSnapshotResource(resources::Pool& pool,
-                                     const core::DrawBindingSnapshot& binding,
-                                     std::uint64_t seqId) {
+template <typename Mark>
+void visitDrawBindingSnapshotResource(const core::DrawBindingSnapshot& binding,
+                                      std::uint64_t seqId, Mark&& mark) {
   const bool observeMarks = resourceMarkOverlapObserverEnabled();
   for (std::uint32_t stream = 0; stream < core::kMaxStreams; ++stream) {
     if ((binding.streamMask & (1u << stream)) == 0) {
@@ -2731,9 +2737,7 @@ void markDrawBindingSnapshotResource(resources::Pool& pool,
           },
           binding.streams[stream].snapshot.metalHandle);
     }
-    pool.markBufferSnapshotUse(binding.streams[stream].buffer,
-                               binding.streams[stream].snapshot,
-                               seqId);
+    mark(binding.streams[stream].buffer, binding.streams[stream].snapshot);
   }
   if (binding.indexSnapshotValid) {
     if (observeMarks) {
@@ -2745,11 +2749,40 @@ void markDrawBindingSnapshotResource(resources::Pool& pool,
           },
           binding.indexSnapshot.metalHandle);
     }
-    pool.markBufferSnapshotUse(binding.indexBuffer,
-                               binding.indexSnapshot,
-                               seqId);
+    mark(binding.indexBuffer, binding.indexSnapshot);
   }
 }
+
+// R-BACK-SYNC-2: this capability owns only bounded concrete-backend stamps,
+// not source/Slot storage. Its caller owns the retained resources and exact
+// seq for the entire walk. Every logical mark is a flush fence.
+class CapturedBufferMarkBatch {
+public:
+  CapturedBufferMarkBatch(resources::Pool& pool, std::uint64_t seqId)
+      : pool_(pool), seqId_(seqId) {}
+
+  void add(core::Handle handle, const core::DrawBufferBindingSnapshot& snapshot) {
+    if (!handle || !snapshot.valid()) return;
+    const resources::BufferUseStamp stamp{handle, snapshot.metalHandle};
+    if (!pending_.append(stamp)) {
+      flush();
+      const bool accepted = pending_.append(stamp);
+      DXMT_ASSERT(accepted);
+      (void)accepted;
+    }
+  }
+
+  void flush() {
+    if (pending_.empty()) return;
+    pool_.markBufferSnapshotUsesBatch(pending_, seqId_);
+    pending_.clear();
+  }
+
+private:
+  resources::Pool& pool_;
+  const std::uint64_t seqId_;
+  resources::BufferUseStampBatch pending_;
+};
 
 void markDrawBindingOverrideResources(
     resources::Pool& pool,
@@ -2767,12 +2800,28 @@ void markDrawBindingOverrideResources(
 void markDrawBindingSnapshotResources(
     resources::Pool& pool,
     std::span<const core::DrawParamPayloadView> payloads,
-    std::uint64_t seqId) {
+    std::uint64_t seqId,
+    CapturedBufferMarkBatch* capturedBatch = nullptr) {
+  if (capturedBatch) {
+    for (const auto& payload : payloads) {
+      core::DrawBindingSnapshot snapshot{};
+      if (copyDrawBindingSnapshot(payload.bindingSnapshotData, snapshot)) {
+        visitDrawBindingSnapshotResource(
+            snapshot, seqId, [&](core::Handle handle, const auto& binding) {
+              capturedBatch->add(handle, binding);
+            });
+      }
+    }
+    return;
+  }
   for (const auto& payload : payloads) {
     if (payload.bindingSnapshotData.size() == sizeof(core::DrawBindingSnapshot)) {
       core::DrawBindingSnapshot snapshot{};
       if (copyDrawBindingSnapshot(payload.bindingSnapshotData, snapshot)) {
-        markDrawBindingSnapshotResource(pool, snapshot, seqId);
+        visitDrawBindingSnapshotResource(
+            snapshot, seqId, [&](core::Handle handle, const auto& binding) {
+              pool.markBufferSnapshotUse(handle, binding, seqId);
+            });
       }
     }
   }
@@ -2994,6 +3043,36 @@ Presenter::AcquireParams makePresentAcquireParams(const core::SwapDesc& desc) {
 
 void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slot) {
   const bool observeMarks = resourceMarkOverlapObserverEnabled();
+  if (lockScopeRefinementEnabled()) {
+    CapturedBufferMarkBatch batch(pool, slot.seqId);
+    for (std::size_t i = 0; i < slot.commandCount(); ++i) {
+      const auto sourceCommand = core::SourcePayloadView(slot).commandAt(i);
+      visitSourceCommandResources(
+          sourceCommand, [&](const core::SourceCommandResourceRef& resource) {
+            const auto& entry = resource.entry;
+            if (observeMarks) {
+              recordResourceMarkObservation(
+                  resources::ResourceMarkObservationPhase::PublishScan,
+                  slot.seqId, entry,
+                  entry.kind == core::ChunkHandleKind::Buffer &&
+                          resource.hasBufferSnapshot
+                      ? resource.bufferSnapshot.metalHandle : 0);
+            }
+            if (entry.kind == core::ChunkHandleKind::Buffer &&
+                resource.hasBufferSnapshot) {
+              batch.add(entry.handle, resource.bufferSnapshot);
+            } else {
+              // Active-backing selection may change between marks. Do not
+              // deduplicate it or move a captured stamp across this effect.
+              batch.flush();
+              markVisitedResource(pool, resource, slot.seqId);
+            }
+          });
+      // Do not defer across coordinator/command ownership boundaries.
+      batch.flush();
+    }
+    return;
+  }
   if (!observeMarks) {
     for (std::size_t i = 0; i < slot.commandCount(); ++i) {
       const auto sourceCommand = core::SourcePayloadView(slot).commandAt(i);
@@ -3551,6 +3630,30 @@ bool CommandQueue::submitDrawRunBatch(
   // codebase_conventions.rules.md; debug-only guard, no-op unless
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 build flag and env are both set.
   DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("submitDrawRun");
+  const bool refineLocks = lockScopeRefinementEnabled();
+  if (refineLocks) {
+    // R-BACK-SYNC-3: entries/payloads are immutable caller-owned borrows for
+    // this synchronous call. No live backing, slot or sequence is read here.
+    scratch.preparedEntries.clear();
+    scratch.preparedEntries.reserve(entries.size());
+    scratch.preparedPairCompatible.clear();
+    scratch.preparedPairCompatible.reserve(entries.size());
+    const core::DrawRunBatchEntry* previous = nullptr;
+    for (const auto& source : entries) {
+      if (!source.valid()) return false;
+      PerfScope stageScope(perf::countSubmitDrawRunPayloadBytesCpuTime);
+      scratch.preparedEntries.push_back({
+          .entry = source,
+          .payloadBytes = drawRunPayloadBytes(source.draws, source.payloads),
+      });
+      scratch.preparedPairCompatible.push_back(
+          previous && core::drawStatesCompatibleForDrawRunBatch(
+                          previous->state->hot, source.state->hot) &&
+          core::shaderLayoutsCompatibleForDrawRunBatch(
+              previous->state->shaderLayout, source.state->shaderLayout));
+      previous = &source;
+    }
+  }
   const auto qmxBegin = queueMutexProbeBegin();
   std::unique_lock lock(mutex_);
   // skipHold: `lock` is handed by reference to ensureWritingSlotUnlocked /
@@ -3560,11 +3663,21 @@ bool CommandQueue::submitDrawRunBatch(
   // single "hold" duration would not be meaningful. Only the acquire-wait
   // for this initial lock is recorded.
   QueueMutexProbeScope qmxScope(qmxBegin, "submit_draw_run", /*skipHold=*/true);
-  scratch.preparedEntries.clear();
-  scratch.preparedEntries.reserve(entries.size());
-  for (const auto& source : entries) {
+  if (refineLocks && !preparedDrawBatchDestinationAvailable(
+                         stop_, activeArenaBuild_.load(std::memory_order_acquire),
+                         activeDirectChunkSlotBuild_.load(std::memory_order_acquire))) {
+    return false;
+  }
+  if (!refineLocks) {
+    scratch.preparedEntries.clear();
+    scratch.preparedEntries.reserve(entries.size());
+  }
+  for (std::size_t sourceIndex = 0; sourceIndex < entries.size(); ++sourceIndex) {
+    const auto& source = entries[sourceIndex];
     if (!source.valid()) return false;
     std::span<const core::DrawParamPayloadView> effectivePayloads{};
+    const std::size_t bindingSnapshotsBefore =
+        refineLocks ? scratch.bindingSnapshots.size() : 0u;
     {
       PerfScope stageScope(perf::countSubmitDrawRunBindingSnapshotCpuTime);
       effectivePayloads = snapshotDrawRunBindingPayloads(
@@ -3572,18 +3685,33 @@ bool CommandQueue::submitDrawRunBatch(
           scratch.bindingSnapshots, scratch.snapshotPayloads,
           /*appendToScratch=*/true);
     }
-    std::size_t payloadBytes = 0;
-    {
+    const std::size_t bindingSnapshotsAfter =
+        refineLocks ? scratch.bindingSnapshots.size() : 0u;
+    std::size_t payloadBytes = refineLocks
+        ? scratch.preparedEntries[sourceIndex].payloadBytes : 0;
+    if (!refineLocks) {
       PerfScope stageScope(perf::countSubmitDrawRunPayloadBytesCpuTime);
       payloadBytes = drawRunPayloadBytes(source.draws, effectivePayloads);
+    } else {
+      // Capture fills only previously empty snapshot fields. User vertex,
+      // index, override and already-captured snapshot extents are unchanged,
+      // so the exact final count is the prepared count plus this O(1) delta.
+      // The helper preserves the initial overflow sentinel fail-closed.
+      payloadBytes = detail::drawRunPayloadBytesAfterBindingSnapshotCapture(
+          payloadBytes, bindingSnapshotsBefore, bindingSnapshotsAfter);
     }
-    scratch.preparedEntries.push_back({
+    const DrawSubmitScratch::PreparedEntry prepared{
         .entry = {.state = source.state,
                   .uniforms = source.uniforms,
                   .draws = source.draws,
                   .payloads = effectivePayloads},
         .payloadBytes = payloadBytes,
-    });
+    };
+    if (refineLocks) {
+      scratch.preparedEntries[sourceIndex] = prepared;
+    } else {
+      scratch.preparedEntries.push_back(prepared);
+    }
   }
 
   bool compatibleRunOpen = false;
@@ -3607,6 +3735,7 @@ bool CommandQueue::submitDrawRunBatch(
       const auto& entry = prepared.entry;
       const bool extends = segmentEnd == segmentStart
           ? compatibleRunOpen && slot.lastDrawRunCompatible(*entry.state)
+          : refineLocks ? scratch.preparedPairCompatible[segmentEnd]
           : core::drawStatesCompatibleForDrawRunBatch(
                 previous->state->hot, entry.state->hot) &&
               core::shaderLayoutsCompatibleForDrawRunBatch(
@@ -3695,10 +3824,14 @@ bool CommandQueue::submitDrawRunBatch(
           (segmentEnd - segmentStart) * core::kMaxTextureStages);
       scratch.segmentSurfaceHandles.reserve(
           (segmentEnd - segmentStart) * (core::kMaxRenderTargets + 1u));
+      std::optional<CapturedBufferMarkBatch> capturedBatch;
+      if (refineLocks) capturedBatch.emplace(pool_, seqId);
       for (std::size_t i = segmentStart; i < segmentEnd; ++i) {
         const auto& entry = scratch.preparedEntries[i].entry;
         const bool extends = scratch.segmentExtends[i - segmentStart];
-        markDrawBindingSnapshotResources(pool_, entry.payloads, seqId);
+        markDrawBindingSnapshotResources(
+            pool_, entry.payloads, seqId,
+            capturedBatch ? &*capturedBatch : nullptr);
         if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
           if (!extends) {
             const auto& hot = entry.state->hot;
@@ -3716,9 +3849,13 @@ bool CommandQueue::submitDrawRunBatch(
               scratch.segmentSurfaceHandles.push_back(hot.depthStencil.handle);
             }
           }
+          // The override marker can select the current backing. Drain all
+          // captured stamps before entering that reference effect boundary.
+          if (capturedBatch) capturedBatch->flush();
           markDrawBindingOverrideResources(pool_, entry.payloads, seqId);
         }
       }
+      if (capturedBatch) capturedBatch->flush();
       if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
         const auto dedup = [](std::vector<core::Handle>& values) {
           std::sort(values.begin(), values.end(),
@@ -7576,6 +7713,14 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
         queueMutexSitePresentTally.fetch_add(1, std::memory_order_relaxed) + 1;
     if (presentOrdinal % 60 == 0) {
       logQueueMutexSites(presentOrdinal);
+    }
+  }
+  if (uploadArenaLockSplitEnabled()) {
+    static std::atomic<std::uint64_t> uploadArenaPresentTally{0};
+    const std::uint64_t snapshotOrdinal =
+        uploadArenaPresentTally.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (snapshotOrdinal % 60u == 0u) {
+      snapshotUploadArenaLockSites(snapshotOrdinal);
     }
   }
   const bool arenaPresentActive =
