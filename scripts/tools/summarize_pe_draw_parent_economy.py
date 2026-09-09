@@ -24,6 +24,10 @@ META_V2_RE = re.compile(r"^draw_parent_meta schema=2 arch=(x86|x64) qpc_frequenc
 META_V3_RE = re.compile(r"^draw_parent_meta schema=3 arch=(x86|x64) qpc_frequency=(\d+) "
                         r"groups=(\d+) warm_groups=(\d+) iterations=(\d+) trace=(0|1) "
                         r"group_detail=1 tail_detail=1 pid=(\d+) tid=(\d+)$")
+META_V4_RE = re.compile(r"^draw_parent_meta schema=4 arch=(x86|x64) qpc_frequency=(\d+) "
+                        r"groups=(\d+) warm_groups=(\d+) iterations=(\d+) trace=(0|1) "
+                        r"group_detail=1 tail_detail=1 completion_window=(\d+) "
+                        r"pid=(\d+) tid=(\d+)$")
 BINDING_RE = re.compile(r"^draw_parent_binding module=(.+) machine=(0x[0-9a-fA-F]+) "
                          r"primitive_rva=(0x[0-9a-fA-F]+) indexed_rva=(0x[0-9a-fA-F]+)$")
 ROW_RE = re.compile(
@@ -101,29 +105,49 @@ def bounded_sum(values: list[int], what: str) -> int:
     return total
 
 
+def completion_boundary(ordinal: int, warm_groups: int, groups: int,
+                        window: int) -> bool:
+    """Return whether a phase-local group must Issue/GetData-complete."""
+    if ordinal < warm_groups:
+        local_ordinal, phase_groups = ordinal + 1, warm_groups
+    else:
+        local_ordinal, phase_groups = ordinal - warm_groups + 1, groups
+    return local_ordinal % window == 0 or local_ordinal == phase_groups
+
+
 def parse_text(text: str, *, expected_arch: str | None = None,
                expected_trace: bool | None = None,
                expected_groups: int | None = None,
                expected_group_detail: bool | None = None,
-               expected_tail_detail: bool | None = None) -> dict:
+               expected_tail_detail: bool | None = None,
+               expected_completion_window: int | None = None) -> dict:
     lines = owned_lines(text)
     meta_v1 = [META_V1_RE.fullmatch(line) for line in lines]
     meta_v2 = [META_V2_RE.fullmatch(line) for line in lines]
     meta_v3 = [META_V3_RE.fullmatch(line) for line in lines]
+    meta_v4 = [META_V4_RE.fullmatch(line) for line in lines]
     meta_v1 = [match for match in meta_v1 if match]
     meta_v2 = [match for match in meta_v2 if match]
     meta_v3 = [match for match in meta_v3 if match]
-    if (len(meta_v1) + len(meta_v2) + len(meta_v3) != 1
+    meta_v4 = [match for match in meta_v4 if match]
+    if (len(meta_v1) + len(meta_v2) + len(meta_v3) + len(meta_v4) != 1
             or sum(line.startswith("draw_parent_meta ") for line in lines) != 1):
         raise ValueError("exactly one valid meta record required")
-    schema = 3 if meta_v3 else (2 if meta_v2 else 1)
+    schema = 4 if meta_v4 else (3 if meta_v3 else (2 if meta_v2 else 1))
     group_detail = schema >= 2
-    tail_detail = schema == 3
-    meta_match = meta_v3[0] if tail_detail else (meta_v2[0] if group_detail else meta_v1[0])
-    arch, frequency, groups, warm_groups, iterations, trace, pid, tid = meta_match.groups()
+    tail_detail = schema >= 3
+    completion_window = 1
+    if schema == 4:
+        meta_match = meta_v4[0]
+        (arch, frequency, groups, warm_groups, iterations, trace,
+         completion_window, pid, tid) = meta_match.groups()
+    else:
+        meta_match = meta_v3[0] if tail_detail else (meta_v2[0] if group_detail else meta_v1[0])
+        arch, frequency, groups, warm_groups, iterations, trace, pid, tid = meta_match.groups()
     frequency, groups, warm_groups, iterations, trace, pid, tid = (
         uint(frequency, positive=True), uint(groups), uint(warm_groups), uint(iterations),
         int(trace), uint(pid, positive=True), uint(tid, positive=True))
+    completion_window = uint(str(completion_window))
     if expected_arch is not None and arch != expected_arch:
         raise ValueError("architecture mismatch")
     if expected_trace is not None and bool(trace) != expected_trace:
@@ -134,6 +158,12 @@ def parse_text(text: str, *, expected_arch: str | None = None,
         raise ValueError("group-detail mode mismatch")
     if expected_tail_detail is not None and tail_detail != expected_tail_detail:
         raise ValueError("tail-detail mode mismatch")
+    if expected_completion_window is not None and completion_window != expected_completion_window:
+        raise ValueError("completion-window mismatch")
+    if schema == 4 and not 2 <= completion_window <= 64:
+        raise ValueError("invalid bounded completion window")
+    if schema < 4 and completion_window != 1:
+        raise ValueError("legacy schema completion window mismatch")
     if not 1 <= groups <= 8192 or not 0 <= warm_groups <= 128 or iterations != 32:
         raise ValueError("invalid bounded meta")
 
@@ -178,6 +208,11 @@ def parse_text(text: str, *, expected_arch: str | None = None,
             group = groups_by_key.get(key)
             if group is None or bounded_sum(values, "tail component") != group["tail_qpc_ticks"]:
                 raise ValueError("tail detail sum does not match group")
+            if schema == 4:
+                draining = completion_boundary(ordinal, warm_groups, groups, completion_window)
+                if not draining and (group["tail_getdata_calls"] != 0
+                                     or values[1] != 0 or values[2] != 0):
+                    raise ValueError("non-draining group has completion work")
             tails_by_key[key] = {"case": case, "path": path, "group": ordinal,
                                  "end_scene_qpc_ticks": values[0],
                                  "issue_qpc_ticks": values[1],
@@ -194,12 +229,16 @@ def parse_text(text: str, *, expected_arch: str | None = None,
                 raise ValueError("group detail must precede all row records")
             case, path, ordinal, measured, qpc, tail, polls = match.groups()
             ordinal, measured = uint(ordinal), int(measured)
-            qpc, tail, polls = uint(qpc), uint(tail), uint(polls, positive=True)
+            qpc, tail, polls = uint(qpc), uint(tail), uint(polls, positive=schema < 4)
             key = (case, path)
             if key not in EXPECTED or ordinal >= warm_groups + groups:
                 raise ValueError("invalid group-detail identity")
             if measured != int(ordinal >= warm_groups):
                 raise ValueError("invalid measured group flag")
+            if schema == 4:
+                draining = completion_boundary(ordinal, warm_groups, groups, completion_window)
+                if draining != (polls != 0):
+                    raise ValueError("group completion boundary mismatch")
             group_key = (case, path, ordinal)
             if group_key in groups_by_key or key in rows:
                 raise ValueError("duplicate or post-row group detail")
@@ -381,6 +420,26 @@ def parse_text(text: str, *, expected_arch: str | None = None,
                                       "getdata_qpc_ticks", "other_qpc_ticks")
                     }
                 report["tail_distributions"][f"{case}/{path}"] = phases
+        if schema == 4:
+            report["meta"]["completion_window"] = completion_window
+            report["completion_summary"] = {}
+            for case, path in sorted(EXPECTED):
+                owned = [item for item in detail_rows
+                         if item["case"] == case and item["path"] == path]
+                phases = {}
+                for phase, measured in (("warm", False), ("measured", True)):
+                    selected = [item for item in owned
+                                if (item["group"] >= warm_groups) == measured]
+                    completed = [item for item in selected
+                                 if completion_boundary(item["group"], warm_groups,
+                                                        groups, completion_window)]
+                    phases[phase] = {
+                        "count": len(completed),
+                        "tail_qpc_ticks_sum": bounded_sum(
+                            [item["tail_qpc_ticks"] for item in completed],
+                            "completion tail QPC"),
+                    }
+                report["completion_summary"][f"{case}/{path}"] = phases
     return report
 
 
@@ -393,6 +452,7 @@ def main() -> int:
     parser.add_argument("--groups", type=int)
     parser.add_argument("--group-detail", type=int, choices=(0, 1))
     parser.add_argument("--tail-detail", type=int, choices=(0, 1))
+    parser.add_argument("--completion-window", type=int)
     args = parser.parse_args()
     try:
         data = args.log.read_bytes()
@@ -400,7 +460,8 @@ def main() -> int:
                             expected_trace=None if args.trace is None else bool(args.trace),
                             expected_groups=args.groups,
                             expected_group_detail=None if args.group_detail is None else bool(args.group_detail),
-                            expected_tail_detail=None if args.tail_detail is None else bool(args.tail_detail))
+                            expected_tail_detail=None if args.tail_detail is None else bool(args.tail_detail),
+                            expected_completion_window=args.completion_window)
         report["source"] = {"path": str(args.log), "bytes": len(data),
                             "sha256": hashlib.sha256(data).hexdigest()}
     except (OSError, UnicodeError, ValueError) as error:

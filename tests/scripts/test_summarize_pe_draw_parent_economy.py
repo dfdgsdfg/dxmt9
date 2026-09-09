@@ -26,6 +26,21 @@ def row(case: str, path: str, groups: int = 2) -> str:
             "pid=123 tid=456")
 
 
+def independent_completion_boundaries(warm_groups: int, groups: int,
+                                      window: int) -> set[int]:
+    """Synthetic producer schedule, intentionally independent of parser logic."""
+    boundaries = set()
+    start = 0
+    for phase_groups in (warm_groups, groups):
+        remaining = phase_groups
+        while remaining:
+            step = min(window, remaining)
+            boundaries.add(start + step - 1)
+            start += step
+            remaining -= step
+    return boundaries
+
+
 def log(trace: bool = False) -> str:
     lines = ["draw_parent_meta schema=1 arch=x86 qpc_frequency=1000000 groups=2 warm_groups=1 iterations=32 trace=" + ("1" if trace else "0") + " pid=123 tid=456",
              "draw_parent_binding module=C:\\windows\\system32\\d3d9.dll machine=0x14c primitive_rva=0x101b0 indexed_rva=0x10200"]
@@ -42,11 +57,14 @@ def log(trace: bool = False) -> str:
 
 
 def detail_log(warm_groups: int = 1, trace: bool = False,
-               tail_detail: bool = False) -> str:
-    schema = 3 if tail_detail else 2
-    meta = (f"draw_parent_meta schema={schema} arch=x86 qpc_frequency=1000000 groups=2 "
+               tail_detail: bool = False, groups: int = 2,
+               completion_window: int | None = None) -> str:
+    tail_detail = tail_detail or completion_window is not None
+    schema = 4 if completion_window is not None else (3 if tail_detail else 2)
+    meta = (f"draw_parent_meta schema={schema} arch=x86 qpc_frequency=1000000 groups={groups} "
             f"warm_groups={warm_groups} iterations=32 trace={'1' if trace else '0'} "
             + "group_detail=1 " + ("tail_detail=1 " if tail_detail else "")
+            + (f"completion_window={completion_window} " if completion_window is not None else "")
             + "pid=123 tid=456")
     lines = [meta,
              "draw_parent_binding module=C:\\windows\\system32\\d3d9.dll machine=0x14c primitive_rva=0x101b0 indexed_rva=0x10200"]
@@ -55,14 +73,26 @@ def detail_log(warm_groups: int = 1, trace: bool = False,
     sample_lines = []
     for case in module.CASES:
         for path in module.PATHS:
-            for ordinal in range(warm_groups + 2):
-                qpc = 0 if ordinal < warm_groups else (40 if ordinal == warm_groups else 60)
+            for ordinal in range(warm_groups + groups):
+                measured_ordinal = ordinal - warm_groups
+                if ordinal < warm_groups:
+                    qpc = 0
+                elif groups == 2:
+                    qpc = 40 if measured_ordinal == 0 else 60
+                else:
+                    qpc = 100 if measured_ordinal == 0 else 0
+                polls = ordinal + 1
+                if completion_window is not None:
+                    polls = int(ordinal in independent_completion_boundaries(
+                        warm_groups, groups, completion_window))
                 sample_lines.append(f"draw_parent_group case={case} path={path} group={ordinal} "
                                     f"measured={int(ordinal >= warm_groups)} qpc_ticks={qpc} "
-                                    f"tail_qpc_ticks={ordinal + 2} tail_getdata_calls={ordinal + 1}")
+                                    f"tail_qpc_ticks={ordinal + 2} tail_getdata_calls={polls}")
                 if tail_detail:
                     end_scene = ordinal
                     getdata = int(ordinal != 0)
+                    if completion_window is not None and not polls:
+                        getdata = 0
                     other = ordinal + 2 - end_scene - getdata
                     sample_lines.append(
                         f"draw_parent_tail case={case} path={path} group={ordinal} "
@@ -74,13 +104,13 @@ def detail_log(warm_groups: int = 1, trace: bool = False,
         trace_lines = ["pe_recorder_chunk seq=1 records=1"]
         for case in module.CASES:
             for path in module.PATHS:
-                for group in range(warm_groups + 2):
+                for group in range(warm_groups + groups):
                     for phase in ("begin", "timed_begin", "timed_end", "end"):
                         trace_lines.append(
                             f"draw_parent_trace phase={phase} case={case} path={path} group={group}")
         lines.extend(trace_lines)
     lines.extend(sample_lines)
-    lines.extend(row(case, path) for case in module.CASES for path in module.PATHS)
+    lines.extend(row(case, path, groups) for case in module.CASES for path in module.PATHS)
     lines.extend(("draw_parent_release refs=0",
                   f"draw_parent_complete schema={schema} rows=27 status=pass"))
     return "\n".join(lines)
@@ -112,7 +142,15 @@ class DrawParentEconomyParserTests(unittest.TestCase):
         self.assertIn("--mode", result.stdout)
         self.assertIn("--group-detail", result.stdout)
         self.assertIn("--tail-detail", result.stdout)
-        self.assertIn("--tail-detail", result.stdout)
+        self.assertIn("--completion-window", result.stdout)
+        with tempfile.TemporaryDirectory() as folder:
+            output = Path(folder) / "invalid-output"
+            invalid = subprocess.run(
+                [sys.executable, str(SCRIPT.with_name("run_pe_draw_parent_economy.py")),
+                 "--arch", "x86", "--completion-window", "0", "--output", str(output)],
+                capture_output=True, text=True)
+            self.assertNotEqual(invalid.returncode, 0)
+            self.assertFalse(output.exists())
 
     def test_runner_filenames_are_not_owned_records(self) -> None:
         text = ("[runner] exe=/tmp/d3d9_draw_parent_economy_x86.exe\n\n" + log() +
@@ -274,6 +312,7 @@ class DrawParentEconomyParserTests(unittest.TestCase):
         self.assertEqual(report["group_rows"], schema2["group_rows"])
         self.assertTrue(report["meta"]["group_detail"])
         self.assertTrue(report["meta"]["tail_detail"])
+        self.assertNotIn("completion_window", report["meta"])
         self.assertEqual(len(report["tail_rows"]), 81)
         self.assertEqual(report["tail_rows"][0], {
             "case": "steady", "path": "setters_only", "group": 0,
@@ -351,6 +390,101 @@ class DrawParentEconomyParserTests(unittest.TestCase):
                                           "end_scene_qpc_ticks=18446744073709551615 issue_qpc_ticks=1", 1))
         with self.assertRaises(ValueError):
             module.parse_text(text, expected_tail_detail=False)
+
+    def test_schema4_completion_windows_boundary_truth_and_summary(self) -> None:
+        for window in (2, 8, 64):
+            for warm_groups, groups in ((0, 1), (3, 5), (17, 73)):
+                with self.subTest(window=window, warm_groups=warm_groups, groups=groups):
+                    report = module.parse_text(
+                        detail_log(warm_groups=warm_groups, groups=groups,
+                                   completion_window=window),
+                        expected_group_detail=True, expected_tail_detail=True,
+                        expected_completion_window=window)
+                    self.assertEqual(report["schema"], "dxmt9-pe-draw-parent-economy-v4")
+                    self.assertEqual(report["meta"]["completion_window"], window)
+                    summary = report["completion_summary"]["steady/setters_only"]
+                    expected = independent_completion_boundaries(warm_groups, groups, window)
+                    expected_warm = sum(ordinal in expected for ordinal in range(warm_groups))
+                    expected_measured = sum(ordinal in expected
+                                            for ordinal in range(warm_groups, warm_groups + groups))
+                    self.assertEqual(summary["warm"]["count"], expected_warm)
+                    self.assertEqual(summary["measured"]["count"], expected_measured)
+                    self.assertEqual(len(report["group_rows"]), 27 * (warm_groups + groups))
+                    if window in (8, 64) and warm_groups == 17 and groups == 73:
+                        self.assertGreater(expected_measured, 1)
+        warm_nonzero = detail_log(warm_groups=3, groups=5, completion_window=8)
+        warm_nonzero = warm_nonzero.replace(
+            "group=0 measured=0 qpc_ticks=0 tail_qpc_ticks=2",
+            "group=0 measured=0 qpc_ticks=7 tail_qpc_ticks=2", 1)
+        report = module.parse_text(warm_nonzero, expected_completion_window=8)
+        self.assertEqual(report["group_distributions"]["steady/setters_only"]["warm"]["qpc_ticks"]["sum"], 7)
+
+    def test_schema4_rejects_interior_or_missing_phase_completion(self) -> None:
+        text = detail_log(warm_groups=3, groups=5, completion_window=2)
+        # Group 3 is the first, non-boundary measured group; Issue/GetData must
+        # remain absent there.
+        interior = text.replace(
+            "draw_parent_group case=steady path=setters_only group=3 measured=1 "
+            "qpc_ticks=100 tail_qpc_ticks=5 tail_getdata_calls=0",
+            "draw_parent_group case=steady path=setters_only group=3 measured=1 "
+            "qpc_ticks=100 tail_qpc_ticks=5 tail_getdata_calls=1", 1)
+        with self.assertRaises(ValueError):
+            module.parse_text(interior)
+        interior_tail = text.replace(
+            "end_scene_qpc_ticks=3 issue_qpc_ticks=0 getdata_qpc_ticks=0 other_qpc_ticks=2",
+            "end_scene_qpc_ticks=3 issue_qpc_ticks=1 getdata_qpc_ticks=0 other_qpc_ticks=1", 1)
+        with self.assertRaises(ValueError):
+            module.parse_text(interior_tail)
+        interior_getdata = text.replace(
+            "end_scene_qpc_ticks=3 issue_qpc_ticks=0 getdata_qpc_ticks=0 other_qpc_ticks=2",
+            "end_scene_qpc_ticks=3 issue_qpc_ticks=0 getdata_qpc_ticks=1 other_qpc_ticks=1", 1)
+        with self.assertRaises(ValueError):
+            module.parse_text(interior_getdata)
+        drain = detail_log(warm_groups=3, groups=5, completion_window=8)
+        missing_warm = drain
+        group = 2
+        old = f"group={group} measured="
+        start = missing_warm.index("draw_parent_group case=steady path=setters_only " + old)
+        end = missing_warm.index("\n", start)
+        line = missing_warm[start:end]
+        self.assertIn("tail_getdata_calls=1", line)
+        missing_warm = (missing_warm[:start]
+                        + line.replace("tail_getdata_calls=1", "tail_getdata_calls=0")
+                        + missing_warm[end:])
+        with self.assertRaises(ValueError):
+            module.parse_text(missing_warm)
+        missing_measured = drain
+        group = 7
+        old = f"group={group} measured="
+        start = missing_measured.index("draw_parent_group case=steady path=setters_only " + old)
+        end = missing_measured.index("\n", start)
+        line = missing_measured[start:end]
+        self.assertIn("tail_getdata_calls=1", line)
+        missing_measured = (missing_measured[:start]
+                            + line.replace("tail_getdata_calls=1", "tail_getdata_calls=0")
+                            + missing_measured[end:])
+        with self.assertRaises(ValueError):
+            module.parse_text(missing_measured)
+
+    def test_schema4_bounds_versions_and_legacy_window(self) -> None:
+        self.assertNotIn("completion_window",
+                         module.parse_text(log(), expected_completion_window=1)["meta"])
+        base = detail_log(completion_window=2)
+        for window in (1, 0, 65, 18446744073709551616):
+            with self.subTest(window=window), self.assertRaises(ValueError):
+                module.parse_text(base.replace("completion_window=2", f"completion_window={window}", 1))
+        text = detail_log(warm_groups=3, groups=5, completion_window=8)
+        for old, new in (
+                ("completion_window=8", "completion_window=2"),
+                ("draw_parent_complete schema=4", "draw_parent_complete schema=3"),
+                ("tail_getdata_calls=0", "tail_getdata_calls=18446744073709551616"),
+                ("end_scene_qpc_ticks=0 issue_qpc_ticks=0 getdata_qpc_ticks=0",
+                 "end_scene_qpc_ticks=18446744073709551615 issue_qpc_ticks=1 getdata_qpc_ticks=1"),
+        ):
+            with self.subTest(new=new), self.assertRaises(ValueError):
+                module.parse_text(text.replace(old, new, 1))
+        with self.assertRaises(ValueError):
+            module.parse_text(text, expected_completion_window=2)
 
     def test_detail_warm_is_not_measured_and_full_sequence_is_required(self) -> None:
         text = detail_log().replace("measured=0 qpc_ticks=0", "measured=0 qpc_ticks=97")

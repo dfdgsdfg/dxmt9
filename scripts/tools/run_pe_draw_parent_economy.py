@@ -131,6 +131,8 @@ def main() -> int:
                         help="Retain each group and separately time its drain tail; diagnostic, not aggregate timing parity.")
     parser.add_argument("--tail-detail", action="store_true",
                         help="Also split EndScene, Issue and GetData wall scopes; implies --group-detail.")
+    parser.add_argument("--completion-window", type=int, default=1,
+                        help="Complete every 1–64 groups and at each phase end; values >1 imply tail detail.")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--groups", type=int)
     parser.add_argument("--warm-groups", type=int)
@@ -144,6 +146,9 @@ def main() -> int:
     parser.add_argument("--wine-id", default="sikarugir-cx-24.0.7")
     parser.add_argument("--prefix", type=Path, default=ROOT / "experiments/prefixs/conf-d3d9-triangle")
     args = parser.parse_args()
+    if not 1 <= args.completion_window <= 64:
+        parser.error("completion-window outside bounded range 1–64")
+    args.tail_detail = args.tail_detail or args.completion_window > 1
     args.group_detail = args.group_detail or args.tail_detail
     groups = args.groups if args.groups is not None else (2 if args.mode == "trace" else 512)
     warm_groups = args.warm_groups if args.warm_groups is not None else (1 if args.mode == "trace" else 8)
@@ -156,12 +161,13 @@ def main() -> int:
     exe_dir = (args.exe_dir or build / "tests/conformance/d3d9").resolve()
     fixture = (args.fixture or exe_dir / f"d3d9_draw_parent_economy_{args.arch}.exe").resolve()
     fixture_source = (args.fixture_source or ROOT / "tests/conformance/d3d9/d3d9_draw_parent_economy.cpp").resolve()
+    fixture_policy = fixture_source.with_name("draw_parent_completion_policy.hpp")
     provider = (args.winemetal_so or ROOT / "build-x86_64-builtin/src/winemetal/unix/winemetal_dxmt9.so").resolve()
     wine_entry = resolve_wine(args.wine_id, args.wine_root)
     wine_root = wine_entry.path.resolve()
     wine = wine_entry.wine_bin().resolve()
-    if not fixture.is_file() or not fixture_source.is_file() or not provider.is_file():
-        raise SystemExit("missing fixture, fixture source, or unix provider")
+    if not fixture.is_file() or not fixture_source.is_file() or not fixture_policy.is_file() or not provider.is_file():
+        raise SystemExit("missing fixture, fixture source/policy, or unix provider")
     output = args.output.resolve()
     output.mkdir(parents=True, exist_ok=False)
     case = output / "case.toml"
@@ -181,6 +187,7 @@ def main() -> int:
     selected_binding = pe_public_binding(pe_images["d3d9.dll"], args.arch)
     source_before, builds_before = source_receipt(), build_receipt()
     fixture_source_before = identity(fixture_source)
+    fixture_policy_before = identity(fixture_policy)
     runtime_paths = {
         "d3d9.dll": wine_root / "lib/wine" / ("i386-windows" if args.arch == "x86" else "x86_64-windows") / "d3d9.dll",
         "winemetal_dxmt9.dll": wine_root / "lib/wine" / ("i386-windows" if args.arch == "x86" else "x86_64-windows") / "winemetal_dxmt9.dll",
@@ -198,6 +205,7 @@ def main() -> int:
                 "DXMT9_TEST_DRAW_PARENT_GROUPS": str(groups), "DXMT9_TEST_DRAW_PARENT_WARM_GROUPS": str(warm_groups),
                 "DXMT9_TEST_DRAW_PARENT_GROUP_DETAIL": "1" if args.group_detail else "0",
                 "DXMT9_TEST_DRAW_PARENT_TAIL_DETAIL": "1" if args.tail_detail else "0",
+                "DXMT9_TEST_DRAW_PARENT_COMPLETION_WINDOW": str(args.completion_window),
                 "DXMT9_TEST_DRAW_PARENT_TRACE": "1" if args.mode == "trace" else "0"}
     if args.mode == "trace":
         explicit["DXMT9_PE_RECORDER_CHUNK_LOG"] = "1"
@@ -215,8 +223,10 @@ def main() -> int:
               "mode": args.mode, "groups": groups, "warm_groups": warm_groups, "iterations": 32,
               "group_detail": args.group_detail,
               "tail_detail": args.tail_detail,
+              "completion_window": args.completion_window,
               "command": command, "env": explicit, "fixture": {"path": str(fixture), **identity(fixture)},
               "fixture_source": fixture_source_before, "images": {str(path): identity(path) for path in pe_images.values()},
+              "fixture_policy": {"path": str(fixture_policy), **fixture_policy_before},
               "production_images": {name: {"path": str(path), "identity": identity(path)}
                                     for name, path in product_inputs.items()},
               "binding": selected_binding,
@@ -243,7 +253,8 @@ def main() -> int:
         parsed = parse_text((output / "run.log").read_text(), expected_arch=args.arch,
                             expected_trace=args.mode == "trace", expected_groups=groups,
                             expected_group_detail=args.group_detail,
-                            expected_tail_detail=args.tail_detail)
+                            expected_tail_detail=args.tail_detail,
+                            expected_completion_window=args.completion_window)
         if parsed["binding"]["primitive_rva"] != selected_binding["primitive_rva"] or \
                 parsed["binding"]["indexed_rva"] != selected_binding["indexed_rva"]:
             raise ValueError("fixture binding does not match linked public COM slots")
@@ -277,6 +288,8 @@ def main() -> int:
             raise ValueError("fixture changed during run")
         if identity(fixture_source) != fixture_source_before:
             raise ValueError("fixture source changed during run")
+        if identity(fixture_policy) != fixture_policy_before:
+            raise ValueError("fixture completion policy changed during run")
         if identity(Path(__file__)) != recipe["driver"] or \
                 identity(Path(__file__).with_name("summarize_pe_draw_parent_economy.py")) != recipe["parser"] or \
                 identity(ROOT / "scripts/tools/run_d3d9_conformance.py") != recipe["runner"] or \

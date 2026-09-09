@@ -30,6 +30,15 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H302](present-pacing-pe-completion-window.302.md) completes the fixture-only
+bounded producer-window lane. Phase-final completion, state/pixel/order checks,
+legacy schemas and all five production images are preserved. Thirty actual
+PE processes pass; window 32 improves same-image draw-mean repeat spreads to
+median 0.653%/0.561% (PE32/PE64), with worst cells still 8.755%/6.970%.
+Whole-process CPU and drain time fall within the fixture, not the product.
+Use this opt-in recipe for shape-matched controls; universal tiny-delta
+economics, exclusive PE CPU and game FPS savings remain unproven.
+
 [H301](present-pacing-pe-qualified-pin-output.301.md) closes the unused
 qualified-pin result with five explicit arguments instead of six, preserving
 wire output timing and every identity/retain/rollback guard. Five PE64 helper

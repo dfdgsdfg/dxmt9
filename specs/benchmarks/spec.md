@@ -269,6 +269,34 @@ tail components. This diagnostic cannot distinguish work done within GetData
 from replay, queue or GPU waits without further evidence; neither its wall
 scope nor the whole-row process CPU value is exclusive PE execution time.
 
+R-BENCH-7.7 adds test-only `--completion-window N` /
+`DXMT9_TEST_DRAW_PARENT_COMPLETION_WINDOW`, bounded to 1–64, default 1.
+The driver enables group and tail detail when N > 1; direct fixture use
+requires those flags. N=1 keeps schemas 1–3. N>1 emits schema 4 with
+`group_detail=1 tail_detail=1 completion_window=N` in metadata and schema 4
+in its final footer; group, tail and row record grammars stay unchanged.
+
+The pure fixture decision uses the phase-local group ordinal. A group drains
+when its one-based ordinal is divisible by N or it is the last group in its
+phase. Warm and measured windows never straddle each other. EndScene still
+runs after every group outside parent QPC; only event Issue/GetData is skipped
+at interior window edges. The final measured group drains before state/input
+and pixel oracles. Retained VB/IB/RT/query objects remain alive across the
+entire row. Per-group setup and final pixels are unchanged, so this diagnostic
+does not add an intermediate-frame or programmable-shader correctness proof.
+
+Each non-draining tail has only the EndScene call: GetData count and the Issue
+and GetData component ticks are exactly zero. Required drains use the existing
+helper, preserve failed HRESULT/timeout/retry handling, and report all polls.
+The parser independently derives boundaries and rejects missing final/warm
+drains, unexpected interior polls or timing, bad bounds and mixed schema
+evidence. Preallocated storage, delayed output, raw-sum conservation and
+separate tracing remain mandatory. Native bounded enumeration checks the
+same helper that the PE fixture calls, including partial windows, zero warm
+groups and boundary limits. The lane changes fixture pacing, not rendering
+semantics or the production queue model. Lower harness CPU or shorter tails
+must not be labeled as saved PE production work or game FPS improvement.
+
 The scope remains warmed FFP with one stream and one triangle, without Present,
 programmable shaders, UP, StateBlock or allocation-failure paths. Pixel checks
 qualify VB/IB geometry and these selected states; constants are qualified by

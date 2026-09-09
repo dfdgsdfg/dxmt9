@@ -69,6 +69,12 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   `--tail-detail` implies group detail and splits EndScene, event Issue and
   accumulated GetData wall time, retaining a conserving control/retry remainder.
   It is a separate diagnostic recipe; no production wait policy is modified.
+  `--completion-window 8` keeps EndScene after each group but completes the
+  query every eight groups and at each warm/measured phase end. Values 2–64
+  imply tail detail and schema 4; default 1 preserves schemas 1–3. Compare
+  same-image repeats before using this producer-window lane to judge small
+  changes: shorter diagnostic drains are not production CPU savings. The
+  completion policy header is included in the fixture provenance receipt.
 - `summarize_3dmark05_perf.py` — parse dxmt9 per-run perf logs into encoder,
   stream, indexed-probe, and per-frame sampling CSVs. Enable
   `DXMT9_PERF_FRAME_SAMPLING=1` or `run_3dmark05_perf_probe.sh --frame-sampling`

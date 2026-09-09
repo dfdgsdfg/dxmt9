@@ -231,3 +231,22 @@ timeout and retry behavior, including a first-call S_OK. The parser must
 reject identity/order/version mixing, missing or duplicate components and
 non-conserving totals. Additional clocks qualify this as a distinct
 diagnostic recipe, not exclusive PE CPU or a production wait-policy change.
+
+**R-BENCH-7.7** A bounded producer-window diagnostic may defer fixture event
+Issue/GetData completion until every N groups, with N in 1–64 and default 1.
+Warm and measured phases have independent windows; each nonempty phase's
+final partial window must complete before the next phase, final getters,
+pixel readback or row teardown. Clear/BeginScene/seed, timed calls, EndScene,
+call order, resources, per-call HRESULT checks and actual drain timeout/retry
+semantics must remain unchanged. No production query or queue policy changes.
+
+N greater than 1 requires group and tail detail with a distinct schema/recipe.
+Non-draining groups must report zero Issue/GetData ticks and GetData calls;
+every required completion boundary must report at least one GetData call.
+Qualification must verify all boundary decisions and exact sample coverage,
+including empty warm phases and non-divisible phase lengths. A production-
+fixture-used pure decision helper must have independent exhaustive native
+coverage. Existing schemas retain their default one-group behavior and output.
+Reduced diagnostic drains are not a production CPU optimization. Record total
+row process CPU, unfiltered parent and tail scopes, and same-image repeatability
+before using this lane to judge small implementation changes.

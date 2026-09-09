@@ -739,3 +739,11 @@ pe_public_allocation_spec = executable(
 )
 
 test('dxmt9-pe-public-allocation-spec', pe_public_allocation_spec)
+
+draw_parent_completion_spec = executable(
+  'dxmt9-draw-parent-completion-spec',
+  'draw_parent_completion_spec.cpp',
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-draw-parent-completion-spec', draw_parent_completion_spec)

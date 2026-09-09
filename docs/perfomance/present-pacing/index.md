@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H302](present-pacing-pe-completion-window.302.md) adds bounded fixture-only
+completion windows. Thirty PE processes pass 810 correctness cells; all five
+product images are unchanged. Window 32 reduces median draw-mean repeat
+spread to 0.653%/0.561% on PE32/PE64, but worst cells still reach 8.755%/6.970%.
+Use explicit matched-shape controls, not a universal small-delta or FPS claim.
+
 [H301](present-pacing-pe-qualified-pin-output.301.md) removes the discarded
 qualified-pin output and optional-pointer branch. Linked PE32/PE64 work shrinks;
 native/TLA and public-COM correctness checks pass. Raw parent/process totals
