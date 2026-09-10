@@ -126,6 +126,23 @@ std::int32_t replayNonDrawRecord(
     const ResolvedRecordView& record,
     NonDrawReplaySink& sink) noexcept;
 
+// Cold provider-replay routing policy. Historical preserves the pre-policy
+// entry behavior for existing callers. Compatibility is an explicit
+// compatibility-only candidate; ProductionSlot
+// enters the same planner/transaction/queue admission path used by production
+// replay, including its explicit compatibility fallback when the candidate is
+// not eligible. A qualified producer interval is preserved; an absent
+// interval remains an explicitly provider-local unqualified replay identity,
+// never inferred capture provenance.
+enum class ProviderReplayPolicy : std::uint8_t {
+  // Historical provider callers: preserve the pre-policy entry semantics.
+  // In particular, a planning-disabled backend may still use its existing
+  // direct ChunkSlot route even though Arena admission was disabled.
+  Historical,
+  Compatibility,
+  ProductionSlot,
+};
+
 // Provider-replay entry for a canonical chunk whose recorded handle table has
 // already been resolved to replay-owned wrappers. The canonical bytes are
 // imported unchanged and dispatched by DeviceReplaySink; this does not add a
@@ -133,6 +150,7 @@ std::int32_t replayNonDrawRecord(
 std::int32_t replayPrevalidatedResolvedCommandChunk(
     D9CDevice* device, std::span<const std::byte> bytes,
     const CommandChunkEnvelope& envelope,
-    std::span<void* const> resolvedObjects) noexcept;
+    std::span<void* const> resolvedObjects,
+    ProviderReplayPolicy policy = ProviderReplayPolicy::Historical) noexcept;
 
 }  // namespace dxmt9::d3d9

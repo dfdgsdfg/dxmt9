@@ -464,6 +464,25 @@ Unknown kinds/dispositions, stale generations, missing or unverified blobs,
 range overflow, completion regression, or duplicate representation are hard
 validation failures. Instantiates R-HARN-2.1, R-HARN-7.2, and R-HARN-7.5.
 
+Completeness includes resource-owned state and direct state calls, not only
+the device-shadow category mask and resource content bytes. A capture must
+either represent an effective mutation in replay order or reject the capture
+with a named reason. In particular, an unrepresented effective managed-texture
+LOD change must invalidate capture tracking, including before arming; a later
+reset to zero must not silently erase that missing history. Clamped no-ops and
+non-managed SetLOD calls do not change this state and must not reject capture.
+Capture rejection must not change the application's SetLOD return value or
+backend state update. Existing bundles without this evidence cannot certify
+that resource-owned state stayed at its default.
+
+The same completeness rule applies to explicit AUTOGEN mip generation outside
+the recorded command path. Recording it must preserve the existing public
+completion/failure contract and bind a canonical command to an authenticated
+Unix source/completion receipt, without executing the operation twice. Until
+that binding exists, capture tracking must reject a hidden-chain explicit
+generation with a named diagnostic, including before arm. Capture rejection
+must not suppress or defer the application's existing synchronous operation.
+
 The v2 state contract additionally treats the 3-channel, 256-entry gamma
 ramp as explicit state. `BootstrapState` carries the initial ramp as exactly
 1536 owned bytes with a verified SHA-256 digest and recomputed identity flag;
@@ -1080,3 +1099,86 @@ bytes must not be reinterpreted as current identity. The v2 EventSerial
 one-source-per-event compatibility lane remains valid and reachable, and is the
 required complete-event fallback when v2 SegmentSerial cannot be authenticated
 or proved before effects. v1 is never a fallback.
+
+## 8. Fixed-Input Policy Experiment Loop
+
+**R-HARN-REPLAY-8.1** A rapid experiment consumes an authenticated immutable
+Render Tape bundle, not a newly interpreted PE API trace or a captured Slot
+that bypasses the policy under test. The input owner preserves command order,
+complete bootstrap/resource closure, immutable blob contents and qualified
+identities across every candidate and repetition. Preparation, resource setup,
+replay, encode, completion, oracle and reset costs must be distinguished; a
+timer excluding a phase must not be labelled end-to-end. Existing capture,
+projection and fresh-process provider contracts remain unchanged.
+
+**R-HARN-REPLAY-8.2** The experiment must execute production import/replay,
+planner, Slot construction and resource-lifetime operations for the tested
+scope. A CPU-only mode may substitute backend execution/completion but must
+not substitute an unrelated planner or lifetime simulator. A Metal mode must
+use the actual provider/encoder and real completion before readback. Requested
+and resolved policies, actual direct/compatibility work and fallback reasons
+must be reported; unsupported or vacuous candidates cannot pass a claimed
+execution gate. Policy exploration never relaxes a production eligibility,
+generation, first-draw, capacity or ordered-control proof.
+
+**R-HARN-REPLAY-8.3** Fast repetitions execute in one process with separately
+declared cold-device and warm-device/cache policies. Each iteration restores
+all effective state and every mutable resource it may read, drains or aborts
+its outstanding work, and retires its CPU pins and final-use stamps before
+reset/reuse. An unchanged input digest alone does not prove reset. An explicit
+reset oracle and a changed-state/mutation A-to-B-to-A negative control must
+detect cross-iteration contamination. Shared immutable input and deliberately
+warm compilation caches are not implicit permission to retain live resources
+through all iterations. Warm-up iterations are excluded from measured totals
+and individually checked. Failure stops the experiment without publishing a
+successful partial aggregate.
+
+**R-HARN-REPLAY-8.4** Completion exploration uses a bounded explicit schedule
+over qualified submissions, not sleeps or assumed OS timing. The controlled
+backend may delay and release completion to exercise pin/stamp transfer,
+retirement, capacity pressure and generation/backing reuse through production
+lifetime code. A completion cannot precede its corresponding submission,
+advance over an unfinished prerequisite, or be acknowledged twice. A real
+Metal backend may delay acknowledgment only after actual GPU completion;
+synthetic completion must never authorize reclaim of in-flight Metal storage.
+Exhausted schedules, unavailable progress, malformed actions and unresolved
+work at termination produce named failures, not hangs or implicit drains that
+erase the tested condition.
+
+**R-HARN-REPLAY-8.5** Reference/candidate equality covers ordered command and
+draw semantics, first-draw state/uniform values, exact generation-qualified
+resource/backing identities, coordinator effects and completion obligations.
+Different legal Slot/run layouts are compared through a documented semantic
+projection, not raw pointers or only final pixels. Bounded lifetime cases must
+include mutation/rename, destroy before completion, delayed completion,
+capacity cuts, generation reuse and injected pre-effect allocation failure.
+Shared production predicates must bind the bounded temporal model to native
+transitions. Negative controls must demonstrate sensitivity to premature
+reclaim, wrong backing/generation, missing/duplicate effects and bad reset.
+Metal readback complements, and does not replace, this layer.
+
+Policy equivalence must be a paired comparison, not two independently accepted
+runs. The reference and candidate must bind the same authenticated Tape,
+provider images, repeat count, resource backend and completion/publication
+policy. Every iteration must pass its own execution, conservation and reset
+checks before comparing ordered semantic evidence. Per-draw cumulative
+semantic observations may identify the first differing logical draw; their
+physical publication event must not be mislabelled as the original capture
+draw locator. Physical batching counts are observations, not equality criteria.
+
+**R-HARN-REPLAY-8.6** The experiment produces a versioned machine-readable
+receipt containing immutable input and executable identities, effective policy,
+reset/cache/backend mode, schedule identity, per-iteration coverage/oracles,
+actual execution/fallback counts and separated wall/native-CPU measurements
+where supported. Repeat bounds and resource limits are explicit and validated
+before effects. Raw results retain all failed and slow iterations. A reduced
+counterexample remains an authenticated Tape plus schedule, not an unbound
+text log. A fast fixed-input result is backend cost/safety evidence, never a
+game FPS or default-promotion claim. Qualification includes a real captured
+GT2 input and a small lifecycle-sensitive sequence; a Clear-only fixture does
+not establish draw-policy or lifetime completion.
+The receipt must preserve inherited Metal API/shader-validation settings
+alongside renderer knobs without dumping unrelated process secrets. Enabled
+or unknown nonempty validation settings make the run diagnostic and ineligible
+for policy-performance acceptance even when its pixel oracle passes. Failed
+diagnostic receipts and actual readbacks remain preserved.

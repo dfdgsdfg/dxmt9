@@ -679,6 +679,12 @@ tell what the contract is protecting against.
 
 ## 8. Full Render Tape Architecture
 
+The separate [fixed-input experiment design](fixed-input-experiment.md)
+defines same-process policy iteration, controlled completion and independent
+semantic/Metal oracles under R-HARN-REPLAY-8.1–8.6. Its implementation status
+belongs to `specs/experiments/gap.md`; the existing fresh-process operations
+below retain their contracts.
+
 **Implementation status (2026-08-14).** The structural substrate is Render
 Tape v2. `device_c_render_tape.*` owns the pointer-free event grammar described
 by R-HARN-REPLAY-7.3/7.4, validates the fixed typed baseline plus canonical

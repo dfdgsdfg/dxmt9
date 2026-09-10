@@ -1098,6 +1098,31 @@ RenderTapeParallelJoinSnapshot snapshotRenderTapeParallelJoin() noexcept {
   };
 }
 
+RenderTapeReplaySnapshot snapshotRenderTapeReplay() noexcept {
+  const Counters& c = counters();
+  RenderTapeReplaySnapshot result;
+  result.continuationCapacityRejected =
+      load(c.directChunkSlotContinuationCapacityRejected);
+  result.continuationPopulatedFallback =
+      load(c.directChunkSlotContinuationPopulatedFallback);
+  result.continuationCapacityRotated =
+      load(c.directChunkSlotContinuationCapacityRotated);
+  for (std::size_t i = 0; i < result.dispositions.size(); ++i)
+    result.dispositions[i] = load(c.directChunkSlotReplayRaws[i]);
+  for (std::size_t i = 0; i < result.outcomes.size(); ++i)
+    result.outcomes[i] = load(c.directChunkSlotReplayOutcomes[i]);
+  result.directLeases = load(c.replaySpanLeases);
+  result.directLeaseDraws = load(c.replaySpanLeaseDraws);
+  result.compatibilityBatches = load(c.compatDrawBatchesPublished);
+  result.compatibilityUnbatchedDraws = load(c.compatDrawBatchUnbatchedDraws);
+  result.compatibilityDraws = load(c.compatDrawBatchDraws) + result.compatibilityUnbatchedDraws;
+  result.fallbackDraws = load(c.replaySpanOrdinaryFallbackDraws);
+  result.soaGrowthAfterReserve = load(c.replaySpanSoaGrowthAfterReserve);
+  result.encodeChunks = load(c.encodeChunkCalls);
+  result.gpuErrors = load(c.gpuCommandBufferErrors);
+  return result;
+}
+
 void countParallelPassBindingReject(
     encoders::ParallelPassBindingRejectReason reason) {
   using Reason = encoders::ParallelPassBindingRejectReason;
@@ -3384,7 +3409,8 @@ void countD3D9DrawStateCacheBatchMissReason(std::uint32_t reasonMask) {
   includeIf(DrawStateInvalidationMutableState |
                 DrawStateInvalidationStateBlock |
                 DrawStateInvalidationReset |
-                DrawStateInvalidationSwapChain,
+                DrawStateInvalidationSwapChain |
+                DrawStateInvalidationStreamFrequency,
             CategoryBroad);
 
   if (categories == 0) {
@@ -3598,7 +3624,8 @@ void countD3D9DrawStateCacheMissReason(std::uint32_t reasonMask) {
           c.d3d9DrawStateCacheMissAfterRenderState);
   countIf(dxmt9::core::DrawStateInvalidationTexture,
           c.d3d9DrawStateCacheMissAfterTexture);
-  countIf(dxmt9::core::DrawStateInvalidationStream,
+  countIf(dxmt9::core::DrawStateInvalidationStream |
+              dxmt9::core::DrawStateInvalidationStreamFrequency,
           c.d3d9DrawStateCacheMissAfterStream);
   countIf(dxmt9::core::DrawStateInvalidationIndexBuffer,
           c.d3d9DrawStateCacheMissAfterIndexBuffer);

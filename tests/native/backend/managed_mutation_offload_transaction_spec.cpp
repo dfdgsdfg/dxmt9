@@ -648,6 +648,7 @@ class MutationOffloadStubDevice final : public dxmt9::Device {
       const dxmt9::resources::ManagedBufferMutationLease& lease,
       std::uint64_t offset,
       std::span<const std::uint8_t> bytes) override {
+    mutationApplies.fetch_add(1u, std::memory_order_relaxed);
     return queue_.pool().applyManagedBufferMutation(
         handle.value, lease, offset, bytes.data(), bytes.size());
   }
@@ -657,6 +658,7 @@ class MutationOffloadStubDevice final : public dxmt9::Device {
 
   std::atomic<std::uint32_t> synchronousUploads{0};
   std::atomic<std::uint32_t> destroyedBuffers{0};
+  std::atomic<std::uint32_t> mutationApplies{0};
 
  private:
   dxmt9::core::BackendLimits limits_{};
@@ -664,6 +666,7 @@ class MutationOffloadStubDevice final : public dxmt9::Device {
 };
 
 struct UnlockFixture {
+  dxmt9::d3d9::ReplayQueueAllocationFailure allocationFailure;
   std::shared_ptr<MutationOffloadStubDevice> upper =
       std::make_shared<MutationOffloadStubDevice>();
   std::shared_ptr<dxmt9::core::Device> coreDevice;
@@ -688,7 +691,9 @@ struct UnlockFixture {
 
     cDevice = std::make_unique<D9CDevice>(nullptr);
     cDevice->replayOffload =
-        std::make_unique<dxmt9::d3d9::ReplayOffloadWorker>();
+        std::make_unique<dxmt9::d3d9::ReplayOffloadWorker>(
+            dxmt9::d3d9::ReplayOffloadWorker::TestAllocationConfig{
+                &allocationFailure});
     wrapper = std::make_unique<D9CBuffer>(buffer, cDevice.get());
     wrapper->desc.size = kBufferBytes;
     wrapper->desc.pool = 1u;  // D3DPOOL_MANAGED
@@ -790,6 +795,60 @@ void testUnlockTransactionUnderModeOn() {
   fixture.buffer->finishDeferredUnlock();
 }
 
+void testManagedMutationAllocationFailureIsPreEffect() {
+  using namespace dxmt9::d3d9;
+  if (!managedMutationOffloadEnabled()) return;
+
+  UnlockFixture fixture;
+  fixture.plainWritableLockAndWrite();
+  auto* record =
+      fixture.upper->poolRef().findBuffer(fixture.buffer->handle().value);
+  check(record != nullptr, "allocation-failure record exists");
+  const auto shadowBefore = record->shadow;
+  const auto backingBefore = fixture.backing;
+  const auto revisionBefore = record->contentRevision;
+  const auto activeIndexBefore = record->renameActiveIndex;
+  const auto ringSizeBefore = record->renameRing.size();
+  const auto depthBefore = fixture.cDevice->replayOffload->queue().depth();
+  const auto bytesBefore =
+      fixture.cDevice->replayOffload->queue().queuedBytesForTest();
+  const auto queuedSeqBefore = fixture.wrapper->replayDrainTarget->lastQueuedSeq;
+  const auto applyCountBefore = fixture.upper->mutationApplies.load();
+
+  fixture.cDevice->replayOffload->queue().failNextAllocationForTest();
+  const auto rejected = offloadManagedBufferMutation(fixture.wrapper.get());
+  check(rejected == BufferMutationOffloadResult::RejectedPreEffect,
+        "forced queue allocation failure is rejected before mutation effects");
+  record = fixture.upper->poolRef().findBuffer(fixture.buffer->handle().value);
+  check(record != nullptr && record->contentRevision == revisionBefore &&
+            record->renameActiveIndex == activeIndexBefore &&
+            record->renameRing.size() == ringSizeBefore &&
+            record->shadow == shadowBefore &&
+            fixture.backing == backingBefore &&
+            fixture.cDevice->replayOffload->queue().depth() == depthBefore &&
+            fixture.cDevice->replayOffload->queue().queuedBytesForTest() ==
+                bytesBefore &&
+            fixture.wrapper->replayDrainTarget->lastQueuedSeq ==
+                queuedSeqBefore &&
+            fixture.upper->mutationApplies.load() == applyCountBefore &&
+            fixture.buffer->locked(),
+        "allocation failure leaves Pool backing, reservation, drain target, "
+        "queue depth, bytes, and core lock unchanged");
+
+  const auto retry = offloadManagedBufferMutation(fixture.wrapper.get());
+  check(retry == BufferMutationOffloadResult::Committed &&
+            fixture.cDevice->replayOffload->queue().depth() == 1u,
+        "the same app-written lock remains recoverable on retry");
+  check(fixture.cDevice->replayOffload->start(fixture.cDevice.get()),
+        "retry worker starts");
+  fixture.cDevice->replayOffload->queue().waitDrained();
+  check(fixture.backing == postMutationBytes() && record->shadow ==
+            postMutationBytes() &&
+            fixture.upper->mutationApplies.load() == applyCountBefore + 1u,
+        "recovered retry applies the exact bytes once");
+  fixture.buffer->finishDeferredUnlock();
+}
+
 void testRepeatedUnlocksComposeThroughTheShadow() {
   using namespace dxmt9::d3d9;
   if (!managedMutationOffloadEnabled()) {
@@ -882,6 +941,7 @@ int main() {
     testTeardownDiscardsPendingMutationsReleasingBudgetAndRetention();
     if (dxmt9::d3d9::managedMutationOffloadEnabled()) {
       testUnlockTransactionUnderModeOn();
+      testManagedMutationAllocationFailureIsPreEffect();
       testRepeatedUnlocksComposeThroughTheShadow();
     } else {
       testUnlockTransactionUnderModeOff();

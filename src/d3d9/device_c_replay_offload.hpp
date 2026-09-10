@@ -1213,6 +1213,26 @@ class ReplayOffloadWorker {
   using ApplyStateBlockFn = int32_t (*)(D9CDevice*, StateBlockApplyTask&);
   using FailurePublishedHook = void (*)(void*);
 
+  // Host tests may inject the queue's existing allocation-failure seam while
+  // production construction keeps the default allocator path unchanged.
+  struct TestAllocationConfig {
+    ReplayQueueAllocationFailure* failure = nullptr;
+  };
+
+  explicit ReplayOffloadWorker(
+      TestAllocationConfig testConfig, ReplayFn replay = nullptr,
+      FailurePublishedHook failureHook = nullptr,
+      void* failureHookContext = nullptr,
+      ApplyMutationFn applyMutation = nullptr,
+      ApplyStateBlockFn applyStateBlock = nullptr)
+      : queue_(offloadQueueMaxChunks(), offloadQueueMaxBytes(),
+               testConfig.failure),
+        replay_(replay),
+        applyMutation_(applyMutation),
+        applyStateBlock_(applyStateBlock),
+        failureHook_(failureHook),
+        failureHookContext_(failureHookContext) {}
+
   // Queue bound: 64 chunks / 8 MiB ~= 2+ frames of GT1 chunks (about
   // 14 chunks/present, ~200 KB/present).
   explicit ReplayOffloadWorker(ReplayFn replay = nullptr,
@@ -1220,12 +1240,9 @@ class ReplayOffloadWorker {
                                void* failureHookContext = nullptr,
                                ApplyMutationFn applyMutation = nullptr,
                                ApplyStateBlockFn applyStateBlock = nullptr)
-      : queue_(offloadQueueMaxChunks(), offloadQueueMaxBytes()),
-        replay_(replay),
-        applyMutation_(applyMutation),
-        applyStateBlock_(applyStateBlock),
-        failureHook_(failureHook),
-        failureHookContext_(failureHookContext) {}
+      : ReplayOffloadWorker(TestAllocationConfig{}, replay, failureHook,
+                            failureHookContext, applyMutation,
+                            applyStateBlock) {}
   ~ReplayOffloadWorker() { stop(); }
 
   ReplayOffloadWorker(const ReplayOffloadWorker&) = delete;

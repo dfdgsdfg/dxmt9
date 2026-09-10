@@ -982,6 +982,9 @@ class CommandQueue {
   // failed offload worker on this device).
   void abortPresentOrdinalWaits();
   void submitFlush();
+  // Cold post-flush check for callers that need a success/failure result,
+  // rather than treating submitFlush's terminal wake as successful completion.
+  bool hasCompletedPendingWork();
   // Cold WSI replacement fence. Unlike submitFlush(), this never records a
   // deferred flush against an active CPU-ready arena and then reports success.
   // The drained bridge entry must reach this operation with no active arena;

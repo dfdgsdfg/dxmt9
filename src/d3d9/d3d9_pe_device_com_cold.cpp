@@ -108,9 +108,6 @@ D3D9DeviceImpl::D3D9DeviceImpl(D9CDevice* dev, IDirect3D9Ex* factory,
     queryContext_.device = this;
     presentationContext_.device = this;
     shaderDeclarationContext_.device = this;
-    for (UINT& freq : streamFreq_) {
-        freq = 1;
-    }
     if (dev_) {
         D9CCommandChunkNegotiation negotiation{};
         negotiation.peSupportedVersions = D9C_COMMAND_CHUNK_CAP_CURRENT;
@@ -331,7 +328,7 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
                     categoryWriter.streamFrequencies().set(
                         stateBlockFixedSlotKey<
                             StateBlockApplyPhysicalStore::streamFrequencies>(slot),
-                        streamFreq_[slot]);
+                        recorderState_.peBindingView.streamFrequencies[slot]);
             }
             if (stateBlockCaptureCategorySelected(
                     effectiveDisposition, StateBlockCaptureCategory::VertexShader))
@@ -540,7 +537,7 @@ HRESULT D3D9DeviceImpl::CaptureStateBlockShadowForChild(
                 refreshedWriter.streamFrequencies().set(
                     stateBlockFixedSlotKey<
                         StateBlockApplyPhysicalStore::streamFrequencies>(slot),
-                    streamFreq_[slot]);
+                    recorderState_.peBindingView.streamFrequencies[slot]);
             });
         if (refreshed.vertexShader().contains(0u))
             refreshedWriter.vertexShader().set(
@@ -2746,7 +2743,7 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::GetStreamSourceFreq(UINT stream, UINT*
     notePeDeviceCallAfterPresent("GetStreamSourceFreq");
     if (!pFreq) return D3DERR_INVALIDCALL;
     if (stream >= 16) return D3DERR_INVALIDCALL;
-    const UINT freq = streamFreq_[stream];
+    const UINT freq = recorderState_.peBindingView.streamFrequencies[stream];
     *pFreq = freq;
     dxmt9DeviceDebugLog("device_get_stream_source_freq device=%p stream=%u -> freq=0x%x",
                         this, stream, (unsigned)freq);
@@ -2852,7 +2849,8 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::ProcessVertices(UINT srcStart, UINT ds
         .streamStrides = std::span<
             const UINT, D9C_DRAW_PACKET_MAX_STREAMS>{streamStrides},
         .streamFrequencies = std::span<
-            const UINT, D9C_DRAW_PACKET_MAX_STREAMS>{streamFreq_},
+            const UINT, D9C_DRAW_PACKET_MAX_STREAMS>{
+                recorderState_.peBindingView.streamFrequencies},
         .textures = std::span<
             IDirect3DBaseTexture9* const,
             D9C_DRAW_PACKET_MAX_TEXTURES>{textures_},
@@ -3668,7 +3666,7 @@ void D3D9DeviceImpl::CommitStateBlockApplyForChild(
                 } else if constexpr (category ==
                                      Category::streamFrequencies) {
                     values.forEach([&](std::size_t slot, std::uint32_t value) {
-                        streamFreq_[slot] = value;
+                        recorderState_.peBindingView.streamFrequencies[slot] = value;
                         if (replayThroughPe) {
                             recorderState_.peState.maintenance().pendingStreamMask() |=
                                 1u << slot;

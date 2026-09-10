@@ -8237,6 +8237,22 @@ CommandQueue::notePresentChunkForCapture(std::uint64_t seqId) {
   return metalCapture_.maybePresentChunkClosesSession(seqId);
 }
 
+bool CommandQueue::hasCompletedPendingWork() {
+  std::lock_guard lock(mutex_);
+  if (writingSlot_) {
+    if (*writingSlot_ >= slots_.size()) return false;
+    const auto* payload = slots_[*writingSlot_].payload;
+    if (!payload || !payload->commandsEmpty()) return false;
+  }
+  const auto next = nextSeqId_.load(std::memory_order_relaxed);
+  return !stop_ && !arenaBuildPoisoned_.load(std::memory_order_relaxed) &&
+      !arenaAdmissionActive_.load(std::memory_order_relaxed) &&
+      !activeArenaBuild_.load(std::memory_order_relaxed) &&
+      !activeDirectChunkSlotBuild_.load(std::memory_order_relaxed) &&
+      !arenaBuildContext_ && next != 0u &&
+      completedSeqIdLocked() >= next - 1u;
+}
+
 void CommandQueue::submitFlush() {
   perf::countSubmitFlush();
   if (deferActiveArenaFlush() != ActiveArenaAppendResult::Inactive) {

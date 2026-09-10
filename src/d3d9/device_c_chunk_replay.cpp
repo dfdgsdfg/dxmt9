@@ -123,6 +123,9 @@ extern "C" int32_t dxmt9c_device_clear(D9CDevice* d, uint32_t count, const D9CRe
 extern "C" int32_t dxmt9c_device_set_stream_source(D9CDevice* d, uint32_t stream,
                                                    D9CBuffer* buf, uint32_t off,
                                                    uint32_t stride);
+extern "C" int32_t dxmt9c_device_set_stream_source_freq(D9CDevice* d,
+                                                         uint32_t stream,
+                                                         uint32_t freq);
 extern "C" int32_t dxmt9c_device_set_vertex_declaration(D9CDevice* d, D9CVertexDecl* vd);
 extern "C" int32_t dxmt9c_device_set_indices(D9CDevice* d, D9CBuffer* buf);
 extern "C" int32_t dxmt9c_device_set_vertex_shader(D9CDevice* d, D9CShader* s);
@@ -692,6 +695,13 @@ public:
     const auto hr = dxmt9c_device_set_stream_source(
         device_, value.slot, static_cast<D9CBuffer*>(buffer), value.offset,
         value.stride);
+    // PE legacy records use zero for an omitted frequency. Preserve the
+    // current D3D9 value; only an explicit nonzero wire value updates it.
+    if (!failed(hr) && value.frequency != 0u) {
+      const auto frequencyHr = dxmt9c_device_set_stream_source_freq(
+          device_, value.slot, value.frequency);
+      if (failed(frequencyHr)) return frequencyHr;
+    }
     if (!failed(hr) && capturedBuffersRequired_ &&
         value.slot < dxmt9::core::kMaxStreams) {
       const auto* wire = static_cast<D9CBuffer*>(buffer);
@@ -962,6 +972,10 @@ public:
           call.payload.userVertexData, call.stride);
     }
     auto draw = call.param;
+    // Batched replay bypasses drawPrimitive[Run], so preserve its state-derived
+    // instance count after applying this record's sparse stream frequencies.
+    draw.instanceCount =
+        dxmt9::core::drawInstanceCountFromState(device_->dev().state());
     if (draw.indexed) {
       draw.indexType = device_->dev().state().indexType;
     }
@@ -2226,7 +2240,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
                              bool pacedByPresentOrdinal,
                              bool allowDirectArena,
                              bool forceEventSerial = false,
-                             bool reportOffloadReplayStage = false) {
+                             bool reportOffloadReplayStage = false,
+                             bool allowDirectSlot = true) {
   // 64 pages is a capture planner/source-grouping bound, not queue storage
   // capacity. It applies only after the PE bridge has authenticated this raw
   // item to a capture token and event ordinal; startup/non-capture raws use
@@ -2334,7 +2349,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
           dxmt9::d3d9::DirectChunkSlotReplayDisposition::LegacyCaptureOrTrace,
           dxmt9::perf::DirectChunkSlotReplayOutcome::NotAttempted);
     }
-    if (!captureIdentityRequested && upper && queue &&
+    if (!captureIdentityRequested && allowDirectSlot && upper && queue &&
         upper->supportsDirectChunkSlotReplay()) {
       dxmt9::d3d9::ImportedChunkView imported;
       if (!importOwnedChunk(raw, imported)) {
@@ -2501,7 +2516,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
       // complete event through the bounded v2 EventSerial planner before
       // treating the event as terminally malformed.
       return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
-                                allowDirectArena, /*forceEventSerial=*/true);
+                                allowDirectArena, /*forceEventSerial=*/true,
+                                /*reportOffloadReplayStage=*/false, allowDirectSlot);
     }
     if (captureIdentityRequested) failCaptureIdentity("planner-reject");
     dxmt9::perf::countCpuReadySessionDisposition(
@@ -2538,7 +2554,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
   // its raw ordering.
   if (captureSegmentSerialRequested && plan.containsOrderedControls) {
     return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
-                              allowDirectArena, /*forceEventSerial=*/true);
+                              allowDirectArena, /*forceEventSerial=*/true,
+                              /*reportOffloadReplayStage=*/false, allowDirectSlot);
   }
 
   if (!allowDirectArena) {
@@ -2617,7 +2634,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
       // queue cursors, so EventSerial v2 may own this raw event exactly once.
       supplyReplayEntry.cancel();
       return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
-                                allowDirectArena, /*forceEventSerial=*/true);
+                                allowDirectArena, /*forceEventSerial=*/true,
+                                /*reportOffloadReplayStage=*/false, allowDirectSlot);
     }
     // Oversize was classified by the structural planner. Any remaining
     // admission failure is queue terminal/corruption, not a legacy fallback.
@@ -2657,7 +2675,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
       supplyReplayEntry.cancel();
       transfer.restoreToSource();
       return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
-                                allowDirectArena, /*forceEventSerial=*/true);
+                                allowDirectArena, /*forceEventSerial=*/true,
+                                /*reportOffloadReplayStage=*/false, allowDirectSlot);
     }
   }
   auto& transaction = beginReplayTransaction(
@@ -2682,7 +2701,9 @@ int32_t replayPlannedChunk(D9CDevice* device,
       transfer.restoreToSource();
       return replayPlannedChunk(device, raw, pacedByPresentOrdinal,
                                 /*allowDirectArena=*/false,
-                                /*forceEventSerial=*/true);
+                                /*forceEventSerial=*/true,
+                                /*reportOffloadReplayStage=*/false,
+                                allowDirectSlot);
     }
     (void)transaction.failStop();
     // Lease destruction performs the two-phase fail-stop abort. Replaying the
@@ -2881,10 +2902,28 @@ private:
 int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
     D9CDevice* d, std::span<const std::byte> bytes,
     const dxmt9::d3d9::CommandChunkEnvelope& envelope,
-    std::span<void* const> resolvedObjects) noexcept {
+    std::span<void* const> resolvedObjects,
+    dxmt9::d3d9::ProviderReplayPolicy policy) noexcept {
   if (!d || bytes.empty() ||
       envelope.version != D9C_COMMAND_CHUNK_VERSION) {
     return commitChunkFail("provider-replay-bad-input");
+  }
+  if (policy != dxmt9::d3d9::ProviderReplayPolicy::Historical &&
+      policy != dxmt9::d3d9::ProviderReplayPolicy::Compatibility &&
+      policy != dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot) {
+    return commitChunkFail("provider-replay-policy");
+  }
+  const bool productionSlot =
+      policy == dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot;
+  if (productionSlot &&
+      !commandChunkProducerIdentityImportable(envelope.producerIdentity)) {
+    // A partially populated producer interval is never admissible. An absent
+    // interval is different: Render Tape bootstrap and provider-local chunks
+    // may have no PE capture source identity, and the production queue
+    // explicitly records that case as an unqualified interval while the
+    // ledger/transaction use raw.replaySeq as a provider-local identity. Do
+    // not synthesize a capture source ordinal for that domain.
+    return commitChunkFail("provider-replay-production-slot-identity");
   }
 
   dxmt9::d3d9::ImportedChunkView imported;
@@ -2917,6 +2956,12 @@ int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
     raw.recordBytes = static_cast<std::uint32_t>(bytes.size());
     raw.handleCount = envelope.handleCount;
     raw.preflightValidated = true;
+    // Preserve a qualified producer interval through the Unix-side raw owner.
+    // An all-zero interval intentionally remains absent: ProductionSlot's
+    // queue path treats it as provider-local/unqualified and derives only the
+    // ledger transaction identity from raw.replaySeq, never as capture source
+    // provenance.
+    raw.producerIdentity = envelope.producerIdentity;
     raw.resolvedObjects.assign(resolvedObjects.begin(), resolvedObjects.end());
     raw.retainedWrappers.reserve(imported.handles.size());
     for (std::size_t index = 0; index < imported.handles.size(); ++index) {
@@ -2948,7 +2993,11 @@ int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
 
     const int32_t hr = replayPlannedChunk(
         d, raw, /*pacedByPresentOrdinal=*/false,
-        /*allowDirectArena=*/false);
+        /*allowDirectArena=*/productionSlot,
+        /*forceEventSerial=*/false,
+        /*reportOffloadReplayStage=*/false,
+        /*allowDirectSlot=*/policy !=
+            dxmt9::d3d9::ProviderReplayPolicy::Compatibility);
     if (!failed(hr)) {
       maybePublishEarlyCpuReadyPrefix(d, raw);
       if (auto* observer = d->mutationCompositionObserver.get()) {

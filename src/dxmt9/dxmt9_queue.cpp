@@ -4113,8 +4113,12 @@ PostEncodeReceiptResult QueueLifecycleController::retireEncodedSourcePayload(
     return PostEncodeReceiptResult::WrongState;
   }
 
-  const auto activation =
-      postEncodeCompletionLedger_.activate(source.seqId, source.hasPresent);
+  // Physical source reuse must not erase the exact-event completion identity.
+  // The receipt owns this obligation until GPU completion hands it to finish.
+  const auto group = tape->postEncodeArenaGroupIdentity(
+      source.source.id, source.source.storage);
+  const auto activation = postEncodeCompletionLedger_.activate(
+      source.seqId, source.hasPresent, group);
   if (activation.result != PostEncodeReceiptResult::Succeeded) {
     perf::countPostEncodeReceiptFailure(
         static_cast<std::uint32_t>(activation.result));
@@ -6426,33 +6430,28 @@ bool QueueLifecycleController::processOnePendingCompletion() {
     completedNotReclaimedCount_ = tapeSourceCount > remaining
         ? std::numeric_limits<std::uint64_t>::max()
         : completedNotReclaimedCount_ + tapeSourceCount;
-    if (binding.completedArenaGroupSettlements) {
-      for (const auto& source : completionSources) {
-        if (source.receiptBacked()) {
-          continue;
-        }
-        const auto settlement =
-            binding.cpuReadyTape->takeCompletedArenaGroupSettlement(
-                source.source);
-        if (!settlement) {
-          continue;
-        }
-        if (!binding.completedArenaGroupSettlements->append(*settlement)) {
+    // Receipt-backed and resident sources share one ordered settlement stream.
+    // Separate loops would reorder interleaved group tails.
+    for (const auto& source : completionSources) {
+      std::optional<ArenaGroupIdentity> settlement;
+      if (source.receiptBacked()) {
+        const auto released = postEncodeCompletionLedger_.markCompleted(
+            source.receipt, source.hasPresent);
+        DXMT_ASSERT(released == PostEncodeReceiptResult::Succeeded);
+        if (released != PostEncodeReceiptResult::Succeeded) {
+          perf::countPostEncodeReceiptFailure(
+              static_cast<std::uint32_t>(released));
           poisonTapeFailureLocked();
           return false;
         }
+        settlement = postEncodeCompletionLedger_.takeCompletedArenaGroup(
+            source.receipt);
+      } else {
+        settlement = binding.cpuReadyTape->takeCompletedArenaGroupSettlement(
+            source.source);
       }
-    }
-    for (const auto& source : completionSources) {
-      if (!source.receiptBacked()) {
-        continue;
-      }
-      const auto released = postEncodeCompletionLedger_.markCompleted(
-          source.receipt, source.hasPresent);
-      DXMT_ASSERT(released == PostEncodeReceiptResult::Succeeded);
-      if (released != PostEncodeReceiptResult::Succeeded) {
-        perf::countPostEncodeReceiptFailure(
-            static_cast<std::uint32_t>(released));
+      if (settlement && (!binding.completedArenaGroupSettlements ||
+          !binding.completedArenaGroupSettlements->append(*settlement))) {
         poisonTapeFailureLocked();
         return false;
       }

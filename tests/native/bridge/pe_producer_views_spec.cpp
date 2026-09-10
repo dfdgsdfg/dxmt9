@@ -455,6 +455,9 @@ void defaultBindingViewIsAllNull() {
     check(stream.offset == 0u, "default stream offset must be zero");
     check(stream.stride == 0u, "default stream stride must be zero");
   }
+  for (const auto frequency : bindings.streamFrequencies) {
+    check(frequency == 1u, "default stream frequency must be one");
+  }
   check(bindings.vs.object == nullptr, "default vs must be null");
   check(bindings.ps.object == nullptr, "default ps must be null");
   check(bindings.vdecl.object == nullptr, "default vdecl must be null");

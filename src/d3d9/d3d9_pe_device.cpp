@@ -719,11 +719,14 @@ HRESULT STDMETHODCALLTYPE D3D9DeviceImpl::SetStreamSourceFreq(UINT stream, UINT 
         hotSetter.markDirty();
         return S_OK;
     }
-    const HRESULT flushHr = flushPeRecorder();
-    if (FAILED(flushHr)) return flushHr;
-    streamFreq_[stream] = freq;
+    if (recorderState_.peBindingView.streamFrequencies[stream] == freq) {
+        return S_OK;
+    }
+    recorderState_.peState.transition().bindStream(stream, [&]() noexcept {
+        recorderState_.peBindingView.streamFrequencies[stream] = freq;
+    });
     hotSetter.markDirty();
-    return hr32(dxmt9c_device_set_stream_source_freq(dev_, stream, freq));
+    return S_OK;
         });
 }
 
@@ -1476,12 +1479,9 @@ bool D3D9DeviceImpl::clearPeStateTracking() {
     fvf_ = 0;
     // D3D9 default stream-source frequency divider is 1 (not 0,
     // which encodes an invalid value -- a zero divider with no
-    // INDEXED/INSTANCE flag is rejected at Set time). Restoring 1
-    // here keeps Reset()-then-Get round-trips consistent with
+    // INDEXED/INSTANCE flag is rejected at Set time). The binding-owner
+    // reset above restores 1 and keeps Reset()-then-Get consistent with
     // test_stream_source_frequency_state.
-    for (UINT& freq : streamFreq_) {
-        freq = 1;
-    }
     return true;
 }
 
@@ -2349,6 +2349,93 @@ bool D3D9DeviceImpl::commandChunkReady() const noexcept {
     return recorderState_.commandChunkNegotiated &&
         semanticRecorderState_ && semanticBatchOwner() &&
         semanticBatchOwner()->constructionSucceeded();
+}
+
+PeRenderTapeChildResult D3D9DeviceImpl::GenerateMipmapsForChild(
+    const dxmt9::d3d9::pe::TextureRef &texture) noexcept {
+    if (!IsRenderTapeCaptureActiveForChild())
+        return {};
+    PeRenderTapeChildResult result{};
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(
+        recorderState_.recorderMutex, recorderState_.recorderLockRequired);
+    if (!commandChunkReady())
+        return result;
+    result.handled = true;
+
+    // Isolate the explicit child command from a pending prefix. Once this
+    // route is selected, every later failure is terminal for this call: the
+    // old direct backend path must never duplicate an accepted bridge effect.
+    result.hr = flushPeRecorder(PeRecorderFlushReason::Child);
+    if (FAILED(result.hr)) return result;
+    // A preflush may have rejected/aborted the capture.  In that case the
+    // command was not yet selected for recording and the caller may retain its
+    // historical direct path.
+    if (!IsRenderTapeCaptureActiveForChild()) {
+        result.handled = false;
+        return result;
+    }
+    if (!texture.valid()) {
+        result.hr = D3DERR_INVALIDCALL;
+        return result;
+    }
+    PeRenderTapeCommitReceiptCollector collector{&result.receipt};
+    PeCaptureState *const captureState =
+        peCaptureState_ ? &*peCaptureState_ : nullptr;
+    if (!captureState)
+        return result;
+    PeRenderTapeCommitReceiptCollectorScope collectorScope(
+        captureState->renderTapeCommitCollector, collector);
+    armSemanticRecord(
+        dxmt9::d3d9::pe::PeSemanticProducerKind::GenerateMipmaps,
+        D9C_COMMAND_RECORD_GENERATE_MIPMAPS,
+        dxmt9::d3d9::pe::PeSemanticRecordInput{.texture0 = texture});
+    const HRESULT appendHr = appendRecord(
+        D9C_COMMAND_RECORD_GENERATE_MIPMAPS,
+        kStableGenerateMipmapsCadenceBytes);
+    const HRESULT flushHr = SUCCEEDED(appendHr)
+        ? flushPeRecorder(PeRecorderFlushReason::Child,
+                          PeRecorderFlushDisposition::Submit)
+        : appendHr;
+    result.hr = FAILED(appendHr) ? appendHr : flushHr;
+    // The scope deliberately remains active across CapacityPost and this
+    // empty/final flush.  appendRecord may have already accepted the isolated
+    // command before returning a later bookkeeping failure.
+    if (result.receipt.conflict) {
+        AbortRenderTapeCaptureForChild();
+        const HRESULT pendingHr = hr32(dxmt9c_device_wait_for_pending_work(dev_));
+        if (SUCCEEDED(result.hr)) result.hr = pendingHr;
+        return result;
+    }
+    if (result.receipt.hasAcceptedEvent()) {
+        const HRESULT waitHr = hr32(
+            dxmt9c_device_wait_render_tape_event_completion(
+                dev_, result.receipt.captureToken,
+                result.receipt.eventOrdinal));
+        if (FAILED(waitHr)) {
+            AbortRenderTapeCaptureForChild();
+            // Identity bookkeeping can fail after execution was accepted.
+            // Preserve the application fence without forging capture proof.
+            const HRESULT pendingHr = hr32(
+                dxmt9c_device_wait_for_pending_work(dev_));
+            if (SUCCEEDED(result.hr)) result.hr = pendingHr;
+            return result;
+        }
+        return result;
+    }
+    if (result.receipt.bridgeAccepted) {
+        // Capture metadata failed before an event identity could be stamped,
+        // but the runtime command may already have been accepted.  Abort the
+        // optional capture and drain normal device work without guessing an
+        // event ordinal; preserve any original recorder failure.
+        AbortRenderTapeCaptureForChild();
+        const HRESULT pendingHr = hr32(dxmt9c_device_wait_for_pending_work(dev_));
+        if (SUCCEEDED(result.hr)) result.hr = pendingHr;
+        return result;
+    }
+    AbortRenderTapeCaptureForChild();
+    if (SUCCEEDED(result.hr)) result.hr = D3DERR_DEVICELOST;
+    return result;
 }
 
 D3D9PeStateBlockContext *D3D9DeviceImpl::stateBlockContext() noexcept {

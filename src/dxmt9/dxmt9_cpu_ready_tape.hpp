@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dxmt9_backend_types.hpp"
+#include "dxmt9_arena_group_identity.hpp"
 #include "dxmt9_chunk_slot_capacity.hpp"
 #include "dxmt9_source_payload.hpp"
 #include "dxmt9_source_semantics.hpp"
@@ -713,19 +714,7 @@ class CpuReadyTape {
   // strict SegmentSerial group reaches Completed.  This is intentionally
   // independent of Present: non-Present raw events still get a durable
   // event-tail status while Present waiters continue using their own queue.
-  struct ArenaGroupSettlement {
-    std::uint64_t rawOrdinal = 0;
-    std::uint64_t buildGeneration = 0;
-    std::uint64_t firstSourceOrdinal = 0;
-    std::uint64_t tailSeqId = 0;
-    std::uint32_t sourceCount = 0;
-    bool hasPresent = false;
-
-    bool valid() const noexcept {
-      return rawOrdinal != 0 && buildGeneration != 0 &&
-             firstSourceOrdinal != 0 && tailSeqId != 0 && sourceCount != 0;
-    }
-  };
+  using ArenaGroupSettlement = ArenaGroupIdentity;
 
   struct SourceRef {
     CpuReadySourceId id{};
@@ -2427,11 +2416,32 @@ class CpuReadyTape {
     const auto* entry = resolveEntry(id, storage);
     // SegmentSerial keeps the complete group's physical page/control credit
     // live until the tail has settled.  This intentionally disables the
-    // locator-backed early-retirement shortcut for grouped entries; the
+    // locator-backed early-retirement shortcut for multi-source groups; the
     // ordinary FIFO reclaim path then releases every member exactly once.
-    return entry && entry->groupSourceCount <= 1u && id.index == sourceHead_ &&
+    return entry && entry->groupSourceCount <= 1u &&
+           (!entry->strictAdmission || groupIdentityValid(*entry)) &&
+           id.index == sourceHead_ &&
            entry->state == State::Represented &&
            !entry->readyPublicationReserved && !entry->arenaOwnerDetached;
+  }
+
+  // Snapshot the singleton obligation before payload retirement removes the
+  // entry. The queue transfers it into the generation-qualified receipt;
+  // this query neither completes the event nor publishes a settlement.
+  std::optional<ArenaGroupIdentity> postEncodeArenaGroupIdentity(
+      CpuReadySourceId id, CpuReadyStorageRef storage) const noexcept {
+    const auto* entry = resolveEntry(id, storage);
+    if (!canBeginPostEncodeRetire(id, storage) || !entry->strictAdmission) {
+      return std::nullopt;
+    }
+    return ArenaGroupIdentity{
+        .rawOrdinal = entry->groupRawOrdinal,
+        .buildGeneration = entry->groupBuildGeneration,
+        .firstSourceOrdinal = entry->groupHeadSourceOrdinal,
+        .tailSeqId = entry->groupTailSeqId,
+        .sourceCount = entry->groupSourceCount,
+        .hasPresent = entry->semantic.hasPresent(),
+    };
   }
 
   // Post-encode retirement is completion-neutral: it releases only payload,

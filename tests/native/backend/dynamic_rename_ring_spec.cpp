@@ -44,6 +44,7 @@
 
 #include "dxmt9/core.hpp"
 #include "device_c_replay_offload.hpp"
+#include "device_c_render_tape_completion.hpp"
 #include "../../../src/dxmt9/dxmt9_command_queue.hpp"
 #include "../../../src/dxmt9/dxmt9_resource_pool.hpp"
 #include "../../../src/winemetal/winemetal.h"
@@ -506,6 +507,147 @@ void testRawCaptureLeasePreventsCompletedBackingReuse() {
           "released G0 becomes reusable after its GPU watermark completes");
 }
 
+void testRenderTapeCompletionScheduleBindsRenameResidency() {
+  using namespace dxmt9::core;
+  using Schedule = dxmt9::d3d9::RenderTapeCompletionSchedule;
+  BackendLimits limits{};
+  dxmt9::CommandQueue queue(dxmt9::CommandQueue::ArenaLeaseTestQueueTag{},
+                            limits);
+  const auto handle = queue.pool().createBuffer(
+      WMT::Device{NULL_OBJECT_HANDLE}, dynamicBufferDesc());
+  auto* record = queue.pool().findBuffer(handle.value);
+  check(record != nullptr, "scheduled-rename buffer is reachable");
+  SyntheticBufferHandleGuard handleGuard{record};
+  // Keep later production growth from relocating the synthetic non-owning
+  // handle through WMT::Reference's retaining copy constructor.
+  record->renameRing.reserve(4u);
+  constexpr obj_handle_t generation0 = 0x2468u;
+  record->buffer.handle = generation0;
+  record->renameRing[0].buffer.handle = generation0;
+
+  const std::array<ChunkHandleEntry, 1> entries{{
+      ChunkHandleEntry{
+          .kind = ChunkHandleKind::Buffer,
+          .handle = handle,
+      },
+  }};
+  std::vector<ChunkBufferBindingSnapshot> captured;
+  check(queue.markChunkResourcesAndCaptureBufferBindings(entries, captured) ==
+            ChunkBufferBindingCaptureResult::Complete,
+        "completion schedule captures the concrete G0 backing");
+  checkEq(captured.size(), std::size_t{1u},
+          "completion schedule captures one buffer backing");
+  checkEq(captured[0].snapshot.metalHandle, generation0,
+          "completion schedule records G0 identity");
+  const auto capturedRevision = captured[0].snapshot.contentRevision;
+  check(capturedRevision != 0u,
+        "completion schedule records G0 content identity");
+  check(captured[0].backingResidency != nullptr &&
+            record->renameRing[0].replayResident(),
+        "completion schedule holds a residency pin for G0");
+  const auto markedSeq = record->lastUsedSeqId;
+  check(markedSeq != 0u, "capture stamps a production sequence watermark");
+
+  // The source identity is deliberately qualified. It is a schedule identity
+  // for this cold reducer, not a fabricated Render Tape producer interval.
+  const Schedule::Key key{
+      .iteration = 1u,
+      .submission = markedSeq,
+      .source = 0x51u,
+      .actionOrdinal = 0u,
+      .sourceGeneration = 0x91u,
+  };
+  Schedule schedule;
+  check(schedule.append({key}).accepted() &&
+            schedule.beginIteration(key.iteration).accepted(),
+        "qualified completion schedule admits the production identity");
+
+  std::uint64_t completedFrontier = 0u;
+  check(schedule.submit(key, [] { return true; }).accepted(),
+        "completion schedule submits the captured source");
+
+  // The initial frontier is still behind G0's production use. The capture
+  // lease, rather than a test-only model pin, is what makes the backing
+  // unavailable to rotateBufferBacking on the real Pool ring.
+  // Clear the mirrored Reference before rotation: the synthetic G0 handle is
+  // non-owning, and assigning the fresh production slot would otherwise try
+  // to release that fake Objective-C object.
+  record->buffer.handle = NULL_OBJECT_HANDLE;
+  queue.pool().finalizeBufferMap(WMT::Device{NULL_OBJECT_HANDLE}, handle,
+                                 UsageDiscard, completedFrontier);
+  checkEq(record->renameRing.size(), std::size_t{2u},
+          "completed frontier still rotates away from resident G0");
+  checkEq(record->renameActiveIndex, 1u,
+          "DISCARD selects G1 while the schedule retains G0");
+  checkEq(record->renameRing[0].buffer.handle, generation0,
+          "G0 remains the captured concrete backing");
+  check(record->contentRevision > capturedRevision,
+        "DISCARD advances the live content identity beyond captured G0");
+
+  auto stale = key;
+  ++stale.iteration;
+  check(schedule.release(stale, [&] {
+          completedFrontier = stale.submission;
+          return true;
+        }).disposition == dxmt9::d3d9::RenderTapeCompletionDisposition::Stale,
+        "stale qualified acknowledgement is rejected before its callback");
+  checkEq(completedFrontier, std::uint64_t{0u},
+          "stale acknowledgement does not advance the completion frontier");
+
+  // Keep G1 busy and prove that the unchanged frontier cannot bypass the G0
+  // residency pin; a fresh G2 is required instead.
+  record->renameRing[1].lastUsedSeqId = markedSeq + 1u;
+  queue.pool().finalizeBufferMap(WMT::Device{NULL_OBJECT_HANDLE}, handle,
+                                 UsageDiscard, completedFrontier);
+  checkEq(record->renameRing.size(), std::size_t{3u},
+          "stale acknowledgement leaves G0 protected from reuse");
+
+  check(schedule.release(key, [&] {
+          completedFrontier = key.submission;
+          return true;
+        }).accepted(),
+        "valid acknowledgement advances the production completion frontier");
+  check(record->renameRing[0].replayResident(),
+        "completion alone does not release G0 residency");
+
+  check(schedule.release(key, [&] {
+          completedFrontier = UINT64_MAX;
+          return true;
+        }).disposition == dxmt9::d3d9::RenderTapeCompletionDisposition::
+                               DuplicateRelease,
+        "duplicate acknowledgement is rejected without a callback");
+  checkEq(completedFrontier, markedSeq,
+          "duplicate acknowledgement does not advance completion");
+  check(schedule.finishIteration().accepted(),
+        "completion schedule finishes after the single valid release");
+
+  // G2 is made busy so the completed frontier still cannot bypass the G0
+  // residency pin. A fresh G3 is required even though the completion is now
+  // at G0's marked sequence.
+  record->renameRing[2].lastUsedSeqId = markedSeq + 2u;
+  queue.pool().finalizeBufferMap(WMT::Device{NULL_OBJECT_HANDLE}, handle,
+                                 UsageDiscard, completedFrontier);
+  checkEq(record->renameRing.size(), std::size_t{4u},
+          "completion alone leaves G0 protected and allocates G3");
+
+  captured.clear();
+  check(!record->renameRing[0].replayResident(),
+        "capture release removes G0 residency after completion");
+  // WMT::Reference copies retain their Objective-C handle. The synthetic G0
+  // value is intentionally non-owning, so clear that slot before the
+  // production reuse assignment; the slot/index and captured scalar identity
+  // above still provide the CPU-only generation evidence.
+  record->renameRing[0].buffer.handle = NULL_OBJECT_HANDLE;
+  record->renameRing[3].lastUsedSeqId = markedSeq + 3u;
+  queue.pool().finalizeBufferMap(WMT::Device{NULL_OBJECT_HANDLE}, handle,
+                                 UsageDiscard, completedFrontier);
+  checkEq(record->renameActiveIndex, 0u,
+          "released G0 is reused only after completion and pin release");
+  checkEq(record->renameRing[0].buffer.handle,
+          static_cast<obj_handle_t>(NULL_OBJECT_HANDLE),
+          "reused slot is the original G0 slot without retaining a fake handle");
+}
+
 void testResolverEmitsPayloadOnlyForDrawUsingCapturedBacking() {
   using namespace dxmt9::core;
   const Handle versioned{.value = 10u};
@@ -794,6 +936,7 @@ int main() {
     testSequentialAlternatingThreadsShareRenameAndCaptureArena();
     testChunkAdmissionCaptureSurvivesLaterRename();
     testRawCaptureLeasePreventsCompletedBackingReuse();
+    testRenderTapeCompletionScheduleBindsRenameResidency();
     testResolverEmitsPayloadOnlyForDrawUsingCapturedBacking();
     testChunkAdmissionLeavesStaticBufferOnLiveFallback();
     testChunkAdmissionRejectsMissingRequiredBacking();

@@ -196,6 +196,12 @@ struct Fixture {
   pe::PeDrawParams params{};
   bool forceFullSnapshot = false;
   bool inlineConstDelta = false;
+
+  // The pinned differential corpus is the legacy-wire compatibility lane:
+  // its stream records intentionally carry the historical omitted-frequency
+  // value.  Production PeBindingView defaults to one; canonical-frequency
+  // coverage below opts in to explicit indexed/instance values.
+  Fixture() { bindings.streamFrequencies.fill(0u); }
 };
 
 struct LaneResult {
@@ -1369,6 +1375,64 @@ Fixture baseDraw(const char* name, std::uint32_t recordType) {
   return f;
 }
 
+void canonicalStreamFrequenciesReachEveryProducerLane() {
+  constexpr std::uint32_t indexedData = 0x40000000u;
+  constexpr std::uint32_t instanceData = 0x80000000u;
+  Fixture fixture = baseDraw("canonical stream frequencies",
+                             D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
+  static D9CBuffer streamOne;
+  fixture.shadow.writer().pendingStreamMask() = 0x3u;
+  fixture.bindings.streams[1].buffer =
+      publishedRef(&streamOne, D9C_CHUNK_HANDLE_KIND_BUFFER);
+  fixture.bindings.streams[1].offset = 128u;
+  fixture.bindings.streams[1].stride = 48u;
+  fixture.bindings.streamFrequencies[0] = indexedData | 7u;
+  fixture.bindings.streamFrequencies[1] = instanceData | 3u;
+
+  auto checkState = [&](bool fullSnapshot) {
+    PeConstShadowBlock constants = fixture.constants;
+    pe::PeSparseScratch scratch{};
+    pe::SparseStateInput state{};
+    D9CCommandChunkWireDrawHeader header{};
+    check(pe::buildSparseState(
+              fixture.shadow, constants, fixture.bindings, fixture.payloads,
+              fixture.params, fullSnapshot, false, scratch, header, state),
+          "canonical stream frequency state builds");
+    for (const auto& stream : state.streams) {
+      check(stream.wire.frequency ==
+                fixture.bindings.streamFrequencies[stream.wire.slot],
+            "canonical stream frequency reaches sparse wire state");
+    }
+    const auto before = fixture.bindings.streamFrequencies;
+    fixture.bindings.streams[0].offset += 16u;
+    fixture.bindings.streams[0].stride += 4u;
+    PeConstShadowBlock reboundConstants = fixture.constants;
+    pe::PeSparseScratch reboundScratch{};
+    pe::SparseStateInput reboundState{};
+    D9CCommandChunkWireDrawHeader reboundHeader{};
+    check(pe::buildSparseState(
+              fixture.shadow, reboundConstants, fixture.bindings,
+              fixture.payloads, fixture.params, fullSnapshot, false,
+              reboundScratch, reboundHeader, reboundState),
+          "tuple rebind preserves producer build");
+    check(fixture.bindings.streamFrequencies == before,
+          "stream tuple rebind leaves canonical frequencies unchanged");
+  };
+
+  checkState(false);
+  fixture.forceFullSnapshot = true;
+  checkState(true);
+
+  fixture.forceFullSnapshot = false;
+  const LaneResult direct = runDirectDrawLane(fixture);
+  const LaneResult compact = runPlanLane(fixture);
+  const LaneResult semantic = runOwnerPlanLane(fixture);
+  check(direct.ok && compact.ok && semantic.ok,
+        "frequency fixture reaches direct, compact, and semantic-owner lanes");
+  check(direct.bytes == compact.bytes && direct.bytes == semantic.bytes,
+        "frequency fixture emits identical compact and semantic-owner bytes");
+}
+
 void nonIndexedDraw() {
   Fixture f = baseDraw("non-indexed draw", D9C_COMMAND_RECORD_DRAW_PRIMITIVE);
   f.params.startVertex = 32u;
@@ -1378,6 +1442,8 @@ void nonIndexedDraw() {
 void indexedDrawWithBaseVertex() {
   Fixture f = baseDraw("indexed draw, base vertex and index range",
                        D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE);
+  check(f.bindings.streamFrequencies[0] == 0u,
+        "legacy indexed fixture must retain explicit zero frequency");
   f.params.baseVertex = 64;
   f.params.minVertex = 8u;
   f.params.numVertices = 256u;
@@ -4014,6 +4080,7 @@ int main() {
     snapshotDrawKeepsEveryStreamSection();
     snapshotIndexedDrawKeepsEveryStreamSection();
     randomizedRecordSequences();
+    canonicalStreamFrequenciesReachEveryProducerLane();
     if (updatingGoldens()) {
       writeGoldens();
       std::cerr << "pe_producer_differential_spec: wrote "

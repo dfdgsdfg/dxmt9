@@ -4594,6 +4594,7 @@ class PeSemanticBatchOwner final {
                   value.valid = 1u;
                   value.offset = bindings.streams[source].offset;
                   value.stride = bindings.streams[source].stride;
+                  value.frequency = bindings.streamFrequencies[source];
                   return emit(value, bindings.streams[source].buffer);
                 });
           };

@@ -210,13 +210,32 @@ struct PeAutogenMipmapState {
   }
 };
 
-static DWORD setTextureLod(D9CTexture *texture, DWORD &lod, DWORD value) {
-  if (!textureIsManaged(texture)) {
+static DWORD setTextureLod(
+    D3D9PeSurfaceTextureContext *recorder,
+    const dxmt9::d3d9::pe::PeWireObjectRef &object, D9CTexture *texture,
+    DWORD &lod, DWORD value) {
+  const bool managedTexture = textureIsManaged(texture);
+  if (!managedTexture) {
     return 0;
   }
   const DWORD previous = lod;
   const DWORD levelCount = dxmt9c_texture_get_level_count(texture);
-  lod = std::min<DWORD>(value, levelCount > 0 ? levelCount - 1 : 0);
+  const DWORD effective =
+      std::min<DWORD>(value, levelCount > 0 ? levelCount - 1 : 0);
+  // Keep the capture observer entirely out of ineffective SetLOD calls. The
+  // normal backend call below is retained for API-path parity, but no capture
+  // tracking query is needed when the effective resource state is unchanged.
+  const bool trackingEnabled =
+      previous != effective && recorder &&
+      recorder->IsRenderTapeCaptureTrackingEnabledForChild();
+  if (dxmt9::d3d9::renderTapeTextureLodMutationRequiresRejection(
+          trackingEnabled, managedTexture, previous, effective)) {
+    recorder->RejectRenderTapeCaptureForChild(
+        dxmt9::d3d9::RenderTapeCaptureRejectionReason::
+            UnsupportedTextureLodMutation,
+        object, std::numeric_limits<std::uint32_t>::max(), {});
+  }
+  lod = effective;
   dxmt9c_texture_set_lod(texture, lod);
   return previous;
 }
@@ -350,6 +369,21 @@ static bool prepareRenderTapeLinearLock(
     return false;
   }
   return true;
+}
+
+static void rejectUnrepresentedExplicitMipGeneration(
+    D3D9PeSurfaceTextureContext *recorder,
+    const dxmt9::d3d9::pe::PeWireObjectRef &object,
+    const D9CSurfaceDesc &desc) noexcept {
+  if (!recorder || !recorder->IsRenderTapeCaptureTrackingEnabledForChild())
+    return;
+  if (dxmt9::d3d9::renderTapeExplicitMipGenerationRequiresRejection(
+          true, (desc.usage & D3DUSAGE_AUTOGENMIPMAP) != 0u,
+          desc.width, desc.height, desc.depth)) {
+    recorder->RejectRenderTapeCaptureForChild(
+        dxmt9::d3d9::RenderTapeCaptureRejectionReason::UnsupportedExplicitMipGeneration,
+        object, 0u, renderTapeLayoutDiagnostic(desc, 0));
+  }
 }
 
 static void rejectRenderTapeFullSnapshot(
@@ -1702,7 +1736,7 @@ public:
     return D3DRTYPE_TEXTURE;
   }
   DWORD STDMETHODCALLTYPE SetLOD(DWORD lod) noexcept override {
-    return setTextureLod(t_, lod_, lod);
+    return setTextureLod(context_, wireObject_, t_, lod_, lod);
   }
   DWORD STDMETHODCALLTYPE GetLOD() noexcept override {
     return textureIsManaged(t_) ? lod_ : 0;
@@ -1732,6 +1766,16 @@ public:
       return;
     if ((sd.usage & D3DUSAGE_AUTOGENMIPMAP) == 0)
       return;
+    if (context_ && context_->IsRenderTapeCaptureActiveForChild() &&
+        (sd.width > 1u || sd.height > 1u || sd.depth > 1u)) {
+      const auto captured = context_->GenerateMipmapsForChild(wireObject_);
+      if (captured.handled) {
+        if (SUCCEEDED(captured.hr))
+          autogenState_.settleClean();
+        return;
+      }
+    }
+    rejectUnrepresentedExplicitMipGeneration(context_, wireObject_, sd);
     const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return;
@@ -2370,7 +2414,7 @@ public:
     return D3DRTYPE_CUBETEXTURE;
   }
   DWORD STDMETHODCALLTYPE SetLOD(DWORD lod) noexcept override {
-    return setTextureLod(t_, lod_, lod);
+    return setTextureLod(context_, wireObject_, t_, lod_, lod);
   }
   DWORD STDMETHODCALLTYPE GetLOD() noexcept override {
     return textureIsManaged(t_) ? lod_ : 0;
@@ -2397,6 +2441,16 @@ public:
       return;
     if ((sd.usage & D3DUSAGE_AUTOGENMIPMAP) == 0)
       return;
+    if (context_ && context_->IsRenderTapeCaptureActiveForChild() &&
+        (sd.width > 1u || sd.height > 1u || sd.depth > 1u)) {
+      const auto captured = context_->GenerateMipmapsForChild(wireObject_);
+      if (captured.handled) {
+        if (SUCCEEDED(captured.hr))
+          autogenState_.settleClean();
+        return;
+      }
+    }
+    rejectUnrepresentedExplicitMipGeneration(context_, wireObject_, sd);
     const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return;
@@ -2883,7 +2937,7 @@ public:
     return D3DRTYPE_VOLUMETEXTURE;
   }
   DWORD STDMETHODCALLTYPE SetLOD(DWORD lod) noexcept override {
-    return setTextureLod(t_, lod_, lod);
+    return setTextureLod(context_, wireObject_, t_, lod_, lod);
   }
   DWORD STDMETHODCALLTYPE GetLOD() noexcept override {
     return textureIsManaged(t_) ? lod_ : 0;
@@ -2909,6 +2963,16 @@ public:
       return;
     if ((sd.usage & D3DUSAGE_AUTOGENMIPMAP) == 0)
       return;
+    if (context_ && context_->IsRenderTapeCaptureActiveForChild() &&
+        (sd.width > 1u || sd.height > 1u || sd.depth > 1u)) {
+      const auto captured = context_->GenerateMipmapsForChild(wireObject_);
+      if (captured.handled) {
+        if (SUCCEEDED(captured.hr))
+          autogenState_.settleClean();
+        return;
+      }
+    }
+    rejectUnrepresentedExplicitMipGeneration(context_, wireObject_, sd);
     const HRESULT flushHr = flushChildRecorder(context_);
     if (FAILED(flushHr))
       return;

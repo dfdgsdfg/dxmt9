@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Mini-Replay Bisection — the apparatus that isolated per-draw vertex-stage write amplification"
 type: domain-index
 status: current
-updated: 2026-07-08
+updated: 2026-09-10
 source: docs/perfomance/overview-3dmark05-gt1.md
 related: docs/perfomance/mini-replay-bisection/overview.md; docs/perfomance/mini-replay-bisection/log.md
 ---
@@ -21,6 +21,7 @@ Latest tracked row: `H22` - Positive Metal visibility samples can be used as the
 
 ## Recent Leaf Documents
 
+- [Fixed-input replay policy experiment — bounded CPU/Metal evidence and GT2 capture residual](fixed-input-replay.01.md)
 - [mini-replay-bisection-vertexremap.01 - Vertex Remap Is A Null On Row 60/1, And Its Positive Control Failed](mini-replay-bisection-vertexremap.01.md)
 - [mini-replay-bisection-texture.09 - Metal Visibility Scout Wiring](mini-replay-bisection-texture.09.md)
 - [mini-replay-bisection-texture.08 - Occlusion Oracle Feasibility Gate](mini-replay-bisection-texture.08.md)

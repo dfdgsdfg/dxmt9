@@ -12,6 +12,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -38,6 +39,7 @@ using dxmt9::core::metalqueue::QueueSubmissionRecord;
 using dxmt9::core::metalqueue::PostEncodeCompletionLedger;
 using dxmt9::core::metalqueue::PostEncodeReceiptResult;
 using dxmt9::core::metalqueue::PostEncodeReceiptState;
+using dxmt9::core::ArenaGroupIdentity;
 
 std::string readFile(const std::filesystem::path& path) {
   std::ifstream input(path);
@@ -222,6 +224,113 @@ void receiptLedgerRejectsDuplicateStaleAndAbaUse() {
             collision.cancelBeforeActivationEffects(occupied.receipt) ==
                 PostEncodeReceiptResult::Stale,
         "only a pre-effect active receipt can roll back once");
+}
+
+void receiptLedgerTransfersArenaGroupExactlyOnce() {
+  const auto groupFor = [](std::uint64_t seqId) {
+    return ArenaGroupIdentity{
+        .rawOrdinal = seqId + 100u,
+        .buildGeneration = seqId + 200u,
+        .firstSourceOrdinal = seqId + 300u,
+        .tailSeqId = seqId,
+        .sourceCount = 1u,
+        .hasPresent = false,
+    };
+  };
+
+  PostEncodeCompletionLedger ledger;
+  const auto first = ledger.activate(40u, false, groupFor(40u));
+  check(first.result == PostEncodeReceiptResult::Succeeded &&
+            !ledger.takeCompletedArenaGroup(first.receipt) &&
+            ledger.matches(first.receipt, PostEncodeReceiptState::Active,
+                           false),
+        "an active receipt cannot transfer its arena group prematurely");
+  check(ledger.markSubmitted(first.receipt, false) ==
+            PostEncodeReceiptResult::Succeeded &&
+            !ledger.takeCompletedArenaGroup(first.receipt) &&
+            ledger.matches(first.receipt, PostEncodeReceiptState::Submitted,
+                           false),
+        "a submitted receipt cannot transfer its arena group prematurely");
+  check(ledger.markCompleted(first.receipt, false) ==
+            PostEncodeReceiptResult::Succeeded &&
+            ledger.finishAndRelease(40u) ==
+                PostEncodeReceiptResult::WrongState,
+        "finish rejects a completed receipt with an unconsumed group");
+  const auto transferred = ledger.takeCompletedArenaGroup(first.receipt);
+  check(transferred && *transferred == groupFor(40u) &&
+            !ledger.takeCompletedArenaGroup(first.receipt),
+        "completed arena-group transfer is value-owned and one-shot");
+  check(ledger.finishAndRelease(40u) == PostEncodeReceiptResult::Succeeded,
+        "finish releases a group receipt after its obligation is consumed");
+
+  const auto cancelled = ledger.activate(41u, false, groupFor(41u));
+  check(cancelled.result == PostEncodeReceiptResult::Succeeded &&
+            ledger.cancelBeforeActivationEffects(cancelled.receipt) ==
+                PostEncodeReceiptResult::Succeeded &&
+            !ledger.takeCompletedArenaGroup(cancelled.receipt) &&
+            ledger.depth() == 0u,
+        "cancelling an active group receipt discards it before completion");
+
+  const auto reused = ledger.activate(
+      40u + dxmt9::core::metalqueue::kMaxPostEncodeCompletionReceipts, false,
+      groupFor(40u +
+               dxmt9::core::metalqueue::kMaxPostEncodeCompletionReceipts));
+  check(reused.result == PostEncodeReceiptResult::Succeeded &&
+            reused.receipt.slot == first.receipt.slot &&
+            reused.receipt.generation != first.receipt.generation &&
+            ledger.takeCompletedArenaGroup(first.receipt) == std::nullopt &&
+            ledger.matches(reused.receipt, PostEncodeReceiptState::Active,
+                           false),
+        "a stale ABA receipt cannot consume a reused arena-group slot");
+  const auto reusedGroup = groupFor(
+      40u + dxmt9::core::metalqueue::kMaxPostEncodeCompletionReceipts);
+  check(ledger.markSubmitted(reused.receipt, false) ==
+            PostEncodeReceiptResult::Succeeded &&
+            ledger.markCompleted(reused.receipt, false) ==
+                PostEncodeReceiptResult::Succeeded &&
+            !ledger.takeCompletedArenaGroup(first.receipt),
+        "stale ABA transfer leaves the newer completed group intact");
+  const auto transferredReused =
+      ledger.takeCompletedArenaGroup(reused.receipt);
+  check(transferredReused && *transferredReused == reusedGroup &&
+            ledger.finishAndRelease(reused.receipt.seqId) ==
+                PostEncodeReceiptResult::Succeeded,
+        "stale ABA transfer leaves the newer completed group intact");
+
+  const auto invalidGroup = [&](ArenaGroupIdentity invalid,
+                                std::string_view message) {
+    PostEncodeCompletionLedger candidate;
+    const auto activation = candidate.activate(50u, false, invalid);
+    check(activation.result == PostEncodeReceiptResult::Invalid &&
+              candidate.depth() == 0u,
+          message);
+  };
+  auto invalidCount = groupFor(50u);
+  invalidCount.sourceCount = 2u;
+  invalidGroup(invalidCount, "group source count must be a strict singleton");
+  auto invalidTail = groupFor(50u);
+  invalidTail.tailSeqId = 51u;
+  invalidGroup(invalidTail, "group tail must match the receipt sequence");
+  auto invalidPresent = groupFor(50u);
+  invalidPresent.hasPresent = true;
+  invalidGroup(invalidPresent,
+               "group Present state must match the receipt Present state");
+  auto invalidZero = groupFor(50u);
+  invalidZero.rawOrdinal = 0u;
+  invalidGroup(invalidZero, "group identity rejects zero-valued authority");
+
+  PostEncodeCompletionLedger ordinary;
+  const auto ordinaryReceipt = ordinary.activate(60u, true);
+  check(ordinaryReceipt.result == PostEncodeReceiptResult::Succeeded &&
+            ordinary.markSubmitted(ordinaryReceipt.receipt, true) ==
+                PostEncodeReceiptResult::Succeeded &&
+            ordinary.markCompleted(ordinaryReceipt.receipt, true) ==
+                PostEncodeReceiptResult::Succeeded &&
+            !ordinary.takeCompletedArenaGroup(ordinaryReceipt.receipt) &&
+            ordinary.finishAndRelease(60u) ==
+                PostEncodeReceiptResult::Succeeded &&
+            ordinary.depth() == 0u,
+        "ordinary receipts retain the no-arena-group completion path");
 }
 
 enum class DeferredSuffixReplayPath : std::uint8_t {
@@ -829,6 +938,7 @@ int main(int argc, char** argv) {
     invalidDuplicateAndTailPresentRejectWithoutMutation();
     mergePreservesOrderPresentAndBounds();
     receiptLedgerRejectsDuplicateStaleAndAbaUse();
+    receiptLedgerTransfersArenaGroupExactlyOnce();
     deferredSuffixRetirementWaitsForAllEffectsAndConservesState();
     queueSealedShadowMatchesLegacyListDomain();
     mixedRetiredAndLocatorSourcesStayDenseAndOrdered();

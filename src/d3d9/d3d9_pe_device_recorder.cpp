@@ -849,11 +849,25 @@ HRESULT D3D9DeviceImpl::commitPendingCommandChunk(
                 poisonStateBlockTransaction();
                 return D3DERR_DEVICELOST;
             }
-            HRESULT hr = hr32(
+            const HRESULT bridgeHr = hr32(
                 segmented
                     ? dxmt9c_device_commit_chunk_segmented(
                           dev_, &segmented->transport)
                     : dxmt9c_device_commit_chunk(dev_, &submittedChunk));
+            // This is the only authoritative PE-side acceptance point for a
+            // capture event. Stamp before any later capture settlement or
+            // diagnostics can fail; callers may then wait on this exact
+            // token/ordinal without predicting the next event.
+            if (captureState &&
+                captureState->renderTapeCommitCollector &&
+                SUCCEEDED(bridgeHr)) {
+                PeRenderTapeCommitReceipt accepted{};
+                accepted.bridgeAccepted = true;
+                accepted.captureToken = submittedChunk.renderTapeCaptureToken;
+                accepted.eventOrdinal = submittedChunk.renderTapeEventOrdinal;
+                captureState->renderTapeCommitCollector->observe(accepted);
+            }
+            HRESULT hr = bridgeHr;
             // Once the C ABI call returned, the unchanged ABI cannot tell us
             // whether the provider published before reporting failure. Turn
             // this injected entered fault into the same fail-stop path as a

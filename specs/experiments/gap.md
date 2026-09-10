@@ -7,6 +7,406 @@ tags: [specs, gap, experiments]
 
 # Experiments Gap
 
+## Fixed-input replay experiment
+
+R-HARN-REPLAY-8.1–8.6 are specified in
+[fixed-input-experiment.md](harness/replay/fixed-input-experiment.md).
+Status: **partial qualification, usable bounded experiment surfaces**. The
+`experiment` operation prepares authenticated input once, runs the actual Metal
+provider repeatedly in one process, reports resource/replay/readback/cleanup
+wall scopes, and enforces warm reset plus strict output/source oracles.
+`compatibility` suppresses both direct paths; `production-slot` retains actual
+production eligibility and reports the executed path, not just the request.
+The old provider command and renderer defaults are unchanged.
+
+The real small capture in
+`experiments/output/fixed-input-harness-20260909/small-{compatibility,direct}-r3`
+passes five measured warm repetitions each; actual selected-path draws are 18
+per repetition. The 128-draw fixture in `parallel-direct-r2` instead falls back
+to compatibility and fails `--require-path`, even though its pixels match.
+That is a negative execution control, not Direct evidence.
+
+`cpu-experiment` executes production replay/Slot/Queue/Pool operations for one
+Plain full-buffer seed, draw, unbind, destroy and implicit Present sequence.
+It uses controlled per-command publication and no GPU/Present pacing; its
+four Direct/compatibility × immediate/delayed-completion combinations compare
+flattened executed-draw semantics. The adapter TLA model passes its bounded
+two-submission safety case and detects deliberately premature/duplicate
+completion. This does not prove all queue interleavings or physical backing
+rename. Tests: `dxmt9-render-tape-provider-spec`,
+`dxmt9-render-tape-provider-cli-spec`,
+`dxmt9-cpu-ready-production-routing-spec`, and
+`dxmt9-render-tape-cpu-experiment-cli-spec`.
+
+Additional native composition pins bind the completion reducer to real Pool
+DISCARD/backing selection and distinguish a completed use stamp from a still
+held capture-residency pin (`dxmt9-dynamic-rename-ring-spec`). The Managed
+mutation transaction's mode-on test now injects the existing queue allocation
+failure before effects, verifies unchanged ownership/state, and counts exactly
+one successful application after retry. Its test-configured fault owner
+outlives the worker; default worker construction still supplies no fault hook.
+These are production-predicate/transaction tests, not a Tape-driven mutation
+grammar or physical Metal backing-byte oracle.
+
+The subsequent bounded `cpu-metal-resources` Tape lane now supplies that byte
+oracle for one DEFAULT+DYNAMIC buffer: Plain A, draw A, DISCARD B, draw B,
+unbind, destroy, Present. Actual Shared Metal buffers are allocated but no GPU
+work is submitted. Delayed completion proves A remains unchanged while B has
+new bytes and an advanced revision; immediate completion permits legal backing
+reuse. Both replay routes pass 16 repetitions under both presets. The external
+event/submission completion plan also passes 16 repetitions with real qualified
+Queue identities. These results do not qualify arbitrary resource families.
+
+`RenderTapeEventCompletionBinding` and its shared-controller native test bind
+the external plan to ordered event publication/release, terminal failure and
+generation-qualified identity. Focused TLC visits 15 normal states and detects
+three injected violations. The full suite passes in `tla-event-binding-r2.log`
+under `experiments/output/fixed-input-harness-20260909/`; seven integrated native
+tests pass in `native-integrated-r3.log`. The model abstracts adapter owners,
+not physical Pool allocation, all queue interleavings or GPU completion.
+
+The bounded cross-event capacity case now executes through authenticated Tape:
+`--publication draw-island` accumulates seven then two plain-buffer draws in
+one writing Slot. With optional headroom disabled, ProductionSlot executes
+seven Direct draws, rejects the next capacity admission once, and appends two
+compatibility draws without rotation or an intermediate publication. Both
+routes and all three completion policies pass 16 repetitions in
+`cpu-capacity-*-r10`, sharing one ordered semantic digest. Receipts bind the
+actual nine-draw source to events 5–6 and preserve exact queue identity.
+`RenderTapeGroupedPublication` checks the bounded composition (14 normal states,
+three required counterexamples); the shared native range predicate checks
+3072 tuples and six execution orders. This closes one populated-Slot fallback
+shape, not every capacity dimension, rotation or arbitrary resource grammar.
+
+The paired `cpu-compare` command now owns an authenticated input and separate
+compatibility/reference and production-slot/candidate receipts. It validates
+each child first and compares logical draws/resources plus cumulative semantic
+observations after every actual final-Slot draw. The grouped capacity input
+passes both preset completion schedules, 16 repetitions per route, in
+`cpu-paired-capacity-{after-command,after-destroy}-r24`. Native negatives reject
+corrupt per-draw evidence even when the final digest is unchanged. Publication
+events qualify the actual physical source, not an original per-draw Tape
+locator; physical source counts are not the cross-route equality contract.
+The shared general-provider object factory, exact identity lookup, release and
+pure preflight plan are implemented. The resource-backed native fixture uses real
+Pool texture/surface records and observes normal core texture uploads at the
+Device boundary without GPU submission. Its 16-entry/64-KiB observation bounds
+and component watermark tests are not general Tape-driven texture lifetime or
+physical-content evidence.
+
+Final `cpu-paired-{capacity,dynamic}-{after-command,after-destroy}-r30` runs
+pass 16 iterations per route per case. The comparator no longer equates
+physical command/source counts across policies, but each child must conserve
+submissions/completions/reclaims and Direct plus compatibility draw totals.
+The delayed dynamic case additionally observes real A backing-byte retention
+across DISCARD B. All four canonical builds, four focused native/CLI tests and
+the full TLA suite pass for that bounded evidence set.
+
+`cpu-general-gt2-paired-r41` additionally passes 16 fresh-device iterations per
+route on the unchanged r4 capture: 965 events, 277 objects, 645 mutations,
+39 chunks, 2085 records and 1420 draws. Compatibility executes 1420 ordinary
+draws; production-slot executes 1410 Direct plus 10 compatibility draws. Every
+iteration has the same ordered per-draw/final digest and conserves all 39
+submitted/completed/reclaimed sources and all 277 wrapper acquisitions/releases.
+Each iteration verifies 4235 actual buffer snapshot observations against core
+shadow bytes. Actual Pool texture/surface records and checked logical upload
+receipts replace fabricated resource handles. This closes bounded **GT2 CPU
+execution**, with explicit immediate completion and no internal split policy;
+it does not close physical texture/pixel correctness or general delayed
+multi-object lifetime schedules. See the versioned artifact and
+[evidence](../../docs/perfomance/mini-replay-bisection/fixed-input-replay.01.md).
+Five focused native/CLI tests and all four canonical builds pass. A native
+snapshot-proof pin rejects stale bytes after mutation even when address and
+revision are reused; cache overflow rejects instead of truncating. Full TLA
+passes in `build/meson-logs/cpu-general-tla-r36.txt`; that model evidence does
+not prove the physical byte oracle or expand the admitted completion policy.
+
+The explicit `before-next-work` CPU mode additionally holds one submitted
+source through wrapper destruction, releasing before the next work event.
+`cpu-general-gt2-before-next-work-r44` passes 16 iterations per route with the
+same draw digest: 39 deferred releases, two destroys while pending and 16
+retained buffer snapshot checks per iteration. This does not authorize delay
+across mutation/rename or multiple outstanding sources. The existing
+chunk-entry quiescence guard remains active, and release boundaries are
+checked against authenticated event types rather than trusted receipt flags.
+The isolated native destroy-window fixture covers all four static/dynamic
+VB/IB combinations, both replay routes and actual-byte corruption with
+failed-iteration cleanup. General projection v2 now observes non-versioned
+live Pool backing separately from required versioned snapshots, with explicit
+UP precedence and strict observation-count conservation. Final r53 immediate
+and before-next-work GT2 comparisons pass 16 iterations per route per mode; GT2 itself
+has zero live-binding observations, so non-versioned coverage comes from the
+native matrix, not that artifact. This does not prove overlapping static
+buffer mutation, general texture-alias lifetime or GPU pixel equivalence.
+
+Native mutation-window qualification now passes 20 route/schedule cases and
+six concrete byte-corruption negatives. It uses the production
+`visitSourceCommandResources` closure, one pending source, one mutation, and
+the actual zero-wait map predicate. Unrelated DEFAULT/plain and referenced
+DEFAULT/dynamic DISCARD mutate before acknowledgment; same-buffer Plain
+completes before locking. The second draw consumes the new bytes through the
+normal snapshot resolver. Nine focused tests pass in
+`build/meson-logs/cpu-mutation-r56.txt`; the new pure admission checker covers
+512 witness valuations and action words of length four/five. Existing full
+TLA checks pass separately in `cpu-mutation-tla-r55.txt`.
+The CLI now exposes this bounded policy only through an explicit
+`cpu-source-project` artifact and `--source-projection` on `cpu-experiment` /
+`cpu-compare`. The compatibility producer records the actual source visitor's
+buffer closure, qualified by input digests and live object identity; native
+candidate replay rechecks all source rows before any mutation hold. The
+wrapper independently checks held events, mutation targets, release boundaries
+and counter conservation, plus final/per-draw digests against the immediate
+reference. Raw chunk handles are not a closure substitute. Identity sidecars
+remain optional; this is not frame/pass-sidecar completeness evidence.
+
+GT2 projection r65 contains 39 sources and 913 buffer references (peak 43).
+The final r66 paired CLI run passes 16 repeats per route, 1420 draws each,
+with 39 submitted/completed/reclaimed sources, three deferred DISCARDs,
+20 retained-buffer byte checks and three release-before-mutation boundaries
+per replay. All ordered/final digests match the immediate reference; final
+digest is `11633069703464745659`. Twelve focused tests pass in
+`cpu-source-binding-r65.txt`, the final three CLI/pure tests in
+`cpu-source-binding-r66.txt`, and full TLA in
+`cpu-source-binding-tla-r63.txt`. The r63/r64 missing-counter rejection is
+preserved, not relabelled as accepted evidence. See the
+[experiment leaf](../../docs/perfomance/mini-replay-bisection/fixed-input-replay.01.md)
+for artifacts and commands. Neither completion preset changes without the
+explicit oracle, and no renderer default changes.
+
+The general executor now has a maintained A-to-B-to-A reset qualification on
+both routes and completion presets, sharing a Metal device but recreating the
+actual core/queue/resources. A skipped wrapper release fails the real reset
+boundary; recovery cleanup does not relabel that sample. The next A matches
+every original A draw. An actual seeded-texture/surviving-surface fixture also
+closes parent-destroy receipt attribution: immutable parent identity plus
+live/tombstone backing evidence replaces the live-wrapper-only lookup. A
+native fault reproducing the old lookup first diverges on the post-destroy
+draw. Same-object-ID texture redefinition is not covered by this fixture.
+
+CPU wrapper receipts now snapshot allowlisted renderer/Metal environment and
+pass that same environment to the provider. API/shader validation enabled or
+unknown nonempty values mark a diagnostic run; execution may pass, but policy
+acceptance, paired comparison and source-projection promotion may not. The
+environment test uses a provider double for wrapper-gate coverage, not actual
+driver-validation evidence. Fresh-device cleanup is not warm-device reset.
+Twelve focused tests plus full TLA pass in `cpu-alias-reset-r74.txt`
+(TLA 165.04 seconds); native and all three canonical cross builds pass.
+Fresh GT2 projection/comparison r75 bind the updated binary: 16 repetitions
+per route, 1420 draws, all 39 source checks and three deferred DISCARDs each;
+all ordered observations and final digest `11633069703464745659` still match
+the immediate reference. Receipts report `diagnostic=false`. This supersedes
+r66 as the CPU execution checkpoint at that stage, not as Metal or FPS evidence.
+
+The r80 native qualification now replays B while A is actually pending,
+retires the actual wrappers and verifies A-only reclaim preserves B's physical
+backing. Both routes also saturate the real queue at 31 pending sources;
+denial changes no state and one completion/reclaim admits one replacement.
+The general executor's `PendingSourceProof` unifies full qualified identity,
+schedule, resource closure, backing proofs and mutation state. Six independent
+identity faults reject before acknowledgment on both routes/presets (24
+negatives), with failed-trace preservation and cleanup. Fourteen focused tests
+pass; the two completion model/code tests and full TLA pass in r79 (168.76 s).
+Fresh GT2 projection/comparison r81 supersede r75: 16 repeats per route, the
+same 1420 draws, 39 conserved sources, three deferred DISCARDs and identical
+per-draw/final semantics, `diagnostic=false`.
+
+Public general-frame now admits a qualified two-source window. The shared
+immutable emission-plan witness limits overlap to 1–64 ordinary draw/state
+records in one whole-source lease. Actual offload/Arena/queue-worker absence,
+4096-byte pages and fresh no-wait queue admission are checked. Every pending
+owner retains its own eligibility and qualified identity; an ineligible owner
+cannot overlap a later eligible source. A real Draw/Clear/Draw/Draw fixture
+pins that distinguishing edge on both routes, alongside the 128-value window
+reducer table and independent inspector/Python receipt checks. R88 focused
+native/CLI tests pass; the completion model/code tests and full TLA passed in
+r85 (168.82 s). GT2 r88 reaches pending peak two in all 16 repeats per route:
+1420 draws, 39 submitted/completed/reclaimed sources and every ordered draw/
+final digest equal to a separately executed immediate-completion control.
+The candidate executes 1410 Direct and 10 compatibility draws. This supersedes
+r87, whose incoming-only eligibility was corrected after independent review.
+The full accepted receipts and control check are linked from
+[the experiment leaf](../../docs/perfomance/mini-replay-bisection/fixed-input-replay.01.md).
+Mutation holds remain a separate max-one policy; no general concurrent
+production admission or GPU-execution guarantee is implied by this cold window.
+Fresh r88 projection and max-one comparison also pass 16 repetitions per route,
+including all 39 source checks, three deferred DISCARDs and 20 retained-buffer
+checks per replay. Earlier projection artifacts are not reused with new binaries.
+
+Remaining extensions beyond the bounded CPU R8 scope: actual GT2 strict Metal
+replay qualification; broader CPU command and delayed multi-object lifetime
+grammar; broader production continuation/capacity cuts. Adapter boundary-fault
+injection and a pending-completion budget are not substitutes for other capacity
+coverage. Existing native allocation/generation tests remain separate evidence.
+The current bounded CPU completion checkpoint is recorded below; it does not
+claim complete Metal/capture qualification. No FPS or renderer-promotion claim
+follows from fixed-input service timings.
+
+Capture completeness (R-HARN-REPLAY-7.4) has a bounded LOD guard, not full
+resource-owned-state replay: effective tracked managed-texture `SetLOD` changes
+invalidate capture before or during arm; no-ops/non-managed calls preserve
+capture. Native truth-table coverage and PE call-site/build checks do not
+retroactively certify old bundles. Stream frequency now has one PE binding
+owner shared by setters/getters, StateBlock, Reset and SWVP. Accepted setters
+enter canonical pending stream state; all four producer lanes emit explicit
+frequencies. Unix sparse replay journals source/frequency together and preserves
+legacy wire zero; the state folder also preserves a known value across sparse
+and FULL_SNAPSHOT zero rows. Producer parity, default/flagged values, rollback
+and fold tests cover the value boundary. Production queue tests also pin A/B/A
+and derived instance counts in Arena, ordinary direct and compatibility routes:
+stable cache generation and batch/encoder key compatibility now include
+frequency, and sparse replay uses the ordinary draw instance-count reducer.
+New PE-origin capture evidence remains separate. The post-fix GT2 CPU recheck
+now passes at r102 after independently owned copy-on-write input staging removes
+the previous ENOSPC blocker. Both routes pass 16 repetitions with pending peak
+two, 1420 draws and 39 submitted/completed/reclaimed sources, matching a
+separate 16-repeat immediate-completion control with the same input and loaded
+images. The r95 artifact failure remains preserved, not relabelled as passing.
+The r102/r103 source-mutation rechecks fail while writing the parent receipt
+with ENOSPC; their lost unpublished evidence remains documented. CPU artifact
+transactions now preserve populated rejected staging even when quarantine or
+marker creation fails. The r105 standalone receipt failure retains all 16
+completed native iterations, but is not a published aggregate. The fresh r105
+two-repeat immediate reference authenticates 39 closures; r106 then passes
+the paired source-mutation comparison for 16 repetitions per route, with three
+deferred DISCARDs, 20 retained-buffer checks and 39 source closure checks per
+iteration. All draw digests match the bound immediate reference. This replaces
+r88 as the accepted source-mutation evidence without relabelling prior failures.
+The r129 two-repeat projection and r130 paired comparison
+revalidate the same 39 closures and all 1420 draws for 16 repetitions per route;
+three deferred DISCARDs, 20 retained-buffer checks and complete resource/source
+reclaim remain unchanged. Loaded images are stable within both runs.
+The bounded CPU R8 timing/receipt closure is now qualified separately from
+Metal/capture completion. R137 passes 16 repetitions per route with external
+completion plans, nine draws and two conserved sources. R139 retains a real
+injected release-callback failure; r140 reproduces its authenticated Tape,
+schedule and incomplete prefix. Bounded results now expose exclusive wall
+phases including teardown, separate import/shared-device setup, and process
+CPU measurements; both grammars declare reset/cache/shared-device policy.
+Missing, malformed or inconsistent timing/reset declarations fail acceptance.
+Final-image r138 projection and r144 paired GT2 comparison pass 16 repetitions
+per route with the unchanged 1420 draws, 39 source closures, three deferred
+DISCARDs, 20 retained-buffer checks and identical semantic digest. R142 passes
+25 native tests; r143 passes five x86_64 tests. Together with the unchanged
+188-config r128 TLA gate and native contamination/fault controls, this closes
+R8.1–8.6 for the declared bounded CPU policy/lifetime scope. It does not close
+arbitrary concurrent admission, broader grammars, Wine capture or GPU pixels.
+The requirement-to-evidence table is in the
+[experiment leaf](../../docs/perfomance/mini-replay-bisection/fixed-input-replay.01.md#bounded-cpu-harness-closure-timing-and-retained-schedules).
+
+The CPU queued-operation oracle covers canonical GENERATE_MIPMAPS
+through actual replay/Queue/Pool, authenticated command counts, immediate and
+delayed completion, destroy-before-completion retention and final reclaim.
+Active, negotiated PE explicit AUTOGEN calls now use an isolated canonical
+record, a device-owned cold receipt collector (including CapacityPost commits),
+and the exact token/event completion bridge. The bridge authenticates the row,
+flushes a potentially parked session, waits the queue settlement, and
+acknowledges only that event. Capture-only failures use an unqualified
+completion fence without repeating generation or manufacturing capture proof.
+Tracking before arm or without a recorder still rejects unrepresented calls
+with `unsupported_explicit_mip_generation`; capture-off and physical-one-level
+execution retain the old direct path. Native integrated r114 pins cover real
+D9CDevice/Queue/Pool completion, missing/foreign lookup, independent event
+acknowledgment, rejected-capture completion, scoped receipt retention and
+second-commit conflicts. The subsequent r122 production-loop test exposed a
+real composition failure: post-encode physical retirement lost a strict
+singleton's group identity, so sequence completion did not settle the exact
+event. The queue now transfers that identity into its receipt before retirement
+and forwards completed receipt/resident group tails through one ordered FIFO.
+The real replay/encode-loop/C API/capture-ledger regression passes in r123 and
+ten repeats in r124; r127 adds singleton physical reuse, receipt ABA/one-shot
+transfer and mixed resident-group ordering. The backend and completion are
+CPU-controlled: this proves release of an unsubmitted production source, not
+that the coordinator was observed asleep on its idle CV. Actual PE COM
+CapacityPost fault integration and GPU mip texels remain outside these pins.
+Explicit PE capture under
+Wine remains unqualified; no promotion or complete capture claim is made.
+The exact-event TLA safety model passes with 87 distinct states and both
+expected counterexamples in the full r110 verification gate. Its r116
+conditional progress extension passes with 32 states and detects a
+missing-release temporal counterexample (183-configuration full gate passes).
+Fair enabled steps and valid accepted requests are premises; queue completion
+is abstracted, so this does not alone close production-thread progress.
+The separate singleton-retirement model now distinguishes sequence completion
+from exact-identity settlement (18 states for both safety and progress).
+Missing transfer fails eventual settlement; stale receipt extraction and
+premature publication fail their safety invariants. The complete 188-config
+TLA gate passes in r128 (214.21 seconds). Final native r131 passes all 24
+selected tests including install-name audit; x86_64 r132 passes the four core
+receipt/Tape/queue/encode-loop tests. Model-code correspondence is bounded
+scenario evidence, not an unbounded proof of arbitrary callback interleavings.
+The small r100 fixture passes both routes and four repeats per completion
+policy; it does not prove PE explicit-call capture or generated mip texels.
+The r4 GT2 input
+has no AUTOGEN texture definitions
+but 36 managed multi-mip textures, with no actual LOD attestation.
+Validation diagnostic r21 still fails (2403 pixels, maximum RGB delta 16,
+zero reported GPU errors). Subsequent wrappers preserve Metal validation
+settings and exclude those runs from policy-performance acceptance. See
+[fixed-input evidence](../../docs/perfomance/mini-replay-bisection/fixed-input-replay.01.md).
+The small synthetic cold-device validation fixture separately exits with
+signal 11 (`validation-fixture-r22`); this remains unresolved and is not a
+passing validation oracle. The environment/acceptance test deliberately uses
+a provider double. Sticky pre-arm LOD invalidation/active abort use the existing
+PE registry path but still lack a direct PE/COM runtime fixture; pure predicate
+tests are not evidence of that whole owner lifecycle.
+
+The bounded Managed Tape now binds the actual replay queue allocation-failure
+hook (`--fault managed-allocation`, `cpu-metal-resources`). It verifies an exact
+pre-effect rejection, unchanged backend ownership and still-open lock, then
+retries through public Unlock and observes exactly one backend apply. Both
+routes and both completion presets pass 16 repetitions in
+`cpu-managed-fault-*-r7`; the receipt is explicitly diagnostic:
+`fault_oracle_passed=true`, `accepted=false`. The CLI native test compares the
+same Tape without the fault and rejects corrupted fault evidence. This closes
+one Tape-driven allocation transaction, not all Slot capacity dimensions.
+
+Current GT2 capture/replay gate: both SegmentSerial `...gt2-frame-tape-v2-20260909-r2`
+and EventSerial `...-r3` at the default 256-record cadence abort identity publication. The first
+`legacy-or-inline` rejection is `ReplayReason::Oversize`; it fails/clears the
+ledger, so later `snapshot-or-ledger-append` messages are secondary. The explicit
+64-record/262144-byte capture recipe `...-r4-capture64` now publishes an
+authenticated complete frame with 965 events, 1420 draws, 135 identity-v2 source
+segments and 39 event settlements. This does not qualify the default cadence;
+the first capture token still aborts and the next token supplies this bundle.
+ARM64 compatibility and ProductionSlot, and x86_64 compatibility replay all
+produce the same image but fail the original source/output oracle at 2378
+pixels (maximum RGB delta 16). Direct executes 691 draws plus 729 compatibility
+draws, so this is a non-vacuous shared capture/replay mismatch, not a passing
+policy gate. A second capture with archive/prewarm disabled also validates but
+fails compatibility replay at 1839 pixels (maximum RGB delta 18); cache-policy
+matching alone is insufficient. Failed source/output RGBA artifacts are now
+preserved and authenticated outside replay timings. The historical r17 v2
+input remains absent locally. See
+[fixed-input evidence](../../docs/perfomance/mini-replay-bisection/fixed-input-replay.01.md).
+
+The cold initial-seed audit is diagnostic only. GT2 `gt2-initial-seed-audit-r16`
+matches all five supported seed readbacks (87 unsupported), with the same final
+2378-pixel failure. The earlier black RT readback in r14 was an audit ordering
+error: deferred Initializer uploads had not completed. The diagnostic now
+flushes that owner and checks a nanosecond-unit wait before readback, with a
+native private-RT seed regression pin. No source oracle was changed.
+
+The cold fresh-owner preflush diagnostic (`gt2-fresh-seed-drain-audit-r17`)
+omits 530 mutation drains and retains 23 after commands, but still rejects the
+output at 2398 pixels (maximum RGB delta 16). This is non-vacuous boundary
+sensitivity, not a capture/replay fix or a renderer promotion. Its first
+receipt's audit-completion field was coupled to the final pixel result;
+mutation coverage is now counted independently without changing acceptance.
+The r18 rerun confirms complete **645/645** coverage and identical rejected
+pixels; its replay service is 138.102 ms, excluding prepare/device/artifact
+work. All nine focused tests pass in `native-integrated-r6.log`.
+
+The independent-texture prestage diagnostic (`gt2-texture-prestage-audit-r20`)
+activates all 40 candidates and consumes 500/500 seeds with zero leftovers,
+277/277 provider-owned wrapper conservation, and unchanged 2378-pixel failure.
+The actual backing receipt classifies all 500 uploads as immediate Shared
+`replaceRegion`, not deferred Initializer work. Thus a zero upload-flush count
+is expected, not an unperformed seed; this run does not exercise deferred-blit
+boundary removal. DEFAULT/MANAGED native indexed fixtures pin exact ordinary
+versus prestaged pixels, alternate-seed sensitivity, upload-route evidence and
+conservation (`native-prestage-r3.log`). The bounded discriminator is closed;
+command/state-projection and publication-boundary localization remain open.
+
 Domain-owned implementation and evidence gap tracker. Use the [root gap index](../gap.md) for cross-domain rollup.
 
 ## Experiments Layer

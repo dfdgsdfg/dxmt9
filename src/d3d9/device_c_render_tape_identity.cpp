@@ -722,6 +722,22 @@ bool RenderTapeProductionIdentityLedger::expectedTail(
   return true;
 }
 
+bool RenderTapeProductionIdentityLedger::expectedSettlement(
+    std::uint64_t captureToken, std::uint64_t eventOrdinal,
+    D9CRenderTapeIdentitySettlementEntry& out) const noexcept {
+  std::lock_guard lock(mutex_);
+  out = {};
+  if (captureToken == 0u || eventOrdinal == 0u ||
+      captureToken_ != captureToken || failed_)
+    return false;
+  for (std::size_t i = 0u; i < settlementCount_; ++i) {
+    if (settlements_[i].eventOrdinal != eventOrdinal) continue;
+    out = settlements_[i];
+    return true;
+  }
+  return false;
+}
+
 bool RenderTapeProductionIdentityLedger::markAllSettled(
     std::uint64_t captureToken) noexcept {
   std::lock_guard lock(mutex_);

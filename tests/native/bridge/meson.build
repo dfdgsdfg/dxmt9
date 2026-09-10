@@ -531,6 +531,30 @@ test('dxmt9-render-tape-provider-cli-spec', python3,
      env: render_tape_provider_test_env,
      timeout: 120)
 
+test('dxmt9-render-tape-cpu-source-projection-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                      'scripts/check/test_render_tape_cpu_source_projection.py')],
+     env: render_tape_provider_test_env)
+test('dxmt9-render-tape-cpu-source-projection-cli-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                      'scripts/check/test_render_tape_cpu_source_projection_cli.py'),
+            cpu_ready_production_routing_spec, dxmt9_render_tape_tool,
+            join_paths(meson.project_source_root(), 'scripts/tools/run_dxmt9_render_tape.py')],
+     env: render_tape_provider_test_env,
+     timeout: 90)
+
+test('dxmt9-render-tape-cpu-experiment-cli-spec', python3,
+     args: [
+       join_paths(meson.project_source_root(),
+                  'scripts/check/test_render_tape_cpu_experiment_cli.py'),
+       cpu_ready_production_routing_spec,
+       dxmt9_render_tape_tool,
+       join_paths(meson.project_source_root(),
+                  'scripts/tools/run_dxmt9_render_tape.py'),
+     ],
+     env: dxmt9_native_test_env,
+     timeout: 120)
+
 render_tape_publisher_spec = executable(
   'dxmt9-render-tape-publisher-spec',
   [

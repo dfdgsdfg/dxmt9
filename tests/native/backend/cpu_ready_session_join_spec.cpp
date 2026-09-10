@@ -47,6 +47,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <memory>
 #include <mutex>
@@ -564,6 +565,14 @@ struct CommandQueueArenaLeaseTestAccess {
         .has_value();
   }
 
+  static bool hasSubmittedPostEncodeReceipt(CommandQueue& queue,
+                                            std::uint64_t seqId) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.queueLifecycle_.postEncodeReceiptForTest(
+               seqId, core::metalqueue::PostEncodeReceiptState::Submitted)
+        .has_value();
+  }
+
   static std::size_t completeAndFinish(
       CommandQueue& queue,
       std::span<const core::metalqueue::QueueCompletionSource> sources,
@@ -948,7 +957,8 @@ void retainRawFixtureObject(std::uint32_t kind, void* object) noexcept {
 }
 
 dxmt9::d3d9::RawCommandChunk makeRaw(const WireFixture& fixture,
-                                     std::uint64_t rawOrdinal) {
+                                     std::uint64_t rawOrdinal,
+                                     bool captureIdentity = false) {
   dxmt9::d3d9::WireObjectRegistry registry;
   dxmt9::d3d9::RawCommandChunk raw;
   const bool prepared = dxmt9::d3d9::prepareOffloadChunk(
@@ -956,6 +966,10 @@ dxmt9::d3d9::RawCommandChunk makeRaw(const WireFixture& fixture,
   check(prepared, "session join raw chunk must pass owned preflight");
   raw.replaySeq = rawOrdinal;
   raw.cpuReadyTapePlanningEnabled = true;
+  if (captureIdentity) {
+    raw.renderTapeCaptureToken = 0xfeedu;
+    raw.renderTapeEventOrdinal = rawOrdinal;
+  }
   return raw;
 }
 
@@ -1014,9 +1028,18 @@ struct SessionJoinDevice final : dxmt9::Device {
     queue_.submitDrawRun(std::move(state), uniforms, draws, payloads);
   }
 
+  void flush() override {
+    flushCalls.fetch_add(1u, std::memory_order_relaxed);
+    if (flushHook) {
+      flushHook();
+    }
+  }
+
   BackendLimits limits_{};
   dxmt9::CommandQueue queue_;
   std::atomic<std::uint32_t> drawCalls{0};
+  std::atomic<std::size_t> flushCalls{0};
+  std::function<void()> flushHook;
   std::uint64_t nextHandle_ = 1;
 };
 
@@ -1545,6 +1568,7 @@ struct ProductionLoopBackendState {
   std::atomic<std::size_t> pauseAfterBackendCall{0};
   std::atomic<bool> backendCallPaused{false};
   std::atomic<bool> releaseBackendCall{false};
+  std::atomic<bool> backendPauseReleased{false};
   bool wantsDceLookahead = false;
   std::size_t postCommitCount = 0;
   std::atomic<std::size_t> observedBackendCalls{0};
@@ -1628,6 +1652,7 @@ class ProductionLoopBackend final : public dxmt9::render::IRenderBackend {
         return state_->releaseBackendCall.load(std::memory_order_acquire);
       });
     }
+    state_->backendPauseReleased.store(true, std::memory_order_release);
 
     dxmt9::core::metalqueue::QueueSubmissionRecord submission{};
     submission.testOnlyAllowNullCommandBuffer = true;
@@ -7182,6 +7207,185 @@ void productionFinalWsiQuiescenceWakesIdleCoordinator() {
   encodeThread.join();
 }
 
+void exactCapturedEventWaitReleasesUnsubmittedProductionSession() {
+  constexpr std::uint64_t kCaptureToken = 0xfeedu;
+  constexpr std::uint64_t kEventOrdinal = 101u;
+
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  dxmt9::CommandQueueArenaLeaseTestAccess::enableCpuReadySessionReleaseLane(
+      queue);
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  backendState->pauseAfterBackendCall.store(1u, std::memory_order_release);
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+
+  std::mutex flushMutex;
+  std::condition_variable flushCv;
+  bool flushEntered = false;
+  bool flushFinished = false;
+  std::mutex waitMutex;
+  std::condition_variable waitCv;
+  bool waitReturned = false;
+  std::int32_t waitResult = D3DERR_NOTAVAILABLE;
+
+  fixture.routing->flushHook = [&] {
+    {
+      std::lock_guard lock(flushMutex);
+      flushEntered = true;
+    }
+    flushCv.notify_all();
+    queue.submitFlush();
+    {
+      std::lock_guard lock(flushMutex);
+      flushFinished = true;
+    }
+    flushCv.notify_all();
+  };
+
+  std::thread encodeThread;
+  std::thread waiter;
+  struct ThreadGuard {
+    SessionJoinDevice& device;
+    dxmt9::CommandQueue& queue;
+    ProductionLoopBackendState& backend;
+    std::thread& encode;
+    std::thread* waiter = nullptr;
+    bool armed = true;
+    ~ThreadGuard() {
+      if (!armed) return;
+      backend.releaseBackendCall.store(true, std::memory_order_release);
+      backend.backendPauseCv.notify_all();
+      dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+      if (waiter && waiter->joinable()) waiter->join();
+      if (encode.joinable()) encode.join();
+      // Device teardown performs another flush. Clear on every failure path
+      // after joining the user of the callback, before captured mutexes die.
+      device.flushHook = {};
+    }
+  } cleanup{*fixture.routing, queue, *backendState, encodeThread, &waiter};
+  encodeThread = std::thread([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::runCpuReadySessionEncodeLoop(
+        queue);
+  });
+
+  auto raw = makeRaw(makeWireFixture(std::array{clearRecord()}),
+                     kEventOrdinal, /*captureIdentity=*/true);
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK,
+        "captured canonical source must replay through the real raw path");
+
+  {
+    std::unique_lock lock(backendState->backendPauseMutex);
+    check(backendState->backendPauseCv.wait_for(
+              lock, std::chrono::seconds(2), [&] {
+                return backendState->backendCallPaused.load(
+                    std::memory_order_acquire);
+              }),
+          "production loop must reach the parked backend session");
+  }
+  check(backendState->calls.size() == 1u &&
+            backendState->calls.front().sessionSource.has_value(),
+        "parked production session must retain the exact source identity");
+  std::array source{*backendState->calls.front().sessionSource};
+  check(!dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, source),
+        "parked non-Present session must remain unsubmitted");
+
+  D9CRenderTapeIdentityCaptureResult premature{};
+  check(!fixture.cDevice->renderTapeIdentityCapture.copy(
+            kCaptureToken, premature, {}),
+        "authentic capture ledger row must remain unsettled while parked");
+  const auto flushesBeforeMalformed =
+      fixture.routing->flushCalls.load(std::memory_order_acquire);
+  check(dxmt9c_device_wait_render_tape_event_completion(
+              fixture.cDevice.get(), kCaptureToken, kEventOrdinal + 1u) ==
+            D3DERR_INVALIDCALL &&
+            fixture.routing->flushCalls.load(std::memory_order_acquire) ==
+                flushesBeforeMalformed &&
+            !dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+                queue, source),
+        "malformed event ticket must not flush or release the parked session");
+
+  backendState->releaseBackendCall.store(true, std::memory_order_release);
+  backendState->backendPauseCv.notify_all();
+  check(waitUntil([&] {
+          return backendState->backendPauseReleased.load(
+              std::memory_order_acquire);
+        }),
+        "backend pause must be released before the exact wait begins");
+  check(!dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+            queue, source),
+        "non-Present session must remain unsubmitted without a release request");
+
+  waiter = std::thread([&] {
+    const auto result = dxmt9c_device_wait_render_tape_event_completion(
+        fixture.cDevice.get(), kCaptureToken, kEventOrdinal);
+    {
+      std::lock_guard lock(waitMutex);
+      waitResult = result;
+      waitReturned = true;
+    }
+    waitCv.notify_all();
+  });
+  const auto apiWaitHasReturned = [&] {
+    std::lock_guard lock(waitMutex);
+    return waitReturned;
+  };
+
+  {
+    std::unique_lock lock(flushMutex);
+    check(flushCv.wait_for(lock, std::chrono::seconds(2), [&] {
+            return flushEntered;
+          }),
+          "exact event wait must invoke the opt-in production flush hook");
+  }
+  check(!apiWaitHasReturned(),
+        "exact event wait must not acknowledge before queue completion");
+  check(!fixture.cDevice->renderTapeIdentityCapture.copy(
+            kCaptureToken, premature, {}),
+        "capture ledger must not acknowledge before controlled completion");
+
+  check(waitUntil([&] {
+          return dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(
+              queue, source);
+        }),
+        "ordered event release must submit the parked source before waiting");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::hasSubmittedPostEncodeReceipt(
+            queue, source.front().seqId),
+        "exact-event completion must survive physical retirement via a receipt");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, source) == source.size(),
+        "controlled queue completion must retire the exact source");
+  {
+    std::unique_lock lock(waitMutex);
+    check(waitCv.wait_for(lock, std::chrono::seconds(2), [&] {
+            return waitReturned;
+          }),
+          "exact event wait must return after queue completion");
+  }
+  check(waitResult == D3D_OK,
+        "exact event wait must return success after exact completion");
+  {
+    std::unique_lock lock(flushMutex);
+    check(flushCv.wait_for(lock, std::chrono::seconds(2), [&] {
+            return flushFinished;
+          }),
+          "opt-in production flush must finish after the controlled completion");
+  }
+  D9CRenderTapeIdentityCaptureResult complete{};
+  check(fixture.cDevice->renderTapeIdentityCapture.copy(
+            kCaptureToken, complete, {}) &&
+            complete.status == D9C_RENDER_TAPE_IDENTITY_CAPTURE_COMPLETE &&
+            complete.eventOrdinal == kEventOrdinal && complete.settlementCount == 1u,
+        "exact ledger row must be acknowledged only after completion");
+
+  waiter.join();
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encodeThread.join();
+  fixture.routing->flushHook = {};
+  cleanup.armed = false;
+}
+
 void productionOrderedControlForwardRawWakesIdleCoordinator() {
   RuntimeFixture fixture;
   auto& queue = fixture.routing->queue_;
@@ -7481,6 +7685,7 @@ int main() {
     multipleArenaSourcesCompleteFifoThroughOneSubmission();
     mixedLegacyAndArenaSourcesShareOneSubmission();
     productionFinalWsiQuiescenceDrainsOpenSessionAndPresent();
+    exactCapturedEventWaitReleasesUnsubmittedProductionSession();
     tapeDceRequestSelectsSessionTerminalCoordinator();
     supplyLatencyKeepsLegacyAndArenaIdentitySeparated();
     failedArenaSupplyEntryCannotContaminateNextSource();

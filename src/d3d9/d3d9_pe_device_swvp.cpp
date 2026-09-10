@@ -1093,19 +1093,25 @@ HRESULT D3D9DeviceImpl::filterSoftwareIndexedDrawOutsideClipPrimitives(
 	    }
 
 UINT D3D9DeviceImpl::softwareDrawInstanceCount() const {
-    if ((streamFreq_[0] & D3DSTREAMSOURCE_INDEXEDDATA) == 0u) {
+    if ((recorderState_.peBindingView.streamFrequencies[0] &
+         D3DSTREAMSOURCE_INDEXEDDATA) == 0u) {
         return 1u;
     }
-    const UINT count = streamFreq_[0] & 0x3fffffffu;
+    const UINT count = recorderState_.peBindingView.streamFrequencies[0] &
+                       0x3fffffffu;
     return count ? count : 1u;
 }
 
 HRESULT D3D9DeviceImpl::applySoftwareInstanceStreamOffsets(UINT instance) {
     for (UINT stream = 1; stream < 16u; ++stream) {
-        if ((streamFreq_[stream] & D3DSTREAMSOURCE_INSTANCEDATA) == 0u) {
+        if ((recorderState_.peBindingView.streamFrequencies[stream] &
+             D3DSTREAMSOURCE_INSTANCEDATA) == 0u) {
             continue;
         }
-        const UINT divider = std::max<UINT>(streamFreq_[stream] & 0x3fffffffu, 1u);
+        const UINT divider = std::max<UINT>(
+            recorderState_.peBindingView.streamFrequencies[stream] &
+                0x3fffffffu,
+            1u);
         const UINT element = instance / divider;
         UINT offset = 0u;
         if (!dxmt9::d3d9::pe::peSwvpCheckedInstanceOffset(

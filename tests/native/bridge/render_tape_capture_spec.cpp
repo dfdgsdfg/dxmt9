@@ -3852,6 +3852,159 @@ void testPresentCaptureResultAbiAndOneShotCancellation() {
 // RecordPartition predicates: the positive split deliberately uses source
 // ordinals/seq IDs 51/53 and 61/66, while every swapped, truncated, foreign,
 // or pass-metadata mutation fails before completion evidence is exposed.
+void testProductionIdentityExactEventLookupDoesNotComplete() {
+  RenderTapeProductionIdentityLedger ledger;
+  const RenderTapeProductionPassRange range{
+      .firstRecord = 0u, .recordCount = 1u, .dagPassIndex = 0u, .passKind = 4u};
+  for (std::uint64_t event : {41u, 42u}) {
+    check(ledger.append(9u, event, event + 10u, event + 20u, 1u,
+                        std::span(&range, 1u)) &&
+              ledger.registerExpectedSettlement(
+                  9u, event, event, 3u, event + 10u, event + 20u, 1u),
+          "exact-event fixture registers two independent accepted sources");
+  }
+  D9CRenderTapeIdentitySettlementEntry result{};
+  check(ledger.expectedTail(9u, result) && result.eventOrdinal == 42u,
+        "a later source exists when waiting for the earlier event");
+  check(ledger.expectedSettlement(9u, 41u, result) &&
+            result.eventOrdinal == 41u && result.rawOrdinal == 41u &&
+            result.buildGeneration == 3u && result.firstSourceOrdinal == 51u &&
+            result.tailSeqId == 61u && result.sourceCount == 1u,
+        "exact lookup cannot substitute the latest accepted event tail");
+  D9CRenderTapeIdentityCaptureResult capture{};
+  check(!ledger.copy(9u, capture, {}),
+        "looking up a settlement is not proof of completion");
+  for (const auto token : {0u, 8u, 10u}) {
+    result.tailSeqId = 99u;
+    check(!ledger.expectedSettlement(token, 41u, result) && result.tailSeqId == 0u,
+          "foreign capture lookup clears an obsolete output ticket");
+  }
+  for (const auto event : {0u, 40u, 43u})
+    check(!ledger.expectedSettlement(9u, event, result) && result.eventOrdinal == 0u,
+          "missing event never falls back to the capture tail");
+  check(ledger.completeSettlement(9u, 41u) &&
+            ledger.expectedSettlement(9u, 41u, result) &&
+            !ledger.copy(9u, capture, {}),
+        "completed early event remains identifiable but cannot settle a later one");
+  check(!ledger.completeSettlement(9u, 41u) && ledger.markAllSettled(9u) &&
+            ledger.copy(9u, capture, {}),
+        "final capture settlement preserves an earlier exact acknowledgment");
+  ledger.fail(9u);
+  check(!ledger.expectedSettlement(9u, 41u, result) && result.tailSeqId == 0u,
+        "failed ledger cannot provide a usable completion ticket");
+}
+
+void testExplicitMipReceiptSurvivesNestedCommitAndEmptyFlush() {
+  PeRenderTapeCommitReceipt receipt{};
+  PeRenderTapeCommitReceiptCollector collector{&receipt};
+  PeRenderTapeCommitReceiptCollector* active = nullptr;
+  const PeRenderTapeCommitReceipt accepted{
+      .bridgeAccepted = true, .captureToken = 9u, .eventOrdinal = 41u};
+  {
+    PeRenderTapeCommitReceiptCollectorScope scope(active, collector);
+    check(active == &collector, "collector is scoped to the device capture owner");
+    active->observe({});
+    check(!receipt.bridgeAccepted, "pre-effect failure creates no accepted ticket");
+    // Production CapacityPost commits have no explicit out-parameter: they
+    // use the same active collector as a later final flush.
+    active->observe(accepted);
+    active->observe({});
+    check(receipt.hasAcceptedEvent() && receipt.eventOrdinal == 41u,
+          "accepted CapacityPost ticket survives an empty final flush");
+    PeRenderTapeCommitReceipt innerReceipt{};
+    PeRenderTapeCommitReceiptCollector inner{&innerReceipt};
+    try {
+      PeRenderTapeCommitReceiptCollectorScope nested(active, inner);
+      active->observe({.bridgeAccepted = true, .captureToken = 10u,
+                       .eventOrdinal = 51u});
+      throw 1;
+    } catch (int) {
+    }
+    check(active == &collector && receipt.eventOrdinal == 41u &&
+              innerReceipt.eventOrdinal == 51u,
+          "nested scope unwinding restores ownership without mixing tickets");
+  }
+  check(active == nullptr, "scope cannot leave a borrowed stack collector installed");
+  collector.observe(accepted);
+  check(receipt.conflict && !receipt.hasAcceptedEvent() &&
+            receipt.eventOrdinal == 41u,
+        "even a duplicate accepted ticket exposes a second commit");
+  receipt.reset();
+  collector.observe(accepted);
+  collector.observe({.bridgeAccepted = true, .captureToken = 9u,
+                     .eventOrdinal = 42u});
+  check(receipt.conflict && receipt.eventOrdinal == 41u,
+        "a newer commit must not silently replace the isolated mip identity");
+  receipt.reset();
+  collector.observe({.bridgeAccepted = true});
+  check(receipt.bridgeAccepted && !receipt.hasAcceptedEvent() && !receipt.conflict,
+        "untagged accepted work requires completion, not direct re-execution");
+}
+
+void testProductionExactEventWaitAcknowledgesOnlySuccessfulWait() {
+  using Status = RenderTapeEventWaitStatus;
+  check(dxmt9c_device_wait_render_tape_event_completion(nullptr, 9u, 41u) < 0,
+        "completion-only C bridge rejects missing device before any effect");
+  RenderTapeProductionIdentityLedger ledger;
+  const RenderTapeProductionPassRange range{
+      .firstRecord = 0u, .recordCount = 1u, .dagPassIndex = 0u, .passKind = 4u};
+  for (std::uint64_t event : {41u, 42u}) {
+    check(ledger.append(9u, event, event + 10u, event + 20u, 1u,
+                        std::span(&range, 1u)) &&
+              ledger.registerExpectedSettlement(
+                  9u, event, event, 3u, event + 10u, event + 20u, 1u),
+          "exact wait fixture registers two separate events");
+  }
+  unsigned waits = 0u;
+  auto wait = [&](const auto& expected) {
+    ++waits;
+    check(expected.eventOrdinal == 41u && expected.rawOrdinal == 41u &&
+              expected.buildGeneration == 3u && expected.firstSourceOrdinal == 51u &&
+              expected.tailSeqId == 61u && expected.sourceCount == 1u,
+          "wait receives the entire exact earlier identity, not the latest tail");
+    return false;
+  };
+  check(ledger.waitAndCompleteSettlement(9u, 41u, wait) == Status::WaitFailed &&
+            waits == 1u,
+        "failed queue wait cannot acknowledge an event");
+  D9CRenderTapeIdentityCaptureResult capture{};
+  check(!ledger.copy(9u, capture, {}), "failed wait leaves capture incomplete");
+  for (auto token : {0u, 8u, 10u})
+    check(ledger.waitAndCompleteSettlement(token, 41u, wait) ==
+              Status::InvalidIdentity && waits == 1u,
+          "invalid capture does not enter a queue wait");
+  for (auto event : {0u, 40u, 43u})
+    check(ledger.waitAndCompleteSettlement(9u, event, wait) ==
+              Status::InvalidIdentity && waits == 1u,
+          "missing exact event does not wait a newer tail");
+  check(ledger.waitAndCompleteSettlement(9u, 41u, [&](const auto& expected) {
+          (void)wait(expected);
+          return true;
+        }) == Status::Completed && waits == 2u && !ledger.copy(9u, capture, {}),
+        "successful wait acknowledges only the earlier event");
+  check(ledger.waitAndCompleteSettlement(9u, 41u, [](const auto&) { return true; }) ==
+            Status::AcknowledgmentFailed,
+        "duplicate completion is not reported as new success");
+  bool threw = false;
+  try {
+    (void)ledger.waitAndCompleteSettlement(9u, 42u, [](const auto&) -> bool {
+      throw 17;
+    });
+  } catch (int value) {
+    threw = value == 17;
+  }
+  check(threw && !ledger.copy(9u, capture, {}),
+        "throwing wait cannot settle the remaining event");
+  check(ledger.waitAndCompleteSettlement(9u, 42u, [](const auto& expected) {
+          return expected.eventOrdinal == 42u;
+        }) == Status::Completed && ledger.copy(9u, capture, {}),
+        "capture completes only after both exact waits");
+  ledger.fail(9u);
+  check(ledger.waitAndCompleteSettlement(9u, 41u, wait) ==
+            Status::InvalidIdentity && waits == 2u,
+        "failed ledger cannot invoke the queue wait");
+}
+
 void testProductionIdentityLedgerIsTokenBoundAndNoClobber() {
   RenderTapeProductionIdentityLedger ledger;
   const std::array ranges{
@@ -4156,6 +4309,55 @@ void testBlockCompressedCaptureRejectsInvalidLayouts() {
             RenderTapeBlockMutationStatus::IncompleteSeed &&
             unavailable.empty(),
         "partial block write cannot manufacture unavailable initial bytes");
+}
+
+void testExplicitMipGenerationRejectionTruthTable() {
+  for (const bool tracking : {false, true})
+    for (const bool autogen : {false, true})
+      for (const std::uint32_t width : {1u, 8u})
+        for (const std::uint32_t height : {1u, 8u})
+          for (const std::uint32_t depth : {1u, 8u})
+            check(renderTapeExplicitMipGenerationRequiresRejection(
+                      tracking, autogen, width, height, depth) ==
+                      (tracking && autogen &&
+                       (width > 1u || height > 1u || depth > 1u)),
+                  "explicit mip capture guard includes 2D, cube and volume chains");
+  check(std::string_view(renderTapeCaptureRejectionReasonName(
+            RenderTapeCaptureRejectionReason::UnsupportedExplicitMipGeneration)) ==
+            "unsupported_explicit_mip_generation",
+        "unrepresented synchronous mip operation has a stable named rejection");
+}
+
+void testTextureLodMutationRejectionTruthTable() {
+  constexpr std::array<std::uint32_t, 3u> lods{{0u, 1u, 7u}};
+  for (const bool trackingEnabled : {false, true}) {
+    for (const bool managedTexture : {false, true}) {
+      for (const auto oldLod : lods) {
+        for (const auto newLod : lods) {
+          const bool expected = trackingEnabled && managedTexture &&
+                                oldLod != newLod;
+          check(renderTapeTextureLodMutationRequiresRejection(
+                    trackingEnabled, managedTexture, oldLod, newLod) ==
+                    expected,
+                "texture LOD capture rejection predicate truth table drifted");
+        }
+      }
+    }
+  }
+  check(std::string_view(renderTapeCaptureRejectionReasonName(
+            RenderTapeCaptureRejectionReason::UnsupportedTextureLodMutation)) ==
+            "unsupported_texture_lod_mutation",
+        "texture LOD capture rejection has a stable diagnostic name");
+
+  // Requests above the available mip range are compared after the PE helper's
+  // clamp. A request that remains at the current effective LOD is harmless,
+  // while a request whose clamp changes resource-owned state is unsupported.
+  check(!renderTapeTextureLodMutationRequiresRejection(true, true, 0u, 0u) &&
+            renderTapeTextureLodMutationRequiresRejection(true, true, 0u, 1u),
+        "effective LOD transition distinguishes clamped no-op from mutation");
+  check(!renderTapeTextureLodMutationRequiresRejection(false, true, 0u, 1u) &&
+            !renderTapeTextureLodMutationRequiresRejection(true, false, 0u, 1u),
+        "disabled and non-managed ineffective requests remain capture-safe");
 }
 
 void testLinearLockCaptureLayouts() {
@@ -4660,10 +4862,15 @@ int main(int argc, char** argv) {
     testSurfaceAliasGenerationReplacementTransition();
     testPendingAliasFlushBeforeReplacementSequence();
     testPresentCaptureResultAbiAndOneShotCancellation();
+    testProductionIdentityExactEventLookupDoesNotComplete();
+    testProductionExactEventWaitAcknowledgesOnlySuccessfulWait();
+    testExplicitMipReceiptSurvivesNestedCommitAndEmptyFlush();
     testProductionIdentityLedgerIsTokenBoundAndNoClobber();
     testBlockCompressedLockCaptureLayouts();
     testBlockCompressedSubrectMipAndOddExtentLayouts();
     testBlockCompressedCaptureRejectsInvalidLayouts();
+    testExplicitMipGenerationRejectionTruthTable();
+    testTextureLodMutationRejectionTruthTable();
     testLinearLockCaptureLayouts();
     testFullSnapshotClosureTruthTable();
     testBootstrapClosureTruthTable();

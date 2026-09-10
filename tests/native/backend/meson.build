@@ -422,9 +422,17 @@ test('dxmt9-cpu-ready-arena-lease-spec',
 
 cpu_ready_production_routing_spec = executable(
   'dxmt9-cpu-ready-production-routing-spec',
-  'cpu_ready_production_routing_spec.cpp',
+  [
+    'cpu_ready_production_routing_spec.cpp',
+    'render_tape_test_metal_device.mm',
+  ],
   include_directories: dxmt9_inc,
-  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  dependencies: [
+    dxmt9_dep,
+    dxmt9_frontend_dep,
+    dxmt9_winemetal_dep,
+    dependency('appleframeworks', modules: ['Foundation', 'Metal']),
+  ],
   link_args: dxmt9_test_link_args,
 )
 
@@ -433,6 +441,50 @@ test('dxmt9-cpu-ready-production-routing-spec',
      env: dxmt9_native_test_env_vars + [
        'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
      ])
+test('dxmt9-render-tape-cpu-destroy-window-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--general-cpu-destroy-spec'],
+     env: dxmt9_native_test_env)
+test('dxmt9-render-tape-cpu-mipmap-window-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--general-cpu-mipmap-spec'],
+     env: dxmt9_native_test_env)
+test('dxmt9-render-tape-cpu-mutation-window-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--general-cpu-mutation-spec'],
+     env: dxmt9_native_test_env,
+     timeout: 30)
+test('dxmt9-render-tape-cpu-reset-qualification-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--general-cpu-reset-spec'],
+     env: dxmt9_native_test_env,
+     timeout: 30)
+test('dxmt9-render-tape-cpu-alias-after-parent-destroy-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--general-cpu-alias-spec'],
+     env: dxmt9_native_test_env,
+     timeout: 30)
+test('dxmt9-render-tape-cpu-two-pending-production-sources-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--two-pending-production-sources-spec'],
+     env: dxmt9_native_test_env,
+     timeout: 30)
+test('dxmt9-render-tape-cpu-phase-ledger-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--cpu-tape-phase-ledger-spec'],
+     env: dxmt9_native_test_env)
+
+cpu_source_admission_spec = executable(
+  'dxmt9-render-tape-cpu-source-admission-spec',
+  'render_tape_cpu_source_admission_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-render-tape-cpu-source-admission-spec',
+     cpu_source_admission_spec,
+     env: dxmt9_native_test_env)
 
 # R-BACK-2.52 inline-constant replay equivalence.  The fixture drives the
 # production PE producer/semantic owner into ExactFixed, then uses the real
@@ -873,6 +925,28 @@ dynamic_rename_ring_spec = executable(
 
 test('dxmt9-dynamic-rename-ring-spec', dynamic_rename_ring_spec)
 
+# R-BACK-5.8 / R-BACK-43.4 — real Metal-resource lifetime oracle. This
+# Objective-C++ fixture allocates Shared MTLBuffers and exercises Pool's
+# capture/rotation/reuse path without submitting a command buffer; it skips
+# on hosts without a Metal device and makes no GPU/pixel claim.
+render_tape_buffer_lifetime_metal_spec = executable(
+  'dxmt9-render-tape-buffer-lifetime-metal-spec',
+  'render_tape_buffer_lifetime_metal_spec.mm',
+  include_directories: dxmt9_inc,
+  dependencies: [
+    dxmt9_dep,
+    dxmt9_winemetal_dep,
+    dependency('appleframeworks', modules: ['Foundation', 'Metal']),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-render-tape-buffer-lifetime-metal-spec',
+     render_tape_buffer_lifetime_metal_spec,
+     env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1'],
+     is_parallel: false,
+     timeout: 30)
+
 # R-BACK-13.* — Tile-shader FFP selector + MSL emit specs.
 tile_ffp_selector_spec = executable(
   'dxmt9-tile-ffp-selector-spec',
@@ -1105,6 +1179,89 @@ test('dxmt9-managed-mutation-offload-transaction-spec',
 test('dxmt9-managed-mutation-offload-transaction-spec-mode-on',
      managed_mutation_offload_transaction_spec,
      env: dxmt9_native_test_env_vars + ['DXMT9_MANAGED_MUTATION_OFFLOAD=1'])
+
+# R-HARN-REPLAY-8.4 cold schedule binding: fixed Tape-event rows are
+# authenticated and bounded before effects, then bind real qualified queue
+# source identities only at production publication time. This is deliberately
+# separate from the CPU provider runner so its negative controls cannot pass
+# through a requested route or fabricated source identity.
+render_tape_completion_plan_spec = executable(
+  'dxmt9-render-tape-completion-plan-spec',
+  'render_tape_completion_plan_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-render-tape-completion-plan-spec',
+     render_tape_completion_plan_spec,
+     env: dxmt9_native_test_env)
+
+render_tape_event_completion_binding_spec = executable(
+  'dxmt9-render-tape-event-completion-binding-spec',
+  'render_tape_event_completion_binding_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-render-tape-event-completion-binding-spec',
+     render_tape_event_completion_binding_spec,
+     env: dxmt9_native_test_env)
+
+render_tape_publication_spec = executable(
+  'dxmt9-render-tape-publication-spec',
+  'render_tape_publication_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-render-tape-publication-spec',
+     render_tape_publication_spec,
+     env: dxmt9_native_test_env)
+
+# Second, bounded CPU-general admission over an already-built general-provider
+# plan. This is a pure narrowing gate; command/tape validation remains owned by
+# the provider and no Metal device is linked by the spec.
+render_tape_cpu_general_grammar_spec = executable(
+  'dxmt9-render-tape-cpu-general-grammar-spec',
+  'render_tape_cpu_general_grammar_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-render-tape-cpu-general-grammar-spec',
+     render_tape_cpu_general_grammar_spec,
+     env: dxmt9_native_test_env)
+
+render_tape_cpu_snapshot_proof_spec = executable(
+  'dxmt9-render-tape-cpu-snapshot-proof-spec',
+  'render_tape_cpu_snapshot_proof_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-render-tape-cpu-snapshot-proof-spec',
+     render_tape_cpu_snapshot_proof_spec,
+     env: dxmt9_native_test_env)
+
+render_tape_cpu_work_boundary_spec = executable(
+  'dxmt9-render-tape-cpu-work-boundary-spec',
+  'render_tape_cpu_work_boundary_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+test('dxmt9-render-tape-cpu-work-boundary-spec',
+     render_tape_cpu_work_boundary_spec,
+     env: dxmt9_native_test_env)
+
+render_tape_cpu_mutation_boundary_spec = executable(
+  'dxmt9-render-tape-cpu-mutation-boundary-spec',
+  'render_tape_cpu_mutation_boundary_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+test('dxmt9-render-tape-cpu-mutation-boundary-spec',
+     render_tape_cpu_mutation_boundary_spec,
+     env: dxmt9_native_test_env)
 
 # Layer 3 of the semantic-isomorphism plan (design brief §5): the deterministic
 # interleaving harness that discharges the C++ memory-order obligation the

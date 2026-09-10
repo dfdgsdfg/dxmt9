@@ -657,6 +657,7 @@ bool appendSparsePlanRecordWithSources(
               value.valid = 1u;
               value.offset = bindings.streams[slot].offset;
               value.stride = bindings.streams[slot].stride;
+              value.frequency = bindings.streamFrequencies[slot];
               if (!appendNullableHandle(builder, bindings.streams[slot].buffer,
                                         D9C_CHUNK_HANDLE_KIND_BUFFER,
                                         value.handleIndex) ||

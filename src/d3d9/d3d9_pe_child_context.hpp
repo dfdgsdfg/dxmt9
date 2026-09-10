@@ -6,6 +6,7 @@
 #include "device_c_render_tape.hpp"
 #include "device_c_render_tape_capture.hpp"
 #include "device_c_render_tape_capture_layout.hpp"
+#include "d3d9_pe_render_tape_commit_receipt.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -14,6 +15,12 @@
 
 class D3D9DeviceImpl;
 class D3D9StateBlockShadow;
+
+struct PeRenderTapeChildResult {
+  bool handled = false;
+  HRESULT hr = S_OK;
+  PeRenderTapeCommitReceipt receipt{};
+};
 
 // The six contexts are deliberately independent, standard-layout, and
 // pointer-sized. Their only state is the device pointer; implementation is
@@ -66,6 +73,9 @@ struct D3D9PeBufferContext {
 struct D3D9PeSurfaceTextureContext {
   D3D9DeviceImpl *device = nullptr;
   HRESULT FlushPeRecorderForChild() noexcept;
+  PeRenderTapeChildResult GenerateMipmapsForChild(
+      const dxmt9::d3d9::pe::TextureRef &) noexcept;
+  bool IsRenderTapeCaptureActiveForChild() const noexcept;
   void AddDefaultPoolResourceRefForChild() noexcept;
   void ReleaseDefaultPoolResourceRefForChild() noexcept;
   void NotifyRenderTapeObjectDestroyForChild(

@@ -2,6 +2,7 @@
 #include "device_c_render_tape_capture_layout.hpp"
 #include "device_c_render_tape_identity.hpp"
 #include "device_c_render_tape_provider.hpp"
+#include "device_c_render_tape_runtime_objects.hpp"
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_presenter.hpp"
 #include "dxmt9/dxmt9_resource_pool.hpp"
@@ -10,6 +11,7 @@
 // pre-effect failure, independent evidence, and native Metal output readback.
 
 #include <array>
+#include <algorithm>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -23,6 +25,7 @@
 #include <stdexcept>
 #include <string>
 #include <string_view>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -1185,7 +1188,7 @@ void testProducedByCapturedPassTape() {
   const D9CPresentParams params{
       .backBufferWidth = 4u,
       .backBufferHeight = 4u,
-      .backBufferFormat = 21u,
+      .backBufferFormat = 22u,
       .backBufferCount = 1u,
       .swapEffect = 1u,
       .windowed = 1u,
@@ -1370,6 +1373,250 @@ struct TexturedFixture {
          .bytes = std::as_bytes(std::span(declaration))},
     }};
   }
+};
+
+// The first command deliberately precedes the texture definition.  The
+// prestage discriminator must still admit the texture because no command
+// occurs between its definition and its complete seed; ObjectDefine then
+// transfers the hidden physical object into the active table before the draw.
+struct PostCommandTexturePrestageFixture {
+  std::array<std::byte, 16u> seed{
+      std::byte{0x10}, std::byte{0x20}, std::byte{0xf0}, std::byte{0xff},
+      std::byte{0xe0}, std::byte{0x30}, std::byte{0x20}, std::byte{0xff},
+      std::byte{0x30}, std::byte{0xd0}, std::byte{0x40}, std::byte{0xff},
+      std::byte{0xc0}, std::byte{0x50}, std::byte{0xb0}, std::byte{0xff},
+  };
+  std::vector<std::byte> vertexBytes{};
+  std::vector<std::byte> indexBytes{};
+  std::vector<std::byte> shaderBytes{};
+  RenderTapeDigest seedDigest{};
+  std::vector<RenderTapeProviderBlob> blobsValue{};
+  std::vector<std::byte> tape{};
+
+  explicit PostCommandTexturePrestageFixture(bool alternateSeed = false,
+                                             std::uint32_t texturePool = 0u) {
+    if (alternateSeed) {
+      for (std::size_t pixel = 0u; pixel < seed.size(); pixel += 4u) {
+        seed[pixel + 0u] = std::byte{0x70};
+        seed[pixel + 1u] = std::byte{0x40};
+        seed[pixel + 2u] = std::byte{0x20};
+      }
+    }
+    seedDigest = RenderTapeCaptureSession::sha256(seed);
+    const std::array vertices{
+        TexturedVertex{-0.5f, -0.5f, 0.0f, 1.0f, 0xffffffffu, 0.0f, 0.0f},
+        TexturedVertex{31.5f, -0.5f, 0.0f, 1.0f, 0xffffffffu, 2.0f, 0.0f},
+        TexturedVertex{-0.5f, 31.5f, 0.0f, 1.0f, 0xffffffffu, 0.0f, 2.0f},
+    };
+    vertexBytes.assign(reinterpret_cast<const std::byte*>(vertices.data()),
+                       reinterpret_cast<const std::byte*>(vertices.data()) +
+                           sizeof(vertices));
+    const std::array<std::uint16_t, 3u> indices{0u, 1u, 2u};
+    indexBytes.assign(reinterpret_cast<const std::byte*>(indices.data()),
+                      reinterpret_cast<const std::byte*>(indices.data()) +
+                          sizeof(indices));
+    const std::array<std::uint32_t, 8u> shaderWords{
+        0xfffe0300u, 0x0200001fu, 0x80000000u, 0xc00f0000u,
+        0x02000001u, 0xc00f0000u, 0xa0e40000u, 0x0000ffffu,
+    };
+    shaderBytes.assign(reinterpret_cast<const std::byte*>(shaderWords.data()),
+                       reinterpret_cast<const std::byte*>(shaderWords.data()) +
+                           sizeof(shaderWords));
+    const auto vertexDigest = RenderTapeCaptureSession::sha256(vertexBytes);
+    const auto indexDigest = RenderTapeCaptureSession::sha256(indexBytes);
+    const auto shaderDigest = RenderTapeCaptureSession::sha256(shaderBytes);
+    blobsValue = {
+        {.digest = vertexDigest, .bytes = vertexBytes},
+        {.digest = indexDigest, .bytes = indexBytes},
+        {.digest = shaderDigest, .bytes = shaderBytes},
+        {.digest = seedDigest, .bytes = seed},
+    };
+    const D9CSurfaceDesc outputDesc{
+        .format = 21u,
+        .resourceType = 1u,
+        .usage = 1u,
+        .pool = 0u,
+        .width = 16u,
+        .height = 16u,
+        .depth = 1u,
+    };
+    const auto outputDescriptorV2 = outputDescriptor(outputDesc);
+    const auto textureDescriptor = texture2DDescriptor(D9CSurfaceDesc{
+        .format = 21u,
+        .resourceType = 3u,
+        .usage = 0u,
+        .pool = texturePool,
+        .width = 2u,
+        .height = 2u,
+        .depth = 1u,
+    });
+    const D9CCommandChunkWireClear clear{
+        .flags = 1u,
+        .colorARGB = 0xff081018u,
+        .z = 1.0f,
+        .rectOffset = sizeof(D9CCommandChunkWireClear),
+    };
+    const D9CCommandChunkWirePresent present{};
+    const RenderTapeOracleAttachment oracle{
+        .identity = kOutput,
+        .descriptorKind = static_cast<std::uint32_t>(
+            RenderTapeDescriptorKind::Surface),
+    };
+
+    std::array<D9CCommandChunkWireTextureBinding,
+               D9C_DRAW_PACKET_MAX_TEXTURES>
+        textures{};
+    for (std::uint32_t slot = 0u; slot < textures.size(); ++slot) {
+      textures[slot] = {.slot = slot,
+                        .valid = 1u,
+                        .handleIndex = slot == 0u
+                            ? 0u
+                            : D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX};
+    }
+    std::array<D9CCommandChunkWireStreamBinding, D9C_DRAW_PACKET_MAX_STREAMS>
+        streams{};
+    for (std::uint32_t slot = 0u; slot < streams.size(); ++slot) {
+      streams[slot] = {
+          .slot = slot,
+          .valid = 1u,
+          .handleIndex = slot == 0u
+              ? 1u
+              : D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+          .stride = slot == 0u
+              ? static_cast<std::uint32_t>(sizeof(TexturedVertex))
+              : 0u,
+          .frequency = 1u,
+      };
+    }
+    const D9CCommandChunkWireVertexInput input{
+        .valid = 1u,
+        .kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_FVF,
+        .value = 0x144u,
+        .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+    };
+    const D9CCommandChunkWireIndexBinding index{
+        .valid = 1u,
+        .handleIndex = 2u,
+    };
+    const std::array stateSections{
+        std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_TEXTURE),
+                  spanBytes(textures)},
+        std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_STREAM),
+                  spanBytes(streams)},
+        std::pair{static_cast<std::uint16_t>(
+                      D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT),
+                  spanBytes(input)},
+        std::pair{static_cast<std::uint16_t>(
+                      D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER),
+                  spanBytes(index)},
+    };
+    const auto statePayload = sparsePayload(
+        D9CCommandChunkWireDrawHeader{
+            .flags = D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT},
+        stateSections);
+    const auto stateBytes = makeChunk(std::array{Record{
+        .type = D9C_COMMAND_RECORD_APPLY_STATE,
+        .payload = statePayload,
+        .handles = {
+            {kTexture.kind, kTexture.generation, kTexture.objectId},
+            {kGeneralVertexBuffer.kind, kGeneralVertexBuffer.generation,
+             kGeneralVertexBuffer.objectId},
+            {kGeneralIndexBuffer.kind, kGeneralIndexBuffer.generation,
+             kGeneralIndexBuffer.objectId},
+        },
+    }});
+    const auto drawBytes = generalIndexedDrawChunk();
+    ImportedChunkView stateView;
+    check(importPrevalidatedCommandChunk(
+              stateBytes,
+              CommandChunkEnvelope{.recordCount = 1u, .handleCount = 3u},
+              stateView),
+          "post-command prestage state anchor imports");
+    ImportedChunkView drawView;
+    check(importPrevalidatedCommandChunk(
+              drawBytes, CommandChunkEnvelope{.recordCount = 1u},
+              drawView),
+          "post-command prestage draw imports");
+    const auto stateRecord = stateView.record(0u);
+    const auto drawRecord = drawView.record(0u);
+    const auto drawChunk = makeChunk(std::array{
+        Record{
+            .type = stateRecord.header.type,
+            .payload = std::vector<std::byte>(stateRecord.payload.begin(),
+                                              stateRecord.payload.end()),
+            .handles = std::vector<D9CCommandChunkWireHandleEntry>(
+                stateView.handles.begin(), stateView.handles.end()),
+        },
+        Record{
+            .type = drawRecord.header.type,
+            .payload = std::vector<std::byte>(drawRecord.payload.begin(),
+                                              drawRecord.payload.end()),
+        },
+    });
+
+    RenderTapeBuilder builder;
+    builder.appendBootstrapState(implicitBootstrapChunk());
+    builder.appendObjectDefine(
+        kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+        std::as_bytes(std::span(&outputDescriptorV2, 1u)), 0u, {});
+    const D9CBufferDesc vertexBuffer{
+        .size = static_cast<std::uint32_t>(vertexBytes.size()),
+    };
+    const D9CBufferDesc indexBuffer{
+        .size = static_cast<std::uint32_t>(indexBytes.size()),
+        .format = 101u,
+    };
+    const RenderTapeShaderDescriptor shader{
+        .stage = D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX,
+        .bytecodeBytes = static_cast<std::uint32_t>(shaderBytes.size()),
+    };
+    builder.appendObjectDefine(
+        kGeneralVertexBuffer,
+        static_cast<std::uint32_t>(RenderTapeDescriptorKind::Buffer),
+        std::as_bytes(std::span(&vertexBuffer, 1u)), 0u, {}, vertexBytes.size(),
+        1u);
+    builder.appendObjectDefine(
+        kGeneralIndexBuffer,
+        static_cast<std::uint32_t>(RenderTapeDescriptorKind::Buffer),
+        std::as_bytes(std::span(&indexBuffer, 1u)), 0u, {}, indexBytes.size(),
+        1u);
+    builder.appendObjectDefine(
+        kGeneralVertexShader,
+        static_cast<std::uint32_t>(RenderTapeDescriptorKind::Shader),
+        std::as_bytes(std::span(&shader, 1u)), shaderBytes.size(),
+        RenderTapeCaptureSession::sha256(shaderBytes));
+    builder.appendResourceMutation(
+        kGeneralVertexBuffer, RenderTapeMutationKind::Upload, 0u, 0u,
+        vertexBytes.size(), RenderTapeCaptureSession::sha256(vertexBytes));
+    builder.appendResourceMutation(
+        kGeneralIndexBuffer, RenderTapeMutationKind::Upload, 0u, 0u,
+        indexBytes.size(), RenderTapeCaptureSession::sha256(indexBytes));
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 1u},
+        makeChunk(std::array{Record{
+            .type = D9C_COMMAND_RECORD_CLEAR,
+            .payload = bytesOf(clear),
+        }}));
+    builder.appendObjectDefine(
+        kTexture, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+        textureDescriptor, 0u, {}, seed.size(), 1u);
+    builder.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload,
+                                   0u, 0u, seed.size(), seedDigest);
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 2u, .handleCount = 3u},
+        drawChunk);
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 1u},
+        makeChunk(std::array{Record{
+            .type = D9C_COMMAND_RECORD_PRESENT,
+            .payload = bytesOf(present),
+        }}));
+    builder.appendPresentComplete(
+        12u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+        std::as_bytes(std::span(&oracle, 1u)));
+    tape = builder.seal();
+  }
+
 };
 
 struct SequenceFixture {
@@ -1919,7 +2166,7 @@ void nativeMetalOffscreenIdentityReplay() {
   const D9CPresentParams params{
       .backBufferWidth = 16u,
       .backBufferHeight = 16u,
-      .backBufferFormat = 21u,
+      .backBufferFormat = 22u,
       .backBufferCount = 1u,
       .swapEffect = 1u,
       .windowed = 1u,
@@ -1965,6 +2212,40 @@ void nativeMetalTexturedUpDigestRepeats() {
                                                std::span(&blob, 1u));
   const auto production = replayFrameTapeIdentity(
       device, productionFixture.tape, productionBlobs);
+  auto prepared = prepareRenderTapeIdentity(fixture.tape,
+                                             std::span(&blob, 1u));
+  fixture.tape[0] ^= std::byte{0xff};
+  fixture.seed[0] ^= std::byte{0xff};
+  auto movedPrepared = std::move(prepared);
+  const auto preparedFirst = replayPreparedRenderTapeIdentity(
+      device, movedPrepared,
+      RenderTapePreparedExecutionOptions{
+          .route = RenderTapePreparedRoute::Compatibility,
+          .reset = RenderTapePreparedReset::FreshDevice});
+  const auto preparedSecond = replayPreparedRenderTapeIdentity(
+      device, movedPrepared,
+      RenderTapePreparedExecutionOptions{
+          .route = RenderTapePreparedRoute::Compatibility,
+          .reset = RenderTapePreparedReset::FreshDevice});
+  SequenceFixture warmBFixture;
+  const auto warmBBlobs = warmBFixture.blobs();
+  auto preparedWarmB = prepareRenderTapeIdentity(warmBFixture.tape,
+                                                   warmBBlobs);
+  const auto warmA = replayPreparedRenderTapeIdentity(
+      device, movedPrepared,
+      RenderTapePreparedExecutionOptions{
+          .route = RenderTapePreparedRoute::Compatibility,
+          .reset = RenderTapePreparedReset::WarmDevice});
+  const auto warmB = replayPreparedRenderTapeIdentity(
+      device, preparedWarmB,
+      RenderTapePreparedExecutionOptions{
+          .route = RenderTapePreparedRoute::Compatibility,
+          .reset = RenderTapePreparedReset::WarmDevice});
+  const auto warmAAgain = replayPreparedRenderTapeIdentity(
+      device, movedPrepared,
+      RenderTapePreparedExecutionOptions{
+          .route = RenderTapePreparedRoute::Compatibility,
+          .reset = RenderTapePreparedReset::WarmDevice});
   dxmt9c_device_release(device);
   dxmt9c_factory_release(factory);
   check(first.complete() && second.complete() && production.complete(),
@@ -1988,6 +2269,22 @@ void nativeMetalTexturedUpDigestRepeats() {
         "identical textured tape replay must repeat the exact Metal digest");
   check(first.validity.outputDigest == production.validity.outputDigest,
         "the production FVF declaration must preserve the exact Metal digest");
+  check(preparedFirst.complete() && preparedSecond.complete() &&
+            first.validity.outputDigest == preparedFirst.validity.outputDigest &&
+            preparedFirst.validity.outputDigest ==
+                preparedSecond.validity.outputDigest &&
+            preparedFirst.prepared.planReused &&
+            preparedSecond.prepared.planReused &&
+            preparedFirst.prepared.timing.chunkReplayNanos != 0u,
+        "moved prepared input must replay repeatedly with one immutable plan");
+  check(warmA.complete() && warmB.complete() && warmAAgain.complete() &&
+            warmA.prepared.resetPerformed && warmA.prepared.resetVerified &&
+            warmB.prepared.resetPerformed && warmB.prepared.resetVerified &&
+            warmAAgain.prepared.resetPerformed &&
+            warmAAgain.prepared.resetVerified &&
+            warmA.validity.outputDigest == warmAAgain.validity.outputDigest &&
+            warmB.validity.outputDigest != warmA.validity.outputDigest,
+        "same-device warm A-B-A replay must reset state and preserve A output");
   check(first.conservation.objectsCreated == 2u &&
             first.conservation.objectsReleased == 2u &&
             second.conservation.objectsCreated == 2u &&
@@ -1995,6 +2292,128 @@ void nativeMetalTexturedUpDigestRepeats() {
             production.conservation.objectsCreated == 3u &&
             production.conservation.objectsReleased == 3u,
         "repeat replay conserves output, texture, and declaration wrappers independently");
+}
+
+void nativeMetalPostCommandTexturePrestageMatchesOrdinaryPixels(
+    std::uint32_t texturePool) {
+  PostCommandTexturePrestageFixture fixture(false, texturePool);
+  const auto preflight = preflightRenderTapeIdentity(
+      fixture.tape, fixture.blobsValue);
+  check(preflight.complete(), frameTapeReplayStatusName(preflight.status));
+  check(preflight.coverage.eventCount == 13u &&
+            preflight.coverage.objectDefinitions == 5u &&
+            preflight.coverage.seedMutations == 3u &&
+            preflight.coverage.commandChunks == 3u &&
+            preflight.coverage.commandRecords == 4u &&
+            preflight.coverage.clearRecords == 1u &&
+            preflight.coverage.applyStateRecords == 1u &&
+            preflight.coverage.drawIndexedPrimitiveRecords == 1u &&
+            preflight.coverage.presentRecords == 1u &&
+            preflight.conservation.inputBlobs == 4u &&
+            preflight.conservation.referencedBlobs == 4u,
+        "post-command prestage fixture preserves the exact clear/define/seed/draw order");
+  auto prepared = prepareRenderTapeIdentity(fixture.tape,
+                                             fixture.blobsValue);
+  check(prepared.valid() && prepared.evidence().immutableInputOwned,
+        "post-command prestage fixture owns its prepared input");
+
+  const D9CPresentParams params{
+      .backBufferWidth = 16u,
+      .backBufferHeight = 16u,
+      .backBufferFormat = 21u,
+      .backBufferCount = 1u,
+      .swapEffect = 1u,
+      .windowed = 1u,
+      .presentationInterval = 0x80000000u,
+  };
+  const auto replay = [&](PreparedRenderTape& input,
+                          RenderTapePreparedExecutionOptions options) {
+    auto* factory = dxmt9c_factory_create();
+    check(factory != nullptr, "post-command prestage factory is available");
+    auto* device =
+        dxmt9c_factory_create_device(factory, 0u, &params, 0u, nullptr);
+    check(device != nullptr, "post-command prestage device constructs");
+    const auto result = replayPreparedRenderTapeIdentity(device, input,
+                                                         options);
+    dxmt9c_device_release(device);
+    dxmt9c_factory_release(factory);
+    return result;
+  };
+  const auto ordinary = replay(prepared, {
+      .route = RenderTapePreparedRoute::Compatibility,
+      .reset = RenderTapePreparedReset::FreshDevice,
+  });
+  const auto prestaged = replay(prepared, {
+      .route = RenderTapePreparedRoute::Compatibility,
+      .reset = RenderTapePreparedReset::FreshDevice,
+      .auditTexturePrestage = true,
+  });
+  check(ordinary.complete() && prestaged.complete(),
+        std::string("post-command prestage replay completes: ") +
+            frameTapeReplayStatusName(ordinary.status) + "/" +
+            frameTapeReplayStatusName(prestaged.status));
+  check(ordinary.validity.outputReadback && ordinary.validity.outputNonDegenerate &&
+            prestaged.validity.outputReadback &&
+            prestaged.validity.outputNonDegenerate &&
+            ordinary.outputPixels.size() == 16u * 16u * 4u &&
+            prestaged.outputPixels == ordinary.outputPixels &&
+            prestaged.validity.outputDigest == ordinary.validity.outputDigest,
+        "hidden prestage activation produces exactly the ordinary sampled pixels");
+  check(ordinary.conservation.objectsCreated == 5u &&
+            ordinary.conservation.objectsReleased == 5u &&
+            prestaged.conservation.objectsCreated == 5u &&
+            prestaged.conservation.objectsReleased == 5u,
+        "ordinary and prestaged replays conserve all indexed fixture objects");
+
+  PostCommandTexturePrestageFixture alternateFixture(true, texturePool);
+  auto alternatePrepared = prepareRenderTapeIdentity(
+      alternateFixture.tape, alternateFixture.blobsValue);
+  const auto alternate = replay(alternatePrepared, {
+      .route = RenderTapePreparedRoute::Compatibility,
+      .reset = RenderTapePreparedReset::FreshDevice,
+  });
+  check(alternate.complete() &&
+            alternate.validity.outputReadback &&
+            alternate.validity.outputNonDegenerate &&
+            alternate.outputPixels != ordinary.outputPixels &&
+            alternate.validity.outputDigest != ordinary.validity.outputDigest,
+        "alternate texture seed must change sampled pixels");
+
+  const auto& evidence = prestaged.texturePrestageAudit;
+  check(evidence.requested && evidence.attempted && evidence.complete &&
+            evidence.candidateObjects == 1u &&
+            evidence.candidateSubresources == 1u &&
+            evidence.candidateBytes == fixture.seed.size() &&
+            evidence.immediateUploadSubresources +
+                    evidence.deferredUploadSubresources ==
+                1u &&
+            evidence.activatedObjects == 1u && evidence.consumedSeeds == 1u &&
+            evidence.stagedObjectsRemaining == 0u &&
+            evidence.stagedSubresourcesRemaining == 0u &&
+            evidence.stagedBytesRemaining == 0u &&
+            evidence.hiddenObjectsCreated == 1u &&
+            evidence.hiddenObjectsReleased == 0u &&
+            evidence.activeObjectsCreated == 4u &&
+            evidence.activeObjectsReleased == 5u &&
+            evidence.physicalObjectsCreated == 5u &&
+            evidence.physicalObjectsReleased == 5u &&
+            evidence.physicalConservation,
+        "prestage evidence is non-vacuous, fully consumed, and physically conserved");
+  if (evidence.deferredUploadSubresources != 0u) {
+    check(evidence.initializerFlushes == 1u &&
+              evidence.initializerWaits == 1u &&
+              evidence.initializerUploadValue != 0u,
+          "deferred prestage upload must perform and wait for initializer flush");
+  } else {
+    check(evidence.initializerFlushes == 0u &&
+              evidence.initializerWaits == 0u,
+          "immediate prestage upload must not claim initializer synchronization");
+  }
+}
+
+void nativeMetalPostCommandTexturePrestageMatchesOrdinaryPixels() {
+  nativeMetalPostCommandTexturePrestageMatchesOrdinaryPixels(0u);
+  nativeMetalPostCommandTexturePrestageMatchesOrdinaryPixels(1u);
 }
 
 void generalIndexedReplayConservesAllObjects() {
@@ -2383,8 +2802,26 @@ void productionShapeUsesImplicitDefaultOutputAndExactDigest() {
 }
 
 void productionShapeReportsWrongExpectedDigest() {
-  ProductionFixture fixture(true);
-  const auto validation = preflightFrameTapeIdentity(fixture.tape, {});
+  GeneralIndexedFixture fixture(1u, true);
+  auto* tapeHeader = reinterpret_cast<RenderTapeHeader*>(fixture.tape.data());
+  auto* events = reinterpret_cast<RenderTapeEventHeader*>(
+      fixture.tape.data() + tapeHeader->eventTableOffset);
+  bool digestCorrupted = false;
+  for (std::uint32_t event = 0u; event < tapeHeader->eventCount; ++event) {
+    if (events[event].type !=
+        static_cast<std::uint32_t>(RenderTapeEventType::PresentComplete)) {
+      continue;
+    }
+    auto* complete = reinterpret_cast<RenderTapePresentCompleteHeader*>(
+        fixture.tape.data() + tapeHeader->payloadArenaOffset +
+        events[event].payloadOffset);
+    complete->expectedDigest[0] ^= std::byte{1u};
+    digestCorrupted = true;
+    break;
+  }
+  check(digestCorrupted, "general mismatch fixture must contain PresentComplete");
+  const auto validation = preflightFrameTapeIdentity(
+      fixture.tape, fixture.blobsValue);
   check(validation.complete(), frameTapeReplayStatusName(validation.status));
   const D9CPresentParams params{
       .backBufferWidth = validation.requirements.outputWidth,
@@ -2399,7 +2836,14 @@ void productionShapeReportsWrongExpectedDigest() {
   check(factory != nullptr, "wrong-digest fixture factory must be available");
   auto* device = dxmt9c_factory_create_device(factory, 0u, &params, 0u, nullptr);
   check(device != nullptr, "wrong-digest fixture device must construct");
-  const auto result = replayFrameTapeIdentity(device, fixture.tape, {});
+  auto prepared = prepareRenderTapeIdentity(
+      fixture.tape, fixture.blobsValue);
+  const auto result = replayPreparedRenderTapeIdentity(
+      device, prepared,
+      RenderTapePreparedExecutionOptions{
+          .route = RenderTapePreparedRoute::Compatibility,
+          .reset = RenderTapePreparedReset::FreshDevice,
+          .auditFreshSeedDrains = true});
   dxmt9c_device_release(device);
   dxmt9c_factory_release(factory);
   check(result.status == FrameTapeReplayStatus::OutputMismatch,
@@ -2407,9 +2851,14 @@ void productionShapeReportsWrongExpectedDigest() {
   check(result.validity.outputReadback && result.validity.expectedDigestCaptured &&
             !result.validity.expectedDigestMatched,
         "output mismatch must retain readback and digest comparison evidence");
-  check(result.conservation.objectsCreated == 1u &&
-            result.conservation.objectsReleased == 1u,
+  check(result.conservation.objectsCreated == 5u &&
+            result.conservation.objectsReleased == 5u,
         "output mismatch must still clean up replay-owned objects");
+  check(result.freshSeedDrainAudit.attempted &&
+            result.freshSeedDrainAudit.mutationCount == 3u &&
+            result.freshSeedDrainAudit.inspectedMutations == 3u &&
+            result.freshSeedDrainAudit.complete,
+        "fresh-seed audit remains complete when only the final pixel oracle fails");
 }
 
 void pixelOracleEnvelopeIsNarrowAndDigestAuthenticated() {
@@ -2890,6 +3339,12 @@ void colorCompleteSeedsReplayAllSubresourcesAndConserve() {
     seeds.emplace_back(16u * 16u * 4u,
                        static_cast<std::byte>(0x10u + subresource));
   }
+  // X8 seeds use the same canonical opaque alpha as capture/readback.
+  for (const auto index : {0u, 7u}) {
+    for (std::size_t byte = 3u; byte < seeds[index].size(); byte += 4u) {
+      seeds[index][byte] = std::byte{0xff};
+    }
+  }
   std::vector<RenderTapeProviderBlob> blobs;
   blobs.reserve(seeds.size());
   for (const auto& seed : seeds) {
@@ -2997,7 +3452,13 @@ void colorCompleteSeedsReplayAllSubresourcesAndConserve() {
   auto* device = dxmt9c_factory_create_device(factory, 0u, &params, 0u,
                                                 nullptr);
   check(device != nullptr, "color seed replay device must construct");
-  const auto result = replayFrameTapeIdentity(device, tape, blobs);
+  auto prepared = prepareRenderTapeIdentity(tape, blobs);
+  const auto result = replayPreparedRenderTapeIdentity(
+      device, prepared,
+      RenderTapePreparedExecutionOptions{
+          .route = RenderTapePreparedRoute::Compatibility,
+          .reset = RenderTapePreparedReset::FreshDevice,
+          .auditInitialSeeds = true});
   dxmt9c_device_release(device);
   dxmt9c_factory_release(factory);
   check(result.complete(), frameTapeReplayStatusName(result.status));
@@ -3008,6 +3469,17 @@ void colorCompleteSeedsReplayAllSubresourcesAndConserve() {
   check(result.conservation.objectsCreated == 4u &&
             result.conservation.objectsReleased == 4u,
         "color seed replay conserves output, 2D, cube, and standalone objects");
+  const auto& audit = result.initialSeedAudit;
+  const auto textureSeed = std::find_if(
+      audit.entries.begin(), audit.entries.end(), [&](const auto& entry) {
+        return entry.identity.kind == kSnapshotTexture2D.kind &&
+            entry.identity.generation == kSnapshotTexture2D.generation &&
+            entry.identity.objectId == kSnapshotTexture2D.objectId;
+      });
+  check(audit.attempted && audit.complete && audit.captureFailedCount == 0u &&
+            textureSeed != audit.entries.end() && textureSeed->supported &&
+            textureSeed->match,
+        "private RT initial seed audit waits for deferred upload before readback");
 }
 
 void writeProductionFixture(const std::filesystem::path& directory) {
@@ -3239,6 +3711,742 @@ void bufferMutationReplayPlanPinsLockFlagsAndOffset() {
         "non-upload/unlock mutation must not reach buffer lock replay");
 }
 
+void freshSeedDrainPredicateTruthTable() {
+  constexpr D9CWireObjectIdentity textureA{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE, .generation = 4u,
+      .objectId = 0x7200u};
+  constexpr D9CWireObjectIdentity textureB{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE, .generation = 9u,
+      .objectId = 0x7201u};
+  constexpr D9CWireObjectIdentity surface{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE, .generation = 4u,
+      .objectId = 0x7202u};
+  const D9CSurfaceDesc level0{
+      .format = 22u, .resourceType = 3u, .usage = 0u, .pool = 0u,
+      .width = 4u, .height = 4u, .depth = 1u};
+  const auto textureDescriptor = texture2DDescriptor(level0);
+  const auto expected = renderTapeDeriveExpectedSurfaceContent(level0);
+  check(expected.status == RenderTapeExpectedContentStatus::Accepted,
+        "fresh-seed truth table uses an accepted texture surface");
+  std::vector<std::byte> seed(expected.bytes, std::byte{0x31});
+  const RenderTapeObjectDefineHeader definition{
+      .identity = textureA,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Texture),
+      .descriptorBytes = static_cast<std::uint32_t>(textureDescriptor.size()),
+      .expectedContentBytes = expected.bytes,
+      .expectedContentCount = 1u};
+  RenderTapeResourceMutationHeader mutation{
+      .identity = textureA,
+      .kind = static_cast<std::uint32_t>(RenderTapeMutationKind::Upload),
+      .subresource = 0u,
+      .byteSize = expected.bytes};
+  const auto admits = [&] {
+    return renderTapeFreshSeedDrainBypassAllowed(
+        definition, textureDescriptor, mutation, seed, true, false, false);
+  };
+  check(admits(), "fresh full first texture seed is bypass-eligible");
+
+  mutation.identity.generation++;
+  check(!admits(), "wrong generation is not fresh-owner eligible");
+  mutation.identity = textureA;
+  check(!renderTapeFreshSeedDrainBypassAllowed(
+            definition, textureDescriptor, mutation, seed, false, false, false),
+        "an intervening command epoch requires a drain");
+  check(!renderTapeFreshSeedDrainBypassAllowed(
+            definition, textureDescriptor, mutation, seed, true, true, false),
+        "texture aliases conservatively require a drain");
+  check(!renderTapeFreshSeedDrainBypassAllowed(
+            definition, textureDescriptor, mutation,
+            std::span<const std::byte>(seed.data(), seed.size() - 1u), true,
+            false, false),
+        "partial seed bytes require a drain");
+  check(!renderTapeFreshSeedDrainBypassAllowed(
+            definition, textureDescriptor, mutation, seed, true, false, true),
+        "repeated subresource seed requires a drain");
+
+  const RenderTapeObjectDefineHeader secondOwner{
+      .identity = textureB,
+      .descriptorKind = definition.descriptorKind,
+      .descriptorBytes = definition.descriptorBytes,
+      .expectedContentBytes = expected.bytes,
+      .expectedContentCount = 1u};
+  mutation.identity = textureB;
+  check(renderTapeFreshSeedDrainBypassAllowed(
+            secondOwner, textureDescriptor, mutation, seed, true, false, false),
+        "an independently-owned second texture has its own fresh epoch");
+
+  const D9CSurfaceDesc level1{level0.format, level0.resourceType, level0.usage,
+                              level0.pool, level0.multiSampleType,
+                              level0.multiSampleQuality, 2u, 2u, 1u};
+  const RenderTapeTextureDescriptorV2 multiHeader{
+      .schemaVersion = kRenderTapeTextureDescriptorVersion2,
+      .dimension = static_cast<std::uint32_t>(RenderTapeTextureDimension::Texture2D),
+      .mipLevelCount = 2u,
+      .subresourceCount = 2u,
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed)};
+  std::vector<std::byte> multiDescriptor(sizeof(multiHeader) +
+                                          2u * sizeof(D9CSurfaceDesc));
+  std::memcpy(multiDescriptor.data(), &multiHeader, sizeof(multiHeader));
+  std::memcpy(multiDescriptor.data() + sizeof(multiHeader), &level0,
+              sizeof(level0));
+  std::memcpy(multiDescriptor.data() + sizeof(multiHeader) + sizeof(level0),
+              &level1, sizeof(level1));
+  const auto expectedLevel1 = renderTapeDeriveExpectedSurfaceContent(level1);
+  check(expectedLevel1.status == RenderTapeExpectedContentStatus::Accepted,
+        "multi-mip truth table uses an accepted second surface");
+  std::vector<std::byte> seedLevel1(expectedLevel1.bytes, std::byte{0x51});
+  const RenderTapeObjectDefineHeader multiDefinition{
+      .identity = textureA,
+      .descriptorKind = definition.descriptorKind,
+      .descriptorBytes = static_cast<std::uint32_t>(multiDescriptor.size()),
+      .expectedContentBytes = expected.bytes + expectedLevel1.bytes,
+      .expectedContentCount = 2u};
+  auto multiMutation = mutation;
+  multiMutation.identity = textureA;
+  multiMutation.byteSize = expected.bytes;
+  check(renderTapeFreshSeedDrainBypassAllowed(
+            multiDefinition, multiDescriptor, multiMutation, seed, true, false,
+            false),
+        "first full seed of a multi-mip texture is eligible");
+  multiMutation.subresource = 1u;
+  multiMutation.byteSize = expectedLevel1.bytes;
+  check(renderTapeFreshSeedDrainBypassAllowed(
+            multiDefinition, multiDescriptor, multiMutation, seedLevel1, true,
+            false, false),
+        "each independently seeded texture subresource is checked");
+  auto prestageMutation = mutation;
+  prestageMutation.identity = textureA;
+  prestageMutation.byteSize = expected.bytes;
+  const std::array prestageMutations{prestageMutation};
+  check(renderTapeTexturePrestageCandidate(
+            definition, textureDescriptor, prestageMutations, false, false,
+            false),
+        "complete texture seed is a cold-prestage candidate");
+  check(!renderTapeTexturePrestageCandidate(
+            definition, textureDescriptor, prestageMutations, true, false,
+            false),
+        "texture alias excludes cold prestaging");
+  check(!renderTapeTexturePrestageCandidate(
+            definition, textureDescriptor, prestageMutations, false, true,
+            false),
+        "same wire slot with another generation excludes cold prestaging");
+  check(!renderTapeTexturePrestageCandidate(
+            definition, textureDescriptor, prestageMutations, false, false,
+            true),
+        "command between definition and final seed excludes cold prestaging");
+  auto duplicateMutation = prestageMutation;
+  const std::array duplicateMutations{prestageMutation, duplicateMutation};
+  check(!renderTapeTexturePrestageCandidate(
+            definition, textureDescriptor, duplicateMutations, false, false,
+            false),
+        "repeated texture subresource excludes cold prestaging");
+  const std::array multiMutations{
+      RenderTapeResourceMutationHeader{.identity = textureA,
+                                       .kind = static_cast<std::uint32_t>(
+                                           RenderTapeMutationKind::Upload),
+                                       .subresource = 0u,
+                                       .byteSize = expected.bytes},
+      RenderTapeResourceMutationHeader{.identity = textureA,
+                                       .kind = static_cast<std::uint32_t>(
+                                           RenderTapeMutationKind::Upload),
+                                       .subresource = 1u,
+                                       .byteSize = expectedLevel1.bytes}};
+  check(renderTapeTexturePrestageCandidate(
+            multiDefinition, multiDescriptor, multiMutations, false, false,
+            false),
+        "all full texture subresources are required for cold prestaging");
+
+  // Bind the predicate to a small chronological event model rather than only
+  // testing independent flags: two owners are declared in both orders, a
+  // command may occur before/between/after declarations or between mutations,
+  // and mutation order is also permuted.  The expected admission is exactly
+  // the reducer state (same epoch and not previously seeded).
+  const std::array<D9CWireObjectIdentity, 2> owners{textureA, textureB};
+  const std::array<RenderTapeObjectDefineHeader, 2> ownerDefinitions{
+      definition, secondOwner};
+  for (unsigned defineOrder = 0u; defineOrder < 2u; ++defineOrder) {
+    for (unsigned mutationOrder = 0u; mutationOrder < 2u; ++mutationOrder) {
+      for (unsigned commandPosition = 0u; commandPosition < 4u;
+           ++commandPosition) {
+        for (unsigned stale = 0u; stale < 2u; ++stale) {
+          std::array<std::uint64_t, 2> definitionEpoch{};
+          std::array<bool, 2> seeded{};
+          std::array<bool, 2> declared{};
+          std::array<bool, 2> possiblyUsed{};
+          std::uint64_t commandEpoch = 0u;
+          const auto command = [&] {
+            ++commandEpoch;
+            // Independent history oracle: any live owner may be bound by a
+            // sparse command; an as-yet-undefined owner cannot be referenced.
+            for (std::size_t owner = 0u; owner < declared.size(); ++owner) {
+              possiblyUsed[owner] = possiblyUsed[owner] || declared[owner];
+            }
+          };
+          const unsigned firstDefinition = defineOrder == 0u ? 0u : 1u;
+          const unsigned secondDefinition = 1u - firstDefinition;
+          const std::array<unsigned, 2> declarationOrder{
+              firstDefinition, secondDefinition};
+          for (unsigned event = 0u; event < declarationOrder.size(); ++event) {
+            if (commandPosition == 0u && event == 0u) command();
+            definitionEpoch[declarationOrder[event]] = commandEpoch;
+            declared[declarationOrder[event]] = true;
+            if (commandPosition == 1u && event == 0u) command();
+          }
+          if (commandPosition == 2u) command();
+          const unsigned firstMutation = mutationOrder == 0u ? 0u : 1u;
+          const unsigned secondMutation = 1u - firstMutation;
+          const std::array<unsigned, 2> replayMutationOrder{
+              firstMutation, secondMutation};
+          for (unsigned event = 0u; event < replayMutationOrder.size();
+               ++event) {
+            if (commandPosition == 3u && event == 1u) command();
+            const unsigned owner = replayMutationOrder[event];
+            auto ownerMutation = mutation;
+            ownerMutation.identity = owners[owner];
+            ownerMutation.byteSize = expected.bytes;
+            if (stale) ++ownerMutation.identity.generation;
+            const bool admitted = renderTapeFreshSeedDrainBypassAllowed(
+                ownerDefinitions[owner], textureDescriptor, ownerMutation,
+                seed, definitionEpoch[owner] == commandEpoch, false,
+                seeded[owner]);
+            const bool expectedAdmission = !stale &&
+                !possiblyUsed[owner] && !seeded[owner];
+            check(admitted == expectedAdmission,
+                  "chronological two-owner fresh-seed model agrees with predicate");
+            seeded[owner] = true;
+          }
+        }
+      }
+    }
+  }
+
+  const D9CBufferDesc bufferDesc{.size = 32u, .pool = 0u};
+  const auto bufferDescriptor = bytesOf(bufferDesc);
+  const std::vector<std::byte> bufferSeed(bufferDesc.size, std::byte{0x42});
+  const D9CWireObjectIdentity buffer{
+      .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .generation = 3u,
+      .objectId = 0x7203u};
+  const RenderTapeObjectDefineHeader bufferDefinition{
+      .identity = buffer,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Buffer),
+      .descriptorBytes = sizeof(bufferDesc),
+      .expectedContentBytes = bufferDesc.size,
+      .expectedContentCount = 1u};
+  const RenderTapeResourceMutationHeader bufferMutation{
+      .identity = buffer,
+      .kind = static_cast<std::uint32_t>(RenderTapeMutationKind::CpuUnlock),
+      .byteSize = bufferDesc.size};
+  check(renderTapeFreshSeedDrainBypassAllowed(
+            bufferDefinition, bufferDescriptor, bufferMutation, bufferSeed,
+            true, false, false),
+        "a full first buffer seed is bypass-eligible");
+  auto nonzeroBufferSubresource = bufferMutation;
+  nonzeroBufferSubresource.subresource = 1u;
+  check(!renderTapeFreshSeedDrainBypassAllowed(
+            bufferDefinition, bufferDescriptor, nonzeroBufferSubresource,
+            bufferSeed, true, false, false),
+        "buffer subresources outside zero are rejected");
+
+  const auto output = outputDescriptor(level0);
+  const RenderTapeObjectDefineHeader surfaceDefinition{
+      .identity = surface,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Surface),
+      .descriptorBytes = sizeof(output),
+      .expectedContentBytes = expected.bytes,
+      .expectedContentCount = 1u};
+  const RenderTapeResourceMutationHeader surfaceMutation{
+      .identity = surface,
+      .kind = static_cast<std::uint32_t>(RenderTapeMutationKind::Upload),
+      .byteSize = expected.bytes};
+  check(!renderTapeFreshSeedDrainBypassAllowed(
+            surfaceDefinition, std::as_bytes(std::span(&output, 1u)),
+            surfaceMutation, seed, true, false, false),
+        "surface owners are outside the fresh-seed proof");
+  check(!renderTapeFreshSeedDrainBypassAllowed(
+            definition, {}, mutation, seed, true, false, false),
+        "unknown descriptors are rejected");
+}
+
+void texturePrestageAdmissionExhaustiveEventOrder() {
+  constexpr D9CWireObjectIdentity texture{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE, .generation = 11u,
+      .objectId = 0x7300u};
+  constexpr D9CWireObjectIdentity otherTexture{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE, .generation = 11u,
+      .objectId = 0x7301u};
+  const D9CSurfaceDesc level{
+      .format = 21u, .resourceType = 3u, .pool = 0u,
+      .width = 2u, .height = 2u, .depth = 1u};
+  const auto descriptor = texture2DDescriptor(level);
+  const auto expected = renderTapeDeriveExpectedSurfaceContent(level);
+  check(expected.status == RenderTapeExpectedContentStatus::Accepted,
+        "prestage exhaustive checker has an accepted 2D seed");
+  const RenderTapeObjectDefineHeader definition{
+      .identity = texture,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Texture),
+      .descriptorBytes = static_cast<std::uint32_t>(descriptor.size()),
+      .expectedContentBytes = expected.bytes,
+      .expectedContentCount = 1u,
+  };
+  const RenderTapeResourceMutationHeader mutation{
+      .identity = texture,
+      .kind = static_cast<std::uint32_t>(RenderTapeMutationKind::Upload),
+      .subresource = 0u,
+      .byteSize = expected.bytes,
+  };
+  const auto modelOrderAllowed = [](std::uint32_t definitionPosition,
+                                    std::span<const std::uint32_t> seeds,
+                                    std::span<const std::uint32_t> commands) {
+    if (seeds.empty()) return false;
+    // Execute an independent event state machine, rather than reproducing
+    // the production min/max interval calculation.
+    std::vector<std::pair<std::uint32_t, unsigned>> events{{definitionPosition, 0u}};
+    for (const auto position : seeds) events.emplace_back(position, 1u);
+    for (const auto position : commands) events.emplace_back(position, 2u);
+    std::sort(events.begin(), events.end());
+    bool defined = false;
+    std::size_t remainingSeeds = seeds.size();
+    for (std::size_t i = 0u; i < events.size(); ++i) {
+      if (i && events[i - 1u].first == events[i].first) return false;
+      switch (events[i].second) {
+      case 0u: defined = true; break;
+      case 1u:
+        if (!defined) return false;
+        --remainingSeeds;
+        break;
+      case 2u:
+        if (defined && remainingSeeds != 0u) return false;
+        break;
+      }
+    }
+    return defined && remainingSeeds == 0u;
+  };
+  // Bind the production order reducer to the admission predicate for every
+  // define/seed/command permutation, including invalid forward references.
+  std::array<std::uint32_t, 3u> order{0u, 1u, 2u};
+  std::uint32_t checkedOrders = 0u;
+  do {
+    std::uint32_t definitionPosition = 0u;
+    std::uint32_t seedPosition = 0u;
+    std::uint32_t commandPosition = 0u;
+    for (std::uint32_t position = 0u; position < order.size(); ++position) {
+      if (order[position] == 0u) definitionPosition = position;
+      if (order[position] == 1u) seedPosition = position;
+      if (order[position] == 2u) commandPosition = position;
+    }
+    const std::array seedPositions{seedPosition};
+    const std::array commandPositions{commandPosition};
+    const bool orderAllowed = renderTapeTexturePrestageOrderAllowed(
+        definitionPosition, seedPositions, commandPositions);
+    check(orderAllowed == modelOrderAllowed(definitionPosition, seedPositions,
+                                             commandPositions),
+          "production order reducer matches the independent event model");
+    const bool admitted = renderTapeTexturePrestageCandidate(
+        definition, descriptor, std::span(&mutation, 1u), false, false,
+        !orderAllowed);
+    check(admitted == orderAllowed,
+          "every define/command/seed order agrees with production admission");
+    ++checkedOrders;
+  } while (std::next_permutation(order.begin(), order.end()));
+  check(checkedOrders == 6u,
+        "prestage checker exhausts all three-event chronological orders");
+
+  const D9CSurfaceDesc level1{
+      .format = 21u, .resourceType = 3u, .pool = 0u,
+      .width = 1u, .height = 1u, .depth = 1u};
+  const RenderTapeTextureDescriptorV2 multiHeader{
+      .schemaVersion = kRenderTapeTextureDescriptorVersion2,
+      .dimension = static_cast<std::uint32_t>(RenderTapeTextureDimension::Texture2D),
+      .mipLevelCount = 2u,
+      .subresourceCount = 2u,
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed),
+  };
+  const auto expected1 = renderTapeDeriveExpectedSurfaceContent(level1);
+  check(expected1.status == RenderTapeExpectedContentStatus::Accepted,
+        "prestage exhaustive checker has an accepted second mip");
+  std::vector<std::byte> multiDescriptor(sizeof(multiHeader) +
+                                          2u * sizeof(D9CSurfaceDesc));
+  std::memcpy(multiDescriptor.data(), &multiHeader, sizeof(multiHeader));
+  std::memcpy(multiDescriptor.data() + sizeof(multiHeader), &level,
+              sizeof(level));
+  std::memcpy(multiDescriptor.data() + sizeof(multiHeader) + sizeof(level),
+              &level1, sizeof(level1));
+  const RenderTapeObjectDefineHeader multiDefinition{
+      .identity = texture,
+      .descriptorKind = definition.descriptorKind,
+      .descriptorBytes = static_cast<std::uint32_t>(multiDescriptor.size()),
+      .expectedContentBytes = expected.bytes + expected1.bytes,
+      .expectedContentCount = 2u,
+  };
+  const std::array multiMutations{
+      mutation,
+      RenderTapeResourceMutationHeader{
+          .identity = texture,
+          .kind = static_cast<std::uint32_t>(RenderTapeMutationKind::Upload),
+          .subresource = 1u,
+          .byteSize = expected1.bytes,
+      },
+  };
+  std::array<std::uint32_t, 4u> multiOrder{0u, 1u, 2u, 3u};
+  checkedOrders = 0u;
+  do {
+    std::uint32_t definitionPosition = 0u;
+    std::array<std::uint32_t, 2u> seedPositions{};
+    std::array<std::uint32_t, 1u> commandPositions{};
+    for (std::uint32_t position = 0u; position < multiOrder.size();
+         ++position) {
+      if (multiOrder[position] == 0u) definitionPosition = position;
+      if (multiOrder[position] == 1u) seedPositions[0] = position;
+      if (multiOrder[position] == 2u) seedPositions[1] = position;
+      if (multiOrder[position] == 3u) commandPositions[0] = position;
+    }
+    const bool orderAllowed = renderTapeTexturePrestageOrderAllowed(
+        definitionPosition, seedPositions, commandPositions);
+    check(orderAllowed == modelOrderAllowed(definitionPosition, seedPositions,
+                                             commandPositions),
+          "two-mip production order matches the independent event model");
+    const bool admitted = renderTapeTexturePrestageCandidate(
+        multiDefinition, multiDescriptor, multiMutations, false, false,
+        !orderAllowed);
+    check(admitted == orderAllowed,
+          "every two-mip define/seed/command order agrees with admission");
+    ++checkedOrders;
+  } while (std::next_permutation(multiOrder.begin(), multiOrder.end()));
+  check(checkedOrders == 24u,
+        "prestage checker exhausts all 24 two-mip chronological orders");
+
+  auto duplicate = mutation;
+  const std::array duplicateSeeds{mutation, duplicate};
+  check(!renderTapeTexturePrestageCandidate(
+            definition, descriptor, duplicateSeeds, false, false, false),
+        "repeated subresource seed is excluded from prestaging");
+  auto outOfRange = mutation;
+  outOfRange.subresource = 1u;
+  check(!renderTapeTexturePrestageCandidate(
+            definition, descriptor, std::span(&outOfRange, 1u), false, false,
+            false),
+        "out-of-range subresource is excluded from prestaging");
+  auto partial = mutation;
+  partial.byteSize = expected.bytes - 1u;
+  check(!renderTapeTexturePrestageCandidate(
+            definition, descriptor, std::span(&partial, 1u), false, false,
+            false),
+        "partial seed bytes are excluded from prestaging");
+  check(!renderTapeTexturePrestageCandidate(
+            definition, descriptor, std::span(&mutation, 1u), true, false,
+            false),
+        "surface alias excludes prestaging");
+  check(!renderTapeTexturePrestageCandidate(
+            definition, descriptor, std::span(&mutation, 1u), false, true,
+            false),
+        "same-slot generation conflict excludes prestaging");
+
+  auto wrongOwner = mutation;
+  wrongOwner.identity = otherTexture;
+  check(!renderTapeTexturePrestageCandidate(
+            definition, descriptor, std::span(&wrongOwner, 1u), false, false,
+            false),
+        "mutation for another owner cannot satisfy prestaging coverage");
+
+  const D9CBufferDesc bufferDesc{
+      .size = static_cast<std::uint32_t>(expected.bytes), .pool = 0u};
+  const RenderTapeObjectDefineHeader bufferDefinition{
+      .identity = D9CWireObjectIdentity{
+          .kind = D9C_CHUNK_HANDLE_KIND_BUFFER,
+          .generation = texture.generation,
+          .objectId = texture.objectId},
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Buffer),
+      .descriptorBytes = sizeof(bufferDesc),
+      .expectedContentBytes = expected.bytes,
+      .expectedContentCount = 1u,
+  };
+  const auto bufferBytes = bytesOf(bufferDesc);
+  auto bufferMutation = mutation;
+  bufferMutation.identity = bufferDefinition.identity;
+  check(!renderTapeTexturePrestageCandidate(
+            bufferDefinition, bufferBytes, std::span(&bufferMutation, 1u),
+            false, false, false),
+        "buffers are excluded from the texture-only prestage lane");
+}
+
+void preparedTapeOwnsImmutableInputAndExposesColdEvidence() {
+  SequenceFixture fixture;
+  auto blobs = fixture.blobs();
+  auto prepared = prepareRenderTapeIdentity(fixture.tape, blobs);
+  check(prepared.valid(), "prepared sequence tape must complete preflight");
+  check(prepared.prepareCount() == 1u && prepared.evidence().prepareCount == 1u &&
+            prepared.evidence().immutableInputOwned &&
+            prepared.evidence().preflightCompleted &&
+            prepared.evidence().tapeBytes == fixture.tape.size() &&
+            prepared.evidence().blobCount == blobs.size(),
+        "prepared tape must expose one cold preflight and owned-input evidence");
+
+  fixture.tape[0] ^= std::byte{0xff};
+  fixture.firstSeed[0] ^= std::byte{0xff};
+  check(prepared.preflightResult().complete() &&
+            prepared.preflightResult().validity.digestsValid,
+        "prepared plan must survive mutation of caller-owned tape and blobs");
+  auto moved = std::move(prepared);
+  check(moved.valid() && moved.prepareCount() == 1u,
+        "prepared tape must remain valid after move");
+  const auto unsupported = replayPreparedRenderTapeIdentity(
+      nullptr, moved,
+      RenderTapePreparedExecutionOptions{
+          .route = RenderTapePreparedRoute::Compatibility,
+          .reset = RenderTapePreparedReset::WarmDevice});
+  check(unsupported.status == FrameTapeReplayStatus::WarmResetUnsupported &&
+            unsupported.prepared.planReused &&
+            unsupported.prepared.timing.replayWallNanos == 0u,
+        "warm-device replay must fail explicitly before device effects");
+}
+
+void sharedGeneralPreflightPlanMatchesProviderAndIsTransactional() {
+  GeneralIndexedFixture fixture;
+  const auto providerResult =
+      preflightRenderTapeIdentity(fixture.tape, fixture.blobsValue);
+  check(providerResult.complete() &&
+            providerResult.profile == kRenderTapeProfileFrame,
+        "general fixture must complete the existing provider preflight");
+
+  render_tape_runtime::GeneralPreflightPlan plan;
+  const auto sharedResult = render_tape_runtime::buildGeneralReplayPlan(
+      fixture.tape, fixture.blobsValue, plan);
+  check(sharedResult.complete() &&
+            sharedResult.status == providerResult.status &&
+            sharedResult.profile == providerResult.profile &&
+            sharedResult.intervalCount == providerResult.intervalCount &&
+            sharedResult.requirements.outputWidth ==
+                providerResult.requirements.outputWidth &&
+            sharedResult.requirements.outputHeight ==
+                providerResult.requirements.outputHeight &&
+            sharedResult.requirements.outputFormat ==
+                providerResult.requirements.outputFormat &&
+            sharedResult.coverage.eventCount == providerResult.coverage.eventCount &&
+            sharedResult.coverage.objectDefinitions ==
+                providerResult.coverage.objectDefinitions &&
+            sharedResult.coverage.seedMutations ==
+                providerResult.coverage.seedMutations &&
+            sharedResult.coverage.commandChunks ==
+                providerResult.coverage.commandChunks &&
+            sharedResult.coverage.commandRecords ==
+                providerResult.coverage.commandRecords &&
+            sharedResult.coverage.drawIndexedPrimitiveRecords ==
+                providerResult.coverage.drawIndexedPrimitiveRecords &&
+            sharedResult.coverage.presentRecords ==
+                providerResult.coverage.presentRecords &&
+            sharedResult.coverage.presentOutputs ==
+                providerResult.coverage.presentOutputs &&
+            sharedResult.conservation.inputBlobs ==
+                providerResult.conservation.inputBlobs &&
+            sharedResult.conservation.referencedBlobs ==
+                providerResult.conservation.referencedBlobs,
+        "shared general preflight must match provider admission evidence");
+  check(plan.tape.events.data() ==
+            reinterpret_cast<const RenderTapeEventHeader*>(
+                fixture.tape.data() + plan.tape.header.eventTableOffset) &&
+            plan.tape.payloadArena.data() ==
+                fixture.tape.data() + plan.tape.header.payloadArenaOffset,
+        "shared plan must borrow the validated tape views exactly");
+  check(plan.definitions.size() ==
+            static_cast<std::size_t>(providerResult.coverage.objectDefinitions) &&
+            plan.commandChunks.size() ==
+                static_cast<std::size_t>(providerResult.coverage.commandChunks),
+        "shared plan must expose the provider's complete general structure");
+
+  for (const auto& event : plan.events) {
+    const auto source = plan.tape.event(event.eventIndex);
+    check(!source.payload.empty() ||
+              event.type == RenderTapeEventType::PresentComplete,
+          "shared plan events must resolve to source tape payloads");
+    if (event.type == RenderTapeEventType::ObjectDefine) {
+      check(event.index < plan.definitions.size(),
+            "shared definition event index must be bounded");
+      const auto& definition = plan.definitions[event.index];
+      check(definition.descriptor.data() ==
+                source.payload.data() + sizeof(definition.fixed) &&
+                definition.descriptor.size() + sizeof(definition.fixed) ==
+                    source.payload.size(),
+            "shared definitions must borrow exact descriptor subspans");
+    } else if (event.type == RenderTapeEventType::CommandChunk) {
+      RenderTapeCommandChunkHeader fixed{};
+      check(source.payload.size() >= sizeof(fixed) &&
+                event.index < plan.commandChunks.size(),
+            "shared command event index must be bounded");
+      std::memcpy(&fixed, source.payload.data(), sizeof(fixed));
+      const auto& chunk = plan.commandChunks[event.index];
+      check(chunk.bytes.data() ==
+                source.payload.data() + sizeof(fixed) &&
+                chunk.bytes.size() + sizeof(fixed) == source.payload.size() &&
+                chunk.envelope.recordCount == fixed.recordCount &&
+                chunk.envelope.handleCount == fixed.handleCount,
+            "shared command chunks must borrow exact wire subspans");
+    }
+  }
+
+  const auto priorTapeEvents = plan.tape.events.data();
+  const auto priorDefinitions = plan.definitions.size();
+  const auto priorFirstDescriptor = plan.definitions.front().descriptor.data();
+  const auto priorEvents = plan.events.size();
+  const std::array<std::byte, 1u> malformed{std::byte{0x7f}};
+  const auto failed = render_tape_runtime::buildGeneralReplayPlan(
+      malformed, fixture.blobsValue, plan);
+  check(failed.status == FrameTapeReplayStatus::InvalidTape &&
+            plan.tape.events.data() == priorTapeEvents &&
+            plan.definitions.size() == priorDefinitions &&
+            plan.definitions.front().descriptor.data() == priorFirstDescriptor &&
+            plan.events.size() == priorEvents,
+        "failed shared preflight must leave the existing plan unchanged");
+}
+
+void sharedRuntimeObjectHelpersPinIdentityAndOwnership() {
+  using namespace render_tape_runtime;
+  const D9CWireObjectIdentity identity{
+      .kind = D9C_CHUNK_HANDLE_KIND_TEXTURE, .generation = 19u,
+      .objectId = 0x9100u};
+  const D9CWireObjectIdentity staleGeneration{
+      .kind = identity.kind, .generation = identity.generation + 1u,
+      .objectId = identity.objectId};
+  const D9CWireObjectIdentity wrongKind{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+      .generation = identity.generation,
+      .objectId = identity.objectId};
+  std::array<OwnedObject, 1u> objects{{
+      {.identity = identity, .value = reinterpret_cast<void*>(0x1u)}}};
+  check(findExactObject(objects, identity) == objects[0].value,
+        "runtime lookup must return an exact live identity");
+  check(findExactObject(objects, staleGeneration) == nullptr &&
+            findExactObject(objects, wrongKind) == nullptr,
+        "runtime lookup must reject stale generation and kind mismatches");
+
+  std::array<void*, 1u> resolved{};
+  std::size_t resolvedCount = 99u;
+  const auto chunkBytes = bootstrapChunk();
+  const CommandChunkView chunk{
+      .envelope = CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_VERSION,
+                                       .recordCount = 1u,
+                                       .handleCount = 1u},
+      .bytes = chunkBytes};
+  const D9CWireObjectIdentity chunkIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE, .generation = 7u,
+      .objectId = 41u};
+  std::array<OwnedObject, 1u> chunkObjects{{
+      {.identity = chunkIdentity, .value = reinterpret_cast<void*>(0x2u)}}};
+  check(resolveCommandHandles(chunk, chunkObjects, resolved, resolvedCount) &&
+            resolvedCount == 1u && resolved[0] == chunkObjects[0].value,
+        "runtime command resolution must use the exact object table");
+  chunkObjects[0].identity.generation++;
+  check(!resolveCommandHandles(chunk, chunkObjects, resolved, resolvedCount) &&
+            resolvedCount == 0u,
+        "runtime command resolution must fail closed on stale generation");
+  chunkObjects[0].identity.generation--;
+
+  const std::array twoTargets{
+      D9CCommandChunkWireRenderTargetBinding{.slot = 0u,
+                                             .valid = 1u,
+                                             .handleIndex = 0u},
+      D9CCommandChunkWireRenderTargetBinding{.slot = 1u,
+                                             .valid = 1u,
+                                             .handleIndex = 1u}};
+  auto missingSecondBytes = bootstrapChunkWithRenderTargets(twoTargets);
+  D9CCommandChunkWireHeader missingSecondHeader{};
+  std::memcpy(&missingSecondHeader, missingSecondBytes.data(),
+              sizeof(missingSecondHeader));
+  const D9CCommandChunkWireHandleEntry missingIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE, .generation = 7u,
+      .objectId = 0xdeadbeefu};
+  std::memcpy(missingSecondBytes.data() + missingSecondHeader.handleTableOffset +
+                  sizeof(D9CCommandChunkWireHandleEntry),
+              &missingIdentity, sizeof(missingIdentity));
+  const CommandChunkView missingSecondChunk{
+      .envelope = CommandChunkEnvelope{.version = D9C_COMMAND_CHUNK_VERSION,
+                                       .recordCount = 1u,
+                                       .handleCount = 2u},
+      .bytes = missingSecondBytes};
+  std::array<void*, 2u> missingSecondResolved{
+      {reinterpret_cast<void*>(0x31u), reinterpret_cast<void*>(0x32u)}};
+  resolvedCount = 55u;
+  check(!resolveCommandHandles(missingSecondChunk, chunkObjects,
+                               missingSecondResolved, resolvedCount) &&
+            resolvedCount == 0u &&
+            missingSecondResolved[0] == reinterpret_cast<void*>(0x31u) &&
+            missingSecondResolved[1] == reinterpret_cast<void*>(0x32u),
+        "runtime resolution must publish no pointers when a later handle is missing");
+  std::array<void*, 0u> undersizedResolved{};
+  resolvedCount = 55u;
+  check(!resolveCommandHandles(chunk, chunkObjects, undersizedResolved,
+                               resolvedCount) &&
+            resolvedCount == 0u,
+        "runtime resolution must reject undersized scratch before publishing");
+
+  const D9CWireObjectIdentity aliasIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE, .generation = 23u,
+      .objectId = 0x9101u};
+  const RenderTapeSurfaceDescriptorV2 alias{
+      .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+      .storage = static_cast<std::uint32_t>(
+          RenderTapeSurfaceStorage::TextureSubresource),
+      .subresource = 0u,
+      .parentTexture = identity};
+  const auto aliasBytes = bytesOf(alias);
+  const RenderTapeObjectDefineHeader aliasDefinition{
+      .identity = aliasIdentity,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Surface),
+      .descriptorBytes = static_cast<std::uint32_t>(aliasBytes.size()),
+  };
+  check(createRenderTapeObject(nullptr, aliasDefinition, aliasBytes, {}, {}) ==
+            nullptr,
+        "alias creation must reject a missing parent before any effect");
+
+  const D9CPresentParams params{
+      .backBufferWidth = 8u,
+      .backBufferHeight = 8u,
+      .backBufferFormat = 21u,
+      .backBufferCount = 1u,
+      .swapEffect = 1u,
+      .windowed = 1u,
+      .presentationInterval = 0x80000000u,
+  };
+  auto* factory = dxmt9c_factory_create();
+  check(factory != nullptr, "runtime object fixture factory must be available");
+  auto* device = dxmt9c_factory_create_device(factory, 0u, &params, 0u,
+                                                nullptr);
+  check(device != nullptr, "runtime object fixture device must construct");
+  const D9CSurfaceDesc level0{.format = 22u,
+                              .resourceType = 3u,
+                              .usage = 1u,
+                              .pool = 0u,
+                              .width = 8u,
+                              .height = 8u,
+                              .depth = 1u};
+  const auto descriptor = texture2DDescriptor(level0);
+  const RenderTapeObjectDefineHeader definition{
+      .identity = identity,
+      .descriptorKind = static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Texture),
+      .descriptorBytes = static_cast<std::uint32_t>(descriptor.size()),
+  };
+  void* value = createRenderTapeObject(device, definition, descriptor, {}, {});
+  check(value != nullptr, "runtime object fixture must create one texture");
+  OwnedObject owned{.identity = identity, .value = value};
+  releaseOwnedObject(owned);
+  check(owned.value == nullptr && findExactObject(std::span(&owned, 1u), identity) ==
+            nullptr,
+        "runtime release must null the owned wrapper and hide it from lookup");
+  releaseOwnedObject(owned);
+  check(owned.value == nullptr,
+        "runtime release must be idempotent after the first release");
+  dxmt9c_device_release(device);
+  dxmt9c_factory_release(factory);
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -3270,6 +4478,11 @@ int main(int argc, char** argv) {
           "--write-parallel-fixture dir]");
     eventLevelMutationDrainOrderingIsPinned();
     bufferMutationReplayPlanPinsLockFlagsAndOffset();
+    freshSeedDrainPredicateTruthTable();
+    texturePrestageAdmissionExhaustiveEventOrder();
+    preparedTapeOwnsImmutableInputAndExposesColdEvidence();
+    sharedGeneralPreflightPlanMatchesProviderAndIsTransactional();
+    sharedRuntimeObjectHelpersPinIdentityAndOwnership();
     standaloneD24X8SeedIsCreatedBeforeReplayAndConserved();
     colorSnapshotCapturesExact2DAndAllCubeFaces();
     colorCompleteSeedsReplayAllSubresourcesAndConserve();
@@ -3281,6 +4494,7 @@ int main(int argc, char** argv) {
     productionPresenterMirrorGpuOracle();
     nativeMetalOffscreenIdentityReplay();
     nativeMetalTexturedUpDigestRepeats();
+    nativeMetalPostCommandTexturePrestageMatchesOrdinaryPixels();
     generalIndexedReplayConservesAllObjects();
     productionParallelIndexedFixtureHasTwoChildren();
     boundedSequenceMutationIsVisibleAtSecondPresent();

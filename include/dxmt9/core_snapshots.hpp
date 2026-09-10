@@ -253,6 +253,8 @@ enum DrawStateInvalidationBits : u32 {
   DrawStateInvalidationTextureLod = 1u << 16,
   DrawStateInvalidationTextureStageState = 1u << 17,
   DrawStateInvalidationSamplerState = 1u << 18,
+  // Frequency is retained in the stable hot key, not DrawBindingOverride.
+  DrawStateInvalidationStreamFrequency = 1u << 19,
 };
 
 struct TextureBinding {
@@ -1290,6 +1292,8 @@ inline bool drawStateKeysCompatibleForDrawRunBatchExceptRenderState(
     const FlatDrawStateKey& a,
     const FlatDrawStateKey& b) noexcept {
   return a.vertexElementCount == b.vertexElementCount &&
+         // Unlike buffer/offset/stride, frequency has no per-draw override.
+         a.streamFrequencies == b.streamFrequencies &&
          a.fvf == b.fvf &&
          a.vertexDeclHash == b.vertexDeclHash &&
          a.vertexShaderKind == b.vertexShaderKind &&
@@ -1324,6 +1328,7 @@ inline bool drawStatesCompatibleForDrawRunBatch(
   // no longer depends on the trio because the alpha-test variant-key bit is
   // gone). Every other group keeps exact equality.
   return drawStateKeysCompatibleForDrawRunBatchExceptRenderState(a.key, b.key) &&
+         a.streamFrequencies == b.streamFrequencies &&
          a.textures == b.textures &&
          a.textureLods == b.textureLods &&
          a.textureMask == b.textureMask &&
@@ -1479,6 +1484,8 @@ inline DrawRunBatchIncompat classifyDrawRunBatchIncompatibility(
     const FlatDrawStateRecord& b,
     const DrawShaderLayoutContext& la,
     const DrawShaderLayoutContext& lb) noexcept {
+  const bool frequencyEq = a.key.streamFrequencies == b.key.streamFrequencies &&
+                           a.streamFrequencies == b.streamFrequencies;
   const bool textureEq = a.key.textures == b.key.textures &&
                          a.key.textureLods == b.key.textureLods &&
                          a.key.textureMask == b.key.textureMask &&
@@ -1529,12 +1536,12 @@ inline DrawRunBatchIncompat classifyDrawRunBatchIncompatibility(
   else if (!usageEq) result.firstDiff = DrawRunBatchIncompatClass::LayoutUsage;
   result.textureOnly = !textureEq && samplerEq && tssEq && renderStateEq &&
                        shaderEq && declEq && attachmentEq && viewportEq &&
-                       clipEq && usageEq;
+                       clipEq && usageEq && frequencyEq;
   // Sub-classify the render-state diff only when render state is the SOLE
   // differing group; otherwise the rs_* counters overstate rescuable pairs
   // (H228 lesson: GT2's "alpha-test-only" pairs also switched shaders).
   if (!renderStateEq && textureEq && samplerEq && tssEq && shaderEq &&
-      declEq && attachmentEq && viewportEq && clipEq && usageEq) {
+      declEq && attachmentEq && viewportEq && clipEq && usageEq && frequencyEq) {
     result.renderStateDiff = classifyDrawRunBatchRenderStateDiff(
         a.renderStates, b.renderStates, &result.renderStateDiffFirstRegister);
   }
@@ -1773,6 +1780,7 @@ struct DeviceState;
 // `tests/native/backend/ffp_key_determinism_spec.cpp`.
 FfpVertexKey makeFfpVertexKey(const DeviceState& state);
 FfpPixelKey makeFfpPixelKey(const DeviceState& state);
+u32 drawInstanceCountFromState(const DeviceState& state) noexcept;
 
 namespace fixture {
 

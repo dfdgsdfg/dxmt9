@@ -637,7 +637,7 @@ bool buildSparseState(const PeHotStateShadow& shadow,
       entry.wire.valid = 1u;
       entry.wire.offset = bindings.streams[slot].offset;
       entry.wire.stride = bindings.streams[slot].stride;
-      entry.wire.frequency = 0u;
+      entry.wire.frequency = bindings.streamFrequencies[slot];
       entry.object = bindings.streams[slot].buffer;
     }
   }
@@ -1368,7 +1368,7 @@ bool addChunkContextSections(const PeChunkContext& chunk,
     entry.wire.valid = 1u;
     entry.wire.offset = bindings.streams[slot].offset;
     entry.wire.stride = bindings.streams[slot].stride;
-    entry.wire.frequency = 0u;
+    entry.wire.frequency = bindings.streamFrequencies[slot];
     entry.object = bindings.streams[slot].buffer;
   }
   if (!snapshot) {

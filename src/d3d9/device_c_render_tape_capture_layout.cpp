@@ -427,6 +427,10 @@ const char* renderTapeCaptureRejectionReasonName(
     return "unmaterialized_pre_arm_object";
   case RenderTapeCaptureRejectionReason::ExpectedContentContract:
     return "expected_content_contract";
+  case RenderTapeCaptureRejectionReason::UnsupportedTextureLodMutation:
+    return "unsupported_texture_lod_mutation";
+  case RenderTapeCaptureRejectionReason::UnsupportedExplicitMipGeneration:
+    return "unsupported_explicit_mip_generation";
   }
   return "unknown_capture_rejection";
 }

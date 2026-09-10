@@ -1,6 +1,7 @@
 #include "device_c_render_tape.hpp"
 #include "device_c_render_tape_projection.hpp"
 #include "device_c_render_tape_policy.hpp"
+#include "device_c_render_tape_cpu_window.hpp"
 
 #include <algorithm>
 #include <array>
@@ -91,9 +92,111 @@ void writeFile(const char* path, std::span<const std::byte> bytes) {
 
 class InspectSink final : public RenderTapeReplaySink {
 public:
-  bool bootstrap(const RenderTapeBootstrapHeader&, std::span<const std::byte>,
+  struct BufferDefinitionInspection {
+    std::uint32_t event = 0u;
+    D9CWireObjectIdentity identity{};
+    D9CBufferDesc descriptor{};
+  };
+
+  struct BufferMutationInspection {
+    std::uint32_t event = 0u;
+    D9CWireObjectIdentity identity{};
+    std::uint32_t mutationKind = 0u;
+    std::uint32_t disposition = 0u;
+    std::uint64_t byteOffset = 0u;
+    std::uint64_t byteSize = 0u;
+  };
+
+  struct BufferDestroyInspection {
+    std::uint32_t event = 0u;
+    D9CWireObjectIdentity identity{};
+  };
+
+  bool collectBufferInspection(const ImportedRenderTapeView& tape) {
+    const auto eventCount = tape.events.size();
+    bufferDefinitions.reserve(eventCount);
+    bufferMutations.reserve(eventCount);
+    bufferDestroys.reserve(eventCount);
+    for (std::size_t index = 0u; index < eventCount; ++index) {
+      const auto event = tape.event(index);
+      const auto eventOrdinal = static_cast<std::uint32_t>(index + 1u);
+      const auto type = static_cast<RenderTapeEventType>(event.header.type);
+      if (type == RenderTapeEventType::ObjectDefine) {
+        if (event.payload.size() < sizeof(RenderTapeObjectDefineHeader)) {
+          return false;
+        }
+        RenderTapeObjectDefineHeader fixed{};
+        std::memcpy(&fixed, event.payload.data(), sizeof(fixed));
+        if (fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_BUFFER) continue;
+        if (fixed.descriptorKind !=
+                static_cast<std::uint32_t>(RenderTapeDescriptorKind::Buffer) ||
+            fixed.descriptorBytes != sizeof(D9CBufferDesc) ||
+            event.payload.size() != sizeof(fixed) + sizeof(D9CBufferDesc) ||
+            bufferDefinitions.size() == eventCount) {
+          return false;
+        }
+        D9CBufferDesc descriptor{};
+        std::memcpy(&descriptor,
+                    event.payload.data() + sizeof(fixed),
+                    sizeof(descriptor));
+        bufferDefinitions.push_back(BufferDefinitionInspection{
+            .event = eventOrdinal,
+            .identity = fixed.identity,
+            .descriptor = descriptor});
+      } else if (type == RenderTapeEventType::ResourceMutation) {
+        if (event.payload.size() != sizeof(RenderTapeResourceMutationHeader)) {
+          return false;
+        }
+        RenderTapeResourceMutationHeader fixed{};
+        std::memcpy(&fixed, event.payload.data(), sizeof(fixed));
+        if (fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_BUFFER) continue;
+        if (bufferMutations.size() == eventCount) return false;
+        bufferMutations.push_back(BufferMutationInspection{
+            .event = eventOrdinal,
+            .identity = fixed.identity,
+            .mutationKind = fixed.kind,
+            .disposition = fixed.bufferDisposition,
+            .byteOffset = fixed.byteOffset,
+            .byteSize = fixed.byteSize});
+      } else if (type == RenderTapeEventType::ObjectDestroy) {
+        if (event.payload.size() != sizeof(RenderTapeObjectDestroyHeader)) {
+          return false;
+        }
+        RenderTapeObjectDestroyHeader fixed{};
+        std::memcpy(&fixed, event.payload.data(), sizeof(fixed));
+        if (fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_BUFFER) continue;
+        if (bufferDestroys.size() == eventCount) return false;
+        bufferDestroys.push_back(BufferDestroyInspection{
+            .event = eventOrdinal, .identity = fixed.identity});
+      }
+    }
+    return true;
+  }
+
+  bool bootstrapStateOnly = true;
+  bool bootstrap(const RenderTapeBootstrapHeader& fixed, std::span<const std::byte> bytes,
                  RenderTapeBootstrapReplayMode mode) override {
     if (mode != RenderTapeBootstrapReplayMode::JournalOnlyDeferredProvider) return false;
+    std::size_t offset = 0u;
+    for (std::uint32_t index = 0u; index < fixed.overlayCount; ++index) {
+      D9CCommandChunkWireHeader header{};
+      if (offset > bytes.size() || bytes.size() - offset < sizeof(header)) return false;
+      std::memcpy(&header, bytes.data() + offset, sizeof(header));
+      if (header.payloadArenaOffset > bytes.size() - offset ||
+          header.payloadArenaSize > bytes.size() - offset - header.payloadArenaOffset) return false;
+      const auto size = std::size_t(header.payloadArenaOffset) + header.payloadArenaSize;
+      ImportedChunkView chunk;
+      if (!validateCommandChunk(bytes.subspan(offset, size),
+              {.version = D9C_COMMAND_CHUNK_WIRE_VERSION, .recordCount = header.recordCount,
+               .handleCount = header.handleCount}, &chunk).valid()) return false;
+      for (const auto& record : chunk.records)
+        bootstrapStateOnly &= record.type == D9C_COMMAND_RECORD_APPLY_STATE ||
+            record.type == D9C_COMMAND_RECORD_SET_VS_CONST_F ||
+            record.type == D9C_COMMAND_RECORD_SET_PS_CONST_F;
+      offset += size;
+    }
+    if (fixed.gammaRampBytes > bytes.size() || offset != bytes.size() - fixed.gammaRampBytes)
+      return false;
     ++bootstraps;
     ++events;
     return true;
@@ -102,6 +205,13 @@ public:
                     std::span<const std::byte> descriptor) override {
     if (fixed.descriptorKind < descriptorKinds.size()) {
       ++descriptorKinds[fixed.descriptorKind];
+    }
+    if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER &&
+        fixed.descriptorKind == static_cast<std::uint32_t>(RenderTapeDescriptorKind::Buffer) &&
+        descriptor.size() == sizeof(D9CBufferDesc)) {
+      D9CBufferDesc buffer{};
+      std::memcpy(&buffer, descriptor.data(), sizeof(buffer));
+      dynamicBuffers += (buffer.usage & 0x200u) != 0u;
     }
     if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
       RenderTapeTextureDescriptorV2 texture{};
@@ -192,6 +302,7 @@ public:
   }
 
   std::uint64_t events = 0u;
+  std::uint64_t dynamicBuffers = 0u;
   std::uint64_t bootstraps = 0u;
   std::uint64_t defines = 0u;
   std::uint64_t textureDescriptorsV2 = 0u;
@@ -215,9 +326,12 @@ public:
   std::array<std::uint64_t, 6u> mutationObjectKinds{};
   std::array<std::uint64_t, 6u> destroyObjectKinds{};
   std::array<std::uint64_t, 6u> controlKinds{};
-  std::array<std::uint64_t, 30u> recordTypes{};
+  std::array<std::uint64_t, D9C_COMMAND_RECORD_GENERATE_MIPMAPS + 1u> recordTypes{};
   std::array<std::uint64_t, D9C_COMMAND_CHUNK_SECTION_COUNT + 1u>
       sectionKinds{};
+  std::vector<BufferDefinitionInspection> bufferDefinitions{};
+  std::vector<BufferMutationInspection> bufferMutations{};
+  std::vector<BufferDestroyInspection> bufferDestroys{};
 };
 
 template <std::size_t N>
@@ -253,7 +367,7 @@ constexpr std::array<const char*, 6u> kObjectKindNames{
 constexpr std::array<const char*, 6u> kControlKindNames{
     nullptr, "query_get_data", "cpu_read", "flush_wait", "reset",
     "device_lost"};
-constexpr std::array<const char*, 30u> kRecordTypeNames{
+constexpr std::array<const char*, D9C_COMMAND_RECORD_GENERATE_MIPMAPS + 1u> kRecordTypeNames{
     nullptr,
     "draw_primitive", "draw_indexed_primitive", "draw_primitive_up",
     "draw_indexed_primitive_up",
@@ -263,7 +377,7 @@ constexpr std::array<const char*, 30u> kRecordTypeNames{
     "set_ps_const_f", "set_ps_const_i", "set_ps_const_b",
     "clear", "present", "stretch_rect", "color_fill", "update_texture",
     "update_surface", "query_issue", "readback", "apply_state",
-    "resz_depth_resolve"};
+    "resz_depth_resolve", "generate_mipmaps"};
 constexpr std::array<const char*, D9C_COMMAND_CHUNK_SECTION_COUNT + 1u>
     kSectionKindNames{
         nullptr,
@@ -372,6 +486,13 @@ void writeIdentity(std::ostream& output,
   output << "{\"kind\":" << identity.kind
          << ",\"object_id\":" << identity.objectId
          << ",\"generation\":" << identity.generation << '}';
+}
+
+void writeInspectionIdentity(std::ostream& output,
+                             const D9CWireObjectIdentity& identity) {
+  output << "{\"kind\":" << identity.kind
+         << ",\"generation\":" << identity.generation
+         << ",\"object_id\":\"" << identity.objectId << "\"}";
 }
 
 void writeLocator(std::ostream& output,
@@ -902,6 +1023,7 @@ int main(int argc, char** argv) {
     }
 
     std::vector<std::uint32_t> commandEventIndices;
+    std::vector<RenderTapeCpuWindowSourcePlan> cpuWindowSources;
     std::vector<std::uint32_t> presentCommandEvents;
     for (std::uint32_t i = 0u; i < tape.events.size(); ++i) {
       if (static_cast<RenderTapeEventType>(tape.events[i].type) !=
@@ -922,6 +1044,8 @@ int main(int argc, char** argv) {
       if (!chunkResult.valid()) {
         throw std::runtime_error("validated command chunk could not be imported");
       }
+      cpuWindowSources.push_back(planRenderTapeCpuWindowSource(
+          chunk, static_cast<RawOrdinal>(i + 1u), kRenderTapeCpuWindowPageSize));
       if (std::any_of(chunk.records.begin(), chunk.records.end(),
                       [](const auto& record) {
                         return record.type == D9C_COMMAND_RECORD_PRESENT;
@@ -931,6 +1055,10 @@ int main(int argc, char** argv) {
     }
 
     InspectSink sink;
+    if (!sink.collectBufferInspection(tape)) {
+      throw std::runtime_error(
+          "validated render tape buffer inspection could not be imported");
+    }
     const auto replay = replayPrevalidatedRenderTape(tape, catalogue, sink);
     if (!replay.complete) {
       std::cerr << "render tape inspect replay failed event="
@@ -965,13 +1093,75 @@ int main(int argc, char** argv) {
     } else {
       std::cout << "null";
     }
-    std::cout
-              << ",\"command_event_indices\":[";
+    std::cout << ",\"dynamic_buffers\":" << sink.dynamicBuffers
+              << ",\"event_types\":[";
+    for (std::size_t i = 0u; i < tape.events.size(); ++i) {
+      if (i != 0u) std::cout << ',';
+      std::cout << tape.events[i].type;
+    }
+    std::cout << "],\"buffer_definitions\":[";
+    for (std::size_t i = 0u; i < sink.bufferDefinitions.size(); ++i) {
+      if (i != 0u) std::cout << ',';
+      const auto& definition = sink.bufferDefinitions[i];
+      std::cout << "{\"event\":" << definition.event << ",\"identity\":";
+      writeInspectionIdentity(std::cout, definition.identity);
+      std::cout << ",\"usage\":" << definition.descriptor.usage
+                << ",\"pool\":" << definition.descriptor.pool
+                << ",\"size\":" << definition.descriptor.size << '}';
+    }
+    std::cout << "],\"buffer_mutations\":[";
+    for (std::size_t i = 0u; i < sink.bufferMutations.size(); ++i) {
+      if (i != 0u) std::cout << ',';
+      const auto& mutation = sink.bufferMutations[i];
+      std::cout << "{\"event\":" << mutation.event << ",\"identity\":";
+      writeInspectionIdentity(std::cout, mutation.identity);
+      std::cout << ",\"mutation_kind\":" << mutation.mutationKind
+                << ",\"disposition\":" << mutation.disposition
+                << ",\"byte_offset\":" << mutation.byteOffset
+                << ",\"byte_size\":" << mutation.byteSize << '}';
+    }
+    std::cout << "],\"buffer_destroys\":[";
+    for (std::size_t i = 0u; i < sink.bufferDestroys.size(); ++i) {
+      if (i != 0u) std::cout << ',';
+      const auto& destroy = sink.bufferDestroys[i];
+      std::cout << "{\"event\":" << destroy.event << ",\"identity\":";
+      writeInspectionIdentity(std::cout, destroy.identity);
+      std::cout << '}';
+    }
+    std::cout << "],\"command_event_indices\":[";
     for (std::size_t i = 0u; i < commandEventIndices.size(); ++i) {
       if (i != 0u) std::cout << ',';
       std::cout << commandEventIndices[i];
     }
-    std::cout << "],\"present_command_events\":[";
+    std::cout << "],\"cpu_window_plan\":{\"schema\":\"dxmt9.render_tape.cpu_window_plan.v1\","
+                 "\"page_size\":" << kRenderTapeCpuWindowPageSize
+              << ",\"bootstrap_state_only\":" << (sink.bootstrapStateOnly ? "true" : "false")
+              << ",\"sources\":[";
+    for (std::size_t index = 0u; index < cpuWindowSources.size(); ++index) {
+      if (index) std::cout << ',';
+      const auto& shape = cpuWindowSources[index];
+      const auto& emission = shape.emission;
+      std::cout << "{\"event\":" << commandEventIndices[index] + 1u
+                << ",\"record_count\":" << shape.recordCount
+                << ",\"allowed_record_count\":" << shape.allowedRecordCount
+                << ",\"partitioned\":" << (emission.partitioned() ? "true" : "false")
+                << ",\"lease_eligible\":" << (emission.leaseEligible() ? "true" : "false")
+                << ",\"coordinator_count\":" << emission.coordinatorCount
+                << ",\"ordered_control_count\":" << emission.orderedControlCount
+                << ",\"compatibility_record_count\":" << emission.compatibilityRecordCount
+                << ",\"eligible\":" << (shape.eligible() ? "true" : "false")
+                << ",\"lease_spans\":[";
+      for (std::size_t i = 0u; i < emission.leaseSpans.size(); ++i) {
+        if (i) std::cout << ',';
+        const auto& span = emission.leaseSpans[i];
+        std::cout << "{\"first_record_index\":" << span.firstRecordIndex
+                  << ",\"record_count\":" << span.recordCount
+                  << ",\"owns_lease\":" << (span.ownsLease ? "true" : "false")
+                  << ",\"final_lease_span\":" << (span.finalLeaseSpan ? "true" : "false") << '}';
+      }
+      std::cout << "]}";
+    }
+    std::cout << "]},\"present_command_events\":[";
     for (std::size_t i = 0u; i < presentCommandEvents.size(); ++i) {
       if (i != 0u) std::cout << ',';
       std::cout << presentCommandEvents[i];

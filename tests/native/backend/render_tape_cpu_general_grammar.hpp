@@ -1,0 +1,519 @@
+#pragma once
+
+// Second, CPU-specific admission for an already-built general-provider plan.
+// This is deliberately a narrowing gate: the general provider owns tape and
+// command validation, while this predicate only checks the bounded CPU lane's
+// grammar and capacity before any effect is allowed.
+
+#include "../../../src/d3d9/device_c_render_tape_runtime_objects.hpp"
+
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <limits>
+
+namespace dxmt9::d3d9::render_tape_runtime {
+
+inline constexpr std::uint32_t kGeneralCpuNoIndex = 0xffffffffu;
+
+struct GeneralCpuAdmissionCaps {
+  // These are bounded-input grammar caps, independent of the command queue's
+  // in-flight ring. The production caller must reserve queue/source capacity
+  // separately before executing an admitted plan.
+  std::size_t maxEvents = 2048u;
+  std::size_t maxObjects = 512u;
+  std::size_t maxMutations = 1024u;
+  std::size_t maxChunks = 128u;
+  std::size_t maxRecords = 4096u;
+  std::uint64_t maxBlobBytes = 256ull * 1024ull * 1024ull;
+  // Capture-cadence input bound for this first grammar. This is not a proof
+  // of queue progress or source-slot availability; production routing must
+  // perform its own pre-effect queue/source reservation.
+  std::size_t maxRecordsPerChunk = 64u;
+};
+
+struct GeneralCpuAdmissionCounts {
+  // The primary counters intentionally match general-provider coverage:
+  // chunks and records exclude bootstrap overlays. Their separate counters
+  // make the bounded bootstrap contribution observable without changing the
+  // r4 capture accounting.
+  std::size_t events = 0u;
+  std::size_t objects = 0u;
+  std::size_t mutations = 0u;
+  std::size_t chunks = 0u;
+  std::size_t records = 0u;
+  std::size_t draws = 0u;
+  std::uint64_t blobBytes = 0u;
+  std::size_t bootstrapChunks = 0u;
+  std::size_t bootstrapRecords = 0u;
+  std::size_t presents = 0u;
+  std::size_t presentCompletions = 0u;
+};
+
+enum class GeneralCpuAdmissionReason : std::uint8_t {
+  Accepted,
+  EventLimit,
+  ObjectLimit,
+  MutationLimit,
+  ChunkLimit,
+  RecordLimit,
+  PerChunkRecordLimit,
+  BlobBytesLimit,
+  InvalidEventReference,
+  UnsupportedEvent,
+  UnsupportedObject,
+  DuplicateBootstrap,
+  GammaUnsupported,
+  OrderedControlUnsupported,
+  CommandChunkUnavailable,
+  UnsupportedCommandRecord,
+  PresentCount,
+  PresentCompleteCount,
+  PresentCompleteNotFinal,
+  OutputDescriptorMissing,
+};
+
+struct GeneralCpuAdmissionResult {
+  GeneralCpuAdmissionReason reason = GeneralCpuAdmissionReason::Accepted;
+  std::uint32_t eventIndex = kGeneralCpuNoIndex;
+  std::uint32_t chunkIndex = kGeneralCpuNoIndex;
+  std::uint32_t recordIndex = kGeneralCpuNoIndex;
+  GeneralCpuAdmissionCounts counts{};
+
+  constexpr bool accepted() const noexcept {
+    return reason == GeneralCpuAdmissionReason::Accepted;
+  }
+};
+
+inline const char* generalCpuAdmissionReasonName(
+    GeneralCpuAdmissionReason reason) noexcept {
+  switch (reason) {
+  case GeneralCpuAdmissionReason::Accepted: return "accepted";
+  case GeneralCpuAdmissionReason::EventLimit: return "event-limit";
+  case GeneralCpuAdmissionReason::ObjectLimit: return "object-limit";
+  case GeneralCpuAdmissionReason::MutationLimit: return "mutation-limit";
+  case GeneralCpuAdmissionReason::ChunkLimit: return "chunk-limit";
+  case GeneralCpuAdmissionReason::RecordLimit: return "record-limit";
+  case GeneralCpuAdmissionReason::PerChunkRecordLimit:
+    return "per-chunk-record-limit";
+  case GeneralCpuAdmissionReason::BlobBytesLimit: return "blob-bytes-limit";
+  case GeneralCpuAdmissionReason::InvalidEventReference:
+    return "invalid-event-reference";
+  case GeneralCpuAdmissionReason::UnsupportedEvent: return "unsupported-event";
+  case GeneralCpuAdmissionReason::UnsupportedObject: return "unsupported-object";
+  case GeneralCpuAdmissionReason::DuplicateBootstrap:
+    return "duplicate-bootstrap";
+  case GeneralCpuAdmissionReason::GammaUnsupported: return "gamma-unsupported";
+  case GeneralCpuAdmissionReason::OrderedControlUnsupported:
+    return "ordered-control-unsupported";
+  case GeneralCpuAdmissionReason::CommandChunkUnavailable:
+    return "command-chunk-unavailable";
+  case GeneralCpuAdmissionReason::UnsupportedCommandRecord:
+    return "unsupported-command-record";
+  case GeneralCpuAdmissionReason::PresentCount: return "present-count";
+  case GeneralCpuAdmissionReason::PresentCompleteCount:
+    return "present-complete-count";
+  case GeneralCpuAdmissionReason::PresentCompleteNotFinal:
+    return "present-complete-not-final";
+  case GeneralCpuAdmissionReason::OutputDescriptorMissing:
+    return "output-descriptor-missing";
+  }
+  return "unknown";
+}
+
+namespace detail {
+
+inline GeneralCpuAdmissionResult generalCpuReject(
+    GeneralCpuAdmissionReason reason, const GeneralCpuAdmissionCounts& counts,
+    std::uint32_t eventIndex = kGeneralCpuNoIndex,
+    std::uint32_t chunkIndex = kGeneralCpuNoIndex,
+    std::uint32_t recordIndex = kGeneralCpuNoIndex) noexcept {
+  return {.reason = reason,
+          .eventIndex = eventIndex,
+          .chunkIndex = chunkIndex,
+          .recordIndex = recordIndex,
+          .counts = counts};
+}
+
+inline bool generalCpuSameIdentity(const D9CWireObjectIdentity& left,
+                                   const D9CWireObjectIdentity& right) noexcept {
+  return left.kind == right.kind && left.generation == right.generation &&
+         left.objectId == right.objectId;
+}
+
+inline bool generalCpuOutputSurfaceSupported(const D9CSurfaceDesc& desc) noexcept {
+  return desc.resourceType == 1u && desc.width != 0u && desc.height != 0u &&
+         desc.depth == 1u && desc.pool == 0u && desc.multiSampleType == 0u &&
+         desc.multiSampleQuality == 0u && (desc.usage & 1u) != 0u &&
+         (desc.usage & 2u) == 0u && (desc.format == 21u || desc.format == 22u);
+}
+
+inline bool generalCpuCommandRecordSupported(std::uint32_t type) noexcept {
+  switch (type) {
+  case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
+  case D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE:
+  case D9C_COMMAND_RECORD_SET_VS_CONST_F:
+  case D9C_COMMAND_RECORD_SET_PS_CONST_F:
+  case D9C_COMMAND_RECORD_APPLY_STATE:
+  case D9C_COMMAND_RECORD_CLEAR:
+  case D9C_COMMAND_RECORD_PRESENT:
+  case D9C_COMMAND_RECORD_GENERATE_MIPMAPS:
+    return true;
+  default:
+    return false;
+  }
+}
+
+inline bool generalCpuAdd(std::size_t value, std::size_t limit,
+                          std::size_t& total) noexcept {
+  if (value > limit || total > limit - value) return false;
+  total += value;
+  return true;
+}
+
+inline bool generalCpuAddBlob(std::uint64_t value, std::uint64_t limit,
+                              std::uint64_t& total) noexcept {
+  if (value > limit || total > limit - value) return false;
+  total += value;
+  return true;
+}
+
+inline std::uint32_t generalCpuEventForOrdinal(
+    const GeneralPreflightPlan& plan, RenderTapeEventType type,
+    std::size_t ordinal) noexcept {
+  std::size_t seen = 0u;
+  for (const auto& event : plan.events) {
+    if (event.type != type) continue;
+    if (seen == ordinal) return event.eventIndex;
+    ++seen;
+  }
+  return kGeneralCpuNoIndex;
+}
+
+inline std::uint32_t generalCpuEventAtPosition(
+    const GeneralPreflightPlan& plan, std::size_t position) noexcept {
+  return position < plan.events.size() ? plan.events[position].eventIndex
+                                       : kGeneralCpuNoIndex;
+}
+
+inline std::uint32_t generalCpuEventForChunk(
+    const GeneralPreflightPlan& plan, bool bootstrap,
+    std::size_t chunkIndex) noexcept {
+  for (const auto& event : plan.events) {
+    if (event.type == (bootstrap ? RenderTapeEventType::BootstrapState
+                                 : RenderTapeEventType::CommandChunk) &&
+        event.index == chunkIndex)
+      return event.eventIndex;
+  }
+  return kGeneralCpuNoIndex;
+}
+
+}  // namespace detail
+
+// `plan` must be the immutable result of buildGeneralReplayPlan. This helper
+// intentionally does not validate tape events, descriptors, mutation bytes,
+// or command record bodies; those are the general-provider contract. The only
+// command inspection is importPrevalidatedCommandChunk(), which reconstructs
+// safe views over the already-validated bytes.
+inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
+    const GeneralPreflightPlan& plan,
+    const GeneralCpuAdmissionCaps& caps = {}) noexcept {
+  GeneralCpuAdmissionCounts counts{
+      .events = plan.events.size(),
+      .objects = plan.definitions.size(),
+      .mutations = plan.mutations.size(),
+      .chunks = plan.commandChunks.size(),
+      .blobBytes = 0u,
+      .bootstrapChunks = plan.bootstrapChunks.size(),
+  };
+
+  // All aggregate bounds are established before semantic iteration. This is
+  // important for a plan assembled from untrusted capture metadata: no later
+  // loop may grow or index a derived collection past a CPU-lane cap.
+  if (counts.events > caps.maxEvents)
+    return detail::generalCpuReject(GeneralCpuAdmissionReason::EventLimit,
+                                    counts,
+                                    detail::generalCpuEventAtPosition(
+                                        plan, caps.maxEvents));
+  if (counts.objects > caps.maxObjects)
+    return detail::generalCpuReject(GeneralCpuAdmissionReason::ObjectLimit,
+                                    counts,
+                                    detail::generalCpuEventForOrdinal(
+                                        plan, RenderTapeEventType::ObjectDefine,
+                                        caps.maxObjects));
+  if (counts.mutations > caps.maxMutations)
+    return detail::generalCpuReject(GeneralCpuAdmissionReason::MutationLimit,
+                                    counts,
+                                    detail::generalCpuEventForOrdinal(
+                                        plan, RenderTapeEventType::ResourceMutation,
+                                        caps.maxMutations));
+  if (counts.chunks > caps.maxChunks ||
+      counts.bootstrapChunks > caps.maxChunks - counts.chunks) {
+    if (counts.chunks > caps.maxChunks) {
+      return detail::generalCpuReject(
+          GeneralCpuAdmissionReason::ChunkLimit, counts,
+          detail::generalCpuEventForChunk(plan, false, caps.maxChunks),
+          static_cast<std::uint32_t>(caps.maxChunks));
+    }
+    return detail::generalCpuReject(
+        GeneralCpuAdmissionReason::ChunkLimit, counts,
+        detail::generalCpuEventForChunk(
+            plan, true, caps.maxChunks - counts.chunks),
+        static_cast<std::uint32_t>(caps.maxChunks - counts.chunks));
+  }
+
+  for (const auto& blob : plan.catalogue.blobs) {
+    if (!detail::generalCpuAddBlob(blob.size, caps.maxBlobBytes,
+                                   counts.blobBytes))
+      return detail::generalCpuReject(GeneralCpuAdmissionReason::BlobBytesLimit,
+                                      counts);
+  }
+
+  // Envelope counts are immutable plan metadata and are checked before any
+  // record view is imported. Bootstrap overlays are counted for capacity but
+  // remain separate from the general-provider command coverage counters.
+  for (std::size_t chunkIndex = 0u; chunkIndex < plan.bootstrapChunks.size();
+       ++chunkIndex) {
+    const auto& chunk = plan.bootstrapChunks[chunkIndex];
+    ImportedChunkView bootstrap;
+    if (!importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope, bootstrap))
+      return detail::generalCpuReject(GeneralCpuAdmissionReason::CommandChunkUnavailable,
+          counts, detail::generalCpuEventForChunk(plan, true, chunkIndex),
+          static_cast<std::uint32_t>(chunkIndex));
+    for (std::size_t record = 0u; record < bootstrap.records.size(); ++record) {
+      const auto type = bootstrap.records[record].type;
+      if (type != D9C_COMMAND_RECORD_APPLY_STATE &&
+          type != D9C_COMMAND_RECORD_SET_VS_CONST_F &&
+          type != D9C_COMMAND_RECORD_SET_PS_CONST_F)
+        return detail::generalCpuReject(GeneralCpuAdmissionReason::UnsupportedCommandRecord,
+            counts, detail::generalCpuEventForChunk(plan, true, chunkIndex),
+            static_cast<std::uint32_t>(chunkIndex), static_cast<std::uint32_t>(record));
+    }
+    if (chunk.envelope.recordCount > caps.maxRecordsPerChunk)
+      return detail::generalCpuReject(
+          GeneralCpuAdmissionReason::PerChunkRecordLimit, counts,
+          detail::generalCpuEventForChunk(plan, true, chunkIndex),
+          static_cast<std::uint32_t>(chunkIndex));
+    if (!detail::generalCpuAdd(chunk.envelope.recordCount, caps.maxRecords,
+                               counts.bootstrapRecords))
+      return detail::generalCpuReject(GeneralCpuAdmissionReason::RecordLimit,
+                                      counts,
+                                      detail::generalCpuEventForChunk(
+                                          plan, true, chunkIndex),
+                                      static_cast<std::uint32_t>(chunkIndex));
+  }
+  for (std::size_t chunkIndex = 0u; chunkIndex < plan.commandChunks.size();
+       ++chunkIndex) {
+    const auto& chunk = plan.commandChunks[chunkIndex];
+    if (chunk.envelope.recordCount > caps.maxRecordsPerChunk)
+      return detail::generalCpuReject(
+          GeneralCpuAdmissionReason::PerChunkRecordLimit, counts,
+          detail::generalCpuEventForChunk(plan, false, chunkIndex),
+          static_cast<std::uint32_t>(chunkIndex));
+    if (!detail::generalCpuAdd(chunk.envelope.recordCount, caps.maxRecords,
+                               counts.records))
+      return detail::generalCpuReject(GeneralCpuAdmissionReason::RecordLimit,
+                                      counts,
+                                      detail::generalCpuEventForChunk(
+                                          plan, false, chunkIndex),
+                                      static_cast<std::uint32_t>(chunkIndex));
+  }
+  if (counts.records > caps.maxRecords)
+    return detail::generalCpuReject(GeneralCpuAdmissionReason::RecordLimit,
+                                    counts);
+
+  if (plan.controls.size() != 0u || plan.controlBytes.size() != 0u)
+    return detail::generalCpuReject(
+        GeneralCpuAdmissionReason::OrderedControlUnsupported, counts);
+  for (const auto& gamma : plan.bootstrapGamma) {
+    bool identity = gamma.empty() || gamma.size() == kRenderTapeGammaRampBytes;
+    for (std::size_t offset = 0u; identity && offset < gamma.size(); offset += 2u) {
+      std::uint16_t value = 0u;
+      std::memcpy(&value, gamma.data() + offset, sizeof(value));
+      identity = value == static_cast<std::uint16_t>(((offset / 2u) % 256u) << 8u);
+    }
+    if (!identity)
+      return detail::generalCpuReject(GeneralCpuAdmissionReason::GammaUnsupported,
+                                      counts);
+  }
+
+  bool sawBootstrap = false;
+  bool sawPresentComplete = false;
+  std::size_t referencedDefinitions = 0u;
+  std::size_t referencedMutations = 0u;
+  std::size_t referencedBootstrapChunks = 0u;
+  std::size_t referencedCommandChunks = 0u;
+  std::size_t referencedDestroys = 0u;
+  std::uint32_t presentEventIndex = kGeneralCpuNoIndex;
+
+  for (std::size_t eventPosition = 0u; eventPosition < plan.events.size();
+       ++eventPosition) {
+    const auto& event = plan.events[eventPosition];
+    const auto eventIndex = event.eventIndex;
+    if (eventIndex != eventPosition ||
+        (eventPosition != 0u &&
+         eventIndex <= plan.events[eventPosition - 1u].eventIndex))
+      return detail::generalCpuReject(
+          GeneralCpuAdmissionReason::InvalidEventReference, counts, eventIndex);
+    if (sawPresentComplete && event.type == RenderTapeEventType::PresentComplete)
+      return detail::generalCpuReject(
+          GeneralCpuAdmissionReason::PresentCompleteCount, counts, eventIndex);
+    if (sawPresentComplete)
+      return detail::generalCpuReject(
+          GeneralCpuAdmissionReason::PresentCompleteNotFinal, counts,
+          eventIndex);
+
+    switch (event.type) {
+    case RenderTapeEventType::BootstrapState:
+      if (sawBootstrap)
+        return detail::generalCpuReject(
+            GeneralCpuAdmissionReason::DuplicateBootstrap, counts, eventIndex);
+      sawBootstrap = true;
+      if (event.index > plan.bootstrapChunks.size() ||
+          event.count > plan.bootstrapChunks.size() - event.index ||
+          event.index != 0u || event.count == 0u ||
+          event.aux >= plan.bootstrapGamma.size())
+        return detail::generalCpuReject(
+            GeneralCpuAdmissionReason::InvalidEventReference, counts, eventIndex);
+      referencedBootstrapChunks += event.count;
+      break;
+    case RenderTapeEventType::ObjectDefine:
+      if (event.index >= plan.definitions.size())
+        return detail::generalCpuReject(
+          GeneralCpuAdmissionReason::InvalidEventReference, counts, eventIndex);
+      if (plan.definitions[event.index].fixed.identity.kind >
+          D9C_CHUNK_HANDLE_KIND_VERTEX_DECL)
+        return detail::generalCpuReject(GeneralCpuAdmissionReason::UnsupportedObject,
+                                        counts, eventIndex);
+      for (std::size_t prior = 0u; prior < eventPosition; ++prior) {
+        if (plan.events[prior].type == event.type &&
+            plan.events[prior].index == event.index)
+          return detail::generalCpuReject(
+              GeneralCpuAdmissionReason::InvalidEventReference, counts, eventIndex);
+      }
+      ++referencedDefinitions;
+      break;
+    case RenderTapeEventType::ResourceMutation:
+      if (event.index >= plan.mutations.size())
+        return detail::generalCpuReject(
+            GeneralCpuAdmissionReason::InvalidEventReference, counts, eventIndex);
+      for (std::size_t prior = 0u; prior < eventPosition; ++prior) {
+        if (plan.events[prior].type == event.type &&
+            plan.events[prior].index == event.index)
+          return detail::generalCpuReject(
+              GeneralCpuAdmissionReason::InvalidEventReference, counts, eventIndex);
+      }
+      ++referencedMutations;
+      break;
+    case RenderTapeEventType::ObjectDestroy:
+      if (event.index >= plan.destroys.size())
+        return detail::generalCpuReject(
+            GeneralCpuAdmissionReason::InvalidEventReference, counts, eventIndex);
+      for (std::size_t prior = 0u; prior < eventPosition; ++prior) {
+        if (plan.events[prior].type == event.type &&
+            plan.events[prior].index == event.index)
+          return detail::generalCpuReject(
+              GeneralCpuAdmissionReason::InvalidEventReference, counts, eventIndex);
+      }
+      ++referencedDestroys;
+      break;
+    case RenderTapeEventType::CommandChunk: {
+      if (event.index >= plan.commandChunks.size())
+        return detail::generalCpuReject(
+            GeneralCpuAdmissionReason::CommandChunkUnavailable, counts, eventIndex);
+      for (std::size_t prior = 0u; prior < eventPosition; ++prior) {
+        if (plan.events[prior].type == event.type &&
+            plan.events[prior].index == event.index)
+          return detail::generalCpuReject(
+              GeneralCpuAdmissionReason::InvalidEventReference, counts, eventIndex);
+      }
+      ++referencedCommandChunks;
+      const auto& chunk = plan.commandChunks[event.index];
+      ImportedChunkView imported;
+      if (!importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope, imported))
+        return detail::generalCpuReject(
+            GeneralCpuAdmissionReason::CommandChunkUnavailable, counts,
+            eventIndex, event.index);
+      for (std::size_t recordIndex = 0u; recordIndex < imported.records.size();
+           ++recordIndex) {
+        if (counts.presents != 0u)
+          return detail::generalCpuReject(GeneralCpuAdmissionReason::PresentCount,
+              counts, eventIndex, event.index, static_cast<std::uint32_t>(recordIndex));
+        const auto record = imported.record(recordIndex);
+        if (!detail::generalCpuCommandRecordSupported(record.header.type))
+          return detail::generalCpuReject(
+              GeneralCpuAdmissionReason::UnsupportedCommandRecord, counts,
+              eventIndex, event.index, static_cast<std::uint32_t>(recordIndex));
+        if (record.header.type == D9C_COMMAND_RECORD_PRESENT) {
+          ++counts.presents;
+          if (counts.presents > 1u)
+            return detail::generalCpuReject(GeneralCpuAdmissionReason::PresentCount,
+                                            counts, eventIndex, event.index,
+                                            static_cast<std::uint32_t>(recordIndex));
+        }
+        if (record.header.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
+            record.header.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE)
+          ++counts.draws;
+      }
+      break;
+    }
+    case RenderTapeEventType::OrderedControl:
+      return detail::generalCpuReject(
+          GeneralCpuAdmissionReason::OrderedControlUnsupported, counts, eventIndex);
+    case RenderTapeEventType::PresentComplete:
+      if (sawPresentComplete || eventPosition + 1u != plan.events.size())
+        return detail::generalCpuReject(
+            GeneralCpuAdmissionReason::PresentCompleteNotFinal, counts, eventIndex);
+      sawPresentComplete = true;
+      ++counts.presentCompletions;
+      presentEventIndex = eventIndex;
+      break;
+    default:
+      return detail::generalCpuReject(GeneralCpuAdmissionReason::UnsupportedEvent,
+                                      counts, eventIndex);
+    }
+  }
+
+  counts.presentCompletions = sawPresentComplete ? 1u : 0u;
+  if (!sawBootstrap || referencedDefinitions != plan.definitions.size() ||
+      referencedMutations != plan.mutations.size() ||
+      referencedBootstrapChunks != plan.bootstrapChunks.size() ||
+      referencedCommandChunks != plan.commandChunks.size() ||
+      referencedDestroys != plan.destroys.size())
+    return detail::generalCpuReject(GeneralCpuAdmissionReason::InvalidEventReference,
+                                    counts);
+  if (!sawPresentComplete)
+    return detail::generalCpuReject(
+        GeneralCpuAdmissionReason::PresentCompleteCount, counts);
+  if (counts.presents != 1u)
+    return detail::generalCpuReject(GeneralCpuAdmissionReason::PresentCount, counts,
+                                    presentEventIndex);
+
+  bool outputFound = false;
+  if (plan.outputIdentity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE &&
+      plan.outputIdentity.generation != 0u && plan.outputIdentity.objectId != 0u &&
+      detail::generalCpuOutputSurfaceSupported(plan.outputDesc)) {
+    for (const auto& definition : plan.definitions) {
+      if (detail::generalCpuSameIdentity(definition.fixed.identity,
+                                         plan.outputIdentity) &&
+          definition.fixed.descriptorKind ==
+              static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface) &&
+          definition.fixed.descriptorBytes != 0u &&
+          definition.descriptor.size() == definition.fixed.descriptorBytes) {
+        outputFound = true;
+        break;
+      }
+    }
+  }
+  if (!outputFound)
+    return detail::generalCpuReject(
+        GeneralCpuAdmissionReason::OutputDescriptorMissing, counts);
+
+  return {.reason = GeneralCpuAdmissionReason::Accepted,
+          .eventIndex = kGeneralCpuNoIndex,
+          .chunkIndex = kGeneralCpuNoIndex,
+          .recordIndex = kGeneralCpuNoIndex,
+          .counts = counts};
+}
+
+}  // namespace dxmt9::d3d9::render_tape_runtime

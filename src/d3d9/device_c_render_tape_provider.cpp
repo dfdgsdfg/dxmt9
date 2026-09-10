@@ -4,21 +4,29 @@
 #include "device_c_common.hpp"
 #include "device_c_render_tape_capture.hpp"
 #include "device_c_render_tape_capture_layout.hpp"
+#include "device_c_render_tape_runtime_objects.hpp"
 #include "dxmt9/dxmt9_format_convert.hpp"
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_presenter.hpp"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <utility>
 
 namespace dxmt9::d3d9 {
 namespace {
+
+using render_tape_runtime::OwnedObject;
+using Definition = render_tape_runtime::Definition;
+using Chunk = render_tape_runtime::CommandChunkView;
+using GeneralPreflightPlan = render_tape_runtime::GeneralPreflightPlan;
 
 template <typename T>
 bool load(std::span<const std::byte> bytes, std::size_t offset, T& out) {
@@ -117,16 +125,6 @@ bool applyGammaRamp(D9CDevice* device,
   dxmt9c_device_set_gamma_ramp(device, gamma.data());
   return true;
 }
-
-struct Definition {
-  RenderTapeObjectDefineHeader fixed{};
-  std::span<const std::byte> descriptor{};
-};
-
-struct Chunk {
-  CommandChunkEnvelope envelope{};
-  std::span<const std::byte> bytes{};
-};
 
 struct IntervalPlan {
   std::vector<RenderTapeResourceMutationHeader> mutationsBefore{};
@@ -1184,24 +1182,6 @@ unsupported:
   return result;
 }
 
-struct GeneralPreflightPlan {
-  ImportedRenderTapeView tape{};
-  RenderTapeBlobCatalogue catalogue{};
-  // Value-owned definitions are retained by the plan so all resource
-  // mutation shape checks happen before the provider creates any Metal
-  // object.  Keeping the descriptor span in the imported tape is safe for
-  // the lifetime of the plan (the caller owns the tape bytes).
-  std::vector<Definition> definitions{};
-  std::vector<D9CWireObjectIdentity> bootstrapIdentities{};
-  D9CWireObjectIdentity outputIdentity{};
-  D9CSurfaceDesc outputDesc{};
-  RenderTapeDigestValidity expectedDigestValidity =
-      RenderTapeDigestValidity::NotCaptured;
-  RenderTapeDigest expectedDigest{};
-  std::uint64_t presentOrdinal = 0u;
-  std::uint64_t completionOrdinal = 0u;
-};
-
 bool generalMutationShapeValid(
     const RenderTapeResourceMutationHeader& mutation,
     const Definition& definition,
@@ -1358,6 +1338,23 @@ FrameTapeReplayResult buildGeneralPlan(
           });
         }
       }
+      const auto bootstrapIndex = static_cast<std::uint32_t>(
+          candidate.bootstrapChunks.size());
+      candidate.bootstrapChunks.insert(candidate.bootstrapChunks.end(),
+                                       chunks.begin(), chunks.end());
+      candidate.bootstrapGamma.emplace_back();
+      if (fixed.gammaRampBytes != 0u) {
+        const auto gamma = event.payload.subspan(
+            event.payload.size() - fixed.gammaRampBytes, fixed.gammaRampBytes);
+        candidate.bootstrapGamma.back().assign(gamma.begin(), gamma.end());
+      }
+      candidate.events.push_back(GeneralPreflightPlan::ReplayEvent{
+          .type = RenderTapeEventType::BootstrapState,
+          .eventIndex = index,
+          .index = bootstrapIndex,
+          .count = static_cast<std::uint32_t>(chunks.size()),
+          .aux = static_cast<std::uint32_t>(candidate.bootstrapGamma.size() - 1u),
+      });
       result.coverage.bootstrapChunks += fixed.overlayCount;
       break;
     }
@@ -1460,6 +1457,11 @@ FrameTapeReplayResult buildGeneralPlan(
           .fixed = fixed,
           .descriptor = descriptor,
       });
+      candidate.events.push_back(GeneralPreflightPlan::ReplayEvent{
+          .type = RenderTapeEventType::ObjectDefine,
+          .eventIndex = index,
+          .index = static_cast<std::uint32_t>(candidate.definitions.size() - 1u),
+      });
       ++result.coverage.objectDefinitions;
       break;
     }
@@ -1468,6 +1470,12 @@ FrameTapeReplayResult buildGeneralPlan(
       if (!load(event.payload, 0u, fixed)) {
         goto unsupported;
       }
+      candidate.destroys.push_back(fixed);
+      candidate.events.push_back(GeneralPreflightPlan::ReplayEvent{
+          .type = RenderTapeEventType::ObjectDestroy,
+          .eventIndex = index,
+          .index = static_cast<std::uint32_t>(candidate.destroys.size() - 1u),
+      });
       ++result.coverage.objectDestroys;
       break;
     }
@@ -1486,6 +1494,12 @@ FrameTapeReplayResult buildGeneralPlan(
         goto unsupported;
       }
       referenceBlob(fixed.digest);
+      candidate.mutations.push_back(fixed);
+      candidate.events.push_back(GeneralPreflightPlan::ReplayEvent{
+          .type = RenderTapeEventType::ResourceMutation,
+          .eventIndex = index,
+          .index = static_cast<std::uint32_t>(candidate.mutations.size() - 1u),
+      });
       ++result.coverage.seedMutations;
       break;
     }
@@ -1555,6 +1569,16 @@ FrameTapeReplayResult buildGeneralPlan(
           break;
         }
       }
+      candidate.commandChunks.push_back(Chunk{
+          .envelope = CommandChunkEnvelope{fixed.wireVersion, fixed.recordCount,
+                                            fixed.handleCount},
+          .bytes = event.payload.subspan(sizeof(fixed)),
+      });
+      candidate.events.push_back(GeneralPreflightPlan::ReplayEvent{
+          .type = RenderTapeEventType::CommandChunk,
+          .eventIndex = index,
+          .index = static_cast<std::uint32_t>(candidate.commandChunks.size() - 1u),
+      });
       ++result.coverage.commandChunks;
       break;
     }
@@ -1567,6 +1591,15 @@ FrameTapeReplayResult buildGeneralPlan(
           event.payload.size() != sizeof(fixed) + kRenderTapeGammaRampBytes) {
         goto unsupported;
       }
+      candidate.controls.push_back(fixed);
+      candidate.controlBytes.emplace_back(
+          event.payload.subspan(sizeof(fixed)).begin(),
+          event.payload.subspan(sizeof(fixed)).end());
+      candidate.events.push_back(GeneralPreflightPlan::ReplayEvent{
+          .type = RenderTapeEventType::OrderedControl,
+          .eventIndex = index,
+          .index = static_cast<std::uint32_t>(candidate.controls.size() - 1u),
+      });
       break;
     }
     case RenderTapeEventType::PresentComplete: {
@@ -1589,6 +1622,10 @@ FrameTapeReplayResult buildGeneralPlan(
       candidate.completionOrdinal = fixed.completionOrdinal;
       sawPresentComplete = true;
       ++result.coverage.presentOutputs;
+      candidate.events.push_back(GeneralPreflightPlan::ReplayEvent{
+          .type = RenderTapeEventType::PresentComplete,
+          .eventIndex = index,
+      });
       break;
     }
     }
@@ -1692,12 +1729,19 @@ unsupported:
   return result;
 }
 
-struct OwnedObject {
-  D9CWireObjectIdentity identity{};
-  void* value = nullptr;
-};
+} // namespace
 
-void releaseObject(OwnedObject& object) {
+namespace render_tape_runtime {
+
+FrameTapeReplayResult buildGeneralReplayPlan(
+    std::span<const std::byte> tape,
+    std::span<const RenderTapeProviderBlob> blobs,
+    GeneralPreflightPlan* plan) {
+  return buildGeneralPlan(tape, blobs, plan);
+}
+
+void releaseOwnedObject(OwnedObject& object) noexcept {
+  if (!object.value) return;
   switch (object.identity.kind) {
   case D9C_CHUNK_HANDLE_KIND_TEXTURE:
     dxmt9c_texture_release(static_cast<D9CTexture*>(object.value)); break;
@@ -1716,28 +1760,44 @@ void releaseObject(OwnedObject& object) {
   object.value = nullptr;
 }
 
-void* findObject(std::vector<OwnedObject>& objects,
-                 const D9CWireObjectIdentity& identity) {
+void* findExactObject(std::span<const OwnedObject> objects,
+                      const D9CWireObjectIdentity& identity) noexcept {
   const auto it = std::find_if(objects.begin(), objects.end(), [&](const auto& object) {
-    return sameIdentity(object.identity, identity);
+    return object.value && sameIdentity(object.identity, identity);
   });
   return it == objects.end() ? nullptr : it->value;
 }
 
-bool resolveChunk(const Chunk& chunk, std::vector<OwnedObject>& objects,
-                  std::vector<void*>& resolved) {
+bool resolveCommandHandles(const CommandChunkView& chunk,
+                           std::span<const OwnedObject> objects,
+                           std::span<void*> resolved,
+                           std::size_t& resolvedCount) noexcept {
+  resolvedCount = 0u;
   ImportedChunkView imported;
   if (!importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope, imported)) return false;
-  resolved.clear();
+  if (imported.handles.size() > resolved.size()) return false;
+  // Validate the complete identity set before publishing any pointer into
+  // caller scratch. A failed lookup is therefore transactional: count stays
+  // zero and the output span remains untouched.
   for (const auto& handle : imported.handles) {
-    void* object = findObject(objects, D9CWireObjectIdentity{
+    void* object = findExactObject(objects, D9CWireObjectIdentity{
         .kind = handle.kind, .generation = handle.generation,
         .objectId = handle.objectId});
     if (!object) return false;
-    resolved.push_back(object);
   }
+  for (std::size_t index = 0u; index < imported.handles.size(); ++index) {
+    const auto& handle = imported.handles[index];
+    resolved[index] = findExactObject(objects, D9CWireObjectIdentity{
+        .kind = handle.kind, .generation = handle.generation,
+        .objectId = handle.objectId});
+  }
+  resolvedCount = imported.handles.size();
   return true;
 }
+
+} // namespace render_tape_runtime
+
+namespace {
 
 bool writeBlockRows(std::span<const std::byte> bytes, void* bits,
                     const RenderTapeBlockLockLayout& layout) {
@@ -1798,23 +1858,28 @@ bool readbackTightSurface(D9CDevice* device, D9CSurface* surface,
   return renderTapeCanonicalizeOpaqueAlpha(format, out);
 }
 
-void* createGeneralObject(
+} // namespace
+
+namespace render_tape_runtime {
+
+void* createRenderTapeObject(
     D9CDevice* device, const RenderTapeObjectDefineHeader& fixed,
     std::span<const std::byte> descriptor,
     std::span<const RenderTapeProviderBlob> blobs,
-    std::vector<OwnedObject>& objects) {
+    std::span<const OwnedObject> objects) {
   if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
     RenderTapeSurfaceDescriptorV2 surface{};
     if (!renderTapeLoadSurfaceDescriptorV2(descriptor, surface)) return nullptr;
     const auto storage = static_cast<RenderTapeSurfaceStorage>(surface.storage);
     if (storage == RenderTapeSurfaceStorage::TextureSubresource) {
       auto* parent = static_cast<D9CTexture*>(
-          findObject(objects, surface.parentTexture));
-      return parent
+          findExactObject(objects, surface.parentTexture));
+      return parent && device
           ? static_cast<void*>(dxmt9c_texture_get_surface_level(
                 parent, surface.subresource))
           : nullptr;
     }
+    if (!device) return nullptr;
     if (storage == RenderTapeSurfaceStorage::SwapchainBackbuffer) {
       auto* swap = device->iface->GetSwapChain(0u);
       if (!swap) return nullptr;
@@ -1837,6 +1902,7 @@ void* createGeneralObject(
     }
     return nullptr;
   }
+  if (!device) return nullptr;
   if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
     D9CBufferDesc desc{};
     if (!load(descriptor, 0u, desc)) return nullptr;
@@ -1890,6 +1956,32 @@ void* createGeneralObject(
   return nullptr;
 }
 
+} // namespace render_tape_runtime
+
+namespace {
+
+struct TexturePrestageEntry {
+  Definition definition{};
+  std::vector<RenderTapeDigest> seedDigests{};
+  std::vector<bool> consumed{};
+  std::size_t hiddenIndex = std::numeric_limits<std::size_t>::max();
+  bool active = false;
+};
+
+bool resolveChunk(const Chunk& chunk,
+                  std::span<const render_tape_runtime::OwnedObject> objects,
+                  std::vector<void*>& resolved) {
+  ImportedChunkView imported;
+  if (!importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope, imported)) return false;
+  resolved.resize(imported.handles.size());
+  std::size_t resolvedCount = 0u;
+  return render_tape_runtime::resolveCommandHandles(
+             render_tape_runtime::CommandChunkView{
+                 .envelope = chunk.envelope, .bytes = chunk.bytes},
+             objects, resolved, resolvedCount) &&
+         resolvedCount == imported.handles.size();
+}
+
 bool writeGeneralLockedSurface(const D9CSurfaceDesc& desc,
                                const D9CLockedRect& locked,
                                std::span<const std::byte> bytes) {
@@ -1910,8 +2002,12 @@ bool applyGeneralMutation(
     std::span<const RenderTapeProviderBlob> blobs,
     const std::vector<Definition>& definitions,
     std::vector<OwnedObject>& objects) {
+  // This is deliberately general-provider-only. It performs GPU-visible
+  // lock/unlock work (and may require a queue flush); CPU completion consumers
+  // must establish their own bounded host-visible transfer path instead of
+  // calling this mutation helper.
   const auto* blob = findBlob(blobs, mutation.digest);
-  void* object = findObject(objects, mutation.identity);
+  void* object = render_tape_runtime::findExactObject(objects, mutation.identity);
   if (!blob || !object || blob->bytes.size() != mutation.byteSize) return false;
   const auto definition = std::find_if(
       definitions.begin(), definitions.end(), [&](const auto& value) {
@@ -2081,7 +2177,7 @@ void restoreSeededColorAttachmentTouches(
         });
     if (!hasSeed) continue;
     auto* wrapped = static_cast<D9CSurface*>(
-        findObject(objects, definition.fixed.identity));
+        render_tape_runtime::findExactObject(objects, definition.fixed.identity));
     if (wrapped && wrapped->obj) {
       upper->queue().markColorHandleTouched(wrapped->obj->handle());
     }
@@ -2098,10 +2194,218 @@ bool chunkContainsPresent(const Chunk& chunk) {
                      });
 }
 
+// Phase timing is deliberately private to prepared replay.  A null timing
+// sink keeps the historical entry points free of clock reads on their hot
+// path while still allowing the cold harness to account for service phases.
+struct PreparedPhaseTiming {
+  std::uint64_t resourceSetupNanos = 0u;
+  std::uint64_t chunkReplayNanos = 0u;
+  std::uint64_t readbackDrainNanos = 0u;
+  std::uint64_t cleanupNanos = 0u;
+};
+
+class PreparedPhaseScope {
+ public:
+  using Field = std::uint64_t PreparedPhaseTiming::*;
+
+  PreparedPhaseScope(PreparedPhaseTiming* timing, Field field) noexcept
+      : timing_(timing), field_(field),
+        begin_(timing ? std::chrono::steady_clock::now()
+                      : std::chrono::steady_clock::time_point{}) {}
+
+  ~PreparedPhaseScope() noexcept {
+    if (!timing_) return;
+    const auto end = std::chrono::steady_clock::now();
+    timing_->*field_ += static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(end - begin_)
+            .count());
+  }
+
+  PreparedPhaseScope(const PreparedPhaseScope&) = delete;
+  PreparedPhaseScope& operator=(const PreparedPhaseScope&) = delete;
+
+ private:
+  PreparedPhaseTiming* timing_;
+  Field field_;
+  std::chrono::steady_clock::time_point begin_;
+};
+
+std::uint64_t elapsedNanos(std::chrono::steady_clock::time_point begin,
+                           std::chrono::steady_clock::time_point end) noexcept;
+
+void auditInitialSeedMutations(
+    D9CDevice* device, std::span<const Definition> definitions,
+    std::span<const RenderTapeResourceMutationHeader> mutations,
+    std::vector<OwnedObject>& objects,
+    std::span<const RenderTapeProviderBlob> blobs,
+    RenderTapeInitialSeedAuditEvidence& evidence) noexcept {
+  const auto started = std::chrono::steady_clock::now();
+  evidence.attempted = true;
+  try {
+    auto upper = device ? device->dev().upperDevice() : nullptr;
+    bool ready = device && upper &&
+        drainDeferredReplay(device, "render-tape-initial-seed-audit");
+    if (ready) {
+      // DEFAULT render-target uploads are deferred in Initializer, not in the
+      // ordinary submission queue. A queue flush alone leaves those seeds
+      // pending until encodeChunk's preamble, after this diagnostic readback.
+      const auto uploaded = upper->queue().flushInitializerUploads();
+      ready = uploaded.value == 0u ||
+          (uploaded.event &&
+           WMT::SharedEvent{uploaded.event.handle}.waitUntilSignaledValue(
+               uploaded.value, /*timeout-ns*/ 1'000'000'000u));
+    }
+    if (!ready) {
+      for (const auto& mutation : mutations) {
+        evidence.entries.push_back({
+            .kind = RenderTapeInitialSeedAuditKind::Color,
+            .identity = mutation.identity,
+            .subresource = mutation.subresource,
+            .expectedDigest = mutation.digest,
+            .failure = RenderTapeInitialSeedAuditFailure::CaptureFailed,
+        });
+        ++evidence.captureFailedCount;
+      }
+      evidence.count = static_cast<std::uint32_t>(evidence.entries.size());
+      evidence.complete = false;
+      evidence.wallNanos = elapsedNanos(started, std::chrono::steady_clock::now());
+      return;
+    }
+    // Deliberately perturbative: both deferred initialization and ordinary
+    // submissions must precede resource readback.
+    upper->flush();
+    for (const auto& mutation : mutations) {
+      RenderTapeInitialSeedAuditEntry entry{
+          .kind = RenderTapeInitialSeedAuditKind::Color,
+          .identity = mutation.identity,
+          .subresource = mutation.subresource,
+          .expectedDigest = mutation.digest,
+      };
+      const auto definition = std::find_if(
+          definitions.begin(), definitions.end(), [&](const auto& value) {
+            return sameIdentity(value.fixed.identity, mutation.identity);
+          });
+      const auto* blob = findBlob(blobs, mutation.digest);
+      void* object = render_tape_runtime::findExactObject(objects, mutation.identity);
+      if (!blob) {
+        entry.failure = RenderTapeInitialSeedAuditFailure::BlobUnavailable;
+        ++evidence.captureFailedCount;
+        evidence.entries.push_back(std::move(entry));
+        continue;
+      }
+      if (definition == definitions.end() || !object) {
+        entry.failure = RenderTapeInitialSeedAuditFailure::ObjectUnavailable;
+        ++evidence.captureFailedCount;
+        evidence.entries.push_back(std::move(entry));
+        continue;
+      }
+
+      RenderTapeSurfaceDescriptorV2 surface{};
+      RenderTapeTextureDescriptorV2 texture{};
+      D9CSurfaceDesc surfaceDesc{};
+      std::vector<std::byte> actual;
+      bool captured = false;
+      if (mutation.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
+        entry.kind = RenderTapeInitialSeedAuditKind::Color;
+        const bool supported =
+            renderTapeArmColorSnapshotTextureSupported(definition->descriptor) &&
+            renderTapeTextureSubresourceDescriptor(
+                definition->descriptor, mutation.subresource, surfaceDesc) &&
+            renderTapeLoadTextureDescriptorV2(definition->descriptor, texture) &&
+            mutation.byteOffset == 0u &&
+            static_cast<RenderTapeInitialContentDisposition>(
+                texture.initialContentDisposition) ==
+                RenderTapeInitialContentDisposition::CompleteSeed;
+        entry.supported = supported;
+        if (supported) {
+          auto* level = dxmt9c_texture_get_surface_level(
+              static_cast<D9CTexture*>(object), mutation.subresource);
+          if (level) {
+            captured = readbackTightSurface(
+                device, level, surfaceDesc.width, surfaceDesc.height,
+                surfaceDesc.format, actual);
+            dxmt9c_surface_release(level);
+          }
+        }
+      } else if (mutation.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE &&
+                 renderTapeLoadSurfaceDescriptorV2(definition->descriptor,
+                                                   surface)) {
+        surfaceDesc = surface.surface;
+        const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
+            surface.initialContentDisposition);
+        if (disposition == RenderTapeInitialContentDisposition::CompleteDepthFloat32V1) {
+          entry.kind = RenderTapeInitialSeedAuditKind::Depth;
+          entry.supported = renderTapeSnapshotStandaloneD24X8Supported(
+              surface.surface);
+          if (entry.supported && upper) {
+            core::CanonicalD24X8Depth capturedDepth;
+            captured = upper->captureCanonicalD24X8Depth(
+                static_cast<D9CSurface*>(object)->obj->handle(), capturedDepth);
+            if (captured) actual.assign(
+                reinterpret_cast<const std::byte*>(capturedDepth.bytes.data()),
+                reinterpret_cast<const std::byte*>(capturedDepth.bytes.data()) +
+                    capturedDepth.bytes.size());
+          }
+        } else if (disposition == RenderTapeInitialContentDisposition::CompleteSeed) {
+          entry.kind = RenderTapeInitialSeedAuditKind::Color;
+          entry.supported =
+              (surface.storage == static_cast<std::uint32_t>(
+                                      RenderTapeSurfaceStorage::SwapchainBackbuffer)
+                   ? renderTapeArmColorSnapshotSwapchainSurfaceSupported(
+                         surface.surface)
+                   : renderTapeArmColorSnapshotStandaloneSurfaceSupported(
+                         surface.surface));
+          if (entry.supported) {
+            captured = readbackTightSurface(
+                device, static_cast<D9CSurface*>(object), surfaceDesc.width,
+                surfaceDesc.height, surfaceDesc.format, actual);
+          }
+        }
+      }
+      if (!entry.supported) {
+        entry.failure = RenderTapeInitialSeedAuditFailure::Unsupported;
+        ++evidence.unsupportedCount;
+      } else if (!captured) {
+        entry.failure = RenderTapeInitialSeedAuditFailure::CaptureFailed;
+        ++evidence.supportedCount;
+        ++evidence.captureFailedCount;
+      } else {
+        ++evidence.supportedCount;
+        entry.bytes = actual.size();
+        entry.actualDigest = RenderTapeCaptureSession::sha256(actual);
+        entry.match = entry.bytes == blob->bytes.size() &&
+                      sameDigest(entry.actualDigest, entry.expectedDigest);
+        entry.failure = entry.match ? RenderTapeInitialSeedAuditFailure::None
+                                    : RenderTapeInitialSeedAuditFailure::DigestMismatch;
+        if (entry.match) {
+          ++evidence.matched;
+        } else {
+          ++evidence.mismatchedCount;
+        }
+      }
+      evidence.entries.push_back(std::move(entry));
+    }
+    evidence.count = static_cast<std::uint32_t>(evidence.entries.size());
+    // `complete` means every requested entry was inspected. It is diagnostic
+    // coverage only; callers must still use `matched` and the normal output
+    // oracle for qualification.
+    evidence.complete = true;
+  } catch (...) {
+    evidence.complete = false;
+  }
+  evidence.count = static_cast<std::uint32_t>(evidence.entries.size());
+  evidence.wallNanos = elapsedNanos(started, std::chrono::steady_clock::now());
+}
+
 FrameTapeReplayResult replayGeneralPlan(
-    D9CDevice* device, GeneralPreflightPlan plan,
+    D9CDevice* device, const GeneralPreflightPlan& plan,
     FrameTapeReplayResult result,
-    std::span<const RenderTapeProviderBlob> blobs) {
+    std::span<const RenderTapeProviderBlob> blobs,
+    ProviderReplayPolicy policy = ProviderReplayPolicy::Historical,
+    PreparedPhaseTiming* timing = nullptr,
+    RenderTapeInitialSeedAuditEvidence* initialSeedAudit = nullptr,
+    RenderTapeFreshSeedDrainEvidence* freshSeedDrainAudit = nullptr,
+    RenderTapeTexturePrestageEvidence* texturePrestageAudit = nullptr) {
   if (!device) {
     result.status = FrameTapeReplayStatus::ObjectCreationFailed;
     return result;
@@ -2115,7 +2419,133 @@ FrameTapeReplayResult replayGeneralPlan(
   bool bootstrapReplayed = false;
   bool outputInstalled = false;
   bool sawSubmittedCommandWork = false;
+  std::uint64_t commandEpoch = 0u;
+  std::vector<std::uint64_t> definitionEpochs;
+  std::vector<RenderTapeResourceMutationHeader> initialSeedMutations;
+  bool initialSeedAuditDone = false;
   std::vector<SeededSubresource> seededSubresources;
+  if (freshSeedDrainAudit) {
+    definitionEpochs.reserve(plan.definitions.size());
+    freshSeedDrainAudit->attempted = true;
+    freshSeedDrainAudit->mutationCount = static_cast<std::uint32_t>(
+        plan.mutations.size());
+    freshSeedDrainAudit->complete = plan.mutations.empty();
+  }
+  std::vector<TexturePrestageEntry> prestaged;
+  std::vector<Definition> prestageDefinitions;
+  std::vector<OwnedObject> hiddenObjects;
+  if (texturePrestageAudit) {
+    texturePrestageAudit->attempted = true;
+    try {
+      objects.reserve(plan.definitions.size());
+      definitions.reserve(plan.definitions.size());
+      prestaged.reserve(plan.definitions.size());
+      prestageDefinitions.reserve(plan.definitions.size());
+      hiddenObjects.reserve(plan.definitions.size());
+      std::vector<std::uint32_t> commandPositions;
+      for (std::size_t position = 0u; position < plan.events.size(); ++position) {
+        if (plan.events[position].type == RenderTapeEventType::CommandChunk)
+          commandPositions.push_back(static_cast<std::uint32_t>(position));
+      }
+      for (std::size_t definitionIndex = 0u;
+           definitionIndex < plan.definitions.size(); ++definitionIndex) {
+        const auto& definition = plan.definitions[definitionIndex];
+        if (definition.fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE)
+          continue;
+        bool hasSurfaceAlias = false;
+        bool hasSlotGenerationConflict = false;
+        for (const auto& other : plan.definitions) {
+          if (other.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
+            RenderTapeSurfaceDescriptorV2 surface{};
+            if (renderTapeLoadSurfaceDescriptorV2(other.descriptor, surface) &&
+                surface.storage == static_cast<std::uint32_t>(
+                    RenderTapeSurfaceStorage::TextureSubresource) &&
+                sameIdentity(surface.parentTexture,
+                             definition.fixed.identity)) {
+              hasSurfaceAlias = true;
+            }
+          }
+          if (other.fixed.identity.kind == definition.fixed.identity.kind &&
+              other.fixed.identity.objectId ==
+                  definition.fixed.identity.objectId &&
+              other.fixed.identity.generation !=
+                  definition.fixed.identity.generation) {
+            hasSlotGenerationConflict = true;
+          }
+        }
+        const auto definitionEvent = std::find_if(
+            plan.events.begin(), plan.events.end(), [&](const auto& event) {
+              return event.type == RenderTapeEventType::ObjectDefine &&
+                     event.index == definitionIndex;
+            });
+        if (definitionEvent == plan.events.end()) continue;
+        std::vector<std::uint32_t> seedPositions;
+        for (std::size_t eventPosition = 0u;
+             eventPosition < plan.events.size(); ++eventPosition) {
+          const auto& event = plan.events[eventPosition];
+          if (event.type == RenderTapeEventType::ResourceMutation &&
+              event.index < plan.mutations.size() &&
+              sameIdentity(plan.mutations[event.index].identity,
+                           definition.fixed.identity)) {
+            seedPositions.push_back(static_cast<std::uint32_t>(eventPosition));
+          }
+        }
+        const auto definitionPosition = static_cast<std::uint32_t>(
+            definitionEvent - plan.events.begin());
+        const bool orderAllowed = renderTapeTexturePrestageOrderAllowed(
+            definitionPosition, seedPositions, commandPositions);
+        if (!renderTapeTexturePrestageCandidate(
+                definition.fixed, definition.descriptor, plan.mutations,
+                hasSurfaceAlias, hasSlotGenerationConflict, !orderAllowed)) {
+          continue;
+        }
+        RenderTapeTextureDescriptorV2 texture{};
+        if (!renderTapeLoadTextureDescriptorV2(definition.descriptor,
+                                               texture)) continue;
+        TexturePrestageEntry entry;
+        entry.definition = definition;
+        entry.seedDigests.resize(texture.subresourceCount);
+        entry.consumed.resize(texture.subresourceCount, false);
+        bool completeSeeds = true;
+        for (const auto& mutation : plan.mutations) {
+          if (!sameIdentity(mutation.identity, definition.fixed.identity))
+            continue;
+          const auto* blob = findBlob(blobs, mutation.digest);
+          if (mutation.subresource >= entry.seedDigests.size() || !blob ||
+              blob->bytes.size() != mutation.byteSize) {
+            completeSeeds = false;
+            break;
+          }
+          entry.seedDigests[mutation.subresource] = mutation.digest;
+        }
+        if (!completeSeeds) continue;
+        prestageDefinitions.push_back(entry.definition);
+        prestaged.push_back(std::move(entry));
+        ++texturePrestageAudit->candidateObjects;
+        texturePrestageAudit->candidateSubresources += texture.subresourceCount;
+        for (const auto& digest : prestaged.back().seedDigests) {
+          const auto* blob = findBlob(blobs, digest);
+          if (!blob) {
+            texturePrestageAudit->candidateObjects--;
+            texturePrestageAudit->candidateSubresources -=
+                texture.subresourceCount;
+            prestaged.pop_back();
+            prestageDefinitions.pop_back();
+            completeSeeds = false;
+            break;
+          }
+          texturePrestageAudit->candidateBytes += blob->bytes.size();
+        }
+        if (!completeSeeds) continue;
+      }
+    } catch (...) {
+      texturePrestageAudit->complete = false;
+      result.status = FrameTapeReplayStatus::ObjectCreationFailed;
+      return result;
+    }
+    texturePrestageAudit->complete =
+        texturePrestageAudit->candidateSubresources == 0u;
+  }
   auto replayUpper = device->dev().upperDevice();
   const bool priorExactAttachmentPreservation =
       replayUpper &&
@@ -2123,7 +2553,35 @@ FrameTapeReplayResult replayGeneralPlan(
   if (replayUpper) {
     replayUpper->queue().setRenderTapeExactAttachmentPreservation(true);
   }
+  const auto findPrestage = [&](const D9CWireObjectIdentity& identity)
+      -> TexturePrestageEntry* {
+    const auto it = std::find_if(
+        prestaged.begin(), prestaged.end(), [&](const auto& entry) {
+          return sameIdentity(entry.definition.fixed.identity, identity);
+        });
+    return it == prestaged.end() ? nullptr : &*it;
+  };
   const auto cleanup = [&] {
+    PreparedPhaseScope phase(timing, &PreparedPhaseTiming::cleanupNanos);
+    if (texturePrestageAudit) {
+      texturePrestageAudit->stagedObjectsRemaining = 0u;
+      texturePrestageAudit->stagedSubresourcesRemaining = 0u;
+      texturePrestageAudit->stagedBytesRemaining = 0u;
+      for (const auto& entry : prestaged) {
+        if (entry.hiddenIndex < hiddenObjects.size() &&
+            hiddenObjects[entry.hiddenIndex].value) {
+          ++texturePrestageAudit->stagedObjectsRemaining;
+        }
+        for (std::size_t subresource = 0u;
+             subresource < entry.seedDigests.size(); ++subresource) {
+          if (entry.consumed[subresource]) continue;
+          ++texturePrestageAudit->stagedSubresourcesRemaining;
+          const auto& digest = entry.seedDigests[subresource];
+          if (const auto* blob = findBlob(blobs, digest))
+            texturePrestageAudit->stagedBytesRemaining += blob->bytes.size();
+        }
+      }
+    }
     if (auto upper = device->dev().upperDevice()) upper->flush();
     if (replayUpper) {
       replayUpper->queue().setRenderTapeExactAttachmentPreservation(
@@ -2142,8 +2600,32 @@ FrameTapeReplayResult replayGeneralPlan(
     }
     for (auto& object : objects) {
       if (!object.value) continue;
-      releaseObject(object);
+      if (texturePrestageAudit) {
+        ++texturePrestageAudit->activeObjectsReleased;
+        if (auto* entry = findPrestage(object.identity)) {
+          entry->active = false;
+        }
+      }
+      render_tape_runtime::releaseOwnedObject(object);
       ++result.conservation.objectsReleased;
+    }
+    for (auto& object : hiddenObjects) {
+      if (!object.value) continue;
+      render_tape_runtime::releaseOwnedObject(object);
+      if (texturePrestageAudit) {
+        ++texturePrestageAudit->hiddenObjectsReleased;
+      }
+    }
+    if (texturePrestageAudit) {
+      texturePrestageAudit->physicalObjectsCreated =
+          texturePrestageAudit->hiddenObjectsCreated +
+          texturePrestageAudit->activeObjectsCreated;
+      texturePrestageAudit->physicalObjectsReleased =
+          texturePrestageAudit->hiddenObjectsReleased +
+          texturePrestageAudit->activeObjectsReleased;
+      texturePrestageAudit->physicalConservation =
+          texturePrestageAudit->physicalObjectsCreated ==
+          texturePrestageAudit->physicalObjectsReleased;
     }
   };
   const auto fail = [&](FrameTapeReplayStatus status,
@@ -2157,6 +2639,8 @@ FrameTapeReplayResult replayGeneralPlan(
     if (outputInstalled) return true;
     auto upper = device->dev().upperDevice();
     if (!upper || !upper->pool()) return true;
+    PreparedPhaseScope phase(timing,
+                             &PreparedPhaseTiming::resourceSetupNanos);
     readbackTarget = dxmt9c_device_create_render_target(
         device, plan.outputDesc.width, plan.outputDesc.height,
         plan.outputDesc.format, 0u, 0u, 0u, nullptr);
@@ -2176,6 +2660,7 @@ FrameTapeReplayResult replayGeneralPlan(
     return outputInstalled;
   };
   const auto replayChunk = [&](const Chunk& chunk) {
+    PreparedPhaseScope phase(timing, &PreparedPhaseTiming::chunkReplayNanos);
     ImportedChunkView imported;
     if (!importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope, imported) ||
         !resolveChunk(chunk, objects, resolved)) {
@@ -2210,198 +2695,421 @@ FrameTapeReplayResult replayGeneralPlan(
       }
     }
     return replayPrevalidatedResolvedCommandChunk(
-               device, chunk.bytes, chunk.envelope, resolved) == core::D3D_OK;
+               device, chunk.bytes, chunk.envelope, resolved, policy) ==
+           core::D3D_OK;
   };
 
-  for (std::uint32_t eventIndex = 0u;
-       eventIndex < plan.tape.events.size(); ++eventIndex) {
-    const auto event = plan.tape.event(eventIndex);
-    switch (static_cast<RenderTapeEventType>(event.header.type)) {
-    case RenderTapeEventType::BootstrapState: {
-      RenderTapeBootstrapHeader fixed{};
-      if (!load(event.payload, 0u, fixed) ||
-          !parseChunks(event.payload.subspan(sizeof(fixed)), fixed.overlayCount,
-                       bootstrap, fixed.gammaRampBytes)) {
-        return fail(FrameTapeReplayStatus::BootstrapFailed, eventIndex);
-      }
-      if (fixed.gammaRampBytes != 0u) {
-        const auto gamma = event.payload.subspan(
-            event.payload.size() - fixed.gammaRampBytes, fixed.gammaRampBytes);
-        if (!applyGammaRamp(device, gamma))
-          return fail(FrameTapeReplayStatus::BootstrapFailed, eventIndex);
-      }
-      break;
-    }
-    case RenderTapeEventType::ObjectDefine: {
-      RenderTapeObjectDefineHeader fixed{};
-      if (!load(event.payload, 0u, fixed))
-        return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
-      const auto descriptor = event.payload.subspan(sizeof(fixed));
-      void* value = createGeneralObject(device, fixed, descriptor, blobs, objects);
-      if (!value)
-        return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
-      definitions.push_back({.fixed = fixed, .descriptor = descriptor});
-      objects.push_back({.identity = fixed.identity, .value = value});
-      ++result.conservation.objectsCreated;
-      break;
-    }
-    case RenderTapeEventType::ObjectDestroy: {
-      RenderTapeObjectDestroyHeader fixed{};
-      if (!bootstrapReplayed) {
-        // Bootstrap is a real state application, not metadata. Materialize it
-        // before retiring any identity it may reference, even when the first
-        // command chunk has not arrived yet.
-        for (const auto& overlay : bootstrap) {
-          if (!replayChunk(overlay))
-            return fail(FrameTapeReplayStatus::BootstrapFailed, eventIndex);
+  if (texturePrestageAudit && !prestaged.empty()) {
+    PreparedPhaseScope phase(timing, &PreparedPhaseTiming::resourceSetupNanos);
+    try {
+      for (auto& entry : prestaged) {
+        void* value = render_tape_runtime::createRenderTapeObject(
+            device, entry.definition.fixed, entry.definition.descriptor, blobs,
+            hiddenObjects);
+        if (!value) {
+          result.status = FrameTapeReplayStatus::ObjectCreationFailed;
+          cleanup();
+          return result;
         }
-        bootstrapReplayed = true;
-      }
-      if (renderTapeProviderEventRequiresDrain(
-              sawSubmittedCommandWork, RenderTapeEventType::ObjectDestroy)) {
-        if (auto upper = device->dev().upperDevice()) upper->flush();
-      }
-      if (!load(event.payload, 0u, fixed))
-        return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
-      const auto object = std::find_if(
-          objects.begin(), objects.end(), [&](const auto& value) {
-            return value.value && sameIdentity(value.identity, fixed.identity);
-          });
-      if (object == objects.end())
-        return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
-      releaseObject(*object);
-      ++result.conservation.objectsReleased;
-      break;
-    }
-    case RenderTapeEventType::ResourceMutation: {
-      RenderTapeResourceMutationHeader fixed{};
-      if (renderTapeProviderEventRequiresDrain(
-              sawSubmittedCommandWork, RenderTapeEventType::ResourceMutation)) {
-        if (auto upper = device->dev().upperDevice()) upper->flush();
-      }
-      if (!load(event.payload, 0u, fixed) ||
-          !applyGeneralMutation(device, fixed, blobs, definitions, objects)) {
-        return fail(FrameTapeReplayStatus::MutationFailed, eventIndex);
-      }
-      seededSubresources.push_back(
-          {.identity = fixed.identity, .subresource = fixed.subresource});
-      restoreSeededColorAttachmentTouches(
-          device, definitions, objects, seededSubresources);
-      break;
-    }
-    case RenderTapeEventType::CommandChunk: {
-      RenderTapeCommandChunkHeader fixed{};
-      if (!load(event.payload, 0u, fixed))
-        return fail(FrameTapeReplayStatus::CommandReplayFailed, eventIndex);
-      const Chunk chunk{
-          .envelope = CommandChunkEnvelope{fixed.wireVersion,
-                                            fixed.recordCount,
-                                            fixed.handleCount},
-          .bytes = event.payload.subspan(sizeof(fixed)),
-      };
-      if (!bootstrapReplayed) {
-        restoreSeededColorAttachmentTouches(
-            device, definitions, objects, seededSubresources);
-        for (const auto& overlay : bootstrap) {
-          if (!replayChunk(overlay))
-            return fail(FrameTapeReplayStatus::BootstrapFailed, eventIndex);
+        entry.hiddenIndex = hiddenObjects.size();
+        hiddenObjects.push_back({
+            .identity = entry.definition.fixed.identity, .value = value});
+        ++texturePrestageAudit->hiddenObjectsCreated;
+        bool deferredUpload = false;
+        bool physicalTexture = false;
+        if (auto upper = device->dev().upperDevice(); upper && upper->pool()) {
+          // Cold hidden ownership excludes command consumers. Inspect the
+          // actual backing under its queue lock, not a guessed D3D pool rule:
+          // Shared textures use immediate replaceRegion, Private textures
+          // require a deferred Initializer blit.
+          std::lock_guard lock(upper->queue().mutex_);
+          const auto* texture = static_cast<D9CTexture*>(value);
+          const auto* record = texture && texture->obj
+              ? upper->pool()->findTexture(texture->obj->handle().value)
+              : nullptr;
+          physicalTexture = record && record->texture;
+          deferredUpload = physicalTexture && record->needsStagingBlit;
         }
-        bootstrapReplayed = true;
-      }
-      if (chunkContainsPresent(chunk) && !installOutput())
-        return fail(FrameTapeReplayStatus::PresentOutputFailed, eventIndex);
-      if (!replayChunk(chunk))
-        return fail(FrameTapeReplayStatus::CommandReplayFailed, eventIndex);
-      sawSubmittedCommandWork = true;
-      break;
-    }
-    case RenderTapeEventType::PresentComplete: {
-      auto upper = device->dev().upperDevice();
-      auto& evidence = result.intervals[0].validity;
-      evidence.expectedDigestCaptured =
-          plan.expectedDigestValidity == RenderTapeDigestValidity::Sha256;
-      if (upper && readbackTarget) {
-        upper->flush();
-        core::ReadbackPixels pixels;
-        if (!upper->readbackSurface(
-                core::ReadbackDesc{.source = readbackTarget->obj->handle()},
-                pixels)) {
-          return fail(FrameTapeReplayStatus::ReadbackFailed, eventIndex);
+        if (!physicalTexture) {
+          result.status = FrameTapeReplayStatus::ObjectCreationFailed;
+          cleanup();
+          return result;
         }
-        constexpr std::uint64_t bytesPerPixel = 4u;
-        std::uint64_t tightPitch = 0u;
-        std::uint64_t tightBytes = 0u;
-        std::uint64_t pitchedBytes = 0u;
-        if (!checkedMul(plan.outputDesc.width, bytesPerPixel, tightPitch) ||
-            !checkedMul(tightPitch, plan.outputDesc.height, tightBytes) ||
-            !checkedMul(pixels.pitch, plan.outputDesc.height, pitchedBytes) ||
-            pixels.pitch < tightPitch ||
-            tightBytes > std::numeric_limits<std::size_t>::max() ||
-            pixels.bytes.size() < pitchedBytes) {
-          return fail(FrameTapeReplayStatus::ReadbackFailed, eventIndex);
-        }
-        std::vector<std::byte> tight(static_cast<std::size_t>(tightBytes));
-        for (std::uint32_t row = 0u; row < plan.outputDesc.height; ++row) {
-          std::memcpy(
-              tight.data() + static_cast<std::size_t>(row * tightPitch),
-              pixels.bytes.data() + static_cast<std::size_t>(row) * pixels.pitch,
-              static_cast<std::size_t>(tightPitch));
-        }
-        evidence.outputReadback = true;
-        evidence.outputBytes = tight.size();
-        evidence.outputDigest = RenderTapeCaptureSession::sha256(tight);
-        if (evidence.expectedDigestCaptured) {
-          evidence.expectedOutputDigest = plan.expectedDigest;
-        }
-        evidence.expectedDigestMatched =
-            evidence.expectedDigestCaptured &&
-            sameDigest(evidence.outputDigest, plan.expectedDigest);
-        const auto pixelSize = std::min<std::size_t>(4u, tight.size());
-        for (std::size_t index = pixelSize; index < tight.size(); ++index) {
-          if (tight[index] != tight[index % pixelSize]) {
-            evidence.outputNonDegenerate = true;
-            break;
+        for (std::uint32_t subresource = 0u;
+             subresource < entry.seedDigests.size(); ++subresource) {
+          const auto mutation = std::find_if(
+              plan.mutations.begin(), plan.mutations.end(),
+              [&](const auto& candidate) {
+                return sameIdentity(candidate.identity,
+                                    entry.definition.fixed.identity) &&
+                       candidate.subresource == subresource;
+              });
+          if (mutation == plan.mutations.end() ||
+              !applyGeneralMutation(device, *mutation, blobs,
+                                    prestageDefinitions, hiddenObjects)) {
+            result.status = FrameTapeReplayStatus::MutationFailed;
+            cleanup();
+            return result;
+          }
+          if (deferredUpload) {
+            ++texturePrestageAudit->deferredUploadSubresources;
+          } else {
+            ++texturePrestageAudit->immediateUploadSubresources;
           }
         }
-        result.outputPixels = std::move(tight);
       }
-      if (upper) {
-        auto* source = static_cast<D9CSurface*>(
-            findObject(objects, plan.outputIdentity));
-        std::vector<std::byte> sourcePixels;
-        if (readbackTightSurface(device, source, plan.outputDesc.width,
-                                 plan.outputDesc.height, plan.outputDesc.format,
-                                 sourcePixels)) {
-          evidence.sourceReadback = true;
-          evidence.sourceBytes = sourcePixels.size();
-          evidence.sourceDigest =
-              RenderTapeCaptureSession::sha256(sourcePixels);
-          result.sourcePixels = std::move(sourcePixels);
+      if (auto upper = device->dev().upperDevice()) {
+        const auto uploaded = upper->queue().flushInitializerUploads();
+        texturePrestageAudit->initializerUploadValue = uploaded.value;
+        if (uploaded.didFlush) {
+          ++texturePrestageAudit->initializerFlushes;
         }
+        bool waited = true;
+        if (uploaded.didFlush ||
+            texturePrestageAudit->deferredUploadSubresources != 0u) {
+          // A previous owner flush may already have submitted these uploads.
+          // Deferred bytes still require its event/value and a checked wait;
+          // a no-op flush alone is not synchronization evidence.
+          if (uploaded.value == 0u || !uploaded.event) {
+            result.status = FrameTapeReplayStatus::MutationFailed;
+            cleanup();
+            return result;
+          }
+          ++texturePrestageAudit->initializerWaits;
+          waited = WMT::SharedEvent{uploaded.event.handle}.waitUntilSignaledValue(
+              uploaded.value, /*timeout-ns*/ 1'000'000'000u);
+        }
+        if (!waited) {
+          result.status = FrameTapeReplayStatus::MutationFailed;
+          cleanup();
+          return result;
+        }
+      } else {
+        result.status = FrameTapeReplayStatus::MutationFailed;
+        cleanup();
+        return result;
       }
-      if (evidence.expectedDigestCaptured && !evidence.expectedDigestMatched) {
-        result.validity = evidence;
-        result.validity.structurallyValid = true;
-        result.validity.digestsValid = true;
-        return fail(FrameTapeReplayStatus::OutputMismatch, eventIndex);
+    } catch (...) {
+      result.status = FrameTapeReplayStatus::ObjectCreationFailed;
+      cleanup();
+      return result;
+    }
+  }
+
+  try {
+    for (const auto& replayEvent : plan.events) {
+      const auto eventIndex = replayEvent.eventIndex;
+      switch (replayEvent.type) {
+      case RenderTapeEventType::BootstrapState: {
+        if (replayEvent.aux >= plan.bootstrapGamma.size() ||
+            replayEvent.index + replayEvent.count > plan.bootstrapChunks.size()) {
+          return fail(FrameTapeReplayStatus::BootstrapFailed, eventIndex);
+        }
+        bootstrap.assign(plan.bootstrapChunks.begin() + replayEvent.index,
+                         plan.bootstrapChunks.begin() + replayEvent.index +
+                             replayEvent.count);
+        const auto& gamma = plan.bootstrapGamma[replayEvent.aux];
+        if (!gamma.empty()) {
+          if (!applyGammaRamp(device, gamma))
+            return fail(FrameTapeReplayStatus::BootstrapFailed, eventIndex);
+        }
+        break;
       }
-      break;
-    }
-    case RenderTapeEventType::OrderedControl: {
-      RenderTapeOrderedControlHeader fixed{};
-      if (!load(event.payload, 0u, fixed) ||
-          fixed.kind != static_cast<std::uint32_t>(
-              RenderTapeControlKind::GammaRampSet) ||
-          fixed.controlBytes != kRenderTapeGammaRampBytes ||
-          event.payload.size() != sizeof(fixed) + kRenderTapeGammaRampBytes) {
-        return fail(FrameTapeReplayStatus::UnsupportedGrammar, eventIndex);
+      case RenderTapeEventType::ObjectDefine: {
+        PreparedPhaseScope phase(timing,
+                                 &PreparedPhaseTiming::resourceSetupNanos);
+        if (replayEvent.index >= plan.definitions.size())
+          return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
+        const auto& definition = plan.definitions[replayEvent.index];
+        auto* staged = texturePrestageAudit
+            ? findPrestage(definition.fixed.identity)
+            : nullptr;
+        void* value = nullptr;
+        if (staged) {
+          if (staged->active || staged->hiddenIndex >= hiddenObjects.size() ||
+              !hiddenObjects[staged->hiddenIndex].value) {
+            return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
+          }
+          value = hiddenObjects[staged->hiddenIndex].value;
+        } else {
+          value = render_tape_runtime::createRenderTapeObject(
+              device, definition.fixed, definition.descriptor, blobs, objects);
+          if (!value)
+            return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
+          if (texturePrestageAudit) ++texturePrestageAudit->activeObjectsCreated;
+        }
+        definitions.push_back(definition);
+        if (freshSeedDrainAudit) definitionEpochs.push_back(commandEpoch);
+        objects.push_back({.identity = definition.fixed.identity, .value = value});
+        if (staged) {
+          // Publish the active bookkeeping before transferring ownership of the
+          // hidden wrapper.  If a bookkeeping allocation throws, cleanup still
+          // sees the wrapper in the hidden table and releases it exactly once.
+          hiddenObjects[staged->hiddenIndex].value = nullptr;
+          staged->active = true;
+          ++texturePrestageAudit->activatedObjects;
+        }
+        ++result.conservation.objectsCreated;
+        break;
       }
-      const auto gamma = event.payload.subspan(sizeof(fixed));
-      if (!applyGammaRamp(device, gamma))
-        return fail(FrameTapeReplayStatus::UnsupportedGrammar, eventIndex);
-      break;
+      case RenderTapeEventType::ObjectDestroy: {
+        if (!bootstrapReplayed) {
+          // Bootstrap is a real state application, not metadata. Materialize it
+          // before retiring any identity it may reference, even when the first
+          // command chunk has not arrived yet.
+          for (const auto& overlay : bootstrap) {
+            if (!replayChunk(overlay))
+              return fail(FrameTapeReplayStatus::BootstrapFailed, eventIndex);
+          }
+          bootstrapReplayed = true;
+        }
+        if (renderTapeProviderEventRequiresDrain(
+                sawSubmittedCommandWork, RenderTapeEventType::ObjectDestroy)) {
+          if (auto upper = device->dev().upperDevice()) upper->flush();
+        }
+        if (replayEvent.index >= plan.destroys.size())
+          return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
+        const auto& fixed = plan.destroys[replayEvent.index];
+        const auto object = std::find_if(
+            objects.begin(), objects.end(), [&](const auto& value) {
+              return value.value && sameIdentity(value.identity, fixed.identity);
+            });
+        if (object == objects.end())
+          return fail(FrameTapeReplayStatus::ObjectCreationFailed, eventIndex);
+        if (texturePrestageAudit) {
+          ++texturePrestageAudit->activeObjectsReleased;
+          if (auto* entry = findPrestage(fixed.identity)) entry->active = false;
+        }
+        render_tape_runtime::releaseOwnedObject(*object);
+        ++result.conservation.objectsReleased;
+        break;
+      }
+      case RenderTapeEventType::ResourceMutation: {
+        PreparedPhaseScope phase(timing,
+                                 &PreparedPhaseTiming::resourceSetupNanos);
+        if (replayEvent.index >= plan.mutations.size()) {
+          return fail(FrameTapeReplayStatus::MutationFailed, eventIndex);
+        }
+        const auto& fixed = plan.mutations[replayEvent.index];
+        bool consumeStagedSeed = false;
+        if (texturePrestageAudit) {
+          if (auto* staged = findPrestage(fixed.identity)) {
+            if (!staged->active || fixed.subresource >= staged->seedDigests.size() ||
+                staged->consumed[fixed.subresource] ||
+                !sameDigest(staged->seedDigests[fixed.subresource], fixed.digest)) {
+              return fail(FrameTapeReplayStatus::MutationFailed, eventIndex);
+            }
+            staged->consumed[fixed.subresource] = true;
+            consumeStagedSeed = true;
+            ++texturePrestageAudit->consumedSeeds;
+            texturePrestageAudit->complete =
+                texturePrestageAudit->consumedSeeds ==
+                texturePrestageAudit->candidateSubresources;
+          }
+        }
+        bool hasSurfaceAlias = false;
+        bool priorSeedForSubresource = false;
+        bool freshBypass = false;
+        if (freshSeedDrainAudit) {
+          const auto definitionIndex = std::find_if(
+              definitions.begin(), definitions.end(), [&](const auto& value) {
+                return sameIdentity(value.fixed.identity, fixed.identity);
+              });
+          const auto definitionOffset = definitionIndex == definitions.end()
+              ? definitions.size()
+              : static_cast<std::size_t>(definitionIndex - definitions.begin());
+          hasSurfaceAlias = fixed.identity.kind ==
+                  D9C_CHUNK_HANDLE_KIND_TEXTURE &&
+              std::any_of(plan.definitions.begin(), plan.definitions.end(),
+                          [&](const auto& value) {
+                            if (value.fixed.identity.kind !=
+                                D9C_CHUNK_HANDLE_KIND_SURFACE) {
+                              return false;
+                            }
+                            RenderTapeSurfaceDescriptorV2 surface{};
+                            return renderTapeLoadSurfaceDescriptorV2(
+                                       value.descriptor, surface) &&
+                                   surface.storage == static_cast<std::uint32_t>(
+                                       RenderTapeSurfaceStorage::TextureSubresource) &&
+                                   sameIdentity(surface.parentTexture,
+                                                fixed.identity);
+                          });
+          priorSeedForSubresource = std::any_of(
+              seededSubresources.begin(), seededSubresources.end(),
+              [&](const auto& value) {
+                return value.subresource == fixed.subresource &&
+                       sameIdentity(value.identity, fixed.identity);
+              });
+          const auto* seedBlob = findBlob(blobs, fixed.digest);
+          freshBypass = definitionOffset < definitionEpochs.size() &&
+              seedBlob &&
+              renderTapeFreshSeedDrainBypassAllowed(
+                  definitions[definitionOffset].fixed,
+                  definitions[definitionOffset].descriptor, fixed,
+                  seedBlob->bytes,
+                  definitionEpochs[definitionOffset] == commandEpoch,
+                  hasSurfaceAlias, priorSeedForSubresource);
+        }
+        const bool needsDrain = renderTapeProviderEventRequiresDrain(
+            sawSubmittedCommandWork, RenderTapeEventType::ResourceMutation);
+        if (consumeStagedSeed) {
+          // The hidden upload was already checked and completed; the logical
+          // mutation event still advances the ordinary seeded-attachment state
+          // below, but must not apply the bytes a second time.
+        } else if (freshSeedDrainAudit && needsDrain && freshBypass) {
+          ++freshSeedDrainAudit->bypassedDrains;
+        } else if (needsDrain) {
+          if (freshSeedDrainAudit) ++freshSeedDrainAudit->requiredDrains;
+          if (auto upper = device->dev().upperDevice()) upper->flush();
+        }
+        if (!consumeStagedSeed &&
+            !applyGeneralMutation(device, fixed, blobs, definitions, objects)) {
+          return fail(FrameTapeReplayStatus::MutationFailed, eventIndex);
+        }
+        if (freshSeedDrainAudit) {
+          ++freshSeedDrainAudit->inspectedMutations;
+          freshSeedDrainAudit->complete =
+              freshSeedDrainAudit->inspectedMutations ==
+              freshSeedDrainAudit->mutationCount;
+        }
+        if (initialSeedAudit && !sawSubmittedCommandWork &&
+            !initialSeedAuditDone) {
+          initialSeedMutations.push_back(fixed);
+        }
+        seededSubresources.push_back(
+            {.identity = fixed.identity, .subresource = fixed.subresource});
+        restoreSeededColorAttachmentTouches(
+            device, definitions, objects, seededSubresources);
+        break;
+      }
+      case RenderTapeEventType::CommandChunk: {
+        if (replayEvent.index >= plan.commandChunks.size())
+          return fail(FrameTapeReplayStatus::CommandReplayFailed, eventIndex);
+        const auto& chunk = plan.commandChunks[replayEvent.index];
+        if (!bootstrapReplayed) {
+          if (initialSeedAudit && !initialSeedAuditDone) {
+            auditInitialSeedMutations(device, definitions, initialSeedMutations,
+                                      objects, blobs, *initialSeedAudit);
+            initialSeedAuditDone = true;
+          }
+          restoreSeededColorAttachmentTouches(
+              device, definitions, objects, seededSubresources);
+          for (const auto& overlay : bootstrap) {
+            if (!replayChunk(overlay))
+              return fail(FrameTapeReplayStatus::BootstrapFailed, eventIndex);
+          }
+          bootstrapReplayed = true;
+        }
+        if (chunkContainsPresent(chunk) && !installOutput())
+          return fail(FrameTapeReplayStatus::PresentOutputFailed, eventIndex);
+        if (!replayChunk(chunk))
+          return fail(FrameTapeReplayStatus::CommandReplayFailed, eventIndex);
+        sawSubmittedCommandWork = true;
+        if (freshSeedDrainAudit) ++commandEpoch;
+        break;
+      }
+      case RenderTapeEventType::PresentComplete: {
+        PreparedPhaseScope phase(timing,
+                                 &PreparedPhaseTiming::readbackDrainNanos);
+        auto upper = device->dev().upperDevice();
+        auto& evidence = result.intervals[0].validity;
+        evidence.expectedDigestCaptured =
+            plan.expectedDigestValidity == RenderTapeDigestValidity::Sha256;
+        if (upper && readbackTarget) {
+          upper->flush();
+          core::ReadbackPixels pixels;
+          if (!upper->readbackSurface(
+                  core::ReadbackDesc{.source = readbackTarget->obj->handle()},
+                  pixels)) {
+            return fail(FrameTapeReplayStatus::ReadbackFailed, eventIndex);
+          }
+          constexpr std::uint64_t bytesPerPixel = 4u;
+          std::uint64_t tightPitch = 0u;
+          std::uint64_t tightBytes = 0u;
+          std::uint64_t pitchedBytes = 0u;
+          if (!checkedMul(plan.outputDesc.width, bytesPerPixel, tightPitch) ||
+              !checkedMul(tightPitch, plan.outputDesc.height, tightBytes) ||
+              !checkedMul(pixels.pitch, plan.outputDesc.height, pitchedBytes) ||
+              pixels.pitch < tightPitch ||
+              tightBytes > std::numeric_limits<std::size_t>::max() ||
+              pixels.bytes.size() < pitchedBytes) {
+            return fail(FrameTapeReplayStatus::ReadbackFailed, eventIndex);
+          }
+          std::vector<std::byte> tight(static_cast<std::size_t>(tightBytes));
+          for (std::uint32_t row = 0u; row < plan.outputDesc.height; ++row) {
+            std::memcpy(
+                tight.data() + static_cast<std::size_t>(row * tightPitch),
+                pixels.bytes.data() + static_cast<std::size_t>(row) * pixels.pitch,
+                static_cast<std::size_t>(tightPitch));
+          }
+          evidence.outputReadback = true;
+          evidence.outputBytes = tight.size();
+          evidence.outputDigest = RenderTapeCaptureSession::sha256(tight);
+          if (evidence.expectedDigestCaptured) {
+            evidence.expectedOutputDigest = plan.expectedDigest;
+          }
+          evidence.expectedDigestMatched =
+              evidence.expectedDigestCaptured &&
+              sameDigest(evidence.outputDigest, plan.expectedDigest);
+          const auto pixelSize = std::min<std::size_t>(4u, tight.size());
+          for (std::size_t index = pixelSize; index < tight.size(); ++index) {
+            if (tight[index] != tight[index % pixelSize]) {
+              evidence.outputNonDegenerate = true;
+              break;
+            }
+          }
+          result.outputPixels = std::move(tight);
+        }
+        if (upper) {
+          auto* source = static_cast<D9CSurface*>(
+              render_tape_runtime::findExactObject(objects, plan.outputIdentity));
+          std::vector<std::byte> sourcePixels;
+          if (readbackTightSurface(device, source, plan.outputDesc.width,
+                                   plan.outputDesc.height, plan.outputDesc.format,
+                                   sourcePixels)) {
+            evidence.sourceReadback = true;
+            evidence.sourceBytes = sourcePixels.size();
+            evidence.sourceDigest =
+                RenderTapeCaptureSession::sha256(sourcePixels);
+            result.sourcePixels = std::move(sourcePixels);
+          }
+        }
+        if (evidence.expectedDigestCaptured && !evidence.expectedDigestMatched) {
+          result.validity = evidence;
+          result.validity.structurallyValid = true;
+          result.validity.digestsValid = true;
+          return fail(FrameTapeReplayStatus::OutputMismatch, eventIndex);
+        }
+        break;
+      }
+      case RenderTapeEventType::OrderedControl: {
+        if (replayEvent.index >= plan.controls.size() ||
+            replayEvent.index >= plan.controlBytes.size()) {
+          return fail(FrameTapeReplayStatus::UnsupportedGrammar, eventIndex);
+        }
+        const auto& fixed = plan.controls[replayEvent.index];
+        if (fixed.kind != static_cast<std::uint32_t>(
+                RenderTapeControlKind::GammaRampSet) ||
+            fixed.controlBytes != kRenderTapeGammaRampBytes ||
+            plan.controlBytes[replayEvent.index].size() !=
+                kRenderTapeGammaRampBytes) {
+          return fail(FrameTapeReplayStatus::UnsupportedGrammar, eventIndex);
+        }
+        const auto& gamma = plan.controlBytes[replayEvent.index];
+        if (!applyGammaRamp(device, gamma))
+          return fail(FrameTapeReplayStatus::UnsupportedGrammar, eventIndex);
+        break;
+      }
+      }
     }
-    }
+  } catch (...) {
+    // Staged owners are deliberately still visible to cleanup if any
+    // bookkeeping allocation or backend wrapper operation throws while the
+    // logical event stream is being consumed.
+    if (!texturePrestageAudit) throw;
+    result.status = FrameTapeReplayStatus::ObjectCreationFailed;
+    cleanup();
+    return result;
   }
 
   if (!bootstrapReplayed || (output && output->scheduledCount() != 1u)) {
@@ -2415,6 +3123,99 @@ FrameTapeReplayResult replayGeneralPlan(
 }
 
 } // namespace
+
+struct PreparedRenderTape::Impl {
+  std::vector<std::byte> tape{};
+  std::vector<std::vector<std::byte>> blobStorage{};
+  std::vector<RenderTapeProviderBlob> blobs{};
+  PreflightPlan boundedPlan{};
+  GeneralPreflightPlan generalPlan{};
+  bool general = false;
+  FrameTapeReplayResult preflight{};
+  RenderTapePreparedEvidence evidence{};
+};
+
+namespace {
+
+const FrameTapeReplayResult& emptyPreparedResult() noexcept {
+  static const FrameTapeReplayResult result{};
+  return result;
+}
+
+std::uint64_t elapsedNanos(
+    std::chrono::steady_clock::time_point begin,
+    std::chrono::steady_clock::time_point end) noexcept {
+  return static_cast<std::uint64_t>(std::chrono::duration_cast<
+      std::chrono::nanoseconds>(end - begin).count());
+}
+
+void attachPreparedEvidence(FrameTapeReplayResult& result,
+                            const RenderTapePreparedEvidence& evidence) {
+  result.prepared = evidence;
+}
+
+enum class WarmResetAttempt : std::uint8_t {
+  Succeeded,
+  Unsupported,
+  Failed,
+};
+
+WarmResetAttempt resetPreparedDevice(
+    D9CDevice* device, const FrameTapeReplayRequirements& requirements) noexcept {
+  if (!device || device->replayDrainLedger.terminal()) {
+    return WarmResetAttempt::Unsupported;
+  }
+  if (!drainDeferredReplay(device, "render-tape-prepared-reset") ||
+      device->wireObjects.activeCount() != 0u) {
+    return WarmResetAttempt::Unsupported;
+  }
+
+  D9CPresentParams params{};
+  params.backBufferWidth = requirements.outputWidth;
+  params.backBufferHeight = requirements.outputHeight;
+  params.backBufferFormat = requirements.outputFormat;
+  params.backBufferCount = 1u;
+  params.swapEffect = 1u;
+  params.windowed = 1u;
+  params.presentationInterval = 0x80000000u;
+  if (dxmt9c_device_reset(device, &params) != core::D3D_OK) {
+    return WarmResetAttempt::Failed;
+  }
+  if (!drainDeferredReplay(device, "render-tape-prepared-reset-post") ||
+      device->wireObjects.activeCount() != 0u) {
+    return WarmResetAttempt::Failed;
+  }
+  return WarmResetAttempt::Succeeded;
+}
+
+} // namespace
+
+PreparedRenderTape::PreparedRenderTape() = default;
+PreparedRenderTape::~PreparedRenderTape() = default;
+PreparedRenderTape::PreparedRenderTape(PreparedRenderTape&&) noexcept = default;
+PreparedRenderTape& PreparedRenderTape::operator=(PreparedRenderTape&&) noexcept =
+    default;
+
+const FrameTapeReplayResult& PreparedRenderTape::preflightResult() const noexcept {
+  return impl_ ? impl_->preflight : emptyPreparedResult();
+}
+
+const FrameTapeReplayResult& PreparedRenderTape::preflight() const noexcept {
+  return preflightResult();
+}
+
+const RenderTapePreparedEvidence& PreparedRenderTape::evidence() const noexcept {
+  static const RenderTapePreparedEvidence empty{};
+  return impl_ ? impl_->evidence : empty;
+}
+
+std::uint64_t PreparedRenderTape::prepareCount() const noexcept {
+  return impl_ ? impl_->evidence.prepareCount : 0u;
+}
+
+bool PreparedRenderTape::valid() const noexcept {
+  return impl_ && impl_->preflight.complete();
+}
 
 std::uint32_t renderTapeBufferMutationLockFlags(
     RenderTapeBufferMutationDisposition disposition) noexcept {
@@ -2455,6 +3256,137 @@ bool renderTapeBufferMutationReplayPlan(
   return true;
 }
 
+bool renderTapeFreshSeedDrainBypassAllowed(
+    const RenderTapeObjectDefineHeader& definition,
+    std::span<const std::byte> descriptor,
+    const RenderTapeResourceMutationHeader& mutation,
+    std::span<const std::byte> mutationBytes,
+    bool defineEpochMatchesCommandEpoch,
+    bool hasSurfaceAlias,
+    bool priorSeedForSubresource) noexcept {
+  if (!defineEpochMatchesCommandEpoch || hasSurfaceAlias ||
+      priorSeedForSubresource ||
+      !sameIdentity(definition.identity, mutation.identity) ||
+      mutation.byteOffset != 0u || mutation.byteSize == 0u ||
+      mutationBytes.size() != mutation.byteSize ||
+      (mutation.kind != static_cast<std::uint32_t>(
+                           RenderTapeMutationKind::Upload) &&
+       mutation.kind != static_cast<std::uint32_t>(
+                           RenderTapeMutationKind::CpuUnlock))) {
+    return false;
+  }
+
+  if (mutation.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
+    D9CBufferDesc buffer{};
+    return mutation.subresource == 0u && descriptor.size() == sizeof(buffer) &&
+           load(descriptor, 0u, buffer) && buffer.size != 0u &&
+           definition.expectedContentCount == 1u &&
+           definition.expectedContentBytes == buffer.size &&
+           mutation.byteSize == buffer.size;
+  }
+  if (mutation.identity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE) return false;
+
+  RenderTapeTextureDescriptorV2 texture{};
+  D9CSurfaceDesc surface{};
+  if (!renderTapeLoadTextureDescriptorV2(descriptor, texture) ||
+      texture.initialContentDisposition != static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed) ||
+      mutation.subresource >= texture.subresourceCount ||
+      definition.expectedContentCount != texture.subresourceCount ||
+      !renderTapeTextureSubresourceDescriptor(descriptor, mutation.subresource,
+                                               surface)) {
+    return false;
+  }
+  const auto expected = renderTapeDeriveExpectedSurfaceContent(surface);
+  return expected.status == RenderTapeExpectedContentStatus::Accepted &&
+         expected.bytes == mutation.byteSize;
+}
+
+bool renderTapeTexturePrestageOrderAllowed(
+    std::uint32_t definitionPosition,
+    std::span<const std::uint32_t> seedPositions,
+    std::span<const std::uint32_t> commandPositions) noexcept {
+  if (seedPositions.empty()) return false;
+  std::uint32_t lastSeed = definitionPosition;
+  for (const auto position : seedPositions) {
+    if (position <= definitionPosition) return false;
+    lastSeed = std::max(lastSeed, position);
+  }
+  return std::none_of(commandPositions.begin(), commandPositions.end(),
+                      [&](const auto position) {
+                        return definitionPosition <= position &&
+                               position <= lastSeed;
+                      });
+}
+
+bool renderTapeTexturePrestageCandidate(
+    const RenderTapeObjectDefineHeader& definition,
+    std::span<const std::byte> descriptor,
+    std::span<const RenderTapeResourceMutationHeader> mutations,
+    bool hasSurfaceAlias, bool hasSlotGenerationConflict,
+    bool invalidEventOrder) noexcept {
+  if (hasSurfaceAlias || hasSlotGenerationConflict ||
+      invalidEventOrder ||
+      definition.identity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE ||
+      definition.descriptorKind != static_cast<std::uint32_t>(
+          RenderTapeDescriptorKind::Texture)) {
+    return false;
+  }
+  RenderTapeTextureDescriptorV2 texture{};
+  if (!renderTapeLoadTextureDescriptorV2(descriptor, texture) ||
+      texture.initialContentDisposition != static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteSeed) ||
+      texture.subresourceCount == 0u ||
+      (texture.dimension != static_cast<std::uint32_t>(
+           RenderTapeTextureDimension::Texture2D) &&
+       texture.dimension != static_cast<std::uint32_t>(
+           RenderTapeTextureDimension::Cube)) ||
+      definition.expectedContentCount != texture.subresourceCount) {
+    return false;
+  }
+
+  std::size_t ownerMutationCount = 0u;
+  for (const auto& mutation : mutations) {
+    if (!sameIdentity(mutation.identity, definition.identity)) continue;
+    if (mutation.subresource >= texture.subresourceCount) return false;
+    ++ownerMutationCount;
+  }
+  if (ownerMutationCount != texture.subresourceCount) return false;
+
+  std::uint64_t totalBytes = 0u;
+  for (std::uint32_t subresource = 0u;
+       subresource < texture.subresourceCount; ++subresource) {
+    D9CSurfaceDesc surface{};
+    if (!renderTapeTextureSubresourceDescriptor(descriptor, subresource,
+                                                surface)) {
+      return false;
+    }
+    const auto expected = renderTapeDeriveExpectedSurfaceContent(surface);
+    if (expected.status != RenderTapeExpectedContentStatus::Accepted ||
+        expected.bytes > std::numeric_limits<std::uint64_t>::max() - totalBytes) {
+      return false;
+    }
+    totalBytes += expected.bytes;
+    std::size_t count = 0u;
+    for (const auto& mutation : mutations) {
+      if (!sameIdentity(mutation.identity, definition.identity) ||
+          mutation.subresource != subresource) {
+        continue;
+      }
+      ++count;
+      if ((mutation.kind != static_cast<std::uint32_t>(
+                              RenderTapeMutationKind::Upload) &&
+           mutation.kind != static_cast<std::uint32_t>(
+                              RenderTapeMutationKind::CpuUnlock)) ||
+          mutation.byteOffset != 0u || mutation.byteSize != expected.bytes) {
+        return false;
+      }
+    }
+    if (count != 1u) return false;
+  }
+  return definition.expectedContentBytes == totalBytes;
+}
+
 bool renderTapeProviderEventRequiresDrain(
     bool submittedCommandWork, RenderTapeEventType event) noexcept {
   return submittedCommandWork &&
@@ -2470,7 +3402,7 @@ FrameTapeReplayResult preflightRenderTapeIdentity(
       bounded.status != FrameTapeReplayStatus::UnsupportedGrammar) {
     return bounded;
   }
-  return buildGeneralPlan(tape, blobs, nullptr);
+  return render_tape_runtime::buildGeneralReplayPlan(tape, blobs, nullptr);
 }
 
 FrameTapeReplayResult preflightFrameTapeIdentity(
@@ -2483,20 +3415,57 @@ FrameTapeReplayResult preflightFrameTapeIdentity(
   return result;
 }
 
-FrameTapeReplayResult replayRenderTapeIdentity(
-    D9CDevice* device, std::span<const std::byte> tape,
+PreparedRenderTape prepareRenderTapeIdentity(
+    std::span<const std::byte> tape,
     std::span<const RenderTapeProviderBlob> blobs) noexcept {
-  PreflightPlan plan;
-  auto result = buildPlan(tape, blobs, &plan);
-  if (!result.complete()) {
-    if (result.status != FrameTapeReplayStatus::UnsupportedGrammar)
-      return result;
-    GeneralPreflightPlan generalPlan;
-    auto generalResult = buildGeneralPlan(tape, blobs, &generalPlan);
-    if (!generalResult.complete()) return generalResult;
-    return replayGeneralPlan(device, std::move(generalPlan), generalResult,
-                             blobs);
+  PreparedRenderTape prepared;
+  try {
+    prepared.impl_ = std::make_unique<PreparedRenderTape::Impl>();
+    auto& impl = *prepared.impl_;
+    const auto begin = std::chrono::steady_clock::now();
+
+    impl.tape.assign(tape.begin(), tape.end());
+    impl.blobStorage.reserve(blobs.size());
+    impl.blobs.reserve(blobs.size());
+    std::uint64_t blobBytes = 0u;
+    for (const auto& blob : blobs) {
+      impl.blobStorage.emplace_back(blob.bytes.begin(), blob.bytes.end());
+      blobBytes += impl.blobStorage.back().size();
+      impl.blobs.push_back(RenderTapeProviderBlob{
+          .digest = blob.digest,
+          .bytes = std::span<const std::byte>(impl.blobStorage.back()),
+      });
+    }
+
+    impl.evidence.immutableInputOwned = true;
+    impl.evidence.tapeBytes = impl.tape.size();
+    impl.evidence.blobBytes = blobBytes;
+    impl.evidence.blobCount = static_cast<std::uint32_t>(impl.blobs.size());
+    impl.evidence.prepareCount = 1u;
+
+    impl.preflight = buildPlan(impl.tape, impl.blobs, &impl.boundedPlan);
+    if (impl.preflight.status == FrameTapeReplayStatus::UnsupportedGrammar) {
+      impl.general = true;
+      impl.preflight = render_tape_runtime::buildGeneralReplayPlan(
+          impl.tape, impl.blobs, impl.generalPlan);
+    }
+    impl.evidence.preflightCompleted = true;
+    impl.evidence.timing.prepareWallNanos = elapsedNanos(
+        begin, std::chrono::steady_clock::now());
+  } catch (...) {
+    // Preparation is an admission boundary.  A failed allocation is an
+    // invalid prepared input, never a partially usable plan.
+    prepared.impl_.reset();
   }
+  return prepared;
+}
+
+FrameTapeReplayResult replayPreflightPlan(
+    D9CDevice* device, const PreflightPlan& plan, FrameTapeReplayResult result,
+    std::span<const RenderTapeProviderBlob> blobs,
+    ProviderReplayPolicy policy = ProviderReplayPolicy::Historical,
+    PreparedPhaseTiming* timing = nullptr,
+    RenderTapeInitialSeedAuditEvidence* initialSeedAudit = nullptr) noexcept {
   if (!device) {
     result.status = FrameTapeReplayStatus::ObjectCreationFailed;
     return result;
@@ -2514,6 +3483,7 @@ FrameTapeReplayResult replayRenderTapeIdentity(
     replayUpper->queue().setRenderTapeExactAttachmentPreservation(true);
   }
   const auto cleanup = [&] {
+    PreparedPhaseScope phase(timing, &PreparedPhaseTiming::cleanupNanos);
     if (auto upper = device->dev().upperDevice()) upper->flush();
     if (replayUpper) {
       replayUpper->queue().setRenderTapeExactAttachmentPreservation(
@@ -2529,7 +3499,7 @@ FrameTapeReplayResult replayRenderTapeIdentity(
     if (readbackTarget) dxmt9c_surface_release(readbackTarget);
     for (auto& object : objects) {
       if (object.value) {
-        releaseObject(object);
+        render_tape_runtime::releaseOwnedObject(object);
         ++result.conservation.objectsReleased;
       }
     }
@@ -2549,98 +3519,28 @@ FrameTapeReplayResult replayRenderTapeIdentity(
       }
       if ((creationPass == 1u) != textureAlias)
         continue;
-    void* value = nullptr;
-    if (definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
-      RenderTapeSurfaceDescriptorV2 surface{};
-      if (!load(definition.descriptor, 0u, surface)) {
+      PreparedPhaseScope phase(timing,
+                               &PreparedPhaseTiming::resourceSetupNanos);
+      void* value = render_tape_runtime::createRenderTapeObject(
+          device, definition.fixed, definition.descriptor, blobs, objects);
+      if (!value) {
         result.status = FrameTapeReplayStatus::ObjectCreationFailed;
         cleanup();
         return result;
       }
-      if (surface.storage == static_cast<std::uint32_t>(
-              RenderTapeSurfaceStorage::TextureSubresource)) {
-        void* parent = findObject(objects, surface.parentTexture);
-        if (parent) {
-          value = dxmt9c_texture_get_surface_level(
-              static_cast<D9CTexture*>(parent), surface.subresource);
-        }
-      } else if (surface.storage == static_cast<std::uint32_t>(
-                     RenderTapeSurfaceStorage::SwapchainBackbuffer)) {
-        auto* swap = device->iface->GetSwapChain(0u);
-        if (swap) {
-          value = new D9CSurface{swap->backBuffer(), nullptr, 0u, device};
-          swap->Release();
-        }
-      } else if (surface.storage == static_cast<std::uint32_t>(
-                     RenderTapeSurfaceStorage::Standalone) &&
-                 (surface.initialContentDisposition ==
-                      static_cast<std::uint32_t>(
-                          RenderTapeInitialContentDisposition::
-                              ProducedByCapturedPass) ||
-                  surface.initialContentDisposition ==
-                      static_cast<std::uint32_t>(
-                          RenderTapeInitialContentDisposition::
-                              CompleteDepthFloat32V1) ||
-                  surface.initialContentDisposition ==
-                      static_cast<std::uint32_t>(
-                          RenderTapeInitialContentDisposition::
-                              CompleteSeed))) {
-        value = surface.surface.usage == 1u
-            ? static_cast<void*>(dxmt9c_device_create_render_target(
-                  device, surface.surface.width, surface.surface.height,
-                  surface.surface.format, surface.surface.multiSampleType,
-                  surface.surface.multiSampleQuality, 0u, nullptr))
-            : static_cast<void*>(dxmt9c_device_create_depth_stencil(
-                  device, surface.surface.width, surface.surface.height,
-                  surface.surface.format, surface.surface.multiSampleType,
-                  surface.surface.multiSampleQuality, 0u, nullptr));
-      }
-    } else if (definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
-      D9CBufferDesc desc{};
-      load(definition.descriptor, 0u, desc);
-      value = desc.format
-          ? static_cast<void*>(dxmt9c_device_create_index_buffer(
-                device, desc.size, desc.usage, desc.format, desc.pool))
-          : static_cast<void*>(dxmt9c_device_create_vertex_buffer(
-                device, desc.size, desc.usage, desc.fvf, desc.pool));
-    } else if (definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE) {
-      RenderTapeTextureDescriptorV2 desc{};
-      D9CSurfaceDesc level0{};
-      load(definition.descriptor, 0u, desc);
-      load(definition.descriptor, sizeof(desc), level0);
-      value = desc.dimension == static_cast<std::uint32_t>(
-                                    RenderTapeTextureDimension::Cube)
-          ? static_cast<void*>(dxmt9c_device_create_cube_texture(
-                device, level0.width, desc.mipLevelCount, level0.usage,
-                level0.format, level0.pool))
-          : static_cast<void*>(dxmt9c_device_create_texture(
-                device, level0.width, level0.height, desc.mipLevelCount,
-                level0.usage, level0.format, level0.pool));
-    } else if (definition.fixed.identity.kind ==
-               D9C_CHUNK_HANDLE_KIND_VERTEX_DECL) {
-      const auto* blob = findBlob(blobs, definition.fixed.immutablePayloadDigest);
-      std::array<D9CVertexElement, 4u> elements{};
-      if (blob && blob->bytes.size() == sizeof(elements)) {
-        std::memcpy(elements.data(), blob->bytes.data(), sizeof(elements));
-        value = dxmt9c_device_create_vertex_declaration(device,
-                                                         elements.data());
-      }
-    }
-    if (!value) {
-      result.status = FrameTapeReplayStatus::ObjectCreationFailed;
-      cleanup();
-      return result;
-    }
-    objects.push_back({.identity = definition.fixed.identity, .value = value});
-    ++result.conservation.objectsCreated;
+      objects.push_back({.identity = definition.fixed.identity, .value = value});
+      ++result.conservation.objectsCreated;
     }
   }
 
   const auto applyMutations = [&](std::span<const RenderTapeResourceMutationHeader>
                                       mutations) {
     for (const auto& mutation : mutations) {
+      PreparedPhaseScope phase(timing,
+                               &PreparedPhaseTiming::resourceSetupNanos);
       const auto* blob = findBlob(blobs, mutation.digest);
-      void* object = findObject(objects, mutation.identity);
+      void* object = render_tape_runtime::findExactObject(
+          objects, mutation.identity);
       bool ok = blob && object;
       if (ok && mutation.identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER) {
         void* mapped = nullptr;
@@ -2767,12 +3667,19 @@ FrameTapeReplayResult replayRenderTapeIdentity(
     return result;
   }
 
+  if (initialSeedAudit) {
+    auditInitialSeedMutations(device, plan.definitions, plan.initialMutations,
+                              objects, blobs, *initialSeedAudit);
+  }
+
   // Seed all prior-boundary content before BootstrapState can bind it.
   std::vector<void*> resolved;
   for (const auto& chunk : plan.bootstrap) {
+    PreparedPhaseScope phase(timing, &PreparedPhaseTiming::chunkReplayNanos);
     if (!resolveChunk(chunk, objects, resolved) ||
         replayPrevalidatedResolvedCommandChunk(
-            device, chunk.bytes, chunk.envelope, resolved) != core::D3D_OK) {
+            device, chunk.bytes, chunk.envelope, resolved, policy) !=
+            core::D3D_OK) {
       result.status = FrameTapeReplayStatus::BootstrapFailed;
       cleanup();
       return result;
@@ -2780,6 +3687,8 @@ FrameTapeReplayResult replayRenderTapeIdentity(
   }
 
   if (auto upper = device->dev().upperDevice(); upper && upper->pool()) {
+    PreparedPhaseScope phase(timing,
+                             &PreparedPhaseTiming::resourceSetupNanos);
     readbackTarget = dxmt9c_device_create_render_target(
         device, plan.outputDesc.width, plan.outputDesc.height,
         plan.outputDesc.format, 0u, 0u, 0u, nullptr);
@@ -2807,6 +3716,8 @@ FrameTapeReplayResult replayRenderTapeIdentity(
   }
 
   const auto readbackInterval = [&](std::uint32_t intervalIndex) {
+    PreparedPhaseScope phase(timing,
+                             &PreparedPhaseTiming::readbackDrainNanos);
     auto& evidence = result.intervals[intervalIndex].validity;
     const auto& interval = plan.intervals[intervalIndex];
     auto upper = device->dev().upperDevice();
@@ -2857,7 +3768,7 @@ FrameTapeReplayResult replayRenderTapeIdentity(
     }
     result.outputPixels = std::move(tight);
     auto* source = static_cast<D9CSurface*>(
-        findObject(objects, plan.outputIdentity));
+        render_tape_runtime::findExactObject(objects, plan.outputIdentity));
     std::vector<std::byte> sourcePixels;
     if (readbackTightSurface(device, source, plan.outputDesc.width,
                              plan.outputDesc.height, plan.outputDesc.format,
@@ -2878,9 +3789,11 @@ FrameTapeReplayResult replayRenderTapeIdentity(
       return result;
     }
     for (const auto& chunk : plan.intervals[intervalIndex].frame) {
+      PreparedPhaseScope phase(timing, &PreparedPhaseTiming::chunkReplayNanos);
       if (!resolveChunk(chunk, objects, resolved) ||
           replayPrevalidatedResolvedCommandChunk(
-              device, chunk.bytes, chunk.envelope, resolved) != core::D3D_OK) {
+              device, chunk.bytes, chunk.envelope, resolved, policy) !=
+              core::D3D_OK) {
         result.status = FrameTapeReplayStatus::CommandReplayFailed;
         cleanup();
         return result;
@@ -2928,6 +3841,118 @@ FrameTapeReplayResult replayRenderTapeIdentity(
         });
   }
   cleanup();
+  return result;
+}
+
+FrameTapeReplayResult replayRenderTapeIdentity(
+    D9CDevice* device, std::span<const std::byte> tape,
+    std::span<const RenderTapeProviderBlob> blobs) noexcept {
+  PreflightPlan plan;
+  auto result = buildPlan(tape, blobs, &plan);
+  if (result.complete()) {
+    return replayPreflightPlan(device, plan, result, blobs);
+  }
+  if (result.status != FrameTapeReplayStatus::UnsupportedGrammar) return result;
+  GeneralPreflightPlan generalPlan;
+  auto generalResult = render_tape_runtime::buildGeneralReplayPlan(
+      tape, blobs, generalPlan);
+  if (!generalResult.complete()) return generalResult;
+  return replayGeneralPlan(device, generalPlan, generalResult, blobs,
+                           ProviderReplayPolicy::Historical);
+}
+
+FrameTapeReplayResult replayPreparedRenderTapeIdentity(
+    D9CDevice* device, const PreparedRenderTape& prepared,
+    RenderTapePreparedExecutionOptions options) noexcept {
+  if (!prepared.impl_) {
+    return FrameTapeReplayResult{};
+  }
+  const auto& impl = *prepared.impl_;
+  auto result = impl.preflight;
+  auto evidence = impl.evidence;
+  evidence.requestedRoute = options.route;
+  evidence.reset = options.reset;
+  evidence.planReused = impl.preflight.complete();
+  result.initialSeedAudit.requested = options.auditInitialSeeds;
+  result.freshSeedDrainAudit.requested = options.auditFreshSeedDrains;
+  result.texturePrestageAudit.requested = options.auditTexturePrestage;
+  if (!impl.preflight.complete()) {
+    attachPreparedEvidence(result, evidence);
+    return result;
+  }
+  const unsigned diagnosticCount =
+      static_cast<unsigned>(options.auditInitialSeeds) +
+      static_cast<unsigned>(options.auditFreshSeedDrains) +
+      static_cast<unsigned>(options.auditTexturePrestage);
+  if (diagnosticCount > 1u ||
+      (options.auditTexturePrestage && !impl.general)) {
+    result.status = FrameTapeReplayStatus::UnsupportedGrammar;
+    attachPreparedEvidence(result, evidence);
+    return result;
+  }
+  if (options.reset == RenderTapePreparedReset::WarmDevice) {
+    if (options.auditInitialSeeds || options.auditFreshSeedDrains ||
+        options.auditTexturePrestage) {
+      result.status = FrameTapeReplayStatus::UnsupportedGrammar;
+      attachPreparedEvidence(result, evidence);
+      return result;
+    }
+    const auto resetBegin = std::chrono::steady_clock::now();
+    const auto reset = resetPreparedDevice(device, result.requirements);
+    evidence.timing.resetWallNanos = elapsedNanos(
+        resetBegin, std::chrono::steady_clock::now());
+    if (reset != WarmResetAttempt::Succeeded) {
+      result.status = reset == WarmResetAttempt::Unsupported
+          ? FrameTapeReplayStatus::WarmResetUnsupported
+          : FrameTapeReplayStatus::WarmResetFailed;
+      attachPreparedEvidence(result, evidence);
+      return result;
+    }
+    evidence.resetPerformed = true;
+    evidence.resetVerified = true;
+  }
+  const auto begin = std::chrono::steady_clock::now();
+  const auto policy = options.route == RenderTapePreparedRoute::ProductionSlot
+      ? ProviderReplayPolicy::ProductionSlot
+      : ProviderReplayPolicy::Compatibility;
+  PreparedPhaseTiming phases{};
+  // Keep diagnostics outside the by-value replay result: assigning that
+  // result must not overwrite the evidence collected through the output sink.
+  RenderTapeInitialSeedAuditEvidence seedAudit{};
+  seedAudit.requested = options.auditInitialSeeds;
+  RenderTapeFreshSeedDrainEvidence freshSeedDrainAudit{};
+  freshSeedDrainAudit.requested = options.auditFreshSeedDrains;
+  RenderTapeTexturePrestageEvidence texturePrestageAudit{};
+  texturePrestageAudit.requested = options.auditTexturePrestage;
+  if (impl.general) {
+    result = replayGeneralPlan(device, impl.generalPlan, result, impl.blobs,
+                               policy, &phases,
+                               options.auditInitialSeeds
+                                   ? &seedAudit
+                                   : nullptr,
+                               options.auditFreshSeedDrains
+                                   ? &freshSeedDrainAudit
+                                   : nullptr,
+                               options.auditTexturePrestage
+                                   ? &texturePrestageAudit
+                                   : nullptr);
+  } else {
+    result = replayPreflightPlan(device, impl.boundedPlan, result, impl.blobs,
+                                 policy, &phases,
+                                 options.auditInitialSeeds
+                                     ? &seedAudit
+                                     : nullptr);
+  }
+  result.initialSeedAudit = std::move(seedAudit);
+  result.freshSeedDrainAudit = std::move(freshSeedDrainAudit);
+  result.texturePrestageAudit = std::move(texturePrestageAudit);
+  evidence.timing.resourceSetupNanos = phases.resourceSetupNanos;
+  evidence.timing.chunkReplayNanos = phases.chunkReplayNanos;
+  evidence.timing.readbackDrainNanos = phases.readbackDrainNanos;
+  evidence.timing.cleanupNanos = phases.cleanupNanos;
+  evidence.timing.replayWallNanos = elapsedNanos(
+      begin, std::chrono::steady_clock::now());
+  attachPreparedEvidence(result, evidence);
   return result;
 }
 
@@ -3112,6 +4137,10 @@ const char* frameTapeReplayStatusName(FrameTapeReplayStatus status) noexcept {
   case FrameTapeReplayStatus::PresentOutputFailed: return "present-output-failed";
   case FrameTapeReplayStatus::ReadbackFailed: return "readback-failed";
   case FrameTapeReplayStatus::OutputMismatch: return "output-mismatch";
+  case FrameTapeReplayStatus::WarmResetUnsupported:
+    return "warm-reset-unsupported";
+  case FrameTapeReplayStatus::WarmResetFailed:
+    return "warm-reset-failed";
   }
   return "unknown";
 }

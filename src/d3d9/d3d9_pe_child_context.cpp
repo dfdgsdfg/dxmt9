@@ -94,6 +94,15 @@ void D3D9PeBufferContext::NotifyRenderTapeOrderedControlForChild(
 HRESULT D3D9PeSurfaceTextureContext::FlushPeRecorderForChild() noexcept {
   return device ? device->FlushPeRecorderForChild() : S_OK;
 }
+PeRenderTapeChildResult D3D9PeSurfaceTextureContext::GenerateMipmapsForChild(
+    const dxmt9::d3d9::pe::TextureRef &texture) noexcept {
+  return device ? device->GenerateMipmapsForChild(texture)
+                : PeRenderTapeChildResult{};
+}
+bool D3D9PeSurfaceTextureContext::IsRenderTapeCaptureActiveForChild()
+    const noexcept {
+  return device && device->IsRenderTapeCaptureActiveForChild();
+}
 void D3D9PeSurfaceTextureContext::AddDefaultPoolResourceRefForChild() noexcept {
   if (device) device->AddDefaultPoolResourceRefForChild();
 }

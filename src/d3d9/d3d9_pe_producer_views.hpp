@@ -57,6 +57,14 @@ struct PeStreamBinding {
 struct PeBindingView {
   std::array<TextureRef, D9C_DRAW_PACKET_MAX_TEXTURES> textures{};
   std::array<PeStreamBinding, D9C_DRAW_PACKET_MAX_STREAMS> streams{};
+  // Stream frequency is independent from the source tuple.  In particular,
+  // rebinding a stream's buffer/offset/stride must not reset its divider or
+  // D3DSTREAMSOURCE flags.
+  std::array<std::uint32_t, D9C_DRAW_PACKET_MAX_STREAMS> streamFrequencies = [] {
+    std::array<std::uint32_t, D9C_DRAW_PACKET_MAX_STREAMS> values{};
+    values.fill(1u);
+    return values;
+  }();
   ShaderRef vs{};
   ShaderRef ps{};
   DeclarationRef vdecl{};

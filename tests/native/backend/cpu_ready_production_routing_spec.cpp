@@ -2,6 +2,21 @@
 #include "device_c_cpu_ready_plan.hpp"
 #include "device_c_chunk_replay.hpp"
 #include "device_c_cpu_ready_transfer.hpp"
+#include "device_c_render_tape_completion.hpp"
+#include "device_c_render_tape_completion_plan.hpp"
+#include "device_c_render_tape_publication.hpp"
+#include "device_c_render_tape.hpp"
+#include "device_c_render_tape_capture.hpp"
+#include "device_c_render_tape_provider.hpp"
+#include "render_tape_completion_fixture.hpp"
+#include "render_tape_cpu_grammar.hpp"
+#include "render_tape_cpu_general_grammar.hpp"
+#include "render_tape_cpu_general_executor.hpp"
+#include "render_tape_cpu_source_admission.hpp"
+#include "render_tape_cpu_destroy_fixture.hpp"
+#include "render_tape_cpu_alias_fixture.hpp"
+#include "render_tape_cpu_mipmap_fixture.hpp"
+#include "render_tape_test_metal_device.hpp"
 #include "device_c_replay_offload.hpp"
 #include "dxmt9/com.hpp"
 #include "dxmt9/copy_materialization_ledger.hpp"
@@ -10,6 +25,8 @@
 #include "dxmt9/dxmt9_command_queue.hpp"
 #include "dxmt9/dxmt9_direct_continuation.hpp"
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9/dxmt9_draw_encoder_draw_internal.hpp"
+#include "dxmt9/dxmt9_draw_state.hpp"
 #include "d3d9_pe_wire_handle.hpp"
 
 #include <algorithm>
@@ -18,17 +35,32 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <ctime>
 #include <cstring>
+#include <fstream>
+#include <filesystem>
+#include <functional>
 #include <iostream>
+#include <iomanip>
+#include <limits>
 #include <memory>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <tuple>
+#include <utility>
 #include <vector>
+#if defined(__APPLE__)
+#include <mach-o/dyld.h>
+#endif
 
 namespace {
+
+using dxmt9::test::CpuSourceOracleRow;
+using dxmt9::test::decodeCpuSourceOracle;
 
 static_assert(!std::is_copy_constructible_v<
               dxmt9::d3d9::CpuReadySemanticTransfer>);
@@ -45,6 +77,47 @@ void digestBytes(std::uint64_t& hash, const void* data,
     hash ^= static_cast<std::uint8_t>(bytes[i]);
     hash *= kPrime;
   }
+}
+
+std::uint64_t digestByteSpan(std::span<const std::uint8_t> bytes) noexcept {
+  std::uint64_t hash = 1469598103934665603ull;
+  digestBytes(hash, bytes.data(), bytes.size());
+  return hash;
+}
+
+const char* completionPlanDispositionName(
+    dxmt9::d3d9::RenderTapeCompletionPlanDisposition disposition) noexcept {
+  using D = dxmt9::d3d9::RenderTapeCompletionPlanDisposition;
+  switch (disposition) {
+  case D::Accepted: return "accepted";
+  case D::InvalidSize: return "invalid-size";
+  case D::InvalidHeader: return "invalid-header";
+  case D::InvalidDigest: return "invalid-digest";
+  case D::InvalidRoute: return "invalid-route";
+  case D::InvalidRepeat: return "invalid-repeat";
+  case D::InvalidCapacity: return "invalid-capacity";
+  case D::InvalidEvent: return "invalid-event";
+  case D::NonMonotonicSubmit: return "nonmonotonic-submit";
+  case D::DuplicateSubmit: return "duplicate-submit";
+  case D::DuplicateRelease: return "duplicate-release";
+  case D::MissingRelease: return "missing-release";
+  case D::InvalidReleaseBoundary: return "invalid-release-boundary";
+  case D::RouteMismatch: return "route-mismatch";
+  case D::StaleIteration: return "stale-iteration";
+  case D::StaleEvent: return "stale-event";
+  case D::UnexpectedSubmit: return "unexpected-submit";
+  case D::DuplicateSubmission: return "duplicate-submission";
+  case D::InvalidActualSource: return "invalid-actual-source";
+  case D::ActualSourceOrder: return "actual-source-order";
+  case D::ReleaseBeforeSubmit: return "release-before-submit";
+  case D::SkippedReleaseFrontier: return "skipped-release-frontier";
+  case D::DuplicateReleaseAttempt: return "duplicate-release";
+  case D::CallbackFailure: return "callback-failure";
+  case D::MissingSubmit: return "missing-submit";
+  case D::Exhausted: return "exhausted";
+  case D::Unresolved: return "unresolved";
+  }
+  return "unknown";
 }
 
 template <typename T>
@@ -306,6 +379,14 @@ struct CommandQueueArenaLeaseTestAccess {
     std::size_t commandCount = 0;
     std::size_t arenaSegmentCount = 0;
     core::Handle presentSource{};
+    core::metalqueue::QueueCompletionSource completion{};
+  };
+
+  struct BufferLifetimeEvidence {
+    bool alive = false;
+    bool destroyPending = false;
+    std::uint64_t lastUsedSeq = 0;
+    std::uint64_t completedSeq = 0;
   };
 
   struct DrawDigest {
@@ -323,6 +404,44 @@ struct CommandQueueArenaLeaseTestAccess {
     return queue.nextSeqId_;
   }
 
+  static std::uint64_t completedSeqId(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.completedSeqIdLocked();
+  }
+
+  static void bindDevice(CommandQueue& queue, WMT::Device device) {
+    std::lock_guard lock(queue.mutex_);
+    queue.device_ = device;
+  }
+
+  // Keep the CPU-only fixture's upload path on the same Pool entry points as
+  // DeviceImpl. The watermark comes from the queue's owner-published
+  // completion state so DEFAULT+DYNAMIC DISCARD rotation uses the real
+  // admission value rather than a test-local counter.
+  static void uploadBufferData(CommandQueue& queue, WMT::Device device,
+                               core::BufferHandle handle,
+                               std::span<const std::uint8_t> bytes) {
+    std::lock_guard lock(queue.mutex_);
+    queue.pool_.uploadBufferData(device, handle.value, bytes.data(),
+                                 bytes.size(), queue.completedSeqIdLocked());
+  }
+
+  static void uploadBufferDataRange(
+      CommandQueue& queue, WMT::Device device, core::BufferHandle handle,
+      std::span<const std::uint8_t> fullBytes, std::uint64_t offset,
+      std::uint64_t byteCount) {
+    if (offset > fullBytes.size() ||
+        byteCount > fullBytes.size() - static_cast<std::size_t>(offset)) {
+      return;
+    }
+    const auto* rangeBytes =
+        byteCount == 0u ? nullptr : fullBytes.data() + offset;
+    std::lock_guard lock(queue.mutex_);
+    queue.pool_.uploadBufferDataRange(
+        device, handle.value, offset, rangeBytes,
+        static_cast<std::size_t>(byteCount), queue.completedSeqIdLocked());
+  }
+
   static std::size_t readyCount(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.cpuReadyTape_.readyCount();
@@ -331,6 +450,104 @@ struct CommandQueueArenaLeaseTestAccess {
   static std::size_t residentCount(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.cpuReadyTape_.residentCount();
+  }
+
+  static std::optional<core::CpuReadyTape::State> oldestSourceState(
+      CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    const auto oldest = queue.cpuReadyTape_.oldestResident();
+    return oldest ? std::optional<core::CpuReadyTape::State>(oldest->state)
+                  : std::nullopt;
+  }
+
+  static bool publishWriting(CommandQueue& queue) {
+    std::unique_lock lock(queue.mutex_);
+    if (!queue.writingSlot_ ||
+        queue.slots_[*queue.writingSlot_].payload->commandsEmpty()) return true;
+    return queue.queueLifecycle_.commitCurrentChunk(lock, kMaxQueuedChunks);
+  }
+
+  static std::uint64_t reclaimCompletedPool(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    const auto completed = queue.completedSeqIdLocked();
+    queue.pool_.reclaimCompleted(completed);
+    return completed;
+  }
+
+  static core::metalqueue::QueueCompletionSource peekReadyCompletion(
+      CommandQueue& queue) {
+    using namespace core::metalqueue;
+    std::lock_guard lock(queue.mutex_);
+    std::array<core::CpuReadyTape::ReadyEntry, 1> entries{};
+    if (queue.cpuReadyTape_.copyReadyPrefix(entries) != 1u) {
+      return {};
+    }
+    const auto& entry = entries[0];
+    ReadySlotSnapshot snapshot{
+        .slotIndex = entry.controlIndex,
+        .seqId = entry.seqId,
+        .metadata = entry.metadata,
+        .semantic = entry.semantic,
+        .hasPresent = entry.semantic.hasPresent(),
+        .commandBegin = 0u,
+        .commandCount = entry.semantic.commandCount,
+        .sourceId = entry.source.id,
+        .storage = entry.source.storage,
+    };
+    return completionSourceForReadySlot(snapshot);
+  }
+
+  struct NoWaitHeadroom {
+    dxmt9::test::CpuTapeSourceAdmissionInputs inputs{};
+
+    bool admitsOne() const noexcept {
+      return dxmt9::test::admitCpuTapeSource(inputs) ==
+             dxmt9::test::CpuTapeSourceAdmission::Admitted;
+    }
+  };
+
+  static bool cpuTapeWorkersDisabled(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return !queue.stop_ && !queue.encodeThread_.joinable() &&
+        !queue.finishThread_.joinable() && !queue.completionThread_.joinable();
+  }
+
+  // Read the same live control/tape/inflight state consulted by production
+  // writer admission. This is intentionally a snapshot, not a reservation;
+  // the single-thread fixture rechecks it immediately before each mutation.
+  static NoWaitHeadroom noWaitHeadroom(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    const bool writerOwned = queue.writingSlot_.has_value();
+    const bool writerIndexValid =
+        writerOwned && *queue.writingSlot_ < queue.slots_.size();
+    const auto* writer = writerIndexValid ? &queue.slots_[*queue.writingSlot_]
+                                          : nullptr;
+    const bool writerValid =
+        writer && writer->state == core::ChunkSlot::State::Writing &&
+        writer->sourceId.valid() && writer->storage.valid() &&
+        writer->payload != nullptr &&
+        queue.cpuReadyTape_.resolveForWrite(core::CpuReadyPublicationTicket{
+            .id = writer->sourceId,
+            .storage = writer->storage,
+        }) == writer->payload;
+    const bool writerEmpty =
+        writerValid && writer->payload->commandsEmpty();
+    const bool nextControlFree =
+        queue.writeIndex_ < queue.slots_.size() &&
+        queue.slots_[queue.writeIndex_].state == core::ChunkSlot::State::Free;
+    return {.inputs = {
+                .stopped = queue.stop_,
+                .writerOwned = writerOwned,
+                .writerValid = writerValid,
+                .writerEmpty = writerEmpty,
+                .nextControlFree = nextControlFree,
+                // This is deliberately a one-source probe. The caller must
+                // re-read it before every publication; it is never summed
+                // or used as a two-source aggregate credit.
+                .tapeCanReserve = queue.cpuReadyTape_.canReserve(),
+                .inflightCount = queue.inflightCount_,
+                .inflightLimit = kMaxQueuedChunks,
+            }};
   }
 
   static std::size_t writingCommandCount(CommandQueue& queue) {
@@ -475,6 +692,64 @@ struct CommandQueueArenaLeaseTestAccess {
     return result;
   }
 
+  static std::vector<std::array<core::u32, core::kMaxStreams>>
+  writingDrawStreamFrequencies(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    std::vector<std::array<core::u32, core::kMaxStreams>> result;
+    const auto append = [&](const core::SourcePayloadView& view) {
+      for (std::size_t index = 0u; index < view.commandCount(); ++index) {
+        const auto& command = view.commandAt(index).command;
+        if (command.drawState.hot) {
+          for (std::size_t draw = 0u; draw < command.drawParams.size(); ++draw)
+            result.push_back(command.drawState.hot->streamFrequencies);
+        }
+      }
+    };
+    std::vector<core::CpuReadyTape::ReadyEntry> ready(
+        queue.cpuReadyTape_.readyCount());
+    if (!ready.empty() && queue.cpuReadyTape_.copyReadyPrefix(ready) ==
+                              ready.size()) {
+      for (const auto& entry : ready) {
+        append(queue.cpuReadyTape_.resolveSourcePayload(
+            entry.source.id, entry.source.storage,
+            core::CpuReadyTape::State::Ready));
+      }
+    }
+    if (queue.writingSlot_) {
+      append(core::SourcePayloadView(*queue.slots_[*queue.writingSlot_].payload));
+    }
+    return result;
+  }
+
+  static std::vector<core::u32> writingDrawInstanceCounts(
+      CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    std::vector<core::u32> result;
+    const auto append = [&](const core::SourcePayloadView& view) {
+      for (std::size_t index = 0u; index < view.commandCount(); ++index) {
+        const auto& command = view.commandAt(index).command;
+        if (!command.drawState.hot) continue;
+        for (const auto& param : command.drawParams) {
+          result.push_back(param.instanceCount);
+        }
+      }
+    };
+    std::vector<core::CpuReadyTape::ReadyEntry> ready(
+        queue.cpuReadyTape_.readyCount());
+    if (!ready.empty() && queue.cpuReadyTape_.copyReadyPrefix(ready) ==
+                              ready.size()) {
+      for (const auto& entry : ready) {
+        append(queue.cpuReadyTape_.resolveSourcePayload(
+            entry.source.id, entry.source.storage,
+            core::CpuReadyTape::State::Ready));
+      }
+    }
+    if (queue.writingSlot_) {
+      append(core::SourcePayloadView(*queue.slots_[*queue.writingSlot_].payload));
+    }
+    return result;
+  }
+
   static std::vector<core::Handle> writingDrawOverrideBuffers(
       CommandQueue& queue, std::size_t commandIndex = 0u) {
     std::lock_guard lock(queue.mutex_);
@@ -510,6 +785,38 @@ struct CommandQueueArenaLeaseTestAccess {
   static bool bufferAlive(CommandQueue& queue, core::Handle handle) {
     std::lock_guard lock(queue.mutex_);
     return queue.pool_.findBuffer(handle.value) != nullptr;
+  }
+
+  static BufferLifetimeEvidence bufferLifetime(CommandQueue& queue,
+                                               core::Handle handle) {
+    std::lock_guard lock(queue.mutex_);
+    BufferLifetimeEvidence result{};
+    if (const auto* record = queue.pool_.findBuffer(handle.value)) {
+      result.alive = true;
+      result.destroyPending = record->destroyPending;
+      result.lastUsedSeq = record->lastUsedSeqId;
+    }
+    result.completedSeq = queue.completedSeqIdLocked();
+    return result;
+  }
+
+  static void markBufferUseForTest(CommandQueue& queue, core::Handle handle,
+                                   std::uint64_t seqId) {
+    std::lock_guard lock(queue.mutex_);
+    queue.pool_.markBufferUse(handle, seqId);
+  }
+
+  static bool destroyBufferForTest(CommandQueue& queue,
+                                   core::Handle handle,
+                                   std::uint64_t completedSeqId) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.pool_.markBufferDestroyAndGc(handle.value, completedSeqId);
+  }
+
+  static void reclaimPoolForTest(CommandQueue& queue,
+                                 std::uint64_t completedSeqId) {
+    std::lock_guard lock(queue.mutex_);
+    queue.pool_.reclaimCompleted(completedSeqId);
   }
 
   static void forceNextBatchBuilderFailure(CommandQueue& queue) {
@@ -629,6 +936,7 @@ struct CommandQueueArenaLeaseTestAccess {
       record.slotIndex = source.slotIndex;
       record.seqId = source.seqId;
       completion = completionSourceForReadySlot(source);
+      result.completion = completion;
       const std::array sources{completion};
       if (!record.assignFixedCompletionSources(sources)) {
         return result;
@@ -655,6 +963,72 @@ struct CommandQueueArenaLeaseTestAccess {
           queue.queueLifecycle_.runFinishIteration(lock);
     }
     return result;
+  }
+
+  // Submit one already-published source through the production queue path but
+  // leave its completion acknowledgement pending.  The caller controls when
+  // processOnePendingCompletion() and runFinishIteration() occur; this is the
+  // concrete binding used by the bounded completion schedule tests below.
+  static CompletionResult submitOneWithheld(
+      CommandQueue& queue,
+      const std::function<void(const core::SourcePayloadView&)>& observe = {}) {
+    using namespace core::metalqueue;
+    CompletionResult result{};
+    ReadySlotSnapshot source{};
+    QueueCompletionSource completion{};
+    {
+      std::unique_lock lock(queue.mutex_);
+      result.dequeued = queue.queueLifecycle_.dequeueReadySlot(lock, source);
+      if (!result.dequeued) return result;
+      result.seqId = source.seqId;
+      const auto resolved =
+          queue.queueLifecycle_.resolveRepresentedSource(source);
+      if (observe) observe(resolved.payload);
+      result.arena = resolved.valid() && resolved.payload.isArena() &&
+                     resolved.slot == nullptr;
+      result.commandCount = resolved.payload.commandCount();
+      result.arenaSegmentCount = resolved.payload.arenaSegmentCount();
+      result.rawOrdinal = resolved.metadata.rawOrdinal;
+      result.sourceOrdinal = resolved.metadata.sourceOrdinal;
+      result.effectiveDigest = effectivePayloadDigest(resolved.payload);
+      result.commandDigests.reserve(result.commandCount);
+      result.commandKinds.reserve(result.commandCount);
+      for (std::size_t index = 0; index < result.commandCount; ++index) {
+        result.commandDigests.push_back(
+            effectiveCommandDigest(resolved.payload, index));
+        result.commandKinds.push_back(static_cast<std::uint8_t>(
+            resolved.payload.commandAt(index).kind()));
+      }
+      completion = completionSourceForReadySlot(source);
+      result.completion = completion;
+
+      QueueSubmissionRecord record{};
+      record.testOnlyAllowNullCommandBuffer = true;
+      record.slotIndex = source.slotIndex;
+      record.seqId = source.seqId;
+      const std::array sources{completion};
+      if (!record.assignFixedCompletionSources(sources)) return result;
+      result.submitted =
+          queue.queueLifecycle_.submitEncodedSubmission(lock, record);
+    }
+    if (!result.submitted) return result;
+
+    QueueLifecycleController::PendingCompletion pending{};
+    pending.slotIndex = completion.slotIndex;
+    pending.seqId = completion.seqId;
+    const std::array pendingSources{completion};
+    if (!pending.assignFixedCompletionSources(pendingSources)) return result;
+    queue.queueLifecycle_.enqueuePendingCompletionForTest(std::move(pending));
+    return result;
+  }
+
+  static bool acknowledgeOne(CommandQueue& queue) {
+    return queue.queueLifecycle_.processOnePendingCompletion();
+  }
+
+  static bool finishQueue(CommandQueue& queue) {
+    std::unique_lock lock(queue.mutex_);
+    return queue.queueLifecycle_.runFinishIteration(lock);
   }
 
   static bool finishIteration(CommandQueue& queue) {
@@ -1006,8 +1380,10 @@ RecordSpec floatConstantRecord(std::uint32_t type,
   return {.type = type, .payload = std::move(payload)};
 }
 
-RecordSpec drawRecord(const D9CWireObjectIdentity& bufferIdentity,
-                      std::uint32_t streamHandleIndex = 0u) {
+RecordSpec streamDrawRecord(
+    std::optional<D9CWireObjectIdentity> bufferIdentity,
+    std::uint32_t streamHandleIndex, std::uint32_t frequency,
+    std::uint32_t streamSlot = 0u) {
   D9CCommandChunkWireDrawHeader draw{
       .primitiveType = 4u,
       .primitiveCount = 1u,
@@ -1025,12 +1401,12 @@ RecordSpec drawRecord(const D9CWireObjectIdentity& bufferIdentity,
       .byteSize = sizeof(D9CCommandChunkWireStreamBinding),
   };
   const D9CCommandChunkWireStreamBinding stream{
-      .slot = 0u,
+      .slot = streamSlot,
       .valid = 1u,
       .handleIndex = streamHandleIndex,
       .offset = 0u,
       .stride = 16u,
-      .frequency = 1u,
+      .frequency = frequency,
   };
   std::vector<std::byte> payload(
       draw.sectionPayloadOffset + sizeof(stream));
@@ -1039,11 +1415,25 @@ RecordSpec drawRecord(const D9CWireObjectIdentity& bufferIdentity,
               &section, sizeof(section));
   std::memcpy(payload.data() + draw.sectionPayloadOffset,
               &stream, sizeof(stream));
-  return {
+  RecordSpec record{
       .type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
       .payload = std::move(payload),
-      .handles = {dxmt9::d3d9::wireHandleEntry(bufferIdentity)},
   };
+  if (bufferIdentity) {
+    record.handles.push_back(dxmt9::d3d9::wireHandleEntry(*bufferIdentity));
+  }
+  return record;
+}
+
+RecordSpec drawRecord(const D9CWireObjectIdentity& bufferIdentity,
+                      std::uint32_t streamHandleIndex = 0u,
+                      std::uint32_t frequency = 1u) {
+  return streamDrawRecord(bufferIdentity, streamHandleIndex, frequency);
+}
+
+RecordSpec nullStreamDrawRecord(std::uint32_t frequency) {
+  return streamDrawRecord(std::nullopt,
+                          D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX, frequency);
 }
 
 RecordSpec stretchRectRecord(const D9CWireObjectIdentity& source,
@@ -1100,10 +1490,40 @@ dxmt9::d3d9::RawCommandChunk makeRaw(const WireFixture& fixture,
 }
 
 struct RoutingDevice final : dxmt9::Device {
+  static constexpr std::size_t kTextureUploadObservationCapacity = 16u;
+  static constexpr std::size_t kTextureUploadObservationBytes = 64u * 1024u;
+
+  struct TextureUploadObservation {
+    TextureHandle handle{};
+    std::uint32_t level = 0u;
+    std::uint32_t width = 0u;
+    std::uint32_t height = 0u;
+    std::uint32_t depth = 0u;
+    std::uint32_t pitch = 0u;
+    std::uint32_t slicePitch = 0u;
+    std::uint64_t contentDigest = 0u;
+    std::vector<std::uint8_t> bytes{};
+  };
+
+  struct CapturedBindingObservation {
+    std::uint64_t metalHandle = 0u;
+    std::uint64_t contentsAddress = 0u;
+    std::uint64_t contentRevision = 0u;
+    std::vector<std::uint8_t> bytes;
+  };
+
   explicit RoutingDevice(bool rejectAfterClear = false,
                          bool segmentSerial = false,
-                         bool directChunkSlot = false)
-      : queue_(
+                         bool directChunkSlot = false,
+                         bool cpuReadyArena = true,
+                         WMT::Device resourceDevice = {})
+      : limits_([&] {
+          BackendLimits limits{};
+          if (resourceDevice)
+            limits.supportsDepth24Stencil8 = resourceDevice.supportsDepth24Stencil8();
+          return limits;
+        }()),
+        queue_(
             dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, limits_, {},
             segmentSerial
                 ? dxmt9::render::RenderPartitionConfig{
@@ -1115,23 +1535,220 @@ struct RoutingDevice final : dxmt9::Device {
                                   SourceIdentityMode::SegmentSerial}}
                 : dxmt9::render::RenderPartitionConfig{}),
         rejectAfterClear_(rejectAfterClear),
-        directChunkSlot_(directChunkSlot) {}
+        directChunkSlot_(directChunkSlot),
+        cpuReadyArena_(cpuReadyArena),
+        resourceDevice_(resourceDevice) {
+    if (static_cast<bool>(resourceDevice_)) {
+      dxmt9::CommandQueueArenaLeaseTestAccess::bindDevice(queue_,
+                                                          resourceDevice_);
+    }
+  }
 
-  WMT::Device wmtDevice() override { return WMT::Device{NULL_OBJECT_HANDLE}; }
+  WMT::Device wmtDevice() override { return resourceDevice_; }
   dxmt9::CommandQueue& queue() override { return queue_; }
   const BackendLimits& limits() const override { return limits_; }
   std::shared_ptr<BackendDevice> backend() override { return {}; }
-  bool supportsCpuReadyArenaReplay() const noexcept override { return true; }
+  void flush() override {
+    ++flushCalls;
+    if (flushHook) flushHook();
+  }
+  bool supportsCpuReadyArenaReplay() const noexcept override {
+    return cpuReadyArena_;
+  }
   bool supportsDirectChunkSlotReplay() const noexcept override {
     return directChunkSlot_;
   }
+  bool dynamicBufferRenameEnabled() const noexcept override { return true; }
 
-  BufferHandle createBuffer(const BufferDesc& desc) override {
-    return queue_.pool().createBuffer(WMT::Device{NULL_OBJECT_HANDLE}, desc);
+  void* mapBuffer(BufferHandle handle, std::uint32_t flags) override {
+    return queue_.mapBuffer(handle, flags);
   }
 
-  SurfaceHandle createSurface(const SurfaceDesc&) override {
-    return SurfaceHandle{nextHandle_++};
+  void unmapBuffer(BufferHandle) override {}
+
+  void uploadBufferData(BufferHandle handle,
+                        std::span<const std::uint8_t> bytes) override {
+    dxmt9::CommandQueueArenaLeaseTestAccess::uploadBufferData(
+        queue_, resourceDevice_, handle, bytes);
+  }
+
+  void uploadBufferDataRange(BufferHandle handle,
+                             std::span<const std::uint8_t> fullBytes,
+                             std::uint64_t offset,
+                             std::uint64_t byteCount) override {
+    dxmt9::CommandQueueArenaLeaseTestAccess::uploadBufferDataRange(
+        queue_, resourceDevice_, handle, fullBytes, offset,
+        byteCount);
+  }
+
+  void uploadTextureLevel(TextureHandle handle, std::uint32_t level,
+                          std::uint32_t width, std::uint32_t height,
+                          std::uint32_t depth, std::uint32_t pitch,
+                          std::uint32_t slicePitch,
+                          std::span<const std::uint8_t> bytes) override {
+    // A null resource device retains the old no-op fixture behavior. The
+    // resource-backed path records the logical core upload only; it does not
+    // touch the Metal texture or submit an initializer/blit command.
+    if (!resourceDevice_) return;
+    std::lock_guard lock(queue_.mutex_);
+    const auto* record = queue_.pool().findTexture(handle.value);
+    std::uint64_t faceCount = 1u;
+    if (record) {
+      switch (record->desc.type) {
+      case TextureType::TwoD:
+      case TextureType::Volume:
+        break;
+      case TextureType::Cube:
+        faceCount = 6u;
+        break;
+      default:
+        faceCount = 0u;
+        break;
+      }
+    }
+    const auto mipLevels = record ? std::max(1u, record->desc.levels) : 0u;
+    const auto subresourceCount = record
+        ? static_cast<std::uint64_t>(mipLevels) * faceCount
+        : 0u;
+    const auto mipLevel = record && record->desc.type == TextureType::Cube
+        ? level % std::max(1u, mipLevels)
+        : level;
+    const bool descriptorValid = record && record->texture && faceCount != 0u &&
+        mipLevels != 0u && record->desc.width != 0u &&
+        record->desc.height != 0u &&
+        (record->desc.type != TextureType::Volume || record->desc.depth != 0u) &&
+        mipLevel < mipLevels && mipLevel < 32u;
+    const auto expectedWidth = descriptorValid
+        ? std::max(1u, record->desc.width >> mipLevel)
+        : 0u;
+    const auto expectedHeight = descriptorValid
+        ? std::max(1u, record->desc.height >> mipLevel)
+        : 0u;
+    const auto expectedDepth = descriptorValid &&
+            record->desc.type == TextureType::Volume
+        ? std::max(1u, record->desc.depth >> mipLevel)
+        : descriptorValid ? 1u : 0u;
+    const auto expectedPitch = descriptorValid
+        ? dxmt9::core::formatRowPitch(record->desc.format, expectedWidth)
+        : 0u;
+    const auto expectedSlicePitch = descriptorValid
+        ? dxmt9::core::formatByteSize(record->desc.format, expectedWidth,
+                                       expectedHeight)
+        : 0u;
+    const bool sizeOverflow =
+        descriptorValid && expectedSlicePitch != 0u && expectedDepth != 0u &&
+        expectedSlicePitch >
+            std::numeric_limits<std::size_t>::max() / expectedDepth;
+    const auto expectedBytes = sizeOverflow
+        ? std::numeric_limits<std::size_t>::max()
+        : expectedSlicePitch * expectedDepth;
+    if (!descriptorValid || level >= subresourceCount || expectedPitch == 0u ||
+        expectedSlicePitch == 0u || sizeOverflow || width != expectedWidth ||
+        height != expectedHeight || depth != expectedDepth ||
+        pitch != expectedPitch || slicePitch != expectedSlicePitch ||
+        bytes.empty() || bytes.size() != expectedBytes) {
+      textureUploadFailed = true;
+      return;
+    }
+    try {
+      // General tape execution consumes a qualified logical upload receipt.
+      // Validation above remains identical to the bounded fixture. The cold
+      // callback runs under the queue lock and must never re-enter the queue.
+      if (generalTextureUpload) {
+        if (!generalTextureUpload(handle, level, width, height, depth, pitch,
+                                  slicePitch, bytes)) {
+          textureUploadFailed = true;
+        }
+        return;
+      }
+      if (bytes.size() > kTextureUploadObservationBytes ||
+          textureUploadObservations.size() >= kTextureUploadObservationCapacity) {
+        textureUploadFailed = true;
+        return;
+      }
+      TextureUploadObservation observation{
+          .handle = handle,
+          .level = level,
+          .width = width,
+          .height = height,
+          .depth = depth,
+          .pitch = pitch,
+          .slicePitch = slicePitch,
+          .contentDigest = digestByteSpan(bytes),
+          .bytes = std::vector<std::uint8_t>(bytes.begin(), bytes.end()),
+      };
+      textureUploadObservations.push_back(std::move(observation));
+    } catch (...) {
+      textureUploadFailed = true;
+    }
+  }
+
+  BufferHandle createBuffer(const BufferDesc& desc) override {
+    return queue_.pool().createBuffer(resourceDevice_, desc);
+  }
+
+  TextureHandle createTexture(const TextureDesc& desc) override {
+    if (!resourceDevice_) return {};
+    // Pool creation allocates the backing record/Metal resource only; no
+    // command buffer or initializer submission is needed here.
+    std::lock_guard lock(queue_.mutex_);
+    return queue_.pool().createTexture(resourceDevice_, limits_, desc);
+  }
+
+  SurfaceHandle createSurface(const SurfaceDesc& desc) override {
+    if (!resourceDevice_) return SurfaceHandle{nextHandle_++};
+    std::lock_guard lock(queue_.mutex_);
+    return queue_.pool().createSurface(resourceDevice_, limits_, desc);
+  }
+
+  SurfaceHandle createSurfaceForTexture(TextureHandle texture, std::uint32_t level,
+                                        const SurfaceDesc& desc) override {
+    if (!resourceDevice_) return {};
+    std::lock_guard lock(queue_.mutex_);
+    return queue_.pool().createSurfaceForTexture(texture, level, desc);
+  }
+
+  bool bufferHasVersionedBacking(BufferHandle handle) override {
+    return queue_.pool().bufferHasVersionedBacking(handle.value);
+  }
+
+  dxmt9::resources::ManagedBufferMutationLease rotateManagedBufferForMutation(
+      BufferHandle handle) override {
+    std::lock_guard lock(queue_.mutex_);
+    return queue_.pool().rotateManagedBufferForMutation(
+        resourceDevice_, handle.value, queue_.completedSeqIdLocked());
+  }
+
+  dxmt9::resources::ManagedBufferMutationApplyResult applyManagedBufferMutation(
+      BufferHandle handle,
+      const dxmt9::resources::ManagedBufferMutationLease& lease,
+      std::uint64_t offset,
+      std::span<const std::uint8_t> bytes) override {
+    ++mutationApplies;
+    return queue_.pool().applyManagedBufferMutation(
+        handle.value, lease, offset, bytes.data(), bytes.size());
+  }
+
+  void destroyBuffer(BufferHandle handle) override {
+    // Same retire predicate as DeviceImpl; the base test Device callback is
+    // intentionally a no-op and cannot witness ObjectDestroy lifetime.
+    const auto completed = dxmt9::CommandQueueArenaLeaseTestAccess::bufferLifetime(
+        queue_, handle).completedSeq;
+    dxmt9::CommandQueueArenaLeaseTestAccess::destroyBufferForTest(queue_, handle, completed);
+  }
+
+  void destroyTexture(TextureHandle handle) override {
+    if (!resourceDevice_) return;
+    std::lock_guard lock(queue_.mutex_);
+    queue_.pool().markTextureDestroyAndGc(handle.value,
+                                          queue_.completedSeqIdLocked());
+  }
+
+  void destroySurface(SurfaceHandle handle) override {
+    if (!resourceDevice_) return;
+    std::lock_guard lock(queue_.mutex_);
+    queue_.pool().markSurfaceDestroyAndGc(handle.value,
+                                          queue_.completedSeqIdLocked());
   }
 
   ChunkBufferBindingCaptureResult captureChunkBufferBindings(
@@ -1147,7 +1764,39 @@ struct RoutingDevice final : dxmt9::Device {
         capturedBufferLastUsedSeq = record->lastUsedSeqId;
       }
     }
-    return queue_.captureChunkBufferBindings(entries, snapshots);
+    const auto result = queue_.captureChunkBufferBindings(entries, snapshots);
+    observeCapturedBindings(snapshots);
+    return result;
+  }
+
+  ChunkBufferBindingCaptureResult markChunkResourcesAndCaptureBufferBindings(
+      std::span<const ChunkHandleEntry> entries,
+      std::vector<ChunkBufferBindingSnapshot>& snapshots) override {
+    ++combinedMarkCalls;
+    const auto result =
+        queue_.markChunkResourcesAndCaptureBufferBindings(entries, snapshots);
+    observeCapturedBindings(snapshots);
+    return result;
+  }
+
+  void observeCapturedBindings(
+      std::span<const ChunkBufferBindingSnapshot> snapshots) {
+    if (!recordBoundedCapturedBindings) return;
+    for (const auto& capture : snapshots) {
+      if (!capture.snapshot.valid() || capture.snapshot.contentsAddress == 0u ||
+          capture.snapshot.byteSize == 0u) {
+        continue;
+      }
+      const auto* bytes = reinterpret_cast<const std::uint8_t*>(
+          static_cast<std::uintptr_t>(capture.snapshot.contentsAddress));
+      CapturedBindingObservation observation{
+          .metalHandle = capture.snapshot.metalHandle,
+          .contentsAddress = capture.snapshot.contentsAddress,
+          .contentRevision = capture.snapshot.contentRevision,
+          .bytes = std::vector<std::uint8_t>(
+              bytes, bytes + static_cast<std::size_t>(capture.snapshot.byteSize))};
+      capturedBindingObservations.push_back(std::move(observation));
+    }
   }
 
   void markChunkResources(
@@ -1210,24 +1859,44 @@ struct RoutingDevice final : dxmt9::Device {
     lastPresentSeqId = queue_.submitPresent(desc);
   }
 
+  void submitGenerateMipmaps(const GenerateMipmapsDesc& desc) override {
+    queue_.submitGenerateMipmaps(desc);
+  }
+
   BackendLimits limits_{};
   dxmt9::CommandQueue queue_;
   bool rejectAfterClear_ = false;
   bool rejectAfterFinalClear_ = false;
   bool directChunkSlot_ = false;
+  bool cpuReadyArena_ = true;
+  WMT::Device resourceDevice_{};
   std::uint64_t nextHandle_ = 1;
   std::atomic<std::uint32_t> clearCalls{0};
   std::atomic<std::uint32_t> drawCalls{0};
   std::atomic<std::uint32_t> ordinaryDrawCalls{0};
   std::atomic<std::uint32_t> ordinaryDrawRunSubmissions{0};
   std::atomic<std::uint32_t> presentCalls{0};
+  std::uint32_t flushCalls = 0u;
+  std::function<void()> flushHook;
   std::uint32_t lastDrawRunSize = 0;
   std::uint64_t lastPresentSeqId = 0;
   std::uint32_t captureCalls = 0;
   std::uint32_t legacyMarkCalls = 0;
+  std::uint32_t combinedMarkCalls = 0;
+  std::atomic<std::uint32_t> mutationApplies{0};
   std::uint64_t capturedBufferLastUsedSeq = UINT64_MAX;
   std::thread::id captureThread{};
   std::vector<ChunkHandleEntry> capturedResources;
+  std::vector<CapturedBindingObservation> capturedBindingObservations;
+  // Tiny backing-lifetime fixtures keep complete historical bytes. General
+  // execution instead observes each final-slot snapshot at consumption time.
+  bool recordBoundedCapturedBindings = true;
+  std::vector<TextureUploadObservation> textureUploadObservations;
+  std::function<bool(TextureHandle, std::uint32_t, std::uint32_t,
+                     std::uint32_t, std::uint32_t, std::uint32_t,
+                     std::uint32_t, std::span<const std::uint8_t>)>
+      generalTextureUpload;
+  bool textureUploadFailed = false;
   dxmt9::CommandQueue::CpuReadyArenaFailureSnapshot organicFailure{};
   bool organicFailureObserved = false;
 };
@@ -1235,10 +1904,18 @@ struct RoutingDevice final : dxmt9::Device {
 struct RuntimeFixture {
   explicit RuntimeFixture(bool rejectAfterClear = false,
                           bool segmentSerial = false,
-                          bool directChunkSlot = false) {
+                          bool directChunkSlot = false,
+                          bool cpuReadyArena = true,
+                          WMT::Device resourceDevice = {},
+                          dxmt9::d3d9::ReplayQueueAllocationFailure*
+                              allocationFailure = nullptr,
+                          const PresentParameters* outputParameters = nullptr) {
+    allocationFailure_ = allocationFailure;
     auto upper = std::make_unique<RoutingDevice>(rejectAfterClear,
                                                   segmentSerial,
-                                                  directChunkSlot);
+                                                  directChunkSlot,
+                                                  cpuReadyArena,
+                                                  resourceDevice);
     routing = upper.get();
     factory = dxmt9::com::Direct3DCreate9Ex(
         dxmt9::com::D3D_SDK_VERSION, std::move(upper));
@@ -1251,26 +1928,46 @@ struct RuntimeFixture {
     params.windowed = true;
     params.deviceWindow = Handle{91};
     params.presentationInterval = PresentInterval::Immediate;
+    if (outputParameters) params = *outputParameters;
     device = factory->CreateDeviceEx(0, params, nullptr);
     check(device != nullptr, "routing core device must construct");
     device->AddRef();
     cDevice = std::make_unique<D9CDevice>(device);
+    if (allocationFailure) {
+      cDevice->replayOffload = std::make_unique<
+          dxmt9::d3d9::ReplayOffloadWorker>(
+          dxmt9::d3d9::ReplayOffloadWorker::TestAllocationConfig{
+              allocationFailure});
+    }
   }
 
   ~RuntimeFixture() {
+    releaseCoreForInspection();
+  }
+
+  // Cold CPU iterations are fresh-device, not warm resets. Keep the real
+  // backend alive while destroying every core/cache owner, so Pool and queue
+  // reclamation can be checked afterwards without a dangling routing pointer.
+  void releaseCoreForInspection() {
+    if (cDevice && !inspectionBackend_)
+      inspectionBackend_ = cDevice->dev().backend();
     cDevice.reset();
     if (device) {
       (void)device->Release();
+      device = nullptr;
     }
     if (factory) {
       (void)factory->Release();
+      factory = nullptr;
     }
   }
 
   RoutingDevice* routing = nullptr;
+  dxmt9::d3d9::ReplayQueueAllocationFailure* allocationFailure_ = nullptr;
   dxmt9::com::IDirect3D9Ex* factory = nullptr;
   dxmt9::com::IDirect3DDevice9Ex* device = nullptr;
   std::unique_ptr<D9CDevice> cDevice;
+  std::shared_ptr<dxmt9::Device> inspectionBackend_;
 };
 
 // Every command the replayed raw published, in source order, across every
@@ -1581,6 +2278,120 @@ void capturedLargeRawPublishesTwoAuthenticatedSources() {
   }
 }
 
+void eventCompletionBridgeWaitsExactCapturedEvent() {
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/true);
+  constexpr std::uint64_t kCaptureToken = 0xfeedu;
+  constexpr std::uint64_t kFirstEvent = 4u;
+  constexpr std::uint64_t kSecondEvent = 5u;
+  auto first = makeRaw(makeWireFixture(std::array{clearRecord()}), kFirstEvent,
+                       /*captureIdentity=*/true);
+  auto second = makeRaw(makeWireFixture(std::array{clearRecord()}),
+                        kSecondEvent, /*captureIdentity=*/true);
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), first) == D3D_OK &&
+            dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), second) == D3D_OK,
+        "captured event bridge fixture must publish both real sources");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+            fixture.routing->queue_) == 2u,
+        "captured event bridge fixture must expose two Ready sources");
+  const auto nextSeqBeforeWait =
+      dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
+          fixture.routing->queue_);
+
+  fixture.routing->flushHook = [&] {
+    const auto ready = dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+        fixture.routing->queue_);
+    for (std::size_t i = 0u; i < ready; ++i) {
+      const auto completion = dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+      check(completion.dequeued && completion.submitted && completion.completed,
+            "flush hook must consume each real captured source");
+    }
+  };
+  const auto expectNoFlush = [&](std::uint64_t token, std::uint64_t event,
+                                 std::string_view reason) {
+    const auto priorFlushes = fixture.routing->flushCalls;
+    const auto priorSeq = dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
+        fixture.routing->queue_);
+    check(dxmt9c_device_wait_render_tape_event_completion(
+              fixture.cDevice.get(), token, event) == D3DERR_INVALIDCALL &&
+              fixture.routing->flushCalls == priorFlushes &&
+              dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
+                  fixture.routing->queue_) == priorSeq,
+          reason);
+  };
+  expectNoFlush(0u, kFirstEvent,
+                "zero capture token must reject without flushing");
+  expectNoFlush(0xdeadbeefu, kFirstEvent,
+                "foreign capture token must reject without flushing");
+  expectNoFlush(kCaptureToken, 999u,
+                "missing event ordinal must reject without flushing");
+
+  const auto priorFlushes = fixture.routing->flushCalls;
+  check(dxmt9c_device_wait_render_tape_event_completion(
+            fixture.cDevice.get(), kCaptureToken, kFirstEvent) == D3D_OK &&
+            fixture.routing->flushCalls == priorFlushes + 1u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
+                fixture.routing->queue_) == nextSeqBeforeWait &&
+            fixture.routing->clearCalls == 2u,
+        "valid earlier event must flush and settle only existing sources");
+  D9CRenderTapeIdentityCaptureResult incomplete{};
+  check(!fixture.cDevice->renderTapeIdentityCapture.copy(
+            kCaptureToken, incomplete, {}),
+        "capture ledger copy must remain incomplete until the newer event settles");
+
+  const auto secondPriorFlushes = fixture.routing->flushCalls;
+  check(dxmt9c_device_wait_render_tape_event_completion(
+            fixture.cDevice.get(), kCaptureToken, kSecondEvent) == D3D_OK &&
+            fixture.routing->flushCalls == secondPriorFlushes + 1u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
+                fixture.routing->queue_) == nextSeqBeforeWait &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+                fixture.routing->queue_) == 0u,
+        "newer event must settle through its exact ledger row without appending");
+  D9CRenderTapeIdentityCaptureResult complete{};
+  check(fixture.cDevice->renderTapeIdentityCapture.copy(kCaptureToken, complete,
+                                                        {}) &&
+            complete.status == D9C_RENDER_TAPE_IDENTITY_CAPTURE_COMPLETE &&
+            complete.settlementCount == 2u,
+        "capture ledger copy must complete after both exact event waits");
+}
+
+void rejectedCaptureStillCompletesAcceptedWork() {
+  RuntimeFixture fixture(false, true);
+  auto raw = makeRaw(makeWireFixture(std::array{clearRecord()}), 4u,
+                     /*captureIdentity=*/true);
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK,
+        "capture-failure fixture publishes actual work");
+  fixture.cDevice->renderTapeIdentityCapture.fail(0xfeedu);
+  check(!fixture.routing->queue_.hasCompletedPendingWork(),
+        "published but uncompleted work cannot pass the cold completion check");
+  // No-op flush is deliberately insufficient. This is a no-thread fixture;
+  // the production check must detect the incomplete real queue waterline.
+  check(dxmt9c_device_wait_for_pending_work(fixture.cDevice.get()) < 0,
+        "flush return alone is not proof of successful completion");
+  fixture.routing->flushHook = [&] {
+    const auto ready = dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+        fixture.routing->queue_);
+    for (std::size_t i = 0u; i < ready; ++i) {
+      const auto completion = dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          fixture.routing->queue_);
+      check(completion.submitted && completion.completed && completion.reclaimed,
+            "fallback fence uses actual source completion and reclaim");
+    }
+  };
+  check(dxmt9c_device_wait_for_pending_work(fixture.cDevice.get()) == D3D_OK &&
+            fixture.routing->queue_.hasCompletedPendingWork() &&
+            fixture.routing->clearCalls == 1u,
+        "rejected capture retains the application fence without repeating work");
+  D9CRenderTapeIdentityCaptureResult capture{};
+  check(!fixture.cDevice->renderTapeIdentityCapture.copy(0xfeedu, capture, {}),
+        "unqualified completion cannot turn rejected capture into valid evidence");
+  fixture.routing->queue_.failStopCpuReadyArena();
+  check(!fixture.routing->queue_.hasCompletedPendingWork(),
+        "terminal stop cannot masquerade as a successful flush");
+}
+
 void mixedSourceLeaseSelectionPreservesSourceOrder() {
   // This is the queue API coordinate-contract pin: a hand-built source may
   // contain multiple physical segments, even though the production planner's
@@ -1644,6 +2455,155 @@ void providerResolvedEntryRoutesExistingClearPresent() {
   check(unixRaw.calls == 1u && unixRaw.bytes == wire.bytes.size() &&
             peRaw.calls == 0u && peRaw.bytes == 0u,
         "provider replay routes bridge raw ownership to Unix only");
+}
+
+void providerRoutePinsDirectCompatibilityAndMalformedIdentity() {
+  // This is the provider-local route pin: all lanes enter the actual
+  // prevalidated provider entry with the same canonical bytes and resolved
+  // object role. ProductionSlot has two independent implementations: the
+  // populated CPU-ready Arena and the ordinary direct ChunkSlot.
+  RuntimeFixture arenaFixture(/*rejectAfterClear=*/false,
+                              /*segmentSerial=*/false,
+                              /*directChunkSlot=*/false,
+                              /*cpuReadyArena=*/true);
+  RuntimeFixture directFixture(/*rejectAfterClear=*/false,
+                               /*segmentSerial=*/false,
+                               /*directChunkSlot=*/true,
+                               /*cpuReadyArena=*/false);
+  dxmt9::CommandQueueArenaLeaseTestAccess::enableDirectLifecycleObservation(
+      directFixture.routing->queue_);
+  RuntimeFixture compatibilityFixture(/*rejectAfterClear=*/false,
+                                      /*segmentSerial=*/false,
+                                      /*directChunkSlot=*/true,
+                                      /*cpuReadyArena=*/false);
+  auto* arenaBuffer = dxmt9c_device_create_vertex_buffer(
+      arenaFixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  auto* directBuffer = dxmt9c_device_create_vertex_buffer(
+      directFixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  auto* compatibilityBuffer = dxmt9c_device_create_vertex_buffer(
+      compatibilityFixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(arenaBuffer != nullptr && directBuffer != nullptr &&
+            compatibilityBuffer != nullptr,
+        "provider route buffers must construct");
+
+  // The object-id/generation is canonical wire identity; each provider call
+  // supplies its local resolved wrapper at the same handle-table position.
+  const D9CWireObjectIdentity wireIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_BUFFER,
+      .generation = 1u,
+      .objectId = 1u};
+  const auto records = std::array{drawRecord(wireIdentity)};
+  auto directWire = makeWireFixture(records);
+  directWire.envelope.producerIdentity = {
+      .firstEventOrdinal = 17u,
+      .lastEventOrdinal = 17u,
+      .firstSourceOrdinal = 3u,
+      .lastSourceOrdinal = 3u};
+  const auto compatibilityWire = directWire;
+  const auto arenaWire = directWire;
+  std::array<void*, 1> arenaObjects{arenaBuffer};
+  std::array<void*, 1> directObjects{directBuffer};
+  std::array<void*, 1> compatibilityObjects{compatibilityBuffer};
+
+  check(dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
+            arenaFixture.cDevice.get(), arenaWire.bytes, arenaWire.envelope,
+            arenaObjects, dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot) ==
+            D3D_OK,
+        "provider ProductionSlot Arena route must accept qualified input");
+  arenaFixture.routing->present(SwapDesc{});
+  const auto arenaCompletion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          arenaFixture.routing->queue_);
+  check(arenaCompletion.arena && arenaCompletion.reclaimed &&
+            arenaFixture.routing->legacyMarkCalls == 0u,
+        "ProductionSlot Arena route must publish an Arena completion without "
+        "the compatibility mark path");
+
+  check(dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
+            directFixture.cDevice.get(), directWire.bytes,
+            directWire.envelope, directObjects,
+            dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot) == D3D_OK,
+        "provider ProductionSlot direct ChunkSlot route must accept qualified input");
+  const auto directWritingCommands =
+      dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+          directFixture.routing->queue_);
+  check(directWritingCommands != 0u &&
+            directFixture.routing->combinedMarkCalls == 1u,
+        "ProductionSlot direct ChunkSlot must reach a direct-owned route before effects");
+  const auto directLifecycle =
+      dxmt9::CommandQueueArenaLeaseTestAccess::directLifecycleState(
+          directFixture.routing->queue_);
+  check(directLifecycle.recordCount != 0u &&
+            directLifecycle.records[0].phase !=
+                dxmt9::queue::DirectSourcePhase::Empty,
+        "ProductionSlot direct ChunkSlot must expose a committed lifecycle witness");
+
+  check(dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
+            compatibilityFixture.cDevice.get(), compatibilityWire.bytes,
+            compatibilityWire.envelope, compatibilityObjects,
+            dxmt9::d3d9::ProviderReplayPolicy::Compatibility) == D3D_OK,
+        "provider Compatibility route must accept the same canonical input");
+  check(compatibilityFixture.routing->drawCalls == 1u &&
+            compatibilityFixture.routing->combinedMarkCalls == 1u,
+        "provider Compatibility must execute the historical combined mark path");
+
+  directFixture.routing->present(SwapDesc{});
+  compatibilityFixture.routing->present(SwapDesc{});
+  const auto directCompletion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          directFixture.routing->queue_);
+  const auto compatibilityCompletion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+          compatibilityFixture.routing->queue_);
+  check(!directCompletion.arena && directCompletion.reclaimed &&
+            !compatibilityCompletion.arena && compatibilityCompletion.reclaimed &&
+            directCompletion.commandCount == compatibilityCompletion.commandCount &&
+            directCompletion.commandKinds == compatibilityCompletion.commandKinds &&
+            directCompletion.effectiveDigest ==
+                compatibilityCompletion.effectiveDigest,
+        "provider Direct/Compatibility must preserve ordered command semantics");
+  check(directFixture.routing->queue_.pool().findBuffer(
+              directBuffer->obj->handle().value) != nullptr &&
+            compatibilityFixture.routing->queue_.pool().findBuffer(
+                compatibilityBuffer->obj->handle().value) != nullptr,
+        "provider route resource identities must remain qualified through completion");
+
+  dxmt9c_buffer_release(arenaBuffer);
+  // A partially populated producer interval is rejected before import,
+  // wrapper retention, queue admission, or any DeviceReplaySink call.
+  RuntimeFixture malformedFixture(/*rejectAfterClear=*/false,
+                                  /*segmentSerial=*/false,
+                                  /*directChunkSlot=*/true,
+                                  /*cpuReadyArena=*/false);
+  auto* malformedBuffer = dxmt9c_device_create_vertex_buffer(
+      malformedFixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(malformedBuffer != nullptr, "malformed provider buffer must construct");
+  auto malformedWire = directWire;
+  malformedWire.envelope.producerIdentity = {
+      .firstEventOrdinal = 17u,
+      .lastEventOrdinal = 17u,
+      .firstSourceOrdinal = 0u,
+      .lastSourceOrdinal = 3u};
+  std::array<void*, 1> malformedObjects{malformedBuffer};
+  const auto malformedBytes = malformedWire.bytes;
+  check(dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
+            malformedFixture.cDevice.get(), malformedWire.bytes,
+            malformedWire.envelope, malformedObjects,
+            dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot) < D3D_OK &&
+            malformedWire.bytes == malformedBytes &&
+            malformedFixture.routing->drawCalls == 0u &&
+            malformedFixture.routing->presentCalls == 0u &&
+            malformedFixture.routing->combinedMarkCalls == 0u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+                malformedFixture.routing->queue_) == 0u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
+                malformedFixture.routing->queue_) == 1u &&
+            !malformedFixture.routing->queue_.cpuReadyArenaPoisoned(),
+        "partial producer identity must fail closed without provider effects");
+
+  dxmt9c_buffer_release(directBuffer);
+  dxmt9c_buffer_release(compatibilityBuffer);
+  dxmt9c_buffer_release(malformedBuffer);
 }
 
 void oversizeSegmentedPresentTakesOneLegacyRollbackSource() {
@@ -2949,6 +3909,229 @@ void ordinarySourceBatchFoldsBindingAbaWithOneAcquisition() {
         "ordinary A/B/A completion retains one folded run plus Present");
 }
 
+void productionReplayAppliesSparseStreamFrequenciesTransactionally() {
+  // Both generation misses and key-only encoder reuse must reject a frequency
+  // change. Buffer tuples have per-draw overrides; frequencies do not.
+  for (std::size_t slot = 0u; slot < dxmt9::core::kMaxStreams; ++slot) {
+    dxmt9::core::FlatDrawStateRecord a{};
+    a.streamFrequencies.fill(1u);
+    a.key.streamFrequencies = a.streamFrequencies;
+    auto b = a;
+    check(dxmt9::core::drawStatesCompatibleForDrawRunBatch(a, b),
+          "equal stream frequencies retain batch compatibility");
+    b.key.streamFrequencies[slot] = 2u;
+    check(!dxmt9::core::drawStateKeysCompatibleForDrawRunBatch(a.key, b.key) &&
+              !dxmt9::core::drawStatesCompatibleForDrawRunBatch(a, b),
+          "every stream frequency participates in batch and encoder key reuse");
+    b = a;
+    b.streamFrequencies[slot] = 2u;
+    check(!dxmt9::core::drawStatesCompatibleForDrawRunBatch(a, b),
+          "executed frequency mismatch cannot hide behind an equal key");
+    b.key.textureMask = 1u;
+    const dxmt9::core::DrawShaderLayoutContext layout{};
+    check(!dxmt9::core::classifyDrawRunBatchIncompatibility(
+               a, b, layout, layout).textureOnly,
+          "frequency mismatch cannot be diagnosed as a texture-only break");
+  }
+  // A zero wire frequency is the legacy omission. It must leave a non-default
+  // live frequency untouched while the stream tuple itself is replaced.
+  {
+    RuntimeFixture fixture;
+    auto* buffer = dxmt9c_device_create_vertex_buffer(
+        fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+    check(buffer != nullptr, "zero-frequency buffer constructs");
+    check(dxmt9c_device_set_stream_source(
+              fixture.cDevice.get(), 0u, buffer, 7u, 24u) == D3D_OK &&
+              dxmt9c_device_set_stream_source_freq(
+                  fixture.cDevice.get(), 0u, 5u) == D3D_OK,
+          "zero-frequency fixture seeds a non-default stream tuple");
+    dxmt9::d3d9::WireObjectRegistry registry;
+    const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+    auto raw = makeRaw(
+        makeWireFixture(std::array{drawRecord(identity, 0u, 0u)}), 201u,
+        false, &registry);
+    check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
+              fixture.cDevice->dev().state().streamFrequencies[0] == 5u &&
+              fixture.cDevice->dev().state().streamBuffers[0] == buffer->obj &&
+              fixture.cDevice->dev().state().streamOffsets[0] == 0u &&
+              fixture.cDevice->dev().state().streamStrides[0] == 16u,
+          "zero wire frequency preserves the live frequency while applying the stream");
+    dxmt9::d3d9::releaseRetainedWrappers(raw);
+    dxmt9c_buffer_release(buffer);
+  }
+
+  // Explicit frequencies are applied after each source update, including an
+  // A/B/A sequence whose final state must be the last A tuple and frequency.
+  for (unsigned route = 0u; route < 3u; ++route) {
+    RuntimeFixture fixture(/*rejectAfterClear=*/false, /*segmentSerial=*/false,
+                           /*directChunkSlot=*/route == 1u,
+                           /*cpuReadyArena=*/route == 0u);
+    auto* bufferA = dxmt9c_device_create_vertex_buffer(
+        fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+    auto* bufferB = dxmt9c_device_create_vertex_buffer(
+        fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+    check(bufferA != nullptr && bufferB != nullptr,
+          "explicit-frequency buffers construct");
+    dxmt9::d3d9::WireObjectRegistry registry;
+    const auto identityA = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, bufferA);
+    const auto identityB = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, bufferB);
+    auto raw = makeRaw(
+        makeWireFixture(std::array{
+            drawRecord(identityA, 0u, 2u),
+            drawRecord(identityB, 1u, 3u),
+            drawRecord(identityA, 2u, 2u),
+        }),
+        202u, false, &registry);
+    raw.cpuReadyTapePlanningEnabled = route == 0u;
+    check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
+              fixture.cDevice->dev().state().streamBuffers[0] == bufferA->obj &&
+              fixture.cDevice->dev().state().streamFrequencies[0] == 2u,
+          "explicit A/B/A frequencies reach the actual final Device state");
+    const auto queuedFrequencies =
+        dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawStreamFrequencies(
+            fixture.routing->queue_);
+    const bool queuedFrequencySequenceOk =
+        queuedFrequencies.size() == 3u &&
+        queuedFrequencies[0][0] == 2u &&
+        queuedFrequencies[1][0] == 3u &&
+        queuedFrequencies[2][0] == 2u;
+    if (!queuedFrequencySequenceOk) {
+      std::cerr << "A/B/A queued frequency evidence rows="
+                << queuedFrequencies.size();
+      for (const auto& row : queuedFrequencies) {
+        std::cerr << " [" << row[0] << "]";
+      }
+      const auto oldestState =
+          dxmt9::CommandQueueArenaLeaseTestAccess::oldestSourceState(
+              fixture.routing->queue_);
+      std::cerr << " ready="
+                << dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+                       fixture.routing->queue_)
+                << " resident="
+                << dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(
+                       fixture.routing->queue_)
+                << " oldest-state="
+                << (oldestState
+                        ? std::to_string(static_cast<unsigned>(*oldestState))
+                        : std::string("none"))
+                << '\n';
+    }
+    check(queuedFrequencySequenceOk,
+          "queued DrawRuns preserve every explicit A/B/A stream frequency");
+    dxmt9::d3d9::releaseRetainedWrappers(raw);
+    dxmt9c_buffer_release(bufferA);
+    dxmt9c_buffer_release(bufferB);
+  }
+
+  // The flagged indexed/instance-data forms must survive into the queued draw
+  // state. The first draw derives its instance count from the indexed stream's
+  // low frequency bits (without normalizing either flag-bearing value).
+  for (unsigned route = 0u; route < 3u; ++route) {
+    RuntimeFixture fixture(/*rejectAfterClear=*/false, /*segmentSerial=*/false,
+                           /*directChunkSlot=*/route == 1u,
+                           /*cpuReadyArena=*/route == 0u);
+    auto* buffer = dxmt9c_device_create_vertex_buffer(
+        fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+    check(buffer != nullptr, "flagged-frequency buffer constructs");
+    dxmt9::d3d9::WireObjectRegistry registry;
+    const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+    constexpr auto frequency =
+        dxmt9::core::kStreamSourceIndexedData | 4u;
+    constexpr auto instanceFrequency =
+        dxmt9::core::kStreamSourceInstanceData | 3u;
+    auto raw = makeRaw(
+        makeWireFixture(std::array{
+            drawRecord(identity, 0u, frequency),
+            streamDrawRecord(identity, 1u, instanceFrequency, 1u),
+        }),
+        203u, false, &registry);
+    raw.cpuReadyTapePlanningEnabled = route == 0u;
+    check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
+              fixture.cDevice->dev().state().streamFrequencies[0] == frequency &&
+              fixture.cDevice->dev().state().streamFrequencies[1] ==
+                  instanceFrequency,
+          "flagged indexed-data frequency reaches the actual Device state");
+    const auto queuedFrequencies =
+        dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawStreamFrequencies(
+            fixture.routing->queue_);
+    const auto queuedInstanceCounts =
+        dxmt9::CommandQueueArenaLeaseTestAccess::writingDrawInstanceCounts(
+            fixture.routing->queue_);
+    check(queuedFrequencies.size() == 2u &&
+              queuedFrequencies[0][0] == frequency &&
+              queuedFrequencies[1][0] == frequency &&
+              queuedFrequencies[1][1] == instanceFrequency &&
+              queuedInstanceCounts.size() == 2u &&
+              queuedInstanceCounts[0] == 4u &&
+              queuedInstanceCounts[1] == 4u,
+          "first queued draw snapshot preserves flagged frequency and instance count");
+    dxmt9::d3d9::releaseRetainedWrappers(raw);
+    dxmt9c_buffer_release(buffer);
+  }
+
+  // A null stream still carries a meaningful explicit frequency; the source
+  // unbind and frequency update are one journaled stream transaction.
+  {
+    RuntimeFixture fixture;
+    auto* buffer = dxmt9c_device_create_vertex_buffer(
+        fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+    check(buffer != nullptr, "null-stream buffer constructs");
+    check(dxmt9c_device_set_stream_source(
+              fixture.cDevice.get(), 0u, buffer, 0u, 16u) == D3D_OK &&
+              dxmt9c_device_set_stream_source_freq(
+                  fixture.cDevice.get(), 0u, 7u) == D3D_OK,
+          "null-stream fixture seeds an existing binding");
+    auto raw = makeRaw(
+        makeWireFixture(std::array{nullStreamDrawRecord(4u)}), 203u);
+    check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK &&
+              fixture.cDevice->dev().state().streamBuffers[0] == nullptr &&
+              fixture.cDevice->dev().state().streamFrequencies[0] == 4u,
+          "null stream binding still applies its explicit frequency");
+    dxmt9::d3d9::releaseRetainedWrappers(raw);
+    dxmt9c_buffer_release(buffer);
+  }
+
+  // Both an invalid explicit frequency and a later replay failure must restore
+  // the complete pre-replay stream tuple, including frequency.
+  for (const bool laterFailure : {false, true}) {
+    RuntimeFixture fixture;
+    auto* oldBuffer = dxmt9c_device_create_vertex_buffer(
+        fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+    auto* newBuffer = dxmt9c_device_create_vertex_buffer(
+        fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+    check(oldBuffer != nullptr && newBuffer != nullptr,
+          "rollback buffers construct");
+    check(dxmt9c_device_set_stream_source(
+              fixture.cDevice.get(), 0u, oldBuffer, 9u, 28u) == D3D_OK &&
+              dxmt9c_device_set_stream_source_freq(
+                  fixture.cDevice.get(), 0u, 6u) == D3D_OK,
+          "rollback fixture seeds the original stream tuple");
+    dxmt9::d3d9::WireObjectRegistry registry;
+    const auto identity = registry.insert(
+        D9C_CHUNK_HANDLE_KIND_BUFFER, newBuffer);
+    std::vector<RecordSpec> records;
+    records.push_back(drawRecord(
+        identity, 0u,
+        laterFailure ? 3u : dxmt9::core::kStreamSourceInstanceData));
+    if (laterFailure) {
+      records.push_back(applyRenderStateThenInvalidTransformRecord(7u, 1u));
+    }
+    auto raw = makeRaw(makeWireFixture(records), 204u + laterFailure,
+                       false, &registry);
+    check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) < D3D_OK &&
+              fixture.cDevice->dev().state().streamBuffers[0] == oldBuffer->obj &&
+              fixture.cDevice->dev().state().streamOffsets[0] == 9u &&
+              fixture.cDevice->dev().state().streamStrides[0] == 28u &&
+              fixture.cDevice->dev().state().streamFrequencies[0] == 6u,
+          laterFailure
+              ? "later replay failure rolls back stream tuple and frequency"
+              : "invalid explicit frequency rolls back stream tuple and frequency");
+    dxmt9::d3d9::releaseRetainedWrappers(raw);
+    dxmt9c_buffer_release(oldBuffer);
+    dxmt9c_buffer_release(newBuffer);
+  }
+}
+
 void populatedSlotDrawApplyDrawUsesCarrierFreeContinuation() {
   RuntimeFixture fixture(/*rejectAfterClear=*/false,
                          /*segmentSerial=*/false,
@@ -3914,10 +5097,4073 @@ void workerPressureWaitResumesAfterActiveLeasePublishes() {
         "pressure release preserves FIFO identity through reclaim");
 }
 
+void boundedCpuGrammarRequiresUnbindBeforeDestroy() {
+  for (const bool includeUnbind : {false, true}) {
+    const auto fixture = dxmt9::d3d9::test::makeCompletionTapeFixture(includeUnbind);
+    const dxmt9::d3d9::RenderTapeBlobCatalogue catalogue{.blobs = {{
+        .digest = fixture.blobDigest, .size = fixture.blob.size(), .verified = 1u}}};
+    dxmt9::d3d9::ImportedRenderTapeView imported;
+    check(dxmt9::d3d9::validateRenderTape(fixture.tape, catalogue, &imported).valid(),
+          "missing-unbind negative must remain a structurally valid Tape");
+    check(dxmt9::d3d9::preflightRenderTapeCpuGrammar(imported).accepted() == includeUnbind,
+          "CPU grammar requires an effective unbind before destroy, before any device effects");
+  }
+}
+
+void boundedCompletionReducerExhaustiveNegativeControls() {
+  using Schedule = dxmt9::d3d9::RenderTapeCompletionSchedule;
+  using Disposition = dxmt9::d3d9::RenderTapeCompletionDisposition;
+  const auto key = [](std::uint64_t iteration, std::uint64_t submission,
+                      std::uint32_t source, std::uint32_t ordinal) {
+    return Schedule::Key{iteration, submission, source, ordinal};
+  };
+
+  // Enumerate both bounded release orders after admitting both submissions.
+  // Only the FIFO order is accepted; the opposite order is rejected at the
+  // same frontier and cannot call a completion callback.
+  for (const bool releaseSecondFirst : {false, true}) {
+    Schedule schedule;
+    check(schedule.append({key(1, 1, 0, 0)}).accepted() &&
+              schedule.append({key(1, 2, 1, 1)}).accepted() &&
+              schedule.beginIteration(1).accepted(),
+          "bounded schedule setup must be accepted");
+    bool submittedA = false;
+    bool submittedB = false;
+    check(schedule.submit(key(1, 1, 0, 0), [&] {
+            submittedA = true;
+            return true;
+          }).accepted() &&
+              schedule.submit(key(1, 2, 1, 1), [&] {
+                submittedB = true;
+                return true;
+              }).accepted() &&
+              submittedA && submittedB,
+          "bounded schedule submission callbacks must run after admission");
+    if (releaseSecondFirst) {
+      bool called = false;
+      check(schedule.release(key(1, 2, 1, 1), [&] {
+              called = true;
+              return true;
+            }).disposition == Disposition::SkippedFrontier && !called,
+            "skipped completion frontier must reject before production effect");
+    }
+    check(schedule.release(key(1, 1, 0, 0)).accepted(),
+          "first completion must advance the bounded frontier");
+    check(schedule.release(key(1, 1, 0, 0)).disposition ==
+              Disposition::DuplicateRelease,
+          "duplicate completion must be rejected");
+    check(schedule.release(key(1, 2, 1, 1)).accepted() &&
+              schedule.finishIteration().accepted(),
+          "FIFO completion must finish the iteration");
+  }
+
+  Schedule beforeSubmit;
+  check(beforeSubmit.append({key(1, 1, 0, 0)}).accepted() &&
+            beforeSubmit.beginIteration(1).accepted() &&
+            beforeSubmit.release(key(1, 1, 0, 0)).disposition ==
+                Disposition::ReleaseBeforeSubmit,
+        "release before submit must be rejected");
+
+  Schedule stale;
+  check(stale.append({key(1, 1, 0, 0)}).accepted() &&
+            stale.beginIteration(1).accepted() &&
+            stale.submit(key(1, 1, 0, 0)).accepted() &&
+            stale.release(key(2, 1, 0, 0)).disposition ==
+                Disposition::Stale,
+        "completion from another iteration must be stale");
+
+  Schedule exhausted;
+  check(exhausted.append({key(1, 1, 0, 0)}).accepted() &&
+            exhausted.beginIteration(1).accepted() &&
+            exhausted.submit(key(1, 1, 0, 0)).accepted() &&
+            exhausted.release(key(1, 1, 0, 0)).accepted() &&
+            exhausted.releaseNext().disposition ==
+                Disposition::Exhausted,
+        "an exhausted schedule must fail closed rather than implicitly drain");
+
+  Schedule callbackFault;
+  check(callbackFault.append({key(1, 1, 0, 0)}).accepted() &&
+            callbackFault.beginIteration(1).accepted() &&
+            callbackFault.submit(key(1, 1, 0, 0), [] { return false; }).disposition ==
+                Disposition::Unresolved &&
+            callbackFault.submit(key(1, 1, 0, 0)).disposition ==
+                Disposition::Unresolved &&
+            callbackFault.finishIteration().disposition ==
+                Disposition::Unresolved,
+        "failed admission callback must latch a terminal executed prefix");
+
+  Schedule duplicateIdentity;
+  check(duplicateIdentity.append({key(1, 1, 0, 0)}).accepted() &&
+            duplicateIdentity.append({key(1, 1, 0, 1)}).disposition ==
+                Disposition::DuplicateAction,
+        "same iteration/submission/source cannot be represented twice");
+
+  Schedule reversedSubmit;
+  check(reversedSubmit.append({key(1, 1, 0, 0)}).accepted() &&
+            reversedSubmit.append({key(1, 2, 1, 1)}).accepted() &&
+            reversedSubmit.beginIteration(1).accepted() &&
+            reversedSubmit.submit(key(1, 2, 1, 1)).disposition ==
+                Disposition::SkippedFrontier,
+        "submission order must not bypass the schedule frontier");
+
+  Schedule repeatedIteration;
+  check(repeatedIteration.append({key(1, 1, 0, 0)}).accepted() &&
+            repeatedIteration.beginIteration(1).accepted() &&
+            repeatedIteration.submit(key(1, 1, 0, 0)).accepted() &&
+            repeatedIteration.release(key(1, 1, 0, 0)).accepted() &&
+            repeatedIteration.finishIteration().accepted() &&
+            repeatedIteration.beginIteration(1).disposition ==
+                Disposition::Stale,
+        "a completed iteration cannot be replayed under the same identity");
+
+  Schedule twoIterations;
+  check(twoIterations.append({key(1, 1, 0, 0)}).accepted() &&
+            twoIterations.append({key(2, 2, 0, 1)}).accepted() &&
+            twoIterations.beginIteration(1).accepted() &&
+            twoIterations.submit(key(1, 1, 0, 0)).accepted() &&
+            twoIterations.release(key(1, 1, 0, 0)).accepted() &&
+            twoIterations.finishIteration().accepted() &&
+            twoIterations.beginIteration(2).accepted() &&
+            twoIterations.submit(key(2, 2, 0, 1)).accepted() &&
+            twoIterations.release(key(2, 2, 0, 1)).accepted() &&
+            twoIterations.finishIteration().accepted(),
+        "iteration ranges must advance without accepting an old frontier");
+
+  // Exhaustively explore every four-action trace over submit(A), submit(B),
+  // release(A), and release(B).  The callback count is the binding check:
+  // malformed reducer transitions must never invoke the production effect.
+  for (std::uint32_t trace = 0u; trace < 256u; ++trace) {
+    Schedule schedule;
+    check(schedule.append({key(1, 1, 0, 0)}).accepted() &&
+              schedule.append({key(1, 2, 1, 1)}).accepted() &&
+              schedule.beginIteration(1).accepted(),
+          "exhaustive reducer trace setup must be accepted");
+    std::size_t acceptedSubmits = 0u;
+    std::size_t acceptedReleases = 0u;
+    for (std::size_t step = 0u; step < 4u; ++step) {
+      const auto operation = static_cast<std::uint32_t>(
+          (trace >> (step * 2u)) & 3u);
+      bool callbackCalled = false;
+      Schedule::Result result;
+      if (operation == 0u || operation == 1u) {
+        const auto submitKey = operation == 0u ? key(1, 1, 0, 0)
+                                               : key(1, 2, 1, 1);
+        result = schedule.submit(submitKey, [&] {
+          callbackCalled = true;
+          return true;
+        });
+        if (result.accepted()) ++acceptedSubmits;
+      } else {
+        const auto releaseKey = operation == 2u ? key(1, 1, 0, 0)
+                                               : key(1, 2, 1, 1);
+        result = schedule.release(releaseKey, [&] {
+          callbackCalled = true;
+          return true;
+        });
+        if (result.accepted()) ++acceptedReleases;
+      }
+      check(callbackCalled == result.accepted(),
+            "every accepted bounded transition must invoke exactly its binding");
+      check(acceptedSubmits <= 2u && acceptedReleases <= 2u,
+            "bounded reducer trace must retain finite submission/release counts");
+    }
+    check(schedule.nextAction() <= schedule.size(),
+          "bounded reducer frontier must never exceed its action list");
+  }
+
+  Schedule capacity;
+  for (std::uint32_t i = 0;
+       i < dxmt9::d3d9::kRenderTapeCompletionScheduleCapacity; ++i) {
+    check(capacity
+              .append({key(1, static_cast<std::uint64_t>(i) + 1u, i, i)})
+              .accepted(),
+          "bounded schedule must admit its declared capacity");
+  }
+  check(capacity.append({key(1, 33u, 32u, 32u)}).disposition ==
+            Disposition::Capacity,
+        "schedule capacity must be explicit and bounded");
+}
+
+void controlledCompletionBindsProductionQueueAndPool() {
+  using Schedule = dxmt9::d3d9::RenderTapeCompletionSchedule;
+  RuntimeFixture fixture;
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr, "completion lifecycle buffer must be allocated");
+  const auto bufferHandle = buffer->obj->handle();
+  dxmt9::d3d9::WireObjectRegistry registry;
+  const auto identity = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, buffer);
+  const std::array records{drawRecord(identity)};
+  auto raw = makeRaw(makeWireFixture(records), 901u, false, &registry);
+  check(dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw) == D3D_OK,
+        "completion lifecycle buffer-bound draw must publish through production replay");
+  const auto stampedSeq =
+      dxmt9::CommandQueueArenaLeaseTestAccess::bufferLastUsedSeqId(
+          fixture.routing->queue_, bufferHandle);
+  check(stampedSeq != 0u,
+        "production buffer-bound draw must stamp Pool last-use before acknowledgment");
+
+  const auto expectedCompletion =
+      dxmt9::CommandQueueArenaLeaseTestAccess::peekReadyCompletion(
+          fixture.routing->queue_);
+  check(expectedCompletion.completionIdentityValid(),
+        "completion lifecycle source must be qualified before scheduling");
+  Schedule schedule;
+  const Schedule::Key completionKey{
+      1u,
+      expectedCompletion.seqId,
+      expectedCompletion.source.id.index,
+      0u,
+      expectedCompletion.source.id.generation};
+  check(schedule.append({completionKey}).accepted() &&
+            schedule.beginIteration(1u).accepted(),
+        "production completion schedule must initialize");
+  dxmt9::CommandQueueArenaLeaseTestAccess::CompletionResult submission{};
+  check(schedule.submit(completionKey, [&] {
+          submission = dxmt9::CommandQueueArenaLeaseTestAccess::submitOneWithheld(
+              fixture.routing->queue_);
+          return submission.submitted;
+        }).accepted() && submission.dequeued && submission.submitted &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::pendingCompletionCount(
+                fixture.routing->queue_) == 1u,
+        "schedule submission must bind to the real queue pending FIFO");
+  check(submission.completion.seqId == completionKey.submission &&
+            submission.completion.source.id.index == completionKey.source &&
+            submission.completion.source.id.generation ==
+                completionKey.sourceGeneration,
+        "completion key must match the qualified production source identity");
+
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::destroyBufferForTest(
+            fixture.routing->queue_, bufferHandle, 0u),
+        "destroy-before-completion must enter the production retire path");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::bufferAlive(
+            fixture.routing->queue_, bufferHandle),
+        "in-flight stamped resource must survive destroy-before-completion");
+
+  check(schedule.release(completionKey, [&] {
+          return dxmt9::CommandQueueArenaLeaseTestAccess::acknowledgeOne(
+              fixture.routing->queue_);
+        }).accepted(),
+        "schedule release must acknowledge the real pending completion");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::finishQueue(
+            fixture.routing->queue_),
+        "finish iteration must consume the production completion waterline");
+  dxmt9::CommandQueueArenaLeaseTestAccess::reclaimPoolForTest(
+      fixture.routing->queue_, stampedSeq);
+  check(schedule.finishIteration().accepted(),
+        "completion schedule must close only after production reclaim path");
+  check(!dxmt9::CommandQueueArenaLeaseTestAccess::bufferAlive(
+            fixture.routing->queue_, bufferHandle),
+        "Pool::reclaimCompleted must retire the destroyed completed resource");
+  const auto reused = fixture.routing->queue_.pool().createBuffer(
+      WMT::Device{NULL_OBJECT_HANDLE}, BufferDesc{.size = 256u});
+  check(static_cast<bool>(reused) && reused.value != bufferHandle.value,
+        "completed retirement must permit generation-qualified backing reuse");
+  dxmt9::d3d9::releaseRetainedWrappers(raw);
+  dxmt9c_buffer_release(buffer);
+}
+
+struct MetalDeviceLease {
+  obj_handle_t handle = NULL_OBJECT_HANDLE;
+  MetalDeviceLease() = default;
+
+  ~MetalDeviceLease() {
+    if (handle != NULL_OBJECT_HANDLE) {
+      dxmt9_test_release_metal_device(handle);
+    }
+  }
+
+  MetalDeviceLease(const MetalDeviceLease&) = delete;
+  MetalDeviceLease& operator=(const MetalDeviceLease&) = delete;
+};
+
+void twoPendingProductionSourcesPreserveQualifiedFifoLifetime() {
+  namespace rt = dxmt9::d3d9;
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  using Policy = rt::ProviderReplayPolicy;
+  using Source = dxmt9::core::metalqueue::QueueCompletionSource;
+  const auto qualified = [](const Source& source) {
+    return rt::RenderTapeQualifiedCompletionKey{
+        .seqId = source.seqId,
+        .sourceIndex = source.source.id.index,
+        .sourceGeneration = source.source.id.generation,
+        .storageFirstPage = source.source.storage.firstPage,
+        .storagePageCount = source.source.storage.pageCount,
+        .storageGeneration = source.source.storage.generation};
+  };
+
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE,
+        "two-pending source fixture requires a Metal device");
+  for (const auto route : {Policy::Compatibility, Policy::ProductionSlot}) {
+    RuntimeFixture fixture(false, false, true, false,
+                           WMT::Device{resourceDevice.handle});
+    auto& queue = fixture.routing->queue_;
+    struct BufferOwner {
+      D9CBuffer* value = nullptr;
+      ~BufferOwner() { release(); }
+      void release() {
+        if (value) dxmt9c_buffer_release(std::exchange(value, nullptr));
+      }
+    };
+    BufferOwner bufferA{dxmt9c_device_create_vertex_buffer(
+        fixture.cDevice.get(), 256u, 0x200u, 0u, 0u)};
+    BufferOwner bufferB{dxmt9c_device_create_vertex_buffer(
+        fixture.cDevice.get(), 256u, 0x200u, 0u, 0u)};
+    check(bufferA.value && bufferB.value, "source buffers construct");
+    const auto handleA = bufferA.value->obj->handle();
+    const auto handleB = bufferB.value->obj->handle();
+    const D9CWireObjectIdentity identityA{
+        .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .generation = 1u, .objectId = 901u};
+    const D9CWireObjectIdentity identityB{
+        .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .generation = 1u, .objectId = 902u};
+    const auto wireA = makeWireFixture(std::array{drawRecord(identityA)});
+    const auto wireB = makeWireFixture(std::array{drawRecord(identityB)});
+    std::array<std::uint8_t, 256> bytesA{};
+    std::array<std::uint8_t, 256> bytesB{};
+    bytesA.fill(0xa1u);
+    bytesB.fill(0xb2u);
+    const auto seed = [&](D9CBuffer* buffer, const auto& bytes) {
+      void* bits = nullptr;
+      check(dxmt9c_buffer_lock(buffer, 0u, bytes.size(), &bits, 0u) == D3D_OK && bits,
+            "source seed enters actual buffer lock");
+      std::memcpy(bits, bytes.data(), bytes.size());
+      check(dxmt9c_buffer_unlock(buffer) == D3D_OK,
+            "source seed enters actual unlock/upload");
+    };
+    seed(bufferA.value, bytesA);
+    seed(bufferB.value, bytesB);
+    const auto backingMatches = [&](Handle handle, const auto& bytes) {
+      // Worker-disabled fixture: no mutation or acknowledgment races this
+      // read. Inspect actual Metal CPU-visible bytes, not only Pool shadow.
+      const auto* record = queue.pool().findBuffer(handle.value);
+      return record && record->buffer && record->contents &&
+          record->desc.size == bytes.size() &&
+          std::memcmp(record->contents, bytes.data(), bytes.size()) == 0;
+    };
+    check(backingMatches(handleA, bytesA) && backingMatches(handleB, bytesB),
+          "both resource owners have actual seeded backing bytes");
+
+    // Native component input, not an on-disk Tape acceptance claim. Bind
+    // the existing plan controller to these immutable two wire chunks.
+    std::vector<std::byte> input = wireA.bytes;
+    input.insert(input.end(), wireB.bytes.begin(), wireB.bytes.end());
+    rt::RenderTapeCompletionPlanFile plan;
+    plan.header.byteSize = sizeof(plan);
+    plan.header.tapeEventCount = 4u;
+    plan.header.submitCount = plan.header.releaseCount = 2u;
+    plan.header.repeatCount = 1u;
+    plan.header.eventsDigest = rt::RenderTapeCaptureSession::sha256(input);
+    plan.submits[0] = {1u, 1u};
+    plan.submits[1] = {2u, 1u};
+    plan.releases[0] = {3u, 1u, 1u};
+    plan.releases[1] = {4u, 2u, 1u};
+    rt::RenderTapeCompletionPlanController controller(plan, plan.header.eventsDigest);
+    const auto planRoute = route == Policy::Compatibility
+        ? rt::RenderTapeCompletionPlanRoute::Compatibility
+        : rt::RenderTapeCompletionPlanRoute::ProductionSlot;
+    check(controller.beginIteration(1u, planRoute).accepted(),
+          "two-source controller begins before actual queue effects");
+
+    const auto publishAndSubmit = [&](const WireFixture& wire, D9CBuffer* buffer,
+                                      std::uint32_t event) {
+      check(Access::pendingCompletionCount(queue) == event - 1u,
+            "B must enter replay while A is already submitted and pending");
+      check(Access::noWaitHeadroom(queue).admitsOne(),
+            "fresh one-source witness precedes each actual replay");
+      const std::array<void*, 1> objects{buffer};
+      check(rt::replayPrevalidatedResolvedCommandChunk(
+                fixture.cDevice.get(), wire.bytes, wire.envelope, objects,
+                route) == D3D_OK,
+            "production replay constructs the draw source");
+      check(Access::publishWriting(queue) && Access::readyCount(queue) == 1u,
+            "one nonempty draw-only source is published");
+      const auto source = Access::peekReadyCompletion(queue);
+      check(source.completionIdentityValid(), "actual completion identity exists");
+      const auto key = qualified(source);
+      check(controller.submit(event, 1u, key, [&] {
+              const auto submitted = Access::submitOneWithheld(queue);
+              return submitted.submitted && submitted.commandCount != 0u &&
+                  qualified(submitted.completion) == key &&
+                  std::all_of(submitted.commandKinds.begin(),
+                              submitted.commandKinds.end(), [](auto kind) {
+                    return kind == static_cast<std::uint8_t>(MetalCommandKind::DrawRun);
+                  });
+            }).accepted() && controller.endEvent(event).accepted(),
+            "actual sequence/source/storage bind before withheld submission");
+      return source;
+    };
+    const auto sourceA = publishAndSubmit(wireA, bufferA.value, 1u);
+    const auto usedA = Access::bufferLifetime(queue, handleA);
+    check(usedA.alive && usedA.lastUsedSeq == sourceA.seqId &&
+              usedA.completedSeq < usedA.lastUsedSeq,
+          "A publication applies the actual resource-use stamp");
+    const auto sourceB = publishAndSubmit(wireB, bufferB.value, 2u);
+    check(fixture.routing->ordinaryDrawCalls ==
+              (route == Policy::Compatibility ? 2u : 0u),
+          "route qualification cannot silently fall back from Direct to compatibility");
+    check(sourceA.source.id != sourceB.source.id &&
+              sourceA.source.storage != sourceB.source.storage &&
+              sourceA.seqId < sourceB.seqId &&
+              Access::pendingCompletionCount(queue) == 2u &&
+              Access::residentCount(queue) == 2u,
+          "A and B are distinct concurrently pending sources");
+
+    check(dxmt9c_device_set_stream_source(
+              fixture.cDevice.get(), 0u, nullptr, 0u, 0u) == D3D_OK,
+          "release core binding before wrapper ownership retirement");
+    bufferA.release();
+    bufferB.release();
+    const auto retiredA = Access::bufferLifetime(queue, handleA);
+    const auto retiredB = Access::bufferLifetime(queue, handleB);
+    check(retiredA.alive && retiredA.destroyPending &&
+              retiredA.lastUsedSeq == sourceA.seqId &&
+              retiredA.completedSeq < retiredA.lastUsedSeq &&
+              retiredB.alive && retiredB.destroyPending &&
+              retiredB.lastUsedSeq == sourceB.seqId &&
+              retiredB.completedSeq < retiredB.lastUsedSeq &&
+              backingMatches(handleA, bytesA) && backingMatches(handleB, bytesB),
+          "wrapper releases retire, but cannot recycle, either pending backing");
+
+    auto skipped = controller;
+    bool skippedCalled = false;
+    check(!skipped.releaseDue(4u, [&](const auto&) {
+              skippedCalled = true;
+              return true;
+            }).accepted() && !skippedCalled &&
+              Access::pendingCompletionCount(queue) == 2u,
+          "B-first release boundary rejects before any acknowledgment");
+
+    const auto release = [&](std::uint32_t event, const Source& expected) {
+      std::size_t callbacks = 0u;
+      check(controller.releaseDue(event, [&](const auto& actual) {
+              ++callbacks;
+              return actual == qualified(expected) &&
+                  Access::acknowledgeOne(queue) && Access::finishQueue(queue);
+            }).accepted() && callbacks == 1u &&
+                controller.endEvent(event).accepted(),
+            "one exact FIFO source completes at its explicit release event");
+      Access::reclaimCompletedPool(queue);
+    };
+    release(3u, sourceA);
+    const auto remainingB = Access::bufferLifetime(queue, handleB);
+    check(!Access::bufferAlive(queue, handleA) && remainingB.alive &&
+              remainingB.destroyPending && remainingB.lastUsedSeq == sourceB.seqId &&
+              remainingB.completedSeq == sourceA.seqId &&
+              backingMatches(handleB, bytesB) &&
+              Access::pendingCompletionCount(queue) == 1u &&
+              Access::residentCount(queue) == 1u,
+          "A reclaim leaves B's exact owner, stamp and physical bytes intact");
+    std::size_t duplicateCallbacks = 0u;
+    check(controller.releaseDue(3u, [&](const auto&) {
+              ++duplicateCallbacks;
+              return true;
+            }).accepted() && duplicateCallbacks == 0u &&
+              Access::pendingCompletionCount(queue) == 1u,
+          "repeated release boundary cannot acknowledge B as duplicate A");
+    release(4u, sourceB);
+    check(controller.finishIteration().accepted() &&
+              Access::pendingCompletionCount(queue) == 0u &&
+              Access::residentCount(queue) == 0u &&
+              !Access::bufferAlive(queue, handleA) &&
+              !Access::bufferAlive(queue, handleB),
+          "B completion closes both source and wrapper-retirement obligations");
+  }
+}
+
+void pendingSourceCapacityRejectsBeforeWorkAndReopensAfterReclaim() {
+  namespace rt = dxmt9::d3d9;
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  using Policy = rt::ProviderReplayPolicy;
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE, "capacity fixture Metal device");
+  for (const auto route : {Policy::Compatibility, Policy::ProductionSlot}) {
+    RuntimeFixture fixture(false, false, true, false,
+                           WMT::Device{resourceDevice.handle});
+    auto& queue = fixture.routing->queue_;
+    auto* buffer = dxmt9c_device_create_vertex_buffer(
+        fixture.cDevice.get(), 256u, 0x200u, 0u, 0u);
+    check(buffer, "capacity fixture buffer");
+    struct Owner {
+      D9CBuffer* value;
+      ~Owner() { dxmt9c_buffer_release(value); }
+    } owner{buffer};
+    const auto wire = makeWireFixture(std::array{drawRecord({
+        .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .generation = 1u, .objectId = 903u})});
+    const std::array<void*, 1> objects{buffer};
+    std::uint64_t lastSequence = 0u;
+    std::size_t submitted = 0u;
+    const auto append = [&] {
+      check(Access::noWaitHeadroom(queue).admitsOne(),
+            "each capacity-test append requires a fresh live witness");
+      check(rt::replayPrevalidatedResolvedCommandChunk(
+                fixture.cDevice.get(), wire.bytes, wire.envelope, objects, route) == D3D_OK &&
+                Access::publishWriting(queue), "capacity-test production append");
+      const auto source = Access::submitOneWithheld(queue);
+      check(source.submitted && source.commandCount != 0u &&
+                source.completion.completionIdentityValid() &&
+                source.completion.seqId > lastSequence,
+            "capacity fill uses actual monotonic nonempty submissions");
+      lastSequence = source.completion.seqId;
+      ++submitted;
+    };
+    // A fixed test bound, never a new queue capacity. No acknowledgment or
+    // synthetic free credit is allowed while discovering real pressure.
+    while (submitted < 64u && Access::noWaitHeadroom(queue).admitsOne()) append();
+    check(submitted >= 2u && submitted < 64u &&
+              Access::pendingCompletionCount(queue) == submitted &&
+              Access::residentCount(queue) == submitted,
+          "real queue reaches bounded pressure with every source still pending");
+    const auto denied = Access::noWaitHeadroom(queue);
+    check(!denied.admitsOne() &&
+              !Access::noWaitHeadroom(queue).admitsOne() &&
+              Access::readyCount(queue) == 0u &&
+              Access::writingCommandCount(queue) == 0u &&
+              Access::pendingCompletionCount(queue) == submitted &&
+              Access::residentCount(queue) == submitted,
+          "denied probes have no work, hidden completion or capacity side effects");
+    check(Access::acknowledgeOne(queue) && Access::finishQueue(queue),
+          "one real FIFO completion reclaims capacity");
+    Access::reclaimCompletedPool(queue);
+    check(Access::noWaitHeadroom(queue).admitsOne(),
+          "actual reclaim reopens one source admission");
+    append();
+    check(!Access::noWaitHeadroom(queue).admitsOne(),
+          "reopened credit is consumed once, not reusable aggregate capacity");
+    for (std::size_t remaining = submitted - 1u; remaining != 0u; --remaining) {
+      check(Access::acknowledgeOne(queue) && Access::finishQueue(queue),
+            "capacity fixture drains only through real completion");
+    }
+    Access::reclaimCompletedPool(queue);
+    check(Access::pendingCompletionCount(queue) == 0u &&
+              Access::residentCount(queue) == 0u &&
+              Access::noWaitHeadroom(queue).admitsOne(),
+          "full capacity conserved after drain");
+    check(fixture.routing->ordinaryDrawCalls ==
+              (route == Policy::Compatibility ? submitted : 0u),
+          "capacity fill executes the selected replay route");
+    std::cout << "CPU source capacity route="
+              << (route == Policy::Compatibility ? "compatibility" : "production-slot")
+              << " pending_limit=" << submitted - 1u
+              << " denial=" << static_cast<unsigned>(dxmt9::test::admitCpuTapeSource(denied.inputs))
+              << " reclaimed=" << submitted << '\n';
+  }
+}
+
+enum class CpuTapeResourceBackend : std::uint8_t {
+  NoGpu,
+  MetalResources,
+};
+
+void cpuMipmapObserverPreservesOrderAndQualifiedTexture() {
+  const auto observe = [](const std::array<std::uint64_t, 2>& handles,
+                           bool resolve, std::uint32_t generation) {
+    dxmt9::core::ChunkSlot slot;
+    for (const auto handle : handles)
+      slot.appendGenerateMipmaps(GenerateMipmapsDesc{.texture = {handle}});
+    std::uint64_t digest = dxmt9::test::detail::kCpuTapeFnvOffset;
+    std::size_t observed = 0u;
+    std::string failure;
+    const auto resource = [&](std::uint32_t kind, Handle handle,
+                               std::uint64_t& hash) {
+      if (!resolve || kind != D9C_CHUNK_HANDLE_KIND_TEXTURE ||
+          (handle.value != 7u && handle.value != 8u)) return false;
+      dxmt9::test::detail::cpuTapeDigestScalar(hash, kind);
+      dxmt9::test::detail::cpuTapeDigestScalar(hash, generation);
+      dxmt9::test::detail::cpuTapeDigestScalar(hash, handle.value);
+      return true;
+    };
+    const auto draw = [](std::uint64_t) { return false; };
+    const bool ok = dxmt9::test::observeCpuTapePayload(
+        dxmt9::core::SourcePayloadView(slot), digest, resource, draw, failure,
+        nullptr, nullptr, nullptr, nullptr, &observed);
+    return std::tuple{ok, digest, observed};
+  };
+  const auto [ok, ab, count] = observe({7u, 8u}, true, 1u);
+  check(ok && count == 2u, "mipmap observer counts actual operations, not draws");
+  const auto [reverseOk, ba, reverseCount] = observe({8u, 7u}, true, 1u);
+  check(reverseOk && reverseCount == 2u && ab != ba,
+        "mipmap resource order participates in the semantic oracle");
+  check(std::get<1>(observe({7u, 8u}, true, 2u)) != ab,
+        "resource generation participates in the logical mip operation");
+  check(!std::get<0>(observe({0u, 8u}, true, 1u)) &&
+            !std::get<0>(observe({9u, 8u}, true, 1u)) &&
+            !std::get<0>(observe({7u, 8u}, false, 1u)),
+        "null, foreign and unresolved mip textures fail closed");
+}
+
+void resourceBackedRoutingDeviceUsesPoolOwnership() {
+  // This component fixture pins the real Pool ownership/reclaim predicate.
+  // It supplies a test watermark explicitly; it is not a Tape-driven texture
+  // mutation test or proof that a GPU sampled the texture before retirement.
+  MetalDeviceLease resourceDeviceLease;
+  resourceDeviceLease.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDeviceLease.handle != NULL_OBJECT_HANDLE,
+        "resource-backed routing fixture requires a Metal device");
+  const WMT::Device resourceDevice{resourceDeviceLease.handle};
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/false,
+                         /*cpuReadyArena=*/true, resourceDevice);
+
+  auto texture = fixture.cDevice->dev().createTexture(TextureDesc{
+      .width = 8u,
+      .height = 8u,
+      .depth = 1u,
+      .levels = 1u,
+      .format = Format::A8R8G8B8,
+      .type = TextureType::TwoD,
+      .pool = Pool::Default,
+  });
+  check(texture && texture->handle(),
+        "resource-backed core texture must receive a Pool handle");
+  const auto textureHandle = texture->handle();
+  auto alias = texture->surfaceLevel(0u);
+  check(alias && alias->handle(),
+        "resource-backed texture alias must receive a Pool surface handle");
+  const auto aliasHandle = alias->handle();
+  auto standalone = fixture.cDevice->dev().createSurface(SurfaceDesc{
+      .width = 8u,
+      .height = 8u,
+      .format = Format::A8R8G8B8,
+      .pool = Pool::Default,
+      .usage = UsageRenderTarget,
+      .renderTarget = true,
+  });
+  check(standalone && standalone->handle(),
+        "resource-backed standalone surface must receive a Pool handle");
+  const auto standaloneHandle = standalone->handle();
+
+  const auto* textureRecord = fixture.routing->queue_.pool().findTexture(
+      textureHandle.value);
+  const auto* aliasRecord = fixture.routing->queue_.pool().findSurface(
+      aliasHandle.value);
+  const auto* standaloneRecord = fixture.routing->queue_.pool().findSurface(
+      standaloneHandle.value);
+  check(textureRecord && textureRecord->texture &&
+            aliasRecord && aliasRecord->texture &&
+            aliasRecord->aliasTexture == textureHandle &&
+            standaloneRecord && standaloneRecord->texture &&
+            standaloneHandle.value != aliasHandle.value,
+        "resource-backed wrappers must refer to real Pool texture/surface records");
+
+  const auto retainedSeq =
+      dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
+          fixture.routing->queue_);
+  check(retainedSeq != 0u,
+        "resource fixture must expose a non-zero sequence watermark");
+  fixture.routing->queue_.pool().markTextureUse(textureHandle, retainedSeq);
+  fixture.routing->queue_.pool().markSurfaceUse(aliasHandle, retainedSeq);
+  fixture.routing->queue_.pool().markSurfaceUse(standaloneHandle, retainedSeq);
+  alias.reset();
+  texture.reset();
+  standalone.reset();
+  check(fixture.routing->queue_.pool().findTexture(textureHandle.value) &&
+            fixture.routing->queue_.pool().findSurface(aliasHandle.value) &&
+            fixture.routing->queue_.pool().findSurface(standaloneHandle.value),
+        "in-flight Pool records must survive wrapper release before completion");
+  dxmt9::CommandQueueArenaLeaseTestAccess::reclaimPoolForTest(
+      fixture.routing->queue_, retainedSeq - 1u);
+  check(fixture.routing->queue_.pool().findTexture(textureHandle.value) &&
+            fixture.routing->queue_.pool().findSurface(aliasHandle.value) &&
+            fixture.routing->queue_.pool().findSurface(standaloneHandle.value),
+        "Pool reclaim must not cross an incomplete waterline");
+  dxmt9::CommandQueueArenaLeaseTestAccess::reclaimPoolForTest(
+      fixture.routing->queue_, retainedSeq);
+  check(!fixture.routing->queue_.pool().findTexture(textureHandle.value) &&
+            !fixture.routing->queue_.pool().findSurface(aliasHandle.value) &&
+            !fixture.routing->queue_.pool().findSurface(standaloneHandle.value),
+        "completed waterline must reclaim retired texture and surface records");
+}
+
+void textureUploadObservationTracksPlainABAndReadOnlyLock() {
+  MetalDeviceLease resourceDeviceLease;
+  resourceDeviceLease.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDeviceLease.handle != NULL_OBJECT_HANDLE,
+        "texture upload fixture requires a Metal device");
+  const WMT::Device resourceDevice{resourceDeviceLease.handle};
+  RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                         /*segmentSerial=*/false,
+                         /*directChunkSlot=*/false,
+                         /*cpuReadyArena=*/true, resourceDevice);
+  auto texture = fixture.cDevice->dev().createTexture(TextureDesc{
+      .width = 4u,
+      .height = 4u,
+      .depth = 1u,
+      .levels = 1u,
+      .format = Format::A8R8G8B8,
+      .type = TextureType::TwoD,
+      .pool = Pool::Default,
+  });
+  check(texture && texture->handle(),
+        "texture upload fixture must create a real Pool texture");
+
+  struct QueueState {
+    std::uint64_t nextSeq = 0u;
+    std::size_t writing = 0u;
+    std::size_t ready = 0u;
+    std::size_t resident = 0u;
+    std::size_t pending = 0u;
+  };
+  const auto queueState = [&]() {
+    return QueueState{
+        .nextSeq = dxmt9::CommandQueueArenaLeaseTestAccess::nextSeqId(
+            fixture.routing->queue_),
+        .writing = dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+            fixture.routing->queue_),
+        .ready = dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+            fixture.routing->queue_),
+        .resident = dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(
+            fixture.routing->queue_),
+        .pending = dxmt9::CommandQueueArenaLeaseTestAccess::pendingCompletionCount(
+            fixture.routing->queue_),
+    };
+  };
+  const auto unchanged = [](const QueueState& before, const QueueState& after) {
+    return before.nextSeq == after.nextSeq && before.writing == after.writing &&
+        before.ready == after.ready && before.resident == after.resident &&
+        before.pending == after.pending;
+  };
+
+  const std::vector<std::uint8_t> invalidBytes(4u * 4u * 4u, 0x11u);
+  const auto expectRejectedUpload = [&](TextureHandle handle,
+                                        std::uint32_t level,
+                                        std::uint32_t width,
+                                        std::uint32_t height,
+                                        std::uint32_t depth,
+                                        std::uint32_t pitch,
+                                        std::uint32_t slicePitch,
+                                        std::span<const std::uint8_t> bytes,
+                                        std::string_view reason) {
+    const auto before = queueState();
+    const auto count = fixture.routing->textureUploadObservations.size();
+    fixture.routing->uploadTextureLevel(
+        handle, level, width, height, depth, pitch, slicePitch, bytes);
+    check(fixture.routing->textureUploadFailed &&
+              fixture.routing->textureUploadObservations.size() == count &&
+              unchanged(before, queueState()), reason);
+    fixture.routing->textureUploadFailed = false;
+  };
+  expectRejectedUpload(TextureHandle{0xdeadbeefu}, 0u, 4u, 4u, 1u, 16u,
+                        64u, invalidBytes,
+                        "invalid texture handle must not record an upload");
+  expectRejectedUpload(texture->handle(), 1u, 4u, 4u, 1u, 16u, 64u,
+                        invalidBytes,
+                        "invalid texture subresource must not record an upload");
+  expectRejectedUpload(texture->handle(), 0u, 8u, 4u, 1u, 16u, 64u,
+                        invalidBytes,
+                        "mismatched upload extent must not record an upload");
+  expectRejectedUpload(texture->handle(), 0u, 4u, 4u, 1u, 0u, 0u, {},
+                        "zero upload geometry must not record an upload");
+
+  const auto beforeA = queueState();
+  const std::vector<std::uint8_t> bytesA(4u * 4u * 4u, 0x11u);
+  auto locked = texture->lockRect(0u, nullptr, 0u);
+  check(locked.data && locked.pitch == 4u * 4u,
+        "plain texture lock must expose the expected CPU layout");
+  std::memcpy(locked.data, bytesA.data(), bytesA.size());
+  texture->unlockRect(0u);
+  const auto afterA = queueState();
+  check(unchanged(beforeA, afterA) &&
+            fixture.routing->textureUploadObservations.size() == 1u &&
+            !fixture.routing->textureUploadFailed,
+        "plain A upload must stay outside Writing/Ready/pending queue state");
+  const auto& uploadA = fixture.routing->textureUploadObservations.back();
+  check(uploadA.handle == texture->handle() && uploadA.level == 0u &&
+            uploadA.width == 4u && uploadA.height == 4u && uploadA.depth == 1u &&
+            uploadA.pitch == 16u && uploadA.slicePitch == bytesA.size() &&
+            uploadA.bytes == bytesA &&
+            uploadA.contentDigest == digestByteSpan(bytesA),
+        "plain A upload must record exact handle, extent, layout, and bytes");
+
+  const std::vector<std::uint8_t> bytesB(4u * 4u * 4u, 0x7bu);
+  locked = texture->lockRect(0u, nullptr, 0u);
+  check(locked.data && locked.pitch == 16u,
+        "plain B texture lock must expose the same CPU layout");
+  std::memcpy(locked.data, bytesB.data(), bytesB.size());
+  texture->unlockRect(0u);
+  const auto afterB = queueState();
+  check(unchanged(afterA, afterB) &&
+            fixture.routing->textureUploadObservations.size() == 2u,
+        "plain B upload must not publish a queue source or completion");
+  const auto& uploadB = fixture.routing->textureUploadObservations.back();
+  check(uploadB.handle == texture->handle() && uploadB.level == 0u &&
+            uploadB.bytes == bytesB &&
+            uploadB.contentDigest == digestByteSpan(bytesB),
+        "plain B upload must replace the observed logical content exactly");
+
+  const auto currentBytes = texture->levelBytes(0u);
+  const auto beforeReadOnly = std::vector<std::uint8_t>(
+      currentBytes.begin(), currentBytes.end());
+  locked = texture->lockRect(0u, nullptr, UsageReadOnly);
+  check(locked.data &&
+            std::memcmp(locked.data, beforeReadOnly.data(), beforeReadOnly.size()) ==
+                0,
+        "read-only lock must expose unchanged B content");
+  texture->unlockRect(0u);
+  const auto afterReadOnly = queueState();
+  check(unchanged(afterB, afterReadOnly) &&
+            fixture.routing->textureUploadObservations.size() == 3u &&
+            fixture.routing->textureUploadObservations.back().bytes ==
+                beforeReadOnly &&
+            !fixture.routing->textureUploadFailed,
+        "read-only unlock must preserve logical bytes and queue state");
+
+  fixture.routing->textureUploadFailed = false;
+  const auto beforeCapacity = queueState();
+  const auto remaining = RoutingDevice::kTextureUploadObservationCapacity -
+      fixture.routing->textureUploadObservations.size();
+  for (std::size_t attempt = 0u; attempt < remaining; ++attempt) {
+    fixture.routing->uploadTextureLevel(texture->handle(), 0u, 4u, 4u, 1u,
+                                        16u, 64u, bytesB);
+  }
+  check(fixture.routing->textureUploadObservations.size() ==
+            RoutingDevice::kTextureUploadObservationCapacity &&
+            !fixture.routing->textureUploadFailed &&
+            unchanged(beforeCapacity, queueState()),
+        "upload observation budget must fill without changing queue state");
+  const auto beforeExhausted = queueState();
+  const auto countAtCapacity =
+      fixture.routing->textureUploadObservations.size();
+  fixture.routing->uploadTextureLevel(texture->handle(), 0u, 4u, 4u, 1u,
+                                      16u, 64u, bytesB);
+  check(fixture.routing->textureUploadFailed &&
+            fixture.routing->textureUploadObservations.size() == countAtCapacity &&
+            unchanged(beforeExhausted, queueState()),
+        "exhausted upload observation budget must fail without effects");
+}
+
+struct CpuTapeExperimentOptions {
+  std::string tapePath;
+  bool generalFrame = false;
+  std::vector<std::string> blobPaths;
+  std::string sourceOraclePath;
+  std::string sourceProjectionSha256;
+  CpuTapeResourceBackend resourceBackend = CpuTapeResourceBackend::NoGpu;
+  bool compatibility = false;
+  bool afterDestroy = false;
+  bool beforeNextWork = false;
+  std::size_t repeat = 1u;
+  bool repeatExplicit = false;
+  std::string fault = "none";
+  std::size_t maxPending = dxmt9::d3d9::kRenderTapeCompletionScheduleCapacity;
+  std::string completionPlanPath;
+  dxmt9::d3d9::RenderTapeCpuPublicationMode publication =
+      dxmt9::d3d9::RenderTapeCpuPublicationMode::PerCommand;
+};
+
+struct CpuTapeTraceRow {
+  std::uint64_t iteration = 0;
+  std::uint32_t event = 0;
+  std::uint32_t eventSubmission = 0;
+  std::uint64_t submission = 0;
+  std::uint32_t source = 0;
+  std::uint64_t sourceGeneration = 0;
+  std::uint32_t storageFirstPage = 0;
+  std::uint32_t storagePageCount = 0;
+  std::uint64_t storageGeneration = 0;
+  std::uint32_t firstEvent = 0;
+  std::uint32_t lastEvent = 0;
+  std::uint32_t releasedAtEvent = 0;
+  bool submitted = false;
+  bool completed = false;
+};
+
+struct CpuTapeDrawObservation {
+  std::uint32_t ordinal = 0u;
+  // The event that published this physical source, not necessarily the
+  // original event containing the draw (draw-island may span events).
+  std::uint32_t publicationEvent = 0u;
+  std::uint64_t cumulativeSemanticDigest = 0u;
+};
+
+enum class CpuTapePhase : std::uint8_t {
+  Setup,
+  Replay,
+  Observe,
+  Completion,
+  Cleanup,
+};
+
+constexpr std::size_t cpuTapePhaseIndex(CpuTapePhase phase) noexcept {
+  return static_cast<std::size_t>(phase);
+}
+
+// Cold-path wall ledger for the bounded CPU tape experiment. Nested scopes
+// pause the active phase and resume it at the same monotonic instant, so
+// semantic observation and controlled completion do not double-count their
+// enclosing replay/event time. The Clock template is only for the native
+// fake-clock proof below; production uses steady_clock directly.
+template <typename Clock>
+class CpuTapePhaseLedger final {
+ public:
+  using Duration = std::chrono::nanoseconds;
+  using TimePoint = typename Clock::time_point;
+
+  class Scope final {
+   public:
+    Scope(CpuTapePhaseLedger& ledger, CpuTapePhase phase) noexcept
+        : ledger_(&ledger), hadPrevious_(ledger.active_),
+          previousPhase_(ledger.activePhase_) {
+      ledger_->enterNested(phase);
+    }
+    Scope(const Scope&) = delete;
+    Scope& operator=(const Scope&) = delete;
+    Scope(Scope&& other) noexcept
+        : ledger_(other.ledger_), hadPrevious_(other.hadPrevious_),
+          previousPhase_(other.previousPhase_) {
+      other.ledger_ = nullptr;
+    }
+    Scope& operator=(Scope&&) = delete;
+    ~Scope() { close(); }
+
+    void close() noexcept {
+      if (!ledger_) return;
+      ledger_->leaveNested(hadPrevious_, previousPhase_);
+      ledger_ = nullptr;
+    }
+
+   private:
+    CpuTapePhaseLedger* ledger_ = nullptr;
+    bool hadPrevious_ = false;
+    CpuTapePhase previousPhase_ = CpuTapePhase::Setup;
+  };
+
+  void begin(CpuTapePhase phase) noexcept {
+    if (!started_) {
+      started_ = true;
+      firstStart_ = Clock::now();
+    }
+    const auto now = Clock::now();
+    pauseActive(now);
+    active_ = true;
+    activePhase_ = phase;
+    activeStart_ = now;
+  }
+
+  Scope scoped(CpuTapePhase phase) noexcept { return Scope(*this, phase); }
+
+  void finish() noexcept {
+    const auto now = Clock::now();
+    pauseActive(now);
+    active_ = false;
+    if (started_) {
+      elapsedNs_ = toNs(
+          std::chrono::duration_cast<Duration>(now - firstStart_));
+    }
+  }
+
+  std::uint64_t elapsedNs() const noexcept { return elapsedNs_; }
+  const std::array<std::uint64_t, 5>& phaseNs() const noexcept {
+    return phaseNs_;
+  }
+
+ private:
+  static std::uint64_t toNs(Duration duration) noexcept {
+    return static_cast<std::uint64_t>(duration.count());
+  }
+
+  void pauseActive(TimePoint now) noexcept {
+    if (!active_) return;
+    phaseNs_[cpuTapePhaseIndex(activePhase_)] +=
+        toNs(std::chrono::duration_cast<Duration>(now - activeStart_));
+  }
+
+  void pauseActive() noexcept { pauseActive(Clock::now()); }
+
+  void enterNested(CpuTapePhase phase) noexcept {
+    const auto now = Clock::now();
+    pauseActive(now);
+    active_ = true;
+    activePhase_ = phase;
+    activeStart_ = now;
+  }
+
+  void leaveNested(bool hadPrevious, CpuTapePhase previousPhase) noexcept {
+    const auto now = Clock::now();
+    pauseActive(now);
+    if (hadPrevious) {
+      active_ = true;
+      activePhase_ = previousPhase;
+      activeStart_ = now;
+    } else {
+      active_ = false;
+    }
+  }
+
+  bool started_ = false;
+  bool active_ = false;
+  CpuTapePhase activePhase_ = CpuTapePhase::Setup;
+  TimePoint firstStart_{};
+  TimePoint activeStart_{};
+  std::array<std::uint64_t, 5> phaseNs_{};
+  std::uint64_t elapsedNs_ = 0u;
+};
+
+struct CpuTapePhaseFakeClock {
+  using time_point = std::chrono::steady_clock::time_point;
+  static inline time_point value{};
+
+  static time_point now() noexcept { return value; }
+  static void advance(std::uint64_t nanoseconds) noexcept {
+    value += std::chrono::nanoseconds(nanoseconds);
+  }
+};
+
+std::optional<std::uint64_t> cpuProcessTimespecNs(std::int64_t seconds,
+                                                  std::int64_t nanoseconds) noexcept {
+  if (seconds < 0 || nanoseconds < 0 || nanoseconds >= 1000000000ll)
+    return std::nullopt;
+  constexpr auto kScale = std::uint64_t{1000000000};
+  const auto secondsValue = static_cast<std::uint64_t>(seconds);
+  const auto nanosValue = static_cast<std::uint64_t>(nanoseconds);
+  if (secondsValue > (std::numeric_limits<std::uint64_t>::max() - nanosValue) /
+                         kScale)
+    return std::nullopt;
+  return secondsValue * kScale + nanosValue;
+}
+
+std::optional<std::uint64_t> sampleProcessCpuNs() noexcept {
+#if defined(CLOCK_PROCESS_CPUTIME_ID)
+  timespec value{};
+  if (::clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &value) != 0)
+    return std::nullopt;
+  return cpuProcessTimespecNs(static_cast<std::int64_t>(value.tv_sec),
+                              static_cast<std::int64_t>(value.tv_nsec));
+#else
+  return std::nullopt;
+#endif
+}
+
+void cpuTapePhaseLedgerNestedScopeSpec() {
+  using Ledger = CpuTapePhaseLedger<CpuTapePhaseFakeClock>;
+  CpuTapePhaseFakeClock::value = {};
+  Ledger ledger;
+  ledger.begin(CpuTapePhase::Setup);
+  CpuTapePhaseFakeClock::advance(5u);
+  try {
+    auto replay = ledger.scoped(CpuTapePhase::Replay);
+    CpuTapePhaseFakeClock::advance(7u);
+    {
+      auto observe = ledger.scoped(CpuTapePhase::Observe);
+      CpuTapePhaseFakeClock::advance(3u);
+      throw TestFailure("phase-ledger-unwind-probe");
+    }
+  } catch (const TestFailure&) {
+    // Scope destruction must restore replay, then the outer setup scope.
+  }
+  ledger.begin(CpuTapePhase::Cleanup);
+  CpuTapePhaseFakeClock::advance(4u);
+  ledger.finish();
+  const auto& phases = ledger.phaseNs();
+  check(phases[cpuTapePhaseIndex(CpuTapePhase::Setup)] == 5u &&
+            phases[cpuTapePhaseIndex(CpuTapePhase::Replay)] == 7u &&
+            phases[cpuTapePhaseIndex(CpuTapePhase::Observe)] == 3u &&
+            phases[cpuTapePhaseIndex(CpuTapePhase::Completion)] == 0u &&
+            phases[cpuTapePhaseIndex(CpuTapePhase::Cleanup)] == 4u &&
+            ledger.elapsedNs() == 19u,
+        "nested CPU tape phase scopes must pause/resume exclusively on unwind");
+  check(cpuProcessTimespecNs(2, 3).value() == 2000000003ull &&
+            !cpuProcessTimespecNs(-1, 0).has_value() &&
+            !cpuProcessTimespecNs(0, 1000000000ll).has_value() &&
+            !cpuProcessTimespecNs(
+                std::numeric_limits<std::int64_t>::max(), 0).has_value(),
+        "process CPU clock conversion must reject invalid and overflowing samples");
+}
+
+struct CpuTapeExperimentSummary {
+  bool complete = false;
+  std::string failure;
+  std::uint64_t digest = 1469598103934665603ull;
+  std::size_t commands = 0u;
+  std::size_t draws = 0u;
+  std::size_t directDraws = 0u;
+  std::size_t compatibilityDraws = 0u;
+  std::size_t submitted = 0u;
+  std::size_t completed = 0u;
+  std::size_t reclaimed = 0u;
+  std::size_t resourcesCreated = 0u;
+  std::size_t resourcesReleased = 0u;
+  std::uint64_t elapsedNs = 0u;
+  std::array<std::uint64_t, 5> phaseNs{};
+  std::optional<std::uint64_t> nativeCpuNs;
+  bool retainedBeforeCompletion = false;
+  bool bufferBackingObserved = false;
+  bool capturedARequiredRetention = false;
+  bool capturedABackingPreserved = false;
+  bool bufferBackingRevisionAdvanced = false;
+  bool distinctDynamicBackings = false;
+  bool bufferBackingOracleComplete = false;
+  bool faultTriggered = false;
+  bool faultPreEffectOwnershipUnchanged = false;
+  bool faultRetrySucceeded = false;
+  std::uint32_t faultMutationApplies = 0u;
+  std::string faultReceipt;
+  bool resetOk = false;
+  std::vector<CpuTapeTraceRow> trace;
+  std::vector<CpuTapeDrawObservation> drawObservations;
+  std::uint32_t groupedRanges = 0u;
+  std::uint32_t groupedEvents = 0u;
+  std::uint32_t groupedObservedDraws = 0u;
+  bool groupedPublicationVerified = false;
+  std::uint32_t capacityRejected = 0u;
+  std::uint32_t populatedFallback = 0u;
+  std::uint32_t capacityRotated = 0u;
+};
+
+class CpuTapeExperimentSink final : public dxmt9::d3d9::RenderTapeReplaySink {
+ public:
+  CpuTapeExperimentSink(RuntimeFixture& fixture,
+                        const dxmt9::d3d9::RenderTapeBlobCatalogue& catalogue,
+                        const std::vector<std::vector<std::byte>>& blobs,
+                        bool compatibility, bool afterDestroy,
+                        bool metalResources,
+                        bool managedAllocationFault,
+                        std::uint64_t iteration,
+                        std::string fault, std::size_t maxPending,
+                        CpuTapeExperimentSummary& summary,
+                        CpuTapePhaseLedger<std::chrono::steady_clock>& phaseLedger,
+                        const dxmt9::d3d9::RenderTapeCpuPublicationPlan*
+                            publicationPlan,
+                        dxmt9::d3d9::RenderTapeCompletionPlanController*
+                            completionPlan)
+      : fixture_(fixture), catalogue_(catalogue), blobs_(blobs),
+        compatibility_(compatibility), afterDestroy_(afterDestroy),
+        metalResources_(metalResources),
+        managedAllocationFault_(managedAllocationFault), iteration_(iteration),
+        fault_(std::move(fault)), maxPending_(maxPending), summary_(summary),
+        phaseLedger_(phaseLedger),
+        publicationPlan_(publicationPlan),
+        externalPlan_(completionPlan) {
+    if (externalPlan_) {
+      const auto started = externalPlan_->beginIteration(
+          static_cast<std::uint32_t>(iteration_),
+          compatibility_
+              ? dxmt9::d3d9::RenderTapeCompletionPlanRoute::Compatibility
+              : dxmt9::d3d9::RenderTapeCompletionPlanRoute::ProductionSlot);
+      if (!started.accepted()) {
+        failure_ = std::string("completion-plan-begin-") +
+                   completionPlanDispositionName(started.disposition);
+      }
+    }
+  }
+
+  bool bootstrap(const dxmt9::d3d9::RenderTapeBootstrapHeader& fixed,
+                 std::span<const std::byte> overlayChunks,
+                 dxmt9::d3d9::RenderTapeBootstrapReplayMode) override {
+    auto phase = phaseLedger_.scoped(CpuTapePhase::Replay);
+    const auto eventOrdinal = beginEvent();
+    bootstrapCount_ = fixed.overlayCount;
+    bootstrap_.assign(overlayChunks.begin(), overlayChunks.end());
+    return finishEvent(eventOrdinal);
+  }
+
+  bool replayBootstrap() {
+    const auto overlayChunks = std::span<const std::byte>(bootstrap_);
+    std::size_t offset = 0u;
+    for (std::uint32_t index = 0u; index < bootstrapCount_; ++index) {
+      if (overlayChunks.size() - offset <
+          sizeof(D9CCommandChunkWireHeader)) {
+        failure_ = "bootstrap-overlay-truncated";
+        return false;
+      }
+      D9CCommandChunkWireHeader header{};
+      std::memcpy(&header, overlayChunks.data() + offset, sizeof(header));
+      const std::size_t total = static_cast<std::size_t>(
+          header.payloadArenaOffset) + header.payloadArenaSize;
+      if (total == 0u || total > overlayChunks.size() - offset) {
+        failure_ = "bootstrap-overlay-layout";
+        return false;
+      }
+      const auto overlay = overlayChunks.subspan(offset, total);
+      const dxmt9::d3d9::CommandChunkEnvelope envelope{
+          .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+          .recordCount = header.recordCount,
+          .handleCount = header.handleCount};
+      dxmt9::d3d9::ImportedChunkView imported;
+      if (!dxmt9::d3d9::importPrevalidatedCommandChunk(
+              overlay, envelope, imported) ||
+          !imported.handles.empty()) {
+        failure_ = "unsupported-grammar: bootstrap handles";
+        return false;
+      }
+      if (dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
+              fixture_.cDevice.get(), overlay, envelope, {},
+              compatibility_ ? dxmt9::d3d9::ProviderReplayPolicy::Compatibility
+                             : dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot) !=
+          dxmt9::core::D3D_OK) {
+        failure_ = "bootstrap-replay-failed";
+        return false;
+      }
+      offset += total;
+    }
+    bootstrapCount_ = 0;
+    return offset == overlayChunks.size();
+  }
+
+  bool objectDefine(const dxmt9::d3d9::RenderTapeObjectDefineHeader& fixed,
+                    std::span<const std::byte> descriptor) override {
+    auto phase = phaseLedger_.scoped(CpuTapePhase::Setup);
+    const auto eventOrdinal = beginEvent();
+    // The validator requires a live output oracle surface. CPU mode admits
+    // only preflight-proven implicit swapchain metadata, never a GPU object.
+    if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
+      return finishEvent(eventOrdinal);
+    }
+    if (fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_BUFFER ||
+        fixed.descriptorKind !=
+            static_cast<std::uint32_t>(
+                dxmt9::d3d9::RenderTapeDescriptorKind::Buffer)) {
+      failure_ = "unsupported-grammar: only buffer ObjectDefine is admitted";
+      return false;
+    }
+    D9CBufferDesc desc{};
+    if (descriptor.size() != sizeof(desc)) {
+      failure_ = "invalid-buffer-descriptor";
+      return false;
+    }
+    std::memcpy(&desc, descriptor.data(), sizeof(desc));
+    constexpr std::uint32_t kD3DUsageDynamic = 0x200u;
+    dynamicResourceMode_ = (desc.usage & kD3DUsageDynamic) != 0u;
+    auto* buffer = desc.format
+                       ? dxmt9c_device_create_index_buffer(
+                             fixture_.cDevice.get(), desc.size, desc.usage,
+                             desc.format, desc.pool)
+                       : dxmt9c_device_create_vertex_buffer(
+                             fixture_.cDevice.get(), desc.size, desc.usage,
+                             desc.fvf, desc.pool);
+    if (!buffer) {
+      failure_ = "buffer-create-failed";
+      return false;
+    }
+    objects_.push_back({fixed.identity, buffer});
+    ++summary_.resourcesCreated;
+    return finishEvent(eventOrdinal);
+  }
+
+  bool objectDestroy(
+      const dxmt9::d3d9::RenderTapeObjectDestroyHeader& fixed) override {
+    auto phase = phaseLedger_.scoped(CpuTapePhase::Setup);
+    const auto eventOrdinal = beginEvent();
+    auto it = find(fixed.identity);
+    if (it == objects_.end()) {
+      failure_ = "stale-object-destroy";
+      return false;
+    }
+    auto* buffer = it->buffer;
+    const auto handle = buffer->obj->handle();
+    dxmt9c_buffer_release(buffer);
+    ++summary_.resourcesReleased;
+    retiredHandles_.push_back(handle);
+    objects_.erase(it);
+    if (externalPlan_) {
+      const bool wasPending = externalPending();
+      const auto evidence =
+          dxmt9::CommandQueueArenaLeaseTestAccess::bufferLifetime(
+              fixture_.routing->queue_, handle);
+      if (wasPending && evidence.alive && evidence.destroyPending &&
+          evidence.lastUsedSeq > evidence.completedSeq) {
+        summary_.retainedBeforeCompletion = true;
+      } else if (wasPending) {
+        failure_ = "destroy-before-completion-retention-unproven";
+        return false;
+      }
+      if (!finishEvent(eventOrdinal)) return false;
+      if (wasPending && !externalPending() &&
+          dxmt9::CommandQueueArenaLeaseTestAccess::bufferAlive(
+              fixture_.routing->queue_, handle)) {
+        failure_ = "completed-buffer-not-reclaimed";
+        return false;
+      }
+      return failure_.empty();
+    } else if (afterDestroy_) {
+      const auto evidence =
+          dxmt9::CommandQueueArenaLeaseTestAccess::bufferLifetime(
+              fixture_.routing->queue_, handle);
+      if (!pending_.empty() && evidence.alive && evidence.destroyPending &&
+          evidence.lastUsedSeq > evidence.completedSeq) {
+        summary_.retainedBeforeCompletion = true;
+      } else {
+        failure_ = "destroy-before-completion-retention-unproven";
+        return false;
+      }
+      // Keep the production snapshot pin through mutation B.  The dynamic
+      // Metal-backed oracle releases this pending source at PresentComplete,
+      // after it has read captured A's physical backing.
+      if (!(dynamicResourceMode_ && metalResources_ &&
+            capturedARequiredRetention_)) {
+        releasePending();
+      }
+      if (!failure_.empty()) return false;
+      if (!(dynamicResourceMode_ && metalResources_ &&
+            capturedARequiredRetention_) &&
+          dxmt9::CommandQueueArenaLeaseTestAccess::bufferAlive(
+              fixture_.routing->queue_, handle)) {
+        failure_ = "completed-buffer-not-reclaimed";
+        return false;
+      }
+    }
+    return finishEvent(eventOrdinal);
+  }
+
+  bool resourceMutation(
+      const dxmt9::d3d9::RenderTapeResourceMutationHeader& fixed) override {
+    auto phase = phaseLedger_.scoped(CpuTapePhase::Replay);
+    const auto eventOrdinal = beginEvent();
+    if (fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_BUFFER ||
+        (fixed.kind != static_cast<std::uint32_t>(
+                           dxmt9::d3d9::RenderTapeMutationKind::CpuUnlock) &&
+         fixed.kind != static_cast<std::uint32_t>(
+                           dxmt9::d3d9::RenderTapeMutationKind::Upload))) {
+      failure_ = "unsupported-grammar: only buffer lock/unlock mutations are admitted";
+      return false;
+    }
+    auto it = find(fixed.identity);
+    if (it == objects_.end() || fixed.byteSize > UINT32_MAX ||
+        fixed.byteOffset > UINT32_MAX) {
+      failure_ = "mutation-object-or-range-invalid";
+      return false;
+    }
+    const auto blobIt = blobsByDigest(fixed.digest, fixed.byteSize);
+    if (!blobIt) {
+      failure_ = "mutation-blob-missing";
+      return false;
+    }
+    if (dynamicResourceMode_ && dynamicMutationCount_ == 1u &&
+        metalResources_) {
+      auto observe = phaseLedger_.scoped(CpuTapePhase::Observe);
+      const auto evidence = dxmt9::CommandQueueArenaLeaseTestAccess::bufferLifetime(
+          fixture_.routing->queue_, it->buffer->obj->handle());
+      // The completion source is the production lifetime witness.  Only read
+      // the captured A address when that source is still beyond the published
+      // completion waterline; an early completion legitimately permits reuse
+      // and must not be treated as a failed retention proof.
+      capturedARequiredRetention_ =
+          capturedASubmissionSeq_ != 0u &&
+          capturedASubmissionSeq_ > evidence.completedSeq &&
+          evidence.lastUsedSeq >= capturedASubmissionSeq_;
+      summary_.capturedARequiredRetention = capturedARequiredRetention_;
+    }
+    void* mapped = nullptr;
+    if (dxmt9c_buffer_lock(it->buffer, static_cast<std::uint32_t>(fixed.byteOffset),
+                           static_cast<std::uint32_t>(fixed.byteSize), &mapped,
+                           dxmt9::d3d9::renderTapeBufferMutationLockFlags(
+                               static_cast<dxmt9::d3d9::RenderTapeBufferMutationDisposition>(
+                                   fixed.bufferDisposition))) != dxmt9::core::D3D_OK ||
+        !mapped) {
+      failure_ = "buffer-lock-failed";
+      return false;
+    }
+    std::memcpy(mapped, blobIt->data(), blobIt->size());
+    digestValue(it->contentDigest, fixed.byteOffset);
+    digestValue(it->contentDigest, fixed.byteSize);
+    digestValue(it->contentDigest, fixed.bufferDisposition);
+    digestBytes(it->contentDigest, mapped, blobIt->size());
+    const bool injectManagedAllocationFailure =
+        managedAllocationFault_ && !faultAttempted_;
+    std::uint64_t revisionBeforeUnlock = 0u;
+    std::size_t renameRingSizeBeforeUnlock = 0u;
+    std::size_t renameActiveIndexBeforeUnlock = 0u;
+    std::vector<std::uint8_t> shadowBeforeUnlock;
+    std::size_t queueDepthBeforeUnlock = 0u;
+    std::size_t queueBytesBeforeUnlock = 0u;
+    std::uint64_t queuedMutationSeqBeforeUnlock = 0u;
+    if (injectManagedAllocationFailure) {
+      auto* record = fixture_.routing->queue_.pool().findBuffer(
+          it->buffer->obj->handle().value);
+      if (!record || !it->buffer->replayDrainTarget) {
+        failure_ = "managed-allocation-fault-snapshot-missing";
+        return false;
+      }
+      revisionBeforeUnlock = record->contentRevision;
+      renameRingSizeBeforeUnlock = record->renameRing.size();
+      renameActiveIndexBeforeUnlock = record->renameActiveIndex;
+      shadowBeforeUnlock = record->shadow;
+      queueDepthBeforeUnlock =
+          fixture_.cDevice->replayOffload
+              ? fixture_.cDevice->replayOffload->queue().depth()
+              : 0u;
+      queueBytesBeforeUnlock =
+          fixture_.cDevice->replayOffload
+              ? fixture_.cDevice->replayOffload->queue().queuedBytesForTest()
+              : 0u;
+      queuedMutationSeqBeforeUnlock =
+          it->buffer->replayDrainTarget->lastQueuedSeq;
+      if (!fixture_.cDevice->replayOffload) {
+        failure_ = "managed-allocation-fault-worker-missing";
+        return false;
+      }
+      fixture_.cDevice->replayOffload->queue().failNextAllocationForTest();
+      faultAttempted_ = true;
+    }
+    const auto unlockResult = dxmt9c_buffer_unlock(it->buffer);
+    if (unlockResult != dxmt9::core::D3D_OK &&
+        injectManagedAllocationFailure) {
+      const bool allocationHookConsumed =
+          fixture_.allocationFailure_ &&
+          !fixture_.allocationFailure_->failNext.load(std::memory_order_acquire);
+      if (unlockResult != dxmt9::core::D3DERR_INVALIDCALL ||
+          !allocationHookConsumed) {
+        failure_ = "managed-allocation-fault-not-injected-invalidcall";
+        return false;
+      }
+      auto* record = fixture_.routing->queue_.pool().findBuffer(
+          it->buffer->obj->handle().value);
+      const bool unchanged =
+          record && record->contentRevision == revisionBeforeUnlock &&
+          record->renameRing.size() == renameRingSizeBeforeUnlock &&
+          record->renameActiveIndex == renameActiveIndexBeforeUnlock &&
+          record->shadow == shadowBeforeUnlock &&
+          fixture_.cDevice->replayOffload->queue().depth() ==
+              queueDepthBeforeUnlock &&
+          fixture_.cDevice->replayOffload->queue().queuedBytesForTest() ==
+              queueBytesBeforeUnlock &&
+          it->buffer->replayDrainTarget->lastQueuedSeq ==
+              queuedMutationSeqBeforeUnlock && it->buffer->obj->locked();
+      summary_.faultTriggered = true;
+      summary_.faultPreEffectOwnershipUnchanged = unchanged;
+      summary_.faultReceipt =
+          "managed-mutation-allocation-rejected-pre-effect-public-unlock";
+      if (!unchanged) {
+        failure_ = "managed-allocation-fault-preeffect-ownership-changed";
+        return false;
+      }
+      // Re-enter the public bridge so its fence recomputes admission for the
+      // still-open lock. The test must not manufacture a planned capability.
+      const auto retry = dxmt9c_buffer_unlock(it->buffer);
+      if (retry != dxmt9::core::D3D_OK ||
+          !fixture_.cDevice->replayOffload->start(fixture_.cDevice.get())) {
+        failure_ = "managed-allocation-fault-retry-rejected";
+        return false;
+      }
+      fixture_.cDevice->replayOffload->queue().waitDrained();
+      summary_.faultMutationApplies =
+          fixture_.routing->mutationApplies.load();
+      summary_.faultRetrySucceeded = summary_.faultMutationApplies == 1u;
+      if (!summary_.faultRetrySucceeded) {
+        failure_ = "managed-allocation-fault-retry-apply-count";
+        return false;
+      }
+    } else if (unlockResult != dxmt9::core::D3D_OK) {
+      failure_ = "buffer-unlock-failed";
+      return false;
+    }
+    if (dynamicResourceMode_) {
+      if (dynamicMutationCount_ == 0u) {
+        dynamicSeedBytes_.assign(
+            reinterpret_cast<const std::uint8_t*>(blobIt->data()),
+            reinterpret_cast<const std::uint8_t*>(blobIt->data()) +
+                blobIt->size());
+      } else if (dynamicMutationCount_ == 1u && metalResources_ &&
+                 capturedARequiredRetention_) {
+        if (capturedAContentsAddress_ == 0u || dynamicSeedBytes_.empty()) {
+          failure_ = "dynamic-capture-A-missing-before-mutation-B";
+          return false;
+        }
+        const auto* capturedA = reinterpret_cast<const std::uint8_t*>(
+            static_cast<std::uintptr_t>(capturedAContentsAddress_));
+        if (std::memcmp(capturedA, dynamicSeedBytes_.data(),
+                        dynamicSeedBytes_.size()) != 0) {
+          failure_ = "captured-A-backing-changed-before-completion";
+          return false;
+        }
+        const auto resourceHandle = it->buffer->obj->handle();
+        const auto* record =
+            fixture_.routing->queue_.pool().findBuffer(resourceHandle.value);
+        if (!record || record->contents == static_cast<const void*>(capturedA)) {
+          failure_ = "dynamic-mutation-B-did-not-rotate-from-captured-A";
+          return false;
+        }
+        summary_.capturedABackingPreserved = true;
+      }
+      dynamicExpectedBytes_.assign(
+          reinterpret_cast<const std::uint8_t*>(blobIt->data()),
+          reinterpret_cast<const std::uint8_t*>(blobIt->data()) +
+              blobIt->size());
+      ++dynamicMutationCount_;
+    }
+    return finishEvent(eventOrdinal);
+  }
+
+  bool commandChunk(const dxmt9::d3d9::CommandChunkEnvelope& envelope,
+                    std::span<const std::byte> chunk) override {
+    auto phase = phaseLedger_.scoped(CpuTapePhase::Replay);
+    const auto eventOrdinal = beginEvent();
+    const auto capturedObservationBegin =
+        fixture_.routing->capturedBindingObservations.size();
+    std::uint32_t eventSubmissionOrdinal = 0u;
+    if (bootstrapCount_ && !replayBootstrap()) return false;
+    dxmt9::d3d9::ImportedChunkView imported;
+    if (!dxmt9::d3d9::importPrevalidatedCommandChunk(chunk, envelope,
+                                                       imported)) {
+      failure_ = "command-import-failed";
+      return false;
+    }
+    for (const auto& handle : imported.handles) {
+      if (handle.kind != D9C_CHUNK_HANDLE_KIND_BUFFER) {
+        failure_ = "unsupported-grammar: command references non-buffer object";
+        return false;
+      }
+    }
+    std::vector<void*> resolved;
+    resolved.reserve(imported.handles.size());
+    for (const auto& handle : imported.handles) {
+      const D9CWireObjectIdentity identity{
+          .kind = handle.kind,
+          .generation = handle.generation,
+          .objectId = handle.objectId};
+      const auto it = find(identity);
+      if (it == objects_.end()) {
+        failure_ = "command-object-not-live";
+        return false;
+      }
+      resolved.push_back(it->buffer);
+    }
+    const auto policy = compatibility_
+                            ? dxmt9::d3d9::ProviderReplayPolicy::Compatibility
+                            : dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot;
+    const auto before = dxmt9::perf::snapshotRenderTapeReplay();
+    if (dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
+            fixture_.cDevice.get(), chunk, envelope, resolved, policy) !=
+        dxmt9::core::D3D_OK) {
+      failure_ = "provider-replay-failed";
+      return false;
+    }
+    const bool containsDraw = std::any_of(
+        imported.records.begin(), imported.records.end(), [](const auto& record) {
+          return record.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
+                 record.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE_UP;
+        });
+    if (dynamicResourceMode_ && containsDraw) {
+      const auto& observations = fixture_.routing->capturedBindingObservations;
+      if (observations.size() <= capturedObservationBegin) {
+        failure_ = "dynamic-capture-snapshot-missing";
+        return false;
+      }
+      const auto& observation = observations.back();
+      if (observation.bytes.empty() || observation.contentsAddress == 0u) {
+        failure_ = "dynamic-capture-snapshot-bytes-missing";
+        return false;
+      }
+      if (!dynamicExpectedBytes_.empty() &&
+          observation.bytes != dynamicExpectedBytes_) {
+        failure_ = "dynamic-capture-bytes-do-not-match-mutation";
+        return false;
+      }
+      digestBytes(summary_.digest, observation.bytes.data(),
+                  observation.bytes.size());
+      summary_.bufferBackingObserved = true;
+      ++dynamicDrawCount_;
+      if (dynamicDrawCount_ == 1u) {
+        capturedAContentsAddress_ = observation.contentsAddress;
+        capturedAMetalHandle_ = observation.metalHandle;
+        capturedARevision_ = observation.contentRevision;
+      } else if (dynamicDrawCount_ == 2u) {
+        summary_.bufferBackingRevisionAdvanced =
+            observation.contentRevision > capturedARevision_;
+        summary_.distinctDynamicBackings =
+            observation.metalHandle != capturedAMetalHandle_;
+        if (!summary_.bufferBackingRevisionAdvanced) {
+          failure_ = "dynamic-capture-backing-revision-did-not-advance";
+          return false;
+        }
+        if (capturedARequiredRetention_ &&
+            !summary_.distinctDynamicBackings) {
+          failure_ = "dynamic-capture-backing-did-not-rotate";
+          return false;
+        }
+        if (capturedARequiredRetention_ &&
+            !summary_.capturedABackingPreserved) {
+          failure_ = "dynamic-capture-A-preservation-unproven";
+          return false;
+        }
+      }
+    }
+    const auto after = dxmt9::perf::snapshotRenderTapeReplay();
+    summary_.directDraws += after.directLeaseDraws - before.directLeaseDraws;
+    summary_.compatibilityDraws += after.compatibilityDraws - before.compatibilityDraws;
+    const auto* publicationRange =
+        publicationPlan_ ? publicationPlan_->rangeForEvent(eventOrdinal)
+                          : nullptr;
+    if (publicationRange && publicationRange->firstEvent !=
+                                publicationRange->lastEvent) {
+      if (!groupedActive_) {
+        if (eventOrdinal != publicationRange->firstEvent) {
+          failure_ = "grouped-publication-unexpected-start";
+          return false;
+        }
+        groupedActive_ = true;
+        groupedExpectedRange_ = *publicationRange;
+        groupedFirstEvent_ = eventOrdinal;
+        groupedLastEvent_ = eventOrdinal;
+        groupedCommandEvents_ = 1u;
+        groupedSourceCount_ = 0u;
+        groupedObservedDraws_ = 0u;
+      } else {
+        if (eventOrdinal != groupedLastEvent_ + 1u ||
+            eventOrdinal > groupedExpectedRange_.lastEvent) {
+          failure_ = "grouped-publication-range-split";
+          return false;
+        }
+        groupedLastEvent_ = eventOrdinal;
+        ++groupedCommandEvents_;
+      }
+      if (eventOrdinal != publicationRange->lastEvent) {
+        if (dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+                fixture_.routing->queue_) != 0u) {
+          failure_ = "grouped-publication-early-ready";
+          return false;
+        }
+        return finishEvent(eventOrdinal);
+      }
+    }
+    if (!dxmt9::CommandQueueArenaLeaseTestAccess::publishWriting(fixture_.routing->queue_)) {
+      failure_ = "source-publication-failed";
+      return false;
+    }
+    groupedObservation_ = groupedActive_;
+    while (dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+        fixture_.routing->queue_)) {
+      const auto source =
+          dxmt9::CommandQueueArenaLeaseTestAccess::peekReadyCompletion(
+              fixture_.routing->queue_);
+      if (!source.completionIdentityValid()) {
+        failure_ = "provider-did-not-publish-completion-source";
+        return false;
+      }
+      if (externalPlan_ && !source.source.valid()) {
+        failure_ = "completion-plan-receipt-source-unsupported";
+        return false;
+      }
+      ++eventSubmissionOrdinal;
+      if (externalPlan_) {
+        if (externalPending() >= maxPending_) {
+          failure_ = "max-pending-capacity-exhausted";
+          return false;
+        }
+        const dxmt9::d3d9::RenderTapeQualifiedCompletionKey actual{
+            .seqId = source.seqId,
+            .sourceIndex = source.source.id.index,
+            .sourceGeneration = source.source.id.generation,
+            .storageFirstPage = source.source.storage.firstPage,
+            .storagePageCount = source.source.storage.pageCount,
+            .storageGeneration = source.source.storage.generation};
+        dxmt9::CommandQueueArenaLeaseTestAccess::CompletionResult submission{};
+        const auto admitted = externalPlan_->submit(
+            eventOrdinal, eventSubmissionOrdinal, actual, [&] {
+              if (!faultTriggered_ && fault_ == "before-submit") {
+                faultTriggered_ = true;
+                summary_.faultTriggered = true;
+                failure_ = "fault-before-submit";
+                return false;
+              }
+              submission =
+                  dxmt9::CommandQueueArenaLeaseTestAccess::submitOneWithheld(
+                      fixture_.routing->queue_,
+                      [&](const auto& payload) { observePayload(payload); });
+              return submission.submitted;
+            });
+        if (!admitted.accepted()) {
+          if (failure_.empty()) {
+            failure_ = std::string("completion-plan-submit-") +
+                       completionPlanDispositionName(admitted.disposition);
+          }
+          return false;
+        }
+        if (submission.completion.seqId != actual.seqId ||
+            submission.completion.source.id.index != actual.sourceIndex ||
+            submission.completion.source.id.generation !=
+                actual.sourceGeneration ||
+            submission.completion.source.storage.firstPage !=
+                actual.storageFirstPage ||
+            submission.completion.source.storage.pageCount !=
+                actual.storagePageCount ||
+            submission.completion.source.storage.generation !=
+                actual.storageGeneration) {
+          failure_ = "completion-plan-source-binding-mismatch";
+          return false;
+        }
+        summary_.commands += submission.commandCount;
+        summary_.draws = summary_.directDraws + summary_.compatibilityDraws;
+        ++summary_.submitted;
+        if (dynamicResourceMode_ && dynamicDrawCount_ == 1u &&
+            capturedASubmissionSeq_ == 0u) {
+          capturedASubmissionSeq_ = source.seqId;
+        }
+        summary_.trace.push_back({
+            .iteration = iteration_,
+            .event = eventOrdinal,
+            .eventSubmission = eventSubmissionOrdinal,
+            .submission = submission.completion.seqId,
+            .source = submission.completion.source.id.index,
+            .sourceGeneration =
+                submission.completion.source.id.generation,
+            .storageFirstPage =
+                submission.completion.source.storage.firstPage,
+            .storagePageCount =
+                submission.completion.source.storage.pageCount,
+            .storageGeneration =
+                submission.completion.source.storage.generation,
+            .firstEvent = groupedActive_ ? groupedFirstEvent_ : eventOrdinal,
+            .lastEvent = groupedActive_ ? groupedLastEvent_ : eventOrdinal,
+            .submitted = true});
+        if (groupedActive_) ++groupedSourceCount_;
+      } else {
+        if (pending_.size() >= maxPending_) {
+          failure_ = "max-pending-capacity-exhausted";
+          return false;
+        }
+        Pending pending{};
+        pending.key = {iteration_, source.seqId, source.source.id.index, 0u,
+                       source.source.id.generation};
+        if (!pending.schedule.append({pending.key}).accepted() ||
+            !pending.schedule.beginIteration(iteration_).accepted()) {
+          failure_ = "completion-schedule-admission-rejected";
+          return false;
+        }
+        auto& schedule = pending.schedule;
+        if (!schedule.submit(pending.key, [&] {
+              if (!faultTriggered_ && fault_ == "before-submit") {
+                faultTriggered_ = true;
+                summary_.faultTriggered = true;
+                failure_ = "fault-before-submit";
+                return false;
+              }
+              pending.submission =
+                  dxmt9::CommandQueueArenaLeaseTestAccess::submitOneWithheld(
+                      fixture_.routing->queue_,
+                      [&](const auto& payload) { observePayload(payload); });
+              return pending.submission.submitted;
+            }).accepted()) {
+          if (failure_.empty()) failure_ = "completion-submit-rejected";
+          return false;
+        }
+        summary_.commands += pending.submission.commandCount;
+        summary_.draws = summary_.directDraws + summary_.compatibilityDraws;
+        ++summary_.submitted;
+        if (dynamicResourceMode_ && dynamicDrawCount_ == 1u &&
+            capturedASubmissionSeq_ == 0u) {
+          capturedASubmissionSeq_ = source.seqId;
+        }
+        summary_.trace.push_back({
+            .iteration = iteration_,
+            .event = eventOrdinal,
+            .eventSubmission = eventSubmissionOrdinal,
+            .submission = pending.submission.completion.seqId,
+            .source = pending.submission.completion.source.id.index,
+            .sourceGeneration =
+                pending.submission.completion.source.id.generation,
+            .storageFirstPage =
+                pending.submission.completion.source.storage.firstPage,
+            .storagePageCount =
+                pending.submission.completion.source.storage.pageCount,
+            .storageGeneration =
+                pending.submission.completion.source.storage.generation,
+            .firstEvent = groupedActive_ ? groupedFirstEvent_ : eventOrdinal,
+            .lastEvent = groupedActive_ ? groupedLastEvent_ : eventOrdinal,
+            .submitted = true});
+        if (groupedActive_) ++groupedSourceCount_;
+        pending_.push_back(std::move(pending));
+        if (pending_.size() >
+            dxmt9::d3d9::kRenderTapeCompletionScheduleCapacity) {
+          failure_ = "completion-capacity-exhausted";
+          return false;
+        }
+      }
+    }
+    groupedObservation_ = false;
+    if (groupedActive_) {
+      if (!dxmt9::d3d9::renderTapeGroupedPublicationMatches(
+              groupedExpectedRange_, groupedFirstEvent_, groupedLastEvent_,
+              groupedCommandEvents_, eventOrdinal, groupedSourceCount_,
+              groupedObservedDraws_)) {
+        failure_ = "grouped-publication-observation-mismatch";
+        return false;
+      }
+      ++summary_.groupedRanges;
+      summary_.groupedEvents += groupedCommandEvents_;
+      summary_.groupedObservedDraws += groupedObservedDraws_;
+      summary_.groupedPublicationVerified = true;
+      groupedActive_ = false;
+    }
+    if (externalPlan_) return finishEvent(eventOrdinal);
+    if (!afterDestroy_) releasePending();
+    return finishEvent(eventOrdinal);
+  }
+
+  bool orderedControl(const dxmt9::d3d9::RenderTapeOrderedControlHeader&,
+                      std::span<const std::byte>) override {
+    auto phase = phaseLedger_.scoped(CpuTapePhase::Replay);
+    (void)beginEvent();
+    failure_ = "unsupported-grammar: ordered controls are not admitted";
+    return false;
+  }
+
+  bool presentComplete(const dxmt9::d3d9::RenderTapePresentCompleteHeader&,
+                       std::span<const std::byte>) override {
+    auto phase = phaseLedger_.scoped(CpuTapePhase::Completion);
+    const auto eventOrdinal = beginEvent();
+    if (externalPlan_) return finishEvent(eventOrdinal);
+    releasePending();
+    if (dynamicResourceMode_ && metalResources_) {
+      for (const auto handle : retiredHandles_) {
+        if (dxmt9::CommandQueueArenaLeaseTestAccess::bufferAlive(
+                fixture_.routing->queue_, handle)) {
+          failure_ = "dynamic-completed-buffer-not-reclaimed";
+          break;
+        }
+      }
+    }
+    return failure_.empty() && finishEvent(eventOrdinal);
+  }
+
+  void finish() {
+    auto phase = phaseLedger_.scoped(CpuTapePhase::Cleanup);
+    const auto queueHasWork = [&] {
+      return dxmt9::CommandQueueArenaLeaseTestAccess::pendingCompletionCount(
+                 fixture_.routing->queue_) != 0u ||
+             dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+                 fixture_.routing->queue_) != 0u ||
+             dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+                 fixture_.routing->queue_) != 0u;
+    };
+    if (externalPlan_) {
+      auto completion = phaseLedger_.scoped(CpuTapePhase::Completion);
+      if (!externalPlan_->finishIteration().accepted() && failure_.empty()) {
+        failure_ = "completion-plan-finish-unresolved";
+      }
+      if (externalPending() || queueHasWork()) {
+        if (failure_.empty()) failure_ = "unresolved-work-at-finish";
+      }
+    } else if (!pending_.empty() || queueHasWork()) {
+      if (failure_.empty()) failure_ = "unresolved-work-at-finish";
+      // Preset completion modes retain their historical explicit cleanup.
+      if (!failure_.empty()) {
+        auto completion = phaseLedger_.scoped(CpuTapePhase::Completion);
+        while (dxmt9::CommandQueueArenaLeaseTestAccess::pendingCompletionCount(
+                   fixture_.routing->queue_)) {
+          if (!dxmt9::CommandQueueArenaLeaseTestAccess::acknowledgeOne(
+                  fixture_.routing->queue_)) {
+            break;
+          }
+          (void)dxmt9::CommandQueueArenaLeaseTestAccess::finishQueue(
+              fixture_.routing->queue_);
+        }
+        pending_.clear();
+        (void)dxmt9::CommandQueueArenaLeaseTestAccess::publishWriting(
+            fixture_.routing->queue_);
+        const auto ready =
+            dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+                fixture_.routing->queue_);
+        for (std::size_t index = 0; index < ready; ++index) {
+          (void)dxmt9::CommandQueueArenaLeaseTestAccess::consumeOne(
+              fixture_.routing->queue_);
+        }
+      }
+    }
+    for (auto& object : objects_) {
+      const auto handle = object.buffer->obj->handle();
+      dxmt9c_buffer_release(object.buffer);
+      ++summary_.resourcesReleased;
+      object.handle = handle;
+    }
+    dxmt9::CommandQueueArenaLeaseTestAccess::reclaimCompletedPool(
+        fixture_.routing->queue_);
+    summary_.resetOk =
+        dxmt9::CommandQueueArenaLeaseTestAccess::pendingCompletionCount(
+            fixture_.routing->queue_) == 0u &&
+        dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(
+            fixture_.routing->queue_) == 0u &&
+        dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
+            fixture_.routing->queue_) == 0u &&
+        dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(
+            fixture_.routing->queue_) == 0u &&
+        std::all_of(retiredHandles_.begin(), retiredHandles_.end(),
+                    [&](const auto handle) {
+          return !dxmt9::CommandQueueArenaLeaseTestAccess::bufferAlive(
+              fixture_.routing->queue_, handle);
+        }) &&
+        std::all_of(objects_.begin(), objects_.end(), [&](const auto& object) {
+          return !dxmt9::CommandQueueArenaLeaseTestAccess::bufferAlive(
+              fixture_.routing->queue_, object.handle);
+        });
+    objects_.clear();
+  }
+
+  const std::string& failure() const noexcept { return failure_; }
+
+ private:
+  std::uint32_t beginEvent() noexcept { return ++eventOrdinal_; }
+
+  std::uint32_t externalPending() const noexcept {
+    return externalPlan_ ? externalPlan_->submitted() - externalPlan_->released()
+                         : 0u;
+  }
+
+  bool finishEvent(std::uint32_t eventOrdinal) {
+    if (!externalPlan_) return failure_.empty();
+    auto phase = phaseLedger_.scoped(CpuTapePhase::Completion);
+    if (!failure_.empty()) return false;
+    const auto release = externalPlan_->releaseDue(
+        eventOrdinal, [&](const auto& actual) {
+          if (!faultTriggered_ && fault_ == "before-release") {
+            faultTriggered_ = true;
+            summary_.faultTriggered = true;
+            failure_ = "fault-before-release";
+            return false;
+          }
+          if (!dxmt9::CommandQueueArenaLeaseTestAccess::acknowledgeOne(
+                  fixture_.routing->queue_)) {
+            failure_ = "completion-plan-acknowledge-failed";
+            return false;
+          }
+          ++summary_.completed;
+          for (auto& row : summary_.trace) {
+            if (row.iteration == iteration_ &&
+                row.submission == actual.seqId &&
+                row.source == actual.sourceIndex &&
+                row.sourceGeneration == actual.sourceGeneration &&
+                row.storageFirstPage == actual.storageFirstPage &&
+                row.storagePageCount == actual.storagePageCount &&
+                row.storageGeneration == actual.storageGeneration &&
+                !row.completed) {
+              row.completed = true;
+              row.releasedAtEvent = eventOrdinal;
+              break;
+            }
+          }
+          if (!dxmt9::CommandQueueArenaLeaseTestAccess::finishQueue(
+                  fixture_.routing->queue_)) {
+            failure_ = "completion-plan-finish-failed";
+            return false;
+          }
+          const auto reclaimedThrough =
+              dxmt9::CommandQueueArenaLeaseTestAccess::reclaimCompletedPool(
+                  fixture_.routing->queue_);
+          if (reclaimedThrough < actual.seqId) {
+            failure_ = "completion-plan-reclaim-waterline-failed";
+            return false;
+          }
+          ++summary_.reclaimed;
+          return true;
+        });
+    if (!release.accepted()) {
+      failure_ = std::string("completion-plan-release-") +
+                 completionPlanDispositionName(release.disposition);
+      return false;
+    }
+    const auto ended = externalPlan_->endEvent(eventOrdinal);
+    if (!ended.accepted()) {
+      failure_ = std::string("completion-plan-event-") +
+                 completionPlanDispositionName(ended.disposition);
+      return false;
+    }
+    return failure_.empty();
+  }
+
+  void digestResource(dxmt9::core::Handle handle) {
+    if (!handle) { digestValue(summary_.digest, std::uint64_t{0}); return; }
+    const auto found = std::find_if(objects_.begin(), objects_.end(), [&](const auto& object) {
+      return object.buffer->obj->handle() == handle;
+    });
+    if (found == objects_.end()) {
+      failure_ = "unqualified-executed-resource";
+      return;
+    }
+    digestValue(summary_.digest, found->identity.kind);
+    digestValue(summary_.digest, found->identity.objectId);
+    digestValue(summary_.digest, found->identity.generation);
+    digestValue(summary_.digest, found->contentDigest);
+  }
+
+  void observePayload(const dxmt9::core::SourcePayloadView& payload) {
+    auto phase = phaseLedger_.scoped(CpuTapePhase::Observe);
+    using namespace dxmt9;
+    for (std::size_t index = 0; index < payload.commandCount(); ++index) {
+      const auto source = payload.commandAt(index);
+      const auto& command = source.command;
+      if (source.kind() != core::MetalCommandKind::DrawRun) {
+        // The bounded grammar admits only pointer-free Clear/Present here.
+        digestValue(summary_.digest, effectiveCommandDigest(payload, index));
+        continue;
+      }
+      if (groupedObservation_) {
+        groupedObservedDraws_ +=
+            static_cast<std::uint32_t>(command.drawParams.size());
+      }
+      for (const auto& param : command.drawParams) {
+        if (!command.drawState.hot) { failure_ = "missing-first-draw-state"; return; }
+        auto hot = *command.drawState.hot;
+        core::DrawBindingOverride binding{};
+        if (encoders::drawParamBindingOverride(param, command.drawPayloadBytes, binding))
+          encoders::applyDrawBindingOverride(hot, nullptr, binding);
+        auto volatileState = state::buildFsVolatile(command.drawState);
+        if (binding.alphaTestStateValid) {
+          const auto alpha = state::makeFsVolatile(
+              binding.alphaTestEnable, binding.alphaTestFunc,
+              binding.alphaTestRef, volatileState.sampleMask);
+          volatileState.alphaTest = alpha.alphaTest;
+          volatileState.alphaRef = alpha.alphaRef;
+        }
+        digestValue(summary_.digest, volatileState.alphaTest);
+        digestValue(summary_.digest, volatileState.alphaRef);
+        digestValue(summary_.digest, volatileState.sampleMask);
+        // One marker per logical draw, never per physical DrawRun/source.
+        digestValue(summary_.digest, core::MetalCommandKind::DrawRun);
+        digestValue(summary_.digest, param.primitiveType);
+        digestValue(summary_.digest, param.primitiveCount);
+        digestValue(summary_.digest, param.startVertex);
+        digestValue(summary_.digest, param.baseVertexIndex);
+        digestValue(summary_.digest, param.startIndex);
+        digestValue(summary_.digest, param.indexed);
+        digestValue(summary_.digest, param.instanceCount);
+        digestValue(summary_.digest, hot.key.fvf);
+        digestValue(summary_.digest, hot.key.vertexDeclHash);
+        digestValue(summary_.digest, hot.key.vertexShaderHash);
+        digestValue(summary_.digest, hot.key.pixelShaderHash);
+        digestValue(summary_.digest, hot.viewport.viewport);
+        digestRect(summary_.digest, hot.viewport.scissor);
+        digestValue(summary_.digest, hot.viewport.scissorEnabled);
+        const auto states = [&](const auto& set) {
+          digestValue(summary_.digest, set.count);
+          for (std::size_t i = 0; i < set.count && i < set.entries.size(); ++i) {
+            digestValue(summary_.digest, set.entries[i].state);
+            digestValue(summary_.digest, set.entries[i].value);
+          }
+        };
+        states(hot.renderStates);
+        for (const auto& set : hot.textureStageStates) states(set);
+        for (const auto& set : hot.samplerStates) states(set);
+        digestValue(summary_.digest, hot.streamMask);
+        for (std::size_t stream = 0; stream < hot.streamBuffers.size(); ++stream) {
+          digestResource(hot.streamBuffers[stream]);
+          digestValue(summary_.digest, hot.streamOffsets[stream]);
+          digestValue(summary_.digest, hot.streamStrides[stream]);
+          digestValue(summary_.digest, hot.streamFrequencies[stream]);
+        }
+        digestResource(hot.indexBuffer);
+        core::DrawBindingSnapshot snapshots{};
+        if (encoders::drawParamBindingSnapshot(param, command.drawPayloadBytes, snapshots)) {
+          for (std::size_t stream = 0; stream < snapshots.streams.size(); ++stream) {
+            if (!(snapshots.streamMask & (1u << stream))) continue;
+            digestResource(snapshots.streams[stream].buffer);
+            digestValue(summary_.digest, snapshots.streams[stream].snapshot.byteSize);
+            digestValue(summary_.digest, snapshots.streams[stream].snapshot.contentRevision);
+          }
+        }
+        core::DrawUniformPayload scratch{};
+        const auto* uniforms = core::drawRunUniformPayloadForParam(command, param, scratch);
+        if (!uniforms) { failure_ = "missing-draw-uniforms"; return; }
+        // Member spans exclude struct padding and runtime uniform locators.
+        digestValue(summary_.digest, uniforms->vsConst.float4);
+        digestValue(summary_.digest, uniforms->vsConst.int4);
+        digestValue(summary_.digest, uniforms->vsConst.bools);
+        digestValue(summary_.digest, uniforms->psConst.float4);
+        digestValue(summary_.digest, uniforms->psConst.int4);
+        digestValue(summary_.digest, uniforms->psConst.bools);
+        digestValue(summary_.digest, uniforms->worldViewProj.m);
+        digestValue(summary_.digest, uniforms->ffpView.m);
+        digestValue(summary_.digest, uniforms->ffpWorldView.m);
+        digestValue(summary_.digest, uniforms->ffpNormalMatrix.m);
+        digestColor(summary_.digest, uniforms->material.emissive);
+        digestColor(summary_.digest, uniforms->material.ambient);
+        digestColor(summary_.digest, uniforms->material.diffuse);
+        digestColor(summary_.digest, uniforms->material.specular);
+        digestValue(summary_.digest, uniforms->material.power);
+        for (const auto& light : uniforms->lights) {
+          digestValue(summary_.digest, light.type);
+          digestValue(summary_.digest, light.enabled);
+          digestColor(summary_.digest, light.diffuse);
+          digestColor(summary_.digest, light.specular);
+          digestColor(summary_.digest, light.ambient);
+          digestValue(summary_.digest, light.position);
+          digestValue(summary_.digest, light.direction);
+          digestValue(summary_.digest, light.range);
+          digestValue(summary_.digest, light.falloff);
+          digestValue(summary_.digest, light.attenuation0);
+          digestValue(summary_.digest, light.attenuation1);
+          digestValue(summary_.digest, light.attenuation2);
+          digestValue(summary_.digest, light.theta);
+          digestValue(summary_.digest, light.phi);
+        }
+        for (const auto& matrix : uniforms->ffpBlendWorldViewProj) digestValue(summary_.digest, matrix.m);
+        for (const auto& matrix : uniforms->ffpBlendWorldView) digestValue(summary_.digest, matrix.m);
+        for (const auto& matrix : uniforms->ffpBlendNormalMatrix) digestValue(summary_.digest, matrix.m);
+        for (const auto& matrix : uniforms->textureTransforms) digestValue(summary_.digest, matrix.m);
+        digestValue(summary_.digest, uniforms->clipPlaneMask);
+        digestValue(summary_.digest, uniforms->clipPlanes);
+        digestValue(summary_.digest, uniforms->vertexFloatConstantCount);
+        digestValue(summary_.digest, uniforms->vertexIntConstantCount);
+        digestValue(summary_.digest, uniforms->vertexBoolConstantCount);
+        digestValue(summary_.digest, uniforms->pixelFloatConstantCount);
+        digestValue(summary_.digest, uniforms->pixelIntConstantCount);
+        digestValue(summary_.digest, uniforms->pixelBoolConstantCount);
+        if (summary_.drawObservations.size() >=
+            dxmt9::d3d9::kRenderTapeCpuGrammarMaxCommandRecords) {
+          failure_ = "draw-observation-capacity-exhausted";
+          return;
+        }
+        summary_.drawObservations.push_back({
+            .ordinal = static_cast<std::uint32_t>(
+                summary_.drawObservations.size() + 1u),
+            .publicationEvent = eventOrdinal_,
+            .cumulativeSemanticDigest = summary_.digest});
+      }
+    }
+  }
+
+  struct Object {
+    D9CWireObjectIdentity identity{};
+    D9CBuffer* buffer = nullptr;
+    dxmt9::core::Handle handle{};
+    std::uint64_t contentDigest = 1469598103934665603ull;
+  };
+  struct Pending {
+    dxmt9::d3d9::RenderTapeCompletionSchedule schedule{};
+    dxmt9::d3d9::RenderTapeCompletionSchedule::Key key{};
+    dxmt9::CommandQueueArenaLeaseTestAccess::CompletionResult submission{};
+  };
+
+  std::vector<Object>::iterator find(const D9CWireObjectIdentity& identity) {
+    return std::find_if(objects_.begin(), objects_.end(),
+                        [&](const Object& object) {
+                          return object.identity.kind == identity.kind &&
+                                 object.identity.generation == identity.generation &&
+                                 object.identity.objectId == identity.objectId;
+                        });
+  }
+  std::optional<std::span<const std::byte>> blobsByDigest(
+      const dxmt9::d3d9::RenderTapeDigest& digest,
+      std::uint64_t size) const {
+    for (std::size_t i = 0; i < catalogue_.blobs.size(); ++i) {
+      if (catalogue_.blobs[i].digest == digest &&
+          catalogue_.blobs[i].size == size) {
+        return std::span<const std::byte>(blobs_[i]);
+      }
+    }
+    return std::nullopt;
+  }
+  void releasePending() {
+    auto phase = phaseLedger_.scoped(CpuTapePhase::Completion);
+    while (!pending_.empty()) {
+      auto& pending = pending_.front();
+      if (!pending.schedule.release(pending.key, [&] {
+            if (!faultTriggered_ && fault_ == "before-release") {
+              faultTriggered_ = true;
+              summary_.faultTriggered = true;
+              failure_ = "fault-before-release";
+              return false;
+            }
+            const bool completed =
+                dxmt9::CommandQueueArenaLeaseTestAccess::acknowledgeOne(
+                    fixture_.routing->queue_);
+            if (completed) {
+              ++summary_.completed;
+              const auto source = pending.key;
+              const auto& completion = pending.submission.completion;
+              const auto trace = std::find_if(
+                  summary_.trace.begin(), summary_.trace.end(),
+                  [&](const auto& row) {
+                    if (row.iteration != source.iteration ||
+                        row.submission != source.submission) {
+                      return false;
+                    }
+                    if (completion.source.valid()) {
+                      return row.source == completion.source.id.index &&
+                             row.sourceGeneration ==
+                                 completion.source.id.generation &&
+                             row.storageFirstPage ==
+                                 completion.source.storage.firstPage &&
+                             row.storagePageCount ==
+                                 completion.source.storage.pageCount &&
+                             row.storageGeneration ==
+                                 completion.source.storage.generation;
+                    }
+                    return row.source == source.source &&
+                           row.sourceGeneration == source.sourceGeneration;
+                  });
+              if (trace != summary_.trace.end()) {
+                trace->completed = true;
+                trace->releasedAtEvent = eventOrdinal_;
+              }
+              if (dxmt9::CommandQueueArenaLeaseTestAccess::finishQueue(
+                      fixture_.routing->queue_)) {
+                ++summary_.reclaimed;
+                dxmt9::CommandQueueArenaLeaseTestAccess::reclaimCompletedPool(fixture_.routing->queue_);
+              } else {
+                failure_ = "source-reclaim-failed";
+                return false;
+              }
+            }
+            return completed;
+          }).accepted()) {
+        if (failure_.empty()) failure_ = "completion-release-rejected";
+        return;
+      }
+      if (!pending.schedule.finishIteration().accepted()) {
+        failure_ = "completion-schedule-finish-rejected";
+        return;
+      }
+      pending_.erase(pending_.begin());
+    }
+  }
+
+  RuntimeFixture& fixture_;
+  const dxmt9::d3d9::RenderTapeBlobCatalogue& catalogue_;
+  const std::vector<std::vector<std::byte>>& blobs_;
+  bool compatibility_ = false;
+  bool afterDestroy_ = false;
+  bool metalResources_ = false;
+  bool managedAllocationFault_ = false;
+  bool faultAttempted_ = false;
+  bool dynamicResourceMode_ = false;
+  std::size_t dynamicMutationCount_ = 0u;
+  std::size_t dynamicDrawCount_ = 0u;
+  bool capturedARequiredRetention_ = false;
+  std::uint64_t capturedAContentsAddress_ = 0u;
+  std::uint64_t capturedAMetalHandle_ = 0u;
+  std::uint64_t capturedARevision_ = 0u;
+  std::uint64_t capturedASubmissionSeq_ = 0u;
+  std::vector<std::uint8_t> dynamicSeedBytes_;
+  std::vector<std::uint8_t> dynamicExpectedBytes_;
+  std::uint64_t iteration_ = 0;
+  std::string fault_ = "none";
+  std::size_t maxPending_ =
+      dxmt9::d3d9::kRenderTapeCompletionScheduleCapacity;
+  bool faultTriggered_ = false;
+  CpuTapeExperimentSummary& summary_;
+  CpuTapePhaseLedger<std::chrono::steady_clock>& phaseLedger_;
+  const dxmt9::d3d9::RenderTapeCpuPublicationPlan* publicationPlan_ = nullptr;
+  bool groupedActive_ = false;
+  bool groupedObservation_ = false;
+  dxmt9::d3d9::RenderTapeCpuPublicationRange groupedExpectedRange_{};
+  std::uint32_t groupedFirstEvent_ = 0u;
+  std::uint32_t groupedLastEvent_ = 0u;
+  std::uint32_t groupedCommandEvents_ = 0u;
+  std::uint32_t groupedSourceCount_ = 0u;
+  std::uint32_t groupedObservedDraws_ = 0u;
+  dxmt9::d3d9::RenderTapeCompletionPlanController* externalPlan_ = nullptr;
+  std::vector<Object> objects_;
+  std::vector<dxmt9::core::Handle> retiredHandles_;
+  std::vector<Pending> pending_;
+  std::vector<std::byte> bootstrap_;
+  std::uint32_t bootstrapCount_ = 0;
+  std::uint32_t eventOrdinal_ = 0u;
+  std::string failure_;
+};
+
+bool readBinaryFile(const std::string& path, std::vector<std::byte>& out) {
+  std::ifstream input(path, std::ios::binary);
+  if (!input) return false;
+  input.seekg(0, std::ios::end);
+  const auto size = input.tellg();
+  if (size < 0) return false;
+  input.seekg(0, std::ios::beg);
+  out.resize(static_cast<std::size_t>(size));
+  return out.empty() ||
+         static_cast<bool>(input.read(reinterpret_cast<char*>(out.data()),
+                                      static_cast<std::streamsize>(out.size())));
+}
+
+bool readBoundedBinaryFile(const std::string& path, std::size_t maximum,
+                           std::vector<std::byte>& out) {
+  std::ifstream input(path, std::ios::binary | std::ios::ate);
+  if (!input) return false;
+  const auto size = input.tellg();
+  if (size < 0 || static_cast<std::uintmax_t>(size) > maximum) return false;
+  input.seekg(0, std::ios::beg);
+  out.resize(static_cast<std::size_t>(size));
+  return out.empty() ||
+         static_cast<bool>(input.read(reinterpret_cast<char*>(out.data()),
+                                      static_cast<std::streamsize>(out.size())));
+}
+
+std::string renderTapeDigestHex(const dxmt9::d3d9::RenderTapeDigest& digest) {
+  static constexpr char hex[] = "0123456789abcdef";
+  std::string result;
+  result.reserve(digest.size() * 2u);
+  for (const auto value : digest) {
+    const auto byte = std::to_integer<unsigned>(value);
+    result.push_back(hex[byte >> 4]);
+    result.push_back(hex[byte & 15u]);
+  }
+  return result;
+}
+
+bool isSha256Hex(std::string_view value) noexcept {
+  if (value.size() != 64u) return false;
+  return std::all_of(value.begin(), value.end(), [](char character) {
+    return (character >= '0' && character <= '9') ||
+           (character >= 'a' && character <= 'f');
+  });
+}
+
+void printCpuTapeLoadedImages() {
+  std::cout << '[';
+#if defined(__APPLE__)
+  bool first = true;
+  for (std::uint32_t index = 0; index < _dyld_image_count(); ++index) {
+    const char* name = _dyld_get_image_name(index);
+    if (!name) continue;
+    const auto basename = std::filesystem::path(name).filename().string();
+    if (basename.find("dxmt9") == std::string::npos &&
+        basename.find("winemetal") == std::string::npos) continue;
+    std::vector<std::byte> bytes;
+    if (!readBinaryFile(name, bytes)) throw TestFailure("cannot fingerprint loaded image");
+    const auto hash = dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes);
+    static constexpr char hex[] = "0123456789abcdef";
+    std::string digest;
+    for (const auto value : hash) {
+      const auto byte = std::to_integer<unsigned>(value);
+      digest += hex[byte >> 4];
+      digest += hex[byte & 15];
+    }
+    if (!first) std::cout << ',';
+    first = false;
+    std::cout << R"({"path":)" << std::quoted(name)
+              << R"(,"sha256":)" << std::quoted(digest)
+              << R"(,"bytes":)" << bytes.size() << '}';
+  }
+#endif
+  std::cout << ']';
+}
+
+int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  const auto reject = [&](const char* status, const std::string& reason) {
+    std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1","grammar":"general-frame","backend":"cpu-metal-resources","status":)"
+              << std::quoted(status) << R"(,"reason":)" << std::quoted(reason)
+              << "}\n";
+    return 3;
+  };
+  if (options.resourceBackend != CpuTapeResourceBackend::MetalResources ||
+      options.afterDestroy || !options.completionPlanPath.empty() ||
+      options.fault != "none" || options.maxPending == 0u || options.maxPending > 2u ||
+      (options.maxPending > 1u && !options.beforeNextWork) ||
+      options.publication != dxmt9::d3d9::RenderTapeCpuPublicationMode::PerCommand) {
+    return reject("unsupported-mode", "general-frame-requires-bounded-resource-backed-execution");
+  }
+  const bool sourceOracleRequested = !options.sourceOraclePath.empty() ||
+      !options.sourceProjectionSha256.empty();
+  if (sourceOracleRequested &&
+      (options.sourceOraclePath.empty() ||
+       !isSha256Hex(options.sourceProjectionSha256) ||
+       !options.beforeNextWork || options.maxPending != 1u ||
+       options.repeat < 2u)) {
+    return reject("unsupported-mode",
+                  "source-oracle-requires-before-next-work-maxpending1-repeat2");
+  }
+  const auto importBegin = std::chrono::steady_clock::now();
+  std::vector<std::byte> tape;
+  if (!readBinaryFile(options.tapePath, tape))
+    return reject("input-read-failed", "events");
+  std::vector<std::vector<std::byte>> ownedBlobs;
+  ownedBlobs.reserve(options.blobPaths.size());
+  for (const auto& path : options.blobPaths) {
+    ownedBlobs.emplace_back();
+    if (!readBinaryFile(path, ownedBlobs.back()))
+      return reject("blob-read-failed", path);
+  }
+  std::vector<dxmt9::d3d9::RenderTapeProviderBlob> blobs;
+  blobs.reserve(ownedBlobs.size());
+  for (const auto& bytes : ownedBlobs) {
+    blobs.push_back({dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes), bytes});
+  }
+  std::vector<CpuSourceOracleRow> sourceOracleRows;
+  std::string sourceOracleSha256;
+  if (sourceOracleRequested) {
+    std::vector<std::byte> sourceOracleBytes;
+    if (!readBoundedBinaryFile(options.sourceOraclePath,
+                               dxmt9::test::kCpuSourceOracleMaxBytes,
+                               sourceOracleBytes))
+      return reject("source-oracle-read-failed", "source-oracle");
+    sourceOracleSha256 = renderTapeDigestHex(
+        dxmt9::d3d9::RenderTapeCaptureSession::sha256(sourceOracleBytes));
+    if (!decodeCpuSourceOracle(sourceOracleBytes, sourceOracleRows))
+      return reject("source-oracle-invalid", "source-oracle-format");
+  }
+  runtime::GeneralPreflightPlan plan;
+  const auto preflight = runtime::buildGeneralReplayPlan(tape, blobs, plan);
+  if (!preflight.complete())
+    return reject("general-preflight-failed",
+                  dxmt9::d3d9::frameTapeReplayStatusName(preflight.status));
+  const auto admission = runtime::admitGeneralCpuPlan(plan);
+  if (!admission.accepted())
+    return reject("unsupported-grammar", runtime::generalCpuAdmissionReasonName(admission.reason));
+  const auto importNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::steady_clock::now() - importBegin).count();
+
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  if (resourceDevice.handle == NULL_OBJECT_HANDLE)
+    return reject("skip-no-metal-device", "resource-backed-execution-required");
+  PresentParameters output{};
+  output.backBufferWidth = plan.outputDesc.width;
+  output.backBufferHeight = plan.outputDesc.height;
+  output.backBufferFormat = dxmt9::d3d9::devicec::fmtFromD3D(plan.outputDesc.format);
+  output.backBufferCount = 1u;
+  output.windowed = true;
+  output.deviceWindow = Handle{91};
+  output.presentationInterval = PresentInterval::Immediate;
+
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+      RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+  struct Iteration {
+    Executor::Result execution;
+    std::uint64_t direct = 0u, compatibility = 0u, elapsed = 0u;
+    dxmt9::perf::RenderTapeReplaySnapshot before{}, after{};
+    std::optional<std::uint64_t> nativeCpuNs;
+  };
+  std::vector<Iteration> results;
+  results.reserve(options.repeat);
+  for (std::size_t index = 0u; index < options.repeat; ++index) {
+    const auto begin = std::chrono::steady_clock::now();
+    const auto nativeCpuBegin = sampleProcessCpuNs();
+    Iteration iterationResult;
+    {
+      RuntimeFixture fixture(false, false, true, false,
+                             WMT::Device{resourceDevice.handle}, nullptr, &output);
+      fixture.routing->recordBoundedCapturedBindings = false;
+      iterationResult.before = dxmt9::perf::snapshotRenderTapeReplay();
+      Executor executor(fixture, plan, blobs, {.route = options.compatibility
+          ? dxmt9::d3d9::ProviderReplayPolicy::Compatibility
+          : dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot,
+          .beforeNextWork = options.beforeNextWork,
+          .maxPendingSources = options.maxPending,
+          .holdSafeBufferMutation = sourceOracleRequested,
+          .sourceOracle = sourceOracleRows});
+      iterationResult.execution = executor.run();
+      iterationResult.after = dxmt9::perf::snapshotRenderTapeReplay();
+      iterationResult.direct = iterationResult.after.directLeaseDraws -
+          iterationResult.before.directLeaseDraws;
+      iterationResult.compatibility = iterationResult.after.compatibilityDraws -
+          iterationResult.before.compatibilityDraws;
+      auto& execution = iterationResult.execution;
+      if (execution.complete &&
+          (execution.draws != admission.counts.draws ||
+           execution.drawObservations.size() != execution.draws ||
+           execution.resourcesCreated != admission.counts.objects ||
+           execution.resourcesReleased != execution.resourcesCreated ||
+           execution.submitted != execution.completed ||
+           execution.submitted != execution.reclaimed ||
+           iterationResult.direct + iterationResult.compatibility !=
+               execution.draws)) {
+        execution.complete = false;
+        execution.failure = "general-execution-conservation-failed";
+      }
+    }
+    iterationResult.elapsed = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - begin)
+            .count());
+    const auto nativeCpuEnd = sampleProcessCpuNs();
+    if (nativeCpuBegin && nativeCpuEnd && *nativeCpuEnd >= *nativeCpuBegin)
+      iterationResult.nativeCpuNs = *nativeCpuEnd - *nativeCpuBegin;
+    results.push_back(std::move(iterationResult));
+    if (!results.back().execution.complete) break;
+  }
+  const bool complete = results.size() == options.repeat &&
+      std::all_of(results.begin(), results.end(), [](const auto& value) {
+        return value.execution.complete;
+      });
+  const bool deterministic = !results.empty() &&
+      std::all_of(results.begin(), results.end(), [&](const auto& value) {
+        return value.execution.digest == results.front().execution.digest &&
+               value.execution.draws == results.front().execution.draws &&
+               value.execution.commands == results.front().execution.commands;
+      });
+  const bool nativeCpuAvailable =
+      !results.empty() &&
+      std::any_of(results.begin(), results.end(), [](const auto& value) {
+        return value.nativeCpuNs.has_value();
+      });
+  std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1","grammar":"general-frame","semantic_projection":"final-slot-general-v2","backend":"cpu-metal-resources","resource_execution":"cpu-visible-metal-no-gpu-submit","timing_backend":"encode-substituted","status":)"
+            << std::quoted(complete ? "complete" : "unresolved")
+            << R"(,"replay_route":)" << std::quoted(options.compatibility ? "compatibility" : "production-slot")
+            << R"(,"publication":"per-command","completion":)"
+            << std::quoted(options.beforeNextWork ? "before-next-work" : "after-command")
+            << R"(,"repeat":)" << options.repeat
+            << R"(,"fault":"none","max_pending":)" << options.maxPending
+            << R"(,"source_projection_sha256":)";
+  if (sourceOracleRequested)
+    std::cout << std::quoted(options.sourceProjectionSha256);
+  else
+    std::cout << "null";
+  std::cout << R"(,"source_oracle_sha256":)";
+  if (sourceOracleRequested)
+    std::cout << std::quoted(sourceOracleSha256);
+  else
+    std::cout << "null";
+  const auto& runtimeEvidence = results.front().execution;
+  std::cout << R"(,"window_runtime":{"page_size":)" << runtimeEvidence.windowPageSize
+            << R"(,"offload":)" << (runtimeEvidence.windowOffload ? "true" : "false")
+            << R"(,"cpu_ready_arena":)" << (runtimeEvidence.windowArena ? "true" : "false")
+            << R"(,"workers_disabled":)" << (runtimeEvidence.windowWorkersDisabled ? "true" : "false")
+            << R"(},"hold_safe_buffer_mutation":)"
+            << (sourceOracleRequested ? "true" : "false")
+            << R"(,"completion_plan_sha256":null,"immutable_input_owned":true,"deterministic":)"
+            << (deterministic ? "true" : "false")
+            << R"(,"native_cpu_clock":)" << std::quoted(
+                nativeCpuAvailable ? "process" : "unavailable")
+            << R"(,"reset_policy":"fresh-device","cache_policy":"fresh-runtime","shared_native_resource_device":true)"
+            << R"(,"effective_cpu_policy":{"reset":"fresh-device","cpu_ready_arena":false,"draw_command_limit":0,"draw_payload_limit":0,"early_prefix":false,"gpu_submit":false})"
+            << R"(,"import_ns":)" << importNs
+            << R"(,"input_counts":{"events":)" << admission.counts.events
+            << R"(,"objects":)" << admission.counts.objects
+            << R"(,"mutations":)" << admission.counts.mutations
+            << R"(,"chunks":)" << admission.counts.chunks
+            << R"(,"records":)" << admission.counts.records
+            << R"(,"draws":)" << admission.counts.draws << R"(},"iterations":[)";
+  for (std::size_t index = 0u; index < results.size(); ++index) {
+    if (index) std::cout << ',';
+    const auto& iteration = results[index];
+    const auto& result = iteration.execution;
+    const auto bindingObservations = result.observedSnapshots + result.observedLiveBindings;
+    std::cout << R"({"index":)" << index
+              << R"(,"complete":)" << (result.complete ? "true" : "false")
+              << R"(,"reset_ok":)" << (result.resetOk ? "true" : "false")
+              << R"(,"failure":)" << std::quoted(result.failure)
+              << R"(,"failed_event":)" << result.failedEvent
+              << R"(,"semantic_digest":")" << result.digest << '"'
+              << R"(,"command_count":)" << result.commands
+              << R"(,"draw_count":)" << result.draws
+              << R"(,"direct_draws":)" << iteration.direct
+              << R"(,"mipmap_command_count":)" << result.mipmapCommands
+              << R"(,"retained_mipmap_textures_after_destroy":)"
+              << result.retainedMipmapTexturesAfterDestroy
+              << R"(,"compatibility_draws":)" << iteration.compatibility
+              << R"(,"capacity_rejected":)" << iteration.after.continuationCapacityRejected - iteration.before.continuationCapacityRejected
+              << R"(,"populated_fallback":)" << iteration.after.continuationPopulatedFallback - iteration.before.continuationPopulatedFallback
+              << R"(,"capacity_rotated":)" << iteration.after.continuationCapacityRotated - iteration.before.continuationCapacityRotated
+              << R"(,"resources_created":)" << result.resourcesCreated
+              << R"(,"resources_released":)" << result.resourcesReleased
+              << R"(,"logical_resource_oracle_complete":)"
+              << (result.logicalResourceOracleComplete ? "true" : "false")
+              << R"(,"buffer_snapshot_observations":)" << result.observedSnapshots
+              << R"(,"buffer_live_binding_observations":)" << result.observedLiveBindings
+              << R"(,"buffer_binding_observations":)" << bindingObservations
+              << R"(,"source_oracle_checked_sources":)"
+              << result.sourceOracleCheckedSources
+              << R"(,"deferred_buffer_mutations":)" << result.deferredBufferMutations
+              << R"(,"deferred_discard_mutations":)" << result.deferredDiscardMutations
+              << R"(,"retained_buffers_after_mutation":)" << result.retainedBuffersAfterMutation
+              << R"(,"mutation_boundary_releases":)" << result.mutationBoundaryReleases
+              << R"(,"buffer_backing_observed":)" << (bindingObservations ? "true" : "false")
+              << R"(,"buffer_backing_oracle_complete":)"
+              << (bindingObservations && result.logicalResourceOracleComplete ? "true" : "false")
+              << R"(,"buffer_backing_oracle":)"
+              << std::quoted(bindingObservations ? "real-metal-cpu-visible" : "not-applicable")
+              << R"(,"submitted":)" << result.submitted
+              << R"(,"completed":)" << result.completed
+              << R"(,"reclaimed":)" << result.reclaimed
+              << R"(,"pending_peak":)" << result.pendingPeak
+              << R"(,"deferred_releases":)" << result.deferredReleases
+              << R"(,"destroys_with_pending":)" << result.destroysWithPending
+              << R"(,"retained_snapshots_after_destroy":)" << result.retainedSnapshotsAfterDestroy
+              << R"(,"elapsed_ns":)" << iteration.elapsed
+              << R"(,"phase_ns":{"setup":)" << result.setupNs
+              << R"(,"replay":)" << result.replayNs
+              << R"(,"observe":)" << result.observeNs
+              << R"(,"completion":)" << result.completionNs
+              << R"(,"cleanup":)" << result.cleanupNs
+              << R"(},"native_cpu_ns":)";
+    if (iteration.nativeCpuNs)
+      std::cout << *iteration.nativeCpuNs;
+    else
+      std::cout << "null";
+    std::cout << R"(,"fault_triggered":false,"physical_texture_oracle":false,"dispositions":[)";
+    for (std::size_t reason = 0u; reason < iteration.after.dispositions.size(); ++reason) {
+      if (reason) std::cout << ',';
+      std::cout << iteration.after.dispositions[reason] - iteration.before.dispositions[reason];
+    }
+    std::cout << R"(],"outcomes":[)";
+    for (std::size_t reason = 0u; reason < iteration.after.outcomes.size(); ++reason) {
+      if (reason) std::cout << ',';
+      std::cout << iteration.after.outcomes[reason] - iteration.before.outcomes[reason];
+    }
+    std::cout << R"(],"destroy_windows":[)";
+    for (std::size_t i = 0u; i < result.destroyWindows.size(); ++i) {
+      if (i) std::cout << ',';
+      const auto& window = result.destroyWindows[i];
+      std::cout << R"({"event":)" << window.event
+                << R"(,"owners_checked":)" << window.ownersChecked
+                << R"(,"retention_valid":)" << (window.retentionValid ? "true" : "false")
+                << R"(,"pending_submissions":[)";
+      for (std::size_t j = 0u; j < window.pendingSubmissions.size(); ++j) {
+        if (j) std::cout << ',';
+        std::cout << window.pendingSubmissions[j];
+      }
+      std::cout << "]}";
+    }
+    std::cout << R"(],"draw_observations":[)";
+    for (std::size_t draw = 0u; draw < result.drawObservations.size(); ++draw) {
+      if (draw) std::cout << ',';
+      const auto& row = result.drawObservations[draw];
+      std::cout << R"({"ordinal":)" << row.ordinal
+                << R"(,"publication_event":)" << row.publicationEvent + 1u
+                << R"(,"cumulative_semantic_digest":")" << row.cumulativeSemanticDigest << R"("})";
+    }
+    std::cout << R"(],"trace":[)";
+    for (std::size_t trace = 0u; trace < result.trace.size(); ++trace) {
+      if (trace) std::cout << ',';
+      const auto& row = result.trace[trace];
+      std::cout << R"({"iteration":)" << index + 1u
+                << R"(,"submission":)" << row.submission
+                << R"(,"source":)" << row.source
+                << R"(,"source_generation":)" << row.sourceGeneration
+                << R"(,"storage_first_page":)" << row.storageFirstPage
+                << R"(,"storage_page_count":)" << row.storagePageCount
+                << R"(,"storage_generation":)" << row.storageGeneration
+                << R"(,"first_event":)" << row.event + 1u
+                << R"(,"last_event":)" << row.event + 1u
+                << R"(,"event":)" << row.event + 1u
+                << R"(,"event_submission":)" << trace + 1u
+                << R"(,"released_at_event":)" << row.releasedAtEvent + 1u
+                << R"(,"held_mutation_event":)" << row.heldMutationEvent
+                << R"(,"held_mutation_identity":)";
+      if (row.heldMutationIdentity) {
+        const auto& identity = *row.heldMutationIdentity;
+        std::cout << R"({"kind":)" << identity.kind
+                  << R"(,"generation":)" << identity.generation
+                  << R"(,"object_id":")" << identity.objectId << R"("})";
+      } else {
+        std::cout << "null";
+      }
+      std::cout
+                << R"(,"submitted":)" << (row.submitted ? "true" : "false")
+                << R"(,"completed":)" << (row.completed ? "true" : "false")
+                << R"(,"buffer_closure":[)";
+      for (std::size_t resource = 0u; resource < row.bufferClosure.size(); ++resource) {
+        if (resource) std::cout << ',';
+        const auto& identity = row.bufferClosure[resource];
+        std::cout << R"({"kind":)" << identity.kind
+                  << R"(,"generation":)" << identity.generation
+                  << R"(,"object_id":")" << identity.objectId << R"("})";
+      }
+      std::cout << "]}";
+    }
+    std::cout << "]}";
+  }
+  std::cout << R"(],"loaded_images":)";
+  printCpuTapeLoadedImages();
+  std::cout << "}\n";
+  return complete && deterministic ? 0 : 4;
+}
+
+void generalCpuMipmapUsesProductionLifetime() {
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  const auto tape = dxmt9::d3d9::test::makeGeneralCpuMipmapFixture();
+  std::vector<dxmt9::d3d9::RenderTapeProviderBlob> blobs;
+  for (const auto& bytes : tape.blobs)
+    blobs.push_back({dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes), bytes});
+  runtime::GeneralPreflightPlan plan;
+  const auto preflight = runtime::buildGeneralReplayPlan(tape.tape, blobs, plan);
+  check(preflight.complete(), "mipmap fixture preflight: " +
+      std::string(dxmt9::d3d9::frameTapeReplayStatusName(preflight.status)));
+  check(runtime::admitGeneralCpuPlan(plan).accepted(), "mipmap CPU grammar admission");
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE, "mipmap fixture needs resource backing");
+  std::uint64_t expectedDigest = 0u;
+  for (bool delayed : {false, true}) {
+    for (bool compatibility : {true, false}) {
+      PresentParameters output{};
+      output.backBufferWidth = plan.outputDesc.width;
+      output.backBufferHeight = plan.outputDesc.height;
+      output.backBufferFormat = dxmt9::d3d9::devicec::fmtFromD3D(plan.outputDesc.format);
+      output.backBufferCount = 1u;
+      output.windowed = true;
+      output.deviceWindow = Handle{91};
+      output.presentationInterval = PresentInterval::Immediate;
+      RuntimeFixture fixture(false, false, true, false,
+                             WMT::Device{resourceDevice.handle}, nullptr, &output);
+      using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+          RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+      Executor executor(fixture, plan, blobs, {
+          .route = compatibility ? dxmt9::d3d9::ProviderReplayPolicy::Compatibility
+                                 : dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot,
+          .beforeNextWork = delayed});
+      const auto result = executor.run();
+      check(result.complete && result.resetOk, "mipmap production replay: " + result.failure);
+      check(result.mipmapCommands == tape.expectedMipmapCommandCount &&
+                result.draws == tape.expectedDrawCount,
+            "canonical mip command must reach the actual final Slot exactly once");
+      check(result.submitted == 3u && result.completed == 3u && result.reclaimed == 3u,
+            "draw, mipmap, and Present sources complete and reclaim exactly once");
+      check(delayed ? result.retainedMipmapTexturesAfterDestroy > 0u
+                    : result.retainedMipmapTexturesAfterDestroy == 0u,
+            "delayed completion must retain the destroyed mip texture non-vacuously");
+      if (!expectedDigest) expectedDigest = result.digest;
+      check(result.digest == expectedDigest,
+            "mipmap semantics must be invariant under route and completion timing");
+    }
+  }
+}
+
+void generalCpuDestroyWindowForBacking(bool dynamicVertex, bool dynamicIndex) {
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  const auto tape = dxmt9::d3d9::test::makeGeneralCpuDestroyFixture(dynamicVertex, dynamicIndex);
+  std::vector<dxmt9::d3d9::RenderTapeProviderBlob> blobs;
+  for (const auto& bytes : tape.blobs)
+    blobs.push_back({dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes), bytes});
+  runtime::GeneralPreflightPlan plan;
+  const auto preflight = runtime::buildGeneralReplayPlan(tape.tape, blobs, plan);
+  check(preflight.complete(), std::string("destroy window shared preflight: ") +
+        dxmt9::d3d9::frameTapeReplayStatusName(preflight.status));
+  const auto admission = runtime::admitGeneralCpuPlan(plan);
+  check(admission.accepted(), std::string("destroy window CPU admission: ") +
+        runtime::generalCpuAdmissionReasonName(admission.reason));
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE, "destroy window needs real buffer backing");
+  std::uint64_t expectedDigest = 0u;
+  for (unsigned scenario : {0u, 1u, 2u}) {
+    const bool delayed = scenario != 0u;
+    const bool corrupt = scenario == 2u;
+    for (bool compatibility : {true, false}) {
+      std::cerr << "general destroy window scenario=" << scenario
+                << " compatibility=" << compatibility << '\n';
+      PresentParameters output{};
+      output.backBufferWidth = plan.outputDesc.width;
+      output.backBufferHeight = plan.outputDesc.height;
+      output.backBufferFormat = dxmt9::d3d9::devicec::fmtFromD3D(plan.outputDesc.format);
+      output.backBufferCount = 1u;
+      output.windowed = true;
+      output.deviceWindow = Handle{91};
+      output.presentationInterval = PresentInterval::Immediate;
+      RuntimeFixture fixture(false, false, true, false,
+                             WMT::Device{resourceDevice.handle}, nullptr, &output);
+      using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+          RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+      Executor executor(fixture, plan, blobs, {
+          .route = compatibility ? dxmt9::d3d9::ProviderReplayPolicy::Compatibility
+                                 : dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot,
+          .beforeNextWork = delayed,
+          .corruptRetainedBytesForTest = corrupt});
+      const auto result = executor.run();
+      if (corrupt) {
+        check(!result.complete && result.resetOk &&
+                  result.failure == "general-executor-retained-buffer-bytes-changed",
+              "actual backing corruption must fail the lifecycle oracle and clean up: " + result.failure);
+        continue;
+      }
+      check(result.complete && result.resetOk, "general destroy window: " + result.failure);
+      check(result.trace.size() == 2u && result.trace[0].bufferClosure.size() == 2u &&
+                result.trace[1].bufferClosure.empty(),
+            "production visitor projects VB/IB identities, not unrelated raw handles");
+      const auto& vb = dxmt9::d3d9::test::general_cpu_destroy_fixture_detail::kVertexBuffer;
+      const auto& ib = dxmt9::d3d9::test::general_cpu_destroy_fixture_detail::kIndexBuffer;
+      for (const auto& identity : result.trace[0].bufferClosure)
+        check(dxmt9::test::detail::cpuGeneralSameIdentity(identity, vb) ||
+                  dxmt9::test::detail::cpuGeneralSameIdentity(identity, ib),
+              "source buffer closure retains exact Tape object/generation identity");
+      const auto captured = std::size_t(dynamicVertex) + std::size_t(dynamicIndex);
+      check(result.observedSnapshots == captured && result.observedLiveBindings == 2u - captured,
+            "each effective VB/IB must use its production captured or live backing");
+      check(result.draws == 1u && result.submitted == 2u &&
+                result.completed == 2u && result.reclaimed == 2u,
+            "actual draw and Present sources must each complete exactly once");
+      check(result.pendingPeak == 1u &&
+                result.destroysWithPending == (delayed ? 2u : 0u) &&
+                result.deferredReleases == (delayed ? 2u : 0u) &&
+                result.retainedSnapshotsAfterDestroy == (delayed ? 4u : 0u),
+            "destroy window must retain actual submitted snapshot bytes non-vacuously");
+      if (!expectedDigest) expectedDigest = result.digest;
+      check(result.digest == expectedDigest,
+            "completion timing and replay route preserve final Slot semantics");
+    }
+  }
+}
+
+void generalCpuDestroyWindowUsesProductionLifetime() {
+  for (bool dynamicVertex : {true, false})
+    for (bool dynamicIndex : {true, false})
+      generalCpuDestroyWindowForBacking(dynamicVertex, dynamicIndex);
+}
+
+void generalCpuPendingOwnerRejectsEveryStaleIdentityDimension() {
+  namespace rt = dxmt9::d3d9;
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+      RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+  using Fault = Executor::PendingIdentityFault;
+  const auto tape = rt::test::makeGeneralCpuDestroyFixture(true, true);
+  std::vector<rt::RenderTapeProviderBlob> blobs;
+  for (const auto& bytes : tape.blobs)
+    blobs.push_back({rt::RenderTapeCaptureSession::sha256(bytes), bytes});
+  rt::render_tape_runtime::GeneralPreflightPlan plan;
+  check(rt::render_tape_runtime::buildGeneralReplayPlan(tape.tape, blobs, plan).complete() &&
+            rt::render_tape_runtime::admitGeneralCpuPlan(plan).accepted(),
+        "pending identity fixture uses authenticated general grammar");
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE, "pending identity fixture Metal device");
+  for (const auto route : {rt::ProviderReplayPolicy::Compatibility,
+                           rt::ProviderReplayPolicy::ProductionSlot}) {
+    for (const bool delayed : {false, true}) {
+      for (const auto fault : {Fault::None, Fault::Sequence, Fault::SourceIndex,
+                               Fault::SourceGeneration, Fault::StorageFirstPage,
+                               Fault::StoragePageCount, Fault::StorageGeneration}) {
+        PresentParameters output{};
+        output.backBufferWidth = plan.outputDesc.width;
+        output.backBufferHeight = plan.outputDesc.height;
+        output.backBufferFormat = rt::devicec::fmtFromD3D(plan.outputDesc.format);
+        output.backBufferCount = 1u;
+        output.windowed = true;
+        output.deviceWindow = Handle{91};
+        output.presentationInterval = PresentInterval::Immediate;
+        RuntimeFixture fixture(false, false, true, false,
+                               WMT::Device{resourceDevice.handle}, nullptr, &output);
+        Executor executor(fixture, plan, blobs, {
+            .route = route, .beforeNextWork = delayed, .pendingIdentityFault = fault});
+        const auto result = executor.run();
+        if (fault == Fault::None) {
+          check(result.complete && result.resetOk && result.completed == 2u,
+                "exact pending identity completes normally: " + result.failure);
+        } else {
+          check(!result.complete && result.resetOk && result.submitted == 1u &&
+                    result.completed == 0u && result.reclaimed == 0u &&
+                    result.trace.size() == 1u && !result.trace.front().completed &&
+                    result.failure == "general-executor-release-identity-changed",
+                "each stale owner dimension rejects before normal acknowledgment: " + result.failure);
+        }
+      }
+    }
+  }
+}
+
+void generalCpuWindowReplaysAuthenticatedSourcesInFifoOrder() {
+  namespace rt = dxmt9::d3d9;
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+      RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+  using Mutation = rt::test::GeneralCpuMutationFixture;
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE, "general window needs real buffers");
+  for (const auto& [mutation, clearBeforeExtraDraws] : std::array{
+           std::pair{Mutation::None, false}, std::pair{Mutation::None, true},
+           std::pair{Mutation::ReferencedPlain, false}, std::pair{Mutation::ReferencedPlain, true},
+           std::pair{Mutation::ReferencedDiscard, false}, std::pair{Mutation::ReferencedDiscard, true}}) {
+    const auto tape = rt::test::makeGeneralCpuDestroyFixture(
+        true, true, mutation, rt::test::GeneralCpuResetFixture::A, 2u, clearBeforeExtraDraws);
+    std::vector<rt::RenderTapeProviderBlob> blobs;
+    for (const auto& bytes : tape.blobs)
+      blobs.push_back({rt::RenderTapeCaptureSession::sha256(bytes), bytes});
+    rt::render_tape_runtime::GeneralPreflightPlan plan;
+    check(rt::render_tape_runtime::buildGeneralReplayPlan(tape.tape, blobs, plan).complete() &&
+              rt::render_tape_runtime::admitGeneralCpuPlan(plan).accepted(),
+          "window fixture is a complete authenticated Tape, not injected slots");
+    std::optional<Executor::Result> reference;
+    for (const auto route : {rt::ProviderReplayPolicy::Compatibility,
+                             rt::ProviderReplayPolicy::ProductionSlot}) {
+      for (const auto limit : {1u, 2u}) {
+        PresentParameters output{};
+        output.backBufferWidth = plan.outputDesc.width;
+        output.backBufferHeight = plan.outputDesc.height;
+        output.backBufferFormat = rt::devicec::fmtFromD3D(plan.outputDesc.format);
+        output.backBufferCount = 1u;
+        output.windowed = true;
+        output.deviceWindow = Handle{91};
+        output.presentationInterval = PresentInterval::Immediate;
+        RuntimeFixture fixture(false, false, true, false,
+                               WMT::Device{resourceDevice.handle}, nullptr, &output);
+        Executor executor(fixture, plan, blobs, {
+            .route = route, .beforeNextWork = true, .maxPendingSources = limit});
+        const auto result = executor.run();
+        check(result.complete && result.resetOk, "general window: " + result.failure);
+        const auto draws = mutation == Mutation::None ? 3u : 4u;
+        check(result.draws == draws && result.drawObservations.size() == draws &&
+                  result.submitted == draws + 1u + std::size_t(clearBeforeExtraDraws) &&
+                  result.completed == result.submitted &&
+                  result.reclaimed == result.submitted && result.pendingPeak == limit,
+              "actual general executor must reach the requested pending window");
+        for (std::size_t i = 0u; i < draws; ++i)
+          check(result.trace[i + std::size_t(clearBeforeExtraDraws && i > 0u)].bufferClosure.size() == 2u,
+                "each pending source owns its own VB/IB closure");
+        check(result.trace.back().bufferClosure.empty(), "Present owns no stale draw closure");
+        if (limit == 2u) {
+          if (clearBeforeExtraDraws) {
+            check(result.trace[0].releasedAtEvent == result.trace[1].event &&
+                      result.trace[1].releasedAtEvent == result.trace[2].event &&
+                      result.trace[2].releasedAtEvent > result.trace[3].event,
+                  "Draw A / Clear B / Draw C / Draw D drains B before C; only C/D overlap");
+          } else {
+            check(result.trace[0].releasedAtEvent == result.trace[2].event &&
+                    result.trace[1].releasedAtEvent > result.trace[0].releasedAtEvent,
+                "third draw source releases A only; B remains pending");
+          }
+          check(result.retainedSnapshotsAfterDestroy ==
+                    (mutation == Mutation::None ? 8u : 4u),
+                "destroy checks every still-pending source's actual captured bytes");
+        }
+        if (!reference) reference = result;
+        check(result.digest == reference->digest, "window preserves final semantics");
+        for (std::size_t i = 0u; i < draws; ++i)
+          check(result.drawObservations[i].cumulativeSemanticDigest ==
+                    reference->drawObservations[i].cumulativeSemanticDigest,
+                "window preserves every draw across mutation and destruction");
+      }
+    }
+  }
+}
+
+void cpuWindowPlanRejectsMissingShapeDimensions() {
+  namespace rt = dxmt9::d3d9;
+  const D9CWireObjectIdentity buffer{
+      .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .generation = 1u, .objectId = 909u};
+  const auto inspect = [&](const auto& records) {
+    const auto wire = makeWireFixture(records);
+    rt::ImportedChunkView imported;
+    check(rt::importPrevalidatedCommandChunk(wire.bytes, wire.envelope, imported),
+          "window plan fixture imports real wire");
+    return rt::planRenderTapeCpuWindowSource(imported, 1u, rt::kRenderTapeCpuWindowPageSize);
+  };
+  const auto valid = inspect(std::array{applyRenderStateRecord(RS_ALPHABLEND_ENABLE, 1u),
+                                       drawRecord(buffer)});
+  check(valid.eligible(), "Draw/APPLY_STATE can use the one-source overlap plan");
+  for (unsigned fault = 0u; fault < 11u; ++fault) {
+    auto bad = valid;
+    switch (fault) {
+    case 0u: bad.recordCount = 65u; break;
+    case 1u: --bad.allowedRecordCount; break;
+    case 2u: bad.emission.coverageExact = false; break;
+    case 3u: bad.emission.directDrawCount = 0u; break;
+    case 4u: ++bad.emission.coordinatorCount; break;
+    case 5u: ++bad.emission.orderedControlCount; break;
+    case 6u: ++bad.emission.compatibilityRecordCount; break;
+    case 7u: bad.emission.leaseSpans.front().ownsLease = false; break;
+    case 8u: ++bad.emission.leaseSpans.front().firstRecordIndex; break;
+    case 9u: --bad.emission.leaseSpans.front().recordCount; break;
+    case 10u: bad.emission.leaseSpans.front().finalLeaseSpan = false; break;
+    }
+    check(!bad.eligible(), "each missing emission shape dimension rejects overlap");
+  }
+  check(!inspect(std::array{clearRecord(), drawRecord(buffer)}).eligible() &&
+            !inspect(std::array{drawRecord(buffer), presentRecord()}).eligible(),
+        "coordinator commands remain release boundaries even beside an eligible draw");
+  auto fan = drawRecord(buffer);
+  D9CCommandChunkWireDrawHeader header{};
+  std::memcpy(&header, fan.payload.data(), sizeof(header));
+  header.primitiveType = 6u;
+  std::memcpy(fan.payload.data(), &header, sizeof(header));
+  check(!inspect(std::array{fan}).eligible(), "TriangleFan compatibility conversion is not an overlap proof");
+}
+
+void generalCpuMutationWindowUsesProductionLifetime() {
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  using Mutation = dxmt9::d3d9::test::GeneralCpuMutationFixture;
+  for (const auto mutation : {Mutation::UnrelatedPlain, Mutation::ReferencedPlain,
+                              Mutation::ReferencedDiscard}) {
+    // A referenced DISCARD is admitted only for a dynamic buffer. Plain
+    // same-buffer writes exercise mandatory completion before the real map.
+    for (bool dynamic : {false, true}) {
+      if (mutation == Mutation::ReferencedDiscard && !dynamic) continue;
+      const auto tape = dxmt9::d3d9::test::makeGeneralCpuDestroyFixture(dynamic, dynamic, mutation);
+      std::vector<dxmt9::d3d9::RenderTapeProviderBlob> blobs;
+      for (const auto& bytes : tape.blobs)
+        blobs.push_back({dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes), bytes});
+      runtime::GeneralPreflightPlan plan;
+      check(runtime::buildGeneralReplayPlan(tape.tape, blobs, plan).complete(),
+            "mutation fixture shared preflight");
+      check(runtime::admitGeneralCpuPlan(plan).accepted(), "mutation fixture CPU admission");
+      MetalDeviceLease resourceDevice;
+      resourceDevice.handle = dxmt9_test_acquire_metal_device();
+      check(resourceDevice.handle != NULL_OBJECT_HANDLE, "mutation fixture real backing");
+      std::uint64_t expectedDigest = 0u;
+      std::vector<dxmt9::test::CpuGeneralTapeDrawObservation> expectedDraws;
+      for (unsigned schedule : {0u, 1u, 2u}) {
+        const bool hold = schedule != 0u;
+        const bool corrupt = schedule == 2u;
+        if (corrupt && mutation == Mutation::ReferencedPlain) continue;
+        for (bool compatibility : {true, false}) {
+          std::cerr << "general mutation=" << unsigned(mutation) << " dynamic=" << dynamic
+                    << " hold=" << hold << " compatibility=" << compatibility << '\n';
+          PresentParameters output{};
+          output.backBufferWidth = plan.outputDesc.width;
+          output.backBufferHeight = plan.outputDesc.height;
+          output.backBufferFormat = dxmt9::d3d9::devicec::fmtFromD3D(plan.outputDesc.format);
+          output.backBufferCount = 1u;
+          output.windowed = true;
+          output.deviceWindow = Handle{91};
+          output.presentationInterval = PresentInterval::Immediate;
+          RuntimeFixture fixture(false, false, true, false,
+                                 WMT::Device{resourceDevice.handle}, nullptr, &output);
+          using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+              RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+          Executor executor(fixture, plan, blobs, {
+              .route = compatibility ? dxmt9::d3d9::ProviderReplayPolicy::Compatibility
+                                     : dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot,
+              .beforeNextWork = true,
+              .holdSafeBufferMutation = hold,
+              .corruptRetainedBytesAfterMutationForTest = corrupt});
+          const auto result = executor.run();
+          if (corrupt) {
+            check(!result.complete && result.resetOk &&
+                      result.failure == "general-executor-mutation-changed-pending-bytes",
+                  "mutation corruption must reject and clean up: " + result.failure);
+            continue;
+          }
+          check(result.complete && result.resetOk, "mutation window: " + result.failure);
+          const bool deferred = hold && mutation != Mutation::ReferencedPlain;
+          check(result.deferredBufferMutations == std::size_t(deferred) &&
+                    result.retainedBuffersAfterMutation == (deferred ? 2u : 0u) &&
+                    result.deferredDiscardMutations ==
+                        std::size_t(deferred && mutation == Mutation::ReferencedDiscard) &&
+                    result.mutationBoundaryReleases ==
+                        std::size_t(hold && mutation == Mutation::ReferencedPlain),
+                "mutation admission must execute non-vacuously or release before blocking map");
+          check(result.draws == 2u && result.submitted == 3u &&
+                    result.completed == 3u && result.reclaimed == 3u && result.pendingPeak == 1u,
+                "second draw and Present conserve actual source completion");
+          if (!expectedDigest) {
+            expectedDigest = result.digest;
+            expectedDraws = result.drawObservations;
+          }
+          check(result.digest == expectedDigest && result.drawObservations.size() == expectedDraws.size(),
+                "mutation schedule preserves final semantics");
+          for (std::size_t i = 0u; i < expectedDraws.size(); ++i)
+            check(result.drawObservations[i].cumulativeSemanticDigest == expectedDraws[i].cumulativeSemanticDigest,
+                  "mutation schedule preserves each draw's bytes and generation");
+        }
+      }
+    }
+  }
+}
+
+std::vector<std::byte> encodeCpuSourceOracleForTest(
+    std::span<const CpuSourceOracleRow> rows) {
+  std::vector<std::byte> bytes{
+      std::byte{'D'}, std::byte{'9'}, std::byte{'C'}, std::byte{'S'},
+      std::byte{'R'}, std::byte{'C'}, std::byte{'0'}, std::byte{'1'},
+      std::byte{}, std::byte{}, std::byte{}, std::byte{}};
+  const auto append32 = [&](std::uint32_t value) {
+    for (std::size_t shift = 0u; shift < 32u; shift += 8u)
+      bytes.push_back(static_cast<std::byte>((value >> shift) & 0xffu));
+  };
+  const auto append64 = [&](std::uint64_t value) {
+    for (std::size_t shift = 0u; shift < 64u; shift += 8u)
+      bytes.push_back(static_cast<std::byte>((value >> shift) & 0xffu));
+  };
+  bytes[8u] = static_cast<std::byte>(rows.size() & 0xffu);
+  bytes[9u] = static_cast<std::byte>((rows.size() >> 8u) & 0xffu);
+  bytes[10u] = static_cast<std::byte>((rows.size() >> 16u) & 0xffu);
+  bytes[11u] = static_cast<std::byte>((rows.size() >> 24u) & 0xffu);
+  for (const auto& row : rows) {
+    append32(row.event);
+    append32(static_cast<std::uint32_t>(row.identities.size()));
+    for (const auto& identity : row.identities) {
+      append32(identity.kind);
+      append32(identity.generation);
+      append64(identity.objectId);
+    }
+  }
+  return bytes;
+}
+
+void generalCpuSourceOracleUsesAuthenticatedClosures() {
+  using Mutation = dxmt9::d3d9::test::GeneralCpuMutationFixture;
+  const auto tape = dxmt9::d3d9::test::makeGeneralCpuDestroyFixture(
+      true, true, Mutation::ReferencedDiscard);
+  std::vector<dxmt9::d3d9::RenderTapeProviderBlob> blobs;
+  for (const auto& bytes : tape.blobs)
+    blobs.push_back({dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes), bytes});
+  dxmt9::d3d9::render_tape_runtime::GeneralPreflightPlan plan;
+  check(dxmt9::d3d9::render_tape_runtime::buildGeneralReplayPlan(
+            tape.tape, blobs, plan).complete(),
+        "source oracle fixture preflight");
+  check(dxmt9::d3d9::render_tape_runtime::admitGeneralCpuPlan(plan).accepted(),
+        "source oracle fixture admission");
+  std::vector<CpuSourceOracleRow> expected;
+  const auto& vertex = dxmt9::d3d9::test::general_cpu_destroy_fixture_detail::kVertexBuffer;
+  const auto& index = dxmt9::d3d9::test::general_cpu_destroy_fixture_detail::kIndexBuffer;
+  for (const auto& event : plan.events) {
+    if (event.type != dxmt9::d3d9::RenderTapeEventType::CommandChunk) continue;
+    CpuSourceOracleRow row{.event = event.eventIndex + 1u};
+    if (expected.size() < 2u)
+      row.identities = {{vertex.kind, vertex.generation, vertex.objectId},
+                        {index.kind, index.generation, index.objectId}};
+    expected.push_back(std::move(row));
+  }
+  check(expected.size() == 3u && expected.back().identities.empty(),
+        "source oracle includes the empty Present source");
+  const auto run = [&](dxmt9::d3d9::ProviderReplayPolicy route,
+                       std::vector<CpuSourceOracleRow> rows) {
+    MetalDeviceLease resourceDevice;
+    resourceDevice.handle = dxmt9_test_acquire_metal_device();
+    check(resourceDevice.handle != NULL_OBJECT_HANDLE,
+          "source oracle fixture real backing");
+    PresentParameters output{};
+    output.backBufferWidth = plan.outputDesc.width;
+    output.backBufferHeight = plan.outputDesc.height;
+    output.backBufferFormat = dxmt9::d3d9::devicec::fmtFromD3D(plan.outputDesc.format);
+    output.backBufferCount = 1u;
+    output.windowed = true;
+    output.deviceWindow = Handle{91};
+    output.presentationInterval = PresentInterval::Immediate;
+    RuntimeFixture fixture(false, false, true, false,
+                           WMT::Device{resourceDevice.handle}, nullptr, &output);
+    using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+        RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+    Executor executor(fixture, plan, blobs, {
+        .route = route,
+        .beforeNextWork = true,
+        .holdSafeBufferMutation = true,
+        .sourceOracle = rows});
+    return executor.run();
+  };
+  for (const auto route : {dxmt9::d3d9::ProviderReplayPolicy::Compatibility,
+                           dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot}) {
+    const auto valid = run(route, expected);
+    check(valid.complete && valid.trace.size() == 3u,
+          "authenticated source closure completes on both routes");
+    check(valid.trace[0].heldMutationEvent != 0u &&
+              valid.trace[0].heldMutationIdentity.has_value() &&
+              dxmt9::test::detail::cpuGeneralSameIdentity(*valid.trace[0].heldMutationIdentity,
+                                             vertex) &&
+              valid.trace[1].heldMutationEvent == 0u &&
+              !valid.trace[1].heldMutationIdentity.has_value(),
+          "held mutation metadata identifies the actual prior source");
+
+    auto finalNonempty = expected;
+    finalNonempty.back().identities = expected.front().identities;
+    const auto finalMismatch = run(route, std::move(finalNonempty));
+    check(!finalMismatch.complete && finalMismatch.resetOk &&
+              finalMismatch.failure == "general-executor-source-oracle-mismatch",
+          "empty final Present closure is authenticated");
+
+    auto stale = expected;
+    stale.front().identities.front().objectId++;
+    const auto staleMismatch = run(route, std::move(stale));
+    check(!staleMismatch.complete && staleMismatch.resetOk &&
+              staleMismatch.failure == "general-executor-source-oracle-mismatch",
+          "stale source identity is rejected");
+
+    auto missing = expected;
+    missing.pop_back();
+    const auto missingRow = run(route, std::move(missing));
+    check(!missingRow.complete &&
+              missingRow.failure == "general-executor-source-oracle-command-events",
+          "missing command row is rejected");
+
+    auto extra = expected;
+    extra.push_back({.event = expected.back().event + 1u});
+    const auto extraRow = run(route, std::move(extra));
+    check(!extraRow.complete &&
+              extraRow.failure == "general-executor-source-oracle-extra-row",
+          "extra command row is rejected");
+  }
+
+  const auto validBytes = encodeCpuSourceOracleForTest(expected);
+  std::vector<CpuSourceOracleRow> decoded;
+  check(decodeCpuSourceOracle(validBytes, decoded) && decoded.size() == expected.size(),
+        "source oracle binary decoder accepts canonical rows");
+  auto badMagic = validBytes;
+  badMagic[0] = std::byte{'X'};
+  check(!decodeCpuSourceOracle(badMagic, decoded),
+        "source oracle decoder rejects bad magic");
+  auto trailing = validBytes;
+  trailing.push_back(std::byte{});
+  check(!decodeCpuSourceOracle(trailing, decoded),
+        "source oracle decoder rejects trailing bytes");
+  auto unsortedRows = expected;
+  std::swap(unsortedRows.front().identities[0],
+            unsortedRows.front().identities[1]);
+  check(!decodeCpuSourceOracle(encodeCpuSourceOracleForTest(unsortedRows),
+                               decoded),
+        "source oracle decoder rejects unsorted identities");
+  CpuSourceOracleRow oversized{.event = expected.front().event};
+  for (std::uint64_t objectId = 1u; objectId <= 513u; ++objectId)
+    oversized.identities.push_back({D9C_CHUNK_HANDLE_KIND_BUFFER, 1u, objectId});
+  check(!decodeCpuSourceOracle(encodeCpuSourceOracleForTest(
+                                   std::span<const CpuSourceOracleRow>(&oversized, 1u)),
+                               decoded),
+        "source oracle decoder rejects more than 512 identities per row");
+}
+
+void generalCpuResetQualificationUsesFreshFixtures() {
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  using Reset = dxmt9::d3d9::test::GeneralCpuResetFixture;
+  const auto runOne = [](MetalDeviceLease& resourceDevice,
+                         dxmt9::d3d9::ProviderReplayPolicy route,
+                         bool beforeNextWork, Reset reset,
+                         bool deferResetObject) {
+    const auto tape = dxmt9::d3d9::test::makeGeneralCpuDestroyFixture(
+        true, true, dxmt9::d3d9::test::GeneralCpuMutationFixture::None, reset);
+    std::vector<dxmt9::d3d9::RenderTapeProviderBlob> blobs;
+    for (const auto& bytes : tape.blobs)
+      blobs.push_back({dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes), bytes});
+    runtime::GeneralPreflightPlan plan;
+    check(runtime::buildGeneralReplayPlan(tape.tape, blobs, plan).complete(),
+          "reset fixture preflight");
+    const auto admission = runtime::admitGeneralCpuPlan(plan);
+    check(admission.accepted(), "reset fixture admission");
+    PresentParameters output{};
+    output.backBufferWidth = plan.outputDesc.width;
+    output.backBufferHeight = plan.outputDesc.height;
+    output.backBufferFormat = dxmt9::d3d9::devicec::fmtFromD3D(plan.outputDesc.format);
+    output.backBufferCount = 1u;
+    output.windowed = true;
+    output.deviceWindow = Handle{91};
+    output.presentationInterval = PresentInterval::Immediate;
+    RuntimeFixture fixture(false, false, true, false,
+                           WMT::Device{resourceDevice.handle}, nullptr, &output);
+    using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+        RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+    Executor executor(fixture, plan, blobs, {
+        .route = route,
+        .beforeNextWork = beforeNextWork,
+        .deferOneObjectReleaseForResetTest = deferResetObject});
+    auto result = executor.run();
+    if (!deferResetObject) {
+      check(result.complete && result.resetOk, "reset fixture execution: " + result.failure);
+      check(result.resourcesCreated == admission.counts.objects &&
+                result.resourcesReleased == result.resourcesCreated &&
+                result.submitted == result.completed &&
+                result.completed == result.reclaimed && result.pendingPeak == 1u,
+            "reset fixture conserves resources and completions");
+    }
+    return result;
+  };
+
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE,
+        "reset qualification needs one shared real backing lease");
+  for (const auto route : {dxmt9::d3d9::ProviderReplayPolicy::Compatibility,
+                           dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot}) {
+    for (const bool beforeNextWork : {false, true}) {
+      const auto a0 = runOne(resourceDevice, route, beforeNextWork, Reset::A, false);
+      const auto b = runOne(resourceDevice, route, beforeNextWork, Reset::B, false);
+      const auto a1 = runOne(resourceDevice, route, beforeNextWork, Reset::A, false);
+      check(a0.digest == a1.digest && a0.digest != b.digest,
+            "A-B-A reset preserves and distinguishes semantic bytes");
+      check(a0.drawObservations.size() == a1.drawObservations.size() &&
+                a0.drawObservations.size() == b.drawObservations.size(),
+            "A-B-A reset preserves per-draw observation count");
+      for (std::size_t draw = 0u; draw < a0.drawObservations.size(); ++draw) {
+        check(a0.drawObservations[draw].cumulativeSemanticDigest ==
+                  a1.drawObservations[draw].cumulativeSemanticDigest &&
+                  a0.drawObservations[draw].cumulativeSemanticDigest !=
+                      b.drawObservations[draw].cumulativeSemanticDigest,
+              "A-B-A reset preserves each A draw and changes B");
+      }
+      const auto skipped = runOne(resourceDevice, route, beforeNextWork, Reset::B, true);
+      check(!skipped.complete && !skipped.resetOk &&
+                skipped.failure == "general-executor-reset-object-release-incomplete" &&
+                skipped.resourcesCreated == skipped.resourcesReleased,
+            "reset qualification rejects an actual skipped object release");
+      const auto recovered = runOne(resourceDevice, route, beforeNextWork, Reset::A, false);
+      check(recovered.complete && recovered.resetOk && recovered.digest == a0.digest,
+            "fresh A recovers after failed reset qualification");
+      check(recovered.drawObservations.size() == a0.drawObservations.size(),
+            "recovered A preserves per-draw observation count");
+      for (std::size_t draw = 0u; draw < a0.drawObservations.size(); ++draw)
+        check(recovered.drawObservations[draw].cumulativeSemanticDigest ==
+                  a0.drawObservations[draw].cumulativeSemanticDigest,
+              "recovered A preserves every per-draw semantic digest");
+    }
+  }
+}
+
+void generalCpuAliasAfterParentDestroyUsesImmutableIdentity() {
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  using Fixture = dxmt9::d3d9::test::GeneralCpuAliasFixture;
+
+  struct Prepared {
+    Fixture fixture;
+    std::vector<dxmt9::d3d9::RenderTapeProviderBlob> blobs;
+    runtime::GeneralPreflightPlan plan;
+    runtime::GeneralCpuAdmissionResult admission;
+  };
+  const auto prepare = [](bool destroyParentAfterFirstDraw,
+                          bool alternateParentSeed = false) {
+    Prepared prepared{.fixture = dxmt9::d3d9::test::makeGeneralCpuAliasFixture(
+                          destroyParentAfterFirstDraw, alternateParentSeed)};
+    dxmt9::d3d9::RenderTapeBlobCatalogue catalogue;
+    for (const auto& bytes : prepared.fixture.blobs)
+      prepared.blobs.push_back({dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes),
+                                bytes});
+    for (const auto& blob : prepared.blobs)
+      catalogue.blobs.push_back({blob.digest, blob.bytes.size(), 1u});
+    const auto validation = dxmt9::d3d9::validateRenderTape(
+        prepared.fixture.tape, catalogue);
+    check(validation.valid(), std::string("alias fixture validation: ") +
+        dxmt9::d3d9::renderTapeValidationStatusName(validation.status) + " event=" +
+        std::to_string(validation.failedEventIndex) + " reason=" +
+        dxmt9::d3d9::renderTapeIncompleteFrameReasonName(validation.incompleteFrameReason));
+    const auto replay = runtime::buildGeneralReplayPlan(
+        prepared.fixture.tape, prepared.blobs, prepared.plan);
+    check(replay.complete(), std::string("alias fixture preflight: ") +
+                                dxmt9::d3d9::frameTapeReplayStatusName(replay.status));
+    prepared.admission = runtime::admitGeneralCpuPlan(prepared.plan);
+    check(prepared.admission.accepted(), "alias fixture CPU admission");
+    return prepared;
+  };
+
+  // Both tapes contain the same texture mutation, two draws through S, and
+  // one Present. Only the parent-wrapper release moves across the draw
+  // boundary, so an equal observation digest proves the live S alias was
+  // attributed to immutable T.g1 after T's wrapper was destroyed.
+  const auto control = prepare(false);
+  const auto alias = prepare(true);
+  const auto changedAlias = prepare(true, true);
+  check(control.plan.events.size() == alias.plan.events.size() &&
+            control.admission.counts.draws == 2u &&
+            alias.admission.counts.draws == 2u,
+        "alias control and parent-destroy tapes have identical command shape");
+  const auto& texture =
+      dxmt9::d3d9::test::general_cpu_alias_fixture_detail::kTexture;
+  const auto& surface =
+      dxmt9::d3d9::test::general_cpu_alias_fixture_detail::kSurface;
+  const auto aliasDestroy = std::find_if(
+      alias.plan.events.begin(), alias.plan.events.end(), [&](const auto& event) {
+        return event.type == dxmt9::d3d9::RenderTapeEventType::ObjectDestroy &&
+               event.index < alias.plan.destroys.size() &&
+               dxmt9::test::detail::cpuGeneralSameIdentity(
+                   alias.plan.destroys[event.index].identity, texture);
+      });
+  const auto aliasSurfaceDefine = std::find_if(
+      alias.plan.definitions.begin(), alias.plan.definitions.end(),
+      [&](const auto& definition) {
+        return dxmt9::test::detail::cpuGeneralSameIdentity(
+            definition.fixed.identity, surface);
+      });
+  check(aliasDestroy != alias.plan.events.end() &&
+            aliasSurfaceDefine != alias.plan.definitions.end(),
+        "alias tape retains S while parent T is destroyed");
+
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE,
+        "alias qualification needs one shared real backing lease");
+  const auto run = [&](const Prepared& prepared,
+                       dxmt9::d3d9::ProviderReplayPolicy route,
+                       bool beforeNextWork, bool dropRetiredAliasReceipt = false) {
+    PresentParameters output{};
+    output.backBufferWidth = prepared.plan.outputDesc.width;
+    output.backBufferHeight = prepared.plan.outputDesc.height;
+    output.backBufferFormat =
+        dxmt9::d3d9::devicec::fmtFromD3D(prepared.plan.outputDesc.format);
+    output.backBufferCount = 1u;
+    output.windowed = true;
+    output.deviceWindow = Handle{91};
+    output.presentationInterval = PresentInterval::Immediate;
+    RuntimeFixture fixture(false, false, true, false,
+                           WMT::Device{resourceDevice.handle}, nullptr, &output);
+    using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+        RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+    Executor executor(fixture, prepared.plan, prepared.blobs, {
+        .route = route,
+        .beforeNextWork = beforeNextWork,
+        .dropRetiredAliasReceiptForTest = dropRetiredAliasReceipt,
+    });
+    return executor.run();
+  };
+
+  for (const auto route : {dxmt9::d3d9::ProviderReplayPolicy::Compatibility,
+                           dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot}) {
+    for (const bool beforeNextWork : {false, true}) {
+      const auto retained = run(control, route, beforeNextWork);
+      const auto destroyed = run(alias, route, beforeNextWork);
+      const auto changed = run(changedAlias, route, beforeNextWork);
+      const auto dropped = run(alias, route, beforeNextWork, true);
+      check(retained.complete && retained.resetOk,
+            "alias control execution: " + retained.failure);
+      check(destroyed.complete && destroyed.resetOk,
+            "alias parent-destroy execution: " + destroyed.failure);
+      check(changed.complete && changed.resetOk,
+            "changed parent seed execution: " + changed.failure);
+      check(dropped.complete && dropped.resetOk &&
+                dropped.drawObservations.size() == 2u &&
+                dropped.drawObservations.front().cumulativeSemanticDigest ==
+                    destroyed.drawObservations.front().cumulativeSemanticDigest &&
+                dropped.drawObservations.back().cumulativeSemanticDigest !=
+                    destroyed.drawObservations.back().cumulativeSemanticDigest &&
+                dropped.digest != destroyed.digest,
+            "old live-only attribution fails equality exactly after parent destruction");
+      check(retained.commands == destroyed.commands && retained.draws == 2u &&
+                destroyed.draws == 2u && retained.submitted == 3u &&
+                destroyed.submitted == 3u && retained.completed == 3u &&
+                destroyed.completed == 3u && retained.reclaimed == 3u &&
+                destroyed.reclaimed == 3u,
+            "alias ordering admits the same draw and Present commands");
+      check(retained.digest == destroyed.digest &&
+                retained.drawObservations.size() == 2u &&
+                destroyed.drawObservations.size() == 2u,
+            "parent destruction does not change the full alias semantic digest");
+      for (std::size_t draw = 0u; draw < retained.drawObservations.size(); ++draw)
+        check(retained.drawObservations[draw].cumulativeSemanticDigest ==
+                  destroyed.drawObservations[draw].cumulativeSemanticDigest,
+              "parent destruction preserves each S-backed draw observation");
+      check(changed.digest != destroyed.digest &&
+                changed.drawObservations.size() == destroyed.drawObservations.size(),
+            "changed parent seed changes the post-destroy alias digest");
+      for (std::size_t draw = 0u; draw < destroyed.drawObservations.size(); ++draw)
+        check(changed.drawObservations[draw].cumulativeSemanticDigest !=
+                  destroyed.drawObservations[draw].cumulativeSemanticDigest,
+              "changed parent seed changes every post-destroy draw observation");
+      check(destroyed.destroysWithPending == std::size_t(beforeNextWork) &&
+                destroyed.retainedSnapshotsAfterDestroy ==
+                    (beforeNextWork ? 2u : 0u),
+            "alias parent release observes the real pending boundary");
+    }
+  }
+}
+
+int runCpuTapeExperiment(CpuTapeExperimentOptions options) {
+  if (options.generalFrame) return runGeneralCpuTapeExperiment(options);
+  if (options.beforeNextWork)
+    throw TestFailure("before-next-work requires general-frame grammar");
+  const bool metalResources =
+      options.resourceBackend == CpuTapeResourceBackend::MetalResources;
+  const bool managedAllocationFault = options.fault == "managed-allocation";
+  const char* const backendName =
+      metalResources ? "cpu-metal-resources" : "cpu-no-gpu";
+  const auto importBegin = std::chrono::steady_clock::now();
+  std::vector<std::byte> tapeBytes;
+  if (!readBinaryFile(options.tapePath, tapeBytes)) {
+    std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1",)"
+              << R"("backend":")" << backendName
+              << R"(","status":"input-read-failed"})" << '\n';
+    return 2;
+  }
+  dxmt9::d3d9::RenderTapeBlobCatalogue catalogue;
+  std::vector<std::vector<std::byte>> blobs;
+  for (const auto& blobPath : options.blobPaths) {
+    std::vector<std::byte> blobBytes;
+    if (!readBinaryFile(blobPath, blobBytes)) {
+      std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1",)"
+                << R"("backend":")" << backendName
+                << R"(","status":"blob-read-failed"})" << '\n';
+      return 2;
+    }
+    const auto digest = dxmt9::d3d9::RenderTapeCaptureSession::sha256(
+        std::span<const std::byte>(blobBytes));
+    catalogue.blobs.push_back(
+        {.digest = digest, .size = blobBytes.size(), .verified = 1u});
+    blobs.push_back(std::move(blobBytes));
+  }
+
+  dxmt9::d3d9::ImportedRenderTapeView imported;
+  const auto validation =
+      dxmt9::d3d9::validateRenderTape(tapeBytes, catalogue, &imported);
+  if (!validation.valid()) {
+    std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1",)"
+              << R"("backend":")" << backendName
+              << R"(","status":"invalid-input",)"
+              << R"("validation_status":")"
+              << dxmt9::d3d9::renderTapeValidationStatusName(validation.status)
+              << R"("})" << '\n';
+    return 2;
+  }
+  bool hasManagedBuffer = false;
+  for (std::size_t eventIndex = 0u; eventIndex < imported.events.size();
+       ++eventIndex) {
+    const auto event = imported.event(eventIndex);
+    if (static_cast<dxmt9::d3d9::RenderTapeEventType>(event.header.type) !=
+            dxmt9::d3d9::RenderTapeEventType::ObjectDefine ||
+        event.payload.size() <
+            sizeof(dxmt9::d3d9::RenderTapeObjectDefineHeader)) {
+      continue;
+    }
+    dxmt9::d3d9::RenderTapeObjectDefineHeader fixed{};
+    std::memcpy(&fixed, event.payload.data(), sizeof(fixed));
+    if (fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_BUFFER ||
+        fixed.descriptorKind != static_cast<std::uint32_t>(
+                                    dxmt9::d3d9::RenderTapeDescriptorKind::Buffer) ||
+        fixed.descriptorBytes != sizeof(D9CBufferDesc) ||
+        event.payload.size() < sizeof(fixed) + sizeof(D9CBufferDesc)) {
+      continue;
+    }
+    D9CBufferDesc descriptor{};
+    std::memcpy(&descriptor, event.payload.data() + sizeof(fixed),
+                sizeof(descriptor));
+    hasManagedBuffer = descriptor.pool == 1u;
+    if (hasManagedBuffer) break;
+  }
+  if (hasManagedBuffer && !metalResources) {
+    std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1",)"
+              << R"("backend":")" << backendName
+              << R"(","status":"managed-resource-backend-required"})" << '\n';
+    return 3;
+  }
+  const auto grammar = dxmt9::d3d9::preflightRenderTapeCpuGrammar(
+      imported, metalResources, managedAllocationFault,
+      options.publication ==
+          dxmt9::d3d9::RenderTapeCpuPublicationMode::DrawIsland);
+  if (!grammar.accepted()) {
+    std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1",)"
+              << R"("backend":")" << backendName
+              << R"(","status":"unsupported-grammar","reason":)"
+              << std::quoted(dxmt9::d3d9::renderTapeCpuGrammarReasonName(grammar.reason))
+              << R"(,"event":)" << grammar.eventIndex << "}\n";
+    return 3;
+  }
+  const auto publicationPlan = dxmt9::d3d9::planRenderTapeCpuPublication(
+      imported, options.publication);
+  if (!publicationPlan.valid) {
+    std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1",)"
+              << R"("backend":")" << backendName
+              << R"(","status":"invalid-publication-plan"})" << '\n';
+    return 3;
+  }
+  if (options.publication ==
+          dxmt9::d3d9::RenderTapeCpuPublicationMode::DrawIsland &&
+      std::none_of(publicationPlan.ranges.begin(),
+                   publicationPlan.ranges.begin() + publicationPlan.count,
+                   [](const auto& range) { return range.commandEvents > 1u; })) {
+    std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1",)"
+              << R"("backend":")" << backendName
+              << R"(","status":"vacuous-publication-plan"})" << '\n';
+    return 3;
+  }
+
+  const auto tapeDigest = dxmt9::d3d9::RenderTapeCaptureSession::sha256(
+      std::span<const std::byte>(tapeBytes));
+  std::optional<dxmt9::d3d9::RenderTapeCompletionPlanFile> completionPlan;
+  std::optional<dxmt9::d3d9::RenderTapeCompletionPlanController>
+      completionController;
+  std::string completionPlanSha256;
+  if (!options.completionPlanPath.empty()) {
+    std::vector<std::byte> planBytes;
+    if (!readBinaryFile(options.completionPlanPath, planBytes)) {
+      std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1",)"
+                << R"("backend":")" << backendName
+                << R"(","status":"completion-plan-read-failed"})"
+                << '\n';
+      return 2;
+    }
+    completionPlanSha256 = renderTapeDigestHex(
+        dxmt9::d3d9::RenderTapeCaptureSession::sha256(
+            std::span<const std::byte>(planBytes)));
+    dxmt9::d3d9::RenderTapeCompletionPlanFile decodedPlan{};
+    auto decoded = dxmt9::d3d9::decodeRenderTapeCompletionPlan(
+        std::span<const std::byte>(planBytes), decodedPlan);
+    if (!decoded.accepted()) {
+      std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1",)"
+                << R"("backend":")" << backendName
+                << R"(","status":"invalid-completion-plan","reason":)"
+                << std::quoted(completionPlanDispositionName(decoded.disposition))
+                << "}\n";
+      return 3;
+    }
+    decoded = dxmt9::d3d9::validateRenderTapeCompletionPlan(
+        decodedPlan, tapeDigest);
+    const auto expectedRoute =
+        options.compatibility
+            ? dxmt9::d3d9::RenderTapeCompletionPlanRoute::Compatibility
+            : dxmt9::d3d9::RenderTapeCompletionPlanRoute::ProductionSlot;
+    const bool eventCountMismatch =
+        decodedPlan.header.tapeEventCount != imported.events.size();
+    const bool routeMismatch =
+        decodedPlan.header.route !=
+            dxmt9::d3d9::RenderTapeCompletionPlanRoute::Any &&
+        decodedPlan.header.route != expectedRoute;
+    const bool repeatMismatch =
+        options.repeatExplicit && decodedPlan.header.repeatCount != options.repeat;
+    if (!decoded.accepted() || eventCountMismatch || routeMismatch ||
+        repeatMismatch) {
+      const auto reason = !decoded.accepted()
+                              ? decoded.disposition
+                              : eventCountMismatch
+                                  ? dxmt9::d3d9::RenderTapeCompletionPlanDisposition::InvalidEvent
+                                  : routeMismatch
+                                      ? dxmt9::d3d9::RenderTapeCompletionPlanDisposition::RouteMismatch
+                                      : dxmt9::d3d9::RenderTapeCompletionPlanDisposition::InvalidRepeat;
+      std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1",)"
+                << R"("backend":")" << backendName
+                << R"(","status":"invalid-completion-plan","reason":)"
+                << std::quoted(completionPlanDispositionName(reason)) << "}\n";
+      return 3;
+    }
+    if (!options.repeatExplicit) options.repeat = decodedPlan.header.repeatCount;
+    completionPlan = decodedPlan;
+    completionController.emplace(*completionPlan,
+                                 std::span<const std::byte>(tapeDigest));
+  }
+
+  const auto importNs = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - importBegin)
+          .count());
+  const auto sharedDeviceSetupBegin = std::chrono::steady_clock::now();
+  MetalDeviceLease resourceDeviceLease;
+  if (metalResources) {
+    resourceDeviceLease.handle = dxmt9_test_acquire_metal_device();
+    if (resourceDeviceLease.handle == NULL_OBJECT_HANDLE) {
+      std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1",)"
+                << R"("backend":")" << backendName
+                << R"(","status":"skip-no-metal-device"})" << '\n';
+      return 77;
+    }
+  }
+  const auto sharedDeviceSetupNs = static_cast<std::uint64_t>(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(
+          std::chrono::steady_clock::now() - sharedDeviceSetupBegin)
+          .count());
+  const WMT::Device resourceDevice{resourceDeviceLease.handle};
+
+  std::vector<CpuTapeExperimentSummary> results;
+  results.reserve(options.repeat);
+  for (std::size_t iteration = 0; iteration < options.repeat; ++iteration) {
+    CpuTapeExperimentSummary summary;
+    const auto nativeCpuBegin = sampleProcessCpuNs();
+    CpuTapePhaseLedger<std::chrono::steady_clock> phaseLedger;
+    phaseLedger.begin(CpuTapePhase::Setup);
+    {
+      dxmt9::d3d9::ReplayQueueAllocationFailure allocationFailure;
+      RuntimeFixture fixture(/*rejectAfterClear=*/false,
+                             /*segmentSerial=*/false,
+                             /*directChunkSlot=*/true,
+                             /*cpuReadyArena=*/false, resourceDevice,
+                             managedAllocationFault ? &allocationFailure : nullptr);
+      const auto replayCountersBefore = dxmt9::perf::snapshotRenderTapeReplay();
+      CpuTapeExperimentSink sink(
+          fixture, catalogue, blobs, options.compatibility, options.afterDestroy,
+          metalResources, managedAllocationFault, iteration + 1u,
+          options.fault, options.maxPending, summary, phaseLedger,
+          &publicationPlan,
+          completionController ? &*completionController : nullptr);
+      phaseLedger.begin(CpuTapePhase::Replay);
+      const auto replay = dxmt9::d3d9::replayPrevalidatedRenderTape(
+          imported, catalogue, sink);
+      phaseLedger.begin(CpuTapePhase::Cleanup);
+      sink.finish();
+      const auto replayCountersAfter = dxmt9::perf::snapshotRenderTapeReplay();
+      summary.capacityRejected = static_cast<std::uint32_t>(
+          replayCountersAfter.continuationCapacityRejected -
+          replayCountersBefore.continuationCapacityRejected);
+      summary.populatedFallback = static_cast<std::uint32_t>(
+          replayCountersAfter.continuationPopulatedFallback -
+          replayCountersBefore.continuationPopulatedFallback);
+      summary.capacityRotated = static_cast<std::uint32_t>(
+          replayCountersAfter.continuationCapacityRotated -
+          replayCountersBefore.continuationCapacityRotated);
+      summary.failure = sink.failure();
+      if (summary.failure.empty() &&
+          summary.drawObservations.size() != summary.draws) {
+        summary.failure = "draw-observation-count-mismatch";
+      }
+      summary.bufferBackingOracleComplete =
+          metalResources && summary.bufferBackingObserved &&
+          summary.bufferBackingRevisionAdvanced &&
+          (!summary.capturedARequiredRetention ||
+           summary.distinctDynamicBackings) &&
+          (!summary.capturedARequiredRetention ||
+           summary.capturedABackingPreserved);
+      const bool groupedPublicationComplete =
+          options.publication ==
+              dxmt9::d3d9::RenderTapeCpuPublicationMode::PerCommand ||
+          (summary.groupedRanges != 0u &&
+           summary.groupedEvents > summary.groupedRanges &&
+           summary.groupedPublicationVerified &&
+           summary.groupedObservedDraws <= summary.draws);
+      summary.complete =
+          replay.complete && summary.failure.empty() && summary.resetOk &&
+          groupedPublicationComplete &&
+          (!managedAllocationFault ||
+           (summary.faultTriggered &&
+            summary.faultPreEffectOwnershipUnchanged &&
+            summary.faultRetrySucceeded && summary.faultMutationApplies == 1u));
+    }  // fixture and sink destruction remain inside the cleanup phase.
+    phaseLedger.finish();
+    const auto nativeCpuEnd = sampleProcessCpuNs();
+    if (nativeCpuBegin && nativeCpuEnd && *nativeCpuEnd >= *nativeCpuBegin)
+      summary.nativeCpuNs = *nativeCpuEnd - *nativeCpuBegin;
+    summary.phaseNs = phaseLedger.phaseNs();
+    summary.elapsedNs = phaseLedger.elapsedNs();
+    results.push_back(summary);
+    if (!summary.complete) break;
+  }
+  const bool complete = results.size() == options.repeat && !results.empty() &&
+                        std::all_of(results.begin(), results.end(),
+                                    [](const auto& result) {
+                                      return result.complete;
+                                    });
+  const bool deterministic =
+      !results.empty() &&
+      std::all_of(results.begin() + 1, results.end(),
+                  [&](const auto& result) {
+                    return result.digest == results.front().digest &&
+                           result.commands == results.front().commands &&
+                           result.draws == results.front().draws &&
+                           result.submitted == results.front().submitted &&
+                           result.completed == results.front().completed &&
+                           result.reclaimed == results.front().reclaimed &&
+                           result.groupedRanges ==
+                               results.front().groupedRanges &&
+                           result.groupedEvents ==
+                               results.front().groupedEvents &&
+                           result.groupedObservedDraws ==
+                               results.front().groupedObservedDraws &&
+                           result.capacityRejected ==
+                               results.front().capacityRejected &&
+                           result.populatedFallback ==
+                               results.front().populatedFallback &&
+                           result.capacityRotated ==
+                               results.front().capacityRotated;
+                  });
+  const bool nativeCpuAvailable =
+      !results.empty() &&
+      std::any_of(results.begin(), results.end(), [](const auto& result) {
+        return result.nativeCpuNs.has_value();
+      });
+  std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1",)"
+            << R"("backend":")" << backendName
+            << R"(","timing_backend":"encode-substituted","status":")"
+            << (complete ? "complete" : "unresolved")
+            << R"(","replay_route":")"
+            << (options.compatibility ? "compatibility" : "production-slot")
+            << R"(","publication":")"
+            << (options.publication ==
+                        dxmt9::d3d9::RenderTapeCpuPublicationMode::DrawIsland
+                    ? "draw-island"
+                    : "per-command")
+            << R"(","completion":")"
+            << (completionPlan ? "external"
+                               : (options.afterDestroy ? "after-destroy"
+                                                        : "after-command"))
+            << R"(","repeat":)"
+            << options.repeat
+            << R"(,"fault":)" << std::quoted(options.fault)
+            << R"(,"max_pending":)" << options.maxPending
+            << R"(,"completion_plan_sha256":)"
+            ;
+  if (completionPlan) {
+    std::cout << std::quoted(completionPlanSha256);
+  } else {
+    std::cout << "null";
+  }
+  std::cout << R"(,"immutable_input_owned":true,"deterministic":)"
+            << (deterministic ? "true" : "false")
+            << R"(,"phase_accounting":"exclusive-wall","clock":"steady_clock","native_cpu_clock":")"
+            << (nativeCpuAvailable ? "process" : "unavailable")
+            << R"(","native_cpu_ns":null,"import_ns":)"
+            << importNs
+            << R"(,"shared_device_setup_ns":)" << sharedDeviceSetupNs
+            << R"(,"reset_policy":"fresh-runtime","cache_policy":"fresh-runtime","shared_native_resource_device":)"
+            << (metalResources ? "true" : "false")
+            << R"(,"resource_execution":")"
+            << (metalResources ? "cpu-visible-metal-no-gpu-submit"
+                               : "shadow-only-no-gpu")
+            << R"(","iterations":[)";
+  for (std::size_t i = 0; i < results.size(); ++i) {
+    if (i != 0u) std::cout << ',';
+    const auto& result = results[i];
+    std::cout << R"({"index":)" << i
+              << R"(,"draw_observations":[)";
+    for (std::size_t draw = 0; draw < result.drawObservations.size(); ++draw) {
+      if (draw != 0u) std::cout << ',';
+      const auto& observation = result.drawObservations[draw];
+      std::cout << R"({"ordinal":)" << observation.ordinal
+                << R"(,"publication_event":)" << observation.publicationEvent
+                << R"(,"cumulative_semantic_digest":")"
+                << observation.cumulativeSemanticDigest << R"("})";
+    }
+    std::cout << ']'
+              << R"(,"semantic_digest":")" << result.digest
+              << R"(","command_count":)" << result.commands
+              << R"(,"draw_count":)" << result.draws
+              << R"(,"direct_draws":)" << result.directDraws
+              << R"(,"compatibility_draws":)" << result.compatibilityDraws
+              << R"(,"submitted":)" << result.submitted
+              << R"(,"completed":)" << result.completed
+              << R"(,"reclaimed":)" << result.reclaimed
+              << R"(,"resources_created":)" << result.resourcesCreated
+              << R"(,"resources_released":)" << result.resourcesReleased
+              << R"(,"retained_before_completion":)"
+              << (result.retainedBeforeCompletion ? "true" : "false")
+              << R"(,"buffer_backing_observed":)"
+              << (result.bufferBackingObserved ? "true" : "false")
+              << R"(,"captured_A_required_retention":)"
+              << (result.capturedARequiredRetention ? "true" : "false")
+              << R"(,"captured_A_backing_preserved":)"
+              << (result.capturedABackingPreserved ? "true" : "false")
+              << R"(,"buffer_backing_revision_advanced":)"
+              << (result.bufferBackingRevisionAdvanced ? "true" : "false")
+              << R"(,"distinct_dynamic_backings":)"
+              << (result.distinctDynamicBackings ? "true" : "false")
+              << R"(,"buffer_backing_oracle":")"
+              << (result.bufferBackingOracleComplete
+                      ? "real-metal-cpu-visible"
+                      : (result.bufferBackingObserved ? "unproven"
+                                                       : "not-applicable"))
+              << '"'
+              << R"(,"reset_ok":)" << (result.resetOk ? "true" : "false")
+              << R"(,"fault_triggered":)"
+              << (result.faultTriggered ? "true" : "false")
+              << R"(,"fault_receipt":)"
+              << (result.faultReceipt.empty()
+                      ? std::string("null")
+                      : std::string("\"") + result.faultReceipt + "\"")
+              << R"(,"fault_preeffect_ownership_unchanged":)"
+              << (result.faultPreEffectOwnershipUnchanged ? "true" : "false")
+              << R"(,"fault_retry_succeeded":)"
+              << (result.faultRetrySucceeded ? "true" : "false")
+              << R"(,"fault_mutation_applies":)"
+              << result.faultMutationApplies
+              << R"(,"grouped_ranges":)" << result.groupedRanges
+              << R"(,"grouped_events":)" << result.groupedEvents
+              << R"(,"grouped_observed_draws":)"
+              << result.groupedObservedDraws
+              << R"(,"grouped_publication_verified":)"
+              << (result.groupedPublicationVerified ? "true" : "false")
+              << R"(,"capacity_rejected":)" << result.capacityRejected
+              << R"(,"populated_fallback":)" << result.populatedFallback
+              << R"(,"capacity_rotated":)" << result.capacityRotated
+              << R"(,"elapsed_ns":)" << result.elapsedNs
+              << R"(,"phase_ns":{"setup":)"
+              << result.phaseNs[cpuTapePhaseIndex(CpuTapePhase::Setup)]
+              << R"(,"replay":)"
+              << result.phaseNs[cpuTapePhaseIndex(CpuTapePhase::Replay)]
+              << R"(,"observe":)"
+              << result.phaseNs[cpuTapePhaseIndex(CpuTapePhase::Observe)]
+              << R"(,"completion":)"
+              << result.phaseNs[cpuTapePhaseIndex(CpuTapePhase::Completion)]
+              << R"(,"cleanup":)"
+              << result.phaseNs[cpuTapePhaseIndex(CpuTapePhase::Cleanup)]
+              << '}'
+              << R"(,"native_cpu_ns":)";
+    if (result.nativeCpuNs)
+      std::cout << *result.nativeCpuNs;
+    else
+      std::cout << "null";
+    std::cout
+              << R"(,"failure":)" << std::quoted(result.failure)
+              << R"(,"trace":[)";
+    for (std::size_t trace = 0; trace < result.trace.size(); ++trace) {
+      if (trace != 0u) std::cout << ',';
+      const auto& row = result.trace[trace];
+      std::cout << R"({"iteration":)" << row.iteration
+                << R"(,"submission":)" << row.submission
+                << R"(,"source":)" << row.source
+                << R"(,"source_generation":)" << row.sourceGeneration
+                << R"(,"storage_first_page":)" << row.storageFirstPage
+                << R"(,"storage_page_count":)" << row.storagePageCount
+                << R"(,"storage_generation":)" << row.storageGeneration
+                << R"(,"first_event":)" << row.firstEvent
+                << R"(,"last_event":)" << row.lastEvent
+                << R"(,"event":)" << row.event
+                << R"(,"event_submission":)" << row.eventSubmission
+                << R"(,"released_at_event":)" << row.releasedAtEvent
+                << R"(,"submitted":)" << (row.submitted ? "true" : "false")
+                << R"(,"completed":)" << (row.completed ? "true" : "false")
+                << '}';
+    }
+    std::cout << "]}";
+  }
+  std::cout << R"(],"loaded_images":)";
+  printCpuTapeLoadedImages();
+  std::cout << "}\n";
+  return complete ? 0 : 4;
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   try {
+    if (argc == 2 && (std::string_view(argv[1]) == "--general-cpu-destroy-spec" ||
+                      std::string_view(argv[1]) == "--general-cpu-mipmap-spec" ||
+                      std::string_view(argv[1]) == "--general-cpu-mutation-spec" ||
+                      std::string_view(argv[1]) == "--general-cpu-source-oracle-spec" ||
+                      std::string_view(argv[1]) == "--general-cpu-reset-spec" ||
+                      std::string_view(argv[1]) == "--general-cpu-alias-spec" ||
+                      std::string_view(argv[1]) ==
+                          "--two-pending-production-sources-spec" ||
+                      std::string_view(argv[1]) ==
+                          "--cpu-tape-phase-ledger-spec")) {
+      // Isolate cached policies from the unrelated routing test matrix.
+      // The general no-GPU executor requires the same admission/pacing pins
+      // as its CLI, established before the first device is constructed.
+      setenv("DXMT9_DISABLE_PRESENT_BOUNDARY", "1", 1);
+      setenv("DXMT9_SYNC_PRESENT_FLUSH", "0", 1);
+      setenv("DXMT9_OFFLOAD_COMMIT_REPLAY", "0", 1);
+      setenv("DXMT9_DRAW_CHUNK_COMMAND_LIMIT", "0", 1);
+      setenv("DXMT9_CHUNK_DRAW_PAYLOAD_ARENA_LIMIT_BYTES", "0", 1);
+      setenv("DXMT9_CPU_READY_TAPE", "0", 1);
+      setenv("DXMT9_CPU_READY_EARLY_PREFIX", "0", 1);
+      setenv("DXMT9_SPLIT_STRETCH_CHUNK", "0", 1);
+      if (std::string_view(argv[1]) == "--cpu-tape-phase-ledger-spec") {
+        cpuTapePhaseLedgerNestedScopeSpec();
+      } else if (std::string_view(argv[1]) == "--general-cpu-mipmap-spec") {
+        cpuMipmapObserverPreservesOrderAndQualifiedTexture();
+        generalCpuMipmapUsesProductionLifetime();
+      } else if (std::string_view(argv[1]) == "--general-cpu-mutation-spec")
+        generalCpuMutationWindowUsesProductionLifetime();
+      else if (std::string_view(argv[1]) == "--general-cpu-source-oracle-spec")
+        generalCpuSourceOracleUsesAuthenticatedClosures();
+      else if (std::string_view(argv[1]) == "--general-cpu-reset-spec")
+        generalCpuResetQualificationUsesFreshFixtures();
+      else if (std::string_view(argv[1]) == "--general-cpu-alias-spec")
+        generalCpuAliasAfterParentDestroyUsesImmutableIdentity();
+      else if (std::string_view(argv[1]) ==
+               "--two-pending-production-sources-spec") {
+        twoPendingProductionSourcesPreserveQualifiedFifoLifetime();
+        pendingSourceCapacityRejectsBeforeWorkAndReopensAfterReclaim();
+        generalCpuPendingOwnerRejectsEveryStaleIdentityDimension();
+        generalCpuWindowReplaysAuthenticatedSourcesInFifoOrder();
+        cpuWindowPlanRejectsMissingShapeDimensions();
+      }
+      else
+        generalCpuDestroyWindowUsesProductionLifetime();
+      return 0;
+    }
+    if (argc == 3 && (std::string_view(argv[1]) == "--write-general-cpu-fixture" ||
+                     std::string_view(argv[1]) == "--write-general-cpu-mipmap-fixture" ||
+                     std::string_view(argv[1]) == "--write-general-cpu-window-fixture")) {
+      const std::filesystem::path directory(argv[2]);
+      if (!std::filesystem::create_directory(directory))
+        throw TestFailure("general fixture output must be a new directory");
+      const auto write = [&](const std::filesystem::path& path, const auto& bytes) {
+        std::ofstream output(path, std::ios::binary);
+        output.write(reinterpret_cast<const char*>(bytes.data()),
+                     static_cast<std::streamsize>(bytes.size()));
+        output.close();
+        if (!output) throw TestFailure("general fixture write failed");
+      };
+      const auto writeFixture = [&](const auto& fixture) {
+        write(directory / "events.bin", fixture.tape);
+        for (std::size_t i = 0u; i < fixture.blobs.size(); ++i)
+          write(directory / ("blob-" + std::to_string(i) + ".bin"), fixture.blobs[i]);
+      };
+      if (std::string_view(argv[1]) == "--write-general-cpu-mipmap-fixture")
+        writeFixture(dxmt9::d3d9::test::makeGeneralCpuMipmapFixture());
+      else
+        writeFixture(dxmt9::d3d9::test::makeGeneralCpuDestroyFixture(
+            true, true, dxmt9::d3d9::test::GeneralCpuMutationFixture::ReferencedDiscard,
+            dxmt9::d3d9::test::GeneralCpuResetFixture::A,
+            std::string_view(argv[1]) == "--write-general-cpu-window-fixture" ? 2u : 0u));
+      return 0;
+    }
+    if (argc == 3 && std::string_view(argv[1]) == "--write-completion-fixture") {
+      dxmt9::d3d9::test::writeCompletionTapeFixture(argv[2]);
+      return 0;
+    }
+    if (argc == 3 &&
+        std::string_view(argv[1]) == "--write-dynamic-completion-fixture") {
+      dxmt9::d3d9::test::writeDynamicCompletionTapeFixture(argv[2]);
+      return 0;
+    }
+    if (argc == 3 && std::string_view(argv[1]) ==
+                         "--write-managed-allocation-failure-fixture") {
+      dxmt9::d3d9::test::writeManagedAllocationFailureTapeFixture(argv[2]);
+      return 0;
+    }
+    if (argc == 3 &&
+        std::string_view(argv[1]) == "--write-capacity-continuation-fixture") {
+      dxmt9::d3d9::test::writeCapacityContinuationTapeFixture(argv[2]);
+      return 0;
+    }
+    if (argc > 1 && std::string_view(argv[1]) == "--tape-experiment") {
+      setenv("DXMT9_OFFLOAD_COMMIT_REPLAY", "0", 1);
+      setenv("DXMT_PERF_COUNTERS", "1", 1);
+      // CPU execution has no presenter worker. Its explicit controller owns
+      // acknowledgment; production frame-pacing waits are outside this mode.
+      setenv("DXMT9_DISABLE_PRESENT_BOUNDARY", "1", 1);
+      setenv("DXMT9_SYNC_PRESENT_FLUSH", "0", 1);
+      CpuTapeExperimentOptions options;
+      if (argc < 3) {
+        throw TestFailure("--tape-experiment requires events.bin");
+      }
+      options.tapePath = argv[2];
+      for (int index = 3; index < argc; ++index) {
+        const std::string_view argument(argv[index]);
+        if (argument == "--blob" && index + 1 < argc) {
+          options.blobPaths.emplace_back(argv[++index]);
+        } else if (argument == "--source-oracle" && index + 1 < argc) {
+          options.sourceOraclePath = argv[++index];
+        } else if (argument == "--source-projection-sha256" && index + 1 < argc) {
+          options.sourceProjectionSha256 = argv[++index];
+        } else if (argument == "--grammar" && index + 1 < argc) {
+          const std::string_view value(argv[++index]);
+          if (value == "general-frame") options.generalFrame = true;
+          else if (value != "bounded") throw TestFailure("invalid CPU grammar");
+        } else if (argument == "--route" && index + 1 < argc) {
+          const std::string_view value(argv[++index]);
+          if (value == "compatibility") options.compatibility = true;
+          else if (value != "production-slot") throw TestFailure("invalid route");
+        } else if (argument == "--completion" && index + 1 < argc) {
+          const std::string_view value(argv[++index]);
+          options.afterDestroy = false;
+          options.beforeNextWork = false;
+          if (value == "before-next-work") options.beforeNextWork = true;
+          else if (value == "after-destroy") options.afterDestroy = true;
+          else if (value != "after-command") throw TestFailure("invalid completion");
+        } else if (argument == "--resource-backend" && index + 1 < argc) {
+          const std::string_view value(argv[++index]);
+          if (value == "cpu-no-gpu") {
+            options.resourceBackend = CpuTapeResourceBackend::NoGpu;
+          } else if (value == "cpu-metal-resources") {
+            options.resourceBackend = CpuTapeResourceBackend::MetalResources;
+          } else {
+            throw TestFailure("invalid resource backend");
+          }
+        } else if (argument == "--fault" && index + 1 < argc) {
+          options.fault = argv[++index];
+          if (options.fault != "none" &&
+              options.fault != "before-submit" &&
+              options.fault != "before-release" &&
+              options.fault != "managed-allocation") {
+            throw TestFailure("invalid fault");
+          }
+        } else if (argument == "--max-pending" && index + 1 < argc) {
+          options.maxPending = static_cast<std::size_t>(
+              std::stoull(std::string(argv[++index])));
+          if (options.maxPending >
+              dxmt9::d3d9::kRenderTapeCompletionScheduleCapacity) {
+            throw TestFailure("max-pending exceeds bounded capacity");
+          }
+        } else if (argument == "--repeat" && index + 1 < argc) {
+          options.repeat = static_cast<std::size_t>(
+              std::stoull(std::string(argv[++index])));
+          options.repeatExplicit = true;
+          if (options.repeat == 0u ||
+              options.repeat > dxmt9::d3d9::kRenderTapeCompletionScheduleCapacity) {
+            throw TestFailure("repeat is outside the bounded experiment capacity");
+          }
+        } else if (argument == "--completion-plan" && index + 1 < argc) {
+          options.completionPlanPath = argv[++index];
+        } else if (argument == "--publication" && index + 1 < argc) {
+          const std::string_view value(argv[++index]);
+          if (value == "per-command") {
+            options.publication =
+                dxmt9::d3d9::RenderTapeCpuPublicationMode::PerCommand;
+          } else if (value == "draw-island") {
+            options.publication =
+                dxmt9::d3d9::RenderTapeCpuPublicationMode::DrawIsland;
+          } else {
+            throw TestFailure("invalid publication mode");
+          }
+        } else {
+          throw TestFailure("unknown tape experiment option");
+        }
+      }
+      if ((!options.sourceOraclePath.empty() ||
+           !options.sourceProjectionSha256.empty()) && !options.generalFrame) {
+        throw TestFailure("source oracle requires general-frame grammar");
+      }
+      setenv("DXMT9_OFFLOAD_COMMIT_REPLAY",
+             options.fault == "managed-allocation" ? "1" : "0", 1);
+      if (options.generalFrame) {
+        // The CPU controller services completions only between immutable
+        // chunks. Pin the no-internal-split baseline before cached knobs are
+        // read; this is a reported harness policy, not production pacing.
+        setenv("DXMT9_DRAW_CHUNK_COMMAND_LIMIT", "0", 1);
+        setenv("DXMT9_CHUNK_DRAW_PAYLOAD_ARENA_LIMIT_BYTES", "0", 1);
+        setenv("DXMT9_CPU_READY_TAPE", "0", 1);
+        setenv("DXMT9_CPU_READY_EARLY_PREFIX", "0", 1);
+        setenv("DXMT9_SPLIT_STRETCH_CHUNK", "0", 1);
+      }
+      if (options.publication ==
+          dxmt9::d3d9::RenderTapeCpuPublicationMode::DrawIsland) {
+        // Isolate the exact-fit production policy before its cached knobs
+        // are first read. No manual reserve or product admission override.
+        setenv("DXMT9_DIRECT_SLOT_HEADROOM_BYTES", "0", 1);
+        setenv("DXMT9_DIRECT_SLOT_AGGREGATE_HEADROOM_BYTES", "0", 1);
+      }
+      return runCpuTapeExperiment(options);
+    }
     productionGateIsExplicitAndDefaultOff();
     directRawPublishesAndCompletesArenaSource();
     semanticTransferOwnsArenaTransactionUntilSettlement();
@@ -3926,6 +9172,8 @@ int main() {
     semanticTransferPostEffectFailureIsTerminal();
     ordinarySegmentConfiguredRawKeepsOneSourceAt512Pages();
     capturedLargeRawPublishesTwoAuthenticatedSources();
+    eventCompletionBridgeWaitsExactCapturedEvent();
+    rejectedCaptureStillCompletesAcceptedWork();
     mixedSourceLeaseSelectionPreservesSourceOrder();
     providerResolvedEntryRoutesExistingClearPresent();
     oversizeSegmentedPresentTakesOneLegacyRollbackSource();
@@ -3944,6 +9192,8 @@ int main() {
     ordinarySegmentedDrawApplyStateDrawMatchesLegacySemantics();
     directAdmissionRejectionPreservesLegacyDrawBatchGrouping();
     ordinarySourceBatchFoldsBindingAbaWithOneAcquisition();
+    productionReplayAppliesSparseStreamFrequenciesTransactionally();
+    cpuMipmapObserverPreservesOrderAndQualifiedTexture();
     populatedSlotDrawApplyDrawUsesCarrierFreeContinuation();
     populatedSlotInsufficientCapacityFallsBackBeforeEffects();
     populatedSlotProducerIdentityGapFallsBackBeforeEffects();
@@ -3965,6 +9215,12 @@ int main() {
     firstOrganicFailureIsRetainedWithCoordinates();
     organicBatchAppendFailureFromReplayFailsOnce();
     workerPressureWaitResumesAfterActiveLeasePublishes();
+    boundedCpuGrammarRequiresUnbindBeforeDestroy();
+    boundedCompletionReducerExhaustiveNegativeControls();
+    controlledCompletionBindsProductionQueueAndPool();
+    resourceBackedRoutingDeviceUsesPoolOwnership();
+    textureUploadObservationTracksPlainABAndReadOnlyLock();
+    providerRoutePinsDirectCompatibilityAndMalformedIdentity();
   } catch (const TestFailure& error) {
     std::cerr << "cpu_ready_production_routing_spec failed: "
               << error.what() << '\n';

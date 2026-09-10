@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 
 import json
+import copy
+import importlib.util
+import os
 import pathlib
 import shutil
 import subprocess
@@ -80,6 +83,234 @@ def main() -> int:
             "source_oracle": False,
         }
 
+        experiment_output = root_path / "experiment"
+        experiment_command = [
+            sys.executable, str(runner), "experiment", str(bundle),
+            "--provider", str(provider), "--validator", str(validator),
+            "--warmup", "1", "--repeat", "2", "--output-dir", str(experiment_output),
+        ]
+        experiment = json.loads(run(*experiment_command).stdout)
+        assert experiment["accepted"] is True
+        receipt = json.loads((experiment_output / "result.json").read_text())
+        prepared = receipt["result"]
+        assert prepared["prepare_count"] == 1
+        assert prepared["reset"] == "cold-device"
+        assert prepared["backend"] == "metal"
+        assert len(prepared["iterations"]) == 3
+        assert receipt["readback_artifacts_valid"] is True
+        assert (experiment_output / "readback").is_dir()
+        audit_output = root_path / "initial-seed-audit"
+        audited = run(*experiment_command[:-1], str(audit_output),
+                      "--audit-initial-seeds", check=False)
+        assert audited.returncode == 1  # Diagnostics cannot qualify a policy.
+        audit_receipt = json.loads((audit_output / "result.json").read_text())
+        assert audit_receipt["diagnostic"] is True
+        assert audit_receipt["accepted"] is False
+        assert audit_receipt["readback_artifacts_valid"] is True
+        for iteration in audit_receipt["result"]["iterations"]:
+            audit = iteration["provider_result"]["initial_seed_audit"]
+            assert audit["requested"] is True and audit["attempted"] is True
+            assert audit["diagnostic"] is True and audit["perturbative"] is True
+            assert audit["count"] == len(audit["entries"])
+        drain_output = root_path / "fresh-seed-drain-audit"
+        drained = run(*experiment_command[:-1], str(drain_output),
+                      "--audit-fresh-seed-drains", check=False)
+        assert drained.returncode == 1
+        drain_receipt = json.loads((drain_output / "result.json").read_text())
+        assert drain_receipt["diagnostic"] is True
+        assert drain_receipt["accepted"] is False
+        assert drain_receipt["readback_artifacts_valid"] is True
+        assert drain_receipt["result"]["audit_fresh_seed_drains"] is True
+        for iteration in drain_receipt["result"]["iterations"]:
+            audit = iteration["provider_result"]["fresh_seed_drain_audit"]
+            assert audit["requested"] is True and audit["diagnostic"] is True
+            # The bounded provider pre-creates this fixture's objects. It must
+            # not manufacture the general provider's chronological witness.
+            assert audit["attempted"] is False and audit["complete"] is False
+            assert audit["inspected_mutations"] == audit["mutation_count"] == 0
+            # This is explicitly not non-vacuous bypass evidence.
+            assert audit["bypassed_drains"] == 0
+        prestage_output = root_path / "texture-prestage-audit"
+        prestaged = run(*experiment_command[:-1], str(prestage_output),
+                        "--audit-texture-prestage", check=False)
+        assert prestaged.returncode == 1
+        prestage_receipt = json.loads((prestage_output / "result.json").read_text())
+        assert prestage_receipt["diagnostic"] is True
+        assert prestage_receipt["accepted"] is False
+        assert prestage_receipt["readback_artifacts_valid"] is True
+        assert prestage_receipt["result"]["audit_texture_prestage"] is True
+        for iteration in prestage_receipt["result"]["iterations"]:
+            audit = iteration["provider_result"]["texture_prestage_audit"]
+            assert audit["requested"] is True and audit["diagnostic"] is True
+            assert audit["attempted"] is False and audit["complete"] is False
+            assert audit["candidate_objects"] == audit["initializer_flushes"] == 0
+        for extra in (("--reset", "warm-device"), ("--audit-fresh-seed-drains",),
+                      ("--audit-initial-seeds",)):
+            invalid_output = root_path / ("invalid-prestage-" + extra[0][2:])
+            invalid = run(*experiment_command[:-1], str(invalid_output),
+                          "--audit-texture-prestage", *extra, check=False)
+            assert invalid.returncode != 0
+            assert not invalid_output.exists()  # Rejected before staging/effects.
+        assert receipt["provider"]["sha256"]
+        assert (experiment_output / "input" / "events.bin").read_bytes() == (bundle / "events.bin").read_bytes()
+        spec = importlib.util.spec_from_file_location("render_tape_runner", runner)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        assert module.experiment_renderer_environment({
+            "DXMT9_TEST": "1", "DXMT_TEST": "0", "MTL_DEBUG_LAYER": "1",
+            "MTL_SHADER_VALIDATION": "1", "MTL_CAPTURE_ENABLED": "0",
+            "METAL_CAPTURE_ENABLED": "1", "MTL_HUD_ENABLED": "1",
+            "ACCOUNT_TOKEN": "do-not-record",
+            "HOME": "/not-renderer-provenance",
+        }) == {"DXMT9_TEST": "1", "DXMT_TEST": "0", "MTL_DEBUG_LAYER": "1",
+               "MTL_SHADER_VALIDATION": "1", "MTL_CAPTURE_ENABLED": "0",
+               "METAL_CAPTURE_ENABLED": "1", "MTL_HUD_ENABLED": "1"}
+        for layer in ("", "0", "1", "unknown"):
+            for shader in ("", "0", "1", "unknown"):
+                assert module.experiment_metal_validation_enabled({
+                    "MTL_DEBUG_LAYER": layer, "MTL_SHADER_VALIDATION": shader,
+                }) is (layer not in ("", "0") or shader not in ("", "0"))
+        validation_output = root_path / "validation-experiment"
+        # Test the wrapper gate independently of Metal's validation runtime:
+        # replay a known-good native receipt/readback set with an env-checking
+        # provider double. This is not a validation-enabled GPU oracle.
+        validation_provider = root_path / "validation-provider.py"
+        validation_provider.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, os, pathlib, shutil, sys\n"
+            "assert os.environ['MTL_DEBUG_LAYER'] == '1'\n"
+            "assert os.environ['MTL_SHADER_VALIDATION'] == '1'\n"
+            f"result = json.loads({json.dumps(prepared)!r})\n"
+            "target = pathlib.Path(sys.argv[sys.argv.index('--readback-dir') + 1])\n"
+            f"shutil.copytree({str(experiment_output / 'readback')!r}, target)\n"
+            "print(json.dumps(result))\n", encoding="utf-8")
+        validation_provider.chmod(0o755)
+        validation_command = [*experiment_command[:-1], str(validation_output)]
+        validation_command[validation_command.index("--provider") + 1] = str(validation_provider)
+        validation_run = subprocess.run(
+            validation_command,
+            env={**os.environ, "MTL_DEBUG_LAYER": "1", "MTL_SHADER_VALIDATION": "1"},
+            capture_output=True, text=True, timeout=60)
+        assert validation_run.returncode == 1, validation_run.stderr
+        validation_receipt = json.loads((validation_output / "result.json").read_text())
+        assert validation_receipt["accepted"] is False
+        assert validation_receipt["diagnostic"] is True
+        assert validation_receipt["metal_validation_diagnostic"] is True
+        assert validation_receipt["renderer_environment"]["MTL_DEBUG_LAYER"] == "1"
+        assert validation_receipt["renderer_environment"]["MTL_SHADER_VALIDATION"] == "1"
+        assert validation_receipt["provider_exit_code"] == 0, (
+            validation_receipt["result"],
+            (validation_output / "provider.stderr").read_text()[:3000])
+        assert module.experiment_accepts(validation_receipt["result"], warmup=1,
+            repeat=2, reset="cold-device", route="compatibility",
+            require_path=False, non_degenerate=False)
+        for index, iteration in enumerate(prepared["iterations"]):
+            artifacts = iteration["readback_artifacts"]
+            for kind in ("output", "source"):
+                evidence = artifacts[f"{kind}_rgba"]
+                assert evidence["path"] == f"iteration-{index:06d}-{kind}.rgba"
+                artifact = experiment_output / "readback" / evidence["path"]
+                assert artifact.stat().st_size == evidence["bytes"]
+                assert module.digest(artifact) == evidence["sha256"]
+        accept_options = dict(warmup=1, repeat=2, reset="cold-device",
+                              route="compatibility", require_path=False, non_degenerate=False)
+        assert module.experiment_accepts(prepared, **accept_options)
+        for change in ("partial", "reset", "stale-output", "gpu-error", "zero-encode", "observed-path", "pixel-determinism", "timing"):
+            invalid = copy.deepcopy(prepared)
+            if change == "partial":
+                invalid["iterations"].pop()
+            elif change == "reset":
+                invalid["iterations"][1]["reset_ok"] = False
+            elif change == "stale-output":
+                invalid["iterations"][1]["provider_result"]["intervals"][0]["validity"]["output_sha256"] = "0" * 64
+            elif change == "gpu-error":
+                invalid["iterations"][1]["path_counters"]["gpu_errors"] = 1
+            elif change == "zero-encode":
+                invalid["iterations"][1]["path_counters"]["encode_chunks"] = 0
+            elif change == "observed-path":
+                invalid["iterations"][1]["observed_replay_path"] = "direct-slot"
+            elif change == "pixel-determinism":
+                invalid["pixel_deterministic"] = False
+            else:
+                invalid["iterations"][1]["replay_ns"] = -1
+            assert not module.experiment_accepts(invalid, **accept_options), change
+        rejected_output = root_path / "empty-candidate"
+        rejected = run(*experiment_command[:-1], str(rejected_output), "--require-path", check=False)
+        assert rejected.returncode != 0
+        assert json.loads((rejected_output / "result.json").read_text())["accepted"] is False
+        assert (rejected_output / "provider.stdout").is_file()
+        assert (rejected_output / "provider.stderr").is_file()
+
+        oracle_failed_provider = root_path / "oracle-failed-experiment-provider.py"
+        oracle_failed_provider.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json\n"
+            "import subprocess\n"
+            "import sys\n"
+            f"real = {str(provider.resolve())!r}\n"
+            "completed = subprocess.run([real, *sys.argv[1:]], check=False, "
+            "text=True, capture_output=True)\n"
+            "result = json.loads(completed.stdout)\n"
+            "result['status'] = 'failed'\n"
+            "print(json.dumps(result))\n"
+            "sys.stderr.write(completed.stderr)\n"
+            "raise SystemExit(1)\n",
+            encoding="utf-8",
+        )
+        oracle_failed_provider.chmod(0o755)
+        oracle_failed_output = root_path / "oracle-failed-experiment"
+        oracle_failed = run(
+            sys.executable, str(runner), "experiment", str(bundle),
+            "--provider", str(oracle_failed_provider), "--validator", str(validator),
+            "--warmup", "0", "--repeat", "1",
+            "--output-dir", str(oracle_failed_output), check=False,
+        )
+        assert oracle_failed.returncode != 0
+        oracle_failed_receipt = json.loads(
+            (oracle_failed_output / "result.json").read_text()
+        )
+        assert oracle_failed_receipt["accepted"] is False
+        assert oracle_failed_receipt["readback_artifacts_valid"] is True
+        assert oracle_failed_receipt["result"]["status"] == "failed"
+        assert (oracle_failed_output / "readback" /
+                "iteration-000000-output.rgba").is_file()
+
+        for corruption in ("missing", "corrupt"):
+            corrupt_provider = root_path / f"{corruption}-readback-provider.py"
+            corrupt_provider.write_text(
+                "#!/usr/bin/env python3\n"
+                "import json\n"
+                "import pathlib\n"
+                "import subprocess\n"
+                "import sys\n"
+                f"real = {str(provider.resolve())!r}\n"
+                f"mode = {corruption!r}\n"
+                "completed = subprocess.run([real, *sys.argv[1:]], check=False, "
+                "text=True, capture_output=True)\n"
+                "result = json.loads(completed.stdout)\n"
+                "directory = pathlib.Path(sys.argv[sys.argv.index('--readback-dir') + 1])\n"
+                "target = directory / 'iteration-000000-output.rgba'\n"
+                "target.unlink() if mode == 'missing' else target.write_bytes(b'corrupt')\n"
+                "print(json.dumps(result))\n"
+                "sys.stderr.write(completed.stderr)\n"
+                "raise SystemExit(completed.returncode)\n",
+                encoding="utf-8",
+            )
+            corrupt_provider.chmod(0o755)
+            corrupt_output = root_path / f"{corruption}-readback"
+            corrupt = run(
+                sys.executable, str(runner), "experiment", str(bundle),
+                "--provider", str(corrupt_provider), "--validator", str(validator),
+                "--warmup", "0", "--repeat", "1",
+                "--output-dir", str(corrupt_output), check=False,
+            )
+            assert corrupt.returncode != 0
+            corrupt_receipt = json.loads(
+                (corrupt_output / "result.json").read_text()
+            )
+            assert corrupt_receipt["accepted"] is False
+            assert corrupt_receipt["readback_artifacts_valid"] is False
+
         parallel_source = root_path / "parallel-source"
         parallel_bundle = root_path / "parallel-bundle"
         run(str(fixture), "--write-parallel-fixture", str(parallel_source))
@@ -98,6 +329,74 @@ def main() -> int:
             if blob.name != "events.bin":
                 parallel_pack.extend(("--blob", str(blob)))
         run(*parallel_pack)
+        parallel_inspect = json.loads(
+            run(
+                sys.executable,
+                str(runner),
+                "inspect",
+                str(parallel_bundle),
+                "--validator",
+                str(validator),
+            ).stdout
+        )
+        assert parallel_inspect["buffer_definitions"] == [
+            {
+                "event": 3,
+                "identity": {"kind": 2, "generation": 4, "object_id": "49"},
+                "usage": 0,
+                "pool": 0,
+                "size": 84,
+            },
+            {
+                "event": 4,
+                "identity": {"kind": 2, "generation": 4, "object_id": "50"},
+                "usage": 0,
+                "pool": 0,
+                "size": 6,
+            },
+        ]
+        assert parallel_inspect["buffer_mutations"] == [
+            {
+                "event": 7,
+                "identity": {"kind": 2, "generation": 4, "object_id": "49"},
+                "mutation_kind": 2,
+                "disposition": 0,
+                "byte_offset": 0,
+                "byte_size": 84,
+            },
+            {
+                "event": 8,
+                "identity": {"kind": 2, "generation": 4, "object_id": "50"},
+                "mutation_kind": 2,
+                "disposition": 0,
+                "byte_offset": 0,
+                "byte_size": 6,
+            },
+        ]
+        assert parallel_inspect["buffer_destroys"] == []
+        route_outputs = []
+        for route in ("compatibility", "production-slot"):
+            route_output = root_path / ("experiment-" + route)
+            route_run = run(
+                sys.executable, str(runner), "experiment", str(parallel_bundle),
+                "--provider", str(provider), "--validator", str(validator),
+                "--output-dir", str(route_output), "--warmup", "1", "--repeat", "2",
+                "--reset", "warm-device", "--replay-route", route,
+                *(("--require-path",) if route == "compatibility" else ()))
+            assert json.loads(route_run.stdout)["accepted"] is True
+            route_result = json.loads((route_output / "result.json").read_text())["result"]
+            if route == "production-slot":
+                # This 128-draw fixture takes production's pre-effect fallback;
+                # matching pixels must not qualify it as executed Direct work.
+                assert all(item["observed_replay_path"] == "compatibility"
+                           for item in route_result["iterations"])
+                assert not module.experiment_accepts(
+                    route_result, warmup=1, repeat=2, reset="warm-device",
+                    route=route, require_path=True, non_degenerate=True)
+            route_outputs.append([
+                item["provider_result"]["validity"]["output_sha256"]
+                for item in route_result["iterations"]])
+        assert route_outputs[0] == route_outputs[1]
         parallel = json.loads(
             run(
                 sys.executable,

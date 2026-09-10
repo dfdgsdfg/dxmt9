@@ -1283,6 +1283,100 @@ void sparseStateFoldTruthTable() {
         "incomplete category manifest rejects before output construction");
 }
 
+void streamFrequencyFoldPreservesLegacyOmission() {
+  for (const bool full : {false, true}) {
+    for (const std::uint32_t slot : {0u, 1u}) {
+      const auto a = slot == 0u ? 0x40000003u : 0x80000002u;
+      const auto b = slot == 0u ? 0x40000007u : 0x80000004u;
+      const std::array frequencies{0u, a, 0u, b, a, 0u, 1u};
+      const std::array expected{0u, a, a, b, a, a, 1u};
+      std::vector<Record> records;
+      for (const auto frequency : frequencies) {
+        auto payload = applyStatePayload();
+        auto* header = reinterpret_cast<D9CCommandChunkWireDrawHeader*>(payload.data());
+        auto* descriptors = reinterpret_cast<D9CCommandChunkWireSectionDesc*>(
+            payload.data() + header->sectionTableOffset);
+        auto streamDesc = descriptors[1u];
+        check(streamDesc.kind == D9C_COMMAND_CHUNK_SECTION_STREAM,
+              "fixture must select the actual stream section");
+        auto* streams = reinterpret_cast<D9CCommandChunkWireStreamBinding*>(
+            payload.data() + streamDesc.payloadOffset);
+        streams[slot].frequency = frequency;
+        if (!full) {
+          const auto streamValue = streams[slot];
+          const auto payloadOffset = alignUp(sizeof(*header) + sizeof(streamDesc),
+                                             alignof(std::uint32_t));
+          const D9CCommandChunkWireDrawHeader sparseHeader{
+              .sectionCount = 1u, .sectionTableOffset = sizeof(*header),
+              .sectionPayloadOffset = static_cast<std::uint32_t>(payloadOffset)};
+          streamDesc.count = 1u;
+          streamDesc.payloadOffset = static_cast<std::uint32_t>(payloadOffset);
+          streamDesc.byteSize = sizeof(streamValue);
+          payload.assign(payloadOffset + sizeof(streamValue), std::byte{});
+          std::memcpy(payload.data(), &sparseHeader, sizeof(sparseHeader));
+          std::memcpy(payload.data() + sizeof(sparseHeader), &streamDesc, sizeof(streamDesc));
+          std::memcpy(payload.data() + payloadOffset, &streamValue, sizeof(streamValue));
+          header = reinterpret_cast<D9CCommandChunkWireDrawHeader*>(payload.data());
+        }
+        header->primitiveType = 4u;
+        header->primitiveCount = 1u;
+        records.push_back({.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+                           .payload = std::move(payload)});
+      }
+      records.push_back({
+          .type = D9C_COMMAND_RECORD_PRESENT,
+          .payload = bytesOf(D9CCommandChunkWirePresent{}),
+          .handles = {{.kind = kOutput.kind, .generation = kOutput.generation,
+                       .objectId = kOutput.objectId}}});
+      const auto output = outputDescriptor();
+      const RenderTapeOracleAttachment oracle{
+          .identity = kOutput,
+          .descriptorKind = static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface)};
+      RenderTapeBuilder builder;
+      builder.appendBootstrapState(bootstrapChunk());
+      builder.appendObjectDefine(kOutput,
+          static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+          std::as_bytes(std::span(&output, 1u)), 0u, {});
+      builder.appendCommandChunk(
+          CommandChunkEnvelope{.recordCount = static_cast<std::uint32_t>(records.size()),
+                               .handleCount = 1u}, makeChunk(records));
+      builder.appendPresentComplete(3u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+                                    std::as_bytes(std::span(&oracle, 1u)));
+      const auto tape = builder.seal();
+      const auto valid = validateRenderTape(tape, catalogue());
+      check(valid.valid(), std::string("frequency fixture: ") +
+            renderTapeValidationStatusName(valid.status) + "/chunk=" +
+            std::to_string(static_cast<unsigned>(valid.chunkStatus)) + "/event=" +
+            std::to_string(valid.failedEventIndex));
+      for (std::size_t draw = 0u; draw < frequencies.size(); ++draw) {
+        const auto folded = foldRenderTapeStateForDraw(tape, catalogue(), 3u, draw);
+        check(folded.valid(), renderTapeStateFoldStatusName(folded.status));
+        D9CCommandChunkWireHeader header{};
+        std::memcpy(&header, folded.bootstrapChunk.data(), sizeof(header));
+        ImportedChunkView chunk;
+        check(importPrevalidatedCommandChunk(folded.bootstrapChunk,
+                  {header.version, header.recordCount, header.handleCount}, chunk),
+              "frequency fold imports canonical snapshot");
+        const auto record = chunk.record(0u);
+        bool found = false;
+        for (std::size_t i = 0u; i < record.sections.size(); ++i) {
+          const auto section = record.section(i);
+          if (section.descriptor.kind != D9C_COMMAND_CHUNK_SECTION_STREAM) continue;
+          for (std::size_t index = 0u; index < section.descriptor.count; ++index) {
+            D9CCommandChunkWireStreamBinding stream{};
+            std::memcpy(&stream, section.payload.data() + index * sizeof(stream), sizeof(stream));
+            if (stream.slot != slot) continue;
+            check(stream.frequency == expected[draw],
+                  "legacy zero preserves known frequency; explicit A/B/A/default replaces it");
+            found = true;
+          }
+        }
+        check(found, "folded snapshot retains the selected stream slot");
+      }
+    }
+  }
+}
+
 void failClosedSelectionAndClosureCases() {
   const auto blobs = catalogue();
   check(projectRenderTapeDrawSlice(makeSequenceTape(), blobs, selector()).status ==
@@ -1386,6 +1480,7 @@ int main(int argc, char** argv) {
     projectionAccountsLatePerIdentitySeed();
     projectionPreservesDispositionAndAliasMetadata();
     sparseStateFoldTruthTable();
+    streamFrequencyFoldPreservesLegacyOmission();
     failClosedSelectionAndClosureCases();
     identityTruthTableAndMalformedInputs();
     policyExploreTruthTable();

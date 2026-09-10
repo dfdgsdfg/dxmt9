@@ -1242,6 +1242,11 @@ dxmt9c_device_finish_render_tape_present_source_capture(
 DXMT9_NODISCARD int32_t dxmt9c_device_finish_render_tape_identity_capture(
     D9CDevice*, uint64_t captureToken,
     D9CRenderTapeIdentityCaptureResult* out, void* bytes, uint64_t capacity);
+DXMT9_NODISCARD int32_t dxmt9c_device_wait_render_tape_event_completion(
+    D9CDevice*, uint64_t captureToken, uint64_t eventOrdinal);
+/* Completion only after an accepted operation whose capture failed. This
+ * drains all pending work, but produces no Render Tape identity receipt. */
+DXMT9_NODISCARD int32_t dxmt9c_device_wait_for_pending_work(D9CDevice*);
 void dxmt9c_device_cancel_render_tape_present_capture(D9CDevice*);
 DXMT9_NODISCARD int32_t dxmt9c_device_capture_render_tape_d24x8_snapshot(
     D9CDevice*, const D9CRenderTapeD24X8SnapshotRequest* request,

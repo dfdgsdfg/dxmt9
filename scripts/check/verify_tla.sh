@@ -51,7 +51,12 @@ normal_models=(
   QuerySeqId
   QueueLifecycleRefinement
   QueueT2dReserveCopyCommit
+  RenderTapeCompletionSchedule
+  RenderTapeEventCompletionBinding
+  RenderTapeExactEventWait
+  RenderTapeGroupedPublication
   RenderTapeIdentitySegments
+  RenderTapeSingletonArenaRetirement
   RenderTapeParallelJoin
   SegmentedTransportV1
   ReplayEmissionPlanIslands
@@ -64,13 +69,15 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=52
-expected_progress_count=2
-expected_counterexample_count=113
-expected_cfg_count=167
+expected_normal_count=57
+expected_progress_count=4
+expected_counterexample_count=127
+expected_cfg_count=188
 progress_configs=(
   CpuPipelineLifecycle.progress
   DirectSourceLifecycle.progress
+  RenderTapeExactEventWait.progress
+  RenderTapeSingletonArenaRetirement.progress
 )
 
 # Generated TLA vocabulary modules are checked against their production enum
@@ -158,6 +165,20 @@ counterexample_models=(
   "QueueT2dReserveCopyCommit|.half-appended-slot.counterexample|Invariant NoHalfAppendedSlot is violated"
   "QueueT2dReserveCopyCommit|.stale-reservation.counterexample|Invariant NoStaleReservationWrite is violated"
   "QueueT2dReserveCopyCommit|.lost-prefix-rollback.counterexample|Invariant RollbackRestoresPrefix is violated"
+  "RenderTapeCompletionSchedule|.premature-release.counterexample|Invariant NoReleaseBeforeSubmit is violated"
+  "RenderTapeCompletionSchedule|.duplicate-release.counterexample|Invariant NoDuplicateRelease is violated"
+  "RenderTapeEventCompletionBinding|.stale-identity.counterexample|Invariant Invariant is violated"
+  "RenderTapeEventCompletionBinding|.premature-reuse.counterexample|Invariant Invariant is violated"
+  "RenderTapeEventCompletionBinding|.premature-completion.counterexample|Invariant Invariant is violated"
+  "RenderTapeExactEventWait|.wrong-latest-lookup.counterexample|Invariant SelectedIdentityExact is violated"
+  "RenderTapeExactEventWait|.missing-release.counterexample|Temporal properties were violated"
+  "RenderTapeExactEventWait|.premature-acknowledgment.counterexample|Invariant NoAckWithoutSuccessfulWait is violated"
+  "RenderTapeGroupedPublication|.early-publish.counterexample|Invariant NoEarlyPublication is violated"
+  "RenderTapeGroupedPublication|.missing-draw.counterexample|Invariant OrderedDrawsExactlyOnce is violated"
+  "RenderTapeGroupedPublication|.wrong-range.counterexample|Invariant ExactRangeCoverage is violated"
+  "RenderTapeSingletonArenaRetirement|.premature-publish.counterexample|Invariant NoPrematurePublish is violated"
+  "RenderTapeSingletonArenaRetirement|.stale-receipt.counterexample|Invariant NoStaleReceiptAccepted is violated"
+  "RenderTapeSingletonArenaRetirement|.missing-transfer.counterexample|Temporal properties were violated"
   # The historical R15 shadow planner dropped the active render seed after
   # retaining and restoring a Ready head, so it could never prove A|B|A.
   "CpuReadyActiveHeadLookahead|.seedless.counterexample|Invariant ActiveSeedPreserved is violated"

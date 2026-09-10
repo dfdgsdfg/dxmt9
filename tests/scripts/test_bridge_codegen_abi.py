@@ -160,12 +160,12 @@ void dxmt9c_read(D9CDevice *device, D9CTestRecord *output);
         )
         canonical = GENERATOR.canonicalize_schema(protos, records)
 
-        self.assertEqual(len(protos), 166)
+        self.assertEqual(len(protos), 168)
         self.assertEqual(protos[0].name, "dxmt9c_factory_create")
         self.assertEqual(protos[-1].name, "dxmt9c_vdecl_get_declaration")
         self.assertIn("op|ordinal=0|dxmt9c_factory_create|", canonical)
         self.assertIn(
-            "op|ordinal=165|dxmt9c_vdecl_get_declaration|", canonical
+            "op|ordinal=167|dxmt9c_vdecl_get_declaration|", canonical
         )
         record_names = {record.name for record in records}
         self.assertIn("D9CCommandChunk", record_names)
@@ -173,6 +173,18 @@ void dxmt9c_read(D9CDevice *device, D9CTestRecord *output);
         self.assertIn("Dxmt9WinemetalCompileShaderParams", record_names)
         self.assertIn("layout-context|", canonical)
         self.assertNotEqual(GENERATOR.compute_bridge_abi_hash(protos, records), 0)
+
+        # Completion-only calls are part of the ABI hash and generated WoW64
+        # dispatch, not hand-authored function-pointer fallback slots.
+        names = {proto.name for proto in protos}
+        self.assertIn("dxmt9c_device_wait_render_tape_event_completion", names)
+        self.assertIn("dxmt9c_device_wait_for_pending_work", names)
+        with tempfile.TemporaryDirectory() as temporary:
+            output = Path(temporary) / "completion-dispatch.cpp"
+            GENERATOR.write_server_cpp(output, "ops.h", protos)
+            generated = output.read_text()
+        self.assertIn("thunk_wow64_dxmt9c_device_wait_render_tape_event_completion", generated)
+        self.assertIn("thunk_wow64_dxmt9c_device_wait_for_pending_work", generated)
 
     def test_segmented_transport_uses_custom_wow64_adapter(self) -> None:
         device_header = GENERATOR.DEVICE_C_HEADER

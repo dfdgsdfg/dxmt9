@@ -1008,7 +1008,7 @@ HResult Device::setStreamSourceFreq(u32 stream, u32 frequency) {
     return D3D_OK;
   }
   state_.streamFrequencies[stream] = frequency;
-  invalidateDrawStateCache(DrawStateInvalidationStream);
+  invalidateDrawStateCache(DrawStateInvalidationStreamFrequency);
   return D3D_OK;
 }
 

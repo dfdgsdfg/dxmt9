@@ -147,6 +147,13 @@ struct RenderTapeIdentityEventSettlement {
 static_assert(sizeof(D9CRenderTapeIdentitySettlementEntry) == 48u);
 inline constexpr std::size_t kMaxRenderTapeIdentitySettlements = 4096u;
 
+enum class RenderTapeEventWaitStatus : std::uint8_t {
+  Completed,
+  InvalidIdentity,
+  WaitFailed,
+  AcknowledgmentFailed,
+};
+
 // Unix-provider capture ledger. The offload worker is the sole appender and
 // the PE Present boundary reads it only after drainDeferredReplay(), but the
 // mutex keeps teardown and diagnostic misuse fail-closed rather than relying
@@ -172,6 +179,25 @@ public:
                           std::uint64_t eventOrdinal) noexcept;
   bool expectedTail(std::uint64_t captureToken,
                     D9CRenderTapeIdentitySettlementEntry& out) const noexcept;
+  // Read the exact accepted event, never a newer tail. Lookup is not a
+  // completion acknowledgment and must not advance the queue waterline.
+  bool expectedSettlement(std::uint64_t captureToken, std::uint64_t eventOrdinal,
+                          D9CRenderTapeIdentitySettlementEntry& out) const noexcept;
+  // The caller drains replay before entering this cold boundary. Never hold
+  // the ledger lock over a queue wait; only an authenticated successful wait
+  // may acknowledge this event. The same sequence is exercised natively.
+  template <typename Wait>
+  RenderTapeEventWaitStatus waitAndCompleteSettlement(
+      std::uint64_t captureToken, std::uint64_t eventOrdinal, Wait&& wait) {
+    D9CRenderTapeIdentitySettlementEntry expected{};
+    if (!expectedSettlement(captureToken, eventOrdinal, expected))
+      return RenderTapeEventWaitStatus::InvalidIdentity;
+    if (!wait(expected))
+      return RenderTapeEventWaitStatus::WaitFailed;
+    if (!completeSettlement(captureToken, eventOrdinal))
+      return RenderTapeEventWaitStatus::AcknowledgmentFailed;
+    return RenderTapeEventWaitStatus::Completed;
+  }
   bool markAllSettled(std::uint64_t captureToken) noexcept;
   void fail(std::uint64_t captureToken) noexcept;
   bool copy(std::uint64_t captureToken,

@@ -117,7 +117,17 @@ struct FoldState {
     resetBaseline();
   }
 
-  void resetBaseline() {
+  void resetBaseline(bool preserveStreamFrequencies = false) {
+    // Legacy wire zero omits frequency even on FULL_SNAPSHOT. Keep known
+    // frequencies across a tuple reset; an unknown origin must stay unknown.
+    std::array<std::uint32_t, D9C_DRAW_PACKET_MAX_STREAMS> frequencies{};
+    if (preserveStreamFrequencies) {
+      for (const auto& element : sections[D9C_COMMAND_CHUNK_SECTION_STREAM - 1u].elements) {
+        D9CCommandChunkWireStreamBinding stream{};
+        if (load(element.bytes, 0u, stream) && stream.slot < frequencies.size())
+          frequencies[stream.slot] = stream.frequency;
+      }
+    }
     for (auto& section : sections) section.elements.clear();
     for (auto& constant : constants)
       constant.bytes.assign(
@@ -154,7 +164,7 @@ struct FoldState {
           .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
           .offset = 0u,
           .stride = 0u,
-          .frequency = 0u,
+          .frequency = frequencies[slot],
           .reserved0 = 0u,
       };
       FoldedElement element{
@@ -286,6 +296,14 @@ void upsert(FoldedSection& section, FoldedElement element) {
         return prior.primaryKey == element.primaryKey &&
                prior.secondaryKey == element.secondaryKey;
       });
+  if (section.kind == D9C_COMMAND_CHUNK_SECTION_STREAM && found != section.elements.end()) {
+    D9CCommandChunkWireStreamBinding current{}, previous{};
+    if (load(element.bytes, 0u, current) && load(found->bytes, 0u, previous) &&
+        current.frequency == 0u) {
+      current.frequency = previous.frequency;
+      std::memcpy(element.bytes.data(), &current, sizeof(current));
+    }
+  }
   if (found == section.elements.end())
     section.elements.push_back(std::move(element));
   else
@@ -320,7 +338,7 @@ bool applySparseRecord(FoldState& state, const ImportedChunkView& chunk,
   if (!record.sparseState()) return false;
   if ((record.drawHeader.flags &
        D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT) != 0u) {
-    state.resetBaseline();
+    state.resetBaseline(true);
     state.coverageMask = kRenderTapeRequiredCategoryMask;
   }
 

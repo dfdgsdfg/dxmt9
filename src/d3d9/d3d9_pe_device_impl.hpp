@@ -902,7 +902,6 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
     IDirect3DVertexShader9*    vs_              = nullptr;
     IDirect3DPixelShader9*     ps_              = nullptr;
     IDirect3DVertexBuffer9*    streamSrc_[16]   = {};
-    UINT                       streamFreq_[16]  = {};
     IDirect3DIndexBuffer9*     indexBuf_        = nullptr;
     std::uint64_t              submittedIndexBufferWireValue_ = 0;
     bool                       submittedIndexBufferKnown_ = false;
@@ -2162,8 +2161,7 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
 
     HRESULT flushPendingCommandChunk(
         PeRecorderFlushReason reason,
-        PeRecorderFlushDisposition disposition =
-            PeRecorderFlushDisposition::Submit);
+        PeRecorderFlushDisposition disposition = PeRecorderFlushDisposition::Submit);
 
     // Append envelope. Owns the recorder mutex, the negotiation gate, the
     // CapacityPre and CapacityPost flushes, and every append telemetry site.
@@ -2553,6 +2551,8 @@ public:
     // COM surface -- in the hot owning TU. Keep AddRef/Release inline.
 private:
     HRESULT FlushPeRecorderForChild() noexcept;
+    PeRenderTapeChildResult GenerateMipmapsForChild(
+        const dxmt9::d3d9::pe::TextureRef &) noexcept;
 
 public:
     void LockStateBlockOperationForChild() noexcept;

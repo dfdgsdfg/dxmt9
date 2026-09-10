@@ -4,6 +4,7 @@
 #include "device_c_render_tape_capture_layout.hpp"
 #include "device_c_render_tape_first_access_locator.hpp"
 #include "device_c_render_tape_identity.hpp"
+#include "d3d9_pe_render_tape_commit_receipt.hpp"
 #include "dxmt9/device_c.h"
 
 #include <cstddef>
@@ -84,6 +85,9 @@ struct PeCaptureState {
   dxmt9::d3d9::RenderTapeFirstAccessLedger renderTapeFirstAccessLedger{};
   const char *renderTapeAbortReason = nullptr;
   std::uint64_t renderTapeCompletionOrdinal = 0u;
+  // Non-null only during a cold capture-only child command.  Commit consults
+  // this already-owned state pointer to collect any CapacityPost acceptance.
+  PeRenderTapeCommitReceiptCollector *renderTapeCommitCollector = nullptr;
 };
 
 inline std::unique_ptr<PeCaptureState> makePeCaptureState(

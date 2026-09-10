@@ -11,9 +11,12 @@ linker_id = "ld.lld"
 configuration = "release"
 
 [recorder_state]
-sizeof_x64 = 104296
-sizeof_x86 = 103496
-sizeof_host = 104320
+# The canonical stream-frequency array moved into PeRecorderState.  The
+# former DeviceImpl-local array was removed at the same time, so the device
+# footprint remains unchanged while each recorder pin grows by 64 bytes.
+sizeof_x64 = 104360
+sizeof_x86 = 103560
+sizeof_host = 104384
 
 [device_layout]
 sizeof_x64 = 106680

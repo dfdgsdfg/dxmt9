@@ -2735,6 +2735,177 @@ void pendingCompletionWatcherExpandsSessionSourcesInOrder() {
         "tail source is reclaimed after tail finish");
 }
 
+void mixedReceiptAndResidentGroupTailsPublishInSourceOrder() {
+  QueueFixture fixture{makeSeparatedPayloadConfig()};
+  const auto segment = makeMinimalArenaLayout();
+  const std::array segmentLayouts{segment};
+  const auto arenaSegment = makeArenaSourcePayloadLayout(
+      segmentLayouts, 4096, 8);
+  check(arenaSegment.has_value(),
+        "mixed completion fixture builds the Arena segment layout");
+  const std::array singletonLayouts{*arenaSegment};
+  const std::array residentGroupLayouts{*arenaSegment, *arenaSegment};
+
+  const auto publishArenaGroup =
+      [&](std::span<const dxmt9::core::ArenaSourcePayloadLayout> layouts,
+          std::uint64_t rawOrdinal, std::uint64_t firstSourceOrdinal,
+          std::uint64_t firstSeqId, std::uint64_t buildGeneration,
+          std::size_t controlIndex) {
+    const auto batch = fixture.cpuReadyTape.reserveArenaBatch(
+        layouts, rawOrdinal, firstSourceOrdinal, firstSeqId, buildGeneration);
+    check(batch.has_value(), "mixed completion fixture reserves Arena group");
+    for (std::size_t i = 0; i < batch->count; ++i) {
+      publishMinimalArena(fixture.cpuReadyTape, batch->reservations[i], segment);
+    }
+    std::array<std::size_t, CpuReadyTape::kMaxArenaBatchSources>
+        controlIndices{};
+    for (std::size_t i = 0; i < batch->count; ++i) {
+      controlIndices[i] = controlIndex + i;
+    }
+    check(fixture.cpuReadyTape.sealAndPublishArenaBatch(
+              *batch, std::span<const std::size_t>(controlIndices.data(),
+                                                   batch->count)),
+          "mixed completion fixture publishes Arena group");
+    for (std::size_t i = 0; i < batch->count; ++i) {
+      auto& slot = fixture.slots[controlIndex + i];
+      slot.state = ChunkSlot::State::Pending;
+      slot.seqId = firstSeqId + i;
+      slot.sourceId = batch->reservations[i].id;
+      slot.storage = batch->reservations[i].storage;
+      slot.payload = nullptr;
+    }
+  };
+
+  publishArenaGroup(singletonLayouts, 1u, 1u, 1u, 1u, 0u);
+  publishArenaGroup(residentGroupLayouts, 2u, 2u, 2u, 2u, 1u);
+  fixture.lastCommittedSeqId = 3u;
+  fixture.nextSeqId.store(4u, std::memory_order_relaxed);
+  fixture.inflightCount = 3u;
+
+  std::array<ReadySlotSnapshot, 3> snapshots{};
+  QueueSubmissionRecord record;
+  {
+    std::unique_lock lock(fixture.mutex);
+    check(fixture.controller.dequeueReadySlotBatch(lock, snapshots) == 3u,
+          "mixed completion fixture dequeues singleton and resident group");
+
+    std::array<QueueCompletionSource, 3> completionSources{
+        completionSourceForReadySlot(snapshots[0]),
+        completionSourceForReadySlot(snapshots[1]),
+        completionSourceForReadySlot(snapshots[2]),
+    };
+    check(fixture.controller.retireEncodedSourcePayload(
+              lock, completionSources[0]) ==
+              dxmt9::core::metalqueue::PostEncodeReceiptResult::Succeeded,
+          "singleton group tail transfers to a post-encode receipt");
+    check(completionSources[0].receipt.valid() &&
+              !completionSources[0].source.valid(),
+          "retired singleton tail has receipt-only completion identity");
+    check(fixture.controller.postEncodeReceiptForTest(
+              1u, dxmt9::core::metalqueue::PostEncodeReceiptState::Active)
+              .has_value(),
+          "receipt remains Active before the mixed submission");
+
+    record.testOnlyAllowNullCommandBuffer = true;
+    record.slotIndex = snapshots[2].slotIndex;
+    record.seqId = snapshots[2].seqId;
+    check(record.assignFixedCompletionSources(completionSources),
+          "mixed completion submission stores receipt and locator tails");
+    check(fixture.controller.submitEncodedSubmission(lock, record),
+          "mixed receipt/locator submission follows production flow");
+    check(fixture.controller.postEncodeReceiptForTest(
+              1u, dxmt9::core::metalqueue::PostEncodeReceiptState::Submitted)
+              .has_value(),
+          "receipt is Submitted alongside resident locator sources");
+  }
+
+  QueueLifecycleController::PendingCompletion pending;
+  pending.slotIndex = record.slotIndex;
+  pending.seqId = record.seqId;
+  check(pending.assignFixedCompletionSources(
+            record.explicitCompletionSourceSpan()),
+        "mixed completion fixture seals its source-order pending record");
+  const auto duplicatePending = pending;
+  fixture.controller.enqueuePendingCompletionForTest(std::move(pending));
+
+  check(fixture.controller.processOnePendingCompletion(),
+        "mixed completion watcher processes receipt and locator sources");
+  checkEq(fixture.completedSeqQueue.size(), std::size_t{3},
+          "mixed completion watcher queues every source in FIFO order");
+  checkEq(fixture.completedSeqQueue[0], 1ull,
+          "receipt source is queued first");
+  checkEq(fixture.completedSeqQueue[1], 2ull,
+          "resident group head is queued second");
+  checkEq(fixture.completedSeqQueue[2], 3ull,
+          "resident group tail is queued third");
+  checkEq(fixture.controller.completedEventSettlementCount(), 0ull,
+          "group history remains private before finish consumes tails");
+  const auto singletonSettlement = CpuReadyTape::ArenaGroupSettlement{
+      .rawOrdinal = 1u,
+      .buildGeneration = 1u,
+      .firstSourceOrdinal = 1u,
+      .tailSeqId = 1u,
+      .sourceCount = 1u,
+      .hasPresent = false,
+  };
+  const auto residentSettlement = CpuReadyTape::ArenaGroupSettlement{
+      .rawOrdinal = 2u,
+      .buildGeneration = 2u,
+      .firstSourceOrdinal = 2u,
+      .tailSeqId = 3u,
+      .sourceCount = 2u,
+      .hasPresent = false,
+  };
+  check(!fixture.controller.hasCompletedArenaGroupSettlement(
+              singletonSettlement.rawOrdinal,
+              singletonSettlement.buildGeneration,
+              singletonSettlement.firstSourceOrdinal,
+              singletonSettlement.tailSeqId, singletonSettlement.sourceCount) &&
+            !fixture.controller.hasCompletedArenaGroupSettlement(
+                residentSettlement.rawOrdinal,
+                residentSettlement.buildGeneration,
+                residentSettlement.firstSourceOrdinal,
+                residentSettlement.tailSeqId, residentSettlement.sourceCount),
+        "neither mixed group tail publishes history before finish");
+
+  std::unique_lock lock(fixture.mutex);
+  check(fixture.controller.runFinishIteration(lock),
+        "finish publishes the receipt-backed singleton tail");
+  checkEq(fixture.controller.completedEventSettlementCount(), 1ull,
+          "first finish publishes exactly the receipt-backed settlement");
+  check(fixture.controller.hasCompletedArenaGroupSettlement(
+            singletonSettlement.rawOrdinal, singletonSettlement.buildGeneration,
+            singletonSettlement.firstSourceOrdinal, singletonSettlement.tailSeqId,
+            singletonSettlement.sourceCount) &&
+            !fixture.controller.hasCompletedArenaGroupSettlement(
+                residentSettlement.rawOrdinal, residentSettlement.buildGeneration,
+                residentSettlement.firstSourceOrdinal, residentSettlement.tailSeqId,
+                residentSettlement.sourceCount),
+        "finish preserves receipt-before-resident group order");
+
+  check(fixture.controller.runFinishIteration(lock),
+        "finish advances over the resident group head without publishing it");
+  checkEq(fixture.controller.completedEventSettlementCount(), 1ull,
+          "resident group settlement waits for its own tail");
+  check(fixture.controller.runFinishIteration(lock),
+        "finish publishes the resident locator-backed group tail");
+  checkEq(fixture.controller.completedEventSettlementCount(), 2ull,
+          "second group settlement publishes after its tail finish");
+  check(fixture.controller.hasCompletedArenaGroupSettlement(
+            residentSettlement.rawOrdinal, residentSettlement.buildGeneration,
+            residentSettlement.firstSourceOrdinal, residentSettlement.tailSeqId,
+            residentSettlement.sourceCount),
+        "resident group tail is present in history after finish");
+
+  lock.unlock();
+  fixture.controller.enqueuePendingCompletionForTest(duplicatePending);
+  check(!fixture.controller.processOnePendingCompletion(),
+        "duplicate mixed completion is rejected after receipt completion");
+  check(fixture.stop, "stale duplicate receipt fail-stops the queue");
+  checkEq(fixture.controller.completedEventSettlementCount(), 2ull,
+          "stale duplicate publishes no additional group history");
+}
+
 void multiSourceSubmitRejectsStaleTailAtomically() {
   QueueFixture fixture;
   fixture.addReadySlot(0, 1);
@@ -3971,6 +4142,7 @@ int main() {
     retainEncodedSourcesAcceptsSelectedPrefixMetadata();
     retainedEncodedHeadCompletesOnlyWithTailCarrier();
     pendingCompletionWatcherExpandsSessionSourcesInOrder();
+    mixedReceiptAndResidentGroupTailsPublishInSourceOrder();
     multiSourceSubmitRejectsStaleTailAtomically();
     submitRejectsWrongRangeAndPresentMetadataAtomically();
     appendPresentRejectsStaleWriterBeforeDereference();

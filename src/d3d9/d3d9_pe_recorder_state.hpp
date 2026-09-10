@@ -125,14 +125,14 @@ struct PeRecorderState {
 // The transaction owner is intentionally part of the recorder footprint; its
 // phase/checkpoint state replaces the former split local observers.
 #if defined(_WIN64)
-static_assert(sizeof(PeRecorderState) == 104120u + sizeof(PeRecorderChunkTransaction));
-static_assert(sizeof(PeRecorderState) == 104296u);
+static_assert(sizeof(PeRecorderState) == 104184u + sizeof(PeRecorderChunkTransaction));
+static_assert(sizeof(PeRecorderState) == 104360u);
 #elif defined(_WIN32)
-static_assert(sizeof(PeRecorderState) == 103376u + sizeof(PeRecorderChunkTransaction));
-static_assert(sizeof(PeRecorderState) == 103496u);
+static_assert(sizeof(PeRecorderState) == 103440u + sizeof(PeRecorderChunkTransaction));
+static_assert(sizeof(PeRecorderState) == 103560u);
 #else
-static_assert(sizeof(PeRecorderState) == 104144u + sizeof(PeRecorderChunkTransaction));
-static_assert(sizeof(PeRecorderState) == 104320u);
+static_assert(sizeof(PeRecorderState) == 104208u + sizeof(PeRecorderChunkTransaction));
+static_assert(sizeof(PeRecorderState) == 104384u);
 #endif
 
 }  // namespace dxmt9::d3d9::pe

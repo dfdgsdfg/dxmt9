@@ -176,10 +176,32 @@ enum class RenderTapeCaptureRejectionReason : std::uint32_t {
   FullSnapshotExtentMismatch = 13u,
   UnmaterializedPreArmObject = 14u,
   ExpectedContentContract = 15u,
+  UnsupportedTextureLodMutation = 16u,
+  UnsupportedExplicitMipGeneration = 17u,
 };
 
 const char* renderTapeCaptureRejectionReasonName(
     RenderTapeCaptureRejectionReason reason) noexcept;
+
+// Texture LOD is resource-owned state consumed by draw replay, but it has no
+// Render Tape descriptor/event representation. Capture must therefore reject
+// only an effective managed-texture transition. The PE caller supplies the
+// already-clamped old/new values so requests that clamp to the current LOD are
+// harmless no-ops.
+constexpr bool renderTapeTextureLodMutationRequiresRejection(
+    bool trackingEnabled, bool managedTexture, std::uint32_t oldLod,
+    std::uint32_t newLod) noexcept {
+  return trackingEnabled && managedTexture && oldLod != newLod;
+}
+
+// The direct public operation has no queue-source identity in the capture
+// journal yet. A hidden pyramid cannot be reconstructed from its public
+// level-zero seed by silently omitting this operation, including before arm.
+constexpr bool renderTapeExplicitMipGenerationRequiresRejection(
+    bool trackingEnabled, bool autogen, std::uint32_t width,
+    std::uint32_t height, std::uint32_t depth) noexcept {
+  return trackingEnabled && autogen && (width > 1u || height > 1u || depth > 1u);
+}
 
 struct RenderTapeLockRect {
   std::int32_t left = 0;

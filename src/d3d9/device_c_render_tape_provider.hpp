@@ -5,6 +5,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <vector>
 
@@ -44,6 +45,180 @@ enum class FrameTapeReplayStatus : std::uint8_t {
   PresentOutputFailed,
   ReadbackFailed,
   OutputMismatch,
+  WarmResetUnsupported,
+  WarmResetFailed,
+};
+
+// The prepared harness is intentionally cold-path only. Compatibility
+// suppresses both direct routes; ProductionSlot retains production Slot
+// admission and fallback. Historical provider replay is unchanged.
+enum class RenderTapePreparedRoute : std::uint8_t {
+  Compatibility,
+  ProductionSlot,
+};
+
+enum class RenderTapePreparedReset : std::uint8_t {
+  FreshDevice,
+  WarmDevice,
+};
+
+struct RenderTapePreparedExecutionOptions {
+  RenderTapePreparedRoute route = RenderTapePreparedRoute::Compatibility;
+  RenderTapePreparedReset reset = RenderTapePreparedReset::FreshDevice;
+  // Cold-harness-only diagnostic. It snapshots only initial mutation seeds
+  // after upload and before the first command effect; historical replay and
+  // the ordinary prepared path leave this disabled.
+  bool auditInitialSeeds = false;
+  // Cold diagnostic for the narrowly proved fresh-owner mutation boundary.
+  bool auditFreshSeedDrains = false;
+  // Cold general-provider-only diagnostic. It stages eligible CompleteSeed
+  // textures before logical replay and transfers them at their definitions.
+  bool auditTexturePrestage = false;
+};
+
+struct RenderTapeFreshSeedDrainEvidence {
+  bool requested = false;
+  bool diagnostic = true;
+  bool attempted = false;
+  bool complete = false;
+  // Coverage is for the resource-mutation preflush audit, independent of the
+  // final pixel oracle. mutationCount includes initial mutations before the
+  // first command; inspectedMutations advances only after each mutation is
+  // successfully applied.
+  std::uint32_t mutationCount = 0u;
+  std::uint32_t inspectedMutations = 0u;
+  std::uint32_t requiredDrains = 0u;
+  std::uint32_t bypassedDrains = 0u;
+};
+
+struct RenderTapeTexturePrestageEvidence {
+  // Object counts track provider-owned wrapper acquisitions/releases, not
+  // every underlying Metal allocation or implicit device/upload resource.
+  bool requested = false;
+  bool diagnostic = true;
+  bool attempted = false;
+  bool complete = false;
+  std::uint32_t candidateObjects = 0u;
+  std::uint32_t candidateSubresources = 0u;
+  std::uint64_t candidateBytes = 0u;
+  std::uint32_t immediateUploadSubresources = 0u;
+  std::uint32_t deferredUploadSubresources = 0u;
+  std::uint32_t initializerFlushes = 0u;
+  std::uint32_t initializerWaits = 0u;
+  std::uint64_t initializerUploadValue = 0u;
+  std::uint32_t activatedObjects = 0u;
+  std::uint32_t consumedSeeds = 0u;
+  std::uint32_t stagedObjectsRemaining = 0u;
+  std::uint32_t stagedSubresourcesRemaining = 0u;
+  std::uint64_t stagedBytesRemaining = 0u;
+  std::uint32_t hiddenObjectsCreated = 0u;
+  std::uint32_t hiddenObjectsReleased = 0u;
+  std::uint32_t activeObjectsCreated = 0u;
+  std::uint32_t activeObjectsReleased = 0u;
+  std::uint32_t physicalObjectsCreated = 0u;
+  std::uint32_t physicalObjectsReleased = 0u;
+  bool physicalConservation = false;
+};
+
+// Pure admission predicate shared by the provider and native truth-table
+// tests. It only admits a first, full seed of an independently-owned texture
+// or buffer after a freshly defined generation and rejects aliases, partials,
+// repeats, and any intervening command epoch.
+bool renderTapeFreshSeedDrainBypassAllowed(
+    const RenderTapeObjectDefineHeader& definition,
+    std::span<const std::byte> descriptor,
+    const RenderTapeResourceMutationHeader& mutation,
+    std::span<const std::byte> mutationBytes,
+    bool defineEpochMatchesCommandEpoch,
+    bool hasSurfaceAlias,
+    bool priorSeedForSubresource) noexcept;
+
+// Pure admission predicate for the cold texture-prestage discriminator. The
+// mutation span is the complete tape mutation table, not a replay prefix.
+bool renderTapeTexturePrestageCandidate(
+    const RenderTapeObjectDefineHeader& definition,
+    std::span<const std::byte> descriptor,
+    std::span<const RenderTapeResourceMutationHeader> mutations,
+    bool hasSurfaceAlias, bool hasSlotGenerationConflict,
+    bool invalidEventOrder) noexcept;
+
+// Positions are in the validated immutable event stream, qualified to one
+// exact texture owner. Seed-before-definition and intervening commands fail
+// closed; native event reducers exercise this same production order check.
+bool renderTapeTexturePrestageOrderAllowed(
+    std::uint32_t definitionPosition,
+    std::span<const std::uint32_t> seedPositions,
+    std::span<const std::uint32_t> commandPositions) noexcept;
+
+enum class RenderTapeInitialSeedAuditKind : std::uint8_t {
+  Color,
+  Depth,
+};
+
+enum class RenderTapeInitialSeedAuditFailure : std::uint8_t {
+  None,
+  Unsupported,
+  BlobUnavailable,
+  ObjectUnavailable,
+  CaptureFailed,
+  DigestMismatch,
+};
+
+struct RenderTapeInitialSeedAuditEntry {
+  RenderTapeInitialSeedAuditKind kind = RenderTapeInitialSeedAuditKind::Color;
+  D9CWireObjectIdentity identity{};
+  std::uint32_t subresource = 0u;
+  RenderTapeDigest expectedDigest{};
+  RenderTapeDigest actualDigest{};
+  std::uint64_t bytes = 0u;
+  bool supported = false;
+  bool match = false;
+  RenderTapeInitialSeedAuditFailure failure =
+      RenderTapeInitialSeedAuditFailure::Unsupported;
+};
+
+struct RenderTapeInitialSeedAuditEvidence {
+  bool requested = false;
+  // The capture flush/readback can perturb queue/resource state. This is a
+  // diagnostic result and must never be included in promotion/performance
+  // claims or used to waive the normal output oracle.
+  bool diagnostic = true;
+  bool perturbative = true;
+  bool attempted = false;
+  bool complete = false;
+  std::uint32_t count = 0u;
+  std::uint32_t matched = 0u;
+  std::uint32_t supportedCount = 0u;
+  std::uint32_t mismatchedCount = 0u;
+  std::uint32_t unsupportedCount = 0u;
+  std::uint32_t captureFailedCount = 0u;
+  std::uint64_t wallNanos = 0u;
+  std::vector<RenderTapeInitialSeedAuditEntry> entries{};
+};
+
+struct RenderTapePreparedTiming {
+  std::uint64_t prepareWallNanos = 0u;
+  std::uint64_t resetWallNanos = 0u;
+  std::uint64_t resourceSetupNanos = 0u;
+  std::uint64_t chunkReplayNanos = 0u;
+  std::uint64_t readbackDrainNanos = 0u;
+  std::uint64_t cleanupNanos = 0u;
+  std::uint64_t replayWallNanos = 0u;
+};
+
+struct RenderTapePreparedEvidence {
+  bool immutableInputOwned = false;
+  bool preflightCompleted = false;
+  bool planReused = false;
+  bool resetPerformed = false;
+  bool resetVerified = false;
+  std::uint64_t prepareCount = 0u;
+  std::uint64_t tapeBytes = 0u;
+  std::uint64_t blobBytes = 0u;
+  std::uint32_t blobCount = 0u;
+  RenderTapePreparedRoute requestedRoute = RenderTapePreparedRoute::Compatibility;
+  RenderTapePreparedReset reset = RenderTapePreparedReset::FreshDevice;
+  RenderTapePreparedTiming timing{};
 };
 
 struct FrameTapeValidityEvidence {
@@ -138,10 +313,47 @@ struct FrameTapeReplayResult {
   // Cold replay-harness artifact: source backbuffer bytes immediately after
   // the Present command drained. This is never a replay input.
   std::vector<std::byte> sourcePixels{};
+  // These fields are populated only by the prepared cold harness.  Existing
+  // provider replay leaves them value-initialized and pays no timing cost.
+  RenderTapePreparedEvidence prepared{};
+  // Populated only when the prepared cold harness is explicitly asked to run
+  // the perturbative initial-seed diagnostic.
+  RenderTapeInitialSeedAuditEvidence initialSeedAudit{};
+  RenderTapeFreshSeedDrainEvidence freshSeedDrainAudit{};
+  RenderTapeTexturePrestageEvidence texturePrestageAudit{};
 
   bool complete() const noexcept {
     return status == FrameTapeReplayStatus::Complete;
   }
+};
+
+// Owns a validated tape, all referenced blob bytes, and the immutable
+// preflight plan.  It is move-only so the PIMPL remains stable while the
+// underlying spans in the plan continue to refer to owned storage.
+class PreparedRenderTape {
+ public:
+  PreparedRenderTape();
+  ~PreparedRenderTape();
+  PreparedRenderTape(PreparedRenderTape&&) noexcept;
+  PreparedRenderTape& operator=(PreparedRenderTape&&) noexcept;
+  PreparedRenderTape(const PreparedRenderTape&) = delete;
+  PreparedRenderTape& operator=(const PreparedRenderTape&) = delete;
+
+  const FrameTapeReplayResult& preflightResult() const noexcept;
+  const FrameTapeReplayResult& preflight() const noexcept;
+  const RenderTapePreparedEvidence& evidence() const noexcept;
+  std::uint64_t prepareCount() const noexcept;
+  bool valid() const noexcept;
+
+ private:
+  struct Impl;
+  std::unique_ptr<Impl> impl_;
+
+  friend PreparedRenderTape prepareRenderTapeIdentity(
+      std::span<const std::byte>, std::span<const RenderTapeProviderBlob>) noexcept;
+  friend FrameTapeReplayResult replayPreparedRenderTapeIdentity(
+      D9CDevice*, const PreparedRenderTape&,
+      RenderTapePreparedExecutionOptions) noexcept;
 };
 
 // Classifies the only accepted bootstrap attachment forms without changing
@@ -183,6 +395,17 @@ FrameTapeReplayResult preflightRenderTapeIdentity(
 FrameTapeReplayResult replayRenderTapeIdentity(
     D9CDevice* device, std::span<const std::byte> tape,
     std::span<const RenderTapeProviderBlob> blobs) noexcept;
+
+// Copies the complete input and performs structural plus digest preflight once.
+// The returned object remains self-contained after caller-owned spans mutate or
+// go out of scope.
+PreparedRenderTape prepareRenderTapeIdentity(
+    std::span<const std::byte> tape,
+    std::span<const RenderTapeProviderBlob> blobs) noexcept;
+
+FrameTapeReplayResult replayPreparedRenderTapeIdentity(
+    D9CDevice* device, const PreparedRenderTape& prepared,
+    RenderTapePreparedExecutionOptions options = {}) noexcept;
 
 // Applies the frame-tape pixel oracle only after strict digest comparison has
 // failed. The expected bytes must be the digest-authenticated production

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "dxmt9_arena_group_identity.hpp"
+
 // Value-only contracts for post-encode payload retirement. Receipt values do
 // not resolve Tape storage; the queue-owned ledger below is the only mutable
 // authority that can activate, submit, and consume them.
@@ -287,8 +289,11 @@ class PostEncodeCompletionLedger {
     PostEncodeCompletionReceipt receipt{};
   };
 
-  Activation activate(std::uint64_t seqId, bool hasPresent) noexcept {
-    if (seqId == 0u) {
+  Activation activate(std::uint64_t seqId, bool hasPresent,
+                      std::optional<ArenaGroupIdentity> group = {}) noexcept {
+    if (seqId == 0u || (group &&
+        (!group->valid() || group->sourceCount != 1u ||
+         group->tailSeqId != seqId || group->hasPresent != hasPresent))) {
       return {};
     }
     const std::size_t slot = seqId % entries_.size();
@@ -305,6 +310,7 @@ class PostEncodeCompletionLedger {
     }
     entry.seqId = seqId;
     entry.hasPresent = hasPresent;
+    entry.group = group;
     entry.state = PostEncodeReceiptState::Active;
     ++depth_;
     peak_ = std::max(peak_, depth_);
@@ -370,11 +376,25 @@ class PostEncodeCompletionLedger {
     if (entry.seqId != seqId) {
       return PostEncodeReceiptResult::Stale;
     }
-    if (entry.state != PostEncodeReceiptState::Completed) {
+    if (entry.state != PostEncodeReceiptState::Completed || entry.group) {
       return PostEncodeReceiptResult::WrongState;
     }
     release(entry);
     return PostEncodeReceiptResult::Succeeded;
+  }
+
+  // A successful GPU completion transfers this obligation exactly once to
+  // the queue's ordered settlement FIFO. Finish must not discard an untaken
+  // obligation, and stale receipt generations cannot consume a newer one.
+  std::optional<ArenaGroupIdentity> takeCompletedArenaGroup(
+      PostEncodeCompletionReceipt receipt) noexcept {
+    auto* entry = resolve(receipt);
+    if (!entry || entry->state != PostEncodeReceiptState::Completed) {
+      return std::nullopt;
+    }
+    auto group = entry->group;
+    entry->group.reset();
+    return group;
   }
 
   bool completed(std::uint64_t seqId) const noexcept {
@@ -421,6 +441,7 @@ class PostEncodeCompletionLedger {
     std::uint64_t generation = 0;
     PostEncodeReceiptState state = PostEncodeReceiptState::Free;
     bool hasPresent = false;
+    std::optional<ArenaGroupIdentity> group;
   };
 
   static constexpr std::uint64_t nextGeneration(
@@ -456,6 +477,7 @@ class PostEncodeCompletionLedger {
     entry.seqId = 0u;
     entry.hasPresent = false;
     entry.state = PostEncodeReceiptState::Free;
+    entry.group.reset();
     entry.generation = nextGeneration(entry.generation);
     --depth_;
   }

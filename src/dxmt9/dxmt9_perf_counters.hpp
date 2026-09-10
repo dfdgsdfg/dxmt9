@@ -508,6 +508,31 @@ struct RenderTapeParallelJoinSnapshot {
 
 RenderTapeParallelJoinSnapshot snapshotRenderTapeParallelJoin() noexcept;
 
+// Cold experiment snapshots read existing counters at quiescent iteration
+// boundaries. No additional writes or diagnostic payloads enter replay/draw.
+struct RenderTapeReplaySnapshot {
+  std::uint64_t continuationCapacityRejected = 0u;
+  std::uint64_t continuationPopulatedFallback = 0u;
+  std::uint64_t continuationCapacityRotated = 0u;
+  std::array<std::uint64_t,
+             static_cast<std::size_t>(DirectChunkSlotReplayDisposition::Count)>
+      dispositions{};
+  std::array<std::uint64_t,
+             static_cast<std::size_t>(DirectChunkSlotReplayOutcome::Count)>
+      outcomes{};
+  std::uint64_t directLeases = 0;
+  std::uint64_t directLeaseDraws = 0;
+  std::uint64_t compatibilityBatches = 0;
+  std::uint64_t compatibilityDraws = 0;
+  std::uint64_t compatibilityUnbatchedDraws = 0;
+  std::uint64_t fallbackDraws = 0;
+  std::uint64_t soaGrowthAfterReserve = 0;
+  std::uint64_t encodeChunks = 0;
+  std::uint64_t gpuErrors = 0;
+};
+
+RenderTapeReplaySnapshot snapshotRenderTapeReplay() noexcept;
+
 void countParallelPassBindingReject(
     encoders::ParallelPassBindingRejectReason reason);
 void countParallelPassBindingSelected(

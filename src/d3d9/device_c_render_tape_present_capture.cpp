@@ -355,6 +355,73 @@ extern "C" int32_t dxmt9c_device_finish_render_tape_identity_capture(
       : dxmt9::core::D3DERR_INVALIDCALL;
 }
 
+extern "C" int32_t dxmt9c_device_wait_render_tape_event_completion(
+    D9CDevice* device, std::uint64_t captureToken,
+    std::uint64_t eventOrdinal) {
+  if (!device || captureToken == 0u || eventOrdinal == 0u) {
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const auto terminalFailure = [&]() noexcept {
+    return dxmt9::d3d9::replayTerminal(device)
+        ? dxmt9::core::D3DERR_DEVICELOST
+        : dxmt9::core::D3DERR_NOTAVAILABLE;
+  };
+  try {
+    // Replay drain is deliberately global, but the settlement below remains
+    // event-exact: no new event is appended and no newer tail is acknowledged.
+    if (!dxmt9::d3d9::drainDeferredReplay(
+            device, "render-tape-event-completion-wait")) {
+      return terminalFailure();
+    }
+    auto upper = device->dev().upperDevice();
+    if (!upper) return dxmt9::core::D3DERR_NOTAVAILABLE;
+    const auto status = device->renderTapeIdentityCapture
+        .waitAndCompleteSettlement(
+            captureToken, eventOrdinal,
+            [&](const D9CRenderTapeIdentitySettlementEntry& expected) {
+              // A non-Present source may park in an open encode session.
+              // Authenticate first, then issue the ordered release fence:
+              // the finish CV alone cannot make that session submit.
+              upper->flush();
+              return upper->queue().waitForCpuReadyEventSettlement(
+                  expected.rawOrdinal, expected.buildGeneration,
+                  expected.firstSourceOrdinal, expected.tailSeqId,
+                  expected.sourceCount);
+            });
+    switch (status) {
+    case dxmt9::d3d9::RenderTapeEventWaitStatus::Completed:
+      return dxmt9::core::D3D_OK;
+    case dxmt9::d3d9::RenderTapeEventWaitStatus::InvalidIdentity:
+    case dxmt9::d3d9::RenderTapeEventWaitStatus::AcknowledgmentFailed:
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    case dxmt9::d3d9::RenderTapeEventWaitStatus::WaitFailed:
+      return terminalFailure();
+    }
+  } catch (...) {
+    return terminalFailure();
+  }
+  return dxmt9::core::D3DERR_NOTAVAILABLE;
+}
+
+extern "C" int32_t dxmt9c_device_wait_for_pending_work(D9CDevice* device) {
+  if (!device) return dxmt9::core::D3DERR_INVALIDCALL;
+  try {
+    if (!dxmt9::d3d9::drainDeferredReplay(
+            device, "render-tape-untracked-completion-wait"))
+      return dxmt9::core::D3DERR_DEVICELOST;
+    auto upper = device->dev().upperDevice();
+    if (!upper) return dxmt9::core::D3DERR_NOTAVAILABLE;
+    // Capture rejection must not remove a successful command's application
+    // completion fence. This fallback never acknowledges a capture event or
+    // issues the operation again; it only settles already accepted work.
+    upper->flush();
+    return upper->queue().hasCompletedPendingWork()
+        ? dxmt9::core::D3D_OK : dxmt9::core::D3DERR_DEVICELOST;
+  } catch (...) {
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
+}
+
 extern "C" void dxmt9c_device_cancel_render_tape_present_capture(
     D9CDevice* device) {
   cancelPresentCapture(device);

@@ -1667,6 +1667,99 @@ void postEncodeRetirementFinishesBeforeGpuCompletion() {
   check(tape.abort(reused->ticket), "reused post-encode fixture aborts cleanly");
 }
 
+void postEncodeArenaIdentityOnlySnapshotsStrictSingleton() {
+  const auto layout = makeMinimalArenaLayout();
+  CpuReadyTape tape{makeSeparatedPayloadConfig(8, 1, 1)};
+  const auto first = tape.reserve(
+      layout.pageCount, layout.usedBytes, CpuReadyAdmissionIdentity{
+          .rawOrdinal = 10,
+          .sourceOrdinal = 20,
+          .seqId = 30,
+          .buildGeneration = 40,
+      });
+  check(first.has_value(), "strict singleton reserves for identity snapshot");
+  publishMinimalArena(tape, *first, layout);
+  check(tape.sealAndPublish(first->ticket, 0, layout.usedBytes),
+        "strict singleton publishes for identity snapshot");
+  std::array<CpuReadyTape::ReadyEntry, 1> ready{};
+  check(tape.copyReadyPrefix(ready) == 1u &&
+            tape.representReadyPrefix(ready),
+        "strict singleton reaches Represented before post-encode retirement");
+
+  const auto source = ready[0].source;
+  const auto snapshot = tape.postEncodeArenaGroupIdentity(
+      source.id, source.storage);
+  const auto expected = dxmt9::core::ArenaGroupIdentity{
+      .rawOrdinal = 10,
+      .buildGeneration = 40,
+      .firstSourceOrdinal = 20,
+      .tailSeqId = 30,
+      .sourceCount = 1,
+      .hasPresent = false,
+  };
+  check(snapshot && *snapshot == expected &&
+            tape.postEncodeArenaGroupIdentity(source.id, source.storage) ==
+                snapshot,
+        "strict singleton snapshots its complete arena-group identity");
+
+  auto owner = tape.beginPostEncodeArenaRetire(source.id, source.storage);
+  check(owner.has_value(), "strict singleton enters post-encode retirement");
+  owner->destroy();
+  check(tape.finishArenaReclaim(source.id, source.storage,
+                                std::move(*owner)),
+        "strict singleton physically reclaims after detached destruction");
+
+  const auto reused = tape.reserve(
+      layout.pageCount, layout.usedBytes, CpuReadyAdmissionIdentity{
+          .rawOrdinal = 11,
+          .sourceOrdinal = 21,
+          .seqId = 31,
+          .buildGeneration = 41,
+      });
+  check(reused.has_value() && reused->id.index == source.id.index &&
+            reused->id.generation != source.id.generation &&
+            reused->storage.generation != source.storage.generation,
+        "post-encode retirement permits generation-qualified physical reuse");
+  check(snapshot && *snapshot == expected &&
+            !tape.postEncodeArenaGroupIdentity(source.id, source.storage),
+        "the copied group identity survives reclaim and rejects the stale locator");
+  abortArena(tape, *reused);
+
+  CpuReadyTape legacy{makeConfig(1, 1, 1, 1, 1, 0, 1, 0)};
+  const auto legacySource = legacy.reserve();
+  check(legacySource.has_value() &&
+            representPublished(legacy, *legacySource, 90),
+        "legacy source publishes for strict-group eligibility check");
+  check(!legacy.postEncodeArenaGroupIdentity(legacySource->id,
+                                              legacySource->storage),
+        "legacy payloads have no arena-group identity to transfer");
+
+  CpuReadyTape grouped{makeSeparatedPayloadConfig(8, 8, 1)};
+  const std::array segmentLayouts{layout};
+  const auto sourceLayout = makeArenaSourcePayloadLayout(
+      segmentLayouts, 4096, 8);
+  check(sourceLayout.has_value(),
+        "multimember strict source layout validates");
+  const std::array layouts{*sourceLayout, *sourceLayout};
+  const auto batch = grouped.reserveArenaBatch(layouts, 70, 80, 90, 100);
+  check(batch.has_value(),
+        "multimember strict group reserves for eligibility check");
+  for (std::size_t i = 0; i < batch->count; ++i) {
+    publishMinimalArena(grouped, batch->reservations[i], layout);
+  }
+  check(grouped.sealAndPublishArenaBatch(
+            *batch, std::array<std::size_t, 2>{0u, 1u}),
+        "multimember strict group publishes atomically");
+  std::array<CpuReadyTape::ReadyEntry, 2> groupedReady{};
+  check(grouped.copyReadyPrefix(groupedReady) == groupedReady.size() &&
+            grouped.representReadyPrefix(groupedReady) &&
+            !grouped.postEncodeArenaGroupIdentity(
+                groupedReady[0].source.id, groupedReady[0].source.storage) &&
+            !grouped.postEncodeArenaGroupIdentity(
+                groupedReady[1].source.id, groupedReady[1].source.storage),
+        "multimember strict groups remain ineligible for singleton retirement");
+}
+
 void rawLegacyAndStrictAdmissionShareRawHighWater() {
   CpuReadyTape tape{makeSeparatedPayloadConfig(6, 6, 2)};
   const auto layout = makeMinimalArenaLayout();
@@ -2143,6 +2236,7 @@ int main() {
     segmentedArenaPublishesAndReclaimsAsOneSource();
     arenaOwnerReclaimIsTwoPhaseAndGenerationScoped();
     postEncodeRetirementFinishesBeforeGpuCompletion();
+    postEncodeArenaIdentityOnlySnapshotsStrictSingleton();
     rawLegacyAndStrictAdmissionShareRawHighWater();
     compatibilityAndStrictIdentityShareHighWater();
     reservationRejectsCorruptTargetPageWithoutMutation();
