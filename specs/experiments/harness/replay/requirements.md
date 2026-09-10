@@ -1182,3 +1182,33 @@ alongside renderer knobs without dumping unrelated process secrets. Enabled
 or unknown nonempty validation settings make the run diagnostic and ineligible
 for policy-performance acceptance even when its pixel oracle passes. Failed
 diagnostic receipts and actual readbacks remain preserved.
+
+**R-HARN-REPLAY-8.7** CPU policy experiments must separate semantic
+qualification from low-perturbation measurement. Both modes must execute the
+same admitted production replay, Slot construction, resource mutations,
+publication, completion and reset policy. Measurement must not hash draw or
+resource contents or collect per-draw semantic observations. It must retain
+production safety checks and cheap execution/conservation counters. A measured
+receipt must not claim a fresh semantic or pixel oracle. Acceptance requires
+successful detailed qualification bound to the same immutable input, loaded
+images, effective policy and reset/backend configuration. Changed or missing
+bindings invalidate acceptance. Failed and warm-up iterations are retained
+and never silently folded into successful measured totals.
+
+**R-HARN-REPLAY-8.8** A versioned CPU policy interface must permit independent
+batching and capacity choices on an unchanged authenticated Tape. Policies
+must be bounded and validated before runtime effects. Requested and effective
+values must be recorded, including any production clamp. Commands,
+coordinator effects and qualified lifetimes must remain ordered across physical
+batch changes. Unsupported combinations must fail explicitly rather than
+silently substituting the baseline. Actual publication/source counts,
+direct/fallback work and capacity outcomes must identify the executed policy.
+
+**R-HARN-REPLAY-8.9** Cross-policy CPU qualification must compare ordered
+semantic observations independent of physical publication layout. The
+measurement aggregate must bind each measured policy to its own qualification
+and require reference/candidate semantic equality before reporting a qualified
+cost comparison. Phase labels must distinguish observer-heavy verification
+from low-perturbation execution; process CPU and wall time remain separate.
+CPU costs exclude real encoder/GPU execution, Wine supply and production
+concurrency unless those boundaries are explicitly executed and qualified.

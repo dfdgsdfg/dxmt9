@@ -155,6 +155,97 @@ shared across iterations. Core/queue/runtime cache owners are recreated, even
 when the CPU-visible Metal device lease is shared. This is not warm PSO reuse
 or a claim that opaque driver caches are reset.
 
+## Qualified low-observer measurement and CPU policies
+
+R-HARN-REPLAY-8.7–8.9 add a separate `cpu-policy-compare` operation. It owns
+one unchanged authenticated Tape and two versioned policy values. It first
+executes detailed qualification for both policies and compares every ordered
+draw observation, ignoring physical source boundaries. Only successful
+qualification permits low-observer measurement. Each measured child is bound
+to its own qualification receipt, input components, native/validator/loaded
+image identities, policy, environment and reset/backend settings. Rebuilding
+a provider invalidates the binding. Missing or changed evidence is a named
+failure, never an implicit baseline run.
+
+`dxmt9.render_tape.cpu_policy.v1` has exactly these fields:
+
+| Field | Supported values / execution owner |
+|---|---|
+| `schema` | `dxmt9.render_tape.cpu_policy.v1` |
+| `replay_route` | `compatibility` or `production-slot` |
+| `draw_command_limit` | `0` or `3..64`; nonzero only for compatibility. Applies the existing queue DrawLimit policy, not a new wire grammar. |
+| `slot_headroom_bytes` | `0` or `1..64 MiB`; positive only for production-slot. Applies actual empty-payload provisioning. |
+| `aggregate_headroom_bytes` | Both capacity fields zero, or at least the per-slot value and at most `512 MiB`. Applies the actual aggregate retained-capacity lease. |
+
+These are independent axes where the existing production route supports them;
+ignored combinations are rejected. Production-slot does not honor the ordinary
+compatibility DrawLimit, so a nonzero limit with that route is invalid rather
+than falsely labelled a batching experiment. This interface does not yet add
+deferred Direct publication across original raw events. All original event and
+record order is retained, including coordinator commands.
+
+Policy experiments use the admitted general-frame grammar, immediate
+after-command completion, one pending submitted source and no payload-byte
+auto-split, source oracle, delayed mutation or external completion schedule.
+The controller may drain multiple Ready sources after replaying one raw. A
+compatibility raw contains at most 64 records; nonzero limits below three are
+rejected because the no-worker producer could exhaust its 31 inflight credits
+before the controller regains control. A bounded exhaustive append/split model
+pins this admission rule. The original richer lifetime qualification modes
+remain available separately, unchanged.
+
+Both run modes recreate the same runtime owners per iteration and share the
+same CPU-visible native resource device. Measurement omits semantic hashing,
+per-draw observations, resource closure byte proofs and observer phase clocks;
+it keeps actual production imports, copies, locks, resource ownership,
+submission identity, controlled completion and reset checks. Source command/
+draw summaries and existing runtime perf counters remain enabled and reported:
+this is low-observer service timing, not a claim of zero instrumentation.
+Measurement phase fields are unmeasured, not zero-cost phases; only iteration
+wall and process CPU time are cost observations. Semantic/pixel oracle flags
+are false, and qualification provenance is separate from measured execution.
+
+Warm-up iterations follow the same reset policy, are individually validated
+and retained, but are excluded from measured statistics. Failed/slow samples
+remain in raw receipts. Actual direct/compatibility counts, source counts,
+DrawLimit publications, provisioning/reuse/failure and aggregate denials show
+which path executed. A policy difference alone is not evidence of an exercised
+mechanism or a performance gain. Neither this CPU result nor the bounded
+model proves real encoder/GPU execution, Wine arrival timing or concurrent
+worker scheduling.
+
+Run from the repository root, using a new output directory:
+
+```sh
+bash scripts/run_python.sh scripts/tools/run_dxmt9_render_tape.py cpu-policy-compare \
+  experiments/render-tapes/gt2-v2-20260909-r4-capture64/frame-1292677716873100-1 \
+  --reference-policy experiments/render-tape-policies/compatibility-exact.json \
+  --candidate-policy experiments/render-tape-policies/compatibility-batch-4.json \
+  --repeat 16 --warmup 2 --output-dir experiments/output/cpu-policy-batch
+```
+
+For capacity, use `production-exact.json` and `production-headroom-5m.json`.
+Passing the same policy twice is the A/A control. Each policy uses a fresh
+child process because the production knobs are cached at startup. The wrapper
+retains two verification iterations and all `warmup + repeat` measurement
+iterations per policy. `verify/{reference,candidate}/result.json` owns detailed
+semantic evidence; `measure/{reference,candidate}/result.json` reports
+`execution_valid=true`, `accepted=false`, and `semantic_qualified=false` for a
+successful timing-only child. Only the parent comparison can qualify its cost.
+Its receipt names and hashes each measurement and its own verification receipt,
+records the warm-up split, and re-authenticates input/provider/loaded images
+before publication. The two canonical policy files and raw child streams remain
+in the output. Failed comparison aggregates expose no successful timing totals.
+
+`dxmt9-render-tape-cpu-policy-spec` exhaustively checks bounded admission and
+tiny-limit queue-exhaustion counterexamples. Compile-time assertions bind its
+record/ring/headroom bounds to the actual grammar and production constants.
+`dxmt9-render-tape-cpu-measurement-spec` pins verify/measure/verify execution;
+`dxmt9-render-tape-cpu-policy-python-spec` and
+`dxmt9-render-tape-cpu-policy-cli-spec` pin acceptance, stale/missing evidence,
+warm-up failures and the public native-backed comparison workflow. Existing
+`cpu-compare` lifetime/schedule modes remain separate and unchanged.
+
 ## Controlled completion
 
 A bounded schedule identifies submissions and release points by iteration,

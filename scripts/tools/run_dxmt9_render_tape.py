@@ -15,6 +15,14 @@ import subprocess
 import sys
 from typing import Any, Optional
 
+# Policy qualification is kept in a small, importable module so the
+# measurement lane cannot accidentally reuse the full-oracle acceptance gate.
+try:
+    import render_tape_cpu_policy
+except ModuleNotFoundError:  # importlib-loaded checks do not set script dir
+    sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    import render_tape_cpu_policy
+
 
 SCHEMA = "dxmt9.render_tape.bundle.v2"
 EVENTS_NAME = "events.bin"
@@ -1660,6 +1668,8 @@ def _cpu_general_frame_accepts(
     input_inspection: dict[str, Any] | None,
     max_pending: int | None = None,
     source_binding: dict[str, Any] | None = None,
+    cpu_policy: dict[str, Any] | None = None,
+    measurement: bool = False,
 ) -> bool:
     """Strict acceptance for the complete-frame CPU resource lane.
 
@@ -1713,10 +1723,29 @@ def _cpu_general_frame_accepts(
     expected_mipmap_count = _cpu_general_mipmap_count(input_inspection)
     if expected_counts is None or expected_mipmap_count is None:
         return False
+    if measurement or cpu_policy is not None:
+        if (completion != "after-command" or effective_max_pending != 1
+                or source_binding is not None or cpu_policy is None):
+            return False
+        try:
+            cpu_policy = render_tape_cpu_policy.validate_policy(cpu_policy)
+            actual_policy = render_tape_cpu_policy.validate_policy(result.get("cpu_policy"))
+        except ValueError:
+            return False
+        if (cpu_policy["replay_route"] != route
+                or actual_policy != cpu_policy
+                or result.get("run_mode") != ("measure" if measurement else "verify")
+                or result.get("phase_accounting") !=
+                   ("iteration-only" if measurement else "scoped-observations")
+                or result.get("runtime_perf_counters") is not True):
+            return False
+    elif result.get("run_mode", "verify") != "verify":
+        return False
     policy = result.get("effective_cpu_policy")
     expected_policy = {
         "reset": "fresh-device", "cpu_ready_arena": False,
-        "draw_command_limit": 0, "draw_payload_limit": 0,
+        "draw_command_limit": cpu_policy["draw_command_limit"] if cpu_policy else 0,
+        "draw_payload_limit": 0,
         "early_prefix": False, "gpu_submit": False}
     if (not isinstance(policy, dict) or policy.keys() != expected_policy.keys()
             or any(type(policy[key]) is not type(value) or policy[key] != value
@@ -1794,7 +1823,20 @@ def _cpu_general_frame_accepts(
             return False
         if not _cpu_native_time_valid(result, iteration):
             return False
-        if (iteration.get("logical_resource_oracle_complete") is not True
+        if measurement:
+            if (any(phase_ns.values())
+                    or iteration.get("full_oracle_calls") != 0
+                    or iteration.get("semantic_digest") != "0"
+                    or iteration.get("draw_observations") != []
+                    or iteration.get("logical_resource_oracle_complete") is not False
+                    or iteration.get("physical_texture_oracle") is not False
+                    or iteration.get("buffer_backing_oracle_complete") is not False
+                    or iteration.get("buffer_backing_observed") is not False
+                    or any(iteration.get(key) != 0 for key in (
+                        "buffer_snapshot_observations", "buffer_live_binding_observations",
+                        "buffer_binding_observations"))):
+                return False
+        elif (iteration.get("logical_resource_oracle_complete") is not True
                 or iteration.get("physical_texture_oracle") is not False
                 or iteration.get("buffer_backing_oracle_complete") is not True
                 or iteration.get("buffer_backing_observed") is not True
@@ -1803,7 +1845,7 @@ def _cpu_general_frame_accepts(
         snapshots = iteration.get("buffer_snapshot_observations")
         live_bindings = iteration.get("buffer_live_binding_observations")
         bindings = iteration.get("buffer_binding_observations")
-        if (type(snapshots) is not int or snapshots < 0
+        if not measurement and (type(snapshots) is not int or snapshots < 0
                 or type(live_bindings) is not int or live_bindings < 0
                 or type(bindings) is not int or bindings <= 0
                 or bindings != snapshots + live_bindings
@@ -1869,7 +1911,17 @@ def _cpu_general_frame_accepts(
                 or iteration["draw_count"] != expected_counts["draws"]
                 or (route == "compatibility" and iteration["direct_draws"] != 0)):
             return False
-        if not _cpu_decimal_uint64(iteration.get("semantic_digest")):
+        if cpu_policy is not None:
+            policy_counters = ("source_summary_commands", "source_summary_draws",
+                               "slot_provisioned", "slot_provision_reused",
+                               "slot_provision_failed", "capacity_lease_denied",
+                               "draw_limit_publishes", "full_oracle_calls")
+            if (any(type(iteration.get(key)) is not int or iteration[key] < 0
+                    for key in policy_counters)
+                    or iteration["source_summary_draws"] != expected_counts["draws"]
+                    or (not measurement and iteration["full_oracle_calls"] == 0)):
+                return False
+        if not measurement and not _cpu_decimal_uint64(iteration.get("semantic_digest")):
             return False
         if (source_binding is not None and iteration["semantic_digest"] !=
                 source_binding.get("reference_semantic_digest")):
@@ -2034,6 +2086,11 @@ def _cpu_general_frame_accepts(
                     or (discards and iteration["retained_buffers_after_mutation"] < discards)
                     or (not held_events and iteration["retained_buffers_after_mutation"] != 0)):
                 return False
+        if measurement:
+            if require_path and iteration[
+                    "direct_draws" if route == "production-slot" else "compatibility_draws"] <= 0:
+                return False
+            continue
         observations = iteration.get("draw_observations")
         if not isinstance(observations, list) or len(observations) != iteration["draw_count"]:
             return False
@@ -2700,6 +2757,30 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
     provider_environment = dict(os.environ)
     validation_diagnostic = experiment_metal_validation_enabled(provider_environment)
     grammar = getattr(args, "grammar", "bounded")
+    run_mode = getattr(args, "run_mode", "verify")
+    policy_lane = bool(getattr(args, "policy_lane", False))
+    policy = render_tape_cpu_policy.validate_policy({
+        "schema": render_tape_cpu_policy.SCHEMA,
+        "replay_route": args.replay_route,
+        "draw_command_limit": getattr(args, "draw_command_limit", 0),
+        "slot_headroom_bytes": getattr(args, "slot_headroom_bytes", 0),
+        "aggregate_headroom_bytes": getattr(args, "aggregate_headroom_bytes", 0),
+    })
+    if run_mode not in ("verify", "measure"):
+        raise SystemExit("CPU run mode must be verify or measure")
+    if grammar != "general-frame" and run_mode != "verify":
+        raise SystemExit("measure mode requires general-frame")
+    warmup = getattr(args, "warmup", 0)
+    if warmup:
+        raise SystemExit("warmup is owned by cpu-policy-compare, not cpu-experiment")
+    has_policy = any(policy[key] for key in (
+        "draw_command_limit", "slot_headroom_bytes", "aggregate_headroom_bytes"))
+    if (run_mode == "measure" or has_policy) and not policy_lane:
+        raise SystemExit("measurement and nondefault policies require --policy-lane")
+    if policy_lane and (grammar != "general-frame" or args.completion != "after-command"
+                        or args.max_pending != 1 or args.completion_plan is not None
+                        or getattr(args, "source_projection", None) is not None):
+        raise SystemExit("policy lane requires general-frame, after-command, max-pending=1")
     source_projection = getattr(args, "source_projection", None)
     if source_projection is not None and (
             grammar != "general-frame" or args.completion != "before-next-work"
@@ -2712,7 +2793,7 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
                          "repeat>=2 and no fault/completion plan")
     if grammar not in ("bounded", "general-frame"):
         raise SystemExit("CPU grammar must be bounded or general-frame")
-    if not 1 <= args.repeat <= 32 or args.timeout_seconds <= 0:
+    if not 1 <= args.repeat <= 32 or warmup < 0 or args.repeat + warmup > 32 or args.timeout_seconds <= 0:
         raise SystemExit("CPU repeat must be in [1,32] and timeout must be positive")
     if not 0 <= args.max_pending <= 32:
         raise SystemExit("CPU max-pending must be in [0,32]")
@@ -2773,6 +2854,13 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
                    "--publication", args.publication,
                    "--completion", args.completion,
                    "--fault", args.fault, "--max-pending", str(args.max_pending)]
+        if grammar == "general-frame":
+            command += ["--run-mode", run_mode]
+        if policy_lane:
+            command += [
+                        "--draw-command-limit", str(policy["draw_command_limit"]),
+                        "--slot-headroom-bytes", str(policy["slot_headroom_bytes"]),
+                        "--aggregate-headroom-bytes", str(policy["aggregate_headroom_bytes"])]
         if source_binding is not None:
             command += ["--source-oracle", str(output / "source-projection" / "source-oracle.bin"),
                         "--source-projection-sha256", source_binding["projection_sha256"]]
@@ -2808,6 +2896,15 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
         except (json.JSONDecodeError, ValueError):
             result = {"status": "timeout" if exit_code is None else "invalid-receipt"}
         images_stable = experiment_images_stable(result)
+        policy_valid = True
+        if policy_lane:
+            policy_valid = _cpu_general_frame_accepts(
+                result, repeat=args.repeat, route=args.replay_route,
+                require_path=args.require_path, completion=completion,
+                resource_backend=args.resource_backend, publication=args.publication,
+                fault=args.fault, completion_plan=plan,
+                input_inspection=input_inspection, max_pending=args.max_pending,
+                cpu_policy=policy, measurement=run_mode == "measure")
         execution_valid = (exit_code == 0
                     and result.get("fault") == args.fault
                     and type(result.get("max_pending")) is int
@@ -2815,7 +2912,8 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
                     and result.get("completion_plan_sha256") == plan_digest
                     and digest(provider) == binary_digest and images_stable
                     and digest(args.validator) == validator_digest
-                    and cpu_experiment_accepts(
+                    and policy_valid
+                    and (policy_lane or cpu_experiment_accepts(
                         result, repeat=args.repeat, route=args.replay_route,
                         completion=completion, require_path=args.require_path,
                         completion_plan=plan, resource_backend=args.resource_backend,
@@ -2823,14 +2921,16 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
                         fault=args.fault, publication=args.publication,
                         input_inspection=input_inspection, grammar=grammar,
                         max_pending=args.max_pending,
-                        source_binding=source_binding))
-        accepted = args.fault == "none" and execution_valid and not validation_diagnostic
+                        source_binding=source_binding)))
+        accepted = (run_mode == "verify" and args.fault == "none"
+                    and execution_valid and not validation_diagnostic)
         fault_oracle_passed = args.fault == "managed-allocation" and execution_valid
         receipt = {"schema": "dxmt9.render_tape.cpu_experiment_artifact.v1",
                    "accepted": accepted, "provider_exit_code": exit_code,
                    "diagnostic": args.fault != "none" or validation_diagnostic,
                    "metal_validation_diagnostic": validation_diagnostic,
                    "execution_valid": execution_valid,
+                   "semantic_qualified": accepted,
                    "renderer_environment": experiment_renderer_environment(provider_environment),
                    "fault_oracle_passed": fault_oracle_passed,
                    "loaded_images_stable": images_stable,
@@ -2844,6 +2944,10 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
                                           "DXMT_PERF_COUNTERS": "1",
                                           "DXMT9_DISABLE_PRESENT_BOUNDARY": "1",
                                           "DXMT9_SYNC_PRESENT_FLUSH": "0",
+                                          **({"DXMT9_DRAW_CHUNK_COMMAND_LIMIT": str(policy["draw_command_limit"]),
+                                              "DXMT9_DIRECT_SLOT_HEADROOM_BYTES": str(policy["slot_headroom_bytes"]),
+                                              "DXMT9_DIRECT_SLOT_AGGREGATE_HEADROOM_BYTES": str(policy["aggregate_headroom_bytes"])}
+                                             if policy_lane else {}),
                                           **({"DXMT9_DIRECT_SLOT_HEADROOM_BYTES": "0",
                                               "DXMT9_DIRECT_SLOT_AGGREGATE_HEADROOM_BYTES": "0"}
                                              if args.publication == "draw-island" else {})},
@@ -2854,7 +2958,9 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
                                  "resource_backend": args.resource_backend,
                                  "publication": args.publication,
                                  "require_backing_oracle": args.require_backing_oracle,
-                                 "fault": args.fault, "max_pending": args.max_pending},
+                                 "fault": args.fault, "max_pending": args.max_pending,
+                                 "run_mode": run_mode, "warmup": warmup,
+                                 "cpu_policy": policy, "policy_lane": policy_lane},
                    "result": result, "gpu_evidence": False}
         # Preserve every observation without multiplying indentation across
         # per-iteration source traces and the paired parent's embedded copies.
@@ -2865,7 +2971,9 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
     print(json.dumps({"accepted": accepted, "output": str(args.output_dir.resolve()),
                       "fault_oracle_passed": fault_oracle_passed,
                       "status": result.get("status")}, sort_keys=True))
-    return 0 if accepted or fault_oracle_passed else 1
+    return 0 if accepted or fault_oracle_passed or (
+        policy_lane and run_mode == "measure" and execution_valid
+        and not validation_diagnostic) else 1
 
 
 def _cpu_compare_failed_artifacts(
@@ -4048,6 +4156,9 @@ def parser() -> argparse.ArgumentParser:
     cpu_parser.add_argument("--validator", type=pathlib.Path,
                             default=pathlib.Path("build/tools/dxmt9-render-tape"))
     cpu_parser.add_argument("--repeat", type=int, default=16)
+    cpu_parser.add_argument("--run-mode", choices=("verify", "measure"), default="verify",
+                            help="full-oracle verification or low-observer measurement")
+    cpu_parser.add_argument("--policy-lane", action="store_true", help=argparse.SUPPRESS)
     cpu_parser.add_argument("--grammar", choices=("bounded", "general-frame"),
                             default="bounded",
                             help="bounded32-event oracle, or complete-frame general oracle")
@@ -4074,8 +4185,27 @@ def parser() -> argparse.ArgumentParser:
                             default="none", help="CPU adapter boundary failure; never a passing policy sample")
     cpu_parser.add_argument("--max-pending", type=int, default=32,
                             help="bounded pending completion budget; zero is a negative control")
+    cpu_parser.add_argument("--draw-command-limit", type=int, default=0)
+    cpu_parser.add_argument("--slot-headroom-bytes", type=int, default=0)
+    cpu_parser.add_argument("--aggregate-headroom-bytes", type=int, default=0)
     cpu_parser.add_argument("--require-path", action="store_true")
     cpu_parser.set_defaults(function=cpu_fixed_input_experiment)
+    policy_compare_parser = subparsers.add_parser(
+        "cpu-policy-compare",
+        help="qualify two versioned CPU policies, then measure them without semantic observation",
+    )
+    policy_compare_parser.add_argument("bundle", type=pathlib.Path)
+    policy_compare_parser.add_argument("--reference-policy", type=pathlib.Path, required=True)
+    policy_compare_parser.add_argument("--candidate-policy", type=pathlib.Path, required=True)
+    policy_compare_parser.add_argument("--repeat", type=int, default=16)
+    policy_compare_parser.add_argument("--warmup", type=int, default=2)
+    policy_compare_parser.add_argument("--output-dir", type=pathlib.Path, required=True)
+    policy_compare_parser.add_argument("--provider", type=pathlib.Path, default=pathlib.Path(
+        "build/tests/native/backend/dxmt9-cpu-ready-production-routing-spec"))
+    policy_compare_parser.add_argument("--validator", type=pathlib.Path, default=pathlib.Path(
+        "build/tools/dxmt9-render-tape"))
+    policy_compare_parser.add_argument("--timeout-seconds", type=int, default=30)
+    policy_compare_parser.set_defaults(function=render_tape_cpu_policy.cpu_policy_compare)
     compare_parser = subparsers.add_parser(
         "cpu-compare",
         help="compare compatibility and production-slot CPU Tape replays",

@@ -402,7 +402,57 @@ def rejected_staging_retention_tests(module):
         assert not list(root.glob(".default-cleanup.rejected-*"))
 
 
+def native_free_policy_mode_contract_tests(module):
+    inspection, verify = _general_frame_fixture()
+    policy = module.render_tape_cpu_policy.default_policy("production-slot")
+    verify.update(run_mode="verify", cpu_policy=policy, max_pending=1,
+                  phase_accounting="scoped-observations", runtime_perf_counters=True)
+    row = verify["iterations"][0]
+    row.update(full_oracle_calls=1, source_summary_commands=1, source_summary_draws=1,
+               slot_provisioned=0, slot_provision_reused=0, slot_provision_failed=0,
+               capacity_lease_denied=0, draw_limit_publishes=0)
+    options = dict(repeat=1, route="production-slot", require_path=True,
+                   completion="after-command", resource_backend="cpu-metal-resources",
+                   publication="per-command", fault="none", completion_plan=None,
+                   input_inspection=inspection, max_pending=1, cpu_policy=policy)
+    assert module._cpu_general_frame_accepts(verify, **options)
+    measure = copy.deepcopy(verify)
+    measure.update(run_mode="measure", phase_accounting="iteration-only")
+    measured = measure["iterations"][0]
+    measured.update(full_oracle_calls=0, semantic_digest="0", draw_observations=[],
+                    logical_resource_oracle_complete=False,
+                    buffer_backing_oracle_complete=False, buffer_backing_observed=False,
+                    buffer_snapshot_observations=0, buffer_live_binding_observations=0,
+                    buffer_binding_observations=0, buffer_backing_oracle="not-applicable",
+                    phase_ns={key: 0 for key in row["phase_ns"]})
+    assert module._cpu_general_frame_accepts(measure, **options, measurement=True)
+    assert not module._cpu_general_frame_accepts(measure, **options)
+    assert not module._cpu_general_frame_accepts(verify, **options, measurement=True)
+    for field, value in (("full_oracle_calls", 1), ("semantic_digest", "1"),
+                         ("logical_resource_oracle_complete", True),
+                         ("buffer_binding_observations", 1), ("source_summary_draws", 0),
+                         ("complete", False), ("reset_ok", False),
+                         ("native_cpu_ns", -1), ("reclaimed", 0)):
+        broken = copy.deepcopy(measure)
+        broken["iterations"][0][field] = value
+        assert not module._cpu_general_frame_accepts(
+            broken, **options, measurement=True), field
+    for field in ("source_summary_draws", "slot_provisioned", "capacity_lease_denied",
+                  "full_oracle_calls", "buffer_binding_observations"):
+        broken = copy.deepcopy(measure)
+        del broken["iterations"][0][field]
+        assert not module._cpu_general_frame_accepts(
+            broken, **options, measurement=True), field
+    broken = copy.deepcopy(measure)
+    broken["iterations"][0]["phase_ns"]["observe"] = 1
+    assert not module._cpu_general_frame_accepts(broken, **options, measurement=True)
+    broken = copy.deepcopy(measure)
+    broken["iterations"][0]["trace"][0]["source_generation"] = 0
+    assert not module._cpu_general_frame_accepts(broken, **options, measurement=True)
+
+
 def native_free_general_frame_contract_tests(module):
+    native_free_policy_mode_contract_tests(module)
     inspection, result = _general_frame_fixture()
     options = dict(repeat=1, route="production-slot", completion="after-command",
                    require_path=True, resource_backend="cpu-metal-resources",

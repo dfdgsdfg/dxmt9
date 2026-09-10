@@ -125,6 +125,11 @@ struct CpuGeneralTapeExecutionResult {
   std::size_t observedLiveBindings = 0u;
   std::size_t sourceOracleCheckedSources = 0u;
   std::size_t observedMutations = 0u;
+  // Cheap counts taken from each published source payload.  These remain
+  // available when semantic observation is disabled for timing samples.
+  std::size_t sourceSummaryCommands = 0u;
+  std::size_t sourceSummaryDraws = 0u;
+  std::size_t fullOracleCalls = 0u;
   bool logicalResourceOracleComplete = false;
 };
 
@@ -274,6 +279,11 @@ class CpuGeneralTapeExecutor {
     bool deferOneObjectReleaseForResetTest = false;
     bool dropRetiredAliasReceiptForTest = false;
     PendingIdentityFault pendingIdentityFault = PendingIdentityFault::None;
+    // Measurement keeps production replay and lifetime work intact while
+    // omitting the cold semantic/resource oracle.  It is intentionally
+    // constrained to immediate, single-source publication until the caller
+    // has a qualified batching policy.
+    bool measurement = false;
   };
 
   CpuGeneralTapeExecutor(Fixture& fixture, const Plan& plan,
@@ -283,6 +293,17 @@ class CpuGeneralTapeExecutor {
   Result run() {
     Result result;
     result.events = plan_.events.size();
+    if (options_.measurement &&
+        (options_.beforeNextWork || options_.maxPendingSources != 1u ||
+         !options_.sourceOracle.empty() || options_.holdSafeBufferMutation ||
+         options_.corruptRetainedBytesForTest ||
+         options_.corruptRetainedBytesAfterMutationForTest ||
+         options_.deferOneObjectReleaseForResetTest ||
+         options_.dropRetiredAliasReceiptForTest ||
+         options_.pendingIdentityFault != PendingIdentityFault::None)) {
+      result.failure = "general-executor-measurement-policy";
+      return result;
+    }
     if (options_.maxPendingSources < 1u || options_.maxPendingSources > 2u) {
       result.failure = "general-executor-max-pending-sources-bound";
       return result;
@@ -471,7 +492,9 @@ class CpuGeneralTapeExecutor {
             std::uint32_t, std::span<const std::uint8_t> bytes) {
           const bool exact = handle == expectedUploadHandle &&
               level == expectedUploadLevel && bytes.size() == expectedUploadBytes.size() &&
-              !bytes.empty() && std::memcmp(bytes.data(), expectedUploadBytes.data(), bytes.size()) == 0;
+              !bytes.empty() &&
+              (options_.measurement ||
+               std::memcmp(bytes.data(), expectedUploadBytes.data(), bytes.size()) == 0);
           observedUpload |= exact;
           return exact;
         };
@@ -497,7 +520,9 @@ class CpuGeneralTapeExecutor {
       return false;
     };
 
-    const auto setupBegin = std::chrono::steady_clock::now();
+    const auto setupBegin = options_.measurement
+        ? std::chrono::steady_clock::time_point{}
+        : std::chrono::steady_clock::now();
     const auto create = [&](const auto& definition) {
       if (objects.size() >= kCpuGeneralMaxObjects)
         return static_cast<void*>(nullptr);
@@ -505,7 +530,7 @@ class CpuGeneralTapeExecutor {
           fixture_.cDevice.get(), definition.fixed, definition.descriptor,
           blobs_, objects);
     };
-    result.setupNs += elapsed(setupBegin);
+    if (!options_.measurement) result.setupNs += elapsed(setupBegin);
 
     // Pending sources are retained in submission order. Every potentially
     // blocking work entry remains quiescent; wrapper destruction and
@@ -520,12 +545,17 @@ class CpuGeneralTapeExecutor {
           return true;
         return fail(event, "general-executor-pending-identity-count");
       }
-      const auto completionBegin = std::chrono::steady_clock::now();
+      const auto completionBegin = options_.measurement
+          ? std::chrono::steady_clock::time_point{}
+          : std::chrono::steady_clock::now();
       struct CompletionTiming {
         Result& result;
         std::chrono::steady_clock::time_point begin;
-        ~CompletionTiming() { result.completionNs += elapsed(begin); }
-      } completionTiming{result, completionBegin};
+        bool enabled = true;
+        ~CompletionTiming() {
+          if (enabled) result.completionNs += elapsed(begin);
+        }
+      } completionTiming{result, completionBegin, !options_.measurement};
       if (result.submitted < result.completed ||
           result.submitted - result.completed != pendingSources.size() ||
           Access::pendingCompletionCount(fixture_.routing->queue_) !=
@@ -613,12 +643,20 @@ class CpuGeneralTapeExecutor {
           return fail(event, "general-executor-schedule-submit-failed");
         auto submission = Access::submitOneWithheld(
             fixture_.routing->queue_, [&](const auto& payload) {
-              const auto observeBegin = std::chrono::steady_clock::now();
-              std::string observeFailure;
+              const auto observeBegin = options_.measurement
+                  ? std::chrono::steady_clock::time_point{}
+                  : std::chrono::steady_clock::now();
               {
                 for (std::size_t command = 0u; command < payload.commandCount(); ++command) {
                   const auto sourceCommand = payload.commandAt(command);
-                  if (sourceCommand.kind() == core::MetalCommandKind::GenerateMipmaps &&
+                  ++result.sourceSummaryCommands;
+                  if (sourceCommand.kind() == core::MetalCommandKind::DrawRun)
+                    result.sourceSummaryDraws += sourceCommand.command.drawParams.size();
+                  if (options_.measurement &&
+                      sourceCommand.kind() == core::MetalCommandKind::GenerateMipmaps)
+                    ++result.mipmapCommands;
+                  if (!options_.measurement &&
+                      sourceCommand.kind() == core::MetalCommandKind::GenerateMipmaps &&
                       sourceCommand.command.generateMipmaps) {
                     const auto handle = sourceCommand.command.generateMipmaps->texture;
                     const auto object = std::find_if(objects.begin(), objects.end(), [&](const auto& value) {
@@ -636,6 +674,7 @@ class CpuGeneralTapeExecutor {
                           reinterpret_cast<std::uintptr_t>(record)});
                     }
                   }
+                  if (options_.measurement) continue;
                   core::visitSourceCommandResources(payload.commandAt(command), [&](const auto& ref) {
                     if (ref.entry.kind != core::ChunkHandleKind::Buffer ||
                         std::find(candidate.resourceBuffers.begin(), candidate.resourceBuffers.end(),
@@ -675,47 +714,52 @@ class CpuGeneralTapeExecutor {
                   ++result.sourceOracleCheckedSources;
                 }
               }
-              auto resource = [&](std::uint32_t kind, core::Handle handle,
-                                  std::uint64_t& hash) {
-                return observeResource(objects, receipts, tombstones,
-                                       kind, handle, hash);
-              };
-              auto draw = [&](std::uint64_t cumulativeHash) {
-                if (result.drawObservations.size() >= kCpuGeneralMaxDraws) {
-                  observeFailure = "general-executor-draw-cap";
-                  return false;
+              if (!options_.measurement) {
+                std::string observeFailure;
+                ++result.fullOracleCalls;
+                auto resource = [&](std::uint32_t kind, core::Handle handle,
+                                    std::uint64_t& hash) {
+                  return observeResource(objects, receipts, tombstones,
+                                         kind, handle, hash);
+                };
+                auto draw = [&](std::uint64_t cumulativeHash) {
+                  if (result.drawObservations.size() >= kCpuGeneralMaxDraws) {
+                    observeFailure = "general-executor-draw-cap";
+                    return false;
+                  }
+                  result.drawObservations.push_back({
+                      .ordinal = static_cast<std::uint32_t>(
+                          result.drawObservations.size() + 1u),
+                      .publicationEvent = event,
+                      .cumulativeSemanticDigest = cumulativeHash});
+                  return true;
+                };
+                const auto observeSnapshotForSource =
+                    [&](core::Handle buffer,
+                        const core::DrawBufferBindingSnapshot& snapshot,
+                        std::uint64_t& digest) {
+                      return observeSnapshot(candidate, buffer, snapshot, digest);
+                    };
+                const auto observeLiveForSource =
+                    [&](core::Handle buffer, std::uint64_t& digest,
+                        std::uint64_t& revision) {
+                      return observeLive(candidate, buffer, digest, revision);
+                    };
+                if (!observeCpuTapePayload(payload, result.digest, resource, draw,
+                                           observeFailure, &result.observedSnapshots,
+                                           observeSnapshotForSource,
+                                           &result.observedLiveBindings,
+                                           observeLiveForSource,
+                                           &result.mipmapCommands) &&
+                    result.failure.empty()) {
+                  result.failure = observeFailure.empty()
+                                       ? "general-executor-observe-failed"
+                                       : observeFailure;
+                  result.failedEvent = event;
                 }
-                result.drawObservations.push_back({
-                    .ordinal = static_cast<std::uint32_t>(
-                        result.drawObservations.size() + 1u),
-                    .publicationEvent = event,
-                    .cumulativeSemanticDigest = cumulativeHash});
-                return true;
-              };
-              const auto observeSnapshotForSource =
-                  [&](core::Handle buffer,
-                      const core::DrawBufferBindingSnapshot& snapshot,
-                      std::uint64_t& digest) {
-                    return observeSnapshot(candidate, buffer, snapshot, digest);
-                  };
-              const auto observeLiveForSource =
-                  [&](core::Handle buffer, std::uint64_t& digest,
-                      std::uint64_t& revision) {
-                    return observeLive(candidate, buffer, digest, revision);
-                  };
-              if (!observeCpuTapePayload(payload, result.digest, resource, draw,
-                                         observeFailure, &result.observedSnapshots,
-                                         observeSnapshotForSource,
-                                         &result.observedLiveBindings,
-                                         observeLiveForSource,
-                                         &result.mipmapCommands) &&
-                  result.failure.empty()) {
-                result.failure = observeFailure.empty()
-                                     ? "general-executor-observe-failed"
-                                     : observeFailure;
-                result.failedEvent = event;
               }
-              result.observeNs += elapsed(observeBegin);
+              if (!options_.measurement)
+                result.observeNs += elapsed(observeBegin);
             });
         if (!submission.dequeued || !submission.submitted) {
           return fail(event, "general-executor-submit-failed");
@@ -753,7 +797,9 @@ class CpuGeneralTapeExecutor {
       if (result.commands + imported.records.size() >
           kCpuGeneralMaxCommandRecords)
         return fail(event, "general-executor-command-cap");
-      const auto replayBegin = std::chrono::steady_clock::now();
+      const auto replayBegin = options_.measurement
+          ? std::chrono::steady_clock::time_point{}
+          : std::chrono::steady_clock::now();
       const bool windowEligible = options_.maxPendingSources > 1u && overlapEligible(chunk, event);
       if (Access::readyCount(fixture_.routing->queue_) ||
           Access::writingCommandCount(fixture_.routing->queue_) ||
@@ -775,7 +821,7 @@ class CpuGeneralTapeExecutor {
               fixture_.cDevice.get(), chunk.bytes, chunk.envelope, resolved,
               options_.route) != core::D3D_OK)
         return fail(event, "general-executor-command-replay-failed");
-      result.replayNs += elapsed(replayBegin);
+      if (!options_.measurement) result.replayNs += elapsed(replayBegin);
       result.commands += imported.records.size();
       for (const auto& record : imported.records) {
         if (record.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
@@ -1022,7 +1068,9 @@ class CpuGeneralTapeExecutor {
           if (action == CpuTapeWindowAction::ReleaseOldest && !releaseOne(event)) return false;
           if (action == CpuTapeWindowAction::DrainAll && !releasePending(event)) return false;
         }
-        const auto eventBegin = std::chrono::steady_clock::now();
+        const auto eventBegin = options_.measurement
+            ? std::chrono::steady_clock::time_point{}
+            : std::chrono::steady_clock::now();
         switch (replayEvent.type) {
         case dxmt9::d3d9::RenderTapeEventType::BootstrapState:
           bootstrapPending = true;
@@ -1103,7 +1151,9 @@ class CpuGeneralTapeExecutor {
           dxmt9::d3d9::render_tape_runtime::releaseOwnedObject(*object);
           ++result.resourcesReleased;
           if (result.submitted != result.completed) {
-            const auto retentionBegin = std::chrono::steady_clock::now();
+            const auto retentionBegin = options_.measurement
+                ? std::chrono::steady_clock::time_point{}
+                : std::chrono::steady_clock::now();
             CpuGeneralTapeDestroyWindow window{.event = event + 1u};
             // No mutation/work is allowed in this pending epoch. A wrapper
             // release must not destroy a submitted draw's concrete bytes.
@@ -1145,7 +1195,7 @@ class CpuGeneralTapeExecutor {
             }
             window.retentionValid = true;
             result.destroyWindows.push_back(std::move(window));
-            result.observeNs += elapsed(retentionBegin);
+            if (!options_.measurement) result.observeNs += elapsed(retentionBegin);
           }
           break;
         }
@@ -1156,8 +1206,9 @@ class CpuGeneralTapeExecutor {
           break;
         }
         if (replayEvent.type == d3d9::RenderTapeEventType::ObjectDefine ||
-            replayEvent.type == d3d9::RenderTapeEventType::ResourceMutation)
-          result.setupNs += elapsed(eventBegin);
+            replayEvent.type == d3d9::RenderTapeEventType::ResourceMutation) {
+          if (!options_.measurement) result.setupNs += elapsed(eventBegin);
+        }
       }
       if (bootstrapPending && !bootstrapDone && !replayBootstrap(
                                       plan_.events.empty()
@@ -1183,7 +1234,9 @@ class CpuGeneralTapeExecutor {
       }
     }
 
-    const auto cleanupBegin = std::chrono::steady_clock::now();
+    const auto cleanupBegin = options_.measurement
+        ? std::chrono::steady_clock::time_point{}
+        : std::chrono::steady_clock::now();
     // Failed execution is not an accepted sample, but it must still settle
     // every actually published no-GPU source before dropping retained owners.
     if (!result.complete) {
@@ -1248,10 +1301,21 @@ class CpuGeneralTapeExecutor {
         Access::readyCount(fixture_.routing->queue_) == 0u &&
         Access::writingCommandCount(fixture_.routing->queue_) == 0u &&
         Access::residentCount(fixture_.routing->queue_) == 0u;
-    result.cleanupNs = elapsed(cleanupBegin);
-    result.logicalResourceOracleComplete = result.failure.empty() &&
-        result.observedMutations == plan_.mutations.size() &&
-        result.drawObservations.size() == result.draws;
+    if (!options_.measurement) result.cleanupNs = elapsed(cleanupBegin);
+    if (options_.measurement) {
+      // A successful lifecycle/reset sample is not a semantic or pixel
+      // oracle; the omitted observer counters must remain zero.
+      if (result.sourceSummaryDraws != result.draws && result.failure.empty()) {
+        result.failure = "general-executor-measurement-draw-conservation";
+        result.complete = false;
+      }
+      result.digest = 0u;
+      result.logicalResourceOracleComplete = false;
+    } else {
+      result.logicalResourceOracleComplete = result.failure.empty() &&
+          result.observedMutations == plan_.mutations.size() &&
+          result.drawObservations.size() == result.draws;
+    }
     result.complete = result.complete && result.resetOk;
     if (!result.resetOk && result.failure.empty())
       result.failure = resetOutstandingObjectObserved

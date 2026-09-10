@@ -511,6 +511,11 @@ RenderTapeParallelJoinSnapshot snapshotRenderTapeParallelJoin() noexcept;
 // Cold experiment snapshots read existing counters at quiescent iteration
 // boundaries. No additional writes or diagnostic payloads enter replay/draw.
 struct RenderTapeReplaySnapshot {
+  std::uint64_t slotProvisioned = 0u;
+  std::uint64_t slotProvisionReused = 0u;
+  std::uint64_t slotProvisionFailed = 0u;
+  std::uint64_t capacityLeaseDenied = 0u;
+  std::uint64_t drawLimitPublishes = 0u;
   std::uint64_t continuationCapacityRejected = 0u;
   std::uint64_t continuationPopulatedFallback = 0u;
   std::uint64_t continuationCapacityRotated = 0u;

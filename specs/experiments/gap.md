@@ -9,6 +9,20 @@ tags: [specs, gap, experiments]
 
 ## Fixed-input replay experiment
 
+R-HARN-REPLAY-8.7–8.9 are qualified for the bounded immediate-completion CPU
+policy lane. Separate full-oracle and low-observer modes execute the same
+production replay/Slot/Pool operations. `cpu-policy-compare` binds measured
+execution to its own detailed qualification, immutable input, policies and
+image identities; warm-ups/failures remain preserved. GT2 A/A r159,
+compatibility DrawLimit 0/4 r156 and production exact/headroom r157 each pass
+two verification plus two warm-up and 16 measured iterations per policy.
+All 1,420 ordered draws match; batch source counts change 39→130, while
+headroom records two provisions and 34 reuses. Native r151/r154, final CLI
+r160 and full TLA r148 pass. These are CPU-service experiments, not Direct
+cross-raw batching, concurrent scheduling, GPU pixels or FPS promotion.
+See the [measurement leaf](../../docs/perfomance/mini-replay-bisection/cpu-policy-measurement.02.md)
+and `harness/replay/fixed-input-experiment.md` for evidence and exact bounds.
+
 R-HARN-REPLAY-8.1–8.6 are specified in
 [fixed-input-experiment.md](harness/replay/fixed-input-experiment.md).
 Status: **partial qualification, usable bounded experiment surfaces**. The

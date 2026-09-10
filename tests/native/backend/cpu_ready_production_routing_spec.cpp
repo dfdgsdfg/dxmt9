@@ -12,6 +12,7 @@
 #include "render_tape_cpu_grammar.hpp"
 #include "render_tape_cpu_general_grammar.hpp"
 #include "render_tape_cpu_general_executor.hpp"
+#include "render_tape_cpu_policy.hpp"
 #include "render_tape_cpu_source_admission.hpp"
 #include "render_tape_cpu_destroy_fixture.hpp"
 #include "render_tape_cpu_alias_fixture.hpp"
@@ -61,6 +62,14 @@ namespace {
 
 using dxmt9::test::CpuSourceOracleRow;
 using dxmt9::test::decodeCpuSourceOracle;
+
+// Keep the bounded no-worker policy proof tied to the actual grammar and
+// queue ring, rather than silently proving a stale test-only capacity.
+static_assert(dxmt9::test::kCpuTapeMaxRecordsPerRaw ==
+              dxmt9::d3d9::render_tape_runtime::GeneralCpuAdmissionCaps{}.maxRecordsPerChunk);
+static_assert(dxmt9::test::kCpuTapeMaxPendingPerRaw == dxmt9::kMaxQueuedChunks);
+static_assert(dxmt9::test::kCpuTapeMinSlotHeadroomBytes >=
+              dxmt9::core::kDirectSlotMinHeadroomBytes);
 
 static_assert(!std::is_copy_constructible_v<
               dxmt9::d3d9::CpuReadySemanticTransfer>);
@@ -5938,6 +5947,9 @@ void textureUploadObservationTracksPlainABAndReadOnlyLock() {
 struct CpuTapeExperimentOptions {
   std::string tapePath;
   bool generalFrame = false;
+  bool measurement = false;
+  bool policyExplicit = false;
+  dxmt9::test::CpuTapePolicy policy{};
   std::vector<std::string> blobPaths;
   std::string sourceOraclePath;
   std::string sourceProjectionSha256;
@@ -7438,6 +7450,12 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
               << "}\n";
     return 3;
   };
+  if (!dxmt9::test::cpuTapePolicyValid(options.policy) ||
+      ((options.measurement || options.policyExplicit) &&
+       (options.beforeNextWork || options.afterDestroy || options.maxPending != 1u ||
+        !options.sourceOraclePath.empty() || !options.sourceProjectionSha256.empty()))) {
+    return reject("unsupported-mode", "cpu-policy-requires-immediate-single-pending");
+  }
   if (options.resourceBackend != CpuTapeResourceBackend::MetalResources ||
       options.afterDestroy || !options.completionPlanPath.empty() ||
       options.fault != "none" || options.maxPending == 0u || options.maxPending > 2u ||
@@ -7533,7 +7551,8 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
           .beforeNextWork = options.beforeNextWork,
           .maxPendingSources = options.maxPending,
           .holdSafeBufferMutation = sourceOracleRequested,
-          .sourceOracle = sourceOracleRows});
+          .sourceOracle = sourceOracleRows,
+          .measurement = options.measurement});
       iterationResult.execution = executor.run();
       iterationResult.after = dxmt9::perf::snapshotRenderTapeReplay();
       iterationResult.direct = iterationResult.after.directLeaseDraws -
@@ -7543,7 +7562,8 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
       auto& execution = iterationResult.execution;
       if (execution.complete &&
           (execution.draws != admission.counts.draws ||
-           execution.drawObservations.size() != execution.draws ||
+           (!options.measurement && execution.drawObservations.size() != execution.draws) ||
+           execution.sourceSummaryDraws != execution.draws ||
            execution.resourcesCreated != admission.counts.objects ||
            execution.resourcesReleased != execution.resourcesCreated ||
            execution.submitted != execution.completed ||
@@ -7581,6 +7601,14 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
       });
   std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1","grammar":"general-frame","semantic_projection":"final-slot-general-v2","backend":"cpu-metal-resources","resource_execution":"cpu-visible-metal-no-gpu-submit","timing_backend":"encode-substituted","status":)"
             << std::quoted(complete ? "complete" : "unresolved")
+            << R"(,"run_mode":)" << std::quoted(options.measurement ? "measure" : "verify")
+            << R"(,"phase_accounting":)"
+            << std::quoted(options.measurement ? "iteration-only" : "scoped-observations")
+            << R"(,"runtime_perf_counters":true,"cpu_policy":{"schema":"dxmt9.render_tape.cpu_policy.v1","replay_route":)"
+            << std::quoted(options.compatibility ? "compatibility" : "production-slot")
+            << R"(,"draw_command_limit":)" << options.policy.drawCommandLimit
+            << R"(,"slot_headroom_bytes":)" << options.policy.slotHeadroomBytes
+            << R"(,"aggregate_headroom_bytes":)" << options.policy.aggregateHeadroomBytes << '}'
             << R"(,"replay_route":)" << std::quoted(options.compatibility ? "compatibility" : "production-slot")
             << R"(,"publication":"per-command","completion":)"
             << std::quoted(options.beforeNextWork ? "before-next-work" : "after-command")
@@ -7608,7 +7636,9 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
             << R"(,"native_cpu_clock":)" << std::quoted(
                 nativeCpuAvailable ? "process" : "unavailable")
             << R"(,"reset_policy":"fresh-device","cache_policy":"fresh-runtime","shared_native_resource_device":true)"
-            << R"(,"effective_cpu_policy":{"reset":"fresh-device","cpu_ready_arena":false,"draw_command_limit":0,"draw_payload_limit":0,"early_prefix":false,"gpu_submit":false})"
+            << R"(,"effective_cpu_policy":{"reset":"fresh-device","cpu_ready_arena":false,"draw_command_limit":)"
+            << options.policy.drawCommandLimit
+            << R"(,"draw_payload_limit":0,"early_prefix":false,"gpu_submit":false})"
             << R"(,"import_ns":)" << importNs
             << R"(,"input_counts":{"events":)" << admission.counts.events
             << R"(,"objects":)" << admission.counts.objects
@@ -7629,6 +7659,9 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
               << R"(,"semantic_digest":")" << result.digest << '"'
               << R"(,"command_count":)" << result.commands
               << R"(,"draw_count":)" << result.draws
+              << R"(,"full_oracle_calls":)" << result.fullOracleCalls
+              << R"(,"source_summary_commands":)" << result.sourceSummaryCommands
+              << R"(,"source_summary_draws":)" << result.sourceSummaryDraws
               << R"(,"direct_draws":)" << iteration.direct
               << R"(,"mipmap_command_count":)" << result.mipmapCommands
               << R"(,"retained_mipmap_textures_after_destroy":)"
@@ -7637,6 +7670,11 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
               << R"(,"capacity_rejected":)" << iteration.after.continuationCapacityRejected - iteration.before.continuationCapacityRejected
               << R"(,"populated_fallback":)" << iteration.after.continuationPopulatedFallback - iteration.before.continuationPopulatedFallback
               << R"(,"capacity_rotated":)" << iteration.after.continuationCapacityRotated - iteration.before.continuationCapacityRotated
+              << R"(,"slot_provisioned":)" << iteration.after.slotProvisioned - iteration.before.slotProvisioned
+              << R"(,"slot_provision_reused":)" << iteration.after.slotProvisionReused - iteration.before.slotProvisionReused
+              << R"(,"slot_provision_failed":)" << iteration.after.slotProvisionFailed - iteration.before.slotProvisionFailed
+              << R"(,"capacity_lease_denied":)" << iteration.after.capacityLeaseDenied - iteration.before.capacityLeaseDenied
+              << R"(,"draw_limit_publishes":)" << iteration.after.drawLimitPublishes - iteration.before.drawLimitPublishes
               << R"(,"resources_created":)" << result.resourcesCreated
               << R"(,"resources_released":)" << result.resourcesReleased
               << R"(,"logical_resource_oracle_complete":)"
@@ -8279,6 +8317,74 @@ void generalCpuSourceOracleUsesAuthenticatedClosures() {
                                    std::span<const CpuSourceOracleRow>(&oversized, 1u)),
                                decoded),
         "source oracle decoder rejects more than 512 identities per row");
+}
+
+void generalCpuMeasurementOmitsOracleOnly() {
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  const auto tape = dxmt9::d3d9::test::makeGeneralCpuDestroyFixture(true, true);
+  std::vector<dxmt9::d3d9::RenderTapeProviderBlob> blobs;
+  for (const auto& bytes : tape.blobs)
+    blobs.push_back({dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes), bytes});
+  runtime::GeneralPreflightPlan plan;
+  check(runtime::buildGeneralReplayPlan(tape.tape, blobs, plan).complete() &&
+            runtime::admitGeneralCpuPlan(plan).accepted(),
+        "measurement fixture must pass unchanged general admission");
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE, "measurement CPU-visible device");
+  PresentParameters output{};
+  output.backBufferWidth = plan.outputDesc.width;
+  output.backBufferHeight = plan.outputDesc.height;
+  output.backBufferFormat = dxmt9::d3d9::devicec::fmtFromD3D(plan.outputDesc.format);
+  output.backBufferCount = 1u;
+  output.windowed = true;
+  output.deviceWindow = Handle{91};
+  output.presentationInterval = PresentInterval::Immediate;
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+      RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+  for (const auto route : {dxmt9::d3d9::ProviderReplayPolicy::Compatibility,
+                           dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot}) {
+    std::optional<Executor::Result> reference;
+    for (unsigned phase = 0u; phase < 3u; ++phase) {
+      const bool measurement = phase == 1u;
+      RuntimeFixture fixture(false, false, true, false,
+                             WMT::Device{resourceDevice.handle}, nullptr, &output);
+      Executor executor(fixture, plan, blobs, {.route = route,
+                                             .measurement = measurement});
+      auto result = executor.run();
+      check(result.complete && result.resetOk, "measurement executes and resets: " + result.failure);
+      check(result.draws > 0u && result.sourceSummaryDraws == result.draws &&
+                result.resourcesCreated == result.resourcesReleased &&
+                result.submitted == result.completed && result.completed == result.reclaimed,
+            "both modes preserve actual draw, source and resource conservation");
+      if (!reference) reference = result;
+      check(result.commands == reference->commands && result.draws == reference->draws &&
+                result.sourceSummaryCommands == reference->sourceSummaryCommands &&
+                result.submitted == reference->submitted,
+            "measurement must not replace semantic counts with physical batching counts");
+      if (measurement) {
+        check(result.fullOracleCalls == 0u && result.drawObservations.empty() &&
+                  result.observedSnapshots == 0u && result.observedLiveBindings == 0u &&
+                  result.sourceOracleCheckedSources == 0u && result.digest == 0u &&
+                  !result.logicalResourceOracleComplete && result.observeNs == 0u &&
+                  result.replayNs == 0u && result.setupNs == 0u &&
+                  result.completionNs == 0u && result.cleanupNs == 0u,
+              "measurement has no full oracle, per-draw proof or phase-clock result");
+      } else {
+        check(result.fullOracleCalls > 0u && result.logicalResourceOracleComplete &&
+                  result.drawObservations.size() == result.draws && result.digest == reference->digest,
+              "verification surrounding measurement retains the detailed semantic oracle");
+      }
+    }
+    RuntimeFixture fixture(false, false, true, false,
+                           WMT::Device{resourceDevice.handle}, nullptr, &output);
+    Executor unsupported(fixture, plan, blobs, {.route = route,
+        .beforeNextWork = true, .measurement = true});
+    const auto rejected = unsupported.run();
+    check(!rejected.complete && rejected.resourcesCreated == 0u && rejected.submitted == 0u &&
+              rejected.failure == "general-executor-measurement-policy",
+          "unqualified measurement schedule rejects before resource effects");
+  }
 }
 
 void generalCpuResetQualificationUsesFreshFixtures() {
@@ -8968,6 +9074,7 @@ int main(int argc, char** argv) {
                       std::string_view(argv[1]) == "--general-cpu-mutation-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-source-oracle-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-reset-spec" ||
+                      std::string_view(argv[1]) == "--general-cpu-measurement-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-alias-spec" ||
                       std::string_view(argv[1]) ==
                           "--two-pending-production-sources-spec" ||
@@ -8995,6 +9102,8 @@ int main(int argc, char** argv) {
         generalCpuSourceOracleUsesAuthenticatedClosures();
       else if (std::string_view(argv[1]) == "--general-cpu-reset-spec")
         generalCpuResetQualificationUsesFreshFixtures();
+      else if (std::string_view(argv[1]) == "--general-cpu-measurement-spec")
+        generalCpuMeasurementOmitsOracleOnly();
       else if (std::string_view(argv[1]) == "--general-cpu-alias-spec")
         generalCpuAliasAfterParentDestroyUsesImmutableIdentity();
       else if (std::string_view(argv[1]) ==
@@ -9083,6 +9192,24 @@ int main(int argc, char** argv) {
           const std::string_view value(argv[++index]);
           if (value == "compatibility") options.compatibility = true;
           else if (value != "production-slot") throw TestFailure("invalid route");
+        } else if (argument == "--run-mode" && index + 1 < argc) {
+          const std::string_view value(argv[++index]);
+          if (value == "measure") options.measurement = true;
+          else if (value != "verify") throw TestFailure("invalid CPU run mode");
+        } else if ((argument == "--draw-command-limit" ||
+                    argument == "--slot-headroom-bytes" ||
+                    argument == "--aggregate-headroom-bytes") && index + 1 < argc) {
+          const std::string_view value(argv[++index]);
+          if (value.empty() || !std::all_of(value.begin(), value.end(),
+                  [](char c) { return c >= '0' && c <= '9'; }))
+            throw TestFailure("CPU policy requires unsigned decimal values");
+          const auto parsed = std::stoull(std::string(value));
+          if (parsed > std::numeric_limits<std::size_t>::max())
+            throw TestFailure("CPU policy integer overflow");
+          if (argument == "--draw-command-limit") options.policy.drawCommandLimit = parsed;
+          else if (argument == "--slot-headroom-bytes") options.policy.slotHeadroomBytes = parsed;
+          else options.policy.aggregateHeadroomBytes = parsed;
+          options.policyExplicit = true;
         } else if (argument == "--completion" && index + 1 < argc) {
           const std::string_view value(argv[++index]);
           options.afterDestroy = false;
@@ -9143,13 +9270,23 @@ int main(int argc, char** argv) {
            !options.sourceProjectionSha256.empty()) && !options.generalFrame) {
         throw TestFailure("source oracle requires general-frame grammar");
       }
+      options.policy.compatibility = options.compatibility;
+      if ((options.measurement || options.policyExplicit) && !options.generalFrame)
+        throw TestFailure("CPU measurement/policy interface requires general-frame grammar");
+      if (!dxmt9::test::cpuTapePolicyValid(options.policy))
+        throw TestFailure("invalid CPU batch/capacity policy");
       setenv("DXMT9_OFFLOAD_COMMIT_REPLAY",
              options.fault == "managed-allocation" ? "1" : "0", 1);
       if (options.generalFrame) {
-        // The CPU controller services completions only between immutable
-        // chunks. Pin the no-internal-split baseline before cached knobs are
-        // read; this is a reported harness policy, not production pacing.
-        setenv("DXMT9_DRAW_CHUNK_COMMAND_LIMIT", "0", 1);
+        // The checked compatibility limit bounds all internal publications
+        // below the no-worker queue's inflight ceiling. Capacity options use
+        // the real cached production provisioning policy, before first use.
+        setenv("DXMT9_DRAW_CHUNK_COMMAND_LIMIT",
+               std::to_string(options.policy.drawCommandLimit).c_str(), 1);
+        setenv("DXMT9_DIRECT_SLOT_HEADROOM_BYTES",
+               std::to_string(options.policy.slotHeadroomBytes).c_str(), 1);
+        setenv("DXMT9_DIRECT_SLOT_AGGREGATE_HEADROOM_BYTES",
+               std::to_string(options.policy.aggregateHeadroomBytes).c_str(), 1);
         setenv("DXMT9_CHUNK_DRAW_PAYLOAD_ARENA_LIMIT_BYTES", "0", 1);
         setenv("DXMT9_CPU_READY_TAPE", "0", 1);
         setenv("DXMT9_CPU_READY_EARLY_PREFIX", "0", 1);

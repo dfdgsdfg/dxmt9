@@ -27,6 +27,14 @@ the apparatus that made [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) p
 
 ## Latest Conclusions
 
+The [qualified low-observer CPU policy interface](cpu-policy-measurement.02.md)
+now compares unchanged GT2 input with separate semantic qualification and
+measurement processes. A/A, compatibility command-limit 0/4 and Direct
+exact/headroom comparisons pass with 1,420 identical ordered draws. Actual
+source-count and provisioning changes are observed; iteration service timing
+omits detailed proof work but retains runtime counters. This is a bounded
+replay/Slot experiment interface, not an encode/GPU or wild FPS result.
+
 The [fixed-input replay experiment](fixed-input-replay.01.md) adds a separate
 production replay/Slot policy loop: authenticated PE Tape, same-process warm
 Metal repetition and bounded completion fixtures with actual Metal-buffer

@@ -1101,6 +1101,11 @@ RenderTapeParallelJoinSnapshot snapshotRenderTapeParallelJoin() noexcept {
 RenderTapeReplaySnapshot snapshotRenderTapeReplay() noexcept {
   const Counters& c = counters();
   RenderTapeReplaySnapshot result;
+  result.slotProvisioned = load(c.directChunkSlotSlotProvisioned);
+  result.slotProvisionReused = load(c.directChunkSlotSlotProvisionReused);
+  result.slotProvisionFailed = load(c.directChunkSlotSlotProvisionFailed);
+  result.capacityLeaseDenied = load(c.directSlotCapacityLeaseDenials);
+  result.drawLimitPublishes = load(c.chunkPublishReasonDrawLimit);
   result.continuationCapacityRejected =
       load(c.directChunkSlotContinuationCapacityRejected);
   result.continuationPopulatedFallback =

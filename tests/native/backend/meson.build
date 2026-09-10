@@ -474,6 +474,18 @@ test('dxmt9-render-tape-cpu-phase-ledger-spec',
      args: ['--cpu-tape-phase-ledger-spec'],
      env: dxmt9_native_test_env)
 
+test('dxmt9-render-tape-cpu-measurement-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--general-cpu-measurement-spec'],
+     env: dxmt9_native_test_env)
+
+cpu_policy_spec = executable(
+  'dxmt9-render-tape-cpu-policy-spec',
+  'render_tape_cpu_policy_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+test('dxmt9-render-tape-cpu-policy-spec', cpu_policy_spec)
+
 cpu_source_admission_spec = executable(
   'dxmt9-render-tape-cpu-source-admission-spec',
   'render_tape_cpu_source_admission_spec.cpp',

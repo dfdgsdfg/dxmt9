@@ -1,0 +1,7 @@
+{
+  "schema": "dxmt9.render_tape.cpu_policy.v1",
+  "replay_route": "production-slot",
+  "draw_command_limit": 0,
+  "slot_headroom_bytes": 0,
+  "aggregate_headroom_bytes": 0
+}
