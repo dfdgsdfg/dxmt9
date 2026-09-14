@@ -4,6 +4,8 @@
 #include "device_c_common.hpp"
 #include "device_c_render_tape_capture.hpp"
 #include "device_c_render_tape_capture_layout.hpp"
+#include "device_c_render_tape_identity.hpp"
+#include "device_c_render_tape_source_plan.hpp"
 #include "device_c_render_tape_runtime_objects.hpp"
 #include "dxmt9/dxmt9_format_convert.hpp"
 #include "dxmt9/dxmt9_device.hpp"
@@ -28,6 +30,71 @@ using Definition = render_tape_runtime::Definition;
 using Chunk = render_tape_runtime::CommandChunkView;
 using GeneralPreflightPlan = render_tape_runtime::GeneralPreflightPlan;
 
+constexpr std::size_t kMaxSourceReplayPublications =
+    static_cast<std::size_t>(kProviderSourceReplayMaxRecords) * 2u + 1u;
+
+// Cold diagnostic plan: all record spans are admitted before any tape effect.
+// Capture source/seq labels remain provenance; the queue owns fresh identities.
+struct SourceBoundaryReplayPlan {
+  CaptureSourceReplayPlan sources{};
+  std::vector<std::vector<std::uint32_t>> batchCuts{};
+};
+
+bool buildSourceBoundaryReplayPlan(
+    std::span<const std::byte> tape, const GeneralPreflightPlan& plan,
+    std::span<const std::byte> sidecar,
+    std::span<const RenderTapeBatchCut> batchCuts, SourceBoundaryReplayPlan& out,
+    RenderTapeSourceBoundaryEvidence& evidence) noexcept {
+  try {
+    if (batchCuts.size() > 4096u) return false;
+    for (std::size_t i = 1u; i < batchCuts.size(); ++i) {
+      const auto& a = batchCuts[i - 1u];
+      const auto& b = batchCuts[i];
+      if (b.eventOrdinal < a.eventOrdinal ||
+          (b.eventOrdinal == a.eventOrdinal && b.beforeRecord <= a.beforeRecord))
+        return false;
+    }
+    SourceBoundaryReplayPlan candidate;
+    if (buildCaptureSourceReplayPlan(tape, plan, sidecar, candidate.sources) !=
+        CaptureSourceReplayPlanStatus::Valid) return false;
+    candidate.batchCuts.resize(plan.commandChunks.size());
+    std::size_t nextBatchCut = 0u;
+    for (const auto& event : plan.events) {
+      if (event.type != RenderTapeEventType::CommandChunk) continue;
+      if (event.index >= candidate.batchCuts.size()) return false;
+      const auto ordinal = plan.tape.event(event.eventIndex).header.ordinal;
+      const auto ranges = candidate.sources.rangesForCommandChunk(event.index);
+      auto& cuts = candidate.batchCuts[event.index];
+      while (nextBatchCut < batchCuts.size() &&
+             batchCuts[nextBatchCut].eventOrdinal == ordinal) {
+        cuts.push_back(batchCuts[nextBatchCut++].beforeRecord);
+      }
+      if (!validateProviderReplayBatchCuts(
+              plan.commandChunks[event.index].envelope.recordCount, ranges, cuts))
+        return false;
+      if (!cuts.empty()) {
+        ImportedChunkView imported;
+        const auto& chunk = plan.commandChunks[event.index];
+        if (!importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope, imported))
+          return false;
+        for (const auto cut : cuts) {
+          const auto type = imported.records[cut].type;
+          if (type != D9C_COMMAND_RECORD_DRAW_PRIMITIVE &&
+              type != D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) return false;
+        }
+      }
+    }
+    if (nextBatchCut != batchCuts.size()) return false;
+    evidence.sourceCount = static_cast<std::uint32_t>(candidate.sources.rows().size());
+    evidence.validated = true;
+    evidence.batchCutCount = static_cast<std::uint32_t>(batchCuts.size());
+    out = std::move(candidate);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
 template <typename T>
 bool load(std::span<const std::byte> bytes, std::size_t offset, T& out) {
   if (offset > bytes.size() || sizeof(T) > bytes.size() - offset) return false;
@@ -49,6 +116,12 @@ bool containsIdentity(std::span<const D9CWireObjectIdentity> identities,
 
 bool sameDigest(const RenderTapeDigest& a, const RenderTapeDigest& b) {
   return std::equal(a.begin(), a.end(), b.begin());
+}
+
+bool nonZeroDigest(const RenderTapeDigest& digest) noexcept {
+  return std::any_of(digest.begin(), digest.end(), [](std::byte value) {
+    return value != std::byte{};
+  });
 }
 
 bool checkedMul(std::uint64_t a, std::uint64_t b,
@@ -2397,6 +2470,107 @@ void auditInitialSeedMutations(
   evidence.wallNanos = elapsedNanos(started, std::chrono::steady_clock::now());
 }
 
+bool validateTextureInputAudit(
+    const RenderTapeTextureInputAuditRequest& request,
+    const GeneralPreflightPlan& plan, const CaptureSourceReplayPlan& sources,
+    RenderTapeTextureInputAuditEvidence& evidence) noexcept {
+  evidence.requested = true;
+  evidence.identity = request.identity;
+  evidence.afterCapturedSeqId = request.afterCapturedSeqId;
+  evidence.byteCount = request.bytes.size();
+  evidence.inputDigest = request.digest;
+  if (request.identity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE ||
+      request.identity.generation == 0u || request.identity.objectId == 0u ||
+      request.afterCapturedSeqId == 0u || request.bytes.empty() ||
+      request.bytes.size() > 64u * 1024u * 1024u ||
+      !nonZeroDigest(request.digest) ||
+      !sameDigest(request.digest, RenderTapeCaptureSession::sha256(request.bytes)))
+    return false;
+  const auto row = std::find_if(sources.rows().begin(), sources.rows().end(),
+      [&](const auto& value) { return value.capturedSeqId == request.afterCapturedSeqId; });
+  if (row == sources.rows().end() || row + 1 == sources.rows().end()) return false;
+  bool alive = false;
+  for (const auto& event : plan.events) {
+    if (plan.tape.event(event.eventIndex).header.ordinal > row->eventOrdinal) break;
+    if (event.type == RenderTapeEventType::ObjectDefine &&
+        event.index < plan.definitions.size() &&
+        sameIdentity(plan.definitions[event.index].fixed.identity, request.identity))
+      alive = true;
+    if (event.type == RenderTapeEventType::ObjectDestroy &&
+        event.index < plan.destroys.size() &&
+        sameIdentity(plan.destroys[event.index].identity, request.identity))
+      alive = false;
+  }
+  if (!alive) return false;
+  const auto definition = std::find_if(plan.definitions.begin(), plan.definitions.end(),
+      [&](const auto& value) { return sameIdentity(value.fixed.identity, request.identity); });
+  if (definition == plan.definitions.end()) return false;
+  RenderTapeTextureDescriptorV2 texture{};
+  D9CSurfaceDesc surface{};
+  if (!renderTapeLoadTextureDescriptorV2(definition->descriptor, texture) ||
+      texture.dimension != static_cast<std::uint32_t>(RenderTapeTextureDimension::Texture2D) ||
+      texture.mipLevelCount != 1u || texture.subresourceCount != 1u ||
+      !renderTapeTextureSubresourceDescriptor(definition->descriptor, 0u, surface) ||
+      surface.format != render_tape_d3d_format::R32F ||
+      surface.width == 0u || surface.height == 0u ||
+      surface.width > 4096u || surface.height > 4096u ||
+      request.bytes.size() != std::uint64_t{surface.width} * surface.height * 4u)
+    return false;
+  evidence.validated = true;
+  return true;
+}
+
+bool applyTextureInputAudit(
+    D9CDevice* device, const RenderTapeTextureInputAuditRequest& request,
+    const std::vector<Definition>& definitions, std::vector<OwnedObject>& objects,
+    RenderTapeTextureInputAuditEvidence& evidence) noexcept {
+  if (!evidence.validated || evidence.attempted) return false;
+  evidence.attempted = true;
+  try {
+    const auto definition = std::find_if(definitions.begin(), definitions.end(),
+        [&](const auto& value) { return sameIdentity(value.fixed.identity, request.identity); });
+    auto* object = static_cast<D9CTexture*>(
+        render_tape_runtime::findExactObject(objects, request.identity));
+    auto upper = device ? device->dev().upperDevice() : nullptr;
+    D9CSurfaceDesc desc{};
+    if (!upper || !object || definition == definitions.end() ||
+        !renderTapeTextureSubresourceDescriptor(definition->descriptor, 0u, desc) ||
+        !drainDeferredReplay(device, "render-tape-texture-input-audit")) return false;
+    auto release = [](D9CSurface* value) { if (value) dxmt9c_surface_release(value); };
+    std::unique_ptr<D9CSurface, decltype(release)> surface(
+        dxmt9c_texture_get_surface_level(object, 0u), release);
+    if (!surface) return false;
+    upper->flush();
+    std::vector<std::byte> before, after;
+    if (!readbackTightSurface(device, surface.get(), desc.width, desc.height,
+                             desc.format, before)) return false;
+    evidence.beforeDigest = RenderTapeCaptureSession::sha256(before);
+    const RenderTapeProviderBlob blob{request.digest, request.bytes};
+    RenderTapeResourceMutationHeader mutation{};
+    mutation.identity = request.identity;
+    mutation.kind = static_cast<std::uint32_t>(RenderTapeMutationKind::Upload);
+    mutation.byteSize = request.bytes.size();
+    mutation.digest = request.digest;
+    evidence.uploaded = applyGeneralMutation(device, mutation,
+        std::span(&blob, 1u), definitions, objects);
+    if (!evidence.uploaded) return false;
+    const auto uploaded = upper->queue().flushInitializerUploads();
+    if (uploaded.value != 0u && (!uploaded.event ||
+        !WMT::SharedEvent{uploaded.event.handle}.waitUntilSignaledValue(
+            uploaded.value, 1'000'000'000u))) return false;
+    upper->flush();
+    if (!readbackTightSurface(device, surface.get(), desc.width, desc.height,
+                             desc.format, after)) return false;
+    evidence.afterDigest = RenderTapeCaptureSession::sha256(after);
+    evidence.readbackMatched = after.size() == request.bytes.size() &&
+        std::equal(after.begin(), after.end(), request.bytes.begin()) &&
+        sameDigest(evidence.afterDigest, request.digest);
+    return evidence.readbackMatched;
+  } catch (...) {
+    return false;
+  }
+}
+
 FrameTapeReplayResult replayGeneralPlan(
     D9CDevice* device, const GeneralPreflightPlan& plan,
     FrameTapeReplayResult result,
@@ -2405,10 +2579,27 @@ FrameTapeReplayResult replayGeneralPlan(
     PreparedPhaseTiming* timing = nullptr,
     RenderTapeInitialSeedAuditEvidence* initialSeedAudit = nullptr,
     RenderTapeFreshSeedDrainEvidence* freshSeedDrainAudit = nullptr,
-    RenderTapeTexturePrestageEvidence* texturePrestageAudit = nullptr) {
+    RenderTapeTexturePrestageEvidence* texturePrestageAudit = nullptr,
+    const SourceBoundaryReplayPlan* sourceBoundaries = nullptr,
+    RenderTapeSourceBoundaryEvidence* sourceBoundaryAudit = nullptr,
+    const CaptureSourceReplayPlan* sourcePolicy = nullptr,
+    const RenderTapeTextureInputAuditRequest* textureInput = nullptr,
+    RenderTapeTextureInputAuditEvidence* textureInputEvidence = nullptr) {
   if (!device) {
     result.status = FrameTapeReplayStatus::ObjectCreationFailed;
     return result;
+  }
+  if (sourcePolicy) {
+    try {
+      // replayGeneralPlan receives the result by value.  A vector copy keeps
+      // its elements but is permitted to discard spare capacity, so reserve
+      // again on this final owner before any queue publication effect.  The
+      // settlement callback must never be the first allocator.
+      result.sourceReplay.publications.reserve(kMaxSourceReplayPublications);
+    } catch (...) {
+      result.status = FrameTapeReplayStatus::ObjectCreationFailed;
+      return result;
+    }
   }
   std::vector<OwnedObject> objects;
   std::vector<Definition> definitions;
@@ -2659,7 +2850,10 @@ FrameTapeReplayResult replayGeneralPlan(
     swap->Release();
     return outputInstalled;
   };
-  const auto replayChunk = [&](const Chunk& chunk) {
+  const auto replayChunk = [&](const Chunk& chunk,
+                              std::span<const ProviderReplayRecordRange> cuts = {},
+                              std::span<const std::uint32_t> batchCuts = {},
+                              std::span<const CaptureSourceReplayRow> sourceRows = {}) {
     PreparedPhaseScope phase(timing, &PreparedPhaseTiming::chunkReplayNanos);
     ImportedChunkView imported;
     if (!importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope, imported) ||
@@ -2693,6 +2887,141 @@ FrameTapeReplayResult replayGeneralPlan(
         if (swap) swap->Release();
         if (!same) return false;
       }
+    }
+    if (!cuts.empty()) {
+      if (sourcePolicy) {
+        struct SettlementContext {
+          RenderTapeSourceReplayEvidence& evidence;
+          std::span<const ProviderReplayRecordRange> ranges;
+          std::span<const CaptureSourceReplayRow> sourceRows;
+          std::span<RenderTapeSourceReplayRowEvidence> rows;
+          std::size_t next = 0u;
+          D9CDevice* device = nullptr;
+          const std::vector<Definition>* definitions = nullptr;
+          std::vector<OwnedObject>* objects = nullptr;
+          const RenderTapeTextureInputAuditRequest* textureInput = nullptr;
+          RenderTapeTextureInputAuditEvidence* textureInputEvidence = nullptr;
+        } context{result.sourceReplay, cuts, sourceRows, {}, 0u};
+        context.device = device;
+        context.definitions = &definitions;
+        context.objects = &objects;
+        context.textureInput = textureInput;
+        context.textureInputEvidence = textureInputEvidence;
+        if (sourceRows.size() != cuts.size()) return false;
+        if (sourceRows.empty()) return false;
+        const auto allRows = sourcePolicy->rows();
+        const auto rowBegin = std::find_if(
+            allRows.begin(), allRows.end(), [&](const auto& row) {
+              return row.commandChunkIndex == sourceRows.front().commandChunkIndex &&
+                     row.eventOrdinal == sourceRows.front().eventOrdinal;
+            });
+        if (rowBegin == allRows.end() ||
+            static_cast<std::size_t>(allRows.end() - rowBegin) < sourceRows.size()) {
+          return false;
+        }
+        context.rows = std::span<RenderTapeSourceReplayRowEvidence>(
+            result.sourceReplay.sources.data() + (rowBegin - allRows.begin()),
+            sourceRows.size());
+        const ProviderReplaySourceConsumer consumer{
+            .context = &context,
+            .settled = [](void* opaque,
+                          const ProviderReplaySourceSettlement& settlement) noexcept {
+              auto& context = *static_cast<SettlementContext*>(opaque);
+              if (context.next >= context.ranges.size() ||
+                  context.next >= context.sourceRows.size() ||
+                  context.next >= context.rows.size() ||
+                  settlement.rangeIndex != context.next || settlement.rawOrdinal == 0u ||
+                  settlement.range.firstRecord != context.ranges[context.next].firstRecord ||
+                  settlement.range.recordCount != context.ranges[context.next].recordCount) {
+                return false;
+              }
+              if (context.evidence.storageOverflow) return false;
+              if (settlement.publications.size() >
+                  context.evidence.publications.capacity() -
+                      context.evidence.publications.size()) {
+                context.evidence.storageOverflow = true;
+                return false;
+              }
+              auto& row = context.rows[context.next];
+              if (row.settled ||
+                  row.eventOrdinal != context.sourceRows[context.next].eventOrdinal ||
+                  row.sourceOrdinal != context.sourceRows[context.next].sourceOrdinal ||
+                  row.capturedSeqId != context.sourceRows[context.next].capturedSeqId ||
+                  row.firstRecord != context.sourceRows[context.next].firstRecord ||
+                  row.recordCount != context.sourceRows[context.next].recordCount) {
+                return false;
+              }
+              row.actualRawOrdinal = settlement.rawOrdinal;
+              row.rangeIndex = settlement.rangeIndex;
+              row.publicationOffset = static_cast<std::uint32_t>(
+                  context.evidence.publications.size());
+              row.publicationCount = static_cast<std::uint32_t>(
+                  settlement.publications.size());
+              row.settled = true;
+              row.settlement = settlement.kind ==
+                      ProviderReplaySourceSettlementKind::PresentPublished
+                  ? RenderTapeSourceReplaySettlement::PresentPublished
+                  : settlement.kind == ProviderReplaySourceSettlementKind::Published
+                      ? RenderTapeSourceReplaySettlement::Published
+                      : RenderTapeSourceReplaySettlement::Empty;
+              for (const auto& publication : settlement.publications) {
+                const auto source = publication.source;
+                const auto metadata = publication.metadata;
+                context.evidence.publications.push_back({
+                    .sourceIdIndex = source.id.index,
+                    .sourceIdGeneration = source.id.generation,
+                    .storageFirstPage = source.storage.firstPage,
+                    .storagePageCount = source.storage.pageCount,
+                    .storageGeneration = source.storage.generation,
+                    .metadataRawOrdinal = metadata.rawOrdinal,
+                    .metadataSourceOrdinal = metadata.sourceOrdinal,
+                    .metadataSeqId = metadata.seqId,
+                    .metadataBuildGeneration = metadata.buildGeneration,
+                    .metadataUsedBytes = metadata.usedBytes,
+                    .metadataPageCount = metadata.pageCount,
+                    .metadataPaddingPagesBefore = metadata.paddingPagesBefore,
+                    .metadataStrictAdmission = metadata.strictAdmission,
+                    .controlIndex = static_cast<std::uint64_t>(
+                        publication.controlIndex),
+                    .hasPresent = publication.hasPresent,
+                });
+              }
+              ++context.next;
+              auto& evidence = context.evidence;
+              ++evidence.completedSourceCount;
+              evidence.publicationCount += settlement.publications.size();
+              if (settlement.kind == ProviderReplaySourceSettlementKind::Empty)
+                ++evidence.emptySourceCount;
+              if (settlement.kind == ProviderReplaySourceSettlementKind::PresentPublished)
+                ++evidence.presentSourceCount;
+              if (context.textureInput &&
+                  row.capturedSeqId == context.textureInput->afterCapturedSeqId) {
+                if (settlement.kind != ProviderReplaySourceSettlementKind::Published ||
+                    !applyTextureInputAudit(context.device, *context.textureInput,
+                        *context.definitions, *context.objects,
+                        *context.textureInputEvidence)) return false;
+              }
+              return true;
+            },
+        };
+        const auto hr = replayPrevalidatedResolvedCommandChunkBySources(
+            device, chunk.bytes, chunk.envelope, resolved, policy, cuts, consumer);
+        result.sourceReplay.complete = hr == core::D3D_OK &&
+            result.sourceReplay.completedSourceCount == result.sourceReplay.sourceCount &&
+            !result.sourceReplay.storageOverflow;
+        return hr == core::D3D_OK && context.next == cuts.size();
+      }
+      std::uint32_t completed = 0u;
+      std::uint32_t completedBatchCuts = 0u;
+      const auto hr = replayPrevalidatedResolvedCommandChunkAtRecordBoundaries(
+          device, chunk.bytes, chunk.envelope, resolved, cuts, completed,
+          batchCuts, &completedBatchCuts);
+      sourceBoundaryAudit->completedSourceCount += completed;
+      sourceBoundaryAudit->completedBatchCutCount += completedBatchCuts;
+      sourceBoundaryAudit->complete =
+          sourceBoundaryAudit->completedSourceCount == sourceBoundaryAudit->sourceCount &&
+          sourceBoundaryAudit->completedBatchCutCount == sourceBoundaryAudit->batchCutCount;
+      return hr == core::D3D_OK;
     }
     return replayPrevalidatedResolvedCommandChunk(
                device, chunk.bytes, chunk.envelope, resolved, policy) ==
@@ -3002,13 +3331,42 @@ FrameTapeReplayResult replayGeneralPlan(
         }
         if (chunkContainsPresent(chunk) && !installOutput())
           return fail(FrameTapeReplayStatus::PresentOutputFailed, eventIndex);
-        if (!replayChunk(chunk))
+        std::span<const ProviderReplayRecordRange> sourceCuts;
+        std::span<const CaptureSourceReplayRow> sourceRows;
+        if (sourcePolicy) {
+          sourceCuts = sourcePolicy->rangesForCommandChunk(replayEvent.index);
+          const auto rows = sourcePolicy->rows();
+          const auto first = std::find_if(
+              rows.begin(), rows.end(), [&](const auto& row) {
+                return row.commandChunkIndex == replayEvent.index;
+              });
+          if (first != rows.end()) {
+            const auto last = std::find_if(
+                first, rows.end(), [&](const auto& row) {
+                  return row.commandChunkIndex != replayEvent.index;
+                });
+            sourceRows = std::span<const CaptureSourceReplayRow>(
+                &*first, static_cast<std::size_t>(last - first));
+          }
+        } else if (sourceBoundaries) {
+          sourceCuts = sourceBoundaries->sources.rangesForCommandChunk(
+              replayEvent.index);
+        }
+        if (!replayChunk(chunk, sourceCuts,
+                               sourceBoundaries
+                                   ? std::span<const std::uint32_t>(
+                                         sourceBoundaries->batchCuts[replayEvent.index])
+                                   : std::span<const std::uint32_t>{},
+                               sourceRows))
           return fail(FrameTapeReplayStatus::CommandReplayFailed, eventIndex);
         sawSubmittedCommandWork = true;
         if (freshSeedDrainAudit) ++commandEpoch;
         break;
       }
       case RenderTapeEventType::PresentComplete: {
+        if (textureInput && (!textureInputEvidence ||
+                            !textureInputEvidence->readbackMatched))
+          return fail(FrameTapeReplayStatus::MutationFailed, eventIndex);
         PreparedPhaseScope phase(timing,
                                  &PreparedPhaseTiming::readbackDrainNanos);
         auto upper = device->dev().upperDevice();
@@ -3876,6 +4234,11 @@ FrameTapeReplayResult replayPreparedRenderTapeIdentity(
   result.initialSeedAudit.requested = options.auditInitialSeeds;
   result.freshSeedDrainAudit.requested = options.auditFreshSeedDrains;
   result.texturePrestageAudit.requested = options.auditTexturePrestage;
+  result.sourceBoundaryAudit.requested = options.auditSourceBoundaries;
+  result.textureInputAudit.requested = options.auditTextureInput != nullptr;
+  const bool sourcePolicyRequested = options.sourceBoundaryMode ==
+      RenderTapeSourceBoundaryMode::CaptureSource;
+  result.sourceReplay.requested = sourcePolicyRequested;
   if (!impl.preflight.complete()) {
     attachPreparedEvidence(result, evidence);
     return result;
@@ -3883,10 +4246,98 @@ FrameTapeReplayResult replayPreparedRenderTapeIdentity(
   const unsigned diagnosticCount =
       static_cast<unsigned>(options.auditInitialSeeds) +
       static_cast<unsigned>(options.auditFreshSeedDrains) +
-      static_cast<unsigned>(options.auditTexturePrestage);
-  if (diagnosticCount > 1u ||
-      (options.auditTexturePrestage && !impl.general)) {
+      static_cast<unsigned>(options.auditTexturePrestage) +
+      static_cast<unsigned>(options.auditSourceBoundaries);
+  if ((options.sourceBoundaryMode != RenderTapeSourceBoundaryMode::Chunk &&
+       !sourcePolicyRequested) || diagnosticCount > 1u ||
+      (sourcePolicyRequested &&
+       (diagnosticCount != 0u || !impl.general ||
+        options.reset != RenderTapePreparedReset::FreshDevice)) ||
+      (options.auditTexturePrestage && !impl.general) ||
+      (!options.auditSourceBoundaries && !options.auditBatchCuts.empty()) ||
+      (options.auditTextureInput &&
+       (!sourcePolicyRequested || !options.hasExpectedSourcePlanDigest ||
+        diagnosticCount != 0u || options.reset != RenderTapePreparedReset::FreshDevice)) ||
+      (!options.auditSourceBoundaries && !sourcePolicyRequested &&
+       !options.sourceBoundaryIdentity.empty()) ||
+      (options.auditSourceBoundaries &&
+       (!impl.general || options.route != RenderTapePreparedRoute::Compatibility ||
+        options.reset != RenderTapePreparedReset::FreshDevice))) {
     result.status = FrameTapeReplayStatus::UnsupportedGrammar;
+    attachPreparedEvidence(result, evidence);
+    return result;
+  }
+  CaptureSourceReplayPlan sourcePolicy;
+  if (sourcePolicyRequested) {
+    if (buildCaptureSourceReplayPlan(impl.tape, impl.generalPlan,
+                                     options.sourceBoundaryIdentity,
+                                     sourcePolicy) != CaptureSourceReplayPlanStatus::Valid) {
+      result.status = FrameTapeReplayStatus::InvalidTape;
+      attachPreparedEvidence(result, evidence);
+      return result;
+    }
+    if (sourcePolicy.rows().empty() ||
+        sourcePolicy.rows().size() > kProviderSourceReplayMaxRecords) {
+      result.status = FrameTapeReplayStatus::InvalidTape;
+      attachPreparedEvidence(result, evidence);
+      return result;
+    }
+    const bool expectedDigestProvided =
+        options.hasExpectedSourcePlanDigest ||
+        nonZeroDigest(options.expectedSourcePlanDigest);
+    if (expectedDigestProvided &&
+        (!nonZeroDigest(options.expectedSourcePlanDigest) ||
+         !sameDigest(options.expectedSourcePlanDigest, sourcePolicy.digest()))) {
+      result.status = FrameTapeReplayStatus::InvalidTape;
+      attachPreparedEvidence(result, evidence);
+      return result;
+    }
+    result.sourceReplay.validated = true;
+    result.sourceReplay.planDigest = sourcePolicy.digest();
+    result.sourceReplay.sourceCount = sourcePolicy.rows().size();
+    try {
+      // Settlement callbacks run after queue publication and are noexcept.
+      // Reserve every evidence slot before the first replay effect so a
+      // diagnostic allocation failure or publication fan-out becomes a
+      // deterministic fail-closed result instead of a partial artifact.
+      result.sourceReplay.sources.resize(sourcePolicy.rows().size());
+      result.sourceReplay.publications.reserve(kMaxSourceReplayPublications);
+      for (std::size_t index = 0u; index < sourcePolicy.rows().size(); ++index) {
+        const auto& source = sourcePolicy.rows()[index];
+        result.sourceReplay.sources[index] = {
+            .eventOrdinal = source.eventOrdinal,
+            .sourceOrdinal = source.sourceOrdinal,
+            .capturedSeqId = source.capturedSeqId,
+            .commandChunkIndex = source.commandChunkIndex,
+            .firstRecord = source.firstRecord,
+            .recordCount = source.recordCount,
+        };
+      }
+    } catch (...) {
+      result.status = FrameTapeReplayStatus::ObjectCreationFailed;
+      attachPreparedEvidence(result, evidence);
+      return result;
+    }
+  }
+  SourceBoundaryReplayPlan sourceBoundaries;
+  RenderTapeTextureInputAuditEvidence textureInputEvidence;
+  if (options.auditTextureInput &&
+      !validateTextureInputAudit(*options.auditTextureInput, impl.generalPlan,
+                                 sourcePolicy, textureInputEvidence)) {
+    result.status = FrameTapeReplayStatus::InvalidTape;
+    result.textureInputAudit = textureInputEvidence;
+    attachPreparedEvidence(result, evidence);
+    return result;
+  }
+  RenderTapeSourceBoundaryEvidence sourceBoundaryAudit;
+  sourceBoundaryAudit.requested = options.auditSourceBoundaries;
+  if (options.auditSourceBoundaries &&
+      !buildSourceBoundaryReplayPlan(impl.tape, impl.generalPlan,
+                                     options.sourceBoundaryIdentity,
+                                     options.auditBatchCuts,
+                                     sourceBoundaries, sourceBoundaryAudit)) {
+    result.status = FrameTapeReplayStatus::InvalidTape;
+    result.sourceBoundaryAudit = sourceBoundaryAudit;
     attachPreparedEvidence(result, evidence);
     return result;
   }
@@ -3935,7 +4386,16 @@ FrameTapeReplayResult replayPreparedRenderTapeIdentity(
                                    : nullptr,
                                options.auditTexturePrestage
                                    ? &texturePrestageAudit
-                                   : nullptr);
+                                   : nullptr,
+                               options.auditSourceBoundaries
+                                   ? &sourceBoundaries
+                                   : nullptr,
+                               options.auditSourceBoundaries
+                                   ? &sourceBoundaryAudit
+                                   : nullptr,
+                               sourcePolicyRequested ? &sourcePolicy : nullptr,
+                               options.auditTextureInput,
+                               options.auditTextureInput ? &textureInputEvidence : nullptr);
   } else {
     result = replayPreflightPlan(device, impl.boundedPlan, result, impl.blobs,
                                  policy, &phases,
@@ -3946,6 +4406,8 @@ FrameTapeReplayResult replayPreparedRenderTapeIdentity(
   result.initialSeedAudit = std::move(seedAudit);
   result.freshSeedDrainAudit = std::move(freshSeedDrainAudit);
   result.texturePrestageAudit = std::move(texturePrestageAudit);
+  result.sourceBoundaryAudit = sourceBoundaryAudit;
+  result.textureInputAudit = textureInputEvidence;
   evidence.timing.resourceSetupNanos = phases.resourceSetupNanos;
   evidence.timing.chunkReplayNanos = phases.chunkReplayNanos;
   evidence.timing.readbackDrainNanos = phases.readbackDrainNanos;

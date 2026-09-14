@@ -5,6 +5,9 @@
 
 #include <cstdlib>
 #include <cstring>
+#include <iomanip>
+#include <limits>
+#include <locale>
 #include <sstream>
 #include <utility>
 
@@ -86,7 +89,7 @@ u64 makeHash(const std::string& source) {
 std::string makeGenericVertexSource(u64 variantHash) {
   std::ostringstream out;
   out << "#include <metal_stdlib>\nusing namespace metal;\n";
-  out << "struct VSOut { float4 position [[position]]; };\n";
+  out << "struct VSOut { float4 position [[position, invariant]]; };\n";
   out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]]) {\n";
   out << "  VSOut out;\n";
   out << "  float2 p[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };\n";
@@ -99,8 +102,13 @@ std::string makeGenericVertexSource(u64 variantHash) {
 
 std::string makeGenericFragmentSource(const core::ColorRGBA& color, u64 variantHash) {
   std::ostringstream out;
+  // Integer-looking values such as alpha=1 still need floating-point MSL
+  // literals (1f is invalid). Preserve the input float rather than rounding
+  // source-embedded clear colors to ostream's default six significant digits.
+  out.imbue(std::locale::classic());
+  out << std::setprecision(std::numeric_limits<float>::max_digits10) << std::showpoint;
   out << "#include <metal_stdlib>\nusing namespace metal;\n";
-  out << "struct VSOut { float4 position [[position]]; };\n";
+  out << "struct VSOut { float4 position [[position, invariant]]; };\n";
   out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]]) {\n";
   out << "  (void)in;\n";
   out << "  return float4(" << color.r << "f, " << color.g << "f, " << color.b << "f, " << color.a << "f);\n";
@@ -109,10 +117,32 @@ std::string makeGenericFragmentSource(const core::ColorRGBA& color, u64 variantH
   return out.str();
 }
 
+std::string makeDepthStencilClearFragmentSource(float depth, bool writeDepth,
+                                                u64 variantHash) {
+  std::ostringstream out;
+  out.imbue(std::locale::classic());
+  out << "#include <metal_stdlib>\nusing namespace metal;\n";
+  out << "struct VSOut { float4 position [[position, invariant]]; };\n";
+  if (writeDepth) {
+    out << "struct FSOut { float depth [[depth(any)]]; };\n";
+    out << "fragment FSOut dxmt9_fs(VSOut in [[stage_in]]) {\n";
+    out << "  (void)in;\n";
+    out << "  FSOut out;\n";
+    out << "  out.depth = " << std::setprecision(std::numeric_limits<float>::max_digits10)
+        << std::showpoint << depth << "f;\n";
+    out << "  return out;\n";
+    out << "}\n";
+  } else {
+    out << "fragment void dxmt9_fs(VSOut in [[stage_in]]) { (void)in; }\n";
+  }
+  out << "// variant " << variantHash << "\n";
+  return out.str();
+}
+
 std::string makeTexturedVertexSource(u64 variantHash) {
   std::ostringstream out;
   out << "#include <metal_stdlib>\nusing namespace metal;\n";
-  out << "struct VSOut { float4 position [[position]]; float2 uv; };\n";
+  out << "struct VSOut { float4 position [[position, invariant]]; float2 uv; };\n";
   out << "vertex VSOut dxmt9_vs(uint vid [[vertex_id]]) {\n";
   out << "  VSOut out;\n";
   out << "  float2 p[3] = { float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0) };\n";
@@ -128,7 +158,7 @@ std::string makeTexturedVertexSource(u64 variantHash) {
 std::string makeTexturedFragmentSource(u64 variantHash, bool forceOpaqueAlpha) {
   std::ostringstream out;
   out << "#include <metal_stdlib>\nusing namespace metal;\n";
-  out << "struct VSOut { float4 position [[position]]; float2 uv; };\n";
+  out << "struct VSOut { float4 position [[position, invariant]]; float2 uv; };\n";
   out << "fragment float4 dxmt9_fs(VSOut in [[stage_in]], texture2d<float> tex0 [[texture(0)]], sampler samp0 [[sampler(0)]]) {\n";
   out << "  float4 color = tex0.sample(samp0, in.uv);\n";
   if (forceOpaqueAlpha) {
@@ -149,7 +179,7 @@ std::string makeGammaApplyFragmentSource(u64 variantHash, bool forceOpaqueAlpha)
   // doesn't gain precision (the upper 8 bits already pick the entry).
   std::ostringstream out;
   out << "#include <metal_stdlib>\nusing namespace metal;\n";
-  out << "struct VSOut { float4 position [[position]]; float2 uv; };\n";
+  out << "struct VSOut { float4 position [[position, invariant]]; float2 uv; };\n";
   out << "struct GammaUniforms {\n";
   out << "  ushort red[" << core::kMaxGammaRampEntries << "];\n";
   out << "  ushort green[" << core::kMaxGammaRampEntries << "];\n";
@@ -338,7 +368,7 @@ std::string makeShaderPrelude(const ShaderPreludeOptions& options) {
   out << "  uint _pad;\n";
   out << "};\n";
   out << "struct VSOut {\n";
-  out << "  float4 position [[position]];\n";
+  out << "  float4 position [[position, invariant]];\n";
   if (vsoutEmitColor(options.vsOutLayout)) {
     out << "  " << vsoutVectorType(options) << " color"
         << centroidAttribute(options.centroidColor) << ";\n";

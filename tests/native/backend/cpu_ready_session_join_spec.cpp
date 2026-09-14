@@ -29,6 +29,7 @@
 
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
 #include "../../../src/dxmt9/dxmt9_encode_session.hpp"
+#include "../../../src/dxmt9/dxmt9_encode_session_storage_internal.hpp"
 #include "../../../src/dxmt9/dxmt9_perf_counters.hpp"
 #include "../../../src/dxmt9/dxmt9_pipeline_cache.hpp"
 #include "../../../src/dxmt9/dxmt9_resource_pool.hpp"
@@ -1570,6 +1571,7 @@ struct ProductionLoopBackendState {
   std::atomic<bool> releaseBackendCall{false};
   std::atomic<bool> backendPauseReleased{false};
   bool wantsDceLookahead = false;
+  std::size_t carryClearFromCall = 0;
   std::size_t postCommitCount = 0;
   std::atomic<std::size_t> observedBackendCalls{0};
   std::atomic<bool> firstRecordPostCommitRan{false};
@@ -1641,6 +1643,20 @@ class ProductionLoopBackend final : public dxmt9::render::IRenderBackend {
         .fragment = options.preRegisteredFragment,
         .skipBackendPlanning = options.skipBackendPlanning,
     });
+    if (state_->carryClearFromCall != 0 &&
+        state_->calls.size() >= state_->carryClearFromCall &&
+        options.session && options.sessionSource) {
+      // Model the real backend's deferred Clear payload borrow. The queue's
+      // retirement predicate and physical FIFO remain entirely production.
+      auto& pass = options.session->storage->pass;
+      pass.pendingClear = ClearDesc{};
+      pass.pendingClearCommand = {
+          .source = options.sessionSource->source,
+          .seqId = seqId,
+          .slotIndex = static_cast<std::uint32_t>(slotIndex),
+          .commandIndex = 0,
+      };
+    }
     state_->observedBackendCalls.store(state_->calls.size(),
                                        std::memory_order_release);
     if (state_->pauseAfterBackendCall.load(std::memory_order_acquire) ==
@@ -5766,6 +5782,79 @@ void productionLoopCreditsExactReadyAndWritingSuccessor() {
         "credited session completes every source in FIFO order");
 }
 
+void productionLoopReopensLatchedPagesWithPendingClear() {
+  RuntimeFixture fixture(true);
+  auto& queue = fixture.routing->queue_;
+  // Fill capture's 2048-page high water. The first three sources can retire
+  // after encoding; the last three retain 1025 pages behind deferred Clears.
+  // High-water-only headroom admits all of that suffix, but admission remains
+  // latched above lowWaterPages=1024 with no Ready cap candidate to release it.
+  constexpr std::array<std::size_t, 6> pages{512, 448, 63, 512, 512, 1};
+  for (std::size_t i = 0; i < pages.size(); ++i) {
+    fixture.publishArenaClearPages(i + 1u, pages[i]);
+  }
+  const auto sources = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(sources.size() == pages.size() &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::tapeStats(queue).
+                admissionClosed,
+        "counterexample must close the real page admission latch");
+  auto backend = std::make_shared<ProductionLoopBackendState>();
+  backend->carryClearFromCall = 4u;
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backend));
+  std::thread encoder([&] {
+    dxmt9::CommandQueueArenaLeaseTestAccess::runCpuReadySessionEncodeLoop(queue);
+  });
+  struct StopJoin {
+    dxmt9::CommandQueue& queue;
+    std::thread& encoder;
+    ~StopJoin() {
+      if (encoder.joinable()) {
+        dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+        encoder.join();
+      }
+    }
+  } cleanup{queue, encoder};
+  const bool submitted = waitUntil([&] {
+    return backend->firstRecordPostCommitRan.load(std::memory_order_acquire);
+  });
+  if (!submitted) {
+    const auto stats = dxmt9::CommandQueueArenaLeaseTestAccess::tapeStats(queue);
+    std::cerr << "latched-page counterexample: ready="
+              << dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(queue)
+              << " residentPages=" << stats.residentPages
+              << " admissionClosed=" << stats.admissionClosed << '\n';
+  }
+  check(submitted,
+        "fixed session cap must leave a Ready successor before low-water deadlock");
+  check(backend->backendCallCountAtFirstRecordSubmit.load() == 5u,
+        "1024-page cap submits before the one-page sixth source, without pressure");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, std::span(sources).first(5u)) == 5u,
+        "older submitted sources must reclaim in exact FIFO order");
+  check(waitUntil([&] {
+          return backend->observedBackendCalls.load(std::memory_order_acquire) == 6u;
+        }), "sixth source must resume after predecessor reclaim");
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1;
+  capacity.clearRecords = 1;
+  const auto segment = makeSourcePayloadLayout(capacity, 4096, 64);
+  check(segment.has_value(), "successor segment must validate");
+  const std::array segments{*segment};
+  const auto layout = makeArenaSourcePayloadLayout(segments, 4096, 512);
+  check(layout.has_value() &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::probeArenaAdmission(
+                queue, *layout) == CpuReadyTape::ReserveProbe::Ready,
+        "ordinary successor admission must reopen without submitting the last Clear");
+  dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
+  encoder.join();
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, std::span(sources).last(1u)) == 1u &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::residentCount(queue) == 0u,
+        "semantic drain completes the final source once and leaves no residency");
+}
+
 void productionLoopReleasesAtDeterministicCapBeforeWriterPressure() {
   RuntimeFixture fixture;
   for (std::uint64_t rawOrdinal = 1;
@@ -7680,6 +7769,7 @@ int main() {
       return 0;
     }
     sessionSourcePolicyClassifiesLegacyAndArena();
+    productionLoopReopensLatchedPagesWithPendingClear();
     neutralPrefixSelectorAdmitsMixedCandidates();
     arenaSessionCarryAcrossSourcesSharesOneCommandBuffer();
     multipleArenaSourcesCompleteFifoThroughOneSubmission();

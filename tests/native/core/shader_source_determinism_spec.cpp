@@ -36,6 +36,7 @@
 // `tests/native/backend/ffp_key_determinism_spec.cpp` (key-side guard).
 
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <exception>
 #include <iostream>
@@ -489,6 +490,32 @@ void testFfpKeyHashEmbeddedInSource() {
   }
 }
 
+void testClearLiteralRoundtrip() {
+  const ColorRGBA color{0.0f, 1.0f, 0.123456791f, -0.0f};
+  const auto source = assertByteStable([&] {
+    return dxmt9::shaders::makeGenericFragmentSource(color, 7u);
+  }, "clear fragment literals");
+  check(source.find(", 1f") == std::string::npos,
+        "integer alpha is not emitted as invalid MSL 1f");
+  const auto start = source.find("return float4(") + std::string_view("return float4(").size();
+  std::size_t cursor = start;
+  for (const auto expected : {color.r, color.g, color.b, color.a}) {
+    const auto end = source.find('f', cursor);
+    check(end != std::string::npos, "clear channel has an explicit float suffix");
+    const auto parsed = std::stof(source.substr(cursor, end - cursor));
+    check(std::bit_cast<u32>(parsed) == std::bit_cast<u32>(expected),
+          "clear literal preserves all float bits, including signed zero");
+    cursor = end + 2u;
+  }
+  for (const auto depth : {0.0f, 1.0f, 0.123456791f}) {
+    const auto text = dxmt9::shaders::makeDepthStencilClearFragmentSource(depth, true, 9u);
+    const auto first = text.find("out.depth = ") + std::string_view("out.depth = ").size();
+    const auto last = text.find('f', first);
+    check(std::bit_cast<u32>(std::stof(text.substr(first, last - first))) ==
+              std::bit_cast<u32>(depth), "depth clear literal preserves exact float value");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -505,6 +532,7 @@ int main() {
     testSampleCountFlipsBuiltinFragment();
     testTextureBindToggleFlipsBuiltinVertex();
     testFfpKeyHashEmbeddedInSource();
+    testClearLiteralRoundtrip();
   } catch (const TestFailure& failure) {
     std::cerr << "shader_source_determinism_spec failed: " << failure.what()
               << '\n';

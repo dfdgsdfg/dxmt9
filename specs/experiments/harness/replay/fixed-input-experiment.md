@@ -7,7 +7,7 @@ tags: [specs, experiments, replay, lifetime, verification]
 
 # Fixed-input Render Tape policy experiments
 
-This design targets `requirements.md` R-HARN-REPLAY-8.1–8.6. It is a new
+This design targets `requirements.md` R-HARN-REPLAY-8.1–8.12. It is a new
 experiment operation, not a change to the existing `provider-replay`,
 `parallel-verify`, capture, projection, or default renderer policies.
 
@@ -105,6 +105,14 @@ empty or `0` set `metal_validation_diagnostic=true` and prevent experiment
 acceptance. Validation diagnostics may use either reset mode; only seed audits
 require cold-device reset. This records instrumentation, not a new rendering
 policy or permission to weaken the pixel oracle.
+
+Bounded diagnostic attachment readbacks may select an encoded-Present interval
+and finite readback count. Such local frame ordinals are selectors only, never
+capture identity or completion authority. Original/replay pass comparisons
+must independently join the retained source/encoder metadata to authenticated
+source rows and reject missing/truncated coverage. Raw and summary-only
+readbacks remain diagnostic even when final pixels match; they cannot authorize
+low-observer policy ranking.
 
 The capture owner must not equate a complete device-shadow bootstrap with all
 resource-owned state. Unsupported managed-texture LOD mutations use the
@@ -1055,6 +1063,497 @@ private input copy, raw provider stdout/stderr and `result.json`, including
 failed/timeout results. Compare only matching input, binary, reset and policy
 receipts; these measurements exclude original PE/Wine supply timing.
 
-`cpu-experiment --completion-plan PLAN.json` selects the external schedule in
-place of `--completion`. It is still restricted to the admitted CPU grammar;
-supplying a schedule does not expand resource or draw support.
+CPU and GPU experiment staging share `copy_input_owned` in
+`scripts/tools/run_dxmt9_render_tape.py`. On macOS it requests independent
+APFS copy-on-write files rather than duplicating every immutable blob for each
+policy child; other platforms retain a deep copy. Hard links and borrowed
+mutable input files are not ownership substitutes. The destination must be
+absent, source links are dereferenced, and clone/copy failures propagate before
+validation or provider effects. The staged manifest, blobs and oracles still
+undergo the same hash reauthentication; storage sharing never relaxes pixel or
+policy acceptance.
+
+## GPU qualification coupled to CPU policy comparison
+
+The external completion-plan options described above apply only to the CPU
+lane. GPU qualification uses real GPU completion, never synthetic schedules.
+
+`cpu-policy-compare --gpu-qualify` inserts a strict GPU qualification gate
+after both CPU detailed verification receipts and the cross-policy identity
+pair binding, and before any `measure/` child is started. It launches one fresh
+`experiment` subprocess per canonical `dxmt9.render_tape.cpu_policy.v1` value,
+with `--warmup 0 --repeat 2 --partition-mode identity --require-path` and an
+explicit `--gpu-reset cold-device|warm-device`. The wrapper sets all three
+cached knobs exactly from the policy before process startup:
+`DXMT9_DRAW_CHUNK_COMMAND_LIMIT`, `DXMT9_DIRECT_SLOT_HEADROOM_BYTES`, and
+`DXMT9_DIRECT_SLOT_AGGREGATE_HEADROOM_BYTES`. The CPU verification provider and
+Metal experiment provider are independently fingerprinted; shared runtime
+modules (excluding each provider executable itself), validator, input and
+non-policy renderer environment must still match.
+
+Qualification requires an authenticated original `output.rgba` and
+`source.rgba` in the unchanged staged bundle. A real capture must declare
+`scope.production_capture=true`; a fixture may instead declare
+`scope.synthetic=true` or `scope.test_input=true`, and is reported as
+`synthetic-test-input`, never as a production capture. `pack --test-input`
+sets the latter marker without creating production capture authority. The
+coupled gate admits single-interval frame tapes only. Each provider result
+must carry top-level `oracle_mode=strict`, `expected_digest_matched=true`, and
+`source_oracle_exact_matched=true`; every interval must carry output/source
+readback and SHA-256 values equal to the original captured bytes. The
+provider-owned per-iteration RGBA artifacts are authenticated by path, size,
+hash and exact bytes. Pixel-envelope diagnostics,
+Metal validation diagnostics, missing/tampered readbacks, zero selected-route
+draws, GPU command-buffer errors, failed completion/reset/conservation, policy
+or environment mismatches all reject the gate.
+
+The coupled parent receipt records `gpu_qualification` child paths and hashes,
+`qualification_scope`, and re-authenticates GPU provider/validator/image
+identities at commit. A failed GPU or pre-measurement identity gate starts no
+measurement child. Final reauthentication failure invalidates the aggregate
+while retaining already-produced measurements as unqualified evidence.
+CPU-only invocations retain their existing
+CPU-only receipt semantics and `gpu_evidence=false`.
+
+The standalone acceptance predicates live in
+`scripts/tools/render_tape_gpu_policy.py`; they are also the predicates used by
+the coupled wrapper and its native-free negative tests. This lane is evidence
+of strict readback qualification only; it is not a GT2 promotion claim until
+the real captured GT2 run passes.
+
+## Capture source-boundary discriminator
+
+Compilation has a separate, explicit equality boundary (R-HARN-REPLAY-8.15).
+The production unix WMT factory pins the same MSL2.4/fast profile with explicit
+invariant vertex-position source attributes for Wine and
+native replay, independently of executable SDK metadata. Compiler receipts
+record the actual option fields and carry them through the library/function/PSO
+chain. Historical receipts with nil options do not prove effective-language
+equality; their immutable original pixels remain the strict oracle. A
+same-text executable-SDK control can identify this missing input, but promotion
+requires the normal provider using the fixed profile, unchanged original tapes,
+zero pixel mismatches, and the existing public CPU/GPU qualification join.
+
+Original intermediate readbacks must be joined to the published Tape's actual
+source identities, not a guessed encoded-Present interval. Capture retries may
+make an otherwise valid encoded-frame selector disjoint from the final bundle.
+Such readbacks remain diagnostic artifacts and must not be used as paired
+original/replay evidence. Capture-local frame IDs are not global frame numbers.
+
+SegmentSerial's batch FrameGraph assigns event-local pass IDs. The capture
+ledger must namespace each nonzero ID by CommandChunk event before emitting
+frame-wide `identity.bin` IDs. Same-event segments carrying the same local ID
+must retain continuity and identical DAG index/kind; different events must
+never alias solely because their local ID and metadata match. Event-local zero,
+overflow, changed same-ID membership, non-exact record coverage, or mixed ID
+scopes within an event must fail closed. The trusted frame-ID append API keeps
+its existing semantics and must not silently reinterpret caller authority.
+`RenderTapeProductionIdentityLedger::appendEventLocalPasses` owns this cold
+conversion under its existing mutex; no queue/wire payload or renderer order
+changes are required. `dxmt9-render-tape-capture-spec` exhausts a small namespace
+and checks the serialized, settled ledger plus failure boundaries. This is an
+identity-value refinement, not a new concurrent transition or pixel proof;
+existing lifecycle TLA and concrete GPU oracle evidence remain separate gates.
+
+The bounded color hash observer records only completed, unconverted tight GPU
+bytes, with size/format/row-pitch metadata and SHA-256. Hash-only output retains
+no raw image and requires an explicit finite count; it bounds disk use, not
+GPU work or timing effects. Capture-only selection registers each validated
+Arena source while the publication lock still excludes Ready consumption,
+then matches owner, seq and the full generation-qualified source/storage ref
+at the encoder. It adds no fields to PE wire, source payloads or queue tickets.
+The diagnostic registry has fixed capacity and is cleared for a destroyed
+queue owner. Lost coverage, rejected identity, unsupported route or table
+collision must never count as equal intermediate output. Successful source
+registration is not successful Tape publication: failed-attempt observations
+must remain outside the final sidecar join. Hash equality can localize matching
+pass endpoints; it cannot recover raw bytes or exclude transient differences
+within a pass. A divergent endpoint requires narrower byte evidence before
+attributing a draw/shader cause. All these inline observers invalidate policy
+qualification independently of pixel equality.
+
+For tightly packed BGRA8/RGBA8 Metal readbacks, color endpoint metadata may
+add separate raw channel SHA-256 digests and their explicit storage-channel
+order. They must hash the same completed bytes without sRGB conversion, alpha
+normalization or tolerance. Unsupported formats/extents must report no channel
+witness. This diagnostic distinguishes RGB divergence from an unused X8 alpha
+channel; it does not certify channel liveness and must not replace the original
+full-byte oracle or qualify a policy run.
+
+Color endpoint metadata must distinguish a matched effective Store action from
+an unknown, discarded, resolve-only or unsupported multisample source. The
+observer pulls the final action from the real attachment ledger after late
+resolution; it must not force Store or split a pass to manufacture evidence.
+Stored-content qualification is necessary, not sufficient: it does not prove
+initialization of every pixel/channel, canonical cross-process attachment
+identity or live-out use. Missing historical store metadata is unknown, not
+implicitly Store. Raw bytes may remain diagnostic artifacts, but such unknown
+or discarded endpoints must not be treated as semantic equality/divergence.
+
+Uniform-byte localization must distinguish the immutable expected payload from
+the actual tracked binding backing. Tracked upload/cache state alone does not
+prove the actual encoder bind. A cold direct-buffer witness must separately
+observe successful Metal vertex/fragment buffer and offset calls at slots 0/3,
+invalidate on setBytes, and compare process-local non-reused object identity
+plus offset to the tracked binding at the selected draw. Fresh, null, inline,
+missing-origin and mismatched bindings must not become a match. This is a
+direct-binding receipt, not argument-buffer, GPU-time contents or residency
+proof. Native tests must include a deliberately skipped rebind with stale
+pixels as well as A/B/A, distinct-buffer and offset-only cases. The existing
+three-draw production oracle must require matches on its direct routes.
+The cold binding observer may inspect only
+bounds-checked shared Metal slices after successful upload/bind; it must not
+rebuild expected constants and call them bound bytes. A direct-binding shadow
+must be reset on actual encoder creation before carrying clean bindings across
+draws. Missing first binding, unsupported storage and unknown extent are missing
+evidence. Vertex-slot-5 observations must record the bytes passed to Metal, not
+reconstructed draw parameters. This CPU-visible witness does not prove GPU
+execution, private storage or parallel-child coverage. The A→B→A independent
+Metal oracle must additionally validate pixels and actual route coverage.
+No execution payload or disabled-path state may be added solely for the observer.
+Capture-only effect observations must reuse the registered full source identity
+at the actual encoder entry, without requiring GPU color readbacks. Missing,
+stale or colliding provenance must suppress observations, never widen to all
+draws. The published sidecar, not attempt-local registration, owns the final
+cross-process join.
+
+Issued indexed-geometry diagnostics must distinguish source bytes from the
+actual Metal-call buffer/offset and the last successful stream-0/DrawVolatile
+bindings on that encoder. Track only cold diagnostic state, reset it on real
+encoder creation, and clear selected draw identity before filtering each draw.
+Suppressed/fake Metal calls, absent bindings, unreadable/private storage,
+overflow and bounded-read limits must not produce a known byte witness.
+Compare exact index and referenced stream-0 backing ranges under the issued
+base-vertex/volatile parameters, not the live logical resource's newer bytes.
+For declared programmable extra streams, observe actual Metal slots 6–20 and
+invalidate a buffer witness on setBytes; never reuse stale buffer identity.
+Use issued indices/base-vertex or instance IDs/divisors for bounded ranges and
+label declaration-derived stride as expected metadata, not selected compiled
+PSO reflection. A visible fixture must read the extra stream, use a nonzero
+binding offset and change pixels when only those bytes change. Empty or unknown
+hashes cannot count as equality. This is CPU-visible binding evidence, not proof
+of GPU reads, expanded/non-indexed draws or parallel children. It must not add
+fields/arguments to queue, draw or PE-wire execution payloads.
+
+Actual raster diagnostics must observe successful viewport, scissor,
+rasterizer, pipeline and blend/stencil-reference calls on the real encoder,
+not reconstruct those values from the next draw's logical shadow. Cold
+encoder-local storage must reset at encoder creation and distinguish absent
+bindings from zero-valued bindings. Issue rows must share the selected draw's
+source/ordinal, including non-indexed draws, and preserve exact floating-point
+bits. A pipeline label identifies an observed binding only; it does not prove
+the selected compiled shader source or descriptor. Suppressed calls, rejected
+draw filters and missing capture provenance must not create issue evidence.
+These diagnostics must not mutate renderer state or qualify timing/pixels.
+
+Selected-PSO provenance must bind the actual successful Metal source-library
+creation to the actual named function and conventional render-pipeline creation,
+then join that immutable receipt through the PSO used by the real draw call.
+The receipt must serialize concrete descriptor fields and full source SHA-256,
+not desired cache keys or a later mutable label. Object-scoped diagnostic
+associations must not retain Metal resources or survive object destruction;
+conflicting associations are permanently unknown. Bound diagnostic storage and
+reject missing/unpublished/unsupported lineage, including binary-only libraries,
+specialized functions and tile/mesh pipelines. Tests must authenticate the
+receipt file and source bytes, pin used function names/descriptor fields and
+verify that real draws without creation receipts remain unknown. Driver-internal
+binary selection and later GPU reads are outside this construction-input proof.
+Keep the existing strict original-pixel gate and all retained counterexamples.
+
+Depth/stencil diagnostics must bind successful Metal state creation to the
+actual depth compare/write and front/back stencil descriptors, then snapshot
+that creation evidence only after the real encoder state bind. Record actual
+stencil-reference calls separately. A new encoder is unobserved; an explicit
+null bind is not a carried prior state. Missing or conflicting creation remains
+unknown. No renderer cache key or desired state may stand in for the actual
+descriptor. Keep one bounded value-only snapshot per object/encoder, without
+resource retains, and use the existing cold binding/geometry gate. Join emitted
+rows to the same selected source/draw identity. Native Metal pixels must cover
+depth rejection, stencil rejection and distinct front/back descriptor values,
+plus null/off/missing-creation negatives. This is construction/binding evidence,
+not depth/stencil attachment contents or proof of the driver's later tests.
+
+Sampling descriptor observers must track actual Metal fragment texture/sampler
+calls and actual argument-encoder writes, not reconstruct a binding from Pool
+or shader expectations. A direct null bind must invalidate the preceding value.
+Argument-table evidence must name the actually bound buffer slice, reject
+unreadable/out-of-bounds or unobserved changed bytes, and invalidate old entries
+before a later observed write can bless an unobserved raw mutation. Reopening
+a table or replacing slot 30 with bytes must invalidate its old witness.
+Snapshots must not retain Metal resources. Keep descriptor storage bounded;
+eviction, missing creation and observation failure yield unknown, not defaults.
+Serialize exact sampler LOD float bits and actual texture view descriptors.
+This proves issued descriptor inputs only, not cross-process resource identity,
+texture contents, shader ABI selection, residency or eventual GPU reads.
+
+A same-process texture-content join may use a nonzero monotonic observation
+token attached to the actual Metal texture object. Bind observation and the
+texture selected for readback must obtain the same token while the objects are
+live, then preserve the token in cold output. Tokens must not retain Metal
+objects or be reused after destruction; zero means unavailable. A token is not
+a Tape identity or comparable across processes. Pair it with authenticated
+source/pass/draw provenance and an explicit no-writer interval before attributing
+readback bytes to a sampled input. This still does not prove sampled texels or
+GPU reads, and cannot repair missing original evidence.
+
+Color endpoint extent selectors must intersect source, attachment and pass
+selectors before admitting a GPU readback or charging its bounded budget.
+Width/height are positive exact subresource extents, not resource identity.
+Malformed, zero or overflowing selectors must disable observation instead of
+widening the scope. Same-input pixel and empty-output negative tests must pin
+this diagnostic-only selection.
+
+Capture-only draw-texture observations must apply the same full source witness
+before deduplication/budget admission, so uncaptured startup frames cannot
+exhaust the budget needed by the published interval. This scope requires
+bounded per-pass collection; malformed or unbounded selectors are rejected.
+The cold completion metadata must preserve owner, source/raw ordinal and
+source/storage generations independently of later registry reuse. A missing
+witness cannot be repaired with a nearby frame's texture. Effect logging and
+color endpoint readbacks are not prerequisites for this texture-only scope.
+Independent native pixel cuts and a two-dump budget with earlier uncaptured
+draws must verify noninterference and exact source selection.
+
+The normal reference contract is distinct from this diagnostic
+(`R-HARN-REPLAY-8.14`). Its versioned policy must explicitly bind capture-source
+cuts and route to a shared authenticated `CaptureSourceReplayPlan`. The pure
+range planner borrows the full raw's handle table and payload arena, adjusts
+only its local planning header/record span, and returns raw-absolute record
+locators. Lease/segment ordinals describe that local range, not a new imported
+raw. Exact capacity is recomputed for each range; non-additive derived capacity
+dimensions must not be summed from unrelated whole-raw plans.
+
+At execution, a Direct lease settles before its source boundary is published.
+An ordinary non-Present publication returns its actual local source metadata;
+a terminal Present owns its own publication; state-only completion does not
+manufacture a source. The expected Direct source/storage/sequence must match
+the current writer before it can be flushed. Capture provenance and private
+raw ownership are bound separately from queue-local publication metadata:
+`CpuReadyTape` rejects repeated nonzero raw ordinals at publication, even when
+each new writer has an empty span witness. No generic high-water relaxation is
+permitted to make capture cuts pass. One raw owner, wrapper/snapshot retention,
+and drain journal survive all ranges. Source-local pre-effect fallback must
+never invoke the whole-raw compatibility fallback after an executed prefix.
+Sequential bounded admission may fail-stop; this is not a guarantee of
+completion under allocation failure. CPU execution must drain through its
+controlled completion seam and must not wait for an absent encoder worker.
+
+The shared execution entry is
+`device_c_chunk_replay.cpp` / `replayPrevalidatedResolvedCommandChunkBySources`.
+Its cold publication scope observes actual Ready publications (including
+implicit command-limit cuts and Present) under the queue mutex, copies bounded
+receipts, and invokes the source consumer only after releasing that mutex.
+Receipt storage admits at most 4096 records per raw and 8193 receipts; it is not
+queue capacity. Bootstrap retains its whole-chunk route. The CPU executor
+reauthenticates the plan against the exact tape/sidecar before object effects,
+checks each actual Ready identity against the receipts, and drains the
+no-worker queue outside the publication callback's locked observer. Its replay
+timing excludes nested controlled completion/observation, but still includes
+bootstrap replay. A normal GPU callback does not add source-local waits.
+
+### Controlled sampled-input intervention
+
+A cold general-provider causal diagnostic may replace one complete, single-level
+2D R32F texture after one authenticated captured-source settlement. It must
+require an exact source-plan digest, kind/generation/object identity, source
+locator and immutable input SHA-256; validate all of these and the bounded full
+extent before replay effects. The source must exist and precede another source.
+The CLI is `--audit-texture-input GEN:ID:AFTERSEQ:SHA256:PATH`, with positive
+decimal identities, lowercase SHA-256, an owned nonempty regular-file payload
+bounded to 64 MiB, and 2D dimensions bounded to 4096 each. Descriptor format
+uses the D3D wire domain (`R32F=114`), not the backend `core::Format` ordinal.
+The wrapper stages a separate `texture-input-audit.r32f`, records the request
+and provider command, and retains populated rejected transactions if artifact
+publication fails. Observer directories must remain outside the final output
+directory so they cannot pre-create the atomic publication destination.
+The intervention may neither modify the Tape/original oracle nor become a CPU
+or GPU policy candidate. Every receipt layer must retain its diagnostic status;
+forged wrapper flags must not hide provider-level intervention evidence.
+
+The callback runs outside the queue lock, with the raw owner still retained.
+It drains preceding work, snapshots the target's actual bytes, uploads the
+replacement through the existing resource path and reads it back before the
+next source is admitted. One-shot or upload/readback failure is fail-stop; it
+must not continue with an unknown partial intervention. The unchanged default
+has no new renderer observer, queue state or PE/unix ABI. Pure admission
+negatives and actual Metal readbacks bind this diagnostic to existing source
+settlement/completion semantics; no new interleaving policy is introduced.
+
+Every causal experiment must pair replay-produced bytes (same-path control)
+with original-produced bytes at the identical locator. A changed image under
+both inputs can instead be caused by the added drain/upload. A successful
+original-input intervention is localization evidence, never proof that the
+unmodified renderer has been fixed or permission to replace its oracle.
+A large-contrast input may test sensitivity, but neither that response nor a
+pool-selected view readback proves every actual Metal binding or sample address.
+
+`experiment --source-boundary-mode capture-source --reset cold-device` exposes
+this normal route for either `compatibility` or `production-slot`, using the
+bundle's authenticated identity. It is exclusive with the seed/source-cut
+diagnostic modes; the controlled sampled-input intervention may consume this
+same source contract but remains unqualified. Normal policy execution rejects
+unbound v1 policy knobs. The exact five-key `dxmt9.render_tape.cpu_policy.v1`
+schema keeps its historical chunk-boundary meaning. The seven-key
+`dxmt9.render_tape.cpu_policy.v2` schema adds `source_boundary_mode`, which must
+be `capture-source`, and a nonzero lowercase `source_plan_sha256`. This digest
+binds the native plan's domain/version, original tape and identity digests,
+and ordered capture-owned event/source/sequence/chunk/record-range rows. It is
+not a queue authority. Both native CLIs must reject a mismatching expected
+digest before replay effects. The public wrapper forwards it through
+`--source-plan-sha256`; omitted expected digests permit only unqualified normal
+GPU investigation, never policy ranking.
+
+`source_replay` records full source settlements and actual local Ready
+publications, as well as the plan digest and completed, published, empty and
+Present-bearing counts. The gate must reconstruct the plan digest from the
+rows and authenticated input components, validate exact range coverage and
+fresh local source/storage/sequence identities, and reject missing, duplicate,
+reordered or truncated receipts. Counts alone are insufficient. CPU and GPU
+queue-local identities need not equal one another; the shared capture plan
+must equal. Verification, GPU qualification and low-observer measurement each
+retain their own policy-bound receipt. Source evidence under v1 is rejected,
+including nonempty evidence hidden behind a false request flag. Exact original
+GPU readbacks and final input/binary/environment reauthentication remain
+mandatory; diagnostic receipts cannot be converted into normal evidence.
+
+`experiment --audit-source-boundaries --replay-route compatibility
+--reset cold-device` is a cold general-provider diagnostic. It requires the
+original authenticated `identity.bin` with Capture authority and completed
+event settlements. The provider revalidates the sidecar against its owned
+tape/catalogue, plans all event-local source record intervals before replay,
+and executes them through the existing record-range replay transaction and
+production sink. Every successful source range requests queue publication; state
+continues across ranges and no source-local GPU wait is added. Bootstrap and
+resource/control event ordering remain unchanged. Fresh provider-local queue
+identities are never relabelled with capture seq IDs.
+
+The optional repeated `--audit-batch-cut EVENT:RECORD` adds a CPU batch flush
+before a zero-based record within that event (at most 4096 locators). It requires
+the source-boundary diagnostic. Locators must be sorted and unique, target a
+non-UP draw, and lie strictly inside an authenticated source. All locators
+validate before any tape effect. Subranges share the source transaction;
+the sink flushes pending DrawRun storage at each subrange end, while source
+publication remains outside that loop. No explicit encoder end or GPU wait
+is added. Requested/completed batch cuts are distinct from publication counts;
+observed physical pass starts must be compared to exclude an indirect change.
+
+The trace is `unqualified input -> validated exact cover -> ordered range
+effects -> publication request -> next range`. Missing/overlapping/reordered/zero
+ranges or an altered tape digest reject before effects. A failure after the
+first effect is terminal and does not fall back to whole-chunk replay. A
+state-only range with no pending queue commands completes without manufacturing
+empty GPU work. Allocation exceptions close the active transaction journal and
+preserve the completed-range prefix. Native
+exhaustive coverage checks and malformed/stale sidecar tests bind this bounded
+ordering contract; existing queue lifecycle TLA models cover the reused publication
+mechanism, not equivalence of pixels across different physical cuts.
+
+`source_boundary_audit` reports requested/validated/complete and requested/
+completed source counts independently of the pixel oracle. `complete` means
+all source ranges and publication requests executed; it does not certify the GPU
+pass count. The existing effect trace joins actual physical pass starts by
+issued draw order to test whether the requested cuts reproduced the original.
+Source count is not physical pass count. The option is mutually exclusive with
+other audits and is excluded from GPU policy qualification even when its
+readback matches. It must neither replace original RGBA nor widen tolerance.
+
+### Paired pass-end depth diagnostic
+
+`DXMT9_DUMP_COLOR_ATTACHMENT_DEPTH_PAIR=1` adds one cold depth copy only when
+the existing bounded hash-only color observer selects a pass end. It requires
+`AFTER_DRAW=0`, a path/directory and `MAX_DUMPS` in 1–256. The same selector and
+budget own both outputs; there is no second scan, forced Store, pass split or
+publication. Missing depth, unresolved/discarded Store, logical stencil, MSAA,
+non-2D/mipmapped depth or mismatching extents produce no depth witness.
+
+The supported copy is the complete tightly packed native float32 depth image:
+plain Depth32Float (Metal format 252), or only the depth plane of logical
+D24X8 backed by Depth32Float_Stencil8 (Metal format 260), using
+`MTLBlitOptionDepthFromDepthStencil`. D24S8 and Depth24Unorm_Stencil8 remain
+unsupported; there is no D24 packing, shader conversion or numeric conversion.
+Metadata records the actual native format and whether depth-plane extraction
+was used. The sibling `.depth.bin` and
+`.depth.json` retain byte digest/extent, source and storage generations, depth
+handle, and the paired color metadata filename. Captured source provenance
+must be the same frozen pass witness used by the color observation. Native
+GPU tests must compare independently expected depth bytes and unchanged color
+pixels, and cover disabled, disjoint-selector and malformed-policy absence.
+No new TLA model is required for this diagnostic: it changes neither ordering
+nor lifetime policy. It does not prove depth contents at a particular draw,
+the first differing draw, or final-pixel fidelity, and cannot qualify a policy.
+
+### Bounded actual-draw vertex position probe
+
+An explicitly enabled, diagnostic-only probe may clone the actual selected
+conventional PSO to observe final clip-space positions. It requires an exact
+vertex-source SHA-256, output directory, 1-32 draw budget, 1-8192 vertex bound
+and a finite indexed triangle-list count. Initial eligibility is one instance,
+zero base vertex/instance and known bounded CPU-readable indices. The source
+must be the supported generated `dxmt9_vs` entry, with an unused slot29 and one
+terminal return; unsupported/ambiguous shapes reject before changing bindings.
+
+The probe instruments only the selected draw, never globally replaces its
+shader family. It restores the original PSO before the next draw, does not
+split a pass, and invokes the original draw exactly once even when preflight
+fails. No fallback/retry is permitted after issuing Metal work. Readback storage
+is immutable to the CPU after admission and pinned to the actual command-buffer
+completion. Unknown/failed completion must not produce a successful witness.
+Atomic per-vertex position min/max bits and invocation counts handle duplicate
+indices without racing ordinary writes and expose conflicting observations.
+
+Receipts retain original/instrumented source and PSO identities, actual source/
+ordinal and capture owner/source/storage generations, geometry bounds, output
+digest and completion disposition. Replay-local identities require a separate
+validated capture-source mapping. A directory is diagnostic even when named
+`0`; forged non-diagnostic metadata cannot make the run eligible for GPU policy
+ranking. The disabled path adds no draw-payload fields or per-draw allocation.
+
+This is a shader/PSO perturbation, not a passive proof of historical GPU reads.
+Pure eligibility/source-rewrite tests, actual-Metal pixel calibration, rejection
+and restore/exactly-once/completion tests precede a bounded wild capture. The
+existing completion/lifetime model still applies; no new scheduling policy or
+general shader-invariance proof is claimed. Calibration of a synthetic or
+standalone fixture cannot qualify an original GT2 pixel failure.
+
+The optional `skinning-inputs` detail is a closed generated two-bone skinning
+shape, additionally bounded to 16 attempts and 2048 vertices. It materializes
+each of the six selected bone rows and four projection rows once in shader
+locals, then uses those exact locals in both the original expressions and the
+observation. It must not label a later reread as the operand previously used.
+It records 23 four-word fields: final position, four decoded vertex inputs,
+address registers, six bone rows, four projection rows, half-pixel correction,
+geometry address, skinned position, three blended rows and pre-half-pixel
+position. The separate input-probe schema specifies 92 min words, 92 max words
+and one invocation counter per vertex. Labels, extent, identities and source
+digests are mandatory; malformed or ambiguous generated shapes reject before
+effects. This is compiler perturbation with earlier operand evaluation, valid
+as equivalent only for immutable inputs; retain a baseline calibration and
+explicitly exclude retrospective original GPU-memory proof. Independent Metal
+input/value and pixel fixtures precede a new original-context capture. No new
+queue/scheduling policy or numerical invariance proof is introduced.
+
+### Digest-selected arithmetic intervention
+
+`DXMT9_PROBE_NO_CONTRACT_SOURCE_SHA256` is a diagnostic-only compiler control,
+not a renderer policy. A comma-separated selection of one to eight distinct
+original lowercase source digests selects only bounded generated vertex entries
+accepted by the position probe's unique-entry, unused-slot and terminal-return
+guard; the guard's observer is not emitted. Before library creation the unix
+owner may prepend `#pragma clang fp contract(off)` without changing
+shader inputs, geometry, binding ABI or submission order. Unknown shapes,
+existing pragmas and preparation failures retain the original source before
+compilation; compiler failure must propagate normally. Actual compiled source
+and PSO lineage must describe the transformed bytes, and the diagnostic log
+must bind the original and transformed digests. No source file replacement or
+shader substitution is allowed after compilation.
+
+Any nonempty request, including malformed `0` or a digest that never matches,
+taints the public experiment/qualification receipt independently of other
+observers. Duplicate, malformed or over-bound selections disable transformation
+without losing diagnostic classification. This control is an explicit arithmetic
+intervention, not a claim that all generated MAD instructions should change
+semantics in production.
+Pure source-transform negatives and an actual selected-library Metal fixture
+precede retained-Tape trials. TLA is not the arithmetic oracle: this control
+changes no queue ownership or ordering. Historical input/output bytes remain
+mandatory, and an intermediate depth repair does not qualify a final pixel.

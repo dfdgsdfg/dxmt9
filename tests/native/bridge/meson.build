@@ -407,6 +407,7 @@ foreach spec : [
   ['render-tape-capture', 'render_tape_capture_spec.cpp'],
   ['render-tape-projection', 'render_tape_projection_spec.cpp'],
   ['render-tape-provider', 'render_tape_provider_spec.cpp'],
+  ['render-tape-source-plan', 'render_tape_source_plan_spec.cpp'],
 ]
   sources = [spec[1]]
   if spec[0] == 'render-tape-capture'
@@ -554,6 +555,34 @@ test('dxmt9-render-tape-cpu-policy-cli-spec', python3,
             cpu_ready_production_routing_spec, dxmt9_render_tape_tool,
             join_paths(meson.project_source_root(), 'scripts/tools/run_dxmt9_render_tape.py')],
      env: dxmt9_native_test_env,
+     timeout: 120)
+
+test('dxmt9-render-tape-gpu-policy-python-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                      'scripts/check/test_render_tape_gpu_policy.py')],
+     env: dxmt9_native_test_env)
+
+test('dxmt9-render-tape-gpu-policy-cli-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                      'scripts/check/test_render_tape_gpu_policy_cli.py'),
+            render_tape_provider_fixture_spec,
+            cpu_ready_production_routing_spec,
+            dxmt9_render_tape_provider_tool,
+            dxmt9_render_tape_tool,
+            join_paths(meson.project_source_root(),
+                       'scripts/tools/run_dxmt9_render_tape.py')],
+     env: render_tape_provider_test_env,
+     timeout: 300)
+
+test('dxmt9-render-tape-compilation-lineage-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                      'scripts/check/test_render_tape_compilation_lineage.py'),
+            render_tape_provider_fixture_spec, dxmt9_render_tape_provider_tool,
+            dxmt9_render_tape_tool,
+            join_paths(meson.project_source_root(),
+                       'scripts/tools/run_dxmt9_render_tape.py')],
+     env: render_tape_provider_test_env,
+     is_parallel: false,
      timeout: 120)
 
 test('dxmt9-render-tape-cpu-experiment-cli-spec', python3,

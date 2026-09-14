@@ -10,6 +10,19 @@
 
 namespace dxmt9::render {
 
+// R-BACK-2.65: physical successor space does not reopen a hysteresis latch.
+// SessionAdmissionHysteresis.SessionLimit binds this fixed, queue-local cap.
+constexpr std::uint64_t sessionResidencyLimitForHysteresis(
+    std::uint64_t highWater, std::uint64_t lowWater,
+    std::uint64_t successorHeadroom) noexcept {
+  if (lowWater >= highWater || successorHeadroom == 0 ||
+      successorHeadroom >= highWater) {
+    return 0;
+  }
+  const auto physicalLimit = highWater - successorHeadroom;
+  return lowWater < physicalLimit ? lowWater : physicalLimit;
+}
+
 enum class EncodeQueueLane : std::uint8_t {
   Invalid,
   CpuReadySerial,

@@ -285,6 +285,18 @@ receipt/Tape/queue/production-loop tests under the x86_64 build.
 
 ## 2. Module Structure
 
+`SessionAdmissionHysteresis` adds the low-water latch composition for
+`R-BACK-2.65`: a deferred-Clear-pinned open session must leave a Ready cap
+candidate before admission can depend on its own submission. Its fixed
+`SessionLimit` algebra is shared with the production
+`sessionResidencyLimitForHysteresis` contract and exhaustively checked by
+`encode_session_admission_spec`. `cpu_ready_session_join_spec` binds the real
+coordinator, Tape pressure latch, source generations, retirement and completion
+to the six-source counterexample. The normal configuration checks safety and
+writer/terminal progress; the high-water-only companion must fail
+`NoClosedEmptySessionCycle`. This small model does not replace the broader
+lease, completion, wrap allocator, or GPU-oracle evidence.
+
 The final-slot carrier-free claim is limited to eligible Direct whole-range
 replay. Compatibility-only or excluded ranges remain compatibility-owned and
 are not included in that claim.
@@ -312,6 +324,8 @@ specs/verification/
     ├── CpuReadyActiveHeadLookahead.cfg
     ├── SessionCapacityLease.tla  fixed lease/headroom and cap-boundary refinement
     ├── SessionCapacityLease.cfg
+    ├── SessionAdmissionHysteresis.tla  page latch / deferred-Clear composition
+    ├── SessionAdmissionHysteresis.cfg
     ├── ParallelDrawBinding.tla  child-local A→B→A binding/order/join refinement
     ├── ParallelDrawBinding.cfg
     ├── RenderTapeParallelJoin.tla  Clear/FULL_SNAPSHOT DrawRun/child join/Present refinement

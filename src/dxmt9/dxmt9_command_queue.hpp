@@ -862,6 +862,11 @@ class CommandQueue {
   void failStopCpuReadyArena() noexcept {
     arenaBuildPoisoned_.store(true, std::memory_order_release);
   }
+  // Cold replay-source consumers use the queue's terminal scheduling stop
+  // rather than only poisoning an Arena lease. This is intentionally public
+  // so a consumed capture scope can fail closed after a post-publication
+  // settlement or preflight error.
+  void failStopReplaySourceExecution() noexcept;
   // Bulk resource retention — chunk importer hands the deduped handle
   // set from D9CCommandChunk.handles[] in one call. Single mutex
   // acquire, dispatches per-kind to pool_.markBufferUse / markTextureUse
@@ -982,6 +987,79 @@ class CommandQueue {
   // failed offload worker on this device).
   void abortPresentOrdinalWaits();
   void submitFlush();
+
+  // Cold Render Tape discriminator: publish the current ordinary source but
+  // do not wait for GPU completion. Capacity admission retains its existing
+  // backpressure. Active Arena/direct transactions cannot be cut here.
+  bool publishReplayDiagnosticBoundary() noexcept;
+  struct ReplaySourcePublicationCaptureResult {
+    bool complete = false;
+    std::size_t count = 0;
+  };
+  class ReplaySourcePublicationCapture {
+   public:
+    ReplaySourcePublicationCapture() = default;
+    ReplaySourcePublicationCapture(const ReplaySourcePublicationCapture&) =
+        delete;
+    ReplaySourcePublicationCapture& operator=(
+        const ReplaySourcePublicationCapture&) = delete;
+    ReplaySourcePublicationCapture(
+        ReplaySourcePublicationCapture&& other) noexcept;
+    ReplaySourcePublicationCapture& operator=(
+        ReplaySourcePublicationCapture&& other) noexcept;
+    ~ReplaySourcePublicationCapture();
+
+    ReplaySourcePublicationCaptureResult finish() noexcept;
+
+   private:
+    friend class CommandQueue;
+    ReplaySourcePublicationCapture(CommandQueue& queue,
+                                   std::uint64_t generation) noexcept
+        : queue_(&queue), generation_(generation) {}
+
+    CommandQueue* queue_ = nullptr;
+    std::uint64_t generation_ = 0;
+  };
+
+  std::optional<ReplaySourcePublicationCapture>
+  beginReplaySourcePublicationCapture(
+      std::span<core::metalqueue::ReplaySourcePublicationReceipt>
+          receipts) noexcept;
+
+  enum class ReplaySourceBoundaryStatus : std::uint8_t {
+    Published,
+    Empty,
+    Rejected,
+  };
+  struct ReplaySourceBoundaryExpectation {
+    core::CpuReadyTape::SourceRef source{};
+    std::uint64_t seqId = 0;
+
+    constexpr bool empty() const noexcept {
+      return source == core::CpuReadyTape::SourceRef{} && seqId == 0;
+    }
+    constexpr bool valid() const noexcept {
+      return source.valid() && seqId != 0;
+    }
+  };
+  struct ReplaySourceBoundaryResult {
+    ReplaySourceBoundaryStatus status =
+        ReplaySourceBoundaryStatus::Rejected;
+    core::CpuReadyTape::SourceRef source{};
+    core::CpuReadySourceMetadata metadata{};
+    std::size_t controlIndex = std::numeric_limits<std::size_t>::max();
+
+    constexpr bool published() const noexcept {
+      return status == ReplaySourceBoundaryStatus::Published;
+    }
+  };
+  // Typed cold publication used by replay-source consumers. The optional
+  // expectation binds the current writer to an already-admitted Direct source
+  // and its predicted sequence; a partial or stale expectation is rejected
+  // before commit. Empty writers return Empty without inventing a source.
+  ReplaySourceBoundaryResult publishReplaySourceBoundary() noexcept;
+  ReplaySourceBoundaryResult publishReplaySourceBoundary(
+      ReplaySourceBoundaryExpectation expected) noexcept;
   // Cold post-flush check for callers that need a success/failure result,
   // rather than treating submitFlush's terminal wake as successful completion.
   bool hasCompletedPendingWork();
@@ -1453,6 +1531,26 @@ class CommandQueue {
   void emitCopyMaterializationReport() const noexcept;
   void noteCopyMaterializationPublishedPresent() noexcept;
   void requestSchedulingStopLocked() noexcept;
+  struct ReplaySourcePublicationCaptureContext {
+    std::span<core::metalqueue::ReplaySourcePublicationReceipt> receipts{};
+    std::size_t count = 0;
+    bool overflow = false;
+    bool failed = false;
+    std::thread::id ownerThread{};
+    std::uint64_t generation = 0;
+  };
+  static void replaySourcePublicationCaptureObserver(
+      void* context,
+      const core::metalqueue::ReplaySourcePublicationReceipt& receipt) noexcept;
+  void recordReplaySourcePublicationLocked(
+      const core::metalqueue::ReplaySourcePublicationReceipt& receipt) noexcept;
+  ReplaySourcePublicationCaptureResult finishReplaySourcePublicationCapture(
+      std::uint64_t generation) noexcept;
+  void abandonReplaySourcePublicationCapture(
+      std::uint64_t generation) noexcept;
+  bool replaySourcePublicationCaptureActiveLocked() const noexcept {
+    return replaySourcePublicationCapture_.has_value();
+  }
   bool cpuReadyArenaControlSlotsFreeLocked(
       std::size_t requiredSlots) const noexcept;
   void notifySchedulingTerminalWaiters(
@@ -2134,6 +2232,9 @@ class CommandQueue {
   // either way and this ordering documents the intent.
   std::unique_ptr<render::IRenderBackend> backend_;
   core::metalqueue::ReplayObserverSink replayObserver_{};
+  std::optional<ReplaySourcePublicationCaptureContext>
+      replaySourcePublicationCapture_{};
+  std::uint64_t replaySourcePublicationCaptureGeneration_ = 0;
 
   std::thread encodeThread_{};
   std::thread finishThread_{};

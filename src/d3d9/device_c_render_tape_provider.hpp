@@ -62,6 +62,40 @@ enum class RenderTapePreparedReset : std::uint8_t {
   WarmDevice,
 };
 
+enum class RenderTapeSourceBoundaryMode : std::uint8_t {
+  Chunk,
+  CaptureSource,
+};
+
+struct RenderTapeBatchCut {
+  std::uint64_t eventOrdinal = 0u;
+  std::uint32_t beforeRecord = 0u;
+};
+
+// Cold causal intervention, never a rendering policy. The caller owns the
+// immutable bytes until the synchronous prepared call returns. Only one full
+// single-level 2D R32F input is supported, at an authenticated source cut.
+struct RenderTapeTextureInputAuditRequest {
+  D9CWireObjectIdentity identity{};
+  std::uint64_t afterCapturedSeqId = 0u;
+  RenderTapeDigest digest{};
+  std::span<const std::byte> bytes{};
+};
+
+struct RenderTapeTextureInputAuditEvidence {
+  bool requested = false;
+  bool validated = false;
+  bool attempted = false;
+  bool uploaded = false;
+  bool readbackMatched = false;
+  D9CWireObjectIdentity identity{};
+  std::uint64_t afterCapturedSeqId = 0u;
+  std::uint64_t byteCount = 0u;
+  RenderTapeDigest inputDigest{};
+  RenderTapeDigest beforeDigest{};
+  RenderTapeDigest afterDigest{};
+};
+
 struct RenderTapePreparedExecutionOptions {
   RenderTapePreparedRoute route = RenderTapePreparedRoute::Compatibility;
   RenderTapePreparedReset reset = RenderTapePreparedReset::FreshDevice;
@@ -74,6 +108,89 @@ struct RenderTapePreparedExecutionOptions {
   // Cold general-provider-only diagnostic. It stages eligible CompleteSeed
   // textures before logical replay and transfers them at their definitions.
   bool auditTexturePrestage = false;
+  // Cold general-provider discriminator. Source cuts are authenticated against
+  // the owned tape; they are not imported as this process's queue identities.
+  bool auditSourceBoundaries = false;
+  // Explicit normal reference policy, distinct from the source-cut diagnostic.
+  RenderTapeSourceBoundaryMode sourceBoundaryMode = RenderTapeSourceBoundaryMode::Chunk;
+  std::span<const std::byte> sourceBoundaryIdentity{};
+  // Required by the authenticated CaptureSource policy.  The digest is a
+  // value, rather than a borrowed text buffer, so the policy gate remains
+  // valid for the entire prepared execution call.
+  RenderTapeDigest expectedSourcePlanDigest{};
+  bool hasExpectedSourcePlanDigest = false;
+  // Optional diagnostic flushes strictly inside authenticated source ranges.
+  // These end a CPU DrawRun batch, not a source publication or Metal pass.
+  std::span<const RenderTapeBatchCut> auditBatchCuts{};
+  const RenderTapeTextureInputAuditRequest* auditTextureInput = nullptr;
+};
+
+struct RenderTapeSourceBoundaryEvidence {
+  bool requested = false;
+  bool diagnostic = true;
+  bool validated = false;
+  bool complete = false;
+  std::uint32_t sourceCount = 0u;
+  std::uint32_t completedSourceCount = 0u;
+  std::uint32_t batchCutCount = 0u;
+  std::uint32_t completedBatchCutCount = 0u;
+};
+
+struct RenderTapeSourceReplayPublicationEvidence {
+  std::uint32_t sourceIdIndex = 0u;
+  std::uint64_t sourceIdGeneration = 0u;
+  std::uint32_t storageFirstPage = 0u;
+  std::uint32_t storagePageCount = 0u;
+  std::uint64_t storageGeneration = 0u;
+  std::uint64_t metadataRawOrdinal = 0u;
+  std::uint64_t metadataSourceOrdinal = 0u;
+  std::uint64_t metadataSeqId = 0u;
+  std::uint64_t metadataBuildGeneration = 0u;
+  std::uint64_t metadataUsedBytes = 0u;
+  std::uint32_t metadataPageCount = 0u;
+  std::uint32_t metadataPaddingPagesBefore = 0u;
+  bool metadataStrictAdmission = false;
+  std::uint64_t controlIndex = 0u;
+  bool hasPresent = false;
+};
+
+enum class RenderTapeSourceReplaySettlement : std::uint8_t {
+  Empty,
+  Published,
+  PresentPublished,
+};
+
+struct RenderTapeSourceReplayRowEvidence {
+  std::uint64_t eventOrdinal = 0u;
+  std::uint64_t sourceOrdinal = 0u;
+  std::uint64_t capturedSeqId = 0u;
+  std::uint32_t commandChunkIndex = 0u;
+  std::uint32_t firstRecord = 0u;
+  std::uint32_t recordCount = 0u;
+  // These are provider-local settlement facts.  In particular, rawOrdinal
+  // and every publication locator are never treated as captured authority.
+  std::uint64_t actualRawOrdinal = 0u;
+  std::uint32_t rangeIndex = 0u;
+  std::uint32_t publicationOffset = 0u;
+  std::uint32_t publicationCount = 0u;
+  bool settled = false;
+  RenderTapeSourceReplaySettlement settlement =
+      RenderTapeSourceReplaySettlement::Empty;
+};
+
+struct RenderTapeSourceReplayEvidence {
+  bool requested = false;
+  bool validated = false;
+  bool complete = false;
+  RenderTapeDigest planDigest{};
+  std::uint64_t sourceCount = 0u;
+  std::uint64_t completedSourceCount = 0u;
+  std::uint64_t publicationCount = 0u;
+  std::uint64_t emptySourceCount = 0u;
+  std::uint64_t presentSourceCount = 0u;
+  bool storageOverflow = false;
+  std::vector<RenderTapeSourceReplayRowEvidence> sources{};
+  std::vector<RenderTapeSourceReplayPublicationEvidence> publications{};
 };
 
 struct RenderTapeFreshSeedDrainEvidence {
@@ -321,6 +438,9 @@ struct FrameTapeReplayResult {
   RenderTapeInitialSeedAuditEvidence initialSeedAudit{};
   RenderTapeFreshSeedDrainEvidence freshSeedDrainAudit{};
   RenderTapeTexturePrestageEvidence texturePrestageAudit{};
+  RenderTapeSourceBoundaryEvidence sourceBoundaryAudit{};
+  RenderTapeTextureInputAuditEvidence textureInputAudit{};
+  RenderTapeSourceReplayEvidence sourceReplay{};
 
   bool complete() const noexcept {
     return status == FrameTapeReplayStatus::Complete;

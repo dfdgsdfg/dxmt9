@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cstddef>
@@ -11,6 +12,7 @@
 #include <utility>
 
 #include "dxmt9/core.hpp"
+#include "../../../src/dxmt9/dxmt9_blit_encoders.hpp"
 #include "../../../src/dxmt9/dxmt9_ffp_shaders.hpp"
 #include "../../../src/dxmt9/dxmt9_format_convert.hpp"
 #include "../../../src/dxmt9/dxmt9_pipeline_cache.hpp"
@@ -780,6 +782,76 @@ void testFillPipelineKeyUsesFullRgbaSourceIdentity() {
         "fill PSO hash changes when embedded alpha source changes");
 }
 
+void testClippedClearRectTruthTable() {
+  // Exhaustive binary domain for the production store choice. A resolve-only
+  // mutation loses the source after either full or partial Clear, so a later
+  // Load has no defined samples even if the resolved readback looks correct.
+  for (bool hasResolve : {false, true}) {
+    const auto action = dxmt9::encoders::clearColorStoreAction(hasResolve);
+    const bool retainsSamples = action == WMTStoreActionStore ||
+                               action == WMTStoreActionStoreAndMultisampleResolve;
+    const bool resolves = action == WMTStoreActionMultisampleResolve ||
+                          action == WMTStoreActionStoreAndMultisampleResolve;
+    check(retainsSamples && resolves == hasResolve,
+          "Clear store choice preserves source samples and required resolve");
+  }
+  const auto clipped = dxmt9::encoders::clipClearRect(Rect{-3, 4, 12, 20}, 16, 16);
+  check(clipped.has_value(), "partially out-of-bounds clear rectangle remains drawable");
+  checkEq(clipped->x, std::uint64_t{0}, "clear rect clips left edge");
+  checkEq(clipped->y, std::uint64_t{4}, "clear rect preserves top edge");
+  checkEq(clipped->width, std::uint64_t{12}, "clear rect clips width");
+  checkEq(clipped->height, std::uint64_t{12}, "clear rect clips bottom edge");
+
+  check(!dxmt9::encoders::clipClearRect(Rect{16, 0, 20, 4}, 16, 16).has_value(),
+        "clear rect fully outside right edge is skipped");
+  check(!dxmt9::encoders::clipClearRect(Rect{4, 8, 3, 9}, 16, 16).has_value(),
+        "inverted clear rect is skipped");
+  check(!dxmt9::encoders::clipClearRect(Rect{0, 0, 0, 0}, 16, 16).has_value(),
+        "empty clear rect is skipped");
+
+  // Exhaustively bind the production clipping transform to the reference
+  // region law over a small adversarial domain (including negative and
+  // out-of-bounds coordinates).
+  for (int left = -2; left <= 18; ++left) {
+    for (int top = -2; top <= 18; ++top) {
+      for (int right = -2; right <= 18; ++right) {
+        for (int bottom = -2; bottom <= 18; ++bottom) {
+          const bool intersects = left < 16 && top < 16 && right > 0 && bottom > 0 &&
+                                  right > left && bottom > top;
+          const auto actual = dxmt9::encoders::clipClearRect(
+              Rect{left, top, right, bottom}, 16, 16);
+          check(actual.has_value() == intersects,
+                "clear clipping agrees with rectangle intersection law");
+          if (actual) {
+            check(actual->x == static_cast<std::uint64_t>(std::max(left, 0)) &&
+                      actual->y == static_cast<std::uint64_t>(std::max(top, 0)) &&
+                      actual->width == static_cast<std::uint64_t>(
+                          std::min(right, 16) - std::max(left, 0)) &&
+                      actual->height == static_cast<std::uint64_t>(
+                          std::min(bottom, 16) - std::max(top, 0)),
+                  "clear clipping preserves exactly the intersected region");
+          }
+        }
+      }
+    }
+  }
+}
+
+void testClearPipelineKeysCarryDepthStencilShape() {
+  const auto depth = dxmt9::pipeline::detail::makeDepthStencilClearPipelineKey(
+      0.25f, WMTPixelFormatDepth32Float, 0u, 1u, true, false);
+  const auto stencil = dxmt9::pipeline::detail::makeDepthStencilClearPipelineKey(
+      0.25f, 0u, WMTPixelFormatStencil8, 1u, false, true);
+  check(!(depth == stencil), "depth and stencil clear PSOs cannot alias");
+  check(depth.depthFormat == WMTPixelFormatDepth32Float && depth.stencilFormat == 0u,
+        "depth clear key records depth attachment shape");
+  check(stencil.depthFormat == 0u && stencil.stencilFormat == WMTPixelFormatStencil8,
+        "stencil clear key records stencil attachment shape");
+  const auto msaa = dxmt9::pipeline::detail::makeFillPipelineKey(
+      ColorRGBA{0.1f, 0.2f, 0.3f, 1.0f}, WMTPixelFormatBGRA8Unorm, 4u);
+  checkEq(msaa.sampleCount, 4u, "partial color clear fill key carries MSAA sample count");
+}
+
 void testContainedDrawShaderSourcesCarryActualSourceHashes() {
   DrawDesc desc{};
   desc.vertexShader.hash = 0x1001u;
@@ -1323,6 +1395,8 @@ int main() {
     testShaderVariantProbeKeyDropsOnlyActualSourceHashes();
     testShaderVariantKeyHashDifferentiatesVsOutLayout();
     testFillPipelineKeyUsesFullRgbaSourceIdentity();
+    testClippedClearRectTruthTable();
+    testClearPipelineKeysCarryDepthStencilShape();
     testContainedDrawShaderSourcesCarryActualSourceHashes();
     testProgrammableShaderVariantKeyUsesFullVertexDeclHash();
     testPipelineHelpersUseExplicitFlatInputs();

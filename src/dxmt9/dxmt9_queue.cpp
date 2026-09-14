@@ -2487,6 +2487,11 @@ void QueueLifecycleController::bindTrackedSubmissionState(SubmissionBinding bind
   submissionBinding_ = binding;
 }
 
+void QueueLifecycleController::setReplaySourcePublicationSink(
+    ReplaySourcePublicationSink sink) noexcept {
+  submissionBinding_.replaySourcePublicationSink = sink;
+}
+
 bool QueueLifecycleController::retainPoisonedCompatibilityOwner(
     DetachedCompatibilityOwnerToken&& token) noexcept {
   if (!token.valid()) return false;
@@ -3576,6 +3581,29 @@ bool QueueLifecycleController::commitCurrentChunk(
     }
     if (onAfterPublish) {
       onAfterPublish();
+    }
+    // Cold replay-source capture observes the exact Ready publication before
+    // the control slot becomes visible to the encode worker. The nullable
+    // check is publication-scoped; no receipt storage or metadata lookup is
+    // touched when the capture seam is disconnected.
+    const auto replaySourceSink =
+        submissionBinding_.replaySourcePublicationSink;
+    if (replaySourceSink.fn) {
+      const auto source = CpuReadyTape::SourceRef{
+          .id = slot.sourceId,
+          .storage = slot.storage,
+      };
+      const auto metadata = submissionBinding_.cpuReadyTape->sourceMetadata(
+          source.id, source.storage, CpuReadyTape::State::Ready)
+                                .value_or(CpuReadySourceMetadata{});
+      replaySourceSink.fn(
+          replaySourceSink.context,
+          ReplaySourcePublicationReceipt{
+              .source = source,
+              .metadata = metadata,
+              .controlIndex = publishedSlotIndex,
+              .hasPresent = !writingPayload->presentRecords.empty(),
+          });
     }
     // Direct non-Present spans remain in this writing slot until a later
     // queue boundary. Their Publish edge belongs here, after Tape's real

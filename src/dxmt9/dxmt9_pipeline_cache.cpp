@@ -1062,7 +1062,8 @@ BlendAttachmentKey detail::canonicalizeBlendAttachmentKey(
 }
 
 ShaderVariantKey detail::makeFillPipelineKey(const core::ColorRGBA& color,
-                                             u32 pixelFormat) noexcept {
+                                             u32 pixelFormat,
+                                             u32 sampleCount) noexcept {
   ShaderVariantKey key{};
   key.hash = kFnvOffset;
   key.hash = mix(key.hash, kFillPipelineKeyTag);
@@ -1071,8 +1072,32 @@ ShaderVariantKey detail::makeFillPipelineKey(const core::ColorRGBA& color,
   key.hash = mix(key.hash, static_cast<u64>(std::bit_cast<u32>(color.b)));
   key.hash = mix(key.hash, static_cast<u64>(std::bit_cast<u32>(color.a)));
   key.hash = mix(key.hash, pixelFormat);
+  key.hash = mix(key.hash, std::max(1u, sampleCount));
   key.colorFormats[0] = pixelFormat;
   key.blend[0].pixelFormat = pixelFormat;
+  key.sampleCount = std::max(1u, sampleCount);
+  return key;
+}
+
+ShaderVariantKey detail::makeDepthStencilClearPipelineKey(
+    float depth, u32 depthFormat, u32 stencilFormat, u32 sampleCount,
+    bool writeDepth, bool writeStencil) noexcept {
+  constexpr u64 kDepthStencilClearPipelineKeyTag = 0x6473636c725f7073ull;
+  ShaderVariantKey key{};
+  key.hash = kFnvOffset;
+  key.hash = mix(key.hash, kDepthStencilClearPipelineKeyTag);
+  key.hash = mix(key.hash, static_cast<u64>(std::bit_cast<u32>(depth)));
+  key.hash = mix(key.hash, depthFormat);
+  key.hash = mix(key.hash, stencilFormat);
+  key.hash = mix(key.hash, std::max(1u, sampleCount));
+  key.hash = mix(key.hash, static_cast<u64>(writeDepth));
+  key.hash = mix(key.hash, static_cast<u64>(writeStencil));
+  key.sampleCount = std::max(1u, sampleCount);
+  key.depthFormat = depthFormat;
+  key.stencilFormat = stencilFormat;
+  // Like the color-fill key, the exact embedded value and shader variant
+  // already identify the generated source. Keep this noexcept value transform
+  // allocation-free; materialize MSL only on the cache-miss path.
   return key;
 }
 
@@ -1351,16 +1376,18 @@ Cache::getOrBuildFillPipeline(WMT::Reference<WMT::Device> device,
                                 const core::ColorRGBA& color,
                                 u32 pixelFormat,
                                 WMT::Reference<WMT::BinaryArchive>* archive,
-                                const std::string* archivePath) {
+                                const std::string* archivePath,
+                                u32 sampleCount) {
   (void)archivePath;
-  const ShaderVariantKey key = detail::makeFillPipelineKey(color, pixelFormat);
+  const ShaderVariantKey key = detail::makeFillPipelineKey(color, pixelFormat, sampleCount);
   std::lock_guard lock(mutex);
   if (auto it = fill.find(key); it != fill.end()) {
     perf::countPipelineCacheHit(perf::PipelineKind::Fill);
     return it->second.future;
   }
   perf::countPipelineCacheMiss(perf::PipelineKind::Fill);
-  auto shared = submitPipelineBuild([device, color, pixelFormat, archive]() mutable {
+  const u32 sampleCountVal = key.sampleCount;
+  auto shared = submitPipelineBuild([device, color, pixelFormat, sampleCountVal, archive]() mutable {
     auto vsLib = shaders::makeLibrary(device, shaders::makeGenericVertexSource(shaders::makeHash("fill")));
     auto fsLib = shaders::makeLibrary(device, shaders::makeGenericFragmentSource(color, shaders::makeHash("fill")));
     if (!vsLib || !fsLib) {
@@ -1375,7 +1402,7 @@ Cache::getOrBuildFillPipeline(WMT::Reference<WMT::Device> device,
     info.colors[0].pixel_format = static_cast<WMTPixelFormat>(pixelFormat);
     info.colors[0].write_mask = WMTColorWriteMaskAll;
     info.rasterization_enabled = true;
-    info.raster_sample_count = 1;
+    info.raster_sample_count = sampleCountVal;
     if (archive && *archive) info.binary_archive_for_serialization = (*archive).handle;
     WMT::Error err{};
     perf::countPipelineBuild(perf::PipelineKind::Fill);
@@ -1392,6 +1419,59 @@ Cache::getOrBuildFillPipeline(WMT::Reference<WMT::Device> device,
     }
     return pso;
   });
+  fill.emplace(key, Entry{shared});
+  return shared;
+}
+
+std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+Cache::getOrBuildDepthStencilClearPipeline(
+    WMT::Reference<WMT::Device> device, float depth, u32 depthFormat,
+    u32 stencilFormat, u32 sampleCount, bool writeDepth, bool writeStencil,
+    WMT::Reference<WMT::BinaryArchive>* archive, const std::string* archivePath) {
+  (void)archivePath;
+  const ShaderVariantKey key = detail::makeDepthStencilClearPipelineKey(
+      depth, depthFormat, stencilFormat, sampleCount, writeDepth, writeStencil);
+  std::lock_guard lock(mutex);
+  if (auto it = fill.find(key); it != fill.end()) {
+    perf::countPipelineCacheHit(perf::PipelineKind::Fill);
+    return it->second.future;
+  }
+  perf::countPipelineCacheMiss(perf::PipelineKind::Fill);
+  const u32 sampleCountVal = key.sampleCount;
+  const auto source = shaders::makeDepthStencilClearFragmentSource(
+      depth, writeDepth, key.hash);
+  auto shared = submitPipelineBuild(
+      [device, depthFormat, stencilFormat, sampleCountVal, source, archive]() mutable {
+        auto vsLib = shaders::makeLibrary(
+            device, shaders::makeGenericVertexSource(shaders::makeHash("depth_clear")));
+        auto fsLib = shaders::makeLibrary(device, source);
+        if (!vsLib || !fsLib) {
+          return WMT::Reference<WMT::RenderPipelineState>{};
+        }
+        auto vs = vsLib.newFunction("dxmt9_vs");
+        auto fs = fsLib.newFunction("dxmt9_fs");
+        WMTRenderPipelineInfo info{};
+        info.max_tessellation_factor = 1;
+        info.vertex_function = vs.handle;
+        info.fragment_function = fs.handle;
+        info.raster_sample_count = sampleCountVal;
+        info.depth_pixel_format = static_cast<WMTPixelFormat>(depthFormat);
+        info.stencil_pixel_format = static_cast<WMTPixelFormat>(stencilFormat);
+        info.rasterization_enabled = true;
+        if (archive && *archive) {
+          info.binary_archive_for_serialization = (*archive).handle;
+        }
+        WMT::Error err{};
+        perf::countPipelineBuild(perf::PipelineKind::Fill);
+        auto pso = device.newRenderPipelineState(info, err);
+        if (pso) {
+          pso.setLabel(labels::makeLabelStringFmt(
+              "pso_depth_stencil_clear_d%u_s%u_msaa%u",
+              static_cast<unsigned>(depthFormat), static_cast<unsigned>(stencilFormat),
+              static_cast<unsigned>(sampleCountVal)));
+        }
+        return pso;
+      });
   fill.emplace(key, Entry{shared});
   return shared;
 }

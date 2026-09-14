@@ -445,6 +445,73 @@ void testFfpVertexCoordinateAndLightingContracts() {
                 "vertex blend feeds lighting and generated texcoord normal");
 }
 
+void testInactiveLightingKeyFieldsDoNotChangeVertexSource() {
+  DrawDesc desc{};
+  desc.vertexDecl.fvf = dxmt9::ffp::kFvfXyz | dxmt9::ffp::kFvfNormal;
+  const auto context = dxmt9::drawshader::makeShaderSourceContext(desc);
+
+  FfpVertexKey disabledKey{};
+  disabledKey.lightingEnabled = false;
+  const auto baseline = dxmt9::ffp::makeFfpVertexSource(disabledKey, context);
+
+  // Exercise every light-enable mask and each supported light type while the
+  // lighting gate is off.  The source emitter must not key its emitted MSL on
+  // any of these inactive fields.
+  constexpr std::array<u32, 3> supportedTypes{
+      static_cast<u32>(LightType::Directional),
+      static_cast<u32>(LightType::Point),
+      static_cast<u32>(LightType::Spot),
+  };
+  for (const auto type : supportedTypes) {
+    for (u32 mask = 0u; mask < (1u << kMaxLights); ++mask) {
+      auto key = disabledKey;
+      key.lightType.fill(type);
+      for (u32 slot = 0u; slot < kMaxLights; ++slot)
+        key.lightEnabled[slot] = (mask & (1u << slot)) != 0u;
+      check(dxmt9::ffp::makeFfpVertexSource(key, context) == baseline,
+            "inactive supported light type/mask does not change FFP VS source");
+    }
+  }
+
+  // Cover every combination of two-bit material selectors (0..2 plus the
+  // fallback value 3), without multiplying by the light-mask/type matrix.
+  for (u32 packed = 0u; packed < 256u; ++packed) {
+    auto key = disabledKey;
+    for (u32 field = 0u; field < key.colorMaterialMode.size(); ++field)
+      key.colorMaterialMode[field] = (packed >> (field * 2u)) & 3u;
+    check(dxmt9::ffp::makeFfpVertexSource(key, context) == baseline,
+          "inactive color-material selectors do not change FFP VS source");
+  }
+
+  // Positive controls: once lighting is active, supported light type, enable
+  // mask placement, and material-source selection must remain source-visible.
+  FfpVertexKey directional{};
+  directional.lightingEnabled = true;
+  directional.lightEnabled[0] = true;
+  directional.lightType[0] = static_cast<u32>(LightType::Directional);
+  const auto directionalSource =
+      dxmt9::ffp::makeFfpVertexSource(directional, context);
+
+  auto point = directional;
+  point.lightType[0] = static_cast<u32>(LightType::Point);
+  check(dxmt9::ffp::makeFfpVertexSource(point, context) != directionalSource,
+        "active light type changes FFP VS source");
+
+  auto movedLight = directional;
+  movedLight.lightEnabled[0] = false;
+  movedLight.lightEnabled[1] = true;
+  movedLight.lightType[1] = static_cast<u32>(LightType::Directional);
+  check(dxmt9::ffp::makeFfpVertexSource(movedLight, context) !=
+            directionalSource,
+        "active light enable mask placement changes FFP VS source");
+
+  auto vertexDiffuseMaterial = directional;
+  vertexDiffuseMaterial.colorMaterialMode[2] = 1u;
+  check(dxmt9::ffp::makeFfpVertexSource(vertexDiffuseMaterial, context) !=
+            directionalSource,
+        "active color-material selector changes FFP VS source");
+}
+
 void testFixedFunctionDeclarationMissingInputsEmitD3DDefaults() {
   // behavioral oracle: Wine visual.c:fixed_function_decl_test
   DrawDesc desc{};
@@ -612,6 +679,7 @@ int main() {
     testVisualDerivedFfpCoverage();
     testPointAndSpotLightingMslContract();
     testFfpVertexCoordinateAndLightingContracts();
+    testInactiveLightingKeyFieldsDoNotChangeVertexSource();
     testFixedFunctionDeclarationMissingInputsEmitD3DDefaults();
     testVisualPortCoverage();
   } catch (const TestFailure& error) {

@@ -2506,7 +2506,7 @@ void testPositionOnlyVSOutLayoutHelper() {
   dxmt9::shaders::ShaderPreludeOptions options{};
   options.vsOutLayout = layout;
   const auto prelude = dxmt9::shaders::makeShaderPrelude(options);
-  checkContains(prelude, "float4 position [[position]]",
+  checkContains(prelude, "float4 position [[position, invariant]]",
                 "position-only VSOut helper retains the required position field");
   checkNotContains(prelude, "[[point_size]]",
                    "position-only VSOut helper omits point size");
@@ -2536,7 +2536,7 @@ void testVsOutHalfProbeNarrowsOnlyUserVaryings() {
     dxmt9::shaders::ShaderPreludeOptions options{};
     options.halfVSOut = true;
     const auto prelude = dxmt9::shaders::makeShaderPrelude(options);
-    checkContains(prelude, "float4 position [[position]]",
+    checkContains(prelude, "float4 position [[position, invariant]]",
                   "VSOut half probe keeps position float4");
     checkContains(prelude, "half4 color",
                   "VSOut half probe narrows color");

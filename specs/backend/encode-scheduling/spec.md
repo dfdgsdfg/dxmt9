@@ -552,6 +552,19 @@ dimension to or below its low watermark; the same head candidate is then
 re-evaluated. This hysteresis and FIFO head-of-line rule make admission
 independent of timing and worker scheduling.
 
+The session coordinator composes this latch with its fixed capacity policy:
+`sessionResidencyLimitForHysteresis` bounds held pages and source entries by
+both low water and high water minus successor headroom. A cap-exceeding source
+stays Ready and supplies the existing deterministic cap fence; admission
+pressure itself cannot close an open session. This matters even when physical
+space is available: an encoded deferred Clear can pin the FIFO's oldest
+residency above low water after an earlier prefix retired. The native
+`productionLoopReopensLatchedPagesWithPendingClear` case fills the production
+capture Arena, retires 1023 pages, and retains a 1025-page suffix; the corrected
+1024-page cap must submit before that suffix consumes its last Ready source.
+The bounded `SessionAdmissionHysteresis` model isolates this composition from
+Metal bytes and driver behavior; it does not qualify GPU pixels or FPS.
+
 SegmentSerial admission passes the complete bounded layout span into both begin
 and wait. `cpuReadyArenaControlSlotsFreeLocked` is their single control-capacity
 predicate: it checks every required slot in the contiguous ring range beginning

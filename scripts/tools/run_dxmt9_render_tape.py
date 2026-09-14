@@ -8,6 +8,7 @@ import json
 import os
 import platform
 import pathlib
+import re
 import shutil
 import struct
 import tempfile
@@ -22,6 +23,8 @@ try:
 except ModuleNotFoundError:  # importlib-loaded checks do not set script dir
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
     import render_tape_cpu_policy
+
+import render_tape_gpu_policy
 
 
 SCHEMA = "dxmt9.render_tape.bundle.v2"
@@ -84,8 +87,8 @@ def copy_flushed(source: pathlib.Path, destination: pathlib.Path) -> None:
         os.fsync(output_stream.fileno())
 
 
-def copy_cpu_input_owned(source: pathlib.Path, destination: pathlib.Path) -> None:
-    """Stage an independently writable CPU input bundle.
+def copy_input_owned(source: pathlib.Path, destination: pathlib.Path) -> None:
+    """Stage an independently writable CPU/GPU input bundle.
 
     APFS clone requests keep large comparison inputs bounded in space while
     preserving copy-on-write ownership.  ``cp -L`` matches ``copytree``'s
@@ -97,7 +100,7 @@ def copy_cpu_input_owned(source: pathlib.Path, destination: pathlib.Path) -> Non
     destination = pathlib.Path(destination)
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(
-            f"CPU input staging target already exists: {destination}"
+            f"Input staging target already exists: {destination}"
         )
     if platform.system() == "Darwin":
         subprocess.run(
@@ -533,6 +536,9 @@ def replay_identity(result: dict[str, Any]) -> dict[str, Any]:
             "coverage",
             "conservation",
             "identity_evidence",
+            "source_boundary_audit",
+            "source_replay",
+            "audit_batch_cuts",
             "intervals",
         )
     }
@@ -713,6 +719,7 @@ def pack(args: argparse.Namespace) -> int:
             "production_provider_replay": False,
             "output_oracle": output_source is not None,
             "source_oracle": source_oracle_source is not None,
+            **({"test_input": True} if getattr(args, "test_input", False) else {}),
         },
         }
         if identity_source is not None:
@@ -1125,16 +1132,61 @@ def provider_replay(args: argparse.Namespace) -> int:
     return 0 if result.get("oracle_accepted") else 1
 
 
+def _source_boundary_audit_is_default(value: Any) -> bool:
+    if not isinstance(value, dict) or value.get("requested") is not False:
+        return False
+    return all(
+        type(value.get(counter)) is int and value[counter] == 0
+        for counter in ("batch_cut_count", "completed_batch_cut_count")
+    )
+
+
+def _source_replay_is_default(value: Any) -> bool:
+    if (not isinstance(value, dict) or
+            any(value.get(key) is not False
+                for key in ("requested", "validated", "complete")) or
+            value.get("plan_sha256") != "0" * 64):
+        return False
+    if (value.get("storage_overflow", False) is not False
+            or ("sources" in value and value["sources"] != [])):
+        return False
+    return all(type(value.get(key)) is int and value[key] == 0 for key in (
+        "source_count", "completed_source_count", "publication_count",
+        "empty_source_count", "present_source_count"))
+
+
 def experiment_accepts(result: dict[str, Any], *, warmup: int, repeat: int,
                        reset: str, route: str, require_path: bool,
-                       non_degenerate: bool) -> bool:
+                       non_degenerate: bool, cpu_policy: dict[str, Any] | None = None,
+                       input_components: dict[str, Any] | None = None) -> bool:
     """Fail closed on partial runs and nonexecuted policy candidates."""
+    capture_source = bool(cpu_policy and cpu_policy.get("schema") ==
+                          render_tape_cpu_policy.SOURCE_SCHEMA)
+    expected_mode = "capture-source" if capture_source else "chunk"
+    if result.get("source_boundary_mode", "chunk") != expected_mode:
+        return False
+    if capture_source:
+        try:
+            cpu_policy = render_tape_cpu_policy.validate_policy(cpu_policy)
+        except render_tape_cpu_policy.PolicyError:
+            return False
+        if reset != "cold-device" or cpu_policy["replay_route"] != route:
+            return False
+    requested_batch_cuts = result.get("audit_batch_cuts")
+    if ("audit_batch_cuts" in result and
+            (not isinstance(requested_batch_cuts, list) or requested_batch_cuts)):
+        return False
+    if ("source_boundary_audit" in result and
+            not _source_boundary_audit_is_default(result["source_boundary_audit"])):
+        return False
     if (result.get("schema") != "dxmt9.render_tape.experiment.v1"
             or result.get("status") != "complete"
             or result.get("backend") != "metal"
             or result.get("reset") != reset
             or result.get("replay_route") != route
             or result.get("prepare_count") != 1
+            or result.get("audit_source_boundaries", False) is not False
+            or result.get("audit_texture_input", False) is not False
             or result.get("pixel_deterministic") is not True):
         return False
     iterations = result.get("iterations")
@@ -1154,6 +1206,26 @@ def experiment_accepts(result: dict[str, Any], *, warmup: int, repeat: int,
                     {**evidence, "provider_exit_code": 0}, non_degenerate)
                 or not isinstance(counters, dict)
                 or counters.get("gpu_errors") != 0):
+            return False
+        source_boundary_audit = evidence.get("source_boundary_audit")
+        if not render_tape_gpu_policy.texture_input_audit_is_default(evidence):
+            return False
+        source_replay = evidence.get("source_replay")
+        if capture_source:
+            import render_tape_source_policy
+            if not render_tape_source_policy.source_replay_accepts(
+                    source_replay, cpu_policy, input_components):
+                return False
+            validity = evidence.get("validity", {})
+            if (validity.get("oracle_mode") != "strict"
+                    or validity.get("expected_digest_matched") is not True
+                    or validity.get("source_oracle_exact_matched") is not True):
+                return False
+        elif ("source_replay" in evidence and
+              not _source_replay_is_default(source_replay)):
+            return False
+        if ("source_boundary_audit" in evidence and
+                not _source_boundary_audit_is_default(source_boundary_audit)):
             return False
         if (type(counters.get("encode_chunks")) is not int
                 or counters["encode_chunks"] <= 0
@@ -1284,14 +1356,102 @@ def experiment_metal_validation_enabled(environment: dict[str, str]) -> bool:
                for key in ("MTL_DEBUG_LAYER", "MTL_SHADER_VALIDATION"))
 
 
+def experiment_inline_observer_enabled(environment: dict[str, str]) -> bool:
+    # Pass-end readbacks do not change the requested source plan, but are still
+    # perturbative diagnostics. Paths named "0" are real enabled directories,
+    # not boolean flags. Do not qualify them through a forged diagnostic flag.
+    return any(environment.get(key, "") != "" for key in (
+        "DXMT9_DUMP_COLOR_ATTACHMENT_DIR", "DXMT9_DUMP_COLOR_ATTACHMENT_PATH",
+        "DXMT9_DUMP_COLOR_ATTACHMENT_ROI_SUMMARY_PATH",
+        "DXMT9_DUMP_DRAW_TEXTURE_DIR", "DXMT_DUMP_SHADER_DIR",
+        "DXMT9_PROBE_VERTEX_POSITION_DIR", "DXMT9_PROBE_NO_CONTRACT_SOURCE_SHA256")) or (
+            environment.get("DXMT9_EFFECT_DRAW_TRACE", "") not in ("", "0"))
+
+
 def fixed_input_experiment(args: argparse.Namespace) -> int:
     provider_environment = dict(os.environ)
+    source_boundary_mode = getattr(args, "source_boundary_mode", "chunk")
+    capture_source = source_boundary_mode == "capture-source"
+    source_plan_digest = getattr(args, "source_plan_sha256", None)
+    if source_plan_digest is not None and not capture_source:
+        raise SystemExit("source-plan SHA-256 requires capture-source mode")
+    policy_values = {
+        "draw_command_limit": getattr(args, "draw_command_limit", None),
+        "slot_headroom_bytes": getattr(args, "slot_headroom_bytes", None),
+        "aggregate_headroom_bytes": getattr(args, "aggregate_headroom_bytes", None),
+    }
+    policy_requested = (source_plan_digest is not None or
+                        any(value is not None for value in policy_values.values()))
+    gpu_policy = None
+    if policy_requested:
+        # Keep the experiment's policy grammar exactly coupled to the canonical
+        # CPU policy module.  The values are cached by the provider at startup,
+        # so each policy child must receive all three knobs explicitly.
+        gpu_policy = render_tape_cpu_policy.validate_policy({
+            "schema": (render_tape_cpu_policy.SOURCE_SCHEMA if capture_source else
+                       render_tape_cpu_policy.SCHEMA),
+            "replay_route": args.replay_route,
+            **{key: value if value is not None else 0
+               for key, value in policy_values.items()},
+            **({"source_boundary_mode": source_boundary_mode,
+                "source_plan_sha256": source_plan_digest} if capture_source else {}),
+        })
+        provider_environment.update({
+            "DXMT9_DRAW_CHUNK_COMMAND_LIMIT": str(gpu_policy["draw_command_limit"]),
+            "DXMT9_DIRECT_SLOT_HEADROOM_BYTES": str(gpu_policy["slot_headroom_bytes"]),
+            "DXMT9_DIRECT_SLOT_AGGREGATE_HEADROOM_BYTES": str(
+                gpu_policy["aggregate_headroom_bytes"]),
+        })
     validation_diagnostic = experiment_metal_validation_enabled(provider_environment)
     audit_initial_seeds = getattr(args, "audit_initial_seeds", False)
     audit_fresh_seed_drains = getattr(args, "audit_fresh_seed_drains", False)
     audit_texture_prestage = getattr(args, "audit_texture_prestage", False)
+    audit_source_boundaries = getattr(args, "audit_source_boundaries", False)
+    audit_texture_input = getattr(args, "audit_texture_input", None)
+    input_audit_request = None
+    input_audit_bytes = None
+    if audit_texture_input is not None:
+        fields = audit_texture_input.split(":", 4)
+        if (len(fields) != 5 or not all(re.fullmatch(r"[1-9][0-9]*", f) for f in fields[:3])
+                or not re.fullmatch(r"[0-9a-f]{64}", fields[3]) or not fields[4]
+                or int(fields[0]) > 0xffffffff or any(int(f) > 0xffffffffffffffff for f in fields[1:3])):
+            raise SystemExit("texture input audit requires GEN:ID:AFTERSEQ:SHA256:PATH")
+        if not capture_source or source_plan_digest is None or args.reset != "cold-device":
+            raise SystemExit("texture input audit requires cold capture-source and exact source-plan SHA-256")
+        path = pathlib.Path(fields[4])
+        if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= 64 * 1024 * 1024:
+            raise SystemExit("texture input must be a bounded regular file")
+        with path.open("rb") as stream:
+            input_audit_bytes = stream.read(64 * 1024 * 1024 + 1)
+        if not 0 < len(input_audit_bytes) <= 64 * 1024 * 1024:
+            raise SystemExit("texture input must be a bounded nonempty file")
+        if hashlib.sha256(input_audit_bytes).hexdigest() != fields[3]:
+            raise SystemExit("texture input SHA-256 mismatch")
+        input_audit_request = {"generation": int(fields[0]), "object_id": int(fields[1]),
+                               "after_captured_seq": int(fields[2]), "sha256": fields[3],
+                               "bytes": len(input_audit_bytes), "source_path": str(path.resolve())}
+    audit_batch_cuts = list(getattr(args, "audit_batch_cuts", []) or [])
     seed_diagnostic = audit_initial_seeds or audit_fresh_seed_drains or audit_texture_prestage
-    diagnostic = seed_diagnostic or validation_diagnostic
+    if capture_source and (seed_diagnostic or audit_source_boundaries or
+                           audit_batch_cuts or args.reset != "cold-device"):
+        raise SystemExit(
+            "normal capture-source replay requires cold-device, no diagnostics "
+            "and an authenticated v2 plan for policy knobs"
+        )
+    if audit_batch_cuts and not audit_source_boundaries:
+        raise SystemExit(
+            "source-boundary batch cuts require --audit-source-boundaries"
+        )
+    diagnostic = (input_audit_request is not None or seed_diagnostic or audit_source_boundaries or validation_diagnostic
+                  or experiment_inline_observer_enabled(provider_environment))
+    if audit_source_boundaries and (
+        seed_diagnostic or args.reset != "cold-device"
+        or args.replay_route != "compatibility"
+    ):
+        raise SystemExit(
+            "source-boundary audit requires a cold-device compatibility run "
+            "and is exclusive with other audits"
+        )
     if audit_texture_prestage and (audit_initial_seeds or audit_fresh_seed_drains):
         raise SystemExit("texture prestage must be a separate diagnostic")
     if seed_diagnostic and args.reset != "cold-device":
@@ -1301,13 +1461,20 @@ def fixed_input_experiment(args: argparse.Namespace) -> int:
     if args.timeout_seconds <= 0:
         raise SystemExit("timeout must be positive")
     # Copy then reauthenticate: measurements never race a capture publisher or
-    # read an input the user is modifying. This general-frame lane keeps the
-    # historical cleanup-on-failure transaction policy.
-    with bundle_transaction(args.output_dir) as output:
+    # read an input the user is modifying. Controlled-input failures retain
+    # their partial evidence; ordinary runs keep their historical policy.
+    with bundle_transaction(args.output_dir,
+                            preserve_rejected=input_audit_request is not None,
+                            failure_metadata={"lane": "texture-input-audit"}) as output:
         staged = output / "input"
         readback_directory = output / "readback"
-        shutil.copytree(args.bundle.resolve(), staged)
+        copy_input_owned(args.bundle.resolve(), staged)
         manifest, events, refs, blobs, identity, source = load_bundle(staged)
+        if (audit_source_boundaries or capture_source) and identity is None:
+            raise SystemExit(
+                "capture source boundaries require authenticated components/identity.bin"
+            )
+        validator_digest = digest(args.validator.resolve())
         run_validator(args.validator, "validate", events, refs)
         if identity is not None:
             run_identity_validator(args.validator, events, identity, refs)
@@ -1324,6 +1491,21 @@ def fixed_input_experiment(args: argparse.Namespace) -> int:
             command += ["--audit-fresh-seed-drains"]
         if audit_texture_prestage:
             command += ["--audit-texture-prestage"]
+        if audit_source_boundaries:
+            command += ["--audit-source-boundaries"]
+        if capture_source:
+            command += ["--source-boundary-mode", source_boundary_mode]
+            if source_plan_digest is not None:
+                command += ["--source-plan-sha256", source_plan_digest]
+        if input_audit_request is not None:
+            audit_path = output / "texture-input-audit.r32f"
+            write_flushed(audit_path, input_audit_bytes)
+            request = input_audit_request
+            command += ["--audit-texture-input", ":".join((str(request["generation"]),
+                str(request["object_id"]), str(request["after_captured_seq"]),
+                request["sha256"], str(audit_path)))]
+        for batch_cut in audit_batch_cuts:
+            command += ["--audit-batch-cut", batch_cut]
         for blob in blobs:
             command += ["--blob", str(blob)]
         if identity is not None:
@@ -1358,21 +1540,32 @@ def fixed_input_experiment(args: argparse.Namespace) -> int:
                     and result.get("audit_initial_seeds", False) is False
                     and result.get("audit_fresh_seed_drains", False) is False
                     and result.get("audit_texture_prestage", False) is False
+                    and result.get("audit_source_boundaries", False) is False
+                    and result.get("audit_texture_input", False) is False
                     and exit_code == 0 and digest(provider) == candidate_digest
+                    and digest(args.validator.resolve()) == validator_digest
                     and images_stable and readbacks_valid
                     and experiment_accepts(
                         result, warmup=args.warmup, repeat=args.repeat,
                         reset=args.reset, route=args.replay_route,
                         require_path=args.require_path,
-                        non_degenerate=bundle_requires_non_degenerate(manifest)))
+                        non_degenerate=bundle_requires_non_degenerate(manifest),
+                        cpu_policy=gpu_policy, input_components=manifest["components"]))
         receipt = {
             "schema": "dxmt9.render_tape.experiment_artifact.v1",
             "accepted": accepted, "provider_exit_code": exit_code,
             "diagnostic": diagnostic,
+            "source_boundary_mode": source_boundary_mode,
+            "audit_source_boundaries": audit_source_boundaries,
+            "audit_texture_input": input_audit_request is not None,
+            "audit_batch_cuts": audit_batch_cuts,
             "metal_validation_diagnostic": validation_diagnostic,
             "loaded_images_stable": images_stable,
             "readback_artifacts_valid": readbacks_valid,
             "provider": {"path": str(provider), "sha256": candidate_digest},
+            "provider_command": command,
+            "validator": {"path": str(args.validator.resolve()),
+                          "sha256": validator_digest},
             "input_components": manifest["components"],
             "input_scope": manifest.get("scope", {}),
             "renderer_environment": experiment_renderer_environment(provider_environment),
@@ -1381,6 +1574,12 @@ def fixed_input_experiment(args: argparse.Namespace) -> int:
                 "DXMT9_PREWARM": "disabled",
                 "DXMT9_RENDER_PARTITION_MODE": args.partition_mode,
                 "DXMT_PERF_COUNTERS": "1",
+                **({
+                    "DXMT9_DRAW_CHUNK_COMMAND_LIMIT": str(gpu_policy["draw_command_limit"]),
+                    "DXMT9_DIRECT_SLOT_HEADROOM_BYTES": str(gpu_policy["slot_headroom_bytes"]),
+                    "DXMT9_DIRECT_SLOT_AGGREGATE_HEADROOM_BYTES": str(
+                        gpu_policy["aggregate_headroom_bytes"]),
+                } if gpu_policy is not None else {}),
             },
             "requested": {"warmup": args.warmup, "repeat": args.repeat,
                           "reset": args.reset, "replay_route": args.replay_route,
@@ -1388,7 +1587,17 @@ def fixed_input_experiment(args: argparse.Namespace) -> int:
                           "audit_initial_seeds": audit_initial_seeds,
                           "audit_fresh_seed_drains": audit_fresh_seed_drains,
                           "audit_texture_prestage": audit_texture_prestage,
-                          "require_path": args.require_path},
+                          "audit_source_boundaries": audit_source_boundaries,
+                          "audit_texture_input": input_audit_request,
+                          "source_boundary_mode": source_boundary_mode,
+                          "source_plan_sha256": source_plan_digest,
+                          "audit_batch_cuts": audit_batch_cuts,
+                          "require_path": args.require_path,
+                          "cpu_policy": gpu_policy,
+                          "cpu_policy_sha256": (
+                              render_tape_cpu_policy.policy_digest(gpu_policy)
+                              if gpu_policy is not None else None),
+                          "policy_lane": policy_requested},
             "result": result,
         }
         write_flushed(output / "result.json",
@@ -2759,13 +2968,23 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
     grammar = getattr(args, "grammar", "bounded")
     run_mode = getattr(args, "run_mode", "verify")
     policy_lane = bool(getattr(args, "policy_lane", False))
+    source_mode = getattr(args, "source_boundary_mode", "chunk")
+    source_plan_digest = getattr(args, "source_plan_sha256", None)
+    capture_source = source_mode == "capture-source"
+    if source_plan_digest is not None and not capture_source:
+        raise SystemExit("source-plan SHA-256 requires capture-source mode")
     policy = render_tape_cpu_policy.validate_policy({
-        "schema": render_tape_cpu_policy.SCHEMA,
+        "schema": (render_tape_cpu_policy.SOURCE_SCHEMA if capture_source else
+                   render_tape_cpu_policy.SCHEMA),
         "replay_route": args.replay_route,
         "draw_command_limit": getattr(args, "draw_command_limit", 0),
         "slot_headroom_bytes": getattr(args, "slot_headroom_bytes", 0),
         "aggregate_headroom_bytes": getattr(args, "aggregate_headroom_bytes", 0),
+        **({"source_boundary_mode": source_mode,
+            "source_plan_sha256": source_plan_digest} if capture_source else {}),
     })
+    if capture_source and not policy_lane:
+        raise SystemExit("capture-source requires --policy-lane")
     if run_mode not in ("verify", "measure"):
         raise SystemExit("CPU run mode must be verify or measure")
     if grammar != "general-frame" and run_mode != "verify":
@@ -2821,13 +3040,15 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
             args.output_dir, preserve_rejected=True,
             failure_metadata=failure_metadata) as output:
         staged = output / "input"
-        copy_cpu_input_owned(args.bundle.resolve(), staged)
+        copy_input_owned(args.bundle.resolve(), staged)
         manifest, events, refs, blobs, identity, _ = load_bundle(staged)
         input_inspection = run_validator(args.validator, "inspect", events, refs)
         if identity is not None:
             run_identity_validator(args.validator, events, identity, refs)
         provider = args.provider.resolve()
         binary_digest = digest(provider)
+        if capture_source and identity is None:
+            raise SystemExit("capture-source requires authenticated identity.bin")
         source_binding = None
         if source_projection is not None:
             try:
@@ -2856,6 +3077,9 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
                    "--fault", args.fault, "--max-pending", str(args.max_pending)]
         if grammar == "general-frame":
             command += ["--run-mode", run_mode]
+        if capture_source:
+            command += render_tape_cpu_policy.source_policy_arguments(policy)
+            command += ["--identity", str(identity)]
         if policy_lane:
             command += [
                         "--draw-command-limit", str(policy["draw_command_limit"]),
@@ -2905,6 +3129,8 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
                 fault=args.fault, completion_plan=plan,
                 input_inspection=input_inspection, max_pending=args.max_pending,
                 cpu_policy=policy, measurement=run_mode == "measure")
+            policy_valid = policy_valid and render_tape_cpu_policy.source_receipts_accept(
+                {"result": result, "input_components": manifest["components"]}, policy)
         execution_valid = (exit_code == 0
                     and result.get("fault") == args.fault
                     and type(result.get("max_pending")) is int
@@ -3114,7 +3340,7 @@ def cpu_compare(args: argparse.Namespace) -> int:
             args.output_dir, preserve_rejected=True,
             failure_metadata=failure_metadata) as output:
         staged = output / "input"
-        copy_cpu_input_owned(bundle, staged)
+        copy_input_owned(bundle, staged)
         manifest, events, refs, _blobs, identity, _source = load_bundle(staged)
         run_validator(validator, "validate", events, refs)
         if identity is not None:
@@ -3305,7 +3531,7 @@ def cpu_source_project(args: argparse.Namespace) -> int:
         sources = []
         setup_error = None
         try:
-            copy_cpu_input_owned(args.bundle.resolve(), staged)
+            copy_input_owned(args.bundle.resolve(), staged)
             manifest, events, refs, _blobs, identity, _source = load_bundle(staged)
             run_validator(validator, "validate", events, refs)
             if identity is not None:
@@ -4081,6 +4307,10 @@ def parser() -> argparse.ArgumentParser:
     pack_parser.add_argument("--output-rgba", type=pathlib.Path)
     pack_parser.add_argument("--source-rgba", type=pathlib.Path)
     pack_parser.add_argument(
+        "--test-input", action="store_true",
+        help="label an independently constructed test fixture; never production capture evidence",
+    )
+    pack_parser.add_argument(
         "--validator", type=pathlib.Path,
         default=pathlib.Path("build/tools/dxmt9-render-tape"),
     )
@@ -4136,16 +4366,34 @@ def parser() -> argparse.ArgumentParser:
                                    default="cold-device")
     experiment_parser.add_argument("--replay-route", choices=("compatibility", "production-slot"),
                                    default="compatibility")
+    experiment_parser.add_argument("--source-boundary-mode",
+                                   choices=("chunk", "capture-source"), default="chunk",
+                                   help="normal authenticated source cuts")
+    experiment_parser.add_argument("--source-plan-sha256",
+                                   help="expected authenticated source plan for a v2 policy")
     experiment_parser.add_argument("--partition-mode", choices=("identity", "serial", "parallel"),
                                    default="identity")
     experiment_parser.add_argument("--require-path", action="store_true",
                                    help="reject iterations with zero selected-route draws")
+    experiment_parser.add_argument("--draw-command-limit", type=int,
+                                   help="canonical policy DrawLimit knob")
+    experiment_parser.add_argument("--slot-headroom-bytes", type=int,
+                                   help="canonical policy direct-slot headroom knob")
+    experiment_parser.add_argument("--aggregate-headroom-bytes", type=int,
+                                   help="canonical policy aggregate headroom knob")
     experiment_parser.add_argument("--audit-initial-seeds", action="store_true",
                                    help="cold diagnostic readback of seed resources; never a policy qualification")
+    experiment_parser.add_argument("--audit-texture-input", metavar="GEN:ID:AFTERSEQ:SHA256:PATH",
+                                   help="one-shot R32F input intervention after an authenticated source; never qualifies")
     experiment_parser.add_argument("--audit-fresh-seed-drains", action="store_true",
                                    help="cold diagnostic fresh-owner drain bypass; never a policy qualification")
     experiment_parser.add_argument("--audit-texture-prestage", action="store_true",
                                    help="cold diagnostic independent texture seed prestaging; never a policy qualification")
+    experiment_parser.add_argument("--audit-source-boundaries", action="store_true",
+                                   help="cold diagnostic source-boundary replay; never a policy qualification")
+    experiment_parser.add_argument("--audit-batch-cut", dest="audit_batch_cuts",
+                                   action="append", default=[], metavar="EVENT:RECORD",
+                                   help="source-boundary diagnostic cut; repeatable and requires --audit-source-boundaries")
     experiment_parser.set_defaults(function=fixed_input_experiment)
     cpu_parser = subparsers.add_parser(
         "cpu-experiment", help="bounded no-GPU Tape replay with controlled completion")
@@ -4159,6 +4407,9 @@ def parser() -> argparse.ArgumentParser:
     cpu_parser.add_argument("--run-mode", choices=("verify", "measure"), default="verify",
                             help="full-oracle verification or low-observer measurement")
     cpu_parser.add_argument("--policy-lane", action="store_true", help=argparse.SUPPRESS)
+    cpu_parser.add_argument("--source-boundary-mode",
+                            choices=("chunk", "capture-source"), default="chunk")
+    cpu_parser.add_argument("--source-plan-sha256")
     cpu_parser.add_argument("--grammar", choices=("bounded", "general-frame"),
                             default="bounded",
                             help="bounded32-event oracle, or complete-frame general oracle")
@@ -4202,9 +4453,16 @@ def parser() -> argparse.ArgumentParser:
     policy_compare_parser.add_argument("--output-dir", type=pathlib.Path, required=True)
     policy_compare_parser.add_argument("--provider", type=pathlib.Path, default=pathlib.Path(
         "build/tests/native/backend/dxmt9-cpu-ready-production-routing-spec"))
+    policy_compare_parser.add_argument("--gpu-provider", type=pathlib.Path, default=pathlib.Path(
+        "build/tools/dxmt9-render-tape-provider"))
     policy_compare_parser.add_argument("--validator", type=pathlib.Path, default=pathlib.Path(
         "build/tools/dxmt9-render-tape"))
     policy_compare_parser.add_argument("--timeout-seconds", type=int, default=30)
+    policy_compare_parser.add_argument("--gpu-qualify", action="store_true",
+                                       help="qualify both policies with strict real-Metal readback before measurement")
+    policy_compare_parser.add_argument("--gpu-reset", choices=("cold-device", "warm-device"),
+                                       default="cold-device",
+                                       help="explicit reset policy for GPU qualification children")
     policy_compare_parser.set_defaults(function=render_tape_cpu_policy.cpu_policy_compare)
     compare_parser = subparsers.add_parser(
         "cpu-compare",

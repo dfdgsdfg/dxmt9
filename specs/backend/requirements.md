@@ -647,6 +647,22 @@ conversion. Native evidence must pin representative finite and special-value
 bit patterns, and any scheduling lane that changes first-use placement must
 retain a wild shader-compilation progress check.
 
+**R-BACK-4.10** Runtime source compilation must use an explicit, versioned
+Metal language and floating-point profile shared by Wine-hosted rendering,
+native replay, and compiler-derived diagnostic pipelines. The profile must not
+depend on the host executable's linked SDK or Metal's implicit options. The
+current profile is MSL 2.4 with fast math/functions and explicit invariant
+vertex-position outputs (`[[position, invariant]]`). The compile-option
+`preserveInvariance` remains false; it is not the position attribute.
+This preserves the established Wine rendering contract. Unsupported compilation
+must fail normally, not fall back to a host-selected language. Creation lineage
+must record the actual options passed to Metal and propagate them through
+library/function/PSO identity. Source-text equality with unknown options is not
+evidence of equivalent compilation. Native real-Metal tests must pin the
+compiler-reported language and concrete vertex-position arithmetic;
+strict retained-input GPU comparisons remain the
+integration gate.
+
 ---
 
 ## 5. Resource Allocation

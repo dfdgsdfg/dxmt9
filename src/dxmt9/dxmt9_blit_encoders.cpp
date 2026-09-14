@@ -1,5 +1,6 @@
 #include "dxmt9_blit_encoders.hpp"
 
+#include "dxmt9/assert.hpp"
 #include "dxmt9_command_queue.hpp"
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_metal_labels.hpp"
@@ -11,6 +12,7 @@
 #include <cstdint>
 #include <cstring>
 #include <mutex>
+#include <optional>
 
 namespace dxmt9::encoders {
 
@@ -387,12 +389,159 @@ void encodeColorFill(WMT::CommandBuffer& commandBuffer,
   encoder.endEncoding();
 }
 
+std::optional<WMTScissorRect> clipClearRect(const core::Rect& rect,
+                                            u32 width, u32 height) noexcept {
+  const auto left = std::max<std::int64_t>(0, rect.left);
+  const auto top = std::max<std::int64_t>(0, rect.top);
+  const auto right = std::min<std::int64_t>(static_cast<std::int64_t>(width), rect.right);
+  const auto bottom = std::min<std::int64_t>(static_cast<std::int64_t>(height), rect.bottom);
+  if (right <= left || bottom <= top) {
+    return std::nullopt;
+  }
+  return WMTScissorRect{static_cast<std::uint64_t>(left), static_cast<std::uint64_t>(top),
+                        static_cast<std::uint64_t>(right - left),
+                        static_cast<std::uint64_t>(bottom - top)};
+}
+
+std::optional<WMTScissorRect> clippedClearScissor(const core::Rect& rect,
+                                                   const resources::SurfaceRecord& surface) {
+  return clipClearRect(rect, surface.desc.width, surface.desc.height);
+}
+
+template <typename Clear>
+void encodeClippedClearPass(
+    WMT::CommandBuffer& commandBuffer, resources::Pool& pool, pipeline::Cache& pipelineCache,
+    WMT::Reference<WMT::Device> device, const core::BackendLimits& limits,
+    WMT::Reference<WMT::BinaryArchive>* archive, const std::string* archivePath,
+    const Clear& clear, std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
+  bool sampleAttachmentConsumed = false;
+  const auto samplesForEncoder = [&]() {
+    if (sampleAttachmentConsumed) return std::span<const WMTSampleBufferAttachmentInfo>{};
+    sampleAttachmentConsumed = true;
+    return sampleBufferAttachments;
+  };
+  // Each attachment gets its own pass. This keeps the PSO descriptor's color
+  // format and sample count exact for MRT/MSAA surfaces while Load preserves
+  // every pixel outside each requested rectangle.
+  if (clear.clearColor) {
+    for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
+      auto* surface = pool.findSurface(clear.colorAttachments[i].handle.value);
+      if (!surface || !surface->texture) continue;
+      const auto pixelFormat = static_cast<u32>(convert::toPixelFormat(surface->desc.format, limits));
+      const auto sampleCount = std::max(1u, core::sampleCount(surface->desc.multiSampleType));
+      auto pipeline = pipelineCache
+          .getOrBuildFillPipeline(device, clear.color, pixelFormat, archive, archivePath,
+                                  sampleCount)
+          .get();
+      if (!pipeline) continue;
+      WMTRenderPassInfo passInfo{};
+      passInfo.colors[0].texture = surface->texture.handle;
+      passInfo.colors[0].load_action = WMTLoadActionLoad;
+      passInfo.colors[0].store_action = clearColorStoreAction(bool(surface->resolveTexture));
+      if (surface->resolveTexture) {
+        passInfo.colors[0].resolve_texture = surface->resolveTexture.handle;
+      }
+      attachCounterSampleBuffers(passInfo, samplesForEncoder());
+      auto encoder = commandBuffer.renderCommandEncoder(passInfo);
+      if (!encoder) continue;
+      encoder.setLabel(labels::makeLabelStringFmt(
+          "ClearRect[color%zu=0x%llx]", i,
+          static_cast<unsigned long long>(clear.colorAttachments[i].handle.value)));
+      encoder.setRenderPipelineState(pipeline);
+      for (const auto& rect : clear.rects) {
+        if (const auto scissor = clippedClearScissor(rect, *surface)) {
+          encoder.setScissorRect(*scissor);
+          encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
+        }
+      }
+      encoder.endEncoding();
+    }
+  }
+
+  auto* depthSurface = pool.findSurface(clear.depthStencil.handle.value);
+  const bool writeDepth = clear.clearDepth && depthSurface && depthSurface->texture &&
+                          depthSurface->desc.depthStencil &&
+                          convert::formatHasDepthAspect(depthSurface->desc.format);
+  const bool writeStencil = clear.clearStencil && depthSurface && depthSurface->texture &&
+                            depthSurface->desc.depthStencil &&
+                            convert::formatHasStencilAspect(depthSurface->desc.format);
+  if (!writeDepth && !writeStencil) return;
+
+  // Bind every available aspect with Load/Store, even when only one aspect is
+  // being changed. The disabled write in the depth-stencil state preserves
+  // the other aspect while keeping the pipeline descriptor compatible with a
+  // combined D24S8/Depth32S8 texture.
+  const bool hasDepthAspect = convert::formatHasDepthAspect(depthSurface->desc.format);
+  const bool hasStencilAspect = convert::formatHasStencilAspect(depthSurface->desc.format);
+  const auto depthFormat = hasDepthAspect
+      ? static_cast<u32>(convert::toPixelFormat(depthSurface->desc.format, limits)) : 0u;
+  const auto stencilFormat = hasStencilAspect
+      ? static_cast<u32>(convert::toPixelFormat(depthSurface->desc.format, limits)) : 0u;
+  const auto sampleCount = std::max(1u, core::sampleCount(depthSurface->desc.multiSampleType));
+  auto pipeline = pipelineCache.getOrBuildDepthStencilClearPipeline(
+      device, clear.depth, depthFormat, stencilFormat, sampleCount, writeDepth, writeStencil,
+      archive, archivePath).get();
+  if (!pipeline) return;
+  WMTRenderPassInfo passInfo{};
+  if (hasDepthAspect) {
+    passInfo.depth.texture = depthSurface->texture.handle;
+    passInfo.depth.load_action = WMTLoadActionLoad;
+    passInfo.depth.store_action = WMTStoreActionStore;
+  }
+  if (hasStencilAspect) {
+    passInfo.stencil.texture = depthSurface->texture.handle;
+    passInfo.stencil.load_action = WMTLoadActionLoad;
+    passInfo.stencil.store_action = WMTStoreActionStore;
+  }
+  WMTDepthStencilInfo stateInfo{};
+  stateInfo.depth_compare_function = WMTCompareFunctionAlways;
+  stateInfo.depth_write_enabled = writeDepth;
+  stateInfo.front_stencil.enabled = writeStencil;
+  stateInfo.front_stencil.stencil_compare_function = WMTCompareFunctionAlways;
+  stateInfo.front_stencil.depth_stencil_pass_op = WMTStencilOperationReplace;
+  stateInfo.front_stencil.write_mask = 0xffu;
+  stateInfo.front_stencil.read_mask = 0xffu;
+  stateInfo.back_stencil = stateInfo.front_stencil;
+  auto depthStencilState = device.newDepthStencilState(stateInfo);
+  if (!depthStencilState) return;
+  attachCounterSampleBuffers(passInfo, samplesForEncoder());
+  auto encoder = commandBuffer.renderCommandEncoder(passInfo);
+  if (!encoder) return;
+  encoder.setDepthStencilState(depthStencilState,
+                               static_cast<std::uint8_t>(clear.stencil & 0xffu));
+  encoder.setRenderPipelineState(pipeline);
+  encoder.setLabel(labels::makeLabelStringFmt(
+      "ClearRect[depth=0x%llx]",
+      static_cast<unsigned long long>(clear.depthStencil.handle.value)));
+  for (const auto& rect : clear.rects) {
+    if (const auto scissor = clippedClearScissor(rect, *depthSurface)) {
+      encoder.setScissorRect(*scissor);
+      encoder.drawPrimitives(WMTPrimitiveTypeTriangle, 0, 3);
+    }
+  }
+  encoder.endEncoding();
+}
+
 template <typename Clear>
 void encodeClearPassImpl(
     WMT::CommandBuffer& commandBuffer,
     resources::Pool& pool,
     const Clear& clear,
-    std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
+    std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments,
+    pipeline::Cache* pipelineCache = nullptr,
+    WMT::Reference<WMT::Device> device = {},
+    const core::BackendLimits* limits = nullptr,
+    WMT::Reference<WMT::BinaryArchive>* archive = nullptr,
+    const std::string* archivePath = nullptr) {
+  if (!clear.rects.empty()) {
+    if (pipelineCache && device && limits) {
+      encodeClippedClearPass(commandBuffer, pool, *pipelineCache, device, *limits, archive,
+                             archivePath, clear, sampleBufferAttachments);
+    } else {
+      DXMT_ASSERT(false && "clipped clear requires pipeline/device context");
+    }
+    return;
+  }
   const bool hasDepthStencilTarget =
       (clear.clearDepth || clear.clearStencil) && clear.depthStencil.handle;
   const bool hasColorTarget = clear.clearColor &&
@@ -412,12 +561,11 @@ void encodeClearPassImpl(
       auto& color = passInfo.colors[i];
       color.texture = surface->texture.handle;
       color.load_action = WMTLoadActionClear;
-      color.store_action = WMTStoreActionStore;
+      color.store_action = clearColorStoreAction(bool(surface->resolveTexture));
       color.clear_color = WMTClearColor{clear.color.r, clear.color.g,
                                         clear.color.b, clear.color.a};
       if (surface->resolveTexture) {
         color.resolve_texture = surface->resolveTexture.handle;
-        color.store_action = WMTStoreActionMultisampleResolve;
       }
       hasAttachment = true;
     }
@@ -471,6 +619,26 @@ void encodeClearPass(
     const core::ClearCommandView& clear,
     std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
   encodeClearPassImpl(commandBuffer, pool, clear, sampleBufferAttachments);
+}
+
+void encodeClearPass(
+    WMT::CommandBuffer& commandBuffer, resources::Pool& pool, pipeline::Cache& pipelineCache,
+    WMT::Reference<WMT::Device> device, const core::BackendLimits& limits,
+    WMT::Reference<WMT::BinaryArchive>* archive, const std::string* archivePath,
+    const core::ClearDesc& clear,
+    std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
+  encodeClearPassImpl(commandBuffer, pool, clear, sampleBufferAttachments, &pipelineCache,
+                      device, &limits, archive, archivePath);
+}
+
+void encodeClearPass(
+    WMT::CommandBuffer& commandBuffer, resources::Pool& pool, pipeline::Cache& pipelineCache,
+    WMT::Reference<WMT::Device> device, const core::BackendLimits& limits,
+    WMT::Reference<WMT::BinaryArchive>* archive, const std::string* archivePath,
+    const core::ClearCommandView& clear,
+    std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments) {
+  encodeClearPassImpl(commandBuffer, pool, clear, sampleBufferAttachments, &pipelineCache,
+                      device, &limits, archive, archivePath);
 }
 
 void encodeDepthResolve(WMT::CommandBuffer& commandBuffer,
@@ -659,7 +827,7 @@ D24X8ConversionPipelines makeD24X8ConversionPipelines(
   static constexpr char kSource[] = R"msl(
 #include <metal_stdlib>
 using namespace metal;
-struct VertexOut { float4 position [[position]]; };
+struct VertexOut { float4 position [[position, invariant]]; };
 vertex VertexOut dxmt9_d24x8_snapshot_vs(uint vertexId [[vertex_id]]) {
   const float2 p[3] = {
     float2(-1.0, -1.0), float2(3.0, -1.0), float2(-1.0, 3.0),

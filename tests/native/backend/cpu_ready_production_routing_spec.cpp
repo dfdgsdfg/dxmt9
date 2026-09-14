@@ -4636,6 +4636,312 @@ void ordinaryChunkSlotSameRawCommitFailureDoesNotRetryLegacy() {
   dxmt9c_buffer_release(buffer);
 }
 
+void captureSourceBoundaryReturnsExactQueuePublication() {
+  using Queue = dxmt9::CommandQueue;
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  using Status = Queue::ReplaySourceBoundaryStatus;
+  using Expected = Queue::ReplaySourceBoundaryExpectation;
+  Queue queue(Queue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  const auto initialSequence = Access::nextSeqId(queue);
+  const auto empty = queue.publishReplaySourceBoundary();
+  check(empty.status == Status::Empty && !empty.source.valid() &&
+            !empty.metadata.valid() &&
+            Access::nextSeqId(queue) == initialSequence &&
+            Access::readyCount(queue) == 0u,
+        "empty source settlement neither publishes nor invents queue identity");
+
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 1u;
+  capacity.clearRecords = 1u;
+  const CpuReadyProducerIdentity producer{77u, 77u, 77u, 77u};
+  Expected previous{};
+  for (std::uint32_t source = 0u; source < 2u; ++source) {
+    // One full raw owner can settle several local publications. Raw identity
+    // belongs to the private lease, not Tape's strict raw-publication waterline.
+    auto begin = queue.beginDirectChunkSlotReplay(
+        77u, capacity, sizeof(ClearDesc), producer);
+    check(begin.lease.has_value(), "each source admits its real Direct lease");
+    const auto ticket = begin.lease->ticket();
+    const Expected expected{
+        .source = {.id = ticket.id, .storage = ticket.storage},
+        .seqId = ticket.seqId,
+    };
+    check(queue.publishReplaySourceBoundary(expected).status == Status::Rejected,
+          "a source boundary cannot cut an active Direct transaction");
+    queue.submitClear(ClearDesc{});
+    check(begin.lease->commit(std::span<const ChunkHandleEntry>{}) ==
+              Queue::DirectChunkSlotReplayStatus::Committed,
+          "Direct commit settles storage before source publication");
+
+    std::array<Expected, 8> stale{};
+    stale.fill(expected);
+    ++stale[0].seqId;
+    ++stale[1].source.id.index;
+    ++stale[2].source.id.generation;
+    ++stale[3].source.storage.firstPage;
+    ++stale[4].source.storage.pageCount;
+    ++stale[5].source.storage.generation;
+    stale[6].source = {};
+    stale[7].seqId = 0u;
+    stale[7].source.storage = {};  // partial source is not an omitted witness
+    for (const auto& invalid : stale) {
+      check(queue.publishReplaySourceBoundary(invalid).status == Status::Rejected &&
+                Access::nextSeqId(queue) == ticket.seqId &&
+                Access::readyCount(queue) == 0u &&
+                Access::writingCommandCount(queue) == 1u,
+            "stale or malformed expectation rejects before publication effects");
+    }
+    if (source != 0u) {
+      check(queue.publishReplaySourceBoundary(previous).status == Status::Rejected,
+            "a previous reclaimed source cannot flush the new writer");
+    }
+    const auto receipt = queue.publishReplaySourceBoundary(expected);
+    check(receipt.status == Status::Published && receipt.published() &&
+              receipt.source == expected.source && receipt.metadata.valid() &&
+              receipt.metadata.rawOrdinal == 0u &&
+              receipt.metadata.seqId == ticket.seqId &&
+              receipt.metadata.sourceOrdinal == ticket.seqId &&
+              receipt.controlIndex != std::numeric_limits<std::size_t>::max() &&
+              Access::nextSeqId(queue) == ticket.seqId + 1u &&
+              Access::readyCount(queue) == 1u,
+          "receipt captures the actual queue-local publication, not raw provenance");
+    check(queue.publishReplaySourceBoundary(expected).status == Status::Rejected,
+          "an already published source is not an empty or duplicate settlement");
+    const auto completed = Access::consumeOne(queue);
+    check(completed.dequeued && completed.completed && completed.reclaimed &&
+              completed.rawOrdinal == 0u && completed.seqId == receipt.metadata.seqId &&
+              completed.sourceOrdinal == receipt.metadata.sourceOrdinal &&
+              Access::residentCount(queue) == 0u,
+          "published receipt survives the real completion and reclamation path");
+    previous = expected;
+  }
+
+  queue.submitClear(ClearDesc{});
+  const auto ordinary = queue.publishReplaySourceBoundary();
+  check(ordinary.status == Status::Published && ordinary.metadata.rawOrdinal == 0u &&
+            Access::readyCount(queue) == 1u,
+        "ordinary Clear source also returns an actual local receipt");
+  check(Access::consumeOne(queue).reclaimed,
+        "ordinary source retains completion/reclaim semantics");
+  queue.submitPresent(SwapDesc{});
+  const auto afterPresent = queue.publishReplaySourceBoundary();
+  check(afterPresent.status == Status::Empty && !afterPresent.source.valid() &&
+            Access::readyCount(queue) == 1u,
+        "Present already published; empty boundary is not invented Present evidence");
+  check(Access::consumeOne(queue).reclaimed,
+        "Present source completes without an extra publication");
+
+  Queue stopped(Queue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  {
+    auto unfinished = stopped.beginDirectChunkSlotReplay(
+        78u, capacity, sizeof(ClearDesc), producer);
+    check(unfinished.lease.has_value(), "failure-prefix fixture admits");
+    stopped.submitClear(ClearDesc{});
+    unfinished.lease->markSemanticEffectsStarted();
+  }
+  check(Access::stopped(stopped) &&
+            stopped.publishReplaySourceBoundary().status == Status::Rejected &&
+            Access::readyCount(stopped) == 0u,
+        "post-effect abandoned source fails closed without publishing its prefix");
+}
+
+void providerSourcePolicyPreservesRawOrderAndSettlement() {
+  namespace replay = dxmt9::d3d9;
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  struct Collector {
+    dxmt9::CommandQueue* queue = nullptr;
+    std::uint64_t raw = 0u;
+    std::uint32_t ranges = 0u;
+    std::uint32_t empty = 0u;
+    std::uint32_t presents = 0u;
+    bool reject = false;
+    std::vector<std::uint64_t> commands;
+    static bool settled(void* opaque,
+                        const replay::ProviderReplaySourceSettlement& value) noexcept {
+      auto& self = *static_cast<Collector*>(opaque);
+      try {
+        if (value.rawOrdinal == 0u || value.rangeIndex != self.ranges ||
+            (self.raw != 0u && self.raw != value.rawOrdinal)) return false;
+        self.raw = value.rawOrdinal;
+        ++self.ranges;
+        if (value.kind == replay::ProviderReplaySourceSettlementKind::Empty) {
+          if (!value.publications.empty()) return false;
+          ++self.empty;
+        }
+        for (const auto& receipt : value.publications) {
+          if (!receipt.source.valid() || !receipt.metadata.valid() ||
+              receipt.metadata.rawOrdinal != 0u ||
+              Access::readyCount(*self.queue) == 0u) return false;
+          const auto expected = Access::peekReadyCompletion(*self.queue);
+          if (expected.source != receipt.source ||
+              expected.seqId != receipt.metadata.seqId) return false;
+          const auto completion = Access::consumeOne(*self.queue);
+          if (completion.arena || !completion.reclaimed ||
+              completion.seqId != receipt.metadata.seqId ||
+              completion.hasPresent != receipt.hasPresent) return false;
+          self.presents += receipt.hasPresent;
+          self.commands.insert(self.commands.end(), completion.commandDigests.begin(),
+                               completion.commandDigests.end());
+        }
+        return !self.reject && Access::readyCount(*self.queue) == 0u;
+      } catch (...) {
+        return false;
+      }
+    }
+  };
+  const D9CWireObjectIdentity identity{
+      .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .generation = 1u, .objectId = 1u};
+  const std::array records{
+      drawRecord(identity), drawRecord(identity, 1u), presentRecord(),
+      applyRenderStateRecord(RS_TEXTURE_FACTOR, 0x11223344u),
+      drawRecord(identity, 2u), presentRecord(),
+      applyRenderStateRecord(RS_TEXTURE_FACTOR, 0x55667788u)};
+  const auto wire = makeWireFixture(records);
+  const auto original = wire.bytes;
+  const std::array<replay::ProviderReplayRecordRange, 4> ranges{{
+      {0u, 2u}, {2u, 1u}, {3u, 3u}, {6u, 1u}}};
+  std::vector<std::uint64_t> reference;
+  for (const auto policy : {replay::ProviderReplayPolicy::Compatibility,
+                            replay::ProviderReplayPolicy::ProductionSlot}) {
+    RuntimeFixture fixture(false, false, true, false);
+    auto* buffer = dxmt9c_device_create_vertex_buffer(
+        fixture.cDevice.get(), 256u, 0u, 0u, 0u);
+    check(buffer != nullptr, "source-policy buffer constructs");
+    std::array<void*, 3> resolved{buffer, buffer, buffer};
+    Collector collector{.queue = &fixture.routing->queue_};
+    check(replay::replayPrevalidatedResolvedCommandChunkBySources(
+              fixture.cDevice.get(), wire.bytes, wire.envelope, resolved, policy,
+              ranges, {&collector, Collector::settled}) == D3D_OK,
+          "source policy executes one full raw through its borrowed ranges");
+    check(collector.ranges == 4u && collector.empty == 1u && collector.presents == 2u &&
+              wire.bytes == original && Access::residentCount(*collector.queue) == 0u &&
+              !Access::stopped(*collector.queue) &&
+              fixture.cDevice->dev().state().renderStates[RS_TEXTURE_FACTOR] ==
+                  0x55667788u,
+          "two Presents and state-only settlement preserve raw ownership and final state");
+    if (policy == replay::ProviderReplayPolicy::Compatibility) {
+      check(fixture.routing->drawCalls == 3u, "compatibility source path is non-vacuous");
+      reference = collector.commands;
+    } else {
+      check(fixture.routing->drawCalls == 0u && !collector.commands.empty() &&
+                collector.commands == reference,
+            "ordinary Direct sources execute identical commands without a carrier or Arena");
+    }
+    dxmt9c_buffer_release(buffer);
+  }
+
+  RuntimeFixture oversized(false, false, true, false);
+  auto* oversizedBuffer = dxmt9c_device_create_vertex_buffer(
+      oversized.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(oversizedBuffer != nullptr, "source-policy oversize buffer constructs");
+  std::array<void*, 3> oversizedResolved{oversizedBuffer, oversizedBuffer,
+                                          oversizedBuffer};
+  auto oversizedEnvelope = wire.envelope;
+  oversizedEnvelope.recordCount = replay::kProviderSourceReplayMaxRecords + 1u;
+  const std::array<replay::ProviderReplayRecordRange, 1> oversizedRanges{{
+      {0u, replay::kProviderSourceReplayMaxRecords + 1u}}};
+  check(replay::replayPrevalidatedResolvedCommandChunkBySources(
+            oversized.cDevice.get(), wire.bytes, oversizedEnvelope,
+            oversizedResolved, replay::ProviderReplayPolicy::ProductionSlot,
+            oversizedRanges) != D3D_OK &&
+            oversized.routing->drawCalls == 0u &&
+            Access::readyCount(oversized.routing->queue_) == 0u &&
+            Access::writingCommandCount(oversized.routing->queue_) == 0u,
+        "source-policy rejects over-cap records before queue effects");
+  dxmt9c_buffer_release(oversizedBuffer);
+
+  RuntimeFixture failed(false, false, true, false);
+  auto* buffer = dxmt9c_device_create_vertex_buffer(
+      failed.cDevice.get(), 256u, 0u, 0u, 0u);
+  check(buffer != nullptr, "source-policy failure buffer constructs");
+  std::array<void*, 3> resolved{buffer, buffer, buffer};
+  Collector rejected{.queue = &failed.routing->queue_, .reject = true};
+  check(replay::replayPrevalidatedResolvedCommandChunkBySources(
+            failed.cDevice.get(), wire.bytes, wire.envelope, resolved,
+            replay::ProviderReplayPolicy::ProductionSlot, ranges,
+            {&rejected, Collector::settled}) != D3D_OK &&
+            rejected.ranges == 1u && rejected.presents == 0u &&
+            Access::stopped(*rejected.queue) && failed.routing->drawCalls == 0u,
+        "consumer failure after published prefix stops; never retries the whole raw");
+  dxmt9c_buffer_release(buffer);
+}
+
+void sourcePublicationCaptureOwnsEveryPublicationAndFailsClosed() {
+  using Queue = dxmt9::CommandQueue;
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  using Receipt = dxmt9::core::metalqueue::ReplaySourcePublicationReceipt;
+  std::array<Receipt, 4> receipts{};
+  Queue queue(Queue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto empty = queue.beginReplaySourcePublicationCapture(receipts);
+  check(empty.has_value() &&
+            !queue.beginReplaySourcePublicationCapture(receipts).has_value(),
+        "publication scope is exclusive");
+  auto moved = std::move(*empty);
+  check(!empty->finish().complete, "moved-from scope has no finish authority");
+  const auto noWork = moved.finish();
+  check(noWork.complete && noWork.count == 0u && Access::readyCount(queue) == 0u,
+        "empty scope settles without inventing source identity");
+
+  auto implicit = queue.beginReplaySourcePublicationCapture(receipts);
+  check(implicit.has_value(), "implicit publication scope starts");
+  queue.submitClear(ClearDesc{});
+  queue.submitPresent(SwapDesc{});
+  const auto observed = implicit->finish();
+  check(observed.complete && observed.count == 1u && receipts[0].hasPresent &&
+            receipts[0].metadata.rawOrdinal == 0u &&
+            Access::peekReadyCompletion(queue).source == receipts[0].source,
+        "Present's actual publication is observed without an explicit flush");
+  check(Access::consumeOne(queue).reclaimed, "implicit source completes");
+
+  auto repeatedRaw = queue.beginReplaySourcePublicationCapture(receipts);
+  check(repeatedRaw.has_value(), "repeated-private-raw capture begins");
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = 2u;
+  capacity.clearRecords = 1u;
+  capacity.presentRecords = 1u;
+  const CpuReadyProducerIdentity producer{77u, 77u, 77u, 77u};
+  for (unsigned index = 0u; index < 2u; ++index) {
+    auto begin = queue.beginDirectChunkSlotReplay(
+        77u, capacity, sizeof(ClearDesc) + sizeof(SwapDesc), producer);
+    check(begin.has_value(), "same private raw admits a fresh Direct Present source");
+    queue.submitClear(ClearDesc{});
+    queue.submitPresent(SwapDesc{});
+    check(begin.lease->commit({}) == Queue::DirectChunkSlotReplayStatus::Committed,
+          "Present keeps private raw witness but publishes queue-local metadata");
+  }
+  const auto repeated = repeatedRaw->finish();
+  check(repeated.complete && repeated.count == 2u && receipts[0].hasPresent &&
+            receipts[1].hasPresent && receipts[0].metadata.rawOrdinal == 0u &&
+            receipts[1].metadata.rawOrdinal == 0u &&
+            receipts[1].metadata.seqId > receipts[0].metadata.seqId &&
+            Access::consumeOne(queue).reclaimed && Access::consumeOne(queue).reclaimed,
+        "repeated Presents do not reuse nonzero raw-publication high water");
+
+  Queue prefix(Queue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto incomplete = prefix.beginReplaySourcePublicationCapture(receipts);
+  check(incomplete.has_value(), "unfinished source capture begins");
+  prefix.submitClear(ClearDesc{});
+  check(!incomplete->finish().complete && Access::stopped(prefix) &&
+            Access::readyCount(prefix) == 0u && Access::writingCommandCount(prefix) == 1u,
+        "unpublished writing effects cannot produce a complete settlement");
+
+  Queue overflow(Queue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto tooSmall = overflow.beginReplaySourcePublicationCapture({});
+  check(tooSmall.has_value(), "zero-capacity capture can represent Empty only");
+  overflow.submitPresent(SwapDesc{});
+  check(!tooSmall->finish().complete && Access::stopped(overflow),
+        "receipt overflow cannot be mistaken for successful truncated evidence");
+
+  Queue active(Queue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto early = active.beginReplaySourcePublicationCapture(receipts);
+  check(early.has_value(), "active-lease capture begins");
+  auto lease = active.beginDirectChunkSlotReplay(
+      79u, capacity, sizeof(ClearDesc) + sizeof(SwapDesc), producer);
+  check(lease.has_value(), "active-lease fixture admits");
+  check(!early->finish().complete && Access::stopped(active),
+        "scope cannot detach while a Direct transaction still owns publication");
+}
+
 void directChunkSlotRollbackAndPostEffectFailureAreFailSafe() {
   SourcePayloadCapacity capacity{};
   capacity.commandHeaders = 1;
@@ -5945,6 +6251,10 @@ void textureUploadObservationTracksPlainABAndReadOnlyLock() {
 }
 
 struct CpuTapeExperimentOptions {
+  enum class SourceBoundaryMode : std::uint8_t {
+    Chunk,
+    CaptureSource,
+  };
   std::string tapePath;
   bool generalFrame = false;
   bool measurement = false;
@@ -5953,6 +6263,9 @@ struct CpuTapeExperimentOptions {
   std::vector<std::string> blobPaths;
   std::string sourceOraclePath;
   std::string sourceProjectionSha256;
+  SourceBoundaryMode sourceBoundaryMode = SourceBoundaryMode::Chunk;
+  std::string identityPath;
+  std::string sourcePlanSha256;
   CpuTapeResourceBackend resourceBackend = CpuTapeResourceBackend::NoGpu;
   bool compatibility = false;
   bool afterDestroy = false;
@@ -7412,6 +7725,172 @@ bool isSha256Hex(std::string_view value) noexcept {
   });
 }
 
+bool isNonzeroLowerSha256Hex(std::string_view value) noexcept {
+  if (!isSha256Hex(value)) return false;
+  return std::any_of(value.begin(), value.end(),
+                     [](char character) { return character != '0'; });
+}
+
+void generalCpuCaptureSourcePlanUsesAuthenticatedExecutor() {
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  namespace replay = dxmt9::d3d9;
+  using replay::RenderTapeIdentityRange;
+  using replay::RenderTapeIdentitySettlement;
+  using replay::RenderTapeIdentitySource;
+
+  const auto fixtureTape = dxmt9::d3d9::test::makeGeneralCpuDestroyFixture(
+      true, true, dxmt9::d3d9::test::GeneralCpuMutationFixture::None,
+      dxmt9::d3d9::test::GeneralCpuResetFixture::A, 1u);
+  std::vector<dxmt9::d3d9::RenderTapeProviderBlob> blobs;
+  for (const auto& bytes : fixtureTape.blobs)
+    blobs.push_back({dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes), bytes});
+  runtime::GeneralPreflightPlan plan;
+  check(runtime::buildGeneralReplayPlan(fixtureTape.tape, blobs, plan).complete(),
+        "capture-source executor fixture preflights");
+
+  constexpr std::uint64_t captureToken = 0x5a17u;
+  std::vector<RenderTapeIdentitySource> sources;
+  std::vector<RenderTapeIdentityRange> ranges;
+  std::vector<RenderTapeIdentitySettlement> settlements;
+  for (const auto& event : plan.events) {
+    if (event.type != dxmt9::d3d9::RenderTapeEventType::CommandChunk) continue;
+    const auto& chunk = plan.commandChunks[event.index];
+    const auto eventOrdinal = plan.tape.events[event.eventIndex].ordinal;
+    const auto sourceOrdinal = static_cast<std::uint64_t>(sources.size() + 1u);
+    const auto seqId = sourceOrdinal;
+    const auto firstRange = static_cast<std::uint32_t>(ranges.size());
+    sources.push_back({.eventOrdinal = eventOrdinal,
+                       .sourceOrdinal = sourceOrdinal,
+                       .seqId = seqId,
+                       .captureToken = captureToken,
+                       .firstRecord = 0u,
+                       .recordCount = chunk.envelope.recordCount,
+                       .firstRange = firstRange,
+                       .rangeCount = 1u});
+    ranges.push_back({.eventOrdinal = eventOrdinal,
+                      .sourceOrdinal = sourceOrdinal,
+                      .seqId = seqId,
+                      .logicalPassId = sourceOrdinal,
+                      .firstRecord = 0u,
+                      .recordCount = chunk.envelope.recordCount,
+                      .dagPassIndex = 0u,
+                      .passKind = 1u});
+    settlements.push_back({.eventOrdinal = eventOrdinal,
+                           .rawOrdinal = sourceOrdinal,
+                           .buildGeneration = 1u,
+                           .firstSourceOrdinal = sourceOrdinal,
+                           .tailSeqId = seqId,
+                           .sourceCount = 1u});
+  }
+  replay::RenderTapeIdentityValidationResult identityValidation{};
+  const auto sidecar = dxmt9::d3d9::buildRenderTapeIdentity(
+      fixtureTape.tape, plan.catalogue, 1u, plan.presentOrdinal, captureToken,
+      dxmt9::d3d9::RenderTapeIdentityAuthority::Capture, sources, ranges,
+      &identityValidation, settlements);
+  check(identityValidation.valid() && !sidecar.empty(),
+        "capture-source executor identity sidecar authenticates");
+  dxmt9::d3d9::CaptureSourceReplayPlan sourcePlan;
+  check(dxmt9::d3d9::buildCaptureSourceReplayPlan(
+            fixtureTape.tape, plan, sidecar, sourcePlan) ==
+            dxmt9::d3d9::CaptureSourceReplayPlanStatus::Valid,
+        "capture-source executor source plan authenticates");
+
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  if (resourceDevice.handle == NULL_OBJECT_HANDLE) return;
+  PresentParameters output{};
+  output.backBufferWidth = plan.outputDesc.width;
+  output.backBufferHeight = plan.outputDesc.height;
+  output.backBufferFormat = dxmt9::d3d9::devicec::fmtFromD3D(plan.outputDesc.format);
+  output.backBufferCount = 1u;
+  output.windowed = true;
+  output.deviceWindow = Handle{91};
+  output.presentationInterval = PresentInterval::Immediate;
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+      RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+  for (const auto policy : {dxmt9::d3d9::ProviderReplayPolicy::Compatibility,
+                            dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot}) {
+    RuntimeFixture fixture(false, false, true, false,
+                           WMT::Device{resourceDevice.handle}, nullptr, &output);
+    Executor executor(fixture, plan, blobs,
+                      {.route = policy,
+                       .captureSourcePlan = &sourcePlan,
+                       .captureSourceTape = fixtureTape.tape,
+                       .captureSourceIdentitySidecar = sidecar});
+    const auto result = executor.run();
+    check(result.complete && result.resetOk,
+          "authenticated capture-source executor completes both routes");
+    check(result.captureSourcePlanDigest == sourcePlan.digest() &&
+              result.captureSourcePlanRanges == sources.size() &&
+              result.captureSourcePlanPublications >= result.captureSourcePlanRanges,
+          "capture-source executor reports authenticated ranges and receipts");
+  }
+
+  const auto staleTape = dxmt9::d3d9::test::makeGeneralCpuDestroyFixture(
+      true, true, dxmt9::d3d9::test::GeneralCpuMutationFixture::None,
+      dxmt9::d3d9::test::GeneralCpuResetFixture::B, 1u);
+  std::vector<dxmt9::d3d9::RenderTapeProviderBlob> staleBlobs;
+  for (const auto& bytes : staleTape.blobs)
+    staleBlobs.push_back({dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes), bytes});
+  runtime::GeneralPreflightPlan stalePlanInput;
+  check(runtime::buildGeneralReplayPlan(staleTape.tape, staleBlobs,
+                                        stalePlanInput).complete(),
+        "stale capture-source fixture preflights");
+  std::vector<RenderTapeIdentitySource> staleSources;
+  std::vector<RenderTapeIdentityRange> staleRanges;
+  std::vector<RenderTapeIdentitySettlement> staleSettlements;
+  for (const auto& event : stalePlanInput.events) {
+    if (event.type != dxmt9::d3d9::RenderTapeEventType::CommandChunk) continue;
+    const auto& chunk = stalePlanInput.commandChunks[event.index];
+    const auto eventOrdinal = stalePlanInput.tape.events[event.eventIndex].ordinal;
+    const auto sourceOrdinal = static_cast<std::uint64_t>(staleSources.size() + 1u);
+    staleSources.push_back({.eventOrdinal = eventOrdinal,
+                            .sourceOrdinal = sourceOrdinal,
+                            .seqId = sourceOrdinal,
+                            .captureToken = captureToken,
+                            .firstRecord = 0u,
+                            .recordCount = chunk.envelope.recordCount,
+                            .firstRange = static_cast<std::uint32_t>(staleRanges.size()),
+                            .rangeCount = 1u});
+    staleRanges.push_back({.eventOrdinal = eventOrdinal,
+                           .sourceOrdinal = sourceOrdinal,
+                           .seqId = sourceOrdinal,
+                           .logicalPassId = sourceOrdinal,
+                           .firstRecord = 0u,
+                           .recordCount = chunk.envelope.recordCount,
+                           .dagPassIndex = 0u,
+                           .passKind = 1u});
+    staleSettlements.push_back({.eventOrdinal = eventOrdinal,
+                                .rawOrdinal = sourceOrdinal,
+                                .buildGeneration = 1u,
+                                .firstSourceOrdinal = sourceOrdinal,
+                                .tailSeqId = sourceOrdinal,
+                                .sourceCount = 1u});
+  }
+  replay::RenderTapeIdentityValidationResult staleValidation{};
+  const auto staleSidecar = dxmt9::d3d9::buildRenderTapeIdentity(
+      staleTape.tape, stalePlanInput.catalogue, 1u, stalePlanInput.presentOrdinal,
+      captureToken, dxmt9::d3d9::RenderTapeIdentityAuthority::Capture,
+      staleSources, staleRanges, &staleValidation, staleSettlements);
+  dxmt9::d3d9::CaptureSourceReplayPlan staleSourcePlan;
+  check(staleValidation.valid() &&
+            dxmt9::d3d9::buildCaptureSourceReplayPlan(
+                staleTape.tape, stalePlanInput, staleSidecar, staleSourcePlan) ==
+                dxmt9::d3d9::CaptureSourceReplayPlanStatus::Valid,
+        "stale capture-source plan authenticates independently");
+  RuntimeFixture rejectedFixture(false, false, true, false,
+                                WMT::Device{resourceDevice.handle}, nullptr, &output);
+  Executor rejected(rejectedFixture, plan, blobs,
+                    {.route = dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot,
+                     .captureSourcePlan = &staleSourcePlan,
+                     .captureSourceTape = fixtureTape.tape,
+                     .captureSourceIdentitySidecar = sidecar});
+  const auto rejectedResult = rejected.run();
+  check(!rejectedResult.complete && rejectedResult.submitted == 0u &&
+            rejectedResult.failure == "general-executor-capture-source-binding",
+        "stale source plan cannot bind by range counts alone");
+}
+
 void printCpuTapeLoadedImages() {
   std::cout << '[';
 #if defined(__APPLE__)
@@ -7444,12 +7923,28 @@ void printCpuTapeLoadedImages() {
 
 int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
   namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  const bool captureSourceRequested =
+      options.sourceBoundaryMode ==
+      CpuTapeExperimentOptions::SourceBoundaryMode::CaptureSource;
   const auto reject = [&](const char* status, const std::string& reason) {
     std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1","grammar":"general-frame","backend":"cpu-metal-resources","status":)"
               << std::quoted(status) << R"(,"reason":)" << std::quoted(reason)
               << "}\n";
     return 3;
   };
+  if (captureSourceRequested &&
+      (!options.generalFrame || options.identityPath.empty() ||
+       !isNonzeroLowerSha256Hex(options.sourcePlanSha256) ||
+       options.beforeNextWork || options.afterDestroy || options.maxPending != 1u ||
+       !options.sourceOraclePath.empty() ||
+       !options.sourceProjectionSha256.empty())) {
+    return reject("unsupported-mode",
+                  "capture-source-requires-cold-general-input-and-plan-digest");
+  }
+  if (captureSourceRequested && (options.measurement || options.policyExplicit) &&
+      !dxmt9::test::cpuTapeCaptureSourcePolicyBounded(options.policy)) {
+    return reject("unsupported-mode", "capture-source-policy-bound-unproven");
+  }
   if (!dxmt9::test::cpuTapePolicyValid(options.policy) ||
       ((options.measurement || options.policyExplicit) &&
        (options.beforeNextWork || options.afterDestroy || options.maxPending != 1u ||
@@ -7489,6 +7984,8 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
   for (const auto& bytes : ownedBlobs) {
     blobs.push_back({dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes), bytes});
   }
+  std::vector<std::byte> identitySidecar;
+  dxmt9::d3d9::CaptureSourceReplayPlan captureSourcePlan;
   std::vector<CpuSourceOracleRow> sourceOracleRows;
   std::string sourceOracleSha256;
   if (sourceOracleRequested) {
@@ -7510,6 +8007,20 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
   const auto admission = runtime::admitGeneralCpuPlan(plan);
   if (!admission.accepted())
     return reject("unsupported-grammar", runtime::generalCpuAdmissionReasonName(admission.reason));
+  if (captureSourceRequested) {
+    constexpr std::size_t kMaxIdentitySidecarBytes = 16u * 1024u * 1024u;
+    if (!readBoundedBinaryFile(options.identityPath, kMaxIdentitySidecarBytes,
+                               identitySidecar))
+      return reject("identity-read-failed", "identity");
+    const auto sourceStatus = dxmt9::d3d9::buildCaptureSourceReplayPlan(
+        tape, plan, identitySidecar, captureSourcePlan);
+    if (sourceStatus != dxmt9::d3d9::CaptureSourceReplayPlanStatus::Valid)
+      return reject("source-plan-failed",
+                    dxmt9::d3d9::captureSourceReplayPlanStatusName(sourceStatus));
+    if (renderTapeDigestHex(captureSourcePlan.digest()) !=
+        options.sourcePlanSha256)
+      return reject("source-plan-digest-mismatch", "source-plan-sha256");
+  }
   const auto importNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now() - importBegin).count();
 
@@ -7552,7 +8063,13 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
           .maxPendingSources = options.maxPending,
           .holdSafeBufferMutation = sourceOracleRequested,
           .sourceOracle = sourceOracleRows,
-          .measurement = options.measurement});
+          .measurement = options.measurement,
+          .captureSourcePlan = captureSourceRequested ? &captureSourcePlan : nullptr,
+          .captureSourceTape = captureSourceRequested ?
+              std::span<const std::byte>(tape) : std::span<const std::byte>{},
+          .captureSourceIdentitySidecar = captureSourceRequested ?
+              std::span<const std::byte>(identitySidecar) :
+              std::span<const std::byte>{}});
       iterationResult.execution = executor.run();
       iterationResult.after = dxmt9::perf::snapshotRenderTapeReplay();
       iterationResult.direct = iterationResult.after.directLeaseDraws -
@@ -7604,11 +8121,20 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
             << R"(,"run_mode":)" << std::quoted(options.measurement ? "measure" : "verify")
             << R"(,"phase_accounting":)"
             << std::quoted(options.measurement ? "iteration-only" : "scoped-observations")
-            << R"(,"runtime_perf_counters":true,"cpu_policy":{"schema":"dxmt9.render_tape.cpu_policy.v1","replay_route":)"
+            << R"(,"runtime_perf_counters":true,"cpu_policy":{"schema":)"
+            << std::quoted(captureSourceRequested
+                               ? "dxmt9.render_tape.cpu_policy.v2"
+                               : "dxmt9.render_tape.cpu_policy.v1")
+            << R"(,"replay_route":)"
             << std::quoted(options.compatibility ? "compatibility" : "production-slot")
             << R"(,"draw_command_limit":)" << options.policy.drawCommandLimit
             << R"(,"slot_headroom_bytes":)" << options.policy.slotHeadroomBytes
-            << R"(,"aggregate_headroom_bytes":)" << options.policy.aggregateHeadroomBytes << '}'
+            << R"(,"aggregate_headroom_bytes":)" << options.policy.aggregateHeadroomBytes;
+  if (captureSourceRequested) {
+    std::cout << R"(,"source_boundary_mode":"capture-source","source_plan_sha256":)"
+              << std::quoted(options.sourcePlanSha256);
+  }
+  std::cout << '}'
             << R"(,"replay_route":)" << std::quoted(options.compatibility ? "compatibility" : "production-slot")
             << R"(,"publication":"per-command","completion":)"
             << std::quoted(options.beforeNextWork ? "before-next-work" : "after-command")
@@ -7711,6 +8237,79 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
       std::cout << *iteration.nativeCpuNs;
     else
       std::cout << "null";
+    if (captureSourceRequested) {
+      const bool sourceComplete = result.complete &&
+          !result.captureSourceReplayStorageOverflow &&
+          result.captureSourcePlanRanges == result.captureSourceRows.size() &&
+          std::all_of(result.captureSourceReplaySources.begin(),
+                      result.captureSourceReplaySources.end(),
+                      [](const auto& row) { return row.settled; });
+      std::cout << ",\"source_replay\":{\"requested\":true,\"validated\":true,\"complete\":"
+                << (sourceComplete ? "true" : "false")
+                << ",\"plan_sha256\":"
+                << std::quoted(renderTapeDigestHex(result.captureSourcePlanDigest))
+                << ",\"source_count\":" << result.captureSourceRows.size()
+                << ",\"completed_source_count\":"
+                << result.captureSourcePlanRanges
+                << ",\"publication_count\":"
+                << result.captureSourcePlanPublications
+                << ",\"empty_source_count\":"
+                << result.captureSourcePlanEmptySources
+                << ",\"present_source_count\":"
+                << result.captureSourcePlanPresentSources
+                << ",\"storage_overflow\":"
+                << (result.captureSourceReplayStorageOverflow ? "true" : "false")
+                << ",\"sources\":[";
+      for (std::size_t row = 0u;
+           row < result.captureSourceReplaySources.size(); ++row) {
+        if (row) std::cout << ',';
+        const auto& value = result.captureSourceReplaySources[row];
+        const char* settlement = "empty";
+        if (value.settlement ==
+            dxmt9::d3d9::RenderTapeSourceReplaySettlement::Published)
+          settlement = "published";
+        else if (value.settlement ==
+                 dxmt9::d3d9::RenderTapeSourceReplaySettlement::PresentPublished)
+          settlement = "present-published";
+        std::cout << "{\"event_ordinal\":" << value.eventOrdinal
+                  << ",\"source_ordinal\":" << value.sourceOrdinal
+                  << ",\"captured_seq_id\":" << value.capturedSeqId
+                  << ",\"command_chunk_index\":" << value.commandChunkIndex
+                  << ",\"first_record\":" << value.firstRecord
+                  << ",\"record_count\":" << value.recordCount
+                  << ",\"local_raw_ordinal\":" << value.actualRawOrdinal
+                  << ",\"range_index\":" << value.rangeIndex
+                  << ",\"settled\":" << (value.settled ? "true" : "false")
+                  << ",\"settlement\":\"" << settlement
+                  << "\",\"publications\":[";
+        const auto first = static_cast<std::size_t>(value.publicationOffset);
+        const auto last = first + value.publicationCount;
+        for (std::size_t publication = first; publication < last; ++publication) {
+          if (publication != first) std::cout << ',';
+          const auto& receipt = result.captureSourceReplayPublications[publication];
+          std::cout << "{\"source_index\":" << receipt.sourceIdIndex
+                    << ",\"source_generation\":" << receipt.sourceIdGeneration
+                    << ",\"storage_first_page\":" << receipt.storageFirstPage
+                    << ",\"storage_page_count\":" << receipt.storagePageCount
+                    << ",\"storage_generation\":" << receipt.storageGeneration
+                    << ",\"raw_ordinal\":" << receipt.metadataRawOrdinal
+                    << ",\"source_ordinal\":" << receipt.metadataSourceOrdinal
+                    << ",\"seq_id\":" << receipt.metadataSeqId
+                    << ",\"build_generation\":" << receipt.metadataBuildGeneration
+                    << ",\"used_bytes\":" << receipt.metadataUsedBytes
+                    << ",\"page_count\":" << receipt.metadataPageCount
+                    << ",\"padding_pages_before\":"
+                    << receipt.metadataPaddingPagesBefore
+                    << ",\"strict_admission\":"
+                    << (receipt.metadataStrictAdmission ? "true" : "false")
+                    << ",\"control_index\":" << receipt.controlIndex
+                    << ",\"has_present\":"
+                    << (receipt.hasPresent ? "true" : "false") << '}';
+        }
+        std::cout << "]}";
+      }
+      std::cout << "]}";
+    }
     std::cout << R"(,"fault_triggered":false,"physical_texture_oracle":false,"dispositions":[)";
     for (std::size_t reason = 0u; reason < iteration.after.dispositions.size(); ++reason) {
       if (reason) std::cout << ',';
@@ -9079,7 +9678,9 @@ int main(int argc, char** argv) {
                       std::string_view(argv[1]) ==
                           "--two-pending-production-sources-spec" ||
                       std::string_view(argv[1]) ==
-                          "--cpu-tape-phase-ledger-spec")) {
+                          "--cpu-tape-phase-ledger-spec" ||
+                      std::string_view(argv[1]) ==
+                          "--capture-source-policy-spec")) {
       // Isolate cached policies from the unrelated routing test matrix.
       // The general no-GPU executor requires the same admission/pacing pins
       // as its CLI, established before the first device is constructed.
@@ -9091,7 +9692,11 @@ int main(int argc, char** argv) {
       setenv("DXMT9_CPU_READY_TAPE", "0", 1);
       setenv("DXMT9_CPU_READY_EARLY_PREFIX", "0", 1);
       setenv("DXMT9_SPLIT_STRETCH_CHUNK", "0", 1);
-      if (std::string_view(argv[1]) == "--cpu-tape-phase-ledger-spec") {
+      if (std::string_view(argv[1]) == "--capture-source-policy-spec") {
+        providerSourcePolicyPreservesRawOrderAndSettlement();
+        sourcePublicationCaptureOwnsEveryPublicationAndFailsClosed();
+        generalCpuCaptureSourcePlanUsesAuthenticatedExecutor();
+      } else if (std::string_view(argv[1]) == "--cpu-tape-phase-ledger-spec") {
         cpuTapePhaseLedgerNestedScopeSpec();
       } else if (std::string_view(argv[1]) == "--general-cpu-mipmap-spec") {
         cpuMipmapObserverPreservesOrderAndQualifiedTexture();
@@ -9184,6 +9789,21 @@ int main(int argc, char** argv) {
           options.sourceOraclePath = argv[++index];
         } else if (argument == "--source-projection-sha256" && index + 1 < argc) {
           options.sourceProjectionSha256 = argv[++index];
+        } else if (argument == "--source-boundary-mode" && index + 1 < argc) {
+          const std::string_view value(argv[++index]);
+          if (value == "chunk") {
+            options.sourceBoundaryMode =
+                CpuTapeExperimentOptions::SourceBoundaryMode::Chunk;
+          } else if (value == "capture-source") {
+            options.sourceBoundaryMode =
+                CpuTapeExperimentOptions::SourceBoundaryMode::CaptureSource;
+          } else {
+            throw TestFailure("invalid source boundary mode");
+          }
+        } else if (argument == "--identity" && index + 1 < argc) {
+          options.identityPath = argv[++index];
+        } else if (argument == "--source-plan-sha256" && index + 1 < argc) {
+          options.sourcePlanSha256 = argv[++index];
         } else if (argument == "--grammar" && index + 1 < argc) {
           const std::string_view value(argv[++index]);
           if (value == "general-frame") options.generalFrame = true;
@@ -9270,6 +9890,21 @@ int main(int argc, char** argv) {
            !options.sourceProjectionSha256.empty()) && !options.generalFrame) {
         throw TestFailure("source oracle requires general-frame grammar");
       }
+      const bool captureSourceRequested =
+          options.sourceBoundaryMode ==
+          CpuTapeExperimentOptions::SourceBoundaryMode::CaptureSource;
+      if (!captureSourceRequested &&
+          (!options.identityPath.empty() || !options.sourcePlanSha256.empty())) {
+        throw TestFailure("identity and source plan require capture-source mode");
+      }
+      if (captureSourceRequested) {
+        if (!options.generalFrame)
+          throw TestFailure("capture-source requires general-frame grammar");
+        if (options.identityPath.empty())
+          throw TestFailure("capture-source requires --identity");
+        if (!isNonzeroLowerSha256Hex(options.sourcePlanSha256))
+          throw TestFailure("capture-source requires a nonzero lowercase source-plan SHA-256");
+      }
       options.policy.compatibility = options.compatibility;
       if ((options.measurement || options.policyExplicit) && !options.generalFrame)
         throw TestFailure("CPU measurement/policy interface requires general-frame grammar");
@@ -9341,6 +9976,7 @@ int main(int argc, char** argv) {
     triangleFanNeverEntersDirectReplay();
     ordinaryChunkSlotSameRawCommitFailureDoesNotRetryLegacy();
     ordinaryOversizedDrawSourceUsesCarrierFreeLifecycle();
+    captureSourceBoundaryReturnsExactQueuePublication();
     directChunkSlotRollbackAndPostEffectFailureAreFailSafe();
     directChunkSlotCapabilityLifetimeIsTerminalSafe();
     transactionalArenaFailureInjectionDisposition();

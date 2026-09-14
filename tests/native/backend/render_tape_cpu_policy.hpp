@@ -104,4 +104,23 @@ inline constexpr bool cpuTapeGeneralQueueBounded(
          queueCapacity >= bound;
 }
 
+// Capture-source replay may be measured and may carry an explicit route
+// policy.  Those modes share the same conservative source bound; they are not
+// a reason to discard an otherwise valid policy at the CLI boundary.
+inline constexpr bool cpuTapeCaptureSourcePolicyBounded(
+    const CpuTapePolicy& policy) noexcept {
+  return cpuTapePolicyValid(policy) &&
+         cpuTapeGeneralQueueBounded(kCpuTapeMaxRecordsPerRaw,
+                                    kCpuTapeMinDrawCommandLimit,
+                                    kCpuTapeMaxPendingPerRaw);
+}
+
+static_assert(cpuTapeCaptureSourcePolicyBounded(CpuTapePolicy{}));
+static_assert(cpuTapeCaptureSourcePolicyBounded(
+    CpuTapePolicy{.compatibility = true, .drawCommandLimit = 3u}));
+static_assert(cpuTapeCaptureSourcePolicyBounded(CpuTapePolicy{
+    .compatibility = false,
+    .slotHeadroomBytes = kCpuTapeMinSlotHeadroomBytes,
+    .aggregateHeadroomBytes = kCpuTapeMinSlotHeadroomBytes}));
+
 }  // namespace dxmt9::test

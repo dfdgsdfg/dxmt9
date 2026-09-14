@@ -1199,6 +1199,94 @@ ReplayEmissionPlan planReplayEmission(
   return planReplayEmissionObserved(imported, rawOrdinal, pageSize);
 }
 
+namespace {
+
+// This is only the consistency contract for an already imported canonical
+// view. It intentionally does not revalidate record payload ranges, section
+// tables, or pointer relationships; validateCommandChunk owns those byte and
+// pointer checks before this cold range planner is called.
+bool canonicalImportedHeader(const ImportedChunkView& imported) noexcept {
+  const auto& header = imported.header;
+  if (header.version != D9C_COMMAND_CHUNK_WIRE_VERSION ||
+      header.headerSize != D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE ||
+      header.recordHeaderSize != D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE ||
+      header.handleEntrySize != D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE ||
+      header.reserved0 != 0u || header.reserved1 != 0u ||
+      header.recordCount != imported.records.size() ||
+      header.handleCount != imported.handles.size() ||
+      header.payloadArenaSize != imported.payloadArena.size()) {
+    return false;
+  }
+
+  constexpr std::uint64_t kU32Max =
+      std::numeric_limits<std::uint32_t>::max();
+  const auto align = [](std::uint64_t value, std::uint64_t alignment,
+                        std::uint64_t& out) noexcept {
+    if (alignment == 0u || value > kU32Max) return false;
+    const auto mask = alignment - 1u;
+    if ((alignment & mask) != 0u || value > kU32Max - mask) return false;
+    out = (value + mask) & ~mask;
+    return out <= kU32Max;
+  };
+  std::uint64_t expected = header.headerSize;
+  if (header.recordTableOffset != expected) return false;
+  if (imported.records.size() >
+      (kU32Max - expected) / sizeof(D9CCommandChunkWireRecordHeader)) {
+    return false;
+  }
+  expected += imported.records.size() * sizeof(D9CCommandChunkWireRecordHeader);
+  if (!align(expected, alignof(D9CCommandChunkWireHandleEntry), expected) ||
+      header.handleTableOffset != expected) {
+    return false;
+  }
+  if (imported.handles.size() >
+      (kU32Max - expected) / sizeof(D9CCommandChunkWireHandleEntry)) {
+    return false;
+  }
+  expected += imported.handles.size() * sizeof(D9CCommandChunkWireHandleEntry);
+  if (!align(expected, alignof(std::uint32_t), expected) ||
+      header.payloadArenaOffset != expected) {
+    return false;
+  }
+  return true;
+}
+
+}  // namespace
+
+ReplayEmissionPlan planReplayEmissionRange(
+    const ImportedChunkView& imported, RawOrdinal rawOrdinal,
+    std::uint32_t firstRecord, std::uint32_t recordCount,
+    std::size_t pageSize) noexcept {
+  if (rawOrdinal == 0u || pageSize == 0u || recordCount == 0u ||
+      !canonicalImportedHeader(imported) ||
+      firstRecord > imported.records.size() ||
+      recordCount > imported.records.size() - firstRecord) {
+    return emissionReject(rawOrdinal, EmissionPlanReason::MalformedView);
+  }
+
+  auto ranged = imported;
+  ranged.header.recordCount = recordCount;
+  ranged.records = imported.records.subspan(firstRecord, recordCount);
+  auto plan = planReplayEmission(ranged, rawOrdinal, pageSize);
+  if (!plan.partitioned()) return plan;
+
+  for (auto& segment : plan.segments) {
+    if (segment.firstRecordIndex >
+            std::numeric_limits<std::uint32_t>::max() - firstRecord) {
+      return emissionReject(rawOrdinal, EmissionPlanReason::Coverage);
+    }
+    segment.firstRecordIndex += firstRecord;
+  }
+  for (auto& span : plan.leaseSpans) {
+    if (span.firstRecordIndex >
+            std::numeric_limits<std::uint32_t>::max() - firstRecord) {
+      return emissionReject(rawOrdinal, EmissionPlanReason::Coverage);
+    }
+    span.firstRecordIndex += firstRecord;
+  }
+  return plan;
+}
+
 DirectChunkSlotReplayDisposition emissionPlanDisposition(
     const ReplayEmissionPlan& plan, bool captureOrTrace) noexcept {
   if (captureOrTrace) {

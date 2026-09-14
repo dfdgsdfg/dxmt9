@@ -47,9 +47,10 @@ bool TraditionalBackend::emitDraw(encoders::EncodeContext& ctx,
 void TraditionalBackend::emitClearWithinPass(encoders::EncodeContext& ctx,
                                              WMT::CommandBuffer& commandBuffer,
                                              const core::ClearDesc& clear) {
-  // encodeClearPass opens its own LoadActionClear render pass; the pool comes
-  // from the encode context. Trailing sampleBufferAttachments span defaults.
-  encoders::encodeClearPass(commandBuffer, ctx.pool, clear);
+  // The clear helper uses the queue-owned pipeline cache/device for clipped
+  // clears and retains the load-action fast path for full clears.
+  encoders::encodeClearPass(commandBuffer, ctx.pool, ctx.cache, ctx.device, ctx.limits,
+                            ctx.shaderArchive, ctx.shaderArchivePath, clear);
 }
 
 }  // namespace dxmt9::render

@@ -261,6 +261,27 @@ struct ReplayObserverSink {
   explicit operator bool() const noexcept { return fn != nullptr; }
 };
 
+// Exact ordinary-source publication evidence. The receipt is emitted only
+// after CpuReadyTape has transitioned the source to Ready and while the queue
+// scheduling mutex is still held. The sink must consume the value immediately
+// and must not retain it or call back into queue-draining code.
+struct ReplaySourcePublicationReceipt {
+  CpuReadyTape::SourceRef source{};
+  CpuReadySourceMetadata metadata{};
+  std::size_t controlIndex = std::numeric_limits<std::size_t>::max();
+  bool hasPresent = false;
+};
+
+using ReplaySourcePublicationFn = void (*)(
+    void* context, const ReplaySourcePublicationReceipt& receipt) noexcept;
+
+struct ReplaySourcePublicationSink {
+  void* context = nullptr;
+  ReplaySourcePublicationFn fn = nullptr;
+
+  explicit operator bool() const noexcept { return fn != nullptr; }
+};
+
 struct ChunkObservation {
   ChunkObservationKind kind = ChunkObservationKind::Draw;
   u32 compatFlags = 0;
@@ -1486,6 +1507,8 @@ class QueueLifecycleController {
     // only forwards owner evidence and never allocates on the disabled path.
     ::dxmt9::queue::PipelineLifecycleObserverSink pipelineLifecycleObserver{};
     ::dxmt9::queue::PipelineControlObserverSink pipelineControlObserver{};
+    ::dxmt9::core::metalqueue::ReplaySourcePublicationSink
+        replaySourcePublicationSink{};
     // Resolved once when this binding is installed. Queue event producers use
     // this cached bit to avoid an unconditional call into the owner observer.
     bool pipelineLifecycleObservationEnabled = false;
@@ -1496,6 +1519,10 @@ class QueueLifecycleController {
   };
 
   void bindTrackedSubmissionState(SubmissionBinding binding);
+  // Cold source-publication capture is installed and removed by CommandQueue
+  // while holding the same scheduling mutex used by commitCurrentChunk.
+  void setReplaySourcePublicationSink(
+      ReplaySourcePublicationSink sink) noexcept;
   // Control-plane boundary evidence. This is separate from per-source owner
   // rows and never synthesizes a GPU completion or reclaim.
   void observePipelineControl(::dxmt9::queue::PipelineControl control,

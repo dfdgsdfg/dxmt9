@@ -11,6 +11,19 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Backend Layer
 
+R-BACK-4.10 has a shared explicit MSL2.4/fast runtime compile profile and
+invariant generated vertex-position outputs. Native/x86 pixel and source
+contracts pass; all ten retained GT2 originals reproduce exact source/output
+bytes twice on the normal provider. This repairs the bounded final-pixel
+cohort, not every intermediate or workload. The fresh combined CPU/GPU
+exact-policy transaction publishes successfully (r593) and passes independent
+post-publication reauthentication (r598). Fresh native 14/14, x86 2/2,
+expanded regression 28/28 and all 190 TLA configurations pass. Interrupted
+r588 is preserved; a separate headroom admission candidate remains rejected.
+See the
+[position-invariance evidence](../../docs/perfomance/mini-replay-bisection/gpu-position-invariance.04.md)
+and [experiment gap](../experiments/gap.md).
+
 The default-off `DXMT9_LOCK_SCOPE_REFINEMENT` candidate is governed by
 [bounded lock-scope refinement](lock-scope-refinement.md). Range-upload queue
 lock elision, exact captured-backing stamp batches and immutable replay
@@ -81,6 +94,7 @@ does not close all layouts/consumers/capture or either default-promotion gate.
 | Resource-scoped replay fence final interleaving hardening (`R-BACK-2.51(d)`) | ✅ | 2026-08-04 native hardening publishes device/worker failure and stops admission before failed replay completion, terminal-gates every owner-bearing drain exemption except teardown-only addref/release, and amortized-sweeps expired core-handle alias targets. `dxmt9-replay-offload-queue-spec` reaches a barrier from an injected negative replay result while the failed chunk is still in flight and pins global-drain failure, refused/unmoved enqueue, no-drain provider-entry sentinels across shader/vdecl, resource, swapchain, and query families, scene fail-stop, teardown reachability, and cache churn. `ReplayScopedDrain.tla` now separates queued, in-flight, successful completion, failure observation, terminal publication, and failed retirement; the complete model generated 1,164,757 states (151,948 distinct, depth 21) with `RawResidencyMatchesOutstanding`, `InFlightRetainsResidency`, `TerminalPrecedesCompletion`, and `FailureBlocksAdmission` green. The focused set is 7/7 and the non-GPU native+TLA/audit suite is 105/105 green. Runtime/Wine promotion gates remain those in the preceding row. |
 | Ring allocators: `RingArena` for argbuf, replayStore, staging, copyTemp | ✅ | metal |
 | Clear-as-load-action folding | ✅ | metal |
+| Explicit partial Clear attachment preservation | ✅ bounded backend oracle | `encodeClearPassImpl` keeps nonempty rectangles out of full-attachment load Clear and uses clipped draws with exact attachment formats/sample counts. `clipClearRect` has exhaustive native region coverage; `clearColorStoreAction` preserves source samples across resolve and later Load. `dxmt9-partial-clear-spec` passes actual MRT, mip/cube isolation, overlapping MSAA Clears and independent exact depth/stencil readback on the Apple Silicon Depth32Float_Stencil8 backing. This does not claim complete viewport/API conformance, packed desktop depth24 coverage or GT2 capture fidelity. [Evidence](../../docs/perfomance/mini-replay-bisection/gpu-policy-qualification.03.md). |
 | Render-target change → encoder split | ✅ | metal |
 | Encoder merging with exact hazard tracking | ✅ | metal; Bloom overlap remains diagnostic only for false-positive measurement |
 | PSO cache: `ShaderVariantKey`, async compile, `MTLBinaryArchive` disk cache (`R-BACK-3.1`–`3.17`) | ✅ | `ShaderVariantKey` now applies the production-called pure backend identity rules: portable FFP omits alpha-test enable/function while tile FFP retains them; general draw keys omit sampler min/mag linear filtering (stretch retains it); attached inactive blend fields fold to `Add`/`One`/`Zero` while write mask/format remain, and invalid formats fold to no-attachment. Runtime vertex-stream offsets are excluded from vertex source/PSO identity while declaration elements and strides remain; per-draw binding payloads still retain exact offsets. Draw handles use append-only release/acquire segmented blocks rather than cloning the full slot prefix. Native truth tables cover all canonicalization cases and `dxmt9-pso-slot-publication-spec` covers boundaries, generation rejection, exhaustion, and concurrent readers. Opt-in bounded diagnostics separate source tuples, composite pre-source backend identity, its VS/PS/clip/layout/FVF/depth/stencil components, vertex declaration elements and stream binding sub-axes, retained descriptor axes, and lookup/source/publication stages without adding fields to the authoritative key; observer-off performance evidence remains mandatory. HDR1 component evidence localizes the saturated pre-source fanout to stream-zero offset, while declaration and stride axes stay bounded. The identity proof is value-level only; shader ABI/pixel correctness still requires the separate GPU oracle and shader corpus. |

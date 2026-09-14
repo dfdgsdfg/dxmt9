@@ -1522,6 +1522,10 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
   if (!ctx.device || !ctx.queue.valid()) {
     return std::nullopt;
   }
+  if (drawCaptureSourceTrackingEnabled()) {
+    selectDrawCaptureSource(reinterpret_cast<std::uintptr_t>(&ctx.pool),
+                            sourceSeqId, options.partitionSource);
+  }
   // Session participation and validated replay-command plans are
   // source-kind-neutral. The plan is call-local and indexes the logical source
   // command stream, including segmented Arena sources.
@@ -2292,6 +2296,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
     bindingState.activeDrawStateKey.reset();
     bindingState.activeDrawStateUsesPrefetchedPsoLayout = false;
     bindingState.textureSamplerShadow.reset();
+    if (effectDrawBindingTraceEnabled()) {
+      resetEffectDirectCbufBindings(encoderState.activeRenderEncoder.handle);
+    }
     // R-BACK-13.1 — per-pass tile-shader FFP selector. Eligibility is
     // computed once at encoder open; the choice is sticky for the pass.
     // Counters: each opened pass bumps exactly one of
@@ -2348,6 +2355,7 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
         ctx.pool, ctx.limits, drawState,
         encoderState.activeRenderEncoder != nullptr,
         encodeChunkSeqId, openedRenderEncoderIndex,
+        options.partitionSource,
         diagnosticsState.activeColorAttachmentDump);
     // M2: push a debug group identifying the render pass attachments.
     // Paired with the popDebugGroup() at the head of flushRender.
@@ -3683,8 +3691,10 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
               commandIndex,
               clearView.colorAttachments[0].handle.value,
               clearView.depthStencil.handle.value);
-          dxmt9::encoders::encodeClearPass(commandBuffer, ctx.pool, clearView,
-                                           sampleAttachment.span());
+          dxmt9::encoders::encodeClearPass(
+              commandBuffer, ctx.pool, ctx.cache, ctx.device, ctx.limits,
+              ctx.shaderArchive, ctx.shaderArchivePath, clearView,
+              sampleAttachment.span());
           recordRenderEncoderGpuAttachment(sampleAttachment);
           commandBufferHasWork = true;
         }
@@ -3904,6 +3914,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
           perf::CounterSnapshot curr = perf::snapshot();
           perf::emitFrameDelta(frameId++, prevSnapshot, curr);
           prevSnapshot = curr;
+        }
+        if (colorAttachmentDumpFrameTrackingEnabled()) {
+          noteColorAttachmentDumpPresent(ctx.pool, sourceSeqId);
         }
         if (perf::enabled()) {
           renderPassFrameTracker.reset();

@@ -9,6 +9,10 @@
 
 struct D9CDevice;
 
+namespace dxmt9::core::metalqueue {
+struct ReplaySourcePublicationReceipt;
+}
+
 namespace dxmt9::d3d9 {
 
 inline constexpr std::int32_t kCommandChunkDecodeFailure =
@@ -143,6 +147,52 @@ enum class ProviderReplayPolicy : std::uint8_t {
   ProductionSlot,
 };
 
+struct ProviderReplayRecordRange {
+  std::uint32_t firstRecord = 0u;
+  std::uint32_t recordCount = 0u;
+};
+
+// Cold harness bound, not a production wire limit. This admits at most 4096
+// plans and 8193 publication receipts for one raw, before any replay effects.
+inline constexpr std::uint32_t kProviderSourceReplayMaxRecords = 4096u;
+
+enum class ProviderReplaySourceSettlementKind : std::uint8_t {
+  Published,
+  PresentPublished,
+  Empty,
+};
+
+// Borrowed only for the synchronous settlement callback. Capture provenance
+// stays in the caller's authenticated source plan, not in local queue IDs.
+// A policy may publish several local sources inside one captured range.
+struct ProviderReplaySourceSettlement {
+  ProviderReplayRecordRange range{};
+  // Provider-local private raw identity; never a captured source/sequence ID.
+  std::uint64_t rawOrdinal = 0u;
+  std::uint32_t rangeIndex = 0u;
+  ProviderReplaySourceSettlementKind kind =
+      ProviderReplaySourceSettlementKind::Empty;
+  std::span<const core::metalqueue::ReplaySourcePublicationReceipt> publications{};
+};
+
+struct ProviderReplaySourceConsumer {
+  void* context = nullptr;
+  // Runs outside the queue lock, after range publication, while the full raw
+  // owner and its wrapper/buffer snapshots are still retained. CPU harnesses
+  // drain their controlled completion here; GPU callers need not wait.
+  bool (*settled)(void*, const ProviderReplaySourceSettlement&) noexcept = nullptr;
+};
+
+bool validateProviderReplayRecordRanges(
+    std::uint32_t totalRecords,
+    std::span<const ProviderReplayRecordRange> ranges) noexcept;
+
+// Sorted, unique cuts strictly inside a source (never at publication edges).
+bool validateProviderReplayBatchCuts(
+    std::uint32_t totalRecords,
+    std::span<const ProviderReplayRecordRange> ranges,
+    std::span<const std::uint32_t> batchCuts) noexcept;
+
 // Provider-replay entry for a canonical chunk whose recorded handle table has
 // already been resolved to replay-owned wrappers. The canonical bytes are
 // imported unchanged and dispatched by DeviceReplaySink; this does not add a
@@ -152,5 +202,25 @@ std::int32_t replayPrevalidatedResolvedCommandChunk(
     const CommandChunkEnvelope& envelope,
     std::span<void* const> resolvedObjects,
     ProviderReplayPolicy policy = ProviderReplayPolicy::Historical) noexcept;
+
+std::int32_t replayPrevalidatedResolvedCommandChunkAtRecordBoundaries(
+    D9CDevice* device, std::span<const std::byte> bytes,
+    const CommandChunkEnvelope& envelope,
+    std::span<void* const> resolvedObjects,
+    std::span<const ProviderReplayRecordRange> ranges,
+    std::uint32_t& completedRanges,
+    std::span<const std::uint32_t> batchCuts = {},
+    std::uint32_t* completedBatchCuts = nullptr) noexcept;
+
+// Shared normal CPU/GPU source driver. Uses ordinary Direct ChunkSlot or
+// source-limited compatibility, never substitutes Arena or repacks the raw.
+// The caller must authenticate ranges against CaptureSourceReplayPlan first.
+std::int32_t replayPrevalidatedResolvedCommandChunkBySources(
+    D9CDevice* device, std::span<const std::byte> bytes,
+    const CommandChunkEnvelope& envelope,
+    std::span<void* const> resolvedObjects,
+    ProviderReplayPolicy policy,
+    std::span<const ProviderReplayRecordRange> ranges,
+    ProviderReplaySourceConsumer consumer = {}) noexcept;
 
 }  // namespace dxmt9::d3d9

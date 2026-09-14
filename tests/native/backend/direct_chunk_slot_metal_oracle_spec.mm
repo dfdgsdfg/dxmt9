@@ -461,7 +461,7 @@ struct ProductionFixture {
     upperRaw->flush();
   }
 
-  void setVertices(std::uint32_t color) {
+  void setVertices(std::uint32_t color, float depth = 0.5f) {
     void* vertexBytes = nullptr;
     check(dxmt9c_buffer_lock(buffer, 0u, 3u * sizeof(TriangleVertex),
                              &vertexBytes, 0u) == dxmt9::core::D3D_OK &&
@@ -471,9 +471,9 @@ struct ProductionFixture {
         // This right triangle covers every 16x16 pixel center. Keeping the
         // diffuse value constant makes the readback an exact fixture oracle,
         // rather than comparing interpolation at a partially covered edge.
-        TriangleVertex{0.0f, 0.0f, 0.5f, 1.0f, color},
-        TriangleVertex{32.0f, 0.0f, 0.5f, 1.0f, color},
-        TriangleVertex{0.0f, 32.0f, 0.5f, 1.0f, color},
+        TriangleVertex{0.0f, 0.0f, depth, 1.0f, color},
+        TriangleVertex{32.0f, 0.0f, depth, 1.0f, color},
+        TriangleVertex{0.0f, 32.0f, depth, 1.0f, color},
     };
     std::memcpy(vertexBytes, vertices.data(), sizeof(vertices));
     check(dxmt9c_buffer_unlock(buffer) == dxmt9::core::D3D_OK,
@@ -604,6 +604,117 @@ void printPixelQuad(std::ostream& out, std::span<const std::byte> pixels,
     out << static_cast<unsigned>(static_cast<std::uint8_t>(pixels[offset + i]));
   }
   out << ']';
+}
+
+int runCaptureObserverChild(std::string_view identityMode, bool textureObserver = false,
+                            std::uint32_t depthFormat = 0u) {
+  check(identityMode == "event" || identityMode == "segment",
+        "capture observer fixture requires a known source identity mode");
+  setenv("DXMT9_RENDER_TAPE_CAPTURE", "1", 1);
+  // Enables the production capture queue profile; this native fixture has no
+  // PE publisher and does not write a Tape or claim a Wine capture oracle.
+  setenv("DXMT9_RENDER_TAPE_OUTPUT_ROOT", "/unused-native-pe-publisher", 1);
+  setenv("DXMT9_RENDER_IDENTITY_MODE", std::string(identityMode).c_str(), 1);
+  @autoreleasepool {
+    auto devices = WMT::CopyAllDevices();
+    if (!devices || devices.count() == 0u) return 77;
+    ProductionFixture fixture(devices.object(0u));
+    const auto releaseSurface = [](D9CSurface* surface) { dxmt9c_surface_release(surface); };
+    std::unique_ptr<D9CSurface, decltype(releaseSurface)> depth(nullptr, releaseSurface);
+    if (depthFormat) {
+      depth.reset(dxmt9c_device_create_depth_stencil(fixture.cDevice.get(),
+          kWidth, kHeight, depthFormat, 0u, 0u, 0u, nullptr));
+      check(depth != nullptr &&
+                dxmt9c_device_set_depth_stencil(fixture.cDevice.get(), depth.get()) == dxmt9::core::D3D_OK,
+            "paired depth observer has a real depth attachment");
+      check(dxmt9c_device_set_render_state(fixture.cDevice.get(), 7u, 1u) == dxmt9::core::D3D_OK &&
+                dxmt9c_device_set_render_state(fixture.cDevice.get(), 14u, 1u) == dxmt9::core::D3D_OK &&
+                dxmt9c_device_set_render_state(fixture.cDevice.get(), 23u, 8u) == dxmt9::core::D3D_OK &&
+                dxmt9c_device_clear(fixture.cDevice.get(), 0u, nullptr, 2u, 0u, 1.0f, 0u) == dxmt9::core::D3D_OK,
+            "depth starts initialized, then every draw writes its exact Z value");
+      fixture.upperRaw->flush();
+    }
+    const auto releaseTexture = [](D9CTexture* texture) { dxmt9c_texture_release(texture); };
+    std::unique_ptr<D9CTexture, decltype(releaseTexture)> texture(nullptr, releaseTexture);
+    if (textureObserver) {
+      texture.reset(dxmt9c_device_create_texture(fixture.cDevice.get(), 2u, 2u,
+                                                1u, 0u, 21u, 1u));
+      check(texture != nullptr, "capture observer sampled texture constructs");
+      D9CLockedRect locked{};
+      check(dxmt9c_texture_lock_rect(texture.get(), 0u, &locked, nullptr, 0u) == dxmt9::core::D3D_OK,
+            "capture observer managed texture locks");
+      for (unsigned y = 0; y != 2; ++y) {
+        std::memset(static_cast<std::byte*>(locked.bits) + y * locked.pitch, 0xff, 8u);
+      }
+      check(dxmt9c_texture_unlock_rect(texture.get(), 0u) == dxmt9::core::D3D_OK &&
+                dxmt9c_device_set_texture(fixture.cDevice.get(), 0u, texture.get()) == dxmt9::core::D3D_OK,
+            "capture observer texture is initialized and bound");
+      // Keep the independent diffuse-color oracle while observing a real
+      // bound texture. Its bytes are checked separately in the Python fixture.
+      check(dxmt9c_device_set_texture_stage_state(fixture.cDevice.get(), 0u, 1u, 2u) == dxmt9::core::D3D_OK &&
+                dxmt9c_device_set_texture_stage_state(fixture.cDevice.get(), 0u, 2u, 0u) == dxmt9::core::D3D_OK &&
+                dxmt9c_device_set_texture_stage_state(fixture.cDevice.get(), 0u, 4u, 2u) == dxmt9::core::D3D_OK &&
+                dxmt9c_device_set_texture_stage_state(fixture.cDevice.get(), 0u, 5u, 0u) == dxmt9::core::D3D_OK,
+            "texture observation preserves diffuse-only fixture pixels");
+      fixture.upperRaw->flush();
+    }
+    dxmt9::d3d9::WireObjectRegistry registry;
+    const auto bufferId = registry.insert(D9C_CHUNK_HANDLE_KIND_BUFFER, fixture.buffer);
+    const auto surfaceId = registry.insert(D9C_CHUNK_HANDLE_KIND_SURFACE, fixture.surface);
+    const auto wire = makeTriangleDrawChunk(bufferId, surfaceId);
+    constexpr std::uint64_t token = 0xfeedu;
+    constexpr std::array colors{0xff123456u, 0xffabcdefu, 0xffa1b2c3u, 0xff123456u};
+    constexpr std::array expected{
+        kFirstDrawPixelBytes, kFinalDrawPixelBytes, kClearPixelBytes, kFirstDrawPixelBytes};
+    for (std::size_t index = 0; index < colors.size(); ++index) {
+      fixture.setVertices(colors[index], depthFormat ? (index + 1u) * 0.125f : 0.5f);
+      auto raw = makeRaw(wire, registry, *fixture.buffer, *fixture.surface, index + 1u);
+      raw.cpuReadyTapePlanningEnabled = true;
+      const bool captured = index == 1u || index == 3u;
+      if (captured) {
+        raw.renderTapeCaptureToken = token;
+        raw.renderTapeEventOrdinal = index + 1u;
+      }
+      const auto hr = dxmt9::d3d9::replayRawChunk(fixture.cDevice.get(), raw);
+      dxmt9::d3d9::releaseRetainedWrappers(raw);
+      check(hr == dxmt9::core::D3D_OK, "capture observer raw replay succeeds");
+      if (captured) {
+        check(dxmt9c_device_wait_render_tape_event_completion(
+                  fixture.cDevice.get(), token, index + 1u) == dxmt9::core::D3D_OK,
+              "capture observer source reaches real GPU settlement");
+      } else {
+        fixture.upperRaw->flush();
+      }
+      (void)readbackPixels(fixture, expected[index], "capture observer cut");
+    }
+    D9CRenderTapeIdentityCaptureResult receipt{};
+    check(fixture.cDevice->renderTapeIdentityCapture.copy(token, receipt, {}) &&
+              receipt.sourceCount == 2u && receipt.byteCount < 65536u,
+          "real production ledger contains precisely the two captured sources");
+    std::vector<std::byte> identityBytes(receipt.byteCount);
+    check(fixture.cDevice->renderTapeIdentityCapture.copy(token, receipt, identityBytes),
+          "settled production capture identity bytes are retained");
+    check(receipt.rangeCount == 2u, "one physical pass per captured fixture event");
+    std::array<D9CRenderTapeIdentityRangeEntry, 2> passRows{};
+    std::memcpy(passRows.data(), identityBytes.data() +
+        receipt.sourceCount * sizeof(D9CRenderTapeIdentitySourceEntry), sizeof(passRows));
+    check(passRows[0].eventOrdinal != passRows[1].eventOrdinal &&
+              passRows[0].logicalPassId != 0u && passRows[1].logicalPassId != 0u &&
+              passRows[0].logicalPassId != passRows[1].logicalPassId,
+          "production replay namespaces identical local pass IDs across events");
+    std::cout << "{\"schema\":\"dxmt9.capture_color_observer_fixture.v1\","
+              << "\"draws\":4,\"strict_pixel_cuts\":4,\"sources\":[";
+    for (std::size_t index = 0; index < receipt.sourceCount; ++index) {
+      D9CRenderTapeIdentitySourceEntry source{};
+      std::memcpy(&source, identityBytes.data() + index * sizeof(source), sizeof(source));
+      if (index) std::cout << ',';
+      std::cout << "{\"seq\":" << source.seqId
+                << ",\"source_ordinal\":" << source.sourceOrdinal
+                << ",\"event_ordinal\":" << source.eventOrdinal << '}';
+    }
+    std::cout << "]}\n";
+  }
+  return 0;
 }
 
 ChildResult runChild(bool expectedDirect) {
@@ -783,6 +894,17 @@ std::string runMode(const char* self, const char* mode) {
 
 int main(int argc, char** argv) {
   try {
+    if (argc == 3 && (std::string_view(argv[1]) == "--capture-observer" ||
+                      std::string_view(argv[1]) == "--capture-texture-observer" ||
+                      std::string_view(argv[1]) == "--capture-depth-observer" ||
+                      std::string_view(argv[1]) == "--capture-d24x8-observer" ||
+                      std::string_view(argv[1]) == "--capture-stencil-observer")) {
+      return runCaptureObserverChild(argv[2],
+          std::string_view(argv[1]) == "--capture-texture-observer",
+          std::string_view(argv[1]) == "--capture-depth-observer" ? 82u :
+          std::string_view(argv[1]) == "--capture-d24x8-observer" ? 77u :
+          std::string_view(argv[1]) == "--capture-stencil-observer" ? 75u : 0u);
+    }
     if (argc == 3 && std::string_view(argv[1]) == "--child") {
       const bool direct = std::string_view(argv[2]) == "1";
       std::cout << serialize(runChild(direct)) << '\n';

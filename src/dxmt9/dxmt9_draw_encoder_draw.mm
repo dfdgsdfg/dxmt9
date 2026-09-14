@@ -3088,6 +3088,7 @@ bool encodeDraw(EncodeContext& ctx,
                   {}};
   const bool traceEncode = debug::shouldTraceEncode(hot, seqId) ||
                            colorAttachmentAliasesTracedTexture(ctx.pool, hot);
+  const bool effectDrawTrace = effectDrawTraceEnabled();
   // This local classification is needed only to suppress the optional
   // homogeneous resource-array lane. The pipeline resolver independently
   // stamps sampled-depth source identity; do not add another pool walk to the
@@ -3157,6 +3158,9 @@ bool encodeDraw(EncodeContext& ctx,
   }
   const bool depthStateProbeRequested =
       debug::probeDisableDepthWrite() || debug::probeDepthFuncAlways();
+  static const bool vertexPositionProbe = vertexPositionProbeDrawEnabled();
+  if (vertexPositionProbe)
+    beginVertexPositionProbeDraw(commandBuffer.handle, encoder.handle, seqId, drawOrdinal);
   std::optional<dxmt9::ffp::FixedFunctionVertexLayout> ffLayout;
   bool fixedFunctionPath = false;
   {
@@ -4112,6 +4116,10 @@ bool encodeDraw(EncodeContext& ctx,
         if (setVertexBufferCached(slice.buffer, slice.offset, 0)) {
           countUniformBufferBinds(1);
         }
+        if (effectDrawBindingTraceEnabled()) {
+          recordEffectDirectCbufBinding(encoder.handle,
+              argbuf_hybrid::kConstantBufferVsIndex, slice.buffer, slice.offset, bytes);
+        }
         perf::countUniformVsConsts(bytes);
         uniform::clearBits(*dirtyPtr, uniform::kVsAny);
       }
@@ -4127,6 +4135,10 @@ bool encodeDraw(EncodeContext& ctx,
         if (!suppressRecordedMetalCalls(ctx)) {
           encoder.setFragmentBuffer(slice.buffer, slice.offset, 0);
         }
+        if (effectDrawBindingTraceEnabled()) {
+          recordEffectDirectCbufBinding(encoder.handle,
+              argbuf_hybrid::kConstantBufferPsIndex, slice.buffer, slice.offset, bytes);
+        }
         countUniformBufferBinds(1);
         perf::countUniformPsConsts(bytes);
         uniform::clearBits(*dirtyPtr, uniform::kPsAny);
@@ -4140,6 +4152,10 @@ bool encodeDraw(EncodeContext& ctx,
       if (slice) {
         if (!suppressRecordedMetalCalls(ctx)) {
           encoder.setFragmentBuffer(slice.buffer, slice.offset, 3);
+        }
+        if (effectDrawBindingTraceEnabled()) {
+          recordEffectDirectCbufBinding(encoder.handle, argbuf_hybrid::kConstantBufferFfpPsIndex,
+              slice.buffer, slice.offset, sizeof(FfpPsConsts));
         }
         countUniformBufferBinds(1);
         perf::countUniformFfpPs(sizeof(FfpPsConsts));
@@ -4160,6 +4176,16 @@ bool encodeDraw(EncodeContext& ctx,
   bool ffpVsBound = false;
   auto bindFfpVsIfDirty = [&] {
     if (ffpVsBound || !uniform::anyDirty(*dirtyPtr, uniform::kFfpVsAny)) {
+      if (effectDrawBindingTraceEnabled()) {
+        // The clean argbuf route can repoint a cached slice without visiting
+        // the upload path. Observe its existing byte owner, not a rebuilt host.
+        if (argbufTableMode && argbufCbufCache &&
+            argbufCbufCache->ffpVsValid && argbufCbufCache->ffpVsBinding()) {
+          traceEffectCachedFfpVsBinding(encoderBreakdown, seqId, drawOrdinal,
+                                        commandIndex, commandDrawIndex,
+                                        argbufCbufCache->ffpVsBytes);
+        }
+      }
       return;
     }
     auto* host = ensureFfpVs();
@@ -4172,6 +4198,11 @@ bool encodeDraw(EncodeContext& ctx,
       argbufCbufCache->promotePayloadHash(argbufPayloadHash);
       uniform::clearBits(*dirtyPtr, uniform::kFfpVsAny);
       ffpVsBound = true;
+      if (effectDrawBindingTraceEnabled()) {
+        traceEffectFfpVsBinding(encoderBreakdown, seqId, drawOrdinal,
+                                commandIndex, commandDrawIndex, *host,
+                                true, true);
+      }
       return;
     }
     auto slice = uploadTransientBuffer(
@@ -4201,10 +4232,19 @@ bool encodeDraw(EncodeContext& ctx,
         if (setVertexBufferCached(slice.buffer, slice.offset, 3)) {
           countUniformBufferBinds(1);
         }
+        if (effectDrawBindingTraceEnabled()) {
+          recordEffectDirectCbufBinding(encoder.handle, argbuf_hybrid::kConstantBufferFfpVsIndex,
+              slice.buffer, slice.offset, sizeof(FfpVsConsts));
+        }
         perf::countUniformFfpVs(sizeof(FfpVsConsts));
       }
       uniform::clearBits(*dirtyPtr, uniform::kFfpVsAny);
       ffpVsBound = true;
+      if (effectDrawBindingTraceEnabled()) {
+        traceEffectFfpVsBinding(encoderBreakdown, seqId, drawOrdinal,
+                                commandIndex, commandDrawIndex, *host,
+                                false, argbufTableMode);
+      }
     }
   };
   bool expandedIndexedDraw = false;
@@ -5772,6 +5812,11 @@ bool encodeDraw(EncodeContext& ctx,
       recordedSetFragmentBytes(ctx, encoder, &fsVolatile,
                                sizeof(fsVolatile), 5);
     }
+    if (effectDrawBindingTraceEnabled()) {
+      traceEffectFsVolatileBinding(encoderBreakdown, seqId, drawOrdinal,
+                                   commandIndex, commandDrawIndex, fsVolatile,
+                                   paramBindingOverride, skipFsVolatilePush);
+    }
   }
   drawPhase.mark(perf::countEncodeDrawPhaseBaseStateCpuTime);
   if (indexedDraw) {
@@ -6025,6 +6070,10 @@ bool encodeDraw(EncodeContext& ctx,
           drawVertexBaseIndex, drawVertexStreamOffset,
           drawVertexStreamStride, hot.streamFrequencies);
       recordedSetVertexBytes(ctx, encoder, &vol, sizeof(DrawVolatile), 5);
+      if (effectDrawBindingTraceEnabled()) {
+        traceEffectVsVolatileBinding(encoderBreakdown, seqId, drawOrdinal,
+                                    commandIndex, commandDrawIndex, vol);
+      }
       perf::countUniformVolatilePush();
       if (encoderBreakdown) {
         encoderBreakdown->addSetVertexBytes(sizeof(DrawVolatile), 5);
@@ -6062,31 +6111,25 @@ bool encodeDraw(EncodeContext& ctx,
           effectiveCullMode,
           fillMode);
     };
-    traceEffectDraw(encoderBreakdown,
-                    hot,
-                    ctx.pool,
-                    seqId,
-                    drawOrdinal,
-                    commandIndex,
-                    commandDrawIndex,
-                    commandDrawCount,
-                    pv.primitiveType,
-                    primitiveCount,
-                    vertexCount,
-                    indexedDraw,
-                    fixedFunctionPath,
-                    preTransformed,
-                    effectDrawTraceEnabled() && drawState.hasShaderContext()
-                        ? drawshader::activeFragmentTextureMaskForShader(
-                              drawState.shaderContext().pixelShader,
-                              hot.textureMask)
-                        : 0u,
-                    drawState.hasShaderContext()
-                        ? drawState.shaderContext().vertexShader.hash
-                        : 0u,
-                    drawState.hasShaderContext()
-                        ? drawState.shaderContext().pixelShader.hash
-                        : 0u);
+    if (effectDrawTrace) {
+      traceEffectDraw(
+          encoderBreakdown, drawState, ctx.pool, seqId, drawOrdinal,
+          commandIndex, commandDrawIndex, commandDrawCount, pv.primitiveType,
+          primitiveCount, vertexCount, indexedDraw, fixedFunctionPath,
+          preTransformed,
+          drawState.hasShaderContext()
+              ? drawshader::activeFragmentTextureMaskForShader(
+                    drawState.shaderContext().pixelShader, hot.textureMask)
+              : 0u,
+          drawState.hasShaderContext()
+              ? drawState.shaderContext().vertexShader.hash
+              : 0u,
+          drawState.hasShaderContext()
+              ? drawState.shaderContext().pixelShader.hash
+              : 0u,
+          encoder.handle,
+          argbufTableMode && argbufCbufCache ? &argbufCbufCache->bindings : nullptr);
+    }
     if (expandedIndexedDraw) {
       if (encoderBreakdown && indexedDraw) {
         encoderBreakdown->recordIndexBufferState(hot.indexBuffer.value);
@@ -7311,9 +7354,32 @@ bool encodeDraw(EncodeContext& ctx,
         drawVertexBaseIndex, drawVertexStreamOffset,
         drawVertexStreamStride, hot.streamFrequencies);
     recordedSetVertexBytes(ctx, encoder, &vol, sizeof(DrawVolatile), 5);
+    if (effectDrawBindingTraceEnabled()) {
+      traceEffectVsVolatileBinding(encoderBreakdown, seqId, drawOrdinal,
+                                  commandIndex, commandDrawIndex, vol);
+    }
     perf::countUniformVolatilePush();
     if (encoderBreakdown) {
       encoderBreakdown->addSetVertexBytes(sizeof(DrawVolatile), 5);
+    }
+    if (effectDrawTrace) {
+      traceEffectDraw(
+          encoderBreakdown, drawState, ctx.pool, seqId, drawOrdinal,
+          commandIndex, commandDrawIndex, commandDrawCount,
+          pv.primitiveType, primitiveCount, vertexCount, false,
+          fixedFunctionPath, preTransformed,
+          drawState.hasShaderContext()
+              ? drawshader::activeFragmentTextureMaskForShader(
+                    drawState.shaderContext().pixelShader, hot.textureMask)
+              : 0u,
+          drawState.hasShaderContext()
+              ? drawState.shaderContext().vertexShader.hash
+              : 0u,
+          drawState.hasShaderContext()
+              ? drawState.shaderContext().pixelShader.hash
+              : 0u,
+          encoder.handle,
+          argbufTableMode && argbufCbufCache ? &argbufCbufCache->bindings : nullptr);
     }
     const bool issueSplit = drawIssueSplitPerfEnabled();
     PerfScope issueScope(perf::countEncodeDrawIssueCpuTime);

@@ -1,18 +1,63 @@
 #import <AppKit/AppKit.h>
+#import <CommonCrypto/CommonDigest.h>
 #import <Metal/Metal.h>
 #import <QuartzCore/CAMetalLayer.h>
 #import <objc/message.h>
 #import <objc/runtime.h>
 
 #include "../winemetal.h"
+#include "winemetal_pipeline_lineage.hpp"
+#include "winemetal_sampling_lineage.hpp"
+#include "winemetal_shader_compile_profile.hpp"
+#include "winemetal_vertex_position_probe.hpp"
+#include "winemetal_vertex_position_probe_policy.hpp"
 
+#include <atomic>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <dlfcn.h>
 #include <mutex>
+#include <unistd.h>
 
 namespace {
+
+MTLCompileOptions* newShaderCompileOptions() {
+  constexpr auto profile = dxmt9::shader::kCompileProfile;
+  MTLCompileOptions* options = [MTLCompileOptions new];
+  options.languageVersion = static_cast<MTLLanguageVersion>(profile.languageVersion);
+  options.preserveInvariance = profile.preserveInvariance;
+  if (@available(macOS 15.0, *)) {
+    options.mathMode = static_cast<MTLMathMode>(profile.mathMode);
+    options.mathFloatingPointFunctions = static_cast<MTLMathFloatingPointFunctions>(profile.mathFunctions);
+  } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    options.fastMathEnabled = YES;
+#pragma clang diagnostic pop
+  }
+  return options;
+}
+
+NSDictionary* shaderCompileOptionsReceipt(MTLCompileOptions* options) {
+  if (!options) return nil;
+  NSNumber* mathMode = nil;
+  NSNumber* mathFunctions = nil;
+  if (@available(macOS 15.0, *)) {
+    mathMode = @(options.mathMode);
+    mathFunctions = @(options.mathFloatingPointFunctions);
+  } else {
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+    mathMode = @(options.fastMathEnabled ? 2u : 0u);
+    mathFunctions = @(options.fastMathEnabled ? 0u : 1u);
+#pragma clang diagnostic pop
+  }
+  return @{@"profile_version": @(dxmt9::shader::kCompileProfile.version),
+           @"language_version": @(options.languageVersion), @"math_mode": mathMode,
+           @"math_functions": mathFunctions, @"preserve_invariance": @(options.preserveInvariance)};
+}
 
 void execute_on_main(dispatch_block_t block) {
   if ([NSThread isMainThread]) {
@@ -844,6 +889,8 @@ extern "C" obj_handle_t MTLDevice_newSamplerState(obj_handle_t device, struct WM
   desc.lodAverage          = info->lod_average;
   desc.supportArgumentBuffers = info->support_argument_buffers;
   id<MTLSamplerState> s = [(id<MTLDevice>)device newSamplerStateWithDescriptor:desc];
+  if (dxmt9::diagnostics::metalSamplingLineageEnabled())
+    dxmt9::diagnostics::noteMetalSamplerCreation((obj_handle_t)s, desc);
   [desc release];
   if (!s) return NULL_OBJECT_HANDLE;
   info->gpu_resource_id = info->support_argument_buffers ? [s gpuResourceID]._impl : 0;
@@ -875,11 +922,370 @@ extern "C" obj_handle_t MTLDevice_newDepthStencilState(obj_handle_t device,
     desc.backFaceStencil.readMask                   = info->back_stencil.read_mask;
   }
   id<MTLDepthStencilState> ds = [(id<MTLDevice>)device newDepthStencilStateWithDescriptor:desc];
+  if (dxmt9::diagnostics::metalSamplingLineageEnabled())
+    dxmt9::diagnostics::noteMetalDepthStencilCreation((obj_handle_t)ds, desc);
   [desc release];
   return (obj_handle_t)ds;
 }
 
 // -- Shader libraries --
+
+namespace {
+
+char librarySourceLineageKey;
+char functionSourceLineageKey;
+char libraryCompileOptionsLineageKey;
+char functionCompileOptionsLineageKey;
+char pipelineCreationLineageKey;
+char vertexProbeDescriptorKey;
+char vertexProbePipelineKey;
+
+std::mutex& vertexProbeMutex() {
+  static std::mutex mutex;
+  return mutex;
+}
+
+bool pipelineLineageEnabled() noexcept {
+  static const bool enabled = [] {
+    const auto on = [](const char* name) {
+      const char* value = std::getenv(name);
+      return value && value[0] && std::strcmp(value, "0") != 0;
+    };
+    const char* path = std::getenv("DXMT_DUMP_SHADER_DIR");
+    return path && path[0] && on("DXMT9_EFFECT_DRAW_TRACE") &&
+        on("DXMT9_EFFECT_DRAW_TRACE_BINDINGS") && on("DXMT9_EFFECT_DRAW_TRACE_GEOMETRY");
+  }();
+  return enabled;
+}
+
+// Associations die with the real object; no pointer-keyed stale registry and
+// no Metal resources retained by lineage itself. The separately gated bounded
+// vertex probe retains a descriptor/PSO pair on its original PSO. Conflicting interned objects are
+// permanently ambiguous. Only cold creation sites take this mutex.
+void attachLineage(id object, const void* key, id value) {
+  if (!object || !value) return;
+  static std::mutex mutex;
+  static std::uint64_t attempts = 0u;
+  std::lock_guard lock(mutex);
+  id previous = objc_getAssociatedObject(object, key);
+  if (previous) {
+    if (![previous isEqual:value])
+      objc_setAssociatedObject(object, key, [NSNull null], OBJC_ASSOCIATION_RETAIN);
+    return;
+  }
+  // Bound total diagnostic associations across libraries/functions/pipelines.
+  if (attempts >= 16384u) return;
+  ++attempts;
+  objc_setAssociatedObject(object, key, value, OBJC_ASSOCIATION_RETAIN);
+}
+
+NSString* lineageSha256(NSData* bytes) {
+  if (!bytes || [bytes length] > UINT32_MAX) return nil;
+  unsigned char hash[CC_SHA256_DIGEST_LENGTH];
+  CC_SHA256([bytes bytes], static_cast<CC_LONG>([bytes length]), hash);
+  char hex[65];
+  constexpr char digits[] = "0123456789abcdef";
+  for (std::size_t i = 0; i < CC_SHA256_DIGEST_LENGTH; ++i) {
+    hex[2 * i] = digits[hash[i] >> 4];
+    hex[2 * i + 1] = digits[hash[i] & 15];
+  }
+  hex[64] = '\0';
+  return [NSString stringWithUTF8String:hex];
+}
+
+void invalidateLineage(id object, const void* key) noexcept {
+  if (!pipelineLineageEnabled() || !object) return;
+  try {
+    @try { attachLineage(object, key, [NSNull null]); }
+    @catch (NSException*) {}
+  } catch (...) {}
+}
+
+void maybeAttachFunctionLineage(id library, id function) noexcept {
+  if (!pipelineLineageEnabled() || !function) return;
+  try {
+    @try {
+      id source = objc_getAssociatedObject(library, &librarySourceLineageKey);
+      // A missing library is not an assertion of no source. Binary libraries
+      // and specialized newFunctionWithConstants are deliberately unsupported.
+      attachLineage(function, &functionSourceLineageKey, source ?: [NSNull null]);
+      id options = objc_getAssociatedObject(library, &libraryCompileOptionsLineageKey);
+      attachLineage(function, &functionCompileOptionsLineageKey, options ?: [NSNull null]);
+    } @catch (NSException*) {}
+  } catch (...) {}
+}
+
+void maybeAttachPipelineLineage(id<MTLRenderPipelineState> pipeline,
+    MTLRenderPipelineDescriptor* descriptor, MTLPipelineOption options) noexcept {
+  if (!pipelineLineageEnabled() || !pipeline) return;
+  try {
+    @autoreleasepool {
+      @try {
+        id vertex = objc_getAssociatedObject(descriptor.vertexFunction, &functionSourceLineageKey);
+        id fragment = descriptor.fragmentFunction ? objc_getAssociatedObject(
+            descriptor.fragmentFunction, &functionSourceLineageKey) : nil;
+        id vertexOptions = objc_getAssociatedObject(descriptor.vertexFunction, &functionCompileOptionsLineageKey);
+        id fragmentOptions = descriptor.fragmentFunction ? objc_getAssociatedObject(
+            descriptor.fragmentFunction, &functionCompileOptionsLineageKey) : nil;
+        if (![vertex isKindOfClass:[NSString class]] ||
+            ![vertexOptions isKindOfClass:[NSDictionary class]] ||
+            (descriptor.fragmentFunction && (![fragment isKindOfClass:[NSString class]] ||
+                ![fragmentOptions isKindOfClass:[NSDictionary class]] || ![fragmentOptions isEqual:vertexOptions]))) {
+          attachLineage(pipeline, &pipelineCreationLineageKey, [NSNull null]);
+          return;
+        }
+        NSMutableArray* colors = [NSMutableArray arrayWithCapacity:8];
+        for (unsigned i = 0u; i < 8u; ++i) {
+          auto* color = descriptor.colorAttachments[i];
+          [colors addObject:@[@(color.pixelFormat), @(color.blendingEnabled),
+              @(color.writeMask), @(color.rgbBlendOperation), @(color.alphaBlendOperation),
+              @(color.sourceRGBBlendFactor), @(color.destinationRGBBlendFactor),
+              @(color.sourceAlphaBlendFactor), @(color.destinationAlphaBlendFactor)]];
+        }
+        NSMutableArray* vertexBuffers = [NSMutableArray arrayWithCapacity:31];
+        NSMutableArray* fragmentBuffers = [NSMutableArray arrayWithCapacity:31];
+        for (unsigned i = 0u; i < 31u; ++i) {
+          [vertexBuffers addObject:@(descriptor.vertexBuffers[i].mutability)];
+          [fragmentBuffers addObject:@(descriptor.fragmentBuffers[i].mutability)];
+        }
+        NSDictionary* receipt = @{
+          @"schema": @"dxmt9.metal_pipeline_creation.v1",
+          @"vertex_source_sha256": vertex,
+          @"fragment_source_sha256": fragment ?: [NSNull null],
+          @"vertex_function": descriptor.vertexFunction.name ?: @"",
+          @"fragment_function": descriptor.fragmentFunction.name ?: [NSNull null],
+          @"function_constants": [NSNull null], @"compile_options": vertexOptions,
+          @"colors": colors, @"vertex_buffer_mutability": vertexBuffers,
+          @"fragment_buffer_mutability": fragmentBuffers,
+          @"depth_format": @(descriptor.depthAttachmentPixelFormat),
+          @"stencil_format": @(descriptor.stencilAttachmentPixelFormat),
+          @"alpha_to_coverage": @(descriptor.alphaToCoverageEnabled),
+          @"alpha_to_one": @(descriptor.alphaToOneEnabled),
+          @"rasterization": @(descriptor.rasterizationEnabled),
+          @"sample_count": @(descriptor.rasterSampleCount),
+          @"topology": @(descriptor.inputPrimitiveTopology),
+          @"tessellation_partition": @(descriptor.tessellationPartitionMode),
+          @"tessellation_step": @(descriptor.tessellationFactorStepFunction),
+          @"tessellation_winding": @(descriptor.tessellationOutputWindingOrder),
+          @"max_tessellation_factor": @(descriptor.maxTessellationFactor),
+          @"pipeline_options": @(options),
+          @"binary_archive_count": @([descriptor.binaryArchives count]),
+          @"scope": @"actual-conventional-render-descriptor-and-source-function-chain",
+        };
+        NSError* error = nil;
+        NSData* bytes = [NSJSONSerialization dataWithJSONObject:receipt
+            options:NSJSONWritingSortedKeys error:&error];
+        NSString* digest = lineageSha256(bytes);
+        static const char* directory = std::getenv("DXMT_DUMP_SHADER_DIR");
+        NSString* root = [[NSString stringWithUTF8String:directory]
+            stringByAppendingPathComponent:@"pipelines"];
+        if (!digest || !root || [bytes length] > 16384u ||
+            ![[NSFileManager defaultManager] createDirectoryAtPath:root
+                withIntermediateDirectories:YES attributes:nil error:&error] ||
+            ![bytes writeToFile:[root stringByAppendingPathComponent:
+                [digest stringByAppendingString:@".json"]] options:NSDataWritingAtomic error:&error]) {
+          attachLineage(pipeline, &pipelineCreationLineageKey, [NSNull null]);
+          return;
+        }
+        dxmt9::diagnostics::MetalPipelineLineage result{};
+        if (![digest getCString:result.receiptSha256 maxLength:65 encoding:NSUTF8StringEncoding] ||
+            ![vertex getCString:result.vertexSha256 maxLength:65 encoding:NSUTF8StringEncoding] ||
+            (fragment && ![fragment getCString:result.fragmentSha256 maxLength:65 encoding:NSUTF8StringEncoding])) {
+          attachLineage(pipeline, &pipelineCreationLineageKey, [NSNull null]);
+          return;
+        }
+        result.fragmentAbsent = descriptor.fragmentFunction == nil;
+        attachLineage(pipeline, &pipelineCreationLineageKey,
+            [NSData dataWithBytes:&result length:sizeof(result)]);
+      } @catch (NSException*) {
+        invalidateLineage(pipeline, &pipelineCreationLineageKey);
+      }
+    }
+  } catch (...) {
+    invalidateLineage(pipeline, &pipelineCreationLineageKey);
+  }
+}
+
+// Cold lineage evidence at the actual Metal compilation boundary. Translator
+// dumps can also be regenerated for attribution, so they alone do not prove
+// which source/options reached the driver. No library or PSO policy changes.
+void maybe_dump_compiled_shader(id<MTLDevice> device, NSString *source,
+                                id<MTLLibrary> library, MTLCompileOptions* options) noexcept {
+  static const char *directory = std::getenv("DXMT_DUMP_SHADER_DIR");
+  if (!directory || !directory[0]) return;
+  try {
+    @autoreleasepool {
+      @try {
+        NSData *bytes = [source dataUsingEncoding:NSUTF8StringEncoding];
+        if (!bytes || [bytes length] > UINT32_MAX) {
+          invalidateLineage(library, &librarySourceLineageKey);
+          std::fprintf(stderr, "[dxmt9-compiled-shader] invalid-source-bytes\n");
+          return;
+        }
+        unsigned char hash[CC_SHA256_DIGEST_LENGTH];
+        CC_SHA256([bytes bytes], static_cast<CC_LONG>([bytes length]), hash);
+        char hex[CC_SHA256_DIGEST_LENGTH * 2 + 1];
+        constexpr char digits[] = "0123456789abcdef";
+        for (std::size_t i = 0; i < CC_SHA256_DIGEST_LENGTH; ++i) {
+          hex[2 * i] = digits[hash[i] >> 4];
+          hex[2 * i + 1] = digits[hash[i] & 15];
+        }
+        hex[sizeof(hex) - 1] = '\0';
+        NSString *digest = [NSString stringWithUTF8String:hex];
+        NSString *root = [[NSString stringWithUTF8String:directory]
+                            stringByAppendingPathComponent:@"compiled"];
+        NSError *error = nil;
+        if (!root || ![[NSFileManager defaultManager]
+                createDirectoryAtPath:root withIntermediateDirectories:YES
+                attributes:nil error:&error] ||
+            ![bytes writeToFile:[root stringByAppendingPathComponent:
+                [digest stringByAppendingString:@".metal"]]
+                options:NSDataWritingAtomic error:&error]) {
+          std::fprintf(stderr, "[dxmt9-compiled-shader] source-publication-failed\n");
+          invalidateLineage(library, &librarySourceLineageKey);
+          return;
+        }
+        static std::atomic<std::uint64_t> nextAttempt{0};
+        const auto attempt = nextAttempt.fetch_add(1, std::memory_order_relaxed);
+#if defined(__aarch64__)
+        NSString *architecture = @"arm64";
+#elif defined(__x86_64__)
+        NSString *architecture = @"x86_64";
+#else
+        NSString *architecture = @"unknown";
+#endif
+        NSDictionary *receipt = @{
+          @"schema": @"dxmt9.metal_shader_compilation.v1",
+          @"source_sha256": digest,
+          @"source_bytes": @([bytes length]),
+          @"compile_options": shaderCompileOptionsReceipt(options) ?: (id)[NSNull null],
+          @"success": @(library != nil),
+          @"process_id": @(getpid()),
+          @"attempt": @(attempt),
+          @"architecture": architecture,
+          @"runtime_os": [[NSProcessInfo processInfo] operatingSystemVersionString],
+          @"device_name": [device name] ?: @"",
+          @"device_registry_id": @([device registryID]),
+        };
+        NSData *json = [NSJSONSerialization dataWithJSONObject:receipt options:0 error:&error];
+        NSString *name = [NSString stringWithFormat:@"attempt-%d-%llu.json",
+            getpid(), static_cast<unsigned long long>(attempt)];
+        if (!json || ![json writeToFile:[root stringByAppendingPathComponent:name]
+                          options:NSDataWritingAtomic error:&error]) {
+          std::fprintf(stderr, "[dxmt9-compiled-shader] receipt-publication-failed\n");
+          invalidateLineage(library, &librarySourceLineageKey);
+        } else if (pipelineLineageEnabled() && library) {
+          attachLineage(library, &librarySourceLineageKey, digest);
+          attachLineage(library, &libraryCompileOptionsLineageKey,
+              shaderCompileOptionsReceipt(options) ?: (id)[NSNull null]);
+        }
+      } @catch (NSException *exception) {
+        (void)exception;
+        invalidateLineage(library, &librarySourceLineageKey);
+        std::fprintf(stderr, "[dxmt9-compiled-shader] observation-failed\n");
+      }
+    }
+  } catch (...) {
+    invalidateLineage(library, &librarySourceLineageKey);
+    std::fprintf(stderr, "[dxmt9-compiled-shader] observation-failed\n");
+  }
+}
+
+}  // namespace
+
+bool dxmt9::diagnostics::copyMetalPipelineLineage(
+    std::uint64_t pipeline, MetalPipelineLineage& output) noexcept {
+  if (!pipelineLineageEnabled() || !pipeline) return false;
+  try {
+    @try {
+      id value = objc_getAssociatedObject((id)pipeline, &pipelineCreationLineageKey);
+      if (![value isKindOfClass:[NSData class]] || [value length] != sizeof(output)) return false;
+      std::memcpy(&output, [value bytes], sizeof(output));
+      return true;
+    } @catch (NSException*) {}
+  } catch (...) {}
+  return false;
+}
+
+namespace {
+void maybeRememberVertexProbeDescriptor(id<MTLRenderPipelineState> pipeline,
+    MTLRenderPipelineDescriptor* descriptor, MTLPipelineOption options) noexcept {
+  using namespace dxmt9::diagnostics;
+  if (!vertexPositionProbeEnabled() || !pipeline || options != MTLPipelineOptionNone ||
+      descriptor.binaryArchives.count != 0) return;
+  try {
+    @try {
+      MetalPipelineLineage lineage;
+      if (!copyMetalPipelineLineage((std::uint64_t)pipeline, lineage) ||
+          vertexPositionProbeConfig().sourceDigest != lineage.vertexSha256) return;
+      std::lock_guard lock(vertexProbeMutex());
+      if (objc_getAssociatedObject(pipeline, &vertexProbeDescriptorKey)) return;
+      static unsigned retained = 0;
+      if (retained >= 64) return;
+      MTLRenderPipelineDescriptor* copy = [descriptor copy];
+      if (!copy) return;
+      objc_setAssociatedObject(pipeline, &vertexProbeDescriptorKey, copy, OBJC_ASSOCIATION_RETAIN);
+      [copy release];
+      ++retained;
+    } @catch (NSException*) {}
+  } catch (...) {}
+}
+}  // namespace
+
+dxmt9::diagnostics::VertexPositionProbePipeline
+dxmt9::diagnostics::prepareVertexPositionProbePipeline(std::uint64_t original) noexcept {
+  VertexPositionProbePipeline result;
+  if (!vertexPositionProbeEnabled() || !copyMetalPipelineLineage(original, result.original) ||
+      vertexPositionProbeConfig().sourceDigest != result.original.vertexSha256) return result;
+  try {
+    @autoreleasepool {
+      @try {
+        std::lock_guard lock(vertexProbeMutex());
+        id<MTLRenderPipelineState> owner = (id<MTLRenderPipelineState>)original;
+        id cached = objc_getAssociatedObject(owner, &vertexProbePipelineKey);
+        if (cached == [NSNull null]) return result;
+        if (cached) {
+          if (copyMetalPipelineLineage((std::uint64_t)cached, result.instrumented)) result.handle = (std::uint64_t)cached;
+          return result;
+        }
+        // Failed/unsupported attempts are sticky for this actual PSO identity.
+        objc_setAssociatedObject(owner, &vertexProbePipelineKey, [NSNull null], OBJC_ASSOCIATION_RETAIN);
+        id saved = objc_getAssociatedObject(owner, &vertexProbeDescriptorKey);
+        if (![saved isKindOfClass:[MTLRenderPipelineDescriptor class]]) return result;
+        NSString* root = [NSString stringWithUTF8String:std::getenv("DXMT_DUMP_SHADER_DIR")];
+        NSString* sourceName = [[NSString stringWithUTF8String:result.original.vertexSha256] stringByAppendingString:@".metal"];
+        NSData* bytes = [NSData dataWithContentsOfFile:[[root stringByAppendingPathComponent:@"compiled"] stringByAppendingPathComponent:sourceName]];
+        if (!bytes || bytes.length > 1024 * 1024 ||
+            ![lineageSha256(bytes) isEqualToString:[NSString stringWithUTF8String:result.original.vertexSha256]]) return result;
+        const auto source = instrumentVertexPositionSource(
+            std::string_view(static_cast<const char*>(bytes.bytes), bytes.length),
+            vertexPositionProbeConfig().maxVertices, vertexPositionProbeConfig().skinningInputs);
+        if (!source) return result;
+        NSString* text = [[[NSString alloc] initWithBytes:source->data() length:source->size() encoding:NSUTF8StringEncoding] autorelease];
+        NSError* error = nil;
+        MTLCompileOptions* options = [newShaderCompileOptions() autorelease];
+        id<MTLLibrary> library = [[owner.device newLibraryWithSource:text options:options error:&error] autorelease];
+        if (!library) return result;
+        maybe_dump_compiled_shader(owner.device, text, library, options);
+        id<MTLFunction> vertex = [[library newFunctionWithName:@"dxmt9_vs"] autorelease];
+        if (!vertex) return result;
+        maybeAttachFunctionLineage(library, vertex);
+        MTLRenderPipelineDescriptor* descriptor = [[saved copy] autorelease];
+        descriptor.vertexFunction = vertex;
+        descriptor.vertexBuffers[29].mutability = MTLMutabilityMutable;
+        descriptor.label = @"Diagnostic selected-draw clip-position probe";
+        id<MTLRenderPipelineState> pipeline = [[owner.device newRenderPipelineStateWithDescriptor:descriptor
+            options:MTLPipelineOptionNone reflection:nil error:&error] autorelease];
+        if (!pipeline) return result;
+        maybeAttachPipelineLineage(pipeline, descriptor, MTLPipelineOptionNone);
+        if (!copyMetalPipelineLineage((std::uint64_t)pipeline, result.instrumented)) return result;
+        objc_setAssociatedObject(owner, &vertexProbePipelineKey, pipeline, OBJC_ASSOCIATION_RETAIN);
+        result.handle = (std::uint64_t)pipeline;
+      } @catch (NSException*) {}
+    }
+  } catch (...) {}
+  return result;
+}
 
 extern "C" obj_handle_t DispatchData_alloc_init(uint64_t native_ptr, uint64_t length) {
   return (obj_handle_t)dispatch_data_create((const void *)native_ptr, (size_t)length, NULL, NULL);
@@ -889,6 +1295,7 @@ extern "C" obj_handle_t MTLDevice_newLibrary(obj_handle_t device, obj_handle_t d
   if (!device || !data) return NULL_OBJECT_HANDLE;
   NSError *err = nil;
   id<MTLLibrary> lib = [(id<MTLDevice>)device newLibraryWithData:(dispatch_data_t)data error:&err];
+  invalidateLineage(lib, &librarySourceLineageKey);
   if (err_out) *err_out = err ? (obj_handle_t)CFBridgingRetain(err) : NULL_OBJECT_HANDLE;
   return (obj_handle_t)lib;
 }
@@ -898,7 +1305,38 @@ extern "C" obj_handle_t MTLDevice_newLibraryFromSource(obj_handle_t device, cons
   if (!device || !source) return NULL_OBJECT_HANDLE;
   NSError *err = nil;
   NSString *src = [NSString stringWithUTF8String:source];
-  id<MTLLibrary> lib = [(id<MTLDevice>)device newLibraryWithSource:src options:nil error:&err];
+  // Cold diagnostic, selected by the original bytes, never a production policy.
+  // The dumped library/PSO lineage records the actual transformed source.
+  static const std::string noContractSelection = []() noexcept {
+    try {
+      const char* value = std::getenv("DXMT9_PROBE_NO_CONTRACT_SOURCE_SHA256");
+      return value && dxmt9::diagnostics::vertexNoContractSelectionValid(value)
+          ? std::string(value) : std::string{};
+    } catch (...) { return std::string{}; }
+  }();
+  if (!noContractSelection.empty()) {
+    try {
+      NSString* originalDigest = lineageSha256([src dataUsingEncoding:NSUTF8StringEncoding]);
+      if (originalDigest && dxmt9::diagnostics::vertexNoContractSelectionContains(
+                                noContractSelection, originalDigest.UTF8String)) {
+        const auto changed = dxmt9::diagnostics::vertexNoContractControlSource(source);
+        if (changed) {
+          src = [NSString stringWithUTF8String:changed->c_str()];
+          std::fprintf(stderr, "[dxmt9-shader-no-contract] original=%s transformed=%s diagnostic-only=1\n",
+              originalDigest.UTF8String,
+              lineageSha256([src dataUsingEncoding:NSUTF8StringEncoding]).UTF8String);
+        } else {
+          std::fprintf(stderr, "[dxmt9-shader-no-contract] unsupported source shape; unchanged\n");
+        }
+      }
+    } catch (...) {
+      std::fprintf(stderr, "[dxmt9-shader-no-contract] preparation failed; unchanged\n");
+    }
+  }
+  MTLCompileOptions* options = newShaderCompileOptions();
+  id<MTLLibrary> lib = [(id<MTLDevice>)device newLibraryWithSource:src options:options error:&err];
+  maybe_dump_compiled_shader((id<MTLDevice>)device, src, lib, options);
+  [options release];
   if (err_out) *err_out = err ? (obj_handle_t)CFBridgingRetain(err) : NULL_OBJECT_HANDLE;
   return (obj_handle_t)lib;
 }
@@ -906,7 +1344,9 @@ extern "C" obj_handle_t MTLDevice_newLibraryFromSource(obj_handle_t device, cons
 extern "C" obj_handle_t MTLLibrary_newFunction(obj_handle_t library, const char *name) {
   if (!library || !name) return NULL_OBJECT_HANDLE;
   NSString *ns_name = [NSString stringWithUTF8String:name];
-  return (obj_handle_t)[(id<MTLLibrary>)library newFunctionWithName:ns_name];
+  id<MTLFunction> function = [(id<MTLLibrary>)library newFunctionWithName:ns_name];
+  maybeAttachFunctionLineage((id)library, function);
+  return (obj_handle_t)function;
 }
 
 extern "C" obj_handle_t MTLLibrary_newFunctionWithConstants(obj_handle_t library, const char *name,
@@ -924,6 +1364,7 @@ extern "C" obj_handle_t MTLLibrary_newFunctionWithConstants(obj_handle_t library
   }
   id<MTLFunction> fn = [(id<MTLLibrary>)library newFunctionWithName:ns_name
                                                      constantValues:values error:&err];
+  invalidateLineage(fn, &functionSourceLineageKey);
   [values release];
   if (err_out) *err_out = err ? (obj_handle_t)CFBridgingRetain(err) : NULL_OBJECT_HANDLE;
   return (obj_handle_t)fn;
@@ -1090,6 +1531,8 @@ extern "C" obj_handle_t MTLDevice_newRenderPipelineState(obj_handle_t device,
   }
   id<MTLRenderPipelineState> pso = [(id<MTLDevice>)device
       newRenderPipelineStateWithDescriptor:desc options:opts reflection:nil error:&err];
+  maybeAttachPipelineLineage(pso, desc, opts);
+  maybeRememberVertexProbeDescriptor(pso, desc, opts);
   if (tracePso) {
     fprintf(stderr,
             "[dxmt9-wmt-pso] after-render-pso pso=%p err=%s\n",
@@ -1563,21 +2006,33 @@ extern "C" void MTLRenderCommandEncoder_encodeCommands(obj_handle_t encoder,
     case WMTRenderCommandSetVertexBuffer: {
       const struct wmtcmd_render_setbuffer *b = (const struct wmtcmd_render_setbuffer *)next;
       [enc setVertexBuffer:(id<MTLBuffer>)b->buffer offset:b->offset atIndex:b->index];
+      if (dxmt9::diagnostics::metalSamplingLineageEnabled())
+        dxmt9::diagnostics::noteMetalDirectBuffer(encoder, true, b->index, b->buffer, b->offset);
       break;
     }
     case WMTRenderCommandSetVertexBufferOffset: {
       const struct wmtcmd_render_setbufferoffset *b = (const struct wmtcmd_render_setbufferoffset *)next;
       [enc setVertexBufferOffset:b->offset atIndex:b->index];
+      if (dxmt9::diagnostics::metalSamplingLineageEnabled())
+        dxmt9::diagnostics::noteMetalDirectBuffer(encoder, true, b->index, 0u, b->offset, true);
       break;
     }
     case WMTRenderCommandSetFragmentBuffer: {
       const struct wmtcmd_render_setbuffer *b = (const struct wmtcmd_render_setbuffer *)next;
       [enc setFragmentBuffer:(id<MTLBuffer>)b->buffer offset:b->offset atIndex:b->index];
+      if (dxmt9::diagnostics::metalSamplingLineageEnabled()) {
+        dxmt9::diagnostics::noteMetalDirectBuffer(encoder, false, b->index, b->buffer, b->offset);
+        if (b->index == 30u) dxmt9::diagnostics::noteMetalFragmentTable(encoder, b->buffer, b->offset);
+      }
       break;
     }
     case WMTRenderCommandSetFragmentBufferOffset: {
       const struct wmtcmd_render_setbufferoffset *b = (const struct wmtcmd_render_setbufferoffset *)next;
       [enc setFragmentBufferOffset:b->offset atIndex:b->index];
+      if (dxmt9::diagnostics::metalSamplingLineageEnabled()) {
+        dxmt9::diagnostics::noteMetalDirectBuffer(encoder, false, b->index, 0u, b->offset, true);
+        if (b->index == 30u) dxmt9::diagnostics::noteMetalFragmentTable(encoder, 0u, b->offset, true);
+      }
       break;
     }
     case WMTRenderCommandSetMeshBuffer: {
@@ -1603,16 +2058,24 @@ extern "C" void MTLRenderCommandEncoder_encodeCommands(obj_handle_t encoder,
     case WMTRenderCommandSetFragmentBytes: {
       const struct wmtcmd_render_setbytes *b = (const struct wmtcmd_render_setbytes *)next;
       [enc setFragmentBytes:(const void *)b->bytes.ptr length:(NSUInteger)b->length atIndex:b->index];
+      if (dxmt9::diagnostics::metalSamplingLineageEnabled()) {
+        dxmt9::diagnostics::noteMetalDirectBytes(encoder, false, b->index);
+        if (b->index == 30u) dxmt9::diagnostics::noteMetalFragmentTable(encoder, 0u, 0u);
+      }
       break;
     }
     case WMTRenderCommandSetVertexBytes: {
       const struct wmtcmd_render_setbytes *b = (const struct wmtcmd_render_setbytes *)next;
       [enc setVertexBytes:(const void *)b->bytes.ptr length:(NSUInteger)b->length atIndex:b->index];
+      if (dxmt9::diagnostics::metalSamplingLineageEnabled())
+        dxmt9::diagnostics::noteMetalDirectBytes(encoder, true, b->index);
       break;
     }
     case WMTRenderCommandSetFragmentTexture: {
       const struct wmtcmd_render_settexture *b = (const struct wmtcmd_render_settexture *)next;
       [enc setFragmentTexture:(id<MTLTexture>)b->texture atIndex:b->index];
+      if (dxmt9::diagnostics::metalSamplingLineageEnabled())
+        dxmt9::diagnostics::noteMetalFragmentTexture(encoder, b->texture, b->index);
       break;
     }
     case WMTRenderCommandSetVertexTexture: {
@@ -1662,12 +2125,18 @@ extern "C" void MTLRenderCommandEncoder_encodeCommands(obj_handle_t encoder,
       const struct wmtcmd_render_setdsso *b = (const struct wmtcmd_render_setdsso *)next;
       [enc setDepthStencilState:(id<MTLDepthStencilState>)b->dsso];
       [enc setStencilReferenceValue:b->stencil_ref];
+      if (dxmt9::diagnostics::metalSamplingLineageEnabled()) {
+        dxmt9::diagnostics::noteMetalDepthStencilBinding((obj_handle_t)enc, b->dsso);
+        dxmt9::diagnostics::noteMetalStencilReference((obj_handle_t)enc, b->stencil_ref);
+      }
       break;
     }
     case WMTRenderCommandSetBlendFactorAndStencilRef: {
       const struct wmtcmd_render_setblendcolor *b = (const struct wmtcmd_render_setblendcolor *)next;
       [enc setBlendColorRed:b->red green:b->green blue:b->blue alpha:b->alpha];
       [enc setStencilReferenceValue:b->stencil_ref];
+      if (dxmt9::diagnostics::metalSamplingLineageEnabled())
+        dxmt9::diagnostics::noteMetalStencilReference((obj_handle_t)enc, b->stencil_ref);
       break;
     }
     case WMTRenderCommandSetVisibilityMode: {
@@ -1845,6 +2314,8 @@ extern "C" void MTLRenderCommandEncoder_encodeCommands(obj_handle_t encoder,
     case WMTRenderCommandSetFragmentSamplerState: {
       const struct wmtcmd_render_setsamplerstate *b = (const struct wmtcmd_render_setsamplerstate *)next;
       [enc setFragmentSamplerState:(id<MTLSamplerState>)b->sampler_state atIndex:b->index];
+      if (dxmt9::diagnostics::metalSamplingLineageEnabled())
+        dxmt9::diagnostics::noteMetalFragmentSampler(encoder, b->sampler_state, b->index);
       break;
     }
     case WMTRenderCommandSetVertexSamplerState: {
@@ -2319,11 +2790,20 @@ extern "C" uint64_t MTLArgumentEncoder_alignment(obj_handle_t encoder) {
 extern "C" void MTLArgumentEncoder_setArgumentBuffer(obj_handle_t encoder, obj_handle_t buffer, uint64_t offset) {
   if (!encoder) return;
   [(id<MTLArgumentEncoder>)encoder setArgumentBuffer:(id<MTLBuffer>)buffer offset:(NSUInteger)offset];
+  if (dxmt9::diagnostics::metalSamplingLineageEnabled())
+    dxmt9::diagnostics::noteMetalArgumentTable(encoder, buffer, offset);
 }
 
 extern "C" void MTLArgumentEncoder_setBuffer(obj_handle_t encoder, obj_handle_t buffer, uint64_t offset,
                                               uint32_t index) {
   if (!encoder) return;
+  if (dxmt9::diagnostics::metalSamplingLineageEnabled()) {
+    dxmt9::diagnostics::prepareMetalArgumentWrite(encoder);
+    [(id<MTLArgumentEncoder>)encoder setBuffer:(id<MTLBuffer>)buffer
+                                       offset:(NSUInteger)offset atIndex:(NSUInteger)index];
+    dxmt9::diagnostics::noteMetalArgumentWrite(encoder, buffer, index, 0u);
+    return;
+  }
   [(id<MTLArgumentEncoder>)encoder setBuffer:(id<MTLBuffer>)buffer
                                      offset:(NSUInteger)offset
                                     atIndex:(NSUInteger)index];
@@ -2331,11 +2811,23 @@ extern "C" void MTLArgumentEncoder_setBuffer(obj_handle_t encoder, obj_handle_t 
 
 extern "C" void MTLArgumentEncoder_setTexture(obj_handle_t encoder, obj_handle_t texture, uint32_t index) {
   if (!encoder) return;
+  if (dxmt9::diagnostics::metalSamplingLineageEnabled()) {
+    dxmt9::diagnostics::prepareMetalArgumentWrite(encoder);
+    [(id<MTLArgumentEncoder>)encoder setTexture:(id<MTLTexture>)texture atIndex:(NSUInteger)index];
+    dxmt9::diagnostics::noteMetalArgumentWrite(encoder, texture, index, 1u);
+    return;
+  }
   [(id<MTLArgumentEncoder>)encoder setTexture:(id<MTLTexture>)texture atIndex:(NSUInteger)index];
 }
 
 extern "C" void MTLArgumentEncoder_setSamplerState(obj_handle_t encoder, obj_handle_t sampler, uint32_t index) {
   if (!encoder) return;
+  if (dxmt9::diagnostics::metalSamplingLineageEnabled()) {
+    dxmt9::diagnostics::prepareMetalArgumentWrite(encoder);
+    [(id<MTLArgumentEncoder>)encoder setSamplerState:(id<MTLSamplerState>)sampler atIndex:(NSUInteger)index];
+    dxmt9::diagnostics::noteMetalArgumentWrite(encoder, sampler, index, 2u);
+    return;
+  }
   [(id<MTLArgumentEncoder>)encoder setSamplerState:(id<MTLSamplerState>)sampler atIndex:(NSUInteger)index];
 }
 

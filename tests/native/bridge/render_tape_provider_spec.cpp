@@ -1,9 +1,12 @@
 #include "device_c_render_tape_capture.hpp"
+#include "device_c_chunk_replay.hpp"
 #include "device_c_render_tape_capture_layout.hpp"
 #include "device_c_render_tape_identity.hpp"
 #include "device_c_render_tape_provider.hpp"
+#include "device_c_render_tape_source_plan.hpp"
 #include "device_c_render_tape_runtime_objects.hpp"
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9/dxmt9_perf_counters.hpp"
 #include "dxmt9/dxmt9_presenter.hpp"
 #include "dxmt9/dxmt9_resource_pool.hpp"
 
@@ -340,6 +343,11 @@ constexpr D9CWireObjectIdentity kGeneralVertexShader{
     .generation = 4u,
     .objectId = 51u,
 };
+constexpr D9CWireObjectIdentity kGpuVisiblePixelShader{
+    .kind = D9C_CHUNK_HANDLE_KIND_SHADER,
+    .generation = 5u,
+    .objectId = 53u,
+};
 constexpr D9CWireObjectIdentity kGeneralVertexDeclaration{
     .kind = D9C_CHUNK_HANDLE_KIND_VERTEX_DECL,
     .generation = 4u,
@@ -356,6 +364,16 @@ constexpr RenderTapeDigest kGeneralExpectedDigest{
     std::byte{0xd7}, std::byte{0x50}, std::byte{0xda}, std::byte{0x2e},
     std::byte{0xb7}, std::byte{0xf3}, std::byte{0xf9}, std::byte{0x9c},
 };
+
+// The GPU policy fixture uses a patterned clear to make the readback
+// non-degenerate while keeping the indexed draws clipped.  Its RGBA oracle is
+// generated from these two independent colors, never from replay output.
+constexpr std::uint32_t kGpuPolicyBaseColorARGB = 0xff102030u;
+constexpr std::uint32_t kGpuPolicyInsetColorARGB = 0xff506070u;
+constexpr std::uint32_t kGpuVisibleBackgroundColorARGB = 0xff101820u;
+
+std::vector<std::byte> gpuPolicyExpectedPixels();
+std::vector<std::byte> gpuVisibleUniformExpectedPixels();
 
 std::vector<std::byte> sparsePayload(
     D9CCommandChunkWireDrawHeader draw,
@@ -461,7 +479,9 @@ std::vector<std::byte> generalBootstrapChunk(
     const D9CWireObjectIdentity& indexBuffer,
     const D9CWireObjectIdentity& vertexShader,
     const D9CWireObjectIdentity& vertexDeclaration,
-    const D9CWireObjectIdentity& output) {
+    const D9CWireObjectIdentity& output,
+    const D9CWireObjectIdentity& pixelShader = {},
+    bool extraStream = false) {
   std::array<D9CCommandChunkWireTextureBinding, D9C_DRAW_PACKET_MAX_TEXTURES>
       textures{};
   for (std::uint32_t slot = 0u; slot < textures.size(); ++slot) {
@@ -478,35 +498,61 @@ std::vector<std::byte> generalBootstrapChunk(
         .handleIndex = slot == 0u ? 0u : D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
     };
   }
-  const std::array shaders{
+  if (pixelShader.kind != 0u)
+    streams[0].stride = static_cast<std::uint32_t>(sizeof(TexturedVertex));
+  if (extraStream) {
+    streams[1].handleIndex = 0u;
+    streams[1].offset = 12u * sizeof(TexturedVertex);
+    streams[1].stride = sizeof(TexturedVertex);
+  }
+  std::vector<D9CCommandChunkWireShaderBinding> shaders{
       D9CCommandChunkWireShaderBinding{
           .stage = D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX,
           .valid = 1u,
           .handleIndex = 1u,
       },
   };
+  if (pixelShader.kind != 0u) {
+    shaders.push_back(D9CCommandChunkWireShaderBinding{
+        .stage = D9C_COMMAND_CHUNK_SHADER_STAGE_PIXEL,
+        .valid = 1u,
+        .handleIndex = 2u,
+    });
+  }
   const D9CCommandChunkWireVertexInput input{
       .valid = 1u,
       .kind = D9C_COMMAND_CHUNK_VERTEX_INPUT_DECLARATION,
       .value = 0u,
-      .handleIndex = 2u,
+      .handleIndex = static_cast<std::uint32_t>(2u + (pixelShader.kind != 0u)),
   };
   const D9CCommandChunkWireIndexBinding index{
       .valid = 1u,
-      .handleIndex = 3u,
+      .handleIndex = static_cast<std::uint32_t>(3u + (pixelShader.kind != 0u)),
   };
   const std::array renderTargets{D9CCommandChunkWireRenderTargetBinding{
       .slot = 0u,
       .valid = 1u,
-      .handleIndex = 4u,
+      .handleIndex = static_cast<std::uint32_t>(4u + (pixelShader.kind != 0u)),
   }};
-  const std::array sections{
+  const D9CViewport visibleViewport{.x = 0u, .y = 0u, .width = 16u,
+                                    .height = 16u, .minZ = 0.f, .maxZ = 1.f};
+  const std::array visibleRenderStates{
+      D9CCommandChunkWireRenderState{.state = 7u, .value = 0u}, // ZENABLE
+      D9CCommandChunkWireRenderState{.state = 14u, .value = 0u}, // ZWRITEENABLE
+      D9CCommandChunkWireRenderState{.state = 15u, .value = 0u}, // ALPHATESTENABLE
+      D9CCommandChunkWireRenderState{.state = 22u, .value = 1u}, // CULLMODE NONE
+      D9CCommandChunkWireRenderState{.state = 27u, .value = 0u}, // ALPHABLENDENABLE
+      D9CCommandChunkWireRenderState{.state = 168u, .value = 15u}, // COLORWRITEENABLE
+      D9CCommandChunkWireRenderState{.state = 174u, .value = 0u}, // SCISSORTESTENABLE
+  };
+  std::vector<std::pair<std::uint16_t, std::span<const std::byte>>> sections{
       std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_TEXTURE),
                 spanBytes(textures)},
       std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_STREAM),
                 spanBytes(streams)},
       std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_SHADER),
-                spanBytes(shaders)},
+                std::span<const std::byte>(reinterpret_cast<const std::byte*>(
+                    shaders.data()), shaders.size() * sizeof(shaders[0]))},
       std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_VERTEX_INPUT),
                 spanBytes(input)},
       std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER),
@@ -514,6 +560,16 @@ std::vector<std::byte> generalBootstrapChunk(
       std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET),
                 spanBytes(renderTargets)},
   };
+  if (pixelShader.kind != 0u) {
+    sections.emplace_back(D9C_COMMAND_CHUNK_SECTION_RENDER_STATE,
+                          spanBytes(visibleRenderStates));
+    sections.emplace_back(D9C_COMMAND_CHUNK_SECTION_VIEWPORT,
+                          spanBytes(visibleViewport));
+    std::sort(sections.begin(), sections.end(),
+              [](const auto& left, const auto& right) {
+                return left.first < right.first;
+              });
+  }
   const auto payload = sparsePayload(
       D9CCommandChunkWireDrawHeader{
           .flags = D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT},
@@ -521,14 +577,21 @@ std::vector<std::byte> generalBootstrapChunk(
   return makeChunk(std::array{Record{
       .type = D9C_COMMAND_RECORD_APPLY_STATE,
       .payload = payload,
-      .handles = {
-          {vertexBuffer.kind, vertexBuffer.generation, vertexBuffer.objectId},
-          {vertexShader.kind, vertexShader.generation, vertexShader.objectId},
-          {vertexDeclaration.kind, vertexDeclaration.generation,
-           vertexDeclaration.objectId},
-          {indexBuffer.kind, indexBuffer.generation, indexBuffer.objectId},
-          {output.kind, output.generation, output.objectId},
-      },
+      .handles = [&] {
+        std::vector<D9CCommandChunkWireHandleEntry> handles{
+            {vertexBuffer.kind, vertexBuffer.generation, vertexBuffer.objectId},
+            {vertexShader.kind, vertexShader.generation, vertexShader.objectId},
+        };
+        if (pixelShader.kind != 0u)
+          handles.push_back({pixelShader.kind, pixelShader.generation,
+                             pixelShader.objectId});
+        handles.push_back({vertexDeclaration.kind, vertexDeclaration.generation,
+                           vertexDeclaration.objectId});
+        handles.push_back({indexBuffer.kind, indexBuffer.generation,
+                           indexBuffer.objectId});
+        handles.push_back({output.kind, output.generation, output.objectId});
+        return handles;
+      }(),
   }});
 }
 
@@ -548,14 +611,108 @@ std::vector<std::byte> generalIndexedDrawChunk() {
   }});
 }
 
+std::vector<std::byte> gpuVisibleVertexShader() {
+  // vs_2_0: dcl_position v0; mul oPos, v0, c0.  DCL has both a semantic
+  // token and a destination token; v0 is an input register (0x900f0000),
+  // while the source operand carries the explicit xyzw swizzle (0x90e40000).
+  // MUL has three operands, so its instruction token length is three.
+  const std::array<std::uint32_t, 9u> words{
+      0xfffe0200u, 0x0200001fu, 0x80000000u, 0x900f0000u,
+      0x03000005u, 0xc00f0000u, 0x90e40000u, 0xa0e40000u,
+      0x0000ffffu};
+  return std::vector<std::byte>(
+      reinterpret_cast<const std::byte*>(words.data()),
+      reinterpret_cast<const std::byte*>(words.data()) + sizeof(words));
+}
+
+std::vector<std::byte> gpuVisiblePixelShader() {
+  // ps_2_0: mov oC0, c0.
+  const std::array<std::uint32_t, 5u> words{
+      0xffff0200u, 0x02000001u, 0x800f0800u, 0xa0e40000u, 0x0000ffffu};
+  return std::vector<std::byte>(
+      reinterpret_cast<const std::byte*>(words.data()),
+      reinterpret_cast<const std::byte*>(words.data()) + sizeof(words));
+}
+
+std::vector<std::byte> gpuVisibleUniformDrawPayload(
+    std::uint32_t startIndex, std::array<float, 4u> transform,
+    std::array<float, 4u> color) {
+  const D9CCommandChunkWireDrawHeader draw{
+      .primitiveType = 4u,
+      .minVertex = (startIndex / 6u) * 4u,
+      .numVertices = 4u,
+      .startIndex = startIndex,
+      .primitiveCount = 2u,
+  };
+  const D9CCommandChunkWireConstantRange range{
+      .startRegister = 0u,
+      .registerCount = 1u,
+  };
+  std::array<std::byte, sizeof(range) + sizeof(transform)> vsConstants{};
+  std::memcpy(vsConstants.data(), &range, sizeof(range));
+  std::memcpy(vsConstants.data() + sizeof(range), transform.data(),
+              sizeof(transform));
+  std::array<std::byte, sizeof(range) + sizeof(color)> psConstants{};
+  std::memcpy(psConstants.data(), &range, sizeof(range));
+  std::memcpy(psConstants.data() + sizeof(range), color.data(), sizeof(color));
+  const std::array sections{
+      std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_VS_CONST_F),
+                std::span<const std::byte>(vsConstants)},
+      std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_PS_CONST_F),
+                std::span<const std::byte>(psConstants)},
+  };
+  return sparsePayload(draw, sections);
+}
+
+std::vector<std::byte> gpuVisibleUniformDrawRunChunk(bool alteredMiddleColor,
+                                                    bool alteredMiddleTransform,
+                                                    bool extraStream = false) {
+  const auto bootstrap = generalBootstrapChunk(
+      kGeneralVertexBuffer, kGeneralIndexBuffer, kGeneralVertexShader,
+      kGeneralVertexDeclaration, kOutput, kGpuVisiblePixelShader, extraStream);
+  ImportedChunkView bootstrapView;
+  check(importPrevalidatedCommandChunk(
+            bootstrap,
+            CommandChunkEnvelope{.recordCount = 1u, .handleCount = 6u},
+            bootstrapView),
+        "visible-uniform fixture imports its FULL_SNAPSHOT anchor");
+  const auto anchor = bootstrapView.record(0u);
+  std::vector<Record> records;
+  records.reserve(4u);
+  records.push_back(Record{
+      .type = anchor.header.type,
+      .payload = std::vector<std::byte>(anchor.payload.begin(), anchor.payload.end()),
+      .handles = std::vector<D9CCommandChunkWireHandleEntry>(
+          bootstrapView.handles.begin(), bootstrapView.handles.end()),
+  });
+  constexpr std::array<float, 4u> transformA{1.f, 1.f, 1.f, 1.f};
+  constexpr std::array<float, 4u> transformB{0.5f, 1.f, 1.f, 1.f};
+  constexpr std::array<float, 4u> colorA{0.88f, 0.25f, 0.25f, 1.f};
+  constexpr std::array<float, 4u> colorB{0.25f, 0.88f, 0.5f, 1.f};
+  const auto middleTransform = alteredMiddleTransform ? transformA : transformB;
+  const std::array transforms{transformA, middleTransform, transformA};
+  const std::array colors{colorA, alteredMiddleColor ?
+      std::array<float, 4u>{0.25f, 0.25f, 0.95f, 1.f} : colorB, colorA};
+  for (std::uint32_t draw = 0u; draw < 3u; ++draw) {
+    records.push_back(Record{
+        .type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
+        .payload = gpuVisibleUniformDrawPayload(draw * 6u, transforms[draw],
+                                                colors[draw]),
+    });
+  }
+  return makeChunk(records);
+}
+
 // Keep the production-parallel fixture in one canonical command chunk.  The
 // first record is the same FULL_SNAPSHOT state anchor used by the production
-// indexed path; the remainder is two indivisible indexed DrawRuns.  64 A
-// draws use the baseline PSO/uniform identity.  64 B draws use a color-write
-// topology/render-state transition and a pixel-inert VS constant range: the
-// production economics identities change while the degenerate pixels do not.
+// indexed path; the remainder is two indivisible indexed DrawRuns.  The first
+// half uses the baseline PSO/uniform identity.  The second half uses a
+// color-write topology/render-state transition and a pixel-inert VS constant
+// range: the production economics identities change while the degenerate
+// pixels do not.
 std::vector<std::byte> indexedDrawPayload(std::uint32_t primitiveType,
-                                          bool alternateUniform) {
+                                          bool alternateUniform,
+                                          bool explicitUniform = false) {
   const D9CCommandChunkWireDrawHeader draw{
       .primitiveType = primitiveType,
       .minVertex = 0u,
@@ -565,20 +722,22 @@ std::vector<std::byte> indexedDrawPayload(std::uint32_t primitiveType,
       .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
       .sectionPayloadOffset = sizeof(D9CCommandChunkWireDrawHeader),
   };
-  if (!alternateUniform) return bytesOf(draw);
+  if (!alternateUniform && !explicitUniform) return bytesOf(draw);
   const D9CCommandChunkWireConstantRange range{
       .startRegister = 0u,
       .registerCount = 1u,
   };
   // The fixture shader moves c0 to oPos. Keeping w=0 makes every B draw
   // clipped/degenerate like A while changing the production uniform identity.
-  const std::array<float, 4u> values{1.0f, 1.0f, 1.0f, 0.0f};
+  const std::array<float, 4u> values = alternateUniform
+      ? std::array<float, 4u>{1.0f, 1.0f, 1.0f, 0.0f}
+      : std::array<float, 4u>{0.0f, 0.0f, 0.0f, 0.0f};
   std::vector<std::byte> constants(sizeof(range) + sizeof(values));
   std::memcpy(constants.data(), &range, sizeof(range));
   std::memcpy(constants.data() + sizeof(range), values.data(), sizeof(values));
   const auto renderState = bytesOf(D9CCommandChunkWireRenderState{
       .state = 168u, // D3DRS_COLORWRITEENABLE
-      .value = 0u,
+      .value = alternateUniform ? 0u : 0xfu,
   });
   const std::array sections{
       std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_RENDER_STATE),
@@ -589,8 +748,10 @@ std::vector<std::byte> indexedDrawPayload(std::uint32_t primitiveType,
   return sparsePayload(draw, sections);
 }
 
-std::vector<std::byte> generalIndexedDrawRunChunk(std::uint32_t drawCount) {
-  check(drawCount >= 128u, "parallel fixture must retain two 64-draw children");
+std::vector<std::byte> generalIndexedDrawRunChunk(std::uint32_t drawCount,
+                                                 bool alternating = false) {
+  check(drawCount >= 2u && drawCount <= 128u && (drawCount % 2u) == 0u,
+        "indexed draw run must contain two even bounded children");
   const auto bootstrap = generalBootstrapChunk(
       kGeneralVertexBuffer, kGeneralIndexBuffer, kGeneralVertexShader,
       kGeneralVertexDeclaration, kOutput);
@@ -610,10 +771,12 @@ std::vector<std::byte> generalIndexedDrawRunChunk(std::uint32_t drawCount) {
       .handles = std::vector<D9CCommandChunkWireHandleEntry>(
           bootstrapView.handles.begin(), bootstrapView.handles.end()),
   });
+  const auto midpoint = drawCount / 2u;
   for (std::uint32_t index = 0u; index < drawCount; ++index) {
+    const bool alternate = alternating ? (index % 2u) != 0u : index >= midpoint;
     records.push_back(Record{
         .type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
-        .payload = indexedDrawPayload(index < 64u ? 4u : 5u, index >= 64u),
+        .payload = indexedDrawPayload(alternate ? 5u : 4u, alternate, alternating),
     });
   }
   return makeChunk(records);
@@ -624,33 +787,83 @@ struct GeneralIndexedFixture {
   std::vector<std::byte> indexBytes{};
   std::vector<std::byte> shaderBytes{};
   std::vector<std::byte> declarationBytes{};
+  std::vector<std::byte> pixelShaderBytes{};
   std::vector<std::byte> outputSeed{};
+  std::vector<std::byte> auditTextureSeed{};
   std::vector<RenderTapeProviderBlob> blobsValue{};
   std::vector<std::byte> tape{};
 
   explicit GeneralIndexedFixture(std::uint32_t drawCount = 1u,
-                                 bool strictDigest = false) {
-    const std::array vertices{
+                                 bool strictDigest = false,
+                                 bool patternedClear = false,
+                                 bool visibleUniform = false,
+                                 bool alteredMiddleUniform = false,
+                                 bool alteredMiddleTransform = false,
+                                 std::uint32_t auditTextureFormat = 0u,
+                                 bool extraStream = false,
+                                 bool alteredExtraStream = false) {
+    // Overscan vertically so the uniform-binding oracle does not depend on
+    // exact top/bottom edge ties after D3D9 half-pixel correction.
+    const std::array visibleVertices{
+        TexturedVertex{-1.0f, -1.25f, 0.0f, 1.0f, 0xffffffffu, 0.0f, 0.0f},
+        TexturedVertex{-0.5f, -1.25f, 0.0f, 1.0f, 0xffffffffu, 1.0f, 0.0f},
+        TexturedVertex{-0.5f, 1.25f, 0.0f, 1.0f, 0xffffffffu, 1.0f, 1.0f},
+        TexturedVertex{-1.0f, 1.25f, 0.0f, 1.0f, 0xffffffffu, 0.0f, 1.0f},
+        TexturedVertex{-0.5f, -1.25f, 0.0f, 1.0f, 0xffffffffu, 0.0f, 0.0f},
+        TexturedVertex{0.5f, -1.25f, 0.0f, 1.0f, 0xffffffffu, 1.0f, 0.0f},
+        TexturedVertex{0.5f, 1.25f, 0.0f, 1.0f, 0xffffffffu, 1.0f, 1.0f},
+        TexturedVertex{-0.5f, 1.25f, 0.0f, 1.0f, 0xffffffffu, 0.0f, 1.0f},
+        TexturedVertex{0.5f, -1.25f, 0.0f, 1.0f, 0xffffffffu, 0.0f, 0.0f},
+        TexturedVertex{1.0f, -1.25f, 0.0f, 1.0f, 0xffffffffu, 1.0f, 0.0f},
+        TexturedVertex{1.0f, 1.25f, 0.0f, 1.0f, 0xffffffffu, 1.0f, 1.0f},
+        TexturedVertex{0.5f, 1.25f, 0.0f, 1.0f, 0xffffffffu, 0.0f, 1.0f},
+    };
+    const std::array indexedVertices{
         TexturedVertex{-0.5f, -0.5f, 0.0f, 1.0f, 0xffff0000u, 0.0f, 0.0f},
         TexturedVertex{0.5f, -0.5f, 0.0f, 1.0f, 0xff00ff00u, 1.0f, 0.0f},
         TexturedVertex{0.0f, 0.5f, 0.0f, 1.0f, 0xff0000ffu, 0.5f, 1.0f},
     };
-    vertexBytes.assign(reinterpret_cast<const std::byte*>(vertices.data()),
-                       reinterpret_cast<const std::byte*>(vertices.data()) +
-                           sizeof(vertices));
-    const std::array<std::uint16_t, 3u> indices{0u, 1u, 2u};
-    indexBytes.assign(reinterpret_cast<const std::byte*>(indices.data()),
-                      reinterpret_cast<const std::byte*>(indices.data()) +
-                          sizeof(indices));
+    const auto selectedVertices = visibleUniform
+        ? std::span<const TexturedVertex>(visibleVertices)
+        : std::span<const TexturedVertex>(indexedVertices);
+    vertexBytes.assign(reinterpret_cast<const std::byte*>(selectedVertices.data()),
+                       reinterpret_cast<const std::byte*>(selectedVertices.data()) +
+                           selectedVertices.size_bytes());
+    if (extraStream) {
+      check(visibleUniform, "extra stream requires visible uniform fixture");
+      auto extra = visibleVertices;
+      // Stream zero is unchanged even for the negative. POSITION comes from
+      // the second half through actual Metal slot 6 at a nonzero bind offset.
+      if (alteredExtraStream)
+        for (auto& vertex : extra) vertex.x = 0.f;
+      const auto bytes = std::as_bytes(std::span(extra));
+      vertexBytes.insert(vertexBytes.end(), bytes.begin(), bytes.end());
+    }
+    const std::array<std::uint16_t, 18u> visibleIndices{
+        0u, 1u, 2u, 0u, 2u, 3u, 4u, 5u, 6u,
+        4u, 6u, 7u, 8u, 9u, 10u, 8u, 10u, 11u};
+    const std::array<std::uint16_t, 3u> indexedIndices{0u, 1u, 2u};
+    const auto selectedIndices = visibleUniform
+        ? std::span<const std::uint16_t>(visibleIndices)
+        : std::span<const std::uint16_t>(indexedIndices);
+    indexBytes.assign(reinterpret_cast<const std::byte*>(selectedIndices.data()),
+                      reinterpret_cast<const std::byte*>(selectedIndices.data()) +
+                          selectedIndices.size_bytes());
     const std::array<std::uint32_t, 8u> shaderWords{
         0xfffe0300u, 0x0200001fu, 0x80000000u, 0xc00f0000u,
         0x02000001u, 0xc00f0000u, 0xa0e40000u, 0x0000ffffu,
     };
-    shaderBytes.assign(reinterpret_cast<const std::byte*>(shaderWords.data()),
-                       reinterpret_cast<const std::byte*>(shaderWords.data()) +
-                           sizeof(shaderWords));
+    shaderBytes = visibleUniform ? gpuVisibleVertexShader() : std::vector<std::byte>(
+        reinterpret_cast<const std::byte*>(shaderWords.data()),
+        reinterpret_cast<const std::byte*>(shaderWords.data()) + sizeof(shaderWords));
+    if (visibleUniform) pixelShaderBytes = gpuVisiblePixelShader();
     const std::array declaration{
-        D9CVertexElement{0u, 0u, 3u, 0u, 9u, 0u},
+        // The legacy clipped fixture intentionally uses POSITIONT.  The
+        // visible shader binds POSITION, so keep that fixture's declaration
+        // semantically aligned without changing the existing fixture.
+        D9CVertexElement{static_cast<std::uint16_t>(extraStream ? 1u : 0u), 0u, 3u, 0u,
+                         static_cast<std::uint8_t>(visibleUniform ? 0u : 9u),
+                         0u},
         D9CVertexElement{0u, 16u, 4u, 0u, 10u, 0u},
         D9CVertexElement{0u, 20u, 1u, 0u, 5u, 0u},
         D9CVertexElement{0xffu, 0u, 17u, 0u, 0u, 0u},
@@ -664,7 +877,15 @@ struct GeneralIndexedFixture {
     const auto shaderDigest = RenderTapeCaptureSession::sha256(shaderBytes);
     const auto declarationDigest =
         RenderTapeCaptureSession::sha256(declarationBytes);
+    const auto pixelShaderDigest =
+        RenderTapeCaptureSession::sha256(pixelShaderBytes);
     outputSeed.assign(16u * 16u * 4u, std::byte{0x3cu});
+    if (visibleUniform) {
+      constexpr std::array background{
+          std::byte{0x20}, std::byte{0x18}, std::byte{0x10}, std::byte{0xff}};
+      for (std::size_t offset = 0u; offset < outputSeed.size(); offset += 4u)
+        std::copy(background.begin(), background.end(), outputSeed.begin() + offset);
+    }
     const auto outputSeedDigest =
         RenderTapeCaptureSession::sha256(outputSeed);
     blobsValue = {
@@ -674,6 +895,11 @@ struct GeneralIndexedFixture {
         {.digest = declarationDigest, .bytes = declarationBytes},
         {.digest = outputSeedDigest, .bytes = outputSeed},
     };
+    if (visibleUniform) {
+      const RenderTapeProviderBlob pixelBlob{
+          .digest = pixelShaderDigest, .bytes = pixelShaderBytes};
+      blobsValue.insert(blobsValue.begin() + 3, pixelBlob);
+    }
 
     const D9CSurfaceDesc outputSurface{
         .format = 22u,
@@ -698,6 +924,10 @@ struct GeneralIndexedFixture {
         .stage = D9C_COMMAND_CHUNK_SHADER_STAGE_VERTEX,
         .bytecodeBytes = static_cast<std::uint32_t>(shaderBytes.size()),
     };
+    const RenderTapeShaderDescriptor pixelShader{
+        .stage = D9C_COMMAND_CHUNK_SHADER_STAGE_PIXEL,
+        .bytecodeBytes = static_cast<std::uint32_t>(pixelShaderBytes.size()),
+    };
     const RenderTapeVertexDeclDescriptor vertexDeclaration{
         .elementCount = 4u,
         .elementBytes = static_cast<std::uint32_t>(declarationBytes.size()),
@@ -707,12 +937,35 @@ struct GeneralIndexedFixture {
         .descriptorKind = static_cast<std::uint32_t>(
             RenderTapeDescriptorKind::Surface),
     };
-    const auto clear = bytesOf(D9CCommandChunkWireClear{
-        .flags = 1u,
-        .colorARGB = 0xff102030u,
-        .z = 1.0f,
-        .rectOffset = sizeof(D9CCommandChunkWireClear),
+    std::vector<Record> clearRecords;
+    clearRecords.push_back(Record{
+        .type = D9C_COMMAND_RECORD_CLEAR,
+        .payload = bytesOf(D9CCommandChunkWireClear{
+            .flags = 1u,
+            .colorARGB = visibleUniform
+                ? kGpuVisibleBackgroundColorARGB
+                : patternedClear ? kGpuPolicyBaseColorARGB : 0xff102030u,
+            .z = 1.0f,
+            .rectOffset = sizeof(D9CCommandChunkWireClear),
+        }),
     });
+    if (patternedClear) {
+      const D9CCommandChunkWireClear inset{
+          .flags = 1u,
+          .colorARGB = kGpuPolicyInsetColorARGB,
+          .z = 1.0f,
+          .rectCount = 1u,
+          .rectOffset = sizeof(D9CCommandChunkWireClear),
+      };
+      std::vector<std::byte> insetBytes = bytesOf(inset);
+      const D9CRect rect{4, 4, 12, 12};
+      const auto rectBytes = std::as_bytes(std::span(&rect, 1u));
+      insetBytes.insert(insetBytes.end(), rectBytes.begin(), rectBytes.end());
+      clearRecords.push_back(Record{
+          .type = D9C_COMMAND_RECORD_CLEAR,
+          .payload = std::move(insetBytes),
+      });
+    }
     const auto present = makeChunk(std::array{Record{
         .type = D9C_COMMAND_RECORD_PRESENT,
         .payload = bytesOf(D9CCommandChunkWirePresent{
@@ -723,10 +976,26 @@ struct GeneralIndexedFixture {
     RenderTapeBuilder builder;
     builder.appendBootstrapState(generalBootstrapChunk(
         kGeneralVertexBuffer, kGeneralIndexBuffer, kGeneralVertexShader,
-        kGeneralVertexDeclaration, kOutput));
+        kGeneralVertexDeclaration, kOutput,
+        visibleUniform ? kGpuVisiblePixelShader : D9CWireObjectIdentity{}, extraStream));
     builder.appendObjectDefine(
         kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
         std::as_bytes(std::span(&output, 1u)), 0u, {}, outputSeed.size(), 1u);
+    if (auditTextureFormat != 0u) {
+      const std::array<float, 4u> values{0.25f, 0.5f, 0.75f, 1.0f};
+      const auto bytes = std::as_bytes(std::span(values));
+      auditTextureSeed.assign(bytes.begin(), bytes.end());
+      const auto digest = RenderTapeCaptureSession::sha256(auditTextureSeed);
+      blobsValue.push_back({.digest = digest, .bytes = auditTextureSeed});
+      const auto descriptor = texture2DDescriptor(D9CSurfaceDesc{
+          .format = auditTextureFormat, .resourceType = 3u, .usage = 1u,
+          .width = 2u, .height = 2u, .depth = 1u});
+      builder.appendObjectDefine(kTexture,
+          static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+          descriptor, 0u, {}, bytes.size(), 1u);
+      builder.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload,
+          0u, 0u, bytes.size(), digest);
+    }
     builder.appendObjectDefine(
         kGeneralVertexBuffer,
         static_cast<std::uint32_t>(RenderTapeDescriptorKind::Buffer),
@@ -741,6 +1010,13 @@ struct GeneralIndexedFixture {
         kGeneralVertexShader,
         static_cast<std::uint32_t>(RenderTapeDescriptorKind::Shader),
         std::as_bytes(std::span(&shader, 1u)), shaderBytes.size(), shaderDigest);
+    if (visibleUniform) {
+      builder.appendObjectDefine(
+          kGpuVisiblePixelShader,
+          static_cast<std::uint32_t>(RenderTapeDescriptorKind::Shader),
+          std::as_bytes(std::span(&pixelShader, 1u)), pixelShaderBytes.size(),
+          pixelShaderDigest);
+    }
     builder.appendObjectDefine(
         kGeneralVertexDeclaration,
         static_cast<std::uint32_t>(RenderTapeDescriptorKind::VertexDeclaration),
@@ -755,24 +1031,42 @@ struct GeneralIndexedFixture {
     builder.appendResourceMutation(
         kOutput, RenderTapeMutationKind::Upload, 0u, 0u,
         outputSeed.size(), outputSeedDigest);
-    builder.appendCommandChunk(
-        CommandChunkEnvelope{.recordCount = 1u}, makeChunk(std::array{Record{
-            .type = D9C_COMMAND_RECORD_CLEAR,
-            .payload = clear,
-        }}));
+    // The visible binding fixture starts from a complete background seed.
+    // A preceding standalone Clear leaves a populated compatibility slot and
+    // can reject Direct admission before this three-draw source starts. Clear
+    // policy coverage belongs to the unchanged patterned-Clear fixture.
+    if (!visibleUniform) {
+      builder.appendCommandChunk(
+          CommandChunkEnvelope{
+              .recordCount = static_cast<std::uint32_t>(clearRecords.size())},
+          makeChunk(clearRecords));
+    }
     builder.appendCommandChunk(
         CommandChunkEnvelope{.recordCount = drawCount == 1u ? 1u
                                                              : drawCount + 1u,
-                             .handleCount = drawCount == 1u ? 0u : 5u},
-        drawCount == 1u ? generalIndexedDrawChunk()
-                        : generalIndexedDrawRunChunk(drawCount));
+                             .handleCount = drawCount == 1u ? 0u
+                                                             : visibleUniform ? 6u : 5u},
+        drawCount == 1u
+            ? generalIndexedDrawChunk()
+            : visibleUniform
+                ? gpuVisibleUniformDrawRunChunk(alteredMiddleUniform,
+                                                alteredMiddleTransform, extraStream)
+                : generalIndexedDrawRunChunk(drawCount, patternedClear));
     builder.appendCommandChunk(
         CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u}, present);
+    // Visible adds a pixel shader definition and omits the Clear event.
     builder.appendPresentComplete(
-        12u, 1u,
+        auditTextureFormat != 0u ? 14u : 12u, 1u,
         strictDigest ? RenderTapeDigestValidity::Sha256
                      : RenderTapeDigestValidity::NotCaptured,
-        strictDigest ? kGeneralExpectedDigest : RenderTapeDigest{},
+        strictDigest
+            ? (visibleUniform
+                   ? RenderTapeCaptureSession::sha256(
+                         gpuVisibleUniformExpectedPixels())
+                   : patternedClear
+                   ? RenderTapeCaptureSession::sha256(gpuPolicyExpectedPixels())
+                   : kGeneralExpectedDigest)
+            : RenderTapeDigest{},
         std::as_bytes(std::span(&oracle, 1u)));
     tape = builder.seal();
   }
@@ -2416,6 +2710,556 @@ void nativeMetalPostCommandTexturePrestageMatchesOrdinaryPixels() {
   nativeMetalPostCommandTexturePrestageMatchesOrdinaryPixels(1u);
 }
 
+void sourceBoundaryExactCoverExhaustive() {
+  // R-HARN-REPLAY-8.13: every partition of a bounded serial stream, and a
+  // zero/gap/overlap counterexample at every source edge.
+  for (std::uint32_t count = 1u; count <= 7u; ++count) {
+    for (std::uint32_t mask = 0u; mask < (1u << (count - 1u)); ++mask) {
+      std::vector<ProviderReplayRecordRange> ranges;
+      std::uint32_t first = 0u;
+      for (std::uint32_t end = 1u; end <= count; ++end) {
+        if (end == count || (mask & (1u << (end - 1u)))) {
+          ranges.push_back({first, end - first});
+          first = end;
+        }
+      }
+      check(validateProviderReplayRecordRanges(count, ranges),
+            "every exact serial partition must admit");
+      std::uint32_t ordinal = 0u;
+      for (const auto& range : ranges) {
+        for (std::uint32_t local = 0u; local < range.recordCount; ++local)
+          check(range.firstRecord + local == ordinal++, "exactly-once serial coverage");
+      }
+      check(ordinal == count, "partition consumes whole stream");
+      for (std::uint32_t cutsMask = 0u; cutsMask < (1u << (count - 1u)); ++cutsMask) {
+        std::vector<std::uint32_t> cuts;
+        bool internalOnly = true;
+        for (std::uint32_t cut = 1u; cut < count; ++cut) {
+          if (!(cutsMask & (1u << (cut - 1u)))) continue;
+          cuts.push_back(cut);
+          for (const auto& source : ranges)
+            if (source.firstRecord == cut) internalOnly = false;
+        }
+        check(validateProviderReplayBatchCuts(count, ranges, cuts) == internalOnly,
+              "batch cuts admit exactly the strict interior subset of every partition");
+        if (!internalOnly) continue;
+        std::uint32_t consumed = 0u, publications = 0u, flushes = 0u;
+        for (const auto& source : ranges) {
+          for (std::uint32_t record = source.firstRecord;
+               record < source.firstRecord + source.recordCount; ++record) {
+            if (std::find(cuts.begin(), cuts.end(), record) != cuts.end()) ++flushes;
+            check(record == consumed++, "nested partition preserves serial exactly once");
+          }
+          ++publications;
+        }
+        check(consumed == count && publications == ranges.size() && flushes == cuts.size(),
+              "batch partition does not introduce source publications");
+        if (!cuts.empty()) {
+          auto bad = cuts;
+          bad.push_back(cuts.back());
+          check(!validateProviderReplayBatchCuts(count, ranges, bad), "duplicate cut rejects");
+          bad = cuts;
+          bad.insert(bad.begin(), count);
+          check(!validateProviderReplayBatchCuts(count, ranges, bad), "unordered cut rejects");
+        }
+      }
+      for (std::size_t i = 0; i < ranges.size(); ++i) {
+        auto corrupt = ranges;
+        corrupt[i].recordCount = 0u;
+        check(!validateProviderReplayRecordRanges(count, corrupt), "zero range rejects");
+        corrupt = ranges;
+        ++corrupt[i].firstRecord;
+        check(!validateProviderReplayRecordRanges(count, corrupt), "range gap rejects");
+        if (i != 0u) {
+          corrupt = ranges;
+          --corrupt[i].firstRecord;
+          check(!validateProviderReplayRecordRanges(count, corrupt), "overlap rejects");
+        }
+      }
+    }
+  }
+  check(!validateProviderReplayRecordRanges(0u, {}), "empty audit cover rejects");
+  check(!validateProviderReplayRecordRanges(1u, {}), "missing cover rejects");
+  const std::array overflow{
+      ProviderReplayRecordRange{0u, 0xffffffffu},
+      ProviderReplayRecordRange{0xffffffffu, 1u}};
+  check(!validateProviderReplayRecordRanges(0xffffffffu, overflow), "overflow rejects");
+}
+
+std::vector<std::byte> sourceBoundaryFixtureIdentity(
+    const GeneralIndexedFixture& fixture, bool wholeChunkSources = false) {
+  render_tape_runtime::GeneralPreflightPlan plan;
+  check(render_tape_runtime::buildGeneralReplayPlan(
+            fixture.tape, fixture.blobsValue, plan).complete(), "source-cut fixture plan");
+  std::vector<RenderTapeIdentitySource> sources;
+  std::vector<RenderTapeIdentityRange> ranges;
+  std::vector<RenderTapeIdentitySettlement> settlements;
+  for (const auto& event : plan.events) {
+    if (event.type != RenderTapeEventType::CommandChunk) continue;
+    const auto ordinal = plan.tape.event(event.eventIndex).header.ordinal;
+    const auto firstSource = sources.size() + 1u;
+    const auto count = plan.commandChunks[event.index].envelope.recordCount;
+    const auto stride = wholeChunkSources ? count : 1u;
+    for (std::uint32_t record = 0u; record < count; record += stride) {
+      const auto source = sources.size() + 1u;
+      sources.push_back({.eventOrdinal = ordinal, .sourceOrdinal = source,
+                         .seqId = source, .captureToken = 77u,
+                         .firstRecord = record, .recordCount = stride,
+                         .firstRange = static_cast<std::uint32_t>(ranges.size()),
+                         .rangeCount = 1u});
+      ranges.push_back({.eventOrdinal = ordinal, .sourceOrdinal = source,
+                        .seqId = source, .logicalPassId = source,
+                        .firstRecord = record, .recordCount = stride,
+                        .dagPassIndex = 0u, .passKind = 1u});
+    }
+    settlements.push_back({.eventOrdinal = ordinal, .rawOrdinal = ordinal,
+                            .buildGeneration = 1u, .firstSourceOrdinal = firstSource,
+                            .tailSeqId = sources.size(),
+                            .sourceCount = wholeChunkSources ? 1u : count});
+  }
+  auto identity = buildRenderTapeIdentity(fixture.tape, plan.catalogue, 42u,
+      plan.presentOrdinal, 77u, RenderTapeIdentityAuthority::Capture,
+      sources, ranges, nullptr, settlements);
+  check(!identity.empty(), "source-cut fixture identity builds");
+  return identity;
+}
+
+void nativeMetalSourceBoundaryAudit() {
+  const GeneralIndexedFixture fixture(32u, true, true);
+  const auto prepared = prepareRenderTapeIdentity(fixture.tape, fixture.blobsValue);
+  check(prepared.valid(), "source-cut prepared fixture");
+  const auto identity = sourceBoundaryFixtureIdentity(fixture);
+  render_tape_runtime::GeneralPreflightPlan plan;
+  check(render_tape_runtime::buildGeneralReplayPlan(
+            fixture.tape, fixture.blobsValue, plan).complete(), "shared source plan fixture");
+  CaptureSourceReplayPlan sharedPlan;
+  check(buildCaptureSourceReplayPlan(fixture.tape, plan, identity, sharedPlan) ==
+            CaptureSourceReplayPlanStatus::Valid && sharedPlan.valid() &&
+            sharedPlan.rows().size() == 36u, "authenticated shared plan preserves all sources");
+  CaptureSourceReplayPlan repeated;
+  check(buildCaptureSourceReplayPlan(fixture.tape, plan, identity, repeated) ==
+            CaptureSourceReplayPlanStatus::Valid && repeated.digest() == sharedPlan.digest(),
+        "source-plan canonical digest is deterministic");
+  const auto digest = sharedPlan.digest();
+  auto moved = std::move(sharedPlan);
+  check(moved.valid() && !sharedPlan.valid() && moved.digest() == digest,
+        "moving a valid source plan invalidates old authority");
+  check(buildCaptureSourceReplayPlan({}, plan, identity, moved) !=
+            CaptureSourceReplayPlanStatus::Valid && moved.valid() && moved.digest() == digest,
+        "failed build does not replace prior output; caller must check returned status");
+  for (unsigned fault = 0u; fault < 4u; ++fault) {
+    auto badPlan = plan;
+    auto bytes = std::vector<std::byte>(plan.commandChunks[0].bytes.begin(),
+                                        plan.commandChunks[0].bytes.end());
+    if (fault == 0u) {
+      bytes.back() ^= std::byte{1u};
+      badPlan.commandChunks[0].bytes = bytes;
+    } else if (fault == 1u) {
+      std::swap(badPlan.events[0], badPlan.events[1]);
+    } else if (fault == 2u) {
+      badPlan.events.erase(badPlan.events.begin());
+    } else {
+      badPlan.events[1] = badPlan.events[0];
+    }
+    CaptureSourceReplayPlan rejected;
+    check(buildCaptureSourceReplayPlan(fixture.tape, badPlan, identity, rejected) !=
+              CaptureSourceReplayPlanStatus::Valid && !rejected.valid(),
+          "stale same-size chunk and reordered/missing/duplicate events reject");
+  }
+  RenderTapePreparedExecutionOptions options{
+      .auditSourceBoundaries = true, .sourceBoundaryIdentity = identity};
+
+  // No device is needed to pin admission failures: the audit must reject
+  // malformed provenance before any replay-owned object can be created.
+  auto missing = options;
+  missing.sourceBoundaryIdentity = {};
+  auto result = replayPreparedRenderTapeIdentity(nullptr, prepared, missing);
+  check(result.status == FrameTapeReplayStatus::InvalidTape &&
+            !result.sourceBoundaryAudit.validated && result.conservation.objectsCreated == 0u,
+        "missing cut authority rejects before effects");
+  for (bool staleDigest : {false, true}) {
+    auto corrupt = identity;
+    RenderTapeIdentityHeader header{};
+    std::memcpy(&header, corrupt.data(), sizeof(header));
+    if (staleDigest) {
+      header.eventsDigest[0] ^= std::byte{1u};
+      std::memcpy(corrupt.data(), &header, sizeof(header));
+    } else {
+      RenderTapeIdentitySource source{};
+      std::memcpy(&source, corrupt.data() + header.sourceTableOffset, sizeof(source));
+      ++source.firstRecord;
+      std::memcpy(corrupt.data() + header.sourceTableOffset, &source, sizeof(source));
+    }
+    auto bad = options;
+    bad.sourceBoundaryIdentity = corrupt;
+    result = replayPreparedRenderTapeIdentity(nullptr, prepared, bad);
+    check(result.status == FrameTapeReplayStatus::InvalidTape &&
+              !result.sourceBoundaryAudit.validated && result.conservation.objectsCreated == 0u,
+          "stale digest or incomplete cover rejects before effects");
+  }
+  for (bool warm : {false, true}) {
+    auto bad = options;
+    if (warm) bad.reset = RenderTapePreparedReset::WarmDevice;
+    else bad.route = RenderTapePreparedRoute::ProductionSlot;
+    check(replayPreparedRenderTapeIdentity(nullptr, prepared, bad).status ==
+              FrameTapeReplayStatus::UnsupportedGrammar, "audit route/reset must be explicit");
+  }
+
+  const D9CPresentParams params{.backBufferWidth = 16u, .backBufferHeight = 16u,
+      .backBufferFormat = 22u, .backBufferCount = 1u, .swapEffect = 1u,
+      .windowed = 1u, .presentationInterval = 0x80000000u};
+  auto* factory = dxmt9c_factory_create();
+  check(factory != nullptr, "source-cut factory");
+  auto* device = dxmt9c_factory_create_device(factory, 0u, &params, 0u, nullptr);
+  check(device != nullptr, "source-cut device");
+  result = replayPreparedRenderTapeIdentity(device, prepared, options);
+  dxmt9c_device_release(device);
+  dxmt9c_factory_release(factory);
+  check(result.complete(), frameTapeReplayStatusName(result.status));
+  check(result.sourceBoundaryAudit.requested && result.sourceBoundaryAudit.diagnostic &&
+            result.sourceBoundaryAudit.validated && result.sourceBoundaryAudit.complete &&
+            result.sourceBoundaryAudit.sourceCount == 36u &&
+            result.sourceBoundaryAudit.completedSourceCount == 36u,
+        "all 36 exact-cover ranges execute and request a flush");
+  check(result.validity.expectedDigestMatched &&
+            result.outputPixels == gpuPolicyExpectedPixels(),
+        "source cuts preserve independent clipped-Clear oracle");
+  check(result.conservation.objectsCreated == result.conservation.objectsReleased,
+        "source-cut resource ownership conserved");
+
+  // A second execution preserves whole-chunk source cuts, adding only local
+  // flushes. The fixture oracle proves clear/control order, not visible draws.
+  const auto groupedIdentity = sourceBoundaryFixtureIdentity(fixture, true);
+  std::vector<RenderTapeBatchCut> batchCuts;
+  for (const auto& event : plan.events) {
+    if (event.type != RenderTapeEventType::CommandChunk) continue;
+    const auto& chunk = plan.commandChunks[event.index];
+    ImportedChunkView imported;
+    check(importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope, imported),
+          "batch-cut native chunk imports");
+    for (std::uint32_t record = 2u; record < imported.records.size(); ++record) {
+      if (imported.records[record].type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE)
+        batchCuts.push_back({plan.tape.event(event.eventIndex).header.ordinal, record});
+    }
+  }
+  check(batchCuts.size() == 31u, "batch-cut fixture contains 31 internal draw cuts");
+  auto batched = options;
+  batched.sourceBoundaryIdentity = groupedIdentity;
+  batched.auditBatchCuts = batchCuts;
+  for (unsigned fault = 0u; fault < 5u; ++fault) {
+    auto bad = batched;
+    auto cuts = batchCuts;
+    if (fault == 0u) ++cuts[0].eventOrdinal;
+    if (fault == 1u) cuts[0].beforeRecord = 0u;
+    if (fault == 2u) cuts[1] = cuts[0];
+    if (fault == 3u) cuts[0].beforeRecord = 0xffffffffu;
+    if (fault == 4u) bad.auditSourceBoundaries = false;
+    bad.auditBatchCuts = cuts;
+    const auto rejected = replayPreparedRenderTapeIdentity(nullptr, prepared, bad);
+    check(!rejected.complete() && !rejected.sourceBoundaryAudit.validated &&
+              rejected.conservation.objectsCreated == 0u,
+          "bad local cut is rejected before resource effects");
+  }
+  factory = dxmt9c_factory_create();
+  check(factory != nullptr, "batch-cut factory");
+  device = dxmt9c_factory_create_device(factory, 0u, &params, 0u, nullptr);
+  check(device != nullptr, "batch-cut device");
+  result = replayPreparedRenderTapeIdentity(device, prepared, batched);
+  dxmt9c_device_release(device);
+  dxmt9c_factory_release(factory);
+  check(result.complete() && result.sourceBoundaryAudit.complete &&
+            result.sourceBoundaryAudit.sourceCount == 3u &&
+            result.sourceBoundaryAudit.completedSourceCount == 3u &&
+            result.sourceBoundaryAudit.batchCutCount == 31u &&
+            result.sourceBoundaryAudit.completedBatchCutCount == 31u &&
+            result.outputPixels == gpuPolicyExpectedPixels() &&
+            result.conservation.objectsCreated == result.conservation.objectsReleased,
+        "31 local flushes preserve exactly 3 source publications and independent oracle");
+}
+
+void nativeMetalCaptureSourceReplayPolicy() {
+  // The policy fixture deliberately clips its indexed draws.  This test
+  // authenticates source coverage and compares the route output to the
+  // fixture's independent patterned-clear oracle; it does not claim visible
+  // draw fidelity for clipped geometry.
+  const GeneralIndexedFixture fixture(32u, true, true);
+  const auto prepared = prepareRenderTapeIdentity(fixture.tape,
+                                                   fixture.blobsValue);
+  check(prepared.valid() && prepared.evidence().immutableInputOwned,
+        "capture-source policy owns its prepared fixture");
+  render_tape_runtime::GeneralPreflightPlan plan;
+  check(render_tape_runtime::buildGeneralReplayPlan(
+            fixture.tape, fixture.blobsValue, plan)
+            .complete(),
+        "capture-source policy preflight completes");
+  const auto identity = sourceBoundaryFixtureIdentity(fixture);
+  CaptureSourceReplayPlan sourcePlan;
+  check(buildCaptureSourceReplayPlan(fixture.tape, plan, identity, sourcePlan) ==
+            CaptureSourceReplayPlanStatus::Valid && sourcePlan.valid(),
+        "capture-source policy identity authenticates");
+
+  const D9CPresentParams params{.backBufferWidth = 16u,
+                                .backBufferHeight = 16u,
+                                .backBufferFormat = 22u,
+                                .backBufferCount = 1u,
+                                .swapEffect = 1u,
+                                .windowed = 1u,
+                                .presentationInterval = 0x80000000u};
+  struct RouteRun {
+    FrameTapeReplayResult result{};
+    dxmt9::perf::RenderTapeReplaySnapshot before{};
+    dxmt9::perf::RenderTapeReplaySnapshot after{};
+  };
+  const auto replay = [&](RenderTapePreparedRoute route) {
+    auto* factory = dxmt9c_factory_create();
+    check(factory != nullptr, "capture-source policy factory constructs");
+    auto* device =
+        dxmt9c_factory_create_device(factory, 0u, &params, 0u, nullptr);
+    check(device != nullptr, "capture-source policy device constructs");
+    const auto before = dxmt9::perf::snapshotRenderTapeReplay();
+    const auto result = replayPreparedRenderTapeIdentity(
+        device, prepared,
+        RenderTapePreparedExecutionOptions{
+            .route = route,
+            .reset = RenderTapePreparedReset::FreshDevice,
+            .sourceBoundaryMode = RenderTapeSourceBoundaryMode::CaptureSource,
+            .sourceBoundaryIdentity = identity,
+            .expectedSourcePlanDigest = sourcePlan.digest()});
+    const auto after = dxmt9::perf::snapshotRenderTapeReplay();
+    dxmt9c_device_release(device);
+    dxmt9c_factory_release(factory);
+    return RouteRun{.result = result, .before = before, .after = after};
+  };
+
+  // The ordinary compatibility replay is the independent native-Metal
+  // oracle. Both source-policy routes must retain its exact sampled bytes and
+  // authenticated digest while exposing real source-settlement evidence.
+  auto* oracleFactory = dxmt9c_factory_create();
+  check(oracleFactory != nullptr, "capture-source oracle factory constructs");
+  auto* oracleDevice =
+      dxmt9c_factory_create_device(oracleFactory, 0u, &params, 0u, nullptr);
+  check(oracleDevice != nullptr, "capture-source oracle device constructs");
+  const auto oracle = replayPreparedRenderTapeIdentity(
+      oracleDevice, prepared,
+      RenderTapePreparedExecutionOptions{
+          .route = RenderTapePreparedRoute::Compatibility,
+          .reset = RenderTapePreparedReset::FreshDevice});
+  dxmt9c_device_release(oracleDevice);
+  dxmt9c_factory_release(oracleFactory);
+  check(oracle.complete() && oracle.validity.outputReadback &&
+            oracle.validity.expectedDigestMatched &&
+            oracle.outputPixels == gpuPolicyExpectedPixels(),
+        "capture-source policy has an independent patterned-clear oracle");
+
+  for (const auto route : {RenderTapePreparedRoute::Compatibility,
+                           RenderTapePreparedRoute::ProductionSlot}) {
+    const auto run = replay(route);
+    const auto& result = run.result;
+    check(result.complete() && result.validity.outputReadback &&
+              result.validity.expectedDigestMatched &&
+              result.outputPixels == oracle.outputPixels &&
+              result.validity.outputDigest == oracle.validity.outputDigest,
+          "capture-source route preserves the independent oracle exactly");
+    check(result.sourceReplay.requested && result.sourceReplay.validated &&
+              result.sourceReplay.complete &&
+              result.sourceReplay.planDigest == sourcePlan.digest() &&
+              result.sourceReplay.sourceCount == sourcePlan.rows().size() &&
+              result.sourceReplay.completedSourceCount ==
+                  result.sourceReplay.sourceCount &&
+              result.sourceReplay.publicationCount != 0u &&
+              result.sourceReplay.presentSourceCount == 1u &&
+              result.sourceReplay.publicationCount +
+                      result.sourceReplay.emptySourceCount >=
+                  result.sourceReplay.sourceCount &&
+              result.prepared.requestedRoute == route,
+          "capture-source route reports authenticated actual source coverage");
+    bool rowsAuthenticated =
+        result.sourceReplay.sources.size() == sourcePlan.rows().size();
+    for (std::size_t index = 0u;
+         rowsAuthenticated && index < sourcePlan.rows().size(); ++index) {
+      const auto& captured = sourcePlan.rows()[index];
+      const auto& actual = result.sourceReplay.sources[index];
+      rowsAuthenticated = actual.eventOrdinal == captured.eventOrdinal &&
+          actual.sourceOrdinal == captured.sourceOrdinal &&
+          actual.capturedSeqId == captured.capturedSeqId &&
+          actual.commandChunkIndex == captured.commandChunkIndex &&
+          actual.firstRecord == captured.firstRecord &&
+          actual.recordCount == captured.recordCount && actual.settled &&
+          actual.actualRawOrdinal != 0u &&
+          static_cast<std::size_t>(actual.publicationOffset) +
+                  actual.publicationCount <=
+              result.sourceReplay.publications.size();
+    }
+    check(rowsAuthenticated && !result.sourceReplay.publications.empty(),
+          "capture-source evidence retains each captured row and local publication set");
+    const auto compatibilityDraws =
+        run.after.compatibilityDraws - run.before.compatibilityDraws;
+    const auto directLeases = run.after.directLeases - run.before.directLeases;
+    const auto directDraws =
+        run.after.directLeaseDraws - run.before.directLeaseDraws;
+    const auto gpuErrors = run.after.gpuErrors - run.before.gpuErrors;
+    if (route == RenderTapePreparedRoute::Compatibility) {
+      check(compatibilityDraws != 0u && directLeases == 0u &&
+                directDraws == 0u && gpuErrors == 0u,
+            "capture-source compatibility route has actual compatibility-only draw coverage");
+    } else {
+      check(directLeases != 0u && directDraws != 0u && gpuErrors == 0u,
+            "capture-source ProductionSlot route has actual ordinary-Direct draw coverage");
+    }
+    check(!result.sourceBoundaryAudit.requested &&
+              !result.sourceBoundaryAudit.validated,
+          "capture-source evidence remains separate from diagnostic boundaries");
+  }
+
+  auto missingIdentity = replayPreparedRenderTapeIdentity(
+      nullptr, prepared,
+      RenderTapePreparedExecutionOptions{
+          .route = RenderTapePreparedRoute::Compatibility,
+          .reset = RenderTapePreparedReset::FreshDevice,
+          .sourceBoundaryMode = RenderTapeSourceBoundaryMode::CaptureSource});
+  check(missingIdentity.status == FrameTapeReplayStatus::InvalidTape &&
+            missingIdentity.sourceReplay.requested &&
+            !missingIdentity.sourceReplay.validated &&
+            missingIdentity.conservation.objectsCreated == 0u,
+        "capture-source policy rejects missing authenticated identity before effects");
+
+  auto mixedMode = replayPreparedRenderTapeIdentity(
+      nullptr, prepared,
+      RenderTapePreparedExecutionOptions{
+          .route = RenderTapePreparedRoute::Compatibility,
+          .reset = RenderTapePreparedReset::FreshDevice,
+          .auditSourceBoundaries = true,
+          .sourceBoundaryMode = RenderTapeSourceBoundaryMode::CaptureSource,
+          .sourceBoundaryIdentity = identity});
+  check(mixedMode.status == FrameTapeReplayStatus::UnsupportedGrammar &&
+            mixedMode.sourceReplay.requested &&
+            !mixedMode.sourceReplay.validated &&
+            mixedMode.sourceBoundaryAudit.requested &&
+            !mixedMode.sourceBoundaryAudit.validated,
+        "diagnostic source cuts and normal capture-source policy cannot mix");
+
+  auto missingDigest = replayPreparedRenderTapeIdentity(
+      nullptr, prepared,
+      RenderTapePreparedExecutionOptions{
+          .route = RenderTapePreparedRoute::Compatibility,
+          .reset = RenderTapePreparedReset::FreshDevice,
+          .sourceBoundaryMode = RenderTapeSourceBoundaryMode::CaptureSource,
+          .sourceBoundaryIdentity = identity});
+  check(missingDigest.status == FrameTapeReplayStatus::ObjectCreationFailed &&
+            missingDigest.sourceReplay.validated &&
+            missingDigest.conservation.objectsCreated == 0u,
+        "capture-source policy preserves unqualified replay when expected digest is omitted");
+
+  auto forgedDigest = sourcePlan.digest();
+  forgedDigest[0] ^= std::byte{0x01};
+  auto mismatchedDigest = replayPreparedRenderTapeIdentity(
+      nullptr, prepared,
+      RenderTapePreparedExecutionOptions{
+          .route = RenderTapePreparedRoute::Compatibility,
+          .reset = RenderTapePreparedReset::FreshDevice,
+          .sourceBoundaryMode = RenderTapeSourceBoundaryMode::CaptureSource,
+          .sourceBoundaryIdentity = identity,
+          .expectedSourcePlanDigest = forgedDigest});
+  check(mismatchedDigest.status == FrameTapeReplayStatus::InvalidTape &&
+            !mismatchedDigest.sourceReplay.validated &&
+            mismatchedDigest.conservation.objectsCreated == 0u,
+        "capture-source policy rejects a stale expected plan digest before effects");
+}
+
+void nativeMetalTextureInputAudit() {
+  // A bounded cold diagnostic, not a rendering policy: prove the real GPU
+  // texture is replaced once at an authenticated cut, then replay continues.
+  const GeneralIndexedFixture fixture(32u, true, true, false, false, false,
+                                      render_tape_d3d_format::R32F);
+  const auto prepared = prepareRenderTapeIdentity(fixture.tape, fixture.blobsValue);
+  check(prepared.valid(), "R32F intervention fixture prepares");
+  render_tape_runtime::GeneralPreflightPlan plan;
+  check(render_tape_runtime::buildGeneralReplayPlan(
+            fixture.tape, fixture.blobsValue, plan).complete(),
+        "R32F intervention fixture preflights");
+  const auto identity = sourceBoundaryFixtureIdentity(fixture, true);
+  CaptureSourceReplayPlan sources;
+  check(buildCaptureSourceReplayPlan(fixture.tape, plan, identity, sources) ==
+            CaptureSourceReplayPlanStatus::Valid,
+        "R32F intervention authenticates source identity");
+  const std::array<float, 4u> input{1.0f, 0.75f, 0.5f, 0.25f};
+  const auto inputBytes = std::as_bytes(std::span(input));
+  const RenderTapeTextureInputAuditRequest request{
+      .identity = kTexture, .afterCapturedSeqId = sources.rows().front().capturedSeqId,
+      .digest = RenderTapeCaptureSession::sha256(inputBytes), .bytes = inputBytes};
+  const RenderTapePreparedExecutionOptions options{
+      .route = RenderTapePreparedRoute::ProductionSlot,
+      .reset = RenderTapePreparedReset::FreshDevice,
+      .sourceBoundaryMode = RenderTapeSourceBoundaryMode::CaptureSource,
+      .sourceBoundaryIdentity = identity,
+      .expectedSourcePlanDigest = sources.digest(),
+      .hasExpectedSourcePlanDigest = true,
+      .auditTextureInput = &request};
+  for (unsigned fault = 0u; fault < 12u; ++fault) {
+    auto bad = request;
+    auto badOptions = options;
+    badOptions.auditTextureInput = &bad;
+    if (fault == 0u) ++bad.identity.generation;
+    if (fault == 1u) ++bad.identity.objectId;
+    if (fault == 2u) bad.identity.kind = D9C_CHUNK_HANDLE_KIND_BUFFER;
+    if (fault == 3u) bad.afterCapturedSeqId = 0u;
+    if (fault == 4u) bad.afterCapturedSeqId = sources.rows().back().capturedSeqId;
+    if (fault == 5u) bad.digest[0] ^= std::byte{1u};
+    if (fault == 6u) {
+      bad.bytes = inputBytes.first(4u);
+      bad.digest = RenderTapeCaptureSession::sha256(bad.bytes);
+    }
+    if (fault == 7u) bad.bytes = {};
+    if (fault == 8u) badOptions.reset = RenderTapePreparedReset::WarmDevice;
+    if (fault == 9u) badOptions.expectedSourcePlanDigest = {};
+    if (fault == 10u) badOptions.sourceBoundaryMode = RenderTapeSourceBoundaryMode::Chunk;
+    if (fault == 11u) badOptions.hasExpectedSourcePlanDigest = false;
+    const auto result = replayPreparedRenderTapeIdentity(nullptr, prepared, badOptions);
+    check(!result.complete() && !result.textureInputAudit.validated &&
+              !result.textureInputAudit.attempted &&
+              result.conservation.objectsCreated == 0u,
+          "invalid texture input intervention fails before effects");
+  }
+  const GeneralIndexedFixture unsupported(32u, true, true, false, false, false, 21u);
+  const auto unsupportedPrepared = prepareRenderTapeIdentity(unsupported.tape, unsupported.blobsValue);
+  const auto unsupportedIdentity = sourceBoundaryFixtureIdentity(unsupported, true);
+  render_tape_runtime::GeneralPreflightPlan unsupportedPlan;
+  check(unsupportedPrepared.valid() && render_tape_runtime::buildGeneralReplayPlan(
+            unsupported.tape, unsupported.blobsValue, unsupportedPlan).complete(),
+        "unsupported audit format remains valid ordinary tape grammar");
+  CaptureSourceReplayPlan unsupportedSources;
+  check(buildCaptureSourceReplayPlan(unsupported.tape, unsupportedPlan,
+            unsupportedIdentity, unsupportedSources) == CaptureSourceReplayPlanStatus::Valid,
+        "unsupported audit format has valid source identity");
+  auto unsupportedOptions = options;
+  unsupportedOptions.sourceBoundaryIdentity = unsupportedIdentity;
+  unsupportedOptions.expectedSourcePlanDigest = unsupportedSources.digest();
+  const auto rejected = replayPreparedRenderTapeIdentity(nullptr, unsupportedPrepared, unsupportedOptions);
+  check(rejected.status == FrameTapeReplayStatus::InvalidTape &&
+            rejected.sourceReplay.validated && !rejected.textureInputAudit.validated &&
+            rejected.conservation.objectsCreated == 0u,
+        "BGRA is rejected by R32F intervention admission, not by unrelated source gates");
+  const D9CPresentParams params{.backBufferWidth = 16u, .backBufferHeight = 16u,
+      .backBufferFormat = 22u, .backBufferCount = 1u, .swapEffect = 1u,
+      .windowed = 1u, .presentationInterval = 0x80000000u};
+  auto* factory = dxmt9c_factory_create();
+  check(factory != nullptr, "R32F intervention factory constructs");
+  auto* device = dxmt9c_factory_create_device(factory, 0u, &params, 0u, nullptr);
+  check(device != nullptr, "R32F intervention device constructs");
+  const auto result = replayPreparedRenderTapeIdentity(device, prepared, options);
+  dxmt9c_device_release(device);
+  dxmt9c_factory_release(factory);
+  const auto& audit = result.textureInputAudit;
+  check(result.complete() && result.sourceReplay.complete && audit.requested &&
+            audit.validated && audit.attempted && audit.uploaded && audit.readbackMatched &&
+            audit.beforeDigest == RenderTapeCaptureSession::sha256(fixture.auditTextureSeed) &&
+            audit.inputDigest == request.digest && audit.afterDigest == request.digest &&
+            audit.byteCount == inputBytes.size() &&
+            result.outputPixels == gpuPolicyExpectedPixels() &&
+            result.conservation.objectsCreated == result.conservation.objectsReleased,
+        "R32F intervention reads actual pre/post GPU bytes and preserves unrelated output");
+}
+
 void generalIndexedReplayConservesAllObjects() {
   GeneralIndexedFixture fixture;
   RenderTapeBlobCatalogue catalogue;
@@ -2466,6 +3310,99 @@ void generalIndexedReplayConservesAllObjects() {
             replay.conservation.objectsReleased == 5u &&
             replay.conservation.referencedBlobs == 5u,
         "general indexed replay must conserve output, VB, IB, shader, and declaration");
+}
+
+void nativeMetalVisibleUniformPolicyOracle() {
+  const GeneralIndexedFixture fixture(3u, true, false, true);
+  const auto prepared = prepareRenderTapeIdentity(fixture.tape,
+                                                   fixture.blobsValue);
+  const auto expected = gpuVisibleUniformExpectedPixels();
+  check(prepared.valid() && prepared.evidence().immutableInputOwned,
+        "visible-uniform policy owns its prepared fixture");
+  render_tape_runtime::GeneralPreflightPlan plan;
+  const auto preflight = render_tape_runtime::buildGeneralReplayPlan(
+      fixture.tape, fixture.blobsValue, plan);
+  check(preflight.complete() &&
+            preflight.coverage.drawIndexedPrimitiveRecords == 3u,
+        "visible-uniform policy preflight completes");
+
+  const D9CPresentParams params{.backBufferWidth = 16u,
+                                .backBufferHeight = 16u,
+                                .backBufferFormat = 22u,
+                                .backBufferCount = 1u,
+                                .swapEffect = 1u,
+                                .windowed = 1u,
+                                .presentationInterval = 0x80000000u};
+  for (const auto route : {RenderTapePreparedRoute::Compatibility,
+                           RenderTapePreparedRoute::ProductionSlot}) {
+    auto* factory = dxmt9c_factory_create();
+    check(factory != nullptr, "visible-uniform policy factory constructs");
+    auto* device =
+        dxmt9c_factory_create_device(factory, 0u, &params, 0u, nullptr);
+    check(device != nullptr, "visible-uniform policy device constructs");
+    const auto before = dxmt9::perf::snapshotRenderTapeReplay();
+    const auto result = replayPreparedRenderTapeIdentity(
+        device, prepared,
+        RenderTapePreparedExecutionOptions{
+            .route = route, .reset = RenderTapePreparedReset::FreshDevice});
+    const auto after = dxmt9::perf::snapshotRenderTapeReplay();
+    dxmt9c_device_release(device);
+    dxmt9c_factory_release(factory);
+    check(result.complete() && result.validity.outputReadback &&
+              result.validity.expectedDigestMatched && result.outputPixels == expected &&
+              result.coverage.drawIndexedPrimitiveRecords == 3u &&
+              result.conservation.objectsCreated == result.conservation.objectsReleased,
+          "visible-uniform policy retains the independent three-draw pixel oracle");
+    const auto compatibilityDraws =
+        after.compatibilityDraws - before.compatibilityDraws;
+    const auto directDraws = after.directLeaseDraws - before.directLeaseDraws;
+    const auto gpuErrors = after.gpuErrors - before.gpuErrors;
+    if (route == RenderTapePreparedRoute::Compatibility) {
+      check(compatibilityDraws == 3u && directDraws == 0u && gpuErrors == 0u,
+            "visible-uniform compatibility executes all three draws");
+    } else {
+      check(directDraws == 3u && compatibilityDraws == 0u && gpuErrors == 0u,
+            "visible-uniform ProductionSlot executes all three draws");
+    }
+  }
+
+  const GeneralIndexedFixture altered(3u, true, false, true, true);
+  const auto alteredPrepared = prepareRenderTapeIdentity(altered.tape,
+                                                          altered.blobsValue);
+  auto* factory = dxmt9c_factory_create();
+  check(factory != nullptr, "altered visible-uniform policy factory constructs");
+  auto* device = dxmt9c_factory_create_device(factory, 0u, &params, 0u, nullptr);
+  check(device != nullptr, "altered visible-uniform policy device constructs");
+  const auto mismatch = replayPreparedRenderTapeIdentity(
+      device, alteredPrepared,
+      RenderTapePreparedExecutionOptions{
+          .route = RenderTapePreparedRoute::Compatibility,
+          .reset = RenderTapePreparedReset::FreshDevice});
+  dxmt9c_device_release(device);
+  dxmt9c_factory_release(factory);
+  check(!mismatch.complete() && mismatch.validity.outputReadback &&
+            !mismatch.validity.expectedDigestMatched &&
+            mismatch.outputPixels != expected,
+        "altered middle uniform fails against the original independent oracle");
+
+  const GeneralIndexedFixture staleVs(3u, true, false, true, false, true);
+  const auto staleVsPrepared = prepareRenderTapeIdentity(staleVs.tape,
+                                                          staleVs.blobsValue);
+  factory = dxmt9c_factory_create();
+  check(factory != nullptr, "stale VS visible-uniform factory constructs");
+  device = dxmt9c_factory_create_device(factory, 0u, &params, 0u, nullptr);
+  check(device != nullptr, "stale VS visible-uniform device constructs");
+  const auto staleVsMismatch = replayPreparedRenderTapeIdentity(
+      device, staleVsPrepared,
+      RenderTapePreparedExecutionOptions{
+          .route = RenderTapePreparedRoute::Compatibility,
+          .reset = RenderTapePreparedReset::FreshDevice});
+  dxmt9c_device_release(device);
+  dxmt9c_factory_release(factory);
+  check(!staleVsMismatch.complete() && staleVsMismatch.validity.outputReadback &&
+            !staleVsMismatch.validity.expectedDigestMatched &&
+            staleVsMismatch.outputPixels != expected,
+        "stale middle VS transform fails against the original independent oracle");
 }
 
 void productionParallelIndexedFixtureHasTwoChildren() {
@@ -3621,6 +4558,216 @@ void writeSequenceFixture(const std::filesystem::path& directory) {
   check(first.good() && second.good(), "sequence fixture must write both blobs");
 }
 
+std::vector<std::byte> gpuPolicyExpectedPixels() {
+  constexpr std::array basePixel{
+      std::byte{0x30}, std::byte{0x20}, std::byte{0x10}, std::byte{0xff}};
+  constexpr std::array insetPixel{
+      std::byte{0x70}, std::byte{0x60}, std::byte{0x50}, std::byte{0xff}};
+  std::vector<std::byte> pixels;
+  pixels.reserve(16u * 16u * basePixel.size());
+  for (std::size_t row = 0u; row < 16u; ++row) {
+    for (std::size_t column = 0u; column < 16u; ++column) {
+      const bool inset = row >= 4u && row < 12u && column >= 4u && column < 12u;
+      const auto& pixel = inset ? insetPixel : basePixel;
+      pixels.insert(pixels.end(), pixel.begin(), pixel.end());
+    }
+  }
+  return pixels;
+}
+
+std::vector<std::byte> gpuVisibleUniformExpectedPixels() {
+  // The independent oracle models the three transformed viewport strips:
+  // A (left, four pixels), B (middle, four pixels after its 0.5x VS scale),
+  // and A (right, four pixels). The remaining columns retain the clear.
+  constexpr std::array background{
+      std::byte{0x20}, std::byte{0x18}, std::byte{0x10}, std::byte{0xff}};
+  constexpr std::array colorA{
+      std::byte{0x40}, std::byte{0x40}, std::byte{0xe0}, std::byte{0xff}};
+  constexpr std::array colorB{
+      std::byte{0x80}, std::byte{0xe0}, std::byte{0x40}, std::byte{0xff}};
+  std::vector<std::byte> pixels;
+  pixels.reserve(16u * 16u * background.size());
+  for (std::size_t row = 0u; row < 16u; ++row) {
+    for (std::size_t column = 0u; column < 16u; ++column) {
+      const auto& pixel = column < 4u || column >= 12u
+          ? colorA
+          : column >= 6u && column < 10u ? colorB : background;
+      pixels.insert(pixels.end(), pixel.begin(), pixel.end());
+    }
+  }
+  return pixels;
+}
+
+void writeGpuPolicyFixture(const std::filesystem::path& directory,
+                           bool textureInputAudit = false) {
+  std::error_code error;
+  std::filesystem::create_directories(directory, error);
+  check(!error, "GPU policy fixture directory must be created");
+  const GeneralIndexedFixture fixture(32u, true, true, false, false, false,
+      textureInputAudit ? render_tape_d3d_format::R32F : 0u);
+  const auto preflight = preflightRenderTapeIdentity(fixture.tape,
+                                                      fixture.blobsValue);
+  check(preflight.complete() &&
+            preflight.coverage.drawIndexedPrimitiveRecords == 32u,
+        "GPU policy fixture must be a bounded 32-draw indexed tape");
+  const auto oracle = gpuPolicyExpectedPixels();
+  check(oracle.size() == 16u * 16u * 4u,
+        "GPU policy fixture oracle dimensions are pinned");
+  const auto expectedDigest = RenderTapeCaptureSession::sha256(oracle);
+  check(expectedDigest != RenderTapeDigest{},
+        "GPU policy fixture oracle digest must be authenticated");
+  std::ofstream events(directory / "events.bin", std::ios::binary);
+  check(events.good(), "GPU policy fixture must open events.bin");
+  events.write(reinterpret_cast<const char*>(fixture.tape.data()),
+               static_cast<std::streamsize>(fixture.tape.size()));
+  check(events.good(), "GPU policy fixture must write events.bin");
+  std::vector<std::string_view> names{
+      std::string_view{"vertex.bin"}, std::string_view{"index.bin"},
+      std::string_view{"shader.bin"}, std::string_view{"declaration.bin"},
+      std::string_view{"output.bin"},
+  };
+  if (textureInputAudit) names.push_back("audit-texture.bin");
+  check(fixture.blobsValue.size() == names.size(),
+        "GPU policy fixture blob count is pinned");
+  for (std::size_t index = 0u; index < names.size(); ++index) {
+    std::ofstream blob(directory / std::string(names[index]), std::ios::binary);
+    check(blob.good(), "GPU policy fixture must open a blob file");
+    blob.write(reinterpret_cast<const char*>(fixture.blobsValue[index].bytes.data()),
+               static_cast<std::streamsize>(fixture.blobsValue[index].bytes.size()));
+    check(blob.good(), "GPU policy fixture must write every blob file");
+  }
+  for (const auto name : {std::string_view{"output.rgba"},
+                          std::string_view{"source.rgba"}}) {
+    std::ofstream rgba(directory / std::string(name), std::ios::binary);
+    check(rgba.good(), "GPU policy fixture must open an RGBA oracle");
+    rgba.write(reinterpret_cast<const char*>(oracle.data()),
+               static_cast<std::streamsize>(oracle.size()));
+    check(rgba.good(), "GPU policy fixture must write an RGBA oracle");
+  }
+  if (textureInputAudit) {
+    // Authenticate the exact emitted tape, including its capture timestamp.
+    const auto sidecar = sourceBoundaryFixtureIdentity(fixture, true);
+    std::ofstream identity(directory / "identity.bin", std::ios::binary);
+    identity.write(reinterpret_cast<const char*>(sidecar.data()), sidecar.size());
+    check(identity.good(), "texture intervention fixture writes identity");
+    const std::array<float, 4u> input{1.0f, 0.75f, 0.5f, 0.25f};
+    std::ofstream data(directory / "intervention.r32f", std::ios::binary);
+    data.write(reinterpret_cast<const char*>(input.data()), sizeof(input));
+    check(data.good(), "texture intervention fixture writes owned input");
+  }
+}
+
+void writeGpuVisibleUniformFixture(const std::filesystem::path& directory,
+                                   bool alteredMiddleUniform = false,
+                                   bool alteredMiddleTransform = false,
+                                   bool extraStream = false,
+                                   bool alteredExtraStream = false) {
+  std::error_code error;
+  std::filesystem::create_directories(directory, error);
+  check(!error, "visible-uniform GPU fixture directory must be created");
+  const GeneralIndexedFixture fixture(3u, true, false, true,
+                                      alteredMiddleUniform,
+                                      alteredMiddleTransform, 0u,
+                                      extraStream, alteredExtraStream);
+  const auto preflight = preflightRenderTapeIdentity(fixture.tape,
+                                                      fixture.blobsValue);
+  if (!preflight.complete() ||
+      preflight.coverage.drawIndexedPrimitiveRecords != 3u) {
+    std::string diagnostic =
+        "visible-uniform fixture preflight status=" +
+        std::string(frameTapeReplayStatusName(preflight.status)) +
+        " failed_event=" + std::to_string(preflight.failedEventIndex) +
+        " events=" + std::to_string(preflight.coverage.eventCount) +
+        " chunks=" + std::to_string(preflight.coverage.commandChunks) +
+        " records=" + std::to_string(preflight.coverage.commandRecords) +
+        " indexed=" +
+        std::to_string(preflight.coverage.drawIndexedPrimitiveRecords) +
+        " primitive=" +
+        std::to_string(preflight.coverage.drawPrimitiveRecords) +
+        " constants=" +
+        std::to_string(preflight.coverage.stateConstantRecords) +
+        " apply_state=" +
+        std::to_string(preflight.coverage.applyStateRecords) +
+        " clear=" + std::to_string(preflight.coverage.clearRecords) +
+        " present=" + std::to_string(preflight.coverage.presentRecords) +
+        " blobs=" + std::to_string(preflight.conservation.inputBlobs) +
+        " referenced_blobs=" +
+        std::to_string(preflight.conservation.referencedBlobs);
+    RenderTapeHeader tapeHeader{};
+    if (fixture.tape.size() >= sizeof(tapeHeader)) {
+      std::memcpy(&tapeHeader, fixture.tape.data(), sizeof(tapeHeader));
+      const auto eventBytes = static_cast<std::uint64_t>(
+          tapeHeader.eventHeaderSize);
+      const auto eventOffset = static_cast<std::uint64_t>(
+          tapeHeader.eventTableOffset) +
+          static_cast<std::uint64_t>(preflight.failedEventIndex) * eventBytes;
+      if (tapeHeader.eventHeaderSize == sizeof(RenderTapeEventHeader) &&
+          preflight.failedEventIndex < tapeHeader.eventCount &&
+          eventOffset <= fixture.tape.size() &&
+          sizeof(RenderTapeEventHeader) <= fixture.tape.size() - eventOffset) {
+        RenderTapeEventHeader failedHeader{};
+        std::memcpy(&failedHeader, fixture.tape.data() + eventOffset,
+                    sizeof(failedHeader));
+        diagnostic += " failed_type=" + std::to_string(failedHeader.type) +
+            " failed_ordinal=" + std::to_string(failedHeader.ordinal) +
+            " failed_payload_bytes=" +
+            std::to_string(failedHeader.payloadSize);
+        if (failedHeader.type ==
+                static_cast<std::uint32_t>(RenderTapeEventType::PresentComplete) &&
+            failedHeader.payloadOffset <= tapeHeader.payloadArenaSize &&
+            sizeof(RenderTapePresentCompleteHeader) <=
+                tapeHeader.payloadArenaSize - failedHeader.payloadOffset &&
+            failedHeader.payloadSize >= sizeof(RenderTapePresentCompleteHeader)) {
+          RenderTapePresentCompleteHeader complete{};
+          const auto payloadOffset = static_cast<std::uint64_t>(
+              tapeHeader.payloadArenaOffset) + failedHeader.payloadOffset;
+          if (payloadOffset <= fixture.tape.size() &&
+              sizeof(complete) <= fixture.tape.size() - payloadOffset) {
+            std::memcpy(&complete, fixture.tape.data() + payloadOffset,
+                        sizeof(complete));
+            diagnostic += " present_ordinal=" +
+                std::to_string(complete.presentOrdinal) +
+                " completion_ordinal=" +
+                std::to_string(complete.completionOrdinal) +
+                " oracle_count=" + std::to_string(complete.oracleCount);
+          }
+        }
+      }
+    }
+    check(false, diagnostic);
+  }
+  const auto oracle = gpuVisibleUniformExpectedPixels();
+  check(oracle.size() == 16u * 16u * 4u,
+        "visible-uniform fixture oracle dimensions are pinned");
+  std::ofstream events(directory / "events.bin", std::ios::binary);
+  check(events.good(), "visible-uniform fixture must open events.bin");
+  events.write(reinterpret_cast<const char*>(fixture.tape.data()),
+               static_cast<std::streamsize>(fixture.tape.size()));
+  check(events.good(), "visible-uniform fixture must write events.bin");
+  constexpr std::array names{
+      std::string_view{"vertex.bin"}, std::string_view{"index.bin"},
+      std::string_view{"shader.bin"}, std::string_view{"pixel.bin"},
+      std::string_view{"declaration.bin"}, std::string_view{"output.bin"},
+  };
+  check(fixture.blobsValue.size() == names.size(),
+        "visible-uniform fixture blob count is pinned");
+  for (std::size_t index = 0u; index < names.size(); ++index) {
+    std::ofstream blob(directory / std::string(names[index]), std::ios::binary);
+    check(blob.good(), "visible-uniform fixture must open a blob file");
+    blob.write(reinterpret_cast<const char*>(fixture.blobsValue[index].bytes.data()),
+               static_cast<std::streamsize>(fixture.blobsValue[index].bytes.size()));
+    check(blob.good(), "visible-uniform fixture must write every blob file");
+  }
+  for (const auto name : {std::string_view{"output.rgba"},
+                          std::string_view{"source.rgba"}}) {
+    std::ofstream rgba(directory / std::string(name), std::ios::binary);
+    check(rgba.good(), "visible-uniform fixture must open an RGBA oracle");
+    rgba.write(reinterpret_cast<const char*>(oracle.data()),
+               static_cast<std::streamsize>(oracle.size()));
+    check(rgba.good(), "visible-uniform fixture must write an RGBA oracle");
+  }
+}
+
 void writeParallelFixture(const std::filesystem::path& directory) {
   std::error_code error;
   std::filesystem::create_directories(directory, error);
@@ -4451,6 +5598,8 @@ void sharedRuntimeObjectHelpersPinIdentityAndOwnership() {
 
 int main(int argc, char** argv) {
   try {
+    check(::setenv("DXMT_PERF_COUNTERS", "1", 1) == 0,
+          "native route evidence requires counters before first device");
     if (argc == 2 && std::string_view(argv[1]) == "--test-event-ordering") {
       eventLevelMutationDrainOrderingIsPinned();
       return 0;
@@ -4467,6 +5616,40 @@ int main(int argc, char** argv) {
       writeSequenceFixture(argv[2]);
       return 0;
     }
+    if (argc == 3 &&
+        std::string_view(argv[1]) == "--write-gpu-policy-fixture") {
+      writeGpuPolicyFixture(argv[2]);
+      return 0;
+    }
+    if (argc == 3 && std::string_view(argv[1]) == "--write-texture-input-audit-fixture") {
+      writeGpuPolicyFixture(argv[2], true);
+      return 0;
+    }
+    if (argc == 3 && std::string_view(argv[1]) ==
+                         "--write-gpu-visible-extra-stream-fixture") {
+      writeGpuVisibleUniformFixture(argv[2], false, false, true);
+      return 0;
+    }
+    if (argc == 3 && std::string_view(argv[1]) ==
+                         "--write-gpu-visible-extra-stream-altered-fixture") {
+      writeGpuVisibleUniformFixture(argv[2], false, false, true, true);
+      return 0;
+    }
+    if (argc == 3 && std::string_view(argv[1]) ==
+                         "--write-gpu-visible-uniform-fixture") {
+      writeGpuVisibleUniformFixture(argv[2]);
+      return 0;
+    }
+    if (argc == 3 && std::string_view(argv[1]) ==
+                         "--write-gpu-visible-uniform-altered-fixture") {
+      writeGpuVisibleUniformFixture(argv[2], true);
+      return 0;
+    }
+    if (argc == 3 && std::string_view(argv[1]) ==
+                         "--write-gpu-visible-uniform-stale-vs-fixture") {
+      writeGpuVisibleUniformFixture(argv[2], false, true);
+      return 0;
+    }
     if (argc == 3 && std::string_view(argv[1]) == "--write-parallel-fixture") {
       writeParallelFixture(argv[2]);
       return 0;
@@ -4475,6 +5658,13 @@ int main(int argc, char** argv) {
           "usage: render_tape_provider_spec "
           "[--test-event-ordering|--write-production-fixture dir|"
           "--write-projection-fixture dir|--write-sequence-fixture dir|"
+          "--write-gpu-policy-fixture dir|"
+          "--write-texture-input-audit-fixture dir|"
+          "--write-gpu-visible-extra-stream-fixture dir|"
+          "--write-gpu-visible-extra-stream-altered-fixture dir|"
+          "--write-gpu-visible-uniform-fixture dir|"
+          "--write-gpu-visible-uniform-altered-fixture dir|"
+          "--write-gpu-visible-uniform-stale-vs-fixture dir|"
           "--write-parallel-fixture dir]");
     eventLevelMutationDrainOrderingIsPinned();
     bufferMutationReplayPlanPinsLockFlagsAndOffset();
@@ -4496,6 +5686,11 @@ int main(int argc, char** argv) {
     nativeMetalTexturedUpDigestRepeats();
     nativeMetalPostCommandTexturePrestageMatchesOrdinaryPixels();
     generalIndexedReplayConservesAllObjects();
+    sourceBoundaryExactCoverExhaustive();
+    nativeMetalSourceBoundaryAudit();
+    nativeMetalCaptureSourceReplayPolicy();
+    nativeMetalTextureInputAudit();
+    nativeMetalVisibleUniformPolicyOracle();
     productionParallelIndexedFixtureHasTwoChildren();
     boundedSequenceMutationIsVisibleAtSecondPresent();
     productionShapeUsesImplicitDefaultOutputAndExactDigest();

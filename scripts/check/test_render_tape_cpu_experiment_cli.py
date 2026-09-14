@@ -142,7 +142,7 @@ def cpu_input_staging_tests(module):
         source_file.write_bytes(source_bytes)
 
         destination = root / "destination"
-        module.copy_cpu_input_owned(source, destination)
+        module.copy_input_owned(source, destination)
         destination_file = destination / source_file.name
         assert destination_file.read_bytes() == source_bytes
         assert destination_file.stat().st_ino != source_file.stat().st_ino
@@ -155,7 +155,7 @@ def cpu_input_staging_tests(module):
         dangling = root / "dangling-target"
         dangling.symlink_to(root / "missing")
         try:
-            module.copy_cpu_input_owned(source, dangling)
+            module.copy_input_owned(source, dangling)
         except FileExistsError:
             pass
         else:
@@ -166,7 +166,7 @@ def cpu_input_staging_tests(module):
         linked_source.mkdir()
         (linked_source / "events.bin").symlink_to(source_file)
         linked_copy = root / "linked-copy"
-        module.copy_cpu_input_owned(linked_source, linked_copy)
+        module.copy_input_owned(linked_source, linked_copy)
         assert not (linked_copy / "events.bin").is_symlink()
         assert (linked_copy / "events.bin").read_bytes() == source_bytes
         (linked_copy / "events.bin").write_bytes(b"isolated-link-copy")
@@ -178,7 +178,7 @@ def cpu_input_staging_tests(module):
         existing_file.write_bytes(b"keep me")
         with mock.patch.object(module.subprocess, "run") as invoked:
             try:
-                module.copy_cpu_input_owned(source, existing)
+                module.copy_input_owned(source, existing)
             except FileExistsError:
                 pass
             else:
@@ -190,7 +190,7 @@ def cpu_input_staging_tests(module):
         with mock.patch.object(module.platform, "system", return_value="Linux"), \
                 mock.patch.object(module.shutil, "copytree",
                                   wraps=module.shutil.copytree) as copied:
-            module.copy_cpu_input_owned(source, fallback)
+            module.copy_input_owned(source, fallback)
             copied.assert_called_once_with(source, fallback)
         assert (fallback / source_file.name).read_bytes() == source_bytes
         assert (fallback / source_file.name).stat().st_ino != source_file.stat().st_ino
@@ -201,7 +201,7 @@ def cpu_input_staging_tests(module):
         with mock.patch.object(module.platform, "system", return_value="Darwin"), \
                 mock.patch.object(module.subprocess, "run", side_effect=failure) as invoked:
             try:
-                module.copy_cpu_input_owned(source, failed)
+                module.copy_input_owned(source, failed)
             except subprocess.CalledProcessError as error:
                 assert error is failure
             else:

@@ -341,7 +341,8 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       render::worstCaseNonWrappingReservationPages(
           tapeValues.maxPagesPerSource);
   const std::uint64_t sessionPages =
-      tapeValues.highWaterPages - successorPages;
+      render::sessionResidencyLimitForHysteresis(
+          tapeValues.highWaterPages, tapeValues.lowWaterPages, successorPages);
   const std::uint64_t ordinaryBytes =
       tapeValues.pageSize * tapeValues.maxPagesPerSource;
   const std::uint64_t sessionBytes = tapeValues.pageSize * sessionPages;
@@ -357,7 +358,11 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
           kMaxQueuedChunks, tapeValues.highWaterReady));
   DXMT_ASSERT(publishedSourceHighWater > 1u);
   const std::uint32_t maxSessionResidentSources =
-      publishedSourceHighWater - 1u;
+      static_cast<std::uint32_t>(render::sessionResidencyLimitForHysteresis(
+          publishedSourceHighWater,
+          std::min<std::size_t>(tapeValues.lowWaterSources,
+                                publishedSourceHighWater - 1u),
+          1u));
   const std::uint32_t maxSessionWorkSources = static_cast<std::uint32_t>(
       core::metalqueue::kMaxEncodeSessionSources);
   const render::EncodeSessionLimits admissionLimits{

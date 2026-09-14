@@ -476,7 +476,7 @@ bool RenderTapeProductionIdentityLedger::append(
     std::uint32_t recordCount,
     std::span<const RenderTapeProductionPassRange> ranges) noexcept {
   return appendImpl(captureToken, eventOrdinal, sourceOrdinal, seqId,
-                    0u, recordCount, ranges, true);
+                    0u, recordCount, ranges, true, PassIdentityScope::Frame);
 }
 
 bool RenderTapeProductionIdentityLedger::append(
@@ -485,7 +485,18 @@ bool RenderTapeProductionIdentityLedger::append(
     std::uint32_t firstRecord, std::uint32_t recordCount,
     std::span<const RenderTapeProductionPassRange> ranges) noexcept {
   return appendImpl(captureToken, eventOrdinal, sourceOrdinal, seqId,
-                    firstRecord, recordCount, ranges, false);
+                    firstRecord, recordCount, ranges, false,
+                    PassIdentityScope::Frame);
+}
+
+bool RenderTapeProductionIdentityLedger::appendEventLocalPasses(
+    std::uint64_t captureToken, std::uint64_t eventOrdinal,
+    std::uint64_t sourceOrdinal, std::uint64_t seqId,
+    std::uint32_t firstRecord, std::uint32_t recordCount,
+    std::span<const RenderTapeProductionPassRange> ranges) noexcept {
+  return appendImpl(captureToken, eventOrdinal, sourceOrdinal, seqId,
+                    firstRecord, recordCount, ranges, false,
+                    PassIdentityScope::Event);
 }
 
 bool RenderTapeProductionIdentityLedger::appendImpl(
@@ -493,7 +504,7 @@ bool RenderTapeProductionIdentityLedger::appendImpl(
     std::uint64_t sourceOrdinal, std::uint64_t seqId,
     std::uint32_t firstRecord, std::uint32_t recordCount,
     std::span<const RenderTapeProductionPassRange> ranges,
-    bool rangesAreSourceLocal) noexcept {
+    bool rangesAreSourceLocal, PassIdentityScope scope) noexcept {
   if (captureToken == 0u || eventOrdinal == 0u || sourceOrdinal == 0u ||
       seqId == 0u || recordCount == 0u || ranges.empty()) {
     fail(captureToken);
@@ -503,6 +514,7 @@ bool RenderTapeProductionIdentityLedger::appendImpl(
   if (captureToken_ != captureToken) {
     captureToken_ = captureToken;
     nextLogicalPassId_ = 1u;
+    eventLocalPassBase_ = 0u;
     failed_ = false;
     settled_ = false;
     settledEventOrdinal_ = 0u;
@@ -550,6 +562,14 @@ bool RenderTapeProductionIdentityLedger::appendImpl(
     failed_ = true;
     return false;
   }
+  const bool eventLocal = scope == PassIdentityScope::Event;
+  const bool sameEvent = !sources_.empty() &&
+      sources_.back().eventOrdinal == eventOrdinal;
+  if (sameEvent && eventLocal != (eventLocalPassBase_ != 0u)) {
+    failed_ = true;
+    return false;
+  }
+  if (!sameEvent) eventLocalPassBase_ = eventLocal ? nextLogicalPassId_ : 0u;
   const auto sourceEnd = firstRecord + recordCount;
   std::uint32_t nextRecord = firstRecord;
   for (const auto& range : ranges) {
@@ -582,6 +602,16 @@ bool RenderTapeProductionIdentityLedger::appendImpl(
       const auto eventFirstRecord = range.firstRecord +
           (rangesAreSourceLocal ? firstRecord : 0u);
       std::uint64_t logicalPassId = range.logicalPassId;
+      if (eventLocal) {
+        // Keep an injective event namespace without a per-draw hash table.
+        // Reserve UINT64_MAX as exhaustion; nextLogicalPassId_ needs +1.
+        if (logicalPassId == 0u || logicalPassId >
+                std::numeric_limits<std::uint64_t>::max() - eventLocalPassBase_) {
+          failed_ = true;
+          return false;
+        }
+        logicalPassId = eventLocalPassBase_ + (logicalPassId - 1u);
+      }
       if (logicalPassId == 0u) logicalPassId = nextLogicalPassId_++;
       const auto found = std::find_if(
           ranges_.begin(), ranges_.end(), [&](const auto& prior) {
@@ -757,6 +787,7 @@ void RenderTapeProductionIdentityLedger::fail(
   if (captureToken_ != captureToken) {
     captureToken_ = captureToken;
     nextLogicalPassId_ = 1u;
+    eventLocalPassBase_ = 0u;
     sources_.clear();
     ranges_.clear();
     settled_ = false;

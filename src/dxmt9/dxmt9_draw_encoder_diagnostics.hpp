@@ -5,6 +5,9 @@
 // session-owned values retain their existing flat member order.
 
 #include "dxmt9_draw_encoder_internal.hpp"
+#include "dxmt9_draw_texture_dump_policy.hpp"
+#include "dxmt9_color_attachment_dump_policy.hpp"
+#include "dxmt9_color_attachment_capture_observer.hpp"
 #include "dxmt9_argbuf_hybrid.hpp"
 #include "dxmt9_debug_trace.hpp"
 #include "dxmt9_draw_state.hpp"
@@ -209,8 +212,12 @@ struct ActiveColorAttachmentDump {
   u32 width = 0;
   u32 height = 0;
   u32 index = 0;
+  u32 sampleCount = 0;
+  WMTStoreAction effectiveStoreAction = WMTStoreActionUnknown;
+  bool storeActionKnown = false;
   u64 seq = 0;
   u64 enc = 0;
+  u64 frame = 0;
   u64 draw = 0;
   u64 commandIndex = 0;
   u64 commandDrawIndex = 0;
@@ -229,6 +236,7 @@ struct ColorAttachmentReadbackRegion {
 struct ActiveDrawTextureDump {
   core::Handle handle{};
   WMT::Texture texture{};
+  u64 metalTextureObservationId = 0u;
   core::Format format = core::Format::Unknown;
   core::TextureType type = core::TextureType::TwoD;
   enum WMTPixelFormat storageMetalPixelFormat = WMTPixelFormatInvalid;
@@ -242,6 +250,7 @@ struct ActiveDrawTextureDump {
   bool vertexStage = false;
   bool srgb = false;
   bool shaderReadView = false;
+  u64 pixelShaderHash = 0;
   u64 seq = 0;
   u64 enc = 0;
 };
@@ -2571,13 +2580,37 @@ bool effectDrawTraceEnabled();
 
 bool effectDrawTraceGeometryEnabled();
 
+bool effectDrawBindingTraceEnabled();
+
+bool vertexPositionProbeDrawEnabled() noexcept;
+void beginVertexPositionProbeDraw(u64 commandBuffer, u64 encoder, u64 seq, u64 ordinal) noexcept;
+
+// Cold observations of already-resolved binding bytes. Do not rebuild state
+// here: these rows distinguish selection/override drift from upload drift.
+void traceEffectFsVolatileBinding(const ActiveEncoderBreakdown* breakdown,
+                                 u64 seqId, u64 ordinal, u32 commandIndex,
+                                 u64 commandDrawIndex,
+                                 const state::FsVolatile& value,
+                                 const core::DrawBindingOverride* override,
+                                 bool skippedPush);
+
+void traceEffectFfpVsBinding(const ActiveEncoderBreakdown* breakdown,
+                            u64 seqId, u64 ordinal, u32 commandIndex,
+                            u64 commandDrawIndex, const FfpVsConsts& value,
+                            bool cacheHit, bool argbuf);
+
+void traceEffectCachedFfpVsBinding(const ActiveEncoderBreakdown* breakdown,
+                                  u64 seqId, u64 ordinal, u32 commandIndex,
+                                  u64 commandDrawIndex,
+                                  std::span<const std::byte, sizeof(FfpVsConsts)> bytes);
+
 // True when render-pass diagnostics require draw-order observation or a
 // post-pass readback sidecar. Parallel children must fail closed while any of
 // these process-immutable diagnostic modes is enabled.
 bool parallelRenderPassSidecarObservationEnabled();
 
 void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
-                     const core::FlatDrawStateRecord& hot,
+                     const core::FlatDrawStateView& drawState,
                      const resources::Pool& pool,
                      u64 seqId,
                      u64 drawOrdinal,
@@ -2592,7 +2625,22 @@ void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
                      bool preTransformed,
                      u32 activeFragmentTextureMask,
                      u64 vertexShaderHash,
-                     u64 pixelShaderHash);
+                     u64 pixelShaderHash,
+                     obj_handle_t encoderHandle,
+                     const argbuf_hybrid::ConstantBufferBindings* cbufBindings);
+
+void resetEffectDirectCbufBindings(obj_handle_t encoderHandle);
+void recordEffectDirectCbufBinding(obj_handle_t encoderHandle, u32 index,
+                                  WMT::Buffer buffer, u64 offset, u64 bytes);
+bool effectDrawCaptureSourcesOnlyEnabled();
+bool drawCaptureSourceTrackingEnabled();
+void selectDrawCaptureSource(std::uintptr_t owner, u64 seqId,
+                             const core::CpuReadyTape::SourceRef& source);
+
+void traceEffectVsVolatileBinding(const ActiveEncoderBreakdown* breakdown,
+                                 u64 seqId, u64 ordinal, u32 commandIndex,
+                                 u64 commandDrawIndex,
+                                 const state::DrawVolatile& value);
 
 bool renderEncoderGpuTimeEnabled();
 
@@ -2636,7 +2684,11 @@ void selectActiveColorAttachmentDump(
     bool renderEncoderActive,
     u64 seqId,
     u64 encoderIndex,
+    const core::CpuReadyTape::SourceRef& source,
     ActiveColorAttachmentDump& activeDump);
+
+bool colorAttachmentDumpFrameTrackingEnabled();
+void noteColorAttachmentDumpPresent(const resources::Pool& pool, u64 seq);
 
 void recordArgbufCbufUploadForBreakdown(void* userdata,
                                         u32 argbufIndex,
@@ -2707,6 +2759,8 @@ void maybeEncodeColorAttachmentDump(
     WMT::CommandBuffer& commandBuffer,
     WMT::Reference<WMT::Device> device,
     const ActiveColorAttachmentDump& active,
+    const ActiveDepthAttachmentDump& depth,
+    const LateRenderPassStoreState& resolvedStore,
     std::vector<std::function<void()>>& completionCallbacks);
 
 void maybeEncodeDrawTextureDumps(

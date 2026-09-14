@@ -681,14 +681,38 @@ void productionPageCapacityLeavesExactSuccessorHeadroom() {
       dxmt9::render::worstCaseNonWrappingReservationPages(
           values.maxPagesPerSource);
   const std::uint64_t sessionPages =
-      values.highWaterPages - successorPages;
+      dxmt9::render::sessionResidencyLimitForHysteresis(
+          values.highWaterPages, values.lowWaterPages, successorPages);
 
   check(values.pageCount == 640u && values.highWaterPages == 640u &&
             values.lowWaterPages == 320u &&
             values.maxPagesPerSource == 64u,
         "32-control streaming profile exposes the bounded page policy");
-  check(successorPages == 127u && sessionPages == 513u,
-        "one non-wrapping successor leaves the exact session page cap");
+  check(successorPages == 127u && sessionPages == 320u,
+        "session cap permits both successor space and low-water reopening");
+  const auto capture = CpuReadyTapeConfig::queueCaptureStreaming(32).values();
+  check(dxmt9::render::sessionResidencyLimitForHysteresis(
+            capture.highWaterPages, capture.lowWaterPages,
+            dxmt9::render::worstCaseNonWrappingReservationPages(
+                capture.maxPagesPerSource)) == 1024u,
+        "capture cannot retain the formerly deadlocking 1025-page suffix");
+  // Exhaustive model-code algebra pin, including invalid/zero/underflow edges.
+  for (std::uint64_t high = 0; high <= 32; ++high) {
+    for (std::uint64_t low = 0; low <= 33; ++low) {
+      for (std::uint64_t successor = 0; successor <= 33; ++successor) {
+        const auto limit = dxmt9::render::sessionResidencyLimitForHysteresis(
+            high, low, successor);
+        const bool valid = low < high && successor > 0 && successor < high;
+        const auto expected = valid ? std::min(low, high - successor) : 0u;
+        check(limit == expected,
+              "SessionAdmissionHysteresis.SessionLimit matches production");
+        if (valid) {
+          check(limit <= low && limit + successor <= high,
+                "every admitted residency can reopen the latch and fit successor");
+        }
+      }
+    }
+  }
 
   const SessionCapacityPolicy policy{
       .highWater = {2, values.highWaterPages, 2, 2, 2, 2, 2, 2, 2},
@@ -698,7 +722,7 @@ void productionPageCapacityLeavesExactSuccessorHeadroom() {
           1, values.maxPagesPerSource, 1, 1, 1, 1, 1, 1, 1},
   };
   check(policy.valid(),
-        "session cap plus exact successor headroom fills page high-water");
+        "session cap plus exact successor headroom fits page high-water");
 }
 
 void firstLeaseOrdinaryShapeExcludesWrapPadding() {

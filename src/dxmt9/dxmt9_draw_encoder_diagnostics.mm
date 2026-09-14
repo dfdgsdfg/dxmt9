@@ -14,9 +14,15 @@
 #include "dxmt9_ring_arena.hpp"
 #include "dxmt9_signposts.hpp"
 #include "util/log/log.hpp"
+#include "../winemetal/unix/winemetal_pipeline_lineage.hpp"
+#include "../winemetal/unix/winemetal_sampling_lineage.hpp"
+#include "../winemetal/unix/winemetal_vertex_position_probe.hpp"
 
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_queue.hpp"
+
+#include <CommonCrypto/CommonDigest.h>
+#import <Metal/Metal.h>
 
 #include <algorithm>
 #include <array>
@@ -36,6 +42,7 @@
 #include <functional>
 #include <iomanip>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -43,6 +50,7 @@
 #include <span>
 #include <string>
 #include <string_view>
+#include <tuple>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -54,6 +62,31 @@ using core::IndexType;
 using dxmt9::core::metalqueue::emitQueueTraceLine;
 
 namespace {
+
+bool effectIssuedGeometryEnabled();
+bool effectDrawTraceSeqMatches(u64 seqId);
+void noteEffectIssuedPipeline(obj_handle_t encoder, WMT::RenderPipelineState pipeline);
+void noteEffectIssuedViewport(obj_handle_t encoder, WMTViewport viewport);
+void noteEffectIssuedScissor(obj_handle_t encoder, WMTScissorRect scissor);
+void noteEffectIssuedRasterizer(obj_handle_t encoder, WMTTriangleFillMode fillMode,
+                               WMTCullMode cullMode, WMTDepthClipMode clipMode,
+                               WMTWinding winding, float bias, float slope, float clamp);
+void noteEffectIssuedBlendStencil(obj_handle_t encoder, float red, float green,
+                                 float blue, float alpha, std::uint8_t stencilRef);
+void noteEffectIssuedStencilRef(obj_handle_t encoder, std::uint8_t stencilRef);
+void traceEffectIssuedRaster(obj_handle_t encoder, bool indexed);
+void noteEffectIssuedVertexBuffer(obj_handle_t encoder, WMT::Buffer buffer,
+                                 u64 offset, std::uint8_t index);
+void noteEffectIssuedVertexBytes(obj_handle_t encoder, const void* bytes,
+                                u64 length, std::uint8_t index);
+void traceEffectIssuedIndexedGeometry(obj_handle_t encoder, WMTIndexType indexType,
+                                     u64 indexCount, WMT::Buffer indexBuffer,
+                                     u64 indexOffset, u32 instances,
+                                     i32 baseVertex, u32 baseInstance);
+void issueIndexedVertexPositionProbe(WMT::RenderCommandEncoder& encoder,
+    WMTPrimitiveType primitiveType, WMTIndexType indexType, u64 indexCount,
+    WMT::Buffer indexBuffer, u64 indexOffset, u32 instances,
+    i32 baseVertex, u32 baseInstance);
 
 std::uint64_t drawGeometryTraceInterval() {
   static const std::uint64_t value = [] {
@@ -370,6 +403,34 @@ std::vector<u64> parseEnvU64ListAuto(const char* name) {
     values.push_back(value);
     cursor = end;
   }
+  return values;
+}
+
+std::optional<u64> parseDrawTextureU64(const char* name, bool& malformed) {
+  const char* env = std::getenv(name);
+  if (!env || env[0] == '\0') {
+    return std::nullopt;
+  }
+  u64 value = 0u;
+  if (!parseDrawTextureDumpU64(env, value)) {
+    malformed = true;
+    return std::nullopt;
+  }
+  return value;
+}
+
+std::vector<u64> parseDrawTextureU64List(const char* name, bool& malformed) {
+  const char* env = std::getenv(name);
+  if (!env || env[0] == '\0') {
+    return {};
+  }
+  std::array<u64, 256u> parsed{};
+  std::size_t count = 0u;
+  if (!parseDrawTextureDumpU64List(env, parsed, count)) {
+    malformed = true;
+    return {};
+  }
+  std::vector<u64> values(parsed.begin(), parsed.begin() + count);
   return values;
 }
 
@@ -690,11 +751,18 @@ struct DepthAttachmentDumpConfig {
 
 struct ColorAttachmentDumpConfig {
   bool enabled = false;
+  bool depthPair = false;
   bool afterDraw = false;
+  bool hashOnly = false;
+  bool captureSourcesOnly = false;
   std::optional<u64> handle;
   std::optional<u64> index;
   std::optional<u64> seq;
   std::optional<u64> enc;
+  std::optional<u64> frame;
+  std::optional<u64> maxDumps;
+  std::optional<u64> width;
+  std::optional<u64> height;
   std::optional<u64> draw;
   std::vector<u64> draws;
   std::optional<u64> commandIndex;
@@ -815,6 +883,27 @@ const ColorAttachmentDumpConfig& colorAttachmentDumpConfig() {
     result.index = parseEnvU64Auto("DXMT9_DUMP_COLOR_ATTACHMENT_INDEX");
     result.seq = parseEnvU64Auto("DXMT9_DUMP_COLOR_ATTACHMENT_SEQ");
     result.enc = parseEnvU64Auto("DXMT9_DUMP_COLOR_ATTACHMENT_ENC");
+    bool malformed = false;
+    const auto hashOnly = parseDrawTextureU64(
+        "DXMT9_DUMP_COLOR_ATTACHMENT_HASH_ONLY", malformed);
+    result.hashOnly = hashOnly.value_or(0u) == 1u;
+    malformed = malformed || hashOnly.value_or(0u) > 1u;
+    const auto depthPair = parseDrawTextureU64(
+        "DXMT9_DUMP_COLOR_ATTACHMENT_DEPTH_PAIR", malformed);
+    result.depthPair = depthPair.value_or(0u) == 1u;
+    malformed = malformed || depthPair.value_or(0u) > 1u;
+    const auto captureOnly = parseDrawTextureU64(
+        "DXMT9_DUMP_COLOR_ATTACHMENT_CAPTURE_SOURCES_ONLY", malformed);
+    result.captureSourcesOnly = captureOnly.value_or(0u) == 1u;
+    malformed = malformed || captureOnly.value_or(0u) > 1u;
+    result.frame = parseDrawTextureU64("DXMT9_DUMP_COLOR_ATTACHMENT_FRAME", malformed);
+    result.maxDumps = parseDrawTextureU64("DXMT9_DUMP_COLOR_ATTACHMENT_MAX_DUMPS", malformed);
+    result.width = parseDrawTextureU64("DXMT9_DUMP_COLOR_ATTACHMENT_WIDTH", malformed);
+    result.height = parseDrawTextureU64("DXMT9_DUMP_COLOR_ATTACHMENT_HEIGHT", malformed);
+    for (const auto extent : {result.width, result.height}) {
+      if (extent && (*extent == 0u || *extent > std::numeric_limits<u32>::max()))
+        malformed = true;
+    }
     result.draw = parseEnvU64Auto("DXMT9_DUMP_COLOR_ATTACHMENT_DRAW");
     result.draws = parseEnvU64ListAuto("DXMT9_DUMP_COLOR_ATTACHMENT_DRAWS");
     result.commandIndex =
@@ -852,6 +941,7 @@ const ColorAttachmentDumpConfig& colorAttachmentDumpConfig() {
                       !result.dir.empty() ||
                       !result.roiSummaryPath.empty()) &&
                      (result.handle.has_value() ||
+                      result.width.has_value() || result.height.has_value() ||
                       result.index.has_value() ||
                       result.seq.has_value() ||
                       result.enc.has_value() ||
@@ -863,45 +953,177 @@ const ColorAttachmentDumpConfig& colorAttachmentDumpConfig() {
                       result.commandDrawIndex.has_value() ||
                       result.texture0.has_value() ||
                       !result.texture0s.empty());
+    if (malformed || !colorAttachmentDepthPairPolicyValid(
+            result.depthPair, result.hashOnly, result.afterDraw,
+            result.maxDumps.value_or(0u)) || !colorAttachmentDumpFramePolicyValid(
+            result.frame.has_value(), result.frame.value_or(0u),
+            result.maxDumps.has_value(), result.maxDumps.value_or(0u),
+            result.hashOnly) ||
+        (result.hashOnly && result.path.empty() && result.dir.empty()) ||
+        (result.captureSourcesOnly && !result.hashOnly)) {
+      result.enabled = false;
+      std::fprintf(stderr, "[dxmt9-color] invalid bounded dump configuration: "
+                   "FRAME must be positive; FRAME/HASH_ONLY requires MAX_DUMPS; "
+                   "raw cap 256, hash-only cap 16384; HASH_ONLY needs PATH/DIR; "
+                   "CAPTURE_SOURCES_ONLY needs HASH_ONLY; WIDTH/HEIGHT must be positive uint32; "
+                   "DEPTH_PAIR needs HASH_ONLY, pass-end and MAX_DUMPS <= 256\n");
+    }
     return result;
   }();
   return config;
 }
 
+ColorAttachmentDumpFrameCursor& colorAttachmentDumpFrameCursor() {
+  static thread_local ColorAttachmentDumpFrameCursor cursor;
+  return cursor;
+}
+
+struct CaptureColorObserverStorage {
+  using PassKey = std::tuple<u64, u64, u64, u64>;
+  std::mutex mutex;
+  ColorAttachmentCaptureTable<1024u> sources;
+  std::map<PassKey, ColorAttachmentCaptureSource> passes;
+  std::map<PassKey, ColorAttachmentCaptureSource> textures;
+};
+
+std::optional<ColorAttachmentCaptureSource>& selectedDrawCaptureSource();
+
+CaptureColorObserverStorage& captureColorObserverStorage() {
+  static CaptureColorObserverStorage storage;
+  return storage;
+}
+
+auto captureColorPassKey(const ActiveColorAttachmentDump& active) {
+  // The existing active texture reference pins this native identity until the
+  // completion callback. No extra payload/zero-fill is added to per-pass hot
+  // state just to carry capture provenance.
+  return CaptureColorObserverStorage::PassKey{
+      active.texture.handle, active.handle.value, active.seq, active.enc};
+}
+
+bool rememberCaptureColorPass(const ActiveColorAttachmentDump& active,
+                              const ColorAttachmentCaptureSource& source) noexcept {
+  try {
+    auto& storage = captureColorObserverStorage();
+    std::lock_guard lock(storage.mutex);
+    const auto key = captureColorPassKey(active);
+    if (const auto it = storage.passes.find(key); it != storage.passes.end()) {
+      return it->second.owner == source.owner && it->second.ticket == source.ticket;
+    }
+    if (storage.passes.size() >= 16384u) return false;
+    storage.passes.emplace(key, source);
+    return true;
+  } catch (...) {
+    return false;  // Allocation failure loses observation, never rendering.
+  }
+}
+
+std::optional<ColorAttachmentCaptureSource> captureColorPassSource(
+    const ActiveColorAttachmentDump& active) {
+  if (!colorAttachmentDumpConfig().captureSourcesOnly) return std::nullopt;
+  auto& storage = captureColorObserverStorage();
+  std::lock_guard lock(storage.mutex);
+  const auto it = storage.passes.find(captureColorPassKey(active));
+  return it != storage.passes.end() ? std::optional(it->second) : std::nullopt;
+}
+
 struct DrawTextureDumpConfig {
   bool enabled = false;
+  bool invalid = false;
+  std::string invalidReason;
   bool texture0Any = false;
   std::vector<u64> handles;
+  std::vector<u64> slots;
+  std::optional<u64> pixelShader;
   std::optional<u64> texture0Width;
   std::optional<u64> texture0Height;
   std::optional<u64> texture0Format;
   std::optional<u64> seq;
   std::optional<u64> seqMin;
+  std::optional<u64> seqMax;
   std::optional<u64> enc;
+  bool repeatPerPass = false;
+  bool captureSourcesOnly = false;
+  std::optional<u64> maxDumps;
   std::string dir;
 };
 
 const DrawTextureDumpConfig& drawTextureDumpConfig() {
   static const DrawTextureDumpConfig config = [] {
     DrawTextureDumpConfig result{};
+    bool malformed = false;
     result.handles = parseEnvU64ListAuto("DXMT9_DUMP_DRAW_TEXTURE_HANDLES");
     if (const auto handle = parseEnvU64Auto("DXMT9_DUMP_DRAW_TEXTURE_HANDLE")) {
       result.handles.push_back(*handle);
     }
+    result.slots = parseDrawTextureU64List(
+        "DXMT9_DUMP_DRAW_TEXTURE_SLOTS", malformed);
+    result.pixelShader = parseDrawTextureU64(
+        "DXMT9_DUMP_DRAW_TEXTURE_PS", malformed);
     result.texture0Any = getenvFlagLocal("DXMT9_DUMP_DRAW_TEXTURE0_ANY");
     result.texture0Width = parseEnvU64Auto("DXMT9_DUMP_DRAW_TEXTURE0_WIDTH");
     result.texture0Height = parseEnvU64Auto("DXMT9_DUMP_DRAW_TEXTURE0_HEIGHT");
     result.texture0Format = parseEnvU64Auto("DXMT9_DUMP_DRAW_TEXTURE0_FORMAT");
     result.seq = parseEnvU64Auto("DXMT9_DUMP_DRAW_TEXTURE_SEQ");
-    result.seqMin = parseEnvU64Auto("DXMT9_DUMP_DRAW_TEXTURE_SEQ_MIN");
+    result.seqMin = parseDrawTextureU64(
+        "DXMT9_DUMP_DRAW_TEXTURE_SEQ_MIN", malformed);
+    result.seqMax = parseDrawTextureU64(
+        "DXMT9_DUMP_DRAW_TEXTURE_SEQ_MAX", malformed);
     result.enc = parseEnvU64Auto("DXMT9_DUMP_DRAW_TEXTURE_ENC");
+    result.repeatPerPass = getenvFlagLocal("DXMT9_DUMP_DRAW_TEXTURE_REPEAT_PER_PASS");
+    const char* captureScope = std::getenv("DXMT9_DUMP_DRAW_TEXTURE_CAPTURE_SOURCES_ONLY");
+    result.captureSourcesOnly = captureScope && std::strcmp(captureScope, "1") == 0;
+    malformed = malformed || (captureScope && captureScope[0] != '\0' &&
+        std::strcmp(captureScope, "0") != 0 && std::strcmp(captureScope, "1") != 0);
+    result.maxDumps = parseDrawTextureU64(
+        "DXMT9_DUMP_DRAW_TEXTURE_MAX_DUMPS", malformed);
     result.dir = getenvStringLocal("DXMT9_DUMP_DRAW_TEXTURE_DIR");
+    if (malformed) {
+      result.invalid = true;
+      result.invalidReason =
+          "PS/SLOTS/SEQ bounds/MAX_DUMPS require unsigned integers; CAPTURE_SOURCES_ONLY requires 0/1";
+    } else if (result.captureSourcesOnly && !result.repeatPerPass) {
+      result.invalid = true;
+      result.invalidReason = "capture-only requires bounded repeat-per-pass mode";
+    } else if (std::any_of(result.slots.begin(), result.slots.end(),
+                           [](u64 slot) {
+                             return !drawTextureDumpSlotValid(
+                                 slot, core::kMaxTextures);
+                           })) {
+      result.invalid = true;
+      result.invalidReason = "SLOTS contains a value outside the texture-stage range";
+    } else if (result.repeatPerPass &&
+        (!result.seqMin.has_value() || !result.seqMax.has_value() ||
+         !result.maxDumps.has_value())) {
+      result.invalid = true;
+      result.invalidReason =
+          "repeat-per-pass requires SEQ_MIN, SEQ_MAX, and MAX_DUMPS";
+    } else if (result.repeatPerPass &&
+               !drawTextureDumpRepeatPolicyValid(
+                   true, result.seqMin.has_value(), result.seqMin.value_or(0u),
+                   result.seqMax.has_value(), result.seqMax.value_or(0u),
+                   result.maxDumps.has_value(), result.maxDumps.value_or(0u))) {
+      result.invalid = true;
+      result.invalidReason =
+          "repeat-per-pass requires SEQ_MIN<=SEQ_MAX and MAX_DUMPS in [1,256]";
+    } else if (result.seqMax.has_value() && result.seqMin.has_value() &&
+               *result.seqMax < *result.seqMin) {
+      result.invalid = true;
+      result.invalidReason = "SEQ_MAX must be greater than or equal to SEQ_MIN";
+    }
     result.enabled = (!result.handles.empty() ||
+                      !result.slots.empty() ||
+                      result.pixelShader.has_value() ||
                       result.texture0Any ||
                       result.texture0Width.has_value() ||
                       result.texture0Height.has_value() ||
                       result.texture0Format.has_value()) &&
-                     !result.dir.empty();
+                     !result.dir.empty() && !result.invalid;
+    if (result.invalid) {
+      std::fprintf(stderr,
+                   "[dxmt9-texture] invalid draw-texture dump configuration: %s\n",
+                   result.invalidReason.c_str());
+    }
     return result;
   }();
   return config;
@@ -911,6 +1133,58 @@ const DrawTextureDumpConfig& drawTextureDumpConfig() {
 
 std::size_t drawTextureDumpReserveCapacity() {
   return drawTextureDumpConfig().handles.size();
+}
+
+bool colorAttachmentDumpFrameTrackingEnabled() {
+  static const bool enabled = colorAttachmentDumpConfig().enabled &&
+      colorAttachmentDumpConfig().frame.has_value();
+  return enabled;
+}
+
+bool captureColorAttachmentObservationEnabled() {
+  // Shared pre-Ready diagnostic provenance; effect-only capture must not
+  // require a color readback just to register the immutable source identity.
+  static const bool enabled = (colorAttachmentDumpConfig().enabled &&
+      colorAttachmentDumpConfig().captureSourcesOnly) || drawCaptureSourceTrackingEnabled();
+  return enabled;
+}
+
+bool drawCaptureSourceTrackingEnabled() {
+  static const bool enabled = effectDrawCaptureSourcesOnlyEnabled() ||
+      (drawTextureDumpConfig().enabled && drawTextureDumpConfig().captureSourcesOnly);
+  return enabled;
+}
+
+void recordCaptureColorAttachmentSource(
+    std::uintptr_t owner, const core::CpuReadyPublicationTicket& ticket) noexcept {
+  auto& storage = captureColorObserverStorage();
+  std::lock_guard lock(storage.mutex);
+  storage.sources.record(owner, ticket);
+}
+
+std::optional<ColorAttachmentCaptureSource> findCaptureColorAttachmentSource(
+    std::uintptr_t owner, std::uint64_t seq,
+    const core::CpuReadyTape::SourceRef& source) noexcept {
+  auto& storage = captureColorObserverStorage();
+  std::lock_guard lock(storage.mutex);
+  return storage.sources.find(owner, seq, source);
+}
+
+void forgetCaptureColorAttachmentOwner(std::uintptr_t owner) noexcept {
+  auto& storage = captureColorObserverStorage();
+  std::lock_guard lock(storage.mutex);
+  storage.sources.forget(owner);
+  std::erase_if(storage.passes, [owner](const auto& entry) {
+    return entry.second.owner == owner;
+  });
+  std::erase_if(storage.textures, [owner](const auto& entry) {
+    return entry.second.owner == owner;
+  });
+}
+
+void noteColorAttachmentDumpPresent(const resources::Pool& pool, u64 seq) {
+  colorAttachmentDumpFrameCursor().present(
+      reinterpret_cast<std::uintptr_t>(&pool), seq);
 }
 
 bool parallelRenderPassSidecarObservationEnabled() {
@@ -952,11 +1226,24 @@ void selectActiveColorAttachmentDump(
     bool renderEncoderActive,
     u64 seqId,
     u64 encoderIndex,
+    const core::CpuReadyTape::SourceRef& source,
     ActiveColorAttachmentDump& activeDump) {
   if (!renderEncoderActive || !colorAttachmentDumpConfig().enabled) {
     return;
   }
   const auto& colorDumpConfig = colorAttachmentDumpConfig();
+  std::optional<ColorAttachmentCaptureSource> captureSource;
+  if (colorDumpConfig.captureSourcesOnly) {
+    captureSource = findCaptureColorAttachmentSource(
+        reinterpret_cast<std::uintptr_t>(&pool), seqId, source);
+    if (!captureSource) return;
+  }
+  u64 frame = 0u;
+  if (colorDumpConfig.frame.has_value()) {
+    frame = colorAttachmentDumpFrameCursor().observe(
+        reinterpret_cast<std::uintptr_t>(&pool), seqId);
+    if (frame != *colorDumpConfig.frame) return;
+  }
   for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
     const auto colorHandle = drawState.hot->colorAttachments[i].handle;
     if (!colorHandle) {
@@ -983,15 +1270,21 @@ void selectActiveColorAttachmentDump(
     activeDump.width = std::max(1u, colorSurface->desc.width);
     activeDump.height = std::max(1u, colorSurface->desc.height);
     activeDump.index = static_cast<u32>(i);
+    activeDump.sampleCount = std::max(1u, core::sampleCount(colorSurface->desc.multiSampleType));
     activeDump.seq = seqId;
     activeDump.enc = encoderIndex;
+    activeDump.frame = frame;
+    if (captureSource && !rememberCaptureColorPass(activeDump, *captureSource)) {
+      activeDump = {};
+    }
     break;
   }
 }
 
 bool drawTextureDumpWantsTexture(u32 textureIndex,
                                  core::Handle handle,
-                                 const resources::TextureRecord& record) {
+                                 const resources::TextureRecord& record,
+                                 u64 pixelShaderHash) {
   const auto& config = drawTextureDumpConfig();
   if (!config.enabled || !handle) {
     return false;
@@ -999,6 +1292,15 @@ bool drawTextureDumpWantsTexture(u32 textureIndex,
   if (!config.handles.empty() &&
       std::find(config.handles.begin(), config.handles.end(),
                 handle.value) == config.handles.end()) {
+    return false;
+  }
+  if (!config.slots.empty() &&
+      std::find(config.slots.begin(), config.slots.end(), textureIndex) ==
+          config.slots.end()) {
+    return false;
+  }
+  if (config.pixelShader.has_value() &&
+      *config.pixelShader != pixelShaderHash) {
     return false;
   }
   if (!config.texture0Any &&
@@ -1079,9 +1381,13 @@ bool colorAttachmentDumpMatches(const ActiveColorAttachmentDump& active) {
   if (!config.enabled || !active.handle || !active.texture) {
     return false;
   }
+  if (config.captureSourcesOnly && !captureColorPassSource(active)) return false;
+  if ((config.width && *config.width != active.width) ||
+      (config.height && *config.height != active.height)) return false;
   if (config.afterDraw != active.afterDraw) {
     return false;
   }
+  if (config.frame.has_value() && *config.frame != active.frame) return false;
   if (config.handle.has_value() && *config.handle != active.handle.value) {
     return false;
   }
@@ -1137,6 +1443,9 @@ bool colorAttachmentDumpMatches(const ActiveColorAttachmentDump& active) {
       static std::mutex mutex;
       static std::unordered_set<std::string> dumped;
       std::lock_guard lock(mutex);
+      if (config.maxDumps.has_value() && dumped.size() >= *config.maxDumps) {
+        return false;
+      }
       return dumped.insert(key.str()).second;
     }
     static std::atomic_bool started{false};
@@ -1155,6 +1464,9 @@ bool colorAttachmentDumpMatches(const ActiveColorAttachmentDump& active) {
   static std::mutex mutex;
   static std::unordered_set<std::string> dumped;
   std::lock_guard lock(mutex);
+  if (config.maxDumps.has_value() && dumped.size() >= *config.maxDumps) {
+    return false;
+  }
   return dumped.insert(key.str()).second;
 }
 
@@ -1228,6 +1540,10 @@ std::string colorAttachmentDumpPath(const ActiveColorAttachmentDump& active) {
   std::ostringstream name;
   name << "color-s" << active.seq
        << "-e" << active.enc;
+  if (const auto source = captureColorPassSource(active)) {
+    name << "-owner0x" << std::hex << source->owner << std::dec
+         << "-gen" << source->ticket.id.generation;
+  }
   if (active.afterDraw) {
     name << "-after-draw-d" << active.draw;
     name << "-ci" << active.commandIndex;
@@ -1245,13 +1561,23 @@ std::string colorAttachmentDumpPath(const ActiveColorAttachmentDump& active) {
 
 bool drawTextureDumpPassMatches(u64 seq, u64 enc) {
   const auto& config = drawTextureDumpConfig();
+  if (config.invalid) {
+    return false;
+  }
   if (!config.enabled) {
     return false;
+  }
+  if (config.captureSourcesOnly) {
+    const auto& source = selectedDrawCaptureSource();
+    if (!source || source->ticket.seqId != seq) return false;
   }
   if (config.seq.has_value() && *config.seq != seq) {
     return false;
   }
   if (config.seqMin.has_value() && seq < *config.seqMin) {
+    return false;
+  }
+  if (config.seqMax.has_value() && seq > *config.seqMax) {
     return false;
   }
   if (config.enc.has_value() && *config.enc != enc) {
@@ -1260,16 +1586,60 @@ bool drawTextureDumpPassMatches(u64 seq, u64 enc) {
   return true;
 }
 
-u64 drawTextureDumpKey(const ActiveDrawTextureDump& active) {
-  u64 key = active.handle.value;
-  key ^= static_cast<u64>(active.srgb ? 0x9e37u : 0u) << 48u;
-  key ^= static_cast<u64>(active.vertexStage ? 0x51u : 0x23u) << 40u;
-  return key;
+auto capturedTextureKey(const ActiveDrawTextureDump& active) {
+  return CaptureColorObserverStorage::PassKey{
+      active.texture.handle, active.handle.value, active.seq, active.enc};
+}
+
+bool rememberCapturedTexture(const ActiveDrawTextureDump& active,
+                             const ColorAttachmentCaptureSource& source) noexcept {
+  try {
+    auto& storage = captureColorObserverStorage();
+    std::lock_guard lock(storage.mutex);
+    const auto key = capturedTextureKey(active);
+    if (const auto it = storage.textures.find(key); it != storage.textures.end()) {
+      return it->second.owner == source.owner && it->second.ticket == source.ticket;
+    }
+    if (storage.textures.size() >= kMaxDrawTextureDumpCount) return false;
+    storage.textures.emplace(key, source);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+std::optional<ColorAttachmentCaptureSource> capturedTextureSource(
+    const ActiveDrawTextureDump& active) {
+  if (!drawTextureDumpConfig().captureSourcesOnly) return std::nullopt;
+  auto& storage = captureColorObserverStorage();
+  std::lock_guard lock(storage.mutex);
+  const auto it = storage.textures.find(capturedTextureKey(active));
+  return it != storage.textures.end() ? std::optional(it->second) : std::nullopt;
+}
+
+using DrawTextureDumpPassKey = DrawTextureDumpPassIdentity;
+
+struct DrawTextureDumpPassKeyHash {
+  std::size_t operator()(const DrawTextureDumpPassKey& key) const noexcept {
+    std::size_t hash = std::hash<u64>{}(key.handle);
+    hash = hash * 31u + std::hash<bool>{}(key.srgb);
+    hash = hash * 31u + std::hash<bool>{}(key.vertexStage);
+    hash = hash * 31u + std::hash<u64>{}(key.seq);
+    hash = hash * 31u + std::hash<u64>{}(key.enc);
+    return hash;
+  }
+};
+
+DrawTextureDumpPassKey drawTextureDumpKey(const ActiveDrawTextureDump& active) {
+  const auto& config = drawTextureDumpConfig();
+  return makeDrawTextureDumpPassIdentity(
+      active.handle.value, active.srgb, active.vertexStage, active.seq,
+      active.enc, config.repeatPerPass);
 }
 
 bool drawTextureDumpAlreadyQueued(std::span<const ActiveDrawTextureDump> active,
                                   const ActiveDrawTextureDump& candidate) {
-  const u64 key = drawTextureDumpKey(candidate);
+  const auto key = drawTextureDumpKey(candidate);
   return std::any_of(active.begin(), active.end(), [&](const auto& entry) {
     return drawTextureDumpKey(entry) == key;
   });
@@ -1277,9 +1647,16 @@ bool drawTextureDumpAlreadyQueued(std::span<const ActiveDrawTextureDump> active,
 
 bool drawTextureDumpMarkStarted(const ActiveDrawTextureDump& active) {
   static std::mutex mutex;
-  static std::unordered_set<u64> started;
-  const u64 key = drawTextureDumpKey(active);
+  static std::unordered_set<DrawTextureDumpPassKey, DrawTextureDumpPassKeyHash>
+      started;
+  const auto key = drawTextureDumpKey(active);
   std::lock_guard lock(mutex);
+  const auto& config = drawTextureDumpConfig();
+  if (config.repeatPerPass && config.maxDumps.has_value() &&
+      started.size() >= *config.maxDumps &&
+      started.find(key) == started.end()) {
+    return false;
+  }
   return started.insert(key).second;
 }
 
@@ -1370,6 +1747,58 @@ void writeDepthAttachmentDump(const ActiveDepthAttachmentDump& active,
   }
 }
 
+struct ColorAttachmentChannelHashes {
+  const char* order = nullptr;
+  std::array<std::array<char, CC_SHA256_DIGEST_LENGTH * 2u + 1u>, 4u> hashes{};
+};
+
+// Cold completed-readback projection only. No extra GPU work or hot payload.
+ColorAttachmentChannelHashes colorAttachmentChannelHashes(
+    const ActiveColorAttachmentDump& active, u32 rowBytes, u64 byteCount,
+    const void* bytes) {
+  ColorAttachmentChannelHashes result{};
+  if (!bytes || active.width == 0u || active.height == 0u ||
+      static_cast<u64>(active.width) * 4u != rowBytes ||
+      static_cast<u64>(rowBytes) * active.height != byteCount) {
+    return result;
+  }
+  switch (active.metalPixelFormat) {
+    case WMTPixelFormatBGRA8Unorm:
+    case WMTPixelFormatBGRA8Unorm_sRGB: result.order = "BGRA"; break;
+    case WMTPixelFormatRGBA8Unorm:
+    case WMTPixelFormatRGBA8Unorm_sRGB: result.order = "RGBA"; break;
+    default: return result;
+  }
+  std::array<CC_SHA256_CTX, 4u> contexts;
+  for (auto& context : contexts) CC_SHA256_Init(&context);
+  std::array<std::array<unsigned char, 1024u>, 4u> scratch;
+  const auto* data = static_cast<const unsigned char*>(bytes);
+  for (u64 pixel = 0u; pixel < byteCount / 4u;) {
+    const auto count = static_cast<std::size_t>(
+        std::min<u64>(scratch[0].size(), byteCount / 4u - pixel));
+    for (std::size_t i = 0u; i < count; ++i) {
+      for (std::size_t channel = 0u; channel < 4u; ++channel) {
+        scratch[channel][i] = data[(pixel + i) * 4u + channel];
+      }
+    }
+    for (std::size_t channel = 0u; channel < 4u; ++channel) {
+      CC_SHA256_Update(&contexts[channel], scratch[channel].data(),
+                       static_cast<CC_LONG>(count));
+    }
+    pixel += count;
+  }
+  constexpr char digits[] = "0123456789abcdef";
+  for (std::size_t channel = 0u; channel < 4u; ++channel) {
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256_Final(digest, &contexts[channel]);
+    for (std::size_t i = 0u; i < CC_SHA256_DIGEST_LENGTH; ++i) {
+      result.hashes[channel][i * 2u] = digits[digest[i] >> 4u];
+      result.hashes[channel][i * 2u + 1u] = digits[digest[i] & 15u];
+    }
+  }
+  return result;
+}
+
 void writeColorAttachmentDump(const ActiveColorAttachmentDump& active,
                               std::string path,
                               u32 rowBytes,
@@ -1379,21 +1808,78 @@ void writeColorAttachmentDump(const ActiveColorAttachmentDump& active,
     return;
   }
   try {
+    const bool hashOnly = colorAttachmentDumpConfig().hashOnly;
+    const auto passSource = captureColorPassSource(active);
+    if (colorAttachmentDumpConfig().captureSourcesOnly && !passSource) return;
+    const auto captureSource = passSource.value_or(ColorAttachmentCaptureSource{});
     const std::filesystem::path binaryPath(path);
+    if (hashOnly && std::filesystem::exists(binaryPath)) {
+      throw std::runtime_error("hash-only destination contains stale raw bytes");
+    }
     if (const auto parent = binaryPath.parent_path(); !parent.empty()) {
       std::filesystem::create_directories(parent);
     }
-    {
-      std::ofstream out(binaryPath, std::ios::binary | std::ios::trunc);
-      out.write(static_cast<const char*>(bytes), static_cast<std::streamsize>(byteCount));
+    // Hash precisely the completed GPU readback, without channel conversion,
+    // alpha normalization or ROI interpretation. Hash-only bounds disk use,
+    // not GPU transfer volume or timing perturbation.
+    CC_SHA256_CTX hashContext;
+    CC_SHA256_Init(&hashContext);
+    const auto* cursor = static_cast<const unsigned char*>(bytes);
+    for (u64 remaining = byteCount; remaining != 0u;) {
+      const auto count = static_cast<CC_LONG>(std::min<u64>(
+          remaining, std::numeric_limits<CC_LONG>::max()));
+      CC_SHA256_Update(&hashContext, cursor, count);
+      cursor += count;
+      remaining -= count;
     }
+    unsigned char hash[CC_SHA256_DIGEST_LENGTH];
+    CC_SHA256_Final(hash, &hashContext);
+    char hex[CC_SHA256_DIGEST_LENGTH * 2u + 1u]{};
+    constexpr char digits[] = "0123456789abcdef";
+    for (std::size_t i = 0; i < CC_SHA256_DIGEST_LENGTH; ++i) {
+      hex[i * 2u] = digits[hash[i] >> 4u];
+      hex[i * 2u + 1u] = digits[hash[i] & 15u];
+    }
+    if (!hashOnly) {
+      std::ofstream out(binaryPath, std::ios::binary | std::ios::trunc);
+      out.exceptions(std::ios::failbit | std::ios::badbit);
+      out.write(static_cast<const char*>(bytes), static_cast<std::streamsize>(byteCount));
+      out.close();
+    }
+    const auto channelHashes = colorAttachmentChannelHashes(active, rowBytes, byteCount, bytes);
     {
       std::ofstream meta(path + ".json", std::ios::trunc);
+      meta.exceptions(std::ios::failbit | std::ios::badbit);
       meta << "{\n"
+           << "  \"rawBytesRetained\": " << (hashOnly ? "false" : "true") << ",\n"
+           << "  \"sha256\": \"" << hex << "\",\n";
+      if (channelHashes.order) {
+        meta << "  \"rawChannelOrder\": \"" << channelHashes.order << "\",\n"
+             << "  \"channelSha256\": [";
+        for (std::size_t i = 0u; i < channelHashes.hashes.size(); ++i) {
+          if (i != 0u) meta << ", ";
+          meta << '"' << channelHashes.hashes[i].data() << '"';
+        }
+        meta << "],\n";
+      } else {
+        meta << "  \"rawChannelOrder\": null,\n  \"channelSha256\": null,\n";
+      }
+      meta << "  \"captureSourceOwner\": " << captureSource.owner << ",\n"
+           << "  \"captureSourceOrdinal\": " << captureSource.ticket.sourceOrdinal << ",\n"
+           << "  \"captureRawOrdinal\": " << captureSource.ticket.rawOrdinal << ",\n"
+           << "  \"captureSourceGeneration\": " << captureSource.ticket.id.generation << ",\n"
+           << "  \"captureStorageGeneration\": " << captureSource.ticket.storage.generation << ",\n"
            << "  \"handle\": \"0x" << std::hex << active.handle.value << std::dec << "\",\n"
            << "  \"seq\": " << active.seq << ",\n"
            << "  \"enc\": " << active.enc << ",\n"
+           << "  \"encodedFrame\": " << active.frame << ",\n"
            << "  \"index\": " << active.index << ",\n"
+           << "  \"sampleCount\": " << active.sampleCount << ",\n"
+           << "  \"storeActionKnown\": " << (active.storeActionKnown ? "true" : "false") << ",\n"
+           << "  \"effectiveStoreAction\": " << static_cast<u32>(active.effectiveStoreAction) << ",\n"
+           << "  \"storedAttachmentContents\": "
+           << (colorAttachmentDumpHasStoredContents(active.storeActionKnown,
+                   active.effectiveStoreAction, active.sampleCount) ? "true" : "false") << ",\n"
            << "  \"afterDraw\": " << (active.afterDraw ? 1 : 0) << ",\n"
            << "  \"draw\": " << active.draw << ",\n"
            << "  \"commandIndex\": " << active.commandIndex << ",\n"
@@ -1408,6 +1894,7 @@ void writeColorAttachmentDump(const ActiveColorAttachmentDump& active,
            << "  \"rowBytes\": " << rowBytes << ",\n"
            << "  \"byteCount\": " << byteCount << "\n"
            << "}\n";
+      meta.close();
     }
     std::ostringstream out;
     out << "[dxmt9-color] dump handle=0x" << std::hex << active.handle.value << std::dec
@@ -1424,6 +1911,8 @@ void writeColorAttachmentDump(const ActiveColorAttachmentDump& active,
         << " size=" << active.width << "x" << active.height
         << " rowBytes=" << rowBytes
         << " bytes=" << byteCount
+        << " rawBytesRetained=" << (hashOnly ? 0 : 1)
+        << " sha256=" << hex
         << " path=" << path;
     emitTextureTraceLine(out.str());
   } catch (const std::exception& e) {
@@ -1642,6 +2131,8 @@ void appendColorAttachmentRoiSummary(
 
 void writeDrawTextureDump(const TextureSidecarReadbackBatch& batch) {
   const auto& active = batch.active;
+  const auto provenance = capturedTextureSource(active);
+  if (drawTextureDumpConfig().captureSourcesOnly && !provenance) return;
   const std::string jsonPath = drawTextureDumpJsonPath(active);
   try {
     const std::filesystem::path metadataPath(jsonPath);
@@ -1665,8 +2156,11 @@ void writeDrawTextureDump(const TextureSidecarReadbackBatch& batch) {
       std::ofstream meta(jsonPath, std::ios::trunc);
       meta << "{\n"
            << "  \"handle\": \"0x" << std::hex << active.handle.value << std::dec << "\",\n"
+           << "  \"metalTextureObservationId\": " << active.metalTextureObservationId << ",\n"
            << "  \"seq\": " << active.seq << ",\n"
            << "  \"enc\": " << active.enc << ",\n"
+           << "  \"pixelShaderHash\": \"0x" << std::hex
+           << active.pixelShaderHash << std::dec << "\",\n"
            << "  \"textureIndex\": " << active.textureIndex << ",\n"
            << "  \"stage\": " << active.stage << ",\n"
            << "  \"shaderStage\": \"" << drawTextureDumpShaderStageName(active) << "\",\n"
@@ -1682,8 +2176,15 @@ void writeDrawTextureDump(const TextureSidecarReadbackBatch& batch) {
            << "  \"width\": " << active.width << ",\n"
            << "  \"height\": " << active.height << ",\n"
            << "  \"depth\": " << active.depth << ",\n"
-           << "  \"levels\": " << active.levels << ",\n"
-           << "  \"subresources\": [\n";
+           << "  \"levels\": " << active.levels << ",\n";
+      if (provenance) {
+        meta << "  \"captureSourceOwner\": " << provenance->owner << ",\n"
+             << "  \"captureSourceOrdinal\": " << provenance->ticket.sourceOrdinal << ",\n"
+             << "  \"captureRawOrdinal\": " << provenance->ticket.rawOrdinal << ",\n"
+             << "  \"captureSourceGeneration\": " << provenance->ticket.id.generation << ",\n"
+             << "  \"captureStorageGeneration\": " << provenance->ticket.storage.generation << ",\n";
+      }
+      meta << "  \"subresources\": [\n";
       for (std::size_t i = 0; i < batch.subresources.size(); ++i) {
         const auto& subresource = batch.subresources[i];
         meta << "    {\n"
@@ -1772,13 +2273,156 @@ void maybeEncodeDepthAttachmentDump(
       });
 }
 
+// A cold companion to the already selected color readback. This never selects
+// a pass, consumes another budget, changes Store, or publishes GPU work.
+static void maybeEncodePairedDepthAttachmentDump(
+    WMT::CommandBuffer& commandBuffer,
+    WMT::Reference<WMT::Device> device,
+    const ActiveColorAttachmentDump& color,
+    const ActiveDepthAttachmentDump& depth,
+    const LateRenderPassStoreState& resolvedStore,
+    const std::string& colorPath,
+    std::vector<std::function<void()>>& completionCallbacks) {
+  if (!colorAttachmentDumpConfig().depthPair || colorPath.empty() ||
+      !depth.handle || !depth.texture || !depth.hasDepth || depth.hasStencil ||
+      depth.seq != color.seq || depth.enc != color.enc) return;
+  bool known = false;
+  auto action = WMTStoreActionUnknown;
+  for (std::size_t i = 0; i < resolvedStore.count; ++i) {
+    const auto& attachment = resolvedStore.attachments[i];
+    if (attachment.aspect == LateRenderPassStoreAspect::Depth &&
+        attachment.handle == depth.handle) {
+      known = !attachment.unresolved();
+      action = attachment.action;
+      break;
+    }
+  }
+  id<MTLTexture> texture = (__bridge id<MTLTexture>)(void*)depth.texture.handle;
+  const bool depthPlane = depth.format == core::Format::D24X8 &&
+      texture.pixelFormat == MTLPixelFormatDepth32Float_Stencil8;
+  const bool supportedDepth = (texture.pixelFormat == MTLPixelFormatDepth32Float || depthPlane) &&
+      texture.textureType == MTLTextureType2D && texture.mipmapLevelCount == 1u &&
+      texture.arrayLength == 1u && texture.depth == 1u &&
+      texture.width == depth.width && texture.height == depth.height;
+  if (!colorAttachmentDepthPairHasStoredContents(known, action,
+          texture.sampleCount, supportedDepth, texture.width, texture.height,
+          color.width, color.height)) return;
+  const auto source = captureColorPassSource(color);
+  if (colorAttachmentDumpConfig().captureSourcesOnly && !source) return;
+  try {
+    const u32 rowBytes = depth.width * 4u;
+    const u64 byteCount = static_cast<u64>(rowBytes) * depth.height;
+    WMTBufferInfo info{};
+    info.length = byteCount;
+    info.options = WMTResourceStorageModeShared;
+    auto buffer = device.newBuffer(info);
+    void* memory = info.memory.get_accessible_or_null();
+    if (!buffer || !memory) return;
+    // Allocate callback storage before encoding the copy. On allocation
+    // failure the observation is absent; normal rendering still proceeds.
+    const auto nativeFormat = static_cast<u32>(texture.pixelFormat);
+    std::function<void()> completed = [depth, color, colorPath, source, nativeFormat, depthPlane,
+                                      rowBytes, byteCount, buffer, memory] {
+      (void)buffer;
+      try {
+        const std::filesystem::path binaryPath(colorPath + ".depth.bin");
+        const std::filesystem::path metadataPath(colorPath + ".depth.json");
+        if (std::filesystem::exists(binaryPath) || std::filesystem::exists(metadataPath))
+          throw std::runtime_error("paired depth destination already exists");
+        if (const auto parent = binaryPath.parent_path(); !parent.empty())
+          std::filesystem::create_directories(parent);
+        unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+        CC_SHA256(memory, static_cast<CC_LONG>(byteCount), digest);
+        char hex[CC_SHA256_DIGEST_LENGTH * 2u + 1u]{};
+        constexpr char digits[] = "0123456789abcdef";
+        for (std::size_t i = 0; i < CC_SHA256_DIGEST_LENGTH; ++i) {
+          hex[i * 2u] = digits[digest[i] >> 4u];
+          hex[i * 2u + 1u] = digits[digest[i] & 15u];
+        }
+        std::ofstream raw(binaryPath, std::ios::binary | std::ios::trunc);
+        raw.exceptions(std::ios::failbit | std::ios::badbit);
+        raw.write(static_cast<const char*>(memory), static_cast<std::streamsize>(byteCount));
+        raw.close();
+        const auto capture = source.value_or(ColorAttachmentCaptureSource{});
+        std::ofstream meta(metadataPath, std::ios::trunc);
+        meta.exceptions(std::ios::failbit | std::ios::badbit);
+        meta << "{\n  \"schema\": \"dxmt9.paired_pass_depth.v1\",\n"
+             << "  \"diagnosticOnly\": true,\n  \"rawBytesRetained\": true,\n"
+             << "  \"sha256\": \"" << hex << "\",\n"
+             << "  \"pairedColorMetadata\": \"";
+        for (const unsigned char ch : std::filesystem::path(colorPath + ".json").filename().string()) {
+          if (ch == '"' || ch == '\\') meta << '\\' << ch;
+          else if (ch < 0x20u) meta << "\\u00" << digits[ch >> 4u] << digits[ch & 15u];
+          else meta << ch;
+        }
+        meta << "\",\n  \"captureSourceOwner\": " << capture.owner << ",\n"
+             << "  \"captureSourceOrdinal\": " << capture.ticket.sourceOrdinal << ",\n"
+             << "  \"captureRawOrdinal\": " << capture.ticket.rawOrdinal << ",\n"
+             << "  \"captureSourceGeneration\": " << capture.ticket.id.generation << ",\n"
+             << "  \"captureStorageGeneration\": " << capture.ticket.storage.generation << ",\n"
+             << "  \"handle\": \"0x" << std::hex << depth.handle.value << std::dec << "\",\n"
+             << "  \"seq\": " << depth.seq << ",\n  \"enc\": " << depth.enc << ",\n"
+             << "  \"encodedFrame\": " << color.frame << ",\n"
+             << "  \"metalPixelFormat\": " << nativeFormat << ",\n"
+             << "  \"depthDataFormat\": \"float32-le\",\n"
+             << "  \"depthPlaneExtraction\": " << (depthPlane ? "true" : "false") << ",\n"
+             << "  \"width\": " << depth.width << ",\n  \"height\": " << depth.height << ",\n"
+             << "  \"rowBytes\": " << rowBytes << ",\n  \"byteCount\": " << byteCount << ",\n"
+             << "  \"sampleCount\": 1,\n  \"storeActionKnown\": true,\n"
+             << "  \"effectiveStoreAction\": 1,\n  \"storedAttachmentContents\": true\n}\n";
+        meta.close();
+      } catch (const std::exception& error) {
+        emitTextureTraceLine(std::string("[dxmt9-depth-pair] write-failed: ") + error.what());
+      }
+    };
+    completionCallbacks.reserve(completionCallbacks.size() + 1u);
+    const auto label = makeLabelStringFmt("Blit[PairedDepthAttachmentDump seq=%llu enc=%llu]",
+        static_cast<unsigned long long>(depth.seq), static_cast<unsigned long long>(depth.enc));
+    auto blit = commandBuffer.blitCommandEncoder();
+    if (!blit) return;
+    blit.setLabel(label);
+    if (depthPlane) {
+      id<MTLBlitCommandEncoder> nativeBlit = (__bridge id<MTLBlitCommandEncoder>)(void*)blit.handle;
+      id<MTLBuffer> nativeBuffer = (__bridge id<MTLBuffer>)(void*)buffer.handle;
+      [nativeBlit copyFromTexture:texture sourceSlice:0 sourceLevel:0
+                    sourceOrigin:MTLOriginMake(0, 0, 0)
+                      sourceSize:MTLSizeMake(depth.width, depth.height, 1)
+                        toBuffer:nativeBuffer destinationOffset:0
+          destinationBytesPerRow:rowBytes destinationBytesPerImage:byteCount
+                         options:MTLBlitOptionDepthFromDepthStencil];
+    } else {
+      blit.copyFromTextureToBuffer(WMT::Texture{depth.texture.handle}, 0, 0,
+          WMTOrigin{0, 0, 0}, WMTSize{depth.width, depth.height, 1},
+          WMT::Buffer{buffer.handle}, 0, rowBytes, 0);
+    }
+    blit.endEncoding();
+    completionCallbacks.push_back(std::move(completed));
+  } catch (const std::exception& error) {
+    emitTextureTraceLine(std::string("[dxmt9-depth-pair] admission-failed: ") + error.what());
+  }
+}
+
 void maybeEncodeColorAttachmentDump(
     WMT::CommandBuffer& commandBuffer,
     WMT::Reference<WMT::Device> device,
     const ActiveColorAttachmentDump& active,
+    const ActiveDepthAttachmentDump& depth,
+    const LateRenderPassStoreState& resolvedStore,
     std::vector<std::function<void()>>& completionCallbacks) {
   if (!colorAttachmentDumpMatches(active)) {
     return;
+  }
+  // Pull only after the existing selector succeeds and late Store has settled.
+  // Never force a Store or split a pass to manufacture an observable result.
+  auto observed = active;
+  for (std::size_t i = 0; i < resolvedStore.count; ++i) {
+    const auto& attachment = resolvedStore.attachments[i];
+    if (attachment.aspect == LateRenderPassStoreAspect::Color &&
+        attachment.colorIndex == active.index && attachment.handle == active.handle) {
+      observed.effectiveStoreAction = attachment.action;
+      observed.storeActionKnown = !attachment.unresolved();
+      break;
+    }
   }
   const u32 bpp = core::bytesPerPixel(active.format);
   if (bpp == 0 || active.width == 0 || active.height == 0) {
@@ -1816,7 +2460,7 @@ void maybeEncodeColorAttachmentDump(
   const auto path = colorAttachmentDumpPath(active);
   const auto summaryPath = colorAttachmentDumpConfig().roiSummaryPath;
   completionCallbacks.push_back(
-      [active, path, summaryPath, region, rowBytes, byteCount,
+      [active = observed, path, summaryPath, region, rowBytes, byteCount,
        readbackBuffer, readbackMemory] {
         (void)readbackBuffer;
         if (!path.empty()) {
@@ -1825,6 +2469,8 @@ void maybeEncodeColorAttachmentDump(
         appendColorAttachmentRoiSummary(active, summaryPath, region, rowBytes,
                                         readbackMemory);
       });
+  maybeEncodePairedDepthAttachmentDump(commandBuffer, device, observed, depth,
+                                       resolvedStore, path, completionCallbacks);
 }
 
 void maybeCollectDrawTextureDump(
@@ -1836,14 +2482,24 @@ void maybeCollectDrawTextureDump(
   if (!drawState.hot || !drawTextureDumpPassMatches(seq, enc)) {
     return;
   }
+  const auto& captureSource = selectedDrawCaptureSource();
+  if (drawTextureDumpConfig().captureSourcesOnly &&
+      (!captureSource || captureSource->owner != reinterpret_cast<std::uintptr_t>(&pool))) {
+    return;
+  }
   const auto& hot = *drawState.hot;
+  // Match the shader bytecode identity exposed by effect-draw/MSL dumps, not
+  // the kind/length-qualified state-key summary in hot.key.pixelShaderHash.
+  const u64 pixelShaderHash = drawState.hasShaderContext()
+      ? drawState.shaderContext().pixelShader.hash : 0u;
   for (u32 textureIndex = 0; textureIndex < core::kMaxTextures; ++textureIndex) {
     const auto handle = hot.textures[textureIndex];
     const auto* record = pool.findTexture(handle.value);
     if (!record || !record->texture) {
       continue;
     }
-    if (!drawTextureDumpWantsTexture(textureIndex, handle, *record)) {
+    if (!drawTextureDumpWantsTexture(textureIndex, handle, *record,
+                                     pixelShaderHash)) {
       continue;
     }
     const bool vertexStage = textureIndex >= core::kVertexTextureSampler0;
@@ -1855,6 +2511,8 @@ void maybeCollectDrawTextureDump(
     ActiveDrawTextureDump candidate{};
     candidate.handle = handle;
     candidate.texture = resources::textureForShaderRead(*record, srgbTexture);
+    candidate.metalTextureObservationId =
+        diagnostics::metalTextureObservationId(candidate.texture.handle);
     candidate.format = record->desc.format;
     candidate.type = record->desc.type;
     candidate.storageMetalPixelFormat =
@@ -1875,8 +2533,11 @@ void maybeCollectDrawTextureDump(
         (!srgbTexture && record->shaderReadTexture);
     candidate.seq = seq;
     candidate.enc = enc;
+    candidate.pixelShaderHash = pixelShaderHash;
     if (!candidate.texture ||
         drawTextureDumpAlreadyQueued(activeDumps, candidate) ||
+        (drawTextureDumpConfig().captureSourcesOnly &&
+         !rememberCapturedTexture(candidate, *captureSource)) ||
         !drawTextureDumpMarkStarted(candidate)) {
       continue;
     }
@@ -2025,6 +2686,7 @@ void recordedSetRenderPipelineState(EncodeContext& ctx,
   }
   if (!suppressRecordedMetalCalls(ctx)) {
     encoder.setRenderPipelineState(pipeline);
+    if (effectIssuedGeometryEnabled()) noteEffectIssuedPipeline(encoder.handle, pipeline);
   }
 }
 
@@ -2038,6 +2700,7 @@ void recordedSetDepthStencilState(EncodeContext& ctx,
   }
   if (!suppressRecordedMetalCalls(ctx)) {
     encoder.setDepthStencilState(depthStencil, stencilRef);
+    if (effectIssuedGeometryEnabled()) noteEffectIssuedStencilRef(encoder.handle, stencilRef);
   }
 }
 
@@ -2055,6 +2718,9 @@ void recordedSetBlendColorAndStencilRef(EncodeContext& ctx,
   }
   if (!suppressRecordedMetalCalls(ctx)) {
     encoder.setBlendColorAndStencilRef(red, green, blue, alpha, stencilRef);
+    if (effectIssuedGeometryEnabled()) {
+      noteEffectIssuedBlendStencil(encoder.handle, red, green, blue, alpha, stencilRef);
+    }
   }
 }
 
@@ -2067,6 +2733,7 @@ void recordedSetViewport(EncodeContext& ctx,
   }
   if (!suppressRecordedMetalCalls(ctx)) {
     encoder.setViewport(viewport);
+    if (effectIssuedGeometryEnabled()) noteEffectIssuedViewport(encoder.handle, viewport);
   }
 }
 
@@ -2079,6 +2746,7 @@ void recordedSetScissorRect(EncodeContext& ctx,
   }
   if (!suppressRecordedMetalCalls(ctx)) {
     encoder.setScissorRect(rect);
+    if (effectIssuedGeometryEnabled()) noteEffectIssuedScissor(encoder.handle, rect);
   }
 }
 
@@ -2100,6 +2768,10 @@ void recordedSetRasterizerState(EncodeContext& ctx,
   if (!suppressRecordedMetalCalls(ctx)) {
     encoder.setRasterizerState(fillMode, cullMode, depthClipMode, winding,
                                depthBias, slopeScale, depthBiasClamp);
+    if (effectIssuedGeometryEnabled()) {
+      noteEffectIssuedRasterizer(encoder.handle, fillMode, cullMode, depthClipMode,
+                                winding, depthBias, slopeScale, depthBiasClamp);
+    }
   }
 }
 
@@ -2166,6 +2838,9 @@ void recordedSetVertexBuffer(EncodeContext& ctx,
   }
   if (!suppressRecordedMetalCalls(ctx)) {
     encoder.setVertexBuffer(buffer, offset, index);
+    if (effectIssuedGeometryEnabled()) {
+      noteEffectIssuedVertexBuffer(encoder.handle, buffer, offset, index);
+    }
   }
 }
 
@@ -2180,6 +2855,9 @@ void recordedSetVertexBytes(EncodeContext& ctx,
   }
   if (!suppressRecordedMetalCalls(ctx)) {
     encoder.setVertexBytes(bytes, length, index);
+    if (effectIssuedGeometryEnabled()) {
+      noteEffectIssuedVertexBytes(encoder.handle, bytes, length, index);
+    }
   }
 }
 
@@ -2213,6 +2891,7 @@ void recordedDrawPrimitives(EncodeContext& ctx,
   if (!suppressRecordedMetalCalls(ctx)) {
     encoder.drawPrimitives(primitiveType, vertexStart, vertexCount,
                            instanceCount, baseInstance);
+    if (effectIssuedGeometryEnabled()) traceEffectIssuedRaster(encoder.handle, false);
   }
 }
 
@@ -2234,9 +2913,21 @@ void recordedDrawIndexedPrimitives(EncodeContext& ctx,
                                     baseVertex, baseInstance);
   }
   if (!suppressRecordedMetalCalls(ctx)) {
+    static const bool probe = diagnostics::vertexPositionProbeEnabled();
+    if (probe) {
+      issueIndexedVertexPositionProbe(encoder, primitiveType, indexType, indexCount,
+          indexBuffer, indexBufferOffset, instanceCount, baseVertex, baseInstance);
+      return;
+    }
     encoder.drawIndexedPrimitives(primitiveType, indexType, indexCount,
                                   indexBuffer, indexBufferOffset,
                                   instanceCount, baseVertex, baseInstance);
+    if (effectIssuedGeometryEnabled()) {
+      traceEffectIssuedRaster(encoder.handle, true);
+      traceEffectIssuedIndexedGeometry(encoder.handle, indexType, indexCount,
+                                      indexBuffer, indexBufferOffset, instanceCount,
+                                      baseVertex, baseInstance);
+    }
   }
 }
 
@@ -2306,12 +2997,363 @@ bool x8ShaderAlphaFillEnabledForDiagnostics();
 bool effectDrawTraceEnabled() {
   static const bool enabled = [] {
     const char* env = std::getenv("DXMT9_EFFECT_DRAW_TRACE");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+    if (!env || env[0] == '\0' || std::strcmp(env, "0") == 0) return false;
+    const char* scope = std::getenv("DXMT9_EFFECT_DRAW_TRACE_CAPTURE_SOURCES_ONLY");
+    if (scope && scope[0] != '\0' && std::strcmp(scope, "0") != 0 &&
+        std::strcmp(scope, "1") != 0) {
+      std::fprintf(stderr, "[dxmt9-effect] invalid CAPTURE_SOURCES_ONLY; trace disabled\n");
+      return false;
+    }
+    return true;
+  }();
+  return enabled;
+}
+
+bool effectDrawCaptureSourcesOnlyEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_EFFECT_DRAW_TRACE_CAPTURE_SOURCES_ONLY");
+    return effectDrawTraceEnabled() && env && std::strcmp(env, "1") == 0;
+  }();
+  return enabled;
+}
+
+bool effectDrawBindingTraceEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_EFFECT_DRAW_TRACE_BINDINGS");
+    return effectDrawTraceEnabled() && env && env[0] != '\0' &&
+           std::strcmp(env, "0") != 0;
   }();
   return enabled;
 }
 
 namespace {
+
+std::optional<ColorAttachmentCaptureSource>& selectedDrawCaptureSource() {
+  static thread_local std::optional<ColorAttachmentCaptureSource> source;
+  return source;
+}
+
+void appendEffectCaptureSource(std::ostream& out) {
+  if (!effectDrawCaptureSourcesOnlyEnabled()) return;
+  const auto& source = selectedDrawCaptureSource();
+  if (!source) return;
+  out << " capture_source_owner=" << source->owner
+      << " capture_source_ordinal=" << source->ticket.sourceOrdinal
+      << " capture_raw_ordinal=" << source->ticket.rawOrdinal
+      << " capture_source_generation=" << source->ticket.id.generation
+      << " capture_storage_generation=" << source->ticket.storage.generation;
+}
+
+struct EffectDirectCbufBindings {
+  obj_handle_t encoder = 0u;
+  argbuf_hybrid::ConstantBufferBindings bindings{};
+};
+
+struct EffectIssuedGeometry {
+  obj_handle_t encoder = 0u;
+  WMT::Buffer stream0{};
+  u64 stream0Offset = 0u;
+  struct ExtraStream {
+    WMT::Buffer buffer{};
+    u64 offset = 0u;
+    u32 stride = 0u;
+    bool declared = false;
+    bool bufferKnown = false;
+  };
+  // Cold diagnostic shadow only. Binding identity comes from issued Metal
+  // calls; declaration/stride are expected metadata, not PSO reflection.
+  std::array<ExtraStream, core::kMaxStreams> extraStreams{};
+  state::DrawVolatile volatileValue{};
+  bool volatileKnown = false;
+  bool selected = false;
+  u64 seq = 0u;
+  u64 ordinal = 0u;
+  u64 probeCommandBuffer = 0u;
+  u64 probeSeq = 0u;
+  u64 probeOrdinal = 0u;
+  // Values below are captured only after actual Metal calls. Known flags are
+  // independent: Metal defaults are not evidence that we bound those values.
+  WMT::RenderPipelineState pipeline{};
+  WMTViewport viewport{};
+  WMTScissorRect scissor{};
+  std::array<u32, 4> rasterModes{};
+  std::array<float, 3> depthBias{};
+  std::array<float, 4> blendColor{};
+  std::uint8_t stencilRef = 0u;
+  bool viewportKnown = false;
+  bool scissorKnown = false;
+  bool rasterKnown = false;
+  bool blendKnown = false;
+  bool stencilRefKnown = false;
+};
+
+EffectIssuedGeometry& effectIssuedGeometry() {
+  static thread_local EffectIssuedGeometry value;
+  return value;
+}
+
+bool effectIssuedGeometryEnabled() {
+  static const bool enabled = effectDrawBindingTraceEnabled() &&
+      effectDrawTraceGeometryEnabled();
+  return enabled;
+}
+
+void issueIndexedVertexPositionProbe(WMT::RenderCommandEncoder& encoder,
+    WMTPrimitiveType primitiveType, WMTIndexType indexType, u64 indexCount,
+    WMT::Buffer indexBuffer, u64 indexOffset, u32 instances,
+    i32 baseVertex, u32 baseInstance) {
+  const auto& state = effectIssuedGeometry();
+  diagnostics::VertexPositionProbeDraw draw;
+  draw.encoder = encoder.handle;
+  draw.commandBuffer = state.probeCommandBuffer;
+  draw.pipeline = state.pipeline.handle;
+  draw.seq = state.seq;
+  draw.ordinal = state.ordinal;
+  draw.indexBuffer = indexBuffer.handle;
+  draw.indexOffset = indexOffset;
+  draw.indexCount = indexCount;
+  draw.indexBytes = indexType == WMTIndexTypeUInt16 ? 2u : indexType == WMTIndexTypeUInt32 ? 4u : 0u;
+  draw.instances = instances;
+  draw.baseVertex = baseVertex;
+  draw.baseInstance = baseInstance;
+  draw.triangleList = primitiveType == WMTPrimitiveTypeTriangle;
+  const auto& source = selectedDrawCaptureSource();
+  if (source && source->ticket.seqId == state.seq) {
+    draw.captureOwner = source->owner;
+    draw.sourceOrdinal = source->ticket.sourceOrdinal;
+    draw.rawOrdinal = source->ticket.rawOrdinal;
+    draw.sourceGeneration = source->ticket.id.generation;
+    draw.storageGeneration = source->ticket.storage.generation;
+    draw.sourceKnown = draw.captureOwner && draw.sourceOrdinal && draw.rawOrdinal &&
+        draw.sourceGeneration && draw.storageGeneration;
+  } else if (!effectDrawCaptureSourcesOnlyEnabled()) {
+    // Replay-local identity only. External source-plan qualification supplies
+    // the mapping; never manufacture an original capture ticket here.
+    const auto seqFilter = parseEnvU64Auto("DXMT9_EFFECT_DRAW_TRACE_SEQ");
+    draw.sourceKnown = seqFilter && *seqFilter != 0 && *seqFilter == state.seq;
+  }
+  draw.sourceKnown &= state.selected && state.encoder == encoder.handle &&
+      state.probeSeq == state.seq && state.probeOrdinal == state.ordinal;
+  const auto issue = [&](u64 actualPipeline) noexcept {
+    encoder.drawIndexedPrimitives(primitiveType, indexType, indexCount, indexBuffer,
+        indexOffset, instances, baseVertex, baseInstance);
+    noteEffectIssuedPipeline(encoder.handle, WMT::RenderPipelineState{actualPipeline});
+    traceEffectIssuedRaster(encoder.handle, true);
+    traceEffectIssuedIndexedGeometry(encoder.handle, indexType, indexCount, indexBuffer,
+        indexOffset, instances, baseVertex, baseInstance);
+  };
+  diagnostics::withVertexPositionProbe(draw, [](void* userdata, u64 pipeline) noexcept {
+    (*static_cast<const decltype(issue)*>(userdata))(pipeline);
+  }, const_cast<void*>(static_cast<const void*>(&issue)));
+  noteEffectIssuedPipeline(encoder.handle, WMT::RenderPipelineState{draw.pipeline});
+}
+
+void noteEffectIssuedPipeline(obj_handle_t encoder, WMT::RenderPipelineState pipeline) {
+  auto& value = effectIssuedGeometry();
+  if (encoder != 0u && value.encoder == encoder) value.pipeline = pipeline;
+}
+
+void noteEffectIssuedViewport(obj_handle_t encoder, WMTViewport viewport) {
+  auto& value = effectIssuedGeometry();
+  if (encoder == 0u || value.encoder != encoder) return;
+  value.viewport = viewport;
+  value.viewportKnown = true;
+}
+
+void noteEffectIssuedScissor(obj_handle_t encoder, WMTScissorRect scissor) {
+  auto& value = effectIssuedGeometry();
+  if (encoder == 0u || value.encoder != encoder) return;
+  value.scissor = scissor;
+  value.scissorKnown = true;
+}
+
+void noteEffectIssuedRasterizer(obj_handle_t encoder, WMTTriangleFillMode fillMode,
+                               WMTCullMode cullMode, WMTDepthClipMode clipMode,
+                               WMTWinding winding, float bias, float slope, float clamp) {
+  auto& value = effectIssuedGeometry();
+  if (encoder == 0u || value.encoder != encoder) return;
+  value.rasterModes = {static_cast<u32>(fillMode), static_cast<u32>(cullMode),
+                       static_cast<u32>(clipMode), static_cast<u32>(winding)};
+  value.depthBias = {bias, slope, clamp};
+  value.rasterKnown = true;
+}
+
+void noteEffectIssuedBlendStencil(obj_handle_t encoder, float red, float green,
+                                 float blue, float alpha, std::uint8_t stencilRef) {
+  auto& value = effectIssuedGeometry();
+  if (encoder == 0u || value.encoder != encoder) return;
+  value.blendColor = {red, green, blue, alpha};
+  value.blendKnown = true;
+  value.stencilRef = stencilRef;
+  value.stencilRefKnown = true;
+}
+
+void noteEffectIssuedStencilRef(obj_handle_t encoder, std::uint8_t stencilRef) {
+  auto& value = effectIssuedGeometry();
+  if (encoder == 0u || value.encoder != encoder) return;
+  value.stencilRef = stencilRef;
+  value.stencilRefKnown = true;
+}
+
+void noteEffectIssuedVertexBuffer(obj_handle_t encoder, WMT::Buffer buffer,
+                                 u64 offset, std::uint8_t index) {
+  auto& value = effectIssuedGeometry();
+  if (encoder == 0u || value.encoder != encoder) return;
+  if (index == 1u) {
+    value.stream0 = buffer;
+    value.stream0Offset = offset;
+  } else if (index == 5u) {
+    value.volatileKnown = false;  // This observer handles the setBytes ABI only.
+  } else if (index >= 6u && index < 5u + core::kMaxStreams) {
+    auto& stream = value.extraStreams[index - 5u];
+    stream.buffer = buffer;
+    stream.offset = offset;
+    stream.bufferKnown = true;
+  }
+}
+
+void noteEffectIssuedVertexBytes(obj_handle_t encoder, const void* bytes,
+                                u64 length, std::uint8_t index) {
+  auto& value = effectIssuedGeometry();
+  if (encoder == 0u || value.encoder != encoder) return;
+  if (index == 1u) {
+    value.stream0 = {};  // Do not reuse a prior buffer after a setBytes bind.
+  } else if (index == 5u) {
+    value.volatileKnown = bytes && length == sizeof(value.volatileValue);
+    if (value.volatileKnown) std::memcpy(&value.volatileValue, bytes, length);
+  } else if (index >= 6u && index < 5u + core::kMaxStreams) {
+    auto& stream = value.extraStreams[index - 5u];
+    stream.buffer = {};
+    stream.bufferKnown = false;  // Never attribute stale setBuffer bytes.
+  }
+}
+
+EffectDirectCbufBindings& effectDirectCbufBindings() {
+  // Cold encode-thread-local shadow. The real encoder-open event resets it;
+  // no binding is inferred from a new draw's expected state or handle reuse.
+  static thread_local EffectDirectCbufBindings state;
+  return state;
+}
+
+bool effectDrawPayloadBytesEnabled() {
+  static const bool enabled = [] {
+    const char* env = std::getenv("DXMT9_EFFECT_DRAW_TRACE_PAYLOAD_BYTES");
+    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
+  }();
+  return enabled;
+}
+
+void appendEffectTraceBytes(std::ostream& out, const char* name,
+                            std::span<const std::byte> bytes) {
+  constexpr char digits[] = "0123456789abcdef";
+  std::string hex(bytes.size() * 2u, '0');
+  for (std::size_t i = 0; i < bytes.size(); ++i) {
+    const auto byte = std::to_integer<unsigned>(bytes[i]);
+    hex[i * 2u] = digits[byte >> 4u];
+    hex[i * 2u + 1u] = digits[byte & 15u];
+  }
+  out << ' ' << name << '=' << hex;
+}
+
+void traceEffectIssuedRaster(obj_handle_t encoder, bool indexed) {
+  const auto& value = effectIssuedGeometry();
+  if (encoder == 0u || value.encoder != encoder || !value.selected ||
+      !effectDrawTraceSeqMatches(value.seq)) return;
+  std::ostringstream out;
+  out << "[dxmt9-effect-issued-raster seq=" << value.seq
+      << " ordinal=" << value.ordinal << " indexed=" << indexed
+      << " viewport_known=" << value.viewportKnown
+      << " scissor_known=" << value.scissorKnown
+      << " raster_known=" << value.rasterKnown
+      << " blend_known=" << value.blendKnown
+      << " stencil_ref_known=" << value.stencilRefKnown
+      << " stencil_ref=" << static_cast<unsigned>(value.stencilRef)
+      << " pipeline_known=" << static_cast<bool>(value.pipeline);
+  diagnostics::MetalPipelineLineage lineage{};
+  const bool creationKnown = diagnostics::copyMetalPipelineLineage(value.pipeline.handle, lineage);
+  out << " pipeline_creation_known=" << creationKnown;
+  if (creationKnown) {
+    out << " pipeline_creation_sha256=" << lineage.receiptSha256
+        << " pipeline_vs_sha256=" << lineage.vertexSha256
+        << " pipeline_fs_sha256=" << (lineage.fragmentAbsent ? "absent" : lineage.fragmentSha256);
+  }
+  if (value.viewportKnown) {
+    const std::array<double, 6> fields{value.viewport.originX, value.viewport.originY,
+        value.viewport.width, value.viewport.height, value.viewport.znear, value.viewport.zfar};
+    appendEffectTraceBytes(out, "viewport_bytes", std::as_bytes(std::span(fields)));
+  }
+  if (value.scissorKnown) {
+    const std::array<u64, 4> fields{value.scissor.x, value.scissor.y,
+                                  value.scissor.width, value.scissor.height};
+    appendEffectTraceBytes(out, "scissor_bytes", std::as_bytes(std::span(fields)));
+  }
+  if (value.rasterKnown) {
+    appendEffectTraceBytes(out, "raster_modes", std::as_bytes(std::span(value.rasterModes)));
+    appendEffectTraceBytes(out, "depth_bias_bytes", std::as_bytes(std::span(value.depthBias)));
+  }
+  if (value.blendKnown) {
+    appendEffectTraceBytes(out, "blend_bytes", std::as_bytes(std::span(value.blendColor)));
+  }
+  if (value.pipeline) {
+    id<MTLRenderPipelineState> pso = (__bridge id<MTLRenderPipelineState>)(void*)value.pipeline.handle;
+    NSString* label = [pso label];
+    const char* utf8 = label ? [label UTF8String] : nullptr;
+    const auto length = utf8 ? [label lengthOfBytesUsingEncoding:NSUTF8StringEncoding] : 0u;
+    if (utf8 && length != 0u && length <= 256u) {
+      appendEffectTraceBytes(out, "pipeline_label_utf8",
+          std::as_bytes(std::span(utf8, static_cast<std::size_t>(length))));
+    }
+  }
+  appendEffectCaptureSource(out);
+  out << " scope=actual-issued-raster-calls-not-gpu-state]";
+  emitQueueTraceLine(out.str());
+  const auto sampling = diagnostics::metalSamplingBindingsJson(encoder);
+  if (!sampling.empty()) {
+    std::ostringstream bindings;
+    bindings << "[dxmt9-effect-issued-sampling seq=" << value.seq
+             << " ordinal=" << value.ordinal;
+    appendEffectTraceBytes(bindings, "json_utf8", std::as_bytes(std::span(sampling)));
+    appendEffectCaptureSource(bindings);
+    bindings << ']';
+    emitQueueTraceLine(bindings.str());
+  }
+  const auto depthStencil = diagnostics::metalDepthStencilBindingsJson(encoder);
+  if (!depthStencil.empty()) {
+    std::ostringstream binding;
+    binding << "[dxmt9-effect-issued-depth seq=" << value.seq
+            << " ordinal=" << value.ordinal;
+    appendEffectTraceBytes(binding, "json_utf8", std::as_bytes(std::span(depthStencil)));
+    appendEffectCaptureSource(binding);
+    binding << ']';
+    emitQueueTraceLine(binding.str());
+  }
+}
+
+void appendEffectCbufBacking(std::ostream& out, const char* stage,
+                            const argbuf_hybrid::ConstantBufferBinding& binding,
+                            u64 maximumBytes) {
+  // Observe the tracked slice that was pointed into the argument table, not
+  // a fresh buildVsConsts/buildPsConsts projection. No GPU wait or mutation.
+  id<MTLBuffer> metalBuffer = (__bridge id<MTLBuffer>)(void*)binding.buffer.handle;
+  const u64 length = metalBuffer ? [metalBuffer length] : 0u;
+  const bool bounded = binding && binding.bytes <= maximumBytes &&
+      binding.offset <= length && binding.bytes <= length - binding.offset;
+  const auto* contents = bounded && [metalBuffer storageMode] == MTLStorageModeShared
+      ? static_cast<const std::byte*>([metalBuffer contents]) : nullptr;
+  out << " bound_" << stage << "_readable=" << (contents ? 1 : 0)
+      << " bound_" << stage << "_size=" << binding.bytes;
+  if (!contents) return;
+  const std::span bytes(contents + binding.offset,
+                        static_cast<std::size_t>(binding.bytes));
+  unsigned char digest[CC_SHA256_DIGEST_LENGTH];
+  CC_SHA256(bytes.data(), static_cast<CC_LONG>(bytes.size()), digest);
+  const std::string prefix = std::string("bound_") + stage;
+  appendEffectTraceBytes(out, (prefix + "_sha256").c_str(),
+                        std::as_bytes(std::span(digest)));
+  if (effectDrawPayloadBytesEnabled()) {
+    appendEffectTraceBytes(out, (prefix + "_bytes").c_str(), bytes);
+  }
+}
 
 std::optional<u64> effectDrawTraceSeqFilter() {
   static const auto value = parseEnvU64Auto("DXMT9_EFFECT_DRAW_TRACE_SEQ");
@@ -2329,6 +3371,10 @@ std::optional<u64> effectDrawTraceSeqMaxFilter() {
 }
 
 bool effectDrawTraceSeqMatches(u64 seqId) {
+  if (effectDrawCaptureSourcesOnlyEnabled()) {
+    const auto& source = selectedDrawCaptureSource();
+    if (!source || source->ticket.seqId != seqId) return false;
+  }
   if (const auto seqFilter = effectDrawTraceSeqFilter();
       seqFilter.has_value()) {
     return *seqFilter == seqId;
@@ -2441,9 +3487,39 @@ u64 effectDrawTraceGeometryMaxRefs() {
 
 }  // namespace
 
+void selectDrawCaptureSource(std::uintptr_t owner, u64 seqId,
+                             const core::CpuReadyTape::SourceRef& source) {
+  selectedDrawCaptureSource() = findCaptureColorAttachmentSource(owner, seqId, source);
+}
+
+bool vertexPositionProbeDrawEnabled() noexcept {
+  return diagnostics::vertexPositionProbeEnabled();
+}
+
+void beginVertexPositionProbeDraw(u64 commandBuffer, u64 encoder, u64 seq, u64 ordinal) noexcept {
+  auto& state = effectIssuedGeometry();
+  state.selected = false;
+  state.probeCommandBuffer = state.encoder == encoder ? commandBuffer : 0u;
+  state.probeSeq = seq;
+  state.probeOrdinal = ordinal;
+}
+
+void resetEffectDirectCbufBindings(obj_handle_t encoderHandle) {
+  effectDirectCbufBindings() = {.encoder = encoderHandle};
+  if (effectIssuedGeometryEnabled()) effectIssuedGeometry() = {.encoder = encoderHandle};
+}
+
+void recordEffectDirectCbufBinding(obj_handle_t encoderHandle, u32 index,
+                                  WMT::Buffer buffer, u64 offset, u64 bytes) {
+  auto& state = effectDirectCbufBindings();
+  if (encoderHandle == 0u || state.encoder != encoderHandle ||
+      index >= state.bindings.entries.size()) return;
+  state.bindings.entries[index] = {.buffer = buffer, .offset = offset, .bytes = bytes};
+}
+
 
 void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
-                     const core::FlatDrawStateRecord& hot,
+                     const core::FlatDrawStateView& drawState,
                      const resources::Pool& pool,
                      u64 seqId,
                      u64 drawOrdinal,
@@ -2458,10 +3534,14 @@ void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
                      bool preTransformed,
                      u32 activeFragmentTextureMask,
                      u64 vertexShaderHash,
-                     u64 pixelShaderHash) {
+                     u64 pixelShaderHash,
+                     obj_handle_t encoderHandle,
+                     const argbuf_hybrid::ConstantBufferBindings* cbufBindings) {
+  if (effectIssuedGeometryEnabled()) effectIssuedGeometry().selected = false;
   if (!effectDrawTraceEnabled()) {
     return;
   }
+  const auto& hot = *drawState.hot;
   const auto encoderIndex = encoderBreakdown ? encoderBreakdown->stats.encoderIndex : 0ull;
   if (!effectDrawTraceSeqMatches(seqId)) {
     return;
@@ -2613,6 +3693,7 @@ void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
   std::ostringstream out;
   out << "[dxmt9-effect-draw"
       << " seq=" << static_cast<unsigned long long>(seqId)
+      << " pass_seq=" << (encoderBreakdown ? encoderBreakdown->stats.seqId : 0ull)
       << " encoder=" << static_cast<unsigned long long>(encoderIndex)
       << " encoder_draw_index=" << static_cast<unsigned long long>(encoderDrawIndex)
       << " ordinal=" << static_cast<unsigned long long>(drawOrdinal)
@@ -2634,6 +3715,16 @@ void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
       << " point_size_max=" << pointSizeMax
       << " vs_hash=0x" << std::hex << vertexShaderHash
       << " ps_hash=0x" << pixelShaderHash
+      // Reuse the admitted state-family hashes. This cold trace observes
+      // existing witnesses; it does not hash payload bytes on the hot path.
+      << " vertex_decl_hash=0x" << hot.key.vertexDeclHash
+      << " vs_constants_hash=0x" << hot.vertexConstantsHash
+      << " ps_constants_hash=0x" << hot.pixelConstantsHash
+      << " render_state_hash=0x" << hot.key.renderStateHash
+      << " viewport_hash=0x" << hot.key.viewportHash
+      << " world_view_proj_hash=0x" << hot.worldViewProjHash
+      << " texture_transforms_hash=0x" << hot.textureTransformsHash
+      << " clip_planes_hash=0x" << hot.clipPlanesHash
       << " texture_mask=0x" << std::hex << hot.textureMask
       << " materialized_fragment_texture_mask=0x" << activeFragmentTextureMask
       << " texture0=0x" << hot.textures[0].value
@@ -2775,8 +3866,172 @@ void traceEffectDraw(const ActiveEncoderBreakdown* encoderBreakdown,
       << " depth_attachment_format="
       << (depthRecord ? static_cast<u32>(depthRecord->desc.format) : 0u)
       << " color_write=0x" << std::hex << colorWrite << std::dec
-      << " scissor=" << (hot.viewport.scissorEnabled ? 1u : 0u)
-      << ']';
+      << " scissor=" << (hot.viewport.scissorEnabled ? 1u : 0u);
+  if (drawState.hasUniformPayload()) {
+    // A DrawRun's hot state can retain the first draw's hashes while later
+    // draws select distinct immutable payloads. Observe the selected payload,
+    // not that run-level key, when comparing live and replayed draw state.
+    const auto& payload = drawState.uniformPayload();
+    out << " payload_vs_hash=0x" << std::hex << payload.vertexConstantsHash
+        << " payload_ps_hash=0x" << payload.pixelConstantsHash << std::dec
+        << " vs_float_count=" << payload.vertexFloatConstantCount
+        << " vs_int_count=" << payload.vertexIntConstantCount
+        << " vs_bool_count=" << payload.vertexBoolConstantCount
+        << " ps_float_count=" << payload.pixelFloatConstantCount
+        << " ps_int_count=" << payload.pixelIntConstantCount
+        << " ps_bool_count=" << payload.pixelBoolConstantCount;
+    if (effectDrawPayloadBytesEnabled()) {
+      const auto appendBytes = [&](const char* name, const auto& values, u32 count) {
+        DXMT_ASSERT(count <= values.size());
+        appendEffectTraceBytes(out, name,
+                              std::as_bytes(std::span(values).first(count)));
+      };
+      appendBytes("vs_float_bytes", payload.vsConst.float4, payload.vertexFloatConstantCount);
+      appendBytes("vs_int_bytes", payload.vsConst.int4, payload.vertexIntConstantCount);
+      appendBytes("vs_bool_bytes", payload.vsConst.bools, payload.vertexBoolConstantCount);
+      appendBytes("ps_float_bytes", payload.psConst.float4, payload.pixelFloatConstantCount);
+      appendBytes("ps_int_bytes", payload.psConst.int4, payload.pixelIntConstantCount);
+      appendBytes("ps_bool_bytes", payload.psConst.bools, payload.pixelBoolConstantCount);
+    }
+  }
+  if (effectDrawBindingTraceEnabled()) {
+    const auto& direct = effectDirectCbufBindings();
+    const auto* tracked = cbufBindings ? cbufBindings :
+        (encoderHandle != 0u && direct.encoder == encoderHandle ? &direct.bindings : nullptr);
+    out << " bound_cbuf_mode=" << (cbufBindings ? "argbuf" : tracked ? "direct" : "unknown");
+    if (tracked) {
+      appendEffectCbufBacking(out, "vs",
+          tracked->entries[argbuf_hybrid::kConstantBufferVsIndex], sizeof(VsConsts));
+      appendEffectCbufBacking(out, "ps",
+          tracked->entries[argbuf_hybrid::kConstantBufferPsIndex], sizeof(PsConsts));
+      appendEffectCbufBacking(out, "ffpvs",
+          tracked->entries[argbuf_hybrid::kConstantBufferFfpVsIndex], sizeof(FfpVsConsts));
+      appendEffectCbufBacking(out, "ffpps",
+          tracked->entries[argbuf_hybrid::kConstantBufferFfpPsIndex], sizeof(FfpPsConsts));
+      if (!cbufBindings && effectIssuedGeometryEnabled()) {
+        const auto match = [&](const char* name, u32 entry, bool vertex, u32 slot) {
+          const auto& binding = tracked->entries[entry];
+          out << " bound_" << name << "_issued_binding="
+              << (binding ? diagnostics::metalDirectBufferMatch(encoderHandle, vertex, slot,
+                      binding.buffer.handle, binding.offset) : "untracked");
+        };
+        match("vs", argbuf_hybrid::kConstantBufferVsIndex, true, 0u);
+        match("ps", argbuf_hybrid::kConstantBufferPsIndex, false, 0u);
+        match("ffpvs", argbuf_hybrid::kConstantBufferFfpVsIndex, true, 3u);
+        match("ffpps", argbuf_hybrid::kConstantBufferFfpPsIndex, false, 3u);
+      }
+    }
+  }
+  appendEffectCaptureSource(out);
+  out << ']';
+  emitQueueTraceLine(out.str());
+  if (effectIssuedGeometryEnabled()) {
+    auto& issued = effectIssuedGeometry();
+    if (issued.encoder == encoderHandle && encoderHandle != 0u) {
+      issued.seq = seqId;
+      issued.ordinal = drawOrdinal;
+      issued.selected = true;
+      for (u32 stream = 1u; stream < issued.extraStreams.size(); ++stream) {
+        auto& extra = issued.extraStreams[stream];
+        extra.declared = !fixedFunctionPath && drawState.hasShaderContext() &&
+            vertexDeclUsesStream(drawState.shaderContext().vertexDecl, stream);
+        extra.stride = extra.declared ? ffp::computeVertexDeclStreamStride(
+            drawState.shaderContext().vertexDecl, stream) : 0u;
+      }
+    }
+  }
+}
+
+
+namespace {
+
+bool effectBindingSeqMatches(const ActiveEncoderBreakdown* breakdown, u64 seqId) {
+  if (!effectDrawTraceSeqMatches(seqId)) {
+    return false;
+  }
+  const auto filter = effectDrawTraceEncoderFilter();
+  return !filter || *filter == (breakdown ? breakdown->stats.encoderIndex : 0ull);
+}
+
+void appendEffectBindingKey(std::ostream& out,
+                            const ActiveEncoderBreakdown* breakdown,
+                            u64 seqId, u64 ordinal, u32 commandIndex,
+                            u64 commandDrawIndex) {
+  out << " seq=" << seqId
+      << " pass_seq=" << (breakdown ? breakdown->stats.seqId : 0ull)
+      << " encoder=" << (breakdown ? breakdown->stats.encoderIndex : 0ull)
+      << " ordinal=" << ordinal
+      << " command_index=" << commandIndex
+      << " command_draw_index=" << commandDrawIndex;
+  appendEffectCaptureSource(out);
+}
+
+}  // namespace
+
+void traceEffectVsVolatileBinding(const ActiveEncoderBreakdown* breakdown,
+                                 u64 seqId, u64 ordinal, u32 commandIndex,
+                                 u64 commandDrawIndex,
+                                 const state::DrawVolatile& value) {
+  if (!effectBindingSeqMatches(breakdown, seqId)) return;
+  std::ostringstream out;
+  out << "[dxmt9-effect-vs-volatile";
+  appendEffectBindingKey(out, breakdown, seqId, ordinal, commandIndex, commandDrawIndex);
+  appendEffectTraceBytes(out, "bytes", std::as_bytes(std::span(&value, 1u)));
+  out << ']';
+  emitQueueTraceLine(out.str());
+}
+
+void traceEffectFsVolatileBinding(const ActiveEncoderBreakdown* breakdown,
+                                 u64 seqId, u64 ordinal, u32 commandIndex,
+                                 u64 commandDrawIndex,
+                                 const state::FsVolatile& value,
+                                 const core::DrawBindingOverride* override,
+                                 bool skippedPush) {
+  if (!effectBindingSeqMatches(breakdown, seqId)) {
+    return;
+  }
+  std::ostringstream out;
+  out << "[dxmt9-effect-fs-volatile";
+  appendEffectBindingKey(out, breakdown, seqId, ordinal, commandIndex, commandDrawIndex);
+  out << " override_valid=" << (override && override->alphaTestStateValid ? 1 : 0)
+      << " override_enable=" << (override ? override->alphaTestEnable : 0u)
+      << " override_func=" << (override ? override->alphaTestFunc : 0u)
+      << " override_ref=" << (override ? override->alphaTestRef : 0u)
+      << " skipped_push=" << (skippedPush ? 1 : 0);
+  appendEffectTraceBytes(out, "bytes", std::as_bytes(std::span(&value, 1u)));
+  out << ']';
+  emitQueueTraceLine(out.str());
+}
+
+void traceEffectCachedFfpVsBinding(const ActiveEncoderBreakdown* breakdown,
+                                  u64 seqId, u64 ordinal, u32 commandIndex,
+                                  u64 commandDrawIndex,
+                                  std::span<const std::byte, sizeof(FfpVsConsts)> bytes) {
+  if (!effectBindingSeqMatches(breakdown, seqId)) {
+    return;
+  }
+  FfpVsConsts value;
+  std::memcpy(&value, bytes.data(), sizeof(value));
+  traceEffectFfpVsBinding(breakdown, seqId, ordinal, commandIndex,
+                          commandDrawIndex, value, true, true);
+}
+
+void traceEffectFfpVsBinding(const ActiveEncoderBreakdown* breakdown,
+                            u64 seqId, u64 ordinal, u32 commandIndex,
+                            u64 commandDrawIndex, const FfpVsConsts& value,
+                            bool cacheHit, bool argbuf) {
+  if (!effectBindingSeqMatches(breakdown, seqId)) {
+    return;
+  }
+  std::ostringstream out;
+  out << "[dxmt9-effect-ffp-vs";
+  appendEffectBindingKey(out, breakdown, seqId, ordinal, commandIndex, commandDrawIndex);
+  out << " cache_hit=" << (cacheHit ? 1 : 0) << " argbuf=" << (argbuf ? 1 : 0);
+  appendEffectTraceBytes(out, "half_pixel", std::as_bytes(std::span(value.halfPixelFixup)));
+  appendEffectTraceBytes(out, "viewport_origin", std::as_bytes(std::span(value.viewportOrigin)));
+  appendEffectTraceBytes(out, "viewport_size", std::as_bytes(std::span(value.viewportSize)));
+  appendEffectTraceBytes(out, "clip_planes", std::as_bytes(std::span(value.clipPlanes)));
+  out << " clip_mask=" << value.clipPlaneMask << ']';
   emitQueueTraceLine(out.str());
 }
 
@@ -2971,6 +4226,125 @@ std::optional<u32> readEffectTraceIndexValue(
   return value;
 }
 
+u64 hashEffectTraceBytes(std::span<const u8> bytes) {
+  u64 hash = 14695981039346656037ull;
+  for (const u8 byte : bytes) {
+    hash ^= static_cast<u64>(byte);
+    hash *= 1099511628211ull;
+  }
+  return hash;
+}
+
+std::span<const u8> effectSharedBufferRange(WMT::Buffer buffer, u64 offset, u64 bytes) {
+  constexpr u64 kMaximumObservedBytes = 64u * 1024u * 1024u;
+  if (!buffer || bytes == 0u || bytes > kMaximumObservedBytes) return {};
+  id<MTLBuffer> metal = (__bridge id<MTLBuffer>)(void*)buffer.handle;
+  const u64 length = [metal length];
+  if (offset > length || bytes > length - offset ||
+      [metal storageMode] != MTLStorageModeShared) return {};
+  const auto* data = static_cast<const u8*>([metal contents]);
+  return data ? std::span(data + offset, static_cast<std::size_t>(bytes))
+              : std::span<const u8>{};
+}
+
+void traceEffectIssuedIndexedGeometry(obj_handle_t encoder, WMTIndexType indexType,
+                                     u64 indexCount, WMT::Buffer indexBuffer,
+                                     u64 indexOffset, u32 instances,
+                                     i32 baseVertex, u32 baseInstance) {
+  const auto& value = effectIssuedGeometry();
+  if (encoder == 0u || value.encoder != encoder || !value.selected ||
+      !effectDrawTraceSeqMatches(value.seq)) return;
+  const u64 elementSize = indexType == WMTIndexTypeUInt16 ? 2u :
+      indexType == WMTIndexTypeUInt32 ? 4u : 0u;
+  const auto indices = elementSize != 0u &&
+      indexCount <= std::numeric_limits<u64>::max() / elementSize
+      ? effectSharedBufferRange(indexBuffer, indexOffset, indexCount * elementSize)
+      : std::span<const u8>{};
+  u64 minimum = std::numeric_limits<u64>::max(), maximum = 0u;
+  bool verticesKnown = !indices.empty() && value.volatileKnown;
+  for (u64 i = 0u; verticesKnown && i < indexCount; ++i) {
+    const auto index = readEffectTraceIndexValue(indices,
+        elementSize == 2u ? IndexType::UInt16 : IndexType::UInt32, i);
+    const auto effective = index ? static_cast<std::int64_t>(*index) + baseVertex +
+        value.volatileValue.vertexBaseIndex : -1;
+    if (effective < 0 || effective > std::numeric_limits<i32>::max()) {
+      verticesKnown = false;
+      break;
+    }
+    minimum = std::min(minimum, static_cast<u64>(effective));
+    maximum = std::max(maximum, static_cast<u64>(effective));
+  }
+  const u64 stride = value.volatileValue.vertexStreamStride;
+  u64 start = 0u, byteCount = 0u;
+  std::span<const u8> vertices;
+  if (verticesKnown && value.volatileValue.streamInstanceDivisors[0] == 0u && stride != 0u &&
+      maximum < std::numeric_limits<u64>::max() / stride &&
+      value.stream0Offset <= std::numeric_limits<u64>::max() - value.volatileValue.vertexStreamOffset) {
+    const auto base = value.stream0Offset + value.volatileValue.vertexStreamOffset;
+    if (base <= std::numeric_limits<u64>::max() - (maximum + 1u) * stride) {
+      start = base + minimum * stride;
+      byteCount = (maximum - minimum + 1u) * stride;
+      vertices = effectSharedBufferRange(value.stream0, start, byteCount);
+    }
+  }
+  std::ostringstream out;
+  out << "[dxmt9-effect-issued-geometry seq=" << value.seq
+      << " ordinal=" << value.ordinal << " index_type=" << (elementSize == 2u ? "u16" : "u32")
+      << " index_count=" << indexCount << " index_offset=" << indexOffset
+      << " index_readable=" << !indices.empty()
+      << " index_hash=0x" << std::hex << hashEffectTraceBytes(indices) << std::dec
+      << " metal_base_vertex=" << baseVertex << " base_instance=" << baseInstance
+      << " instance_count=" << instances << " volatile_known=" << value.volatileKnown
+      << " volatile_base_vertex=" << value.volatileValue.vertexBaseIndex
+      << " volatile_stream_offset=" << value.volatileValue.vertexStreamOffset
+      << " stream0_binding_offset=" << value.stream0Offset << " stream0_stride=" << stride
+      << " stream0_readable=" << !vertices.empty()
+      << " stream0_start_byte=" << start << " stream0_byte_count=" << byteCount
+      << " min_vertex=" << minimum << " max_vertex=" << maximum
+      << " stream0_hash=0x" << std::hex << hashEffectTraceBytes(vertices) << std::dec
+      << " scope=issued-index-and-bound-stream0-cpu-shared-bytes";
+  appendEffectCaptureSource(out);
+  out << ']';
+  emitQueueTraceLine(out.str());
+  for (u32 stream = 1u; stream < value.extraStreams.size(); ++stream) {
+    const auto& extra = value.extraStreams[stream];
+    if (!extra.declared) continue;
+    const u64 divisor = value.volatileValue.streamInstanceDivisors[stream];
+    u64 first = minimum, last = maximum;
+    bool rangeKnown = verticesKnown && instances != 0u;
+    if (divisor != 0u && value.volatileKnown && instances != 0u) {
+      // Metal instance_id includes baseInstance; shader divides that issued ID.
+      first = static_cast<u64>(baseInstance) / divisor;
+      last = (static_cast<u64>(baseInstance) + instances - 1u) / divisor;
+      rangeKnown = true;
+    }
+    u64 startByte = 0u, bytes = 0u;
+    std::span<const u8> data;
+    if (rangeKnown && extra.stride != 0u &&
+        last < std::numeric_limits<u64>::max() / extra.stride &&
+        extra.offset <= std::numeric_limits<u64>::max() - (last + 1u) * extra.stride) {
+      startByte = extra.offset + first * extra.stride;
+      bytes = (last - first + 1u) * extra.stride;
+      if (extra.bufferKnown)
+        data = effectSharedBufferRange(extra.buffer, startByte, bytes);
+    }
+    std::ostringstream row;
+    row << "[dxmt9-effect-issued-stream seq=" << value.seq
+        << " ordinal=" << value.ordinal << " stream=" << stream
+        << " metal_slot=" << stream + 5u << " binding_known=" << extra.bufferKnown
+        << " binding_offset=" << extra.offset << " stride=" << extra.stride
+        << " divisor=" << divisor << " min_element=" << first << " max_element=" << last
+        << " start_byte=" << startByte << " byte_count=" << bytes
+        << " readable=" << !data.empty()
+        << " hash=0x" << std::hex << hashEffectTraceBytes(data) << std::dec
+        << " layout_scope=expected-declaration-stride"
+        << " scope=issued-bound-extra-stream-cpu-shared-bytes";
+    appendEffectCaptureSource(row);
+    row << ']';
+    emitQueueTraceLine(row.str());
+  }
+}
+
 u32 effectTraceFloatComponentCount(u32 declType) {
   switch (declType) {
     case kD3DDeclTypeFloat1:
@@ -3130,9 +4504,154 @@ void traceEffectIndexedGeometry(const ActiveEncoderBreakdown* encoderBreakdown,
     return;
   }
 
-  const auto layout = resolveEffectTraceStream0Layout(drawState);
   const auto encoderDrawIndex =
       encoderBreakdown ? encoderBreakdown->stats.drawCalls + 1ull : 0ull;
+  const u64 maxRefs = effectDrawTraceGeometryMaxRefs();
+
+  const u64 indexElementSize = indexType == IndexType::UInt16 ? 2ull : 4ull;
+  const u64 indexStartByte = static_cast<u64>(startIndex) * indexElementSize;
+  const bool indexByteCountRepresentable =
+      indexCount <= std::numeric_limits<u64>::max() / indexElementSize;
+  const u64 indexByteCount =
+      indexByteCountRepresentable ? indexCount * indexElementSize : 0ull;
+  const bool indexRangeValid =
+      indexByteCountRepresentable &&
+      indexStartByte <= static_cast<u64>(indexBytes.size()) &&
+      indexByteCount <= static_cast<u64>(indexBytes.size()) - indexStartByte;
+  const u64 indexHash =
+      indexRangeValid
+          ? hashEffectTraceBytes(indexBytes.subspan(
+                static_cast<std::size_t>(indexStartByte),
+                static_cast<std::size_t>(indexByteCount)))
+          : 0ull;
+
+  u64 invalidCount = indexRangeValid ? 0ull : indexCount;
+  bool hasReferencedVertex = false;
+  u64 minVertex = std::numeric_limits<u64>::max();
+  u64 maxVertex = 0ull;
+  if (indexRangeValid) {
+    const auto firstIndex = static_cast<std::size_t>(startIndex);
+    for (u64 i = 0; i < indexCount; ++i) {
+      const auto indexValue = readEffectTraceIndexValue(
+          indexBytes, indexType, firstIndex + static_cast<std::size_t>(i));
+      if (!indexValue.has_value()) {
+        ++invalidCount;
+        continue;
+      }
+      const auto effectiveVertex =
+          static_cast<std::int64_t>(baseVertexIndex) +
+          static_cast<std::int64_t>(*indexValue);
+      if (effectiveVertex < 0) {
+        ++invalidCount;
+        continue;
+      }
+      const u64 vertex = static_cast<u64>(effectiveVertex);
+      minVertex = std::min(minVertex, vertex);
+      maxVertex = std::max(maxVertex, vertex);
+      hasReferencedVertex = true;
+    }
+  }
+
+  bool stream0RangeValid = false;
+  u64 stream0StartByte = 0ull;
+  u64 stream0ByteCount = 0ull;
+  if (indexRangeValid && invalidCount == 0u && hasReferencedVertex) {
+    const bool vertexSpanRepresentable =
+        maxVertex >= minVertex &&
+        maxVertex - minVertex < std::numeric_limits<u64>::max();
+    const u64 vertexSpan =
+        vertexSpanRepresentable ? maxVertex - minVertex + 1ull : 0ull;
+    const bool streamStartRepresentable =
+        minVertex <= std::numeric_limits<u64>::max() / stream0Stride &&
+        minVertex * stream0Stride <=
+            std::numeric_limits<u64>::max() - stream0Offset;
+    const u64 candidateStartByte =
+        streamStartRepresentable
+            ? stream0Offset + minVertex * stream0Stride
+            : 0ull;
+    const bool streamByteCountRepresentable =
+        vertexSpan != 0u &&
+        vertexSpan <= std::numeric_limits<u64>::max() / stream0Stride;
+    const u64 candidateByteCount =
+        streamByteCountRepresentable ? vertexSpan * stream0Stride : 0ull;
+    stream0RangeValid =
+        streamStartRepresentable && streamByteCountRepresentable &&
+        candidateStartByte <= static_cast<u64>(vertexBytes.size()) &&
+        candidateByteCount <=
+            static_cast<u64>(vertexBytes.size()) - candidateStartByte;
+    if (stream0RangeValid) {
+      stream0StartByte = candidateStartByte;
+      stream0ByteCount = candidateByteCount;
+    }
+  }
+  const u64 stream0Hash =
+      stream0RangeValid
+          ? hashEffectTraceBytes(vertexBytes.subspan(
+                static_cast<std::size_t>(stream0StartByte),
+                static_cast<std::size_t>(stream0ByteCount)))
+          : 0ull;
+
+  std::ostringstream bytesOut;
+  bytesOut << "[dxmt9-effect-geometry-bytes"
+           << " seq=" << static_cast<unsigned long long>(seqId)
+           << " pass_seq="
+           << (encoderBreakdown ? encoderBreakdown->stats.seqId : 0ull)
+           << " encoder=" << static_cast<unsigned long long>(encoderIndex)
+           << " encoder_draw_index="
+           << static_cast<unsigned long long>(encoderDrawIndex)
+           << " ordinal=" << static_cast<unsigned long long>(drawOrdinal)
+           << " command_index=" << commandIndex
+           << " command_draw_index="
+           << static_cast<unsigned long long>(commandDrawIndex)
+           << " command_draw_count="
+           << static_cast<unsigned long long>(commandDrawCount)
+           << " indexed=1"
+           << " index_type=" << (indexType == IndexType::UInt16 ? "u16" : "u32")
+           << " start_index=" << startIndex
+           << " index_count=" << static_cast<unsigned long long>(indexCount)
+           << " base_vertex=" << baseVertexIndex
+           << " stream0_offset="
+           << static_cast<unsigned long long>(stream0Offset)
+           << " stream0_stride="
+           << static_cast<unsigned long long>(stream0Stride)
+           << " index_start_byte="
+           << static_cast<unsigned long long>(indexStartByte)
+           << " index_byte_count="
+           << static_cast<unsigned long long>(indexByteCount)
+           << " index_range_valid=" << (indexRangeValid ? 1u : 0u)
+           << " index_hash_valid=" << (indexRangeValid ? 1u : 0u)
+           << " index_hash=0x" << std::hex << indexHash << std::dec
+           << " invalid_count=" << static_cast<unsigned long long>(invalidCount)
+           << " min_vertex=";
+  if (hasReferencedVertex) {
+    bytesOut << static_cast<unsigned long long>(minVertex);
+  } else {
+    bytesOut << "none";
+  }
+  bytesOut << " max_vertex=";
+  if (hasReferencedVertex) {
+    bytesOut << static_cast<unsigned long long>(maxVertex);
+  } else {
+    bytesOut << "none";
+  }
+  bytesOut << " stream0_start_byte="
+           << static_cast<unsigned long long>(stream0StartByte)
+           << " stream0_byte_count="
+           << static_cast<unsigned long long>(stream0ByteCount)
+           << " stream0_range_valid=" << (stream0RangeValid ? 1u : 0u)
+           << " stream0_hash_valid=" << (stream0RangeValid ? 1u : 0u)
+           << " stream0_hash=0x" << std::hex << stream0Hash << std::dec
+           << " source_limitations=original-index-order,stream-0-only"
+           << " range_note=min-max-includes-intervening-vertices-and-stride-padding"
+           << " mismatch_followup=localize-further"
+           << ']';
+  emitQueueTraceLine(bytesOut.str());
+
+  if (maxRefs == 0u) {
+    return;
+  }
+
+  const auto layout = resolveEffectTraceStream0Layout(drawState);
   if (!layout.hasPosition) {
     std::ostringstream out;
     out << "[dxmt9-effect-geometry"
@@ -3178,7 +4697,6 @@ void traceEffectIndexedGeometry(const ActiveEncoderBreakdown* encoderBreakdown,
     return value;
   };
 
-  const u64 maxRefs = effectDrawTraceGeometryMaxRefs();
   const u64 refsToSample = std::min(indexCount, maxRefs);
   u64 readableIndices = 0;
   u64 validVertices = 0;

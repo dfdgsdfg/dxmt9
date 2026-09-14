@@ -1,4 +1,5 @@
 #include "dxmt9_command_queue.hpp"
+#include "dxmt9_color_attachment_capture_observer.hpp"
 #include "dxmt9_queue_mutex_diag.hpp"
 #include "render/backend_factory.hpp"
 #include "dxmt9/assert.hpp"
@@ -2016,6 +2017,10 @@ void CommandQueue::markPendingDirtyAll() {
 CommandQueue::~CommandQueue() {
   if (threadsStarted_) {
     stopThreads();
+  }
+  if (encoders::captureColorAttachmentObservationEnabled()) {
+    encoders::forgetCaptureColorAttachmentOwner(
+        reinterpret_cast<std::uintptr_t>(&pool_));
   }
   // The periodic rows are cumulative.  Emit only a non-empty tail so an
   // exact 60-present boundary is not reported twice (once periodically and
@@ -5205,15 +5210,19 @@ CommandQueue::commitDirectChunkSlotReplay(
   const auto publishedPresentBoundaryPolicy = pendingPresentBoundaryPolicy;
   bool published = true;
   if (hasPublishedPresent) {
+    const auto publicationIdentity =
+        replaySourcePublicationCaptureActiveLocked()
+            ? core::metalqueue::CompatibilityPublicationIdentity{}
+            : core::metalqueue::CompatibilityPublicationIdentity{
+                  .rawOrdinal = ticket.rawOrdinal,
+                  .sourceOrdinal = ticket.sourceOrdinal,
+              };
     published = queueLifecycle_.commitCurrentChunk(
         lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
           prepareSlotForPublish(*this, pool_, slot,
                                 perf::ChunkPublishReason::Present);
         },
-        core::metalqueue::CompatibilityPublicationIdentity{
-            .rawOrdinal = ticket.rawOrdinal,
-            .sourceOrdinal = ticket.sourceOrdinal,
-        },
+        publicationIdentity,
         {}, /*suppressDirectLifecyclePublish=*/false);
   }
   if (!published) {
@@ -6700,6 +6709,13 @@ bool CommandQueue::publishCpuReadyArenaSource(
   }
   control.seqId = ticket.seqId;
   control.state = core::ChunkSlot::State::Pending;
+  if (captureIdentity && capturedValid &&
+      encoders::captureColorAttachmentObservationEnabled()) {
+    // The queue lock still excludes Ready consumption. Registering after the
+    // replay-side identity ledger append would race the encode thread.
+    encoders::recordCaptureColorAttachmentSource(
+        reinterpret_cast<std::uintptr_t>(&pool_), ticket);
+  }
   lastCommittedSeqId_ = ticket.seqId;
   ++inflightCount_;
   writeIndex_ = (controlIndex + 1) % slots_.size();
@@ -7191,6 +7207,12 @@ CommandQueue::publishCpuReadyArenaBatch(
     auto& control = slots_[controlIndices[i]];
     control.seqId = context->batchReservations[i].ticket.seqId;
     control.state = core::ChunkSlot::State::Pending;
+    if (captureIdentity && capturedValid &&
+        encoders::captureColorAttachmentObservationEnabled()) {
+      encoders::recordCaptureColorAttachmentSource(
+          reinterpret_cast<std::uintptr_t>(&pool_),
+          context->batchReservations[i].ticket);
+    }
     queueLifecycle_.recordCpuReadySupplyPublished(
         core::CpuReadyTape::PayloadKind::Arena,
         context->batchReservations[i].id,
@@ -8232,6 +8254,244 @@ bool CommandQueue::metalCaptureEnabled() const noexcept {
   return metalCapture_.enabled();
 }
 
+CommandQueue::ReplaySourcePublicationCapture::
+    ReplaySourcePublicationCapture(ReplaySourcePublicationCapture&& other)
+    noexcept
+    : queue_(other.queue_), generation_(other.generation_) {
+  other.queue_ = nullptr;
+  other.generation_ = 0;
+}
+
+CommandQueue::ReplaySourcePublicationCapture&
+CommandQueue::ReplaySourcePublicationCapture::operator=(
+    ReplaySourcePublicationCapture&& other) noexcept {
+  if (this == &other) {
+    return *this;
+  }
+  if (queue_) {
+    queue_->abandonReplaySourcePublicationCapture(generation_);
+  }
+  queue_ = other.queue_;
+  generation_ = other.generation_;
+  other.queue_ = nullptr;
+  other.generation_ = 0;
+  return *this;
+}
+
+CommandQueue::ReplaySourcePublicationCapture::~ReplaySourcePublicationCapture() {
+  if (queue_) {
+    queue_->abandonReplaySourcePublicationCapture(generation_);
+  }
+}
+
+CommandQueue::ReplaySourcePublicationCaptureResult
+CommandQueue::ReplaySourcePublicationCapture::finish() noexcept {
+  if (!queue_) {
+    return {};
+  }
+  CommandQueue* queue = queue_;
+  const auto generation = generation_;
+  queue_ = nullptr;
+  generation_ = 0;
+  return queue->finishReplaySourcePublicationCapture(generation);
+}
+
+std::optional<CommandQueue::ReplaySourcePublicationCapture>
+CommandQueue::beginReplaySourcePublicationCapture(
+    std::span<core::metalqueue::ReplaySourcePublicationReceipt> receipts)
+    noexcept {
+  try {
+    const auto qmxBegin = queueMutexProbeBegin();
+    std::unique_lock lock(mutex_);
+    QueueMutexProbeScope qmxScope(
+        qmxBegin, "begin_replay_source_publication_capture");
+    if (replaySourcePublicationCapture_.has_value() || stop_ ||
+        arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
+        arenaAdmissionActive_.load(std::memory_order_relaxed) ||
+        activeArenaBuild_.load(std::memory_order_relaxed) ||
+        activeDirectChunkSlotBuild_.load(std::memory_order_relaxed) ||
+        arenaBuildContext_) {
+      return std::nullopt;
+    }
+    // Capture starts at a source boundary. A commandless writer is harmless
+    // and remains the first source owner; a populated writer would make the
+    // first receipt ambiguous because its publication predates the scope.
+    if (writingSlot_) {
+      if (*writingSlot_ >= slots_.size() || !slots_[*writingSlot_].payload ||
+          !slots_[*writingSlot_].commandsEmpty()) {
+        return std::nullopt;
+      }
+    }
+    if (replaySourcePublicationCaptureGeneration_ >=
+        std::numeric_limits<std::uint64_t>::max() - 1u) {
+      return std::nullopt;
+    }
+    const auto generation = ++replaySourcePublicationCaptureGeneration_;
+    replaySourcePublicationCapture_.emplace(
+        ReplaySourcePublicationCaptureContext{
+            .receipts = receipts,
+            .count = 0,
+            .overflow = false,
+            .failed = false,
+            .ownerThread = std::this_thread::get_id(),
+            .generation = generation,
+        });
+    queueLifecycle_.setReplaySourcePublicationSink(
+        core::metalqueue::ReplaySourcePublicationSink{
+            .context = this,
+            .fn = &CommandQueue::replaySourcePublicationCaptureObserver,
+        });
+    return ReplaySourcePublicationCapture(*this, generation);
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+void CommandQueue::replaySourcePublicationCaptureObserver(
+    void* context,
+    const core::metalqueue::ReplaySourcePublicationReceipt& receipt) noexcept {
+  auto* queue = static_cast<CommandQueue*>(context);
+  if (queue) {
+    // QueueLifecycle invokes this synchronously after Tape Ready publication
+    // while the scheduling mutex is held. Do not acquire another lock or call
+    // any drain/worker callback from this cold sink.
+    queue->recordReplaySourcePublicationLocked(receipt);
+  }
+}
+
+void CommandQueue::recordReplaySourcePublicationLocked(
+    const core::metalqueue::ReplaySourcePublicationReceipt& receipt) noexcept {
+  auto& capture = replaySourcePublicationCapture_;
+  if (!capture.has_value()) {
+    return;
+  }
+  auto& context = *capture;
+  if (context.ownerThread != std::this_thread::get_id()) {
+    context.failed = true;
+    return;
+  }
+  const auto metadata = cpuReadyTape_.sourceMetadata(
+      receipt.source.id, receipt.source.storage,
+      core::CpuReadyTape::State::Ready);
+  const bool sourceMatchesSlot =
+      receipt.controlIndex < slots_.size() &&
+      core::CpuReadyTape::SourceRef{
+          .id = slots_[receipt.controlIndex].sourceId,
+          .storage = slots_[receipt.controlIndex].storage,
+      } == receipt.source;
+  if (!receipt.source.valid() || !metadata.has_value() ||
+      *metadata != receipt.metadata || !receipt.metadata.valid() ||
+      receipt.metadata.rawOrdinal != 0u ||
+      receipt.metadata.sourceOrdinal != receipt.metadata.seqId ||
+      !sourceMatchesSlot) {
+    context.failed = true;
+    return;
+  }
+  if (context.count != 0u &&
+      receipt.metadata.seqId <=
+          context.receipts[context.count - 1u].metadata.seqId) {
+    context.failed = true;
+    return;
+  }
+  if (context.count >= context.receipts.size()) {
+    context.overflow = true;
+    return;
+  }
+  context.receipts[context.count++] = receipt;
+}
+
+CommandQueue::ReplaySourcePublicationCaptureResult
+CommandQueue::finishReplaySourcePublicationCapture(
+    std::uint64_t generation) noexcept {
+  try {
+    const auto qmxBegin = queueMutexProbeBegin();
+    std::unique_lock lock(mutex_);
+    QueueMutexProbeScope qmxScope(qmxBegin,
+                                  "finish_replay_source_publication_capture");
+    if (!replaySourcePublicationCapture_.has_value() ||
+        replaySourcePublicationCapture_->generation != generation) {
+      return {};
+    }
+    auto& capture = *replaySourcePublicationCapture_;
+    const bool ownerMatches =
+        capture.ownerThread == std::this_thread::get_id();
+    bool writerClean = true;
+    if (writingSlot_) {
+      if (*writingSlot_ >= slots_.size()) {
+        writerClean = false;
+      } else {
+        const auto& writer = slots_[*writingSlot_];
+        writerClean = writer.state == core::ChunkSlot::State::Writing &&
+            writer.payload != nullptr && writer.commandsEmpty();
+      }
+    }
+    const bool noActiveBuild =
+        !arenaAdmissionActive_.load(std::memory_order_relaxed) &&
+        !activeArenaBuild_.load(std::memory_order_relaxed) &&
+        !activeDirectChunkSlotBuild_.load(std::memory_order_relaxed) &&
+        !arenaBuildContext_.has_value();
+    const bool complete = !stop_ &&
+        !arenaBuildPoisoned_.load(std::memory_order_relaxed) &&
+        ownerMatches && writerClean && noActiveBuild && !capture.overflow &&
+        !capture.failed;
+    const auto count = capture.count;
+    queueLifecycle_.setReplaySourcePublicationSink({});
+    if (!complete) {
+      requestSchedulingStopLocked();
+    }
+    replaySourcePublicationCapture_.reset();
+    return {.complete = complete, .count = count};
+  } catch (...) {
+    return {};
+  }
+}
+
+void CommandQueue::abandonReplaySourcePublicationCapture(
+    std::uint64_t generation) noexcept {
+  try {
+    const auto qmxBegin = queueMutexProbeBegin();
+    std::lock_guard lock(mutex_);
+    QueueMutexProbeScope qmxScope(
+        qmxBegin, "abandon_replay_source_publication_capture");
+    if (!replaySourcePublicationCapture_.has_value() ||
+        replaySourcePublicationCapture_->generation != generation) {
+      return;
+    }
+    queueLifecycle_.setReplaySourcePublicationSink({});
+    // An unfinished scope may have allowed an ordinary publication to escape
+    // without the caller consuming its receipt. Fail closed even when count is
+    // still zero; this scope is deliberately a cold harness boundary.
+    requestSchedulingStopLocked();
+    replaySourcePublicationCapture_.reset();
+  } catch (...) {
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    wsiAdmissionStopped_.store(true, std::memory_order_release);
+    writeCv_.notify_all();
+    encodeCv_.notify_all();
+    finishCv_.notify_all();
+    presentCompletedCv_.notify_all();
+    presentDequeuedCv_.notify_all();
+  }
+}
+
+void CommandQueue::failStopReplaySourceExecution() noexcept {
+  try {
+    const auto qmxBegin = queueMutexProbeBegin();
+    std::lock_guard lock(mutex_);
+    QueueMutexProbeScope qmxScope(qmxBegin,
+                                  "fail_stop_replay_source_execution");
+    requestSchedulingStopLocked();
+  } catch (...) {
+    arenaBuildPoisoned_.store(true, std::memory_order_release);
+    wsiAdmissionStopped_.store(true, std::memory_order_release);
+    writeCv_.notify_all();
+    encodeCv_.notify_all();
+    finishCv_.notify_all();
+    presentCompletedCv_.notify_all();
+    presentDequeuedCv_.notify_all();
+  }
+}
+
 std::optional<core::metalcapture::MetalCaptureRequest>
 CommandQueue::notePresentChunkForCapture(std::uint64_t seqId) {
   return metalCapture_.maybePresentChunkClosesSession(seqId);
@@ -8251,6 +8511,94 @@ bool CommandQueue::hasCompletedPendingWork() {
       !activeDirectChunkSlotBuild_.load(std::memory_order_relaxed) &&
       !arenaBuildContext_ && next != 0u &&
       completedSeqIdLocked() >= next - 1u;
+}
+
+bool CommandQueue::publishReplayDiagnosticBoundary() noexcept {
+  // Diagnostics count completed cut requests, including state-only no-ops.
+  // Keep that receipt contract while sharing the actual publication seam.
+  return publishReplaySourceBoundary().status !=
+      ReplaySourceBoundaryStatus::Rejected;
+}
+
+CommandQueue::ReplaySourceBoundaryResult
+CommandQueue::publishReplaySourceBoundary() noexcept {
+  return publishReplaySourceBoundary(ReplaySourceBoundaryExpectation{});
+}
+
+CommandQueue::ReplaySourceBoundaryResult
+CommandQueue::publishReplaySourceBoundary(
+    ReplaySourceBoundaryExpectation expected) noexcept {
+  ReplaySourceBoundaryResult result{};
+  try {
+    std::unique_lock lock(mutex_);
+    if ((!expected.empty() && !expected.valid()) ||
+        stop_ || arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
+        arenaAdmissionActive_.load(std::memory_order_relaxed) ||
+        activeArenaBuild_.load(std::memory_order_relaxed) ||
+        activeDirectChunkSlotBuild_.load(std::memory_order_relaxed) ||
+        arenaBuildContext_) {
+      return result;
+    }
+    if (!writingSlot_) {
+      if (expected.empty()) {
+        result.status = ReplaySourceBoundaryStatus::Empty;
+      }
+      return result;
+    }
+    if (*writingSlot_ >= slots_.size() || !slots_[*writingSlot_].payload) {
+      return result;
+    }
+    const auto controlIndex = *writingSlot_;
+    auto& slot = slots_[controlIndex];
+    const core::CpuReadyTape::SourceRef currentSource{
+        .id = slot.sourceId,
+        .storage = slot.storage,
+    };
+    const auto nextSeqId = nextSeqId_.load(std::memory_order_relaxed);
+    if (!currentSource.valid() || nextSeqId == 0u) {
+      return result;
+    }
+    if (!expected.empty() &&
+        (expected.source != currentSource || expected.seqId != nextSeqId)) {
+      return result;
+    }
+    if (slot.commandsEmpty()) {
+      result.status = ReplaySourceBoundaryStatus::Empty;
+      return result;
+    }
+
+    bool captured = false;
+    const bool published = queueLifecycle_.commitCurrentChunk(
+        lock, kMaxQueuedChunks, [this](core::ChunkSlot& value) {
+          prepareSlotForPublish(*this, pool_, value,
+                                perf::ChunkPublishReason::Flush);
+        }, core::metalqueue::CompatibilityPublicationIdentity{}, [&] {
+          // commitCurrentChunk invokes this while the queue mutex is still
+          // held, immediately after Tape sealAndPublish and before the slot
+          // becomes visible to the encode worker. Read the exact published
+          // metadata here; never infer it from sequence highwater.
+          result.source = core::CpuReadyTape::SourceRef{
+              .id = slot.sourceId,
+              .storage = slot.storage,
+          };
+          result.metadata = cpuReadyTape_.sourceMetadata(
+              result.source.id, result.source.storage,
+              core::CpuReadyTape::State::Ready)
+                                .value_or(core::CpuReadySourceMetadata{});
+          captured = result.source == currentSource &&
+              result.metadata.valid() && result.metadata.rawOrdinal == 0u &&
+              result.metadata.seqId == nextSeqId &&
+              result.metadata.sourceOrdinal == nextSeqId;
+        });
+    if (!published || !captured) {
+      return {};
+    }
+    result.status = ReplaySourceBoundaryStatus::Published;
+    result.controlIndex = controlIndex;
+    return result;
+  } catch (...) {
+    return {};
+  }
 }
 
 void CommandQueue::submitFlush() {

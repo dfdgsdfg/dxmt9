@@ -27,6 +27,14 @@ std::string makeGenericVertexSource(u64 variantHash);
 // Generic solid-color fragment shader. Color is baked into the source.
 std::string makeGenericFragmentSource(const core::ColorRGBA& color, u64 variantHash);
 
+// Fragment shader used by clipped depth/stencil clears.  The depth value is
+// baked into the source because clear commands are short-lived and this keeps
+// the helper free of a transient uniform buffer.  The color member is kept in
+// the output struct so the same shader is valid for a depth/stencil-only
+// render pass as well as a combined color/depth pass.
+std::string makeDepthStencilClearFragmentSource(float depth, bool writeDepth,
+                                                u64 variantHash);
+
 // Textured fullscreen-triangle vertex shader — generates UVs for a present
 // or stretch blit.
 std::string makeTexturedVertexSource(u64 variantHash);

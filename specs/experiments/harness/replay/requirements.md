@@ -1212,3 +1212,100 @@ cost comparison. Phase labels must distinguish observer-heavy verification
 from low-perturbation execution; process CPU and wall time remain separate.
 CPU costs exclude real encoder/GPU execution, Wine supply and production
 concurrency unless those boundaries are explicitly executed and qualified.
+
+**R-HARN-REPLAY-8.10** When `--gpu-qualify` is requested, no CPU measurement
+child may start until both detailed CPU verification receipts and their
+authenticated input/provider/validator/image identity pair have passed. The
+gate launches a fresh real-Metal `experiment` child for each canonical CPU
+policy with warmup zero, two qualification iterations, identity partitioning,
+an explicit cold- or warm-device reset, and all three policy environment knobs
+set exactly from that policy. CPU and Metal provider executables are separate
+roles, but validator/input identity, shared loaded runtime modules, and the
+non-policy renderer environment are bound before measurement. A failed GPU or
+pre-measurement identity gate starts no measurement child. Final
+reauthentication failure rejects the aggregate while retaining any measurement
+artifacts already produced as unqualified evidence.
+
+**R-HARN-REPLAY-8.11** GPU policy qualification requires both original
+authenticated source and output RGBA oracles. Production evidence must carry
+`scope.production_capture=true`; synthetic/test fixtures must be explicitly
+marked `scope.synthetic=true` or `scope.test_input=true` and are reported as
+synthetic evidence. Each provider result must carry top-level strict oracle
+mode, `expected_digest_matched=true`, and `source_oracle_exact_matched=true`;
+every interval must match the original expected digest and source bytes, and
+retain an independently authenticated provider readback artifact whose bytes
+equal those original bytes. Pixel-envelope-only evidence, diagnostic validation runs, A/B equality
+without original oracles, missing/tampered readbacks, wrong route/policy/env,
+zero selected-route draws, GPU errors, incomplete completion, reset or
+conservation are failures. The coupled gate admits single-interval frame tapes
+only; sequence tapes require per-interval original oracles and remain rejected.
+Qualification is readback evidence, not a GT2 promotion claim by itself.
+
+**R-HARN-REPLAY-8.12** CPU-only policy receipts remain explicitly CPU-only.
+The coupled receipt records each GPU child path and hash, the qualified input
+scope, strict oracle/reset evidence and final binary reauthentication without
+relabeling a synthetic fixture as a production capture. The shared acceptance
+predicates used by the coupled GPU gate must be exercised by
+native-free negative tests for missing original oracles, envelope-only output,
+source mismatch, missing/tampered RGBA, diagnostics, wrong route or zero path,
+GPU error, policy/environment/hash mismatch, and a strict A/A success.
+
+**R-HARN-REPLAY-8.13** A capture-source-boundary replay diagnostic must validate
+the sidecar against the immutable tape and verified blob catalogue before any
+tape effect. Only Capture authority with complete event settlement and exact,
+nonempty, nonoverlapping source-record coverage is admissible. Each command
+record executes once in original order through the production replay sink;
+source boundaries request explicit queue publication without inventing captured queue
+identities or adding per-source GPU waits. A failure after a visible prefix
+must fail-stop rather than replay that prefix. Receipts must distinguish
+validated source cuts, completed cut requests, and observed physical pass
+boundaries: none implies either of the others or original-pixel equality.
+This diagnostic is excluded from policy qualification and performance ranking.
+
+An optional batch-cut discriminator may flush a DrawRun before an explicitly
+located DrawPrimitive/DrawIndexedPrimitive record strictly inside a source.
+Its bounded, sorted, unique event/record locators must all validate against the
+same authenticated input before effects. Batch cuts must not request queue
+publication, encoder termination, or GPU waits; only the original source ends
+may request publication. Receipts must preserve requested/completed batch cuts
+separately from source cuts. Exact serial coverage and unchanged publication
+edges require native exhaustive pins; physical pass equality still requires
+observed trace evidence. Batch-cut diagnostics must never qualify a policy.
+
+**R-HARN-REPLAY-8.14** A GPU-qualified capture-source reference policy must
+explicitly preserve the authenticated source-publication cuts through the
+same record-range plan in CPU and real-Metal execution. The versioned policy
+and receipts must bind the boundary mode, source-plan digest, and selected
+replay route. Original canonical chunk bytes, full handle/payload tables,
+retained wrappers and buffer snapshots remain one raw owner; range planning
+must not repack wire data or turn captured source/sequence labels into local
+queue authority. ProductionSlot must enter the ordinary Direct ChunkSlot
+admission/assembler path, with source-limited compatibility work reported
+separately, rather than substituting an Arena implementation.
+
+All range plans and ordered-control legality must be checked before effects.
+The cold source-policy driver admits at most 4096 records per canonical raw;
+its per-range publication receipt allocation is bounded by twice that record
+count plus one. CPU no-worker execution must additionally prove its narrower
+in-flight queue bound before replay; receipt capacity is not queue credit.
+A fallback may replay only an as-yet-unexecuted source range, never the full
+raw after an earlier source has executed. A failure after effects in that
+range must fail-stop. Source settlement must distinguish actual publication
+with a queue-issued source/storage/sequence receipt, publication performed by
+the source's Present, and an empty state-only settlement without GPU work.
+The private raw transaction identity remains separate from publication
+metadata: repeated local source publications must not reuse a nonzero raw
+ordinal in Tape's strictly increasing raw-publication high water. The drain
+journal publishes raw replay completion once, after all its ranges settle.
+Native exact-cover, stale-source, empty, Present and failure-prefix pins bind
+the reused queue lifecycle refinement. Strict original GPU oracles and actual
+route coverage remain required; preserving requested cuts alone cannot
+qualify a policy or prove physical pass equivalence.
+
+**R-HARN-REPLAY-8.15** Original/replay GPU compilation equivalence must include
+the explicit runtime compile profile from R-BACK-4.10, not only generated MSL
+or a nil-options receipt. Equivalent source strings compiled under different
+host-selected language versions are not an equivalent reference. Native replay
+and Wine rendering must share the production profile. SDK-header modifications
+may be used as retained causal diagnostics but are not the product fix or a
+substitute for normal-provider qualification on the unchanged original bundle.

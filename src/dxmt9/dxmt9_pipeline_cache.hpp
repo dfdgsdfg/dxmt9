@@ -286,7 +286,18 @@ u64 makeBackendShaderIdentityHash(const core::ShaderRef& shader,
 // Fill PSOs embed the fill colour directly into the generated fragment source,
 // so every RGBA channel must participate in the immutable pipeline key.
 ShaderVariantKey makeFillPipelineKey(const core::ColorRGBA& color,
-                                     u32 pixelFormat) noexcept;
+                                     u32 pixelFormat,
+                                     u32 sampleCount = 1u) noexcept;
+
+// Key for the clipped depth/stencil clear pipeline.  The clear depth is
+// source material (rather than a mutable binding), while the attachment
+// formats/sample count and write masks are pipeline descriptor state.
+ShaderVariantKey makeDepthStencilClearPipelineKey(float depth,
+                                                  u32 depthFormat,
+                                                  u32 stencilFormat,
+                                                  u32 sampleCount,
+                                                  bool writeDepth,
+                                                  bool writeStencil) noexcept;
 
 // Stretch/blit filtering is a separate pipeline concern: unlike general draw
 // PSOs, its linear-vs-nearest choice is part of the generated shader behavior.
@@ -413,7 +424,22 @@ class Cache {
                           const core::ColorRGBA& color,
                           u32 pixelFormat,
                           WMT::Reference<WMT::BinaryArchive>* archive,
-                          const std::string* archivePath);
+                          const std::string* archivePath,
+                          u32 sampleCount = 1u);
+
+  // Build a depth/stencil-capable fullscreen clear pipeline.  The caller
+  // selects depth/stencil load actions and binds the matching depth-stencil
+  // state; this method only owns the render PSO and its cache identity.
+  std::shared_future<WMT::Reference<WMT::RenderPipelineState>>
+  getOrBuildDepthStencilClearPipeline(WMT::Reference<WMT::Device> device,
+                                      float depth,
+                                      u32 depthFormat,
+                                      u32 stencilFormat,
+                                      u32 sampleCount,
+                                      bool writeDepth,
+                                      bool writeStencil,
+                                      WMT::Reference<WMT::BinaryArchive>* archive,
+                                      const std::string* archivePath);
 
   // Look up or build a textured-blit (stretch-rect) pipeline keyed by
   // (linear, sampleCount, pixelFormat).

@@ -9,6 +9,32 @@ tags: [specs, gap, experiments]
 
 ## Fixed-input replay experiment
 
+### Current GPU qualification status (2026-09-14)
+
+R-HARN-REPLAY-8.15 and R-BACK-4.10 now have normal-provider GT2 evidence:
+explicit invariant vertex-position outputs plus the shared runtime compile
+profile repair all ten retained final-pixel failures, with two cold replays
+per original, exact source/output bytes and zero GPU errors (r585). The
+fresh public compatibility-exact/production-exact comparison completes both
+CPU verifications, both two-iteration cold GPU qualifications, and one warm-up
+plus three measured CPU iterations per policy. It atomically publishes an
+accepted production-capture result (r593). Post-publication r598 reauthenticates
+original/staged input, source plan, policies, every child, runtime images and
+readbacks. R-HARN-REPLAY-8.10–8.15 are qualified for this bounded frame-tape
+pair; r597 separately reauthenticates all 20 retained-cohort iterations.
+The prior ENOSPC transaction r588 remains unpublished and must not be called
+accepted. The 5MiB headroom candidate fails capacity-receipt admission in
+r586 and remains rejected. See
+[current evidence and remaining gates](../../docs/perfomance/mini-replay-bisection/gpu-position-invariance.04.md).
+The fresh focused native 14/14, x86 2/2, expanded regression 28/28 and complete
+190-configuration TLA gates pass. The expanded set also fixes the capture CLI's
+stale exact metadata expectation without weakening its dictionary comparison.
+This is not full-intermediate, arbitrary-policy, sequence-tape or FPS
+qualification. Pre-r585 failure statements in the historical notes below
+are superseded only for the named ten final-pixel originals.
+
+### Earlier CPU and GPU qualification evidence
+
 R-HARN-REPLAY-8.7–8.9 are qualified for the bounded immediate-completion CPU
 policy lane. Separate full-oracle and low-observer modes execute the same
 production replay/Slot/Pool operations. `cpu-policy-compare` binds measured
@@ -420,6 +446,443 @@ boundary removal. DEFAULT/MANAGED native indexed fixtures pin exact ordinary
 versus prestaged pixels, alternate-seed sensitivity, upload-route evidence and
 conservation (`native-prestage-r3.log`). The bounded discriminator is closed;
 command/state-projection and publication-boundary localization remain open.
+
+The strict GPU/CPU policy join is implemented as an optional qualification
+gate, not yet production-qualified. The 2026-09-10 GT2 A/A r12 executes CPU
+verification, rejects both real-GPU original source/output comparisons, and
+starts no measurement child. Fresh r17/r18 traces align 2,196 issued draws
+and match render-state/viewport/transform/declaration fields. New r28/r29
+additionally align 2,267 issued draws and match all selected programmable
+uniform hashes, active counts and bytes; run-level hashes still differ without
+payload corruption. Final pixels still differ at 1,453 pixels (max RGB delta
+27) for that separate frame. An independent synthetic
+positive fixture exposed partial Clear being encoded as a whole-target clear;
+GT2 r13's nine Clears have no rectangles, so the defects are not equated.
+The r22 actual positive CLI gate passes strict A/A and nonidentical A/B
+comparisons on an independent nonuniform synthetic oracle. Alternating draw
+states force the candidate command-limit policy to publish more encode chunks;
+both policies still reproduce the original source and output bytes. Its
+clipped geometry proves Clear/gate control flow, not visible draw/uniform
+fidelity. The corrected partial-Clear attachment oracle additionally exposed
+full-Clear resolve-only source loss, now fixed and pinned by a shared store
+predicate. r27 passes actual MRT/mip/cube/MSAA and exact independent depth/
+stencil readbacks; r30 passes the existing 188 TLA configurations, without
+claiming those lifecycle models prove pixels.
+Fresh r36/r37 additionally matches post-override fragment slot 5 bytes and
+observed vertex slot 3 half-pixel/viewport/clip fields across 2,257 issued
+draws without missing binding observations. Pixels still differ (1,749 for
+this separate frame). Live has 230 physical render-pass starts, replay 38;
+the replay starts are a strict subset. The provider currently validates and
+reports the identity sidecar but does not consume its source record intervals
+to reproduce capture cuts. `partition-mode=identity` is a scheduler selector,
+not capture-boundary identity. The default-off source-boundary diagnostic
+(`R-HARN-REPLAY-8.13`) now consumes an authenticated exact record cover and
+requests ordinary queue publication per range without a source-local GPU wait.
+State-only ranges are no-ops; missing/stale/overlapping ranges reject before
+effects, and prefix failure is terminal. r44 independently observes all 230
+physical pass starts matching the original and exact source/output RGBA.
+Same-input/same-binary diagnostic-off r45 reproduces the original mismatch;
+r46 repeats the exact diagnostic result twice with effect tracing off.
+The older r28 input in r47 remains a strict counterexample: both cold
+iterations have six differing pixels (maximum RGB delta 1, total 6), improved
+from 1,453 but not eligible for tolerance-based promotion. r48 still matches
+all selected programmable uniform bytes; its older live trace lacks physical
+pass IDs and effective slot 3/5 bindings, so those comparisons remain unobserved.
+Rebuilt x86_64 r50 reproduces the same six-pixel residual SHA. Native exact-cover,
+sidecar rejection and 36-range Metal control/Clear tests pass within the 8/8
+integrated r43 gate; existing queue TLA passes in r41. Source publications do
+not generically promise physical encoder boundaries when sessions coalesce.
+r53 additionally restores all 15 missing intra-source DrawRun starts: all 836
+original command starts match, with unchanged 224 replay physical pass starts
+and identical six-byte residual. This excludes the run partition/hash drift
+under the source-cut regime. Same-build trace-off r54 repeats the residual twice;
+r55 retains exact original r36 pixels. The pure authenticated source-plan
+builder now owns provenance rows/digest and is consumed by the diagnostic.
+Native exhaustive interior cuts and stale-plan failures, 31-flush/three-source
+Metal execution, and integrated CPU/GPU gates pass 8/8 in r56. Normal CPU/GPU
+policy execution did not yet consume this plan at r56; diagnostic success remains
+excluded from ranking.
+Remaining: close r28's residual, bind the explicit capture-boundary reference
+plan into versioned CPU/GPU policy receipts, and qualify both ordinary routes with
+original oracles and actual path evidence. Diagnostic receipts remain excluded
+even when exact. GPU policy promotion and general GT2 fidelity remain open. See
+[GPU qualification evidence](../../docs/perfomance/mini-replay-bisection/gpu-policy-qualification.03.md).
+
+R-HARN-REPLAY-8.14 now specifies the normal capture-source reference contract.
+The borrowed range planner preserves raw-absolute locators and full canonical
+handle/payload storage. The normal CPU executor and GPU provider now use one
+source-aware driver, while the public versioned policy join remains open.
+The typed queue-publication seam now returns actual queue-issued receipts or
+empty/rejected settlement, and the diagnostic consumes it. Native pins cover
+stale identity, active leases, repeated private-raw cuts, completion/reclaim,
+Clear, Present and post-effect failure. The normal driver now captures actual
+Ready publications including implicit cuts and Present, binds range settlement
+to the authenticated plan and fail-stops on a failed prefix. The CPU executor
+rejects stale same-shape plans by exact tape/sidecar digest binding and matches
+each Ready source/sequence to its receipt before controlled completion.
+Tape's raw high-water
+forbids repeated nonzero raw ordinals; capture/private-raw provenance remains
+separate rather than relaxing that invariant. New trace-complete GT2 r65/r66
+matches 136 source cuts, 149 physical pass starts and exact original bytes;
+trace-off r68 repeats twice exactly, while cuts-off r67 differs at 6,943 pixels.
+The typed implementation retains exact original bytes in both cold r75
+iterations with 136/136 cut requests and zero GPU errors; it still exercises
+compatibility only. Native integration passes 9/9 and the existing TLA suite
+passes in r71, without claiming a new composed policy proof.
+These diagnostics are not policy qualification and do not close r28's six-pixel
+residual. r64's host-POSIX output path disabled the PE publisher and produced
+no tape despite benchmark success; r65 corrected the invocation to a PE-visible
+Windows absolute root. All failed evidence is retained.
+
+Normal source execution now passes native 7/7 (r89), x86_64 6/6 (r93), both
+full builds and the existing TLA suite (r90, 172.67 s). Public provider CLI,
+strict GPU policy Python and synthetic GPU A/A + A/B CLI pass 3/3 in r97.
+The no-worker Present
+test timeout was a fixture pacing mismatch, localized by r82's stack and
+fixed with the CPU harness's isolated pacing contract, not a queue wait bypass.
+Real r65 input passes exact original source/output in two cold iterations
+per route (r91 compatibility, r92 ProductionSlot); Direct executes 133 leases
+and 1387 draws, plus 10 compatibility draws, with 136/136 source publications.
+The older exact r36 input also passes ordinary Direct twice (r95: 214 leases,
+2265 Direct draws, 10 compatibility draws, 217/217 publications). All have zero
+GPU errors. Normal Direct on r28 still reproduces exactly the prior six-pixel
+residual twice (r94: 207 leases, 2275 Direct draws); strict promotion is denied.
+The r91/r92/r94/r95 receipts remain unqualified historical normal executions:
+canonical v1 policies do not bind this boundary mode/plan. The explicit v2
+policy now binds capture-source mode and an expected plan SHA before effects.
+Full source rows/local Ready publications are retained in both executors;
+Python reconstructs the native plan digest and joins CPU publications to their
+actual completion traces. Final GPU reauthentication takes the caller's
+expected name-to-policy mapping, not a policy chosen by a stored receipt.
+GT2 r65 now passes the public CPU verification (r103) and strict GPU execution
+(r104). Actual GPU-qualified Compatibility/Direct A/B (r106, two verification,
+two GPU, two warm-up and sixteen measured iterations per policy) and Direct
+A/A (r107) pass with original source/output bytes. Final-code reruns r116/r117
+reconfirm A/A and A/B after the optional-digest CLI and expected-policy
+reauthentication fixes; native/CLI/Metal plus existing TLA pass 9/9 in r113,
+and the final x86_64 provider/source-policy/Clear/CLI set passes 6/6 in r123.
+Stale expected plan digests reject before replay effects in GPU r119 and CPU
+r120. This qualification is input/policy-bound, not general GT2 fidelity or
+production/FPS promotion.
+The r28 pass-end scene/bloom probe r110 retains exactly the same six-pixel
+counterexample; it is diagnostic and rejected. Its initial r108 invocation
+failed before effects because the CLI incorrectly marked an absent optional
+digest as supplied; that flag is fixed. Non-diagnostic v2 Direct r121 still
+fails exact original source/output equality in two cold iterations with the
+same six one-unit RGB differences. Offline final-composite analysis is not an
+acceptance oracle and does not establish original current-frame intermediate
+or emitted shader/compiler identity. Actual compiler-input receipts now retain
+matching translated source sets on ARM64/x86_64 r131/r134 with the unchanged
+residual; bounded scene/bloom r145 is also invariant. Visible indexed A→B→A
+color/geometry coverage now passes both actual routes with independent pixels,
+and altered PS/stale VS inputs reject; provider/GPU-policy CLI/compiler-lineage
+tests pass 3/3 on native r148 and x86_64 r150. Live r146 independently validates
+222 source segments, but its runner was terminated during finalization for
+low disk space and supplies no full-run qualification. Same-input r152/r157
+confirms exact bloom bytes but a seven-byte/six-pixel scene mismatch before
+the final composite and two differing final pixels. Its 236 physical encoder
+identities and 2296 FS-volatile rows align. Non-indexed effect observation is
+now covered by a one-UP-draw logger off/on invariance test (not an independent
+pixel oracle); native r156 passes 3/3 and x86_64 r158 passes 4/4. Actual PSO
+prefetch suppression in r159 restores the 12 differing VS fallback-literal
+sources to their live variants, without changing scene/bloom/final bytes.
+The r161 bounded pass-end ROI observer preserves that final failure and finds
+only three RGB-changing endpoints among 123 observed scene passes. This is
+replay-only candidate localization; it omits alpha and original per-pass
+comparisons. Summary-only readback paths now reject GPU qualification even
+when pixels match, covered by native Python and actual-GPU CLI tests.
+Live r171 completes and independently validates a 174-source Tape, but its
+135 fixed-frame pass dumps share zero sources with the published interval.
+Observer-off r172 reproduces a new three-pixel strict failure twice. The
+disjoint original observation is retained as rejected evidence. Bounded
+hash-only readback and capture-source-only selection now have pure identity,
+single/batch actual queue publication, teardown and actual GPU hash/raw pins
+(r176/r178 and final r180/r181: 5/5 per architecture; existing TLA r177
+passes). Registration is
+under the publication lock before Ready consumption, and matches the actual
+encoder's full source/storage ref. Diagnostic pass provenance adds no fields
+to execution payloads or queue tickets. The bounded positive native
+source-to-GPU hash join now passes EventSerial and SegmentSerial with
+independent full-image BGRA constants, actual settled production-ledger
+entries and uncaptured-source exclusion (`dxmt9-capture-color-observer-metal-spec`;
+r183/r184 pass 2/2 per architecture including the existing Direct/compatibility
+Metal oracle). This fixture has no PE publisher. After disk space was freed,
+live r185 independently authenticates 211 original pass hashes against the
+published 198-source Tape and excludes 345 outside observations. r186 matches
+final pixels, reconfirmed observer-off twice in r187. Intermediate comparison
+finds 45 raw hash differences, mostly R32F; canonical cross-process attachment
+identity and raw-byte localization remain open. Capture-attempt membership
+alone is not successful publication authority; prior evidence remains intact.
+The r190 cold ledger repair namespaces SegmentSerial event-local pass IDs before
+frame-sidecar publication. Its native counterexample failed under the prior
+frame-global interpretation; source/settlement and actual Metal observer pins
+pass after repair. Same-event continuation and trusted frame-ID APIs remain
+distinct. This fixes a demonstrated identity-composition defect, not GPU pixels;
+post-repair r191 successfully publishes 101 sources and authenticates 114 original
+pass hashes with no outside-attempt rows. r192 has exact final scene/bloom and
+output bytes, reconfirmed observer-off twice in r193. r194 independently repeats
+each original r28/r146/r171 twice; all six retain the same 6/2/3-pixel strict
+failures. The successful capture does not substitute for those counterexamples.
+Fresh current-build r201, with per-pass hashes disabled and final inputs retained,
+also fails by six final pixels; r202 localizes five scene-input pixels while
+bloom is exact, r203 repeats observer-off twice, and r204's same-input pass
+hash observer leaves the same failure SHA. This is not a historical-build-only
+problem. r205 adds effective late-resolved Store witnesses to cold color hashes;
+native/actual-GPU pins pass 5/5 per architecture and existing TLA passes (r206/207).
+r208 finds 80 Store-qualified replay scene endpoints and seven RGB-changing
+writer candidates, not the first original divergence. Defined-content and
+paired original endpoint evidence remain open. Observer-off compatibility r209
+retains the same six-pixel failure twice with zero Direct draws. Actual prefetch
+suppression r211 restores all original candidate VS compilation variants but
+leaves scene/bloom/final bytes unchanged. r212 authenticates identical input,
+source cuts and provider images; Direct-only and these compiler-variant
+explanations are excluded for this input, not the shared capture/replay path.
+Tracked Shared Metal cbuf backing and actual vertex-slot-5 observations now
+have A→B→A Direct/compatibility/argument-table pixel pins, capture source-scope
+negatives and passing TLA (r218–r223). Live r225 authenticates 226 sources and
+2,231 draw observations, yet replay r226 fails by 56 pixels with equal observed
+VS/PS backing, volatile values and 2,213 indexed stream-0/index hashes. FFPVS
+full backing and some FFP shader hashes differ; GPU-read and all-field equality
+remain unproven. Observer-off r227 repeats the failure once (stops before the
+requested second iteration). Exact r221 is positive evidence, not replacement.
+r225's live texture dump budget expires before its composite. Exact-source
+texture selection now precedes budget admission, with both-architecture Metal
+negative/positive pins (r231) and TLA (r232). Published r233/r234 joins 195
+sources, 2,127 draws and final-composite inputs: final pixels and bloom are
+exact; scene differs only in one alpha byte. This does not replace failing
+originals. Conservative actual-compilation audit r236 finds no material/light
+field reads in the observed r225/r233 VS variants; ten changed FFP sources
+differ only in their final hash comment, not executable text. This is not a
+per-draw selected-PSO/GPU-read proof. Cold completed-readback per-channel hashes
+have native/x86_64 Metal pins (r237) to separate RGB and alpha evidence; paired
+failing source endpoints and first-divergence localization remain open.
+r238/r239 pairs 179 stored endpoints: 131 raw-equal, two alpha-only and 46
+R32F differences, with exact final scene/bloom/output and no BGRA/RGBA RGB
+difference. Store does not prove defined/live contents. Observer-off r240
+retains the original r225 56-pixel failure on the final build. Actual issued
+index/bound-stream0 observation has A→B→A route and filter-negative Metal pins
+on native/x86_64 and passing TLA (r243). On unchanged r225 all 2,213 indexed
+ranges match both replay logical geometry and retained live source rows;
+five index staging rebases preserve bytes. The 56-pixel failure is unchanged.
+This is not a same-build live pair or proof of GPU reads; 18 non-indexed draws,
+other streams, selected PSO/raster state and later mutation remain outside it.
+See the GPU qualification leaf for preserved receipts, byte comparisons and exclusions.
+Actual raster observation and strict scene-extent filters have native/x86_64
+Metal pins (r249–r253); native TLA passes r249. Same-build failing r254/r255
+now pairs 132 scene-sized Store endpoints. Source 22693 (event 775, records
+23–33) first differs in observed RGB after an exact same-scene predecessor.
+Actual indexed bytes/ranges, raster and VS/FS volatile match through qualified
+draw keys. One replay-only FFP binding event remains explicitly uncovered.
+Final scene differs at one pixel; observer-off r256 repeats its three-pixel
+final failure twice. Wire audit r258 establishes logical complete seed,
+full Clear and final-composite alias/read provenance. Actual runtime canonical
+resource identity, selected PSO/view/sampler, candidate produced R32F contents
+(371 preceding writer draws) and first within-pass divergence remain unproven
+for r254. After disk recovery, r261/r262 has exact final pixels despite 209
+changed R32F values. New r263/r264 instead fails by 72 pixels: the first observed
+scene divergence is four draws at source 22237. Wire audit r265 connects the
+retained R32F input (1,415 changed float values) across a checked no-writer
+interval; the later selected family's full material/cube mip coverage does not
+cover the four earlier draws' other PS families. Observer-off r266 retains the
+identical failure once and exits before its requested second repeat. Remaining
+work focuses on the earlier four draws' inputs and actual selected PSO/view/
+sampler lineage. Controlled R32F intervention r274–r286 leaves the exact same
+72-pixel final failure under replay-input and original-input replacement;
+post-upload readbacks authenticate both inputs. Ten selected-view dumps retain
+the original replacement. A zero-input sensitivity control changes 515,132
+pixels, so the diagnostic has a real downstream effect; the observed 1–4 ULP
+input differences alone are not a sufficient explanation at this cut. The
+new cold intervention is permanently diagnostic, bounds D3D-format 114 input
+and fails closed before effects on bad identity/extent/plan. Rejected populated
+intervention artifacts are retained. These results do not prove every actual
+Metal binding or resolve any original counterexample.
+The native R32F pre/post-readback fixture, malformed identity/extent/format/
+mode admission pins, CLI ownership/forwarding and post-render publication
+failure retention pass in r295; the existing full TLA+ suite passes in r289.
+This closes the scoped diagnostic, not original-pixel GPU qualification.
+Actual extra-stream observation now covers Metal slots 6–20 with cold
+encoder-local setBuffer/setBytes invalidation and expected-declaration stride
+labelling. A real stream-1 POSITION fixture at nonzero offset changes pixels
+when only that region changes, while stream-0/index hashes remain unchanged;
+both routes and off/filter negatives pass on native/x86 (r296–r307).
+Same-build r300/r303 pairs 1,902 draws, 1,884 indexed ranges and 107 extra-stream
+ranges without a byte-hash mismatch or unreadable range, but two final pixels
+still differ by one unit. Of 80 stored scene endpoints, 36 are raw-exact and
+44 RGB-different; the first observed difference is source 22190's eleven draws
+(event 843 records 24–34), after raw-exact source 22189. Observer-off r308
+completes two cold iterations with identical wrong bytes and zero GPU errors.
+r299 preserves r263's original 72-pixel failure under the extended observer.
+Shared bytes at encode time and expected stride are not GPU-read or actual
+selected compiled-PSO/view/sampler proof. No lifetime/interleaving policy or
+pixel threshold changed; the lower diagnostic pixel envelope is not the strict
+public GPU gate. Actual selected-PSO creation provenance r310–r327 now connects
+actual bound pipelines to authenticated library source/function/creation
+descriptors; unavailable publication, conflicting associations and unsupported
+binary/specialized-function paths remain unknown. Native/x86 publication
+failure negatives pass. New r315/r316 and r319/r320 are exact positive pairs,
+not replacements for older counterexamples. A same-input r263 prefetch-on/off
+intervention changes actual selected VS source on 872 of 1,868 draws while
+preserving the identical 72-pixel failure; all other serialized creation
+fields match, including unchanged first-bad four-draw receipts. Original r300
+also retains its two-pixel failure with prefetch off. Older originals lack
+new creation metadata, so this is causal replay/replay evidence, not original
+PSO proof. Actual texture/view/sampler binding and GPU-time content equality
+remain open. Actual fragment sampling descriptors r328–r335 now cover direct
+Metal calls and bounded actual argument-table writes; native exact mip-view
+pixels and null/reopen/offset/setBytes/raw-mutation/eviction negatives pass on
+native and x86. Current replays retain the same r263 72-pixel and r300 two-pixel
+failures, with respectively 7,617/7,519 actual direct texture/sampler stage
+entries under the expected stage mask and no unknown descriptors. GT2 does not
+provide argument-table coverage; the native fixture does. Original sampling
+receipts, actual resource/content joins and selected shader ABI consumption
+remain unproven. r323/r326/r334 r263 attempts reach readback but are rejected
+by the source oracle, not successful completed iterations. The lower r300
+diagnostic pixel envelope is still not the strict public gate. All original
+failures remain open. Process-local actual texture tokens now join issued
+binding to selected-view readback, with native/x86 root/view/null/off and
+EventSerial/SegmentSerial production readback pins. Fresh r346 provides 7,573
+paired actual texture/sampler descriptors each without differences, yet r347
+retains 69 wrong pixels. Six generation-qualified cube input pairs differ by
+the same 2,168 float texels; their complete faces and no-writer intervals are
+checked. The first scene difference precedes cube sampling, so this is not its
+causal attribution or a replacement for missing r300 input bytes. Prefetch-off
+r349 makes all first-bad eight actual PSO construction receipts equal to the
+original while retaining identical cube and final wrong bytes. Both attempts
+are rejected through readback, not successful completed cold iterations.
+Actual depth/stencil creation/binding/reference observation now has native/x86
+exact depth/stencil rejection/update pixels, unknown/conflict/off negatives,
+and production three-draw row joins. New r359/r364 original/replay pairs have
+1,857/1,859 equal actual depth descriptors and exact final pixels; they are
+diagnostic positives, not replacements for failures. r363 preserves r346's
+identical 69-pixel mismatch on the new build. The failing older originals lack
+actual depth witnesses, and GPU-consumption-time contents remain unproven.
+Actual direct-buffer/cache coherence now observes successful Metal slots 0/3
+and offset/setBytes transitions with non-reused process-local identity. Native
+stale-rebind pixels, A/B/A and production three-draw/off/filter pins pass.
+r373/r375/r376 each have 7,412 actual/cache matches and equal observed bound
+bytes/84 replay scene hashes, but retain r346's identical 69-pixel failure.
+API/GPU validation reports no access error; the existing dedicated transient
+diagnostic changes actual allocation counts without changing pixels. These
+same-build replay interventions use an older original: they do not prove its
+binds, original-side lifetime or GPU-time contents. r370 identifies the shared
+2048² R32F shadow sampled by the first divergent eight draws; its original
+content evidence remains missing. The r377 audit preserves strict rejection.
+The bounded shadow-input capture r379 times out before 500 Presents and emits
+no Tape, despite the catalogue's timeout-permitting `pass`. A retained sample
+places replay in Arena admission and encode in a CPU-ready session wait;
+the retained PC now identifies the open-session/empty-Ready branch. r382
+reauthenticates this as failed capture evidence, not pixels. r383–r389 reproduce
+and fix a concrete low-water latch/session-cap composition: a deferred Clear
+pins 1025 pages above capture's 1024-page reopen threshold. Native, x86, GPU
+smoke and full TLA gates pass; the high-water-only model fails as expected.
+One repaired-build live run (r390) now exits normally without timeout and
+publishes 176 settled sources/1862 draws; this does not exclusively attribute
+every sampled r379 wait. The same-build r391 replay has exact final RGBA.
+The actual shadow-input join executes on six readbacks with matched object,
+generation, source/pass/draw and no-writer witnesses: all six repeat one R32F
+texture difference (934 float texels, maximum 60 ULP / 3.5763e-6) after writer
+draw554, despite the exact final output. This is a newly authenticated
+intermediate difference, not proof of sampled texel/branch divergence or a
+replacement for any failing original. The r393–r396 follow-up identifies 395
+shadow writers with equal observed PSO/raster/depth/geometry inputs and exact
+replay A/A shadow bytes. All six selected VS and their reachable helpers only
+read FFP fields outside the differing material/light region. This bounded
+source-use audit does not prove driver instructions or GPU-time contents.
+The r397/r398 capture/replay pair now narrows the first differing existing
+shadow endpoint to source22267's eleven draws260–270, after eleven equal
+stored endpoint hashes. Its final RGBA is exact; original per-pass raw bytes,
+the first differing draw and GPU-consumption distinction remain open. Do not
+attribute this intermediate difference to an old final-pixel failure yet.
+The bounded paired-depth observer now passes native/x86 real-Metal byte and
+negative-selection tests. It distinguishes native Depth32Float (252) from
+D24X8's Depth32Float_Stencil8 (260), extracting only its depth plane. New
+r405/r406 retains 32 source/Store/canonical-generation-qualified paired pass
+endpoints: nine exact, then simultaneous color/depth differences in source22176,
+draws245–255 (121 depth texels, maximum2 ULP). Final RGBA differs by one RGB
+pixel. Removing earlier replay readbacks preserves the same wrong bytes in
+r409. This is a new retained failure and localization evidence, not policy
+qualification or proof of a first draw/GPU-consumption cause. Actual first-bad
+PSO/raster/depth/geometry and VS/FS values match; FFP backing differences remain
+an observed distinction, not a proven cause.
+Observer-free normal replay r411 retains identical wrong source/output bytes;
+r412 reauthenticates the original/source plan and confirms public GPU rejection
+with `diagnostic=false`. Full TLA/lineage/install-name gates pass. Rendering
+fidelity remains open independently of diagnostic implementation coverage.
+Diagnostic prefix cuts r414-r418 localize the replay depth writer to global
+draw251/replay ordinal252. Canonical VB/IB restoration matches the issued CPU
+range hashes. The r420-r429 standalone discriminator uses unchanged captured
+MSL and 1,501,552 bytes of input; three triangles reproduce all 121 replay depth
+values, with 68/51/2 coordinates in their separate outputs. Repetition and
+validation-off preserve reduced depth/color bytes. This is not a production
+route qualification, full-attachment oracle or proof of original GPU reads.
+The original-context buffer/vertex-output distinction remains open, as do all
+ten retained final-pixel counterexamples.
+Standalone r431/r438-r441 calibrates bounded GPU position min/max observations:
+seven vertices/nine invocations, no conflicting duplicate values, unchanged
+full depth/color and identical outputs under four caller rounding modes.
+The warning/missing-schema r433-r436 receipts are excluded and preserved.
+This standalone evidence is not a production fenv exclusion. The bounded
+actual-draw collector is now implemented: supported generated source + unused
+slot 29, actual-PSO clone/restore, once-only issue, duplicate-safe atomic
+min/max/counts, and completion-pinned output. Native and x86 Metal fixtures
+verify independent positions/pixels, preflight rejection, restoration, budget,
+disabled/malformed settings and no files before completion. The public gate
+rejects its directory independently, including literal `0`. r453/r455 observes
+all 1872 vertices of r405's localized writer; validation-off preserves the
+entire old depth/final output and its one-pixel failure. Validation-on retains
+the same depth/positions but adds one final pixel; it is not baseline-equivalent.
+Original r456 captures ten source/generation-qualified position receipts.
+r458/r459/r460 pairs original source22174/draw787286 with replay27/draw260:
+139 of 1872 actual GPU clip positions differ despite matching source/PSO
+receipts and issued CPU geometry/VS/PS bytes. The first nine paired depth
+endpoints are exact; the tenth differs at 807 texels, at most 2 ULP. Probing
+does not change replay depth or final pixels. New r456 final pixels happen to
+match; this does not close any of the ten old failures. Original GPU-time
+input bytes versus arithmetic/compilation attribution remains open. FFP
+material/light backing still differs; matching CPU half-pixel fields are not
+independent GPU-consumption evidence. Detailed input/intermediate r465/r466
+changes the 139 replay positions and the whole selected depth to match the
+original, failing passive calibration. Thirty-four bounded standalone GPU
+controls r469–r477/r480 reversibly reproduce this immutable-input difference
+with skinning MAD fusion versus separate rounding. They do not prove exclusive
+original-context input/arithmetic attribution. r478 repairs r405's selected
+depth, not its final one-pixel error. A default-off digest-selected no-contract
+compiler control, independently rejected by the public GPU gate, extends its
+exact shadow prefix from 9 to 12 endpoints (r483/r486/r488). The next divergence
+is source22179/replay30, eleven draws with three other vertex programs. A bounded
+four-source control r492/r494 subsequently makes all 32 selected shadow color
+endpoint hashes exact while retaining the identical final one-pixel error;
+the remaining scene/other shader path and final-pixel cause are open. A bounded
+exact-source scan and singleton controls r499–r522 localize a target-pixel
+intervention to VS `bad49ade...`, source22283/replay134's first draw
+(global1380, original ordinal788346; 4608 indices / 1480 vertices). Pass-end
+and per-draw ROI observations preserve both full final images, but the
+intervention makes only the target exact while introducing 790 other differing
+pixels. This is not original intermediate evidence or a production arithmetic
+fix. Two unmatched source digests and r518/r519's absent per-draw observations
+are explicitly excluded. Same-build r346 controls r496–r498/r515 retain its
+69-pixel failure under the four-shadow intervention; the two-scene-VS control
+worsens it to 1751. The retained scene draw now has full-image calibrated
+standalone replay under baseline and matched-intervention inputs (r524–r553).
+The46-pixel inherited color-seed difference is disjoint from the14-pixel local
+response; depth and all76 sampled texture subresources remain equal. Twenty-seven
+bounded arithmetic controls reversibly localize the target response to the
+last skinning MAD. API/shader-validation controls preserve the images after
+correcting the fixture's PS allocation to the declared argument size; the prior
+short-allocation validation failure is retained. This is a replay discriminator,
+not original GPU-consumption equality, exclusive original-context attribution
+or a final-image repair. All ten original failures remain open. This is
+not all-frame attachment/depth or original GPU-read equivalence. Native/x86 source and
+actual-Metal diagnostic fixtures plus public CLI/lineage/full TLC pass; no
+production arithmetic default or old failure is closed. Explicit failed-GPU-completion fault
+injection is still absent; failed status is rejected by the completion path.
+The repaired build's r387 replay preserves r346's byte-identical 69-pixel
+failure; the progress repair is not GPU-fidelity closure.
+r340 produced no Tape and is excluded despite catalogue pass.
+Remaining: localize the earlier scene-write divergence and close the
+original r28, r146, r171, current-build r201, r225, r254, r263, r300, r346 and
+r405 strict counterexamples. Actual Direct
+growth counters remain evidence, not a zero-growth claim.
 
 Domain-owned implementation and evidence gap tracker. Use the [root gap index](../gap.md) for cross-domain rollup.
 

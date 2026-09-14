@@ -1,5 +1,120 @@
 # Backend descriptor / pipeline / replay / hazard / capture / counter / render-pass specs.
 
+metal_shader_compile_profile_spec = executable(
+  'dxmt9-metal-shader-compile-profile-spec',
+  'metal_shader_compile_profile_spec.mm',
+  objcpp_args: ['-fobjc-arc'],
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_winemetal_dep,
+    dependency('appleframeworks', modules: ['Foundation', 'Metal'])],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-metal-shader-compile-profile-spec', metal_shader_compile_profile_spec,
+  env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1', 'MTL_SHADER_VALIDATION=1'],
+  is_parallel: false,
+  timeout: 30)
+
+vertex_position_probe_policy_spec = executable(
+  'dxmt9-vertex-position-probe-policy-spec',
+  'vertex_position_probe_policy_spec.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src')],
+)
+test('dxmt9-vertex-position-probe-policy-spec', vertex_position_probe_policy_spec,
+     env: dxmt9_native_test_env)
+
+vertex_position_probe_metal_spec = executable(
+  'dxmt9-vertex-position-probe-metal-spec',
+  'vertex_position_probe_metal_spec.mm',
+  objcpp_args: ['-fobjc-arc'],
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_winemetal_dep,
+    dependency('appleframeworks', modules: ['Foundation', 'Metal'])],
+  link_args: dxmt9_test_link_args,
+)
+foreach mode : ['enabled', 'disabled', 'invalid', 'skinning', 'no-contract']
+  test('dxmt9-vertex-position-probe-' + mode + '-metal-spec', vertex_position_probe_metal_spec,
+    args: [mode],
+    env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1', 'MTL_SHADER_VALIDATION=1'],
+    is_parallel: false,
+    timeout: 60)
+endforeach
+
+metal_sampling_lineage_spec = executable(
+  'dxmt9-metal-sampling-lineage-spec',
+  'metal_sampling_lineage_spec.mm',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_winemetal_dep,
+    dependency('appleframeworks', modules: ['Foundation', 'Metal'])],
+  link_args: dxmt9_test_link_args,
+)
+foreach enabled : ['0', '1']
+  test('dxmt9-metal-sampling-lineage-' + enabled + '-spec', metal_sampling_lineage_spec,
+    env: dxmt9_native_test_env_vars + [
+      'DXMT9_EFFECT_DRAW_TRACE=' + enabled,
+      'DXMT9_EFFECT_DRAW_TRACE_BINDINGS=1',
+      'DXMT9_EFFECT_DRAW_TRACE_GEOMETRY=1',
+      'MTL_DEBUG_LAYER=1'],
+    is_parallel: false,
+    timeout: 30)
+endforeach
+
+metal_depth_stencil_lineage_spec = executable(
+  'dxmt9-metal-depth-stencil-lineage-spec',
+  'metal_depth_stencil_lineage_spec.mm',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_winemetal_dep,
+    dependency('appleframeworks', modules: ['Foundation', 'Metal'])],
+  link_args: dxmt9_test_link_args,
+)
+foreach enabled : ['0', '1']
+  test('dxmt9-metal-depth-stencil-lineage-' + enabled + '-spec', metal_depth_stencil_lineage_spec,
+    env: dxmt9_native_test_env_vars + [
+      'DXMT9_EFFECT_DRAW_TRACE=' + enabled,
+      'DXMT9_EFFECT_DRAW_TRACE_BINDINGS=1',
+      'DXMT9_EFFECT_DRAW_TRACE_GEOMETRY=1',
+      'MTL_DEBUG_LAYER=1'],
+    is_parallel: false,
+    timeout: 30)
+endforeach
+
+metal_direct_buffer_lineage_spec = executable(
+  'dxmt9-metal-direct-buffer-lineage-spec',
+  'metal_direct_buffer_lineage_spec.mm',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_winemetal_dep,
+    dependency('appleframeworks', modules: ['Foundation', 'Metal'])],
+  link_args: dxmt9_test_link_args,
+)
+foreach enabled : ['0', '1']
+  test('dxmt9-metal-direct-buffer-lineage-' + enabled + '-spec', metal_direct_buffer_lineage_spec,
+    env: dxmt9_native_test_env_vars + [
+      'DXMT9_EFFECT_DRAW_TRACE=' + enabled,
+      'DXMT9_EFFECT_DRAW_TRACE_BINDINGS=1',
+      'DXMT9_EFFECT_DRAW_TRACE_GEOMETRY=1',
+      'MTL_DEBUG_LAYER=1'],
+    is_parallel: false,
+    timeout: 30)
+endforeach
+
+partial_clear_spec = executable(
+  'dxmt9-partial-clear-spec',
+  ['partial_clear_spec.cpp', 'partial_clear_metal_helper.mm'],
+  objcpp_args: ['-fobjc-arc'],
+  include_directories: dxmt9_inc,
+  dependencies: [
+    dxmt9_dep,
+    dxmt9_frontend_dep,
+    dxmt9_winemetal_dep,
+    dependency('appleframeworks', modules: ['Foundation', 'Metal']),
+  ],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-partial-clear-spec', partial_clear_spec,
+     env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1'],
+     is_parallel: false,
+     timeout: 30)
+
 backend_key_descriptor_spec = executable(
   'dxmt9-backend-key-descriptor-spec',
   'backend_key_descriptor_spec.cpp',
@@ -420,6 +535,17 @@ test('dxmt9-cpu-ready-arena-lease-spec',
      cpu_ready_arena_lease_spec,
      env: dxmt9_native_test_env)
 
+capture_color_observer_test_env = dxmt9_native_test_env_vars + [
+  'DXMT9_DUMP_COLOR_ATTACHMENT_DIR=/unused-inert-queue-observer',
+  'DXMT9_DUMP_COLOR_ATTACHMENT_INDEX=0',
+  'DXMT9_DUMP_COLOR_ATTACHMENT_HASH_ONLY=1',
+  'DXMT9_DUMP_COLOR_ATTACHMENT_CAPTURE_SOURCES_ONLY=1',
+  'DXMT9_DUMP_COLOR_ATTACHMENT_MAX_DUMPS=16',
+]
+test('dxmt9-cpu-ready-arena-capture-observer-spec',
+     cpu_ready_arena_lease_spec,
+     env: capture_color_observer_test_env)
+
 cpu_ready_production_routing_spec = executable(
   'dxmt9-cpu-ready-production-routing-spec',
   [
@@ -473,6 +599,11 @@ test('dxmt9-render-tape-cpu-phase-ledger-spec',
      cpu_ready_production_routing_spec,
      args: ['--cpu-tape-phase-ledger-spec'],
      env: dxmt9_native_test_env)
+test('dxmt9-render-tape-capture-source-policy-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--capture-source-policy-spec'],
+     env: dxmt9_native_test_env,
+     timeout: 30)
 
 test('dxmt9-render-tape-cpu-measurement-spec',
      cpu_ready_production_routing_spec,
@@ -696,6 +827,14 @@ test('dxmt9-direct-chunk-slot-metal-oracle-spec',
      env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1'],
      is_parallel: false,
      timeout: 30)
+
+test('dxmt9-capture-color-observer-metal-spec', python3,
+     args: [join_paths(meson.project_source_root(),
+                      'scripts/check/test_capture_color_observer_metal.py'),
+            direct_chunk_slot_metal_oracle_spec],
+     env: dxmt9_native_test_env_vars,
+     is_parallel: false,
+     timeout: 90)
 
 encode_session_lifecycle_spec = executable(
   'dxmt9-encode-session-lifecycle-spec',
@@ -1327,4 +1466,14 @@ chunk_record_allocation_spec = executable(
 )
 test('dxmt9-chunk-record-allocation-spec',
      chunk_record_allocation_spec,
+     env: dxmt9_native_test_env)
+
+# Pure parsing, admission and exact-identity checks shared with the opt-in
+# draw-texture diagnostic observer.
+draw_texture_dump_policy_spec = executable(
+  'dxmt9-draw-texture-dump-policy-spec',
+  'draw_texture_dump_policy_spec.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src')],
+)
+test('dxmt9-draw-texture-dump-policy-spec', draw_texture_dump_policy_spec,
      env: dxmt9_native_test_env)

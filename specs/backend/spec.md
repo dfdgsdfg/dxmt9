@@ -1170,6 +1170,32 @@ empty and the path falls through to compile-and-write.
 
 ## 6. Shader Translation
 
+### Explicit runtime compilation profile
+
+R-BACK-4.10 fixes source compilation at the unix WMT boundary to profile1:
+MSL2.4, fast floating-point optimization/functions and explicit
+`[[position, invariant]]` on generated vertex-position outputs. The distinct
+compile option `preserveInvariance` stays false.
+`MTLDevice_newLibraryFromSource` and diagnostic probe cloning must
+use the same options factory. There is no environment-selected language or
+fallback to nil options. The change is cold library creation, not a per-draw
+payload or scheduling rule. Modern runtimes receive explicit math-mode/function
+settings; older supported runtimes use the equivalent legacy fast-math option.
+
+Language alone does not fix the executable-context input: Wine's minimum-OS
+10.7/SDK12.3 metadata and a native minimum-OS26/SDK26.5 host produce different
+skinning MAD rounding even with explicit MSL2.4. The generated
+vertex-output attribute constrains position arithmetic without disabling
+contraction for fragment math or every vertex varying. Global contract-off is
+not an equivalent policy. The actual compiled source includes the attribute
+and is hashed as a whole. Actual compilation receipts carry the option values; function and PSO
+lineage must inherit those immutable creation options and reject missing or
+conflicting associations. Metal archive matching still uses the compiled
+functions, not source text as authority for an executable artifact. Future
+profile changes require explicit cache/receipt compatibility review and GPU
+requalification. Value/source-contract tests and concrete GPU output apply;
+no new thread/lifetime transition or additional TLA model is introduced.
+
 ```mermaid
 flowchart LR
     BC["D3DBC bytecode\n(SM 1.x / 2.0 / 3.0)"]

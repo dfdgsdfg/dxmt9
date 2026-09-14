@@ -131,9 +131,9 @@ struct RenderTapeProductionPassRange {
   std::uint32_t recordCount = 0u;
   std::uint32_t dagPassIndex = 0u;
   std::uint32_t passKind = 0u;
-  // Zero allocates a fresh pass ID. Non-zero is an authenticated pass ID
-  // supplied by a trusted producer when a pass continues across source
-  // boundaries.
+  // append: zero allocates a fresh frame ID, non-zero is a trusted frame ID.
+  // appendEventLocalPasses: non-zero is qualified by the CommandChunk event;
+  // the ledger remaps it to a frame ID, retaining same-event continuation.
   std::uint64_t logicalPassId = 0u;
 };
 
@@ -167,6 +167,13 @@ public:
   bool append(std::uint64_t captureToken, std::uint64_t eventOrdinal,
               std::uint64_t sourceOrdinal, std::uint64_t seqId,
               std::uint32_t firstRecord, std::uint32_t recordCount,
+              std::span<const RenderTapeProductionPassRange> ranges) noexcept;
+  // Batch FrameGraph pass IDs restart per event, not per frame. Record offsets
+  // remain event-absolute, including for later segments of the same event.
+  bool appendEventLocalPasses(std::uint64_t captureToken,
+              std::uint64_t eventOrdinal, std::uint64_t sourceOrdinal,
+              std::uint64_t seqId, std::uint32_t firstRecord,
+              std::uint32_t recordCount,
               std::span<const RenderTapeProductionPassRange> ranges) noexcept;
   // Registers one expected event tail at publication. Completion is recorded
   // separately only after QueueLifecycle authenticates the exact tail.
@@ -205,15 +212,18 @@ public:
             std::span<std::byte> bytes) const noexcept;
 
 private:
+  enum class PassIdentityScope : std::uint8_t { Frame, Event };
   bool appendImpl(std::uint64_t captureToken, std::uint64_t eventOrdinal,
                   std::uint64_t sourceOrdinal, std::uint64_t seqId,
                   std::uint32_t firstRecord, std::uint32_t recordCount,
                   std::span<const RenderTapeProductionPassRange> ranges,
-                  bool rangesAreSourceLocal) noexcept;
+                  bool rangesAreSourceLocal, PassIdentityScope scope) noexcept;
 
   mutable std::mutex mutex_{};
   std::uint64_t captureToken_ = 0u;
   std::uint64_t nextLogicalPassId_ = 1u;
+  // Cold capture-only namespace. Zero denotes the existing frame-ID API.
+  std::uint64_t eventLocalPassBase_ = 0u;
   bool failed_ = false;
   bool settled_ = false;
   std::uint64_t settledEventOrdinal_ = 0u;

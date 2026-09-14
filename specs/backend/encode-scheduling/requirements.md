@@ -620,6 +620,17 @@ second time. Older submitted residency may delay lease acquisition or source
 publication until reclaim, but GPU completion timing must not change which
 sources share a session.
 
+The maximum session-held physical residency must also fit each admission
+dimension's fixed low watermark. High-water successor headroom alone is not
+sufficient: after a pressure latch closes, a pending Clear may prevent further
+payload retirement while the Ready FIFO is empty. Pages (including wrap
+padding) and resident source entries must therefore be bounded by
+`min(lowWater, highWater - successorHeadroom)` at queue creation. This is a
+deterministic session cap, not a pressure-triggered submit. Ready publication
+credits must be released on representation; older submitted residency remains
+subject to eventual completion/reclaim. Source-order, payload-lifetime and
+exactly-once obligations are unchanged.
+
 At first acquisition, the coordinator may credit exactly one already-resident
 `Writing` source against, and never beyond, `successorHeadroom` only when the
 Tape observation proves it is the unique ordered tail, owns a valid publication

@@ -12,11 +12,25 @@
 #include "dxmt9_source_payload.hpp"
 #include "../winemetal/Metal.hpp"
 
+#include <optional>
 #include <string>
 
 namespace dxmt9::encoders {
 
 using u32 = std::uint32_t;
+
+// Pure rectangle transform shared by the clipped-clear encoder and native
+// truth-table tests. Empty/inverted/out-of-bounds rectangles return no draw;
+// non-empty rectangles are clipped to the attachment extent.
+std::optional<WMTScissorRect> clipClearRect(const core::Rect& rect,
+                                            u32 width,
+                                            u32 height) noexcept;
+
+// Clear is not a lifetime-ending discard. Even after a resolve, a later
+// partial operation must be able to load the original attachment samples.
+constexpr WMTStoreAction clearColorStoreAction(bool hasResolve) noexcept {
+  return hasResolve ? WMTStoreActionStoreAndMultisampleResolve : WMTStoreActionStore;
+}
 
 constexpr bool canonicalD24X8PhysicalFormatSupported(
     WMTPixelFormat format) noexcept {
@@ -75,14 +89,40 @@ void encodeColorFill(WMT::CommandBuffer& commandBuffer,
                       const core::ColorFillDesc& fill,
                       std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments = {});
 
-// Render-pass with LoadActionClear that targets color attachment 0 (and its
-// resolve if present). Used for D3DClear-style non-scissored clears.
+// Render-pass with LoadActionClear for a full D3DClear-style clear. Rectangles
+// require the context-rich overload below so they can use Load+scissored draw
+// semantics without discarding untouched pixels.
 void encodeClearPass(WMT::CommandBuffer& commandBuffer,
                       resources::Pool& pool,
                       const core::ClearDesc& clear,
                       std::span<const WMTSampleBufferAttachmentInfo> sampleBufferAttachments = {});
 void encodeClearPass(WMT::CommandBuffer& commandBuffer,
                      resources::Pool& pool,
+                     const core::ClearCommandView& clear,
+                     std::span<const WMTSampleBufferAttachmentInfo>
+                         sampleBufferAttachments = {});
+
+// Full clear encoder context used by clipped clears.  A clear with no rects
+// stays on the load-action fast path above; clipped color/depth/stencil clears
+// require a fullscreen draw with the target's concrete formats and sample
+// count, so the provider must receive the existing queue-owned cache/device.
+void encodeClearPass(WMT::CommandBuffer& commandBuffer,
+                     resources::Pool& pool,
+                     pipeline::Cache& pipelineCache,
+                     WMT::Reference<WMT::Device> device,
+                     const core::BackendLimits& limits,
+                     WMT::Reference<WMT::BinaryArchive>* archive,
+                     const std::string* archivePath,
+                     const core::ClearDesc& clear,
+                     std::span<const WMTSampleBufferAttachmentInfo>
+                         sampleBufferAttachments = {});
+void encodeClearPass(WMT::CommandBuffer& commandBuffer,
+                     resources::Pool& pool,
+                     pipeline::Cache& pipelineCache,
+                     WMT::Reference<WMT::Device> device,
+                     const core::BackendLimits& limits,
+                     WMT::Reference<WMT::BinaryArchive>* archive,
+                     const std::string* archivePath,
                      const core::ClearCommandView& clear,
                      std::span<const WMTSampleBufferAttachmentInfo>
                          sampleBufferAttachments = {});

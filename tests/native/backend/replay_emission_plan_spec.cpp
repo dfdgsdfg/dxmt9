@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <cstring>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -190,6 +191,23 @@ RecordSpec clearRecord() {
       .rectOffset = sizeof(D9CCommandChunkWireClear),
   };
   return {.type = D9C_COMMAND_RECORD_CLEAR, .payload = bytesOf(clear)};
+}
+
+RecordSpec stretchRectRecord(std::uint32_t handleBase) {
+  return {
+      .type = D9C_COMMAND_RECORD_STRETCH_RECT,
+      .payload = bytesOf(D9CCommandChunkWireStretchRect{
+          .srcHandleIndex = handleBase,
+          .dstHandleIndex = handleBase + 1u}),
+      .handles = {D9CCommandChunkWireHandleEntry{
+                      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+                      .generation = 1u,
+                      .objectId = 61u},
+                  D9CCommandChunkWireHandleEntry{
+                      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE,
+                      .generation = 1u,
+                      .objectId = 62u}},
+  };
 }
 
 // Handle indices in a record payload are chunk-global, so a control record's
@@ -1251,10 +1269,118 @@ void aRawWithNoIslandOwnsNoLease() {
   }
 }
 
+void rangePlansUseRawAbsoluteRecordIndices() {
+  const std::array specs{
+      islandDrawRecord(),
+      applyStateRecord(),
+      clearRecord(),
+      upDrawRecord(),
+      queryIssueRecord(0u),
+      islandDrawRecord(),
+      stretchRectRecord(1u),
+      islandDrawRecord(),
+      RecordSpec{.type = D9C_COMMAND_RECORD_PRESENT,
+                 .payload = bytesOf(D9CCommandChunkWirePresent{})},
+  };
+  const auto fixture = makeValidatedFixture(specs);
+  const auto imported = fixture.view();
+  const auto originalBytes = fixture.bytes;
+  const auto originalHeader = imported.header;
+  const auto originalRecords = imported.records;
+  const auto originalHandles = imported.handles;
+  const auto originalPayload = imported.payloadArena;
+  check(imported.records.size() == specs.size() && imported.handles.size() != 0u,
+        "mixed range fixture retains full records and nonzero handles");
+  check(imported.record(6u).header.payloadOffset != 0u &&
+            imported.record(6u).handles.size() == 2u &&
+            imported.record(6u).handles.data() == imported.handles.data() + 1u,
+        "mixed range fixture keeps full payload offsets and handle slices");
+
+  const auto focused = dxmt9::d3d9::planReplayEmissionRange(
+      imported, 77u, 5u, 4u, 4096u);
+  check(focused.partitioned() && focused.leaseEligible() &&
+            focused.leaseOwningSpanCount() != 0u && focused.containsPresent &&
+            focused.spansExecutable(),
+        "a nonzero-base direct range owns a lease through its trailing Present");
+
+  for (std::uint32_t first = 0u;
+       first < static_cast<std::uint32_t>(specs.size()); ++first) {
+    for (std::uint32_t count = 1u;
+         count <= static_cast<std::uint32_t>(specs.size()) - first; ++count) {
+      const auto ranged = dxmt9::d3d9::planReplayEmissionRange(
+          imported, 77u, first, count, 4096u);
+      check(ranged.partitioned(), "every nonempty mixed subrange partitions");
+      check(ranged.rawOrdinal == 77u,
+            "range plan preserves the authenticated raw ordinal");
+
+      auto local = imported;
+      local.header.recordCount = count;
+      local.records = imported.records.subspan(first, count);
+      const auto localPlan = dxmt9::d3d9::planReplayEmission(local, 77u, 4096u);
+      check(localPlan.partitioned(), "borrowed local view partitions identically");
+      check(ranged.aggregateCapacity == localPlan.aggregateCapacity &&
+                ranged.aggregatePlannedBytes == localPlan.aggregatePlannedBytes &&
+                ranged.leaseBlock == localPlan.leaseBlock &&
+                ranged.spansExecutable() == localPlan.spansExecutable() &&
+                ranged.leaseSpanCount == localPlan.leaseSpanCount &&
+                ranged.leaseOwningSpanCount() == localPlan.leaseOwningSpanCount(),
+            "range capacity matches the borrowed local view exactly");
+      check(ranged.segments.size() == localPlan.segments.size() &&
+                ranged.leaseSpans.size() == localPlan.leaseSpans.size(),
+            "range and local view produce the same partition shape");
+      for (std::size_t i = 0u; i < ranged.segments.size(); ++i) {
+        const auto& absolute = ranged.segments[i];
+        const auto& localSegment = localPlan.segments[i];
+        check(absolute.firstRecordIndex == first + localSegment.firstRecordIndex &&
+                  absolute.recordCount == localSegment.recordCount &&
+                  absolute.kind == localSegment.kind &&
+                  absolute.drawCount == localSegment.drawCount &&
+                  absolute.locatorRecordType == localSegment.locatorRecordType &&
+                  absolute.capacity == localSegment.capacity,
+              "range segment record indices are raw-absolute and capacities match");
+      }
+      for (std::size_t i = 0u; i < ranged.leaseSpans.size(); ++i) {
+        const auto& absolute = ranged.leaseSpans[i];
+        const auto& localSpan = localPlan.leaseSpans[i];
+        check(absolute.firstRecordIndex == first + localSpan.firstRecordIndex &&
+                  absolute.recordCount == localSpan.recordCount &&
+                  absolute.firstSegmentIndex == localSpan.firstSegmentIndex &&
+                  absolute.segmentCount == localSpan.segmentCount &&
+                  absolute.leaseOrdinal == localSpan.leaseOrdinal &&
+                  absolute.drawCount == localSpan.drawCount &&
+                  absolute.islandCount == localSpan.islandCount &&
+                  absolute.coordinatorCount == localSpan.coordinatorCount &&
+                  absolute.presentCount == localSpan.presentCount &&
+                  absolute.trailingCut == localSpan.trailingCut &&
+                  absolute.ownsLease == localSpan.ownsLease &&
+                  absolute.presentTrailingCoordinator ==
+                      localSpan.presentTrailingCoordinator &&
+                  absolute.finalLeaseSpan == localSpan.finalLeaseSpan &&
+                  absolute.containsTerminalPresent ==
+                      localSpan.containsTerminalPresent &&
+                  absolute.plannedBytes == localSpan.plannedBytes &&
+                  absolute.capacity == localSpan.capacity,
+              "range lease spans keep local ordinals but absolute record indices");
+      }
+    }
+  }
+
+  check(fixture.bytes == originalBytes &&
+            std::memcmp(&imported.header, &originalHeader,
+                        sizeof(imported.header)) == 0 &&
+            imported.records.data() == originalRecords.data() &&
+            imported.records.size() == originalRecords.size() &&
+            imported.handles.data() == originalHandles.data() &&
+            imported.handles.size() == originalHandles.size() &&
+            imported.payloadArena.data() == originalPayload.data(),
+        "range planning leaves input bytes, headers, and borrowed pointers unchanged");
+}
+
 void malformedViewsFailClosed() {
   const std::array records{islandDrawRecord()};
   const auto fixture = makeValidatedFixture(records);
   const auto imported = fixture.view();
+  const auto originalBytes = fixture.bytes;
   check(dxmt9::d3d9::planReplayEmission(imported, 0u, 4096u).reason ==
             EmissionPlanReason::MalformedView,
         "a zero raw ordinal is a malformed-plan rejection");
@@ -1271,6 +1397,68 @@ void malformedViewsFailClosed() {
   check(dxmt9::d3d9::emissionPlanDisposition(plan, false) ==
             dxmt9::d3d9::DirectChunkSlotReplayDisposition::RejectInvalid,
         "a malformed view is a hard reject, not a legacy fallback");
+
+  check(dxmt9::d3d9::planReplayEmissionRange(imported, 9u, 0u, 0u, 4096u)
+                .reason == EmissionPlanReason::MalformedView,
+        "a zero range count is rejected");
+  check(dxmt9::d3d9::planReplayEmissionRange(imported, 9u, 2u, 1u, 4096u)
+                .reason == EmissionPlanReason::MalformedView,
+        "an out-of-bounds range start is rejected");
+  check(dxmt9::d3d9::planReplayEmissionRange(imported, 9u, 0u, 2u, 4096u)
+                .reason == EmissionPlanReason::MalformedView,
+        "an out-of-bounds range extent is rejected");
+  check(dxmt9::d3d9::planReplayEmissionRange(imported, 0u, 0u, 1u, 4096u)
+                .reason == EmissionPlanReason::MalformedView,
+        "a zero range raw ordinal is rejected");
+  check(dxmt9::d3d9::planReplayEmissionRange(imported, 9u, 0u, 1u, 0u)
+                .reason == EmissionPlanReason::MalformedView,
+        "a zero range page size is rejected");
+
+  const auto originalHeader = imported.header;
+  const auto originalRecords = imported.records;
+  const auto originalHandles = imported.handles;
+  const auto originalPayload = imported.payloadArena;
+  auto checkBadHeader = [&](auto mutate, std::string_view message) {
+    auto badFullHeader = imported;
+    mutate(badFullHeader.header);
+    check(dxmt9::d3d9::planReplayEmissionRange(
+              badFullHeader, 9u, 0u, 1u, 4096u)
+                  .reason == EmissionPlanReason::MalformedView,
+          message);
+    check(std::memcmp(&imported.header, &originalHeader,
+                      sizeof(imported.header)) == 0 &&
+              fixture.bytes == originalBytes &&
+              imported.records.data() == originalRecords.data() &&
+              imported.records.size() == originalRecords.size() &&
+              imported.handles.data() == originalHandles.data() &&
+              imported.handles.size() == originalHandles.size() &&
+              imported.payloadArena.data() == originalPayload.data(),
+          "malformed range planning leaves the full input view unchanged");
+  };
+  checkBadHeader([](auto& header) { ++header.recordCount; },
+                 "an inconsistent full record count is rejected");
+  checkBadHeader([](auto& header) { ++header.payloadArenaSize; },
+                 "an inconsistent full payload size is rejected");
+  checkBadHeader([](auto& header) { header.version = 0u; },
+                 "an inconsistent full wire version is rejected");
+  checkBadHeader([](auto& header) { header.recordTableOffset += 4u; },
+                 "an inconsistent full record offset is rejected");
+  checkBadHeader([](auto& header) { header.handleTableOffset += 4u; },
+                 "an inconsistent full handle offset is rejected");
+  checkBadHeader([](auto& header) { header.payloadArenaOffset += 4u; },
+                 "an inconsistent full payload offset is rejected");
+  checkBadHeader([](auto& header) { ++header.handleCount; },
+                 "an inconsistent full handle count is rejected");
+  check(dxmt9::d3d9::planReplayEmissionRange(
+              imported, 9u, std::numeric_limits<std::uint32_t>::max(), 1u,
+              4096u)
+                .reason == EmissionPlanReason::MalformedView,
+        "a UINT32_MAX range start is rejected without arithmetic wrap");
+  check(dxmt9::d3d9::planReplayEmissionRange(
+              imported, 9u, 0u, std::numeric_limits<std::uint32_t>::max(),
+              4096u)
+                .reason == EmissionPlanReason::MalformedView,
+        "a UINT32_MAX range count is rejected without arithmetic wrap");
 }
 
 }  // namespace
@@ -1287,6 +1475,7 @@ int main() {
     coordinatorLocatorsStayInsideTheirSpan();
     compatibilityRangeDoesNotPoisonNeighbouringSpans();
     aRawWithNoIslandOwnsNoLease();
+    rangePlansUseRawAbsoluteRecordIndices();
     malformedViewsFailClosed();
   } catch (const std::exception& error) {
     std::cerr << "replay_emission_plan_spec failed: " << error.what() << '\n';

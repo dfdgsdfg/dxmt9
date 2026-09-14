@@ -1,4 +1,5 @@
 #include "../../../src/dxmt9/dxmt9_command_queue.hpp"
+#include "../../../src/dxmt9/dxmt9_color_attachment_capture_observer.hpp"
 #include "../../../src/dxmt9/dxmt9_source_payload.hpp"
 
 #include <array>
@@ -101,6 +102,21 @@ struct CommandQueueArenaLeaseTestAccess {
   static std::size_t readyCount(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     return queue.cpuReadyTape_.readyCount();
+  }
+
+  static std::size_t observedReadyCount(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    std::array<core::CpuReadyTape::ReadyEntry, 4u> ready;
+    const auto count = queue.cpuReadyTape_.copyReadyPrefix(ready);
+    std::size_t observed = 0u;
+    for (std::size_t i = 0; i < count; ++i) {
+      const auto entry = encoders::findCaptureColorAttachmentSource(
+          reinterpret_cast<std::uintptr_t>(&queue.pool_), ready[i].seqId,
+          ready[i].source);
+      if (entry && entry->ticket.sourceOrdinal ==
+                       ready[i].metadata.sourceOrdinal) ++observed;
+    }
+    return observed;
   }
 
   static CommandQueue::CpuReadyArenaFailureSnapshot activeFailure(
@@ -940,8 +956,15 @@ void testCaptureIdentityUsesExactRawRangesAndPreReorderPasses() {
 
   CommandQueue::CpuReadyCaptureIdentity identity{};
   const auto ticket = begin->ticket();
+  check(!encoders::findCaptureColorAttachmentSource(
+            reinterpret_cast<std::uintptr_t>(&queue.pool()), ticket.seqId,
+            {.id = ticket.id, .storage = ticket.storage}),
+        "capture observer must not admit an unpublished reservation");
   check(begin->publish({}, &identity),
         "capture identity is copied before Ready visibility");
+  check(CommandQueueArenaLeaseTestAccess::observedReadyCount(queue) ==
+            (encoders::captureColorAttachmentObservationEnabled() ? 1u : 0u),
+        "single-source Ready publication carries the exact capture observation");
   check(identity.valid() && identity.sourceOrdinal == ticket.sourceOrdinal &&
             identity.seqId == ticket.seqId && identity.recordCount == 5u,
         "capture identity preserves exact publication metadata");
@@ -1022,6 +1045,8 @@ void testIncompleteCaptureIdentityDoesNotRejectArenaPublication() {
         "incomplete diagnostic identity must not reject renderer publication");
   check(!identity.valid(),
         "incomplete diagnostic identity is returned fail-closed");
+  check(CommandQueueArenaLeaseTestAccess::observedReadyCount(queue) == 0u,
+        "failed capture identity cannot arm a color observation");
   const auto* arena =
       CommandQueueArenaLeaseTestAccess::publishedArena(queue, ticket);
   check(arena != nullptr && SourcePayloadView(*arena).commandCount() == 1u,
@@ -1248,6 +1273,9 @@ void testBatchPublishBuildsOneAuthenticatedCrossSourcePass() {
         "same-pass cross-source rows must carry one nonzero logical pass");
   check(CommandQueueArenaLeaseTestAccess::readyCount(queue) == 2u,
         "cross-source publication must expose both Ready entries together");
+  check(CommandQueueArenaLeaseTestAccess::observedReadyCount(queue) ==
+            (encoders::captureColorAttachmentObservationEnabled() ? 2u : 0u),
+        "batch Ready entries both carry their exact capture identities");
 }
 
 void testBatchPublishRunsEventProofWithoutCaptureSidecar() {
@@ -1280,6 +1308,39 @@ void testBatchPublishRunsEventProofWithoutCaptureSidecar() {
         "complete source window");
   check(CommandQueueArenaLeaseTestAccess::readyCount(queue) == 2u,
         "successful no-capture proof must publish both Ready rows atomically");
+  check(CommandQueueArenaLeaseTestAccess::observedReadyCount(queue) == 0u,
+        "ordinary sources cannot inherit an earlier capture observation");
+}
+
+void testCaptureColorObservationEndsAtQueueTeardown() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+  std::uintptr_t owner = 0u;
+  CpuReadyPublicationTicket ticket{};
+  {
+    SourcePayloadCapacity capacity{};
+    capacity.commandHeaders = 1u;
+    capacity.clearRecords = 1u;
+    CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    owner = reinterpret_cast<std::uintptr_t>(&queue.pool());
+    auto lease = queue.beginCpuReadyArenaSource(125u, makeLayout(capacity));
+    check(lease && lease->beginCaptureIdentity(1u) &&
+              lease->captureNextCommandRecord(0u), "teardown fixture admits capture");
+    ClearDesc clear{};
+    clear.clearColor = true;
+    queue.submitClear(clear);
+    ticket = lease->ticket();
+    CommandQueue::CpuReadyCaptureIdentity identity;
+    check(lease->publish({}, &identity) && identity.valid(),
+          "teardown fixture publishes capture");
+    check(encoders::findCaptureColorAttachmentSource(
+              owner, ticket.seqId, {.id = ticket.id, .storage = ticket.storage})
+                  .has_value() == encoders::captureColorAttachmentObservationEnabled(),
+          "observation belongs to the live queue");
+  }
+  check(!encoders::findCaptureColorAttachmentSource(
+            owner, ticket.seqId, {.id = ticket.id, .storage = ticket.storage}),
+        "pool-address reuse cannot inherit a destroyed queue's observation");
 }
 
 void testBatchPlannerRejectionRollsBackBeforeEffects() {
@@ -1560,6 +1621,7 @@ int main() {
     testCountOneSettlementRequiresExactIdentityTuple();
     testBatchPublishBuildsOneAuthenticatedCrossSourcePass();
     testBatchPublishRunsEventProofWithoutCaptureSidecar();
+    testCaptureColorObservationEndsAtQueueTeardown();
     testBatchPlannerRejectionRollsBackBeforeEffects();
     testBatchBuilderFailureRollsBackForEventSerialFallback();
     testFirstArenaFailureRetainsCoordinatesAcrossLaterFailures();

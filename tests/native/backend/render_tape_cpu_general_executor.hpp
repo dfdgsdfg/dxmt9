@@ -11,6 +11,7 @@
 #include "device_c_cpu_ready_plan.hpp"
 #include "device_c_render_tape_capture_layout.hpp"
 #include "device_c_render_tape_provider.hpp"
+#include "device_c_render_tape_source_plan.hpp"
 #include "device_c_render_tape_runtime_objects.hpp"
 #include "device_c_render_tape_completion.hpp"
 #include "device_c_render_tape_cpu_window.hpp"
@@ -21,8 +22,10 @@
 #include "render_tape_cpu_mutation_boundary.hpp"
 #include "render_tape_cpu_source_oracle.hpp"
 #include "render_tape_cpu_source_admission.hpp"
+#include "render_tape_cpu_policy.hpp"
 
 #include "dxmt9/dxmt9_source_payload.hpp"
+#include "dxmt9/dxmt9_command_queue.hpp"
 
 #include <algorithm>
 #include <array>
@@ -131,6 +134,20 @@ struct CpuGeneralTapeExecutionResult {
   std::size_t sourceSummaryDraws = 0u;
   std::size_t fullOracleCalls = 0u;
   bool logicalResourceOracleComplete = false;
+  dxmt9::d3d9::RenderTapeDigest captureSourcePlanDigest{};
+  std::size_t captureSourcePlanRanges = 0u;
+  std::size_t captureSourcePlanPublications = 0u;
+  std::size_t captureSourcePlanEmptySources = 0u;
+  std::size_t captureSourcePlanPresentSources = 0u;
+  std::vector<dxmt9::d3d9::CaptureSourceReplayRow> captureSourceRows{};
+  // The serialized source-replay receipt deliberately mirrors the provider
+  // evidence contract: authenticated source rows are retained alongside the
+  // provider-local settlement facts and flat publication records.
+  std::vector<dxmt9::d3d9::RenderTapeSourceReplayRowEvidence>
+      captureSourceReplaySources{};
+  std::vector<dxmt9::d3d9::RenderTapeSourceReplayPublicationEvidence>
+      captureSourceReplayPublications{};
+  bool captureSourceReplayStorageOverflow = false;
 };
 
 namespace detail {
@@ -284,6 +301,15 @@ class CpuGeneralTapeExecutor {
     // constrained to immediate, single-source publication until the caller
     // has a qualified batching policy.
     bool measurement = false;
+    // Optional pre-authenticated capture source plan. The caller owns this
+    // object for the duration of run(); the executor only borrows its
+    // immutable ranges and digest.
+    const dxmt9::d3d9::CaptureSourceReplayPlan* captureSourcePlan = nullptr;
+    // Input bytes used to bind the pre-authenticated plan to this exact
+    // GeneralPreflightPlan before any device effects. Both spans must outlive
+    // run() when captureSourcePlan is set.
+    std::span<const std::byte> captureSourceTape{};
+    std::span<const std::byte> captureSourceIdentitySidecar{};
   };
 
   CpuGeneralTapeExecutor(Fixture& fixture, const Plan& plan,
@@ -302,6 +328,12 @@ class CpuGeneralTapeExecutor {
          options_.dropRetiredAliasReceiptForTest ||
          options_.pendingIdentityFault != PendingIdentityFault::None)) {
       result.failure = "general-executor-measurement-policy";
+      return result;
+    }
+    if (options_.captureSourcePlan &&
+        (options_.beforeNextWork || options_.maxPendingSources != 1u ||
+         !options_.sourceOracle.empty() || options_.holdSafeBufferMutation)) {
+      result.failure = "general-executor-capture-source-policy";
       return result;
     }
     if (options_.maxPendingSources < 1u || options_.maxPendingSources > 2u) {
@@ -323,6 +355,7 @@ class CpuGeneralTapeExecutor {
       result.failure = "general-executor-fixture-unavailable";
       return result;
     }
+    if (!admitCaptureSourcePlan(result)) return result;
     if (!admitEmission(result)) return result;
     result.windowPageSize = fixture_.routing->queue_.cpuReadyArenaPlanLimits().pageSize;
     result.windowOffload = bool(fixture_.cDevice->replayOffload);
@@ -622,16 +655,38 @@ class CpuGeneralTapeExecutor {
         return true;
       return fail(event, "general-executor-pending-identity-count");
     };
-    const auto publishReady = [&](std::uint32_t event, bool windowEligible = false) {
+    const auto publishReady = [&](
+                                   std::uint32_t event,
+                                   bool windowEligible = false,
+                                   const std::span<const core::metalqueue::ReplaySourcePublicationReceipt>* strictExpected = nullptr) {
+      const bool strictMode = strictExpected != nullptr;
+      if (strictMode && Access::writingCommandCount(fixture_.routing->queue_) != 0u)
+        return fail(event, "general-executor-source-writing-preexisting");
       if (!Access::publishWriting(fixture_.routing->queue_))
         return fail(event, "general-executor-publish-failed");
-      while (Access::readyCount(fixture_.routing->queue_) != 0u) {
+      const std::size_t expectedReady =
+          strictMode ? strictExpected->size() : 0u;
+      if (strictMode && Access::readyCount(fixture_.routing->queue_) != expectedReady)
+        return fail(event, "general-executor-source-ready-count");
+      std::size_t drained = 0u;
+      while (strictMode ? drained < expectedReady
+                        : Access::readyCount(fixture_.routing->queue_) != 0u) {
+        if (strictMode && Access::readyCount(fixture_.routing->queue_) !=
+                              expectedReady - drained)
+          return fail(event, "general-executor-source-ready-count");
         if (result.submitted < result.completed ||
             result.submitted - result.completed >= options_.maxPendingSources)
           return fail(event, "general-executor-pending-budget");
         const auto expected = Access::peekReadyCompletion(fixture_.routing->queue_);
         if (!expected.completionIdentityValid())
           return fail(event, "general-executor-invalid-completion-identity");
+        if (strictMode) {
+          const auto& receipt = (*strictExpected)[drained];
+          if (!(expected.source == receipt.source) ||
+              expected.seqId != receipt.metadata.seqId ||
+              expected.slotIndex != receipt.controlIndex)
+            return fail(event, "general-executor-source-receipt-mismatch");
+        }
         PendingSourceProof candidate;
         candidate.windowEligible = windowEligible;
         candidate.bind(expected);
@@ -782,13 +837,19 @@ class CpuGeneralTapeExecutor {
         pendingSources.push_back(std::move(candidate));
         result.trace.push_back(trace);
         result.pendingPeak = std::max(result.pendingPeak, result.submitted - result.completed);
+        ++drained;
         if (!options_.beforeNextWork && !releasePending(event)) return false;
       }
+      if (strictMode && (drained != expectedReady ||
+                         Access::readyCount(fixture_.routing->queue_) != 0u))
+        return fail(event, "general-executor-source-ready-drain");
       return result.failure.empty();
     };
 
     const auto replayChunk = [&](std::uint32_t event,
-                                 const dxmt9::d3d9::render_tape_runtime::CommandChunkView& chunk) {
+                                 const dxmt9::d3d9::render_tape_runtime::CommandChunkView& chunk,
+                                 std::optional<std::size_t> commandChunkIndex =
+                                     std::nullopt) {
       dxmt9::d3d9::ImportedChunkView imported;
       if (!dxmt9::d3d9::importPrevalidatedCommandChunk(chunk.bytes,
                                                         chunk.envelope,
@@ -817,17 +878,146 @@ class CpuGeneralTapeExecutor {
               chunk, objects, resolved, resolvedCount) ||
           resolvedCount != imported.handles.size())
         return fail(event, "general-executor-command-handle-failed");
-      if (dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
-              fixture_.cDevice.get(), chunk.bytes, chunk.envelope, resolved,
-              options_.route) != core::D3D_OK)
+      bool sourceDriven = false;
+      if (options_.captureSourcePlan && commandChunkIndex.has_value()) {
+        sourceDriven = true;
+        if (!commandChunkIndex.has_value() ||
+            *commandChunkIndex >= options_.captureSourcePlan->commandChunkCount())
+          return fail(event, "general-executor-capture-source-chunk-index");
+        const auto ranges = options_.captureSourcePlan->rangesForCommandChunk(
+            *commandChunkIndex);
+        const auto sourceRowsIt = std::find_if(
+            result.captureSourceReplaySources.begin(),
+            result.captureSourceReplaySources.end(),
+            [&](const auto& row) {
+              return row.commandChunkIndex == *commandChunkIndex;
+            });
+        if (sourceRowsIt == result.captureSourceReplaySources.end() ||
+            static_cast<std::size_t>(result.captureSourceReplaySources.end() -
+                                     sourceRowsIt) < ranges.size())
+          return fail(event, "general-executor-capture-source-row-map");
+        std::size_t sourceRowCursor = static_cast<std::size_t>(
+            sourceRowsIt - result.captureSourceReplaySources.begin());
+        const auto sourceRowEnd = sourceRowCursor + ranges.size();
+        std::size_t settledRange = 0u;
+        std::uint64_t callbackNs = 0u;
+        const auto settle = [&](
+            const dxmt9::d3d9::ProviderReplaySourceSettlement& settlement) {
+          if (settledRange >= ranges.size() ||
+              sourceRowCursor >= sourceRowEnd ||
+              settlement.rangeIndex != settledRange ||
+              settlement.range.firstRecord != ranges[settledRange].firstRecord ||
+              settlement.range.recordCount != ranges[settledRange].recordCount)
+            return false;
+          auto& sourceRow = result.captureSourceReplaySources[sourceRowCursor];
+          if (sourceRow.settled ||
+              sourceRow.firstRecord != settlement.range.firstRecord ||
+              sourceRow.recordCount != settlement.range.recordCount ||
+              settlement.publications.size() >
+                  result.captureSourceReplayPublications.capacity() -
+                      result.captureSourceReplayPublications.size() ||
+              settlement.publications.size() >
+                  std::numeric_limits<std::uint32_t>::max()) {
+            result.captureSourceReplayStorageOverflow = true;
+            return false;
+          }
+          sourceRow.actualRawOrdinal = settlement.rawOrdinal;
+          sourceRow.rangeIndex = settlement.rangeIndex;
+          sourceRow.publicationOffset = static_cast<std::uint32_t>(
+              result.captureSourceReplayPublications.size());
+          sourceRow.publicationCount = static_cast<std::uint32_t>(
+              settlement.publications.size());
+          sourceRow.settled = true;
+          sourceRow.settlement =
+              settlement.kind ==
+                      dxmt9::d3d9::ProviderReplaySourceSettlementKind::PresentPublished
+                  ? dxmt9::d3d9::RenderTapeSourceReplaySettlement::PresentPublished
+                  : settlement.kind ==
+                            dxmt9::d3d9::ProviderReplaySourceSettlementKind::Published
+                      ? dxmt9::d3d9::RenderTapeSourceReplaySettlement::Published
+                      : dxmt9::d3d9::RenderTapeSourceReplaySettlement::Empty;
+          for (const auto& publication : settlement.publications) {
+            const auto source = publication.source;
+            const auto metadata = publication.metadata;
+            result.captureSourceReplayPublications.push_back({
+                .sourceIdIndex = source.id.index,
+                .sourceIdGeneration = source.id.generation,
+                .storageFirstPage = source.storage.firstPage,
+                .storagePageCount = source.storage.pageCount,
+                .storageGeneration = source.storage.generation,
+                .metadataRawOrdinal = metadata.rawOrdinal,
+                .metadataSourceOrdinal = metadata.sourceOrdinal,
+                .metadataSeqId = metadata.seqId,
+                .metadataBuildGeneration = metadata.buildGeneration,
+                .metadataUsedBytes = metadata.usedBytes,
+                .metadataPageCount = metadata.pageCount,
+                .metadataPaddingPagesBefore = metadata.paddingPagesBefore,
+                .metadataStrictAdmission = metadata.strictAdmission,
+                .controlIndex = static_cast<std::uint64_t>(publication.controlIndex),
+                .hasPresent = publication.hasPresent,
+            });
+          }
+          ++sourceRowCursor;
+          ++settledRange;
+          ++result.captureSourcePlanRanges;
+          result.captureSourcePlanPublications += settlement.publications.size();
+          if (settlement.kind ==
+              dxmt9::d3d9::ProviderReplaySourceSettlementKind::Empty)
+            ++result.captureSourcePlanEmptySources;
+          if (settlement.kind ==
+              dxmt9::d3d9::ProviderReplaySourceSettlementKind::PresentPublished)
+            ++result.captureSourcePlanPresentSources;
+          const auto callbackBegin = options_.measurement
+              ? std::chrono::steady_clock::time_point{}
+              : std::chrono::steady_clock::now();
+          const bool published = publishReady(event, false, &settlement.publications);
+          if (!options_.measurement) callbackNs += elapsed(callbackBegin);
+          return published;
+        };
+        struct SourceSettlementContext {
+          using Settle = decltype(settle);
+          const Settle* settle = nullptr;
+
+          static bool invoke(
+              void* opaque,
+              const dxmt9::d3d9::ProviderReplaySourceSettlement& settlement) noexcept {
+            auto* self = static_cast<SourceSettlementContext*>(opaque);
+            if (!self || !self->settle) return false;
+            try {
+              return (*self->settle)(settlement);
+            } catch (...) {
+              return false;
+            }
+          }
+        } settlementContext{.settle = &settle};
+        const dxmt9::d3d9::ProviderReplaySourceConsumer consumer{
+            .context = &settlementContext,
+            .settled = &SourceSettlementContext::invoke};
+        if (dxmt9::d3d9::replayPrevalidatedResolvedCommandChunkBySources(
+                fixture_.cDevice.get(), chunk.bytes, chunk.envelope, resolved,
+                options_.route, ranges, consumer) != core::D3D_OK ||
+            settledRange != ranges.size() || sourceRowCursor != sourceRowEnd)
+          return fail(event, "general-executor-command-source-replay-failed");
+        if (!options_.measurement) {
+          const auto elapsedReplay = elapsed(replayBegin);
+          result.replayNs += elapsedReplay >= callbackNs
+              ? elapsedReplay - callbackNs
+              : 0u;
+        }
+      } else if (dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
+                     fixture_.cDevice.get(), chunk.bytes, chunk.envelope, resolved,
+                     options_.route) != core::D3D_OK) {
         return fail(event, "general-executor-command-replay-failed");
-      if (!options_.measurement) result.replayNs += elapsed(replayBegin);
+      }
+      if (!options_.measurement && !sourceDriven)
+        result.replayNs += elapsed(replayBegin);
       result.commands += imported.records.size();
       for (const auto& record : imported.records) {
         if (record.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
             record.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE)
           ++result.draws;
       }
+      if (sourceDriven) return result.failure.empty();
       return publishReady(event, windowEligible);
     };
 
@@ -1112,7 +1302,8 @@ class CpuGeneralTapeExecutor {
         case dxmt9::d3d9::RenderTapeEventType::CommandChunk:
           if (bootstrapPending && !replayBootstrap(event)) return false;
           if (replayEvent.index >= plan_.commandChunks.size() ||
-              !replayChunk(event, plan_.commandChunks[replayEvent.index]))
+              !replayChunk(event, plan_.commandChunks[replayEvent.index],
+                           replayEvent.index))
             return false;
           break;
         case dxmt9::d3d9::RenderTapeEventType::ObjectDestroy: {
@@ -1395,7 +1586,127 @@ class CpuGeneralTapeExecutor {
     return true;
   }
 
+  bool admitCaptureSourcePlan(Result& result) const {
+    const auto* sourcePlan = options_.captureSourcePlan;
+    if (!sourcePlan) return true;
+    if (!sourcePlan->valid() ||
+        sourcePlan->commandChunkCount() != plan_.commandChunks.size() ||
+        options_.route == d3d9::ProviderReplayPolicy::Historical ||
+        options_.captureSourceTape.empty() ||
+        options_.captureSourceIdentitySidecar.empty()) {
+      result.failure = "general-executor-capture-source-plan";
+      return false;
+    }
+    d3d9::CaptureSourceReplayPlan reboundPlan;
+    if (d3d9::buildCaptureSourceReplayPlan(
+            options_.captureSourceTape, plan_,
+            options_.captureSourceIdentitySidecar, reboundPlan) !=
+            d3d9::CaptureSourceReplayPlanStatus::Valid ||
+        !detail::cpuGeneralSameDigest(reboundPlan.digest(),
+                                      sourcePlan->digest())) {
+      result.failure = "general-executor-capture-source-binding";
+      return false;
+    }
+    if (!Access::cpuTapeWorkersDisabled(fixture_.routing->queue_) ||
+        fixture_.cDevice->replayOffload ||
+        fixture_.routing->supportsCpuReadyArenaReplay()) {
+      result.failure = "general-executor-capture-source-runtime";
+      return false;
+    }
+    const auto limits = fixture_.routing->queue_.cpuReadyArenaPlanLimits();
+    const auto pageSize = limits.pageSize == 0u ? 4096u : limits.pageSize;
+    std::vector<bool> seen(plan_.commandChunks.size(), false);
+    std::size_t publicationReserve = 0u;
+    for (const auto& replayEvent : plan_.events) {
+      if (replayEvent.type != d3d9::RenderTapeEventType::CommandChunk)
+        continue;
+      if (replayEvent.index >= plan_.commandChunks.size() ||
+          seen[replayEvent.index]) {
+        result.failure = "general-executor-capture-source-event-map";
+        result.failedEvent = replayEvent.eventIndex;
+        return false;
+      }
+      if (replayEvent.eventIndex == std::numeric_limits<std::uint32_t>::max()) {
+        result.failure = "general-executor-capture-source-event-ordinal";
+        result.failedEvent = replayEvent.eventIndex;
+        return false;
+      }
+      seen[replayEvent.index] = true;
+      const auto& chunk = plan_.commandChunks[replayEvent.index];
+      d3d9::ImportedChunkView imported;
+      if (!d3d9::importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope,
+                                                 imported)) {
+        result.failure = "general-executor-capture-source-import";
+        result.failedEvent = replayEvent.eventIndex;
+        return false;
+      }
+      const auto ranges = sourcePlan->rangesForCommandChunk(replayEvent.index);
+      if (!d3d9::validateProviderReplayRecordRanges(
+              chunk.envelope.recordCount, ranges)) {
+        result.failure = "general-executor-capture-source-coverage";
+        result.failedEvent = replayEvent.eventIndex;
+        return false;
+      }
+      for (const auto& range : ranges) {
+        const auto emission = d3d9::planReplayEmissionRange(
+            imported, static_cast<d3d9::RawOrdinal>(replayEvent.eventIndex + 1u),
+            range.firstRecord, range.recordCount, pageSize);
+        if (!emission.partitioned()) {
+          result.failure = "general-executor-capture-source-emission";
+          result.failedEvent = replayEvent.eventIndex;
+          return false;
+        }
+        // Compatibility replay can split at the runtime draw-command limit,
+        // even when the emission partition itself has one span. Reuse the
+        // established conservative CPU-lane proof: the admitted 64-record
+        // maximum, minimum valid command limit (3), and one terminal source
+        // (including Present) stay below the 31-slot queue bound.
+        const auto publicationBound = cpuTapeConservativeMaxPendingPerRaw(
+            range.recordCount, kCpuTapeMinDrawCommandLimit);
+        if (!cpuTapeGeneralQueueBounded(
+                range.recordCount, kCpuTapeMinDrawCommandLimit,
+                dxmt9::kMaxQueuedChunks) ||
+            publicationBound == 0u) {
+          result.failure = "general-executor-capture-source-capacity";
+          result.failedEvent = replayEvent.eventIndex;
+          return false;
+        }
+        if (publicationReserve >
+            std::numeric_limits<std::size_t>::max() - publicationBound) {
+          result.failure = "general-executor-capture-source-capacity";
+          result.failedEvent = replayEvent.eventIndex;
+          return false;
+        }
+        publicationReserve += publicationBound;
+      }
+    }
+    if (std::any_of(seen.begin(), seen.end(), [](bool value) { return !value; })) {
+      result.failure = "general-executor-capture-source-missing-chunk";
+      return false;
+    }
+    result.captureSourcePlanDigest = sourcePlan->digest();
+    result.captureSourceRows.assign(sourcePlan->rows().begin(),
+                                    sourcePlan->rows().end());
+    result.captureSourceReplaySources.clear();
+    result.captureSourceReplaySources.reserve(result.captureSourceRows.size());
+    for (const auto& row : result.captureSourceRows) {
+      result.captureSourceReplaySources.push_back({
+          .eventOrdinal = row.eventOrdinal,
+          .sourceOrdinal = row.sourceOrdinal,
+          .capturedSeqId = row.capturedSeqId,
+          .commandChunkIndex = row.commandChunkIndex,
+          .firstRecord = row.firstRecord,
+          .recordCount = row.recordCount,
+      });
+    }
+    result.captureSourceReplayPublications.clear();
+    result.captureSourceReplayPublications.reserve(publicationReserve);
+    result.captureSourceReplayStorageOverflow = false;
+    return true;
+  }
+
   bool admitEmission(Result& result) const {
+    if (options_.captureSourcePlan) return true;
     const auto pageSize = fixture_.routing->queue_.cpuReadyArenaPlanLimits().pageSize;
     if (pageSize == 0u) {
       result.failure = "general-executor-queue-page-size";

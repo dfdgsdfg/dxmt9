@@ -12,6 +12,64 @@ This is the detailed owner for `R-BACK-2.35`–`R-BACK-2.50`,
 [backend gap](../gap.md) keeps only a routing summary. Historical experiments
 remain in `docs/perfomance/`.
 
+## GPU policy admission negative (2026-09-14)
+
+The real r405 capture now has exact normal-provider pixels under the fixed
+vertex-position profile, but the public 5MiB slot / 64MiB aggregate headroom
+candidate r586 stops at raw30/span0 with `FailStopped/StructuralRejected`.
+This status/reason combination identifies the guard refusing to downgrade an
+existing qualified payload capacity receipt to an unqualified admission in
+`CommandQueue::beginDirectChunkSlotReplay`. Which provision/reuse precondition
+causes the new receipt to remain unqualified still needs a distinguishing
+native case. CPU verification passes while GPU replay stops; the coupled
+policy gate rejects the candidate and does not rank it. Do not weaken the
+receipt guard or infer an allocator-only cause. See
+[the retained policy counterexample](../../../docs/perfomance/mini-replay-bisection/gpu-position-invariance.04.md).
+
+The separate compatibility-exact/production-exact pair now completes the
+public CPU/GPU verification-to-measurement transaction with accepted atomic
+publication (r593) and independent final artifact reauthentication (r598).
+This qualifies the bounded gate, not the rejected headroom policy, concurrent
+worker scheduling or FPS. The fresh full TLA gate and applicable native/x86
+regression sets pass; no headroom/renderer-default promotion is implied.
+
+## Bounded capture-progress: low-water composition repair (2026-09-14)
+
+GT2 original-capture attempt r379 times out before its 500-Present gate and
+publishes no Render Tape. The last periodic snapshot has one Arena admission
+waiter and one session lease; a later process sample observes
+`CommandQueue::waitForCpuReadyArenaAdmission` and
+`CommandQueue::runCpuReadySessionEncodeLoop` both in condition waits, with
+finish/completion also waiting. The retained executable attributes encode's
+sample PC to the open-session/empty-Ready wait, not the first-lease wait. The
+periodic counters and process sample are not simultaneous; r379's exact
+physical-residency value at that wait is still unknown.
+
+The real coordinator native case reproduces a distinguishing cycle in 2.7
+seconds: fill capture's 2048-page high water, retire 1023 pages, then hold 1025
+pages behind deferred Clears with Ready empty and admission still closed above
+lowWaterPages=1024. `sessionResidencyLimitForHysteresis` fixes the queue's
+constant page/source cap using both low water and complete successor headroom.
+Five focused native specs pass, including the corrected FIFO submit/reclaim
+path. `SessionAdmissionHysteresis` passes its safety/progress checks; its
+high-water-only companion reproduces `NoClosedEmptySessionCycle`. This proves
+and repairs a reachable composition defect, not its exclusive attribution to
+r379 or GPU pixel equivalence.
+
+The full 190-configuration TLA gate, native/GPU 7/7 and x86 focused 5/5 pass.
+GT2 r390 with the same 500-Present capture recipe now exits normally, without
+timeout, and publishes one Tape: 176 identity-qualified sources and 1862 draws.
+Chunk rejects and GPU errors are zero. Its staged unix hash matches the repaired
+provider used by r387. This is one positive progress run, not an exclusive
+causal proof of every r379 wait or a general liveness claim.
+
+Required: resume the original-pixel investigation and keep the bounded
+counterexamples. No pressure or timeout-created submit is introduced.
+Wild/FPS impact of the fixed smaller session residency cap remains unmeasured;
+GPU pixel failures remain separate.
+Evidence and exclusions: [GPU qualification investigation](../../../docs/perfomance/mini-replay-bisection/gpu-policy-qualification.03.md),
+`experiments/output/gpu-tape-qualification-20260910/capture-stall-r382.json`.
+
 ## Direct replay construction and ownership progress
 
 | Area | Current implementation truth | Required closure |

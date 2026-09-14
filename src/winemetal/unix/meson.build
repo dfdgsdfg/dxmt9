@@ -73,6 +73,8 @@ dxmt9_winemetal_unix_module = shared_library(
   files(
     'winemetal_unix.cpp',
     'winemetal_private_api.mm',
+    'winemetal_sampling_lineage.mm',
+    'winemetal_vertex_position_probe.mm',
     # ABI-hash handshake handler (slot 4 of the dispatch table). Returns
     # the codegen-time dxmt9::bridge::kBridgeAbiHash for the PE-side
     # DllMain to compare; refuses-to-load on mismatch. Reserved at fixed

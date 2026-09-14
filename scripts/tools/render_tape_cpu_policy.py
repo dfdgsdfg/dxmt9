@@ -18,13 +18,14 @@ import subprocess
 import sys
 from typing import Any, Iterable
 
-
 SCHEMA = "dxmt9.render_tape.cpu_policy.v1"
+SOURCE_SCHEMA = "dxmt9.render_tape.cpu_policy.v2"
 COMPARE_SCHEMA = "dxmt9.render_tape.cpu_policy_compare.v1"
 POLICY_KEYS = frozenset({
     "schema", "replay_route", "draw_command_limit", "slot_headroom_bytes",
     "aggregate_headroom_bytes",
 })
+SOURCE_POLICY_KEYS = POLICY_KEYS | {"source_boundary_mode", "source_plan_sha256"}
 ROUTES = frozenset(("compatibility", "production-slot"))
 MAX_DRAW_COMMAND_LIMIT = 64
 MIN_HEADROOM = 1 << 20
@@ -34,6 +35,16 @@ MAX_AGGREGATE_HEADROOM = 512 << 20
 
 class PolicyError(ValueError):
     """A malformed or semantically impossible versioned policy."""
+
+
+def _gpu_module() -> Any:
+    """Load GPU qualification lazily to keep CPU-only imports acyclic."""
+    try:
+        import render_tape_gpu_policy
+    except ModuleNotFoundError:
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+        import render_tape_gpu_policy
+    return render_tape_gpu_policy
 
 
 def _strict_object(source: bytes | str) -> dict[str, Any]:
@@ -63,17 +74,23 @@ def validate_policy(value: Any) -> dict[str, Any]:
     """
     if not isinstance(value, dict):
         raise PolicyError("policy must be a JSON object")
-    if set(value) != POLICY_KEYS:
-        missing = sorted(POLICY_KEYS - set(value))
-        unknown = sorted(set(value) - POLICY_KEYS)
+    source_policy = value.get("schema") == SOURCE_SCHEMA
+    keys = SOURCE_POLICY_KEYS if source_policy else POLICY_KEYS
+    if set(value) != keys:
+        missing = sorted(keys - set(value))
+        unknown = sorted(set(value) - keys)
         detail = []
         if missing:
             detail.append(f"missing={','.join(missing)}")
         if unknown:
             detail.append(f"unknown={','.join(unknown)}")
         raise PolicyError("policy keys are not exact: " + " ".join(detail))
-    if value["schema"] != SCHEMA or type(value["schema"]) is not str:
+    if value["schema"] not in (SCHEMA, SOURCE_SCHEMA) or type(value["schema"]) is not str:
         raise PolicyError("unsupported policy schema")
+    if source_policy and (value["source_boundary_mode"] != "capture-source"
+                          or not _sha256(value["source_plan_sha256"])
+                          or value["source_plan_sha256"] == "0" * 64):
+        raise PolicyError("v2 requires capture-source and a nonzero source-plan SHA-256")
     route = value["replay_route"]
     if type(route) is not str or route not in ROUTES:
         raise PolicyError("replay_route must be compatibility or production-slot")
@@ -97,9 +114,21 @@ def validate_policy(value: Any) -> dict[str, Any]:
         raise PolicyError("production-slot policy cannot request a draw limit")
     if (slot == 0) != (aggregate == 0) or (aggregate and aggregate < slot):
         raise PolicyError("headroom values must both be zero or aggregate >= slot")
-    return {key: value[key] for key in (
+    result = {key: value[key] for key in (
         "schema", "replay_route", "draw_command_limit", "slot_headroom_bytes",
         "aggregate_headroom_bytes")}
+    if source_policy:
+        result.update(source_boundary_mode=value["source_boundary_mode"],
+                      source_plan_sha256=value["source_plan_sha256"])
+    return result
+
+
+def source_policy_arguments(policy: dict[str, Any]) -> list[str]:
+    policy = validate_policy(policy)
+    if policy["schema"] == SCHEMA:
+        return []
+    return ["--source-boundary-mode", policy["source_boundary_mode"],
+            "--source-plan-sha256", policy["source_plan_sha256"]]
 
 
 def load_policy(path: pathlib.Path) -> dict[str, Any]:
@@ -146,6 +175,32 @@ def _policy_in_receipt(receipt: dict[str, Any], policy: dict[str, Any]) -> bool:
     evidence = _evidence(receipt)
     return bool(evidence and isinstance(evidence.get("cpu_policy"), dict)
                 and evidence.get("cpu_policy") == policy)
+
+
+def source_receipts_accept(receipt: dict[str, Any], policy: dict[str, Any]) -> bool:
+    """Authenticate source witnesses for verification AND low-observer runs."""
+    evidence = _evidence(receipt)
+    if not isinstance(evidence, dict):
+        return False
+    rows = evidence.get("iterations")
+    if not isinstance(rows, list) or not rows:
+        return False
+    if str(pathlib.Path(__file__).resolve().parent) not in sys.path:
+        sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+    if policy["schema"] == SCHEMA:
+        # Historical native output omits the field. Never accept source-mode
+        # execution under v1 merely because its requested flag was hidden.
+        import run_dxmt9_render_tape as runner
+        return all(isinstance(row, dict) and
+                   ("source_replay" not in row or
+                    runner._source_replay_is_default(row["source_replay"]))
+                   for row in rows)
+    import render_tape_source_policy
+    return all(isinstance(row, dict) and
+               render_tape_source_policy.source_replay_accepts(
+                   row.get("source_replay"), policy, receipt.get("input_components")) and
+               render_tape_source_policy.cpu_source_trace_matches(row)
+               for row in rows)
 
 
 ARTIFACT_SCHEMA = "dxmt9.render_tape.cpu_experiment_artifact.v1"
@@ -348,7 +403,12 @@ def verify_receipt(
     receipt: dict[str, Any], policy: dict[str, Any], *, repeat: int,
     input_inspection: dict[str, Any] | None = None,
 ) -> tuple[bool, str]:
-    """Accept a raw/native or public artifact full-oracle receipt."""
+    """Validate local full-oracle evidence, not standalone input authenticity.
+
+    The paired workflow additionally authenticates the independently staged
+    manifest, executable/images and retained receipts in _final_identity_check.
+    A self-consistent native JSON alone is never a policy promotion receipt.
+    """
     try:
         policy = validate_policy(policy)
     except PolicyError:
@@ -366,6 +426,8 @@ def verify_receipt(
         evidence, policy, repeat=repeat, measurement=False)
     if not valid:
         return False, reason
+    if not source_receipts_accept(receipt, policy):
+        return False, "verification-source-settlement-mismatch"
     if not _runner_general_accepts(
             evidence, policy, repeat=repeat, input_inspection=input_inspection,
             measurement=False):
@@ -412,6 +474,8 @@ def execution_receipt(
         evidence, policy, repeat=repeat, measurement=True)
     if not valid:
         return False, reason, []
+    if not source_receipts_accept(receipt, policy):
+        return False, "measurement-source-settlement-mismatch", []
     # These are deliberately allowed to be absent in the native root object;
     # the per-iteration fields below are the authenticated measurement contract.
     if (evidence.get("full_oracle_calls") not in (None, 0)
@@ -669,7 +733,7 @@ def cpu_policy_compare(args: argparse.Namespace) -> int:
                 output, preserve_rejected=True,
                 failure_metadata={"operation": "cpu-policy-compare"}) as staging:
             staged = staging / "input"
-            runner_module.copy_cpu_input_owned(args.bundle.resolve(), staged)
+            runner_module.copy_input_owned(args.bundle.resolve(), staged)
             verify: dict[str, dict[str, Any]] = {}
             policies = (("reference", reference_policy), ("candidate", candidate_policy))
             for name, policy in policies:
@@ -688,6 +752,7 @@ def cpu_policy_compare(args: argparse.Namespace) -> int:
                            str(policy["slot_headroom_bytes"]), "--aggregate-headroom-bytes",
                            str(policy["aggregate_headroom_bytes"]), "--output-dir", str(child),
                            "--timeout-seconds", str(args.timeout_seconds)]
+                command += source_policy_arguments(policy)
                 verify[name] = _child(command, args.timeout_seconds + 5)
             verify_checks = {name: verify_receipt(verify[name], policy, repeat=2)
                              for name, policy in policies}
@@ -696,8 +761,37 @@ def cpu_policy_compare(args: argparse.Namespace) -> int:
                           if valid else {"accepted": False,
                                         "failures": [{"name": "verification-rejected"}]})
             pair_bound = _policy_pair_bindings_match(verify["reference"], verify["candidate"])
+            gpu_provider = getattr(args, "gpu_provider", pathlib.Path(
+                "build/tools/dxmt9-render-tape-provider"))
+            gpu_qualification: dict[str, Any] = {
+                "schema": _gpu_module().SCHEMA,
+                "accepted": False,
+                "skipped": not bool(getattr(args, "gpu_qualify", False)),
+                "qualification_scope": None,
+                "failures": [],
+                "policies": {},
+            }
+            if getattr(args, "gpu_qualify", False) and valid and comparison["accepted"] and pair_bound:
+                try:
+                    provider_snapshot = runner_module.digest(gpu_provider.resolve())
+                    validator_snapshot = runner_module.digest(args.validator.resolve())
+                except (OSError, ValueError):
+                    provider_snapshot = validator_snapshot = None
+                gpu_qualification = _gpu_module().qualify_policy_pair(
+                    input_bundle=staged, staging=staging,
+                    provider=gpu_provider, validator=args.validator,
+                    reference_policy=reference_policy,
+                    candidate_policy=candidate_policy,
+                    timeout_seconds=args.timeout_seconds,
+                    reset=getattr(args, "gpu_reset", "cold-device"),
+                    cpu_verification=verify,
+                    expected_provider_sha256=provider_snapshot,
+                    expected_validator_sha256=validator_snapshot,
+                )
             measurements: dict[str, Any] = {}
-            if valid and comparison["accepted"] and pair_bound:
+            gpu_gate = (not getattr(args, "gpu_qualify", False)
+                        or gpu_qualification.get("accepted") is True)
+            if valid and comparison["accepted"] and pair_bound and gpu_gate:
                 for name, policy in policies:
                     child = staging / "measure" / name
                     command = [str(launcher), str(runner), "cpu-experiment", str(staged),
@@ -712,6 +806,7 @@ def cpu_policy_compare(args: argparse.Namespace) -> int:
                                str(policy["slot_headroom_bytes"]), "--aggregate-headroom-bytes",
                                str(policy["aggregate_headroom_bytes"]), "--output-dir", str(child),
                                "--timeout-seconds", str(args.timeout_seconds)]
+                    command += source_policy_arguments(policy)
                     measurements[name] = _child(command, args.timeout_seconds + 5)
             qualifications: dict[str, tuple[bool, str, list[dict[str, Any]]]] = {}
             for name, policy in policies:
@@ -723,6 +818,12 @@ def cpu_policy_compare(args: argparse.Namespace) -> int:
             identity_bound = (pair_bound and _final_identity_check(
                     runner_module, staged, args.provider, args.validator,
                     [*verify.values(), *measurements.values()]))
+            if getattr(args, "gpu_qualify", False):
+                identity_bound = bool(identity_bound and _gpu_module().final_reauthenticate(
+                    gpu_qualification, staging=staging, input_bundle=staged,
+                    provider=gpu_provider, validator=args.validator,
+                    runner=runner_module, expected_policies=dict(policies)))
+                identity_bound = bool(identity_bound and gpu_qualification.get("accepted") is True)
             accepted = bool(valid and comparison["accepted"] and identity_bound and all(
                 name in qualifications and qualifications[name][0]
                 and bindings_match(verify[name], measurements[name], policy)
@@ -730,6 +831,7 @@ def cpu_policy_compare(args: argparse.Namespace) -> int:
             failures = [dict(name=f"{name}-verification", reason=check[1])
                         for name, check in verify_checks.items() if not check[0]]
             failures.extend(comparison["failures"])
+            failures.extend(gpu_qualification.get("failures", []))
             if not identity_bound:
                 failures.append({"name": "input-provider-image-binding"})
             for name, check in qualifications.items():
@@ -744,7 +846,9 @@ def cpu_policy_compare(args: argparse.Namespace) -> int:
                 "warmup": args.warmup,
                 "repeat": args.repeat,
                 "semantic_proof": False,
-                "gpu_evidence": False,
+                "gpu_evidence": bool(gpu_qualification.get("accepted") is True),
+                "gpu_qualification": gpu_qualification,
+                "qualification_scope": gpu_qualification.get("qualification_scope"),
                 "reference_policy": reference_policy,
                 "candidate_policy": candidate_policy,
                 "verification": {
@@ -789,7 +893,14 @@ def parser() -> argparse.ArgumentParser:
         "build/tests/native/backend/dxmt9-cpu-ready-production-routing-spec"))
     parser.add_argument("--validator", type=pathlib.Path, default=pathlib.Path(
         "build/tools/dxmt9-render-tape"))
+    parser.add_argument("--gpu-provider", type=pathlib.Path, default=pathlib.Path(
+        "build/tools/dxmt9-render-tape-provider"))
     parser.add_argument("--timeout-seconds", type=int, default=30)
+    parser.add_argument("--gpu-qualify", action="store_true",
+                        help="qualify both policies with strict real-Metal readback before measurement")
+    parser.add_argument("--gpu-reset", choices=("cold-device", "warm-device"),
+                        default="cold-device",
+                        help="explicit reset policy for GPU qualification children")
     return parser
 
 

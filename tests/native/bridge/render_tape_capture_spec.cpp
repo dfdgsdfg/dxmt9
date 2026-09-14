@@ -4169,6 +4169,118 @@ void testProductionIdentityLedgerIsTokenBoundAndNoClobber() {
         "zero logical pass IDs never infer continuity across source boundaries");
 }
 
+void testProductionIdentityEventLocalPassComposition() {
+  RenderTapeProductionIdentityLedger ledger;
+  const RenderTapeProductionPassRange render{
+      .firstRecord = 0u, .recordCount = 1u,
+      .dagPassIndex = 0u, .passKind = 1u, .logicalPassId = 1u};
+  auto coordinator = render;
+  coordinator.passKind = 4u;
+  check(ledger.appendEventLocalPasses(1u, 11u, 21u, 31u, 0u, 1u,
+                      std::span(&render, 1u)),
+        "event-local counterexample admits first event pass one");
+  check(ledger.appendEventLocalPasses(1u, 12u, 22u, 32u, 0u, 1u,
+                      std::span(&coordinator, 1u)),
+        "different events must not collide at event-local pass one");
+
+  // The same metadata also must not silently alias two unrelated events.
+  // Exhaust the small producer namespace, both DAG/kind values, and a split
+  // event; query the actual serialized sidecar rather than a test-only mapper.
+  for (const auto local : {1u, 3u}) {
+    for (const auto nextLocal : {1u, 3u}) {
+      for (const auto dag : {0u, 2u}) {
+        for (const auto kind : {1u, 4u}) {
+          RenderTapeProductionIdentityLedger composed;
+          auto first = render;
+          first.logicalPassId = local;
+          auto continuation = first;
+          continuation.firstRecord = 1u;
+          auto next = render;
+          next.logicalPassId = nextLocal;
+          next.dagPassIndex = dag;
+          next.passKind = kind;
+          check(composed.appendEventLocalPasses(
+                    1u, 11u, 21u, 31u, 0u, 1u, std::span(&first, 1u)) &&
+                    composed.appendEventLocalPasses(
+                    1u, 11u, 22u, 32u, 1u, 1u, std::span(&continuation, 1u)) &&
+                    composed.registerExpectedSettlement(
+                    1u, 11u, 101u, 201u, 21u, 32u, 2u) &&
+                    composed.completeSettlement(1u, 11u) &&
+                    composed.appendEventLocalPasses(
+                    1u, 12u, 23u, 33u, 0u, 1u, std::span(&next, 1u)) &&
+                    composed.registerExpectedSettlement(
+                    1u, 12u, 102u, 202u, 23u, 33u, 1u) &&
+                    composed.completeSettlement(1u, 12u),
+                "event namespace preserves exact source settlement");
+          D9CRenderTapeIdentityCaptureResult query{};
+          check(composed.copy(1u, query, {}) && query.sourceCount == 3u &&
+                    query.rangeCount == 3u,
+                "composed identity has all source and range rows");
+          std::vector<std::byte> bytes(query.byteCount);
+          check(composed.copy(1u, query, bytes), "copy composed identity");
+          std::array<D9CRenderTapeIdentityRangeEntry, 3> rows{};
+          std::memcpy(rows.data(), bytes.data() +
+              3u * sizeof(D9CRenderTapeIdentitySourceEntry), sizeof(rows));
+          check(rows[0].logicalPassId == rows[1].logicalPassId &&
+                    rows[2].logicalPassId != rows[0].logicalPassId &&
+                    rows[2].dagPassIndex == dag && rows[2].passKind == kind,
+                "same-event continuation joins, different event IDs never alias");
+        }
+      }
+    }
+  }
+
+  for (const bool eventFirst : {false, true}) {
+    RenderTapeProductionIdentityLedger mixed;
+    auto second = render;
+    second.firstRecord = 1u;
+    const auto append = [&](bool local, std::uint64_t source,
+                            const RenderTapeProductionPassRange& range) {
+      return local ? mixed.appendEventLocalPasses(
+          1u, 11u, source, source + 10u, range.firstRecord, 1u,
+          std::span(&range, 1u)) : mixed.append(
+          1u, 11u, source, source + 10u, range.firstRecord, 1u,
+          std::span(&range, 1u));
+    };
+    check(append(eventFirst, 21u, render) &&
+              !append(!eventFirst, 22u, second),
+          "one event must not mix frame and event-local authority");
+  }
+  for (unsigned mutation = 0u; mutation != 6u; ++mutation) {
+    RenderTapeProductionIdentityLedger invalid;
+    check(invalid.appendEventLocalPasses(
+              1u, 11u, 21u, 31u, 0u, 1u, std::span(&render, 1u)),
+          "invalid event-local continuation fixture");
+    auto second = render;
+    second.firstRecord = 1u;
+    if (mutation == 0u) second.passKind = 4u;
+    if (mutation == 1u) second.dagPassIndex = 2u;
+    if (mutation == 2u) second.logicalPassId = 0u;
+    if (mutation == 3u)
+      second.logicalPassId = std::numeric_limits<std::uint64_t>::max();
+    if (mutation == 4u) second.firstRecord = 0u;
+    if (mutation == 5u) second.recordCount = 2u;
+    check(!invalid.appendEventLocalPasses(
+              1u, 11u, 22u, 32u, 1u, 1u, std::span(&second, 1u)),
+          "changed membership, missing identity, overflow or coverage fails closed");
+    D9CRenderTapeIdentityCaptureResult query{};
+    check(!invalid.copy(1u, query, {}), "no partial identity after rejection");
+    check(invalid.appendEventLocalPasses(
+              2u, 1u, 1u, 1u, 0u, 1u, std::span(&render, 1u)),
+          "new token resets failed event namespace");
+  }
+
+  RenderTapeProductionIdentityLedger overflow;
+  auto high = render;
+  high.logicalPassId = std::numeric_limits<std::uint64_t>::max() - 2u;
+  check(overflow.append(1u, 11u, 21u, 31u, 0u, 1u, std::span(&high, 1u)),
+        "trusted frame ID establishes near-exhaustion allocator");
+  high.logicalPassId = 3u;
+  check(!overflow.appendEventLocalPasses(
+            1u, 12u, 22u, 32u, 0u, 1u, std::span(&high, 1u)),
+        "event base plus local offset must not wrap");
+}
+
 void testBlockCompressedLockCaptureLayouts() {
   constexpr std::uint32_t dxt1 = render_tape_d3d_format::DXT1;
   constexpr std::uint32_t dxt3 = render_tape_d3d_format::DXT3;
@@ -4866,6 +4978,7 @@ int main(int argc, char** argv) {
     testProductionExactEventWaitAcknowledgesOnlySuccessfulWait();
     testExplicitMipReceiptSurvivesNestedCommitAndEmptyFlush();
     testProductionIdentityLedgerIsTokenBoundAndNoClobber();
+    testProductionIdentityEventLocalPassComposition();
     testBlockCompressedLockCaptureLayouts();
     testBlockCompressedSubrectMipAndOddExtentLayouts();
     testBlockCompressedCaptureRejectsInvalidLayouts();

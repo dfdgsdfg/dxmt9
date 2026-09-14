@@ -1941,11 +1941,13 @@ int32_t checkReplayBatchFailure(D9CDevice* device, int32_t hr) noexcept {
 
 int32_t replayCompatibilityChunk(
     D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
-    bool pacedByPresentOrdinal, bool containsOrderedControls = false) {
-  auto& transaction = beginReplayTransaction(device, raw);
+    bool pacedByPresentOrdinal, bool containsOrderedControls = false,
+    ReplayRecordRange range = {}) {
+  auto& transaction = beginReplayTransaction(
+      device, raw, 1u, static_cast<std::uint32_t>(range.firstRecordIndex));
   const auto hr = checkReplayBatchFailure(device, replayResolvedChunk(
       device, raw, pacedByPresentOrdinal, transaction, nullptr, {},
-      containsOrderedControls));
+      containsOrderedControls, {}, false, nullptr, range));
   if (failed(hr)) {
     (void)rollbackReplayTransaction(device, transaction);
     return hr;
@@ -1989,13 +1991,18 @@ int32_t replayEmissionSpans(
     const dxmt9::d3d9::ImportedChunkView& imported,
     const dxmt9::d3d9::ReplayEmissionPlan& plan,
     dxmt9::CommandQueue& queue, bool observability,
-    dxmt9::perf::DirectChunkSlotReplayOutcome& outcome) {
+    dxmt9::perf::DirectChunkSlotReplayOutcome& outcome,
+    ReplayRecordRange fallbackRange = {},
+    dxmt9::CommandQueue::ReplaySourceBoundaryExpectation*
+        terminalWriter = nullptr) {
+  if (terminalWriter) *terminalWriter = {};
   outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::NotAttempted;
   // Whole-raw ordered-control preflight, once, before any span executes.
   // Every span call below then skips its own preflight: a span may
   // legitimately contain no control, and repeating the scan per span would
   // let a late malformed control fail after an earlier span's effects.
-  if (plan.orderedControlCount != 0) {
+  if (plan.orderedControlCount != 0 &&
+      !fallbackRange.orderedControlPreflightDone) {
     bool foundOrderedControl = false;
     for (std::size_t index = 0; index < imported.records.size(); ++index) {
       const auto record = imported.record(index);
@@ -2149,7 +2156,10 @@ int32_t replayEmissionSpans(
         dxmt9::perf::countReplaySpanOrdinaryFallbackDraws(span.drawCount);
       }
       markLegacyResources(device, raw);
-      return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal);
+      return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal,
+                                      !fallbackRange.wholeRaw() &&
+                                          plan.orderedControlCount != 0u,
+                                      fallbackRange);
     }
 
     auto lease = std::move(*begin.lease);
@@ -2189,7 +2199,10 @@ int32_t replayEmissionSpans(
       // Already narrowed to ReplayFailed above; compatibility replay owning
       // the raw from here must not report the direct attempt as committed.
       markLegacyResources(device, raw);
-      return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal);
+      return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal,
+                                      !fallbackRange.wholeRaw() &&
+                                          plan.orderedControlCount != 0u,
+                                      fallbackRange);
     }
     // Explicit cut at the span end. Coordinator appends already seal the open
     // run implicitly, but a span boundary is a cut the assembler never sees,
@@ -2220,6 +2233,16 @@ int32_t replayEmissionSpans(
       outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::CommitFailed;
       return commitChunkFail("chunk-span-state-commit", span.firstRecordIndex);
     }
+    if (terminalWriter && !fallbackRange.wholeRaw() &&
+        span.presentCount == 0u &&
+        span.firstRecordIndex + span.recordCount ==
+            fallbackRange.firstRecordIndex + fallbackRange.recordCount) {
+      *terminalWriter = {
+          .source = {.id = destinationTicket.id,
+                     .storage = destinationTicket.storage},
+          .seqId = destinationTicket.seqId,
+      };
+    }
     // At least one lease reached publication. A later span may still fail, and
     // will narrow this again; nothing after this point can fall back.
     outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::Committed;
@@ -2231,7 +2254,7 @@ int32_t replayEmissionSpans(
       dxmt9::perf::countReplaySpanStateProjections(span.recordCount);
     }
   }
-  dxmt9::perf::countChunkAdmit();
+  if (fallbackRange.countAdmit) dxmt9::perf::countChunkAdmit();
   return dxmt9::core::D3D_OK;
 }
 
@@ -2795,7 +2818,7 @@ int32_t replayPlannedChunk(D9CDevice* device,
         failCaptureIdentity("range-allocation");
         return dxmt9::core::D3D_OK;
       }
-      if (!device->renderTapeIdentityCapture.append(
+      if (!device->renderTapeIdentityCapture.appendEventLocalPasses(
               transferRaw.renderTapeCaptureToken,
               transferRaw.renderTapeEventOrdinal,
               segment.sourceOrdinal, segment.seqId, segment.firstRecord,
@@ -2897,45 +2920,272 @@ private:
   dxmt9::d3d9::RawCommandChunk& chunk_;
   bool armed_ = true;
 };
-}  // namespace
 
-int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
-    D9CDevice* d, std::span<const std::byte> bytes,
+int32_t replayProviderRecordRanges(
+    D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
+    std::span<const dxmt9::d3d9::ProviderReplayRecordRange> ranges,
+    std::uint32_t& completedRanges,
+    std::span<const std::uint32_t> batchCuts,
+    std::uint32_t& completedBatchCuts) {
+  completedRanges = 0u;
+  completedBatchCuts = 0u;
+  markLegacyResources(device, raw);
+  std::size_t nextBatchCut = 0u;
+  for (const auto& sourceRange : ranges) {
+    auto& transaction = beginReplayTransaction(
+        device, raw, /*compatibilitySourceCount=*/1u,
+        sourceRange.firstRecord);
+    struct RangeTransactionScope {
+      D9CDevice* device;
+      dxmt9::d3d9::ReplayTransaction& transaction;
+      bool committed = false;
+      ~RangeTransactionScope() noexcept {
+        // Also close the journal when allocation throws from the sink.
+        // rollbackReplayTransaction fail-stops an irreversible prefix.
+        if (!committed) (void)rollbackReplayTransaction(device, transaction);
+      }
+    } transactionScope{device, transaction};
+    const auto sourceEnd = sourceRange.firstRecord + sourceRange.recordCount;
+    auto cursor = sourceRange.firstRecord;
+    while (cursor < sourceEnd) {
+      const bool batchCut = nextBatchCut < batchCuts.size() &&
+          batchCuts[nextBatchCut] < sourceEnd;
+      const auto end = batchCut ? batchCuts[nextBatchCut] : sourceEnd;
+      const ReplayRecordRange range{
+          .firstRecordIndex = cursor,
+          .recordCount = end - cursor,
+          .orderedControlPreflightDone = true,
+          .countAdmit = false,
+      };
+      // A subrange uses the existing sink's terminal batch flush. Keep the
+      // source journal and queue publication outside this loop: the cut is
+      // not authority to submit a source or end a physical render pass.
+      const auto hr = checkReplayBatchFailure(
+          device, replayResolvedChunk(device, raw, /*pacedByPresentOrdinal=*/false,
+                                      transaction, nullptr, {},
+                                      /*containsOrderedControls=*/true, {}, false,
+                                      nullptr, range));
+      if (failed(hr)) return hr;
+      cursor = end;
+      if (batchCut) {
+        ++nextBatchCut;
+        ++completedBatchCuts;
+      }
+    }
+    if (!commitReplayTransaction(transaction,
+                                 compatibilityReplayReceipt(transaction))) {
+      return commitChunkFail("provider-replay-range-commit",
+                             sourceRange.firstRecord);
+    }
+    transactionScope.committed = true;
+    auto upper = device ? device->dev().upperDevice() : nullptr;
+    if (!upper) {
+      return commitChunkFail("provider-replay-range-flush-device",
+                             sourceRange.firstRecord);
+    }
+    // This cold queue operation requests publication of the pending writer
+    // slot without waiting for GPU completion. It rejects an active
+    // arena/direct build, so a successful return completes the requested
+    // source-boundary publication.
+    if (!upper->queue().publishReplayDiagnosticBoundary()) {
+      return commitChunkFail("provider-replay-range-flush",
+                             sourceRange.firstRecord);
+    }
+    ++completedRanges;
+  }
+  dxmt9::perf::countChunkAdmit();
+  return dxmt9::core::D3D_OK;
+}
+
+bool preflightProviderOrderedControls(
+    const dxmt9::d3d9::ImportedChunkView& imported,
+    std::uint64_t rawOrdinal) noexcept {
+  for (std::size_t index = 0; index < imported.records.size(); ++index) {
+    const auto record = imported.record(index);
+    switch (record.header.type) {
+    case D9C_COMMAND_RECORD_QUERY_ISSUE:
+    case D9C_COMMAND_RECORD_READBACK:
+    case D9C_COMMAND_RECORD_UPDATE_TEXTURE: {
+      const auto disposition = dxmt9::d3d9::makeOrderedControlDisposition(
+          record, rawOrdinal, index);
+      if (!disposition || !disposition->valid()) {
+        return false;
+      }
+      break;
+    }
+    default:
+      break;
+    }
+  }
+  return true;
+}
+
+int32_t replayProviderSourcePolicy(
+    D9CDevice* device, dxmt9::d3d9::RawCommandChunk& raw,
+    const dxmt9::d3d9::ImportedChunkView& imported,
+    dxmt9::d3d9::ProviderReplayPolicy policy,
+    std::span<const dxmt9::d3d9::ProviderReplayRecordRange> ranges,
+    dxmt9::d3d9::ProviderReplaySourceConsumer consumer) {
+  using namespace dxmt9::d3d9;
+  auto upper = device ? device->dev().upperDevice() : nullptr;
+  if (!upper ||
+      (policy == ProviderReplayPolicy::ProductionSlot &&
+       !upper->supportsDirectChunkSlotReplay())) {
+    return commitChunkFail("provider-source-policy-backend");
+  }
+  auto& queue = upper->queue();
+  const auto limits = queue.cpuReadyArenaPlanLimits();
+  // No prefix may execute before the entire raw's plans, control contracts
+  // and receipt storage have been admitted. Each plan borrows global payload
+  // and handle offsets; private raw ownership never splits or gets repacked.
+  std::vector<ReplayEmissionPlan> plans;
+  plans.reserve(ranges.size());
+  std::size_t maximumRangeRecords = 0u;
+  for (const auto& range : ranges) {
+    auto plan = planReplayEmissionRange(
+        imported, raw.replaySeq, range.firstRecord, range.recordCount,
+        limits.pageSize == 0u ? 4096u : limits.pageSize);
+    if (!plan.partitioned()) {
+      return commitChunkFail("provider-source-policy-plan", range.firstRecord);
+    }
+    maximumRangeRecords = std::max(maximumRangeRecords,
+                                  static_cast<std::size_t>(range.recordCount));
+    plans.push_back(std::move(plan));
+  }
+  if (!preflightProviderOrderedControls(imported, raw.replaySeq)) {
+    return commitChunkFail("provider-source-policy-ordered-control");
+  }
+  // One command can publish a previous writer and its own terminal command.
+  // This is bounded evidence storage, not permission to exceed queue capacity.
+  if (maximumRangeRecords > (std::numeric_limits<std::size_t>::max() - 1u) / 2u) {
+    return commitChunkFail("provider-source-policy-receipt-capacity");
+  }
+  std::vector<dxmt9::core::metalqueue::ReplaySourcePublicationReceipt> receipts(
+      maximumRangeRecords * 2u + 1u);
+  const bool observability = dxmt9::perf::enabled();
+  bool priorRangeSettled = false;
+  struct SourceExecutionScope {
+    dxmt9::CommandQueue& queue;
+    bool complete = false;
+    bool enteredEffects = false;
+    ~SourceExecutionScope() noexcept {
+      if (!complete && enteredEffects) queue.failStopReplaySourceExecution();
+    }
+  } execution{queue};
+
+  for (std::size_t index = 0u; index < ranges.size(); ++index) {
+    const auto& range = ranges[index];
+    const auto& plan = plans[index];
+    auto capture = queue.beginReplaySourcePublicationCapture(receipts);
+    if (!capture) {
+      if (priorRangeSettled) execution.enteredEffects = true;
+      return commitChunkFail("provider-source-policy-publication-begin",
+                             range.firstRecord);
+    }
+    const ReplayRecordRange fallbackRange{
+        .firstRecordIndex = range.firstRecord,
+        .recordCount = range.recordCount,
+        .orderedControlPreflightDone = true,
+        .countAdmit = false,
+    };
+    // Each new local source needs final-use marks at its own queue sequence.
+    // The full raw's retained wrappers and snapshot bindings stay unchanged.
+    raw.resourcesMarkedBeforeReplay = false;
+    execution.enteredEffects = true;
+    dxmt9::CommandQueue::ReplaySourceBoundaryExpectation terminalWriter{};
+    auto outcome = dxmt9::perf::DirectChunkSlotReplayOutcome::NotAttempted;
+    const bool direct = policy == ProviderReplayPolicy::ProductionSlot &&
+        plan.spansExecutable() && plan.leaseOwningSpanCount() != 0u &&
+        plan.rotationFreeProductionEligible();
+    int32_t hr;
+    if (direct) {
+      hr = replayEmissionSpans(device, raw, false, imported, plan, queue,
+                               observability, outcome, fallbackRange,
+                               &terminalWriter);
+    } else {
+      markLegacyResources(device, raw);
+      hr = replayCompatibilityChunk(device, raw, false,
+                                     plan.orderedControlCount != 0u,
+                                     fallbackRange);
+    }
+    if (observability && policy == ProviderReplayPolicy::ProductionSlot) {
+      dxmt9::perf::recordDirectChunkSlotReplayDisposition(
+          static_cast<dxmt9::perf::DirectChunkSlotReplayDisposition>(
+              emissionPlanDisposition(plan, false)),
+          outcome, range.recordCount, raw.recordBytes);
+    }
+    if (failed(hr)) return hr;
+    const auto boundary = terminalWriter.empty()
+        ? queue.publishReplaySourceBoundary()
+        : queue.publishReplaySourceBoundary(terminalWriter);
+    if (boundary.status ==
+        dxmt9::CommandQueue::ReplaySourceBoundaryStatus::Rejected) {
+      return commitChunkFail("provider-source-policy-publication-end",
+                             range.firstRecord);
+    }
+    const auto captured = capture->finish();
+    if (!captured.complete || captured.count > receipts.size()) {
+      return commitChunkFail("provider-source-policy-publication-receipt",
+                             range.firstRecord);
+    }
+    const auto published = std::span<const dxmt9::core::metalqueue::
+        ReplaySourcePublicationReceipt>(receipts.data(), captured.count);
+    const auto presentCount = static_cast<std::size_t>(std::count_if(
+        imported.records.begin() + range.firstRecord,
+        imported.records.begin() + range.firstRecord + range.recordCount,
+        [](const auto& record) {
+          return record.type == D9C_COMMAND_RECORD_PRESENT;
+        }));
+    const auto publishedPresents = static_cast<std::size_t>(std::count_if(
+        published.begin(), published.end(),
+        [](const auto& receipt) { return receipt.hasPresent; }));
+    if (publishedPresents != presentCount ||
+        (boundary.published() &&
+         (published.empty() || published.back().source != boundary.source ||
+          published.back().metadata.seqId != boundary.metadata.seqId))) {
+      return commitChunkFail("provider-source-policy-settlement-mismatch",
+                             range.firstRecord);
+    }
+    const ProviderReplaySourceSettlement settlement{
+        .range = range,
+        .rawOrdinal = raw.replaySeq,
+        .rangeIndex = static_cast<std::uint32_t>(index),
+        .kind = presentCount != 0u
+            ? ProviderReplaySourceSettlementKind::PresentPublished
+            : (published.empty() ? ProviderReplaySourceSettlementKind::Empty
+                                 : ProviderReplaySourceSettlementKind::Published),
+        .publications = published,
+    };
+    // The synchronous callback may drain a no-worker CPU queue, but cannot
+    // outlive the borrowed receipt span or mutate/release this raw owner.
+    if (consumer.settled && !consumer.settled(consumer.context, settlement)) {
+      return commitChunkFail("provider-source-policy-consumer", range.firstRecord);
+    }
+    priorRangeSettled = true;
+  }
+  execution.complete = true;
+  dxmt9::perf::countChunkAdmit();
+  return dxmt9::core::D3D_OK;
+}
+
+int32_t runProviderReplay(
+    D9CDevice* device, std::span<const std::byte> bytes,
     const dxmt9::d3d9::CommandChunkEnvelope& envelope,
     std::span<void* const> resolvedObjects,
-    dxmt9::d3d9::ProviderReplayPolicy policy) noexcept {
-  if (!d || bytes.empty() ||
-      envelope.version != D9C_COMMAND_CHUNK_VERSION) {
-    return commitChunkFail("provider-replay-bad-input");
-  }
-  if (policy != dxmt9::d3d9::ProviderReplayPolicy::Historical &&
-      policy != dxmt9::d3d9::ProviderReplayPolicy::Compatibility &&
-      policy != dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot) {
-    return commitChunkFail("provider-replay-policy");
-  }
-  const bool productionSlot =
-      policy == dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot;
-  if (productionSlot &&
-      !commandChunkProducerIdentityImportable(envelope.producerIdentity)) {
-    // A partially populated producer interval is never admissible. An absent
-    // interval is different: Render Tape bootstrap and provider-local chunks
-    // may have no PE capture source identity, and the production queue
-    // explicitly records that case as an unqualified interval while the
-    // ledger/transaction use raw.replaySeq as a provider-local identity. Do
-    // not synthesize a capture source ordinal for that domain.
-    return commitChunkFail("provider-replay-production-slot-identity");
-  }
-
-  dxmt9::d3d9::ImportedChunkView imported;
-  if (!dxmt9::d3d9::importPrevalidatedCommandChunk(
-          bytes, envelope, imported) ||
-      resolvedObjects.size() != imported.handles.size()) {
-    return commitChunkFail("provider-replay-import");
-  }
-
+    const dxmt9::d3d9::ImportedChunkView& imported,
+    dxmt9::d3d9::ProviderReplayPolicy policy,
+    std::span<const dxmt9::d3d9::ProviderReplayRecordRange> ranges,
+    bool sourceCutDriver, std::uint32_t* completedRanges,
+    std::span<const std::uint32_t> batchCuts,
+    std::uint32_t* completedBatchCuts,
+    const dxmt9::d3d9::ProviderReplaySourceConsumer* sourceConsumer = nullptr) noexcept {
   dxmt9::d3d9::RawCommandChunk raw;
   ScopedRetainedWrapperRelease retainedRelease(raw);
   bool ledgerPublished = false;
+  if (completedRanges) {
+    *completedRanges = 0u;
+  }
+  if (completedBatchCuts) *completedBatchCuts = 0u;
   try {
     auto* ledger = dxmt9::core::activeCopyMaterializationLedger(
         dxmt9::core::CopyMaterializationOwner::Unix);
@@ -2956,11 +3206,11 @@ int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
     raw.recordBytes = static_cast<std::uint32_t>(bytes.size());
     raw.handleCount = envelope.handleCount;
     raw.preflightValidated = true;
-    // Preserve a qualified producer interval through the Unix-side raw owner.
-    // An all-zero interval intentionally remains absent: ProductionSlot's
-    // queue path treats it as provider-local/unqualified and derives only the
-    // ledger transaction identity from raw.replaySeq, never as capture source
-    // provenance.
+    // The provider ledger is the sole authority for this raw's replay
+    // identity. In particular, source-cut replay must not manufacture a
+    // capture/global sequence before publishInline assigns the provider-local
+    // ordinal used by ordered-control dispositions and transactions.
+    raw.replaySeq = 0u;
     raw.producerIdentity = envelope.producerIdentity;
     raw.resolvedObjects.assign(resolvedObjects.begin(), resolvedObjects.end());
     raw.retainedWrappers.reserve(imported.handles.size());
@@ -2980,30 +3230,53 @@ int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
           return record.type == D9C_COMMAND_RECORD_PRESENT;
         });
 
-    if (!persistResolvedResourcesAndCaptureBindings(d, raw, imported)) {
+    if (!persistResolvedResourcesAndCaptureBindings(device, raw, imported)) {
       return commitChunkFail("provider-replay-resource-capture");
     }
-    if (!dxmt9::d3d9::drainDeferredReplay(d, "provider-render-tape")) {
+    if (!dxmt9::d3d9::drainDeferredReplay(device, "provider-render-tape")) {
       return commitChunkFail("provider-replay-drain");
     }
-    if (!d->replayDrainLedger.publishInline(raw)) {
+    if (!device->replayDrainLedger.publishInline(raw)) {
       return commitChunkFail("provider-replay-ledger");
     }
     ledgerPublished = true;
 
-    const int32_t hr = replayPlannedChunk(
-        d, raw, /*pacedByPresentOrdinal=*/false,
-        /*allowDirectArena=*/productionSlot,
-        /*forceEventSerial=*/false,
-        /*reportOffloadReplayStage=*/false,
-        /*allowDirectSlot=*/policy !=
-            dxmt9::d3d9::ProviderReplayPolicy::Compatibility);
+    if ((sourceCutDriver || sourceConsumer) &&
+        !preflightProviderOrderedControls(imported, raw.replaySeq)) {
+      const auto hr = commitChunkFail(
+          "provider-replay-ordered-control-preflight");
+      device->replayDrainLedger.poison();
+      if (auto* observer = device->mutationCompositionObserver.get()) {
+        observer->observeGlobalBarrier(
+            dxmt9::resources::mutation_observer::BarrierReason::Failure);
+      }
+      return hr;
+    }
+
+    std::uint32_t localCompletedRanges = 0u;
+    auto& completed = completedRanges ? *completedRanges : localCompletedRanges;
+    std::uint32_t localCompletedBatchCuts = 0u;
+    const int32_t hr = sourceConsumer
+        ? replayProviderSourcePolicy(device, raw, imported, policy, ranges,
+                                     *sourceConsumer)
+        : sourceCutDriver
+        ? replayProviderRecordRanges(device, raw, ranges,
+                                     completed, batchCuts,
+                                     completedBatchCuts ? *completedBatchCuts
+                                                        : localCompletedBatchCuts)
+        : replayPlannedChunk(
+              device, raw, /*pacedByPresentOrdinal=*/false,
+              /*allowDirectArena=*/
+                  policy == dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot,
+              /*forceEventSerial=*/false,
+              /*reportOffloadReplayStage=*/false,
+              /*allowDirectSlot=*/
+                  policy != dxmt9::d3d9::ProviderReplayPolicy::Compatibility);
     if (!failed(hr)) {
-      maybePublishEarlyCpuReadyPrefix(d, raw);
-      if (auto* observer = d->mutationCompositionObserver.get()) {
-        // Inline replay is the rollback lane for commit offload and for
-        // synchronous readback chunks; bind the same Render Tape snapshot
-        // identity and source ordinal used by the worker path.
+      if (!sourceCutDriver && !sourceConsumer) {
+        maybePublishEarlyCpuReadyPrefix(device, raw);
+      }
+      if (auto* observer = device->mutationCompositionObserver.get()) {
         for (const auto& snapshot : raw.bufferSnapshots) {
           observer->observeUse(
               {.resource = snapshot.buffer.value,
@@ -3022,22 +3295,148 @@ int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
           }
         }
       }
-      d->replayDrainLedger.publishReplayed(raw);
+      device->replayDrainLedger.publishReplayed(raw);
     } else {
-      d->replayDrainLedger.poison();
-      if (auto* observer = d->mutationCompositionObserver.get())
+      device->replayDrainLedger.poison();
+      if (auto* observer = device->mutationCompositionObserver.get()) {
         observer->observeGlobalBarrier(
             dxmt9::resources::mutation_observer::BarrierReason::Failure);
+      }
     }
     return hr;
   } catch (const std::bad_alloc&) {
-    if (ledgerPublished) d->replayDrainLedger.poison();
+    if (ledgerPublished) device->replayDrainLedger.poison();
     return commitChunkFail("provider-replay-allocation", 0xffffffffu, 0u,
                            dxmt9::core::E_OUTOFMEMORY);
   } catch (...) {
-    if (ledgerPublished) d->replayDrainLedger.poison();
+    if (ledgerPublished) device->replayDrainLedger.poison();
     return commitChunkFail("provider-replay-exception");
   }
+}
+}  // namespace
+
+bool dxmt9::d3d9::validateProviderReplayRecordRanges(
+    std::uint32_t totalRecords,
+    std::span<const dxmt9::d3d9::ProviderReplayRecordRange> ranges) noexcept {
+  if (ranges.empty()) {
+    return false;
+  }
+
+  std::uint64_t cursor = 0u;
+  for (const auto& range : ranges) {
+    if (range.recordCount == 0u ||
+        range.firstRecord != cursor ||
+        static_cast<std::uint64_t>(range.recordCount) >
+            static_cast<std::uint64_t>(totalRecords) - cursor) {
+      return false;
+    }
+    cursor += range.recordCount;
+  }
+  return cursor == totalRecords;
+}
+
+bool dxmt9::d3d9::validateProviderReplayBatchCuts(
+    std::uint32_t totalRecords,
+    std::span<const ProviderReplayRecordRange> ranges,
+    std::span<const std::uint32_t> batchCuts) noexcept {
+  if (!validateProviderReplayRecordRanges(totalRecords, ranges)) return false;
+  std::size_t source = 0u;
+  std::uint32_t previous = 0u;
+  for (const auto cut : batchCuts) {
+    if (cut <= previous || cut >= totalRecords) return false;
+    while (source + 1u < ranges.size() &&
+           ranges[source + 1u].firstRecord <= cut) ++source;
+    if (cut == ranges[source].firstRecord) return false;
+    previous = cut;
+  }
+  return true;
+}
+
+int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunk(
+    D9CDevice* d, std::span<const std::byte> bytes,
+    const dxmt9::d3d9::CommandChunkEnvelope& envelope,
+    std::span<void* const> resolvedObjects,
+    dxmt9::d3d9::ProviderReplayPolicy policy) noexcept {
+  if (!d || bytes.empty() ||
+      envelope.version != D9C_COMMAND_CHUNK_VERSION) {
+    return commitChunkFail("provider-replay-bad-input");
+  }
+  if (policy != dxmt9::d3d9::ProviderReplayPolicy::Historical &&
+      policy != dxmt9::d3d9::ProviderReplayPolicy::Compatibility &&
+      policy != dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot) {
+    return commitChunkFail("provider-replay-policy");
+  }
+  const bool productionSlot =
+      policy == dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot;
+  if (productionSlot &&
+      !commandChunkProducerIdentityImportable(envelope.producerIdentity)) {
+    return commitChunkFail("provider-replay-production-slot-identity");
+  }
+
+  dxmt9::d3d9::ImportedChunkView imported;
+  if (!dxmt9::d3d9::importPrevalidatedCommandChunk(
+          bytes, envelope, imported) ||
+      resolvedObjects.size() != imported.handles.size()) {
+    return commitChunkFail("provider-replay-import");
+  }
+  return runProviderReplay(
+      d, bytes, envelope, resolvedObjects, imported, policy, {}, false,
+      nullptr, {}, nullptr);
+}
+
+std::int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunkAtRecordBoundaries(
+    D9CDevice* device, std::span<const std::byte> bytes,
+    const dxmt9::d3d9::CommandChunkEnvelope& envelope,
+    std::span<void* const> resolvedObjects,
+    std::span<const dxmt9::d3d9::ProviderReplayRecordRange> ranges,
+    std::uint32_t& completedRanges,
+    std::span<const std::uint32_t> batchCuts,
+    std::uint32_t* completedBatchCuts) noexcept {
+  completedRanges = 0u;
+  if (completedBatchCuts) *completedBatchCuts = 0u;
+  if (!device || bytes.empty() ||
+      envelope.version != D9C_COMMAND_CHUNK_VERSION ||
+      !dxmt9::d3d9::validateProviderReplayBatchCuts(
+          envelope.recordCount, ranges, batchCuts)) {
+    return commitChunkFail("provider-replay-range-input");
+  }
+
+  dxmt9::d3d9::ImportedChunkView imported;
+  if (!dxmt9::d3d9::importPrevalidatedCommandChunk(
+          bytes, envelope, imported) ||
+      resolvedObjects.size() != imported.handles.size()) {
+    return commitChunkFail("provider-replay-import");
+  }
+  return runProviderReplay(
+      device, bytes, envelope, resolvedObjects, imported,
+      dxmt9::d3d9::ProviderReplayPolicy::Historical, ranges, true,
+      &completedRanges, batchCuts, completedBatchCuts);
+}
+
+std::int32_t dxmt9::d3d9::replayPrevalidatedResolvedCommandChunkBySources(
+    D9CDevice* device, std::span<const std::byte> bytes,
+    const CommandChunkEnvelope& envelope,
+    std::span<void* const> resolvedObjects,
+    ProviderReplayPolicy policy,
+    std::span<const ProviderReplayRecordRange> ranges,
+    ProviderReplaySourceConsumer consumer) noexcept {
+  if (!device || bytes.empty() ||
+      envelope.version != D9C_COMMAND_CHUNK_VERSION ||
+      envelope.recordCount > kProviderSourceReplayMaxRecords ||
+      (policy != ProviderReplayPolicy::Compatibility &&
+       policy != ProviderReplayPolicy::ProductionSlot) ||
+      !commandChunkProducerIdentityImportable(envelope.producerIdentity) ||
+      !validateProviderReplayRecordRanges(envelope.recordCount, ranges)) {
+    return commitChunkFail("provider-source-policy-input");
+  }
+  ImportedChunkView imported;
+  if (!importPrevalidatedCommandChunk(bytes, envelope, imported) ||
+      resolvedObjects.size() != imported.handles.size()) {
+    return commitChunkFail("provider-source-policy-import");
+  }
+  return runProviderReplay(device, bytes, envelope, resolvedObjects, imported,
+                            policy, ranges, false, nullptr, {}, nullptr,
+                            &consumer);
 }
 
 static int32_t dxmt9c_device_commit_chunk_impl(

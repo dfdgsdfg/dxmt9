@@ -111,7 +111,9 @@ void LifecycleRuntime::flushPendingClear() {
   const auto sampleAttachment = makeRenderEncoderGpuAttachment(
       core::metalqueue::RenderEncoderGpuPassType::Clear, storage_.pass.pendingClearCommand,
       clear.colorAttachments[0].handle.value, clear.depthStencil.handle.value);
-  dxmt9::encoders::encodeClearPass(call_.commandBuffer, ctx_.pool, clear, sampleAttachment.span());
+  dxmt9::encoders::encodeClearPass(
+      call_.commandBuffer, ctx_.pool, ctx_.cache, ctx_.device, ctx_.limits,
+      ctx_.shaderArchive, ctx_.shaderArchivePath, clear, sampleAttachment.span());
   recordRenderEncoderGpuAttachment(sampleAttachment);
   call_.commandBufferHasWork = true;
   storage_.pass.pendingClear.reset();
@@ -379,6 +381,8 @@ void LifecycleRuntime::endRender(perf::EncoderSplitReason reason) {
   }
   maybeEncodeColorAttachmentDump(call_.commandBuffer, ctx_.device,
                                  storage_.diagnostics.activeColorAttachmentDump,
+                                 storage_.diagnostics.activeDepthAttachmentDump,
+                                 storage_.pass.lateStore,
                                  storage_.completion.completionCallbacks);
   maybeEncodeDepthAttachmentDump(call_.commandBuffer, ctx_.device,
                                  storage_.diagnostics.activeDepthAttachmentDump,

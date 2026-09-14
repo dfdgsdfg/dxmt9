@@ -11,8 +11,8 @@ import sys
 import tempfile
 
 
-def run(*args: str, check: bool = True) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(args, check=check, text=True, capture_output=True)
+def run(*args: str, check: bool = True, env=None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(args, check=check, text=True, capture_output=True, env=env)
 
 
 def main() -> int:
@@ -99,6 +99,38 @@ def main() -> int:
         assert len(prepared["iterations"]) == 3
         assert receipt["readback_artifacts_valid"] is True
         assert (experiment_output / "readback").is_dir()
+        # The textured projection fixture issues one non-indexed UP draw.
+        # Observe the same real Metal route with/without the cold logger;
+        # do not let indexed-only trace coverage masquerade as all draws.
+        nonindexed = root_path / "nonindexed-trace-source"
+        run(str(fixture), "--write-projection-fixture", str(nonindexed))
+        trace_command = [str(provider), "experiment", str(nonindexed / "events.bin"),
+                         "--blob", str(nonindexed / "seed.bin"),
+                         "--identity", str(nonindexed / "identity.bin"),
+                         "--warmup", "0", "--repeat", "1",
+                         "--replay-route", "compatibility"]
+        trace_results = []
+        for enabled in (False, True):
+            environment = dict(os.environ, DXMT9_EFFECT_DRAW_TRACE=str(int(enabled)),
+                               DXMT9_EFFECT_DRAW_TRACE_INCLUDE_NON_ALPHA="1",
+                               DXMT9_EFFECT_DRAW_TRACE_INCLUDE_UNTEXTURED="1")
+            observed = run(*trace_command, env=environment)
+            draw_rows = [line for line in observed.stderr.splitlines()
+                         if "[dxmt9-effect-draw " in line]
+            assert len(draw_rows) == int(enabled), draw_rows
+            if enabled:
+                assert " indexed=0 " in draw_rows[0], draw_rows[0]
+            observed_iteration, = json.loads(observed.stdout)["iterations"]
+            assert observed_iteration["path_counters"]["gpu_errors"] == 0
+            observed_provider = observed_iteration["provider_result"]
+            assert observed_provider["coverage"]["draw_primitive_up_records"] == 1
+            # This historical fixture names the attachment but carries no
+            # captured pixel digest. Prove observer invariance against the
+            # observer-off result, not independent pixel qualification.
+            assert observed_provider["validity"]["output_readback"] is True
+            assert observed_provider["validity"]["output_bytes"] == 16 * 16 * 4
+            trace_results.append(observed_provider["validity"]["output_sha256"])
+        assert trace_results[0] == trace_results[1]
         audit_output = root_path / "initial-seed-audit"
         audited = run(*experiment_command[:-1], str(audit_output),
                       "--audit-initial-seeds", check=False)
@@ -511,6 +543,9 @@ def main() -> int:
             "coverage",
             "conservation",
             "identity_evidence",
+            "source_boundary_audit",
+            "source_replay",
+            "audit_batch_cuts",
             "intervals",
         )
         assert all(

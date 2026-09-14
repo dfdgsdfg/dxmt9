@@ -7,6 +7,7 @@
 
 #include "dxmt9/device_c.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <charconv>
 #include <chrono>
@@ -16,6 +17,7 @@
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <span>
@@ -51,7 +53,8 @@ bool forceHermeticReplayEnvironment(const std::string& partitionMode) noexcept {
 #endif
 }
 
-std::vector<std::byte> readFile(const std::string& path) {
+std::vector<std::byte> readFile(const std::string& path,
+                              std::size_t maxBytes = std::numeric_limits<std::size_t>::max()) {
   std::ifstream stream(path, std::ios::binary | std::ios::ate);
   if (!stream) {
     throw std::runtime_error("cannot open file: " + path);
@@ -60,6 +63,8 @@ std::vector<std::byte> readFile(const std::string& path) {
   if (end < 0) {
     throw std::runtime_error("cannot size file: " + path);
   }
+  if (static_cast<std::uintmax_t>(end) > maxBytes)
+    throw std::runtime_error("file exceeds byte limit: " + path);
   std::vector<std::byte> bytes(static_cast<std::size_t>(end));
   stream.seekg(0);
   if (!bytes.empty() &&
@@ -152,6 +157,29 @@ std::string digestHex(const RenderTapeDigest& digest) {
     result.push_back(digits[byte & 0xfu]);
   }
   return result;
+}
+
+RenderTapeDigest parseDigestHex(std::string_view text) {
+  if (text.size() != kRenderTapeDigestSize * 2u)
+    throw std::runtime_error("source plan digest must be exactly 64 lowercase hexadecimal characters");
+  RenderTapeDigest digest{};
+  const auto nibble = [](char value) -> unsigned {
+    if (value >= '0' && value <= '9') return static_cast<unsigned>(value - '0');
+    if (value >= 'a' && value <= 'f') return static_cast<unsigned>(value - 'a') + 10u;
+    return 16u;
+  };
+  for (std::size_t index = 0u; index < digest.size(); ++index) {
+    const auto high = nibble(text[index * 2u]);
+    const auto low = nibble(text[index * 2u + 1u]);
+    if (high > 15u || low > 15u)
+      throw std::runtime_error("source plan digest must be exactly 64 lowercase hexadecimal characters");
+    digest[index] = static_cast<std::byte>((high << 4u) | low);
+  }
+  if (std::all_of(digest.begin(), digest.end(), [](std::byte value) {
+        return value == std::byte{};
+      }))
+    throw std::runtime_error("source plan digest must be nonzero");
+  return digest;
 }
 
 const char* identityAuthorityName(std::uint32_t authority) noexcept {
@@ -505,6 +533,104 @@ void printResult(const FrameTapeReplayResult& result,
               << ",\"physical_conservation\":"
               << (prestage.physicalConservation ? "true" : "false") << '}';
   }
+  const auto& sourceBoundaryAudit = result.sourceBoundaryAudit;
+  std::cout << ",\"source_boundary_audit\":{";
+  std::cout << "\"requested\":"
+            << (sourceBoundaryAudit.requested ? "true" : "false")
+            << ",\"diagnostic\":true"
+            << ",\"validated\":"
+            << (sourceBoundaryAudit.validated ? "true" : "false")
+            << ",\"complete\":"
+            << (sourceBoundaryAudit.complete ? "true" : "false")
+            << ",\"source_count\":" << sourceBoundaryAudit.sourceCount
+            << ",\"completed_source_count\":"
+            << sourceBoundaryAudit.completedSourceCount
+            << ",\"batch_cut_count\":" << sourceBoundaryAudit.batchCutCount
+            << ",\"completed_batch_cut_count\":"
+            << sourceBoundaryAudit.completedBatchCutCount << '}';
+  const auto& sourceReplay = result.sourceReplay;
+  const auto& inputAudit = result.textureInputAudit;
+  std::cout << ",\"texture_input_audit\":{\"requested\":"
+            << (inputAudit.requested ? "true" : "false")
+            << ",\"diagnostic\":true,\"validated\":" << (inputAudit.validated ? "true" : "false")
+            << ",\"attempted\":" << (inputAudit.attempted ? "true" : "false")
+            << ",\"uploaded\":" << (inputAudit.uploaded ? "true" : "false")
+            << ",\"readback_matched\":" << (inputAudit.readbackMatched ? "true" : "false")
+            << ",\"kind\":" << inputAudit.identity.kind
+            << ",\"generation\":" << inputAudit.identity.generation
+            << ",\"object_id\":" << inputAudit.identity.objectId
+            << ",\"after_captured_seq\":" << inputAudit.afterCapturedSeqId
+            << ",\"bytes\":" << inputAudit.byteCount
+            << ",\"input_sha256\":\"" << digestHex(inputAudit.inputDigest)
+            << "\",\"before_sha256\":\"" << digestHex(inputAudit.beforeDigest)
+            << "\",\"after_sha256\":\"" << digestHex(inputAudit.afterDigest) << "\"}";
+  std::cout << ",\"source_replay\":{\"requested\":"
+            << (sourceReplay.requested ? "true" : "false")
+            << ",\"validated\":" << (sourceReplay.validated ? "true" : "false")
+            << ",\"complete\":" << (sourceReplay.complete ? "true" : "false")
+            << ",\"plan_sha256\":\"" << digestHex(sourceReplay.planDigest) << '"'
+            << ",\"source_count\":" << sourceReplay.sourceCount
+            << ",\"completed_source_count\":" << sourceReplay.completedSourceCount
+            << ",\"publication_count\":" << sourceReplay.publicationCount
+            << ",\"empty_source_count\":" << sourceReplay.emptySourceCount
+            << ",\"present_source_count\":" << sourceReplay.presentSourceCount
+            << ",\"storage_overflow\":"
+            << (sourceReplay.storageOverflow ? "true" : "false")
+            << ",\"sources\":[";
+  for (std::size_t sourceIndex = 0u;
+       sourceIndex < sourceReplay.sources.size(); ++sourceIndex) {
+    if (sourceIndex != 0u) std::cout << ',';
+    const auto& source = sourceReplay.sources[sourceIndex];
+    const char* settlement = "empty";
+    if (source.settlement == RenderTapeSourceReplaySettlement::Published)
+      settlement = "published";
+    else if (source.settlement ==
+             RenderTapeSourceReplaySettlement::PresentPublished)
+      settlement = "present-published";
+    std::cout << "{\"event_ordinal\":" << source.eventOrdinal
+              << ",\"source_ordinal\":" << source.sourceOrdinal
+              << ",\"captured_seq_id\":" << source.capturedSeqId
+              << ",\"command_chunk_index\":" << source.commandChunkIndex
+              << ",\"first_record\":" << source.firstRecord
+              << ",\"record_count\":" << source.recordCount
+              << ",\"local_raw_ordinal\":" << source.actualRawOrdinal
+              << ",\"range_index\":" << source.rangeIndex
+              << ",\"settled\":" << (source.settled ? "true" : "false")
+              << ",\"settlement\":\"" << settlement << "\",\"publications\":[";
+    const auto first = static_cast<std::size_t>(source.publicationOffset);
+    const auto last = first + source.publicationCount;
+    for (std::size_t publicationIndex = first; publicationIndex < last;
+         ++publicationIndex) {
+      if (publicationIndex != first) std::cout << ',';
+      const auto& publication = sourceReplay.publications[publicationIndex];
+      std::cout << "{\"source_index\":" << publication.sourceIdIndex
+                << ",\"source_generation\":"
+                << publication.sourceIdGeneration
+                << ",\"storage_first_page\":"
+                << publication.storageFirstPage
+                << ",\"storage_page_count\":"
+                << publication.storagePageCount
+                << ",\"storage_generation\":"
+                << publication.storageGeneration
+                << ",\"raw_ordinal\":" << publication.metadataRawOrdinal
+                << ",\"source_ordinal\":"
+                << publication.metadataSourceOrdinal
+                << ",\"seq_id\":" << publication.metadataSeqId
+                << ",\"build_generation\":"
+                << publication.metadataBuildGeneration
+                << ",\"used_bytes\":" << publication.metadataUsedBytes
+                << ",\"page_count\":" << publication.metadataPageCount
+                << ",\"padding_pages_before\":"
+                << publication.metadataPaddingPagesBefore
+                << ",\"strict_admission\":"
+                << (publication.metadataStrictAdmission ? "true" : "false")
+                << ",\"control_index\":" << publication.controlIndex
+                << ",\"has_present\":"
+                << (publication.hasPresent ? "true" : "false") << '}';
+    }
+    std::cout << "]}";
+  }
+  std::cout << "]}";
   std::cout << ",\"intervals\":[";
   for (std::uint32_t i = 0u; i < result.intervalCount; ++i) {
     if (i != 0u) std::cout << ',';
@@ -566,9 +692,14 @@ void usage() {
                " [replay options] [--warmup N] [--repeat N]"
                " [--reset cold-device|warm-device]"
                " [--replay-route compatibility|production-slot]"
+               " [--source-boundary-mode chunk|capture-source]"
+               " [--source-plan-sha256 <64-lowercase-hex>]"
                " [--readback-dir <new-directory>]\n";
   std::cerr << "               [--audit-initial-seeds]"
-               " [--audit-fresh-seed-drains] [--audit-texture-prestage]\n";
+               " [--audit-fresh-seed-drains] [--audit-texture-prestage]"
+               " [--audit-source-boundaries]"
+               " [--audit-texture-input GEN:ID:AFTERSEQ:SHA256:PATH]"
+               " [--audit-batch-cut EVENT:RECORD]...\n";
 }
 
 using Clock = std::chrono::steady_clock;
@@ -584,6 +715,71 @@ unsigned parseCount(std::string_view value) {
   if (parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || result > 64)
     throw std::runtime_error("iteration count must be an integer in [0,64]");
   return result;
+}
+
+RenderTapeBatchCut parseBatchCut(std::string_view value) {
+  const auto separator = value.find(':');
+  if (separator == std::string_view::npos || separator == 0u ||
+      separator + 1u >= value.size() ||
+      value.find(':', separator + 1u) != std::string_view::npos) {
+    throw std::runtime_error(
+        "batch cut must be specified as EVENT:RECORD with unsigned decimal values");
+  }
+  RenderTapeBatchCut result{};
+  const auto event = value.substr(0u, separator);
+  const auto record = value.substr(separator + 1u);
+  for (const auto digit : event) {
+    if (digit < '0' || digit > '9') {
+      throw std::runtime_error(
+          "batch cut must be specified as EVENT:RECORD with unsigned decimal values");
+    }
+  }
+  for (const auto digit : record) {
+    if (digit < '0' || digit > '9') {
+      throw std::runtime_error(
+          "batch cut must be specified as EVENT:RECORD with unsigned decimal values");
+    }
+  }
+  const auto eventParsed = std::from_chars(
+      event.data(), event.data() + event.size(), result.eventOrdinal);
+  const auto recordParsed = std::from_chars(
+      record.data(), record.data() + record.size(), result.beforeRecord);
+  if (eventParsed.ec != std::errc{} ||
+      eventParsed.ptr != event.data() + event.size() ||
+      recordParsed.ec != std::errc{} ||
+      recordParsed.ptr != record.data() + record.size()) {
+    throw std::runtime_error(
+        "batch cut must be specified as EVENT:RECORD with unsigned decimal values");
+  }
+  return result;
+}
+
+RenderTapeTextureInputAuditRequest parseTextureInputAudit(
+    std::string_view value, std::string& path) {
+  std::array<std::string_view, 4> fields;
+  for (auto& field : fields) {
+    const auto separator = value.find(':');
+    if (separator == std::string_view::npos || separator == 0u)
+      throw std::runtime_error("texture input audit requires GEN:ID:AFTERSEQ:SHA256:PATH");
+    field = value.substr(0u, separator);
+    value.remove_prefix(separator + 1u);
+  }
+  const auto number = [](std::string_view field) {
+    if (field.empty() || field.front() == '0')
+      throw std::runtime_error("texture input target requires canonical positive decimal identities");
+    std::uint64_t out = 0u;
+    const auto parsed = std::from_chars(field.data(), field.data() + field.size(), out);
+    if (parsed.ec != std::errc{} || parsed.ptr != field.data() + field.size() || out == 0u)
+      throw std::runtime_error("texture input target requires positive decimal identities");
+    return out;
+  };
+  const auto generation = number(fields[0]);
+  if (generation > UINT32_MAX || value.empty())
+    throw std::runtime_error("invalid texture input generation/path");
+  path = value;
+  return {.identity = {D9C_CHUNK_HANDLE_KIND_TEXTURE,
+                       static_cast<std::uint32_t>(generation), number(fields[1])},
+          .afterCapturedSeqId = number(fields[2]), .digest = parseDigestHex(fields[3])};
 }
 
 void printLoadedImages() {
@@ -648,7 +844,16 @@ int runExperiment(const PreparedRenderTape& prepared, unsigned warmup,
                   bool auditInitialSeeds,
                   bool auditFreshSeedDrains,
                   bool auditTexturePrestage,
+                  bool auditSourceBoundaries,
+                  RenderTapeSourceBoundaryMode sourceBoundaryMode,
+                  RenderTapeDigest expectedSourcePlanDigest,
+                  std::span<const std::byte> sourceBoundaryIdentity,
+                  std::span<const RenderTapeBatchCut> auditBatchCuts,
+                  const RenderTapeTextureInputAuditRequest* textureInputAudit,
                   const RenderTapeIdentityView* identity) {
+  const bool expectedSourceDigestProvided = std::any_of(
+      expectedSourcePlanDigest.begin(), expectedSourcePlanDigest.end(),
+      [](std::byte value) { return value != std::byte{}; });
   const auto expected = expectedPath.empty() ? std::vector<std::byte>{} : readFile(expectedPath);
   const auto expectedSource = expectedSourcePath.empty() ? std::vector<std::byte>{} : readFile(expectedSourcePath);
   if (!forceHermeticReplayEnvironment(partitionMode))
@@ -692,6 +897,23 @@ int runExperiment(const PreparedRenderTape& prepared, unsigned warmup,
             << (auditFreshSeedDrains ? "true" : "false")
             << ",\"audit_texture_prestage\":"
             << (auditTexturePrestage ? "true" : "false")
+            << ",\"audit_source_boundaries\":"
+            << (auditSourceBoundaries ? "true" : "false")
+            << ",\"audit_texture_input\":" << (textureInputAudit ? "true" : "false")
+            << ",\"source_boundary_mode\":\""
+            << (sourceBoundaryMode == RenderTapeSourceBoundaryMode::CaptureSource
+                    ? "capture-source" : "chunk") << '"'
+            << ",\"source_plan_sha256\":\""
+            << (expectedSourceDigestProvided ? digestHex(expectedSourcePlanDigest)
+                                              : std::string{}) << '"'
+            << ",\"audit_batch_cuts\":[";
+  for (std::size_t index = 0u; index < auditBatchCuts.size(); ++index) {
+    if (index != 0u) std::cout << ',';
+    std::cout << "{\"event_ordinal\":" << auditBatchCuts[index].eventOrdinal
+              << ",\"before_record\":"
+              << auditBatchCuts[index].beforeRecord << '}';
+  }
+  std::cout << ']'
             << ",\"prepare_count\":" << prepared.prepareCount()
             << ",\"prepare_ns\":" << prepared.evidence().timing.prepareWallNanos
             << ",\"source_identity_domain\":\"provider-local-unqualified\""
@@ -718,6 +940,13 @@ int runExperiment(const PreparedRenderTape& prepared, unsigned warmup,
           .auditInitialSeeds = auditInitialSeeds,
           .auditFreshSeedDrains = auditFreshSeedDrains,
           .auditTexturePrestage = auditTexturePrestage,
+          .auditSourceBoundaries = auditSourceBoundaries,
+          .sourceBoundaryMode = sourceBoundaryMode,
+          .sourceBoundaryIdentity = sourceBoundaryIdentity,
+          .expectedSourcePlanDigest = expectedSourcePlanDigest,
+          .hasExpectedSourcePlanDigest = expectedSourceDigestProvided,
+          .auditBatchCuts = auditBatchCuts,
+          .auditTextureInput = textureInputAudit,
       });
     }
     const auto serviceNs = nanosSince(replayBegin);
@@ -818,9 +1047,16 @@ int main(int argc, char** argv) {
     bool auditInitialSeeds = false;
     bool auditFreshSeedDrains = false;
     bool auditTexturePrestage = false;
+    bool auditSourceBoundaries = false;
+    RenderTapeSourceBoundaryMode sourceBoundaryMode = RenderTapeSourceBoundaryMode::Chunk;
+    bool sourceBoundaryModeSpecified = false;
+    RenderTapeDigest expectedSourcePlanDigest{};
+    bool sourcePlanDigestSpecified = false;
+    std::vector<RenderTapeBatchCut> auditBatchCuts;
     std::string outputPath;
     std::string sourceOutputPath;
     std::string identityPath;
+    std::string textureInputArgument;
     std::string partitionMode = "identity";
     bool partitionModeSpecified = false;
     for (int index = 3; index < argc; ++index) {
@@ -835,12 +1071,37 @@ int main(int argc, char** argv) {
         else if (option == "--reset") reset = value;
         else if (option == "--replay-route") route = value;
         else readbackDir = value;
+      } else if (experiment && option == "--source-boundary-mode") {
+        if (sourceBoundaryModeSpecified || index + 1 >= argc) { usage(); return 2; }
+        const std::string_view value = argv[++index];
+        if (value == "capture-source")
+          sourceBoundaryMode = RenderTapeSourceBoundaryMode::CaptureSource;
+        else if (value != "chunk") { usage(); return 2; }
+        sourceBoundaryModeSpecified = true;
+      } else if (experiment && option == "--source-plan-sha256") {
+        if (sourcePlanDigestSpecified || index + 1 >= argc) {
+          usage(); return 2;
+        }
+        expectedSourcePlanDigest = parseDigestHex(argv[++index]);
+        sourcePlanDigestSpecified = true;
+      } else if (experiment && option == "--audit-texture-input") {
+        if (!textureInputArgument.empty() || index + 1 >= argc) { usage(); return 2; }
+        textureInputArgument = argv[++index];
+        if (textureInputArgument.empty()) { usage(); return 2; }
       } else if (experiment && option == "--audit-initial-seeds") {
         auditInitialSeeds = true;
       } else if (experiment && option == "--audit-fresh-seed-drains") {
         auditFreshSeedDrains = true;
       } else if (experiment && option == "--audit-texture-prestage") {
         auditTexturePrestage = true;
+      } else if (experiment && option == "--audit-source-boundaries") {
+        auditSourceBoundaries = true;
+      } else if (experiment && option == "--audit-batch-cut") {
+        if (index + 1 >= argc || auditBatchCuts.size() >= 4096u) {
+          usage();
+          return 2;
+        }
+        auditBatchCuts.push_back(parseBatchCut(argv[++index]));
       } else if (option == "--partition-mode") {
         if (partitionModeSpecified || index + 1 >= argc) {
           usage();
@@ -897,6 +1158,8 @@ int main(int argc, char** argv) {
       }
     }
 
+    const bool captureSource =
+        sourceBoundaryMode == RenderTapeSourceBoundaryMode::CaptureSource;
     if (experiment && (repeat == 0 || warmup + repeat > 64 ||
         (reset != "cold-device" && reset != "warm-device") ||
         (route != "compatibility" && route != "production-slot") ||
@@ -904,10 +1167,41 @@ int main(int argc, char** argv) {
         (auditFreshSeedDrains && reset != "cold-device") ||
         (auditTexturePrestage && (reset != "cold-device" ||
                                  auditInitialSeeds || auditFreshSeedDrains)) ||
+        (auditSourceBoundaries &&
+         (reset != "cold-device" || route != "compatibility" ||
+          auditInitialSeeds || auditFreshSeedDrains || auditTexturePrestage)) ||
+        (!auditBatchCuts.empty() && !auditSourceBoundaries) ||
+        (captureSource && (reset != "cold-device" || auditInitialSeeds ||
+            auditFreshSeedDrains || auditTexturePrestage || auditSourceBoundaries ||
+            !auditBatchCuts.empty())) ||
+        (sourcePlanDigestSpecified && !captureSource) ||
+        (!textureInputArgument.empty() && (!captureSource || !sourcePlanDigestSpecified ||
+          reset != "cold-device")) ||
         !outputPath.empty() || !sourceOutputPath.empty())) {
       usage(); return 2;
     }
+    if ((auditSourceBoundaries || captureSource) && identityPath.empty()) {
+      throw std::runtime_error(
+          "capture source boundaries require an authenticated --identity sidecar");
+    }
     std::vector<std::string> inputPaths{argv[2]};
+    std::string textureInputPath;
+    std::optional<RenderTapeTextureInputAuditRequest> textureInputAudit;
+    std::vector<std::byte> textureInputBytes;
+    if (!textureInputArgument.empty()) {
+      textureInputAudit = parseTextureInputAudit(textureInputArgument, textureInputPath);
+      const std::filesystem::path input(textureInputPath);
+      if (std::filesystem::is_symlink(input) || !std::filesystem::is_regular_file(input) ||
+          std::filesystem::file_size(input) > 64u * 1024u * 1024u)
+        throw std::runtime_error("texture input must be a bounded regular file");
+      textureInputBytes = readFile(textureInputPath, 64u * 1024u * 1024u);
+      if (textureInputBytes.empty())
+        throw std::runtime_error("texture input must not be empty");
+      textureInputAudit->bytes = textureInputBytes;
+      if (RenderTapeCaptureSession::sha256(textureInputBytes) != textureInputAudit->digest)
+        throw std::runtime_error("texture input SHA-256 mismatch");
+      inputPaths.push_back(textureInputPath);
+    }
     inputPaths.insert(inputPaths.end(), blobPaths.begin(), blobPaths.end());
     inputPaths.push_back(expectedPath);
     inputPaths.push_back(expectedSourcePath);
@@ -930,12 +1224,13 @@ int main(int argc, char** argv) {
     auto prepared = experiment ? prepareRenderTapeIdentity(tape, blobs) : PreparedRenderTape{};
     const auto preflight = experiment ? prepared.preflightResult() : preflightRenderTapeIdentity(tape, blobs);
     std::optional<RenderTapeIdentityView> identity;
+    std::vector<std::byte> identitySidecar;
     std::string identityError;
     if (!identityPath.empty()) {
-      const auto sidecar = readFile(identityPath);
+      identitySidecar = readFile(identityPath);
       identity.emplace();
       const auto identityValidation = validateRenderTapeIdentity(
-          tape, makeIdentityCatalogue(blobs), sidecar, &*identity);
+          tape, makeIdentityCatalogue(blobs), identitySidecar, &*identity);
       if (!identityValidation.valid()) {
         identityError = renderTapeIdentityStatusName(identityValidation.status);
         identity.reset();
@@ -961,11 +1256,21 @@ int main(int argc, char** argv) {
     }
 
     if (experiment)
-      return runExperiment(prepared, warmup, repeat, reset, route, partitionMode,
+        return runExperiment(prepared, warmup, repeat, reset, route, partitionMode,
                            expectedPath, expectedSourcePath, readbackDir,
                            auditInitialSeeds,
                            auditFreshSeedDrains,
                            auditTexturePrestage,
+                           auditSourceBoundaries,
+                           sourceBoundaryMode,
+                           expectedSourcePlanDigest,
+                           // Keep the byte-for-byte authenticated sidecar
+                           // borrowed only for the prepared execution call.
+                           (auditSourceBoundaries || captureSource)
+                               ? std::span<const std::byte>(identitySidecar)
+                               : std::span<const std::byte>{},
+                           std::span<const RenderTapeBatchCut>(auditBatchCuts),
+                           textureInputAudit ? &*textureInputAudit : nullptr,
                            identity ? &*identity : nullptr);
 
     if (!forceHermeticReplayEnvironment(partitionMode)) {

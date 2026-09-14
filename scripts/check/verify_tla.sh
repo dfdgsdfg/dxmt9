@@ -64,15 +64,16 @@ normal_models=(
   ReplayProjectionTransaction
   ResourceLifetime
   SessionCapacityLease
+  SessionAdmissionHysteresis
   StateBlockOrderedReplay
   WireObjectRegistry
   WsiPresenterReplacement
 )
 
-expected_normal_count=57
+expected_normal_count=58
 expected_progress_count=4
-expected_counterexample_count=127
-expected_cfg_count=188
+expected_counterexample_count=128
+expected_cfg_count=190
 progress_configs=(
   CpuPipelineLifecycle.progress
   DirectSourceLifecycle.progress
@@ -118,6 +119,7 @@ trap cleanup EXIT
 # selects `<model>.tla`; the suffix selects `<model><suffix>.cfg`, so one model
 # may carry several independent broken premises.
 counterexample_models=(
+  "SessionAdmissionHysteresis|.high-water-only.counterexample|Invariant NoClosedEmptySessionCycle is violated"
   "DirectSourceLifecycle|.stale-witness.counterexample|Invariant WitnessIsFresh is violated"
   "DirectSourceLifecycle|.duplicate-witness.counterexample|Invariant WitnessConsumedOnce is violated"
   "DirectSourceLifecycle|.source-reorder.counterexample|Invariant ExactFifoSourceOrder is violated"

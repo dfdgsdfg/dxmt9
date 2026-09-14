@@ -490,6 +490,17 @@ ReplayEmissionPlan planReplayEmission(
     const ImportedChunkView& imported, RawOrdinal rawOrdinal,
     std::size_t pageSize) noexcept;
 
+// Plans one non-empty raw-record interval without rebuilding wire storage.
+// The returned segment/span indices are absolute in the full imported raw;
+// firstSegmentIndex and lease ordinals remain local to this interval. This is
+// a cold range description only: it grants no queue identity or publication
+// authority. A trailing Present is therefore meaningful only within the
+// supplied range and is never evidence that the full raw was published.
+ReplayEmissionPlan planReplayEmissionRange(
+    const ImportedChunkView& imported, RawOrdinal rawOrdinal,
+    std::uint32_t firstRecord, std::uint32_t recordCount,
+    std::size_t pageSize) noexcept;
+
 // One typed whole-raw disposition per classified raw, derived from the plan.
 // This closes the production-dead classifyDirectChunkSlotReplay gap: a single
 // producer maps a real plan onto the existing perf disposition alphabet.
