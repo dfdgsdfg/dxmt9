@@ -12,26 +12,53 @@ This is the detailed owner for `R-BACK-2.35`–`R-BACK-2.50`,
 [backend gap](../gap.md) keeps only a routing summary. Historical experiments
 remain in `docs/perfomance/`.
 
-## GPU policy admission negative (2026-09-14)
+## Qualified capacity ownership recovery (2026-09-14)
 
-The real r405 capture now has exact normal-provider pixels under the fixed
-vertex-position profile, but the public 5MiB slot / 64MiB aggregate headroom
-candidate r586 stops at raw30/span0 with `FailStopped/StructuralRejected`.
-This status/reason combination identifies the guard refusing to downgrade an
-existing qualified payload capacity receipt to an unqualified admission in
-`CommandQueue::beginDirectChunkSlotReplay`. Which provision/reuse precondition
-causes the new receipt to remain unqualified still needs a distinguishing
-native case. CPU verification passes while GPU replay stops; the coupled
-policy gate rejects the candidate and does not rank it. Do not weaken the
-receipt guard or infer an allocator-only cause. See
-[the retained policy counterexample](../../../docs/perfomance/mini-replay-bisection/gpu-position-invariance.04.md).
+Implemented and bounded-qualified for Direct denial recovery followed by
+ordinary compatibility growth. Optional admission validates the original
+qualified receipt before observing/reconciling capacity. Exact coverage reuses
+it; missing coverage stages required exact replacement with failure-atomic old
+ownership preservation. Mandatory exact storage can exceed the optional ceiling
+but remains fully charged and denies further optional over-budget staging.
 
-The separate compatibility-exact/production-exact pair now completes the
-public CPU/GPU verification-to-measurement transaction with accepted atomic
-publication (r593) and independent final artifact reauthentication (r598).
-This qualifies the bounded gate, not the rejected headroom policy, concurrent
-worker scheduling or FPS. The fresh full TLA gate and applicable native/x86
-regression sets pass; no headroom/renderer-default promotion is implied.
+Ordinary appends use the move-only `CompatibilityCapacityWrite` through
+`QueueLifecycleController::mutateWritingPayload`: acquire before mutation,
+settle physical capacity before releasing the mutex, and poison after partial
+allocation failure. Draws share one witness per maximal reserved batch.
+Publication and detached-owner reclaim reject unmatched capacity; they never
+mint late proof or downgrade a qualified receipt. The unqualified default path
+does no capacity scan.
+
+Evidence for R-BACK-2.104–2.105:
+
+- Native 13/13 and x86 5/5 pass, including the real queue ownership/growth
+  regressions and install-name audit. The pre-fix two-Clear counterexample is
+  retained under `ownership-direct-images-r607/ordinary-growth-counterexample.txt`.
+  Additional source lifecycle, replay-plan and perf-counter audits pass 8/8
+  (`build/meson-logs/ownership-extra-r616.txt`).
+- All 30 optional/required staging fault points, 31 partial ordinary-reserve
+  exceptions, stale source/storage/sequence/receipt, moved/double-consumed
+  witnesses and unaccounted publication are pinned.
+- `DirectSlotDeniedOwnership` composes recovery, ordinary mutation/failure,
+  publication, completion and reclaim. The full 196-configuration TLA gate
+  passes, including five distinguishing ownership negatives.
+- Unchanged-original public pairs `public-policy-r610` (1MiB/16MiB),
+  `public-policy-r611` (5MiB/64MiB), and `public-policy-r612` (zero) all pass
+  CPU verification, two strict cold-device GPU replays per route, measurement
+  and atomic publication. Each candidate iteration executes 1,856 Direct draws
+  through 182 leases, the final 10-draw compatibility batch, seven separately
+  counted unbatched draws, and 186 chunks; original source/output bytes match
+  exactly with zero GPU errors. r610 exercises exact replacement twice across
+  the two GPU iterations. r614 independently reauthenticates all bindings.
+- r586 (unqualified fallback after denial) and r605 (unsettled ordinary growth)
+  remain preserved rejected/unmeasured artifacts; r604/r606 are intermediate
+  Direct-only-repair/control evidence, superseded by the final same-build gate.
+
+Artifact root: `experiments/output/gpu-tape-qualification-20260910/`.
+See [capacity ownership recovery](../../../docs/perfomance/mini-replay-bisection/capacity-ownership-recovery.05.md)
+for hashes and verification logs. This closes the observed ownership composition,
+not FPS/default promotion, zero allocation, other workloads or arbitrary
+concurrent worker scheduling. Positive headroom remains opt-in.
 
 ## Bounded capture-progress: low-water composition repair (2026-09-14)
 

@@ -21,6 +21,7 @@ Latest tracked row: `H22` - Positive Metal visibility samples can be used as the
 
 ## Recent Leaf Documents
 
+- [Qualified capacity: denial recovery and compatibility growth verified](capacity-ownership-recovery.05.md)
 - [Vertex-position invariance: retained GT2 pixels and public CPU/GPU policy transaction qualified](gpu-position-invariance.04.md)
 - [Strict GPU policy qualification and source-boundary fidelity/residual](gpu-policy-qualification.03.md)
 - [Qualified low-observer CPU policy comparison](cpu-policy-measurement.02.md)

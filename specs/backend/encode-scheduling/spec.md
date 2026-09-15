@@ -2304,9 +2304,38 @@ Address-space exhaustion was therefore only a hypothesis. The ring-wide lease,
 failure injection, and a same-build positive GT1 memory/locality qualification
 now exist; `gap.md` records their bounded result. The mechanism remains opt-in
 because aggregate denials and the remaining CB/pass locality gap still fail
-promotion, and GT2 has not yet been qualified on this reuse policy.
+promotion. Bounded GT2 original-pixel policy qualification is recorded in
+`gap.md`; wild GT2 performance/locality promotion remains separate.
 
 ### Retained-capacity reuse on a reclaimed payload (R-BACK-2.105)
+
+Optional provisioning denial and allocation rollback have a separate exact
+fallback on an already qualified payload. Its source plan is the immutable
+incoming exact capacity, never the optional provision plan. Admission first
+validates the persisted receipt against the physical payload and settled
+ledger. Complete exact coverage restores lookup extents without allocation or
+generation change. Missing coverage takes a required-exact staged replacement:
+the same move-only lease and staged owner charge old plus new bytes, then
+commit a fresh capacity generation or roll back without changing live storage.
+Required exact credit is accounted even beyond the optional headroom ceiling;
+optional Stage remains bounded and cannot use that exception. Neither recovery
+publishes a source or retries a semantic prefix. A required allocation failure
+is terminal before effect, while stale ownership remains a structural failure.
+Headroom-disabled unqualified admission is unchanged and performs no ledger
+work. Native production coverage must carry each recovered receipt through
+publication, detach, completion and reclaim, not merely test a local reducer.
+
+Ordinary compatibility appends consume `CompatibilityCapacityWrite` through
+`QueueLifecycleController::mutateWritingPayload`. This synchronous move-only
+borrow validates physical capacity before mutation, binds the current source,
+storage, sequence and original receipt, then uses
+`reduceCompatibilityCapacityWrite` to settle growth before the mutex can be
+released. Draw traffic has one scope per reserved maximal batch, not per draw.
+Coordinator appends and the lifecycle-owned Present append use the same seam.
+Partial allocation exceptions settle surviving capacity and poison the queue;
+the scope never claims command rollback. Publication validates the settled
+receipt without repairing it, and the detached-owner guard is unchanged.
+Unqualified exact-fit slots branch directly to the existing append operation.
 
 The 64 compatibility payloads are persistent, and reclaim retains their
 storage: `ChunkSlot::clearCommands()` calls `clear()` on every vector, which

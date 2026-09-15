@@ -497,6 +497,13 @@ void countDirectChunkSlotSlotProvisionReused() {
   add(counters().directChunkSlotSlotProvisionReused);
 }
 
+void countDirectSlotExactFallback(bool accepted, bool reused) {
+  auto& c = counters();
+  add(!accepted ? c.directSlotExactFallbackRejected
+      : reused ? c.directSlotExactFallbackReused
+               : c.directSlotExactFallbackReplaced);
+}
+
 void countDirectChunkSlotSlotProvisionReuseRejected() {
   add(counters().directChunkSlotSlotProvisionReuseRejected);
 }

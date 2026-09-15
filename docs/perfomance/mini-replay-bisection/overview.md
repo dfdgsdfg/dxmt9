@@ -41,10 +41,15 @@ atomically publishes the accepted outer result (r593). Post-publication r598
 reauthenticates all inputs, policies, child receipts, runtime images and
 readbacks. Native 14/14, x86 2/2, the expanded 28/28 regression set and all
 190 TLA configurations pass. Interrupted r588 remains preserved and is not
-relabelled accepted. A 5MiB headroom candidate fails qualified capacity
-admission and remains rejected (r586). This closes bounded final-pixel and
-policy-interface integration, not FPS, all-intermediate equivalence,
-concurrent scheduling or arbitrary-policy qualification.
+relabelled accepted. The original 5MiB admission failure (r586) and a smaller
+policy's compatibility-growth failure (r605) are now repaired without weakening
+receipt provenance. Fresh 1MiB/16MiB, 5MiB/64MiB and zero-headroom policy pairs
+all pass exact original CPU/GPU qualification (r610–r612), with post-publication
+reauthentication in r614. Native 13/13, x86 5/5 and all 196 TLA configurations
+pass. See [capacity ownership recovery](capacity-ownership-recovery.05.md).
+This closes bounded final-pixel, policy-interface and ownership integration,
+not FPS, all-intermediate equivalence, concurrent scheduling or arbitrary-policy
+qualification; positive headroom remains opt-in.
 
 ### Prior localization evidence (through r553)
 

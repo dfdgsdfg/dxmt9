@@ -314,6 +314,7 @@ void countDirectChunkSlotSlotProvisionReused();
 void countDirectChunkSlotSlotProvisionReuseRejected();
 void countDirectChunkSlotSlotProvisionSourceExceedsBudget();
 void countDirectSlotCapacityLeaseDenied();
+void countDirectSlotExactFallback(bool accepted, bool reused);
 void recordDirectSlotCapacityLease(std::uint64_t retainedBytes,
                                    std::uint64_t stagedBytes,
                                    bool generationAdvanced,

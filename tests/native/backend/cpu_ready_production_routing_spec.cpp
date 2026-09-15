@@ -609,6 +609,71 @@ struct CommandQueueArenaLeaseTestAccess {
         slot.drawUniformPixelConstantsLookupNext, kDrawHeadroom);
   }
 
+  static core::DetachedCapacityReceipt qualifyEmptyWritingCapacity(
+      CommandQueue& queue, const core::SourcePayloadCapacity& plan) {
+    std::lock_guard lock(queue.mutex_);
+    if (!queue.writingSlot_) return {};
+    auto& control = queue.slots_[*queue.writingSlot_];
+    auto& payload = *control.payload;
+    const auto index = queue.cpuReadyTape_.compatibilityPayloadIndex(
+        {.id = control.sourceId, .storage = control.storage});
+    if (!index) return {};
+    std::array<std::uint64_t, core::kDirectSlotCapacityPayloadCount> actual{};
+    for (std::size_t i = 0; i < actual.size(); ++i) {
+      const auto bytes = queue.cpuReadyTape_.compatibilityPayloadRetainedBytes(i);
+      if (!bytes) return {};
+      actual[i] = *bytes;
+    }
+    auto lease = core::LeaseHeld::tryAcquire(
+        queue.directSlotCapacityLedger_, payload, actual, *index, 1ull << 30,
+        core::directSlotProvisionRetainedBytes(plan));
+    auto staged = core::StagedDirectSlot::create(std::move(lease), plan);
+    if (!staged.valid() || !std::move(staged).commit()) return {};
+    const auto entry = queue.directSlotCapacityLedger_.entries[*index];
+    payload.admissionCapacityReceipt = core::DetachedCapacityReceipt::ledgerQualified(
+        static_cast<std::uint32_t>(*index), entry.generation, entry.retainedBytes);
+    return payload.admissionCapacityReceipt;
+  }
+
+  static core::DetachedCapacityReceipt writingCapacityReceipt(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.writingSlot_
+        ? queue.slots_[*queue.writingSlot_].payload->admissionCapacityReceipt
+        : core::DetachedCapacityReceipt{};
+  }
+
+  static bool ordinaryCapacityFailure(CommandQueue& queue, unsigned faultPoint) {
+    std::unique_lock lock(queue.mutex_);
+    auto& payload = *queue.slots_[*queue.writingSlot_].payload;
+    unsigned point = 0;
+    try {
+      queue.queueLifecycle_.mutateWritingPayload(payload, [&]() -> bool {
+#define DXMT9_FAIL_ORDINARY_RESERVE(region, plan, storage, element, physical, \
+                                 provision, allocation, lookup, owner)      \
+        DXMT9_DIRECT_CHUNK_SLOT_EXPAND_PHYSICAL_##physical(                 \
+          payload.storage.reserve(payload.storage.capacity() + 1);         \
+          if (point++ == faultPoint) throw std::bad_alloc();)
+        DXMT9_DIRECT_CHUNK_SLOT_DIMENSIONS(DXMT9_FAIL_ORDINARY_RESERVE)
+#undef DXMT9_FAIL_ORDINARY_RESERVE
+        return true;
+      });
+      return false;
+    } catch (const std::bad_alloc&) {
+      const auto receipt = payload.admissionCapacityReceipt;
+      return queue.stop_ && queue.cpuReadyTape_.readyCount() == 0 &&
+          receipt.retainedBytes() == core::directSlotPhysicalRetainedBytes(payload) &&
+          queue.directSlotCapacityLedger_.entries[receipt.payloadIndex()].retainedBytes ==
+              receipt.retainedBytes() && queue.directSlotCapacityLedger_.stagedBytes == 0;
+    }
+  }
+
+  static void growWithoutCapacityWitness(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    auto& payload = *queue.slots_[*queue.writingSlot_].payload;
+    payload.appendClear(core::ClearDesc{});
+    payload.appendClear(core::ClearDesc{});
+  }
+
   static void enableDirectLifecycleObservation(CommandQueue& queue) {
     queue.pipelineLifecycleObserver_ =
         std::make_unique<dxmt9::queue::PipelineLifecycleObserver>(true, true);
@@ -4634,6 +4699,91 @@ void ordinaryChunkSlotSameRawCommitFailureDoesNotRetryLegacy() {
         "rolling back the applied prefix");
   dxmt9::d3d9::releaseRetainedWrappers(raw);
   dxmt9c_buffer_release(buffer);
+}
+
+void deniedHeadroomPreservesQualifiedCapacity() {
+  using Queue = dxmt9::CommandQueue;
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  for (const auto count : {1u, 2u}) {
+    Queue queue(Queue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    SourcePayloadCapacity first{};
+    first.commandHeaders = first.clearRecords = 1u;
+    auto initial = queue.beginDirectChunkSlotReplay(1u, first, sizeof(ClearDesc));
+    check(initial.lease.has_value(), "initial empty slot admission succeeds");
+    check(initial.lease->rollbackPreEffect(), "initial admission rolls back");
+    // A legitimate retained owner, not a forged receipt. The test's small
+    // runtime budget denies the optional re-provision while preserving it.
+    auto retained = first;
+    retained.drawPayloadBytes = 65536u;
+    const auto old = Access::qualifyEmptyWritingCapacity(queue, retained);
+    check(old.qualified(), "fixture retains real qualified storage");
+    SourcePayloadCapacity next = first;
+    next.commandHeaders = next.clearRecords = count;
+    auto begin = queue.beginDirectChunkSlotReplay(2u, next, count * sizeof(ClearDesc));
+    check(begin.lease.has_value() && !Access::stopped(queue),
+          "denied headroom preserves ownership and admits exact required storage");
+    const auto current = Access::writingCapacityReceipt(queue);
+    check(current.qualified() && current.payloadIndex() == old.payloadIndex() &&
+              current.generation() == old.generation() + (count == 2u ? 1u : 0u) &&
+              (count != 1u || current == old),
+          "actual admission preserves reuse receipt or transfers to one fresh generation");
+    for (unsigned i = 0; i < count; ++i) queue.submitClear(ClearDesc{});
+    check(begin.lease->commit({}) == Queue::DirectChunkSlotReplayStatus::Committed,
+          "denial recovery commits commands exactly once");
+    const auto published = queue.publishReplaySourceBoundary();
+    check(published.published(), "recovered source publishes once");
+    const auto completed = Access::consumeOne(queue);
+    check(completed.completed && completed.reclaimed && !Access::stopped(queue),
+          "qualified denial recovery survives detach, completion and reclaim");
+  }
+}
+
+void qualifiedCapacitySurvivesOrdinaryGrowth() {
+  using Queue = dxmt9::CommandQueue;
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  Queue queue(Queue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  SourcePayloadCapacity first{};
+  first.commandHeaders = first.clearRecords = 1u;
+  auto initial = queue.beginDirectChunkSlotReplay(1u, first, sizeof(ClearDesc));
+  check(initial.lease.has_value() && initial.lease->rollbackPreEffect(),
+        "ordinary growth fixture acquires an empty destination");
+  const auto old = Access::qualifyEmptyWritingCapacity(queue, first);
+  check(old.qualified(), "ordinary source inherits a real retained capacity owner");
+  // This bypasses Direct intentionally: compatibility commands may reuse a
+  // physical payload which a previous Direct source provisioned and reclaimed.
+  queue.submitClear(ClearDesc{});
+  check(Access::writingCapacityReceipt(queue) == old,
+        "in-capacity ordinary append preserves the prior generation");
+  queue.submitClear(ClearDesc{});
+  const auto grown = Access::writingCapacityReceipt(queue);
+  check(grown.qualified() && grown.payloadIndex() == old.payloadIndex() &&
+            grown.generation() == old.generation() + 1 &&
+            grown.retainedBytes() > old.retainedBytes(),
+        "ordinary growth settles its same physical owner before publication");
+  check(queue.publishReplaySourceBoundary().published(),
+        "ordinary growth publishes the qualified source once");
+  const auto completed = Access::consumeOne(queue);
+  check(completed.completed && completed.reclaimed && !Access::stopped(queue),
+        "ordinary growth must settle qualified credit before detach and reclaim");
+
+  for (unsigned fault = 0; fault != kDirectChunkSlotPhysicalDimensionCount; ++fault) {
+    Queue failed(Queue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+    auto begin = failed.beginDirectChunkSlotReplay(1u, first, sizeof(ClearDesc));
+    check(begin.lease && begin.lease->rollbackPreEffect(), "fault fixture gets a writer");
+    check(Access::qualifyEmptyWritingCapacity(failed, first).qualified(),
+          "fault fixture starts with retained authority");
+    check(Access::ordinaryCapacityFailure(failed, fault),
+          "each partial ordinary reserve failure is accounted and fails before publication");
+  }
+
+  Queue invalid(Queue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto begin = invalid.beginDirectChunkSlotReplay(1u, first, sizeof(ClearDesc));
+  check(begin.lease && begin.lease->rollbackPreEffect(), "stale fixture gets a writer");
+  const auto original = Access::qualifyEmptyWritingCapacity(invalid, first);
+  Access::growWithoutCapacityWitness(invalid);
+  check(!invalid.publishReplaySourceBoundary().published() && Access::stopped(invalid) &&
+            Access::writingCapacityReceipt(invalid) == original && Access::readyCount(invalid) == 0,
+        "publication rejects unpriced growth instead of minting a late receipt");
 }
 
 void captureSourceBoundaryReturnsExactQueuePublication() {
@@ -9668,6 +9818,18 @@ int runCpuTapeExperiment(CpuTapeExperimentOptions options) {
 
 int main(int argc, char** argv) {
   try {
+    if (argc == 2 && std::string_view(argv[1]) == "--qualified-ordinary-growth-spec") {
+      qualifiedCapacitySurvivesOrdinaryGrowth();
+      std::cout << "qualified ordinary growth spec passed\n";
+      return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--headroom-ownership-spec") {
+      setenv("DXMT9_DIRECT_SLOT_HEADROOM_BYTES", "65536", 1);
+      setenv("DXMT9_DIRECT_SLOT_AGGREGATE_HEADROOM_BYTES", "65536", 1);
+      deniedHeadroomPreservesQualifiedCapacity();
+      std::cout << "headroom ownership spec passed\n";
+      return 0;
+    }
     if (argc == 2 && (std::string_view(argv[1]) == "--general-cpu-destroy-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-mipmap-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-mutation-spec" ||

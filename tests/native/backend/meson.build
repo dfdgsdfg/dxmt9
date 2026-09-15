@@ -567,6 +567,14 @@ test('dxmt9-cpu-ready-production-routing-spec',
      env: dxmt9_native_test_env_vars + [
        'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
      ])
+test('dxmt9-direct-slot-headroom-ownership-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--headroom-ownership-spec'],
+     env: dxmt9_native_test_env)
+test('dxmt9-qualified-ordinary-growth-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--qualified-ordinary-growth-spec'],
+     env: dxmt9_native_test_env)
 test('dxmt9-render-tape-cpu-destroy-window-spec',
      cpu_ready_production_routing_spec,
      args: ['--general-cpu-destroy-spec'],

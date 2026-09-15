@@ -123,6 +123,9 @@ struct Counters {
   std::atomic<std::uint64_t> directChunkSlotSlotProvisionReuseRejected{0};
   std::atomic<std::uint64_t> directChunkSlotSlotProvisionSourceExceedsBudget{0};
   std::atomic<std::uint64_t> directSlotCapacityLeaseDenials{0};
+  std::atomic<std::uint64_t> directSlotExactFallbackReused{0};
+  std::atomic<std::uint64_t> directSlotExactFallbackReplaced{0};
+  std::atomic<std::uint64_t> directSlotExactFallbackRejected{0};
   std::atomic<std::uint64_t> directSlotCapacityLeaseRollbacks{0};
   std::atomic<std::uint64_t> directSlotCapacityLeaseGenerationAdvances{0};
   std::atomic<std::uint64_t> directSlotCapacityLeaseRetainedBytes{0};

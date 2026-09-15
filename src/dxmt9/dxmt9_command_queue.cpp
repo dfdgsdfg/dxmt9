@@ -3810,144 +3810,148 @@ bool CommandQueue::submitDrawRunBatch(
       continue;
     }
 
-    if (!slot.reserveDrawRunBatchStorage(
-            segmentDraws, segmentPayloadBytes, segmentRuns,
-            segmentEnd - segmentStart, /*appendState=*/segmentRuns != 0u)) {
-      return false;
-    }
-    perf::countSubmitDrawRunBatchSegment();
+    const bool batchAppended = queueLifecycle_.mutateWritingPayload(slot, [&] {
+      if (!slot.reserveDrawRunBatchStorage(
+              segmentDraws, segmentPayloadBytes, segmentRuns,
+              segmentEnd - segmentStart, /*appendState=*/segmentRuns != 0u)) {
+        return false;
+      }
+      perf::countSubmitDrawRunBatchSegment();
 
-    {
-      PerfScope stageScope(perf::countSubmitDrawRunResourceMarkCpuTime);
-      const std::uint64_t seqId = seqIdForMark(*this, 0);
-      scratch.segmentBufferHandles.clear();
-      scratch.segmentTextureHandles.clear();
-      scratch.segmentSurfaceHandles.clear();
-      scratch.segmentBufferHandles.reserve(
-          (segmentEnd - segmentStart) * (core::kMaxStreams + 1u));
-      scratch.segmentTextureHandles.reserve(
-          (segmentEnd - segmentStart) * core::kMaxTextureStages);
-      scratch.segmentSurfaceHandles.reserve(
-          (segmentEnd - segmentStart) * (core::kMaxRenderTargets + 1u));
-      std::optional<CapturedBufferMarkBatch> capturedBatch;
-      if (refineLocks) capturedBatch.emplace(pool_, seqId);
-      for (std::size_t i = segmentStart; i < segmentEnd; ++i) {
-        const auto& entry = scratch.preparedEntries[i].entry;
-        const bool extends = scratch.segmentExtends[i - segmentStart];
-        markDrawBindingSnapshotResources(
-            pool_, entry.payloads, seqId,
-            capturedBatch ? &*capturedBatch : nullptr);
+      {
+        PerfScope stageScope(perf::countSubmitDrawRunResourceMarkCpuTime);
+        const std::uint64_t seqId = seqIdForMark(*this, 0);
+        scratch.segmentBufferHandles.clear();
+        scratch.segmentTextureHandles.clear();
+        scratch.segmentSurfaceHandles.clear();
+        scratch.segmentBufferHandles.reserve(
+            (segmentEnd - segmentStart) * (core::kMaxStreams + 1u));
+        scratch.segmentTextureHandles.reserve(
+            (segmentEnd - segmentStart) * core::kMaxTextureStages);
+        scratch.segmentSurfaceHandles.reserve(
+            (segmentEnd - segmentStart) * (core::kMaxRenderTargets + 1u));
+        std::optional<CapturedBufferMarkBatch> capturedBatch;
+        if (refineLocks) capturedBatch.emplace(pool_, seqId);
+        for (std::size_t i = segmentStart; i < segmentEnd; ++i) {
+          const auto& entry = scratch.preparedEntries[i].entry;
+          const bool extends = scratch.segmentExtends[i - segmentStart];
+          markDrawBindingSnapshotResources(
+              pool_, entry.payloads, seqId,
+              capturedBatch ? &*capturedBatch : nullptr);
+          if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
+            if (!extends) {
+              const auto& hot = entry.state->hot;
+              if (hot.indexBuffer) scratch.segmentBufferHandles.push_back(hot.indexBuffer);
+              for (const auto handle : hot.streamBuffers) {
+                if (handle) scratch.segmentBufferHandles.push_back(handle);
+              }
+              for (const auto handle : hot.textures) {
+                if (handle) scratch.segmentTextureHandles.push_back(handle);
+              }
+              for (const auto& attachment : hot.colorAttachments) {
+                if (attachment.handle) scratch.segmentSurfaceHandles.push_back(attachment.handle);
+              }
+              if (hot.depthStencil.handle) {
+                scratch.segmentSurfaceHandles.push_back(hot.depthStencil.handle);
+              }
+            }
+            // The override marker can select the current backing. Drain all
+            // captured stamps before entering that reference effect boundary.
+            if (capturedBatch) capturedBatch->flush();
+            markDrawBindingOverrideResources(pool_, entry.payloads, seqId);
+          }
+        }
+        if (capturedBatch) capturedBatch->flush();
         if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
-          if (!extends) {
-            const auto& hot = entry.state->hot;
-            if (hot.indexBuffer) scratch.segmentBufferHandles.push_back(hot.indexBuffer);
-            for (const auto handle : hot.streamBuffers) {
-              if (handle) scratch.segmentBufferHandles.push_back(handle);
+          const auto dedup = [](std::vector<core::Handle>& values) {
+            std::sort(values.begin(), values.end(),
+                      [](const core::Handle a, const core::Handle b) {
+                        return a.value < b.value;
+                      });
+            values.erase(std::unique(values.begin(), values.end(),
+                                     [](const core::Handle a, const core::Handle b) {
+                                       return a.value == b.value;
+                                     }),
+                         values.end());
+          };
+          dedup(scratch.segmentBufferHandles);
+          dedup(scratch.segmentTextureHandles);
+          dedup(scratch.segmentSurfaceHandles);
+          // These are the unique buffer/texture/surface handles passed to the
+          // batch marker after per-segment deduplication. Per-draw snapshot and
+          // override marks are intentionally outside this denominator.
+          perf::countSubmitDrawRunBatchResourceMarkUniqueEntries(
+              static_cast<std::uint64_t>(scratch.segmentBufferHandles.size()) +
+              static_cast<std::uint64_t>(scratch.segmentTextureHandles.size()) +
+              static_cast<std::uint64_t>(scratch.segmentSurfaceHandles.size()));
+          if (resourceMarkOverlapObserverEnabled()) {
+            for (const auto handle : scratch.segmentBufferHandles) {
+              recordResourceMarkObservation(
+                  resources::ResourceMarkObservationPhase::Ingress, seqId,
+                  core::ChunkHandleEntry{
+                      .kind = core::ChunkHandleKind::Buffer,
+                      .handle = handle,
+                  });
             }
-            for (const auto handle : hot.textures) {
-              if (handle) scratch.segmentTextureHandles.push_back(handle);
+            for (const auto handle : scratch.segmentTextureHandles) {
+              recordResourceMarkObservation(
+                  resources::ResourceMarkObservationPhase::Ingress, seqId,
+                  core::ChunkHandleEntry{
+                      .kind = core::ChunkHandleKind::Texture,
+                      .handle = handle,
+                  });
             }
-            for (const auto& attachment : hot.colorAttachments) {
-              if (attachment.handle) scratch.segmentSurfaceHandles.push_back(attachment.handle);
-            }
-            if (hot.depthStencil.handle) {
-              scratch.segmentSurfaceHandles.push_back(hot.depthStencil.handle);
+            for (const auto handle : scratch.segmentSurfaceHandles) {
+              recordResourceMarkObservation(
+                  resources::ResourceMarkObservationPhase::Ingress, seqId,
+                  core::ChunkHandleEntry{
+                      .kind = core::ChunkHandleKind::Surface,
+                      .handle = handle,
+                  });
             }
           }
-          // The override marker can select the current backing. Drain all
-          // captured stamps before entering that reference effect boundary.
-          if (capturedBatch) capturedBatch->flush();
-          markDrawBindingOverrideResources(pool_, entry.payloads, seqId);
+          pool_.markBufferUsesBatch(scratch.segmentBufferHandles, seqId);
+          pool_.markTextureUsesBatch(scratch.segmentTextureHandles, seqId);
+          pool_.markSurfaceUsesBatch(scratch.segmentSurfaceHandles, seqId);
         }
       }
-      if (capturedBatch) capturedBatch->flush();
-      if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
-        const auto dedup = [](std::vector<core::Handle>& values) {
-          std::sort(values.begin(), values.end(),
-                    [](const core::Handle a, const core::Handle b) {
-                      return a.value < b.value;
-                    });
-          values.erase(std::unique(values.begin(), values.end(),
-                                   [](const core::Handle a, const core::Handle b) {
-                                     return a.value == b.value;
-                                   }),
-                       values.end());
-        };
-        dedup(scratch.segmentBufferHandles);
-        dedup(scratch.segmentTextureHandles);
-        dedup(scratch.segmentSurfaceHandles);
-        // These are the unique buffer/texture/surface handles passed to the
-        // batch marker after per-segment deduplication. Per-draw snapshot and
-        // override marks are intentionally outside this denominator.
-        perf::countSubmitDrawRunBatchResourceMarkUniqueEntries(
-            static_cast<std::uint64_t>(scratch.segmentBufferHandles.size()) +
-            static_cast<std::uint64_t>(scratch.segmentTextureHandles.size()) +
-            static_cast<std::uint64_t>(scratch.segmentSurfaceHandles.size()));
-        if (resourceMarkOverlapObserverEnabled()) {
-          for (const auto handle : scratch.segmentBufferHandles) {
-            recordResourceMarkObservation(
-                resources::ResourceMarkObservationPhase::Ingress, seqId,
-                core::ChunkHandleEntry{
-                    .kind = core::ChunkHandleKind::Buffer,
-                    .handle = handle,
-                });
+      {
+        PerfScope stageScope(perf::countSubmitDrawRunAppendCpuTime);
+        DXMT_ASSERT_OWNED_BY_OR_LOCKED(writingSlotOwnership_, lock.owns_lock());
+        for (std::size_t i = segmentStart; i < segmentEnd; ++i) {
+          const auto& entry = scratch.preparedEntries[i].entry;
+          // Preflight derived this witness against the same Writing slot while
+          // this mutex remained held. No command or split can interpose within
+          // the reserved segment, so re-running the topology/state comparison
+          // here would be redundant work rather than a stronger proof.
+          const bool extends = scratch.segmentExtends[i - segmentStart];
+          noteCurrentSlotCommandAppendStartedUnlocked(*this);
+          const bool appended = extends
+              ? currentSlotUnlocked(*this).appendCompatibleDrawRunEntryUnchecked(
+                    *entry.state, *entry.uniforms, entry.draws, entry.payloads,
+                    {}, /*alreadyReserved=*/true,
+                    scratch.preparedEntries[i].payloadBytes)
+              : currentSlotUnlocked(*this).appendDrawRun(
+                    *entry.state, *entry.uniforms, entry.draws, entry.payloads,
+                    {}, /*stampUniformHandle=*/true,
+                    /*alreadyReserved=*/true,
+                    scratch.preparedEntries[i].payloadBytes);
+          if (!appended) {
+            // A segment is preflighted and reserved before its first semantic
+            // write. Failure here therefore means an internal witness drift,
+            // and an earlier entry may already be resident in the Writing slot.
+            // Stop the queue so that partial state can never be published.
+            requestSchedulingStopLocked();
+            return false;
           }
-          for (const auto handle : scratch.segmentTextureHandles) {
-            recordResourceMarkObservation(
-                resources::ResourceMarkObservationPhase::Ingress, seqId,
-                core::ChunkHandleEntry{
-                    .kind = core::ChunkHandleKind::Texture,
-                    .handle = handle,
-                });
-          }
-          for (const auto handle : scratch.segmentSurfaceHandles) {
-            recordResourceMarkObservation(
-                resources::ResourceMarkObservationPhase::Ingress, seqId,
-                core::ChunkHandleEntry{
-                    .kind = core::ChunkHandleKind::Surface,
-                    .handle = handle,
-                });
-          }
+          if (!extends) perf::countSubmitDrawRunBatchEmittedRun();
+          compatibleRunOpen = true;
+          currentBackBuffer_ = entry.state->hot.colorAttachments[0].handle;
         }
-        pool_.markBufferUsesBatch(scratch.segmentBufferHandles, seqId);
-        pool_.markTextureUsesBatch(scratch.segmentTextureHandles, seqId);
-        pool_.markSurfaceUsesBatch(scratch.segmentSurfaceHandles, seqId);
       }
-    }
-    {
-      PerfScope stageScope(perf::countSubmitDrawRunAppendCpuTime);
-      DXMT_ASSERT_OWNED_BY_OR_LOCKED(writingSlotOwnership_, lock.owns_lock());
-      for (std::size_t i = segmentStart; i < segmentEnd; ++i) {
-        const auto& entry = scratch.preparedEntries[i].entry;
-        // Preflight derived this witness against the same Writing slot while
-        // this mutex remained held. No command or split can interpose within
-        // the reserved segment, so re-running the topology/state comparison
-        // here would be redundant work rather than a stronger proof.
-        const bool extends = scratch.segmentExtends[i - segmentStart];
-        noteCurrentSlotCommandAppendStartedUnlocked(*this);
-        const bool appended = extends
-            ? currentSlotUnlocked(*this).appendCompatibleDrawRunEntryUnchecked(
-                  *entry.state, *entry.uniforms, entry.draws, entry.payloads,
-                  {}, /*alreadyReserved=*/true,
-                  scratch.preparedEntries[i].payloadBytes)
-            : currentSlotUnlocked(*this).appendDrawRun(
-                  *entry.state, *entry.uniforms, entry.draws, entry.payloads,
-                  {}, /*stampUniformHandle=*/true,
-                  /*alreadyReserved=*/true,
-                  scratch.preparedEntries[i].payloadBytes);
-        if (!appended) {
-          // A segment is preflighted and reserved before its first semantic
-          // write. Failure here therefore means an internal witness drift,
-          // and an earlier entry may already be resident in the Writing slot.
-          // Stop the queue so that partial state can never be published.
-          requestSchedulingStopLocked();
-          return false;
-        }
-        if (!extends) perf::countSubmitDrawRunBatchEmittedRun();
-        compatibleRunOpen = true;
-        currentBackBuffer_ = entry.state->hot.colorAttachments[0].handle;
-      }
-    }
+      return true;
+    });
+    if (!batchAppended) return false;
     {
       PerfScope stageScope(perf::countSubmitDrawRunChunkCommitCpuTime);
       if (maybeCommitDrawChunkUnlocked(*this, pool_, lock)) {
@@ -4548,6 +4552,17 @@ CommandQueue::beginDirectChunkSlotReplay(
           core::directSlotCapacityLedgerQualifiesReuse(
               directSlotCapacityLedger_.entries[*payloadIndex],
               directSlotCapacityLedger_.stagedBytes, *payload);
+      if (payload->admissionCapacityReceipt.qualified() &&
+          (!payloadIndex || !core::directSlotExactFallbackOwnerValid(
+              directSlotCapacityLedger_, *payload, *payloadIndex))) {
+        // Neither optional reprovision nor exact fallback may legitimize a
+        // stale persisted receipt by observing and replacing it afterwards.
+        requestSchedulingStopLocked();
+        return {
+            .status = DirectChunkSlotReplayStatus::FailStopped,
+            .failureReason = DirectChunkSlotReplayFailureReason::StructuralRejected,
+        };
+      }
       // R-BACK-2.104: the one address-safe moment to give this slot storage
       // headroom. The shared reducer owns the decision; production, the native
       // truth table and the TLA binding all consume it.
@@ -4649,6 +4664,37 @@ CommandQueue::beginDirectChunkSlotReplay(
           }
         } else {
           perf::countDirectChunkSlotSlotProvisionFailed();
+          if (payload->admissionCapacityReceipt.qualified()) {
+            const auto recovered = core::recoverDirectSlotExactCapacity(
+                directSlotCapacityLedger_, *payload,
+                payloadIndex.value_or(core::kDirectSlotCapacityPayloadCount),
+                capacity);
+            perf::countDirectSlotExactFallback(recovered.accepted,
+                recovered.action == core::DirectSlotExactFallbackAction::Reuse);
+            perf::recordDirectSlotCapacityLease(
+                directSlotCapacityLedger_.retainedBytes,
+                directSlotCapacityLedger_.stagedBytes,
+                recovered.accepted && recovered.action ==
+                    core::DirectSlotExactFallbackAction::Replace, false);
+            if (!recovered.accepted) {
+              // A required allocation failure retains the old authority;
+              // ordinary replay must not grow it behind that receipt. Stale
+              // ownership is likewise terminal, never an unqualified retry.
+              requestSchedulingStopLocked();
+              return {
+                  .status = DirectChunkSlotReplayStatus::FailStopped,
+                  .failureReason = recovered.action ==
+                          core::DirectSlotExactFallbackAction::Reject
+                      ? DirectChunkSlotReplayFailureReason::StructuralRejected
+                      : DirectChunkSlotReplayFailureReason::AssemblerRejected,
+              };
+            }
+            capacityReceipt = recovered.receipt;
+            admittedStorageAction = recovered.action ==
+                    core::DirectSlotExactFallbackAction::Reuse
+                ? core::DirectSpanStorageAction::ReusedExact
+                : core::DirectSpanStorageAction::ReplacedExact;
+          }
         }
         break;
       }
@@ -7519,7 +7565,11 @@ void CommandQueue::submitClear(const core::ClearDesc& desc) {
     traceTextureSurfaceOp(pool_, "Clear", attachment.handle, desc.depthStencil.handle);
   }
   noteCurrentSlotCommandAppendStartedUnlocked(*this);
-  currentSlotUnlocked(*this).appendClear(desc);
+  auto& slot = currentSlotUnlocked(*this);
+  if (!queueLifecycle_.mutateWritingPayload(slot, [&] {
+        slot.appendClear(desc);
+        return true;
+      })) return;
   if (desc.colorAttachments[0].handle) {
     currentBackBuffer_ = desc.colorAttachments[0].handle;
   }
@@ -7543,7 +7593,11 @@ void CommandQueue::submitSurfaceCopy(const core::SurfaceCopyDesc& desc) {
   ensureWritingSlotUnlocked(*this, lock);
   traceTextureSurfaceOp(pool_, "SurfaceCopy", desc.source, desc.destination);
   noteCurrentSlotCommandAppendStartedUnlocked(*this);
-  currentSlotUnlocked(*this).appendSurfaceCopy(desc);
+  auto& slot = currentSlotUnlocked(*this);
+  if (!queueLifecycle_.mutateWritingPayload(slot, [&] {
+        slot.appendSurfaceCopy(desc);
+        return true;
+      })) return;
   currentBackBuffer_ = desc.destination;
   pool_.markSurfaceCopyResources(desc, seqIdForMark(*this, 0));
 }
@@ -7574,7 +7628,11 @@ void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
   ensureWritingSlotUnlocked(*this, lock);
   traceTextureSurfaceOp(pool_, "StretchRect", desc.source, desc.destination);
   noteCurrentSlotCommandAppendStartedUnlocked(*this);
-  currentSlotUnlocked(*this).appendStretchRect(desc);
+  auto& slot = currentSlotUnlocked(*this);
+  if (!queueLifecycle_.mutateWritingPayload(slot, [&] {
+        slot.appendStretchRect(desc);
+        return true;
+      })) return;
   currentBackBuffer_ = desc.destination;
   pool_.markStretchResources(desc, seqIdForMark(*this, 0));
   if (splitStretchChunk()) {
@@ -7616,7 +7674,11 @@ void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
   ensureWritingSlotUnlocked(*this, lock);
   traceTextureSurfaceOp(pool_, "ColorFill", desc.destination);
   noteCurrentSlotCommandAppendStartedUnlocked(*this);
-  currentSlotUnlocked(*this).appendColorFill(desc);
+  auto& slot = currentSlotUnlocked(*this);
+  if (!queueLifecycle_.mutateWritingPayload(slot, [&] {
+        slot.appendColorFill(desc);
+        return true;
+      })) return;
   currentBackBuffer_ = desc.destination;
   pool_.markColorFillResources(desc, seqIdForMark(*this, 0));
 }
@@ -7642,7 +7704,11 @@ void CommandQueue::submitDepthResolve(const core::DepthResolveDesc& desc) {
   ensureWritingSlotUnlocked(*this, lock);
   traceTextureSurfaceOp(pool_, "DepthResolve", desc.msaaDepth, desc.intzDest);
   noteCurrentSlotCommandAppendStartedUnlocked(*this);
-  currentSlotUnlocked(*this).appendDepthResolve(desc);
+  auto& slot = currentSlotUnlocked(*this);
+  if (!queueLifecycle_.mutateWritingPayload(slot, [&] {
+        slot.appendDepthResolve(desc);
+        return true;
+      })) return;
   pool_.markDepthResolveResources(desc, seqIdForMark(*this, 0));
 }
 
@@ -7662,7 +7728,11 @@ void CommandQueue::submitGenerateMipmaps(
                                 /*skipHold=*/true);
   ensureWritingSlotUnlocked(*this, lock);
   noteCurrentSlotCommandAppendStartedUnlocked(*this);
-  currentSlotUnlocked(*this).appendGenerateMipmaps(desc);
+  auto& slot = currentSlotUnlocked(*this);
+  if (!queueLifecycle_.mutateWritingPayload(slot, [&] {
+        slot.appendGenerateMipmaps(desc);
+        return true;
+      })) return;
   pool_.markGenerateMipmapsResources(desc, seqIdForMark(*this, 0));
 }
 

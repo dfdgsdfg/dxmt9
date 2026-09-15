@@ -1708,6 +1708,35 @@ ordinary pre-effect provisioning miss: it changes no semantic, command-buffer,
 render-pass, completion, or wake boundary and proceeds through the existing
 exact-fit assembler path.
 
+An optional provisioning miss must not downgrade an existing qualified
+capacity receipt. With the payload empty and detached ownership restored,
+admission must validate its payload index, capacity generation, retained bytes
+and settled ledger. If its storage covers the arriving **exact** source plan,
+admission restores only lookup extents and preserves that receipt. This is
+exact fallback reuse, not full-headroom reuse. Otherwise an exact replacement
+must stage off-slot, charge both old and new storage, and atomically transfer
+ownership to a new qualified generation. The required exact allocation is not
+optional headroom: as with the existing exact-fit fallback it may exceed the
+optional aggregate ceiling, but its entire footprint must remain accounted
+and must prevent further optional headroom admission while over limit.
+It may not enlarge the exact plan to a headroom plan. A failed required
+allocation must preserve the previous storage and receipt, settle staged
+credit, and fail before semantic effect; it must not retry by growing the
+qualified payload without accounting. Stale receipts, detached owners and
+nonempty payloads do not authorize this recovery.
+
+Ordinary compatibility writers may inherit that qualified storage. Before
+mutating it they must acquire a move-only, source/storage/sequence-qualified
+capacity-write witness against the unchanged persisted receipt and physical
+capacity. The witness covers one mutex-held append or maximal draw batch,
+never a publication, wait, or ownership transfer. Before releasing that scope,
+including partial allocation failure, the writer must settle actual retained
+capacity through the shared reducer and preserve or advance the receipt's
+generation. Required ordinary growth is accounted even above the optional
+ceiling. Publication and reclaim must reject unmatched physical capacity;
+neither may manufacture a witness after mutation. Unqualified exact-fit
+writers must not pay for capacity scans or witness construction.
+
 Provisioning must also be failure-atomic. Every allocation and lookup-table
 size change must be staged outside the live slot and adopted only after the
 complete capacity set succeeds. An exception or allocation failure must leave

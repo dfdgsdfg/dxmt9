@@ -896,6 +896,15 @@ void everyTypedAllocationFailureOwnsAndRollsBackLease() {
                   readbackBefore,
           "typed fault owner destruction rolls back credit and preserves the "
           "live destination");
+    destination.admissionCapacityReceipt = DetachedCapacityReceipt::ledgerQualified(
+        0, generationAfterAcquire, retainedAfterAcquire);
+    const auto exactFallback = recoverDirectSlotExactCapacity(
+        ledger, destination, 0, plan);
+    check(exactFallback.accepted && exactFallback.receipt.qualified() &&
+              exactFallback.receipt.generation() == generationAfterAcquire + 1 &&
+              ledger.stagedBytes == 0 &&
+              ledger.retainedBytes == directSlotPhysicalRetainedBytes(destination),
+          "every optional allocation rollback admits an accounted exact fallback");
   }
 }
 
@@ -1024,6 +1033,118 @@ void aggregateLeaseConservesGenerationAndCredit() {
   check(!peerOverLimit.accepted,
         "unseen peer exact-fit growth that exceeds the aggregate denies "
         "positive provisioning");
+  check(peerOverLimit.observed && peerOverLimit.state.retainedBytes == 125 &&
+            peerOverLimit.entries[62].retainedBytes == 80,
+        "a denied over-limit observation still prices the complete physical owner set");
+}
+
+void deniedCapacityRecoveryPreservesOwnership() {
+  // DirectSlotDeniedOwnership::FallbackAction, all Boolean valuations.
+  constexpr DirectSlotExactFallbackAction table[2][2] = {
+      {DirectSlotExactFallbackAction::Reject, DirectSlotExactFallbackAction::Reject},
+      {DirectSlotExactFallbackAction::Replace, DirectSlotExactFallbackAction::Reuse}};
+  for (unsigned valid = 0; valid != 2; ++valid)
+    for (unsigned covered = 0; covered != 2; ++covered)
+      check(reduceDirectSlotExactFallback(valid, covered) == table[valid][covered],
+            "production exact fallback matches all model transition rows");
+
+  for (std::uint64_t limit = 0; limit != 5; ++limit)
+    for (std::uint64_t retained = 0; retained != 5; ++retained)
+      for (std::uint64_t generation = 0; generation != 3; ++generation)
+        for (std::uint64_t serial = 0; serial != 3; ++serial)
+          for (std::uint64_t bytes = 0; bytes != 4; ++bytes)
+            for (std::uint64_t outstanding = 0; outstanding != 2; ++outstanding) {
+              const DirectSlotCapacityLeaseState state{
+                  .limitBytes = limit, .retainedBytes = retained,
+                  .stagedBytes = outstanding, .nextTicketSerial = serial,
+                  .entry = {.generation = generation, .retainedBytes = retained}};
+              const bool valid = limit && bytes && generation && serial && !outstanding;
+              const auto optional = reduceDirectSlotCapacityLease(
+                  state, DirectSlotCapacityLeaseEvent::Stage, bytes);
+              const auto required = reduceDirectSlotCapacityLease(
+                  state, DirectSlotCapacityLeaseEvent::StageExact, bytes);
+              check(optional.accepted == (valid && retained + bytes <= limit) &&
+                        required.accepted == valid,
+                    "bounded optional/required admission table keeps distinct budget obligations");
+              if (required.accepted) {
+                const auto rollback = reduceDirectSlotCapacityLease(required.next,
+                    DirectSlotCapacityLeaseEvent::Rollback, 0, required.ticket);
+                check(rollback.accepted && rollback.next.stagedBytes == 0 &&
+                          rollback.next.entry == state.entry &&
+                          rollback.next.retainedBytes == state.retainedBytes,
+                      "required stage rollback conserves every bounded old owner");
+              }
+            }
+
+  const auto plan = allAllocationDimensionsPlan();
+  for (std::size_t point = 0; point < kDirectChunkSlotProvisionDimensionCount; ++point) {
+    QueueDirectSlotCapacityLeaseLedger ledger{};
+    ChunkSlot slot;
+    provision(slot, exactSpanPlan(1));
+    const auto bytes = directSlotPhysicalRetainedBytes(slot);
+    constexpr std::size_t index = 3;
+    ledger.limitBytes = bytes; // optional replacement cannot stage a single byte
+    ledger.retainedBytes = bytes;
+    ledger.entries[index] = {.generation = 7, .retainedBytes = bytes};
+    slot.admissionCapacityReceipt = DetachedCapacityReceipt::ledgerQualified(index, 7, bytes);
+    const auto old = slot.admissionCapacityReceipt;
+    const auto topology = topologyOf(slot);
+    const auto lookup = lookupValuesOf(slot);
+    FailingAllocation injection{.target = static_cast<DirectSlotProvisionAllocation>(point)};
+    const auto failed = recoverDirectSlotExactCapacity(
+        ledger, slot, index, plan, {&injection, &failAllocation});
+    check(!failed.accepted && failed.action == DirectSlotExactFallbackAction::Replace &&
+              injection.observed && ledger.stagedBytes == 0 &&
+              ledger.retainedBytes == bytes && ledger.entries[index].generation == 7 &&
+              slot.admissionCapacityReceipt == old && topologyOf(slot) == topology &&
+              lookupValuesOf(slot) == lookup,
+          "every required-exact allocation fault preserves old authority and storage");
+    const auto replaced = recoverDirectSlotExactCapacity(ledger, slot, index, plan);
+    check(replaced.accepted && replaced.action == DirectSlotExactFallbackAction::Replace &&
+              replaced.receipt.qualified() && replaced.receipt.generation() == 8 &&
+              ledger.entries[index].generation == 8 && ledger.stagedBytes == 0 &&
+              ledger.retainedBytes == directSlotPhysicalRetainedBytes(slot) &&
+              directSlotPhysicalCapacityCovers(slot, plan),
+          "exact replacement accounts required capacity beyond optional budget");
+    const auto newTopology = topologyOf(slot);
+    const auto serial = ledger.nextTicketSerial;
+    const auto reused = recoverDirectSlotExactCapacity(ledger, slot, index, plan);
+    check(reused.accepted && reused.action == DirectSlotExactFallbackAction::Reuse &&
+              reused.receipt == replaced.receipt && topologyOf(slot) == newTopology &&
+              ledger.nextTicketSerial == serial,
+          "covered exact fallback preserves all pointers, generation and lease serial");
+    DirectSlotCapacityLeaseState state{
+        .limitBytes = ledger.limitBytes, .retainedBytes = ledger.retainedBytes,
+        .entry = ledger.entries[index]};
+    check(!reduceDirectSlotCapacityLease(state, DirectSlotCapacityLeaseEvent::Stage, 1).accepted,
+          "required exact credit never permits optional over-budget headroom");
+  }
+
+  for (unsigned fault = 0; fault != 7; ++fault) {
+    QueueDirectSlotCapacityLeaseLedger ledger{};
+    ChunkSlot slot;
+    provision(slot, plan);
+    const auto bytes = directSlotPhysicalRetainedBytes(slot);
+    ledger.limitBytes = ledger.retainedBytes = bytes;
+    ledger.entries[3] = {.generation = 7, .retainedBytes = bytes};
+    slot.admissionCapacityReceipt = DetachedCapacityReceipt::ledgerQualified(3, 7, bytes);
+    switch (fault) {
+    case 0: slot.admissionCapacityReceipt = DetachedCapacityReceipt::ledgerQualified(4, 7, bytes); break;
+    case 1: slot.admissionCapacityReceipt = DetachedCapacityReceipt::ledgerQualified(3, 6, bytes); break;
+    case 2: slot.admissionCapacityReceipt = DetachedCapacityReceipt::ledgerQualified(3, 7, bytes + 1); break;
+    case 3: ledger.stagedBytes = 1; break;
+    case 4: slot.detachedOwnerMarker.serial = 1; break;
+    case 5: slot.commandHeaders.resize(1); break;
+    case 6: slot.drawPayloadArena.reserve(slot.drawPayloadArena.capacity() + 1); break;
+    }
+    const auto before = topologyOf(slot);
+    const auto receipt = slot.admissionCapacityReceipt;
+    const auto rejected = recoverDirectSlotExactCapacity(ledger, slot, 3, plan);
+    check(!rejected.accepted && rejected.action == DirectSlotExactFallbackAction::Reject &&
+              topologyOf(slot) == before && slot.admissionCapacityReceipt == receipt,
+          "stale index/generation/bytes, staged/detached/nonempty/grown owner rejects unchanged");
+    slot.detachedOwnerMarker = {};
+  }
 }
 
 void typedLeaseTransactionCommitsOrRollsBack() {
@@ -1123,6 +1244,88 @@ DetachedCompatibilityOwnerIdentity detachedIdentity(
 // the owners with the mutex released, then move the emptied buffer back after
 // the relock. Modelled here as one function because only the ORDER matters to
 // the storage question under test.
+void compatibilityCapacityWritePreservesOwnership() {
+  static_assert(!std::is_copy_constructible_v<CompatibilityCapacityWrite>);
+  static_assert(std::is_nothrow_move_constructible_v<CompatibilityCapacityWrite>);
+  // SettleOrdinary: exact old credit + actual surviving capacity, including
+  // required growth past the optional ceiling. No authority means no repair.
+  for (unsigned valid = 0; valid != 2; ++valid)
+    for (unsigned old = 1; old != 4; ++old)
+      for (unsigned actual = 0; actual != 5; ++actual)
+        for (unsigned staged = 0; staged != 2; ++staged) {
+          const DirectSlotCapacityLeaseState state{
+              .limitBytes = 1, .retainedBytes = old + 7,
+              .stagedBytes = staged, .entry = {3, old}};
+          const auto result = reduceCompatibilityCapacityWrite(state, valid, actual);
+          const bool accepted = valid && !staged && actual >= old;
+          check(result.accepted == accepted &&
+                    (!accepted ? result.next == state :
+                     result.next.retainedBytes == actual + 7 &&
+                     result.next.entry.generation == (actual == old ? 3u : 4u) &&
+                     result.next.limitBytes == 1),
+                "ordinary settlement matches the bounded model truth table");
+        }
+
+  for (unsigned fault = 0; fault != 14; ++fault) {
+    ChunkSlot slot;
+    provision(slot, exactSpanPlan(1));
+    const auto identity = detachedIdentity(slot);
+    QueueDirectSlotCapacityLeaseLedger ledger{};
+    const auto bytes = identity.capacityReceipt.retainedBytes();
+    ledger.limitBytes = ledger.retainedBytes = bytes;
+    ledger.entries[identity.payloadIndex] = {identity.capacityReceipt.generation(), bytes};
+    auto lease = CompatibilityCapacityWrite::acquire(ledger, slot, identity);
+    check(lease.valid(), "qualified ordinary write acquires pre-mutation authority");
+    auto moved = std::move(lease);
+    check(!lease.valid() && moved.valid(), "ordinary write capability is linear");
+    auto current = identity;
+    switch (fault) {
+    case 0: break; // reuse: no growth
+    case 1: slot.clearRecords.reserve(slot.clearRecords.capacity() + 3); break;
+    case 2: ++current.seqId; break;
+    case 3: ++current.sourceIndex; break;
+    case 4: ++current.sourceGeneration; break;
+    case 5: ++current.firstPage; break;
+    case 6: ++current.pageCount; break;
+    case 7: ++current.storageGeneration; break;
+    case 8: ++current.payloadIndex; break;
+    case 9: ++ledger.entries[identity.payloadIndex].generation; break;
+    case 10: ++ledger.entries[identity.payloadIndex].retainedBytes; break;
+    case 11: ledger.stagedBytes = 1; break;
+    case 12: slot.admissionCapacityReceipt = DetachedCapacityReceipt{}; break;
+    case 13: current.payload = nullptr; break;
+    }
+    const auto before = ledger.entries;
+    const auto creditBefore = ledger.retainedBytes;
+    const auto receiptBefore = slot.admissionCapacityReceipt;
+    const bool accepted = std::move(moved).settle(current);
+    check(accepted == (fault < 2), "stale identity, ledger or receipt cannot settle a write");
+    check(!std::move(moved).settle(current) && !std::move(lease).settle(current),
+          "consumed and moved-from capabilities reject duplicate settlement");
+    if (accepted) {
+      check(ledger.retainedBytes == directSlotPhysicalRetainedBytes(slot) &&
+                slot.admissionCapacityReceipt.generation() ==
+                    identity.capacityReceipt.generation() + (fault == 1 ? 1u : 0u),
+            "ordinary reuse preserves generation and growth advances it once");
+    } else {
+      check(ledger.entries == before && ledger.retainedBytes == creditBefore &&
+                slot.admissionCapacityReceipt == receiptBefore,
+            "invalid settlement never launders authority or drops old credit");
+    }
+  }
+
+  ChunkSlot stale;
+  provision(stale, exactSpanPlan(1));
+  const auto identity = detachedIdentity(stale);
+  QueueDirectSlotCapacityLeaseLedger ledger{};
+  ledger.retainedBytes = identity.capacityReceipt.retainedBytes();
+  ledger.entries[identity.payloadIndex] = {
+      identity.capacityReceipt.generation(), ledger.retainedBytes};
+  stale.clearRecords.reserve(stale.clearRecords.capacity() + 1);
+  check(!CompatibilityCapacityWrite::acquire(ledger, stale, identity).valid(),
+        "a witness acquired after unpriced growth is not authority");
+}
+
 void reclaimPayload(ChunkSlot& slot) {
   // Swap out (O(1), leaves the payload's vector specified empty with capacity
   // zero), clear the rest of the payload, release the mutex, destroy the
@@ -1642,6 +1845,8 @@ int main() {
   everyProductionAllocationFailureIsAtomic();
   everyTypedAllocationFailureOwnsAndRollsBackLease();
   aggregateLeaseConservesGenerationAndCredit();
+  deniedCapacityRecoveryPreservesOwnership();
+  compatibilityCapacityWritePreservesOwnership();
   typedLeaseTransactionCommitsOrRollsBack();
   aggregateReconciliationIncludesReusedReadbackCapacity();
   reclaimRetainsEveryProvisionedCapacity();

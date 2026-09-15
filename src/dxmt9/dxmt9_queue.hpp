@@ -1581,6 +1581,41 @@ class QueueLifecycleController {
   }
   // TLA+: WriterAcquire, WriterWaitBegin, WriterWaitEnd.
   bool ensureWriterSlot(std::unique_lock<std::mutex>& lock, size_t inflightLimit);
+  // The callback may only mutate this payload; it must not publish, wait,
+  // release the queue mutex or transfer source ownership. Unqualified slots
+  // retain the historical append path without a capacity scan or fat token.
+  template <typename Mutation>
+  bool mutateWritingPayload(ChunkSlot& payload, Mutation&& mutation) {
+    if (!payload.admissionCapacityReceipt.qualified()) return mutation();
+    const auto identity = writingCapacityIdentity(payload);
+    auto* ledger = submissionBinding_.directSlotCapacityLedger;
+    auto lease = identity && ledger
+        ? CompatibilityCapacityWrite::acquire(*ledger, payload, *identity)
+        : CompatibilityCapacityWrite{};
+    if (!lease.valid()) {
+      poisonTapeFailureLocked();
+      return false;
+    }
+    const auto settle = [&]() noexcept {
+      const auto current = writingCapacityIdentity(payload);
+      return std::move(lease).settle(
+          current.value_or(DetachedCompatibilityOwnerIdentity{}));
+    };
+    try {
+      const bool appended = mutation();
+      if (!settle()) {
+        poisonTapeFailureLocked();
+        return false;
+      }
+      return appended;
+    } catch (...) {
+      // A reserve may grow some vectors before a later allocation throws.
+      // Account those surviving allocations, but never publish partial work.
+      (void)settle();
+      poisonTapeFailureLocked();
+      throw;
+    }
+  }
   // TLA+: Present enqueue + CommitPublish for a present-bearing chunk.
   bool presentAndCommit(std::unique_lock<std::mutex>& lock,
                         size_t inflightLimit,
@@ -1702,6 +1737,8 @@ class QueueLifecycleController {
       const std::function<void(u64)>& onInlineComplete = {});
   // TLA+: present-bearing metadata append before CommitPublish.
   bool appendPresentCommand(const SwapDesc& present, Handle sourceHandle);
+  std::optional<DetachedCompatibilityOwnerIdentity> writingCapacityIdentity(
+      const ChunkSlot& payload) const noexcept;
   // TLA+: EncodeSubmitToGpu.
   bool submitEncodedChunk(WMT::Reference<WMT::CommandBuffer> commandBuffer,
                           size_t slotIndex,

@@ -3373,6 +3373,33 @@ bool QueueLifecycleController::presentAndCommit(
   return commitCurrentChunk(lock, inflightLimit, onBeforePublish);
 }
 
+std::optional<DetachedCompatibilityOwnerIdentity>
+QueueLifecycleController::writingCapacityIdentity(
+    const ChunkSlot& payload) const noexcept {
+  const auto* writing = submissionBinding_.writingSlot;
+  const auto* tape = submissionBinding_.cpuReadyTape;
+  const auto* nextSeq = submissionBinding_.nextSeqId;
+  if (!writing || !*writing || !tape || !nextSeq ||
+      **writing >= submissionBinding_.slots.size()) return std::nullopt;
+  const auto& control = submissionBinding_.slots[**writing];
+  const CpuReadyTape::SourceRef source{control.sourceId, control.storage};
+  const auto index = tape->compatibilityPayloadIndex(source);
+  if (control.state != ChunkSlot::State::Writing || control.payload != &payload ||
+      !source.valid() || !index || *index > std::numeric_limits<u32>::max()) {
+    return std::nullopt;
+  }
+  return DetachedCompatibilityOwnerIdentity{
+      .payload = &payload,
+      .seqId = nextSeq->load(std::memory_order_relaxed),
+      .sourceIndex = source.id.index,
+      .sourceGeneration = source.id.generation,
+      .firstPage = source.storage.firstPage,
+      .pageCount = source.storage.pageCount,
+      .storageGeneration = source.storage.generation,
+      .payloadIndex = static_cast<u32>(*index),
+      .capacityReceipt = payload.admissionCapacityReceipt};
+}
+
 void QueueLifecycleController::flushAndWait(
     std::unique_lock<std::mutex>& lock,
     size_t inflightLimit,
@@ -3449,6 +3476,15 @@ bool QueueLifecycleController::commitCurrentChunk(
     poisonTapeFailureLocked();
     dxmt9::noteQueueMutexSegmentIfEnabled("commit_current_chunk/pre_wait",
                                           qmxEnabled, qmxSegStart);
+    return false;
+  }
+  if (writingPayload->admissionCapacityReceipt.qualified() &&
+      !detachedCompatibilityOwnerIdentity(
+          *submissionBinding_.cpuReadyTape,
+          submissionBinding_.directSlotCapacityLedger,
+          {slot.sourceId, slot.storage},
+          nextSeqId->load(std::memory_order_relaxed), *writingPayload)) {
+    poisonTapeFailureLocked();
     return false;
   }
   if (writingPayload->commandsEmpty()) {
@@ -3553,6 +3589,16 @@ bool QueueLifecycleController::commitCurrentChunk(
     const auto onBeforePublishStart = std::chrono::steady_clock::now();
     if (onBeforePublish) {
       onBeforePublish(*writingPayload);
+    }
+    if (writingPayload->admissionCapacityReceipt.qualified() &&
+        !detachedCompatibilityOwnerIdentity(
+            *submissionBinding_.cpuReadyTape,
+            submissionBinding_.directSlotCapacityLedger,
+            {slot.sourceId, slot.storage}, slot.seqId, *writingPayload)) {
+      slot.seqId = 0;
+      writingPayload->seqId = 0;
+      poisonTapeFailureLocked();
+      return;
     }
     onBeforePublishCpuNanoseconds = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -4431,10 +4477,12 @@ bool QueueLifecycleController::appendPresentCommand(const SwapDesc& present,
     poisonTapeFailureLocked();
     return false;
   }
-  enqueuePresent(slotIndex, slot.seqId, present, sourceHandle, [&] {
-    payload->appendPresent(present, sourceHandle);
+  return mutateWritingPayload(*payload, [&] {
+    enqueuePresent(slotIndex, slot.seqId, present, sourceHandle, [&] {
+      payload->appendPresent(present, sourceHandle);
+    });
+    return true;
   });
-  return true;
 }
 
 bool QueueLifecycleController::submitEncodedChunk(WMT::Reference<WMT::CommandBuffer> commandBuffer,

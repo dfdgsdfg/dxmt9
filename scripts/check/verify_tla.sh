@@ -25,6 +25,7 @@ normal_models=(
   DirectChunkSlotContinuation
   DirectSlotAggregateCapacityLease
   DirectSlotCapacityProvisioning
+  DirectSlotDeniedOwnership
   DirectSourceLifecycle
   DrawPsoIdentity
   DrawableToken
@@ -70,10 +71,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=58
+expected_normal_count=59
 expected_progress_count=4
-expected_counterexample_count=128
-expected_cfg_count=190
+expected_counterexample_count=133
+expected_cfg_count=196
 progress_configs=(
   CpuPipelineLifecycle.progress
   DirectSourceLifecycle.progress
@@ -154,6 +155,11 @@ counterexample_models=(
   "DirectSlotCapacityProvisioning|.no-reuse.counterexample|Invariant NoRedundantReprovision is violated"
   "DirectSlotCapacityProvisioning|.detached-owner-storage.counterexample|Invariant ReuseRequiresCompleteRetention is violated"
   "DirectSlotCapacityProvisioning|.stale-ledger-reuse.counterexample|Invariant ReuseIsLedgerQualified is violated"
+  "DirectSlotDeniedOwnership|.downgrade.counterexample|Invariant AuthorityPreserved is violated"
+  "DirectSlotDeniedOwnership|.unpriced-growth.counterexample|Invariant PhysicalCreditConserved is violated"
+  "DirectSlotDeniedOwnership|.early-reclaim.counterexample|Invariant CompletionBeforeReclaim is violated"
+  "DirectSlotDeniedOwnership|.late-witness.counterexample|Invariant ScopedWriteHasAuthority is violated"
+  "DirectSlotDeniedOwnership|.ordinary-growth.counterexample|Invariant PhysicalCreditConserved is violated"
   "DirectSlotAggregateCapacityLease|.partial-adoption.counterexample|Invariant AdoptionIsAtomic is violated"
   "DirectSlotAggregateCapacityLease|.leaked-credit.counterexample|Invariant RetainedCreditConserved is violated"
   "ReplayEmissionPlanIslands|.span-identity.counterexample|Invariant EachRecordEmittedOnce is violated"

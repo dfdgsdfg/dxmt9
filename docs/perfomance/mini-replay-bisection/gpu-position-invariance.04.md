@@ -166,8 +166,11 @@ last denial's ledger snapshot or authorize weakening receipt provenance.
 
 The retained final source/output cohort, public exact-policy CPU/GPU join,
 atomic publication, final reauthentication and fresh applicable native/TLA
-gates are closed. The headroom candidate remains rejected pending its own
-admission/ownership repair and model/native/GPU requalification. Other
+gates are closed. The historical r586 headroom failure above is superseded by
+[qualified ownership recovery](capacity-ownership-recovery.05.md): r610–r612
+requalify the unchanged original with 1MiB/16MiB, 5MiB/64MiB and zero headroom,
+including the later compatibility-growth boundary. r586 remains a preserved
+negative rather than being relabelled. Other
 workloads/devices, sequence tapes with per-interval original oracles, complete
 intermediate attachments, arbitrary policies, concurrent worker scheduling
 and performance promotion remain separate evidence scopes. No renderer
