@@ -1165,6 +1165,18 @@ the later publication reports attribution loss instead.
 It is diagnostic evidence only and cannot change admission, publication,
 dequeue, release, or completion policy.
 
+**R-BACK-2.84.1** A CPU-supply investigation must distinguish native thread CPU,
+elapsed service, unavailable input, FIFO reservation blocking, and
+ready-but-not-dispatched delay. Stage scopes that overlap or nest must not be
+summed as a serial frame budget. Source-ready/replay and publication/encode
+joins must be identity-qualified within a bounded process/run interval;
+overflow, missing endpoints, reused identities and unsupported execution lanes
+must invalidate attribution rather than become zero cost. A half/zero replay
+counterfactual must state which arrivals, dispatch delays, downstream service,
+and completion feedback it holds fixed. It must not be presented as an actual
+FPS improvement or an unconditional end-to-end speedup ceiling. A production
+policy change requires separate semantic and performance evidence.
+
 **R-BACK-2.85** The opt-in replay-to-queue direct path must use a
 `TransactionalChunkSlotAssembler` whose reservation is owned by the final
 `ChunkSlot` / Arena payload destination. `reserve` must prove bounded capacity

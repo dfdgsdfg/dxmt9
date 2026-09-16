@@ -73,6 +73,9 @@ endif
 test('dxmt9-observe-darwin-thread-cpu', python3,
      args: [join_paths(meson.project_source_root(), 'tests/scripts/test_observe_darwin_thread_cpu.py')])
 
+test('dxmt9-cpu-supply-analysis', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_cpu_supply.py')])
+
 test('dxmt9-d3d9-pe-process-vertices-split-audit', python3,
      args: [join_paths(meson.project_source_root(), 'scripts/check/audit_d3d9_pe_process_vertices_split.py')])
 

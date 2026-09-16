@@ -1237,6 +1237,16 @@ replay_offload_queue_spec = executable(
 test('dxmt9-replay-offload-queue-spec', replay_offload_queue_spec,
      env: dxmt9_native_test_env)
 
+cpu_supply_trace_spec = executable(
+  'dxmt9-cpu-supply-trace-spec', 'cpu_supply_trace_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-cpu-supply-trace-spec', python3,
+  args: [join_paths(meson.project_source_root(), 'tests/scripts/test_cpu_supply_trace.py'),
+         cpu_supply_trace_spec.full_path()], env: dxmt9_native_test_env)
+
 cpu_ready_early_prefix_spec = executable(
   'dxmt9-cpu-ready-early-prefix-spec',
   'cpu_ready_early_prefix_spec.cpp',

@@ -24,6 +24,7 @@
 #include "dxmt9/copy_materialization_ledger.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9/dxmt9_managed_mutation_lease.hpp"
+#include "dxmt9/dxmt9_cpu_supply_trace.hpp"
 
 struct D9CDevice;     // fwd (global-namespace struct; see device_c_common.hpp)
 struct D9CBuffer;     // fwd (global-namespace struct; see device_c_common.hpp)
@@ -760,6 +761,10 @@ class ReplayOffloadQueue {
       drainCv_.notify_all();
       return ReplayQueuePushDisposition::EffectUnknown;
     }
+    if (supply::enabled()) {
+      supply::record(supply::Event::RawReady, this, queue_.back().chunk.replaySeq);
+      traceQueueStateLocked();
+    }
     workCv_.notify_one();
     return ReplayQueuePushDisposition::Accepted;
   } catch (...) {
@@ -835,6 +840,11 @@ class ReplayOffloadQueue {
       drainCv_.notify_all();
       return ReplayQueuePushDisposition::EffectUnknown;
     }
+    if (supply::enabled()) {
+      supply::record(supply::Event::StateBlockReady, this,
+                     queue_.back().stateBlockApply->replaySeq);
+      traceQueueStateLocked();
+    }
     workCv_.notify_one();
     return ReplayQueuePushDisposition::Accepted;
   } catch (...) {
@@ -887,6 +897,7 @@ class ReplayOffloadQueue {
     slot.reservationId = nextReservationId_++;
     slot.chargedBytes = bytes;
     queuedBytes_ += bytes;
+    if (supply::enabled()) traceQueueStateLocked();
     return {slot.reservationId, reserved};
   } catch (...) {
     // `emplace_back` is the only throwing step and it precedes every visible
@@ -918,6 +929,10 @@ class ReplayOffloadQueue {
       std::lock_guard ledgerLock(ledger.mutex_);
       ledger.publishMutationAcceptedLocked(*found->mutation);
     }
+    if (supply::enabled()) {
+      supply::record(supply::Event::MutationReady, this, reservation.replaySeq);
+      traceQueueStateLocked();
+    }
     workCv_.notify_one();
     return true;
   }
@@ -936,6 +951,7 @@ class ReplayOffloadQueue {
     }
     queuedBytes_ -= found->chargedBytes;
     queue_.erase(found);
+    if (supply::enabled()) traceQueueStateLocked();
     spaceCv_.notify_all();
     // The head may have just become poppable, and the queue may have just
     // become empty.
@@ -950,6 +966,7 @@ class ReplayOffloadQueue {
   // side straight-line code between `reserveMutation` and `commitMutation`
   // with no waits in it, so head-blocking here is microseconds.
   bool pop(ReplayQueueItem& out) {
+    if (supply::enabled()) supply::record(supply::Event::PopAttempt, this);
     std::unique_lock lock(mutex_);
     const auto ready = [&] {
       return stop_ || (!queue_.empty() && !queue_.front().placeholder());
@@ -957,7 +974,12 @@ class ReplayOffloadQueue {
     if (!ready()) {
       // Worker idle: counted only when there is nothing it may consume.
       const auto waitStart = std::chrono::steady_clock::now();
+      if (supply::enabled()) {
+        traceQueueStateLocked();
+        supply::record(supply::Event::PopWait, this);
+      }
       workCv_.wait(lock, ready);
+      if (supply::enabled()) supply::record(supply::Event::PopWake, this);
       noteWorkerIdleWait(static_cast<std::uint64_t>(
           std::chrono::duration_cast<std::chrono::nanoseconds>(
               std::chrono::steady_clock::now() - waitStart).count()));
@@ -968,6 +990,13 @@ class ReplayOffloadQueue {
     out = std::move(queue_.front());
     queue_.pop_front();
     queuedBytes_ -= out.chargedBytes;
+    if (supply::enabled()) {
+      supply::record(supply::Event::ReplayBegin, this,
+          out.isMutation() ? out.mutation->replaySeq :
+          out.isStateBlockApply() ? out.stateBlockApply->replaySeq : out.chunk.replaySeq,
+          out.isMutation() ? 1u : out.isStateBlockApply() ? 2u : 0u);
+      traceQueueStateLocked();
+    }
     if (!out.isMutation() && !out.isStateBlockApply() &&
         out.chunk.cpuReadyTapePlanningEnabled && !queue_.empty() &&
         !queue_.front().placeholder() && !queue_.front().isMutation() &&
@@ -999,12 +1028,14 @@ class ReplayOffloadQueue {
     }
     queue_.clear();
     queuedBytes_ = 0u;
+    if (supply::enabled()) traceQueueStateLocked();
     spaceCv_.notify_all();
     drainCv_.notify_all();
   }
 
   void markReplayDone() {
     std::lock_guard lock(mutex_);
+    if (supply::enabled()) supply::record(supply::Event::ReplayEnd, this);
     inFlight_ = false;
     if (observabilityEnabled_) {
       noteReplayInflightRaw(false);
@@ -1084,6 +1115,17 @@ class ReplayOffloadQueue {
   }
 
  private:
+  void traceQueueStateLocked() const noexcept {
+    std::uint64_t readyPrefix = 0;
+    for (const auto& item : queue_) {
+      if (item.placeholder()) break;
+      ++readyPrefix;
+    }
+    supply::record(queue_.empty() ? supply::Event::QueueEmpty :
+        queue_.front().placeholder() ? supply::Event::QueueReserved :
+        supply::Event::QueueReady, this, queue_.size(), readyPrefix);
+  }
+
   using ItemDeque =
       std::deque<ReplayQueueItem, ReplayQueueAllocator<ReplayQueueItem>>;
 

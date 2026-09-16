@@ -4,12 +4,19 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-09-09
+updated: 2026-09-16
 source: docs/perfomance/present-pacing/present-pacing-pe-constant-bitcompare.254.md; docs/perfomance/present-pacing/present-pacing-pe-canonical-authority.253.md; docs/perfomance/present-pacing/present-pacing-pe-append-effects.251.md; docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md; docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
+
+[H312](present-pacing-cpu-supply-critical-path.312.md) finds upstream app-thread
+supply near one core while replay/encode are not saturated in four 05/06 GT2
+diagnostic windows. Empty-input waits dominate reservation/dispatch delay.
+Fixed-arrival replay sensitivity mostly reduces latency; PE-exclusive cost,
+feedback and the unconditional FPS ceiling remain open. Runtime defaults and
+README are unchanged.
 
 [H311](present-pacing-lock-scope-attribution.311.md) reruns the exact H309
 provider and H310 on 06 GT2. Both recover to about 18 FPS, so the earlier large

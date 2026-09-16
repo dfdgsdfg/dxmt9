@@ -1,4 +1,5 @@
 #include "dxmt9_queue.hpp"
+#include "dxmt9_cpu_supply_trace.hpp"
 #include "dxmt9_queue_mutex_diag.hpp"
 #include "dxmt9_scheduling_progress_watchdog.hpp"
 
@@ -3697,6 +3698,9 @@ bool QueueLifecycleController::commitCurrentChunk(
     nextSeqId->store(nextSeqId->load(std::memory_order_relaxed) + 1,
                      std::memory_order_release);
     slot.state = ChunkSlot::State::Pending;
+    if (::dxmt9::supply::enabled())
+      ::dxmt9::supply::record(::dxmt9::supply::Event::Publish, this,
+                            slot.seqId, rawOrdinal);
     *lastCommittedSeqId = slot.seqId;
     ++(*inflightCount);
     writingSlot->reset();
@@ -4356,6 +4360,8 @@ bool QueueLifecycleController::runEncodeIteration(
   if (!dequeueReadySlot(lock, source)) {
     return false;
   }
+  if (::dxmt9::supply::enabled())
+    ::dxmt9::supply::record(::dxmt9::supply::Event::EncodeBegin, this, source.seqId);
   auto qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
                                  : std::chrono::steady_clock::time_point{};
   std::optional<QueueSubmissionRecord> submission;
@@ -4411,6 +4417,8 @@ bool QueueLifecycleController::runEncodeIteration(
   DXMT_ASSERT(lock.owns_lock());
   qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
                            : std::chrono::steady_clock::time_point{};
+  if (::dxmt9::supply::enabled())
+    ::dxmt9::supply::record(::dxmt9::supply::Event::EncodeEnd, this, source.seqId);
 
   if (submission.has_value()) {
     if (submission->fixedCompletionSources.empty()) {
@@ -6143,6 +6151,8 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
                                  "seq=%llu",
                                  static_cast<unsigned long long>(record.seqId));
       record.commandBuffer.commit();
+      if (::dxmt9::supply::enabled())
+        ::dxmt9::supply::record(::dxmt9::supply::Event::Submit, this, record.seqId);
       os_signpost_interval_end(signpostLog, commitSignpost, "commit",
                                "seq=%llu",
                                static_cast<unsigned long long>(record.seqId));

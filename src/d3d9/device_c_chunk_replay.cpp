@@ -3450,6 +3450,14 @@ static int32_t dxmt9c_device_commit_chunk_impl(
   if (!d || (!chunk && !preparedRaw)) {
     return commitChunkFail("bad-header");
   }
+  const bool traceSupply = dxmt9::supply::enabled();
+  if (traceSupply)
+    dxmt9::supply::record(dxmt9::supply::Event::ImportBegin, d);
+  const auto traceImportExit = [d](void*) noexcept {
+    dxmt9::supply::record(dxmt9::supply::Event::ImportEnd, d);
+  };
+  const std::unique_ptr<void, decltype(traceImportExit)> traceImportScope(
+      traceSupply ? d : nullptr, traceImportExit);
 #if defined(__APPLE__)
   // The Metal System Trace CPU sidecar
   // (scripts/tools/summarize_xctrace_cpu_threads.py) resolves the P4 producer

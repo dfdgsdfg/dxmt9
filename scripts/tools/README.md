@@ -622,3 +622,10 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
   `shader_corpus_tool.py sync`.
 - `run_dx9_present_policy_ab.py` — A/B compare present policies across apps;
   emits boundary-counter JSON consumed by `specs/benchmarks/`.
+- `analyze_cpu_supply.py` — strict V2 ordinary-worker supply trace analysis:
+  native thread CPU vs elapsed scopes, empty/reserved/ready FIFO residence,
+  publication-to-encode delay and explicitly conditional fixed-arrival replay
+  sensitivity. Requires a closed loss-free transcript from
+  `DXMT9_CPU_SUPPLY_TRACE` and a matching `--frame-log`; V1 unqualified CPU
+  clocks, incomplete interior stage/Present coverage and menu/loading frames
+  are rejected.

@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-09
+updated: 2026-09-16
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
@@ -29,6 +29,14 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 [index-cache-locality](../index-cache-locality/index.md); the per-CB encode story by [state-churn-encode](../state-churn-encode/index.md).
 
 ## Latest Conclusions
+
+[H312](present-pacing-cpu-supply-critical-path.312.md) measures four calibrated
+05/06 GT2 CPU-supply windows with matched-image controls. The app thread uses
+0.94–0.96 cores, replay 0.39–0.54 and encode 0.41–0.56; input waits are mostly
+empty FIFO, not reserved-head blocking. The first constraint points upstream,
+not to saturated replay. App CPU is not PE-exclusive. Fixed-arrival half/zero
+replay sensitivity mostly advances latency; producer/lock feedback and the
+unconditional end-to-end speedup ceiling remain open. No FPS/default promotion.
 
 [H311](present-pacing-lock-scope-attribution.311.md) finds that the exact
 historical H309 provider also recovers to about 18 FPS in 06 GT2, near H310.
@@ -650,12 +658,12 @@ remaining branches are:
   the respective stopped-PC prefixes. Remove measured work or crossings,
   preserving mutation/lifetime ordering; a PC at the bridge does not price
   bridge-local work versus synchronous Unix/wait time.
-- **Replay and encode second ceilings:** historical H236 replay and encode
-  observations were approximately `57%` and `60%` of separate cores, not a
-  fresh HEAD measurement. The live dxmt9 branches are replay
-  snapshot/materialization elimination and safe CPU-stage overlap. Parallel
-  render encoding remains non-default after duplicated CPU cost outweighed its
-  chunk-wall reduction.
+- **Replay and encode second ceilings:** H312's current diagnostic 05/06 GT2
+  windows use 0.39–0.54 replay cores and 0.41–0.56 encode cores, with substantial
+  input waits. App-thread supply (0.94–0.96 cores) is the first attribution
+  target; this is not PE-exclusive. Replay snapshot/materialization elimination
+  remains a CPU/latency target, but fixed-arrival sensitivity does not close
+  its arrival-changing FPS ceiling. Parallel render encoding stays non-default.
 - **CPU-ready Tape:** the publication, admission, session, active-head, and
   next-source-intent mechanisms are implemented and bounded by native/TLA
   evidence, but H239 still fails CB/pass/tile locality. The remaining design

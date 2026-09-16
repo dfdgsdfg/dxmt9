@@ -34,6 +34,47 @@ logical pass; Metal 4 does not cross it.
 
 ## 2. Ownership
 
+### CPU supply observation (`R-BACK-2.84.1`)
+
+`src/dxmt9/dxmt9_cpu_supply_trace.cpp` owns an opt-in process-lifetime bounded
+cold event buffer. Existing replay and queue lock owners record FIFO changes;
+no new mutex, wake, ordering decision, Slot field or wire field is introduced.
+`ReplayOffloadQueue` records committed item identity and queue state separately:
+a nonempty queue with an uncommitted head is not ready input. Import scopes
+begin at the Unix commit implementation, not at PE serialization or the start
+of segmented import preparation. The initial implementation qualifies ordinary
+single-source encode only; it does not claim complete Arena/session coverage.
+
+Each V2 event binds monotonic wall time, calling-thread CPU time from
+`PROC_PIDTHREADID64INFO` (not uncalibrated POSIX thread-clock values), native TID,
+process-local owner, item/sequence and encoded-Present window. The buffer is
+allocated before the selected window and exported after it. Per-event clocks
+and atomics still have cost; matched disabled controls are required. Missing
+clock/TID, overflow, an in-flight writer at export, incomplete closure or
+ambiguous identity invalidates analysis. The default-disabled path is a cached
+gate and does not instantiate the sink or read clocks.
+
+`scripts/tools/analyze_cpu_supply.py` integrates time-weighted replay queue
+states, pairs elapsed/CPU scopes, and joins publication to its enclosing
+identity-qualified worker interval. Its max-plus sensitivity preserves measured
+producer arrivals, dispatch gaps and encode service while scaling replay
+service/publication offsets. Factor one must reproduce every interior Present,
+not only the endpoints; missing interior stage pairs or thread-CPU rollback
+invalidate the result. A matching frame log must qualify the selected interval
+as real scene draws rather than startup/menu frames.
+This is a conditional latency/throughput model, not a rendering policy or a
+prediction that lock, allocator, producer or GPU feedback stays unchanged after
+optimization. Saturated prepared-input replay+encode is a separate experiment;
+CPU-only controlled-completion tape timings must not stand in for it.
+
+Verification: `dxmt9-cpu-supply-analysis` pins arrival-limited and saturated
+serial cases, loss/stale identity/missing-stage rejection and factor-one
+reconstruction; `dxmt9-cpu-supply-trace-spec` exercises production FIFO state
+observation and exclusive artifact creation. Existing replay-queue/lifecycle
+tests remain semantic authority. No transition, resource lifetime or pixel
+policy is changed, so this diagnostic does not introduce a new TLA/GPU proof
+claim.
+
 | Owner | Owns | Must not own or mutate |
 |---|---|---|
 | Import/replay worker | FIFO raw replay, canonical resource summaries, immutable CPU-ready publication | Metal encoders, partition-worker state, reordered replay |
