@@ -205,6 +205,13 @@ struct ReplayDevice final : dxmt9::Device {
   }
   DirectReplayDrawDisposition submitDirectReplayDraw(
       const DirectReplayDrawInput& input) noexcept override {
+    // Bind the real Device snapshot producer to the pure projection contract,
+    // not just two synthetic inputs to the same Slot helper.
+    if (input.uniforms && input.uniformFixedPayload &&
+        *input.uniformFixedPayload ==
+            makeDrawUniformFixedPayload(*input.uniforms)) {
+      ++matchingFixedProjectionCalls;
+    }
     const auto disposition = queue_.submitDirectReplayDraw(input);
     if (disposition == DirectReplayDrawDisposition::Appended) ++directDrawCalls;
     else ++rejectedDirectDrawCalls;
@@ -219,6 +226,7 @@ struct ReplayDevice final : dxmt9::Device {
   std::uint64_t nextHandle_ = 1u;
   std::uint32_t ordinaryDrawCalls = 0u;
   std::uint32_t directDrawCalls = 0u;
+  std::uint32_t matchingFixedProjectionCalls = 0u;
   std::uint32_t rejectedDirectDrawCalls = 0u;
 };
 
@@ -773,6 +781,8 @@ std::vector<DrawSnapshot> produceAndReplay(bool inlineConstants, bool direct,
   }
   check(fixture.routing->rejectedDirectDrawCalls == 0u,
         "direct receipts must exclude fallback and accepted-fail-stop");
+  check(!direct || fixture.routing->matchingFixedProjectionCalls == 4u,
+        "every production Direct borrow carries its same-snapshot fixed projection");
   directCalls = fixture.routing->directDrawCalls;
   ordinaryCalls = fixture.routing->ordinaryDrawCalls;
   return actual;
@@ -803,6 +813,32 @@ void runGateMatrix() {
       }
     }
   }
+}
+
+void runFixedProjectionCacheTransitions() {
+  RuntimeFixture fixture(/*cpuReady=*/false, /*direct=*/false);
+  auto& core = fixture.cDevice->dev();
+  // Real setter/cache binding on A/A/B/A, separately from Slot value tests.
+  for (const float value : {1.0f, 1.0f, 2.0f, 1.0f}) {
+    Matrix4x4 world{};
+    world.m[0] = world.m[5] = world.m[10] = world.m[15] = 1.0f;
+    world.m[12] = value;
+    Material material{};
+    material.power = value;
+    Light light{};
+    light.position[0] = value;
+    check(core.setTransform(XFORM_WORLD_BASE, world) == D3D_OK &&
+              core.setMaterial(material) == D3D_OK &&
+              core.setLight(0u, light) == D3D_OK &&
+              core.lightEnable(0u, true) == D3D_OK &&
+              core.setClipPlane(0u, ClipPlane{value, 0.0f, 0.0f, 1.0f}) == D3D_OK,
+          "fixed projection fixture mutates real core state");
+    check(core.submitDirectReplayDrawFromCurrentState(
+              DrawParam{.primitiveCount = 1u}).succeeded(),
+          "same-cache Direct borrow survives ordinary fallback");
+  }
+  check(fixture.routing->matchingFixedProjectionCalls == 4u,
+        "real fixed-state generations supply matching projections on every draw");
 }
 
 void runCaptureIdentityBindingCase() {
@@ -882,6 +918,7 @@ int main() {
   try {
     failedStandaloneAppendCanRetry();
     runGateMatrix();
+    runFixedProjectionCacheTransitions();
     runCaptureIdentityBindingCase();
     return 0;
   } catch (const TestFailure& failure) {

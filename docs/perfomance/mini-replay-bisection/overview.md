@@ -27,6 +27,15 @@ the apparatus that made [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) p
 
 ## Latest Conclusions
 
+The [fixed-uniform projection follow-up](fixed-uniform-projection.12.md)
+removes repeated extraction at Direct append without a new handle cache or
+invalidation rule. Exhaustive bounded value tests, production-cache binding
+and fresh GT2 exact CPU/GPU comparisons pass. Lookup elapsed scopes fall
+~0.85→0.71–0.72ms, but ordinary whole-iteration medians change +1.01%/−0.33%
+in opposite orders. No repeatable total-CPU or FPS gain is established.
+Snapshot construction remains the larger candidate; retained component reuse
+and asynchronous/wild evidence remain separate work.
+
 The [unchanged-image replay owner investigation](replay-cost-owners.11.md)
 locates the largest source-driver sample owners in state/uniform snapshots
 (38.1%) and Direct Slot append (21.0%), ahead of resource closure (9.5%),
@@ -34,10 +43,10 @@ planning (4.0%) and Slot admission (3.6%). Existing scoped timers corroborate
 snapshot and uniform-component lookup work; planning totals only ~0.90ms
 across both harness and production calls. These are diagnostic attribution,
 not additive CPU shares or removable milliseconds: 17.5% of sampled source
-stacks include clocks. Next candidate: cached fixed-uniform projection reuse
-at Direct append, with owner/generation-qualified reuse and unchanged oracles.
-No runtime/default/FPS promotion; wrapper attribution and asynchronous/wild
-evidence remain open.
+stacks include clocks. The follow-up above implements only cached value
+projection reuse, not persistent owner/generation-qualified component reuse.
+Wrapper attribution, observer-off costs and asynchronous/wild evidence remain
+open; the attribution alone does not authorize policy or FPS promotion.
 
 The [corrected phase attribution](cpu-phase-attribution.10.md) now separates
 replay from fresh setup/admission and resource reconstruction. Four ordered

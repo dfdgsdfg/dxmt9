@@ -1910,6 +1910,19 @@ struct ChunkSlot {
       const DrawUniformPayload& payload,
       DrawUniformFixedHandle fixedHandleCandidate = {},
       bool alreadyReserved = false) {
+    const auto fixedPayload = makeDrawUniformFixedPayload(payload);
+    return appendDrawUniformPayloadWithFixedProjection(
+        payload, fixedPayload, fixedHandleCandidate, alreadyReserved);
+  }
+
+  // fixedPayload is the pure projection of payload, borrowed for this call.
+  // Keep all interning/collision and destination ownership decisions identical
+  // to the full-payload entry point; no borrowed address survives this call.
+  DrawUniformHandle appendDrawUniformPayloadWithFixedProjection(
+      const DrawUniformPayload& payload,
+      const DrawUniformFixedPayload& fixedPayload,
+      DrawUniformFixedHandle fixedHandleCandidate = {},
+      bool alreadyReserved = false) {
     const bool canUseUniformSoA =
         detail::chunkSlotCanAppendU32IndexedElement(drawUniformPayloads.size()) &&
         detail::chunkSlotCanAppendU32IndexedElement(drawUniformFixedPayloads.size()) &&
@@ -1931,10 +1944,12 @@ struct ChunkSlot {
         !detail::chunkSlotDisableDrawUniformPayloadDedup()) {
       detail::ChunkSlotPerfScope scope(
           dxmt9::perf::countDrawUniformPayloadAppendFixedFindCpuTime);
-      fixedHandle = findDrawUniformFixedPayload(payload);
+      fixedHandle = findDrawUniformFixedPayload(
+          fixedPayload, payload.fixedPayloadHash);
     }
     if (!fixedHandle.valid()) {
-      fixedHandle = appendDrawUniformFixedPayload(payload);
+      fixedHandle = appendDrawUniformFixedPayload(
+          fixedPayload, payload.fixedPayloadHash);
       if (!fixedHandle.valid()) {
         return {};
       }

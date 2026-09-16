@@ -11,6 +11,14 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Backend Layer
 
+R-BACK-2.15.2 fixed-uniform projection reuse is implemented at synchronous
+Direct append, with unchanged content interning and Slot ownership. Bounded
+native equivalence, production-cache binding, existing TLC regressions and
+fresh GT2 exact CPU/GPU readbacks pass; see the
+[projection evidence](../../docs/perfomance/mini-replay-bisection/fixed-uniform-projection.12.md).
+This closes the duplicate value extraction, not persistent component reuse,
+observer-off CPU benefit, arbitrary workloads or wild/FPS non-regression.
+
 R-BACK-4.10 has a shared explicit MSL2.4/fast runtime compile profile and
 invariant generated vertex-position outputs. Native/x86 pixel and source
 contracts pass; all ten retained GT2 originals reproduce exact source/output

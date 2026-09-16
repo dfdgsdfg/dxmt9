@@ -1080,6 +1080,185 @@ void testDirectChunkSlotReserveHappensInTheConstructor() {
   }
 }
 
+SourcePayloadCapacity fixedProjectionCapacity(std::size_t draws) {
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = draws;
+  capacity.drawHotStates = draws;
+  capacity.drawShaderLayouts = draws;
+  capacity.drawDebugSnapshots = draws;
+  capacity.drawPsoSubviews = draws;
+  capacity.drawRunRecords = draws;
+  capacity.drawParams = draws;
+  capacity.drawUniformPayloads = draws;
+  capacity.drawUniformFixedPayloads = draws;
+  capacity.drawUniformVertexConstants = draws;
+  capacity.drawUniformVertexConstantBytes =
+      draws * sizeof(dxmt9::core::VertexShaderConstants);
+  capacity.drawUniformPixelConstants = draws;
+  capacity.drawUniformPixelConstantBytes =
+      draws * sizeof(dxmt9::core::PixelShaderConstants);
+  return capacity;
+}
+
+dxmt9::core::DrawUniformPayload fixedProjectionValue(
+    std::uint32_t mask, bool collide) {
+  dxmt9::core::DrawUniformPayload value{};
+  const float fixed = (mask & 1u) ? 2.0f : 1.0f;
+  for (auto* matrix : {&value.worldViewProj, &value.ffpView,
+                       &value.ffpWorldView, &value.ffpNormalMatrix}) {
+    matrix->m.fill(fixed);
+  }
+  for (auto* matrices : {&value.ffpBlendWorldViewProj,
+                         &value.ffpBlendWorldView,
+                         &value.ffpBlendNormalMatrix}) {
+    for (auto& matrix : *matrices) matrix.m.fill(fixed);
+  }
+  for (auto& matrix : value.textureTransforms) matrix.m.fill(fixed);
+  value.material.power = fixed;
+  for (auto& light : value.lights) {
+    light.enabled = (mask & 1u) != 0;
+    light.range = fixed;
+  }
+  value.clipPlaneMask = (mask & 1u) ? 3u : 1u;
+  for (auto& plane : value.clipPlanes) plane.fill(fixed);
+  value.vertexFloatConstantCount = (mask & 2u) ? 2u : 1u;
+  value.pixelFloatConstantCount = (mask & 4u) ? 2u : 1u;
+  for (std::size_t i = 0; i < value.vertexFloatConstantCount; ++i)
+    value.vsConst.float4[i].fill((mask & 2u) ? 4.0f : 3.0f);
+  for (std::size_t i = 0; i < value.pixelFloatConstantCount; ++i)
+    value.psConst.float4[i].fill((mask & 4u) ? 6.0f : 5.0f);
+  value.fixedPayloadHash = collide ? 17u : 17u + (mask & 1u);
+  value.vertexConstantsHash = 31u + (mask & 2u);
+  value.pixelConstantsHash = 47u + (mask & 4u);
+  value.hash = 61u + mask;
+  return value;
+}
+
+void checkFixedProjectionSlots(
+    const ChunkSlot& reference, const ChunkSlot& projected,
+    const std::array<dxmt9::core::DrawUniformPayload, 3>& expected) {
+  using namespace dxmt9::core;
+  const bool oneFixed =
+      makeDrawUniformFixedPayload(expected[0]) ==
+          makeDrawUniformFixedPayload(expected[1]) &&
+      makeDrawUniformFixedPayload(expected[0]) ==
+          makeDrawUniformFixedPayload(expected[2]);
+  check(projected.drawUniformFixedPayloads.size() == (oneFixed ? 1u : 2u),
+        "fixed hash collision retains exact content deduplication");
+  check(reference.commandCount() == projected.commandCount() &&
+            reference.drawParams.size() == expected.size() &&
+            projected.drawParams.size() == expected.size() &&
+            reference.drawUniformPayloads.size() ==
+                projected.drawUniformPayloads.size() &&
+            reference.drawUniformFixedPayloads.size() ==
+                projected.drawUniformFixedPayloads.size() &&
+            reference.drawUniformVertexConstants.size() ==
+                projected.drawUniformVertexConstants.size() &&
+            reference.drawUniformPixelConstants.size() ==
+                projected.drawUniformPixelConstants.size() &&
+            reference.drawUniformVertexConstantBytes ==
+                projected.drawUniformVertexConstantBytes &&
+            reference.drawUniformPixelConstantBytes ==
+                projected.drawUniformPixelConstantBytes,
+        "prepared fixed projection preserves component interning and topology");
+  for (std::size_t i = 0; i < reference.commandCount(); ++i) {
+    const auto a = reference.commandAt(i);
+    const auto b = projected.commandAt(i);
+    check(a.kind == b.kind && a.drawParams.size() == b.drawParams.size(),
+          "prepared fixed projection preserves command/run boundaries");
+  }
+  const auto a = reference.commandAt(0);
+  const auto b = projected.commandAt(0);
+  for (std::size_t i = 0; i < expected.size(); ++i) {
+    DrawUniformPayload referenceScratch{}, projectedScratch{};
+    const auto* referenceValue = drawRunUniformPayloadForHandle(
+        a, reference.drawParams[i].uniformHandle, referenceScratch);
+    const auto* projectedValue = drawRunUniformPayloadForHandle(
+        b, projected.drawParams[i].uniformHandle, projectedScratch);
+    check(referenceValue && projectedValue &&
+              *referenceValue == expected[i] && *projectedValue == expected[i] &&
+              reference.drawParams[i].startVertex == i &&
+              projected.drawParams[i].startVertex == i &&
+              reference.drawParams[i].uniformHandle ==
+                  projected.drawParams[i].uniformHandle,
+          "both paths own exact per-draw values after source borrows change");
+  }
+}
+
+void testDirectFixedProjectionBoundedEquivalence() {
+  using namespace dxmt9::core;
+  // R-BACK-2.15.2: all 8^3 value traces (fixed/VS/PS each has two values),
+  // with ordinary hashes and forced fixed-hash collisions. Repeat each trace
+  // after rollback and clear/reuse; no cross-draw handle cache is introduced.
+  for (bool collide : {false, true}) {
+    for (std::uint32_t trace = 0; trace < 512u; ++trace) {
+      std::array<DrawUniformPayload, 3> expected{};
+      for (std::size_t i = 0; i < expected.size(); ++i)
+        expected[i] = fixedProjectionValue((trace >> (3u * i)) & 7u, collide);
+      ChunkSlot reference, projected;
+      for (std::uint32_t cycle = 0; cycle < 3u; ++cycle) {
+        TransactionalChunkSlotAssembler a(reference, fixedProjectionCapacity(3));
+        TransactionalChunkSlotAssembler b(projected, fixedProjectionCapacity(3));
+        FlatDrawStateRecord hot{};
+        DrawShaderLayoutContext layout{};
+        for (std::size_t i = 0; i < expected.size(); ++i) {
+          auto uniforms = expected[i];
+          auto fixed = makeDrawUniformFixedPayload(uniforms);
+          DirectReplayDrawInput input{
+              .hot = &hot,
+              .shaderLayout = &layout,
+              .uniforms = &uniforms,
+              .draw = DrawParam{.primitiveCount = 1u,
+                                .startVertex = static_cast<u32>(i)},
+          };
+          check(a.tryAppendDirectDraw(input), "reference Direct draw appends");
+          input.uniformFixedPayload = &fixed;
+          check(b.tryAppendDirectDraw(input), "projected Direct draw appends");
+          uniforms = fixedProjectionValue(7u, false);
+          fixed = makeDrawUniformFixedPayload(uniforms);
+        }
+        checkFixedProjectionSlots(reference, projected, expected);
+        if (cycle == 0u) {
+          a.rollback();
+          b.rollback();
+        } else {
+          check(a.commitValueOnlyForTest() && b.commitValueOnlyForTest(),
+                "both pure value transactions publish identically");
+          reference.clearCommands();
+          projected.clearCommands();
+        }
+        check(reference.commandsEmpty() && projected.commandsEmpty() &&
+                  reference.drawUniformFixedPayloads.empty() &&
+                  projected.drawUniformFixedPayloads.empty(),
+              "rollback/reset retains no old projection or fixed handle");
+      }
+    }
+  }
+}
+
+void testFixedProjectionFailureRollsBackOwnedBytes() {
+  using namespace dxmt9::core;
+  ChunkSlot slot;
+  TransactionalChunkSlotAssembler assembler(slot, fixedProjectionCapacity(1));
+  FlatDrawStateRecord hot{};
+  DrawShaderLayoutContext layout{};
+  auto uniforms = fixedProjectionValue(1u, true);
+  auto fixed = makeDrawUniformFixedPayload(uniforms);
+  const DirectReplayDrawInput input{
+      .hot = &hot, .shaderLayout = &layout, .uniforms = &uniforms,
+      .uniformFixedPayload = &fixed,
+      .draw = DrawParam{.primitiveCount = 1u},
+  };
+  check(assembler.tryAppendDirectDraw(input), "bounded first projection appends");
+  check(!assembler.tryAppendDirectDraw(input) &&
+            assembler.state() == TransactionalChunkSlotAssembler::State::Failed,
+        "exhausted reservation still fails before publication");
+  assembler.rollback();
+  check(slot.commandsEmpty() && slot.drawUniformFixedPayloads.empty() &&
+            slot.drawUniformPayloads.empty() && !slot.lastUniformFixedHandle.valid(),
+        "failed transaction returns all owned bytes and last-handle state");
+}
+
 void testDirectChunkSlotReserveFollowsDimensionSchema() {
   ChunkSlot slot;
   SourcePayloadCapacity capacity{};
@@ -1231,6 +1410,8 @@ int main() {
     testCopyMaterializationRegistryOwnershipAndDisabledPath();
     testTransactionalAssemblerRollbackReclaimsDestination();
     testDirectChunkSlotReserveHappensInTheConstructor();
+    testDirectFixedProjectionBoundedEquivalence();
+    testFixedProjectionFailureRollsBackOwnedBytes();
     testDirectChunkSlotReserveFollowsDimensionSchema();
     testProductionCommitRequiresTypedEvidence();
     testArenaChainMapsOneLogicalCommandSpaceWithoutGather();

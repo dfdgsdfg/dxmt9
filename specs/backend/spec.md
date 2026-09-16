@@ -889,6 +889,27 @@ R-BACK-2.99 source audits pin the retired symbols and equivalent AoS ownership
 surfaces absent. Wild locality and materialization-floor evidence remain
 separate promotion gates.
 
+#### Synchronous fixed-uniform projection reuse
+
+`Device::cachedBaseDrawStateForSubmissionBatch` owns a fixed-uniform projection
+alongside full uniforms. Direct ingress may borrow both from that single cache
+refresh; `TransactionalChunkSlotAssembler` forwards the projection into final
+`ChunkSlot` interning. The receiver still performs the existing exact component
+lookup and owns any appended bytes. A caller without a prepared projection
+derives it once and uses the same value for lookup and append-on-miss.
+
+R-BACK-2.15.2 changes no cache invalidation predicate, resource lifetime,
+submission ordering, cross-draw handle reuse or wire ABI. Under R-VERIF-1.5
+its correctness obligation is the pure substitution
+`append(payload, project(payload)) == append(payload)`, exercised through the
+real Direct assembler. Bounded A/A and A/B/A values, constant-only and fixed
+changes, hash collisions, rollback, new Slots and post-call borrow mutation
+must preserve materialized uniforms and command/component topology. A separate
+temporal model is not needed for this substitution; any future retained
+component witness needs its own owner/generation refinement. Production-cache
+binding and deterministic GPU readback remain required evidence; native value
+tests do not prove driver behavior or FPS.
+
 ---
 
 ## 3. Encoder Lifecycle

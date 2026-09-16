@@ -1687,8 +1687,10 @@ bool TransactionalChunkSlotAssembler::tryAppendDirectDraw(
         slot.drawDebugSnapshots.push_back(input.debug);
       }
 
-      const auto uniformHandle = slot.appendDrawUniformPayload(
-          *input.uniforms, {}, directRangeBuild_);
+      const auto uniformHandle = input.uniformFixedPayload
+          ? slot.appendDrawUniformPayloadWithFixedProjection(
+                *input.uniforms, *input.uniformFixedPayload, {}, directRangeBuild_)
+          : slot.appendDrawUniformPayload(*input.uniforms, {}, directRangeBuild_);
       if (!uniformHandle.valid() ||
           slot.drawParams.size() > std::numeric_limits<std::uint32_t>::max()) {
         return fail();

@@ -132,6 +132,14 @@ state records and referenced by stable queue-local handles or spans. Hot
 PSO/resource decisions must use hashes and compact flat records, not full constant
 arrays.
 
+**R-BACK-2.15.2** Synchronous Direct replay may borrow the already-derived
+fixed-uniform projection from the same refreshed snapshot as its full uniform
+payload. The projection must equal `makeDrawUniformFixedPayload(payload)`;
+the receiver must intern/copy it before returning and must not retain the
+borrow. This is value-projection reuse, not authority to reuse a Slot handle
+across draws, generations, rollback or Slot replacement. Hash-and-content
+deduplication, capacity failure and command ordering must remain unchanged.
+
 **R-BACK-2.16** Replay transforms that derive encoder decisions from imported
 records (pass merge/split, deferred clear application, hazard classification, PSO
 key construction, argument-buffer layout) must be deterministic for identical

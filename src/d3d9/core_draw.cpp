@@ -4197,6 +4197,7 @@ DirectReplayDrawResult Device::submitDirectReplayDrawFromCurrentState(
       .hot = &cached.hot,
       .shaderLayout = &cached.shaderLayout,
       .uniforms = &cached.uniforms,
+      .uniformFixedPayload = &cached.uniformFixedPayload,
       .debug = makeDrawDebugSnapshot(
           DrawCallArgs{draw.primitiveType, draw.primitiveCount,
                        draw.startVertex, draw.baseVertexIndex,
@@ -4205,7 +4206,7 @@ DirectReplayDrawResult Device::submitDirectReplayDrawFromCurrentState(
       .draw = draw,
       .payload = payload,
   };
-  DXMT_ASSERT(cached.fullUniformsValid);
+  DXMT_ASSERT(cached.fullUniformsValid && cached.uniformFixedPayloadValid);
   const auto disposition = appendCapability
       ? appendCapability->append(input)
       : upperDevice_

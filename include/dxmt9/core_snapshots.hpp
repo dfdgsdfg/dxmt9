@@ -1113,6 +1113,9 @@ struct DirectReplayDrawInput {
   const FlatDrawStateRecord* hot = nullptr;
   const DrawShaderLayoutContext* shaderLayout = nullptr;
   const DrawUniformPayload* uniforms = nullptr;
+  // Optional projection of the same refreshed uniforms. Consumed synchronously;
+  // this is not a cached Slot handle or permission to skip content comparison.
+  const DrawUniformFixedPayload* uniformFixedPayload = nullptr;
   DrawDebugSnapshot debug{};
   DrawParam draw{};
   DrawParamPayloadView payload{};
