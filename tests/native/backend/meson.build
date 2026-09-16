@@ -661,6 +661,13 @@ inline_constant_replay_spec = executable(
 test('dxmt9-inline-constant-replay-spec', inline_constant_replay_spec,
      env: dxmt9_native_test_env_vars + [
        'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
+       'DXMT9_REPLAY_PRECISE_UNIFORM_INVALIDATION=0',
+     ])
+
+test('dxmt9-precise-uniform-invalidation-spec', inline_constant_replay_spec,
+     env: dxmt9_native_test_env_vars + [
+       'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
+       'DXMT9_REPLAY_PRECISE_UNIFORM_INVALIDATION=1',
      ])
 
 cpu_ready_session_join_spec = executable(

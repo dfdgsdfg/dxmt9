@@ -21,6 +21,7 @@ Latest tracked row: `H22` - Positive Metal visibility samples can be used as the
 
 ## Recent Leaf Documents
 
+- [Known RenderState dependencies: eliminate unchanged fixed-uniform rebuilds](uniform-dependency-reuse.15.md)
 - [Uniform hashing: dependency work versus nested observation](uniform-dependencies-observer.14.md)
 - [Snapshot-local dedup: fitting flat states dominate the recovered CPU cost](snapshot-local-dedup.13.md)
 - [Direct fixed-uniform projection reuse: equivalent values, small local cost reduction](fixed-uniform-projection.12.md)

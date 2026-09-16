@@ -807,13 +807,13 @@ HResult Device::setRenderState(u32 key, u32 value) {
   if (key == RS_SCISSOR_TEST_ENABLE) {
     state_.scissorEnabled = value != 0;
   }
-  invalidateDrawStateCache(DrawStateInvalidationRenderState);
+  invalidateDrawRenderStateCache(key);
   return D3D_OK;
 }
 
 HResult Device::setRenderStateFloat(u32 key, f32 value) {
   state_.renderStates.set(key, std::bit_cast<u32>(value));
-  invalidateDrawStateCache(DrawStateInvalidationRenderState);
+  invalidateDrawRenderStateCache(key);
   return D3D_OK;
 }
 

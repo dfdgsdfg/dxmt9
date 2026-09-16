@@ -11,12 +11,24 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Backend Layer
 
+R-BACK-2.15.5 known-setter nonconstant invalidation is a default-off candidate.
+The GT2 dependency probe found identical fixed values in every comparable
+batch full rebuild (421/422 per iteration), not workload-independent reuse
+authority. Shared-predicate refinement explores 262,144 length-six traces
+with two omission counterexamples; 4,096 fresh-value cells and native/x86
+actual setter/cache/hot-hash pins pass. Same-image CPU semantics and GPU exact
+pixels pass; full builds fall 422→1 and bounded CPU medians fall 2.76–3.97%
+in opposite orders. See the [dependency-reuse evidence](../../docs/perfomance/mini-replay-bisection/uniform-dependency-reuse.15.md).
+Broader FFP/clipping pixel transitions, global observer-off service,
+asynchronous/wild non-regression and default promotion remain open.
+
 R-BACK-2.15.4 uniform-hash observer separation is implemented. Process-isolated
 native mode/counter tests and fresh same-image GT2 CPU/GPU exact evidence pass;
 the [dependency/observer audit](../../docs/perfomance/mini-replay-bisection/uniform-dependencies-observer.14.md)
 attributes 0.467–0.481ms of the ~1.7ms parent to nested observation. The remaining
 ~1.217ms includes dependency work and surviving observation, not a proven
-optimization budget. Per-component dependency/reuse refinement, global
+optimization budget. The known RenderState subset is refined above; finer
+per-component generations, global
 observer-off service and wild/FPS evidence remain open. Default observation
 and all generation/layout/lifetime authority are unchanged.
 

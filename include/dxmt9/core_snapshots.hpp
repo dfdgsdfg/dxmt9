@@ -2521,6 +2521,9 @@ class Device : public std::enable_shared_from_this<Device> {
   };
 
   void invalidateDrawStateCache(u32 reasonMask = DrawStateInvalidationUnknown) noexcept;
+  void invalidateDrawRenderStateCache(u32 key) noexcept;
+  void invalidateDrawStateCacheImpl(u32 reasonMask,
+                                   bool affectsNonconstantUniform) noexcept;
   void invalidateDrawUniformCache() noexcept;
   void invalidateDrawShaderConstantsCache() noexcept;
   void invalidateDrawVertexShaderConstantsCache() noexcept;

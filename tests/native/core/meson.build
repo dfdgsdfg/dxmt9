@@ -1,5 +1,15 @@
 # Core device, FFP, format, shader translator, draw-state, and DOD specs.
 
+uniform_dependencies_spec = executable(
+  'dxmt9-uniform-dependencies-spec',
+  'uniform_dependencies_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-uniform-dependencies-spec', uniform_dependencies_spec,
+     env: dxmt9_native_test_env)
+
 # R-CORE-REC-7.42–7.43/7.46: production constant writers, interval clear and
 # flush dispatch refine the six-family reference without Wine or a GPU.
 pe_const_flush_spec = executable(

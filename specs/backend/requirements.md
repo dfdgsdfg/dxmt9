@@ -155,6 +155,17 @@ component hashes, payload values and the enclosing hash scope. Receipts must
 bind the observer mode; suppressed counters must not be interpreted as absent
 work or as a globally observer-free measurement.
 
+**R-BACK-2.15.5** Known RenderState setters may preserve nonconstant-uniform
+generation only when a shared dependency predicate proves that their key
+cannot change the fixed payload. `RS_CLIPPING` and `RS_CLIP_PLANE_ENABLE`
+must invalidate it. Stable state, shader layout and aggregate uniform
+invalidation must remain unchanged. Generic mutable borrows (including a
+RenderState reason), StateBlock and reset must remain conservative. Reuse
+still requires the existing coordinate-space, validity and stage
+generation/usage witnesses; diagnostic equality must never grant authority.
+This candidate must remain default-off until bounded refinement, actual
+setter/cache binding, GPU exact and wild non-regression evidence qualify it.
+
 **R-BACK-2.16** Replay transforms that derive encoder decisions from imported
 records (pass merge/split, deferred clear application, hazard classification, PSO
 key construction, argument-buffer layout) must be deterministic for identical

@@ -27,6 +27,16 @@ the apparatus that made [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) p
 
 ## Latest Conclusions
 
+The default-off [known-setter dependency refinement](uniform-dependency-reuse.15.md)
+reduces GT2 batch full-uniform builds from 422 to one: all 421 comparable
+rebuilds had identical fixed values. Shared-predicate bounded refinement,
+actual setter/cache tests and same-image CPU/GPU exact evidence pass. Batch
+uniform-build scopes fall ~1.56→0.52ms; ordinary CPU medians fall 2.76–3.97%
+in opposite orders with parent-only hash observation. No new cache or layout
+authority is added. Broader FFP/clipping pixels, global observer-off,
+asynchronous and wild/FPS qualification remain open; default promotion is
+withheld. The remaining hash parent is ~0.73ms under this observation mode.
+
 The [uniform-hash observer separation](uniform-dependencies-observer.14.md)
 prices nested timing/publication at 0.467–0.481ms, or 27.7–28.3% of the
 ~1.7ms hash parent, without changing semantic work. Parent-only observation

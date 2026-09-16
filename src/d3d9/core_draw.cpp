@@ -5,6 +5,8 @@
 #include "dxmt9/dxmt9_d3d9_bytecode.hpp"
 #include "d3d9_snapshot_miss_observer.hpp"
 #include "d3d9_uniform_hash_observer.hpp"
+#include "d3d9_uniform_dependency_observer.hpp"
+#include "d3d9_uniform_dependencies.hpp"
 #include "../dxmt9/dxmt9_perf_counters.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
@@ -3100,6 +3102,19 @@ HResult Device::submitDrawRunInternalFromState(
 }
 
 void Device::invalidateDrawStateCache(u32 reasonMask) noexcept {
+  invalidateDrawStateCacheImpl(
+      reasonMask, drawStateInvalidationAffectsUniformNonConstants(reasonMask));
+}
+
+void Device::invalidateDrawRenderStateCache(u32 key) noexcept {
+  static const bool precise = dxmt9::util::getenvFlag(
+      "DXMT9_REPLAY_PRECISE_UNIFORM_INVALIDATION");
+  invalidateDrawStateCacheImpl(DrawStateInvalidationRenderState,
+      !precise || dxmt9::d3d9::renderStateAffectsNonconstantUniform(key));
+}
+
+void Device::invalidateDrawStateCacheImpl(
+    u32 reasonMask, bool affectsNonconstantUniform) noexcept {
   if (reasonMask == DrawStateInvalidationUnknown) {
     drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
   } else {
@@ -3112,7 +3127,7 @@ void Device::invalidateDrawStateCache(u32 reasonMask) noexcept {
     if (drawStateInvalidationAffectsShaderLayout(reasonMask)) {
       bumpGeneration(drawShaderLayoutGeneration_);
     }
-    if (drawStateInvalidationAffectsUniformNonConstants(reasonMask)) {
+    if (affectsNonconstantUniform) {
       invalidateDrawUniformNonConstantCache();
     }
     if (drawStateInvalidationMayAffectShaderConstants(reasonMask)) {
@@ -3766,13 +3781,21 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
         dxmt9::perf::ScopedD3D9SnapshotUniformBuildContext
             uniformBuildContext(
                 dxmt9::perf::D3D9SnapshotUniformBuildContext::BatchMiss);
-        cache.uniforms = makeDrawUniformPayloadFromState(
-            state_, cache.shaderLayout.clipPlaneMask, &uniformHashes,
-            /*recordSnapshotPerf=*/true, &cache.shaderLayout,
-            reusableNonConstantHashes, reusableShaderConstantHashes,
-            reuseVertexConstantsHash, reusePixelConstantsHash,
-            vertexConstantGeneration, pixelConstantGeneration,
-            vertexConstantHashIndex, pixelConstantHashIndex);
+        const auto rebuild = [&] {
+          cache.uniforms = makeDrawUniformPayloadFromState(
+              state_, cache.shaderLayout.clipPlaneMask, &uniformHashes,
+              /*recordSnapshotPerf=*/true, &cache.shaderLayout,
+              reusableNonConstantHashes, reusableShaderConstantHashes,
+              reuseVertexConstantsHash, reusePixelConstantsHash,
+              vertexConstantGeneration, pixelConstantGeneration,
+              vertexConstantHashIndex, pixelConstantHashIndex);
+        };
+        if (dxmt9::d3d9::uniformDependencyProbeEnabled()) {
+          dxmt9::d3d9::observeUniformNonconstantRebuild(
+              cache.uniforms, hadCachedState && cache.fullUniformsValid, rebuild);
+        } else {
+          rebuild();
+        }
         cache.uniformHashes = uniformHashes;
       }
       cache.uniformFixedPayload = makeDrawUniformFixedPayload(cache.uniforms);

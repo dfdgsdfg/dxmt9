@@ -8,6 +8,7 @@
 #include "d3d9_pe_producer.hpp"
 #include "d3d9_pe_semantic_owner.hpp"
 #include "d3d9_pe_wire_handle.hpp"
+#include "../../../src/d3d9/d3d9_uniform_dependency_observer.hpp"
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9/device_c.h"
@@ -212,6 +213,43 @@ struct ReplayDevice final : dxmt9::Device {
             makeDrawUniformFixedPayload(*input.uniforms)) {
       ++matchingFixedProjectionCalls;
     }
+    if (freshState && input.valid()) {
+      // Independent fresh construction, not projection of the same cache.
+      const auto desc = fixture::makeDrawDescFromState(*freshState, {});
+      const auto fresh = fixture::makeDrawUniformPayload(desc);
+      const auto expectedLayout = fixture::makeDrawShaderLayoutContext(desc);
+      const auto expectedHot = makeCanonicalDrawStateFromState(*freshState, {}).hot;
+      const auto compareHash = [&](u64 actual, u64 expected, const char* field) {
+        if (actual != expected) {
+          std::fprintf(stderr, "fresh hash mismatch draw=%u field=%s actual=%llu expected=%llu\n",
+              freshValueChecks, field, static_cast<unsigned long long>(actual),
+              static_cast<unsigned long long>(expected));
+          freshValuesMatch = false;
+        }
+      };
+      compareHash(input.hot->key.renderStateHash, expectedHot.key.renderStateHash, "renderState");
+      compareHash(input.hot->key.worldViewProjHash, expectedHot.key.worldViewProjHash, "worldViewProj");
+      compareHash(input.hot->key.textureTransformsHash, expectedHot.key.textureTransformsHash, "textureTransforms");
+      compareHash(input.hot->key.clipPlanesHash, expectedHot.key.clipPlanesHash, "clipPlanes");
+      // Incremental stage hashes use kIncrementalHashDomain, unlike the
+      // fresh fixture's full/prefix hash. Compare their bytes and usage below,
+      // and require in-snapshot hash consistency instead of cross-domain bits.
+      compareHash(input.hot->key.vertexConstantsHash, input.uniforms->vertexConstantsHash, "vs");
+      compareHash(input.hot->key.pixelConstantsHash, input.uniforms->pixelConstantsHash, "ps");
+      const auto groups = dxmt9::d3d9::compareUniformNonconstantValues(
+          makeDrawUniformFixedPayload(fresh), *input.uniforms);
+      freshValuesMatch &= std::all_of(groups.begin(), groups.end(),
+                                     [](bool value) { return value; });
+      freshValuesMatch &= input.uniforms->vsConst == fresh.vsConst &&
+          input.uniforms->psConst == fresh.psConst &&
+          input.uniforms->fixedPayloadHash == fresh.fixedPayloadHash &&
+          input.shaderLayout->clipPlaneMask == expectedLayout.clipPlaneMask &&
+          input.shaderLayout->vertexShader.hash == expectedLayout.vertexShader.hash &&
+          input.shaderLayout->pixelShader.hash == expectedLayout.pixelShader.hash &&
+          input.shaderLayout->vertexConstantUsage == expectedLayout.vertexConstantUsage &&
+          input.shaderLayout->pixelConstantUsage == expectedLayout.pixelConstantUsage;
+      ++freshValueChecks;
+    }
     const auto disposition = queue_.submitDirectReplayDraw(input);
     if (disposition == DirectReplayDrawDisposition::Appended) ++directDrawCalls;
     else ++rejectedDirectDrawCalls;
@@ -228,6 +266,9 @@ struct ReplayDevice final : dxmt9::Device {
   std::uint32_t directDrawCalls = 0u;
   std::uint32_t matchingFixedProjectionCalls = 0u;
   std::uint32_t rejectedDirectDrawCalls = 0u;
+  const DeviceState* freshState = nullptr;
+  bool freshValuesMatch = true;
+  std::uint32_t freshValueChecks = 0u;
 };
 
 struct RuntimeFixture {
@@ -841,6 +882,87 @@ void runFixedProjectionCacheTransitions() {
         "real fixed-state generations supply matching projections on every draw");
 }
 
+void runUniformInvalidationCacheTransitions() {
+  RuntimeFixture fixture(/*cpuReady=*/false, /*direct=*/false);
+  auto& device = fixture.cDevice->dev();
+  fixture.routing->freshState = &device.state();
+  unsigned draws = 0;
+  const auto draw = [&] {
+    check(device.submitDirectReplayDrawFromCurrentState(
+              DrawParam{.primitiveCount = 1u}).succeeded(),
+          "dependency fixture draws through the real batch cache");
+    ++draws;
+    check(fixture.routing->freshValuesMatch &&
+              fixture.routing->freshValueChecks == draws,
+          "cached payload/layout must match fresh current-state construction");
+  };
+  Matrix4x4 transform{};
+  transform.m = {2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 4, 0, 5, 6, 7, 1};
+  check(device.setTransform(XFORM_VIEW, transform) == D3D_OK &&
+        device.setTransform(XFORM_PROJECTION, transform) == D3D_OK &&
+        device.setClipPlane(0, ClipPlane{2, 3, 5, 7}) == D3D_OK,
+        "distinguishing clip-space input");
+  for (u32 key : {RS_CLIPPING, RS_CLIP_PLANE_ENABLE, RS_Z_ENABLE,
+                 RS_ALPHA_REF, RS_LIGHTING, RS_SCISSOR_TEST_ENABLE}) {
+    for (u32 value : {1u, 1u, 0u, 1u}) {
+      check(device.setRenderState(key, value) == D3D_OK, "integer state setter");
+      draw();
+      draw(); // stable cache hit
+    }
+  }
+  // The float entry point must share exactly the same dependency classifier.
+  for (u32 key : {RS_FOG_START, RS_CLIPPING, RS_CLIP_PLANE_ENABLE}) {
+    for (u32 bits : {1u, 0u, 1u}) {
+      check(device.setRenderStateFloat(key, std::bit_cast<float>(bits)) == D3D_OK,
+            "float state setter");
+      draw();
+    }
+  }
+  const auto saved = device.captureStateBlock();
+  for (float value : {2.f, 3.f, 2.f}) {
+    // Even a caller naming RenderState can mutate other categories. It is not
+    // the known-key capability and must not gain precise invalidation.
+    device.mutableState(DrawStateInvalidationRenderState).material.power = value;
+    draw();
+    device.mutableState().lights[0].theta = value;
+    draw();
+    transform.m[0] = value;
+    check(device.setTransform(XFORM_WORLD_BASE, transform) == D3D_OK &&
+          device.setTransform(XFORM_TEXTURE_BASE, transform) == D3D_OK,
+          "transform mutation retains conservative invalidation");
+    draw();
+  }
+  check(saved && device.applyStateBlock(*saved) == D3D_OK, "StateBlock restores state");
+  draw();
+
+  ShaderRef vs{};
+  vs.kind = ShaderRef::Kind::Bytecode;
+  const auto words = allConstantShaderCode(true);
+  vs.bytecode.bytes = bytesOf(words.data(), words.size() * sizeof(words[0]));
+  vs.hash = vs.bytecode.hash = 77;
+  for (bool programmable : {true, true, false, true, false}) {
+    check(device.setVertexShader(programmable ? vs : ShaderRef{}) == D3D_OK,
+          "vertex shader coordinate-space transition");
+    draw();
+  }
+  for (float value : {1.f, 1.f, 2.f, 1.f}) {
+    device.mutableVertexShaderFloatConstantsState(0, 1).vsConst.float4[0][0] = value;
+    device.mutablePixelShaderFloatConstantsState(0, 1).psConst.float4[0][0] = value;
+    draw();
+  }
+  PresentParameters reset{};
+  reset.backBufferWidth = reset.backBufferHeight = 16;
+  reset.backBufferFormat = Format::A8R8G8B8;
+  reset.windowed = true;
+  reset.deviceWindow = Handle{91};
+  reset.presentationInterval = PresentInterval::Immediate;
+  check(device.reset(reset) == D3D_OK, "public reset invalidates cached state");
+  draw();
+  check(fixture.routing->matchingFixedProjectionCalls == draws,
+        "every refreshed payload supplies the matching fixed projection");
+  fixture.routing->freshState = nullptr;
+}
+
 void runCaptureIdentityBindingCase() {
   CaptureIdentityReceipt onReceipt{
       .captureToken = 701u,
@@ -919,6 +1041,7 @@ int main() {
     failedStandaloneAppendCanRetry();
     runGateMatrix();
     runFixedProjectionCacheTransitions();
+    runUniformInvalidationCacheTransitions();
     runCaptureIdentityBindingCase();
     return 0;
   } catch (const TestFailure& failure) {

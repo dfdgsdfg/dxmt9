@@ -956,6 +956,39 @@ price this observer family, not pure clock latency or global observer cost;
 the residual parent still includes its own observation and elapsed-time
 effects. This is observational refinement without a new temporal protocol.
 
+#### Known-setter nonconstant invalidation
+
+R-BACK-2.15.5 refines only the render-state-key dependency in
+`src/d3d9/d3d9_uniform_dependencies.hpp` (`renderStateAffectsNonconstantUniform`).
+Matrices, material, lights and texture transforms do not read render states;
+clip planes/mask read clipping enable and clip-plane enable. The known
+integer and float setters use this predicate only when
+`DXMT9_REPLAY_PRECISE_UNIFORM_INVALIDATION` is enabled. They still invalidate
+stable state, shader layout, render-state flattening and aggregate uniforms.
+No new cache or generation is introduced. Broad mutation and rollback,
+StateBlock, FFP/transform/light/clip mutation and reset retain their previous
+conservative transitions. Vertex-shader mode changes still require the
+existing clip-coordinate-space witness; shader constants still require both
+stage generation and usage bounds.
+
+The serial reference rebuilds fixed values from current state at every draw.
+Bounded native trace exploration covers two cache lanes, known irrelevant
+and clipping setters, broad mutation/reset and draws; omitting either
+clipping dependency must produce a stale-value counterexample. Native tests
+also compare every bounded render-state key against fresh values and drive
+real setters/cache borrows against the fresh reference. This is an exhaustive
+finite-domain refinement under R-VERIF-1.5, not a proof of arbitrary inputs,
+thread interleavings, driver behavior or pixels. GPU exact readback and wild
+non-regression remain separate promotion gates.
+
+`DXMT9_PERF_UNIFORM_DEPENDENCY_PROBE` is a separate, default-off observation
+of binding-agnostic batch full rebuilds, not all snapshot paths. It compares
+five semantic fixed-value groups against the previous valid full payload,
+preserving floating-point bits and excluding Light padding. Cold storage and
+atomics are entered only behind the cached gate. Equality is evidence of
+redundant work in that input, never a reuse predicate. Timed comparisons must
+disable this probe and bind both candidate and observer environment modes.
+
 ---
 
 ## 3. Encoder Lifecycle
