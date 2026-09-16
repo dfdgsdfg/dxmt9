@@ -27,6 +27,16 @@ the apparatus that made [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) p
 
 ## Latest Conclusions
 
+The [uniform-hash observer separation](uniform-dependencies-observer.14.md)
+prices nested timing/publication at 0.467–0.481ms, or 27.7–28.3% of the
+~1.7ms hash parent, without changing semantic work. Parent-only observation
+leaves ~1.217ms; this is a residual envelope, not a proven removable cost.
+Same-image forward/reverse mode runs preserve CPU semantics, exact original
+GT2 pixels and replay/snapshot work. Constant generation plus usage and
+nonconstant/clip-space dependencies remain required. Whole-iteration drift
+prevents a precise overall-speedup claim; observer defaults are unchanged,
+and global observer-off/asynchronous/wild evidence remains open.
+
 The [snapshot-local dedup follow-up](snapshot-local-dedup.13.md) removes
 priority/duplicate selection when all flat states fit, redundant sorting of
 ordered tables and same-call WORLD0 matrix recomputation. Ordinary CPU medians

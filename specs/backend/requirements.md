@@ -148,6 +148,13 @@ Uniform matrix reuse within one snapshot must retain the original multiplication
 association and singular-normal fallback. Neither optimization grants reuse
 across calls or changes category-generation invalidation authority.
 
+**R-BACK-2.15.4** Uniform-hash attribution must separate dependency work from
+observation. A diagnostic may suppress child timing and hash-work counters,
+but must retain shader usage/generation checks, dirty-index synchronization,
+component hashes, payload values and the enclosing hash scope. Receipts must
+bind the observer mode; suppressed counters must not be interpreted as absent
+work or as a globally observer-free measurement.
+
 **R-BACK-2.16** Replay transforms that derive encoder decisions from imported
 records (pass merge/split, deferred clear application, hazard classification, PSO
 key construction, argument-buffer layout) must be deterministic for identical

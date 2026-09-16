@@ -4,6 +4,7 @@
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_d3d9_bytecode.hpp"
 #include "d3d9_snapshot_miss_observer.hpp"
+#include "d3d9_uniform_hash_observer.hpp"
 #include "../dxmt9/dxmt9_perf_counters.hpp"
 #include "util/config/config.hpp"
 #include "util/log/log.hpp"
@@ -985,8 +986,12 @@ void hashDrawUniformShaderConstantSnapshots(
     DrawUniformPayloadHashes &hashes,
     DrawUniformPayloadHashOptions options = {}) {
   const bool recordPerf = options.recordSnapshotPerf && dxmt9::perf::enabled();
+  const bool recordTimes = recordPerf && dxmt9::d3d9::uniformHashObserverTimes(
+      dxmt9::d3d9::uniformHashObserverMode());
+  const bool recordCounts = recordPerf && dxmt9::d3d9::uniformHashObserverCounts(
+      dxmt9::d3d9::uniformHashObserverMode());
   auto recorder = [&](void (*fn)(std::uint64_t)) {
-    return recordPerf ? fn : nullptr;
+    return recordTimes ? fn : nullptr;
   };
 
   if (options.reuseVertexConstantsHash &&
@@ -1014,7 +1019,7 @@ void hashDrawUniformShaderConstantSnapshots(
     hashes.vertexFloatConstantCount = result.floatCount;
     hashes.vertexIntConstantCount = result.intCount;
     hashes.vertexBoolConstantCount = result.boolCount;
-    if (recordPerf) {
+    if (recordCounts) {
       dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashBytes(result.bytes);
       if (result.full) {
         dxmt9::perf::countD3D9SnapshotUniformBuildVsConstHashFull();
@@ -1070,7 +1075,7 @@ void hashDrawUniformShaderConstantSnapshots(
     hashes.pixelFloatConstantCount = result.floatCount;
     hashes.pixelIntConstantCount = result.intCount;
     hashes.pixelBoolConstantCount = result.boolCount;
-    if (recordPerf) {
+    if (recordCounts) {
       dxmt9::perf::countD3D9SnapshotUniformBuildPsConstHashBytes(result.bytes);
       if (result.full) {
         dxmt9::perf::countD3D9SnapshotUniformBuildPsConstHashFull();
@@ -1109,7 +1114,9 @@ void hashDrawUniformShaderConstantComponents(
 void hashDrawUniformNonConstantComponents(
     const DrawUniformPayload &payload, DrawUniformPayloadHashes &hashes,
     DrawUniformPayloadHashOptions options = {}) {
-  const bool recordPerf = options.recordSnapshotPerf && dxmt9::perf::enabled();
+  const bool recordPerf = options.recordSnapshotPerf && dxmt9::perf::enabled() &&
+      dxmt9::d3d9::uniformHashObserverTimes(
+          dxmt9::d3d9::uniformHashObserverMode());
   auto recorder = [&](void (*fn)(std::uint64_t)) {
     return recordPerf ? fn : nullptr;
   };
@@ -1192,7 +1199,9 @@ void copyDrawUniformNonConstantHashes(
 u64 combineDrawUniformPayloadHashes(const DrawUniformPayloadHashes &hashes,
                                     u32 clipPlaneMask,
                                     bool recordSnapshotPerf = false) {
-  const bool recordPerf = recordSnapshotPerf && dxmt9::perf::enabled();
+  const bool recordPerf = recordSnapshotPerf && dxmt9::perf::enabled() &&
+      dxmt9::d3d9::uniformHashObserverTimes(
+          dxmt9::d3d9::uniformHashObserverMode());
   auto recorder = [&](void (*fn)(std::uint64_t)) {
     return recordPerf ? fn : nullptr;
   };

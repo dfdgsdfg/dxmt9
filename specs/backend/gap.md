@@ -11,6 +11,15 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Backend Layer
 
+R-BACK-2.15.4 uniform-hash observer separation is implemented. Process-isolated
+native mode/counter tests and fresh same-image GT2 CPU/GPU exact evidence pass;
+the [dependency/observer audit](../../docs/perfomance/mini-replay-bisection/uniform-dependencies-observer.14.md)
+attributes 0.467–0.481ms of the ~1.7ms parent to nested observation. The remaining
+~1.217ms includes dependency work and surviving observation, not a proven
+optimization budget. Per-component dependency/reuse refinement, global
+observer-off service and wild/FPS evidence remain open. Default observation
+and all generation/layout/lifetime authority are unchanged.
+
 R-BACK-2.15.3 snapshot-local value simplification is implemented: fitting
 ordered flat tables bypass priority/dedup work, and scalar WORLD0 matrices
 reuse same-call blend slot zero. Native bounded/reference and matrix tests,

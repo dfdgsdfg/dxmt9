@@ -1,5 +1,6 @@
 #include "dxmt9/core.hpp"
 #include "core_spec_fixtures.hpp"
+#include "../../../src/d3d9/d3d9_uniform_hash_observer.hpp"
 #include "../../../src/dxmt9/dxmt9_backend_types.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_state.hpp"
 
@@ -45,6 +46,26 @@ void checkNear(float actual, float expected, std::string_view message) {
 bool drawUniformPayloadDedupDisabledForTest() {
   const char* env = std::getenv("DXMT9_DISABLE_DRAW_UNIFORM_PAYLOAD_DEDUP");
   return env && env[0] != '\0' && env[0] != '0';
+}
+
+void testUniformHashObserverModes() {
+  using namespace dxmt9::d3d9;
+  for (const auto value : {"", "full", "invalid", "0", "COUNTS"}) {
+    checkEq(parseUniformHashObserverMode(value), UniformHashObserverMode::Full,
+            "unset/unknown diagnostic mode preserves existing observation");
+  }
+  checkEq(parseUniformHashObserverMode("counts"), UniformHashObserverMode::Counts,
+          "counts mode parsed exactly");
+  checkEq(parseUniformHashObserverMode("parent"), UniformHashObserverMode::Parent,
+          "parent mode parsed exactly");
+  for (const auto mode : {UniformHashObserverMode::Full,
+                         UniformHashObserverMode::Counts,
+                         UniformHashObserverMode::Parent}) {
+    checkEq(uniformHashObserverTimes(mode), mode == UniformHashObserverMode::Full,
+            "only full mode enters child timer scopes");
+    checkEq(uniformHashObserverCounts(mode), mode != UniformHashObserverMode::Parent,
+            "parent mode omits only child count publication");
+  }
 }
 
 void checkMatrixNear(const Matrix4x4& actual, const Matrix4x4& expected,
@@ -3274,6 +3295,7 @@ void testReszDepthResolveSentinelClassification() {
 }  // namespace
 
 int main() {
+  testUniformHashObserverModes();
   testChunkSlotU32GuardBoundaries();
   testChunkSlotSimpleCommandSoAViews();
   testChunkSlotPrefetchSealLifecycle();

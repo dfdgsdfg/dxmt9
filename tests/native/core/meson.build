@@ -188,6 +188,10 @@ state_draw_transform_spec = executable(
 test('dxmt9-state-draw-transform-spec', state_draw_transform_spec,
      env: dxmt9_native_test_env_vars)
 
+test('dxmt9-uniform-hash-observer-spec', python3,
+     args: [files('uniform_hash_observer_spec.py'), state_draw_transform_spec],
+     env: dxmt9_native_test_env_vars, timeout: 180)
+
 draw_uniforms_layout_spec = executable(
   'dxmt9-draw-uniforms-layout-spec',
   'draw_uniforms_layout_spec.cpp',

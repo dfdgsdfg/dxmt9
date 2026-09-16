@@ -929,6 +929,33 @@ exact matrix cases precede production-cache and GPU oracle tests. Existing
 generation, Slot and completion protocols are unchanged; no new temporal
 model is required for this local substitution.
 
+#### Uniform-hash dependencies and observation
+
+R-BACK-2.15.4 keeps diagnostic authority separate from reuse authority.
+`hashDrawUniformShaderConstantSnapshots` needs both the stage's constant
+generation and usage bounds for reuse. Its incremental index synchronizes
+dirty register ranges, or rebuilds after invalidation/missing range evidence;
+a usage change still selects and combines the correct indexed prefix even
+when no constant bytes changed. An indexed/full-usage counter is not evidence
+of a full byte scan on every call. Nonconstant reuse depends on its generation
+and clip-plane coordinate space; full payload reuse additionally checks the
+clip mask and both stages' generation/usage. The dedicated shader-layout
+generation is unchanged. Pointer equality or a shared invalidation reason
+mask is never replacement authority.
+
+`DXMT9_PERF_UNIFORM_HASH_OBSERVER_MODE` selects `full` (existing child clocks
+and counts), `counts` (no child timers or their timing-counter publication),
+or `parent` (also no child byte/reason counters). Unset/unknown is `full`.
+Only diagnostics inside the hash parent are affected; all semantic branches,
+the enclosing hash timer and snapshot path counters survive. When snapshot
+perf is disabled, the mode is not queried. No payload, generation, queue or
+bridge type carries this diagnostic. Compare the same binary/input/source
+plan with forward/reverse mode order, separate CPU semantic verification
+and GPU exact readback, and environment-qualified receipts. Differences
+price this observer family, not pure clock latency or global observer cost;
+the residual parent still includes its own observation and elapsed-time
+effects. This is observational refinement without a new temporal protocol.
+
 ---
 
 ## 3. Encoder Lifecycle
