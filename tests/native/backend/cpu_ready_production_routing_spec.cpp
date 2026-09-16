@@ -6408,6 +6408,7 @@ struct CpuTapeExperimentOptions {
   std::string tapePath;
   bool generalFrame = false;
   bool measurement = false;
+  bool diagnostic = false;
   bool policyExplicit = false;
   dxmt9::test::CpuTapePolicy policy{};
   std::vector<std::string> blobPaths;
@@ -6610,6 +6611,13 @@ std::optional<std::uint64_t> sampleProcessCpuNs() noexcept {
 #else
   return std::nullopt;
 #endif
+}
+
+dxmt9::test::CpuDiagnosticSample sampleCpuDiagnosticClocks() noexcept {
+  const auto wall = static_cast<std::uint64_t>(std::chrono::duration_cast<
+      std::chrono::nanoseconds>(std::chrono::steady_clock::now().time_since_epoch()).count());
+  const auto cpu = sampleProcessCpuNs();
+  return {wall, cpu.value_or(0u), cpu.has_value()};
 }
 
 void cpuTapePhaseLedgerNestedScopeSpec() {
@@ -8194,6 +8202,7 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
     std::uint64_t direct = 0u, compatibility = 0u, elapsed = 0u;
     dxmt9::perf::RenderTapeReplaySnapshot before{}, after{};
     std::optional<std::uint64_t> nativeCpuNs;
+    std::optional<dxmt9::test::CpuDiagnosticLedger> diagnostic;
   };
   std::vector<Iteration> results;
   results.reserve(options.repeat);
@@ -8201,46 +8210,56 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
     const auto begin = std::chrono::steady_clock::now();
     const auto nativeCpuBegin = sampleProcessCpuNs();
     Iteration iterationResult;
+    if (options.diagnostic) iterationResult.diagnostic.emplace(sampleCpuDiagnosticClocks);
+    auto* diagnostic = iterationResult.diagnostic ? &*iterationResult.diagnostic : nullptr;
+    using Phase = dxmt9::test::CpuDiagnosticPhase;
     {
-      RuntimeFixture fixture(false, false, true, false,
-                             WMT::Device{resourceDevice.handle}, nullptr, &output);
-      fixture.routing->recordBoundedCapturedBindings = false;
-      iterationResult.before = dxmt9::perf::snapshotRenderTapeReplay();
-      Executor executor(fixture, plan, blobs, {.route = options.compatibility
-          ? dxmt9::d3d9::ProviderReplayPolicy::Compatibility
-          : dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot,
-          .beforeNextWork = options.beforeNextWork,
-          .maxPendingSources = options.maxPending,
-          .holdSafeBufferMutation = sourceOracleRequested,
-          .sourceOracle = sourceOracleRows,
-          .measurement = options.measurement,
-          .captureSourcePlan = captureSourceRequested ? &captureSourcePlan : nullptr,
-          .captureSourceTape = captureSourceRequested ?
-              std::span<const std::byte>(tape) : std::span<const std::byte>{},
-          .captureSourceIdentitySidecar = captureSourceRequested ?
-              std::span<const std::byte>(identitySidecar) :
-              std::span<const std::byte>{}});
-      iterationResult.execution = executor.run();
-      iterationResult.after = dxmt9::perf::snapshotRenderTapeReplay();
-      iterationResult.direct = iterationResult.after.directLeaseDraws -
-          iterationResult.before.directLeaseDraws;
-      iterationResult.compatibility = iterationResult.after.compatibilityDraws -
-          iterationResult.before.compatibilityDraws;
-      auto& execution = iterationResult.execution;
-      if (execution.complete &&
-          (execution.draws != admission.counts.draws ||
-           (!options.measurement && execution.drawObservations.size() != execution.draws) ||
-           execution.sourceSummaryDraws != execution.draws ||
-           execution.resourcesCreated != admission.counts.objects ||
-           execution.resourcesReleased != execution.resourcesCreated ||
-           execution.submitted != execution.completed ||
-           execution.submitted != execution.reclaimed ||
-           iterationResult.direct + iterationResult.compatibility !=
-               execution.draws)) {
-        execution.complete = false;
-        execution.failure = "general-execution-conservation-failed";
+      dxmt9::test::CpuDiagnosticLedger::Scope phase(diagnostic, Phase::FixtureSetup);
+      {
+        RuntimeFixture fixture(false, false, true, false,
+                               WMT::Device{resourceDevice.handle}, nullptr, &output);
+        phase.set(Phase::Bookkeeping);
+        fixture.routing->recordBoundedCapturedBindings = false;
+        iterationResult.before = dxmt9::perf::snapshotRenderTapeReplay();
+        Executor executor(fixture, plan, blobs, {.route = options.compatibility
+            ? dxmt9::d3d9::ProviderReplayPolicy::Compatibility
+            : dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot,
+            .beforeNextWork = options.beforeNextWork,
+            .maxPendingSources = options.maxPending,
+            .holdSafeBufferMutation = sourceOracleRequested,
+            .sourceOracle = sourceOracleRows,
+            .measurement = options.measurement,
+            .captureSourcePlan = captureSourceRequested ? &captureSourcePlan : nullptr,
+            .captureSourceTape = captureSourceRequested ?
+                std::span<const std::byte>(tape) : std::span<const std::byte>{},
+            .captureSourceIdentitySidecar = captureSourceRequested ?
+                std::span<const std::byte>(identitySidecar) :
+                std::span<const std::byte>{},
+            .diagnostic = diagnostic});
+        iterationResult.execution = executor.run();
+        iterationResult.after = dxmt9::perf::snapshotRenderTapeReplay();
+        iterationResult.direct = iterationResult.after.directLeaseDraws -
+            iterationResult.before.directLeaseDraws;
+        iterationResult.compatibility = iterationResult.after.compatibilityDraws -
+            iterationResult.before.compatibilityDraws;
+        auto& execution = iterationResult.execution;
+        if (execution.complete &&
+            (execution.draws != admission.counts.draws ||
+             (!options.measurement && execution.drawObservations.size() != execution.draws) ||
+             execution.sourceSummaryDraws != execution.draws ||
+             execution.resourcesCreated != admission.counts.objects ||
+             execution.resourcesReleased != execution.resourcesCreated ||
+             execution.submitted != execution.completed ||
+             execution.submitted != execution.reclaimed ||
+             iterationResult.direct + iterationResult.compatibility !=
+                 execution.draws)) {
+          execution.complete = false;
+          execution.failure = "general-execution-conservation-failed";
+        }
+        phase.set(Phase::FixtureTeardown);
       }
     }
+    if (diagnostic) diagnostic->finish();
     iterationResult.elapsed = static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
             std::chrono::steady_clock::now() - begin)
@@ -8268,9 +8287,10 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
       });
   std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1","grammar":"general-frame","semantic_projection":"final-slot-general-v2","backend":"cpu-metal-resources","resource_execution":"cpu-visible-metal-no-gpu-submit","timing_backend":"encode-substituted","status":)"
             << std::quoted(complete ? "complete" : "unresolved")
-            << R"(,"run_mode":)" << std::quoted(options.measurement ? "measure" : "verify")
+            << R"(,"run_mode":)" << std::quoted(options.diagnostic ? "diagnose" : options.measurement ? "measure" : "verify")
             << R"(,"phase_accounting":)"
-            << std::quoted(options.measurement ? "iteration-only" : "scoped-observations")
+            << std::quoted(options.diagnostic ? "exclusive-diagnostic-wall-process" :
+                           options.measurement ? "iteration-only" : "scoped-observations")
             << R"(,"runtime_perf_counters":true,"cpu_policy":{"schema":)"
             << std::quoted(captureSourceRequested
                                ? "dxmt9.render_tape.cpu_policy.v2"
@@ -8387,6 +8407,22 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
       std::cout << *iteration.nativeCpuNs;
     else
       std::cout << "null";
+    if (iteration.diagnostic) {
+      const auto& ledger = *iteration.diagnostic;
+      std::cout << R"(,"diagnostic_accounting":{"valid":)"
+                << (ledger.valid() ? "true" : "false")
+                << R"(,"wall_ns":)" << ledger.total().wall
+                << R"(,"cpu_ns":)" << ledger.total().cpu
+                << R"(,"phases":{)";
+      for (std::size_t phase = 0u; phase < ledger.rows().size(); ++phase) {
+        if (phase) std::cout << ',';
+        const auto& row = ledger.rows()[phase];
+        std::cout << std::quoted(dxmt9::test::kCpuDiagnosticPhaseNames[phase])
+                  << R"(:{"wall_ns":)" << row.wall << R"(,"cpu_ns":)" << row.cpu
+                  << R"(,"entries":)" << row.entries << '}';
+      }
+      std::cout << "}}";
+    }
     if (captureSourceRequested) {
       const bool sourceComplete = result.complete &&
           !result.captureSourceReplayStorageOverflow &&
@@ -9069,6 +9105,41 @@ void generalCpuSourceOracleUsesAuthenticatedClosures() {
 }
 
 void generalCpuMeasurementOmitsOracleOnly() {
+  using Ledger = dxmt9::test::CpuDiagnosticLedger;
+  using Phase = dxmt9::test::CpuDiagnosticPhase;
+  static dxmt9::test::CpuDiagnosticSample fake{};
+  const auto fakeClock = +[]() noexcept { return fake; };
+  {
+    fake = {};
+    Ledger ledger(fakeClock);
+    fake = {5, 3};
+    try {
+      Ledger::Scope replay(&ledger, Phase::Replay);
+      fake = {12, 7};
+      Ledger::Scope completion(&ledger, Phase::Completion);
+      fake = {15, 9};
+      throw TestFailure("diagnostic-unwind");
+    } catch (const TestFailure&) {}
+    fake = {20, 11};
+    ledger.finish();
+    ledger.finish();
+    check(ledger.valid() && ledger.total().wall == 20 && ledger.total().cpu == 11 &&
+              ledger.rows()[static_cast<std::size_t>(Phase::Replay)].wall == 7 &&
+              ledger.rows()[static_cast<std::size_t>(Phase::Replay)].cpu == 4 &&
+              ledger.rows()[static_cast<std::size_t>(Phase::Completion)].wall == 3 &&
+              ledger.rows()[0].wall == 10 && ledger.rows()[0].cpu == 5,
+          "diagnostic scopes conserve both clocks through nested exception unwinding");
+    fake = {0, 0};
+    Ledger backwards(fakeClock);
+    fake = {1, 0, false};
+    backwards.finish();
+    check(!backwards.valid(), "unavailable CPU clock is not zero-cost evidence");
+    fake = {10, 10};
+    Ledger regressed(fakeClock);
+    fake = {9, 11};
+    regressed.finish();
+    check(!regressed.valid(), "non-monotonic diagnostic clock fails closed");
+  }
   namespace runtime = dxmt9::d3d9::render_tape_runtime;
   const auto tape = dxmt9::d3d9::test::makeGeneralCpuDestroyFixture(true, true);
   std::vector<dxmt9::d3d9::RenderTapeProviderBlob> blobs;
@@ -9094,13 +9165,24 @@ void generalCpuMeasurementOmitsOracleOnly() {
   for (const auto route : {dxmt9::d3d9::ProviderReplayPolicy::Compatibility,
                            dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot}) {
     std::optional<Executor::Result> reference;
-    for (unsigned phase = 0u; phase < 3u; ++phase) {
-      const bool measurement = phase == 1u;
+    for (unsigned phase = 0u; phase < 4u; ++phase) {
+      const bool measurement = phase == 1u || phase == 3u;
+      std::optional<Ledger> diagnostic;
+      if (phase == 3u) diagnostic.emplace(sampleCpuDiagnosticClocks);
       RuntimeFixture fixture(false, false, true, false,
                              WMT::Device{resourceDevice.handle}, nullptr, &output);
       Executor executor(fixture, plan, blobs, {.route = route,
-                                             .measurement = measurement});
+          .measurement = measurement, .diagnostic = diagnostic ? &*diagnostic : nullptr});
       auto result = executor.run();
+      if (diagnostic) {
+        diagnostic->finish();
+        std::uint64_t wall = 0u, cpu = 0u;
+        for (const auto& row : diagnostic->rows()) { wall += row.wall; cpu += row.cpu; }
+        check(diagnostic->valid() && wall == diagnostic->total().wall &&
+                  cpu == diagnostic->total().cpu &&
+                  diagnostic->rows()[static_cast<std::size_t>(Phase::Completion)].entries > 0u,
+              "general diagnostic phases conserve wall/CPU without changing execution");
+      }
       check(result.complete && result.resetOk, "measurement executes and resets: " + result.failure);
       check(result.draws > 0u && result.sourceSummaryDraws == result.draws &&
                 result.resourcesCreated == result.resourcesReleased &&
@@ -9976,8 +10058,10 @@ int main(int argc, char** argv) {
           else if (value != "production-slot") throw TestFailure("invalid route");
         } else if (argument == "--run-mode" && index + 1 < argc) {
           const std::string_view value(argv[++index]);
-          if (value == "measure") options.measurement = true;
-          else if (value != "verify") throw TestFailure("invalid CPU run mode");
+          if (value != "measure" && value != "verify" && value != "diagnose")
+            throw TestFailure("invalid CPU run mode");
+          options.measurement = value != "verify";
+          options.diagnostic = value == "diagnose";
         } else if ((argument == "--draw-command-limit" ||
                     argument == "--slot-headroom-bytes" ||
                     argument == "--aggregate-headroom-bytes") && index + 1 < argc) {

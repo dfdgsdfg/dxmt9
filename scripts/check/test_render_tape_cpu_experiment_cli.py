@@ -426,6 +426,34 @@ def native_free_policy_mode_contract_tests(module):
                     buffer_binding_observations=0, buffer_backing_oracle="not-applicable",
                     phase_ns={key: 0 for key in row["phase_ns"]})
     assert module._cpu_general_frame_accepts(measure, **options, measurement=True)
+    diagnostic = copy.deepcopy(measure)
+    diagnostic.update(run_mode="diagnose", phase_accounting="exclusive-diagnostic-wall-process")
+    diagnosed = diagnostic["iterations"][0]
+    diagnosed["native_cpu_ns"] = 100
+    diagnosed["elapsed_ns"] = 100
+    names = ("bookkeeping", "fixture_setup", "admission", "harness_setup",
+             "object_setup", "mutation", "replay", "publication", "completion",
+             "cleanup", "fixture_teardown")
+    diagnosed["diagnostic_accounting"] = {
+        "valid": True, "wall_ns": 11, "cpu_ns": 11,
+        "phases": {name: {"wall_ns": 1, "cpu_ns": 1, "entries": 1} for name in names}}
+    assert module._cpu_general_frame_accepts(
+        diagnostic, **options, measurement=True, diagnostic=True)
+    assert not module._cpu_general_frame_accepts(diagnostic, **options, measurement=True)
+    assert not module._cpu_general_frame_accepts(diagnostic, **options)
+    relabelled = copy.deepcopy(diagnostic)
+    relabelled.update(run_mode="measure", phase_accounting="iteration-only")
+    assert not module._cpu_general_frame_accepts(relabelled, **options, measurement=True)
+    for field, value in (("valid", False), ("wall_ns", 12), ("cpu_ns", True),
+                         ("phases", {})):
+        broken = copy.deepcopy(diagnostic)
+        broken["iterations"][0]["diagnostic_accounting"][field] = value
+        assert not module._cpu_general_frame_accepts(
+            broken, **options, measurement=True, diagnostic=True), field
+    broken = copy.deepcopy(diagnostic)
+    broken["iterations"][0]["native_cpu_ns"] = 10
+    assert not module._cpu_general_frame_accepts(
+        broken, **options, measurement=True, diagnostic=True)
     assert not module._cpu_general_frame_accepts(measure, **options)
     assert not module._cpu_general_frame_accepts(verify, **options, measurement=True)
     for field, value in (("full_oracle_calls", 1), ("semantic_digest", "1"),
@@ -797,6 +825,20 @@ def native_general_mipmap_receipt_tests(module, provider, validator, runner, roo
     _, events, refs, _, _, _ = module.load_bundle(bundle)
     inspection = module.run_validator(validator, "inspect", events, refs)
     assert module._cpu_general_mipmap_count(inspection) == 1, inspection
+    diagnostic_output = root / "mipmap-diagnostic"
+    run(sys.executable, str(runner), "cpu-experiment", str(bundle),
+        "--provider", str(provider), "--validator", str(validator),
+        "--grammar", "general-frame", "--resource-backend", "cpu-metal-resources",
+        "--completion", "after-command", "--max-pending", "1", "--repeat", "2",
+        "--run-mode", "diagnose", "--policy-lane", "--output-dir", str(diagnostic_output))
+    diagnostic_receipt = json.loads((diagnostic_output / "result.json").read_text())
+    assert diagnostic_receipt["execution_valid"] is True
+    assert diagnostic_receipt["diagnostic"] is True
+    assert diagnostic_receipt["accepted"] is False
+    assert diagnostic_receipt["semantic_qualified"] is False
+    for row in diagnostic_receipt["result"]["iterations"]:
+        assert module._cpu_diagnostic_accounting_accepts(row)
+        assert not any(row["phase_ns"].values()) and row["full_oracle_calls"] == 0
     expected_digest = None
     for completion in ("after-command", "before-next-work"):
         output = root / ("mipmap-" + completion)

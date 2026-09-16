@@ -1212,6 +1212,14 @@ cost comparison. Phase labels must distinguish observer-heavy verification
 from low-perturbation execution; process CPU and wall time remain separate.
 CPU costs exclude real encoder/GPU execution, Wine supply and production
 concurrency unless those boundaries are explicitly executed and qualified.
+An optional diagnostic-only CPU mode may partition wall and process CPU time
+with exclusive nested scopes. It must retain measurement's execution and
+conservation checks, reject unavailable/regressing clocks or inconsistent
+phase totals, and remain ineligible for policy ranking and semantic
+qualification. Diagnostic phase evidence must not be relabelled as ordinary
+measurement. CPU-only attachment shadow work not performed by the normal
+GPU-backed provider must be identified before claiming representative
+production replay cost.
 
 **R-HARN-REPLAY-8.10** When `--gpu-qualify` is requested, no CPU measurement
 child may start until both detailed CPU verification receipts and their

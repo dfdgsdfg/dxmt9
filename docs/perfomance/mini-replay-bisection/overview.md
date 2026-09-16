@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Mini-Replay Bisection — the apparatus that isolated per-draw vertex-stage write amplification - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-14
+updated: 2026-09-16
 source: docs/perfomance/mini-replay-bisection/log.md; docs/perfomance/overview-3dmark05-gt1.md
 related: docs/perfomance/mini-replay-bisection/index.md; docs/perfomance/mini-replay-bisection/log.md
 ---
@@ -26,6 +26,28 @@ the apparatus that made [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) p
 [index-cache-locality](../index-cache-locality/index.md) win.
 
 ## Latest Conclusions
+
+The [CPU slow-mode follow-up](cpu-shadow-slowmode.07.md) localizes the variable
+cost to replay: a same-policy 229→319ms process shift adds about 88.5ms there,
+while completion stays near 0.93ms. Unchanged-image external samples spend
+53–74% of main-thread samples in software attachment Clear. The CPU fixture
+lacks GPU readback and performs shadow fills skipped by the normal provider
+for GPU-owned attachments. Diagnostic-only phase accounting now separates
+these owners and cannot qualify policy timing. Production-equivalent attachment
+authority remains the next harness gate; the exact process-speed mechanism
+and CPU policy ranking remain unresolved.
+
+The [same-image GT2 policy matrix](gt2-policy-matrix.06.md) now passes all
+20 CPU/GPU-qualified forward/reverse and A/A comparisons (640 measured CPU
+iterations, 80 exact GPU iterations). CPU ranking remains inconclusive:
+identical-policy process medians shift by -10.28% and +113.16% in the starting
+A/A controls, and several policy differences reverse with execution order.
+The unchanged 1MiB/64MiB candidate uses 20.86MiB GPU capacity-ledger retention
+with no denial or post-reserve growth; 5MiB/64MiB retains 61.84MiB, with 56
+optional denials per two-iteration GPU process and nine growth events per
+iteration. These are mechanism observations, not FPS or default promotion.
+The follow-up above identifies a timing-fidelity gap; the controlled-completion
+CPU lane also does not rank asynchronous supply/locality.
 
 The current GPU conclusion is [explicit vertex-position invariance](gpu-position-invariance.04.md).
 All ten retained GT2 failing originals now pass two normal-provider cold

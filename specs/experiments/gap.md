@@ -9,6 +9,28 @@ tags: [specs, gap, experiments]
 
 ## Fixed-input replay experiment
 
+### CPU timing representativeness (2026-09-16)
+
+R-HARN-REPLAY-8.7–8.9: diagnostic-only exclusive wall/process-CPU accounting
+now separates fixture, admission, resource setup/mutation, replay, publication,
+controlled completion and reset. Native nested-clock/unwind tests, actual
+general execution and CLI non-promotion gates cover the mode. The GT2 r620
+same-policy campaign reauthenticates 182 iterations; slower processes add
+about 88ms in replay, not completion or setup. Unchanged-binary external
+stacks in r619 concentrate in software attachment Clear. The CPU fixture
+does not advertise GPU readback, whereas the normal provider skips shadows
+for GPU-owned attachments. This is a **partial timing-fidelity gap**, not a
+failed CPU semantic or GPU pixel oracle. Production-equivalent attachment
+authority and the underlying process-dependent Clear speed remain open;
+do not enable a false readback capability or subtract sampled percentages
+to claim a corrected policy ranking. See
+[slow-mode evidence](../../docs/perfomance/mini-replay-bisection/cpu-shadow-slowmode.07.md).
+
+The earlier 5MiB rejection below is historical: capacity ownership recovery
+and the subsequent same-image matrix now pass that bounded GPU policy. The
+matrix still withholds CPU ranking; it does not promote headroom defaults.
+See [policy matrix](../../docs/perfomance/mini-replay-bisection/gt2-policy-matrix.06.md).
+
 ### Current GPU qualification status (2026-09-14)
 
 R-HARN-REPLAY-8.15 and R-BACK-4.10 now have normal-provider GT2 evidence:

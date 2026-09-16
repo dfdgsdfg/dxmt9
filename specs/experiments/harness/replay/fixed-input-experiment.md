@@ -213,6 +213,25 @@ Measurement phase fields are unmeasured, not zero-cost phases; only iteration
 wall and process CPU time are cost observations. Semantic/pixel oracle flags
 are false, and qualification provenance is separate from measured execution.
 
+`cpu-experiment --run-mode diagnose --policy-lane` uses the same constrained
+execution as measurement, but enables a cold controller-only exclusive wall
+and process-CPU ledger. Its phases are fixture setup, admission, harness setup,
+object setup, mutation, replay, publication, controlled completion, cleanup,
+fixture teardown and remaining bookkeeping. Nested completion/publication
+scopes pause replay; phase sums must equal ledger totals and fit within the
+outer iteration clocks. Unavailable/regressing clocks reject the diagnostic
+receipt. All failure artifacts are retained. This mode has `diagnostic=true`,
+`accepted=false` and no semantic qualification; neither its timings nor a
+receipt relabelled as `measure` may enter `cpu-policy-compare`. The ordinary
+measurement lane keeps its phase clocks disabled. No runtime rendering policy
+or source boundary is changed by diagnostics.
+
+The resource-backed CPU fixture substitutes encode/completion and does not
+provide GPU readback. Core attachment shadow operations (including software
+depth Clear) can therefore differ from the normal GPU-readback-capable
+provider. Phase and external-stack evidence must distinguish those costs
+before interpreting whole-iteration service time as production replay cost.
+
 Warm-up iterations follow the same reset policy, are individually validated
 and retained, but are excluded from measured statistics. Failed/slow samples
 remain in raw receipts. Actual direct/compatibility counts, source counts,

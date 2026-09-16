@@ -23,6 +23,7 @@
 #include "render_tape_cpu_source_oracle.hpp"
 #include "render_tape_cpu_source_admission.hpp"
 #include "render_tape_cpu_policy.hpp"
+#include "render_tape_cpu_diagnostic.hpp"
 
 #include "dxmt9/dxmt9_source_payload.hpp"
 #include "dxmt9/dxmt9_command_queue.hpp"
@@ -310,6 +311,7 @@ class CpuGeneralTapeExecutor {
     // run() when captureSourcePlan is set.
     std::span<const std::byte> captureSourceTape{};
     std::span<const std::byte> captureSourceIdentitySidecar{};
+    CpuDiagnosticLedger* diagnostic = nullptr;
   };
 
   CpuGeneralTapeExecutor(Fixture& fixture, const Plan& plan,
@@ -317,7 +319,12 @@ class CpuGeneralTapeExecutor {
       : fixture_(fixture), plan_(plan), blobs_(blobs), options_(options) {}
 
   Result run() {
+    CpuDiagnosticLedger::Scope diagnostic(options_.diagnostic, CpuDiagnosticPhase::Admission);
     Result result;
+    if (options_.diagnostic && !options_.measurement) {
+      result.failure = "general-executor-diagnostic-requires-measurement";
+      return result;
+    }
     result.events = plan_.events.size();
     if (options_.measurement &&
         (options_.beforeNextWork || options_.maxPendingSources != 1u ||
@@ -357,6 +364,7 @@ class CpuGeneralTapeExecutor {
     }
     if (!admitCaptureSourcePlan(result)) return result;
     if (!admitEmission(result)) return result;
+    diagnostic.set(CpuDiagnosticPhase::HarnessSetup);
     result.windowPageSize = fixture_.routing->queue_.cpuReadyArenaPlanLimits().pageSize;
     result.windowOffload = bool(fixture_.cDevice->replayOffload);
     result.windowArena = fixture_.routing->supportsCpuReadyArenaReplay();
@@ -572,6 +580,7 @@ class CpuGeneralTapeExecutor {
     std::size_t sourceOracleRow = 0u;
     bool pendingIdentityFaultInjected = false;
     const auto releaseOne = [&](std::uint32_t event) {
+      CpuDiagnosticLedger::Scope phase(options_.diagnostic, CpuDiagnosticPhase::Completion);
       if (pendingSources.empty()) {
         if (result.completed == result.submitted &&
             Access::pendingCompletionCount(fixture_.routing->queue_) == 0u)
@@ -659,6 +668,7 @@ class CpuGeneralTapeExecutor {
                                    std::uint32_t event,
                                    bool windowEligible = false,
                                    const std::span<const core::metalqueue::ReplaySourcePublicationReceipt>* strictExpected = nullptr) {
+      CpuDiagnosticLedger::Scope phase(options_.diagnostic, CpuDiagnosticPhase::Publication);
       const bool strictMode = strictExpected != nullptr;
       if (strictMode && Access::writingCommandCount(fixture_.routing->queue_) != 0u)
         return fail(event, "general-executor-source-writing-preexisting");
@@ -850,6 +860,7 @@ class CpuGeneralTapeExecutor {
                                  const dxmt9::d3d9::render_tape_runtime::CommandChunkView& chunk,
                                  std::optional<std::size_t> commandChunkIndex =
                                      std::nullopt) {
+      CpuDiagnosticLedger::Scope phase(options_.diagnostic, CpuDiagnosticPhase::Replay);
       dxmt9::d3d9::ImportedChunkView imported;
       if (!dxmt9::d3d9::importPrevalidatedCommandChunk(chunk.bytes,
                                                         chunk.envelope,
@@ -1236,6 +1247,13 @@ class CpuGeneralTapeExecutor {
 
     const auto executeEvents = [&]() -> bool {
       for (const auto& replayEvent : plan_.events) {
+        const auto kind = replayEvent.type;
+        CpuDiagnosticLedger::Scope phase(options_.diagnostic,
+            kind == d3d9::RenderTapeEventType::ObjectDefine ? CpuDiagnosticPhase::ObjectSetup :
+            kind == d3d9::RenderTapeEventType::ResourceMutation ? CpuDiagnosticPhase::Mutation :
+            kind == d3d9::RenderTapeEventType::CommandChunk ? CpuDiagnosticPhase::Replay :
+            kind == d3d9::RenderTapeEventType::ObjectDestroy ? CpuDiagnosticPhase::Cleanup :
+            CpuDiagnosticPhase::Bookkeeping);
         const auto event = replayEvent.eventIndex;
         MutationBoundary boundary;
         const bool pendingMutation = replayEvent.type == d3d9::RenderTapeEventType::ResourceMutation &&
@@ -1415,6 +1433,7 @@ class CpuGeneralTapeExecutor {
         return fail(plan_.events.back().eventIndex, "general-executor-unresolved-schedule");
       return result.failure.empty();
     };
+    diagnostic.set(CpuDiagnosticPhase::Bookkeeping);
     try {
     result.complete = executeEvents();
     } catch (...) {
@@ -1425,6 +1444,7 @@ class CpuGeneralTapeExecutor {
       }
     }
 
+    diagnostic.set(CpuDiagnosticPhase::Cleanup);
     const auto cleanupBegin = options_.measurement
         ? std::chrono::steady_clock::time_point{}
         : std::chrono::steady_clock::now();

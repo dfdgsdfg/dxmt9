@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Mini-Replay Bisection — the apparatus that isolated per-draw vertex-stage write amplification"
 type: domain-index
 status: current
-updated: 2026-09-14
+updated: 2026-09-16
 source: docs/perfomance/overview-3dmark05-gt1.md
 related: docs/perfomance/mini-replay-bisection/overview.md; docs/perfomance/mini-replay-bisection/log.md
 ---
@@ -21,6 +21,8 @@ Latest tracked row: `H22` - Positive Metal visibility samples can be used as the
 
 ## Recent Leaf Documents
 
+- [CPU slow modes: software attachment Clear and diagnostic-only phase accounting](cpu-shadow-slowmode.07.md)
+- [GT2 route/capacity matrix: exact pixels, unresolved CPU timing variation](gt2-policy-matrix.06.md)
 - [Qualified capacity: denial recovery and compatibility growth verified](capacity-ownership-recovery.05.md)
 - [Vertex-position invariance: retained GT2 pixels and public CPU/GPU policy transaction qualified](gpu-position-invariance.04.md)
 - [Strict GPU policy qualification and source-boundary fidelity/residual](gpu-policy-qualification.03.md)

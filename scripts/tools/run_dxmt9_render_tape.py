@@ -1870,6 +1870,27 @@ def _cpu_native_time_valid(result: dict[str, Any], iteration: dict[str, Any]) ->
             and type(value) is int and value >= 0)
 
 
+def _cpu_diagnostic_accounting_accepts(iteration: dict[str, Any]) -> bool:
+    ledger = iteration.get("diagnostic_accounting")
+    names = {"bookkeeping", "fixture_setup", "admission", "harness_setup",
+             "object_setup", "mutation", "replay", "publication", "completion",
+             "cleanup", "fixture_teardown"}
+    if (not isinstance(ledger, dict) or ledger.keys() != {"valid", "wall_ns", "cpu_ns", "phases"}
+            or ledger["valid"] is not True or not isinstance(ledger["phases"], dict)
+            or ledger["phases"].keys() != names):
+        return False
+    for row in ledger["phases"].values():
+        if (not isinstance(row, dict) or row.keys() != {"wall_ns", "cpu_ns", "entries"}
+                or any(type(value) is not int or value < 0 for value in row.values())):
+            return False
+    for clock, outer in (("wall_ns", "elapsed_ns"), ("cpu_ns", "native_cpu_ns")):
+        if (type(ledger.get(clock)) is not int or ledger[clock] <= 0
+                or type(iteration.get(outer)) is not int or ledger[clock] > iteration[outer]
+                or sum(row[clock] for row in ledger["phases"].values()) != ledger[clock]):
+            return False
+    return True
+
+
 def _cpu_general_frame_accepts(
     result: dict[str, Any], *, repeat: int, route: str, require_path: bool,
     completion: str, resource_backend: str, publication: str, fault: str,
@@ -1879,6 +1900,7 @@ def _cpu_general_frame_accepts(
     source_binding: dict[str, Any] | None = None,
     cpu_policy: dict[str, Any] | None = None,
     measurement: bool = False,
+    diagnostic: bool = False,
 ) -> bool:
     """Strict acceptance for the complete-frame CPU resource lane.
 
@@ -1887,6 +1909,8 @@ def _cpu_general_frame_accepts(
     receipt, and it never treats physical command/submission topology as a
     semantic equality claim.
     """
+    if diagnostic and not measurement:
+        return False
     if (not isinstance(input_inspection, dict) or completion_plan is not None
             or completion not in ("after-command", "before-next-work")
             or publication != "per-command"
@@ -1943,9 +1967,10 @@ def _cpu_general_frame_accepts(
             return False
         if (cpu_policy["replay_route"] != route
                 or actual_policy != cpu_policy
-                or result.get("run_mode") != ("measure" if measurement else "verify")
+                or result.get("run_mode") != ("diagnose" if diagnostic else "measure" if measurement else "verify")
                 or result.get("phase_accounting") !=
-                   ("iteration-only" if measurement else "scoped-observations")
+                   ("exclusive-diagnostic-wall-process" if diagnostic else
+                    "iteration-only" if measurement else "scoped-observations")
                 or result.get("runtime_perf_counters") is not True):
             return False
     elif result.get("run_mode", "verify") != "verify":
@@ -2065,6 +2090,11 @@ def _cpu_general_frame_accepts(
                     "resources_created", "resources_released", "elapsed_ns",
                     "pending_peak", "deferred_releases", "destroys_with_pending",
                     "retained_snapshots_after_destroy", "mipmap_command_count")
+        if diagnostic:
+            if not _cpu_diagnostic_accounting_accepts(iteration):
+                return False
+        elif "diagnostic_accounting" in iteration:
+            return False
         if any(type(iteration.get(field)) is not int or iteration[field] < 0
                for field in counters):
             return False
@@ -2985,16 +3015,16 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
     })
     if capture_source and not policy_lane:
         raise SystemExit("capture-source requires --policy-lane")
-    if run_mode not in ("verify", "measure"):
-        raise SystemExit("CPU run mode must be verify or measure")
+    if run_mode not in ("verify", "measure", "diagnose"):
+        raise SystemExit("CPU run mode must be verify, measure or diagnose")
     if grammar != "general-frame" and run_mode != "verify":
-        raise SystemExit("measure mode requires general-frame")
+        raise SystemExit("measure/diagnose mode requires general-frame")
     warmup = getattr(args, "warmup", 0)
     if warmup:
         raise SystemExit("warmup is owned by cpu-policy-compare, not cpu-experiment")
     has_policy = any(policy[key] for key in (
         "draw_command_limit", "slot_headroom_bytes", "aggregate_headroom_bytes"))
-    if (run_mode == "measure" or has_policy) and not policy_lane:
+    if (run_mode != "verify" or has_policy) and not policy_lane:
         raise SystemExit("measurement and nondefault policies require --policy-lane")
     if policy_lane and (grammar != "general-frame" or args.completion != "after-command"
                         or args.max_pending != 1 or args.completion_plan is not None
@@ -3128,7 +3158,8 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
                 resource_backend=args.resource_backend, publication=args.publication,
                 fault=args.fault, completion_plan=plan,
                 input_inspection=input_inspection, max_pending=args.max_pending,
-                cpu_policy=policy, measurement=run_mode == "measure")
+                cpu_policy=policy, measurement=run_mode != "verify",
+                diagnostic=run_mode == "diagnose")
             policy_valid = policy_valid and render_tape_cpu_policy.source_receipts_accept(
                 {"result": result, "input_components": manifest["components"]}, policy)
         execution_valid = (exit_code == 0
@@ -3153,7 +3184,7 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
         fault_oracle_passed = args.fault == "managed-allocation" and execution_valid
         receipt = {"schema": "dxmt9.render_tape.cpu_experiment_artifact.v1",
                    "accepted": accepted, "provider_exit_code": exit_code,
-                   "diagnostic": args.fault != "none" or validation_diagnostic,
+                   "diagnostic": args.fault != "none" or validation_diagnostic or run_mode == "diagnose",
                    "metal_validation_diagnostic": validation_diagnostic,
                    "execution_valid": execution_valid,
                    "semantic_qualified": accepted,
@@ -3198,7 +3229,7 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
                       "fault_oracle_passed": fault_oracle_passed,
                       "status": result.get("status")}, sort_keys=True))
     return 0 if accepted or fault_oracle_passed or (
-        policy_lane and run_mode == "measure" and execution_valid
+        policy_lane and run_mode in ("measure", "diagnose") and execution_valid
         and not validation_diagnostic) else 1
 
 
@@ -4404,8 +4435,8 @@ def parser() -> argparse.ArgumentParser:
     cpu_parser.add_argument("--validator", type=pathlib.Path,
                             default=pathlib.Path("build/tools/dxmt9-render-tape"))
     cpu_parser.add_argument("--repeat", type=int, default=16)
-    cpu_parser.add_argument("--run-mode", choices=("verify", "measure"), default="verify",
-                            help="full-oracle verification or low-observer measurement")
+    cpu_parser.add_argument("--run-mode", choices=("verify", "measure", "diagnose"), default="verify",
+                            help="full oracle, low-observer timing, or diagnostic-only phase clocks")
     cpu_parser.add_argument("--policy-lane", action="store_true", help=argparse.SUPPRESS)
     cpu_parser.add_argument("--source-boundary-mode",
                             choices=("chunk", "capture-source"), default="chunk")
