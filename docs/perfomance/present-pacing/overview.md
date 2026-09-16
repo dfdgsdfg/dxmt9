@@ -30,6 +30,14 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H313](present-pacing-app-thread-attribution.313.md) samples unchanged H312
+images. Interior guest PCs are 70.28%/81.06% game, 10.26%/5.83% dxmt9 PE
+and 11.18%/7.30% bridge in 05/06 GT2; these are **not CPU-time shares**.
+Rosetta/Wine stack unwinding is unreliable and Time Profiler fails to save,
+so exclusive game/Wine/PE/Unix CPU remains open. Recurring synchronous
+contexts point to commit/import and buffer Lock/Unlock for direct calibrated
+boundary accounting. No additive CPU budget, FPS ceiling or default change.
+
 [H312](present-pacing-cpu-supply-critical-path.312.md) measures four calibrated
 05/06 GT2 CPU-supply windows with matched-image controls. The app thread uses
 0.94–0.96 cores, replay 0.39–0.54 and encode 0.41–0.56; input waits are mostly

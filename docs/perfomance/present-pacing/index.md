@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H313](present-pacing-app-thread-attribution.313.md) records current-image
+game/Wine-system/PE/bridge guest-PC populations. Game PCs dominate, but saved
+bridge contexts and unreliable Rosetta unwinds leave exclusive CPU attribution
+unclosed. Commit/import and buffer Lock/Unlock are the next synchronous
+boundary targets; failed Time Profiler evidence is preserved and excluded.
+
 [H312](present-pacing-cpu-supply-critical-path.312.md) finds upstream app-thread
 supply near one core while replay/encode are not saturated in four 05/06 GT2
 diagnostic windows. Empty-input waits dominate reservation/dispatch delay.
