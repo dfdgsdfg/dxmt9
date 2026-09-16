@@ -31,9 +31,21 @@ than exact in both orders. These are whole-iteration controlled-completion
 observations, not isolated replay service time or default/FPS promotion.
 1MiB has zero GPU denial/growth at 20.86MiB retained capacity; 5MiB retains
 61.84MiB and has 56 optional denials per two GPU iterations without a CPU
-benefit. Corrected phase attribution, asynchronous owner pressure/pacing,
-repeated wild A/B and broader tapes remain open. See
+benefit. Asynchronous owner pressure/pacing, repeated wild A/B and broader
+tapes remain open. See
 [corrected matrix](../../docs/perfomance/mini-replay-bisection/gt2-qualified-policy-matrix.09.md).
+
+Corrected phase attribution r623 reauthenticates twelve fresh semantic
+verification, 96 ordinary measured and 192 diagnostic measured iterations,
+plus 36 warm-ups, using unchanged r622 images/input/policies and reauthenticated
+GPU evidence. Direct exact saves 2.794ms in the replay envelope
+(18.869→16.075ms mean); harness admission stays near 19.270ms. Ordinary
+brackets repeat a 3.05–3.08% route benefit, but the 1MiB increment is not stable
+(-0.52%/+0.16%). Diagnostic receipts remain excluded from policy ranking.
+First-level setup/resource/replay/publication/completion separation is complete;
+isolated production service attribution, warm-resource reset fidelity and
+asynchronous/wild promotion remain open. See
+[phase evidence](../../docs/perfomance/mini-replay-bisection/cpu-phase-attribution.10.md).
 
 Pre-correction R-HARN-REPLAY-8.7–8.9 evidence: diagnostic-only exclusive
 wall/process-CPU accounting separated fixture, admission, resource work,

@@ -11,6 +11,10 @@ related: docs/perfomance/mini-replay-bisection/attachment-authority.08.md; docs/
 
 # GT2 corrected CPU policy matrix
 
+Follow-up: [CPU phase attribution](cpu-phase-attribution.10.md) locates the
+Direct route benefit in replay, but does not reproduce a stable whole-iteration
+1MiB increment. The results below describe the r622 comparison block.
+
 ## Verdict
 
 After the [attachment-authority correction](attachment-authority.08.md),

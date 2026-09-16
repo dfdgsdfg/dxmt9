@@ -27,6 +27,16 @@ the apparatus that made [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) p
 
 ## Latest Conclusions
 
+The [corrected phase attribution](cpu-phase-attribution.10.md) now separates
+replay from fresh setup/admission and resource reconstruction. Four ordered
+diagnostic blocks locate Direct exact's benefit in replay (18.869→16.075ms
+CPU mean), with admission unchanged at 19.270ms. Ordinary brackets repeat a
+3.05–3.08% whole-iteration route benefit. The earlier 1MiB increment is not
+stable: -0.52%/+0.16% in ordinary brackets and only -0.033ms mean replay.
+Diagnostic overhead and fresh-object tails remain separate from policy ranking.
+Next: narrow the ~16ms replay envelope into wrapper versus production planning/
+materialization costs; asynchronous/wild promotion remains open.
+
 The [corrected GT2 matrix](gt2-qualified-policy-matrix.09.md) passes ten fresh
 CPU/GPU-qualified comparisons and independent receipt reauthentication.
 Direct exact costs 3.48–3.69% less whole-iteration CPU than Compatibility in
@@ -34,8 +44,9 @@ both orders; 1MiB/64MiB has a smaller 1.10–2.97% signal versus exact. A/A
 brackets differ by -0.77%/+0.08%. 5MiB shows no useful gain and retains
 61.84MiB with 56 GPU optional denials per two iterations, versus 20.86MiB and
 zero denials/growth for 1MiB. These are scoped CPU/capacity observations, not
-FPS or default promotion. Next: corrected replay-phase attribution, then
-asynchronous residency/pacing and repeated wild comparison for the 1MiB candidate.
+FPS or default promotion. The follow-up above confirms the route benefit but
+does not repeat the 1MiB whole-iteration gain; asynchronous residency/pacing
+and repeated wild comparison remain open.
 
 The [attachment-authority correction](attachment-authority.08.md) now removes
 the CPU-only software Clear mismatch while preserving commands, identities,
