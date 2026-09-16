@@ -140,6 +140,14 @@ borrow. This is value-projection reuse, not authority to reuse a Slot handle
 across draws, generations, rollback or Slot replacement. Hash-and-content
 deduplication, capacity failure and command ordering must remain unchanged.
 
+**R-BACK-2.15.3** Snapshot-local work elimination must preserve complete flat
+state values, sorted order, zero-filled unused entries, full-table hash and
+overflow selection. A fitting `StateValueTable` needs no priority selection
+or duplicate search because its keys are unique and its iterator is ordered.
+Uniform matrix reuse within one snapshot must retain the original multiplication
+association and singular-normal fallback. Neither optimization grants reuse
+across calls or changes category-generation invalidation authority.
+
 **R-BACK-2.16** Replay transforms that derive encoder decisions from imported
 records (pass merge/split, deferred clear application, hazard classification, PSO
 key construction, argument-buffer layout) must be deterministic for identical

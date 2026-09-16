@@ -21,6 +21,7 @@ Latest tracked row: `H22` - Positive Metal visibility samples can be used as the
 
 ## Recent Leaf Documents
 
+- [Snapshot-local dedup: fitting flat states dominate the recovered CPU cost](snapshot-local-dedup.13.md)
 - [Direct fixed-uniform projection reuse: equivalent values, small local cost reduction](fixed-uniform-projection.12.md)
 - [GT2 replay owners: snapshot and Slot materialization ahead of planning](replay-cost-owners.11.md)
 - [GT2 CPU phases: replay-local Direct benefit, unstable 1MiB increment](cpu-phase-attribution.10.md)

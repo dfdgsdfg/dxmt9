@@ -27,14 +27,23 @@ the apparatus that made [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) p
 
 ## Latest Conclusions
 
+The [snapshot-local dedup follow-up](snapshot-local-dedup.13.md) removes
+priority/duplicate selection when all flat states fit, redundant sorting of
+ordered tables and same-call WORLD0 matrix recomputation. Ordinary CPU medians
+fall 1.85%/1.78% in opposite orders; diagnostic replay falls 15.828→14.839ms.
+The largest scoped change is render-state flattening, ~1.20→0.125ms. Bounded
+native value tests, unchanged cache/replay work counts and fresh exact GT2
+CPU/GPU evidence pass. No generation, ownership or queue policy changes;
+uniform hashing, observer-off costs and wild/FPS qualification remain open.
+
 The [fixed-uniform projection follow-up](fixed-uniform-projection.12.md)
 removes repeated extraction at Direct append without a new handle cache or
 invalidation rule. Exhaustive bounded value tests, production-cache binding
 and fresh GT2 exact CPU/GPU comparisons pass. Lookup elapsed scopes fall
 ~0.85→0.71–0.72ms, but ordinary whole-iteration medians change +1.01%/−0.33%
 in opposite orders. No repeatable total-CPU or FPS gain is established.
-Snapshot construction remains the larger candidate; retained component reuse
-and asynchronous/wild evidence remain separate work.
+The newer follow-up above reduces snapshot-local construction; retained
+component reuse and asynchronous/wild evidence remain separate work.
 
 The [unchanged-image replay owner investigation](replay-cost-owners.11.md)
 locates the largest source-driver sample owners in state/uniform snapshots

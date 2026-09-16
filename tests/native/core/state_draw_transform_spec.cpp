@@ -3,6 +3,7 @@
 #include "../../../src/dxmt9/dxmt9_backend_types.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_state.hpp"
 
+#include <algorithm>
 #include <array>
 #include <bit>
 #include <cmath>
@@ -2337,6 +2338,138 @@ void testRenderStateFlatPayloadPreservesBackendKeysWhenOverflowing() {
                       "compact payload preserves point sprite enable");
 }
 
+void testFittingFlatStateConstructionEquivalence() {
+  // R-BACK-2.15.3: all subsets of sparse keys, including word boundaries and
+  // high priority keys. Reproduce the old duplicate-search/sort algorithm as
+  // an independent reference; priority order cannot affect a fitting set.
+  constexpr std::array<u32, 10> keys{
+      0u, RS_Z_ENABLE, 63u, 64u, 127u, 128u,
+      RS_SEPARATE_ALPHA_BLEND_ENABLE, 223u, 254u, 255u};
+  auto checkTable = [&](const RenderStateTable& table) {
+    FlatRenderStateSet expected{};
+    expected.hash = ((1469598103934665603ull ^ table.size()) *
+                     1099511628211ull ^ table.rollingHash) * 1099511628211ull;
+    auto append = [&](u32 key) {
+      for (u32 i = 0; i < expected.count; ++i)
+        if (expected.entries[i].state == key) return;
+      if (expected.count < kMaxFlatRenderStates && table.contains(key))
+        expected.entries[expected.count++] = {key, table.at(key)};
+    };
+    for (auto i = keys.rbegin(); i != keys.rend(); ++i) append(*i);
+    for (const auto& entry : table) append(entry.first);
+    std::sort(expected.entries.begin(), expected.entries.begin() + expected.count,
+              [](const auto& a, const auto& b) { return a.state < b.state; });
+    DrawDesc desc{};
+    desc.rs.values = table;
+    const auto actual = makeFlatDrawStateRecord(desc).renderStates;
+    checkEq(actual, expected,
+            "fitting flat construction preserves exact sorted entries/hash/zero tail");
+  };
+  for (u32 mask = 0; mask < (1u << keys.size()); ++mask) {
+    RenderStateTable table;
+    for (std::size_t i = keys.size(); i-- > 0;)
+      if (mask & (1u << i)) table.set(keys[i], 0x12340000u + keys[i]);
+    checkTable(table);
+    // Redundant writes and erase/reinsert must not introduce duplicate keys.
+    for (const auto key : keys) {
+      if (!table.contains(key)) continue;
+      const auto value = table.at(key);
+      table.erase(key);
+      table.set(key, value);
+      table.set(key, value);
+    }
+    checkTable(table);
+  }
+  RenderStateTable boundary;
+  for (u32 count = 0; count <= kMaxFlatRenderStates; ++count) {
+    checkTable(boundary);
+    boundary.set(255u - count, count);
+  }
+  // Cross the fast-path boundary, then return to the exact-fit side.
+  DrawDesc desc{};
+  desc.rs.values = boundary;
+  check(makeFlatDrawStateRecord(desc).renderStates.overflow,
+        "129 states still take priority-preserving overflow selection");
+  boundary.erase(255u - kMaxFlatRenderStates);
+  checkTable(boundary);
+
+  constexpr std::array<u32, 8> categoryKeys{0u, 1u, 2u, 3u, 4u, 7u, 14u, 15u};
+  for (u32 mask = 0; mask < (1u << categoryKeys.size()); ++mask) {
+    DrawDesc desc{};
+    for (std::size_t i = categoryKeys.size(); i-- > 0;) {
+      if (!(mask & (1u << i))) continue;
+      desc.samplers[0].states.set(categoryKeys[i], mask + categoryKeys[i]);
+      desc.textures[0].stageStates.set(categoryKeys[i], mask + categoryKeys[i]);
+    }
+    const auto record = makeFlatDrawStateRecord(desc);
+    const auto checkCategory = [&](const auto& table, const auto& flat) {
+      checkEq(flat.count, static_cast<u32>(table.size()), "flat category count");
+      check(!flat.overflow, "fitting category does not overflow");
+      u32 index = 0;
+      for (const auto& entry : table)
+        checkEq(flat.entries[index++], FlatStateEntry{entry.first, entry.second},
+                "ordered category needs no second sort");
+      for (; index < flat.entries.size(); ++index)
+        checkEq(flat.entries[index], FlatStateEntry{}, "flat category zero tail");
+    };
+    checkCategory(desc.samplers[0].states, record.samplerStates[0]);
+    checkCategory(desc.textures[0].stageStates, record.textureStageStates[0]);
+  }
+}
+
+void testSnapshotMatrixLocalReuseExact() {
+  const auto bits = [](const Matrix4x4& matrix) {
+    return std::bit_cast<std::array<u32, 16>>(matrix);
+  };
+  const auto multiply = [](const Matrix4x4& a, const Matrix4x4& b) {
+    Matrix4x4 value{};
+    for (u32 row = 0; row < 4; ++row)
+      for (u32 column = 0; column < 4; ++column)
+        for (u32 k = 0; k < 4; ++k)
+          value.m[row * 4 + column] += a.m[row * 4 + k] * b.m[k * 4 + column];
+    return value;
+  };
+  std::array<Matrix4x4, 6> matrices{};
+  matrices[0] = identityMatrixForTest();
+  matrices[1] = {}; // singular inverse retains identity normal fallback
+  matrices[2] = identityMatrixForTest();
+  matrices[2].m[0] = 2.0f;
+  matrices[2].m[5] = -4.0f;
+  matrices[2].m[10] = 0.5f;
+  matrices[3] = taggedMatrix(0.125f);
+  matrices[4] = identityMatrixForTest();
+  matrices[4].m[1] = 0.375f;
+  matrices[4].m[12] = -3.25f;
+  matrices[5] = identityMatrixForTest();
+  matrices[5].m[3] = 0.75f;
+  matrices[5].m[11] = -0.125f;
+  for (const auto& world : matrices)
+    for (const auto& view : matrices)
+      for (const auto& projection : matrices) {
+        DeviceState state;
+        state.reset();
+        state.transforms[XFORM_WORLD_BASE] = world;
+        state.transforms[XFORM_VIEW] = view;
+        state.transforms[XFORM_PROJECTION] = projection;
+        const auto desc = makeDrawDescFromState(state, {});
+        const auto wv = multiply(world, view);
+        const auto wvp = multiply(wv, projection);
+        checkEq(bits(desc.ffpWorldView), bits(wv), "WORLD0 VIEW remains bit-exact");
+        checkEq(bits(desc.worldViewProj), bits(wvp), "WVP association remains bit-exact");
+        checkEq(bits(desc.ffpWorldView), bits(desc.ffpBlendWorldView[0]),
+                "scalar WORLD0 view equals blend slot zero");
+        checkEq(bits(desc.worldViewProj), bits(desc.ffpBlendWorldViewProj[0]),
+                "scalar WVP equals blend slot zero");
+        checkEq(bits(desc.ffpNormalMatrix), bits(desc.ffpBlendNormalMatrix[0]),
+                "scalar normal equals blend slot zero");
+        if (&world == &matrices[1] || &view == &matrices[1])
+          checkEq(bits(desc.ffpNormalMatrix), bits(identityMatrixForTest()),
+                  "singular normal retains identity fallback");
+        checkEq(bits(desc.ffpBlendWorldView[1]), bits(multiply(matrices[0], view)),
+                "unset blend world retains identity behavior");
+      }
+}
+
 void testSamplerAndTextureStageDirtyHashPayloadBoundaries() {
   DeviceState state;
   state.reset();
@@ -3169,6 +3302,8 @@ int main() {
   testTextureStageArgumentCanonicalValues();
   testRenderStateIntentPayloadAcrossDrawRunBoundary();
   testRenderStateFlatPayloadPreservesBackendKeysWhenOverflowing();
+  testFittingFlatStateConstructionEquivalence();
+  testSnapshotMatrixLocalReuseExact();
   testSamplerAndTextureStageDirtyHashPayloadBoundaries();
   testVertexDeclSnapshotSurvivesLaterStateMutation();
   testIndexedDrawRunPolicyDataContract();

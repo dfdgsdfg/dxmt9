@@ -97,22 +97,20 @@ u64 hashStateMap(const StateValueTable<MaxEntries> &values) {
   return hashStateDigest(values.size(), values.rollingHash);
 }
 
-template <std::size_t MaxEntries>
-FlatStateSet<MaxEntries> makeFlatStateSet(const auto &values) {
+template <std::size_t MaxEntries, std::size_t SourceEntries>
+FlatStateSet<MaxEntries> makeFlatStateSet(
+    const StateValueTable<SourceEntries> &values) {
   FlatStateSet<MaxEntries> set{};
   set.hash = hashStateMap(values);
   set.overflow = values.size() > MaxEntries;
   for (const auto &entry : values) {
     if (set.count >= MaxEntries) {
-      continue;
+      break;
     }
     set.entries[set.count++] =
         FlatStateEntry{.state = entry.first, .value = entry.second};
   }
-  std::sort(set.entries.begin(), set.entries.begin() + set.count,
-            [](const FlatStateEntry &a, const FlatStateEntry &b) {
-              return a.state < b.state;
-            });
+  // StateValueTable iterates unique keys in ascending order; no sort is needed.
   return set;
 }
 
@@ -236,10 +234,16 @@ void appendFlatStateEntryIfPresent(FlatStateSet<MaxEntries> &set,
       FlatStateEntry{.state = state, .value = values.at(state)};
 }
 
-template <std::size_t MaxEntries, typename StateTable, std::size_t PreserveCount>
+template <std::size_t MaxEntries, std::size_t SourceEntries,
+          std::size_t PreserveCount>
 FlatStateSet<MaxEntries> makePrioritizedFlatStateSet(
-    const StateTable &values,
+    const StateValueTable<SourceEntries> &values,
     const std::array<u32, PreserveCount> &preservedStates) {
+  // Priority affects membership only on overflow. A fitting table already
+  // supplies a complete, unique, sorted sequence (R-BACK-2.15.3).
+  if (values.size() <= MaxEntries) {
+    return makeFlatStateSet<MaxEntries>(values);
+  }
   FlatStateSet<MaxEntries> set{};
   set.hash = hashStateMap(values);
   set.overflow = values.size() > MaxEntries;
@@ -1968,19 +1972,6 @@ makeClipPlanesFromState(const DeviceState &state, u32 clipPlaneMask) {
   return clipPlanes;
 }
 
-Matrix4x4 makeWorldViewProjFromState(const DeviceState &state) {
-  const Matrix4x4 world = lookupTransform(state, XFORM_WORLD_BASE);
-  const Matrix4x4 view = lookupTransform(state, XFORM_VIEW);
-  const Matrix4x4 proj = lookupTransform(state, XFORM_PROJECTION);
-  return multiplyMatrix(multiplyMatrix(world, view), proj);
-}
-
-Matrix4x4 makeWorldViewFromState(const DeviceState &state) {
-  const Matrix4x4 world = lookupTransform(state, XFORM_WORLD_BASE);
-  const Matrix4x4 view = lookupTransform(state, XFORM_VIEW);
-  return multiplyMatrix(world, view);
-}
-
 Matrix4x4 makeNormalMatrixFromWorldView(const Matrix4x4 &worldView) {
   Matrix4x4 inverse{};
   if (!invertMatrix(worldView, &inverse)) {
@@ -1995,9 +1986,9 @@ struct FfpBlendTransforms {
   std::array<Matrix4x4, 4> normalMatrix{};
 };
 
-FfpBlendTransforms makeBlendTransformsFromState(const DeviceState &state) {
+FfpBlendTransforms makeBlendTransformsFromState(
+    const DeviceState &state, const Matrix4x4 &view) {
   FfpBlendTransforms transforms{};
-  const Matrix4x4 view = lookupTransform(state, XFORM_VIEW);
   const Matrix4x4 proj = lookupTransform(state, XFORM_PROJECTION);
   for (size_t i = 0; i < transforms.worldView.size(); ++i) {
     const Matrix4x4 world =
@@ -2082,10 +2073,12 @@ DrawUniformPayload makeDrawUniformPayloadFromState(
     PerfScope scope(recorder(
         dxmt9::perf::countD3D9SnapshotUniformBuildFfpMatrixCpuTime));
     payload.ffpView = lookupTransform(state, XFORM_VIEW);
-    payload.ffpWorldView = makeWorldViewFromState(state);
-    payload.ffpNormalMatrix = makeNormalMatrixFromWorldView(payload.ffpWorldView);
-    payload.worldViewProj = makeWorldViewProjFromState(state);
-    const auto blendTransforms = makeBlendTransformsFromState(state);
+    const auto blendTransforms = makeBlendTransformsFromState(state, payload.ffpView);
+    // WORLD0 is already computed by blend slot zero with the same operation
+    // order and singular inverse fallback. Reuse values, not a cross-draw cache.
+    payload.ffpWorldView = blendTransforms.worldView[0];
+    payload.ffpNormalMatrix = blendTransforms.normalMatrix[0];
+    payload.worldViewProj = blendTransforms.worldViewProj[0];
     payload.ffpBlendWorldViewProj = blendTransforms.worldViewProj;
     payload.ffpBlendWorldView = blendTransforms.worldView;
     payload.ffpBlendNormalMatrix = blendTransforms.normalMatrix;

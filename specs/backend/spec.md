@@ -910,6 +910,25 @@ component witness needs its own owner/generation refinement. Production-cache
 binding and deterministic GPU readback remain required evidence; native value
 tests do not prove driver behavior or FPS.
 
+#### Snapshot-local redundant work
+
+R-BACK-2.15.3 separates value construction from temporal cache reuse. When all
+render states fit the flat capacity, priority selection cannot change membership:
+emit the unique ordered `StateValueTable` entries directly. Generic flat
+construction is restricted to that table type, not arbitrary unordered inputs.
+Overflow retains priority-first membership followed by sorted publication;
+the hash still includes the complete input, including omitted states.
+
+Within one full uniform build, blend slot zero already computes `WORLD0 * VIEW`,
+its inverse transpose and `(WORLD0 * VIEW) * PROJECTION`. The scalar fields
+reuse these exact values without reassociation or a new cache. Other blend
+slots, absent-world identity and singular inverse fallback remain unchanged.
+The refinement obligation is pure value equivalence: bounded exhaustive table
+construction against the old selection algorithm, capacity boundaries and
+exact matrix cases precede production-cache and GPU oracle tests. Existing
+generation, Slot and completion protocols are unchanged; no new temporal
+model is required for this local substitution.
+
 ---
 
 ## 3. Encoder Lifecycle

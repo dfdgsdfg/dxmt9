@@ -11,6 +11,14 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Backend Layer
 
+R-BACK-2.15.3 snapshot-local value simplification is implemented: fitting
+ordered flat tables bypass priority/dedup work, and scalar WORLD0 matrices
+reuse same-call blend slot zero. Native bounded/reference and matrix tests,
+production-cache regressions, existing TLC and fresh GT2 exact CPU/GPU evidence
+pass. [Snapshot-local evidence](../../docs/perfomance/mini-replay-bisection/snapshot-local-dedup.13.md)
+reports lower bounded CPU costs; broader workloads, observer-off service and
+wild/FPS non-regression remain open. No temporal cache authority is expanded.
+
 R-BACK-2.15.2 fixed-uniform projection reuse is implemented at synchronous
 Direct append, with unchanged content interning and Slot ownership. Bounded
 native equivalence, production-cache binding, existing TLC regressions and
