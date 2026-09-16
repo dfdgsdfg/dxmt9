@@ -11,24 +11,43 @@ tags: [specs, gap, experiments]
 
 ### CPU timing representativeness (2026-09-16)
 
-R-HARN-REPLAY-8.7–8.9: diagnostic-only exclusive wall/process-CPU accounting
-now separates fixture, admission, resource setup/mutation, replay, publication,
-controlled completion and reset. Native nested-clock/unwind tests, actual
-general execution and CLI non-promotion gates cover the mode. The GT2 r620
-same-policy campaign reauthenticates 182 iterations; slower processes add
-about 88ms in replay, not completion or setup. Unchanged-binary external
-stacks in r619 concentrate in software attachment Clear. The CPU fixture
-does not advertise GPU readback, whereas the normal provider skips shadows
-for GPU-owned attachments. This is a **partial timing-fidelity gap**, not a
-failed CPU semantic or GPU pixel oracle. Production-equivalent attachment
-authority and the underlying process-dependent Clear speed remain open;
-do not enable a false readback capability or subtract sampled percentages
-to claim a corrected policy ranking. See
+R-HARN-REPLAY-8.9 attachment authority is now separated from GPU readback.
+General CPU execution skips only backend-owned shadow work, preserves Clear
+publication/lifetime and seed writes, and rejects CPU read/control consumers
+at admission. Unavailable/failed backend readback cannot return a stale seed.
+The corrected ownership contract is mandatory in CLI/comparison receipts.
+The 373,248-trace native refinement, production Clear/readback pins, fifteen
+focused tests and all 196 TLA configurations pass. GT2 r621 reauthenticates
+12 CPU verification, 96 measured CPU plus 12 warm-up, and 12 GPU exact
+iterations: old ordered semantics and original pixels match; A/A shifts are
+0.27–0.63%. This closes the bounded attachment-work mismatch, not application
+FPS, asynchronous scheduling or the old software loop's speed mechanism.
+See [authority evidence](../../docs/perfomance/mini-replay-bisection/attachment-authority.08.md).
+
+The corrected r622 ten-pair matrix also reauthenticates 320 measured CPU and
+40 GPU exact iterations. A/A brackets differ by -0.77%/+0.08%; Direct exact
+is 3.48–3.69% cheaper than Compatibility, and 1MiB/64MiB is 1.10–2.97% cheaper
+than exact in both orders. These are whole-iteration controlled-completion
+observations, not isolated replay service time or default/FPS promotion.
+1MiB has zero GPU denial/growth at 20.86MiB retained capacity; 5MiB retains
+61.84MiB and has 56 optional denials per two GPU iterations without a CPU
+benefit. Corrected phase attribution, asynchronous owner pressure/pacing,
+repeated wild A/B and broader tapes remain open. See
+[corrected matrix](../../docs/perfomance/mini-replay-bisection/gt2-qualified-policy-matrix.09.md).
+
+Pre-correction R-HARN-REPLAY-8.7–8.9 evidence: diagnostic-only exclusive
+wall/process-CPU accounting separated fixture, admission, resource work,
+replay, publication, controlled completion and reset. GT2 r620 reauthenticates
+182 iterations; slow processes add about 88ms in replay, not completion/setup.
+Unchanged-image r619 stacks concentrate in software attachment Clear. That
+was a timing-fidelity gap, not a failed semantic/pixel oracle. The correction
+above removes the mismatched work; the exact old process-speed cause remains
+open. Sample percentages must not be subtracted to manufacture timings. See
 [slow-mode evidence](../../docs/perfomance/mini-replay-bisection/cpu-shadow-slowmode.07.md).
 
 The earlier 5MiB rejection below is historical: capacity ownership recovery
-and the subsequent same-image matrix now pass that bounded GPU policy. The
-matrix still withholds CPU ranking; it does not promote headroom defaults.
+and the subsequent same-image matrix pass that bounded GPU policy. The
+pre-correction matrix withheld CPU ranking; no headroom default is promoted.
 See [policy matrix](../../docs/perfomance/mini-replay-bisection/gt2-policy-matrix.06.md).
 
 ### Current GPU qualification status (2026-09-14)

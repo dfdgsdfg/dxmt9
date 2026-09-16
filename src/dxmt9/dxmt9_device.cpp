@@ -486,6 +486,9 @@ class DeviceImpl final : public Device {
         queue_, queue_.pool(), wmt_device_, limits_, destination, depth);
   }
   bool supportsGpuReadback() const override { return true; }
+  AttachmentContentOwner attachmentContentOwner() const noexcept override {
+    return AttachmentContentOwner::BackendCommands;
+  }
 
   bool ready() const noexcept { return queue_.started(); }
 

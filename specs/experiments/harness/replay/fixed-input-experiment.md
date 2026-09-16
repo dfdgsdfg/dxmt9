@@ -227,10 +227,24 @@ measurement lane keeps its phase clocks disabled. No runtime rendering policy
 or source boundary is changed by diagnostics.
 
 The resource-backed CPU fixture substitutes encode/completion and does not
-provide GPU readback. Core attachment shadow operations (including software
-depth Clear) can therefore differ from the normal GPU-readback-capable
-provider. Phase and external-stack evidence must distinguish those costs
-before interpreting whole-iteration service time as production replay cost.
+provide GPU readback. `AttachmentContentOwner` separately selects CPU-shadow
+or backend-command authority. The real provider uses backend ownership; old
+recording fixtures default to CPU shadows. After successful general grammar
+admission the CPU executor selects backend ownership before tape effects.
+Core Clear/StretchRect shadow decisions use this authority, never readback
+availability. The CPU grammar still rejects StretchRect, readback, CPU read
+locks and ordered controls; seed mutations are complete, write-only uploads,
+not requests for previous attachment bytes. The resource oracle hashes seed
+receipts and ordered commands, not stale attachment shadows. No command,
+snapshot, retention, publication or completion is elided.
+
+General CPU receipts require `attachment_contents=backend-command-owned-v1`
+and `gpu_readback=false` in verify, measure and diagnose. Missing or old
+receipts fail both the CLI and policy comparison gates. This corrects the
+software depth-Clear timing mismatch without pretending to render/read pixels.
+Core readback of a backend-owned attachment must not fall back to its stale
+CPU seed when real readback is unavailable or fails. Low-level seed locks
+remain storage APIs, not a general post-render readback implementation.
 
 Warm-up iterations follow the same reset policy, are individually validated
 and retained, but are excluded from measured statistics. Failed/slow samples

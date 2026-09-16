@@ -357,6 +357,8 @@ def _basic_result_shape(
             or evidence.get("grammar") != "general-frame"
             or evidence.get("backend") != "cpu-metal-resources"
             or evidence.get("resource_execution") != "cpu-visible-metal-no-gpu-submit"
+            or evidence.get("attachment_contents") != "backend-command-owned-v1"
+            or evidence.get("gpu_readback") is not False
             or evidence.get("status") != "complete"
             or evidence.get("run_mode") != ("measure" if measurement else "verify")
             or evidence.get("replay_route") != policy["replay_route"]

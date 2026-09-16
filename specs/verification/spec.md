@@ -86,6 +86,20 @@ case count. Neither result may be summarized merely as "formally verified."
 
 ### 1.3 Render Tape as a concrete refinement layer
 
+`dxmt9-render-tape-cpu-attachment-spec` binds R-HARN-REPLAY-8.9 to the
+production `backendAttachmentContents` and `attachmentReadRoute` predicates.
+It exhausts 373,248 six-step traces (two owners × attachment/nonattachment ×
+readback available/unavailable × six actions to the sixth power): seed A/B,
+Clear A/B, successful/failed read. Every readable value equals the serial
+latest value; unavailable reads expose nothing; Clear is never elided. A
+stale-seed fallback mutant must have a counterexample. Native core Clear pins
+surface, texture-alias and depth shadow decisions, preserved command/attachment
+snapshots and completion, plus unavailable/failed readback rejection. This is
+a bounded sequential ownership refinement, not a new concurrency proof or
+pixel oracle. The general CPU grammar denies CPU read/control consumers before
+effects; low-level seed locks are outside any claim of rendered-pixel access.
+Real-provider GT2 exact readback remains the independent GPU qualification.
+
 The unified replay architecture is specified in
 `specs/experiments/harness/replay/spec.md` §0/§8. Verification treats its
 profiles differently:

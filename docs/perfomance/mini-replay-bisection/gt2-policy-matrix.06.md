@@ -13,6 +13,10 @@ related: docs/perfomance/mini-replay-bisection/capacity-ownership-recovery.05.md
 
 ## Verdict
 
+Follow-up: the [corrected CPU matrix](gt2-qualified-policy-matrix.09.md) uses
+separate attachment-content authority and requalified images. It does not
+relabel the noisy pre-correction measurements recorded here.
+
 All 20 public comparisons pass CPU semantic qualification, strict original
 GPU source/output equality and post-publication identity reauthentication.
 The experiment executes the requested route and capacity mechanisms, but

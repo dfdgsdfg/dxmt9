@@ -618,6 +618,11 @@ test('dxmt9-render-tape-cpu-measurement-spec',
      args: ['--general-cpu-measurement-spec'],
      env: dxmt9_native_test_env)
 
+test('dxmt9-render-tape-cpu-attachment-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--general-cpu-attachment-spec'],
+     env: dxmt9_native_test_env)
+
 cpu_policy_spec = executable(
   'dxmt9-render-tape-cpu-policy-spec',
   'render_tape_cpu_policy_spec.cpp',

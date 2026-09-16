@@ -79,6 +79,7 @@ def _general_frame_fixture():
         "schema": "dxmt9.render_tape.cpu_experiment.v1",
         "grammar": "general-frame",
         "semantic_projection": "final-slot-general-v2",
+        "attachment_contents": "backend-command-owned-v1", "gpu_readback": False,
         "reset_policy": "fresh-device",
         "cache_policy": "fresh-runtime", "shared_native_resource_device": True,
         "backend": "cpu-metal-resources",

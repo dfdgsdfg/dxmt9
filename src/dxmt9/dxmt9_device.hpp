@@ -9,6 +9,7 @@
 
 #include "../winemetal/Metal.hpp"
 #include "dxmt9/core.hpp"
+#include "dxmt9/attachment_contents.hpp"
 #include "dxmt9_command_queue.hpp"
 
 #include <cstdint>
@@ -255,9 +256,11 @@ class Device {
   virtual core::HResult waitForVBlank(const core::SwapDesc&) { return core::HResult{0}; }
   virtual bool readbackSurface(const core::ReadbackDesc&, core::ReadbackPixels&) { return false; }
 
-  // True for real GPU devices where render-target/depth contents can be
-  // recovered through readbackSurface(); false for recording/null test stubs
-  // that still need core's CPU shadow path for assertions.
+  virtual AttachmentContentOwner attachmentContentOwner() const noexcept {
+    return AttachmentContentOwner::CpuShadow;
+  }
+  // Readback ability is not attachment content authority. Recording devices
+  // may own backend commands while providing no physical pixels at all.
   virtual bool supportsGpuReadback() const { return false; }
 };
 

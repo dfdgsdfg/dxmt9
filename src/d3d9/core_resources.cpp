@@ -129,8 +129,8 @@ bool backendOwnsTextureContents(const TextureDesc &desc) {
   return (desc.usage & (UsageRenderTarget | UsageDepthStencil)) != 0;
 }
 
-bool canTrustGpuReadback(const std::shared_ptr<dxmt9::Device> &backend) {
-  return backend && backend->supportsGpuReadback();
+bool backendOwnsAttachmentContents(const std::shared_ptr<dxmt9::Device> &backend) {
+  return backend && backendAttachmentContents(backend->attachmentContentOwner(), true);
 }
 
 bool renderTraceEnabled() {
@@ -672,7 +672,7 @@ HResult Device::clear(const ClearDesc &desc) {
       for (auto &surface : surfaces_) {
         if (auto sp = surface.lock();
             sp && sp->handle() == attachment.handle && sp->valid()) {
-          if (detail::canTrustGpuReadback(backend_) &&
+          if (detail::backendOwnsAttachmentContents(backend_) &&
               detail::backendOwnsSurfaceContents(sp->desc())) {
             continue;
           }
@@ -688,7 +688,7 @@ HResult Device::clear(const ClearDesc &desc) {
       for (auto &texture : textures_) {
         if (auto tp = texture.lock();
             tp && tp->handle() == attachment.handle && tp->valid()) {
-          if (detail::canTrustGpuReadback(backend_) &&
+          if (detail::backendOwnsAttachmentContents(backend_) &&
               detail::backendOwnsTextureContents(tp->desc())) {
             continue;
           }
@@ -710,7 +710,7 @@ HResult Device::clear(const ClearDesc &desc) {
         return;
       }
       const auto &surfaceDesc = surface->desc();
-      if (detail::canTrustGpuReadback(backend_) &&
+      if (detail::backendOwnsAttachmentContents(backend_) &&
           detail::backendOwnsSurfaceContents(surfaceDesc)) {
         return;
       }

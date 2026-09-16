@@ -27,19 +27,37 @@ the apparatus that made [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) p
 
 ## Latest Conclusions
 
+The [corrected GT2 matrix](gt2-qualified-policy-matrix.09.md) passes ten fresh
+CPU/GPU-qualified comparisons and independent receipt reauthentication.
+Direct exact costs 3.48–3.69% less whole-iteration CPU than Compatibility in
+both orders; 1MiB/64MiB has a smaller 1.10–2.97% signal versus exact. A/A
+brackets differ by -0.77%/+0.08%. 5MiB shows no useful gain and retains
+61.84MiB with 56 GPU optional denials per two iterations, versus 20.86MiB and
+zero denials/growth for 1MiB. These are scoped CPU/capacity observations, not
+FPS or default promotion. Next: corrected replay-phase attribution, then
+asynchronous residency/pacing and repeated wild comparison for the 1MiB candidate.
+
+The [attachment-authority correction](attachment-authority.08.md) now removes
+the CPU-only software Clear mismatch while preserving commands, identities,
+seed writes and lifetimes. Three fresh GPU-qualified A/A pairs differ by
+0.27–0.63% at 70.7–73.4ms per CPU iteration. All 1,866 ordered draw observations
+match the old verification, and original source/output pixels remain exact.
+This corrects measurement fidelity, not game FPS; old timing receipts are
+not interchangeable with the new ownership contract.
+
 The [CPU slow-mode follow-up](cpu-shadow-slowmode.07.md) localizes the variable
 cost to replay: a same-policy 229→319ms process shift adds about 88.5ms there,
 while completion stays near 0.93ms. Unchanged-image external samples spend
 53–74% of main-thread samples in software attachment Clear. The CPU fixture
 lacks GPU readback and performs shadow fills skipped by the normal provider
 for GPU-owned attachments. Diagnostic-only phase accounting now separates
-these owners and cannot qualify policy timing. Production-equivalent attachment
-authority remains the next harness gate; the exact process-speed mechanism
-and CPU policy ranking remain unresolved.
+these owners and cannot qualify policy timing. The correction above closes
+the attachment-authority gate; the exact old process-speed mechanism remains
+unresolved, independently of corrected policy measurements.
 
-The [same-image GT2 policy matrix](gt2-policy-matrix.06.md) now passes all
+The earlier [same-image GT2 policy matrix](gt2-policy-matrix.06.md) passed all
 20 CPU/GPU-qualified forward/reverse and A/A comparisons (640 measured CPU
-iterations, 80 exact GPU iterations). CPU ranking remains inconclusive:
+iterations, 80 exact GPU iterations). Its CPU ranking remains inconclusive:
 identical-policy process medians shift by -10.28% and +113.16% in the starting
 A/A controls, and several policy differences reverse with execution order.
 The unchanged 1MiB/64MiB candidate uses 20.86MiB GPU capacity-ledger retention

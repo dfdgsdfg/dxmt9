@@ -26,6 +26,7 @@
 #include "render_tape_cpu_diagnostic.hpp"
 
 #include "dxmt9/dxmt9_source_payload.hpp"
+#include "dxmt9/attachment_contents.hpp"
 #include "dxmt9/dxmt9_command_queue.hpp"
 
 #include <algorithm>
@@ -364,6 +365,13 @@ class CpuGeneralTapeExecutor {
     }
     if (!admitCaptureSourcePlan(result)) return result;
     if (!admitEmission(result)) return result;
+    // The admitted grammar has no CPU read/control operations. Seed writes
+    // remain real; post-render evidence is commands, never stale shadows.
+    fixture_.routing->attachmentOwner = AttachmentContentOwner::BackendCommands;
+    if (fixture_.routing->supportsGpuReadback()) {
+      result.failure = "general-executor-unexpected-gpu-readback";
+      return result;
+    }
     diagnostic.set(CpuDiagnosticPhase::HarnessSetup);
     result.windowPageSize = fixture_.routing->queue_.cpuReadyArenaPlanLimits().pageSize;
     result.windowOffload = bool(fixture_.cDevice->replayOffload);

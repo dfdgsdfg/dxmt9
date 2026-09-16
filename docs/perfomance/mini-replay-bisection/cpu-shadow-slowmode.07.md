@@ -11,6 +11,10 @@ related: docs/perfomance/mini-replay-bisection/gt2-policy-matrix.06.md; specs/ex
 
 # CPU slow-mode attribution
 
+Follow-up: [attachment authority](attachment-authority.08.md) corrects this
+CPU-only work mismatch and requalifies semantics/pixels. The measurements and
+code explanation below describe the preceding diagnostic revision.
+
 ## Verdict
 
 The identical-policy process variation is concentrated in **replay CPU work**,

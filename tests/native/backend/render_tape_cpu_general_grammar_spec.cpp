@@ -240,6 +240,12 @@ void grammarRejectsUnsupportedEventsAndControls() {
 }
 
 void commandGrammarReportsRecordLocator() {
+  for (const auto type : {D9C_COMMAND_RECORD_READBACK,
+                         D9C_COMMAND_RECORD_STRETCH_RECT,
+                         D9C_COMMAND_RECORD_UPDATE_SURFACE}) {
+    check(!detail::generalCpuCommandRecordSupported(type),
+          "CPU attachment consumers reject before any resource effects");
+  }
   MiniPlan fixture;
   D9CCommandChunkWireQueryIssue query{};
   fixture.presentBytes = test::singleRecordChunk(

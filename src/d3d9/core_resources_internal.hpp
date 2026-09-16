@@ -20,7 +20,7 @@ namespace dxmt9::core::detail {
 
 bool backendOwnsSurfaceContents(const SurfaceDesc &desc);
 bool backendOwnsTextureContents(const TextureDesc &desc);
-bool canTrustGpuReadback(const std::shared_ptr<dxmt9::Device> &backend);
+bool backendOwnsAttachmentContents(const std::shared_ptr<dxmt9::Device> &backend);
 
 bool renderTraceEnabled();
 std::optional<u64> textureDumpHandle();

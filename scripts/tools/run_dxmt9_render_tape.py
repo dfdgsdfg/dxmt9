@@ -1999,6 +1999,8 @@ def _cpu_general_frame_accepts(
     if (result.get("schema") != "dxmt9.render_tape.cpu_experiment.v1"
             or result.get("grammar") != "general-frame"
             or result.get("semantic_projection") != "final-slot-general-v2"
+            or result.get("attachment_contents") != "backend-command-owned-v1"
+            or result.get("gpu_readback") is not False
             or result.get("reset_policy") != "fresh-device"
             or result.get("cache_policy") != "fresh-runtime"
             or result.get("shared_native_resource_device") is not True

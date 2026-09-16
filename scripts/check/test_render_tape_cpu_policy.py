@@ -79,6 +79,7 @@ def _native(module, policy, mode="verify", repeat=2, source=1):
     return {
         "schema": "dxmt9.render_tape.cpu_experiment.v1",
         "grammar": "general-frame", "semantic_projection": "final-slot-general-v2",
+        "attachment_contents": "backend-command-owned-v1", "gpu_readback": False,
         "backend": "cpu-metal-resources",
         "resource_execution": "cpu-visible-metal-no-gpu-submit", "status": "complete",
         "reset_policy": "fresh-device", "cache_policy": "fresh-runtime",
@@ -147,6 +148,16 @@ def main() -> int:
         verified = _native(module, batch4, repeat=2)
         assert module.verify_receipt(
             verified, batch4, repeat=2, input_inspection=inspection)[0]
+        for field, value in (("attachment_contents", None),
+                             ("attachment_contents", "cpu-shadow"),
+                             ("gpu_readback", None), ("gpu_readback", True)):
+            stale = copy.deepcopy(verified)
+            if value is None:
+                stale.pop(field)
+            else:
+                stale[field] = value
+            assert not module.verify_receipt(
+                stale, batch4, repeat=2, input_inspection=inspection)[0]
         broken = copy.deepcopy(verified)
         broken["iterations"][0]["full_oracle_calls"] = 0
         assert not module.verify_receipt(

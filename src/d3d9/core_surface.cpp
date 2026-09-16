@@ -254,7 +254,7 @@ HResult Device::stretchRect(const std::shared_ptr<Surface> &src,
     backendDesc.destinationRect = dstArea;
     backendDesc.linear = linear;
     upperDevice_->submitStretchRect(backendDesc);
-    if (detail::canTrustGpuReadback(backend_) &&
+    if (detail::backendOwnsAttachmentContents(backend_) &&
         (detail::backendOwnsSurfaceContents(src->desc()) ||
          detail::backendOwnsSurfaceContents(dst->desc()))) {
       return D3D_OK;
@@ -411,6 +411,10 @@ HResult Device::getRenderTargetData(const std::shared_ptr<Surface> &src,
     return D3DERR_INVALIDCALL;
   }
   if (backend_) {
+    const auto readRoute = attachmentReadRoute(backend_->attachmentContentOwner(),
+        detail::backendOwnsSurfaceContents(src->desc()), backend_->supportsGpuReadback());
+    if (readRoute == AttachmentReadRoute::Unavailable)
+      return D3DERR_NOTAVAILABLE;
     ReadbackDesc backendDesc;
     backendDesc.source = src->handle();
     backendDesc.destination = dst->handle();
@@ -446,6 +450,9 @@ HResult Device::getRenderTargetData(const std::shared_ptr<Surface> &src,
       dst->unlockRect();
       return D3D_OK;
     }
+    // The allocation may hold a seed, never the pixels produced by rendering.
+    if (readRoute == AttachmentReadRoute::GpuReadback)
+      return D3DERR_NOTAVAILABLE;
   }
   return updateSurface(src, nullptr, dst, 0, 0);
 }

@@ -21,6 +21,8 @@ Latest tracked row: `H22` - Positive Metal visibility samples can be used as the
 
 ## Recent Leaf Documents
 
+- [GT2 corrected policy matrix: small Direct benefit, no 5MiB promotion](gt2-qualified-policy-matrix.09.md)
+- [CPU attachment authority: corrected Clear work and qualified A/A](attachment-authority.08.md)
 - [CPU slow modes: software attachment Clear and diagnostic-only phase accounting](cpu-shadow-slowmode.07.md)
 - [GT2 route/capacity matrix: exact pixels, unresolved CPU timing variation](gt2-policy-matrix.06.md)
 - [Qualified capacity: denial recovery and compatibility growth verified](capacity-ownership-recovery.05.md)

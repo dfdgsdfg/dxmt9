@@ -1221,6 +1221,18 @@ measurement. CPU-only attachment shadow work not performed by the normal
 GPU-backed provider must be identified before claiming representative
 production replay cost.
 
+Attachment content ownership must be independent of GPU readback capability.
+The general CPU executor must use backend-command-owned attachment contents,
+preserve every Clear/draw/publication and qualified lifetime, and keep GPU
+readback unavailable. Immutable seed writes remain permitted; readback,
+CPU read locks and commands requiring prior CPU attachment pixels must be
+rejected at grammar admission before effects. Seed storage must never be
+reported as post-render pixels. Receipts must identify this ownership contract;
+missing/legacy ownership receipts are not comparable with corrected timings.
+A bounded exhaustive seed/Clear/read refinement, native production-predicate
+binding and the independent real-GPU exact oracle are required before using
+the corrected CPU cost for policy comparisons.
+
 **R-HARN-REPLAY-8.10** When `--gpu-qualify` is requested, no CPU measurement
 child may start until both detailed CPU verification receipts and their
 authenticated input/provider/validator/image identity pair have passed. The

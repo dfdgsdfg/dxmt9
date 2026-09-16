@@ -1116,6 +1116,7 @@ struct CommandQueueArenaLeaseTestAccess {
 namespace {
 
 using namespace dxmt9::core;
+using dxmt9::AttachmentContentOwner;
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -1564,6 +1565,12 @@ dxmt9::d3d9::RawCommandChunk makeRaw(const WireFixture& fixture,
 }
 
 struct RoutingDevice final : dxmt9::Device {
+  AttachmentContentOwner attachmentOwner = AttachmentContentOwner::CpuShadow;
+  bool readbackAvailableForTest = false;
+  AttachmentContentOwner attachmentContentOwner() const noexcept override {
+    return attachmentOwner;
+  }
+  bool supportsGpuReadback() const override { return readbackAvailableForTest; }
   static constexpr std::size_t kTextureUploadObservationCapacity = 16u;
   static constexpr std::size_t kTextureUploadObservationBytes = 64u * 1024u;
 
@@ -8285,7 +8292,7 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
       std::any_of(results.begin(), results.end(), [](const auto& value) {
         return value.nativeCpuNs.has_value();
       });
-  std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1","grammar":"general-frame","semantic_projection":"final-slot-general-v2","backend":"cpu-metal-resources","resource_execution":"cpu-visible-metal-no-gpu-submit","timing_backend":"encode-substituted","status":)"
+  std::cout << R"({"schema":"dxmt9.render_tape.cpu_experiment.v1","grammar":"general-frame","semantic_projection":"final-slot-general-v2","backend":"cpu-metal-resources","resource_execution":"cpu-visible-metal-no-gpu-submit","attachment_contents":"backend-command-owned-v1","gpu_readback":false,"timing_backend":"encode-substituted","status":)"
             << std::quoted(complete ? "complete" : "unresolved")
             << R"(,"run_mode":)" << std::quoted(options.diagnostic ? "diagnose" : options.measurement ? "measure" : "verify")
             << R"(,"phase_accounting":)"
@@ -9104,6 +9111,129 @@ void generalCpuSourceOracleUsesAuthenticatedClosures() {
         "source oracle decoder rejects more than 512 identities per row");
 }
 
+void generalCpuAttachmentContentsRefinement() {
+  using Owner = dxmt9::AttachmentContentOwner;
+  using Read = dxmt9::AttachmentReadRoute;
+  // Exhaust all six-step traces over Seed A/B, Clear A/B, successful and
+  // failed reads for all owner/attachment/readback combinations. The serial
+  // reference always has the newest value; unavailable reads expose nothing.
+  std::size_t staleFallbackCounterexamples = 0u;
+  for (const auto owner : {Owner::CpuShadow, Owner::BackendCommands}) {
+    for (const bool attachment : {false, true}) {
+      for (const bool readback : {false, true}) {
+        for (unsigned trace = 0u; trace < 46656u; ++trace) {
+          unsigned remaining = trace, reference = 0u, shadow = 0u, backend = 0u;
+          unsigned referenceCommands = 0u, commands = 0u;
+          for (unsigned step = 0u; step < 6u; ++step) {
+            const auto action = remaining % 6u;
+            remaining /= 6u;
+            if (action < 2u) {
+              reference = shadow = backend = action + 1u;
+            } else if (action < 4u) {
+              reference = backend = action - 1u;
+              ++referenceCommands;
+              ++commands;
+              if (!dxmt9::backendAttachmentContents(owner, attachment))
+                shadow = reference;
+            } else {
+              const auto route = dxmt9::attachmentReadRoute(owner, attachment, readback);
+              const bool backendOwned = attachment && owner == Owner::BackendCommands;
+              const bool expectedReadable = !backendOwned || (readback && action == 4u);
+              const bool readable = route == Read::CpuShadow ||
+                  (route == Read::GpuReadback && action == 4u);
+              check(readable == expectedReadable, "attachment read refinement availability");
+              if (readable)
+                check((route == Read::CpuShadow ? shadow : backend) == reference,
+                      "attachment read refinement newest value");
+              if (backendOwned && !readable && shadow != reference)
+                ++staleFallbackCounterexamples;
+            }
+            check(commands == referenceCommands, "ownership never elides Clear commands");
+          }
+        }
+      }
+    }
+  }
+  check(staleFallbackCounterexamples != 0u,
+        "bounded model distinguishes stale-seed read fallback mutant");
+
+  using Access = dxmt9::CommandQueueArenaLeaseTestAccess;
+  for (const auto owner : {Owner::CpuShadow, Owner::BackendCommands}) {
+    RuntimeFixture fixture(false, false, true, false);
+    fixture.routing->attachmentOwner = owner;
+    check(!fixture.routing->supportsGpuReadback(), "CPU fixture never fabricates readback");
+    auto& device = fixture.cDevice->dev();
+    auto color = device.createSurface({2, 2, Format::A8R8G8B8, Pool::Default,
+                                       UsageRenderTarget, true, false});
+    auto depth = device.createSurface({2, 2, Format::D24S8, Pool::Default,
+                                       UsageDepthStencil, false, true});
+    auto texture = device.createTexture({2, 2, 1, 1, Format::A8R8G8B8,
+        TextureType::TwoD, Pool::Default, UsageTexture | UsageRenderTarget});
+    check(color && depth && texture, "attachment fixture resources");
+    const auto seed = [](auto& resource) {
+      auto region = resource->lockRect(nullptr, 0u);
+      check(region.data != nullptr, "write-only attachment seed");
+      std::memset(region.data, 0x5a, region.pitch * 2u);
+      resource->unlockRect();
+    };
+    seed(color);
+    seed(depth);
+    auto alias = texture->surfaceLevel(0u);
+    check(alias != nullptr, "texture attachment alias");
+    seed(alias);
+    ClearDesc clear{};
+    clear.clearColor = clear.clearDepth = clear.clearStencil = true;
+    clear.color = {1.0f, 0.0f, 0.0f, 1.0f};
+    clear.depth = 1.0f;
+    clear.stencil = 0xffu;
+    clear.colorAttachments[0].handle = color->handle();
+    clear.colorAttachments[1].handle = texture->handle();
+    clear.depthStencil.handle = depth->handle();
+    check(device.clear(clear) == D3D_OK && fixture.routing->clearCalls == 1u,
+          "production Clear executes exactly once for both authorities");
+    for (auto& surface : {color, depth, alias}) {
+      auto region = surface->lockRect(nullptr, 0u);
+      check(region.data != nullptr, "inspect backing seed, not rendered pixels");
+      const auto* bytes = static_cast<const unsigned char*>(region.data);
+      const bool unchanged = std::all_of(bytes, bytes + region.pitch * 2u,
+                                         [](auto byte) { return byte == 0x5a; });
+      surface->unlockRect();
+      check(unchanged == (owner == Owner::BackendCommands),
+            "production Clear shadow decision is bound to ownership, not readback");
+    }
+    if (owner == Owner::BackendCommands) {
+      auto destination = device.createSurface({2, 2, Format::A8R8G8B8,
+                                               Pool::SystemMem, 0u, false, false});
+      check(device.getRenderTargetData(color, destination) == D3DERR_NOTAVAILABLE,
+            "backend-command readback fails rather than copying the stale seed");
+      check(fixture.routing->flushCalls == 0u,
+            "unavailable readback rejects before submission/flush effects");
+      fixture.routing->readbackAvailableForTest = true;
+      check(device.getRenderTargetData(color, destination) == D3DERR_NOTAVAILABLE &&
+                fixture.routing->flushCalls == 1u,
+            "failed capable readback never falls back to the stale seed");
+      fixture.routing->readbackAvailableForTest = false;
+    }
+    check(Access::publishWriting(fixture.routing->queue_), "publish preserved Clear");
+    unsigned clearCount = 0u;
+    const auto submitted = Access::submitOneWithheld(fixture.routing->queue_, [&](const auto& payload) {
+      for (std::size_t i = 0; i < payload.commandCount(); ++i) {
+        const auto command = payload.commandAt(i);
+        if (command.kind() != MetalCommandKind::Clear) continue;
+        ++clearCount;
+        check(command.command.clear && command.command.clear->clearDepth &&
+                  command.command.clear->colorAttachments[0].handle == color->handle() &&
+                  command.command.clear->depthStencil.handle == depth->handle(),
+              "Clear snapshot and attachment identities preserved");
+      }
+    });
+    check(submitted.submitted && clearCount == 1u &&
+              Access::acknowledgeOne(fixture.routing->queue_) &&
+              Access::finishQueue(fixture.routing->queue_),
+          "preserved Clear completes and reclaims normally");
+  }
+}
+
 void generalCpuMeasurementOmitsOracleOnly() {
   using Ledger = dxmt9::test::CpuDiagnosticLedger;
   using Phase = dxmt9::test::CpuDiagnosticPhase;
@@ -9918,6 +10048,7 @@ int main(int argc, char** argv) {
                       std::string_view(argv[1]) == "--general-cpu-source-oracle-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-reset-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-measurement-spec" ||
+                      std::string_view(argv[1]) == "--general-cpu-attachment-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-alias-spec" ||
                       std::string_view(argv[1]) ==
                           "--two-pending-production-sources-spec" ||
@@ -9953,6 +10084,8 @@ int main(int argc, char** argv) {
         generalCpuResetQualificationUsesFreshFixtures();
       else if (std::string_view(argv[1]) == "--general-cpu-measurement-spec")
         generalCpuMeasurementOmitsOracleOnly();
+      else if (std::string_view(argv[1]) == "--general-cpu-attachment-spec")
+        generalCpuAttachmentContentsRefinement();
       else if (std::string_view(argv[1]) == "--general-cpu-alias-spec")
         generalCpuAliasAfterParentDestroyUsesImmutableIdentity();
       else if (std::string_view(argv[1]) ==
