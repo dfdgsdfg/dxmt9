@@ -27,6 +27,18 @@ the apparatus that made [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) p
 
 ## Latest Conclusions
 
+The [unchanged-image replay owner investigation](replay-cost-owners.11.md)
+locates the largest source-driver sample owners in state/uniform snapshots
+(38.1%) and Direct Slot append (21.0%), ahead of resource closure (9.5%),
+planning (4.0%) and Slot admission (3.6%). Existing scoped timers corroborate
+snapshot and uniform-component lookup work; planning totals only ~0.90ms
+across both harness and production calls. These are diagnostic attribution,
+not additive CPU shares or removable milliseconds: 17.5% of sampled source
+stacks include clocks. Next candidate: cached fixed-uniform projection reuse
+at Direct append, with owner/generation-qualified reuse and unchanged oracles.
+No runtime/default/FPS promotion; wrapper attribution and asynchronous/wild
+evidence remain open.
+
 The [corrected phase attribution](cpu-phase-attribution.10.md) now separates
 replay from fresh setup/admission and resource reconstruction. Four ordered
 diagnostic blocks locate Direct exact's benefit in replay (18.869→16.075ms
@@ -34,8 +46,8 @@ CPU mean), with admission unchanged at 19.270ms. Ordinary brackets repeat a
 3.05–3.08% whole-iteration route benefit. The earlier 1MiB increment is not
 stable: -0.52%/+0.16% in ordinary brackets and only -0.033ms mean replay.
 Diagnostic overhead and fresh-object tails remain separate from policy ranking.
-Next: narrow the ~16ms replay envelope into wrapper versus production planning/
-materialization costs; asynchronous/wild promotion remains open.
+The owner follow-up above narrows the ~16ms replay envelope without treating
+harness setup or resource reconstruction as production replay service.
 
 The [corrected GT2 matrix](gt2-qualified-policy-matrix.09.md) passes ten fresh
 CPU/GPU-qualified comparisons and independent receipt reauthentication.

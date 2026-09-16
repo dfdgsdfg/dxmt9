@@ -21,6 +21,7 @@ Latest tracked row: `H22` - Positive Metal visibility samples can be used as the
 
 ## Recent Leaf Documents
 
+- [GT2 replay owners: snapshot and Slot materialization ahead of planning](replay-cost-owners.11.md)
 - [GT2 CPU phases: replay-local Direct benefit, unstable 1MiB increment](cpu-phase-attribution.10.md)
 - [GT2 corrected policy matrix: small Direct benefit, no 5MiB promotion](gt2-qualified-policy-matrix.09.md)
 - [CPU attachment authority: corrected Clear work and qualified A/A](attachment-authority.08.md)

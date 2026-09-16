@@ -47,6 +47,17 @@ isolated production service attribution, warm-resource reset fidelity and
 asynchronous/wild promotion remain open. See
 [phase evidence](../../docs/perfomance/mini-replay-bisection/cpu-phase-attribution.10.md).
 
+r624/r625 narrow source-driver ownership using unchanged images/input, six
+external stack samples and existing counters; 434 total iterations (eight
+semantic verification, 32 ordinary, 356 diagnostic, 38 warm-up) reauthenticate.
+Snapshots and final Slot append dominate sampled production ancestry;
+planning is smaller. Diagnostic clock overhead is visible, and the planner's
+library-load environment gate requires an explicit pre-launch counter flag.
+No optimization/default/FPS promotion follows. Complete exclusive wrapper/
+production attribution, commit-closure timing, observer-off cost and live
+asynchronous contention remain open under R-HARN-REPLAY-8.7–8.9. See
+[cost owners](../../docs/perfomance/mini-replay-bisection/replay-cost-owners.11.md).
+
 Pre-correction R-HARN-REPLAY-8.7–8.9 evidence: diagnostic-only exclusive
 wall/process-CPU accounting separated fixture, admission, resource work,
 replay, publication, controlled completion and reset. GT2 r620 reauthenticates
