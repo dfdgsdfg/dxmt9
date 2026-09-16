@@ -19,8 +19,13 @@ with two omission counterexamples; 4,096 fresh-value cells and native/x86
 actual setter/cache/hot-hash pins pass. Same-image CPU semantics and GPU exact
 pixels pass; full builds fall 422→1 and bounded CPU medians fall 2.76–3.97%
 in opposite orders. See the [dependency-reuse evidence](../../docs/perfomance/mini-replay-bisection/uniform-dependency-reuse.15.md).
-Broader FFP/clipping pixel transitions, global observer-off service,
-asynchronous/wild non-regression and default promotion remain open.
+The [pixel/wild qualification](../../docs/perfomance/mini-replay-bisection/uniform-invalidation-qualification.16.md)
+adds 30 exact OFF/ON FFP/programmed/FFP clip, mask and StateBlock frames on
+arm64/x86_64, with changed-cache execution counters. Eight same-image
+asynchronous GT1/GT2 wild runs complete with clean error counters and sampled
+visual checks. FPS means change −0.08%/−0.57%; GT2 OFF repeats drift 4.2%, so
+wild performance non-regression is not established. Global observer-off
+service/FPS, broader workloads and default promotion remain open.
 
 R-BACK-2.15.4 uniform-hash observer separation is implemented. Process-isolated
 native mode/counter tests and fresh same-image GT2 CPU/GPU exact evidence pass;

@@ -670,6 +670,21 @@ test('dxmt9-precise-uniform-invalidation-spec', inline_constant_replay_spec,
        'DXMT9_REPLAY_PRECISE_UNIFORM_INVALIDATION=1',
      ])
 
+uniform_invalidation_metal_spec = executable(
+  'dxmt9-uniform-invalidation-metal-spec',
+  'uniform_invalidation_metal_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-uniform-invalidation-metal-spec', python3,
+     args: [join_paths(meson.project_source_root(), 'tests/scripts/test_uniform_invalidation_metal.py'),
+            uniform_invalidation_metal_spec.full_path()],
+     env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1'],
+     depends: uniform_invalidation_metal_spec,
+     is_parallel: false,
+     timeout: 150)
+
 cpu_ready_session_join_spec = executable(
   'dxmt9-cpu-ready-session-join-spec',
   'cpu_ready_session_join_spec.cpp',

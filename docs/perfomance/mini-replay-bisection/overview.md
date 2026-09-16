@@ -27,15 +27,24 @@ the apparatus that made [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) p
 
 ## Latest Conclusions
 
+The [pixel/wild follow-up](uniform-invalidation-qualification.16.md) closes
+the bounded cached FFP/clipping GPU gate: 30 exact OFF/ON frames pass on
+arm64/x86_64, with nine actual full-build-to-reuse transitions. Eight
+same-image asynchronous GT1/GT2 runs have clean error counters and sampled
+pixels, but FPS means change −0.08%/−0.57%. GT2 OFF repeats drift 4.2%.
+Targeted rebuild work falls sharply without an established throughput gain;
+default promotion remains withheld pending global observer-off `.3dr`
+comparisons and noise-qualified non-regression.
+
 The default-off [known-setter dependency refinement](uniform-dependency-reuse.15.md)
 reduces GT2 batch full-uniform builds from 422 to one: all 421 comparable
 rebuilds had identical fixed values. Shared-predicate bounded refinement,
 actual setter/cache tests and same-image CPU/GPU exact evidence pass. Batch
 uniform-build scopes fall ~1.56→0.52ms; ordinary CPU medians fall 2.76–3.97%
 in opposite orders with parent-only hash observation. No new cache or layout
-authority is added. Broader FFP/clipping pixels, global observer-off,
-asynchronous and wild/FPS qualification remain open; default promotion is
-withheld. The remaining hash parent is ~0.73ms under this observation mode.
+authority is added. The follow-up above adds bounded FFP/clipping and wild
+correctness evidence; global observer-off and wild performance qualification
+remain open. The remaining hash parent is ~0.73ms under this observation mode.
 
 The [uniform-hash observer separation](uniform-dependencies-observer.14.md)
 prices nested timing/publication at 0.467–0.481ms, or 27.7–28.3% of the

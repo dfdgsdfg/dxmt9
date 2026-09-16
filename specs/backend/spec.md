@@ -981,6 +981,18 @@ finite-domain refinement under R-VERIF-1.5, not a proof of arbitrary inputs,
 thread interleavings, driver behavior or pixels. GPU exact readback and wild
 non-regression remain separate promotion gates.
 
+`dxmt9-uniform-invalidation-metal-spec` supplies a concrete cache-path oracle:
+one persistent bound VB, real Device setters and binding-agnostic batch
+snapshot construction feed actual Metal readback. FFP/programmed/FFP mode
+changes use a nonidentity view so world-space and clip-space planes have
+different observable halfspaces. Clipping enable, plane mask, plane sign and
+StateBlock restoration have known-color probes. Separate OFF/ON processes
+must agree on every active pixel byte, reach all Metal draws, and prove nine
+irrelevant-key rebuilds became full-payload reuse. No-GPU hosts report skip,
+not successful pixel evidence. This fixture does not assert Direct Slot lease
+placement or asynchronous source-import ordering; tape and wild layers own
+those integration checks.
+
 `DXMT9_PERF_UNIFORM_DEPENDENCY_PROBE` is a separate, default-off observation
 of binding-agnostic batch full rebuilds, not all snapshot paths. It compares
 five semantic fixed-value groups against the previous valid full payload,
