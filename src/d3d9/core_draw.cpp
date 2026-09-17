@@ -4,6 +4,7 @@
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_d3d9_bytecode.hpp"
 #include "d3d9_snapshot_miss_observer.hpp"
+#include "d3d9_stateblock_snapshot_effect_observer.hpp"
 #include "d3d9_uniform_hash_observer.hpp"
 #include "d3d9_uniform_dependency_observer.hpp"
 #include "d3d9_uniform_dependencies.hpp"
@@ -1305,6 +1306,14 @@ bool batchMissSemanticReuseProbeEnabled() {
   static const bool enabled = [] {
     return dxmt9::util::getenvFlag(
         "DXMT9_PERF_BATCH_MISS_SEMANTIC_REUSE_PROBE");
+  }();
+  return enabled;
+}
+
+bool stateBlockSnapshotEffectObserverEnabled() {
+  static const bool enabled = [] {
+    return dxmt9::util::getenvFlag(
+        "DXMT9_PERF_STATEBLOCK_CACHE_EFFECT_OBSERVER");
   }();
   return enabled;
 }
@@ -3619,6 +3628,22 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
     dxmt9::perf::countD3D9DrawStateCacheBatchMissReason(
         invalidationReasonMask);
     const bool hadCachedState = cache.valid;
+    const bool observeStateBlockEffect =
+        stateBlockSnapshotEffectObserverEnabled() && hadCachedState &&
+        (invalidationReasonMask & DrawStateInvalidationStateBlock) != 0;
+    dxmt9::d3d9::StateBlockSnapshotEffectBaseline* previousStateBlockEffect =
+        nullptr;
+    if (observeStateBlockEffect) {
+      previousStateBlockEffect =
+          dxmt9::d3d9::captureStateBlockSnapshotEffectBaseline(
+              cache.shaderLayout, cache.hot.key,
+              dxmt9::d3d9::SnapshotMissUniformGenerations{
+                  .aggregate = cache.uniformGeneration,
+                  .vertexConstants = cache.vertexShaderConstantGeneration,
+                  .pixelConstants = cache.pixelShaderConstantGeneration,
+              },
+              cache.uniformPayloadHash);
+    }
     const auto previousVertexConstantGeneration =
         cache.vertexShaderConstantGeneration;
     const auto previousPixelConstantGeneration =
@@ -3896,6 +3921,23 @@ Device::cachedBaseDrawStateForSubmissionBatch() {
     cache.textureStageStateFlatGeneration = drawTextureStageStateFlatGeneration_;
     cache.samplerStateFlatGeneration = drawSamplerStateFlatGeneration_;
     cache.valid = true;
+    if (previousStateBlockEffect != nullptr) {
+      const auto& previous = *previousStateBlockEffect;
+      const auto comparison =
+          dxmt9::d3d9::compareStateBlockSnapshotEffect(
+              previous.shaderLayout, cache.shaderLayout, previous.key,
+              cache.hot.key, previous.uniformGenerations,
+              dxmt9::d3d9::SnapshotMissUniformGenerations{
+                  .aggregate = cache.uniformGeneration,
+                  .vertexConstants = cache.vertexShaderConstantGeneration,
+                  .pixelConstants = cache.pixelShaderConstantGeneration,
+              },
+              previous.uniformPayloadHash, cache.uniformPayloadHash);
+      dxmt9::perf::countD3D9SnapshotCacheStateBlockEffectObservation(
+          comparison.sameCanonical, comparison.shaderLayoutChanged,
+          comparison.keyChanged, comparison.uniformGenerationChanged,
+          comparison.uniformPayloadChanged, comparison.resourceIdentityChanged);
+    }
     drawStateInvalidationReasonMask_ = DrawStateInvalidationUnknown;
   }
   return cache;

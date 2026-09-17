@@ -7,6 +7,7 @@
 #include "dxmt9_draw_encoder_diagnostics.hpp"
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_perf_counters.hpp"
+#include "dxmt9_query_policy.hpp"
 #include "dxmt9_resource_pool.hpp"
 
 #include <algorithm>
@@ -576,6 +577,14 @@ bool prepareRenderPassWithStoreProofLookahead(
     return false;
   }
   auto& passInfo = prepared.info;
+  // BEGIN publishes even the preceding unqueried writer; END closes a
+  // query-only reader. Neither boundary proves that an attachment is dead.
+  // Preserve provider-wide, not just when this pass has a visibility buffer:
+  // source-local suffix exhaustion and deferred Unknown resolution cannot
+  // establish live-out safety across a later query membership boundary.
+  const bool preserveQueryAttachments = query::metalOcclusionEnabled();
+  const bool preserveAttachments = preserveQueryAttachments ||
+      ctx.queue.renderTapeExactAttachmentPreservation();
   const bool discardAfterPresent = !clear.has_value() && ctx.queue.backBufferDiscardAfterPresent_ &&
                                    hot.colorAttachments[0].handle == ctx.queue.currentBackBuffer_;
   for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
@@ -619,10 +628,10 @@ bool prepareRenderPassWithStoreProofLookahead(
       perf::countRenderPassNoLookaheadCause(colorNoLookaheadCause);
     }
     const bool colorDontCareStore =
-        !ctx.queue.renderTapeExactAttachmentPreservation() &&
+        !preserveAttachments &&
         (colorStoreProof == perf::RenderPassColorStoreProof::AllowNextClear ||
          colorStoreProof == perf::RenderPassColorStoreProof::AllowDeadNoPresent);
-    const bool colorLateStoreEligible = lateRenderPassStoreEligible(
+    const bool colorLateStoreEligible = !preserveQueryAttachments && lateRenderPassStoreEligible(
         colorStoreProof == perf::RenderPassColorStoreProof::BlockNoLookahead, colorNoLookaheadCause,
         activePass.lookaheadMayHaveFutureSources, static_cast<bool>(surface->resolveTexture),
         hot.colorAttachments[i].handle == ctx.queue.currentBackBuffer_);
@@ -631,7 +640,9 @@ bool prepareRenderPassWithStoreProofLookahead(
                                                        : WMTStoreActionStore;
     if (surface->resolveTexture) {
       attachment.resolve_texture = surface->resolveTexture.handle;
-      attachment.store_action = WMTStoreActionMultisampleResolve;
+      attachment.store_action = preserveQueryAttachments
+          ? WMTStoreActionStoreAndMultisampleResolve
+          : WMTStoreActionMultisampleResolve;
     }
     if (actionSummary) {
       ++actionSummary->colorAttachmentCount;
@@ -714,14 +725,15 @@ bool prepareRenderPassWithStoreProofLookahead(
       perf::countRenderPassNoLookaheadCause(legacyNoLookaheadCause);
     }
     const auto allowsDontCare = [&](perf::RenderPassDepthStoreProof proof) {
-      return !ctx.queue.renderTapeExactAttachmentPreservation() &&
+      return !preserveAttachments &&
              !hasResolveTarget &&
              (proof == perf::RenderPassDepthStoreProof::AllowNextClear ||
               proof == perf::RenderPassDepthStoreProof::AllowDeadNoPresent);
     };
     const auto allowsLateStore = [&](perf::RenderPassDepthStoreProof proof,
                                      perf::RenderPassNoLookaheadCause cause) {
-      return lateRenderPassStoreEligible(proof == perf::RenderPassDepthStoreProof::BlockNoLookahead,
+      return !preserveQueryAttachments &&
+             lateRenderPassStoreEligible(proof == perf::RenderPassDepthStoreProof::BlockNoLookahead,
                                          cause, activePass.lookaheadMayHaveFutureSources,
                                          hasResolveTarget,
                                          /*presentSourceConstrained=*/false);

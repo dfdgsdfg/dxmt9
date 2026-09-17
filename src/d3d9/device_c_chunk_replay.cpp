@@ -2650,6 +2650,16 @@ int32_t replayPlannedChunk(D9CDevice* device,
       markLegacyResources(device, raw);
       return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal);
     }
+    if (begin.status == dxmt9::CommandQueue::CpuReadyArenaBeginStatus::
+                            OcclusionScopeUnsupported) {
+      // Occlusion membership is frozen on compatibility/direct ChunkSlots;
+      // Arena admission was rejected before any effects or Tape reservation.
+      // Route the complete raw event through the same bounded compatibility
+      // owner, never back through TemporaryPressure.
+      supplyReplayEntry.cancel();
+      markLegacyResources(device, raw);
+      return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal);
+    }
     if (segmentSerial && begin.status ==
             dxmt9::CommandQueue::CpuReadyArenaBeginStatus::RecoverableFailure) {
       // Admission and builder construction happen before replay invokes any

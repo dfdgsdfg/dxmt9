@@ -11,8 +11,9 @@ D3D9 queries let the application probe GPU state asynchronously. Because dxmt9
 uses a deferred command queue, query results are not available until the GPU has
 processed the commands that surround the query. The implementation uses POD
 query operations plus CPU-visible ordinary and initializer completion fences.
-Section 7 describes the implemented completion path. Sections 4–5 describe
-the target Metal result providers, which are not yet fully implemented.
+Section 7 describes the implemented completion path. Section 4 describes the
+opt-in Metal occlusion result provider; section 5 describes the still-incomplete
+timestamp target.
 
 The default-off deferred-END candidate (`R-CORE-11.5(d–e)`) retains that
 completion predicate and initializer authority. A queue-local writer owns one
@@ -128,33 +129,64 @@ initializer completion is observed independently.
 An occlusion query counts the number of samples that pass the depth-stencil test
 between `BEGIN` and `END`.
 
-Metal provides visibility result buffers: a `MTLBuffer` where the GPU writes a
-per-render-pass sample count.
+The bounded `DXMT9_METAL_OCCLUSION` candidate uses Metal visibility buffers;
+the existing default primitive-count approximation is not GPU visibility.
+The candidate is opt-in until its remaining integration evidence is qualified.
 
-```
-OcclusionQueryPool:
-  visibilityBuffer: MTLBuffer
-  slotAllocator: ring
-```
+The PE QueryIssue wire record is unchanged. Unix core BEGIN creates an
+`OcclusionResult` qualified by object identity, issue generation and reset epoch.
+Core constructs an immutable active `OcclusionScope` (at most 64 simultaneous
+queries); replacing membership first publishes the previous ordinary writer.
+Publication attaches that scope to its final ChunkSlot. Repeated BEGIN replaces
+only that query's result generation; repeated END preserves its result. Old
+published scopes retain old generations independently of public Query lifetime.
+Released active owners are pruned at the next query boundary, and reset drains
+before clearing all membership. No strong device Query registry delays release.
 
-`Issue(D3DISSUE_BEGIN)` allocates an 8-byte aligned slot from the shared
-visibility buffer and appends a BEGIN record carrying the opaque visibility
-buffer handle and slot offset. Queue replay enables
-`MTLVisibilityResultModeCounting` on the active render encoder.
+Each actual render pass allocates a separate, zeroed CPU-readable eight-byte
+contribution. Counting is enabled once at pass creation and stays enabled for
+all user draws in that encoder: Metal permits setting a particular visibility
+offset only once per pass. Clear/copy/helper work closes the user encoder and
+does not contribute.
+At successful completion the retained contribution is added once to every
+member of that pass's immutable scope; callbacks precede the queue completion
+waterline. Each contribution's command-buffer status must be checked, including
+mid-chunk command buffers. Reusing one slot across encoders must never be assumed
+to accumulate. Saturating 64-bit totals are clamped to DWORD on public reads.
 
-`Issue(D3DISSUE_END)` appends an END record. Queue replay disables visibility
-counting on the active render encoder, and the frontend records the issuing
-chunk sequence ID.
+`GetData` requires the ordinary/initializer END fence, current reset epoch, no
+failure and zero outstanding contributions. Zero outstanding contributions
+before encoding is not itself completion. Pending and failed reads preserve
+caller bytes. Allocation, encoder and command-buffer failure cannot report a
+successful zero. Even the synchronous query-policy override does not bypass
+the candidate's actual result fence.
 
-`GetData(&count, sizeof(DWORD), flags)` returns `S_FALSE` until the issuing chunk
-is complete. Once resolved, it reads the shared visibility slot, clamps the
-`uint64` count to `DWORD`, writes the public result, and returns `S_OK`.
+The initial provider intentionally preserves membership boundaries: Arena
+admission returns a pre-effect compatibility-required status; ordinary/direct
+ChunkSlots carry the scope. Scoped sources cannot join cross-source encode
+sessions, frame-graph reorder/DCE or parallel passes. A scope change closes an
+active render pass. Queried FFP draws use portable FFP because tile-FFP alpha
+rejection occurs after rasterization. Production queries take precedence over
+the diagnostic visibility scout's single Metal visibility attachment. EVENT
+END coalescing policy is unchanged; occlusion membership changes are eager
+boundaries and must not be advertised as a batching optimization.
 
-Visibility result buffers must use CPU-readable storage. Slot reuse is delayed
-until every chunk that can write the slot has completed. Queries that span
-render pass boundaries accumulate counts from all passes that had the query
-active; if replay opens a new render encoder while the query is active, replay
-re-enables visibility counting for the same slot.
+Early-prefix publication is suppressed whenever this provider is enabled,
+including before the first BEGIN, so an unscoped prefix cannot park waiting
+for a scope-incompatible successor.
+
+While the provider is enabled, pass stores conservatively preserve color,
+depth and stencil across every source boundary, including unqueried
+predecessors. Neither source-local DontCare proof nor deferred Unknown store
+selection is admitted. MSAA color attachments use StoreAndMultisampleResolve
+so the resolved image and the multisample contents both survive a later Load.
+Ordinary Load/Clear selection is unchanged. Query cuts are not live-out death;
+re-admitting store elision requires a separate cross-boundary proof.
+
+Evidence owners: `QueryOcclusionResults.tla`, the shared predicates in
+`include/dxmt9/query_occlusion.hpp`, core lifecycle tests, and the production
+Metal occlusion oracle. Model safety does not prove Metal sample bytes or wild
+performance; remaining gates belong to the D3D9 and verification gap rows.
 
 ---
 
@@ -274,6 +306,17 @@ snapshot. Event quotas reserve 128 Issue rows independently from up to 384
 poll rows; omitted rows are counted. These bounded diagnostics do not claim a
 complete per-query lifecycle trace for a long game run.
 
+Its separate recent-evidence join keeps up to 128 END summaries keyed by
+queue incarnation, query identity, issue ordinal and epoch. A recent-128
+sequence/marker ring joins publication, actual submission and successful
+completion, including stages observed before END returns. Shared sequence
+evidence applies to every matching query. `DXMT9_QUERY_OBSERVER_SKIP_ENDS`
+selects a later window by skipping a fixed number of END observations; skipped,
+dropped and evicted counts remain explicit. Missing stages are not inferred
+from S_OK. The END timestamp is core END-return observation, not API entry;
+publication may precede it. Arena publication and independent initializer
+stage timestamps are not covered by this observer.
+
 `DXMT9_QUERY_SPLIT_OBSERVER` observes ordinary source publications by reason
 and completion-bearing tail command buffers handed to `QueueLifecycleController`.
 Its `command_buffer` category excludes mid-chunk sub-CB commits and initializer
@@ -282,6 +325,6 @@ CBs. Compare it with the separate `sub_command_buffers` commit counter and
 attribution. Final group totals and the first 128 identity events have distinct
 populations. The observer does not turn the candidate on.
 
-The current core occlusion/timestamp value providers are not made into real
-Metal visibility/timestamp results by this change. Their data semantics remain
-a separate type-specific gap, even when completion fencing is sound.
+Completion fencing alone does not prove query data. Section 4's separately
+gated occlusion provider supplies real visibility values; GPU timestamp data
+remains a separate gap.

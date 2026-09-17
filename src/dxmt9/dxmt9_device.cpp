@@ -161,6 +161,7 @@ class DeviceImpl final : public Device {
             renderTapePublisherCaptureEnabled()),
         cpuReadyTapeDirectReplayEnabled_(cpuReadyTapeDirectReplayEnabled()),
         directChunkSlotReplayEnabled_(directChunkSlotReplayEnabled()),
+        metalOcclusionEnabled_(query::metalOcclusionEnabled()),
         renderPartitionConfig_(renderPartitionConfig()),
         queue_(wmt_device_, limits_, cpuReadyTapeDirectReplayEnabled_,
                renderTapePublisherCaptureEnabled_, renderPartitionConfig_) {
@@ -444,6 +445,12 @@ class DeviceImpl final : public Device {
   bool usesAsyncQueryFences() const noexcept override {
     return query::asynchronousFencesEnabled();
   }
+  bool usesMetalOcclusion() const noexcept override {
+    return metalOcclusionEnabled_;
+  }
+  bool setOcclusionScope(query::OcclusionScopeRef scope) noexcept override {
+    return metalOcclusionEnabled_ && queue_.setOcclusionScope(std::move(scope));
+  }
   query::EndReceipt publishQueryEnd() noexcept override {
     return queue_.publishQueryEnd();
   }
@@ -497,6 +504,7 @@ class DeviceImpl final : public Device {
   bool renderTapePublisherCaptureEnabled_ = false;
   bool cpuReadyTapeDirectReplayEnabled_ = false;
   bool directChunkSlotReplayEnabled_ = false;
+  bool metalOcclusionEnabled_ = false;
   render::RenderPartitionConfig renderPartitionConfig_{};
   CommandQueue queue_;
 };

@@ -3687,9 +3687,23 @@ bool QueueLifecycleController::commitCurrentChunk(
     if (onAfterPublish) {
       onAfterPublish();
     }
-    query::splitdiag::note(query::splitdiag::Kind::Publication,
-        submissionBinding_.queryQueueIdentity, slot.seqId,
-        writingPayload->commandCount(), unsigned(writingPayload->publishReason));
+    if (::dxmt9::query::timeline_diag::enabled()) {
+      ::dxmt9::query::timeline_diag::MarkerWitness marker{};
+      if (writingPayload->queryEndMarker) {
+        const auto owner = writingPayload->queryEndMarker->owner();
+        marker = {owner.queue, owner.index, owner.generation,
+                  owner.storageGeneration};
+      }
+      query::splitdiag::notePublication(
+          submissionBinding_.queryQueueIdentity, slot.seqId,
+          writingPayload->commandCount(), unsigned(writingPayload->publishReason),
+          marker);
+    } else {
+      query::splitdiag::note(
+          query::splitdiag::Kind::Publication,
+          submissionBinding_.queryQueueIdentity, slot.seqId,
+          writingPayload->commandCount(), unsigned(writingPayload->publishReason));
+    }
     // Cold replay-source capture observes the exact Ready publication before
     // the control slot becomes visible to the encode worker. The nullable
     // check is publication-scoped; no receipt storage or metadata lookup is
@@ -4436,6 +4450,10 @@ bool QueueLifecycleController::runEncodeIteration(
   }
   if (::dxmt9::supply::enabled())
     ::dxmt9::supply::record(::dxmt9::supply::Event::EncodeBegin, this, source.seqId);
+  if (query::timeline_diag::enabled()) {
+    query::timeline_diag::encodeStart(
+        submissionBinding_.queryQueueIdentity, source.seqId);
+  }
   auto qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
                                  : std::chrono::steady_clock::time_point{};
   std::optional<QueueSubmissionRecord> submission;
@@ -4493,6 +4511,10 @@ bool QueueLifecycleController::runEncodeIteration(
                            : std::chrono::steady_clock::time_point{};
   if (::dxmt9::supply::enabled())
     ::dxmt9::supply::record(::dxmt9::supply::Event::EncodeEnd, this, source.seqId);
+  if (query::timeline_diag::enabled()) {
+    query::timeline_diag::encodeEnd(
+        submissionBinding_.queryQueueIdentity, source.seqId);
+  }
 
   if (submission.has_value()) {
     if (submission->fixedCompletionSources.empty()) {
@@ -6325,6 +6347,15 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
           submissionBinding_.queryQueueIdentity, completionSources.back().seqId,
           completionSources.size());
     }
+    // The command buffer commit and completion handoff above are the first
+    // point at which submission is real. Publication and this edge are kept
+    // separate so a parked/deferred END cannot be mistaken for a submitted CB.
+    if (query::timeline_diag::enabled()) {
+      for (const auto& source : completionSources) {
+        query::timeline_diag::actualSubmit(
+            submissionBinding_.queryQueueIdentity, source.seqId);
+      }
+    }
     if (completionWaitActive) {
       ++completionWaitEnqueues_;
     }
@@ -6458,6 +6489,10 @@ bool QueueLifecycleController::processOnePendingCompletion() {
       pending.commandBuffer.status() == WMTCommandBufferStatusError) {
     queryCompletionFailed_.store(true, std::memory_order_release);
   }
+  const bool completionSucceeded =
+      (!pending.commandBuffer ||
+       pending.commandBuffer.status() != WMTCommandBufferStatusError) &&
+      !queryCompletionFailed_.load(std::memory_order_acquire);
 
   // The Metal tail has completed, but a corrupt shadow must fail-stop before
   // diagnostics, callbacks, waterline publication, or Tape completion.
@@ -6689,6 +6724,16 @@ bool QueueLifecycleController::processOnePendingCompletion() {
     }
     if (binding.finishCv) {
       binding.finishCv->notify_all();
+    }
+    // Waterline/Tape completion has settled successfully at this point. Keep
+    // the timeline edge after all validation and settlement so it cannot turn
+    // a status sample or an early callback into GPU completion evidence.
+    if (query::timeline_diag::enabled()) {
+      for (const auto& source : completionSources) {
+        query::timeline_diag::completion(
+            submissionBinding_.queryQueueIdentity, source.seqId,
+            completionSucceeded);
+      }
     }
   }
   // pending.commandBuffer is released when `pending` goes out of scope.

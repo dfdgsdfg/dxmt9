@@ -128,8 +128,10 @@ remain `MTLStoreActionStore`.
 Symmetric rule for color attachments: a color attachment may use
 `MTLStoreActionDontCare` when the encoder can prove the contents are not
 read by any subsequent operation. The same proof set as `R-BACK-15.7`
-applies. MSAA resolve overrides this rule: a color attachment with a
-resolve target must use `MTLStoreActionMultisampleResolve`.
+applies. MSAA resolve overrides discard: a color attachment with a resolve
+target must resolve its contents. When later passes may Load the multisample
+storage, it must use `MTLStoreActionStoreAndMultisampleResolve`; otherwise
+`MTLStoreActionMultisampleResolve` is sufficient.
 
 ### 3.3 No look-ahead beyond the current chunk (`R-BACK-15.9`)
 
@@ -137,6 +139,12 @@ Live-out determination must use only operations already imported into the
 current execution chunk. The encoder must not block waiting for future
 chunks to determine the answer; a defensive `Store` is the correct fallback
 when the next operation is unknown.
+
+Query membership boundaries (`R-CORE-8.2(a)`) are not attachment-death
+evidence. The bounded Metal occlusion provider must preserve stores on both
+queried passes and their unqueried predecessors; its conservative policy also
+excludes deferred Unknown selection. Resolve must retain multisample storage
+when the next query pass may Load it (StoreAndMultisampleResolve).
 
 When the selected backend supplies a validated command permutation for the
 chunk, "next operation" means the next operation in that actual replay order,

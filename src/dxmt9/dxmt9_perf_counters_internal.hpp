@@ -898,6 +898,14 @@ struct Counters {
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticObserverUniformGeneration{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticObserverUniformPayload{0};
   std::atomic<std::uint64_t> d3d9SnapshotCacheBatchMissSemanticObserverResourceIdentity{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheStateBlockEffectObserverSamples{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheStateBlockEffectObserverSame{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheStateBlockEffectObserverChanged{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheStateBlockEffectObserverShaderLayout{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheStateBlockEffectObserverKey{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheStateBlockEffectObserverUniformGeneration{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheStateBlockEffectObserverUniformPayload{0};
+  std::atomic<std::uint64_t> d3d9SnapshotCacheStateBlockEffectObserverResourceIdentity{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterUnknown{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterMutableState{0};
   std::atomic<std::uint64_t> d3d9DrawStateCacheMissAfterDrawPacket{0};

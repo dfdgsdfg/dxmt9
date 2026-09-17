@@ -3579,6 +3579,31 @@ void countD3D9SnapshotCacheBatchMissSemanticObservation(
   }
 }
 
+void countD3D9SnapshotCacheStateBlockEffectObservation(
+    bool sameCanonical, bool shaderLayoutChanged, bool keyChanged,
+    bool uniformGenerationChanged, bool uniformPayloadChanged,
+    bool resourceIdentityChanged) {
+  auto& c = counters();
+  add(c.d3d9SnapshotCacheStateBlockEffectObserverSamples);
+  add(sameCanonical ? c.d3d9SnapshotCacheStateBlockEffectObserverSame
+                    : c.d3d9SnapshotCacheStateBlockEffectObserverChanged);
+  if (shaderLayoutChanged) {
+    add(c.d3d9SnapshotCacheStateBlockEffectObserverShaderLayout);
+  }
+  if (keyChanged) {
+    add(c.d3d9SnapshotCacheStateBlockEffectObserverKey);
+  }
+  if (uniformGenerationChanged) {
+    add(c.d3d9SnapshotCacheStateBlockEffectObserverUniformGeneration);
+  }
+  if (uniformPayloadChanged) {
+    add(c.d3d9SnapshotCacheStateBlockEffectObserverUniformPayload);
+  }
+  if (resourceIdentityChanged) {
+    add(c.d3d9SnapshotCacheStateBlockEffectObserverResourceIdentity);
+  }
+}
+
 void countResourceMarkOverlapIngress(std::uint64_t entries) {
   add(counters().resourceMarkOverlapIngressEntries, entries);
 }

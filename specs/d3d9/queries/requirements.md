@@ -30,6 +30,31 @@ visibility result buffers. The returned sample count may be an approximation and
 may be clamped to boolean visibility where the backend cannot provide an exact
 count.
 
+#### GPU result ownership (`R-CORE-8.2(a)`)
+
+An implemented GPU visibility path must not substitute submitted primitives for
+passing samples. BEGIN creates an issue-qualified result owner; reissue never
+resets storage still referenced by encoded work. Overlapping query windows may
+share a pass contribution but must not duplicate a draw. Active membership
+changes are ordered boundaries, including empty and repeated BEGIN/END.
+
+Each actual render pass contributes independently. Reusing an offset in a new
+Metal encoder must not assume that Metal adds to a previous pass's value.
+Results become readable only after the actual END receipt completes and all
+contributions have retired successfully. Capacity/allocation/encoding failure
+must fail closed, never produce synthetic visibility or a successful zero.
+Clear, copy and internal helper draws must not contribute. Reset/release must
+not invalidate storage still owned by submitted work.
+
+BEGIN/END publication is not attachment death. Color, depth, stencil and
+multisample contents needed by a later query must survive these boundaries,
+including the unqueried predecessor published by BEGIN. Source-local suffix
+exhaustion is not evidence that a later query will not read the attachment.
+
+The initial bounded provider may retain an eager source boundary and reject
+unsupported replay/parallel admission before effects. Missing wild coverage
+keeps the provider opt-in; that gate does not make synthetic results correct.
+
 ### 1.3 Validation and Support Probes (`R-CORE-8.3`)
 
 Query validation must follow Windows D3D9-visible behavior. Unsupported or

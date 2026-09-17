@@ -4,6 +4,7 @@
 #include "dxmt9/core_compat_draw_batch.hpp"
 #include "dxmt9/core_constants.hpp"
 #include "dxmt9/query_end_marker.hpp"
+#include "dxmt9/query_occlusion.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2044,6 +2045,7 @@ class Surface : public std::enable_shared_from_this<Surface> {
 class Query : public std::enable_shared_from_this<Query> {
  public:
   explicit Query(QueryType type);
+  ~Query();
 
   Query(const Query&) = delete;
   Query& operator=(const Query&) = delete;
@@ -2059,6 +2061,10 @@ class Query : public std::enable_shared_from_this<Query> {
   u64 issueOrdinal() const noexcept { return issueOrdinal_; }
   u64 issueDeviceEpoch() const noexcept { return issueDeviceEpoch_; }
   query::Fence backendFence() const noexcept { return backendFence_.snapshot(); }
+  std::optional<query::WriterIdentity> backendMarkerOwner() const noexcept {
+    return backendFence_.marker ? std::optional<query::WriterIdentity>(
+        backendFence_.marker->owner()) : std::nullopt;
+  }
   bool deferredBackendFence() const noexcept { return bool(backendFence_.marker); }
   HRESULT getData(void* output, size_t size, u32 flags, u64 completedSequenceId) const;
 
@@ -2069,6 +2075,7 @@ class Query : public std::enable_shared_from_this<Query> {
   u64 issueOrdinal_ = 0;
   u64 issueDeviceEpoch_ = 0;
   query::EndReceipt backendFence_{};
+  std::shared_ptr<query::OcclusionResult> occlusionResult_;
   bool failedIssue_ = false;
   u64 issuedSequenceId_ = 0;
   bool active_ = false;
@@ -2641,8 +2648,8 @@ class Device : public std::enable_shared_from_this<Device> {
   std::vector<std::weak_ptr<Texture>> textures_;
   std::vector<std::weak_ptr<Surface>> surfaces_;
   std::vector<std::shared_ptr<SwapChain>> swapChains_;
-  std::vector<std::shared_ptr<Query>> queries_;
   std::shared_ptr<Query> activeOcclusionQuery_;
+  query::OcclusionScopeRef activeGpuOcclusionScope_;
   u64 activeOcclusionCount_ = 0;
   std::vector<u8> upVertexScratch_;
   std::vector<u8> upIndexScratch_;

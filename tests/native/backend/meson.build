@@ -1,4 +1,32 @@
 # Backend descriptor / pipeline / replay / hazard / capture / counter / render-pass specs.
+query_bridge_poll_observer_spec = executable(
+  'dxmt9-query-bridge-poll-observer-spec', 'query_bridge_poll_observer_spec.cpp',
+  include_directories: dxmt9_inc, dependencies: dxmt9_util_dep,
+)
+test('dxmt9-query-bridge-poll-observer-spec', query_bridge_poll_observer_spec,
+     env: dxmt9_native_test_env)
+
+query_timeline_observer_spec = executable(
+  'dxmt9-query-timeline-observer-spec', 'query_timeline_observer_spec.cpp',
+  include_directories: dxmt9_inc, dependencies: dxmt9_util_dep,
+)
+test('dxmt9-query-timeline-observer-spec', query_timeline_observer_spec,
+     env: dxmt9_native_test_env)
+
+query_occlusion_metal_spec = executable(
+  'dxmt9-query-occlusion-metal-spec', 'query_occlusion_metal_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+foreach tile : ['off', 'force']
+  test('dxmt9-query-occlusion-' + tile + '-metal-spec', query_occlusion_metal_spec,
+    env: dxmt9_native_test_env_vars + [
+      'MTL_DEBUG_LAYER=1', 'DXMT9_METAL_OCCLUSION=1', 'DXMT_PERF_COUNTERS=1',
+      'DXMT9_TILE_FFP=' + tile, 'DXMT9_ASYNC_QUERY_FENCES=1'],
+    is_parallel: false, timeout: 60)
+endforeach
+
 test('dxmt9-runtime-policy-retirement-audit', python3,
      args: [join_paths(meson.project_source_root(),
                       'tests/scripts/test_runtime_policy_retirement.py')])
@@ -325,6 +353,15 @@ resource_mark_snapshot_observer_spec = executable(
 
 test('dxmt9-resource-mark-snapshot-observer-spec',
      resource_mark_snapshot_observer_spec)
+
+stateblock_snapshot_effect_observer_spec = executable(
+  'dxmt9-stateblock-snapshot-effect-observer-spec',
+  'stateblock_snapshot_effect_observer_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+
+test('dxmt9-stateblock-snapshot-effect-observer-spec',
+     stateblock_snapshot_effect_observer_spec)
 
 # R-BACK-2.88 / R-VERIF-2.23 bounded source-to-reclaim lifecycle observer.
 # Uses production pure predicates plus a deterministic condition-variable fake

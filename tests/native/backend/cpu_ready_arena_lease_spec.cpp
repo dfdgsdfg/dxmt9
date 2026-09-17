@@ -719,6 +719,72 @@ void testActiveSingleDrawPreservesUpAndStateBlockBypass() {
         "single-run publish must commit final state-block draw semantics");
 }
 
+void testOcclusionScopeRejectsArenaBeforeReservation() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+
+  const auto layout = makeLayout(singleDrawCapacity());
+  auto scope = std::make_shared<query::OcclusionScope>();
+  scope->results[0] = std::make_shared<query::OcclusionResult>(17, 1, 1);
+  scope->count = 1;
+
+  CommandQueue scoped(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  check(scoped.setOcclusionScope(scope),
+        "occlusion scope must install on an idle queue");
+  const auto single = scoped.beginCpuReadyArenaSource(201, layout);
+  check(single.status == CommandQueue::CpuReadyArenaBeginStatus::
+                             OcclusionScopeUnsupported &&
+            !single,
+        "active occlusion scope must reject single-source Arena admission");
+  check(CommandQueueArenaLeaseTestAccess::residentSources(scoped) == 0u &&
+            CommandQueueArenaLeaseTestAccess::nextSeqId(scoped) == 1u &&
+            CommandQueueArenaLeaseTestAccess::control(scoped, 0).state ==
+                ChunkSlot::State::Free,
+        "single-source occlusion rejection must precede effects and reservation");
+
+  const std::array layouts{layout, layout};
+  const auto batch = scoped.beginCpuReadyArenaSources(202, layouts);
+  check(batch.status == CommandQueue::CpuReadyArenaBeginStatus::
+                              OcclusionScopeUnsupported &&
+            !batch,
+        "active occlusion scope must reject batch Arena admission");
+  check(CommandQueueArenaLeaseTestAccess::residentSources(scoped) == 0u &&
+            CommandQueueArenaLeaseTestAccess::nextSeqId(scoped) == 1u,
+        "batch occlusion rejection must leave Tape high-water unchanged");
+
+  // Clearing membership restores both Arena admission forms. Use a fresh
+  // queue for each success case to settle each lease through its own abort
+  // contract without coupling the independent restoration assertions.
+  CommandQueue restored(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  check(restored.setOcclusionScope(scope),
+        "restoration fixture must install an occlusion scope");
+  check(restored.setOcclusionScope({}),
+        "empty scope must be accepted on an idle queue");
+  auto restoredSingle = restored.beginCpuReadyArenaSource(203, layout);
+  check(restoredSingle.status == CommandQueue::CpuReadyArenaBeginStatus::Ready &&
+            restoredSingle.has_value(),
+        "empty scope must restore single-source Arena admission");
+  // A single-source lease has no reversible fallback contract; settle this
+  // unused fixture through its documented terminal abort before testing the
+  // independent batch restoration fixture below.
+  check(!restoredSingle->abortForFallback(),
+        "restored single-source admission must retain its terminal abort contract");
+
+  CommandQueue restoredBatch(CommandQueue::ArenaLeaseTestQueueTag{},
+                             BackendLimits{});
+  check(restoredBatch.setOcclusionScope(scope) &&
+            restoredBatch.setOcclusionScope({}),
+        "batch restoration fixture must clear occlusion membership");
+  auto restoredSources =
+      restoredBatch.beginCpuReadyArenaSources(204, layouts);
+  check(restoredSources.status ==
+                CommandQueue::CpuReadyArenaBeginStatus::Ready &&
+            restoredSources.has_value(),
+        "empty scope must restore batch Arena admission");
+  check(restoredSources->abortForFallback(),
+        "restored batch admission must support pre-effect rollback");
+}
+
 void testTypedBeginStatusAndMissingAdmissionSnapshot() {
   using namespace dxmt9;
   using namespace dxmt9::core;
@@ -1923,6 +1989,7 @@ int main(int argc, char**) {
     testPublishedQueryFences();
     testExplicitControlIndexGroupingAndExactSnapshotMark();
     testActiveMismatchFailStopsWithoutFallback();
+    testOcclusionScopeRejectsArenaBeforeReservation();
     testLegacyWriterBoundaryBeforeStrictAdmission();
     testActiveSingleDrawPreservesUpAndStateBlockBypass();
     testTypedBeginStatusAndMissingAdmissionSnapshot();

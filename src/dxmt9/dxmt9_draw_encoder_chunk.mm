@@ -1522,6 +1522,13 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
   if (!ctx.device || !ctx.queue.valid()) {
     return std::nullopt;
   }
+  // Query membership is stamped on ordinary/direct slots at publication.
+  // Arena sources are rejected before this encoder is reached, so this
+  // synchronous view is sufficient for every production GPU-query source.
+  const query::OcclusionScopeRef sourceOcclusionScope =
+      payload.isLegacy() && payload.legacyPayload()
+          ? payload.legacyPayload()->occlusionScope
+          : query::OcclusionScopeRef{};
   if (drawCaptureSourceTrackingEnabled()) {
     selectDrawCaptureSource(reinterpret_cast<std::uintptr_t>(&ctx.pool),
                             sourceSeqId, options.partitionSource);
@@ -1557,8 +1564,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
       options.partitionRanges;
   thread_local ProductionEncodePartitionPlanStorage productionPlanStorage;
   const bool parallelPartitionRequested =
+      !sourceOcclusionScope &&
       options.partitionExecutionMode ==
-      render::PartitionExecutionMode::ExplicitParallel;
+          render::PartitionExecutionMode::ExplicitParallel;
   // DXMT9_PARALLEL_PASS_DRAW_QUANTUM — diagnostic/tuning env knob for the
   // parallel-pass economics floor (R-BACK-2.68..2.75). Read once and shared by
   // both the shadow snapshot producer's child subdivision and the economics
@@ -1771,6 +1779,13 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
                                              options.partitionSource,
                                              sourceSeqId,
                                              slotIndex);
+  // A membership change is an observable source boundary. Do this before the
+  // first command can reuse the prior encoder, including an active->null
+  // transition when the final query END was recorded in the preceding source.
+  if (encoderState.activeRenderEncoder &&
+      session.pass.occlusionScope != sourceOcclusionScope) {
+    lifecycle.endRender(perf::EncoderSplitReason::OrderedControl);
+  }
   const bool activeSeedMergeAttributionEnabled =
       !options.activeSeedMergeTargets.empty() &&
       activeSeedMergeTicketAttributionEnabled(
@@ -2164,12 +2179,52 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
         drawState.hot->depthStencil.handle.value,
         psoHandleBucket(renderPsoHandle));
     const u64 openedRenderEncoderIndex = diagnosticsState.renderEncoderIndex;
-    diagnosticsState.activeVisibilityScout =
-        makeVisibilityScoutPass(ctx.device, encodeChunkSeqId,
-                                openedRenderEncoderIndex);
+    passState.occlusionScope = sourceOcclusionScope;
+    passState.occlusionBuffer = {};
+    passState.occlusionResults = nullptr;
+    passState.occlusionAttached = false;
+    if (sourceOcclusionScope) {
+      bool completionCapacityReserved = true;
+      try {
+        // Reserve the completion record before any Metal effect. The later
+        // callback insertion is then a non-allocating move in the normal
+        // path, preserving the visibility buffer until CB completion.
+        completionState.completionCallbacks.reserve(
+            completionState.completionCallbacks.size() + 1u);
+      } catch (...) {
+        sourceOcclusionScope->fail();
+        completionCapacityReserved = false;
+      }
+      WMTBufferInfo visibilityInfo{};
+      if (completionCapacityReserved) {
+        visibilityInfo.length = sizeof(std::uint64_t);
+        visibilityInfo.options = WMTResourceStorageModeShared;
+        passState.occlusionBuffer = ctx.device.newBuffer(visibilityInfo);
+        if (!passState.occlusionBuffer || !visibilityInfo.memory.ptr) {
+          sourceOcclusionScope->fail();
+          passState.occlusionBuffer = {};
+        } else {
+          std::memset(visibilityInfo.memory.ptr, 0,
+                      sizeof(std::uint64_t));
+          passState.occlusionResults =
+              static_cast<std::uint64_t*>(visibilityInfo.memory.ptr);
+        }
+      }
+      // Production query work owns the one visibility slot. The diagnostic
+      // scout is deliberately suppressed so the two users never alias the
+      // attachment or alter the query count.
+      diagnosticsState.activeVisibilityScout.reset();
+    } else {
+      diagnosticsState.activeVisibilityScout =
+          makeVisibilityScoutPass(ctx.device, encodeChunkSeqId,
+                                  openedRenderEncoderIndex);
+    }
     const WMT::Buffer visibilityBuffer{
-        diagnosticsState.activeVisibilityScout ? diagnosticsState.activeVisibilityScout->buffer.handle
-                              : NULL_OBJECT_HANDLE};
+        passState.occlusionResults
+            ? passState.occlusionBuffer.handle
+            : diagnosticsState.activeVisibilityScout
+                  ? diagnosticsState.activeVisibilityScout->buffer.handle
+                  : NULL_OBJECT_HANDLE};
     traceRenderPassProgress("before-begin-render-pass", lookaheadStartIndex,
                             clear.has_value());
     const auto storeProofLookahead =
@@ -2186,9 +2241,12 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
     // about the first use after the encoder actually closes. Tile-FFP can
     // resplit on a later eligibility change, so it keeps the conservative
     // one-record proof until that path has an equivalent suffix classifier.
-    const auto tileFfpSelection =
-        dxmt9::pipeline::selectTileFfpForPass(drawState,
-                                               ctx.pool.supportsApple3());
+    const auto tileFfpSelection = sourceOcclusionScope
+        ? dxmt9::pipeline::TileFfpSelection{
+              dxmt9::pipeline::TileFfpDecision::Portable,
+              dxmt9::pipeline::TileFfpFallbackReason::UnsupportedState}
+        : dxmt9::pipeline::selectTileFfpForPass(
+              drawState, ctx.pool.supportsApple3());
     const RenderPassStoreProofActivePass storeProofActivePass{
         .hot = drawState.hot,
         .allowSameAttachmentContinuation =
@@ -2225,13 +2283,33 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
                             lookaheadStartIndex, clear.has_value());
     encoderState.hasActiveRender = static_cast<bool>(encoderState.activeRenderEncoder);
     if (!encoderState.hasActiveRender) {
+      if (sourceOcclusionScope) {
+        sourceOcclusionScope->fail();
+      }
       diagnosticsState.activeVisibilityScout.reset();
+      passState.occlusionScope.reset();
+      passState.occlusionBuffer = {};
+      passState.occlusionResults = nullptr;
+      passState.occlusionAttached = false;
       // No Metal encoder owns these provisional actions. Discard the copied
       // ledger before a later command can resolve/account stale Unknown state.
       passState.lateStore = {};
       renderPassActions = {};
     }
     if (encoderState.hasActiveRender) {
+      if (passState.occlusionResults && passState.occlusionScope) {
+        // Metal permits one visibility-result offset per render pass. Keep
+        // counting enabled for the entire scoped pass so consecutive user
+        // draws accumulate into this fresh slot; ending the encoder resets
+        // the mode before any subsequent pass can bind another slot.
+        encoderState.activeRenderEncoder.setVisibilityResultMode(
+            WMTVisibilityResultModeCounting, 0);
+        for (std::size_t i = 0; i < passState.occlusionScope->count; ++i) {
+          passState.occlusionScope->results[i]->pending.fetch_add(
+              1, std::memory_order_acq_rel);
+        }
+        passState.occlusionAttached = true;
+      }
       for (std::size_t i = 0; i < passState.lateStore.count; ++i) {
         const auto& attachment = passState.lateStore.attachments[i];
         if (!attachment.unresolved()) {
@@ -2309,6 +2387,7 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
     {
       const auto& selection = tileFfpSelection;
       passState.activePassUsesTileFfp =
+          !sourceOcclusionScope &&
           selection.decision == dxmt9::pipeline::TileFfpDecision::Tile;
       if (passState.activePassUsesTileFfp) {
         perf::countTileFfpPass();
@@ -2585,7 +2664,7 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
     const auto coordinatorProof = makeParallelPassCoordinatorProofSnapshot(
         ParallelPassCoordinatorProofSnapshotInput{
             .firstPassActionEpoch = parallelPassSeedActionEpoch,
-            .queryAbsent = true,
+            .queryAbsent = !sourceOcclusionScope,
             .updateTextureAbsent = true,
             .captureInactive = !ctx.queue.metalCaptureEnabled() &&
                 !captureAlreadyStartedAtChunkBegin &&
@@ -3294,19 +3373,21 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
           : 0ull;
       traceEncodeCommand("drawrun.before-encode-draw", commandIndex,
                          Kind::DrawRun, command);
-      if (encodeDraw(ctx, commandBuffer, encoderState.activeRenderEncoder, drawStateView, sourceSeqId,
-                     /*skipBaseStateBind=*/skipBaseStateBind,
-                     anyUpData ? &preData : nullptr,
-                     &param,
-                     recordPayloadArena,
-                     hasBindingOverride ? &bindingOverride : nullptr,
-                     hasBindingSnapshot ? &bindingSnapshot : nullptr,
-                     /*tileFfpMode=*/passState.activePassUsesTileFfp,
-                     /*argbufHybridMode=*/bindingState.activePassUsesArgbufHybrid,
-                     /*argbufResourceArray=*/bindingState.activePassUsesArgbufResourceArray,
-                     /*argbufDirectCbufMode=*/bindingState.activePassUsesArgbufDirectCbuf,
-                     /*reopenArgbufHybrid=*/reopenArgbuf,
-                     DrawNativeShadowView{
+      const bool encodedDraw = encodeDraw(
+          ctx, commandBuffer, encoderState.activeRenderEncoder, drawStateView,
+          sourceSeqId,
+          /*skipBaseStateBind=*/skipBaseStateBind,
+          anyUpData ? &preData : nullptr,
+          &param,
+          recordPayloadArena,
+          hasBindingOverride ? &bindingOverride : nullptr,
+          hasBindingSnapshot ? &bindingSnapshot : nullptr,
+          /*tileFfpMode=*/passState.activePassUsesTileFfp,
+          /*argbufHybridMode=*/bindingState.activePassUsesArgbufHybrid,
+          /*argbufResourceArray=*/bindingState.activePassUsesArgbufResourceArray,
+          /*argbufDirectCbufMode=*/bindingState.activePassUsesArgbufDirectCbuf,
+          /*reopenArgbufHybrid=*/reopenArgbuf,
+          DrawNativeShadowView{
                          .uniformDirty = &bindingState.uniformDirty,
                          .textureSampler = &bindingState.textureSamplerShadow,
                          .encoderBreakdown =
@@ -3333,7 +3414,11 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
                              argbufPsPayloadSourceChanged,
                          .bindingOverridePrefetchedPsoCompatible =
                              bindingOverridePrefetchedPsoCompatible,
-                     })) {
+                     });
+      if (!encodedDraw && sourceOcclusionScope) {
+        sourceOcclusionScope->fail();
+      }
+      if (encodedDraw) {
         traceEncodeCommand("drawrun.after-encode-draw-ok", commandIndex,
                            Kind::DrawRun, command);
         bindingState.activeDrawStateKey = drawStateView.hot->key;
@@ -4005,7 +4090,8 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
       }
       return false;
     };
-    if (!eligibility.eligible || suppressRecordedMetalCalls(ctx) ||
+    if (sourceOcclusionScope || !eligibility.eligible ||
+        suppressRecordedMetalCalls(ctx) ||
         ctx.drawRecorder || perf::encoderBreakdownEnabled() ||
         commitPolicy == MidChunkCommitPolicy::PerNRecords ||
         encoderState.activeRenderEncoder || encoderState.activeBlitEncoder ||
@@ -4952,26 +5038,61 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     core::SourcePayloadView payload,
     std::uint64_t sourceSeqId,
     EncodeChunkOptions options) {
+  const query::OcclusionScopeRef occlusionScope =
+      payload.isLegacy() && payload.legacyPayload()
+          ? payload.legacyPayload()->occlusionScope
+          : query::OcclusionScopeRef{};
   if (options.sessionLookaheadBorrows) {
     std::optional<core::metalqueue::QueueSubmissionRecord> result;
-    const bool visited =
-        options.sessionLookaheadBorrows->visitResolvedProjection(
-        options.sessionLookaheadSources,
-        [&](std::span<const core::metalqueue::ResolvedPublishedSource> sources)
-            noexcept {
-          try {
-            result = encodeChunkImpl(ctx, slotIndex, payload, sourceSeqId,
-                                     std::move(options), sources);
-            return true;
-          } catch (...) {
-            return false;
-          }
-        });
-    return visited ? std::move(result) : std::nullopt;
+    bool visited = false;
+    try {
+      visited = options.sessionLookaheadBorrows->visitResolvedProjection(
+          options.sessionLookaheadSources,
+          [&](std::span<const core::metalqueue::ResolvedPublishedSource> sources)
+              noexcept {
+            try {
+              result = encodeChunkImpl(ctx, slotIndex, payload, sourceSeqId,
+                                       std::move(options), sources);
+              return true;
+            } catch (...) {
+              return false;
+            }
+          });
+    } catch (...) {
+      if (occlusionScope) {
+        visited = false;
+      } else {
+        throw;
+      }
+    }
+    if (!visited || !result) {
+      // A null submission is otherwise interpreted by the ordinary queue as
+      // an inline-completed source. Scoped GPU queries must fail closed here,
+      // or GetData could incorrectly observe a successful zero result after
+      // an encoder/command-buffer failure.
+      if (occlusionScope) {
+        occlusionScope->fail();
+      }
+      return std::nullopt;
+    }
+    return result;
   }
   const auto fallbackLookaheadSources = options.sessionLookaheadSources;
-  return encodeChunkImpl(ctx, slotIndex, payload, sourceSeqId,
-                         std::move(options), fallbackLookaheadSources);
+  std::optional<core::metalqueue::QueueSubmissionRecord> result;
+  try {
+    result = encodeChunkImpl(ctx, slotIndex, payload, sourceSeqId,
+                             std::move(options), fallbackLookaheadSources);
+  } catch (...) {
+    if (occlusionScope) {
+      result.reset();
+    } else {
+      throw;
+    }
+  }
+  if (!result && occlusionScope) {
+    occlusionScope->fail();
+  }
+  return result;
 }
 
 std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(

@@ -302,6 +302,13 @@ HResult Device::resetValidated(const PresentParameters& params) {
   if (backend_) {
     upperDevice_->flush();
   }
+  if (activeGpuOcclusionScope_) {
+    if (!upperDevice_ || !upperDevice_->setOcclusionScope({}))
+      return D3DERR_DEVICELOST;
+    activeGpuOcclusionScope_.reset();
+  }
+  activeOcclusionQuery_.reset();
+  activeOcclusionCount_ = 0;
   completeUpTo(submittedSequenceId_);
   // Drain-before-teardown: Reset waits for queued work to drain before
   // invalidating default-pool resources.

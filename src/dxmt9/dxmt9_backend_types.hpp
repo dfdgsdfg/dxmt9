@@ -4,6 +4,7 @@
 #include "dxmt9/assert.hpp"
 #include "dxmt9_chunk_slot_dimensions.hpp"
 #include "dxmt9_perf_counters.hpp"
+#include "dxmt9/query_occlusion.hpp"
 
 #include <algorithm>
 #include <array>
@@ -995,6 +996,10 @@ struct ChunkSlot {
   DetachedCapacityReceipt admissionCapacityReceipt{};
   // Cold candidate: one group per writer. Receipts survive Slot reclamation.
   std::shared_ptr<query::EndMarker> queryEndMarker{};
+  // Cold query membership snapshot. The queue stamps this at publication so
+  // the encoder observes the exact writer scope even when the queue advances
+  // to a different active scope before completion.
+  query::OcclusionScopeRef occlusionScope{};
   dxmt9::perf::ChunkPublishReason publishReason =
       dxmt9::perf::ChunkPublishReason::Unknown;
   bool pipelinePrefetchSealed = false;
@@ -1126,6 +1131,7 @@ struct ChunkSlot {
 
   void clearCommands() {
     queryEndMarker.reset();
+    occlusionScope.reset();
     publishReason = dxmt9::perf::ChunkPublishReason::Unknown;
     pipelinePrefetchSealed = false;
 #define DXMT9_CLEAR_CHUNK_SLOT_VECTOR(                                      \

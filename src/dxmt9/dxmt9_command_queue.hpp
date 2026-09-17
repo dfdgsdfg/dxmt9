@@ -28,6 +28,7 @@
 #include "dxmt9_queue.hpp"
 #include "dxmt9/wsi_surface_protocol.hpp"
 #include "dxmt9/query_end_marker.hpp"
+#include "dxmt9/query_occlusion.hpp"
 #include "dxmt9_hud.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_presenter.hpp"
@@ -591,6 +592,9 @@ class CommandQueue {
     // source that must remain the frame's Present tail. Replay must use that
     // owner through the Legacy path; it must not wait or flush it.
     CompatibilityTailOwned,
+    // GPU occlusion currently binds only to compatibility/direct ChunkSlots;
+    // Arena admission must fall back before the raw replay has any effects.
+    OcclusionScopeUnsupported,
     Stopped,
     Corrupt,
     Invalid,
@@ -990,6 +994,15 @@ class CommandQueue {
 
   // Query END publishes an actual prefix without a GPU completion wait.
   // Issue retains normal bounded publication admission; polling never does.
+  // Replaces the queue's cold occlusion membership snapshot. A non-empty
+  // writer is published before the replacement, so no encoded source can
+  // observe membership from both scopes.
+  bool setOcclusionScope(query::OcclusionScopeRef scope) noexcept;
+  // Caller must hold mutex_. This is intentionally a cold publication hook;
+  // prepareSlotForPublish copies the shared reference into the source payload.
+  query::OcclusionScopeRef occlusionScopeLocked() const noexcept {
+    return occlusionScope_;
+  }
   query::EndReceipt publishQueryEnd() noexcept;
   query::Poll pollQueryFence(const query::EndReceipt& receipt, bool flush) noexcept;
   query::Progress queryProgress() noexcept;
@@ -1422,6 +1435,9 @@ class CommandQueue {
   }
 
   std::uint64_t lastCommittedSeqId_ = 0;  // cpu-committed watermark
+  // Current writer membership, guarded by mutex_. The published ChunkSlot
+  // owns its own shared reference until source retirement/reclaim.
+  query::OcclusionScopeRef occlusionScope_{};
   std::uint64_t presentDequeuedSeqId_ = 0; // encode worker reached present
   std::uint64_t presentCompletedSeqId_ = 0; // present-bearing command buffer completed
   std::uint64_t deferredPresentBoundaryTargetSeqId_ = 0; // next-Present run-ahead boundary

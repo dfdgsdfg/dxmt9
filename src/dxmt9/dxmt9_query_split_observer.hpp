@@ -1,4 +1,5 @@
 #pragma once
+#include "dxmt9_query_timeline_observer.hpp"
 #include "util/log/log.hpp"
 #include <array>
 #include <cstdlib>
@@ -38,8 +39,8 @@ struct Ledger {
   }
 };
 // No clock, diagnostic lock, storage initialization or payload walk while off.
-inline void note(Kind kind, std::uint64_t queue, std::uint64_t sequence,
-                 std::uint64_t extent = 0, unsigned reason = 0) {
+inline void record(Kind kind, std::uint64_t queue, std::uint64_t sequence,
+                   std::uint64_t extent, unsigned reason) {
   if (!enabled()) return;
   static Ledger ledger;
   std::lock_guard lock(ledger.mutex);
@@ -53,5 +54,19 @@ inline void note(Kind kind, std::uint64_t queue, std::uint64_t sequence,
         "kind=%s queue=%llu seq=%llu extent=%llu reason=%u", names[index],
         (unsigned long long)queue, (unsigned long long)sequence,
         (unsigned long long)extent, reason);
+}
+
+inline void note(Kind kind, std::uint64_t queue, std::uint64_t sequence,
+                 std::uint64_t extent = 0, unsigned reason = 0) {
+  if (kind == Kind::Publication)
+    timeline_diag::publication(queue, sequence);
+  record(kind, queue, sequence, extent, reason);
+}
+
+inline void notePublication(std::uint64_t queue, std::uint64_t sequence,
+                            std::uint64_t extent, unsigned reason,
+                            timeline_diag::MarkerWitness marker) {
+  timeline_diag::publication(queue, sequence, marker);
+  record(Kind::Publication, queue, sequence, extent, reason);
 }
 } // namespace dxmt9::query::splitdiag

@@ -8,6 +8,7 @@
 #include "dxmt9_perf_counters.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <limits>
 #include <span>
 #include <utility>
@@ -276,6 +277,60 @@ void LifecycleRuntime::resolveLateStoreForStoreCause(
   accountLateStoreActions();
 }
 
+void LifecycleRuntime::enqueueOcclusionContribution() {
+  auto& pass = storage_.pass;
+  if (!pass.occlusionAttached || !pass.occlusionScope ||
+      !pass.occlusionResults || !pass.occlusionBuffer ||
+      !call_.commandBuffer) {
+    return;
+  }
+
+  // Keep both the originating command buffer and the visibility slot alive
+  // until this callback runs. A session may split into several command
+  // buffers; the tail status alone is not evidence that this pass completed.
+  auto scope = std::move(pass.occlusionScope);
+  auto buffer = std::move(pass.occlusionBuffer);
+  auto* results = pass.occlusionResults;
+  // Copy the reference rather than rebuilding it from the raw handle. The
+  // latter adopts without retaining and could release the originating CB
+  // before this callback observes its completion status.
+  auto origin = call_.commandBuffer;
+  pass.occlusionResults = nullptr;
+  pass.occlusionAttached = false;
+  try {
+    storage_.completion.completionCallbacks.push_back(
+        [scope, buffer = std::move(buffer), results,
+         origin = std::move(origin)]() mutable {
+          (void)buffer;
+          const bool completed = origin &&
+              origin.status() == WMTCommandBufferStatusCompleted;
+          if (completed) {
+            for (std::size_t i = 0; i < scope->count; ++i) {
+              scope->results[i]->add(*results);
+            }
+          } else {
+            scope->fail();
+          }
+          for (std::size_t i = 0; i < scope->count; ++i) {
+            auto& pending = scope->results[i]->pending;
+            const auto prior = pending.fetch_sub(1, std::memory_order_acq_rel);
+            DXMT_ASSERT(prior != 0);
+            (void)prior;
+          }
+        });
+  } catch (...) {
+    // The command has already been encoded, so report a failed issue rather
+    // than leaving a permanently pending result (or exposing a zero count).
+    scope->fail();
+    for (std::size_t i = 0; i < scope->count; ++i) {
+      auto& pending = scope->results[i]->pending;
+      const auto prior = pending.fetch_sub(1, std::memory_order_acq_rel);
+      DXMT_ASSERT(prior != 0);
+      (void)prior;
+    }
+  }
+}
+
 perf::RenderPassLateStoreResolutionCause
 LifecycleRuntime::lateStoreCloseCause(perf::EncoderSplitReason reason) const noexcept {
   if (reason != perf::EncoderSplitReason::Final) {
@@ -328,6 +383,7 @@ void LifecycleRuntime::completeParallelRenderPass(
   DXMT_ASSERT(!storage_.diagnostics.activeDepthAttachmentDump.handle);
   DXMT_ASSERT(storage_.diagnostics.activeDrawTextureDumps.empty());
   DXMT_ASSERT(!storage_.diagnostics.activeVisibilityScout.has_value());
+  DXMT_ASSERT(!storage_.pass.occlusionAttached);
   perf::countRenderPassEnd(reason);
   storage_.diagnostics.activeEncoderBreakdown.emit(reason);
   storage_.binding.activeStreamIbStaging.begin(false);
@@ -379,6 +435,7 @@ void LifecycleRuntime::endRender(perf::EncoderSplitReason reason) {
     storage_.encoder.activeRenderEncoder.popDebugGroup();
     storage_.encoder.activeRenderEncoder.endEncoding();
   }
+  enqueueOcclusionContribution();
   maybeEncodeColorAttachmentDump(call_.commandBuffer, ctx_.device,
                                  storage_.diagnostics.activeColorAttachmentDump,
                                  storage_.diagnostics.activeDepthAttachmentDump,
@@ -407,6 +464,10 @@ void LifecycleRuntime::endRender(perf::EncoderSplitReason reason) {
   storage_.diagnostics.activeColorAttachmentDump = {};
   storage_.diagnostics.activeDepthAttachmentDump = {};
   storage_.diagnostics.activeDrawTextureDumps.clear();
+  storage_.pass.occlusionScope.reset();
+  storage_.pass.occlusionBuffer = {};
+  storage_.pass.occlusionResults = nullptr;
+  storage_.pass.occlusionAttached = false;
   storage_.pass.activeInstance = {};
   storage_.pass.lateStore = {};
   storage_.encoder.activeRenderEncoder = {};

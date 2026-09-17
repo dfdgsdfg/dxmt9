@@ -1112,6 +1112,10 @@ void countD3D9SnapshotCacheBatchMissSemanticObservation(
     bool sameSemantic, bool shaderLayoutChanged,
     bool uniformGenerationChanged, bool uniformPayloadChanged,
     bool resourceIdentityChanged);
+void countD3D9SnapshotCacheStateBlockEffectObservation(
+    bool sameCanonical, bool shaderLayoutChanged, bool keyChanged,
+    bool uniformGenerationChanged, bool uniformPayloadChanged,
+    bool resourceIdentityChanged);
 void countD3D9SnapshotUniformBuildCall();
 void countD3D9SnapshotUniformBuildVsConstCopyCpuTime(std::uint64_t nanoseconds);
 void countD3D9SnapshotUniformBuildPsConstCopyCpuTime(std::uint64_t nanoseconds);

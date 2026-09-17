@@ -208,6 +208,11 @@ Query::Query(QueryType type) : type_(type) {
  *                       completedSeqId >= qIssuedSeqId[q].
  *   GPUComplete     -> Device::completeUpTo() advances completedSeqId.
  */
+Query::~Query() {
+  if (occlusionResult_)
+    occlusionResult_->abandoned.store(true, std::memory_order_release);
+}
+
 void Query::begin(u64 sequenceId) {
   ++issueOrdinal_;
   backendFence_ = {};
@@ -583,7 +588,6 @@ HResult SwapChain::present(std::shared_ptr<dxmt9::Device> device,
 std::shared_ptr<Query> Device::createQuery(QueryType type) {
   auto query = std::make_shared<Query>(type);
   if (!query->identity()) return {};
-  queries_.push_back(query);
   return query;
 }
 
@@ -798,12 +802,54 @@ HResult Device::issueQuery(const std::shared_ptr<Query> &query, bool begin) {
     query->failedIssue_ = true;
     return D3DERR_DEVICELOST;
   }
-  const bool async = upperDevice_ && upperDevice_->usesAsyncQueryFences();
+  const bool gpuOcclusion = upperDevice_ &&
+      query->type() == QueryType::Occlusion && upperDevice_->usesMetalOcclusion();
+  // GPU result bytes always require an actual fence, even if the diagnostic
+  // synchronous policy is selected for other query kinds.
+  const bool async = upperDevice_ &&
+      (upperDevice_->usesAsyncQueryFences() || gpuOcclusion);
   if (async && deviceLost_) return D3DERR_DEVICELOST;
   if (async && flushCompatibilityReplayDrawBatch() ==
                    CompatibilityDrawBatchFlushStatus::Failed) {
     query->failedIssue_ = true;
     return D3DERR_DEVICELOST;
+  }
+  if (gpuOcclusion) {
+    try {
+      auto next = std::make_shared<query::OcclusionScope>();
+      if (activeGpuOcclusionScope_) {
+        for (std::size_t i = 0; i < activeGpuOcclusionScope_->count; ++i) {
+          const auto& result = activeGpuOcclusionScope_->results[i];
+          if (result != query->occlusionResult_ &&
+              !result->abandoned.load(std::memory_order_acquire))
+            next->results[next->count++] = result;
+        }
+      }
+      auto result = query->occlusionResult_;
+      if (begin || !result || result->epoch != queryDeviceEpoch_) {
+        result = std::make_shared<query::OcclusionResult>(
+            query->identity_, query->issueOrdinal_ + 1, queryDeviceEpoch_);
+      }
+      if (begin) {
+        if (next->count == query::OcclusionScope::capacity) {
+          query->failedIssue_ = true;
+          return E_OUTOFMEMORY;
+        }
+        next->results[next->count++] = result;
+      }
+      query::OcclusionScopeRef scope = next->count ? next : nullptr;
+      // The backend freezes old membership before any caller-visible issue
+      // state changes. Failure cannot relabel an already queued draw.
+      if (!upperDevice_->setOcclusionScope(scope)) {
+        query->failedIssue_ = true;
+        return D3DERR_DEVICELOST;
+      }
+      activeGpuOcclusionScope_ = std::move(scope);
+      query->occlusionResult_ = std::move(result);
+    } catch (...) {
+      query->failedIssue_ = true;
+      return E_OUTOFMEMORY;
+    }
   }
   // TLA+: QuerySeqId / IssueQuery
   // The command stream assigns the next seqId, and D3DISSUE_END records that
@@ -815,13 +861,13 @@ HResult Device::issueQuery(const std::shared_ptr<Query> &query, bool begin) {
   DXMT_ASSERT(submittedSequenceId_ >= completedSequenceId_);
   if (begin) {
     query->begin(submittedSequenceId_);
-    if (query->type() == QueryType::Occlusion) {
+    if (query->type() == QueryType::Occlusion && !gpuOcclusion) {
       activeOcclusionQuery_ = query;
       activeOcclusionCount_ = 0;
     }
   } else {
     query->end(submittedSequenceId_);
-    if (query->type() == QueryType::Occlusion) {
+    if (query->type() == QueryType::Occlusion && !gpuOcclusion) {
       query->resolve(activeOcclusionCount_);
       activeOcclusionQuery_.reset();
     } else if (query->type() == QueryType::Timestamp) {
@@ -848,7 +894,9 @@ HResult Device::getQueryData(const std::shared_ptr<Query> &query, void *output,
     return D3DERR_INVALIDCALL;
   }
   const auto poll = [&]() -> HResult {
-    if (upperDevice_ && upperDevice_->usesAsyncQueryFences()) {
+    if (upperDevice_ && (upperDevice_->usesAsyncQueryFences() ||
+                        (query->type() == QueryType::Occlusion &&
+                         upperDevice_->usesMetalOcclusion()))) {
       if (deviceLost_ || query->failedIssue_ ||
           (query->issueOrdinal_ && query->issueDeviceEpoch_ != queryDeviceEpoch_))
         return D3DERR_DEVICELOST;
@@ -863,6 +911,12 @@ HResult Device::getQueryData(const std::shared_ptr<Query> &query, void *output,
         case query::Poll::Invalid:
         case query::Poll::Failed: return D3DERR_DEVICELOST;
         case query::Poll::Complete: break;
+        }
+        if (query->occlusionResult_) {
+          if (!query->occlusionResult_->readableAfterFence())
+            return D3DERR_DEVICELOST;
+          query->resolve(query->occlusionResult_->samples.load(
+              std::memory_order_acquire));
         }
       }
       // The backend receipt proved THIS issue complete. Do not advance the

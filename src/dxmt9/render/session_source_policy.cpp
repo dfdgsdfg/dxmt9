@@ -14,11 +14,15 @@ bool sessionSourceHasFinalPresentTail(
 }
 
 bool sessionSourceCanBeHead(core::SourcePayloadView payload) noexcept {
+  if (payload.isLegacy() && payload.legacyPayload()->occlusionScope)
+    return false;
   return !payload.commandsEmpty() && payload.presentRecordCount() == 0u;
 }
 
 bool sessionSourceCanAppendToPending(core::SourcePayloadView payload,
                                      bool hasPendingSession) noexcept {
+  if (payload.isLegacy() && payload.legacyPayload()->occlusionScope)
+    return false;
   if (sessionSourceHasFinalPresentTail(payload)) {
     return true;
   }

@@ -30,6 +30,29 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H321 observer-off control / queue-drain attribution](present-pacing-query-queue-drain-attribution.321.md)
+uses identical staged images with no scheduled build/test/agent work during
+the two STALKER runtimes. The observer-OFF visual spot completes at 21.457 FPS
+with scene geometry and zero required errors. Separate diagnostic evidence
+places the selected 56 occlusion rows' median 14.340 ms before dequeue versus
+0.268 ms in dequeue-to-relock encoding. Matching 309,583 polling calls spend
+10.071 s in the replay-drain prologue out of 11.071 s in the outer PE bridge.
+These are bounded elapsed intervals, not additive critical-path/FPS costs.
+Next: older-source/frontier attribution and query-qualified replay-drain scope.
+No provider promotion, whole-sequence equality or performance gain is claimed.
+
+[H320 actual occlusion / timeline / StateBlock](present-pacing-occlusion-timeline-stateblock.320.md)
+adds a default-OFF Metal visibility provider and identity-qualified polling
+evidence. Query cuts exposed attachment loss: source-local depth death did
+not justify discarding data read by a later query. Provider-wide preserving
+stores restore the inspected STALKER scenes and mixed zero/nonzero results.
+Native Metal/core and the 214-configuration TLC gate pass; the lifecycle model
+does not prove attachment bytes. R644 overlaps worker verification and cannot
+qualify FPS or clean timing. Its StateBlock census finds only 2 same-canonical
+snapshots among 169,252 rebuilds, so broad snapshot bypass is not justified.
+Next gates are quiet observer-off visual/performance repeats and separate
+query submission/polling attribution, not default promotion.
+
 [H319 committed-image wild checks](present-pacing-policy-consolidation-wild.319.md)
 complete 05 GT2, 06 GT2 and STALKER Day with normal exit, qualified staged
 images, scene captures and zero required error counters. Scene FPS is

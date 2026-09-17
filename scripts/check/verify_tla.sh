@@ -53,6 +53,7 @@ normal_models=(
   QueryPublicationFence
   QueryInitializerFence
   QueryEndCoalescing
+  QueryOcclusionResults
   QueueLifecycleRefinement
   QueueT2dReserveCopyCommit
   RenderTapeCompletionSchedule
@@ -74,10 +75,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=62
+expected_normal_count=63
 expected_progress_count=4
-expected_counterexample_count=144
-expected_cfg_count=210
+expected_counterexample_count=147
+expected_cfg_count=214
 progress_configs=(
   CpuPipelineLifecycle.progress
   DirectSourceLifecycle.progress
@@ -134,6 +135,9 @@ counterexample_models=(
   "QueryPublicationFence|.old-issue.counterexample|Invariant CompletionSafety is violated"
   "QueryPublicationFence|.ignore-failure.counterexample|Invariant CompletionSafety is violated"
   "QueryPublicationFence|.retire-on-publish.counterexample|Invariant SubmissionPressureSafety is violated"
+  "QueryOcclusionResults|.read-before-fence.counterexample|Invariant NoReadBeforeGpu is violated"
+  "QueryOcclusionResults|.stale-redirect.counterexample|Invariant ScopeIdentity is violated"
+  "QueryOcclusionResults|.missing-failure.counterexample|Invariant FailedNeverSuccess is violated"
   "SessionAdmissionHysteresis|.high-water-only.counterexample|Invariant NoClosedEmptySessionCycle is violated"
   "DirectSourceLifecycle|.stale-witness.counterexample|Invariant WitnessIsFresh is violated"
   "DirectSourceLifecycle|.duplicate-witness.counterexample|Invariant WitnessConsumedOnce is violated"

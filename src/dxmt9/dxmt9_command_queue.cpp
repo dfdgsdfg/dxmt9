@@ -1702,7 +1702,12 @@ void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot) {
     {
       PerfScope stageScope(perf::countEncodeSlotPsoPrefetchTileSelectCpuTime);
       tileSelection =
-          pipeline::selectTileFfpForPass(drawState, pool_.supportsApple3());
+          slot.occlusionScope
+              ? pipeline::TileFfpSelection{
+                    pipeline::TileFfpDecision::Portable,
+                    pipeline::TileFfpFallbackReason::UnsupportedState}
+              : pipeline::selectTileFfpForPass(drawState,
+                                               pool_.supportsApple3());
     }
     const bool tileFfpMode =
         tileSelection.decision == pipeline::TileFfpDecision::Tile;
@@ -3132,6 +3137,10 @@ void prepareSlotForPublish(CommandQueue& q,
                            core::ChunkSlot& slot,
                            perf::ChunkPublishReason reason) {
   slot.publishReason = reason;
+  // The queue mutex is held by every commitCurrentChunk caller. Freeze query
+  // membership at the same publication edge as seqId/resource retention;
+  // replacing the queue scope later cannot relabel this source.
+  slot.occlusionScope = q.occlusionScopeLocked();
   const std::uint64_t residencyNs =
       recordCurrentSlotPublishResidencyUnlocked(q, reason);
   perf::countChunkPublishReason(reason, slot.commandCount());
@@ -5240,6 +5249,12 @@ CommandQueue::beginCpuReadyArenaSource(
       arenaBuildContext_.has_value()) {
     return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
   }
+  // Occlusion membership is carried by the compatibility ChunkSlot. Reject
+  // Arena before flushing a writer or reserving Tape storage so replay can
+  // take its pre-effect compatibility fallback without a pressure retry loop.
+  if (occlusionScope_) {
+    return {.status = CpuReadyArenaBeginStatus::OcclusionScopeUnsupported};
+  }
   if (writingSlot_ && cpuReadyEarlyPrefixPublishedThisFrame_) {
     return {.status = CpuReadyArenaBeginStatus::CompatibilityTailOwned};
   }
@@ -5393,6 +5408,11 @@ CommandQueue::beginCpuReadyArenaSources(
   if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
       arenaBuildContext_.has_value()) {
     return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
+  }
+  // See the single-source admission path above. This check deliberately
+  // precedes all writer flushes and aggregate Tape reservations.
+  if (occlusionScope_) {
+    return {.status = CpuReadyArenaBeginStatus::OcclusionScopeUnsupported};
   }
   if (writingSlot_ && cpuReadyEarlyPrefixPublishedThisFrame_) {
     return {.status = CpuReadyArenaBeginStatus::CompatibilityTailOwned};
@@ -7895,6 +7915,16 @@ bool CommandQueue::publishEarlyCpuReadyPrefix(
   if (!cpuReadyEarlyPrefixLaneEnabled_) {
     return false;
   }
+  // The early-prefix lane can park a published compatibility head while its
+  // successor is still Writing. GPU occlusion uses that exact boundary for
+  // membership, so allowing the experiment while the provider is enabled can
+  // leave session admission waiting for a scope-incompatible tail. Suppress
+  // before taking the mutex or arming any successor hint; callers then take
+  // the ordinary bounded replay route and never wait for an intent that will
+  // not be created.
+  if (query::metalOcclusionEnabled()) {
+    return false;
+  }
   perf::countCpuReadyEarlyPrefixCandidate();
 
   const auto qmxBegin = queueMutexProbeBegin();
@@ -8489,6 +8519,56 @@ std::uint64_t CommandQueue::allocateQueryQueueIdentity() noexcept {
                                   std::memory_order_relaxed)) return value;
   }
   return 0;  // Exhaustion fails closed, never wrap into another incarnation.
+}
+
+bool CommandQueue::setOcclusionScope(query::OcclusionScopeRef scope) noexcept {
+  try {
+    std::unique_lock lock(mutex_);
+    if (!queryQueueIdentity_ || stop_ || queueLifecycle_.queryCompletionFailed() ||
+        arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
+        arenaAdmissionActive_.load(std::memory_order_relaxed) ||
+        activeArenaBuild_.load(std::memory_order_relaxed) ||
+        activeDirectChunkSlotBuild_.load(std::memory_order_relaxed) ||
+        arenaBuildContext_ || directChunkSlotBuildContext_) {
+      return false;
+    }
+
+    bool hadCommands = false;
+    if (writingSlot_) {
+      if (*writingSlot_ >= slots_.size() || !slots_[*writingSlot_].payload) {
+        return false;
+      }
+      hadCommands = !slots_[*writingSlot_].payload->commandsEmpty();
+    }
+
+    // Scope replacement is a source boundary. A populated writer must use
+    // the ordinary publication path so it receives one seqId, its resource
+    // marks, and the old scope snapshot. At the cap, request the same sticky
+    // submission used by publishQueryEnd; commitCurrentChunk performs only
+    // the existing bounded admission wait and never waits for this query.
+    if (hadCommands) {
+      if (inflightCount_ >= kMaxQueuedChunks) {
+        (void)queueLifecycle_.requestQuerySubmission(lastCommittedSeqId_);
+      }
+      if (!queueLifecycle_.commitCurrentChunk(
+              lock, kMaxQueuedChunks,
+              [this](core::ChunkSlot& slot) {
+                prepareSlotForPublish(*this, pool_, slot,
+                                      perf::ChunkPublishReason::SemanticBoundary);
+              }) ||
+          stop_ || arenaBuildPoisoned_.load(std::memory_order_relaxed)) {
+        return false;
+      }
+    }
+
+    // Do this only after actual publication succeeds. An empty compatibility
+    // writer is intentionally left uncommitted, so no fake seqId is emitted.
+    occlusionScope_ = std::move(scope);
+    return true;
+  } catch (...) {
+    failStopReplaySourceExecution();
+    return false;
+  }
 }
 
 query::EndReceipt CommandQueue::publishQueryEnd() noexcept {

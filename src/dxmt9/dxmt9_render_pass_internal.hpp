@@ -199,6 +199,7 @@ public:
   void resolveLateStoreForDraw(core::FlatDrawStateView drawState);
   void resolveLateStoreForStoreCause(
       perf::RenderPassLateStoreResolutionCause cause);
+  void enqueueOcclusionContribution();
   perf::RenderPassLateStoreResolutionCause lateStoreCloseCause(
       perf::EncoderSplitReason reason) const noexcept;
   // The parallel parent and every child have already ended. Perform the

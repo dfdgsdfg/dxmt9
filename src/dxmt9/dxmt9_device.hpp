@@ -245,6 +245,12 @@ class Device {
   virtual void abortPresentOrdinalWaits() {}
   virtual void flush() {}
   virtual bool usesAsyncQueryFences() const noexcept { return false; }
+  // GPU occlusion is an opt-in provider. The default keeps stub/test devices
+  // on the existing query implementation and owns no queue scope.
+  virtual bool usesMetalOcclusion() const noexcept { return false; }
+  virtual bool setOcclusionScope(query::OcclusionScopeRef) noexcept {
+    return false;
+  }
   virtual query::EndReceipt publishQueryEnd() noexcept { return {}; }
   virtual query::Poll pollQueryFence(const query::EndReceipt&, bool) noexcept {
     return query::Poll::Invalid;

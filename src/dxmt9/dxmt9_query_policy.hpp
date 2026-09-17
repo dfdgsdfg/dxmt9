@@ -3,6 +3,14 @@
 #include <cstdlib>
 
 namespace dxmt9::query {
+inline bool metalOcclusionEnabled() noexcept {
+  static const bool enabled = [] {
+    const char* value = std::getenv("DXMT9_METAL_OCCLUSION");
+    return value && value[0] && value[0] != '0';
+  }();
+  return enabled;
+}
+
 // One cached decision for the public fence and its initializer authority.
 // An explicit zero retains the synchronous diagnostic/reference path.
 inline bool asynchronousFencesEnabled() noexcept {

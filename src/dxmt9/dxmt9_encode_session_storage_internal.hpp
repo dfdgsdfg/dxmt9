@@ -9,6 +9,7 @@
 
 #include "dxmt9_capture.hpp"
 #include "dxmt9_draw_encoder_diagnostics.hpp"
+#include "dxmt9/query_occlusion.hpp"
 #include "dxmt9_resource_pool.hpp"
 
 #include <dxmt9/assert.hpp>
@@ -266,6 +267,13 @@ struct PassState {
   // Copied attachment identity/action facts for exactly-once late store-action
   // resolution. No source payload or borrowed lookahead storage escapes here.
   LateRenderPassStoreState lateStore{};
+  // One fresh visibility slot belongs to each actual render encoder. The
+  // buffer and scope stay here until endRender queues a completion callback;
+  // no query state is read from the PE/Query object on the encode path.
+  query::OcclusionScopeRef occlusionScope{};
+  WMT::Reference<WMT::Buffer> occlusionBuffer{};
+  std::uint64_t* occlusionResults = nullptr;
+  bool occlusionAttached = false;
 };
 
 struct BindingState {

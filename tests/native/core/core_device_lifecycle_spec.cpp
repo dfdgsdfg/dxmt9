@@ -832,12 +832,21 @@ class QueryFenceDevice final : public dxmt9::Device {
   dxmt9::query::Progress progress{41, 0, 0, false};
   u64 requests = 0;
   bool rejectEnd = false;
+  bool gpuOcclusion = false;
+  bool rejectScope = false;
+  dxmt9::query::OcclusionScopeRef scope;
   std::shared_ptr<dxmt9::query::EndMarker> deferredMarker;
   WMT::Device wmtDevice() override { return WMT::Device{NULL_OBJECT_HANDLE}; }
   dxmt9::CommandQueue& queue() override { return unused; }
   const BackendLimits& limits() const override { return caps; }
   std::shared_ptr<BackendDevice> backend() override { return renderer; }
   bool usesAsyncQueryFences() const noexcept override { return true; }
+  bool usesMetalOcclusion() const noexcept override { return gpuOcclusion; }
+  bool setOcclusionScope(dxmt9::query::OcclusionScopeRef next) noexcept override {
+    if (rejectScope) return false;
+    scope = std::move(next);
+    return true;
+  }
   dxmt9::query::EndReceipt publishQueryEnd() noexcept override {
     if (rejectEnd) return {};
     if (deferredMarker) {
@@ -966,6 +975,86 @@ void testDeferredQueryResetAndReissue() {
   checkEq(device->issueQuery(q, false), D3D_OK, "post-reset eager reissue");
   upper->progress.completed = upper->progress.published;
   checkEq(device->getQueryData(q, nullptr, 0, 0), S_OK, "new epoch resolves normally");
+}
+
+void testGpuOcclusionResultOwnership() {
+  auto upper = std::make_shared<QueryFenceDevice>();
+  upper->gpuOcclusion = true;
+  Factory factory(upper);
+  PresentParameters params{};
+  params.backBufferWidth = params.backBufferHeight = 8;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  auto device = factory.createDevice(0, params);
+  auto a = device->createQuery(QueryType::Occlusion);
+  auto b = device->createQuery(QueryType::Occlusion);
+  checkEq(device->issueQuery(a, true), D3D_OK, "GPU A begin");
+  const auto first = upper->scope->results[0];
+  checkEq(device->issueQuery(b, true), D3D_OK, "GPU B overlap begin");
+  const auto overlap = upper->scope;
+  checkEq(overlap->count, size_t{2}, "overlap keeps both result generations");
+  first->pending = 1;
+  checkEq(device->issueQuery(a, false), D3D_OK, "GPU A end");
+  checkEq(upper->scope->count, size_t{1}, "A END leaves B active");
+  u32 value = 0xabcdef;
+  checkEq(device->getQueryData(a, &value, sizeof(value), QUERY_GETDATA_FLUSH),
+          S_FALSE, "uncompleted result pending");
+  checkEq(value, 0xabcdefu, "pending bytes preserved");
+  upper->progress.completed = upper->progress.published;
+  checkEq(device->getQueryData(a, &value, sizeof(value), 0), D3DERR_DEVICELOST,
+          "fence cannot hide missing result callback");
+  first->add(1234);
+  first->pending = 0;
+  checkEq(device->getQueryData(a, &value, sizeof(value), 0), S_OK,
+          "completed GPU sample contribution exposed");
+  checkEq(value, 1234u, "not a submitted primitive count");
+  checkEq(device->issueQuery(a, true), D3D_OK, "GPU A reissue");
+  const auto second = upper->scope->results[1];
+  check(first != second && first->issue != second->issue,
+        "new BEGIN owns new immutable issue generation");
+  first->add(999);
+  checkEq(second->samples.load(), 0ull, "old callback cannot mutate new issue");
+  checkEq(device->issueQuery(a, false), D3D_OK, "GPU new A end");
+  second->add(std::numeric_limits<u64>::max());
+  second->add(1);
+  upper->progress.completed = upper->progress.published;
+  checkEq(device->getQueryData(a, &value, sizeof(value), 0), S_OK, "clamped GPU count");
+  checkEq(value, std::numeric_limits<u32>::max(), "sample sum saturates before DWORD clamp");
+  second->failed = true;
+  value = 77;
+  checkEq(device->getQueryData(a, &value, sizeof(value), 0), D3DERR_DEVICELOST,
+          "failed contribution never reports successful zero");
+  checkEq(value, 77u, "failed bytes preserved");
+  auto released = device->createQuery(QueryType::Occlusion);
+  checkEq(device->issueQuery(released, true), D3D_OK, "released active query");
+  const auto abandoned = upper->scope->results[1];
+  released.reset();
+  check(abandoned->abandoned.load(), "no device registry pins released Query");
+  checkEq(device->issueQuery(b, true), D3D_OK, "prune abandoned membership");
+  checkEq(upper->scope->count, size_t{1}, "release does not consume scope credit forever");
+  checkEq(device->reset(params), D3D_OK, "reset drains and clears active scope");
+  check(!upper->scope, "reset cannot count into earlier device epoch");
+  upper->rejectScope = true;
+  checkEq(device->issueQuery(b, true), D3DERR_DEVICELOST, "scope publication failure");
+  checkEq(device->getQueryData(b, &value, sizeof(value), 0), D3DERR_DEVICELOST,
+          "failed issue cannot expose old receipt");
+  upper->rejectScope = false;
+  std::vector<std::shared_ptr<Query>> bounded;
+  for (size_t i = 0; i < dxmt9::query::OcclusionScope::capacity; ++i) {
+    auto q = device->createQuery(QueryType::Occlusion);
+    checkEq(device->issueQuery(q, true), D3D_OK, "admit bounded active query");
+    bounded.push_back(std::move(q));
+  }
+  const auto fullScope = upper->scope;
+  auto overflow = device->createQuery(QueryType::Occlusion);
+  checkEq(device->issueQuery(overflow, true), E_OUTOFMEMORY,
+          "65th active query fails before replacing scope");
+  check(upper->scope == fullScope, "capacity denial preserves published membership");
+  bounded.front().reset();
+  checkEq(device->issueQuery(overflow, true), D3D_OK,
+          "released owner is pruned before capacity admission");
+  checkEq(upper->scope->count, dxmt9::query::OcclusionScope::capacity,
+          "replacement does not exceed scope capacity");
 }
 
 void testQueryFenceTruthTable() {
@@ -1812,6 +1901,7 @@ int main() {
     testAsyncQueryUsesActualCompletionOnly();
     testQueryFenceTruthTable();
     testDeferredQueryResetAndReissue();
+    testGpuOcclusionResultOwnership();
     testResetClearsStaleDrawStateBeforeNextBoundaryPacket();
     testResetRejectsStaleSurfaceOpsBeforeBackendBoundary();
     testGetRenderTargetDataUsesRuntimeReadbackPayload();

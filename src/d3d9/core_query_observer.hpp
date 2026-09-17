@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dxmt9/core.hpp"
+#include "../dxmt9/dxmt9_query_timeline_observer.hpp"
 #include "util/log/log.hpp"
 
 #include <array>
@@ -54,6 +55,18 @@ struct Ledger {
 
 inline Ledger& ledger() { static Ledger value; return value; }
 
+inline ::dxmt9::query::timeline_diag::Identity timelineIdentity(const Query& q) noexcept {
+  const auto fence = q.backendFence();
+  return {fence.queue, q.identity(), q.issueOrdinal(), q.issueDeviceEpoch()};
+}
+
+inline ::dxmt9::query::timeline_diag::MarkerWitness timelineMarker(const Query& q) noexcept {
+  const auto owner = q.backendMarkerOwner();
+  if (!owner) return {};
+  return {owner->queue, owner->index, owner->generation,
+          owner->storageGeneration};
+}
+
 inline void event(const Query& q, const char* action, u32 flags, HResult result,
                   u64 nanos, query::Progress progress, bool authoritative) {
   const auto fence = q.backendFence();
@@ -86,6 +99,13 @@ inline void issue(const Query& q, bool begin, bool async, HResult result,
     event(q, begin ? "begin" : "end", 0, result, 0, progress,
           async && q.backendFence().valid());
   }
+  if (!begin) {
+    ::dxmt9::query::timeline_diag::end(
+        {q.backendFence().queue, q.identity(), q.issueOrdinal(),
+         q.issueDeviceEpoch()},
+        static_cast<u32>(q.type()), q.backendFence().sequence,
+        timelineMarker(q), q.backendFence().initializer);
+  }
 }
 
 inline void poll(const Query& q, u32 flags, HResult result, u64 nanos,
@@ -111,6 +131,8 @@ inline void poll(const Query& q, u32 flags, HResult result, u64 nanos,
     ++l.reports;
     l.report();
   }
+  ::dxmt9::query::timeline_diag::poll(timelineIdentity(q), static_cast<int>(result),
+                             result == S_OK, q.resolvedValue());
 }
 
 }  // namespace dxmt9::core::querydiag
