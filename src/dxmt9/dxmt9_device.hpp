@@ -244,6 +244,12 @@ class Device {
   // in waitPresentOrdinalBoundary must be released instead of hanging.
   virtual void abortPresentOrdinalWaits() {}
   virtual void flush() {}
+  virtual bool usesAsyncQueryFences() const noexcept { return false; }
+  virtual query::Fence publishQueryEnd() noexcept { return {}; }
+  virtual query::Poll pollQueryFence(query::Fence, bool) noexcept {
+    return query::Poll::Invalid;
+  }
+  virtual query::Progress queryProgress() noexcept { return {}; }
   virtual void observePipelineControl(
       queue::PipelineControl, queue::PipelineDisposition) noexcept {}
   virtual wsi::QuiescenceDisposition beginWsiQuiescence() noexcept {

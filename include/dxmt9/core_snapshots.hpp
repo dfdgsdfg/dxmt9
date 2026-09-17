@@ -3,6 +3,7 @@
 #include "dxmt9/assert.hpp"
 #include "dxmt9/core_compat_draw_batch.hpp"
 #include "dxmt9/core_constants.hpp"
+#include "dxmt9/query_fence.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2054,10 +2055,20 @@ class Query : public std::enable_shared_from_this<Query> {
   bool resolved() const noexcept { return resolvedValue_.has_value(); }
   std::optional<u64> resolvedValue() const noexcept { return resolvedValue_; }
   u64 issuedSequenceId() const noexcept { return issuedSequenceId_; }
+  u64 identity() const noexcept { return identity_; }
+  u64 issueOrdinal() const noexcept { return issueOrdinal_; }
+  u64 issueDeviceEpoch() const noexcept { return issueDeviceEpoch_; }
+  query::Fence backendFence() const noexcept { return backendFence_; }
   HRESULT getData(void* output, size_t size, u32 flags, u64 completedSequenceId) const;
 
  private:
+  friend class Device;
   QueryType type_;
+  u64 identity_ = 0;
+  u64 issueOrdinal_ = 0;
+  u64 issueDeviceEpoch_ = 0;
+  query::Fence backendFence_{};
+  bool failedIssue_ = false;
   u64 issuedSequenceId_ = 0;
   bool active_ = false;
   std::optional<u64> resolvedValue_;
@@ -2637,6 +2648,7 @@ class Device : public std::enable_shared_from_this<Device> {
   u64 nextHandle_ = 1;
   u64 submittedSequenceId_ = 0;
   u64 completedSequenceId_ = 0;
+  u64 queryDeviceEpoch_ = 1;
   u32 presentCount_ = 0;
   u32 maximumFrameLatency_ = kDefaultFrameLatency;
   bool inScene_ = false;

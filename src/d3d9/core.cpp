@@ -295,6 +295,7 @@ HResult Device::resetEx(const PresentParameters& params, const DisplayModeEx* fu
 }
 
 HResult Device::resetValidated(const PresentParameters& params) {
+  if (queryDeviceEpoch_ == std::numeric_limits<u64>::max()) return D3DERR_DEVICELOST;
   presentParameters_ = normalizePresentParameters(adapter_, params);
   deviceLost_ = false;
   presentOccluded_ = false;
@@ -337,6 +338,9 @@ HResult Device::resetValidated(const PresentParameters& params) {
   invalidateDrawStateCache(DrawStateInvalidationReset);
   submittedSequenceId_ = 0;
   completedSequenceId_ = 0;
+  // Async receipts refer to the old device issue epoch even though the upper
+  // queue's actual publication/completion waterlines remain monotone.
+  ++queryDeviceEpoch_;
   presentCount_ = 0;
   experimentCapture_.captured = false;
   if (backend_) {

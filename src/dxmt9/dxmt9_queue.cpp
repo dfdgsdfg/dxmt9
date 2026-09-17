@@ -4,6 +4,7 @@
 #include "dxmt9_scheduling_progress_watchdog.hpp"
 
 #include "dxmt9/assert.hpp"
+#include "dxmt9/query_fence.hpp"
 #include "dxmt9_compat.hpp"
 #include "dxmt9_hud.hpp"
 #include "dxmt9_perf_counters.hpp"
@@ -1146,6 +1147,34 @@ bool QueueLifecycleController::producerSequenceWaitActive() {
 u64 QueueLifecycleController::producerSequenceWaitTargetSeqId() {
   std::lock_guard lock(pendingCompletionMutex_);
   return producerSequenceWaitDepth_ == 0 ? 0 : producerSequenceWaitTargetSeqId_;
+}
+
+bool QueueLifecycleController::requestQuerySubmission(u64 targetSeqId) {
+  // Caller owns the submission mutex, so publication cannot change here.
+  if (!submissionBinding_.lastCommittedSeqId || !submissionBinding_.stop ||
+      *submissionBinding_.stop ||
+      targetSeqId > *submissionBinding_.lastCommittedSeqId) return false;
+  {
+    std::lock_guard lock(pendingCompletionMutex_);
+    querySubmissionTargetSeqId_ =
+        std::max(querySubmissionTargetSeqId_, targetSeqId);
+  }
+  pendingCompletionCv_.notify_all();
+  if (submissionBinding_.encodeCv) submissionBinding_.encodeCv->notify_one();
+  return true;
+}
+
+u64 QueueLifecycleController::sequenceSubmissionTargetSeqId() {
+  std::lock_guard lock(pendingCompletionMutex_);
+  const auto completed = querySubmissionTargetSeqId_ &&
+          submissionBinding_.completedSeqId
+      ? submissionBinding_.completedSeqId->load(std::memory_order_acquire) : 0;
+  return std::max(producerSequenceWaitDepth_ ? producerSequenceWaitTargetSeqId_ : 0,
+      query::submissionTarget(querySubmissionTargetSeqId_, completed));
+}
+
+bool QueueLifecycleController::sequenceSubmissionRequested() {
+  return sequenceSubmissionTargetSeqId() != 0;
 }
 
 void QueueLifecycleController::waitForProducerSequenceWaitTargetForTest(
@@ -6279,6 +6308,7 @@ bool QueueLifecycleController::processOnePendingCompletion() {
   }
 
   if (forcedCompletionFailure) {
+    queryCompletionFailed_.store(true, std::memory_order_release);
     poisonTapeFailure();
     return false;
   }
@@ -6364,6 +6394,11 @@ bool QueueLifecycleController::processOnePendingCompletion() {
   }
 
   delayCompletionSignalForPerfProbe();
+
+  if (pending.commandBuffer &&
+      pending.commandBuffer.status() == WMTCommandBufferStatusError) {
+    queryCompletionFailed_.store(true, std::memory_order_release);
+  }
 
   // The Metal tail has completed, but a corrupt shadow must fail-stop before
   // diagnostics, callbacks, waterline publication, or Tape completion.

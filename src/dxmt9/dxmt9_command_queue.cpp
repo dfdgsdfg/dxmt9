@@ -8583,6 +8583,86 @@ bool CommandQueue::hasCompletedPendingWork() {
       completedSeqIdLocked() >= next - 1u;
 }
 
+std::uint64_t CommandQueue::allocateQueryQueueIdentity() noexcept {
+  static std::atomic<std::uint64_t> next{1};
+  auto value = next.load(std::memory_order_relaxed);
+  while (value != std::numeric_limits<std::uint64_t>::max()) {
+    if (next.compare_exchange_weak(value, value + 1,
+                                  std::memory_order_relaxed)) return value;
+  }
+  return 0;  // Exhaustion fails closed, never wrap into another incarnation.
+}
+
+query::Fence CommandQueue::publishQueryEnd() noexcept {
+  try {
+    std::unique_lock lock(mutex_);
+    if (!queryQueueIdentity_ || stop_ || queueLifecycle_.queryCompletionFailed() ||
+        arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
+        arenaAdmissionActive_.load(std::memory_order_relaxed) ||
+        activeArenaBuild_.load(std::memory_order_relaxed) ||
+        activeDirectChunkSlotBuild_.load(std::memory_order_relaxed) ||
+        arenaBuildContext_) return {};
+    std::uint64_t initializerPrefix = 0;
+    if (initializer_) {
+      const auto prefix = initializer_->publishQueryPrefixUnlocked();
+      if (!prefix) {
+        requestSchedulingStopLocked();
+        return {};
+      }
+      initializerPrefix = *prefix;
+    }
+    bool hadCommands = false;
+    if (writingSlot_) {
+      if (*writingSlot_ >= slots_.size() || !slots_[*writingSlot_].payload)
+        return {};
+      hadCommands = !slots_[*writingSlot_].payload->commandsEmpty();
+    }
+    // If Issue meets an inflight admission cap, older parked work must still
+    // be allowed to submit. This is a progress request, never fake completion.
+    if (inflightCount_ >= kMaxQueuedChunks)
+      (void)queueLifecycle_.requestQuerySubmission(lastCommittedSeqId_);
+    const bool published = queueLifecycle_.commitCurrentChunk(
+        lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
+          prepareSlotForPublish(*this, pool_, slot,
+                                perf::ChunkPublishReason::SemanticBoundary);
+        });
+    if (stop_ || arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
+        (hadCommands && !published)) return {};
+    // The prefix is fixed under the same lock as actual publication. Empty
+    // ENDs share the preceding prefix; future appends cannot extend this fence.
+    return {queryQueueIdentity_, lastCommittedSeqId_, initializerPrefix};
+  } catch (...) {
+    failStopReplaySourceExecution();
+    return {};
+  }
+}
+
+query::Progress CommandQueue::queryProgress() noexcept {
+  std::lock_guard lock(mutex_);
+  const auto uploads = initializer_ ? initializer_->queryProgressUnlocked()
+      : resources::Initializer::QueryProgress{};
+  return {queryQueueIdentity_, lastCommittedSeqId_, completedSeqIdLocked(),
+          stop_ || arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
+              queueLifecycle_.queryCompletionFailed() || uploads.failed,
+          uploads.published, uploads.completed};
+}
+
+query::Poll CommandQueue::pollQueryFence(query::Fence fence, bool flush) noexcept {
+  std::lock_guard lock(mutex_);
+  const auto uploads = initializer_ ? initializer_->queryProgressUnlocked()
+      : resources::Initializer::QueryProgress{};
+  const query::Progress progress{
+      queryQueueIdentity_, lastCommittedSeqId_, completedSeqIdLocked(),
+      stop_ || arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
+          queueLifecycle_.queryCompletionFailed() || uploads.failed,
+      uploads.published, uploads.completed};
+  const auto result = query::classify(fence, progress);
+  if (result == query::Poll::Pending && flush &&
+      !queueLifecycle_.requestQuerySubmission(fence.sequence))
+    return query::Poll::Failed;
+  return result;
+}
+
 bool CommandQueue::publishReplayDiagnosticBoundary() noexcept {
   // Diagnostics count completed cut requests, including state-only no-ops.
   // Keep that receipt contract while sharing the actual publication seam.

@@ -1784,6 +1784,14 @@ class QueueLifecycleController {
   // Exact highest ordered fence currently owned by producer-side sequence
   // waits. Zero means no producer wait is active.
   u64 producerSequenceWaitTargetSeqId();
+  // An async query request is an ordered submission obligation, not a waiter.
+  // It persists until the target completes, even after GetData returns.
+  bool requestQuerySubmission(u64 targetSeqId);
+  bool sequenceSubmissionRequested();
+  u64 sequenceSubmissionTargetSeqId();
+  bool queryCompletionFailed() const noexcept {
+    return queryCompletionFailed_.load(std::memory_order_acquire);
+  }
   void waitForProducerSequenceWaitTargetForTest(u64 targetSeqId);
   // Queue-local observation for a compatibility writer blocked either on a
   // free control/Tape reservation or on the GPU-inflight publication cap.
@@ -2220,6 +2228,10 @@ class QueueLifecycleController {
   bool completionWaitActive_ = false;
   std::uint32_t producerSequenceWaitDepth_ = 0;
   u64 producerSequenceWaitTargetSeqId_ = 0;
+  u64 querySubmissionTargetSeqId_ = 0;
+  // Reclamation waterlines may retire a failed GPU submission. Query success
+  // additionally requires that no completion error was observed.
+  std::atomic<bool> queryCompletionFailed_{false};
   std::uint32_t producerWriterPressureDepth_ = 0;
   std::uint64_t completionWaitEnqueues_ = 0;
   std::chrono::steady_clock::time_point completionWaitCommitPublishTime_{};

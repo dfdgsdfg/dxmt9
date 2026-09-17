@@ -171,3 +171,62 @@ stateDiagram-v2
 The COM object may be released while a backend record is in flight. Command chunk
 retention keeps backend handles and result storage alive until GPU completion,
 without depending on public COM references.
+
+## 7. Published-prefix asynchronous candidate
+
+`DXMT9_ASYNC_QUERY_FENCES` is an opt-in implementation of R-CORE-11.5(a).
+END first settles any compatibility draw batch, then publishes the ordinary
+queue writer and obtains `{queue incarnation, published sequence}` under the
+queue mutex. With no writer it captures the existing published prefix, including
+zero for a genuinely empty queue. It does not invent a Query GPU command or
+use the core operation counter as a queue sequence. Active Arena/direct build
+transactions reject the operation rather than returning a deferred receipt.
+
+The initializer's separate upload stream is also part of the receipt. END
+flushes pending initializer uploads without waiting and captures its submitted
+shared-event value under the queue mutex. Poll requires both the ordinary
+completion waterline and this initializer event value. A bounded FIFO of 64
+retained upload command buffers additionally proves successful upload completion;
+an error, missing event, exhausted counter or full tracker fails closed rather
+than dropping an unobserved upload. Ordinary queue GPU errors also invalidate
+query success independently of the resource-reclamation waterline. A failed initializer
+flush yields no receipt and fail-stops; absence of ordinary commands must not
+hide pending uploads. The native exhaustive product table covers both axes;
+`QueryPublicationFence.tla` abstracts the initializer/Metal event axis out.
+
+The core query retains this value with its issue ordinal and device-reset
+epoch. There is no callback retaining or mutating the public query object:
+polling reads the queue-owned completion waterline, so destruction/reissue
+cannot redirect a late callback. Reset invalidates earlier issue epochs.
+
+FLUSH on a pending receipt raises a sticky queue submission target and wakes
+the encode coordinator. It does not enter `waitForSequence`, nor does it call
+`completeUpTo`. The request participates in the encoder's existing ordered
+progress decisions and remains active after the producer returns. Readback,
+reset and teardown continue to use their blocking contracts. An already
+complete query does not request submission of a newer suffix.
+
+The shared pure predicates in `include/dxmt9/query_fence.hpp` distinguish
+invalid/failed/pending/complete and retire async progress only after its exact
+target completes. Formal/native evidence must cover delayed completion,
+queue-incarnation mismatch, old/new issue receipts, empty prefix, terminal
+state, reset, and persistent wakeup. END publication may change batching;
+performance and command-buffer locality are explicit promotion gates.
+
+`DXMT9_QUERY_OBSERVER` is separate, bounded, default-off evidence. It reports
+query kind, identity/issue, FLUSH, result, core ordinal, published fence and
+queue waterlines. Legacy observations must label the absence of an authoritative
+query fence; matching aggregate counters are not identity binding. Observer-off
+must not construct reports, read clocks, or acquire diagnostic locks.
+Elapsed poll scopes cover core `Device::getQueryData`, not PE recorder flush
+or bridge replay drain. Issue events report core/replay disposition; a recorded
+PE Issue may already have returned before replay encounters a failure.
+Logged queue waterlines are sampled after the call;
+they may advance after an `S_FALSE` decision and are not its linearization
+snapshot. Event quotas reserve 128 Issue rows independently from up to 384
+poll rows; omitted rows are counted. These bounded diagnostics do not claim a
+complete per-query lifecycle trace for a long game run.
+
+The current core occlusion/timestamp value providers are not made into real
+Metal visibility/timestamp results by this change. Their data semantics remain
+a separate type-specific gap, even when completion fencing is sound.

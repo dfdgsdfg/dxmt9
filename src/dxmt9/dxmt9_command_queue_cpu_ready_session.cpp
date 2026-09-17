@@ -679,7 +679,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
     if (!pendingRecord.has_value()) {
       return std::nullopt;
     }
-    if (queueLifecycle_.producerSequenceWaitActive()) {
+    if (queueLifecycle_.sequenceSubmissionRequested()) {
       return perf::CpuReadySessionReleaseReason::ProducerWait;
     }
     return std::nullopt;
@@ -692,7 +692,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         core::metalqueue::decideCpuReadyEarlySessionAction(
             pendingEarlyPrefix, stop_,
             sessionReleaseState_.hasPending() ||
-                queueLifecycle_.producerSequenceWaitActive(),
+                queueLifecycle_.sequenceSubmissionRequested(),
             !cpuReadyTape_.readyEmpty(), /*nextAppendable=*/true,
             /*nextHasFinalPresentTail=*/false);
     if (earlyWakeAction ==
@@ -762,7 +762,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
             .ready = !cpuReadyTape_.readyEmpty(),
             .orderedRelease = sessionReleaseState_.hasPending(),
             .producerSequenceWait =
-                queueLifecycle_.producerSequenceWaitActive(),
+                queueLifecycle_.sequenceSubmissionRequested(),
         });
       });
       continue;
@@ -818,7 +818,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         retainedHeadFrontier &&
         cpuReadyTape_.readyCount() == 1u &&
         !sessionReleaseState_.hasPending() &&
-        !queueLifecycle_.producerSequenceWaitActive() &&
+        !queueLifecycle_.sequenceSubmissionRequested() &&
         arenaAdmissionWaiterCount_.load(std::memory_order_acquire) == 0u &&
         !queueLifecycle_.producerWriterPressureActive() &&
         !(initializer_ && initializer_->hasPendingUploadsUnlocked())) {
@@ -990,7 +990,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                 .ready = !cpuReadyTape_.readyEmpty(),
                 .orderedRelease = sessionReleaseState_.hasPending(),
                 .producerSequenceWait =
-                    queueLifecycle_.producerSequenceWaitActive(),
+                    queueLifecycle_.sequenceSubmissionRequested(),
                 .admissionPressure = arenaAdmissionWaiterCount_.load(
                     std::memory_order_acquire) != 0u,
                 .writerPressure =
@@ -1007,7 +1007,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
 
           const bool releasePending = sessionReleaseState_.hasPending();
           const bool producerWait =
-              queueLifecycle_.producerSequenceWaitActive();
+              queueLifecycle_.sequenceSubmissionRequested();
           const bool initializerPending =
               initializer_ && initializer_->hasPendingUploadsUnlocked();
           const bool pressure =
@@ -1392,7 +1392,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
               .admissionPressure = arenaAdmissionWaiterCount_.load(
                   std::memory_order_acquire) != 0u,
               .producerSequenceWaitTargetSeqId =
-                  queueLifecycle_.producerSequenceWaitTargetSeqId(),
+                  queueLifecycle_.sequenceSubmissionTargetSeqId(),
               .readyHeadOwnsOrdinaryDirectCapacity =
                   leaseDeniedReadyHeadEligibility ==
                   render::FirstLeaseReadyHeadEligibility::Eligible,
@@ -2201,7 +2201,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                         core::metalqueue::SessionReleaseSnapshot{}) ==
                         held->release &&
                     !sessionReleaseState_.hasPending() &&
-                    !queueLifecycle_.producerSequenceWaitActive() &&
+                    !queueLifecycle_.sequenceSubmissionRequested() &&
                     !(initializer_ &&
                       initializer_->hasPendingUploadsUnlocked()) &&
                     !stop_ && !heldCaptureBoundary;
@@ -2323,7 +2323,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
               observation.wakeFlags |=
                   render::DeferredTerminalSuffixWakeOrderedRelease;
             }
-            if (queueLifecycle_.producerSequenceWaitActive()) {
+            if (queueLifecycle_.sequenceSubmissionRequested()) {
               observation.wakeFlags |=
                   render::DeferredTerminalSuffixWakeProducerWait;
             }
@@ -2385,7 +2385,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                   .ready = !cpuReadyTape_.readyEmpty(),
                   .orderedRelease = sessionReleaseState_.hasPending(),
                   .producerSequenceWait =
-                      queueLifecycle_.producerSequenceWaitActive(),
+                      queueLifecycle_.sequenceSubmissionRequested(),
                   .admissionPressure = arenaAdmissionWaiterCount_.load(
                       std::memory_order_acquire) != 0u,
                   .writerPressure =

@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <future>
 #include <iostream>
 #include <limits>
 #include <stdexcept>
@@ -50,6 +51,25 @@ struct CommandQueueArenaLeaseTestAccess {
   static void setStopped(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     queue.requestSchedulingStopLocked();
+  }
+
+  static std::uint64_t submissionTarget(CommandQueue& queue) {
+    return queue.queueLifecycle_.sequenceSubmissionTargetSeqId();
+  }
+
+  static bool awaitSubmissionRequest(CommandQueue& queue, std::promise<void>& entered) {
+    std::unique_lock lock(queue.mutex_);
+    entered.set_value();
+    return queue.encodeCv_.wait_for(lock, std::chrono::seconds(2), [&] {
+      return queue.queueLifecycle_.sequenceSubmissionRequested();
+    });
+  }
+
+  static core::CpuReadyPublicationTicket readyTicket(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    std::array<core::CpuReadyTape::ReadyEntry, 1> entries{};
+    if (queue.cpuReadyTape_.copyReadyPrefix(entries) != 1) return {};
+    return {entries[0].source.id, entries[0].source.storage};
   }
 
   static void stopCpuReadyTape(CommandQueue& queue) {
@@ -251,7 +271,7 @@ struct CommandQueueArenaLeaseTestAccess {
 
   static LifecycleResult publishToReclaim(
       CommandQueue& queue,
-      core::CpuReadyPublicationTicket ticket) {
+      core::CpuReadyPublicationTicket ticket, bool failCompletion = false) {
     using namespace core;
     using namespace core::metalqueue;
     LifecycleResult result{};
@@ -300,6 +320,7 @@ struct CommandQueueArenaLeaseTestAccess {
       return result;
     }
     queue.queueLifecycle_.enqueuePendingCompletionForTest(std::move(pending));
+    if (failCompletion) queue.queueLifecycle_.forceNextCompletionFailureForTest();
     result.completed = queue.queueLifecycle_.processOnePendingCompletion();
 
     {
@@ -1600,10 +1621,75 @@ void testWsiQuiescenceAndRegistryFailureDisposition() {
         "stopped queue has a distinct non-quiescent disposition");
 }
 
+void testPublishedQueryFences() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+  using Access = CommandQueueArenaLeaseTestAccess;
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  const auto empty = queue.publishQueryEnd();
+  check(empty.valid() && empty.sequence == 0, "empty END has a live empty prefix");
+  check(queue.pollQueryFence(empty, true) == query::Poll::Complete,
+        "empty prefix needs no artificial GPU command");
+  ClearDesc clear{};
+  clear.clearColor = true;
+  queue.submitClear(clear);
+  const auto first = queue.publishQueryEnd();
+  check(first.valid() && first.sequence == 1, "END gets actual first publication");
+  const auto ticket = Access::readyTicket(queue);
+  check(queue.pollQueryFence(first, false) == query::Poll::Pending,
+        "publication is not completion");
+  check(Access::submissionTarget(queue) == 0, "poll alone does not force submission");
+  std::promise<void> entered;
+  auto parked = std::async(std::launch::async, [&] {
+    return Access::awaitSubmissionRequest(queue, entered);
+  });
+  entered.get_future().wait();
+  check(queue.pollQueryFence(first, true) == query::Poll::Pending,
+        "FLUSH returns pending with no completion worker running");
+  check(parked.get(), "query submission wakes real queue CV and progress predicate");
+  check(Access::submissionTarget(queue) == first.sequence,
+        "async submission request survives GetData return");
+  const auto retired = Access::publishToReclaim(queue, ticket);
+  check(retired.submitted && retired.completed && retired.reclaimed,
+        "actual queue submit/completion/reclaim owner advances watermark");
+  check(queue.pollQueryFence(first, false) == query::Poll::Complete,
+        "actual queue completion resolves receipt after reclaim");
+  check(Access::submissionTarget(queue) == 0, "completed async request retires");
+  queue.submitClear(clear);
+  const auto newer = queue.publishQueryEnd();
+  const auto newerTicket = Access::readyTicket(queue);
+  check(newer.sequence > first.sequence, "newer source has distinct sequence");
+  check(queue.pollQueryFence(first, true) == query::Poll::Complete,
+        "old query excludes newer incomplete suffix");
+  check(Access::submissionTarget(queue) == 0, "old query does not submit suffix");
+  check(queue.pollQueryFence(newer, true) == query::Poll::Pending,
+        "new issue remains pending at old completion");
+  CommandQueue other(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  check(other.pollQueryFence(first, true) == query::Poll::Invalid,
+        "cross-queue ABA is rejected");
+  check(queue.pollQueryFence({first.queue, newer.sequence + 1}, true) == query::Poll::Invalid,
+        "future unpublished receipt is rejected");
+  const auto last = Access::publishToReclaim(queue, newerTicket);
+  check(last.completed && last.reclaimed, "second delayed completion drains");
+  Access::setStopped(queue);
+  check(queue.pollQueryFence(first, true) == query::Poll::Failed,
+        "terminal wake is not successful completion");
+  check(!queue.publishQueryEnd().valid(), "terminal queue cannot issue receipts");
+
+  CommandQueue failing(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  failing.submitClear(clear);
+  const auto doomed = failing.publishQueryEnd();
+  const auto failed = Access::publishToReclaim(failing, Access::readyTicket(failing), true);
+  check(failed.submitted && !failed.completed, "completion failure is not successful GPU work");
+  check(failing.pollQueryFence(doomed, true) == query::Poll::Failed,
+        "real completion owner failure cannot resolve an issued query");
+}
+
 }  // namespace
 
 int main() {
   try {
+    testPublishedQueryFences();
     testExplicitControlIndexGroupingAndExactSnapshotMark();
     testActiveMismatchFailStopsWithoutFallback();
     testLegacyWriterBoundaryBeforeStrictAdmission();

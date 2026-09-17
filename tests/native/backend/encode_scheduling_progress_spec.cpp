@@ -51,6 +51,17 @@ struct SchedulingProgressTestAccess {
     initializer.queue_->noteInitializerPendingUploads();
   }
 
+  static bool rejectQueryUploadWithoutEvent(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    resources::Initializer initializer(queue, queue.pool_, {});
+    initializer.queryTrackingEnabled_ = true;
+    // Fault fixture bypasses staging: the missing-event guard must reject
+    // before touching these bytes or creating any Metal command buffer.
+    initializer.pendingUploads_.emplace_back();
+    const auto result = initializer.flushToWaitUnlocked();
+    return !result.didFlush && initializer.queryFailed_ && queue.stop_;
+  }
+
   static void requestTerminal(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     queue.requestSchedulingStopLocked();
@@ -656,6 +667,14 @@ void poisonOriginPublishesFirstCallsiteOnce() {
 
 int main() {
   try {
+    {
+      auto queue = makeSchedulingQueue();
+      const auto beforeFailure = queue.publishQueryEnd();
+      check(dxmt9::SchedulingProgressTestAccess::rejectQueryUploadWithoutEvent(queue),
+            "initializer failure stops ordinary submission even before Query END");
+      check(queue.pollQueryFence(beforeFailure, true) == dxmt9::query::Poll::Failed,
+            "upload failure cannot masquerade as successful empty-prefix completion");
+    }
     admissionTruthTable();
     firstLeaseCapacityWaitTruthTable();
     sessionWakeTruthTables();

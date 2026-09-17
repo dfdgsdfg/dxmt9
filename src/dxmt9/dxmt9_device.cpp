@@ -462,6 +462,22 @@ class DeviceImpl final : public Device {
     queue_.observePipelineControl(control, disposition);
   }
   void flush() override { queue_.submitFlush(); }
+  bool usesAsyncQueryFences() const noexcept override {
+    static const bool enabled = [] {
+      const char* value = std::getenv("DXMT9_ASYNC_QUERY_FENCES");
+      return value && value[0] && value[0] != '0';
+    }();
+    return enabled;
+  }
+  query::Fence publishQueryEnd() noexcept override {
+    return queue_.publishQueryEnd();
+  }
+  query::Poll pollQueryFence(query::Fence fence, bool flush) noexcept override {
+    return queue_.pollQueryFence(fence, flush);
+  }
+  query::Progress queryProgress() noexcept override {
+    return queue_.queryProgress();
+  }
   wsi::QuiescenceDisposition beginWsiQuiescence() noexcept override {
     return queue_.beginWsiQuiescence();
   }

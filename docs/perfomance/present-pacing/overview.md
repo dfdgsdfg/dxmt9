@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-16
+updated: 2026-09-17
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
@@ -29,6 +29,27 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 [index-cache-locality](../index-cache-locality/index.md); the per-CB encode story by [state-churn-encode](../state-churn-encode/index.md).
 
 ## Latest Conclusions
+
+[H315](present-pacing-query-publication-fences.315.md) separates actual-prefix
+Query END publication from completion waiting behind a default-off candidate.
+The receipt joins ordinary queue and initializer progress; persistent FLUSH
+requests wake encode without inventing completion. Native/model checks and
+Wine x64/x86 delayed-S_FALSE → S_OK plus exact pixel probes pass. Initializer
+fault coverage, visible wild/locality and real query-data providers remain
+distinct gates; no default or README promotion.
+One same-image STALKER diagnostic OFF/ON pair observes 11.976 → 17.338 FPS,
+core query elapsed 63.254 → 1.052 s and queue sequence waits 62.521 → 0 s.
+Polling and CB count grow; both onscreen captures fail. These are not clean
+FPS-promotion measurements, and a later failure-only hardening revision is
+qualified by separate native/Wine tests, not by those performance spots.
+
+[H314](present-pacing-stalker-query-waits.314.md) moves to STALKER Day on
+unchanged H312 images. The retry is 12.298 FPS; a separate diagnostic measures
+64.465 s in GetData, 62.378 s of queue completion waits and only 1.318 s of
+query-entry replay drain at its last periodic endpoint. These scopes overlap.
+Partial app CPU is 0.449 cores; query submission/completion identity is the
+next priority, not a proven removable wait budget. Both runs miss the onscreen
+capture, so visual/focus qualification and README promotion remain closed.
 
 [H313](present-pacing-app-thread-attribution.313.md) samples unchanged H312
 images. Interior guest PCs are 70.28%/81.06% game, 10.26%/5.83% dxmt9 PE

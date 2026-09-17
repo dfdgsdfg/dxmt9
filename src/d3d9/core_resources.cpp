@@ -2,6 +2,7 @@
 #include "core_format_utils.hpp"
 #include "core_private.hpp"
 #include "core_resources_internal.hpp"
+#include "core_query_observer.hpp"
 #include "dxmt9/assert.hpp"
 #include "dxmt9/core.hpp"
 #include "dxmt9/dxmt9_device.hpp"
@@ -11,6 +12,7 @@
 #include "util/log/log.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -166,6 +168,15 @@ void emitRenderTrace(const char *fmt, ...) {
 } // namespace detail
 
 Query::Query(QueryType type) : type_(type) {
+  static std::atomic<u64> nextIdentity{1};
+  auto identity = nextIdentity.load(std::memory_order_relaxed);
+  while (identity != std::numeric_limits<u64>::max()) {
+    if (nextIdentity.compare_exchange_weak(identity, identity + 1,
+                                           std::memory_order_relaxed)) {
+      identity_ = identity;
+      break;
+    }
+  }
   if (type_ == QueryType::TimestampFreq) {
     resolvedValue_ = 1000000000ull;
   } else if (type_ == QueryType::TimestampDisjoint) {
@@ -174,7 +185,9 @@ Query::Query(QueryType type) : type_(type) {
 }
 
 /*
- * TLA+: QuerySeqId binding
+ * Legacy QuerySeqId predicate binding only, not a proof that the public
+ * FLUSH wrapper is nonblocking. The opt-in QueryPublicationFence binding
+ * uses backendFence_, not these logical core ordinals.
  *   QueryIds[q]       -> each core::Query instance.
  *   qIssuedSeqId[q]  -> Query::issuedSequenceId_.
  *   currentSeqId     -> Device::submittedSequenceId_ + 1 before assignment;
@@ -196,12 +209,18 @@ Query::Query(QueryType type) : type_(type) {
  *   GPUComplete     -> Device::completeUpTo() advances completedSeqId.
  */
 void Query::begin(u64 sequenceId) {
+  ++issueOrdinal_;
+  backendFence_ = {};
+  failedIssue_ = false;
   active_ = true;
   issuedSequenceId_ = sequenceId;
   resolvedValue_.reset();
 }
 
 void Query::end(u64 sequenceId) {
+  ++issueOrdinal_;
+  backendFence_ = {};
+  failedIssue_ = false;
   active_ = false;
   issuedSequenceId_ = sequenceId;
 }
@@ -563,6 +582,7 @@ HResult SwapChain::present(std::shared_ptr<dxmt9::Device> device,
 
 std::shared_ptr<Query> Device::createQuery(QueryType type) {
   auto query = std::make_shared<Query>(type);
+  if (!query->identity()) return {};
   queries_.push_back(query);
   return query;
 }
@@ -774,6 +794,17 @@ HResult Device::issueQuery(const std::shared_ptr<Query> &query, bool begin) {
   if (!query) {
     return D3DERR_INVALIDCALL;
   }
+  if (query->issueOrdinal_ == std::numeric_limits<u64>::max()) {
+    query->failedIssue_ = true;
+    return D3DERR_DEVICELOST;
+  }
+  const bool async = upperDevice_ && upperDevice_->usesAsyncQueryFences();
+  if (async && deviceLost_) return D3DERR_DEVICELOST;
+  if (async && flushCompatibilityReplayDrawBatch() ==
+                   CompatibilityDrawBatchFlushStatus::Failed) {
+    query->failedIssue_ = true;
+    return D3DERR_DEVICELOST;
+  }
   // TLA+: QuerySeqId / IssueQuery
   // The command stream assigns the next seqId, and D3DISSUE_END records that
   // seqId as qIssuedSeqId for the query fence.
@@ -797,7 +828,18 @@ HResult Device::issueQuery(const std::shared_ptr<Query> &query, bool begin) {
       query->resolve(submittedSequenceId_);
     }
   }
-  return D3D_OK;
+  query->issueDeviceEpoch_ = queryDeviceEpoch_;
+  if (async && !begin && query->type() != QueryType::TimestampFreq &&
+      query->type() != QueryType::TimestampDisjoint) {
+    query->backendFence_ = upperDevice_->publishQueryEnd();
+    query->failedIssue_ = !query->backendFence_.valid();
+  }
+  const auto result = query->failedIssue_ ? D3DERR_DEVICELOST : D3D_OK;
+  if (querydiag::enabled()) {
+    querydiag::issue(*query, begin, async, result,
+                    upperDevice_ ? upperDevice_->queryProgress() : query::Progress{});
+  }
+  return result;
 }
 
 HResult Device::getQueryData(const std::shared_ptr<Query> &query, void *output,
@@ -805,14 +847,45 @@ HResult Device::getQueryData(const std::shared_ptr<Query> &query, void *output,
   if (!query) {
     return D3DERR_INVALIDCALL;
   }
-  if ((flags & QUERY_GETDATA_FLUSH) != 0 && backend_) {
-    upperDevice_->flush();
-    completeUpTo(submittedSequenceId_);
-  }
-  // TLA+: QuerySeqId / SeqIdMonotone
-  // The completed sequence never exceeds submitted query/draw work.
-  DXMT_ASSERT(completedSequenceId_ <= submittedSequenceId_);
-  return query->getData(output, size, flags, completedSequenceId_);
+  const auto poll = [&]() -> HResult {
+    if (upperDevice_ && upperDevice_->usesAsyncQueryFences()) {
+      if (deviceLost_ || query->failedIssue_ ||
+          (query->issueOrdinal_ && query->issueDeviceEpoch_ != queryDeviceEpoch_))
+        return D3DERR_DEVICELOST;
+      // Frequency/disjoint have no per-END GPU data in the existing provider.
+      const bool constant = query->type() == QueryType::TimestampFreq ||
+                            query->type() == QueryType::TimestampDisjoint;
+      if (!constant && query->issueOrdinal_) {
+        if (query->active_) return S_FALSE;
+        switch (upperDevice_->pollQueryFence(query->backendFence_,
+                                  (flags & QUERY_GETDATA_FLUSH) != 0)) {
+        case query::Poll::Pending: return S_FALSE;
+        case query::Poll::Invalid:
+        case query::Poll::Failed: return D3DERR_DEVICELOST;
+        case query::Poll::Complete: break;
+        }
+      }
+      // The backend receipt proved THIS issue complete. Do not advance the
+      // unrelated core cursor, and never use Present's synthetic core progress
+      // to resolve a GPU receipt. Existing result-byte formatting is unchanged.
+      return query->getData(output, size, flags, query->issuedSequenceId_);
+    }
+    if ((flags & QUERY_GETDATA_FLUSH) != 0 && backend_) {
+      upperDevice_->flush();
+      completeUpTo(submittedSequenceId_);
+    }
+    // Legacy fallback retains its synchronous completion contract.
+    DXMT_ASSERT(completedSequenceId_ <= submittedSequenceId_);
+    return query->getData(output, size, flags, completedSequenceId_);
+  };
+  if (!querydiag::enabled()) return poll();
+  const auto started = std::chrono::steady_clock::now();
+  const auto result = poll();
+  const auto elapsed = std::chrono::steady_clock::now() - started;
+  querydiag::poll(*query, flags, result,
+      static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count()),
+      upperDevice_ ? upperDevice_->queryProgress() : query::Progress{});
+  return result;
 }
 
 void Device::completeUpTo(u64 sequenceId) {

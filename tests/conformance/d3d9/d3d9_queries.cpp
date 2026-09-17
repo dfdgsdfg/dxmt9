@@ -271,12 +271,100 @@ void timestamp_query_public_sizes() {
   freq_query->Release();
 }
 
+// Project-authored GPU oracle. Readback happens only AFTER query completion;
+// it must not accidentally supply the progress required by the poll loop.
+void event_query_draw_completion() {
+  Fixture fixture;
+  if (!fixture.init("event_query_draw_completion")) return;
+  auto* device = fixture.device;
+  IDirect3DQuery9* query = nullptr;
+  IDirect3DSurface9* target = nullptr;
+  IDirect3DSurface9* readback = nullptr;
+  CHECK_HR(device->CreateQuery(D3DQUERYTYPE_EVENT, &query), D3D_OK);
+  CHECK_HR(device->CreateRenderTarget(16, 16, D3DFMT_A8R8G8B8,
+      D3DMULTISAMPLE_NONE, 0, FALSE, &target, nullptr), D3D_OK);
+  CHECK_HR(device->CreateOffscreenPlainSurface(16, 16, D3DFMT_A8R8G8B8,
+      D3DPOOL_SYSTEMMEM, &readback, nullptr), D3D_OK);
+  if (query && target && readback) {
+    CHECK_HR(device->SetRenderTarget(0, target), D3D_OK);
+    CHECK_HR(device->SetDepthStencilSurface(nullptr), D3D_OK);
+    D3DVIEWPORT9 viewport{0, 0, 16, 16, 0.f, 1.f};
+    CHECK_HR(device->SetViewport(&viewport), D3D_OK);
+    CHECK_HR(device->SetFVF(D3DFVF_XYZRHW | D3DFVF_DIFFUSE), D3D_OK);
+    CHECK_HR(device->SetRenderState(D3DRS_LIGHTING, FALSE), D3D_OK);
+    CHECK_HR(device->SetRenderState(D3DRS_ZENABLE, FALSE), D3D_OK);
+    CHECK_HR(device->SetRenderState(D3DRS_CULLMODE, D3DCULL_NONE), D3D_OK);
+    CHECK_HR(device->SetRenderState(D3DRS_ALPHABLENDENABLE, FALSE), D3D_OK);
+    CHECK_HR(device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1), D3D_OK);
+    CHECK_HR(device->SetTextureStageState(0, D3DTSS_COLORARG1, D3DTA_DIFFUSE), D3D_OK);
+    CHECK_HR(device->SetTextureStageState(0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1), D3D_OK);
+    CHECK_HR(device->SetTextureStageState(0, D3DTSS_ALPHAARG1, D3DTA_DIFFUSE), D3D_OK);
+    for (unsigned issue = 0; issue < 2; ++issue) {
+      const DWORD color = issue ? 0xffc04020u : 0xff20c040u;
+      struct Vertex { float x, y, z, w; DWORD color; };
+      const Vertex vertices[] = {
+          {4, 4, 0, 1, color}, {12, 4, 0, 1, color},
+          {4, 12, 0, 1, color}, {12, 12, 0, 1, color}};
+      CHECK_HR(device->Clear(0, nullptr, D3DCLEAR_TARGET, 0xff204060u, 1, 0), D3D_OK);
+      CHECK_HR(device->BeginScene(), D3D_OK);
+      CHECK_HR(device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices,
+          sizeof(Vertex)), D3D_OK);
+      CHECK_HR(device->EndScene(), D3D_OK);
+      CHECK_HR(query->Issue(D3DISSUE_END), D3D_OK);
+
+      unsigned pending = 0;
+      HRESULT hr = query->GetData(nullptr, 0, 0);
+      CHECK_HR_ANY(hr, S_FALSE, S_OK);
+      // A FLUSH poll must make progress even without Present, readback, or a
+      // subsequent producer call. Pending polls preserve caller storage.
+      const DWORD started = GetTickCount();
+      do {
+        DWORD data[2] = {0xdeadbeefu, 0xbaadf00du};
+        hr = query->GetData(data, sizeof(data[0]), D3DGETDATA_FLUSH);
+        CHECK(data[1] == 0xbaadf00du);
+        if (hr != S_FALSE) break;
+        CHECK(data[0] == 0xdeadbeefu);
+        ++pending;
+        Sleep(1);
+      } while (GetTickCount() - started < 10000);
+      CHECK_HR(hr, S_OK);
+      std::printf("REACHED:event_query_draw_completion issue=%u pending=%u elapsed_ms=%lu\n",
+          issue, pending, static_cast<unsigned long>(GetTickCount() - started));
+      const char* async = std::getenv("DXMT9_ASYNC_QUERY_FENCES");
+      const char* delay = std::getenv("DXMT9_PERF_COMPLETION_SIGNAL_DELAY_MS");
+      if (async && async[0] == '1' && delay && std::strtoul(delay, nullptr, 10) >= 100)
+        CHECK(pending > 0);
+      if (hr != S_OK) break;
+      CHECK_HR(query->GetData(nullptr, 0, 0), S_OK);
+      CHECK_HR(device->GetRenderTargetData(target, readback), D3D_OK);
+      D3DLOCKED_RECT locked{};
+      hr = readback->LockRect(&locked, nullptr, D3DLOCK_READONLY);
+      CHECK_HR(hr, D3D_OK);
+      if (SUCCEEDED(hr)) {
+        auto pixel = [&](unsigned x, unsigned y) {
+          DWORD value;
+          std::memcpy(&value, static_cast<const char*>(locked.pBits) +
+              y * locked.Pitch + x * 4, sizeof(value));
+          return value;
+        };
+        CHECK(pixel(1, 1) == 0xff204060u);
+        CHECK(pixel(8, 8) == color);
+        CHECK_HR(readback->UnlockRect(), D3D_OK);
+      }
+    }
+  }
+  if (readback) readback->Release();
+  if (target) target->Release();
+  if (query) query->Release();
+}
+
 }  // namespace
 
 int main() {
   query_support_probe();
   occlusion_query_public_sizes();
   timestamp_query_public_sizes();
+  event_query_draw_completion();
 
   if (failures) {
     std::printf("d3d9_queries_x64: %d failure(s), %d skip(s)\n", failures, skips);

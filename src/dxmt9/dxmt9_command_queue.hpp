@@ -27,6 +27,7 @@
 #include "dxmt9_early_prefix_policy.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9/wsi_surface_protocol.hpp"
+#include "dxmt9/query_fence.hpp"
 #include "dxmt9_hud.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_presenter.hpp"
@@ -988,6 +989,12 @@ class CommandQueue {
   void abortPresentOrdinalWaits();
   void submitFlush();
 
+  // Query END publishes an actual prefix without a GPU completion wait.
+  // Issue retains normal bounded publication admission; polling never does.
+  query::Fence publishQueryEnd() noexcept;
+  query::Poll pollQueryFence(query::Fence fence, bool flush) noexcept;
+  query::Progress queryProgress() noexcept;
+
   // Cold Render Tape discriminator: publish the current ordinary source but
   // do not wait for GPU completion. Capacity admission retains its existing
   // backpressure. Active Arena/direct transactions cannot be cut here.
@@ -1402,6 +1409,8 @@ class CommandQueue {
   //     `Pool::reclaimCompleted` are driven from the finish loop with `mutex_`
   //     held, so the gate still sees the exact value.
   std::atomic<std::uint64_t> completedSeqId_{0};  // gpu-completed watermark
+  static std::uint64_t allocateQueryQueueIdentity() noexcept;
+  const std::uint64_t queryQueueIdentity_ = allocateQueryQueueIdentity();
 
   // TLA+: ProducerMarkReclaim!MapFastRead — the T2c lock-free watermark read.
   std::uint64_t completedSeqIdAcquire() const noexcept {

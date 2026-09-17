@@ -1,6 +1,7 @@
 #include "core_spec_fixtures.hpp"
 
 #include "dxmt9/d3d9_raster_status.hpp"
+#include "../../../src/dxmt9/dxmt9_device.hpp"
 
 #include <cstdlib>
 #include <filesystem>
@@ -821,6 +822,135 @@ void testQueryFlushPresentResetSequenceBoundaries() {
           "post-reset timestamp uses reset-local sequence id");
 }
 
+// A delayed backend authority, not a mock of the core query implementation.
+// Core public calls must consume these receipts without synthesizing progress.
+class QueryFenceDevice final : public dxmt9::Device {
+ public:
+  std::shared_ptr<RecordingBackend> renderer = std::make_shared<RecordingBackend>();
+  dxmt9::CommandQueue unused{dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, {}};
+  BackendLimits caps{};
+  dxmt9::query::Progress progress{41, 0, 0, false};
+  u64 requests = 0;
+  bool rejectEnd = false;
+  WMT::Device wmtDevice() override { return WMT::Device{NULL_OBJECT_HANDLE}; }
+  dxmt9::CommandQueue& queue() override { return unused; }
+  const BackendLimits& limits() const override { return caps; }
+  std::shared_ptr<BackendDevice> backend() override { return renderer; }
+  bool usesAsyncQueryFences() const noexcept override { return true; }
+  dxmt9::query::Fence publishQueryEnd() noexcept override {
+    if (rejectEnd) return {};
+    return {progress.queue, ++progress.published, progress.initializerPublished};
+  }
+  dxmt9::query::Poll pollQueryFence(dxmt9::query::Fence f, bool flush) noexcept override {
+    const auto result = dxmt9::query::classify(f, progress);
+    if (result == dxmt9::query::Poll::Pending && flush) ++requests;
+    return result;
+  }
+  dxmt9::query::Progress queryProgress() noexcept override { return progress; }
+  void flush() override { ++renderer->flushCount; }
+};
+
+void testAsyncQueryUsesActualCompletionOnly() {
+  auto upper = std::make_shared<QueryFenceDevice>();
+  Factory factory(upper);
+  PresentParameters params{};
+  params.backBufferWidth = 64;
+  params.backBufferHeight = 48;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "async query core device");
+  auto q = device->createQuery(QueryType::Timestamp);
+  upper->progress.initializerPublished = 1;
+  checkEq(device->issueQuery(q, false), D3D_OK, "END binds published prefix");
+  const auto first = q->backendFence();
+  check(first.valid() && first.sequence == 1, "first actual backend receipt");
+  u64 value = 0xdeadbeef;
+  checkEq(device->getQueryData(q, &value, sizeof(value), 0), S_FALSE,
+          "no-FLUSH pending poll");
+  checkEq(upper->requests, 0ull, "no-FLUSH does not request submission");
+  for (unsigned i = 0; i < 4; ++i) {
+    checkEq(device->getQueryData(q, &value, sizeof(value), QUERY_GETDATA_FLUSH),
+            S_FALSE, "FLUSH returns while actual backend is delayed");
+  }
+  checkEq(value, 0xdeadbeefull, "pending never touches result bytes");
+  checkEq(upper->renderer->flushCount, 0u, "no blocking generic flush");
+  checkEq(device->completedSequenceId(), 0ull, "no invented core completion");
+  device->completeUpTo(device->submittedSequenceId());
+  checkEq(device->getQueryData(q, nullptr, 0, 0), S_FALSE,
+          "synthetic core/Present completion cannot resolve backend fence");
+  upper->progress.completed = first.sequence;
+  checkEq(device->getQueryData(q, nullptr, 0, 0), S_FALSE,
+          "ordinary prefix completion cannot hide pending initializer upload");
+  upper->progress.initializerCompleted = 1;
+  upper->progress.published = 7;  // unrelated newer suffix remains incomplete
+  const auto requestsBefore = upper->requests;
+  checkEq(device->getQueryData(q, &value, sizeof(value), QUERY_GETDATA_FLUSH),
+          S_OK, "only query prefix needs completion");
+  checkEq(upper->requests, requestsBefore, "resolved query never flushes newer suffix");
+  checkEq(device->issueQuery(q, false), D3D_OK, "reissue replaces receipt");
+  checkEq(device->getQueryData(q, nullptr, 0, 0), S_FALSE,
+          "old completion cannot satisfy reissue");
+  upper->progress.completed = upper->progress.published;
+  checkEq(device->getQueryData(q, nullptr, 0, 0), S_OK, "new receipt completes");
+  upper->progress.failed = true;
+  checkEq(device->getQueryData(q, nullptr, 0, 0), D3DERR_DEVICELOST,
+          "terminal queue wins over completed watermark");
+  upper->progress.failed = false;
+  ++upper->progress.queue;
+  checkEq(device->getQueryData(q, nullptr, 0, 0), D3DERR_DEVICELOST,
+          "another queue incarnation cannot resolve receipt");
+  --upper->progress.queue;
+  checkEq(device->reset(params), D3D_OK, "reset preserves its blocking flush");
+  checkEq(upper->renderer->flushCount, 1u, "reset still flushes");
+  checkEq(device->getQueryData(q, nullptr, 0, 0), D3DERR_DEVICELOST,
+          "reset invalidates prior issue epoch");
+  checkEq(device->issueQuery(q, false), D3D_OK, "reissue after reset");
+  upper->rejectEnd = true;
+  checkEq(device->issueQuery(q, false), D3DERR_DEVICELOST, "END publication failure");
+  checkEq(device->getQueryData(q, nullptr, 0, QUERY_GETDATA_FLUSH), D3DERR_DEVICELOST,
+          "failed END cannot resolve an older receipt");
+  upper->rejectEnd = false;
+  auto occlusion = device->createQuery(QueryType::Occlusion);
+  checkEq(device->issueQuery(occlusion, true), D3D_OK, "occlusion begin");
+  checkEq(device->getQueryData(occlusion, nullptr, 0, QUERY_GETDATA_FLUSH), S_FALSE,
+          "BEGIN alone is not an END receipt");
+  checkEq(device->issueQuery(occlusion, false), D3D_OK, "occlusion end");
+  upper->progress.completed = upper->progress.published;
+  u32 samples = 123;
+  checkEq(device->getQueryData(occlusion, &samples, sizeof(samples), 0), S_OK,
+          "occlusion formatter behind completed receipt");
+  checkEq(samples, 0u, "existing empty occlusion value preserved");
+}
+
+void testQueryFenceTruthTable() {
+  using namespace dxmt9::query;
+  for (u64 owner = 0; owner != 3; ++owner)
+    for (u64 sequence = 0; sequence != 5; ++sequence)
+      for (u64 published = 0; published != 4; ++published)
+        for (u64 completed = 0; completed != 5; ++completed)
+          for (bool failed : {false, true}) {
+            const auto actual = classify({owner, sequence}, {1, published, completed, failed});
+            const bool valid = owner == 1 && sequence <= published && completed <= published;
+            const auto expected = !valid ? Poll::Invalid : failed ? Poll::Failed :
+                completed < sequence ? Poll::Pending : Poll::Complete;
+            check(actual == expected, "QueryPublicationFence exhaustive poll binding");
+            checkEq(submissionTarget(sequence, completed),
+                    sequence > completed ? sequence : 0,
+                    "sticky obligation retires only past its own prefix");
+          }
+  // Exhaustive product with the separate initializer event frontier. This
+  // binds the extra data dependency that QueryPublicationFence abstracts out.
+  for (u64 seqDone = 0; seqDone != 3; ++seqDone)
+    for (u64 initDone = 0; initDone != 4; ++initDone)
+      for (u64 initIssued = 0; initIssued != 4; ++initIssued) {
+        const auto result = classify({1, 1, initIssued}, {1, 2, seqDone, false, 2, initDone});
+        const auto expected = initDone > 2 || initIssued > 2 ? Poll::Invalid :
+            seqDone >= 1 && initDone >= initIssued ? Poll::Complete : Poll::Pending;
+        check(result == expected, "query requires both independent completion frontiers");
+      }
+}
+
 void testResetClearsStaleDrawStateBeforeNextBoundaryPacket() {
   auto backend = std::make_shared<RecordingBackend>();
   Factory factory({}, backend);
@@ -1628,6 +1758,8 @@ int main() {
     testDeviceCoreFlow();
     testFullscreenAndDeviceLost();
     testQueryFlushPresentResetSequenceBoundaries();
+    testAsyncQueryUsesActualCompletionOnly();
+    testQueryFenceTruthTable();
     testResetClearsStaleDrawStateBeforeNextBoundaryPacket();
     testResetRejectsStaleSurfaceOpsBeforeBackendBoundary();
     testGetRenderTargetDataUsesRuntimeReadbackPayload();

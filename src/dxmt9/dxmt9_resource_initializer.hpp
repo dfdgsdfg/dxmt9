@@ -11,7 +11,9 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9_resource_pool.hpp"
 
+#include <array>
 #include <cstdint>
+#include <optional>
 #include <span>
 #include <vector>
 
@@ -68,6 +70,14 @@ class Initializer {
   // Caller must hold CommandQueue::mutex_. This is a queue-side boundary
   // predicate for EncodeSession append decisions; it does not flush work.
   bool hasPendingUploadsUnlocked() const noexcept;
+  // Query owns a prefix of this separate submission stream as well as the
+  // ordinary queue. Callers hold CommandQueue::mutex_; no completion wait.
+  std::optional<std::uint64_t> publishQueryPrefixUnlocked();
+  struct QueryProgress {
+    std::uint64_t published = 0, completed = 0;
+    bool failed = false;
+  };
+  QueryProgress queryProgressUnlocked() noexcept;
 
  private:
   FlushResult flushToWaitUnlocked();
@@ -84,6 +94,18 @@ class Initializer {
   std::uint64_t nextEventValue_ = 1;
   std::uint64_t lastSignaledValue_ = 0;
   std::vector<Pool::StagingCopy> pendingUploads_;
+  // Opt-in candidate only. Retain a bounded FIFO of upload submissions so
+  // shared-event signaling cannot hide an errored command buffer. No callback
+  // captures Initializer/Query lifetime and polling never waits for the GPU.
+  struct QueryUpload {
+    WMT::Reference<WMT::CommandBuffer> buffer;
+    std::uint64_t value = 0;
+  };
+  bool queryTrackingEnabled_ = false;
+  bool queryFailed_ = false;
+  std::uint64_t queryCompleted_ = 0;
+  std::array<QueryUpload, 64> queryUploads_{};
+  std::size_t queryUploadHead_ = 0, queryUploadCount_ = 0;
 };
 
 }  // namespace resources

@@ -4,12 +4,24 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap"
 type: domain-index
 status: current
-updated: 2026-09-16
+updated: 2026-09-17
 source: docs/perfomance/present-pacing/present-pacing-pe-constant-bitcompare.254.md; docs/perfomance/present-pacing/present-pacing-pe-canonical-authority.253.md; docs/perfomance/present-pacing/present-pacing-pe-append-effects.251.md; docs/perfomance/present-pacing/present-pacing-pe-sparse-work.250.md; docs/perfomance/present-pacing/present-pacing-pe-flush-layout.249.md; docs/perfomance/present-pacing/present-pacing-pe-identity-distribution.248.md
 related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
+
+[H315](present-pacing-query-publication-fences.315.md) implements a default-off
+actual-prefix query fence with persistent FLUSH submission and separate GPU
+completion. Native/model binding and x64/x86 delayed-completion pixel probes
+pass; visible wild/locality and initializer fault coverage remain promotion
+gates. Core query result-data providers are not upgraded by this fence.
+
+[H314](present-pacing-stalker-query-waits.314.md) establishes an unchanged-image
+STALKER Day retry and separate query-wait diagnostic. Query crossing and queue
+completion waits dominate replay-drain time; partial app CPU is 0.449 cores.
+Actual END-to-queue identity and public nonblocking behavior need investigation.
+Missing onscreen captures prevent visual/focus qualification and FPS promotion.
 
 [H313](present-pacing-app-thread-attribution.313.md) records current-image
 game/Wine-system/PE/bridge guest-PC populations. Game PCs dominate, but saved

@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <iomanip>
 #include <limits>
@@ -219,6 +220,8 @@ void dumpTextureSnapshotUnlocked(CommandQueue& queue,
 
 Initializer::Initializer(CommandQueue& queue, Pool& pool, WMT::Reference<WMT::Device> device)
     : queue_(&queue), pool_(&pool), device_(std::move(device)) {
+  const char* queryMode = std::getenv("DXMT9_ASYNC_QUERY_FENCES");
+  queryTrackingEnabled_ = queryMode && queryMode[0] && queryMode[0] != '0';
   // Allocate the SharedEvent eagerly when we have a real device. On the
   // null-device test path event_ stays empty and flushToWait becomes a
   // no-op.
@@ -314,6 +317,35 @@ bool Initializer::hasPendingUploadsUnlocked() const noexcept {
   return !pendingUploads_.empty();
 }
 
+std::optional<std::uint64_t> Initializer::publishQueryPrefixUnlocked() {
+  const bool pending = !pendingUploads_.empty();
+  const auto result = flushToWaitUnlocked();
+  // The older flush helper clears failed allocations; that is not a receipt.
+  if (queryFailed_ || (pending && !result.didFlush) || (result.value && !event_))
+    return std::nullopt;
+  return result.value;
+}
+
+Initializer::QueryProgress Initializer::queryProgressUnlocked() noexcept {
+  const auto signaled = event_ ? WMT::SharedEvent{event_.handle}.signaledValue() : 0;
+  if (!queryTrackingEnabled_) return {lastSignaledValue_, signaled, false};
+  while (queryUploadCount_) {
+    auto& head = queryUploads_[queryUploadHead_];
+    const auto status = head.buffer.status();
+    if (status == WMTCommandBufferStatusError) {
+      queryFailed_ = true;
+      queue_->requestSchedulingStopLocked();
+      break;
+    }
+    if (status != WMTCommandBufferStatusCompleted) break;
+    queryCompleted_ = head.value;
+    head = {};
+    queryUploadHead_ = (queryUploadHead_ + 1) % queryUploads_.size();
+    --queryUploadCount_;
+  }
+  return {lastSignaledValue_, std::min(queryCompleted_, signaled), queryFailed_};
+}
+
 void Initializer::enqueuePendingUploadUnlocked(Pool::StagingCopy staging) {
   // TLA+: ResourceLifetime!StageInitializerUpload / NoUseAfterFree is asserted
   // where the StagingCopy is BUILT (Pool::stageTextureUpload, right after
@@ -340,17 +372,37 @@ Initializer::FlushResult Initializer::flushToWaitUnlocked() {
     result.value = lastSignaledValue_;
     return result;
   }
+  if (queryTrackingEnabled_) {
+    (void)queryProgressUnlocked();
+    if (queryFailed_ || queryUploadCount_ == queryUploads_.size() || !event_ ||
+        nextEventValue_ == std::numeric_limits<std::uint64_t>::max()) {
+      queryFailed_ = true;
+      // This helper also runs before ordinary encode, not only at Query END.
+      // Do not let a rejected upload masquerade as an empty successful flush.
+      queue_->requestSchedulingStopLocked();
+      result.value = lastSignaledValue_;
+      return result;
+    }
+  }
   // Encode all queued staging→private blits into one command buffer,
   // signal the event, and commit WITHOUT waiting — the render chunk
   // will wait via encodeWaitForEvent on its own command buffer.
   auto commandBuffer = queue_->newCommandBuffer();
   if (!commandBuffer) {
+    if (queryTrackingEnabled_) {
+      queryFailed_ = true;
+      queue_->requestSchedulingStopLocked();
+    }
     pendingUploads_.clear();
     result.value = lastSignaledValue_;
     return result;
   }
   auto blit = commandBuffer.blitCommandEncoder();
   if (!blit) {
+    if (queryTrackingEnabled_) {
+      queryFailed_ = true;
+      queue_->requestSchedulingStopLocked();
+    }
     pendingUploads_.clear();
     result.value = lastSignaledValue_;
     return result;
@@ -405,6 +457,12 @@ Initializer::FlushResult Initializer::flushToWaitUnlocked() {
     commandBuffer.encodeSignalEvent(WMT::Event{event_.handle}, value);
   }
   commandBuffer.commit();
+  if (queryTrackingEnabled_) {
+    auto& entry = queryUploads_[(queryUploadHead_ + queryUploadCount_) % queryUploads_.size()];
+    entry.buffer = commandBuffer;
+    entry.value = value;
+    ++queryUploadCount_;
+  }
   lastSignaledValue_ = value;
   pendingUploads_.clear();
   result.value = value;

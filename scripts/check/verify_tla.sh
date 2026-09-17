@@ -50,6 +50,7 @@ normal_models=(
   ProducerMarkReclaim
   PsoSlotPublication
   QuerySeqId
+  QueryPublicationFence
   QueueLifecycleRefinement
   QueueT2dReserveCopyCommit
   RenderTapeCompletionSchedule
@@ -71,10 +72,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=59
+expected_normal_count=60
 expected_progress_count=4
-expected_counterexample_count=133
-expected_cfg_count=196
+expected_counterexample_count=137
+expected_cfg_count=201
 progress_configs=(
   CpuPipelineLifecycle.progress
   DirectSourceLifecycle.progress
@@ -120,6 +121,10 @@ trap cleanup EXIT
 # selects `<model>.tla`; the suffix selects `<model><suffix>.cfg`, so one model
 # may carry several independent broken premises.
 counterexample_models=(
+  "QueryPublicationFence|.early-completion.counterexample|Invariant NoInventedCompletion is violated"
+  "QueryPublicationFence|.drop-request.counterexample|Invariant StickyRequest is violated"
+  "QueryPublicationFence|.old-issue.counterexample|Invariant CompletionSafety is violated"
+  "QueryPublicationFence|.ignore-failure.counterexample|Invariant CompletionSafety is violated"
   "SessionAdmissionHysteresis|.high-water-only.counterexample|Invariant NoClosedEmptySessionCycle is violated"
   "DirectSourceLifecycle|.stale-witness.counterexample|Invariant WitnessIsFresh is violated"
   "DirectSourceLifecycle|.duplicate-witness.counterexample|Invariant WitnessConsumedOnce is violated"

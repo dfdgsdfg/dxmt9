@@ -3312,6 +3312,36 @@ summary = "Sikarugir-CX 24.0.7 builtin lane x64 2026-05-24 — pass via extended
 [[case]]
 executable = "d3d9_queries_x64.exe"
 source_file = "d3d9_queries.cpp"
+function = "event_query_draw_completion"
+source = "dxmt9-authored Clear/Draw/Event END/poll/reissue/readback oracle"
+source_kind = "dxmt9-policy"
+license = "MIT"
+license_scope = "dxmt9"
+lanes = ["app-local", "builtin"]
+arches = ["x64", "x86"]
+area = "queries"
+owner = "core/queries"
+requirements = ["R-TEST-12.12"]
+acceptance = ["R-CORE-11.5(a): Event END completes real Clear/Draw without Present or readback supplying progress; pending polls preserve storage, reissue completes a new prefix, and exact clear/draw pixels match after completion; async plus diagnostic completion delay requires observed S_FALSE"]
+status = "partial"
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x64"
+status = "passing"
+source = "experiments/output/query-fences-r636-20260917.noindex/on-hardened-x64.json:1"
+summary = "R636: all four auxiliary cases pass without skips; async with 200ms completion delay observes S_FALSE then S_OK, reissue, exact clear/draw pixel probes, repeated after initializer failure hardening. Earlier same-image OFF and undelayed ON controls also pass. Does not exercise initializer-only uploads or real occlusion/timestamp values."
+
+[[case.evidence]]
+lane = "builtin"
+arch = "x86"
+status = "passing"
+source = "experiments/output/query-fences-r636-20260917.noindex/on-hardened-x86.json:1"
+summary = "R636: WoW64 build (legacy exe basename remains d3d9_queries_x64.exe) passes all four cases, no skips; 200ms delayed async completion/reissue and exact clear/draw pixel probes, repeated after initializer failure hardening."
+
+[[case]]
+executable = "d3d9_queries_x64.exe"
+source_file = "d3d9_queries.cpp"
 function = "occlusion_query_public_sizes"
 source = "wine/dlls/d3d9/tests/device.c:test_occlusion_query"
 source_kind = "behavioral-oracle"
