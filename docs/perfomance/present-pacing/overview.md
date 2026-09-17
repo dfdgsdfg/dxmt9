@@ -30,7 +30,17 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
-[H315](present-pacing-query-publication-fences.315.md) separates actual-prefix
+[H316](present-pacing-query-default-promotion.316.md) promotes asynchronous
+query completion to default ON after bounded native/model/GPU/Wine and visible
+STALKER evidence. Explicit OFF preserves the synchronous reference. END still
+publishes eagerly, but an actually submitted query no longer pressures an
+unrelated suffix or repeats encode/finish wakes. Failure injection uses the
+production upload reaper; it does not prove real driver recovery. Full-frame
+wild equivalence, real Metal occlusion/timestamp providers and deferred END
+coalescing remain open. Clean same-image runs are kept separate from the
+observer-enabled locality diagnostic; README is unchanged.
+
+Historical [H315](present-pacing-query-publication-fences.315.md) separates actual-prefix
 Query END publication from completion waiting behind a default-off candidate.
 The receipt joins ordinary queue and initializer progress; persistent FLUSH
 requests wake encode without inventing completion. Native/model checks and

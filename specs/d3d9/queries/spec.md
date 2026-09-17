@@ -10,7 +10,9 @@ tags: [specs, d3d9, queries, spec]
 D3D9 queries let the application probe GPU state asynchronously. Because dxmt9
 uses a deferred command queue, query results are not available until the GPU has
 processed the commands that surround the query. The implementation uses POD
-query records in command chunks plus a CPU-visible sequence ID fence.
+query operations plus CPU-visible ordinary and initializer completion fences.
+Section 7 describes the implemented completion path. Sections 4–5 describe
+the target Metal result providers, which are not yet fully implemented.
 
 ---
 
@@ -41,7 +43,8 @@ CommandQueue state:
   completedSeqId:  atomic<uint64>
 ```
 
-A query is resolved when `completedSeqId >= query.issuedSeqId`.
+A query requires `completedSeqId >= fence.sequence` as well as successful
+initializer completion, a live queue incarnation and the current issue epoch.
 
 ```mermaid
 sequenceDiagram
@@ -50,24 +53,25 @@ sequenceDiagram
     participant CQ as CommandQueue
     participant GPU
 
-    App->>Core: Issue(D3DISSUE_BEGIN)
-    Core->>CQ: append BeginQuery record (chunk N)
-
     App->>Core: Issue(D3DISSUE_END)
-    Core->>CQ: append EndQuery marker record (chunk N)
-    Note over Core: query.issuedSeqId = N
+    Core->>CQ: publish ordinary writer and initializer uploads
+    CQ-->>Core: actual queue incarnation, prefix N, initializer U
+
+    App->>Core: GetData(FLUSH)
+    Core->>CQ: request submission of N (no completion wait)
+    Core-->>App: S_FALSE while pending
 
     CQ->>GPU: MTLCommandBuffer.commit() (chunk N)
     GPU-->>CQ: completion signal
     CQ->>CQ: completedSeqId = N
 
     App->>Core: GetData(&result, size, flags)
-    Core->>CQ: completedSeqId >= issuedSeqId?
+    Core->>CQ: ordinary N and initializer U successfully complete?
     alt resolved
         Core-->>App: S_OK, result filled
     else not yet
         alt D3DGETDATA_FLUSH
-            Core->>CQ: flush pending chunks
+            Core->>CQ: retain submission obligation for N
         end
         Core-->>App: S_FALSE
     end
@@ -77,16 +81,16 @@ sequenceDiagram
 
 ## 3. D3DQUERYTYPE_EVENT
 
-An event query is a pure GPU fence. It returns no data; it only reports
-completion.
+An event query is a GPU fence with a `BOOL` public result. A caller may poll
+with `GetData(NULL, 0, flags)` without requesting result bytes.
 
-`Issue(D3DISSUE_END)` appends a queue-local EVENT END marker record to the
-current chunk and stores that chunk's sequence ID in `query.issuedSeqId`. No
-Metal query object is required; completion is tracked through `completedSeqId`.
+In the implemented path, `Issue(D3DISSUE_END)` publishes the current writer
+and captures its actual prefix, rather than inserting a new Metal query
+command. No Metal query object is required. Section 7 adds initializer success,
+queue incarnation and failure to the ordinary `completedSeqId` condition.
 
-`GetData(NULL, 0, flags)` compares `completedSeqId` with `issuedSeqId`. If the
-query is unresolved and `D3DGETDATA_FLUSH` is set, the recorder commits the
-current chunk so the END marker can reach the GPU.
+`GetData(NULL, 0, flags)` polls that receipt. If the query is unresolved and
+`D3DGETDATA_FLUSH` is set, it requests submission of the published prefix.
 
 ```cpp
 while (pQuery->GetData(NULL, 0, D3DGETDATA_FLUSH) == S_FALSE) {
@@ -94,9 +98,9 @@ while (pQuery->GetData(NULL, 0, D3DGETDATA_FLUSH) == S_FALSE) {
 }
 ```
 
-The flush path is the deadlock breaker for this loop. It submits the chunk that
-contains the END marker; the finish thread then advances `completedSeqId` when
-the GPU completes the chunk.
+The sticky submission request is the deadlock breaker for this loop. The
+finish thread advances `completedSeqId` only after actual GPU completion;
+initializer completion is observed independently.
 
 ---
 
@@ -172,9 +176,12 @@ The COM object may be released while a backend record is in flight. Command chun
 retention keeps backend handles and result storage alive until GPU completion,
 without depending on public COM references.
 
-## 7. Published-prefix asynchronous candidate
+## 7. Published-prefix asynchronous completion
 
-`DXMT9_ASYNC_QUERY_FENCES` is an opt-in implementation of R-CORE-11.5(a).
+`DXMT9_ASYNC_QUERY_FENCES` controls the implementation of R-CORE-11.5(a).
+It defaults ON; explicit `0` (or an empty value) selects the synchronous
+diagnostic/reference path. This is a completion-policy change, not a new
+Metal occlusion/timestamp result provider.
 END first settles any compatibility draw batch, then publishes the ordinary
 queue writer and obtains `{queue incarnation, published sequence}` under the
 queue mutex. With no writer it captures the existing published prefix, including
@@ -193,6 +200,20 @@ query success independently of the resource-reclamation waterline. A failed init
 flush yields no receipt and fail-stops; absence of ordinary commands must not
 hide pending uploads. The native exhaustive product table covers both axes;
 `QueryPublicationFence.tla` abstracts the initializer/Metal event axis out.
+`QueryInitializerFence.tla` owns the independent two-frontier product, including
+signal-before-success and bounded tracker capacity. Its expected failures
+remove the upload dependency, trust the event without successful completion,
+and remove capacity admission. This is an abstract driver-status model, not a
+proof of actual Metal bytes or driver recovery after a device fault.
+
+The fixed `query::UploadTracker` owns retained entries, contiguous successful
+completion and terminal failure. Production supplies Metal status reads to the
+same reaper that native fault tests drive with deterministic statuses. Admission
+fails before allocation when capacity/event/ordinal constraints cannot be met;
+failed entries and their unobserved suffix are never evicted for new work.
+The initializer-only GPU oracle parks an actual command queue behind a separate
+event, confirms pending query polls, releases the gate, and reads every byte
+only after completion. It repeats the upload while preserving the old receipt.
 
 The core query retains this value with its issue ordinal and device-reset
 epoch. There is no callback retaining or mutating the public query object:
@@ -202,13 +223,20 @@ cannot redirect a late callback. Reset invalidates earlier issue epochs.
 FLUSH on a pending receipt raises a sticky queue submission target and wakes
 the encode coordinator. It does not enter `waitForSequence`, nor does it call
 `completeUpTo`. The request participates in the encoder's existing ordered
-progress decisions and remains active after the producer returns. Readback,
+progress decisions and remains active after the producer returns until the
+requested prefix has actually been submitted. Repeated polls of an already
+requested/submitted prefix do not repeat encode/finish CV notifications.
+Readback,
 reset and teardown continue to use their blocking contracts. An already
 complete query does not request submission of a newer suffix.
 
 The shared pure predicates in `include/dxmt9/query_fence.hpp` distinguish
-invalid/failed/pending/complete and retire async progress only after its exact
-target completes. Formal/native evidence must cover delayed completion,
+invalid/failed/pending/complete. `submissionWorkTarget` retires submission
+pressure only at an actual submitted prefix (or completed prefix), while
+`classify` still requires successful completion. A submitted but pending query
+must not force unrelated later sources to split. The request value remains
+sticky; no completion or reclamation cursor advances with it.
+Formal/native evidence must cover delayed completion,
 queue-incarnation mismatch, old/new issue receipts, empty prefix, terminal
 state, reset, and persistent wakeup. END publication may change batching;
 performance and command-buffer locality are explicit promotion gates.

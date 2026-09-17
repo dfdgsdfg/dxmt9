@@ -9,6 +9,7 @@
 
 #include "../winemetal/Metal.hpp"
 #include "dxmt9/core.hpp"
+#include "dxmt9/query_upload_tracker.hpp"
 #include "dxmt9_resource_pool.hpp"
 
 #include <array>
@@ -89,23 +90,16 @@ class Initializer {
   Pool* pool_;
   WMT::Reference<WMT::Device> device_;
 
-  // Created lazily on first deferred upload (if device is non-null).
+  // Created with a real device; absent only on the null-device test path.
   WMT::Reference<WMT::SharedEvent> event_;
   std::uint64_t nextEventValue_ = 1;
   std::uint64_t lastSignaledValue_ = 0;
   std::vector<Pool::StagingCopy> pendingUploads_;
-  // Opt-in candidate only. Retain a bounded FIFO of upload submissions so
+  // Async query mode retains a bounded FIFO of upload submissions so
   // shared-event signaling cannot hide an errored command buffer. No callback
   // captures Initializer/Query lifetime and polling never waits for the GPU.
-  struct QueryUpload {
-    WMT::Reference<WMT::CommandBuffer> buffer;
-    std::uint64_t value = 0;
-  };
   bool queryTrackingEnabled_ = false;
-  bool queryFailed_ = false;
-  std::uint64_t queryCompleted_ = 0;
-  std::array<QueryUpload, 64> queryUploads_{};
-  std::size_t queryUploadHead_ = 0, queryUploadCount_ = 0;
+  query::UploadTracker<WMT::Reference<WMT::CommandBuffer>, 64> queryUploads_;
 };
 
 }  // namespace resources

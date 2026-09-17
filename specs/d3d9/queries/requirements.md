@@ -56,7 +56,7 @@ Windows-compatible public byte size for the query type, including:
 
 | Query type | Required public size |
 |---|---:|
-| `D3DQUERYTYPE_EVENT` | `0` |
+| `D3DQUERYTYPE_EVENT` | `sizeof(BOOL)` |
 | `D3DQUERYTYPE_OCCLUSION` | `sizeof(DWORD)` |
 | `D3DQUERYTYPE_TIMESTAMP` | `sizeof(UINT64)` |
 | `D3DQUERYTYPE_TIMESTAMPDISJOINT` | `sizeof(BOOL)` |
@@ -110,9 +110,9 @@ the END marker remained in an uncommitted chunk.
 Flush commits are ordering operations only. They must not make the query appear
 resolved before GPU completion advances `completedSeqId` past `issuedSeqId`.
 
-### 4.1 Published-prefix candidate (`R-CORE-11.5(a)`)
+### 4.1 Published-prefix completion (`R-CORE-11.5(a)`)
 
-The opt-in asynchronous query-fence candidate must bind END to an actual
+The asynchronous query-fence path must bind END to an actual
 published queue prefix, qualified by a queue incarnation. A core API ordinal
 or a predicted future writer sequence is not a completion identity. An empty
 prefix is valid only with a live queue incarnation.
@@ -124,14 +124,43 @@ wait for GPU completion or advance the core completion cursor. A pending query
 returns `S_FALSE`; actual completion permits `S_OK`. A terminal queue, stale
 device epoch, or invalid receipt must not report successful completion. Reissue
 replaces the old receipt, and later unrelated submissions must not extend it.
-Progress requests must survive return from the poll and wake a parked encoder;
-they retire only when completion passes their target or the queue terminates.
+Progress requests must survive return from the poll and wake a parked encoder.
+Their submission pressure retires at actual submission; the query's completion
+obligation persists until both completion frontiers pass or the queue terminates.
 
-This candidate may publish the current writer at END, retaining existing
+This path may publish the current writer at END, retaining existing
 bounded admission backpressure at Issue. Blocking readback/reset/teardown
-flushes remain separate. It must stay default-off until native/model binding,
-Wine behavior, visible wild correctness and locality/non-regression evidence
-are available. Query result-data implementation is not proved by a fence.
+flushes remain separate. Default promotion requires native/model binding,
+Wine behavior, visible wild correctness and locality/non-regression evidence.
+Query result-data implementation is not proved by a fence.
+
+### 4.2 Initializer completion evidence (`R-CORE-11.5(b)`)
+
+The initializer completion frontier must be the minimum of the observed event
+signal and the contiguous prefix of successfully completed upload command
+buffers. Signaling alone, completion of a later upload, or ordinary queue
+completion must not authorize an earlier pending or failed upload.
+
+The retained upload tracker must reject capacity exhaustion, stale publication
+ordinals, missing events, counter exhaustion and allocation failure before
+claiming a new receipt. Failure is terminal for query success; tracker entries
+must not be overwritten to admit newer work. Fault tests must exercise every
+tracker position and reuse across wrap. A hardware oracle must independently
+gate an initializer-only stream, observe pending polls without Present/readback,
+then verify all uploaded bytes after successful query completion.
+
+### 4.3 Submission locality (`R-CORE-11.5(c)`)
+
+A pending query's submission obligation and completion obligation are distinct.
+An actual submitted prefix may discharge the former, never the latter. An
+already submitted query prefix should not force publication of unrelated later
+sources while waiting for GPU completion. Blocking resource/readback/teardown
+wait targets retain their existing semantics.
+
+Deferring END publication or coalescing ENDs across a live writer requires a
+separate admitted marker-to-publication identity; a predicted future queue
+sequence remains forbidden. Such a candidate must preserve ordered-control
+cuts and may not claim the eager-publication evidence as proof of the new path.
 
 ---
 

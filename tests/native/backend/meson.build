@@ -1,5 +1,22 @@
 # Backend descriptor / pipeline / replay / hazard / capture / counter / render-pass specs.
 
+query_upload_tracker_spec = executable(
+  'dxmt9-query-upload-tracker-spec', 'query_upload_tracker_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+test('dxmt9-query-upload-tracker-spec', query_upload_tracker_spec,
+     env: dxmt9_native_test_env)
+
+query_initializer_spec = executable(
+  'dxmt9-query-initializer-spec', 'query_initializer_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-query-initializer-spec', query_initializer_spec,
+     env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1', 'DXMT9_ASYNC_QUERY_FENCES=1'],
+     is_parallel: false, timeout: 30)
+
 metal_shader_compile_profile_spec = executable(
   'dxmt9-metal-shader-compile-profile-spec',
   'metal_shader_compile_profile_spec.mm',

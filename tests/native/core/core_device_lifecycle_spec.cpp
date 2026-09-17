@@ -949,6 +949,12 @@ void testQueryFenceTruthTable() {
             seqDone >= 1 && initDone >= initIssued ? Poll::Complete : Poll::Pending;
         check(result == expected, "query requires both independent completion frontiers");
       }
+  for (u64 requested = 0; requested != 4; ++requested)
+    for (u64 submitted = 0; submitted != 4; ++submitted)
+      for (u64 completed = 0; completed <= submitted; ++completed)
+        checkEq(submissionWorkTarget(requested, submitted, completed),
+                requested > submitted ? requested : 0,
+                "actual submission discharges only submission pressure");
 }
 
 void testResetClearsStaleDrawStateBeforeNextBoundaryPacket() {

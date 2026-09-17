@@ -306,11 +306,34 @@ void event_query_draw_completion() {
           {4, 4, 0, 1, color}, {12, 4, 0, 1, color},
           {4, 12, 0, 1, color}, {12, 12, 0, 1, color}};
       CHECK_HR(device->Clear(0, nullptr, D3DCLEAR_TARGET, 0xff204060u, 1, 0), D3D_OK);
+      IDirect3DVertexBuffer9* vb = nullptr;
+      if (issue) {
+        CHECK_HR(device->CreateVertexBuffer(sizeof(vertices), D3DUSAGE_WRITEONLY,
+            D3DFVF_XYZRHW | D3DFVF_DIFFUSE, D3DPOOL_DEFAULT, &vb, nullptr), D3D_OK);
+        if (vb) {
+          void* data = nullptr;
+          const HRESULT lock = vb->Lock(0, sizeof(vertices), &data, 0);
+          CHECK_HR(lock, D3D_OK);
+          if (SUCCEEDED(lock)) {
+            std::memcpy(data, vertices, sizeof(vertices));
+            CHECK_HR(vb->Unlock(), D3D_OK);
+          }
+          CHECK_HR(device->SetStreamSource(0, vb, 0, sizeof(Vertex)), D3D_OK);
+        }
+      }
       CHECK_HR(device->BeginScene(), D3D_OK);
-      CHECK_HR(device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices,
-          sizeof(Vertex)), D3D_OK);
+      if (vb) {
+        CHECK_HR(device->DrawPrimitive(D3DPT_TRIANGLESTRIP, 0, 2), D3D_OK);
+      } else {
+        CHECK_HR(device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices,
+            sizeof(Vertex)), D3D_OK);
+      }
       CHECK_HR(device->EndScene(), D3D_OK);
       CHECK_HR(query->Issue(D3DISSUE_END), D3D_OK);
+      if (vb) {
+        CHECK_HR(device->SetStreamSource(0, nullptr, 0, 0), D3D_OK);
+        vb->Release(); // retained draw lifetime must not depend on this reference
+      }
 
       unsigned pending = 0;
       HRESULT hr = query->GetData(nullptr, 0, 0);
@@ -332,7 +355,8 @@ void event_query_draw_completion() {
           issue, pending, static_cast<unsigned long>(GetTickCount() - started));
       const char* async = std::getenv("DXMT9_ASYNC_QUERY_FENCES");
       const char* delay = std::getenv("DXMT9_PERF_COMPLETION_SIGNAL_DELAY_MS");
-      if (async && async[0] == '1' && delay && std::strtoul(delay, nullptr, 10) >= 100)
+      const bool asyncEnabled = !async || (async[0] && async[0] != '0');
+      if (asyncEnabled && delay && std::strtoul(delay, nullptr, 10) >= 100)
         CHECK(pending > 0);
       if (hr != S_OK) break;
       CHECK_HR(query->GetData(nullptr, 0, 0), S_OK);

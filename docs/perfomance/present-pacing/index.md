@@ -11,7 +11,15 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
-[H315](present-pacing-query-publication-fences.315.md) implements a default-off
+[H316](present-pacing-query-default-promotion.316.md) promotes asynchronous
+query completion to default ON, with explicit OFF as the synchronous reference.
+Production upload-reaper fault tests, initializer-only exact GPU bytes,
+default-mode Wine x64/x86 and visible same-image STALKER repetitions qualify
+the bounded path. Actual submission now retires query splitting pressure;
+END itself remains eager. Real Metal query-data providers and deferred END
+coalescing remain separate work.
+
+Historical [H315](present-pacing-query-publication-fences.315.md) implements a default-off
 actual-prefix query fence with persistent FLUSH submission and separate GPU
 completion. Native/model binding and x64/x86 delayed-completion pixel probes
 pass; visible wild/locality and initializer fault coverage remain promotion

@@ -8,6 +8,7 @@
 #include "dxmt9_capture.hpp"
 #include "dxmt9_debug_trace.hpp"
 #include "dxmt9_perf_counters.hpp"
+#include "dxmt9_query_policy.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9_resource_pool.hpp"
 
@@ -220,8 +221,7 @@ void dumpTextureSnapshotUnlocked(CommandQueue& queue,
 
 Initializer::Initializer(CommandQueue& queue, Pool& pool, WMT::Reference<WMT::Device> device)
     : queue_(&queue), pool_(&pool), device_(std::move(device)) {
-  const char* queryMode = std::getenv("DXMT9_ASYNC_QUERY_FENCES");
-  queryTrackingEnabled_ = queryMode && queryMode[0] && queryMode[0] != '0';
+  queryTrackingEnabled_ = query::asynchronousFencesEnabled();
   // Allocate the SharedEvent eagerly when we have a real device. On the
   // null-device test path event_ stays empty and flushToWait becomes a
   // no-op.
@@ -321,7 +321,7 @@ std::optional<std::uint64_t> Initializer::publishQueryPrefixUnlocked() {
   const bool pending = !pendingUploads_.empty();
   const auto result = flushToWaitUnlocked();
   // The older flush helper clears failed allocations; that is not a receipt.
-  if (queryFailed_ || (pending && !result.didFlush) || (result.value && !event_))
+  if (queryUploads_.failed() || (pending && !result.didFlush) || (result.value && !event_))
     return std::nullopt;
   return result.value;
 }
@@ -329,21 +329,14 @@ std::optional<std::uint64_t> Initializer::publishQueryPrefixUnlocked() {
 Initializer::QueryProgress Initializer::queryProgressUnlocked() noexcept {
   const auto signaled = event_ ? WMT::SharedEvent{event_.handle}.signaledValue() : 0;
   if (!queryTrackingEnabled_) return {lastSignaledValue_, signaled, false};
-  while (queryUploadCount_) {
-    auto& head = queryUploads_[queryUploadHead_];
-    const auto status = head.buffer.status();
-    if (status == WMTCommandBufferStatusError) {
-      queryFailed_ = true;
-      queue_->requestSchedulingStopLocked();
-      break;
-    }
-    if (status != WMTCommandBufferStatusCompleted) break;
-    queryCompleted_ = head.value;
-    head = {};
-    queryUploadHead_ = (queryUploadHead_ + 1) % queryUploads_.size();
-    --queryUploadCount_;
-  }
-  return {lastSignaledValue_, std::min(queryCompleted_, signaled), queryFailed_};
+  const auto completed = queryUploads_.poll(signaled, [](auto& buffer) {
+    const auto status = buffer.status();
+    return status == WMTCommandBufferStatusError ? query::UploadStatus::Failed :
+        status == WMTCommandBufferStatusCompleted ? query::UploadStatus::Complete :
+                                                   query::UploadStatus::Pending;
+  });
+  if (queryUploads_.failed()) queue_->requestSchedulingStopLocked();
+  return {lastSignaledValue_, completed, queryUploads_.failed()};
 }
 
 void Initializer::enqueuePendingUploadUnlocked(Pool::StagingCopy staging) {
@@ -374,9 +367,7 @@ Initializer::FlushResult Initializer::flushToWaitUnlocked() {
   }
   if (queryTrackingEnabled_) {
     (void)queryProgressUnlocked();
-    if (queryFailed_ || queryUploadCount_ == queryUploads_.size() || !event_ ||
-        nextEventValue_ == std::numeric_limits<std::uint64_t>::max()) {
-      queryFailed_ = true;
+    if (!queryUploads_.admit(bool(event_), nextEventValue_)) {
       // This helper also runs before ordinary encode, not only at Query END.
       // Do not let a rejected upload masquerade as an empty successful flush.
       queue_->requestSchedulingStopLocked();
@@ -390,7 +381,7 @@ Initializer::FlushResult Initializer::flushToWaitUnlocked() {
   auto commandBuffer = queue_->newCommandBuffer();
   if (!commandBuffer) {
     if (queryTrackingEnabled_) {
-      queryFailed_ = true;
+      queryUploads_.fail();
       queue_->requestSchedulingStopLocked();
     }
     pendingUploads_.clear();
@@ -400,7 +391,7 @@ Initializer::FlushResult Initializer::flushToWaitUnlocked() {
   auto blit = commandBuffer.blitCommandEncoder();
   if (!blit) {
     if (queryTrackingEnabled_) {
-      queryFailed_ = true;
+      queryUploads_.fail();
       queue_->requestSchedulingStopLocked();
     }
     pendingUploads_.clear();
@@ -457,12 +448,8 @@ Initializer::FlushResult Initializer::flushToWaitUnlocked() {
     commandBuffer.encodeSignalEvent(WMT::Event{event_.handle}, value);
   }
   commandBuffer.commit();
-  if (queryTrackingEnabled_) {
-    auto& entry = queryUploads_[(queryUploadHead_ + queryUploadCount_) % queryUploads_.size()];
-    entry.buffer = commandBuffer;
-    entry.value = value;
-    ++queryUploadCount_;
-  }
+  if (queryTrackingEnabled_ && !queryUploads_.append(commandBuffer, value))
+    queue_->requestSchedulingStopLocked();
   lastSignaledValue_ = value;
   pendingUploads_.clear();
   result.value = value;

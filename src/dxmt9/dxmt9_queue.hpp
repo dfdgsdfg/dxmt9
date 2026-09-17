@@ -1785,7 +1785,8 @@ class QueueLifecycleController {
   // waits. Zero means no producer wait is active.
   u64 producerSequenceWaitTargetSeqId();
   // An async query request is an ordered submission obligation, not a waiter.
-  // It persists until the target completes, even after GetData returns.
+  // The request persists after GetData returns. Its submission pressure ends
+  // at actual submission; successful completion remains a separate frontier.
   bool requestQuerySubmission(u64 targetSeqId);
   bool sequenceSubmissionRequested();
   u64 sequenceSubmissionTargetSeqId();
@@ -2229,6 +2230,8 @@ class QueueLifecycleController {
   std::uint32_t producerSequenceWaitDepth_ = 0;
   u64 producerSequenceWaitTargetSeqId_ = 0;
   u64 querySubmissionTargetSeqId_ = 0;
+  // pendingCompletionMutex_: actual committed CB tail, not queue publication.
+  u64 querySubmittedPrefixSeqId_ = 0;
   // Reclamation waterlines may retire a failed GPU submission. Query success
   // additionally requires that no completion error was observed.
   std::atomic<bool> queryCompletionFailed_{false};

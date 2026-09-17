@@ -31,6 +31,8 @@ struct CommandQueueArenaLeaseTestAccess {
     std::size_t residentSources = 0;
     std::uint64_t generationBefore = 0;
     std::uint64_t generationAfter = 0;
+    std::uint64_t queryTargetAfterSubmit = 0;
+    query::Poll queryPollAfterSubmit = query::Poll::Invalid;
   };
 
   static void ensureEmptyLegacyWriter(CommandQueue& queue) {
@@ -311,6 +313,10 @@ struct CommandQueueArenaLeaseTestAccess {
     if (!result.submitted) {
       return result;
     }
+
+    result.queryTargetAfterSubmit = queue.queueLifecycle_.sequenceSubmissionTargetSeqId();
+    result.queryPollAfterSubmit = queue.pollQueryFence(
+        {queue.queryQueueIdentity_, completionSource.seqId}, true);
 
     QueueLifecycleController::PendingCompletion pending{};
     pending.slotIndex = completionSource.slotIndex;
@@ -1652,6 +1658,9 @@ void testPublishedQueryFences() {
   const auto retired = Access::publishToReclaim(queue, ticket);
   check(retired.submitted && retired.completed && retired.reclaimed,
         "actual queue submit/completion/reclaim owner advances watermark");
+  check(retired.queryTargetAfterSubmit == 0 &&
+            retired.queryPollAfterSubmit == query::Poll::Pending,
+        "actual submission removes suffix pressure but never completes a query");
   check(queue.pollQueryFence(first, false) == query::Poll::Complete,
         "actual queue completion resolves receipt after reclaim");
   check(Access::submissionTarget(queue) == 0, "completed async request retires");
@@ -1683,6 +1692,25 @@ void testPublishedQueryFences() {
   check(failed.submitted && !failed.completed, "completion failure is not successful GPU work");
   check(failing.pollQueryFence(doomed, true) == query::Poll::Failed,
         "real completion owner failure cannot resolve an issued query");
+
+  CommandQueue building(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  auto lease = building.beginCpuReadyArenaSource(136, makeLayout(singleDrawCapacity()));
+  check(lease.has_value(), "query active-arena guard fixture admits");
+  check(!building.publishQueryEnd().valid(),
+        "active transaction cannot invent an END publication receipt");
+  check(!lease->abortForFallback() && !building.publishQueryEnd().valid(),
+        "single-source abort is terminal and cannot issue an END receipt");
+
+  CommandQueue reversible(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  const std::array layouts{makeLayout(singleDrawCapacity())};
+  auto batch = reversible.beginCpuReadyArenaSources(137, layouts);
+  check(batch.has_value() && !reversible.publishQueryEnd().valid(),
+        "active batch cannot issue an END receipt before publication");
+  check(batch->abortForFallback(), "pre-effect batch abort is reversible");
+  const auto settled = reversible.publishQueryEnd();
+  check(settled.valid() && settled.sequence == 0 &&
+            reversible.pollQueryFence(settled, true) == query::Poll::Complete,
+        "pre-effect abort leaves no phantom query prefix");
 }
 
 }  // namespace

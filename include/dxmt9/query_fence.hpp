@@ -46,4 +46,12 @@ constexpr std::uint64_t submissionTarget(std::uint64_t requested,
   return requested > completed ? requested : 0;
 }
 
+// Submission pressure is discharged by an actual submitted prefix; query
+// completion still uses classify(). Retaining the sticky request value must
+// not split every unrelated suffix while the GPU completes an older target.
+constexpr std::uint64_t submissionWorkTarget(std::uint64_t requested,
+    std::uint64_t submitted, std::uint64_t completed) noexcept {
+  return requested > submitted && requested > completed ? requested : 0;
+}
+
 }  // namespace dxmt9::query

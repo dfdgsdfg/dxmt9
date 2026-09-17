@@ -2,7 +2,7 @@
 EXTENDS Naturals, TLC
 
 (* Published END receipt, independent submit/completion and sticky async wake.
-   Native binding: query::classify/submissionTarget, CommandQueue::publishQueryEnd,
+   Native binding: query::classify/submissionWorkTarget, CommandQueue::publishQueryEnd,
    pollQueryFence, QueueLifecycleController::requestQuerySubmission.
    Excludes Metal result bytes, mutex memory ordering, and admission capacity. *)
 CONSTANTS MaxSeq, MaxEpoch, Mutation
@@ -43,8 +43,11 @@ Flush ==
   /\ UNCHANGED <<published, submitted, epoch, issueEpoch, issueSeq, oldIssueSeq,
                  issued, failed>>
   /\ NoObservation
+EffectiveSubmissionTarget ==
+  IF requested > (IF Mutation = "RetireOnPublish" THEN published ELSE submitted)
+  THEN requested ELSE 0
 Submit ==
-  /\ ~failed /\ submitted < requested
+  /\ ~failed /\ submitted < EffectiveSubmissionTarget
   /\ submitted' = requested
   /\ UNCHANGED <<published, completed, epoch, issueEpoch, issueSeq, oldIssueSeq,
                  issued, failed, requested, obligation>>
@@ -88,6 +91,9 @@ ReceiptIsPublished == issueSeq <= published
 CompletionSafety == ok => /\ observedCompleted >= observedIssue
                           /\ observedEpoch = observedIssueEpoch /\ ~observedFailed
 StickyRequest == (~failed /\ completed < obligation) => requested >= obligation
+SubmissionPressureSafety == (~failed /\ submitted < obligation) =>
+                             EffectiveSubmissionTarget >= obligation
+SubmissionLocality == (submitted >= requested) => EffectiveSubmissionTarget = 0
 Progress == \A target \in 1..MaxSeq:
               (requested >= target /\ ~failed) ~> (completed >= target \/ failed)
 ====

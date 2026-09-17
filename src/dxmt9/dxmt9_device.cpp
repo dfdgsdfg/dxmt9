@@ -4,6 +4,7 @@
 #include "dxmt9_blit_encoders.hpp"
 #include "dxmt9_lock_scope_policy.hpp"
 #include "dxmt9_perf_counters.hpp"
+#include "dxmt9_query_policy.hpp"
 #include "dxmt9_render_scheduling.hpp"
 #include "dxmt9_upload_arena_lock_diag.hpp"
 #include "util/config/config.hpp"
@@ -463,11 +464,7 @@ class DeviceImpl final : public Device {
   }
   void flush() override { queue_.submitFlush(); }
   bool usesAsyncQueryFences() const noexcept override {
-    static const bool enabled = [] {
-      const char* value = std::getenv("DXMT9_ASYNC_QUERY_FENCES");
-      return value && value[0] && value[0] != '0';
-    }();
-    return enabled;
+    return query::asynchronousFencesEnabled();
   }
   query::Fence publishQueryEnd() noexcept override {
     return queue_.publishQueryEnd();

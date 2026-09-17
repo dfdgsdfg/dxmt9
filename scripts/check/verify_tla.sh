@@ -51,6 +51,7 @@ normal_models=(
   PsoSlotPublication
   QuerySeqId
   QueryPublicationFence
+  QueryInitializerFence
   QueueLifecycleRefinement
   QueueT2dReserveCopyCommit
   RenderTapeCompletionSchedule
@@ -72,10 +73,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=60
+expected_normal_count=61
 expected_progress_count=4
-expected_counterexample_count=137
-expected_cfg_count=201
+expected_counterexample_count=141
+expected_cfg_count=206
 progress_configs=(
   CpuPipelineLifecycle.progress
   DirectSourceLifecycle.progress
@@ -121,10 +122,14 @@ trap cleanup EXIT
 # selects `<model>.tla`; the suffix selects `<model><suffix>.cfg`, so one model
 # may carry several independent broken premises.
 counterexample_models=(
+  "QueryInitializerFence|.ignore-upload.counterexample|Invariant CompletionSafety is violated"
+  "QueryInitializerFence|.signal-only.counterexample|Invariant CompletionSafety is violated"
+  "QueryInitializerFence|.capacity.counterexample|Invariant CapacitySafety is violated"
   "QueryPublicationFence|.early-completion.counterexample|Invariant NoInventedCompletion is violated"
   "QueryPublicationFence|.drop-request.counterexample|Invariant StickyRequest is violated"
   "QueryPublicationFence|.old-issue.counterexample|Invariant CompletionSafety is violated"
   "QueryPublicationFence|.ignore-failure.counterexample|Invariant CompletionSafety is violated"
+  "QueryPublicationFence|.retire-on-publish.counterexample|Invariant SubmissionPressureSafety is violated"
   "SessionAdmissionHysteresis|.high-water-only.counterexample|Invariant NoClosedEmptySessionCycle is violated"
   "DirectSourceLifecycle|.stale-witness.counterexample|Invariant WitnessIsFresh is violated"
   "DirectSourceLifecycle|.duplicate-witness.counterexample|Invariant WitnessConsumedOnce is violated"

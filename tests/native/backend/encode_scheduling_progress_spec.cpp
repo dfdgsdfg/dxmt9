@@ -59,7 +59,7 @@ struct SchedulingProgressTestAccess {
     // before touching these bytes or creating any Metal command buffer.
     initializer.pendingUploads_.emplace_back();
     const auto result = initializer.flushToWaitUnlocked();
-    return !result.didFlush && initializer.queryFailed_ && queue.stop_;
+    return !result.didFlush && initializer.queryUploads_.failed() && queue.stop_;
   }
 
   static void requestTerminal(CommandQueue& queue) {

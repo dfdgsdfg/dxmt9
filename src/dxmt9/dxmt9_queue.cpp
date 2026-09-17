@@ -1156,8 +1156,12 @@ bool QueueLifecycleController::requestQuerySubmission(u64 targetSeqId) {
       targetSeqId > *submissionBinding_.lastCommittedSeqId) return false;
   {
     std::lock_guard lock(pendingCompletionMutex_);
-    querySubmissionTargetSeqId_ =
-        std::max(querySubmissionTargetSeqId_, targetSeqId);
+    // Existing requests are sticky and already woke the predicate owner.
+    // Polling a submitted prefix (or initializer-only zero prefix) needs no
+    // new encoder/finish wake and must not pressure an unrelated suffix.
+    if (targetSeqId <= querySubmissionTargetSeqId_ ||
+        targetSeqId <= querySubmittedPrefixSeqId_) return true;
+    querySubmissionTargetSeqId_ = targetSeqId;
   }
   pendingCompletionCv_.notify_all();
   if (submissionBinding_.encodeCv) submissionBinding_.encodeCv->notify_one();
@@ -1170,7 +1174,8 @@ u64 QueueLifecycleController::sequenceSubmissionTargetSeqId() {
           submissionBinding_.completedSeqId
       ? submissionBinding_.completedSeqId->load(std::memory_order_acquire) : 0;
   return std::max(producerSequenceWaitDepth_ ? producerSequenceWaitTargetSeqId_ : 0,
-      query::submissionTarget(querySubmissionTargetSeqId_, completed));
+      query::submissionWorkTarget(querySubmissionTargetSeqId_,
+                                  querySubmittedPrefixSeqId_, completed));
 }
 
 bool QueueLifecycleController::sequenceSubmissionRequested() {
@@ -6150,6 +6155,10 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     submissionBinding_.writeCv->notify_all();
   }
   if (!record.commandBuffer) {
+    // The null-CB path is admitted only by the explicit native test fixture.
+    std::lock_guard lock(pendingCompletionMutex_);
+    querySubmittedPrefixSeqId_ = std::max(querySubmittedPrefixSeqId_,
+                                         completionSources.back().seqId);
     return true;
   }
 
@@ -6265,6 +6274,10 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     pending.completionCallbacks = std::move(record.completionCallbacks);
     pending.retainedPayloads = std::move(record.retainedPayloads);
     pendingCompletion_.push_back(std::move(pending));
+    // Actual commit and completion handoff succeeded. This discharges only
+    // submission pressure; no query completion or reclaim cursor is advanced.
+    querySubmittedPrefixSeqId_ = std::max(querySubmittedPrefixSeqId_,
+                                         completionSources.back().seqId);
     const auto pendingDepthAfterPush = pendingCompletion_.size();
     if (completionWaitActive) {
       ++completionWaitEnqueues_;
