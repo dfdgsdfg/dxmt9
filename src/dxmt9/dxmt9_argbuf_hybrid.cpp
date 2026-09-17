@@ -8,8 +8,6 @@
 
 #include <array>
 #include <chrono>
-#include <cstdlib>
-#include <cstring>
 
 namespace dxmt9::argbuf_hybrid {
 
@@ -227,21 +225,6 @@ PerfRecorder cbufSetBufferRecorderForArgbufIndex(u32 argbufIdx) {
   }
 }
 
-PerfRecorder cbufBindingHashRecorderForArgbufIndex(u32 argbufIdx) {
-  switch (argbufIdx) {
-    case kVsConstsArgbufIdx:
-      return perf::countEncodeDrawArgbufCbufBindingHashVsCpuTime;
-    case kPsConstsArgbufIdx:
-      return perf::countEncodeDrawArgbufCbufBindingHashPsCpuTime;
-    case kFfpVsArgbufIdx:
-      return perf::countEncodeDrawArgbufCbufBindingHashFfpVsCpuTime;
-    case kFfpPsArgbufIdx:
-      return perf::countEncodeDrawArgbufCbufBindingHashFfpPsCpuTime;
-    default:
-      return nullptr;
-  }
-}
-
 PerfRecorder cbufBindingWriteRecorderForArgbufIndex(u32 argbufIdx) {
   switch (argbufIdx) {
     case kVsConstsArgbufIdx:
@@ -270,14 +253,6 @@ PerfRecorder cbufObserverRecorderForArgbufIndex(u32 argbufIdx) {
     default:
       return nullptr;
   }
-}
-
-bool argbufCbufContentHashEnabled() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_ARGBUF_CBUF_CONTENT_HASH");
-    return env && env[0] != '\0' && env[0] != '0';
-  }();
-  return enabled;
 }
 
 void recordedSetArgumentBuffer(ArgbufEncoderResource& encoderResource,
@@ -444,25 +419,11 @@ u64 uploadAndPointEntryBytes(CommandQueue& queue,
   }
   if (writtenBindings &&
       argbufIdx < writtenBindings->entries.size()) {
-    u64 contentHash = 0;
-    if (argbufCbufContentHashEnabled()) {
-      auto doHash = [&]() {
-        contentHash = hashConstantBufferBytes(host, static_cast<u64>(byteCount));
-      };
-      if (countDirtyPhase) {
-        PerfScope scope(perf::countEncodeDrawArgbufCbufBindingHashCpuTime,
-                        cbufBindingHashRecorderForArgbufIndex(argbufIdx));
-        doHash();
-      } else {
-        doHash();
-      }
-    }
     auto doWriteBinding = [&]() {
       writtenBindings->entries[argbufIdx] = ConstantBufferBinding{
           .buffer = slice.buffer,
           .offset = slice.offset,
           .bytes = static_cast<u64>(byteCount),
-          .contentHash = contentHash,
       };
     };
     if (countDirtyPhase) {
@@ -544,25 +505,11 @@ u64 buildAndPointEntryBytes(CommandQueue& queue,
   }
   if (writtenBindings &&
       argbufIdx < writtenBindings->entries.size()) {
-    u64 contentHash = 0;
-    if (argbufCbufContentHashEnabled()) {
-      auto doHash = [&]() {
-        contentHash = hashConstantBufferBytes(host, static_cast<u64>(byteCount));
-      };
-      if (countDirtyPhase) {
-        PerfScope scope(perf::countEncodeDrawArgbufCbufBindingHashCpuTime,
-                        cbufBindingHashRecorderForArgbufIndex(argbufIdx));
-        doHash();
-      } else {
-        doHash();
-      }
-    }
     auto doWriteBinding = [&]() {
       writtenBindings->entries[argbufIdx] = ConstantBufferBinding{
           .buffer = reservation.slice.buffer,
           .offset = reservation.slice.offset,
           .bytes = static_cast<u64>(byteCount),
-          .contentHash = contentHash,
       };
     };
     if (countDirtyPhase) {

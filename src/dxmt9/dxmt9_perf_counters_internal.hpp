@@ -197,8 +197,6 @@ struct Counters {
   std::atomic<std::uint64_t> prepareSlotForPublishCpuMaxNs{0};
   std::atomic<std::uint64_t> prepareSlotResourceMarkCpuNs{0};
   std::atomic<std::uint64_t> prepareSlotResourceMarkCpuMaxNs{0};
-  std::atomic<std::uint64_t> unpublishedSlotPsoPrefetchCpuNs{0};
-  std::atomic<std::uint64_t> unpublishedSlotPsoPrefetchCpuMaxNs{0};
   std::atomic<std::uint64_t> chunkPublishReasonUnknown{0};
   std::atomic<std::uint64_t> chunkPublishReasonDrawLimit{0};
   std::atomic<std::uint64_t> chunkPublishReasonPayloadLimit{0};
@@ -1071,11 +1069,6 @@ struct Counters {
   std::atomic<std::uint64_t> encodeDrawArgbufCbufUploadPlanCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufUploadPlanVsCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufUploadPlanPsCpuNs{0};
-  std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingHashCpuNs{0};
-  std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingHashVsCpuNs{0};
-  std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingHashPsCpuNs{0};
-  std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingHashFfpVsCpuNs{0};
-  std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingHashFfpPsCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingWriteCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingWriteVsCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawArgbufCbufBindingWritePsCpuNs{0};
@@ -2443,7 +2436,6 @@ struct Counters {
   PercentileRing submitPresentBoundaryCpuRing;
   PercentileRing prepareSlotForPublishCpuRing;
   PercentileRing prepareSlotResourceMarkCpuRing;
-  PercentileRing unpublishedSlotPsoPrefetchCpuRing;
   PercentileRing chunkPublishSlotResidencyRing;
   PercentileRing chunkPublishSlotResidencyPresentRing;
   PercentileRing chunkPublishSlotResidencyNonPresentRing;

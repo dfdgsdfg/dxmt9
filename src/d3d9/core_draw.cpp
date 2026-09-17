@@ -3107,10 +3107,8 @@ void Device::invalidateDrawStateCache(u32 reasonMask) noexcept {
 }
 
 void Device::invalidateDrawRenderStateCache(u32 key) noexcept {
-  static const bool precise = dxmt9::util::getenvFlag(
-      "DXMT9_REPLAY_PRECISE_UNIFORM_INVALIDATION");
   invalidateDrawStateCacheImpl(DrawStateInvalidationRenderState,
-      !precise || dxmt9::d3d9::renderStateAffectsNonconstantUniform(key));
+      dxmt9::d3d9::renderStateAffectsNonconstantUniform(key));
 }
 
 void Device::invalidateDrawStateCacheImpl(

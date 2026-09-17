@@ -30,7 +30,7 @@ ShaderRef shader(const std::array<u32, N>& words) {
   return result;
 }
 
-void run() {
+void run(bool serialReference) {
   BackendLimits limits{};
   limits.maxTextureSize = 4096;
   limits.maxColorAttachments = 4;
@@ -49,13 +49,20 @@ void run() {
   auto readback = device->createSurface(
       {64, 64, Format::A8R8G8B8, Pool::Scratch, 0, false, false});
   check(target && readback, "real render/readback surfaces");
-  check(device->setRenderTarget(0, target) == D3D_OK, "bind RT");
-  check(device->setViewport({0, 0, 64, 64, 0, 1}) == D3D_OK, "viewport");
-  check(device->setRenderState(RS_CULL_MODE, u32(CullMode::None)) == D3D_OK,
-        "no culling");
-  check(device->setRenderState(RS_Z_ENABLE, 0) == D3D_OK, "no depth");
-  check(device->setRenderState(RS_LIGHTING, 0) == D3D_OK, "diffuse FFP");
-  check(device->setFVF(0x4002u | 0x040u) == D3D_OK, "XYZW + diffuse FVF");
+  const auto set = [&](HResult result, const char* message) {
+    check(result == D3D_OK, message);
+    // Test-only serial oracle: force the old conservative invalidation after
+    // each setter, without introducing a production runtime selector.
+    if (serialReference) {
+      static_cast<void>(device->mutableState(DrawStateInvalidationUnknown));
+    }
+  };
+  set(device->setRenderTarget(0, target), "bind RT");
+  set(device->setViewport({0, 0, 64, 64, 0, 1}), "viewport");
+  set(device->setRenderState(RS_CULL_MODE, u32(CullMode::None)), "no culling");
+  set(device->setRenderState(RS_Z_ENABLE, 0), "no depth");
+  set(device->setRenderState(RS_LIGHTING, 0), "diffuse FFP");
+  set(device->setFVF(0x4002u | 0x040u), "XYZW + diffuse FVF");
   struct Vertex { float x, y, z, w; u32 color; };
   const std::array<Vertex, 6> vertices{{
       {-.8f, -.8f, .5f, 1, 0xff00ff00}, {-.8f, .8f, .5f, 1, 0xff00ff00},
@@ -68,16 +75,16 @@ void run() {
   check(mapping.data && mapping.pitch >= sizeof(vertices), "VB lock");
   std::memcpy(mapping.data, vertices.data(), sizeof(vertices));
   buffer->unlock();
-  check(device->setStreamSource(0, buffer, 0, sizeof(Vertex)) == D3D_OK, "bind VB");
+  set(device->setStreamSource(0, buffer, 0, sizeof(Vertex)), "bind VB");
 
   // Swap x/y in FFP view. A world-space y plane therefore clips x in FFP,
   // while a programmable VS must continue to consume the clip-space y plane.
   Matrix4x4 view{};
   view.m = {0, 1, 0, 0, 1, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
-  check(device->setTransform(XFORM_VIEW, view) == D3D_OK, "distinguishing view");
-  check(device->setClipPlane(0, ClipPlane{0, 1, 0, 0}) == D3D_OK, "positive y plane");
-  check(device->setRenderState(RS_CLIPPING, 1) == D3D_OK, "enable clipping");
-  check(device->setRenderState(RS_CLIP_PLANE_ENABLE, 1) == D3D_OK, "enable plane");
+  set(device->setTransform(XFORM_VIEW, view), "distinguishing view");
+  set(device->setClipPlane(0, ClipPlane{0, 1, 0, 0}), "positive y plane");
+  set(device->setRenderState(RS_CLIPPING, 1), "enable clipping");
+  set(device->setRenderState(RS_CLIP_PLANE_ENABLE, 1), "enable plane");
   // Project-authored pass-through VS/PS from the programmable-space corpus.
   const auto vs = shader(std::array<u32, 20>{
       0xfffe0300, 0x0200001f, 0x80000000, 0x900f0000,
@@ -128,43 +135,45 @@ void run() {
     if (programmable) {
       const std::vector<VertexElement> declaration{
           {0, 0, 3, 0, 0, 0}, {0, 16, 4, 0, 10, 0}};
-      check(device->setVertexDeclaration(declaration) == D3D_OK, "float4/color declaration");
+      set(device->setVertexDeclaration(declaration), "float4/color declaration");
     } else {
-      check(device->setFVF(0x4002u | 0x040u) == D3D_OK, "FFP FVF restored");
+      set(device->setFVF(0x4002u | 0x040u), "FFP FVF restored");
     }
-    check(device->setVertexShader(programmable ? vs : ShaderRef{}) == D3D_OK, "VS transition");
-    check(device->setPixelShader(programmable ? ps : ShaderRef{}) == D3D_OK, "PS transition");
+    set(device->setVertexShader(programmable ? vs : ShaderRef{}), "VS transition");
+    set(device->setPixelShader(programmable ? ps : ShaderRef{}), "PS transition");
     const unsigned positive = programmable ? 3u : 10u;
     draw("positive", positive);
     for (u32 alphaRef : {1u, 2u, 1u}) {
-      check(device->setRenderState(RS_ALPHA_REF, alphaRef) == D3D_OK, "irrelevant RS change");
+      set(device->setRenderState(RS_ALPHA_REF, alphaRef), "irrelevant RS change");
       draw("irrelevant-rs", positive);
     }
-    check(device->setRenderState(RS_CLIPPING, 0) == D3D_OK, "clipping off");
+    set(device->setRenderState(RS_CLIPPING, 0), "clipping off");
     draw("clipping-off", 15u);
-    check(device->setRenderState(RS_CLIPPING, 1) == D3D_OK, "clipping restored");
+    set(device->setRenderState(RS_CLIPPING, 1), "clipping restored");
     draw("clipping-restored", positive);
-    check(device->setRenderState(RS_CLIP_PLANE_ENABLE, 0) == D3D_OK, "mask off");
+    set(device->setRenderState(RS_CLIP_PLANE_ENABLE, 0), "mask off");
     draw("mask-off", 15u);
-    check(device->setRenderState(RS_CLIP_PLANE_ENABLE, 1) == D3D_OK, "mask restored");
+    set(device->setRenderState(RS_CLIP_PLANE_ENABLE, 1), "mask restored");
     draw("mask-restored", positive);
     auto saved = device->captureStateBlock();
     check(bool(saved), "capture StateBlock");
-    check(device->setClipPlane(0, ClipPlane{0, -1, 0, 0}) == D3D_OK, "negative plane");
+    set(device->setClipPlane(0, ClipPlane{0, -1, 0, 0}), "negative plane");
     draw("negative", 15u ^ positive);
-    check(device->applyStateBlock(*saved) == D3D_OK, "restore StateBlock");
+    set(device->applyStateBlock(*saved), "restore StateBlock");
     draw("stateblock-restored", positive);
   }
 }
 }  // namespace
 
-int main() {
+int main(int argc, char** argv) {
   const auto devices = WMT::CopyAllDevices();
   if (!devices || devices.count() == 0) {
     std::puts("SKIP: no Metal device available");
     return 77;
   }
-  try { run(); }
+  const bool serialReference = argc > 1 &&
+      std::strcmp(argv[1], "--serial-reference") == 0;
+  try { run(serialReference); }
   catch (const std::exception& e) {
     std::fprintf(stderr, "uniform invalidation Metal oracle: %s\n", e.what());
     return 1;

@@ -8,6 +8,7 @@
 #include "d3d9_pe_producer.hpp"
 #include "d3d9_pe_semantic_owner.hpp"
 #include "d3d9_pe_wire_handle.hpp"
+#include "../../../src/d3d9/d3d9_uniform_dependencies.hpp"
 #include "../../../src/d3d9/d3d9_uniform_dependency_observer.hpp"
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
@@ -883,6 +884,14 @@ void runFixedProjectionCacheTransitions() {
 }
 
 void runUniformInvalidationCacheTransitions() {
+  // Known RenderState setters always use the shared dependency predicate.
+  // There is no runtime gate: clipping keys invalidate nonconstant uniforms,
+  // while unrelated keys preserve that generation and may reuse the payload.
+  check(dxmt9::d3d9::renderStateAffectsNonconstantUniform(RS_CLIPPING) &&
+            dxmt9::d3d9::renderStateAffectsNonconstantUniform(
+                RS_CLIP_PLANE_ENABLE) &&
+            !dxmt9::d3d9::renderStateAffectsNonconstantUniform(RS_ALPHA_REF),
+        "known RenderState dependency classification is unconditional");
   RuntimeFixture fixture(/*cpuReady=*/false, /*direct=*/false);
   auto& device = fixture.cDevice->dev();
   fixture.routing->freshState = &device.state();

@@ -1,4 +1,7 @@
 # Backend descriptor / pipeline / replay / hazard / capture / counter / render-pass specs.
+test('dxmt9-runtime-policy-retirement-audit', python3,
+     args: [join_paths(meson.project_source_root(),
+                      'tests/scripts/test_runtime_policy_retirement.py')])
 query_end_marker_spec = executable(
   'dxmt9-query-end-marker-spec', 'query_end_marker_spec.cpp',
   include_directories: dxmt9_inc,
@@ -691,13 +694,13 @@ inline_constant_replay_spec = executable(
 test('dxmt9-inline-constant-replay-spec', inline_constant_replay_spec,
      env: dxmt9_native_test_env_vars + [
        'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
-       'DXMT9_REPLAY_PRECISE_UNIFORM_INVALIDATION=0',
      ])
 
+# Retired selector must not restore the legacy invalidation path.
 test('dxmt9-precise-uniform-invalidation-spec', inline_constant_replay_spec,
      env: dxmt9_native_test_env_vars + [
        'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
-       'DXMT9_REPLAY_PRECISE_UNIFORM_INVALIDATION=1',
+       'DXMT9_REPLAY_PRECISE_UNIFORM_INVALIDATION=0',
      ])
 
 uniform_invalidation_metal_spec = executable(
@@ -970,12 +973,11 @@ range_upload_lock_scope_spec = executable(
   dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
   link_args: dxmt9_test_link_args,
 )
-foreach mode : ['0', '1']
-  test('dxmt9-range-upload-lock-scope-' + mode + '-spec',
-       range_upload_lock_scope_spec,
-       env: dxmt9_native_test_env_vars + ['DXMT9_LOCK_SCOPE_REFINEMENT=' + mode],
-       timeout: 30)
-endforeach
+test('dxmt9-range-upload-lock-scope-spec', range_upload_lock_scope_spec,
+     env: dxmt9_native_test_env, timeout: 30)
+test('dxmt9-range-upload-retired-selector-spec', range_upload_lock_scope_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT9_LOCK_SCOPE_REFINEMENT=0'],
+     timeout: 30)
 
 queue_lock_scope_refinement_spec = executable(
   'dxmt9-queue-lock-scope-refinement-spec',
@@ -984,13 +986,12 @@ queue_lock_scope_refinement_spec = executable(
   dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
   link_args: dxmt9_test_link_args,
 )
-foreach mode : ['0', '1']
-  test('dxmt9-queue-lock-scope-refinement-' + mode + '-spec',
-       queue_lock_scope_refinement_spec,
-       env: dxmt9_native_test_env_vars + [
-         'DXMT9_LOCK_SCOPE_REFINEMENT=' + mode,
-         'DXMT9_PERF_UPLOAD_ARENA_LOCK_SPLIT=1'])
-endforeach
+test('dxmt9-queue-lock-scope-refinement-spec', queue_lock_scope_refinement_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT9_PERF_UPLOAD_ARENA_LOCK_SPLIT=1'])
+test('dxmt9-queue-lock-retired-selector-spec', queue_lock_scope_refinement_spec,
+     env: dxmt9_native_test_env_vars + [
+       'DXMT9_LOCK_SCOPE_REFINEMENT=0',
+       'DXMT9_PERF_UPLOAD_ARENA_LOCK_SPLIT=1'])
 
 render_pass_actions_spec = executable(
   'dxmt9-render-pass-actions-spec',

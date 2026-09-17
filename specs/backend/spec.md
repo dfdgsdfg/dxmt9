@@ -962,8 +962,8 @@ R-BACK-2.15.5 refines only the render-state-key dependency in
 `src/d3d9/d3d9_uniform_dependencies.hpp` (`renderStateAffectsNonconstantUniform`).
 Matrices, material, lights and texture transforms do not read render states;
 clip planes/mask read clipping enable and clip-plane enable. The known
-integer and float setters use this predicate only when
-`DXMT9_REPLAY_PRECISE_UNIFORM_INVALIDATION` is enabled. They still invalidate
+integer and float setters use this predicate unconditionally. The retired
+runtime selector no longer changes this behavior. They still invalidate
 stable state, shader layout, render-state flattening and aggregate uniforms.
 No new cache or generation is introduced. Broad mutation and rollback,
 StateBlock, FFP/transform/light/clip mutation and reset retain their previous

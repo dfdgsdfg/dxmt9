@@ -134,7 +134,6 @@ compatibility promises:
 | `per-n-records` mid-chunk commit | `off` or `per-render-pass` | production shape and locality evidence |
 | deferred present-completion boundary | present-completion | pass-streaming, ordered completion, visual, latency, and locality gates |
 | PE inline-constant delta | standalone constant records | renewed workload evidence above the noise gate |
-| unpublished-slot PSO prefetch | encode-slot prefetch | no-gputrace producer/encode overlap and no new queue stall |
 | native Metal base-vertex submission | index/offset adjustment | draw/readback equivalence plus target-workload CPU/GPU benefit |
 | opaque-depth extended scope | conservative opaque-depth predicate | image and Xcode invocation proof across target workloads |
 | compatible indexed-draw merge | unmerged draws | visual, query-attribution, and cache-benefit evidence |
@@ -152,6 +151,21 @@ it is a correctness-blocked candidate, not a usable opt-in provider.
 `DXMT9_TILE_FFP=force` is diagnostic only.
 
 ### 2.3 Diagnostic and retired surfaces
+
+The 2026-09-17 implementation consolidation retires four runtime selectors:
+
+| Retired selector | Sole implementation / removal reason |
+|---|---|
+| `DXMT9_REPLAY_PRECISE_UNIFORM_INVALIDATION` | Known-setter dependency refinement is unconditional; broad mutation, StateBlock and reset stay conservative. Serial rebuild comparison remains test-only. |
+| `DXMT9_LOCK_SCOPE_REFINEMENT` | Arena-serialized range upload, bounded captured-backing batches and pre-lock immutable preparation are unconditional under `R-BACK-SYNC-1`–`5`. |
+| `DXMT9_PREFETCH_UNPUBLISHED_SLOT_PSO` | Remove the unpublished synchronous placement hypothesis; retain ordinary sealed encode-slot prefetch. Historical H58 moved work onto the supplying thread without establishing overlap. |
+| `DXMT9_ARGBUF_CBUF_CONTENT_HASH` | Remove the optional second uploaded-byte hash; authoritative payload/category identities remain unchanged. |
+
+This is a structural acceptance and retirement decision, not an FPS promotion
+result. Query END coalescing, Tape/headroom, segmented transport, inline
+constants and independent parallel/resource-array providers are not classified
+as obsolete by this change. Their domain-specific evidence and policy remain
+separate; enabling all selectors is not consolidation.
 
 Correctness-invalid state overrides, draw filters, geometry mutation probes,
 attachment-view suppression, capture/dump controls, measurement-only counters,

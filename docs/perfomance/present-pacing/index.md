@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H318](present-pacing-policy-consolidation.318.md) makes known-setter uniform
+invalidation and bounded lock-scope refinement unconditional, removing their
+legacy runtime alternatives. Unpublished-slot prefetch and secondary cbuf
+content hashing are retired with exclusive metadata/counters. Independent
+test references remain; structural acceptance is not a new FPS claim.
+
 [H317](present-pacing-query-end-coalescing.317.md) adds default-OFF deferred
 END groups, exact writer-to-publication binding and split attribution. Bounded
 native/TLA/GPU and x64/x86 Wine gates pass; matched wild locality and stable
@@ -50,11 +56,12 @@ Fixed-arrival replay sensitivity mostly reduces latency; PE-exclusive cost,
 feedback and the unconditional FPS ceiling remain open. Runtime defaults and
 README are unchanged.
 
-[H311](present-pacing-lock-scope-attribution.311.md) reruns the exact H309
+Historical [H311](present-pacing-lock-scope-attribution.311.md) reruns the exact H309
 provider and H310 on 06 GT2. Both recover to about 18 FPS, so the earlier large
 decline cannot be independently attributed to the lock candidate or its payload
-recount. Next: actual batch size/duplicate/flush-cause economics. Default OFF
-and README remain unchanged; this does not close all promotion gates.
+recount. Actual batch size/duplicate/flush-cause economics remain open. H311
+kept default OFF; H318 subsequently removes the opt-out by explicit structural
+acceptance, without claiming those economic gates closed. README is unchanged.
 
 [H310](present-pacing-payload-count-batch-cost.310.md) removes the candidate's
 second payload-count walk using a checked source-local snapshot byte delta.

@@ -7,25 +7,28 @@ import sys
 
 
 def main():
-    results = []
-    for mode in (0, 1):
-        env = os.environ | {
+    def run_case(label, args, obsolete_selector):
+        env = os.environ.copy()
+        env.update({
             "DXMT_PERF_COUNTERS": "1",
-            "DXMT9_REPLAY_PRECISE_UNIFORM_INVALIDATION": str(mode),
             "DXMT9_PERF_UNIFORM_DEPENDENCY_PROBE": "0",
-        }
-        result = subprocess.run([sys.argv[1]], env=env, capture_output=True,
-                                text=True, timeout=60)
+        })
+        if obsolete_selector is None:
+            env.pop("DXMT9_REPLAY_PRECISE_UNIFORM_INVALIDATION", None)
+        else:
+            env["DXMT9_REPLAY_PRECISE_UNIFORM_INVALIDATION"] = obsolete_selector
+        result = subprocess.run([sys.argv[1], *args], env=env,
+                                capture_output=True, text=True, timeout=60)
         if result.returncode == 77:
-            if results:
-                raise RuntimeError("Metal became unavailable between OFF/ON runs")
+            if label != "reference":
+                raise RuntimeError("Metal became unavailable between oracle runs")
             print(result.stdout)
             return 77
         if result.returncode:
             sys.stderr.write(result.stderr)
-            raise RuntimeError(f"pixel child mode={mode} exited {result.returncode}")
+            raise RuntimeError(f"pixel child case={label} exited {result.returncode}")
         frames = [line for line in result.stdout.splitlines() if line.startswith("frame=")]
-        assert len(frames) == 30, f"mode={mode}: missing frame readbacks"
+        assert len(frames) == 30, f"case={label}: missing frame readbacks"
         for frame in frames:
             assert len(bytes.fromhex(frame.split("pixels=", 1)[1])) == 64 * 64 * 4
         perf = [line for line in result.stderr.splitlines() if line.startswith("[dxmt9-perf] ")]
@@ -39,13 +42,33 @@ def main():
                 for suffix in ("reuse_full", "reuse_nonconst", "full_build")]
         counts = [int(counters[key]) for key in keys]
         assert counts[2] > 0, "fixture must build initial/conservatively invalidated payloads"
-        print(f"mode={mode} frames={len(frames)} reuse_full/nonconst/build={counts}")
-        results.append((frames, counts))
-    assert results[0][0] == results[1][0], "OFF/ON pixel bytes differ"
-    assert results[1][1][0] >= results[0][1][0] + 9, "nine irrelevant RS edits must reuse"
-    assert results[0][1][2] >= results[1][1][2] + 9, "nine full rebuilds must disappear"
-    digest = hashlib.sha256("\n".join(results[0][0]).encode()).hexdigest()
-    print(f"30 exact OFF/ON frames accepted; pixel transcript sha256={digest}")
+        print(f"case={label} frames={len(frames)} reuse_full/nonconst/build={counts}")
+        return frames, counts
+
+    # The serial reference is a test-only CLI mode that forces a generic
+    # invalidation after setters. Production has no selector: run it once with
+    # the selector unset and again with each retired value to prove both are
+    # inert.
+    reference = run_case("reference", ["--serial-reference"], None)
+    if reference == 77:
+        return 77
+    production_unset = run_case("production-unset", [], None)
+    production_zero = run_case("production-obsolete-0", [], "0")
+    production_one = run_case("production-obsolete-1", [], "1")
+
+    assert reference[0] == production_unset[0], "reference/production pixel bytes differ"
+    assert production_unset[0] == production_zero[0] == production_one[0], \
+        "retired selector values changed production pixels"
+    assert production_unset[1] == production_zero[1] == production_one[1], \
+        "retired selector values changed production cache paths"
+    assert production_unset[1][0] >= reference[1][0] + 9, \
+        "nine irrelevant RS edits must reuse full payloads"
+    assert reference[1][2] >= production_unset[1][2] + 9, \
+        "nine serial-reference full rebuilds must disappear"
+    digest = hashlib.sha256("\n".join(production_unset[0]).encode()).hexdigest()
+    assert digest == "ef83939770ce9b6e6728bd564b5fa8207f38a0113683d8d61df552ad3d955fd7", \
+        f"unexpected pixel transcript sha256={digest}"
+    print(f"30 exact reference/production frames accepted; pixel transcript sha256={digest}")
 
 
 if __name__ == "__main__":

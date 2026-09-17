@@ -936,7 +936,6 @@ class CommandQueue {
       std::uint64_t replayNanoseconds, bool replaySucceeded);
   void noteCommitChunkRecordShapeForCompletionGap(
       const core::metalqueue::NoEnqueueCommitChunkRecordShape& shape);
-  void prefetchCurrentWritingSlotPipelines();
   // Default-off CPU-ready experiment. Called only after one complete raw
   // source has replayed successfully; publication is a no-op unless a
   // Present-tail credit and its successor Writing owner are both provable.
@@ -1311,7 +1310,7 @@ class CommandQueue {
       std::size_t publishedSourceCount,
       std::uint64_t nextRawOrdinal,
       bool hasPresent) noexcept;
-  void prefetchSlotPipelines(core::ChunkSlot& slot, bool seal = true);
+  void prefetchSlotPipelines(core::ChunkSlot& slot);
   void startThreads(std::function<void()> encodeLoop,
                     std::function<void()> finishLoop,
                     std::function<void()> completionLoop);

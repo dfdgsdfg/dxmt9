@@ -483,16 +483,14 @@ void testLiveSnapshotCaptureAndWatermarks() {
             after->renameRing[0].lastUsedSeqId == 1u &&
             after->renameRing[1].lastUsedSeqId == 0u,
         "live logical and active-backing watermarks advance independently");
-  if (uploadArenaLockSplitEnabled()) {
-    const auto updateManyDelta = bufferArenaOperationCount(
-                                     UploadLockOperation::UpdateMany) -
-                                 updateManyBefore;
-    check(updateManyDelta == (lockScopeRefinementEnabled() ? 2u : 1u),
-          "queue marks captured and logical bindings through update_many");
-    check(bufferArenaOperationCount(UploadLockOperation::Update) - updateBefore ==
-              (lockScopeRefinementEnabled() ? 0u : draws.size()),
-          "three captured scalar acquisitions become one bounded batch acquisition");
-  }
+  const auto updateManyDelta = bufferArenaOperationCount(
+                                   UploadLockOperation::UpdateMany) -
+                               updateManyBefore;
+  check(updateManyDelta == 2u,
+        "queue marks captured and logical bindings through update_many");
+  check(bufferArenaOperationCount(UploadLockOperation::Update) - updateBefore ==
+            0u,
+        "three captured scalar acquisitions become one bounded batch acquisition");
 }
 
 void testMixedCapturedLiveAndImplicitSnapshotPayloads() {

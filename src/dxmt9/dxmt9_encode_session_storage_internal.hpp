@@ -181,13 +181,6 @@ struct ArgbufCbufCache {
                : dxmt9::argbuf_hybrid::ConstantBufferBinding{};
   }
 
-  bool hasMatchingBinding(u32 argbufIndex,
-                          u64 contentHash,
-                          u64 bytes) const noexcept {
-    return argbufIndex < bindings.entries.size() &&
-           bindings.entries[argbufIndex].contentMatches(contentHash, bytes);
-  }
-
   bool hasMatchingIdentity(u32 argbufIndex,
                            u64 identityHash,
                            u64 bytes) const noexcept {
@@ -241,8 +234,6 @@ struct ArgbufCbufCache {
             .buffer = buffer,
             .offset = offset,
             .bytes = bytes,
-            .contentHash = dxmt9::argbuf_hybrid::hashConstantBufferBytes(
-                &host, bytes),
             .identityHash = 0,
         };
     std::memcpy(ffpVsBytes.data(), &host, sizeof(state::FfpVsConsts));

@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Mini-Replay Bisection — the apparatus that isolated per-draw vertex-stage write amplification - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-16
+updated: 2026-09-17
 source: docs/perfomance/mini-replay-bisection/log.md; docs/perfomance/overview-3dmark05-gt1.md
 related: docs/perfomance/mini-replay-bisection/index.md; docs/perfomance/mini-replay-bisection/log.md
 ---
@@ -27,16 +27,22 @@ the apparatus that made [tvb-mechanism-proof](../tvb-mechanism-proof/index.md) p
 
 ## Latest Conclusions
 
+[H318 consolidation](../present-pacing/present-pacing-policy-consolidation.318.md)
+makes known-setter dependency refinement unconditional and removes its runtime
+opt-out. The conservative reference remains test-only; exact 30-frame equality
+and nine avoided rebuilds are rechecked on arm64/x86_64. This structural policy
+acceptance does not close the broader workload/performance gaps below.
+
 The [pixel/wild follow-up](uniform-invalidation-qualification.16.md) closes
 the bounded cached FFP/clipping GPU gate: 30 exact OFF/ON frames pass on
 arm64/x86_64, with nine actual full-build-to-reuse transitions. Eight
 same-image asynchronous GT1/GT2 runs have clean error counters and sampled
 pixels, but FPS means change −0.08%/−0.57%. GT2 OFF repeats drift 4.2%.
-Targeted rebuild work falls sharply without an established throughput gain;
-default promotion remains withheld pending global observer-off `.3dr`
-comparisons and noise-qualified non-regression.
+Targeted rebuild work falls sharply without an established throughput gain.
+That experiment withheld default promotion; H318 later removes the selector
+without claiming global observer-off `.3dr` or noise-qualified non-regression.
 
-The default-off [known-setter dependency refinement](uniform-dependency-reuse.15.md)
+The originally default-off [known-setter dependency refinement](uniform-dependency-reuse.15.md)
 reduces GT2 batch full-uniform builds from 422 to one: all 421 comparable
 rebuilds had identical fixed values. Shared-predicate bounded refinement,
 actual setter/cache tests and same-image CPU/GPU exact evidence pass. Batch

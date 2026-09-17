@@ -192,8 +192,10 @@ handles while publishing the slot, and the
 `result.json` files). The legacy placement was rejected because GT1 showed it
 serializes `submitPresent()` by ~`2.5ms/present`; the promoted default —
 resolving handles on the encode worker's slot copy — and its live opt-out
-`DXMT9_DISABLE_ENCODE_SLOT_PSO_PREFETCH` stay, as does the open
-`DXMT9_PREFETCH_UNPUBLISHED_SLOT_PSO` P4 probe. The reopen premise died with
+`DXMT9_DISABLE_ENCODE_SLOT_PSO_PREFETCH` stay. The separate
+`DXMT9_PREFETCH_UNPUBLISHED_SLOT_PSO` P4 probe is also retired by the
+2026-09-17 consolidation; see the encoder registry for its removed surface.
+The reopen premise died with
 the engine-default commit-replay offload (`DXMT9_OFFLOAD_COMMIT_REPLAY`,
 H195/`d45af067`) and the H212 producer attribution showing the residual wall
 is the game's own CPU. Do not schedule new runs with these envs unless the

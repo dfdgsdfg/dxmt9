@@ -31,11 +31,6 @@ void check(bool condition, std::string_view message) {
   }
 }
 
-bool refinementEnabled() {
-  const char* value = std::getenv("DXMT9_LOCK_SCOPE_REFINEMENT");
-  return value && value[0] != '\0' && value[0] != '0';
-}
-
 struct MutexHolder {
   explicit MutexHolder(dxmt9::CommandQueue& queue) : queue_(queue) {
     thread_ = std::thread([this] {
@@ -108,34 +103,30 @@ void testProductionRangeUpload() {
                                               0xa5u, 0xa6u, 0xa7u, 0xa8u};
   auto uploadBytes = initial;
   std::copy(patch.begin(), patch.end(), uploadBytes.begin() + 16);
-  if (refinementEnabled()) {
-    bool completed = false;
-    std::mutex completionMutex;
-    std::condition_variable completionCv;
-    std::thread uploader;
-    bool completedWhileQueueWasHeld = false;
-    {
-      MutexHolder holder(upper->queue());
-      uploader = std::thread([&] {
-        upper->uploadBufferDataRange(handle, uploadBytes, 16u, patch.size());
-        {
-          std::lock_guard lock(completionMutex);
-          completed = true;
-        }
-        completionCv.notify_one();
-      });
+  bool completed = false;
+  std::mutex completionMutex;
+  std::condition_variable completionCv;
+  std::thread uploader;
+  bool completedWhileQueueWasHeld = false;
+  {
+    MutexHolder holder(upper->queue());
+    uploader = std::thread([&] {
+      upper->uploadBufferDataRange(handle, uploadBytes, 16u, patch.size());
       {
-        std::unique_lock lock(completionMutex);
-        completedWhileQueueWasHeld =
-            completionCv.wait_for(lock, 2s, [&] { return completed; });
+        std::lock_guard lock(completionMutex);
+        completed = true;
       }
+      completionCv.notify_one();
+    });
+    {
+      std::unique_lock lock(completionMutex);
+      completedWhileQueueWasHeld =
+          completionCv.wait_for(lock, 2s, [&] { return completed; });
     }
-    uploader.join();
-    check(completedWhileQueueWasHeld,
-          "range upload completes while queue mutex is held elsewhere");
-  } else {
-    upper->uploadBufferDataRange(handle, uploadBytes, 16u, patch.size());
   }
+  uploader.join();
+  check(completedWhileQueueWasHeld,
+        "range upload completes while queue mutex is held elsewhere");
 
   record = upper->pool()->findBuffer(handle.value);
   check(record != nullptr, "record survives the valid range upload");

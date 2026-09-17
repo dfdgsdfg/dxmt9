@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Mini-Replay Bisection — the apparatus that isolated per-draw vertex-stage write amplification"
 type: domain-index
 status: current
-updated: 2026-09-16
+updated: 2026-09-17
 source: docs/perfomance/overview-3dmark05-gt1.md
 related: docs/perfomance/mini-replay-bisection/overview.md; docs/perfomance/mini-replay-bisection/log.md
 ---
@@ -21,6 +21,7 @@ Latest tracked row: `H22` - Positive Metal visibility samples can be used as the
 
 ## Recent Leaf Documents
 
+- [H318: uniform refinement is unconditional; legacy selector retired](../present-pacing/present-pacing-policy-consolidation.318.md)
 - [Uniform invalidation: concrete clip pixels pass, wild FPS promotion withheld](uniform-invalidation-qualification.16.md)
 - [Known RenderState dependencies: eliminate unchanged fixed-uniform rebuilds](uniform-dependency-reuse.15.md)
 - [Uniform hashing: dependency work versus nested observation](uniform-dependencies-observer.14.md)

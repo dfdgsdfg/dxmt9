@@ -10,8 +10,8 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Bounded lock-scope refinement (2026-09-09)
 
-`R-BACK-SYNC-1`–`R-BACK-SYNC-5` and the default-off candidate are owned by
-[lock-scope refinement](../backend/lock-scope-refinement.md). Native ON/OFF
+`R-BACK-SYNC-1`–`R-BACK-SYNC-5` and the unconditional implementation are owned by
+[lock-scope refinement](../backend/lock-scope-refinement.md). Historical native ON/OFF
 tests cover the actual range entry under queue contention, Shared buffer
 bytes, Pool stale-generation/exact-backing max stamps, final-Slot differential
 contents and live snapshot capacity. A concrete three-draw fixture pins three
@@ -34,8 +34,19 @@ diagnostic pair. Four PE32/PE64 OFF/ON dynamic-VB DISCARD/NOOVERWRITE/DISCARD
 processes pass twelve exact readback samples; the experiment fixture is not
 an exhaustive GPU-overlap or MT oracle. The 06 low-observer perf is slower in
 both paired directions amid large repeat drift. CPU/latency/FPS non-regression and broader rendered/
-concurrent correctness are not closed; default OFF remains. This does not
+concurrent correctness are not closed. The 2026-09-17 structural acceptance
+retires the runtime opt-out; it does not turn those results into performance
+proof. Unconditional native tests retain the actual range contention, bounded
+batch/reference effects and final-Slot checks. This does not
 upgrade H308's bounded model to a complete timing or concurrency proof.
+
+The integrated [H318 consolidation](../../docs/perfomance/present-pacing/present-pacing-policy-consolidation.318.md)
+passes the full unchanged 210-configuration TLA inventory, focused native
+reference-effect tests and arm64/x86_64 Metal/runtime gates. Four retired
+selectors are absent from production source; the source audit does not itself
+prove refinement. Arbitrary MT interleavings and new whole-game equivalence
+are not asserted by this revalidation.
+
 [H310](../../docs/perfomance/present-pacing/present-pacing-payload-count-batch-cost.310.md)
 adds a shared checked snapshot-byte delta, 2,048 bounded arithmetic-oracle
 cells, overflow edges and actual multi-entry mixed-payload final-Slot tests.

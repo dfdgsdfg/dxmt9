@@ -114,6 +114,17 @@ small; otherwise remove it. A rollback selector is justified only by unresolved
 correctness, compatibility, or measurable regression risk, not by the existence
 of a micro-optimization itself.
 
+**R-BACK-42.19** When a bounded behavior-preserving implementation is accepted
+to remove redundant work, consolidation must remove its obsolete runtime
+selector and alternative implementation, not merely change a boolean default.
+Keep independent semantic/reference oracles in tests and retain evidence
+limits explicitly. Acceptance without an FPS gain claim must not relabel noisy
+measurements as proven non-regression. Retire cost-only or superseded
+hypothesis paths with their exclusive metadata, callbacks and counters, while
+preserving the decision and historical evidence in documentation. This does
+not authorize removing required capability fallbacks or independently supported
+providers; nor does it waive unresolved semantic/lifetime/progress failures.
+
 ## Encode Execution Provider
 
 **R-BACK-42.13** Encode execution must resolve exactly one queue-immutable

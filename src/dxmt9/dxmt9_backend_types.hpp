@@ -998,7 +998,6 @@ struct ChunkSlot {
   dxmt9::perf::ChunkPublishReason publishReason =
       dxmt9::perf::ChunkPublishReason::Unknown;
   bool pipelinePrefetchSealed = false;
-  std::size_t pipelinePrefetchCommandCursor = 0;
 
   // Data-oriented execution storage. The replay loop walks commandHeaders
   // linearly and indexes into type-specific payload arrays. This avoids the
@@ -1129,7 +1128,6 @@ struct ChunkSlot {
     queryEndMarker.reset();
     publishReason = dxmt9::perf::ChunkPublishReason::Unknown;
     pipelinePrefetchSealed = false;
-    pipelinePrefetchCommandCursor = 0;
 #define DXMT9_CLEAR_CHUNK_SLOT_VECTOR(                                      \
     region, plan, storage, element, physical, provision, allocation,        \
     lookup, owner)                                                          \
@@ -1162,17 +1160,7 @@ struct ChunkSlot {
     return pipelinePrefetchSealed;
   }
 
-  std::size_t prefetchedPipelineCommandCursor() const noexcept {
-    return pipelinePrefetchCommandCursor;
-  }
-
-  void setPrefetchedPipelineCommandCursor(std::size_t commandIndex) noexcept {
-    pipelinePrefetchCommandCursor =
-        commandIndex > commandHeaders.size() ? commandHeaders.size() : commandIndex;
-  }
-
   void sealPrefetchedPipelines() noexcept {
-    pipelinePrefetchCommandCursor = commandHeaders.size();
     pipelinePrefetchSealed = true;
   }
 

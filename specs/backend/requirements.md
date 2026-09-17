@@ -163,8 +163,13 @@ invalidation must remain unchanged. Generic mutable borrows (including a
 RenderState reason), StateBlock and reset must remain conservative. Reuse
 still requires the existing coordinate-space, validity and stage
 generation/usage witnesses; diagnostic equality must never grant authority.
-This candidate must remain default-off until bounded refinement, actual
-setter/cache binding, GPU exact and wild non-regression evidence qualify it.
+This dependency refinement is the unconditional implementation for known
+setters. The former runtime opt-out must not restore redundant invalidation.
+Bounded refinement, actual setter/cache binding and GPU exact regression
+coverage must remain; a conservative rebuild reference belongs in the test
+fixture, not a selectable production path. This consolidation accepts the
+demonstrated work reduction without claiming an FPS improvement or closing
+the separately recorded workload/performance evidence gaps.
 
 **R-BACK-2.16** Replay transforms that derive encoder decisions from imported
 records (pass merge/split, deferred clear application, hazard classification, PSO

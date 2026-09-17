@@ -379,14 +379,6 @@ bool encodeSlotPsoPrefetchEnabled() {
   return !encodeSlotPsoPrefetchDisabled();
 }
 
-bool unpublishedSlotPsoPrefetchEnabled() {
-  static const bool enabled = [] {
-    const char* env = std::getenv("DXMT9_PREFETCH_UNPUBLISHED_SLOT_PSO");
-    return env && env[0] != '\0' && std::strcmp(env, "0") != 0;
-  }();
-  return enabled;
-}
-
 void traceEncodeFnStage(const char* stage,
                         std::size_t slotIndex,
                         const core::ChunkSlot& slot) {
@@ -918,25 +910,21 @@ encoders::EncodeContext CommandQueue::makeEncodeContext() {
   return ctx;
 }
 
-void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot, bool seal) {
+void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot) {
   perf::countEncodeSlotPsoPrefetchInvocation();
   DXMT_ASSERT(!slot.prefetchedPipelinesSealed() &&
               "prefetchSlotPipelines called after slot prefetch seal");
   tracePsoPrefetchStage("begin", slot);
   if (!device_) {
-    if (seal) {
-      slot.sealPrefetchedPipelines();
-    }
+    slot.sealPrefetchedPipelines();
     tracePsoPrefetchStage("no-device-sealed", slot);
     return;
   }
-  const auto beginCommand = slot.prefetchedPipelineCommandCursor();
+  constexpr std::size_t beginCommand = 0;
   const auto commandCount = slot.commandCount();
   if (beginCommand >= commandCount) {
-    if (seal) {
-      slot.sealPrefetchedPipelines();
-    }
-    tracePsoPrefetchStage(seal ? "end-sealed" : "end-partial", slot);
+    slot.sealPrefetchedPipelines();
+    tracePsoPrefetchStage("end-sealed", slot);
     return;
   }
   perf::countEncodeSlotPsoPrefetchCommands(
@@ -1910,11 +1898,8 @@ void CommandQueue::prefetchSlotPipelines(core::ChunkSlot& slot, bool seal) {
     slot.setDrawRunPsoHandles(i, lookup.handle);
     tracePsoPrefetchStage("draw.done", slot, i);
   }
-  slot.setPrefetchedPipelineCommandCursor(commandCount);
-  if (seal) {
-    slot.sealPrefetchedPipelines();
-  }
-  tracePsoPrefetchStage(seal ? "end-sealed" : "end-partial", slot);
+  slot.sealPrefetchedPipelines();
+  tracePsoPrefetchStage("end-sealed", slot);
 }
 
 uniform::DirtyState CommandQueue::consumePendingDirty() {
@@ -2805,31 +2790,16 @@ void markDrawBindingOverrideResources(
 }
 
 void markDrawBindingSnapshotResources(
-    resources::Pool& pool,
     std::span<const core::DrawParamPayloadView> payloads,
     std::uint64_t seqId,
-    CapturedBufferMarkBatch* capturedBatch = nullptr) {
-  if (capturedBatch) {
-    for (const auto& payload : payloads) {
-      core::DrawBindingSnapshot snapshot{};
-      if (copyDrawBindingSnapshot(payload.bindingSnapshotData, snapshot)) {
-        visitDrawBindingSnapshotResource(
-            snapshot, seqId, [&](core::Handle handle, const auto& binding) {
-              capturedBatch->add(handle, binding);
-            });
-      }
-    }
-    return;
-  }
+    CapturedBufferMarkBatch& capturedBatch) {
   for (const auto& payload : payloads) {
-    if (payload.bindingSnapshotData.size() == sizeof(core::DrawBindingSnapshot)) {
-      core::DrawBindingSnapshot snapshot{};
-      if (copyDrawBindingSnapshot(payload.bindingSnapshotData, snapshot)) {
-        visitDrawBindingSnapshotResource(
-            snapshot, seqId, [&](core::Handle handle, const auto& binding) {
-              pool.markBufferSnapshotUse(handle, binding, seqId);
-            });
-      }
+    core::DrawBindingSnapshot snapshot{};
+    if (copyDrawBindingSnapshot(payload.bindingSnapshotData, snapshot)) {
+      visitDrawBindingSnapshotResource(
+          snapshot, seqId, [&](core::Handle handle, const auto& binding) {
+            capturedBatch.add(handle, binding);
+          });
     }
   }
 }
@@ -3050,61 +3020,33 @@ Presenter::AcquireParams makePresentAcquireParams(const core::SwapDesc& desc) {
 
 void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slot) {
   const bool observeMarks = resourceMarkOverlapObserverEnabled();
-  if (lockScopeRefinementEnabled()) {
-    CapturedBufferMarkBatch batch(pool, slot.seqId);
-    for (std::size_t i = 0; i < slot.commandCount(); ++i) {
-      const auto sourceCommand = core::SourcePayloadView(slot).commandAt(i);
-      visitSourceCommandResources(
-          sourceCommand, [&](const core::SourceCommandResourceRef& resource) {
-            const auto& entry = resource.entry;
-            if (observeMarks) {
-              recordResourceMarkObservation(
-                  resources::ResourceMarkObservationPhase::PublishScan,
-                  slot.seqId, entry,
-                  entry.kind == core::ChunkHandleKind::Buffer &&
-                          resource.hasBufferSnapshot
-                      ? resource.bufferSnapshot.metalHandle : 0);
-            }
-            if (entry.kind == core::ChunkHandleKind::Buffer &&
-                resource.hasBufferSnapshot) {
-              batch.add(entry.handle, resource.bufferSnapshot);
-            } else {
-              // Active-backing selection may change between marks. Do not
-              // deduplicate it or move a captured stamp across this effect.
-              batch.flush();
-              markVisitedResource(pool, resource, slot.seqId);
-            }
-          });
-      // Do not defer across coordinator/command ownership boundaries.
-      batch.flush();
-    }
-    return;
-  }
-  if (!observeMarks) {
-    for (std::size_t i = 0; i < slot.commandCount(); ++i) {
-      const auto sourceCommand = core::SourcePayloadView(slot).commandAt(i);
-      visitSourceCommandResources(
-          sourceCommand,
-          [&](const core::SourceCommandResourceRef& resource) {
-            markVisitedResource(pool, resource, slot.seqId);
-          });
-    }
-    return;
-  }
+  CapturedBufferMarkBatch batch(pool, slot.seqId);
   for (std::size_t i = 0; i < slot.commandCount(); ++i) {
     const auto sourceCommand = core::SourcePayloadView(slot).commandAt(i);
-    visitSourceCommandResources(sourceCommand,
-                                [&](const core::SourceCommandResourceRef& resource) {
-                                  const auto& entry = resource.entry;
-                                  recordResourceMarkObservation(
-                                      resources::ResourceMarkObservationPhase::PublishScan,
-                                      slot.seqId, entry,
-                                      entry.kind == core::ChunkHandleKind::Buffer &&
-                                              resource.hasBufferSnapshot
-                                          ? resource.bufferSnapshot.metalHandle
-                                          : 0);
-                                  markVisitedResource(pool, resource, slot.seqId);
-                                });
+    visitSourceCommandResources(
+        sourceCommand, [&](const core::SourceCommandResourceRef& resource) {
+          const auto& entry = resource.entry;
+          if (observeMarks) {
+            recordResourceMarkObservation(
+                resources::ResourceMarkObservationPhase::PublishScan,
+                slot.seqId, entry,
+                entry.kind == core::ChunkHandleKind::Buffer &&
+                        resource.hasBufferSnapshot
+                    ? resource.bufferSnapshot.metalHandle
+                    : 0);
+          }
+          if (entry.kind == core::ChunkHandleKind::Buffer &&
+              resource.hasBufferSnapshot) {
+            batch.add(entry.handle, resource.bufferSnapshot);
+          } else {
+            // Active-backing selection may change between marks. Do not
+            // deduplicate it or move a captured stamp across this effect.
+            batch.flush();
+            markVisitedResource(pool, resource, slot.seqId);
+          }
+        });
+    // Do not defer across coordinator/command ownership boundaries.
+    batch.flush();
   }
 }
 
@@ -3380,26 +3322,6 @@ void CommandQueue::noteCommitChunkRecordShapeForCompletionGap(
   queueLifecycle_.recordNoEnqueueCommitChunkRecordShapeBeforePublish(shape);
 }
 
-void CommandQueue::prefetchCurrentWritingSlotPipelines() {
-  if (!unpublishedSlotPsoPrefetchEnabled()) {
-    return;
-  }
-
-  const auto qmxBegin = queueMutexProbeBegin();
-  std::unique_lock lock(mutex_);
-  QueueMutexProbeScope qmxScope(qmxBegin, "prefetch_current_writing_slot_pipelines");
-  if (!writingSlot_) {
-    return;
-  }
-  auto& slot = currentSlotUnlocked(*this);
-  if (slot.commandsEmpty() || slot.prefetchedPipelinesSealed()) {
-    return;
-  }
-
-  PerfScope stageScope(perf::countUnpublishedSlotPsoPrefetchCpuTime);
-  prefetchSlotPipelines(slot, /*seal=*/false);
-}
-
 namespace {
 // Splits the queue-side mark call's cost into "waiting for the queue mutex"
 // and "marking". The distinction decides what the remaining commit_chunk
@@ -3637,29 +3559,26 @@ bool CommandQueue::submitDrawRunBatch(
   // codebase_conventions.rules.md; debug-only guard, no-op unless
   // DXMT_DEBUG_NO_PER_DRAW_ALLOC=1 build flag and env are both set.
   DXMT_DEBUG_NO_HEAP_ALLOC_SCOPE("submitDrawRun");
-  const bool refineLocks = lockScopeRefinementEnabled();
-  if (refineLocks) {
-    // R-BACK-SYNC-3: entries/payloads are immutable caller-owned borrows for
-    // this synchronous call. No live backing, slot or sequence is read here.
-    scratch.preparedEntries.clear();
-    scratch.preparedEntries.reserve(entries.size());
-    scratch.preparedPairCompatible.clear();
-    scratch.preparedPairCompatible.reserve(entries.size());
-    const core::DrawRunBatchEntry* previous = nullptr;
-    for (const auto& source : entries) {
-      if (!source.valid()) return false;
-      PerfScope stageScope(perf::countSubmitDrawRunPayloadBytesCpuTime);
-      scratch.preparedEntries.push_back({
-          .entry = source,
-          .payloadBytes = drawRunPayloadBytes(source.draws, source.payloads),
-      });
-      scratch.preparedPairCompatible.push_back(
-          previous && core::drawStatesCompatibleForDrawRunBatch(
-                          previous->state->hot, source.state->hot) &&
-          core::shaderLayoutsCompatibleForDrawRunBatch(
-              previous->state->shaderLayout, source.state->shaderLayout));
-      previous = &source;
-    }
+  // R-BACK-SYNC-3: entries/payloads are immutable caller-owned borrows for
+  // this synchronous call. No live backing, slot or sequence is read here.
+  scratch.preparedEntries.clear();
+  scratch.preparedEntries.reserve(entries.size());
+  scratch.preparedPairCompatible.clear();
+  scratch.preparedPairCompatible.reserve(entries.size());
+  const core::DrawRunBatchEntry* previous = nullptr;
+  for (const auto& source : entries) {
+    if (!source.valid()) return false;
+    PerfScope stageScope(perf::countSubmitDrawRunPayloadBytesCpuTime);
+    scratch.preparedEntries.push_back({
+        .entry = source,
+        .payloadBytes = drawRunPayloadBytes(source.draws, source.payloads),
+    });
+    scratch.preparedPairCompatible.push_back(
+        previous && core::drawStatesCompatibleForDrawRunBatch(
+                        previous->state->hot, source.state->hot) &&
+        core::shaderLayoutsCompatibleForDrawRunBatch(
+            previous->state->shaderLayout, source.state->shaderLayout));
+    previous = &source;
   }
   const auto qmxBegin = queueMutexProbeBegin();
   std::unique_lock lock(mutex_);
@@ -3670,21 +3589,16 @@ bool CommandQueue::submitDrawRunBatch(
   // single "hold" duration would not be meaningful. Only the acquire-wait
   // for this initial lock is recorded.
   QueueMutexProbeScope qmxScope(qmxBegin, "submit_draw_run", /*skipHold=*/true);
-  if (refineLocks && !preparedDrawBatchDestinationAvailable(
-                         stop_, activeArenaBuild_.load(std::memory_order_acquire),
-                         activeDirectChunkSlotBuild_.load(std::memory_order_acquire))) {
+  if (!preparedDrawBatchDestinationAvailable(
+          stop_, activeArenaBuild_.load(std::memory_order_acquire),
+          activeDirectChunkSlotBuild_.load(std::memory_order_acquire))) {
     return false;
-  }
-  if (!refineLocks) {
-    scratch.preparedEntries.clear();
-    scratch.preparedEntries.reserve(entries.size());
   }
   for (std::size_t sourceIndex = 0; sourceIndex < entries.size(); ++sourceIndex) {
     const auto& source = entries[sourceIndex];
     if (!source.valid()) return false;
     std::span<const core::DrawParamPayloadView> effectivePayloads{};
-    const std::size_t bindingSnapshotsBefore =
-        refineLocks ? scratch.bindingSnapshots.size() : 0u;
+    const std::size_t bindingSnapshotsBefore = scratch.bindingSnapshots.size();
     {
       PerfScope stageScope(perf::countSubmitDrawRunBindingSnapshotCpuTime);
       effectivePayloads = snapshotDrawRunBindingPayloads(
@@ -3692,21 +3606,15 @@ bool CommandQueue::submitDrawRunBatch(
           scratch.bindingSnapshots, scratch.snapshotPayloads,
           /*appendToScratch=*/true);
     }
-    const std::size_t bindingSnapshotsAfter =
-        refineLocks ? scratch.bindingSnapshots.size() : 0u;
-    std::size_t payloadBytes = refineLocks
-        ? scratch.preparedEntries[sourceIndex].payloadBytes : 0;
-    if (!refineLocks) {
-      PerfScope stageScope(perf::countSubmitDrawRunPayloadBytesCpuTime);
-      payloadBytes = drawRunPayloadBytes(source.draws, effectivePayloads);
-    } else {
-      // Capture fills only previously empty snapshot fields. User vertex,
-      // index, override and already-captured snapshot extents are unchanged,
-      // so the exact final count is the prepared count plus this O(1) delta.
-      // The helper preserves the initial overflow sentinel fail-closed.
-      payloadBytes = detail::drawRunPayloadBytesAfterBindingSnapshotCapture(
-          payloadBytes, bindingSnapshotsBefore, bindingSnapshotsAfter);
-    }
+    const std::size_t bindingSnapshotsAfter = scratch.bindingSnapshots.size();
+    // Capture fills only previously empty snapshot fields. User vertex, index,
+    // override and already-captured snapshot extents are unchanged, so the
+    // exact final count is the prepared count plus this O(1) delta. The helper
+    // preserves the initial overflow sentinel fail-closed.
+    const std::size_t payloadBytes =
+        detail::drawRunPayloadBytesAfterBindingSnapshotCapture(
+            scratch.preparedEntries[sourceIndex].payloadBytes,
+            bindingSnapshotsBefore, bindingSnapshotsAfter);
     const DrawSubmitScratch::PreparedEntry prepared{
         .entry = {.state = source.state,
                   .uniforms = source.uniforms,
@@ -3714,11 +3622,7 @@ bool CommandQueue::submitDrawRunBatch(
                   .payloads = effectivePayloads},
         .payloadBytes = payloadBytes,
     };
-    if (refineLocks) {
-      scratch.preparedEntries[sourceIndex] = prepared;
-    } else {
-      scratch.preparedEntries.push_back(prepared);
-    }
+    scratch.preparedEntries[sourceIndex] = prepared;
   }
 
   bool compatibleRunOpen = false;
@@ -3734,7 +3638,6 @@ bool CommandQueue::submitDrawRunBatch(
     std::size_t segmentDraws = 0;
     std::size_t segmentPayloadBytes = 0;
     std::size_t segmentRuns = 0;
-    const core::DrawRunBatchEntry* previous = nullptr;
     scratch.segmentExtends.clear();
     scratch.segmentExtends.reserve(scratch.preparedEntries.size() - segmentStart);
     while (segmentEnd < scratch.preparedEntries.size()) {
@@ -3742,11 +3645,7 @@ bool CommandQueue::submitDrawRunBatch(
       const auto& entry = prepared.entry;
       const bool extends = segmentEnd == segmentStart
           ? compatibleRunOpen && slot.lastDrawRunCompatible(*entry.state)
-          : refineLocks ? scratch.preparedPairCompatible[segmentEnd]
-          : core::drawStatesCompatibleForDrawRunBatch(
-                previous->state->hot, entry.state->hot) &&
-              core::shaderLayoutsCompatibleForDrawRunBatch(
-                  previous->state->shaderLayout, entry.state->shaderLayout);
+          : scratch.preparedPairCompatible[segmentEnd];
       if (segmentDraws > std::numeric_limits<std::size_t>::max() -
                              entry.draws.size() ||
           segmentPayloadBytes > std::numeric_limits<std::size_t>::max() -
@@ -3784,7 +3683,6 @@ bool CommandQueue::submitDrawRunBatch(
       segmentDraws = nextDraws;
       segmentPayloadBytes = nextPayloadBytes;
       segmentRuns = nextRuns;
-      previous = &entry;
       scratch.segmentExtends.push_back(extends);
       ++segmentEnd;
     }
@@ -3832,14 +3730,12 @@ bool CommandQueue::submitDrawRunBatch(
             (segmentEnd - segmentStart) * core::kMaxTextureStages);
         scratch.segmentSurfaceHandles.reserve(
             (segmentEnd - segmentStart) * (core::kMaxRenderTargets + 1u));
-        std::optional<CapturedBufferMarkBatch> capturedBatch;
-        if (refineLocks) capturedBatch.emplace(pool_, seqId);
+        CapturedBufferMarkBatch capturedBatch(pool_, seqId);
         for (std::size_t i = segmentStart; i < segmentEnd; ++i) {
           const auto& entry = scratch.preparedEntries[i].entry;
           const bool extends = scratch.segmentExtends[i - segmentStart];
-          markDrawBindingSnapshotResources(
-              pool_, entry.payloads, seqId,
-              capturedBatch ? &*capturedBatch : nullptr);
+          markDrawBindingSnapshotResources(entry.payloads, seqId,
+                                           capturedBatch);
           if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
             if (!extends) {
               const auto& hot = entry.state->hot;
@@ -3859,11 +3755,11 @@ bool CommandQueue::submitDrawRunBatch(
             }
             // The override marker can select the current backing. Drain all
             // captured stamps before entering that reference effect boundary.
-            if (capturedBatch) capturedBatch->flush();
+            capturedBatch.flush();
             markDrawBindingOverrideResources(pool_, entry.payloads, seqId);
           }
         }
-        if (capturedBatch) capturedBatch->flush();
+        capturedBatch.flush();
         if (!skipDrawResourceMarking_ || forceDrawResourceMarkingAfterSplit_) {
           const auto dedup = [](std::vector<core::Handle>& values) {
             std::sort(values.begin(), values.end(),

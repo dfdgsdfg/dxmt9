@@ -278,26 +278,22 @@ void testConstantBufferBindingsRequireAllEntries() {
         "cbuf binding cache is complete only after all argbuf entries exist");
 }
 
-void testContentHashZeroIsNotAContentMatch() {
+void testIdentityHashMatchesByteCount() {
   WMT::Buffer buffer{};
   buffer.handle = 0x6000000000000030ull;
   dxmt9::argbuf_hybrid::ConstantBufferBinding binding{
       .buffer = buffer,
       .offset = 128u,
       .bytes = 64u,
-      .contentHash = 0u,
       .identityHash = 0x1234u,
   };
 
-  check(!binding.contentMatches(0u, 64u),
-        "zero content hash is a sentinel, not a reusable content proof");
-  check(!binding.contentMatches(0x5678u, 64u),
-        "zero stored content hash does not match a non-zero probe");
-  binding.contentHash = 0x5678u;
-  check(binding.contentMatches(0x5678u, 64u),
-        "non-zero content hash still matches when explicitly populated");
   check(binding.identityMatches(0x1234u, 64u),
-        "identity hash matching is independent of content hash sentinel");
+        "identity hash matches the binding identity and byte count");
+  check(!binding.identityMatches(0x1234u, 32u),
+        "identity hash rejects a mismatched byte count");
+  check(!binding.identityMatches(0x5678u, 64u),
+        "identity hash rejects a mismatched identity");
 }
 
 void testPointConstantBufferBindingRecordsArbitraryEntry() {
@@ -350,7 +346,7 @@ int main() {
     testPopulatedArgbufDefaultIsEmpty();
     testPointFfpVsAtSliceRecordsArgbufEntry();
     testConstantBufferBindingsRequireAllEntries();
-    testContentHashZeroIsNotAContentMatch();
+    testIdentityHashMatchesByteCount();
     testPointConstantBufferBindingRecordsArbitraryEntry();
   } catch (const TestFailure& failure) {
     std::cerr << "argbuf_populator_spec failed: " << failure.what() << '\n';

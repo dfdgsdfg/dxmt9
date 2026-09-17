@@ -11,7 +11,8 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Backend Layer
 
-R-BACK-2.15.5 known-setter nonconstant invalidation is a default-off candidate.
+R-BACK-2.15.5 known-setter nonconstant invalidation is the unconditional
+implementation; the 2026-09-17 consolidation removes its runtime opt-out.
 The GT2 dependency probe found identical fixed values in every comparable
 batch full rebuild (421/422 per iteration), not workload-independent reuse
 authority. Shared-predicate refinement explores 262,144 length-six traces
@@ -25,7 +26,9 @@ arm64/x86_64, with changed-cache execution counters. Eight same-image
 asynchronous GT1/GT2 wild runs complete with clean error counters and sampled
 visual checks. FPS means change −0.08%/−0.57%; GT2 OFF repeats drift 4.2%, so
 wild performance non-regression is not established. Global observer-off
-service/FPS, broader workloads and default promotion remain open.
+service/FPS and broader workloads remain open. Structural acceptance does not
+reclassify these measurements as proven FPS non-regression. The conservative
+pixel/reference comparison remains in the fixture without a production selector.
 
 R-BACK-2.15.4 uniform-hash observer separation is implemented. Process-isolated
 native mode/counter tests and fresh same-image GT2 CPU/GPU exact evidence pass;
@@ -66,7 +69,7 @@ See the
 [position-invariance evidence](../../docs/perfomance/mini-replay-bisection/gpu-position-invariance.04.md)
 and [experiment gap](../experiments/gap.md).
 
-The default-off `DXMT9_LOCK_SCOPE_REFINEMENT` candidate is governed by
+The unconditional lock-scope implementation is governed by
 [bounded lock-scope refinement](lock-scope-refinement.md). Range-upload queue
 lock elision, exact captured-backing stamp batches and immutable replay
 preparation are implemented and native-verified; see
@@ -81,8 +84,8 @@ adds both PE cross-builds, the x86_64 provider, six runtime specs/audits and
 DISCARD processes pass twelve exact readback samples in an experiment fixture.
 Range queue acquisitions disappear and non-app arena
 update acquisitions fall, but both 06 perf pairs are slower amid large repeat
-drift. Default promotion is withheld: CPU/latency/FPS non-regression is not
-established, even though an FPS gain is not required. Full-upload/managed
+drift. That historical gate did not establish CPU/latency/FPS non-regression.
+Full-upload/managed
 rotation and actual final-slot reserve/append retain their existing locks.
 Broader rendered/concurrent correctness and lock-tail qualification remain open.
 [H310](../../docs/perfomance/present-pacing/present-pacing-payload-count-batch-cost.310.md)
@@ -93,7 +96,17 @@ reruns both the exact historical H309 provider and H310 at about 18 FPS in
 06 GT2; the earlier large decline is not reproduced or independently
 attributable to the lock candidate. Actual batch distribution, contended tails,
 broader correctness and stable cross-workload non-regression remain open;
-default OFF is unchanged.
+the 2026-09-17 structural consolidation makes the bounded implementation
+unconditional and removes the opt-out rather than claiming those gaps closed.
+Reference max-stamp and final-Slot comparisons remain tests. The published
+completion/reclaim protocol and full-upload locking are unchanged.
+
+[H318](../../docs/perfomance/present-pacing/present-pacing-policy-consolidation.318.md)
+records the integrated consolidation: all four builds, 29 focused native checks,
+six API-validation checks, ten x86_64 runtime checks and the full 210-config TLA
+inventory pass. The uniform GPU oracle retains conservative rebuild comparison
+and proves retired selector values are inert. No new Wine/wild FPS qualification
+or broader MT claim follows from this regression gate.
 
 [H275](../../docs/perfomance/present-pacing/present-pacing-pe-cached-com-lifetime.275.md)
 closes the bounded PE Present/backbuffer cache cycle: capture-OFF controls

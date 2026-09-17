@@ -7,11 +7,13 @@ tags: [specs, backend, synchronization, verification]
 
 # Bounded queue/arena lock-scope refinement
 
-This experimental candidate addresses the queue/arena scope mismatches in
+This implementation addresses the queue/arena scope mismatches in
 [H307](../../docs/perfomance/present-pacing/present-pacing-lock-contention-audit.307.md).
-`DXMT9_LOCK_SCOPE_REFINEMENT=1` is default-off and is not a stable rendering
-provider. Absence preserves the reference path. Safety, progress, lock work
-and tail latency are separate gates from FPS.
+Range-upload arena serialization, bounded captured-stamp batches and immutable
+preparation are the sole runtime path. The former
+`DXMT9_LOCK_SCOPE_REFINEMENT` selector and redundant outer-lock/scalar/preflight
+alternatives are retired. Safety, progress, lock work and tail latency remain
+separate evidence dimensions; this is not a new rendering provider.
 
 Under R-VERIF-1.5–1.8 this is a stateful synchronization refinement, not a
 pure byte-layout cleanup. The Unix device owns range admission, the resource
@@ -68,16 +70,18 @@ OS mutex fairness. Stale-generation behavior must additionally be pinned in
 the actual Pool; native predicate tables are explicit correspondences, not
 an automatically generated proof of the entire C++ implementation.
 
-**R-BACK-SYNC-5 — promotion.** Formal/native success does not prove actual
-buffer bytes, rendering, driver behavior, allocator economics or all MT
-interleavings. Deterministic byte/readback and supervised wild correctness,
-followed by qualified lock-count/wait/hold and CPU measurements, precede
-default promotion. Queue holds contain arena work and are not additive. A
-larger batch must not trade lower acquisition count for an unbounded hold.
-An FPS increase is not required: the intended synchronization-work reduction
-plus matched CPU, latency and FPS non-regression is sufficient for the
-economic gate. A noisy or materially slower control/candidate comparison
-does not establish non-regression and must not trigger a default change.
+**R-BACK-SYNC-5 — consolidation.** Preserve the bounded formal/native,
+deterministic byte/readback and supervised wild correctness evidence when
+making this synchronization-work reduction unconditional. Reference scalar
+effects and conservative comparisons belong in tests, not a runtime opt-out.
+Queue holds contain arena work and are not additive. A larger batch must not
+trade lower acquisition count for an unbounded hold. This consolidation is an
+explicit implementation-policy decision based on bounded correctness and
+reduced redundant work; it is not a statistical CPU, latency or FPS
+non-regression result. Keep unresolved performance and arbitrary-MT coverage
+in the owning gap. A subsequently demonstrated material regression must be
+investigated rather than dismissed because lock counts decreased. Formal/native
+success does not prove driver behavior, allocator economics or all interleavings.
 
 The conservative full-upload watermark read, complete off-slot reserve/copy/
 commit, per-resource lock sharding, lock primitive replacement, and publication

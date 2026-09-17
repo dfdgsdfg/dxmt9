@@ -30,6 +30,15 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H318](present-pacing-policy-consolidation.318.md) consolidates two qualified
+redundant-work reductions: known-setter uniform invalidation and bounded
+lock-scope refinement. Their runtime opt-outs and legacy alternatives are gone;
+synchronous unpublished prefetch and secondary uploaded-cbuf hashing are
+retired entirely. Test-only conservative/scalar references remain. This is an
+explicit structural policy decision, not a new CPU/FPS non-regression result;
+broader MT, live pacing and workload economics remain open. H317 END grouping
+and independent experimental providers are unchanged.
+
 [H317](present-pacing-query-end-coalescing.317.md) implements default-OFF END
 grouping with actual-publication identity, independent receipt lifetime and
 single-FLUSH progress. Bounded TLA/native, exact Metal bytes and x64/x86 Wine
@@ -84,12 +93,13 @@ not to saturated replay. App CPU is not PE-exclusive. Fixed-arrival half/zero
 replay sensitivity mostly advances latency; producer/lock feedback and the
 unconditional end-to-end speedup ceiling remain open. No FPS/default promotion.
 
-[H311](present-pacing-lock-scope-attribution.311.md) finds that the exact
+Historical [H311](present-pacing-lock-scope-attribution.311.md) finds that the exact
 historical H309 provider also recovers to about 18 FPS in 06 GT2, near H310.
 The earlier 5.95–9.31 FPS population is not a stable binary-specific deficit;
 run environment/execution state confounds its attribution. No isolated FPS
 gain is claimed for the payload fix. Measure actual batch construction,
-size, duplicates and flush causes next; retain semantic fences and default OFF.
+size, duplicates and flush causes next; retain semantic fences. H311 kept
+default OFF; H318 later retires that selector without closing the economic gaps.
 
 [H310](present-pacing-payload-count-batch-cost.310.md) replaces the extra
 post-capture payload-count walk with checked constant-time settlement from

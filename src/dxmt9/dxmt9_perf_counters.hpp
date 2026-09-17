@@ -387,7 +387,6 @@ void countSubmitPresentCommitCpuTime(std::uint64_t nanoseconds);
 void countSubmitPresentBoundaryCpuTime(std::uint64_t nanoseconds);
 void countPrepareSlotForPublishCpuTime(std::uint64_t nanoseconds);
 void countPrepareSlotResourceMarkCpuTime(std::uint64_t nanoseconds);
-void countUnpublishedSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds);
 void countChunkPublishReason(ChunkPublishReason reason,
                              std::uint64_t commandCount);
 // Tape-gated CPU-ready session join lane (DXMT9_CPU_READY_TAPE). Release
@@ -1310,11 +1309,6 @@ void countEncodeDrawArgbufCbufSetBufferFfpPsCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawArgbufCbufUploadPlanCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawArgbufCbufUploadPlanVsCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawArgbufCbufUploadPlanPsCpuTime(std::uint64_t nanoseconds);
-void countEncodeDrawArgbufCbufBindingHashCpuTime(std::uint64_t nanoseconds);
-void countEncodeDrawArgbufCbufBindingHashVsCpuTime(std::uint64_t nanoseconds);
-void countEncodeDrawArgbufCbufBindingHashPsCpuTime(std::uint64_t nanoseconds);
-void countEncodeDrawArgbufCbufBindingHashFfpVsCpuTime(std::uint64_t nanoseconds);
-void countEncodeDrawArgbufCbufBindingHashFfpPsCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawArgbufCbufBindingWriteCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawArgbufCbufBindingWriteVsCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawArgbufCbufBindingWritePsCpuTime(std::uint64_t nanoseconds);

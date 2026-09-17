@@ -745,13 +745,6 @@ void countPrepareSlotResourceMarkCpuTime(std::uint64_t nanoseconds) {
   recordRing(c.prepareSlotResourceMarkCpuRing, nanoseconds);
 }
 
-void countUnpublishedSlotPsoPrefetchCpuTime(std::uint64_t nanoseconds) {
-  auto& c = counters();
-  add(c.unpublishedSlotPsoPrefetchCpuNs, nanoseconds);
-  updateMax(c.unpublishedSlotPsoPrefetchCpuMaxNs, nanoseconds);
-  recordRing(c.unpublishedSlotPsoPrefetchCpuRing, nanoseconds);
-}
-
 void countChunkPublishReason(ChunkPublishReason reason,
                              std::uint64_t commandCount) {
   auto& c = counters();
@@ -4110,26 +4103,6 @@ void countEncodeDrawArgbufCbufUploadPlanVsCpuTime(std::uint64_t nanoseconds) {
 
 void countEncodeDrawArgbufCbufUploadPlanPsCpuTime(std::uint64_t nanoseconds) {
   add(counters().encodeDrawArgbufCbufUploadPlanPsCpuNs, nanoseconds);
-}
-
-void countEncodeDrawArgbufCbufBindingHashCpuTime(std::uint64_t nanoseconds) {
-  add(counters().encodeDrawArgbufCbufBindingHashCpuNs, nanoseconds);
-}
-
-void countEncodeDrawArgbufCbufBindingHashVsCpuTime(std::uint64_t nanoseconds) {
-  add(counters().encodeDrawArgbufCbufBindingHashVsCpuNs, nanoseconds);
-}
-
-void countEncodeDrawArgbufCbufBindingHashPsCpuTime(std::uint64_t nanoseconds) {
-  add(counters().encodeDrawArgbufCbufBindingHashPsCpuNs, nanoseconds);
-}
-
-void countEncodeDrawArgbufCbufBindingHashFfpVsCpuTime(std::uint64_t nanoseconds) {
-  add(counters().encodeDrawArgbufCbufBindingHashFfpVsCpuNs, nanoseconds);
-}
-
-void countEncodeDrawArgbufCbufBindingHashFfpPsCpuTime(std::uint64_t nanoseconds) {
-  add(counters().encodeDrawArgbufCbufBindingHashFfpPsCpuNs, nanoseconds);
 }
 
 void countEncodeDrawArgbufCbufBindingWriteCpuTime(std::uint64_t nanoseconds) {
