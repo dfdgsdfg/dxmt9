@@ -245,8 +245,8 @@ class Device {
   virtual void abortPresentOrdinalWaits() {}
   virtual void flush() {}
   virtual bool usesAsyncQueryFences() const noexcept { return false; }
-  virtual query::Fence publishQueryEnd() noexcept { return {}; }
-  virtual query::Poll pollQueryFence(query::Fence, bool) noexcept {
+  virtual query::EndReceipt publishQueryEnd() noexcept { return {}; }
+  virtual query::Poll pollQueryFence(const query::EndReceipt&, bool) noexcept {
     return query::Poll::Invalid;
   }
   virtual query::Progress queryProgress() noexcept { return {}; }

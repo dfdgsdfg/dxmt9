@@ -76,8 +76,11 @@ with opaque backend handles. They must not contain D3D9 COM pointers,
 Objective-C object pointers, unix-side C++ object pointers, or executable
 payloads.
 
-Each query END must record the chunk sequence ID that orders the END marker.
-A query is resolved only when `completedSeqId >= issuedSeqId`.
+Each query END must bind to the actual chunk sequence ID that orders the END
+marker. The deferred candidate may retain an unbound writer marker until
+publication, but must never predict a sequence or treat unbound as an empty
+prefix. Resolution requires a bound receipt and `completedSeqId >= issuedSeqId`
+as well as the initializer, incarnation, epoch and failure conditions below.
 
 Multiple queries may share an `issuedSeqId` when their END records are in the
 same chunk. Resolution remains chunk-granular: if the chunk completed, every END
@@ -161,6 +164,44 @@ Deferring END publication or coalescing ENDs across a live writer requires a
 separate admitted marker-to-publication identity; a predicted future queue
 sequence remains forbidden. Such a candidate must preserve ordered-control
 cuts and may not claim the eager-publication evidence as proof of the new path.
+
+### 4.4 Deferred END groups (`R-CORE-11.5(d)`)
+
+A default-off coalescing candidate may attach multiple ENDs to one nonempty
+ordinary writer. The group must own a lifetime-independent, queue/source/
+generation-qualified marker. Admission must not predict a queue sequence.
+Only successful publication of that exact writer may bind the marker to its
+actual sequence. Existing Present, capacity, readback and ordered-control cuts
+remain authoritative; coalescing must not remove or cross them.
+
+Before binding, polling without FLUSH returns `S_FALSE`. FLUSH must
+publish the owning writer and request its actual prefix. Deferred admission
+requires an available publication credit at Issue; full admission uses the
+eager Issue reference path and its existing progress/backpressure protocol.
+No later source may bypass an unbound writer and consume that credit. FLUSH
+must not wait for GPU completion. Once bound, future writers cannot extend the
+receipt. Completion
+may conservatively include commands after END within the same published chunk;
+the END's initializer prefix and query result bytes remain fixed at Issue.
+
+Reissue/release must not leave callbacks referring to a public Query object.
+Marker allocation failure, stale ownership, publication failure, terminal
+failure and device-epoch mismatch must fail closed. An empty writer uses the
+already published prefix and must not create a never-publishable marker.
+If binding fails after Tape publication, control state must retain that actual
+published ownership before stopping. It must not revert to Writing, reclaim
+published storage early or advance successful completion.
+The candidate requires bounded safety/progress, production-predicate/native
+binding, GPU readback, visible wild and matched performance evidence before
+default promotion.
+
+### 4.5 Split attribution (`R-CORE-11.5(e)`)
+
+Diagnostics must distinguish END-forced publication, deferred groups, empty
+prefix reuse and FLUSH-forced publication from unrelated semantic, capacity
+and Present boundaries. A source-publication count is not a command-buffer
+count. Any claimed CB reduction must name the separately measured submission
+population. Disabled diagnostics must not add per-draw clocks or payload work.
 
 ---
 

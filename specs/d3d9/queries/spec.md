@@ -14,6 +14,23 @@ query operations plus CPU-visible ordinary and initializer completion fences.
 Section 7 describes the implemented completion path. Sections 4–5 describe
 the target Metal result providers, which are not yet fully implemented.
 
+The default-off deferred-END candidate (`R-CORE-11.5(d–e)`) retains that
+completion predicate and initializer authority. A queue-local writer owns one
+shared marker, independent of public Query lifetime. END stores that marker
+and its own fixed initializer prefix. The marker carries admitted source and
+storage generations, not a future sequence. The actual `sealAndPublish` seam
+binds it once before making the source available to encode. A later writer
+has a distinct marker even if physical Slot storage is reused.
+
+Non-FLUSH polls never publish. FLUSH may publish only the marker's exact live
+writer, and does not enter a full admission wait: END defers only below the
+publication cap, otherwise it uses the eager Issue path. No later publication
+may bypass that writer and consume its admission credit. Existing boundaries
+also publish and bind the group. Marker storage is Unix/core ownership only;
+PE query records and the PE/Unix ABI remain pointer-free and unchanged.
+The eager path is the reference and remains default until candidate evidence
+is complete. Missing gates are tracked in the query gap row.
+
 ---
 
 ## 1. Query Types in Scope
@@ -45,6 +62,8 @@ CommandQueue state:
 
 A query requires `completedSeqId >= fence.sequence` as well as successful
 initializer completion, a live queue incarnation and the current issue epoch.
+An unbound deferred marker never satisfies this condition. The following
+diagram describes the default eager-END path.
 
 ```mermaid
 sequenceDiagram
@@ -84,7 +103,7 @@ sequenceDiagram
 An event query is a GPU fence with a `BOOL` public result. A caller may poll
 with `GetData(NULL, 0, flags)` without requesting result bytes.
 
-In the implemented path, `Issue(D3DISSUE_END)` publishes the current writer
+In the default path, `Issue(D3DISSUE_END)` publishes the current writer
 and captures its actual prefix, rather than inserting a new Metal query
 command. No Metal query object is required. Section 7 adds initializer success,
 queue incarnation and failure to the ordinary `completedSeqId` condition.
@@ -182,7 +201,7 @@ without depending on public COM references.
 It defaults ON; explicit `0` (or an empty value) selects the synchronous
 diagnostic/reference path. This is a completion-policy change, not a new
 Metal occlusion/timestamp result provider.
-END first settles any compatibility draw batch, then publishes the ordinary
+By default, END first settles any compatibility draw batch, then publishes the ordinary
 queue writer and obtains `{queue incarnation, published sequence}` under the
 queue mutex. With no writer it captures the existing published prefix, including
 zero for a genuinely empty queue. It does not invent a Query GPU command or
@@ -254,6 +273,14 @@ they may advance after an `S_FALSE` decision and are not its linearization
 snapshot. Event quotas reserve 128 Issue rows independently from up to 384
 poll rows; omitted rows are counted. These bounded diagnostics do not claim a
 complete per-query lifecycle trace for a long game run.
+
+`DXMT9_QUERY_SPLIT_OBSERVER` observes ordinary source publications by reason
+and completion-bearing tail command buffers handed to `QueueLifecycleController`.
+Its `command_buffer` category excludes mid-chunk sub-CB commits and initializer
+CBs. Compare it with the separate `sub_command_buffers` commit counter and
+`command_buffers` creation counter; none alone is a complete causal split
+attribution. Final group totals and the first 128 identity events have distinct
+populations. The observer does not turn the candidate on.
 
 The current core occlusion/timestamp value providers are not made into real
 Metal visibility/timestamp results by this change. Their data semantics remain

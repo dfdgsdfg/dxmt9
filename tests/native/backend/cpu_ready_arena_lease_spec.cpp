@@ -7,14 +7,32 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <cstdlib>
 #include <future>
 #include <iostream>
 #include <limits>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <thread>
 #include <type_traits>
+
+namespace {
+// Test executable only: inject into the real make_shared allocation without
+// adding an allocation-fault branch or allocator callback to production END.
+thread_local bool failNextQueryAllocation = false;
+}
+void* operator new(std::size_t size) {
+  if (failNextQueryAllocation) {
+    failNextQueryAllocation = false;
+    throw std::bad_alloc();
+  }
+  if (void* value = std::malloc(size ? size : 1)) return value;
+  throw std::bad_alloc();
+}
+void operator delete(void* value) noexcept { std::free(value); }
+void operator delete(void* value, std::size_t) noexcept { std::free(value); }
 
 namespace dxmt9 {
 
@@ -67,6 +85,14 @@ struct CommandQueueArenaLeaseTestAccess {
     });
   }
 
+  static bool awaitIssuePressure(CommandQueue& queue) {
+    std::unique_lock lock(queue.mutex_);
+    return queue.encodeCv_.wait_for(lock, std::chrono::seconds(2), [&] {
+      return queue.queueLifecycle_.producerWriterPressureActive() &&
+          queue.queueLifecycle_.sequenceSubmissionRequested();
+    });
+  }
+
   static core::CpuReadyPublicationTicket readyTicket(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     std::array<core::CpuReadyTape::ReadyEntry, 1> entries{};
@@ -77,6 +103,14 @@ struct CommandQueueArenaLeaseTestAccess {
   static void stopCpuReadyTape(CommandQueue& queue) {
     std::lock_guard lock(queue.mutex_);
     queue.cpuReadyTape_.stopAdmission();
+  }
+
+  static void corruptQueryPublicationOwner(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    auto& marker = queue.slots_[*queue.writingSlot_].payload->queryEndMarker;
+    auto owner = marker->owner();
+    ++owner.storageGeneration;
+    marker = std::make_shared<query::EndMarker>(owner);
   }
 
   static void stopAfterCompatibilityFlush(CommandQueue& queue) {
@@ -1633,14 +1667,14 @@ void testPublishedQueryFences() {
   using Access = CommandQueueArenaLeaseTestAccess;
   CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
   const auto empty = queue.publishQueryEnd();
-  check(empty.valid() && empty.sequence == 0, "empty END has a live empty prefix");
+  check(empty.valid() && empty.snapshot().sequence == 0, "empty END has a live empty prefix");
   check(queue.pollQueryFence(empty, true) == query::Poll::Complete,
         "empty prefix needs no artificial GPU command");
   ClearDesc clear{};
   clear.clearColor = true;
   queue.submitClear(clear);
   const auto first = queue.publishQueryEnd();
-  check(first.valid() && first.sequence == 1, "END gets actual first publication");
+  check(first.valid() && first.snapshot().sequence == 1, "END gets actual first publication");
   const auto ticket = Access::readyTicket(queue);
   check(queue.pollQueryFence(first, false) == query::Poll::Pending,
         "publication is not completion");
@@ -1653,7 +1687,7 @@ void testPublishedQueryFences() {
   check(queue.pollQueryFence(first, true) == query::Poll::Pending,
         "FLUSH returns pending with no completion worker running");
   check(parked.get(), "query submission wakes real queue CV and progress predicate");
-  check(Access::submissionTarget(queue) == first.sequence,
+  check(Access::submissionTarget(queue) == first.snapshot().sequence,
         "async submission request survives GetData return");
   const auto retired = Access::publishToReclaim(queue, ticket);
   check(retired.submitted && retired.completed && retired.reclaimed,
@@ -1667,7 +1701,7 @@ void testPublishedQueryFences() {
   queue.submitClear(clear);
   const auto newer = queue.publishQueryEnd();
   const auto newerTicket = Access::readyTicket(queue);
-  check(newer.sequence > first.sequence, "newer source has distinct sequence");
+  check(newer.snapshot().sequence > first.snapshot().sequence, "newer source has distinct sequence");
   check(queue.pollQueryFence(first, true) == query::Poll::Complete,
         "old query excludes newer incomplete suffix");
   check(Access::submissionTarget(queue) == 0, "old query does not submit suffix");
@@ -1676,7 +1710,7 @@ void testPublishedQueryFences() {
   CommandQueue other(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
   check(other.pollQueryFence(first, true) == query::Poll::Invalid,
         "cross-queue ABA is rejected");
-  check(queue.pollQueryFence({first.queue, newer.sequence + 1}, true) == query::Poll::Invalid,
+  check(queue.pollQueryFence({first.snapshot().queue, newer.snapshot().sequence + 1}, true) == query::Poll::Invalid,
         "future unpublished receipt is rejected");
   const auto last = Access::publishToReclaim(queue, newerTicket);
   check(last.completed && last.reclaimed, "second delayed completion drains");
@@ -1708,15 +1742,184 @@ void testPublishedQueryFences() {
         "active batch cannot issue an END receipt before publication");
   check(batch->abortForFallback(), "pre-effect batch abort is reversible");
   const auto settled = reversible.publishQueryEnd();
-  check(settled.valid() && settled.sequence == 0 &&
+  check(settled.valid() && settled.snapshot().sequence == 0 &&
             reversible.pollQueryFence(settled, true) == query::Poll::Complete,
         "pre-effect abort leaves no phantom query prefix");
 }
 
+void testCoalescedQueryFences() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+  using Access = CommandQueueArenaLeaseTestAccess;
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  core::ClearDesc clear{};
+  clear.clearColor = true;
+  const auto empty = queue.publishQueryEnd();
+  check(!empty.marker && queue.pollQueryFence(empty, true) == query::Poll::Complete,
+        "empty END must not allocate a never-publishable marker");
+  queue.submitClear(clear);
+  auto first = queue.publishQueryEnd();
+  check(first.valid() && first.marker && !first.snapshot().sequence,
+        "END admits writer identity without predicting sequence");
+  queue.submitClear(clear);
+  const auto second = queue.publishQueryEnd();
+  check(second.marker == first.marker, "two ENDs share one writer group");
+  check(!Access::readyTicket(queue).id.valid() && queue.queryProgress().published == 0,
+        "ENDs did not publish");
+  check(queue.pollQueryFence(first, false) == query::Poll::Pending,
+        "unbound marker cannot pass as an empty fence");
+  CommandQueue other(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  check(other.pollQueryFence(first, true) == query::Poll::Invalid,
+        "foreign queue cannot publish another queue's marker");
+  check(queue.pollQueryFence(second, true) == query::Poll::Pending,
+        "one FLUSH publishes group, never completes it");
+  check(first.snapshot().sequence == 1 && second.snapshot().sequence == 1,
+        "both receipts receive the actual publication");
+  const auto ticket = Access::readyTicket(queue);
+  first = {};
+  const auto settled = Access::publishToReclaim(queue, ticket);
+  check(settled.commandCount == 2 && settled.completed && settled.reclaimed,
+        "one actual source contains both clears and reclaims");
+  check(queue.pollQueryFence(second, false) == query::Poll::Complete,
+        "receipt remains bound after Slot storage reclamation");
+  queue.submitClear(clear);
+  auto newer = queue.publishQueryEnd();
+  check(newer.marker && newer.marker != second.marker,
+        "recycled Slot must create a distinct generation group");
+  check(queue.pollQueryFence(second, true) == query::Poll::Complete &&
+            !newer.snapshot().sequence,
+        "old poll never publishes or extends newer writer");
+  check(queue.publishReplayDiagnosticBoundary(), "natural cut publishes writer");
+  check(newer.snapshot().sequence == 2 && second.snapshot().sequence == 1,
+        "natural boundary binds exactly once without rebinding old receipt");
+  check(queue.pollQueryFence(newer, true) == query::Poll::Pending,
+        "actual submission is still incomplete");
+  const auto failed = Access::publishToReclaim(queue, Access::readyTicket(queue), true);
+  check(failed.submitted && !failed.completed &&
+            queue.pollQueryFence(newer, true) == query::Poll::Failed,
+        "driver failure cannot authorize coalesced receipt");
+  CommandQueue invalid(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  invalid.submitClear(clear);
+  auto foreign = invalid.publishQueryEnd();
+  auto forged = foreign;
+  auto owner = forged.marker->owner();
+  ++owner.generation;
+  forged.marker = std::make_shared<query::EndMarker>(owner);
+  check(invalid.pollQueryFence(forged, true) == query::Poll::Invalid,
+        "stale generation cannot take writer publication authority");
+  Access::stopCpuReadyTape(invalid);
+  check(invalid.pollQueryFence(foreign, true) == query::Poll::Pending &&
+            foreign.snapshot().sequence == 1,
+        "stopping new admission still drains the already admitted writer");
+  Access::setStopped(invalid);
+  check(invalid.pollQueryFence(foreign, true) == query::Poll::Failed,
+        "terminal queue stop fails closed");
+
+  CommandQueue allocation(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  allocation.submitClear(clear);
+  failNextQueryAllocation = true;
+  const auto rejected = allocation.publishQueryEnd();
+  const bool injected = !failNextQueryAllocation;
+  failNextQueryAllocation = false;
+  check(injected && !rejected.valid() && allocation.queryProgress().failed &&
+            allocation.queryProgress().published == 0,
+        "real marker allocation failure fail-stops without a receipt/publication");
+
+  CommandQueue publication(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  publication.submitClear(clear);
+  const auto unpublished = publication.publishQueryEnd();
+  Access::corruptQueryPublicationOwner(publication);
+  check(!publication.publishReplayDiagnosticBoundary() &&
+            publication.queryProgress().failed &&
+            publication.pollQueryFence(unpublished, true) == query::Poll::Failed,
+        "post-seal stale marker binding fail-stops before encode visibility");
+  const auto stoppedSource = Access::readyTicket(publication);
+  check(stoppedSource.id.valid() && publication.queryProgress().published == 1 &&
+            publication.queryProgress().completed == 0 &&
+            !Access::publishToReclaim(publication, stoppedSource).dequeued &&
+            Access::residentSources(publication) == 1,
+        "failed published ownership remains retained, never encoded or reclaimed early");
+}
+
+void testCoalescedQueryCapacity() {
+  using namespace dxmt9;
+  using Access = CommandQueueArenaLeaseTestAccess;
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, core::BackendLimits{});
+  core::ClearDesc clear{};
+  clear.clearColor = true;
+  for (std::size_t i = 0; i < kMaxQueuedChunks - 1; ++i) {
+    queue.submitClear(clear);
+    check(queue.publishReplayDiagnosticBoundary(), "fill actual publication capacity");
+  }
+  queue.submitClear(clear);
+  const auto deferred = queue.publishQueryEnd();
+  check(deferred.marker && !deferred.snapshot().sequence,
+        "last available publication credit admits a deferred marker");
+  check(queue.pollQueryFence(deferred, true) == query::Poll::Pending &&
+            deferred.snapshot().sequence == kMaxQueuedChunks,
+        "single FLUSH consumes reserved ordering position without GPU wait");
+  // Wait for the real producer-pressure edge, not an arbitrary sleep or the
+  // submission target already set by the preceding FLUSH.
+  queue.submitClear(clear);
+  auto issue = std::async(std::launch::async, [&] { return queue.publishQueryEnd(); });
+  const bool pressure = Access::awaitIssuePressure(queue);
+  if (!pressure) Access::setStopped(queue);
+  check(pressure, "full-cap Issue preserves submission progress");
+  const auto oldest = Access::publishToReclaim(queue, Access::readyTicket(queue));
+  const bool ready = issue.wait_for(std::chrono::seconds(2)) == std::future_status::ready;
+  if (!ready) Access::setStopped(queue);
+  check(oldest.reclaimed && ready, "actual completion releases eager Issue backpressure");
+  const auto eager = issue.get();
+  check(eager.valid() && !eager.marker && eager.snapshot().sequence == kMaxQueuedChunks + 1,
+        "full-cap END uses eager actual publication, no deferred over-admission");
+  while (Access::readyCount(queue)) {
+    check(Access::publishToReclaim(queue, Access::readyTicket(queue)).reclaimed,
+          "drain all actual capacity-test sources");
+  }
+  check(queue.pollQueryFence(eager, false) == query::Poll::Complete,
+        "eager pressure fallback completes exactly once");
+}
+
+void testCoalescedWriterBeforeArenaAdmission() {
+  using namespace dxmt9;
+  using namespace dxmt9::core;
+  using Access = CommandQueueArenaLeaseTestAccess;
+  CommandQueue queue(CommandQueue::ArenaLeaseTestQueueTag{}, BackendLimits{});
+  ClearDesc clear{};
+  clear.clearColor = true;
+  queue.submitClear(clear);
+  const auto receipt = queue.publishQueryEnd();
+  check(receipt.marker && !receipt.snapshot().sequence, "deferred ordinary prefix");
+  SourcePayloadCapacity capacity{};
+  capacity.commandHeaders = capacity.clearRecords = 1;
+  auto arena = queue.beginCpuReadyArenaSource(2, makeLayout(capacity));
+  check(arena && arena->seqId() == 2 && receipt.snapshot().sequence == 1,
+        "Arena admission must publish/bind the ordinary marker before it can pass");
+  check(!queue.publishQueryEnd().valid(), "active Arena build rejects new END authority");
+  queue.submitClear(clear);
+  check(arena->publish(), "later Arena source publishes");
+  check(queue.pollQueryFence(receipt, true) == query::Poll::Pending,
+        "old receipt requests only its own already bound prefix");
+  check(Access::publishToReclaim(queue, Access::readyTicket(queue)).reclaimed,
+        "ordinary prefix completes/reclaims");
+  check(queue.pollQueryFence(receipt, false) == query::Poll::Complete &&
+            Access::readyCount(queue) == 1,
+        "later incomplete Arena cannot extend the earlier query receipt");
+  check(Access::publishToReclaim(queue, Access::readyTicket(queue)).reclaimed,
+        "later Arena completes/reclaims independently");
+}
+
 }  // namespace
 
-int main() {
+int main(int argc, char**) {
   try {
+    if (argc > 1) {
+      testCoalescedQueryFences();
+      testCoalescedQueryCapacity();
+      testCoalescedWriterBeforeArenaAdmission();
+      std::cout << "coalesced query group tests passed\n";
+      return 0;
+    }
     testPublishedQueryFences();
     testExplicitControlIndexGroupingAndExactSnapshotMark();
     testActiveMismatchFailStopsWithoutFallback();

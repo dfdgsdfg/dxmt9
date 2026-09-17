@@ -211,6 +211,8 @@ struct Counters {
   std::atomic<std::uint64_t> chunkPublishReasonSemanticBoundary{0};
   std::atomic<std::uint64_t> chunkPublishReasonDirectCapacityRotation{0};
   std::atomic<std::uint64_t> chunkPublishReasonEarlyPrefix{0};
+  std::atomic<std::uint64_t> chunkPublishReasonQueryEnd{0};
+  std::atomic<std::uint64_t> chunkPublishReasonQueryPoll{0};
   std::atomic<std::uint64_t> chunkPublishCommandsUnknown{0};
   std::atomic<std::uint64_t> chunkPublishCommandsDrawLimit{0};
   std::atomic<std::uint64_t> chunkPublishCommandsPayloadLimit{0};
@@ -223,6 +225,8 @@ struct Counters {
   std::atomic<std::uint64_t> chunkPublishCommandsSemanticBoundary{0};
   std::atomic<std::uint64_t> chunkPublishCommandsDirectCapacityRotation{0};
   std::atomic<std::uint64_t> chunkPublishCommandsEarlyPrefix{0};
+  std::atomic<std::uint64_t> chunkPublishCommandsQueryEnd{0};
+  std::atomic<std::uint64_t> chunkPublishCommandsQueryPoll{0};
   // Tape-gated CPU-ready session join lane (DXMT9_CPU_READY_TAPE):
   std::atomic<std::uint64_t> encodePartitionIdentitySelections{0};
   std::atomic<std::uint64_t> encodePartitionExplicitSelections{0};

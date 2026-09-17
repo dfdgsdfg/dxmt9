@@ -832,17 +832,23 @@ class QueryFenceDevice final : public dxmt9::Device {
   dxmt9::query::Progress progress{41, 0, 0, false};
   u64 requests = 0;
   bool rejectEnd = false;
+  std::shared_ptr<dxmt9::query::EndMarker> deferredMarker;
   WMT::Device wmtDevice() override { return WMT::Device{NULL_OBJECT_HANDLE}; }
   dxmt9::CommandQueue& queue() override { return unused; }
   const BackendLimits& limits() const override { return caps; }
   std::shared_ptr<BackendDevice> backend() override { return renderer; }
   bool usesAsyncQueryFences() const noexcept override { return true; }
-  dxmt9::query::Fence publishQueryEnd() noexcept override {
+  dxmt9::query::EndReceipt publishQueryEnd() noexcept override {
     if (rejectEnd) return {};
+    if (deferredMarker) {
+      dxmt9::query::EndReceipt receipt{progress.queue, 0, progress.initializerPublished};
+      receipt.marker = deferredMarker;
+      return receipt;
+    }
     return {progress.queue, ++progress.published, progress.initializerPublished};
   }
-  dxmt9::query::Poll pollQueryFence(dxmt9::query::Fence f, bool flush) noexcept override {
-    const auto result = dxmt9::query::classify(f, progress);
+  dxmt9::query::Poll pollQueryFence(const dxmt9::query::EndReceipt& f, bool flush) noexcept override {
+    const auto result = dxmt9::query::classifyEnd(f, progress);
     if (result == dxmt9::query::Poll::Pending && flush) ++requests;
     return result;
   }
@@ -921,6 +927,45 @@ void testAsyncQueryUsesActualCompletionOnly() {
   checkEq(device->getQueryData(occlusion, &samples, sizeof(samples), 0), S_OK,
           "occlusion formatter behind completed receipt");
   checkEq(samples, 0u, "existing empty occlusion value preserved");
+}
+
+void testDeferredQueryResetAndReissue() {
+  auto upper = std::make_shared<QueryFenceDevice>();
+  Factory factory(upper);
+  PresentParameters params{};
+  params.backBufferWidth = params.backBufferHeight = 8;
+  params.backBufferFormat = Format::A8R8G8B8;
+  params.windowed = true;
+  auto device = factory.createDevice(0, params);
+  check(device != nullptr, "deferred core device");
+  auto q = device->createQuery(QueryType::Timestamp);
+  const dxmt9::query::WriterIdentity owner{upper->progress.queue, 1, 1, 1};
+  upper->deferredMarker = std::make_shared<dxmt9::query::EndMarker>(owner);
+  checkEq(device->issueQuery(q, false), D3D_OK, "deferred first END");
+  check(q->deferredBackendFence() && q->backendFence().sequence == 0,
+        "core retains unbound ownership rather than a scalar empty prefix");
+  u64 value = 0xdeadbeef;
+  checkEq(device->getQueryData(q, &value, sizeof(value), QUERY_GETDATA_FLUSH),
+          S_FALSE, "unbound public query remains pending");
+  checkEq(value, 0xdeadbeefull, "unbound public query preserves output bytes");
+  const auto previous = upper->deferredMarker;
+  auto nextOwner = owner;
+  ++nextOwner.generation;
+  upper->deferredMarker = std::make_shared<dxmt9::query::EndMarker>(nextOwner);
+  checkEq(device->issueQuery(q, false), D3D_OK, "deferred reissue replaces marker");
+  check(previous->bind(owner, 1), "old writer publishes after reissue");
+  upper->progress.published = upper->progress.completed = 1;
+  checkEq(device->getQueryData(q, nullptr, 0, 0), S_FALSE,
+          "old marker completion cannot resolve new unbound issue");
+  checkEq(device->reset(params), D3D_OK, "reset invalidates unbound query epoch");
+  check(upper->deferredMarker->bind(nextOwner, 2), "new writer later completes");
+  upper->progress.published = upper->progress.completed = 2;
+  checkEq(device->getQueryData(q, nullptr, 0, QUERY_GETDATA_FLUSH), D3DERR_DEVICELOST,
+          "post-reset marker publication cannot revive stale query");
+  upper->deferredMarker.reset();
+  checkEq(device->issueQuery(q, false), D3D_OK, "post-reset eager reissue");
+  upper->progress.completed = upper->progress.published;
+  checkEq(device->getQueryData(q, nullptr, 0, 0), S_OK, "new epoch resolves normally");
 }
 
 void testQueryFenceTruthTable() {
@@ -1766,6 +1811,7 @@ int main() {
     testQueryFlushPresentResetSequenceBoundaries();
     testAsyncQueryUsesActualCompletionOnly();
     testQueryFenceTruthTable();
+    testDeferredQueryResetAndReissue();
     testResetClearsStaleDrawStateBeforeNextBoundaryPacket();
     testResetRejectsStaleSurfaceOpsBeforeBackendBoundary();
     testGetRenderTargetDataUsesRuntimeReadbackPayload();

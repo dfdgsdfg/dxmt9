@@ -3,7 +3,7 @@
 #include "dxmt9/assert.hpp"
 #include "dxmt9/core_compat_draw_batch.hpp"
 #include "dxmt9/core_constants.hpp"
-#include "dxmt9/query_fence.hpp"
+#include "dxmt9/query_end_marker.hpp"
 
 #include <algorithm>
 #include <array>
@@ -2058,7 +2058,8 @@ class Query : public std::enable_shared_from_this<Query> {
   u64 identity() const noexcept { return identity_; }
   u64 issueOrdinal() const noexcept { return issueOrdinal_; }
   u64 issueDeviceEpoch() const noexcept { return issueDeviceEpoch_; }
-  query::Fence backendFence() const noexcept { return backendFence_; }
+  query::Fence backendFence() const noexcept { return backendFence_.snapshot(); }
+  bool deferredBackendFence() const noexcept { return bool(backendFence_.marker); }
   HRESULT getData(void* output, size_t size, u32 flags, u64 completedSequenceId) const;
 
  private:
@@ -2067,7 +2068,7 @@ class Query : public std::enable_shared_from_this<Query> {
   u64 identity_ = 0;
   u64 issueOrdinal_ = 0;
   u64 issueDeviceEpoch_ = 0;
-  query::Fence backendFence_{};
+  query::EndReceipt backendFence_{};
   bool failedIssue_ = false;
   u64 issuedSequenceId_ = 0;
   bool active_ = false;

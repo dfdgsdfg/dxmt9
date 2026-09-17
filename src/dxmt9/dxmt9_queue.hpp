@@ -1489,6 +1489,7 @@ class QueueLifecycleController {
     // the offload path (e.g. the completion-sources spec).
     u64* completedPresentOrdinal = nullptr;
     u64* lastCommittedSeqId = nullptr;
+    u64 queryQueueIdentity = 0;
     std::span<ChunkSlotControl> slots;
     CpuReadyTape* cpuReadyTape = nullptr;
     QueueDirectSlotCapacityLeaseLedger* directSlotCapacityLedger = nullptr;

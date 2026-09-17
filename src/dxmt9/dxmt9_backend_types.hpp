@@ -993,6 +993,8 @@ struct ChunkSlot {
   // detached-owner token must carry the receipt minted at admission; it may
   // not re-derive a qualified receipt from a later ledger snapshot.
   DetachedCapacityReceipt admissionCapacityReceipt{};
+  // Cold candidate: one group per writer. Receipts survive Slot reclamation.
+  std::shared_ptr<query::EndMarker> queryEndMarker{};
   dxmt9::perf::ChunkPublishReason publishReason =
       dxmt9::perf::ChunkPublishReason::Unknown;
   bool pipelinePrefetchSealed = false;
@@ -1124,6 +1126,7 @@ struct ChunkSlot {
   }
 
   void clearCommands() {
+    queryEndMarker.reset();
     publishReason = dxmt9::perf::ChunkPublishReason::Unknown;
     pipelinePrefetchSealed = false;
     pipelinePrefetchCommandCursor = 0;

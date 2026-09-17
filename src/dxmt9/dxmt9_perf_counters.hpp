@@ -214,6 +214,8 @@ enum class ChunkPublishReason : std::uint8_t {
   // Default-off CPU-ready experiment: one immutable non-Present frame prefix
   // published only after reserving the compatibility Present tail.
   EarlyPrefix,
+  QueryEnd,
+  QueryPoll,
 };
 
 enum class ChunkPublishTailCommandKind : std::uint8_t {

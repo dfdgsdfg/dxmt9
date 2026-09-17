@@ -27,7 +27,7 @@
 #include "dxmt9_early_prefix_policy.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9/wsi_surface_protocol.hpp"
-#include "dxmt9/query_fence.hpp"
+#include "dxmt9/query_end_marker.hpp"
 #include "dxmt9_hud.hpp"
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_presenter.hpp"
@@ -991,8 +991,8 @@ class CommandQueue {
 
   // Query END publishes an actual prefix without a GPU completion wait.
   // Issue retains normal bounded publication admission; polling never does.
-  query::Fence publishQueryEnd() noexcept;
-  query::Poll pollQueryFence(query::Fence fence, bool flush) noexcept;
+  query::EndReceipt publishQueryEnd() noexcept;
+  query::Poll pollQueryFence(const query::EndReceipt& receipt, bool flush) noexcept;
   query::Progress queryProgress() noexcept;
 
   // Cold Render Tape discriminator: publish the current ordinary source but

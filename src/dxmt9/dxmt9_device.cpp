@@ -466,10 +466,10 @@ class DeviceImpl final : public Device {
   bool usesAsyncQueryFences() const noexcept override {
     return query::asynchronousFencesEnabled();
   }
-  query::Fence publishQueryEnd() noexcept override {
+  query::EndReceipt publishQueryEnd() noexcept override {
     return queue_.publishQueryEnd();
   }
-  query::Poll pollQueryFence(query::Fence fence, bool flush) noexcept override {
+  query::Poll pollQueryFence(const query::EndReceipt& fence, bool flush) noexcept override {
     return queue_.pollQueryFence(fence, flush);
   }
   query::Progress queryProgress() noexcept override {

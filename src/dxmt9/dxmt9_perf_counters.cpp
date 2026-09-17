@@ -802,6 +802,14 @@ void countChunkPublishReason(ChunkPublishReason reason,
     count = &c.chunkPublishReasonEarlyPrefix;
     commands = &c.chunkPublishCommandsEarlyPrefix;
     break;
+  case ChunkPublishReason::QueryEnd:
+    count = &c.chunkPublishReasonQueryEnd;
+    commands = &c.chunkPublishCommandsQueryEnd;
+    break;
+  case ChunkPublishReason::QueryPoll:
+    count = &c.chunkPublishReasonQueryPoll;
+    commands = &c.chunkPublishCommandsQueryPoll;
+    break;
   // DrawContinuation is retained for counter-table numbering stability and
   // folded into the Unknown bucket.
   case ChunkPublishReason::DrawContinuation:

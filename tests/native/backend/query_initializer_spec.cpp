@@ -44,7 +44,7 @@ void testInitializerOnly(dxmt9::CommandQueue& queue) {
   const auto surface = queue.pool().createSurfaceForTexture(texture, 0, surfaceDesc);
   check(bool(surface), "create readback alias");
 
-  query::Fence previous{};
+  query::EndReceipt previous{};
   for (unsigned issue = 0; issue != 3; ++issue) {
     Gate gate{queue.device().newSharedEvent()};
     check(bool(gate.event), "create independent GPU gate");
@@ -58,10 +58,10 @@ void testInitializerOnly(dxmt9::CommandQueue& queue) {
     queue.uploadTextureLevel(texture, 0, size, size, 1, size * 4,
                              size * size * 4, expected);
     const auto fence = queue.publishQueryEnd();
-    check(fence.valid() && fence.sequence == 0 && fence.initializer > 0,
+    check(fence.valid() && fence.snapshot().sequence == 0 && fence.snapshot().initializer > 0,
           "END captures initializer-only actual submission");
     if (previous.valid()) {
-      check(fence.initializer > previous.initializer, "reissue gets new upload prefix");
+      check(fence.snapshot().initializer > previous.snapshot().initializer, "reissue gets new upload prefix");
       check(queue.pollQueryFence(previous, true) == query::Poll::Complete,
             "later blocked upload does not extend old receipt");
     }
@@ -88,16 +88,79 @@ void testInitializerOnly(dxmt9::CommandQueue& queue) {
     previous = fence;
   }
 }
+
+void testCoalescedOrdinary(dxmt9::CommandQueue& queue) {
+  using namespace dxmt9;
+  core::SurfaceDesc desc{};
+  desc.width = desc.height = 8;
+  desc.format = core::Format::A8R8G8B8;
+  desc.usage = core::UsageRenderTarget;
+  desc.renderTarget = true;
+  const auto surface = queue.pool().createSurface(queue.device(), queue.limits(), desc);
+  check(bool(surface), "coalesced render target");
+  Gate gate{queue.device().newSharedEvent()};
+  check(bool(gate.event), "ordinary independent GPU gate");
+  auto blocker = queue.newCommandBuffer();
+  blocker.encodeWaitForEvent(WMT::Event{gate.event.handle}, 1);
+  blocker.commit();
+  core::ClearDesc clear{};
+  clear.colorAttachments[0].handle = surface;
+  clear.clearColor = true;
+  clear.color = {1, 0, 0, 1};
+  const auto before = queue.queryProgress().published;
+  queue.submitClear(clear);
+  auto first = queue.publishQueryEnd();
+  clear.color = {0, 1, 0, 1};
+  queue.submitClear(clear);
+  const auto second = queue.publishQueryEnd();
+  check(first.marker && first.marker == second.marker &&
+            queue.queryProgress().published == before,
+        "two real clears share deferred writer, no END cut");
+  check(queue.pollQueryFence(first, false) == query::Poll::Pending,
+        "unbound ordinary marker cannot complete");
+  check(queue.pollQueryFence(second, true) == query::Poll::Pending,
+        "FLUSH publishes without waiting for blocked GPU");
+  check(first.snapshot().sequence == second.snapshot().sequence &&
+            first.snapshot().sequence > before,
+        "publication binds both hardware receipts to one actual sequence");
+  first = {};
+  for (unsigned i = 0; i != 16; ++i)
+    check(queue.pollQueryFence(second, false) == query::Poll::Pending,
+          "blocked hardware remains pending after public receipt release");
+  gate.release();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  auto status = query::Poll::Pending;
+  while (status == query::Poll::Pending && std::chrono::steady_clock::now() < deadline) {
+    status = queue.pollQueryFence(second, false);
+    if (status == query::Poll::Pending) std::this_thread::yield();
+  }
+  check(status == query::Poll::Complete, "one FLUSH retains submission progress");
+  // Readback is strictly after success and cannot rescue a parked encoder.
+  core::ReadbackDesc readback{};
+  readback.source = surface;
+  readback.sourceRect = core::Rect{0, 0, 8, 8};
+  core::ReadbackPixels actual{};
+  check(encoders::readbackSurface(queue, queue.pool(), queue.device(), queue.limits(),
+                                 readback, actual), "coalesced output readback");
+  check(actual.pitch == 32 && actual.bytes.size() == 256, "exact output extent");
+  for (std::size_t i = 0; i != actual.bytes.size(); i += 4)
+    check(actual.bytes[i] == 0 && actual.bytes[i+1] == 255 &&
+              actual.bytes[i+2] == 0 && actual.bytes[i+3] == 255,
+          "ordered red then green clears produce exact green bytes");
+}
 } // namespace
 
-int main() {
+int main(int argc, char**) {
   try {
     auto devices = WMT::CopyAllDevices();
     if (!devices || !devices.count()) return 77;
     dxmt9::CommandQueue queue(devices.object(0), {}, false);
     check(queue.valid() && queue.started(), "production queue starts");
     testInitializerOnly(queue);
+    if (argc > 1) testCoalescedOrdinary(queue);
     std::cout << "query_initializer_spec passed (3 gated uploads, 768 exact bytes)\n";
+    if (argc > 1)
+      std::cout << "coalesced ordinary oracle passed (2 ordered clears, 256 exact bytes)\n";
     return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

@@ -60,7 +60,7 @@ inline void event(const Query& q, const char* action, u32 flags, HResult result,
   util::logf(util::LogLevel::Info, "dxmt9-query-event",
       "action=%s type=%u query=%llu issue=%llu epoch=%llu core_seq=%llu flags=%u hr=%d "
       "authoritative=%u queue=%llu fence_queue=%llu fence=%llu published=%llu completed=%llu "
-      "init_fence=%llu init_published=%llu init_completed=%llu failed=%u elapsed_ns=%llu",
+      "init_fence=%llu init_published=%llu init_completed=%llu failed=%u elapsed_ns=%llu deferred=%u bound=%u",
       action, unsigned(q.type()), (unsigned long long)q.identity(),
       (unsigned long long)q.issueOrdinal(), (unsigned long long)q.issueDeviceEpoch(),
       (unsigned long long)q.issuedSequenceId(),
@@ -71,7 +71,9 @@ inline void event(const Query& q, const char* action, u32 flags, HResult result,
       (unsigned long long)fence.initializer,
       (unsigned long long)progress.initializerPublished,
       (unsigned long long)progress.initializerCompleted,
-      unsigned(progress.failed), (unsigned long long)nanos);
+      unsigned(progress.failed), (unsigned long long)nanos,
+      unsigned(q.deferredBackendFence()),
+      unsigned(!q.deferredBackendFence() || fence.sequence != 0));
 }
 
 inline void issue(const Query& q, bool begin, bool async, HResult result,

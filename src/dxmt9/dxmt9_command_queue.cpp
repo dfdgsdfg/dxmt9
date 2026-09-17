@@ -18,6 +18,8 @@
 #include "dxmt9_pipeline_cache.hpp"
 #include "dxmt9_presenter.hpp"
 #include "dxmt9_queue.hpp"
+#include "dxmt9_query_policy.hpp"
+#include "dxmt9_query_split_observer.hpp"
 #include "dxmt9_resource_initializer.hpp"
 #include "dxmt9_resource_mark_observer.hpp"
 #include "dxmt9_resource_pool.hpp"
@@ -8593,7 +8595,7 @@ std::uint64_t CommandQueue::allocateQueryQueueIdentity() noexcept {
   return 0;  // Exhaustion fails closed, never wrap into another incarnation.
 }
 
-query::Fence CommandQueue::publishQueryEnd() noexcept {
+query::EndReceipt CommandQueue::publishQueryEnd() noexcept {
   try {
     std::unique_lock lock(mutex_);
     if (!queryQueueIdentity_ || stop_ || queueLifecycle_.queryCompletionFailed() ||
@@ -8617,19 +8619,45 @@ query::Fence CommandQueue::publishQueryEnd() noexcept {
         return {};
       hadCommands = !slots_[*writingSlot_].payload->commandsEmpty();
     }
+    // Admit a deferred writer only below the publication cap. Otherwise use
+    // the eager Issue path (and its existing progress/backpressure protocol).
+    // Until this writer publishes no later source can consume its credit.
+    if (hadCommands && query::coalesceEndsEnabled() &&
+        inflightCount_ < kMaxQueuedChunks) {
+      auto& writer = slots_[*writingSlot_];
+      auto& marker = writer.payload->queryEndMarker;
+      const query::WriterIdentity owner{queryQueueIdentity_, writer.sourceId.index,
+          writer.sourceId.generation, writer.storage.generation};
+      if (!owner.valid()) return {};
+      const bool shared = bool(marker);
+      if (!marker) marker = std::make_shared<query::EndMarker>(owner);
+      if (marker->owner() != owner || marker->sequence()) return {};
+      query::EndReceipt receipt{queryQueueIdentity_, 0, initializerPrefix};
+      receipt.marker = marker;
+      query::splitdiag::note(shared ? query::splitdiag::Kind::DeferredShared
+                                   : query::splitdiag::Kind::DeferredNew,
+                            queryQueueIdentity_, 0);
+      return receipt;
+    }
     // If Issue meets an inflight admission cap, older parked work must still
     // be allowed to submit. This is a progress request, never fake completion.
-    if (inflightCount_ >= kMaxQueuedChunks)
+    if (inflightCount_ >= kMaxQueuedChunks) {
+      query::splitdiag::note(query::splitdiag::Kind::EagerCapacity,
+                            queryQueueIdentity_, lastCommittedSeqId_);
       (void)queueLifecycle_.requestQuerySubmission(lastCommittedSeqId_);
+    }
     const bool published = queueLifecycle_.commitCurrentChunk(
         lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
           prepareSlotForPublish(*this, pool_, slot,
-                                perf::ChunkPublishReason::SemanticBoundary);
+                                perf::ChunkPublishReason::QueryEnd);
         });
     if (stop_ || arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
         (hadCommands && !published)) return {};
     // The prefix is fixed under the same lock as actual publication. Empty
     // ENDs share the preceding prefix; future appends cannot extend this fence.
+    query::splitdiag::note(hadCommands ? query::splitdiag::Kind::EagerEnd
+                                      : query::splitdiag::Kind::EmptyEnd,
+                          queryQueueIdentity_, lastCommittedSeqId_);
     return {queryQueueIdentity_, lastCommittedSeqId_, initializerPrefix};
   } catch (...) {
     failStopReplaySourceExecution();
@@ -8647,20 +8675,57 @@ query::Progress CommandQueue::queryProgress() noexcept {
           uploads.published, uploads.completed};
 }
 
-query::Poll CommandQueue::pollQueryFence(query::Fence fence, bool flush) noexcept {
-  std::lock_guard lock(mutex_);
-  const auto uploads = initializer_ ? initializer_->queryProgressUnlocked()
-      : resources::Initializer::QueryProgress{};
-  const query::Progress progress{
-      queryQueueIdentity_, lastCommittedSeqId_, completedSeqIdLocked(),
-      stop_ || arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
-          queueLifecycle_.queryCompletionFailed() || uploads.failed,
-      uploads.published, uploads.completed};
-  const auto result = query::classify(fence, progress);
-  if (result == query::Poll::Pending && flush &&
-      !queueLifecycle_.requestQuerySubmission(fence.sequence))
+query::Poll CommandQueue::pollQueryFence(const query::EndReceipt& receipt,
+                                        bool flush) noexcept {
+  try {
+    std::unique_lock lock(mutex_);
+    const auto uploads = initializer_ ? initializer_->queryProgressUnlocked()
+        : resources::Initializer::QueryProgress{};
+    const query::Progress progress{
+        queryQueueIdentity_, lastCommittedSeqId_, completedSeqIdLocked(),
+        stop_ || arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
+            queueLifecycle_.queryCompletionFailed() || uploads.failed,
+        uploads.published, uploads.completed};
+    auto result = query::classifyEnd(receipt, progress);
+    if (result != query::Poll::Pending || !flush) return result;
+    if (receipt.marker && !receipt.marker->sequence()) {
+      if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
+          activeArenaBuild_.load(std::memory_order_relaxed) ||
+          activeDirectChunkSlotBuild_.load(std::memory_order_relaxed) ||
+          arenaBuildContext_) return query::Poll::Invalid;
+      if (!writingSlot_ || *writingSlot_ >= slots_.size()) return query::Poll::Invalid;
+      const auto& writer = slots_[*writingSlot_];
+      const query::WriterIdentity owner{queryQueueIdentity_, writer.sourceId.index,
+          writer.sourceId.generation, writer.storage.generation};
+      if (!writer.payload || writer.payload->queryEndMarker != receipt.marker ||
+          receipt.marker->owner() != owner || writer.payload->commandsEmpty())
+        return query::Poll::Invalid;
+      if (inflightCount_ >= kMaxQueuedChunks) {
+        // A different source cannot pass an unpublished writer. Reject a
+        // violated admission witness rather than silently dropping a FLUSH.
+        requestSchedulingStopLocked();
+        return query::Poll::Failed;
+      }
+      // Capacity is available while holding the writer mutex. No GPU wait or
+      // speculative nextSeqId receipt is introduced by the poll.
+      if (!queueLifecycle_.commitCurrentChunk(lock, kMaxQueuedChunks,
+          [this](core::ChunkSlot& slot) {
+            prepareSlotForPublish(*this, pool_, slot, perf::ChunkPublishReason::QueryPoll);
+          }) || !receipt.marker->sequence() || stop_ ||
+          arenaBuildPoisoned_.load(std::memory_order_relaxed)) return query::Poll::Failed;
+      query::splitdiag::note(query::splitdiag::Kind::FlushPublish,
+                            queryQueueIdentity_, receipt.marker->sequence());
+    }
+    const auto fence = receipt.snapshot();
+    if (!queueLifecycle_.requestQuerySubmission(fence.sequence))
+      return query::Poll::Failed;
+    // Publication/submission request never authorizes success. Re-poll the
+    // actual completion frontiers on the next call.
+    return query::Poll::Pending;
+  } catch (...) {
+    failStopReplaySourceExecution();
     return query::Poll::Failed;
-  return result;
+  }
 }
 
 bool CommandQueue::publishReplayDiagnosticBoundary() noexcept {
@@ -9591,6 +9656,7 @@ void CommandQueue::bindSelfLifecycle(ResolveSurfaceFlagsFn resolveSurfaceFlags) 
       .presentCompletedSeqId = &presentCompletedSeqId_,
       .completedPresentOrdinal = &presentOrdinalGate_.completedOrdinal,
       .lastCommittedSeqId = &lastCommittedSeqId_,
+      .queryQueueIdentity = queryQueueIdentity_,
       .slots = std::span<core::ChunkSlotControl>(slots_.data(), slots_.size()),
       .cpuReadyTape = &cpuReadyTape_,
       .directSlotCapacityLedger = &directSlotCapacityLedger_,

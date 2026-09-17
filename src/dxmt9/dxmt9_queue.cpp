@@ -5,6 +5,7 @@
 
 #include "dxmt9/assert.hpp"
 #include "dxmt9/query_fence.hpp"
+#include "dxmt9_query_split_observer.hpp"
 #include "dxmt9_compat.hpp"
 #include "dxmt9_hud.hpp"
 #include "dxmt9_perf_counters.hpp"
@@ -3660,9 +3661,35 @@ bool QueueLifecycleController::commitCurrentChunk(
       poisonTapeFailureLocked();
       return;
     }
+    if (writingPayload->queryEndMarker) {
+      const auto& marker = writingPayload->queryEndMarker;
+      if (!marker->bind({submissionBinding_.queryQueueIdentity, slot.sourceId.index,
+                         slot.sourceId.generation, slot.storage.generation},
+                        slot.seqId)) {
+        // Tape publication already happened. Preserve that actual ownership
+        // transition before stopping; leaving the control Writing would pair
+        // a zero-sequence writer with a Ready source. Never roll back/reclaim
+        // published storage or authorize the failed query receipt.
+        nextSeqId->store(slot.seqId + 1, std::memory_order_release);
+        slot.state = ChunkSlot::State::Pending;
+        *lastCommittedSeqId = slot.seqId;
+        ++(*inflightCount);
+        writingSlot->reset();
+        *writeIndex = (*writeIndex + 1) % slots.size();
+        sealed = false;
+        poisonTapeFailureLocked();
+        return;
+      }
+      query::splitdiag::note(query::splitdiag::Kind::MarkerBound,
+          submissionBinding_.queryQueueIdentity, slot.seqId,
+          writingPayload->commandCount());
+    }
     if (onAfterPublish) {
       onAfterPublish();
     }
+    query::splitdiag::note(query::splitdiag::Kind::Publication,
+        submissionBinding_.queryQueueIdentity, slot.seqId,
+        writingPayload->commandCount(), unsigned(writingPayload->publishReason));
     // Cold replay-source capture observes the exact Ready publication before
     // the control slot becomes visible to the encode worker. The nullable
     // check is publication-scoped; no receipt storage or metadata lookup is
@@ -3904,6 +3931,19 @@ size_t QueueLifecycleController::reserveReadySlotBatchPrefix(
         (payload.isArena() && control.payload != nullptr)) {
       poisonTapeFailureLocked();
       return 0;
+    }
+    // Normal shutdown may drain Ready work. A source whose query binding
+    // failed after seal is not normal drainable work: keep its actual Ready
+    // ownership but never let it cross the encode boundary.
+    if (payload.isLegacy() && payload.legacyPayload()->queryEndMarker) {
+      const auto& marker = payload.legacyPayload()->queryEndMarker;
+      const query::WriterIdentity owner{submissionBinding_.queryQueueIdentity,
+          candidate.source.id.index, candidate.source.id.generation,
+          candidate.source.storage.generation};
+      if (marker->owner() != owner || marker->sequence() != candidate.seqId) {
+        poisonTapeFailureLocked();
+        return 0;
+      }
     }
     for (size_t j = 0; j < i; ++j) {
       if (ready[j].controlIndex == candidate.controlIndex) {
@@ -6279,6 +6319,12 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     querySubmittedPrefixSeqId_ = std::max(querySubmittedPrefixSeqId_,
                                          completionSources.back().seqId);
     const auto pendingDepthAfterPush = pendingCompletion_.size();
+    // Count actual CBs separately: publication is not a one-to-one CB cut.
+    if (query::splitdiag::enabled()) {
+      query::splitdiag::note(query::splitdiag::Kind::CommandBuffer,
+          submissionBinding_.queryQueueIdentity, completionSources.back().seqId,
+          completionSources.size());
+    }
     if (completionWaitActive) {
       ++completionWaitEnqueues_;
     }

@@ -1,4 +1,10 @@
 # Backend descriptor / pipeline / replay / hazard / capture / counter / render-pass specs.
+query_end_marker_spec = executable(
+  'dxmt9-query-end-marker-spec', 'query_end_marker_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+test('dxmt9-query-end-marker-spec', query_end_marker_spec,
+     env: dxmt9_native_test_env)
 
 query_upload_tracker_spec = executable(
   'dxmt9-query-upload-tracker-spec', 'query_upload_tracker_spec.cpp',
@@ -15,6 +21,10 @@ query_initializer_spec = executable(
 )
 test('dxmt9-query-initializer-spec', query_initializer_spec,
      env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1', 'DXMT9_ASYNC_QUERY_FENCES=1'],
+     is_parallel: false, timeout: 30)
+test('dxmt9-query-end-coalescing-gpu-spec', query_initializer_spec,
+     args: ['--coalesced-query'],
+     env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1', 'DXMT9_ASYNC_QUERY_FENCES=1', 'DXMT9_COALESCE_QUERY_ENDS=1'],
      is_parallel: false, timeout: 30)
 
 metal_shader_compile_profile_spec = executable(
@@ -551,6 +561,9 @@ cpu_ready_arena_lease_spec = executable(
 test('dxmt9-cpu-ready-arena-lease-spec',
      cpu_ready_arena_lease_spec,
      env: dxmt9_native_test_env)
+test('dxmt9-query-end-coalescing-queue-spec', cpu_ready_arena_lease_spec,
+     args: ['--coalesced-query'],
+     env: dxmt9_native_test_env_vars + ['DXMT9_COALESCE_QUERY_ENDS=1', 'DXMT9_ASYNC_QUERY_FENCES=1'])
 
 capture_color_observer_test_env = dxmt9_native_test_env_vars + [
   'DXMT9_DUMP_COLOR_ATTACHMENT_DIR=/unused-inert-queue-observer',

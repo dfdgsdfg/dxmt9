@@ -30,6 +30,13 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H317](present-pacing-query-end-coalescing.317.md) implements default-OFF END
+grouping with actual-publication identity, independent receipt lifetime and
+single-FLUSH progress. Bounded TLA/native, exact Metal bytes and x64/x86 Wine
+checks pass. Split observers distinguish END/FLUSH source cuts from actual
+CB counts. The separate old/current ABBA comparison suffers severe same-image
+drift; no absolute code delta, FPS gain or default promotion is established.
+
 [H316](present-pacing-query-default-promotion.316.md) promotes asynchronous
 query completion to default ON after bounded native/model/GPU/Wine and visible
 STALKER evidence. Explicit OFF preserves the synchronous reference. END still
@@ -37,7 +44,7 @@ publishes eagerly, but an actually submitted query no longer pressures an
 unrelated suffix or repeats encode/finish wakes. Failure injection uses the
 production upload reaper; it does not prove real driver recovery. Full-frame
 wild equivalence, real Metal occlusion/timestamp providers and deferred END
-coalescing remain open. Clean same-image runs are kept separate from the
+coalescing are outside H316 (see H317 for its candidate). Clean same-image runs are kept separate from the
 observer-enabled locality diagnostic; README is unchanged.
 
 Historical [H315](present-pacing-query-publication-fences.315.md) separates actual-prefix

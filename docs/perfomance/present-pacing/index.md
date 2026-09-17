@@ -11,13 +11,19 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H317](present-pacing-query-end-coalescing.317.md) adds default-OFF deferred
+END groups, exact writer-to-publication binding and split attribution. Bounded
+native/TLA/GPU and x64/x86 Wine gates pass; matched wild locality and stable
+non-regression remain promotion gates. The old/current absolute FPS comparison
+has severe same-image temporal drift and does not isolate a code delta.
+
 [H316](present-pacing-query-default-promotion.316.md) promotes asynchronous
 query completion to default ON, with explicit OFF as the synchronous reference.
 Production upload-reaper fault tests, initializer-only exact GPU bytes,
 default-mode Wine x64/x86 and visible same-image STALKER repetitions qualify
 the bounded path. Actual submission now retires query splitting pressure;
 END itself remains eager. Real Metal query-data providers and deferred END
-coalescing remain separate work.
+coalescing are outside H316; H317 tracks the latter candidate.
 
 Historical [H315](present-pacing-query-publication-fences.315.md) implements a default-off
 actual-prefix query fence with persistent FLUSH submission and separate GPU

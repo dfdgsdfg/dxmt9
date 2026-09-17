@@ -52,6 +52,7 @@ normal_models=(
   QuerySeqId
   QueryPublicationFence
   QueryInitializerFence
+  QueryEndCoalescing
   QueueLifecycleRefinement
   QueueT2dReserveCopyCommit
   RenderTapeCompletionSchedule
@@ -73,10 +74,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=61
+expected_normal_count=62
 expected_progress_count=4
-expected_counterexample_count=141
-expected_cfg_count=206
+expected_counterexample_count=144
+expected_cfg_count=210
 progress_configs=(
   CpuPipelineLifecycle.progress
   DirectSourceLifecycle.progress
@@ -125,6 +126,9 @@ counterexample_models=(
   "QueryInitializerFence|.ignore-upload.counterexample|Invariant CompletionSafety is violated"
   "QueryInitializerFence|.signal-only.counterexample|Invariant CompletionSafety is violated"
   "QueryInitializerFence|.capacity.counterexample|Invariant CapacitySafety is violated"
+  "QueryEndCoalescing|.unbound.counterexample|Invariant CompletionSafety is violated"
+  "QueryEndCoalescing|.stale.counterexample|Invariant BindingIdentity is violated"
+  "QueryEndCoalescing|.pressure.counterexample|Temporal properties were violated"
   "QueryPublicationFence|.early-completion.counterexample|Invariant NoInventedCompletion is violated"
   "QueryPublicationFence|.drop-request.counterexample|Invariant StickyRequest is violated"
   "QueryPublicationFence|.old-issue.counterexample|Invariant CompletionSafety is violated"
