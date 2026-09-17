@@ -11,6 +11,13 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H319](present-pacing-policy-consolidation-wild.319.md) checks committed
+`c9256634` in three completed wild runs. 05/06 GT2 scene spots are
+26.385/16.417 FPS; STALKER Day is 13.764 benchmark FPS. Image hashes, sampled
+scene pictures and error counters pass. GT2 is below README amid host activity;
+no same-session parent control exists, so performance non-regression remains
+open and README is unchanged.
+
 [H318](present-pacing-policy-consolidation.318.md) makes known-setter uniform
 invalidation and bounded lock-scope refinement unconditional, removing their
 legacy runtime alternatives. Unpublished-slot prefetch and secondary cbuf

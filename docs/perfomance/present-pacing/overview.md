@@ -30,6 +30,14 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H319 committed-image wild checks](present-pacing-policy-consolidation-wild.319.md)
+complete 05 GT2, 06 GT2 and STALKER Day with normal exit, qualified staged
+images, scene captures and zero required error counters. Scene FPS is
+26.385/16.417 for 05/06; STALKER's own average is 13.764. Both GT2 spots are
+below README. Background activity and the absence of a same-session parent
+control prevent causal attribution or a non-regression claim. Keep README
+unchanged and use matched parent/current repeat controls for the next gate.
+
 [H318](present-pacing-policy-consolidation.318.md) consolidates two qualified
 redundant-work reductions: known-setter uniform invalidation and bounded
 lock-scope refinement. Their runtime opt-outs and legacy alternatives are gone;

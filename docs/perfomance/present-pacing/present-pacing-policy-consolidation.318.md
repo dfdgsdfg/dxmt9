@@ -85,6 +85,10 @@ The runtime source diff removes a net 283 lines, including comments, while
 keeping test-only reference paths. No new wild FPS result is claimed by these
 fixtures.
 
+The subsequent committed-image [H319 wild smoke](present-pacing-policy-consolidation-wild.319.md)
+records three completed runs and their separate, still-unqualified performance
+comparison; it does not retroactively turn this fixture gate into an FPS proof.
+
 ## Deliberately not folded into this cleanup
 
 [H317 END coalescing](present-pacing-query-end-coalescing.317.md) remains a
