@@ -33,6 +33,19 @@ The provider remains default OFF; public PE/MSAA/fault breadth, full-sequence
 wild equivalence and repeated performance evidence remain open independently
 of the 214-configuration TLC gate.
 
+[H322](../../docs/perfomance/present-pacing/present-pacing-query-ready-replay-frontier.322.md)
+adds bounded Ready-frontier/predecessor and retrospective END/raw drain
+diagnostics, with 12 native and six x86_64 focused gates plus the unchanged
+214-configuration TLC inventory. R647 demonstrates later raw work in 1,773
+stable-END drain calls, not an authorized narrower wait or removable time.
+Admission-time issue identity, successful replay-prefix completion and polling
+independent of mutable Device/Query ownership are still unimplemented gates.
+The observed ordinal alone cannot make the current core polling call concurrent
+with later replay. Full preceding-source-chain attribution, in-flight identity
+and same-raw suffix separation remain open. R647's title capture fails; one
+explicitly restored scene spot is retained, and its diagnostic/focus-affected
+FPS is not performance evidence.
+
 ## Bounded lock-scope refinement (2026-09-09)
 
 `R-BACK-SYNC-1`–`R-BACK-SYNC-5` and the unconditional implementation are owned by

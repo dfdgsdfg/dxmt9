@@ -861,6 +861,62 @@ void testPopExposesOnlyAdoptedImmediateRawLookahead() {
   }
 }
 
+void testDiagnosticQueueEndpoints() {
+  using namespace dxmt9::d3d9;
+  ReplayOffloadQueue queue(8, 1u << 20);
+  ReplayDrainLedger ledger;
+  const auto snapshot = [&] {
+    ReplayQueueDiagnosticSnapshot result;
+    queue.visitDiagnostic([&](const auto& value) { result = value; });
+    return result;
+  };
+  auto view = snapshot();
+  check(view.queuedCount == 0 && !view.inFlight &&
+            !view.frontOrdinalKnown && !view.backOrdinalKnown,
+        "empty diagnostic view invents no FIFO ordinal");
+  const auto head = queue.reserveMutation(8, ledger);
+  check(head.valid() && queue.push(makeChunk(8), &ledger),
+        "reserve head and append adopted raw");
+  view = snapshot();
+  check(view.queuedCount == 2 && view.frontPlaceholder &&
+            !view.frontOrdinalKnown && view.backOrdinalKnown &&
+            view.backOrdinal == head.replaySeq + 1 && view.unknownOrdinal,
+        "reserved head stays unknown rather than borrowing its successor ordinal");
+  const auto tail = queue.reserveMutation(8, ledger);
+  check(tail.valid(), "reserve diagnostic tail");
+  view = snapshot();
+  check(view.backPlaceholder && !view.backOrdinalKnown,
+        "reserved tail stays unknown rather than borrowing its predecessor ordinal");
+  queue.releaseMutation(head);
+  view = snapshot();
+  check(view.frontOrdinalKnown && view.frontOrdinal == head.replaySeq + 1 &&
+            view.backPlaceholder,
+        "releasing reservation exposes the real FIFO head");
+  queue.releaseMutation(tail);
+  ReplayQueueItem out;
+  check(queue.pop(out), "pop diagnostic raw");
+  view = snapshot();
+  check(view.queuedCount == 0 && view.inFlight && !view.frontOrdinalKnown,
+        "in-flight work is separate from queued ordinals");
+  check(queue.push(makeChunk(8), &ledger), "append behind in-flight raw");
+  view = snapshot();
+  check(view.queuedCount == 1 && view.inFlight &&
+            view.frontOrdinalKnown && view.backOrdinal == view.frontOrdinal,
+        "in-flight work remains explicit even with a known queued tail");
+  queue.markReplayDone();
+  check(queue.pop(out), "pop diagnostic tail");
+  queue.markReplayDone();
+  check(queue.push(makeChunk(8)) && queue.push(makeChunk(8), &ledger),
+        "append ordinal-free fixture before known raw");
+  view = snapshot();
+  check(!view.frontOrdinalKnown && view.backOrdinalKnown && view.unknownOrdinal,
+        "ordinal-zero head never adopts a later ordinal");
+  check(queue.pop(out), "pop ordinal-free raw");
+  queue.markReplayDone();
+  check(queue.pop(out), "pop final known raw");
+  queue.markReplayDone();
+}
+
 void testDrainWaitsForInFlight() {
   dxmt9::d3d9::ReplayOffloadQueue q(4, 1 << 20);
   check(q.push(makeChunk(8)), "push");
@@ -1573,6 +1629,7 @@ int main() {
     testSegmentedLedgerChargeSettlesOnOwningSinkAcrossThread();
     testFifoPushPop();
     testPopExposesOnlyAdoptedImmediateRawLookahead();
+    testDiagnosticQueueEndpoints();
     testDrainWaitsForInFlight();
     testBoundedPushBlocksUntilPop();
     testStopReleasesEverything();

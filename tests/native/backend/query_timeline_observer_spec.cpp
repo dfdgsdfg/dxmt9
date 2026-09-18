@@ -170,6 +170,73 @@ void recentEvidenceRingAndSkip() {
         "sequence-only evidence upgrades to the deferred marker witness");
 }
 
+void readyResidenceFrontierAndPredecessor() {
+  Ledger ledger(false);
+  // The ordinary source immediately before the query overlaps the query's
+  // publication-to-dequeue residence interval.
+  ledger.ordinaryEncodeStart(7, 41, 90);
+  ledger.ordinaryEncodeEnd(7, 41, 110);
+  const Identity query{7, 200, 1, 1};
+  ledger.readyPublication(7, 42, {}, 3, 19, 17, 40, 12, 100);
+  ledger.dequeue(7, 42, 200);
+  // END can arrive after the queue has already observed both Ready edges.
+  ledger.end(query, 1, 42, {}, 210);
+  auto summaries = ledger.snapshotSummaries();
+  const auto& summary = summaries[0];
+  check(summary.readyFrontierKnown && summary.readyDepthBefore == 3 &&
+            summary.readyOldestSeqBefore == 19 &&
+            summary.encodingSeqBefore == 17 &&
+            summary.submittedFrontierBefore == 40 &&
+            summary.completedFrontierBefore == 12,
+        "late END joins the publication-time Ready frontier snapshot");
+  check(summary.dequeueNs == 200 && summary.predecessorEncodeSeq == 41 &&
+            summary.predecessorEncodeStartNs == 90 &&
+            summary.predecessorEncodeEndNs == 110 &&
+            summary.predecessorEncodeOverlap,
+        "exact preceding ordinary encode interval is joined late");
+
+  // Queue qualification prevents a same-sequence source on another queue
+  // from becoming a predecessor witness.
+  Ledger distinctQueue(false);
+  distinctQueue.ordinaryEncodeStart(8, 41, 90);
+  distinctQueue.ordinaryEncodeEnd(8, 41, 110);
+  distinctQueue.readyPublication(7, 42, {}, 1, 0, 0, 0, 0, 100);
+  distinctQueue.dequeue(7, 42, 200);
+  distinctQueue.end(Identity{7, 201, 1, 1}, 1, 42, {}, 210);
+  check(!distinctQueue.snapshotSummaries()[0].predecessorEncodeOverlap,
+        "predecessor evidence remains queue-qualified");
+
+  // A missing exact N-1 source and an interval outside residence are both
+  // explicit coverage gaps, rather than inferred waiting evidence.
+  Ledger gaps(false);
+  gaps.ordinaryEncodeStart(7, 40, 90);
+  gaps.ordinaryEncodeEnd(7, 40, 110);
+  gaps.readyPublication(7, 42, {}, 1, 0, 0, 0, 0, 100);
+  gaps.dequeue(7, 42, 200);
+  gaps.end(Identity{7, 202, 1, 1}, 1, 42, {}, 210);
+  check(!gaps.snapshotSummaries()[0].predecessorEncodeOverlap,
+        "missing exact predecessor remains an explicit gap");
+
+  Ledger nonoverlap(false);
+  nonoverlap.ordinaryEncodeStart(7, 41, 10);
+  nonoverlap.ordinaryEncodeEnd(7, 41, 20);
+  nonoverlap.readyPublication(7, 42, {}, 0, 0, 0, 0, 0, 100);
+  nonoverlap.dequeue(7, 42, 200);
+  nonoverlap.end(Identity{7, 203, 1, 1}, 1, 42, {}, 210);
+  check(!nonoverlap.snapshotSummaries()[0].predecessorEncodeOverlap,
+        "non-overlapping predecessor interval remains a coverage gap");
+}
+
+void boundedOrdinaryEncodeLedger() {
+  Ledger ledger(false);
+  for (std::uint64_t sequence = 1; sequence <= kCapacity + 1; ++sequence) {
+    ledger.ordinaryEncodeStart(9, sequence, sequence);
+    ledger.ordinaryEncodeEnd(9, sequence, sequence + 1);
+  }
+  check(ledger.stats().evictedOrdinaryEncode == 1,
+        "ordinary encode evidence uses a bounded eviction ring");
+}
+
 }  // namespace
 
 int main() {
@@ -177,5 +244,7 @@ int main() {
   deferredMarkerAndUnknownPoll();
   boundedStorageAndMissingStages();
   recentEvidenceRingAndSkip();
+  readyResidenceFrontierAndPredecessor();
+  boundedOrdinaryEncodeLedger();
   std::cout << "query_timeline_observer_spec passed\n";
 }

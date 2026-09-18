@@ -317,6 +317,44 @@ from S_OK. The END timestamp is core END-return observation, not API entry;
 publication may precede it. Arena publication and independent initializer
 stage timestamps are not covered by this observer.
 
+### Replay-drain and Ready-residence attribution
+
+The PE `Query::GetData` flushes its child recorder before crossing the bridge.
+The Unix `dxmt9c_query_get_data` then drains the replay FIFO before entering
+the core provider. `ReplayOffloadQueue::waitDrained` waits for both an empty
+deque and no in-flight replay item, or terminal stop. This is a device-wide
+CPU replay condition, not the query's GPU completion predicate. Later raw
+chunks and records after END within its raw may be covered by that drain.
+
+Cold diagnostics may associate core END with the currently executing raw
+ordinal and snapshot queued ordinals around the unchanged drain. The END
+association must be copied on the owning core/replay thread and qualified by
+immutable query identity, issue ordinal and reset epoch. Before draining,
+the bridge must not read mutable Query issue/fence state; it may look up
+copied diagnostic evidence using only immutable object identity. Missing,
+evicted, failed, reissued and inline/non-offloaded associations remain explicit.
+A post-drain END association is retrospective evidence, not authority for a
+prefix wait before that END has replayed.
+
+Publication-time Ready/Encoding/frontier snapshots and preceding ordinary
+encode intervals may refine Ready-residence attribution. Queue-qualified
+sequence identity and exact interval intersection are required; a sampled
+completion gap is not proof that GPU execution blocks the encoder. Missing
+multi-source or evicted intervals must not be synthesized. These observations
+must not change admission, queue predicates, wakeups, HRESULTs or completion.
+
+A future narrower drain requires admission-time END identity, successful
+FIFO replay-completion authority, same-query concurrency ordering, reset and
+terminal handling, and resource lifetime coverage. A raw-prefix receipt alone
+cannot omit records after END inside the same raw chunk. No such optimization
+is authorized by the diagnostic mapping.
+It must also separate polling from mutable core ownership: current
+`Device::getQueryData` reads device/query state and may resolve the public
+Query value, while the COM adapter adds no independent serialization.
+Reaching an END ordinal alone is not permission to run that provider call
+concurrently with later replay. An immutable polling receipt or an explicitly
+proved synchronization boundary is required.
+
 `DXMT9_QUERY_SPLIT_OBSERVER` observes ordinary source publications by reason
 and completion-bearing tail command buffers handed to `QueueLifecycleController`.
 Its `command_buffer` category excludes mid-chunk sub-CB commits and initializer

@@ -6,6 +6,7 @@
 // complete).
 
 #include "device_c_replay_offload.hpp"
+#include "device_c_query_drain_observer.hpp"
 
 #include "device_c_common.hpp"
 // Need the full dxmt9::Device type to call abortPresentOrdinalWaits() on
@@ -981,9 +982,17 @@ void ReplayOffloadWorker::run(D9CDevice* device) {
       replayStart = std::chrono::steady_clock::now();
     }
     int32_t hr = dxmt9::core::D3D_OK;
+    const auto invokeReplay = [&]() -> int32_t {
+      return replay_ ? replay_(device, chunk) : replayRawChunk(device, chunk);
+    };
     try {
-      hr = replay_ ? replay_(device, chunk)
-                   : replayRawChunk(device, chunk);
+      if (dxmt9::core::querydiag::enabled()) {
+        dxmt9::core::querydiag::ScopedReplayRawOrdinal rawOrdinalScope(
+            chunk.replaySeq);
+        hr = invokeReplay();
+      } else {
+        hr = invokeReplay();
+      }
     } catch (const std::bad_alloc&) {
       hr = dxmt9::core::E_OUTOFMEMORY;
     } catch (...) {
@@ -1877,10 +1886,68 @@ bool drainDeferredReplay(D9CSurface* s, const char* site) {
 }
 
 bool drainDeferredReplay(D9CQuery* q, const char* site) {
-  if (!q) {
-    return true;
+  constexpr const char* kGetDataSite = "dxmt9c_query_get_data";
+  const bool observe = query_drain_diag::enabled() && site &&
+                       std::strcmp(site, kGetDataSite) == 0;
+  if (!observe) return drainDeferredReplay(q ? q->device : nullptr, site);
+
+  // The only query state sampled here is the immutable core identity. Current
+  // issue/fence values are captured by core::querydiag::issue on its owning
+  // thread and are never read from q across this drain boundary.
+  const auto identity = q && q->obj ? q->obj->identity() : 0u;
+  const auto beforeEnd =
+      dxmt9::core::querydiag::ledger().endSnapshot(identity);
+  query_drain_diag::QueueSnapshot beforeQueue{};
+  if (q && q->device && q->device->replayOffload) {
+    q->device->replayOffload->queue().visitDiagnostic(
+        [&](const ReplayQueueDiagnosticSnapshot& snapshot) {
+          beforeQueue = query_drain_diag::QueueSnapshot{
+              snapshot.queuedCount, snapshot.frontOrdinal,
+              snapshot.backOrdinal, snapshot.frontOrdinalKnown,
+              snapshot.backOrdinalKnown, snapshot.frontPlaceholder,
+              snapshot.backPlaceholder, snapshot.unknownOrdinal,
+              snapshot.inFlight};
+        });
   }
-  return drainDeferredReplay(q->device, site);
+  const auto drainStart = query_drain_diag::nowNs();
+  const bool drained = drainDeferredReplay(q ? q->device : nullptr, site);
+  const auto drainEnd = query_drain_diag::nowNs();
+  const auto afterEnd =
+      dxmt9::core::querydiag::ledger().endSnapshot(identity);
+  query_drain_diag::QueueSnapshot afterQueue{};
+  if (q && q->device && q->device->replayOffload) {
+    q->device->replayOffload->queue().visitDiagnostic(
+        [&](const ReplayQueueDiagnosticSnapshot& snapshot) {
+          afterQueue = query_drain_diag::QueueSnapshot{
+              snapshot.queuedCount, snapshot.frontOrdinal,
+              snapshot.backOrdinal, snapshot.frontOrdinalKnown,
+              snapshot.backOrdinalKnown, snapshot.frontPlaceholder,
+              snapshot.backPlaceholder, snapshot.unknownOrdinal,
+              snapshot.inFlight};
+        });
+  }
+  const auto* after = afterEnd ? &*afterEnd : nullptr;
+  const bool queuedTailBeforeDrain = after && after->rawOrdinal != 0 &&
+      query_drain_diag::queueHasTailAfter(beforeQueue, after->rawOrdinal);
+  const bool queuedTailAfterDrainOnly = after && after->rawOrdinal != 0 &&
+      !queuedTailBeforeDrain &&
+      query_drain_diag::queueHasTailAfter(afterQueue, after->rawOrdinal);
+  const bool unknownInflight = beforeQueue.inFlight || afterQueue.inFlight;
+  query_drain_diag::ledger().record({
+      identity,
+      query_drain_diag::classifyRecords(
+          identity, beforeEnd ? &*beforeEnd : nullptr,
+          afterEnd ? &*afterEnd : nullptr, beforeQueue, afterQueue, drained),
+      beforeEnd.value_or(query_drain_diag::EndRecord{}),
+      afterEnd.value_or(query_drain_diag::EndRecord{}),
+      beforeQueue,
+      afterQueue,
+      drainEnd >= drainStart ? drainEnd - drainStart : 0u,
+      drained,
+      queuedTailBeforeDrain,
+      queuedTailAfterDrainOnly,
+      unknownInflight});
+  return drained;
 }
 
 bool drainDeferredReplay(D9CStateBlock* sb, const char* site) {

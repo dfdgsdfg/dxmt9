@@ -46,6 +46,19 @@ crossing; provider time includes core observer overhead. Reports are bounded
 to 64 periodic snapshots plus teardown. Disable this gate for visual/perf
 controls; use separate observer-enabled runs for attribution.
 
+The same gate may inspect the query END's raw replay ordinal and the FIFO
+around its unchanged GetData drain. These are retrospective, copied identities,
+not authority to skip the drain: an END still queued at entry may have no
+association yet, and reissue can replace the association during the wait.
+Queued-tail ordinals beyond END demonstrate later raw work in the sampled
+FIFO, not its isolated cost; in-flight identity and records after END within
+the same raw require separate evidence. A tail observed only after draining
+may be newly admitted work and must not be charged as work waited on. Aggregate
+counts and elapsed durations are complete; 16 busy and 16 generic detail rows
+are a bounded, non-random sample. Ready-publication snapshots and exact
+preceding ordinary encode interval overlap are also diagnostic only. Completion
+gaps do not establish GPU blocking, and missing/evicted paths stay unknown.
+
 > **Do not price encode-thread instrumentation against frame wall.** GT2's
 > encode thread carries `~17 ms/present` of slack, so CPU added or removed there
 > is absorbed by waiting and never reaches the frame. A no-op-`PerfScope` A/B

@@ -460,6 +460,21 @@ struct ReplayQueueItem {
   bool isStateBlockApply() const noexcept { return stateBlockApply != nullptr; }
 };
 
+// Cold, value-only view used by the query replay-drain observer.  The queue
+// remains the owner of all FIFO entries; this snapshot never exposes payloads
+// or wrapper pointers and is built while the queue mutex is held.
+struct ReplayQueueDiagnosticSnapshot {
+  std::size_t queuedCount = 0;
+  std::uint64_t frontOrdinal = 0;
+  std::uint64_t backOrdinal = 0;
+  bool frontOrdinalKnown = false;
+  bool backOrdinalKnown = false;
+  bool frontPlaceholder = false;
+  bool backPlaceholder = false;
+  bool unknownOrdinal = false;
+  bool inFlight = false;
+};
+
 // Handle returned by `ReplayOffloadQueue::reserveMutation`. `replaySeq` is the
 // FIFO ordinal the mutation will carry; it is allocated from the ledger under
 // BOTH the queue and ledger mutexes so a concurrent chunk push — which takes
@@ -1096,6 +1111,44 @@ class ReplayOffloadQueue {
   std::size_t depth() const {
     std::lock_guard lock(mutex_);
     return queue_.size() + (inFlight_ ? 1 : 0);
+  }
+
+  // Explicitly diagnostic visitor: callers receive only a bounded value
+  // snapshot, while the existing queue mutex protects the FIFO traversal.
+  template <typename Visitor>
+  void visitDiagnostic(Visitor&& visitor) const {
+    std::lock_guard lock(mutex_);
+    ReplayQueueDiagnosticSnapshot snapshot;
+    snapshot.queuedCount = queue_.size();
+    snapshot.inFlight = inFlight_;
+    if (!queue_.empty()) {
+      snapshot.frontPlaceholder = queue_.front().placeholder();
+      snapshot.backPlaceholder = queue_.back().placeholder();
+      snapshot.unknownOrdinal = snapshot.frontPlaceholder ||
+                                snapshot.backPlaceholder;
+    }
+    const auto ordinal = [](const ReplayQueueItem& item) {
+      if (item.placeholder()) return ReplaySeq{0};
+      if (item.isMutation()) return item.mutation->replaySeq;
+      if (item.isStateBlockApply()) return item.stateBlockApply->replaySeq;
+      return item.chunk.replaySeq;
+    };
+    for (const auto& item : queue_) {
+      const auto value = ordinal(item);
+      if (value == 0) {
+        snapshot.unknownOrdinal = true;
+        continue;
+      }
+      if (!snapshot.frontPlaceholder && &item == &queue_.front()) {
+        snapshot.frontOrdinal = value;
+        snapshot.frontOrdinalKnown = true;
+      }
+      if (!snapshot.backPlaceholder && &item == &queue_.back()) {
+        snapshot.backOrdinal = value;
+        snapshot.backOrdinalKnown = true;
+      }
+    }
+    visitor(snapshot);
   }
 
   std::size_t queuedBytesForTest() const {

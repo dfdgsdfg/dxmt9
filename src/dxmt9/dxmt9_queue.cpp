@@ -3620,6 +3620,8 @@ bool QueueLifecycleController::commitCurrentChunk(
   bool sealed = false;
   std::uint64_t onBeforePublishCpuNanoseconds = 0;
   commitPublish(publishedSlotIndex, publishedSeqId, inflightLimit, [&] {
+    const bool queryTimelineEnabled =
+        ::dxmt9::query::timeline_diag::enabled();
     slot.seqId = nextSeqId->load(std::memory_order_relaxed);
     writingPayload->seqId = slot.seqId;
     const auto onBeforePublishStart = std::chrono::steady_clock::now();
@@ -3687,17 +3689,61 @@ bool QueueLifecycleController::commitCurrentChunk(
     if (onAfterPublish) {
       onAfterPublish();
     }
-    if (::dxmt9::query::timeline_diag::enabled()) {
-      ::dxmt9::query::timeline_diag::MarkerWitness marker{};
+    if (queryTimelineEnabled) {
+      // This pull is made while the scheduling mutex is held immediately
+      // after the real Tape seal.  The just-published source is subtracted
+      // from the depth/head sample, leaving only prior Ready residence.
+      const auto readyDepthAfter = static_cast<std::uint64_t>(
+          submissionBinding_.cpuReadyTape->readyCount());
+      const auto readyDepthBefore = readyDepthAfter == 0
+          ? 0 : readyDepthAfter - 1u;
+      std::uint64_t readyOldestSeqBefore = 0;
+      if (readyDepthAfter != 0) {
+        std::array<CpuReadyTape::ReadyEntry, 1> readyHead{};
+        if (submissionBinding_.cpuReadyTape->copyReadyPrefix(
+                std::span<CpuReadyTape::ReadyEntry>(readyHead)) == 1u &&
+            readyHead[0].seqId != slot.seqId) {
+          readyOldestSeqBefore = readyHead[0].seqId;
+        }
+      }
+      std::uint64_t encodingSeqBefore = 0;
+      std::size_t encodingCount = 0;
+      for (const auto& candidate : submissionBinding_.slots) {
+        if (candidate.state != ChunkSlot::State::Encoding) continue;
+        ++encodingCount;
+        encodingSeqBefore = candidate.seqId;
+      }
+      if (encodingCount != 1u) encodingSeqBefore = 0;
+      const auto completedFrontierBefore = submissionBinding_.completedSeqId
+          ? submissionBinding_.completedSeqId->load(std::memory_order_relaxed)
+          : 0;
+      std::uint64_t submittedFrontierBefore = 0;
+      // Actual submission is owned by the completion handoff ledger, whose
+      // mutex is separate from the scheduling lock. Include both its
+      // monotonic prefix and queued tails; zero remains honest when no
+      // submission edge is available yet.
+      {
+        std::lock_guard pendingLock(pendingCompletionMutex_);
+        submittedFrontierBefore = querySubmittedPrefixSeqId_;
+        for (const auto& pending : pendingCompletion_)
+          submittedFrontierBefore = std::max(submittedFrontierBefore,
+                                             pending.seqId);
+      }
+      ::dxmt9::query::timeline_diag::MarkerWitness timelineMarker{};
       if (writingPayload->queryEndMarker) {
         const auto owner = writingPayload->queryEndMarker->owner();
-        marker = {owner.queue, owner.index, owner.generation,
-                  owner.storageGeneration};
+        timelineMarker = {owner.queue, owner.index, owner.generation,
+                          owner.storageGeneration};
       }
+      ::dxmt9::query::timeline_diag::ledger().readyPublication(
+          submissionBinding_.queryQueueIdentity, slot.seqId, timelineMarker,
+          readyDepthBefore, readyOldestSeqBefore, encodingSeqBefore,
+          submittedFrontierBefore, completedFrontierBefore,
+          ::dxmt9::query::timeline_diag::nowNs());
       query::splitdiag::notePublication(
           submissionBinding_.queryQueueIdentity, slot.seqId,
           writingPayload->commandCount(), unsigned(writingPayload->publishReason),
-          marker);
+          timelineMarker);
     } else {
       query::splitdiag::note(
           query::splitdiag::Kind::Publication,
@@ -4448,11 +4494,17 @@ bool QueueLifecycleController::runEncodeIteration(
   if (!dequeueReadySlot(lock, source)) {
     return false;
   }
+  const bool queryTimelineEnabled =
+      ::dxmt9::query::timeline_diag::enabled();
   if (::dxmt9::supply::enabled())
     ::dxmt9::supply::record(::dxmt9::supply::Event::EncodeBegin, this, source.seqId);
-  if (query::timeline_diag::enabled()) {
-    query::timeline_diag::encodeStart(
-        submissionBinding_.queryQueueIdentity, source.seqId);
+  if (queryTimelineEnabled) {
+    auto& timeline = query::timeline_diag::ledger();
+    const auto timelineNow = query::timeline_diag::nowNs();
+    timeline.dequeue(submissionBinding_.queryQueueIdentity, source.seqId,
+                     timelineNow);
+    timeline.encodeStart(submissionBinding_.queryQueueIdentity, source.seqId,
+                         timelineNow, true);
   }
   auto qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
                                  : std::chrono::steady_clock::time_point{};
@@ -4511,9 +4563,10 @@ bool QueueLifecycleController::runEncodeIteration(
                            : std::chrono::steady_clock::time_point{};
   if (::dxmt9::supply::enabled())
     ::dxmt9::supply::record(::dxmt9::supply::Event::EncodeEnd, this, source.seqId);
-  if (query::timeline_diag::enabled()) {
-    query::timeline_diag::encodeEnd(
-        submissionBinding_.queryQueueIdentity, source.seqId);
+  if (queryTimelineEnabled) {
+    auto& timeline = query::timeline_diag::ledger();
+    timeline.encodeEnd(submissionBinding_.queryQueueIdentity, source.seqId,
+                       query::timeline_diag::nowNs(), true);
   }
 
   if (submission.has_value()) {

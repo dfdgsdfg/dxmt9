@@ -1,4 +1,11 @@
 # Backend descriptor / pipeline / replay / hazard / capture / counter / render-pass specs.
+query_replay_drain_observer_spec = executable(
+  'dxmt9-query-replay-drain-observer-spec', 'query_replay_drain_observer_spec.cpp',
+  include_directories: dxmt9_inc, dependencies: dxmt9_util_dep,
+)
+test('dxmt9-query-replay-drain-observer-spec', query_replay_drain_observer_spec,
+     env: dxmt9_native_test_env)
+
 query_bridge_poll_observer_spec = executable(
   'dxmt9-query-bridge-poll-observer-spec', 'query_bridge_poll_observer_spec.cpp',
   include_directories: dxmt9_inc, dependencies: dxmt9_util_dep,

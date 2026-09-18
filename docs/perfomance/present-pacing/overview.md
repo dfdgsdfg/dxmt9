@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-17
+updated: 2026-09-18
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
@@ -30,6 +30,16 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H322 Ready/replay frontier](present-pacing-query-ready-replay-frontier.322.md)
+finds 1,773 stable-END polls with later raw work already queued; their drain
+intervals total 5.751 s, not a proven saving. Busy-entry calls contain 99.79%
+of inner drain elapsed time; empty checks are only 22 ms over 163,160 calls.
+The selected 126 occlusion rows have median prior Ready depth 9; immediate
+predecessor encoding covers only 4.12% of their summed residence. Prioritize
+immutable polling-receipt ownership and prefix authority, not unchecked drain
+removal. R647 has a mid-run window restore and diagnostic observers: its FPS
+cannot qualify performance; one restored scene spot is not whole-run equality.
+
 [H321 observer-off control / queue-drain attribution](present-pacing-query-queue-drain-attribution.321.md)
 uses identical staged images with no scheduled build/test/agent work during
 the two STALKER runtimes. The observer-OFF visual spot completes at 21.457 FPS
@@ -38,7 +48,7 @@ places the selected 56 occlusion rows' median 14.340 ms before dequeue versus
 0.268 ms in dequeue-to-relock encoding. Matching 309,583 polling calls spend
 10.071 s in the replay-drain prologue out of 11.071 s in the outer PE bridge.
 These are bounded elapsed intervals, not additive critical-path/FPS costs.
-Next: older-source/frontier attribution and query-qualified replay-drain scope.
+H322 above follows up older-source/frontier and query-qualified drain scope.
 No provider promotion, whole-sequence equality or performance gain is claimed.
 
 [H320 actual occlusion / timeline / StateBlock](present-pacing-occlusion-timeline-stateblock.320.md)
