@@ -9,6 +9,8 @@ from pathlib import Path
 def main():
     root = Path(__file__).resolve().parents[2]
     retired = (
+        "DXMT9_QUERY_POLL_RECEIPTS",
+        "queryPollReceiptsEnabled",
         "DXMT9_REPLAY_PRECISE_UNIFORM_INVALIDATION",
         "DXMT9_LOCK_SCOPE_REFINEMENT",
         "DXMT9_PREFETCH_UNPUBLISHED_SLOT_PSO",
@@ -36,7 +38,7 @@ def main():
                 if symbol in text:
                     violations.append(f"{path.relative_to(root)}: {symbol}")
     assert not violations, "retired runtime surface remains:\n" + "\n".join(violations)
-    print("runtime policy retirement: four selectors and exclusive scaffolding absent")
+    print("runtime policy retirement: retired selectors and exclusive scaffolding absent")
 
 
 if __name__ == "__main__":

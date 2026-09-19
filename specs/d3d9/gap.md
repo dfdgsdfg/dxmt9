@@ -11,6 +11,23 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## D3D9 Layer
 
+### Query replay drain follow-up
+
+`R-CORE-11.5(f)` is the unconditional production polling policy; the
+`DXMT9_QUERY_POLL_RECEIPTS` selector and disabled branch are removed after
+R648 and the user's successful visual confirmation on 2026-09-19.
+Immutable query snapshots permit waiting through the query's whole raw replay
+prefix without accessing mutable Query state concurrently with later replay.
+Unqualified/direct/synchronous/deferred-marker cases retain global drain.
+See [H323](../../docs/perfomance/present-pacing/present-pacing-query-poll-receipts.323.md)
+and the [verification gap](../verification/gap.md) for distinct native,
+model, Metal and wild evidence. R648 on 2026-09-19 explicitly enables the
+candidate in STALKER Day and exits normally with zero health errors and three
+scene spot captures. A loading-stage window restore and absence of a matched
+OFF/ON pair prevent performance qualification; candidate/fallback population
+counts and full-sequence equality remain unproved. Promotion is the explicit
+user decision, not a claim that those remaining evidence gaps are closed.
+
 | Area | Status | Evidence / notes |
 |---|---|---|
 | Factory, adapter enum, `CheckDeviceFormat` / conversion | ⚠️ | Functional path exists. **T3 (2026-05-08)**: `CheckDepthStencilMatch` now does real bit-depth compatibility (not unconditional `S_OK`); `CheckDeviceFormatConversion` does real format-pair check (identity + A8R8G8B8↔X8R8G8B8) instead of unconditional `D3DERR_NOTAVAILABLE`; `CheckDeviceFormat` rejects VB/IB rtype with `D3DERR_INVALIDCALL`. **R-FORMAT-16 (2026-08-27):** supported AUTOGENMIPMAP queries now return `D3D_OK` and use a one-public-level / complete-hidden-Metal-pyramid implementation. Helpers in `core_format_utils.hpp`. PE factory still needs adapter index validation, fullscreen display format strictness, adapter format allowlist, resource type mapping parity. |

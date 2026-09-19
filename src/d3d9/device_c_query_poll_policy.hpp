@@ -1,6 +1,5 @@
 #pragma once
 
-#include <cstdlib>
 #include <cstdint>
 #include <optional>
 
@@ -11,14 +10,6 @@ namespace dxmt9::d3d9 {
 // No value means that the unchanged global-drain provider owns this call.
 std::optional<std::int32_t> tryPollQueryReceipt(
     D9CQuery* query, void* output, std::uint32_t size, std::uint32_t flags);
-
-inline bool queryPollReceiptsEnabled() noexcept {
-  static const bool enabled = [] {
-    const auto* value = std::getenv("DXMT9_QUERY_POLL_RECEIPTS");
-    return value && value[0] && value[0] != '0';
-  }();
-  return enabled;
-}
 
 inline thread_local std::uint64_t queryReplayOrdinalTls = 0;
 

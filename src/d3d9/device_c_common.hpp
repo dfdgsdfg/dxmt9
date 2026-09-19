@@ -427,10 +427,8 @@ struct D9CQuery {
 
   D9CQuery(std::shared_ptr<dxmt9::core::Query> o, D9CDevice* d)
       : obj(std::move(o)), device(d) {
-    if (dxmt9::d3d9::queryPollReceiptsEnabled()) {
-      replayDrainTarget = std::make_shared<dxmt9::d3d9::ReplayDrainTarget>();
-      pollState = std::make_unique<D9CQueryPollState>();
-    }
+    replayDrainTarget = std::make_shared<dxmt9::d3d9::ReplayDrainTarget>();
+    pollState = std::make_unique<D9CQueryPollState>();
     if (device) {
       wireIdentity = device->wireObjects.insert(
           D9C_CHUNK_HANDLE_KIND_QUERY, this);

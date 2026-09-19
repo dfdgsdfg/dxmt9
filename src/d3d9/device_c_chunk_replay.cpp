@@ -1730,9 +1730,8 @@ bool persistResolvedResourcesAndCaptureBindings(
   // Query handles are also present in the canonical handle table, but that
   // table is shared by records which do not issue a query.  Decode each
   // QUERY_ISSUE payload so BEGIN and END both advance the same target and a
-  // receipt for an earlier issue is superseded by a later one.  This scan is
-  // entirely gated: the default-off path does not inspect query records.
-  if (dxmt9::d3d9::queryPollReceiptsEnabled()) {
+  // receipt for an earlier issue is superseded by a later one.
+  {
     for (const auto& recordHeader : imported.records) {
       if (recordHeader.type != D9C_COMMAND_RECORD_QUERY_ISSUE) {
         continue;
@@ -2935,10 +2934,7 @@ int32_t dxmt9::d3d9::replayRawChunk(D9CDevice* d, dxmt9::d3d9::RawCommandChunk& 
     dxmt9::perf::countCommandChunkReject();
     return commitChunkFail("offload-unsupported-wire-version");
   }
-  std::optional<dxmt9::d3d9::ScopedQueryReplayOrdinal> queryOrdinalScope;
-  if (dxmt9::d3d9::queryPollReceiptsEnabled()) {
-    queryOrdinalScope.emplace(chunk.replaySeq);
-  }
+  dxmt9::d3d9::ScopedQueryReplayOrdinal queryOrdinalScope(chunk.replaySeq);
   const bool schedulingObservabilityEnabled = dxmt9::perf::enabled();
   if (schedulingObservabilityEnabled) {
     dxmt9::perf::recordOffloadReplayStage(
@@ -3297,11 +3293,7 @@ int32_t runProviderReplay(
       return commitChunkFail("provider-replay-ledger");
     }
     ledgerPublished = true;
-    std::optional<dxmt9::d3d9::ScopedQueryReplayOrdinal>
-        queryOrdinalScope;
-    if (dxmt9::d3d9::queryPollReceiptsEnabled()) {
-      queryOrdinalScope.emplace(raw.replaySeq);
-    }
+    dxmt9::d3d9::ScopedQueryReplayOrdinal queryOrdinalScope(raw.replaySeq);
 
     if ((sourceCutDriver || sourceConsumer) &&
         !preflightProviderOrderedControls(imported, raw.replaySeq)) {
@@ -3919,11 +3911,7 @@ static int32_t dxmt9c_device_commit_chunk_impl(
       dxmt9::perf::countCommandChunkReject();
       return commitChunkFail("chunk-replay-ledger-stopped-inline");
     }
-    std::optional<dxmt9::d3d9::ScopedQueryReplayOrdinal>
-        queryOrdinalScope;
-    if (dxmt9::d3d9::queryPollReceiptsEnabled()) {
-      queryOrdinalScope.emplace(raw.replaySeq);
-    }
+    dxmt9::d3d9::ScopedQueryReplayOrdinal queryOrdinalScope(raw.replaySeq);
     const int32_t hr = replayPlannedChunk(
         d, raw, /*pacedByPresentOrdinal=*/false,
         /*allowDirectArena=*/false);

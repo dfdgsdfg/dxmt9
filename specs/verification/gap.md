@@ -38,13 +38,42 @@ adds bounded Ready-frontier/predecessor and retrospective END/raw drain
 diagnostics, with 12 native and six x86_64 focused gates plus the unchanged
 214-configuration TLC inventory. R647 demonstrates later raw work in 1,773
 stable-END drain calls, not an authorized narrower wait or removable time.
-Admission-time issue identity, successful replay-prefix completion and polling
-independent of mutable Device/Query ownership are still unimplemented gates.
-The observed ordinal alone cannot make the current core polling call concurrent
-with later replay. Full preceding-source-chain attribution, in-flight identity
+Those admission-time identity and immutable-polling gaps are implemented by
+the separate H323 candidate below; H322's diagnostic ordinal itself remains
+non-authoritative. Full preceding-source-chain attribution, in-flight identity
 and same-raw suffix separation remain open. R647's title capture fails; one
 explicitly restored scene spot is retained, and its diagnostic/focus-affected
 FPS is not performance evidence.
+
+### Immutable query polling receipts (`R-CORE-11.5(f)`)
+
+Implemented in `b012b4b0`, with bridge-test build correction
+`f42f83a7`. [H323](../../docs/perfomance/present-pacing/present-pacing-query-poll-receipts.323.md)
+records query-specific raw admission, whole-raw successful replay completion,
+and synchronized immutable snapshot consumption. BEGIN supersedes old END
+receipts. Later unrelated raws do not extend the captured wait; the same-raw
+suffix remains covered. CPU completion never substitutes for GPU ordinary and
+initializer completion. Unsupported snapshots keep the global-drain reference.
+
+The production bridge tests cover contiguous/segmented import, inline/offload
+routes, a withheld later raw, a withheld own-raw completion, BEGIN supersession
+and replay failure injected during backend polling. Snapshot/native predicates
+and bounded Metal result/readback evidence are distinct layers. The
+`QueryReplayReceipt` model abstracts one captured attempt and final Issue per
+query-bearing raw; it is not a whole-program memory-model proof.
+Final-HEAD revalidation on 2026-09-19 passes five native and six x86_64 focused
+tests, plus the full 221-configuration TLA gate (64 safety, five progress,
+152 expected counterexamples). The receipt model has 4,674 distinct states.
+
+R648 on 2026-09-19 explicitly enables receipts and actual occlusion in STALKER
+Day on the staged HEAD binaries. It exits normally, has eight zero health
+counters and three inspected scene spots. This is selector-ON wild evidence,
+not a candidate/fallback route census. A loading-stage window restore and lack
+of a matched OFF/ON pair leave performance non-regression unqualified.
+Broader public PE concurrency/fault coverage, full-sequence image equivalence
+and matched performance evidence remain open. Following R648 and the user's
+visual confirmation, receipt polling is promoted unconditionally by explicit
+request; the disable selector is removed without closing these evidence gaps.
 
 ## Bounded lock-scope refinement (2026-09-09)
 

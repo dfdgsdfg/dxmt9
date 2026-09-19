@@ -343,10 +343,10 @@ completion gap is not proof that GPU execution blocks the encoder. Missing
 multi-source or evicted intervals must not be synthesized. These observations
 must not change admission, queue predicates, wakeups, HRESULTs or completion.
 
-### Immutable replay-prefix polling candidate
+### Immutable replay-prefix polling
 
-`DXMT9_QUERY_POLL_RECEIPTS=1` implements `R-CORE-11.5(f)` independently of the
-diagnostic mapping. It is default OFF. Validated QueryIssue records attach a
+Production implements `R-CORE-11.5(f)` independently of the diagnostic mapping,
+without a runtime disable selector. Validated QueryIssue records attach a
 query-specific `ReplayDrainTarget` at raw admission; BEGIN and END both replace
 its latest admitted ordinal. Contiguous and segmented raw ownership use the
 same attachment seam. The existing ledger commits admission only after queue
@@ -375,12 +375,12 @@ observed in progress or a changed epoch cannot yield successful bytes.
 
 Unqualified/non-raw Issues, absent snapshots, synchronous legacy receipts and
 deferred END markers use the unchanged global drain and mutable core provider.
-No per-Issue heap object is allocated; the opt-in wrapper owns a cold mutex and
+No per-Issue heap object is allocated; the query wrapper owns a cold mutex and
 snapshot, and the copied receipt retains existing owners. The PE ABI is unchanged.
-The candidate does not separate the suffix inside one raw. Diagnostics from
+The policy does not separate the suffix inside one raw. Diagnostics from
 `DXMT9_QUERY_OBSERVER` covering mutable core GetData and global bridge drains
-describe only fallback calls while this candidate is enabled; they are not a
-complete candidate polling census. The candidate never restores a global drain
+describe only fallback calls; they are not a
+complete polling census. The policy never restores a global drain
 merely to collect those observations.
 
 The `QueryReplayReceipt` model and native production-reducer/ledger tests own

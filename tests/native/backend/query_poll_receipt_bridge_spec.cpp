@@ -347,10 +347,6 @@ void testWholeRawCompletionStillRequired() {
 
 int main() {
   try {
-    if (!dxmt9::d3d9::queryPollReceiptsEnabled()) {
-      std::cout << "query_poll_receipt_bridge_spec skipped (gate off)\n";
-      return 0;
-    }
     testValidatedContiguousBeginEndAndBridgePoll();
     testValidatedSegmentedBeginEndAndTerminalSentinel();
     testMissingReceiptFallsBackToLegacyBridge();

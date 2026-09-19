@@ -250,9 +250,11 @@ CPU prefix completion authorizes only snapshot consumption, not `S_OK`.
 Ordinary and initializer GPU completion and successful result contributions
 remain required. Records after END inside the same raw remain in the CPU wait.
 Missing identity, non-raw Issue, synchronous legacy policy and deferred writer
-markers retain the global-drain reference path. The candidate is default OFF
-until model/native binding, hardware readback, visible wild correctness and
-matched non-regression evidence qualify it.
+markers retain the global-drain compatibility path. Immutable receipt polling
+is the production policy with no runtime disable selector. Bounded model/native
+binding, hardware readback and visible wild evidence support this promotion;
+matched performance non-regression and broader fault coverage remain separate
+evidence obligations, not claims implied by promotion.
 
 ---
 

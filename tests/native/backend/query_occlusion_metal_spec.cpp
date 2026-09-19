@@ -204,13 +204,6 @@ void run() {
         "scoped source cannot reorder across an open session");
 }
 
-bool snapshotModeEnabled() {
-  // The second Meson pair sets the candidate's existing opt-in gate. Keep the
-  // oracle in this executable so tile-off and tile-force use identical bytes.
-  const auto* value = std::getenv("DXMT9_QUERY_POLL_RECEIPTS");
-  return value && value[0] && value[0] != '0';
-}
-
 void runSnapshotPollOracle() {
   Factory factory(BackendLimits{});
   PresentParameters params{};
@@ -387,9 +380,12 @@ void runSnapshotPollOracle() {
 }
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
   try {
-    if (snapshotModeEnabled()) {
+    // Test-only oracle selection, independent of production runtime policy.
+    check(argc == 1 || (argc == 2 && std::strcmp(argv[1], "--snapshot-oracle") == 0),
+          "unknown oracle argument");
+    if (argc == 2) {
       runSnapshotPollOracle();
       std::cout << "query occlusion Metal snapshot oracle passed\n";
     } else {
