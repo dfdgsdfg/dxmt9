@@ -146,6 +146,15 @@ gaps do not establish GPU blocking, and missing/evicted paths stay unknown.
 
 ## Retired perf diagnostics
 
+Queue-mutex split coverage caveat (2026-09-19): the acquisition inventory in
+the historical `DXMT9_PERF_QUEUE_MUTEX_SPLIT` entry is not a current all-owner
+guarantee. New query/direct paths and `DeviceImpl`/initializer acquisitions
+exist outside those probes. Segment rows may share names and overlap outer
+scopes; do not sum them into queue occupancy. The diagnostic table itself can
+lock while the runtime mutex is held. Use `DXMT_LOG_LEVEL=info` to retain its
+site rows; `DXMT9_LOG_LEVEL` is not the logger setting. Reports locate candidates,
+not the holder responsible for an individual polling wait.
+
 `DXMT9_QUERY_POLL_RECEIPTS` is retired and ignored, including `=0`.
 Immutable query replay receipts are unconditional production policy after
 H323/R648 and the user's visual confirmation. Missing or unsupported receipts

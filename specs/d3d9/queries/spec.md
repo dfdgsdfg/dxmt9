@@ -229,6 +229,11 @@ without depending on public COM references.
 
 ## 7. Published-prefix asynchronous completion
 
+Read-mostly polling is a proposed follow-up, not an implemented replacement.
+See [the authority audit and model acceptance gate](read-mostly-polling.md).
+An ordinary completion acquire alone does not authorize bypassing terminal,
+initializer, identity or persistent FLUSH submission checks.
+
 `DXMT9_ASYNC_QUERY_FENCES` controls the implementation of R-CORE-11.5(a).
 It defaults ON; explicit `0` (or an empty value) selects the synchronous
 diagnostic/reference path. This is a completion-policy change, not a new

@@ -30,6 +30,13 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H327 queue mutex owner audit](present-pacing-query-mutex-owners.327.md)
+reviews publication, encode submission and finish reclamation holders separately
+from polling waiters. Coverage is partial and no waiter/holder join exists.
+The read-mostly follow-up is Pending-only with durable FLUSH coverage and locked
+success/initializer refresh; runtime lock bypass remains unimplemented and
+requires terminal/identity/publication model-code evidence.
+
 [H326 reference tails/backend poll split](present-pacing-query-backend-poll-cost.326.md)
 confirms late slowdown in retained WineD3D and DXVK/MoltenVK results; these are
 historical, not scene-aligned current A/B runs. In dxmt9 R650, 99.81% of pending
