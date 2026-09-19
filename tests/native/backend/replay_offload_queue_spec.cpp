@@ -1618,6 +1618,105 @@ void testTerminalScopedFenceRejectsProviderCall() {
     }
   }
 }
+
+void testReplayReceiptWaitsForExactCapturedPrefix() {
+  using namespace dxmt9::d3d9;
+  ReplayDrainLedger ledger;
+  auto target = std::make_shared<ReplayDrainTarget>();
+  auto first = makeChunk(8u);
+  first.ledgerTargets.push_back(target.get());
+  check(ledger.publishInline(first), "receipt prefix publishes first issue");
+  const auto receipt = ledger.captureReceipt(target);
+
+  std::atomic<bool> ready{false};
+  std::atomic<bool> returned{false};
+  std::thread waiter([&] {
+    ready.store(true, std::memory_order_release);
+    returned.store(ledger.waitReceipt(receipt) ==
+                       dxmt9::query::ReplayReceiptState::Ready,
+                   std::memory_order_release);
+  });
+  while (!ready.load(std::memory_order_acquire)) {
+    std::this_thread::yield();
+  }
+  auto unrelated = makeChunk(8u);
+  check(ledger.publishInline(unrelated),
+        "unrelated admission does not extend receipt prefix");
+  std::this_thread::sleep_for(std::chrono::milliseconds(2));
+  check(!returned.load(std::memory_order_acquire),
+        "later unrelated raw cannot wake a prefix receipt");
+  ledger.publishReplayed(first);
+  waiter.join();
+  check(returned.load(std::memory_order_acquire),
+        "captured prefix wakes at its own replay completion");
+}
+
+void testReplayReceiptSupersededByReissueAndRejectIsNonMutating() {
+  using namespace dxmt9::d3d9;
+  ReplayDrainLedger ledger;
+  auto target = std::make_shared<ReplayDrainTarget>();
+  auto first = makeChunk(8u);
+  first.ledgerTargets.push_back(target.get());
+  check(ledger.publishInline(first), "first query issue admission");
+  const auto receipt = ledger.captureReceipt(target);
+  auto begin = makeChunk(8u);
+  begin.ledgerTargets.push_back(target.get());
+  check(ledger.publishInline(begin), "BEGIN reissue admission");
+  check(ledger.waitReceipt(receipt) ==
+            dxmt9::query::ReplayReceiptState::Superseded,
+        "BEGIN reissue supersedes an older receipt without replay");
+
+  ReplayOffloadQueue queue(2u, 1u << 20);
+  ledger.stop();
+  auto rejected = makeChunk(8u);
+  rejected.ledgerTargets.push_back(target.get());
+  check(queue.pushWithDisposition(std::move(rejected), &ledger) ==
+            ReplayQueuePushDisposition::RejectedPreEffect,
+        "stopped ledger rejects receipt candidate before adoption");
+  check(target->lastQueuedSeq == begin.replaySeq &&
+            target->lastReplayedSeq == 0u,
+        "rejected push does not mutate target watermarks");
+}
+
+void testReplayReceiptTerminalFailureAndRetainedTargetLifetime() {
+  using namespace dxmt9::d3d9;
+  ReplayDrainLedger ledger;
+  std::weak_ptr<ReplayDrainTarget> weak;
+  ReplayDrainReceipt receipt;
+  {
+    auto target = std::make_shared<ReplayDrainTarget>();
+    weak = target;
+    auto chunk = makeChunk(8u);
+    chunk.ledgerTargets.push_back(target.get());
+    check(ledger.publishInline(chunk), "failure receipt admission");
+    receipt = ledger.captureReceipt(target);
+    target.reset();
+    check(!weak.expired(), "receipt retains target after wrapper release");
+  }
+  ledger.poison();
+  check(ledger.waitReceipt(receipt) == dxmt9::query::ReplayReceiptState::Failed,
+        "terminal replay failure wins over pending receipt");
+  receipt = {};
+  check(weak.expired(), "target is released with the final receipt");
+}
+
+void testReplayReceiptReadyVisitorOnlyRunsWhenReady() {
+  using namespace dxmt9::d3d9;
+  ReplayDrainLedger ledger;
+  auto target = std::make_shared<ReplayDrainTarget>();
+  auto chunk = makeChunk(8u);
+  chunk.ledgerTargets.push_back(target.get());
+  check(ledger.publishInline(chunk), "visitor receipt admission");
+  const auto receipt = ledger.captureReceipt(target);
+  std::uint32_t callbacks = 0u;
+  check(ledger.visitReadyReceipt(receipt, [&] { ++callbacks; }) ==
+            dxmt9::query::ReplayReceiptState::Pending && callbacks == 0u,
+        "pending receipt never invokes ready visitor");
+  ledger.publishReplayed(chunk);
+  check(ledger.visitReadyReceipt(receipt, [&] { ++callbacks; }) ==
+            dxmt9::query::ReplayReceiptState::Ready && callbacks == 1u,
+        "ready receipt invokes visitor exactly once");
+}
 }  // namespace
 
 int main() {
@@ -1655,6 +1754,10 @@ int main() {
     testCleanWorkerStopAndDestructorWakeScopedWaiters();
     testCleanStopWithInflightEntryWakesScopedWaiter();
     testTerminalScopedFenceRejectsProviderCall();
+    testReplayReceiptWaitsForExactCapturedPrefix();
+    testReplayReceiptSupersededByReissueAndRejectIsNonMutating();
+    testReplayReceiptTerminalFailureAndRetainedTargetLifetime();
+    testReplayReceiptReadyVisitorOnlyRunsWhenReady();
   } catch (const TestFailure& e) {
     std::cerr << "replay_offload_queue_spec failed: " << e.what() << '\n';
     return 1;

@@ -25,6 +25,7 @@
 #include "dxmt9/core.hpp"
 #include "dxmt9/dxmt9_managed_mutation_lease.hpp"
 #include "dxmt9/dxmt9_cpu_supply_trace.hpp"
+#include "dxmt9/query_replay_receipt.hpp"
 
 struct D9CDevice;     // fwd (global-namespace struct; see device_c_common.hpp)
 struct D9CBuffer;     // fwd (global-namespace struct; see device_c_common.hpp)
@@ -116,6 +117,14 @@ struct ReplayDrainTarget {
   ReplaySeq lastReplayedSeq = 0;
 };
 
+// A query poll captures the target's current admission ordinal.  The shared
+// target is intentional: wrapper retention is released when replay settles,
+// while a caller may retain this receipt until it consumes the result.
+struct ReplayDrainReceipt {
+  std::shared_ptr<ReplayDrainTarget> target;
+  ReplaySeq capturedSequence = 0;
+};
+
 enum class ReplayDrainResult : std::uint8_t {
   CaughtUp,
   Stopped,
@@ -148,6 +157,29 @@ struct StateBlockApplyTask;
 
 class ReplayDrainLedger {
  public:
+  ReplayDrainReceipt captureReceipt(
+      std::shared_ptr<ReplayDrainTarget> target) const noexcept;
+  dxmt9::query::ReplayReceiptState waitReceipt(
+      const ReplayDrainReceipt& receipt) noexcept;
+
+  // Re-check a captured receipt while holding the ledger mutex.  The callback
+  // is deliberately restricted to the Ready case; it must only copy query
+  // state under the query's own mutex and must not enter queue/GPU code.
+  template <typename Visitor>
+  dxmt9::query::ReplayReceiptState visitReadyReceipt(
+      const ReplayDrainReceipt& receipt, Visitor&& visitor) {
+    std::lock_guard lock(mutex_);
+    const auto state = classifyReceiptLocked(receipt);
+    if (state == dxmt9::query::ReplayReceiptState::Ready) {
+      if constexpr (std::is_invocable_v<Visitor&, const ReplayDrainReceipt&>) {
+        std::forward<Visitor>(visitor)(receipt);
+      } else {
+        std::forward<Visitor>(visitor)();
+      }
+    }
+    return state;
+  }
+
   std::shared_ptr<ReplayDrainTarget> targetForCoreBuffer(
       std::uint64_t handleValue);
   bool publishInline(RawCommandChunk& chunk) noexcept;
@@ -179,6 +211,8 @@ class ReplayDrainLedger {
   // would tell a direct reader it was caught up while that chunk is still
   // queued.
   void publishMutationAcceptedLocked(BufferMutationTask& task) noexcept;
+  dxmt9::query::ReplayReceiptState classifyReceiptLocked(
+      const ReplayDrainReceipt& receipt) const noexcept;
 
   mutable std::mutex mutex_;
   std::condition_variable cv_;

@@ -11,6 +11,7 @@
 #include "device_c_record_utils.hpp"
 #include "device_c_replay_projection.hpp"
 #include "device_c_replay_offload.hpp"
+#include "device_c_query_poll_policy.hpp"
 #include "device_c_cpu_ready_transfer.hpp"
 #include "util/unixcall_marshal.hpp"
 
@@ -1651,6 +1652,32 @@ bool persistResolvedResourcesAndCaptureBindings(
   // capacity, so steady-state chunks pay a fill, not an allocation.
   scratch.ledgerTargetPresence.reset(imported.handles.size());
   scratch.coreEntryPresence.reset(imported.handles.size());
+  // prepareOffloadChunk already reserves this for the normal commit path.
+  // Provider-owned inline raws reach this function directly, so reserve here
+  // as well: target attachment must not grow after wrapper retention without
+  // an owned capacity bound.
+  raw.ledgerTargets.reserve(imported.handles.size());
+  const auto appendLedgerTarget = [&](dxmt9::d3d9::ReplayDrainTarget* target) {
+    if (!target) {
+      return;
+    }
+    bool duplicate;
+    if (!scratch.ledgerTargetPresence.overflowed()) {
+      duplicate = scratch.ledgerTargetPresence.contains(target);
+    } else {
+      // Keep the complete vector as the overflow fallback for unusually large
+      // handle tables; the normal path remains a bounded presence probe.
+      duplicate = std::find(raw.ledgerTargets.begin(), raw.ledgerTargets.end(),
+                            target) != raw.ledgerTargets.end();
+    }
+    if (duplicate) {
+      return;
+    }
+    raw.ledgerTargets.push_back(target);
+    if (!scratch.ledgerTargetPresence.overflowed()) {
+      scratch.ledgerTargetPresence.insert(target);
+    }
+  };
   std::uint64_t bufferHandleCount = 0u;
   for (std::size_t i = 0u; i < imported.handles.size(); ++i) {
     dxmt9::core::Handle handle{};
@@ -1670,23 +1697,7 @@ bool persistResolvedResourcesAndCaptureBindings(
       if (value && value->obj) {
         handle = value->obj->handle();
         ++bufferHandleCount;
-        auto* target = value->replayDrainTarget.get();
-        bool targetDuplicate;
-        if (!scratch.ledgerTargetPresence.overflowed()) {
-          targetDuplicate = scratch.ledgerTargetPresence.contains(target);
-        } else {
-          // Overflow fallback: raw.ledgerTargets is always kept complete, so
-          // the linear scan is still correct, just the pre-overflow O(n).
-          targetDuplicate = std::find(
-              raw.ledgerTargets.begin(), raw.ledgerTargets.end(),
-              target) != raw.ledgerTargets.end();
-        }
-        if (!targetDuplicate) {
-          raw.ledgerTargets.push_back(target);
-        if (!scratch.ledgerTargetPresence.overflowed()) {
-            scratch.ledgerTargetPresence.insert(target);
-          }
-        }
+        appendLedgerTarget(value->replayDrainTarget.get());
       }
       break;
     }
@@ -1713,6 +1724,38 @@ bool persistResolvedResourcesAndCaptureBindings(
       if (!scratch.coreEntryPresence.overflowed()) {
         scratch.coreEntryPresence.insert({kind, handle});
       }
+    }
+  }
+
+  // Query handles are also present in the canonical handle table, but that
+  // table is shared by records which do not issue a query.  Decode each
+  // QUERY_ISSUE payload so BEGIN and END both advance the same target and a
+  // receipt for an earlier issue is superseded by a later one.  This scan is
+  // entirely gated: the default-off path does not inspect query records.
+  if (dxmt9::d3d9::queryPollReceiptsEnabled()) {
+    for (const auto& recordHeader : imported.records) {
+      if (recordHeader.type != D9C_COMMAND_RECORD_QUERY_ISSUE) {
+        continue;
+      }
+      const auto record = imported.record(
+          static_cast<std::size_t>(&recordHeader - imported.records.data()));
+      if (record.payload.size() < sizeof(D9CCommandChunkWireQueryIssue)) {
+        return false;
+      }
+      D9CCommandChunkWireQueryIssue issue{};
+      std::memcpy(&issue, record.payload.data(), sizeof(issue));
+      if (issue.queryHandleIndex >= raw.resolvedObjects.size() ||
+          issue.queryHandleIndex >= imported.handles.size() ||
+          imported.handles[issue.queryHandleIndex].kind !=
+              D9C_CHUNK_HANDLE_KIND_QUERY) {
+        return false;
+      }
+      auto* query = static_cast<D9CQuery*>(
+          raw.resolvedObjects[issue.queryHandleIndex]);
+      if (!query) {
+        return false;
+      }
+      appendLedgerTarget(query->replayDrainTarget.get());
     }
   }
   raw.resourceEntries = scratch.coreEntries;
@@ -2892,6 +2935,10 @@ int32_t dxmt9::d3d9::replayRawChunk(D9CDevice* d, dxmt9::d3d9::RawCommandChunk& 
     dxmt9::perf::countCommandChunkReject();
     return commitChunkFail("offload-unsupported-wire-version");
   }
+  std::optional<dxmt9::d3d9::ScopedQueryReplayOrdinal> queryOrdinalScope;
+  if (dxmt9::d3d9::queryPollReceiptsEnabled()) {
+    queryOrdinalScope.emplace(chunk.replaySeq);
+  }
   const bool schedulingObservabilityEnabled = dxmt9::perf::enabled();
   if (schedulingObservabilityEnabled) {
     dxmt9::perf::recordOffloadReplayStage(
@@ -3250,6 +3297,11 @@ int32_t runProviderReplay(
       return commitChunkFail("provider-replay-ledger");
     }
     ledgerPublished = true;
+    std::optional<dxmt9::d3d9::ScopedQueryReplayOrdinal>
+        queryOrdinalScope;
+    if (dxmt9::d3d9::queryPollReceiptsEnabled()) {
+      queryOrdinalScope.emplace(raw.replaySeq);
+    }
 
     if ((sourceCutDriver || sourceConsumer) &&
         !preflightProviderOrderedControls(imported, raw.replaySeq)) {
@@ -3866,6 +3918,11 @@ static int32_t dxmt9c_device_commit_chunk_impl(
       dxmt9::d3d9::releaseRetainedWrappers(raw);
       dxmt9::perf::countCommandChunkReject();
       return commitChunkFail("chunk-replay-ledger-stopped-inline");
+    }
+    std::optional<dxmt9::d3d9::ScopedQueryReplayOrdinal>
+        queryOrdinalScope;
+    if (dxmt9::d3d9::queryPollReceiptsEnabled()) {
+      queryOrdinalScope.emplace(raw.replaySeq);
     }
     const int32_t hr = replayPlannedChunk(
         d, raw, /*pacedByPresentOrdinal=*/false,

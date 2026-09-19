@@ -1,4 +1,28 @@
 # Backend descriptor / pipeline / replay / hazard / capture / counter / render-pass specs.
+query_poll_receipt_bridge_spec = executable(
+  'dxmt9-query-poll-receipt-bridge-spec', 'query_poll_receipt_bridge_spec.cpp',
+  '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
+  '../../../src/d3d9/d3d9_pe_chunk_nondraw.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src'),
+                        include_directories('../../../src/d3d9')],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+foreach offload : ['0', '1']
+  test('dxmt9-query-poll-receipt-bridge-' + offload + '-spec',
+    query_poll_receipt_bridge_spec,
+    env: dxmt9_native_test_env_vars + ['DXMT9_QUERY_POLL_RECEIPTS=1',
+      'DXMT9_OFFLOAD_COMMIT_REPLAY=' + offload,
+      'DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'], timeout: 30)
+endforeach
+
+query_replay_receipt_spec = executable(
+  'dxmt9-query-replay-receipt-spec', 'query_replay_receipt_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+test('dxmt9-query-replay-receipt-spec', query_replay_receipt_spec,
+     env: dxmt9_native_test_env)
+
 query_replay_drain_observer_spec = executable(
   'dxmt9-query-replay-drain-observer-spec', 'query_replay_drain_observer_spec.cpp',
   include_directories: dxmt9_inc, dependencies: dxmt9_util_dep,
@@ -31,6 +55,12 @@ foreach tile : ['off', 'force']
     env: dxmt9_native_test_env_vars + [
       'MTL_DEBUG_LAYER=1', 'DXMT9_METAL_OCCLUSION=1', 'DXMT_PERF_COUNTERS=1',
       'DXMT9_TILE_FFP=' + tile, 'DXMT9_ASYNC_QUERY_FENCES=1'],
+    is_parallel: false, timeout: 60)
+  test('dxmt9-query-poll-receipt-' + tile + '-metal-spec', query_occlusion_metal_spec,
+    env: dxmt9_native_test_env_vars + [
+      'MTL_DEBUG_LAYER=1', 'DXMT9_METAL_OCCLUSION=1', 'DXMT_PERF_COUNTERS=1',
+      'DXMT9_TILE_FFP=' + tile, 'DXMT9_ASYNC_QUERY_FENCES=1',
+      'DXMT9_QUERY_POLL_RECEIPTS=1'],
     is_parallel: false, timeout: 60)
 endforeach
 

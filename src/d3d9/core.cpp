@@ -31,6 +31,22 @@ using detail::kDrawRunInlinePayloadCapacity;
 
 namespace {
 
+class QueryResetScope {
+ public:
+  explicit QueryResetScope(std::atomic<bool>& resetting) noexcept
+      : resetting_(&resetting) {
+    resetting_->store(true, std::memory_order_release);
+  }
+  ~QueryResetScope() {
+    resetting_->store(false, std::memory_order_release);
+  }
+  QueryResetScope(const QueryResetScope&) = delete;
+  QueryResetScope& operator=(const QueryResetScope&) = delete;
+
+ private:
+  std::atomic<bool>* resetting_;
+};
+
 std::optional<u32> parseEnvU32(const char* name) {
   return dxmt9::util::getenvU32(name);
 }
@@ -295,7 +311,9 @@ HResult Device::resetEx(const PresentParameters& params, const DisplayModeEx* fu
 }
 
 HResult Device::resetValidated(const PresentParameters& params) {
-  if (queryDeviceEpoch_ == std::numeric_limits<u64>::max()) return D3DERR_DEVICELOST;
+  if (queryDeviceEpoch_.load(std::memory_order_acquire) ==
+      std::numeric_limits<u64>::max()) return D3DERR_DEVICELOST;
+  QueryResetScope queryResetScope(queryResetInProgress_);
   presentParameters_ = normalizePresentParameters(adapter_, params);
   deviceLost_ = false;
   presentOccluded_ = false;

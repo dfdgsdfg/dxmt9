@@ -13,6 +13,7 @@
 #include "device_c_chunk_registry.hpp"
 #include "device_c_render_tape_identity.hpp"
 #include "device_c_replay_offload.hpp"
+#include "device_c_query_poll_policy.hpp"
 #include "dxmt9/device_c.h"
 #include "dxmt9/com.hpp"
 #include "dxmt9/core.hpp"
@@ -27,6 +28,7 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <unordered_map>
@@ -404,16 +406,31 @@ struct D9CVertexDecl {
   }
 };
 
+// Cold, opt-in Unix ownership. Replay publishes before releasing its raw's
+// ledger completion. Poll copies under ledger -> snapshot lock order; neither
+// lock is held during backend polling. No public Query mutation on the reader.
+struct D9CQueryPollState {
+  std::mutex mutex;
+  dxmt9::core::QueryPollSnapshot snapshot;
+  std::uint64_t rawOrdinal = 0;
+};
+
 struct D9CQuery {
   std::shared_ptr<dxmt9::core::Query> obj;
   D9CDevice* device{nullptr};
   D9CWireObjectIdentity wireIdentity{};
   std::atomic<uint32_t> refs{1};
+  std::shared_ptr<dxmt9::d3d9::ReplayDrainTarget> replayDrainTarget;
+  std::unique_ptr<D9CQueryPollState> pollState;
 
   D9CQuery() = default;
 
   D9CQuery(std::shared_ptr<dxmt9::core::Query> o, D9CDevice* d)
       : obj(std::move(o)), device(d) {
+    if (dxmt9::d3d9::queryPollReceiptsEnabled()) {
+      replayDrainTarget = std::make_shared<dxmt9::d3d9::ReplayDrainTarget>();
+      pollState = std::make_unique<D9CQueryPollState>();
+    }
     if (device) {
       wireIdentity = device->wireObjects.insert(
           D9C_CHUNK_HANDLE_KIND_QUERY, this);

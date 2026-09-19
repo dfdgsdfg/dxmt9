@@ -129,6 +129,7 @@ compatibility promises:
 
 | Candidate | Stable fallback | Promotion requirement |
 |---|---|---|
+| immutable query replay receipt | global replay drain + core poll | admission/completion identity, retained snapshot/native binding, GPU result/readback, wild correctness and non-regression (`R-CORE-11.5(f)`) |
 | `long-session-direct` | `serial-final-slot-thread` | EncodeSession correctness/progress/completion proof, non-increasing CB/pass/tile locality, and end-to-end benefit |
 | `parallel-compact-soa` | `serial-final-slot-thread` | sealed-pass safety, compact materialization economy, Metal equality, and an encode-bound workload benefit |
 | `per-n-records` mid-chunk commit | `off` or `per-render-pass` | production shape and locality evidence |

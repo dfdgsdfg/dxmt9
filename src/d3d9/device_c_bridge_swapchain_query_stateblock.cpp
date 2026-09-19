@@ -1,6 +1,7 @@
 #include "device_c_provider_api.hpp"
 #include "device_c_replay_offload.hpp"
 #include "device_c_query_poll_observer.hpp"
+#include "device_c_query_poll_policy.hpp"
 
 #define DXMT9_DRAIN_OR_RETURN(...)                                      \
   do {                                                                  \
@@ -134,6 +135,14 @@ extern "C" int32_t dxmt9c_query_issue(D9CQuery* arg0, uint32_t flags) {
 }
 
 extern "C" int32_t dxmt9c_query_get_data(D9CQuery* arg0, void* data, uint32_t size, uint32_t flags) {
+  if (dxmt9::d3d9::queryPollReceiptsEnabled()) {
+    try {
+      if (auto result = dxmt9::d3d9::tryPollQueryReceipt(arg0, data, size, flags))
+        return *result;
+    } catch (...) {
+      return dxmt9::d3d9::ReplayDrainFailure{};
+    }
+  }
   if (dxmt9::d3d9::query_poll_diag::enabled()) {
     namespace diag = dxmt9::d3d9::query_poll_diag;
     return diag::observeCall(diag::ledger(), flags,

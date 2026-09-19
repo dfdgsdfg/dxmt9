@@ -343,17 +343,50 @@ completion gap is not proof that GPU execution blocks the encoder. Missing
 multi-source or evicted intervals must not be synthesized. These observations
 must not change admission, queue predicates, wakeups, HRESULTs or completion.
 
-A future narrower drain requires admission-time END identity, successful
-FIFO replay-completion authority, same-query concurrency ordering, reset and
-terminal handling, and resource lifetime coverage. A raw-prefix receipt alone
-cannot omit records after END inside the same raw chunk. No such optimization
-is authorized by the diagnostic mapping.
-It must also separate polling from mutable core ownership: current
-`Device::getQueryData` reads device/query state and may resolve the public
-Query value, while the COM adapter adds no independent serialization.
-Reaching an END ordinal alone is not permission to run that provider call
-concurrently with later replay. An immutable polling receipt or an explicitly
-proved synchronization boundary is required.
+### Immutable replay-prefix polling candidate
+
+`DXMT9_QUERY_POLL_RECEIPTS=1` implements `R-CORE-11.5(f)` independently of the
+diagnostic mapping. It is default OFF. Validated QueryIssue records attach a
+query-specific `ReplayDrainTarget` at raw admission; BEGIN and END both replace
+its latest admitted ordinal. Contiguous and segmented raw ownership use the
+same attachment seam. The existing ledger commits admission only after queue
+adoption and publishes replay completion only after the entire raw succeeds.
+
+GetData captures `{retained target, admitted raw ordinal}`. The shared
+`classifyReplayReceipt` reducer returns Pending, Ready, Superseded or Failed.
+The wait never follows a newer ordinal; a newer Issue returns `S_FALSE` with
+unchanged output. Terminal failure dominates every state. The ledger lock
+serializes the final admission recheck and snapshot copy. Copy takes the query's
+cold snapshot mutex in ledger-to-snapshot order. Replay publishes its snapshot,
+releases that mutex, then later publishes whole-raw completion to the ledger.
+Neither mutex spans a backend poll.
+
+The provider publishes a `QueryPollSnapshot` after owner-thread Issue, tagged
+with the executing raw ordinal. It freezes query identity, issue/reset epoch,
+active/failure state, result value, retained result owner and backend receipt.
+`Device::pollQuerySnapshot` reads that copy, atomic loss/reset/epoch controls,
+and queue-owned completion state only. It never resolves or reads the live
+Query. Its GPU completion and result-byte contract matches the reference;
+CPU readiness alone cannot authorize success. A poll linearized before a
+concurrent reissue may finish using its retained old snapshot.
+The final atomic control check is the successful poll's reset/loss
+linearization point. A later reset may overlap the return; a reset already
+observed in progress or a changed epoch cannot yield successful bytes.
+
+Unqualified/non-raw Issues, absent snapshots, synchronous legacy receipts and
+deferred END markers use the unchanged global drain and mutable core provider.
+No per-Issue heap object is allocated; the opt-in wrapper owns a cold mutex and
+snapshot, and the copied receipt retains existing owners. The PE ABI is unchanged.
+The candidate does not separate the suffix inside one raw. Diagnostics from
+`DXMT9_QUERY_OBSERVER` covering mutable core GetData and global bridge drains
+describe only fallback calls while this candidate is enabled; they are not a
+complete candidate polling census. The candidate never restores a global drain
+merely to collect those observations.
+
+The `QueryReplayReceipt` model and native production-reducer/ledger tests own
+bounded ordering evidence. The snapshot and Metal occlusion fixtures own
+independent polling and result/readback checks. Whole-game and performance
+qualification remain separate evidence gates in the verification gap.
 
 `DXMT9_QUERY_SPLIT_OBSERVER` observes ordinary source publications by reason
 and completion-bearing tail command buffers handed to `QueueLifecycleController`.

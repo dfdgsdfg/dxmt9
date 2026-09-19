@@ -51,6 +51,7 @@ normal_models=(
   PsoSlotPublication
   QuerySeqId
   QueryPublicationFence
+  QueryReplayReceipt
   QueryInitializerFence
   QueryEndCoalescing
   QueryOcclusionResults
@@ -75,13 +76,14 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=63
-expected_progress_count=4
-expected_counterexample_count=147
-expected_cfg_count=214
+expected_normal_count=64
+expected_progress_count=5
+expected_counterexample_count=152
+expected_cfg_count=221
 progress_configs=(
   CpuPipelineLifecycle.progress
   DirectSourceLifecycle.progress
+  QueryReplayReceipt.progress
   RenderTapeExactEventWait.progress
   RenderTapeSingletonArenaRetirement.progress
 )
@@ -138,6 +140,11 @@ counterexample_models=(
   "QueryOcclusionResults|.read-before-fence.counterexample|Invariant NoReadBeforeGpu is violated"
   "QueryOcclusionResults|.stale-redirect.counterexample|Invariant ScopeIdentity is violated"
   "QueryOcclusionResults|.missing-failure.counterexample|Invariant FailedNeverSuccess is violated"
+  "QueryReplayReceipt|.missing-completion.counterexample|Invariant NoCpuEarlySnapshot is violated"
+  "QueryReplayReceipt|.missing-gpu-completion.counterexample|Invariant NoGpuEarlySuccess is violated"
+  "QueryReplayReceipt|.ignore-superseded.counterexample|Invariant SnapshotAdmissionIdentity is violated"
+  "QueryReplayReceipt|.mutable-receipt.counterexample|Invariant PostSnapshotIssueStable is violated"
+  "QueryReplayReceipt|.ignore-terminal-reset.counterexample|Invariant TerminalAndResetInvalidate is violated"
   "SessionAdmissionHysteresis|.high-water-only.counterexample|Invariant NoClosedEmptySessionCycle is violated"
   "DirectSourceLifecycle|.stale-witness.counterexample|Invariant WitnessIsFresh is violated"
   "DirectSourceLifecycle|.duplicate-witness.counterexample|Invariant WitnessConsumedOnce is violated"

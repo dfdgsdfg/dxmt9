@@ -1,5 +1,14 @@
 # Core device, FFP, format, shader translator, draw-state, and DOD specs.
 
+query_poll_snapshot_spec = executable(
+  'dxmt9-query-poll-snapshot-spec', 'query_poll_snapshot_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-query-poll-snapshot-spec', query_poll_snapshot_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT_DEBUG_DISABLE_SHADER_ARCHIVE=1'])
+
 uniform_dependencies_spec = executable(
   'dxmt9-uniform-dependencies-spec',
   'uniform_dependencies_spec.cpp',

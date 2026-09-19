@@ -5,10 +5,12 @@
 #include "dxmt9/core_constants.hpp"
 #include "dxmt9/query_end_marker.hpp"
 #include "dxmt9/query_occlusion.hpp"
+#include "dxmt9/query_poll_snapshot.hpp"
 
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -2413,6 +2415,10 @@ class Device : public std::enable_shared_from_this<Device> {
   HResult issueQuery(const std::shared_ptr<Query>& query, bool begin);
   HResult getQueryData(const std::shared_ptr<Query>& query, void* output, size_t size,
                        u32 flags);
+  [[nodiscard]] QueryPollSnapshot captureQueryPollSnapshot(
+      const std::shared_ptr<Query>& query) const;
+  HResult pollQuerySnapshot(const QueryPollSnapshot& snapshot, void* output,
+                            size_t size, u32 flags) const;
   void completeUpTo(u64 sequenceId);
   u64 submittedSequenceId() const noexcept { return submittedSequenceId_; }
   u64 completedSequenceId() const noexcept { return completedSequenceId_; }
@@ -2656,11 +2662,14 @@ class Device : public std::enable_shared_from_this<Device> {
   u64 nextHandle_ = 1;
   u64 submittedSequenceId_ = 0;
   u64 completedSequenceId_ = 0;
-  u64 queryDeviceEpoch_ = 1;
+  std::atomic<u64> queryDeviceEpoch_{1};
   u32 presentCount_ = 0;
   u32 maximumFrameLatency_ = kDefaultFrameLatency;
   bool inScene_ = false;
-  bool deviceLost_ = false;
+  std::atomic<bool> deviceLost_{false};
+  // Reset is a control boundary. A snapshot poll that races it must fail
+  // closed even when the old epoch has not been published yet.
+  std::atomic<bool> queryResetInProgress_{false};
   bool presentOccluded_ = false;
   ExperimentCaptureConfig experimentCapture_{};
   // Gamma ramp shadow — initialized to the identity ramp in the

@@ -230,6 +230,32 @@ population. Disabled diagnostics must not add per-draw clocks or payload work.
 
 ---
 
+### 4.6 Immutable CPU replay receipts (`R-CORE-11.5(f)`)
+
+A narrower GetData replay drain must capture a query-specific immutable raw
+admission ordinal. Every admitted Issue, including BEGIN, supersedes the prior
+ordinal. Failed admission must not publish a receipt. The raw retains the query
+wrapper through successful whole-raw replay completion; CPU completion must not
+be inferred from END publication alone.
+
+A poll must wait only for its captured ordinal. A newer same-query admission
+must return `S_FALSE` without modifying output or extending the wait. Terminal
+replay failure takes priority. After waiting, the poll must recheck admission
+and copy an issue-qualified snapshot under synchronized ownership. It must not
+access mutable Query or ordinary Device replay state concurrently with later
+replay. The copied value retains its result owner and backend fence independently
+of reissue/release. Reset epoch and failure must invalidate stale success.
+
+CPU prefix completion authorizes only snapshot consumption, not `S_OK`.
+Ordinary and initializer GPU completion and successful result contributions
+remain required. Records after END inside the same raw remain in the CPU wait.
+Missing identity, non-raw Issue, synchronous legacy policy and deferred writer
+markers retain the global-drain reference path. The candidate is default OFF
+until model/native binding, hardware readback, visible wild correctness and
+matched non-regression evidence qualify it.
+
+---
+
 ## 5. Lifetime
 
 Query COM lifetime is independent from backend result lifetime. Releasing a query

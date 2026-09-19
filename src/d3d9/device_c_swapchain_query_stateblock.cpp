@@ -127,7 +127,11 @@ extern "C" D9CQuery* dxmt9c_device_create_query(D9CDevice* d, uint32_t type) {
   if (!query) {
     return nullptr;
   }
-  return new D9CQuery{query, d};
+  try {
+    return new D9CQuery{query, d};
+  } catch (...) {
+    return nullptr;
+  }
 }
 
 extern "C" D9CStateBlock* dxmt9c_device_create_state_block(D9CDevice* d, uint32_t type) {
@@ -258,7 +262,54 @@ extern "C" uint32_t dxmt9c_query_release(D9CQuery* q) {
 }
 
 extern "C" int32_t dxmt9c_query_issue(D9CQuery* q, uint32_t flags) {
-  return q->device->iface->IssueQuery(q->obj, (flags & 2) != 0);
+  const auto result = q->device->iface->IssueQuery(q->obj, (flags & 2) != 0);
+  if (q->pollState) {
+    auto snapshot = q->device->dev().captureQueryPollSnapshot(q->obj);
+    snapshot.failed |= result < 0;
+    std::lock_guard lock(q->pollState->mutex);
+    q->pollState->snapshot = std::move(snapshot);
+    q->pollState->rawOrdinal = dxmt9::d3d9::queryReplayOrdinal();
+  }
+  return result;
+}
+
+std::optional<std::int32_t> dxmt9::d3d9::tryPollQueryReceipt(
+    D9CQuery* q, void* output, std::uint32_t size, std::uint32_t flags) {
+  if (!q || !q->device || !q->obj || !q->pollState || !q->replayDrainTarget)
+    return std::nullopt;
+  auto& ledger = q->device->replayDrainLedger;
+  const auto receipt = ledger.captureReceipt(q->replayDrainTarget);
+  // Unissued and direct (non-raw) issues use the reference ownership boundary.
+  if (!receipt.capturedSequence) return std::nullopt;
+  using State = dxmt9::query::ReplayReceiptState;
+  auto state = ledger.waitReceipt(receipt);
+  if (state == State::Failed) return core::D3DERR_DEVICELOST;
+  if (state == State::Superseded) return core::S_FALSE;
+  core::QueryPollSnapshot snapshot;
+  bool qualified = false;
+  state = ledger.visitReadyReceipt(receipt, [&] {
+    std::lock_guard lock(q->pollState->mutex);
+    qualified = q->pollState->rawOrdinal == receipt.capturedSequence &&
+                q->pollState->snapshot.eligible &&
+                q->pollState->snapshot.identity == q->obj->identity();
+    if (qualified) snapshot = q->pollState->snapshot;
+  });
+  if (state == State::Failed) return core::D3DERR_DEVICELOST;
+  if (state != State::Ready) return core::S_FALSE;
+  if (!qualified) return std::nullopt;
+  // The snapshot owns its result and queue receipt independently of later
+  // replay. No mutable core Query access is permitted beyond this point.
+  // Stage the at-most-eight public result bytes so a replay failure published
+  // during backend polling cannot leak successful bytes before the final check.
+  std::uint64_t staged = 0;
+  const auto result = q->device->dev().pollQuerySnapshot(
+      snapshot, output ? &staged : nullptr, std::min<std::uint32_t>(size, sizeof(staged)),
+      flags);
+  if (ledger.terminal()) return core::D3DERR_DEVICELOST;
+  const auto resultBytes = core::queryPollResultBytes(snapshot.type);
+  if (result == core::S_OK && output && resultBytes && size >= resultBytes)
+    std::memcpy(output, &staged, resultBytes);
+  return result;
 }
 
 extern "C" int32_t dxmt9c_query_get_data(D9CQuery* q, void* data, uint32_t size, uint32_t flags) {

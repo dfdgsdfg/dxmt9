@@ -477,6 +477,41 @@ ReplayDrainLedger::targetForCoreBuffer(std::uint64_t handleValue) {
   return target;
 }
 
+ReplayDrainReceipt ReplayDrainLedger::captureReceipt(
+    std::shared_ptr<ReplayDrainTarget> target) const noexcept {
+  if (!target) {
+    return {};
+  }
+  std::lock_guard lock(mutex_);
+  const auto capturedSequence = target->lastQueuedSeq;
+  return ReplayDrainReceipt{
+      .target = std::move(target),
+      .capturedSequence = capturedSequence};
+}
+
+dxmt9::query::ReplayReceiptState ReplayDrainLedger::classifyReceiptLocked(
+    const ReplayDrainReceipt& receipt) const noexcept {
+  if (!receipt.target) {
+    return dxmt9::query::ReplayReceiptState::Failed;
+  }
+  return dxmt9::query::classifyReplayReceipt(
+      receipt.capturedSequence, receipt.target->lastQueuedSeq,
+      receipt.target->lastReplayedSeq, terminal());
+}
+
+dxmt9::query::ReplayReceiptState ReplayDrainLedger::waitReceipt(
+    const ReplayDrainReceipt& receipt) noexcept {
+  if (!receipt.target) {
+    return dxmt9::query::ReplayReceiptState::Failed;
+  }
+  std::unique_lock lock(mutex_);
+  cv_.wait(lock, [&] {
+    return classifyReceiptLocked(receipt) !=
+           dxmt9::query::ReplayReceiptState::Pending;
+  });
+  return classifyReceiptLocked(receipt);
+}
+
 void ReplayDrainLedger::publishAcceptedLocked(RawCommandChunk& chunk) noexcept {
   chunk.replaySeq = nextSeq_++;
   for (auto* target : chunk.ledgerTargets) {
@@ -568,6 +603,8 @@ void ReplayDrainLedger::stop() noexcept {
 void ReplayDrainLedger::publishFailure() noexcept {
   terminalState_.store(ReplayTerminalState::Failed,
                        std::memory_order_release);
+  std::lock_guard lock(mutex_);
+  cv_.notify_all();
 }
 
 void ReplayDrainLedger::poison() noexcept {

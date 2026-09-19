@@ -267,29 +267,101 @@ HRESULT Query::getData(void *output, size_t size, u32 flags,
   // A resolved query is only reported once the GPU has completed the chunk
   // that issued it.
   DXMT_ASSERT(completedSequenceId >= issuedSequenceId_);
+  return formatQueryPollResult(type_, resolvedValue_, output, size);
+}
 
-  if (type_ == QueryType::Event) {
-    return S_OK;
+QueryPollSnapshot Device::captureQueryPollSnapshot(
+    const std::shared_ptr<Query> &query) const {
+  QueryPollSnapshot snapshot;
+  if (!query) {
+    return snapshot;
+  }
+  snapshot.owner = this;
+  snapshot.identity = query->identity_;
+  snapshot.type = query->type_;
+  snapshot.issueOrdinal = query->issueOrdinal_;
+  snapshot.issueDeviceEpoch = query->issueDeviceEpoch_;
+  snapshot.active = query->active_;
+  snapshot.failed = query->failedIssue_;
+  snapshot.issuedSequenceId = query->issuedSequenceId_;
+  snapshot.resolvedValue = query->resolvedValue_;
+  snapshot.backendFence = query->backendFence_;
+  snapshot.occlusionResult = query->occlusionResult_;
+  snapshot.backend = backend_;
+
+  // Constants and pre-issue queries do not need a backend receipt. A
+  // synchronous legacy query with an issued END is intentionally ineligible:
+  // callers retain the legacy Query for that path. Deferred END markers are
+  // likewise rejected until the replay writer has bound them.
+  const bool constant = snapshot.constant();
+  const bool preIssue = snapshot.preIssue();
+  const bool async = snapshot.backend &&
+      (snapshot.backend->usesAsyncQueryFences() ||
+       (snapshot.type == QueryType::Occlusion &&
+        snapshot.backend->usesMetalOcclusion()));
+  snapshot.eligible = constant || preIssue || (async && !snapshot.deferredBackendFence());
+  return snapshot;
+}
+
+HResult Device::pollQuerySnapshot(const QueryPollSnapshot &snapshot,
+                                  void *output, size_t size, u32 flags) const {
+  // This method deliberately reads no mutable Query state and no ordinary
+  // Device cursor. The atomics are the only control state observed here.
+  const auto epoch = queryDeviceEpoch_.load(std::memory_order_acquire);
+  if (!snapshot.identity || snapshot.owner != this ||
+      snapshot.backend.get() != backend_.get() ||
+      queryResetInProgress_.load(std::memory_order_acquire) ||
+      deviceLost_.load(std::memory_order_acquire) ||
+      (snapshot.issueOrdinal && snapshot.issueDeviceEpoch != epoch)) {
+    return D3DERR_DEVICELOST;
+  }
+  if (!snapshot.eligible || snapshot.failed ||
+      (snapshot.issueOrdinal && snapshot.deferredBackendFence())) {
+    return snapshot.eligible ? D3DERR_DEVICELOST : D3DERR_NOTAVAILABLE;
   }
 
-  const u64 value = resolvedValue_.value_or(0ull);
-  if (type_ == QueryType::Occlusion) {
-    if (!output || size == 0) {
-      return S_OK;
+  if (snapshot.constant() || snapshot.preIssue()) {
+    if (queryResetInProgress_.load(std::memory_order_acquire) ||
+        deviceLost_.load(std::memory_order_acquire) ||
+        queryDeviceEpoch_.load(std::memory_order_acquire) != epoch) {
+      return D3DERR_DEVICELOST;
     }
-    if (size >= sizeof(u32)) {
-      *static_cast<u32 *>(output) = static_cast<u32>(
-          std::min<u64>(value, std::numeric_limits<u32>::max()));
-    }
-    return S_OK;
+    return formatQueryPollResult(snapshot.type, snapshot.resolvedValue,
+                                 output, size);
   }
-  if (type_ == QueryType::Timestamp) {
-    if (output && size >= sizeof(u64)) {
-      *static_cast<u64 *>(output) = value;
-    }
-    return S_OK;
+  if (snapshot.active) {
+    return S_FALSE;
   }
-  return D3DERR_NOTAVAILABLE;
+  if (!snapshot.backend || !snapshot.backendFence.valid()) {
+    return D3DERR_DEVICELOST;
+  }
+
+  switch (snapshot.backend->pollQueryFence(
+      snapshot.backendFence, (flags & QUERY_GETDATA_FLUSH) != 0)) {
+  case query::Poll::Pending:
+    return S_FALSE;
+  case query::Poll::Invalid:
+  case query::Poll::Failed:
+    return D3DERR_DEVICELOST;
+  case query::Poll::Complete:
+    break;
+  }
+  std::optional<u64> value = snapshot.resolvedValue;
+  if (snapshot.occlusionResult) {
+    if (!snapshot.occlusionResult->readableAfterFence()) {
+      return D3DERR_DEVICELOST;
+    }
+    value = snapshot.occlusionResult->samples.load(std::memory_order_acquire);
+  }
+  // Recheck control state before exposing bytes, preserving output on error.
+  // This is the successful poll's control linearization point: a Reset/loss
+  // starting afterward may overlap the return, but cannot redirect its value.
+  if (queryResetInProgress_.load(std::memory_order_acquire) ||
+      deviceLost_.load(std::memory_order_acquire) ||
+      queryDeviceEpoch_.load(std::memory_order_acquire) != epoch) {
+    return D3DERR_DEVICELOST;
+  }
+  return formatQueryPollResult(snapshot.type, value, output, size);
 }
 
 SwapChain::SwapChain(std::shared_ptr<Device> owner, SwapChainHandle handle,
