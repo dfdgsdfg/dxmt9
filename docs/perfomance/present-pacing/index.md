@@ -11,6 +11,19 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H330](present-pacing-query-pending-publication.330.md) records post-Rosetta
+same-image controls: Pending OFF/ON 19.452/19.422 FPS; publication reuse
+has 0.812 ms/Present marking versus OFF controls 0.905/0.893. Identical-policy
+OFF FPS drifts 19.422→18.507; no FPS gain/regression is established. Completed
+R660 diagnostics show 99.80% Pending coverage and distinguish pre-fragmentation
+stalls from a late CB/pass explosion. Boundary-cause attribution and repeated
+non-regression remain open; these are not promotion or README evidence.
+
+[H329](present-pacing-query-pending-publication.329.md) adds complete
+covered-Pending route census, sparse full-run query timeline joins and an
+experimental bounded publication stamp cache. The initial matched OFF/ON
+pair is unqualified for promotion because captures show Orca, not the game.
+
 [H319](present-pacing-policy-consolidation-wild.319.md) checks committed
 `c9256634` in three completed wild runs. 05/06 GT2 scene spots are
 26.385/16.417 FPS; STALKER Day is 13.764 benchmark FPS. Image hashes, sampled

@@ -49,9 +49,12 @@ tables call the production predicate. The gated GPU fixture tests a real poll
 while another thread holds the queue mutex, one-FLUSH progress, invalid identity
 and initializer prefix, terminal rejection and exact 256-byte readback.
 
-The backend phase observer currently describes slow-path attempts when this
-candidate is enabled, not a complete poll census. Use the outer receipt census
-for total attempts. Wild/performance evidence remains open.
+The backend observer now counts both covered-Pending and slow-path attempts,
+with explicit `covered_pending` and `slow` totals. Fast samples cover only the
+return observation, not the preceding atomic predicate. Slow phase timings
+retain their previous meaning; these are not full entry-to-exit timings.
+The receipt census also includes attempts that do not reach backend polling.
+Observer-OFF matched performance qualification remains open.
 
 ## Verification record (2026-09-19)
 

@@ -4,6 +4,7 @@
 #include "d3d9_pe_chunk_builder.hpp"
 #include "dxmt9/com.hpp"
 #include "dxmt9/dxmt9_device.hpp"
+#include "../../../src/dxmt9/dxmt9_query_timeline_observer.hpp"
 
 #include <cstdint>
 #include <cstring>
@@ -159,6 +160,15 @@ void testValidatedContiguousBeginEndAndBridgePoll() {
         "bridge poll uses the qualified immutable receipt");
   check(value != 0xfeedfacecafebeefull,
         "qualified timestamp poll writes the result");
+  if (dxmt9::query::timeline_diag::enabled()) {
+    const auto rows = dxmt9::query::timeline_diag::ledger().snapshotSummaries();
+    bool joined = false;
+    for (const auto& row : rows) {
+      if (row.identity.query != query->obj->identity()) continue;
+      joined = row.firstOkNs != 0 && !row.resultValue;
+    }
+    check(joined, "receipt S_OK joins END without inventing fake backend completion");
+  }
   check(dxmt9::d3d9::tryPollQueryReceipt(query, nullptr, 0u, 0u).has_value(),
         "contiguous raw uses snapshot route, not merely successful fallback");
   const auto old = device.replayDrainLedger.captureReceipt(query->replayDrainTarget);

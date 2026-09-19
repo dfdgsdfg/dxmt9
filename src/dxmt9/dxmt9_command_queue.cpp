@@ -23,6 +23,7 @@
 #include "dxmt9_query_split_observer.hpp"
 #include "dxmt9_resource_initializer.hpp"
 #include "dxmt9_resource_mark_observer.hpp"
+#include "dxmt9_publication_mark_cache.hpp"
 #include "dxmt9_resource_pool.hpp"
 #include "dxmt9_lock_scope_policy.hpp"
 #include "dxmt9_ring_arena.hpp"
@@ -45,6 +46,7 @@
 #include <memory>
 #include <optional>
 #include <sstream>
+#include <type_traits>
 #include <utility>
 #include <vector>
 #if defined(__APPLE__)
@@ -3025,8 +3027,11 @@ Presenter::AcquireParams makePresentAcquireParams(const core::SwapDesc& desc) {
   };
 }
 
-void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slot) {
+template<bool Deduplicate>
+void markSlotResourcesImpl(resources::Pool& pool, const core::ChunkSlot& slot) {
   const bool observeMarks = resourceMarkOverlapObserverEnabled();
+  std::conditional_t<Deduplicate, resources::PublicationMarkCache<>,
+                     std::nullptr_t> cache{};
   CapturedBufferMarkBatch batch(pool, slot.seqId);
   for (std::size_t i = 0; i < slot.commandCount(); ++i) {
     const auto sourceCommand = core::SourcePayloadView(slot).commandAt(i);
@@ -3049,12 +3054,24 @@ void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slo
             // Active-backing selection may change between marks. Do not
             // deduplicate it or move a captured stamp across this effect.
             batch.flush();
+            if constexpr (Deduplicate) {
+              if (!cache.shouldMark(entry)) return;
+            }
             markVisitedResource(pool, resource, slot.seqId);
           }
         });
     // Do not defer across coordinator/command ownership boundaries.
     batch.flush();
   }
+}
+
+void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slot) {
+  static const bool deduplicate = [] {
+    const char* value = std::getenv("DXMT9_PUBLISH_RESOURCE_DEDUP");
+    return value && value[0] && value[0] != '0';
+  }();
+  if (deduplicate) markSlotResourcesImpl<true>(pool, slot);
+  else markSlotResourcesImpl<false>(pool, slot);
 }
 
 struct PresentPrePresentOpportunity {
@@ -8671,8 +8688,15 @@ query::Poll CommandQueue::pollQueryFence(const query::EndReceipt& receipt,
         arenaBuildPoisoned_.load(std::memory_order_acquire) ||
         queueLifecycle_.queryCompletionFailed();
     if (query::coveredPending(receipt.prefix, queryQueueIdentity_, covered,
-                             completed, uploads, terminal, bool(receipt.marker)))
+                             completed, uploads, terminal, bool(receipt.marker))) {
+      if (query::polldiag::mode()) {
+        return query::polldiag::observe(flush, [] {
+          query::polldiag::active->coveredPending = true;
+          return query::Poll::Pending;
+        });
+      }
       return query::Poll::Pending;
+    }
   }
   if (!query::polldiag::mode()) return pollQueryFenceImpl<false>(receipt, flush);
   return query::polldiag::observe(flush, [&] {

@@ -240,6 +240,19 @@ void boundedOrdinaryEncodeLedger() {
 }  // namespace
 
 int main() {
+  {
+    Ledger sampled(false, 2, 3);
+    for (unsigned i = 1; i <= 11; ++i)
+      sampled.end({7, i, 1, 1}, 3, i, {}, 100 + i);
+    const auto rows = sampled.snapshotSummaries();
+    check(sampled.size() == 3 && sampled.stats().skippedEnds == 8,
+          "skip then stride bounds full-run sampling");
+    check(rows[0].identity.query == 3 && rows[1].identity.query == 6 &&
+          rows[2].identity.query == 9, "stride does not relabel identities");
+    sampled.poll({7, 9, 1, 1}, 0, true, 42, 120);
+    check(sampled.snapshotSummaries()[2].firstOkNs == 120,
+          "late sampled snapshot result joins exact identity");
+  }
   deterministicLifecycleAndReissue();
   deferredMarkerAndUnknownPoll();
   boundedStorageAndMissingStages();

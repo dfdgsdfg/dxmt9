@@ -3,6 +3,7 @@
 #include "../../../src/dxmt9/dxmt9_blit_encoders.hpp"
 #include "../../../src/dxmt9/dxmt9_command_queue.hpp"
 #include "../../../src/dxmt9/dxmt9_resource_pool.hpp"
+#include "../../../src/dxmt9/dxmt9_publication_mark_cache.hpp"
 #include "../../../src/winemetal/Metal.hpp"
 
 #include <chrono>
@@ -45,6 +46,22 @@ void testInitializerOnly(dxmt9::CommandQueue& queue) {
   surfaceDesc.renderTarget = true;
   const auto surface = queue.pool().createSurfaceForTexture(texture, 0, surfaceDesc);
   check(bool(surface), "create readback alias");
+
+  {
+    std::lock_guard lock(queue.mutex_);
+    resources::PublicationMarkCache<1> cache;
+    for (unsigned i = 0; i < 4; ++i) {
+      // Real Pool records, including a texture alias. Cache collisions must
+      // preserve both records' final sequence, not collapse kinds/identities.
+      if (cache.shouldMark({core::ChunkHandleKind::Texture, texture}))
+        queue.pool().markTextureUse(texture, 7);
+      if (cache.shouldMark({core::ChunkHandleKind::Surface, surface}))
+        queue.pool().markSurfaceUse(surface, 7);
+    }
+    check(queue.pool().findTexture(texture.value)->lastUsedSeqId == 7 &&
+          queue.pool().findSurface(surface.value)->lastUsedSeqId == 7,
+          "real Pool texture and alias stamp max preserved under collisions");
+  }
 
   query::EndReceipt previous{};
   for (unsigned issue = 0; issue != 3; ++issue) {
@@ -169,6 +186,10 @@ void testCoveredPending(dxmt9::CommandQueue& queue) {
   core::ClearDesc clear{};
   clear.colorAttachments[0].handle = surface;
   clear.clearColor = true;
+  clear.color = {1, 0, 0, 1};
+  queue.submitClear(clear);
+  clear.color = {0, 0, 1, 1};
+  queue.submitClear(clear);
   clear.color = {0, 1, 0, 1};
   queue.submitClear(clear);
   const auto receipt = queue.publishQueryEnd();
@@ -184,6 +205,9 @@ void testCoveredPending(dxmt9::CommandQueue& queue) {
   // A real public poll must finish while another thread owns the large mutex.
   // Release it before checking the timeout so a failing fixture cannot deadlock.
   std::unique_lock lock(queue.mutex_);
+  check(queue.pool().findSurface(surface.value)->lastUsedSeqId >=
+            receipt.prefix.sequence,
+        "repeated publication references stamp the actual final use");
   auto result = std::async(std::launch::async, [&] {
     for (unsigned i = 0; i != 64; ++i)
       if (queue.pollQueryFence(receipt, (i & 1) != 0) != query::Poll::Pending)

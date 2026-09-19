@@ -20,6 +20,14 @@ int main() try {
         "disjoint outer and inner lock intervals");
   check(total.maximum == total.ns, "sample maxima");
   check(total.requests[2] == 1 && total.results[2] == 1, "request and result populations");
+  diag::Sample fast;
+  fast.coveredPending = true;
+  diag::Totals census;
+  census.add(fast, true, dxmt9::query::Poll::Pending);
+  census.add(sample, false, dxmt9::query::Poll::Complete);
+  check(census.calls == 2 && census.coveredPending == 1 &&
+        census.results[2] == 1 && census.results[3] == 1,
+        "full route census includes covered pending and slow calls");
   sample.at(diag::Phase::Exit, 1);
   total.add(sample, false, dxmt9::query::Poll::Failed);
   check(total.invalid == 1 && total.samples == 1 && total.calls == 2, "bad clock excluded");

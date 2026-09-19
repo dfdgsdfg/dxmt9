@@ -110,8 +110,9 @@ struct Stats {
 
 class Ledger final {
  public:
-  explicit Ledger(bool logging = true, std::uint64_t skipEnds = 0) noexcept
-      : logging_(logging), skipEnds_(skipEnds) {}
+  explicit Ledger(bool logging = true, std::uint64_t skipEnds = 0,
+                  std::uint64_t stride = 1) noexcept
+      : logging_(logging), skipEnds_(skipEnds), stride_(stride ? stride : 1) {}
   Ledger(const Ledger&) = delete;
   Ledger& operator=(const Ledger&) = delete;
   ~Ledger() { report(); }
@@ -125,6 +126,10 @@ class Ledger final {
     ++stats_.ends;
     if (skipEnds_ != 0) {
       --skipEnds_;
+      ++stats_.skippedEnds;
+      return;
+    }
+    if (sampleOrdinal_++ % stride_ != 0) {
       ++stats_.skippedEnds;
       return;
     }
@@ -285,12 +290,34 @@ class Ledger final {
       summary->lastPendingNs = nowNs;
     } else if (result == 0 /* S_OK */) {
       ++summary->okPolls;
+      const bool firstOk = summary->firstOkNs == 0;
       if (summary->firstOkNs == 0) summary->firstOkNs = nowNs;
       summary->lastOkNs = nowNs;
       // A successful read is useful only after the queue has supplied its
       // explicit completion stage. Never infer completion from S_OK alone.
       if (completed && summary->has(Completion) && value)
         summary->resultValue = value;
+      // Preserve bounded evidence even when the app exits without running
+      // unixlib static destructors. At most one live row per retained END.
+      // Missing stages remain missing; S_OK never fabricates completion.
+      if (firstOk && logging_) {
+        const auto u = [](std::uint64_t v) {
+          return static_cast<unsigned long long>(v);
+        };
+        util::logf(util::LogLevel::Info, "dxmt9-query-timeline-live",
+            "queue=%llu query=%llu issue=%llu epoch=%llu type=%u missing=%u "
+            "fence_seq=%llu end_observed_ns=%llu publication_ns=%llu "
+            "encode_start_ns=%llu encode_end_ns=%llu submit_ns=%llu "
+            "completion_ns=%llu first_ok_ns=%llu polls=%llu pending=%llu "
+            "ready_depth_before=%llu encoding_seq_before=%llu",
+            u(identity.queue), u(identity.query), u(identity.issue), u(identity.epoch),
+            summary->type, unsigned(summary->missing()), u(summary->fenceSequence),
+            u(summary->endObservedNs), u(summary->publicationNs),
+            u(summary->encodeStartNs), u(summary->encodeEndNs),
+            u(summary->submitNs), u(summary->completionNs), u(summary->firstOkNs),
+            u(summary->polls), u(summary->pendingPolls),
+            u(summary->readyDepthBefore), u(summary->encodingSeqBefore));
+      }
     }
   }
 
@@ -609,6 +636,7 @@ class Ledger final {
   bool logging_ = true;
   bool reported_ = false;
   std::uint64_t skipEnds_ = 0;
+  std::uint64_t stride_ = 1, sampleOrdinal_ = 0;
   std::uint64_t nextEvidenceOrdinal_ = 0;
   std::uint64_t nextOrdinaryEncodeOrdinal_ = 0;
   std::array<Summary, kCapacity> summaries_{};
@@ -644,7 +672,15 @@ inline std::uint64_t skipEndCount() noexcept {
 }
 
 inline Ledger& ledger() {
-  static Ledger value(true, skipEndCount());
+  static const std::uint64_t stride = [] {
+    const char* setting = std::getenv("DXMT9_QUERY_OBSERVER_END_STRIDE");
+    if (!setting || !setting[0] || setting[0] == '-') return std::uint64_t{1};
+    char* end = nullptr;
+    const auto parsed = std::strtoull(setting, &end, 10);
+    return end == setting || *end || !parsed ? std::uint64_t{1}
+        : static_cast<std::uint64_t>(parsed);
+  }();
+  static Ledger value(true, skipEndCount(), stride);
   return value;
 }
 

@@ -1,5 +1,6 @@
 #include "device_c_provider.hpp"
 #include "device_c_query_receipt_observer.hpp"
+#include "../dxmt9/dxmt9_query_timeline_observer.hpp"
 
 // Needed so dxmt9c_stateblock_apply can mark the per-frequency uniform
 // DirtyState on the queue. A state-block apply is bulk state mutation
@@ -345,6 +346,16 @@ static std::optional<std::int32_t> pollQueryReceiptImpl(
   const auto resultBytes = core::queryPollResultBytes(snapshot.type);
   if (result == core::S_OK && output && resultBytes && size >= resultBytes)
     std::memcpy(output, &staged, resultBytes);
+  if (dxmt9::query::timeline_diag::enabled()) {
+    const auto prefix = snapshot.backendFence.prefix;
+    // Observe the final receipt result without reacquiring mutable Query state
+    // or forcing a global replay drain. Unavailable output remains unknown.
+    dxmt9::query::timeline_diag::poll(
+        {prefix.queue, snapshot.identity, snapshot.issueOrdinal,
+         snapshot.issueDeviceEpoch}, result, result == core::S_OK,
+        result == core::S_OK && output && resultBytes && size >= resultBytes
+            ? std::optional<std::uint64_t>{staged} : std::nullopt);
+  }
   return result;
 }
 

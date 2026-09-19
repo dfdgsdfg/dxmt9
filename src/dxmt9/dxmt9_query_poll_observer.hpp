@@ -26,7 +26,7 @@ inline std::uint64_t now() noexcept {
       std::chrono::steady_clock::now().time_since_epoch()).count();
 }
 struct Sample {
-  bool timed = false, invalid = false, marker = false;
+  bool timed = false, invalid = false, marker = false, coveredPending = false;
   Request request = Request::None;
   std::uint64_t last = 0;
   std::array<std::uint64_t, phaseNames.size()> ns{};
@@ -39,11 +39,13 @@ struct Sample {
 };
 struct Totals {
   std::uint64_t calls = 0, flush = 0, samples = 0, invalid = 0, markers = 0;
+  std::uint64_t coveredPending = 0;
   std::array<std::uint64_t, requestNames.size()> requests{};
   std::array<std::uint64_t, 4> results{};
   std::array<std::uint64_t, phaseNames.size()> ns{}, maximum{};
   void add(const Sample& sample, bool f, Poll result) noexcept {
     ++calls; flush += f; markers += sample.marker;
+    coveredPending += sample.coveredPending;
     ++requests[static_cast<unsigned>(sample.request)];
     ++results[static_cast<unsigned>(result)];
     if (!sample.timed) return;
@@ -79,9 +81,10 @@ class Ledger {
     ++reports_;
     const auto u = [](std::uint64_t x) { return static_cast<unsigned long long>(x); };
     util::logf(util::LogLevel::Info, "dxmt9-query-backend",
-        "calls=%llu flush=%llu samples=%llu invalid_clocks=%llu markers=%llu reports=%u",
+        "calls=%llu flush=%llu samples=%llu invalid_clocks=%llu markers=%llu reports=%u covered_pending=%llu slow=%llu",
         u(totals_.calls), u(totals_.flush), u(totals_.samples), u(totals_.invalid),
-        u(totals_.markers), reports_);
+        u(totals_.markers), reports_, u(totals_.coveredPending),
+        u(totals_.calls - totals_.coveredPending));
     for (unsigned i = 0; i < requestNames.size(); ++i)
       util::logf(util::LogLevel::Info, "dxmt9-query-backend-request",
           "kind=%s calls=%llu", requestNames[i], u(totals_.requests[i]));

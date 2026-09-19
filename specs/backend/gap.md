@@ -11,6 +11,27 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Backend Layer
 
+Experimental [publication stamp reuse](publication-marking.md) removes exact
+texture/surface repeats only within one locked Slot publication. Default OFF;
+bounded native refinement, real Pool texture/alias stamp checks and a gated
+repeated-clear exact GPU oracle pass on native and x86_64. Full texture/surface
+retirement/race coverage and wild/performance qualification remain open.
+Arena and buffer marking are not
+changed; no ingress pin is removed.
+After user-installed Rosetta on 2026-09-20, system x86_64 execution and Wine
+startup recover; the final-image x86_64 focused set passes 7/7. Wild cost
+qualification remains open, no longer blocked by errno 86. See
+[H329](../../docs/perfomance/present-pacing/present-pacing-query-pending-publication.329.md)
+for the partial Pending census and exact evidence boundaries.
+Fresh same-image post-recovery R657–R659 all pass with sampled game captures
+and zero health counters. R658→R659 marking elapsed is 0.905→0.812 ms/Present,
+but publication counts differ and FPS falls 19.422→18.821 in the single pair.
+The R661 OFF repeat returns marking to 0.893 ms/Present but FPS to 18.507;
+identical-policy drift prevents an FPS verdict. R660 final census confirms
+99.80% of Pending uses coverage; late CB/pass fragmentation and earlier stalls
+remain distinct attribution gaps. This is not stable non-regression evidence. See
+[H330](../../docs/perfomance/present-pacing/present-pacing-query-pending-publication.330.md).
+
 R-BACK-2.15.5 known-setter nonconstant invalidation is the unconditional
 implementation; the 2026-09-17 consolidation removes its runtime opt-out.
 The GT2 dependency probe found identical fixed values in every comparable
