@@ -195,7 +195,7 @@ void testValidatedSegmentedBeginEndAndTerminalSentinel() {
 
   check(dxmt9::d3d9::tryPollQueryReceipt(query, nullptr, 0u, 0u).has_value(),
         "segmented raw snapshot has a qualified replay ordinal");
-  auto* upper = static_cast<QueryUpper*>(device.dev().upperDevice());
+  auto* upper = static_cast<QueryUpper*>(device.dev().upperDevice().get());
   upper->failLedger = &device.replayDrainLedger;
   std::uint64_t value = 0x123456789abcdef0ull;
   check(dxmt9c_query_get_data(query, &value, sizeof(value), 0u) ==
