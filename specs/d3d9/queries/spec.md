@@ -402,6 +402,21 @@ saturation. Aggregation occurs outside runtime ownership locks and after the
 normal attempt. It must preserve calls, output bytes, exceptions and HRESULTs,
 and may not trigger a drain, submit, retry or extra backend completion poll.
 
+The independent `DXMT9_QUERY_BACKEND_OBSERVER` splits `pollQueryFence` queue
+acquisition from progress/classification and submission-request work. The
+request decision is observed where `requestQuerySubmission` already owns the
+pending-completion mutex: rejected, already submitted, existing requested
+prefix, or new target requiring notification. Submitted takes precedence over
+existing-target only for diagnostic classification, not for execution. Request
+calls outside an observed backend poll are excluded. Runtime lock ownership,
+condition-variable notifications, completion reads and return values remain
+unchanged. Fixed-size aggregation occurs after release of runtime mutexes;
+counts-only mode reads no clocks and disabled template hooks have no work.
+Sampled post-acquisition residence cannot be called continuous lock hold when
+deferred-marker publication may release/reacquire that mutex. Sample maxima
+are not whole-population maxima, and observer timing does not establish GPU
+limitation or an FPS opportunity.
+
 `DXMT9_QUERY_SPLIT_OBSERVER` observes ordinary source publications by reason
 and completion-bearing tail command buffers handed to `QueueLifecycleController`.
 Its `command_buffer` category excludes mid-chunk sub-CB commits and initializer

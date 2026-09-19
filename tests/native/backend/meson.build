@@ -1,4 +1,11 @@
 # Backend descriptor / pipeline / replay / hazard / capture / counter / render-pass specs.
+query_backend_observer_spec = executable(
+  'dxmt9-query-backend-observer-spec', 'query_backend_observer_spec.cpp',
+  include_directories: dxmt9_inc, dependencies: dxmt9_util_dep,
+)
+test('dxmt9-query-backend-observer-spec', query_backend_observer_spec,
+     env: dxmt9_native_test_env)
+
 query_receipt_observer_spec = executable(
   'dxmt9-query-receipt-observer-spec', 'query_receipt_observer_spec.cpp',
   include_directories: dxmt9_inc, dependencies: dxmt9_util_dep,

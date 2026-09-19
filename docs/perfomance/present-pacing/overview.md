@@ -30,6 +30,15 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H326 reference tails/backend poll split](present-pacing-query-backend-poll-cost.326.md)
+confirms late slowdown in retained WineD3D and DXVK/MoltenVK results; these are
+historical, not scene-aligned current A/B runs. In dxmt9 R650, 99.81% of pending
+submission requests already deduplicate, while queue-mutex acquisition accounts
+for 87.73% of sampled backend-poll elapsed time (not whole-frame time). Wake
+work contributes only 0.03%. Prioritize queue-lock-owner/read-mostly progress
+analysis, not redundant-wake removal. R650 has a failed app-window capture and
+is not visual/FPS qualification or proof of the long-frame cause.
+
 [H325 benchmark FPS windows](present-pacing-stkcop-fps-windows.325.md) confirm
 the late STALKER tail without new instrumentation: R648/R649 start at roughly
 28.58/27.43 FPS over 0–60 reconstructed seconds, but fall to 7.60/5.10 FPS in

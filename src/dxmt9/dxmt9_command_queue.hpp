@@ -1551,6 +1551,9 @@ class CommandQueue {
   friend struct CommandQueueArenaLeaseTestAccess;
   friend struct SchedulingProgressTestAccess;
 
+  template<bool Observe>
+  query::Poll pollQueryFenceImpl(const query::EndReceipt& receipt, bool flush) noexcept;
+
   void noteInitializerPendingUploads() noexcept;
   void emitCopyMaterializationReport() const noexcept;
   void noteCopyMaterializationPublishedPresent() noexcept;

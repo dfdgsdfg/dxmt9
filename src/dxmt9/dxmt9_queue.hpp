@@ -1832,6 +1832,8 @@ class QueueLifecycleController {
       const NoEnqueueFirstPublishSlotShape& shape);
 
  private:
+  template<bool Observe>
+  bool requestQuerySubmissionImpl(u64 targetSeqId);
   template <typename Visitor>
   bool visitSourceBorrows(
       std::unique_lock<std::mutex>& lock,

@@ -82,6 +82,14 @@ fixtures preserve production semantics; the full TLA gate remains passing.
 Sampled phase totals are not a per-source tail trace, isolated queue-lock wait,
 PE crossing cost, total CPU estimate or matched performance evidence.
 
+[H326](../../docs/perfomance/present-pacing/present-pacing-query-backend-poll-cost.326.md)
+separates queue/pending-mutex acquisition and actual submission decisions in a
+cold backend observer. Enabled/counts/OFF native and Metal tests preserve
+completion semantics; the full TLA gate passes. R650 confirms the existing
+sticky request deduplication, but sampled lock costs have no owner/source/frame
+join. App capture failed, so this is diagnostic evidence only. A read-mostly
+progress fast path is not implemented or proved by these measurements.
+
 ## Bounded lock-scope refinement (2026-09-09)
 
 `R-BACK-SYNC-1`–`R-BACK-SYNC-5` and the unconditional implementation are owned by

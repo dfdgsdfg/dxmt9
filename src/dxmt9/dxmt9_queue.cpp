@@ -6,6 +6,7 @@
 #include "dxmt9/assert.hpp"
 #include "dxmt9/query_fence.hpp"
 #include "dxmt9_query_split_observer.hpp"
+#include "dxmt9_query_poll_observer.hpp"
 #include "dxmt9_compat.hpp"
 #include "dxmt9_hud.hpp"
 #include "dxmt9_perf_counters.hpp"
@@ -1151,21 +1152,43 @@ u64 QueueLifecycleController::producerSequenceWaitTargetSeqId() {
 }
 
 bool QueueLifecycleController::requestQuerySubmission(u64 targetSeqId) {
+  if (query::polldiag::mode() && query::polldiag::active)
+    return requestQuerySubmissionImpl<true>(targetSeqId);
+  return requestQuerySubmissionImpl<false>(targetSeqId);
+}
+
+template<bool Observe>
+bool QueueLifecycleController::requestQuerySubmissionImpl(u64 targetSeqId) {
+  namespace diag = query::polldiag;
   // Caller owns the submission mutex, so publication cannot change here.
   if (!submissionBinding_.lastCommittedSeqId || !submissionBinding_.stop ||
       *submissionBinding_.stop ||
-      targetSeqId > *submissionBinding_.lastCommittedSeqId) return false;
+      targetSeqId > *submissionBinding_.lastCommittedSeqId) {
+    diag::request<Observe>(diag::Request::Rejected);
+    return false;
+  }
+  diag::mark<Observe>(diag::Phase::RequestSetup);
   {
     std::lock_guard lock(pendingCompletionMutex_);
+    diag::mark<Observe>(diag::Phase::PendingWait);
     // Existing requests are sticky and already woke the predicate owner.
     // Polling a submitted prefix (or initializer-only zero prefix) needs no
     // new encoder/finish wake and must not pressure an unrelated suffix.
     if (targetSeqId <= querySubmissionTargetSeqId_ ||
-        targetSeqId <= querySubmittedPrefixSeqId_) return true;
+        targetSeqId <= querySubmittedPrefixSeqId_) {
+      if constexpr (Observe)
+        diag::request<Observe>(targetSeqId <= querySubmittedPrefixSeqId_
+            ? diag::Request::Submitted : diag::Request::ExistingTarget);
+      diag::mark<Observe>(diag::Phase::Decision);
+      return true;
+    }
     querySubmissionTargetSeqId_ = targetSeqId;
+    diag::request<Observe>(diag::Request::New);
+    diag::mark<Observe>(diag::Phase::Decision);
   }
   pendingCompletionCv_.notify_all();
   if (submissionBinding_.encodeCv) submissionBinding_.encodeCv->notify_one();
+  diag::mark<Observe>(diag::Phase::Wake);
   return true;
 }
 

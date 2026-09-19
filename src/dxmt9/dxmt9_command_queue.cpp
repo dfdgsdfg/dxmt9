@@ -19,6 +19,7 @@
 #include "dxmt9_presenter.hpp"
 #include "dxmt9_queue.hpp"
 #include "dxmt9_query_policy.hpp"
+#include "dxmt9_query_poll_observer.hpp"
 #include "dxmt9_query_split_observer.hpp"
 #include "dxmt9_resource_initializer.hpp"
 #include "dxmt9_resource_mark_observer.hpp"
@@ -8653,8 +8654,19 @@ query::Progress CommandQueue::queryProgress() noexcept {
 
 query::Poll CommandQueue::pollQueryFence(const query::EndReceipt& receipt,
                                         bool flush) noexcept {
+  if (!query::polldiag::mode()) return pollQueryFenceImpl<false>(receipt, flush);
+  return query::polldiag::observe(flush, [&] {
+    return pollQueryFenceImpl<true>(receipt, flush);
+  });
+}
+
+template<bool Observe>
+query::Poll CommandQueue::pollQueryFenceImpl(const query::EndReceipt& receipt,
+                                            bool flush) noexcept {
+  namespace diag = query::polldiag;
   try {
     std::unique_lock lock(mutex_);
+    diag::mark<Observe>(diag::Phase::QueueWait);
     const auto uploads = initializer_ ? initializer_->queryProgressUnlocked()
         : resources::Initializer::QueryProgress{};
     const query::Progress progress{
@@ -8663,8 +8675,10 @@ query::Poll CommandQueue::pollQueryFence(const query::EndReceipt& receipt,
             queueLifecycle_.queryCompletionFailed() || uploads.failed,
         uploads.published, uploads.completed};
     auto result = query::classifyEnd(receipt, progress);
+    diag::mark<Observe>(diag::Phase::Classify);
     if (result != query::Poll::Pending || !flush) return result;
     if (receipt.marker && !receipt.marker->sequence()) {
+      diag::marker<Observe>();
       if (arenaAdmissionActive_.load(std::memory_order_relaxed) ||
           activeArenaBuild_.load(std::memory_order_relaxed) ||
           activeDirectChunkSlotBuild_.load(std::memory_order_relaxed) ||
@@ -8692,6 +8706,7 @@ query::Poll CommandQueue::pollQueryFence(const query::EndReceipt& receipt,
       query::splitdiag::note(query::splitdiag::Kind::FlushPublish,
                             queryQueueIdentity_, receipt.marker->sequence());
     }
+    diag::mark<Observe>(diag::Phase::Marker);
     const auto fence = receipt.snapshot();
     if (!queueLifecycle_.requestQuerySubmission(fence.sequence))
       return query::Poll::Failed;
