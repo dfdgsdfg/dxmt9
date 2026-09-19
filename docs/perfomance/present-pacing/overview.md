@@ -30,6 +30,14 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H325 benchmark FPS windows](present-pacing-stkcop-fps-windows.325.md) confirm
+the late STALKER tail without new instrumentation: R648/R649 start at roughly
+28.58/27.43 FPS over 0–60 reconstructed seconds, but fall to 7.60/5.10 FPS in
+90–100 seconds. R649 has 41 frames over 100ms in that window. R648 already has
+the tail with receipt diagnostics OFF; this is not a matched optimization
+comparison or a causal join to replay waits. Focus the next attribution on
+late stalls rather than whole-run averages.
+
 [H323](present-pacing-query-poll-receipts.323.md) promotes immutable receipt
 polling unconditionally in `029cef81`. [H324](present-pacing-query-receipt-cost.324.md)
 adds the missing production-route census: R649 handles 488,900 of 488,901 polls,
