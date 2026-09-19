@@ -75,6 +75,13 @@ and matched performance evidence remain open. Following R648 and the user's
 visual confirmation, receipt polling is promoted unconditionally by explicit
 request; the disable selector is removed without closing these evidence gaps.
 
+[H324](../../docs/perfomance/present-pacing/present-pacing-query-receipt-cost.324.md)
+adds an independent cold receipt-attempt observer. R649 records 488,900 handled
+calls and one fallback, with zero error results. Native enabled/counts/OFF
+fixtures preserve production semantics; the full TLA gate remains passing.
+Sampled phase totals are not a per-source tail trace, isolated queue-lock wait,
+PE crossing cost, total CPU estimate or matched performance evidence.
+
 ## Bounded lock-scope refinement (2026-09-09)
 
 `R-BACK-SYNC-1`–`R-BACK-SYNC-5` and the unconditional implementation are owned by

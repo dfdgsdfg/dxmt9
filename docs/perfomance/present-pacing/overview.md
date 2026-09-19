@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-18
+updated: 2026-09-19
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
@@ -29,6 +29,18 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 [index-cache-locality](../index-cache-locality/index.md); the per-CB encode story by [state-churn-encode](../state-churn-encode/index.md).
 
 ## Latest Conclusions
+
+[H323](present-pacing-query-poll-receipts.323.md) promotes immutable receipt
+polling unconditionally in `029cef81`. [H324](present-pacing-query-receipt-cost.324.md)
+adds the missing production-route census: R649 handles 488,900 of 488,901 polls,
+with 94.70% S_FALSE and 99.48% occlusion. Among 7,640 timing samples, captured-raw
+replay wait contributes 59.95% and backend polling 36.37%; snapshot acquisition
+and copy contribute 1.59%. These are sampled attempt-time shares, not whole-run
+CPU or removable frame time. Next: source-qualified wait tails and backend
+queue-lock/classification/submission-request attribution. Diagnostic FPS is not
+a performance comparison; fallback expansion is not supported as the next target.
+
+Historical motivation for that promotion:
 
 [H322 Ready/replay frontier](present-pacing-query-ready-replay-frontier.322.md)
 finds 1,773 stable-END polls with later raw work already queued; their drain

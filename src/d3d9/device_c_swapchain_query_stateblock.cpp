@@ -1,4 +1,5 @@
 #include "device_c_provider.hpp"
+#include "device_c_query_receipt_observer.hpp"
 
 // Needed so dxmt9c_stateblock_apply can mark the per-frequency uniform
 // DirtyState on the queue. A state-block apply is bulk state mutation
@@ -273,18 +274,32 @@ extern "C" int32_t dxmt9c_query_issue(D9CQuery* q, uint32_t flags) {
   return result;
 }
 
-std::optional<std::int32_t> dxmt9::d3d9::tryPollQueryReceipt(
+template<bool Observe>
+static std::optional<std::int32_t> pollQueryReceiptImpl(
     D9CQuery* q, void* output, std::uint32_t size, std::uint32_t flags) {
+  namespace diag = dxmt9::d3d9::query_receipt_diag;
+  namespace core = dxmt9::core;
   if (!q || !q->device || !q->obj || !q->pollState || !q->replayDrainTarget)
     return std::nullopt;
   auto& ledger = q->device->replayDrainLedger;
   const auto receipt = ledger.captureReceipt(q->replayDrainTarget);
+  diag::mark<Observe>(diag::Phase::Capture);
   // Unissued and direct (non-raw) issues use the reference ownership boundary.
-  if (!receipt.capturedSequence) return std::nullopt;
+  if (!receipt.capturedSequence) {
+    diag::route<Observe>(diag::Route::NonRaw);
+    return std::nullopt;
+  }
   using State = dxmt9::query::ReplayReceiptState;
   auto state = ledger.waitReceipt(receipt);
-  if (state == State::Failed) return core::D3DERR_DEVICELOST;
-  if (state == State::Superseded) return core::S_FALSE;
+  diag::mark<Observe>(diag::Phase::ReplayWait);
+  if (state == State::Failed) {
+    diag::route<Observe>(diag::Route::ReplayFailed);
+    return core::D3DERR_DEVICELOST;
+  }
+  if (state == State::Superseded) {
+    diag::route<Observe>(diag::Route::Superseded);
+    return core::S_FALSE;
+  }
   core::QueryPollSnapshot snapshot;
   bool qualified = false;
   state = ledger.visitReadyReceipt(receipt, [&] {
@@ -293,10 +308,27 @@ std::optional<std::int32_t> dxmt9::d3d9::tryPollQueryReceipt(
                 q->pollState->snapshot.eligible &&
                 q->pollState->snapshot.identity == q->obj->identity();
     if (qualified) snapshot = q->pollState->snapshot;
+    if constexpr (Observe) {
+      if (q->pollState->rawOrdinal != receipt.capturedSequence)
+        diag::route<Observe>(diag::Route::RawMismatch);
+      else if (!q->pollState->snapshot.eligible)
+        diag::route<Observe>(diag::Route::Ineligible);
+      else if (!qualified)
+        diag::route<Observe>(diag::Route::IdentityMismatch);
+    }
   });
-  if (state == State::Failed) return core::D3DERR_DEVICELOST;
-  if (state != State::Ready) return core::S_FALSE;
+  diag::mark<Observe>(diag::Phase::Snapshot);
+  if (state == State::Failed) {
+    diag::route<Observe>(diag::Route::ReplayFailed);
+    return core::D3DERR_DEVICELOST;
+  }
+  if (state != State::Ready) {
+    diag::route<Observe>(diag::Route::NotReady);
+    return core::S_FALSE;
+  }
   if (!qualified) return std::nullopt;
+  diag::route<Observe>(diag::Route::Handled);
+  diag::kind<Observe>(static_cast<unsigned>(snapshot.type));
   // The snapshot owns its result and queue receipt independently of later
   // replay. No mutable core Query access is permitted beyond this point.
   // Stage the at-most-eight public result bytes so a replay failure published
@@ -305,11 +337,24 @@ std::optional<std::int32_t> dxmt9::d3d9::tryPollQueryReceipt(
   const auto result = q->device->dev().pollQuerySnapshot(
       snapshot, output ? &staged : nullptr, std::min<std::uint32_t>(size, sizeof(staged)),
       flags);
-  if (ledger.terminal()) return core::D3DERR_DEVICELOST;
+  diag::mark<Observe>(diag::Phase::Backend);
+  if (ledger.terminal()) {
+    diag::route<Observe>(diag::Route::ReplayFailed);
+    return core::D3DERR_DEVICELOST;
+  }
   const auto resultBytes = core::queryPollResultBytes(snapshot.type);
   if (result == core::S_OK && output && resultBytes && size >= resultBytes)
     std::memcpy(output, &staged, resultBytes);
   return result;
+}
+
+std::optional<std::int32_t> dxmt9::d3d9::tryPollQueryReceipt(
+    D9CQuery* q, void* output, std::uint32_t size, std::uint32_t flags) {
+  if (!query_receipt_diag::mode())
+    return pollQueryReceiptImpl<false>(q, output, size, flags);
+  return query_receipt_diag::observe(flags, [&] {
+    return pollQueryReceiptImpl<true>(q, output, size, flags);
+  });
 }
 
 extern "C" int32_t dxmt9c_query_get_data(D9CQuery* q, void* data, uint32_t size, uint32_t flags) {

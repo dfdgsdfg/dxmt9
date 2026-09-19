@@ -1,4 +1,11 @@
 # Backend descriptor / pipeline / replay / hazard / capture / counter / render-pass specs.
+query_receipt_observer_spec = executable(
+  'dxmt9-query-receipt-observer-spec', 'query_receipt_observer_spec.cpp',
+  include_directories: dxmt9_inc, dependencies: dxmt9_util_dep,
+)
+test('dxmt9-query-receipt-observer-spec', query_receipt_observer_spec,
+     env: dxmt9_native_test_env)
+
 query_poll_receipt_bridge_spec = executable(
   'dxmt9-query-poll-receipt-bridge-spec', 'query_poll_receipt_bridge_spec.cpp',
   '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',

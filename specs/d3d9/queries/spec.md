@@ -388,6 +388,20 @@ bounded ordering evidence. The snapshot and Metal occlusion fixtures own
 independent polling and result/readback checks. Whole-game and performance
 qualification remain separate evidence gates in the verification gap.
 
+`DXMT9_QUERY_RECEIPT_OBSERVER` independently observes receipt attempts, not the
+mutable fallback provider. Its OFF instantiation removes all diagnostic phase,
+route and kind operations at compile time. Enabled fixed-size census includes
+missing target, non-raw admission, replay failure, supersession, recheck-not-ready,
+snapshot raw/eligibility/identity rejection, and handled results. Query kind is
+unknown until an immutable snapshot is qualified; diagnostics must not read
+mutable query state to fill gaps. Counts-only mode reads no clocks; sampled
+mode records one-in-64 disjoint elapsed phase intervals. Snapshot acquisition
+includes ledger and snapshot mutex work plus copying, not isolated lock wait.
+Backend pending does not establish which GPU dependency is blocking or GPU
+saturation. Aggregation occurs outside runtime ownership locks and after the
+normal attempt. It must preserve calls, output bytes, exceptions and HRESULTs,
+and may not trigger a drain, submit, retry or extra backend completion poll.
+
 `DXMT9_QUERY_SPLIT_OBSERVER` observes ordinary source publications by reason
 and completion-bearing tail command buffers handed to `QueueLifecycleController`.
 Its `command_buffer` category excludes mid-chunk sub-CB commits and initializer
