@@ -8587,6 +8587,9 @@ bool CommandQueue::setOcclusionScope(query::OcclusionScopeRef scope) noexcept {
 
     // Do this only after actual publication succeeds. An empty compatibility
     // writer is intentionally left uncommitted, so no fake seqId is emitted.
+    query::splitdiag::note(scope ? query::splitdiag::Kind::ScopeNonempty
+                                : query::splitdiag::Kind::ScopeEmpty,
+                          queryQueueIdentity_, lastCommittedSeqId_, hadCommands);
     occlusionScope_ = std::move(scope);
     return true;
   } catch (...) {

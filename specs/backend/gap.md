@@ -31,6 +31,12 @@ identical-policy drift prevents an FPS verdict. R660 final census confirms
 99.80% of Pending uses coverage; late CB/pass fragmentation and earlier stalls
 remain distinct attribution gaps. This is not stable non-regression evidence. See
 [H330](../../docs/perfomance/present-pacing/present-pacing-query-pending-publication.330.md).
+The [H331 diagnostic](../../docs/perfomance/present-pacing/present-pacing-stalker-scope-fragmentation.331.md)
+attributes the late SemanticBoundary publication population to successful
+occlusion scope replacements, not extra QueryEnd or FLUSH publication.
+Query-scope-aware encode-session composition remains unimplemented; preserving
+membership/visibility contributions, failure propagation and completion is a
+prerequisite. Diagnostic counters do not authorize removing these boundaries.
 
 R-BACK-2.15.5 known-setter nonconstant invalidation is the unconditional
 implementation; the 2026-09-17 consolidation removes its runtime opt-out.

@@ -11,6 +11,13 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H331](present-pacing-stalker-scope-fragmentation.331.md) connects the late
+STALKER publication explosion to occlusion membership: 54.34 SemanticBoundary
+publications/P match scope-change publications, while QueryEnd remains 1/P
+and FLUSH publication is zero. Scoped sources currently cannot share encode
+sessions. Pre-fragmentation app-thread CPU rises independently; Rosetta native
+stack attribution remains unqualified. Diagnostic figures are not FPS evidence.
+
 [H330](present-pacing-query-pending-publication.330.md) records post-Rosetta
 same-image controls: Pending OFF/ON 19.452/19.422 FPS; publication reuse
 has 0.812 ms/Present marking versus OFF controls 0.905/0.893. Identical-policy
