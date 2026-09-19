@@ -2297,6 +2297,7 @@ core::ChunkSlot& currentSlotUnlocked(CommandQueue& q) {
     // every producer/consumer surface and terminate before any release-build
     // dereference rather than returning an invalid reference.
     q.cpuReadyTape_.stopAdmission();
+    q.queryPendingTerminal_.store(true, std::memory_order_release);
     q.stop_ = true;
     q.writeCv_.notify_all();
     q.encodeCv_.notify_all();
@@ -5267,6 +5268,7 @@ CommandQueue::beginCpuReadyArenaSource(
         });
     if (testOnlyStopCpuReadyArenaAfterCompatibilityFlush_) {
       testOnlyStopCpuReadyArenaAfterCompatibilityFlush_ = false;
+      queryPendingTerminal_.store(true, std::memory_order_release);
       stop_ = true;
     }
     if (stop_) {
@@ -5426,6 +5428,7 @@ CommandQueue::beginCpuReadyArenaSources(
         });
     if (testOnlyStopCpuReadyArenaAfterCompatibilityFlush_) {
       testOnlyStopCpuReadyArenaAfterCompatibilityFlush_ = false;
+      queryPendingTerminal_.store(true, std::memory_order_release);
       stop_ = true;
     }
     if (stop_) {
@@ -7313,6 +7316,7 @@ CommandQueue::abortCpuReadyArenaBatch(
       owners[i - 1].emplace(std::move(*detached));
     }
     if (failStop) {
+      queryPendingTerminal_.store(true, std::memory_order_release);
       stop_ = true;
       cpuReadyTape_.stopAdmission();
       arenaBuildPoisoned_.store(true, std::memory_order_release);
@@ -7379,6 +7383,7 @@ CommandQueue::abortCpuReadyArenaBatch(
         }
       }
       if (rollbackFailed && !failStop) {
+        queryPendingTerminal_.store(true, std::memory_order_release);
         stop_ = true;
         cpuReadyTape_.stopAdmission();
         arenaBuildPoisoned_.store(true, std::memory_order_release);
@@ -7423,6 +7428,7 @@ void CommandQueue::abortCpuReadyArenaSource(
       activeArenaBuild_.store(nullptr, std::memory_order_release);
       arenaBuildContext_.reset();
     }
+    queryPendingTerminal_.store(true, std::memory_order_release);
     stop_ = true;
     cpuReadyTape_.stopAdmission();
     arenaBuildPoisoned_.store(true, std::memory_order_release);
@@ -8654,6 +8660,20 @@ query::Progress CommandQueue::queryProgress() noexcept {
 
 query::Poll CommandQueue::pollQueryFence(const query::EndReceipt& receipt,
                                         bool flush) noexcept {
+  if (query::coveredPendingEnabled()) {
+    const auto covered = queryPendingCovered_.load(std::memory_order_acquire);
+    const auto completed = completedSeqIdAcquire();
+    const auto uploads = queryInitializerSucceeded_.load(std::memory_order_acquire);
+    // Monotone terminal observations admit a control linearization point
+    // during these reads. A concurrent failure may overlap the return;
+    // success and initializer refresh ALWAYS take the locked path below.
+    const bool terminal = queryPendingTerminal_.load(std::memory_order_acquire) ||
+        arenaBuildPoisoned_.load(std::memory_order_acquire) ||
+        queueLifecycle_.queryCompletionFailed();
+    if (query::coveredPending(receipt.prefix, queryQueueIdentity_, covered,
+                             completed, uploads, terminal, bool(receipt.marker)))
+      return query::Poll::Pending;
+  }
   if (!query::polldiag::mode()) return pollQueryFenceImpl<false>(receipt, flush);
   return query::polldiag::observe(flush, [&] {
     return pollQueryFenceImpl<true>(receipt, flush);
@@ -8710,6 +8730,14 @@ query::Poll CommandQueue::pollQueryFenceImpl(const query::EndReceipt& receipt,
     const auto fence = receipt.snapshot();
     if (!queueLifecycle_.requestQuerySubmission(fence.sequence))
       return query::Poll::Failed;
+    if (query::coveredPendingEnabled() && !receipt.marker && !progress.failed) {
+      queryInitializerSucceeded_.store(std::max(
+          queryInitializerSucceeded_.load(std::memory_order_relaxed),
+          uploads.completed), std::memory_order_release);
+      queryPendingCovered_.store(std::max(
+          queryPendingCovered_.load(std::memory_order_relaxed), fence.sequence),
+          std::memory_order_release);
+    }
     // Publication/submission request never authorizes success. Re-poll the
     // actual completion frontiers on the next call.
     return query::Poll::Pending;
@@ -9741,6 +9769,7 @@ void CommandQueue::noteInitializerPendingUploads() noexcept {
 }
 
 void CommandQueue::requestSchedulingStopLocked() noexcept {
+  queryPendingTerminal_.store(true, std::memory_order_release);
   stop_ = true;
   wsiAdmissionStopped_.store(true, std::memory_order_release);
   wsiQuiescenceCv_.notify_all();

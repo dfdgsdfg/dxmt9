@@ -1,6 +1,72 @@
 # Read-mostly backend polling: design review
 
-Status: proposed; no runtime lock bypass or new verification claim.
+Status: implemented experimental candidate (`DXMT9_QUERY_COVERED_PENDING=1`),
+default OFF pending observer-OFF wild qualification.
+
+The selector is additionally disabled when `DXMT9_ASYNC_QUERY_FENCES=0`, so a
+signal-only initializer reference path cannot supply success certificates.
+
+## Implemented boundary
+
+`query::coveredPending` is the shared pure decision. A scalar, nonzero, eager
+receipt may return Pending without the queue mutex only when its incarnation
+matches, its ordinary prefix is at or below a durably covered prefix, ordinary GPU
+completion is still below the target, and its initializer prefix is already
+successfully completed. All markers, new/unvalidated prefixes, initializer-only
+receipts and possible successes take the original path. Non-FLUSH calls may
+reuse the same certificate but cannot create one.
+
+Only a successful locked FLUSH poll publishes coverage, after
+`requestQuerySubmission` returns (including notification for a new request).
+That owner serializes coverage publication; requested/submitted reuse under
+the same queue mutex cannot overtake another request's wake. Successful upload
+certificates come from `queryProgressUnlocked`, never the event signal alone.
+Both certificates use release/acquire and monotone prefixes. Combining two
+stale-low reads cannot invent coverage or successful uploads. No mutable
+initializer tracker or `stop_` bool is read by the bypass.
+
+Every production `CommandQueue::stop_ = true` site first publishes a sticky
+query terminal latch; controller poison publishes `queryCompletionFailed_`.
+The reader also checks atomic arena poison and completion failure. The latch
+is not cleared on thread restart, conservatively disabling the candidate for
+that incarnation. Terminal overlapping the control observations may linearize
+after this Pending result, just as a failure can overlap the old locked return.
+Acquire is not a promise of immediate observation across threads. Device reset,
+issue epoch, retained backend and output-byte gates remain in the existing
+snapshot/bridge wrapper. No successful result is authorized by cached state.
+
+The initializer tracker may discover a new unrelated upload error only when
+its authoritative owner polls; this candidate does not accelerate error
+discovery. It cannot bypass an unsatisfied initializer dependency. Once ordinary
+completion reaches the target, the original path refreshes initializer status.
+
+`QueryCoveredPending` separates Request, Wake, Grant, stale reads and decision;
+five mutations reject early coverage/request, early coverage/wake, invented
+upload success, ignored terminal and wrong incarnation. Its safety argument
+composes with the existing publication progress model; it does not prove C++
+cache fairness, driver error discovery, timing or FPS. Native exhaustive truth
+tables call the production predicate. The gated GPU fixture tests a real poll
+while another thread holds the queue mutex, one-FLUSH progress, invalid identity
+and initializer prefix, terminal rejection and exact 256-byte readback.
+
+The backend phase observer currently describes slow-path attempts when this
+candidate is enabled, not a complete poll census. Use the outer receipt census
+for total attempts. Wild/performance evidence remains open.
+
+## Verification record (2026-09-19)
+
+Base `c6baedeb` plus this implementation. Full native, x86_64 Unix (including
+install-name fixup), PE64 and PE32 builds pass. Native candidate-ON focused
+tests pass 7/7, reference/OFF lifecycle tests pass 8/8, and the explicit
+async-OFF policy gate passes 1/1. The x86_64 candidate predicate, gated GPU
+oracle and install-name audit pass 3/3. Full TLC passes in 295.05 seconds:
+65 safety, 5 progress and 157 expected-failure configurations (227 total),
+including the new five counterexamples. `git diff --check` passes.
+
+Local logs: `build/meson-logs/query-covered-{final-tests,off-tests,policy-test,
+x86-tests,tla}.log`. No wild run or FPS improvement is claimed. The GPU fixture
+proves 64 polls complete with the submission mutex held by the other thread;
+it does not prove public-wrapper wait freedom or every hardware failure mode.
 
 ## Motivation and scope
 
@@ -10,7 +76,7 @@ H326's sampled backend polling cost is dominated by queue mutex acquisition
 repeated observations, not deleting the persistent submission obligation.
 Neither percentage is a frame-time fraction or a measured FPS opportunity.
 
-## Current authority audit
+## Pre-change authority audit
 
 | State | Current owner/publication | Consequence |
 |---|---|---|

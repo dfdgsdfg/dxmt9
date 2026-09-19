@@ -34,8 +34,9 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 reviews publication, encode submission and finish reclamation holders separately
 from polling waiters. Coverage is partial and no waiter/holder join exists.
 The read-mostly follow-up is Pending-only with durable FLUSH coverage and locked
-success/initializer refresh; runtime lock bypass remains unimplemented and
-requires terminal/identity/publication model-code evidence.
+success/initializer refresh. The [covered-Pending candidate](../../../specs/d3d9/queries/read-mostly-polling.md)
+is now implemented default OFF with native/TLA and gated GPU evidence;
+observer-OFF wild qualification and performance evidence remain open.
 
 [H326 reference tails/backend poll split](present-pacing-query-backend-poll-cost.326.md)
 confirms late slowdown in retained WineD3D and DXVK/MoltenVK results; these are

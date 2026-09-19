@@ -3191,6 +3191,7 @@ void QueueLifecycleController::noteCpuReadyCapacityProgress() noexcept {
 
 void QueueLifecycleController::poisonTapeFailureLocked(
     std::source_location location) noexcept {
+  queryCompletionFailed_.store(true, std::memory_order_release);
   bool expected = false;
   if (firstPoisonOriginClaimed_.compare_exchange_strong(
           expected, true, std::memory_order_acq_rel,

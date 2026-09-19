@@ -10,12 +10,15 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Read-mostly backend query polling (2026-09-19)
 
-[Design review](../d3d9/queries/read-mostly-polling.md) maps the proposed
+[Design review](../d3d9/queries/read-mostly-polling.md) maps the experimental
 covered-Pending fast path to QueryPublicationFence, QueryInitializerFence and
-QueryReplayReceipt. Runtime behavior is unchanged. Existing models do not prove
-mixed atomic observations, terminal publication ordering, coverage-before-wake
-safety or cached initializer progress. Those model/native counterexamples and
-the C++ publication argument remain required before lock bypass. Queue mutex
+QueryReplayReceipt. The default-OFF candidate adds `QueryCoveredPending` safety
+and five counterexamples plus production predicate and real queue/GPU fixtures.
+The new model covers independent stale-low reads and rejects coverage-before-wake;
+it assumes authoritative terminal/epoch observations at the decision point.
+C++ memory order, eventual cache visibility and driver error discovery remain
+outside TLC. The publication argument is documented separately; observer-OFF wild
+qualification and performance evidence remain open. Queue mutex
 site statistics are partial owner evidence, not a complete waiter/holder join.
 
 ## Occlusion lifecycle and attachment preservation (2026-09-17)

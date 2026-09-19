@@ -1,4 +1,13 @@
 # Backend descriptor / pipeline / replay / hazard / capture / counter / render-pass specs.
+query_covered_pending_spec = executable(
+  'dxmt9-query-covered-pending-spec', 'query_covered_pending_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+test('dxmt9-query-covered-pending-spec', query_covered_pending_spec,
+     env: dxmt9_native_test_env)
+test('dxmt9-query-covered-pending-sync-disabled-spec', query_covered_pending_spec,
+     args: ['--expect-disabled'], env: dxmt9_native_test_env_vars + [
+       'DXMT9_QUERY_COVERED_PENDING=1', 'DXMT9_ASYNC_QUERY_FENCES=0'])
 query_backend_observer_spec = executable(
   'dxmt9-query-backend-observer-spec', 'query_backend_observer_spec.cpp',
   include_directories: dxmt9_inc, dependencies: dxmt9_util_dep,
@@ -103,6 +112,12 @@ query_initializer_spec = executable(
 )
 test('dxmt9-query-initializer-spec', query_initializer_spec,
      env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1', 'DXMT9_ASYNC_QUERY_FENCES=1'],
+     is_parallel: false, timeout: 30)
+test('dxmt9-query-covered-pending-gpu-spec', query_initializer_spec,
+     args: ['--covered-query'],
+     env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1',
+       'DXMT9_ASYNC_QUERY_FENCES=1', 'DXMT9_QUERY_COVERED_PENDING=1',
+       'DXMT9_COALESCE_QUERY_ENDS=0'],
      is_parallel: false, timeout: 30)
 test('dxmt9-query-end-coalescing-gpu-spec', query_initializer_spec,
      args: ['--coalesced-query'],

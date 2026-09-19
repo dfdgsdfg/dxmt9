@@ -51,6 +51,7 @@ normal_models=(
   PsoSlotPublication
   QuerySeqId
   QueryPublicationFence
+  QueryCoveredPending
   QueryReplayReceipt
   QueryInitializerFence
   QueryEndCoalescing
@@ -76,10 +77,10 @@ normal_models=(
   WsiPresenterReplacement
 )
 
-expected_normal_count=64
+expected_normal_count=65
 expected_progress_count=5
-expected_counterexample_count=152
-expected_cfg_count=221
+expected_counterexample_count=157
+expected_cfg_count=227
 progress_configs=(
   CpuPipelineLifecycle.progress
   DirectSourceLifecycle.progress
@@ -133,6 +134,11 @@ counterexample_models=(
   "QueryEndCoalescing|.stale.counterexample|Invariant BindingIdentity is violated"
   "QueryEndCoalescing|.pressure.counterexample|Temporal properties were violated"
   "QueryPublicationFence|.early-completion.counterexample|Invariant NoInventedCompletion is violated"
+  "QueryCoveredPending|.early-request.counterexample|Invariant CoverageSound is violated"
+  "QueryCoveredPending|.early-wake.counterexample|Invariant CoverageSound is violated"
+  "QueryCoveredPending|.upload.counterexample|Invariant UploadSound is violated"
+  "QueryCoveredPending|.terminal.counterexample|Invariant PendingSound is violated"
+  "QueryCoveredPending|.identity.counterexample|Invariant PendingSound is violated"
   "QueryPublicationFence|.drop-request.counterexample|Invariant StickyRequest is violated"
   "QueryPublicationFence|.old-issue.counterexample|Invariant CompletionSafety is violated"
   "QueryPublicationFence|.ignore-failure.counterexample|Invariant CompletionSafety is violated"

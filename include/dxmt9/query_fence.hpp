@@ -25,6 +25,17 @@ struct Progress {
 
 enum class Poll : std::uint8_t { Invalid, Failed, Pending, Complete };
 
+// QueryCoveredPending: only a previously validated, durably requested prefix
+// may bypass the submission lock. This predicate NEVER authorizes success.
+constexpr bool coveredPending(Fence fence, std::uint64_t queue,
+    std::uint64_t covered, std::uint64_t completed,
+    std::uint64_t initializerSucceeded, bool terminal,
+    bool hasMarker) noexcept {
+  return !terminal && !hasMarker && fence.valid() && fence.queue == queue &&
+      fence.sequence != 0 && fence.sequence <= covered &&
+      completed < fence.sequence && fence.initializer <= initializerSucceeded;
+}
+
 // QueryPublicationFence / Poll: publication alone never proves completion.
 // Terminal state wins over a high watermark (including an empty prefix).
 constexpr Poll classify(Fence fence, Progress progress) noexcept {

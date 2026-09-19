@@ -20,6 +20,15 @@ inline bool asynchronousFencesEnabled() noexcept {
   }();
   return enabled;
 }
+// Requires the successful-initializer tracker, not the signal-only reference.
+// Experimental until observer-OFF wild qualification; never bypass S_OK.
+inline bool coveredPendingEnabled() noexcept {
+  static const bool enabled = [] {
+    const char* value = std::getenv("DXMT9_QUERY_COVERED_PENDING");
+    return value && value[0] && value[0] != '0';
+  }();
+  return enabled && asynchronousFencesEnabled();
+}
 inline bool coalesceEndsEnabled() noexcept {
   static const bool enabled = [] {
     const char* value = std::getenv("DXMT9_COALESCE_QUERY_ENDS");

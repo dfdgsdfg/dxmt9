@@ -1423,6 +1423,13 @@ class CommandQueue {
   std::atomic<std::uint64_t> completedSeqId_{0};  // gpu-completed watermark
   static std::uint64_t allocateQueryQueueIdentity() noexcept;
   const std::uint64_t queryQueueIdentity_ = allocateQueryQueueIdentity();
+  // Monotone certificates, written under mutex_. Coverage is released only
+  // after requestQuerySubmission has installed a sticky target AND notified.
+  // Independent low/stale reads only force fallback. No compound Progress is
+  // reconstructed. Terminal is sticky even if worker threads restart.
+  std::atomic<std::uint64_t> queryPendingCovered_{0};
+  std::atomic<std::uint64_t> queryInitializerSucceeded_{0};
+  std::atomic<bool> queryPendingTerminal_{false};
 
   // TLA+: ProducerMarkReclaim!MapFastRead — the T2c lock-free watermark read.
   std::uint64_t completedSeqIdAcquire() const noexcept {

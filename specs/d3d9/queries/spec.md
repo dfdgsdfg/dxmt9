@@ -229,7 +229,8 @@ without depending on public COM references.
 
 ## 7. Published-prefix asynchronous completion
 
-Read-mostly polling is a proposed follow-up, not an implemented replacement.
+Read-mostly polling is a default-OFF experimental covered-Pending candidate,
+not a replacement for authoritative successful completion.
 See [the authority audit and model acceptance gate](read-mostly-polling.md).
 An ordinary completion acquire alone does not authorize bypassing terminal,
 initializer, identity or persistent FLUSH submission checks.
