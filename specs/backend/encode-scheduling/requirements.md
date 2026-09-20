@@ -993,6 +993,34 @@ proof. Synchronous table borrows must not escape validation. The independent
 source-derived coverage check must not be replaced by trusting the table under
 test. Resource pins and completion ownership remain separate from membership.
 
+Identity metadata construction must not imply execution-coordinator authority.
+The parallel coordinator is a logical owner, not a requirement to execute on
+the Replay thread. Before child effects, the owner must validate current
+source/session facts, establish exclusive parent/pass-action ownership, and
+retain source storage through child join. Work prepared upstream must not
+authorize query, initializer, capture, session or completion decisions whose
+facts are only stable at execution admission. Moving pure preparation between
+Replay and Encode must preserve these boundaries and the serial fallback.
+
+The target prepared-execution path must build a bounded, immutable
+`PreparedEncodePlan` alongside final Slot construction in Replay. It must own
+source/storage-qualified offsets and indices for stable resource access and
+candidate child ranges, not borrowed pointers or executable Metal authority.
+Slot and plan publication must be one failure-atomic handoff: preparation
+failure must either publish a complete serial-capable source without a prepared
+plan or publish neither; it must not expose a partial plan or lose/replay a
+command twice. Alias-dependent metadata may be prepared only with a stability
+contract lasting through consumption; otherwise it remains unresolved for
+Encode or rejects the prepared lane before effects.
+
+Encode must perform final admission against current session/preamble facts
+before dispatch. Plan storage must remain valid through child join, while GPU
+resource retirement remains governed separately by completion. A prepared
+plan must not authorize concurrent sources sharing mutable session or parent
+state. Promotion requires independent semantic refinement, fault/stale-identity
+coverage, non-vacuous exact GPU evidence and end-to-end supply measurements;
+reduced Encode time alone is insufficient.
+
 **R-BACK-2.72** Economics and selection must be deterministic checked fixed-
 point value transforms. Scores may use only bounded integer inputs captured in
 the policy snapshot; they must not depend on wallclock time, worker arrival,

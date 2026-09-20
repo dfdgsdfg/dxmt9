@@ -30,9 +30,25 @@ feeds source-derived coverage into the production certificate validator.
 Internal index numbers are not replay identity; canonical resource identities
 and read/write semantics are. Unknown identities, foreign table domains and
 omitted child reads reject. The synchronous index borrow is not retained by
-the certificate, workers or a future iteration. Moving table construction to
-Replay/Slot publication is a separate unimplemented step and must keep alias
-stability, failure-atomic publication and source-generation qualification.
+the certificate, workers or a future iteration. The selected next target is
+Replay-built `PreparedEncodePlan` publication alongside the final Slot, not a
+migration of execution coordination. This remains unimplemented. It must keep
+alias stability, failure-atomic publication and source-generation qualification.
+Encode retains final session/pass admission, child dispatch/join and parent
+ownership. Plans must be reconstructed from authenticated raw input on each
+fresh replay; precomputed plans must not bypass measured construction or serve
+as their own semantic oracle. The harness
+must count metadata preparation in the stage that executes it and include it
+in end-to-end comparisons; a lower Encode time alone does not qualify moving
+work onto a supply-limiting Replay thread.
+
+Use identical input and source boundaries for the existing Encode-prepared
+reference and the Replay-prepared candidate. Compare source-derived canonical
+accesses and ordered ranges, not internal index numbering. Exercise metadata
+allocation/capacity failures, stale identities, malformed offsets and partial
+publication before GPU comparison. Timing includes preparation, final admission,
+encoding, queue starvation/backpressure and retained plan capacity. Prebuilt-plan
+Encode-only timing is a separate microbenchmark, not end-to-end evidence.
 
 ### Iteration ownership
 

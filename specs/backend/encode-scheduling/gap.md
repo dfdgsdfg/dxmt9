@@ -22,10 +22,19 @@ The production resolver still independently re-reads and canonicalizes source
 accesses. Native exhaustive index/set refinement and producer/certificate
 fixtures cover unknown/stale identities, mismatched table domains, omitted
 reads, aliases and exact-capacity word boundaries. Admission remains 256;
-normal serial execution remains unchanged. Replay-owned table construction,
-Slot publication/alias-stability contracts, wide-resource GPU coverage and
+normal serial execution remains unchanged. Target upstream table construction
+requires Slot publication/alias-stability contracts; wide-resource GPU coverage and
 end-to-end performance qualification remain open. This step reduces proof
 storage, not yet resource extraction or linear lookup work.
+Target (not implemented): Replay builds a bounded `PreparedEncodePlan` during
+final Slot construction and publishes both transactionally. The existing
+Encode thread retains final admission, parent ownership, child dispatch/join
+and ordered submission. Required work: alias-stability qualification, owned
+offset/index storage, allocation-failure rollback and serial fallback,
+publication/reclaim refinement, independent fixed-input semantic and
+non-degenerate GPU oracles, and supply-critical-path measurements. Current
+synchronous index borrows cannot form the async handoff. This target does not
+enable concurrent sources or change the current default execution policy.
 Evidence: focused native/provider 5/5, final ownership test and x86_64 native
 spec pass; existing TLA regression passes (195.71s). The provider CLI includes
 nonzero parallel-worker execution and exact output for its existing bounded,

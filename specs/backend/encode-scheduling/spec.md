@@ -1559,11 +1559,84 @@ metadata or elimination of independent certificate re-resolution. Normal serial
 execution does not build this data unless the bounded observer is enabled.
 
 This first representation step remains encode-coordinator owned. It does not
-yet move canonicalization to Replay or persist indices in Slots. Such a move
-requires alias stability across publication, transactional capacity ownership,
+move canonicalization to Replay or persist indices in Slots. The next target
+is Replay-side prepared execution, subject to correctness and supply-cost
+qualification. It requires alias stability across publication, transactional capacity ownership,
 and capture/replay qualification; a table reference alone is not a resource
 pin. Lookup is currently an exact linear scan of the existing table, not a
 new hashing optimization or a CPU speedup claim.
+
+#### Metadata preparation versus execution coordination
+
+The coordinator is a logical execution owner, not the Replay thread. The
+current Encode coordinator remains responsible for admitting and executing a
+parallel pass. Building an identity table earlier does not move this authority.
+
+| Owner | Responsibility | Authority boundary |
+|---|---|---|
+| Replay / Slot producer | Ordered immutable command, draw/state/uniform data and retained source publication; in the target path, prepare stable resource-access metadata and candidate ranges during final Slot construction | May describe candidate ranges; cannot authorize current Metal session/pass actions or parallel child execution |
+| Encode coordinator | Resolve current session/preamble facts, validate source and access proofs, choose serial/parallel policy, own parent encoder/pass actions, dispatch and join children, then continue ordered submission | Sole logical owner of the affected parent/session; pre-effect rejection falls back, post-effect failure follows existing fail-stop rules |
+| Encode child workers | Read admitted immutable SoA and validated child inputs; maintain child-local binding state and encode assigned ranges | Cannot mutate the shared table, perform coordinator commands, submit/complete the parent, or reclaim source storage |
+
+The target moves source-stable resource extraction, canonicalization and
+candidate planning into Replay's existing Slot-construction work. Current
+production still performs this work in Encode; a separate preparation task is
+not part of this implementation target. Any async
+handoff requires owned generation-qualified storage, explicit publication and
+join/lifetime contracts; the current synchronous `ParallelPassReadIndices`
+borrow must not be forwarded to another thread. The coordinator must validate
+facts that become stable only after the source preamble: active session,
+pass actions, query/capture exclusions and initializer dependencies. Upstream
+metadata is evidence for admission, never a substitute for these checks.
+
+The execution coordinator remains on the existing Encode thread. It consumes
+a prepared plan, validates execution-time facts, owns parent/pass actions,
+dispatches child tasks and joins them before continuing ordered execution.
+Preparation of source N+1 may overlap encoding source N; this does not grant
+permission to encode multiple sources concurrently against shared mutable
+session or parent state. No dedicated coordinator thread is required.
+
+#### Target PreparedEncodePlan handoff (not yet implemented)
+
+`PreparedEncodePlan` is the design name, not an existing runtime type. Its
+source-stable payload contains qualified source/storage generation and replay
+bounds, a canonical identity table with read/write access indices, logical
+pass/control boundaries, candidate child ranges and structural coverage/work
+facts. It carries no Metal objects, lambdas, raw source pointers or final
+execution-admission token. Offsets resolve only within the owned published
+storage. Source-dependent alias mappings require a stable pinned backing
+identity or an explicit unresolved disposition; early lookup alone is not
+proof that an alias remains valid.
+
+Replay reserves bounded metadata storage, appends data while building the
+final Slot, and seals both in one publication transaction. Allocation,
+capacity or proof failure discards tentative preparation and preserves the
+complete serial-capable source, or aborts publication of both under the
+existing source failure contract. No partial plan becomes visible and no
+fallback may duplicate commands. Encode resolves offsets under the matching
+generation, checks final session/query/capture/initializer facts and either
+admits child execution or selects the serial path before effects. Failures
+after effects follow the existing fail-stop contract, not serial replay.
+
+The published plan is immutable through child join. Its storage cannot be
+recycled during encoding, and source retirement must additionally obey any
+existing longer-lived consumers. GPU resource pins/stamps continue to obey
+completion rather than CPU join. Current `ParallelPassReadIndices` borrows
+remain synchronous and are not the asynchronous handoff representation.
+
+The independent source-derived reference stays in the harness; promotion must
+not merely trust a prepared plan to certify itself. Verification must cover
+publication/rollback/reclaim interleavings, every metadata allocation fault,
+stale source/storage/alias identity, truncated offsets and omitted/duplicate
+access or child ranges. Bind the production predicates to bounded refinement,
+then compare supported fixed-input serial/parallel output with nonzero worker
+coverage. Existing output-degenerate fixtures are integration evidence only.
+
+Compare total Replay plus Encode work, queue starvation/backpressure,
+retained metadata and observed pipeline throughput, separately from preparation
+and admission scopes. Adding work to Replay can delay supply even when Encode
+time decreases. Select this target for implementation, but do not promote it
+or claim a speedup until the complete pipeline is qualified.
 
 The native exhaustive small-domain set refinement in
 `parallel_render_pass_spec.cpp` uses the production accumulator against an exact
