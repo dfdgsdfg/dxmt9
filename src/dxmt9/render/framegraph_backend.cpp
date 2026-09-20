@@ -1,6 +1,7 @@
 #include "framegraph_backend.hpp"
 
 #include "../dxmt9_draw_encoder.hpp"
+#include "../dxmt9_cpu_supply_trace.hpp"
 #include "../dxmt9_perf_counters.hpp"
 #include "../framegraph/fg_builder.hpp"
 #include "../framegraph/fg_linearizer.hpp"
@@ -424,6 +425,19 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
                                  encoders::EncodeChunkOptions&& options,
                                  std::span<const core::metalqueue::ResolvedPublishedSource>
                                      sessionLookaheadSources) {
+  // Cold observer identity is bound by the ordinary queue's backend-begin
+  // event. No queue pointer or diagnostic field enters EncodeContext/Slot.
+  auto encodePlannedChunk = [&](std::uint64_t disposition) {
+    if (::dxmt9::supply::enabled())
+      ::dxmt9::supply::record(::dxmt9::supply::Event::FramegraphEncodeBegin,
+                            static_cast<const IRenderBackend*>(this), seqId, disposition);
+    auto result = encoders::encodeChunk(ctx, slotIndex, payload, seqId,
+                                       std::move(options));
+    if (::dxmt9::supply::enabled())
+      ::dxmt9::supply::record(::dxmt9::supply::Event::FramegraphEncodeEnd,
+                            static_cast<const IRenderBackend*>(this), seqId, disposition);
+    return result;
+  };
   if (options.skipBackendPlanning ||
       (payload.isLegacy() && payload.legacyPayload()->occlusionScope)) {
     // The surrounding onSourceReady wrapper has already converted the live
@@ -431,8 +445,7 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
     // delegating so encodeChunk does not materialize the same lookahead twice.
     options.sessionLookaheadBorrows = nullptr;
     options.sessionLookaheadSources = sessionLookaheadSources;
-    return encoders::encodeChunk(ctx, slotIndex, payload, seqId,
-                                 std::move(options));
+    return encodePlannedChunk(1u); // Planning bypass: scoped/explicit skip.
   }
 
   // Side-effect-neutral observe + DAG export side-channel (R-BACK-39.7). This
@@ -755,8 +768,7 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
                         FinalNaturalOrder);
           options.sessionLookaheadBorrows = nullptr;
           options.sessionLookaheadSources = sessionLookaheadSources;
-          return encoders::encodeChunk(ctx, slotIndex, payload, seqId,
-                                       std::move(options));
+          return encodePlannedChunk(2u); // Validated replay-command plan.
         }
         recordSourceLocalReturnOutcome(
             perf::FramegraphSourceLocalReplayOutcome::FinalNaturalOrder);
@@ -782,8 +794,7 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
   }
   options.sessionLookaheadBorrows = nullptr;
   options.sessionLookaheadSources = sessionLookaheadSources;
-  return encoders::encodeChunk(ctx, slotIndex, payload, seqId,
-                               std::move(options));
+  return encodePlannedChunk(3u); // Natural-order final path.
 }
 
 }  // namespace dxmt9::render

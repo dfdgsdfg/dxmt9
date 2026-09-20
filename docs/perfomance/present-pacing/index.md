@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H338](present-pacing-stalker-framegraph-phases.338.md) narrows the blocking
+head further: framegraph planning/setup 0.337ms, encodeChunk 13.407ms and
+cleanup 0.005ms native CPU. All 55 target sources join; encodeChunk internals,
+not framegraph planning, are the next measured-owner target.
+
 [H337](present-pacing-stalker-encode-phases.337.md) partitions the blocking
 head's encode CPU: backend 13.965ms, prefetch 0.892ms, remaining 0.033ms.
 All 55 target sources have qualified phase endpoints; backend planning versus

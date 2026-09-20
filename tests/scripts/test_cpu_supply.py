@@ -38,6 +38,30 @@ def fixture():
 
 
 class TestSupply(unittest.TestCase):
+    def test_framegraph_partition(self):
+        begin = dict(kind='encode_backend_begin', owner=2, id=7, value=99,
+                     tid=3, wall_ns=1000000, cpu_ns=100000)
+        end = dict(begin, kind='encode_backend_end', wall_ns=2000000, cpu_ns=600000)
+        events = {r['kind']: r for r in (begin, end)}
+        a = dict(begin, kind='framegraph_encode_begin', owner=99, value=2,
+                 wall_ns=1200000, cpu_ns=200000)
+        b = dict(a, kind='framegraph_encode_end', wall_ns=1800000, cpu_ns=500000)
+        for disposition in (1, 2, 3):
+            phases = progress.framegraph_phases(events, {(99,7):[
+                dict(a, value=disposition), dict(b, value=disposition)]})
+            self.assertTrue(phases['qualified'])
+            self.assertAlmostEqual(phases['planning_setup']['cpu_ms'], .1)
+            self.assertAlmostEqual(phases['encode_chunk']['cpu_ms'], .3)
+            self.assertAlmostEqual(phases['cleanup_return']['cpu_ms'], .1)
+        for candidates in ({}, {(99,7):[a]}, {(98,7):[a,b]}, {(99,8):[a,b]}):
+            self.assertFalse(progress.framegraph_phases(events, candidates)['qualified'])
+        self.assertFalse(progress.framegraph_phases({}, {})['qualified'])
+        for invalid in ([a,a,b], [dict(a,tid=4),b], [a,dict(b,value=3)],
+                        [dict(a,wall_ns=1900000),b], [a,dict(b,cpu_ns=1)],
+                        [a,dict(b,cpu_ns=10**12)]):
+            with self.assertRaises(ValueError):
+                progress.framegraph_phases(events, {(99,7):invalid})
+
     def test_encode_phase_partition(self):
         names = ('encode_begin',) + progress.PHASES + ('encode_end',)
         events = {name: dict(tid=3, wall_ns=1000000+i*200000,
@@ -113,6 +137,16 @@ class TestSupply(unittest.TestCase):
         self.assertAlmostEqual(phases['backend']['cpu_ms'], .2)
         self.assertAlmostEqual(sum(v['cpu_ms'] for k, v in phases.items()
                                    if k != 'qualified'), .95)
+        nested = [dict(r, value=99) if r['kind']=='encode_backend_begin' else r
+                  for r in observed]
+        for kind, t in zip(progress.FRAMEGRAPH, (25_100_000, 25_300_000)):
+            nested.append(dict(kind=kind, wall_ns=t, cpu_ns=t//2+1,
+                               tid=3, owner=99, id=2, value=2, frame=2))
+        nested.sort(key=lambda r: r['wall_ns'])
+        fg = progress.analyze(meta, nested, {'pid':17}, [receipt])[
+            'target_sources'][0]['framegraph_phases']
+        self.assertTrue(fg['qualified'])
+        self.assertAlmostEqual(fg['encode_chunk']['cpu_ms'], .1)
         with self.assertRaises(ValueError):
             progress.analyze(meta, observed+[next(r for r in observed
                 if r['kind']=='encode_backend_begin')], {'pid':17}, [receipt])

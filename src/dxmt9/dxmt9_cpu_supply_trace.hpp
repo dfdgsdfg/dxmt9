@@ -22,6 +22,7 @@ enum class Event : std::uint32_t {
   PublishReason, PublishCommands, ScopeBoundary, QueryIssue,
   CompletionDequeue, CompletionObserved, Retire,
   EncodePrefetchBegin, EncodePrefetchEnd, EncodeBackendBegin, EncodeBackendEnd,
+  FramegraphEncodeBegin, FramegraphEncodeEnd,
 };
 
 // Call only behind enabled(). No output, allocation or sink mutex in the

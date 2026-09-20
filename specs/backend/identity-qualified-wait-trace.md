@@ -87,3 +87,14 @@ costs. Skipped prefetch still brackets the eligibility check. Missing phases
 unqualified, never zero-filled. Duplicate, reordered, cross-thread or invalid
 clock endpoints must be rejected. No global counter delta may be attributed
 to one source, and no per-draw diagnostic state is required.
+
+The ordinary backend-begin event may bind the backend interface identity in
+diagnostic storage. Framegraph encodeChunk entry/exit events must join through
+that identity, source sequence, thread and enclosing backend interval, never
+sequence alone. Dispositions distinguish planning bypass, activated replay plan
+and natural-order return. The partition is planning/setup, encodeChunk call
+and cleanup/return; planning/setup includes wrapper and observer work and is
+not an exclusive optimizer timer. Invalid plans or exceptions without both
+endpoints remain unqualified. Multiple calls, mismatched dispositions, threads
+or clocks must not yield a successful partition. No runtime identity fields,
+query semantics or scheduling policy may be added for this observation.

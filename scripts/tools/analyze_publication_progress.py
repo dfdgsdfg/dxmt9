@@ -13,6 +13,37 @@ STAGES = ('publish', 'encode_begin', 'encode_end', 'submit',
           'completion_dequeue', 'completion_observed', 'retire')
 PHASES = ('encode_prefetch_begin', 'encode_prefetch_end',
           'encode_backend_begin', 'encode_backend_end')
+FRAMEGRAPH = ('framegraph_encode_begin', 'framegraph_encode_end')
+
+
+def framegraph_phases(events, backend_events):
+    begin, end = events.get('encode_backend_begin'), events.get('encode_backend_end')
+    if not begin or not end or not begin.get('value'):
+        return dict(qualified=False, reason='missing ordinary backend binding')
+    candidates = backend_events.get((begin['value'], begin['id']), [])
+    # Backend object/sequence alone is not unique across shared-session calls.
+    # Require one pair fully nested in this queue/TID-bound ordinary call.
+    local = [r for r in candidates if begin['wall_ns'] <= r['wall_ns'] <= end['wall_ns']]
+    counts = collections.Counter(r['kind'] for r in local)
+    if any(counts[k] > 1 for k in FRAMEGRAPH):
+        raise ValueError('duplicate framegraph encode endpoints')
+    if any(counts[k] != 1 for k in FRAMEGRAPH):
+        return dict(qualified=False, reason='missing nested framegraph encode endpoints')
+    a = next(r for r in local if r['kind']==FRAMEGRAPH[0])
+    b = next(r for r in local if r['kind']==FRAMEGRAPH[1])
+    if a['value'] not in (1, 2, 3) or a['value'] != b['value']:
+        raise ValueError('invalid framegraph disposition')
+    endpoints = (begin, a, b, end)
+    if len({r['tid'] for r in endpoints}) != 1:
+        raise ValueError('framegraph endpoint thread mismatch')
+    parts = []
+    for x, y in zip(endpoints, endpoints[1:]):
+        wall, cpu = y['wall_ns']-x['wall_ns'], y['cpu_ns']-x['cpu_ns']
+        if wall < 0 or cpu < 0 or cpu > wall+100000:
+            raise ValueError('invalid framegraph endpoint clocks/order')
+        parts.append(dict(wall_ms=wall/1e6, cpu_ms=cpu/1e6))
+    return dict(qualified=True, disposition=a['value'], **dict(zip(
+        ('planning_setup', 'encode_chunk', 'cleanup_return'), parts)))
 
 
 def encode_phases(events):
@@ -43,7 +74,11 @@ def analyze(meta, rows, wait_meta, wait_rows, query=None):
         raise ValueError('no matched pending receipt')
     target = max(pending, key=lambda r: r['receipt_ns'])
     events = collections.defaultdict(dict)
+    backend_events = collections.defaultdict(list)
     for r in rows:
+        if r['kind'] in FRAMEGRAPH:
+            backend_events[(r['owner'], r['id'])].append(r)
+            continue
         if r['kind'] not in STAGES + PHASES + ('publish_reason', 'publish_commands'):
             continue
         key = (r['owner'], r['id'])
@@ -66,6 +101,7 @@ def analyze(meta, rows, wait_meta, wait_rows, query=None):
             commands=e.get('publish_commands', {}).get('value'),
             encode_cpu_ms=encode_cpu/1e6,
             encode_phases=encode_phases(e),
+            framegraph_phases=framegraph_phases(e, backend_events),
             stages_ms={a+'__'+b: (e[b]['wall_ns']-e[a]['wall_ns'])/1e6
                        for a, b in zip(STAGES, STAGES[1:])}))
     keys = {(r['queue_owner'], r['sequence']) for r in target['target']['publications']}

@@ -17,6 +17,11 @@ traces or unsupported Arena/session/lookahead paths are unqualified, not zero
 cost. Four extra events per ordinary source consume the same fixed sink;
 shorten the selected window if it overflows. These diagnostic scopes include
 observer overhead and do not constitute an observer-OFF FPS comparison.
+Framegraph additionally emits encodeChunk call endpoints bound through the
+ordinary backend-begin interface identity, sequence, TID and enclosing interval.
+The analyzer separates planning/setup, encodeChunk and cleanup/return, with
+bypass/activated-plan/natural-order dispositions. These two additional events
+per call use the same sink; old traces without the binding remain unqualified.
 
 | Var | Purpose | Default |
 |---|---|---|

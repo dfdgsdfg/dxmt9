@@ -109,6 +109,16 @@ the blocking head spends 13.965/14.890ms native CPU inside backend processing,
 0.892ms in prefetch and 0.033ms elsewhere. Backend planning versus actual
 encoding and observer-OFF cost remain open; see
 [H337](../../docs/perfomance/present-pacing/present-pacing-stalker-encode-phases.337.md).
+The follow-up observer binds FrameGraphBackend encodeChunk call endpoints to
+the enclosing ordinary source via backend interface identity, sequence and
+TID. Its analysis splits planning/setup, encodeChunk and cleanup/return and
+distinguishes bypass, activated replay plan and natural-order paths. Missing
+bindings/endpoints stay unqualified. R678 qualifies all 4337 complete sources
+and all 55 target publications. The blocking head has 0.337ms planning/setup,
+13.407ms encodeChunk and 0.005ms cleanup native CPU: encodeChunk owns 97.51%
+of backend CPU in that source. Its internal owners and observer-OFF performance
+remain open; see
+[H338](../../docs/perfomance/present-pacing/present-pacing-stalker-framegraph-phases.338.md).
 
 R-BACK-2.15.5 known-setter nonconstant invalidation is the unconditional
 implementation; the 2026-09-17 consolidation removes its runtime opt-out.

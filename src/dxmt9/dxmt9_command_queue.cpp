@@ -836,7 +836,8 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
                     };
                     if (::dxmt9::supply::enabled())
                       ::dxmt9::supply::record(::dxmt9::supply::Event::EncodeBackendBegin,
-                                            &queueLifecycle_, source.seqId);
+                                            &queueLifecycle_, source.seqId,
+                                            reinterpret_cast<std::uintptr_t>(backend_.get()));
                     result = backend_->onChunkReady(
                         ctx, slotIndex, slot, std::move(options));
                     if (::dxmt9::supply::enabled())

@@ -14,6 +14,11 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H338](present-pacing-stalker-framegraph-phases.338.md) attributes 97.51% of
+the selected blocking head's backend CPU to encodeChunk (13.407ms), versus
+0.337ms planning/setup and 0.005ms cleanup. The source-qualified partition is
+complete, but encodeChunk's internal owners and observer-OFF gains remain open.
+
 [H337](present-pacing-stalker-encode-phases.337.md) narrows the late STALKER
 blocking-head CPU owner: 13.965ms backend, 0.892ms prefetch and 0.033ms other
 work within a 14.890ms encode CPU scope. The 55-source pattern still fills the

@@ -18,7 +18,8 @@ EVENTS = ('present import_begin import_end raw_ready mutation_ready stateblock_r
           'replay_ledger writer_wait_begin writer_wait_end '
           'commit_wait_begin commit_wait_end publish_reason publish_commands '
           'scope_boundary query_issue completion_dequeue completion_observed retire '
-          'encode_prefetch_begin encode_prefetch_end encode_backend_begin encode_backend_end').split()
+          'encode_prefetch_begin encode_prefetch_end encode_backend_begin encode_backend_end '
+          'framegraph_encode_begin framegraph_encode_end').split()
 
 
 def load(path):
