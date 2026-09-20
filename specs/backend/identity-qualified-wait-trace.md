@@ -138,3 +138,15 @@ ordinary sources, emits no query target, and must not claim blocking-wait
 ownership or scene equivalence. It is mutually exclusive with `--query`.
 Normal receipt analysis must reject missing matched receipts rather than
 silently falling back to a source-local selection.
+
+Optional serial parallel-candidate observation must remain restricted to the
+bounded trace window and IdentitySerial execution. It must use the existing
+pure sealed-pass producer with truthful query/capture/initializer facts and
+diagnostic-owned scratch that never reaches parallel execution. Production
+partition selection and counters must remain unchanged. Pool/source/thread
+qualified begin/end and count/rejection endpoints join through the ordinary
+framegraph pool binding. Missing/duplicate/cross-thread/nonmonotonic endpoints
+must not yield a qualified result. Structural eligibility precedes executor
+economics and binding checks. Whole-source CPU may bound candidate work but
+must not be attributed to a subset of draws or divided by child count to claim
+a speedup. Observer timing is intrusive, not a calibrated subtraction.

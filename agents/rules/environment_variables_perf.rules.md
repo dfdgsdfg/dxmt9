@@ -9,6 +9,17 @@ perf-probe toolkit.
 
 ## Perf counters
 
+`DXMT9_CPU_SUPPLY_PARALLEL_OBSERVER=1` requires the CPU-supply trace and runs
+only inside its bounded Present window on IdentitySerial sources. It uses the
+same pure sealed-pass producer in separate diagnostic scratch, never publishes
+an executable parallel plan and never changes production parallel counters.
+Pool/sequence/TID events report query scope, structural candidates/eligible
+draws/children, rejection reasons and maximum within-pass child imbalance.
+These precede executor binding/economics checks: structural eligibility is not
+parallel execution eligibility. Observer CPU is bracketed; source CPU is only
+an upper bound for eligible work, never a measured parallelizable fraction.
+Missing/partial endpoints are rejected, not zero-filled. Default is OFF.
+
 The bounded CPU-supply trace also brackets ordinary Slot prefetch and backend
 processing using queue/sequence-qualified native CPU and wall endpoints.
 `analyze_publication_progress.py` partitions these with source preparation,

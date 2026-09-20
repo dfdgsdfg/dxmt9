@@ -26,6 +26,9 @@ enum class Event : std::uint32_t {
   FramegraphPoolBinding, ChunkBodyBegin, ChunkBodyEnd,
   ChunkCommandBegin, ChunkCommandEnd, ChunkSplitBegin, ChunkSplitEnd,
   EncodeDrawBegin, EncodeDrawEnd,
+  ParallelObserveBegin, ParallelObserveCounts, ParallelObserveDraws,
+  ParallelObserveChildren, ParallelObserveReject, ParallelObserveEnd,
+  ParallelObserveStatus, ParallelObserveImbalance,
 };
 
 inline bool commandSplitEnabled() noexcept {
@@ -43,6 +46,18 @@ inline bool drawSplitEnabled() noexcept {
   }();
   return value;
 }
+
+inline bool parallelObserveEnabled() noexcept {
+  static const bool value = [] {
+    const char* flag = std::getenv("DXMT9_CPU_SUPPLY_PARALLEL_OBSERVER");
+    return enabled() && flag && flag[0] && flag[0] != '0';
+  }();
+  return value;
+}
+
+// Call behind an enabled diagnostic gate. This is observation admission only,
+// not a source-lifetime or scheduler capability; endpoints may still clip.
+bool windowActive() noexcept;
 
 // Call only behind enabled(). No output, allocation or sink mutex in the
 // measured window. Timestamp/cpu/TID and a bounded event live in cold storage.

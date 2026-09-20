@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H344](present-pacing-stalker-parallel-observer.344.md) observes candidates
+without executing parallel work. The late window finds 40 structural passes
+in 20 sources, but incomplete resource sets and child imbalance constrain
+coverage. Candidate-source CPU is an upper bound, not predicted savings.
+
 [H343](present-pacing-stalker-capture-origin.343.md) attributes the first
 capture rejection to successful `VolumeTexture::LockBox`: volume capture is
 unsupported. Serial-run shadow zeros do not measure parallel eligibility;

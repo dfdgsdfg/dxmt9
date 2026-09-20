@@ -145,6 +145,16 @@ late-hitch attribution, lower-interference binding/uniform/driver attribution
 and pure product/FPS evidence remain open. See
 [H341](../../docs/perfomance/present-pacing/present-pacing-stalker-draw-phases.341.md).
 
+H344 adds bounded IdentitySerial-only structural candidate observation using
+the pure producer and separate non-executable scratch. R691 joins 1470 complete
+sources: 1126 query-scoped sources have zero structural successes; 20 unscoped
+sources contain 40 passes/24975 candidate draws. Their inclusive source CPU is
+233.533ms of 885.916ms, an upper bound including noncandidate work and observer
+cost, not speedup. Incomplete resource sets and child imbalance remain key
+admission questions; per-pass costs and executor economics/binding qualification
+remain open. See
+[H344](../../docs/perfomance/present-pacing/present-pacing-stalker-parallel-observer.344.md).
+
 R-BACK-2.15.5 known-setter nonconstant invalidation is the unconditional
 implementation; the 2026-09-17 consolidation removes its runtime opt-out.
 The GT2 dependency probe found identical fixed values in every comparable

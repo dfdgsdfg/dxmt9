@@ -2661,7 +2661,15 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
   // See `kParallelPassSeedActionEpoch`.
   const std::uint64_t parallelPassSeedActionEpoch =
       kParallelPassSeedActionEpoch;
-  if (parallelPartitionRequested) {
+  const bool observeSerialParallel =
+      ::dxmt9::supply::parallelObserveEnabled() &&
+      options.partitionExecutionMode == render::PartitionExecutionMode::IdentitySerial &&
+      ::dxmt9::supply::windowActive() &&
+      !(ctx.drawRecorder && ctx.drawRecorder->suppressCommandEncoderSideEffects);
+  if (parallelPartitionRequested || observeSerialParallel) {
+    if (observeSerialParallel)
+      ::dxmt9::supply::record(::dxmt9::supply::Event::ParallelObserveBegin,
+                            &ctx.pool, sourceSeqId, sourceOcclusionScope ? 1u : 0u);
     // SourcePayloadView cannot represent Query, UpdateTexture, or an ordered
     // control: those dispositions are resolved by the coordinator before this
     // call. Capture and initializer facts become stable only after the source
@@ -2684,10 +2692,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
         });
     // Pass-local sealing over the final validated replay order. Coordinator
     // commands never enter a child range and no borrowed view escapes this
-    // call. Identity/serial modes never pay this proof cost; parallel mode
-    // needs the same snapshots even when perf counters are disabled.
-    const auto observation = produceSealedParallelPassSnapshots(
-        SealedParallelPassSnapshotInput{
+    // call. Identity/serial modes pay this proof cost only for the bounded
+    // diagnostic; parallel execution needs snapshots even without counters.
+    const auto snapshotInput = SealedParallelPassSnapshotInput{
             .stream = &partitionReplayStream,
             .ranges = {},
             .proofs = ParallelPassStaticProofInput{
@@ -2705,11 +2712,50 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
             .sourceStartsPass = options.session == nullptr,
             .sourceEndsPass = !(options.deferSessionFinalization &&
                                 options.session != nullptr),
-            .drawQuantum = parallelPassDrawQuantum,
-        },
-        parallelPassShadows);
-    if (perf::enabled()) {
-      perf::countParallelPassShadow(observation);
+            .drawQuantum = observeSerialParallel
+                ? encoders::resolveParallelPassDrawQuantumFromEnv()
+                : parallelPassDrawQuantum,
+        };
+    if (observeSerialParallel) {
+      // Diagnostic-only storage must never reach parallelPassForReplayOrdinal
+      // or tryEncodeParallelPass. The executable batch remains empty.
+      thread_local SealedParallelPassSnapshotBatch diagnosticSnapshots;
+      diagnosticSnapshots.reset();
+      const auto observed = produceSealedParallelPassSnapshots(
+          snapshotInput, diagnosticSnapshots);
+      using E = ::dxmt9::supply::Event;
+      const auto emit = [&](E event, std::uint64_t value) {
+        ::dxmt9::supply::record(event, &ctx.pool, sourceSeqId, value);
+      };
+      emit(E::ParallelObserveCounts,
+           (std::uint64_t(observed.candidateCount) << 32) | observed.sealedCount);
+      emit(E::ParallelObserveDraws, observed.drawCount);
+      emit(E::ParallelObserveChildren, observed.childCount);
+      emit(E::ParallelObserveStatus,
+           (std::uint64_t(observed.considered) << 32) |
+               static_cast<std::uint32_t>(observed.fallback));
+      std::uint64_t maxImbalance = 0;
+      for (const auto& pass : diagnosticSnapshots.view()) {
+        if (pass.childCount < 2) continue;
+        auto low = pass.childDrawCounts[0];
+        auto high = low;
+        for (std::uint32_t i = 1; i < pass.childCount; ++i) {
+          low = std::min(low, pass.childDrawCounts[i]);
+          high = std::max(high, pass.childDrawCounts[i]);
+        }
+        maxImbalance = std::max(maxImbalance, high - low);
+      }
+      emit(E::ParallelObserveImbalance, maxImbalance);
+      for (std::size_t reason = 0; reason < observed.rejectionCounts.size(); ++reason)
+        if (observed.rejectionCounts[reason])
+          emit(E::ParallelObserveReject,
+               (std::uint64_t(reason) << 32) | observed.rejectionCounts[reason]);
+      diagnosticSnapshots.reset();
+      emit(E::ParallelObserveEnd, observed.eligibleCount);
+    } else {
+      const auto observation = produceSealedParallelPassSnapshots(
+          snapshotInput, parallelPassShadows);
+      if (perf::enabled()) perf::countParallelPassShadow(observation);
     }
 
   }

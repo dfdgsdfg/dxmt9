@@ -22,7 +22,10 @@ EVENTS = ('present import_begin import_end raw_ready mutation_ready stateblock_r
           'framegraph_encode_begin framegraph_encode_end '
           'framegraph_pool_binding chunk_body_begin chunk_body_end '
           'chunk_command_begin chunk_command_end chunk_split_begin chunk_split_end '
-          'encode_draw_begin encode_draw_end').split()
+          'encode_draw_begin encode_draw_end '
+          'parallel_observe_begin parallel_observe_counts parallel_observe_draws '
+          'parallel_observe_children parallel_observe_reject parallel_observe_end '
+          'parallel_observe_status parallel_observe_imbalance').split()
 
 
 def load(path):

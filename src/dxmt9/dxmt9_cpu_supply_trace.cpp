@@ -104,6 +104,12 @@ Sink& sink() noexcept {
 }
 }  // namespace
 
+bool windowActive() noexcept {
+  auto& s = sink();
+  const auto frame = s.frame.load(std::memory_order_relaxed);
+  return s.rows && !s.finished.load() && frame >= s.first && frame <= s.last;
+}
+
 void record(Event event, const void* owner, std::uint64_t id,
             std::uint64_t value) noexcept {
   auto& s = sink();

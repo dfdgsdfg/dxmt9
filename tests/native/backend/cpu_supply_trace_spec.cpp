@@ -6,7 +6,9 @@
 
 int main() {
   using namespace dxmt9::d3d9;
+  if (dxmt9::supply::windowActive()) return 4;
   dxmt9::supply::present(1);
+  // Failed/existing output admission may keep the sink inactive in-window.
   dxmt9::supply::record(dxmt9::supply::Event::ImportBegin, nullptr);
   const auto start = std::chrono::steady_clock::now();
   volatile std::uint64_t work = 1;
@@ -36,5 +38,6 @@ int main() {
   if (!popped) return 3;
   dxmt9::supply::present(2);
   dxmt9::supply::present(4);
+  if (dxmt9::supply::windowActive()) return 6;
   return 0;
 }

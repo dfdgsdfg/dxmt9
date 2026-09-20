@@ -1,6 +1,7 @@
 import importlib.util
 from pathlib import Path
 import tempfile
+import re
 import sys
 import unittest
 
@@ -38,6 +39,57 @@ def fixture():
 
 
 class TestSupply(unittest.TestCase):
+    def test_parallel_observer_is_structural_and_fail_closed(self):
+        begin = dict(kind='framegraph_encode_begin', tid=3, wall_ns=1000, cpu_ns=500)
+        end = dict(begin, kind='framegraph_encode_end', wall_ns=10000, cpu_ns=5000)
+        rows = [dict(begin, kind='parallel_observe_'+kind, value=value,
+                     wall_ns=2000+i*500, cpu_ns=1000+i*250)
+                for i,(kind,value) in enumerate((
+                    ('begin',0), ('counts',(2<<32)|2), ('draws',256),
+                    ('children',4), ('status',1<<32), ('imbalance',0), ('end',2)))]
+        result = progress.parallel_observation(begin,end,rows)
+        self.assertEqual(result['structural_eligible'],2)
+        self.assertIn('not eligible-draw CPU',result['qualification'])
+        self.assertFalse(progress.parallel_observation(begin,end,[])['qualified'])
+        rejected = [dict(r, value=(1 if r['kind']=='parallel_observe_begin' else
+                    (18 if r['kind']=='parallel_observe_status' else 0))) for r in rows]
+        result = progress.parallel_observation(begin,end,rejected)
+        self.assertTrue(result['query_scoped'])
+        self.assertEqual(result['structural_eligible'],0)
+        self.assertEqual(result['fallback'],'query_state')
+        for changed in (rows[:-1], rows+[rows[-1]],
+                        [dict(r,tid=4) if i==2 else r for i,r in enumerate(rows)],
+                        [dict(rows[0],value=1)]+rows[1:],
+                        rows[:-1]+[dict(rows[-1],value=3)]):
+            with self.assertRaises(ValueError):
+                progress.parallel_observation(begin,end,changed)
+
+    def test_parallel_observer_storage_is_not_executable(self):
+        source = (ROOT/'src/dxmt9/dxmt9_draw_encoder_chunk.mm').read_text()
+        block = source.split('if (observeSerialParallel) {',1)[1].split('\n    } else {',1)[0]
+        self.assertIn('snapshotInput, diagnosticSnapshots',block)
+        self.assertNotIn('snapshotInput, parallelPassShadows',block)
+        self.assertNotIn('tryEncodeParallelPass(',block)
+        self.assertNotIn('countParallelPassShadow(',block)
+        self.assertIn('IdentitySerial &&',source)
+        header = (ROOT/'src/dxmt9/dxmt9_parallel_render_pass.hpp').read_text()
+        enum = header.split('enum class SealedParallelPassSnapshotFallback',1)[1].split('{',1)[1].split('}',1)[0]
+        names = [s.strip() for s in enum.split(',') if s.strip() and s.strip() != 'Count']
+        self.assertEqual([re.sub(r'(?<!^)(?=[A-Z])','_',n).lower() for n in names],
+                         progress.PARALLEL_REASONS)
+
+    def test_parallel_summary_does_not_price_draw_subset(self):
+        observation = dict(qualified=True, query_scoped=False, structural_eligible=1,
+                           structural_draws=128, observer_cpu_ms=2, rejections={})
+        source = dict(encode_cpu_ms=20, framegraph_phases=dict(
+            chunk_phases=dict(parallel_observation=observation)))
+        summary = progress.parallel_summary([source,dict(encode_cpu_ms=100)])
+        group = summary['groups']['structural_candidate_sources']
+        self.assertEqual(group['inclusive_encode_cpu_ms'],20)
+        self.assertEqual(group['observer_cpu_ms'],2)
+        self.assertEqual(summary['unqualified_sources'],1)
+        self.assertIn('not predicted savings',summary['qualification'])
+
     def test_nested_encode_draw_partition(self):
         a = dict(kind='chunk_body_begin',tid=3,wall_ns=1000000,cpu_ns=500000,value=3)
         b = dict(a,kind='chunk_body_end',wall_ns=3000000,cpu_ns=1500000)

@@ -18,6 +18,64 @@ CHUNK_BODY = ('chunk_body_begin', 'chunk_body_end')
 COMMAND_EVENTS = ('chunk_command_begin', 'chunk_command_end',
                   'chunk_split_begin', 'chunk_split_end')
 DRAW_EVENTS = ('encode_draw_begin', 'encode_draw_end')
+PARALLEL_EVENTS = tuple(k for k in supply.EVENTS if k.startswith('parallel_observe_'))
+PARALLEL_REASONS = ('none plan_missing plan_not_validated replay_invalid '
+    'unsealed_start unsealed_end coordinator_command non_child_draw_run '
+    'no_two_child_work planner_invariant child_capacity pass_capacity '
+    'attachment_mismatch resource_set_incomplete resource_identity_proof '
+    'resource_hazard render_route pass_action_epoch query_state update_texture_state '
+    'capture_state initializer_state ordered_control_state sidecar_state '
+    'first_draw_snapshot').split()
+
+
+def parallel_observation(begin, end, rows):
+    local = sorted((r for r in rows if r['kind'] in PARALLEL_EVENTS),
+                   key=lambda r:r['wall_ns'])
+    if not local:
+        return dict(qualified=False, reason='parallel observer disabled or outside window')
+    counts = collections.Counter(r['kind'] for r in local)
+    required = set(PARALLEL_EVENTS)-{'parallel_observe_reject'}
+    if any(counts[k] != 1 for k in required):
+        raise ValueError('incomplete/duplicate parallel observation')
+    if (local[0]['kind'] != 'parallel_observe_begin' or
+            local[-1]['kind'] != 'parallel_observe_end'):
+        raise ValueError('parallel observation endpoint order')
+    previous = begin
+    for row in local+[end]:
+        if (row['tid'] != begin['tid'] or row['wall_ns'] < previous['wall_ns'] or
+                row['cpu_ns'] < previous['cpu_ns']):
+            raise ValueError('parallel observation clocks/thread')
+        previous = row
+    values = {r['kind'].removeprefix('parallel_observe_'):r['value'] for r in local}
+    status, fallback = values['status'] >> 32, values['status'] & 0xffffffff
+    if status not in (0,1) or fallback >= len(PARALLEL_REASONS) or values['begin'] not in (0,1):
+        raise ValueError('invalid parallel observation classification')
+    rejects = {}
+    for row in local:
+        if row['kind'] != 'parallel_observe_reject': continue
+        reason, count = row['value'] >> 32, row['value'] & 0xffffffff
+        if not 0 < reason < len(PARALLEL_REASONS) or not count or reason in rejects:
+            raise ValueError('invalid/duplicate parallel rejection')
+        rejects[reason] = count
+    candidates, sealed = values['counts'] >> 32, values['counts'] & 0xffffffff
+    eligible = values['end']
+    if (eligible > sealed or sealed > candidates or values['children'] < 2*eligible or
+            (eligible and values['draws'] < values['children']) or
+            values['imbalance'] > values['draws'] or
+            (not status and (candidates or sealed or eligible or rejects)) or
+            (not eligible and (values['draws'] or values['children'] or values['imbalance'])) or
+            (values['begin'] and eligible)):
+        raise ValueError('invalid parallel candidate counts')
+    wall = local[-1]['wall_ns']-local[0]['wall_ns']
+    cpu = local[-1]['cpu_ns']-local[0]['cpu_ns']
+    if cpu > wall+100000: raise ValueError('invalid parallel observer CPU clock')
+    return dict(qualified=True, query_scoped=bool(values['begin']), considered=bool(status),
+        fallback=PARALLEL_REASONS[fallback], candidates=candidates, sealed=sealed,
+        structural_eligible=eligible, structural_draws=values['draws'],
+        children=values['children'], max_child_draw_imbalance=values['imbalance'],
+        rejections={PARALLEL_REASONS[k]:v for k,v in rejects.items()},
+        observer_cpu_ms=cpu/1e6, observer_wall_ms=wall/1e6,
+        qualification='Structural only; excludes executor economics/binding gates; source CPU is not eligible-draw CPU')
 
 
 def draw_phases(begin, end, candidates, draw_run):
@@ -141,6 +199,7 @@ def chunk_phases(begin, end, bindings, chunk_events):
             raise ValueError('invalid chunk body clocks/order')
         parts.append(dict(wall_ms=wall/1e6, cpu_ms=cpu/1e6))
     return dict(qualified=True,
+        parallel_observation=parallel_observation(begin, end, local),
         command_phases=command_phases(endpoints[1], endpoints[2], local), **dict(zip(
         ('setup_partition', 'command_body', 'finalize_return'), parts)))
 
@@ -197,6 +256,30 @@ def encode_phases(events):
         intervals)))
 
 
+def parallel_summary(sources):
+    qualified = []
+    for source in sources:
+        observation = source.get('framegraph_phases',{}).get('chunk_phases',{}).get('parallel_observation',{})
+        if observation.get('qualified'):
+            qualified.append((source,observation))
+    groups = {}
+    for name, predicate in (
+            ('query_scoped',lambda o:o['query_scoped']),
+            ('structural_candidate_sources',lambda o:o['structural_eligible'] > 0),
+            ('unscoped_no_candidate',lambda o:not o['query_scoped'] and not o['structural_eligible'])):
+        selected = [(s,o) for s,o in qualified if predicate(o)]
+        groups[name] = dict(sources=len(selected),
+            inclusive_encode_cpu_ms=sum(s['encode_cpu_ms'] for s,o in selected),
+            observer_cpu_ms=sum(o['observer_cpu_ms'] for s,o in selected),
+            structural_passes=sum(o['structural_eligible'] for s,o in selected),
+            structural_draws=sum(o['structural_draws'] for s,o in selected))
+    rejections = collections.Counter()
+    for _,o in qualified: rejections.update(o['rejections'])
+    return dict(qualified_sources=len(qualified), unqualified_sources=len(sources)-len(qualified),
+        groups=groups, rejections=dict(rejections),
+        qualification='Inclusive source CPU includes observer and noncandidate work; candidate-source CPU is an upper bound, not predicted savings')
+
+
 def analyze(meta, rows, wait_meta, wait_rows, query=None, source_only=False):
     if source_only and query is not None:
         raise ValueError('source-only analysis cannot claim a query target')
@@ -210,7 +293,7 @@ def analyze(meta, rows, wait_meta, wait_rows, query=None, source_only=False):
     backend_events = collections.defaultdict(list)
     chunk_events = collections.defaultdict(list)
     for r in rows:
-        if r['kind'] in CHUNK_BODY + COMMAND_EVENTS + DRAW_EVENTS:
+        if r['kind'] in CHUNK_BODY + COMMAND_EVENTS + DRAW_EVENTS + PARALLEL_EVENTS:
             chunk_events[(r['owner'], r['id'])].append(r)
             continue
         if r['kind'] in FRAMEGRAPH + ('framegraph_pool_binding',):
@@ -246,6 +329,7 @@ def analyze(meta, rows, wait_meta, wait_rows, query=None, source_only=False):
             raise ValueError('no complete ordinary sources')
         return dict(target=None, target_sources=[max(sources,key=lambda s:s['encode_cpu_ms'])],
             complete_sources=sources, incomplete_source_count=len(events)-len(sources),
+            parallel_summary=parallel_summary(sources),
             selection='largest encode CPU among complete ordinary sources; not a blocking-receipt selection',
             qualification='Source-local timing only; no query wait ownership or scene equivalence claim')
     keys = {(r['queue_owner'], r['sequence']) for r in target['target']['publications']}
@@ -272,6 +356,7 @@ def analyze(meta, rows, wait_meta, wait_rows, query=None, source_only=False):
     return dict(target=target, target_sources=target_sources,
         target_missing_source_stages=len(keys)-len(target_sources),
         query_issues=issues, scope_boundaries=scopes, cap_waits=relief,
+        parallel_summary=parallel_summary(sources),
         complete_sources=sources, incomplete_source_count=len(events)-len(sources),
         qualification='Ordinary source stages only; encode CPU uses same-thread endpoints and includes prefetch/backend work, not only draw encoding; retirement in wait interval is not OS wake identity; elapsed stages across sources overlap')
 

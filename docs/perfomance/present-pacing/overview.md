@@ -14,6 +14,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H344](present-pacing-stalker-parallel-observer.344.md) finds 40 structural
+parallel candidates / 24975 draws in 20 of 1470 late sources while retaining
+serial execution. Candidate-bearing sources contain at most 26.36% of observed
+encode CPU, including rejected work and observation. Incomplete resource-set
+causes and child imbalance are the next admission targets; parallel speedup
+and the late blocking-head reproduction remain unproved.
+
 [H343](present-pacing-stalker-capture-origin.343.md) identifies volume locking
 as the first STALKER capture blocker. Complete volume capture/replay is a real
 grammar extension, not an admission-flag fix. Existing shadow counters run
