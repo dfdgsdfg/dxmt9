@@ -7,9 +7,9 @@
 #include <new>
 #include <pthread.h>
 #include <time.h>
+#include <unistd.h>
 #if defined(__APPLE__)
 #include <libproc.h>
-#include <unistd.h>
 #endif
 
 namespace dxmt9::supply {
@@ -70,14 +70,14 @@ struct Sink {
   }
   void finish(bool closed) noexcept {
     if (finished.exchange(true) || !file) return;
-    const auto count = next.load();
     std::uint64_t incomplete = writers.load();
+    const auto count = next.load();
     for (std::size_t i = 0; i < count && i < kCapacity; ++i) {
       if (!rows[i].ready.load(std::memory_order_acquire)) ++incomplete;
     }
-    std::fprintf(file, "# cpu-supply-v2 first=%llu last=%llu closed=%u overflow=%llu incomplete=%llu cpu_clock=1\n",
+    std::fprintf(file, "# cpu-supply-v2 first=%llu last=%llu closed=%u overflow=%llu incomplete=%llu cpu_clock=1 pid=%d\n",
         first, last, closed ? 1u : 0u,
-        count > kCapacity ? count - kCapacity : 0ull, incomplete);
+        count > kCapacity ? count - kCapacity : 0ull, incomplete, getpid());
     std::fprintf(file, "wall_ns,cpu_ns,tid,owner,id,value,frame,event\n");
     for (std::size_t i = 0; i < count && i < kCapacity; ++i) {
       const auto& r = rows[i];

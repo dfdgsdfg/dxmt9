@@ -18,6 +18,7 @@ enum class Event : std::uint32_t {
   Present, ImportBegin, ImportEnd, RawReady, MutationReady, StateBlockReady,
   ReplayBegin, ReplayEnd, QueueEmpty, QueueReserved, QueueReady,
   PopAttempt, PopWait, PopWake, Publish, EncodeBegin, EncodeEnd, Submit,
+  ReplayLedger, WriterWaitBegin, WriterWaitEnd, CommitWaitBegin, CommitWaitEnd,
 };
 
 // Call only behind enabled(). No output, allocation or sink mutex in the

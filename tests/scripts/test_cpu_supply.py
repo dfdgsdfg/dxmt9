@@ -1,12 +1,16 @@
 import importlib.util
 from pathlib import Path
 import tempfile
+import sys
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location('supply', ROOT/'scripts/tools/analyze_cpu_supply.py')
 supply = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(supply)
+sys.path.insert(0, str(ROOT/'scripts/tools'))
+import join_replay_wait_trace as joiner
+import summarize_guest_pc_window as guest
 
 
 def fixture():
@@ -33,6 +37,63 @@ def fixture():
 
 
 class TestSupply(unittest.TestCase):
+    def test_guest_pc_window_is_not_cpu(self):
+        def group(frame, samples):
+            return (f'[dxmt9-perf-frame frame={frame} wall_ms=1]\n'
+                    f'[dxmt9-pe-sampler] presents={frame} samples={samples} '
+                    'suspend_failures=0 ctx_failures=0 resume_failures=0 selfpc_coverage=1\n'
+                    f'[dxmt9-pe-sampler] module=xrEngine.exe samples={samples}\n'
+                    '[dxmt9-pe-sampler] selfpc_module=d3d9.dll\n'
+                    '[dxmt9-pe-sampler] selfpc_overflow=0\n'
+                    '[dxmt9-pe-sampler] selfpc_summary mode=full rows=0 used=0 '
+                    'self_samples=0 reported_samples=0 omitted_samples=0 overflow_samples=0 complete=1\n')
+        text = group(1800, 10)+group(2000, 20)
+        self.assertEqual(guest.summarize(text, 1800, 2100)['samples'], 10)
+        truncated_modules = text.replace('module=xrEngine.exe samples=10',
+                                         'module=xrEngine.exe samples=9').replace(
+                                         'module=xrEngine.exe samples=20',
+                                         'module=xrEngine.exe samples=17')
+        residual = guest.summarize(truncated_modules, 1800, 2100)
+        self.assertEqual(next(r['samples'] for r in residual['modules']
+                              if r['module'] == 'unreported-module-tail'), 2)
+        with self.assertRaises(ValueError):
+            guest.summarize(group(1800, 10)+group(2000, 20).replace(
+                'module=xrEngine.exe', 'module=xrRender_R2.dll'), 1800, 2100)
+        with self.assertRaises(ValueError):
+            guest.summarize(text.replace('complete=1', 'complete=0'), 1800, 2100)
+        with self.assertRaises(ValueError):
+            guest.summarize(text+'target_thread_mismatch', 1800, 2100)
+
+    def test_receipt_replay_join(self):
+        meta, rows = fixture()
+        meta['pid'] = 17
+        for kind, t in [('commit_wait_begin', 22_000_000), ('commit_wait_end', 23_000_000)]:
+            rows.append(dict(kind=kind, event=supply.EVENTS.index(kind),
+                wall_ns=t, cpu_ns=t//2+1, tid=2, owner=2, id=2, value=31, frame=2))
+        for r in list(rows):
+            if r['kind'] == 'replay_begin':
+                rows.append(dict(r, kind='replay_ledger', event=18,
+                                 wall_ns=r['wall_ns']+1, value=9))
+        rows.sort(key=lambda r: r['wall_ns'])
+        receipt = dict(site=0, waits=1, owner=9, query=54, first_frame=2,
+                       completed_before=1, raw_before=2, acquired_ns=1, end_ns=2)
+        result = joiner.join({'pid':17}, [receipt], meta, rows)
+        self.assertEqual(result['matched_targets'], 1)
+        target = result['receipts'][0]['target']
+        self.assertEqual(target['publications'][0]['sequence'], 2)
+        self.assertEqual(target['wall_ns'], 2_900_000)
+        self.assertEqual(target['queue_wait_ns'], 1_000_000)
+        with self.assertRaises(ValueError):
+            joiner.join({'pid':17}, [receipt], meta,
+                        [r for r in rows if r['kind'] != 'commit_wait_end'])
+        receipt['owner'] = 10
+        self.assertEqual(joiner.join({'pid':17}, [receipt], meta, rows)['matched_targets'], 0)
+        with self.assertRaises(ValueError):
+            joiner.join({'pid':18}, [receipt], meta, rows)
+        with self.assertRaises(ValueError):
+            joiner.join({'pid':17}, [receipt], meta, rows +
+                        [next(r for r in rows if r['kind']=='replay_ledger')])
+
     def test_arrival_limited(self):
         jobs = [(0, 0, 2), (10, 10, 12), (20, 20, 22)]
         for factor in (1, .5, 0):

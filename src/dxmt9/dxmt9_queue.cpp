@@ -3381,7 +3381,15 @@ bool QueueLifecycleController::ensureWriterSlot(std::unique_lock<std::mutex>& lo
     }
     dxmt9::noteQueueMutexSegmentIfEnabled("ensure_writer_slot", qmxEnabled,
                                           qmxSegStart);
+    if (::dxmt9::supply::enabled())
+      ::dxmt9::supply::record(::dxmt9::supply::Event::WriterWaitBegin,
+                            this, submissionBinding_.queryQueueIdentity,
+                            slots[*writeIndex].seqId);
     writeCv->wait(lock);
+    if (::dxmt9::supply::enabled())
+      ::dxmt9::supply::record(::dxmt9::supply::Event::WriterWaitEnd,
+                            this, submissionBinding_.queryQueueIdentity,
+                            slots[*writeIndex].seqId);
     qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
                              : std::chrono::steady_clock::time_point{};
   }
@@ -3601,7 +3609,15 @@ bool QueueLifecycleController::commitCurrentChunk(
   dxmt9::noteQueueMutexSegmentIfEnabled("commit_current_chunk/pre_wait",
                                         qmxEnabled, qmxSegStart);
   const auto waitStarted = std::chrono::steady_clock::now();
+  if (waitNeeded && ::dxmt9::supply::enabled())
+    ::dxmt9::supply::record(::dxmt9::supply::Event::CommitWaitBegin,
+                          this, submissionBinding_.queryQueueIdentity,
+                          *inflightCount);
   writeCv->wait(lock, [&] { return *stop || *inflightCount < inflightLimit; });
+  if (waitNeeded && ::dxmt9::supply::enabled())
+    ::dxmt9::supply::record(::dxmt9::supply::Event::CommitWaitEnd,
+                          this, submissionBinding_.queryQueueIdentity,
+                          *inflightCount);
   const auto waitElapsed = std::chrono::steady_clock::now() - waitStarted;
   qmxSegStart = qmxEnabled ? std::chrono::steady_clock::now()
                            : std::chrono::steady_clock::time_point{};

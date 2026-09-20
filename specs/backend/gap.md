@@ -73,8 +73,19 @@ rejects the unclosed CSV. Final-image R672 captures the game and closes
 1400–1800 with zero overflow/incomplete/unknown rows; receipt CV/reacquisition
 totals 2.817ms and recorded query-queue acquisition totals 1.723ms. Its later
 slowdown is outside that window, and the CPU helper fails before sampling.
-Late-region and exclusive wait ownership remain open; see
+R673 closes 1800–2600 with 194 CV entries and no lost/unknown rows; receipt
+CV/reacquisition totals 1.931s, 94.1% for query 54. Early-started app CPU
+envelopes validate and show CPU/frame rising before large CB fragmentation.
+Replay-worker and exclusive residual wait ownership remain open; see
 [H334](../../docs/perfomance/present-pacing/present-pacing-identity-wait-trace.334.md).
+The companion supply trace now binds ledger/raw identities and brackets
+writer-slot/inflight-cap waits without changing predicates. R674 joins all
+51 targets and identifies inflight-cap backpressure at count 31 inside the
+query 54 replay span. R675 qualifies pre-split import CPU and guest-PC
+locations, not an exclusive game/Wine/PE/Unix partition. Why publication
+fragments, downstream completion progress and remaining synchronous CPU
+families remain open; see
+[H335](../../docs/perfomance/present-pacing/present-pacing-stalker-replay-ownership.335.md).
 
 R-BACK-2.15.5 known-setter nonconstant invalidation is the unconditional
 implementation; the 2026-09-17 consolidation removes its runtime opt-out.

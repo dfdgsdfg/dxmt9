@@ -49,3 +49,18 @@ Initial coverage is receipt and resource-scoped replay waits plus backend
 query queue acquisition. Global drains, queue-space holder attribution and
 game/Wine wait stacks remain separately qualified surfaces; absent hooks
 must not be treated as zero time.
+
+## Companion replay ownership evidence
+
+When both wait and CPU-supply traces are enabled, `ReplayLedger` must bind
+each dequeued raw FIFO identity to the receipt ledger incarnation. A join
+requires one process, overlapping windows, matching raw/owner identity and
+paired replay start/end on the worker TID. Publication records identify the
+actual queue sequence; membership in a replay interval is a caller-context
+relation, not proof that every draw in the published Slot belongs to that raw.
+Writer-slot and inflight-cap waits retain the production predicates and are
+recorded before release and after reacquisition. Their elapsed durations are
+subsets of replay wall time, never additive costs. Missing/clipped pairs or
+sink overflow invalidate complete ownership attribution. The companion uses
+calibrated native thread CPU; neither saved guest PCs nor stack occurrences
+may be multiplied into exclusive game/Wine/PE CPU shares.

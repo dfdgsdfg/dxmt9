@@ -30,6 +30,14 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H335 replay ownership](present-pacing-stalker-replay-ownership.335.md): late
+receipt waits inherit publication inflight-cap backpressure (153 waits at
+count 31; no observed writer-slot CV wait). All 51 targets join to raw replay.
+Separate pre-split diagnosis measures app CPU 50.44ms/P and nested import
+CPU 2.16ms/P; guest-PC shares are game 47.29%, Wine-system PE 28.89%, dxmt9
+PE 8.38%, bridge 11.96%. These are different, intrusive populations, not an
+exclusive CPU budget or a reason to remove completion/receipt guards.
+
 [H334 bounded wait trace](present-pacing-identity-wait-trace.334.md) adds
 identity-qualified CV-entry and mutex-acquisition evidence without polling
 subsampling. Native identity/closure tests pass. R671 ends before the selected
@@ -37,8 +45,12 @@ window closes and captures Orca instead of the game; its empty CSV is rejected,
 not counted as zero waits. Final-image R672 captures the game and closes
 1400–1800 with no lost/unknown rows: receipt CV/reacquisition totals 2.817ms,
 recorded query-queue acquisition 1.723ms. The larger slowdown lies after
-that window; late wait ownership remains open. The companion CPU helper
-rejects the oversized log before sampling, so it provides no CPU attribution.
+that window; its CPU helper rejects an oversized log before sampling.
+R673 closes 1800–2600 with 194 CV entries and 1.931s receipt CV/reacquisition,
+94.1% belonging to query 54; recorded query-queue acquisitions total 31.695ms.
+Its early CPU helper validates envelopes: CPU/frame grows 28.94 → 41.47ms
+before large CB fragmentation, then 59.62ms in 2100–2499. This identifies
+late receipt blocking, not its replay-worker owner or the whole slowdown.
 
 [H333 pre-split wait ownership](present-pacing-stalker-pre-split-wait-owner.333.md)
 separates app-thread CPU growth from the later CB explosion. The pre-split

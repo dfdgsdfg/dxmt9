@@ -926,6 +926,15 @@ void ReplayOffloadWorker::stop() {
 void ReplayOffloadWorker::run(D9CDevice* device) {
   ReplayQueueItem item;
   while (queue_.pop(item)) {
+    // Diagnostic join only: the FIFO owner and raw identity map to the same
+    // incarnation used by receipt waits. Never infer this from an address.
+    if (dxmt9::supply::enabled() && dxmt9::waittrace::enabled()) {
+      const auto raw = item.isMutation() ? item.mutation->replaySeq :
+          item.isStateBlockApply() ? item.stateBlockApply->replaySeq :
+          item.chunk.replaySeq;
+      dxmt9::supply::record(dxmt9::supply::Event::ReplayLedger, &queue_, raw,
+          dxmt9::waittrace::ownerIdentity(&device->replayDrainLedger));
+    }
     if (item.isStateBlockApply()) {
       auto& task = *item.stateBlockApply;
       int32_t hr = dxmt9::core::D3D_OK;

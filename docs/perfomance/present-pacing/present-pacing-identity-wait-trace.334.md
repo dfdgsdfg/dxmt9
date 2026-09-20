@@ -5,7 +5,7 @@ title: "H334: bounded identity-qualified CPU wait evidence"
 type: evidence
 status: implementation-qualification
 updated: 2026-09-20
-source: experiments/output/wait-trace-validation-h334/dxmt9-wait-trace-final-native-tests.log; experiments/output/wait-trace-validation-h334/dxmt9-wait-trace-final-x86-tests.log; experiments/output/wait-trace-validation-h334/hardened-native-tests.log; experiments/output/wait-trace-validation-h334/hardened-x86-tests.log; experiments/output/wait-trace-validation-h334/reviewed-native-tests.log; experiments/output/wait-trace-validation-h334/reviewed-x86-tests.log; experiments/output/wait-trace-validation-h334/native-waits.csv; experiments/output/wait-trace-validation-h334/dxmt9-wait-trace-tla.log; experiments/output/app-d3d9-stkcop-bench-identity-wait-r670-day/launch-failure.log; experiments/output/app-d3d9-stkcop-bench-identity-wait-r671-day/run-policy.json; experiments/output/app-d3d9-stkcop-bench-identity-wait-r671-day/result.json; experiments/output/app-d3d9-stkcop-bench-identity-wait-r672-day/{result.json,actual.png,run-policy.json,dxmt9.log,waits.csv,thread-cpu.jsonl}
+source: experiments/output/wait-trace-validation-h334/dxmt9-wait-trace-final-native-tests.log; experiments/output/wait-trace-validation-h334/dxmt9-wait-trace-final-x86-tests.log; experiments/output/wait-trace-validation-h334/hardened-native-tests.log; experiments/output/wait-trace-validation-h334/hardened-x86-tests.log; experiments/output/wait-trace-validation-h334/reviewed-native-tests.log; experiments/output/wait-trace-validation-h334/reviewed-x86-tests.log; experiments/output/wait-trace-validation-h334/native-waits.csv; experiments/output/wait-trace-validation-h334/dxmt9-wait-trace-tla.log; experiments/output/app-d3d9-stkcop-bench-identity-wait-r670-day/launch-failure.log; experiments/output/app-d3d9-stkcop-bench-identity-wait-r671-day/run-policy.json; experiments/output/app-d3d9-stkcop-bench-identity-wait-r671-day/result.json; experiments/output/app-d3d9-stkcop-bench-identity-wait-r672-day/{result.json,actual.png,run-policy.json,dxmt9.log,waits.csv,thread-cpu.jsonl}; experiments/output/app-d3d9-stkcop-bench-identity-wait-r673-day/{result.json,actual.png,run-policy.json,dxmt9.log,waits.csv,thread-cpu.jsonl}
 related: present-pacing-stalker-pre-split-wait-owner.333.md
 ---
 
@@ -141,6 +141,59 @@ repeat should cover 1800–2600 (requiring 2602 Presents for closure), start the
 CPU helper at process startup, and retain the uncovered global-drain,
 queue-space/holder, GPU-resource and game/Wine wait hypotheses. Do not delete
 synchronization or claim a GPU bottleneck from these diagnostic totals.
+
+## R673: late window and early-started app-thread CPU
+
+Commit `6799396f` changes documentation only; runtime source remains
+`5cf3874c`. Repeat the same Day/high 1280x720 policy with wait window
+1800–2600 and start the CPU helper at logged frame 14. Artifacts under
+`experiments/output/app-d3d9-stkcop-bench-identity-wait-r673-day/` include
+`result.json`, `actual.png`, `run-policy.json`, `dxmt9.log`, `waits.csv` and
+`thread-cpu.jsonl`. The runner returns PASS, code 0, no timeout/failures or
+capture error; the screenshot shows the game. Encoded Presents: 2655.
+
+The analyzer accepts 408 rows, 194 CV entries, one owner, zero
+overflow/incomplete/unknown and no cross-window exclusions. Query receipt
+has 195 rows (194 CV waits plus one mutex-only row), 1931.041669ms total
+CV/reacquisition and 0.070156ms acquisition. Query queue acquisition has
+213 threshold-qualified rows totalling 31.695302ms. No resource/lock/unlock
+CV row is recorded. These are bounded hooked-site observations, not all
+synchronization or exclusive blocked CPU time.
+
+| Encoded frame bracket | Frame samples | Diagnostic FPS | CB/frame | App CPU ms/frame (envelope) | Average app cores | Receipt CV/reacquisition total |
+|---|---:|---:|---:|---:|---:|---:|
+| 1400–1799 | 400 | 30.057 | 7.300 | 28.938 | 0.860 | Outside wait window |
+| 1800–2099 | 300 | 20.586 | 7.853 | 41.466 | 0.849 | 0ms |
+| 2100–2499 | 400 | 10.565 | 39.438 | 59.623 | 0.629 | 1740.581ms |
+| 2500–2600 | 101 | 11.055 | 51.139 | 51.312 | 0.568 | 190.461ms |
+
+FPS and CB/frame use all logged frames in each inclusive bracket. CPU uses
+`observe_darwin_thread_cpu.summarize_envelope` with exclusive upper bounds;
+stable endpoint spans cover 380/283/399/96 frames respectively, not identical
+all-frame populations. All four envelopes validate their internal samples
+and process/thread/selector identity. Native thread 1073720 includes game,
+Wine, PE and synchronous Unix, not PE-only CPU. The helper retains 373
+successful samples followed by a process-not-found query error after the
+last envelope, consistent with process exit. Do not convert this error into
+zero CPU or add query/frame elapsed sums to CPU as a frame budget.
+
+Query identity 54 accounts for 177 CV waits and 1816.943919ms (94.1% of
+receipt CV time). The slowest is Present 2283, owner 1, raw 384462:
+completed frontier 384314 → 384462, CV/reacquisition 19.803875ms, initial
+mutex acquisition 83ns. This identifies an END-prefix replay receipt wait,
+not GPU completion latency or the work occupying the replay worker.
+Other query identities contribute: 60 (92.548ms), 36 (10.668ms),
+55 (6.486ms), 48 (3.265ms) and 42 (1.132ms). Query-queue acquisition totals
+in the three measured brackets are 2.289/20.683/8.723ms.
+
+Verdict: app-thread CPU/frame rises before the large CB increase and
+recorded receipt blocking. Late receipt waits are real and concentrated,
+but neither they nor recorded mutex acquisitions explain the complete
+slowdown. Next, connect owner 1/query 54 raw prefixes to replay execution,
+publication and queue-space stalls, and separately split app-thread CPU
+before fragmentation. Global drains, GPU-resource waits, scheduler gaps
+and game/Wine waits remain uncovered; do not assign the residual to GPU or
+remove the receipt predicate. This is not an OFF/ON performance claim.
 
 ## Invocation
 
