@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H348](present-pacing-shared-pass-indices.348.md) replaces per-child copied
+identity sets with synchronous exact indices over the sealed pass table.
+Read metadata falls from 2056 to 48 bytes per child on the native build;
+independent source validation remains. Replay relocation and speedup are open.
+
 [H347](present-pacing-stalker-access-cardinality.347.md) measures the 21
 overflowing passes exactly: 433–458 distinct reads each, with 69.95% repeated
 touches. Production bounds remain unchanged; shared identity-table/index views

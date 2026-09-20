@@ -1256,8 +1256,7 @@ bool resolveParallelPassCoverage(
     return false;
   }
   coverage = {};
-  coverage.reads.flags = core::ExactResourceSetComplete |
-      core::ExactResourceSetCanonicalized;
+  coverage.reads.bind(snapshot.resourceReads);
   coverage.writes.flags = core::ExactResourceSetComplete |
       core::ExactResourceSetCanonicalized;
   coverage.attachments = snapshot.attachments;

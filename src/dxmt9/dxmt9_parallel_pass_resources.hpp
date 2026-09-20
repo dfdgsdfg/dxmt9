@@ -2,6 +2,7 @@
 
 #include "dxmt9_source_semantics.hpp"
 #include <array>
+#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <type_traits>
@@ -68,5 +69,94 @@ struct BoundedParallelPassReadSet {
 using ParallelPassReadSet = BoundedParallelPassReadSet<kParallelPassReadCapacity>;
 static_assert(std::is_trivially_copyable_v<ParallelPassReadSet>);
 static_assert(core::kSourceEntryResourceCapacity == 12u);
+
+// A synchronous borrow of one sealed pass's canonical identity table. The
+// table is owned by the source-qualified snapshot, not by a child. No indexed
+// coverage escapes certificate validation; the certificate retains its own
+// value-owned snapshot. A bit has meaning only in the exact bound table.
+class ParallelPassReadIndices {
+ public:
+  constexpr void bind(const ParallelPassReadSet& table) noexcept {
+    table_ = &table;
+    bits_ = {};
+    valid_ = table.complete() && table.canonicalized();
+  }
+  void bind(ParallelPassReadSet&&) = delete;
+  void bind(const ParallelPassReadSet&&) = delete;
+  constexpr bool complete() const noexcept { return table_ && valid_; }
+  constexpr bool validFor(const ParallelPassReadSet& table) const noexcept {
+    return table_ == &table && complete();
+  }
+  constexpr bool add(std::uint64_t identity) noexcept {
+    if (!complete()) return false;
+    for (std::uint32_t i = 0; i < table_->count; ++i) {
+      if (identity && table_->handles[i] == identity) {
+        bits_[i / 64] |= std::uint64_t{1} << (i % 64);
+        return true;
+      }
+    }
+    // Never turn an unknown identity into an empty/disjoint set.
+    valid_ = false;
+    return false;
+  }
+  template<typename Set>
+  constexpr bool include(const Set& reads) noexcept {
+    if (!complete() || !reads.complete() || !reads.canonicalized() ||
+        reads.count > reads.handles.size()) {
+      valid_ = false;
+      return false;
+    }
+    for (std::uint32_t i = 0; i < reads.count; ++i)
+      if (!add(reads.handles[i])) return false;
+    return true;
+  }
+  constexpr bool merge(const ParallelPassReadIndices& other) noexcept {
+    if (!complete() || !other.complete() || table_ != other.table_) {
+      valid_ = false;
+      return false;
+    }
+    for (std::size_t i = 0; i < bits_.size(); ++i) bits_[i] |= other.bits_[i];
+    return true;
+  }
+  constexpr std::uint32_t count() const noexcept {
+    std::uint32_t result = 0;
+    for (auto word : bits_) result += std::popcount(word);
+    return result;
+  }
+  constexpr bool coversTable() const noexcept {
+    return complete() && count() == table_->count;
+  }
+  constexpr bool contains(std::uint64_t identity) const noexcept {
+    if (!complete() || !identity) return false;
+    for (std::uint32_t i = 0; i < table_->count; ++i)
+      if (table_->handles[i] == identity)
+        return bits_[i / 64] & (std::uint64_t{1} << (i % 64));
+    return false;
+  }
+  template<typename Set>
+  constexpr bool containsAll(const Set& other) const noexcept {
+    if (!complete() || !other.complete() || !other.canonicalized() ||
+        other.count > other.handles.size()) return false;
+    for (std::uint32_t i = 0; i < other.count; ++i)
+      if (!contains(other.handles[i])) return false;
+    return true;
+  }
+  template<typename Set>
+  constexpr bool overlaps(const Set& other) const noexcept {
+    if (!complete() || !other.complete() || !other.canonicalized() ||
+        other.count > other.handles.size()) return true;
+    for (std::uint32_t i = 0; i < other.count; ++i)
+      if (contains(other.handles[i])) return true;
+    return false;
+  }
+
+ private:
+  const ParallelPassReadSet* table_ = nullptr;
+  std::array<std::uint64_t, (kParallelPassReadCapacity + 63) / 64> bits_{};
+  bool valid_ = false;
+};
+
+static_assert(std::is_trivially_copyable_v<ParallelPassReadIndices>);
+static_assert(sizeof(ParallelPassReadIndices) < sizeof(ParallelPassReadSet));
 
 } // namespace dxmt9::encoders

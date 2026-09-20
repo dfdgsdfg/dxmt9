@@ -2167,6 +2167,7 @@ struct SemanticPlanFixture {
   mutable std::uint32_t authorityCalls = 0u;
   mutable std::uint32_t resolverCalls = 0u;
   std::uint32_t resolvedCommandCountOverride = 0u;
+  bool foreignIndexDomain = false;
 
   static bool resolveAuthority(
       const void* context,
@@ -2220,7 +2221,9 @@ struct SemanticPlanFixture {
         return false;
       }
     }
-    coverage.reads = fixture.resolvedReads;
+    coverage.reads.bind(fixture.foreignIndexDomain ? fixture.resolvedReads
+                                                : snapshot.resourceReads);
+    if (!coverage.reads.include(fixture.resolvedReads)) return false;
     coverage.writes = fixture.resolvedWrites;
     coverage.attachments = fixture.snapshot.attachments;
     coverage.route = dxmt9::core::RenderRoute::Portable;
@@ -2444,6 +2447,15 @@ void semanticPlanMutationAndCoverageProofsFailClosed() {
   check(valid.accepted() && fixture.authorityCalls == 1u &&
             fixture.resolverCalls == fixture.count,
         "coherent sealed snapshot produces one owner lookup and one exact resolver call per child");
+  const auto detachedCertificate = [] {
+    SemanticPlanFixture local(3u);
+    return validateParallelPassSemanticPlan(
+        local.snapshot, local.view(), local.authorityResolver(),
+        local.coverageResolver(), local.epochWitness());
+  }();
+  check(detachedCertificate.accepted() &&
+            detachedCertificate.plan.snapshot() == valid.plan.snapshot(),
+        "certificate retains value metadata after all index borrows end");
 
   auto expectInvalid = [&](auto mutate, std::string_view message) {
     SemanticPlanFixture candidate = fixture;
@@ -2455,6 +2467,8 @@ void semanticPlanMutationAndCoverageProofsFailClosed() {
                 .accepted(),
           message);
   };
+  expectInvalid([](auto& f) { f.foreignIndexDomain = true; },
+                "equal identity values from a foreign index domain fail closed");
   expectInvalid([](auto& f) {
     f.snapshot.coordinatorProof.flags &= ~ParallelPassQueryAbsent;
   }, "coordinator proof mutation fails closed");
@@ -2861,8 +2875,7 @@ bool resolveProducerCoverage(
     return false;
   }
   if (child.coversCompleteCommands) {
-    coverage.reads.flags = dxmt9::core::ExactResourceSetComplete |
-        dxmt9::core::ExactResourceSetCanonicalized;
+    coverage.reads.bind(snapshot.resourceReads);
     coverage.writes.flags = dxmt9::core::ExactResourceSetComplete |
         dxmt9::core::ExactResourceSetCanonicalized;
     bool haveAttachments = false;
@@ -2893,6 +2906,12 @@ bool resolveProducerCoverage(
       const auto writes = dxmt9::core::makeRenderAttachmentWriteSet(
           *command.command.drawState.hot);
       for (std::uint32_t i = 0u; i < reads.count; ++i) {
+        // Fault injection omits a late identity from the independently read
+        // source, not by mutating an exposed bitset representation.
+        if (state.omitLateRead && snapshot.resourceReads.count > 12u &&
+            reads.handles[i] ==
+                snapshot.resourceReads.handles[snapshot.resourceReads.count - 1u])
+          continue;
         if (!coverage.reads.add(reads.handles[i])) {
           return false;
         }
@@ -2933,8 +2952,6 @@ bool resolveProducerCoverage(
     }
     coverage.route = dxmt9::core::RenderRoute::Portable;
     coverage.passActionEpoch = child.firstDraw.entryRender.passActionEpoch;
-    if (state.omitLateRead && coverage.reads.count > 12u)
-      --coverage.reads.count;
     return coverage.drawCount != 0u;
   }
   const auto resolved = dxmt9::encoders::resolveEncodePartition(
@@ -2960,11 +2977,13 @@ bool resolveProducerCoverage(
       })) {
     return false;
   }
-  coverage.reads.importEntry(dxmt9::core::makeDrawEntryReadSet(
-      resolved.partition.entry.drawState));
+  coverage.reads.bind(snapshot.resourceReads);
+  auto entryReads = dxmt9::core::makeDrawEntryReadSet(
+      resolved.partition.entry.drawState);
+  entryReads.flags |= dxmt9::core::ExactResourceSetCanonicalized;
+  if (!coverage.reads.include(entryReads)) return false;
   coverage.writes = dxmt9::core::makeRenderAttachmentWriteSet(
       *resolved.partition.entry.drawState.hot);
-  coverage.reads.flags |= dxmt9::core::ExactResourceSetCanonicalized;
   coverage.writes.flags |= dxmt9::core::ExactResourceSetCanonicalized;
   coverage.attachments = dxmt9::core::makeRenderAttachmentKey(
       *resolved.partition.entry.drawState.hot);
@@ -3642,6 +3661,91 @@ void wideWholeCommandChildrenCertify() {
 
 // Bounded exhaustive refinement of the actual accumulator against a mathematical
 // set. Enumerate duplicates, nulls, all write aliases, exact capacity and poison.
+void indexedPassReadsRefineExactSets() {
+  using namespace dxmt9::encoders;
+  static_assert(sizeof(ParallelPassReadIndices) <= 64u);
+  std::cout << "parallel read metadata: table=" << sizeof(ParallelPassReadSet)
+            << " child_indices=" << sizeof(ParallelPassReadIndices)
+            << " child_array_reduction="
+            << (sizeof(ParallelPassReadSet) - sizeof(ParallelPassReadIndices)) *
+                   kParallelRenderPassChildCapacity
+            << '\n';
+  // Two independent child projections of six commands, all 4^6 traces.
+  // The fourth identity is outside the table: once observed it poisons the
+  // child and cannot disappear during union. Reference storage is not indexed.
+  for (std::uint32_t trace = 0; trace < 4096u; ++trace) {
+    ParallelPassReadSet table{};
+    table.flags |= dxmt9::core::ExactResourceSetCanonicalized;
+    for (std::uint64_t id = 1; id <= 3; ++id) check(table.add(id), "table add");
+    std::array<ParallelPassReadIndices, 2> children{};
+    std::array<std::array<bool, 4>, 2> reference{};
+    std::array<bool, 2> valid{true, true};
+    for (auto& child : children) child.bind(table);
+    auto encoded = trace;
+    for (std::uint32_t step = 0; step < 6; ++step) {
+      const auto child = step % 2;
+      const auto id = (encoded % 4) + 1;
+      encoded /= 4;
+      valid[child] = valid[child] && id <= 3;
+      if (valid[child]) reference[child][id] = true;
+      check(children[child].add(id) == valid[child],
+            "indexed append matches independent exact-domain reference");
+      for (std::uint64_t probe = 1; probe <= 3; ++probe)
+        check(children[child].contains(probe) ==
+                  (valid[child] && reference[child][probe]),
+              "indexed membership matches reference after each append");
+    }
+    ParallelPassReadIndices joined;
+    joined.bind(table);
+    const bool merged = joined.merge(children[0]) && joined.merge(children[1]);
+    check(merged == (valid[0] && valid[1]), "union preserves poison");
+    bool all = valid[0] && valid[1];
+    for (std::uint64_t probe = 1; probe <= 3; ++probe) {
+      const bool member = reference[0][probe] || reference[1][probe];
+      all = all && member;
+      dxmt9::core::ExactResourceSet writes{};
+      writes.flags |= dxmt9::core::ExactResourceSetCanonicalized;
+      check(writes.add(probe), "write reference");
+      check(joined.overlaps(writes) == (!merged || member),
+            "all alias intersections match fail-closed exact reference");
+    }
+    check(joined.coversTable() == all, "exact union rejects omitted table rows");
+  }
+
+  ParallelPassReadSet table{};
+  table.flags |= dxmt9::core::ExactResourceSetCanonicalized;
+  for (std::uint32_t i = 0; i < kParallelPassReadCapacity; ++i)
+    check(table.add((std::uint64_t(i + 1) << 32) | 7u),
+          "same low index, distinct generations fill exact capacity");
+  ParallelPassReadIndices full;
+  full.bind(table);
+  check(full.include(table) && full.coversTable() &&
+            full.count() == kParallelPassReadCapacity,
+        "all bit-word boundaries and last table index remain exact");
+  auto other = table;
+  ParallelPassReadIndices foreign;
+  foreign.bind(other);
+  check(foreign.include(other) && !full.validFor(other) && !full.merge(foreign),
+        "equal values in another snapshot cannot supply borrowed index authority");
+  check(!full.add(table.handles[0]), "domain mismatch is sticky");
+  full.bind(table);
+  check(full.count() == 0 && !full.coversTable() && full.add(table.handles[0]),
+        "new synchronous binding clears prior indices");
+  check(!full.add(7u) && !full.complete(), "stale generation rejected");
+  full.bind(table);
+  check(!full.add(0), "null canonical identity rejected");
+  auto incomplete = table;
+  incomplete.flags &= ~dxmt9::core::ExactResourceSetComplete;
+  full.bind(incomplete);
+  check(!full.complete(), "incomplete table cannot bind valid coverage");
+  full.bind(table);
+  check(!full.include(incomplete), "incomplete source set poisons coverage");
+  ParallelPassReadSet empty{};
+  empty.flags |= dxmt9::core::ExactResourceSetCanonicalized;
+  full.bind(empty);
+  check(full.coversTable(), "empty table has exact empty coverage");
+}
+
 void passReadSetMatchesExactReference() {
   using namespace dxmt9::encoders;
   static_assert(sizeof(dxmt9::core::ExactResourceSet) == 104u);
@@ -4524,6 +4628,7 @@ int main() {
     streamingCoverageFoldMatchesStoredRowReference();
     wideWholeCommandChildrenCertify();
     passReadSetMatchesExactReference();
+    indexedPassReadsRefineExactSets();
     accessObserverIsExactBoundedAndScoped();
     passLocalEpochProofIsIndependentlyReDerived();
     boundaryAdjacentPassIdentityCertifies();

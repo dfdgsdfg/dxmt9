@@ -13,6 +13,29 @@ experiment operation, not a change to the existing `provider-replay`,
 
 ## Ownership and execution boundaries
 
+### Shared pass identity metadata
+
+The production encode coordinator owns the first shared-table representation:
+`ParallelPassReadIndices` projects independently resolved child accesses into
+the sealed pass's canonical table during certificate validation. The table is
+reconstructed by production code for each replay, not serialized as trusted
+capture evidence. `parallel-verify` reaches this same provider/encode path;
+CPU-only policy timing does not by itself demonstrate certificate or worker
+execution. Nonzero selected/children/worker counters and exact output remain
+required for a non-vacuous parallel GPU verdict.
+
+Native `parallel_render_pass_spec.cpp` compares indexed membership, union and
+alias decisions with independent exact sets over exhaustive short traces and
+feeds source-derived coverage into the production certificate validator.
+Internal index numbers are not replay identity; canonical resource identities
+and read/write semantics are. Unknown identities, foreign table domains and
+omitted child reads reject. The synchronous index borrow is not retained by
+the certificate, workers or a future iteration. Moving table construction to
+Replay/Slot publication is a separate unimplemented step and must keep alias
+stability, failure-atomic publication and source-generation qualification.
+
+### Iteration ownership
+
 The bundle loader owns authenticated, immutable event/identity/blob storage
 for the whole experiment. An iteration owns fresh logical replay state,
 resource identities, temporary pins, Slot transactions and submitted work.

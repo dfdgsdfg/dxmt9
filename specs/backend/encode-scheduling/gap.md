@@ -14,16 +14,38 @@ remain in `docs/perfomance/`.
 
 ## Pass-wide immutable access metadata (2026-09-20)
 
-`R-BACK-2.71`: producer, production child coverage resolver and semantic
-certificate now use a distinct 256-identity `ParallelPassReadSet` for pass/child
-read unions. The 12-identity draw-entry `ExactResourceSet` remains 104 bytes;
+Shared-table step: `ParallelPassResolvedCoverage` and the validator's union now
+use exact `ParallelPassReadIndices` over the snapshot-owned canonical table,
+instead of copying a 256-identity array per child. Indices borrow only during
+synchronous validation; returned certificates retain value-owned snapshots.
+The production resolver still independently re-reads and canonicalizes source
+accesses. Native exhaustive index/set refinement and producer/certificate
+fixtures cover unknown/stale identities, mismatched table domains, omitted
+reads, aliases and exact-capacity word boundaries. Admission remains 256;
+normal serial execution remains unchanged. Replay-owned table construction,
+Slot publication/alias-stability contracts, wide-resource GPU coverage and
+end-to-end performance qualification remain open. This step reduces proof
+storage, not yet resource extraction or linear lookup work.
+Evidence: focused native/provider 5/5, final ownership test and x86_64 native
+spec pass; existing TLA regression passes (195.71s). The provider CLI includes
+nonzero parallel-worker execution and exact output for its existing bounded,
+output-degenerate fixture, not a wide-resource pixel promotion oracle. See
+[H348](../../../docs/perfomance/present-pacing/present-pacing-shared-pass-indices.348.md).
+
+`R-BACK-2.71`: producer and semantic certificate retain a distinct 256-identity
+`ParallelPassReadSet` as their pass table. Child coverage uses synchronous
+indexed membership over that table. The 12-identity draw-entry
+`ExactResourceSet` remains 104 bytes;
 Slot draw/state/uniform SoA and resource lifetime ownership are unchanged.
 Metadata is value-owned by source/generation/range-qualified snapshots; no new
 source spans escape and no per-draw allocation is introduced. This is bounded
 proof metadata, not a claim of zero-copy certificates: each wide set is 2056
 bytes, increasing each pass/certificate read set by 1952 bytes. Candidate TLS
-and resolved-child stack arrays each have 16 entries. Their cost must be priced
-before promotion; table-index/bitset sharing is a possible later reduction.
+has 16 entries. The 16-child resolved-coverage array now replaces each 2056-byte
+read set with 48-byte indices on the native 64-bit build, reducing that array's
+read metadata by 32,128 bytes. The expected-union temporary shrinks likewise.
+This is a `sizeof` result, not measured total stack peak or a speedup. Snapshot
+and certificate table copies remain and must be priced before promotion.
 
 Native exhaustive set refinement and wide producer-to-certificate tests cover
 overflow poisoning, duplicates, write aliases, omitted late identities, stale

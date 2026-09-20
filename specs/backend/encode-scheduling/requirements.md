@@ -986,6 +986,13 @@ exact union with the sealed pass under matching source/storage generation,
 sequence and replay bounds. Widening a pass must not enlarge or reinterpret
 per-draw state/SoA records, create new resource ownership, or weaken alias checks.
 
+Child coverage may use exact table indices instead of copied identities only
+when it is bound to the same immutable qualified table. Unknown identities and
+cross-table merges must reject; equal index values alone are not an identity
+proof. Synchronous table borrows must not escape validation. The independent
+source-derived coverage check must not be replaced by trusting the table under
+test. Resource pins and completion ownership remain separate from membership.
+
 **R-BACK-2.72** Economics and selection must be deterministic checked fixed-
 point value transforms. Scores may use only bounded integer inputs captured in
 the policy snapshot; they must not depend on wallclock time, worker arrival,

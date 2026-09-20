@@ -1532,21 +1532,38 @@ and epoch ambiguity reject without altering the production plan.
 Pass-wide read access uses `ParallelPassReadSet`, separate from the 12-identity
 `core::ExactResourceSet` retained by draw-entry continuation summaries and
 attachment writes. The initial pass admission budget is 256 canonical identities;
-it is not a measured maximum or an unbounded guarantee. Each pass and resolved
-child owns only flat identity metadata, never a copy of draw/state/uniform SoA
-or a borrowed source span. The enclosing snapshot binds it to source/storage
+it is not a measured maximum or an unbounded guarantee. Each pass owns the flat
+canonical identity table, never a copy of draw/state/uniform SoA.
+The enclosing snapshot binds it to source/storage
 generation, sequence, pass-action epoch and ordered replay interval. Existing
 queue residency ownership remains authoritative; this set grants no lifetime.
 
 The producer folds individually canonicalized entry reads into that union. The
-coverage resolver independently folds every child command's canonical reads into
-the same bounded type; certificate validation folds the child unions, compares
-exact membership and checks attachment-write intersections. Pass-union overflow
+coverage resolver independently re-reads every child command's canonical reads
+and maps them into `ParallelPassReadIndices` over the sealed pass table.
+These synchronous child borrows contain private exact membership bits, not
+copies of the identity array. Missing table entries poison coverage; the
+certificate verifies the exact table object binding before merging bitsets,
+requires the union to cover every table entry, and checks attachment-write
+intersections using full identities. Equal values from a different table do
+not authorize merging indices. Bind/reset discards old bits; no index borrow
+escapes the synchronous validator or enters the returned certificate/workers.
+The table cannot mutate or move while this borrow is active. The caller's
+existing pinned source and snapshot authority checks still validate source,
+storage generation, sequence, range and pass-action epoch before coverage.
+Pass-union overflow
 is sticky and rejects before child effects. Raw-entry overflow, alias failure,
 query/ordered-control exclusions and economics remain unchanged. Certificates
 still own bounded value snapshots: this stage does not claim zero-copy proof
 metadata or elimination of independent certificate re-resolution. Normal serial
 execution does not build this data unless the bounded observer is enabled.
+
+This first representation step remains encode-coordinator owned. It does not
+yet move canonicalization to Replay or persist indices in Slots. Such a move
+requires alias stability across publication, transactional capacity ownership,
+and capture/replay qualification; a table reference alone is not a resource
+pin. Lookup is currently an exact linear scan of the existing table, not a
+new hashing optimization or a CPU speedup claim.
 
 The native exhaustive small-domain set refinement in
 `parallel_render_pass_spec.cpp` uses the production accumulator against an exact

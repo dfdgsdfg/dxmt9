@@ -14,6 +14,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H348](present-pacing-shared-pass-indices.348.md) implements shared pass-table
+membership for child coverage and certificate union. Native child read metadata
+shrinks 2056→48 bytes; the production Replay provider tests pass. Construction
+remains in Encode, lookup remains linear, and the 256-identity admission bound
+is unchanged. This is storage refinement, not FPS or wide-resource GPU proof.
+
 [H347](present-pacing-stalker-access-cardinality.347.md) closes rejected-pass
 cardinality: all 21 overflows require 433–458 distinct canonical reads, with
 69.95% repeated touches. All 1528 diagnostic pass transcripts are exact.

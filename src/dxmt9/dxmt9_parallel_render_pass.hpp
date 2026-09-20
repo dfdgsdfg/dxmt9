@@ -1835,7 +1835,7 @@ struct ParallelPassResolvedCoverage {
   std::uint64_t drawCount = 0u;
   using Command = ParallelPassCoverageFold::Command;
   ParallelPassCoverageFold commands{};
-  ParallelPassReadSet reads{};
+  ParallelPassReadIndices reads{};
   core::ExactResourceSet writes{};
   core::RenderAttachmentKey attachments{};
   core::RenderRoute route = core::RenderRoute::Unknown;
@@ -2126,9 +2126,8 @@ inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
     return result;
   }
   result.failure = ParallelPassSemanticPlanFailure::FirstDrawProof;
-  ParallelPassReadSet expectedReads{};
-  expectedReads.flags = core::ExactResourceSetComplete |
-      core::ExactResourceSetCanonicalized;
+  ParallelPassReadIndices expectedReads{};
+  expectedReads.bind(snapshot->resourceReads);
   core::ExactResourceSet expectedWrites{};
   expectedWrites.flags = core::ExactResourceSetComplete |
       core::ExactResourceSetCanonicalized;
@@ -2168,11 +2167,10 @@ inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
         resolvedCoverage[i].attachments != snapshot->attachments ||
         resolvedCoverage[i].route != firstDraw.entryRender.route ||
         resolvedCoverage[i].passActionEpoch != snapshot->passActionEpoch ||
-        !parallelPassExactResourceSetValid(resolvedCoverage[i].reads) ||
+        !resolvedCoverage[i].reads.validFor(snapshot->resourceReads) ||
         !parallelPassExactResourceSetValid(resolvedCoverage[i].writes) ||
         resolvedCoverage[i].reads.overlaps(resolvedCoverage[i].writes) ||
-        !parallelPassExactResourceSetContains(
-            resolvedCoverage[i].reads, firstDraw.entryRender.entryReads)) {
+        !resolvedCoverage[i].reads.containsAll(firstDraw.entryRender.entryReads)) {
       return result;
     }
     const auto& fold = resolvedCoverage[i].commands;
@@ -2209,13 +2207,7 @@ inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
         return result;
       }
     }
-    for (std::uint32_t resource = 0u;
-         resource < resolvedCoverage[i].reads.count;
-         ++resource) {
-      if (!expectedReads.add(resolvedCoverage[i].reads.handles[resource])) {
-        return result;
-      }
-    }
+    if (!expectedReads.merge(resolvedCoverage[i].reads)) return result;
     for (std::uint32_t resource = 0u;
          resource < resolvedCoverage[i].writes.count;
          ++resource) {
@@ -2224,8 +2216,7 @@ inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
       }
     }
   }
-  if (!parallelPassExactResourceSetEqual(expectedReads,
-                                         snapshot->resourceReads) ||
+  if (!expectedReads.coversTable() ||
       !parallelPassExactResourceSetEqual(expectedWrites,
                                          snapshot->attachmentWrites) ||
       expectedReads.overlaps(expectedWrites) ||
