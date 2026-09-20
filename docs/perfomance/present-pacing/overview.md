@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-20
+updated: 2026-09-21
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
@@ -13,6 +13,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
+
+[H349](present-pacing-prepared-publication-shadow.349.md) connects an opt-in
+prepared-plan shadow to ordinary publication. An x86_64 synthetic 64-command,
+resource-empty source costs 19–20 us median including observation, with a
+149,576-byte allocation. This is neither real-workload pricing nor an Encode
+saving: fused construction, async ownership and differential comparison remain open.
 
 [H348](present-pacing-shared-pass-indices.348.md) implements shared pass-table
 membership for child coverage and certificate union. Native child read metadata

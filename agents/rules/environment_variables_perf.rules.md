@@ -9,6 +9,19 @@ perf-probe toolkit.
 
 ## Perf counters
 
+`DXMT9_CPU_SUPPLY_PREPARED_OBSERVER=1` requires the supply trace and its
+bounded Present window. Ordinary Slot publication builds and discards a
+PreparedEncodePlan shadow under the existing queue mutex. It reads final
+commands (not wire ordinals), resolves draw identities synchronously, and
+leaves non-draw/incomplete entries explicitly unresolved. No plan is used by
+Encode or handed off asynchronously. Source/storage generations, allocation
+bytes, append/seal endpoints, failure and successful plan cardinalities are
+recorded; failure cardinalities are unavailable, not zero work. OFF adds one
+cached gate and no Slot fields. `analyze_prepared_encode_shadow.py` rejects
+missing/duplicate/cross-thread endpoints. Timings include observation; total
+also includes deallocation and metadata events. This second walk is a cost
+probe, not the target fused Replay construction or a gameplay/FPS measurement.
+
 `DXMT9_CPU_SUPPLY_PARALLEL_OBSERVER=1` requires the CPU-supply trace and runs
 only inside its bounded Present window on IdentitySerial sources. It uses the
 same pure sealed-pass producer in separate diagnostic scratch, never publishes

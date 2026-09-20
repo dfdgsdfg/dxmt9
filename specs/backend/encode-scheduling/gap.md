@@ -26,7 +26,7 @@ normal serial execution remains unchanged. Target upstream table construction
 requires Slot publication/alias-stability contracts; wide-resource GPU coverage and
 end-to-end performance qualification remain open. This step reduces proof
 storage, not yet resource extraction or linear lookup work.
-Foundation implemented, runtime target not connected: the bounded
+Foundation implemented, runtime execution target not connected: the bounded
 `PreparedEncodePlanBuilder`, move-only sealed owner and pure publication reducer
 are covered by a dedicated native exhaustive test. The reuse/alias audit and
 precise proof exclusions are in [PreparedEncodePlan foundation](prepared-encode-plan.md).
@@ -34,6 +34,14 @@ Evidence: 1024 builder traces, 61 publication states/75 accepted edges, native
 focused 4/4, x86_64 foundation test and existing TLA regression (195.96s) pass.
 The 149,576-byte fixed foundation storage must be priced or reshaped before
 hot-path adoption; no allocation policy or FPS improvement is qualified.
+An opt-in ordinary publication shadow now builds/discards the plan at
+`prepareSlotForPublish`, using final Slot ordinals and synchronous draw alias
+resolution. The bounded CPU-supply observer separates allocation, projection
+and seal, and records failures rather than silently sampling successes only.
+This is a second walk under the queue mutex, not fused Replay construction;
+Arena-only publication, async ownership, independent Encode differential
+comparison, and real-workload cost qualification remain open. Non-draw and
+incomplete draw access stay explicitly unresolved. No execution policy changes.
 Replay will build a bounded `PreparedEncodePlan` during
 final Slot construction and publishes both transactionally. The existing
 Encode thread retains final admission, parent ownership, child dispatch/join

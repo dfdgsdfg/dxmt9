@@ -8,10 +8,40 @@ tags: [specs, backend, replay, encode, ownership, verification]
 # PreparedEncodePlan foundation
 
 Implements the value-layer foundation of `R-BACK-2.71`. The builder and pure
-publication reducer live in `src/dxmt9/dxmt9_prepared_encode_plan.hpp`; no live
-Replay, Slot, queue or Encode call site uses them yet. A sealed plan is data,
+publication reducer live in `src/dxmt9/dxmt9_prepared_encode_plan.hpp`. An opt-in
+ordinary publication shadow now exercises the builder; no Encode caller consumes
+it and no plan is published asynchronously. A sealed plan is data,
 not a parallel execution certificate. Actual joint publication remains the
 next integration step.
+
+## Publication shadow cost probe
+
+`prepareSlotForPublish` in `src/dxmt9/dxmt9_command_queue.cpp` has a cached
+default-OFF `DXMT9_CPU_SUPPLY_PREPARED_OBSERVER` gate. Inside the bounded
+CPU-supply window it builds and destroys a private plan from the final ordinary
+Slot, with the actual source/storage generations and sequence. There is no
+plan field in the Slot, no async borrow, and no execution-policy change.
+
+The shadow is intentionally a second command walk under the existing queue
+mutex. It measures allocation/initialization, command/access projection,
+seal/structural validation, and total including destruction/observer events.
+It is not the eventual fused Replay implementation. Draw alias resolution is
+synchronous only; non-draw commands or incomplete access require Encode
+resolution and cannot certify a worker. Arena-only publications are not covered.
+
+`scripts/tools/analyze_prepared_encode_shadow.py` qualifies exact source event
+coverage, native thread CPU and monotonic wall endpoints, rejects clipped or
+duplicate records, and retains rejected attempts. Allocation bytes are per
+attempt, not RSS. Failed-plan cardinalities are unavailable. A successful
+structural plan does not establish parallel eligibility or saved Encode work.
+
+The native `dxmt9-prepared-encode-plan-spec --publication-shadow-probe` invokes
+actual queue submission/publication without workers or a GPU: 18 sources of
+64 resource-empty DrawRun commands. Use the first two sources as shadow warm-up
+and the remaining 16 as a synthetic connection/cost probe. It does not model
+STALKER resource cardinality, alias lookup contention, execution, or FPS.
+Real-workload qualification must additionally compare identical input/binary
+observer-OFF and ON runs and independently check the original Encode plan.
 
 ## Reuse and placement audit
 
@@ -68,7 +98,7 @@ limits, not workload maxima or changes to production pass capacity. The
 source-wide 256 bound is independently conservative; a future production
 budget must not assume that H347's per-pass cardinality is source-wide.
 The initial fixed storage is 149,576 bytes on the tested 64-bit builds. This
-is an unconnected foundation, not a priced hot-path allocation policy. Before
+is a fixed foundation, not a qualified hot-path allocation policy. Before
 runtime integration, account for this maximum allocation and initialization;
 pooling or exact-sized regions must retain the same failure/publication contract.
 

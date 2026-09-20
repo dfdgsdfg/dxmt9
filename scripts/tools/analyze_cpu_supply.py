@@ -27,7 +27,12 @@ EVENTS = ('present import_begin import_end raw_ready mutation_ready stateblock_r
           'parallel_observe_children parallel_observe_reject parallel_observe_end '
           'parallel_observe_status parallel_observe_imbalance '
           'parallel_observe_resources parallel_access_range parallel_access_counts '
-          'parallel_access_touches parallel_access_reuse parallel_access_flags').split()
+          'parallel_access_touches parallel_access_reuse parallel_access_flags '
+          'prepared_begin prepared_allocated prepared_appended prepared_sealed '
+          'prepared_status prepared_identities prepared_accesses prepared_ranges '
+          'prepared_unresolved prepared_end prepared_source_index '
+          'prepared_source_generation prepared_storage_generation '
+          'prepared_storage_pages').split()
 
 
 def load(path):

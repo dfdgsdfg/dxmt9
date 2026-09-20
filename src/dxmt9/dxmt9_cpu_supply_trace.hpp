@@ -32,6 +32,11 @@ enum class Event : std::uint32_t {
   ParallelObserveResources,
   ParallelAccessRange, ParallelAccessCounts, ParallelAccessTouches,
   ParallelAccessReuse, ParallelAccessFlags,
+  PreparedBegin, PreparedAllocated, PreparedAppended, PreparedSealed,
+  PreparedStatus, PreparedIdentities, PreparedAccesses, PreparedRanges,
+  PreparedUnresolved, PreparedEnd,
+  PreparedSourceIndex, PreparedSourceGeneration, PreparedStorageGeneration,
+  PreparedStoragePages,
 };
 
 inline bool commandSplitEnabled() noexcept {
@@ -53,6 +58,14 @@ inline bool drawSplitEnabled() noexcept {
 inline bool parallelObserveEnabled() noexcept {
   static const bool value = [] {
     const char* flag = std::getenv("DXMT9_CPU_SUPPLY_PARALLEL_OBSERVER");
+    return enabled() && flag && flag[0] && flag[0] != '0';
+  }();
+  return value;
+}
+
+inline bool preparedObserveEnabled() noexcept {
+  static const bool value = [] {
+    const char* flag = std::getenv("DXMT9_CPU_SUPPLY_PREPARED_OBSERVER");
     return enabled() && flag && flag[0] && flag[0] != '0';
   }();
   return value;

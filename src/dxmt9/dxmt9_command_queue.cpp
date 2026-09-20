@@ -1,6 +1,7 @@
 #include "dxmt9_command_queue.hpp"
 #include "dxmt9_wait_trace.hpp"
 #include "dxmt9_cpu_supply_trace.hpp"
+#include "dxmt9_prepared_encode_shadow.hpp"
 #include "dxmt9_color_attachment_capture_observer.hpp"
 #include "dxmt9_queue_mutex_diag.hpp"
 #include "render/backend_factory.hpp"
@@ -3166,6 +3167,59 @@ PresentPrePresentOpportunity analyzePresentPrePresentOpportunity(
   return stats;
 }
 
+// Cold shadow only: ordinary publication caller, under the existing queue
+// mutex. Includes a second final-command walk; never an execution certificate.
+void observePreparedSlot(CommandQueue& q, resources::Pool& pool,
+                         const core::ChunkSlot& slot) noexcept {
+  if (!supply::windowActive() || !q.writingSlot_) return;
+  const auto& control = q.slots_[*q.writingSlot_];
+  if (control.payload != &slot || slot.commandCount() > UINT32_MAX) return;
+  using namespace encoders;
+  const PreparedSourceKey key{
+      .source = {.id = control.sourceId, .storage = control.storage},
+      .sequence = slot.seqId,
+      .commandCount = static_cast<std::uint32_t>(slot.commandCount()),
+  };
+  const auto emit = [&](supply::Event event, std::uint64_t value = 0) {
+    supply::record(event, &q, slot.seqId, value);
+  };
+  emit(supply::Event::PreparedBegin, key.commandCount);
+  emit(supply::Event::PreparedSourceIndex, key.source.id.index);
+  emit(supply::Event::PreparedSourceGeneration, key.source.id.generation);
+  emit(supply::Event::PreparedStorageGeneration, key.source.storage.generation);
+  emit(supply::Event::PreparedStoragePages,
+       (static_cast<std::uint64_t>(key.source.storage.firstPage) << 32) |
+           key.source.storage.pageCount);
+  {
+    PreparedEncodePlanBuilder builder(key);
+    emit(supply::Event::PreparedAllocated,
+         builder.failure() == PreparedPlanFailure::None
+             ? sizeof(PreparedEncodePlanStorage) : 0);
+    std::uint32_t unresolved = 0;
+    const bool appended = builder.failure() == PreparedPlanFailure::None &&
+        appendPreparedEncodeShadow(builder, core::SourcePayloadView(slot), key,
+            [&](std::uint64_t raw, std::uint64_t& canonical) noexcept {
+              const auto* surface = pool.findSurface(raw);
+              canonical = surface && surface->aliasTexture
+                  ? surface->aliasTexture.value : raw;
+              return canonical != 0;
+            }, unresolved);
+    emit(supply::Event::PreparedAppended);
+    auto owner = appended ? builder.seal() : PreparedEncodePlan{};
+    emit(supply::Event::PreparedSealed);
+    const auto* plan = owner.view(key);
+    const auto failure = plan ? PreparedPlanFailure::None
+        : !appended && builder.failure() == PreparedPlanFailure::None
+            ? PreparedPlanFailure::InvalidSource : builder.failure();
+    emit(supply::Event::PreparedStatus, static_cast<std::uint64_t>(failure));
+    emit(supply::Event::PreparedIdentities, plan ? plan->identityCount : 0);
+    emit(supply::Event::PreparedAccesses, plan ? plan->accessCount : 0);
+    emit(supply::Event::PreparedRanges, plan ? plan->rangeCount : 0);
+    emit(supply::Event::PreparedUnresolved, unresolved);
+  }
+  emit(supply::Event::PreparedEnd);
+}
+
 void prepareSlotForPublish(CommandQueue& q,
                            resources::Pool& pool,
                            core::ChunkSlot& slot,
@@ -3194,6 +3248,7 @@ void prepareSlotForPublish(CommandQueue& q,
     PerfScope stageScope(perf::countPrepareSlotResourceMarkCpuTime);
     markSlotResourcesUnlocked(pool, slot);
   }
+  if (supply::preparedObserveEnabled()) observePreparedSlot(q, pool, slot);
 }
 
 // R-BACK-2.104 empty-slot storage provisioning.

@@ -1,4 +1,7 @@
 #include "../../../src/dxmt9/dxmt9_prepared_encode_plan.hpp"
+#include "../../../src/dxmt9/dxmt9_prepared_encode_shadow.hpp"
+#include "../../../src/dxmt9/dxmt9_command_queue.hpp"
+#include "../../../src/dxmt9/dxmt9_cpu_supply_trace.hpp"
 #include <algorithm>
 #include <iostream>
 #include <set>
@@ -27,6 +30,67 @@ auto attachments(std::uint32_t samples = 1) {
 }
 using Kind = dxmt9::core::MetalCommandKind;
 constexpr auto Stable = PreparedAccessResolution::CanonicalStable;
+
+void finalSlotShadowProjection() {
+  dxmt9::core::ChunkSlot slot{};
+  const std::array<dxmt9::core::DrawParam, 1> draws{};
+  const std::array<dxmt9::core::DrawParamPayloadView, 1> payloads{};
+  dxmt9::core::CanonicalDrawState state{};
+  state.hot.textures[0] = dxmt9::core::Handle{1};
+  state.hot.textures[1] = dxmt9::core::Handle{2};
+  slot.appendDrawRun(std::move(state),
+                    dxmt9::core::DrawUniformPayload{}, draws, payloads);
+  slot.appendPresent({}, {});
+  auto sourceKey = key(static_cast<std::uint32_t>(slot.commandCount()));
+  sourceKey.firstCommand = 0;
+  PreparedEncodePlanBuilder builder(sourceKey);
+  std::uint32_t unresolved = 0;
+  check(appendPreparedEncodeShadow(builder, dxmt9::core::SourcePayloadView(slot),
+      sourceKey, [](std::uint64_t raw, std::uint64_t& out) noexcept {
+        out = raw == 1 || raw == 2 ? 9 : raw; return true;
+      }, unresolved), "actual final Slot projection");
+  auto owner = builder.seal();
+  const auto* plan = owner.view(sourceKey);
+  check(plan && plan->commandCount == slot.commandCount() &&
+        plan->commands[0].kind == Kind::DrawRun &&
+        plan->commands[1].kind == Kind::Present && plan->rangeCount == 2 &&
+        unresolved == 1 && plan->needsEncodeResolution,
+        "final ordinals and unresolved coordinator remain explicit");
+  check(plan->identityCount == 1 && plan->identities[0] == 9 &&
+        plan->commands[0].readCount == 1, "synchronous aliases deduplicate exactly");
+  PreparedEncodePlanBuilder failedResolve(sourceKey);
+  unresolved = 0;
+  check(appendPreparedEncodeShadow(failedResolve, dxmt9::core::SourcePayloadView(slot),
+      sourceKey, [](std::uint64_t, std::uint64_t&) noexcept { return false; }, unresolved),
+      "failed resolver retains explicit source row");
+  auto unresolvedOwner = failedResolve.seal();
+  check(unresolved == 2 && unresolvedOwner.view(sourceKey)->identityCount == 0,
+        "failed alias lookup cannot publish guessed identities");
+  check(slot.commandCount() == 2 && slot.commandAt(0).kind == Kind::DrawRun,
+        "shadow does not mutate source");
+  auto badKey = sourceKey;
+  ++badKey.commandCount;
+  PreparedEncodePlanBuilder bad(badKey);
+  check(!appendPreparedEncodeShadow(bad, dxmt9::core::SourcePayloadView(slot),
+      badKey, [](std::uint64_t, std::uint64_t&) noexcept { return false; }, unresolved) &&
+      !bad.seal(), "invalid final span exposes no prefix");
+}
+
+void publicationShadowProbe() {
+  // Real queue publication, no worker/GPU. Synthetic data prices only the
+  // connected shadow preparation, not gameplay or saved Encode work.
+  dxmt9::CommandQueue queue(dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, {});
+  const std::array<dxmt9::core::DrawParam, 1> draws{};
+  const std::array<dxmt9::core::DrawParamPayloadView, 1> payloads{};
+  dxmt9::supply::present(1);
+  for (unsigned sample = 0; sample < 18; ++sample) {
+    for (unsigned command = 0; command < 64; ++command)
+      queue.submitDrawRun(dxmt9::core::CanonicalDrawState{},
+                          dxmt9::core::DrawUniformPayload{}, draws, payloads);
+    check(queue.publishReplayDiagnosticBoundary(), "production publication hook probe");
+  }
+  dxmt9::supply::present(4);
+}
 
 void exhaustiveConstruction() {
   // Independently reconstruct expected command access, set membership and
@@ -267,11 +331,16 @@ void exhaustivePublication() {
 }
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
   try {
+    if (argc == 2 && std::string_view(argv[1]) == "--publication-shadow-probe") {
+      publicationShadowProbe();
+      return 0;
+    }
     std::cout << "prepared plan fixed storage bytes=" << sizeof(PreparedEncodePlanStorage) << '\n';
     exhaustiveConstruction();
     failuresAndBounds();
+    finalSlotShadowProjection();
     exhaustivePublication();
   } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';

@@ -7,7 +7,7 @@
 
 namespace dxmt9::encoders {
 
-// Stage-2 foundation only: no queue or Replay caller publishes this yet.
+// Value foundation: publication shadow observes this; no runtime async owner yet.
 struct PreparedSourceKey {
   core::CpuReadyTape::SourceRef source{};
   std::uint64_t sequence = 0;

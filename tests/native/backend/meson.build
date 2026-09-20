@@ -574,10 +574,15 @@ prepared_encode_plan_spec = executable(
   'dxmt9-prepared-encode-plan-spec',
   'prepared_encode_plan_spec.cpp',
   include_directories: dxmt9_inc,
-  dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
   link_args: dxmt9_test_link_args,
 )
 test('dxmt9-prepared-encode-plan-spec', prepared_encode_plan_spec,
+     env: dxmt9_native_test_env)
+test('dxmt9-prepared-encode-shadow-analysis', python3,
+     args: [files('../../../scripts/check/test_prepared_encode_shadow.py'),
+            prepared_encode_plan_spec.full_path()],
+     depends: prepared_encode_plan_spec,
      env: dxmt9_native_test_env)
 
 test('dxmt9-replay-emission-plan-spec',
