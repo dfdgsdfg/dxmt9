@@ -1,4 +1,5 @@
 #include "dxmt9_command_queue.hpp"
+#include "dxmt9_wait_trace.hpp"
 #include "dxmt9_color_attachment_capture_observer.hpp"
 #include "dxmt9_queue_mutex_diag.hpp"
 #include "render/backend_factory.hpp"
@@ -8712,7 +8713,10 @@ query::Poll CommandQueue::pollQueryFenceImpl(const query::EndReceipt& receipt,
                                             bool flush) noexcept {
   namespace diag = query::polldiag;
   try {
-    std::unique_lock lock(mutex_);
+    auto lock = waittrace::enabled() && waittrace::inWindow()
+        ? waittrace::queryLock(mutex_, queryQueueIdentity_, receipt.prefix.sequence,
+                              receipt.prefix.initializer, receipt.prefix.queue)
+        : std::unique_lock<std::mutex>(mutex_);
     diag::mark<Observe>(diag::Phase::QueueWait);
     const auto uploads = initializer_ ? initializer_->queryProgressUnlocked()
         : resources::Initializer::QueryProgress{};

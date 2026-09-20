@@ -30,6 +30,12 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H334 bounded wait trace](present-pacing-identity-wait-trace.334.md) adds
+identity-qualified CV-entry and mutex-acquisition evidence without polling
+subsampling. Native identity/closure tests pass. R671 ends before the selected
+window closes and captures Orca instead of the game; its empty CSV is rejected,
+not counted as zero waits. Foreground-controlled final-image attribution is open.
+
 [H333 pre-split wait ownership](present-pacing-stalker-pre-split-wait-owner.333.md)
 separates app-thread CPU growth from the later CB explosion. The pre-split
 bracket reaches 45.18ms CPU/frame at 0.787 cores with only 3.799 tail CBs/P;

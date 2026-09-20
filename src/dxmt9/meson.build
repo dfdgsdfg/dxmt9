@@ -21,6 +21,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_argbuf_hybrid.cpp',
   'dxmt9_command_queue.cpp',
   'dxmt9_cpu_supply_trace.cpp',
+  'dxmt9_wait_trace.cpp',
   'dxmt9_command_queue_cpu_ready_session.cpp',
   'dxmt9_compat.cpp',
   'dxmt9_capture.cpp',

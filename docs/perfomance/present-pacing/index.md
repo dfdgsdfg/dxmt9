@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H334](present-pacing-identity-wait-trace.334.md) adds a default-OFF bounded
+identity-qualified wait recorder: receipt/resource CV entries and slow query
+queue acquisition, with explicit output-completeness gates. Global drains,
+GPU resource waits and game/Wine attribution remain outside its coverage.
+
 [H333](present-pacing-stalker-pre-split-wait-owner.333.md) reproduces app-thread
 CPU growth before the large scope split increase. Fixed-stride query reports
 exhaust their periodic budget before that region, so exclusive wait ownership

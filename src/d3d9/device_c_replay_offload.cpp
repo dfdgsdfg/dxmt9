@@ -6,6 +6,7 @@
 // complete).
 
 #include "device_c_replay_offload.hpp"
+#include "dxmt9/dxmt9_wait_trace.hpp"
 #include "device_c_query_drain_observer.hpp"
 
 #include "device_c_common.hpp"
@@ -477,6 +478,10 @@ ReplayDrainLedger::targetForCoreBuffer(std::uint64_t handleValue) {
   return target;
 }
 
+ReplayDrainLedger::ReplayDrainLedger() {
+  if (dxmt9::waittrace::enabled()) dxmt9::waittrace::registerOwner(this);
+}
+
 ReplayDrainReceipt ReplayDrainLedger::captureReceipt(
     std::shared_ptr<ReplayDrainTarget> target) const noexcept {
   if (!target) {
@@ -503,6 +508,18 @@ dxmt9::query::ReplayReceiptState ReplayDrainLedger::waitReceipt(
     const ReplayDrainReceipt& receipt) noexcept {
   if (!receipt.target) {
     return dxmt9::query::ReplayReceiptState::Failed;
+  }
+  if (dxmt9::waittrace::enabled() && dxmt9::waittrace::inWindow()) {
+    dxmt9::waittrace::bindReceipt(this, receipt.target.get(), receipt.capturedSequence);
+    return dxmt9::waittrace::observeWait(mutex_, cv_, this, receipt.target.get(),
+        dxmt9::waittrace::Site::Receipt, [&] {
+          const auto state = classifyReceiptLocked(receipt);
+          return std::pair{state, dxmt9::waittrace::Snapshot{
+              receipt.capturedSequence, receipt.target->lastQueuedSeq,
+              receipt.target->lastReplayedSeq, static_cast<std::uint32_t>(state)}};
+        }, [](auto state) {
+          return state == dxmt9::query::ReplayReceiptState::Pending;
+        });
   }
   std::unique_lock lock(mutex_);
   cv_.wait(lock, [&] {
@@ -569,6 +586,20 @@ void ReplayDrainLedger::publishReplayed(
 
 ReplayDrainResult ReplayDrainLedger::wait(
     ReplayDrainTarget& target) noexcept {
+  if (dxmt9::waittrace::enabled() && dxmt9::waittrace::inWindow()) {
+    const auto state = dxmt9::waittrace::observeWait(mutex_, cv_, this, &target,
+        dxmt9::waittrace::Site::Resource, [&] {
+          // 0=pending, 1=caught up, 2=stopped, 3=poisoned. Keep the
+          // production terminal precedence and moving resource watermark.
+          const unsigned state = poisoned_ ? 3u : stopping_ ? 2u :
+              target.lastQueuedSeq <= target.lastReplayedSeq ? 1u : 0u;
+          return std::pair{state, dxmt9::waittrace::Snapshot{
+              target.lastQueuedSeq, target.lastQueuedSeq,
+              target.lastReplayedSeq, state}};
+        }, [](auto state) { return state == 0u; });
+    return state == 3u ? ReplayDrainResult::Poisoned :
+        state == 2u ? ReplayDrainResult::Stopped : ReplayDrainResult::CaughtUp;
+  }
   std::unique_lock lock(mutex_);
   cv_.wait(lock, [&] {
     return poisoned_ || stopping_ ||
@@ -1488,7 +1519,13 @@ bool drainDeferredReplayForBufferLock(D9CBuffer* b,
   }
   dxmt9::perf::countOffloadDrainFenceWait();
   const auto waitStart = std::chrono::steady_clock::now();
-  const auto result = ledger.wait(*b->replayDrainTarget);
+  const auto result = [&] {
+    if (dxmt9::waittrace::enabled()) {
+      dxmt9::waittrace::ContextScope scope({0, dxmt9::waittrace::Site::BufferLock});
+      return ledger.wait(*b->replayDrainTarget);
+    }
+    return ledger.wait(*b->replayDrainTarget);
+  }();
   const auto elapsed = static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now() - waitStart).count());
@@ -1877,7 +1914,13 @@ bool drainDeferredReplayForBufferUnlock(D9CBuffer* b) {
   }
   dxmt9::perf::countOffloadDrainFenceWait();
   const auto waitStart = std::chrono::steady_clock::now();
-  const auto result = ledger.wait(*b->replayDrainTarget);
+  const auto result = [&] {
+    if (dxmt9::waittrace::enabled()) {
+      dxmt9::waittrace::ContextScope scope({0, dxmt9::waittrace::Site::BufferUnlock});
+      return ledger.wait(*b->replayDrainTarget);
+    }
+    return ledger.wait(*b->replayDrainTarget);
+  }();
   const auto elapsed = static_cast<std::uint64_t>(
       std::chrono::duration_cast<std::chrono::nanoseconds>(
           std::chrono::steady_clock::now() - waitStart).count());

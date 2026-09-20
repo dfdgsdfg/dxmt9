@@ -1,5 +1,6 @@
 #include "device_c_provider.hpp"
 #include "device_c_query_receipt_observer.hpp"
+#include "dxmt9/dxmt9_wait_trace.hpp"
 #include "../dxmt9/dxmt9_query_timeline_observer.hpp"
 
 // Needed so dxmt9c_stateblock_apply can mark the per-frequency uniform
@@ -359,8 +360,22 @@ static std::optional<std::int32_t> pollQueryReceiptImpl(
   return result;
 }
 
+[[gnu::noinline]] static std::optional<std::int32_t> pollQueryReceiptTraced(
+    D9CQuery* q, void* output, std::uint32_t size, std::uint32_t flags) {
+  namespace query_receipt_diag = dxmt9::d3d9::query_receipt_diag;
+  dxmt9::waittrace::ContextScope scope({q && q->obj ? q->obj->identity() : 0,
+                                      dxmt9::waittrace::Site::Receipt});
+  if (!query_receipt_diag::mode())
+    return pollQueryReceiptImpl<false>(q, output, size, flags);
+  return query_receipt_diag::observe(flags, [&] {
+    return pollQueryReceiptImpl<true>(q, output, size, flags);
+  });
+}
+
 std::optional<std::int32_t> dxmt9::d3d9::tryPollQueryReceipt(
     D9CQuery* q, void* output, std::uint32_t size, std::uint32_t flags) {
+  if (dxmt9::waittrace::enabled() && dxmt9::waittrace::inWindow())
+    return pollQueryReceiptTraced(q, output, size, flags);
   if (!query_receipt_diag::mode())
     return pollQueryReceiptImpl<false>(q, output, size, flags);
   return query_receipt_diag::observe(flags, [&] {

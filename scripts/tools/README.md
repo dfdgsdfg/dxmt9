@@ -28,6 +28,10 @@ build. `shader_corpus_tool.py` is also imported by the Meson tests under
 - `summarize_3dmark05_cleanup_candidates.py` — non-destructively rank
   3DMark05 `traces/` and `experiments/output/` run-id cleanup candidates,
   marking run ids referenced by `docs/perfomance/**/*.md`.
+- `summarize_wait_trace.py` — validate `DXMT9_WAIT_TRACE` CSV identity,
+  bounded-window closure, capacity and CV-entry coverage; report replay waits
+  separately from mutex acquisition. Reject incomplete evidence and exclude
+  cross-window rows. Elapsed observations are not CPU/FPS savings.
 - `observe_darwin_thread_cpu.py` — externally query the native commit-entry
   thread through `build/tools/dxmt9-thread-cpu`. Uses a fresh Info run log,
   one successful device negotiation and one native-ID marker; PID/start

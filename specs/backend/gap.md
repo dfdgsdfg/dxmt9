@@ -58,6 +58,20 @@ The [H333 follow-up](../../docs/perfomance/present-pacing/present-pacing-stalker
 reproduces app-thread CPU growth before heavy scope splitting, but periodic
 query reports exhaust their budget before the target window. Exclusive
 pre-split replay/queue/game/Wine wait ownership remains unproven.
+The default-OFF [identity-qualified wait trace](identity-qualified-wait-trace.md)
+(R-BACK-WAIT-1) records every hooked receipt/resource CV entry in a bounded
+Present window, separating mutex acquisition from wait/reacquisition and
+retaining ledger incarnation, captured raw/query and completion frontiers.
+Slow query-queue acquisition carries the actual/requested queue and END prefix.
+Native checks cover ready/pending, terminal/supersession, spurious wakeups,
+owner reuse, overflow, incomplete/cross-window export and overwrite refusal.
+Global drains, queue-space holder attribution and game/Wine wait stacks are
+not covered; frontier settlement is not the identity of an OS notification.
+R671 ends at 2,080 encoded Presents before the selected 2,100 boundary and its
+capture shows the desktop/Orca fallback, not the game. The analyzer correctly
+rejects the unclosed CSV. Final-image foreground-controlled wild evidence and
+exclusive wait ownership remain open; see
+[H334](../../docs/perfomance/present-pacing/present-pacing-identity-wait-trace.334.md).
 
 R-BACK-2.15.5 known-setter nonconstant invalidation is the unconditional
 implementation; the 2026-09-17 consolidation removes its runtime opt-out.

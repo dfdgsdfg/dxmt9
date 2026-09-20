@@ -157,6 +157,7 @@ struct StateBlockApplyTask;
 
 class ReplayDrainLedger {
  public:
+  ReplayDrainLedger();
   ReplayDrainReceipt captureReceipt(
       std::shared_ptr<ReplayDrainTarget> target) const noexcept;
   dxmt9::query::ReplayReceiptState waitReceipt(

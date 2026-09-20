@@ -1,5 +1,6 @@
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_cpu_supply_trace.hpp"
+#include "dxmt9_wait_trace.hpp"
 
 #include "dxmt9_encode_partition.hpp"
 #include "dxmt9_parallel_render_pass.hpp"
@@ -7827,6 +7828,7 @@ void countPresentEncoded() {
   const auto value =
       counters().presentEncoded.fetch_add(1, std::memory_order_relaxed) + 1;
   if (::dxmt9::supply::enabled()) ::dxmt9::supply::present(value);
+  if (::dxmt9::waittrace::enabled()) ::dxmt9::waittrace::present(value);
   const auto memoryInterval = processMemoryPresentInterval();
   if (memoryInterval != 0 && value % memoryInterval == 0) {
     sampleProcessMemory();
