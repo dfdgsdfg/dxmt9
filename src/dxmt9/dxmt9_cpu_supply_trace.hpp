@@ -21,6 +21,7 @@ enum class Event : std::uint32_t {
   ReplayLedger, WriterWaitBegin, WriterWaitEnd, CommitWaitBegin, CommitWaitEnd,
   PublishReason, PublishCommands, ScopeBoundary, QueryIssue,
   CompletionDequeue, CompletionObserved, Retire,
+  EncodePrefetchBegin, EncodePrefetchEnd, EncodeBackendBegin, EncodeBackendEnd,
 };
 
 // Call only behind enabled(). No output, allocation or sink mutex in the

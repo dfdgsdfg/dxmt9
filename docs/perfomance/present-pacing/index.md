@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H337](present-pacing-stalker-encode-phases.337.md) partitions the blocking
+head's encode CPU: backend 13.965ms, prefetch 0.892ms, remaining 0.033ms.
+All 55 target sources have qualified phase endpoints; backend planning versus
+actual encoding remains the next ownership split. This is not FPS evidence.
+
 [H336](present-pacing-stalker-publication-progress.336.md) resolves the
 55-publication case: one prelude plus 54 occlusion-scope closures, all semantic
 boundaries. The cap clears when the large head finishes (14.35ms encode,

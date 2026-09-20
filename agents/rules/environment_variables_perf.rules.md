@@ -9,6 +9,15 @@ perf-probe toolkit.
 
 ## Perf counters
 
+The bounded CPU-supply trace also brackets ordinary Slot prefetch and backend
+processing using queue/sequence-qualified native CPU and wall endpoints.
+`analyze_publication_progress.py` partitions these with source preparation,
+context preparation and return/relock residuals. Missing endpoints in older
+traces or unsupported Arena/session/lookahead paths are unqualified, not zero
+cost. Four extra events per ordinary source consume the same fixed sink;
+shorten the selected window if it overflows. These diagnostic scopes include
+observer overhead and do not constitute an observer-OFF FPS comparison.
+
 | Var | Purpose | Default |
 |---|---|---|
 | `DXMT9_QUERY_SCOPE_CB_JOIN` | Experimental FIFO CB-only composition of scoped sources in CPU-ready EncodeSessions. Requires `DXMT9_METAL_OCCLUSION=1` and the CPU-ready session lane. Keeps source publication, independent query render passes, origin-qualified contributions, FLUSH submission and ordered completion; does not admit Arena queries, reorder/DCE or queried parallel passes. See `specs/backend/query-scope-cb-composition.md`. | `0` |

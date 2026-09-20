@@ -75,3 +75,15 @@ observation after `waitUntilCompleted`, not an exact GPU timestamp. Commit-to-
 dequeue includes completion-worker FIFO delay; dequeue-to-observed includes
 driver waiting and scheduling. Only same-sequence ordinary 1:1 submissions
 may use these differences; shared CBs and missing endpoints stay unqualified.
+
+The ordinary Slot encode callback may add bounded prefetch and backend
+begin/end events with the same queue owner, source sequence and native thread
+clock as the outer encode interval. Adjacent endpoints partition source/borrow
+preparation, prefetch eligibility/work, context preparation, backend processing
+and return/relock. Both wall and native CPU differences must be reported;
+these are observed scopes including diagnostic overhead, not pure function
+costs. Skipped prefetch still brackets the eligibility check. Missing phases
+(older traces, Arena, session/lookahead paths or exceptions) must remain
+unqualified, never zero-filled. Duplicate, reordered, cross-thread or invalid
+clock endpoints must be rejected. No global counter delta may be attributed
+to one source, and no per-draw diagnostic state is required.

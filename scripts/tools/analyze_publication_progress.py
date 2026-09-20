@@ -11,6 +11,28 @@ import summarize_wait_trace as waits
 
 STAGES = ('publish', 'encode_begin', 'encode_end', 'submit',
           'completion_dequeue', 'completion_observed', 'retire')
+PHASES = ('encode_prefetch_begin', 'encode_prefetch_end',
+          'encode_backend_begin', 'encode_backend_end')
+
+
+def encode_phases(events):
+    """Disjoint intervals on one encode thread, never aggregate counter deltas."""
+    missing = [name for name in PHASES if name not in events]
+    if missing:
+        return dict(qualified=False, missing=missing)
+    names = ('encode_begin',) + PHASES + ('encode_end',)
+    endpoints = [events[name] for name in names]
+    if len({r['tid'] for r in endpoints}) != 1:
+        raise ValueError('encode phase thread mismatch')
+    intervals = []
+    for a, b in zip(endpoints, endpoints[1:]):
+        wall, cpu = b['wall_ns']-a['wall_ns'], b['cpu_ns']-a['cpu_ns']
+        if wall < 0 or cpu < 0 or cpu > wall+100000:
+            raise ValueError('invalid encode phase clocks/order')
+        intervals.append(dict(wall_ms=wall/1e6, cpu_ms=cpu/1e6))
+    return dict(qualified=True, **dict(zip(
+        ('source_prepare', 'prefetch', 'context_prepare', 'backend', 'return_relock'),
+        intervals)))
 
 
 def analyze(meta, rows, wait_meta, wait_rows, query=None):
@@ -22,7 +44,7 @@ def analyze(meta, rows, wait_meta, wait_rows, query=None):
     target = max(pending, key=lambda r: r['receipt_ns'])
     events = collections.defaultdict(dict)
     for r in rows:
-        if r['kind'] not in STAGES + ('publish_reason', 'publish_commands'):
+        if r['kind'] not in STAGES + PHASES + ('publish_reason', 'publish_commands'):
             continue
         key = (r['owner'], r['id'])
         if r['kind'] in events[key]:
@@ -43,6 +65,7 @@ def analyze(meta, rows, wait_meta, wait_rows, query=None):
             reason=e.get('publish_reason', {}).get('value'),
             commands=e.get('publish_commands', {}).get('value'),
             encode_cpu_ms=encode_cpu/1e6,
+            encode_phases=encode_phases(e),
             stages_ms={a+'__'+b: (e[b]['wall_ns']-e[a]['wall_ns'])/1e6
                        for a, b in zip(STAGES, STAGES[1:])}))
     keys = {(r['queue_owner'], r['sequence']) for r in target['target']['publications']}

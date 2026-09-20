@@ -38,6 +38,28 @@ def fixture():
 
 
 class TestSupply(unittest.TestCase):
+    def test_encode_phase_partition(self):
+        names = ('encode_begin',) + progress.PHASES + ('encode_end',)
+        events = {name: dict(tid=3, wall_ns=1000000+i*200000,
+                            cpu_ns=100000+i*100000)
+                  for i, name in enumerate(names)}
+        result = progress.encode_phases(events)
+        self.assertTrue(result['qualified'])
+        self.assertAlmostEqual(sum(v['cpu_ms'] for k, v in result.items()
+                                   if k != 'qualified'), .5)
+        self.assertAlmostEqual(result['backend']['wall_ms'], .2)
+        missing = dict(events)
+        del missing['encode_backend_end']
+        self.assertFalse(progress.encode_phases(missing)['qualified'])
+        self.assertFalse(progress.encode_phases({})['qualified'])
+        for replacement in ({'tid': 4}, {'wall_ns': 1}, {'cpu_ns': 1},
+                            {'cpu_ns': 10**12}):
+            invalid = dict(events)
+            invalid['encode_prefetch_end'] = dict(events['encode_prefetch_end'],
+                                                  **replacement)
+            with self.assertRaises(ValueError):
+                progress.encode_phases(invalid)
+
     def test_publication_progress(self):
         meta, rows = fixture()
         meta['pid'] = 17
@@ -61,6 +83,7 @@ class TestSupply(unittest.TestCase):
         self.assertEqual(r['target_sources'][0]['reason'], 9)
         self.assertEqual(r['target_sources'][0]['commands'], 1)
         self.assertAlmostEqual(r['target_sources'][0]['encode_cpu_ms'], .95)
+        self.assertFalse(r['target_sources'][0]['encode_phases']['qualified'])
         self.assertEqual(r['scope_boundaries'][0],
                          dict(sequence=2, published=True, before=1, after=0))
         self.assertEqual(r['target_sources'][0]['stages_ms']['submit__completion_dequeue'], .001)
@@ -77,6 +100,22 @@ class TestSupply(unittest.TestCase):
                        for r in rows]
             with self.assertRaises(ValueError):
                 progress.analyze(meta, invalid, {'pid':17}, [receipt])
+        observed = list(rows)
+        for index, kind in enumerate(progress.PHASES):
+            t = 24_200_000 + index*400_000
+            observed.append(dict(kind=kind, wall_ns=t, cpu_ns=t//2+1,
+                                 tid=3, owner=2, id=2, value=0, frame=2))
+        observed.sort(key=lambda r: r['wall_ns'])
+        phases = progress.analyze(meta, observed, {'pid':17}, [receipt])[
+            'target_sources'][0]['encode_phases']
+        self.assertTrue(phases['qualified'])
+        self.assertAlmostEqual(phases['prefetch']['cpu_ms'], .2)
+        self.assertAlmostEqual(phases['backend']['cpu_ms'], .2)
+        self.assertAlmostEqual(sum(v['cpu_ms'] for k, v in phases.items()
+                                   if k != 'qualified'), .95)
+        with self.assertRaises(ValueError):
+            progress.analyze(meta, observed+[next(r for r in observed
+                if r['kind']=='encode_backend_begin')], {'pid':17}, [receipt])
 
     def test_guest_pc_window_is_not_cpu(self):
         def group(frame, samples):

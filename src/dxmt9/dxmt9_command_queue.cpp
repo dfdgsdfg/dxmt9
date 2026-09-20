@@ -810,6 +810,9 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
                     auto& slot = *const_cast<core::ChunkSlot*>(legacySlot);
                     const std::size_t slotIndex = source.slotIndex;
                     traceEncodeFnStage("entry", slotIndex, slot);
+                    if (::dxmt9::supply::enabled())
+                      ::dxmt9::supply::record(::dxmt9::supply::Event::EncodePrefetchBegin,
+                                            &queueLifecycle_, source.seqId);
                     if (encodeSlotPsoPrefetchEnabled() &&
                         !slot.prefetchedPipelinesSealed()) {
                       traceEncodeFnStage("before-pso-prefetch", slotIndex, slot);
@@ -817,6 +820,9 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
                       prefetchSlotPipelines(slot);
                       traceEncodeFnStage("after-pso-prefetch", slotIndex, slot);
                     }
+                    if (::dxmt9::supply::enabled())
+                      ::dxmt9::supply::record(::dxmt9::supply::Event::EncodePrefetchEnd,
+                                            &queueLifecycle_, source.seqId);
                     traceEncodeFnStage("before-make-context", slotIndex, slot);
                     auto ctx = makeEncodeContext();
                     traceEncodeFnStage("after-make-context", slotIndex, slot);
@@ -828,8 +834,14 @@ CommandQueue::CommandQueue(WMT::Device device, core::BackendLimits limits,
                         .id = source.sourceId,
                         .storage = source.storage,
                     };
+                    if (::dxmt9::supply::enabled())
+                      ::dxmt9::supply::record(::dxmt9::supply::Event::EncodeBackendBegin,
+                                            &queueLifecycle_, source.seqId);
                     result = backend_->onChunkReady(
                         ctx, slotIndex, slot, std::move(options));
+                    if (::dxmt9::supply::enabled())
+                      ::dxmt9::supply::record(::dxmt9::supply::Event::EncodeBackendEnd,
+                                            &queueLifecycle_, source.seqId);
                     traceEncodeFnStage(result.has_value()
                                            ? "after-backend-onChunkReady-submission"
                                            : "after-backend-onChunkReady-inline",

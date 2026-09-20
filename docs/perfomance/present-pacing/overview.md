@@ -14,6 +14,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H337](present-pacing-stalker-encode-phases.337.md) narrows the late STALKER
+blocking-head CPU owner: 13.965ms backend, 0.892ms prefetch and 0.033ms other
+work within a 14.890ms encode CPU scope. The 55-source pattern still fills the
+inflight cap. Backend planning versus encoding and scope/END source batching
+are separate next gates; no observer-OFF FPS improvement is established.
+
 ## Scope
 
 This domain owns the **CPU/sync side** of GT1 wallclock: why

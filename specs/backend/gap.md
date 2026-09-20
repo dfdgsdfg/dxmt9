@@ -99,7 +99,16 @@ Multi-scope source ownership and deferred-END receipt composition need a joint
 refinement before changing this boundary. The measured encode CPU includes
 prefetch/backend processing and borrow/relock work; sequence-qualified phase
 attribution is still missing. Offline analysis now exposes validated native
-encode CPU per complete source without changing runtime policy.
+encode CPU per complete source without changing runtime policy. The ordinary
+Slot callback now brackets prefetch and backend processing in the bounded
+supply trace; the analyzer retains preparation/context/return-relock residuals
+as disjoint wall/native-CPU intervals. Missing phase endpoints remain
+unqualified (including old traces, Arena and session/lookahead paths).
+R677 qualifies all 3125 complete sources and the target's 55 publications:
+the blocking head spends 13.965/14.890ms native CPU inside backend processing,
+0.892ms in prefetch and 0.033ms elsewhere. Backend planning versus actual
+encoding and observer-OFF cost remain open; see
+[H337](../../docs/perfomance/present-pacing/present-pacing-stalker-encode-phases.337.md).
 
 R-BACK-2.15.5 known-setter nonconstant invalidation is the unconditional
 implementation; the 2026-09-17 consolidation removes its runtime opt-out.
