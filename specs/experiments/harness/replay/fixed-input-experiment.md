@@ -32,7 +32,9 @@ and read/write semantics are. Unknown identities, foreign table domains and
 omitted child reads reject. The synchronous index borrow is not retained by
 the certificate, workers or a future iteration. The selected next target is
 Replay-built `PreparedEncodePlan` publication alongside the final Slot, not a
-migration of execution coordination. This remains unimplemented. It must keep
+migration of execution coordination. The isolated builder/publication value
+model exists with native exhaustive tests; production handoff and provider
+integration remain unimplemented. It must keep
 alias stability, failure-atomic publication and source-generation qualification.
 Encode retains final session/pass admission, child dispatch/join and parent
 ownership. Plans must be reconstructed from authenticated raw input on each

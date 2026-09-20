@@ -1596,9 +1596,12 @@ Preparation of source N+1 may overlap encoding source N; this does not grant
 permission to encode multiple sources concurrently against shared mutable
 session or parent state. No dedicated coordinator thread is required.
 
-#### Target PreparedEncodePlan handoff (not yet implemented)
+#### Target PreparedEncodePlan handoff (foundation only)
 
-`PreparedEncodePlan` is the design name, not an existing runtime type. Its
+`PreparedEncodePlan` now has an isolated bounded builder, move-only storage and
+publication value-model foundation, described in
+[PreparedEncodePlan foundation](prepared-encode-plan.md). No live queue or
+Replay caller uses it yet; joint Slot publication is still unimplemented. Its
 source-stable payload contains qualified source/storage generation and replay
 bounds, a canonical identity table with read/write access indices, logical
 pass/control boundaries, candidate child ranges and structural coverage/work
