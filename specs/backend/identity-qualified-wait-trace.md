@@ -168,3 +168,21 @@ rejected/overflowed passes and are not a complete workload capacity histogram.
 Older transcripts without the event remain qualified for prior fields, but
 resource cardinality is unknown, not zero. Duplicate or inconsistent size
 events must fail analysis. This observation does not qualify execution.
+
+The serial observer may additionally install a scoped, thread-local access
+observer around the existing sealed-pass producer. Its storage and events must
+not enter producer signatures, snapshots, Slots or certificates. The producer
+must return the same verdict and snapshots with or without this observer.
+Pass boundaries come from the producer, not a second replay grammar.
+
+For every candidate interval it records canonical distinct read identities,
+canonical read touches per DrawRun command, maximum commands using one identity,
+adjacent-command repeated reads, and sealed/rejected/production-overflow flags.
+These count commands, not DrawParams, bytes or GPU reads. The separate 4096-entry
+diagnostic dictionary compares full identities on hash collision. Its own
+exhaustion or failed canonicalization must mark results inexact/lower-bound;
+neither may enlarge production admission or grant execution authority. Bounds,
+event order, source/thread clocks and coarse overflow/eligibility counts must
+agree before analysis qualifies the per-pass transcript. Missing historical
+events are unknown, not zero resource cardinality. This diagnostic measures
+structure with intrusive CPU/cache work, not observer-OFF performance.

@@ -35,8 +35,15 @@ parallel performance evidence remain open. IdentitySerial remains default;
 this change does not promote ExplicitParallel.
 
 R694 serial observation finds 54 structural passes with at most 25 read
-identities, while 21 pass unions still exceed 256. Full cardinality of rejected
-passes remains unknown. See [H346](../../../docs/perfomance/present-pacing/present-pacing-stalker-pass-access.346.md).
+identities, while 21 pass unions still exceed 256. See [H346](../../../docs/perfomance/present-pacing/present-pacing-stalker-pass-access.346.md).
+R695's diagnostic-only exact dictionary measures 433–458 distinct identities
+for each of 21 rejected passes, with 69.95% repeated read touches; all 1528
+pass transcripts are exact. Production bounds remain unchanged. A pass-owned
+identity table with exact child index/bitset views is a representation candidate,
+not implemented sharing or parallel qualification. Preserve source/storage
+generation, independent coverage and alias proofs, and overflow fallback;
+construction/copy/memory pricing remains open. See
+[H347](../../../docs/perfomance/present-pacing/present-pacing-stalker-access-cardinality.347.md).
 
 ## Qualified capacity ownership recovery (2026-09-14)
 

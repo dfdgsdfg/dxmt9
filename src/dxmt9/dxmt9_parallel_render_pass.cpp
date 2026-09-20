@@ -1,4 +1,5 @@
 #include "dxmt9_parallel_render_pass.hpp"
+#include "dxmt9_parallel_access_observer.hpp"
 
 #include "util/log/log.hpp"
 
@@ -133,6 +134,7 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     const SealedParallelPassSnapshotInput& input,
     SealedParallelPassSnapshotBatch& snapshots) noexcept {
   snapshots.reset();
+  auto* const accessObserver = activeParallelAccessObserver;
   if (!input.stream) {
     return rejectBatch(Fallback::PlanMissing, snapshots);
   }
@@ -227,6 +229,7 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     current.coordinatorProof.firstPassActionEpoch = epochState.epoch;
     current.passActionEpoch = epochState.epoch;
     current.replayOrdinalBegin = static_cast<std::uint32_t>(ordinal);
+    if (accessObserver) accessObserver->start(current.replayOrdinalBegin);
     current.attachments = attachments;
     current.firstDraw = commandLocator(
         stream, ordinal, commandIndex, Kind::DrawRun);
@@ -514,6 +517,10 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
       result.drawCountMax = std::max(result.drawCountMax,
                                      current.drawCount);
     }
+    if (accessObserver)
+      accessObserver->seal(replayOrdinalEnd,
+          candidateRejections[fallbackIndex(Fallback::PassReadUnionOverflow)],
+          candidateRejected, boundaryComplete);
     resetCandidate();
   };
 
@@ -614,6 +621,7 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
         rawWrites, input.proofs.resources, writes);
     const bool readsCanonical = canonicalizeResources(
         rawReads, input.proofs.resources, reads);
+    if (accessObserver) accessObserver->append(reads, readsCanonical);
     if (!input.proofs.resources.valid()) {
       rejectCandidate(Fallback::ResourceIdentityProof);
     } else if (!writesCanonical || !readsCanonical) {

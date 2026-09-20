@@ -27,6 +27,14 @@ The optional accepted-pass resource event reports maximum and total read
 identity cardinality per source. Rejected passes are excluded; missing events
 in historical traces mean unknown. It does not measure retained capacity or
 prove that a larger pass is executable.
+The same bounded serial observer also records per-pass canonical read cardinality
+and reuse, including rejected passes. A scoped TLS observer owns a separate exact
+4096-identity diagnostic dictionary; it cannot widen production capacity. Count
+touches per DrawRun command, not per draw. Diagnostic exhaustion/canonicalization
+failure marks lower-bound/incomplete data. Hash collisions compare full identities.
+Per-pass events are optional for historical traces but must be complete and agree
+with coarse candidate/overflow/eligibility counts when present. This adds cold
+dictionary reset/lookup and tracing overhead; it is not an FPS lane.
 
 The bounded CPU-supply trace also brackets ordinary Slot prefetch and backend
 processing using queue/sequence-qualified native CPU and wall endpoints.

@@ -39,6 +39,28 @@ def fixture():
 
 
 class TestSupply(unittest.TestCase):
+    def test_parallel_access_transcript(self):
+        begin = dict(tid=3,wall_ns=100,cpu_ns=100)
+        end = dict(tid=3,wall_ns=1000,cpu_ns=1000)
+        values = [(4<<32)|304, (266<<32)|300, 600, (8<<32)|250, 1|8|16|32]
+        rows = [dict(begin,kind=k,value=v,wall_ns=200+i*100,cpu_ns=200+i*100)
+                for i,(k,v) in enumerate(zip(progress.ACCESS_EVENTS,values))]
+        result = progress.parallel_accesses(begin,end,rows,1,1)[0]
+        self.assertEqual(result['distinct'],266)
+        self.assertTrue(result['exact'])
+        self.assertEqual(result['adjacent_reuse'],250)
+        self.assertIsNone(progress.parallel_accesses(begin,end,[],1,1))
+        for invalid in (rows[:-1], rows+rows,
+                        [dict(rows[0],tid=4)]+rows[1:],
+                        rows[:1]+[dict(rows[1],value=(200<<32)|300)]+rows[2:],
+                        rows[:3]+[dict(rows[3],value=(8<<32)|599)]+rows[4:],
+                        rows[:-1]+[dict(rows[-1],value=3|8|16|32)]):
+            with self.assertRaises(ValueError):
+                progress.parallel_accesses(begin,end,invalid,1,1)
+        clipped = [dict(rows[0],value=(4<<32)|5004),dict(rows[1],value=(4096<<32)|5000),
+                           dict(rows[2],value=6000),rows[3],dict(rows[4],value=2|8|16|32)]
+        self.assertFalse(progress.parallel_accesses(begin,end,clipped,1,1)[0]['exact'])
+
     def test_parallel_observer_is_structural_and_fail_closed(self):
         begin = dict(kind='framegraph_encode_begin', tid=3, wall_ns=1000, cpu_ns=500)
         end = dict(begin, kind='framegraph_encode_end', wall_ns=10000, cpu_ns=5000)
@@ -81,6 +103,7 @@ class TestSupply(unittest.TestCase):
         self.assertNotIn('tryEncodeParallelPass(',block)
         self.assertNotIn('countParallelPassShadow(',block)
         self.assertIn('IdentitySerial &&',source)
+        self.assertIn('ScopedParallelAccessObserver scope(accessObserver)',block)
         header = (ROOT/'src/dxmt9/dxmt9_parallel_render_pass.hpp').read_text()
         enum = header.split('enum class SealedParallelPassSnapshotFallback',1)[1].split('{',1)[1].split('}',1)[0]
         names = [s.strip() for s in enum.split(',') if s.strip() and s.strip() != 'Count']

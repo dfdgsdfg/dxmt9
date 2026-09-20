@@ -4,6 +4,7 @@
 #include "dxmt9_capture.hpp"
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_cpu_supply_trace.hpp"
+#include "dxmt9_parallel_access_observer.hpp"
 #include "dxmt9_encode_partition.hpp"
 #include "dxmt9_draw_encoder_draw_internal.hpp"
 #include "dxmt9_draw_encoder_internal.hpp"
@@ -2721,8 +2722,13 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
       // or tryEncodeParallelPass. The executable batch remains empty.
       thread_local SealedParallelPassSnapshotBatch diagnosticSnapshots;
       diagnosticSnapshots.reset();
-      const auto observed = produceSealedParallelPassSnapshots(
-          snapshotInput, diagnosticSnapshots);
+      const auto observed = [&] {
+        thread_local ParallelAccessObserver accessObserver;
+        accessObserver.owner = &ctx.pool;
+        accessObserver.sequence = sourceSeqId;
+        ScopedParallelAccessObserver scope(accessObserver);
+        return produceSealedParallelPassSnapshots(snapshotInput, diagnosticSnapshots);
+      }();
       using E = ::dxmt9::supply::Event;
       const auto emit = [&](E event, std::uint64_t value) {
         ::dxmt9::supply::record(event, &ctx.pool, sourceSeqId, value);

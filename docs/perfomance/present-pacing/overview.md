@@ -14,10 +14,16 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H347](present-pacing-stalker-access-cardinality.347.md) closes rejected-pass
+cardinality: all 21 overflows require 433–458 distinct canonical reads, with
+69.95% repeated touches. All 1528 diagnostic pass transcripts are exact.
+This supports investigating shared pass-owned identity tables and child index
+views; production bounds and serial policy remain unchanged. No FPS claim.
+
 [H346](present-pacing-stalker-pass-access.346.md) implements separate pass-read
 metadata without changing draw/state SoA. R694 observes 54 accepted passes
 (maximum 25 read identities), with 21 pass unions still exceeding 256. The next
-gates are large-pass cardinality, proof-storage cost and wide-resource GPU exact
+gates were large-pass cardinality (now measured by H347), proof-storage cost and wide-resource GPU exact
 validation; this is not parallel execution promotion or an FPS A/B.
 
 [H345](present-pacing-stalker-resource-closure.345.md) isolates the resource

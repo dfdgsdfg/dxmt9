@@ -19,6 +19,8 @@ COMMAND_EVENTS = ('chunk_command_begin', 'chunk_command_end',
                   'chunk_split_begin', 'chunk_split_end')
 DRAW_EVENTS = ('encode_draw_begin', 'encode_draw_end')
 PARALLEL_EVENTS = tuple(k for k in supply.EVENTS if k.startswith('parallel_observe_'))
+ACCESS_EVENTS = ('parallel_access_range', 'parallel_access_counts',
+                 'parallel_access_touches', 'parallel_access_reuse', 'parallel_access_flags')
 PARALLEL_REASONS = ('none plan_missing plan_not_validated replay_invalid '
     'unsealed_start unsealed_end coordinator_command non_child_draw_run '
     'no_two_child_work planner_invariant child_capacity pass_capacity '
@@ -27,6 +29,50 @@ PARALLEL_REASONS = ('none plan_missing plan_not_validated replay_invalid '
     'capture_state initializer_state ordered_control_state sidecar_state '
     'first_draw_snapshot raw_read_set_incomplete raw_write_set_incomplete '
     'pass_read_union_overflow').split()
+
+def parallel_accesses(begin, end, rows, candidates, overflow_count, eligible=None):
+    local = sorted((r for r in rows if r['kind'] in ACCESS_EVENTS),key=lambda r:r['wall_ns'])
+    if not local:
+        return None
+    if len(local) != candidates*len(ACCESS_EVENTS):
+        raise ValueError('incomplete parallel access transcript')
+    previous, previous_end = begin, 0
+    passes = []
+    for index in range(0,len(local),len(ACCESS_EVENTS)):
+        group = local[index:index+len(ACCESS_EVENTS)]
+        if tuple(r['kind'] for r in group) != ACCESS_EVENTS:
+            raise ValueError('parallel access event order/duplicate')
+        for r in group:
+            if (r['tid'] != begin['tid'] or r['wall_ns'] < previous['wall_ns'] or
+                    r['cpu_ns'] < previous['cpu_ns'] or r['wall_ns'] > end['wall_ns'] or
+                    r['cpu_ns'] > end['cpu_ns']):
+                raise ValueError('parallel access clocks/thread')
+            previous = r
+        interval, counts, touches, reuse, flags = (r['value'] for r in group)
+        first, last = interval >> 32, interval & 0xffffffff
+        unique, commands = counts >> 32, counts & 0xffffffff
+        maximum_uses, adjacent = reuse >> 32, reuse & 0xffffffff
+        exact, exhausted, incomplete = bool(flags&1), bool(flags&2), bool(flags&4)
+        overflow, rejected, sealed = bool(flags&8), bool(flags&16), bool(flags&32)
+        if (flags & ~63 or exact != (not exhausted and not incomplete) or
+                first < previous_end or last <= first or not commands or commands > last-first or
+                unique > 4096 or unique > touches or maximum_uses > commands or
+                maximum_uses > touches or adjacent > touches-unique or
+                (touches and not maximum_uses) or
+                (exhausted and unique != 4096) or (overflow and not rejected) or
+                (not rejected and not sealed) or
+                (exact and overflow and unique <= 256)):
+            raise ValueError('invalid parallel access counts/range')
+        previous_end = last
+        passes.append(dict(begin=first,end=last,commands=commands,distinct=unique,
+            touches=touches,maximum_uses=maximum_uses,adjacent_reuse=adjacent,
+            exact=exact,diagnostic_exhausted=exhausted,incomplete=incomplete,
+            production_overflow=overflow,rejected=rejected,sealed=sealed))
+    if sum(p['production_overflow'] for p in passes) != overflow_count:
+        raise ValueError('parallel access overflow count mismatch')
+    if eligible is not None and sum(not p['rejected'] for p in passes) != eligible:
+        raise ValueError('parallel access eligibility count mismatch')
+    return passes
 
 
 def parallel_observation(begin, end, rows):
@@ -89,6 +135,8 @@ def parallel_observation(begin, end, rows):
         structural_eligible=eligible, structural_draws=values['draws'],
         children=values['children'], max_child_draw_imbalance=values['imbalance'],
         accepted_pass_resources=resource_sizes,
+        pass_accesses=parallel_accesses(local[0],local[-1],rows,candidates,
+            rejects.get(PARALLEL_REASONS.index('pass_read_union_overflow'),0),eligible),
         rejections={PARALLEL_REASONS[k]:v for k,v in rejects.items()},
         observer_cpu_ms=cpu/1e6, observer_wall_ms=wall/1e6,
         qualification='Structural only; excludes executor economics/binding gates; source CPU is not eligible-draw CPU')
@@ -309,7 +357,7 @@ def analyze(meta, rows, wait_meta, wait_rows, query=None, source_only=False):
     backend_events = collections.defaultdict(list)
     chunk_events = collections.defaultdict(list)
     for r in rows:
-        if r['kind'] in CHUNK_BODY + COMMAND_EVENTS + DRAW_EVENTS + PARALLEL_EVENTS:
+        if r['kind'] in CHUNK_BODY + COMMAND_EVENTS + DRAW_EVENTS + PARALLEL_EVENTS + ACCESS_EVENTS:
             chunk_events[(r['owner'], r['id'])].append(r)
             continue
         if r['kind'] in FRAMEGRAPH + ('framegraph_pool_binding',):

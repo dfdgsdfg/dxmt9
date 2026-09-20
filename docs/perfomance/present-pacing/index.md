@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H347](present-pacing-stalker-access-cardinality.347.md) measures the 21
+overflowing passes exactly: 433–458 distinct reads each, with 69.95% repeated
+touches. Production bounds remain unchanged; shared identity-table/index views
+are the next representation candidate, not yet an execution optimization.
+
 [H346](present-pacing-stalker-pass-access.346.md) separates pass-wide identity
 metadata from small draw-entry summaries and connects independent certificate
 validation. Serial observation accepts up to 25 read identities per pass but

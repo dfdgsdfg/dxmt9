@@ -1,4 +1,5 @@
 #include "../../../src/dxmt9/dxmt9_parallel_render_pass.hpp"
+#include "../../../src/dxmt9/dxmt9_parallel_access_observer.hpp"
 #include "../../../src/dxmt9/dxmt9_parallel_render_pass_metal.hpp"
 #include "../../../src/dxmt9/dxmt9_perf_counters.hpp"
 
@@ -1168,6 +1169,17 @@ void producerRejectsControlsFragmentsHazardsAndBounds() {
             rejected(ResourceFallback::RawReadSetIncomplete) == 0u &&
             result.fallback == ResourceFallback::None,
         "pass union is independent of the unchanged small draw-entry bound");
+  const auto acceptedWithoutObserver = result;
+  const auto snapshotWithoutObserver = output.passes[0];
+  dxmt9::encoders::ParallelAccessObserver acceptedDiagnostic;
+  {
+    dxmt9::encoders::ScopedParallelAccessObserver scope(acceptedDiagnostic);
+    result = unionOverflow.observe(output);
+  }
+  check(result == acceptedWithoutObserver && output.passes[0] == snapshotWithoutObserver &&
+            acceptedDiagnostic.distinct == 14u && acceptedDiagnostic.touches == 21u &&
+            acceptedDiagnostic.maximumUses == 2u && acceptedDiagnostic.adjacentReuse == 7u,
+        "observer preserves accepted snapshot and counts canonical command reuse exactly");
 
   PassObservationFixture boundedOverflow;
   for (std::size_t n = 0; n < 38u; ++n) {
@@ -1184,6 +1196,18 @@ void producerRejectsControlsFragmentsHazardsAndBounds() {
             rejected(ResourceFallback::PassReadUnionOverflow) == 1u &&
             rejected(ResourceFallback::RawReadSetIncomplete) == 0u,
         "pass-specific bound still fails closed and deduplicates overflow");
+  const auto withoutObserver = result;
+  dxmt9::encoders::ParallelAccessObserver diagnostic;
+  {
+    dxmt9::encoders::ScopedParallelAccessObserver scope(diagnostic);
+    result = boundedOverflow.observe(output);
+  }
+  check(result == withoutObserver && output.count == 0u &&
+            diagnostic.distinct == 266u && diagnostic.touches == 266u &&
+            diagnostic.commands == 38u && diagnostic.maximumUses == 1u &&
+            diagnostic.adjacentReuse == 0u && !diagnostic.exhausted &&
+            !diagnostic.incomplete && !dxmt9::encoders::activeParallelAccessObserver,
+        "cold observer measures beyond production capacity without changing admission");
 
   // A same-set repeated draw does not grow the union or create a false detail.
   PassObservationFixture repeatedReads;
@@ -3655,6 +3679,44 @@ void passReadSetMatchesExactReference() {
         "overflow cannot be repaired by a duplicate identity");
 }
 
+void accessObserverIsExactBoundedAndScoped() {
+  using namespace dxmt9::encoders;
+  ParallelAccessObserver observer, nested;
+  observer.start(4);
+  auto add = [&](std::uint64_t identity) {
+    dxmt9::core::ExactResourceSet reads{};
+    reads.flags |= dxmt9::core::ExactResourceSetCanonicalized;
+    reads.add(identity);
+    observer.append(reads,true);
+  };
+  // A/B/A/A counts reuse across commands, not DrawParam multiplicity.
+  add(0x100000001u); add(0x200000001u); add(0x100000001u); add(0x100000001u);
+  check(observer.distinct == 2u && observer.touches == 4u &&
+            observer.maximumUses == 3u && observer.adjacentReuse == 1u,
+        "full identities and nonadjacent versus adjacent reuse are distinguished");
+  observer.start(9);
+  for (std::uint64_t i = 1; i <= ParallelAccessObserver::kCapacity; ++i) add(i);
+  check(!observer.exhausted && observer.distinct == ParallelAccessObserver::kCapacity,
+        "diagnostic exact capacity includes collision-resolved identities");
+  add(ParallelAccessObserver::kCapacity + 1u);
+  add(1);
+  check(observer.exhausted && observer.distinct == ParallelAccessObserver::kCapacity &&
+            observer.maximumUses == 2u,
+        "diagnostic overflow remains lower-bound while existing identities retain counts");
+  observer.append({},false);
+  check(observer.incomplete, "unresolved reads cannot claim complete cardinality");
+  observer.start(10);
+  check(!observer.exhausted && !observer.incomplete && !observer.distinct && !observer.touches,
+        "pass reset cannot leak resource identities or quality flags");
+  {
+    ScopedParallelAccessObserver first(observer);
+    { ScopedParallelAccessObserver second(nested);
+      check(activeParallelAccessObserver == &nested, "nested scope is local"); }
+    check(activeParallelAccessObserver == &observer, "nested scope restores owner");
+  }
+  check(!activeParallelAccessObserver, "diagnostic capability cannot escape its scope");
+}
+
 // R-BACK-2.69: the certificate never trusts a stored action epoch. The
 // producer issues the coordinator proof per pass, and the certificate
 // re-derives that pass's epoch itself by folding the shared classifier over
@@ -4462,6 +4524,7 @@ int main() {
     streamingCoverageFoldMatchesStoredRowReference();
     wideWholeCommandChildrenCertify();
     passReadSetMatchesExactReference();
+    accessObserverIsExactBoundedAndScoped();
     passLocalEpochProofIsIndependentlyReDerived();
     boundaryAdjacentPassIdentityCertifies();
     proofCoreAdapterGatesEveryProductionCandidate();
