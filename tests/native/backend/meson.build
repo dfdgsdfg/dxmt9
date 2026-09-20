@@ -1,4 +1,10 @@
 # Backend descriptor / pipeline / replay / hazard / capture / counter / render-pass specs.
+query_scope_cb_spec = executable(
+  'dxmt9-query-scope-cb-spec', 'query_scope_cb_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+test('dxmt9-query-scope-cb-spec', query_scope_cb_spec,
+     env: dxmt9_native_test_env)
 publication_mark_cache_spec = executable(
   'dxmt9-publication-mark-cache-spec', 'publication_mark_cache_spec.cpp',
   include_directories: dxmt9_inc,
@@ -85,6 +91,25 @@ query_occlusion_metal_spec = executable(
   link_args: dxmt9_test_link_args,
 )
 foreach tile : ['off', 'force']
+  test('dxmt9-query-scope-cb-reference-' + tile + '-metal-spec', query_occlusion_metal_spec,
+    env: dxmt9_native_test_env_vars + [
+      'MTL_DEBUG_LAYER=1', 'DXMT9_METAL_OCCLUSION=1', 'DXMT_PERF_COUNTERS=1',
+      'DXMT9_QUERY_SCOPE_CB_JOIN=0', 'DXMT9_CPU_READY_TAPE=1',
+      'DXMT9_TILE_FFP=' + tile, 'DXMT9_ASYNC_QUERY_FENCES=1'],
+    is_parallel: false, timeout: 60)
+  test('dxmt9-query-scope-cb-' + tile + '-metal-spec', query_occlusion_metal_spec,
+    env: dxmt9_native_test_env_vars + [
+      'MTL_DEBUG_LAYER=1', 'DXMT9_METAL_OCCLUSION=1', 'DXMT_PERF_COUNTERS=1',
+      'DXMT9_QUERY_SCOPE_CB_JOIN=1', 'DXMT9_CPU_READY_TAPE=1',
+      'DXMT9_TILE_FFP=' + tile, 'DXMT9_ASYNC_QUERY_FENCES=1'],
+    is_parallel: false, timeout: 60)
+  test('dxmt9-query-scope-cb-receipt-' + tile + '-metal-spec', query_occlusion_metal_spec,
+    args: ['--snapshot-oracle'],
+    env: dxmt9_native_test_env_vars + [
+      'MTL_DEBUG_LAYER=1', 'DXMT9_METAL_OCCLUSION=1', 'DXMT_PERF_COUNTERS=1',
+      'DXMT9_QUERY_SCOPE_CB_JOIN=1', 'DXMT9_CPU_READY_TAPE=1',
+      'DXMT9_TILE_FFP=' + tile, 'DXMT9_ASYNC_QUERY_FENCES=1'],
+    is_parallel: false, timeout: 60)
   test('dxmt9-query-occlusion-' + tile + '-metal-spec', query_occlusion_metal_spec,
     env: dxmt9_native_test_env_vars + [
       'MTL_DEBUG_LAYER=1', 'DXMT9_METAL_OCCLUSION=1', 'DXMT_PERF_COUNTERS=1',
@@ -851,6 +876,10 @@ test('dxmt9-cpu-ready-session-join-spec',
      env: dxmt9_native_test_env_vars + [
        'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
      ])
+
+test('dxmt9-cpu-ready-session-physical-cap-spec', cpu_ready_session_join_spec,
+     env: dxmt9_native_test_env_vars + [
+       'DXMT9_OFFLOAD_COMMIT_REPLAY=1', 'DXMT9_SESSION_JOIN_CAPACITY_CASE=1'])
 
 test('dxmt9-cpu-ready-session-join-p0-composition-spec',
      cpu_ready_session_join_spec,

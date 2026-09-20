@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-19
+updated: 2026-09-20
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
@@ -29,6 +29,24 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 [index-cache-locality](../index-cache-locality/index.md); the per-CB encode story by [state-churn-encode](../state-churn-encode/index.md).
 
 ## Latest Conclusions
+
+[H333 pre-split wait ownership](present-pacing-stalker-pre-split-wait-owner.333.md)
+separates app-thread CPU growth from the later CB explosion. The pre-split
+bracket reaches 45.18ms CPU/frame at 0.787 cores with only 3.799 tail CBs/P;
+the later bracket reaches 61.34ms at 0.581 cores and 48.301 tail CBs/P.
+These are partial diagnostic populations, not a whole-frame cost budget.
+Periodic query reports stop before the target region, leaving exclusive
+replay/queue/game/Wine wait ownership unresolved.
+
+[H332 scoped CB composition](present-pacing-query-scope-cb-composition.332.md)
+preserves query visibility passes while sharing session CBs. Exact native
+sample/readback and bounded refinement checks pass. Same-image Tape-ON
+scoped-join OFF/ON/OFF STALKER runs yield 14.832 / 14.801 / 14.941 FPS;
+CBs per Present decrease about 46%, without demonstrated FPS improvement.
+Late stalls remain. The prerequisite pre-effect physical-capacity abort is
+fixed with a reproducing native test; a separate scheduling-sensitive broad
+session test remains unresolved. Scoped join stays default OFF. This result
+does not qualify enabling Tape itself or identify pre-fragmentation wait owners.
 
 [H328 covered-Pending ON wild run](present-pacing-query-covered-pending-wild.328.md):
 `92ac354c` passes STALKER Day High 1280x720 with observers OFF, eight zero health

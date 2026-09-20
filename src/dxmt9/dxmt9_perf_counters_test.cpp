@@ -307,6 +307,10 @@ std::uint64_t cpuReadySessionLeaseCurrent() {
   return load(counters().cpuReadySessionLeaseCurrent);
 }
 
+std::uint64_t cpuReadySessionHeadAppended() {
+  return load(counters().cpuReadySessionHeadAppended);
+}
+
 CpuReadySupplySnapshot snapshotCpuReadySupply() {
   const Counters& c = counters();
   return CpuReadySupplySnapshot{

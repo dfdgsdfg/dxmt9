@@ -11,11 +11,24 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H333](present-pacing-stalker-pre-split-wait-owner.333.md) reproduces app-thread
+CPU growth before the large scope split increase. Fixed-stride query reports
+exhaust their periodic budget before that region, so exclusive wait ownership
+remains open; a bounded blocked-wait/identity trace is the next measurement.
+
+[H332](present-pacing-query-scope-cb-composition.332.md) implements default-OFF
+query-scope CB-only composition with independent visibility passes. Native,
+x86_64 GPU and bounded/TLA evidence are recorded separately from wild gates.
+Same-image OFF/ON/OFF gives 14.832 / 14.801 / 14.941 FPS despite about 46%
+fewer CBs per Present; late stalls persist and the candidate remains OFF.
+H331 had no session starts, so Tape enablement and scoped CB admission must be
+measured as separate changes.
+
 [H331](present-pacing-stalker-scope-fragmentation.331.md) connects the late
 STALKER publication explosion to occlusion membership: 54.34 SemanticBoundary
 publications/P match scope-change publications, while QueryEnd remains 1/P
-and FLUSH publication is zero. Scoped sources currently cannot share encode
-sessions. Pre-fragmentation app-thread CPU rises independently; Rosetta native
+and FLUSH publication is zero. In that baseline scoped sources cannot share
+encode sessions. Pre-fragmentation app-thread CPU rises independently; Rosetta native
 stack attribution remains unqualified. Diagnostic figures are not FPS evidence.
 
 [H330](present-pacing-query-pending-publication.330.md) records post-Rosetta

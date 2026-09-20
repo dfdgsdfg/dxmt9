@@ -36,4 +36,12 @@ inline bool coalesceEndsEnabled() noexcept {
   }();
   return enabled && asynchronousFencesEnabled();
 }
+// CB-only FIFO composition; render-pass cuts and query completion remain intact.
+inline bool scopeCbJoinEnabled() noexcept {
+  static const bool enabled = [] {
+    const char* value = std::getenv("DXMT9_QUERY_SCOPE_CB_JOIN");
+    return value && value[0] && value[0] != '0';
+  }();
+  return enabled && metalOcclusionEnabled();
+}
 } // namespace dxmt9::query

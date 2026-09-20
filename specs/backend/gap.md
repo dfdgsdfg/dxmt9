@@ -34,9 +34,30 @@ remain distinct attribution gaps. This is not stable non-regression evidence. Se
 The [H331 diagnostic](../../docs/perfomance/present-pacing/present-pacing-stalker-scope-fragmentation.331.md)
 attributes the late SemanticBoundary publication population to successful
 occlusion scope replacements, not extra QueryEnd or FLUSH publication.
-Query-scope-aware encode-session composition remains unimplemented; preserving
-membership/visibility contributions, failure propagation and completion is a
-prerequisite. Diagnostic counters do not authorize removing these boundaries.
+Default-OFF [query-scope CB composition](query-scope-cb-composition.md)
+(R-CORE-8.2(b)) now admits scoped FIFO sources into CPU-ready EncodeSessions
+while flushing source-tail encoders and retaining query pass boundaries.
+Bounded 32,768 scope/partition/failure value traces and initial native GPU
+sample/readback, gated polling and receipt tests pass; actual appended scoped
+sources are asserted. Same-image observer-OFF STALKER OFF/ON/OFF runs pass
+with sampled scene captures and no GPU errors: 14.832 / 14.801 / 14.941 FPS.
+CBs per Present decrease about 46%, but late stalls persist and performance
+non-regression/default promotion remain unqualified. See
+[H332](../../docs/perfomance/present-pacing/present-pacing-query-scope-cb-composition.332.md).
+A
+Tape-ON/scoped-join-OFF control exposed a pre-representation physical lease
+overflow abort. A 31-source native counterexample reproduces it; the fix keeps
+the denied source Ready and submits the owned prefix, with ordered
+completion/retry tests passing on arm64/x86_64. Full TLA rerun passes. A separate
+pressure test fails under concurrent TLC load and passes isolated repeats;
+that scheduling-sensitive test gap remains explicit.
+H331 ran with zero session starts/appends: comparisons must
+separate enabling the session coordinator from enabling scoped CB composition.
+Diagnostic counters do not authorize removing membership boundaries or pins.
+The [H333 follow-up](../../docs/perfomance/present-pacing/present-pacing-stalker-pre-split-wait-owner.333.md)
+reproduces app-thread CPU growth before heavy scope splitting, but periodic
+query reports exhaust their budget before the target window. Exclusive
+pre-split replay/queue/game/Wine wait ownership remains unproven.
 
 R-BACK-2.15.5 known-setter nonconstant invalidation is the unconditional
 implementation; the 2026-09-17 consolidation removes its runtime opt-out.

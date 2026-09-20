@@ -258,6 +258,14 @@ evidence obligations, not claims implied by promotion.
 
 ---
 
+### 4.7 Query-scope CB composition (`R-CORE-8.2(b)`)
+
+Consecutive scoped sources may share a bounded command-buffer chain only under
+the [composition contract](../../backend/query-scope-cb-composition.md).
+Composition must preserve independent render passes, immutable result identity,
+origin-qualified exactly-once contributions, END prefixes and FLUSH progress.
+Sharing a CB must not authorize source reorder or early successful completion.
+
 ## 5. Lifetime
 
 Query COM lifetime is independent from backend result lifetime. Releasing a query

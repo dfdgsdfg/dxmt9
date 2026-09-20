@@ -2112,6 +2112,42 @@ void productionLoopJoinsMixedSourcesOnStopDrain() {
   runProductionLoopStopDrainCase({true, false, true});
 }
 
+void productionLoopCutsAtPhysicalLeaseBeforeRepresentation() {
+  RuntimeFixture fixture;
+  auto& queue = fixture.routing->queue_;
+  for (std::size_t i = 0; i < dxmt9::kMaxQueuedChunks; ++i)
+    fixture.publishLegacyClear();
+  const auto sources = dxmt9::CommandQueueArenaLeaseTestAccess::
+      snapshotReadyCompletionSources(queue);
+  check(sources.size() == dxmt9::kMaxQueuedChunks,
+        "fill the publishable FIFO without consuming successor headroom");
+  auto backendState = std::make_shared<ProductionLoopBackendState>();
+  backendState->carryClearFromCall = 1;
+  dxmt9::CommandQueueArenaLeaseTestAccess::installBackend(
+      queue, std::make_unique<ProductionLoopBackend>(backendState));
+  dxmt9::CommandQueueArenaLeaseTestAccess::stopAndRunCpuReadySessionEncodeLoop(queue);
+  const auto prefixCount = backendState->calls.size();
+  check(prefixCount == sources.size() - 1 &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(queue) == 1,
+        "physical lease cap submits prefix and leaves the uncharged source Ready");
+  const auto prefix = std::span(sources).first(prefixCount);
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::allSourcesSubmitted(queue, prefix),
+        "lease-bound prefix has real submission identity");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(queue, prefix) == prefixCount,
+        "completion releases prefix ownership before retry");
+  dxmt9::CommandQueueArenaLeaseTestAccess::stopAndRunCpuReadySessionEncodeLoop(queue);
+  check(backendState->calls.size() == sources.size(),
+        "remaining source encodes exactly once after credit release");
+  for (std::size_t i = 0; i < sources.size(); ++i)
+    check(backendState->calls[i].seqId == sources[i].seqId,
+          "physical capacity cut preserves source FIFO");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::completeAndFinish(
+            queue, std::span(sources).last(1)) == 1 &&
+            dxmt9::CommandQueueArenaLeaseTestAccess::completedSeqId(queue) ==
+                sources.back().seqId,
+        "final completion preserves exactly-once ordered reclaim");
+}
+
 template <typename Predicate>
 bool waitUntil(Predicate&& predicate,
                std::chrono::milliseconds timeout =
@@ -7753,6 +7789,10 @@ int main() {
   setenv("DXMT9_RENDERER_FEATURES", "passcoalesce", 1);
   try {
     nextSourceIntentTransitionTruthTable();
+    if (std::getenv("DXMT9_SESSION_JOIN_CAPACITY_CASE")) {
+      productionLoopCutsAtPhysicalLeaseBeforeRepresentation();
+      return 0;
+    }
     if (perfOffCase) {
       productionLoopPerfOffKeepsSeedPlanWithoutTicketWork();
       productionLoopAttributesSessionCapCloseToSameKeyReopen(false);

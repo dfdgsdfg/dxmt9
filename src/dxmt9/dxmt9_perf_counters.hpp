@@ -1942,6 +1942,7 @@ RenderPassStoreAccountingSnapshot snapshotRenderPassStoreAccounting();
 // counter remains private; this exposes only the live count needed by the
 // terminal-drain proof, not the mutable counter storage.
 std::uint64_t cpuReadySessionLeaseCurrent();
+std::uint64_t cpuReadySessionHeadAppended();
 
 struct CpuReadySupplySnapshot {
   std::uint64_t legacyReplayEntryToPublish = 0;

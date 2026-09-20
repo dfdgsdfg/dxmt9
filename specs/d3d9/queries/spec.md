@@ -163,8 +163,10 @@ the candidate's actual result fence.
 
 The initial provider intentionally preserves membership boundaries: Arena
 admission returns a pre-effect compatibility-required status; ordinary/direct
-ChunkSlots carry the scope. Scoped sources cannot join cross-source encode
-sessions, frame-graph reorder/DCE or parallel passes. A scope change closes an
+ChunkSlots carry the scope. Scoped sources cannot join frame-graph reorder/DCE
+or parallel passes. Default-off CB-only session composition is governed by
+[R-CORE-8.2(b)](../../backend/query-scope-cb-composition.md); the reference still
+isolates scoped sources. A scope change closes an
 active render pass. Queried FFP draws use portable FFP because tile-FFP alpha
 rejection occurs after rasterization. Production queries take precedence over
 the diagnostic visibility scout's single Metal visibility attachment. EVENT

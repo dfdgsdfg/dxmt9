@@ -13,6 +13,7 @@
 #include "dxmt9_encode_session_internal.hpp"
 #include "dxmt9_argbuf_hybrid.hpp"
 #include "dxmt9_blit_encoders.hpp"
+#include "render/query_scope_cb_policy.hpp"
 
 #include "dxmt9/assert.hpp"
 #include "dxmt9_command_queue.hpp"
@@ -4938,7 +4939,12 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
     }
   }
 
-  if (!deferSessionFinalization) {
+  // Sharing a CB must not share a query visibility pass across sources.
+  // This closes encoders/clears only: deferred callbacks, sources and the CB
+  // remain owned by the session until its normal submission boundary.
+  if (!deferSessionFinalization || render::queryScopeClosesSourceEncoders(
+                                      bool(sourceOcclusionScope),
+                                      deferSessionFinalization)) {
     finalizeEncodeChunkSessionForReturn();
   }
 

@@ -1302,8 +1302,21 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                       capacityLeaseState.lease().generation;
                   if (!capacityLeaseState.charge(selectionLeaseGeneration,
                                                  capacity)) {
-                    abortCpuReadySessionFailOpen(
-                        "capacity lease pre-representation charge");
+                    // Semantic work limits do not bound every physical lease
+                    // axis (retained sources/blocks/tickets can outlive encode).
+                    // charge is transactional and the candidate is still Ready:
+                    // keep it there and consume/submit the already owned prefix.
+                    // Never borrow fixed successor headroom to admit it.
+                    if (selected == 0u) {
+                      if (!pendingRecord.has_value()) {
+                        abortCpuReadySessionFailOpen(
+                            "capacity charge denied without an owned prefix");
+                      }
+                      blockedByPendingCompatibility = true;
+                      blockedReleaseReason =
+                          core::metalqueue::SessionReleaseReason::SessionCap;
+                    }
+                    return false;
                   }
                 }
                 selectedCapacityCharges[selected] = capacity;

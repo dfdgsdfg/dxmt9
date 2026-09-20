@@ -2,6 +2,7 @@
 #include "dxmt9/core.hpp"
 #include "../../../src/dxmt9/dxmt9_device.hpp"
 #include "../../../src/dxmt9/dxmt9_perf_counters.hpp"
+#include "../../../src/dxmt9/dxmt9_query_policy.hpp"
 #include "../../../src/dxmt9/render/session_source_policy.hpp"
 #include <array>
 #include <chrono>
@@ -157,6 +158,10 @@ void run() {
   readback->unlockRect();
 
   // Simultaneous scopes, separate pass contributions and publication cuts.
+  // Readback above has drained all prior sources. Every source published in
+  // this interval is scoped, so an appended head proves queried CB sharing.
+  const auto joinedBefore = dxmt9::perf::test::cpuReadySessionHeadAppended();
+  const auto passesBefore = dxmt9::perf::snapshot().renderPassBegin;
   Gate gate{queue.device().newSharedEvent()};
   auto blocker = queue.newCommandBuffer();
   blocker.encodeWaitForEvent(WMT::Event{gate.event.handle}, 1);
@@ -172,6 +177,25 @@ void run() {
   gate.event.signalValue(1);
   check(result(a) == 4 * full, "A scope sums four draws across passes/sources");
   check(result(b) == 4 * full, "B overlap receives same shared contributions");
+  check(dxmt9::perf::snapshot().renderPassBegin - passesBefore == 5,
+        "CB composition preserves all five independent visibility passes");
+  if (dxmt9::query::scopeCbJoinEnabled()) {
+    const auto joined = dxmt9::perf::test::cpuReadySessionHeadAppended() - joinedBefore;
+    std::cout << "query-window appended sources=" << joined << '\n';
+    check(joined != 0, "GPU oracle must exercise actual source CB composition");
+  }
+  check(device->getRenderTargetData(device->swapChain()->backBuffer(), readback) == D3D_OK,
+        "read back the actually composed query window");
+  const auto joinedPixels = readback->lockRect(nullptr, 0);
+  check(joinedPixels.data && joinedPixels.pitch >= 128, "composed readback bytes");
+  for (unsigned y = 0; y != 32; ++y)
+    for (unsigned x = 0; x != 32; ++x) {
+      const auto* p = static_cast<const u8*>(joinedPixels.data) +
+          y * joinedPixels.pitch + x * 4;
+      check(p[0] == 0 && p[1] == 255 && p[2] == 0 && p[3] == 255,
+            "actually composed query window preserves exact green pixels");
+    }
+  readback->unlockRect();
   issue(a, false);
   check(result(a) == 4 * full, "repeated END preserves previous result");
   issue(a, true); issue(a, true); issue(a, false);
@@ -199,9 +223,10 @@ void run() {
   scope->results[0] = std::make_shared<dxmt9::query::OcclusionResult>(1, 1, 1);
   scope->count = 1;
   slot.occlusionScope = scope;
-  check(!dxmt9::render::sessionSourceCanBeHead(SourcePayloadView(slot)) &&
-            !dxmt9::render::sessionSourceCanAppendToPending(SourcePayloadView(slot), true),
-        "scoped source cannot reorder across an open session");
+  const bool join = dxmt9::query::scopeCbJoinEnabled();
+  check(dxmt9::render::sessionSourceCanBeHead(SourcePayloadView(slot)) == join &&
+            dxmt9::render::sessionSourceCanAppendToPending(SourcePayloadView(slot), true) == join,
+        "scoped FIFO CB admission follows the selected policy");
 }
 
 void runSnapshotPollOracle() {
