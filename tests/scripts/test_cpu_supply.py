@@ -60,6 +60,7 @@ class TestSupply(unittest.TestCase):
         self.assertEqual(r['target_missing_source_stages'], 0)
         self.assertEqual(r['target_sources'][0]['reason'], 9)
         self.assertEqual(r['target_sources'][0]['commands'], 1)
+        self.assertAlmostEqual(r['target_sources'][0]['encode_cpu_ms'], .95)
         self.assertEqual(r['scope_boundaries'][0],
                          dict(sequence=2, published=True, before=1, after=0))
         self.assertEqual(r['target_sources'][0]['stages_ms']['submit__completion_dequeue'], .001)
@@ -71,6 +72,11 @@ class TestSupply(unittest.TestCase):
         with self.assertRaises(ValueError):
             progress.analyze(meta, rows+[next(r for r in rows if r['kind']=='submit')],
                              {'pid':17}, [receipt])
+        for replacement in ({'tid': 999}, {'cpu_ns': 0}, {'cpu_ns': 10**12}):
+            invalid = [dict(r, **replacement) if r['kind']=='encode_end' else r
+                       for r in rows]
+            with self.assertRaises(ValueError):
+                progress.analyze(meta, invalid, {'pid':17}, [receipt])
 
     def test_guest_pc_window_is_not_cpu(self):
         def group(frame, samples):

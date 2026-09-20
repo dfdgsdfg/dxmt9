@@ -104,6 +104,40 @@ composition does not itself remove the per-source publication credit limit;
 do not interpret this run as evidence to enable it or simply increase the cap.
 The head's 14.342ms encode CPU is a separate measured optimization target.
 
+### Follow-up code audit
+
+Removing only `CommandQueue::setOcclusionScope` publication is insufficient.
+`Device::issueQuery` in `src/d3d9/core_resources.cpp` first freezes the new
+scope and then calls `publishQueryEnd` for END. With a populated writer,
+the non-coalesced END path publishes that writer anyway. Thus a scope-only
+change would move the publication reason, not eliminate the 54 credits.
+The existing deferred-END marker is writer-generation-qualified, but its
+presence does not prove that multiple scope ranges in a Slot are supported.
+
+The current `encodeChunkImpl` in
+`src/dxmt9/dxmt9_draw_encoder_chunk.mm` reads one immutable scope from the
+whole source. Removing publication without replacing this representation
+would assign the wrong query membership to some commands. A future candidate
+must jointly handle immutable command-range scope ownership and END-marker
+resolution, including a final FLUSH when no later source arrives. Existing
+CB composition preserves source publication and is not this transformation.
+
+The measured encode interval is also broader than `encodeDraw`:
+`QueueLifecycleController::runEncodeIteration` begins before source borrow
+resolution and ends after the encode callback and queue relock. The ordinary
+callback in `CommandQueue` includes `prefetchSlotPipelines`, context setup and
+backend processing. The 14.342ms native CPU therefore must not be attributed
+to draw encoding or PSO lookup alone. The progress analyzer now exports
+same-thread `encode_cpu_ms` per complete source and rejects mismatched TIDs,
+regressing CPU clocks and CPU deltas exceeding wall time beyond the existing
+100us clock tolerance. This is offline reanalysis, not a new runtime run.
+
+The next diagnostic gate is bounded, queue/sequence-qualified CPU and wall
+endpoints around prefetch and backend processing, with residual queue/borrow
+work retained. Aggregate per-Present phase counters cannot attribute the head
+source, and existing `_cpu_ms` wall timers cannot replace native CPU clocks.
+Only after identifying that owner should finer per-draw phases be enabled.
+
 ## Verification
 
 All four canonical builds pass. Native focused 4/4 passes in isolation;

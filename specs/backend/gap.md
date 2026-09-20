@@ -93,6 +93,13 @@ head's retirement after encode and completion observation. Scope-preserving
 source coalescing, exact GPU timestamps and whole-tail generalization remain
 unproven; see
 [H336](../../docs/perfomance/present-pacing/present-pacing-stalker-publication-progress.336.md).
+The follow-up code audit confirms that scope-only publication removal would
+still publish at END, while the encoder currently stores one scope per source.
+Multi-scope source ownership and deferred-END receipt composition need a joint
+refinement before changing this boundary. The measured encode CPU includes
+prefetch/backend processing and borrow/relock work; sequence-qualified phase
+attribution is still missing. Offline analysis now exposes validated native
+encode CPU per complete source without changing runtime policy.
 
 R-BACK-2.15.5 known-setter nonconstant invalidation is the unconditional
 implementation; the 2026-09-17 consolidation removes its runtime opt-out.

@@ -34,9 +34,15 @@ def analyze(meta, rows, wait_meta, wait_rows, query=None):
             continue
         if any(e[b]['wall_ns'] < e[a]['wall_ns'] for a, b in zip(STAGES, STAGES[1:])):
             raise ValueError('nonmonotonic source progress')
+        begin, end = e['encode_begin'], e['encode_end']
+        encode_cpu = end['cpu_ns']-begin['cpu_ns']
+        if (begin['tid'] != end['tid'] or encode_cpu < 0 or
+                encode_cpu > end['wall_ns']-begin['wall_ns']+100000):
+            raise ValueError('encode CPU endpoints must share a monotone thread clock')
         sources.append(dict(owner=key[0], sequence=key[1],
             reason=e.get('publish_reason', {}).get('value'),
             commands=e.get('publish_commands', {}).get('value'),
+            encode_cpu_ms=encode_cpu/1e6,
             stages_ms={a+'__'+b: (e[b]['wall_ns']-e[a]['wall_ns'])/1e6
                        for a, b in zip(STAGES, STAGES[1:])}))
     keys = {(r['queue_owner'], r['sequence']) for r in target['target']['publications']}
@@ -64,7 +70,7 @@ def analyze(meta, rows, wait_meta, wait_rows, query=None):
         target_missing_source_stages=len(keys)-len(target_sources),
         query_issues=issues, scope_boundaries=scopes, cap_waits=relief,
         complete_sources=sources, incomplete_source_count=len(events)-len(sources),
-        qualification='Ordinary source stages only; retirement in wait interval is not OS wake identity; elapsed stages across sources overlap')
+        qualification='Ordinary source stages only; encode CPU uses same-thread endpoints and includes prefetch/backend work, not only draw encoding; retirement in wait interval is not OS wake identity; elapsed stages across sources overlap')
 
 
 if __name__ == '__main__':
