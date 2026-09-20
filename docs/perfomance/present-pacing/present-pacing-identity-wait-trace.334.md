@@ -5,7 +5,7 @@ title: "H334: bounded identity-qualified CPU wait evidence"
 type: evidence
 status: implementation-qualification
 updated: 2026-09-20
-source: experiments/output/wait-trace-validation-h334/dxmt9-wait-trace-final-native-tests.log; experiments/output/wait-trace-validation-h334/dxmt9-wait-trace-final-x86-tests.log; experiments/output/wait-trace-validation-h334/hardened-native-tests.log; experiments/output/wait-trace-validation-h334/hardened-x86-tests.log; experiments/output/wait-trace-validation-h334/reviewed-native-tests.log; experiments/output/wait-trace-validation-h334/reviewed-x86-tests.log; experiments/output/wait-trace-validation-h334/native-waits.csv; experiments/output/wait-trace-validation-h334/dxmt9-wait-trace-tla.log; experiments/output/app-d3d9-stkcop-bench-identity-wait-r670-day/launch-failure.log; experiments/output/app-d3d9-stkcop-bench-identity-wait-r671-day/run-policy.json; experiments/output/app-d3d9-stkcop-bench-identity-wait-r671-day/result.json
+source: experiments/output/wait-trace-validation-h334/dxmt9-wait-trace-final-native-tests.log; experiments/output/wait-trace-validation-h334/dxmt9-wait-trace-final-x86-tests.log; experiments/output/wait-trace-validation-h334/hardened-native-tests.log; experiments/output/wait-trace-validation-h334/hardened-x86-tests.log; experiments/output/wait-trace-validation-h334/reviewed-native-tests.log; experiments/output/wait-trace-validation-h334/reviewed-x86-tests.log; experiments/output/wait-trace-validation-h334/native-waits.csv; experiments/output/wait-trace-validation-h334/dxmt9-wait-trace-tla.log; experiments/output/app-d3d9-stkcop-bench-identity-wait-r670-day/launch-failure.log; experiments/output/app-d3d9-stkcop-bench-identity-wait-r671-day/run-policy.json; experiments/output/app-d3d9-stkcop-bench-identity-wait-r671-day/result.json; experiments/output/app-d3d9-stkcop-bench-identity-wait-r672-day/{result.json,actual.png,run-policy.json,dxmt9.log,waits.csv,thread-cpu.jsonl}
 related: present-pacing-stalker-pre-split-wait-owner.333.md
 ---
 
@@ -91,7 +91,58 @@ owner attribution. A foreground-controlled final-image repeat with a
 reachable scene window remains open. No additional wild run is started while
 foreground availability is unconfirmed.
 
-## Usage
+## R672: final-image bounded wild evidence
+
+Commit `5cf3874c`, Sikarugir cx24.0.7, Day/high 1280x720, perf profile.
+After the user moved to desktop 0, the canonical runner completed with PASS,
+return code 0, no timeout, no failures and no capture error. `actual.png`
+contains the game, not the desktop. This single screenshot is not a continuous
+pixel oracle. Evidence is retained in
+`experiments/output/app-d3d9-stkcop-bench-identity-wait-r672-day/`:
+`result.json`, `actual.png`, `run-policy.json`, `dxmt9.log`, `waits.csv` and
+`thread-cpu.jsonl`.
+
+The final collector closes the inclusive 1400–1800 encoded-Present window:
+14 rows, 14 CV entries, one owner, zero overflow/incomplete/unknown identity
+and zero excluded cross-window rows. These are totals over the window:
+
+| Hook | Recorded rows | CV entries | Mutex acquisition | CV plus reacquisition |
+|---|---:|---:|---:|---:|
+| Query receipt | 3 | 14 | 1.059542ms | 2.816542ms |
+| Query queue acquisition | 11 | 0 | 1.722540ms | — |
+
+Two receipt calls enter the CV: query 6/raw 265026 at Present 1424
+(five entries, 0.713875ms) and query 6/raw 265962 at Present 1432
+(nine entries, 2.102667ms). Both settle to their captured raw frontier.
+The third receipt row is already Ready after a 1.059417ms mutex acquisition
+and does not enter the CV. All recorded rows belong to native thread 1059096.
+Queue rows refer to queue 2, queries 5/6; their maximum acquisition is
+0.348666ms. No hooked resource/lock/unlock CV row is recorded in this window.
+Mutex-only rows below 50us are omitted by policy, not zero-cost acquisitions.
+
+Frame-log brackets confirm a later slowdown outside the closed wait window:
+
+| Encoded frame bracket | Samples | Wall-derived diagnostic FPS | CB/frame | Pass/frame | Maximum frame wall |
+|---|---:|---:|---:|---:|---:|
+| 1400–1800 | 401 | 31.605 | 7.623 | 20.653 | 80.486ms |
+| 1801–2100 | 300 | 20.678 | 7.817 | 23.230 | 259.583ms |
+| 2101–2500 | 400 | 11.465 | 37.847 | 51.343 | 297.741ms |
+| 2501–2684 | 184 | 13.216 | 57.772 | 69.277 | 851.003ms |
+
+FPS here is sample count / summed frame wall, not the benchmark result or an
+observer-OFF performance comparison. Total encoded Presents are 2685.
+The external CPU helper was started too late: it rejects the log with
+`log read bound exceeded` before sampling. No CPU or CPU/wait decomposition
+can be inferred from that failed companion artifact.
+
+Verdict: hooked receipt blocking and recorded query-queue acquisitions are
+small in 1400–1800; this does not attribute the later hitch. The next bounded
+repeat should cover 1800–2600 (requiring 2602 Presents for closure), start the
+CPU helper at process startup, and retain the uncovered global-drain,
+queue-space/holder, GPU-resource and game/Wine wait hypotheses. Do not delete
+synchronization or claim a GPU bottleneck from these diagnostic totals.
+
+## Invocation
 
 Set `DXMT9_WAIT_TRACE` to a fresh absolute CSV path, `DXMT_PERF_COUNTERS=1`,
 and FIRST/LAST bounds through `DXMT9_WAIT_TRACE_FIRST_PRESENT` and

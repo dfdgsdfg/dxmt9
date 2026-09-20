@@ -15,6 +15,8 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 identity-qualified wait recorder: receipt/resource CV entries and slow query
 queue acquisition, with explicit output-completeness gates. Global drains,
 GPU resource waits and game/Wine attribution remain outside its coverage.
+R672 captures the game and closes 1400–1800 without lost rows; the later
+slowdown needs its own wait window and an early-started CPU helper.
 
 [H333](present-pacing-stalker-pre-split-wait-owner.333.md) reproduces app-thread
 CPU growth before the large scope split increase. Fixed-stride query reports

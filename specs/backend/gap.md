@@ -69,8 +69,11 @@ Global drains, queue-space holder attribution and game/Wine wait stacks are
 not covered; frontier settlement is not the identity of an OS notification.
 R671 ends at 2,080 encoded Presents before the selected 2,100 boundary and its
 capture shows the desktop/Orca fallback, not the game. The analyzer correctly
-rejects the unclosed CSV. Final-image foreground-controlled wild evidence and
-exclusive wait ownership remain open; see
+rejects the unclosed CSV. Final-image R672 captures the game and closes
+1400–1800 with zero overflow/incomplete/unknown rows; receipt CV/reacquisition
+totals 2.817ms and recorded query-queue acquisition totals 1.723ms. Its later
+slowdown is outside that window, and the CPU helper fails before sampling.
+Late-region and exclusive wait ownership remain open; see
 [H334](../../docs/perfomance/present-pacing/present-pacing-identity-wait-trace.334.md).
 
 R-BACK-2.15.5 known-setter nonconstant invalidation is the unconditional

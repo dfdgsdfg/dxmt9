@@ -34,7 +34,11 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 identity-qualified CV-entry and mutex-acquisition evidence without polling
 subsampling. Native identity/closure tests pass. R671 ends before the selected
 window closes and captures Orca instead of the game; its empty CSV is rejected,
-not counted as zero waits. Foreground-controlled final-image attribution is open.
+not counted as zero waits. Final-image R672 captures the game and closes
+1400–1800 with no lost/unknown rows: receipt CV/reacquisition totals 2.817ms,
+recorded query-queue acquisition 1.723ms. The larger slowdown lies after
+that window; late wait ownership remains open. The companion CPU helper
+rejects the oversized log before sampling, so it provides no CPU attribution.
 
 [H333 pre-split wait ownership](present-pacing-stalker-pre-split-wait-owner.333.md)
 separates app-thread CPU growth from the later CB explosion. The pre-split
