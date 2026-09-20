@@ -11,6 +11,16 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H343](present-pacing-stalker-capture-origin.343.md) attributes the first
+capture rejection to successful `VolumeTexture::LockBox`: volume capture is
+unsupported. Serial-run shadow zeros do not measure parallel eligibility;
+a non-executing source-qualified observer is still needed.
+
+[H342](present-pacing-stalker-tape-admission.342.md) attempts the STALKER
+fixed-input parallel ladder but stops before Tape publication: pre-arm
+`child_abort` invalidates the registry. Query/volume provider grammar gaps
+are separate prerequisites; no parallel performance result is available.
+
 [H341](present-pacing-stalker-draw-phases.341.md) separates observed DrawRun
 CPU into encodeDraw 27.178ms and preparation/pass/post-draw residual 10.622ms.
 No blocking CV entry occurs in either window: this is source-local evidence,

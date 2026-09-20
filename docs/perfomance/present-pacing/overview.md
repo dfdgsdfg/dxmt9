@@ -14,6 +14,17 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H343](present-pacing-stalker-capture-origin.343.md) identifies volume locking
+as the first STALKER capture blocker. Complete volume capture/replay is a real
+grammar extension, not an admission-flag fix. Existing shadow counters run
+only with ExplicitParallel; serial-only cost-weighted eligibility remains open.
+
+[H342](present-pacing-stalker-tape-admission.342.md) blocks fixed-input
+STALKER parallel qualification at capture admission. A generic pre-arm
+`child_abort` invalidates the registry; later output-admission errors do not
+identify the original caller. Query/volume provider grammar also needs work.
+Repair and qualify capture before parallel policy timing; no speedup is claimed.
+
 [H341](present-pacing-stalker-draw-phases.341.md) measures encodeDraw at
 71.90% of selected DrawRun CPU (27.178/37.800ms), with 10.622ms residual
 including preparation/pass/post-draw work and observer overhead. Both windows

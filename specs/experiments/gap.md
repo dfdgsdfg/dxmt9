@@ -9,6 +9,30 @@ tags: [specs, gap, experiments]
 
 ## Fixed-input replay experiment
 
+### STALKER capture and parallel experiment admission (2026-09-20)
+
+R-HARN-REPLAY-7.12/7.23 remain unqualified for STALKER. H342 R684 misses its
+selected Present boundary; R685 reaches the boundary but publishes no Tape.
+R686 info diagnostics identify pre-arm `registry_invalid reason=child_abort`
+with no qualified resource/caller, followed by `present_output_admission`
+rejection. The generic first-abort needs capture-only callsite attribution;
+it does not prove a backbuffer failure or a volume-specific cause.
+General provider Query definitions, QUERY_ISSUE, QueryGetData and volume
+execution are also unsupported by code inspection, independent of this
+capture failure. No STALKER serial/parallel oracle or repeated performance
+sample is qualified. See
+[H342](../../docs/perfomance/present-pacing/present-pacing-stalker-tape-admission.342.md).
+
+H343 R688 closes first-callsite attribution: the pre-arm rejection originates
+in `D3D9VolumeTextureImpl::LockBox`, whose successful volume lock deliberately
+aborts capture. Failure-only caller literals survive the child facade; the
+WoW64 stack-walk attempt was inconclusive and removed. Volume identity/layout
+and complete capture/provider support remain open. Serial-run parallel shadow
+zeros are unobserved (producer requires ExplicitParallel), not zero eligibility.
+Both diagnostic runs were intentionally stopped after startup evidence and
+are not successful wild or pixel tests. See
+[H343](../../docs/perfomance/present-pacing/present-pacing-stalker-capture-origin.343.md).
+
 ### CPU timing representativeness (2026-09-16)
 
 R-HARN-REPLAY-8.9 attachment authority is now separated from GPU readback.

@@ -85,9 +85,20 @@ bool D3D9DeviceImpl::IsRenderTapeCaptureTrackingEnabledForChild() const noexcept
     return peCaptureState_ != nullptr;
 }
 
-void D3D9DeviceImpl::AbortRenderTapeCaptureForChild() noexcept {
+void D3D9DeviceImpl::AbortRenderTapeCaptureForChild(
+    const char *origin, unsigned originLine) noexcept {
     assertRecorderThreadConfined();
     PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
+    // Capture failure only: preserve the first caller before the sticky
+    // registry rejection obscures it behind later arm-admission failures.
+    // This cold failure API alone carries callsite literals; COM and normal
+    // recorder signatures do not acquire diagnostic payloads.
+    if (peCaptureState_ && !peCaptureState_->renderTapeRegistry.invalid &&
+        dxmt9::util::shouldLog(dxmt9::util::LogLevel::Info)) {
+        dxmt9DeviceInfoLog(
+            "render_tape_capture first_child_abort origin=%s line=%u",
+            origin ? origin : "unknown", originLine);
+    }
     markRenderTapeInvalidOnce("child_abort");
     if (IsRenderTapeCaptureActiveForChild())
         abortRenderTapeCapture("child_abort");

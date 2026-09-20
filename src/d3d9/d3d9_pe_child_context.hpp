@@ -57,7 +57,9 @@ struct D3D9PeBufferContext {
           dxmt9::d3d9::RenderTapeBufferMutationDisposition::Plain) noexcept;
   bool IsRenderTapeCaptureActiveForChild() const noexcept;
   bool IsRenderTapeCaptureTrackingEnabledForChild() const noexcept;
-  void AbortRenderTapeCaptureForChild() noexcept;
+  void AbortRenderTapeCaptureForChild(
+      const char *origin = __builtin_FUNCTION(),
+      unsigned originLine = __builtin_LINE()) noexcept;
   void RejectRenderTapeCaptureForChild(
       dxmt9::d3d9::RenderTapeCaptureRejectionReason,
       const dxmt9::d3d9::pe::PeWireObjectRef &, std::uint32_t,
@@ -89,7 +91,9 @@ struct D3D9PeSurfaceTextureContext {
       const dxmt9::d3d9::RenderTapeOrderedControlHeader &,
       std::span<const std::byte>) noexcept;
   bool IsRenderTapeCaptureTrackingEnabledForChild() const noexcept;
-  void AbortRenderTapeCaptureForChild() noexcept;
+  void AbortRenderTapeCaptureForChild(
+      const char *origin = __builtin_FUNCTION(),
+      unsigned originLine = __builtin_LINE()) noexcept;
   void RejectRenderTapeCaptureForChild(
       dxmt9::d3d9::RenderTapeCaptureRejectionReason,
       const dxmt9::d3d9::pe::PeWireObjectRef &, std::uint32_t,

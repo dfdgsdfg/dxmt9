@@ -66,8 +66,9 @@ bool D3D9PeBufferContext::IsRenderTapeCaptureActiveForChild() const noexcept {
 bool D3D9PeBufferContext::IsRenderTapeCaptureTrackingEnabledForChild() const noexcept {
   return device && device->IsRenderTapeCaptureTrackingEnabledForChild();
 }
-void D3D9PeBufferContext::AbortRenderTapeCaptureForChild() noexcept {
-  if (device) device->AbortRenderTapeCaptureForChild();
+void D3D9PeBufferContext::AbortRenderTapeCaptureForChild(
+    const char *origin, unsigned originLine) noexcept {
+  if (device) device->AbortRenderTapeCaptureForChild(origin, originLine);
 }
 void D3D9PeBufferContext::RejectRenderTapeCaptureForChild(
     dxmt9::d3d9::RenderTapeCaptureRejectionReason reason,
@@ -130,8 +131,9 @@ bool D3D9PeSurfaceTextureContext::IsRenderTapeCaptureTrackingEnabledForChild()
     const noexcept {
   return device && device->IsRenderTapeCaptureTrackingEnabledForChild();
 }
-void D3D9PeSurfaceTextureContext::AbortRenderTapeCaptureForChild() noexcept {
-  if (device) device->AbortRenderTapeCaptureForChild();
+void D3D9PeSurfaceTextureContext::AbortRenderTapeCaptureForChild(
+    const char *origin, unsigned originLine) noexcept {
+  if (device) device->AbortRenderTapeCaptureForChild(origin, originLine);
 }
 void D3D9PeSurfaceTextureContext::RejectRenderTapeCaptureForChild(
     dxmt9::d3d9::RenderTapeCaptureRejectionReason reason,

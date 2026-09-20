@@ -2568,7 +2568,9 @@ public:
         std::span<const std::byte> immutablePayload = {}) noexcept;
     bool IsRenderTapeCaptureActiveForChild() const noexcept;
     bool IsRenderTapeCaptureTrackingEnabledForChild() const noexcept;
-    void AbortRenderTapeCaptureForChild() noexcept;
+    void AbortRenderTapeCaptureForChild(
+        const char *origin = __builtin_FUNCTION(),
+        unsigned originLine = __builtin_LINE()) noexcept;
     void RejectRenderTapeCaptureForChild(
         dxmt9::d3d9::RenderTapeCaptureRejectionReason reason,
         const dxmt9::d3d9::pe::PeWireObjectRef &object,
