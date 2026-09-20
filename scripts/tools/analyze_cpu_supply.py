@@ -16,7 +16,8 @@ EVENTS = ('present import_begin import_end raw_ready mutation_ready stateblock_r
           'replay_begin replay_end queue_empty queue_reserved queue_ready '
           'pop_attempt pop_wait pop_wake publish encode_begin encode_end submit '
           'replay_ledger writer_wait_begin writer_wait_end '
-          'commit_wait_begin commit_wait_end').split()
+          'commit_wait_begin commit_wait_end publish_reason publish_commands '
+          'scope_boundary query_issue completion_dequeue completion_observed retire').split()
 
 
 def load(path):

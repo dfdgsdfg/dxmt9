@@ -11,6 +11,7 @@ spec.loader.exec_module(supply)
 sys.path.insert(0, str(ROOT/'scripts/tools'))
 import join_replay_wait_trace as joiner
 import summarize_guest_pc_window as guest
+import analyze_publication_progress as progress
 
 
 def fixture():
@@ -37,6 +38,40 @@ def fixture():
 
 
 class TestSupply(unittest.TestCase):
+    def test_publication_progress(self):
+        meta, rows = fixture()
+        meta['pid'] = 17
+        # END of one query closes a populated one-command scope.
+        for kind, identity, value in [('query_issue', 54, 1),
+                                      ('scope_boundary', 2, (1 << 63) | (1 << 32)),
+                                      ('publish_reason', 2, 9), ('publish_commands', 2, 1)]:
+            rows.append(dict(kind=kind, wall_ns=23_000_001, cpu_ns=11_500_001,
+                             tid=2, owner=2, id=identity, value=value, frame=2))
+        for r in list(rows):
+            if r['kind']=='replay_begin':
+                rows.append(dict(r, kind='replay_ledger', value=9, wall_ns=r['wall_ns']+1))
+            if r['kind']=='encode_end':
+                for offset, kind in enumerate(['submit','completion_dequeue','completion_observed','retire'], 1):
+                    rows.append(dict(r, kind=kind, wall_ns=r['wall_ns']+offset*1000))
+        rows.sort(key=lambda r:r['wall_ns'])
+        receipt = dict(site=0, waits=1, owner=9, query=54, first_frame=2,
+                       completed_before=1, raw_before=2, acquired_ns=1, end_ns=2)
+        r = progress.analyze(meta, rows, {'pid':17}, [receipt])
+        self.assertEqual(r['target_missing_source_stages'], 0)
+        self.assertEqual(r['target_sources'][0]['reason'], 9)
+        self.assertEqual(r['target_sources'][0]['commands'], 1)
+        self.assertEqual(r['scope_boundaries'][0],
+                         dict(sequence=2, published=True, before=1, after=0))
+        self.assertEqual(r['target_sources'][0]['stages_ms']['submit__completion_dequeue'], .001)
+        with self.assertRaises(ValueError):
+            progress.analyze(meta, rows, {'pid':17}, [receipt], query=55)
+        incomplete = progress.analyze(meta, [r for r in rows if r['kind']!='retire'],
+                                      {'pid':17}, [receipt])
+        self.assertEqual(incomplete['target_missing_source_stages'], 1)
+        with self.assertRaises(ValueError):
+            progress.analyze(meta, rows+[next(r for r in rows if r['kind']=='submit')],
+                             {'pid':17}, [receipt])
+
     def test_guest_pc_window_is_not_cpu(self):
         def group(frame, samples):
             return (f'[dxmt9-perf-frame frame={frame} wall_ms=1]\n'

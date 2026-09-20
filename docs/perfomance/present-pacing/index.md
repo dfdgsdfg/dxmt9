@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H336](present-pacing-stalker-publication-progress.336.md) resolves the
+55-publication case: one prelude plus 54 occlusion-scope closures, all semantic
+boundaries. The cap clears when the large head finishes (14.35ms encode,
+5.99ms completion observation wait), not after a long credit-retirement step.
+
 [H335](present-pacing-stalker-replay-ownership.335.md) joins all 51 late
 receipt targets to replay raw identity. Query 54's target service includes
 inflight-cap waits at count 31, not writer-slot exhaustion. Separate pre-split

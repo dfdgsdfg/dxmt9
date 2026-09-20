@@ -3859,9 +3859,14 @@ bool QueueLifecycleController::commitCurrentChunk(
     nextSeqId->store(nextSeqId->load(std::memory_order_relaxed) + 1,
                      std::memory_order_release);
     slot.state = ChunkSlot::State::Pending;
-    if (::dxmt9::supply::enabled())
+    if (::dxmt9::supply::enabled()) {
       ::dxmt9::supply::record(::dxmt9::supply::Event::Publish, this,
                             slot.seqId, rawOrdinal);
+      ::dxmt9::supply::record(::dxmt9::supply::Event::PublishReason, this,
+                            slot.seqId, unsigned(writingPayload->publishReason));
+      ::dxmt9::supply::record(::dxmt9::supply::Event::PublishCommands, this,
+                            slot.seqId, writingPayload->commandCount());
+    }
     *lastCommittedSeqId = slot.seqId;
     ++(*inflightCount);
     writingSlot->reset();
@@ -5112,6 +5117,9 @@ bool QueueLifecycleController::drainCompletedSequence(std::unique_lock<std::mute
     } else if (*inflightCount > 0) {
       --(*inflightCount);
     }
+    if (::dxmt9::supply::enabled())
+      ::dxmt9::supply::record(::dxmt9::supply::Event::Retire, this,
+                            seqId, *inflightCount);
     auto* completedPresentSeqQueue = submissionBinding_.completedPresentSeqQueue;
     auto* presentCompletedSeqId = submissionBinding_.presentCompletedSeqId;
     if (completedPresentSeqQueue && presentCompletedSeqId) {
@@ -6499,6 +6507,9 @@ bool QueueLifecycleController::processOnePendingCompletion() {
   const WMTCommandBufferStatus dequeueStatus =
       pending.commandBuffer ? pending.commandBuffer.status()
                             : WMTCommandBufferStatusNotEnqueued;
+  if (::dxmt9::supply::enabled())
+    ::dxmt9::supply::record(::dxmt9::supply::Event::CompletionDequeue, this,
+                          pending.seqId, unsigned(dequeueStatus));
   if (pending.enqueueTime != std::chrono::steady_clock::time_point{}) {
     const auto age = std::chrono::steady_clock::now() - pending.enqueueTime;
     perf::countCompletionDequeue(
@@ -6576,6 +6587,9 @@ bool QueueLifecycleController::processOnePendingCompletion() {
         pending.diagnostics.shaderVariantHash);
   }
 
+  if (::dxmt9::supply::enabled())
+    ::dxmt9::supply::record(::dxmt9::supply::Event::CompletionObserved, this,
+                          pending.seqId);
   delayCompletionSignalForPerfProbe();
 
   if (pending.commandBuffer &&

@@ -64,3 +64,14 @@ subsets of replay wall time, never additive costs. Missing/clipped pairs or
 sink overflow invalidate complete ownership attribution. The companion uses
 calibrated native thread CPU; neither saved guest PCs nor stack occurrences
 may be multiplied into exclusive game/Wine/PE CPU shares.
+
+Publication reason and command count must use the actual sealed Slot. Query
+Issue records carry object identity and flags before execution; scope-boundary
+records carry old/new membership counts after successful publication. A query
+attempt is not proof of successful completion. Completion timing must separate
+encode, actual commit, completion-worker dequeue, observed completion, and
+the completion frontier/inflight-credit update. Observed completion is a CPU
+observation after `waitUntilCompleted`, not an exact GPU timestamp. Commit-to-
+dequeue includes completion-worker FIFO delay; dequeue-to-observed includes
+driver waiting and scheduling. Only same-sequence ordinary 1:1 submissions
+may use these differences; shared CBs and missing endpoints stay unqualified.

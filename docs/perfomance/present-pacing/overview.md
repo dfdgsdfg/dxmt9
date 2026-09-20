@@ -30,6 +30,14 @@ GPU frame-time story is owned by [hidden-backend-storage](../hidden-backend-stor
 
 ## Latest Conclusions
 
+[H336 publication progress](present-pacing-stalker-publication-progress.336.md)
+reproduces 55 sources from 54 BEGIN/END pairs: first BEGIN drains a 284-command
+writer, then each END drains a one-command scope. All are SemanticBoundary.
+Inflight=31 is released by the large head after 14.35ms encode plus 5.99ms
+completion observation wait; post-observation retirement is 0.045ms. This
+supports investigating scope-versus-source granularity and head encode CPU,
+not removing query guards or treating observed waits as GPU arithmetic time.
+
 [H335 replay ownership](present-pacing-stalker-replay-ownership.335.md): late
 receipt waits inherit publication inflight-cap backpressure (153 waits at
 count 31; no observed writer-slot CV wait). All 51 targets join to raw replay.

@@ -86,6 +86,13 @@ locations, not an exclusive game/Wine/PE/Unix partition. Why publication
 fragments, downstream completion progress and remaining synchronous CPU
 families remain open; see
 [H335](../../docs/perfomance/present-pacing/present-pacing-stalker-replay-ownership.335.md).
+R676 additionally qualifies actual reason/command counts, query/scope events
+and ordinary encode/submit/completion/retirement timestamps. Its 55 sources
+are one populated prelude plus 54 scope closures; the cap clears on the large
+head's retirement after encode and completion observation. Scope-preserving
+source coalescing, exact GPU timestamps and whole-tail generalization remain
+unproven; see
+[H336](../../docs/perfomance/present-pacing/present-pacing-stalker-publication-progress.336.md).
 
 R-BACK-2.15.5 known-setter nonconstant invalidation is the unconditional
 implementation; the 2026-09-17 consolidation removes its runtime opt-out.

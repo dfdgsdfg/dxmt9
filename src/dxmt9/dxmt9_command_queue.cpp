@@ -1,5 +1,6 @@
 #include "dxmt9_command_queue.hpp"
 #include "dxmt9_wait_trace.hpp"
+#include "dxmt9_cpu_supply_trace.hpp"
 #include "dxmt9_color_attachment_capture_observer.hpp"
 #include "dxmt9_queue_mutex_diag.hpp"
 #include "render/backend_factory.hpp"
@@ -8591,6 +8592,12 @@ bool CommandQueue::setOcclusionScope(query::OcclusionScopeRef scope) noexcept {
     query::splitdiag::note(scope ? query::splitdiag::Kind::ScopeNonempty
                                 : query::splitdiag::Kind::ScopeEmpty,
                           queryQueueIdentity_, lastCommittedSeqId_, hadCommands);
+    if (::dxmt9::supply::enabled())
+      ::dxmt9::supply::record(::dxmt9::supply::Event::ScopeBoundary,
+          &queueLifecycle_, lastCommittedSeqId_,
+          (std::uint64_t(hadCommands) << 63) |
+          (std::uint64_t(occlusionScope_ ? occlusionScope_->count : 0) << 32) |
+              std::uint64_t(scope ? scope->count : 0));
     occlusionScope_ = std::move(scope);
     return true;
   } catch (...) {

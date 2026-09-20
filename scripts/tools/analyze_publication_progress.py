@@ -1,0 +1,83 @@
+#!/usr/bin/env python3
+"""Ordinary 1:1 source progress, not GPU timestamps or additive frame costs."""
+import argparse
+import collections
+import json
+from pathlib import Path
+
+import analyze_cpu_supply as supply
+import join_replay_wait_trace as joiner
+import summarize_wait_trace as waits
+
+STAGES = ('publish', 'encode_begin', 'encode_end', 'submit',
+          'completion_dequeue', 'completion_observed', 'retire')
+
+
+def analyze(meta, rows, wait_meta, wait_rows, query=None):
+    joined = joiner.join(wait_meta, wait_rows, meta, rows)
+    pending = [r for r in joined['receipts'] if r['target'] and
+               (query is None or r['query'] == query)]
+    if not pending:
+        raise ValueError('no matched pending receipt')
+    target = max(pending, key=lambda r: r['receipt_ns'])
+    events = collections.defaultdict(dict)
+    for r in rows:
+        if r['kind'] not in STAGES + ('publish_reason', 'publish_commands'):
+            continue
+        key = (r['owner'], r['id'])
+        if r['kind'] in events[key]:
+            raise ValueError('duplicate ordinary source stage; shared CB unsupported')
+        events[key][r['kind']] = r
+    sources = []
+    for key, e in events.items():
+        if not all(s in e for s in STAGES):
+            continue
+        if any(e[b]['wall_ns'] < e[a]['wall_ns'] for a, b in zip(STAGES, STAGES[1:])):
+            raise ValueError('nonmonotonic source progress')
+        sources.append(dict(owner=key[0], sequence=key[1],
+            reason=e.get('publish_reason', {}).get('value'),
+            commands=e.get('publish_commands', {}).get('value'),
+            stages_ms={a+'__'+b: (e[b]['wall_ns']-e[a]['wall_ns'])/1e6
+                       for a, b in zip(STAGES, STAGES[1:])}))
+    keys = {(r['queue_owner'], r['sequence']) for r in target['target']['publications']}
+    target_sources = [s for s in sources if (s['owner'], s['sequence']) in keys]
+    spans = supply.pair(rows, 'replay_begin', 'replay_end')
+    span = next(s for s in spans if s['begin']['id'] == target['target_raw'] and
+                s['begin']['tid'] == target['target']['worker_tid'])
+    a, b = span['begin']['wall_ns'], span['end']['wall_ns']
+    local = [r for r in rows if r['tid'] == span['begin']['tid'] and a <= r['wall_ns'] <= b]
+    issues = [dict(query=r['id'], flags=r['value']) for r in local if r['kind']=='query_issue']
+    scopes = [dict(sequence=r['id'], published=bool(r['value'] >> 63),
+                   before=(r['value'] >> 32) & 0x7fffffff, after=r['value'] & 0xffffffff)
+              for r in local if r['kind']=='scope_boundary']
+    blocked = supply.pair(rows, 'commit_wait_begin', 'commit_wait_end')
+    relief = []
+    for s in blocked:
+        x, y = s['begin'], s['end']
+        if x['tid'] != span['begin']['tid'] or not a <= x['wall_ns'] <= y['wall_ns'] <= b:
+            continue
+        retired = [r['id'] for r in rows if r['kind']=='retire' and r['owner']==x['owner'] and
+                   x['wall_ns'] <= r['wall_ns'] <= y['wall_ns']]
+        relief.append(dict(wall_ms=s['wall_ns']/1e6, before=x['value'], after=y['value'],
+                           retirements_in_interval=retired))
+    return dict(target=target, target_sources=target_sources,
+        target_missing_source_stages=len(keys)-len(target_sources),
+        query_issues=issues, scope_boundaries=scopes, cap_waits=relief,
+        complete_sources=sources, incomplete_source_count=len(events)-len(sources),
+        qualification='Ordinary source stages only; retirement in wait interval is not OS wake identity; elapsed stages across sources overlap')
+
+
+if __name__ == '__main__':
+    p = argparse.ArgumentParser(description=__doc__)
+    p.add_argument('supply', type=Path)
+    p.add_argument('waits', type=Path)
+    p.add_argument('--output', required=True, type=Path)
+    p.add_argument('--query', type=int, help='Select a recorded query identity; absent means longest receipt')
+    a = p.parse_args()
+    try:
+        result = analyze(*supply.load(a.supply), *waits.load(a.waits), query=a.query)
+        with a.output.open('x') as stream:
+            stream.write(json.dumps(result, indent=2)+'\n')
+        print(json.dumps({k:v for k,v in result.items() if k not in ('complete_sources','target_sources','target')}, indent=2))
+    except (ValueError, KeyError, OSError, StopIteration) as error:
+        p.exit(1, f'unqualified progress: {error}\n')

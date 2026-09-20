@@ -1,6 +1,7 @@
 #include "device_c_provider.hpp"
 #include "device_c_query_receipt_observer.hpp"
 #include "dxmt9/dxmt9_wait_trace.hpp"
+#include "dxmt9/dxmt9_cpu_supply_trace.hpp"
 #include "../dxmt9/dxmt9_query_timeline_observer.hpp"
 
 // Needed so dxmt9c_stateblock_apply can mark the per-frequency uniform
@@ -265,6 +266,9 @@ extern "C" uint32_t dxmt9c_query_release(D9CQuery* q) {
 }
 
 extern "C" int32_t dxmt9c_query_issue(D9CQuery* q, uint32_t flags) {
+  if (dxmt9::supply::enabled())
+    dxmt9::supply::record(dxmt9::supply::Event::QueryIssue, q->device,
+                         q->obj->identity(), flags);
   const auto result = q->device->iface->IssueQuery(q->obj, (flags & 2) != 0);
   if (q->pollState) {
     auto snapshot = q->device->dev().captureQueryPollSnapshot(q->obj);
