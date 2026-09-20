@@ -160,8 +160,10 @@ pass-deduplicated raw-read/raw-write/pass-read-union detail reasons. Native
 counterexamples distinguish per-draw overflow from pass-union overflow without
 changing admission or capacity. Fresh R693 attributes 61/61 resource-set
 rejections to pass-read-union overflow (raw-read/write failures zero), across
-41 sources. Separate bounded pass closure, certificate equivalence and GPU
-qualification remain open; historical coarse traces cannot recover details.
+41 sources. Pass-specific bounded read storage and independent wide certificate
+re-resolution are now implemented; wide GPU qualification and performance
+remain open (see [encode scheduling gap](encode-scheduling/gap.md)). Historical
+coarse traces cannot recover details.
 See [H345](../../docs/perfomance/present-pacing/present-pacing-stalker-resource-closure.345.md).
 
 R-BACK-2.15.5 known-setter nonconstant invalidation is the unconditional

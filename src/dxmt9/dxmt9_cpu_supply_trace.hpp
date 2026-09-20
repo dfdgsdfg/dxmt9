@@ -29,6 +29,7 @@ enum class Event : std::uint32_t {
   ParallelObserveBegin, ParallelObserveCounts, ParallelObserveDraws,
   ParallelObserveChildren, ParallelObserveReject, ParallelObserveEnd,
   ParallelObserveStatus, ParallelObserveImbalance,
+  ParallelObserveResources,
 };
 
 inline bool commandSplitEnabled() noexcept {

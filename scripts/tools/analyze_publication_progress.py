@@ -35,7 +35,7 @@ def parallel_observation(begin, end, rows):
     if not local:
         return dict(qualified=False, reason='parallel observer disabled or outside window')
     counts = collections.Counter(r['kind'] for r in local)
-    required = set(PARALLEL_EVENTS)-{'parallel_observe_reject'}
+    required = set(PARALLEL_EVENTS)-{'parallel_observe_reject', 'parallel_observe_resources'}
     if any(counts[k] != 1 for k in required):
         raise ValueError('incomplete/duplicate parallel observation')
     if (local[0]['kind'] != 'parallel_observe_begin' or
@@ -67,6 +67,13 @@ def parallel_observation(begin, end, rows):
         if rejects.get(PARALLEL_REASONS.index(detail), 0) > coarse:
             raise ValueError('parallel resource detail exceeds coarse rejection')
     eligible = values['end']
+    resource_sizes = None
+    if 'resources' in values:
+        maximum, total = values['resources'] >> 32, values['resources'] & 0xffffffff
+        if (counts['parallel_observe_resources'] != 1 or maximum > total or
+                total > maximum*eligible or (not eligible and maximum)):
+            raise ValueError('invalid parallel resource cardinalities')
+        resource_sizes = dict(max_pass_reads=maximum, total_pass_reads=total)
     if (eligible > sealed or sealed > candidates or values['children'] < 2*eligible or
             (eligible and values['draws'] < values['children']) or
             values['imbalance'] > values['draws'] or
@@ -81,6 +88,7 @@ def parallel_observation(begin, end, rows):
         fallback=PARALLEL_REASONS[fallback], candidates=candidates, sealed=sealed,
         structural_eligible=eligible, structural_draws=values['draws'],
         children=values['children'], max_child_draw_imbalance=values['imbalance'],
+        accepted_pass_resources=resource_sizes,
         rejections={PARALLEL_REASONS[k]:v for k,v in rejects.items()},
         observer_cpu_ms=cpu/1e6, observer_wall_ms=wall/1e6,
         qualification='Structural only; excludes executor economics/binding gates; source CPU is not eligible-draw CPU')

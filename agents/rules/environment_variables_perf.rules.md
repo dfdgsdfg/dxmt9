@@ -23,6 +23,10 @@ Resource detail reasons distinguish incomplete raw reads/writes from pass-read
 union overflow. They overlap `resource_set_incomplete`, are counted once per
 pass, and must not be added to the coarse total. Historical traces lack this
 detail; absence there does not prove that overflow did not occur.
+The optional accepted-pass resource event reports maximum and total read
+identity cardinality per source. Rejected passes are excluded; missing events
+in historical traces mean unknown. It does not measure retained capacity or
+prove that a larger pass is executable.
 
 The bounded CPU-supply trace also brackets ordinary Slot prefetch and backend
 processing using queue/sequence-qualified native CPU and wall endpoints.

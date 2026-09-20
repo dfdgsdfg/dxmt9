@@ -51,6 +51,15 @@ class TestSupply(unittest.TestCase):
         self.assertEqual(result['structural_eligible'],2)
         self.assertIn('not eligible-draw CPU',result['qualification'])
         self.assertFalse(progress.parallel_observation(begin,end,[])['qualified'])
+        sized = rows[:-1] + [dict(rows[-1], kind='parallel_observe_resources',
+                                 value=(60<<32)|80)] + [dict(rows[-1], wall_ns=6000, cpu_ns=3000)]
+        sizes = progress.parallel_observation(begin,end,sized)['accepted_pass_resources']
+        self.assertEqual(sizes,dict(max_pass_reads=60,total_pass_reads=80))
+        self.assertIsNone(result['accepted_pass_resources'])
+        for bad in ((60<<32)|59, (60<<32)|121):
+            invalid = sized[:-2]+[dict(sized[-2],value=bad)]+sized[-1:]
+            with self.assertRaises(ValueError):
+                progress.parallel_observation(begin,end,invalid)
         rejected = [dict(r, value=(1 if r['kind']=='parallel_observe_begin' else
                     (18 if r['kind']=='parallel_observe_status' else 0))) for r in rows]
         result = progress.parallel_observation(begin,end,rejected)

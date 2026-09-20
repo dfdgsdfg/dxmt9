@@ -12,6 +12,32 @@ This is the detailed owner for `R-BACK-2.35`–`R-BACK-2.50`,
 [backend gap](../gap.md) keeps only a routing summary. Historical experiments
 remain in `docs/perfomance/`.
 
+## Pass-wide immutable access metadata (2026-09-20)
+
+`R-BACK-2.71`: producer, production child coverage resolver and semantic
+certificate now use a distinct 256-identity `ParallelPassReadSet` for pass/child
+read unions. The 12-identity draw-entry `ExactResourceSet` remains 104 bytes;
+Slot draw/state/uniform SoA and resource lifetime ownership are unchanged.
+Metadata is value-owned by source/generation/range-qualified snapshots; no new
+source spans escape and no per-draw allocation is introduced. This is bounded
+proof metadata, not a claim of zero-copy certificates: each wide set is 2056
+bytes, increasing each pass/certificate read set by 1952 bytes. Candidate TLS
+and resolved-child stack arrays each have 16 entries. Their cost must be priced
+before promotion; table-index/bitset sharing is a possible later reduction.
+
+Native exhaustive set refinement and wide producer-to-certificate tests cover
+overflow poisoning, duplicates, write aliases, omitted late identities, stale
+storage generation and ordered child ranges. Existing parallel TLA regression
+remains applicable to execution/lifetime; the bounded set refinement directly
+uses the new C++ accumulator. A non-vacuous >12-resource serial/parallel GPU
+oracle, executor economics/binding qualification, retained-capacity pricing and
+parallel performance evidence remain open. IdentitySerial remains default;
+this change does not promote ExplicitParallel.
+
+R694 serial observation finds 54 structural passes with at most 25 read
+identities, while 21 pass unions still exceed 256. Full cardinality of rejected
+passes remains unknown. See [H346](../../../docs/perfomance/present-pacing/present-pacing-stalker-pass-access.346.md).
+
 ## Qualified capacity ownership recovery (2026-09-14)
 
 Implemented and bounded-qualified for Direct denial recovery followed by

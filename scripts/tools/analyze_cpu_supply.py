@@ -25,7 +25,8 @@ EVENTS = ('present import_begin import_end raw_ready mutation_ready stateblock_r
           'encode_draw_begin encode_draw_end '
           'parallel_observe_begin parallel_observe_counts parallel_observe_draws '
           'parallel_observe_children parallel_observe_reject parallel_observe_end '
-          'parallel_observe_status parallel_observe_imbalance').split()
+          'parallel_observe_status parallel_observe_imbalance '
+          'parallel_observe_resources').split()
 
 
 def load(path):

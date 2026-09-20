@@ -1147,8 +1147,8 @@ void producerRejectsControlsFragmentsHazardsAndBounds() {
             output.count == 0u,
         "raw read incompleteness is distinguished without changing coarse verdict");
 
-  // Individually complete reads can overflow only when unioned across a pass.
-  // Repeat the second draw to pin pass-level, not occurrence-level, counting.
+  // Individually complete reads formerly overflowed the shared 12-entry bound
+  // only when unioned across a pass. Repeated reads must not inflate the union.
   dxmt9::core::CanonicalDrawState firstReads{}, secondReads{};
   for (std::size_t i = 0; i < 7u; ++i) {
     firstReads.hot.streamBuffers[i] = dxmt9::core::Handle{0x200u + i};
@@ -1161,12 +1161,29 @@ void producerRejectsControlsFragmentsHazardsAndBounds() {
   unionOverflow.slot.appendPresent({}, {});
   unionOverflow.finalize(414u);
   result = unionOverflow.observe(output);
+  check(result.eligibleCount == 1u && output.count == 1u &&
+            output.passes[0].resourceReads.count == 14u &&
+            rejected(ResourceFallback::ResourceSetIncomplete) == 0u &&
+            rejected(ResourceFallback::PassReadUnionOverflow) == 0u &&
+            rejected(ResourceFallback::RawReadSetIncomplete) == 0u &&
+            result.fallback == ResourceFallback::None,
+        "pass union is independent of the unchanged small draw-entry bound");
+
+  PassObservationFixture boundedOverflow;
+  for (std::size_t n = 0; n < 38u; ++n) {
+    dxmt9::core::CanonicalDrawState state{};
+    for (std::size_t i = 0; i < 7u; ++i)
+      state.hot.streamBuffers[i] = dxmt9::core::Handle{0x1000u + n * 7u + i};
+    boundedOverflow.slot.appendDrawRun(state, {}, drawValues, drawPayloads);
+  }
+  boundedOverflow.slot.appendPresent({}, {});
+  boundedOverflow.finalize(416u);
+  result = boundedOverflow.observe(output);
   check(result.eligibleCount == 0u && output.count == 0u &&
             rejected(ResourceFallback::ResourceSetIncomplete) == 1u &&
             rejected(ResourceFallback::PassReadUnionOverflow) == 1u &&
-            rejected(ResourceFallback::RawReadSetIncomplete) == 0u &&
-            result.fallback == ResourceFallback::ResourceSetIncomplete,
-        "complete individual draws fail closed on pass read union overflow once");
+            rejected(ResourceFallback::RawReadSetIncomplete) == 0u,
+        "pass-specific bound still fails closed and deduplicates overflow");
 
   // A same-set repeated draw does not grow the union or create a false detail.
   PassObservationFixture repeatedReads;
@@ -1179,6 +1196,24 @@ void producerRejectsControlsFragmentsHazardsAndBounds() {
             rejected(ResourceFallback::ResourceSetIncomplete) == 0u &&
             rejected(ResourceFallback::PassReadUnionOverflow) == 0u,
         "duplicate canonical resource reads preserve accepted pass");
+
+  PassObservationFixture lateAlias;
+  for (std::uint32_t i = 0; i < 20u; ++i) {
+    dxmt9::core::CanonicalDrawState state{};
+    state.hot.colorAttachments[0].handle = dxmt9::core::Handle{0x900u};
+    state.hot.textures[0] = dxmt9::core::Handle{0x500u + i};
+    lateAlias.slot.appendDrawRun(state, {}, drawValues, drawPayloads);
+  }
+  lateAlias.slot.appendPresent({}, {});
+  lateAlias.finalize(417u);
+  ResourceProofFixture lateAliasProof{.aliasFrom = 0x513u, .aliasTo = 0x900u};
+  auto lateProofs = completeProofs();
+  lateProofs.resources = {.context = &lateAliasProof, .resolve = fixtureResourceProof};
+  result = lateAlias.observe(output, true, true, lateProofs);
+  check(result.eligibleCount == 0u && output.count == 0u &&
+            rejected(ResourceFallback::ResourceHazard) == 1u &&
+            rejected(ResourceFallback::PassReadUnionOverflow) == 0u,
+        "canonical write alias beyond the former union bound still rejects");
 
   PassObservationFixture control;
   control.slot.appendDrawRun({}, {}, drawValues, drawPayloads);
@@ -2102,7 +2137,7 @@ struct SemanticPlanFixture {
       children{};
   std::uint32_t count = 0;
   dxmt9::core::CpuReadyTape::SourceRef expectedSource{};
-  dxmt9::core::ExactResourceSet resolvedReads{};
+  dxmt9::encoders::ParallelPassReadSet resolvedReads{};
   dxmt9::core::ExactResourceSet resolvedWrites{};
   const SemanticPlanFixture* authorityOwner = nullptr;
   mutable std::uint32_t authorityCalls = 0u;
@@ -2283,6 +2318,9 @@ struct SemanticPlanFixture {
     snapshot.attachmentWrites.add(0x22u);
     resolvedReads = snapshot.resourceReads;
     resolvedWrites = snapshot.attachmentWrites;
+    dxmt9::core::ExactResourceSet entryReads{};
+    entryReads.flags = snapshot.resourceReads.flags;
+    entryReads.add(0x11u);
     snapshot.replayOrdinalBegin = 0u;
     snapshot.replayOrdinalEnd = 1u;
     snapshot.drawCount = static_cast<std::uint64_t>(childCount) *
@@ -2318,7 +2356,7 @@ struct SemanticPlanFixture {
           .provenance = entry.entry,
           .entryRender = {
               .attachments = snapshot.attachments,
-              .entryReads = snapshot.resourceReads,
+              .entryReads = entryReads,
               .route = dxmt9::core::RenderRoute::Portable,
               .passActionEpoch = snapshot.passActionEpoch,
               .flags = dxmt9::core::RenderContinuationKeyValid |
@@ -2707,6 +2745,7 @@ struct ProducerCoverageContext {
   // published, or a carried source would be re-derived as a fresh one.
   bool sourceStartsPass = true;
   bool sourceEndsPass = true;
+  bool omitLateRead = false;
   mutable std::uint32_t epochReads = 0u;
 };
 
@@ -2870,6 +2909,8 @@ bool resolveProducerCoverage(
     }
     coverage.route = dxmt9::core::RenderRoute::Portable;
     coverage.passActionEpoch = child.firstDraw.entryRender.passActionEpoch;
+    if (state.omitLateRead && coverage.reads.count > 12u)
+      --coverage.reads.count;
     return coverage.drawCount != 0u;
   }
   const auto resolved = dxmt9::encoders::resolveEncodePartition(
@@ -2895,8 +2936,8 @@ bool resolveProducerCoverage(
       })) {
     return false;
   }
-  coverage.reads = dxmt9::core::makeDrawEntryReadSet(
-      resolved.partition.entry.drawState);
+  coverage.reads.importEntry(dxmt9::core::makeDrawEntryReadSet(
+      resolved.partition.entry.drawState));
   coverage.writes = dxmt9::core::makeRenderAttachmentWriteSet(
       *resolved.partition.entry.drawState.hot);
   coverage.reads.flags |= dxmt9::core::ExactResourceSetCanonicalized;
@@ -3490,7 +3531,9 @@ void wideWholeCommandChildrenCertify() {
   using namespace dxmt9::encoders;
   PassObservationFixture wide;
   for (std::uint32_t command = 0u; command < 60u; ++command) {
-    wide.slot.appendDrawRun({}, {}, draws(3u), payloads(3u));
+    dxmt9::core::CanonicalDrawState state{};
+    state.hot.textures[0] = dxmt9::core::Handle{0x1000u + command};
+    wide.slot.appendDrawRun(state, {}, draws(3u), payloads(3u));
   }
   // The production partition planner reports an explicit plan only when some
   // DrawRun is large enough to subdivide; the wide small-command run is what
@@ -3505,6 +3548,9 @@ void wideWholeCommandChildrenCertify() {
         "a many-command source still produces one whole-command candidate");
 
   const auto& snapshot = output.passes[0];
+  check(snapshot.resourceReads.count == 60u &&
+            snapshot.firstDraws[0].entryRender.entryReads.count <= 12u,
+        "wide pass access proof does not enlarge per-draw entry summaries");
   std::uint32_t widestChild = 0u;
   for (std::uint32_t i = 0u; i < snapshot.childCount; ++i) {
     widestChild = std::max(widestChild, snapshot.childReplayOrdinalCounts[i]);
@@ -3541,6 +3587,17 @@ void wideWholeCommandChildrenCertify() {
             .accepted(),
         "a child owning more commands than the former row capacity certifies");
 
+  auto stale = snapshot;
+  stale.source.storage.generation++;
+  check(!validateParallelPassSemanticPlan(
+            stale, {children.data(), stale.childCount}, authority, resolver,
+            witness).accepted(), "wide read proof is storage-generation qualified");
+  auto missing = snapshot;
+  missing.resourceReads.count--;
+  check(!validateParallelPassSemanticPlan(
+            missing, {children.data(), missing.childCount}, authority, resolver,
+            witness).accepted(), "wide proof cannot omit a late resource identity");
+
   // The per-row predicates are still enforced at that width.
   for (std::uint32_t field = 1u; field <= 3u; ++field) {
     context.mutateNonzeroWholeRowField = field;
@@ -3552,6 +3609,50 @@ void wideWholeCommandChildrenCertify() {
           "mutation");
   }
   context.mutateNonzeroWholeRowField = 0u;
+  context.omitLateRead = true;
+  check(!validateParallelPassSemanticPlan(
+            snapshot, {children.data(), snapshot.childCount}, authority,
+            resolver, witness).accepted(),
+        "certificate independently detects missing child reads beyond entry capacity");
+}
+
+// Bounded exhaustive refinement of the actual accumulator against a mathematical
+// set. Enumerate duplicates, nulls, all write aliases, exact capacity and poison.
+void passReadSetMatchesExactReference() {
+  using namespace dxmt9::encoders;
+  static_assert(sizeof(dxmt9::core::ExactResourceSet) == 104u);
+  for (std::uint32_t encoded = 0; encoded < 4096u; ++encoded) {
+    BoundedParallelPassReadSet<2> actual{};
+    actual.flags |= dxmt9::core::ExactResourceSetCanonicalized;
+    std::array<bool, 4> reference{};
+    bool poisoned = false;
+    auto remaining = encoded;
+    for (std::uint32_t step = 0; step < 6u; ++step) {
+      const auto identity = remaining % 4u;
+      remaining /= 4u;
+      if (identity) reference[identity] = true;
+      const auto cardinality = static_cast<unsigned>(reference[1]) +
+          reference[2] + reference[3];
+      poisoned |= cardinality > 2u;
+      check(actual.add(identity) == !poisoned && actual.complete() == !poisoned,
+            "bounded pass union matches exact set or stays poisoned");
+      if (!poisoned) {
+        check(actual.count == cardinality, "exact canonical cardinality");
+        for (std::uint64_t write = 1; write <= 3; ++write) {
+          dxmt9::core::ExactResourceSet writes{};
+          writes.add(write);
+          check(actual.overlaps(writes) == reference[write],
+                "all write aliases match the mathematical intersection");
+        }
+      }
+    }
+  }
+  ParallelPassReadSet full{};
+  for (std::uint64_t i = 1; i <= kParallelPassReadCapacity; ++i)
+    check(full.add(i), "pass bound fits exactly");
+  check(full.add(1) && !full.add(kParallelPassReadCapacity + 1u) &&
+            !full.complete() && !full.add(1),
+        "overflow cannot be repaired by a duplicate identity");
 }
 
 // R-BACK-2.69: the certificate never trusts a stored action epoch. The
@@ -4360,6 +4461,7 @@ int main() {
     producerOutputFeedsSynchronousSemanticValidator();
     streamingCoverageFoldMatchesStoredRowReference();
     wideWholeCommandChildrenCertify();
+    passReadSetMatchesExactReference();
     passLocalEpochProofIsIndependentlyReDerived();
     boundaryAdjacentPassIdentityCertifies();
     proofCoreAdapterGatesEveryProductionCandidate();

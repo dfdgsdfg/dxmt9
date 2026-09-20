@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H346](present-pacing-stalker-pass-access.346.md) separates pass-wide identity
+metadata from small draw-entry summaries and connects independent certificate
+validation. Serial observation accepts up to 25 read identities per pass but
+still finds 21 unions exceeding the new 256 budget; GPU qualification is open.
+
 [H345](present-pacing-stalker-resource-closure.345.md) attributes all 61
 resource-set rejections in a fresh serial window to pass-wide read-union
 overflow, not incomplete individual draws. Separate pass closure is the next

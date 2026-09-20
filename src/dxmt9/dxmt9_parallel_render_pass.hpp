@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dxmt9_encode_partition.hpp"
+#include "dxmt9_parallel_pass_resources.hpp"
 #include "dxmt9_source_semantics.hpp"
 #include "dxmt9_uniform_dirty.hpp"
 
@@ -915,7 +916,7 @@ struct SealedParallelPassSnapshot {
   std::array<std::uint64_t, kParallelRenderPassChildCapacity> childDrawCounts{};
   core::RenderAttachmentKey attachments{};
   core::ExactResourceSet attachmentWrites{};
-  core::ExactResourceSet resourceReads{};
+  ParallelPassReadSet resourceReads{};
   core::CpuReadyTape::SourceRef source{};
   ParallelPassCommandLocator firstDraw{};
   ParallelPassCommandLocator leadingClear{};
@@ -1834,7 +1835,7 @@ struct ParallelPassResolvedCoverage {
   std::uint64_t drawCount = 0u;
   using Command = ParallelPassCoverageFold::Command;
   ParallelPassCoverageFold commands{};
-  core::ExactResourceSet reads{};
+  ParallelPassReadSet reads{};
   core::ExactResourceSet writes{};
   core::RenderAttachmentKey attachments{};
   core::RenderRoute route = core::RenderRoute::Unknown;
@@ -1857,8 +1858,8 @@ struct ParallelPassCoverageResolver {
   }
 };
 
-inline bool parallelPassExactResourceSetValid(
-    const core::ExactResourceSet& resources) noexcept {
+template<typename Set>
+inline bool parallelPassExactResourceSetValid(const Set& resources) noexcept {
   if (!resources.complete() || !resources.canonicalized() ||
       resources.count > resources.handles.size()) {
     return false;
@@ -1876,9 +1877,9 @@ inline bool parallelPassExactResourceSetValid(
   return true;
 }
 
+template<typename Left, typename Right>
 inline bool parallelPassExactResourceSetEqual(
-    const core::ExactResourceSet& left,
-    const core::ExactResourceSet& right) noexcept {
+    const Left& left, const Right& right) noexcept {
   if (!parallelPassExactResourceSetValid(left) ||
       !parallelPassExactResourceSetValid(right) ||
       left.count != right.count) {
@@ -1896,9 +1897,9 @@ inline bool parallelPassExactResourceSetEqual(
   return true;
 }
 
+template<typename Container, typename Contained>
 inline bool parallelPassExactResourceSetContains(
-    const core::ExactResourceSet& container,
-    const core::ExactResourceSet& contained) noexcept {
+    const Container& container, const Contained& contained) noexcept {
   if (!parallelPassExactResourceSetValid(container) ||
       !parallelPassExactResourceSetValid(contained)) {
     return false;
@@ -2125,7 +2126,7 @@ inline ParallelPassSemanticPlanValidation validateParallelPassSemanticPlan(
     return result;
   }
   result.failure = ParallelPassSemanticPlanFailure::FirstDrawProof;
-  core::ExactResourceSet expectedReads{};
+  ParallelPassReadSet expectedReads{};
   expectedReads.flags = core::ExactResourceSetComplete |
       core::ExactResourceSetCanonicalized;
   core::ExactResourceSet expectedWrites{};

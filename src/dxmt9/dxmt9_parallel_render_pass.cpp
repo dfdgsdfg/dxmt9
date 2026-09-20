@@ -44,7 +44,7 @@ void noteRejection(SealedParallelPassSnapshotBatchResult& result,
   }
 }
 
-bool appendResources(core::ExactResourceSet& destination,
+bool appendResources(ParallelPassReadSet& destination,
                      const core::ExactResourceSet& source) noexcept {
   if (!destination.complete() || !source.complete() ||
       !source.canonicalized()) {

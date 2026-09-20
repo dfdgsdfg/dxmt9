@@ -1529,6 +1529,33 @@ Attachment changes split candidates without merging their action ownership.
 Fixed pass/child capacity, stale locators, incomplete resources, alias hazards,
 and epoch ambiguity reject without altering the production plan.
 
+Pass-wide read access uses `ParallelPassReadSet`, separate from the 12-identity
+`core::ExactResourceSet` retained by draw-entry continuation summaries and
+attachment writes. The initial pass admission budget is 256 canonical identities;
+it is not a measured maximum or an unbounded guarantee. Each pass and resolved
+child owns only flat identity metadata, never a copy of draw/state/uniform SoA
+or a borrowed source span. The enclosing snapshot binds it to source/storage
+generation, sequence, pass-action epoch and ordered replay interval. Existing
+queue residency ownership remains authoritative; this set grants no lifetime.
+
+The producer folds individually canonicalized entry reads into that union. The
+coverage resolver independently folds every child command's canonical reads into
+the same bounded type; certificate validation folds the child unions, compares
+exact membership and checks attachment-write intersections. Pass-union overflow
+is sticky and rejects before child effects. Raw-entry overflow, alias failure,
+query/ordered-control exclusions and economics remain unchanged. Certificates
+still own bounded value snapshots: this stage does not claim zero-copy proof
+metadata or elimination of independent certificate re-resolution. Normal serial
+execution does not build this data unless the bounded observer is enabled.
+
+The native exhaustive small-domain set refinement in
+`parallel_render_pass_spec.cpp` uses the production accumulator against an exact
+set oracle, including all short duplicate/null/overflow traces and write aliases.
+Wide producer-to-certificate fixtures retain generation/range rejection coverage.
+This extends the admission representation, not command or resource-lifetime order;
+parallel promotion still requires a non-vacuous wide-resource GPU oracle and
+measured benefit. IdentitySerial remains the default.
+
 The pass-action epoch is issued per pass. `produceSealedParallelPassSnapshots`
 drives one shared `ParallelPassActionEpochState` while it walks the effective
 replay order and stamps each sealed pass's `coordinatorProof` with that pass's

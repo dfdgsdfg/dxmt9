@@ -978,6 +978,14 @@ pass-wide unknown, conflict, action mismatch, ABI mismatch, or missing
 first-draw fact. Coordinator-owned pass actions, sidecars, completion, and
 parent/segment lifecycle remain outside child ownership.
 
+The pass/child canonical read union must have its own bounded representation,
+independent of the small draw-entry continuation summary. Admission must retain
+exact identities (not a hash-only proof); overflow must remain fail-closed.
+The certificate must independently reconstruct child unions and compare their
+exact union with the sealed pass under matching source/storage generation,
+sequence and replay bounds. Widening a pass must not enlarge or reinterpret
+per-draw state/SoA records, create new resource ownership, or weaken alias checks.
+
 **R-BACK-2.72** Economics and selection must be deterministic checked fixed-
 point value transforms. Scores may use only bounded integer inputs captured in
 the policy snapshot; they must not depend on wallclock time, worker arrival,

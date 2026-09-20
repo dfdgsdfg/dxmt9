@@ -14,6 +14,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H346](present-pacing-stalker-pass-access.346.md) implements separate pass-read
+metadata without changing draw/state SoA. R694 observes 54 accepted passes
+(maximum 25 read identities), with 21 pass unions still exceeding 256. The next
+gates are large-pass cardinality, proof-storage cost and wide-resource GPU exact
+validation; this is not parallel execution promotion or an FPS A/B.
+
 [H345](present-pacing-stalker-resource-closure.345.md) isolates the resource
 gate: R693's 61 coarse failures are all pass-read-union overflow at the shared
 12-identity bound. Separate bounded pass closure from small draw-entry summaries

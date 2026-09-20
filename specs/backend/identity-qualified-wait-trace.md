@@ -161,3 +161,10 @@ Native counterexamples cover individually incomplete reads, complete individual
 reads whose union overflows, and repeated identical reads whose union fits.
 This is observation-only classification, not a stateful rendering refinement;
 it introduces no new execution, ownership, ordering or GPU-pixel claim.
+
+Optional resource-cardinality events report the maximum and sum of canonical
+read identities over structurally accepted passes in a source. They exclude
+rejected/overflowed passes and are not a complete workload capacity histogram.
+Older transcripts without the event remain qualified for prior fields, but
+resource cardinality is unknown, not zero. Duplicate or inconsistent size
+events must fail analysis. This observation does not qualify execution.

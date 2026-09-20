@@ -2735,7 +2735,10 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
            (std::uint64_t(observed.considered) << 32) |
                static_cast<std::uint32_t>(observed.fallback));
       std::uint64_t maxImbalance = 0;
+      std::uint32_t maxPassReads = 0, totalPassReads = 0;
       for (const auto& pass : diagnosticSnapshots.view()) {
+        maxPassReads = std::max(maxPassReads, pass.resourceReads.count);
+        totalPassReads += pass.resourceReads.count;
         if (pass.childCount < 2) continue;
         auto low = pass.childDrawCounts[0];
         auto high = low;
@@ -2746,6 +2749,8 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
         maxImbalance = std::max(maxImbalance, high - low);
       }
       emit(E::ParallelObserveImbalance, maxImbalance);
+      emit(E::ParallelObserveResources,
+           (std::uint64_t(maxPassReads) << 32) | totalPassReads);
       for (std::size_t reason = 0; reason < observed.rejectionCounts.size(); ++reason)
         if (observed.rejectionCounts[reason])
           emit(E::ParallelObserveReject,
