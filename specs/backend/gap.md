@@ -119,6 +119,22 @@ and all 55 target publications. The blocking head has 0.337ms planning/setup,
 of backend CPU in that source. Its internal owners and observer-OFF performance
 remain open; see
 [H338](../../docs/perfomance/present-pacing/present-pacing-stalker-framegraph-phases.338.md).
+The next observer adds a pool-qualified encodeChunk command-body pair and
+partitions setup/partition, command execution and finalize/return. Missing or
+invalid bindings remain unqualified. R679 qualifies all 2690 complete sources
+and all 55 target publications. The blocking head has 0.076ms setup/partition,
+16.719ms command body and 0.162ms finalize/return native CPU. Command body
+owns 98.60% of encodeChunk CPU but includes pass management and in-loop
+splits, not just draws. Draw/non-draw/dispatch ownership remains open; see
+[H339](../../docs/perfomance/present-pacing/present-pacing-stalker-chunk-phases.339.md).
+Default-OFF large-serial-source command splitting now separates DrawRun,
+non-draw, split policy and dispatch residual with disjoint endpoint/count
+validation. Same-image R680 OFF/R681 ON pass. R681 qualifies 81 large sources;
+its selected head has 18.545ms DrawRun, zero non-draw calls, 0.281ms split
+and 0.934ms residual CPU. DrawRun includes internal pass work. Population drift
+and high-frequency clock overhead prevent pure-product/FPS attribution;
+DrawRun preparation/pass versus encodeDraw remains open. See
+[H340](../../docs/perfomance/present-pacing/present-pacing-stalker-command-phases.340.md).
 
 R-BACK-2.15.5 known-setter nonconstant invalidation is the unconditional
 implementation; the 2026-09-17 consolidation removes its runtime opt-out.

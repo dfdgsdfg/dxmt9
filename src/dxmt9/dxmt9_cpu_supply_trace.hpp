@@ -23,7 +23,17 @@ enum class Event : std::uint32_t {
   CompletionDequeue, CompletionObserved, Retire,
   EncodePrefetchBegin, EncodePrefetchEnd, EncodeBackendBegin, EncodeBackendEnd,
   FramegraphEncodeBegin, FramegraphEncodeEnd,
+  FramegraphPoolBinding, ChunkBodyBegin, ChunkBodyEnd,
+  ChunkCommandBegin, ChunkCommandEnd, ChunkSplitBegin, ChunkSplitEnd,
 };
+
+inline bool commandSplitEnabled() noexcept {
+  static const bool value = [] {
+    const char* flag = std::getenv("DXMT9_CPU_SUPPLY_COMMAND_SPLIT");
+    return enabled() && flag && flag[0] && flag[0] != '0';
+  }();
+  return value;
+}
 
 // Call only behind enabled(). No output, allocation or sink mutex in the
 // measured window. Timestamp/cpu/TID and a bounded event live in cold storage.

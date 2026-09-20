@@ -22,9 +22,15 @@ ordinary backend-begin interface identity, sequence, TID and enclosing interval.
 The analyzer separates planning/setup, encodeChunk and cleanup/return, with
 bypass/activated-plan/natural-order dispositions. These two additional events
 per call use the same sink; old traces without the binding remain unqualified.
+The framegraph call also binds the resource pool for source-qualified
+encodeChunk command-body begin/end events. Three additional events per call
+separate setup/partition, command dispatch/execution and finalize/return;
+there are no per-draw clocks. The body still includes pass and split work.
+Use a shorter window as these events approach the fixed sink capacity.
 
 | Var | Purpose | Default |
 |---|---|---|
+| `DXMT9_CPU_SUPPLY_COMMAND_SPLIT` | Requires CPU supply trace. Adds paired command/split-policy CPU and wall endpoints only for serial sources with at least 128 input commands (suppressed-effect fixtures excluded). DrawRun includes its pass transitions; non-draw includes helper/pass work; dispatch is the uncovered body residual. The body event marks selection; absent/disabled endpoints are unqualified, not zero. Higher-frequency clocks perturb timings: compare a same-image OFF control, do not call measured scopes pure product cost. Four events per command can fill the fixed sink; use a narrow window. | `0` |
 | `DXMT9_QUERY_SCOPE_CB_JOIN` | Experimental FIFO CB-only composition of scoped sources in CPU-ready EncodeSessions. Requires `DXMT9_METAL_OCCLUSION=1` and the CPU-ready session lane. Keeps source publication, independent query render passes, origin-qualified contributions, FLUSH submission and ordered completion; does not admit Arena queries, reorder/DCE or queried parallel passes. See `specs/backend/query-scope-cb-composition.md`. | `0` |
 | `DXMT9_QUERY_COVERED_PENDING` | Experimental read-mostly backend polling. A bound eager receipt with a previously validated/woken FLUSH prefix and successfully completed initializer prefix may return Pending using conservative atomic observations, without the large queue mutex. New coverage, markers, initializer-only receipts, terminal/invalid cases and every possible success keep the authoritative locked path. Default OFF pending observer-OFF wild qualification. Backend census now includes `covered_pending` and `slow` totals; fast timing excludes the preceding atomic predicate. | `0` |
 | `DXMT9_PUBLISH_RESOURCE_DEDUP` | Experimental exact 64-entry per-Slot texture/surface publication stamp cache. Same kind/full generation-qualified handle at the same sequence may omit a repeated max-stamp. Collisions re-mark. Buffers, batch flush boundaries, lifetime pins and Arena publication are unchanged. See `specs/backend/publication-marking.md`; default OFF pending integration/performance qualification. | `0` |

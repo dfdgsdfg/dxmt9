@@ -98,3 +98,25 @@ not an exclusive optimizer timer. Invalid plans or exceptions without both
 endpoints remain unqualified. Multiple calls, mismatched dispositions, threads
 or clocks must not yield a successful partition. No runtime identity fields,
 query semantics or scheduling policy may be added for this observation.
+
+An optional framegraph pool binding may connect that call to encodeChunk body
+endpoints through pool identity, sequence, TID and the enclosing encodeChunk
+interval. Setup/partition, command body and finalize/return must partition the
+call without per-command clocks. The command body includes dispatch, draws,
+pass transitions and in-loop split work; it is not exclusive draw cost.
+Finalize/return includes tail encoder closure, submission construction, local
+destruction and autorelease cleanup. Missing/duplicate bindings or body
+endpoints must not be presented as zero work. These are source-call scopes,
+not instrumentation of child parallel workers or a GPU timing authority.
+
+Optional command-body splitting is restricted to selected serial large sources.
+Selection must be explicit in the body event. Paired DrawRun/non-draw command
+scopes and split-policy scopes must be disjoint and nested in that source body,
+using the same pool, sequence and native thread. Counts must cover one split
+per executed command. The remaining wall/CPU interval is dispatch residual,
+including tracing and timer overhead outside the scopes. DrawRun includes its
+internal pass transitions; non-draw includes its helper/pass work. This split
+does not independently attribute all pass work. Disabled, excluded, missing,
+overlapping, unpaired or invalid-clock evidence must not yield zero-filled
+costs. A same-image control is required before interpreting observer cost;
+diagnostic timing alone cannot authorize a runtime policy change.

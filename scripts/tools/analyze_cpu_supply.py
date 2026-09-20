@@ -19,7 +19,9 @@ EVENTS = ('present import_begin import_end raw_ready mutation_ready stateblock_r
           'commit_wait_begin commit_wait_end publish_reason publish_commands '
           'scope_boundary query_issue completion_dequeue completion_observed retire '
           'encode_prefetch_begin encode_prefetch_end encode_backend_begin encode_backend_end '
-          'framegraph_encode_begin framegraph_encode_end').split()
+          'framegraph_encode_begin framegraph_encode_end '
+          'framegraph_pool_binding chunk_body_begin chunk_body_end '
+          'chunk_command_begin chunk_command_end chunk_split_begin chunk_split_end').split()
 
 
 def load(path):

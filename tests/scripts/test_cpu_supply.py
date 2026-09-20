@@ -38,6 +38,60 @@ def fixture():
 
 
 class TestSupply(unittest.TestCase):
+    def test_command_body_cost_partition(self):
+        a = dict(kind='chunk_body_begin', tid=3, wall_ns=1000000,
+                 cpu_ns=500000, value=1)
+        b = dict(a, kind='chunk_body_end', wall_ns=3000000, cpu_ns=1500000)
+        rows = []
+        for i,(kind,value) in enumerate((
+                ('chunk_command_begin',1),('chunk_command_end',1),
+                ('chunk_split_begin',0),('chunk_split_end',0),
+                ('chunk_command_begin',0),('chunk_command_end',0),
+                ('chunk_split_begin',0),('chunk_split_end',0))):
+            t = 1100000+i*200000
+            rows.append(dict(a,kind=kind,value=value,wall_ns=t,cpu_ns=t//2))
+        p = progress.command_phases(a,b,rows)
+        self.assertTrue(p['qualified'])
+        self.assertAlmostEqual(p['draw_run']['cpu_ms'],.1)
+        self.assertAlmostEqual(p['non_draw']['cpu_ms'],.1)
+        self.assertEqual(p['split_policy']['calls'],2)
+        self.assertAlmostEqual(sum(p[k]['cpu_ms'] for k in
+            ('draw_run','non_draw','split_policy','dispatch_residual')),1.0)
+        self.assertFalse(progress.command_phases(dict(a,value=0),b,rows)['qualified'])
+        self.assertFalse(progress.command_phases(a,b,[])['qualified'])
+        for bad in (rows[:-1], rows[1:], rows+[rows[0]],
+                    [dict(rows[0],tid=4)]+rows[1:],
+                    [rows[0],dict(rows[1],value=0)]+rows[2:],
+                    [rows[0],dict(rows[1],cpu_ns=1)]+rows[2:],
+                    rows[:2]+rows[4:]):
+            with self.assertRaises(ValueError):
+                progress.command_phases(a,b,bad)
+
+    def test_chunk_body_partition(self):
+        a = dict(kind='framegraph_encode_begin', owner=99, id=7, value=3,
+                 tid=3, wall_ns=1000000, cpu_ns=100000)
+        b = dict(a, kind='framegraph_encode_end', wall_ns=2000000, cpu_ns=600000)
+        binding = dict(a, kind='framegraph_pool_binding', value=88, wall_ns=999000)
+        x = dict(a, kind='chunk_body_begin', owner=88, value=0,
+                 wall_ns=1200000, cpu_ns=200000)
+        y = dict(x, kind='chunk_body_end', wall_ns=1800000, cpu_ns=500000)
+        phases = progress.chunk_phases(a, b, [binding], {(88,7):[x,y]})
+        self.assertTrue(phases['qualified'])
+        self.assertAlmostEqual(phases['setup_partition']['cpu_ms'], .1)
+        self.assertAlmostEqual(phases['command_body']['cpu_ms'], .3)
+        self.assertAlmostEqual(phases['finalize_return']['cpu_ms'], .1)
+        self.assertFalse(progress.chunk_phases(a,b,[],{})['qualified'])
+        for data in ({}, {(88,7):[x]}, {(89,7):[x,y]}, {(88,8):[x,y]}):
+            self.assertFalse(progress.chunk_phases(a,b,[binding],data)['qualified'])
+        for invalid in ([x,x,y], [dict(x,tid=4),y], [dict(x,wall_ns=1900000),y],
+                        [x,dict(y,cpu_ns=1)], [x,dict(y,cpu_ns=10**12)]):
+            with self.assertRaises(ValueError):
+                progress.chunk_phases(a,b,[binding],{(88,7):invalid})
+        for bindings in ([binding,binding], [dict(binding,value=0)],
+                         [dict(binding,tid=4)], [dict(binding,wall_ns=1500000)]):
+            with self.assertRaises(ValueError):
+                progress.chunk_phases(a,b,bindings,{(88,7):[x,y]})
+
     def test_framegraph_partition(self):
         begin = dict(kind='encode_backend_begin', owner=2, id=7, value=99,
                      tid=3, wall_ns=1000000, cpu_ns=100000)
@@ -147,6 +201,30 @@ class TestSupply(unittest.TestCase):
             'target_sources'][0]['framegraph_phases']
         self.assertTrue(fg['qualified'])
         self.assertAlmostEqual(fg['encode_chunk']['cpu_ms'], .1)
+        self.assertFalse(fg['chunk_phases']['qualified'])
+        for kind, owner, value, t in (
+                ('framegraph_pool_binding',99,88,25_090_000),
+                ('chunk_body_begin',88,0,25_150_000),
+                ('chunk_body_end',88,0,25_250_000)):
+            nested.append(dict(kind=kind, wall_ns=t, cpu_ns=t//2+1,
+                               tid=3, owner=owner, id=2, value=value, frame=2))
+        nested.sort(key=lambda r:r['wall_ns'])
+        chunk = progress.analyze(meta,nested,{'pid':17},[receipt])[
+            'target_sources'][0]['framegraph_phases']['chunk_phases']
+        self.assertTrue(chunk['qualified'])
+        self.assertAlmostEqual(chunk['command_body']['cpu_ms'], .05)
+        detailed = [dict(r,value=1) if r['kind']=='chunk_body_begin' else r
+                    for r in nested]
+        for i,(kind,value) in enumerate((('chunk_command_begin',1),
+                ('chunk_command_end',1),('chunk_split_begin',0),('chunk_split_end',0))):
+            t = 25_160_000+i*10_000
+            detailed.append(dict(kind=kind,wall_ns=t,cpu_ns=t//2+1,
+                                  tid=3,owner=88,id=2,value=value,frame=2))
+        detailed.sort(key=lambda r:r['wall_ns'])
+        command = progress.analyze(meta,detailed,{'pid':17},[receipt])[
+            'target_sources'][0]['framegraph_phases']['chunk_phases']['command_phases']
+        self.assertTrue(command['qualified'])
+        self.assertAlmostEqual(command['draw_run']['cpu_ms'], .005)
         with self.assertRaises(ValueError):
             progress.analyze(meta, observed+[next(r for r in observed
                 if r['kind']=='encode_backend_begin')], {'pid':17}, [receipt])

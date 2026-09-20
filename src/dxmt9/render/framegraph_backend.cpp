@@ -429,6 +429,10 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
   // event. No queue pointer or diagnostic field enters EncodeContext/Slot.
   auto encodePlannedChunk = [&](std::uint64_t disposition) {
     if (::dxmt9::supply::enabled())
+      ::dxmt9::supply::record(::dxmt9::supply::Event::FramegraphPoolBinding,
+                            static_cast<const IRenderBackend*>(this), seqId,
+                            reinterpret_cast<std::uintptr_t>(&ctx.pool));
+    if (::dxmt9::supply::enabled())
       ::dxmt9::supply::record(::dxmt9::supply::Event::FramegraphEncodeBegin,
                             static_cast<const IRenderBackend*>(this), seqId, disposition);
     auto result = encoders::encodeChunk(ctx, slotIndex, payload, seqId,

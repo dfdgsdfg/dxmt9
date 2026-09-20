@@ -11,6 +11,16 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H340](present-pacing-stalker-command-phases.340.md) splits a selected large
+source's body into DrawRun 18.545ms, non-draw 0, split 0.281ms and dispatch
+residual 0.934ms CPU. DrawRun includes its internal pass work. Same-image
+OFF/ON population drift prevents an exact observer-overhead/FPS verdict.
+
+[H339](present-pacing-stalker-chunk-phases.339.md) partitions encodeChunk:
+the selected blocking head spends 16.719ms native CPU in command execution,
+0.076ms in setup/partition and 0.162ms in finalization. Draw/pass/dispatch
+owners inside that body remain open; no FPS verdict follows.
+
 [H338](present-pacing-stalker-framegraph-phases.338.md) narrows the blocking
 head further: framegraph planning/setup 0.337ms, encodeChunk 13.407ms and
 cleanup 0.005ms native CPU. All 55 target sources join; encodeChunk internals,

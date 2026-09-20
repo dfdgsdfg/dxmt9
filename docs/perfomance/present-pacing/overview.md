@@ -14,6 +14,17 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H340](present-pacing-stalker-command-phases.340.md) finds DrawRun accounts
+for 93.85% of the selected observed body (18.545/19.760ms CPU); split and
+dispatch residual include timer overhead. Internal DrawRun pass/binding/draw
+work remains open. Same-image OFF/ON runs pass but differ in source population,
+so the intrusive costs are not a pure product or FPS verdict.
+
+[H339](present-pacing-stalker-chunk-phases.339.md) finds command execution
+owns 98.60% of the selected head's encodeChunk CPU (16.719/16.957ms), with
+0.076ms setup and 0.162ms finalization. The body includes draw, non-draw/pass
+and split work; these internal owners, not source setup, are the next split.
+
 [H338](present-pacing-stalker-framegraph-phases.338.md) attributes 97.51% of
 the selected blocking head's backend CPU to encodeChunk (13.407ms), versus
 0.337ms planning/setup and 0.005ms cleanup. The source-qualified partition is

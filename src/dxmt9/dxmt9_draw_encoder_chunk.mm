@@ -3,6 +3,7 @@
 
 #include "dxmt9_capture.hpp"
 #include "dxmt9_draw_encoder.hpp"
+#include "dxmt9_cpu_supply_trace.hpp"
 #include "dxmt9_encode_partition.hpp"
 #include "dxmt9_draw_encoder_draw_internal.hpp"
 #include "dxmt9_draw_encoder_internal.hpp"
@@ -1568,6 +1569,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
       !sourceOcclusionScope &&
       options.partitionExecutionMode ==
           render::PartitionExecutionMode::ExplicitParallel;
+  const bool supplyCommandSplit = ::dxmt9::supply::commandSplitEnabled() &&
+      !parallelPartitionRequested && replayRange.commandCount() >= 128u &&
+      !(ctx.drawRecorder && ctx.drawRecorder->suppressCommandEncoderSideEffects);
   // DXMT9_PARALLEL_PASS_DRAW_QUANTUM — diagnostic/tuning env knob for the
   // parallel-pass economics floor (R-BACK-2.68..2.75). Read once and shared by
   // both the shadow snapshot producer's child subdivision and the economics
@@ -3712,6 +3716,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
   };
 
   auto applyPerRecordSplitPolicy = [&](bool presentRecord) {
+    if (supplyCommandSplit)
+      ::dxmt9::supply::record(::dxmt9::supply::Event::ChunkSplitBegin,
+                            &ctx.pool, sourceSeqId);
     // R-BACK-2.29..2.32 — per-N-records policy. Counts every replayed
     // record (including helper-encoder commands), and fires a mid-chunk
     // commit when the threshold is hit AND there is no active encoder.
@@ -3741,6 +3748,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
       splitMidChunkUnderCap();
       recordsSinceLastSplit = 0;
     }
+    if (supplyCommandSplit)
+      ::dxmt9::supply::record(::dxmt9::supply::Event::ChunkSplitEnd,
+                            &ctx.pool, sourceSeqId);
   };
 
   auto encodeCompleteCommand = [&](auto& replayObserver,
@@ -3750,6 +3760,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
       replayObserver.observe(static_cast<std::uint32_t>(commandIndex), source);
       traceEncodeCommand("begin", commandIndex, command.kind, command);
       // TLA+: EncoderLifecycle / opCount observes command replay progress.
+      if (supplyCommandSplit)
+        ::dxmt9::supply::record(::dxmt9::supply::Event::ChunkCommandBegin,
+                              &ctx.pool, sourceSeqId, command.kind == Kind::DrawRun);
       switch (command.kind) {
       case Kind::Clear: {
         if (!source.clear.has_value()) break;
@@ -4030,6 +4043,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
         break;
       }
       }
+      if (supplyCommandSplit)
+        ::dxmt9::supply::record(::dxmt9::supply::Event::ChunkCommandEnd,
+                              &ctx.pool, sourceSeqId, command.kind == Kind::DrawRun);
       traceEncodeCommand("after-encode", commandIndex, command.kind, command);
       traceEncodeCommand("before-split-policy", commandIndex, command.kind, command);
       applyPerRecordSplitPolicy(command.kind == Kind::Present);
@@ -4896,11 +4912,17 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
       }
       if (!encodedInParallel) {
         replayObserver.observe(commandIndex, source);
+        if (supplyCommandSplit)
+          ::dxmt9::supply::record(::dxmt9::supply::Event::ChunkCommandBegin,
+                                &ctx.pool, sourceSeqId, 1u);
         encodeDrawRunCommand(
             commandIndex, command,
             partitionBatch.identityResolved
                 ? std::span<const EncodePartitionRangeSnapshot>{}
                 : partitionBatch.ranges);
+        if (supplyCommandSplit)
+          ::dxmt9::supply::record(::dxmt9::supply::Event::ChunkCommandEnd,
+                                &ctx.pool, sourceSeqId, 1u);
       }
       traceEncodeCommand("after-encode", commandIndex, Kind::DrawRun, command);
       traceEncodeCommand("before-split-policy", commandIndex, Kind::DrawRun,
@@ -4910,6 +4932,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
     }
   };
 
+  if (::dxmt9::supply::enabled())
+    ::dxmt9::supply::record(::dxmt9::supply::Event::ChunkBodyBegin,
+                          &ctx.pool, sourceSeqId, supplyCommandSplit);
   // One cached gate owns the complete disabled path: no observer-specific
   // storage is constructed and no resource visitor runs when the sink is null.
   if (ctx.replayObserver.fn) {
@@ -4925,6 +4950,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
     DisabledReplayObserver replayObserver;
     encodeSelectedCommands(replayObserver);
   }
+  if (::dxmt9::supply::enabled())
+    ::dxmt9::supply::record(::dxmt9::supply::Event::ChunkBodyEnd,
+                          &ctx.pool, sourceSeqId);
 
   if (options.session && options.sessionSource.has_value()) {
     options.sessionSource->pipelineOwner = selectedParallelUsed
