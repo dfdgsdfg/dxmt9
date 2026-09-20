@@ -774,6 +774,9 @@ enum class SealedParallelPassSnapshotFallback : std::uint8_t {
   OrderedControlState,
   SidecarState,
   FirstDrawSnapshot,
+  RawReadSetIncomplete,
+  RawWriteSetIncomplete,
+  PassReadUnionOverflow,
   Count,
 };
 
@@ -1263,6 +1266,9 @@ inline ParallelPassFallbackReason parallelPassFallbackForSnapshot(
     return ParallelPassFallbackReason::ChildCapacity;
   case SealedParallelPassSnapshotFallback::AttachmentMismatch:
   case SealedParallelPassSnapshotFallback::ResourceSetIncomplete:
+  case SealedParallelPassSnapshotFallback::RawReadSetIncomplete:
+  case SealedParallelPassSnapshotFallback::RawWriteSetIncomplete:
+  case SealedParallelPassSnapshotFallback::PassReadUnionOverflow:
   case SealedParallelPassSnapshotFallback::ResourceIdentityProof:
   case SealedParallelPassSnapshotFallback::ResourceHazard:
   case SealedParallelPassSnapshotFallback::RenderRoute:

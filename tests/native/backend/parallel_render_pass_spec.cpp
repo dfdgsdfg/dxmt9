@@ -1135,6 +1135,50 @@ void producerRejectsControlsFragmentsHazardsAndBounds() {
             result.rejectionCounts[static_cast<std::size_t>(
                 dxmt9::encoders::SealedParallelPassSnapshotFallback::ResourceSetIncomplete)] == 1u,
         "incomplete exact resource set fails closed");
+  using ResourceFallback =
+      dxmt9::encoders::SealedParallelPassSnapshotFallback;
+  auto rejected = [&](ResourceFallback reason) {
+    return result.rejectionCounts[static_cast<std::size_t>(reason)];
+  };
+  check(rejected(ResourceFallback::RawReadSetIncomplete) == 1u &&
+            rejected(ResourceFallback::RawWriteSetIncomplete) == 0u &&
+            rejected(ResourceFallback::PassReadUnionOverflow) == 0u &&
+            result.fallback == ResourceFallback::ResourceSetIncomplete &&
+            output.count == 0u,
+        "raw read incompleteness is distinguished without changing coarse verdict");
+
+  // Individually complete reads can overflow only when unioned across a pass.
+  // Repeat the second draw to pin pass-level, not occurrence-level, counting.
+  dxmt9::core::CanonicalDrawState firstReads{}, secondReads{};
+  for (std::size_t i = 0; i < 7u; ++i) {
+    firstReads.hot.streamBuffers[i] = dxmt9::core::Handle{0x200u + i};
+    secondReads.hot.streamBuffers[i] = dxmt9::core::Handle{0x300u + i};
+  }
+  PassObservationFixture unionOverflow;
+  unionOverflow.slot.appendDrawRun(firstReads, {}, drawValues, drawPayloads);
+  unionOverflow.slot.appendDrawRun(secondReads, {}, drawValues, drawPayloads);
+  unionOverflow.slot.appendDrawRun(secondReads, {}, drawValues, drawPayloads);
+  unionOverflow.slot.appendPresent({}, {});
+  unionOverflow.finalize(414u);
+  result = unionOverflow.observe(output);
+  check(result.eligibleCount == 0u && output.count == 0u &&
+            rejected(ResourceFallback::ResourceSetIncomplete) == 1u &&
+            rejected(ResourceFallback::PassReadUnionOverflow) == 1u &&
+            rejected(ResourceFallback::RawReadSetIncomplete) == 0u &&
+            result.fallback == ResourceFallback::ResourceSetIncomplete,
+        "complete individual draws fail closed on pass read union overflow once");
+
+  // A same-set repeated draw does not grow the union or create a false detail.
+  PassObservationFixture repeatedReads;
+  repeatedReads.slot.appendDrawRun(firstReads, {}, drawValues, drawPayloads);
+  repeatedReads.slot.appendDrawRun(firstReads, {}, drawValues, drawPayloads);
+  repeatedReads.slot.appendPresent({}, {});
+  repeatedReads.finalize(415u);
+  result = repeatedReads.observe(output);
+  check(result.eligibleCount == 1u && output.count == 1u &&
+            rejected(ResourceFallback::ResourceSetIncomplete) == 0u &&
+            rejected(ResourceFallback::PassReadUnionOverflow) == 0u,
+        "duplicate canonical resource reads preserve accepted pass");
 
   PassObservationFixture control;
   control.slot.appendDrawRun({}, {}, drawValues, drawPayloads);

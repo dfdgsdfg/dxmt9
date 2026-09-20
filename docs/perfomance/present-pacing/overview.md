@@ -14,6 +14,11 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H345](present-pacing-stalker-resource-closure.345.md) isolates the resource
+gate: R693's 61 coarse failures are all pass-read-union overflow at the shared
+12-identity bound. Separate bounded pass closure from small draw-entry summaries
+before considering capacity expansion; this is not yet parallel speedup evidence.
+
 [H344](present-pacing-stalker-parallel-observer.344.md) finds 40 structural
 parallel candidates / 24975 draws in 20 of 1470 late sources while retaining
 serial execution. Candidate-bearing sources contain at most 26.36% of observed

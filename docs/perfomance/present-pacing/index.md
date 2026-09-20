@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H345](present-pacing-stalker-resource-closure.345.md) attributes all 61
+resource-set rejections in a fresh serial window to pass-wide read-union
+overflow, not incomplete individual draws. Separate pass closure is the next
+representation candidate; capacity and parallel policy remain unchanged.
+
 [H344](present-pacing-stalker-parallel-observer.344.md) observes candidates
 without executing parallel work. The late window finds 40 structural passes
 in 20 sources, but incomplete resource sets and child imbalance constrain

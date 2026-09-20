@@ -78,6 +78,25 @@ class TestSupply(unittest.TestCase):
         self.assertEqual([re.sub(r'(?<!^)(?=[A-Z])','_',n).lower() for n in names],
                          progress.PARALLEL_REASONS)
 
+    def test_parallel_resource_detail_reasons(self):
+        begin = dict(kind='framegraph_encode_begin', tid=3, wall_ns=1000, cpu_ns=500)
+        end = dict(begin, kind='framegraph_encode_end', wall_ns=10000, cpu_ns=5000)
+        for detail in ('raw_read_set_incomplete', 'raw_write_set_incomplete',
+                       'pass_read_union_overflow'):
+            index = progress.PARALLEL_REASONS.index(detail)
+            values = [('begin',0), ('counts',(1<<32)|1), ('draws',0),
+                      ('children',0), ('status',(1<<32)|13), ('imbalance',0),
+                      ('reject',(13<<32)|1), ('reject',(index<<32)|1), ('end',0)]
+            rows = [dict(begin, kind='parallel_observe_'+kind, value=value,
+                         wall_ns=2000+i*500, cpu_ns=1000+i*250)
+                    for i,(kind,value) in enumerate(values)]
+            result = progress.parallel_observation(begin,end,rows)
+            self.assertEqual(result['fallback'],'resource_set_incomplete')
+            self.assertEqual(result['rejections'],
+                             {'resource_set_incomplete':1, detail:1})
+            with self.assertRaises(ValueError):
+                progress.parallel_observation(begin,end,rows[:6]+rows[7:])
+
     def test_parallel_summary_does_not_price_draw_subset(self):
         observation = dict(qualified=True, query_scoped=False, structural_eligible=1,
                            structural_draws=128, observer_cpu_ms=2, rejections={})

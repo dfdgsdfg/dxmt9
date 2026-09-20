@@ -313,6 +313,8 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
         source.command.drawState);
     core::ExactResourceSet reads{};
     if (!canonicalizeResources(rawReads, input.proofs.resources, reads)) {
+      if (!rawReads.complete())
+        rejectCandidate(Fallback::RawReadSetIncomplete);
       rejectCandidate(rawReads.complete()
                           ? Fallback::ResourceIdentityProof
                           : Fallback::ResourceSetIncomplete);
@@ -615,6 +617,10 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
     if (!input.proofs.resources.valid()) {
       rejectCandidate(Fallback::ResourceIdentityProof);
     } else if (!writesCanonical || !readsCanonical) {
+      if (!rawReads.complete())
+        rejectCandidate(Fallback::RawReadSetIncomplete);
+      if (!rawWrites.complete())
+        rejectCandidate(Fallback::RawWriteSetIncomplete);
       rejectCandidate(rawWrites.complete() && rawReads.complete()
                           ? Fallback::ResourceIdentityProof
                           : Fallback::ResourceSetIncomplete);
@@ -629,6 +635,9 @@ SealedParallelPassSnapshotBatchResult produceSealedParallelPassSnapshots(
       }
       if (!appendResources(current.resourceReads, reads)) {
         rejectCandidate(Fallback::ResourceSetIncomplete);
+        // Both input sets are canonical and complete. A previously poisoned
+        // union keeps this same pass-local bit, never another occurrence.
+        rejectCandidate(Fallback::PassReadUnionOverflow);
       }
       if (current.attachmentWrites.overlaps(reads)) {
         rejectCandidate(Fallback::ResourceHazard);

@@ -155,6 +155,15 @@ admission questions; per-pass costs and executor economics/binding qualification
 remain open. See
 [H344](../../docs/perfomance/present-pacing/present-pacing-stalker-parallel-observer.344.md).
 
+Resource-closure attribution now retains that coarse rejection and adds
+pass-deduplicated raw-read/raw-write/pass-read-union detail reasons. Native
+counterexamples distinguish per-draw overflow from pass-union overflow without
+changing admission or capacity. Fresh R693 attributes 61/61 resource-set
+rejections to pass-read-union overflow (raw-read/write failures zero), across
+41 sources. Separate bounded pass closure, certificate equivalence and GPU
+qualification remain open; historical coarse traces cannot recover details.
+See [H345](../../docs/perfomance/present-pacing/present-pacing-stalker-resource-closure.345.md).
+
 R-BACK-2.15.5 known-setter nonconstant invalidation is the unconditional
 implementation; the 2026-09-17 consolidation removes its runtime opt-out.
 The GT2 dependency probe found identical fixed values in every comparable

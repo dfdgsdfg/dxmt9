@@ -1261,7 +1261,9 @@ void countParallelPassEconomics(
 void countParallelPassShadow(
     const encoders::SealedParallelPassSnapshotBatchResult& result) {
   using Fallback = encoders::SealedParallelPassSnapshotFallback;
-  static_assert(static_cast<std::uint8_t>(Fallback::Count) == 25u);
+  static_assert(static_cast<std::uint8_t>(Fallback::Count) == 28u);
+  // Resource detail reasons overlap the retained ResourceSetIncomplete bucket;
+  // do not add them again to the production rejection totals below.
   auto& c = counters();
   auto rejected = [&](Fallback fallback) {
     return static_cast<std::uint64_t>(

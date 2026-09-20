@@ -25,7 +25,8 @@ PARALLEL_REASONS = ('none plan_missing plan_not_validated replay_invalid '
     'attachment_mismatch resource_set_incomplete resource_identity_proof '
     'resource_hazard render_route pass_action_epoch query_state update_texture_state '
     'capture_state initializer_state ordered_control_state sidecar_state '
-    'first_draw_snapshot').split()
+    'first_draw_snapshot raw_read_set_incomplete raw_write_set_incomplete '
+    'pass_read_union_overflow').split()
 
 
 def parallel_observation(begin, end, rows):
@@ -58,6 +59,13 @@ def parallel_observation(begin, end, rows):
             raise ValueError('invalid/duplicate parallel rejection')
         rejects[reason] = count
     candidates, sealed = values['counts'] >> 32, values['counts'] & 0xffffffff
+    # Detail buckets overlap the coarse bucket and are pass-deduplicated.
+    # Old transcripts with only the coarse bucket remain readable.
+    coarse = rejects.get(PARALLEL_REASONS.index('resource_set_incomplete'), 0)
+    for detail in ('raw_read_set_incomplete', 'raw_write_set_incomplete',
+                   'pass_read_union_overflow'):
+        if rejects.get(PARALLEL_REASONS.index(detail), 0) > coarse:
+            raise ValueError('parallel resource detail exceeds coarse rejection')
     eligible = values['end']
     if (eligible > sealed or sealed > candidates or values['children'] < 2*eligible or
             (eligible and values['draws'] < values['children']) or

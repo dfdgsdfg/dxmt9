@@ -150,3 +150,14 @@ must not yield a qualified result. Structural eligibility precedes executor
 economics and binding checks. Whole-source CPU may bound candidate work but
 must not be attributed to a subset of draws or divided by child count to claim
 a speedup. Observer timing is intrusive, not a calibrated subtraction.
+
+Resource rejection details must distinguish incomplete draw-entry reads,
+incomplete attachment writes, and pass-wide read-union overflow. These detail
+reasons overlap the retained `ResourceSetIncomplete` aggregate; each is counted
+at most once per rejected pass, not once per draw or failed append. Existing
+reason IDs and coarse production counters must remain stable. Detail attribution
+must not widen capacities, bypass canonical identity proofs, or admit a pass.
+Native counterexamples cover individually incomplete reads, complete individual
+reads whose union overflows, and repeated identical reads whose union fits.
+This is observation-only classification, not a stateful rendering refinement;
+it introduces no new execution, ownership, ordering or GPU-pixel claim.

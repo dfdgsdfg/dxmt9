@@ -19,6 +19,10 @@ These precede executor binding/economics checks: structural eligibility is not
 parallel execution eligibility. Observer CPU is bracketed; source CPU is only
 an upper bound for eligible work, never a measured parallelizable fraction.
 Missing/partial endpoints are rejected, not zero-filled. Default is OFF.
+Resource detail reasons distinguish incomplete raw reads/writes from pass-read
+union overflow. They overlap `resource_set_incomplete`, are counted once per
+pass, and must not be added to the coarse total. Historical traces lack this
+detail; absence there does not prove that overflow did not occur.
 
 The bounded CPU-supply trace also brackets ordinary Slot prefetch and backend
 processing using queue/sequence-qualified native CPU and wall endpoints.
