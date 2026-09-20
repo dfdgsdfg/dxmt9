@@ -136,6 +136,15 @@ and high-frequency clock overhead prevent pure-product/FPS attribution;
 DrawRun preparation/pass versus encodeDraw remains open. See
 [H340](../../docs/perfomance/present-pacing/present-pacing-stalker-command-phases.340.md).
 
+Default-OFF nested encodeDraw splitting now validates parent DrawRun, identity,
+thread and clock nesting. Same-image R682 OFF/R683 ON pass; R683's largest
+complete source has 27.178ms encodeDraw and 10.622ms preparation/pass/post-draw
+residual CPU. Both windows have zero blocking CV entries: explicit source-only
+analysis is not reproduction of the query-54 blocking head. Scene-aligned
+late-hitch attribution, lower-interference binding/uniform/driver attribution
+and pure product/FPS evidence remain open. See
+[H341](../../docs/perfomance/present-pacing/present-pacing-stalker-draw-phases.341.md).
+
 R-BACK-2.15.5 known-setter nonconstant invalidation is the unconditional
 implementation; the 2026-09-17 consolidation removes its runtime opt-out.
 The GT2 dependency probe found identical fixed values in every comparable

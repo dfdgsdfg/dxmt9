@@ -25,12 +25,21 @@ enum class Event : std::uint32_t {
   FramegraphEncodeBegin, FramegraphEncodeEnd,
   FramegraphPoolBinding, ChunkBodyBegin, ChunkBodyEnd,
   ChunkCommandBegin, ChunkCommandEnd, ChunkSplitBegin, ChunkSplitEnd,
+  EncodeDrawBegin, EncodeDrawEnd,
 };
 
 inline bool commandSplitEnabled() noexcept {
   static const bool value = [] {
     const char* flag = std::getenv("DXMT9_CPU_SUPPLY_COMMAND_SPLIT");
     return enabled() && flag && flag[0] && flag[0] != '0';
+  }();
+  return value;
+}
+
+inline bool drawSplitEnabled() noexcept {
+  static const bool value = [] {
+    const char* flag = std::getenv("DXMT9_CPU_SUPPLY_DRAW_SPLIT");
+    return commandSplitEnabled() && flag && flag[0] && flag[0] != '0';
   }();
   return value;
 }

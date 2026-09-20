@@ -1572,6 +1572,7 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
   const bool supplyCommandSplit = ::dxmt9::supply::commandSplitEnabled() &&
       !parallelPartitionRequested && replayRange.commandCount() >= 128u &&
       !(ctx.drawRecorder && ctx.drawRecorder->suppressCommandEncoderSideEffects);
+  const bool supplyDrawSplit = supplyCommandSplit && ::dxmt9::supply::drawSplitEnabled();
   // DXMT9_PARALLEL_PASS_DRAW_QUANTUM — diagnostic/tuning env knob for the
   // parallel-pass economics floor (R-BACK-2.68..2.75). Read once and shared by
   // both the shadow snapshot producer's child subdivision and the economics
@@ -3378,6 +3379,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
           : 0ull;
       traceEncodeCommand("drawrun.before-encode-draw", commandIndex,
                          Kind::DrawRun, command);
+      if (supplyDrawSplit)
+        ::dxmt9::supply::record(::dxmt9::supply::Event::EncodeDrawBegin,
+                              &ctx.pool, sourceSeqId, commandIndex);
       const bool encodedDraw = encodeDraw(
           ctx, commandBuffer, encoderState.activeRenderEncoder, drawStateView,
           sourceSeqId,
@@ -3420,6 +3424,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
                          .bindingOverridePrefetchedPsoCompatible =
                              bindingOverridePrefetchedPsoCompatible,
                      });
+      if (supplyDrawSplit)
+        ::dxmt9::supply::record(::dxmt9::supply::Event::EncodeDrawEnd,
+                              &ctx.pool, sourceSeqId, commandIndex);
       if (!encodedDraw && sourceOcclusionScope) {
         sourceOcclusionScope->fail();
       }
@@ -4934,7 +4941,8 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
 
   if (::dxmt9::supply::enabled())
     ::dxmt9::supply::record(::dxmt9::supply::Event::ChunkBodyBegin,
-                          &ctx.pool, sourceSeqId, supplyCommandSplit);
+                          &ctx.pool, sourceSeqId,
+                          (supplyCommandSplit ? 1u : 0u) | (supplyDrawSplit ? 2u : 0u));
   // One cached gate owns the complete disabled path: no observer-specific
   // storage is constructed and no resource visitor runs when the sink is null.
   if (ctx.replayObserver.fn) {

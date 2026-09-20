@@ -14,6 +14,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H341](present-pacing-stalker-draw-phases.341.md) measures encodeDraw at
+71.90% of selected DrawRun CPU (27.178/37.800ms), with 10.622ms residual
+including preparation/pass/post-draw work and observer overhead. Both windows
+lack blocking CV entries, so this does not extend the earlier blocking-head
+chain. Align scene/semantic boundaries before attributing the late hitch;
+do not derive pure product costs or FPS gains from these intrusive scopes.
+
 [H340](present-pacing-stalker-command-phases.340.md) finds DrawRun accounts
 for 93.85% of the selected observed body (18.545/19.760ms CPU); split and
 dispatch residual include timer overhead. Internal DrawRun pass/binding/draw

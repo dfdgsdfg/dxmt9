@@ -11,6 +11,11 @@ related: docs/perfomance/present-pacing/overview.md; docs/perfomance/present-pac
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap
 
+[H341](present-pacing-stalker-draw-phases.341.md) separates observed DrawRun
+CPU into encodeDraw 27.178ms and preparation/pass/post-draw residual 10.622ms.
+No blocking CV entry occurs in either window: this is source-local evidence,
+not a reproduction of the query-54 head. Scene-aligned attribution remains open.
+
 [H340](present-pacing-stalker-command-phases.340.md) splits a selected large
 source's body into DrawRun 18.545ms, non-draw 0, split 0.281ms and dispatch
 residual 0.934ms CPU. DrawRun includes its internal pass work. Same-image

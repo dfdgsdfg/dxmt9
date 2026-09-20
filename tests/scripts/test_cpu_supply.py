@@ -38,6 +38,29 @@ def fixture():
 
 
 class TestSupply(unittest.TestCase):
+    def test_nested_encode_draw_partition(self):
+        a = dict(kind='chunk_body_begin',tid=3,wall_ns=1000000,cpu_ns=500000,value=3)
+        b = dict(a,kind='chunk_body_end',wall_ns=3000000,cpu_ns=1500000)
+        rows = []
+        for kind,value,t in (
+                ('chunk_command_begin',1,1100000),('encode_draw_begin',7,1200000),
+                ('encode_draw_end',7,1500000),('chunk_command_end',1,1900000),
+                ('chunk_split_begin',0,2000000),('chunk_split_end',0,2100000)):
+            rows.append(dict(a,kind=kind,value=value,wall_ns=t,cpu_ns=t//2))
+        p = progress.command_phases(a,b,rows)
+        self.assertTrue(p['draw_phases']['qualified'])
+        self.assertAlmostEqual(p['draw_phases']['encode_draw']['cpu_ms'],.15)
+        self.assertAlmostEqual(p['draw_phases']['preparation_pass_residual']['cpu_ms'],.25)
+        self.assertFalse(progress.command_phases(dict(a,value=1),b,rows)[
+            'draw_phases']['qualified'])
+        for bad in (rows[:2]+rows[3:], rows[:1]+rows[2:], rows+[rows[1]],
+                    [rows[0],dict(rows[1],tid=4)]+rows[2:],
+                    rows[:2]+[dict(rows[2],value=9)]+rows[3:],
+                    rows[:2]+[dict(rows[2],cpu_ns=1)]+rows[3:],
+                    [dict(rows[0],value=0)]+rows[1:3]+[dict(rows[3],value=0)]+rows[4:]):
+            with self.assertRaises(ValueError):
+                progress.command_phases(a,b,bad)
+
     def test_command_body_cost_partition(self):
         a = dict(kind='chunk_body_begin', tid=3, wall_ns=1000000,
                  cpu_ns=500000, value=1)
@@ -160,6 +183,13 @@ class TestSupply(unittest.TestCase):
         self.assertEqual(r['target_missing_source_stages'], 0)
         self.assertEqual(r['target_sources'][0]['reason'], 9)
         self.assertEqual(r['target_sources'][0]['commands'], 1)
+        standalone = progress.analyze(meta,rows,{'pid':17},[],source_only=True)
+        self.assertIsNone(standalone['target'])
+        self.assertEqual(len(standalone['target_sources']),1)
+        with self.assertRaises(ValueError):
+            progress.analyze(meta,rows,{'pid':17},[])
+        with self.assertRaises(ValueError):
+            progress.analyze(meta,rows,{'pid':17},[],query=54,source_only=True)
         self.assertAlmostEqual(r['target_sources'][0]['encode_cpu_ms'], .95)
         self.assertFalse(r['target_sources'][0]['encode_phases']['qualified'])
         self.assertEqual(r['scope_boundaries'][0],

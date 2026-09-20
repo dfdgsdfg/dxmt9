@@ -120,3 +120,21 @@ does not independently attribute all pass work. Disabled, excluded, missing,
 overlapping, unpaired or invalid-clock evidence must not yield zero-filled
 costs. A same-image control is required before interpreting observer cost;
 diagnostic timing alone cannot authorize a runtime policy change.
+
+Optional encodeDraw splitting must be separately gated and marked by body
+selection mask 0x2 (mask 0x1 retains command-split selection). Each pair must be
+nested inside a classified DrawRun command on the same pool/source/thread.
+The call scope includes encodeDraw argument evaluation and internal binding,
+uniform and draw issue work; the parent remainder includes pass/preparation,
+post-draw bookkeeping and observer overhead. It is not pure pass time.
+Unpaired, overlapping, cross-parent, mismatched-command or invalid-clock
+draw endpoints must be rejected. Missing enablement stays unqualified.
+Parallel children remain excluded; two per-call events require a shorter
+bounded window and an observer control before product-cost conclusions.
+
+Source-local analysis without a blocking receipt must require explicit
+`--source-only` selection. It selects the largest encode CPU among complete
+ordinary sources, emits no query target, and must not claim blocking-wait
+ownership or scene equivalence. It is mutually exclusive with `--query`.
+Normal receipt analysis must reject missing matched receipts rather than
+silently falling back to a source-local selection.

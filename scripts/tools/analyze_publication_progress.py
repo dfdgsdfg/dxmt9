@@ -17,10 +17,53 @@ FRAMEGRAPH = ('framegraph_encode_begin', 'framegraph_encode_end')
 CHUNK_BODY = ('chunk_body_begin', 'chunk_body_end')
 COMMAND_EVENTS = ('chunk_command_begin', 'chunk_command_end',
                   'chunk_split_begin', 'chunk_split_end')
+DRAW_EVENTS = ('encode_draw_begin', 'encode_draw_end')
+
+
+def draw_phases(begin, end, candidates, draw_run):
+    if not (begin.get('value',0) & 2):
+        return dict(qualified=False, reason='draw split disabled')
+    rows = sorted((r for r in candidates if r['kind'] in COMMAND_EVENTS+DRAW_EVENTS and
+                   begin['wall_ns'] <= r['wall_ns'] <= end['wall_ns']),
+                  key=lambda r:r['wall_ns'])
+    parent, active, previous = None, None, begin
+    total = dict(wall_ms=0.0, cpu_ms=0.0, calls=0)
+    for r in rows+[end]:
+        if (r['tid'] != begin['tid'] or r['cpu_ns'] < previous['cpu_ns'] or
+                r['wall_ns'] < previous['wall_ns']):
+            raise ValueError('invalid draw endpoint thread/order')
+        previous = r
+        kind = r['kind']
+        if kind=='chunk_command_begin':
+            parent = r
+        elif kind=='chunk_command_end':
+            if active is not None:
+                raise ValueError('draw crosses parent boundary')
+            parent = None
+        elif kind=='encode_draw_begin':
+            if active is not None or parent is None or parent['value'] != 1:
+                raise ValueError('draw outside DrawRun or nested draw')
+            active = r
+        elif kind=='encode_draw_end':
+            if active is None or r['value'] != active['value']:
+                raise ValueError('unpaired draw endpoint')
+            wall, cpu = r['wall_ns']-active['wall_ns'], r['cpu_ns']-active['cpu_ns']
+            if cpu > wall+100000:
+                raise ValueError('invalid draw CPU clock')
+            total['wall_ms'] += wall/1e6
+            total['cpu_ms'] += cpu/1e6
+            total['calls'] += 1
+            active = None
+    if active is not None:
+        raise ValueError('unclosed draw endpoint')
+    residual = {k:draw_run[k]-total[k] for k in ('wall_ms','cpu_ms')}
+    if any(v < -1e-9 for v in residual.values()):
+        raise ValueError('negative DrawRun residual')
+    return dict(qualified=True, encode_draw=total, preparation_pass_residual=residual)
 
 
 def command_phases(begin, end, candidates):
-    if begin.get('value') != 1:
+    if not (begin.get('value',0) & 1):
         return dict(qualified=False, reason='command split disabled or source excluded')
     rows = sorted((r for r in candidates if r['kind'] in COMMAND_EVENTS and
                    begin['wall_ns'] <= r['wall_ns'] <= end['wall_ns']),
@@ -67,7 +110,8 @@ def command_phases(begin, end, candidates):
                 for k,field in (('wall_ms','wall_ns'),('cpu_ms','cpu_ns'))}
     if any(v < -1e-9 for v in residual.values()):
         raise ValueError('negative command dispatch residual')
-    return dict(qualified=True, **totals, dispatch_residual=residual)
+    return dict(qualified=True, **totals, dispatch_residual=residual,
+                draw_phases=draw_phases(begin,end,candidates,totals['draw_run']))
 
 
 def chunk_phases(begin, end, bindings, chunk_events):
@@ -153,18 +197,20 @@ def encode_phases(events):
         intervals)))
 
 
-def analyze(meta, rows, wait_meta, wait_rows, query=None):
+def analyze(meta, rows, wait_meta, wait_rows, query=None, source_only=False):
+    if source_only and query is not None:
+        raise ValueError('source-only analysis cannot claim a query target')
     joined = joiner.join(wait_meta, wait_rows, meta, rows)
     pending = [r for r in joined['receipts'] if r['target'] and
                (query is None or r['query'] == query)]
-    if not pending:
+    if not pending and not source_only:
         raise ValueError('no matched pending receipt')
-    target = max(pending, key=lambda r: r['receipt_ns'])
+    target = max(pending, key=lambda r: r['receipt_ns']) if pending else None
     events = collections.defaultdict(dict)
     backend_events = collections.defaultdict(list)
     chunk_events = collections.defaultdict(list)
     for r in rows:
-        if r['kind'] in CHUNK_BODY + COMMAND_EVENTS:
+        if r['kind'] in CHUNK_BODY + COMMAND_EVENTS + DRAW_EVENTS:
             chunk_events[(r['owner'], r['id'])].append(r)
             continue
         if r['kind'] in FRAMEGRAPH + ('framegraph_pool_binding',):
@@ -195,6 +241,13 @@ def analyze(meta, rows, wait_meta, wait_rows, query=None):
             framegraph_phases=framegraph_phases(e, backend_events, chunk_events),
             stages_ms={a+'__'+b: (e[b]['wall_ns']-e[a]['wall_ns'])/1e6
                        for a, b in zip(STAGES, STAGES[1:])}))
+    if source_only:
+        if not sources:
+            raise ValueError('no complete ordinary sources')
+        return dict(target=None, target_sources=[max(sources,key=lambda s:s['encode_cpu_ms'])],
+            complete_sources=sources, incomplete_source_count=len(events)-len(sources),
+            selection='largest encode CPU among complete ordinary sources; not a blocking-receipt selection',
+            qualification='Source-local timing only; no query wait ownership or scene equivalence claim')
     keys = {(r['queue_owner'], r['sequence']) for r in target['target']['publications']}
     target_sources = [s for s in sources if (s['owner'], s['sequence']) in keys]
     spans = supply.pair(rows, 'replay_begin', 'replay_end')
@@ -228,10 +281,14 @@ if __name__ == '__main__':
     p.add_argument('supply', type=Path)
     p.add_argument('waits', type=Path)
     p.add_argument('--output', required=True, type=Path)
-    p.add_argument('--query', type=int, help='Select a recorded query identity; absent means longest receipt')
+    selection = p.add_mutually_exclusive_group()
+    selection.add_argument('--query', type=int, help='Select a recorded query identity; absent means longest receipt')
+    selection.add_argument('--source-only', action='store_true',
+                           help='Explicitly select largest complete source without a blocking-receipt claim')
     a = p.parse_args()
     try:
-        result = analyze(*supply.load(a.supply), *waits.load(a.waits), query=a.query)
+        result = analyze(*supply.load(a.supply), *waits.load(a.waits),
+                         query=a.query, source_only=a.source_only)
         with a.output.open('x') as stream:
             stream.write(json.dumps(result, indent=2)+'\n')
         print(json.dumps({k:v for k,v in result.items() if k not in ('complete_sources','target_sources','target')}, indent=2))
