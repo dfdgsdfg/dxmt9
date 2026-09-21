@@ -35,6 +35,22 @@ class ShadowTest(unittest.TestCase):
         for bad in [[], rows[:-1], rows + [rows[-1]], rows[::-1]]:
             with self.assertRaises(ValueError):
                 shadow.analyze(bad)
+
+    def test_screen_schema(self):
+        rows = self.rows()
+        row = dict(rows[4], kind='prepared_screen', value=1)
+        skipped = rows[:5] + [row, rows[-1]]
+        result = shadow.analyze(skipped)
+        self.assertEqual(result['skips'], {1: 1})
+        self.assertEqual(result['failures'], {})
+        self.assertIsNone(result['sources'][0]['allocation'])
+        self.assertEqual(result['sources'][0]['allocation_bytes'], 0)
+        with self.assertRaises(ValueError):
+            shadow.analyze(skipped[:-1])
+        with self.assertRaises(ValueError):
+            shadow.analyze(rows[:5] + [row] + rows[5:])
+        row['value'] = 0
+        self.assertFalse(shadow.analyze(rows[:5] + [row] + rows[5:])['sources'][0]['skipped'])
         for field in ['tid', 'cpu_ns']:
             bad = self.rows()
             bad[6][field] = 0
@@ -64,9 +80,11 @@ class ShadowTest(unittest.TestCase):
                     self.assertEqual(publications, reference_publications)
                 if enabled:
                     result = shadow.analyze(rows)
-                    self.assertEqual(result['qualified_shadow_sources'], 18)
+                    self.assertEqual(result['qualified_shadow_sources'], 21)
                     self.assertEqual(result['failures'], {0: 18})
-                    self.assertTrue(all(r['commands'] == 64 for r in result['sources']))
+                    self.assertEqual(result['skips'], {3: 2, 1: 1})
+                    self.assertTrue(all(r['commands'] == 64 for r in result['sources']
+                                        if not r['skipped']))
                 else:
                     self.assertFalse(any(r['kind'].startswith('prepared_') for r in rows))
 

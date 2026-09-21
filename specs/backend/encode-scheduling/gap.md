@@ -46,9 +46,17 @@ H350 adds real STALKER shadow cost evidence (not consumer qualification):
 1,209 sources, 1,188 structural successes, 21 identity-capacity rejections,
 30.605 ms diagnostic CPU. Query-scoped single-command sources consume 82.26%
 of that CPU; per-attempt fixed storage requests total 172.46 MiB. Cheap
-pre-allocation eligibility screening, right-sized/reused storage and exact
+pre-allocation screening is now implemented in the diagnostic shadow, with a
+pure exhaustive table and live OFF/ON publication-equality fixtures. It skips
+query-scoped and trivially non-parallel sources without allocating, but retains
+multi-draw single-command candidates. Right-sized/reused storage and exact
 wide-source cardinality remain required before hot-path adoption. The live
 OFF/ON source streams differ; no net performance attribution is established.
+H351's actual-input screening probe skips 1,084/1,126 sources before allocation;
+42 attempts retain 21 structural successes and 21 capacity rejections, requesting
+5.991 MiB cumulatively. Native/TLA 4/4 and x86_64 3/3 pass. See
+[H351](../../../docs/perfomance/present-pacing/present-pacing-prepared-screen.351.md)
+for cost, trace and live-comparison exclusions; this is not consumer qualification.
 Replay will build a bounded `PreparedEncodePlan` during
 final Slot construction and publishes both transactionally. The existing
 Encode thread retains final admission, parent ownership, child dispatch/join

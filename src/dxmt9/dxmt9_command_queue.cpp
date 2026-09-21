@@ -3190,6 +3190,18 @@ void observePreparedSlot(CommandQueue& q, resources::Pool& pool,
   emit(supply::Event::PreparedStoragePages,
        (static_cast<std::uint64_t>(key.source.storage.firstPage) << 32) |
            key.source.storage.pageCount);
+  // Query scope was frozen at this publication edge. A rejection can skip
+  // preparation, but acceptance does not freeze later session/Encode policy.
+  const bool queryScoped = slot.occlusionScope && slot.occlusionScope->count != 0;
+  const auto single = !queryScoped && key.commandCount == 1 ? slot.commandAt(0)
+                                                           : core::MetalCommandView{};
+  const auto screen = screenPreparedEncodeShadow(
+      queryScoped, key.commandCount, single.kind, single.drawParams.size());
+  emit(supply::Event::PreparedScreen, static_cast<std::uint64_t>(screen));
+  if (screen != PreparedShadowScreen::Candidate) {
+    emit(supply::Event::PreparedEnd);
+    return;
+  }
   {
     PreparedEncodePlanBuilder builder(key);
     emit(supply::Event::PreparedAllocated,

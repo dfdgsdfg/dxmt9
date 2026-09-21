@@ -14,6 +14,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H351](present-pacing-prepared-screen.351.md) implements diagnostic pre-allocation
+screening. Actual STALKER input skips 1,084/1,126 sources, leaving 42 allocations
+(5.991 MiB cumulative), 21 structural successes and 21 capacity rejections.
+Total diagnostic CPU is 11.282 ms; live inputs differ from H350, so this is
+allocation-suppression evidence, not an FPS speedup. Storage policy and wide-source
+cardinality remain the next gates; Encode consumption is still disconnected.
+
 [H350](present-pacing-stalker-prepared-shadow.350.md) measures the actual STALKER
 publication shadow: 1,209 attempts cost 30.605 ms in 21 encoded Presents;
 82.26% is spent on 1,146 query-scoped single-command sources, while 21 larger

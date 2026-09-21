@@ -31,6 +31,24 @@ auto attachments(std::uint32_t samples = 1) {
 using Kind = dxmt9::core::MetalCommandKind;
 constexpr auto Stable = PreparedAccessResolution::CanonicalStable;
 
+void preparationScreenTruthTable() {
+  for (bool query : {false, true})
+    for (std::size_t commands : {0u, 1u, 2u, 1025u})
+      for (auto kind : {Kind::DrawRun, Kind::Clear, Kind::Present})
+        for (std::size_t draws : {0u, 1u, 2u, 128u}) {
+          const auto result = screenPreparedEncodeShadow(query, commands, kind, draws);
+          const bool impossible = commands == 0 || (commands == 1 &&
+              (kind != Kind::DrawRun || draws < 2));
+          check((result == PreparedShadowScreen::Candidate) == (!query && !impossible),
+                "screen bounded truth table");
+          if (query) check(result == PreparedShadowScreen::QueryScope,
+                           "query rejection before allocation independent of shape");
+        }
+  check(screenPreparedEncodeShadow(false, 1, Kind::DrawRun, 128) ==
+            PreparedShadowScreen::Candidate,
+        "single DrawRun can be subdivided into multiple children");
+}
+
 void finalSlotShadowProjection() {
   dxmt9::core::ChunkSlot slot{};
   const std::array<dxmt9::core::DrawParam, 1> draws{};
@@ -89,6 +107,17 @@ void publicationShadowProbe() {
                           dxmt9::core::DrawUniformPayload{}, draws, payloads);
     check(queue.publishReplayDiagnosticBoundary(), "production publication hook probe");
   }
+  queue.submitClear({});
+  check(queue.publishReplayDiagnosticBoundary(), "single coordinator publication");
+  queue.submitDrawRun({}, {}, draws, payloads);
+  check(queue.publishReplayDiagnosticBoundary(), "single draw publication");
+  auto scope = std::make_shared<dxmt9::query::OcclusionScope>();
+  scope->results[0] = std::make_shared<dxmt9::query::OcclusionResult>(1, 1, 1);
+  scope->count = 1;
+  check(queue.setOcclusionScope(scope), "query-scoped source fixture");
+  queue.submitDrawRun({}, {}, draws, payloads);
+  queue.submitDrawRun({}, {}, draws, payloads);
+  check(queue.publishReplayDiagnosticBoundary(), "query scope publication");
   dxmt9::supply::present(4);
 }
 
@@ -339,6 +368,7 @@ int main(int argc, char** argv) {
     }
     std::cout << "prepared plan fixed storage bytes=" << sizeof(PreparedEncodePlanStorage) << '\n';
     exhaustiveConstruction();
+    preparationScreenTruthTable();
     failuresAndBounds();
     finalSlotShadowProjection();
     exhaustivePublication();

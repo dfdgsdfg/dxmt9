@@ -22,6 +22,22 @@ CPU-supply window it builds and destroys a private plan from the final ordinary
 Slot, with the actual source/storage generations and sequence. There is no
 plan field in the Slot, no async borrow, and no execution-policy change.
 
+Before allocating, `screenPreparedEncodeShadow` skips frozen nonempty query
+scopes, empty sources, and single commands with no possible two-draw child
+work. A single DrawRun with multiple draws remains a candidate: the existing
+parallel producer can subdivide that one command. Screening acceptance is not
+parallel admission. Skipped sources retain identity and total-cost events but
+have no allocation, projection or seal events; their failure/cardinality fields
+are unavailable, not fabricated successful plans. The analyzer also accepts
+historical complete transcripts without a screen event.
+
+Verification classification: diagnostic-only read-side preparation selection;
+no resource lifetime, command order, publication or execution transition changes.
+The native truth table binds the actual screening predicate, and live queue
+OFF/ON fixtures compare publication sequence and command-count evidence. The
+existing TLA regression is a regression check, not a new async-refinement or
+GPU-equivalence proof. Future plan consumption still needs those proofs.
+
 The shadow is intentionally a second command walk under the existing queue
 mutex. It measures allocation/initialization, command/access projection,
 seal/structural validation, and total including destruction/observer events.
@@ -37,7 +53,10 @@ structural plan does not establish parallel eligibility or saved Encode work.
 
 The native `dxmt9-prepared-encode-plan-spec --publication-shadow-probe` invokes
 actual queue submission/publication without workers or a GPU: 18 sources of
-64 resource-empty DrawRun commands. Use the first two sources as shadow warm-up
+64 resource-empty DrawRun commands, plus three publication fixtures covering a
+single Clear, a single-draw DrawRun and a nonempty query scope. OFF/ON tests
+require identical publication sequences and command counts, 18 preparation
+attempts and three skips. Use the first two candidate sources as shadow warm-up
 and the remaining 16 as a synthetic connection/cost probe. It does not model
 STALKER resource cardinality, alias lookup contention, execution, or FPS.
 Real-workload qualification must additionally compare identical input/binary

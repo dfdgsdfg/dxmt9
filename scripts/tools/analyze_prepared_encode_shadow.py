@@ -16,13 +16,20 @@ def analyze(rows):
     for row in rows:
         if row['kind'].startswith('prepared_'):
             groups[(row['owner'], row['id'])].append(row)
-    expected = {name for name in supply.EVENTS if name.startswith('prepared_')}
     results = []
     for (queue, sequence), events in groups.items():
         indexed = {row['kind']: row for row in events}
+        screen_row = indexed.get('prepared_screen')
+        screen = screen_row['value'] if screen_row else None
+        if screen is not None and screen not in range(4):
+            raise ValueError('unknown preparation screen')
+        skipped = screen is not None and screen != 0
+        order = ORDER[:5] + ['screen', 'end'] if skipped else (
+            ORDER[:5] + ['screen'] + ORDER[5:] if screen_row else ORDER)
+        expected = {'prepared_' + name for name in order}
         if len(indexed) != len(events) or set(indexed) != expected:
             raise ValueError(f'incomplete/duplicate shadow source {queue}/{sequence}')
-        if [row['kind'] for row in events] != ['prepared_' + name for name in ORDER]:
+        if [row['kind'] for row in events] != ['prepared_' + name for name in order]:
             raise ValueError('out-of-order shadow stages')
         if len({row['tid'] for row in events}) != 1:
             raise ValueError('shadow source crossed threads')
@@ -38,8 +45,8 @@ def analyze(rows):
                 raise ValueError('missing native thread CPU clock')
             return {'cpu_ns': b['cpu_ns'] - a['cpu_ns'],
                     'wall_ns': b['wall_ns'] - a['wall_ns']}
-        status = value('status')
-        if not 0 <= status <= 8:
+        status = None if skipped else value('status')
+        if status is not None and not 0 <= status <= 8:
             raise ValueError('unknown prepared failure')
         if (not sequence or not value('source_generation') or
                 not value('storage_generation') or not (value('storage_pages') & 0xffffffff)):
@@ -52,18 +59,23 @@ def analyze(rows):
             'first_page': value('storage_pages') >> 32,
             'page_count': value('storage_pages') & 0xffffffff,
             'commands': indexed['prepared_begin']['value'],
-            'allocation_bytes': value('allocated'), 'failure': status,
-            'identities': value('identities'), 'accesses': value('accesses'),
-            'ranges': value('ranges'), 'unresolved_visited': value('unresolved'),
-            'allocation': interval('storage_pages', 'allocated'),
-            'append': interval('allocated', 'appended'),
-            'seal': interval('appended', 'sealed'),
+            'screen': screen, 'skipped': skipped,
+            'allocation_bytes': 0 if skipped else value('allocated'), 'failure': status,
+            'identities': None if skipped else value('identities'),
+            'accesses': None if skipped else value('accesses'),
+            'ranges': None if skipped else value('ranges'),
+            'unresolved_visited': None if skipped else value('unresolved'),
+            'allocation': None if skipped else interval(
+                'screen' if screen_row else 'storage_pages', 'allocated'),
+            'append': None if skipped else interval('allocated', 'appended'),
+            'seal': None if skipped else interval('appended', 'sealed'),
             'total': interval('begin', 'end'),
         })
     if not results:
         raise ValueError('no publication shadow hook evidence')
     return {'qualified_shadow_sources': len(results),
-            'failures': dict(collections.Counter(r['failure'] for r in results)),
+            'failures': dict(collections.Counter(r['failure'] for r in results if not r['skipped'])),
+            'skips': dict(collections.Counter(r['screen'] for r in results if r['skipped'])),
             'scope': 'ordinary publication under queue mutex; extra synchronous '
                      'walk, clocks and allocation; no async consumption or FPS claim',
             'sources': results}

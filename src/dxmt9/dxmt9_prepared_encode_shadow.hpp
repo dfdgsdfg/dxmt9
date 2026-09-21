@@ -4,6 +4,23 @@
 
 namespace dxmt9::encoders {
 
+enum class PreparedShadowScreen : std::uint8_t {
+  Candidate, QueryScope, Empty, NoParallelWork,
+};
+
+// Preparation economics only, never execution authority. A single DrawRun
+// CAN have multiple children; do not reject it by command count alone.
+constexpr PreparedShadowScreen screenPreparedEncodeShadow(
+    bool queryScoped, std::size_t commandCount, core::MetalCommandKind singleKind,
+    std::size_t singleDrawCount) noexcept {
+  if (queryScoped) return PreparedShadowScreen::QueryScope;
+  if (!commandCount) return PreparedShadowScreen::Empty;
+  if (commandCount == 1 &&
+      (singleKind != core::MetalCommandKind::DrawRun || singleDrawCount < 2))
+    return PreparedShadowScreen::NoParallelWork;
+  return PreparedShadowScreen::Candidate;
+}
+
 // Synchronous diagnostic projection only. The caller retains the source and
 // resolver for this call; no canonical identity is authority for async use.
 template <typename Resolve>

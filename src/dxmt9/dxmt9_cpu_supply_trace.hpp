@@ -37,6 +37,7 @@ enum class Event : std::uint32_t {
   PreparedUnresolved, PreparedEnd,
   PreparedSourceIndex, PreparedSourceGeneration, PreparedStorageGeneration,
   PreparedStoragePages,
+  PreparedScreen,
 };
 
 inline bool commandSplitEnabled() noexcept {
