@@ -42,6 +42,13 @@ This is a second walk under the queue mutex, not fused Replay construction;
 Arena-only publication, async ownership, independent Encode differential
 comparison, and real-workload cost qualification remain open. Non-draw and
 incomplete draw access stay explicitly unresolved. No execution policy changes.
+H350 adds real STALKER shadow cost evidence (not consumer qualification):
+1,209 sources, 1,188 structural successes, 21 identity-capacity rejections,
+30.605 ms diagnostic CPU. Query-scoped single-command sources consume 82.26%
+of that CPU; per-attempt fixed storage requests total 172.46 MiB. Cheap
+pre-allocation eligibility screening, right-sized/reused storage and exact
+wide-source cardinality remain required before hot-path adoption. The live
+OFF/ON source streams differ; no net performance attribution is established.
 Replay will build a bounded `PreparedEncodePlan` during
 final Slot construction and publishes both transactionally. The existing
 Encode thread retains final admission, parent ownership, child dispatch/join

@@ -14,6 +14,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H350](present-pacing-stalker-prepared-shadow.350.md) measures the actual STALKER
+publication shadow: 1,209 attempts cost 30.605 ms in 21 encoded Presents;
+82.26% is spent on 1,146 query-scoped single-command sources, while 21 larger
+sources exhaust the 256-identity bound. Cumulative requested plan storage is
+172.46 MiB, not RSS. Prioritize pre-allocation screening and storage policy;
+no fixed-input speedup or prepared-consumer qualification is established.
+
 [H349](present-pacing-prepared-publication-shadow.349.md) connects an opt-in
 prepared-plan shadow to ordinary publication. An x86_64 synthetic 64-command,
 resource-empty source costs 19–20 us median including observation, with a
