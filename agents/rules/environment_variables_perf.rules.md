@@ -19,13 +19,19 @@ bytes, append/seal endpoints, failure and successful plan cardinalities are
 recorded; failure cardinalities are unavailable, not zero work. OFF adds one
 cached gate and no Slot fields. `analyze_prepared_encode_shadow.py` rejects
 missing/duplicate/cross-thread endpoints. Timings include observation; total
-also includes deallocation and metadata events. This second walk is a cost
+also includes storage lifecycle and metadata events. This second walk is a cost
 probe, not the target fused Replay construction or a gameplay/FPS measurement.
 Before allocation, `prepared_screen` distinguishes candidates from query-scope,
 empty-source and no-parallel-work skips. A multi-draw single DrawRun remains a
 candidate. Skips emit identity and total endpoints only: no attempted-plan
 failure, cardinalities or phase times. Historical unscreened traces remain
 readable; do not compare attempted-plan totals without accounting for skips.
+Candidate scratch now reuses one cold thread-local fixed region. New
+`prepared_storage_capacity` metadata distinguishes available bytes from
+`prepared_allocated` new bytes (zero on reuse). Idle storage survives until
+thread exit; it retains no resource references. Total includes recycle, not
+per-source deallocation. Neither retained bytes nor cumulative allocated bytes
+is an RSS measurement. OFF never initializes this workspace.
 
 `DXMT9_CPU_SUPPLY_PARALLEL_OBSERVER=1` requires the CPU-supply trace and runs
 only inside its bounded Present window on IdentitySerial sources. It uses the

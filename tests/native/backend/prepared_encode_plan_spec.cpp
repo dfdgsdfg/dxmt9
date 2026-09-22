@@ -272,6 +272,87 @@ void failuresAndBounds() {
   reject([](auto& s) { s.needsEncodeResolution = true; });
 }
 
+void exhaustiveWorkspaceReuse() {
+  // All three-step histories over canonical, unresolved, partial-capacity,
+  // incomplete and invalid-key outcomes. A fresh builder is the reference.
+  for (unsigned history = 0; history < 125; ++history) {
+    PreparedEncodePlanWorkspace workspace;
+    auto choices = history;
+    for (unsigned step = 0; step < 3; ++step) {
+      const unsigned choice = choices % 5;
+      choices /= 5;
+      auto current = key(choice == 3 ? 2 : 1);
+      current.sequence += step;
+      current.source.id.generation += step;
+      current.source.storage.generation += step;
+      if (choice == 4) current.sequence = 0;
+      PreparedPlanLimits limits{};
+      if (choice == 2) limits.identities = 1;
+      const bool warm = workspace.hasStorage();
+      auto builder = workspace.acquire(current, limits,
+          warm ? nullptr : PreparedEncodePlanBuilder::allocate);
+      check(!workspace.hasStorage(), "acquire transfers exclusive storage ownership");
+      PreparedEncodePlanBuilder fresh(current, limits);
+      const auto add = [&](PreparedEncodePlanBuilder& b) {
+        return b.append(4, Kind::DrawRun, resources({step + 1u}), resources({9}),
+            attachments(step + 1), choice == 1
+                ? PreparedAccessResolution::RequiresEncodeResolution : Stable);
+      };
+      check(add(builder) == add(fresh), "reuse/fresh append differential");
+      auto owner = builder.seal();
+      auto reference = fresh.seal();
+      check(builder.failure() == fresh.failure() && bool(owner) == bool(reference),
+            "reuse/fresh failure and seal differential");
+      if (!owner) {
+        const auto failure = builder.failure();
+        check(!add(builder) && !builder.seal() && builder.failure() == failure,
+              "retained failed prefix cannot resume or replace its first failure");
+      }
+      const auto* p = owner.view(current);
+      const auto* r = reference.view(current);
+      if (p) {
+        check(validatePreparedEncodePlan(*p, current) && p->key == r->key &&
+              p->commandCount == r->commandCount && p->accessCount == r->accessCount &&
+              p->identityCount == r->identityCount && p->rangeCount == r->rangeCount &&
+              p->needsEncodeResolution == r->needsEncodeResolution,
+              "reuse resets all semantic cursors and flags");
+        check(std::equal(p->identities.begin(), p->identities.begin() + p->identityCount,
+                         r->identities.begin()) &&
+              std::equal(p->accesses.begin(), p->accesses.begin() + p->accessCount,
+                         r->accesses.begin()) &&
+              p->ranges[0].attachments == r->ranges[0].attachments,
+              "no previous-source dictionary/access/attachment leakage");
+        auto stale = current;
+        --stale.source.storage.generation;
+        check(!owner.view(stale), "recycled storage never accepts old generation");
+      }
+      workspace.recycle(std::move(owner));
+      workspace.recycle(std::move(builder));
+      check(!owner && !builder.seal() && !add(builder),
+            "recycled owners and failed prefixes are consumed");
+      check(workspace.hasStorage() == (warm || choice != 4),
+            "failed prefixes retained privately, invalid cold key does not allocate");
+    }
+  }
+  PreparedEncodePlanWorkspace workspace;
+  auto failed = workspace.acquire(key(1), {}, nullptr);
+  check(failed.failure() == PreparedPlanFailure::Allocation && !failed.seal(),
+        "cold workspace allocation fault");
+  workspace.recycle(std::move(failed));
+  check(!workspace.hasStorage(), "failed allocation invents no reusable storage");
+
+  PreparedEncodePlan survivor;
+  {
+    PreparedEncodePlanWorkspace temporary;
+    auto builder = temporary.acquire(key(1));
+    check(builder.append(4, Kind::DrawRun, resources({7}), resources({}),
+                         attachments(), Stable), "independent ownership fixture");
+    survivor = builder.seal();
+  }
+  check(survivor.view(key(1)) && validatePreparedEncodePlan(*survivor.view(key(1)), key(1)),
+        "sealed owner outlives workspace without dangling recycler");
+}
+
 void exhaustivePublication() {
   using P = PreparedPublicationPhase;
   using A = PreparedPublicationAction;
@@ -370,6 +451,7 @@ int main(int argc, char** argv) {
     exhaustiveConstruction();
     preparationScreenTruthTable();
     failuresAndBounds();
+    exhaustiveWorkspaceReuse();
     finalSlotShadowProjection();
     exhaustivePublication();
   } catch (const std::exception& e) {

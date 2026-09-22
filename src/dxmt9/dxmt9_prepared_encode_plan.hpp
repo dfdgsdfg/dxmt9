@@ -111,6 +111,7 @@ inline bool validatePreparedEncodePlan(const PreparedEncodePlanStorage& s,
 }
 
 class PreparedEncodePlanBuilder;
+class PreparedEncodePlanWorkspace;
 class PreparedEncodePlan {
  public:
   PreparedEncodePlan() = default;
@@ -127,6 +128,7 @@ class PreparedEncodePlan {
   explicit operator bool() const noexcept { return storage_ != nullptr; }
  private:
   friend class PreparedEncodePlanBuilder;
+  friend class PreparedEncodePlanWorkspace;
   std::unique_ptr<PreparedEncodePlanStorage> storage_{};
 };
 
@@ -158,7 +160,7 @@ class PreparedEncodePlanBuilder {
       const core::ExactResourceSet& reads, const core::ExactResourceSet& writes,
       core::RenderAttachmentKey attachments,
       PreparedAccessResolution resolution) noexcept {
-    if (!storage_) return false;
+    if (!storage_ || failure_ != PreparedPlanFailure::None) return false;
     auto& s = *storage_;
     if (s.commandCount == s.key.commandCount ||
         commandIndex != s.key.firstCommand + s.commandCount)
@@ -200,7 +202,7 @@ class PreparedEncodePlanBuilder {
 
   PreparedEncodePlan seal() noexcept {
     PreparedEncodePlan result;
-    if (!storage_) return result;
+    if (!storage_ || failure_ != PreparedPlanFailure::None) return result;
     if (storage_->commandCount != storage_->key.commandCount) {
       fail(PreparedPlanFailure::Incomplete);
       return result;
@@ -214,9 +216,27 @@ class PreparedEncodePlanBuilder {
     return result;
   }
  private:
+  friend class PreparedEncodePlanWorkspace;
+  PreparedEncodePlanBuilder(PreparedSourceKey key, PreparedPlanLimits limits,
+      std::unique_ptr<PreparedEncodePlanStorage> storage, Allocator allocator) noexcept
+      : storage_(std::move(storage)), limits_(limits), recyclable_(true) {
+    if (!key.valid()) { fail(PreparedPlanFailure::InvalidSource); return; }
+    if (!limits.valid() || key.commandCount > limits.commands) {
+      fail(PreparedPlanFailure::Capacity); return;
+    }
+    if (!storage_) storage_ = allocator ? allocator() : nullptr;
+    if (!storage_) { fail(PreparedPlanFailure::Allocation); return; }
+    // Old array tails are inaccessible: append overwrites each counted row,
+    // and every reader is bounded by these freshly reset cursors.
+    storage_->key = key;
+    storage_->identityCount = storage_->accessCount = 0;
+    storage_->commandCount = storage_->rangeCount = 0;
+    storage_->needsEncodeResolution = false;
+  }
   bool fail(PreparedPlanFailure reason) noexcept {
     if (failure_ == PreparedPlanFailure::None) failure_ = reason;
-    storage_.reset(); // Discard the entire unpublished prefix on any failure.
+    // A recyclable failed prefix stays private and cannot append or seal.
+    if (!recyclable_) storage_.reset();
     return false;
   }
   bool appendAccesses(const core::ExactResourceSet& set) noexcept {
@@ -235,6 +255,29 @@ class PreparedEncodePlanBuilder {
   std::unique_ptr<PreparedEncodePlanStorage> storage_{};
   PreparedPlanLimits limits_{};
   PreparedPlanFailure failure_ = PreparedPlanFailure::None;
+  bool recyclable_ = false;
+};
+
+// Synchronous diagnostic scratch, not a cache of source semantics. Exclusive
+// unique ownership moves out at acquire and back only after all views expire.
+// No builder/plan holds a back-pointer: it may safely outlive the workspace.
+class PreparedEncodePlanWorkspace {
+ public:
+  bool hasStorage() const noexcept { return storage_ != nullptr; }
+  PreparedEncodePlanBuilder acquire(PreparedSourceKey key,
+      PreparedPlanLimits limits = {},
+      PreparedEncodePlanBuilder::Allocator allocator = PreparedEncodePlanBuilder::allocate) noexcept {
+    return PreparedEncodePlanBuilder(key, limits, std::move(storage_), allocator);
+  }
+  void recycle(PreparedEncodePlan&& plan) noexcept {
+    if (plan.storage_) storage_ = std::move(plan.storage_);
+  }
+  void recycle(PreparedEncodePlanBuilder&& builder) noexcept {
+    if (builder.storage_) storage_ = std::move(builder.storage_);
+    builder.failure_ = PreparedPlanFailure::Consumed;
+  }
+ private:
+  std::unique_ptr<PreparedEncodePlanStorage> storage_{};
 };
 
 // Pure publication/lifetime reducer. The future queue adapter must apply its

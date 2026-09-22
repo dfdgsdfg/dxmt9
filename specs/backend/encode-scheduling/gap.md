@@ -57,6 +57,20 @@ H351's actual-input screening probe skips 1,084/1,126 sources before allocation;
 5.991 MiB cumulatively. Native/TLA 4/4 and x86_64 3/3 pass. See
 [H351](../../../docs/perfomance/present-pacing/present-pacing-prepared-screen.351.md)
 for cost, trace and live-comparison exclusions; this is not consumer qualification.
+The subsequent shadow storage refinement adds a move-only workspace transfer:
+one cold thread-local region is acquired and recycled after synchronous views
+expire, including invalidated failed prefixes. Fresh source keys and semantic
+cursors replace old metadata; no async borrower or resource ownership is cached.
+Native 125-history differential tests compare reusable and fresh builders, and
+the live synthetic probe confirms one allocation plus 17 reuses for 18 candidates.
+This removes repeated diagnostic allocation, not repeated source extraction or
+production Encode work. Exact-sized storage and rejected-source cardinality are
+still open; fixed capacity is unchanged.
+H352's complete actual-input trace confirms one allocation and 41 reuses for
+42 attempts, including 20 reused capacity rejections. The whole wild run failed
+with timeout and a launch-dialog capture instead of the game: visual, progress
+and performance qualification must be repeated without that interference. See
+[H352](../../../docs/perfomance/present-pacing/present-pacing-prepared-reuse.352.md).
 Replay will build a bounded `PreparedEncodePlan` during
 final Slot construction and publishes both transactionally. The existing
 Encode thread retains final admission, parent ownership, child dispatch/join

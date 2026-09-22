@@ -110,7 +110,7 @@ the unpublished plan; incomplete source access is never silently declared safe.
 
 ## Bounded storage and sealing
 
-The foundation owns one fixed storage allocation per builder, with no per-draw
+The foundation owns one fixed storage region per active builder, with no per-draw
 allocation. Initial ceilings are 256 canonical identities, 1024 command rows,
 8192 access indices and 1024 candidate ranges. They are testable admission
 limits, not workload maxima or changes to production pass capacity. The
@@ -120,6 +120,22 @@ The initial fixed storage is 149,576 bytes on the tested 64-bit builds. This
 is a fixed foundation, not a qualified hot-path allocation policy. Before
 runtime integration, account for this maximum allocation and initialization;
 pooling or exact-sized regions must retain the same failure/publication contract.
+
+The ordinary diagnostic shadow now uses `PreparedEncodePlanWorkspace`: one
+cold thread-local reusable allocation, created only for the first candidate.
+It caches bytes, never source semantics or resource ownership. Acquire moves
+exclusive storage into the builder and resets key, counts and resolution flag;
+append overwrites every live array element before counted access. Array tails
+are not read or cleared. Recycling consumes the sealed owner or failed builder
+after synchronous views expire. No object retains a workspace back-pointer, so
+an active owner may outlive its workspace. At most one idle region is retained
+per observing thread until thread exit. This is not async Slot-plan pooling.
+
+`prepared_allocated` reports new bytes (zero on reuse), while
+`prepared_storage_capacity` reports available private bytes, including reused
+storage retained after an early rejection. Historical traces lack the latter
+and cannot establish reuse. Allocation phase now includes acquire/reset; append
+starts after capacity metadata. Total includes recycling, not a per-source free.
 
 Each access row owns read/write offsets and counts into a `uint16_t` index
 array. The dictionary, commands, ranges and source/storage/sequence key are
@@ -132,10 +148,19 @@ as data for final admission, not elided by the builder.
 
 The single allocation point is injectable at construction for deterministic
 failure tests; the allocator is not retained. Any append/coverage/capacity
-failure discards the complete unpublished allocation. A failed builder cannot
-seal or resume; successful `seal` transfers storage exactly once. Destruction
-rolls back any unsealed allocation. `seal` does not publish the associated
+failure invalidates the complete unpublished prefix. The ordinary builder frees
+it immediately; a workspace builder can privately retain the bytes for recycling.
+A failed builder cannot seal or resume; successful `seal` transfers storage
+exactly once. Destruction frees any unrecycled allocation. `seal` does not publish the associated
 Slot, acquire resource ownership, or provide a worker lifetime token.
+
+Reuse is checked by an exhaustive 125-history native differential against fresh
+builders over canonical, unresolved, partial-capacity, incomplete and invalid-key
+outcomes. Tests also cover allocation failure, stale generation, consumed owners
+and workspace destruction before sealed-owner destruction. This is synchronous
+storage refinement only; the publication TLA model still does not certify an
+async adapter. Live OFF/ON queue probes require one allocation plus 17 reuses
+for their 18 candidates without changing publications or skip accounting.
 
 ## Publication value model
 

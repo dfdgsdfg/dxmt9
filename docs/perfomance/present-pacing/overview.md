@@ -14,6 +14,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H352](present-pacing-prepared-reuse.352.md) reuses one private diagnostic region,
+with native fresh/reused differential and OFF/ON publication checks passing.
+The real-input trace confirms 1 allocation / 41 reuses, including failed-prefix
+reuse. Its wild run timed out with a macOS launch dialog captured instead of the
+game, so visual/FPS/progress qualification remains open. Total diagnostic CPU
+did not improve in that interfered run; no performance claim is made.
+
 [H351](present-pacing-prepared-screen.351.md) implements diagnostic pre-allocation
 screening. Actual STALKER input skips 1,084/1,126 sources, leaving 42 allocations
 (5.991 MiB cumulative), 21 structural successes and 21 capacity rejections.
