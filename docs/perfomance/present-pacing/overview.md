@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-21
+updated: 2026-09-23
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
@@ -14,12 +14,20 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H353](present-pacing-prepared-cardinality.353.md) closes full rejected-source
+cardinality: all 21 sources require 412–429 canonical identities, with zero
+unresolved rows and 82.59% repeated within-source access occurrences. Select a
+512-entry dense dictionary plus 1024 builder-only indexed lookup slots for the
+next implementation, preserving other capacity limits and fail-closed overflow.
+This is a design decision, not an implemented limit increase or FPS claim.
+
 [H352](present-pacing-prepared-reuse.352.md) reuses one private diagnostic region,
 with native fresh/reused differential and OFF/ON publication checks passing.
-The real-input trace confirms 1 allocation / 41 reuses, including failed-prefix
-reuse. Its wild run timed out with a macOS launch dialog captured instead of the
-game, so visual/FPS/progress qualification remains open. Total diagnostic CPU
-did not improve in that interfered run; no performance claim is made.
+The first real-input run was interfered with by a macOS launch dialog and timed
+out. The same-binary clean retry completes normally with an in-scene capture,
+zero GPU errors, and 1 allocation / 86 reuses across 87 candidates. Total
+diagnostic CPU is 11.828 ms and native average 20.982122 FPS; changed live input
+precludes a speedup claim. Exact GPU equivalence and async consumption remain open.
 
 [H351](present-pacing-prepared-screen.351.md) implements diagnostic pre-allocation
 screening. Actual STALKER input skips 1,084/1,126 sources, leaving 42 allocations

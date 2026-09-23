@@ -32,6 +32,14 @@ Candidate scratch now reuses one cold thread-local fixed region. New
 thread exit; it retains no resource references. Total includes recycle, not
 per-source deallocation. Neither retained bytes nor cumulative allocated bytes
 is an RSS measurement. OFF never initializes this workspace.
+Capacity-rejected candidates now receive a separate full-source cardinality
+pass under the same gate: exact canonical projected draw read/write union,
+access occurrences, command coverage and unresolved rows. It has no 256-entry
+ceiling and never raises the production bound. `prepared_cardinality_*`
+endpoints retain failed measurements without partial counts. The interval
+includes scratch allocation/sort and contributes to total observer CPU; exclude
+it when comparing builder phases to earlier traces. Unresolved rows forbid
+claiming complete source-resource semantics from this count.
 
 `DXMT9_CPU_SUPPLY_PARALLEL_OBSERVER=1` requires the CPU-supply trace and runs
 only inside its bounded Present window on IdentitySerial sources. It uses the

@@ -9,6 +9,9 @@ import analyze_cpu_supply as supply
 
 ORDER = ('begin source_index source_generation storage_generation storage_pages '
          'allocated appended sealed status identities accesses ranges unresolved end').split()
+CARDINALITY = ('cardinality_begin cardinality_status cardinality_commands '
+               'cardinality_unresolved cardinality_accesses cardinality_identities '
+               'cardinality_end').split()
 
 
 def analyze(rows):
@@ -30,6 +33,9 @@ def analyze(rows):
         if capacity_row and not skipped:
             order = order.copy()
             order.insert(order.index('allocated') + 1, 'storage_capacity')
+        cardinality = 'prepared_cardinality_begin' in indexed
+        if cardinality and not skipped:
+            order = order[:-1] + CARDINALITY + ['end']
         expected = {'prepared_' + name for name in order}
         if len(indexed) != len(events) or set(indexed) != expected:
             raise ValueError(f'incomplete/duplicate shadow source {queue}/{sequence}')
@@ -57,6 +63,25 @@ def analyze(rows):
             raise ValueError('allocation/capacity mismatch')
         if status is not None and not 0 <= status <= 8:
             raise ValueError('unknown prepared failure')
+        cardinality_result = None
+        if cardinality:
+            cstatus = value('cardinality_status')
+            if status != 3 or cstatus not in (0, 1, 2):
+                raise ValueError('invalid cardinality status or non-capacity source')
+            counts = [value('cardinality_' + n) for n in
+                      ('commands', 'unresolved', 'accesses', 'identities')]
+            commands, unresolved, accesses, identities = counts
+            if (cstatus == 0 and (commands != value('begin') or
+                    not 0 <= unresolved <= commands or not 0 <= identities <= accesses)):
+                raise ValueError('incomplete cardinality coverage')
+            if cstatus != 0 and any(counts):
+                raise ValueError('failed cardinality exposes partial counts')
+            cardinality_result = dict(status=cstatus,
+                commands=commands if cstatus == 0 else None,
+                unresolved=unresolved if cstatus == 0 else None,
+                accesses=accesses if cstatus == 0 else None,
+                identities=identities if cstatus == 0 else None,
+                cost=interval('cardinality_begin', 'cardinality_end'))
         if (not sequence or not value('source_generation') or
                 not value('storage_generation') or not (value('storage_pages') & 0xffffffff)):
             raise ValueError('invalid source identity')
@@ -69,6 +94,7 @@ def analyze(rows):
             'page_count': value('storage_pages') & 0xffffffff,
             'commands': indexed['prepared_begin']['value'],
             'screen': screen, 'skipped': skipped,
+            'cardinality': cardinality_result,
             'allocation_bytes': 0 if skipped else value('allocated'), 'failure': status,
             'storage_capacity_bytes': capacity,
             'storage_reused': (bool(capacity and not value('allocated'))

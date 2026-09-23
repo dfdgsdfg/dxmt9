@@ -1,11 +1,11 @@
 ---
 domain: present-pacing
 workload: STALKER CoP Day
-title: "H352: Reuse private prepared-plan storage; wild qualification blocked"
+title: "H352: Reuse private prepared-plan storage; clean wild retry completed"
 type: evidence
 status: partial-attribution
-updated: 2026-09-21
-source: experiments/output/prepared-reuse-h352/{native-final.log,x86-tests.log,tla.log,h350-backcompat.json,h351-backcompat.json,stalker-on-runner.log,stalker-r2-runner.log,stalker-r2.csv,stalker-r2.json}; experiments/output/app-d3d9-stkcop-bench-prepared-reuse-h352-r2-day/{result.json,actual.png}
+updated: 2026-09-22
+source: experiments/output/prepared-reuse-h352/{native-final.log,x86-tests.log,tla.log,h350-backcompat.json,h351-backcompat.json,stalker-on-runner.log,stalker-r2-runner.log,stalker-r2.csv,stalker-r2.json,stalker-r3-runner.log,stalker-r3.csv,stalker-r3.json}; experiments/output/app-d3d9-stkcop-bench-prepared-reuse-h352-r2-day/{result.json,actual.png}; experiments/output/app-d3d9-stkcop-bench-prepared-reuse-h352-r3-day/{result.json,actual.png,daybenchmark.result}
 related: present-pacing-prepared-screen.351.md
 ---
 
@@ -85,10 +85,37 @@ allocation phase includes reset and clocks; retained capacity is not RSS. The
 total excludes a per-source free because storage is now retained until thread
 exit. No native benchmark result or FPS comparison is accepted for this run.
 
+## Clean retry (2026-09-22)
+
+After the user cleared the dialog, `r3` ran commit `1dbf6bd6` with the same
+configuration and all five staged artifact hashes identical to `r2`. No builds
+or tests ran alongside it. Runner PASS, return code 0, no timeout or capture
+error, elapsed 228.948s, and zero reported GPU command-buffer errors. The
+150s screenshot is an actual STALKER scene with no obvious black/repeated
+geometry. A single screenshot is not a full-run flicker or pixel-exact oracle.
+
+The 2450–2470 trace closes with zero overflow/incomplete writers:
+
+| Item | Clean retry |
+|---|---:|
+| Qualified sources | 1,249 |
+| Query-scope / no-parallel-work skips | 1,141 / 21 |
+| Preparation attempts | 87 |
+| Structural successes / capacity rejections | 66 / 21 |
+| New allocations / reuses | 1 / 86 |
+| Cumulative new allocation | 149,576 bytes |
+| Total / candidate diagnostic CPU | 11.828 / 5.377 ms |
+| Acquire / projection / seal CPU | 0.131 / 4.069 / 0.228 ms |
+| Native benchmark average | 20.982122 FPS |
+
+Normal completion and an in-scene capture close the prior single-run integration
+blocker. Reuse remains non-vacuous on real input. The candidate population is
+87 rather than H351/r2's 42; neither the timing nor FPS is a fixed-input A/B
+improvement claim. Async consumption and pixel-exact equivalence remain open.
+
 ## Next gate
 
-Repeat wild visual/cost qualification after the launch dialog and focus issue
-are cleared. Then measure exact rejected-source identity cardinality before
+Measure exact rejected-source identity cardinality before
 choosing right-sized storage or raising a bound. Repeated projection/lookup,
 joint Slot-plan ownership and independent Encode differential remain open;
 this diagnostic optimization does not itself remove production Encode work.

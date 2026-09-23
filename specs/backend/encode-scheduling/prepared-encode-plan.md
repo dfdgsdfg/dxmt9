@@ -48,7 +48,19 @@ resolution and cannot certify a worker. Arena-only publications are not covered.
 `scripts/tools/analyze_prepared_encode_shadow.py` qualifies exact source event
 coverage, native thread CPU and monotonic wall endpoints, rejects clipped or
 duplicate records, and retains rejected attempts. Allocation bytes are per
-attempt, not RSS. Failed-plan cardinalities are unavailable. A successful
+attempt, not RSS. Failed-plan cardinalities are unavailable in the ordinary
+plan fields. Capacity rejections additionally invoke
+`measurePreparedShadowCardinality`, sharing the exact diagnostic projection
+visitor but walking the complete source without the dictionary admission bound.
+The cold collector sorts full-width canonical read/write handles and reports
+their exact union, access occurrences, visited commands and unresolved rows.
+Non-draw/incomplete rows remain unresolved: this is the projected draw-resource
+union, not proof of all source resource accesses. Allocation/source failure
+discards all partial counts. The analyzer requires complete identity-qualified
+cardinality endpoints and full command coverage; historical missing events
+remain unavailable. The separate cardinality CPU interval is included in total
+observer time and must not be mistaken for normal builder/Encode cost.
+A successful
 structural plan does not establish parallel eligibility or saved Encode work.
 
 The native `dxmt9-prepared-encode-plan-spec --publication-shadow-probe` invokes
@@ -161,6 +173,26 @@ and workspace destruction before sealed-owner destruction. This is synchronous
 storage refinement only; the publication TLA model still does not certify an
 async adapter. Live OFF/ON queue probes require one allocation plus 17 reuses
 for their 18 candidates without changing publications or skip accounting.
+
+## Measured identity-table target (not yet implemented)
+
+H353 measures 21 complete rejected-source projections at 412–429 canonical
+identities, 2357–2477 accesses and 263–275 commands, with zero unresolved rows.
+The next source dictionary target is 512 full-width identities and unchanged
+`uint16_t` access indices; exceeding the bound must still reject atomically.
+Use 1024 builder-only open-address slots with index+1 sentinels, full-key
+collision equality, deterministic first-occurrence dense indices and bounded
+probing. This costs 4 KiB for the immutable dictionary and 2 KiB for construction
+lookup, rather than copying keys into a node-based map. Do not increase unrelated
+command/access/range limits or persist construction lookup in the Encode payload.
+Retain reusable storage and failed-prefix invalidation. Capacity metadata must
+drive validation and coverage arrays consistently; no scattered 256 assumptions.
+
+This is a measured bounded policy decision, not a production promotion. Existing
+pass/certificate limits remain separate. Boundary/collision/generation/reuse and
+fault differential tests precede fixed-input builder timing; joint async
+publication and independent Encode/GPU validation still precede consumption.
+Evidence and exclusions: [H353](../../../docs/perfomance/present-pacing/present-pacing-prepared-cardinality.353.md).
 
 ## Publication value model
 

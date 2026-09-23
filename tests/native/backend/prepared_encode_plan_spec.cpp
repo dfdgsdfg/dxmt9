@@ -121,6 +121,53 @@ void publicationShadowProbe() {
   dxmt9::supply::present(4);
 }
 
+void exactShadowCardinality() {
+  dxmt9::core::ChunkSlot slot{};
+  const std::array<dxmt9::core::DrawParam, 1> draws{};
+  const std::array<dxmt9::core::DrawParamPayloadView, 1> payloads{};
+  for (unsigned i = 0; i < 600; ++i) {
+    dxmt9::core::CanonicalDrawState state{};
+    const auto generation = std::uint64_t(i % 300 + 1) << 32;
+    state.hot.textures[0] = dxmt9::core::Handle{generation | 7};
+    state.hot.textures[1] = dxmt9::core::Handle{generation | 8};
+    state.hot.depthStencil.handle = dxmt9::core::Handle{generation | 7};
+    slot.appendDrawRun(std::move(state), {}, draws, payloads);
+  }
+  slot.appendPresent({}, {});
+  auto sourceKey = key(slot.commandCount());
+  sourceKey.firstCommand = 0;
+  const auto resolve = [](std::uint64_t raw, std::uint64_t& out) {
+    out = (raw & ~std::uint64_t(UINT32_MAX)) | 7; return true;
+  };
+  PreparedEncodePlanBuilder builder(sourceKey);
+  std::uint32_t unresolved = 0;
+  check(!appendPreparedEncodeShadow(builder, dxmt9::core::SourcePayloadView(slot),
+      sourceKey, resolve, unresolved) && builder.failure() == PreparedPlanFailure::Capacity,
+      "fixture exceeds production shadow identity ceiling");
+  const auto exact = measurePreparedShadowCardinality(
+      dxmt9::core::SourcePayloadView(slot), sourceKey, resolve);
+  check(exact.status == PreparedShadowCardinality::Status::Exact &&
+        exact.identities == 300 && exact.accesses == 1200 &&
+        exact.commands == slot.commandCount() && exact.unresolved == 1,
+        "full source union preserves generations, aliases, repeats and unresolved tail");
+  const auto unknown = measurePreparedShadowCardinality(
+      dxmt9::core::SourcePayloadView(slot), sourceKey,
+      [](std::uint64_t, std::uint64_t&) { return false; });
+  check(unknown.status == PreparedShadowCardinality::Status::Exact &&
+        unknown.identities == 0 && unknown.unresolved == slot.commandCount(),
+        "unresolved rows cannot become exact resource-completeness proof");
+  const auto failed = measurePreparedShadowCardinality(
+      dxmt9::core::SourcePayloadView(slot), sourceKey,
+      [](std::uint64_t, std::uint64_t&) -> bool { throw std::bad_alloc{}; });
+  check(failed.status == PreparedShadowCardinality::Status::Allocation &&
+        failed.commands == 0 && failed.identities == 0,
+        "diagnostic allocation failure exposes no partial count");
+  ++sourceKey.commandCount;
+  check(measurePreparedShadowCardinality(dxmt9::core::SourcePayloadView(slot),
+        sourceKey, resolve).status == PreparedShadowCardinality::Status::InvalidSource,
+        "out of range cardinality fails closed");
+}
+
 void exhaustiveConstruction() {
   // Independently reconstruct expected command access, set membership and
   // maximal ranges from 4^5 input traces. Index assignment is not the oracle.
@@ -453,6 +500,7 @@ int main(int argc, char** argv) {
     failuresAndBounds();
     exhaustiveWorkspaceReuse();
     finalSlotShadowProjection();
+    exactShadowCardinality();
     exhaustivePublication();
   } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';

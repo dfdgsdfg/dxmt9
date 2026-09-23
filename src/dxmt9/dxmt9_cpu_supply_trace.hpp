@@ -39,6 +39,9 @@ enum class Event : std::uint32_t {
   PreparedStoragePages,
   PreparedScreen,
   PreparedStorageCapacity,
+  PreparedCardinalityBegin, PreparedCardinalityStatus, PreparedCardinalityCommands,
+  PreparedCardinalityUnresolved, PreparedCardinalityAccesses,
+  PreparedCardinalityIdentities, PreparedCardinalityEnd,
 };
 
 inline bool commandSplitEnabled() noexcept {

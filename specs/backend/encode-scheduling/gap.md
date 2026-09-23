@@ -69,8 +69,19 @@ still open; fixed capacity is unchanged.
 H352's complete actual-input trace confirms one allocation and 41 reuses for
 42 attempts, including 20 reused capacity rejections. The whole wild run failed
 with timeout and a launch-dialog capture instead of the game: visual, progress
-and performance qualification must be repeated without that interference. See
+and performance qualification was not established. The 2026-09-22 same-binary
+clean retry completes normally with an in-scene capture and zero GPU errors;
+87 candidates use one allocation and 86 reuses. This closes the single-run
+integration blocker, not pixel-exact or fixed-input performance qualification. See
 [H352](../../../docs/perfomance/present-pacing/present-pacing-prepared-reuse.352.md).
+H353 closes exact rejected-source projected cardinality: 21/21 transcripts
+cover 412–429 identities, 2357–2477 accesses and 263–275 commands, with no
+unresolved rows. Native/x86_64 3/3 each, TLA regression and wild PASS support
+the measurement. The next policy is 512 dense identities with a 1024-slot
+builder-only lookup and unchanged other dimensions; implementation, collision/
+boundary differential, fixed-input costs and consumer proof integration remain
+open. Existing source and pass/certificate limits are unchanged. See
+[H353](../../../docs/perfomance/present-pacing/present-pacing-prepared-cardinality.353.md).
 Replay will build a bounded `PreparedEncodePlan` during
 final Slot construction and publishes both transactionally. The existing
 Encode thread retains final admission, parent ownership, child dispatch/join

@@ -3215,14 +3215,14 @@ void observePreparedSlot(CommandQueue& q, resources::Pool& pool,
          reused || builder.failure() == PreparedPlanFailure::None
              ? sizeof(PreparedEncodePlanStorage) : 0);
     std::uint32_t unresolved = 0;
+    const auto resolve = [&](std::uint64_t raw, std::uint64_t& canonical) noexcept {
+      const auto* surface = pool.findSurface(raw);
+      canonical = surface && surface->aliasTexture ? surface->aliasTexture.value : raw;
+      return canonical != 0;
+    };
     const bool appended = builder.failure() == PreparedPlanFailure::None &&
         appendPreparedEncodeShadow(builder, core::SourcePayloadView(slot), key,
-            [&](std::uint64_t raw, std::uint64_t& canonical) noexcept {
-              const auto* surface = pool.findSurface(raw);
-              canonical = surface && surface->aliasTexture
-                  ? surface->aliasTexture.value : raw;
-              return canonical != 0;
-            }, unresolved);
+                                   resolve, unresolved);
     emit(supply::Event::PreparedAppended);
     auto owner = appended ? builder.seal() : PreparedEncodePlan{};
     emit(supply::Event::PreparedSealed);
@@ -3235,6 +3235,18 @@ void observePreparedSlot(CommandQueue& q, resources::Pool& pool,
     emit(supply::Event::PreparedAccesses, plan ? plan->accessCount : 0);
     emit(supply::Event::PreparedRanges, plan ? plan->rangeCount : 0);
     emit(supply::Event::PreparedUnresolved, unresolved);
+    if (failure == PreparedPlanFailure::Capacity) {
+      emit(supply::Event::PreparedCardinalityBegin);
+      const auto cardinality = measurePreparedShadowCardinality(
+          core::SourcePayloadView(slot), key, resolve);
+      emit(supply::Event::PreparedCardinalityStatus,
+           static_cast<std::uint64_t>(cardinality.status));
+      emit(supply::Event::PreparedCardinalityCommands, cardinality.commands);
+      emit(supply::Event::PreparedCardinalityUnresolved, cardinality.unresolved);
+      emit(supply::Event::PreparedCardinalityAccesses, cardinality.accesses);
+      emit(supply::Event::PreparedCardinalityIdentities, cardinality.identities);
+      emit(supply::Event::PreparedCardinalityEnd);
+    }
     // All synchronous views end here. Failed prefixes are invalidated before
     // reuse just like sealed owners; no metadata is handed to Encode.
     workspace.recycle(std::move(owner));

@@ -77,6 +77,30 @@ class ShadowTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             shadow.analyze(rows)
 
+    def test_cardinality_schema(self):
+        rows = self.rows()
+        rows[8]['value'] = 3
+        extra = [dict(rows[-1], kind='prepared_' + name, value={
+            'cardinality_commands': 64, 'cardinality_unresolved': 1,
+            'cardinality_accesses': 600, 'cardinality_identities': 300,
+        }.get(name, 0)) for name in shadow.CARDINALITY]
+        complete = rows[:-1] + extra + rows[-1:]
+        self.assertEqual(shadow.analyze(complete)['sources'][0]['cardinality']['identities'], 300)
+        for bad in (complete[:-1], rows[:-1] + extra[:-1] + rows[-1:],
+                    rows[:-1] + extra + [extra[-1]] + rows[-1:]):
+            with self.assertRaises(ValueError):
+                shadow.analyze(bad)
+        extra[2]['value'] = 63
+        with self.assertRaises(ValueError):
+            shadow.analyze(complete)
+        extra[2]['value'] = 64
+        extra[1]['value'] = 2
+        with self.assertRaises(ValueError):
+            shadow.analyze(complete)
+        for row in extra[2:-1]:
+            row['value'] = 0
+        self.assertIsNone(shadow.analyze(complete)['sources'][0]['cardinality']['identities'])
+
     @unittest.skipUnless(PROBE, 'native publication probe not supplied')
     def test_live_publication_on_off(self):
         with tempfile.TemporaryDirectory(prefix='dxmt9-prepared-shadow-') as directory:
