@@ -1,4 +1,9 @@
-"""Check same-capture prepared serial consumer qualification, not performance."""
+"""Check archived pre-promotion OFF/ON receipts, not current runtime policy.
+
+The removed selector cannot generate a new OFF baseline. This checker retains
+the zero-consumption requirement so current default/default runs cannot be
+misrepresented as historical OFF/ON evidence.
+"""
 import hashlib
 import json
 import pathlib

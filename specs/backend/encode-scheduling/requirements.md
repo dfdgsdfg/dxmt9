@@ -1026,6 +1026,11 @@ reads from the immutable final state, retain full-width identities and exact
 Bloom membership, and reject the entire unpublished candidate on allocation
 or storage overflow. This narrower data must not be used as parallel admission
 or canonical alias authority.
+Eligible ordinary Slots use the fused serial read metadata path by default.
+The retired `DXMT9_PREPARED_SERIAL_READS` setting must not restore a selectable
+reference-only path. Required allocation/capacity/identity and unsupported-mode
+fallback remains available before draw effects; removal of the OFF policy must
+not convert optional preparation failure into dropped work or device failure.
 
 Encode must perform final admission against current session/preamble facts
 before dispatch. Plan storage must remain valid through child join, while GPU

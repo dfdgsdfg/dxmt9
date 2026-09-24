@@ -14,6 +14,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H360](present-pacing-prepared-default.360.md) records the explicit user decision
+to promote prepared serial reads and remove the OFF policy. Eligible ordinary
+Slots always use fused preparation; the old full-plan consumer is test-only.
+Required failure/unsupported-mode fallback remains. This supersedes historical
+default-OFF statements below without claiming a newly proven FPS improvement.
+
 [H359](present-pacing-prepared-fused.359.md) fuses serial metadata append into
 the existing publication resource-mark traversal and removes the second final
 command-view walk. Both same-input campaigns are pixel-exact (216 iterations),

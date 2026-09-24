@@ -42,6 +42,26 @@ struct CommandQueueArenaLeaseTestAccess {
 };
 } // namespace dxmt9
 namespace {
+// Historical full-plan consumer retained only as an independent differential
+// oracle, never as a selectable production implementation.
+bool tryPreparedDrawReadHazard(const PreparedEncodePlan* owner,
+    PreparedSourceKey key, std::size_t commandIndex, HazardProbe& output) noexcept {
+  const auto* plan = owner ? owner->view(key) : nullptr;
+  if (!plan || commandIndex < key.firstCommand ||
+      commandIndex - key.firstCommand >= plan->commandCount) return false;
+  const auto& row = plan->commands[commandIndex - key.firstCommand];
+  if (!row.serialReadsExact || row.kind != dxmt9::core::MetalCommandKind::DrawRun ||
+      row.resolution != PreparedAccessResolution::CanonicalStable ||
+      row.readCount > HazardHandles::kCapacity) return false;
+  HazardProbe prepared{};
+  prepared.bloom.bits = row.readBloom;
+  prepared.exact.count = row.readCount;
+  for (std::uint32_t i = 0; i < row.readCount; ++i)
+    prepared.exact.handles[i] = plan->identities[plan->accesses[row.readOffset + i]];
+  output = prepared;
+  return true;
+}
+
 void check(bool ok, const char* message) {
   if (!ok) throw std::runtime_error(message);
 }

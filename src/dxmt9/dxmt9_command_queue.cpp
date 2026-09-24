@@ -3284,11 +3284,7 @@ void prepareSlotForPublish(CommandQueue& q,
     }
   }
   PerfScope scope(perf::countPrepareSlotForPublishCpuTime);
-  static const bool preparedSerial = [] {
-    const auto* value = std::getenv("DXMT9_PREPARED_SERIAL_READS");
-    return value && std::strcmp(value, "1") == 0;
-  }();
-  if (preparedSerial && q.writingSlot_ && slot.commandCount() &&
+  if (q.writingSlot_ && slot.commandCount() &&
       slot.commandCount() <= 1024 && !slot.drawRunRecords.empty() &&
       q.slots_[*q.writingSlot_].payload == &slot) {
     const auto buildPrepared = [&] {

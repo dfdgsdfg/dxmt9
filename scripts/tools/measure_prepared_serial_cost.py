@@ -1,4 +1,4 @@
-"""Sequential fixed-capture A/A, A/B, B/A and nested-timer control.
+"""Sequential fixed-capture default-path repeats and nested-timer control.
 
 This records elapsed scope sums, not thread CPU or pipeline critical-path time.
 Run only when builds and other benchmarks have stopped.
@@ -24,20 +24,18 @@ def main():
     runner = pathlib.Path("scripts/tools/run_dxmt9_render_tape.py").resolve()
     import os
     # Keep all inherited renderer settings in the runner's receipt, and require
-    # them to remain identical except for these two explicitly controlled knobs.
+    # them to remain identical except for the explicitly controlled build timer.
     env = dict(os.environ, DXMT_PERF_COUNTERS="1")
     baseline_input = None
     baseline_images = None
     baseline_pixels = None
     reports = {}
-    for label, enabled, timing in (
-        ("aa0", "0", "1"), ("aa1", "0", "1"),
-        ("ab1", "1", "1"), ("ba1", "1", "1"),
-        ("ba0", "0", "1"), ("timer_off1", "1", "0"),
+    for label, timing in (
+        ("default0", "1"), ("default1", "1"), ("timer_off", "0"),
     ):
         output = args.output / label
-        child_env = dict(env, DXMT9_PREPARED_SERIAL_READS=enabled,
-                         DXMT9_PREPARED_BUILD_TIMING=timing)
+        child_env = dict(env, DXMT9_PREPARED_BUILD_TIMING=timing)
+        child_env.pop("DXMT9_PREPARED_SERIAL_READS", None)
         command = [str(launcher), str(runner), "experiment", str(args.bundle.resolve()),
                    "--provider", str(provider), "--validator", "build/tools/dxmt9-render-tape",
                    "--output-dir", str(output), "--warmup", "2", "--repeat", "16",
@@ -73,17 +71,17 @@ def main():
                     baseline_pixels = data
                 assert data == baseline_pixels, "pixel drift"
             scopes = iteration["cpu_scope_wall_ns"]
-            assert (scopes["prepared_reads"] > 0) == (enabled == "1")
+            assert scopes["prepared_reads"] > 0
             # H359 fuses marking into preparation; do not label this as the
             # historical isolated build scope in the output or comparisons.
             prepared_scope = scopes.get("prepared_build_and_mark", scopes.get("prepared_build", 0))
-            assert (prepared_scope > 0) == (enabled == timing == "1")
+            assert (prepared_scope > 0) == (timing == "1")
             if not iteration["warmup"]:
                 samples.append(dict(scopes, service=iteration["service_ns"],
                                     chunk_replay=iteration["phases_wall_ns"]["chunk_replay"]))
         assert len(samples) == 16
         reports[label] = {
-            "selector": enabled, "timing": timing, "samples": samples,
+            "policy": "default-prepared", "timing": timing, "samples": samples,
             "median_ms": {k: statistics.median(s[k] for s in samples) / 1e6
                           for k in samples[0] if k not in ("prepared_reads", "prepared_read_fallbacks")},
             "prepared_reads": sorted({s["prepared_reads"] for s in samples}),

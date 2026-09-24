@@ -20,7 +20,8 @@ reference comparison only when their sequence equals the raw sequence.
 Attachment hazards, pass actions, alias/backing resolution, resource pins,
 GPU-use stamps, query scopes and execution order remain unchanged.
 
-`DXMT9_PREPARED_SERIAL_READS=1` is an experimental default-OFF selector. Final
+Prepared serial reads are the ordinary-Slot default. The former
+`DXMT9_PREPARED_SERIAL_READS` selector is retired and ignored, including `0`. Final
 ordinary Slot publication, under the existing queue mutex and after resource
 marking, owns the optional immutable plan. The Slot retains it until reclaim;
 Encode borrows it synchronously under the existing source residency protocol.
@@ -38,7 +39,7 @@ never truncate it. The incremental builder appends the command view already
 projected by `markSlotResourcesImpl`, after each command's captured stamp batch
 is flushed. This removes the independent publication command walk, not the
 per-command raw read-set extraction. It is not fused Slot emission or pooled
-storage. The disabled specialization has an empty callback and no builder.
+storage. The ineligible-source specialization has an empty callback and no builder.
 
 `PreparedSerialReadsBuilder` owns the mutable unpublished prefix. Append must
 match the next original command index; ordering or capacity failure is sticky
@@ -49,8 +50,8 @@ No view, builder or callback escapes the synchronous queue-mutex scope.
 
 The diagnostic `prepared_build_and_mark` scope now includes allocation,
 the fused resource-mark/append loop and seal; `resource_mark` includes append
-when the candidate is enabled. Neither is comparable to H358's isolated build
-timer. Use the unchanged parent prepare-slot scope for OFF/ON cost comparison;
+for eligible sources. Neither is comparable to H358's isolated build
+timer. Use the unchanged parent prepare-slot scope for cost comparison;
 do not subtract overlapping medians or add nested timings.
 
 Admission must match the complete source/storage/sequence key and whole-source
@@ -67,12 +68,12 @@ with the independent existing helper, exercise every key mutation, raw alias
 identity preservation, clear/reuse and allocation/capacity failure, and preserve the existing
 publication reducer's no-release-before-join contract. Same-capture GPU comparison
 must prove nonzero prepared-row consumption, not merely unchanged pixels through
-fallback. Until that gate passes the selector must remain default OFF. No FPS
+fallback. H356–H359 supply bounded GT2 exact-pixel evidence. No FPS
 gain is implied by moving work onto the publication thread.
 
 Implements the value-layer foundation of `R-BACK-2.71`. The builder and pure
 publication reducer live in `src/dxmt9/dxmt9_prepared_encode_plan.hpp`. The
-diagnostic shadow retains the general canonical projection; the experimental
+diagnostic shadow retains the general canonical projection; the default
 serial consumer uses only the raw read projection in
 `src/dxmt9/dxmt9_prepared_serial_reads.hpp`. Both reuse the existing Replay
 read-set transform. Neither serial metadata nor a sealed general plan is a
@@ -86,7 +87,7 @@ default-OFF `DXMT9_CPU_SUPPLY_PREPARED_OBSERVER` gate. Inside the bounded
 CPU-supply window it builds and destroys a private plan from the final ordinary
 Slot, with the actual source/storage generations and sequence. There is no
 async borrow or execution-policy change from this observer. The separate serial
-consumer selector owns the optional Slot field; the observer never populates it.
+consumer owns the optional Slot field; the observer never populates it.
 
 Before allocating, `screenPreparedEncodeShadow` skips frozen nonempty query
 scopes, empty sources, and single commands with no possible two-draw child
@@ -294,7 +295,7 @@ in this value model, not a synthesized GPU signal. An encoded failure remains
 a failure even after its submitted work reaches completion.
 
 This reducer does not perform atomic memory publication or implement terminal
-queue recovery. The experimental serial adapter uses the existing ordinary Slot
+queue recovery. The default serial adapter uses the existing ordinary Slot
 queue-lock publication and residency/reclaim protocol, retaining plan ownership
 until Slot clear/destruction. Its consumer uses the complete source key from
 that protocol. It does not introduce a new queue state machine. General Arena
@@ -325,7 +326,9 @@ the reducer graph has 61 reachable states and 75 accepted edges. Existing TLA
 regression passes in 195.96 seconds. Logs are preserved under
 `experiments/output/prepared-encode-plan-foundation/{native,x86,tla}.log`.
 
-The serial consumer is default OFF until its qualification gates pass. The
-default renderer and all parallel policies remain unchanged. Non-degenerate
-GPU exact qualification and end-to-end timing are separate gates from native
-read-hazard equivalence.
+The serial consumer is default following the explicit user promotion decision.
+The selectable reference-only lane and runtime full-plan consumer are removed.
+Allocation/capacity rejection, stale identity, Arena and non-identity execution
+retain the necessary raw-hazard fallback; it is not a selectable legacy policy.
+Parallel policies are unchanged. Broader wild qualification and end-to-end
+performance remain evidence gaps, not claims implied by this promotion.

@@ -113,26 +113,6 @@ HazardProbe makeAttachmentHazard(const core::FlatDrawStateRecord& hot);
 HazardProbe makeAttachmentHazard(const core::ClearDesc& clear);
 HazardProbe makeDrawReadHazard(core::FlatDrawStateView state);
 
-// The owner was sealed before publication. Only source-qualified serial rows
-// whose canonical projection preserved raw read identity replace the reference.
-inline bool tryPreparedDrawReadHazard(const PreparedEncodePlan* owner,
-    PreparedSourceKey key, std::size_t commandIndex, HazardProbe& output) noexcept {
-  const auto* plan = owner ? owner->view(key) : nullptr;
-  if (!plan || commandIndex < key.firstCommand ||
-      commandIndex - key.firstCommand >= plan->commandCount) return false;
-  const auto& row = plan->commands[commandIndex - key.firstCommand];
-  if (!row.serialReadsExact || row.kind != core::MetalCommandKind::DrawRun ||
-      row.resolution != PreparedAccessResolution::CanonicalStable ||
-      row.readCount > HazardHandles::kCapacity) return false;
-  HazardProbe prepared{};
-  prepared.bloom.bits = row.readBloom;
-  prepared.exact.count = row.readCount;
-  for (std::uint32_t i = 0; i < row.readCount; ++i)
-    prepared.exact.handles[i] = plan->identities[plan->accesses[row.readOffset + i]];
-  output = prepared;
-  return true;
-}
-
 inline bool tryPreparedSerialReadHazard(const PreparedSerialReads* owner,
     PreparedSourceKey key, std::size_t commandIndex, HazardProbe& output) noexcept {
   const auto* row = owner ? owner->row(key, commandIndex) : nullptr;

@@ -140,6 +140,19 @@ regression. Two fixed-input campaigns (216 iterations) preserve exact pixels,
 still adds 0.12–0.17ms preparation with noisy Encode block timings; meaningful
 speedup remains unproven. See
 [H359](../../../docs/perfomance/present-pacing/present-pacing-prepared-fused.359.md).
+Current policy supersedes H356–H359's historical default-OFF status: the user
+explicitly selected default promotion and removal of the OFF policy. Eligible
+ordinary Slots always build fused serial metadata; the former selector is
+ignored, and the old full-plan consumer exists only in differential tests.
+Allocation/capacity/stale-identity and unsupported-mode fallback remains
+required. No FPS win or broader wild evidence is implied by this decision.
+The measurement runner now emits default/default and timing-OFF blocks, not
+misleading OFF/ON labels for a retired selector.
+H360 final-binary evidence: native 5/5 and x86_64 9/9, full Unix build, TLA
+regression, and 54 selector-unset fixed-input iterations pass. Each consumes
+646 prepared rows, preserves exact H359 pixels and reports zero GPU errors.
+The retired selector `0` is covered by an actual queue publication test. See
+[H360](../../../docs/perfomance/present-pacing/present-pacing-prepared-default.360.md).
 This is not general
 resource-closure/PSO/framegraph reuse or a parallel execution certificate.
 Replay will build a bounded `PreparedEncodePlan` during
