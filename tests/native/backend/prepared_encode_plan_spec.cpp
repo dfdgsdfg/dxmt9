@@ -139,7 +139,7 @@ void exactShadowCardinality() {
   const auto resolve = [](std::uint64_t raw, std::uint64_t& out) {
     out = (raw & ~std::uint64_t(UINT32_MAX)) | 7; return true;
   };
-  PreparedEncodePlanBuilder builder(sourceKey);
+  PreparedEncodePlanBuilder builder(sourceKey, {.identities = 256});
   std::uint32_t unresolved = 0;
   check(!appendPreparedEncodeShadow(builder, dxmt9::core::SourcePayloadView(slot),
       sourceKey, resolve, unresolved) && builder.failure() == PreparedPlanFailure::Capacity,
@@ -400,6 +400,50 @@ void exhaustiveWorkspaceReuse() {
         "sealed owner outlives workspace without dangling recycler");
 }
 
+void indexedDictionaryBoundaries() {
+  static_assert(kPreparedIdentityCapacity == 512 && kPreparedLookupCapacity == 1024);
+  static_assert(sizeof(PreparedEncodePlanStorage) == 151624);
+  std::vector<std::uint64_t> collisions;
+  for (std::uint64_t generation = 1; collisions.size() < 513; ++generation) {
+    const auto handle = (generation << 32) | 7;
+    if (preparedIdentityBucket(handle) == kPreparedLookupCapacity - 1)
+      collisions.push_back(handle);
+  }
+  PreparedEncodePlanWorkspace workspace;
+  for (unsigned count : {256u, 257u, 512u, 513u, 1u, 512u}) {
+    auto current = key(count);
+    current.sequence += count;
+    auto builder = workspace.acquire(current);
+    for (unsigned i = 0; i < count; ++i) {
+      const auto identity = collisions[count - 1 - i];
+      const bool appended = builder.append(4 + i, Kind::DrawRun, resources({identity}),
+          resources({identity}), attachments(), Stable);
+      check(appended == (i < kPreparedIdentityCapacity),
+            "collision chain/wrap preserves exact admission boundary");
+    }
+    auto owner = builder.seal();
+    if (count > kPreparedIdentityCapacity) {
+      check(!owner && builder.failure() == PreparedPlanFailure::Capacity,
+            "513th distinct identity atomically rejects the plan");
+    } else {
+      const auto* p = owner.view(current);
+      check(p && p->identityCount == count && p->accessCount == count * 2 &&
+            validatePreparedEncodePlan(*p, current), "full dictionary validates");
+      // Independent linear first-occurrence oracle: every row first reads one
+      // new handle then writes the same handle. Hash order must not reorder it.
+      for (unsigned i = 0; i < count; ++i)
+        check(p->identities[i] == collisions[count - 1 - i] &&
+              p->accesses[i * 2] == i && p->accesses[i * 2 + 1] == i,
+              "full-generation collision equality and dense first occurrence");
+    }
+    workspace.recycle(std::move(owner));
+    workspace.recycle(std::move(builder));
+  }
+  PreparedEncodePlanBuilder invalid(key(1), {.identities = 513});
+  check(invalid.failure() == PreparedPlanFailure::Capacity,
+        "configured identity capacity cannot exceed physical storage");
+}
+
 void exhaustivePublication() {
   using P = PreparedPublicationPhase;
   using A = PreparedPublicationAction;
@@ -499,6 +543,7 @@ int main(int argc, char** argv) {
     preparationScreenTruthTable();
     failuresAndBounds();
     exhaustiveWorkspaceReuse();
+    indexedDictionaryBoundaries();
     finalSlotShadowProjection();
     exactShadowCardinality();
     exhaustivePublication();

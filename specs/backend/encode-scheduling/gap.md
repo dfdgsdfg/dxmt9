@@ -77,11 +77,15 @@ integration blocker, not pixel-exact or fixed-input performance qualification. S
 H353 closes exact rejected-source projected cardinality: 21/21 transcripts
 cover 412–429 identities, 2357–2477 accesses and 263–275 commands, with no
 unresolved rows. Native/x86_64 3/3 each, TLA regression and wild PASS support
-the measurement. The next policy is 512 dense identities with a 1024-slot
-builder-only lookup and unchanged other dimensions; implementation, collision/
-boundary differential, fixed-input costs and consumer proof integration remain
-open. Existing source and pass/certificate limits are unchanged. See
+the measurement. H354 implements 512 dense identities with a 1024-slot
+builder-only lookup and unchanged other dimensions. Collision/wrap, 256/257/512/513
+boundaries and failed-prefix reuse tests pass. The actual-input trace seals
+21 wide sources (383–415 identities) with zero preparation failures, but its
+capture misses the game, so visual/FPS qualification must be repeated.
+Fixed-input costs and consumer proof integration remain open. Existing
+pass/certificate limits are unchanged. See
 [H353](../../../docs/perfomance/present-pacing/present-pacing-prepared-cardinality.353.md).
+Implementation evidence: [H354](../../../docs/perfomance/present-pacing/present-pacing-prepared-index.354.md).
 Replay will build a bounded `PreparedEncodePlan` during
 final Slot construction and publishes both transactionally. The existing
 Encode thread retains final admission, parent ownership, child dispatch/join

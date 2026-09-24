@@ -123,12 +123,13 @@ the unpublished plan; incomplete source access is never silently declared safe.
 ## Bounded storage and sealing
 
 The foundation owns one fixed storage region per active builder, with no per-draw
-allocation. Initial ceilings are 256 canonical identities, 1024 command rows,
+allocation. Current ceilings are 512 canonical identities, 1024 command rows,
 8192 access indices and 1024 candidate ranges. They are testable admission
 limits, not workload maxima or changes to production pass capacity. The
-source-wide 256 bound is independently conservative; a future production
+source-wide bound is independently conservative; a future production
 budget must not assume that H347's per-pass cardinality is source-wide.
-The initial fixed storage is 149,576 bytes on the tested 64-bit builds. This
+The fixed storage is 151,624 bytes on the tested 64-bit builds (149,576 before
+the 256-to-512 identity increase), plus 2 KiB builder-only lookup scratch. This
 is a fixed foundation, not a qualified hot-path allocation policy. Before
 runtime integration, account for this maximum allocation and initialization;
 pooling or exact-sized regions must retain the same failure/publication contract.
@@ -174,23 +175,29 @@ storage refinement only; the publication TLA model still does not certify an
 async adapter. Live OFF/ON queue probes require one allocation plus 17 reuses
 for their 18 candidates without changing publications or skip accounting.
 
-## Measured identity-table target (not yet implemented)
+## Measured identity-table implementation
 
 H353 measures 21 complete rejected-source projections at 412–429 canonical
 identities, 2357–2477 accesses and 263–275 commands, with zero unresolved rows.
-The next source dictionary target is 512 full-width identities and unchanged
+The source dictionary now holds 512 full-width identities and unchanged
 `uint16_t` access indices; exceeding the bound must still reject atomically.
-Use 1024 builder-only open-address slots with index+1 sentinels, full-key
+The builder uses 1024 private open-address slots with index+1 sentinels, full-key
 collision equality, deterministic first-occurrence dense indices and bounded
 probing. This costs 4 KiB for the immutable dictionary and 2 KiB for construction
 lookup, rather than copying keys into a node-based map. Do not increase unrelated
 command/access/range limits or persist construction lookup in the Encode payload.
-Retain reusable storage and failed-prefix invalidation. Capacity metadata must
-drive validation and coverage arrays consistently; no scattered 256 assumptions.
+Reusable storage and failed-prefix invalidation are retained. Shared capacity
+constants drive limit validation, physical identity storage and coverage arrays.
+The lookup resets on each builder construction, including workspace acquire,
+and does not follow the sealed owner. Standalone closure validation deliberately
+retains its independent duplicate scan; faster construction is not evidence that
+seal or the whole pipeline is faster.
 
-This is a measured bounded policy decision, not a production promotion. Existing
-pass/certificate limits remain separate. Boundary/collision/generation/reuse and
-fault differential tests precede fixed-input builder timing; joint async
+This is a bounded preparation implementation, not a production promotion. Existing
+pass/certificate limits remain separate. Native tests cover 256/257/512/513
+entries, 513 full-generation keys colliding into the last bucket, probe wrap,
+read/write alias reuse, deterministic dense ordering and failed-prefix reuse.
+Fixed-input builder timing remains open; joint async
 publication and independent Encode/GPU validation still precede consumption.
 Evidence and exclusions: [H353](../../../docs/perfomance/present-pacing/present-pacing-prepared-cardinality.353.md).
 

@@ -14,12 +14,18 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H354](present-pacing-prepared-index.354.md) implements the 512-entry dictionary
+and 1024-slot builder-only lookup. Native collision/boundary/reuse tests pass;
+real input seals 21 wide sources with no capacity rejection. Its game-window
+capture fails, so visual/FPS qualification and fixed-input cost comparison remain
+open. Pass/certificate capacity and original Encode execution are unchanged.
+
 [H353](present-pacing-prepared-cardinality.353.md) closes full rejected-source
 cardinality: all 21 sources require 412–429 canonical identities, with zero
 unresolved rows and 82.59% repeated within-source access occurrences. Select a
 512-entry dense dictionary plus 1024 builder-only indexed lookup slots for the
-next implementation, preserving other capacity limits and fail-closed overflow.
-This is a design decision, not an implemented limit increase or FPS claim.
+implementation (now H354), preserving other capacity limits and fail-closed overflow.
+H353 itself is cardinality evidence, not a limit increase or FPS claim.
 
 [H352](present-pacing-prepared-reuse.352.md) reuses one private diagnostic region,
 with native fresh/reused differential and OFF/ON publication checks passing.

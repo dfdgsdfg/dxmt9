@@ -27,10 +27,24 @@ enum class PreparedPlanFailure : std::uint8_t {
   None, InvalidSource, Allocation, Capacity, CommandOrder, InvalidAccess,
   UnsupportedCommand, Incomplete, Consumed,
 };
+inline constexpr std::uint32_t kPreparedIdentityCapacity = 512;
+inline constexpr std::uint32_t kPreparedLookupCapacity = 1024;
+static_assert(kPreparedLookupCapacity == 2 * kPreparedIdentityCapacity);
+static_assert((kPreparedLookupCapacity & (kPreparedLookupCapacity - 1)) == 0);
+static_assert(kPreparedIdentityCapacity < UINT16_MAX);
+// Full-width mixing; bucket equality is never identity equality.
+constexpr std::uint32_t preparedIdentityBucket(std::uint64_t key) noexcept {
+  key ^= key >> 30;
+  key *= UINT64_C(0xbf58476d1ce4e5b9);
+  key ^= key >> 27;
+  key *= UINT64_C(0x94d049bb133111eb);
+  key ^= key >> 31;
+  return static_cast<std::uint32_t>(key) & (kPreparedLookupCapacity - 1);
+}
 struct PreparedPlanLimits {
-  std::uint32_t identities = 256, commands = 1024, accesses = 8192, ranges = 1024;
+  std::uint32_t identities = kPreparedIdentityCapacity, commands = 1024, accesses = 8192, ranges = 1024;
   constexpr bool valid() const noexcept {
-    return identities <= 256 && commands <= 1024 && accesses <= 8192 && ranges <= 1024;
+    return identities <= kPreparedIdentityCapacity && commands <= 1024 && accesses <= 8192 && ranges <= 1024;
   }
 };
 struct PreparedCommandAccess {
@@ -47,7 +61,7 @@ struct PreparedCommandRange {
 };
 struct PreparedEncodePlanStorage {
   PreparedSourceKey key{};
-  std::array<std::uint64_t, 256> identities{};
+  std::array<std::uint64_t, kPreparedIdentityCapacity> identities{};
   std::array<std::uint16_t, 8192> accesses{};
   std::array<PreparedCommandAccess, 1024> commands{};
   std::array<PreparedCommandRange, 1024> ranges{};
@@ -69,7 +83,7 @@ inline bool validatePreparedEncodePlan(const PreparedEncodePlanStorage& s,
     for (std::uint32_t j = 0; j < i; ++j)
       if (s.identities[i] == s.identities[j]) return false;
   }
-  std::array<bool, 256> used{};
+  std::array<bool, kPreparedIdentityCapacity> used{};
   std::uint32_t cursor = 0;
   bool unresolved = false;
   for (std::uint32_t i = 0; i < s.commandCount; ++i) {
@@ -242,17 +256,36 @@ class PreparedEncodePlanBuilder {
   bool appendAccesses(const core::ExactResourceSet& set) noexcept {
     for (std::uint32_t i = 0; i < set.count; ++i) {
       auto& s = *storage_;
-      std::uint32_t index = 0;
-      while (index < s.identityCount && s.identities[index] != set.handles[i]) ++index;
-      if (s.accessCount == limits_.accesses ||
-          (index == s.identityCount && index == limits_.identities))
-        return fail(PreparedPlanFailure::Capacity);
-      if (index == s.identityCount) s.identities[s.identityCount++] = set.handles[i];
-      s.accesses[s.accessCount++] = static_cast<std::uint16_t>(index);
+      if (s.accessCount == limits_.accesses) return fail(PreparedPlanFailure::Capacity);
+      auto bucket = preparedIdentityBucket(set.handles[i]);
+      bool found = false;
+      for (std::uint32_t probe = 0; probe < kPreparedLookupCapacity; ++probe) {
+        auto& entry = lookup_[bucket];
+        if (!entry) {
+          if (s.identityCount == limits_.identities) return fail(PreparedPlanFailure::Capacity);
+          const auto index = s.identityCount++;
+          s.identities[index] = set.handles[i];
+          entry = static_cast<std::uint16_t>(index + 1);
+          s.accesses[s.accessCount++] = static_cast<std::uint16_t>(index);
+          found = true;
+          break;
+        }
+        const auto index = static_cast<std::uint32_t>(entry - 1);
+        if (s.identities[index] == set.handles[i]) {
+          s.accesses[s.accessCount++] = static_cast<std::uint16_t>(index);
+          found = true;
+          break;
+        }
+        bucket = (bucket + 1) & (kPreparedLookupCapacity - 1);
+      }
+      if (!found) return fail(PreparedPlanFailure::Capacity);
     }
     return true;
   }
   std::unique_ptr<PreparedEncodePlanStorage> storage_{};
+  // Reset with each builder, including workspace acquire. Never sealed or
+  // shared with Encode; values reference this builder's dense dictionary only.
+  std::array<std::uint16_t, kPreparedLookupCapacity> lookup_{};
   PreparedPlanLimits limits_{};
   PreparedPlanFailure failure_ = PreparedPlanFailure::None;
   bool recyclable_ = false;
