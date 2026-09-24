@@ -13,8 +13,10 @@ The first production-shaped consumer of `R-BACK-2.71` replaces only the
 DrawRun read-hazard reconstruction in serial Encode. It must preserve the
 reference's full raw-handle read set (index buffer, every stream, every texture,
 including inactive entries), exact overlap and Bloom bits. Canonical alias
-projection is not interchangeable with that reference: a row is eligible only
-when preparation proves its canonical read sequence equals the raw sequence.
+projection is not interchangeable with that reference. The serial lane now
+builds only raw reads through `makeDrawEntryReadSet`; it performs no canonical
+alias projection. The general foundation's canonical rows remain eligible for
+reference comparison only when their sequence equals the raw sequence.
 Attachment hazards, pass actions, alias/backing resolution, resource pins,
 GPU-use stamps, query scopes and execution order remain unchanged.
 
@@ -25,8 +27,15 @@ Encode borrows it synchronously under the existing source residency protocol.
 No diagnostic thread-local workspace may recycle a published region. The owner
 is an immutable shared handle to break the backend-type dependency cycle;
 Encode performs no shared-handle copies or reference-count increments per draw.
-At most one fixed region plus an owner/control block is allocated per candidate
-Slot. This initial adapter is not fused Replay construction or pooled storage.
+The demand-specific `PreparedSerialReads` allocates an owner/control block and
+two bounded vectors once per candidate Slot: command rows and raw handles.
+Rows reserve the source command count; handles reserve the smaller of the
+source command count times the maximum draw read count and 8192. Only live
+entries are initialized. No per-draw allocation, canonical dictionary, write
+set, attachment range, global identity dedup or whole-plan seal scan is needed.
+The 1024-command/8192-handle bounds reject the complete unpublished candidate,
+never truncate it. This adapter reuses Replay's raw projection but still walks
+the final commands at publication; it is not fused emission or pooled storage.
 
 Admission must match the complete source/storage/sequence key and whole-source
 command count. Lookup uses original command indices, never replay ordinals, so
@@ -38,8 +47,8 @@ Terminal discard and reclaim release the Slot owner through normal destruction
 or `clearCommands`; retaining CPU metadata does not extend or replace GPU pins.
 
 Verification must compare the actual consumer's full exact list and Bloom bits
-with the independent existing helper, exercise every key mutation, alias-change
-fallback, clear/reuse and allocation/capacity failure, and preserve the existing
+with the independent existing helper, exercise every key mutation, raw alias
+identity preservation, clear/reuse and allocation/capacity failure, and preserve the existing
 publication reducer's no-release-before-join contract. Same-capture GPU comparison
 must prove nonzero prepared-row consumption, not merely unchanged pixels through
 fallback. Until that gate passes the selector must remain default OFF. No FPS
@@ -47,8 +56,11 @@ gain is implied by moving work onto the publication thread.
 
 Implements the value-layer foundation of `R-BACK-2.71`. The builder and pure
 publication reducer live in `src/dxmt9/dxmt9_prepared_encode_plan.hpp`. The
-diagnostic shadow and the separate experimental serial consumer share source
-projection. A sealed plan is data, not a parallel execution certificate.
+diagnostic shadow retains the general canonical projection; the experimental
+serial consumer uses only the raw read projection in
+`src/dxmt9/dxmt9_prepared_serial_reads.hpp`. Both reuse the existing Replay
+read-set transform. Neither serial metadata nor a sealed general plan is a
+parallel execution certificate.
 General prepared scheduling and parallel consumption remain subsequent work.
 
 ## Publication shadow cost probe

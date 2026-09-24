@@ -112,6 +112,20 @@ per iteration. Keep the lane default OFF; fused/reused construction and live
 critical-path economics remain open. Cold-device elapsed scopes are not FPS
 evidence. See
 [H357](../../../docs/perfomance/present-pacing/present-pacing-prepared-cost.357.md).
+The serial adapter now constructs demand-specific `PreparedSerialReads` from
+the existing raw Replay read projection, not the general canonical plan.
+It omits alias lookup, writes, candidate ranges, dictionary construction and
+global seal validation; bounded source-sized vectors replace the fixed region.
+Native actual-consumer differential tests cover 256 binding patterns, all key
+mutations, raw alias identity, allocation failures, 1024 commands/8192 handles,
+overflow and reclaim. The existing publication/reclaim contract is unchanged.
+This is metadata narrowing, not fused final-Slot emission or storage pooling;
+those and live end-to-end performance remain open. The lane stays default OFF.
+H358's same-input 108-iteration qualification is pixel-exact with nonzero
+consumption and zero GPU errors. New-binary preparation is 0.17ms versus H357's
+historical 2.2ms, but OFF/ON Encode savings remain unproven. Native 2/2, x86_64
+5/5, full Unix build and existing TLA regression pass. See
+[H358](../../../docs/perfomance/present-pacing/present-pacing-prepared-minimal.358.md).
 This is not general
 resource-closure/PSO/framegraph reuse or a parallel execution certificate.
 Replay will build a bounded `PreparedEncodePlan` during

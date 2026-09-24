@@ -81,6 +81,11 @@ void finalSlotShadowProjection() {
   check(!plan->commands[0].serialReadsExact &&
         !tryPreparedDrawReadHazard(&owner, sourceKey, 0, aliasHazard),
         "actual alias projection cannot replace raw serial hazards");
+  const auto rawOwner = PreparedSerialReads::build(dxmt9::core::SourcePayloadView(slot), sourceKey);
+  check(tryPreparedSerialReadHazard(rawOwner.get(), sourceKey, 0, aliasHazard) &&
+        aliasHazard.exact.handles == makeDrawReadHazard(slot.commandAt(0).drawState).exact.handles &&
+        aliasHazard.bloom.bits == makeDrawReadHazard(slot.commandAt(0).drawState).bloom.bits,
+        "raw serial metadata preserves aliases without canonical authority");
   PreparedEncodePlanBuilder failedResolve(sourceKey);
   unresolved = 0;
   check(appendPreparedEncodeShadow(failedResolve, dxmt9::core::SourcePayloadView(slot),
@@ -148,10 +153,11 @@ void serialConsumerRefinement() {
     std::uint32_t unresolved = 0;
     check(appendPreparedEncodeShadow(b, dxmt9::core::SourcePayloadView(slot), k,
         [](auto raw, auto& out) { out = raw; return true; }, unresolved), "serial projection");
-    slot.preparedEncodePlan = std::make_shared<const PreparedEncodePlan>(b.seal());
-    std::weak_ptr<const PreparedEncodePlan> lifetime = slot.preparedEncodePlan;
+    auto oldPlan = b.seal();
+    slot.preparedEncodePlan = PreparedSerialReads::build(dxmt9::core::SourcePayloadView(slot), k);
+    std::weak_ptr<const PreparedSerialReads> lifetime = slot.preparedEncodePlan;
     HazardProbe result{};
-    check(tryPreparedDrawReadHazard(slot.preparedEncodePlan.get(), k, 0, result),
+    check(tryPreparedSerialReadHazard(slot.preparedEncodePlan.get(), k, 0, result),
           "actual serial consumer selected");
     const auto reference = makeDrawReadHazard(slot.commandAt(0).drawState);
     check(reference.bloom.bits == result.bloom.bits &&
@@ -169,12 +175,27 @@ void serialConsumerRefinement() {
         case 6: ++stale.firstCommand; break;
         case 7: ++stale.commandCount; break;
       }
-      check(!tryPreparedDrawReadHazard(slot.preparedEncodePlan.get(), stale, 0, result) &&
+      check(!tryPreparedSerialReadHazard(slot.preparedEncodePlan.get(), stale, 0, result) &&
             result.exact.handles == reference.exact.handles, "stale key rejects without effects");
     }
-    check(!tryPreparedDrawReadHazard(slot.preparedEncodePlan.get(), k, 1, result) &&
-          !tryPreparedDrawReadHazard(slot.preparedEncodePlan.get(), k, 2, result),
+    check(!tryPreparedSerialReadHazard(slot.preparedEncodePlan.get(), k, 1, result) &&
+          !tryPreparedSerialReadHazard(slot.preparedEncodePlan.get(), k, 2, result),
           "non-draw and out-of-range fallback");
+    HazardProbe oldResult{};
+    check(tryPreparedDrawReadHazard(&oldPlan, k, 0, oldResult) &&
+          oldResult.exact.handles == result.exact.handles &&
+          oldResult.bloom.bits == result.bloom.bits, "minimal/full plan equivalence");
+    for (auto fault : {PreparedSerialReads::Fault::Owner,
+                       PreparedSerialReads::Fault::Rows,
+                       PreparedSerialReads::Fault::Handles})
+      check(!PreparedSerialReads::build(dxmt9::core::SourcePayloadView(slot), k, fault),
+            "allocation failure publishes no prefix");
+    if (reference.exact.count)
+      check(!PreparedSerialReads::build(dxmt9::core::SourcePayloadView(slot), k,
+          PreparedSerialReads::Fault::None, reference.exact.count - 1),
+          "handle capacity failure discards complete candidate");
+    check(slot.preparedEncodePlan->storageBytes() < sizeof(PreparedEncodePlanStorage),
+          "small source avoids full fixed plan allocation");
     slot.clearCommands();
     check(lifetime.expired(), "Slot reclaim releases immutable metadata");
   }
@@ -204,6 +225,45 @@ void serialConsumerRefinement() {
     check(step.accepted, "serial metadata release after completion");
     publication = step.state;
   }
+}
+
+void minimalReadBounds() {
+  dxmt9::core::ChunkSlot slot{};
+  const std::array<dxmt9::core::DrawParam, 1> draws{};
+  const std::array<dxmt9::core::DrawParamPayloadView, 1> payloads{};
+  // More than the general plan's 512 identities. Each row still compares raw
+  // generation-qualified identity; no canonical/dictionary ceiling is needed.
+  for (unsigned i = 0; i < 1024; ++i) {
+    dxmt9::core::CanonicalDrawState state{};
+    for (unsigned j = 0; j < 8; ++j)
+      state.hot.textures[j] = dxmt9::core::Handle{(std::uint64_t(i + 1) << 32) | (j + 1)};
+    slot.appendDrawRun(std::move(state), {}, draws, payloads);
+  }
+  auto k = key(1024); k.firstCommand = 0;
+  auto owner = PreparedSerialReads::build(dxmt9::core::SourcePayloadView(slot), k);
+  check(owner && owner->handles().size() == 8192, "exact command and handle capacity");
+  for (std::size_t i = 0; i < 1024; ++i) {
+    HazardProbe actual{};
+    const auto expected = makeDrawReadHazard(slot.commandAt(i).drawState);
+    check(tryPreparedSerialReadHazard(owner.get(), k, i, actual) &&
+          actual.exact.handles == expected.exact.handles &&
+          actual.bloom.bits == expected.bloom.bits, "full-bound independent refinement");
+  }
+  check(!PreparedSerialReads::build(dxmt9::core::SourcePayloadView(slot), k,
+      PreparedSerialReads::Fault::None, 8191), "late overflow discards prefix");
+  auto subset = k; subset.firstCommand = 3; subset.commandCount = 5;
+  auto subsetOwner = PreparedSerialReads::build(dxmt9::core::SourcePayloadView(slot), subset);
+  HazardProbe result{};
+  check(subsetOwner && !tryPreparedSerialReadHazard(subsetOwner.get(), subset, 2, result) &&
+        tryPreparedSerialReadHazard(subsetOwner.get(), subset, 3, result) &&
+        result.exact.handles == makeDrawReadHazard(slot.commandAt(3).drawState).exact.handles,
+        "original command index, not local ordinal");
+  auto invalid = k; invalid.sequence = 0;
+  check(!PreparedSerialReads::build(dxmt9::core::SourcePayloadView(slot), invalid),
+        "invalid identity before allocation");
+  slot.appendPresent({}, {}); ++k.commandCount;
+  check(!PreparedSerialReads::build(dxmt9::core::SourcePayloadView(slot), k),
+        "command capacity plus one rejects");
 }
 
 void exactShadowCardinality() {
@@ -634,6 +694,7 @@ int main(int argc, char** argv) {
     exactShadowCardinality();
     exhaustivePublication();
     serialConsumerRefinement();
+    minimalReadBounds();
   } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';
     return 1;

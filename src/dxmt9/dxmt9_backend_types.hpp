@@ -20,7 +20,7 @@
 #include <utility>
 #include <vector>
 
-namespace dxmt9::encoders { class PreparedEncodePlan; }
+namespace dxmt9::encoders { class PreparedSerialReads; }
 
 namespace dxmt9::core {
 
@@ -1008,7 +1008,7 @@ struct ChunkSlot {
   bool pipelinePrefetchSealed = false;
   // Immutable CPU metadata, published/reclaimed with this Slot. Encode only
   // borrows; no per-draw ownership or resource pin is carried by this handle.
-  std::shared_ptr<const encoders::PreparedEncodePlan> preparedEncodePlan{};
+  std::shared_ptr<const encoders::PreparedSerialReads> preparedEncodePlan{};
 
   // Data-oriented execution storage. The replay loop walks commandHeaders
   // linearly and indexes into type-specific payload arrays. This avoids the

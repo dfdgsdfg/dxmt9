@@ -14,6 +14,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H358](present-pacing-prepared-minimal.358.md) replaces the serial consumer's
+general canonical plan with raw read metadata only. On the same GT2 input,
+preparation falls from H357's 2.2ms to 0.17ms (separate-build comparison), but
+new-binary OFF/ON still demonstrates no Encode saving. All 108 iterations are
+pixel-exact with 646 consumptions per ON iteration. Keep default OFF; the
+remaining publication walk is not yet fused into Replay emission.
+
 [H357](present-pacing-prepared-cost.357.md) prices the serial consumer on the
 same GT2 input: preparation adds 2.2–2.3ms per captured-frame iteration while
 Encode remains near 42ms with no demonstrated saving. Six sequential blocks

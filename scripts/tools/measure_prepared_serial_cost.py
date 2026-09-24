@@ -27,6 +27,7 @@ def main():
     # them to remain identical except for these two explicitly controlled knobs.
     env = dict(os.environ, DXMT_PERF_COUNTERS="1")
     baseline_input = None
+    baseline_images = None
     baseline_pixels = None
     reports = {}
     for label, enabled, timing in (
@@ -53,6 +54,9 @@ def main():
         receipt = json.loads((output / "result.json").read_text())
         assert receipt["accepted"] and receipt["readback_artifacts_valid"]
         assert receipt["loaded_images_stable"] and not receipt["diagnostic"]
+        if baseline_images is None:
+            baseline_images = receipt["result"]["loaded_images"]
+        assert receipt["result"]["loaded_images"] == baseline_images
         assert receipt["provider"]["sha256"] == digest
         assert hashlib.sha256(provider.read_bytes()).hexdigest() == digest
         if baseline_input is None:

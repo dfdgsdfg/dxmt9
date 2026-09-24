@@ -2921,7 +2921,7 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
     const auto* preparedOwner = payload.isLegacy() &&
         options.partitionExecutionMode == render::PartitionExecutionMode::IdentitySerial
         ? payload.legacyPayload()->preparedEncodePlan.get() : nullptr;
-    const bool preparedRead = preparedOwner && tryPreparedDrawReadHazard(
+    const bool preparedRead = preparedOwner && tryPreparedSerialReadHazard(
         preparedOwner,
         {.source = options.partitionSource, .sequence = sourceSeqId,
          .commandCount = static_cast<std::uint32_t>(payload.commandCount())},

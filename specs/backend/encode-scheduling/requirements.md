@@ -1020,6 +1020,12 @@ rows must match complete source/storage/sequence identity and original command
 indices before use. Missing or ineligible rows retain reference calculation;
 CPU metadata ownership must remain live throughout synchronous consumption and
 must not replace resource pins or GPU completion ownership.
+Demand-specific serial metadata may omit canonical dictionaries, write sets
+and candidate ranges when the consumer does not use them. It must derive raw
+reads from the immutable final state, retain full-width identities and exact
+Bloom membership, and reject the entire unpublished candidate on allocation
+or storage overflow. This narrower data must not be used as parallel admission
+or canonical alias authority.
 
 Encode must perform final admission against current session/preamble facts
 before dispatch. Plan storage must remain valid through child join, while GPU

@@ -12,6 +12,7 @@
 #include "dxmt9_post_encode_retirement.hpp"
 #include "dxmt9_hazard_bloom.hpp"
 #include "dxmt9_prepared_encode_plan.hpp"
+#include "dxmt9_prepared_serial_reads.hpp"
 
 #include <algorithm>
 #include <array>
@@ -128,6 +129,19 @@ inline bool tryPreparedDrawReadHazard(const PreparedEncodePlan* owner,
   prepared.exact.count = row.readCount;
   for (std::uint32_t i = 0; i < row.readCount; ++i)
     prepared.exact.handles[i] = plan->identities[plan->accesses[row.readOffset + i]];
+  output = prepared;
+  return true;
+}
+
+inline bool tryPreparedSerialReadHazard(const PreparedSerialReads* owner,
+    PreparedSourceKey key, std::size_t commandIndex, HazardProbe& output) noexcept {
+  const auto* row = owner ? owner->row(key, commandIndex) : nullptr;
+  if (!row || row->count > HazardHandles::kCapacity) return false;
+  HazardProbe prepared{};
+  prepared.bloom.bits = row->bloom;
+  prepared.exact.count = row->count;
+  const auto handles = owner->handles().subspan(row->offset, row->count);
+  std::copy(handles.begin(), handles.end(), prepared.exact.handles.begin());
   output = prepared;
   return true;
 }

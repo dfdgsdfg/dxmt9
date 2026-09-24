@@ -2,6 +2,7 @@
 #include "dxmt9_wait_trace.hpp"
 #include "dxmt9_cpu_supply_trace.hpp"
 #include "dxmt9_prepared_encode_shadow.hpp"
+#include "dxmt9_prepared_serial_reads.hpp"
 #include "dxmt9_color_attachment_capture_observer.hpp"
 #include "dxmt9_queue_mutex_diag.hpp"
 #include "render/backend_factory.hpp"
@@ -3302,26 +3303,8 @@ void prepareSlotForPublish(CommandQueue& q,
           .sequence = slot.seqId,
           .commandCount = static_cast<std::uint32_t>(slot.commandCount()),
       };
-      encoders::PreparedEncodePlanBuilder builder(key);
-      std::uint32_t unresolved = 0;
-      const auto resolve = [&](std::uint64_t raw, std::uint64_t& canonical) noexcept {
-        const auto* surface = pool.findSurface(raw);
-        canonical = surface && surface->aliasTexture ? surface->aliasTexture.value : raw;
-        return canonical != 0;
-      };
-      if (builder.failure() == encoders::PreparedPlanFailure::None &&
-          encoders::appendPreparedEncodeShadow(builder, core::SourcePayloadView(slot),
-                                               key, resolve, unresolved)) {
-        auto owner = builder.seal();
-        if (owner) {
-          try {
-            slot.preparedEncodePlan =
-                std::make_shared<const encoders::PreparedEncodePlan>(std::move(owner));
-          } catch (const std::bad_alloc&) {
-            // No published side effects: the reference path remains available.
-          }
-        }
-      }
+      slot.preparedEncodePlan = encoders::PreparedSerialReads::build(
+          core::SourcePayloadView(slot), key);
     };
     static const bool timePrepared = [] {
       const auto* value = std::getenv("DXMT9_PREPARED_BUILD_TIMING");
