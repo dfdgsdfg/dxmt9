@@ -128,9 +128,11 @@ class ShadowTest(unittest.TestCase):
                     self.assertEqual(result['failures'], {0: 18})
                     self.assertEqual(result['skips'], {3: 2, 1: 1})
                     attempts = [r for r in result['sources'] if not r['skipped']]
-                    self.assertEqual(sum(r['allocation_bytes'] for r in attempts), 151624)
+                    # H356 added per-command Bloom bits to the general shadow
+                    # plan; the demand-specific serial owner is separate.
+                    self.assertEqual(sum(r['allocation_bytes'] for r in attempts), 168008)
                     self.assertEqual(sum(r['storage_reused'] for r in attempts), 17)
-                    self.assertTrue(all(r['storage_capacity_bytes'] == 151624 for r in attempts))
+                    self.assertTrue(all(r['storage_capacity_bytes'] == 168008 for r in attempts))
                     self.assertTrue(all(r['commands'] == 64 for r in result['sources']
                                         if not r['skipped']))
                 else:

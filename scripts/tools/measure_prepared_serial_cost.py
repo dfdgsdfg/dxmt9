@@ -74,7 +74,10 @@ def main():
                 assert data == baseline_pixels, "pixel drift"
             scopes = iteration["cpu_scope_wall_ns"]
             assert (scopes["prepared_reads"] > 0) == (enabled == "1")
-            assert (scopes["prepared_build"] > 0) == (enabled == timing == "1")
+            # H359 fuses marking into preparation; do not label this as the
+            # historical isolated build scope in the output or comparisons.
+            prepared_scope = scopes.get("prepared_build_and_mark", scopes.get("prepared_build", 0))
+            assert (prepared_scope > 0) == (enabled == timing == "1")
             if not iteration["warmup"]:
                 samples.append(dict(scopes, service=iteration["service_ns"],
                                     chunk_replay=iteration["phases_wall_ns"]["chunk_replay"]))

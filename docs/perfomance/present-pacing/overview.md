@@ -14,6 +14,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H359](present-pacing-prepared-fused.359.md) fuses serial metadata append into
+the existing publication resource-mark traversal and removes the second final
+command-view walk. Both same-input campaigns are pixel-exact (216 iterations),
+but block timing drift prevents an Encode/FPS claim. Preparation still adds
+about 0.12–0.17ms in the repeated OFF/ON comparison, similar to H358. The lane
+stays OFF; this is publication fusion, not final-Slot emission fusion or pooling.
+
 [H358](present-pacing-prepared-minimal.358.md) replaces the serial consumer's
 general canonical plan with raw read metadata only. On the same GT2 input,
 preparation falls from H357's 2.2ms to 0.17ms (separate-build comparison), but

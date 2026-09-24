@@ -10,6 +10,37 @@
 #include <vector>
 
 using namespace dxmt9::encoders;
+namespace dxmt9 {
+struct CommandQueueArenaLeaseTestAccess {
+  static bool preparedPublished(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    unsigned owners = 0;
+    for (const auto& control : queue.slots_) {
+      const auto* slot = control.payload;
+      if (!slot || !slot->preparedEncodePlan) continue;
+      ++owners;
+      const PreparedSourceKey key{
+          .source = {.id = control.sourceId, .storage = control.storage},
+          .sequence = slot->seqId,
+          .commandCount = static_cast<std::uint32_t>(slot->commandCount())};
+      for (std::size_t i = 0; i < slot->commandCount(); ++i) {
+        const auto command = slot->commandAt(i);
+        HazardProbe actual{};
+        const bool eligible = command.kind == core::MetalCommandKind::DrawRun;
+        if (tryPreparedSerialReadHazard(slot->preparedEncodePlan.get(), key, i, actual) != eligible)
+          return false;
+        if (eligible) {
+          const auto expected = makeDrawReadHazard(command.drawState);
+          if (actual.exact.handles != expected.exact.handles ||
+              actual.exact.count != expected.exact.count ||
+              actual.bloom.bits != expected.bloom.bits) return false;
+        }
+      }
+    }
+    return owners != 0;
+  }
+};
+} // namespace dxmt9
 namespace {
 void check(bool ok, const char* message) {
   if (!ok) throw std::runtime_error(message);
@@ -264,6 +295,43 @@ void minimalReadBounds() {
   slot.appendPresent({}, {}); ++k.commandCount;
   check(!PreparedSerialReads::build(dxmt9::core::SourcePayloadView(slot), k),
         "command capacity plus one rejects");
+}
+
+void incrementalReadCoverage() {
+  dxmt9::core::ChunkSlot slot{};
+  const std::array<dxmt9::core::DrawParam, 1> draws{};
+  const std::array<dxmt9::core::DrawParamPayloadView, 1> payloads{};
+  slot.appendDrawRun({}, {}, draws, payloads);
+  slot.appendPresent({}, {});
+  slot.appendDrawRun({}, {}, draws, payloads);
+  auto k = key(3); k.firstCommand = 0;
+  for (unsigned length = 0; length <= 4; ++length) {
+    const auto combinations = 1u << (2 * length);
+    for (unsigned history = 0; history < combinations; ++history) {
+      PreparedSerialReadsBuilder builder(k);
+      bool valid = true;
+      unsigned bits = history;
+      for (unsigned step = 0; step < length; ++step) {
+        const auto ordinal = bits & 3; bits >>= 2;
+        valid &= ordinal == step && step < 3;
+        check(builder.append(ordinal, slot.commandAt(ordinal % 3)) == valid,
+              "incremental order failure is sticky");
+      }
+      auto moved = std::move(builder);
+      check(!builder.seal(), "moved-from builder cannot publish");
+      auto owner = moved.seal();
+      check(bool(owner) == (valid && length == 3), "only exact complete coverage seals");
+      check(!moved.seal() && !moved.append(0, slot.commandAt(0)),
+            "seal consumes success or incomplete prefix");
+      if (owner) {
+        HazardProbe hazard{};
+        check(tryPreparedSerialReadHazard(owner.get(), k, 0, hazard) &&
+              !tryPreparedSerialReadHazard(owner.get(), k, 1, hazard) &&
+              tryPreparedSerialReadHazard(owner.get(), k, 2, hazard),
+              "coordinator row preserves final command ordinals");
+      }
+    }
+  }
 }
 
 void exactShadowCardinality() {
@@ -680,6 +748,18 @@ void exhaustivePublication() {
 
 int main(int argc, char** argv) {
   try {
+    if (argc == 2 && std::string_view(argv[1]) == "--serial-publication-probe") {
+      dxmt9::CommandQueue queue(dxmt9::CommandQueue::ArenaLeaseTestQueueTag{}, {});
+      const std::array<dxmt9::core::DrawParam, 1> draws{};
+      const std::array<dxmt9::core::DrawParamPayloadView, 1> payloads{};
+      queue.submitDrawRun({}, {}, draws, payloads);
+      queue.submitClear({});
+      queue.submitDrawRun({}, {}, draws, payloads);
+      check(queue.publishReplayDiagnosticBoundary(), "fused source publication");
+      check(dxmt9::CommandQueueArenaLeaseTestAccess::preparedPublished(queue),
+            "actual marking traversal seals source-qualified owner");
+      return 0;
+    }
     if (argc == 2 && std::string_view(argv[1]) == "--publication-shadow-probe") {
       publicationShadowProbe();
       return 0;
@@ -695,6 +775,7 @@ int main(int argc, char** argv) {
     exhaustivePublication();
     serialConsumerRefinement();
     minimalReadBounds();
+    incrementalReadCoverage();
   } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';
     return 1;

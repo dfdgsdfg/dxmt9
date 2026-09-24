@@ -592,6 +592,12 @@ test('dxmt9-prepared-encode-benchmark-spec', prepared_encode_benchmark,
      env: dxmt9_native_test_env)
 test('dxmt9-prepared-encode-plan-spec', prepared_encode_plan_spec,
      env: dxmt9_native_test_env)
+foreach dedup : ['0', '1']
+  test('dxmt9-prepared-serial-publication-dedup-' + dedup, prepared_encode_plan_spec,
+       args: ['--serial-publication-probe'],
+       env: dxmt9_native_test_env_vars + [
+         'DXMT9_PREPARED_SERIAL_READS=1', 'DXMT9_PUBLISH_RESOURCE_DEDUP=' + dedup])
+endforeach
 test('dxmt9-prepared-encode-shadow-analysis', python3,
      args: [files('../../../scripts/check/test_prepared_encode_shadow.py'),
             prepared_encode_plan_spec.full_path()],

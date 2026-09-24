@@ -126,6 +126,20 @@ consumption and zero GPU errors. New-binary preparation is 0.17ms versus H357's
 historical 2.2ms, but OFF/ON Encode savings remain unproven. Native 2/2, x86_64
 5/5, full Unix build and existing TLA regression pass. See
 [H358](../../../docs/perfomance/present-pacing/present-pacing-prepared-minimal.358.md).
+The next adapter fuses incremental serial metadata append into the existing
+publication resource-mark traversal, reusing each final command view after
+snapshot-stamp flush. Seal requires complete original-ordinal coverage and
+consumes the mutable prefix; failure never stops mandatory marking. Native
+tests enumerate 341 short append histories, and actual queue publication is
+tested with resource dedup OFF and ON. This removes the second command-view
+walk, not read-set extraction, allocation or final-emission work. The existing
+Slot ownership protocol and default-OFF policy remain unchanged.
+H359 verifies native 4/4, x86_64 7/7, shadow analysis, full Unix build and TLA
+regression. Two fixed-input campaigns (216 iterations) preserve exact pixels,
+646 consumptions per ON iteration and zero GPU errors. The repeated comparison
+still adds 0.12–0.17ms preparation with noisy Encode block timings; meaningful
+speedup remains unproven. See
+[H359](../../../docs/perfomance/present-pacing/present-pacing-prepared-fused.359.md).
 This is not general
 resource-closure/PSO/framegraph reuse or a parallel execution certificate.
 Replay will build a bounded `PreparedEncodePlan` during

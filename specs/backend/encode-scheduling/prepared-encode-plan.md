@@ -34,8 +34,24 @@ source command count times the maximum draw read count and 8192. Only live
 entries are initialized. No per-draw allocation, canonical dictionary, write
 set, attachment range, global identity dedup or whole-plan seal scan is needed.
 The 1024-command/8192-handle bounds reject the complete unpublished candidate,
-never truncate it. This adapter reuses Replay's raw projection but still walks
-the final commands at publication; it is not fused emission or pooled storage.
+never truncate it. The incremental builder appends the command view already
+projected by `markSlotResourcesImpl`, after each command's captured stamp batch
+is flushed. This removes the independent publication command walk, not the
+per-command raw read-set extraction. It is not fused Slot emission or pooled
+storage. The disabled specialization has an empty callback and no builder.
+
+`PreparedSerialReadsBuilder` owns the mutable unpublished prefix. Append must
+match the next original command index; ordering or capacity failure is sticky
+and discards the prefix. Seal requires complete coverage, consumes the builder
+and returns only immutable ownership. Failure must not short-circuit resource
+marking: every remaining command and snapshot stamp is visited normally.
+No view, builder or callback escapes the synchronous queue-mutex scope.
+
+The diagnostic `prepared_build_and_mark` scope now includes allocation,
+the fused resource-mark/append loop and seal; `resource_mark` includes append
+when the candidate is enabled. Neither is comparable to H358's isolated build
+timer. Use the unchanged parent prepare-slot scope for OFF/ON cost comparison;
+do not subtract overlapping medians or add nested timings.
 
 Admission must match the complete source/storage/sequence key and whole-source
 command count. Lookup uses original command indices, never replay ordinals, so

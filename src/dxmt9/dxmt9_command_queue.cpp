@@ -3044,8 +3044,9 @@ Presenter::AcquireParams makePresentAcquireParams(const core::SwapDesc& desc) {
   };
 }
 
-template<bool Deduplicate>
-void markSlotResourcesImpl(resources::Pool& pool, const core::ChunkSlot& slot) {
+template<bool Deduplicate, typename AfterCommand>
+void markSlotResourcesImpl(resources::Pool& pool, const core::ChunkSlot& slot,
+                           AfterCommand&& afterCommand) {
   const bool observeMarks = resourceMarkOverlapObserverEnabled();
   std::conditional_t<Deduplicate, resources::PublicationMarkCache<>,
                      std::nullptr_t> cache{};
@@ -3079,16 +3080,19 @@ void markSlotResourcesImpl(resources::Pool& pool, const core::ChunkSlot& slot) {
         });
     // Do not defer across coordinator/command ownership boundaries.
     batch.flush();
+    afterCommand(i, sourceCommand.command);
   }
 }
 
-void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slot) {
+template<typename AfterCommand>
+void markSlotResourcesUnlocked(resources::Pool& pool, const core::ChunkSlot& slot,
+                              AfterCommand&& afterCommand) {
   static const bool deduplicate = [] {
     const char* value = std::getenv("DXMT9_PUBLISH_RESOURCE_DEDUP");
     return value && value[0] && value[0] != '0';
   }();
-  if (deduplicate) markSlotResourcesImpl<true>(pool, slot);
-  else markSlotResourcesImpl<false>(pool, slot);
+  if (deduplicate) markSlotResourcesImpl<true>(pool, slot, afterCommand);
+  else markSlotResourcesImpl<false>(pool, slot, afterCommand);
 }
 
 struct PresentPrePresentOpportunity {
@@ -3280,45 +3284,50 @@ void prepareSlotForPublish(CommandQueue& q,
     }
   }
   PerfScope scope(perf::countPrepareSlotForPublishCpuTime);
-  {
-    PerfScope stageScope(perf::countPrepareSlotResourceMarkCpuTime);
-    markSlotResourcesUnlocked(pool, slot);
-  }
-  if (supply::preparedObserveEnabled()) observePreparedSlot(q, pool, slot);
   static const bool preparedSerial = [] {
     const auto* value = std::getenv("DXMT9_PREPARED_SERIAL_READS");
     return value && std::strcmp(value, "1") == 0;
   }();
   if (preparedSerial && q.writingSlot_ && slot.commandCount() &&
-      slot.commandCount() <= 1024 &&
-      std::any_of(slot.commandHeaders.begin(), slot.commandHeaders.end(),
-                  [](const auto& h) { return h.kind == core::MetalCommandKind::DrawRun; })) {
+      slot.commandCount() <= 1024 && !slot.drawRunRecords.empty() &&
+      q.slots_[*q.writingSlot_].payload == &slot) {
     const auto buildPrepared = [&] {
       // The queue lock publishes this owner together with the final immutable
       // Slot. No diagnostic workspace can reclaim these bytes during Encode.
       const auto& control = q.slots_[*q.writingSlot_];
-      if (control.payload != &slot) return;
       const encoders::PreparedSourceKey key{
           .source = {.id = control.sourceId, .storage = control.storage},
           .sequence = slot.seqId,
           .commandCount = static_cast<std::uint32_t>(slot.commandCount()),
       };
-      slot.preparedEncodePlan = encoders::PreparedSerialReads::build(
-          core::SourcePayloadView(slot), key);
+      encoders::PreparedSerialReadsBuilder builder(key);
+      {
+        PerfScope stageScope(perf::countPrepareSlotResourceMarkCpuTime);
+        markSlotResourcesUnlocked(pool, slot, [&](auto ordinal, const auto& command) {
+          // Failure affects optional metadata only. Never skip the remaining
+          // resource marks or publish a partial owner.
+          builder.append(ordinal, command);
+        });
+      }
+      slot.preparedEncodePlan = builder.seal();
     };
     static const bool timePrepared = [] {
       const auto* value = std::getenv("DXMT9_PREPARED_BUILD_TIMING");
       return value && std::strcmp(value, "1") == 0;
     }();
     if (timePrepared && perf::enabled()) {
-      // Diagnostic-only source scope, never a per-draw clock. The existing
-      // parent timer includes this nested measurement; do not add them.
+      // Fused preparation INCLUDING resource marking, never a per-draw clock.
+      // Report this scope separately from historical standalone-build timings.
       PerfScope preparedScope(perf::countPreparedSerialBuildTime);
       buildPrepared();
     } else {
       buildPrepared();
     }
+  } else {
+    PerfScope stageScope(perf::countPrepareSlotResourceMarkCpuTime);
+    markSlotResourcesUnlocked(pool, slot, [](auto, const auto&) {});
   }
+  if (supply::preparedObserveEnabled()) observePreparedSlot(q, pool, slot);
 }
 
 // R-BACK-2.104 empty-slot storage provisioning.

@@ -1004,7 +1004,7 @@ int runExperiment(const PreparedRenderTape& prepared, unsigned warmup,
               << ",\"cpu_scope_wall_ns\":{\"prepare_slot\":"
               << after.prepareSlotWallNs - before.prepareSlotWallNs
               << ",\"resource_mark\":" << after.resourceMarkWallNs - before.resourceMarkWallNs
-              << ",\"prepared_build\":" << after.preparedSerialBuildWallNs - before.preparedSerialBuildWallNs
+              << ",\"prepared_build_and_mark\":" << after.preparedSerialBuildWallNs - before.preparedSerialBuildWallNs
               << ",\"encode_chunk\":" << after.encodeChunkWallNs - before.encodeChunkWallNs
               << ",\"prepared_reads\":" << after.preparedSerialReads - before.preparedSerialReads
               << ",\"prepared_read_fallbacks\":"
