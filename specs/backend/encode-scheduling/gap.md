@@ -86,6 +86,13 @@ Fixed-input costs and consumer proof integration remain open. Existing
 pass/certificate limits are unchanged. See
 [H353](../../../docs/perfomance/present-pacing/present-pacing-prepared-cardinality.353.md).
 Implementation evidence: [H354](../../../docs/perfomance/present-pacing/present-pacing-prepared-index.354.md).
+H355 closes the same-binary wild integration retry: valid game capture, zero GPU
+errors, 42 preparation successes and no failures, including 21 sources with
+415–459 identities. Equal synthetic 420-identity builder inputs show 61 versus
+231 microseconds indexed/linear CPU with A/A and reversed-order controls.
+This is not an actual captured-input or end-to-end speedup proof; those gates
+and immutable consumer integration remain open. See
+[H355](../../../docs/perfomance/present-pacing/present-pacing-prepared-comparison.355.md).
 Replay will build a bounded `PreparedEncodePlan` during
 final Slot construction and publishes both transactionally. The existing
 Encode thread retains final admission, parent ownership, child dispatch/join

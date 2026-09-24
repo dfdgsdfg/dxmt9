@@ -577,6 +577,19 @@ prepared_encode_plan_spec = executable(
   dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
   link_args: dxmt9_test_link_args,
 )
+prepared_linear_reference = custom_target('prepared-linear-reference',
+  input: '../../../src/dxmt9/dxmt9_prepared_encode_plan.hpp',
+  output: 'prepared_linear_reference.generated.hpp',
+  command: [python3, files('../../../scripts/check/gen_prepared_linear_reference.py'), '@INPUT@', '@OUTPUT@'],
+)
+prepared_encode_benchmark = executable('dxmt9-prepared-encode-benchmark',
+  ['prepared_encode_benchmark.cpp', prepared_linear_reference],
+  include_directories: [dxmt9_inc, include_directories('../../../src/dxmt9')],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-prepared-encode-benchmark-spec', prepared_encode_benchmark,
+     env: dxmt9_native_test_env)
 test('dxmt9-prepared-encode-plan-spec', prepared_encode_plan_spec,
      env: dxmt9_native_test_env)
 test('dxmt9-prepared-encode-shadow-analysis', python3,

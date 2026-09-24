@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-23
+updated: 2026-09-24
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
@@ -14,11 +14,18 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H355](present-pacing-prepared-comparison.355.md) requalifies the same runtime
+with an in-scene capture, zero GPU errors and 21.617464 FPS (single run, not a
+speedup claim). All 21 wide sources fit, at 415–459 identities. Equal synthetic
+420-identity inputs cost 61 versus 231 microseconds for indexed versus linear
+construction, with A/A and reversed-order controls. Actual captured-input
+comparison and Encode consumer/GPU proof remain open.
+
 [H354](present-pacing-prepared-index.354.md) implements the 512-entry dictionary
 and 1024-slot builder-only lookup. Native collision/boundary/reuse tests pass;
 real input seals 21 wide sources with no capacity rejection. Its game-window
-capture fails, so visual/FPS qualification and fixed-input cost comparison remain
-open. Pass/certificate capacity and original Encode execution are unchanged.
+capture fails; H355 supplies the integration retry and synthetic cost comparison.
+Pass/certificate capacity and original Encode execution are unchanged.
 
 [H353](present-pacing-prepared-cardinality.353.md) closes full rejected-source
 cardinality: all 21 sources require 412–429 canonical identities, with zero
