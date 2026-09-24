@@ -104,6 +104,14 @@ comparison: eight byte-identical nonuniform readbacks, 1292 actual prepared
 consumptions and zero GPU errors. Broader wild/performance qualification remains
 open and `DXMT9_PREPARED_SERIAL_READS` remains default OFF. See
 [H356](../../../docs/perfomance/present-pacing/present-pacing-prepared-serial.356.md).
+H357 separates preparation and Encode on identical captured input with A/A,
+forward/reverse comparisons and nested-timer OFF. Preparation adds 2.2–2.3ms
+per captured-frame iteration; Encode savings are not demonstrated. All 108
+iterations preserve pixel equality and ON consumes 646 prepared read hazards
+per iteration. Keep the lane default OFF; fused/reused construction and live
+critical-path economics remain open. Cold-device elapsed scopes are not FPS
+evidence. See
+[H357](../../../docs/perfomance/present-pacing/present-pacing-prepared-cost.357.md).
 This is not general
 resource-closure/PSO/framegraph reuse or a parallel execution certificate.
 Replay will build a bounded `PreparedEncodePlan` during

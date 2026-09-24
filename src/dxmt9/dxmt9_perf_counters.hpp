@@ -513,6 +513,9 @@ RenderTapeParallelJoinSnapshot snapshotRenderTapeParallelJoin() noexcept;
 // Cold experiment snapshots read existing counters at quiescent iteration
 // boundaries. No additional writes or diagnostic payloads enter replay/draw.
 struct RenderTapeReplaySnapshot {
+  std::uint64_t prepareSlotWallNs = 0, resourceMarkWallNs = 0;
+  std::uint64_t preparedSerialBuildWallNs = 0, encodeChunkWallNs = 0;
+  std::uint64_t preparedSerialReads = 0, preparedSerialReadFallbacks = 0;
   std::uint64_t slotProvisioned = 0u;
   std::uint64_t slotProvisionReused = 0u;
   std::uint64_t slotProvisionFailed = 0u;
@@ -1036,6 +1039,7 @@ void countRenderPassBegin();
 void countRenderPassEnd(EncoderSplitReason reason);
 void countHazardProbe(bool bloomOverlap, bool exactOverlap);
 void countPreparedSerialRead(bool consumed);
+void countPreparedSerialBuildTime(std::uint64_t nanoseconds);
 void countSubmitDrawRunBatchInputRuns(std::uint64_t runs);
 void countSubmitDrawRunBatchCall();
 void countSubmitDrawRunBatchEmittedRun();

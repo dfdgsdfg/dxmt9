@@ -14,12 +14,20 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H357](present-pacing-prepared-cost.357.md) prices the serial consumer on the
+same GT2 input: preparation adds 2.2–2.3ms per captured-frame iteration while
+Encode remains near 42ms with no demonstrated saving. Six sequential blocks
+include A/A, reversed comparison and nested-timer OFF; all pixels match with
+646 actual prepared consumptions per ON iteration. Keep the lane OFF and
+target fused/reused preparation next. Cold-device wall scopes are not FPS or
+pipeline-critical-path measurements.
+
 [H356](present-pacing-prepared-serial.356.md) connects the first default-OFF
 ordinary-Slot serial consumer: raw-equivalent DrawRun read-hazard membership
 and Bloom bits. The same GT2 capture produces byte-exact source/output images
 across OFF/ON, with 1292 actual prepared consumptions. This is not a general
 Encode plan or a performance promotion; fresh publication allocation and a
-second source walk remain to be priced.
+second source walk are priced by H357.
 
 [H355](present-pacing-prepared-comparison.355.md) requalifies the same runtime
 with an in-scene capture, zero GPU errors and 21.617464 FPS (single run, not a

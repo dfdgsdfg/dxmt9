@@ -832,6 +832,7 @@ struct Counters {
   std::atomic<std::uint64_t> renderSplitOrderedControl{0};
   std::atomic<std::uint64_t> hazardProbeComparisons{0};
   std::atomic<std::uint64_t> preparedSerialReads{0};
+  std::atomic<std::uint64_t> preparedSerialBuildNs{0};
   std::atomic<std::uint64_t> preparedSerialReadFallbacks{0};
   std::atomic<std::uint64_t> hazardBloomOverlaps{0};
   std::atomic<std::uint64_t> hazardExactOverlaps{0};

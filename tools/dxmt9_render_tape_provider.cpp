@@ -1001,6 +1001,14 @@ int runExperiment(const PreparedRenderTape& prepared, unsigned warmup,
               << ",\"readback_drain\":" << result.prepared.timing.readbackDrainNanos
               << ",\"cleanup\":" << result.prepared.timing.cleanupNanos << '}'
               << ",\"observed_replay_path\":\"" << observedReplayPath(before, after) << '\"'
+              << ",\"cpu_scope_wall_ns\":{\"prepare_slot\":"
+              << after.prepareSlotWallNs - before.prepareSlotWallNs
+              << ",\"resource_mark\":" << after.resourceMarkWallNs - before.resourceMarkWallNs
+              << ",\"prepared_build\":" << after.preparedSerialBuildWallNs - before.preparedSerialBuildWallNs
+              << ",\"encode_chunk\":" << after.encodeChunkWallNs - before.encodeChunkWallNs
+              << ",\"prepared_reads\":" << after.preparedSerialReads - before.preparedSerialReads
+              << ",\"prepared_read_fallbacks\":"
+              << after.preparedSerialReadFallbacks - before.preparedSerialReadFallbacks << '}'
               << ",\"path_counters\":";
     printPathDelta(before, after);
     std::cout << ",\"readback_artifacts\":";

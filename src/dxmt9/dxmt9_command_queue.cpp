@@ -3292,34 +3292,48 @@ void prepareSlotForPublish(CommandQueue& q,
       slot.commandCount() <= 1024 &&
       std::any_of(slot.commandHeaders.begin(), slot.commandHeaders.end(),
                   [](const auto& h) { return h.kind == core::MetalCommandKind::DrawRun; })) {
-    // The queue lock publishes this owner together with the final immutable
-    // Slot. No diagnostic workspace can reclaim these bytes during Encode.
-    const auto& control = q.slots_[*q.writingSlot_];
-    if (control.payload != &slot) return;
-    const encoders::PreparedSourceKey key{
-        .source = {.id = control.sourceId, .storage = control.storage},
-        .sequence = slot.seqId,
-        .commandCount = static_cast<std::uint32_t>(slot.commandCount()),
-    };
-    encoders::PreparedEncodePlanBuilder builder(key);
-    std::uint32_t unresolved = 0;
-    const auto resolve = [&](std::uint64_t raw, std::uint64_t& canonical) noexcept {
-      const auto* surface = pool.findSurface(raw);
-      canonical = surface && surface->aliasTexture ? surface->aliasTexture.value : raw;
-      return canonical != 0;
-    };
-    if (builder.failure() == encoders::PreparedPlanFailure::None &&
-        encoders::appendPreparedEncodeShadow(builder, core::SourcePayloadView(slot),
-                                             key, resolve, unresolved)) {
-      auto owner = builder.seal();
-      if (owner) {
-        try {
-          slot.preparedEncodePlan =
-              std::make_shared<const encoders::PreparedEncodePlan>(std::move(owner));
-        } catch (const std::bad_alloc&) {
-          // No published side effects: the reference path remains available.
+    const auto buildPrepared = [&] {
+      // The queue lock publishes this owner together with the final immutable
+      // Slot. No diagnostic workspace can reclaim these bytes during Encode.
+      const auto& control = q.slots_[*q.writingSlot_];
+      if (control.payload != &slot) return;
+      const encoders::PreparedSourceKey key{
+          .source = {.id = control.sourceId, .storage = control.storage},
+          .sequence = slot.seqId,
+          .commandCount = static_cast<std::uint32_t>(slot.commandCount()),
+      };
+      encoders::PreparedEncodePlanBuilder builder(key);
+      std::uint32_t unresolved = 0;
+      const auto resolve = [&](std::uint64_t raw, std::uint64_t& canonical) noexcept {
+        const auto* surface = pool.findSurface(raw);
+        canonical = surface && surface->aliasTexture ? surface->aliasTexture.value : raw;
+        return canonical != 0;
+      };
+      if (builder.failure() == encoders::PreparedPlanFailure::None &&
+          encoders::appendPreparedEncodeShadow(builder, core::SourcePayloadView(slot),
+                                               key, resolve, unresolved)) {
+        auto owner = builder.seal();
+        if (owner) {
+          try {
+            slot.preparedEncodePlan =
+                std::make_shared<const encoders::PreparedEncodePlan>(std::move(owner));
+          } catch (const std::bad_alloc&) {
+            // No published side effects: the reference path remains available.
+          }
         }
       }
+    };
+    static const bool timePrepared = [] {
+      const auto* value = std::getenv("DXMT9_PREPARED_BUILD_TIMING");
+      return value && std::strcmp(value, "1") == 0;
+    }();
+    if (timePrepared && perf::enabled()) {
+      // Diagnostic-only source scope, never a per-draw clock. The existing
+      // parent timer includes this nested measurement; do not add them.
+      PerfScope preparedScope(perf::countPreparedSerialBuildTime);
+      buildPrepared();
+    } else {
+      buildPrepared();
     }
   }
 }

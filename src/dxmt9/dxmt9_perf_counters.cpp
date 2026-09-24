@@ -1111,6 +1111,12 @@ RenderTapeParallelJoinSnapshot snapshotRenderTapeParallelJoin() noexcept {
 RenderTapeReplaySnapshot snapshotRenderTapeReplay() noexcept {
   const Counters& c = counters();
   RenderTapeReplaySnapshot result;
+  result.prepareSlotWallNs = load(c.prepareSlotForPublishCpuNs);
+  result.resourceMarkWallNs = load(c.prepareSlotResourceMarkCpuNs);
+  result.preparedSerialBuildWallNs = load(c.preparedSerialBuildNs);
+  result.encodeChunkWallNs = load(c.encodeChunkCpuNs);
+  result.preparedSerialReads = load(c.preparedSerialReads);
+  result.preparedSerialReadFallbacks = load(c.preparedSerialReadFallbacks);
   result.slotProvisioned = load(c.directChunkSlotSlotProvisioned);
   result.slotProvisionReused = load(c.directChunkSlotSlotProvisionReused);
   result.slotProvisionFailed = load(c.directChunkSlotSlotProvisionFailed);
@@ -3241,6 +3247,10 @@ void countRenderPassEnd(EncoderSplitReason reason) {
 
 void countPreparedSerialRead(bool consumed) {
   add(consumed ? counters().preparedSerialReads : counters().preparedSerialReadFallbacks);
+}
+
+void countPreparedSerialBuildTime(std::uint64_t nanoseconds) {
+  add(counters().preparedSerialBuildNs, nanoseconds);
 }
 
 void countHazardProbe(bool bloomOverlap, bool exactOverlap) {
