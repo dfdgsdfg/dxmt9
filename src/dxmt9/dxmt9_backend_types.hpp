@@ -14,10 +14,13 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <span>
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+namespace dxmt9::encoders { class PreparedEncodePlan; }
 
 namespace dxmt9::core {
 
@@ -1003,6 +1006,9 @@ struct ChunkSlot {
   dxmt9::perf::ChunkPublishReason publishReason =
       dxmt9::perf::ChunkPublishReason::Unknown;
   bool pipelinePrefetchSealed = false;
+  // Immutable CPU metadata, published/reclaimed with this Slot. Encode only
+  // borrows; no per-draw ownership or resource pin is carried by this handle.
+  std::shared_ptr<const encoders::PreparedEncodePlan> preparedEncodePlan{};
 
   // Data-oriented execution storage. The replay loop walks commandHeaders
   // linearly and indexes into type-specific payload arrays. This avoids the
@@ -1134,6 +1140,7 @@ struct ChunkSlot {
     occlusionScope.reset();
     publishReason = dxmt9::perf::ChunkPublishReason::Unknown;
     pipelinePrefetchSealed = false;
+    preparedEncodePlan.reset();
 #define DXMT9_CLEAR_CHUNK_SLOT_VECTOR(                                      \
     region, plan, storage, element, physical, provision, allocation,        \
     lookup, owner)                                                          \

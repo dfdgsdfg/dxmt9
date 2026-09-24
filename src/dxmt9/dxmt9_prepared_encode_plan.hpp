@@ -1,13 +1,14 @@
 #pragma once
 
 #include "dxmt9_parallel_render_pass.hpp"
+#include "dxmt9_hazard_bloom.hpp"
 #include <memory>
 #include <new>
 #include <utility>
 
 namespace dxmt9::encoders {
 
-// Value foundation: publication shadow observes this; no runtime async owner yet.
+// Full source identity for shadow preparation and Slot-owned serial metadata.
 struct PreparedSourceKey {
   core::CpuReadyTape::SourceRef source{};
   std::uint64_t sequence = 0;
@@ -51,6 +52,8 @@ struct PreparedCommandAccess {
   core::MetalCommandKind kind{};
   std::uint32_t readOffset = 0, readCount = 0, writeOffset = 0, writeCount = 0;
   PreparedAccessResolution resolution = PreparedAccessResolution::RequiresEncodeResolution;
+  bool serialReadsExact = false;
+  std::array<std::uint64_t, 2> readBloom{};
 };
 // Maximal same-attachment DrawRun ranges, or one coordinator command. These
 // are candidates only, not child execution or pass-action authority.
@@ -109,6 +112,14 @@ inline bool validatePreparedEncodePlan(const PreparedEncodePlanStorage& s,
           if (s.accesses[prior] == s.accesses[at]) return false;
       }
     }
+    std::array<std::uint64_t, 2> bloom{};
+    if (row.serialReadsExact) {
+      if (row.kind != core::MetalCommandKind::DrawRun ||
+          row.resolution != PreparedAccessResolution::CanonicalStable) return false;
+      for (std::uint32_t j = 0; j < row.readCount; ++j)
+        addHazardBloom(bloom, s.identities[s.accesses[row.readOffset + j]]);
+    }
+    if (bloom != row.readBloom) return false;
   }
   if (cursor != s.accessCount || unresolved != s.needsEncodeResolution) return false;
   for (std::uint32_t i = 0; i < s.identityCount; ++i) if (!used[i]) return false;
@@ -173,7 +184,7 @@ class PreparedEncodePlanBuilder {
   bool append(std::uint32_t commandIndex, core::MetalCommandKind kind,
       const core::ExactResourceSet& reads, const core::ExactResourceSet& writes,
       core::RenderAttachmentKey attachments,
-      PreparedAccessResolution resolution) noexcept {
+      PreparedAccessResolution resolution, bool serialReadsExact = false) noexcept {
     if (!storage_ || failure_ != PreparedPlanFailure::None) return false;
     auto& s = *storage_;
     if (s.commandCount == s.key.commandCount ||
@@ -195,6 +206,11 @@ class PreparedEncodePlanBuilder {
     if (!extend && s.rangeCount == limits_.ranges)
       return fail(PreparedPlanFailure::Capacity);
     PreparedCommandAccess command{.kind = kind, .resolution = resolution};
+    command.serialReadsExact = canonical && serialReadsExact &&
+        kind == core::MetalCommandKind::DrawRun;
+    if (command.serialReadsExact)
+      for (std::uint32_t i = 0; i < reads.count; ++i)
+        addHazardBloom(command.readBloom, reads.handles[i]);
     command.readOffset = s.accessCount;
     if (canonical) {
       if (!appendAccesses(reads)) return false;
@@ -322,13 +338,14 @@ enum class PreparedPublicationPhase : std::uint8_t {
 enum class PreparedPublicationAction : std::uint8_t {
   SlotReady, PlanReady, PlanFailed, Publish, Abort, SelectSerial, BeginEncode,
   Child0Done, Child1Done, Join, EncodeFailed, ReleasePlan, Submit, Complete,
-  RetireSource, Count,
+  RetireSource, SelectPreparedSerial, Count,
 };
 struct PreparedPublicationState {
   PreparedSourceKey key{};
   PreparedPublicationPhase phase = PreparedPublicationPhase::Preparing;
   bool slotReady = false, planReady = false, planFailed = false;
   bool prepared = false, planReleased = false, encodeFailed = false;
+  bool preparedSerial = false;
   std::uint8_t childrenDone = 0;
   friend constexpr bool operator==(const PreparedPublicationState&,
                                    const PreparedPublicationState&) = default;
@@ -370,15 +387,19 @@ constexpr PreparedPublicationStep reducePreparedPublication(
   case A::BeginEncode:
     if (s.phase != P::Published) return result;
     s.phase = P::Encoding; break;
+  case A::SelectPreparedSerial:
+    if (s.phase != P::Published || !s.prepared || s.preparedSerial) return result;
+    s.preparedSerial = true; break;
   case A::Child0Done:
   case A::Child1Done: {
     const auto bit = action == A::Child0Done ? 1u : 2u;
-    if (s.phase != P::Encoding || (!s.prepared && bit == 2u) ||
+    if (s.phase != P::Encoding || ((!s.prepared || s.preparedSerial) && bit == 2u) ||
         (s.childrenDone & bit)) return result;
     s.childrenDone |= bit; break;
   }
   case A::Join:
-    if (s.phase != P::Encoding || s.childrenDone != (s.prepared ? 3u : 1u)) return result;
+    if (s.phase != P::Encoding ||
+        s.childrenDone != (s.prepared && !s.preparedSerial ? 3u : 1u)) return result;
     s.phase = P::Joined; break;
   case A::EncodeFailed:
     if (s.phase != P::Encoding || s.encodeFailed) return result;

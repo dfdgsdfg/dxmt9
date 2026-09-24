@@ -2917,7 +2917,17 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
                        Kind::DrawRun, command);
     assertEncoderLifecycleInvariant();
     const auto drawKey = makeAttachmentKey(hot);
-    const auto drawReadHazard = makeDrawReadHazard(stateView);
+    HazardProbe drawReadHazard;
+    const auto* preparedOwner = payload.isLegacy() &&
+        options.partitionExecutionMode == render::PartitionExecutionMode::IdentitySerial
+        ? payload.legacyPayload()->preparedEncodePlan.get() : nullptr;
+    const bool preparedRead = preparedOwner && tryPreparedDrawReadHazard(
+        preparedOwner,
+        {.source = options.partitionSource, .sequence = sourceSeqId,
+         .commandCount = static_cast<std::uint32_t>(payload.commandCount())},
+        commandIndex, drawReadHazard);
+    if (!preparedRead) drawReadHazard = makeDrawReadHazard(stateView);
+    if (preparedOwner) perf::countPreparedSerialRead(preparedRead);
     auto hasExactRenderHazard = [&] {
       const bool bloomOverlap = passState.activeWriteHazard.bloomOverlaps(drawReadHazard);
       const bool exactOverlap = passState.activeWriteHazard.exactOverlaps(drawReadHazard);

@@ -2,6 +2,7 @@
 #include "../../../src/dxmt9/dxmt9_prepared_encode_shadow.hpp"
 #include "../../../src/dxmt9/dxmt9_command_queue.hpp"
 #include "../../../src/dxmt9/dxmt9_cpu_supply_trace.hpp"
+#include "../../../src/dxmt9/dxmt9_draw_encoder_internal.hpp"
 #include <algorithm>
 #include <iostream>
 #include <set>
@@ -76,6 +77,10 @@ void finalSlotShadowProjection() {
         "final ordinals and unresolved coordinator remain explicit");
   check(plan->identityCount == 1 && plan->identities[0] == 9 &&
         plan->commands[0].readCount == 1, "synchronous aliases deduplicate exactly");
+  HazardProbe aliasHazard{};
+  check(!plan->commands[0].serialReadsExact &&
+        !tryPreparedDrawReadHazard(&owner, sourceKey, 0, aliasHazard),
+        "actual alias projection cannot replace raw serial hazards");
   PreparedEncodePlanBuilder failedResolve(sourceKey);
   unresolved = 0;
   check(appendPreparedEncodeShadow(failedResolve, dxmt9::core::SourcePayloadView(slot),
@@ -119,6 +124,86 @@ void publicationShadowProbe() {
   queue.submitDrawRun({}, {}, draws, payloads);
   check(queue.publishReplayDiagnosticBoundary(), "query scope publication");
   dxmt9::supply::present(4);
+}
+
+void serialConsumerRefinement() {
+  // Exercise the actual Encode consumer against the unchanged raw-state helper.
+  // Inactive bindings intentionally remain in the serial reference read set.
+  for (unsigned pattern = 0; pattern < 256; ++pattern) {
+    dxmt9::core::ChunkSlot slot{};
+    const std::array<dxmt9::core::DrawParam, 1> draws{};
+    const std::array<dxmt9::core::DrawParamPayloadView, 1> payloads{};
+    dxmt9::core::CanonicalDrawState state{};
+    state.hot.textureMask = pattern & 1;
+    for (unsigned i = 0; i < 4; ++i) {
+      const auto handle = ((pattern >> (2 * i)) & 3) * (UINT64_C(1) << 32 | 7);
+      state.hot.textures[i] = dxmt9::core::Handle{handle};
+      state.hot.streamBuffers[i] = dxmt9::core::Handle{handle};
+    }
+    state.hot.indexBuffer = state.hot.textures[0];
+    slot.appendDrawRun(std::move(state), {}, draws, payloads);
+    slot.appendPresent({}, {});
+    auto k = key(2); k.firstCommand = 0;
+    PreparedEncodePlanBuilder b(k);
+    std::uint32_t unresolved = 0;
+    check(appendPreparedEncodeShadow(b, dxmt9::core::SourcePayloadView(slot), k,
+        [](auto raw, auto& out) { out = raw; return true; }, unresolved), "serial projection");
+    slot.preparedEncodePlan = std::make_shared<const PreparedEncodePlan>(b.seal());
+    std::weak_ptr<const PreparedEncodePlan> lifetime = slot.preparedEncodePlan;
+    HazardProbe result{};
+    check(tryPreparedDrawReadHazard(slot.preparedEncodePlan.get(), k, 0, result),
+          "actual serial consumer selected");
+    const auto reference = makeDrawReadHazard(slot.commandAt(0).drawState);
+    check(reference.bloom.bits == result.bloom.bits &&
+          reference.exact.count == result.exact.count &&
+          reference.exact.handles == result.exact.handles, "serial hazard exact refinement");
+    for (unsigned field = 0; field < 8; ++field) {
+      auto stale = k;
+      switch (field) {
+        case 0: ++stale.source.id.index; break;
+        case 1: ++stale.source.id.generation; break;
+        case 2: ++stale.source.storage.firstPage; break;
+        case 3: ++stale.source.storage.pageCount; break;
+        case 4: ++stale.source.storage.generation; break;
+        case 5: ++stale.sequence; break;
+        case 6: ++stale.firstCommand; break;
+        case 7: ++stale.commandCount; break;
+      }
+      check(!tryPreparedDrawReadHazard(slot.preparedEncodePlan.get(), stale, 0, result) &&
+            result.exact.handles == reference.exact.handles, "stale key rejects without effects");
+    }
+    check(!tryPreparedDrawReadHazard(slot.preparedEncodePlan.get(), k, 1, result) &&
+          !tryPreparedDrawReadHazard(slot.preparedEncodePlan.get(), k, 2, result),
+          "non-draw and out-of-range fallback");
+    slot.clearCommands();
+    check(lifetime.expired(), "Slot reclaim releases immutable metadata");
+  }
+  auto k = key(1);
+  PreparedEncodePlanBuilder alias(k);
+  check(alias.append(4, Kind::DrawRun, resources({9}), resources({}), attachments(),
+                     Stable, false), "alias projection remains structural data");
+  auto owner = alias.seal();
+  HazardProbe output{};
+  check(!tryPreparedDrawReadHazard(&owner, k, 4, output),
+        "canonical alias proof is not raw serial authority");
+  check(!tryPreparedDrawReadHazard(nullptr, k, 4, output), "missing owner fallback");
+  PreparedPublicationState publication{.key = k};
+  using A = PreparedPublicationAction;
+  for (auto action : {A::SlotReady, A::PlanReady, A::Publish,
+                      A::SelectPreparedSerial, A::BeginEncode}) {
+    const auto step = reducePreparedPublication(publication, action, k);
+    check(step.accepted, "prepared serial publication model");
+    publication = step.state;
+  }
+  check(!reducePreparedPublication(publication, A::ReleasePlan, k).accepted &&
+        !reducePreparedPublication(publication, A::Child1Done, k).accepted,
+        "serial prepared owner remains live and has only one consumer");
+  for (auto action : {A::Child0Done, A::Join, A::Submit, A::Complete,
+                      A::ReleasePlan, A::RetireSource}) {
+    const auto step = reducePreparedPublication(publication, action, k);
+    check(step.accepted, "serial metadata release after completion");
+    publication = step.state;
+  }
 }
 
 void exactShadowCardinality() {
@@ -402,7 +487,7 @@ void exhaustiveWorkspaceReuse() {
 
 void indexedDictionaryBoundaries() {
   static_assert(kPreparedIdentityCapacity == 512 && kPreparedLookupCapacity == 1024);
-  static_assert(sizeof(PreparedEncodePlanStorage) == 151624);
+  static_assert(sizeof(PreparedEncodePlanStorage) == 168008);
   std::vector<std::uint64_t> collisions;
   for (std::uint64_t generation = 1; collisions.size() < 513; ++generation) {
     const auto handle = (generation << 32) | 7;
@@ -471,7 +556,8 @@ void exhaustivePublication() {
           check(!before.prepared || !after.planReleased, "no early plan retirement");
         }
         if (action == A::Join)
-          check(before.childrenDone == (before.prepared ? 3u : 1u), "join every worker");
+          check(before.childrenDone == (before.prepared && !before.preparedSerial ? 3u : 1u),
+                "join every worker");
         if (action == A::RetireSource)
           check(before.phase == P::Completed && before.planReleased,
                 "source retirement requires completion and no plan consumers");
@@ -547,6 +633,7 @@ int main(int argc, char** argv) {
     finalSlotShadowProjection();
     exactShadowCardinality();
     exhaustivePublication();
+    serialConsumerRefinement();
   } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';
     return 1;

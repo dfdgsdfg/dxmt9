@@ -7,12 +7,49 @@ tags: [specs, backend, replay, encode, ownership, verification]
 
 # PreparedEncodePlan foundation
 
+## First serial consumer: immutable read-hazard projection
+
+The first production-shaped consumer of `R-BACK-2.71` replaces only the
+DrawRun read-hazard reconstruction in serial Encode. It must preserve the
+reference's full raw-handle read set (index buffer, every stream, every texture,
+including inactive entries), exact overlap and Bloom bits. Canonical alias
+projection is not interchangeable with that reference: a row is eligible only
+when preparation proves its canonical read sequence equals the raw sequence.
+Attachment hazards, pass actions, alias/backing resolution, resource pins,
+GPU-use stamps, query scopes and execution order remain unchanged.
+
+`DXMT9_PREPARED_SERIAL_READS=1` is an experimental default-OFF selector. Final
+ordinary Slot publication, under the existing queue mutex and after resource
+marking, owns the optional immutable plan. The Slot retains it until reclaim;
+Encode borrows it synchronously under the existing source residency protocol.
+No diagnostic thread-local workspace may recycle a published region. The owner
+is an immutable shared handle to break the backend-type dependency cycle;
+Encode performs no shared-handle copies or reference-count increments per draw.
+At most one fixed region plus an owner/control block is allocated per candidate
+Slot. This initial adapter is not fused Replay construction or pooled storage.
+
+Admission must match the complete source/storage/sequence key and whole-source
+command count. Lookup uses original command indices, never replay ordinals, so
+reordered/subset serial traversal cannot select another command's row. Arena,
+parallel execution, missing plan, stale identity, unsupported or unresolved row,
+allocation failure and bounded capacity rejection use the original read-hazard
+calculation before that draw's effects. No executed command is retried.
+Terminal discard and reclaim release the Slot owner through normal destruction
+or `clearCommands`; retaining CPU metadata does not extend or replace GPU pins.
+
+Verification must compare the actual consumer's full exact list and Bloom bits
+with the independent existing helper, exercise every key mutation, alias-change
+fallback, clear/reuse and allocation/capacity failure, and preserve the existing
+publication reducer's no-release-before-join contract. Same-capture GPU comparison
+must prove nonzero prepared-row consumption, not merely unchanged pixels through
+fallback. Until that gate passes the selector must remain default OFF. No FPS
+gain is implied by moving work onto the publication thread.
+
 Implements the value-layer foundation of `R-BACK-2.71`. The builder and pure
-publication reducer live in `src/dxmt9/dxmt9_prepared_encode_plan.hpp`. An opt-in
-ordinary publication shadow now exercises the builder; no Encode caller consumes
-it and no plan is published asynchronously. A sealed plan is data,
-not a parallel execution certificate. Actual joint publication remains the
-next integration step.
+publication reducer live in `src/dxmt9/dxmt9_prepared_encode_plan.hpp`. The
+diagnostic shadow and the separate experimental serial consumer share source
+projection. A sealed plan is data, not a parallel execution certificate.
+General prepared scheduling and parallel consumption remain subsequent work.
 
 ## Publication shadow cost probe
 
@@ -20,7 +57,8 @@ next integration step.
 default-OFF `DXMT9_CPU_SUPPLY_PREPARED_OBSERVER` gate. Inside the bounded
 CPU-supply window it builds and destroys a private plan from the final ordinary
 Slot, with the actual source/storage generations and sequence. There is no
-plan field in the Slot, no async borrow, and no execution-policy change.
+async borrow or execution-policy change from this observer. The separate serial
+consumer selector owns the optional Slot field; the observer never populates it.
 
 Before allocating, `screenPreparedEncodeShadow` skips frozen nonempty query
 scopes, empty sources, and single commands with no possible two-draw child
@@ -128,8 +166,9 @@ allocation. Current ceilings are 512 canonical identities, 1024 command rows,
 limits, not workload maxima or changes to production pass capacity. The
 source-wide bound is independently conservative; a future production
 budget must not assume that H347's per-pass cardinality is source-wide.
-The fixed storage is 151,624 bytes on the tested 64-bit builds (149,576 before
-the 256-to-512 identity increase), plus 2 KiB builder-only lookup scratch. This
+The fixed storage is 168,008 bytes on the tested 64-bit builds (151,624 before
+the serial read Bloom projection, 149,576 before the identity increase), plus
+2 KiB builder-only lookup scratch. This
 is a fixed foundation, not a qualified hot-path allocation policy. Before
 runtime integration, account for this maximum allocation and initialization;
 pooling or exact-sized regions must retain the same failure/publication contract.
@@ -218,17 +257,20 @@ Every event is qualified by all source/storage/sequence/range key fields.
 Only `Preparing` can publish, and it needs a complete Slot plus either a
 complete plan or an explicit preparation failure. Post-effect failure remains
 sticky and drains child ownership; it cannot retry through serial execution.
-Two children model prepared execution; one completion models serial execution.
+Two children model parallel prepared execution. `SelectPreparedSerial` retains
+the plan but requires only one consumer completion; `SelectSerial` discards
+prepared authority and models reference fallback.
 `ReleasePlan` requires join, while source retirement additionally requires
 submission completion. GPU completion events are trusted environment inputs
 in this value model, not a synthesized GPU signal. An encoded failure remains
 a failure even after its submitted work reaches completion.
 
-This reducer does not perform atomic memory publication, retain a real Slot,
-or implement cancellation/terminal queue recovery. The production adapter must
-consume actual assembler/lease evidence, publish under the existing queue
-lock or release/acquire protocol, keep owned storage through join, and bind
-completion to actual submitted identity. Those obligations remain open.
+This reducer does not perform atomic memory publication or implement terminal
+queue recovery. The experimental serial adapter uses the existing ordinary Slot
+queue-lock publication and residency/reclaim protocol, retaining plan ownership
+until Slot clear/destruction. Its consumer uses the complete source key from
+that protocol. It does not introduce a new queue state machine. General Arena
+publication and parallel consumer/recovery binding remain open.
 
 ## Verification mapping
 
@@ -255,6 +297,7 @@ the reducer graph has 61 reachable states and 75 accepted edges. Existing TLA
 regression passes in 195.96 seconds. Logs are preserved under
 `experiments/output/prepared-encode-plan-foundation/{native,x86,tla}.log`.
 
-No runtime behavior or default policy changes. Production shadow comparison,
-non-degenerate GPU exact qualification and end-to-end timing belong to the
-subsequent Replay/Encode integration stages.
+The serial consumer is default OFF until its qualification gates pass. The
+default renderer and all parallel policies remain unchanged. Non-degenerate
+GPU exact qualification and end-to-end timing are separate gates from native
+read-hazard equivalence.

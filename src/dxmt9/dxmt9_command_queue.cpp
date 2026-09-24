@@ -3284,6 +3284,44 @@ void prepareSlotForPublish(CommandQueue& q,
     markSlotResourcesUnlocked(pool, slot);
   }
   if (supply::preparedObserveEnabled()) observePreparedSlot(q, pool, slot);
+  static const bool preparedSerial = [] {
+    const auto* value = std::getenv("DXMT9_PREPARED_SERIAL_READS");
+    return value && std::strcmp(value, "1") == 0;
+  }();
+  if (preparedSerial && q.writingSlot_ && slot.commandCount() &&
+      slot.commandCount() <= 1024 &&
+      std::any_of(slot.commandHeaders.begin(), slot.commandHeaders.end(),
+                  [](const auto& h) { return h.kind == core::MetalCommandKind::DrawRun; })) {
+    // The queue lock publishes this owner together with the final immutable
+    // Slot. No diagnostic workspace can reclaim these bytes during Encode.
+    const auto& control = q.slots_[*q.writingSlot_];
+    if (control.payload != &slot) return;
+    const encoders::PreparedSourceKey key{
+        .source = {.id = control.sourceId, .storage = control.storage},
+        .sequence = slot.seqId,
+        .commandCount = static_cast<std::uint32_t>(slot.commandCount()),
+    };
+    encoders::PreparedEncodePlanBuilder builder(key);
+    std::uint32_t unresolved = 0;
+    const auto resolve = [&](std::uint64_t raw, std::uint64_t& canonical) noexcept {
+      const auto* surface = pool.findSurface(raw);
+      canonical = surface && surface->aliasTexture ? surface->aliasTexture.value : raw;
+      return canonical != 0;
+    };
+    if (builder.failure() == encoders::PreparedPlanFailure::None &&
+        encoders::appendPreparedEncodeShadow(builder, core::SourcePayloadView(slot),
+                                             key, resolve, unresolved)) {
+      auto owner = builder.seal();
+      if (owner) {
+        try {
+          slot.preparedEncodePlan =
+              std::make_shared<const encoders::PreparedEncodePlan>(std::move(owner));
+        } catch (const std::bad_alloc&) {
+          // No published side effects: the reference path remains available.
+        }
+      }
+    }
+  }
 }
 
 // R-BACK-2.104 empty-slot storage provisioning.

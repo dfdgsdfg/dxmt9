@@ -10,6 +10,8 @@
 #include "dxmt9_ffp_shaders.hpp"
 #include "dxmt9_format_convert.hpp"
 #include "dxmt9_post_encode_retirement.hpp"
+#include "dxmt9_hazard_bloom.hpp"
+#include "dxmt9_prepared_encode_plan.hpp"
 
 #include <algorithm>
 #include <array>
@@ -52,21 +54,10 @@ encodedCommandIdAtSynchronousEncodeSeam(
 // is inline in the header so HazardBloom::add can keep its verbatim
 // call site after T7's split.
 
-inline u64 bloomMix64(u64 value, u64 salt) {
-  u64 x = value + salt + 0x9e3779b97f4a7c15ull;
-  x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9ull;
-  x = (x ^ (x >> 27)) * 0x94d049bb133111ebull;
-  return x ^ (x >> 31);
-}
-
 struct HazardBloom {
   std::array<u64, 2> bits{};
   void add(u64 value) {
-    if (value == 0) return;
-    const u64 hash0 = bloomMix64(value, 0x4d595df4d0f33173ull);
-    const u64 hash1 = bloomMix64(value, 0x9e3779b97f4a7c15ull);
-    bits[0] |= 1ull << (hash0 & 63u);
-    bits[1] |= 1ull << (hash1 & 63u);
+    addHazardBloom(bits, value);
   }
   bool overlaps(const HazardBloom& other) const {
     return ((bits[0] & other.bits[0]) != 0) || ((bits[1] & other.bits[1]) != 0);
@@ -120,6 +111,26 @@ struct HazardProbe {
 HazardProbe makeAttachmentHazard(const core::FlatDrawStateRecord& hot);
 HazardProbe makeAttachmentHazard(const core::ClearDesc& clear);
 HazardProbe makeDrawReadHazard(core::FlatDrawStateView state);
+
+// The owner was sealed before publication. Only source-qualified serial rows
+// whose canonical projection preserved raw read identity replace the reference.
+inline bool tryPreparedDrawReadHazard(const PreparedEncodePlan* owner,
+    PreparedSourceKey key, std::size_t commandIndex, HazardProbe& output) noexcept {
+  const auto* plan = owner ? owner->view(key) : nullptr;
+  if (!plan || commandIndex < key.firstCommand ||
+      commandIndex - key.firstCommand >= plan->commandCount) return false;
+  const auto& row = plan->commands[commandIndex - key.firstCommand];
+  if (!row.serialReadsExact || row.kind != core::MetalCommandKind::DrawRun ||
+      row.resolution != PreparedAccessResolution::CanonicalStable ||
+      row.readCount > HazardHandles::kCapacity) return false;
+  HazardProbe prepared{};
+  prepared.bloom.bits = row.readBloom;
+  prepared.exact.count = row.readCount;
+  for (std::uint32_t i = 0; i < row.readCount; ++i)
+    prepared.exact.handles[i] = plan->identities[plan->accesses[row.readOffset + i]];
+  output = prepared;
+  return true;
+}
 
 enum class RenderPassEntryDecision : u8 {
   ContinueActive,

@@ -53,7 +53,8 @@ void equivalent(const std::vector<Row>& rows) {
     const auto& x = p->commands[i]; const auto& y = q->commands[i];
     require(x.kind == y.kind && x.readOffset == y.readOffset && x.readCount == y.readCount &&
             x.writeOffset == y.writeOffset && x.writeCount == y.writeCount &&
-            unsigned(x.resolution) == unsigned(y.resolution));
+            unsigned(x.resolution) == unsigned(y.resolution) &&
+            x.serialReadsExact == y.serialReadsExact && x.readBloom == y.readBloom);
   }
   for (unsigned i = 0; i < p->rangeCount; ++i) {
     const auto& x = p->ranges[i]; const auto& y = q->ranges[i];

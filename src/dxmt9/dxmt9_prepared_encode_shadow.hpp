@@ -24,8 +24,9 @@ constexpr PreparedShadowScreen screenPreparedEncodeShadow(
   return PreparedShadowScreen::Candidate;
 }
 
-// Synchronous diagnostic projection only. The caller retains the source and
-// resolver for this call; no canonical identity is authority for async use.
+// Shared synchronous source projection. The caller retains the source and
+// resolver for this call; canonical identity alone grants no async authority.
+// The serial consumer accepts only rows preserving the raw read sequence.
 template <typename Resolve, typename Visit>
 bool visitPreparedEncodeShadow(
     core::SourcePayloadView source, PreparedSourceKey key,
@@ -39,6 +40,7 @@ bool visitPreparedEncodeShadow(
     core::ExactResourceSet reads{}, writes{};
     core::RenderAttachmentKey attachments{};
     auto resolution = PreparedAccessResolution::RequiresEncodeResolution;
+    bool rawReadsPreserved = false;
     if (command.kind == core::MetalCommandKind::DrawRun &&
         command.drawState.hot && command.drawState.shaderLayout &&
         command.drawState.debug && command.drawRunRecord &&
@@ -55,16 +57,21 @@ bool visitPreparedEncodeShadow(
         }
         return true;
       };
-      if (canonicalize(core::makeDrawEntryReadSet(command.drawState), reads) &&
+      const auto rawReads = core::makeDrawEntryReadSet(command.drawState);
+      if (canonicalize(rawReads, reads) &&
           canonicalize(core::makeRenderAttachmentWriteSet(*command.drawState.hot), writes))
         resolution = PreparedAccessResolution::CanonicalStable;
+      rawReadsPreserved = rawReads.count == reads.count &&
+          std::equal(rawReads.handles.begin(), rawReads.handles.begin() + rawReads.count,
+                     reads.handles.begin());
     }
     if (resolution == PreparedAccessResolution::RequiresEncodeResolution) {
       ++unresolved;
       reads = {};
       writes = {};
     }
-    if (!visit(ordinal, command.kind, reads, writes, attachments, resolution))
+    if (!visit(ordinal, command.kind, reads, writes, attachments, resolution,
+               rawReadsPreserved))
       return false;
   }
   return true;
@@ -76,8 +83,9 @@ bool appendPreparedEncodeShadow(PreparedEncodePlanBuilder& builder,
     Resolve&& resolve, std::uint32_t& unresolved) noexcept {
   return visitPreparedEncodeShadow(source, key, resolve,
       [&](auto ordinal, auto kind, const auto& reads, const auto& writes,
-          auto attachments, auto resolution) noexcept {
-        return builder.append(ordinal, kind, reads, writes, attachments, resolution);
+          auto attachments, auto resolution, bool rawReadsPreserved) noexcept {
+        return builder.append(ordinal, kind, reads, writes, attachments, resolution,
+                              rawReadsPreserved);
       }, unresolved);
 }
 
@@ -99,7 +107,7 @@ PreparedShadowCardinality measurePreparedShadowCardinality(
   try {
     std::vector<std::uint64_t> handles;
     const bool complete = visitPreparedEncodeShadow(source, key, resolve,
-        [&](auto, auto, const auto& reads, const auto& writes, auto, auto) {
+        [&](auto, auto, const auto& reads, const auto& writes, auto, auto, bool) {
           ++result.commands;
           for (const auto* set : {&reads, &writes})
             for (std::uint32_t i = 0; i < set->count; ++i)

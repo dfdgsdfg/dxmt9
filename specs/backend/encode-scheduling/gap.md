@@ -93,6 +93,19 @@ errors, 42 preparation successes and no failures, including 21 sources with
 This is not an actual captured-input or end-to-end speedup proof; those gates
 and immutable consumer integration remain open. See
 [H355](../../../docs/perfomance/present-pacing/present-pacing-prepared-comparison.355.md).
+The first experimental ordinary-Slot serial consumer now replaces DrawRun
+read-hazard reconstruction only for source-qualified raw-equivalent rows.
+Immutable plan ownership follows Slot publication/reclaim; Arena and parallel
+consumption, fused construction, pooling and end-to-end performance remain open.
+Native consumer refinement covers 256 binding patterns, all key components,
+unsupported rows and reclaim; the bounded publication reducer now distinguishes
+one-consumer prepared serial execution. The same GT2 capture passes OFF/ON GPU
+comparison: eight byte-identical nonuniform readbacks, 1292 actual prepared
+consumptions and zero GPU errors. Broader wild/performance qualification remains
+open and `DXMT9_PREPARED_SERIAL_READS` remains default OFF. See
+[H356](../../../docs/perfomance/present-pacing/present-pacing-prepared-serial.356.md).
+This is not general
+resource-closure/PSO/framegraph reuse or a parallel execution certificate.
 Replay will build a bounded `PreparedEncodePlan` during
 final Slot construction and publishes both transactionally. The existing
 Encode thread retains final admission, parent ownership, child dispatch/join

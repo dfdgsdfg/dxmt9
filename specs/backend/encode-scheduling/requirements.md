@@ -1013,6 +1013,14 @@ command twice. Alias-dependent metadata may be prepared only with a stability
 contract lasting through consumption; otherwise it remains unresolved for
 Encode or rejects the prepared lane before effects.
 
+Serial consumers must preserve the serial reference's identity domain. In
+particular, raw-handle read-hazard membership must not be replaced with
+alias-canonical membership unless equality is established. Immutable prepared
+rows must match complete source/storage/sequence identity and original command
+indices before use. Missing or ineligible rows retain reference calculation;
+CPU metadata ownership must remain live throughout synchronous consumption and
+must not replace resource pins or GPU completion ownership.
+
 Encode must perform final admission against current session/preamble facts
 before dispatch. Plan storage must remain valid through child join, while GPU
 resource retirement remains governed separately by completion. A prepared

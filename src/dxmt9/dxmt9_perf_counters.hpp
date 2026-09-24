@@ -1035,6 +1035,7 @@ void countShaderVariantKeyHashCpuTime(std::uint64_t nanoseconds);
 void countRenderPassBegin();
 void countRenderPassEnd(EncoderSplitReason reason);
 void countHazardProbe(bool bloomOverlap, bool exactOverlap);
+void countPreparedSerialRead(bool consumed);
 void countSubmitDrawRunBatchInputRuns(std::uint64_t runs);
 void countSubmitDrawRunBatchCall();
 void countSubmitDrawRunBatchEmittedRun();

@@ -3239,6 +3239,10 @@ void countRenderPassEnd(EncoderSplitReason reason) {
   add(splitReasonCounter(counters(), reason));
 }
 
+void countPreparedSerialRead(bool consumed) {
+  add(consumed ? counters().preparedSerialReads : counters().preparedSerialReadFallbacks);
+}
+
 void countHazardProbe(bool bloomOverlap, bool exactOverlap) {
   add(counters().hazardProbeComparisons);
   if (bloomOverlap) {

@@ -706,6 +706,8 @@ constexpr CounterEntry kCounterTable[] = {
     {"render_split_tile_midpass", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitTileMidPassIneligible, nullptr, nullptr, 0.0},
     {"render_split_ordered_control", CounterEntry::Kind::UnsignedCount, &Counters::renderSplitOrderedControl, nullptr, nullptr, 0.0},
     {"hazard_probe", CounterEntry::Kind::UnsignedCount, &Counters::hazardProbeComparisons, nullptr, nullptr, 0.0},
+    {"prepared_serial_reads", CounterEntry::Kind::UnsignedCount, &Counters::preparedSerialReads, nullptr, nullptr, 0.0},
+    {"prepared_serial_read_fallbacks", CounterEntry::Kind::UnsignedCount, &Counters::preparedSerialReadFallbacks, nullptr, nullptr, 0.0},
     {"hazard_bloom", CounterEntry::Kind::UnsignedCount, &Counters::hazardBloomOverlaps, nullptr, nullptr, 0.0},
     {"hazard_exact", CounterEntry::Kind::UnsignedCount, &Counters::hazardExactOverlaps, nullptr, nullptr, 0.0},
     {"hazard_bloom_false_positive", CounterEntry::Kind::UnsignedCount, &Counters::hazardBloomFalsePositive, nullptr, nullptr, 0.0},
