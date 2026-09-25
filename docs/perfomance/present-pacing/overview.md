@@ -14,6 +14,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H367](present-pacing-tail-supply-audio.367.md) samples two late STALKER windows:
+app CPU is 72.8–83.1ms/Present with substantial replay input and encode
+unpublished-input gaps, and no selected instrumented queue-wait events.
+Prioritize app/guest execution ownership, including seven unresolved repeated-PC
+threads. System Trace coverage holes and teardown-only CoreAudio errors leave
+in-game audio correlation open; no new runtime policy or FPS gain is claimed.
+
 [H366](present-pacing-coalesce-query-reuse.366.md) removes repeated graph
 reachability work without changing coalescing decisions. On the same four
 STALKER inputs, OFF optimizer CPU falls from 7.8–27.6ms to 0.071–0.183ms;
