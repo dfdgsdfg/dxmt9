@@ -25,6 +25,8 @@ if host_machine.system() == 'darwin'
   dxmt9_optimizer_probe = executable(
     'dxmt9-framegraph-optimizer-probe',
     'dxmt9_framegraph_optimizer_probe.cpp',
+    'reference_passcoalesce.cpp',
+    'passcoalesce_refinement.cpp',
     include_directories: dxmt9_inc,
     dependencies: [dxmt9_dep, dxmt9_frontend_dep],
     install: false,

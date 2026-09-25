@@ -12,6 +12,11 @@
 #include <dlfcn.h>
 
 using namespace dxmt9::framegraph;
+namespace dxmt9::framegraph::reference {
+void runPassCoalesce(FrameGraph&, OptimizerStats*, bool, ActiveSeedMergeWitnessSink*);
+}
+void checkPassCoalesceRefinement();
+void checkOptimizerStats(const OptimizerStats&, const OptimizerStats&);
 namespace {
 u64 cpu() {
   std::uint64_t tid = 0;
@@ -29,6 +34,7 @@ void require(bool value) {
   if (!value) throw std::runtime_error("graph equality/fixture contract failed");
 }
 void selfTest() {
+  checkPassCoalesceRefinement();
   OptimizerFixture f;
   f.sequence = 42; f.backend = 17; f.process = 9; f.observed_ns = 31;
   f.return_diagnostics = true;
@@ -118,7 +124,15 @@ int main(int argc, char** argv) {
     auto expected = input.graph;
     OptimizerOptions options; options.passcoalesce = true;
     OptimizerStats reference{};
-    runOptimizer(expected, options, nullptr, &reference);
+    runLifetime(expected);
+    reference::runPassCoalesce(expected, &reference, false, nullptr);
+    runLoadStore(expected);
+    auto expectedOn = input.graph;
+    OptimizerStats referenceOn{};
+    runLifetime(expectedOn);
+    reference::runPassCoalesce(expectedOn, &referenceOn, true, nullptr);
+    runLoadStore(expectedOn);
+    require(equalOptimizerGraph(expected, expectedOn));
     std::cout << "round,diagnostics,mode,stage,wall_ns,cpu_ns,merged,candidates,passes,edges,blocked_cycle,second_non_draw,non_render_intervener,missing_invariant\n";
     // Two warmups per policy. Sixteen measured AB/BA pairs reverse order each
     // round; every phase trial starts from a fresh identical input graph.
@@ -155,6 +169,7 @@ int main(int argc, char** argv) {
           }
           require(equalOptimizerGraph(graph, expected));
           require(stats.pass_coalesced_count == reference.pass_coalesced_count);
+          checkOptimizerStats(stats, diagnostic ? referenceOn : reference);
         }
       }
     }

@@ -22,6 +22,14 @@ namespace dxmt9::render {
 
 namespace {
 
+bool returnDiagnosticsEnabled() {
+  static const bool enabled = [] {
+    const char* value = std::getenv("DXMT9_FRAMEGRAPH_RETURN_DIAGNOSTICS");
+    return value && std::strcmp(value, "1") == 0;
+  }();
+  return enabled;
+}
+
 // True if the env string carries at least one non-whitespace, non-separator
 // token. DXMT9_RENDERER_FEATURES is a comma/space-separated list; at L0 the
 // presence of *any* token under the Strict profile is a rejection trigger.
@@ -478,7 +486,7 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
         framegraph::buildFrameGraph(payload, seqId, aliasResolver);
     framegraph::OptimizerOptions activeOptions = options_;
     activeOptions.collect_passcoalesce_return_diagnostics =
-        activeOptions.passcoalesce && perf::enabled();
+        activeOptions.passcoalesce && returnDiagnosticsEnabled() && perf::enabled();
 
     std::vector<framegraph::ResourceHandle> overwriteProof;
     planningPhase(3u);

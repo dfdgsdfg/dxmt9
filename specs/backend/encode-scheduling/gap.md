@@ -1682,5 +1682,9 @@ STALKER volume/query Render Tape capture or authorize an optimizer change.
 Offline graph equality cannot substitute for backend/GPU output evidence.
 H365 captures four real STALKER graphs: all OFF/ON and whole/split results
 match, but large inputs retain 26–28ms CPU in pass-coalescing with zero merges.
-Core candidate-search/reachability optimization and its refinement remain open;
-return diagnostics account for only the smaller 0.85–3.39ms increment.
+The graph-qualified [query reuse contract](coalesce-query-reuse.md) now binds
+bounded exhaustive reference comparison to the production coalescer. CSR/lazy
+reachability rows and pass summaries preserve pair order and reset on every
+merge. Return diagnostics are explicit opt-in instead of following generic
+perf counters. H366 records same-input CPU evidence; full STALKER Tape/GPU
+exact coverage and a paired end-to-end FPS verdict remain separate open gates.

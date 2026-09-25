@@ -7,6 +7,13 @@ string that is not `0`, unless documented otherwise.
 
 ## Backend selection
 
+`DXMT9_FRAMEGRAPH_RETURN_DIAGNOSTICS=1` explicitly enables source-local
+pass-coalescing return classification when perf counters are enabled. It is
+cached, default-OFF, and accepts only `1`. Generic perf counters alone no
+longer enable its candidate identity tracking. Zero return counters while
+disabled mean unobserved, not absence of candidates. The device-free optimizer
+probe controls this observer directly for matched-input OFF/ON comparisons.
+
 `DXMT9_FRAMEGRAPH_OPTIMIZER_FIXTURE_DIR` is a default-OFF diagnostic output
 directory (unset/empty/`0` disables). It must already exist. Copies the exact
 default pass-coalescing input graph, runs production once, then exclusively

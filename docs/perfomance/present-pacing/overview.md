@@ -14,13 +14,22 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
-[H365](present-pacing-optimizer-fixture.365.md) closes same-input attribution:
+[H366](present-pacing-coalesce-query-reuse.366.md) removes repeated graph
+reachability work without changing coalescing decisions. On the same four
+STALKER inputs, OFF optimizer CPU falls from 7.8–27.6ms to 0.071–0.183ms;
+full outputs/statistics match the frozen reference and bounded refinement
+passes 102,414 cases. Return diagnostics are now explicit opt-in. A counters-OFF
+wild run passes at 25.169 FPS, but this single historical comparison does not
+prove an FPS gain; the late slowdown remains. Reattribute the residual slow
+source before choosing the next optimization.
+
+[H365](present-pacing-optimizer-fixture.365.md) established same-input attribution:
 four real STALKER graphs match exactly under diagnostics OFF/ON and whole/split
 optimizer execution. Large inputs still cost 26–28ms native CPU with diagnostics
 OFF, almost entirely pass coalescing, **with zero merges**. Return diagnostics
 add 0.85–3.39ms, not the majority. Prioritize reusable dependency/reachability
-queries and safe early rejection on the unchanged graph; no algorithm or FPS
-improvement is claimed yet.
+queries and safe early rejection on the unchanged graph; H366 implements
+these without changing graph decisions. No paired FPS improvement is claimed.
 
 [H364](present-pacing-encode-residual.364.md) records a counters-OFF STALKER
 Day baseline of 24.822 FPS, with the late slowdown still present. A bounded

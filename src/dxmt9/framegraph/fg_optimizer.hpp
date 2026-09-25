@@ -59,7 +59,8 @@ struct OptimizerOptions {
   bool dce = false;       // §5.1 — default OFF (chunk-conservative).
   bool reorder = false;
   // Diagnostic-only source-local return classification. Production enables
-  // this only while perf counters are active; it never participates in an
+  // this with explicit DXMT9_FRAMEGRAPH_RETURN_DIAGNOSTICS=1 and active
+  // perf counters; it never participates in an
   // optimizer decision.
   bool collect_passcoalesce_return_diagnostics = false;
 

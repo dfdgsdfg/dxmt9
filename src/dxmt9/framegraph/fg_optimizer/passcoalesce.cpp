@@ -41,6 +41,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <optional>
+#include <new>
 #include <vector>
 
 namespace dxmt9::framegraph {
@@ -79,6 +80,67 @@ bool reaches(const FrameGraph& graph, u32 from, u32 to) {
 }
 
 enum class Move { Before, After, Blocked };
+
+// Scoped to one coalesceOnce incarnation. A merge returns from that function,
+// so no cached row can survive pass/edge remapping. Bounds limit scratch only;
+// oversize input retains the exact traversal rather than truncating candidates.
+class GraphQueries {
+public:
+  explicit GraphQueries(const FrameGraph& graph) : graph_(graph) {
+    const auto n = graph.passes.size();
+    if (n > 4096 || graph.edges.size() > 65536) return;
+    try {
+      words_ = (n + 63) / 64;
+      rows_.resize(n * words_);
+      ready_.resize(n);
+      offsets_.resize(n + 1);
+      stack_.reserve(n);
+      for (const auto& e : graph.edges)
+        if (e.src_pass < n && e.dst_pass < n) ++offsets_[e.src_pass + 1];
+      for (std::size_t i = 1; i <= n; ++i) offsets_[i] += offsets_[i - 1];
+      adjacent_.resize(offsets_.back());
+      auto cursor = offsets_;
+      for (const auto& e : graph.edges)
+        if (e.src_pass < n && e.dst_pass < n)
+          adjacent_[cursor[e.src_pass]++] = e.dst_pass;
+      enabled_ = true;
+    } catch (const std::bad_alloc&) {
+      // No graph side effects have occurred. Keep the reference semantics.
+    }
+  }
+
+  bool reaches(u32 from, u32 to) {
+    if (!enabled_) return framegraph::reaches(graph_, from, to);
+    auto* row = rows_.data() + from * words_;
+    if (!ready_[from]) {
+      stack_.clear();
+      row[from / 64] |= u64{1} << (from % 64);
+      stack_.push_back(from);
+      while (!stack_.empty()) {
+        const auto cur = stack_.back();
+        stack_.pop_back();
+        for (auto i = offsets_[cur]; i < offsets_[cur + 1]; ++i) {
+          const auto dst = adjacent_[i];
+          const auto bit = u64{1} << (dst % 64);
+          if (!(row[dst / 64] & bit)) {
+            row[dst / 64] |= bit;
+            stack_.push_back(dst);
+          }
+        }
+      }
+      ready_[from] = true;
+    }
+    return (row[to / 64] & (u64{1} << (to % 64))) != 0;
+  }
+
+private:
+  const FrameGraph& graph_;
+  std::size_t words_ = 0;
+  bool enabled_ = false;
+  std::vector<u64> rows_;
+  std::vector<bool> ready_;
+  std::vector<u32> offsets_, adjacent_, stack_;
+};
 
 // Diagnostic identity is deliberately independent of mutable pass indices.
 // Initial passes receive stable IDs; a successful merge receives a fresh ID,
@@ -191,13 +253,13 @@ bool hasSemanticFlag(const PassNode& pass) noexcept {
 
 // Decide whether intervening pass x (a < x < b) can move before P_a or after
 // P_b without breaking an edge. See file header for the rule.
-Move classifyIntervening(const FrameGraph& graph, u32 a, u32 b, u32 x) {
+Move classifyIntervening(GraphQueries& queries, u32 a, u32 b, u32 x) {
   // Does the pair produce something x consumes? (pair ->* x) -> x must stay AFTER
   // the pair start, so it cannot move before P_a.
-  const bool pair_feeds_x = reaches(graph, a, x) || reaches(graph, b, x);
+  const bool pair_feeds_x = queries.reaches(a, x) || queries.reaches(b, x);
   // Does x produce something the pair consumes? (x ->* pair) -> x must stay
   // BEFORE the pair end, so it cannot move after P_b.
-  const bool x_feeds_pair = reaches(graph, x, a) || reaches(graph, x, b);
+  const bool x_feeds_pair = queries.reaches(x, a) || queries.reaches(x, b);
 
   if (pair_feeds_x && x_feeds_pair) {
     return Move::Blocked;  // wedged inside the pair; cannot coalesce.
@@ -215,6 +277,18 @@ bool coalesceOnce(FrameGraph& graph, OptimizerStats* stats,
                   ReturnDiagnosticTracker* returnDiagnostics,
                   ActiveSeedMergeWitnessSink* activeSeedWitnesses) {
   const std::size_t n = graph.passes.size();
+  std::optional<GraphQueries> queries;
+  struct Summary { bool valid; bool drawOnly; };
+  std::vector<Summary> summaries;
+  std::vector<std::size_t> hardBoundaries(n + 1);
+  summaries.reserve(n);
+  for (std::size_t i = 0; i < n; ++i) {
+    const auto& pass = graph.passes[i];
+    const bool valid = validCommandRange(graph, pass) && validDrawRange(graph, pass);
+    summaries.push_back({valid, valid && !hasNonDrawCommand(graph, pass)});
+    hardBoundaries[i + 1] = hardBoundaries[i] +
+        (pass.kind != PassKind::Render || pass.flags.dead || !valid);
+  }
   for (std::size_t a = 0; a < n; ++a) {
     const PassNode& pa = graph.passes[a];
     if (pa.kind != PassKind::Render || pa.flags.dead) {
@@ -234,8 +308,7 @@ bool coalesceOnce(FrameGraph& graph, OptimizerStats* stats,
       if (collect_return_candidate) {
         ++stats->pass_coalesce_return_candidates;
       }
-      if (!validCommandRange(graph, pa) || !validCommandRange(graph, pb) ||
-          !validDrawRange(graph, pa) || !validDrawRange(graph, pb)) {
+      if (!summaries[a].valid || !summaries[b].valid) {
         if (collect_return_candidate) {
           ++stats->pass_coalesce_return_missing_invariant;
         }
@@ -248,14 +321,7 @@ bool coalesceOnce(FrameGraph& graph, OptimizerStats* stats,
       // only when P_b contributes draw records. A Clear/helper command at the
       // head of P_b is a semantic encoder boundary and must not be silently
       // folded into the merged pass.
-      bool second_pass_draw_only = true;
-      for (u32 i = 0; i < pb.commands.count; ++i) {
-        if (graph.commands[pb.commands.first + i].kind !=
-            core::MetalCommandKind::DrawRun) {
-          second_pass_draw_only = false;
-          break;
-        }
-      }
+      const bool second_pass_draw_only = summaries[b].drawOnly;
       if (!second_pass_draw_only) {
         if (stats) {
           if (collect_return_candidate) {
@@ -269,6 +335,10 @@ bool coalesceOnce(FrameGraph& graph, OptimizerStats* stats,
       }
       // R-BACK-34.5 / L1 flush boundary: reject if any intervening pass is not
       // a plain render pass (Present/Blit/Sync may be flush-bearing).
+      if (!returnDiagnostics && !pa.flags.active_render_seed &&
+          hardBoundaries[b] != hardBoundaries[a + 1]) {
+        continue;
+      }
       bool intervening_ok = true;
       std::vector<u32> before;  // intervening passes that go before P_a.
       std::vector<u32> after;   // intervening passes that go after P_b.
@@ -288,8 +358,7 @@ bool coalesceOnce(FrameGraph& graph, OptimizerStats* stats,
           intervening_ok = false;
           break;
         }
-        if (px.flags.dead || !validCommandRange(graph, px) ||
-            !validDrawRange(graph, px)) {
+        if (px.flags.dead || !summaries[x].valid) {
           missing_invariant = true;
           intervening_ok = false;
           break;
@@ -299,10 +368,11 @@ bool coalesceOnce(FrameGraph& graph, OptimizerStats* stats,
         if (collect_return_candidate) {
           commandless_intervener += commandless ? 1u : 0u;
           non_draw_intervener +=
-              !commandless && hasNonDrawCommand(graph, px) ? 1u : 0u;
+              !commandless && !summaries[x].drawOnly ? 1u : 0u;
           semantic_intervener += hasSemanticFlag(px) ? 1u : 0u;
         }
-        const Move m = classifyIntervening(graph, static_cast<u32>(a),
+        if (!queries) queries.emplace(graph);
+        const Move m = classifyIntervening(*queries, static_cast<u32>(a),
                                            static_cast<u32>(b),
                                            static_cast<u32>(x));
         if (m == Move::Blocked) {

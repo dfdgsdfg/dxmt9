@@ -58,7 +58,10 @@ its internal post-merge lifetime refresh; do not count that work again.
 
 Require every graph output (including ordered commands/draws, edges, flags,
 resource accesses and load/store actions) to equal the unsplit OFF reference;
-also require equal merge counts. Timers report both monotonic wall and native
+also require equal merge counts. The query-reuse probe freezes `bba48fd8`
+pass coalescing in a test-only translation unit and compares every named
+optimizer statistic against that reference for each diagnostic setting.
+Timers report both monotonic wall and native
 thread CPU. Their fixed clock overhead affects very small phases. Diagnostic
 counters may differ by design; they must not change graph decisions.
 
