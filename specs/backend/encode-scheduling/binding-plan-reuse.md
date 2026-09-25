@@ -11,7 +11,8 @@ The reference is `makeDrawBindingPacketPlan` for every draw. Under
 R-VERIF-1.5–1.8, a candidate must produce an equal packet at every draw, not
 merely at the first draw of an encoder.
 
-The serial DrawRun call owns a non-copyable, synchronous binding-plan owner.
+The serial DrawRun call always owns a non-copyable, synchronous binding-plan owner;
+there is no runtime OFF policy. The retired selector is ignored, including `0`.
 It borrows the command's immutable hot state and pixel-shader metadata; neither
 may change until the owner is destroyed. The owner must not escape the command,
 cross a source boundary, or be shared with a parallel child. Address equality

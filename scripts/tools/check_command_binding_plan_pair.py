@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Check same-image OFF/ON replay readbacks and non-vacuous binding-plan reuse."""
+"""Check archived OFF/ON or default/retired-selector replay with real reuse."""
 import argparse
 import hashlib
 import json
@@ -8,7 +8,7 @@ import re
 import statistics
 
 
-def check(off, on):
+def check(off, on, default=False):
     receipts = [json.loads((path / 'result.json').read_text()) for path in (off, on)]
     a, b = receipts
     for key in ('provider', 'input_components', 'forced_environment', 'source_boundary_mode'):
@@ -21,7 +21,8 @@ def check(off, on):
     if a['result']['loaded_images'] != b['result']['loaded_images']:
         raise ValueError('loaded image drift')
     images, reports = None, []
-    for enabled, path, receipt in zip(('0', '1'), (off, on), receipts):
+    policies = (None, '0') if default else ('0', '1')
+    for enabled, path, receipt in zip(policies, (off, on), receipts):
         if not (receipt['accepted'] and receipt['readback_artifacts_valid'] and
                 receipt['loaded_images_stable']):
             raise ValueError('unqualified receipt')
@@ -55,8 +56,8 @@ def check(off, on):
             return int(values[-1])
         builds = counter('encode_draw_command_binding_plan_builds')
         reuses = counter('encode_draw_command_binding_plan_reuses')
-        if (enabled == '1' and (builds == 0 or reuses == 0)) or (
-                enabled == '0' and (builds or reuses)):
+        if ((default or enabled == '1') and (builds == 0 or reuses == 0)) or (
+                not default and enabled == '0' and (builds or reuses)):
             raise ValueError('vacuous or wrong candidate coverage')
         if counter('gpu_command_buffer_errors'):
             raise ValueError('GPU errors')
@@ -72,8 +73,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('off', type=Path)
     parser.add_argument('on', type=Path)
+    parser.add_argument('--default', action='store_true',
+                        help='Require reuse with selector unset and retired selector=0')
     args = parser.parse_args()
-    print(json.dumps(check(args.off, args.on), indent=2))
+    print(json.dumps(check(args.off, args.on, args.default), indent=2))
 
 
 if __name__ == '__main__':

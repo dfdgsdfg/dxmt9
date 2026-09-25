@@ -9,8 +9,8 @@ for the probe-class → flag → `docs/perfomance/` mapping.
 
 ## Encoder / state debug
 
-`DXMT9_COMMAND_BINDING_PLAN_REUSE=1` enables the experimental serial DrawRun
-sampler-plan owner (default off). Immutable command state/shader projections are
+`DXMT9_COMMAND_BINDING_PLAN_REUSE` is retired and ignored, including `0`.
+Serial DrawRun always owns a sampler plan. Immutable command state/shader projections are
 reused in place; stream/raster plans (including stream overrides) remain per-draw.
 Foreign state and parallel children use canonical preparation; backing snapshots
 are not cached. Perf counters

@@ -14,12 +14,19 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
-[H362](present-pacing-binding-plan.362.md) removes disabled draw diagnostics
+[H363](present-pacing-binding-plan-default.363.md) makes serial binding-plan
+reuse unconditional and retires its OFF selector at the user's request.
+Safety/unsupported-context fallback remains; promotion adds no FPS claim.
+
+[H362](present-pacing-binding-plan.362.md) (historical OFF/ON; selector removed)
+removes disabled draw diagnostics
 and implements opt-in command-local sampler-plan reuse. Same-image GT2 GPU
 exact passes with nonzero reuse; short encode elapsed is 40.36→39.31ms, not
 an FPS verdict. STALKER planning splits now work, but the 40–45ms spike did not
 reproduce in the smaller selected sources; matched large-source evidence and
-observer-OFF performance qualification remain open. Candidate remains OFF.
+observer-OFF performance qualification remain open. Subsequent explicit user
+promotion makes serial reuse unconditional and removes its OFF selector;
+this policy change is not an additional performance verdict.
 
 [H361](present-pacing-serial-encode-owners.361.md) remeasures serial STALKER
 Encode on H360: encodeDraw owns 72% of observed encodeChunk elapsed scopes;

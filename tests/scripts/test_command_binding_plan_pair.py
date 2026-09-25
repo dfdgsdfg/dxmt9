@@ -32,11 +32,26 @@ class PairTest(unittest.TestCase):
                     f'encode_draw_command_binding_plan_reuses={flag} '
                     'gpu_command_buffer_errors=0')
             self.assertTrue(check(off, on)['exact'])
+            for path, flag in ((off, None), (on, '0')):
+                record = json.loads((path/'result.json').read_text())
+                record['renderer_environment'] = (
+                    {} if flag is None else {'DXMT9_COMMAND_BINDING_PLAN_REUSE': flag})
+                (path/'result.json').write_text(json.dumps(record))
+                (path/'provider.stderr').write_text(
+                    'encode_draw_command_binding_plan_builds=1 '
+                    'encode_draw_command_binding_plan_reuses=1 gpu_command_buffer_errors=0')
+            self.assertTrue(check(off, on, default=True)['exact'])
             (on/'provider.stderr').write_text(
                 'encode_draw_command_binding_plan_builds=1 '
                 'encode_draw_command_binding_plan_reuses=0 gpu_command_buffer_errors=0')
             with self.assertRaisesRegex(ValueError, 'vacuous'):
-                check(off, on)
+                check(off, on, default=True)
+
+    def test_runtime_selector_retired(self):
+        source = (Path(__file__).resolve().parents[2] /
+                  'src/dxmt9/dxmt9_draw_encoder_chunk.mm').read_text()
+        self.assertNotIn('DXMT9_COMMAND_BINDING_PLAN_REUSE', source)
+        self.assertIn('.commandBindingPlan = &commandBindingPlan', source)
 
 
 if __name__ == '__main__':

@@ -4,12 +4,17 @@ workload: 3DMark05 GT2 fixed capture; STALKER CoP Day
 title: "H362: Diagnostic gating and command-local binding projection"
 type: evidence
 status: partial-attribution
+outdated: knob-removed
 updated: 2026-09-25
 source: experiments/output/binding-plan-h362/override-comparison.json; experiments/output/binding-plan-h362/{override-off,override-on}/result.json; experiments/output/app-d3d9-stkcop-bench-planning-h362/{result.json,daybenchmark.result,scene.png}; traces/app-d3d9-stkcop-planning-h362/planning.json
 related: present-pacing-serial-encode-owners.361.md
 ---
 
 # H362: Execution proof before reuse claims
+
+Historical OFF/ON experiment: the selector is retired by
+[H363](present-pacing-binding-plan-default.363.md). Its artifacts remain valid
+historical evidence, but the OFF policy cannot be selected in current runtime.
 
 Base `ed88a207` plus the uncommitted implementation. Three changes:
 

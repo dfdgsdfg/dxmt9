@@ -16,8 +16,10 @@ remain in `docs/perfomance/`.
 
 Command-local binding projection: candidate implementation and bounded native
 reference comparison are in [binding-plan reuse](binding-plan-reuse.md).
-`DXMT9_COMMAND_BINDING_PLAN_REUSE` remains default-off: broader live wild
-and cost qualification are open. Frozen sampler plans are reused in-place;
+Serial DrawRun reuse is the default following the user's explicit promotion;
+`DXMT9_COMMAND_BINDING_PLAN_REUSE` and its OFF branch are removed from runtime.
+Broader live wild and cost qualification remain open, not claimed by promotion.
+Frozen sampler plans are reused in-place;
 stream/raster plans remain per-draw, including production stream overrides. No
 parallel, lifetime or scheduling claims are added. Source-level planning phase
 trace is available. H362's STALKER window has 58 complete sources and 8.254ms
@@ -28,6 +30,9 @@ and 4 measured per policy), with 3,876 ON builds and 7,320 reuses. The first two
 attempts were rejected as vacuous (zero reuse), not counted as qualification.
 Native production-override differential and existing TLA regression pass;
 the short elapsed-time sample does not establish an FPS benefit.
+H363's promoted binary passes the same GT2 oracle with the selector unset and
+with retired selector `0`: 12 exact iterations, 7,320 reuses per block, zero GPU
+errors. No new OFF policy exists; broader performance qualification remains open.
 
 Shared-table step: `ParallelPassResolvedCoverage` and the validator's union now
 use exact `ParallelPassReadIndices` over the snapshot-owned canonical table,
