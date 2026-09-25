@@ -1672,3 +1672,15 @@ execution lanes as separate contracts and applies `R-BACK-2.50` before any
 default promotion.
 
 | Render Tape identity v1/v2 and SegmentSerial (`R-BACK-2.40`, `R-BACK-2.49`, `R-BACK-2.60`, `R-BACK-2.66`, `R-BACK-2.76`–`2.81`) | ⚠️ v1 retired/rejected; bounded SegmentSerial admission/completion refinement and native bindings present; production/GT2 promotion open | `identity.bin` v1 is explicitly rejected and never reinterpreted. The v2 EventSerial one-source-per-event path remains the compatibility/default identity lane and the complete-event fallback. `RenderTapeIdentitySegments.tla`/`.cfg` proves bounded exact segment partition, pass-piece continuity, atomic publication/two-phase abort, reverse-tail reclaim, flattened completion, exact same-event/tail settlement, shared greatest-dependent watermarks, and pre-effect fallback/post-effect fail-stop. Native tape and capture-ledger tests bind the production detach/finish and full-run settlement predicates. The GT2 r65/r66 capture-authority runs prove surviving v2 sidecars and exact v2 event/record/pass coverage; they do not prove unbounded provider grammar, Metal segment completion, or visual/locality promotion. | Keep binding production callsites and add the non-vacuous GT2 identity-v2 EventSerial-vs-SegmentSerial pair with zero GPU errors and equal output/record identity. Keep SegmentSerial and the Tape lane default-off until R-BACK-2.50 and cross-workload visual/locality/no-gputrace gates pass; do not revive v1. |
+
+## Optimizer input measurement fixture
+
+The diagnostic [optimizer fixture](optimizer-fixture.md) preserves the actual
+pre-optimizer value graph for default pass-coalescing and compares return
+diagnostics OFF/ON and whole/split production execution. This does not close
+STALKER volume/query Render Tape capture or authorize an optimizer change.
+Offline graph equality cannot substitute for backend/GPU output evidence.
+H365 captures four real STALKER graphs: all OFF/ON and whole/split results
+match, but large inputs retain 26–28ms CPU in pass-coalescing with zero merges.
+Core candidate-search/reachability optimization and its refinement remain open;
+return diagnostics account for only the smaller 0.85–3.39ms increment.

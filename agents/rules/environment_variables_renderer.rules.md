@@ -7,6 +7,17 @@ string that is not `0`, unless documented otherwise.
 
 ## Backend selection
 
+`DXMT9_FRAMEGRAPH_OPTIMIZER_FIXTURE_DIR` is a default-OFF diagnostic output
+directory (unset/empty/`0` disables). It must already exist. Copies the exact
+default pass-coalescing input graph, runs production once, then exclusively
+exports at most four inputs with >=128 commands and >=5ms optimizer wall.
+Files are bounded to 8 MiB; unsupported optimizer features are not exported.
+This perturbs scheduling and cannot qualify FPS. Use the device-free
+`dxmt9-framegraph-optimizer-probe INPUT.fginput` for same-input return-diagnostic
+OFF/ON and lifetime/coalescing/loadstore timings. See
+`specs/backend/encode-scheduling/optimizer-fixture.md`; this is not GPU/Tape
+capture and does not retain live resources.
+
 Range upload uses its resource-arena lock without a redundant outer queue
 lock, exact captured-backing stamps use bounded batches, and immutable
 compatibility-batch preflight runs before queue locking. These are unconditional;

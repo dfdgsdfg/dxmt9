@@ -22,6 +22,17 @@ dxmt9_render_tape_provider_tool = executable(
 )
 
 if host_machine.system() == 'darwin'
+  dxmt9_optimizer_probe = executable(
+    'dxmt9-framegraph-optimizer-probe',
+    'dxmt9_framegraph_optimizer_probe.cpp',
+    include_directories: dxmt9_inc,
+    dependencies: [dxmt9_dep, dxmt9_frontend_dep],
+    install: false,
+  )
+  if get_option('build_tests')
+    test('dxmt9-framegraph-optimizer-fixture', dxmt9_optimizer_probe,
+         args: ['--self-test'])
+  endif
   dxmt9_thread_cpu_tool = executable(
     'dxmt9-thread-cpu',
     'dxmt9_thread_cpu.cpp',

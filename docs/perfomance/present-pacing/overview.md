@@ -14,6 +14,24 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H365](present-pacing-optimizer-fixture.365.md) closes same-input attribution:
+four real STALKER graphs match exactly under diagnostics OFF/ON and whole/split
+optimizer execution. Large inputs still cost 26–28ms native CPU with diagnostics
+OFF, almost entirely pass coalescing, **with zero merges**. Return diagnostics
+add 0.85–3.39ms, not the majority. Prioritize reusable dependency/reachability
+queries and safe early rejection on the unchanged graph; no algorithm or FPS
+improvement is claimed yet.
+
+[H364](present-pacing-encode-residual.364.md) records a counters-OFF STALKER
+Day baseline of 24.822 FPS, with the late slowdown still present. A bounded
+ordinary-source trace reproduces a 35.7ms planning CPU spike: 35.5ms is in
+the optimizer, versus 0.185ms graph construction. Perf-enabled return-candidate
+diagnostics are inside that phase; H365 separates these from core coalescing
+on identical graphs. Residual encodeDraw budgets favor
+index/stream binding over another sampler-plan rewrite. Full STALKER Tape
+capture remains blocked by volume/query coverage; no fixed-input spike or
+FPS gain is claimed.
+
 [H363](present-pacing-binding-plan-default.363.md) makes serial binding-plan
 reuse unconditional and retires its OFF selector at the user's request.
 Safety/unsupported-context fallback remains; promotion adds no FPS claim.

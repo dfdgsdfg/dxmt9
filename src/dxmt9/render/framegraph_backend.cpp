@@ -6,6 +6,7 @@
 #include "../framegraph/fg_builder.hpp"
 #include "../framegraph/fg_linearizer.hpp"
 #include "../framegraph/fg_multi_source_planner.hpp"
+#include "../framegraph/fg_optimizer_fixture.hpp"
 #include "util/log/log.hpp"
 
 #include <algorithm>
@@ -575,9 +576,15 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
 
     framegraph::OptimizerStats stats{};
     planningPhase(5u);
-    framegraph::runOptimizer(
-        graph, activeOptions, /*observations=*/nullptr, &stats,
-        framegraph::DceLookaheadProof{overwriteProof});
+    if (framegraph::optimizerFixtureEnabled()) {
+      framegraph::runOptimizerWithFixture(graph, activeOptions, &stats,
+          framegraph::DceLookaheadProof{overwriteProof}, seqId,
+          static_cast<const IRenderBackend*>(this));
+    } else {
+      framegraph::runOptimizer(
+          graph, activeOptions, /*observations=*/nullptr, &stats,
+          framegraph::DceLookaheadProof{overwriteProof});
+    }
     planningPhase(6u);
     const perf::FramegraphSourceLocalPassCoalesceDiagnostic
         sourceLocalReturnDiagnostic{
