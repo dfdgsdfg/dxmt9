@@ -14,6 +14,21 @@ remain in `docs/perfomance/`.
 
 ## Pass-wide immutable access metadata (2026-09-20)
 
+Command-local binding projection: candidate implementation and bounded native
+reference comparison are in [binding-plan reuse](binding-plan-reuse.md).
+`DXMT9_COMMAND_BINDING_PLAN_REUSE` remains default-off: broader live wild
+and cost qualification are open. Frozen sampler plans are reused in-place;
+stream/raster plans remain per-draw, including production stream overrides. No
+parallel, lifetime or scheduling claims are added. Source-level planning phase
+trace is available. H362's STALKER window has 58 complete sources and 8.254ms
+total planning CPU, but the earlier 814-command spike did not reproduce;
+same-large-source spike attribution remains open.
+H362's same-image GT2 comparison passes all 12 GPU-exact iterations (2 warmups
+and 4 measured per policy), with 3,876 ON builds and 7,320 reuses. The first two
+attempts were rejected as vacuous (zero reuse), not counted as qualification.
+Native production-override differential and existing TLA regression pass;
+the short elapsed-time sample does not establish an FPS benefit.
+
 Shared-table step: `ParallelPassResolvedCoverage` and the validator's union now
 use exact `ParallelPassReadIndices` over the snapshot-owned canonical table,
 instead of copying a 256-identity array per child. Indices borrow only during

@@ -368,8 +368,8 @@ class PerfScope {
   // them (state-churn-encode-append-decomposition.14).
   explicit PerfScope(void (*record)(std::uint64_t),
                      void (*site)(std::uint64_t) = nullptr)
-      : record_(record),
-        site_(site && encodeDrawPhaseSplitPerfEnabled() ? site : nullptr) {
+      : record_(perf::enabled() ? record : nullptr),
+        site_(record_ && site && encodeDrawPhaseSplitPerfEnabled() ? site : nullptr) {
     if (record_) {
       started_ = std::chrono::steady_clock::now();
     }

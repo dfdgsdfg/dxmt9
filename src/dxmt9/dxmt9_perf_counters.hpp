@@ -1272,6 +1272,7 @@ void countEncodeDrawBindingPacketCacheHashCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawBindingPacketCacheProbeCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawBindingPacketCacheStoreCpuTime(std::uint64_t nanoseconds);
 void countEncodeDrawBindingPacketCacheHits(std::uint64_t hits);
+void countEncodeDrawCommandBindingPlan(bool reused);
 void countEncodeDrawBindingPacketCacheMisses(std::uint64_t misses);
 void countEncodeDrawBindingPacketCacheCollisions(std::uint64_t collisions);
 void countEncodeDrawBindingPacketTextureRecordCpuTime(std::uint64_t nanoseconds);

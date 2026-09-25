@@ -42,7 +42,16 @@ enum class Event : std::uint32_t {
   PreparedCardinalityBegin, PreparedCardinalityStatus, PreparedCardinalityCommands,
   PreparedCardinalityUnresolved, PreparedCardinalityAccesses,
   PreparedCardinalityIdentities, PreparedCardinalityEnd,
+  FramegraphPlanningPhase,
 };
+
+inline bool planningSplitEnabled() noexcept {
+  static const bool value = [] {
+    const char* flag = std::getenv("DXMT9_CPU_SUPPLY_PLANNING_SPLIT");
+    return enabled() && flag && flag[0] && flag[0] != '0';
+  }();
+  return value;
+}
 
 inline bool commandSplitEnabled() noexcept {
   static const bool value = [] {

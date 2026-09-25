@@ -13,6 +13,7 @@ namespace dxmt9::encoders {
 
 struct ActiveEncoderBreakdown;
 struct VisibilityScoutPass;
+class CommandBindingPlan;
 
 namespace encode_session {
 struct ArgbufCbufCache;
@@ -26,6 +27,7 @@ struct DrawNativeShadowView {
   encode_session::ArgbufCbufCache* argbufCbufCache = nullptr;
   encode_session::StreamIbStagingCache* streamIbStagingCache = nullptr;
   VisibilityScoutPass* visibilityScout = nullptr;
+  CommandBindingPlan* commandBindingPlan = nullptr;
   core::PsoHandle renderPsoHandle{};
   core::PsoHandle tilePsoHandle{};
   core::DepthStencilHandle depthStencilHandle{};

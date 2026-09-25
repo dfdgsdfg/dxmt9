@@ -13,6 +13,7 @@ sys.path.insert(0, str(ROOT/'scripts/tools'))
 import join_replay_wait_trace as joiner
 import summarize_guest_pc_window as guest
 import analyze_publication_progress as progress
+import analyze_framegraph_planning as planning
 
 
 def fixture():
@@ -39,6 +40,25 @@ def fixture():
 
 
 class TestSupply(unittest.TestCase):
+    def test_planning_partition(self):
+        rows = [dict(kind='framegraph_planning_phase', owner=1, tid=2, id=3,
+                     value=p, wall_ns=1000+i*100, cpu_ns=500+i*50)
+                for i, p in enumerate([1, 2, 3, 4, 5, 6, 7, 0])]
+        result = planning.analyze(rows)
+        self.assertEqual(len(result['sources']), 1)
+        self.assertEqual(result['sources'][0]['cpu_ns'], 350)
+        self.assertEqual(len(result['sources'][0]['phases']), 7)
+        for malformed in (rows[:3]+rows[4:], rows[:3]+rows[2:]):
+            with self.assertRaises(ValueError):
+                planning.analyze(malformed)
+        self.assertEqual(planning.analyze(rows[:-1])['incomplete_sources'], 1)
+        self.assertFalse(planning.analyze(rows[2:])['sources'])
+        self.assertFalse(planning.analyze([rows[-1]])['sources'])
+        self.assertEqual(planning.analyze(
+            rows[:4]+[dict(rows[4], value=8)])['aborted_sources'], 1)
+        foreign = [dict(r, id=4) for r in rows]
+        self.assertEqual(len(planning.analyze(rows+foreign)['sources']), 2)
+
     def test_parallel_access_transcript(self):
         begin = dict(tid=3,wall_ns=100,cpu_ns=100)
         end = dict(tid=3,wall_ns=1000,cpu_ns=1000)

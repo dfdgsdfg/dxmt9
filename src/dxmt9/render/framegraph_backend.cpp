@@ -427,7 +427,14 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
                                      sessionLookaheadSources) {
   // Cold observer identity is bound by the ordinary queue's backend-begin
   // event. No queue pointer or diagnostic field enters EncodeContext/Slot.
+  const bool planningSplit = ::dxmt9::supply::planningSplitEnabled();
+  auto planningPhase = [&](std::uint64_t phase) {
+    if (planningSplit)
+      ::dxmt9::supply::record(::dxmt9::supply::Event::FramegraphPlanningPhase,
+                            static_cast<const IRenderBackend*>(this), seqId, phase);
+  };
   auto encodePlannedChunk = [&](std::uint64_t disposition) {
+    planningPhase(0u); // End planning before any encode work.
     if (::dxmt9::supply::enabled())
       ::dxmt9::supply::record(::dxmt9::supply::Event::FramegraphPoolBinding,
                             static_cast<const IRenderBackend*>(this), seqId,
@@ -461,9 +468,11 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
   // dump is backend-agnostic — the TraditionalBackend owns the same observer.
   const framegraph::ResourceAliasResolver aliasResolver =
       makeResourceAliasResolver(ctx.pool);
+  planningPhase(1u);
   observer_.observeAndExport(payload, seqId, aliasResolver);
 
   if (!features_.empty()) {
+    planningPhase(2u);
     framegraph::FrameGraph graph =
         framegraph::buildFrameGraph(payload, seqId, aliasResolver);
     framegraph::OptimizerOptions activeOptions = options_;
@@ -471,6 +480,7 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
         activeOptions.passcoalesce && perf::enabled();
 
     std::vector<framegraph::ResourceHandle> overwriteProof;
+    planningPhase(3u);
     if (features_.dce) {
       if (const auto* next = selectFrameGraphLookahead(
               sessionLookaheadSources, slotIndex, payload, seqId,
@@ -491,6 +501,7 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
     framegraph::OptimizerStats naturalStats{};
     framegraph::ReplayCommandPlan naturalPlan{};
     bool activeRenderSeedApplied = false;
+    planningPhase(4u);
     if (requiresHeadStableFrontier) {
       naturalGraph =
           framegraph::buildFrameGraph(payload, seqId, aliasResolver);
@@ -563,9 +574,11 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
     }
 
     framegraph::OptimizerStats stats{};
+    planningPhase(5u);
     framegraph::runOptimizer(
         graph, activeOptions, /*observations=*/nullptr, &stats,
         framegraph::DceLookaheadProof{overwriteProof});
+    planningPhase(6u);
     const perf::FramegraphSourceLocalPassCoalesceDiagnostic
         sourceLocalReturnDiagnostic{
             .candidates = stats.pass_coalesce_return_candidates,
@@ -652,6 +665,7 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
           perf::FramegraphSourceLocalReplayOutcome::FinalInvalid);
       util::logf(util::LogLevel::Error, "dxmt9-renderer",
                  "DCE lookahead supplied an invalid encoded replay prefix");
+      planningPhase(8u); // Rejected plan; never include as successful planning.
       return std::nullopt;
     }
 
@@ -686,6 +700,7 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
       }
     }
     bool activeRenderSeedReplayAccepted = false;
+    planningPhase(7u);
     if (requiresHeadStableFrontier) {
       const encoders::EncodeSessionReplayFrontierState replayFrontierState =
           options.session
@@ -751,6 +766,7 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
             util::logf(util::LogLevel::Error, "dxmt9-renderer",
                        "fresh DCE proof changed the already encoded optimized "
                        "prefix");
+            planningPhase(8u);
             return std::nullopt;
           }
           replayPlan = replayPlan.subspan(encoded.size());
@@ -784,6 +800,7 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
         util::logf(util::LogLevel::Error, "dxmt9-renderer",
                    "DCE lookahead could not validate the already encoded "
                    "optimized prefix");
+        planningPhase(8u);
         return std::nullopt;
       }
       static std::once_flag warning;

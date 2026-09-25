@@ -1039,6 +1039,8 @@ struct Counters {
   std::atomic<std::uint64_t> encodeDrawBindingPacketCacheProbeCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawBindingPacketCacheStoreCpuNs{0};
   std::atomic<std::uint64_t> encodeDrawBindingPacketCacheHits{0};
+  std::atomic<std::uint64_t> encodeDrawCommandBindingPlanBuilds{0};
+  std::atomic<std::uint64_t> encodeDrawCommandBindingPlanReuses{0};
   std::atomic<std::uint64_t> encodeDrawBindingPacketCacheMisses{0};
   std::atomic<std::uint64_t> encodeDrawBindingPacketCacheCollisions{0};
   std::atomic<std::uint64_t> encodeDrawBindingPacketTextureRecordCpuNs{0};

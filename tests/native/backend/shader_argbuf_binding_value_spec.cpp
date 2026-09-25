@@ -37,6 +37,8 @@
 #include "../../../src/dxmt9/dxmt9_argbuf_hybrid.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_encoder_internal.hpp"
+#include "../../../src/dxmt9/dxmt9_draw_encoder_diagnostics.hpp"
+#include "../../../src/dxmt9/dxmt9_draw_encoder_draw_internal.hpp"
 #include "../../../src/dxmt9/dxmt9_draw_shader.hpp"
 #include "../../../src/dxmt9/dxmt9_ffp_shaders.hpp"
 #include "../../../src/dxmt9/dxmt9_shader_translator.hpp"
@@ -583,6 +585,90 @@ void checkBindingPacketKeyDiffers(
         message);
 }
 
+void testCommandBindingPlanRefinement() {
+  // Bounded sequential refinement: state A/B/A owners, every dynamic input
+  // combination, and rejected foreign-state/shader borrows on each owner.
+  using namespace dxmt9::encoders;
+  const std::array<u8, 12> vertices{};
+  for (u32 generation : {0u, 1u, 2u, 0u}) {
+    auto desc = makeBindingPacketKeyDesc();
+    desc.textures[2].handle = Handle{0x2222u + (u64{generation} << 32)};
+    desc.samplers[2].states[SAMP_ADDRESS_U] = generation + 1;
+    desc.textures[kVertexTextureSampler0].handle = Handle{0x4444u + generation};
+    desc.samplers[kVertexTextureSampler0].states[SAMP_MIN_FILTER] = generation;
+    if (generation == 2) desc.textures[2].handle = {};
+    auto hot = makeFlatDrawStateRecord(desc);
+    hot.textureLods[2] = generation;
+    hot.textureLods[kVertexTextureSampler0] = generation;
+    hot.streamFrequencies[1] = generation == 1 ? kStreamSourceInstanceData : 1;
+    const auto foreignHot = hot;
+    const ShaderRef shader{};
+    const ShaderRef foreignShader{};
+    CommandBindingPlan owner(hot, shader);
+    const DrawBindingPacketPlan* storage = nullptr;
+    for (u32 bits = 0; bits < 256; ++bits) {
+      for (u32 offset : {3u, 9u, 3u}) {
+        auto pv = makeBindingPacketKeyParamView(offset);
+        pv.indexed = bits & 1;
+        pv.instanceCount = bits & 128 ? 3 : 1;
+        if (bits & 2) pv.userVertexData = vertices;
+        auto viewport = desc.viewport;
+        viewport.viewport.x += bits & 4 ? 7 : 0;
+        viewport.scissor.left += bits & 8 ? 3 : 0;
+        const u32 width = bits & 16 ? 128 : 256;
+        const bool preTransformed = bits & 32;
+        const bool disabled = bits & 64;
+        const auto reference = makeDrawBindingPacketPlan(
+            desc.vertexDecl, hot, pv, width, 96, preTransformed,
+            disabled, disabled, &shader, &viewport);
+        const auto* actual = owner.prepare(
+            desc.vertexDecl, hot, shader, pv, width, 96, preTransformed,
+            disabled, disabled, &viewport);
+        check(actual && drawBindingPacketPlansEqual(reference, *actual),
+              "command-local projection refines canonical per-draw packet");
+        check(!storage || storage == actual, "packet storage reused in place");
+        storage = actual;
+        check(!owner.prepare(desc.vertexDecl, foreignHot, shader, pv, width,
+                             96, false, false, false),
+              "foreign state fails closed despite equal values");
+        check(!owner.prepare(desc.vertexDecl, hot, foreignShader, pv, width,
+                             96, false, false, false),
+              "foreign shader fails closed despite equal values");
+        auto overridden = hot;
+        DrawShaderLayoutContext layout{};
+        layout.vertexDecl = desc.vertexDecl;
+        layout.pixelShader = shader;
+        DrawBindingOverride binding{};
+        binding.streamMask = 2;
+        binding.streams[1].buffer = Handle{99};
+        binding.streams[1].offset = offset * 16;
+        binding.streams[1].stride = bits & 4 ? 24 : 32;
+        binding.indexBufferValid = true;
+        binding.indexBuffer = Handle{101};
+        applyDrawBindingOverride(overridden, &layout, binding);
+        const auto overrideReference = makeDrawBindingPacketPlan(
+            layout.vertexDecl, overridden, pv, width, 96, preTransformed,
+            disabled, disabled, &layout.pixelShader, &viewport);
+        const auto* overrideActual = owner.prepareStreamOverride(
+            layout.vertexDecl, overridden, pv, width, 96, preTransformed,
+            disabled, disabled, &viewport);
+        check(drawBindingPacketPlansEqual(overrideReference, *overrideActual),
+              "production stream override preserves frozen sampler projection");
+      }
+    }
+  }
+}
+
+void testDisabledDrawPerfScope() {
+  static unsigned callbacks = 0;
+  callbacks = 0;
+  {
+    dxmt9::encoders::PerfScope scope(+[](std::uint64_t) { ++callbacks; });
+  }
+  checkEq(callbacks, dxmt9::perf::enabled() ? 1u : 0u,
+          "disabled draw scope does not call its recorder");
+}
+
 void testDrawBindingPacketKeyIsStableForSameCanonicalValues() {
   static_assert(std::is_trivially_copyable_v<dxmt9::encoders::DrawBindingPacketKey>);
 
@@ -990,6 +1076,8 @@ int main() {
     testEncoderVertexBindingPlanReusesCanonicalSamplerHash();
     testEncoderRasterStatePlanMatchesMetalViewportScissorCull();
     testDrawBindingPacketKeyIsStableForSameCanonicalValues();
+    testCommandBindingPlanRefinement();
+    testDisabledDrawPerfScope();
     testDrawBindingPacketPlanHashMatchesCanonicalKeyHash();
     testDrawBindingPacketKeyDiffersForTextureHandleChange();
     testDrawBindingPacketKeyDiffersForSamplerStateChange();

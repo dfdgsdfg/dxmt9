@@ -9,6 +9,14 @@ for the probe-class → flag → `docs/perfomance/` mapping.
 
 ## Encoder / state debug
 
+`DXMT9_COMMAND_BINDING_PLAN_REUSE=1` enables the experimental serial DrawRun
+sampler-plan owner (default off). Immutable command state/shader projections are
+reused in place; stream/raster plans (including stream overrides) remain per-draw.
+Foreign state and parallel children use canonical preparation; backing snapshots
+are not cached. Perf counters
+`encode_draw_command_binding_plan_builds/reuses` prove candidate execution.
+See `specs/backend/encode-scheduling/binding-plan-reuse.md` for evidence gates.
+
 The durable encoding providers are Stage 1/Stage 2/Stage 2b/resource-array
 binding and portable FFP execution; tile-auto is correctness-blocked; see
 `specs/backend/render-provider/spec.md`. Rollback flags remain supported, while

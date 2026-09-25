@@ -1,5 +1,18 @@
 # dxmt9 Environment Variables — Perf counters
 
+`DXMT9_CPU_SUPPLY_PLANNING_SPLIT=1` adds source-level sequential phase markers
+to the bounded CPU supply trace (default off, requires `DXMT9_CPU_SUPPLY_TRACE`).
+Phases: observer, graph construction, lookahead, natural-frontier planning,
+optimizer, diagnostics/prefix repair, replay selection. Run
+`scripts/run_python.sh scripts/tools/analyze_framegraph_planning.py TRACE` to
+rank complete sources by native CPU and wall time. Clipped scopes are excluded;
+missing interior or reversed phases are rejected. Wrapper/alias setup and
+encode are excluded; results are not FPS bounds. No per-draw instrumentation.
+
+Draw-encoder `PerfScope` and binding-cache child clocks are disabled when
+`DXMT_PERF_COUNTERS` is off. Texture-record resource lookup additionally requires
+the active encoder-breakdown observer, not merely its non-null owner pointer.
+
 Part of the [`environment_variables.rules.md`](environment_variables.rules.md)
 index (counter system, per-frame snapshot, and 3DMark05 GT1 perf-probe knobs).
 A flag is "set" when its value is a non-empty string that is not `0`, unless

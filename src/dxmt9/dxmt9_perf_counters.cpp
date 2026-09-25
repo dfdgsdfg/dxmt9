@@ -3977,6 +3977,11 @@ void countEncodeDrawBindingPacketCacheHits(std::uint64_t hits) {
   add(counters().encodeDrawBindingPacketCacheHits, hits);
 }
 
+void countEncodeDrawCommandBindingPlan(bool reused) {
+  add(reused ? counters().encodeDrawCommandBindingPlanReuses
+             : counters().encodeDrawCommandBindingPlanBuilds, 1);
+}
+
 void countEncodeDrawBindingPacketCacheMisses(std::uint64_t misses) {
   add(counters().encodeDrawBindingPacketCacheMisses, misses);
 }

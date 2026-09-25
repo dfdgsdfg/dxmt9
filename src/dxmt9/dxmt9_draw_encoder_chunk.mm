@@ -3173,6 +3173,14 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
           subrangeTelemetry.otherRelaxationSetPairs;
     };
     u64 selectedMergePairs = 0u;
+    static const bool reuseBindingPlan = [] {
+      const char* value = std::getenv("DXMT9_COMMAND_BINDING_PLAN_REUSE");
+      return value && value[0] && value[0] != '0';
+    }();
+    std::optional<CommandBindingPlan> commandBindingPlan;
+    if (reuseBindingPlan) {
+      commandBindingPlan.emplace(hot, stateView.shaderContext().pixelShader);
+    }
     auto encodeDrawSubrange = [&](std::span<const core::DrawParam> drawItems,
                                   std::size_t commandDrawBegin) {
     const std::size_t drawCount = drawItems.size();
@@ -3473,6 +3481,8 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
                          .visibilityScout = diagnosticsState.activeVisibilityScout
                              ? &*diagnosticsState.activeVisibilityScout
                              : nullptr,
+                         .commandBindingPlan =
+                             commandBindingPlan ? &*commandBindingPlan : nullptr,
                          .renderPsoHandle = renderPsoHandle,
                          .tilePsoHandle = tilePsoHandle,
                          .depthStencilHandle = depthStencilHandle,

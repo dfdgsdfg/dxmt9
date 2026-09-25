@@ -4298,87 +4298,117 @@ bool encodeDraw(EncodeContext& ctx,
   const DrawBindingPacketPlan* bindingPacketPtr = nullptr;
   {
     PerfScope bindingPacketScope(perf::countEncodeDrawBindingPacketCpuTime);
-    DrawBindingPacketPlan bindingPacketPlan{};
-    {
+    if (native.commandBindingPlan) {
+      const bool reused = native.commandBindingPlan->prepared();
       PerfScope bindingPacketPlanScope(
           perf::countEncodeDrawBindingPacketPlanCpuTime);
-      if (bindingPacketPlanSplitPerfEnabled()) {
-        {
-          PerfScope fragmentScope(
-              perf::countEncodeDrawBindingPacketPlanFragmentCpuTime);
-          bindingPacketPlan.fragmentTextureSamplers =
-              makeFragmentTextureSamplerBindings(
-                  hot,
-                  &drawState.shaderContext().pixelShader);
-        }
-        {
-          PerfScope vertexScope(
-              perf::countEncodeDrawBindingPacketPlanVertexCpuTime);
-          bindingPacketPlan.vertexTextureSamplers =
-              makeVertexTextureSamplerBindings(hot);
-        }
-        {
-          PerfScope extraStreamScope(
-              perf::countEncodeDrawBindingPacketPlanExtraStreamCpuTime);
-          bindingPacketPlan.extraStreams =
-              makeProgrammableVsExtraStreamBindings(vertexDecl, hot, pv);
-        }
-        {
-          PerfScope rasterScope(
-              perf::countEncodeDrawBindingPacketPlanRasterCpuTime);
-          bindingPacketPlan.raster =
-              makeEncoderRasterStatePlan(
-                  hot,
-                  bindingPacketHasRasterTarget
-                      ? bindingPacketSurface->desc.width
-                      : 1u,
-                  bindingPacketHasRasterTarget
-                      ? bindingPacketSurface->desc.height
-                      : 1u,
-                  ffLayout && ffLayout->preTransformed,
-                  scissorDisabled,
-                  debug::disableCull(),
-                  &effectiveViewport);
-        }
-      } else {
-        bindingPacketPlan = makeDrawBindingPacketPlan(
-            vertexDecl,
-            hot,
-            pv,
+      if (paramBindingOverride &&
+          core::drawBindingOverrideHasBindings(*paramBindingOverride)) {
+        bindingPacketPtr = native.commandBindingPlan->prepareStreamOverride(
+            vertexDecl, hot, pv,
             bindingPacketHasRasterTarget ? bindingPacketSurface->desc.width : 1u,
             bindingPacketHasRasterTarget ? bindingPacketSurface->desc.height : 1u,
-            ffLayout && ffLayout->preTransformed,
-            scissorDisabled,
-            debug::disableCull(),
-            &drawState.shaderContext().pixelShader,
-            &effectiveViewport);
+            ffLayout && ffLayout->preTransformed, scissorDisabled,
+            debug::disableCull(), &effectiveViewport);
+      } else {
+        bindingPacketPtr = native.commandBindingPlan->prepare(
+          vertexDecl, hot, drawState.shaderContext().pixelShader, pv,
+          bindingPacketHasRasterTarget ? bindingPacketSurface->desc.width : 1u,
+          bindingPacketHasRasterTarget ? bindingPacketSurface->desc.height : 1u,
+          ffLayout && ffLayout->preTransformed, scissorDisabled,
+          debug::disableCull(), &effectiveViewport);
+      }
+      if (bindingPacketPtr && perf::enabled())
+        perf::countEncodeDrawCommandBindingPlan(reused);
+    }
+    if (!bindingPacketPtr) {
+      DrawBindingPacketPlan bindingPacketPlan{};
+      {
+        PerfScope bindingPacketPlanScope(
+            perf::countEncodeDrawBindingPacketPlanCpuTime);
+        if (bindingPacketPlanSplitPerfEnabled()) {
+          {
+            PerfScope fragmentScope(
+                perf::countEncodeDrawBindingPacketPlanFragmentCpuTime);
+            bindingPacketPlan.fragmentTextureSamplers =
+                makeFragmentTextureSamplerBindings(
+                    hot,
+                    &drawState.shaderContext().pixelShader);
+          }
+          {
+            PerfScope vertexScope(
+                perf::countEncodeDrawBindingPacketPlanVertexCpuTime);
+            bindingPacketPlan.vertexTextureSamplers =
+                makeVertexTextureSamplerBindings(hot);
+          }
+          {
+            PerfScope extraStreamScope(
+                perf::countEncodeDrawBindingPacketPlanExtraStreamCpuTime);
+            bindingPacketPlan.extraStreams =
+                makeProgrammableVsExtraStreamBindings(vertexDecl, hot, pv);
+          }
+          {
+            PerfScope rasterScope(
+                perf::countEncodeDrawBindingPacketPlanRasterCpuTime);
+            bindingPacketPlan.raster =
+                makeEncoderRasterStatePlan(
+                    hot,
+                    bindingPacketHasRasterTarget
+                        ? bindingPacketSurface->desc.width
+                        : 1u,
+                    bindingPacketHasRasterTarget
+                        ? bindingPacketSurface->desc.height
+                        : 1u,
+                    ffLayout && ffLayout->preTransformed,
+                    scissorDisabled,
+                    debug::disableCull(),
+                    &effectiveViewport);
+          }
+        } else {
+          bindingPacketPlan = makeDrawBindingPacketPlan(
+              vertexDecl,
+              hot,
+              pv,
+              bindingPacketHasRasterTarget ? bindingPacketSurface->desc.width : 1u,
+              bindingPacketHasRasterTarget ? bindingPacketSurface->desc.height : 1u,
+              ffLayout && ffLayout->preTransformed,
+              scissorDisabled,
+              debug::disableCull(),
+              &drawState.shaderContext().pixelShader,
+              &effectiveViewport);
+        }
+      }
+      {
+        PerfScope bindingPacketCacheScope(
+            perf::countEncodeDrawBindingPacketCacheCpuTime);
+        if (!perf::enabled()) {
+          bindingPacketPtr = &cacheDrawBindingPacket(
+              gDrawBindingPacketCache, bindingPacketPlan);
+        } else {
+          DrawBindingPacketCacheStats bindingPacketCacheStats{};
+          bindingPacketPtr =
+              &cacheDrawBindingPacket(
+                  gDrawBindingPacketCache,
+                  bindingPacketPlan,
+                  &bindingPacketCacheStats);
+          perf::countEncodeDrawBindingPacketCacheKeyCpuTime(
+              bindingPacketCacheStats.keyCpuNs);
+          perf::countEncodeDrawBindingPacketCacheHashCpuTime(
+              bindingPacketCacheStats.hashCpuNs);
+          perf::countEncodeDrawBindingPacketCacheProbeCpuTime(
+              bindingPacketCacheStats.probeCpuNs);
+          perf::countEncodeDrawBindingPacketCacheStoreCpuTime(
+              bindingPacketCacheStats.storeCpuNs);
+          perf::countEncodeDrawBindingPacketCacheHits(
+              bindingPacketCacheStats.hits);
+          perf::countEncodeDrawBindingPacketCacheMisses(
+              bindingPacketCacheStats.misses);
+          perf::countEncodeDrawBindingPacketCacheCollisions(
+              bindingPacketCacheStats.collisions);
+        }
       }
     }
-    {
-      PerfScope bindingPacketCacheScope(
-          perf::countEncodeDrawBindingPacketCacheCpuTime);
-      DrawBindingPacketCacheStats bindingPacketCacheStats{};
-      bindingPacketPtr =
-          &cacheDrawBindingPacket(
-              gDrawBindingPacketCache,
-              bindingPacketPlan,
-              &bindingPacketCacheStats);
-      perf::countEncodeDrawBindingPacketCacheKeyCpuTime(
-          bindingPacketCacheStats.keyCpuNs);
-      perf::countEncodeDrawBindingPacketCacheHashCpuTime(
-          bindingPacketCacheStats.hashCpuNs);
-      perf::countEncodeDrawBindingPacketCacheProbeCpuTime(
-          bindingPacketCacheStats.probeCpuNs);
-      perf::countEncodeDrawBindingPacketCacheStoreCpuTime(
-          bindingPacketCacheStats.storeCpuNs);
-      perf::countEncodeDrawBindingPacketCacheHits(
-          bindingPacketCacheStats.hits);
-      perf::countEncodeDrawBindingPacketCacheMisses(
-          bindingPacketCacheStats.misses);
-      perf::countEncodeDrawBindingPacketCacheCollisions(
-          bindingPacketCacheStats.collisions);
-    }
-    if (encoderBreakdown) {
+    if (encoderBreakdown && encoderBreakdown->enabled) {
       PerfScope bindingPacketTextureRecordScope(
           perf::countEncodeDrawBindingPacketTextureRecordCpuTime);
       for (const auto& binding : bindingPacketPtr->fragmentTextureSamplers) {

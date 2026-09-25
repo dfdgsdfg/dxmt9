@@ -934,6 +934,8 @@ constexpr CounterEntry kCounterTable[] = {
     {"encode_draw_binding_packet_cache_probe_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketCacheProbeCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_binding_packet_cache_store_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketCacheStoreCpuNs, nullptr, nullptr, 0.0},
     {"encode_draw_binding_packet_cache_hits", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawBindingPacketCacheHits, nullptr, nullptr, 0.0},
+    {"encode_draw_command_binding_plan_builds", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawCommandBindingPlanBuilds, nullptr, nullptr, 0.0},
+    {"encode_draw_command_binding_plan_reuses", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawCommandBindingPlanReuses, nullptr, nullptr, 0.0},
     {"encode_draw_binding_packet_cache_misses", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawBindingPacketCacheMisses, nullptr, nullptr, 0.0},
     {"encode_draw_binding_packet_cache_collisions", CounterEntry::Kind::UnsignedCount, &Counters::encodeDrawBindingPacketCacheCollisions, nullptr, nullptr, 0.0},
     {"encode_draw_binding_packet_texture_record_cpu_ms", CounterEntry::Kind::Milliseconds, &Counters::encodeDrawBindingPacketTextureRecordCpuNs, nullptr, nullptr, 0.0},

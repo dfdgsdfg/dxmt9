@@ -2136,6 +2136,58 @@ inline DrawBindingPacketPlan makeDrawBindingPacketPlan(
   };
 }
 
+// Command-local synchronous capability. The borrowed state/shader must remain
+// immutable for its entire lifetime; never retain this across a DrawRun.
+class CommandBindingPlan {
+ public:
+  CommandBindingPlan(const core::FlatDrawStateRecord& hot,
+                     const core::ShaderRef& pixelShader) noexcept
+      : hot_(&hot), pixelShader_(&pixelShader) {}
+  CommandBindingPlan(const CommandBindingPlan&) = delete;
+  CommandBindingPlan& operator=(const CommandBindingPlan&) = delete;
+  bool prepared() const noexcept { return packet_.has_value(); }
+
+  const DrawBindingPacketPlan* prepare(
+      const core::VertexDeclSnapshot& vertexDecl,
+      const core::FlatDrawStateRecord& hot, const core::ShaderRef& pixelShader,
+      const ParamView& pv, u32 width, u32 height, bool preTransformed,
+      bool scissorDisabled, bool cullDisabled,
+      const core::ViewportScissor* viewportOverride = nullptr) {
+    if (&hot != hot_ || &pixelShader != pixelShader_) return nullptr;
+    return prepareStreamOverride(vertexDecl, hot, pv, width, height,
+                                 preTransformed, scissorDisabled, cullDisabled,
+                                 viewportOverride);
+  }
+
+  // Only for the command's applyDrawBindingOverride result: that transition
+  // changes stream/index inputs, never sampler inputs or the pixel shader.
+  // Concrete backing snapshots are still consumed per draw by encodeDraw.
+  const DrawBindingPacketPlan* prepareStreamOverride(
+      const core::VertexDeclSnapshot& vertexDecl,
+      const core::FlatDrawStateRecord& hot, const ParamView& pv,
+      u32 width, u32 height, bool preTransformed,
+      bool scissorDisabled, bool cullDisabled,
+      const core::ViewportScissor* viewportOverride = nullptr) {
+    if (!packet_) {
+      packet_.emplace();
+      packet_->fragmentTextureSamplers =
+          makeFragmentTextureSamplerBindings(*hot_, pixelShader_);
+      packet_->vertexTextureSamplers = makeVertexTextureSamplerBindings(*hot_);
+    }
+    packet_->extraStreams =
+        makeProgrammableVsExtraStreamBindings(vertexDecl, hot, pv);
+    packet_->raster = makeEncoderRasterStatePlan(
+        hot, width, height, preTransformed, scissorDisabled, cullDisabled,
+        viewportOverride);
+    return &*packet_;
+  }
+
+ private:
+  const core::FlatDrawStateRecord* hot_;
+  const core::ShaderRef* pixelShader_;
+  std::optional<DrawBindingPacketPlan> packet_;
+};
+
 // Geometry-trace recorder (env-gated). Called from encodeDraw for the
 // indexed / expanded-indexed / non-indexed paths. Implementation lives
 // in dxmt9_draw_encoder_diagnostics.mm.

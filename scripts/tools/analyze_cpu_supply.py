@@ -35,7 +35,8 @@ EVENTS = ('present import_begin import_end raw_ready mutation_ready stateblock_r
           'prepared_storage_pages prepared_screen prepared_storage_capacity '
           'prepared_cardinality_begin prepared_cardinality_status prepared_cardinality_commands '
           'prepared_cardinality_unresolved prepared_cardinality_accesses '
-          'prepared_cardinality_identities prepared_cardinality_end').split()
+          'prepared_cardinality_identities prepared_cardinality_end '
+          'framegraph_planning_phase').split()
 
 
 def load(path):

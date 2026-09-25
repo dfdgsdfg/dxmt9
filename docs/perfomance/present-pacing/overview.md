@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-24
+updated: 2026-09-25
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
@@ -13,6 +13,24 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
+
+[H362](present-pacing-binding-plan.362.md) removes disabled draw diagnostics
+and implements opt-in command-local sampler-plan reuse. Same-image GT2 GPU
+exact passes with nonzero reuse; short encode elapsed is 40.36→39.31ms, not
+an FPS verdict. STALKER planning splits now work, but the 40–45ms spike did not
+reproduce in the smaller selected sources; matched large-source evidence and
+observer-OFF performance qualification remain open. Candidate remains OFF.
+
+[H361](present-pacing-serial-encode-owners.361.md) remeasures serial STALKER
+Encode on H360: encodeDraw owns 72% of observed encodeChunk elapsed scopes;
+binding-packet preparation owns 16%, despite 90% packet-cache hits. The packet
+is built before lookup on every draw. Cold diagnostic clocks are another
+concrete candidate. These are elapsed service budgets, not native CPU or FPS
+gains; intrusive stack sampling is excluded from the performance verdict.
+The bounded native-CPU retry finds only 27.6% Encode-core occupancy and long
+unpublished-input gaps in its selected late window. Three sources also expose
+40–45ms planning/setup spikes; neither continuous Encode saturation nor a
+whole-pipeline FPS gain is established.
 
 [H360](present-pacing-prepared-default.360.md) records the explicit user decision
 to promote prepared serial reads and remove the OFF policy. Eligible ordinary
