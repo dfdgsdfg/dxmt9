@@ -14,6 +14,38 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H371](present-pacing-tuned-tail-wait.371.md) records the user-selected
+STALKER-specific tuning recipe and recaptures the tuned tail. Replay queue is
+empty 77.84% of the bounded window; replay/encode use 0.241/0.217 cores.
+Native stacks corroborate both waiting for input while primary and secondary
+game threads enter NtWaitForAlertByThreadId. Guest caller/wait-object/waker
+binding, not another encode parallelism change, is the next attribution gate.
+
+[H370](present-pacing-xray-worker-abba.370.md) completes observer-OFF A–B–B–A:
+default 25.425/22.000 FPS versus `-max-threads 2` 28.337/27.617 FPS, all PASS
+with identical staged binaries. Both orderings favor the candidate; mean
+difference is +17.98%, with substantial baseline drift and only two runs each.
+Tail p99 and >250ms counts improve, but stalls remain. Screenshots show no
+gross corruption; temporal visual/audio confirmation is open. No default or
+README baseline is changed.
+
+[H369](present-pacing-xray-worker-yield.369.md) identifies an installed X-Ray
+helper idle protocol with up to one million SwitchToThread attempts before
+sleep backoff. The existing `-max-threads 2` engine option reduces seven
+yield-heavy helpers to one; a diagnostic run passes without runtime patches.
+Single-run throughput improves, but unmatched scenes and diagnostic overhead
+leave observer-OFF reversed-order performance and visual/audio qualification
+open. The primary's native wait resolves to NtWaitForAlertByThreadId/kevent;
+its guest waiter/waker is not yet identified.
+
+[H368](present-pacing-tail-yield-owner.368.md) resolves H367's repeated native
+PC to Wine `NtYieldExecution` → `cthread_yield`. Seven threads show that chain
+in 89.7–94.9% of recorded stacks and consume about 3.13 cores in a separate
+following CPU-delta window with the invasive PE sampler disabled. The primary's
+late stopped-PC share shifts toward ntdll; guest callers and exact wait sites
+remain open. Prioritize these owners, not a global Wine yield replacement or
+encode parallelism; audio causality and FPS benefit are unproved.
+
 [H367](present-pacing-tail-supply-audio.367.md) samples two late STALKER windows:
 app CPU is 72.8–83.1ms/Present with substantial replay input and encode
 unpublished-input gaps, and no selected instrumented queue-wait events.

@@ -32,6 +32,25 @@ scripts/run_python.sh scripts/run_apps/run_experiment.py run app-d3d9-3dmark06 -
 scripts/run_python.sh scripts/run_apps/run_experiment.py run app-d3d9-sfiv-benchmark --wine-root "$WINE_ROOT" --binary "/path/to/StreetFighterIV_Benchmark.exe"
 ```
 
+### STALKER-specific worker tuning
+
+Keep the catalogue default as the unmodified engine baseline. For the tuned
+STALKER CoP Day/high lane, explicitly limit the engine to two workers (one
+helper plus the calling thread):
+
+```sh
+DXMT_STKCOP_LANE=day DXMT_STKCOP_PRESET=high DXMT_STKCOP_VID_MODE=1280x720 \
+DXMT_STKCOP_EXTRA_ARGS='-max-threads 2' \
+  scripts/run_python.sh scripts/run_apps/run_experiment.py run app-d3d9-stkcop-bench
+```
+
+This controls X-Ray helpers, not dxmt9 replay/encode threads. Label results
+`max-threads 2`; do not mix them with untuned backend comparisons. Unset
+`DXMT_STKCOP_EXTRA_ARGS` for the original baseline. The
+[observer-OFF ABBA](../docs/perfomance/present-pacing/present-pacing-xray-worker-abba.370.md)
+shows a positive throughput signal on this machine; other scenes/runtimes,
+full temporal visual correctness and audio behavior are not thereby qualified.
+
 DX9 regression suite:
 
 ```sh
