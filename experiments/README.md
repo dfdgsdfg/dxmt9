@@ -51,6 +51,33 @@ This controls X-Ray helpers, not dxmt9 replay/encode threads. Label results
 shows a positive throughput signal on this machine; other scenes/runtimes,
 full temporal visual correctness and audio behavior are not thereby qualified.
 
+### STALKER audio-controlled renderer lane
+
+To isolate renderer comparisons from audio mixing load, explicitly append the
+engine's `snd_targets` setting (for example, 16 voices):
+
+```sh
+DXMT_STKCOP_EXTRA_ARGS='-max-threads 2' DXMT_STKCOP_SND_TARGETS=16 \
+  scripts/run_python.sh scripts/run_apps/run_experiment.py run app-d3d9-stkcop-bench
+```
+
+Unset `DXMT_STKCOP_SND_TARGETS` preserves the preset (high uses 32). Accepted
+overrides are integers 4–32, not a claim about every X-Ray build. Volume zero
+is not a substitute. Voice limiting changes audio quality: never use it as an
+unlabelled README/backend comparison or the default. Keep worker count,
+renderer, resolution and preset fixed when comparing original versus capped audio.
+
+`stkcop-requested.ltx`, `stkcop-after-run.ltx` and `stkcop-controls.txt` preserve
+requested configuration and the engine's post-run file. They do not by
+themselves prove source allocation or audible correctness. Qualify source
+count separately, then compare observer-OFF runs in ABBA order.
+
+All launcher runs lock the shared app tree and restore the previous
+`test.ltx`/`user.ltx` bytes (or prior absence) on normal/error exit. Concurrent
+launches fail before staging. An uncatchable kill may leave
+`.dxmt9-experiment-config-lock` with recovery copies: stop the game, restore
+those files and remove the stale lock manually. Never clear a live run's lock.
+
 DX9 regression suite:
 
 ```sh

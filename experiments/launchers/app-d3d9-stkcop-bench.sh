@@ -16,6 +16,7 @@ set -euo pipefail
 #                         engine clamps to what its HW probe accepts)
 #   DXMT_STKCOP_VID_MODE  WxH (default 1280x720), windowed
 #   DXMT_STKCOP_EXTRA_ARGS extra engine args appended verbatim
+#   DXMT_STKCOP_SND_TARGETS optional 4..32 voice cap; unset preserves preset
 #
 # The engine needs native d3dx9 (its runtime-compiled SM1/SM3 shaders break
 # Wine's vkd3d-shader HLSL frontend: E5017 "SM1 non-float expression"), so
@@ -33,6 +34,11 @@ lane=${DXMT_STKCOP_LANE:-day}
 preset=${DXMT_STKCOP_PRESET:-high}
 renderer=${DXMT_STKCOP_RENDERER:-renderer_r2.5}
 vid_mode=${DXMT_STKCOP_VID_MODE:-1280x720}
+snd_targets=${DXMT_STKCOP_SND_TARGETS:-}
+if [[ -n "$snd_targets" ]] && ! [[ "$snd_targets" =~ ^([4-9]|[12][0-9]|3[0-2])$ ]]; then
+  echo "[stkcop] DXMT_STKCOP_SND_TARGETS must be an integer 4..32, or unset" >&2
+  exit 2
+fi
 
 case "$lane" in
   day)       test_file="dayBenchmark.test" ;;
@@ -81,10 +87,19 @@ generate_stkcop_config() {
     echo
     cat "$rspec"
     printf 'renderer %s\nrs_fullscreen off\nvid_mode %s\n' "$renderer" "$vid_mode"
+    if [[ -n "$snd_targets" ]]; then printf 'snd_targets %s\n' "$snd_targets"; fi
   } > "$appdata/test.ltx"
   # The engine reads $app_data_root$/user.ltx earlier than the -ltx config;
   # keep both in sync so the renderer request is visible at every read point.
   cp "$appdata/test.ltx" "$appdata/user.ltx"
+  if [[ -n "${DXMT_EXPERIMENT_OUTPUT_DIR:-}" ]]; then
+    mkdir -p "$DXMT_EXPERIMENT_OUTPUT_DIR"
+    cp "$appdata/test.ltx" "$DXMT_EXPERIMENT_OUTPUT_DIR/stkcop-requested.ltx"
+    printf 'snd_targets_override=%s\nextra_args=%s\nqualification=%s\n' \
+      "${snd_targets:-unset}" "${DXMT_STKCOP_EXTRA_ARGS:-}" \
+      'requested config only; verify engine/source evidence; audio cap changes quality' \
+      > "$DXMT_EXPERIMENT_OUTPUT_DIR/stkcop-controls.txt"
+  fi
   echo "[stkcop] config: lane=$lane preset=$preset renderer=$renderer vid_mode=$vid_mode"
 }
 
@@ -95,6 +110,9 @@ collect_stkcop_results() {
     return 0
   fi
   mkdir -p "$out_dir"
+  if [[ -f "$appdata/user.ltx" ]]; then
+    cp "$appdata/user.ltx" "$out_dir/stkcop-after-run.ltx"
+  fi
   local copied=0
   local f
   for f in "$appdata"/*.result; do
@@ -112,14 +130,52 @@ collect_stkcop_results() {
   fi
 }
 
+# Config files belong to the shared app tree, not to a Wine prefix. Serialize
+# every lane and restore exact prior bytes, including prior absence.
+config_lock="$app_root/.dxmt9-experiment-config-lock"
+if ! mkdir "$config_lock"; then
+  echo "[stkcop] shared app is locked; do not remove the lock until its run has stopped" >&2
+  exit 2
+fi
+config_ready=0
+finish_stkcop() {
+  local status=$?
+  trap - EXIT
+  if (( config_ready )); then
+    collect_stkcop_results || status=1
+    local name
+    for name in test.ltx user.ltx; do
+      if [[ -f "$config_lock/$name" ]]; then
+        if cp "$config_lock/$name" "$app_root/_appdata_/$name"; then
+          rm -f "$config_lock/$name"
+        else
+          status=1 # Preserve the backup and lock if restoration fails.
+        fi
+      else
+        rm -f "$app_root/_appdata_/$name"
+      fi
+    done
+  fi
+  rmdir "$config_lock" || status=1
+  exit "$status"
+}
+trap finish_stkcop EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
+mkdir -p "$app_root/_appdata_"
+for config_name in test.ltx user.ltx; do
+  if [[ -f "$app_root/_appdata_/$config_name" ]]; then
+    cp "$app_root/_appdata_/$config_name" "$config_lock/$config_name"
+  fi
+done
+config_ready=1
+
 exp_stage_dxmt9
 stage_stkcop_redist
 generate_stkcop_config
 rm -f "$app_root/_appdata_"/*.result
 
 export DXMT_EXPERIMENT_WORKDIR="$app_root"
-
-trap collect_stkcop_results EXIT
 
 read -r -a extra_args <<< "${DXMT_STKCOP_EXTRA_ARGS:-}"
 echo "[stkcop] running lane=$lane via $test_file"

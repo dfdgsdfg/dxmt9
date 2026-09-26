@@ -12,6 +12,7 @@ harnesses:
 
 | Var | Purpose |
 |---|---|
+| `DXMT_STKCOP_SND_TARGETS` | STALKER harness-only audio source cap, integer 4–32. Unset preserves preset. Changes audio quality; label controlled comparisons separately. Launcher locks/restores shared configs and records requested/post-run files; actual allocation requires diagnostic verification. |
 | `DXMT9_WINEMETAL_SO` | Explicit `winemetal_dxmt9.so` provider path for app-local bridge loading |
 | `DXMT9_ALLOW_RUNTIME_PROVIDER_FALLBACK` | Allow legacy runtime-by-name provider fallback |
 | `DXMT9_WINE_METAL_SURFACE_PROTOCOL` / `DXMT9_WINE_MANIFEST_ID` | Harness-owned Wine WSI declaration and resolved manifest identity. Only `legacy-macdrv-symbols:<runtime-id>` whose suffix equals `DXMT9_WINE_MANIFEST_ID` qualifies the legacy aggregate-table fallback; `extescape-v1` remains gated by `QUERYESCSUPPORT`. The harness clears inherited values when no manifest entry is resolved |

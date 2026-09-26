@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-25
+updated: 2026-09-26
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
@@ -13,6 +13,65 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
+
+[H380](present-pacing-audio-controlled-supply.380.md) recaptures the capped lane:
+app/replay/encode use 0.866/0.463/0.479 cores, while replay input wait and encode
+unpublished-input gap remain about 25ms/Present. Fixed-arrival replay sensitivity
+is near zero in this window, not an unconditional ceiling. Prioritize game/Wine/
+PE/synchronous-Unix attribution on the primary before encode parallelism.
+
+[H379](present-pacing-audio-cap-abba.379.md) implements an explicit 16-voice
+control lane, verifies actual allocation, and completes observer-OFF ABBA.
+Mean FPS rises 27.675→29.745 (+7.48%); whole-run p99 falls from 143–154ms to
+87–88ms. The lane changes audio quality and stays opt-in; original 32-voice
+results remain the baseline. Human audio/temporal validation remains open.
+
+[H378](present-pacing-audio-mix-coefficients.378.md) reuses saved stacks to decode
+the four applied mixing coefficients. In three late captures, 71–76% of
+qualified samples have all coefficients below 0.01; none are all zero.
+This is low-gain work, not proof of inaudibility or safe voice culling. No new
+run or runtime change; causal audio-quality/provider A/B remains separate.
+
+[H377](present-pacing-audio-source-progress.377.md) finds all 32 late source
+slots advancing through 2–3 buffers with OpenAL looping disabled. The source
+address set stays fixed across the two sampled windows; this is consistent
+with active streaming, not frozen cursors or a growing observed list. Game-side
+requeue/duplication and inaudible work remain unresolved; address reuse is not
+generation-qualified. Do not reduce sound quality as an implicit optimization.
+
+[H376](present-pacing-audio-workload-growth.376.md) reads the mixer source list
+in early/late windows: two qualified early observations show two playing
+sources, while 62 late observations show 22–32 (median 32), with list size 32
+throughout. Frame bounds grow far less. Source workload growth is now concrete,
+but early sample coverage is sparse and no CPU/FPS ratio follows from it.
+
+[H375](present-pacing-audio-owner-execution.375.md) samples the WinMM owner:
+118 of 124 lock-owned PCs execute the wrapper's scalar interpolation/mixing
+routine; six execute other wrapper code. Another 36 samples show timer waiting
+without owning the global lock. Installed-binary disassembly binds the x87
+accumulation loop and recursive lock scope. Prioritize audio workload and
+per-sample cost, without interpreting intrusive PC shares as CPU time or FPS.
+
+[H374](present-pacing-openal-wake-edge.374.md) binds 1,724 OpenAL address waits
+to WinMM-owner wake requests and waiter returns using existing Wine sync
+traces. Median entry-to-return is 10ms; 1,720 returns share the alert's 1ms
+timestamp bucket. Typical delay precedes the wake request, strengthening the
+callback-work lead rather than a large post-alert scheduling-delay hypothesis.
+Logging is perturbing; outermost lock hold time and audible causality stay open.
+
+[H373](present-pacing-openal-lock-sampling.373.md) follows with a five-second
+non-suspending poll: 1,382/1,663 samples observe the OpenAL lock owned, almost
+all by the WinMM owner. The run passes with unchanged binaries. Sampled
+same-owner spans are not continuous hold durations; guest CPU-time deltas are
+unusable zeros. Exact unlock/wake/resume tracing remains open.
+
+[H372](present-pacing-guest-wait-ownership.372.md) connects Primary/Secondary
+guest engine locks to the bundled OpenAL global critical section, owned in
+repeated snapshots by a WinMM thread executing `wrap_oal.dll`. Two bounded
+guest-snapshot runs pass with identical staged binaries and zero reported GPU
+errors. Sequential snapshots prove observed owner dependencies, not an atomic
+wait graph or actual wake timing. Follow the audio lock's hold/release/resume
+timeline before another encode-policy change; audible causality remains open.
 
 [H371](present-pacing-tuned-tail-wait.371.md) records the user-selected
 STALKER-specific tuning recipe and recaptures the tuned tail. Replay queue is
