@@ -43,6 +43,10 @@ enum class Event : std::uint32_t {
   PreparedCardinalityUnresolved, PreparedCardinalityAccesses,
   PreparedCardinalityIdentities, PreparedCardinalityEnd,
   FramegraphPlanningPhase,
+  StateBlockWaitBegin, StateBlockWaitEnd, StateBlockWaitCapacity,
+  StateBlockWaitAdopted, MarkTicketWaitBegin, MarkTicketWaitEnd,
+  MarkTicketHoldEnd,
+  QueueMutexHoldBegin, QueueMutexHoldEnd,
 };
 
 inline bool planningSplitEnabled() noexcept {
@@ -88,6 +92,9 @@ inline bool preparedObserveEnabled() noexcept {
 // Call behind an enabled diagnostic gate. This is observation admission only,
 // not a source-lifetime or scheduler capability; endpoints may still clip.
 bool windowActive() noexcept;
+
+// Diagnostic attempt identity only; never a replay sequence or lifetime token.
+std::uint64_t nextWaitAttempt() noexcept;
 
 // Call only behind enabled(). No output, allocation or sink mutex in the
 // measured window. Timestamp/cpu/TID and a bounded event live in cold storage.

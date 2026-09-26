@@ -1,5 +1,18 @@
 # dxmt9 Environment Variables — Perf counters
 
+The bounded `DXMT9_CPU_SUPPLY_TRACE` also records actual StateBlock queue-space
+waits (attempt ID, capacity, entry/exit depth, eventual replay-sequence adoption)
+and mark-ticket capture mutex acquisition/body endpoints. Analyze with
+`scripts/run_python.sh scripts/tools/analyze_app_queue_waits.py TRACE`.
+Attempt IDs are diagnostic, not resource/source identities. Missing adoption
+is unresolved; CV time includes reacquisition; the hold-body endpoint is before
+actual unlock. Lifecycle segment events identify the actual mutex address,
+holder TID and site (stable FNV-1a name ID), split at existing unlock/CV
+boundaries. The analyzer intersects only same-mutex/different-thread held
+segments and unions nested coverage. Coverage is partial: unmatched time is
+unattributed, not proved scheduler or resource-loop cost. Timings are
+observer-inclusive, not FPS evidence. No additional knob or policy change.
+
 `DXMT9_CPU_SUPPLY_PLANNING_SPLIT=1` adds source-level sequential phase markers
 to the bounded CPU supply trace (default off, requires `DXMT9_CPU_SUPPLY_TRACE`).
 Phases: observer, graph construction, lookahead, natural-frontier planning,

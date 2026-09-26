@@ -36,7 +36,10 @@ EVENTS = ('present import_begin import_end raw_ready mutation_ready stateblock_r
           'prepared_cardinality_begin prepared_cardinality_status prepared_cardinality_commands '
           'prepared_cardinality_unresolved prepared_cardinality_accesses '
           'prepared_cardinality_identities prepared_cardinality_end '
-          'framegraph_planning_phase').split()
+          'framegraph_planning_phase '
+          'stateblock_wait_begin stateblock_wait_end stateblock_wait_capacity '
+          'stateblock_wait_adopted mark_ticket_wait_begin mark_ticket_wait_end '
+          'mark_ticket_hold_end queue_mutex_hold_begin queue_mutex_hold_end').split()
 
 
 def load(path):
@@ -173,7 +176,8 @@ def analyze(meta, rows, trim=10):
                     cpu_ms_per_present=cpu/frames/1e6, wall_fraction=wall/elapsed,
                     wall_minus_cpu_ms_per_present=(wall-cpu)/frames/1e6)
 
-    states = [r for r in rows if r['kind'].startswith('queue_')]
+    states = [r for r in rows if r['kind'] in
+              ('queue_empty', 'queue_reserved', 'queue_ready')]
     if len({r['owner'] for r in states}) != 1:
         raise ValueError('requires one replay queue')
     occupancy, depth_ns, ready_ns = collections.Counter(), 0, 0

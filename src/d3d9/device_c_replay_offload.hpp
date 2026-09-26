@@ -839,16 +839,28 @@ class ReplayOffloadQueue {
     if (!task) {
       return ReplayQueuePushDisposition::RejectedPreEffect;
     }
+    std::uint64_t waitAttempt = 0;
     std::unique_lock lock(mutex_);
     const auto admissible = [&] {
       return stop_ || queue_.size() < maxChunks_;
     };
     if (!admissible()) {
       const auto waitStart = std::chrono::steady_clock::now();
+      if (supply::enabled()) {
+        waitAttempt = supply::nextWaitAttempt();
+        supply::record(supply::Event::StateBlockWaitCapacity, this,
+                       waitAttempt, maxChunks_);
+        supply::record(supply::Event::StateBlockWaitBegin, this,
+                       waitAttempt, queue_.size());
+      }
       if (observabilityEnabled_) {
         notePushWaitEnter();
       }
       spaceCv_.wait(lock, admissible);
+      if (waitAttempt) {
+        supply::record(supply::Event::StateBlockWaitEnd, this,
+                       waitAttempt, queue_.size());
+      }
       if (observabilityEnabled_) {
         notePushWaitExit();
       }
@@ -881,6 +893,12 @@ class ReplayOffloadQueue {
         return ReplayQueuePushDisposition::RejectedPreEffect;
       }
       queue_.back().stateBlockApply = std::move(task);
+    }
+    // replaySeq is assigned by ledger adoption, not before the space wait.
+    // A zero sequence (no ledger) is explicitly not a qualified replay link.
+    if (waitAttempt) {
+      supply::record(supply::Event::StateBlockWaitAdopted, this,
+                     waitAttempt, queue_.back().stateBlockApply->replaySeq);
     }
     if (testOnlyFailurePoint_ == ReplayQueueFailurePoint::AfterAdoption) {
       testOnlyFailurePoint_ = ReplayQueueFailurePoint::None;

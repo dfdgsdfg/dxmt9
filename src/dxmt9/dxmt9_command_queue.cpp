@@ -3608,8 +3608,18 @@ CommandQueue::markChunkResourcesAndCaptureBufferBindings(
     const bool phaseSplit = markChunkPhaseSplitEnabled();
     const auto lockWaitStart = phaseSplit ? std::chrono::steady_clock::now()
                                           : std::chrono::steady_clock::time_point{};
+    std::uint64_t waitAttempt = 0;
+    if (supply::enabled()) {
+      waitAttempt = supply::nextWaitAttempt();
+      supply::record(supply::Event::MarkTicketWaitBegin, &mutex_,
+                     waitAttempt, markTicket);
+    }
     const auto qmxBegin = queueMutexProbeBegin();
     std::unique_lock lock(mutex_);
+    if (waitAttempt) {
+      supply::record(supply::Event::MarkTicketWaitEnd, &mutex_,
+                     waitAttempt, markTicket);
+    }
     QueueMutexProbeScope qmxScope(
         qmxBegin, "mark_chunk_resources_and_capture_buffer_bindings");
     if (phaseSplit) {
@@ -3621,6 +3631,10 @@ CommandQueue::markChunkResourcesAndCaptureBufferBindings(
         *this, markTicket, [this, entries](std::uint64_t frozenTicket) {
           markChunkResourcesWithExactSeq(pool_, entries, frozenTicket);
         });
+    if (waitAttempt) {
+      supply::record(supply::Event::MarkTicketHoldEnd, &mutex_,
+                     waitAttempt, markTicket);
+    }
   }
 
   return pool_.captureChunkBufferBindings(entries, snapshots);
@@ -9402,7 +9416,7 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
     // SEGMENT-HOLD: pool_.mapWaitSeqId() never touches `lock` -- this is
     // real, previously-invisible hold time between the outer skipHold=true
     // acquire probe and the first potential unlock/relock helper call below.
-    QueueMutexSegmentScope qmxPreCommitSegment("map_buffer/pre_commit");
+    QueueMutexSegmentScope qmxPreCommitSegment("map_buffer/pre_commit", &mutex_);
     // Re-read under the lock. The unlocked read above only SELECTED the lane;
     // the value the wait is computed from is taken at exactly the point it was
     // taken before T2c, so the slow lane's behaviour is byte-for-byte today's.
@@ -9449,7 +9463,7 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
     // further unlock/relock helper calls below) through the accounting call
     // and pool_.finalizeBufferMap() itself -- this closes out map_buffer's
     // previously entirely-invisible hold time.
-    QueueMutexSegmentScope qmxFinalizeSegment("map_buffer/finalize");
+    QueueMutexSegmentScope qmxFinalizeSegment("map_buffer/finalize", &mutex_);
     perf::countMapBufferWait(
         static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
             waitEnd - totalStart).count()),

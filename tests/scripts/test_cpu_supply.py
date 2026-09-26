@@ -14,6 +14,7 @@ import join_replay_wait_trace as joiner
 import summarize_guest_pc_window as guest
 import analyze_publication_progress as progress
 import analyze_framegraph_planning as planning
+import analyze_app_queue_waits as app_waits
 
 
 def fixture():
@@ -40,6 +41,69 @@ def fixture():
 
 
 class TestSupply(unittest.TestCase):
+    def test_mutex_events_are_not_replay_occupancy(self):
+        meta, rows = fixture()
+        expected = supply.analyze(meta, rows, 1)
+        rows.append(dict(kind='queue_mutex_hold_begin', owner=99, tid=4,
+                         id=900, value=0, wall_ns=25_000_000, cpu_ns=10,
+                         frame=2, event=supply.EVENTS.index('queue_mutex_hold_begin')))
+        rows.sort(key=lambda r: r['wall_ns'])
+        self.assertEqual(supply.analyze(meta, rows, 1), expected)
+
+    def test_supply_event_schema_order(self):
+        header = (ROOT/'src/dxmt9/dxmt9_cpu_supply_trace.hpp').read_text()
+        body = re.search(r'enum class Event[^\{]*\{(.*?)\};', header, re.S)[1]
+        names = [s.strip() for s in body.split(',') if s.strip()]
+        snake = [re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower()
+                 .replace('state_block', 'stateblock') for name in names]
+        self.assertEqual(snake, supply.EVENTS)
+
+    def test_app_queue_wait_attempts(self):
+        def row(kind, wall, value=0, identity=1):
+            return dict(kind=kind, wall_ns=wall, cpu_ns=wall//2,
+                        tid=2, owner=3, id=identity, value=value)
+        rows = [row('stateblock_wait_capacity', 90, 32),
+                row('stateblock_wait_begin', 100, 32),
+                row('stateblock_wait_end', 200, 31),
+                row('stateblock_wait_adopted', 220, 99)]
+        result = app_waits.analyze(rows)
+        self.assertEqual(result['waits'][0]['replay_seq'], 99)
+        self.assertEqual(result['waits'][0]['wall_ns'], 100)
+        self.assertEqual(app_waits.analyze(rows[2:])['incomplete_attempts'], 1)
+        self.assertIsNone(app_waits.analyze(rows[:3])['waits'][0]['replay_seq'])
+        self.assertIsNone(app_waits.analyze(rows[:3] + [dict(rows[3], value=0)])
+                          ['waits'][0]['replay_seq'])
+        with self.assertRaises(ValueError):
+            app_waits.analyze(rows + [rows[0]])
+        other = [dict(r, id=2) for r in rows]
+        self.assertEqual(len(app_waits.analyze(rows + other)['waits']), 2)
+        mark = [row('mark_ticket_wait_begin', 100, 8),
+                row('mark_ticket_wait_end', 300, 8),
+                row('mark_ticket_hold_end', 350, 8)]
+        self.assertEqual(app_waits.analyze(mark)['waits'][0]['hold_body_ns'], 50)
+
+    def test_app_mutex_holder_identity_and_clipping(self):
+        def row(kind, t, tid=2, owner=3, identity=1, value=0):
+            return dict(kind=kind, wall_ns=t, cpu_ns=t//2,
+                        tid=tid, owner=owner, id=identity, value=value)
+        wait = [row('mark_ticket_wait_begin', 100), row('mark_ticket_wait_end', 300)]
+        held = [row('queue_mutex_hold_begin', 150, tid=4, identity=2),
+                row('queue_mutex_hold_end', 250, tid=4, identity=2,
+                    value=app_waits.site_id('commit_current_chunk/post_wait'))]
+        result = app_waits.analyze(wait+held)['waits'][0]
+        self.assertEqual(result['observed_held_overlap_ns'], 100)
+        self.assertEqual(result['unattributed_ns'], 100)
+        self.assertEqual(result['observed_holders'][0]['site'], 'commit_current_chunk/post_wait')
+        for foreign in ([dict(r, owner=9) for r in held],
+                        [dict(r, tid=2) for r in held], held[:1], held[1:]):
+            self.assertEqual(app_waits.analyze(wait+foreign)['waits'][0]
+                             ['observed_held_overlap_ns'], 0)
+        nested = [dict(r, id=3) for r in held]
+        self.assertEqual(app_waits.analyze(wait+held+nested)['waits'][0]
+                         ['observed_held_overlap_ns'], 100)
+        with self.assertRaises(ValueError):
+            app_waits.analyze(held+held)
+
     def test_planning_partition(self):
         rows = [dict(kind='framegraph_planning_phase', owner=1, tid=2, id=3,
                      value=p, wall_ns=1000+i*100, cpu_ns=500+i*50)

@@ -26,6 +26,8 @@
 // before touching a clock, exactly like QueueMutexBeginToken does; nothing
 // here reads a clock unless the caller already checked the flag.
 
+#include "dxmt9_cpu_supply_trace.hpp"
+
 #include <chrono>
 #include <cstdint>
 
@@ -57,17 +59,52 @@ inline void noteQueueMutexSegment(const char* site,
                      queueMutexProbeNanos(std::chrono::steady_clock::now() - start));
 }
 
+// Diagnostic-only segment token. Begin/end are inside an uninterrupted held
+// interval, not acquisition/release timestamps. Never span an unlock/CV wait.
+struct QueueMutexSegmentToken {
+  std::chrono::steady_clock::time_point start{};
+  const void* mutex = nullptr;
+  std::uint64_t attempt = 0;
+};
+
+inline bool queueMutexSegmentEnabled() {
+  return queueMutexSplitEnabled() || supply::enabled();
+}
+
+inline QueueMutexSegmentToken beginQueueMutexSegment(bool enabled,
+                                                     const void* mutex) {
+  if (!enabled) return {};
+  QueueMutexSegmentToken token{std::chrono::steady_clock::now(), mutex, 0};
+  if (supply::enabled()) {
+    token.attempt = supply::nextWaitAttempt();
+    supply::record(supply::Event::QueueMutexHoldBegin, mutex, token.attempt);
+  }
+  return token;
+}
+
+inline std::uint64_t queueMutexSiteId(const char* site) {
+  std::uint64_t hash = 14695981039346656037ull;
+  for (; *site; ++site) {
+    hash = (hash ^ static_cast<unsigned char>(*site)) * 1099511628211ull;
+  }
+  return hash;
+}
+
 // Same as noteQueueMutexSegment, but no-ops (and touches no clock) unless
 // `enabled` is true. Use this at call sites that computed `enabled` once
 // (e.g. at the top of a loop iteration) instead of re-deriving it from
 // queueMutexSplitEnabled() at every segment boundary.
 inline void noteQueueMutexSegmentIfEnabled(
     const char* site, bool enabled,
-    std::chrono::steady_clock::time_point start) {
+    QueueMutexSegmentToken token) {
   if (!enabled) {
     return;
   }
-  noteQueueMutexSegment(site, start);
+  if (token.attempt) {
+    supply::record(supply::Event::QueueMutexHoldEnd, token.mutex,
+                   token.attempt, queueMutexSiteId(site));
+  }
+  if (queueMutexSplitEnabled()) noteQueueMutexSegment(site, token.start);
 }
 
 // RAII segment-hold probe for the common case: a single function scope that
@@ -78,10 +115,10 @@ inline void noteQueueMutexSegmentIfEnabled(
 // loop or across an early-return.
 class QueueMutexSegmentScope {
  public:
-  explicit QueueMutexSegmentScope(const char* site)
-      : site_(site), enabled_(queueMutexSplitEnabled()) {
+  explicit QueueMutexSegmentScope(const char* site, const void* mutex)
+      : site_(site), enabled_(queueMutexSegmentEnabled()) {
     if (enabled_) {
-      start_ = std::chrono::steady_clock::now();
+      start_ = beginQueueMutexSegment(true, mutex);
     }
   }
 
@@ -92,13 +129,13 @@ class QueueMutexSegmentScope {
     if (!enabled_) {
       return;
     }
-    noteQueueMutexSegment(site_, start_);
+    noteQueueMutexSegmentIfEnabled(site_, true, start_);
   }
 
  private:
   const char* site_;
   bool enabled_;
-  std::chrono::steady_clock::time_point start_{};
+  QueueMutexSegmentToken start_{};
 };
 
 }  // namespace dxmt9

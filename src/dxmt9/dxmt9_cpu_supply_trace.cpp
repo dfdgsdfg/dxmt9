@@ -13,6 +13,11 @@
 #endif
 
 namespace dxmt9::supply {
+std::uint64_t nextWaitAttempt() noexcept {
+  static std::atomic<std::uint64_t> next{1};
+  return next.fetch_add(1, std::memory_order_relaxed);
+}
+
 namespace {
 constexpr std::size_t kCapacity = 262144;
 struct Row {

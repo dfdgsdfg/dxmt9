@@ -14,6 +14,19 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H382](present-pacing-app-wait-holders.382.md) records same-mutex holders:
+1,372 mark-ticket attempts total 17.113ms in 16 intervals; measured holder
+overlap is only 1.739ms, mainly encode submit (1.604ms). Remaining acquisition
+time is unattributed. No StateBlock queue-space burst recurred in this narrow
+window; replay is still empty 51.42% of it. Split submit and uncovered lock
+scopes before proposing lock removal or queue-capacity changes.
+
+[H381](present-pacing-controlled-app-owner.381.md) follows the Primary: 179/320
+guest PCs are in game modules, while most bridge PCs are Unix-call return
+sites, not exclusive bridge CPU. Native samples expose StateBlock queue-space
+backpressure and mark-ticket mutex acquisition waits. Average input starvation
+coexists with full-queue bursts; trace these owners before changing capacity.
+
 [H380](present-pacing-audio-controlled-supply.380.md) recaptures the capped lane:
 app/replay/encode use 0.866/0.463/0.479 cores, while replay input wait and encode
 unpublished-input gap remain about 25ms/Present. Fixed-arrival replay sensitivity
