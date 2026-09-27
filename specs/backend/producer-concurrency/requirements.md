@@ -49,6 +49,16 @@ argument from scratch because no standing contract existed
 
 ## Thread-ownership contract
 
+- **R-BACK-43.9** Deferring ingress resource marks must preserve Unix-owned
+  wire data, generation-qualified retention and backing residency before
+  acceptance. Replay must establish execution-use sequence coverage before
+  releasing those owners. Non-versioned mutation must wait for relevant
+  replay and execution visibility; retaining an object is not a content
+  snapshot. Rejection before adoption releases locally; an ambiguous adopted
+  effect must fail-stop rather than retry. Execution policy must not be used
+  as proof that these ownership obligations hold. Promotion requires the
+  R-BACK-43.6 and R-VERIF-1.5–1.8 evidence layers.
+
 - **R-BACK-43.4** State reachable from more than one of {producer, replay
   worker, encode thread, completion path} must carry exactly one ownership
   class from the closed taxonomy below, declared at the owning

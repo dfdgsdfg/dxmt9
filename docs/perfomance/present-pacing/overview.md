@@ -11,6 +11,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H394](present-pacing-ingress-deferred-marks.394.md) adds a default-off
+capture-only ordinary ingress candidate independent of CPU-ready policy.
+Arm64 routing 2/2, x86_64 focused 9/9 and existing TLA regression pass; the
+bounded handoff checker detects three deliberate lifetime/visibility faults.
+All-family composition, GPU exact/wild qualification and performance remain
+open. No default change or FPS gain is claimed.
+
 [H393](present-pacing-ingress-lifetime-audit.393.md) clarifies the remaining
 ingress coupling: Unix already owns accepted raw work, and backing capture is
 already outside the queue mutex. The residual acquisition reconciles a

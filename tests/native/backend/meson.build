@@ -781,6 +781,13 @@ test('dxmt9-cpu-ready-production-routing-spec',
      cpu_ready_production_routing_spec,
      env: dxmt9_native_test_env_vars + [
        'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
+       'DXMT9_DEFER_INGRESS_RESOURCE_MARKS=0',
+     ])
+test('dxmt9-deferred-ingress-routing-spec',
+     cpu_ready_production_routing_spec,
+     env: dxmt9_native_test_env_vars + [
+       'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
+       'DXMT9_DEFER_INGRESS_RESOURCE_MARKS=1',
      ])
 test('dxmt9-direct-slot-headroom-ownership-spec',
      cpu_ready_production_routing_spec,

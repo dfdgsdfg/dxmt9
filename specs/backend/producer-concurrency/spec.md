@@ -34,6 +34,35 @@ Lock domains, from narrowest to widest:
 
 ## 2. Established ownership assignments
 
+### Capture-only ingress candidate (R-BACK-43.9)
+
+`DXMT9_DEFER_INGRESS_RESOURCE_MARKS=1` selects an experimental, default-off
+ownership policy independent of CPU-ready planning. The importer retains
+wrappers and captures backing snapshots exactly as before, but does not call
+the combined provisional-mark/capture hook. `resourcesMarkedBeforeReplay`
+remains false. Existing direct publication owns exact sequence stamping;
+compatibility and ordered-control fallbacks call `markLegacyResources` before
+semantic replay. This also applies to inline/provider replay; it does not
+force asynchronous execution or bypass its boundaries.
+
+The candidate changes neither queue adoption dispositions nor mutation fences:
+buffer Lock uses its identity-qualified drain target, while texture/surface
+content operations retain bridge drains. NOOVERWRITE keeps its API promise;
+renamed DISCARD keeps physical backing residency. Replay completion is not GPU
+completion. The sequence watermark remains authoritative for GPU reuse.
+
+`dxmt9-deferred-ingress-routing-spec` runs the production routing suite with
+the candidate enabled; the baseline target explicitly disables it. The focused
+ordinary-ingress test checks app-thread capture before any stamp and worker-side
+compatibility stamping. `testDeferredIngressBoundedHandoff` in
+`producer_mark_reclaim_spec.cpp` exhausts a one-resource/two-sequence model
+using production `markStampUpper` and `canReclaimRecord`: raw pin release,
+competing publication, final stamping, completion, reclaim and non-versioned
+mutation may interleave. Early-release, stale-ingress-stamp and missing-mutation-
+fence controls must each fail. It assumes atomic final publication/stamping;
+it does not prove that premise for every production command, C++ memory order,
+reset/poison, backing rename, GPU bytes or pixels. Those gates remain open.
+
 Evidence: the four source audits in the design doc §7 and the
 `ProducerMarkReclaim` model.
 

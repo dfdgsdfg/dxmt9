@@ -81,11 +81,13 @@
 #include <cstdint>
 #include <exception>
 #include <iostream>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
+#include <vector>
 
 namespace {
 
@@ -1070,11 +1072,107 @@ void testTraceCounterexampleCaptureAfterFree() {
   check(production.noCaptureAfterFree(), "production capture is sound");
 }
 
+// R-BACK-43.9: bounded capture-only handoff checker. Unlike BeginMark in
+// ProducerMarkReclaim, ingress does NOT reserve a queue sequence here.
+// Exhaust all action orders for one retained, non-versioned resource and
+// one competing publication. Exact publication/stamp is one action (the
+// production queue transaction); memory ordering, reset, rename, all-family
+// command coverage and GPU bytes are deliberately outside this small model.
+void testDeferredIngressBoundedHandoff() {
+  enum class Fault { None, EarlyRelease, StaleStamp, MissingMutationFence };
+  const auto violations = [](Fault fault) {
+    // phase: 0 captured, 1 adopted, 2 replayed, 3 raw owner released.
+    // Remaining fields: next seq, use stamp, published seq, completed seq,
+    // raw pin, reclaimed, content overwritten.
+    using State = std::array<u64, 8>;
+    const State initial{0, 1, 0, 0, 0, 1, 0, 0};
+    std::set<State> visited{initial};
+    std::vector<State> pending{initial};
+    std::size_t bad = 0;
+    while (!pending.empty()) {
+      const auto state = pending.back();
+      pending.pop_back();
+      const auto [phase, next, stamp, published, completed, pin, freed,
+                  overwritten] = state;
+      const bool outstanding = phase < 2 || completed < published;
+      if ((freed && outstanding) || (overwritten && outstanding)) {
+        ++bad;
+        continue;
+      }
+      const auto push = [&](State successor) {
+        if (visited.insert(successor).second) pending.push_back(successor);
+      };
+      if (phase == 0) {
+        auto successor = state;
+        successor[0] = 1;
+        push(successor); // Queue adoption; raw owner keeps the pin.
+      }
+      if (next == 1) {
+        auto successor = state;
+        successor[1] = 2;
+        push(successor); // Competing publication advances nextSeqId.
+      }
+      if (next >= 2 && completed == 0 && published != 1) {
+        auto successor = state;
+        successor[4] = 1;
+        push(successor); // Only the competing sequence has completed.
+      }
+      if (phase == 1 && !freed && !overwritten) {
+        auto successor = state;
+        successor[0] = 2;
+        successor[1] = next + 1;
+        successor[2] = markStampUpper(
+            stamp, fault == Fault::StaleStamp ? 1 : next);
+        successor[3] = next;
+        push(successor); // Replay publishes with final-use protection.
+      }
+      if (phase == 2) {
+        auto successor = state;
+        successor[0] = 3;
+        successor[5] = 0;
+        push(successor); // Replay completion releases raw ownership.
+      }
+      if (fault == Fault::EarlyRelease && phase == 1 && pin) {
+        auto successor = state;
+        successor[5] = 0;
+        push(successor);
+      }
+      if (published != 0 && completed < published) {
+        auto successor = state;
+        successor[4] = published;
+        push(successor); // Actual GPU completion, not replay completion.
+      }
+      if (!freed && canReclaimRecord(!pin, stamp, completed)) {
+        auto successor = state;
+        successor[6] = 1;
+        push(successor);
+      }
+      if (!overwritten && !freed && phase >= 1 &&
+          (fault == Fault::MissingMutationFence || !outstanding)) {
+        auto successor = state;
+        successor[7] = 1;
+        push(successor);
+      }
+    }
+    check(visited.size() > 20u, "handoff checker must explore interleavings");
+    return bad;
+  };
+  check(violations(Fault::None) == 0u,
+        "retained capture plus final stamp must protect delayed replay");
+  check(violations(Fault::EarlyRelease) != 0u,
+        "checker must detect releasing raw pins before Replay");
+  check(violations(Fault::StaleStamp) != 0u,
+        "checker must detect using ingress's unreserved sequence");
+  check(violations(Fault::MissingMutationFence) != 0u,
+        "checker must detect content mutation despite a live object pin");
+}
+
 }  // namespace
 
 int main() {
   try {
     testCanReclaimRecordTruthTable();
+    testDeferredIngressBoundedHandoff();
     testMarkStampUpperTruthTable();
     testTraceHappyPathCommit();
     testTraceWorkerReclaimsDuringMarkWindow();

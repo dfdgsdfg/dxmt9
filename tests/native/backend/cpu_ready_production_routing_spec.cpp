@@ -1883,6 +1883,7 @@ struct RoutingDevice final : dxmt9::Device {
   void markChunkResources(
       std::span<const ChunkHandleEntry> entries) override {
     ++legacyMarkCalls;
+    legacyMarkThread = std::this_thread::get_id();
     queue_.markChunkResources(entries);
   }
 
@@ -1967,6 +1968,7 @@ struct RoutingDevice final : dxmt9::Device {
   std::atomic<std::uint32_t> mutationApplies{0};
   std::uint64_t capturedBufferLastUsedSeq = UINT64_MAX;
   std::thread::id captureThread{};
+  std::thread::id legacyMarkThread{};
   std::vector<ChunkHandleEntry> capturedResources;
   std::vector<CapturedBindingObservation> capturedBindingObservations;
   // Tiny backing-lifetime fixtures keep complete historical bytes. General
@@ -2539,6 +2541,8 @@ void providerResolvedEntryRoutesExistingClearPresent() {
 }
 
 void providerRoutePinsDirectCompatibilityAndMalformedIdentity() {
+  const bool deferredIngress = dxmt9::d3d9::deferIngressResourceMarks(
+      false, std::getenv("DXMT9_DEFER_INGRESS_RESOURCE_MARKS"));
   // This is the provider-local route pin: all lanes enter the actual
   // prevalidated provider entry with the same canonical bytes and resolved
   // object role. ProductionSlot has two independent implementations: the
@@ -2609,7 +2613,10 @@ void providerRoutePinsDirectCompatibilityAndMalformedIdentity() {
       dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
           directFixture.routing->queue_);
   check(directWritingCommands != 0u &&
-            directFixture.routing->combinedMarkCalls == 1u,
+            directFixture.routing->combinedMarkCalls ==
+                (deferredIngress ? 0u : 1u) &&
+            directFixture.routing->captureCalls ==
+                (deferredIngress ? 1u : 0u),
         "ProductionSlot direct ChunkSlot must reach a direct-owned route before effects");
   const auto directLifecycle =
       dxmt9::CommandQueueArenaLeaseTestAccess::directLifecycleState(
@@ -2625,8 +2632,11 @@ void providerRoutePinsDirectCompatibilityAndMalformedIdentity() {
             dxmt9::d3d9::ProviderReplayPolicy::Compatibility) == D3D_OK,
         "provider Compatibility route must accept the same canonical input");
   check(compatibilityFixture.routing->drawCalls == 1u &&
-            compatibilityFixture.routing->combinedMarkCalls == 1u,
-        "provider Compatibility must execute the historical combined mark path");
+            compatibilityFixture.routing->combinedMarkCalls ==
+                (deferredIngress ? 0u : 1u) &&
+            compatibilityFixture.routing->legacyMarkCalls ==
+                (deferredIngress ? 1u : 0u),
+        "provider Compatibility must establish marks at the selected boundary");
 
   directFixture.routing->present(SwapDesc{});
   compatibilityFixture.routing->present(SwapDesc{});
@@ -2797,6 +2807,55 @@ void resourceBearingDirectCapturesThenMarksExactTicketAndPublishes() {
             completion.seqId == 1u,
         "resource-bearing Direct source must complete and reclaim by its "
         "published arena identity");
+}
+
+void ordinaryIngressDefersMarksUntilReplay() {
+  using dxmt9::d3d9::deferIngressResourceMarks;
+  for (const bool planning : {false, true}) {
+    check(deferIngressResourceMarks(planning, nullptr) == planning &&
+              deferIngressResourceMarks(planning, "") == planning &&
+              deferIngressResourceMarks(planning, "0") == planning &&
+              deferIngressResourceMarks(planning, "1"),
+          "ingress experiment must default off independently of Tape policy");
+  }
+  if (!deferIngressResourceMarks(
+          false, std::getenv("DXMT9_DEFER_INGRESS_RESOURCE_MARKS"))) return;
+
+  for (const bool direct : {false, true}) {
+    RuntimeFixture fixture(false, false, direct, false);
+    auto buffer = fixture.device->CreateBuffer(BufferDesc{
+        .size = 256u, .pool = Pool::Default, .usage = UsageVertexBuffer});
+    check(buffer != nullptr, "ordinary ingress buffer must construct");
+    D9CBuffer wireBuffer(buffer, fixture.cDevice.get());
+    const std::array records{drawRecord(wireBuffer.wireIdentity)};
+    const auto wire = makeWireFixture(records);
+    D9CCommandChunk chunk{
+        .version = D9C_COMMAND_CHUNK_VERSION,
+        .recordCount = wire.envelope.recordCount,
+        .recordBytes = static_cast<std::uint32_t>(wire.bytes.size()),
+        .records = toWireHandle(wire.bytes.data()),
+        .handleCount = wire.envelope.handleCount};
+    const auto appThread = std::this_thread::get_id();
+    check(dxmt9c_device_commit_chunk(fixture.cDevice.get(), &chunk) == D3D_OK,
+          "ordinary capture-only ingress must accept input");
+    check(dxmt9::d3d9::drainDeferredReplay(
+              fixture.cDevice.get(), "deferred-ingress-test"),
+          "ordinary capture-only Replay must finish");
+    const auto* resource =
+        fixture.routing->queue_.pool().findBuffer(buffer->handle().value);
+    check(fixture.routing->combinedMarkCalls == 0u &&
+              fixture.routing->captureCalls == 1u &&
+              fixture.routing->captureThread == appThread &&
+              fixture.routing->capturedBufferLastUsedSeq == 0u &&
+              resource && resource->lastUsedSeqId != 0u,
+          "ordinary ingress must capture unstamped input and Replay must "
+          "establish execution-use coverage");
+    if (!direct) {
+      check(fixture.routing->legacyMarkCalls == 1u &&
+                fixture.routing->legacyMarkThread != appThread,
+            "compatibility bulk marking must move to the Replay worker");
+    }
+  }
 }
 
 void sameRawLegacyAndDirectProductionOracle() {
@@ -10344,6 +10403,7 @@ int main(int argc, char** argv) {
     providerResolvedEntryRoutesExistingClearPresent();
     oversizeSegmentedPresentTakesOneLegacyRollbackSource();
     resourceBearingDirectCapturesThenMarksExactTicketAndPublishes();
+    ordinaryIngressDefersMarksUntilReplay();
     sameRawLegacyAndDirectProductionOracle();
     ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion();
     ordinaryDrawApplyStateDrawUsesCarrierFreeDirectPath();

@@ -378,8 +378,11 @@ longer inherits the offload state: callers must explicitly set
   generation checks, canonical resource identities, backing snapshots, raw
   residency, and wrapper retention. With the CPU-ready promotion gate off, it
   also keeps the historical combined `markChunkResources` + backing-capture
-  operation before handoff, and the worker skips structural planning and
-  directly uses Legacy replay. With the gate on, a Direct candidate applies
+  operation before handoff unless the independent default-off
+  `DXMT9_DEFER_INGRESS_RESOURCE_MARKS` candidate is enabled (R-BACK-43.9).
+  That candidate captures without provisional marking and leaves final-use
+  coverage to the existing Replay direct/compatibility owners. With the
+  CPU-ready gate on, a Direct candidate applies
   the exact strict source `seqId` mark after admission and before seal/Ready;
   StateOnly emits no mark, and a planned Legacy lane marks before semantic
   replay. The replay boundary remains the existing

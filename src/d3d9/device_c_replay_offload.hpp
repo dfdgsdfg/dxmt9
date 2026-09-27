@@ -39,6 +39,15 @@ struct D9CStateBlock; // fwd (global-namespace struct; see device_c_common.hpp)
 
 namespace dxmt9::d3d9 {
 
+// Experimental ownership routing, independent of CPU-ready execution policy.
+// This only moves provisional marking; it does not discharge mutation fences
+// or the Replay publisher's final-use sequence obligation.
+constexpr bool deferIngressResourceMarks(bool cpuReadyPlanning,
+                                         const char* optIn) noexcept {
+  return cpuReadyPlanning ||
+      (optIn && optIn[0] != '\0' && optIn[0] != '0');
+}
+
 // Wrapper pointer retained across the canonical offload queue boundary. `kind` is a
 // D9C_CHUNK_HANDLE_KIND_* value; Query wrappers participate in the same
 // validated wire handle table.
