@@ -14,6 +14,18 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H391](present-pacing-fixed-projection-validation.391.md) closes fresh GPU/wild
+integration: both GT2 routes pass two cold-device exact readbacks each;
+STALKER Day passes with 3,251 Presents, zero chunk rejects/GPU errors and
+sampled normal scenes. Loading/focus delay excludes this run from performance
+ranking. Order-reversed baseline/candidate CPU performance remains open.
+
+[H390](present-pacing-fixed-projection-integration.390.md) connects direct field
+comparison to production lookup. Native edge/collision tests and 18+18 GT2
+CPU semantic iterations pass with identical work counts. Verify-mode lookup
+elapsed falls 0.9791→0.9116ms/input; controlled performance remains open, while
+H391 supplies fresh GPU/wild evidence. No hash-only authority or cache was introduced.
+
 [H389](present-pacing-fixed-projection-probe.389.md) confirms an isolated x86
 comparison still constructs the 2,568-byte fixed projection. Direct field
 comparison passes 398 bounded edge cases and saves 65–68ns/call in a synthetic

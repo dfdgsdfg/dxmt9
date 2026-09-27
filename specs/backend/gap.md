@@ -11,6 +11,16 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Backend Layer
 
+R-BACK-2.15.2 fixed comparison now avoids a temporary projection with the same
+hash guard and fieldwise equality. Native float-edge/collision fixtures and
+18+18 identical-input CPU semantic iterations pass. This pure substitution
+changes no temporal model. Fresh Compatibility/ProductionSlot GPU exact
+readbacks pass twice each; STALKER Day integration passes with zero GPU errors.
+Order-reversed performance qualification remains open; verify-mode timing and
+the focus-delayed wild run are not FPS evidence. See
+[H390](../../docs/perfomance/present-pacing/present-pacing-fixed-projection-integration.390.md)
+and [H391](../../docs/perfomance/present-pacing/present-pacing-fixed-projection-validation.391.md).
+
 Experimental [publication stamp reuse](publication-marking.md) removes exact
 texture/surface repeats only within one locked Slot publication. Default OFF;
 bounded native refinement, real Pool texture/alias stamp checks and a gated

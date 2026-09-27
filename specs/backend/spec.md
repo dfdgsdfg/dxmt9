@@ -891,6 +891,15 @@ separate promotion gates.
 
 #### Synchronous fixed-uniform projection reuse
 
+Full-payload lookup may compare the fixed fields directly against a stored
+fixed record instead of constructing a temporary projection. It must refine
+`record.hash == payload.fixedPayloadHash && record.payload == project(payload)`
+with the same member order and floating-point equality, including NaN and
+signed zero. Hash collisions still require content comparison; this grants no
+new cross-call witness or handle authority. The production predicate is
+`drawUniformFixedPayloadMatches`; native projection-equivalence and colliding
+Slot lookup fixtures bind this pure substitution without a temporal change.
+
 `Device::cachedBaseDrawStateForSubmissionBatch` owns a fixed-uniform projection
 alongside full uniforms. Direct ingress may borrow both from that single cache
 refresh; `TransactionalChunkSlotAssembler` forwards the projection into final

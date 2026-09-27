@@ -4,6 +4,7 @@
 #include <cstring>
 #include <exception>
 #include <iostream>
+#include <limits>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -611,6 +612,50 @@ void testChunkSlotUniformPayloadLookupHashCollisionKeepsDistinctPayloads() {
           "hash collision lookup returns the payload whose full contents match");
 }
 
+void testFixedComparisonRefinesProjection() {
+  const float values[] = {0.0f, -0.0f, 1.0f, -1.0f,
+      std::numeric_limits<float>::infinity(),
+      std::numeric_limits<float>::quiet_NaN()};
+  auto exercise = [&](auto member) {
+    for (float x : values) for (float y : values) {
+      DrawUniformPayload payload{};
+      DrawUniformFixedPayloadRecord record{};
+      record.payload = makeDrawUniformFixedPayload(payload);
+      member(record.payload) = x;
+      member(payload) = y;
+      for (u64 hash : {u64{0}, u64{1}}) {
+        record.handle.hash = hash;
+        checkEq(drawUniformFixedPayloadMatches(record, payload),
+                drawUniformFixedPayloadMatches(record,
+                    makeDrawUniformFixedPayload(payload), payload.fixedPayloadHash),
+                "direct comparison refines projection including hash and float edges");
+      }
+    }
+  };
+  exercise([](auto& p) -> float& { return p.worldViewProj.m[0]; });
+  exercise([](auto& p) -> float& { return p.ffpView.m[0]; });
+  exercise([](auto& p) -> float& { return p.ffpWorldView.m[0]; });
+  exercise([](auto& p) -> float& { return p.ffpNormalMatrix.m[0]; });
+  exercise([](auto& p) -> float& { return p.material.power; });
+  exercise([](auto& p) -> float& { return p.lights.back().range; });
+  exercise([](auto& p) -> float& { return p.ffpBlendWorldViewProj.back().m[15]; });
+  exercise([](auto& p) -> float& { return p.ffpBlendWorldView.back().m[15]; });
+  exercise([](auto& p) -> float& { return p.ffpBlendNormalMatrix.back().m[15]; });
+  exercise([](auto& p) -> float& { return p.textureTransforms.back().m[15]; });
+  exercise([](auto& p) -> float& { return p.clipPlanes.back().back(); });
+  ChunkSlot slot{};
+  DrawUniformPayload first{};
+  first.hash = first.fixedPayloadHash = 42;
+  auto second = first;
+  second.clipPlaneMask = 1;
+  const auto a = slot.appendDrawUniformPayload(first);
+  const auto b = slot.appendDrawUniformPayload(second);
+  check(!(a == b), "fixed collision retains distinct identities");
+  checkEq(slot.findDrawUniformPayload(first), a, "bucket collision resolves first contents");
+  checkEq(slot.findDrawUniformPayload(second), b, "bucket collision resolves second contents");
+  checkEq(slot.findDrawUniformPayload(second), b, "last-handle path still checks contents");
+}
+
 void testChunkSlotUniformStageConstantsUseCompactByteArena() {
   DrawDesc desc{};
   desc.primitiveCount = 1u;
@@ -789,6 +834,7 @@ int main() {
     testStreamingSummaryPreservesResolverOrder();
     testChunkSlotDrawRunSoAReuseKeepsReservedCapacitiesStable();
     testChunkSlotUniformPayloadLookupHashCollisionKeepsDistinctPayloads();
+    testFixedComparisonRefinesProjection();
     testChunkSlotUniformStageConstantsUseCompactByteArena();
     testChunkSlotUniformStageConstantsPreserveAbiPrefixForBoolUpload();
     testChunkSlotUniformStageConstantsPreserveAbiPrefixForIntUpload();

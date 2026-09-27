@@ -358,8 +358,21 @@ inline bool drawUniformFixedPayloadMatches(
 inline bool drawUniformFixedPayloadMatches(
     const DrawUniformFixedPayloadRecord& record,
     const DrawUniformPayload& payload) noexcept {
-  return drawUniformFixedPayloadMatches(
-      record, makeDrawUniformFixedPayload(payload), payload.fixedPayloadHash);
+  // Refine equality with makeDrawUniformFixedPayload without materializing
+  // its stack copy. Preserve member order and floating-point equality.
+  const auto& fixed = record.payload;
+  return record.handle.hash == payload.fixedPayloadHash &&
+         fixed.worldViewProj == payload.worldViewProj &&
+         fixed.ffpView == payload.ffpView &&
+         fixed.ffpWorldView == payload.ffpWorldView &&
+         fixed.ffpNormalMatrix == payload.ffpNormalMatrix &&
+         fixed.material == payload.material && fixed.lights == payload.lights &&
+         fixed.ffpBlendWorldViewProj == payload.ffpBlendWorldViewProj &&
+         fixed.ffpBlendWorldView == payload.ffpBlendWorldView &&
+         fixed.ffpBlendNormalMatrix == payload.ffpBlendNormalMatrix &&
+         fixed.textureTransforms == payload.textureTransforms &&
+         fixed.clipPlaneMask == payload.clipPlaneMask &&
+         fixed.clipPlanes == payload.clipPlanes;
 }
 
 inline bool drawUniformVertexConstantsMatches(
