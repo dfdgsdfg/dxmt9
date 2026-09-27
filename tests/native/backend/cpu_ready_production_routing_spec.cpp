@@ -34,6 +34,7 @@
 #include <array>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstddef>
 #include <cstdint>
 #include <ctime>
@@ -45,6 +46,7 @@
 #include <iomanip>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <span>
 #include <stdexcept>
@@ -2855,6 +2857,162 @@ void ordinaryIngressDefersMarksUntilReplay() {
                 fixture.routing->legacyMarkThread != appThread,
             "compatibility bulk marking must move to the Replay worker");
     }
+  }
+}
+
+// Uses the worker's existing ReplayFn seam only to park before real dispatch
+// and inject a terminal result. The successful/partial-effect paths still run
+// replayRawChunk, including production direct/compatibility publication.
+struct IngressHandoffGate {
+  enum class Failure { None, BeforeReplay, AfterReplay };
+  inline static IngressHandoffGate* active = nullptr;
+  std::mutex mutex;
+  std::condition_variable cv;
+  bool entered = false;
+  bool released = false;
+  Failure failure = Failure::None;
+  std::uint32_t calls = 0;
+  bool protectedAtReturn = true;
+
+  void release() {
+    std::lock_guard lock(mutex);
+    released = true;
+    cv.notify_all();
+  }
+
+  static int32_t replay(D9CDevice* device,
+                        dxmt9::d3d9::RawCommandChunk& raw) {
+    auto& gate = *active;
+    {
+      std::unique_lock lock(gate.mutex);
+      gate.entered = true;
+      gate.cv.notify_all();
+      gate.cv.wait(lock, [&] { return gate.released; });
+    }
+    ++gate.calls;
+    if (gate.failure == Failure::BeforeReplay) return D3DERR_INVALIDCALL;
+    const auto hr = dxmt9::d3d9::replayRawChunk(device, raw);
+    auto& pool = device->dev().upperDevice()->queue().pool();
+    for (const auto& entry : raw.resourceEntries) {
+      if (entry.kind != ChunkHandleKind::Buffer) continue;
+      const auto* record = pool.findBuffer(entry.handle.value);
+      gate.protectedAtReturn &= record && record->lastUsedSeqId != 0u;
+    }
+    gate.protectedAtReturn &= !raw.retainedWrappers.empty();
+    return gate.failure == Failure::AfterReplay ? D3DERR_INVALIDCALL : hr;
+  }
+};
+
+void deferredIngressAdoptionAndFailureKeepRawOwnership() {
+  if (!dxmt9::d3d9::deferIngressResourceMarks(
+          false, std::getenv("DXMT9_DEFER_INGRESS_RESOURCE_MARKS"))) return;
+  using Failure = IngressHandoffGate::Failure;
+  for (const bool direct : {false, true}) {
+    for (const auto failure :
+         {Failure::None, Failure::BeforeReplay, Failure::AfterReplay}) {
+      IngressHandoffGate gate;
+      gate.failure = failure;
+      RuntimeFixture fixture(false, false, direct, false);
+      auto first = fixture.device->CreateBuffer(BufferDesc{
+          .size = 256u, .pool = Pool::Default, .usage = UsageVertexBuffer});
+      auto second = fixture.device->CreateBuffer(BufferDesc{
+          .size = 256u, .pool = Pool::Default, .usage = UsageVertexBuffer});
+      check(first && second, "handoff buffers must construct");
+      // Stack wrappers outlive the worker; test refs must settle to exactly 1.
+      D9CBuffer firstWire(first, fixture.cDevice.get());
+      D9CBuffer secondWire(second, fixture.cDevice.get());
+      IngressHandoffGate::active = &gate;
+      fixture.cDevice->replayOffload =
+          std::make_unique<dxmt9::d3d9::ReplayOffloadWorker>(
+              &IngressHandoffGate::replay);
+      auto& worker = *fixture.cDevice->replayOffload;
+      struct Settlement {
+        IngressHandoffGate& gate;
+        dxmt9::d3d9::ReplayOffloadWorker& worker;
+        ~Settlement() {
+          gate.release();
+          worker.stop();
+          IngressHandoffGate::active = nullptr;
+        }
+      } settlement{gate, worker};
+      check(worker.start(fixture.cDevice.get()), "handoff worker must start");
+      const auto commit = [&](D9CBuffer& buffer) {
+        const std::array records{drawRecord(buffer.wireIdentity)};
+        const auto wire = makeWireFixture(records);
+        const D9CCommandChunk chunk{
+            .version = D9C_COMMAND_CHUNK_VERSION,
+            .recordCount = wire.envelope.recordCount,
+            .recordBytes = static_cast<std::uint32_t>(wire.bytes.size()),
+            .records = toWireHandle(wire.bytes.data()),
+            .handleCount = wire.envelope.handleCount};
+        return dxmt9c_device_commit_chunk(fixture.cDevice.get(), &chunk);
+      };
+      check(commit(firstWire) == D3D_OK,
+            "first ingress must return while Replay is parked");
+      {
+        std::unique_lock lock(gate.mutex);
+        check(gate.cv.wait_for(lock, std::chrono::seconds(5),
+                              [&] { return gate.entered; }),
+              "worker must reach the deterministic pre-Replay gate");
+      }
+      check(commit(secondWire) == D3D_OK,
+            "second ingress must transfer ownership while first is parked");
+      auto& ledger = fixture.cDevice->replayDrainLedger;
+      check(firstWire.refs.load() == 2u && secondWire.refs.load() == 2u &&
+                ledger.pending(*firstWire.replayDrainTarget) &&
+                ledger.pending(*secondWire.replayDrainTarget),
+            "accepted raw entries must own refs and publish mutation targets");
+      check(fixture.routing->combinedMarkCalls == 0u &&
+                fixture.routing->legacyMarkCalls == 0u &&
+                fixture.routing->queue_.pool().findBuffer(
+                    first->handle().value)->lastUsedSeqId == 0u &&
+                fixture.routing->queue_.pool().findBuffer(
+                    second->handle().value)->lastUsedSeqId == 0u,
+            "accepted pending work must require neither ingress mark nor "
+            "Replay/GPU completion to keep its objects alive");
+      gate.release();
+      worker.stop(); // joins and settles both active and unreplayed entries
+      check(firstWire.refs.load() == 1u && secondWire.refs.load() == 1u,
+            "success and poison cleanup must each release raw refs once");
+      check(gate.calls == (failure == Failure::None ? 2u : 1u) &&
+                worker.failed() == (failure != Failure::None),
+            "failure must discard the queued successor without replay/retry");
+      check(gate.protectedAtReturn,
+            "real Replay must establish marks while raw refs are still held");
+      if (failure != Failure::None) {
+        check(ledger.terminal() &&
+                  fixture.routing->queue_.pool().findBuffer(
+                      second->handle().value)->lastUsedSeqId == 0u,
+              "terminal cleanup must not invent use of an unreplayed source");
+      }
+    }
+    // The opposite ownership boundary: a stopped queue never adopts the raw.
+    // Retention acquired during import must unwind locally, not via a worker.
+    RuntimeFixture rejected(false, false, direct, false);
+    auto buffer = rejected.device->CreateBuffer(BufferDesc{
+        .size = 256u, .pool = Pool::Default, .usage = UsageVertexBuffer});
+    check(buffer != nullptr, "rejected-ingress buffer must construct");
+    D9CBuffer wireBuffer(buffer, rejected.cDevice.get());
+    rejected.cDevice->replayOffload =
+        std::make_unique<dxmt9::d3d9::ReplayOffloadWorker>();
+    rejected.cDevice->replayOffload->queue().stop();
+    const std::array records{drawRecord(wireBuffer.wireIdentity)};
+    const auto wire = makeWireFixture(records);
+    const D9CCommandChunk chunk{
+        .version = D9C_COMMAND_CHUNK_VERSION,
+        .recordCount = wire.envelope.recordCount,
+        .recordBytes = static_cast<std::uint32_t>(wire.bytes.size()),
+        .records = toWireHandle(wire.bytes.data()),
+        .handleCount = wire.envelope.handleCount};
+    check(dxmt9c_device_commit_chunk(rejected.cDevice.get(), &chunk) < D3D_OK &&
+              wireBuffer.refs.load() == 1u &&
+              !rejected.cDevice->replayDrainLedger.pending(
+                  *wireBuffer.replayDrainTarget) &&
+              rejected.routing->captureCalls == 1u &&
+              rejected.routing->combinedMarkCalls == 0u &&
+              rejected.routing->queue_.pool().findBuffer(
+                  buffer->handle().value)->lastUsedSeqId == 0u,
+          "pre-adoption refusal must release locally without pending/use marks");
   }
 }
 
@@ -10404,6 +10562,7 @@ int main(int argc, char** argv) {
     oversizeSegmentedPresentTakesOneLegacyRollbackSource();
     resourceBearingDirectCapturesThenMarksExactTicketAndPublishes();
     ordinaryIngressDefersMarksUntilReplay();
+    deferredIngressAdoptionAndFailureKeepRawOwnership();
     sameRawLegacyAndDirectProductionOracle();
     ordinaryChunkSlotDirectMatchesLegacyCadenceAndCompletion();
     ordinaryDrawApplyStateDrawUsesCarrierFreeDirectPath();

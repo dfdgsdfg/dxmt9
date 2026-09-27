@@ -63,6 +63,14 @@ fence controls must each fail. It assumes atomic final publication/stamping;
 it does not prove that premise for every production command, C++ memory order,
 reset/poison, backing rename, GPU bytes or pixels. Those gates remain open.
 
+`deferredIngressAdoptionAndFailureKeepRawOwnership` additionally exercises the
+real worker with two adopted raws while dispatch is parked, checking retained
+refs and pending mutation targets before any stamp. Direct/compatibility runs
+cover success, pre-dispatch failure, post-dispatch failure and queue refusal.
+The rename-ring suite runs combined and capture-only admission, proving captured
+backing residency hands protection to a final-use stamp before reuse. These are
+bounded buffer fixtures, not an all-family or Reset qualification.
+
 Evidence: the four source audits in the design doc §7 and the
 `ProducerMarkReclaim` model.
 

@@ -10,6 +10,12 @@ tags: [specs, backend, producer-concurrency, gap]
 Domain-owned tracker for `requirements.md` (R-BACK-43.x). Root rollup:
 [../../gap.md](../../gap.md).
 
+R-BACK-43.9 native composition update:
+[H395](../../../docs/perfomance/present-pacing/present-pacing-ingress-handoff-validation.395.md)
+adds parked-worker adoption, success/failure/stop cleanup and pre-adoption
+refusal tests, plus capture-only backing-to-sequence protection. These pass
+without promoting the candidate; all-family/reset/GPU/wild gates remain open.
+
 | Area | Status | Evidence / missing |
 |---|---|---|
 | Capture-only ordinary ingress (R-BACK-43.9) | implemented as a default-off candidate; bounded/native checks pass, promotion open | `DXMT9_DEFER_INGRESS_RESOURCE_MARKS` decouples capture-only admission from CPU-ready planning. `dxmt9-deferred-ingress-routing-spec` checks production direct/compatibility routes and worker-side marking; baseline suite disables the candidate. `producer_mark_reclaim_spec.cpp` exhausts one-resource/two-sequence handoff using production mark/reclaim predicates and detects early release, stale stamp and missing mutation fence controls. Full all-family failure/interleaving bindings, physical backing/reset composition, GPU exact comparison, wild correctness and matched performance remain required. Existing `ProducerMarkReclaim!BeginMark` reserves a ticket unlike the production provisional read; its green result alone does not qualify this candidate. |

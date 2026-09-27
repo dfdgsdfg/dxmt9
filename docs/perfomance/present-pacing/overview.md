@@ -11,6 +11,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H395](present-pacing-ingress-handoff-validation.395.md) binds ingress ownership
+to actual parked-worker execution: six direct/compatibility success/failure
+schedules and two pre-adoption refusals settle references correctly. Extended
+rename tests cover capture-only residency followed by final-use sequence
+protection. x86_64 focused tests pass 3/3; all-family/GPU/wild promotion remains
+open and the candidate stays default off.
+
 [H394](present-pacing-ingress-deferred-marks.394.md) adds a default-off
 capture-only ordinary ingress candidate independent of CPU-ready policy.
 Arm64 routing 2/2, x86_64 focused 9/9 and existing TLA regression pass; the

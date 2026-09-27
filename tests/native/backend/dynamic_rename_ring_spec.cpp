@@ -399,7 +399,7 @@ void testSequentialAlternatingThreadsShareRenameAndCaptureArena() {
         "discard map zero-fills the newly selected CPU shadow");
 }
 
-void testChunkAdmissionCaptureSurvivesLaterRename() {
+void testChunkAdmissionCaptureSurvivesLaterRename(bool captureOnly) {
   using namespace dxmt9::core;
   BackendLimits limits{};
   dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits, false);
@@ -420,8 +420,9 @@ void testChunkAdmissionCaptureSurvivesLaterRename() {
       },
   }};
   std::vector<ChunkBufferBindingSnapshot> captured;
-  const auto captureResult =
-      queue.markChunkResourcesAndCaptureBufferBindings(entries, captured);
+  const auto captureResult = captureOnly
+      ? queue.captureChunkBufferBindings(entries, captured)
+      : queue.markChunkResourcesAndCaptureBufferBindings(entries, captured);
   check(captureResult == ChunkBufferBindingCaptureResult::Complete,
         "valid versioned backing completes chunk admission capture");
   checkEq(captured.size(), std::size_t{1u},
@@ -461,7 +462,7 @@ void testChunkAdmissionCaptureSurvivesLaterRename() {
         "chunk resolver fails closed when a required handle is absent");
 }
 
-void testRawCaptureLeasePreventsCompletedBackingReuse() {
+void testRawCaptureLeasePreventsCompletedBackingReuse(bool captureOnly) {
   using namespace dxmt9::core;
   BackendLimits limits{};
   dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits, false);
@@ -470,6 +471,7 @@ void testRawCaptureLeasePreventsCompletedBackingReuse() {
   auto* record = queue.pool().findBuffer(handle.value);
   check(record != nullptr, "raw-residency buffer is reachable");
   SyntheticBufferHandleGuard handleGuard{record};
+  record->renameRing.reserve(4u);
   constexpr obj_handle_t generation0 = 0x1234u;
   record->buffer.handle = generation0;
   record->renameRing[0].buffer.handle = generation0;
@@ -481,28 +483,48 @@ void testRawCaptureLeasePreventsCompletedBackingReuse() {
       },
   }};
   std::vector<ChunkBufferBindingSnapshot> captured;
-  check(queue.markChunkResourcesAndCaptureBufferBindings(entries, captured) ==
+  check((captureOnly ? queue.captureChunkBufferBindings(entries, captured)
+                    : queue.markChunkResourcesAndCaptureBufferBindings(
+                          entries, captured)) ==
             ChunkBufferBindingCaptureResult::Complete,
         "raw-residency fixture captures G0");
+  if (captureOnly) {
+    checkEq(record->lastUsedSeqId, std::uint64_t{0u},
+            "raw residency must not depend on an ingress sequence stamp");
+  }
   check(captured[0].backingResidency != nullptr &&
             record->renameRing[0].replayResident(),
         "raw capture leases its concrete ring entry");
 
+  // Completion advances monotonically 1 -> 6 -> 7 throughout this schedule.
+  // Even the combined lane's provisional stamp (1) is already complete here.
   queue.pool().finalizeBufferMap(WMT::Device{NULL_OBJECT_HANDLE}, handle,
                                  UsageDiscard,
-                                 /*completedSeqId=*/UINT64_MAX);
+                                 /*completedSeqId=*/1u);
   checkEq(record->renameRing.size(), std::size_t{2u},
           "GPU completion cannot make a raw-resident backing reusable");
   checkEq(record->renameActiveIndex, 1u,
           "DISCARD grows away from the raw-resident G0 entry");
 
+  // The final use names captured G0, not the now-active G1. Pin release
+  // hands protection to the concrete backing's GPU watermark.
+  queue.pool().markBufferSnapshotUse(handle, captured[0].snapshot, 7u);
+  checkEq(record->renameRing[0].lastUsedSeqId, std::uint64_t{7u},
+          "Replay final-use mark must protect the captured old backing");
   captured.clear();
   check(!record->renameRing[0].replayResident(),
         "raw-entry destruction releases the backing lease");
   record->renameRing[1].lastUsedSeqId = 9u;
   queue.pool().finalizeBufferMap(WMT::Device{NULL_OBJECT_HANDLE}, handle,
+                                 UsageDiscard, /*completedSeqId=*/6u);
+  checkEq(record->renameRing.size(), std::size_t{3u},
+          "raw pin release must not bypass the final-use GPU watermark");
+  checkEq(record->renameActiveIndex, 2u,
+          "DISCARD must grow while both previous backings are in flight");
+  record->renameRing[2].lastUsedSeqId = 9u;
+  queue.pool().finalizeBufferMap(WMT::Device{NULL_OBJECT_HANDLE}, handle,
                                  UsageDiscard,
-                                 /*completedSeqId=*/8u);
+                                 /*completedSeqId=*/7u);
   checkEq(record->renameActiveIndex, 0u,
           "released G0 becomes reusable after its GPU watermark completes");
 }
@@ -729,7 +751,7 @@ void testChunkAdmissionLeavesStaticBufferOnLiveFallback() {
           "static fallback emits no concrete backing override");
 }
 
-void testChunkAdmissionRejectsMissingRequiredBacking() {
+void testChunkAdmissionRejectsMissingRequiredBacking(bool captureOnly) {
   using namespace dxmt9::core;
   BackendLimits limits{};
   dxmt9::CommandQueue queue(WMT::Device{NULL_OBJECT_HANDLE}, limits, false);
@@ -742,8 +764,9 @@ void testChunkAdmissionRejectsMissingRequiredBacking() {
       },
   }};
   std::vector<ChunkBufferBindingSnapshot> captured;
-  const auto captureResult =
-      queue.markChunkResourcesAndCaptureBufferBindings(entries, captured);
+  const auto captureResult = captureOnly
+      ? queue.captureChunkBufferBindings(entries, captured)
+      : queue.markChunkResourcesAndCaptureBufferBindings(entries, captured);
   check(captureResult == ChunkBufferBindingCaptureResult::MissingRequired,
         "versioned buffer without a concrete backing rejects admission");
   checkEq(captured.size(), std::size_t{1u},
@@ -934,12 +957,14 @@ int main() {
     testDynamicNoOverwriteRangeUploadPreservesSentinels();
     testConcreteSnapshotMarkProtectsRotatedBacking();
     testSequentialAlternatingThreadsShareRenameAndCaptureArena();
-    testChunkAdmissionCaptureSurvivesLaterRename();
-    testRawCaptureLeasePreventsCompletedBackingReuse();
+    for (const bool captureOnly : {false, true}) {
+      testChunkAdmissionCaptureSurvivesLaterRename(captureOnly);
+      testRawCaptureLeasePreventsCompletedBackingReuse(captureOnly);
+      testChunkAdmissionRejectsMissingRequiredBacking(captureOnly);
+    }
     testRenderTapeCompletionScheduleBindsRenameResidency();
     testResolverEmitsPayloadOnlyForDrawUsingCapturedBacking();
     testChunkAdmissionLeavesStaticBufferOnLiveFallback();
-    testChunkAdmissionRejectsMissingRequiredBacking();
     testManagedCreateSeedsVersionRing();
     testManagedWritableMapNeverWaitsButDefaultPlainDoes();
     testManagedUploadRotatesAfterMapAndCopiesFullShadow();
