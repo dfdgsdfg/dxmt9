@@ -8208,6 +8208,7 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
     Executor::Result execution;
     std::uint64_t direct = 0u, compatibility = 0u, elapsed = 0u;
     dxmt9::perf::RenderTapeReplaySnapshot before{}, after{};
+    dxmt9::append_diag::Snapshot appendBefore{}, appendAfter{};
     std::optional<std::uint64_t> nativeCpuNs;
     std::optional<dxmt9::test::CpuDiagnosticLedger> diagnostic;
   };
@@ -8228,6 +8229,7 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
         phase.set(Phase::Bookkeeping);
         fixture.routing->recordBoundedCapturedBindings = false;
         iterationResult.before = dxmt9::perf::snapshotRenderTapeReplay();
+        iterationResult.appendBefore = dxmt9::append_diag::snapshot();
         Executor executor(fixture, plan, blobs, {.route = options.compatibility
             ? dxmt9::d3d9::ProviderReplayPolicy::Compatibility
             : dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot,
@@ -8245,6 +8247,7 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
             .diagnostic = diagnostic});
         iterationResult.execution = executor.run();
         iterationResult.after = dxmt9::perf::snapshotRenderTapeReplay();
+        iterationResult.appendAfter = dxmt9::append_diag::snapshot();
         iterationResult.direct = iterationResult.after.directLeaseDraws -
             iterationResult.before.directLeaseDraws;
         iterationResult.compatibility = iterationResult.after.compatibilityDraws -
@@ -8415,6 +8418,18 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
     else
       std::cout << "null";
     if (iteration.diagnostic) {
+      std::cout << R"(,"compat_append_observation":{"mode":)"
+                << dxmt9::append_diag::mode() << R"(,"phases":{)";
+      for (unsigned p = 0; p < dxmt9::append_diag::names.size(); ++p) {
+        if (p) std::cout << ',';
+        std::cout << std::quoted(dxmt9::append_diag::names[p])
+                  << R"(:{"wall_ns":)"
+                  << iteration.appendAfter[p].ns - iteration.appendBefore[p].ns
+                  << R"(,"calls":)"
+                  << iteration.appendAfter[p].calls - iteration.appendBefore[p].calls
+                  << '}';
+      }
+      std::cout << "}}";
       const auto& ledger = *iteration.diagnostic;
       std::cout << R"(,"diagnostic_accounting":{"valid":)"
                 << (ledger.valid() ? "true" : "false")

@@ -46,6 +46,13 @@ SITES = {site_id(name): name for name in (
     'fail_stop_replay_source_execution',
     'arm_cpu_ready_next_source_intent',
     'cancel_cpu_ready_next_source_intent',
+    'direct_commit/raw_resource_mark',
+    'direct_commit/span_resource_mark',
+    'direct_commit/retain_digest',
+    'compat_batch/binding_snapshot',
+    'compat_batch/reserve_mark_append',
+    'compat_batch/resource_mark',
+    'compat_batch/append',
 )}
 
 

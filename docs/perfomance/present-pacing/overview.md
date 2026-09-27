@@ -4,7 +4,7 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-26
+updated: 2026-09-27
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
@@ -13,6 +13,21 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
+
+[H387](present-pacing-compat-append-phases.387.md) splits compatibility append
+on identical GT2 Tape input: uniform lookup/intern/storage is ~2.20ms of the
+~3.03ms split-observed append; state is ~0.245ms, final command/payload writes
+~0.171ms, batch reserve ~0.067ms. Split clocks add ~0.525ms to parent-only
+append observation. This is GT2 attribution, not STALKER cost equivalence or
+removable CPU/FPS. Qualify the workload transfer before an off-lock rewrite.
+
+[H386](present-pacing-mark-ticket-coverage.386.md) finds missing Replay holder
+coverage: compatible Slot snapshot/reserve/mark/append overlaps 20.602ms of
+31.133ms mark-ticket acquisition in 16 intervals; append alone overlaps
+12.865ms (included in its parent). All measured holders cover 24.026ms.
+Uncovered time is 7.107ms, not proved scheduler cost. This is observer-inclusive
+attribution, not FPS or a cross-run improvement: inspect compatibility append
+materialization/ownership before removing the producer's lifetime lock.
 
 [H385](present-pacing-streaming-summary.385.md) implements the streaming
 summary fold: no temporary observation vector or second traversal, with

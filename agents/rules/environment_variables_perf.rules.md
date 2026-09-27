@@ -1,5 +1,20 @@
 # dxmt9 Environment Variables — Perf counters
 
+`DXMT9_COMPAT_APPEND_DIAGNOSTICS` is an explicit fixed-input CPU diagnostic:
+unset/`0` disables it, `1` measures ordinary compatibility batch, batch reserve
+and append envelopes, and `2` additionally partitions append into preflight,
+uniform lookup, local reserve, uniform append, state/PSO construction and final
+SoA writes. Unknown values disable it. It does not observe Direct/Arena work
+outside an ordinary compatibility batch. Thread-local bounded timing scopes
+accumulate into process counters; the CPU Tape diagnostic receipt snapshots
+per-iteration deltas. No file output or thread-CPU syscall occurs per phase.
+These are observer-inclusive elapsed times, not exclusive native CPU service.
+Parent scopes overlap children; reserve includes capacity checks, lookup-table
+provision and any allocation/relocation, not allocator-exclusive cost. Existing
+perf timers remain active in these experiments. Compare OFF/parent/split using
+identical inputs and images before drawing performance conclusions. State
+passed by value before entering append is outside the append envelope.
+
 The bounded `DXMT9_CPU_SUPPLY_TRACE` also records actual StateBlock queue-space
 waits (attempt ID, capacity, entry/exit depth, eventual replay-sequence adoption)
 and mark-ticket capture mutex acquisition/body endpoints. Analyze with
@@ -12,6 +27,17 @@ boundaries. The analyzer intersects only same-mutex/different-thread held
 segments and unions nested coverage. Coverage is partial: unmatched time is
 unattributed, not proved scheduler or resource-loop cost. Timings are
 observer-inclusive, not FPS evidence. No additional knob or policy change.
+Direct Slot commit now brackets three uninterrupted held bodies separately:
+`direct_commit/raw_resource_mark`, `direct_commit/span_resource_mark` and
+`direct_commit/retain_digest`. These scopes do not cross publication/CV waits
+or fail-stop unlocks. They are partial coverage, not the entire commit hold.
+Compatibility batch holds additionally cover binding snapshot and the
+uninterrupted reserve/mark/append body, with nested mark and append scopes.
+Per-site overlap is inclusive; use the analyzer's interval union for total
+coverage rather than summing parent and child sites.
+Each trace row timestamps wall time before querying native thread CPU through
+`proc_pidinfo`; endpoint deltas include part of observer work and must not be
+treated as exact mutex-only or off-CPU intervals.
 
 `QueueSubmitPhase` markers in the same trace partition successful bound
 submissions into validation/summary, lifecycle/preparation, capture/signpost,

@@ -133,6 +133,17 @@ class TestSupply(unittest.TestCase):
                          ['observed_held_overlap_ns'], 100)
         with self.assertRaises(ValueError):
             app_waits.analyze(held+held)
+        for site in ('direct_commit/raw_resource_mark',
+                     'direct_commit/span_resource_mark',
+                     'direct_commit/retain_digest',
+                     'compat_batch/binding_snapshot',
+                     'compat_batch/reserve_mark_append',
+                     'compat_batch/resource_mark',
+                     'compat_batch/append'):
+            direct = [held[0], dict(held[1], value=app_waits.site_id(site))]
+            observed = app_waits.analyze(wait+direct)['waits'][0]
+            self.assertEqual(observed['observed_holders'][0]['site'], site)
+            self.assertEqual(observed['observed_held_overlap_ns'], 100)
 
     def test_planning_partition(self):
         rows = [dict(kind='framegraph_planning_phase', owner=1, tid=2, id=3,

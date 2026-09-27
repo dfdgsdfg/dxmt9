@@ -764,7 +764,27 @@ void testChunkSlotUniformStageConstantsPreserveAbiPrefixForIntUpload() {
 
 int main() {
   try {
+    // Exercise diagnostic OFF, parent-only and split modes with the same
+    // command fixtures; callers select the mode in a fresh process.
+    const auto before = dxmt9::append_diag::snapshot();
+    {
+      dxmt9::append_diag::Scope root(dxmt9::append_diag::Phase::Batch);
+      testChunkSlotReplayObserverAndQueueSummarySeeSameCategories();
+    }
+    const auto after = dxmt9::append_diag::snapshot();
+    checkEq(after[0].calls - before[0].calls,
+            dxmt9::append_diag::mode() ? u64{1} : u64{0},
+            "diagnostic root respects OFF gate");
+    check((after[static_cast<unsigned>(dxmt9::append_diag::Phase::Soa)].calls >
+           before[static_cast<unsigned>(dxmt9::append_diag::Phase::Soa)].calls) ==
+              (dxmt9::append_diag::mode() == 2),
+          "only split mode observes final SoA writes");
+    const auto unrootedBefore = dxmt9::append_diag::snapshot();
     testChunkSlotReplayObserverAndQueueSummarySeeSameCategories();
+    const auto unrootedAfter = dxmt9::append_diag::snapshot();
+    for (unsigned i = 0; i < unrootedBefore.size(); ++i)
+      checkEq(unrootedBefore[i].calls, unrootedAfter[i].calls,
+              "non-compatibility calls excluded from append diagnostic");
     testSummaryOrderedFoldTruthTable();
     testStreamingSummaryPreservesResolverOrder();
     testChunkSlotDrawRunSoAReuseKeepsReservedCapacitiesStable();

@@ -4,6 +4,7 @@
 #include "dxmt9/assert.hpp"
 #include "dxmt9_chunk_slot_dimensions.hpp"
 #include "dxmt9_perf_counters.hpp"
+#include "dxmt9_append_diag.hpp"
 #include "dxmt9/query_occlusion.hpp"
 
 #include <algorithm>
@@ -2064,6 +2065,7 @@ struct ChunkSlot {
                                   std::size_t runCount,
                                   std::size_t uniformCount,
                                   bool appendState = true) {
+    dxmt9::append_diag::Scope observation(dxmt9::append_diag::Phase::BatchReserve);
     if (runCount > std::numeric_limits<std::size_t>::max() - commandHeaders.size() ||
         runCount > std::numeric_limits<std::size_t>::max() - drawRunRecords.size() ||
         runCount > std::numeric_limits<std::size_t>::max() - drawPsoSubviews.size() ||
@@ -2193,6 +2195,9 @@ struct ChunkSlot {
                      bool alreadyReserved = false,
                      std::size_t payloadBytesHint =
                          std::numeric_limits<std::size_t>::max()) {
+    using AppendPhase = dxmt9::append_diag::Phase;
+    dxmt9::append_diag::Scope appendObservation(AppendPhase::Append);
+    dxmt9::append_diag::Scope phaseObservation(AppendPhase::Preflight);
     if (draws.empty()) {
       return true;
     }
@@ -2201,10 +2206,12 @@ struct ChunkSlot {
       return false;
     }
 
+    phaseObservation.set(AppendPhase::UniformLookup);
     DrawUniformHandle uniformHandle =
         detail::chunkSlotDisableDrawUniformPayloadDedup()
             ? DrawUniformHandle{}
             : findDrawUniformPayload(uniformPayload, uniformHandleCandidate);
+    phaseObservation.set(AppendPhase::Preflight);
     const bool needsUniformAppend = !uniformHandle.valid();
     CommandPayloadIndex drawRunRecordIndex{};
     if (!detail::chunkSlotTryMakeCommandPayloadIndex(commandHeaders.size(), drawRunRecords.size(),
@@ -2236,6 +2243,7 @@ struct ChunkSlot {
       return false;
     }
 
+    phaseObservation.set(AppendPhase::LocalReserve);
     if (!alreadyReserved) {
       detail::chunkSlotReserveAtLeast(commandHeaders, commandHeaders.size() + 1u);
       detail::chunkSlotReserveAtLeast(drawRunRecords, drawRunRecords.size() + 1u);
@@ -2267,6 +2275,7 @@ struct ChunkSlot {
       }
     }
 
+    phaseObservation.set(AppendPhase::UniformAppend);
     if (needsUniformAppend) {
       uniformHandle = appendDrawUniformPayload(uniformPayload, {},
                                                 alreadyReserved);
@@ -2275,6 +2284,7 @@ struct ChunkSlot {
       }
     }
 
+    phaseObservation.set(AppendPhase::State);
     const auto psoSubview = makeDrawPsoSubview(state);
     const DrawRunInvariant invariant{
         .viewportScissorHash = state.hot.key.viewportHash,
@@ -2287,6 +2297,7 @@ struct ChunkSlot {
         .samplerStateMask = state.hot.key.samplerStateMask,
     };
     const auto stateIndex = appendDrawState(std::move(state));
+    phaseObservation.set(AppendPhase::Soa);
     const auto firstParam = static_cast<std::uint32_t>(drawParams.size());
     const auto payloadOffset = static_cast<std::uint32_t>(drawPayloadArena.size());
 
@@ -2365,6 +2376,9 @@ struct ChunkSlot {
       bool alreadyReserved = false,
       std::size_t payloadBytesHint =
           std::numeric_limits<std::size_t>::max()) {
+    using AppendPhase = dxmt9::append_diag::Phase;
+    dxmt9::append_diag::Scope appendObservation(AppendPhase::Append);
+    dxmt9::append_diag::Scope phaseObservation(AppendPhase::Preflight);
     (void)state;
     if (draws.empty()) {
       return true;
@@ -2386,10 +2400,12 @@ struct ChunkSlot {
       return false;
     }
 
+    phaseObservation.set(AppendPhase::UniformLookup);
     DrawUniformHandle uniformHandle =
         detail::chunkSlotDisableDrawUniformPayloadDedup()
             ? DrawUniformHandle{}
             : findDrawUniformPayload(uniformPayload, uniformHandleCandidate);
+    phaseObservation.set(AppendPhase::Preflight);
     const bool needsUniformAppend = !uniformHandle.valid();
     std::uint64_t payloadBytes64 = payloadBytesHint;
     if (payloadBytesHint == std::numeric_limits<std::size_t>::max()) {
@@ -2416,6 +2432,7 @@ struct ChunkSlot {
       return false;
     }
 
+    phaseObservation.set(AppendPhase::LocalReserve);
     if (!alreadyReserved) {
       detail::chunkSlotReserveAtLeast(drawParams,
                                       drawParams.size() + draws.size());
@@ -2447,6 +2464,7 @@ struct ChunkSlot {
             drawUniformPixelConstants.size() + 1u);
       }
     }
+    phaseObservation.set(AppendPhase::UniformAppend);
     if (needsUniformAppend) {
       uniformHandle = appendDrawUniformPayload(uniformPayload, {},
                                                 alreadyReserved);
@@ -2455,6 +2473,7 @@ struct ChunkSlot {
       }
     }
 
+    phaseObservation.set(AppendPhase::Soa);
     std::uint32_t recordPayloadSize = record.payloadSize;
     auto appendPayloadBytes = [&](std::span<const u8> bytes)
         -> DrawPayloadRange {

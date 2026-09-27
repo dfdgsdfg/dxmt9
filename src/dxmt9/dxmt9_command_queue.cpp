@@ -3749,6 +3749,7 @@ bool CommandQueue::submitDrawRunBatch(
   // Counts ordinary queue-batch transactions only; the Arena-owned path
   // returns above before acquiring this compatibility-batch mutex.
   perf::countSubmitDrawRunBatchCall();
+  append_diag::Scope appendBatchObservation(append_diag::Phase::Batch);
   perf::countSubmitDrawRunBatchInputRuns(inputRunCount);
   auto& scratch = drawSubmitScratch();
   ScopedDrawSubmitScratchUse scratchUse(scratch);
@@ -3800,6 +3801,7 @@ bool CommandQueue::submitDrawRunBatch(
     const std::size_t bindingSnapshotsBefore = scratch.bindingSnapshots.size();
     {
       PerfScope stageScope(perf::countSubmitDrawRunBindingSnapshotCpuTime);
+      QueueMutexSegmentScope segment("compat_batch/binding_snapshot", &mutex_);
       effectivePayloads = snapshotDrawRunBindingPayloads(
           pool_, source.state->hot, source.draws, source.payloads,
           scratch.bindingSnapshots, scratch.snapshotPayloads,
@@ -3910,6 +3912,7 @@ bool CommandQueue::submitDrawRunBatch(
     }
 
     const bool batchAppended = queueLifecycle_.mutateWritingPayload(slot, [&] {
+      QueueMutexSegmentScope batchSegment("compat_batch/reserve_mark_append", &mutex_);
       if (!slot.reserveDrawRunBatchStorage(
               segmentDraws, segmentPayloadBytes, segmentRuns,
               segmentEnd - segmentStart, /*appendState=*/segmentRuns != 0u)) {
@@ -3919,6 +3922,7 @@ bool CommandQueue::submitDrawRunBatch(
 
       {
         PerfScope stageScope(perf::countSubmitDrawRunResourceMarkCpuTime);
+        QueueMutexSegmentScope segment("compat_batch/resource_mark", &mutex_);
         const std::uint64_t seqId = seqIdForMark(*this, 0);
         scratch.segmentBufferHandles.clear();
         scratch.segmentTextureHandles.clear();
@@ -4014,6 +4018,7 @@ bool CommandQueue::submitDrawRunBatch(
       }
       {
         PerfScope stageScope(perf::countSubmitDrawRunAppendCpuTime);
+        QueueMutexSegmentScope segment("compat_batch/append", &mutex_);
         DXMT_ASSERT_OWNED_BY_OR_LOCKED(writingSlotOwnership_, lock.owns_lock());
         for (std::size_t i = segmentStart; i < segmentEnd; ++i) {
           const auto& entry = scratch.preparedEntries[i].entry;
@@ -5289,7 +5294,10 @@ CommandQueue::commitDirectChunkSlotReplay(
   // the closure only at the raw's first span would leave a resource a later
   // span uses carrying an earlier watermark -- the unsafe direction. Marking
   // a resource under a later seq only extends retention.
-  markChunkResourcesWithExactSeq(pool_, resources, ticket.seqId);
+  {
+    QueueMutexSegmentScope segment("direct_commit/raw_resource_mark", &mutex_);
+    markChunkResourcesWithExactSeq(pool_, resources, ticket.seqId);
+  }
   const core::SourcePayloadView payloadView(*payload);
   if (!payloadView.valid()) {
     return failStop();
@@ -5300,7 +5308,10 @@ CommandQueue::commitDirectChunkSlotReplay(
   // the checkpoint this walk is quadratic in the raw's span count and
   // re-marks every earlier command under a later seq.
   const auto firstSpanCommand = context->assembler->directCommandCheckpoint();
-  markArenaSourceResources(pool_, payloadView, ticket.seqId, firstSpanCommand);
+  {
+    QueueMutexSegmentScope segment("direct_commit/span_resource_mark", &mutex_);
+    markArenaSourceResources(pool_, payloadView, ticket.seqId, firstSpanCommand);
+  }
   // Every dimension is reserved once at admission and the per-append `fits`
   // predicate keeps writes inside it, so the destination must not have
   // reallocated. Reported rather than enforced: the transaction is already
@@ -5310,8 +5321,11 @@ CommandQueue::commitDirectChunkSlotReplay(
     perf::countReplaySpanSoaGrowthAfterReserve();
   }
   ArenaResourceRetainDigest retained;
-  retained.add(resources);
-  retained.add(payloadView, firstSpanCommand);
+  {
+    QueueMutexSegmentScope segment("direct_commit/retain_digest", &mutex_);
+    retained.add(resources);
+    retained.add(payloadView, firstSpanCommand);
+  }
   const auto& binding = *context->assembler->outerBinding();
   if (!context->assembler->bindCommitEvidence(
           core::ArenaCommitEvidence(
