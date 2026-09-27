@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H398](present-pacing-ingress-wild.398.md) runs promoted commit `694427f3`
+through STALKER Day/high: normal completion, zero GPU errors and sampled
+middle/late visuals without obvious corruption. Engine average is 27.84 FPS;
+selected early/middle/late windows are 32.56/47.65/16.70 FPS. This single run
+is operational evidence, not matched-input speedup or all-family/Reset proof.
+
 [H397](present-pacing-ingress-promotion.397.md) promotes capture-only ingress at
 the user's request and removes the OFF selector. Final-binary focused tests
 pass 13/13; unset versus retired `0` passes eight GPU iterations and 16 exact
