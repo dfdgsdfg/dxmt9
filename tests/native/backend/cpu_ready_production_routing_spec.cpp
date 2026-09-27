@@ -2543,8 +2543,6 @@ void providerResolvedEntryRoutesExistingClearPresent() {
 }
 
 void providerRoutePinsDirectCompatibilityAndMalformedIdentity() {
-  const bool deferredIngress = dxmt9::d3d9::deferIngressResourceMarks(
-      false, std::getenv("DXMT9_DEFER_INGRESS_RESOURCE_MARKS"));
   // This is the provider-local route pin: all lanes enter the actual
   // prevalidated provider entry with the same canonical bytes and resolved
   // object role. ProductionSlot has two independent implementations: the
@@ -2615,10 +2613,8 @@ void providerRoutePinsDirectCompatibilityAndMalformedIdentity() {
       dxmt9::CommandQueueArenaLeaseTestAccess::writingCommandCount(
           directFixture.routing->queue_);
   check(directWritingCommands != 0u &&
-            directFixture.routing->combinedMarkCalls ==
-                (deferredIngress ? 0u : 1u) &&
-            directFixture.routing->captureCalls ==
-                (deferredIngress ? 1u : 0u),
+            directFixture.routing->combinedMarkCalls == 0u &&
+            directFixture.routing->captureCalls == 1u,
         "ProductionSlot direct ChunkSlot must reach a direct-owned route before effects");
   const auto directLifecycle =
       dxmt9::CommandQueueArenaLeaseTestAccess::directLifecycleState(
@@ -2634,10 +2630,8 @@ void providerRoutePinsDirectCompatibilityAndMalformedIdentity() {
             dxmt9::d3d9::ProviderReplayPolicy::Compatibility) == D3D_OK,
         "provider Compatibility route must accept the same canonical input");
   check(compatibilityFixture.routing->drawCalls == 1u &&
-            compatibilityFixture.routing->combinedMarkCalls ==
-                (deferredIngress ? 0u : 1u) &&
-            compatibilityFixture.routing->legacyMarkCalls ==
-                (deferredIngress ? 1u : 0u),
+            compatibilityFixture.routing->combinedMarkCalls == 0u &&
+            compatibilityFixture.routing->legacyMarkCalls == 1u,
         "provider Compatibility must establish marks at the selected boundary");
 
   directFixture.routing->present(SwapDesc{});
@@ -2812,17 +2806,6 @@ void resourceBearingDirectCapturesThenMarksExactTicketAndPublishes() {
 }
 
 void ordinaryIngressDefersMarksUntilReplay() {
-  using dxmt9::d3d9::deferIngressResourceMarks;
-  for (const bool planning : {false, true}) {
-    check(deferIngressResourceMarks(planning, nullptr) == planning &&
-              deferIngressResourceMarks(planning, "") == planning &&
-              deferIngressResourceMarks(planning, "0") == planning &&
-              deferIngressResourceMarks(planning, "1"),
-          "ingress experiment must default off independently of Tape policy");
-  }
-  if (!deferIngressResourceMarks(
-          false, std::getenv("DXMT9_DEFER_INGRESS_RESOURCE_MARKS"))) return;
-
   for (const bool direct : {false, true}) {
     RuntimeFixture fixture(false, false, direct, false);
     auto buffer = fixture.device->CreateBuffer(BufferDesc{
@@ -2904,8 +2887,6 @@ struct IngressHandoffGate {
 };
 
 void deferredIngressAdoptionAndFailureKeepRawOwnership() {
-  if (!dxmt9::d3d9::deferIngressResourceMarks(
-          false, std::getenv("DXMT9_DEFER_INGRESS_RESOURCE_MARKS"))) return;
   using Failure = IngressHandoffGate::Failure;
   for (const bool direct : {false, true}) {
     for (const auto failure :

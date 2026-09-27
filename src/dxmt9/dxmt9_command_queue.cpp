@@ -3661,8 +3661,8 @@ CommandQueue::captureChunkBufferBindings(
   if (entries.empty()) {
     return core::ChunkBufferBindingCaptureResult::Complete;
   }
-  // T2b — capture-only sibling (the CpuReadyTape planning lane, where the
-  // stamps are deferred to replay). It took `mutex_` for nothing but the
+  // T2b — capture-only ingress, independent of CpuReadyTape planning.
+  // Stamps are deferred to Replay. It took `mutex_` for nothing but the
   // capture loop, so with T2b the acquire disappears entirely rather than
   // shrinking: the `capture_chunk_buffer_bindings`
   // `DXMT9_PERF_QUEUE_MUTEX_SPLIT` row is expected to go to zero acquires.
@@ -3671,8 +3671,9 @@ CommandQueue::captureChunkBufferBindings(
   //
   // Note this lane's ordering is NOT stamps-before-capture: it captures
   // without marking at all, because `resourcesMarkedBeforeReplay` is false
-  // and the arena replay stamps later under its own reserved ticket. That is
-  // unchanged by T2b — it was already true while the mutex was held.
+  // and Replay establishes final-use protection before releasing raw owners.
+  // Direct publication uses its ticket; compatibility keeps its mark/repair
+  // protocol. Mutation visibility fences remain separate obligations.
   return pool_.captureChunkBufferBindings(entries, snapshots);
 }
 

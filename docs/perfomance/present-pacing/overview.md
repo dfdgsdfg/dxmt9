@@ -11,6 +11,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H397](present-pacing-ingress-promotion.397.md) promotes capture-only ingress at
+the user's request and removes the OFF selector. Final-binary focused tests
+pass 13/13; unset versus retired `0` passes eight GPU iterations and 16 exact
+readbacks on both routes. All-family/Reset and STALKER qualification remains
+open. Default-off statements in H394–H396 describe their historical builds,
+not current policy; no FPS gain is claimed.
+
 [H396](present-pacing-ingress-gpu-exact.396.md) qualifies the same GT2 captured
 input with ingress OFF/ON on Compatibility and ProductionSlot: 8/8 GPU
 iterations pass, all 16 readbacks match original bytes, and loaded images/input

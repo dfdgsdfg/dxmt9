@@ -179,9 +179,11 @@ class Device {
   virtual core::ChunkBufferBindingCaptureResult captureChunkBufferBindings(
       std::span<const core::ChunkHandleEntry> entries,
       std::vector<core::ChunkBufferBindingSnapshot>& snapshots) {
-    // Compatibility backends may only implement the historical combined
-    // hook. Production DeviceImpl overrides this with capture-only behavior.
-    return markChunkResourcesAndCaptureBufferBindings(entries, snapshots);
+    // Unsupported capture must not silently perform provisional marking.
+    // Replay owns final-use stamping independently of backing capture.
+    (void)entries;
+    snapshots.clear();
+    return core::ChunkBufferBindingCaptureResult::Unsupported;
   }
   virtual bool supportsCpuReadyArenaReplay() const noexcept { return false; }
   // The ordinary synchronous replay lane may use a transactional

@@ -1766,19 +1766,13 @@ bool persistResolvedResourcesAndCaptureBindings(
   if (auto upper = device->dev().upperDevice()) {
     raw.cpuReadyTapePlanningEnabled =
         upper->supportsCpuReadyArenaReplay();
-    static const bool deferOrdinaryIngressMarks =
-        dxmt9::d3d9::deferIngressResourceMarks(
-            false, std::getenv("DXMT9_DEFER_INGRESS_RESOURCE_MARKS"));
-    const bool deferMarks = raw.cpuReadyTapePlanningEnabled ||
-                            deferOrdinaryIngressMarks;
     CommitChunkPhaseTimer corePhase(phaseSplit);
-    const auto captureResult = deferMarks
-        ? upper->captureChunkBufferBindings(raw.resourceEntries,
-                                            raw.bufferSnapshots)
-        : upper->markChunkResourcesAndCaptureBufferBindings(
-              raw.resourceEntries, raw.bufferSnapshots);
+    // Ingress owns identity/backing lifetime, not an unreserved GPU ticket.
+    // Replay's direct publication or compatibility boundary supplies marks.
+    const auto captureResult = upper->captureChunkBufferBindings(
+        raw.resourceEntries, raw.bufferSnapshots);
     corePhase.stop(dxmt9::perf::countCommitChunkPhaseMarkCoreCpuTime);
-    raw.resourcesMarkedBeforeReplay = !deferMarks;
+    raw.resourcesMarkedBeforeReplay = false;
     raw.bufferSnapshotsCaptured =
         captureResult ==
         dxmt9::core::ChunkBufferBindingCaptureResult::Complete;
@@ -2394,8 +2388,8 @@ int32_t replayPlannedChunk(D9CDevice* device,
   }
   if (!raw.cpuReadyTapePlanningEnabled) {
     // The ordinary execution policy is independent of ingress ownership.
-    // Combined ingress already marked; capture-only ingress leaves marking
-    // to the direct publisher or markLegacyResources at the fallback boundary.
+    // Ingress leaves marking to the direct publisher or markLegacyResources
+    // at the fallback boundary.
     if (captureIdentityRequested) failCaptureIdentity("planning-disabled");
     if (reportOffloadReplayStage) {
       dxmt9::perf::recordOffloadReplayStage(

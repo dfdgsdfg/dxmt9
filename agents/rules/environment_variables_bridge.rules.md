@@ -7,14 +7,14 @@ for global notes.
 
 ## PE bridge / recorder
 
-`DXMT9_DEFER_INGRESS_RESOURCE_MARKS=1` is an experimental, default-off Unix
-ingress ownership candidate, independent of `DXMT9_CPU_READY_TAPE`. It keeps
-validation, retained wrappers and backing capture, but moves provisional
-resource marking from synchronous ingress to existing Replay publication or
-compatibility marking. Mutation drains, final GPU-use stamps and completion
-watermarks remain mandatory. Unset, empty or a value starting with `0` is off;
-other values enable it, cached on first use. It is not qualified for production
-promotion; see `specs/backend/producer-concurrency/gap.md` R-BACK-43.9.
+`DXMT9_DEFER_INGRESS_RESOURCE_MARKS` is retired and ignored, including `0`.
+Capture-only Unix ingress is the sole production policy, independent of
+`DXMT9_CPU_READY_TAPE`. Validation, retained wrappers and backing capture stay
+at ingress; existing Replay publication or compatibility marking owns stamps.
+Mutation drains, final GPU-use stamps and completion watermarks remain
+mandatory. Promotion was explicitly requested after bounded/native and GT2 GPU
+exact evidence; residual all-family/Reset and STALKER qualification remains
+open in `specs/backend/producer-concurrency/gap.md` R-BACK-43.9.
 
 Constant-transition fusion changes the `const_setter` timing population:
 `DXMT9_PE_STATS_DECIMATION` now observes nonzero live setter reductions,

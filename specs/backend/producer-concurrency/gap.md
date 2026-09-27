@@ -21,12 +21,16 @@ closes the captured GT2 GPU exact sub-gate: ingress OFF/ON on both Compatibility
 and ProductionSlot passes eight iterations with 16 original-exact readbacks,
 identical input/loaded images and a measured ticket-recheck reduction. It is
 synchronous provider replay, not a worker/Reset proof or a performance result.
-All-family/reset composition and STALKER wild/performance remain open; default
-OFF is unchanged.
+All-family/reset composition and STALKER wild/performance remain open.
+After H396, the user explicitly requested promotion before those residual gates
+closed: capture-only ingress is now unconditional and the OFF selector is
+removed. This is a deployment decision, not evidence that the residual gates
+passed. The baseline routing suite uses an unset selector; its companion sets
+the retired selector to `0` and must observe the same capture-only behavior.
 
 | Area | Status | Evidence / missing |
 |---|---|---|
-| Capture-only ordinary ingress (R-BACK-43.9) | implemented as a default-off candidate; bounded/native checks pass, promotion open | `DXMT9_DEFER_INGRESS_RESOURCE_MARKS` decouples capture-only admission from CPU-ready planning. `dxmt9-deferred-ingress-routing-spec` checks production direct/compatibility routes and worker-side marking; baseline suite disables the candidate. `producer_mark_reclaim_spec.cpp` exhausts one-resource/two-sequence handoff using production mark/reclaim predicates and detects early release, stale stamp and missing mutation fence controls. Full all-family failure/interleaving bindings, physical backing/reset composition, GPU exact comparison, wild correctness and matched performance remain required. Existing `ProducerMarkReclaim!BeginMark` reserves a ticket unlike the production provisional read; its green result alone does not qualify this candidate. |
+| Capture-only ordinary ingress (R-BACK-43.9) | sole production path by explicit user request; residual qualification open | The runtime selector and automatic combined-capture fallback are removed, independently of CPU-ready planning. Routing tests cover unset and retired `0`, direct/compatibility, parked-worker adoption and failure cleanup. H394–H395 provide bounded lifetime and rename evidence; H396 provides captured GT2 GPU exact evidence. Full all-family failure/interleaving bindings, physical backing/reset composition, STALKER wild correctness and matched performance remain required. Existing `ProducerMarkReclaim!BeginMark` reserves a ticket unlike the historical provisional read; its green result alone does not close these gaps. |
 | Bridge entry classification table (R-BACK-43.1) | classification complete + mechanically audited | `scripts/check/audit_bridge_entry_classification.py` / `dxmt9-bridge-entry-classification-audit` covers 161 symbols and the five bridge forwarder files. |
 | `record-only` de-synchronization (R-BACK-43.2) | G2 resolved: no getter migration | The 2026-08-21 source audit found no drained entry with a justified record-only migration. Reopen only if a profiler identifies one. |
 | Ownership declarations at field level (R-BACK-43.4) | implemented for the audited set + mechanically audited | Rename mutation and commit-time capture are documented as `arena-protected` under HandleArena unique/`inspect` locking; binding publication remains the immutable commit-time snapshot. `scripts/check/audit_thread_ownership_declarations.py` / `dxmt9-thread-ownership-audit` checks token declarations and declaration-site drift. The audit is lexical and does not replace the HandleArena lock proof. |

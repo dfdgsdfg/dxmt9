@@ -376,12 +376,10 @@ longer inherits the offload state: callers must explicitly set
 
 - The synchronous phase always keeps wire header/range validation, handle
   generation checks, canonical resource identities, backing snapshots, raw
-  residency, and wrapper retention. With the CPU-ready promotion gate off, it
-  also keeps the historical combined `markChunkResources` + backing-capture
-  operation before handoff unless the independent default-off
-  `DXMT9_DEFER_INGRESS_RESOURCE_MARKS` candidate is enabled (R-BACK-43.9).
-  That candidate captures without provisional marking and leaves final-use
-  coverage to the existing Replay direct/compatibility owners. With the
+  residency, and wrapper retention. Capture-only ingress is unconditional
+  (R-BACK-43.9); the retired `DXMT9_DEFER_INGRESS_RESOURCE_MARKS` selector is
+  ignored. It leaves final-use coverage to the existing Replay
+  direct/compatibility owners. With the
   CPU-ready gate on, a Direct candidate applies
   the exact strict source `seqId` mark after admission and before seal/Ready;
   StateOnly emits no mark, and a planned Legacy lane marks before semantic

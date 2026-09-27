@@ -331,13 +331,10 @@ int main(int argc, char** argv) {
     };
 
     const auto status = dxmt9c_device_commit_chunk(&cDevice, &chunk);
-    const bool admissionMatchesLane = cpuReadyTapeEnabled
-        ? recording->combinedCaptureCalls == 0u &&
-              recording->captureOnlyCalls == 1u &&
-              recording->captureOnlyThread == admissionThread
-        : recording->combinedCaptureCalls == 1u &&
-              recording->captureOnlyCalls == 0u &&
-              recording->combinedCaptureThread == admissionThread;
+    const bool admissionMatchesLane =
+        recording->combinedCaptureCalls == 0u &&
+        recording->captureOnlyCalls == 1u &&
+        recording->captureOnlyThread == admissionThread;
     dxmt9::d3d9::drainDeferredReplay(
         &cDevice, "replay-byte-identity-dispatch");
     ok = status == D3D_OK &&
