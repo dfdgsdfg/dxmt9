@@ -11,6 +11,23 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H393](present-pacing-ingress-lifetime-audit.393.md) clarifies the remaining
+ingress coupling: Unix already owns accepted raw work, and backing capture is
+already outside the queue mutex. The residual acquisition reconciles a
+provisional use-stamp ticket. Capture-only ingress independent of execution
+policy is a candidate, not yet qualified: mutation visibility, final-use
+coverage and the model's stronger producer reservation premise must be closed
+before removing the repair lock. No runtime or performance change is claimed.
+
+[H392](present-pacing-stalker-cpu-recheck.392.md) rechecks `fd2fafa5`: baseline
+early/middle/late selected windows are 32.43/47.81/15.35 FPS; late pass count
+rises to 80.85/frame. Valid diagnostics show Replay input empty 67.8% before
+the tail and 33.5% in the tail, with final app native CPU occupancy .888 core
+versus Replay .676 / Encode .648. Compatibility lock residence remains real
+but is not the whole limiter. Prioritize observer-OFF late app stack ownership;
+do not treat same Present IDs across runs as identical scene inputs. The wide
+tail trace overflow is retained/rejected; a short retry qualifies.
+
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
