@@ -14,6 +14,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H389](present-pacing-fixed-projection-probe.389.md) confirms an isolated x86
+comparison still constructs the 2,568-byte fixed projection. Direct field
+comparison passes 398 bounded edge cases and saves 65–68ns/call in a synthetic
+equal-input probe. Production call-site inspection and same-Tape validation
+remain open; this is a small candidate, not a replay/FPS improvement claim.
+
 [H388](present-pacing-uniform-lookup-owners.388.md) reuses existing H387 counters:
 full uniform lookup is 0.934–0.950ms/input, fixed-component find 0.299–0.303ms,
 vertex append 0.178–0.185ms. There are 919 last hits, only 168 bucket probes
