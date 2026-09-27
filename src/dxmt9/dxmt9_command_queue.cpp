@@ -271,9 +271,15 @@ QueueMutexBeginToken queueMutexProbeBegin() {
 // acquire-wait already captured at construction time.
 class QueueMutexProbeScope {
  public:
-  QueueMutexProbeScope(QueueMutexBeginToken begin, const char* site,
+  QueueMutexProbeScope(QueueMutexBeginToken begin, const void* mutex, const char* site,
                        bool skipHold = false)
-      : site_(site), skipHold_(skipHold), enabled_(begin.enabled) {
+      : site_(site), skipHold_(skipHold), enabled_(begin.enabled), mutex_(mutex) {
+    // Only uninterrupted RAII critical sections qualify. Callers handing the
+    // lock to lifecycle/CV helpers use the separately bracketed segments.
+    if (!skipHold_ && supply::enabled()) {
+      holdAttempt_ = supply::nextWaitAttempt();
+      supply::record(supply::Event::QueueMutexHoldBegin, mutex_, holdAttempt_);
+    }
     if (!enabled_) {
       return;
     }
@@ -286,6 +292,10 @@ class QueueMutexProbeScope {
   QueueMutexProbeScope& operator=(const QueueMutexProbeScope&) = delete;
 
   ~QueueMutexProbeScope() {
+    if (holdAttempt_) {
+      supply::record(supply::Event::QueueMutexHoldEnd, mutex_, holdAttempt_,
+                     queueMutexSiteId(site_));
+    }
     if (!enabled_) {
       return;
     }
@@ -302,6 +312,8 @@ class QueueMutexProbeScope {
   const char* site_;
   bool skipHold_;
   bool enabled_;
+  const void* mutex_;
+  std::uint64_t holdAttempt_ = 0;
   std::uint64_t acquireWaitNs_ = 0;
   std::chrono::steady_clock::time_point holdStart_{};
 };
@@ -912,7 +924,7 @@ encoders::EncodeContext CommandQueue::makeEncodeContext() {
   {
     const auto qmxBegin = queueMutexProbeBegin();
     std::lock_guard lock(mutex_);
-    QueueMutexProbeScope qmxScope(qmxBegin, "make_encode_context");
+    QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "make_encode_context");
     transientCompletedSeqId = completedSeqIdLocked();
   }
   auto ctx = encoders::EncodeContext{
@@ -2081,7 +2093,7 @@ core::HResult CommandQueue::generateTextureMipSublevels(core::TextureHandle hand
   {
     const auto qmxBegin = queueMutexProbeBegin();
     std::lock_guard lock(mutex_);
-    QueueMutexProbeScope qmxScope(qmxBegin, "generate_texture_mip_sublevels");
+    QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "generate_texture_mip_sublevels");
     auto* record = pool_.findTexture(handle.value);
     if (!record || !record->texture || record->physicalMipLevels <= 1) {
       return record ? core::D3D_OK : core::D3DERR_INVALIDCALL;
@@ -2149,7 +2161,7 @@ CommandQueue::TransientBufferSlice CommandQueue::uploadTransientBuffer(
   {
     const auto qmxBegin = queueMutexProbeBegin();
     std::lock_guard lock(mutex_);
-    QueueMutexProbeScope qmxScope(qmxBegin, "upload_transient_buffer");
+    QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "upload_transient_buffer");
     completedSeqId = completedSeqIdLocked();
   }
   return uploadTransientBufferWithCompletedSeqId(
@@ -2173,7 +2185,7 @@ std::vector<CommandQueue::TransientBufferSlice> CommandQueue::uploadTransientBuf
   {
     const auto qmxBegin = queueMutexProbeBegin();
     std::lock_guard lock(mutex_);
-    QueueMutexProbeScope qmxScope(qmxBegin, "upload_transient_buffer_batch");
+    QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "upload_transient_buffer_batch");
     completedSeqId = completedSeqIdLocked();
   }
   return uploadTransientBufferBatchWithCompletedSeqId(
@@ -2202,7 +2214,7 @@ CommandQueue::TransientBufferReservation CommandQueue::reserveTransientBuffer(
   {
     const auto qmxBegin = queueMutexProbeBegin();
     std::lock_guard lock(mutex_);
-    QueueMutexProbeScope qmxScope(qmxBegin, "reserve_transient_buffer");
+    QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "reserve_transient_buffer");
     completedSeqId = completedSeqIdLocked();
   }
   return reserveTransientBufferWithCompletedSeqId(
@@ -2224,7 +2236,7 @@ resources::ReorderedIndexBufferLookup CommandQueue::findReorderedIndexBuffer(
     std::uint64_t seqId) {
   const auto qmxBegin = queueMutexProbeBegin();
   std::lock_guard lock(mutex_);
-  QueueMutexProbeScope qmxScope(qmxBegin, "find_reordered_index_buffer");
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "find_reordered_index_buffer");
   return pool_.findReorderedIndexBuffer(
       sourceHandle.value,
       key,
@@ -2238,7 +2250,7 @@ bool CommandQueue::rememberRejectedReorderedIndexBuffer(
     std::uint64_t seqId) {
   const auto qmxBegin = queueMutexProbeBegin();
   std::lock_guard lock(mutex_);
-  QueueMutexProbeScope qmxScope(qmxBegin, "remember_rejected_reordered_index_buffer");
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "remember_rejected_reordered_index_buffer");
   return pool_.rememberRejectedReorderedIndexBuffer(
       sourceHandle.value,
       key,
@@ -2253,7 +2265,7 @@ resources::ReorderedIndexBufferLookup CommandQueue::getOrCreateReorderedIndexBuf
     std::uint64_t seqId) {
   const auto qmxBegin = queueMutexProbeBegin();
   std::lock_guard lock(mutex_);
-  QueueMutexProbeScope qmxScope(qmxBegin, "get_or_create_reordered_index_buffer");
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "get_or_create_reordered_index_buffer");
   return pool_.getOrCreateReorderedIndexBuffer(
       device_,
       sourceHandle.value,
@@ -2288,7 +2300,7 @@ void CommandQueue::stopThreads() {
   {
     const auto qmxBegin = queueMutexProbeBegin();
     std::lock_guard lock(mutex_);
-    QueueMutexProbeScope qmxScope(qmxBegin, "stop_threads");
+    QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "stop_threads");
     requestSchedulingStopLocked();
   }
   if (encodeThread_.joinable()) encodeThread_.join();
@@ -3454,7 +3466,7 @@ bool maybeCommitDrawChunkUnlocked(
 void CommandQueue::setSkipDrawResourceMarking(bool skip) {
   const auto qmxBegin = queueMutexProbeBegin();
   std::unique_lock lock(mutex_);
-  QueueMutexProbeScope qmxScope(qmxBegin, "set_skip_draw_resource_marking");
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "set_skip_draw_resource_marking");
   skipDrawResourceMarking_ = skip;
   forceDrawResourceMarkingAfterSplit_ = false;
 }
@@ -3538,7 +3550,7 @@ void CommandQueue::markChunkResources(std::span<const core::ChunkHandleEntry> en
                                         : std::chrono::steady_clock::time_point{};
   const auto qmxBegin = queueMutexProbeBegin();
   std::unique_lock lock(mutex_);
-  QueueMutexProbeScope qmxScope(qmxBegin, "mark_chunk_resources");
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "mark_chunk_resources");
   if (phaseSplit) {
     perf::countCommitChunkPhaseMarkLockCpuTime(static_cast<std::uint64_t>(
         std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -3621,7 +3633,7 @@ CommandQueue::markChunkResourcesAndCaptureBufferBindings(
                      waitAttempt, markTicket);
     }
     QueueMutexProbeScope qmxScope(
-        qmxBegin, "mark_chunk_resources_and_capture_buffer_bindings");
+        qmxBegin, &mutex_, "mark_chunk_resources_and_capture_buffer_bindings");
     if (phaseSplit) {
       perf::countCommitChunkPhaseMarkLockCpuTime(static_cast<std::uint64_t>(
           std::chrono::duration_cast<std::chrono::nanoseconds>(
@@ -3775,7 +3787,7 @@ bool CommandQueue::submitDrawRunBatch(
   // different file) an unbounded number of times before returning, so a
   // single "hold" duration would not be meaningful. Only the acquire-wait
   // for this initial lock is recorded.
-  QueueMutexProbeScope qmxScope(qmxBegin, "submit_draw_run", /*skipHold=*/true);
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "submit_draw_run", /*skipHold=*/true);
   if (!preparedDrawBatchDestinationAvailable(
           stop_, activeArenaBuild_.load(std::memory_order_acquire),
           activeDirectChunkSlotBuild_.load(std::memory_order_acquire))) {
@@ -4560,7 +4572,7 @@ CommandQueue::beginDirectChunkSlotReplay(
   const auto qmxBegin = queueMutexProbeBegin();
   std::unique_lock lock(mutex_);
   QueueMutexProbeScope qmxScope(
-      qmxBegin, "begin_direct_chunkslot_replay", /*skipHold=*/true);
+      qmxBegin, &mutex_, "begin_direct_chunkslot_replay", /*skipHold=*/true);
   if (stop_ || activeArenaBuild_.load(std::memory_order_acquire) ||
       activeDirectChunkSlotBuild_.load(std::memory_order_acquire) ||
       directChunkSlotBuildContext_) {
@@ -5411,7 +5423,7 @@ CommandQueue::beginCpuReadyArenaSource(
   // lock.unlock() followed by more work before returning (see below), so a
   // single "hold" duration would not be meaningful.
   QueueMutexProbeScope qmxScope(
-      qmxBegin, "begin_cpu_ready_arena_source", /*skipHold=*/true);
+      qmxBegin, &mutex_, "begin_cpu_ready_arena_source", /*skipHold=*/true);
   if (testOnlyForceNextCpuReadyArenaCapacityFailure_) {
     testOnlyForceNextCpuReadyArenaCapacityFailure_ = false;
     return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
@@ -5572,7 +5584,7 @@ CommandQueue::beginCpuReadyArenaSources(
   const auto qmxBegin = queueMutexProbeBegin();
   std::unique_lock lock(mutex_);
   QueueMutexProbeScope qmxScope(
-      qmxBegin, "begin_cpu_ready_arena_batch", /*skipHold=*/true);
+      qmxBegin, &mutex_, "begin_cpu_ready_arena_batch", /*skipHold=*/true);
   if (testOnlyForceNextCpuReadyArenaCapacityFailure_) {
     testOnlyForceNextCpuReadyArenaCapacityFailure_ = false;
     return {.status = CpuReadyArenaBeginStatus::TemporaryPressure};
@@ -5795,7 +5807,7 @@ bool CommandQueue::waitForCpuReadyArenaAdmission(
   // releases and reacquires the mutex an unbounded number of times while
   // parked, so only the acquire-wait for this initial lock is recorded.
   QueueMutexProbeScope qmxScope(
-      qmxBegin, "wait_for_cpu_ready_arena_admission-cv", /*skipHold=*/true);
+      qmxBegin, &mutex_, "wait_for_cpu_ready_arena_admission-cv", /*skipHold=*/true);
   if (testOnlySchedulingWaitObservationEnabled_) {
     ++testOnlyArenaAdmissionWaitEntries_;
     testOnlyArenaAdmissionPredicateEvaluations_ = 0;
@@ -6700,7 +6712,7 @@ bool CommandQueue::publishCpuReadyArenaSource(
     // "hold" duration measured from acquisition to this scope's exit would
     // overcount past the real unlock on those paths.
     QueueMutexProbeScope qmxScope(
-        qmxBegin, "publish_cpu_ready_arena_source_phase1", /*skipHold=*/true);
+        qmxBegin, &mutex_, "publish_cpu_ready_arena_source_phase1", /*skipHold=*/true);
     if (controlIndex >= slots_.size() || !arenaBuildContext_ ||
         &*arenaBuildContext_ != context ||
         activeArenaBuild_.load(std::memory_order_relaxed) != context ||
@@ -6804,7 +6816,7 @@ bool CommandQueue::publishCpuReadyArenaSource(
   // and the success path) are each followed by more work before returning,
   // so a single "hold" duration would not be meaningful.
   QueueMutexProbeScope qmxScope(
-      qmxBegin, "publish_cpu_ready_arena_source_phase3", /*skipHold=*/true);
+      qmxBegin, &mutex_, "publish_cpu_ready_arena_source_phase3", /*skipHold=*/true);
   if (controlIndex >= slots_.size() || !arenaBuildContext_ ||
       &*arenaBuildContext_ != context ||
       activeArenaBuild_.load(std::memory_order_relaxed) != context ||
@@ -6934,7 +6946,7 @@ CommandQueue::publishCpuReadyArenaBatch(
     const auto qmxBegin = queueMutexProbeBegin();
     std::unique_lock lock(mutex_);
     QueueMutexProbeScope qmxScope(
-        qmxBegin, "publish_cpu_ready_arena_batch_phase1", /*skipHold=*/true);
+        qmxBegin, &mutex_, "publish_cpu_ready_arena_batch_phase1", /*skipHold=*/true);
     if (!arenaBuildContext_ || &*arenaBuildContext_ != context ||
         activeArenaBuild_.load(std::memory_order_relaxed) != context) {
       lock.unlock();
@@ -7307,7 +7319,7 @@ CommandQueue::publishCpuReadyArenaBatch(
   const auto qmxBegin = queueMutexProbeBegin();
   std::unique_lock lock(mutex_);
   QueueMutexProbeScope qmxScope(
-      qmxBegin, "publish_cpu_ready_arena_batch_phase3", /*skipHold=*/true);
+      qmxBegin, &mutex_, "publish_cpu_ready_arena_batch_phase3", /*skipHold=*/true);
   if (!arenaBuildContext_ || &*arenaBuildContext_ != context ||
       activeArenaBuild_.load(std::memory_order_relaxed) != context ||
       !context->publishing.load(std::memory_order_acquire) ||
@@ -7465,7 +7477,7 @@ CommandQueue::abortCpuReadyArenaBatch(
   {
     const auto qmxBegin = queueMutexProbeBegin();
     std::unique_lock lock(mutex_);
-    QueueMutexProbeScope qmxScope(qmxBegin, "abort_cpu_ready_arena_batch_detach");
+    QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "abort_cpu_ready_arena_batch_detach");
     if (!arenaBuildContext_ || !arenaBuildContext_->batchMode ||
         arenaBuildContext_->reservation.ticket != ticket) {
       return CpuReadyArenaBatchAbortStatus::NoActiveBatch;
@@ -7506,7 +7518,7 @@ CommandQueue::abortCpuReadyArenaBatch(
   {
     const auto qmxBegin = queueMutexProbeBegin();
     std::lock_guard lock(mutex_);
-    QueueMutexProbeScope qmxScope(qmxBegin, "abort_cpu_ready_arena_batch_finish");
+    QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "abort_cpu_ready_arena_batch_finish");
     if (arenaBuildContext_) {
       for (std::size_t i = count; i != 0; --i) {
         if (owners[i - 1]) {
@@ -7589,7 +7601,7 @@ void CommandQueue::abortCpuReadyArenaSource(
   auto owner = [&]() {
     const auto qmxBegin = queueMutexProbeBegin();
     std::unique_lock lock(mutex_);
-    QueueMutexProbeScope qmxScope(qmxBegin, "abort_cpu_ready_arena_source_detach");
+    QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "abort_cpu_ready_arena_source_detach");
     auto detached = controlIndex < slots_.size()
         ? cpuReadyTape_.beginArenaAbort(ticket)
         : std::optional<core::CpuReadyTape::DetachedArenaOwner>{};
@@ -7619,7 +7631,7 @@ void CommandQueue::abortCpuReadyArenaSource(
   {
     const auto qmxBegin = queueMutexProbeBegin();
     std::lock_guard lock(mutex_);
-    QueueMutexProbeScope qmxScope(qmxBegin, "abort_cpu_ready_arena_source_finish");
+    QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "abort_cpu_ready_arena_source_finish");
     if (owner && cpuReadyTape_.finishArenaAbort(ticket, std::move(*owner)) &&
         controlIndex < slots_.size()) {
       slots_[controlIndex] = {};
@@ -7659,7 +7671,7 @@ void CommandQueue::submitClear(const core::ClearDesc& desc) {
   std::unique_lock lock(mutex_);
   // skipHold: `lock` is handed to ensureWritingSlotUnlocked below, which may
   // unlock/relock it via QueueLifecycleController (a different file).
-  QueueMutexProbeScope qmxScope(qmxBegin, "submit_clear", /*skipHold=*/true);
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "submit_clear", /*skipHold=*/true);
   ensureWritingSlotUnlocked(*this, lock);
   traceTextureClear(pool_, desc);
   for (const auto& attachment : desc.colorAttachments) {
@@ -7690,7 +7702,7 @@ void CommandQueue::submitSurfaceCopy(const core::SurfaceCopyDesc& desc) {
   std::unique_lock lock(mutex_);
   // skipHold: `lock` is handed to ensureWritingSlotUnlocked below, which may
   // unlock/relock it via QueueLifecycleController (a different file).
-  QueueMutexProbeScope qmxScope(qmxBegin, "submit_surface_copy", /*skipHold=*/true);
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "submit_surface_copy", /*skipHold=*/true);
   ensureWritingSlotUnlocked(*this, lock);
   traceTextureSurfaceOp(pool_, "SurfaceCopy", desc.source, desc.destination);
   noteCurrentSlotCommandAppendStartedUnlocked(*this);
@@ -7718,7 +7730,7 @@ void CommandQueue::submitStretchRect(const core::StretchRectDesc& desc) {
   // skipHold: `lock` is handed to queueLifecycle_.commitCurrentChunk() and
   // ensureWritingSlotUnlocked below, both of which may unlock/relock it via
   // QueueLifecycleController (a different file).
-  QueueMutexProbeScope qmxScope(qmxBegin, "submit_stretch_rect", /*skipHold=*/true);
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "submit_stretch_rect", /*skipHold=*/true);
   if (splitStretchChunk()) {
     queueLifecycle_.commitCurrentChunk(
         lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
@@ -7751,7 +7763,7 @@ void CommandQueue::submitReadback(const core::ReadbackDesc& desc) {
   }
   const auto qmxBegin = queueMutexProbeBegin();
   std::lock_guard lock(mutex_);
-  QueueMutexProbeScope qmxScope(qmxBegin, "submit_readback");
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "submit_readback");
   // Readback is satisfied synchronously in CommandQueue::readbackSurface.
   // Still mark resources so NoUseAfterFree remains meaningful.
   traceTextureSurfaceOp(pool_, "Readback", desc.source, desc.destination);
@@ -7771,7 +7783,7 @@ void CommandQueue::submitColorFill(const core::ColorFillDesc& desc) {
   std::unique_lock lock(mutex_);
   // skipHold: `lock` is handed to ensureWritingSlotUnlocked below, which may
   // unlock/relock it via QueueLifecycleController (a different file).
-  QueueMutexProbeScope qmxScope(qmxBegin, "submit_color_fill", /*skipHold=*/true);
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "submit_color_fill", /*skipHold=*/true);
   ensureWritingSlotUnlocked(*this, lock);
   traceTextureSurfaceOp(pool_, "ColorFill", desc.destination);
   noteCurrentSlotCommandAppendStartedUnlocked(*this);
@@ -7801,7 +7813,7 @@ void CommandQueue::submitDepthResolve(const core::DepthResolveDesc& desc) {
   std::unique_lock lock(mutex_);
   // skipHold: `lock` is handed to ensureWritingSlotUnlocked below, which may
   // unlock/relock it via QueueLifecycleController (a different file).
-  QueueMutexProbeScope qmxScope(qmxBegin, "submit_depth_resolve", /*skipHold=*/true);
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "submit_depth_resolve", /*skipHold=*/true);
   ensureWritingSlotUnlocked(*this, lock);
   traceTextureSurfaceOp(pool_, "DepthResolve", desc.msaaDepth, desc.intzDest);
   noteCurrentSlotCommandAppendStartedUnlocked(*this);
@@ -7825,7 +7837,7 @@ void CommandQueue::submitGenerateMipmaps(
   }
   const auto qmxBegin = queueMutexProbeBegin();
   std::unique_lock lock(mutex_);
-  QueueMutexProbeScope qmxScope(qmxBegin, "submit_generate_mipmaps",
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "submit_generate_mipmaps",
                                 /*skipHold=*/true);
   ensureWritingSlotUnlocked(*this, lock);
   noteCurrentSlotCommandAppendStartedUnlocked(*this);
@@ -7996,7 +8008,7 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
           // below, which may unlock/relock it via QueueLifecycleController
           // (a different file).
           QueueMutexProbeScope qmxScope(
-              qmxBegin, "submit_present_sync_on_submit", /*skipHold=*/true);
+              qmxBegin, &mutex_, "submit_present_sync_on_submit", /*skipHold=*/true);
           // The early-prefix experiment already owns this exact Writing slot
           // as its reserved Present tail. Keep it intact across the blocking
           // acquire so the prefix cannot consume a second, unreserved
@@ -8056,7 +8068,7 @@ std::uint64_t CommandQueue::submitPresent(const core::SwapDesc& desc) {
     // which may unlock/relock it via QueueLifecycleController (a different
     // file).
     QueueMutexProbeScope qmxScope(
-        qmxBegin, "submit_present_commit", /*skipHold=*/true);
+        qmxBegin, &mutex_, "submit_present_commit", /*skipHold=*/true);
     const core::Handle sourceHandle =
         core::metalqueue::selectPresentSourceHandle(queuedDesc, currentBackBuffer_);
     perf::countPresentSourceSelection(static_cast<bool>(queuedDesc.sourceSurface),
@@ -8113,7 +8125,7 @@ bool CommandQueue::publishEarlyCpuReadyPrefix(
   const auto qmxBegin = queueMutexProbeBegin();
   std::unique_lock lock(mutex_);
   QueueMutexProbeScope qmxScope(
-      qmxBegin, "publish_early_cpu_ready_prefix", /*skipHold=*/true);
+      qmxBegin, &mutex_, "publish_early_cpu_ready_prefix", /*skipHold=*/true);
 
   const bool hasWriter = writingSlot_.has_value() &&
       *writingSlot_ < slots_.size();
@@ -8236,7 +8248,7 @@ void CommandQueue::presentBoundary(std::uint64_t presentSeqId, std::uint32_t max
   // below, which release and reacquire the mutex an unbounded number of
   // times while parked, so only the acquire-wait for this initial lock is
   // recorded.
-  QueueMutexProbeScope qmxScope(qmxBegin, "present_boundary-cv", /*skipHold=*/true);
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "present_boundary-cv", /*skipHold=*/true);
   // R-BACK / PresentFrameLatency — branch on the unified
   // BoundaryPolicy resolved once at process init. Disabled is
   // filtered earlier by resolvePresentBoundaryAction (only
@@ -8299,7 +8311,7 @@ void CommandQueue::deferPresentBoundary(std::uint64_t presentSeqId,
   }
   const auto qmxBegin = queueMutexProbeBegin();
   std::lock_guard lock(mutex_);
-  QueueMutexProbeScope qmxScope(qmxBegin, "defer_present_boundary");
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "defer_present_boundary");
   deferredPresentBoundaryTargetSeqId_ =
       std::max(deferredPresentBoundaryTargetSeqId_, targetSeqId);
   perf::countPresentBoundaryDeferred();
@@ -8312,7 +8324,7 @@ void CommandQueue::drainDeferredPresentBoundary() {
   // below, which releases and reacquires the mutex an unbounded number of
   // times while parked.
   QueueMutexProbeScope qmxScope(
-      qmxBegin, "drain_deferred_present_boundary-cv", /*skipHold=*/true);
+      qmxBegin, &mutex_, "drain_deferred_present_boundary-cv", /*skipHold=*/true);
   const std::uint64_t targetSeqId = deferredPresentBoundaryTargetSeqId_;
   if (targetSeqId == 0) {
     return;
@@ -8373,7 +8385,7 @@ void CommandQueue::waitPresentOrdinalBoundary(std::uint64_t presentOrdinal,
   // below, which releases and reacquires the mutex an unbounded number of
   // times while parked.
   QueueMutexProbeScope qmxScope(
-      qmxBegin, "wait_present_ordinal_boundary-cv", /*skipHold=*/true);
+      qmxBegin, &mutex_, "wait_present_ordinal_boundary-cv", /*skipHold=*/true);
   const PresentOrdinalWaitPlan plan = planPresentOrdinalWait(
       policy, presentOrdinal, effectiveLatency, presentOrdinalGate_.deferredTarget);
   // Ordinals are produced by the single app-thread commit path (strictly
@@ -8403,7 +8415,7 @@ void CommandQueue::waitPresentOrdinalBoundary(std::uint64_t presentOrdinal,
 void CommandQueue::abortPresentOrdinalWaits() {
   const auto qmxBegin = queueMutexProbeBegin();
   std::lock_guard lock(mutex_);
-  QueueMutexProbeScope qmxScope(qmxBegin, "abort_present_ordinal_waits");
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "abort_present_ordinal_waits");
   presentOrdinalGate_.aborted = true;
   presentCompletedCv_.notify_all();
 }
@@ -8411,7 +8423,7 @@ void CommandQueue::abortPresentOrdinalWaits() {
 void CommandQueue::notePresentDequeued(std::uint64_t seqId) {
   const auto qmxBegin = queueMutexProbeBegin();
   std::lock_guard lock(mutex_);
-  QueueMutexProbeScope qmxScope(qmxBegin, "note_present_dequeued");
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "note_present_dequeued");
   presentDequeuedSeqId_ = std::max(presentDequeuedSeqId_, seqId);
   presentDequeuedCv_.notify_all();
 }
@@ -8485,7 +8497,7 @@ CommandQueue::beginReplaySourcePublicationCapture(
     const auto qmxBegin = queueMutexProbeBegin();
     std::unique_lock lock(mutex_);
     QueueMutexProbeScope qmxScope(
-        qmxBegin, "begin_replay_source_publication_capture");
+        qmxBegin, &mutex_, "begin_replay_source_publication_capture");
     if (replaySourcePublicationCapture_.has_value() || stop_ ||
         arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
         arenaAdmissionActive_.load(std::memory_order_relaxed) ||
@@ -8587,7 +8599,7 @@ CommandQueue::finishReplaySourcePublicationCapture(
   try {
     const auto qmxBegin = queueMutexProbeBegin();
     std::unique_lock lock(mutex_);
-    QueueMutexProbeScope qmxScope(qmxBegin,
+    QueueMutexProbeScope qmxScope(qmxBegin, &mutex_,
                                   "finish_replay_source_publication_capture");
     if (!replaySourcePublicationCapture_.has_value() ||
         replaySourcePublicationCapture_->generation != generation) {
@@ -8633,7 +8645,7 @@ void CommandQueue::abandonReplaySourcePublicationCapture(
     const auto qmxBegin = queueMutexProbeBegin();
     std::lock_guard lock(mutex_);
     QueueMutexProbeScope qmxScope(
-        qmxBegin, "abandon_replay_source_publication_capture");
+        qmxBegin, &mutex_, "abandon_replay_source_publication_capture");
     if (!replaySourcePublicationCapture_.has_value() ||
         replaySourcePublicationCapture_->generation != generation) {
       return;
@@ -8659,7 +8671,7 @@ void CommandQueue::failStopReplaySourceExecution() noexcept {
   try {
     const auto qmxBegin = queueMutexProbeBegin();
     std::lock_guard lock(mutex_);
-    QueueMutexProbeScope qmxScope(qmxBegin,
+    QueueMutexProbeScope qmxScope(qmxBegin, &mutex_,
                                   "fail_stop_replay_source_execution");
     requestSchedulingStopLocked();
   } catch (...) {
@@ -9040,7 +9052,7 @@ void CommandQueue::submitFlush() {
   // skipHold: `lock` is handed to queueLifecycle_.flushAndWait() below, which
   // may unlock/relock it (and cv-wait) via QueueLifecycleController (a
   // different file).
-  QueueMutexProbeScope qmxScope(qmxBegin, "submit_flush", /*skipHold=*/true);
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "submit_flush", /*skipHold=*/true);
   queueLifecycle_.flushAndWait(
       lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
         prepareSlotForPublish(*this, pool_, slot,
@@ -9054,7 +9066,7 @@ wsi::QuiescenceDisposition CommandQueue::beginWsiQuiescence() noexcept {
     const auto qmxBegin = queueMutexProbeBegin();
     std::unique_lock lock(mutex_);
     QueueMutexProbeScope qmxScope(
-        qmxBegin, "begin_wsi_quiescence", /*skipHold=*/true);
+        qmxBegin, &mutex_, "begin_wsi_quiescence", /*skipHold=*/true);
     // beginCpuReadyArenaSource(s) publishes both flags while holding mutex_.
     // Checking them under that same lock pins the drained cold-entry
     // precondition: no deferred arena flush can masquerade as quiescence.
@@ -9116,7 +9128,7 @@ wsi::QuiescenceDisposition CommandQueue::beginFinalWsiQuiescence() noexcept {
     const auto qmxBegin = queueMutexProbeBegin();
     std::unique_lock lock(mutex_);
     QueueMutexProbeScope qmxScope(
-        qmxBegin, "begin_final_wsi_quiescence", /*skipHold=*/true);
+        qmxBegin, &mutex_, "begin_final_wsi_quiescence", /*skipHold=*/true);
 
     for (;;) {
       {
@@ -9297,7 +9309,7 @@ bool CommandQueue::releaseCpuReadySessionBeforeOrderedControl(
   // queueLifecycle_.waitForSequence(); all may unlock/relock the mutex an
   // unbounded number of times.
   QueueMutexProbeScope qmxScope(
-      qmxBegin, "release_cpu_ready_session-cv", /*skipHold=*/true);
+      qmxBegin, &mutex_, "release_cpu_ready_session-cv", /*skipHold=*/true);
   if (stop_) {
     return false;
   }
@@ -9411,7 +9423,7 @@ void* CommandQueue::mapBuffer(core::BufferHandle handle, std::uint32_t flags) {
   // skipHold: `lock` is handed to queueLifecycle_.commitCurrentChunk() and
   // queueLifecycle_.waitForSequence() below, both of which may unlock/relock
   // it via QueueLifecycleController (a different file).
-  QueueMutexProbeScope qmxScope(qmxBegin, "map_buffer", /*skipHold=*/true);
+  QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "map_buffer", /*skipHold=*/true);
   {
     // SEGMENT-HOLD: pool_.mapWaitSeqId() never touches `lock` -- this is
     // real, previously-invisible hold time between the outer skipHold=true
@@ -9503,7 +9515,7 @@ void CommandQueue::runEncodeLoop(EncodeChunkFn encodeChunk, OnSubmittedFn onSubm
     // below, which may unlock/relock it (and cv-wait) via
     // QueueLifecycleController (a different file). One acquire-wait sample
     // is recorded per loop iteration.
-    QueueMutexProbeScope qmxScope(qmxBegin, "run_encode_loop", /*skipHold=*/true);
+    QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "run_encode_loop", /*skipHold=*/true);
     if (!queueLifecycle_.runEncodeIteration(lock, encodeChunk, onSubmitted)) {
       return;
     }
@@ -9532,7 +9544,7 @@ void CommandQueue::runDceChunkLookaheadEncodeLoop(
     // post-commit callback drain), so only the acquire-wait for the lock
     // taken at the top of each loop iteration is recorded.
     QueueMutexProbeScope qmxScope(
-        qmxBegin, "run_dce_chunk_lookahead_encode_loop", /*skipHold=*/true);
+        qmxBegin, &mutex_, "run_dce_chunk_lookahead_encode_loop", /*skipHold=*/true);
     if (!held.has_value()) {
       ReadySlotSnapshot source{};
       if (!queueLifecycle_.dequeueReadySlot(lock, source)) {
@@ -9906,7 +9918,7 @@ bool CommandQueue::armCpuReadyNextSourceIntent(
   const auto qmxBegin = queueMutexProbeBegin();
   std::lock_guard lock(mutex_);
   QueueMutexProbeScope qmxScope(
-      qmxBegin, "arm_cpu_ready_next_source_intent");
+      qmxBegin, &mutex_, "arm_cpu_ready_next_source_intent");
   if (stop_ || !arenaBuildContext_.has_value() ||
       arenaBuildContext_->reservation.ticket != predecessor ||
       arenaBuildContext_->batchMode || predecessorHasPresent ||
@@ -9927,7 +9939,7 @@ void CommandQueue::cancelCpuReadyNextSourceIntent(
   const auto qmxBegin = queueMutexProbeBegin();
   std::lock_guard lock(mutex_);
   QueueMutexProbeScope qmxScope(
-      qmxBegin, "cancel_cpu_ready_next_source_intent");
+      qmxBegin, &mutex_, "cancel_cpu_ready_next_source_intent");
   if (nextSourceIntent_.valid() &&
       nextSourceIntent_.rawOrdinal == rawOrdinal) {
     nextSourceIntent_ = {};
@@ -10013,7 +10025,7 @@ void CommandQueue::runFinishLoop() {
     // below, which may unlock/relock it (and cv-wait) via
     // QueueLifecycleController (a different file). One acquire-wait sample
     // is recorded per loop iteration.
-    QueueMutexProbeScope qmxScope(qmxBegin, "run_finish_loop", /*skipHold=*/true);
+    QueueMutexProbeScope qmxScope(qmxBegin, &mutex_, "run_finish_loop", /*skipHold=*/true);
     if (!queueLifecycle_.runFinishIteration(lock, [this](std::uint64_t) {
           allocators_.reclaim(completedSeqIdLocked());
           pool_.reclaimCompleted(completedSeqIdLocked());

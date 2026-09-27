@@ -15,6 +15,7 @@ import summarize_guest_pc_window as guest
 import analyze_publication_progress as progress
 import analyze_framegraph_planning as planning
 import analyze_app_queue_waits as app_waits
+import analyze_queue_submit as submit
 
 
 def fixture():
@@ -41,6 +42,35 @@ def fixture():
 
 
 class TestSupply(unittest.TestCase):
+    def test_submit_partition(self):
+        rows = [dict(kind='queue_submit_phase', owner=1, tid=2, id=3,
+                     value=p, wall_ns=100+i*100, cpu_ns=50+i*50)
+                for i, p in enumerate([1, 2, 3, 4, 5, 6, 7, 0])]
+        result = submit.analyze(rows)
+        self.assertEqual(len(result['sources']), 1)
+        self.assertEqual(result['sources'][0]['phases'][3]['phase'], 'driver_commit')
+        self.assertEqual(result['sources'][0]['phases'][3]['wall_ns'], 100)
+        for invalid in (rows[:3]+rows[4:], rows+rows, rows[::-1]):
+            with self.assertRaises(ValueError):
+                submit.analyze(invalid)
+        for clipped in (rows[1:], rows[:-1]):
+            self.assertEqual(submit.analyze(clipped)['incomplete_or_rejected_sources'], 1)
+        self.assertEqual(len(submit.analyze(rows+[dict(r, owner=9) for r in rows])['sources']), 2)
+        boundary = dict(rows[0], kind='queue_submit_validation_end',
+                        wall_ns=150, cpu_ns=75, value=1)
+        family = dict(boundary, kind='queue_submit_summary_family', wall_ns=160, value=2)
+        detailed = submit.analyze(rows+[boundary, family])['sources'][0]['validation_summary_split']
+        self.assertEqual(detailed['summary_wall_ns'], 50)
+        self.assertEqual(detailed['validation_wall_ns'], 50)
+        self.assertEqual(detailed['families'][0]['family'], 'arena')
+        self.assertTrue(detailed['family_coverage_complete'])
+        self.assertFalse(submit.analyze(rows+[boundary])['sources'][0]
+                         ['validation_summary_split']['family_coverage_complete'])
+        for extra in ([boundary,boundary], [dict(boundary,wall_ns=300)],
+                      [dict(family,value=9)]):
+            with self.assertRaises(ValueError):
+                submit.analyze(rows+extra)
+
     def test_mutex_events_are_not_replay_occupancy(self):
         meta, rows = fixture()
         expected = supply.analyze(meta, rows, 1)

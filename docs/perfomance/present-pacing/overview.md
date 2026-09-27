@@ -14,6 +14,27 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H385](present-pacing-streaming-summary.385.md) implements the streaming
+summary fold: no temporary observation vector or second traversal, with
+3,906 exhaustive observation sequences and actual Slot ordering tests.
+Compatibility/hash derivation and resource resolution remain unchanged.
+The controlled wild run passes, but summary wall is 4.135ms versus H384's
+4.163ms with different source counts (32 versus 38): no runtime gain is
+established. Split remaining view/flags/resolver/hash work before caching it.
+
+[H384](present-pacing-submit-summary-family.384.md) resolves the combined phase:
+38/38 members use legacy ChunkSlot payloads; summary reconstruction costs
+4.163ms versus validation 0.330ms in 16 intervals. Prioritize streaming summary
+fold equivalence, not removal of safety checks or an Arena-specific fix. This
+is 0.260ms/Present of measured summary service, not an FPS gain guarantee;
+mark-ticket acquisition remains mostly unattributed.
+
+[H383](present-pacing-submit-phase-owner.383.md) splits 32 submit sources:
+validation/summary 4.297ms versus driver commit 0.667ms in 16 intervals;
+pending-completion acquisition is 0.035ms. Mark-ticket acquisition remains
+mostly unattributed (0.775ms holder coverage out of 17.095ms). Split safety
+validation from repeated summary traversal before moving driver commit.
+
 [H382](present-pacing-app-wait-holders.382.md) records same-mutex holders:
 1,372 mark-ticket attempts total 17.113ms in 16 intervals; measured holder
 overlap is only 1.739ms, mainly encode submit (1.604ms). Remaining acquisition

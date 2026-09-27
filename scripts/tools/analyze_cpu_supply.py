@@ -39,7 +39,8 @@ EVENTS = ('present import_begin import_end raw_ready mutation_ready stateblock_r
           'framegraph_planning_phase '
           'stateblock_wait_begin stateblock_wait_end stateblock_wait_capacity '
           'stateblock_wait_adopted mark_ticket_wait_begin mark_ticket_wait_end '
-          'mark_ticket_hold_end queue_mutex_hold_begin queue_mutex_hold_end').split()
+          'mark_ticket_hold_end queue_mutex_hold_begin queue_mutex_hold_end '
+          'queue_submit_phase queue_submit_validation_end queue_submit_summary_family').split()
 
 
 def load(path):

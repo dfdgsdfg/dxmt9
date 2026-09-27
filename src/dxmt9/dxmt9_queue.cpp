@@ -635,6 +635,34 @@ CommandBufferDiagnostics summarizeChunk(const ChunkSummaryInput& input) {
   return diagnostics;
 }
 
+namespace {
+// Ordered fold: Clear/ColorFill are Draw-class observations with zero hashes,
+// so they deliberately replace hashes from an earlier shader draw.
+void accumulateChunkObservation(ChunkSummaryInput& input,
+                                const ChunkObservation& observation) noexcept {
+  switch (observation.kind) {
+    case ChunkObservationKind::Draw:
+      input.hasDraw = true;
+      input.compatFlags |= observation.compatFlags;
+      input.vertexShaderHash = observation.vertexShaderHash;
+      input.pixelShaderHash = observation.pixelShaderHash;
+      input.shaderVariantHash = observation.shaderVariantHash;
+      break;
+    case ChunkObservationKind::Blit:
+      input.hasBlit = true;
+      break;
+    case ChunkObservationKind::StretchRect:
+      input.hasBlit = true;
+      input.hasStretchRect = true;
+      break;
+    case ChunkObservationKind::Present:
+      input.hasPresent = true;
+      input.compatFlags |= observation.compatFlags;
+      break;
+  }
+}
+}  // namespace
+
 CommandBufferDiagnostics summarizeChunk(u64 seqId,
                                         size_t slotIndex,
                                         std::span<const ChunkObservation> observations) {
@@ -642,26 +670,7 @@ CommandBufferDiagnostics summarizeChunk(u64 seqId,
   input.seqId = seqId;
   input.slotIndex = slotIndex;
   for (const auto& observation : observations) {
-    switch (observation.kind) {
-      case ChunkObservationKind::Draw:
-        input.hasDraw = true;
-        input.compatFlags |= observation.compatFlags;
-        input.vertexShaderHash = observation.vertexShaderHash;
-        input.pixelShaderHash = observation.pixelShaderHash;
-        input.shaderVariantHash = observation.shaderVariantHash;
-        break;
-      case ChunkObservationKind::Blit:
-        input.hasBlit = true;
-        break;
-      case ChunkObservationKind::StretchRect:
-        input.hasBlit = true;
-        input.hasStretchRect = true;
-        break;
-      case ChunkObservationKind::Present:
-        input.hasPresent = true;
-        input.compatFlags |= observation.compatFlags;
-        break;
-    }
+    accumulateChunkObservation(input, observation);
   }
   return summarizeChunk(input);
 }
@@ -670,12 +679,14 @@ CommandBufferDiagnostics summarizeCommands(u64 seqId,
                                            size_t slotIndex,
                                            const ChunkSlot& slot,
                                            const std::function<u32(Handle)>& resolveSurfaceFlags) {
-  std::vector<ChunkObservation> observations;
-  observations.reserve(slot.commandCount());
+  ChunkSummaryInput input;
+  input.seqId = seqId;
+  input.slotIndex = slotIndex;
   for (std::size_t i = 0; i < slot.commandCount(); ++i) {
-    observations.push_back(makeChunkObservation(slot.commandAt(i), resolveSurfaceFlags));
+    accumulateChunkObservation(
+        input, makeChunkObservation(slot.commandAt(i), resolveSurfaceFlags));
   }
-  return summarizeChunk(seqId, slotIndex, std::span<const ChunkObservation>(observations.data(), observations.size()));
+  return summarizeChunk(input);
 }
 
 NoEnqueueFirstPublishSlotShape summarizeNoEnqueueFirstPublishSlotShape(
@@ -994,8 +1005,14 @@ CommandBufferDiagnostics QueueLifecycleController::summarizeSubmission(
     return CommandBufferDiagnostics{.seqId = seqId, .slotIndex = slotIndex};
   }
   if (const auto* legacy = payload.legacyPayload()) {
+    if (::dxmt9::supply::enabled())
+      ::dxmt9::supply::record(::dxmt9::supply::Event::QueueSubmitSummaryFamily,
+                            this, seqId, 1);
     return summarizeCommands(seqId, slotIndex, *legacy, resolveSurfaceFlags);
   }
+  if (::dxmt9::supply::enabled())
+    ::dxmt9::supply::record(::dxmt9::supply::Event::QueueSubmitSummaryFamily,
+                          this, seqId, 2);
   CommandBufferDiagnostics result{.seqId = seqId, .slotIndex = slotIndex};
   for (std::size_t i = 0; i < payload.commandCount(); ++i) {
     switch (payload.commandAt(i).kind()) {
@@ -1035,6 +1052,9 @@ CommandBufferDiagnostics QueueLifecycleController::summarizeSubmissionSources(
   result.slotIndex = record.slotIndex;
   for (const auto& source : sources) {
     if (source.receiptBacked()) {
+      if (::dxmt9::supply::enabled())
+        ::dxmt9::supply::record(::dxmt9::supply::Event::QueueSubmitSummaryFamily,
+                              this, source.seqId, 3);
       result.hasPresent = result.hasPresent || source.hasPresent;
       continue;
     }
@@ -6108,6 +6128,8 @@ void QueueLifecycleController::transition(QueueTransitionRecord record,
 }
 
 bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
+  if (::dxmt9::supply::enabled())
+    ::dxmt9::supply::record(::dxmt9::supply::Event::QueueSubmitPhase, this, record.seqId, 1);
   if (!record.commandBuffer && !record.testOnlyAllowNullCommandBuffer) {
     poisonTapeFailureLocked();
     return false;
@@ -6186,8 +6208,13 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     tapeSources[tapeSourceCount++] = source.source;
   }
 
+  if (::dxmt9::supply::enabled())
+    ::dxmt9::supply::record(::dxmt9::supply::Event::QueueSubmitValidationEnd,
+                          this, record.seqId, completionSources.size());
   const CommandBufferDiagnostics diagnostics =
       summarizeSubmissionSources(record, completionSources);
+  if (::dxmt9::supply::enabled())
+    ::dxmt9::supply::record(::dxmt9::supply::Event::QueueSubmitPhase, this, record.seqId, 2);
 
   // Keep the physical batch correlation stable across dequeue, submit, and
   // completion.  Arena groups carry one raw ordinal; legacy/mixed records
@@ -6313,6 +6340,8 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
   }
 
   auto commitCommandBuffer = [&] {
+    if (::dxmt9::supply::enabled())
+      ::dxmt9::supply::record(::dxmt9::supply::Event::QueueSubmitPhase, this, record.seqId, 3);
     bool captureStarted = false;
     if (record.metalCapture.has_value()) {
       if (record.metalCaptureAlreadyStarted) {
@@ -6338,7 +6367,11 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
       os_signpost_interval_begin(signpostLog, commitSignpost, "commit",
                                  "seq=%llu",
                                  static_cast<unsigned long long>(record.seqId));
+      if (::dxmt9::supply::enabled())
+        ::dxmt9::supply::record(::dxmt9::supply::Event::QueueSubmitPhase, this, record.seqId, 4);
       record.commandBuffer.commit();
+      if (::dxmt9::supply::enabled())
+        ::dxmt9::supply::record(::dxmt9::supply::Event::QueueSubmitPhase, this, record.seqId, 5);
       if (::dxmt9::supply::enabled())
         ::dxmt9::supply::record(::dxmt9::supply::Event::Submit, this, record.seqId);
       os_signpost_interval_end(signpostLog, commitSignpost, "commit",
@@ -6384,8 +6417,12 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
               record.metalCaptureAlreadyStarted);
     }
   }
+  if (::dxmt9::supply::enabled())
+    ::dxmt9::supply::record(::dxmt9::supply::Event::QueueSubmitPhase, this, record.seqId, 6);
   {
     std::lock_guard lock(pendingCompletionMutex_);
+    if (::dxmt9::supply::enabled())
+      ::dxmt9::supply::record(::dxmt9::supply::Event::QueueSubmitPhase, this, record.seqId, 7);
     const bool completionWaitActive = completionWaitActive_;
     const auto enqueueTime = std::chrono::steady_clock::now();
     if (!completionWaitActive &&
@@ -6454,6 +6491,8 @@ bool QueueLifecycleController::submit(QueueSubmissionRecord& record) {
     assertPendingCompletionInvariantsLocked();
 #endif
   }
+  if (::dxmt9::supply::enabled())
+    ::dxmt9::supply::record(::dxmt9::supply::Event::QueueSubmitPhase, this, record.seqId, 0);
   pendingCompletionCv_.notify_all();
   return true;
 }

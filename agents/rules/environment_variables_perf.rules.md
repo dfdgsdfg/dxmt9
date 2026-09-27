@@ -13,6 +13,19 @@ segments and unions nested coverage. Coverage is partial: unmatched time is
 unattributed, not proved scheduler or resource-loop cost. Timings are
 observer-inclusive, not FPS evidence. No additional knob or policy change.
 
+`QueueSubmitPhase` markers in the same trace partition successful bound
+submissions into validation/summary, lifecycle/preparation, capture/signpost,
+driver commit, post-commit/watchdog, pending-completion mutex acquisition and
+handoff/unlock. Use `scripts/tools/analyze_queue_submit.py TRACE`; only complete
+ordered source-qualified phase sets are accepted. Early rejection, null/test,
+unbound and clipped submissions remain excluded. Uninterrupted CommandQueue
+RAII holds are also recorded; `skipHold` sites are not wrapped across waits.
+The validation-end marker further splits phase 1 into safety validation and
+summary construction. Summary-family events distinguish legacy, Arena and
+receipt-backed members without resolving payloads an extra time. Missing
+family coverage remains explicit; historical traces without the split do not
+acquire invented attribution.
+
 `DXMT9_CPU_SUPPLY_PLANNING_SPLIT=1` adds source-level sequential phase markers
 to the bounded CPU supply trace (default off, requires `DXMT9_CPU_SUPPLY_TRACE`).
 Phases: observer, graph construction, lookahead, natural-frontier planning,

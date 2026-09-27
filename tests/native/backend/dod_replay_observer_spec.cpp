@@ -235,6 +235,8 @@ void testChunkSlotReplayObserverAndQueueSummarySeeSameCategories() {
   desc.textures[0].handle = Handle{0x1000u};
   desc.textureTransforms[0] = projectedTextureTransform();
   desc.rs.values[RS_SRGB_WRITE_ENABLE] = 1u;
+  desc.vertexShader.hash = 0x1234u;
+  desc.pixelShader.hash = 0x5678u;
 
   const auto uniforms = makeDrawUniformPayload(desc);
   const std::array<DrawParam, 2> draws{
@@ -271,6 +273,10 @@ void testChunkSlotReplayObserverAndQueueSummarySeeSameCategories() {
   slot.drawUniformVertexConstantBytes.clear();
   slot.drawUniformPixelConstants.clear();
   slot.drawUniformPixelConstantBytes.clear();
+
+  const auto drawSummary = metalqueue::summarizeCommands(42u, 3u, slot, {});
+  checkEq(drawSummary.vertexShaderHash, u64{0x1234u}, "streaming draw VS hash");
+  checkEq(drawSummary.pixelShaderHash, u64{0x5678u}, "streaming draw PS hash");
 
   ClearDesc clear{};
   clear.colorAttachments[0] = RenderTargetAttachment{
@@ -366,6 +372,132 @@ void testChunkSlotReplayObserverAndQueueSummarySeeSameCategories() {
       metalcompat::CompatFlagMsaa;
   checkEq(diagnostics.compatFlags & expectedFlags, expectedFlags,
           "queue diagnostics aggregate draw/present compatibility flags");
+  checkEq(diagnostics.vertexShaderHash, u64{0}, "clear replaces prior VS hash");
+  checkEq(diagnostics.pixelShaderHash, u64{0}, "clear replaces prior PS hash");
+  checkEq(diagnostics.shaderVariantHash, u64{0}, "clear replaces prior variant");
+
+  // Reversing the order must restore shader hashes; Present must retain them.
+  slot.appendDrawRun(makeCanonicalDrawStateForTest(desc), uniforms, draws, {});
+  slot.appendPresent(present, present.sourceSurface);
+  const auto lastDraw = metalqueue::summarizeCommands(42u, 3u, slot, {});
+  checkEq(lastDraw.vertexShaderHash, drawSummary.vertexShaderHash,
+          "later draw restores VS hash across present");
+  checkEq(lastDraw.pixelShaderHash, drawSummary.pixelShaderHash,
+          "later draw restores PS hash across present");
+  checkEq(lastDraw.shaderVariantHash, drawSummary.shaderVariantHash,
+          "later draw restores variant across present");
+  slot.appendColorFill(ColorFillDesc{});
+  const auto fill = metalqueue::summarizeCommands(42u, 3u, slot, {});
+  check(fill.vertexShaderHash == 0 && fill.pixelShaderHash == 0 &&
+            fill.shaderVariantHash == 0,
+        "color fill replaces all prior draw hashes");
+}
+
+void testSummaryOrderedFoldTruthTable() {
+  using Kind = metalqueue::ChunkObservationKind;
+  // Exhaust every sequence up to five observations, including non-draw hash
+  // noise and zero-hash Draw observations (Clear/ColorFill semantics).
+  const std::array<metalqueue::ChunkObservation, 5> alphabet{{
+      {Kind::Draw, 1u, 11u, 12u, 13u},
+      {Kind::Draw, 2u, 0u, 0u, 0u},
+      {Kind::Blit, 4u, 21u, 22u, 23u},
+      {Kind::StretchRect, 8u, 31u, 32u, 33u},
+      {Kind::Present, 16u, 41u, 42u, 43u},
+  }};
+  std::size_t combinations = 1;
+  for (std::size_t length = 0; length <= 5; ++length) {
+    for (std::size_t code = 0; code < combinations; ++code) {
+      std::vector<metalqueue::ChunkObservation> observations;
+      std::size_t remaining = code;
+      bool draw = false, present = false, blit = false, stretch = false;
+      u32 flags = 0;
+      u64 vs = 0, ps = 0, variant = 0;
+      for (std::size_t i = 0; i < length; ++i) {
+        const auto value = alphabet[remaining % alphabet.size()];
+        remaining /= alphabet.size();
+        observations.push_back(value);
+        draw |= value.kind == Kind::Draw;
+        present |= value.kind == Kind::Present;
+        blit |= value.kind == Kind::Blit || value.kind == Kind::StretchRect;
+        stretch |= value.kind == Kind::StretchRect;
+        if (value.kind == Kind::Draw || value.kind == Kind::Present)
+          flags |= value.compatFlags;
+      }
+      // Independent last-writer oracle, not the production forward reducer.
+      for (auto it = observations.rbegin(); it != observations.rend(); ++it) {
+        if (it->kind == Kind::Draw) {
+          vs = it->vertexShaderHash;
+          ps = it->pixelShaderHash;
+          variant = it->shaderVariantHash;
+          break;
+        }
+      }
+      const auto result = metalqueue::summarizeChunk(77u, 9u, observations);
+      checkEq(result.seqId, 77u, "fold sequence identity");
+      checkEq(result.slotIndex, std::size_t{9}, "fold slot identity");
+      checkEq(result.frame, 0u, "fold frame default");
+      checkEq(result.hasDraw, draw, "fold draw flag");
+      checkEq(result.hasPresent, present, "fold present flag");
+      checkEq(result.hasBlit, blit, "fold blit flag");
+      checkEq(result.hasStretchRect, stretch, "fold stretch flag");
+      checkEq(result.compatFlags, flags, "fold compatibility flags");
+      checkEq(result.vertexShaderHash, vs, "fold last draw VS hash");
+      checkEq(result.pixelShaderHash, ps, "fold last draw PS hash");
+      checkEq(result.shaderVariantHash, variant, "fold last draw variant");
+    }
+    combinations *= alphabet.size();
+  }
+}
+
+void testStreamingSummaryPreservesResolverOrder() {
+  ChunkSlot slot{};
+  std::vector<Handle> calls;
+  const auto resolver = [&](Handle handle) -> u32 {
+    calls.push_back(handle);
+    return metalcompat::CompatFlagFp16;
+  };
+  const auto empty = metalqueue::summarizeCommands(42u, 3u, slot, resolver);
+  check(calls.empty(), "empty slot never resolves resources");
+  check(!empty.hasDraw && !empty.hasPresent && !empty.hasBlit &&
+            !empty.hasStretchRect && empty.compatFlags == 0u,
+        "empty slot has no observations");
+
+  ClearDesc clear{};
+  clear.colorAttachments[0].handle = Handle{0x1000u};
+  clear.colorAttachments[1].handle = Handle{0x2000u};
+  slot.appendClear(clear);
+  slot.appendColorFill(ColorFillDesc{});
+  SwapDesc present{};
+  present.sourceSurface = Handle{0x3000u};
+  slot.appendPresent(present, present.sourceSurface);
+  slot.appendClear(clear);
+  const auto result = metalqueue::summarizeCommands(42u, 3u, slot, resolver);
+  const std::vector<Handle> expected{
+      Handle{0x1000u}, Handle{0x2000u}, Handle{0x3000u},
+      Handle{0x1000u}, Handle{0x2000u}};
+  checkEq(calls, expected, "streaming fold preserves resolver order and count");
+  checkEq(result.compatFlags,
+          metalcompat::CompatFlagFp16 | metalcompat::CompatFlagMrt,
+          "streaming clear/present flags");
+  check(result.hasDraw && result.hasPresent && !result.hasBlit,
+        "streaming command categories");
+  check(result.vertexShaderHash == 0 && result.pixelShaderHash == 0 &&
+            result.shaderVariantHash == 0,
+        "clear and color fill retain zero-hash semantics");
+  calls.clear();
+  bool threw = false;
+  try {
+    metalqueue::summarizeCommands(42u, 3u, slot, [&](Handle handle) -> u32 {
+      calls.push_back(handle);
+      if (calls.size() == 2u)
+        throw TestFailure("resolver failure");
+      return 0u;
+    });
+  } catch (const TestFailure&) {
+    threw = true;
+  }
+  check(threw && calls.size() == 2u,
+        "resolver failure propagates without evaluating subsequent commands");
 }
 
 void testChunkSlotDrawRunSoAReuseKeepsReservedCapacitiesStable() {
@@ -633,6 +765,8 @@ void testChunkSlotUniformStageConstantsPreserveAbiPrefixForIntUpload() {
 int main() {
   try {
     testChunkSlotReplayObserverAndQueueSummarySeeSameCategories();
+    testSummaryOrderedFoldTruthTable();
+    testStreamingSummaryPreservesResolverOrder();
     testChunkSlotDrawRunSoAReuseKeepsReservedCapacitiesStable();
     testChunkSlotUniformPayloadLookupHashCollisionKeepsDistinctPayloads();
     testChunkSlotUniformStageConstantsUseCompactByteArena();

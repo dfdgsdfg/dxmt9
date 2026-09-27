@@ -47,6 +47,8 @@ enum class Event : std::uint32_t {
   StateBlockWaitAdopted, MarkTicketWaitBegin, MarkTicketWaitEnd,
   MarkTicketHoldEnd,
   QueueMutexHoldBegin, QueueMutexHoldEnd,
+  QueueSubmitPhase,
+  QueueSubmitValidationEnd, QueueSubmitSummaryFamily,
 };
 
 inline bool planningSplitEnabled() noexcept {
