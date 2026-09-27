@@ -14,6 +14,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 > Current, compact view for this performance domain. Historical detail from the former
 > top-level `present-pacing.md` overview is preserved in [log](log.md). Domain landing: [index](index.md).
 
+[H388](present-pacing-uniform-lookup-owners.388.md) reuses existing H387 counters:
+full uniform lookup is 0.934–0.950ms/input, fixed-component find 0.299–0.303ms,
+vertex append 0.178–0.185ms. There are 919 last hits, only 168 bucket probes
+and no equal-hash collisions per input. Prioritize content/projection and
+fixed-component search, not hash-table collision tuning. These elapsed totals
+include warmups and observers; no new runtime change or STALKER transfer claim.
+
 [H387](present-pacing-compat-append-phases.387.md) splits compatibility append
 on identical GT2 Tape input: uniform lookup/intern/storage is ~2.20ms of the
 ~3.03ms split-observed append; state is ~0.245ms, final command/payload writes
