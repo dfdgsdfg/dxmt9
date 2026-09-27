@@ -11,6 +11,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H396](present-pacing-ingress-gpu-exact.396.md) qualifies the same GT2 captured
+input with ingress OFF/ON on Compatibility and ProductionSlot: 8/8 GPU
+iterations pass, all 16 readbacks match original bytes, and loaded images/input
+match. Ticket rechecks fall by 102 per process on both routes, confirming the
+branch executes. This synchronous provider oracle is not an async performance
+measurement; family/reset composition and STALKER wild remain open.
+
 [H395](present-pacing-ingress-handoff-validation.395.md) binds ingress ownership
 to actual parked-worker execution: six direct/compatibility success/failure
 schedules and two pre-adoption refusals settle references correctly. Extended
