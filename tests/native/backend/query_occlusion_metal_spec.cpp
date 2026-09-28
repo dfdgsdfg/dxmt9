@@ -21,7 +21,7 @@ struct Gate {
   WMT::Reference<WMT::SharedEvent> event;
   ~Gate() { if (event) event.signalValue(1); }
 };
-void run() {
+void run(bool benchmark = false) {
   Factory factory(BackendLimits{});
   PresentParameters params{};
   params.backBufferWidth = params.backBufferHeight = 32;
@@ -108,10 +108,10 @@ void run() {
   const auto storesAfter = dxmt9::perf::test::snapshotRenderPassStoreAccounting();
   // DontCare contents can survive by accident on a particular GPU. Check the
   // real descriptor-accounting seam too, not only fortunate retained bytes.
-  check(storesAfter.depthStore >= storesBefore.depthStore + 4 &&
+  check(benchmark || (storesAfter.depthStore >= storesBefore.depthStore + 4 &&
             storesAfter.depthDontCare == storesBefore.depthDontCare &&
             storesAfter.stencilDontCare == storesBefore.stencilDontCare &&
-            storesAfter.colorDontCare == storesBefore.colorDontCare,
+            storesAfter.colorDontCare == storesBefore.colorDontCare),
         "unqueried predecessor and queried readers use preserving Store actions");
   set(RS_COLOR_WRITE_ENABLE, 15);
   set(RS_Z_FUNC, u32(CompareFunc::Less));
@@ -157,6 +157,56 @@ void run() {
     }
   readback->unlockRect();
 
+  if (benchmark) {
+    std::array<std::shared_ptr<Query>, 8> queries;
+    for (auto& q : queries) q = device->createQuery(QueryType::Occlusion);
+    using Clock = std::chrono::steady_clock;
+    for (int iteration = -2; iteration != 16; ++iteration) {
+      const auto before = queue.queryProgress();
+      std::optional<dxmt9::perf::RenderTapeReplaySnapshot> countersBefore;
+      if (dxmt9::perf::enabled()) countersBefore = dxmt9::perf::snapshotRenderTapeReplay();
+      const auto start = Clock::now();
+      for (const auto& q : queries) {
+        draw(); // unqueried predecessor: same serial stream in both policies
+        issue(q, true); draw(); issue(q, false);
+      }
+      const auto prepared = Clock::now();
+      for (const auto& q : queries) check(result(q) == full, "burst query exact samples");
+      const auto done = Clock::now();
+      const auto after = queue.queryProgress();
+      if (iteration >= 0)
+        std::cout << "query-burst sample=" << iteration
+                  << " ranges=" << dxmt9::query::scopeRangesEnabled()
+                  << " prepare_us=" << std::chrono::duration<double, std::micro>(prepared-start).count()
+                  << " completion_us=" << std::chrono::duration<double, std::micro>(done-prepared).count()
+                  << " sources=" << after.published-before.published << '\n';
+      if (iteration >= 0 && countersBefore) {
+        const auto countersAfter = dxmt9::perf::snapshotRenderTapeReplay();
+        std::cout << "query-burst-cpu sample=" << iteration
+                  << " publication_us=" << double(countersAfter.prepareSlotWallNs -
+                      countersBefore->prepareSlotWallNs) / 1000
+                  << " encode_us=" << double(countersAfter.encodeChunkWallNs -
+                      countersBefore->encodeChunkWallNs) / 1000 << '\n';
+      }
+      if (dxmt9::query::scopeRangesEnabled())
+        check(after.published-before.published == 1, "range burst publishes one actual source");
+      else
+        check(after.published-before.published == 16, "reference burst publishes sixteen sources");
+    }
+    check(device->getRenderTargetData(device->swapChain()->backBuffer(), readback) == D3D_OK,
+          "burst final readback");
+    const auto finalPixels = readback->lockRect(nullptr, 0);
+    check(finalPixels.data && finalPixels.pitch >= 128, "burst final bytes");
+    for (unsigned y = 0; y != 32; ++y)
+      for (unsigned x = 0; x != 32; ++x) {
+        const auto* p = static_cast<const u8*>(finalPixels.data) + y * finalPixels.pitch + x * 4;
+        check(p[0] == 0 && p[1] == 255 && p[2] == 0 && p[3] == 255,
+              "burst final exact green framebuffer");
+      }
+    readback->unlockRect();
+    return;
+  }
+
   // Simultaneous scopes, separate pass contributions and publication cuts.
   // Readback above has drained all prior sources. Every source published in
   // this interval is scoped, so an appended head proves queried CB sharing.
@@ -198,6 +248,27 @@ void run() {
   readback->unlockRect();
   issue(a, false);
   check(result(a) == 4 * full, "repeated END preserves previous result");
+  if (dxmt9::query::scopeRangesEnabled()) {
+    if (dxmt9::query::coalesceEndsEnabled()) {
+      auto event = device->createQuery(QueryType::Event);
+      draw(); issue(event, false);
+      issue(a, true); draw(); issue(a, false);
+      check(result(a) == full, "range owner after ordinary deferred END");
+      (void)result(event); // Original marker must bind, not be overwritten.
+    }
+    // More issue generations than one owner can retain. Capacity must publish
+    // a complete prefix and retry the next membership, not drop query results.
+    std::vector<std::shared_ptr<Query>> many;
+    const auto before = queue.queryProgress().published;
+    for (unsigned i = 0; i != 70; ++i) {
+      auto q = device->createQuery(QueryType::Occlusion);
+      issue(q, true); draw(); issue(q, false);
+      many.push_back(std::move(q));
+    }
+    for (const auto& q : many) check(result(q) == full, "range capacity exact query result");
+    const auto sources = queue.queryProgress().published - before;
+    check(sources >= 2 && sources < 70, "bounded scope table seals and continues");
+  }
   issue(a, true); issue(a, true); issue(a, false);
   check(result(a) == 0, "empty/repeated BEGIN replaces generation");
 
@@ -408,9 +479,13 @@ void runSnapshotPollOracle() {
 int main(int argc, char** argv) {
   try {
     // Test-only oracle selection, independent of production runtime policy.
-    check(argc == 1 || (argc == 2 && std::strcmp(argv[1], "--snapshot-oracle") == 0),
+    check(argc == 1 || (argc == 2 &&
+          (std::strcmp(argv[1], "--snapshot-oracle") == 0 ||
+           std::strcmp(argv[1], "--range-benchmark") == 0)),
           "unknown oracle argument");
-    if (argc == 2) {
+    if (argc == 2 && std::strcmp(argv[1], "--range-benchmark") == 0) {
+      run(true);
+    } else if (argc == 2) {
       runSnapshotPollOracle();
       std::cout << "query occlusion Metal snapshot oracle passed\n";
     } else {

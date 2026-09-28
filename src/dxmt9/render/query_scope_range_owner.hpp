@@ -10,7 +10,7 @@
 
 namespace dxmt9::render {
 
-// Candidate-only storage owner. No production queue or Metal consumer yet.
+// Bounded candidate metadata, composed with the queue-owned payload.
 enum class QueryRangeStatus : std::uint8_t {
   Accepted, Capacity, Invalid, AllocationFailed
 };
@@ -18,8 +18,8 @@ enum class QueryRangeStatus : std::uint8_t {
 namespace query_range_detail {
 struct EndState {
   query::EndMarker marker;
-  std::atomic<bool> cancelled{false};
-  explicit EndState(query::WriterIdentity owner) noexcept : marker(owner) {}
+  explicit EndState(query::WriterIdentity owner) noexcept
+      : marker(owner, query::EndMarkerPolling::RetainedCancellable) {}
 };
 struct MakeEndState {
   auto operator()(query::WriterIdentity owner) const {
@@ -36,7 +36,7 @@ class QueryRangeEndReceipt {
   query::Poll poll(query::Progress progress) const noexcept {
     if (!state_ || state_->marker.owner().queue != progress.queue)
       return query::Poll::Invalid;
-    if (state_->cancelled.load(std::memory_order_acquire))
+    if (state_->marker.cancelled())
       return query::Poll::Failed;
     return query::classifyEnd(
         {progress.queue, state_->marker.sequence(), initializer_},
@@ -45,6 +45,12 @@ class QueryRangeEndReceipt {
   std::uint32_t commandEnd() const noexcept { return commandEnd_; }
   std::uint64_t sequence() const noexcept {
     return state_ ? state_->marker.sequence() : 0;
+  }
+  query::EndReceipt fence() const noexcept {
+    if (!state_) return {};
+    query::EndReceipt result{state_->marker.owner().queue, 0, initializer_};
+    result.marker = {state_, &state_->marker};
+    return result;
   }
  private:
   template<std::size_t, std::size_t, std::size_t> friend class QueryScopeRangeOwner;
@@ -176,7 +182,7 @@ class QueryScopeRangeOwner {
     } catch (...) { return QueryRangeStatus::AllocationFailed; }
     if (!staged) return QueryRangeStatus::AllocationFailed;
     if (staged->marker.owner() != expected || staged->marker.sequence() ||
-        staged->cancelled.load(std::memory_order_acquire)) return QueryRangeStatus::Invalid;
+        staged->marker.cancelled()) return QueryRangeStatus::Invalid;
     endState_ = std::move(staged);
     ends_[endCount_++] = {cursor_.commands, initializer};
     out.state_ = endState_;
@@ -201,10 +207,22 @@ class QueryScopeRangeOwner {
   }
   void cancelUnpublished() noexcept {
     if (phase_ == Phase::Published || phase_ == Phase::Cancelled) return;
-    if (endState_) endState_->cancelled.store(true, std::memory_order_release);
+    if (endState_) endState_->marker.cancel();
     phase_ = Phase::Cancelled;
   }
   Phase phase() const noexcept { return phase_; }
+  query::WriterIdentity identity() const noexcept { return cursor_.owner; }
+  std::shared_ptr<query::EndMarker> marker() noexcept {
+    return endState_ ? std::shared_ptr<query::EndMarker>{endState_, &endState_->marker}
+                     : nullptr;
+  }
+  // Leave one range/scope entry available for the next physical command suffix.
+  bool mustPublishBeforeNextScope() const noexcept {
+    return scopeCount_ + 1 >= ScopeCapacity || cursor_.ranges + 1 >= RangeCapacity;
+  }
+  void failResults() const noexcept {
+    for (std::size_t i = 0; i < scopeCount_; ++i) scopes_[i].fail();
+  }
   std::uint32_t commands() const noexcept { return cursor_.commands; }
   std::size_t scopeCount() const noexcept { return scopeCount_; }
   std::size_t rangeCount() const noexcept { return cursor_.ranges; }
@@ -242,5 +260,8 @@ class QueryScopeRangeOwner {
   std::shared_ptr<query_range_detail::EndState> endState_;
   Phase phase_ = Phase::Writing;
 };
+
+// Candidate bounds, independent of the normal source storage capacities.
+using SlotQueryRanges = QueryScopeRangeOwner<64, 256, 256>;
 
 } // namespace dxmt9::render

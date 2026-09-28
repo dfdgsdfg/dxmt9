@@ -11,11 +11,17 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H412](present-pacing-query-range-integration.412.md) connects atomic DrawRun
+append, real queue publication/FLUSH and command-range Metal membership in an
+OFF-by-default candidate. Native reference/candidate exact GPU checks pass,
+including immutable receipts and forced tile. Same-input native burst timings
+are recorded separately from STALKER FPS; composed concurrency/wild promotion
+remain open.
+
 [H411](present-pacing-query-range-clear-transaction.411.md) joins metadata
 admission to the real ChunkSlot Clear appender with staged payload/reservation
-and rollback (four focused tests pass). This is Clear-only native integration;
-DrawRun, physical credit, actual queue publication and Metal consumption remain
-open. It does not claim a runtime change or speedup.
+and rollback (four focused tests pass). That historical step was Clear-only;
+H412 advances the queue/DrawRun/Metal integration boundary.
 
 [H410](present-pacing-query-range-owner.410.md) implements a move-only bounded
 metadata owner with frozen scope refs, range/END offsets and cancellation-aware

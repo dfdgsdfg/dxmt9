@@ -1,4 +1,6 @@
 #include "dxmt9_command_queue.hpp"
+#include "render/query_range_draw_append.hpp"
+#include <stdexcept>
 #include "dxmt9_wait_trace.hpp"
 #include "dxmt9_cpu_supply_trace.hpp"
 #include "dxmt9_prepared_encode_shadow.hpp"
@@ -3272,6 +3274,20 @@ void observePreparedSlot(CommandQueue& q, resources::Pool& pool,
   emit(supply::Event::PreparedEnd);
 }
 
+// Called under the writer mutex. Payload construction is private until this
+// metadata suffix is frozen; refusal stops publication, never drops commands.
+bool finishQueryRangePrefix(CommandQueue& q, core::ChunkSlot& slot) {
+  if (!slot.queryRanges) return true;
+  if (slot.commandCount() < slot.queryRanges->commands() ||
+      slot.commandCount() > UINT32_MAX) return false;
+  static const query::OcclusionScope empty{};
+  const auto& scope = q.occlusionScopeLocked();
+  return slot.queryRanges->append(slot.queryRanges->identity(),
+      scope ? *scope : empty,
+      static_cast<std::uint32_t>(slot.commandCount() - slot.queryRanges->commands()))
+          == render::QueryRangeStatus::Accepted;
+}
+
 void prepareSlotForPublish(CommandQueue& q,
                            resources::Pool& pool,
                            core::ChunkSlot& slot,
@@ -3281,6 +3297,22 @@ void prepareSlotForPublish(CommandQueue& q,
   // membership at the same publication edge as seqId/resource retention;
   // replacing the queue scope later cannot relabel this source.
   slot.occlusionScope = q.occlusionScopeLocked();
+  if (slot.queryRanges &&
+      (!finishQueryRangePrefix(q, slot) ||
+       !slot.queryRanges->seal(slot.queryRanges->identity())))
+    throw std::runtime_error("query range publication witness drift");
+  if (slot.queryRanges && !slot.occlusionScope) {
+    // Source-level conservative query guard for PSO/tile prefetch and other
+    // consumers that do not consume the range table. Actual draw membership
+    // is selected by command index in Encode, never from this guard.
+    for (const auto& range : slot.queryRanges->ranges()) {
+      if (range.scope.slot) {
+        slot.occlusionScope = {slot.queryRanges, slot.queryRanges->scope(
+            slot.queryRanges->identity(), range.scope)};
+        break;
+      }
+    }
+  }
   const std::uint64_t residencyNs =
       recordCurrentSlotPublishResidencyUnlocked(q, reason);
   perf::countChunkPublishReason(reason, slot.commandCount());
@@ -4029,7 +4061,18 @@ bool CommandQueue::submitDrawRunBatch(
           // here would be redundant work rather than a stronger proof.
           const bool extends = scratch.segmentExtends[i - segmentStart];
           noteCurrentSlotCommandAppendStartedUnlocked(*this);
-          const bool appended = extends
+          auto& destination = currentSlotUnlocked(*this);
+          const auto appendRanged = [&] {
+            if (!finishQueryRangePrefix(*this, destination)) return false;
+            static const query::OcclusionScope empty{};
+            return render::appendQueryRangeDraw(*destination.queryRanges,
+                destination.queryRanges->identity(), destination,
+                occlusionScope_ ? *occlusionScope_ : empty, *entry.state,
+                *entry.uniforms, entry.draws, entry.payloads)
+                    == render::QueryRangeStatus::Accepted;
+          };
+          const bool appended = !extends && destination.queryRanges
+              ? appendRanged() : extends
               ? currentSlotUnlocked(*this).appendCompatibleDrawRunEntryUnchecked(
                     *entry.state, *entry.uniforms, entry.draws, entry.payloads,
                     {}, /*alreadyReserved=*/true,
@@ -4564,6 +4607,9 @@ CommandQueue::beginDirectChunkSlotReplay(
     bool finalSpan,
     bool allowRotation,
     queue::DirectSourceControlMode controlMode) noexcept {
+  // Initial range lane uses the atomic compatibility appender only. Do not
+  // allow a Direct continuation to bypass its membership transaction.
+  if (query::scopeRangesEnabled()) return {};
   if (rawOrdinal == 0 || plannedBytes == 0 || capacity.commandHeaders == 0 ||
       !producerIdentity.importable() ||
       ((rangeRecordCount == 0) != (rangeDrawCount == 0)) ||
@@ -5457,7 +5503,7 @@ CommandQueue::beginCpuReadyArenaSource(
   // Occlusion membership is carried by the compatibility ChunkSlot. Reject
   // Arena before flushing a writer or reserving Tape storage so replay can
   // take its pre-effect compatibility fallback without a pressure retry loop.
-  if (occlusionScope_) {
+  if (occlusionScope_ || query::scopeRangesEnabled()) {
     return {.status = CpuReadyArenaBeginStatus::OcclusionScopeUnsupported};
   }
   if (writingSlot_ && cpuReadyEarlyPrefixPublishedThisFrame_) {
@@ -5617,7 +5663,7 @@ CommandQueue::beginCpuReadyArenaSources(
   }
   // See the single-source admission path above. This check deliberately
   // precedes all writer flushes and aggregate Tape reservations.
-  if (occlusionScope_) {
+  if (occlusionScope_ || query::scopeRangesEnabled()) {
     return {.status = CpuReadyArenaBeginStatus::OcclusionScopeUnsupported};
   }
   if (writingSlot_ && cpuReadyEarlyPrefixPublishedThisFrame_) {
@@ -8756,7 +8802,24 @@ bool CommandQueue::setOcclusionScope(query::OcclusionScopeRef scope) noexcept {
     // marks, and the old scope snapshot. At the cap, request the same sticky
     // submission used by publishQueryEnd; commitCurrentChunk performs only
     // the existing bounded admission wait and never waits for this query.
-    if (hadCommands) {
+    bool retainedRangeWriter = false;
+    if (hadCommands && query::scopeRangesEnabled() &&
+        (!slots_[*writingSlot_].payload->queryEndMarker ||
+         slots_[*writingSlot_].payload->queryRanges)) {
+      auto& writer = slots_[*writingSlot_];
+      auto& payload = *writer.payload;
+      if (!payload.queryRanges) {
+        payload.queryRanges = std::make_shared<render::SlotQueryRanges>(
+            query::WriterIdentity{queryQueueIdentity_, writer.sourceId.index,
+                writer.sourceId.generation, writer.storage.generation}, UINT32_MAX);
+      }
+      if (!finishQueryRangePrefix(*this, payload)) {
+        requestSchedulingStopLocked();
+        return false;
+      }
+      retainedRangeWriter = !payload.queryRanges->mustPublishBeforeNextScope();
+    }
+    if (hadCommands && !retainedRangeWriter) {
       if (inflightCount_ >= kMaxQueuedChunks) {
         (void)queueLifecycle_.requestQuerySubmission(lastCommittedSeqId_);
       }
@@ -8775,11 +8838,12 @@ bool CommandQueue::setOcclusionScope(query::OcclusionScopeRef scope) noexcept {
     // writer is intentionally left uncommitted, so no fake seqId is emitted.
     query::splitdiag::note(scope ? query::splitdiag::Kind::ScopeNonempty
                                 : query::splitdiag::Kind::ScopeEmpty,
-                          queryQueueIdentity_, lastCommittedSeqId_, hadCommands);
+                          queryQueueIdentity_, lastCommittedSeqId_,
+                          hadCommands && !retainedRangeWriter);
     if (::dxmt9::supply::enabled())
       ::dxmt9::supply::record(::dxmt9::supply::Event::ScopeBoundary,
           &queueLifecycle_, lastCommittedSeqId_,
-          (std::uint64_t(hadCommands) << 63) |
+          (std::uint64_t(hadCommands && !retainedRangeWriter) << 63) |
           (std::uint64_t(occlusionScope_ ? occlusionScope_->count : 0) << 32) |
               std::uint64_t(scope ? scope->count : 0));
     occlusionScope_ = std::move(scope);
@@ -8814,10 +8878,38 @@ query::EndReceipt CommandQueue::publishQueryEnd() noexcept {
         return {};
       hadCommands = !slots_[*writingSlot_].payload->commandsEmpty();
     }
+    if (hadCommands && query::scopeRangesEnabled() &&
+        inflightCount_ < kMaxQueuedChunks) {
+      auto& writer = slots_[*writingSlot_];
+      auto& payload = *writer.payload;
+      if (payload.queryRanges) {
+        if (!finishQueryRangePrefix(*this, payload)) {
+          requestSchedulingStopLocked();
+          return {};
+        }
+        render::QueryRangeEndReceipt receipt;
+        const bool shared = bool(payload.queryEndMarker);
+        const auto status = payload.queryRanges->end(
+            payload.queryRanges->identity(), initializerPrefix, receipt);
+        if (status == render::QueryRangeStatus::Accepted) {
+          payload.queryEndMarker = payload.queryRanges->marker();
+          query::splitdiag::note(shared ? query::splitdiag::Kind::DeferredShared
+                                       : query::splitdiag::Kind::DeferredNew,
+                                queryQueueIdentity_, 0);
+          return receipt.fence();
+        }
+        if (status != render::QueryRangeStatus::Capacity) {
+          requestSchedulingStopLocked();
+          return {};
+        }
+        // END capacity uses eager publication of this complete writer.
+      }
+    }
     // Admit a deferred writer only below the publication cap. Otherwise use
     // the eager Issue path (and its existing progress/backpressure protocol).
     // Until this writer publishes no later source can consume its credit.
-    if (hadCommands && query::coalesceEndsEnabled() &&
+    if (hadCommands && !slots_[*writingSlot_].payload->queryRanges &&
+        query::coalesceEndsEnabled() &&
         inflightCount_ < kMaxQueuedChunks) {
       auto& writer = slots_[*writingSlot_];
       auto& marker = writer.payload->queryEndMarker;

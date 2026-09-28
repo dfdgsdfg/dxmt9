@@ -1,4 +1,14 @@
 # Backend descriptor / pipeline / replay / hazard / capture / counter / render-pass specs.
+query_range_draw_source_spec = executable(
+  'dxmt9-query-range-draw-source-spec', 'query_range_draw_source_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+test('dxmt9-query-range-draw-source-spec', query_range_draw_source_spec,
+     env: dxmt9_native_test_env)
+test('dxmt9-query-range-draw-source-no-dedup-spec', query_range_draw_source_spec,
+     env: dxmt9_native_test_env_vars + ['DXMT9_DISABLE_DRAW_UNIFORM_PAYLOAD_DEDUP=1'])
 query_range_clear_source_spec = executable(
   'dxmt9-query-range-clear-source-spec', 'query_range_clear_source_spec.cpp',
   include_directories: dxmt9_inc,
@@ -108,6 +118,22 @@ query_occlusion_metal_spec = executable(
   dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
   link_args: dxmt9_test_link_args,
 )
+foreach tile : ['off', 'force']
+  test('dxmt9-query-ranges-' + tile + '-metal-spec', query_occlusion_metal_spec,
+    env: dxmt9_native_test_env_vars + [
+      'MTL_DEBUG_LAYER=1', 'DXMT9_METAL_OCCLUSION=1', 'DXMT_PERF_COUNTERS=1',
+      'DXMT9_QUERY_SCOPE_RANGES=1', 'DXMT9_QUERY_SCOPE_CB_JOIN=0',
+      'DXMT9_COALESCE_QUERY_ENDS=1',
+      'DXMT9_CPU_READY_TAPE=1', 'DXMT9_TILE_FFP=' + tile,
+      'DXMT9_ASYNC_QUERY_FENCES=1'], is_parallel: false, timeout: 60)
+  test('dxmt9-query-ranges-receipt-' + tile + '-metal-spec', query_occlusion_metal_spec,
+    args: ['--snapshot-oracle'],
+    env: dxmt9_native_test_env_vars + [
+      'MTL_DEBUG_LAYER=1', 'DXMT9_METAL_OCCLUSION=1', 'DXMT_PERF_COUNTERS=1',
+      'DXMT9_QUERY_SCOPE_RANGES=1', 'DXMT9_QUERY_SCOPE_CB_JOIN=0',
+      'DXMT9_CPU_READY_TAPE=1', 'DXMT9_TILE_FFP=' + tile,
+      'DXMT9_ASYNC_QUERY_FENCES=1'], is_parallel: false, timeout: 60)
+endforeach
 foreach tile : ['off', 'force']
   test('dxmt9-query-scope-cb-reference-' + tile + '-metal-spec', query_occlusion_metal_spec,
     env: dxmt9_native_test_env_vars + [

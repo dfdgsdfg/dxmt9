@@ -68,8 +68,13 @@ existing EndMarker and its per-END logical/initializer prefix. Unpublished
 owner abandonment marks cancellation, so its receipts fail rather than remain
 unbound forever. Wrong-queue receipts are invalid. Cancellation is local to
 this writer receipt and does not fail unrelated shared result generations.
-The new typed receipt is not yet interchangeable with the production
-`EndReceipt` polling API; discarding its cancellation authority is forbidden.
+The production `EndReceipt` adapter aliases the retained EndState's marker;
+the marker itself owns the cancellation bit. No raw pointer or cancellation
+authority is discarded. Only `RetainedCancellable` markers authorize immutable
+snapshot polling before publication. Ordinary coalescing markers retain their
+existing legacy-query fallback. An independent FLUSH still validates the exact
+live writer and publishes it under the queue mutex; eligibility never implies
+completion or bypasses reset/initializer/result checks.
 
 This owner reserves metadata against a command count, not physical command
 storage. Queue integration must compose payload allocation/append with this
@@ -93,8 +98,42 @@ reserves both header/clear vectors before calling the actual rvalue Clear
 appender. No payload is exposed while Writing. Failed preparation may retain
 larger vector capacity but does not change semantic sizes or references;
 future queue credit accounting must cover that physical capacity explicitly.
-It is a native integration component, not an enabled replay source. No Draw,
-resource-marking, queue submission or GPU-consumer support is implied.
+It remains the narrow native Clear fixture. `appendQueryRangeDraw` additionally
+composes the actual DrawRun appender with metadata. All record/state/uniform/
+byte and lookup vector capacities are reserved before any lookup rebuild or
+logical commit. Existing batch reservation and interning are then reused in
+the noexcept commit. Failure preserves every schema length, old lookup chain,
+scope retain and END offset; surviving physical capacity remains priced.
+
+### Experimental queue and consumer binding
+
+`DXMT9_QUERY_SCOPE_RANGES=1` requires actual Metal occlusion and asynchronous
+fences. It defaults OFF. The initial route uses compatibility Slot storage;
+Direct, Arena, session joining, framegraph DCE/reordering and parallel encoding
+are excluded. This is not an all-family promotion.
+
+Membership replacement freezes the preceding physical command prefix in the
+bounded owner instead of publishing it. DrawRun append uses the transaction
+adapter after the ordinary segment resource admission. Clear/control suffixes
+are frozen at membership/publication edges; failure stops publication. A free
+range/scope entry is kept for the next suffix; pressure publishes before the
+next membership. END capacity uses eager publication. An already existing
+ordinary deferred marker is published before adopting a range owner, never
+overwritten. Published source ownership remains in the real CpuReadyTape.
+
+`prepareSlotForPublish` seals metadata and installs a conservative source-wide
+query guard for PSO prefetch. This guard must cover queries anywhere in a source,
+even when its final scope is empty. It is not the draw's membership. The queue
+binds the owner's marker only after successful `sealAndPublish` with the actual
+queue/source/storage identity and sequence. The existing locked poll path
+publishes an unbound owner and posts the sticky submission request.
+
+Encode selects frozen scope membership by command index. Membership and recorded
+END boundaries close pending clears/render passes before switching scope. The
+existing preserving attachment policy and origin-CB callbacks are unchanged.
+Callback scope refs alias the retained table; result generations survive payload
+retirement. Failed encoding marks every retained scope failed, including scopes
+not represented by the source-wide prefetch guard.
 
 ## END, FLUSH and completion
 
@@ -150,5 +189,7 @@ This is a stateful R-VERIF-1.5–1.8 lane. Required evidence is:
 6. Only then qualify wild visuals and observer-OFF repeats. No default promotion
    follows from native value checks or H408's small FPS difference.
 
-PE ABI, runtime defaults and encoder scheduling are unchanged by the prototype.
+PE ABI and default behavior remain unchanged. Candidate scheduling is explicitly
+restricted as above; no wild-performance or composed end-to-end proof follows
+from the bounded owner checks and prerequisite TLA models alone.
 Implementation/evidence status lives in [gap.md](gap.md).

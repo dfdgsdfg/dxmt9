@@ -44,4 +44,11 @@ inline bool scopeCbJoinEnabled() noexcept {
   }();
   return enabled && metalOcclusionEnabled();
 }
+inline bool scopeRangesEnabled() noexcept {
+  static const bool enabled = [] {
+    const char* value = std::getenv("DXMT9_QUERY_SCOPE_RANGES");
+    return value && value[0] && value[0] != '0';
+  }();
+  return enabled && metalOcclusionEnabled() && asynchronousFencesEnabled();
+}
 } // namespace dxmt9::query

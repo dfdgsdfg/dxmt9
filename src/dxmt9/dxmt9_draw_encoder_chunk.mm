@@ -3,6 +3,7 @@
 
 #include "dxmt9_capture.hpp"
 #include "dxmt9_draw_encoder.hpp"
+#include <stdexcept>
 #include "dxmt9_cpu_supply_trace.hpp"
 #include "dxmt9_parallel_access_observer.hpp"
 #include "dxmt9_encode_partition.hpp"
@@ -1524,10 +1525,11 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
   if (!ctx.device || !ctx.queue.valid()) {
     return std::nullopt;
   }
-  // Query membership is stamped on ordinary/direct slots at publication.
-  // Arena sources are rejected before this encoder is reached, so this
-  // synchronous view is sufficient for every production GPU-query source.
-  const query::OcclusionScopeRef sourceOcclusionScope =
+  // Ordinary sources carry one scope; the experimental compatibility source
+  // additionally owns a frozen command-range table. Arena queries are rejected.
+  const auto queryRanges = payload.isLegacy() && payload.legacyPayload()
+      ? payload.legacyPayload()->queryRanges : nullptr;
+  query::OcclusionScopeRef sourceOcclusionScope =
       payload.isLegacy() && payload.legacyPayload()
           ? payload.legacyPayload()->occlusionScope
           : query::OcclusionScopeRef{};
@@ -1566,7 +1568,7 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
       options.partitionRanges;
   thread_local ProductionEncodePartitionPlanStorage productionPlanStorage;
   const bool parallelPartitionRequested =
-      !sourceOcclusionScope &&
+      !queryRanges && !sourceOcclusionScope &&
       options.partitionExecutionMode ==
           render::PartitionExecutionMode::ExplicitParallel;
   const bool supplyCommandSplit = ::dxmt9::supply::commandSplitEnabled() &&
@@ -3828,6 +3830,33 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
                             &ctx.pool, sourceSeqId);
   };
 
+  auto selectQueryRange = [&](std::size_t commandIndex) {
+    if (!queryRanges) return;
+    const render::SlotQueryRanges::Range* selected = nullptr;
+    for (const auto& range : queryRanges->ranges()) {
+      if (range.begin <= commandIndex && commandIndex < range.end) {
+        selected = &range;
+        break;
+      }
+    }
+    if (!selected) throw std::runtime_error("query range coverage mismatch");
+    query::OcclusionScopeRef next;
+    if (selected->scope.slot) {
+      const auto* scope = queryRanges->scope(queryRanges->identity(), selected->scope);
+      if (!scope) throw std::runtime_error("query range identity mismatch");
+      next = {queryRanges, scope};
+    }
+    const bool endBoundary = commandIndex != 0 && std::any_of(
+        queryRanges->ends().begin(), queryRanges->ends().end(),
+        [&](const auto& end) { return end.commandEnd == commandIndex; });
+    if (next != sourceOcclusionScope || endBoundary) {
+      // Preserve the old source-boundary pass/store behavior, including a
+      // deferred Clear, before installing the next immutable membership.
+      flushPendingClear();
+      flushRender(perf::EncoderSplitReason::OrderedControl);
+      sourceOcclusionScope = std::move(next);
+    }
+  };
   auto encodeCompleteCommand = [&](auto& replayObserver,
                                    std::size_t commandIndex,
                                    const core::SourceCommandView& source) {
@@ -4182,7 +4211,7 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
       }
       return false;
     };
-    if (sourceOcclusionScope || !eligibility.eligible ||
+    if (queryRanges || sourceOcclusionScope || !eligibility.eligible ||
         suppressRecordedMetalCalls(ctx) ||
         ctx.drawRecorder || perf::encoderBreakdownEnabled() ||
         commitPolicy == MidChunkCommitPolicy::PerNRecords ||
@@ -4918,6 +4947,7 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
             replayObserver.observe(commandIndex, source);
             continue;
           }
+          selectQueryRange(commandIndex);
           if (source.kind() == Kind::DrawRun) {
             if (const auto* pass = parallelPassForReplayOrdinal(
                     static_cast<std::uint32_t>(ordinal))) {
@@ -4975,6 +5005,7 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
         replayObserver.observe(commandIndex, source);
         continue;
       }
+      selectQueryRange(commandIndex);
       traceEncodeCommand("begin", commandIndex, Kind::DrawRun, command);
       if (const auto* pass = parallelPassForReplayOrdinal(
               partitionBatch.replayOrdinalBegin)) {
@@ -5148,6 +5179,8 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     core::SourcePayloadView payload,
     std::uint64_t sourceSeqId,
     EncodeChunkOptions options) {
+  const auto queryRanges = payload.isLegacy() && payload.legacyPayload()
+      ? payload.legacyPayload()->queryRanges : nullptr;
   const query::OcclusionScopeRef occlusionScope =
       payload.isLegacy() && payload.legacyPayload()
           ? payload.legacyPayload()->occlusionScope
@@ -5169,7 +5202,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
             }
           });
     } catch (...) {
-      if (occlusionScope) {
+      if (occlusionScope || queryRanges) {
         visited = false;
       } else {
         throw;
@@ -5183,6 +5216,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
       if (occlusionScope) {
         occlusionScope->fail();
       }
+      if (queryRanges) queryRanges->failResults();
       return std::nullopt;
     }
     return result;
@@ -5193,7 +5227,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
     result = encodeChunkImpl(ctx, slotIndex, payload, sourceSeqId,
                              std::move(options), fallbackLookaheadSources);
   } catch (...) {
-    if (occlusionScope) {
+    if (occlusionScope || queryRanges) {
       result.reset();
     } else {
       throw;
@@ -5202,6 +5236,7 @@ std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunk(
   if (!result && occlusionScope) {
     occlusionScope->fail();
   }
+  if (!result && queryRanges) queryRanges->failResults();
   return result;
 }
 

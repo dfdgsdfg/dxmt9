@@ -11,18 +11,21 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Backend Layer
 
-R-CORE-8.2(c), [source-local query ranges](query-scope-ranges.md): candidate
-reducer plus move-only bounded metadata owner retaining frozen scope snapshots,
-ranges, END offsets and cancellation-aware receipts. Native evidence includes
-4,096 scope/failure cases and 15,625 owner lifecycle schedules, independent
-capacity refusal, END allocation faults, move/alias/lifetime checks and existing
-EndMarker binding. A private real ChunkSlot/Clear transaction now stages nested
-payloads and reserves both vectors before noexcept commit; six preparation
-fault cases and four focused tests pass. Not connected to production. Draw and
-other family physical transaction composition, physical credit accounting,
-FLUSH/publication queue wiring, range-aware Metal
-consumption, composed concurrent refinement, GPU exact and same-input CPU
-comparison remain open. No performance or default-promotion claim.
+R-CORE-8.2(c), [source-local query ranges](query-scope-ranges.md): default-OFF
+`DXMT9_QUERY_SCOPE_RANGES` now connects the bounded owner to actual compatibility
+DrawRun construction, CpuReadyTape publication, END/FLUSH, immutable polling
+receipts and range-aware Metal execution. Existing pass/store and origin-CB
+contribution rules remain; Direct/Arena/session/reorder/parallel routes are
+excluded. Focused native tests cover 4,096 membership cases, 15,625 owner
+schedules and 90 DrawRun allocation failures each with dedup ON/OFF. Real Metal
+reference/candidate tests cover exact samples/pixels, overlaps, capacity splits,
+no-successor FLUSH, immutable receipts, reset/reissue/release and forced tile.
+The final-scope-empty PSO guard regression was found and fixed by that oracle.
+H412 records same-input native CPU evidence, not STALKER FPS. Composed queue /
+range / callback temporal refinement, full all-family fault coverage, strict
+aggregate accounting for callback-retained metadata, x86_64/Wine wild evidence
+and default promotion remain open. Existing TLA suite success is prerequisite
+evidence only; it is not a new end-to-end proof.
 
 R-BACK-2.15.2 fixed comparison now avoids a temporary projection with the same
 hash guard and fieldwise equality. Native float-edge/collision fixtures and

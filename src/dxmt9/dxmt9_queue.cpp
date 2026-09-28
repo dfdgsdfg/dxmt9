@@ -3719,11 +3719,14 @@ bool QueueLifecycleController::commitCurrentChunk(
       poisonTapeFailureLocked();
       return;
     }
-    if (writingPayload->queryEndMarker) {
+    if (writingPayload->queryEndMarker || writingPayload->queryRanges) {
       const auto& marker = writingPayload->queryEndMarker;
-      if (!marker->bind({submissionBinding_.queryQueueIdentity, slot.sourceId.index,
-                         slot.sourceId.generation, slot.storage.generation},
-                        slot.seqId)) {
+      const query::WriterIdentity owner{submissionBinding_.queryQueueIdentity,
+          slot.sourceId.index, slot.sourceId.generation, slot.storage.generation};
+      const bool bound = writingPayload->queryRanges
+          ? writingPayload->queryRanges->bindPublished(owner, slot.seqId)
+          : marker->bind(owner, slot.seqId);
+      if (!bound) {
         // Tape publication already happened. Preserve that actual ownership
         // transition before stopping; leaving the control Writing would pair
         // a zero-sequence writer with a Ready source. Never roll back/reclaim
@@ -3738,9 +3741,10 @@ bool QueueLifecycleController::commitCurrentChunk(
         poisonTapeFailureLocked();
         return;
       }
-      query::splitdiag::note(query::splitdiag::Kind::MarkerBound,
-          submissionBinding_.queryQueueIdentity, slot.seqId,
-          writingPayload->commandCount());
+      if (marker)
+        query::splitdiag::note(query::splitdiag::Kind::MarkerBound,
+            submissionBinding_.queryQueueIdentity, slot.seqId,
+            writingPayload->commandCount());
     }
     if (onAfterPublish) {
       onAfterPublish();

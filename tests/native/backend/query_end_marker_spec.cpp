@@ -1,4 +1,5 @@
 #include "dxmt9/query_end_marker.hpp"
+#include "dxmt9/query_poll_snapshot.hpp"
 #include <iostream>
 #include <stdexcept>
 
@@ -47,6 +48,23 @@ int main() {
           "terminal failure dominates high completion waterlines");
     marker.reset();
     check(receipt.snapshot().sequence == 2, "receipt owns marker beyond writer lifetime");
+    for (auto policy : {EndMarkerPolling::WriterBoundOnly,
+                        EndMarkerPolling::RetainedCancellable}) {
+      auto owned = std::make_shared<EndMarker>(admitted, policy);
+      dxmt9::core::QueryPollSnapshot snapshot;
+      snapshot.backendFence = {7, 0, 0};
+      snapshot.backendFence.marker = owned;
+      check(snapshot.deferredBackendFence() == (policy == EndMarkerPolling::WriterBoundOnly),
+            "only retained cancellable ownership grants independent polling");
+      check(classifyEnd(snapshot.backendFence, {7, 0, 0}) == Poll::Pending,
+            "independent marker is not an empty completed prefix");
+      owned->cancel();
+      check(!owned->bind(admitted, 1), "cancelled writer cannot publish");
+      check(classifyEnd(snapshot.backendFence, {7, 0, 0}) == Poll::Failed,
+            "retained cancellation survives receipt adaptation");
+      check(classifyEnd(snapshot.backendFence, {8, 0, 0}) == Poll::Invalid,
+            "wrong queue remains invalid after cancellation");
+    }
     std::cout << "query_end_marker_spec passed\n";
   } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';

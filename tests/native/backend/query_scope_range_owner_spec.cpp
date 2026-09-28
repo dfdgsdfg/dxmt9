@@ -79,6 +79,7 @@ int main() {
         if (explicitCancel) owner.cancelUnpublished();
       }
       check(cancelled.poll({7, 0, 0}) == query::Poll::Failed);
+      check(query::classifyEnd(cancelled.fence(), {7, 0, 0}) == query::Poll::Failed);
       check(cancelled.poll({8, 0, 0}) == query::Poll::Invalid);
     }
 

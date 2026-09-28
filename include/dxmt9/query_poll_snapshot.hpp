@@ -37,9 +37,10 @@ struct QueryPollSnapshot {
   std::shared_ptr<query::OcclusionResult> occlusionResult;
   std::shared_ptr<dxmt9::Device> backend;
 
-  // Only constants/pre-issue snapshots and receipts without a coalescing
-  // marker are eligible for this independent poll.  A marker is deliberately
-  // rejected so replay can retain the legacy Query until its writer binds.
+  // Legacy coalescing markers retain the reference fallback. The range owner
+  // explicitly grants independent polling: its retained marker carries writer
+  // identity AND cancellation, and FLUSH validates/publishes under the queue
+  // mutex. The receipt/result do not borrow the mutable Query or writer.
   bool eligible = false;
 
   bool constant() const noexcept {
@@ -48,7 +49,7 @@ struct QueryPollSnapshot {
   }
   bool preIssue() const noexcept { return issueOrdinal == 0; }
   bool deferredBackendFence() const noexcept {
-    return static_cast<bool>(backendFence.marker);
+    return backendFence.marker && !backendFence.marker->independentPolling();
   }
 };
 

@@ -194,7 +194,8 @@ FrameGraphBackend::planMultiSourceSessionReplay(
             [&](const core::metalqueue::SynchronousSourcePayloadBorrow&
                     payloadBorrow) {
           const auto payload = payloadBorrow.checkedView();
-          if (payload.isLegacy() && payload.legacyPayload()->occlusionScope)
+          if (payload.isLegacy() && (payload.legacyPayload()->occlusionScope ||
+                                    payload.legacyPayload()->queryRanges))
             return false;
           if (source.commandBegin() != 0u ||
               source.commandCount() != payload.commandCount()) {
@@ -360,7 +361,7 @@ std::vector<std::uint32_t> FrameGraphBackend::dceLookaheadReplayPrefix(
     encoders::EncodeContext& ctx,
     std::size_t slotIndex,
     const core::ChunkSlot& slot) {
-  if (!features_.dce || slot.occlusionScope) {
+  if (!features_.dce || slot.occlusionScope || slot.queryRanges) {
     return {};
   }
   static_cast<void>(slotIndex);
@@ -459,7 +460,8 @@ FrameGraphBackend::onSourceReadyImpl(encoders::EncodeContext& ctx,
     return result;
   };
   if (options.skipBackendPlanning ||
-      (payload.isLegacy() && payload.legacyPayload()->occlusionScope)) {
+      (payload.isLegacy() && (payload.legacyPayload()->occlusionScope ||
+                             payload.legacyPayload()->queryRanges))) {
     // The surrounding onSourceReady wrapper has already converted the live
     // borrow batch into this call-local span. Clear the capability before
     // delegating so encodeChunk does not materialize the same lookahead twice.

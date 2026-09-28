@@ -6,6 +6,7 @@
 #include "dxmt9_perf_counters.hpp"
 #include "dxmt9_append_diag.hpp"
 #include "dxmt9/query_occlusion.hpp"
+#include "render/query_scope_range_owner.hpp"
 
 #include <algorithm>
 #include <array>
@@ -1017,6 +1018,7 @@ struct ChunkSlot {
   // the encoder observes the exact writer scope even when the queue advances
   // to a different active scope before completion.
   query::OcclusionScopeRef occlusionScope{};
+  std::shared_ptr<render::SlotQueryRanges> queryRanges{};
   dxmt9::perf::ChunkPublishReason publishReason =
       dxmt9::perf::ChunkPublishReason::Unknown;
   bool pipelinePrefetchSealed = false;
@@ -1152,6 +1154,7 @@ struct ChunkSlot {
   void clearCommands() {
     queryEndMarker.reset();
     occlusionScope.reset();
+    queryRanges.reset();
     publishReason = dxmt9::perf::ChunkPublishReason::Unknown;
     pipelinePrefetchSealed = false;
     preparedEncodePlan.reset();

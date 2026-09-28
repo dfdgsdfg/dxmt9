@@ -16,6 +16,7 @@ bool sessionSourceHasFinalPresentTail(
 }
 
 bool sessionSourceCanBeHead(core::SourcePayloadView payload) noexcept {
+  if (payload.isLegacy() && payload.legacyPayload()->queryRanges) return false;
   if (!queryScopeAllowsSession(
           payload.isLegacy() && bool(payload.legacyPayload()->occlusionScope),
           query::scopeCbJoinEnabled()))
@@ -25,6 +26,7 @@ bool sessionSourceCanBeHead(core::SourcePayloadView payload) noexcept {
 
 bool sessionSourceCanAppendToPending(core::SourcePayloadView payload,
                                      bool hasPendingSession) noexcept {
+  if (payload.isLegacy() && payload.legacyPayload()->queryRanges) return false;
   if (!queryScopeAllowsSession(
           payload.isLegacy() && bool(payload.legacyPayload()->occlusionScope),
           query::scopeCbJoinEnabled()))

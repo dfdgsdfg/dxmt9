@@ -21,6 +21,7 @@ inline std::size_t chunkSlotPhysicalRetainedBytes(
         : count * element;
   };
   std::size_t total = 0;
+  if (slot.queryRanges) total = sizeof(render::SlotQueryRanges);
   const auto add = [&](std::size_t value) noexcept {
     total = value > std::numeric_limits<std::size_t>::max() - total
         ? std::numeric_limits<std::size_t>::max()

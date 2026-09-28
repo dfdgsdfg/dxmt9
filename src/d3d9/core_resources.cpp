@@ -292,7 +292,8 @@ QueryPollSnapshot Device::captureQueryPollSnapshot(
   // Constants and pre-issue queries do not need a backend receipt. A
   // synchronous legacy query with an issued END is intentionally ineligible:
   // callers retain the legacy Query for that path. Deferred END markers are
-  // likewise rejected until the replay writer has bound them.
+  // likewise rejected unless the retained cancellable range owner explicitly
+  // grants independent polling through the backend's locked FLUSH protocol.
   const bool constant = snapshot.constant();
   const bool preIssue = snapshot.preIssue();
   const bool async = snapshot.backend &&

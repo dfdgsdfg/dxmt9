@@ -28,24 +28,37 @@ constexpr bool canBindEnd(WriterIdentity admitted, WriterIdentity published,
   return admitted.valid() && admitted == published && !bound && sequence;
 }
 
+enum class EndMarkerPolling : std::uint8_t {
+  WriterBoundOnly, RetainedCancellable
+};
+
 class EndMarker {
  public:
-  explicit EndMarker(WriterIdentity owner) noexcept : owner_(owner) {}
+  explicit EndMarker(WriterIdentity owner,
+      EndMarkerPolling polling = EndMarkerPolling::WriterBoundOnly) noexcept
+      : owner_(owner), polling_(polling) {}
+  bool independentPolling() const noexcept {
+    return polling_ == EndMarkerPolling::RetainedCancellable;
+  }
   WriterIdentity owner() const noexcept { return owner_; }
   std::uint64_t sequence() const noexcept {
     return sequence_.load(std::memory_order_acquire);
   }
+  bool cancelled() const noexcept { return cancelled_.load(std::memory_order_acquire); }
+  void cancel() noexcept { cancelled_.store(true, std::memory_order_release); }
   // Called only under the owning queue mutex after successful sealAndPublish.
   bool bind(WriterIdentity owner, std::uint64_t sequence) noexcept {
     auto expected = std::uint64_t{0};
-    return canBindEnd(owner_, owner, expected, sequence) &&
+    return !cancelled() && canBindEnd(owner_, owner, expected, sequence) &&
         sequence_.compare_exchange_strong(expected, sequence,
                                           std::memory_order_release,
                                           std::memory_order_relaxed);
   }
  private:
   const WriterIdentity owner_;
+  const EndMarkerPolling polling_;
   std::atomic<std::uint64_t> sequence_{0};
+  std::atomic<bool> cancelled_{false};
 };
 
 // Keep the scalar Fence/classify algebra separate from lifetime ownership.
@@ -78,6 +91,8 @@ constexpr Poll classifyEnd(Fence snapshot, Progress progress, bool deferred,
       ? Poll::Pending : result;
 }
 inline Poll classifyEnd(const EndReceipt& receipt, Progress progress) noexcept {
+  if (receipt.valid() && receipt.prefix.queue == progress.queue &&
+      receipt.marker && receipt.marker->cancelled()) return Poll::Failed;
   return classifyEnd(receipt.snapshot(), progress, bool(receipt.marker),
                      receipt.valid());
 }
