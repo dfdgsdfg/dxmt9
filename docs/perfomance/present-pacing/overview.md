@@ -11,6 +11,93 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H410](present-pacing-query-range-owner.410.md) implements a move-only bounded
+metadata owner with frozen scope refs, range/END offsets and cancellation-aware
+receipts. Native tests pass 3/3, including 15,625 lifecycle schedules. Queue
+payload atomicity, real FLUSH/publication and Metal consumption remain open;
+this is ownership groundwork, not production integration or measured speedup.
+
+[H409](present-pacing-query-range-prototype.409.md) adds a candidate range
+contract/reducer and native fixture (3/3 focused tests). Scope cuts cannot
+be removed profitably while END remains eager: deferred writer-qualified END
+binding and FLUSH progress must be composed with the range owner. Production
+storage/consumer, GPU exact and CPU cost comparison remain open; no FPS claim.
+
+[H408](present-pacing-stalker-occlusion-ab.408.md) tests visibility OFF/ON:
+28.18 / 28.40 FPS (+0.78%, one exploratory pair, no demonstrated gain).
+Separate diagnostics reduce draws/Present 9.51% but double CBs with nearly
+unchanged pass counts; scope changes account for all 32,748 extra semantic
+publications. ON alone is not the large-gap fix. Next examine membership
+ranges within a source, not another CB-only join; benefit remains unproved.
+H407's 27.41 FPS is user-accepted as the working baseline. Capture failures
+remain a visual qualification limit, not a reason to repeat baseline loops.
+
+[H407](present-pacing-stalker-baseline-recheck.407.md) repeats observer-OFF
+after user-reported interference in the 23.93 FPS run: 27.41 FPS over 119.43 s,
+still 8.37% below H403 OFF with matching binary/config receipts. The repeat's
+window capture fails and falls back to an Orca screenshot, so foreground and
+visual qualification remain open. Resolve this before renderer attribution.
+
+[H406](present-pacing-stalker-cross-renderer-waits.406.md) finds the same
+engine/Secondary/OpenAL dependency classes on D9VK, so their presence alone
+does not explain the renderer gap. Both diagnostic runs drift far below prior
+FPS and use buffered scene signals; comparative timing is unqualified.
+Restore an observer-OFF control and stronger scene alignment before pricing
+the differential; retain the snapshots only as common-owner evidence.
+
+[H405](present-pacing-stalker-controlled-thread-owners.405.md) rechecks the
+16-voice lane with native and guest snapshots: late encode/replay input waits
+dominate their sampled stacks; guest engine coordination and one OpenAL wait
+remain. The yielding helper starts in xrCPU_Pipe. Sequential snapshots do not
+close a wake timeline or map H404's native IDs, and common game/audio costs
+do not yet explain the D9VK differential. Cross-renderer late-window comparison
+is the next gate, not another unqualified renderer policy change.
+
+[H404](present-pacing-stalker-gpu-supply-gaps.404.md) records two short current
+STALKER Metal System Trace windows. App GPU Active unions are 46.31% middle
+and 15.89% late; the longest late gap is 176.05 ms, with the following CB
+committed only after 175.62 ms. This favors pre-submit supply/progress over
+continuous GPU saturation. Secondary/unnamed-thread CPU samples dominate
+that gap; symbolicated export failed, so exact CPU owner and wait/waker remain.
+
+[H403](present-pacing-stalker-covered-pending-validation.403.md) tests
+covered-Pending OFF/ON and reversed repeats with observers OFF and default
+occlusion fixed: 29.91 / 29.75 FPS (-0.53%), no demonstrated gain. A separate
+census confirms 99.53% of backend calls use the fast path. This weakens mutex
+polling as the dominant gap owner; it does not establish zero CPU savings or
+qualify actual visibility. Runtime defaults remain unchanged.
+
+[H402](present-pacing-stalker-query-split-census.402.md) accounts for all
+35,922 real-visibility SemanticBoundary publications as scope replacement;
+END-only deferral is not their owner. Backend polling reaches 1.88M/2.60M
+calls, over 99.94% of Pending needing no new submission request, but the
+current covered-Pending fast path remains default OFF. Counts do not price
+CPU/lock cost. Existing CB joining has historical no-gain evidence; current
+observer-OFF policy comparison and D9VK work/critical-path attribution remain.
+
+[H401](present-pacing-stalker-visibility-gap.401.md) confirms that current
+default occlusion results are primitive counts, not GPU visibility. A separate
+current-binary diagnostic sees 78/78 positive retained results by default,
+versus 90/93 zero results with real visibility. Scene-like draw averages fall
+but CB averages double; unmatched camera windows and intrusive observers
+prevent causal FPS attribution. A short native sample finds both replay and
+encode waiting for input in most stacks. Cross-renderer workload counts,
+visibility qualification and submission attribution remain open.
+
+[H400](present-pacing-gt2-renderer-comparison.400.md) obtains a current
+observer-OFF 3DMark05 GT2 dxmt9 baseline of 31.68 FPS across two accepted
+runs. D9VK/MoltenVK 1.4.1 emits results but fails the black-screen gate in
+both attempts; its values are excluded. Resolve rendering versus fullscreen
+capture failure before using GT2 to generalize the STALKER comparison.
+
+[H399](present-pacing-stalker-renderer-comparison.399.md) compares current
+observer-OFF STALKER Day against D9VK/MoltenVK 1.4.1 with identical game
+settings and the same Wine root/prefix. Two accepted runs per route average
+29.54 versus 53.92 FPS (1.825x); the gap spans the middle as well as the tail.
+A D9VK timeout is excluded and retained. D9VK launch preparation is much
+longer, but excluded from game-owned scene FPS. The old README reference is
+not a current matched baseline; next isolate mid-scene CPU/supply ownership.
+
 [H398](present-pacing-ingress-wild.398.md) runs promoted commit `694427f3`
 through STALKER Day/high: normal completion, zero GPU errors and sampled
 middle/late visuals without obvious corruption. Engine average is 27.84 FPS;

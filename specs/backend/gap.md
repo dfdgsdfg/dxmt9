@@ -11,6 +11,16 @@ Domain-owned implementation and evidence gap tracker. Use the [root gap index](.
 
 ## Backend Layer
 
+R-CORE-8.2(c), [source-local query ranges](query-scope-ranges.md): candidate
+reducer plus move-only bounded metadata owner retaining frozen scope snapshots,
+ranges, END offsets and cancellation-aware receipts. Native evidence includes
+4,096 scope/failure cases and 15,625 owner lifecycle schedules, independent
+capacity refusal, END allocation faults, move/alias/lifetime checks and existing
+EndMarker binding. Not connected to production. Physical command-storage
+transaction composition, FLUSH/publication queue wiring, range-aware Metal
+consumption, composed concurrent refinement, GPU exact and same-input CPU
+comparison remain open. No performance or default-promotion claim.
+
 R-BACK-2.15.2 fixed comparison now avoids a temporary projection with the same
 hash guard and fieldwise equality. Native float-edge/collision fixtures and
 18+18 identical-input CPU semantic iterations pass. This pure substitution
