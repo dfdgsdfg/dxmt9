@@ -77,6 +77,25 @@ transaction and retain the published owner through consumer/completion lifetime.
 Fixed-array zero-initialization, bounded table scans and reference copies have
 not yet been cost-qualified. Template capacities are not production defaults.
 
+### Physical append seam
+
+`appendWithPayload` is a single-writer draft transaction: tentatively admit
+metadata, prepare physical storage without changing payload logical lengths,
+then perform a statically noexcept commit. Preparation failure restores the
+cursor, last extended range and new scope refs. It leaves END metadata intact.
+The callback is compile-time bound, not a type-erased runtime observer. It may
+not publish, re-enter the owner, or introduce an externally visible effect.
+This seam is not a general rollback mechanism for arbitrary callbacks.
+
+The initial `QueryRangeClearSource` owns a real `core::ChunkSlot` plus this
+metadata owner and admits only Clear. It stages the nested rect copy and
+reserves both header/clear vectors before calling the actual rvalue Clear
+appender. No payload is exposed while Writing. Failed preparation may retain
+larger vector capacity but does not change semantic sizes or references;
+future queue credit accounting must cover that physical capacity explicitly.
+It is a native integration component, not an enabled replay source. No Draw,
+resource-marking, queue submission or GPU-consumer support is implied.
+
 ## END, FLUSH and completion
 
 Membership replacement alone need not publish. A nonempty END records an

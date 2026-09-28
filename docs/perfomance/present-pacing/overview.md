@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H411](present-pacing-query-range-clear-transaction.411.md) joins metadata
+admission to the real ChunkSlot Clear appender with staged payload/reservation
+and rollback (four focused tests pass). This is Clear-only native integration;
+DrawRun, physical credit, actual queue publication and Metal consumption remain
+open. It does not claim a runtime change or speedup.
+
 [H410](present-pacing-query-range-owner.410.md) implements a move-only bounded
 metadata owner with frozen scope refs, range/END offsets and cancellation-aware
 receipts. Native tests pass 3/3, including 15,625 lifecycle schedules. Queue

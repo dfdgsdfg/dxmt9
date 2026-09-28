@@ -1,4 +1,10 @@
 # Backend descriptor / pipeline / replay / hazard / capture / counter / render-pass specs.
+query_range_clear_source_spec = executable(
+  'dxmt9-query-range-clear-source-spec', 'query_range_clear_source_spec.cpp',
+  include_directories: dxmt9_inc,
+)
+test('dxmt9-query-range-clear-source-spec', query_range_clear_source_spec,
+     env: dxmt9_native_test_env)
 query_scope_range_owner_spec = executable(
   'dxmt9-query-scope-range-owner-spec', 'query_scope_range_owner_spec.cpp',
   include_directories: dxmt9_inc,

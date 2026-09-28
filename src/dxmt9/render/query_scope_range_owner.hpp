@@ -5,6 +5,7 @@
 #include <array>
 #include <memory>
 #include <span>
+#include <type_traits>
 #include <utility>
 
 namespace dxmt9::render {
@@ -131,6 +132,34 @@ class QueryScopeRangeOwner {
     else
       ranges_[cursor_.ranges - 1].end = plan.next.commands;
     cursor_ = plan.next;
+    return QueryRangeStatus::Accepted;
+  }
+
+  // Single-writer, draft-only transaction. prepare may allocate but must not
+  // change payload logical size. commit consumes already reserved storage.
+  // This seam cannot roll back external effects or throwing payload commits.
+  template<class Prepare, class Commit>
+  QueryRangeStatus appendWithPayload(query::WriterIdentity expected,
+      const query::OcclusionScope& input, std::uint32_t commands,
+      Prepare&& prepare, Commit&& commit) noexcept {
+    static_assert(std::is_nothrow_invocable_v<Commit>);
+    static_assert(std::is_void_v<std::invoke_result_t<Prepare>>);
+    static_assert(std::is_void_v<std::invoke_result_t<Commit>>);
+    const auto oldCursor = cursor_;
+    const auto oldScopeCount = scopeCount_;
+    const auto oldLast = cursor_.ranges ? ranges_[cursor_.ranges - 1] : Range{};
+    const auto status = append(expected, input, commands);
+    if (status != QueryRangeStatus::Accepted || !commands) return status;
+    try {
+      std::forward<Prepare>(prepare)();
+    } catch (...) {
+      for (auto i = oldScopeCount; i < scopeCount_; ++i) scopes_[i] = {};
+      scopeCount_ = oldScopeCount;
+      cursor_ = oldCursor;
+      if (cursor_.ranges) ranges_[cursor_.ranges - 1] = oldLast;
+      return QueryRangeStatus::AllocationFailed;
+    }
+    std::forward<Commit>(commit)();
     return QueryRangeStatus::Accepted;
   }
 
