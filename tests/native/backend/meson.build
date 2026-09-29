@@ -123,14 +123,21 @@ query_serialized_range_metal_spec = executable(
 )
 foreach ranges : ['0', '1']
   foreach offload : ['0', '1']
-    test('dxmt9-query-serialized-range-' + ranges + '-offload-' + offload + '-metal-spec',
-      query_serialized_range_metal_spec,
-      env: dxmt9_native_test_env_vars + [
-        'MTL_DEBUG_LAYER=1', 'DXMT9_METAL_OCCLUSION=1',
-        'DXMT9_QUERY_SCOPE_RANGES=' + ranges, 'DXMT9_QUERY_SCOPE_CB_JOIN=0',
-        'DXMT9_CPU_READY_TAPE=1', 'DXMT9_TILE_FFP=off',
-        'DXMT9_ASYNC_QUERY_FENCES=1', 'DXMT9_OFFLOAD_COMMIT_REPLAY=' + offload],
-      is_parallel: false, timeout: 30)
+    foreach transport : ['contiguous', 'segmented']
+      oracle_args = ranges == '1' ? ['--require-retained-writer'] : []
+      if transport == 'segmented'
+        oracle_args += ['--segmented']
+      endif
+      test('dxmt9-query-serialized-range-' + ranges + '-offload-' + offload +
+          (transport == 'segmented' ? '-segmented' : '') + '-metal-spec',
+        query_serialized_range_metal_spec, args: oracle_args,
+        env: dxmt9_native_test_env_vars + [
+          'MTL_DEBUG_LAYER=1', 'DXMT9_METAL_OCCLUSION=1',
+          'DXMT9_QUERY_SCOPE_RANGES=' + ranges, 'DXMT9_QUERY_SCOPE_CB_JOIN=0',
+          'DXMT9_CPU_READY_TAPE=1', 'DXMT9_TILE_FFP=off',
+          'DXMT9_ASYNC_QUERY_FENCES=1', 'DXMT9_OFFLOAD_COMMIT_REPLAY=' + offload],
+        is_parallel: false, timeout: 30)
+    endforeach
   endforeach
 endforeach
 

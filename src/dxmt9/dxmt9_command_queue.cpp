@@ -9404,7 +9404,8 @@ void CommandQueue::leaveWsiPresentUse() noexcept {
 bool CommandQueue::releaseCpuReadySessionBeforeOrderedControl(
     core::metalqueue::SessionReleaseReason reason,
     core::metalqueue::SessionReleaseAction action,
-    std::uint64_t fenceRawOrdinal) {
+    std::uint64_t fenceRawOrdinal,
+    core::metalqueue::SessionReleaseWriter writer) {
   if (!cpuReadySessionLaneEnabled_) {
     return true;
   }
@@ -9420,11 +9421,17 @@ bool CommandQueue::releaseCpuReadySessionBeforeOrderedControl(
   if (stop_) {
     return false;
   }
-  (void)queueLifecycle_.commitCurrentChunk(
-      lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
-        prepareSlotForPublish(*this, pool_, slot,
-                              perf::ChunkPublishReason::SemanticBoundary);
-      });
+  if (!core::metalqueue::retainWriterForSessionRelease(
+          writer, query::scopeRangesEnabled(), reason, action)) {
+    (void)queueLifecycle_.commitCurrentChunk(
+        lock, kMaxQueuedChunks, [this](core::ChunkSlot& slot) {
+          prepareSlotForPublish(*this, pool_, slot,
+                                perf::ChunkPublishReason::SemanticBoundary);
+        });
+  }
+  // Retained membership is a future range-consumer pass boundary, not a
+  // published source. Release only the immutable already-published prefix;
+  // keep the ordinary FIFO event, wake and acknowledgement in both modes.
   const std::uint64_t fenceSeqId = lastCommittedSeqId_;
 
   core::metalqueue::SessionReleasePostResult posted{};

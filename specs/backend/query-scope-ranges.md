@@ -148,6 +148,31 @@ not represented by the source-wide prefetch guard.
 
 ## END, FLUSH and completion
 
+### Serialized ordered-control release
+
+For a validated BEGIN or END of a resolved GPU occlusion query only, the
+range candidate may retain the unpublished compatibility writer across the
+replay ordered-control release. `orderedControlWriter` admits exact flags
+1 (END) or 2 (BEGIN); other query kinds, unknown flags and invalid locators
+keep the publication cut. `retainWriterForSessionRelease` additionally
+requires DirectObservation/ClosePass and the enabled range policy.
+
+The release still posts one FIFO event, wakes Encode and waits for its exact
+acknowledgement. Its fixed sequence fence covers only previously published
+sources. The acknowledgement is a pass-close receipt for that prefix, not
+completion or publication of the retained writer. The following query dispatch
+freezes membership at the physical command boundary; encode applies its pass
+cut when consuming that command range. END captures the initializer prefix
+and a retained writer marker; FLUSH publishes/binds/submits through the existing
+owner path. Capacity may still force earlier publication.
+
+Readback, UpdateTexture, non-occlusion queries, reset and terminal submission
+retain their existing obligations. A late failure after replay effects is
+fail-stop, never replayed through a second fallback. The bounded release test
+composes production release/ack predicates and END polling over the old-prefix,
+END, publication, submission, completion and initializer event permutations;
+it does not prove arbitrary concurrent reset or Metal callback behavior.
+
 Membership replacement alone need not publish. A nonempty END records an
 immutable logical command prefix and initializer prefix and retains an unbound,
 writer-qualified marker. An END must not seal merely to assign a sequence:
@@ -164,8 +189,8 @@ the logical prefix; the initial candidate does not promise sub-source retirement
 FLUSH must seal an unbound END's owner and post a sticky submission obligation
 even without later commands. It must not wait for GPU completion. A source
 waiting on its own result cannot hold an unsubmitted suffix indefinitely.
-Present, ordered control and any bounded-capacity escape also seal; initializer
-and inflight pressure obligations remain intact. Progress requires eventual
+Present, non-membership ordered controls and any bounded-capacity escape also
+seal; initializer and inflight pressure obligations remain intact. Progress requires eventual
 worker execution/completion, not merely an arithmetic boundary predicate.
 
 Each contribution remains associated with its actual originating CB and frozen

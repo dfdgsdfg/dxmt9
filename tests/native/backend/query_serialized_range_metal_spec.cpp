@@ -55,7 +55,7 @@ struct Fixture {
   }
 };
 
-void run(bool requireRetainedWriter) {
+void run(bool requireRetainedWriter, bool segmented) {
   Fixture f;
   auto& device = f.wire->dev();
   auto& queue = device.upperDevice()->queue();
@@ -76,8 +76,34 @@ void run(bool requireRetainedWriter) {
   std::memcpy(mapping.data, vertices.data(), sizeof(vertices));
   vb->unlock();
   check(device.setStreamSource(0, vb, 0, sizeof(Vertex)) == D3D_OK, "stream");
+  check(device.drawPrimitive(PrimitiveType::TriangleList, 2) == D3D_OK,
+        "real published prefix before retained writer");
   device.upperDevice()->flush();
   const auto before = queue.queryProgress();
+  check(before.published != 0, "nonempty old-prefix release fence");
+
+  const auto commit = [&](pe::CommandChunkBuilder& input) {
+    if (segmented) {
+      const auto sealed = input.sealSegmented();
+      check(sealed.valid(), "segmented wire seals");
+      f.wire->commandChunkTransport = D9C_COMMAND_CHUNK_TRANSPORT_SEGMENTED_V1;
+      check(dxmt9c_device_commit_chunk_segmented(f.wire.get(), &sealed.transport) ==
+                D3D_OK, "segmented wire import");
+    } else {
+      const auto sealed = input.seal();
+      check(sealed.valid(), "canonical wire seals");
+      const D9CCommandChunk chunk{
+          .version = D9C_COMMAND_CHUNK_VERSION,
+          .recordCount = sealed.recordCount,
+          .recordBytes = static_cast<u32>(sealed.blob.size()),
+          .records = toWireHandle(sealed.blob.data()),
+          .handleCount = sealed.handleCount,
+      };
+      check(dxmt9c_device_commit_chunk(f.wire.get(), &chunk) == D3D_OK, "wire import");
+    }
+    check(dxmt9::d3d9::drainDeferredReplay(f.wire.get(), "serialized range oracle"),
+          "actual replay completes");
+  };
 
   pe::CommandChunkBuilder builder;
   const auto draw = [&] {
@@ -92,22 +118,19 @@ void run(bool requireRetainedWriter) {
   check(pe::appendQueryIssue(builder, 2u, ref), "serialized BEGIN");
   draw();
   check(pe::appendQueryIssue(builder, 1u, ref), "serialized END");
-  const auto sealed = builder.seal();
-  check(sealed.valid(), "canonical wire seals");
-  const D9CCommandChunk chunk{
-      .version = D9C_COMMAND_CHUNK_VERSION,
-      .recordCount = sealed.recordCount,
-      .recordBytes = static_cast<u32>(sealed.blob.size()),
-      .records = toWireHandle(sealed.blob.data()),
-      .handleCount = sealed.handleCount,
-  };
-  check(dxmt9c_device_commit_chunk(f.wire.get(), &chunk) == D3D_OK, "wire import");
-  check(dxmt9::d3d9::drainDeferredReplay(f.wire.get(), "serialized range oracle"),
-        "actual replay completes");
+  draw(); // END must also exclude an unqueried suffix in the same source.
+  commit(builder);
   check(f.query->replayDrainTarget->lastQueuedSeq != 0 &&
         f.query->replayDrainTarget->lastQueuedSeq ==
             f.query->replayDrainTarget->lastReplayedSeq, "query raw identity settled");
   const auto beforePoll = queue.queryProgress();
+
+  if (requireRetainedWriter) {
+    u32 pending = 0xdeadbeef;
+    check(dxmt9c_query_get_data(f.query, &pending, sizeof(pending), 0) == S_FALSE &&
+              pending == 0xdeadbeef,
+          "unpublished END deterministically stays Pending with untouched output");
+  }
 
   u32 samples = 0xdeadbeef;
   HResult hr = S_FALSE;
@@ -139,21 +162,67 @@ void run(bool requireRetainedWriter) {
             "exact green pixels");
     }
   readback->unlockRect();
-  // Explicit activation gate, separate from correctness. Current serialized
-  // ordered release is known to fail this; no expected-failure blanket masks
-  // query, pixel, timeout, or validation failures in the normal test matrix.
+  // Activation is independent of pixels and samples: the candidate must
+  // actually retain the writer, not silently pass via the reference route.
   if (requireRetainedWriter)
     check(beforePoll.published == before.published &&
           after.published - before.published == 1,
           "serialized query ranges must retain writer until FLUSH");
+
+  // Non-occlusion controls must still cut, even with ranges globally enabled.
+  for (u32 kind : {8u, 10u}) { // D3DQUERYTYPE_EVENT / TIMESTAMP
+    auto releaseQuery = [](D9CQuery* query) { if (query) dxmt9c_query_release(query); };
+    std::unique_ptr<D9CQuery, decltype(releaseQuery)> other(
+        dxmt9c_device_create_query(f.wire.get(), kind), releaseQuery);
+    check(bool(other), "non-occlusion query");
+    pe::CommandChunkBuilder control;
+    check(pe::appendSparseRecord(control, D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+          {.primitiveType = 4u, .primitiveCount = 2}, {}), "draw before non-occlusion END");
+    pe::QueryRef otherRef{};
+    otherRef.identity = other->wireIdentity;
+    otherRef.object = other.get();
+    check(pe::appendQueryIssue(control, 1u, otherRef), "non-occlusion END");
+    const auto prefix = queue.queryProgress().published;
+    commit(control);
+    check(queue.queryProgress().published == prefix + 1,
+          "non-occlusion ordered release still publishes writer");
+  }
+
+  // A new serialized issue must not reuse the previous completed receipt.
+  pe::CommandChunkBuilder resetInput;
+  check(pe::appendQueryIssue(resetInput, 2u, ref) &&
+        pe::appendSparseRecord(resetInput, D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+          {.primitiveType = 4u, .primitiveCount = 2}, {}) &&
+        pe::appendQueryIssue(resetInput, 1u, ref), "serialized reissue before reset");
+  commit(resetInput);
+  if (requireRetainedWriter) {
+    u32 pending = 0xdeadbeef;
+    check(dxmt9c_query_get_data(f.query, &pending, sizeof(pending), 0) == S_FALSE &&
+              pending == 0xdeadbeef, "reissue supersedes completed receipt");
+  }
+  PresentParameters reset{};
+  reset.backBufferWidth = reset.backBufferHeight = 32;
+  reset.backBufferFormat = Format::A8R8G8B8;
+  reset.windowed = true;
+  check(device.reset(reset) == D3D_OK, "reset after serialized END");
+  u32 invalidated = 0xdeadbeef;
+  check(dxmt9c_query_get_data(f.query, &invalidated, sizeof(invalidated),
+                             QUERY_GETDATA_FLUSH) == D3DERR_DEVICELOST &&
+            invalidated == 0xdeadbeef, "old-epoch bridge receipt fails without writing");
 }
 } // namespace
 
 int main(int argc, char** argv) {
   try {
-    check(argc == 1 || (argc == 2 &&
-          std::strcmp(argv[1], "--require-retained-writer") == 0), "argument");
-    run(argc == 2);
+    bool requireRetainedWriter = false, segmented = false;
+    for (int i = 1; i < argc; ++i) {
+      if (std::strcmp(argv[i], "--require-retained-writer") == 0)
+        requireRetainedWriter = true;
+      else if (std::strcmp(argv[i], "--segmented") == 0)
+        segmented = true;
+      else check(false, "argument");
+    }
+    run(requireRetainedWriter, segmented);
     return 0;
   } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';

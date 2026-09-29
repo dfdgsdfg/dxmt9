@@ -53,6 +53,18 @@ std::optional<OrderedControlDisposition> makeOrderedControlDisposition(
     std::uint64_t rawOrdinal,
     std::size_t recordIndex) noexcept;
 
+// The caller derives gpuOcclusion from the retained, resolved Query object,
+// never from an untrusted opcode alone. Other query types keep the full cut.
+inline core::metalqueue::SessionReleaseWriter orderedControlWriter(
+    const OrderedControlDisposition& control, bool rangesEnabled,
+    bool gpuOcclusion) noexcept {
+  using core::metalqueue::SessionReleaseWriter;
+  return rangesEnabled && gpuOcclusion && control.valid() &&
+      control.kind == OrderedControlKind::Query &&
+      (control.controlFlags == 1u || control.controlFlags == 2u)
+      ? SessionReleaseWriter::RetainQueryRange : SessionReleaseWriter::Publish;
+}
+
 static_assert(std::is_trivially_copyable_v<OrderedControlDisposition>);
 static_assert(std::is_standard_layout_v<OrderedControlDisposition>);
 

@@ -1,5 +1,8 @@
 #include "../../../src/dxmt9/dxmt9_session_release.hpp"
+#include "dxmt9/query_end_marker.hpp"
 
+#include <algorithm>
+#include <array>
 #include <cstddef>
 #include <exception>
 #include <iostream>
@@ -234,10 +237,119 @@ void testTerminalRequestsClampUnknownAndRegressedFences() {
         "clamped terminal generation acknowledges at the inherited fence");
 }
 
+void testRetainedWriterReleaseRefinement() {
+  using namespace dxmt9::query;
+  for (unsigned reason = 0; reason != 16; ++reason)
+    for (unsigned action = 0; action != 4; ++action)
+      for (bool enabled : {false, true})
+        for (auto writer : {SessionReleaseWriter::Publish,
+                            SessionReleaseWriter::RetainQueryRange})
+          check(retainWriterForSessionRelease(writer, enabled,
+                    static_cast<SessionReleaseReason>(reason),
+                    static_cast<SessionReleaseAction>(action)) ==
+                    (enabled && writer == SessionReleaseWriter::RetainQueryRange &&
+                     reason == unsigned(SessionReleaseReason::DirectObservation) &&
+                     action == unsigned(SessionReleaseAction::ClosePass)),
+                "only the membership release can retain a writer");
+
+  // Exhaust all permutations of the seven monotone events. Illegal schedules
+  // stop at their first disabled transition; every legal prefix checks the
+  // same production receipt and release predicates. Old prefix is empty or
+  // one real source; retained source gets a distinct later sequence.
+  enum Event { EncodeOld, Ack, End, Flush, Submit, Complete, Initialize };
+  unsigned completedSchedules = 0;
+  for (unsigned oldPrefix : {0u, 1u}) {
+    std::array<Event, 7> order{EncodeOld, Ack, End, Flush, Submit, Complete, Initialize};
+    do {
+      SessionReleaseState releases;
+      const auto posted = releases.tryPostOrdered(
+          SessionReleaseReason::DirectObservation, SessionReleaseAction::ClosePass,
+          7, oldPrefix);
+      check(posted.accepted(), "retained writer release posts");
+      const WriterIdentity owner{3, 0, 1, 1};
+      auto marker = std::make_shared<EndMarker>(owner, EndMarkerPolling::RetainedCancellable);
+      EndReceipt receipt{owner.queue, 0, 1};
+      receipt.marker = marker;
+      Progress progress{owner.queue, oldPrefix, 0, false, 1, 0};
+      bool encoded = oldPrefix == 0, acknowledged = false, ended = false;
+      bool published = false, submitted = false, completed = false;
+      bool legal = true;
+      for (auto event : order) {
+        switch (event) {
+        case EncodeOld: encoded = true; break;
+        case Ack:
+          legal = sessionReleaseActionReady(posted.snapshot, 0, encoded ? oldPrefix : 0);
+          check(legal == encoded, "release cannot run before the old prefix is encoded");
+          if (legal) {
+            check(releases.acknowledge(posted.snapshot,
+                      SessionReleaseCompletion::PassClosed, 7, oldPrefix) ==
+                      SessionReleaseAckResult::Acknowledged, "old prefix acknowledges");
+            check(releases.acknowledge(posted.snapshot,
+                      SessionReleaseCompletion::PassClosed, 7, oldPrefix) !=
+                      SessionReleaseAckResult::Acknowledged, "no duplicate acknowledgement");
+            acknowledged = true;
+          }
+          break;
+        case End: legal = acknowledged; ended = legal; break;
+        case Flush:
+          legal = ended;
+          if (legal) {
+            auto stale = owner;
+            ++stale.storageGeneration;
+            check(!marker->bind(stale, oldPrefix + 1), "stale writer refuses bind");
+            check(marker->bind(owner, oldPrefix + 1), "actual source binds once");
+            check(!marker->bind(owner, oldPrefix + 2), "cannot rebind marker");
+            progress.published = oldPrefix + 1;
+            check(submissionWorkTarget(marker->sequence(), oldPrefix, 0) == oldPrefix + 1,
+                  "FLUSH requests the retained source, not just the old prefix");
+            published = true;
+          }
+          break;
+        case Submit:
+          legal = published;
+          submitted = legal;
+          if (legal)
+            check(submissionWorkTarget(marker->sequence(), oldPrefix + 1, 0) == 0,
+                  "actual submission discharges the sticky obligation");
+          break;
+        case Complete:
+          legal = submitted;
+          if (legal) { progress.completed = oldPrefix + 1; completed = true; }
+          break;
+        case Initialize: progress.initializerCompleted = 1; break;
+        }
+        if (!legal) break;
+        if (ended) {
+          const bool ready = completed && progress.initializerCompleted == 1;
+          check(classifyEnd(receipt, progress) == (ready ? Poll::Complete : Poll::Pending),
+                "ack is never retained-writer completion; both fences must complete");
+          auto terminal = progress;
+          terminal.failed = true;
+          check(classifyEnd(receipt, terminal) == Poll::Failed, "terminal dominates readiness");
+          auto wrongQueue = progress;
+          ++wrongQueue.queue;
+          check(classifyEnd(receipt, wrongQueue) == Poll::Invalid, "queue identity required");
+        }
+      }
+      if (legal) {
+        ++completedSchedules;
+        check(classifyEnd(receipt, progress) == Poll::Complete,
+              "no-successor FLUSH eventually completes under fair execution");
+        marker->cancel();
+        check(classifyEnd(receipt, progress) == Poll::Failed, "cancellation is sticky");
+      }
+    } while (std::next_permutation(order.begin(), order.end()));
+  }
+  check(completedSchedules != 0, "bounded progress schedules are non-vacuous");
+  std::cout << "retained writer release: 10080 event permutations, "
+            << completedSchedules << " complete schedules\n";
+}
+
 }  // namespace
 
 int main() {
   try {
+    testRetainedWriterReleaseRefinement();
     testOrdinaryEventsAreStrictFifo();
     testOrdinaryFifoFullDoesNotOverwrite();
     testOrdinaryFenceAndActionMustBeCovered();

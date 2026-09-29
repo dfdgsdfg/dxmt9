@@ -490,6 +490,21 @@ void blockersSelectOneWholeRawFallbackLane() {
         fixture.view().record(1), 5, 1);
     check(control && control->valid(),
           "the exact control descriptor rebuilds from the validated raw");
+    for (bool ranges : {false, true})
+      for (bool gpuOcclusion : {false, true})
+        for (unsigned flags = 0; flags != 256; ++flags) {
+          auto candidate = *control;
+          candidate.controlFlags = flags;
+          const bool retain = ranges && gpuOcclusion &&
+              item.kind == OrderedControlKind::Query && (flags == 1 || flags == 2);
+          check((dxmt9::d3d9::orderedControlWriter(candidate, ranges, gpuOcclusion) ==
+                 dxmt9::core::metalqueue::SessionReleaseWriter::RetainQueryRange) == retain,
+                "only exact resolved GPU occlusion BEGIN/END may retain writer");
+          candidate.rawOrdinal = 0;
+          check(dxmt9::d3d9::orderedControlWriter(candidate, ranges, gpuOcclusion) ==
+                    dxmt9::core::metalqueue::SessionReleaseWriter::Publish,
+                "invalid control cannot authorize retained writer");
+        }
     check(control->kind == item.kind &&
               control->requiredReleaseAction == item.action &&
               control->rawOrdinal == 5 && control->recordIndex == 1 &&

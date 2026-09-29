@@ -11,12 +11,19 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H415](present-pacing-query-range-retained-release.415.md) connects serialized
+GPU occlusion membership to retained writers while preserving published-prefix
+ClosePass acknowledgement. The real contiguous/segmented GPU fixture now
+publishes zero sources before polling and one at FLUSH, with exact query/pixel
+results. Native bounded and regression checks pass; new wild/FPS qualification
+and full concurrency composition remain open. Default stays OFF.
+
 [H414](present-pacing-query-range-replay-boundary.414.md) reproduces the range
 slowdown in reverse order and identifies a production integration gap: ordered
 Query replay publishes the writer and waits for ClosePass acknowledgement
 before membership/END reach the range owner. Deferred END and marker counts
-are zero, while Arena/session packing is lost. Add a serialized-replay GPU
-oracle and refine query-specific release authority before promotion.
+are zero, while Arena/session packing is lost. H415 addresses that release
+boundary; these historical FPS values do not measure the new implementation.
 
 [H413](present-pacing-query-range-routing.413.md) removes intentional Arena
 fallback warnings and bypasses capacity planning for validated non-capture

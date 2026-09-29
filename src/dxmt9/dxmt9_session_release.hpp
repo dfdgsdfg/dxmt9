@@ -29,6 +29,22 @@ enum class SessionReleaseAction : std::uint8_t {
   SubmitAndWait,
 };
 
+// Occlusion membership can be recorded inside an unpublished range owner.
+// This changes only the writer cut, never the release/acknowledgement of the
+// already-published sequence prefix.
+enum class SessionReleaseWriter : std::uint8_t {
+  Publish,
+  RetainQueryRange,
+};
+
+constexpr bool retainWriterForSessionRelease(
+    SessionReleaseWriter writer, bool rangesEnabled,
+    SessionReleaseReason reason, SessionReleaseAction action) noexcept {
+  return rangesEnabled && writer == SessionReleaseWriter::RetainQueryRange &&
+      reason == SessionReleaseReason::DirectObservation &&
+      action == SessionReleaseAction::ClosePass;
+}
+
 // Ordered release identity. Acknowledgement means the requested pass/session
 // action has happened; SubmitAndWait completion remains the posting thread's
 // separate waitForSequence obligation.

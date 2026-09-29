@@ -1548,6 +1548,17 @@ int32_t replayResolvedChunk(
                                   record.wire.header.type);
       auto upper = device->dev().upperDevice();
       auto* queue = upper ? &upper->queue() : nullptr;
+      bool gpuOcclusion = false;
+      if (dxmt9::query::scopeRangesEnabled() && upper &&
+          orderedControl->kind == dxmt9::d3d9::OrderedControlKind::Query) {
+        auto* query = static_cast<D9CQuery*>(record.objectForAbsoluteIndex(
+            orderedControl->primaryHandleIndex));
+        gpuOcclusion = query && query->device == device && query->obj &&
+            query->obj->type() == dxmt9::core::QueryType::Occlusion &&
+            upper->usesMetalOcclusion();
+      }
+      const auto writer = dxmt9::d3d9::orderedControlWriter(
+          *orderedControl, dxmt9::query::scopeRangesEnabled(), gpuOcclusion);
       const auto reason = orderedControl->kind ==
                                   dxmt9::d3d9::OrderedControlKind::UpdateTexture
                               ? dxmt9::core::metalqueue::
@@ -1557,7 +1568,7 @@ int32_t replayResolvedChunk(
       if (!orderedControl->valid() || !queue ||
           !queue->releaseCpuReadySessionBeforeOrderedControl(
               reason, orderedControl->requiredReleaseAction,
-              orderedControl->rawOrdinal)) {
+              orderedControl->rawOrdinal, writer)) {
         return commitChunkFail("chunk-ordered-control-release",
                                static_cast<std::uint32_t>(index),
                                record.wire.header.type);

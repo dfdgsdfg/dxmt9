@@ -31,23 +31,31 @@ draw/state routing shortcut excludes capture and controls before effects.
 Existing TLA suite success is prerequisite
 evidence only; it is not a new end-to-end proof.
 
-H414 identifies a blocking production range-integration gap: ordered Query
-Issue release publishes the writer before `setOcclusionScope`/`publishQueryEnd`,
-and the STALKER candidate reports no deferred END or marker bindings. Reverse
-observer-OFF runs reproduce the slowdown. The real wire/import/replay fixture
-`tests/native/backend/query_serialized_range_metal_spec.cpp` now covers
-`Draw -> BEGIN -> Draw -> END -> FLUSH`: native range OFF/ON and replay
-offload OFF/ON pass exact 1,024 samples, unchanged Pending output, settled raw
-identity and exact green readback under Metal API validation. Both policies
-publish two sources before polling. Its explicit `--require-retained-writer`
-activation gate fails on the ON/offload-ON path, after the correctness checks
-pass. This is a deterministic reproduction of the missing optimization, not a
-new rendering failure or FPS result. The ordinary test matrix does not mask
-failures with an expected-failure annotation. Segmented transport, serialized
-reset/fault coverage, and a refined query-specific ClosePass/publication
-contract remain required; direct core-call range oracles do not cover those
-obligations. Readback/update and terminal/completion release obligations must
-not be weakened wholesale. No runtime scheduling or default policy changed.
+H414's production gap is addressed by H415's narrow serialized occlusion
+release: `orderedControlWriter` retains the writer only for resolved GPU
+occlusion BEGIN/END, while `releaseCpuReadySessionBeforeOrderedControl` still
+posts/wakes/acknowledges ClosePass for the already-published prefix. Other
+queries and readback/update keep their publication/submission obligations.
+`session_release_event_spec` checks 10,080 event permutations (49 complete
+legal schedules), production receipt/release predicates, stale binding and
+terminal/cancellation guards; this is bounded composition, not a full runtime
+interleaving proof. The existing 65 safety/5 progress/157 counterexample TLA
+configurations pass unchanged.
+
+`query_serialized_range_metal_spec` covers real contiguous/segmented import,
+replay offload OFF/ON, populated prior publication, unqueried prefix/suffix,
+exact 1,024 samples and pixels, deterministic Pending before FLUSH, Event and
+Timestamp publication cuts, serialized reissue and sequential reset. Its
+activation gate is now mandatory in every range-ON matrix entry: zero new
+sources before polling, one after FLUSH (reference: two before polling).
+Native repeated matrix passes 24/24; query/session regression passes 28/28,
+and x86_64/Rosetta regression plus install-name audit passes 29/29 after the
+default build's fixup. The gap is no longer lack of a
+serialized activation fixture. Full concurrent reset/callback/fault refinement,
+metadata accounting, cross-workload wild/exact and observer-OFF performance
+qualification remain open. Range policy stays default OFF; H414's old FPS
+does not measure this implementation. See
+[H415](../../docs/perfomance/present-pacing/present-pacing-query-range-retained-release.415.md).
 
 R-BACK-2.15.2 fixed comparison now avoids a temporary projection with the same
 hash guard and fieldwise equality. Native float-edge/collision fixtures and

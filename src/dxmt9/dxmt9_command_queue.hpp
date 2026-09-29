@@ -906,11 +906,15 @@ class CommandQueue {
   // fence, wakes the encode coordinator, and waits until the requested pass
   // or submission action is acknowledged. SubmitAndWait additionally waits
   // for GPU completion of the fixed sequence fence. The default-off lane is a
-  // no-op so its existing compatibility ordering remains unchanged.
+  // no-op so its existing compatibility ordering remains unchanged. A resolved
+  // range-query membership cut may retain the writer while still releasing
+  // and acknowledging the already-published prefix; it grants no completion.
   bool releaseCpuReadySessionBeforeOrderedControl(
       core::metalqueue::SessionReleaseReason reason,
       core::metalqueue::SessionReleaseAction action,
-      std::uint64_t fenceRawOrdinal);
+      std::uint64_t fenceRawOrdinal,
+      core::metalqueue::SessionReleaseWriter writer =
+          core::metalqueue::SessionReleaseWriter::Publish);
 
   // Phase 14: chunk importer toggles this around a chunk's record-iter
   // block. While true, submitDrawRun skips per-draw
