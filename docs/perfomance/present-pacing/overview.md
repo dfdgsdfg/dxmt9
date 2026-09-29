@@ -11,6 +11,19 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H414](present-pacing-query-range-replay-boundary.414.md) reproduces the range
+slowdown in reverse order and identifies a production integration gap: ordered
+Query replay publishes the writer and waits for ClosePass acknowledgement
+before membership/END reach the range owner. Deferred END and marker counts
+are zero, while Arena/session packing is lost. Add a serialized-replay GPU
+oracle and refine query-specific release authority before promotion.
+
+[H413](present-pacing-query-range-routing.413.md) removes intentional Arena
+fallback warnings and bypasses capacity planning for validated non-capture
+draw/state raws. A clean single STALKER pair is 24.12 FPS OFF / 21.30 ON with
+zero admission warnings. Both exit normally; no speedup or default promotion
+is established, and remaining compatibility/range costs are not yet attributed.
+
 [H412](present-pacing-query-range-integration.412.md) connects atomic DrawRun
 append, real queue publication/FLUSH and command-range Metal membership in an
 OFF-by-default candidate. Native reference/candidate exact GPU checks pass,

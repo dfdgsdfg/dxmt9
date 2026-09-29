@@ -23,9 +23,21 @@ no-successor FLUSH, immutable receipts, reset/reissue/release and forced tile.
 The final-scope-empty PSO guard regression was found and fixed by that oracle.
 H412 records same-input native CPU evidence, not STALKER FPS. Composed queue /
 range / callback temporal refinement, full all-family fault coverage, strict
-aggregate accounting for callback-retained metadata, x86_64/Wine wild evidence
-and default promotion remain open. Existing TLA suite success is prerequisite
+aggregate accounting for callback-retained metadata and default promotion
+remain open. H413 adds x86_64 query/planner tests and Wine STALKER OFF/ON normal
+exits; the warning-free single pair is slower ON, and current-build full-scene
+visual/exact and repeated performance qualification remain open. The range
+draw/state routing shortcut excludes capture and controls before effects.
+Existing TLA suite success is prerequisite
 evidence only; it is not a new end-to-end proof.
+
+H414 identifies a blocking production range-integration gap: ordered Query
+Issue release publishes the writer before `setOcclusionScope`/`publishQueryEnd`,
+and the STALKER candidate reports no deferred END or marker bindings. Reverse
+observer-OFF runs reproduce the slowdown. A real wire/import/replay GPU fixture
+and refined query-specific ClosePass/publication contract remain required;
+direct core-call range oracles do not cover this path. Readback/update and
+terminal/completion release obligations must not be weakened wholesale.
 
 R-BACK-2.15.2 fixed comparison now avoids a temporary projection with the same
 hash guard and fieldwise equality. Native float-edge/collision fixtures and

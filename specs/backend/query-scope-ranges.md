@@ -23,6 +23,17 @@ stored. Mandatory clear/blit/pass boundaries remain in the command stream.
 
 ## Ownership and admission
 
+When ranges are enabled, an already validated non-capture raw containing only
+ordinary Draw/DrawIndexed/APPLY_STATE and at least one draw may select the
+existing compatibility transaction before Arena capacity planning. Replay must
+cancel its speculative next-source intent before effects and retain the same
+resource-marking and serial replay owner. State-only, UP, controls, capture
+(including incomplete token/event pairs) and unlisted families keep the full
+planner. `queryRangeCompatibilityShortcut` and the CPU-ready plan opcode truth
+table bind this pre-effect routing restriction; no new publication, completion
+or lifetime transition is introduced. `OcclusionScopeUnsupported` is an
+expected representation fallback, not a warning-level admission failure.
+
 Replay/queue construction owns bounded flat range storage and a frozen scope
 table retaining the existing immutable `OcclusionScopeRef` / `OcclusionResult`
 generations. Encode reads these owned tables, never mutable Query/COM state.

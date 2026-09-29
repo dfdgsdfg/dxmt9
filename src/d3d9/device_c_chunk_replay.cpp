@@ -12,6 +12,8 @@
 #include "device_c_replay_projection.hpp"
 #include "device_c_replay_offload.hpp"
 #include "device_c_query_poll_policy.hpp"
+#include "device_c_query_range_route.hpp"
+#include "../dxmt9/dxmt9_query_policy.hpp"
 #include "device_c_cpu_ready_transfer.hpp"
 #include "util/unixcall_marshal.hpp"
 
@@ -2510,6 +2512,20 @@ int32_t replayPlannedChunk(D9CDevice* device,
     }
     return commitChunkFail("chunk-planned-import");
   }
+  if (queue && dxmt9::d3d9::queryRangeCompatibilityShortcut(
+          imported, dxmt9::query::scopeRangesEnabled(),
+          raw.renderTapeCaptureToken != 0u || raw.renderTapeEventOrdinal != 0u)) {
+    // Ranges own compatibility storage for this entire process. No Arena
+    // capacity plan, admission lock or failed reservation is needed. Withdraw
+    // the speculative successor before applying the original serial effects.
+    queue->cancelCpuReadyNextSourceIntent(raw.replaySeq);
+    if (reportOffloadReplayStage) {
+      dxmt9::perf::recordOffloadReplayStage(
+          dxmt9::perf::OffloadReplayStage::Encode);
+    }
+    markLegacyResources(device, raw);
+    return replayCompatibilityChunk(device, raw, pacedByPresentOrdinal);
+  }
   const auto limits = queue
       ? queue->cpuReadyArenaPlanLimits()
       : dxmt9::CommandQueue::CpuReadyArenaPlanLimits{};
@@ -2678,8 +2694,13 @@ int32_t replayPlannedChunk(D9CDevice* device,
   }
   if (begin.status != dxmt9::CommandQueue::CpuReadyArenaBeginStatus::Ready ||
       !begin.has_value()) {
-    logAdmissionFailure(static_cast<std::uint32_t>(begin.status),
-                        begin.stopReason);
+    // An unsupported representation is an intentional pre-effect route, not
+    // queue corruption. Keep genuine admission failures visible.
+    if (begin.status != dxmt9::CommandQueue::CpuReadyArenaBeginStatus::
+                            OcclusionScopeUnsupported) {
+      logAdmissionFailure(static_cast<std::uint32_t>(begin.status),
+                          begin.stopReason);
+    }
     if (begin.status == dxmt9::CommandQueue::CpuReadyArenaBeginStatus::
                             CompatibilityTailOwned) {
       // The prior early publication already reserved the only admissible

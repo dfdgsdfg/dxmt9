@@ -1,4 +1,5 @@
 #include "device_c_cpu_ready_plan.hpp"
+#include "device_c_query_range_route.hpp"
 #include "device_c_ordered_control.hpp"
 #include "dxmt9/dxmt9_device.hpp"
 
@@ -1270,6 +1271,36 @@ void recordCapacityDeltaMatchesSourcePlanAndFailsAtomically() {
 
 int main() {
   try {
+    {
+      const std::array records{drawRecord(D9C_COMMAND_RECORD_APPLY_STATE),
+                               drawRecord()};
+      const auto fixture = makeValidatedFixture(records);
+      const auto imported = fixture.view();
+      for (bool ranges : {false, true})
+        for (bool capture : {false, true})
+          check(dxmt9::d3d9::queryRangeCompatibilityShortcut(
+                    imported, ranges, capture) == (ranges && !capture),
+                "range shortcut requires policy and excludes capture");
+      auto headers = std::vector(imported.records.begin(), imported.records.end());
+      auto view = imported;
+      view.records = headers;
+      for (std::uint32_t opcode = 0; opcode != 256; ++opcode) {
+        headers.back().type = opcode;
+        const bool draw = opcode == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
+                          opcode == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE;
+        check(dxmt9::d3d9::queryRangeCompatibilityShortcut(view, true, false) == draw,
+              "controls, unknown families and state-only retain full planning");
+      }
+      headers.front().type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE;
+      for (std::uint32_t opcode = 0; opcode != 256; ++opcode) {
+        headers.back().type = opcode;
+        const bool allowed = opcode == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
+            opcode == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE ||
+            opcode == D9C_COMMAND_RECORD_APPLY_STATE;
+        check(dxmt9::d3d9::queryRangeCompatibilityShortcut(view, true, false) == allowed,
+              "a draw prefix cannot hide a later control or unsupported record");
+      }
+    }
     directChunkSlotReplayGateTruthTable();
     eligibleWholeRawPlanHasTypedCapacity();
     stateOnlyRawHasNoLogicalSourceOrAdmission();
