@@ -112,6 +112,28 @@ query_timeline_observer_spec = executable(
 test('dxmt9-query-timeline-observer-spec', query_timeline_observer_spec,
      env: dxmt9_native_test_env)
 
+query_serialized_range_metal_spec = executable(
+  'dxmt9-query-serialized-range-metal-spec', 'query_serialized_range_metal_spec.cpp',
+  '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
+  '../../../src/d3d9/d3d9_pe_chunk_nondraw.cpp',
+  '../../../src/d3d9/d3d9_pe_chunk_draw.cpp',
+  include_directories: [dxmt9_inc, include_directories('../../../src/d3d9')],
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+foreach ranges : ['0', '1']
+  foreach offload : ['0', '1']
+    test('dxmt9-query-serialized-range-' + ranges + '-offload-' + offload + '-metal-spec',
+      query_serialized_range_metal_spec,
+      env: dxmt9_native_test_env_vars + [
+        'MTL_DEBUG_LAYER=1', 'DXMT9_METAL_OCCLUSION=1',
+        'DXMT9_QUERY_SCOPE_RANGES=' + ranges, 'DXMT9_QUERY_SCOPE_CB_JOIN=0',
+        'DXMT9_CPU_READY_TAPE=1', 'DXMT9_TILE_FFP=off',
+        'DXMT9_ASYNC_QUERY_FENCES=1', 'DXMT9_OFFLOAD_COMMIT_REPLAY=' + offload],
+      is_parallel: false, timeout: 30)
+  endforeach
+endforeach
+
 query_occlusion_metal_spec = executable(
   'dxmt9-query-occlusion-metal-spec', 'query_occlusion_metal_spec.cpp',
   include_directories: dxmt9_inc,

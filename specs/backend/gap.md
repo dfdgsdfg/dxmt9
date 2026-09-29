@@ -34,10 +34,20 @@ evidence only; it is not a new end-to-end proof.
 H414 identifies a blocking production range-integration gap: ordered Query
 Issue release publishes the writer before `setOcclusionScope`/`publishQueryEnd`,
 and the STALKER candidate reports no deferred END or marker bindings. Reverse
-observer-OFF runs reproduce the slowdown. A real wire/import/replay GPU fixture
-and refined query-specific ClosePass/publication contract remain required;
-direct core-call range oracles do not cover this path. Readback/update and
-terminal/completion release obligations must not be weakened wholesale.
+observer-OFF runs reproduce the slowdown. The real wire/import/replay fixture
+`tests/native/backend/query_serialized_range_metal_spec.cpp` now covers
+`Draw -> BEGIN -> Draw -> END -> FLUSH`: native range OFF/ON and replay
+offload OFF/ON pass exact 1,024 samples, unchanged Pending output, settled raw
+identity and exact green readback under Metal API validation. Both policies
+publish two sources before polling. Its explicit `--require-retained-writer`
+activation gate fails on the ON/offload-ON path, after the correctness checks
+pass. This is a deterministic reproduction of the missing optimization, not a
+new rendering failure or FPS result. The ordinary test matrix does not mask
+failures with an expected-failure annotation. Segmented transport, serialized
+reset/fault coverage, and a refined query-specific ClosePass/publication
+contract remain required; direct core-call range oracles do not cover those
+obligations. Readback/update and terminal/completion release obligations must
+not be weakened wholesale. No runtime scheduling or default policy changed.
 
 R-BACK-2.15.2 fixed comparison now avoids a temporary projection with the same
 hash guard and fieldwise equality. Native float-edge/collision fixtures and
