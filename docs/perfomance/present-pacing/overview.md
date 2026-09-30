@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H423](present-pacing-close-reuse-wild.423.md) completes a Day visual smoke and
+observer-OFF reversed-order pairs on H422. Ranges ON remains 9.66% / 8.49%
+slower; default OFF is retained. This is a whole-policy comparison, not isolated
+reuse cost. Next count wild reuse/fallback activation and isolate the global
+Arena/session exclusion from range-local costs on identical input.
+
 [H422](present-pacing-close-reuse-integration.422.md) connects actual producer
 ack reuse under queue + clean-dirty locks in the default-OFF range lane. Clean
 requests return while Encode is paused; dirty requests still wake/wait. Explicit

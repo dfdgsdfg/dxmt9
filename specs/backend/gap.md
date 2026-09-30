@@ -111,6 +111,13 @@ cross-workload wild correctness and observer-OFF performance promotion remain
 open; no default change or recovered FPS is claimed. See
 [H422](../../docs/perfomance/present-pacing/present-pacing-close-reuse-integration.422.md).
 
+H423 adds a STALKER Day sampled visual smoke and observer-OFF reversed-order
+pairs on H422. All runs exit successfully, but ranges ON remains 9.66% / 8.49%
+slower. Keep default OFF; whole-policy FPS does not isolate receipt reuse.
+Wild reuse/fallback activation and identical-input Arena/session route-cost
+isolation remain open, alongside the broader correctness obligations above.
+See [H423](../../docs/perfomance/present-pacing/present-pacing-close-reuse-wild.423.md).
+
 R-BACK-2.15.2 fixed comparison now avoids a temporary projection with the same
 hash guard and fieldwise equality. Native float-edge/collision fixtures and
 18+18 identical-input CPU semantic iterations pass. This pure substitution
