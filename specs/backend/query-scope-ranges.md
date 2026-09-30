@@ -193,14 +193,20 @@ The candidate `ClosedPrefixWitness` in `src/dxmt9/dxmt9_closed_prefix.hpp`
 checks those supplied dimensions and admits only an adjacent, exact current
 FIFO head for retained DirectObservation/ClosePass. It cannot discharge a
 submission/completion obligation. This is conditional value logic, not a trusted
-production capability: the current transport authenticates the acknowledged
-ordinal, not the supplied previous snapshot, outcome or coordinator epoch.
-Production certification and temporal composition remain required before use.
+production capability: the outcome and coordinator epoch still need trusted
+runtime ownership. `acknowledgeAndCertify` authenticates the full current
+snapshot and consumes it through `SessionReleaseState::acknowledge` in the same
+queue-lock-owned operation; it cannot mint from a historical ordinal. Rejection
+must leave the FIFO unchanged and use ordinary release, not count as success.
+Production context ownership and temporal composition remain required before use.
 
 `session_release_event_spec` covers 2,048 guard combinations. The serialized
 release-burst Metal fixture observes actual helper outcomes and requires 33
 repeated `NoActivePass` results on the retained prefix, alongside exact query
-samples and pixels. These tests do not elide any runtime acknowledgement.
+samples and pixels. The fake-backend lifecycle test binds issuance to the real
+close helper and verifies that a later source reopening the same command buffer
+invalidates reuse through work generation, even with unchanged publication in
+the supplied context. These tests do not elide any runtime acknowledgement.
 
 The candidate reuses `EndMarker::bind` / `classifyEnd` once it is integrated:
 bind only after successful actual publication, only for the admitted writer,

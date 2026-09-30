@@ -75,7 +75,11 @@ burst oracle: retained mode requires one `Closed` followed by 33 `NoActivePass`
 outcomes, exact 1,024 queried samples, zero empty-query samples and exact pixels.
 The conditional closed-prefix admission value has 2,048 invalidation guard
 combinations. It is not connected to production acknowledgement elision.
-Trusted epoch/work-generation/quiescence ownership, prior-snapshot provenance
+H419 closes prior-snapshot provenance in the candidate by combining exact FIFO
+acknowledgement and issuance in one operation. Forged snapshot fields and repeat
+issuance are rejected without FIFO mutation. The fake production lifecycle
+fixture exercises actual close/reopen on the same carrier and rejects the old
+work generation. Trusted epoch/work-generation/quiescence ownership
 and end-to-end temporal refinement remain open; existing TLA results do not
 prove that future integration. Range policy remains default OFF. See
 [H418](../../docs/perfomance/present-pacing/present-pacing-close-outcome-oracle.418.md).

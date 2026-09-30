@@ -347,6 +347,33 @@ void testRetainedWriterReleaseRefinement() {
 }
 
 void testClosedPrefixAdmission() {
+  // Issuance itself is transactional: rejecting any authority/coverage guard
+  // cannot accidentally consume the head before the ordinary path handles it.
+  for (unsigned mask = 0; mask != 512; ++mask) {
+    SessionReleaseState transport;
+    const auto posted = transport.tryPostOrdered(SessionReleaseReason::DirectObservation,
+        SessionReleaseAction::ClosePass, 10, 7);
+    ClosedPrefixContext context{11, 1, 1, 7, true, false};
+    if (mask & 1) context.queue = 0;
+    if (mask & 2) context.epoch = 0;
+    if (mask & 4) context.encoderWorkGeneration = 0;
+    if (mask & 8) context.encoderQuiescent = false;
+    if (mask & 16) context.stopped = true;
+    if (mask & 32) (void)transport.requestTerminal(SessionReleaseReason::DeviceLoss, 10, 7);
+    if (mask & 64) (void)transport.tryPostOrdered(SessionReleaseReason::ExplicitFlush,
+        SessionReleaseAction::SubmitSession, 11, 7);
+    const auto witness = ClosedPrefixWitness::acknowledgeAndCertify(
+        transport, posted.snapshot, context, ClosedPrefixOutcome::Closed,
+        mask & 128 ? 9 : 10, mask & 256 ? 6 : 7);
+    check(bool(witness) == (mask == 0), "issuance requires every authority/coverage guard");
+    if (mask) {
+      check(transport.peekNext() == posted.snapshot && transport.acknowledgedOrdinal() == 0,
+            "rejected issuance has no FIFO side effect");
+    } else {
+      check(!transport.hasPending() && transport.acknowledgedOrdinal() == posted.snapshot.event.ordinal,
+            "successful issuance consumes exactly the authenticated head");
+    }
+  }
   // Exhaust all independent context/policy invalidations, using the actual
   // release FIFO/acknowledgement implementation for every candidate.
   for (unsigned mask = 0; mask != 2048; ++mask) {
@@ -354,17 +381,34 @@ void testClosedPrefixAdmission() {
     const auto old = transport.tryPostOrdered(SessionReleaseReason::DirectObservation,
         SessionReleaseAction::ClosePass, 10, 7);
     ClosedPrefixContext base{11, 1, 1, 7, true, false};
-    check(!ClosedPrefixWitness::certify(transport, old.snapshot, base,
-              ClosedPrefixOutcome::Closed, 7), "unacknowledged event cannot mint witness");
-    check(transport.acknowledge(old.snapshot, SessionReleaseCompletion::PassClosed,
-              10, 7) == SessionReleaseAckResult::Acknowledged, "real close acknowledgement");
-    const auto proof = ClosedPrefixWitness::certify(transport, old.snapshot, base,
-        ClosedPrefixOutcome::NoActivePass, 7);
-    check(bool(proof), "successful no-active close certifies prefix");
-    check(!ClosedPrefixWitness::certify(transport, old.snapshot, base,
-              ClosedPrefixOutcome::Invalid, 7), "invalid close cannot certify prefix");
-    check(!ClosedPrefixWitness::certify(transport, old.snapshot, base,
-              ClosedPrefixOutcome::Closed, 8), "represented prefix is not exact publication coverage");
+    check(!ClosedPrefixWitness::acknowledgeAndCertify(transport, old.snapshot, base,
+              ClosedPrefixOutcome::Invalid, 10, 7), "invalid close cannot certify prefix");
+    check(!ClosedPrefixWitness::acknowledgeAndCertify(transport, old.snapshot, base,
+              ClosedPrefixOutcome::Closed, 10, 8), "represented prefix is not exact publication coverage");
+    check(!ClosedPrefixWitness::acknowledgeAndCertify(transport, old.snapshot, base,
+              ClosedPrefixOutcome::Closed, 9, 7), "uncovered raw cannot acknowledge");
+    for (unsigned field = 0; field != 7; ++field) {
+      auto forged = old.snapshot;
+      switch (field) {
+      case 0: ++forged.event.fenceRawOrdinal; break;
+      case 1: --forged.event.fenceSeqId; break;
+      case 2: ++forged.event.ordinal; break;
+      case 3: ++forged.generation; break;
+      case 4: forged.origin = SessionReleaseOrigin::Terminal; break;
+      case 5: forged.event.reason = SessionReleaseReason::ExplicitFlush; break;
+      case 6: forged.event.action = SessionReleaseAction::SubmitAndWait; break;
+      }
+      check(!ClosedPrefixWitness::acknowledgeAndCertify(transport, forged, base,
+                ClosedPrefixOutcome::Closed, 11, 7), "forged snapshot cannot authenticate acknowledgement");
+    }
+    check(transport.peekNext() == old.snapshot && transport.acknowledgedOrdinal() == 0,
+          "rejected certification leaves FIFO and acknowledgement unchanged");
+    const auto proof = ClosedPrefixWitness::acknowledgeAndCertify(transport, old.snapshot, base,
+        ClosedPrefixOutcome::NoActivePass, 10, 7);
+    check(bool(proof) && transport.acknowledgedOrdinal() == old.snapshot.event.ordinal,
+          "successful no-active close atomically acknowledges and certifies prefix");
+    check(!ClosedPrefixWitness::acknowledgeAndCertify(transport, old.snapshot, base,
+              ClosedPrefixOutcome::Closed, 10, 7), "previous ack cannot mint another witness");
     auto next = transport.tryPostOrdered(SessionReleaseReason::DirectObservation,
         SessionReleaseAction::ClosePass, 11, 7);
     auto current = base;
@@ -385,21 +429,19 @@ void testClosedPrefixAdmission() {
     if (mask == 0) {
       // Reference ClosePass is idempotent. Candidate may only acknowledge the
       // same FIFO head; source/initializer/GPU completion remain untouched.
-      check(transport.acknowledge(next.snapshot, SessionReleaseCompletion::PassClosed,
-                11, 7) == SessionReleaseAckResult::Acknowledged,
+      const auto renewed = ClosedPrefixWitness::acknowledgeAndCertify(transport, next.snapshot,
+          current, ClosedPrefixOutcome::NoActivePass, 11, 7);
+      check(bool(renewed),
             "reuse advances the actual FIFO/raw obligation exactly once");
       check(!proof->permits(transport, next.snapshot, current, writer, true),
             "already acknowledged head cannot reuse twice");
-      const auto renewed = ClosedPrefixWitness::certify(transport, next.snapshot,
-          current, ClosedPrefixOutcome::NoActivePass, 7);
-      check(bool(renewed), "new acknowledgement produces next witness");
       const auto submit = transport.tryPostOrdered(SessionReleaseReason::DirectObservation,
           SessionReleaseAction::SubmitAndWait, 12, 7);
       check(!renewed->permits(transport, submit.snapshot, current, writer, true),
             "pass closure never discharges submit/completion obligations");
     }
   }
-  std::cout << "closed prefix: 2048 context/policy combinations\n";
+  std::cout << "closed prefix: 512 issuance and 2048 reuse context/policy combinations\n";
 }
 
 }  // namespace

@@ -25,24 +25,29 @@ enum class ClosedPrefixOutcome : std::uint8_t {
   Invalid,
 };
 
-// Conditional admission value, not a production authority: transport proves the
-// acknowledged ordinal, but does not authenticate the supplied prior snapshot,
-// helper outcome or coordinator context. Integration must bind those inputs to
-// trusted execution. Copying does not grant reuse in another context/epoch.
+// Conditional admission value, not a production authority: issuance consumes
+// the exact current FIFO head through the transport's real acknowledgement.
+// The helper outcome and coordinator context still require trusted execution.
+// Copying does not grant reuse in another context/epoch.
 class ClosedPrefixWitness {
  public:
-  static std::optional<ClosedPrefixWitness> certify(
-      const SessionReleaseState& transport,
+  // Queue-lock-owned transaction. Failure leaves the FIFO unchanged; callers
+  // must then execute the ordinary release path, not treat rejection as an ack.
+  static std::optional<ClosedPrefixWitness> acknowledgeAndCertify(
+      SessionReleaseState& transport,
       const SessionReleaseSnapshot& acknowledged,
       ClosedPrefixContext context, ClosedPrefixOutcome outcome,
-      std::uint64_t coveredSequence) noexcept {
+      std::uint64_t coveredRawOrdinal, std::uint64_t coveredSequence) noexcept {
     if (!context.valid() || !eligible(acknowledged) ||
         (outcome != ClosedPrefixOutcome::Closed &&
          outcome != ClosedPrefixOutcome::NoActivePass) ||
-        transport.terminalRequested() || transport.hasPending() ||
-        transport.acknowledgedOrdinal() != acknowledged.event.ordinal ||
+        transport.terminalRequested() || transport.orderedSize() != 1 ||
+        transport.peekNext() != acknowledged ||
         context.publishedSequence != coveredSequence ||
         acknowledged.event.fenceSeqId != coveredSequence)
+      return std::nullopt;
+    if (transport.acknowledge(acknowledged, SessionReleaseCompletion::PassClosed,
+            coveredRawOrdinal, coveredSequence) != SessionReleaseAckResult::Acknowledged)
       return std::nullopt;
     return ClosedPrefixWitness(context, acknowledged.event);
   }

@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H419](present-pacing-close-witness-provenance.419.md) closes the candidate's
+snapshot provenance gap: receipt issuance now performs the actual exact-head
+FIFO ack, rather than accepting a historical ordinal. Real-helper fake-backend
+tests cover close/reopen invalidation. Runtime coordinator ownership and wake
+elision remain unimplemented; no new FPS claim or policy promotion.
+
 [H418](present-pacing-close-outcome-oracle.418.md) reproduces actual redundant
 pass closure on identical serialized input: retained mode closes once, then
 returns `NoActivePass` 33 times, with exact samples/pixels in all transport and

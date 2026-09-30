@@ -11,6 +11,7 @@
 // into the tail submission, and session reset.
 
 #include "../../../src/dxmt9/dxmt9_draw_encoder.hpp"
+#include "../../../src/dxmt9/dxmt9_closed_prefix.hpp"
 #include "../../../src/dxmt9/dxmt9_encode_partition.hpp"
 #include "../../../src/dxmt9/dxmt9_encode_session.hpp"
 #include "../../../src/dxmt9/dxmt9_encode_session_internal.hpp"
@@ -1400,6 +1401,7 @@ void explicitDrawRunDeferredSessionRetainsSourceUntilFinalizer() {
 }
 
 void closePassIsIdempotentAndSessionResumesOnSameCommandBuffer() {
+  using namespace dxmt9::core::metalqueue;
   Harness harness;
   DrawRunCapture capture;
   auto renderEncoderOwner =
@@ -1430,8 +1432,9 @@ void closePassIsIdempotentAndSessionResumesOnSameCommandBuffer() {
           "deferred source does not end its render pass");
   const auto commandBufferHandle = firstSubmission->commandBuffer.handle;
 
-  check(dxmt9::encoders::closeEncodeChunkSessionRenderPass(
-            ctx, *session, *firstSubmission) ==
+  const auto firstClose = dxmt9::encoders::closeEncodeChunkSessionRenderPass(
+      ctx, *session, *firstSubmission);
+  check(firstClose ==
             dxmt9::encoders::EncodeChunkSessionPassCloseResult::Closed,
         "ordered-control ClosePass closes an active pass");
   check(!dxmt9::encoders::encodeChunkSessionHasActiveRender(*session),
@@ -1446,6 +1449,26 @@ void closePassIsIdempotentAndSessionResumesOnSameCommandBuffer() {
           std::size_t{1},
           "ClosePass preserves retained session sources");
 
+  // Bind candidate issuance to the real helper outcome and the actual FIFO.
+  // This fixture supplies coordinator epochs; production ownership is separate.
+  SessionReleaseState releaseState;
+  ClosedPrefixContext authority{11, 1, 1, firstSlot.seqId, true, false};
+  const auto firstRelease = releaseState.tryPostOrdered(
+      SessionReleaseReason::DirectObservation, SessionReleaseAction::ClosePass,
+      1, firstSlot.seqId);
+  const auto witness = ClosedPrefixWitness::acknowledgeAndCertify(
+      releaseState, firstRelease.snapshot, authority,
+      firstClose == dxmt9::encoders::EncodeChunkSessionPassCloseResult::Closed
+          ? ClosedPrefixOutcome::Closed : ClosedPrefixOutcome::Invalid,
+      1, firstSlot.seqId);
+  check(witness.has_value(), "actual Closed outcome authenticates the FIFO acknowledgement");
+  const auto repeatedRelease = releaseState.tryPostOrdered(
+      SessionReleaseReason::DirectObservation, SessionReleaseAction::ClosePass,
+      2, firstSlot.seqId);
+  check(witness->permits(releaseState, repeatedRelease.snapshot, authority,
+            SessionReleaseWriter::RetainQueryRange, true),
+        "closed idle prefix admits the adjacent retained observation");
+
   check(dxmt9::encoders::closeEncodeChunkSessionRenderPass(
             ctx, *session, *firstSubmission) ==
             dxmt9::encoders::EncodeChunkSessionPassCloseResult::NoActivePass,
@@ -1457,6 +1480,11 @@ void closePassIsIdempotentAndSessionResumesOnSameCommandBuffer() {
   auto secondSlot = makeDrawRunSlot(76u);
   const auto secondSource =
       partitionSource(secondSlotIndex, secondSlot.seqId);
+  authority.encoderQuiescent = false;
+  check(!witness->permits(releaseState, repeatedRelease.snapshot, authority,
+            SessionReleaseWriter::RetainQueryRange, true),
+        "encoding work invalidates the closed-prefix admission before execution");
+  ++authority.encoderWorkGeneration;
   auto secondSubmission = dxmt9::encoders::encodeChunk(
       ctx, secondSlotIndex, secondSlot,
       deferredOptions(*session, std::move(firstSubmission->commandBuffer),
@@ -1467,6 +1495,10 @@ void closePassIsIdempotentAndSessionResumesOnSameCommandBuffer() {
           "resumed session keeps the same command-buffer chain");
   check(dxmt9::encoders::encodeChunkSessionHasActiveRender(*session),
         "later source opens a new pass in the retained session");
+  authority.encoderQuiescent = true;
+  check(!witness->permits(releaseState, repeatedRelease.snapshot, authority,
+            SessionReleaseWriter::RetainQueryRange, true),
+        "new work rejects stale witness even with unchanged publication identity");
   checkEq(capture.renderPassBegins, std::size_t{2},
           "later source begins exactly one replacement render pass");
   checkEq(dxmt9::encoders::encodeChunkSessionSources(*session).size(),
