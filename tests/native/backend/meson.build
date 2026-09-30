@@ -1008,6 +1008,12 @@ test('dxmt9-cpu-ready-session-physical-cap-spec', cpu_ready_session_join_spec,
      env: dxmt9_native_test_env_vars + [
        'DXMT9_OFFLOAD_COMMIT_REPLAY=1', 'DXMT9_SESSION_JOIN_CAPACITY_CASE=1'])
 
+test('dxmt9-cpu-ready-closed-prefix-spec', cpu_ready_session_join_spec,
+     env: dxmt9_native_test_env_vars + [
+       'DXMT9_OFFLOAD_COMMIT_REPLAY=1', 'DXMT9_QUERY_SCOPE_RANGES=1',
+       'DXMT9_METAL_OCCLUSION=1',
+       'DXMT9_SESSION_JOIN_CLOSED_PREFIX_CASE=1'])
+
 test('dxmt9-cpu-ready-session-join-p0-composition-spec',
      cpu_ready_session_join_spec,
      env: dxmt9_native_test_env_vars + [

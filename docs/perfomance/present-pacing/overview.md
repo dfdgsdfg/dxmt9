@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H420](present-pacing-close-coordinator-owner.420.md) connects receipt
+qualification to the actual queue-owned coordinator. Production-loop tests
+observe issuance after real acknowledgement, then rejection at younger
+publication and invalidation at work start. Every wake/ack remains intact;
+next compose the consumer admission and temporal progress proof before elision.
+
 [H419](present-pacing-close-witness-provenance.419.md) closes the candidate's
 snapshot provenance gap: receipt issuance now performs the actual exact-head
 FIFO ack, rather than accepting a historical ordinal. Real-helper fake-backend

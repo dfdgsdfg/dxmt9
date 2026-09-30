@@ -36,6 +36,7 @@
 #include "dxmt9_render_scheduling.hpp"
 #include "dxmt9_ring_arena.hpp"
 #include "dxmt9_session_release.hpp"
+#include "dxmt9_closed_prefix.hpp"
 #include "dxmt9_scheduling_progress_watchdog.hpp"
 #include "dxmt9_shader_archive.hpp"
 #include "dxmt9_transient_resource_arena.hpp"
@@ -1542,6 +1543,7 @@ class CommandQueue {
   std::condition_variable presentCompletedCv_{};
   std::condition_variable sessionReleaseCv_{};
   core::metalqueue::SessionReleaseState sessionReleaseState_{};
+  core::metalqueue::ClosedPrefixCoordinator closedPrefixCoordinator_{queryQueueIdentity_};
   std::uint64_t sessionReleaseCoveredRawOrdinal_ = 0;
   std::uint64_t sessionReleaseCoveredSeqId_ = 0;
   std::size_t cpuReadyCapacityWaiterCount_ = 0;

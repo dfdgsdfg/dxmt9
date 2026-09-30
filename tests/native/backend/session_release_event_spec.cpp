@@ -20,6 +20,8 @@ static_assert(std::is_trivially_copyable_v<SessionReleaseEvent>);
 static_assert(std::is_standard_layout_v<SessionReleaseEvent>);
 static_assert(std::is_trivially_copyable_v<SessionReleaseSnapshot>);
 static_assert(std::is_standard_layout_v<SessionReleaseSnapshot>);
+static_assert(!std::is_copy_constructible_v<ClosedPrefixCoordinator>);
+static_assert(!std::is_move_constructible_v<ClosedPrefixCoordinator>);
 
 struct TestFailure : std::runtime_error {
   using std::runtime_error::runtime_error;
@@ -444,10 +446,67 @@ void testClosedPrefixAdmission() {
   std::cout << "closed prefix: 512 issuance and 2048 reuse context/policy combinations\n";
 }
 
+void testCoordinatorOwnsInvalidation() {
+  for (unsigned mask = 0; mask != 512; ++mask) {
+    SessionReleaseState reference, qualified;
+    ClosedPrefixCoordinator candidate(mask & 1 ? 0 : 42);
+    auto snapshot = reference.tryPostOrdered(SessionReleaseReason::DirectObservation,
+        SessionReleaseAction::ClosePass, 10, 7).snapshot;
+    (void)qualified.tryPostOrdered(SessionReleaseReason::DirectObservation,
+        SessionReleaseAction::ClosePass, 10, 7);
+    if (mask & 2) candidate.stop();
+    for (auto* state : {&reference, &qualified}) {
+      if (mask & 4) (void)state->requestTerminal(SessionReleaseReason::DeviceLoss, 10, 7);
+      if (mask & 8) (void)state->tryPostOrdered(SessionReleaseReason::ExplicitFlush,
+          SessionReleaseAction::SubmitSession, 11, 7);
+    }
+    if (mask & 256) ++snapshot.generation;
+    const auto raw = mask & 32 ? 9u : 10u;
+    const auto sequence = mask & 64 ? 6u : 7u;
+    const auto expected = reference.acknowledge(snapshot,
+        SessionReleaseCompletion::PassClosed, raw, sequence);
+    const auto actual = candidate.acknowledgeClose(qualified, snapshot,
+        mask & 16 ? ClosedPrefixOutcome::Invalid : ClosedPrefixOutcome::Closed,
+        raw, sequence, mask & 128 ? 8u : 7u);
+    check(actual == expected && reference.peekNext() == qualified.peekNext() &&
+              reference.orderedSize() == qualified.orderedSize() &&
+              reference.acknowledgedOrdinal() == qualified.acknowledgedOrdinal() &&
+              reference.terminalPending() == qualified.terminalPending(),
+          "qualification preserves ordinary release transition in every guard combination");
+  }
+  SessionReleaseState transport;
+  ClosedPrefixCoordinator owner(42);
+  const auto close = [&](ClosedPrefixOutcome outcome, std::uint64_t published) {
+    const auto event = transport.tryPostOrdered(SessionReleaseReason::DirectObservation,
+        SessionReleaseAction::ClosePass, 10, 7);
+    check(event.accepted(), "coordinator event posts");
+    check(owner.acknowledgeClose(transport, event.snapshot, outcome, 10, 7, published) ==
+              SessionReleaseAckResult::Acknowledged,
+          "qualification does not change ordinary acknowledgement");
+  };
+  owner.beginMutation();
+  close(ClosedPrefixOutcome::Closed, 7);
+  check(owner.hasReceiptFor(7) && !owner.hasReceiptFor(8), "receipt is exact-publication-qualified");
+  owner.beginMutation();
+  check(!owner.hasReceiptFor(7), "work invalidates before executing outside the queue lock");
+  close(ClosedPrefixOutcome::NoActivePass, 7);
+  check(owner.hasReceiptFor(7), "actual close can recertify after work");
+  close(ClosedPrefixOutcome::Invalid, 7);
+  check(!owner.hasReceiptFor(7), "absent helper cannot mint receipt");
+  close(ClosedPrefixOutcome::Closed, 8);
+  check(!owner.hasReceiptFor(8), "unexecuted publication cannot be certified");
+  close(ClosedPrefixOutcome::Closed, 7);
+  owner.stop();
+  check(!owner.hasReceiptFor(7), "terminal stop destroys the old epoch receipt");
+  close(ClosedPrefixOutcome::Closed, 7);
+  check(!owner.hasReceiptFor(7), "stopped authority cannot be revived by later acknowledgement");
+}
+
 }  // namespace
 
 int main() {
   try {
+    testCoordinatorOwnsInvalidation();
     testClosedPrefixAdmission();
     testRetainedWriterReleaseRefinement();
     testOrdinaryEventsAreStrictFifo();

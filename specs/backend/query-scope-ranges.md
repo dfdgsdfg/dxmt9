@@ -200,6 +200,21 @@ queue-lock-owned operation; it cannot mint from a historical ordinal. Rejection
 must leave the FIFO unchanged and use ordinary release, not count as success.
 Production context ownership and temporal composition remain required before use.
 
+`CommandQueue::closedPrefixCoordinator_` now owns qualification context under
+the queue mutex. Its identity is the queue's nonreused query identity; its epoch
+ends at terminal/stop, with no restart operation. The coordinator invalidates
+before source selection/planning can unlock, before finalization/submission and
+before executing another release action. Idle waits alone preserve context.
+Only the actual helper outcome, after lock reacquisition, may issue a receipt;
+publication must exactly match executed release coverage. Publication mismatch
+makes a retained receipt ineligible without reading encoder state on the producer.
+
+Qualification runs only in the range candidate and preserves every ordinary
+wake/ack. The inspection method `hasReceiptFor` is not reuse permission: it
+does not check a new request's FIFO, terminal state or writer policy. Consumer
+integration and composed invalidation/progress refinement remain prerequisites
+to any wake elision. No context is exported to PE or persisted across queue reuse.
+
 `session_release_event_spec` covers 2,048 guard combinations. The serialized
 release-burst Metal fixture observes actual helper outcomes and requires 33
 repeated `NoActivePass` results on the retained prefix, alongside exact query

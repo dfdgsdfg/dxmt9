@@ -453,6 +453,11 @@ struct CommandQueueArenaLeaseTestAccess {
     return queue.testOnlyPausedAfterSessionReleaseAck_;
   }
 
+  static bool hasClosedPrefixReceipt(CommandQueue& queue) {
+    std::lock_guard lock(queue.mutex_);
+    return queue.closedPrefixCoordinator_.hasReceiptFor(queue.lastCommittedSeqId_);
+  }
+
   static void resumeAfterSessionReleaseAck(CommandQueue& queue) {
     {
       std::lock_guard lock(queue.mutex_);
@@ -771,6 +776,7 @@ WMT::Reference<WmtType> retainedToken(const char* label) {
 
 void check(bool condition, std::string_view message) {
   if (!condition) {
+    std::cerr << "session join assertion: " << message << '\n';
     throw TestFailure(std::string(message));
   }
 }
@@ -6127,11 +6133,13 @@ void productionLoopAttributesSessionCapCloseToSameKeyReopen(
         "both work-cap pass instances complete once in FIFO order");
 }
 
-void orderedClosePassKeepsFencedSuffixReadyAndPreservesSession() {
+void orderedClosePassKeepsFencedSuffixReadyAndPreservesSession(bool lateSuffix = false) {
   RuntimeFixture fixture;
-  fixture.publishArenaClear(1);
-  fixture.publishArenaClear(2);
   auto& queue = fixture.routing->queue_;
+  fixture.publishArenaClear(1);
+  if (lateSuffix) check(queue.publishReplayDiagnosticBoundary(), "first compatibility source publishes");
+  fixture.publishArenaClear(2);
+  if (lateSuffix) check(queue.publishReplayDiagnosticBoundary(), "second compatibility source publishes");
   dxmt9::CommandQueueArenaLeaseTestAccess::
       enableCpuReadySessionReleaseLane(queue);
 
@@ -6157,11 +6165,11 @@ void orderedClosePassKeepsFencedSuffixReadyAndPreservesSession() {
 
   // This publication is deliberately younger than the already-fixed event.
   // It must remain Ready while the older prefix closes its pass.
-  fixture.publishArenaClear(3);
-  const auto expectedSources =
+  if (!lateSuffix) fixture.publishArenaClear(3);
+  auto expectedSources =
       dxmt9::CommandQueueArenaLeaseTestAccess::
           snapshotReadyCompletionSources(queue);
-  check(expectedSources.size() == 3,
+  check(expectedSources.size() == (lateSuffix ? 2u : 3u),
         "ClosePass fixture publishes two fenced sources and one suffix");
 
   std::thread encodeThread([&] {
@@ -6179,7 +6187,7 @@ void orderedClosePassKeepsFencedSuffixReadyAndPreservesSession() {
         "ordered ClosePass poster returns only after acknowledgement");
   check(backendState->calls.size() == 2,
         "release fence represents only the older compatibility prefix");
-  check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(queue) == 1,
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::readyCount(queue) == (lateSuffix ? 0u : 1u),
         "source younger than the release fence stays Ready");
   check(!backendState->firstRecordPostCommitRan.load(
             std::memory_order_acquire),
@@ -6188,6 +6196,17 @@ void orderedClosePassKeepsFencedSuffixReadyAndPreservesSession() {
             backendState->calls[0].session == backendState->calls[1].session,
         "ClosePass keeps one queue-owned EncodeSession for the fenced prefix");
 
+  if (lateSuffix) {
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::hasClosedPrefixReceipt(queue),
+          "production coordinator certifies the actually closed exact prefix");
+    fixture.publishArenaClear(3);
+    check(queue.publishReplayDiagnosticBoundary(), "younger compatibility source publishes");
+    check(!dxmt9::CommandQueueArenaLeaseTestAccess::hasClosedPrefixReceipt(queue),
+          "new publication makes the closed receipt ineligible before encode resumes");
+    const auto suffix = dxmt9::CommandQueueArenaLeaseTestAccess::snapshotReadyCompletionSources(queue);
+    expectedSources.insert(expectedSources.end(), suffix.begin(), suffix.end());
+  }
+
   dxmt9::CommandQueueArenaLeaseTestAccess::
       resumeAfterSessionReleaseAck(queue);
   check(waitUntil([&] {
@@ -6195,6 +6214,9 @@ void orderedClosePassKeepsFencedSuffixReadyAndPreservesSession() {
                      std::memory_order_acquire) == 3;
         }),
         "resumed coordinator appends the younger suffix");
+  if (lateSuffix)
+    check(!dxmt9::CommandQueueArenaLeaseTestAccess::hasClosedPrefixReceipt(queue),
+          "source execution invalidates the production receipt");
   dxmt9::CommandQueueArenaLeaseTestAccess::requestStop(queue);
   encodeThread.join();
 
@@ -7789,6 +7811,10 @@ int main() {
   setenv("DXMT9_RENDERER_FEATURES", "passcoalesce", 1);
   try {
     nextSourceIntentTransitionTruthTable();
+    if (std::getenv("DXMT9_SESSION_JOIN_CLOSED_PREFIX_CASE")) {
+      orderedClosePassKeepsFencedSuffixReadyAndPreservesSession(true);
+      return 0;
+    }
     if (std::getenv("DXMT9_SESSION_JOIN_CAPACITY_CASE")) {
       productionLoopCutsAtPhysicalLeaseBeforeRepresentation();
       return 0;

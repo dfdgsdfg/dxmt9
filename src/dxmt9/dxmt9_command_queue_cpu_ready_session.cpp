@@ -3,6 +3,7 @@
 #include "dxmt9/assert.hpp"
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_perf_counters.hpp"
+#include "dxmt9_query_policy.hpp"
 #include "dxmt9_resource_initializer.hpp"
 #include "framegraph/fg_multi_source_planner.hpp"
 #include "render/backend_interface.hpp"
@@ -511,6 +512,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
 
   auto submitRecordLocked = [this](std::unique_lock<std::mutex>& lock,
                                    QueueSubmissionRecord& record) {
+    if (query::scopeRangesEnabled()) closedPrefixCoordinator_.beginMutation();
     if (record.testOnlyAllowNullCommandBuffer) {
       record.commandBuffer = {};
     }
@@ -531,6 +533,7 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       [this, &pendingRecord, &pendingSession](
           std::unique_lock<std::mutex>& lock,
           encoders::SessionFinalizeCause cause) {
+        if (query::scopeRangesEnabled()) closedPrefixCoordinator_.beginMutation();
         if (!pendingSession) {
           return true;
         }
@@ -628,6 +631,8 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                                  core::metalqueue::SessionReleaseOrigin::Terminal) << 2));
         SessionReleaseCompletion completion =
             SessionReleaseCompletion::SessionSubmitted;
+        auto closeOutcome = core::metalqueue::ClosedPrefixOutcome::Invalid;
+        if (query::scopeRangesEnabled()) closedPrefixCoordinator_.beginMutation();
         if (release->event.action == SessionReleaseAction::ClosePass) {
           completion = SessionReleaseCompletion::PassClosed;
           if (pendingSession && pendingRecord) {
@@ -637,6 +642,10 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                 encoders::closeEncodeChunkSessionRenderPass(
                     ctx, *pendingSession, *pendingRecord);
             lock.lock();
+            if (closed == encoders::EncodeChunkSessionPassCloseResult::Closed)
+              closeOutcome = core::metalqueue::ClosedPrefixOutcome::Closed;
+            else if (closed == encoders::EncodeChunkSessionPassCloseResult::NoActivePass)
+              closeOutcome = core::metalqueue::ClosedPrefixOutcome::NoActivePass;
             static_assert(std::uint64_t(encoders::EncodeChunkSessionPassCloseResult::NoActivePass) == 0 &&
                           std::uint64_t(encoders::EncodeChunkSessionPassCloseResult::Closed) == 1 &&
                           std::uint64_t(encoders::EncodeChunkSessionPassCloseResult::InvalidCommandBufferCarrier) == 2);
@@ -671,9 +680,15 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         sessionReleaseCoveredRawOrdinal_ = std::max(
             sessionReleaseCoveredRawOrdinal_,
             release->event.fenceRawOrdinal);
-        const auto acknowledged = sessionReleaseState_.acknowledge(
-            *release, completion, sessionReleaseCoveredRawOrdinal_,
-            sessionReleaseCoveredSeqId_);
+        const auto acknowledged = query::scopeRangesEnabled() &&
+                completion == SessionReleaseCompletion::PassClosed
+            ? closedPrefixCoordinator_.acknowledgeClose(
+                sessionReleaseState_, *release, closeOutcome,
+                sessionReleaseCoveredRawOrdinal_, sessionReleaseCoveredSeqId_,
+                lastCommittedSeqId_)
+            : sessionReleaseState_.acknowledge(
+                *release, completion, sessionReleaseCoveredRawOrdinal_,
+                sessionReleaseCoveredSeqId_);
         if (acknowledged != SessionReleaseAckResult::Acknowledged) {
           abortCpuReadySessionFailOpen("ordered release acknowledgement");
         }
@@ -817,6 +832,10 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
       }
       continue;
     }
+
+    // Invalidate before any source planning/selection can release the mutex.
+    // The two idle waits above preserve a closed receipt without executing work.
+    if (query::scopeRangesEnabled()) closedPrefixCoordinator_.beginMutation();
 
     // A one-source Ready frontier cannot expose an A|B + A replay window to
     // the bounded planner. When that exact frontier has one already-reserved

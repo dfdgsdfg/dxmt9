@@ -80,9 +80,16 @@ acknowledgement and issuance in one operation. Forged snapshot fields and repeat
 issuance are rejected without FIFO mutation. The fake production lifecycle
 fixture exercises actual close/reopen on the same carrier and rejects the old
 work generation. Trusted epoch/work-generation/quiescence ownership
-and end-to-end temporal refinement remain open; existing TLA results do not
+is now connected for qualification only by H420's queue-mutex-owned coordinator:
+actual helper results issue receipts, source/finalization/submission/terminal
+edges invalidate them, and publication mismatch rejects coverage. The production
+loop fixture checks issuance while paused after ack and invalidation before/after
+younger publication/execution. Wake elision and end-to-end temporal refinement
+remain open; existing TLA results do not
 prove that future integration. Range policy remains default OFF. See
 [H418](../../docs/perfomance/present-pacing/present-pacing-close-outcome-oracle.418.md).
+See also [H420](../../docs/perfomance/present-pacing/present-pacing-close-coordinator-owner.420.md)
+for production qualification boundaries and exclusions.
 
 R-BACK-2.15.2 fixed comparison now avoids a temporary projection with the same
 hash guard and fieldwise equality. Native float-edge/collision fixtures and

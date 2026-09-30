@@ -4,8 +4,8 @@
 
 namespace dxmt9::core::metalqueue {
 
-// Candidate admission algebra only. Production has not yet supplied the
-// encoder-work epoch/quiescence authority required to skip a release wake.
+// Value algebra used by the queue-owned qualification authority below.
+// Production does not yet consume these receipts to skip a release wake.
 struct ClosedPrefixContext {
   std::uint64_t queue = 0;
   std::uint64_t epoch = 0;
@@ -83,6 +83,62 @@ class ClosedPrefixWitness {
       : context_(context), acknowledged_(acknowledged) {}
   ClosedPrefixContext context_;
   SessionReleaseEvent acknowledged_;
+};
+
+// Queue-mutex-owned authority. Only the Encode coordinator reports a helper
+// result; producer-side code cannot manufacture a quiescent context. This is
+// wired for receipt qualification only, not for skipping production wakeups.
+class ClosedPrefixCoordinator {
+ public:
+  explicit ClosedPrefixCoordinator(std::uint64_t queue) noexcept
+      : context_{queue, 1, 1, 0, false, false} {}
+  ClosedPrefixCoordinator(const ClosedPrefixCoordinator&) = delete;
+  ClosedPrefixCoordinator& operator=(const ClosedPrefixCoordinator&) = delete;
+
+  void beginMutation() noexcept {
+    witness_.reset();
+    context_.encoderQuiescent = false;
+    if (context_.encoderWorkGeneration == std::numeric_limits<std::uint64_t>::max())
+      context_.stopped = true;
+    else
+      ++context_.encoderWorkGeneration;
+  }
+
+  void stop() noexcept {
+    beginMutation();
+    context_.stopped = true;
+    if (context_.epoch != std::numeric_limits<std::uint64_t>::max())
+      ++context_.epoch;
+  }
+
+  SessionReleaseAckResult acknowledgeClose(
+      SessionReleaseState& transport, const SessionReleaseSnapshot& snapshot,
+      ClosedPrefixOutcome outcome, std::uint64_t rawCoverage,
+      std::uint64_t sequenceCoverage, std::uint64_t publishedSequence) noexcept {
+    witness_.reset();
+    context_.publishedSequence = publishedSequence;
+    context_.encoderQuiescent = !context_.stopped;
+    witness_ = ClosedPrefixWitness::acknowledgeAndCertify(
+        transport, snapshot, context_, outcome, rawCoverage, sequenceCoverage);
+    if (witness_)
+      return SessionReleaseAckResult::Acknowledged;
+    context_.encoderQuiescent = false;
+    // Qualification rejection is not a failed ordinary release. Preserve the
+    // existing FIFO semantics without replaying the already executed helper.
+    return transport.acknowledge(snapshot, SessionReleaseCompletion::PassClosed,
+                                 rawCoverage, sequenceCoverage);
+  }
+
+  // Inspection only, never an admission predicate: this does not inspect the
+  // current release FIFO, terminal latch or a new request's writer policy.
+  bool hasReceiptFor(std::uint64_t publishedSequence) const noexcept {
+    return witness_.has_value() && context_.valid() &&
+        context_.publishedSequence == publishedSequence;
+  }
+
+ private:
+  ClosedPrefixContext context_;
+  std::optional<ClosedPrefixWitness> witness_;
 };
 
 } // namespace dxmt9::core::metalqueue

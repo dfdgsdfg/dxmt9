@@ -9303,6 +9303,7 @@ wsi::QuiescenceDisposition CommandQueue::beginFinalWsiQuiescence() noexcept {
                                   perf::ChunkPublishReason::Flush);
           });
       const std::uint64_t terminalSeqId = lastCommittedSeqId_;
+      closedPrefixCoordinator_.stop();
       const auto terminal = sessionReleaseState_.requestTerminal(
           core::metalqueue::SessionReleaseReason::Shutdown,
           /*fenceRawOrdinal=*/0u, terminalSeqId);
@@ -10105,6 +10106,7 @@ void CommandQueue::noteInitializerPendingUploads() noexcept {
 }
 
 void CommandQueue::requestSchedulingStopLocked() noexcept {
+  closedPrefixCoordinator_.stop();
   queryPendingTerminal_.store(true, std::memory_order_release);
   stop_ = true;
   wsiAdmissionStopped_.store(true, std::memory_order_release);
