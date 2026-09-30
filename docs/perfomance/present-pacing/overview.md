@@ -4,19 +4,28 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-27
+updated: 2026-09-29
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H416](present-pacing-query-range-wild.416.md) confirms H415 activation in
+STALKER, but observer-OFF pairs remain slower ON in both orders:
+23.63/21.35 and 23.45/21.15 FPS (OFF/ON, about −9.7%). Separate diagnostics
+reduce CBs/Present 21.03→6.51 while increasing replay idle and compatibility
+batch calls. Six runs pass; sampled scene output is normal, not wild exact
+proof. Default stays OFF. Next separate repeated published-prefix ClosePass
+acknowledgements from Arena/session exclusion and range-consumer costs.
+
 [H415](present-pacing-query-range-retained-release.415.md) connects serialized
 GPU occlusion membership to retained writers while preserving published-prefix
 ClosePass acknowledgement. The real contiguous/segmented GPU fixture now
 publishes zero sources before polling and one at FLUSH, with exact query/pixel
-results. Native bounded and regression checks pass; new wild/FPS qualification
-and full concurrency composition remain open. Default stays OFF.
+results. Native bounded and regression checks pass; H416 supplies negative
+wild performance qualification. Full concurrency composition remains open.
+Default stays OFF.
 
 [H414](present-pacing-query-range-replay-boundary.414.md) reproduces the range
 slowdown in reverse order and identifies a production integration gap: ordered

@@ -52,9 +52,14 @@ Native repeated matrix passes 24/24; query/session regression passes 28/28,
 and x86_64/Rosetta regression plus install-name audit passes 29/29 after the
 default build's fixup. The gap is no longer lack of a
 serialized activation fixture. Full concurrent reset/callback/fault refinement,
-metadata accounting, cross-workload wild/exact and observer-OFF performance
-qualification remain open. Range policy stays default OFF; H414's old FPS
-does not measure this implementation. See
+metadata accounting and cross-workload wild/exact qualification remain open.
+H416 confirms deferred END/marker activation in STALKER with six successful,
+warning-free runs and a normal sampled scene. Two observer-OFF pairs in reversed
+order remain approximately 9.7% slower ON, despite fewer CBs/publications.
+Performance promotion fails; repeated prefix-release synchronization and global
+Arena/session exclusion remain unpriced candidates. Range policy stays default
+OFF; H414's old FPS does not measure this implementation. See
+[H416](../../docs/perfomance/present-pacing/present-pacing-query-range-wild.416.md) and
 [H415](../../docs/perfomance/present-pacing/present-pacing-query-range-retained-release.415.md).
 
 R-BACK-2.15.2 fixed comparison now avoids a temporary projection with the same
