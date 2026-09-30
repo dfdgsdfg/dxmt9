@@ -1,4 +1,5 @@
 #include "../../../src/dxmt9/dxmt9_session_release.hpp"
+#include "../../../src/dxmt9/dxmt9_closed_prefix.hpp"
 #include "dxmt9/query_end_marker.hpp"
 
 #include <algorithm>
@@ -345,10 +346,67 @@ void testRetainedWriterReleaseRefinement() {
             << completedSchedules << " complete schedules\n";
 }
 
+void testClosedPrefixAdmission() {
+  // Exhaust all independent context/policy invalidations, using the actual
+  // release FIFO/acknowledgement implementation for every candidate.
+  for (unsigned mask = 0; mask != 2048; ++mask) {
+    SessionReleaseState transport;
+    const auto old = transport.tryPostOrdered(SessionReleaseReason::DirectObservation,
+        SessionReleaseAction::ClosePass, 10, 7);
+    ClosedPrefixContext base{11, 1, 1, 7, true, false};
+    check(!ClosedPrefixWitness::certify(transport, old.snapshot, base,
+              ClosedPrefixOutcome::Closed, 7), "unacknowledged event cannot mint witness");
+    check(transport.acknowledge(old.snapshot, SessionReleaseCompletion::PassClosed,
+              10, 7) == SessionReleaseAckResult::Acknowledged, "real close acknowledgement");
+    const auto proof = ClosedPrefixWitness::certify(transport, old.snapshot, base,
+        ClosedPrefixOutcome::NoActivePass, 7);
+    check(bool(proof), "successful no-active close certifies prefix");
+    check(!ClosedPrefixWitness::certify(transport, old.snapshot, base,
+              ClosedPrefixOutcome::Invalid, 7), "invalid close cannot certify prefix");
+    check(!ClosedPrefixWitness::certify(transport, old.snapshot, base,
+              ClosedPrefixOutcome::Closed, 8), "represented prefix is not exact publication coverage");
+    auto next = transport.tryPostOrdered(SessionReleaseReason::DirectObservation,
+        SessionReleaseAction::ClosePass, 11, 7);
+    auto current = base;
+    if (mask & 1) ++current.queue;
+    if (mask & 2) ++current.epoch;
+    if (mask & 4) ++current.encoderWorkGeneration;
+    if (mask & 8) ++current.publishedSequence;
+    if (mask & 16) current.encoderQuiescent = false;
+    if (mask & 32) current.stopped = true;
+    if (mask & 64) ++next.snapshot.generation;
+    if (mask & 128) (void)transport.requestTerminal(SessionReleaseReason::DeviceLoss, 11, 7);
+    if (mask & 256) (void)transport.tryPostOrdered(SessionReleaseReason::ExplicitFlush,
+        SessionReleaseAction::SubmitSession, 12, 7);
+    const auto writer = mask & 512 ? SessionReleaseWriter::Publish
+                                  : SessionReleaseWriter::RetainQueryRange;
+    check(proof->permits(transport, next.snapshot, current, writer, !(mask & 1024)) ==
+              (mask == 0), "every authority dimension is necessary");
+    if (mask == 0) {
+      // Reference ClosePass is idempotent. Candidate may only acknowledge the
+      // same FIFO head; source/initializer/GPU completion remain untouched.
+      check(transport.acknowledge(next.snapshot, SessionReleaseCompletion::PassClosed,
+                11, 7) == SessionReleaseAckResult::Acknowledged,
+            "reuse advances the actual FIFO/raw obligation exactly once");
+      check(!proof->permits(transport, next.snapshot, current, writer, true),
+            "already acknowledged head cannot reuse twice");
+      const auto renewed = ClosedPrefixWitness::certify(transport, next.snapshot,
+          current, ClosedPrefixOutcome::NoActivePass, 7);
+      check(bool(renewed), "new acknowledgement produces next witness");
+      const auto submit = transport.tryPostOrdered(SessionReleaseReason::DirectObservation,
+          SessionReleaseAction::SubmitAndWait, 12, 7);
+      check(!renewed->permits(transport, submit.snapshot, current, writer, true),
+            "pass closure never discharges submit/completion obligations");
+    }
+  }
+  std::cout << "closed prefix: 2048 context/policy combinations\n";
+}
+
 }  // namespace
 
 int main() {
   try {
+    testClosedPrefixAdmission();
     testRetainedWriterReleaseRefinement();
     testOrdinaryEventsAreStrictFifo();
     testOrdinaryFifoFullDoesNotOverwrite();

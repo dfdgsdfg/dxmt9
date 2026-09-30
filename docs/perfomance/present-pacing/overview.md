@@ -11,6 +11,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H418](present-pacing-close-outcome-oracle.418.md) reproduces actual redundant
+pass closure on identical serialized input: retained mode closes once, then
+returns `NoActivePass` 33 times, with exact samples/pixels in all transport and
+replay modes. This justifies a reuse candidate, not its production safety or
+FPS gain. Next bind the conditional admission value to trusted coordinator
+epochs/work generations and prove invalidation before eliding any wake/ack.
+
 [H417](present-pacing-session-release-cost.417.md) observes 535 consecutive
 same-prefix retained ClosePass round trips in five active STALKER Presents,
 7.621 ms total diagnostic elapsed. This confirms repeated transport, not a

@@ -70,6 +70,16 @@ encoder work, terminal/reset and raw/FIFO progress must precede any ack elision.
 The OFF/ON windows have different query populations and do not price the FPS
 regression. See [H417](../../docs/perfomance/present-pacing/present-pacing-session-release-cost.417.md).
 
+H418 adds actual ClosePass outcome observation and a same-input serialized
+burst oracle: retained mode requires one `Closed` followed by 33 `NoActivePass`
+outcomes, exact 1,024 queried samples, zero empty-query samples and exact pixels.
+The conditional closed-prefix admission value has 2,048 invalidation guard
+combinations. It is not connected to production acknowledgement elision.
+Trusted epoch/work-generation/quiescence ownership, prior-snapshot provenance
+and end-to-end temporal refinement remain open; existing TLA results do not
+prove that future integration. Range policy remains default OFF. See
+[H418](../../docs/perfomance/present-pacing/present-pacing-close-outcome-oracle.418.md).
+
 R-BACK-2.15.2 fixed comparison now avoids a temporary projection with the same
 hash guard and fieldwise equality. Native float-edge/collision fixtures and
 18+18 identical-input CPU semantic iterations pass. This pure substitution

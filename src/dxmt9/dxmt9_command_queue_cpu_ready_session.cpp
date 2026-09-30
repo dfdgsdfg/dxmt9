@@ -637,11 +637,22 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
                 encoders::closeEncodeChunkSessionRenderPass(
                     ctx, *pendingSession, *pendingRecord);
             lock.lock();
+            static_assert(std::uint64_t(encoders::EncodeChunkSessionPassCloseResult::NoActivePass) == 0 &&
+                          std::uint64_t(encoders::EncodeChunkSessionPassCloseResult::Closed) == 1 &&
+                          std::uint64_t(encoders::EncodeChunkSessionPassCloseResult::InvalidCommandBufferCarrier) == 2);
+            if (supply::enabled())
+              supply::record(supply::Event::SessionReleaseClose,
+                             &sessionReleaseState_, release->event.ordinal,
+                             std::uint64_t(closed));
             if (closed == encoders::EncodeChunkSessionPassCloseResult::
                               InvalidCommandBufferCarrier) {
               abortCpuReadySessionFailOpen(
                   "ordered ClosePass command-buffer carrier");
             }
+          } else if (supply::enabled()) {
+            // 0/1/2 are the real helper enum. 3 means no helper was called.
+            supply::record(supply::Event::SessionReleaseClose,
+                           &sessionReleaseState_, release->event.ordinal, 3);
           }
         } else if (pendingRecord &&
                    !submitPendingRecordLocked(

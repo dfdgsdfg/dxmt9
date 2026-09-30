@@ -11,13 +11,14 @@ PREFIX = 'session_release_'
 STAGES = ('post', 'raw', 'policy', 'queue', 'action_begin', 'ack', 'return')
 
 
-def analyze(meta, rows):
+def analyze(meta, rows, *, require_close=False):
+    close_schema = require_close or any(r['kind'] == PREFIX + 'close' for r in rows)
     groups = collections.defaultdict(dict)
     for row in rows:
         if not row['kind'].startswith(PREFIX):
             continue
         stage = row['kind'][len(PREFIX):]
-        if stage not in STAGES or not row['owner'] or not row['id']:
+        if stage not in (*STAGES, 'close') or not row['owner'] or not row['id']:
             raise ValueError('invalid release identity/stage')
         group = groups[row['owner'], row['id']]
         if stage in group:
@@ -25,6 +26,7 @@ def analyze(meta, rows):
         group[stage] = row
     complete, clipped, terminal, stopped, consumer_only = [], 0, 0, 0, 0
     for (owner, ordinal), group in groups.items():
+        close = group.pop('close', None)
         action = group.get('action_begin')
         if action and action['value'] & 4 and 'post' not in group:
             terminal += 1
@@ -58,6 +60,17 @@ def analyze(meta, rows):
             raise ValueError('invalid release policy/completion')
         if operation != 0 and ack['value'] != 1:
             raise ValueError('submission action lacks submission acknowledgement')
+        close_outcome = None
+        if operation == 0 and close_schema and close is None:
+            raise ValueError('missing close outcome')
+        if close is not None:
+            if (operation != 0 or close['tid'] != begin['tid'] or
+                    not begin['wall_ns'] <= close['wall_ns'] <= ack['wall_ns'] or
+                    not begin['cpu_ns'] <= close['cpu_ns'] <= ack['cpu_ns'] or
+                    close['value'] not in (0, 1, 3) or
+                    (close['value'] == 3) != (begin['value'] != 3)):
+                raise ValueError('invalid close outcome')
+            close_outcome = {0: 'no_active_pass', 1: 'closed', 3: 'no_session'}[close['value']]
         if any(r['tid'] != post['tid'] for r in (raw, policy, queue, returned)):
             raise ValueError('posting thread changed')
 
@@ -69,7 +82,8 @@ def analyze(meta, rows):
 
         complete.append(dict(owner=owner, ordinal=ordinal, queue=queue['value'],
             raw=raw['value'], sequence=post['value'], reason=reason,
-            action=operation, writer=writer, pending_record=bool(begin['value'] & 1),
+            action=operation, writer=writer, close_outcome=close_outcome,
+            pending_record=bool(begin['value'] & 1),
             pending_session=bool(begin['value'] & 2), post_ns=post['wall_ns'],
             return_ns=returned['wall_ns'],
             post_to_action_ns=begin['wall_ns'] - post['wall_ns'],
@@ -99,6 +113,8 @@ def analyze(meta, rows):
         consecutive_same_prefix=summary([r for r in complete if r['consecutive_same_prefix']]),
         clipped=clipped, terminal=terminal, stopped=stopped,
         consumer_only=consumer_only, releases=complete,
+        close_outcomes=dict(collections.Counter(r['close_outcome'] or 'unknown'
+            for r in complete if r['action'] == 0)),
         qualification='Elapsed scopes include diagnostic clocks, scheduling and mutex reacquisition. '
         'Same-prefix classification is not an epoch/pass-state witness or permission to skip release. '
         'Return precedes any separate SubmitAndWait GPU completion wait; no queue acquisition, '
@@ -109,9 +125,10 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('trace', type=Path)
     parser.add_argument('--output', type=Path, required=True)
+    parser.add_argument('--require-close-outcomes', action='store_true')
     args = parser.parse_args()
     try:
-        result = analyze(*supply.load(args.trace))
+        result = analyze(*supply.load(args.trace), require_close=args.require_close_outcomes)
         if not result['complete']['count']:
             raise ValueError('no complete release evidence')
         with args.output.open('x') as stream:

@@ -68,6 +68,31 @@ class TestSupply(unittest.TestCase):
                 self.release_fixture() + self.release_fixture(**config))
             self.assertEqual(result['consecutive_same_prefix']['count'], 0)
 
+    def test_release_close_outcomes_and_legacy_schema(self):
+        meta = dict(first=1, last=5)
+        legacy = self.release_fixture()
+        self.assertEqual(release.analyze(meta, legacy)['close_outcomes'], {'unknown': 1})
+        with self.assertRaises(ValueError):
+            release.analyze(meta, legacy, require_close=True)
+        for outcome, name in ((0, 'no_active_pass'), (1, 'closed'), (3, 'no_session')):
+            rows = self.release_fixture()
+            rows[4]['value'] = 0 if outcome == 3 else 3
+            close = dict(rows[4], kind='session_release_close', value=outcome,
+                         wall_ns=1450, cpu_ns=1045)
+            self.assertEqual(release.analyze(meta, rows + [close], require_close=True)
+                             ['close_outcomes'], {name: 1})
+            for mutation in (dict(value=2), dict(value=9), dict(tid=99),
+                             dict(wall_ns=1399), dict(wall_ns=1501),
+                             dict(cpu_ns=1039), dict(cpu_ns=1051),
+                             dict(value=0 if outcome == 3 else 3)):
+                with self.assertRaises(ValueError):
+                    release.analyze(meta, rows + [dict(close, **mutation)])
+            with self.assertRaises(ValueError):
+                release.analyze(meta, rows + [close, close])
+            # A mixed transcript must not silently treat missing outcomes as legacy.
+            with self.assertRaises(ValueError):
+                release.analyze(meta, rows + [close] + self.release_fixture(2, start=2000))
+
     def test_release_rejects_duplicate_missing_and_bad_thread(self):
         meta = dict(first=1, last=5)
         rows = self.release_fixture()

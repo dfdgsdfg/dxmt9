@@ -137,6 +137,16 @@ foreach ranges : ['0', '1']
           'DXMT9_CPU_READY_TAPE=1', 'DXMT9_TILE_FFP=off',
           'DXMT9_ASYNC_QUERY_FENCES=1', 'DXMT9_OFFLOAD_COMMIT_REPLAY=' + offload],
         is_parallel: false, timeout: 30)
+      test('dxmt9-query-release-burst-' + ranges + '-offload-' + offload +
+          '-' + transport + '-metal-spec', python3,
+        args: [join_paths(meson.project_source_root(), 'tests/scripts/test_query_release_burst.py'),
+               query_serialized_range_metal_spec.full_path()] + oracle_args,
+        env: dxmt9_native_test_env_vars + [
+          'MTL_DEBUG_LAYER=1', 'DXMT9_METAL_OCCLUSION=1',
+          'DXMT9_QUERY_SCOPE_RANGES=' + ranges, 'DXMT9_QUERY_SCOPE_CB_JOIN=0',
+          'DXMT9_CPU_READY_TAPE=1', 'DXMT9_TILE_FFP=off',
+          'DXMT9_ASYNC_QUERY_FENCES=1', 'DXMT9_OFFLOAD_COMMIT_REPLAY=' + offload],
+        is_parallel: false, timeout: 30)
     endforeach
   endforeach
 endforeach
@@ -1181,6 +1191,8 @@ encode_session_lifecycle_spec = executable(
 test('dxmt9-encode-session-lifecycle-spec',
      encode_session_lifecycle_spec,
      env: dxmt9_native_test_env_vars + [
+       # This fixture asserts diagnostic activation counters as well as commands.
+       'DXMT9_FRAMEGRAPH_RETURN_DIAGNOSTICS=1',
        'DXMT9_PERF_ENCODER_GPU_TIME=0',
        'DXMT_METAL_CAPTURE_FRAME=0',
      ])

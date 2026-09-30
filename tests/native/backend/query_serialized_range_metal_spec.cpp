@@ -3,6 +3,7 @@
 #include "device_c_common.hpp"
 #include "d3d9_pe_chunk_builder.hpp"
 #include "dxmt9/dxmt9_device.hpp"
+#include "dxmt9/dxmt9_cpu_supply_trace.hpp"
 
 #include <array>
 #include <chrono>
@@ -55,7 +56,7 @@ struct Fixture {
   }
 };
 
-void run(bool requireRetainedWriter, bool segmented) {
+void run(bool requireRetainedWriter, bool segmented, bool releaseBurst) {
   Fixture f;
   auto& device = f.wire->dev();
   auto& queue = device.upperDevice()->queue();
@@ -78,9 +79,13 @@ void run(bool requireRetainedWriter, bool segmented) {
   check(device.setStreamSource(0, vb, 0, sizeof(Vertex)) == D3D_OK, "stream");
   check(device.drawPrimitive(PrimitiveType::TriangleList, 2) == D3D_OK,
         "real published prefix before retained writer");
-  device.upperDevice()->flush();
+  if (releaseBurst)
+    check(queue.publishReplayDiagnosticBoundary(), "publish without submission for release burst");
+  else
+    device.upperDevice()->flush();
   const auto before = queue.queryProgress();
   check(before.published != 0, "nonempty old-prefix release fence");
+  if (releaseBurst) dxmt9::supply::present(1);
 
   const auto commit = [&](pe::CommandChunkBuilder& input) {
     if (segmented) {
@@ -119,7 +124,24 @@ void run(bool requireRetainedWriter, bool segmented) {
   draw();
   check(pe::appendQueryIssue(builder, 1u, ref), "serialized END");
   draw(); // END must also exclude an unqueried suffix in the same source.
+  auto releaseQuery = [](D9CQuery* query) { if (query) dxmt9c_query_release(query); };
+  std::unique_ptr<D9CQuery, decltype(releaseQuery)> emptyQuery(nullptr, releaseQuery);
+  if (releaseBurst) {
+    emptyQuery.reset(dxmt9c_device_create_query(f.wire.get(), 9u));
+    check(bool(emptyQuery), "burst query identity");
+    pe::QueryRef emptyRef{};
+    emptyRef.identity = emptyQuery->wireIdentity;
+    emptyRef.object = emptyQuery.get();
+    for (unsigned i = 0; i != 16; ++i)
+      check(pe::appendQueryIssue(builder, 2u, emptyRef) &&
+            pe::appendQueryIssue(builder, 1u, emptyRef), "empty query release burst");
+  }
   commit(builder);
+  if (releaseBurst) {
+    // Synthetic trace window, not game Presents or a timing benchmark.
+    dxmt9::supply::present(2);
+    dxmt9::supply::present(4);
+  }
   check(f.query->replayDrainTarget->lastQueuedSeq != 0 &&
         f.query->replayDrainTarget->lastQueuedSeq ==
             f.query->replayDrainTarget->lastReplayedSeq, "query raw identity settled");
@@ -143,6 +165,20 @@ void run(bool requireRetainedWriter, bool segmented) {
     }
   }
   check(hr == S_OK && samples == 32 * 32, "exact membership and FLUSH progress");
+  if (releaseBurst) {
+    u32 emptySamples = 0xdeadbeef;
+    hr = S_FALSE;
+    while (hr == S_FALSE && std::chrono::steady_clock::now() < deadline) {
+      hr = dxmt9c_query_get_data(emptyQuery.get(), &emptySamples, sizeof(emptySamples),
+                                QUERY_GETDATA_FLUSH);
+      if (hr == S_FALSE) {
+        check(emptySamples == 0xdeadbeef, "empty pending poll leaves output untouched");
+        std::this_thread::yield();
+      }
+    }
+    check(hr == S_OK && emptySamples == 0,
+          "empty reissue burst remains zero after the containing source completes");
+  }
   const auto after = queue.queryProgress();
   std::cout << "serialized-query sources-before-poll="
             << beforePoll.published - before.published
@@ -214,15 +250,17 @@ void run(bool requireRetainedWriter, bool segmented) {
 
 int main(int argc, char** argv) {
   try {
-    bool requireRetainedWriter = false, segmented = false;
+    bool requireRetainedWriter = false, segmented = false, releaseBurst = false;
     for (int i = 1; i < argc; ++i) {
       if (std::strcmp(argv[i], "--require-retained-writer") == 0)
         requireRetainedWriter = true;
       else if (std::strcmp(argv[i], "--segmented") == 0)
         segmented = true;
+      else if (std::strcmp(argv[i], "--release-burst") == 0)
+        releaseBurst = true;
       else check(false, "argument");
     }
-    run(requireRetainedWriter, segmented);
+    run(requireRetainedWriter, segmented, releaseBurst);
     return 0;
   } catch (const std::exception& e) {
     std::cerr << e.what() << '\n';

@@ -179,6 +179,29 @@ writer-qualified marker. An END must not seal merely to assign a sequence:
 otherwise moving the scope boundary saves little or no publication work.
 Empty END preserves the existing completed-prefix semantics.
 
+### Closed-prefix reuse admission (not integrated)
+
+A published sequence alone must not authorize skipping an Encode round trip:
+selected-prefix coverage may advance before execution, and context creation
+has queue/dirty-state effects. A reusable receipt must bind the queue identity,
+reset epoch, encoder-work generation, exact published prefix and actual helper
+outcome to a successful acknowledged release. Any new encoder work, publication,
+reset, stop or terminal request invalidates reuse. The coordinator must establish
+quiescence under the same authority that prevents concurrent encoder mutation.
+
+The candidate `ClosedPrefixWitness` in `src/dxmt9/dxmt9_closed_prefix.hpp`
+checks those supplied dimensions and admits only an adjacent, exact current
+FIFO head for retained DirectObservation/ClosePass. It cannot discharge a
+submission/completion obligation. This is conditional value logic, not a trusted
+production capability: the current transport authenticates the acknowledged
+ordinal, not the supplied previous snapshot, outcome or coordinator epoch.
+Production certification and temporal composition remain required before use.
+
+`session_release_event_spec` covers 2,048 guard combinations. The serialized
+release-burst Metal fixture observes actual helper outcomes and requires 33
+repeated `NoActivePass` results on the retained prefix, alongside exact query
+samples and pixels. These tests do not elide any runtime acknowledgement.
+
 The candidate reuses `EndMarker::bind` / `classifyEnd` once it is integrated:
 bind only after successful actual publication, only for the admitted writer,
 once. Multiple ENDs may conservatively wait for the same containing-source
