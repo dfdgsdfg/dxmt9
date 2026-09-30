@@ -91,6 +91,15 @@ prove that future integration. Range policy remains default OFF. See
 See also [H420](../../docs/perfomance/present-pacing/present-pacing-close-coordinator-owner.420.md)
 for production qualification boundaries and exclusions.
 
+H421 adds a candidate consumer transaction, not live wake elision. A depth-six
+native checker enumerates 46,656 schedules of close/reuse, work, publication,
+dirty mutation and terminal stop against a serial closed-pass oracle. Reuse
+renews the exact FIFO receipt and raw coverage; rejection preserves fallback,
+and submit/completion actions remain excluded. `makeEncodeContext` consumes
+pending uniform-dirty state before the no-op helper; production synchronization
+of the context-side-effect guard remains open. See
+[H421](../../docs/perfomance/present-pacing/present-pacing-close-consumer-refinement.421.md).
+
 R-BACK-2.15.2 fixed comparison now avoids a temporary projection with the same
 hash guard and fieldwise equality. Native float-edge/collision fixtures and
 18+18 identical-input CPU semantic iterations pass. This pure substitution

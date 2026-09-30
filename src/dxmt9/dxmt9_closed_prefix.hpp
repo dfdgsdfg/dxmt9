@@ -1,6 +1,7 @@
 #pragma once
 
 #include "dxmt9_session_release.hpp"
+#include <algorithm>
 
 namespace dxmt9::core::metalqueue {
 
@@ -134,6 +135,29 @@ class ClosedPrefixCoordinator {
   bool hasReceiptFor(std::uint64_t publishedSequence) const noexcept {
     return witness_.has_value() && context_.valid() &&
         context_.publishedSequence == publishedSequence;
+  }
+
+  // Candidate consumer transaction, not yet called by production. The caller
+  // must hold the queue lock and prove that omitted context creation has no
+  // side effects (notably pending uniform-dirty consumption).
+  bool tryAcknowledgeReuse(
+      SessionReleaseState& transport, const SessionReleaseSnapshot& snapshot,
+      SessionReleaseWriter writer, bool rangesEnabled,
+      std::uint64_t publishedSequence, std::uint64_t sequenceCoverage,
+      bool contextSideEffectsAbsent, std::uint64_t& rawCoverage) noexcept {
+    if (!contextSideEffectsAbsent || !witness_ ||
+        publishedSequence != context_.publishedSequence ||
+        sequenceCoverage != context_.publishedSequence ||
+        !witness_->permits(transport, snapshot, context_, writer, rangesEnabled))
+      return false;
+    const auto nextRawCoverage = std::max(rawCoverage, snapshot.event.fenceRawOrdinal);
+    const auto renewed = ClosedPrefixWitness::acknowledgeAndCertify(
+        transport, snapshot, context_, ClosedPrefixOutcome::NoActivePass,
+        nextRawCoverage, sequenceCoverage);
+    if (!renewed) return false;
+    witness_ = renewed;
+    rawCoverage = nextRawCoverage;
+    return true;
   }
 
  private:

@@ -458,6 +458,15 @@ struct CommandQueueArenaLeaseTestAccess {
     return queue.closedPrefixCoordinator_.hasReceiptFor(queue.lastCommittedSeqId_);
   }
 
+  static bool contextCreationConsumesPendingDirty(CommandQueue& queue) {
+    (void)queue.consumePendingDirty();
+    queue.applyDirtyConstantSetVsF(23, 2);
+    const auto first = queue.makeEncodeContext();
+    const auto second = queue.makeEncodeContext();
+    return first.dirty.maxChangedVsF == 25 && first.dirty.mask != 0 &&
+        second.dirty.maxChangedVsF == 0 && second.dirty.mask == 0;
+  }
+
   static void resumeAfterSessionReleaseAck(CommandQueue& queue) {
     {
       std::lock_guard lock(queue.mutex_);
@@ -6136,6 +6145,9 @@ void productionLoopAttributesSessionCapCloseToSameKeyReopen(
 void orderedClosePassKeepsFencedSuffixReadyAndPreservesSession(bool lateSuffix = false) {
   RuntimeFixture fixture;
   auto& queue = fixture.routing->queue_;
+  if (lateSuffix)
+    check(dxmt9::CommandQueueArenaLeaseTestAccess::contextCreationConsumesPendingDirty(queue),
+          "context creation consumes dirty state even without encoding or closing a pass");
   fixture.publishArenaClear(1);
   if (lateSuffix) check(queue.publishReplayDiagnosticBoundary(), "first compatibility source publishes");
   fixture.publishArenaClear(2);

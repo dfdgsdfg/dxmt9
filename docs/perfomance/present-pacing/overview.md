@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H421](present-pacing-close-consumer-refinement.421.md) adds the candidate receipt
+consumer and 46,656 bounded schedules. A concrete integration constraint remains:
+`makeEncodeContext` consumes pending uniform-dirty state before a no-op close.
+The consumer requires a side-effect-free-context guard, still not production
+bound. No runtime wake elision or new performance result is claimed.
+
 [H420](present-pacing-close-coordinator-owner.420.md) connects receipt
 qualification to the actual queue-owned coordinator. Production-loop tests
 observe issuance after real acknowledgement, then rejection at younger

@@ -502,10 +502,113 @@ void testCoordinatorOwnsInvalidation() {
   check(!owner.hasReceiptFor(7), "stopped authority cannot be revived by later acknowledgement");
 }
 
+void testClosedPrefixConsumerSchedules() {
+  {
+    SessionReleaseState transport;
+    ClosedPrefixCoordinator owner(42);
+    std::uint64_t raw = 1;
+    const auto first = transport.tryPostOrdered(SessionReleaseReason::DirectObservation,
+        SessionReleaseAction::ClosePass, 1, 1);
+    check(owner.acknowledgeClose(transport, first.snapshot, ClosedPrefixOutcome::Closed,
+              1, 1, 1) == SessionReleaseAckResult::Acknowledged, "consumer seed closes");
+    const auto next = transport.tryPostOrdered(SessionReleaseReason::DirectObservation,
+        SessionReleaseAction::ClosePass, 2, 1);
+    check(!owner.tryAcknowledgeReuse(transport, next.snapshot, SessionReleaseWriter::Publish,
+              true, 1, 1, true, raw), "publication writer cannot reuse");
+    check(!owner.tryAcknowledgeReuse(transport, next.snapshot, SessionReleaseWriter::RetainQueryRange,
+              false, 1, 1, true, raw), "disabled ranges cannot reuse");
+    check(owner.tryAcknowledgeReuse(transport, next.snapshot, SessionReleaseWriter::RetainQueryRange,
+              true, 1, 1, true, raw), "rejections preserve valid subsequent reuse");
+    const auto submit = transport.tryPostOrdered(SessionReleaseReason::DirectObservation,
+        SessionReleaseAction::SubmitAndWait, 3, 1);
+    check(!owner.tryAcknowledgeReuse(transport, submit.snapshot, SessionReleaseWriter::RetainQueryRange,
+              true, 1, 1, true, raw) && raw == 2 && transport.peekNext() == submit.snapshot,
+          "consumer cannot discharge submit or GPU completion obligation");
+  }
+  // Independent serial oracle: a pass stays closed until work; its receipt
+  // covers one publication; dirty context state must still be consumed.
+  constexpr unsigned scheduleCount = 46656; // 6 actions, depth 6.
+  for (unsigned schedule = 0; schedule != scheduleCount; ++schedule) {
+    SessionReleaseState transport;
+    ClosedPrefixCoordinator owner(42);
+    std::uint64_t publication = 1, coveredSequence = 1, raw = 0, nextRaw = 0;
+    std::uint64_t certifiedPublication = 0;
+    bool closed = false, dirty = false, terminal = false;
+    const auto ordinaryClose = [&](const SessionReleaseSnapshot& event) {
+      owner.beginMutation();
+      raw = event.event.fenceRawOrdinal;
+      coveredSequence = publication;
+      check(owner.acknowledgeClose(transport, event, ClosedPrefixOutcome::Closed,
+                raw, coveredSequence, publication) == SessionReleaseAckResult::Acknowledged,
+            "reference close acknowledges exact event");
+      closed = true;
+      dirty = false;
+      certifiedPublication = publication;
+    };
+    const auto initial = transport.tryPostOrdered(SessionReleaseReason::DirectObservation,
+        SessionReleaseAction::ClosePass, ++nextRaw, publication);
+    ordinaryClose(initial.snapshot);
+    unsigned actions = schedule;
+    for (unsigned step = 0; step != 6; ++step, actions /= 6) {
+      switch (actions % 6) {
+      case 1: owner.beginMutation(); closed = false; break;
+      case 2: ++publication; break;
+      case 3:
+        if (!terminal) {
+          (void)transport.requestTerminal(SessionReleaseReason::DeviceLoss, nextRaw, publication);
+          owner.stop();
+          terminal = true;
+        }
+        break;
+      case 4: dirty = true; break;
+      default: {
+        if (terminal) {
+          const auto head = transport.peekNext();
+          check(head.has_value() && !owner.tryAcknowledgeReuse(transport, *head,
+                    SessionReleaseWriter::RetainQueryRange, true, publication,
+                    coveredSequence, !dirty, raw), "terminal head cannot reuse a close receipt");
+          break;
+        }
+        const auto posted = transport.tryPostOrdered(SessionReleaseReason::DirectObservation,
+            SessionReleaseAction::ClosePass, ++nextRaw, publication);
+        check(posted.accepted(), "serial query posts");
+        if (actions % 6 == 5) {
+          ordinaryClose(posted.snapshot);
+          break;
+        }
+        const auto oldRaw = raw;
+        const auto oldAck = transport.acknowledgedOrdinal();
+        const bool expected = closed && certifiedPublication == publication && !dirty;
+        const bool reused = owner.tryAcknowledgeReuse(transport, posted.snapshot,
+            SessionReleaseWriter::RetainQueryRange, true, publication,
+            coveredSequence, !dirty, raw);
+        check(reused == expected, "consumer matches serial closed-pass/context oracle");
+        if (reused) {
+          check(!transport.hasPending() && raw == nextRaw &&
+                    transport.acknowledgedOrdinal() == posted.snapshot.event.ordinal,
+                "reuse advances raw and FIFO exactly once without submission");
+          check(!owner.tryAcknowledgeReuse(transport, posted.snapshot,
+                    SessionReleaseWriter::RetainQueryRange, true, publication,
+                    coveredSequence, true, raw), "duplicate consumer rejected");
+        } else {
+          check(raw == oldRaw && transport.acknowledgedOrdinal() == oldAck &&
+                    transport.peekNext() == posted.snapshot,
+                "rejection preserves ordinary fallback obligations");
+          ordinaryClose(posted.snapshot);
+        }
+        break;
+      }
+      }
+    }
+  }
+  std::cout << "closed prefix consumer: 46656 depth-six schedules\n";
+}
+
 }  // namespace
 
 int main() {
   try {
+    testClosedPrefixConsumerSchedules();
     testCoordinatorOwnsInvalidation();
     testClosedPrefixAdmission();
     testRetainedWriterReleaseRefinement();

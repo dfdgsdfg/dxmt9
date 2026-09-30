@@ -215,6 +215,20 @@ does not check a new request's FIFO, terminal state or writer policy. Consumer
 integration and composed invalidation/progress refinement remain prerequisites
 to any wake elision. No context is exported to PE or persisted across queue reuse.
 
+The candidate consumer `tryAcknowledgeReuse` revalidates current publication,
+executed sequence coverage, policy and exact FIFO head against the owned witness.
+It renews the receipt through the real acknowledgement and advances raw coverage
+only after success. Rejection leaves the ordinary action pending; it must not
+fall through as success or advance a GPU completion waterline.
+
+Skipping context creation requires a separate trusted guard. In the reference
+path `makeEncodeContext` consumes `pendingDirty_` even when the close helper then
+returns `NoActivePass`. The consumer therefore requires explicit absence of
+context side effects. Production must establish that guard with the dirty-state
+lock and prove its ordering against producer mutations; a caller-supplied bool
+in a native test is not that proof. The consumer remains disconnected from
+production wake/ack control until this binding is complete.
+
 `session_release_event_spec` covers 2,048 guard combinations. The serialized
 release-burst Metal fixture observes actual helper outcomes and requires 33
 repeated `NoActivePass` results on the retained prefix, alongside exact query
