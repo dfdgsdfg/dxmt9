@@ -93,6 +93,28 @@ class TestSupply(unittest.TestCase):
             with self.assertRaises(ValueError):
                 release.analyze(meta, rows + [close] + self.release_fixture(2, start=2000))
 
+    def test_release_producer_reuse_is_not_encode_action(self):
+        rows = self.release_fixture()
+        reused = dict(rows[4], kind='session_release_reuse', tid=1, value=0)
+        rows = rows[:4] + [reused, rows[-1]]
+        report = release.analyze(dict(first=1, last=5), rows, require_close=True)
+        self.assertEqual(report['reused']['count'], 1)
+        self.assertEqual(report['releases'][0]['close_outcome'], 'reused')
+        self.assertIsNone(report['releases'][0]['pending_session'])
+        self.assertEqual(report['reused']['action_to_ack_ms'], 0)
+        for mutation in (dict(tid=2), dict(value=1), dict(wall_ns=1)):
+            with self.assertRaises(ValueError):
+                release.analyze(dict(first=1, last=5), rows[:4] +
+                                [dict(reused, **mutation), rows[-1]])
+        for policy in (2, 2 | (1 << 8) | (1 << 16)):
+            invalid = [dict(r) for r in rows]
+            invalid[2]['value'] = policy
+            with self.assertRaises(ValueError):
+                release.analyze(dict(first=1, last=5), invalid)
+        with self.assertRaises(ValueError):
+            release.analyze(dict(first=1, last=5), rows +
+                            [dict(reused, kind='session_release_ack')])
+
     def test_release_rejects_duplicate_missing_and_bad_thread(self):
         meta = dict(first=1, last=5)
         rows = self.release_fixture()

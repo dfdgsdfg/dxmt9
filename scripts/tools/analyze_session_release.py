@@ -18,7 +18,7 @@ def analyze(meta, rows, *, require_close=False):
         if not row['kind'].startswith(PREFIX):
             continue
         stage = row['kind'][len(PREFIX):]
-        if stage not in (*STAGES, 'close') or not row['owner'] or not row['id']:
+        if stage not in (*STAGES, 'close', 'reuse') or not row['owner'] or not row['id']:
             raise ValueError('invalid release identity/stage')
         group = groups[row['owner'], row['id']]
         if stage in group:
@@ -27,6 +27,16 @@ def analyze(meta, rows, *, require_close=False):
     complete, clipped, terminal, stopped, consumer_only = [], 0, 0, 0, 0
     for (owner, ordinal), group in groups.items():
         close = group.pop('close', None)
+        reuse = group.pop('reuse', None)
+        if reuse is not None:
+            if close is not None or 'action_begin' in group or 'ack' in group:
+                raise ValueError('reuse cannot also execute an Encode close')
+            if reuse['value'] != 0:
+                raise ValueError('invalid reuse value')
+            # One producer-side linearization point replaces both endpoints.
+            # These are timing aliases, not fabricated Encode events.
+            group['action_begin'] = reuse
+            group['ack'] = reuse
         action = group.get('action_begin')
         if action and action['value'] & 4 and 'post' not in group:
             terminal += 1
@@ -61,7 +71,11 @@ def analyze(meta, rows, *, require_close=False):
         if operation != 0 and ack['value'] != 1:
             raise ValueError('submission action lacks submission acknowledgement')
         close_outcome = None
-        if operation == 0 and close_schema and close is None:
+        if reuse is not None:
+            if (reason, operation, writer) != (2, 0, 1) or reuse['tid'] != post['tid']:
+                raise ValueError('invalid reuse policy/thread')
+            close_outcome = 'reused'
+        if operation == 0 and close_schema and close is None and reuse is None:
             raise ValueError('missing close outcome')
         if close is not None:
             if (operation != 0 or close['tid'] != begin['tid'] or
@@ -83,8 +97,9 @@ def analyze(meta, rows, *, require_close=False):
         complete.append(dict(owner=owner, ordinal=ordinal, queue=queue['value'],
             raw=raw['value'], sequence=post['value'], reason=reason,
             action=operation, writer=writer, close_outcome=close_outcome,
-            pending_record=bool(begin['value'] & 1),
-            pending_session=bool(begin['value'] & 2), post_ns=post['wall_ns'],
+            reused=reuse is not None,
+            pending_record=None if reuse is not None else bool(begin['value'] & 1),
+            pending_session=None if reuse is not None else bool(begin['value'] & 2), post_ns=post['wall_ns'],
             return_ns=returned['wall_ns'],
             post_to_action_ns=begin['wall_ns'] - post['wall_ns'],
             action_to_ack_ns=ack['wall_ns'] - begin['wall_ns'],
@@ -110,6 +125,7 @@ def analyze(meta, rows, *, require_close=False):
             for key in ('roundtrip_ns', 'post_to_action_ns', 'action_to_ack_ns',
                         'ack_to_return_ns', 'posting_cpu_ns', 'action_cpu_ns')})
     return dict(complete=summary(complete),
+        reused=summary([r for r in complete if r['reused']]),
         consecutive_same_prefix=summary([r for r in complete if r['consecutive_same_prefix']]),
         clipped=clipped, terminal=terminal, stopped=stopped,
         consumer_only=consumer_only, releases=complete,
@@ -118,6 +134,7 @@ def analyze(meta, rows, *, require_close=False):
         qualification='Elapsed scopes include diagnostic clocks, scheduling and mutex reacquisition. '
         'Same-prefix classification is not an epoch/pass-state witness or permission to skip release. '
         'Return precedes any separate SubmitAndWait GPU completion wait; no queue acquisition, '
+        'Reused rows use one producer-side ack point, not an Encode action; its action-to-ack scope is zero. '
         'writer commit or full-ring wait coverage. Terminal, consumer-only and clipped groups excluded.')
 
 

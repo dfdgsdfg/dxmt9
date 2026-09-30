@@ -157,8 +157,9 @@ replay ordered-control release. `orderedControlWriter` admits exact flags
 keep the publication cut. `retainWriterForSessionRelease` additionally
 requires DirectObservation/ClosePass and the enabled range policy.
 
-The release still posts one FIFO event, wakes Encode and waits for its exact
-acknowledgement. Its fixed sequence fence covers only previously published
+The release still posts one FIFO event. It wakes Encode and waits for its exact
+acknowledgement unless the closed-prefix consumer below qualifies a local ack.
+Its fixed sequence fence covers only previously published
 sources. The acknowledgement is a pass-close receipt for that prefix, not
 completion or publication of the retained writer. The following query dispatch
 freezes membership at the physical command boundary; encode applies its pass
@@ -179,7 +180,7 @@ writer-qualified marker. An END must not seal merely to assign a sequence:
 otherwise moving the scope boundary saves little or no publication work.
 Empty END preserves the existing completed-prefix semantics.
 
-### Closed-prefix reuse admission (not integrated)
+### Closed-prefix reuse admission
 
 A published sequence alone must not authorize skipping an Encode round trip:
 selected-prefix coverage may advance before execution, and context creation
@@ -198,7 +199,8 @@ runtime ownership. `acknowledgeAndCertify` authenticates the full current
 snapshot and consumes it through `SessionReleaseState::acknowledge` in the same
 queue-lock-owned operation; it cannot mint from a historical ordinal. Rejection
 must leave the FIFO unchanged and use ordinary release, not count as success.
-Production context ownership and temporal composition remain required before use.
+The queue coordinator supplies context; bounded transition and integration
+tests qualify the narrow consumer described below.
 
 `CommandQueue::closedPrefixCoordinator_` now owns qualification context under
 the queue mutex. Its identity is the queue's nonreused query identity; its epoch
@@ -209,11 +211,11 @@ Only the actual helper outcome, after lock reacquisition, may issue a receipt;
 publication must exactly match executed release coverage. Publication mismatch
 makes a retained receipt ineligible without reading encoder state on the producer.
 
-Qualification runs only in the range candidate and preserves every ordinary
-wake/ack. The inspection method `hasReceiptFor` is not reuse permission: it
-does not check a new request's FIFO, terminal state or writer policy. Consumer
-integration and composed invalidation/progress refinement remain prerequisites
-to any wake elision. No context is exported to PE or persisted across queue reuse.
+Qualification runs only in the default-OFF range candidate. The inspection
+method `hasReceiptFor` is not reuse permission: it does not check a new request's
+FIFO, terminal state or writer policy. The full consumer predicate is mandatory
+after that cheap rejection check. No context is exported to PE or persisted
+across queue reuse.
 
 The candidate consumer `tryAcknowledgeReuse` revalidates current publication,
 executed sequence coverage, policy and exact FIFO head against the owned witness.
@@ -224,18 +226,29 @@ fall through as success or advance a GPU completion waterline.
 Skipping context creation requires a separate trusted guard. In the reference
 path `makeEncodeContext` consumes `pendingDirty_` even when the close helper then
 returns `NoActivePass`. The consumer therefore requires explicit absence of
-context side effects. Production must establish that guard with the dirty-state
-lock and prove its ordering against producer mutations; a caller-supplied bool
-in a native test is not that proof. The consumer remains disconnected from
-production wake/ack control until this binding is complete.
+context side effects. Production holds the queue mutex, then acquires
+`dirtyMutex_`, checks the mask and all six high-water counters are zero, and
+holds both locks through acknowledgement. Dirty setters/consumption must not
+acquire the queue mutex while holding the dirty lock. Dirty state preserves the
+ordinary Encode path; the consumer clears no dirty bits. Completion snapshots
+are unused by the no-active-pass helper and grant no completion authority.
+
+Success consumes the ordinary FIFO head, advances raw coverage and notifies
+release waiters without waking Encode. `SessionReleaseReuse` records this
+producer-side point separately from actual helper/Encode events. New work or
+publication, dirty state, terminal/stop, nonretained policy and submission
+actions retain the reference path. Wild correctness/performance promotion is
+still required; range policy remains default OFF.
 
 `session_release_event_spec` covers 2,048 guard combinations. The serialized
 release-burst Metal fixture observes actual helper outcomes and requires 33
-repeated `NoActivePass` results on the retained prefix, alongside exact query
+repeated `NoActivePass` or explicitly reused receipts on the retained prefix,
+with at least one actual reuse in candidate mode, alongside exact query
 samples and pixels. The fake-backend lifecycle test binds issuance to the real
 close helper and verifies that a later source reopening the same command buffer
 invalidates reuse through work generation, even with unchanged publication in
-the supplied context. These tests do not elide any runtime acknowledgement.
+the supplied context. Production-loop tests require a clean retained request
+to return while Encode is paused; dirty requests must wait for Encode instead.
 
 The candidate reuses `EndMarker::bind` / `classifyEnd` once it is integrated:
 bind only after successful actual publication, only for the admitted writer,

@@ -467,6 +467,10 @@ struct CommandQueueArenaLeaseTestAccess {
         second.dirty.maxChangedVsF == 0 && second.dirty.mask == 0;
   }
 
+  static void makeContextDirty(CommandQueue& queue) {
+    queue.applyDirtyConstantSetVsF(23, 2);
+  }
+
   static void resumeAfterSessionReleaseAck(CommandQueue& queue) {
     {
       std::lock_guard lock(queue.mutex_);
@@ -6211,6 +6215,35 @@ void orderedClosePassKeepsFencedSuffixReadyAndPreservesSession(bool lateSuffix =
   if (lateSuffix) {
     check(dxmt9::CommandQueueArenaLeaseTestAccess::hasClosedPrefixReceipt(queue),
           "production coordinator certifies the actually closed exact prefix");
+    const auto retainedRelease = [&] {
+      return queue.releaseCpuReadySessionBeforeOrderedControl(
+          dxmt9::core::metalqueue::SessionReleaseReason::DirectObservation,
+          dxmt9::core::metalqueue::SessionReleaseAction::ClosePass, 2,
+          dxmt9::core::metalqueue::SessionReleaseWriter::RetainQueryRange);
+    };
+    std::atomic<bool> reused{false};
+    std::thread repeat([&] { reused.store(retainedRelease(), std::memory_order_release); });
+    const bool returnedWhileEncodePaused = waitUntil([&] { return reused.load(std::memory_order_acquire); });
+    if (!returnedWhileEncodePaused)
+      dxmt9::CommandQueueArenaLeaseTestAccess::resumeAfterSessionReleaseAck(queue);
+    repeat.join();
+    check(returnedWhileEncodePaused, "clean receipt acknowledges without waking the paused Encode worker");
+
+    dxmt9::CommandQueueArenaLeaseTestAccess::makeContextDirty(queue);
+    dxmt9::CommandQueueArenaLeaseTestAccess::pauseAfterNextSessionReleaseAck(queue);
+    std::atomic<bool> dirtyReturned{false};
+    std::thread dirtyRepeat([&] { dirtyReturned.store(retainedRelease(), std::memory_order_release); });
+    const bool dirtyQueued = waitUntil([&] {
+      return dxmt9::CommandQueueArenaLeaseTestAccess::hasPendingSessionRelease(queue);
+    });
+    const bool dirtyWaited = !dirtyReturned.load(std::memory_order_acquire);
+    dxmt9::CommandQueueArenaLeaseTestAccess::resumeAfterSessionReleaseAck(queue);
+    dirtyRepeat.join();
+    check(dirtyQueued && dirtyWaited && dirtyReturned.load(std::memory_order_acquire),
+          "dirty context preserves the ordinary Encode action and acknowledgement");
+    check(waitUntil([&] {
+      return dxmt9::CommandQueueArenaLeaseTestAccess::pausedAfterSessionReleaseAck(queue);
+    }), "dirty fallback recertifies before younger publication");
     fixture.publishArenaClear(3);
     check(queue.publishReplayDiagnosticBoundary(), "younger compatibility source publishes");
     check(!dxmt9::CommandQueueArenaLeaseTestAccess::hasClosedPrefixReceipt(queue),

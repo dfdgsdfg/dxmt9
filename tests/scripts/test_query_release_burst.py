@@ -25,7 +25,8 @@ with tempfile.TemporaryDirectory(prefix='dxmt9-release-burst-') as directory:
         assert rows[0]['close_outcome'] == 'closed', report
         assert report['consecutive_same_prefix']['count'] == 33
         repeated = rows[1:]
-        assert all(r['close_outcome'] == 'no_active_pass' for r in repeated), report
+        assert all(r['close_outcome'] in ('no_active_pass', 'reused') for r in repeated), report
+        assert report['reused']['count'] > 0, 'candidate never reused the closed prefix'
     else:
         assert all(r['writer'] == 0 for r in rows)
         assert report['consecutive_same_prefix']['count'] == 0

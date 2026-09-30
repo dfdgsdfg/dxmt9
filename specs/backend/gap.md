@@ -97,8 +97,19 @@ dirty mutation and terminal stop against a serial closed-pass oracle. Reuse
 renews the exact FIFO receipt and raw coverage; rejection preserves fallback,
 and submit/completion actions remain excluded. `makeEncodeContext` consumes
 pending uniform-dirty state before the no-op helper; production synchronization
-of the context-side-effect guard remains open. See
+of the context-side-effect guard is supplied by H422 below. See
 [H421](../../docs/perfomance/present-pacing/present-pacing-close-consumer-refinement.421.md).
+
+H422 connects the guarded producer-side consumer inside the default-OFF range
+candidate. Queue -> dirty lock ordering keeps the clean mask/six-counter test
+atomic through exact FIFO/raw acknowledgement. Dirty or stale requests retain
+the ordinary Encode wake. The paused-coordinator fixture requires clean local
+return and dirty fallback; the GPU burst requires observable receipt reuse plus
+exact query samples/pixels. `SessionReleaseReuse` distinguishes producer ack
+from actual Encode/helper events. Full concurrent reset/callback composition,
+cross-workload wild correctness and observer-OFF performance promotion remain
+open; no default change or recovered FPS is claimed. See
+[H422](../../docs/perfomance/present-pacing/present-pacing-close-reuse-integration.422.md).
 
 R-BACK-2.15.2 fixed comparison now avoids a temporary projection with the same
 hash guard and fieldwise equality. Native float-edge/collision fixtures and

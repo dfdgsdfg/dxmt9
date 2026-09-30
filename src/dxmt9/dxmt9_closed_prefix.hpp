@@ -6,7 +6,7 @@
 namespace dxmt9::core::metalqueue {
 
 // Value algebra used by the queue-owned qualification authority below.
-// Production does not yet consume these receipts to skip a release wake.
+// The range candidate consumes receipts only under queue + clean-dirty guards.
 struct ClosedPrefixContext {
   std::uint64_t queue = 0;
   std::uint64_t epoch = 0;
@@ -88,7 +88,7 @@ class ClosedPrefixWitness {
 
 // Queue-mutex-owned authority. Only the Encode coordinator reports a helper
 // result; producer-side code cannot manufacture a quiescent context. This is
-// wired for receipt qualification only, not for skipping production wakeups.
+// also owns renewal for the guarded producer-side acknowledgement path.
 class ClosedPrefixCoordinator {
  public:
   explicit ClosedPrefixCoordinator(std::uint64_t queue) noexcept
@@ -137,7 +137,7 @@ class ClosedPrefixCoordinator {
         context_.publishedSequence == publishedSequence;
   }
 
-  // Candidate consumer transaction, not yet called by production. The caller
+  // Consumer transaction for the default-OFF range candidate. The caller
   // must hold the queue lock and prove that omitted context creation has no
   // side effects (notably pending uniform-dirty consumption).
   bool tryAcknowledgeReuse(

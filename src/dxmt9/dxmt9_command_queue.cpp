@@ -9432,7 +9432,8 @@ bool CommandQueue::releaseCpuReadySessionBeforeOrderedControl(
   }
   // Retained membership is a future range-consumer pass boundary, not a
   // published source. Release only the immutable already-published prefix;
-  // keep the ordinary FIFO event, wake and acknowledgement in both modes.
+  // keep the ordinary FIFO event. A qualified clean closed-prefix receipt may
+  // acknowledge locally; all other requests wake the coordinator.
   const std::uint64_t fenceSeqId = lastCommittedSeqId_;
 
   core::metalqueue::SessionReleasePostResult posted{};
@@ -9467,11 +9468,35 @@ bool CommandQueue::releaseCpuReadySessionBeforeOrderedControl(
     supply::record(supply::Event::SessionReleaseQueue, &sessionReleaseState_,
                    eventOrdinal, queryQueueIdentity_);
   }
-  encodeCv_.notify_one();
-  sessionReleaseCv_.wait(lock, [this, eventOrdinal] {
-    return stop_ ||
-           sessionReleaseState_.acknowledgedOrdinal() >= eventOrdinal;
-  });
+  bool reusedClose = false;
+  if (core::metalqueue::retainWriterForSessionRelease(
+          writer, query::scopeRangesEnabled(), reason, action) &&
+      closedPrefixCoordinator_.hasReceiptFor(lastCommittedSeqId_)) {
+    // Lock order is queue -> dirty. Dirty setters/consumePendingDirty never
+    // acquire the queue lock while holding dirtyMutex_. Keep the clean check
+    // and acknowledgement atomic with respect to dirty producers.
+    std::lock_guard dirtyLock(dirtyMutex_);
+    const auto& dirty = pendingDirty_;
+    const bool contextClean = dirty.mask == 0 && dirty.maxChangedVsF == 0 &&
+        dirty.maxChangedVsI == 0 && dirty.maxChangedVsB == 0 &&
+        dirty.maxChangedPsF == 0 && dirty.maxChangedPsI == 0 && dirty.maxChangedPsB == 0;
+    reusedClose = closedPrefixCoordinator_.tryAcknowledgeReuse(
+        sessionReleaseState_, posted.snapshot, writer, true,
+        lastCommittedSeqId_, sessionReleaseCoveredSeqId_, contextClean,
+        sessionReleaseCoveredRawOrdinal_);
+  }
+  if (reusedClose) {
+    if (supply::enabled())
+      supply::record(supply::Event::SessionReleaseReuse, &sessionReleaseState_,
+                     eventOrdinal, 0);
+    sessionReleaseCv_.notify_all();
+  } else {
+    encodeCv_.notify_one();
+    sessionReleaseCv_.wait(lock, [this, eventOrdinal] {
+      return stop_ ||
+             sessionReleaseState_.acknowledgedOrdinal() >= eventOrdinal;
+    });
+  }
   if (supply::enabled())
     supply::record(supply::Event::SessionReleaseReturn, &sessionReleaseState_,
                    eventOrdinal, stop_ ? 0 : 1);

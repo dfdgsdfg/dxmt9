@@ -11,6 +11,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H422](present-pacing-close-reuse-integration.422.md) connects actual producer
+ack reuse under queue + clean-dirty locks in the default-OFF range lane. Clean
+requests return while Encode is paused; dirty requests still wake/wait. Explicit
+reuse trace events and GPU query/pixel checks qualify activation. Wild visual
+and observer-OFF performance validation remain the next gates, not a default
+promotion or measured FPS recovery.
+
 [H421](present-pacing-close-consumer-refinement.421.md) adds the candidate receipt
 consumer and 46,656 bounded schedules. A concrete integration constraint remains:
 `makeEncodeContext` consumes pending uniform-dirty state before a no-op close.
