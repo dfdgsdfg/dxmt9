@@ -16,6 +16,7 @@ import analyze_publication_progress as progress
 import analyze_framegraph_planning as planning
 import analyze_app_queue_waits as app_waits
 import analyze_queue_submit as submit
+import analyze_session_release as release
 
 
 def fixture():
@@ -42,6 +43,64 @@ def fixture():
 
 
 class TestSupply(unittest.TestCase):
+    def release_fixture(self, ordinal=1, sequence=4, queue=9, start=1000):
+        values = (sequence, ordinal + 10, 2 | (1 << 16), queue, 0, 0, 1)
+        return [dict(kind='session_release_' + stage, owner=8, id=ordinal,
+                     value=value, wall_ns=start + i * 100, cpu_ns=start + i * 10,
+                     tid=2 if stage in ('action_begin', 'ack') else 1, frame=3)
+                for i, (stage, value) in enumerate(zip(release.STAGES, values))]
+
+    def test_release_roundtrip_partition_and_same_prefix(self):
+        rows = self.release_fixture() + self.release_fixture(2, start=2000)
+        result = release.analyze(dict(first=1, last=5), rows)
+        self.assertEqual(result['complete']['count'], 2)
+        self.assertEqual(result['consecutive_same_prefix']['count'], 1)
+        self.assertAlmostEqual(result['complete']['roundtrip_ms'], .0012)
+        for item in result['releases']:
+            self.assertEqual(item['roundtrip_ns'], sum(item[k] for k in
+                ('post_to_action_ns', 'action_to_ack_ns', 'ack_to_return_ns')))
+
+    def test_release_queue_sequence_and_ordinal_gaps_do_not_match(self):
+        for kwargs in (dict(queue=10), dict(sequence=5), dict(ordinal=3)):
+            config = dict(ordinal=2, start=2000)
+            config.update(kwargs)
+            result = release.analyze(dict(first=1, last=5),
+                self.release_fixture() + self.release_fixture(**config))
+            self.assertEqual(result['consecutive_same_prefix']['count'], 0)
+
+    def test_release_rejects_duplicate_missing_and_bad_thread(self):
+        meta = dict(first=1, last=5)
+        rows = self.release_fixture()
+        with self.assertRaises(ValueError):
+            release.analyze(meta, rows + [rows[0]])
+        with self.assertRaises(ValueError):
+            release.analyze(meta, rows[:-1])
+        rows[-1]['tid'] = 3
+        with self.assertRaises(ValueError):
+            release.analyze(meta, rows)
+
+    def test_release_boundary_terminal_and_stop_are_excluded(self):
+        meta = dict(first=1, last=5)
+        rows = self.release_fixture()[:-1]
+        for row in rows:
+            row['frame'] = 1
+        self.assertEqual(release.analyze(meta, rows)['clipped'], 1)
+        rows = self.release_fixture()[4:6]
+        self.assertEqual(release.analyze(meta, rows)['consumer_only'], 1)
+        rows[0]['value'] = 4
+        self.assertEqual(release.analyze(meta, rows)['terminal'], 1)
+        rows = self.release_fixture()
+        rows[-1]['value'] = 0
+        self.assertEqual(release.analyze(meta, rows)['stopped'], 1)
+
+    def test_release_rejects_bad_order_policy_and_cpu(self):
+        for stage, key, value in ((5, 'wall_ns', 1), (2, 'value', 255),
+                                  (5, 'cpu_ns', 0), (6, 'value', 2)):
+            rows = self.release_fixture()
+            rows[stage][key] = value
+            with self.assertRaises(ValueError):
+                release.analyze(dict(first=1, last=5), rows)
+
     def test_submit_partition(self):
         rows = [dict(kind='queue_submit_phase', owner=1, tid=2, id=3,
                      value=p, wall_ns=100+i*100, cpu_ns=50+i*50)

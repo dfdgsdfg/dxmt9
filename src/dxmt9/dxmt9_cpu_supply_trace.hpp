@@ -14,6 +14,7 @@ inline bool enabled() noexcept {
   return value;
 }
 
+// Append-only diagnostic vocabulary; keep analyze_cpu_supply.py in lockstep.
 enum class Event : std::uint32_t {
   Present, ImportBegin, ImportEnd, RawReady, MutationReady, StateBlockReady,
   ReplayBegin, ReplayEnd, QueueEmpty, QueueReserved, QueueReady,
@@ -49,6 +50,9 @@ enum class Event : std::uint32_t {
   QueueMutexHoldBegin, QueueMutexHoldEnd,
   QueueSubmitPhase,
   QueueSubmitValidationEnd, QueueSubmitSummaryFamily,
+  SessionReleasePost, SessionReleaseRaw, SessionReleasePolicy,
+  SessionReleaseQueue, SessionReleaseActionBegin, SessionReleaseAck,
+  SessionReleaseReturn,
 };
 
 inline bool planningSplitEnabled() noexcept {

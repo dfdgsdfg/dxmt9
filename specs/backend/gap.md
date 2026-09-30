@@ -62,6 +62,14 @@ OFF; H414's old FPS does not measure this implementation. See
 [H416](../../docs/perfomance/present-pacing/present-pacing-query-range-wild.416.md) and
 [H415](../../docs/perfomance/present-pacing/present-pacing-query-range-retained-release.415.md).
 
+H417's bounded release observer confirms 535 consecutive same-prefix retained
+ClosePass requests in five active STALKER Presents (7.621 ms diagnostic elapsed).
+It does not observe `Closed` versus `NoActivePass` and is not a reuse capability.
+Same-input closed-prefix identity/epoch/action refinement, invalidation by new
+encoder work, terminal/reset and raw/FIFO progress must precede any ack elision.
+The OFF/ON windows have different query populations and do not price the FPS
+regression. See [H417](../../docs/perfomance/present-pacing/present-pacing-session-release-cost.417.md).
+
 R-BACK-2.15.2 fixed comparison now avoids a temporary projection with the same
 hash guard and fieldwise equality. Native float-edge/collision fixtures and
 18+18 identical-input CPU semantic iterations pass. This pure substitution

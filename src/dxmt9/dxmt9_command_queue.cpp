@@ -9453,12 +9453,27 @@ bool CommandQueue::releaseCpuReadySessionBeforeOrderedControl(
     return false;
   }
 
-  encodeCv_.notify_one();
   const std::uint64_t eventOrdinal = posted.snapshot.event.ordinal;
+  if (supply::enabled()) {
+    supply::record(supply::Event::SessionReleasePost, &sessionReleaseState_,
+                   eventOrdinal, fenceSeqId);
+    supply::record(supply::Event::SessionReleaseRaw, &sessionReleaseState_,
+                   eventOrdinal, fenceRawOrdinal);
+    supply::record(supply::Event::SessionReleasePolicy, &sessionReleaseState_,
+                   eventOrdinal, std::uint64_t(reason) |
+                       (std::uint64_t(action) << 8) |
+                       (std::uint64_t(writer) << 16));
+    supply::record(supply::Event::SessionReleaseQueue, &sessionReleaseState_,
+                   eventOrdinal, queryQueueIdentity_);
+  }
+  encodeCv_.notify_one();
   sessionReleaseCv_.wait(lock, [this, eventOrdinal] {
     return stop_ ||
            sessionReleaseState_.acknowledgedOrdinal() >= eventOrdinal;
   });
+  if (supply::enabled())
+    supply::record(supply::Event::SessionReleaseReturn, &sessionReleaseState_,
+                   eventOrdinal, stop_ ? 0 : 1);
   if (stop_) {
     return false;
   }

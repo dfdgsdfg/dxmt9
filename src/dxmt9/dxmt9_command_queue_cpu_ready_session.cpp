@@ -1,4 +1,5 @@
 #include "dxmt9_command_queue.hpp"
+#include "dxmt9_cpu_supply_trace.hpp"
 #include "dxmt9/assert.hpp"
 #include "dxmt9_draw_encoder.hpp"
 #include "dxmt9_perf_counters.hpp"
@@ -618,6 +619,13 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
           return false;
         }
 
+        if (supply::enabled())
+          supply::record(supply::Event::SessionReleaseActionBegin,
+                         &sessionReleaseState_, release->event.ordinal,
+                         std::uint64_t(bool(pendingRecord)) |
+                             (std::uint64_t(bool(pendingSession)) << 1) |
+                             (std::uint64_t(release->origin ==
+                                 core::metalqueue::SessionReleaseOrigin::Terminal) << 2));
         SessionReleaseCompletion completion =
             SessionReleaseCompletion::SessionSubmitted;
         if (release->event.action == SessionReleaseAction::ClosePass) {
@@ -658,6 +666,11 @@ void CommandQueue::runCpuReadySessionEncodeLoop(OnSubmittedFn onSubmitted) {
         if (acknowledged != SessionReleaseAckResult::Acknowledged) {
           abortCpuReadySessionFailOpen("ordered release acknowledgement");
         }
+        if (supply::enabled() &&
+            acknowledged == SessionReleaseAckResult::Acknowledged)
+          supply::record(supply::Event::SessionReleaseAck,
+                         &sessionReleaseState_, release->event.ordinal,
+                         std::uint64_t(completion));
         switch (release->event.reason) {
         case core::metalqueue::SessionReleaseReason::ProducerSequenceWait:
           perf::countCpuReadySessionReleased(

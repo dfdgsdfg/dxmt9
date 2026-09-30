@@ -4,12 +4,19 @@ workload: 3DMark05 GT1
 title: "Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview"
 type: domain-overview
 status: current
-updated: 2026-09-29
+updated: 2026-09-30
 source: docs/perfomance/present-pacing/log.md; docs/perfomance/overview-3dmark05-gt1.md; docs/perfomance/present-pacing/present-pacing-current-bottleneck-pe-symbol.236.md; docs/perfomance/present-pacing/present-pacing-cpu-ready-next-source-intent.239.md; docs/perfomance/present-pacing/present-pacing-pe-direct-canonical.242.md
 related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing/log.md
 ---
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
+
+[H417](present-pacing-session-release-cost.417.md) observes 535 consecutive
+same-prefix retained ClosePass round trips in five active STALKER Presents,
+7.621 ms total diagnostic elapsed. This confirms repeated transport, not a
+safe early-return predicate or the full FPS deficit. OFF at the same Present
+numbers has a different query population, so timing subtraction is invalid.
+Next qualify pass-close witness reuse on identical input; policy stays OFF.
 
 [H416](present-pacing-query-range-wild.416.md) confirms H415 activation in
 STALKER, but observer-OFF pairs remain slower ON in both orders:

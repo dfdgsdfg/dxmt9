@@ -297,6 +297,22 @@ gaps do not establish GPU blocking, and missing/evicted paths stay unknown.
 | `DXMT_3DMARK05_SYSTEM_TRACE_CPU_PRODUCER_FROM_PE_LOG` | Default for `run_3dmark05_system_trace_sidecar.sh --cpu-producer-from-pe-log`; forces PE recorder stats/log info when no explicit regex is set, passes the wrapped probe's `3dmark05-direct.log` to the CPU summarizer, and lets it prefer unix-side `unix_commit_chunk_entry native_tid=0x...` selectors before falling back to PE `pe_present_* thread_id=0x...` selectors. PE ids are Win32 thread ids, so a PE-source `producer-thread-not-found` verdict means native Mach/pthread mapping is still needed | `0` |
 | `DXMT_3DMARK05_SYSTEM_TRACE_MIN_FREE_MB` | Free-space guard for `run_3dmark05_system_trace_sidecar.sh` before launching xctrace. Defaults to `4096` because a 10s all-processes 3DMark05 Metal System Trace has failed during Instruments trim with about `2.4GiB` free. Set `0` only for deliberate partial-run risk; dry-runs print a warning instead of failing | `4096` |
 
+### Ordered session-release trace
+
+`DXMT9_CPU_SUPPLY_TRACE` also observes ordered release post, raw/policy/queue
+identity, Encode action begin, acknowledgement and caller return. Existing
+window/capacity/overflow rules apply. `scripts/tools/analyze_session_release.py`
+pairs release-state owner and event ordinal, retains unique queue identity, and
+separates post-to-action, action-to-ack and ack-to-return wall time, plus
+same-thread posting/Encode CPU. It excludes terminal, consumer-only, stopped
+and boundary-clipped groups and rejects incomplete interior caller groups.
+Internal Encode producer-wait/cap releases have no synchronous posting endpoint.
+Consecutive retained ClosePass requests with the same sequence are a diagnostic
+population, **not** an epoch/pass-state witness permitting synchronization removal.
+No queue acquisition, writer commit, full-ring wait or subsequent SubmitAndWait
+GPU wait is included. Clocks run under the queue lock and perturb scheduling;
+this trace is not observer-OFF FPS evidence. No additional runtime knob.
+
 ## Retired perf diagnostics
 
 Queue-mutex split coverage caveat (2026-09-19): the acquisition inventory in
