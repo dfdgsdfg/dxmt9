@@ -134,12 +134,13 @@ fully attributed. No runtime change or FPS improvement follows. DrawRun
 preparation/pass ownership and wait-linked source selection remain open. See
 [H425](../../docs/perfomance/present-pacing/present-pacing-range-encode-body.425.md).
 
-H427 source audit identifies potentially redundant store-proof scans when
-Metal query preservation fixes Store actions and disables late-store eligibility.
-Perf-only summary re-traversal must be priced separately; tape-only preservation
-is not the same predicate. Implementation, prepared-output equivalence, GPU/query
-validation and observer-OFF benefit remain open. See
-[H427](../../docs/perfomance/present-pacing/present-pacing-pass-proof-audit.427.md).
+H428 implements H427's query-preserved, perf-OFF store-proof omission. A pure
+production selector preserves normal/tape-only proof evaluation and perf counters.
+Both observer modes pass 192 actual prepared-output cases; segmented/offloaded
+range OFF/ON GPU query/pixel oracles pass. Observer-OFF wild benefit and broader
+alias/format cross-product evidence remain open; perf-only summary re-traversal
+is unchanged. See
+[H428](../../docs/perfomance/present-pacing/present-pacing-query-proof-elision.428.md).
 
 H426 adds opt-in sequential DrawRun preparation milestones without changing
 rendering policy. Five large diagnostic bodies attribute 22.466 ms to pass

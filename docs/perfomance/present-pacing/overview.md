@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H428](present-pacing-query-proof-elision.428.md) implements the narrow H427
+selector: omit store-proof walks only for query preservation with perf OFF.
+Prepared-output fixtures pass 192 cases in each observer mode, and range OFF/ON
+GPU query/pixel oracles pass. No wild/FPS result yet; perf ON retains the scans
+and tape-only preservation remains unchanged.
+
 [H427](present-pacing-pass-proof-audit.427.md) identifies a narrower code candidate:
 query-preserved pass actions still compute store lookahead, while perf ON also
 re-traverses color0/depth for a summary. Their costs are not yet separated.

@@ -1651,6 +1651,15 @@ void testDepthShadowMapBit3() {
 
 int main() {
   try {
+    for (bool queryPreserved : {false, true}) {
+      for (bool observer : {false, true}) {
+        checkEq(dxmt9::encoders::renderPassStoreProofRequired(queryPreserved, observer),
+                !queryPreserved || observer, "query proof demand truth table");
+      }
+    }
+    // Tape-only preservation is deliberately not an input to this predicate.
+    check(dxmt9::encoders::renderPassStoreProofRequired(false, false),
+          "tape-only late-store still requires proof");
     unsetenv("DXMT9_AGGRESSIVE_DEPTH_DONTCARE");
     unsetenv("DXMT9_AGGRESSIVE_COLOR_DONTCARE");
     testDefaultsLoadAndStore();

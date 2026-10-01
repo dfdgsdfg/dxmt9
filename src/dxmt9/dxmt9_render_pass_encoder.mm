@@ -585,6 +585,8 @@ bool prepareRenderPassWithStoreProofLookahead(
   const bool preserveQueryAttachments = query::metalOcclusionEnabled();
   const bool preserveAttachments = preserveQueryAttachments ||
       ctx.queue.renderTapeExactAttachmentPreservation();
+  const bool storeProofRequired = renderPassStoreProofRequired(
+      preserveQueryAttachments, perf::enabled());
   const bool discardAfterPresent = !clear.has_value() && ctx.queue.backBufferDiscardAfterPresent_ &&
                                    hot.colorAttachments[0].handle == ctx.queue.currentBackBuffer_;
   for (std::size_t i = 0; i < core::kMaxRenderTargets; ++i) {
@@ -613,7 +615,7 @@ bool prepareRenderPassWithStoreProofLookahead(
     perf::RenderPassNoLookaheadCause colorNoLookaheadCause =
         perf::RenderPassNoLookaheadCause::Empty;
     auto colorStoreProof =
-        !lookaheadSources.empty()
+        storeProofRequired && !lookaheadSources.empty()
             ? colorStoreProofForLookahead(lookaheadSources, hot.colorAttachments[i].handle, nullptr,
                                           surface->aliasTexture, activePass,
                                           static_cast<std::uint8_t>(i), &colorNoLookaheadCause)
@@ -623,9 +625,11 @@ bool prepareRenderPassWithStoreProofLookahead(
          colorStoreProof == perf::RenderPassColorStoreProof::AllowDeadNoPresent)) {
       colorStoreProof = perf::RenderPassColorStoreProof::BlockMsaaResolve;
     }
-    perf::countRenderPassColorStoreProof(colorStoreProof);
-    if (colorStoreProof == perf::RenderPassColorStoreProof::BlockNoLookahead) {
-      perf::countRenderPassNoLookaheadCause(colorNoLookaheadCause);
+    if (storeProofRequired) {
+      perf::countRenderPassColorStoreProof(colorStoreProof);
+      if (colorStoreProof == perf::RenderPassColorStoreProof::BlockNoLookahead) {
+        perf::countRenderPassNoLookaheadCause(colorNoLookaheadCause);
+      }
     }
     const bool colorDontCareStore =
         !preserveAttachments &&
@@ -695,7 +699,7 @@ bool prepareRenderPassWithStoreProofLookahead(
     const auto proofForAspect = [&](LateRenderPassStoreAspect aspect,
                                     perf::RenderPassNoLookaheadCause& cause) {
       auto proof =
-          !lookaheadSources.empty()
+          storeProofRequired && !lookaheadSources.empty()
               ? depthStoreProofForLookahead(lookaheadSources, hot.depthStencil.handle, nullptr,
                                             depthSurface->aliasTexture, activePass, aspect, &cause)
               : perf::RenderPassDepthStoreProof::BlockNoLookahead;
@@ -720,9 +724,11 @@ bool prepareRenderPassWithStoreProofLookahead(
         legacyDepthProofForPass(hasDepthAspect, depthStoreProof, stencilStoreProof);
     const auto legacyNoLookaheadCause =
         hasDepthAspect ? depthNoLookaheadCause : stencilNoLookaheadCause;
-    perf::countRenderPassDepthStoreProof(legacyDepthStoreProof);
-    if (legacyDepthStoreProof == perf::RenderPassDepthStoreProof::BlockNoLookahead) {
-      perf::countRenderPassNoLookaheadCause(legacyNoLookaheadCause);
+    if (storeProofRequired) {
+      perf::countRenderPassDepthStoreProof(legacyDepthStoreProof);
+      if (legacyDepthStoreProof == perf::RenderPassDepthStoreProof::BlockNoLookahead) {
+        perf::countRenderPassNoLookaheadCause(legacyNoLookaheadCause);
+      }
     }
     const auto allowsDontCare = [&](perf::RenderPassDepthStoreProof proof) {
       return !preserveAttachments &&

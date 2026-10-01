@@ -1288,6 +1288,20 @@ render_pass_actions_spec = executable(
 test('dxmt9-render-pass-actions-spec', render_pass_actions_spec,
      env: dxmt9_native_test_env_vars)
 
+query_preserved_pass_spec = executable(
+  'dxmt9-query-preserved-pass-spec', 'query_preserved_pass_spec.cpp',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep],
+  link_args: dxmt9_test_link_args,
+)
+foreach observer : ['0', '1']
+  test('dxmt9-query-preserved-pass-observer-' + observer + '-spec',
+    query_preserved_pass_spec,
+    env: dxmt9_native_test_env_vars + [
+      'DXMT9_METAL_OCCLUSION=1', 'DXMT_PERF_COUNTERS=' + observer],
+    is_parallel: false)
+endforeach
+
 # R-FORMAT-12 — D3DFMT_NULL depth-only (colorless) render-pass attachment
 # decisions. Pure value transforms (encoders::renderPassAdmitsRt0 /
 # colorAttachmentIncluded) extracted from beginRenderPass so the

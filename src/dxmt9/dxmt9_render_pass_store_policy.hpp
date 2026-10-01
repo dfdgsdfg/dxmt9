@@ -4,6 +4,13 @@
 
 namespace dxmt9::encoders {
 
+// Query preservation fixes both DontCare and provisional Unknown decisions.
+// Tape-only preservation does not: its late-store path still needs the proof.
+inline constexpr bool renderPassStoreProofRequired(
+    bool preserveQueryAttachments, bool observeProof) noexcept {
+  return !preserveQueryAttachments || observeProof;
+}
+
 // Policy seam for provisional WMTStoreActionUnknown selection. Only bounded
 // proof exhaustion is recoverable online; malformed evidence, resolve actions,
 // present sources, and sessions with no possible successor stay concrete.

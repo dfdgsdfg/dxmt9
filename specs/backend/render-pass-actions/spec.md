@@ -110,6 +110,18 @@ Order of precedence, first match wins:
 
 ### 2.2 Store action selection (per attachment, at `flushRender`)
 
+Metal occlusion preservation overrides proof-based DontCare and provisional
+Unknown selection provider-wide: included color attachments use Store (or
+StoreAndMultisampleResolve for a resolve target), and included depth/stencil
+aspects use Store. `renderPassStoreProofRequired` may omit the pure lookahead
+walk only when this query-preservation predicate holds and perf observation is
+disabled. Perf observation retains the original proof/cause counters; omitted
+work must not emit a synthetic BlockNoLookahead observation. Tape-only exact
+preservation does not qualify because its late-store path still consumes proof.
+Attachment construction, load/clear actions, resource ledgers and query ordering
+are unchanged. This is value-computation elision, not load/store-action elision;
+exhaustive predicate tests and prepared-output checks bind the refinement.
+
 Order of precedence, first match wins:
 
 1. `R-BACK-15.14` MSAA resolve → `StoreActionMultisampleResolve`.
