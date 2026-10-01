@@ -3626,6 +3626,270 @@ void nativeMetalCapturedQueryTapeOracle() {
         "Pending-only transcript preserves actual Metal/pixel evidence without a GPU query-result claim");
 }
 
+struct PagedBootstrapVolumeFixture {
+  GeneralIndexedFixture source{3u, true, false, true, false, false,
+      0u, false, false, true, kGpuVisibleBackgroundColorARGB, true};
+  std::vector<std::byte> pixelShader{source.pixelShaderBytes};
+  std::vector<RenderTapeProviderBlob> blobs{source.blobsValue};
+  std::vector<std::byte> correct{};
+  std::vector<std::byte> wrongTail{};
+
+  PagedBootstrapVolumeFixture() {
+    // Both sampler operands move from s0 to s5. Its state is beyond the first
+    // sparse cap after six complete public sampler-state sets are sorted.
+    const std::uint32_t declaration = 0xa00f0805u;
+    const std::uint32_t operand = 0xa0e40805u;
+    std::memcpy(pixelShader.data() + 3u * sizeof(declaration), &declaration, sizeof(declaration));
+    std::memcpy(pixelShader.data() + 7u * sizeof(operand), &operand, sizeof(operand));
+    const auto originalDigest = RenderTapeCaptureSession::sha256(source.pixelShaderBytes);
+    const auto shaderDigest = RenderTapeCaptureSession::sha256(pixelShader);
+    for (auto& blob : blobs)
+      if (blob.digest == originalDigest) blob = {.digest = shaderDigest, .bytes = pixelShader};
+
+    ImportedRenderTapeView tape;
+    check(importPrevalidatedRenderTape(source.tape, tape), "paged Volume source imports");
+    const auto rebuildState = [](const ImportedRecordView& record, std::uint32_t flags,
+                                  bool completeConstants) {
+      std::vector<std::vector<std::byte>> owned;
+      owned.reserve(kRenderTapeStateCategoryCount);
+      std::vector<std::pair<std::uint16_t, std::span<const std::byte>>> sections;
+      for (std::size_t index = 0u; index < record.sections.size(); ++index) {
+        const auto section = record.section(index);
+        if (section.descriptor.kind == D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE) continue;
+        owned.emplace_back(section.payload.begin(), section.payload.end());
+        if (section.descriptor.kind == D9C_COMMAND_CHUNK_SECTION_TEXTURE) {
+          auto* bindings = reinterpret_cast<D9CCommandChunkWireTextureBinding*>(owned.back().data());
+          check(section.descriptor.count == D9C_DRAW_PACKET_MAX_TEXTURES,
+                "paged shader retains the complete bound/null texture table");
+          bindings[5u].handleIndex = bindings[0u].handleIndex;
+          bindings[0u].handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX;
+        }
+        sections.emplace_back(section.descriptor.kind, owned.back());
+      }
+      if (completeConstants) {
+        for (std::uint16_t kind = D9C_COMMAND_CHUNK_SECTION_VS_CONST_F;
+             kind <= D9C_COMMAND_CHUNK_SECTION_PS_CONST_B; ++kind) {
+          const auto* rule = sectionRule(kind);
+          owned.emplace_back(sizeof(D9CCommandChunkWireConstantRange) +
+                             rule->maxCount * rule->elementSize, std::byte{0});
+          const D9CCommandChunkWireConstantRange range{
+              .startRegister = 0u, .registerCount = rule->maxCount};
+          std::memcpy(owned.back().data(), &range, sizeof(range));
+          // A nonzero unreferenced final register catches truncated files;
+          // c0 still comes from the original per-draw delta.
+          owned.back().back() = std::byte{1u};
+          sections.emplace_back(kind, owned.back());
+        }
+      }
+      auto payload = sparsePayload(D9CCommandChunkWireDrawHeader{.flags = flags}, sections);
+      auto* header = reinterpret_cast<D9CCommandChunkWireDrawHeader*>(payload.data());
+      auto* descriptors = reinterpret_cast<D9CCommandChunkWireSectionDesc*>(
+          payload.data() + header->sectionTableOffset);
+      for (std::uint32_t index = 0u; index < header->sectionCount; ++index)
+        if (descriptors[index].kind >= D9C_COMMAND_CHUNK_SECTION_VS_CONST_F &&
+            descriptors[index].kind <= D9C_COMMAND_CHUNK_SECTION_PS_CONST_B)
+          descriptors[index].count = sectionRule(descriptors[index].kind)->maxCount;
+      return payload;
+    };
+    const auto build = [&](bool wrong) {
+      RenderTapeBuilder builder;
+      for (std::uint32_t index = 0u; index < tape.events.size(); ++index) {
+        const auto event = tape.event(index);
+        const auto type = static_cast<RenderTapeEventType>(event.header.type);
+        if (type == RenderTapeEventType::BootstrapState) {
+          RenderTapeBootstrapHeader fixed{};
+          std::memcpy(&fixed, event.payload.data(), sizeof(fixed));
+          D9CCommandChunkWireHeader header{};
+          const auto bytes = event.payload.subspan(sizeof(fixed));
+          std::memcpy(&header, bytes.data(), sizeof(header));
+          ImportedChunkView chunk;
+          check(importPrevalidatedCommandChunk(bytes, CommandChunkEnvelope{
+              .recordCount = header.recordCount, .handleCount = header.handleCount}, chunk),
+              "paged Volume bootstrap imports its original anchor");
+          std::vector<Record> records{{.type = D9C_COMMAND_RECORD_APPLY_STATE,
+              .payload = rebuildState(chunk.record(0u), D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT, true),
+              .handles = std::vector<D9CCommandChunkWireHandleEntry>(chunk.handles.begin(), chunk.handles.end())}};
+          std::vector<D9CDrawPacketSamplerState> states;
+          constexpr std::array values{3u, 3u, 3u, 0u, 1u, 1u, 1u, 0u, 0u, 1u, 0u, 0u, 0u};
+          for (std::uint32_t sampler = 0u; sampler <= 5u; ++sampler)
+            for (std::uint32_t state = 1u; state <= values.size(); ++state)
+              states.push_back({sampler, state,
+                  wrong && sampler == 5u && state == 3u ? 1u : values[state - 1u]});
+          for (std::uint32_t pageIndex = 0u;; ++pageIndex) {
+            const auto page = renderTapeBootstrapPageSpan(states.size(), D9C_DRAW_PACKET_MAX_SAMPLER, pageIndex);
+            if (page.count == 0u) break;
+            const std::array section{std::pair<std::uint16_t, std::span<const std::byte>>{
+                D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE,
+                std::as_bytes(std::span(states).subspan(page.first, page.count))}};
+            records.push_back({.type = D9C_COMMAND_RECORD_APPLY_STATE,
+                                .payload = sparsePayload({}, section)});
+          }
+          builder.appendBootstrapState(makeChunk(records));
+        } else if (type == RenderTapeEventType::ObjectDefine) {
+          RenderTapeObjectDefineHeader fixed{};
+          std::memcpy(&fixed, event.payload.data(), sizeof(fixed));
+          auto payload = std::vector<std::byte>(event.payload.begin(), event.payload.end());
+          if (fixed.immutablePayloadDigest == originalDigest) {
+            fixed.immutablePayloadDigest = shaderDigest;
+            std::memcpy(payload.data(), &fixed, sizeof(fixed));
+          }
+          builder.appendRawEvent(type, payload);
+        } else if (type == RenderTapeEventType::CommandChunk) {
+          RenderTapeCommandChunkHeader fixed{};
+          std::memcpy(&fixed, event.payload.data(), sizeof(fixed));
+          ImportedChunkView chunk;
+          check(importPrevalidatedCommandChunk(event.payload.subspan(sizeof(fixed)),
+              CommandChunkEnvelope{.recordCount = fixed.recordCount, .handleCount = fixed.handleCount}, chunk),
+              "paged Volume source commands import");
+          std::vector<Record> records;
+          std::uint32_t draw = 0u;
+          for (std::uint32_t recordIndex = 0u; recordIndex < chunk.records.size(); ++recordIndex) {
+            const auto record = chunk.record(recordIndex);
+            Record copy{.type = record.header.type,
+                .payload = std::vector<std::byte>(record.payload.begin(), record.payload.end()),
+                .handles = std::vector<D9CCommandChunkWireHandleEntry>(record.handles.begin(), record.handles.end())};
+            if (record.header.type == D9C_COMMAND_RECORD_APPLY_STATE)
+              copy.payload = rebuildState(record, 0u, false);
+            if (record.header.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
+              auto* header = reinterpret_cast<D9CCommandChunkWireDrawHeader*>(copy.payload.data());
+              auto* sections = reinterpret_cast<D9CCommandChunkWireSectionDesc*>(
+                  copy.payload.data() + header->sectionTableOffset);
+              for (std::uint32_t sectionIndex = 0u; sectionIndex < header->sectionCount; ++sectionIndex) {
+                if (sections[sectionIndex].kind != D9C_COMMAND_CHUNK_SECTION_PS_CONST_F || draw >= 2u) continue;
+                const float z = draw == 0u ? -1.f / 6.f : 7.f / 6.f;
+                std::memcpy(copy.payload.data() + sections[sectionIndex].payloadOffset +
+                    sizeof(D9CCommandChunkWireConstantRange) + 2u * sizeof(float), &z, sizeof(z));
+              }
+              ++draw;
+            }
+            records.push_back(std::move(copy));
+          }
+          builder.appendCommandChunk(CommandChunkEnvelope{
+              .recordCount = fixed.recordCount, .handleCount = fixed.handleCount}, makeChunk(records));
+        } else {
+          builder.appendRawEvent(type, event.payload);
+        }
+      }
+      return builder.seal();
+    };
+    correct = build(false);
+    wrongTail = build(true);
+  }
+};
+
+void nativeMetalPagedBootstrapTailControlsSampledPixels() {
+  const PagedBootstrapVolumeFixture fixture;
+  const auto correct = prepareRenderTapeIdentity(fixture.correct, fixture.blobs);
+  const auto wrong = prepareRenderTapeIdentity(fixture.wrongTail, fixture.blobs);
+  check(correct.valid() && wrong.valid(), "paged Volume correct/wrong-tail fixtures preflight");
+  ImportedRenderTapeView tape;
+  check(importPrevalidatedRenderTape(fixture.correct, tape), "paged Volume tape imports");
+  const auto bootstrap = tape.event(0u).payload.subspan(sizeof(RenderTapeBootstrapHeader));
+  D9CCommandChunkWireHeader header{};
+  std::memcpy(&header, bootstrap.data(), sizeof(header));
+  ImportedChunkView chunk;
+  check(validateCommandChunk(bootstrap, CommandChunkEnvelope{
+              .recordCount = header.recordCount, .handleCount = header.handleCount}, &chunk).valid() &&
+            chunk.records.size() == 3u && chunk.record(1u).section(0u).descriptor.count == 64u &&
+            chunk.record(2u).section(0u).descriptor.count == 14u,
+        "real GPU fixture has one full anchor and exactly78 sampler rows in two capped deltas");
+  const auto tail = chunk.record(2u).section(0u).payload;
+  D9CDrawPacketSamplerState witness{};
+  std::memcpy(&witness, tail.data() + 3u * sizeof(witness), sizeof(witness));
+  check(witness.sampler == 5u && witness.type == 3u && witness.value == 3u,
+        "sampled shader ADDRESSW CLAMP is deliberately in the last bootstrap page");
+  std::uint32_t completeConstants = 0u;
+  const auto anchor = chunk.record(0u);
+  for (std::size_t index = 0u; index < anchor.sections.size(); ++index) {
+    const auto section = anchor.section(index);
+    if (section.descriptor.kind >= D9C_COMMAND_CHUNK_SECTION_VS_CONST_F &&
+        section.descriptor.kind <= D9C_COMMAND_CHUNK_SECTION_PS_CONST_B) {
+      check(section.descriptor.count == sectionRule(section.descriptor.kind)->maxCount &&
+                section.payload.back() == std::byte{1u},
+            "paged GPU anchor retains each full constant file and its final-register sentinel");
+      ++completeConstants;
+    }
+    if (section.descriptor.kind == D9C_COMMAND_CHUNK_SECTION_TEXTURE) {
+      D9CCommandChunkWireTextureBinding null{}, bound{};
+      std::memcpy(&null, section.payload.data(), sizeof(null));
+      std::memcpy(&bound, section.payload.data() + 5u * sizeof(bound), sizeof(bound));
+      check(null.valid == 1u && null.handleIndex == D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX &&
+                bound.valid == 1u && bound.handleIndex < chunk.handles.size() &&
+                chunk.handles[bound.handleIndex].objectId == kTexture.objectId,
+            "paged GPU anchor binds the actual sampled Volume while preserving explicit null slots");
+    }
+  }
+  check(completeConstants == 6u, "paged GPU anchor preserves all six complete constant files");
+  const D9CPresentParams params{.backBufferWidth = 16u, .backBufferHeight = 16u,
+      .backBufferFormat = 22u, .backBufferCount = 1u, .swapEffect = 1u,
+      .windowed = 1u, .presentationInterval = 0x80000000u};
+  for (const auto route : {RenderTapePreparedRoute::Compatibility, RenderTapePreparedRoute::ProductionSlot}) {
+    std::unique_ptr<D9CFactory, decltype(&dxmt9c_factory_release)> factory(dxmt9c_factory_create(), dxmt9c_factory_release);
+    std::unique_ptr<D9CDevice, decltype(&dxmt9c_device_release)> device(
+        dxmt9c_factory_create_device(factory.get(), 0u, &params, 0u, nullptr), dxmt9c_device_release);
+    check(device != nullptr, "paged Volume actual Metal device constructs");
+    for (std::uint32_t iteration = 0u; iteration < 3u; ++iteration) {
+      const bool incorrect = iteration == 1u;
+      const auto before = dxmt9::perf::snapshotRenderTapeReplay();
+      const auto replay = replayPreparedRenderTapeIdentity(device.get(), incorrect ? wrong : correct, {
+          .route = route,
+          .reset = iteration == 0u ? RenderTapePreparedReset::FreshDevice : RenderTapePreparedReset::WarmDevice});
+      const auto after = dxmt9::perf::snapshotRenderTapeReplay();
+      check(after.gpuErrors == before.gpuErrors &&
+            (route == RenderTapePreparedRoute::Compatibility
+                ? after.compatibilityDraws - before.compatibilityDraws == 3u &&
+                  after.directLeaseDraws == before.directLeaseDraws
+                : after.directLeaseDraws - before.directLeaseDraws == 3u &&
+                  after.compatibilityDraws == before.compatibilityDraws),
+            "paged bootstrap GPU fixture executes all3 draws through its selected production route");
+      const auto expected = gpuVisibleUniformExpectedPixels();
+      if (incorrect) {
+        auto swapped = expected;
+        for (std::size_t y = 0u; y < 16u; ++y) {
+          for (std::size_t x = 0u; x < 16u; ++x) {
+            if (x >= 4u && (x < 6u || x >= 10u)) continue;
+            const auto color = x < 4u ? kGpuVisibleColorBARGB : kGpuVisibleColorAARGB;
+            std::memcpy(swapped.data() + (y * 16u + x) * sizeof(color), &color, sizeof(color));
+          }
+        }
+        check(replay.status == FrameTapeReplayStatus::OutputMismatch &&
+                  replay.validity.expectedDigestCaptured && !replay.validity.expectedDigestMatched &&
+                  replay.outputPixels != expected && replay.outputPixels == swapped,
+              "wrong last-page ADDRESSW WRAP swaps exact sampled stripes and fails the unchanged original oracle");
+      } else {
+        check(replay.complete() && replay.outputPixels == expected &&
+                  replay.sourcePixels == expected && replay.validity.expectedDigestMatched &&
+                  replay.queryReplay.actualMetal && replay.queryReplay.gpuResultOracle &&
+                  replay.queryReplay.matchedResults == 2u,
+              "cold/warm paged bootstrap preserves exact original mip/z pixels and real192/zero query results");
+      }
+      check(replay.conservation.objectsCreated == replay.conservation.objectsReleased,
+            "paged correct/negative/warm recovery conserve every runtime wrapper");
+    }
+  }
+}
+
+void writePagedBootstrapVolumeFixture(const std::filesystem::path& directory) {
+  std::error_code error;
+  std::filesystem::create_directories(directory, error);
+  check(!error, "paged Volume fixture directory creates");
+  const PagedBootstrapVolumeFixture fixture;
+  const auto write = [&](std::string_view name, std::span<const std::byte> bytes) {
+    std::ofstream output(directory / std::string(name), std::ios::binary);
+    output.write(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+    check(output.good(), "paged Volume fixture artifact writes");
+  };
+  write("events.bin", fixture.correct);
+  write("wrong-tail.events.bin", fixture.wrongTail);
+  write("output.rgba", gpuVisibleUniformExpectedPixels());
+  write("source.rgba", gpuVisibleUniformExpectedPixels());
+  constexpr std::array names{
+      "vertex.bin", "index.bin", "shader.bin", "pixel.bin", "declaration.bin",
+      "output.bin", "volume0.bin", "volume1.bin", "volume2.bin"};
+  check(fixture.blobs.size() == names.size(), "paged Volume artifact blob names match canonical catalogue");
+  for (std::size_t index = 0u; index < names.size(); ++index) write(names[index], fixture.blobs[index].bytes);
+}
+
 void nativeMetalVolumeMipSliceOracle() {
   const GeneralIndexedFixture fixture(3u, true, false, true, false, false,
       0u, false, false, true, kGpuVisibleBackgroundColorARGB, true);
@@ -4205,6 +4469,108 @@ void boundedSequenceMutationIsVisibleAtSecondPresent() {
             second.conservation.objectsCreated == 2u &&
             second.conservation.objectsReleased == 2u,
         "each sequence replay conserves its output and texture wrappers");
+}
+
+void pagedBootstrapOutputUsesFinalOrderedAttachment() {
+  const auto implicit = implicitBootstrapChunk();
+  ImportedChunkView imported;
+  check(importPrevalidatedCommandChunk(implicit, CommandChunkEnvelope{.recordCount = 1u}, imported),
+        "paged attachment anchor imports");
+  const auto fullPayload = imported.record(0u).payload;
+  const Record anchor{.type = D9C_COMMAND_RECORD_APPLY_STATE,
+      .payload = std::vector<std::byte>(fullPayload.begin(), fullPayload.end())};
+  const D9CCommandChunkWireRenderState state{.state = 7u, .value = 1u};
+  const std::array stateSection{std::pair<std::uint16_t, std::span<const std::byte>>{
+      D9C_COMMAND_CHUNK_SECTION_RENDER_STATE, std::as_bytes(std::span(&state, 1u))}};
+  const Record preserve{.type = D9C_COMMAND_RECORD_APPLY_STATE,
+      .payload = sparsePayload({}, stateSection)};
+  const auto target = [&](std::uint32_t symbol, std::uint32_t handleIndex) {
+    const D9CCommandChunkWireRenderTargetBinding binding{
+        .slot = 0u, .valid = 1u,
+        .handleIndex = symbol == 2u ? D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX : handleIndex};
+    const std::array section{std::pair<std::uint16_t, std::span<const std::byte>>{
+        D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET, std::as_bytes(std::span(&binding, 1u))}};
+    Record record{.type = D9C_COMMAND_RECORD_APPLY_STATE, .payload = sparsePayload({}, section)};
+    if (symbol != 2u)
+      record.handles.push_back({kOutput.kind,
+          kOutput.generation + (symbol == 3u ? 1u : 0u), kOutput.objectId});
+    return record;
+  };
+  for (std::uint32_t length = 1u, words = 4u; length <= 3u; ++length, words *= 4u) {
+    for (std::uint32_t word = 0u; word < words; ++word) {
+      std::vector<Record> records{anchor};
+      auto expected = FrameTapeBootstrapOutputDisposition::ImplicitDefault;
+      std::uint32_t handleCount = 0u;
+      for (std::uint32_t index = 0u, digits = word; index < length; ++index, digits /= 4u) {
+        const auto symbol = digits % 4u;
+        if (symbol == 0u) {
+          records.push_back(preserve);
+          continue;
+        }
+        records.push_back(target(symbol, handleCount));
+        handleCount += records.back().handles.size();
+        expected = symbol == 1u ? FrameTapeBootstrapOutputDisposition::ExplicitExact
+            : symbol == 2u ? FrameTapeBootstrapOutputDisposition::ExplicitNull
+                           : FrameTapeBootstrapOutputDisposition::WrongIdentity;
+      }
+      const auto bytes = makeChunk(records);
+      check(validateCommandChunk(bytes, CommandChunkEnvelope{
+                  .recordCount = static_cast<std::uint32_t>(records.size()),
+                  .handleCount = handleCount}).valid(),
+            "ordered attachment checker uses canonical records and generation-qualified handle slices");
+      check(classifyFrameTapeBootstrapOutput(bytes, CommandChunkEnvelope{
+                  .recordCount = static_cast<std::uint32_t>(records.size()),
+                  .handleCount = handleCount}, kOutput) == expected,
+            "every small ordered RT0 trace classifies the final effective delta, not the first binding");
+    }
+  }
+  const auto sparseOnly = makeChunk(std::array{preserve});
+  check(classifyFrameTapeBootstrapOutput(sparseOnly,
+            CommandChunkEnvelope{.recordCount = 1u}, kOutput) ==
+            FrameTapeBootstrapOutputDisposition::Malformed,
+        "paged attachment classifier requires the first full anchor");
+  const auto explicitBytes = bootstrapChunk();
+  check(importPrevalidatedCommandChunk(explicitBytes,
+            CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u}, imported),
+        "legacy explicit attachment imports");
+  const auto explicitPayload = imported.record(0u).payload;
+  const Record explicitAnchor{.type = D9C_COMMAND_RECORD_APPLY_STATE,
+      .payload = std::vector<std::byte>(explicitPayload.begin(), explicitPayload.end()),
+      .handles = {{kOutput.kind, kOutput.generation, kOutput.objectId}}};
+  const auto reset = makeChunk(std::array{explicitAnchor, anchor});
+  check(classifyFrameTapeBootstrapOutput(reset,
+            CommandChunkEnvelope{.recordCount = 2u, .handleCount = 1u}, kOutput,
+            kRenderTapeLegacyBaselineProfileVersion) ==
+            FrameTapeBootstrapOutputDisposition::ImplicitDefault &&
+            classifyFrameTapeBootstrapOutput(reset,
+                CommandChunkEnvelope{.recordCount = 2u, .handleCount = 1u}, kOutput) ==
+                FrameTapeBootstrapOutputDisposition::Malformed,
+        "legacy later FULL resets implicit RT0 while profile3 rejects a repeated anchor");
+  const Record emptyDelta{.type = D9C_COMMAND_RECORD_APPLY_STATE,
+      .payload = sparsePayload({}, {})};
+  check(classifyFrameTapeBootstrapOutput(makeChunk(std::array{anchor, emptyDelta}),
+            CommandChunkEnvelope{.recordCount = 2u}, kOutput) ==
+            FrameTapeBootstrapOutputDisposition::Malformed,
+        "effect-empty bootstrap continuation fails attachment admission");
+
+  // Exercise the actual compact provider planner, not only the classifier.
+  ProductionFixture fixture;
+  ImportedRenderTapeView original;
+  check(importPrevalidatedRenderTape(fixture.tape, original), "compact paged fixture imports");
+  const auto paged = makeChunk(std::array{anchor, preserve});
+  const RenderTapeBootstrapHeader header{.overlayCount = 1u};
+  auto payload = bytesOf(header);
+  payload.insert(payload.end(), paged.begin(), paged.end());
+  RenderTapeBuilder builder;
+  builder.appendRawEvent(RenderTapeEventType::BootstrapState, payload);
+  for (std::uint32_t index = 1u; index < original.events.size(); ++index) {
+    const auto event = original.event(index);
+    builder.appendRawEvent(static_cast<RenderTapeEventType>(event.header.type), event.payload);
+  }
+  const auto tape = builder.seal();
+  const auto admitted = preflightFrameTapeIdentity(tape, {});
+  check(admitted.complete() && admitted.coverage.bootstrapChunks == 1u,
+        "compact provider preflight accepts one canonical chunk with ordered bootstrap pages");
 }
 
 void productionShapeUsesImplicitDefaultOutputAndExactDigest() {
@@ -6289,6 +6655,7 @@ int main(int argc, char** argv) {
       check(::setenv("DXMT9_METAL_OCCLUSION", "1", 1) == 0,
             "volume oracle retains actual GPU query-result checks");
       nativeMetalVolumeMipSliceOracle();
+      nativeMetalPagedBootstrapTailControlsSampledPixels();
       return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--test-retained-query-oracle") {
@@ -6323,6 +6690,11 @@ int main(int argc, char** argv) {
     }
     if (argc == 3 && std::string_view(argv[1]) == "--write-texture-input-audit-fixture") {
       writeGpuPolicyFixture(argv[2], true);
+      return 0;
+    }
+    if (argc == 3 && std::string_view(argv[1]) ==
+                         "--write-gpu-paged-bootstrap-fixture") {
+      writePagedBootstrapVolumeFixture(argv[2]);
       return 0;
     }
     if (argc == 3 && std::string_view(argv[1]) ==
@@ -6371,6 +6743,7 @@ int main(int argc, char** argv) {
           "--write-gpu-visible-extra-stream-altered-fixture dir|"
           "--write-gpu-visible-uniform-fixture dir|"
           "--write-gpu-query-fixture dir|"
+          "--write-gpu-paged-bootstrap-fixture dir|"
           "--write-gpu-visible-uniform-altered-fixture dir|"
           "--write-gpu-visible-uniform-stale-vs-fixture dir|"
           "--write-parallel-fixture dir]");
@@ -6402,6 +6775,7 @@ int main(int argc, char** argv) {
     nativeMetalVisibleUniformPolicyOracle();
     productionParallelIndexedFixtureHasTwoChildren();
     boundedSequenceMutationIsVisibleAtSecondPresent();
+    pagedBootstrapOutputUsesFinalOrderedAttachment();
     productionShapeUsesImplicitDefaultOutputAndExactDigest();
     productionShapeReportsWrongExpectedDigest();
     pixelOracleEnvelopeIsNarrowAndDigestAuthenticated();

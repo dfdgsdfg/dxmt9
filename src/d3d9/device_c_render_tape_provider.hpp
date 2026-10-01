@@ -567,7 +567,8 @@ class PreparedRenderTape {
 // created and bound by the replay device itself.
 FrameTapeBootstrapOutputDisposition classifyFrameTapeBootstrapOutput(
     std::span<const std::byte> bytes, const CommandChunkEnvelope& envelope,
-    const D9CWireObjectIdentity& output) noexcept;
+    const D9CWireObjectIdentity& output,
+    std::uint32_t baselineProfileVersion = kRenderTapeBaselineProfileVersion) noexcept;
 
 // Event-ordering predicate used by replay: a CPU-visible mutation or object
 // retirement must not overtake command work submitted by an earlier event.

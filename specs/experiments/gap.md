@@ -76,10 +76,56 @@ qualification. Bootstrap-state rejection attribution is the next actual-input
 gate; no captured state may be dropped to bypass it.
 Failure-only bootstrap diagnostics now report all four shadow table counts and
 capacities plus all six constant-family byte/alignment/register bounds. Both
-PE builds pass. Full-shadow extents exceed the single-section capacities
-(render-state/TSS/sampler/transform: 64/64/64/16), making table overflow a
-candidate, not yet an observed attribution. The next capture must identify the
-rejected dimension before changing bootstrap serialization.
+PE builds pass. Before retry 04, the larger full-shadow extents made overflow
+of the single-section capacities (render-state/TSS/sampler/transform:
+64/64/64/16) a candidate without an observed rejecting dimension.
+Capture retry `app-d3d9-stkcop-bench-tape-h430-query-volume-04` now identifies
+the rejection: sampler state has 83 entries against capacity 64; render states
+43/64, TSS 12/64 and transforms 3/16 fit. All six constant ranges are aligned
+and within their register limits (VS float 256/256, PS float 8/224, others
+empty). The run was intentionally terminated after repeated identical
+bootstrap rejection; its process failure is not a rendering/FPS verdict. No
+Tape was published. A lossless paged bootstrap is required: simply emitting
+multiple FULL_SNAPSHOT records is unsafe because the CPU state fold resets its
+baseline at each such record. The normal recorder section capacities and
+capture-OFF scratch footprint must not grow to accommodate this cold checkpoint.
+
+R-HARN-REPLAY-9.7 now has a dedicated cold PE bootstrap emitter, baseline-profile
+3 validation, cumulative paged fold output and ordered provider RT0
+classification. Ordinary producer source/header and section capacities are
+unchanged. Native producer tests compare real sparse replay with the entire
+source state, including complete constant bytes/dirty cursors, explicit nulls,
+index binding and unchanged live shadow; bounded emission and malformed
+constant failures also pass. PE32/PE64 and the full x86 Unix build pass. Native
+tape/projection/provider plus query/Volume/budget/seed regressions pass 7/7;
+Main additionally reran x86 tape/projection, emitter and install-name checks.
+The shape layer covers 1554 independently specified v2/v3 trace/partition
+cases, and page coverage checks 85 small partitions. Maximum legal-domain
+folding stays inside the conservative 35-record producer and 64-record CPU
+admission bounds. The actual PE helper now feeds an 83-sampler CPU fixture:
+compatibility/production-slot verify and measure runs pass with three bootstrap
+records, three ordinary/source-summary commands, two draws, three conserved
+submissions and five conserved resources. A tail-page mutation changes the
+actual CPU semantic digest; both correct verification routes agree. Main reran
+the producer and CPU paged-route tests and independently inspected the exported
+fixture. Independent verify/execution/measure receipt checks and cross-route
+verification also accept that same input without counting bootstrap pages as
+ordinary sources. A real Metal fixture now uses 64+14 sampler rows with sampled
+Volume s5 ADDRESSW deliberately in the final page. Both routes pass fresh
+correct / warm wrong-tail / warm correct recovery: correct pixels match the
+unchanged original oracle, wrong wrap produces independently predicted swapped
+stripes and OutputMismatch, and real query results and wrapper conservation
+hold. The final seven-test native matrix and Main's separate Volume Metal
+rerun pass. These fixtures do not replace actual STALKER evidence. Retry 05
+passes paged snapshot construction but rejects resource closure with
+`bootstrap_referenced_incomplete_seed`: kind 1, generation 1, object
+4294967298, format 75 (D24S8), 1280x720, usage 2, no multisampling;
+descriptor admission succeeds but expected seed layout is `unsupported_format`.
+The verified task process was terminated after repeated identical rejection.
+No Tape was published and no FPS/visual qualification is claimed. Lossless
+depth/stencil checkpoint capture and restoration, or an independently proven
+first-access initialization contract, remain to be established; omitting the
+bound resource or fabricating its initial contents is not a valid workaround.
 Existing H343 artifacts do not identify the workload's volume format.
 The existing mutation event carries complete volume mip blobs without a new
 wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage

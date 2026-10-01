@@ -493,7 +493,9 @@ forms before subsequent command work. The compact replay path is not allowed
 to silently drop these events and therefore falls through to the general
 typed provider when either form is present. Mismatched size, digest, identity,
 ordering, or unsupported control kinds fail closed.
-The gamma-bearing 64-byte bootstrap header is baseline profile version 2.
+The gamma-bearing 64-byte bootstrap header was introduced in baseline profile
+version 2. Profile 3 retains that layout and adds the ordered paged checkpoint
+contract in R-HARN-REPLAY-9.7.
 Pre-gamma profile-1 artifacts are Retired and fail closed; they are not
 reinterpreted as profile 2 or used as production replay evidence.
 
@@ -1388,3 +1390,18 @@ Failed snapshots reject capture without changing the application's operation
 result. CPU upload evidence must include depth and both strides, and the Metal
 oracle must exercise distinct z slices and mip levels. Supporting query grammar
 does not waive these resource-closure requirements.
+
+**R-HARN-REPLAY-9.7** Capture bootstrap must preserve the complete live keyed
+device state even when it exceeds one canonical sparse section's capacity.
+Baseline profile 3 must contain one initial FULL_SNAPSHOT APPLY_STATE anchor,
+followed only by nonempty delta APPLY_STATE records in a bounded ordered
+overlay sequence. Later full resets, missing anchors and empty overlay chunks
+must reject before execution. Pagination must preserve explicit null bindings,
+constant bytes and every keyed entry without consuming live pending state or
+enlarging the ordinary recorder's scratch or wire section capacities. State
+folding and projected bootstrap emission must preserve the same accumulated
+state; accepting a paged capture while truncating or rejecting its legal folded
+state does not complete this contract. Legacy profile 2 retains its existing
+validation semantics. Native bounded refinement must compare reconstructed
+state with the unsliced reference across capacity boundaries; actual captured
+query and pixel qualification remain separate requirements.

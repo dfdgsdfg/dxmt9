@@ -1283,6 +1283,227 @@ void sparseStateFoldTruthTable() {
         "incomplete category manifest rejects before output construction");
 }
 
+void foldedBootstrapPagesPreserveCompleteState() {
+  struct Table {
+    std::uint16_t kind = 0u;
+    std::uint32_t count = 0u;
+    std::vector<std::byte> bytes{};
+  };
+  const auto tablePayload = [](std::uint16_t kind, std::uint32_t count,
+                               std::span<const std::byte> bytes) {
+    const auto* rule = sectionRule(kind);
+    check(rule != nullptr, "paged fixture category has a canonical rule");
+    const D9CCommandChunkWireDrawHeader header{
+        .sectionCount = 1u, .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
+        .sectionPayloadOffset = sizeof(D9CCommandChunkWireDrawHeader) +
+                                sizeof(D9CCommandChunkWireSectionDesc)};
+    const D9CCommandChunkWireSectionDesc section{
+        .kind = kind, .elementSize = rule->elementSize, .count = count,
+        .payloadOffset = header.sectionPayloadOffset,
+        .byteSize = static_cast<std::uint32_t>(bytes.size())};
+    std::vector<std::byte> payload(header.sectionPayloadOffset + bytes.size());
+    std::memcpy(payload.data(), &header, sizeof(header));
+    std::memcpy(payload.data() + header.sectionTableOffset, &section, sizeof(section));
+    std::memcpy(payload.data() + header.sectionPayloadOffset, bytes.data(), bytes.size());
+    return payload;
+  };
+  std::array<Table, 4u> tables{{
+      {D9C_COMMAND_CHUNK_SECTION_RENDER_STATE},
+      {D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE},
+      {D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE},
+      {D9C_COMMAND_CHUNK_SECTION_TRANSFORM}}};
+  const auto append = [](Table& table, const auto& value) {
+    const auto bytes = std::as_bytes(std::span(&value, 1u));
+    table.bytes.insert(table.bytes.end(), bytes.begin(), bytes.end());
+    ++table.count;
+  };
+  // Complete public D3D9 enum domains, not the wider raw PE shadow extents.
+  constexpr std::array renderKeys{
+      7u, 8u, 9u, 14u, 15u, 16u, 19u, 20u, 22u, 23u, 24u, 25u, 26u, 27u, 28u, 29u,
+      34u, 35u, 36u, 37u, 38u, 48u, 52u, 53u, 54u, 55u, 56u, 57u, 58u, 59u, 60u,
+      128u, 129u, 130u, 131u, 132u, 133u, 134u, 135u, 136u, 137u, 139u, 140u, 141u,
+      142u, 143u, 145u, 146u, 147u, 148u, 151u, 152u, 154u, 155u, 156u, 157u, 158u,
+      159u, 160u, 161u, 162u, 163u, 165u, 166u, 167u, 168u, 170u, 171u, 172u, 173u,
+      174u, 175u, 176u, 178u, 179u, 180u, 181u, 182u, 183u, 184u, 185u, 186u, 187u,
+      188u, 189u, 190u, 191u, 192u, 193u, 194u, 195u, 198u, 199u, 200u, 201u, 202u,
+      203u, 204u, 205u, 206u, 207u, 208u, 209u};
+  for (const auto key : renderKeys)
+    append(tables[0u], D9CCommandChunkWireRenderState{.state = key, .value = key ^ 0x1234u});
+  constexpr std::array stageKeys{1u, 2u, 3u, 4u, 5u, 6u, 7u, 8u, 9u, 10u, 11u,
+                                 22u, 23u, 24u, 26u, 27u, 28u, 32u};
+  for (std::uint32_t stage = 0u; stage < 8u; ++stage)
+    for (const auto key : stageKeys)
+      append(tables[1u], D9CDrawPacketTextureStageState{
+          .stage = stage, .type = key, .value = stage * 256u + key});
+  for (std::uint32_t slot = 0u; slot < D9C_DRAW_PACKET_MAX_TEXTURES; ++slot) {
+    const auto sampler = slot < 16u ? slot : 257u + slot - 16u;
+    for (std::uint32_t key = 1u; key <= 13u; ++key)
+      append(tables[2u], D9CDrawPacketSamplerState{
+          .sampler = sampler, .type = key, .value = sampler * 256u + key});
+  }
+  const auto addTransform = [&](std::uint32_t key) {
+    D9CDrawPacketTransform value{.state = key};
+    for (std::size_t index = 0u; index < 16u; ++index)
+      value.matrix.m[index] = static_cast<float>(key * 16u + index);
+    append(tables[3u], value);
+  };
+  addTransform(2u);
+  addTransform(3u);
+  for (std::uint32_t key = 16u; key <= 23u; ++key) addTransform(key);
+  for (std::uint32_t key = 256u; key < 512u; ++key) addTransform(key);
+
+  const auto makeTape = [&](std::span<const std::byte> bootstrap,
+                            std::span<const Record> records) {
+    RenderTapeBuilder builder;
+    builder.appendBootstrapState(bootstrap);
+    const auto output = outputDescriptor();
+    builder.appendObjectDefine(kOutput,
+        static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+        std::as_bytes(std::span(&output, 1u)), 0u, {});
+    builder.appendObjectDefine(kTexture,
+        static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+        textureDescriptor(), 0u, {}, 4u, 1u);
+    builder.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload,
+                                  0u, 0u, 4u, kTextureDigest);
+    std::uint32_t handles = 0u;
+    for (const auto& record : records) handles += record.handles.size();
+    builder.appendCommandChunk(CommandChunkEnvelope{
+        .recordCount = static_cast<std::uint32_t>(records.size()), .handleCount = handles},
+        makeChunk(records));
+    const RenderTapeOracleAttachment oracle{
+        .identity = kOutput,
+        .descriptorKind = static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface)};
+    builder.appendPresentComplete(5u, records.size(), RenderTapeDigestValidity::NotCaptured, {},
+                                  std::as_bytes(std::span(&oracle, 1u)));
+    return builder.seal();
+  };
+  const auto clearRecord = Record{.type = D9C_COMMAND_RECORD_CLEAR,
+      .payload = bytesOf(D9CCommandChunkWireClear{.flags = 1u, .z = 1.0f,
+          .rectOffset = sizeof(D9CCommandChunkWireClear)})};
+  const auto drawRecord = Record{.type = D9C_COMMAND_RECORD_DRAW_PRIMITIVE,
+      .payload = sparseTexturePayload(true, true),
+      .handles = {{kTexture.kind, kTexture.generation, kTexture.objectId}}};
+  const auto presentRecord = Record{.type = D9C_COMMAND_RECORD_PRESENT,
+      .payload = bytesOf(D9CCommandChunkWirePresent{})};
+  for (std::uint32_t mode = 0u; mode < 3u; ++mode) {
+    std::vector<Record> records{clearRecord};
+    std::array<std::uint32_t, 4u> counts{};
+    std::uint32_t expectedRecords = 1u;
+    for (std::size_t index = 0u; index < tables.size(); ++index) {
+      const auto& table = tables[index];
+      const auto* rule = sectionRule(table.kind);
+      counts[index] = mode == 2u ? table.count : rule->maxCount + mode;
+      check(counts[index] <= table.count, "cap edge fixture lies inside the public key domain");
+      for (std::uint32_t pageIndex = 0u;; ++pageIndex) {
+        const auto page = renderTapeBootstrapPageSpan(counts[index], rule->maxCount, pageIndex);
+        if (page.count == 0u) break;
+        records.push_back({.type = D9C_COMMAND_RECORD_APPLY_STATE,
+            .payload = tablePayload(table.kind, page.count,
+                std::span(table.bytes).subspan(page.first * rule->elementSize,
+                                               page.count * rule->elementSize))});
+        ++expectedRecords;
+      }
+      // A -> B -> A at a real key tests replacement, not just concatenation.
+      auto changed = std::vector<std::byte>(table.bytes.begin(),
+                                            table.bytes.begin() + rule->elementSize);
+      changed[table.kind == D9C_COMMAND_CHUNK_SECTION_TRANSFORM
+                  ? offsetof(D9CDrawPacketTransform, matrix)
+                  : rule->elementSize - 1u] ^= std::byte{1u};
+      check(!std::ranges::equal(changed, std::span(table.bytes).first(rule->elementSize)),
+            "A -> B -> A fixture changes an actual state value before restoring it");
+      records.push_back({.type = D9C_COMMAND_RECORD_APPLY_STATE,
+          .payload = tablePayload(table.kind, 1u, changed)});
+      records.push_back({.type = D9C_COMMAND_RECORD_APPLY_STATE,
+          .payload = tablePayload(table.kind, 1u,
+              std::span(table.bytes).first(rule->elementSize))});
+    }
+    std::array<std::vector<std::byte>, 6u> constantPayloads;
+    for (std::uint16_t index = 0u; index < constantPayloads.size(); ++index) {
+      const auto kind = static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_VS_CONST_F + index);
+      const auto* rule = sectionRule(kind);
+      auto& values = constantPayloads[index];
+      values.resize(sizeof(D9CCommandChunkWireConstantRange) + rule->maxCount * rule->elementSize);
+      const D9CCommandChunkWireConstantRange range{.startRegister = 0u,
+                                                   .registerCount = rule->maxCount};
+      std::memcpy(values.data(), &range, sizeof(range));
+      std::fill(values.begin() + sizeof(range), values.end(), std::byte{static_cast<unsigned char>(index + 1u)});
+      records.push_back({.type = D9C_COMMAND_RECORD_APPLY_STATE,
+          .payload = tablePayload(kind, rule->maxCount, values)});
+    }
+    const D9CCommandChunkWireIndexBinding nullIndex{
+        .valid = 1u, .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX};
+    records.push_back({.type = D9C_COMMAND_RECORD_APPLY_STATE,
+        .payload = tablePayload(D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER, 1u,
+                                std::as_bytes(std::span(&nullIndex, 1u)))});
+    const auto selected = static_cast<std::uint32_t>(records.size());
+    records.push_back(drawRecord);
+    records.push_back(presentRecord);
+    const auto tape = makeTape(bootstrapChunk(), records);
+    const auto folded = foldRenderTapeStateForDraw(tape, catalogue(), 5u, selected);
+    check(folded.valid(), std::string("paged fold: ") + renderTapeStateFoldStatusName(folded.status));
+    D9CCommandChunkWireHeader header{};
+    std::memcpy(&header, folded.bootstrapChunk.data(), sizeof(header));
+    ImportedChunkView output;
+    check(validateCommandChunk(folded.bootstrapChunk, CommandChunkEnvelope{
+              .recordCount = header.recordCount, .handleCount = header.handleCount}, &output).valid() &&
+              header.recordCount == expectedRecords && header.recordCount <= 35u &&
+              header.recordCount <= 64u && folded.referencedIdentities.size() == 1u &&
+              folded.referencedIdentities[0].objectId == kTexture.objectId,
+          "maximum folded checkpoint remains canonical and inside production slot record caps");
+    std::array<std::vector<std::byte>, 4u> actual;
+    for (std::size_t recordIndex = 0u; recordIndex < output.records.size(); ++recordIndex) {
+      const auto record = output.record(recordIndex);
+      check(renderTapeBootstrapRecordShapeValid(kRenderTapeBaselineProfileVersion, recordIndex,
+                  record.drawHeader.flags, record.sections.size()),
+            "folded checkpoint has exactly one anchor followed by nonempty deltas");
+      for (std::size_t sectionIndex = 0u; sectionIndex < record.sections.size(); ++sectionIndex) {
+        const auto section = record.section(sectionIndex);
+        for (std::size_t tableIndex = 0u; tableIndex < tables.size(); ++tableIndex) {
+          if (section.descriptor.kind != tables[tableIndex].kind) continue;
+          check(recordIndex != 0u && record.sections.size() == 1u &&
+                    section.descriptor.count <= sectionRule(section.descriptor.kind)->maxCount,
+                "large tables are emitted only as bounded one-category delta pages");
+          actual[tableIndex].insert(actual[tableIndex].end(), section.payload.begin(), section.payload.end());
+        }
+        if (section.descriptor.kind >= D9C_COMMAND_CHUNK_SECTION_VS_CONST_F &&
+            section.descriptor.kind <= D9C_COMMAND_CHUNK_SECTION_PS_CONST_B) {
+          const auto index = section.descriptor.kind - D9C_COMMAND_CHUNK_SECTION_VS_CONST_F;
+          check(recordIndex == 0u && std::ranges::equal(section.payload, constantPayloads[index]),
+                "all six complete constant files retain exact bytes in the anchor");
+        }
+        if (section.descriptor.kind == D9C_COMMAND_CHUNK_SECTION_TEXTURE) {
+          D9CCommandChunkWireTextureBinding first{}, second{};
+          std::memcpy(&first, section.payload.data(), sizeof(first));
+          std::memcpy(&second, section.payload.data() + sizeof(first), sizeof(second));
+          check(recordIndex == 0u && first.valid == 1u && first.handleIndex == 0u &&
+                    second.valid == 1u && second.handleIndex == D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+                "paged checkpoint keeps live texture identity and explicit null slots");
+        }
+        if (section.descriptor.kind == D9C_COMMAND_CHUNK_SECTION_INDEX_BUFFER) {
+          D9CCommandChunkWireIndexBinding binding{};
+          std::memcpy(&binding, section.payload.data(), sizeof(binding));
+          check(recordIndex == 0u && binding.valid == 1u &&
+                    binding.handleIndex == D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
+                "explicit null index binding survives checkpoint paging");
+        }
+      }
+    }
+    for (std::size_t index = 0u; index < tables.size(); ++index)
+      check(std::ranges::equal(actual[index], std::span(tables[index].bytes).first(
+                counts[index] * sectionRule(tables[index].kind)->elementSize)),
+            "cap, cap+1 and maximum-domain folded table bytes are exact and lossless");
+    const std::array repeatedRecords{clearRecord, drawRecord, presentRecord};
+    const auto checkpoint = makeTape(folded.bootstrapChunk, repeatedRecords);
+    const auto repeated = foldRenderTapeStateForDraw(checkpoint, catalogue(), 5u, 1u);
+    check(repeated.valid() && repeated.bootstrapChunk == folded.bootstrapChunk,
+          "paged bootstrap replay and re-fold preserve every state byte deterministically");
+    const auto projection = projectRenderTapeDrawSlice(tape, catalogue(), {
+        .commandEventOrdinal = 5u, .firstRecordIndex = selected, .recordCount = 1u});
+    check(projection.valid() && projection.stateFold.bootstrapChunk == folded.bootstrapChunk,
+          "real projection consumer accepts the lossless paged checkpoint");
+  }
+}
+
 void streamFrequencyFoldPreservesLegacyOmission() {
   for (const bool full : {false, true}) {
     for (const std::uint32_t slot : {0u, 1u}) {
@@ -1480,6 +1701,7 @@ int main(int argc, char** argv) {
     projectionAccountsLatePerIdentitySeed();
     projectionPreservesDispositionAndAliasMetadata();
     sparseStateFoldTruthTable();
+    foldedBootstrapPagesPreserveCompleteState();
     streamFrequencyFoldPreservesLegacyOmission();
     failClosedSelectionAndClosureCases();
     identityTruthTableAndMalformedInputs();

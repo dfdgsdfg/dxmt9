@@ -217,6 +217,7 @@ struct PreflightPlan {
   std::vector<Definition> definitions{};
   std::vector<RenderTapeResourceMutationHeader> initialMutations{};
   std::vector<Chunk> bootstrap{};
+  std::uint32_t bootstrapProfileVersion = kRenderTapeBaselineProfileVersion;
   std::array<IntervalPlan, kRenderTapeMaxReplayIntervals> intervals{};
   std::uint32_t intervalCount = 0u;
   D9CWireObjectIdentity outputIdentity{};
@@ -629,6 +630,7 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
           !parseChunks(event.payload.subspan(sizeof(fixed)), fixed.overlayCount,
                        candidate.bootstrap, fixed.gammaRampBytes)) goto unsupported;
       result.coverage.bootstrapChunks = fixed.overlayCount;
+      candidate.bootstrapProfileVersion = fixed.baselineProfileVersion;
       break;
     }
     case RenderTapeEventType::ObjectDefine: {
@@ -891,7 +893,7 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
       ? classifyFrameTapeBootstrapOutput(
             candidate.bootstrap.front().bytes,
             candidate.bootstrap.front().envelope,
-            candidate.outputIdentity)
+            candidate.outputIdentity, candidate.bootstrapProfileVersion)
       : FrameTapeBootstrapOutputDisposition::Malformed;
   bootstrapAccepted =
       bootstrapDisposition == FrameTapeBootstrapOutputDisposition::ImplicitDefault ||
@@ -4792,63 +4794,63 @@ FrameTapeReplayResult replayFrameTapeIdentity(
 
 FrameTapeBootstrapOutputDisposition classifyFrameTapeBootstrapOutput(
     std::span<const std::byte> bytes, const CommandChunkEnvelope& envelope,
-    const D9CWireObjectIdentity& output) noexcept {
+    const D9CWireObjectIdentity& output,
+    std::uint32_t baselineProfileVersion) noexcept {
   ImportedChunkView imported;
   if (!importPrevalidatedCommandChunk(bytes, envelope, imported) ||
-      imported.records.size() != 1u ||
-      imported.record(0u).header.type != D9C_COMMAND_RECORD_APPLY_STATE) {
+      imported.records.empty()) {
     return FrameTapeBootstrapOutputDisposition::Malformed;
   }
 
-  bool sawRenderTargetSection = false;
-  bool sawSlotZero = false;
-  for (std::size_t index = 0u; index < imported.record(0u).sections.size();
-       ++index) {
-    const auto section = imported.record(0u).section(index);
-    if (section.descriptor.kind != D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET) {
-      continue;
+  auto disposition = FrameTapeBootstrapOutputDisposition::ImplicitDefault;
+  for (std::size_t recordIndex = 0u; recordIndex < imported.records.size(); ++recordIndex) {
+    const auto record = imported.record(recordIndex);
+    if (record.header.type != D9C_COMMAND_RECORD_APPLY_STATE ||
+        !renderTapeBootstrapRecordShapeValid(baselineProfileVersion, recordIndex,
+                                             record.drawHeader.flags,
+                                             record.sections.size())) {
+      return FrameTapeBootstrapOutputDisposition::Malformed;
     }
-    sawRenderTargetSection = true;
-    if (section.descriptor.count == 0u) {
-      if (section.descriptor.byteSize != 0u) {
-        return FrameTapeBootstrapOutputDisposition::Malformed;
-      }
-      continue;
+    if ((record.drawHeader.flags & D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT) != 0u) {
+      disposition = FrameTapeBootstrapOutputDisposition::ImplicitDefault;
     }
-    for (std::uint32_t bindingIndex = 0u;
-         bindingIndex < section.descriptor.count; ++bindingIndex) {
-      D9CCommandChunkWireRenderTargetBinding binding{};
-      if (!load(section.payload, bindingIndex * sizeof(binding), binding)) {
+    bool sawSlotZero = false;
+    for (std::size_t index = 0u; index < record.sections.size(); ++index) {
+      const auto section = record.section(index);
+      if (section.descriptor.count == 0u || section.descriptor.byteSize == 0u)
         return FrameTapeBootstrapOutputDisposition::Malformed;
-      }
-      if (binding.slot != 0u) {
-        return FrameTapeBootstrapOutputDisposition::SlotOutOfRange;
-      }
-      if (sawSlotZero) {
-        return FrameTapeBootstrapOutputDisposition::Ambiguous;
-      }
-      sawSlotZero = true;
-      if (binding.valid != 1u ||
-          binding.handleIndex == D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX) {
-        return FrameTapeBootstrapOutputDisposition::ExplicitNull;
-      }
-      if (binding.handleIndex >= imported.handles.size()) {
-        return FrameTapeBootstrapOutputDisposition::Malformed;
-      }
-      const auto& handle = imported.handles[binding.handleIndex];
-      if (!sameIdentity(output, D9CWireObjectIdentity{
-                                 .kind = handle.kind,
-                                 .generation = handle.generation,
-                                 .objectId = handle.objectId,
-                             })) {
-        return FrameTapeBootstrapOutputDisposition::WrongIdentity;
+      if (section.descriptor.kind != D9C_COMMAND_CHUNK_SECTION_RENDER_TARGET) continue;
+      for (std::uint32_t bindingIndex = 0u;
+           bindingIndex < section.descriptor.count; ++bindingIndex) {
+        D9CCommandChunkWireRenderTargetBinding binding{};
+        if (!load(section.payload, bindingIndex * sizeof(binding), binding)) {
+          return FrameTapeBootstrapOutputDisposition::Malformed;
+        }
+        if (binding.slot != 0u) {
+          return FrameTapeBootstrapOutputDisposition::SlotOutOfRange;
+        }
+        if (sawSlotZero) {
+          return FrameTapeBootstrapOutputDisposition::Ambiguous;
+        }
+        sawSlotZero = true;
+        if (binding.valid != 1u ||
+            binding.handleIndex == D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX) {
+          disposition = FrameTapeBootstrapOutputDisposition::ExplicitNull;
+          continue;
+        }
+        if (binding.handleIndex >= imported.handles.size()) {
+          return FrameTapeBootstrapOutputDisposition::Malformed;
+        }
+        const auto& handle = imported.handles[binding.handleIndex];
+        disposition = sameIdentity(output, D9CWireObjectIdentity{
+            .kind = handle.kind, .generation = handle.generation,
+            .objectId = handle.objectId})
+            ? FrameTapeBootstrapOutputDisposition::ExplicitExact
+            : FrameTapeBootstrapOutputDisposition::WrongIdentity;
       }
     }
   }
-  if (!sawRenderTargetSection || !sawSlotZero) {
-    return FrameTapeBootstrapOutputDisposition::ImplicitDefault;
-  }
-  return FrameTapeBootstrapOutputDisposition::ExplicitExact;
+  return disposition;
 }
 
 bool applyRenderTapePixelOracleEnvelope(

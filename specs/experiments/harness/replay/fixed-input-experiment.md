@@ -165,6 +165,30 @@ actual sampler values or physical render-pass boundaries.
 
 ## Query transcript and completion authority
 
+### Paged device checkpoint
+
+R-HARN-REPLAY-9.7 uses baseline profile 3 for an ordered bootstrap transaction.
+The first record establishes the full baseline, including explicit null
+bindings and complete constant ranges. Bounded delta pages then overlay every
+entry in the four potentially oversized keyed tables (render, texture-stage,
+sampler and transform state). Exactly the first flattened record carries
+FULL_SNAPSHOT; a later reset would erase earlier pages in the state fold.
+Every chunk and record remains subject to canonical wire validation and exact
+generation-qualified resource closure. No draw or control operation may appear
+inside this state-only transaction.
+
+The PE capture owner constructs pages from a private cold snapshot, never by
+draining or modifying the live recorder. The state-fold owner reconstructs all
+pages and emits the same bounded anchor-plus-delta form when its result exceeds
+one section. Allocation or emission failure rejects the whole checkpoint before
+publication. Profile 2 remains readable under its original full-record rules;
+profile 3 does not silently reinterpret those older artifacts. Native tests
+bind page coverage and state equality to the real producer, validator and fold,
+including cap+1 and maximum-size cases. GPU and original-workload oracles are
+still required independently.
+
+### Query observations
+
 R-HARN-REPLAY-9.1–9.5 extend the same experiment boundary to query-bearing
 captures; they do not create an alternate renderer. The capture owner records
 public observations. The structural validator closes lifetime and issue-cycle

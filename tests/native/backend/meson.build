@@ -849,6 +849,10 @@ cpu_ready_production_routing_spec = executable(
   [
     'cpu_ready_production_routing_spec.cpp',
     'render_tape_test_metal_device.mm',
+    '../../../src/d3d9/d3d9_pe_producer.cpp',
+    '../../../src/d3d9/d3d9_pe_tape_bootstrap.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_draw.cpp',
   ],
   include_directories: dxmt9_inc,
   dependencies: [
@@ -872,6 +876,10 @@ test('dxmt9-render-tape-cpu-query-transcript-spec',
 test('dxmt9-render-tape-cpu-volume-spec',
      cpu_ready_production_routing_spec,
      args: ['--general-cpu-volume-spec'],
+     env: dxmt9_native_test_env)
+test('dxmt9-render-tape-cpu-bootstrap-pages-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--general-cpu-bootstrap-pages-spec'],
      env: dxmt9_native_test_env)
 test('dxmt9-deferred-ingress-routing-spec',
      cpu_ready_production_routing_spec,

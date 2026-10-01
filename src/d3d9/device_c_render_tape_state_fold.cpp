@@ -477,132 +477,168 @@ bool appendUniqueIdentity(std::vector<D9CWireObjectIdentity>& identities,
 
 bool buildBootstrapChunk(FoldState& state,
                          RenderTapeStateFoldResult& result) {
-  std::vector<FoldedSection*> present;
+  struct SectionSpan {
+    FoldedSection* section = nullptr;
+    RenderTapeBootstrapPageSpan elements{};
+  };
+  const auto pagedSection = [](std::uint16_t kind) {
+    return kind == D9C_COMMAND_CHUNK_SECTION_RENDER_STATE ||
+           kind == D9C_COMMAND_CHUNK_SECTION_TEXTURE_STAGE_STATE ||
+           kind == D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE ||
+           kind == D9C_COMMAND_CHUNK_SECTION_TRANSFORM;
+  };
+  std::vector<SectionSpan> anchor;
   for (auto& section : state.sections) {
-    if (constantForSection(state, section.kind) || !section.elements.empty())
-      present.push_back(&section);
-  }
-  if (present.empty()) return false;
-
-  for (auto* section : present) {
-    std::sort(section->elements.begin(), section->elements.end(),
+    if (section.elements.size() > std::numeric_limits<std::uint32_t>::max())
+      return false;
+    std::sort(section.elements.begin(), section.elements.end(),
               [](const auto& left, const auto& right) {
                 return left.primaryKey < right.primaryKey ||
                        (left.primaryKey == right.primaryKey &&
                         left.secondaryKey < right.secondaryKey);
               });
-  }
-
-  const auto sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader);
-  const auto sectionPayloadOffset = alignUp(
-      sectionTableOffset +
-          present.size() * sizeof(D9CCommandChunkWireSectionDesc),
-      alignof(std::uint32_t));
-  std::vector<D9CCommandChunkWireSectionDesc> descriptors;
-  std::vector<std::byte> payload(sectionPayloadOffset, std::byte{0});
-  descriptors.reserve(present.size());
-
-  for (auto* section : present) {
-    const auto* rule = sectionRule(section->kind);
-    if (!rule) return false;
-    payload.resize(alignUp(payload.size(), rule->payloadAlignment),
-                   std::byte{0});
-    const auto offset = payload.size();
-    std::uint32_t count = 0u;
-    if (auto* constant = constantForSection(state, section->kind)) {
-      const D9CCommandChunkWireConstantRange range{
-          .startRegister = 0u,
-          .registerCount = constant->registerCount,
-      };
-      const auto* rangeBytes = reinterpret_cast<const std::byte*>(&range);
-      payload.insert(payload.end(), rangeBytes, rangeBytes + sizeof(range));
-      payload.insert(payload.end(), constant->bytes.begin(),
-                     constant->bytes.end());
-      count = constant->registerCount;
-    } else {
-      if (section->elements.size() > rule->maxCount) return false;
-      count = static_cast<std::uint32_t>(section->elements.size());
-      for (auto& element : section->elements) {
-        if (element.bytes.size() != rule->elementSize) return false;
-        if (element.hasHandle && !element.nullHandle) {
-          std::uint32_t handleIndex = 0u;
-          if (!appendUniqueIdentity(result.referencedIdentities,
-                                    element.identity, handleIndex))
-            return false;
-          std::memcpy(element.bytes.data() + element.handleOffset,
-                      &handleIndex, sizeof(handleIndex));
-        }
-        payload.insert(payload.end(), element.bytes.begin(),
-                       element.bytes.end());
-      }
+    if (!pagedSection(section.kind) &&
+        (constantForSection(state, section.kind) || !section.elements.empty())) {
+      anchor.push_back({&section, {0u, static_cast<std::uint32_t>(
+                                        section.elements.size())}});
     }
-    descriptors.push_back(D9CCommandChunkWireSectionDesc{
-        .kind = section->kind,
-        .elementSize = rule->elementSize,
-        .count = count,
-        .payloadOffset = static_cast<std::uint32_t>(offset),
-        .byteSize = static_cast<std::uint32_t>(payload.size() - offset),
-    });
   }
+  if (anchor.empty()) return false;
 
-  const D9CCommandChunkWireDrawHeader draw{
-      .flags = D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT,
-      .primitiveType = 0u,
-      .baseVertex = 0,
-      .minVertex = 0u,
-      .numVertices = 0u,
-      .startVertex = 0u,
-      .startIndex = 0u,
-      .primitiveCount = 0u,
-      .stride = 0u,
-      .indexFormat = 0u,
-      .sectionCount = static_cast<std::uint32_t>(descriptors.size()),
-      .sectionTableOffset = static_cast<std::uint32_t>(sectionTableOffset),
-      .sectionPayloadOffset = static_cast<std::uint32_t>(sectionPayloadOffset),
-      .reserved0 = 0u,
+  std::vector<D9CCommandChunkWireRecordHeader> records;
+  std::vector<std::byte> arena;
+  const auto appendRecord = [&](std::uint32_t flags,
+                                std::span<const SectionSpan> sections) {
+    const auto firstHandle = result.referencedIdentities.size();
+    const auto sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader);
+    const auto sectionPayloadOffset = alignUp(
+        sectionTableOffset +
+            sections.size() * sizeof(D9CCommandChunkWireSectionDesc),
+        alignof(std::uint32_t));
+    std::vector<D9CCommandChunkWireSectionDesc> descriptors;
+    std::vector<std::byte> payload(sectionPayloadOffset, std::byte{0});
+    descriptors.reserve(sections.size());
+    for (const auto& span : sections) {
+      auto* section = span.section;
+      const auto* rule = sectionRule(section->kind);
+      if (!rule) return false;
+      payload.resize(alignUp(payload.size(), rule->payloadAlignment), std::byte{0});
+      const auto offset = payload.size();
+      std::uint32_t count = 0u;
+      if (auto* constant = constantForSection(state, section->kind)) {
+        const D9CCommandChunkWireConstantRange range{
+            .startRegister = 0u, .registerCount = constant->registerCount};
+        const auto* rangeBytes = reinterpret_cast<const std::byte*>(&range);
+        payload.insert(payload.end(), rangeBytes, rangeBytes + sizeof(range));
+        payload.insert(payload.end(), constant->bytes.begin(), constant->bytes.end());
+        count = constant->registerCount;
+      } else {
+        count = span.elements.count;
+        if (count == 0u || count > rule->maxCount ||
+            span.elements.first > section->elements.size() ||
+            count > section->elements.size() - span.elements.first)
+          return false;
+        for (std::uint32_t index = 0u; index < count; ++index) {
+          auto& element = section->elements[span.elements.first + index];
+          if (element.bytes.size() != rule->elementSize) return false;
+          if (element.hasHandle && !element.nullHandle) {
+            std::uint32_t handleIndex = 0u;
+            if (!appendUniqueIdentity(result.referencedIdentities,
+                                      element.identity, handleIndex))
+              return false;
+            std::memcpy(element.bytes.data() + element.handleOffset,
+                        &handleIndex, sizeof(handleIndex));
+          }
+          payload.insert(payload.end(), element.bytes.begin(), element.bytes.end());
+        }
+      }
+      descriptors.push_back(D9CCommandChunkWireSectionDesc{
+          .kind = section->kind, .elementSize = rule->elementSize, .count = count,
+          .payloadOffset = static_cast<std::uint32_t>(offset),
+          .byteSize = static_cast<std::uint32_t>(payload.size() - offset)});
+    }
+    const D9CCommandChunkWireDrawHeader draw{
+        .flags = flags,
+        .primitiveType = 0u,
+        .baseVertex = 0,
+        .minVertex = 0u,
+        .numVertices = 0u,
+        .startVertex = 0u,
+        .startIndex = 0u,
+        .primitiveCount = 0u,
+        .stride = 0u,
+        .indexFormat = 0u,
+        .sectionCount = static_cast<std::uint32_t>(descriptors.size()),
+        .sectionTableOffset = static_cast<std::uint32_t>(sectionTableOffset),
+        .sectionPayloadOffset = static_cast<std::uint32_t>(sectionPayloadOffset),
+        .reserved0 = 0u};
+    std::memcpy(payload.data(), &draw, sizeof(draw));
+    std::memcpy(payload.data() + sectionTableOffset, descriptors.data(),
+                descriptors.size() * sizeof(descriptors[0]));
+    const auto* applyRule = recordRule(D9C_COMMAND_RECORD_APPLY_STATE);
+    arena.resize(alignUp(arena.size(), applyRule->payloadAlignment), std::byte{0});
+    if (arena.size() > D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES ||
+        payload.size() > D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES - arena.size())
+      return false;
+    records.push_back(D9CCommandChunkWireRecordHeader{
+        .type = D9C_COMMAND_RECORD_APPLY_STATE,
+        .flags = 0u,
+        .payloadOffset = static_cast<std::uint32_t>(arena.size()),
+        .payloadSize = static_cast<std::uint32_t>(payload.size()),
+        .firstHandle = static_cast<std::uint32_t>(firstHandle),
+        .handleCount = static_cast<std::uint32_t>(
+            result.referencedIdentities.size() - firstHandle),
+        .reserved0 = 0u,
+        .reserved1 = 0u});
+    arena.insert(arena.end(), payload.begin(), payload.end());
+    return true;
   };
-  std::memcpy(payload.data(), &draw, sizeof(draw));
-  std::memcpy(payload.data() + sectionTableOffset, descriptors.data(),
-              descriptors.size() * sizeof(descriptors[0]));
+
+  if (!appendRecord(D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT, anchor)) return false;
+  for (auto& section : state.sections) {
+    if (!pagedSection(section.kind)) continue;
+    const auto* rule = sectionRule(section.kind);
+    if (!rule) return false;
+    for (std::uint32_t pageIndex = 0u;; ++pageIndex) {
+      const auto page = renderTapeBootstrapPageSpan(
+          static_cast<std::uint32_t>(section.elements.size()), rule->maxCount, pageIndex);
+      if (page.count == 0u) break;
+      const SectionSpan span{&section, page};
+      if (!appendRecord(0u, std::span(&span, 1u))) return false;
+    }
+  }
 
   const auto recordTableOffset = sizeof(D9CCommandChunkWireHeader);
   const auto handleTableOffset = alignUp(
-      recordTableOffset + sizeof(D9CCommandChunkWireRecordHeader),
+      recordTableOffset + records.size() * sizeof(D9CCommandChunkWireRecordHeader),
       alignof(D9CCommandChunkWireHandleEntry));
   const auto payloadArenaOffset = alignUp(
       handleTableOffset + result.referencedIdentities.size() *
                               sizeof(D9CCommandChunkWireHandleEntry),
       alignof(std::uint32_t));
+  if (payloadArenaOffset > D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES ||
+      arena.size() > D9C_COMMAND_CHUNK_MAX_TOTAL_WIRE_BYTES - payloadArenaOffset)
+    return false;
   const D9CCommandChunkWireHeader header{
       .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
       .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
       .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
       .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
       .recordTableOffset = static_cast<std::uint32_t>(recordTableOffset),
-      .recordCount = 1u,
+      .recordCount = static_cast<std::uint32_t>(records.size()),
       .handleTableOffset = static_cast<std::uint32_t>(handleTableOffset),
       .handleCount = static_cast<std::uint32_t>(
           result.referencedIdentities.size()),
       .payloadArenaOffset = static_cast<std::uint32_t>(payloadArenaOffset),
-      .payloadArenaSize = static_cast<std::uint32_t>(payload.size()),
+      .payloadArenaSize = static_cast<std::uint32_t>(arena.size()),
       .reserved0 = 0u,
       .reserved1 = 0u,
   };
-  const D9CCommandChunkWireRecordHeader record{
-      .type = D9C_COMMAND_RECORD_APPLY_STATE,
-      .flags = 0u,
-      .payloadOffset = 0u,
-      .payloadSize = static_cast<std::uint32_t>(payload.size()),
-      .firstHandle = 0u,
-      .handleCount = header.handleCount,
-      .reserved0 = 0u,
-      .reserved1 = 0u,
-  };
-  result.bootstrapChunk.assign(payloadArenaOffset + payload.size(),
+  result.bootstrapChunk.assign(payloadArenaOffset + arena.size(),
                                std::byte{0});
   std::memcpy(result.bootstrapChunk.data(), &header, sizeof(header));
-  std::memcpy(result.bootstrapChunk.data() + recordTableOffset, &record,
-              sizeof(record));
+  std::memcpy(result.bootstrapChunk.data() + recordTableOffset, records.data(),
+              records.size() * sizeof(records[0]));
   for (std::size_t index = 0u; index < result.referencedIdentities.size();
        ++index) {
     const auto& identity = result.referencedIdentities[index];
@@ -615,13 +651,13 @@ bool buildBootstrapChunk(FoldState& state,
                     index * sizeof(handle),
                 &handle, sizeof(handle));
   }
-  std::memcpy(result.bootstrapChunk.data() + payloadArenaOffset, payload.data(),
-              payload.size());
+  std::memcpy(result.bootstrapChunk.data() + payloadArenaOffset, arena.data(),
+              arena.size());
   const auto validation = validateCommandChunk(
       result.bootstrapChunk,
       CommandChunkEnvelope{
           .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
-          .recordCount = 1u,
+          .recordCount = header.recordCount,
           .handleCount = header.handleCount,
       });
   return validation.valid();

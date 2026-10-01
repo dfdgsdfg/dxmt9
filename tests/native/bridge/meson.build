@@ -172,6 +172,9 @@ pe_full_snapshot_equivalence_spec = executable(
   [
     'pe_full_snapshot_equivalence_spec.cpp',
     '../../../src/d3d9/d3d9_pe_producer.cpp',
+    '../../../src/d3d9/d3d9_pe_tape_bootstrap.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_builder.cpp',
+    '../../../src/d3d9/d3d9_pe_chunk_draw.cpp',
   ],
   include_directories: [
     dxmt9_inc,

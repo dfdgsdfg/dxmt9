@@ -23,8 +23,9 @@ enum class RenderTapeStateFoldStatus : std::uint8_t {
 
 // Cold, value-owned result of folding the production BootstrapState and the
 // canonical state records through one selected Draw. The output chunk contains
-// exactly one APPLY_STATE|FULL_SNAPSHOT record and can be embedded directly in
-// another Render Tape BootstrapState without inventing another state schema.
+// one APPLY_STATE|FULL_SNAPSHOT anchor followed by capped, nonempty state-table
+// delta pages. It can be embedded directly in a profile-3 BootstrapState
+// without inventing another state schema or enlarging hot-path sparse caps.
 struct RenderTapeStateFoldResult {
   RenderTapeStateFoldStatus status = RenderTapeStateFoldStatus::InvalidSource;
   RenderTapeValidationResult sourceValidation{};

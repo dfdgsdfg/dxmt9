@@ -1221,7 +1221,7 @@ validateRenderTape(std::span<const std::byte> blob,
       if (!load(event.payload, 0u, fixed) ||
           fixed.stateCategoryCount != kRenderTapeStateCategoryCount ||
           fixed.reserved0 != 0u ||
-          fixed.baselineProfileVersion != kRenderTapeBaselineProfileVersion ||
+          !renderTapeBootstrapProfileSupported(fixed.baselineProfileVersion) ||
           fixed.overlayCount == 0u) {
         return failure(RenderTapeValidationStatus::InvalidBootstrap, i);
       }
@@ -1235,6 +1235,7 @@ validateRenderTape(std::span<const std::byte> blob,
       // update/query/readback/control records).
       const auto overlays = tailAfter(event.payload, sizeof(fixed));
       std::uint64_t walk = 0u;
+      std::uint64_t flattenedRecordIndex = 0u;
       for (std::uint32_t o = 0u; o < fixed.overlayCount; ++o) {
         std::uint64_t total = 0u;
         if (!chunkTotalBytes(overlays.subspan(walk), total)) {
@@ -1259,17 +1260,23 @@ validateRenderTape(std::span<const std::byte> blob,
           return failure(RenderTapeValidationStatus::InvalidBootstrapChunk, i,
                          chunkResult.status);
         }
+        if (fixed.baselineProfileVersion == kRenderTapeBaselineProfileVersion &&
+            chunk.records.empty()) {
+          return failure(RenderTapeValidationStatus::InvalidBootstrapChunk, i);
+        }
         for (std::size_t r = 0u; r < chunk.records.size(); ++r) {
           const auto record = chunk.record(r);
           if (record.header.type != D9C_COMMAND_RECORD_APPLY_STATE) {
             return failure(RenderTapeValidationStatus::BootstrapForbiddenRecord,
                            i);
           }
-          if ((record.drawHeader.flags &
-               D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT) == 0u) {
+          if (!renderTapeBootstrapRecordShapeValid(
+                  fixed.baselineProfileVersion, flattenedRecordIndex,
+                  record.drawHeader.flags, record.sections.size())) {
             return failure(RenderTapeValidationStatus::InvalidBootstrapChunk,
                            i);
           }
+          ++flattenedRecordIndex;
         }
         // The canonical validator proves handle-table shape and references;
         // this tape-level pass proves that every referenced identity has an
@@ -2537,7 +2544,8 @@ RenderTapeReductionResult reduceRenderTape(
 
 void RenderTapeBuilder::appendBootstrapState(
     std::span<const std::byte> overlayChunks,
-    std::span<const std::byte> gammaRamp) {
+    std::span<const std::byte> gammaRamp,
+    std::uint32_t baselineProfileVersion) {
   if (!gammaRamp.empty() && gammaRamp.size() != kRenderTapeGammaRampBytes) {
     throw std::invalid_argument("bootstrap gamma ramp must be exactly 1536 bytes");
   }
@@ -2559,7 +2567,7 @@ void RenderTapeBuilder::appendBootstrapState(
   tail.insert(tail.end(), overlayChunks.begin(), overlayChunks.end());
   tail.insert(tail.end(), gammaRamp.begin(), gammaRamp.end());
   RenderTapeBootstrapHeader fixed{
-      .baselineProfileVersion = kRenderTapeBaselineProfileVersion,
+      .baselineProfileVersion = baselineProfileVersion,
       .stateCategoryCount = kRenderTapeStateCategoryCount,
       .overlayCount = overlayCount,
       .gammaRampBytes = static_cast<std::uint32_t>(gammaRamp.size()),

@@ -1831,6 +1831,173 @@ void textureSurfaceWrapperLifetimeIsIdempotent() {
         "standalone surface remains independently wrapper-owned");
 }
 
+void bootstrapProfileShapesAndPagePartitionsAreExhaustive() {
+  const auto stateChunk = makeApplyStateChunk();
+  ImportedChunkView anchor;
+  check(importPrevalidatedCommandChunk(stateChunk, CommandChunkEnvelope{.recordCount = 1u},
+                                       anchor), "shape anchor imports");
+  const auto anchorBytes = anchor.record(0u).payload;
+  const std::vector<std::byte> full(anchorBytes.begin(), anchorBytes.end());
+  const D9CCommandChunkWireDrawHeader deltaHeader{
+      .sectionCount = 1u, .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
+      .sectionPayloadOffset = sizeof(D9CCommandChunkWireDrawHeader) +
+                              sizeof(D9CCommandChunkWireSectionDesc)};
+  const D9CCommandChunkWireSectionDesc deltaSection{
+      .kind = D9C_COMMAND_CHUNK_SECTION_RENDER_STATE,
+      .elementSize = sizeof(D9CCommandChunkWireRenderState), .count = 1u,
+      .payloadOffset = deltaHeader.sectionPayloadOffset,
+      .byteSize = sizeof(D9CCommandChunkWireRenderState)};
+  const D9CCommandChunkWireRenderState state{.state = 7u, .value = 1u};
+  std::vector<std::byte> delta(deltaHeader.sectionPayloadOffset + sizeof(state));
+  std::memcpy(delta.data(), &deltaHeader, sizeof(deltaHeader));
+  std::memcpy(delta.data() + deltaHeader.sectionTableOffset, &deltaSection,
+              sizeof(deltaSection));
+  std::memcpy(delta.data() + deltaHeader.sectionPayloadOffset, &state, sizeof(state));
+  const D9CCommandChunkWireDrawHeader emptyHeader{
+      .sectionTableOffset = sizeof(D9CCommandChunkWireDrawHeader),
+      .sectionPayloadOffset = sizeof(D9CCommandChunkWireDrawHeader)};
+  std::vector<std::byte> empty(sizeof(emptyHeader));
+  std::memcpy(empty.data(), &emptyHeader, sizeof(emptyHeader));
+  const std::array payloads{full, delta, empty};
+  const auto pack = [](std::span<const std::vector<std::byte>> records) {
+    const auto handlesOffset = alignUp(sizeof(D9CCommandChunkWireHeader) +
+        records.size() * sizeof(D9CCommandChunkWireRecordHeader),
+        alignof(D9CCommandChunkWireHandleEntry));
+    const auto arenaOffset = alignUp(handlesOffset, alignof(std::uint32_t));
+    std::vector<std::byte> bytes(arenaOffset);
+    std::uint32_t arenaBytes = 0u;
+    for (std::size_t index = 0u; index < records.size(); ++index) {
+      const D9CCommandChunkWireRecordHeader record{
+          .type = D9C_COMMAND_RECORD_APPLY_STATE, .payloadOffset = arenaBytes,
+          .payloadSize = static_cast<std::uint32_t>(records[index].size())};
+      std::memcpy(bytes.data() + sizeof(D9CCommandChunkWireHeader) +
+                      index * sizeof(record), &record, sizeof(record));
+      bytes.insert(bytes.end(), records[index].begin(), records[index].end());
+      arenaBytes += record.payloadSize;
+    }
+    const D9CCommandChunkWireHeader header{
+        .version = D9C_COMMAND_CHUNK_WIRE_VERSION,
+        .headerSize = D9C_COMMAND_CHUNK_WIRE_HEADER_SIZE,
+        .recordHeaderSize = D9C_COMMAND_CHUNK_WIRE_RECORD_HEADER_SIZE,
+        .handleEntrySize = D9C_COMMAND_CHUNK_WIRE_HANDLE_ENTRY_SIZE,
+        .recordTableOffset = sizeof(D9CCommandChunkWireHeader),
+        .recordCount = static_cast<std::uint32_t>(records.size()),
+        .handleTableOffset = static_cast<std::uint32_t>(handlesOffset),
+        .payloadArenaOffset = static_cast<std::uint32_t>(arenaOffset),
+        .payloadArenaSize = arenaBytes};
+    std::memcpy(bytes.data(), &header, sizeof(header));
+    return bytes;
+  };
+  const auto tapeWithBootstrap = [&](std::span<const std::byte> overlays,
+                                      std::uint32_t version) {
+    RenderTapeBuilder builder;
+    builder.appendBootstrapState(overlays, {}, version);
+    const auto descriptor = outputSurfaceDescriptor();
+    builder.appendObjectDefine(kSurface,
+        static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+        std::as_bytes(std::span(&descriptor, 1u)), 0u, {});
+    builder.appendCommandChunk(CommandChunkEnvelope{.recordCount = 1u}, makePresentChunk());
+    const RenderTapeOracleAttachment oracle{
+        .identity = kSurface,
+        .descriptorKind = static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface)};
+    builder.appendPresentComplete(3u, 1u, RenderTapeDigestValidity::NotCaptured, {},
+                                  std::as_bytes(std::span(&oracle, 1u)));
+    return builder.seal();
+  };
+  std::uint32_t cases = 0u;
+  for (const auto version : {kRenderTapeLegacyBaselineProfileVersion,
+                             kRenderTapeBaselineProfileVersion}) {
+    for (std::uint32_t length = 1u, words = 3u; length <= 4u; ++length, words *= 3u) {
+      for (std::uint32_t word = 0u; word < words; ++word) {
+        std::vector<std::vector<std::byte>> records;
+        auto digits = word;
+        bool expected = true;
+        bool predicateAccepted = true;
+        for (std::uint32_t index = 0u; index < length; ++index, digits /= 3u) {
+          const auto symbol = digits % 3u;
+          records.push_back(payloads[symbol]);
+          expected &= version == kRenderTapeLegacyBaselineProfileVersion
+              ? symbol == 0u : symbol == (index == 0u ? 0u : 1u);
+          predicateAccepted &= renderTapeBootstrapRecordShapeValid(version, index,
+              symbol == 0u ? D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT : 0u,
+              symbol == 2u ? 0u : 1u);
+        }
+        check(predicateAccepted == expected,
+              "shared shape predicate refines the independent full-anchor/delta language");
+        for (std::uint32_t cuts = 0u; cuts < (1u << (length - 1u)); ++cuts) {
+          std::vector<std::byte> overlays;
+          std::size_t first = 0u;
+          for (std::size_t index = 0u; index < records.size(); ++index) {
+            if (index + 1u != records.size() && (cuts & (1u << index)) == 0u) continue;
+            const auto chunk = pack(std::span(records).subspan(first, index + 1u - first));
+            overlays.insert(overlays.end(), chunk.begin(), chunk.end());
+            first = index + 1u;
+          }
+          const auto result = validateRenderTape(tapeWithBootstrap(overlays, version), {});
+          check(result.valid() == expected &&
+                    (expected || result.status == RenderTapeValidationStatus::InvalidBootstrapChunk),
+                "shared flattened bootstrap predicate matches every small trace/chunk partition");
+          ++cases;
+        }
+      }
+    }
+    const auto emptyChunk = pack({});
+    auto overlays = stateChunk;
+    overlays.insert(overlays.end(), emptyChunk.begin(), emptyChunk.end());
+    check(validateRenderTape(tapeWithBootstrap(overlays, version), {}).valid() ==
+              (version == kRenderTapeLegacyBaselineProfileVersion),
+          "legacy empty overlay remains readable; profile3 empty overlay fails closed");
+    check(validateRenderTape(tapeWithBootstrap(emptyChunk, version), {}).valid() ==
+              (version == kRenderTapeLegacyBaselineProfileVersion),
+          "legacy empty-only overlay remains readable; profile3 requires the anchor");
+  }
+  check(cases == 1554u, "flattened shape checker covers all 1554 bounded traces/partitions");
+  for (const auto version : {kRenderTapeLegacyBaselineProfileVersion,
+                             kRenderTapeBaselineProfileVersion, 4u}) {
+    for (const auto flags : {2u, 3u, 0xffffffffu})
+      check(!renderTapeBootstrapRecordShapeValid(version, 0u, flags, 1u),
+            "shape predicate rejects unknown flags and unsupported profiles");
+  }
+  check(!renderTapeBootstrapRecordShapeValid(4u, 0u,
+              D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT, 1u),
+        "unsupported baseline cannot acquire anchor authority");
+  auto zeroCount = delta;
+  auto* zeroSection = reinterpret_cast<D9CCommandChunkWireSectionDesc*>(
+      zeroCount.data() + deltaHeader.sectionTableOffset);
+  zeroSection->count = 0u;
+  zeroSection->byteSize = 0u;
+  zeroCount.resize(deltaHeader.sectionPayloadOffset);
+  const std::array zeroRecords{full, zeroCount};
+  const auto zeroResult = validateRenderTape(
+      tapeWithBootstrap(pack(zeroRecords), kRenderTapeBaselineProfileVersion), {});
+  check(zeroResult.status == RenderTapeValidationStatus::InvalidBootstrapChunk &&
+            zeroResult.chunkStatus == CommandChunkValidationStatus::InvalidSectionSchema,
+        "canonical validation rejects zero-count-only continuation before shape policy");
+
+  for (std::uint32_t total = 0u; total <= 16u; ++total) {
+    for (std::uint32_t cap = 1u; cap <= 5u; ++cap) {
+      std::uint32_t next = 0u;
+      std::array<std::uint32_t, 16u> visits{};
+      for (std::uint32_t pageIndex = 0u;; ++pageIndex) {
+        const auto page = renderTapeBootstrapPageSpan(total, cap, pageIndex);
+        if (page.count == 0u) break;
+        check(page.first == next && page.count <= cap && page.count <= total - next,
+              "shared page spans are bounded and adjacent");
+        for (std::uint32_t index = page.first; index < page.first + page.count; ++index)
+          ++visits[index];
+        next += page.count;
+      }
+      check(next == total, "shared page spans cover the entire source table");
+      for (std::uint32_t index = 0u; index < total; ++index)
+        check(visits[index] == 1u, "each source state row appears exactly once");
+    }
+  }
+  check(renderTapeBootstrapPageSpan(16u, 0u, 0u).count == 0u &&
+            renderTapeBootstrapPageSpan(0xffffffffu, 0xffffffffu, 2u).count == 0u &&
+            renderTapeBootstrapPageSpan(0xffffffffu, 64u, 0x03ffffffu).count == 63u,
+        "page span zero-cap and widened overflow edges remain bounded");
+}
+
 void invalidInputsFailBeforeCallbacks() {
   const auto validCatalogue = completeCatalogue();
 
@@ -2926,6 +3093,7 @@ int main(int argc, char** argv) {
     gammaRampBootstrapAndOrderedMutationAreTyped();
     bufferMutationDispositionIsTypedAndBackwardCompatible();
     queryTranscriptV2PreservesCallsAndRejectsStaleCycles();
+    bootstrapProfileShapesAndPagePartitionsAreExhaustive();
     invalidInputsFailBeforeCallbacks();
     boundedCaptureReplayRefinementIsExhaustive();
     wholeEventReductionIsCanonicalAndFailClosed();

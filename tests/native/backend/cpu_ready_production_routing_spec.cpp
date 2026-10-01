@@ -19,6 +19,7 @@
 #include "render_tape_cpu_mipmap_fixture.hpp"
 #include "render_tape_cpu_query_fixture.hpp"
 #include "render_tape_cpu_volume_fixture.hpp"
+#include "render_tape_cpu_bootstrap_pages_fixture.hpp"
 #include "render_tape_test_metal_device.hpp"
 #include "device_c_replay_offload.hpp"
 #include "dxmt9/com.hpp"
@@ -9212,6 +9213,70 @@ void generalCpuVolumeWriterAndUploadShapeAreExact() {
         "unrepresentable Volume extent cannot authorize an upload shape");
 }
 
+void generalCpuBootstrapPagesUseProductionReplay() {
+  namespace tape = dxmt9::d3d9;
+  namespace runtime = tape::render_tape_runtime;
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE,
+        "paged CPU bootstrap needs CPU-visible resources, not GPU work");
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+      RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+  std::uint64_t originalDigest = 0u;
+  for (bool alternateTail : {false, true}) {
+    const auto fixture = tape::test::makeGeneralCpuBootstrapPagesFixture(alternateTail);
+    std::vector<tape::RenderTapeProviderBlob> blobs;
+    for (const auto& bytes : fixture.blobs)
+      blobs.push_back({tape::RenderTapeCaptureSession::sha256(bytes), bytes});
+    runtime::GeneralPreflightPlan plan;
+    const auto preflight = runtime::buildGeneralReplayPlan(fixture.tape, blobs, plan);
+    check(preflight.complete(), std::string("paged bootstrap shared preflight: ") +
+          tape::frameTapeReplayStatusName(preflight.status));
+    const auto admission = runtime::admitGeneralCpuPlan(plan);
+    check(admission.accepted() && admission.counts.bootstrapChunks == 1u &&
+              admission.counts.bootstrapRecords == 3u &&
+              admission.counts.records == preflight.coverage.commandRecords &&
+              admission.counts.queryIssues == 0u && admission.counts.queryPolls == 0u &&
+              tape::pe::kRenderTapeBootstrapMaxRecords <=
+                  runtime::GeneralCpuAdmissionCaps{}.maxRecordsPerChunk,
+          "three real bootstrap records remain separate from commands/query/source counts");
+    std::uint64_t semantic = 0u;
+    for (bool measured : {false, true}) {
+      for (bool compatibility : {true, false}) {
+        RuntimeFixture runtimeFixture(false, false, true, false,
+                                      WMT::Device{resourceDevice.handle});
+        Executor executor(runtimeFixture, plan, blobs, {
+            .route = compatibility ? tape::ProviderReplayPolicy::Compatibility
+                                   : tape::ProviderReplayPolicy::ProductionSlot,
+            .measurement = measured});
+        const auto result = executor.run();
+        check(result.complete && result.resetOk,
+              "paged bootstrap production CPU replay: " + result.failure);
+        check(result.commands == admission.counts.records +
+                                     admission.counts.bootstrapRecords &&
+                  result.draws == 2u &&
+                  result.sourceSummaryCommands == admission.counts.records &&
+                  result.sourceSummaryDraws == admission.counts.draws &&
+                  result.resourcesCreated == result.resourcesReleased &&
+                  result.submitted == result.completed &&
+                  result.completed == result.reclaimed,
+              "executor total equals separate ordinary/bootstrap counts and all owners settle");
+        if (measured) {
+          check(result.fullOracleCalls == 0u && result.drawObservations.empty(),
+                "paged measurement keeps conservation without semantic rows");
+        } else {
+          if (semantic == 0u) semantic = result.digest;
+          check(result.digest == semantic && result.drawObservations.size() == 2u,
+                "paged state has identical verification semantics across actual routes");
+        }
+      }
+    }
+    if (!alternateTail) originalDigest = semantic;
+    else check(semantic != originalDigest,
+               "last sampler page contributes to the actual draw-state semantic oracle");
+  }
+}
+
 void generalCpuVolumeTapeUsesProductionCreationAndMutation() {
   namespace tape = dxmt9::d3d9;
   namespace runtime = tape::render_tape_runtime;
@@ -10773,6 +10838,7 @@ int main(int argc, char** argv) {
                       std::string_view(argv[1]) == "--general-cpu-alias-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-query-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-volume-spec" ||
+                      std::string_view(argv[1]) == "--general-cpu-bootstrap-pages-spec" ||
                       std::string_view(argv[1]) ==
                           "--two-pending-production-sources-spec" ||
                       std::string_view(argv[1]) ==
@@ -10805,6 +10871,8 @@ int main(int argc, char** argv) {
       } else if (std::string_view(argv[1]) == "--general-cpu-volume-spec") {
         generalCpuVolumeWriterAndUploadShapeAreExact();
         generalCpuVolumeTapeUsesProductionCreationAndMutation();
+      } else if (std::string_view(argv[1]) == "--general-cpu-bootstrap-pages-spec") {
+        generalCpuBootstrapPagesUseProductionReplay();
       } else if (std::string_view(argv[1]) == "--general-cpu-mutation-spec")
         generalCpuMutationWindowUsesProductionLifetime();
       else if (std::string_view(argv[1]) == "--general-cpu-source-oracle-spec")
@@ -10833,6 +10901,7 @@ int main(int argc, char** argv) {
                      std::string_view(argv[1]) == "--write-general-cpu-mipmap-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-query-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-volume-fixture" ||
+                     std::string_view(argv[1]) == "--write-general-cpu-bootstrap-pages-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-window-fixture")) {
       const std::filesystem::path directory(argv[2]);
       if (!std::filesystem::create_directory(directory))
@@ -10855,6 +10924,8 @@ int main(int argc, char** argv) {
         writeFixture(dxmt9::d3d9::test::makeGeneralCpuQueryFixture());
       else if (std::string_view(argv[1]) == "--write-general-cpu-volume-fixture")
         writeFixture(dxmt9::d3d9::test::makeGeneralCpuVolumeFixture());
+      else if (std::string_view(argv[1]) == "--write-general-cpu-bootstrap-pages-fixture")
+        writeFixture(dxmt9::d3d9::test::makeGeneralCpuBootstrapPagesFixture());
       else
         writeFixture(dxmt9::d3d9::test::makeGeneralCpuDestroyFixture(
             true, true, dxmt9::d3d9::test::GeneralCpuMutationFixture::ReferencedDiscard,

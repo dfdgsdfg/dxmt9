@@ -7,6 +7,7 @@
 
 #include "d3d9_pe_device_impl.hpp"
 #include "d3d9_pe_tape_support.hpp"
+#include "d3d9_pe_tape_bootstrap.hpp"
 
 void D3D9DeviceImpl::abortRenderTapeCapture(const char *reason) noexcept {
     if (!peCaptureState_ || !peCaptureState_->renderTapeCapture.enabled()) {
@@ -68,20 +69,21 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
     };
     try {
         dxmt9::d3d9::pe::CommandChunkBuilder builder({
-            .records = 1u,
+            .records = dxmt9::d3d9::pe::kRenderTapeBootstrapMaxRecords,
             .handles = 256u,
             .payloadBytes = 1024u * 1024u,
             .sealedBytes = 1024u * 1024u,
         });
         // The bootstrap is a checkpoint of the live PE shadow. Binding
         // metadata is kept authoritative at each state transition.
-        const bool snapshotBuilt = dxmt9::d3d9::pe::buildFullSnapshotState(
-            recorderState_.peState, recorderState_.peConsts, recorderState_.peBindingView, recorderState_.peSparseScratch,
-            recorderState_.peSparseHeader, recorderState_.peSparseState);
-        const bool snapshotAppended =
-            snapshotBuilt && dxmt9::d3d9::pe::appendApplyState(
-                                 builder, recorderState_.peSparseHeader.flags,
-                                 recorderState_.peSparseState);
+        const auto snapshotStatus =
+            dxmt9::d3d9::pe::appendRenderTapeBootstrapState(
+                builder, recorderState_.peState, recorderState_.peConsts,
+                recorderState_.peBindingView);
+        const bool snapshotBuilt = snapshotStatus !=
+            dxmt9::d3d9::pe::RenderTapeBootstrapBuildStatus::SnapshotRejected;
+        const bool snapshotAppended = snapshotStatus ==
+            dxmt9::d3d9::pe::RenderTapeBootstrapBuildStatus::Valid;
         if (!snapshotBuilt || !snapshotAppended) {
             dxmt9DeviceInfoLog(
                 "render_tape_capture producer aborted reason=bootstrap_state "

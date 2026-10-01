@@ -18,7 +18,8 @@ inline constexpr std::uint64_t kRenderTapeMagic = 0x32505452544d5844ull;
 inline constexpr std::uint32_t kRenderTapeVersion = 2u;
 inline constexpr std::uint32_t kRenderTapeProfileFrame = 1u;
 inline constexpr std::uint32_t kRenderTapeProfileSequence = 2u;
-inline constexpr std::uint32_t kRenderTapeBaselineProfileVersion = 2u;
+inline constexpr std::uint32_t kRenderTapeLegacyBaselineProfileVersion = 2u;
+inline constexpr std::uint32_t kRenderTapeBaselineProfileVersion = 3u;
 inline constexpr std::uint32_t kRenderTapePayloadAlignment = 8u;
 inline constexpr std::uint32_t kRenderTapeDigestSize = 32u;
 using RenderTapeDigest = std::array<std::byte, kRenderTapeDigestSize>;
@@ -76,6 +77,44 @@ inline constexpr std::uint32_t kRenderTapeStateCategoryCount =
 // completeness violation and must fail before replay.
 inline constexpr std::uint64_t kRenderTapeRequiredCategoryMask =
     (std::uint64_t{1} << kRenderTapeStateCategoryCount) - std::uint64_t{1};
+
+constexpr bool renderTapeBootstrapProfileSupported(std::uint32_t version) noexcept {
+  return version == kRenderTapeLegacyBaselineProfileVersion ||
+         version == kRenderTapeBaselineProfileVersion;
+}
+
+// Version 2 treated every overlay record as an independent full reset. Version
+// 3 is one flattened state stream: exactly one anchor, then nonempty deltas.
+// Called after canonical validation: every present section has positive count
+// and exact positive payload bytes, so sectionCount != 0 excludes empty deltas.
+constexpr bool renderTapeBootstrapRecordShapeValid(
+    std::uint32_t version, std::uint64_t flattenedRecordIndex,
+    std::uint32_t flags, std::size_t sectionCount) noexcept {
+  if (version == kRenderTapeLegacyBaselineProfileVersion)
+    return flags == D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT;
+  if (version != kRenderTapeBaselineProfileVersion || sectionCount == 0u)
+    return false;
+  return flags == (flattenedRecordIndex == 0u
+                       ? D9C_COMMAND_CHUNK_DRAW_FLAG_FULL_SNAPSHOT
+                       : 0u);
+}
+
+struct RenderTapeBootstrapPageSpan {
+  std::uint32_t first = 0u;
+  std::uint32_t count = 0u;
+};
+
+// Shared by the cold PE bootstrap producer and folded checkpoint producer.
+// A zero count ends the walk; multiplication is widened before any narrowing.
+constexpr RenderTapeBootstrapPageSpan renderTapeBootstrapPageSpan(
+    std::uint32_t totalCount, std::uint32_t maxCount,
+    std::uint32_t pageIndex) noexcept {
+  const auto first = std::uint64_t{maxCount} * pageIndex;
+  if (maxCount == 0u || first >= totalCount) return {};
+  const auto remaining = totalCount - static_cast<std::uint32_t>(first);
+  return {static_cast<std::uint32_t>(first),
+          remaining < maxCount ? remaining : maxCount};
+}
 
 enum class RenderTapeEventType : std::uint32_t {
   BootstrapState = 1u,
@@ -154,8 +193,10 @@ struct RenderTapeEventHeader {
 // version (typed defaults for every persistent state category) plus one or
 // more canonical APPLY_STATE-only command chunks used as overlays, plus a
 // completeness manifest that must equal every known state category. Absent
-// sparse sections in an overlay therefore mean the baseline default rather
-// than a live-state dependency.
+// sparse sections in the first full overlay therefore mean the baseline
+// default rather than a live-state dependency. Profile 3 continues that anchor
+// with nonempty deltas across all overlay chunks; profile 2 retains independent
+// FULL_SNAPSHOT records for legacy bundle readability.
 struct RenderTapeBootstrapHeader {
   std::uint32_t baselineProfileVersion = kRenderTapeBaselineProfileVersion;
   std::uint32_t stateCategoryCount = kRenderTapeStateCategoryCount;
@@ -687,7 +728,8 @@ public:
                       std::span<const std::byte> payload);
   void appendBootstrapState(
       std::span<const std::byte> overlayChunks,
-      std::span<const std::byte> gammaRamp = {});
+      std::span<const std::byte> gammaRamp = {},
+      std::uint32_t baselineProfileVersion = kRenderTapeBaselineProfileVersion);
   void appendObjectDefine(const D9CWireObjectIdentity& identity,
                           std::uint32_t descriptorKind,
                           std::span<const std::byte> descriptor,

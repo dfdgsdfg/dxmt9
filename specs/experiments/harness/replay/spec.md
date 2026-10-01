@@ -709,7 +709,8 @@ enabled, the device tracks generation-qualified live object identities plus
 value-owned descriptors, immutable shader/declaration payloads, and supported
 CPU-written resource contents from creation onward. At the first successful
 Present boundary the member producer serializes the actual PE shadow as one
-canonical `APPLY_STATE|FULL_SNAPSHOT`, sorts and seeds the live objects, emits
+canonical chunk containing a `APPLY_STATE|FULL_SNAPSHOT` anchor and bounded
+delta pages under baseline profile 3 (R-HARN-REPLAY-9.7), sorts and seeds the live objects, emits
 complete initial subresource mutations, and arms the next interval; an injected
 producer remains only an explicit test override. Each recorder-flushed canonical
 chunk is copied exactly once, and the following Present seals/publishes one
@@ -1416,12 +1417,13 @@ with the supplied verified blob catalogue before constructing output, accepts
 only `frame-tape`, and selects one non-empty contiguous record interval from
 one `CommandChunk` named by canonical event ordinal. All selected records must
 be Draw records. A cold value transform seeds the typed baseline from the
-canonical `BootstrapState`, applies its existing `APPLY_STATE|FULL_SNAPSHOT`
-overlay, then folds `APPLY_STATE`, Draw sparse sections, and standalone
+canonical `BootstrapState`, applies its version-qualified full anchor and
+ordered state overlays, then folds `APPLY_STATE`, Draw sparse sections, and standalone
 constant records in exact event/record order through the first selected Draw.
 Repeated keyed state, binding, and overlapping constant ranges use exact
-last-write semantics. It emits one deterministic
-`APPLY_STATE|FULL_SNAPSHOT` bootstrap using the existing D9C v2 section grammar,
+last-write semantics. It emits one deterministic bootstrap chunk containing a
+`APPLY_STATE|FULL_SNAPSHOT` anchor and capped nonempty delta pages using the
+existing D9C v2 section grammar and baseline profile 3,
 preserves the captured gamma ramp, and adds every surviving
 `(kind, objectId, generation)` handle to projection closure. Complete category
 coverage and live definitions are checked before output construction; an
