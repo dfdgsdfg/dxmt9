@@ -878,6 +878,42 @@ void defaultMetalFactorySourceContractIsPinned(
         "production queue uses the WMT retained-default factory seam");
 }
 
+void presenterBorrowedDeviceRetentionSourceContractIsPinned(
+    const std::filesystem::path& sourceRoot) {
+  const std::string wrapper =
+      readFile(sourceRoot / "src/winemetal/Metal.hpp");
+  const std::string presenter =
+      readFile(sourceRoot / "src/dxmt9/dxmt9_presenter.mm");
+  const std::string presenterHeader =
+      readFile(sourceRoot / "src/dxmt9/dxmt9_presenter.hpp");
+
+  const auto borrowedBegin = wrapper.find("Reference(Class non_retained)");
+  const auto adoptedBegin = wrapper.find("Reference(obj_handle_t retained)");
+  check(borrowedBegin != std::string::npos &&
+            adoptedBegin != std::string::npos && borrowedBegin < adoptedBegin,
+        "WMT borrowed and adopted reference constructors are locatable");
+  const std::string_view borrowedBody(wrapper.data() + borrowedBegin,
+                                     adoptedBegin - borrowedBegin);
+  check(borrowedBody.find("this->retain();") != std::string_view::npos,
+        "constructing a WMT reference from a borrowed view retains it");
+  check(presenterHeader.find("WMT::Device device_{};") != std::string::npos &&
+            presenter.find("WMT::Reference<WMT::Device>{device_.handle}") ==
+                std::string::npos,
+        "Presenter must not adopt the raw handle of its borrowed device");
+
+  constexpr std::string_view retainedView =
+      "WMT::Reference<WMT::Device>{device_}";
+  std::size_t count = 0u;
+  for (auto offset = presenter.find(retainedView);
+       offset != std::string::npos;
+       offset = presenter.find(retainedView, offset + retainedView.size())) {
+    ++count;
+  }
+  check(count == 3u,
+        "both async present pipeline variants and sampler creation retain "
+        "the borrowed device view");
+}
+
 void invalidLeaseSnapshotFailStopsBeforeCapacityWait(
     const std::filesystem::path& sourceRoot) {
   const std::string coordinator = readFile(
@@ -943,6 +979,7 @@ int main(int argc, char** argv) {
     queueSealedShadowMatchesLegacyListDomain();
     mixedRetiredAndLocatorSourcesStayDenseAndOrdered();
     defaultMetalFactorySourceContractIsPinned(argv[1]);
+    presenterBorrowedDeviceRetentionSourceContractIsPinned(argv[1]);
     invalidLeaseSnapshotFailStopsBeforeCapacityWait(argv[1]);
     borrowedViewAsyncEscapeSourceContractIsPinned(argv[1]);
     emptySessionLifetimeIsPinned();

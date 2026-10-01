@@ -336,10 +336,10 @@ Presenter::pipelineFor(bool opaqueAlpha, bool applyGamma) {
   if (!slot.valid()) {
     slot = applyGamma
                ? pipeline::buildGammaApplyPresentPipeline(
-                     WMT::Reference<WMT::Device>{device_.handle},
+                     WMT::Reference<WMT::Device>{device_},
                      opaqueAlpha, archive_, archivePath_)
                : pipeline::buildPresentPipeline(
-                     WMT::Reference<WMT::Device>{device_.handle},
+                     WMT::Reference<WMT::Device>{device_},
                      opaqueAlpha, archive_, archivePath_);
   }
   return slot;
@@ -649,7 +649,7 @@ Presenter::EncodeResult Presenter::encodeCommands(WMT::CommandBuffer& commandBuf
     info.compare_function = WMTCompareFunctionNever;
     info.lod_max_clamp = 1e9f;
     info.normalized_coords = true;
-    sampler_ = WMT::Reference<WMT::Device>{device_.handle}.newSamplerState(info);
+    sampler_ = WMT::Reference<WMT::Device>{device_}.newSamplerState(info);
   }
 
   presentimpl::traceEvent("nextDrawable.begin", params.seqId, hwnd_);
