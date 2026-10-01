@@ -9,6 +9,10 @@
 #include "d3d9_pe_tape_support.hpp"
 #include "d3d9_pe_tape_bootstrap.hpp"
 
+#include <exception>
+#include <new>
+#include <stdexcept>
+
 void D3D9DeviceImpl::abortRenderTapeCapture(const char *reason) noexcept {
     if (!peCaptureState_ || !peCaptureState_->renderTapeCapture.enabled()) {
         return;
@@ -66,6 +70,31 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
             [&](const auto &snapshot) {
                 return renderTapeSameIdentity(snapshot.identity, identity);
             });
+    };
+    // Failure-only attribution for this cold capture producer. Keep the
+    // throwing operation and its input extents visible without copying the
+    // resource again or changing any recorder hot-path contract.
+    const char *exceptionPhase = "bootstrap_state";
+    D9CWireObjectIdentity exceptionIdentity{};
+    std::size_t exceptionDescriptorBytes = 0u;
+    std::size_t exceptionContentCount = 0u;
+    std::size_t exceptionPayloadBytes = 0u;
+    std::uint32_t exceptionSubresource =
+        std::numeric_limits<std::uint32_t>::max();
+    const auto logProducerException = [&](const char *kind,
+                                          const char *detail) {
+        dxmt9DeviceInfoLog(
+            "render_tape_capture producer aborted reason=exception "
+            "exception_kind=%s phase=%s kind=%u generation=%u object_id=%llu "
+            "descriptor_bytes=%zu content_count=%zu subresource=%u "
+            "payload_bytes=%zu objects=%zu mutations=%zu blobs=%zu detail=%s",
+            kind, exceptionPhase, exceptionIdentity.kind,
+            exceptionIdentity.generation,
+            static_cast<unsigned long long>(exceptionIdentity.objectId),
+            exceptionDescriptorBytes, exceptionContentCount,
+            exceptionSubresource, exceptionPayloadBytes,
+            seed.objects.size(), seed.mutations.size(), seed.blobs.size(),
+            detail ? detail : "unknown");
     };
     try {
         dxmt9::d3d9::pe::CommandChunkBuilder builder({
@@ -172,6 +201,7 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
                 bootstrapValidation.byteOffset);
             return false;
         }
+        exceptionPhase = "bootstrap_handles";
         std::vector<D9CWireObjectIdentity> bootstrapHandles;
         bootstrapHandles.reserve(bootstrapChunk.handles.size());
         for (const auto& handle : bootstrapChunk.handles) {
@@ -189,12 +219,14 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
                 bootstrapHandles.push_back(identity);
             }
         }
+        exceptionPhase = "bootstrap_overlay_copy";
         seed.bootstrapOverlay.assign(overlay.blob.begin(), overlay.blob.end());
         dxmt9DeviceInfoLog(
             "render_tape_capture bootstrap_overlay_complete "
             "records=%u handles=%u bytes=%zu",
             overlay.recordCount, overlay.handleCount, overlay.blob.size());
 
+        exceptionPhase = "bootstrap_live_objects";
         std::vector<const RenderTapeLiveObject *> objects;
         objects.reserve(peCaptureState_->renderTapeRegistry.objects.size());
         for (const auto &object : peCaptureState_->renderTapeRegistry.objects) {
@@ -206,6 +238,7 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
                    std::tie(b->identity.kind, b->identity.generation,
                             b->identity.objectId);
         });
+        exceptionPhase = "bootstrap_closure_objects";
         std::vector<dxmt9::d3d9::RenderTapeBootstrapClosureObject>
             closureObjects;
         closureObjects.reserve(objects.size());
@@ -310,6 +343,7 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
             for (const auto *object : objects)
                 bootstrapHandles.push_back(object->identity);
         }
+        exceptionPhase = "bootstrap_closure";
         std::vector<D9CWireObjectIdentity> closure;
         const auto closureResult =
             dxmt9::d3d9::renderTapeBuildBootstrapClosureAttributed(
@@ -426,6 +460,10 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
                 continue;
             }
             dxmt9::d3d9::RenderTapeCaptureObjectSeed objectSeed{};
+            exceptionIdentity = object->identity;
+            exceptionSubresource =
+                std::numeric_limits<std::uint32_t>::max();
+            exceptionPayloadBytes = 0u;
             objectSeed.identity = object->identity;
             objectSeed.descriptorKind = static_cast<std::uint32_t>(
                 dxmt9::d3d9::renderTapeDescriptorKindForObject(
@@ -459,6 +497,9 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
             }
             const auto effectiveDescriptor = armOverlay.descriptor;
             const auto effectiveContent = armOverlay.content;
+            exceptionDescriptorBytes = effectiveDescriptor.size();
+            exceptionContentCount = effectiveContent.size();
+            exceptionPhase = "object_descriptor_copy";
             objectSeed.descriptor.assign(effectiveDescriptor.begin(),
                                          effectiveDescriptor.end());
             dxmt9::d3d9::RenderTapeExpectedContentContract contentContract{};
@@ -487,16 +528,21 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
             objectSeed.expectedContentBytes = contentContract.bytes;
             objectSeed.expectedContentCount = contentContract.count;
             if (!object->immutablePayload.empty()) {
+                exceptionPayloadBytes = object->immutablePayload.size();
                 objectSeed.immutableBytes = object->immutablePayload.size();
+                exceptionPhase = "immutable_digest";
                 objectSeed.immutableDigest =
                     dxmt9::d3d9::RenderTapeCaptureSession::sha256(
                         object->immutablePayload);
+                exceptionPhase = "immutable_blob_copy";
                 seed.blobs.push_back({.bytes = object->immutablePayload});
             }
             if (!effectiveContent.empty()) {
                 for (std::uint32_t subresource = 0u;
                      subresource < effectiveContent.size(); ++subresource) {
                     const auto &bytes = effectiveContent[subresource];
+                    exceptionSubresource = subresource;
+                    exceptionPayloadBytes = bytes.size();
                     if (bytes.empty()) {
                         if (object->identity.kind ==
                             D9C_CHUNK_HANDLE_KIND_TEXTURE) {
@@ -599,9 +645,12 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
                              .bytes = 0u});
                         return false;
                     }
+                    exceptionPhase = "content_digest";
                     const auto digest =
                         dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes);
+                    exceptionPhase = "content_blob_copy";
                     seed.blobs.push_back({.bytes = bytes});
+                    exceptionPhase = "content_mutation_append";
                     seed.mutations.push_back({
                         .identity = object->identity,
                         .kind = dxmt9::d3d9::RenderTapeMutationKind::Upload,
@@ -612,8 +661,10 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
                     });
                 }
             }
+            exceptionPhase = "object_seed_append";
             seed.objects.push_back(std::move(objectSeed));
             if (object->role == RenderTapeLiveObject::Role::PresentOutput) {
+                exceptionPhase = "oracle_attachment_append";
                 seed.oracleAttachments.push_back({
                     .identity = object->identity,
                     .descriptorKind = static_cast<std::uint32_t>(
@@ -634,9 +685,17 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
             seed.objects.size(), seed.mutations.size(), seed.blobs.size(),
             seed.oracleAttachments.size());
         return true;
+    } catch (const std::bad_alloc &exception) {
+        logProducerException("bad_alloc", exception.what());
+        return false;
+    } catch (const std::length_error &exception) {
+        logProducerException("length_error", exception.what());
+        return false;
+    } catch (const std::exception &exception) {
+        logProducerException("std_exception", exception.what());
+        return false;
     } catch (...) {
-        dxmt9DeviceInfoLog(
-            "render_tape_capture producer aborted reason=exception");
+        logProducerException("unknown", nullptr);
         return false;
     }
 }

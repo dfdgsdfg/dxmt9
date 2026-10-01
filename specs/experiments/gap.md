@@ -212,6 +212,17 @@ The existing 227-configuration TLA regression passes, not a new proof of the
 entire checkpoint protocol. No actual STALKER Tape is published yet; actual
 capture, production query/pixel qualification and repeated policy measurements
 remain open. These synthetic results establish no FPS benefit.
+Actual retry `app-d3d9-stkcop-bench-tape-h430-query-volume-08` on `e795e2a5`
+passes bridge ABI `0xb5182eeb924e5741` and authenticates both pre-cut EVENT
+queries, including independent cycles/ordinals 585/585 and 586/586 in the first
+attempt. Color and D24S8 checkpointing also complete. The next failure is now
+the PE bootstrap producer: closure construction reports four objects, then
+throws with one object/mutation/blob already staged. The catch currently
+reports only `reason=exception`; the cause is not yet attributed. The verified
+game process was deliberately terminated after repeated identical failures;
+runner exit 1 is that termination, not a GPU failure or FPS result. No Tape
+was published. The harness screenshot captured Orca rather than the game and
+is not visual-correctness evidence.
 Existing H343 artifacts do not identify the workload's volume format.
 The existing mutation event carries complete volume mip blobs without a new
 wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage
