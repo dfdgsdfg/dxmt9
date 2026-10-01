@@ -285,6 +285,39 @@ including allocation-failure sweeps and abort deallocation checks; PE32, PE64,
 and the canonical Unix build pass. This fixes an independent retry-retention
 bug, not the unexplained first-attempt failure in capture 11. A new workload
 capture remains required to identify that failure and qualify the original Tape.
+Capture `app-d3d9-stkcop-bench-tape-h430-query-volume-12` on `f375803c`
+identifies the first failing operation: `arm_with_blobs/blob_digest` throws
+`bad_alloc` for blob 0 (3,686,400 bytes), before any unique blob has been
+copied. The configured blob budget is 268,435,456 bytes, not the rejecting
+condition. The failure repeats; the game was deliberately terminated and no
+Tape was published. The SHA-256 whole-input temporary is the next removable
+allocation; removing it does not yet prove that later ownership copies will
+succeed or establish the underlying allocator/address-space exhaustion cause.
+SHA-256 now processes complete input blocks directly with a fixed 128-byte
+padding buffer. Native capture/tape tests pass (2/2), including independent
+padding-boundary digests and a zero-allocation check at the observed failing
+extent. Actual workload capture and downstream admission remain unqualified.
+All three canonical runtime builds pass. Capture
+`app-d3d9-stkcop-bench-tape-h430-query-volume-13` with the streaming hash
+passes hashing but repeatedly fails at `arm_with_blobs/owned_blob_copy`:
+`bad_alloc` for blob 1 (4,608,000 bytes), after one unique blob (3,686,400
+bytes). The game was deliberately terminated without a published Tape.
+This moves the evidenced failure to duplicate payload ownership; consuming
+the already-owned bootstrap seed is the next change, not increasing limits.
+The production bootstrap now uses consuming `armWithOwnedBlobs` admission;
+the borrowed API still copies through shared validation. Native tests pass
+(2/2), covering canonical event/digest equivalence, payload-pointer
+conservation, duplicate-aware budgets, failed rearm, and allocation-failure
+rollback. Arm snapshots remain intact for JIT materialization. Runtime builds
+pass for PE32, PE64 and Unix. Capture
+`app-d3d9-stkcop-bench-tape-h430-query-volume-14` now reaches `arm_complete`.
+Its first command repeatedly rejects alias 4294967307 (generation 1) to
+texture 4294967306 (generation 1): format 21, 1280x720, single mip, no MSAA,
+render-target usage, absent arm snapshot and incomplete initial content.
+The observed access is binding-only, not a terminal-write proof, so the
+existing rejection remains correct. The run was deliberately terminated;
+no Tape was published. Investigate this snapshot omission before claiming
+original workload capture or policy qualification.
 Existing H343 artifacts do not identify the workload's volume format.
 The existing mutation event carries complete volume mip blobs without a new
 wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage

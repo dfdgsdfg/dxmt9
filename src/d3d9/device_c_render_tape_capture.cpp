@@ -116,22 +116,14 @@ RenderTapeDigest RenderTapeCaptureSession::sha256(
                                         0x510e527fu, 0x9b05688cu,
                                         0x1f83d9abu, 0x5be0cd19u};
   const std::uint64_t bitCount = static_cast<std::uint64_t>(bytes.size()) * 8u;
-  const std::size_t padded = ((bytes.size() + 9u + 63u) / 64u) * 64u;
-  std::vector<std::byte> message(padded);
-  std::memcpy(message.data(), bytes.data(), bytes.size());
-  message[bytes.size()] = std::byte{0x80};
-  for (unsigned i = 0u; i < 8u; ++i) {
-    message[padded - 1u - i] =
-        static_cast<std::byte>((bitCount >> (i * 8u)) & 0xffu);
-  }
-  for (std::size_t offset = 0u; offset < message.size(); offset += 64u) {
+  const auto compress = [&](std::span<const std::byte, 64u> block) {
     std::array<std::uint32_t, 64> schedule{};
     for (unsigned i = 0u; i < 16u; ++i) {
-      const auto at = offset + i * 4u;
-      schedule[i] = (static_cast<std::uint32_t>(message[at]) << 24u) |
-                    (static_cast<std::uint32_t>(message[at + 1u]) << 16u) |
-                    (static_cast<std::uint32_t>(message[at + 2u]) << 8u) |
-                    static_cast<std::uint32_t>(message[at + 3u]);
+      const auto at = i * 4u;
+      schedule[i] = (static_cast<std::uint32_t>(block[at]) << 24u) |
+                    (static_cast<std::uint32_t>(block[at + 1u]) << 16u) |
+                    (static_cast<std::uint32_t>(block[at + 2u]) << 8u) |
+                    static_cast<std::uint32_t>(block[at + 3u]);
     }
     for (unsigned i = 16u; i < 64u; ++i) {
       const auto s0 = rotr(schedule[i - 15u], 7u) ^
@@ -162,6 +154,26 @@ RenderTapeDigest RenderTapeCaptureSession::sha256(
     for (unsigned i = 0u; i < 8u; ++i) {
       state[i] += working[i];
     }
+  };
+  // Input blocks are borrowed only for this call. Only the final one or two
+  // padded blocks need scratch; never allocate another whole captured blob.
+  const std::size_t fullBytes = bytes.size() - bytes.size() % 64u;
+  for (std::size_t offset = 0u; offset < fullBytes; offset += 64u) {
+    compress(std::span<const std::byte, 64u>(bytes.data() + offset, 64u));
+  }
+  std::array<std::byte, 128u> tail{};
+  const std::size_t remaining = bytes.size() - fullBytes;
+  if (remaining != 0u)
+    std::memcpy(tail.data(), bytes.data() + fullBytes, remaining);
+  tail[remaining] = std::byte{0x80};
+  const std::size_t tailBytes = remaining < 56u ? 64u : 128u;
+  for (unsigned i = 0u; i < 8u; ++i) {
+    tail[tailBytes - 1u - i] =
+        static_cast<std::byte>((bitCount >> (i * 8u)) & 0xffu);
+  }
+  compress(std::span<const std::byte, 64u>(tail.data(), 64u));
+  if (tailBytes == 128u) {
+    compress(std::span<const std::byte, 64u>(tail.data() + 64u, 64u));
   }
   RenderTapeDigest result{};
   for (unsigned i = 0u; i < 8u; ++i) {
@@ -279,9 +291,27 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobs(
     std::span<const std::byte> bootstrapOverlay,
     std::span<const RenderTapeCaptureBlob> blobs,
     std::span<const std::byte> gammaRamp) {
+  return armWithBlobStorage(bootstrapOverlay, blobs, gammaRamp, nullptr);
+}
+
+RenderTapeCaptureStatus RenderTapeCaptureSession::armWithOwnedBlobs(
+    std::span<const std::byte> bootstrapOverlay,
+    std::vector<RenderTapeCaptureBlob>&& blobs,
+    std::span<const std::byte> gammaRamp) {
+  std::vector<RenderTapeCaptureBlob> transferred;
+  transferred.swap(blobs);
+  return armWithBlobStorage(bootstrapOverlay, transferred, gammaRamp, &transferred);
+}
+
+RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobStorage(
+    std::span<const std::byte> bootstrapOverlay,
+    std::span<const RenderTapeCaptureBlob> blobs,
+    std::span<const std::byte> gammaRamp,
+    std::vector<RenderTapeCaptureBlob>* transferredBlobs) {
   armFailure_ = {};
   RenderTapeCaptureArmFailure context{
-      .layer = "arm_with_blobs", .phase = "catalogue_reserve",
+      .layer = transferredBlobs ? "arm_with_owned_blobs" : "arm_with_blobs",
+      .phase = "catalogue_reserve",
       .inputBlobCount = blobs.size()};
   const auto fail = [&](const char* reason, const char* exception = "none") {
     context.reason = reason;
@@ -329,9 +359,16 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobs(
       catalogue.push_back(RenderTapeBlob{.digest = digest,
                                          .size = blob.bytes.size(),
                                          .verified = 1u});
-      context.phase = "owned_blob_copy";
-      owned.push_back(RenderTapePublishedBlob{.digest = digest,
-                                              .bytes = blob.bytes});
+      if (transferredBlobs) {
+        static_assert(std::is_nothrow_move_constructible_v<RenderTapePublishedBlob>);
+        context.phase = "owned_blob_move";
+        owned.push_back(RenderTapePublishedBlob{
+            .digest = digest, .bytes = std::move((*transferredBlobs)[index].bytes)});
+      } else {
+        context.phase = "owned_blob_copy";
+        owned.push_back(RenderTapePublishedBlob{.digest = digest,
+                                                .bytes = blob.bytes});
+      }
       totalBlobBytes += blobBytes;
     }
   } catch (const std::bad_alloc&) {
@@ -356,7 +393,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::armWithBlobs(
     blobBytes_ = totalBlobBytes;
   } else {
     // Preserve the downstream layer/phase/reason, while retaining the
-    // caller's raw input count and the wrapper's successfully copied totals.
+    // caller's raw input count and the wrapper's successfully staged totals.
     armFailure_.inputBlobCount = blobs.size();
     armFailure_.uniqueBlobCount = owned.size();
     armFailure_.cumulativeBlobBytes = totalBlobBytes;

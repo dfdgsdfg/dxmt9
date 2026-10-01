@@ -178,6 +178,14 @@ public:
       std::span<const RenderTapeCaptureBlob> blobs,
       std::span<const std::byte> gammaRamp = {});
 
+  // Consumes the vector at entry, including on failure. Unique payloads move
+  // into session storage only after independent hashing and unchanged budget
+  // admission; duplicates/unadmitted inputs are released without publication.
+  RenderTapeCaptureStatus armWithOwnedBlobs(
+      std::span<const std::byte> bootstrapOverlay,
+      std::vector<RenderTapeCaptureBlob>&& blobs,
+      std::span<const std::byte> gammaRamp = {});
+
   // Starts the bounded profile selected at construction. Frame captures seal
   // after one successful Present; sequence captures retain the first boundary
   // and seal after the second. A new begin call is always rejected.
@@ -285,6 +293,12 @@ public:
   static RenderTapeDigest sha256(std::span<const std::byte> bytes);
 
 private:
+  RenderTapeCaptureStatus armWithBlobStorage(
+      std::span<const std::byte> bootstrapOverlay,
+      std::span<const RenderTapeCaptureBlob> blobs,
+      std::span<const std::byte> gammaRamp,
+      std::vector<RenderTapeCaptureBlob>* transferredBlobs);
+
   struct ObjectSlot {
     D9CWireObjectIdentity identity{};
     RenderTapeLogicalObjectSlot logicalSlot{};

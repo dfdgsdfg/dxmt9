@@ -3444,7 +3444,6 @@ void testArmFailureProvenanceAndAbortRelease() {
             std::string_view(malformedArm.armFailure().exceptionKind) == "invalid_argument",
         "downstream canonical-overlay exception survives wrapper status translation");
 
-  bool sawDigest = false;
   bool sawOwnedCopy = false;
   bool sawCatalogueCopy = false;
   bool sawBootstrapAppend = false;
@@ -3469,7 +3468,8 @@ void testArmFailureProvenanceAndAbortRelease() {
               injected.publicationBundle().events.empty(),
           "every injected allocation failure is typed without publishing partial data");
     const std::string_view phase(failure.phase);
-    sawDigest |= phase == "blob_digest";
+    check(phase != "blob_digest",
+          "allocation fault injection cannot fail the allocation-free blob digest");
     sawOwnedCopy |= phase == "owned_blob_copy";
     sawCatalogueCopy |= phase == "catalogue_copy";
     sawBootstrapAppend |= phase == "bootstrap_append";
@@ -3477,7 +3477,7 @@ void testArmFailureProvenanceAndAbortRelease() {
       check(failure.uniqueBlobCount == 2u && failure.cumulativeBlobBytes == 5u,
             "inner allocation exception retains complete outer copied-byte accounting");
   }
-  check(reachedSuccess && sawDigest && sawOwnedCopy && sawCatalogueCopy && sawBootstrapAppend,
+  check(reachedSuccess && sawOwnedCopy && sawCatalogueCopy && sawBootstrapAppend,
         "allocation fault sweep binds both arm layers and each large copy/append phase");
 
   const RenderTapeCaptureBlob retained{
@@ -3527,6 +3527,145 @@ void testArmFailureProvenanceAndAbortRelease() {
             std::string_view(session.armFailure().reason) == "none",
         "repeated abort preserves attribution and retry restores unchanged admission");
   capture_state_allocation_probe::watchedPointer = nullptr;
+}
+
+void testConsumingArmBlobOwnershipAndEquivalence() {
+  const auto bootstrap = bootstrapChunk();
+  const std::vector<RenderTapeCaptureBlob> borrowed{
+      RenderTapeCaptureBlob{.bytes = std::vector<std::byte>(4u, std::byte{0x31u})},
+      RenderTapeCaptureBlob{.bytes = std::vector<std::byte>(4u, std::byte{0x72u})},
+      RenderTapeCaptureBlob{.bytes = std::vector<std::byte>(4u, std::byte{0x31u})}};
+  auto transferred = borrowed;
+  RenderTapeCaptureSession copied(true, {.maxBlobEntries = 2u, .maxBlobBytes = 8u});
+  RenderTapeCaptureSession consumed(true, {.maxBlobEntries = 2u, .maxBlobBytes = 8u});
+  check(copied.armWithBlobs(bootstrap, borrowed) == RenderTapeCaptureStatus::Accepted &&
+            consumed.armWithOwnedBlobs(bootstrap, std::move(transferred)) ==
+                RenderTapeCaptureStatus::Accepted &&
+            transferred.empty() && copied.ownedBlobEntries() == 2u &&
+            consumed.ownedBlobEntries() == 2u && copied.ownedBlobBytes() == 8u &&
+            consumed.ownedBlobBytes() == 8u && borrowed.size() == 3u &&
+            borrowed[0].bytes.size() == 4u,
+        "consuming and borrowed APIs preserve exact limits/dedup and borrowed caller storage");
+  const auto finish = [&](RenderTapeCaptureSession& session) {
+    const auto descriptor = outputSurfaceDescriptor();
+    const auto present = presentChunk();
+    const auto attachment = oracle();
+    check(session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted,
+          "blob ownership equivalence fixture begins the selected frame");
+    check(session.objectDefine(kSurface,
+              static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+              std::as_bytes(std::span(&descriptor, 1u)), 0u, {}) ==
+              RenderTapeCaptureStatus::Accepted,
+          "blob ownership equivalence fixture defines the output attachment");
+    check(session.commandChunk(
+              CommandChunkEnvelope{.recordCount = 1u, .handleCount = 0u}, present) ==
+              RenderTapeCaptureStatus::Accepted,
+          "blob ownership equivalence fixture journals the exact Present");
+    const auto presentOrdinal = session.eventCount();
+    check(presentOrdinal == 3u &&
+              session.completePresent(presentOrdinal, 1u,
+                  RenderTapeDigestValidity::NotCaptured, {},
+                  std::as_bytes(std::span(&attachment, 1u))) == RenderTapeCaptureStatus::Complete,
+          "both blob ownership modes produce the same complete canonical frame");
+  };
+  finish(copied);
+  finish(consumed);
+  const auto& copiedBundle = copied.publicationBundle();
+  const auto& consumedBundle = consumed.publicationBundle();
+  check(copiedBundle.events == consumedBundle.events &&
+            copiedBundle.blobs.size() == 2u && consumedBundle.blobs.size() == 2u &&
+            std::equal(copiedBundle.blobs.begin(), copiedBundle.blobs.end(),
+                consumedBundle.blobs.begin(), [](const auto& first, const auto& second) {
+                  return first.digest == second.digest && first.bytes == second.bytes;
+                }) &&
+            consumedBundle.blobs[0].digest ==
+                RenderTapeCaptureSession::sha256(borrowed[0].bytes) &&
+            consumedBundle.blobs[1].digest ==
+                RenderTapeCaptureSession::sha256(borrowed[1].bytes),
+        "consuming arm independently rehashes payloads and preserves copying-path events/digests");
+
+  std::vector<RenderTapeCaptureBlob> pointerSeed{
+      RenderTapeCaptureBlob{.bytes = std::vector<std::byte>(8197u, std::byte{0x35u})}};
+  const auto* originalPointer = pointerSeed[0].bytes.data();
+  capture_state_allocation_probe::watchedPointer = pointerSeed[0].bytes.data();
+  capture_state_allocation_probe::watchedFreed = false;
+  capture_state_allocation_probe::watchSize = pointerSeed[0].bytes.size();
+  RenderTapeCaptureSession pointerSession(true);
+  check(pointerSession.armWithOwnedBlobs(bootstrap, std::move(pointerSeed)) ==
+            RenderTapeCaptureStatus::Accepted && pointerSeed.empty() &&
+            pointerSession.ownedBlobBytes() == 8197u &&
+            capture_state_allocation_probe::watchedPointer == originalPointer &&
+            !capture_state_allocation_probe::watchedFreed,
+        "consuming arm conserves the original payload pointer with no payload-sized allocation");
+  capture_state_allocation_probe::watchSize = 0u;
+  std::vector<RenderTapeCaptureBlob> invalidRetry{
+      RenderTapeCaptureBlob{.bytes = std::vector<std::byte>(5u, std::byte{0x11u})}};
+  check(pointerSession.armWithOwnedBlobs(bootstrap, std::move(invalidRetry)) ==
+            RenderTapeCaptureStatus::InvalidState && invalidRetry.empty() &&
+            pointerSession.state() == RenderTapeCaptureState::Armed &&
+            pointerSession.ownedBlobEntries() == 1u && pointerSession.ownedBlobBytes() == 8197u &&
+            !capture_state_allocation_probe::watchedFreed,
+        "failed consuming rearm releases transferred input without changing the existing session");
+  pointerSession.abort();
+  check(capture_state_allocation_probe::watchedFreed,
+        "session abort releases the exact payload pointer consumed at arm");
+  capture_state_allocation_probe::watchedPointer = nullptr;
+
+  auto overflowing = borrowed;
+  RenderTapeCaptureSession budget(true, {.maxBlobBytes = 7u});
+  check(budget.armWithOwnedBlobs(bootstrap, std::move(overflowing)) ==
+            RenderTapeCaptureStatus::CapacityExceeded && overflowing.empty() &&
+            budget.ownedBlobEntries() == 0u && budget.ownedBlobBytes() == 0u &&
+            budget.publicationBundle().events.empty() &&
+            std::string_view(budget.armFailure().layer) == "arm_with_owned_blobs" &&
+            std::string_view(budget.armFailure().reason) == "blob_byte_limit" &&
+            budget.armFailure().blobIndex == 1u &&
+            budget.armFailure().blobBytes == 4u && budget.armFailure().cumulativeBlobBytes == 4u,
+        "consuming byte-budget failure preserves exact provenance without partial publication");
+  std::vector<RenderTapeCaptureBlob> duplicates{borrowed[0], borrowed[0]};
+  RenderTapeCaptureSession oneEntry(true, {.maxBlobEntries = 1u, .maxBlobBytes = 4u});
+  check(oneEntry.armWithOwnedBlobs(bootstrap, std::move(duplicates)) ==
+            RenderTapeCaptureStatus::Accepted && duplicates.empty() &&
+            oneEntry.ownedBlobEntries() == 1u && oneEntry.ownedBlobBytes() == 4u,
+        "duplicate transferred payloads consume exactly one budget entry and byte charge");
+  auto entryOverflow = borrowed;
+  RenderTapeCaptureSession oneEntryRejected(true, {.maxBlobEntries = 1u});
+  check(oneEntryRejected.armWithOwnedBlobs(bootstrap, std::move(entryOverflow)) ==
+            RenderTapeCaptureStatus::CapacityExceeded && entryOverflow.empty() &&
+            std::string_view(oneEntryRejected.armFailure().reason) == "blob_entry_limit",
+        "consuming path does not widen unique entry budgets");
+
+  bool reachedSuccess = false;
+  bool sawInnerFailure = false;
+  for (std::size_t allocation = 0u; allocation < 32u; ++allocation) {
+    auto input = borrowed;
+    RenderTapeCaptureSession injected(true);
+    capture_state_allocation_probe::failAfter = allocation;
+    capture_state_allocation_probe::failEnabled = true;
+    const auto status = injected.armWithOwnedBlobs(bootstrap, std::move(input));
+    capture_state_allocation_probe::failEnabled = false;
+    check(input.empty(), "consuming API takes ownership even when staged metadata allocation fails");
+    if (status == RenderTapeCaptureStatus::Accepted) {
+      reachedSuccess = true;
+      break;
+    }
+    const auto& failure = injected.armFailure();
+    check(status == RenderTapeCaptureStatus::CapacityExceeded &&
+              std::string_view(failure.reason) == "exception" &&
+              std::string_view(failure.exceptionKind) == "bad_alloc" &&
+              std::string_view(failure.phase) != "owned_blob_copy" &&
+              injected.ownedBlobEntries() == 0u && injected.ownedBlobBytes() == 0u &&
+              injected.publicationBundle().events.empty() && injected.sealedArtifact().empty(),
+          "consuming allocation failure remains transactional with exact typed attribution");
+    if (std::string_view(failure.layer) == "arm") {
+      sawInnerFailure = true;
+      check(failure.inputBlobCount == 3u && failure.uniqueBlobCount == 2u &&
+                failure.cumulativeBlobBytes == 8u,
+            "consuming downstream failure retains duplicate-aware transferred payload totals");
+    }
+  }
+  check(reachedSuccess && sawInnerFailure,
+        "consuming fault sweep reaches downstream arm failures and unchanged success");
 }
 
 void testBoundedBlobBytesAndDeduplication() {
@@ -4467,6 +4606,77 @@ void testPendingAliasFlushBeforeReplacementSequence() {
   }
   check(validateRenderTape(session.sealedArtifact(), catalogue).valid(),
         "pending alias replacement sequence passes final canonical validation");
+}
+
+void testSha256AllocationFreeBlocksAndPadding() {
+  const auto matchesHex = [](const RenderTapeDigest& digest, std::string_view expected) {
+    constexpr std::string_view digits = "0123456789abcdef";
+    if (expected.size() != digest.size() * 2u) return false;
+    for (std::size_t index = 0u; index < digest.size(); ++index) {
+      const auto value = static_cast<unsigned>(digest[index]);
+      if (expected[index * 2u] != digits[value >> 4u] ||
+          expected[index * 2u + 1u] != digits[value & 0xfu])
+        return false;
+    }
+    return true;
+  };
+  const auto checkHash = [&](std::span<const std::byte> bytes,
+                            std::string_view expected) {
+    capture_state_allocation_probe::count = 0u;
+    capture_state_allocation_probe::enabled = true;
+    const auto digest = RenderTapeCaptureSession::sha256(bytes);
+    capture_state_allocation_probe::enabled = false;
+    check(matchesHex(digest, expected) && capture_state_allocation_probe::count == 0u,
+          "SHA256 matches the independent golden digest with zero heap allocations");
+  };
+  struct StandardVector {
+    std::string_view bytes;
+    std::string_view digest;
+  };
+  constexpr std::array standards{
+      StandardVector{"",
+          "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"},
+      StandardVector{"abc",
+          "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+      StandardVector{"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+          "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"}};
+  for (const auto& vector : standards)
+    checkHash(std::as_bytes(std::span(vector.bytes.data(), vector.bytes.size())),
+              vector.digest);
+
+  // Binary prefix vectors were derived independently with Digest::SHA.
+  // The one-byte offset also exercises an unaligned complete input block.
+  std::array<std::byte, 66u> binary{};
+  for (std::size_t index = 0u; index < 65u; ++index)
+    binary[index + 1u] = static_cast<std::byte>(index);
+  struct BoundaryVector {
+    std::size_t bytes;
+    std::string_view digest;
+  };
+  constexpr std::array boundaries{
+      BoundaryVector{55u,
+          "463eb28e72f82e0a96c0a4cc53690c571281131f672aa229e0d45ae59b598b59"},
+      BoundaryVector{56u,
+          "da2ae4d6b36748f2a318f23e7ab1dfdf45acdc9d049bd80e59de82a60895f562"},
+      BoundaryVector{63u,
+          "29af2686fd53374a36b0846694cc342177e428d1647515f078784d69cdb9e488"},
+      BoundaryVector{64u,
+          "fdeab9acf3710362bd2658cdc9a29e8f9c757fcf9811603a8c447cd1d9151108"},
+      BoundaryVector{65u,
+          "4bfd2c8b6f1eec7a2afeb48b934ee4b2694182027e6d0fc075074f2fabb31781"}};
+  for (const auto& vector : boundaries)
+    checkHash(std::span(binary).subspan(1u, vector.bytes), vector.digest);
+
+  const std::vector<std::byte> millionA(1000000u, std::byte{0x61u});
+  checkHash(millionA,
+            "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+  // Exact extent of capture12's failed first blob. Allocation precedes the
+  // probe; only hashing is measured. Input is 14400 repetitions of bytes0..255.
+  std::vector<std::byte> capturedExtent(3686400u);
+  for (std::size_t index = 0u; index < capturedExtent.size(); ++index)
+    capturedExtent[index] = static_cast<std::byte>(index & 0xffu);
+  checkHash(capturedExtent,
+            "38a46cf828a816c7b776f09bd5bc414b90f8f0e186c562d5ee3eb6131aa6f1c6");
 }
 
 void testPresentCaptureResultAbiAndOneShotCancellation() {
@@ -5725,6 +5935,7 @@ int main(int argc, char** argv) {
     testPresentCompleteOracleTargetTruthTable();
     testFailureBeforePublishAndBoundedBackpressure();
     testArmFailureProvenanceAndAbortRelease();
+    testConsumingArmBlobOwnershipAndEquivalence();
     testBoundedBlobBytesAndDeduplication();
     testRenderTapeBlobCapacityResolverTruthTable();
     testProductionBlobDefaultIsCaptureBounded();
@@ -5735,6 +5946,7 @@ int main(int argc, char** argv) {
     testStandaloneSurfaceIdentityClosureTruthTable();
     testSurfaceAliasGenerationReplacementTransition();
     testPendingAliasFlushBeforeReplacementSequence();
+    testSha256AllocationFreeBlocksAndPadding();
     testPresentCaptureResultAbiAndOneShotCancellation();
     testProductionIdentityExactEventLookupDoesNotComplete();
     testProductionExactEventWaitAcknowledgesOnlySuccessfulWait();

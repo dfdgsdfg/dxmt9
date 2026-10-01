@@ -600,6 +600,16 @@ report zero while old payloads remain owned. Failure attribution may preserve
 pre-release extents as value-only diagnostics; it must not keep those payloads
 alive. Resetting the builder must preserve the selected capture profile.
 
+When the bootstrap producer already owns its blob payloads, session admission
+must transfer those payloads rather than create another full-size copy.
+Transferred bytes still require exact duplicate detection, budget admission,
+and recomputed digests; caller-supplied identity is not validation evidence.
+Borrowed-input admission retains copying semantics. Both routes must produce
+the same canonical events and blob catalogue, with no partial publication on
+failure. Digest computation must use bounded scratch independent of input
+extent. Arm snapshots needed by later JIT materialization remain owned until
+their existing lifetime boundary; consuming bootstrap seeds must not drain them.
+
 The capture owner must also enforce an overflow-safe total owned-blob byte
 budget before hashing or copying a new blob. The capture-only production
 default is 256 MiB (268,435,456 bytes). `DXMT9_RENDER_TAPE_MAX_BLOB_BYTES`

@@ -1297,9 +1297,10 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
     }
     auto armStatus = dxmt9::d3d9::RenderTapeCaptureStatus::InvalidInput;
     auto intervalStatus = dxmt9::d3d9::RenderTapeCaptureStatus::InvalidState;
+    const auto producedBlobCount = seed.blobs.size();
     if (produced) {
-        armStatus = peCaptureState_->renderTapeCapture.armWithBlobs(
-            seed.bootstrapOverlay, seed.blobs, seed.gammaRamp);
+        armStatus = peCaptureState_->renderTapeCapture.armWithOwnedBlobs(
+            seed.bootstrapOverlay, std::move(seed.blobs), seed.gammaRamp);
         if (armStatus == dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
             intervalStatus = peCaptureState_->renderTapeCapture.beginPresentInterval();
         }
@@ -1312,7 +1313,7 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
             "interval_status=%u objects=%zu mutations=%zu blobs=%zu",
             produced ? 1 : 0, static_cast<unsigned>(armStatus),
             static_cast<unsigned>(intervalStatus), seed.objects.size(),
-            seed.mutations.size(), seed.blobs.size());
+            seed.mutations.size(), producedBlobCount);
         if (produced) {
             const auto &failure = peCaptureState_->renderTapeCapture.armFailure();
             const auto &limits = peCaptureState_->renderTapeCapture.limits();
@@ -1405,7 +1406,7 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
         "render_tape_capture arm_complete token=%llu objects=%zu "
         "mutations=%zu blobs=%zu",
         static_cast<unsigned long long>(peCaptureState_->renderTapeActiveCaptureToken),
-        seed.objects.size(), seed.mutations.size(), seed.blobs.size());
+        seed.objects.size(), seed.mutations.size(), producedBlobCount);
     return true;
 }
 
