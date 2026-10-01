@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H427](present-pacing-pass-proof-audit.427.md) identifies a narrower code candidate:
+query-preserved pass actions still compute store lookahead, while perf ON also
+re-traverses color0/depth for a summary. Their costs are not yet separated.
+Only the query-preservation predicate fixes both DontCare and late-store choices;
+tape-only preservation must not inherit the shortcut. No runtime change.
+
 [H426](present-pacing-drawrun-preparation.426.md) subdivides large-source DrawRun
 residual: pass entry 22.466 ms and per-draw loop residual 17.018 ms dominate
 47.538 ms across five bodies. Command binding-plan setup is 1.429 ms. These are
