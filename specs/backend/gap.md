@@ -137,10 +137,12 @@ preparation/pass ownership and wait-linked source selection remain open. See
 H428 implements H427's query-preserved, perf-OFF store-proof omission. A pure
 production selector preserves normal/tape-only proof evaluation and perf counters.
 Both observer modes pass 192 actual prepared-output cases; segmented/offloaded
-range OFF/ON GPU query/pixel oracles pass. Observer-OFF wild benefit and broader
-alias/format cross-product evidence remain open; perf-only summary re-traversal
-is unchanged. See
-[H428](../../docs/perfomance/present-pacing/present-pacing-query-proof-elision.428.md).
+range OFF/ON GPU query/pixel oracles pass. H429's default-route observer-OFF
+wild pairs give +1.668% / -1.546% against 2.484% A/A variation: no benefit is
+resolved. Broader temporal visual and alias/format cross-product evidence remain
+open; perf-only summary re-traversal is unchanged. See
+[H428](../../docs/perfomance/present-pacing/present-pacing-query-proof-elision.428.md)
+and [H429](../../docs/perfomance/present-pacing/present-pacing-query-proof-wild.429.md).
 
 H426 adds opt-in sequential DrawRun preparation milestones without changing
 rendering policy. Five large diagnostic bodies attribute 22.466 ms to pass

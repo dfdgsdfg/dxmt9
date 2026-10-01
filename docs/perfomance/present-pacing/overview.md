@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H429](present-pacing-query-proof-wild.429.md) measures H428 with observers OFF
+on the default range-OFF Day route: +1.668% / -1.546% in reversed-order pairs,
+against 2.484% same-image A/A variation. No FPS benefit is resolved. Five runs
+pass; an earlier non-game capture is excluded. Keep the computation elision,
+but do not promote ranges or assign H426's observed pass-entry time as savings.
+
 [H428](present-pacing-query-proof-elision.428.md) implements the narrow H427
 selector: omit store-proof walks only for query preservation with perf OFF.
 Prepared-output fixtures pass 192 cases in each observer mode, and range OFF/ON
