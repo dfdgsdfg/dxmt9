@@ -17,6 +17,8 @@
 #include "render_tape_cpu_destroy_fixture.hpp"
 #include "render_tape_cpu_alias_fixture.hpp"
 #include "render_tape_cpu_mipmap_fixture.hpp"
+#include "render_tape_cpu_query_fixture.hpp"
+#include "render_tape_cpu_volume_fixture.hpp"
 #include "render_tape_test_metal_device.hpp"
 #include "device_c_replay_offload.hpp"
 #include "dxmt9/com.hpp"
@@ -1573,6 +1575,26 @@ struct RoutingDevice final : dxmt9::Device {
     return attachmentOwner;
   }
   bool supportsGpuReadback() const override { return readbackAvailableForTest; }
+  // Only admitted query tapes opt into this backend. The query-free fixture
+  // retains its existing policy. Result storage is substituted CPU evidence;
+  // fences and scope lifetime still belong to the production queue.
+  bool controlledQueries = false;
+  bool usesAsyncQueryFences() const noexcept override { return controlledQueries; }
+  bool usesMetalOcclusion() const noexcept override { return controlledQueries; }
+  bool setOcclusionScope(dxmt9::query::OcclusionScopeRef scope) noexcept override {
+    return controlledQueries && queue_.setOcclusionScope(std::move(scope));
+  }
+  dxmt9::query::EndReceipt publishQueryEnd() noexcept override {
+    return controlledQueries ? queue_.publishQueryEnd() : dxmt9::query::EndReceipt{};
+  }
+  dxmt9::query::Poll pollQueryFence(const dxmt9::query::EndReceipt& receipt,
+                                   bool flush) noexcept override {
+    return controlledQueries ? queue_.pollQueryFence(receipt, flush)
+                             : dxmt9::query::Poll::Invalid;
+  }
+  dxmt9::query::Progress queryProgress() noexcept override {
+    return controlledQueries ? queue_.queryProgress() : dxmt9::query::Progress{};
+  }
   static constexpr std::size_t kTextureUploadObservationCapacity = 16u;
   static constexpr std::size_t kTextureUploadObservationBytes = 64u * 1024u;
 
@@ -8284,6 +8306,91 @@ void printCpuTapeLoadedImages() {
   std::cout << ']';
 }
 
+void printCpuQueryReplay(const dxmt9::d3d9::RenderTapeQueryReplayEvidence& evidence,
+                         bool measurement, std::string_view eventsSha256) {
+  const auto boolean = [](bool value) { return value ? "true" : "false"; };
+  const auto bytesHex = [](const auto& bytes, std::uint32_t count) {
+    constexpr char digits[] = "0123456789abcdef";
+    std::string hex;
+    for (std::size_t index = 0u; index < std::min<std::size_t>(count, bytes.size()); ++index) {
+      const auto byte = std::to_integer<unsigned>(bytes[index]);
+      hex.push_back(digits[byte >> 4u]);
+      hex.push_back(digits[byte & 15u]);
+    }
+    return hex;
+  };
+  constexpr std::array<const char*, 8> failures{
+      "none", "unsupported-result-kind", "snapshot-unavailable", "cycle-mismatch",
+      "poll-failed", "result-mismatch", "progress-exhausted", "backend-unavailable"};
+  constexpr std::array<const char*, 3> progressLimits{
+      "none", "poll-budget", "wall-budget"};
+  std::cout << R"({"schema":"dxmt9.render_tape.query_replay.v1","backend":"cpu-controlled-production-queue","mode":)"
+            << std::quoted(measurement ? "measurement" : "qualification")
+            << R"(,"events_sha256":)" << std::quoted(eventsSha256)
+            << R"(,"present":)" << boolean(evidence.present)
+            << R"(,"transcript_complete":)" << boolean(evidence.transcriptComplete)
+            << R"(,"oracle_complete":)" << boolean(evidence.oracleComplete)
+            << R"(,"actual_metal":false,"gpu_result_oracle":false,"query_definitions":)" << evidence.queryDefinitions
+            << R"(,"issue_records":)" << evidence.issueRecords
+            << R"(,"replayed_issue_records":)" << evidence.replayedIssueRecords
+            << R"(,"recorded_polls":)" << evidence.recordedPolls
+            << R"(,"replayed_polls":)" << evidence.replayedPolls
+            << R"(,"captured_pending":)" << evidence.capturedPending
+            << R"(,"replay_pending":)" << evidence.replayPending
+            << R"(,"captured_ready":)" << evidence.capturedReady
+            << R"(,"replay_ready":)" << evidence.replayReady
+            << R"(,"required_results":)" << evidence.requiredResults
+            << R"(,"matched_results":)" << evidence.matchedResults
+            << R"(,"readiness_required":)" << evidence.readinessRequired
+            << R"(,"readiness_satisfied":)" << evidence.readinessSatisfied
+            << R"(,"substituted_results":)" << evidence.substitutedResults
+            << R"(,"supplemental_polls":)" << evidence.supplementalPolls
+            << R"(,"supplemental_drains":)" << evidence.supplementalDrains
+            << R"(,"transcript_wall_ns":)" << evidence.transcriptWallNanos
+            << R"(,"oracle_wall_ns":)" << evidence.oracleWallNanos
+            << R"(,"max_oracle_polls":)" << evidence.maxOraclePolls
+            << R"(,"max_oracle_wall_ns":)" << evidence.maxOracleWallNanos
+            << R"(,"progress_limit":)" << std::quoted(progressLimits[std::min<std::size_t>(
+                static_cast<std::size_t>(evidence.progressLimit), progressLimits.size() - 1u)])
+            << R"(,"failure":)" << std::quoted(failures[std::min<std::size_t>(
+                static_cast<std::size_t>(evidence.failure), failures.size() - 1u)])
+            << R"(,"rows":[)";
+  for (std::size_t index = 0u; index < evidence.rows.size(); ++index) {
+    if (index) std::cout << ',';
+    const auto& row = evidence.rows[index];
+    std::cout << R"({"event_index":)" << row.eventIndex
+              << R"(,"event_ordinal":)" << row.eventOrdinal
+              << R"(,"identity":{"kind":)" << row.identity.kind
+              << R"(,"generation":)" << row.identity.generation
+              << R"(,"object_id":")" << row.identity.objectId << R"("})"
+              << R"(,"issue_cycle":)" << row.issueCycle
+              << R"(,"flags":)" << row.flags
+              << R"(,"has_output":)" << boolean(row.hasOutput)
+              << R"(,"data_size":)" << row.dataSize
+              << R"(,"captured_result":)" << row.capturedResult
+              << R"(,"replay_result":)" << row.replayResult
+              << R"(,"oracle_result":)" << row.oracleResult
+              << R"(,"defined_bytes":)" << row.definedBytes
+              << R"(,"captured_hex":)" << std::quoted(bytesHex(row.capturedBytes, row.definedBytes))
+              << R"(,"replay_hex":)" << std::quoted(bytesHex(row.replayBytes, row.definedBytes))
+              << R"(,"local_query_identity":)" << row.localQueryIdentity
+              << R"(,"local_issue_ordinal":)" << row.localIssueOrdinal
+              << R"(,"local_device_epoch":)" << row.localDeviceEpoch
+              << R"(,"local_queue":)" << row.localQueue
+              << R"(,"local_sequence":)" << row.localSequence
+              << R"(,"local_initializer":)" << row.localInitializer
+              << R"(,"completed_sequence":)" << row.completedSequence
+              << R"(,"completed_initializer":)" << row.completedInitializer
+              << R"(,"oracle_polls":)" << row.oraclePolls
+              << R"(,"result_required":)" << boolean(row.resultRequired)
+              << R"(,"result_matched":)" << boolean(row.resultMatched)
+              << R"(,"readiness_satisfied":)" << boolean(row.readinessSatisfied)
+              << R"(,"result_substituted":)" << boolean(row.resultSubstituted)
+              << R"(,"supplemental":)" << boolean(row.supplemental) << '}';
+  }
+  std::cout << "]}";
+}
+
 int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
   namespace runtime = dxmt9::d3d9::render_tape_runtime;
   const bool captureSourceRequested =
@@ -8386,6 +8493,9 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
   }
   const auto importNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
       std::chrono::steady_clock::now() - importBegin).count();
+  const auto queryEventsSha256 = admission.counts.queryDefinitions
+      ? renderTapeDigestHex(dxmt9::d3d9::RenderTapeCaptureSession::sha256(tape))
+      : std::string{};
 
   MetalDeviceLease resourceDevice;
   resourceDevice.handle = dxmt9_test_acquire_metal_device();
@@ -8485,6 +8595,7 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
   const bool deterministic = !results.empty() &&
       std::all_of(results.begin(), results.end(), [&](const auto& value) {
         return value.execution.digest == results.front().execution.digest &&
+               value.execution.querySemanticDigest == results.front().execution.querySemanticDigest &&
                value.execution.draws == results.front().execution.draws &&
                value.execution.commands == results.front().execution.commands;
       });
@@ -8515,6 +8626,9 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
   std::cout << '}'
             << R"(,"replay_route":)" << std::quoted(options.compatibility ? "compatibility" : "production-slot")
             << R"(,"publication":"per-command","completion":)"
+            << std::quoted(admission.counts.queryDefinitions ? "controlled-query-ready-obligation"
+                : options.beforeNextWork ? "before-next-work" : "after-command")
+            << R"(,"requested_completion":)"
             << std::quoted(options.beforeNextWork ? "before-next-work" : "after-command")
             << R"(,"repeat":)" << options.repeat
             << R"(,"fault":"none","max_pending":)" << options.maxPending
@@ -8549,7 +8663,10 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
             << R"(,"mutations":)" << admission.counts.mutations
             << R"(,"chunks":)" << admission.counts.chunks
             << R"(,"records":)" << admission.counts.records
-            << R"(,"draws":)" << admission.counts.draws << R"(},"iterations":[)";
+            << R"(,"draws":)" << admission.counts.draws
+            << R"(,"query_definitions":)" << admission.counts.queryDefinitions
+            << R"(,"query_issues":)" << admission.counts.queryIssues
+            << R"(,"query_polls":)" << admission.counts.queryPolls << R"(},"iterations":[)";
   for (std::size_t index = 0u; index < results.size(); ++index) {
     if (index) std::cout << ',';
     const auto& iteration = results[index];
@@ -8561,6 +8678,10 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
               << R"(,"failure":)" << std::quoted(result.failure)
               << R"(,"failed_event":)" << result.failedEvent
               << R"(,"semantic_digest":")" << result.digest << '"'
+              << R"(,"query_semantic_digest":")" << result.querySemanticDigest << '"'
+              << R"(,"query_replay":)";
+    printCpuQueryReplay(result.queryReplay, options.measurement, queryEventsSha256);
+    std::cout
               << R"(,"command_count":)" << result.commands
               << R"(,"draw_count":)" << result.draws
               << R"(,"full_oracle_calls":)" << result.fullOracleCalls
@@ -8793,6 +8914,393 @@ int runGeneralCpuTapeExperiment(const CpuTapeExperimentOptions& options) {
   printCpuTapeLoadedImages();
   std::cout << "}\n";
   return complete && deterministic ? 0 : 4;
+}
+
+void controlledQueryFenceRefinementAndLifetime() {
+  using namespace dxmt9::query;
+  for (std::uint64_t owner : {1u, 2u})
+    for (std::uint64_t sequence = 0u; sequence <= 2u; ++sequence)
+      for (std::uint64_t published = 0u; published <= 2u; ++published)
+        for (std::uint64_t completed = 0u; completed <= 3u; ++completed)
+          for (bool failed : {false, true}) {
+            const Fence fence{owner, sequence};
+            const Progress progress{1u, published, completed, failed};
+            const auto observed = classify(fence, progress);
+            const bool valid = owner == progress.queue && completed <= published &&
+                               sequence <= published;
+            check((observed == Poll::Complete) ==
+                      (valid && !failed && completed >= sequence),
+                  "production query classify admits only queue-qualified completed prefixes");
+            check((observed == Poll::Pending) ==
+                      (valid && !failed && completed < sequence),
+                  "publication and submission cannot manufacture query readiness");
+          }
+  const WriterIdentity writer{1u, 0u, 1u, 1u};
+  auto marker = std::make_shared<EndMarker>(writer);
+  EndReceipt deferred{1u, 0u};
+  deferred.marker = marker;
+  check(classifyEnd(deferred, {1u, 0u, 0u}) == Poll::Pending,
+        "unbound END is not an already-completed empty prefix");
+  check(!marker->bind({2u, 0u, 1u, 1u}, 1u) && marker->bind(writer, 1u) &&
+            !marker->bind(writer, 2u),
+        "production END binds its exact writer once, never foreign or duplicate publication");
+  marker->cancel();
+  check(classifyEnd(deferred, {1u, 1u, 1u}) == Poll::Failed,
+        "cancelled result remains terminal above completion waterline");
+
+  RuntimeFixture fixture(false, false, true, false);
+  fixture.routing->controlledQueries = true;
+  auto* wrapped = dxmt9c_device_create_query(fixture.cDevice.get(), 9u);
+  check(wrapped != nullptr, "controlled production query creation");
+  check(dxmt9c_query_issue(wrapped, 2u) == D3D_OK, "controlled BEGIN");
+  fixture.routing->submitClear(ClearDesc{});
+  check(dxmt9c_query_issue(wrapped, 1u) == D3D_OK, "controlled END publishes real work");
+  check(dxmt9::CommandQueueArenaLeaseTestAccess::publishWriting(fixture.routing->queue_),
+        "controlled deferred END publishes through production queue");
+  auto old = fixture.cDevice->dev().captureQueryPollSnapshot(wrapped->obj);
+  const auto fence = old.backendFence.snapshot();
+  check(old.eligible && fence.queue != 0u && fence.sequence != 0u,
+        "controlled END receives an actual local publication receipt");
+  std::uint32_t output = 0xdeadbeefu;
+  check(dxmt9c_query_get_data(wrapped, &output, sizeof(output), 1u) == S_FALSE &&
+            output == 0xdeadbeefu,
+        "recorded FLUSH is nonblocking and preserves undefined pending bytes");
+  dxmt9::d3d9::RenderTapeCompletionSchedule schedule;
+  const auto ready = dxmt9::CommandQueueArenaLeaseTestAccess::peekReadyCompletion(fixture.routing->queue_);
+  const dxmt9::d3d9::RenderTapeCompletionKey key{
+      1u, ready.seqId, ready.source.id.index, 0u, ready.source.id.generation};
+  check(schedule.append({key}).accepted() && schedule.beginIteration(1u).accepted(),
+        "bounded query completion schedule initialized");
+  bool prematureCallback = false;
+  check(!schedule.release(key, [&] { prematureCallback = true; return true; }).accepted() &&
+            !prematureCallback,
+        "query completion schedule rejects acknowledgment before submission");
+  check(schedule.submit(key).accepted(), "actual query submission admitted");
+  const auto submitted = dxmt9::CommandQueueArenaLeaseTestAccess::submitOneWithheld(fixture.routing->queue_);
+  check(submitted.submitted && fixture.cDevice->dev().pollQuerySnapshot(old,
+            &output, sizeof(output), 0u) == S_FALSE,
+        "submitted work remains Pending until explicit controlled completion");
+  check(schedule.release(key, [&] {
+          return dxmt9::CommandQueueArenaLeaseTestAccess::acknowledgeOne(fixture.routing->queue_);
+        }).accepted() &&
+        dxmt9::CommandQueueArenaLeaseTestAccess::finishQueue(fixture.routing->queue_),
+        "query source completes and retires through the production lifecycle");
+  check(!schedule.release(key).accepted(), "duplicate query acknowledgment rejects");
+  check(fixture.cDevice->dev().pollQuerySnapshot(old, &output, sizeof(output), 0u) == D3D_OK,
+        "completion makes the original query receipt ready");
+  const auto resultOwner = old.occlusionResult;
+  check(dxmt9c_query_issue(wrapped, 2u) == D3D_OK,
+        "new BEGIN creates a replacement cycle");
+  const auto replacement = fixture.cDevice->dev().captureQueryPollSnapshot(wrapped->obj);
+  check(replacement.issueOrdinal > old.issueOrdinal && replacement.active &&
+            replacement.occlusionResult != resultOwner,
+        "reissue never relabels or clears old result storage");
+  output = 0xdeadbeefu;
+  check(dxmt9c_query_get_data(wrapped, &output, sizeof(output), 0u) == S_FALSE &&
+            output == 0xdeadbeefu,
+        "replacement cycle cannot expose the previous result");
+  dxmt9c_query_release(wrapped);
+  check(fixture.cDevice->dev().pollQuerySnapshot(old, &output, sizeof(output), 0u) == D3D_OK,
+        "retained original snapshot survives public wrapper release");
+  PresentParameters reset{};
+  reset.backBufferWidth = reset.backBufferHeight = 16u;
+  reset.backBufferFormat = Format::A8R8G8B8;
+  reset.windowed = true;
+  reset.deviceWindow = Handle{91u};
+  reset.presentationInterval = PresentInterval::Immediate;
+  check(fixture.cDevice->dev().reset(reset) == D3D_OK, "query reset advances device epoch");
+  output = 0xdeadbeefu;
+  check(fixture.cDevice->dev().pollQuerySnapshot(old, &output, sizeof(output), 0u) ==
+            D3DERR_DEVICELOST && output == 0xdeadbeefu,
+        "reset rejects stale epoch without writing result bytes");
+}
+
+void generalCpuQueryTranscriptUsesControlledQueue() {
+  namespace runtime = dxmt9::d3d9::render_tape_runtime;
+  using Fault = dxmt9::d3d9::test::CpuQueryFixtureFault;
+  for (auto fault : {Fault::StaleCycle, Fault::MissingBegin,
+                     Fault::UncapturedClosedResult, Fault::LegacyDescriptor}) {
+    const auto tape = dxmt9::d3d9::test::makeGeneralCpuQueryFixture(fault);
+    std::vector<dxmt9::d3d9::RenderTapeProviderBlob> blobs;
+    for (const auto& bytes : tape.blobs)
+      blobs.push_back({dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes), bytes});
+    runtime::GeneralPreflightPlan plan;
+    const auto preflight = runtime::buildGeneralReplayPlan(tape.tape, blobs, plan);
+    check(!preflight.complete() && plan.events.empty(),
+          "query negative fixture " + std::to_string(static_cast<unsigned>(fault)) +
+              " rejects before effects: " +
+              dxmt9::d3d9::frameTapeReplayStatusName(preflight.status));
+  }
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE, "query tape needs actual CPU-visible resource backing");
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+      RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+  for (bool reissue : {false, true}) {
+    const auto tape = dxmt9::d3d9::test::makeGeneralCpuQueryFixture(Fault::None, reissue);
+    std::vector<dxmt9::d3d9::RenderTapeProviderBlob> blobs;
+    for (const auto& bytes : tape.blobs)
+      blobs.push_back({dxmt9::d3d9::RenderTapeCaptureSession::sha256(bytes), bytes});
+    runtime::GeneralPreflightPlan plan;
+    const auto preflight = runtime::buildGeneralReplayPlan(tape.tape, blobs, plan);
+    check(preflight.complete(), std::string("query preflight: ") +
+          dxmt9::d3d9::frameTapeReplayStatusName(preflight.status));
+    const auto admission = runtime::admitGeneralCpuPlan(plan);
+    check(admission.accepted() && admission.counts.queryDefinitions == 1u &&
+              admission.counts.queryIssues == (reissue ? 4u : 2u) &&
+              admission.counts.queryPolls == (reissue ? 4u : 3u),
+          "CPU query grammar preserves issue and original poll coverage");
+    std::uint64_t semantic = 0u, querySemantic = 0u;
+    for (unsigned scenario : {0u, 1u, 2u}) {
+      for (bool compatibility : {true, false}) {
+        const bool measured = scenario == 1u;
+        const bool exhausted = scenario == 2u;
+        RuntimeFixture fixture(false, false, true, false, WMT::Device{resourceDevice.handle});
+        Executor executor(fixture, plan, blobs, {
+            .route = compatibility ? dxmt9::d3d9::ProviderReplayPolicy::Compatibility
+                                   : dxmt9::d3d9::ProviderReplayPolicy::ProductionSlot,
+            .measurement = measured, .maxQueryOraclePolls = exhausted ? 0u : 4u});
+        const auto result = executor.run();
+        if (exhausted) {
+          check(!result.complete && result.resetOk &&
+                    result.failure == "general-executor-query-progress-exhausted" &&
+                    result.queryReplay.progressLimit ==
+                        dxmt9::d3d9::RenderTapeQueryProgressLimit::PollBudget &&
+                    result.queryReplay.supplementalPolls == 0u,
+                "zero progress budget fails without hiding an oracle drain: " + result.failure);
+          continue;
+        }
+        check(result.complete && result.resetOk, "controlled query replay: " + result.failure);
+        const auto& queries = result.queryReplay;
+        check(queries.present && queries.transcriptComplete && queries.oracleComplete &&
+                  queries.progressLimit == dxmt9::d3d9::RenderTapeQueryProgressLimit::None &&
+                  !queries.actualMetal && !queries.gpuResultOracle &&
+                  queries.replayedIssueRecords == admission.counts.queryIssues &&
+                  queries.replayedPolls == admission.counts.queryPolls &&
+                  queries.readinessSatisfied == (reissue ? 2u : 1u) &&
+                  queries.substitutedResults == (reissue ? 2u : 1u) &&
+                  queries.matchedResults == 0u && queries.supplementalPolls == (reissue ? 2u : 1u),
+              "CPU proves qualified readiness without claiming captured GPU samples");
+        if (measured) {
+          check(queries.rows.empty() && result.fullOracleCalls == 0u,
+                "query measurement retains cheap obligations and omits semantic rows");
+        } else {
+          check(queries.rows.size() == admission.counts.queryPolls &&
+                    queries.rows[0].capturedResult == S_FALSE &&
+                    queries.rows[0].replayResult == S_FALSE &&
+                    queries.rows[1].flags == 1u,
+                "original Pending and FLUSH calls remain visible and ordered");
+          for (const auto& row : queries.rows)
+            if (row.resultRequired)
+              check(row.readinessSatisfied && row.localSequence != 0u &&
+                        row.completedSequence >= row.localSequence &&
+                        row.resultSubstituted && !row.resultMatched,
+                    "captured success binds the same local issue and completed END");
+          if (semantic == 0u) { semantic = result.digest; querySemantic = result.querySemanticDigest; }
+          check(result.digest == semantic && result.querySemanticDigest == querySemantic,
+                "production route fallback preserves draw and query transcript semantics");
+        }
+      }
+    }
+  }
+}
+
+void generalCpuVolumeWriterAndUploadShapeAreExact() {
+  namespace tape = dxmt9::d3d9;
+  namespace cpu = dxmt9::test::detail;
+  for (auto format : {tape::render_tape_d3d_format::A8R8G8B8,
+                      tape::render_tape_d3d_format::DXT1,
+                      tape::render_tape_d3d_format::DXT5}) {
+    const auto fixture = tape::test::makeGeneralCpuVolumeFixture(format);
+    check(!fixture.tape.empty(), "volume writer fixture constructs complete bytes");
+    for (std::uint32_t mip = 0u; mip < fixture.levels.size(); ++mip) {
+      const auto& desc = fixture.levels[mip];
+      tape::RenderTapeVolumeLockLayout canonical{};
+      check(tape::renderTapeVolumeContentLayout(desc, canonical) ==
+                tape::RenderTapeVolumeLayoutStatus::Accepted,
+            "volume mip has a shared canonical layout");
+      cpu::CpuGeneralTextureUploadShape shape{};
+      check(cpu::cpuGeneralTextureUploadShape(desc, shape) &&
+                shape.width == desc.width && shape.height == desc.height &&
+                shape.depth == desc.depth && shape.pitch == canonical.fullRowBytes &&
+                shape.slicePitch == canonical.fullSliceBytes &&
+                shape.bytes == canonical.fullBytes,
+            "upload shape binds mip extents and packed storage rows/slices");
+      check(cpu::cpuGeneralTextureUploadShapeMatches(shape, shape.width,
+                shape.height, shape.depth, shape.pitch, shape.slicePitch,
+                static_cast<std::size_t>(shape.bytes)),
+            "exact captured upload shape is accepted");
+      for (unsigned field = 0u; field < 6u; ++field) {
+        auto wrong = shape;
+        switch (field) {
+        case 0u: ++wrong.width; break;
+        case 1u: ++wrong.height; break;
+        case 2u: ++wrong.depth; break;
+        case 3u: ++wrong.pitch; break;
+        case 4u: ++wrong.slicePitch; break;
+        case 5u: ++wrong.bytes; break;
+        }
+        check(!cpu::cpuGeneralTextureUploadShapeMatches(shape, wrong.width,
+                  wrong.height, wrong.depth, wrong.pitch, wrong.slicePitch,
+                  static_cast<std::size_t>(wrong.bytes)),
+              "every upload dimension, stride, and byte extent is checked");
+      }
+      for (bool shadow : {false, true}) {
+        const auto slicePitch = shadow
+            ? static_cast<std::uint64_t>(canonical.pitch) * desc.height
+            : canonical.fullSliceBytes;
+        std::vector<std::byte> storage(
+            static_cast<std::size_t>(slicePitch * desc.depth) + 16u, std::byte{0x5a});
+        D9CTexture texture({}, nullptr);
+        if (shadow) {
+          auto& lockedShadow = texture.wow64Locks[mip];
+          lockedShadow.active = true;
+          lockedShadow.shadow.ptr = storage.data();
+          lockedShadow.shadowSlicePitch = static_cast<std::size_t>(slicePitch);
+        }
+        const D9CLockedRect lock{
+            .pitch = static_cast<std::int32_t>(canonical.pitch), .bits = storage.data()};
+        check(cpu::cpuGeneralWriteTextureRows(desc, texture, mip, lock,
+                  fixture.seeds[mip]),
+              "CPU volume writer copies every packed or shadow-strided slice");
+        tape::RenderTapeVolumeLockLayout locked{};
+        std::vector<std::byte> roundtrip;
+        check(tape::renderTapeVolumeLockLayout(desc, lock.pitch,
+                  static_cast<std::int64_t>(slicePitch), nullptr, locked) ==
+                  tape::RenderTapeVolumeLayoutStatus::Accepted &&
+                  tape::copyRenderTapeVolumeRows(storage.data(), locked, roundtrip) &&
+                  roundtrip == fixture.seeds[mip],
+              "every mip/slice matches its exact canonical seed");
+        for (std::uint32_t z = 0u; z < desc.depth; ++z)
+          for (auto offset = canonical.fullSliceBytes; offset < slicePitch; ++offset)
+            check(storage[static_cast<std::size_t>(z * slicePitch + offset)] ==
+                      std::byte{0x5a}, "compressed shadow slice padding stays untouched");
+        check(std::all_of(storage.end() - 16u, storage.end(), [](std::byte byte) {
+                return byte == std::byte{0x5a}; }),
+              "volume writer cannot write beyond its full depth extent");
+        const auto before = storage;
+        check(!cpu::cpuGeneralWriteTextureRows(desc, texture, mip, lock,
+                  std::span(fixture.seeds[mip]).first(fixture.seeds[mip].size() - 1u)) &&
+                  storage == before,
+              "short canonical volume input rejects before copying any slice");
+      }
+    }
+    tape::RenderTapeVolumeLockLayout level0{};
+    check(tape::renderTapeVolumeContentLayout(fixture.levels[0], level0) ==
+              tape::RenderTapeVolumeLayoutStatus::Accepted &&
+              fixture.changedLevel0 != fixture.seeds[0] &&
+              std::equal(fixture.seeds[0].begin(),
+                         fixture.seeds[0].begin() + level0.fullSliceBytes,
+                         fixture.changedLevel0.begin()),
+          "nonzero-z captured mutation changes later slices and preserves slice zero");
+  }
+  D9CSurfaceDesc invalid{.format = tape::render_tape_d3d_format::A8R8G8B8,
+      .resourceType = 4u, .width = 7u, .height = 5u, .depth = 3u};
+  tape::RenderTapeVolumeLockLayout layout{};
+  check(tape::renderTapeVolumeLockLayout(invalid, 28, 139, nullptr, layout) ==
+            tape::RenderTapeVolumeLayoutStatus::InvalidPitch && layout.fullBytes == 0u,
+        "short slice stride rejects before publishing a usable layout");
+  check(tape::renderTapeVolumeLockLayout(invalid, 28,
+            std::numeric_limits<std::int64_t>::max(), nullptr, layout) ==
+            tape::RenderTapeVolumeLayoutStatus::Overflow && layout.fullBytes == 0u,
+        "source slice offset overflow rejects before any CPU copy");
+  invalid.width = std::numeric_limits<std::uint32_t>::max();
+  cpu::CpuGeneralTextureUploadShape shape{};
+  check(tape::renderTapeVolumeContentLayout(invalid, layout) ==
+            tape::RenderTapeVolumeLayoutStatus::Overflow &&
+            !cpu::cpuGeneralTextureUploadShape(invalid, shape) && shape.bytes == 0u,
+        "unrepresentable Volume extent cannot authorize an upload shape");
+}
+
+void generalCpuVolumeTapeUsesProductionCreationAndMutation() {
+  namespace tape = dxmt9::d3d9;
+  namespace runtime = tape::render_tape_runtime;
+  using Fault = tape::test::CpuVolumeFixtureFault;
+  for (auto fault : {Fault::WrongMipDepth, Fault::WrongResourceType,
+                     Fault::MissingSliceBytes}) {
+    const auto fixture = tape::test::makeGeneralCpuVolumeFixture(
+        tape::render_tape_d3d_format::A8R8G8B8, fault);
+    std::vector<tape::RenderTapeProviderBlob> blobs;
+    for (const auto& bytes : fixture.blobs)
+      blobs.push_back({tape::RenderTapeCaptureSession::sha256(bytes), bytes});
+    runtime::GeneralPreflightPlan plan;
+    const auto preflight = runtime::buildGeneralReplayPlan(fixture.tape, blobs, plan);
+    check(!preflight.complete() && plan.events.empty(),
+          "volume negative fixture " + std::to_string(static_cast<unsigned>(fault)) +
+              " rejects before effects: " + tape::frameTapeReplayStatusName(preflight.status));
+  }
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE,
+        "CPU volume tape needs actual resource backing, not a pixel oracle");
+  {
+    RuntimeFixture mismatch(false, false, true, false,
+                            WMT::Device{resourceDevice.handle});
+    auto volume = mismatch.cDevice->dev().createTexture(TextureDesc{
+        .width = 7u, .height = 5u, .depth = 3u, .levels = 3u,
+        .format = Format::A8R8G8B8, .type = TextureType::Volume,
+        .pool = Pool::Default});
+    check(volume && volume->handle(), "upload mismatch test has real Volume backing");
+    const std::vector<std::uint8_t> bytes(7u * 5u * 3u * 4u, 0x5au);
+    mismatch.routing->uploadTextureLevel(volume->handle(), 0u, 7u, 5u, 1u,
+                                        28u, 140u, bytes);
+    check(mismatch.routing->textureUploadFailed &&
+              mismatch.routing->textureUploadObservations.empty(),
+          "2D-shaped upload cannot authorize a three-slice Volume receipt");
+  }
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+      RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+  std::uint64_t originalDigest = 0u;
+  for (bool alternateMutation : {false, true}) {
+    const auto fixture = tape::test::makeGeneralCpuVolumeFixture(
+        tape::render_tape_d3d_format::A8R8G8B8, Fault::None, alternateMutation);
+    std::vector<tape::RenderTapeProviderBlob> blobs;
+    for (const auto& bytes : fixture.blobs)
+      blobs.push_back({tape::RenderTapeCaptureSession::sha256(bytes), bytes});
+    runtime::GeneralPreflightPlan plan;
+    const auto preflight = runtime::buildGeneralReplayPlan(fixture.tape, blobs, plan);
+    check(preflight.complete(), std::string("volume shared preflight: ") +
+          tape::frameTapeReplayStatusName(preflight.status));
+    const auto admission = runtime::admitGeneralCpuPlan(plan);
+    check(admission.accepted(), std::string("volume CPU grammar: ") +
+          runtime::generalCpuAdmissionReasonName(admission.reason));
+    std::uint64_t semantic = 0u;
+    for (unsigned scenario : {0u, 1u, 2u}) {
+      const bool delayed = scenario == 1u;
+      const bool measured = scenario == 2u;
+      for (bool compatibility : {true, false}) {
+        RuntimeFixture runtimeFixture(false, false, true, false,
+                                      WMT::Device{resourceDevice.handle});
+        Executor executor(runtimeFixture, plan, blobs, {
+            .route = compatibility ? tape::ProviderReplayPolicy::Compatibility
+                                   : tape::ProviderReplayPolicy::ProductionSlot,
+            .beforeNextWork = delayed, .measurement = measured});
+        const auto result = executor.run();
+        check(result.complete && result.resetOk,
+              "production CPU volume replay: " + result.failure);
+        check(result.draws == 2u && result.observedTextureUploads == 4u &&
+                  result.observedMutations == plan.mutations.size() &&
+                  !runtimeFixture.routing->textureUploadFailed &&
+                  result.resourcesCreated == result.resourcesReleased &&
+                  result.submitted == result.completed &&
+                  result.completed == result.reclaimed,
+              "all mip seeds and nonzero-z mutation reach exact production uploads and settle");
+        if (measured) {
+          check(result.fullOracleCalls == 0u && result.drawObservations.empty(),
+                "volume measurement retains shape/conservation checks and omits semantic rows");
+        } else {
+          check(result.drawObservations.size() == 2u,
+                "two actual draw observations consume the volume receipt closure");
+          if (!semantic) semantic = result.digest;
+          check(result.digest == semantic,
+                "Volume draw semantics are invariant under route and completion timing");
+        }
+      }
+    }
+    if (!alternateMutation) originalDigest = semantic;
+    else check(semantic != originalDigest,
+               "later-slice volume content changes the actual draw semantic oracle");
+  }
 }
 
 void generalCpuMipmapUsesProductionLifetime() {
@@ -10263,6 +10771,8 @@ int main(int argc, char** argv) {
                       std::string_view(argv[1]) == "--general-cpu-measurement-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-attachment-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-alias-spec" ||
+                      std::string_view(argv[1]) == "--general-cpu-query-spec" ||
+                      std::string_view(argv[1]) == "--general-cpu-volume-spec" ||
                       std::string_view(argv[1]) ==
                           "--two-pending-production-sources-spec" ||
                       std::string_view(argv[1]) ==
@@ -10289,6 +10799,12 @@ int main(int argc, char** argv) {
       } else if (std::string_view(argv[1]) == "--general-cpu-mipmap-spec") {
         cpuMipmapObserverPreservesOrderAndQualifiedTexture();
         generalCpuMipmapUsesProductionLifetime();
+      } else if (std::string_view(argv[1]) == "--general-cpu-query-spec") {
+        controlledQueryFenceRefinementAndLifetime();
+        generalCpuQueryTranscriptUsesControlledQueue();
+      } else if (std::string_view(argv[1]) == "--general-cpu-volume-spec") {
+        generalCpuVolumeWriterAndUploadShapeAreExact();
+        generalCpuVolumeTapeUsesProductionCreationAndMutation();
       } else if (std::string_view(argv[1]) == "--general-cpu-mutation-spec")
         generalCpuMutationWindowUsesProductionLifetime();
       else if (std::string_view(argv[1]) == "--general-cpu-source-oracle-spec")
@@ -10315,6 +10831,8 @@ int main(int argc, char** argv) {
     }
     if (argc == 3 && (std::string_view(argv[1]) == "--write-general-cpu-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-mipmap-fixture" ||
+                     std::string_view(argv[1]) == "--write-general-cpu-query-fixture" ||
+                     std::string_view(argv[1]) == "--write-general-cpu-volume-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-window-fixture")) {
       const std::filesystem::path directory(argv[2]);
       if (!std::filesystem::create_directory(directory))
@@ -10333,6 +10851,10 @@ int main(int argc, char** argv) {
       };
       if (std::string_view(argv[1]) == "--write-general-cpu-mipmap-fixture")
         writeFixture(dxmt9::d3d9::test::makeGeneralCpuMipmapFixture());
+      else if (std::string_view(argv[1]) == "--write-general-cpu-query-fixture")
+        writeFixture(dxmt9::d3d9::test::makeGeneralCpuQueryFixture());
+      else if (std::string_view(argv[1]) == "--write-general-cpu-volume-fixture")
+        writeFixture(dxmt9::d3d9::test::makeGeneralCpuVolumeFixture());
       else
         writeFixture(dxmt9::d3d9::test::makeGeneralCpuDestroyFixture(
             true, true, dxmt9::d3d9::test::GeneralCpuMutationFixture::ReferencedDiscard,

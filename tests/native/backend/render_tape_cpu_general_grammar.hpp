@@ -6,6 +6,7 @@
 // grammar and capacity before any effect is allowed.
 
 #include "../../../src/d3d9/device_c_render_tape_runtime_objects.hpp"
+#include "../../../src/d3d9/device_c_render_tape_descriptors.hpp"
 
 #include <cstddef>
 #include <cstdint>
@@ -48,6 +49,9 @@ struct GeneralCpuAdmissionCounts {
   std::size_t bootstrapRecords = 0u;
   std::size_t presents = 0u;
   std::size_t presentCompletions = 0u;
+  std::size_t queryDefinitions = 0u;
+  std::size_t queryIssues = 0u;
+  std::size_t queryPolls = 0u;
 };
 
 enum class GeneralCpuAdmissionReason : std::uint8_t {
@@ -71,6 +75,7 @@ enum class GeneralCpuAdmissionReason : std::uint8_t {
   PresentCompleteCount,
   PresentCompleteNotFinal,
   OutputDescriptorMissing,
+  QueryTranscriptUnavailable,
 };
 
 struct GeneralCpuAdmissionResult {
@@ -117,6 +122,8 @@ inline const char* generalCpuAdmissionReasonName(
     return "present-complete-not-final";
   case GeneralCpuAdmissionReason::OutputDescriptorMissing:
     return "output-descriptor-missing";
+  case GeneralCpuAdmissionReason::QueryTranscriptUnavailable:
+    return "query-transcript-unavailable";
   }
   return "unknown";
 }
@@ -158,6 +165,7 @@ inline bool generalCpuCommandRecordSupported(std::uint32_t type) noexcept {
   case D9C_COMMAND_RECORD_CLEAR:
   case D9C_COMMAND_RECORD_PRESENT:
   case D9C_COMMAND_RECORD_GENERATE_MIPMAPS:
+  case D9C_COMMAND_RECORD_QUERY_ISSUE:
     return true;
   default:
     return false;
@@ -322,7 +330,7 @@ inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
     return detail::generalCpuReject(GeneralCpuAdmissionReason::RecordLimit,
                                     counts);
 
-  if (plan.controls.size() != 0u || plan.controlBytes.size() != 0u)
+  if (plan.controls.size() != plan.controlBytes.size())
     return detail::generalCpuReject(
         GeneralCpuAdmissionReason::OrderedControlUnsupported, counts);
   for (const auto& gamma : plan.bootstrapGamma) {
@@ -344,6 +352,7 @@ inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
   std::size_t referencedBootstrapChunks = 0u;
   std::size_t referencedCommandChunks = 0u;
   std::size_t referencedDestroys = 0u;
+  std::size_t referencedControls = 0u;
   std::uint32_t presentEventIndex = kGeneralCpuNoIndex;
 
   for (std::size_t eventPosition = 0u; eventPosition < plan.events.size();
@@ -381,8 +390,17 @@ inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
       if (event.index >= plan.definitions.size())
         return detail::generalCpuReject(
           GeneralCpuAdmissionReason::InvalidEventReference, counts, eventIndex);
-      if (plan.definitions[event.index].fixed.identity.kind >
-          D9C_CHUNK_HANDLE_KIND_VERTEX_DECL)
+      if (plan.definitions[event.index].fixed.identity.kind ==
+          D9C_CHUNK_HANDLE_KIND_QUERY) {
+        RenderTapeQueryDescriptorV2 query{};
+        if (!renderTapeLoadQueryDescriptorV2(
+                plan.definitions[event.index].descriptor, query))
+          return detail::generalCpuReject(
+              GeneralCpuAdmissionReason::QueryTranscriptUnavailable, counts,
+              eventIndex);
+        ++counts.queryDefinitions;
+      } else if (plan.definitions[event.index].fixed.identity.kind >
+                 D9C_CHUNK_HANDLE_KIND_VERTEX_DECL)
         return detail::generalCpuReject(GeneralCpuAdmissionReason::UnsupportedObject,
                                         counts, eventIndex);
       for (std::size_t prior = 0u; prior < eventPosition; ++prior) {
@@ -454,12 +472,33 @@ inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
         if (record.header.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
             record.header.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE)
           ++counts.draws;
+        if (record.header.type == D9C_COMMAND_RECORD_QUERY_ISSUE)
+          ++counts.queryIssues;
       }
       break;
     }
-    case RenderTapeEventType::OrderedControl:
-      return detail::generalCpuReject(
-          GeneralCpuAdmissionReason::OrderedControlUnsupported, counts, eventIndex);
+    case RenderTapeEventType::OrderedControl: {
+      if (event.index >= plan.controls.size() ||
+          event.index != referencedControls)
+        return detail::generalCpuReject(
+            GeneralCpuAdmissionReason::InvalidEventReference, counts, eventIndex);
+      const auto& control = plan.controls[event.index];
+      if (control.kind != static_cast<std::uint32_t>(RenderTapeControlKind::QueryGetData))
+        return detail::generalCpuReject(
+            GeneralCpuAdmissionReason::OrderedControlUnsupported, counts, eventIndex);
+      if (control.controlBytes != sizeof(RenderTapeQueryGetDataControlV2) ||
+          plan.controlBytes[event.index].size() != sizeof(RenderTapeQueryGetDataControlV2))
+        return detail::generalCpuReject(
+            GeneralCpuAdmissionReason::QueryTranscriptUnavailable, counts, eventIndex);
+      RenderTapeQueryGetDataControlV2 poll{};
+      std::memcpy(&poll, plan.controlBytes[event.index].data(), sizeof(poll));
+      if (poll.schemaVersion != kRenderTapeQueryTranscriptVersion2)
+        return detail::generalCpuReject(
+            GeneralCpuAdmissionReason::QueryTranscriptUnavailable, counts, eventIndex);
+      ++referencedControls;
+      ++counts.queryPolls;
+      break;
+    }
     case RenderTapeEventType::PresentComplete:
       if (sawPresentComplete || eventPosition + 1u != plan.events.size())
         return detail::generalCpuReject(
@@ -479,7 +518,8 @@ inline GeneralCpuAdmissionResult admitGeneralCpuPlan(
       referencedMutations != plan.mutations.size() ||
       referencedBootstrapChunks != plan.bootstrapChunks.size() ||
       referencedCommandChunks != plan.commandChunks.size() ||
-      referencedDestroys != plan.destroys.size())
+      referencedDestroys != plan.destroys.size() ||
+      referencedControls != plan.controls.size())
     return detail::generalCpuReject(GeneralCpuAdmissionReason::InvalidEventReference,
                                     counts);
   if (!sawPresentComplete)

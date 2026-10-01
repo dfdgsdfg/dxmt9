@@ -163,6 +163,93 @@ remains invalid even if a later call restores LOD zero. Executed-state evidence
 is distinct from `identity.bin`: logical pass/source provenance does not attest
 actual sampler values or physical render-pass boundaries.
 
+## Query transcript and completion authority
+
+R-HARN-REPLAY-9.1–9.5 extend the same experiment boundary to query-bearing
+captures; they do not create an alternate renderer. The capture owner records
+public observations. The structural validator closes lifetime and issue-cycle
+order before any provider effect. The iteration's query registry owns the
+mapping from captured `(object, generation, issue cycle)` to replay-local query
+objects and their production submission/completion receipts. The experiment
+result owns comparison evidence; no captured integer is installed as a local
+completion waterline.
+
+Query BEGIN/END remain canonical ordered records. GetData metadata is a
+versioned, bounded control payload carrying flags, output presence and requested
+size, issue cycle, and only defined successful result bytes. HRESULT and
+disposition remain in the control envelope. A public data size does not prove
+that the implementation wrote that many bytes: Event queries and failed or
+Pending calls must never hash untouched application memory. Unknown versions,
+contradictory dispositions, oversized/truncated payloads and stale cycles reject
+before effects. Old structurally valid payloads may remain inspectable but do
+not establish query-experiment eligibility.
+
+Pre-arm tracking distinguishes active scopes from ended or retired cycles.
+An active query whose missing prefix contributes to captured draws cannot be
+reconstructed by inserting BEGIN at the cut. An ended pre-arm query referenced
+by GetData similarly lacks an authoritative result unless a complete supported
+checkpoint exists. These cases produce named identity-qualified capture/admission
+failures. An unrelated unused ended query must not force materialization merely
+because it remains alive. A new captured issue cycle may supersede an old ended
+cycle only where production issue semantics permit that transition. The input
+must still close all resource seeds and source boundaries independently.
+
+The CPU executor uses the production query/publication/lifetime machinery with
+a bounded controlled backend. It must not silently fall back to the synchronous
+primitive-count query implementation and call that a GPU sample oracle. The
+Metal executor creates real provider queries and obtains real results after
+actual completion. Both execute every captured poll and preserve FLUSH
+submission obligations. A replay poll may become Ready earlier or later than
+the original poll; that timing difference is recorded separately from the
+captured observation, not resolved by a sleep or fabricated return value.
+
+Successful captured result obligations remain keyed by issue cycle. The
+comparison owner must settle an obligation before that replay cycle is reissued
+or destroyed, or retain an independently valid result receipt through the
+transition. If an additional bounded oracle poll/drain is required, its cost and
+effect are reported outside ordinary transcript execution. Inability to obtain
+the required result is an explicit failure, never permission to skip the
+comparison. Unsupported nondeterministic result kinds require a documented
+comparison relation before qualification; equality of pixels alone is not
+query-result equality.
+
+A captured local snapshot with a writer-bound END marker is not initially
+independently pollable. An explicit published-only capability may be issued
+after the actual backend classifies its nonzero bound sequence as Pending or
+Complete. Promotion preserves the retained marker, cancellation, result owner,
+backend, device epoch and issue identity; dropping the marker into a scalar
+fence would discard cancellation authority. Promotion and every subsequent
+poll reject unbound, cancelled, foreign, terminal or reset-invalid receipts.
+This capability never publishes an unbound writer and does not change default
+snapshot eligibility. It permits a retained prior-cycle result to be checked
+after reissue without forcing an oracle drain between every recorded poll.
+
+Qualification has three independent gates: ordered CPU semantics and lifetime,
+actual Metal query results and original pixels, and non-vacuous policy execution.
+The same query-bearing original bundle and source cuts feed all policies.
+Production query restrictions on Direct/Arena remain in force; no unsupported
+route may be enabled just to make a counter nonzero. A workload whose candidate
+route is ineligible produces that finding, not a successful route comparison.
+
+Diagnostic cost attribution separates setup/admission, replay and Slot building,
+pass preparation, actual encoder creation/configuration, draw encoding, and
+submission/completion waits. Low-observer ranking remains separate from those
+diagnostics and excludes semantic hashing. CPU substitution measures neither
+Metal encoder work nor GPU execution. Repeated fixed-input results do not
+reproduce Wine supply timing or establish application FPS; wild validation is
+still the final integration gate.
+
+A measurement-only receipt establishes structural execution, not independent
+query semantics. Qualified policy timing must bind its logical publication and
+release event schedule to a separately verified run of the same input, policy,
+binary and source boundaries. Equal release counts cannot replace this join:
+release at a different query cycle is a mismatch even when all totals agree.
+Physical allocation identities need not match between fresh repetitions.
+Authenticated intervals with query definitions but no issues/polls, or only
+Pending polls, have zero readiness/result obligations. They still require an
+explicit complete transcript receipt; they do not claim a successful GPU query
+result oracle merely because zero required results match zero observed results.
+
 ## Reset is an operation, not a loop counter
 
 Each iteration starts from the same effective bootstrap and resource bytes.
@@ -172,6 +259,15 @@ reported separately. Resource conservation, no pending completion, exact
 bootstrap/state and output equality witness reset. The experiment includes
 an A-to-B-to-A input/reset control so constant-output fixtures cannot make a
 broken reset appear correct. Warm-up uses the same checks as measured work.
+
+An authenticated complete swapchain seed may clear stale prior-Present discard
+state only after its real copy completes. The queue must reject active borrowed
+Direct/Arena transactions before reading writer payloads, then establish idle
+publication/completion, successful initializer completion, the live current
+backbuffer identity and absence of terminal failure. Signal-only initializer
+tracking is not success authority and is rejected for this qualified seed lane.
+The operation does not restore per-source touch state or change ordinary
+Present discard semantics.
 
 Preparation and device/resource setup can be excluded from a replay-only
 timing only when separately reported. Retaining PSO caches does not justify

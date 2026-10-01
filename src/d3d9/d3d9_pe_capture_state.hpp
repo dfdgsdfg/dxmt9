@@ -28,6 +28,10 @@ struct RenderTapeLiveObject {
   dxmt9::d3d9::RenderTapeSurfaceAliasLifetime lifetime{};
   D9CWireObjectIdentity aliasParentTexture{};
   Role role = Role::Ordinary;
+  dxmt9::d3d9::RenderTapeQueryCycleState query{};
+  // Volume and VolumeTexture wrappers share the owning texture's per-mip
+  // lock intent. No live pBits or wrapper pointer enters capture state.
+  std::vector<dxmt9::d3d9::RenderTapeVolumeLockState> volumeLocks{};
 };
 
 struct RenderTapeArmObjectSnapshot {

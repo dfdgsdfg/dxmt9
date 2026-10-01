@@ -2035,6 +2035,65 @@ void CommandQueue::clearAllTouchedColorHandles() {
   touchedColorHandles_.clear();
 }
 
+bool CommandQueue::completeRenderTapeBackbufferSeed(
+    core::Handle handle) noexcept {
+  try {
+    std::lock_guard lock(mutex_);
+    // Borrowed Direct/Arena appends may mutate payloads without this mutex.
+    // Establish the cold boundary before touching any writer or encoder state.
+    if (!renderTapeBackbufferSeedBuildQuiescent(
+            arenaAdmissionActive_.load(std::memory_order_relaxed),
+            activeArenaBuild_.load(std::memory_order_relaxed) != nullptr,
+            activeDirectChunkSlotBuild_.load(std::memory_order_relaxed) != nullptr,
+            arenaBuildContext_.has_value(),
+            directChunkSlotBuildContext_.has_value())) return false;
+    bool writingEmpty = !writingSlot_.has_value();
+    if (writingSlot_ && *writingSlot_ < slots_.size()) {
+      const auto* payload = slots_[*writingSlot_].payload;
+      writingEmpty = payload && payload->commandsEmpty();
+    }
+    const auto next = nextSeqId_.load(std::memory_order_relaxed);
+    // A submitted initializer may be empty yet failed. Poll its actual
+    // completion receipts before composing terminal, since failure discovery
+    // stops the queue through the ordinary initializer protocol.
+    const auto uploads = initializer_ ? initializer_->queryProgressUnlocked()
+        : resources::Initializer::QueryProgress{};
+    RenderTapeBackbufferSeedCompletionState state{
+        .seedTarget = handle,
+        .currentBackbuffer = handle,
+        .publishedSequence = lastCommittedSeqId_,
+        .completedSequence = completedSeqIdLocked(),
+        .initializerPublished = uploads.published,
+        .initializerCompleted = uploads.completed,
+        .inflightCount = inflightCount_,
+        .exactAttachmentPreservation = renderTapeExactAttachmentPreservation(),
+        .validSeedSurface = bool(handle),
+        .producerQuiescent = writingEmpty && next != 0u &&
+            lastCommittedSeqId_ == next - 1u,
+        .initializerQuiescent = !initializer_ ||
+            !initializer_->hasPendingUploadsUnlocked(),
+        .initializerTrackingAvailable = query::asynchronousFencesEnabled(),
+        .initializerFailed = uploads.failed,
+        .terminal = stop_ ||
+            arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
+            queryPendingTerminal_.load(std::memory_order_relaxed) ||
+            queueLifecycle_.queryCompletionFailed(),
+    };
+    // Do not read encoder-owned state at all until the same shared predicate
+    // establishes quiescence. The provisional identity is not an admission.
+    if (!renderTapeBackbufferSeedCompletionAllowed(state)) return false;
+    state.currentBackbuffer = currentBackBuffer_;
+    state.validSeedSurface = pool_.findSurface(handle.value) != nullptr;
+    if (!renderTapeBackbufferSeedCompletionAllowed(state)) return false;
+    // inflightCount==0 and real completion make this the sole owner until
+    // the next publication. No producer writes the encoder-owned touch set.
+    backBufferDiscardAfterPresent_ = false;
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
 void CommandQueue::markPendingDirtyAll() {
   std::lock_guard<std::mutex> guard(dirtyMutex_);
   uniform::markAllDirty(pendingDirty_);

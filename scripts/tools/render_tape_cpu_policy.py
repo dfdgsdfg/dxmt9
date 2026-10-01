@@ -337,9 +337,12 @@ def _runner_general_accepts(
         if str(pathlib.Path(__file__).resolve().parent) not in sys.path:
             sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
         import run_dxmt9_render_tape as runner
+        completion = result.get("completion")
+        if completion == "controlled-query-ready-obligation":
+            completion = result.get("requested_completion")
         return runner._cpu_general_frame_accepts(
             result, repeat=repeat, route=policy["replay_route"],
-            require_path=False, completion=result.get("completion"),
+            require_path=False, completion=completion,
             resource_backend=result.get("backend"),
             publication=result.get("publication"), fault=result.get("fault"),
             completion_plan=None, input_inspection=input_inspection,
@@ -353,6 +356,23 @@ def _basic_result_shape(
     evidence: dict[str, Any], policy: dict[str, Any], *, repeat: int,
     measurement: bool,
 ) -> tuple[bool, str, list[dict[str, Any]]]:
+    completion = evidence.get("completion")
+    if completion == "controlled-query-ready-obligation":
+        # This is shape checking only. The caller's independent inspection
+        # and strict runner gate authenticate the transcript and obligations.
+        query_rows = _iterations(evidence)
+        counts = evidence.get("input_counts")
+        if (evidence.get("requested_completion") != "after-command"
+                or not isinstance(counts, dict)
+                or type(counts.get("query_definitions")) is not int
+                or counts["query_definitions"] <= 0
+                or not query_rows
+                or any(not isinstance(row.get("query_replay"), dict)
+                       or row["query_replay"].get("present") is not True
+                       for row in query_rows)):
+            return False, "execution-query-completion-shape", []
+    elif completion != "after-command":
+        return False, "execution-result-shape", []
     if (evidence.get("schema") != NATIVE_SCHEMA
             or evidence.get("grammar") != "general-frame"
             or evidence.get("backend") != "cpu-metal-resources"
@@ -362,7 +382,6 @@ def _basic_result_shape(
             or evidence.get("status") != "complete"
             or evidence.get("run_mode") != ("measure" if measurement else "verify")
             or evidence.get("replay_route") != policy["replay_route"]
-            or evidence.get("completion") != "after-command"
             or evidence.get("publication") != "per-command"
             or evidence.get("fault") != "none"
             or evidence.get("deterministic") is not True
@@ -446,6 +465,13 @@ def compare_verification(reference: dict[str, Any], candidate: dict[str, Any], *
         for index, (ref, cand) in enumerate(zip(refs, cands)):
             if ref.get("semantic_digest") != cand.get("semantic_digest"):
                 failures.append({"name": "semantic-digest-mismatch", "iteration": index})
+            has_queries = any(isinstance(row.get("query_replay"), dict)
+                              and row["query_replay"].get("present") is True
+                              for row in (ref, cand))
+            if has_queries and (not isinstance(ref.get("query_semantic_digest"), str)
+                                or ref["query_semantic_digest"] in ("", "0")
+                                or ref["query_semantic_digest"] != cand.get("query_semantic_digest")):
+                failures.append({"name": "query-semantic-digest-mismatch", "iteration": index})
             if _draw_digests(ref) != _draw_digests(cand):
                 failures.append({"name": "draw-digest-mismatch", "iteration": index})
             if _conservation(ref) != _conservation(cand):
@@ -551,6 +577,20 @@ def measure_receipt(
                     *topology_fields):
             if row.get(key) != source.get(key):
                 return False, f"measurement-qualified-count-mismatch:{key}", []
+        if (isinstance(source.get("query_replay"), dict)
+                and source["query_replay"].get("present") is True):
+            # verify_receipt has already independently joined captured
+            # identity/cycle ENDs, local fences and actual source submissions.
+            # Retain that logical publication/release schedule without adding
+            # per-poll observations, clocks or hashing to measured execution.
+            fields = ("event_submission", "first_event", "last_event", "event",
+                      "released_at_event")
+            expected = [tuple(item.get(field) for field in fields)
+                        for item in source["trace"]]
+            observed = [tuple(item.get(field) for field in fields)
+                        for item in row["trace"]]
+            if observed != expected:
+                return False, "measurement-qualified-query-release-mismatch", []
     if _is_artifact(receipt) or _is_artifact(verification):
         if not bindings_match(verification, receipt, policy):
             return False, "measurement-qualification-binding-mismatch", []
@@ -569,8 +609,8 @@ def measurement_summary(receipt: dict[str, Any], rows: list[dict[str, Any]]) -> 
     cpus = [row["native_cpu_ns"] for row in rows if _integer(row.get("native_cpu_ns"))]
     return {
         "iterations": len(rows),
-        "median_wall_ns": median(walls) if len(walls) == len(rows) else None,
-        "median_native_cpu_ns": median(cpus) if len(cpus) == len(rows) else None,
+        "median_wall_ns": median(walls) if rows and len(walls) == len(rows) else None,
+        "median_native_cpu_ns": median(cpus) if rows and len(cpus) == len(rows) else None,
         "fps": None,
     }
 

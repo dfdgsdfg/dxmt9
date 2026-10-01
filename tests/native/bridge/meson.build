@@ -405,6 +405,7 @@ foreach spec : [
   ['chunk-record-validation', 'chunk_record_validation_spec.cpp'],
   ['render-tape', 'render_tape_spec.cpp'],
   ['render-tape-capture', 'render_tape_capture_spec.cpp'],
+  ['render-tape-volume-layout', 'render_tape_volume_layout_spec.cpp'],
   ['render-tape-projection', 'render_tape_projection_spec.cpp'],
   ['render-tape-provider', 'render_tape_provider_spec.cpp'],
   ['render-tape-source-plan', 'render_tape_source_plan_spec.cpp'],
@@ -445,6 +446,47 @@ foreach spec : [
     render_tape_provider_fixture_spec = target
   endif
 endforeach
+
+render_tape_query_test_env = environment()
+render_tape_query_test_env.set('DXMT9_UPDATE_PE_PRODUCER_GOLDEN', '0')
+render_tape_query_test_env.set('DXMT_DEBUG_DISABLE_SHADER_ARCHIVE', '1')
+render_tape_query_test_env.set('DXMT9_METAL_OCCLUSION', '1')
+if host_machine.system() == 'darwin' and dxmt9_wine_install_path != ''
+  render_tape_query_test_env.set('DYLD_LIBRARY_PATH', dxmt9_wine_unix_runtime_path)
+endif
+test('dxmt9-render-tape-query-metal-oracle',
+     render_tape_provider_fixture_spec,
+     args: ['--test-query-oracle'],
+     env: render_tape_query_test_env,
+     timeout: 120)
+test('dxmt9-render-tape-volume-metal-oracle',
+     render_tape_provider_fixture_spec,
+     args: ['--test-volume-oracle'],
+     env: render_tape_query_test_env,
+     timeout: 120)
+test('dxmt9-render-tape-retained-query-budget',
+     render_tape_provider_fixture_spec,
+     args: ['--test-retained-query-budget'],
+     env: render_tape_query_test_env,
+     timeout: 120)
+
+render_tape_seed_reference_env = environment()
+render_tape_seed_reference_env.set('DXMT9_UPDATE_PE_PRODUCER_GOLDEN', '0')
+render_tape_seed_reference_env.set('DXMT_DEBUG_DISABLE_SHADER_ARCHIVE', '1')
+render_tape_seed_reference_env.set('DXMT9_ASYNC_QUERY_FENCES', '0')
+if host_machine.system() == 'darwin' and dxmt9_wine_install_path != ''
+  render_tape_seed_reference_env.set('DYLD_LIBRARY_PATH', dxmt9_wine_unix_runtime_path)
+endif
+test('dxmt9-render-tape-seed-reference-rejection',
+     render_tape_provider_fixture_spec,
+     args: ['--test-seed-reference-rejection'],
+     env: render_tape_seed_reference_env,
+     timeout: 120)
+
+test('dxmt9-render-tape-query-receipts', python3,
+     args: [join_paths(meson.project_source_root(),
+                      'scripts/check/test_render_tape_query_receipts.py')],
+     env: dxmt9_native_test_env)
 
 render_tape_origin_locator_spec = executable(
   'dxmt9-render-tape-origin-locator-spec',

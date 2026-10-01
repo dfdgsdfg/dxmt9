@@ -240,6 +240,70 @@ struct RenderTapeQueryGetDataControl {
   std::uint64_t seqId = 0u;
 };
 
+inline constexpr std::uint32_t kRenderTapeQueryTranscriptVersion2 = 2u;
+inline constexpr std::uint32_t kRenderTapeQueryMaxResultBytes = 8u;
+
+enum class RenderTapeQueryInitialState : std::uint32_t {
+  Unissued = 0u,
+  // An old closed cycle supplies provenance only. Its result and END fence
+  // are absent from this tape, so it cannot authorize a GetData observation.
+  ClosedWithoutReplayResult = 1u,
+};
+
+struct RenderTapeQueryDescriptorV2 {
+  std::uint32_t schemaVersion = kRenderTapeQueryTranscriptVersion2;
+  std::uint32_t type = 0u;
+  std::uint32_t dataBytes = 0u;
+  std::uint32_t initialState = 0u;
+  std::uint64_t initialIssueCycle = 0u;
+};
+
+// controlBytes discriminates this complete transcript from the legacy
+// dataSize/seqId payload. result stores only bytes the successful call defined;
+// Pending/Failed, null output and the existing Event write contract store none.
+struct RenderTapeQueryGetDataControlV2 {
+  std::uint32_t schemaVersion = kRenderTapeQueryTranscriptVersion2;
+  std::uint32_t flags = 0u;
+  std::uint32_t hasOutput = 0u;
+  std::uint32_t definedBytes = 0u;
+  std::uint64_t dataSize = 0u;
+  std::uint64_t issueCycle = 0u;
+  std::array<std::byte, kRenderTapeQueryMaxResultBytes> result{};
+};
+
+constexpr std::uint32_t renderTapeQueryDataBytes(std::uint32_t type) noexcept {
+  switch (type) {
+  case 8u: case 9u: case 11u: return 4u;
+  case 10u: case 12u: return 8u;
+  default: return 0u;
+  }
+}
+
+constexpr std::uint32_t renderTapeQueryDefinedBytes(
+    std::uint32_t type, std::int32_t resultCode, bool hasOutput,
+    std::uint64_t dataSize) noexcept {
+  const auto bytes = renderTapeQueryDataBytes(type);
+  return resultCode == 0 && hasOutput && type != 8u && dataSize >= bytes
+             ? bytes : 0u;
+}
+
+bool renderTapeLoadQueryDescriptorV2(
+    std::span<const std::byte> bytes, RenderTapeQueryDescriptorV2& out) noexcept;
+
+// Shared pure cycle transition for capture and structural admission. BEGIN
+// replaces the previous cycle. END closes its matching BEGIN, or creates a
+// fresh END-only cycle for query types without an occlusion scope.
+struct RenderTapeQueryCycleState {
+  std::uint32_t type = 0u;
+  std::uint64_t issueCycle = 0u;
+  bool active = false;
+  bool capturedCycle = false;
+};
+
+bool renderTapeAdvanceQueryCycle(RenderTapeQueryCycleState& state,
+                                std::uint32_t flags,
+                                bool captured) noexcept;
+
 struct RenderTapeCpuReadControl {
   std::uint32_t copyCount = 0u;
   std::uint32_t bytesRead = 0u;
@@ -294,6 +358,8 @@ static_assert(sizeof(RenderTapeCommandChunkHeader) == 16u);
 static_assert(alignof(RenderTapeCommandChunkHeader) == 4u);
 static_assert(sizeof(RenderTapeOrderedControlHeader) == 48u);
 static_assert(alignof(RenderTapeOrderedControlHeader) == 8u);
+static_assert(sizeof(RenderTapeQueryDescriptorV2) == 24u);
+static_assert(sizeof(RenderTapeQueryGetDataControlV2) == 40u);
 static_assert(sizeof(RenderTapePresentCompleteHeader) == 64u);
 static_assert(alignof(RenderTapePresentCompleteHeader) == 8u);
 static_assert(sizeof(RenderTapeOracleAttachment) == 24u);
@@ -394,6 +460,8 @@ enum class RenderTapeValidationStatus : std::uint8_t {
   InvalidCommandChunk,
   InvalidControlKind,
   InvalidControlSize,
+  InvalidQueryTranscript,
+  QueryUncapturedCycle,
   NonMonotoneCompletion,
   ResetNotTerminal,
   InvalidPresentComplete,
@@ -481,6 +549,10 @@ struct RenderTapeBlobCatalogue {
 };
 
 struct RenderTapeValidationScratch {
+  struct QueryState {
+    D9CWireObjectIdentity identity{};
+    RenderTapeQueryCycleState cycle{};
+  };
   struct ObjectDefinition {
     D9CWireObjectIdentity identity{};
     std::uint32_t descriptorKind = 0u;
@@ -527,6 +599,7 @@ struct RenderTapeValidationScratch {
   std::vector<SeedContentExpectation> seedContentExpectations;
   std::vector<SeedSubresource> seedSubresources;
   std::vector<ProducedPassObligation> producedPassObligations;
+  std::vector<QueryState> queries;
   CommandChunkValidationScratch chunk;
 };
 

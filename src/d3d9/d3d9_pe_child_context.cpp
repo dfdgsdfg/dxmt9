@@ -165,6 +165,25 @@ void D3D9PeSurfaceTextureContext::NotifyRenderTapeLinearMutationForChild(
   if (device) device->NotifyRenderTapeLinearMutationForChild(object, subresource,
                                                                layout, bytes);
 }
+void D3D9PeSurfaceTextureContext::NotifyRenderTapeVolumeLockForChild(
+    const dxmt9::d3d9::pe::PeWireObjectRef &object, std::uint32_t subresource,
+    std::uint32_t flags) noexcept {
+  if (device) device->NotifyRenderTapeVolumeLockForChild(object, subresource,
+                                                        flags);
+}
+bool D3D9PeSurfaceTextureContext::FinishRenderTapeVolumeLockForChild(
+    const dxmt9::d3d9::pe::PeWireObjectRef &object, std::uint32_t subresource,
+    bool unlockSucceeded, bool &writable) noexcept {
+  return device && device->FinishRenderTapeVolumeLockForChild(
+      object, subresource, unlockSucceeded, writable);
+}
+void D3D9PeSurfaceTextureContext::NotifyRenderTapeVolumeSnapshotForChild(
+    const dxmt9::d3d9::pe::PeWireObjectRef &object, std::uint32_t subresource,
+    const dxmt9::d3d9::RenderTapeVolumeLockLayout &layout,
+    std::span<const std::byte> bytes, bool writable) noexcept {
+  if (device) device->NotifyRenderTapeVolumeSnapshotForChild(
+      object, subresource, layout, bytes, writable);
+}
 void D3D9PeSurfaceTextureContext::NotifyRenderTapeSurfaceAliasForChild(
     const dxmt9::d3d9::pe::PeWireObjectRef &surface,
     const dxmt9::d3d9::pe::PeWireObjectRef &parentTexture,
@@ -184,6 +203,9 @@ HRESULT D3D9PeQueryContext::FlushPeRecorderForChild() noexcept {
 }
 bool D3D9PeQueryContext::IsChunkRecorderEnabledForChild() const noexcept {
   return device && device->IsChunkRecorderEnabledForChild();
+}
+bool D3D9PeQueryContext::IsRenderTapeCaptureTrackingEnabledForChild() const noexcept {
+  return device && device->IsRenderTapeCaptureTrackingEnabledForChild();
 }
 HRESULT D3D9PeQueryContext::AppendQueryIssueForChild(
     std::uint32_t flags, const dxmt9::d3d9::pe::QueryRef &query) noexcept {

@@ -2592,8 +2592,9 @@ void testExpectedContentContractDerivation() {
       render_tape_d3d_format::A8R8G8B8, 4u, 4u);
   contract = renderTapeDeriveExpectedContentContract(
       texture, volume);
-  check(contract.status == RenderTapeExpectedContentStatus::UnsupportedDimension,
-        "V2 volume is rejected before ObjectDefine because seed closure is unsupported");
+  check(contract.status == RenderTapeExpectedContentStatus::Accepted &&
+            contract.bytes == 256u && contract.count == 1u,
+        "V2 volume derives an exact seed extent across all slices");
   const RenderTapeSurfaceDescriptorV2 depthSurface{
       .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
       .storage = static_cast<std::uint32_t>(RenderTapeSurfaceStorage::Standalone),
@@ -2747,15 +2748,20 @@ void testUpdateTextureClosureTruthTable() {
           "UpdateTexture rejects palettized closure without palette proof");
   }
   {
-    const auto volumeDescriptor = versionedTextureDescriptor(
+    auto volumeDescriptor = versionedTextureDescriptor(
         RenderTapeTextureDimension::Volume, 1u,
         render_tape_d3d_format::A8R8G8B8, 2u, 2u);
+    auto destinationDescriptor = volumeDescriptor;
+    setPool(volumeDescriptor, 2u);
+    setPool(destinationDescriptor, 0u);
+    const std::vector<std::vector<std::byte>> volumeSource{
+        std::vector<std::byte>(32u, std::byte{0x31})};
     std::vector<std::vector<std::byte>> destination(1u);
     check(applyRenderTapeUpdateTextureClosure(
-              volumeDescriptor, completeSource, volumeDescriptor,
+              volumeDescriptor, volumeSource, destinationDescriptor,
               destination) == RenderTapeUpdateTextureStatus::
-                                 UnsupportedDimension,
-          "UpdateTexture rejects volume closure");
+                                 Accepted && destination == volumeSource,
+          "UpdateTexture closes every slice of a complete volume mip");
   }
 }
 
@@ -4482,6 +4488,8 @@ void testLinearLockCaptureLayouts() {
         "R32F pins the authoritative public D3DFORMAT value");
   check(render_tape_d3d_format::A16B16G16R16 == 36u,
         "A16B16G16R16 pins the authoritative public D3DFORMAT value");
+  check(render_tape_d3d_format::A32B32G32R32F == 116u,
+        "A32B32G32R32F pins the authoritative public D3DFORMAT value");
   check(render_tape_d3d_format::Q8W8V8U8 == 63u,
         "Q8W8V8U8 pins the authoritative public D3DFORMAT value");
   constexpr std::array supportedFormats{
@@ -4498,6 +4506,7 @@ void testLinearLockCaptureLayouts() {
       std::pair{render_tape_d3d_format::A8B8G8R8, 4u},
       std::pair{render_tape_d3d_format::X8B8G8R8, 4u},
       std::pair{render_tape_d3d_format::A16B16G16R16, 8u},
+      std::pair{render_tape_d3d_format::A32B32G32R32F, 16u},
       std::pair{render_tape_d3d_format::A8P8, 2u},
       std::pair{render_tape_d3d_format::P8, 1u},
       std::pair{render_tape_d3d_format::L8, 1u},
@@ -4675,6 +4684,104 @@ void testLinearLockCaptureLayouts() {
   check(renderTapeLinearLockLayout(huge, 0x7fffffff, nullptr, full) ==
             RenderTapeLinearLayoutStatus::Overflow,
         "linear descriptor conversion and byte ranges reject overflow");
+}
+
+void testFloat32RgbaLockCaptureIsByteExact() {
+  constexpr auto format = render_tape_d3d_format::A32B32G32R32F;
+  const D9CSurfaceDesc observed{.format = format, .resourceType = 3u,
+      .width = 64u, .height = 64u, .depth = 1u};
+  RenderTapeLinearLockLayout observedLayout{};
+  check(renderTapeLinearLockLayout(observed, 1024, nullptr, observedLayout) ==
+            RenderTapeLinearLayoutStatus::Accepted &&
+            observedLayout.bytesPerPixel == 16u &&
+            observedLayout.fullRowBytes == 1024u &&
+            observedLayout.tightBytes == 65536u &&
+            observedLayout.sourceBytes == 65536u && observedLayout.fullSubresource &&
+            renderTapeDeriveExpectedTextureSubresourceContent(observed).bytes == 65536u,
+        "STALKER 64x64 format116 lock has exactly 65536 canonical bytes");
+  const D9CSurfaceDesc desc{.format = format, .resourceType = 3u,
+      .width = 3u, .height = 2u, .depth = 1u};
+  RenderTapeLinearLockLayout full{};
+  check(renderTapeLinearLockLayout(desc, 64, nullptr, full) ==
+            RenderTapeLinearLayoutStatus::Accepted && full.fullRowBytes == 48u &&
+            full.tightBytes == 96u && full.sourceBytes == 112u,
+        "RGBA32F full layout separates 16-byte texels from physical row padding");
+  // Raw IEEE-754 words include signed zero, a NaN payload, and infinities.
+  // Capture/replay must copy these bits without interpreting or normalizing them.
+  const std::array<std::uint32_t, 4u> words{
+      0x80000000u, 0x7fc12345u, 0x7f800000u, 0xff800000u};
+  std::vector<std::byte> expected(96u);
+  for (std::size_t texel = 0u; texel < 6u; ++texel)
+    std::memcpy(expected.data() + texel * sizeof(words), words.data(), sizeof(words));
+  std::vector<std::byte> physical(128u, std::byte{0xe3});
+  for (std::size_t row = 0u; row < 2u; ++row)
+    std::memcpy(physical.data() + row * 64u, expected.data() + row * 48u, 48u);
+  std::vector<std::byte> copied;
+  check(copyRenderTapeLinearRows(physical.data(), full, copied) && copied == expected,
+        "format116 capture preserves all component bits and strips only row padding");
+  std::vector<std::byte> replay(128u, std::byte{0xe3});
+  check(writeRenderTapeLinearRows(copied, replay.data(), full) && replay == physical,
+        "format116 replay restores every component while preserving padding");
+  const auto before = replay;
+  check(!writeRenderTapeLinearRows(std::span(copied).first(copied.size() - 1u),
+                                    replay.data(), full) && replay == before,
+        "short format116 bytes reject before writing any destination row");
+  const RenderTapeLockRect rect{.left = 1, .top = 1, .right = 3, .bottom = 2};
+  RenderTapeLinearLockLayout partial{};
+  check(renderTapeLinearLockLayout(desc, 64, &rect, partial) ==
+            RenderTapeLinearLayoutStatus::Accepted &&
+            partial.destinationByteOffset == 16u && partial.subresourceSourceOffset == 80u &&
+            partial.rowBytes == 32u && partial.tightBytes == 32u &&
+            copyRenderTapeLinearRows(physical.data(), partial, copied,
+                                      RenderTapeLockBitsOrigin::Subresource),
+        "format116 partial capture uses checked 16-byte x offsets and physical y stride");
+  std::vector<std::byte> content(96u, std::byte{0x25});
+  auto changed = content;
+  std::copy(copied.begin(), copied.end(), changed.begin() + 64u);
+  check(applyRenderTapeLinearMutation(partial, copied, content) ==
+            RenderTapeBlockMutationStatus::Accepted && content == changed,
+        "format116 partial mutation preserves every byte outside the captured rectangle");
+  check(renderTapeLinearLockLayout(observed, 1023, nullptr, full) ==
+            RenderTapeLinearLayoutStatus::InvalidPitch,
+        "format116 lock rejects a pitch shorter than its exact 16-byte row");
+  auto overflow = observed;
+  overflow.width = 134217728u;
+  check(renderTapeLinearLockLayout(overflow, std::numeric_limits<std::int32_t>::max(),
+                                    nullptr, full) == RenderTapeLinearLayoutStatus::InvalidPitch &&
+            renderTapeDeriveExpectedTextureSubresourceContent(overflow).status ==
+                RenderTapeExpectedContentStatus::Overflow,
+        "format116 row fits wire width but cannot fit signed lock or canonical pitch");
+  overflow.width = 268435456u;
+  check(renderTapeLinearLockLayout(overflow, std::numeric_limits<std::int32_t>::max(),
+                                    nullptr, full) == RenderTapeLinearLayoutStatus::Overflow,
+        "format116 row-byte multiplication rejects beyond its uint32 layout field");
+  auto unknown = observed;
+  unknown.format = 117u;
+  check(renderTapeLinearBytesPerPixel(unknown.format) == 0u &&
+            renderTapeDeriveExpectedTextureSubresourceContent(unknown).status ==
+                RenderTapeExpectedContentStatus::UnsupportedFormat,
+        "adding exact format116 support leaves unknown formats fail-closed");
+
+  auto texture = versionedTextureDescriptor(RenderTapeTextureDimension::Texture2D,
+                                            3u, format, 7u, 5u);
+  for (std::uint32_t mip = 0u; mip < 3u; ++mip) {
+    D9CSurfaceDesc level{};
+    const auto offset = sizeof(RenderTapeTextureDescriptorV2) + mip * sizeof(level);
+    std::memcpy(&level, texture.data() + offset, sizeof(level));
+    level.width = renderTapeTextureMipExtent(7u, mip);
+    level.height = renderTapeTextureMipExtent(5u, mip);
+    std::memcpy(texture.data() + offset, &level, sizeof(level));
+  }
+  std::array<std::uint64_t, 3u> mipBytes{};
+  const auto contract = renderTapeDeriveExpectedContentContract(
+      D9C_CHUNK_HANDLE_KIND_TEXTURE, texture, mipBytes);
+  check(contract.status == RenderTapeExpectedContentStatus::Accepted &&
+            contract.bytes == 672u && contract.count == 3u &&
+            mipBytes == std::array<std::uint64_t, 3u>{560u, 96u, 16u} &&
+            renderTapeValidateExpectedContentExtents(
+                D9C_CHUNK_HANDLE_KIND_TEXTURE, texture, mipBytes) ==
+                RenderTapeExpectedContentStatus::Accepted,
+        "format116 mip seed contract includes every exact shrinking 16-byte extent");
 }
 
 void testFullSnapshotClosureTruthTable() {
@@ -4985,6 +5092,7 @@ int main(int argc, char** argv) {
     testExplicitMipGenerationRejectionTruthTable();
     testTextureLodMutationRejectionTruthTable();
     testLinearLockCaptureLayouts();
+    testFloat32RgbaLockCaptureIsByteExact();
     testFullSnapshotClosureTruthTable();
     testBootstrapClosureTruthTable();
     testCommandAdmissionTruthTable();

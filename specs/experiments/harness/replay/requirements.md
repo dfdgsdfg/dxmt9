@@ -1329,3 +1329,62 @@ host-selected language versions are not an equivalent reference. Native replay
 and Wine rendering must share the production profile. SDK-header modifications
 may be used as retained causal diagnostics but are not the product fix or a
 substitute for normal-provider qualification on the unchanged original bundle.
+
+## 9. Query-aware captured policy experiments
+
+**R-HARN-REPLAY-9.1** A query-aware capture must preserve query type,
+generation-qualified object identity, issue-cycle identity, ordered BEGIN/END,
+and each observed GetData call's FLUSH disposition, output-presence/size,
+HRESULT and defined result bytes. Pending or failed calls must not copy
+undefined caller memory. Captured queue labels are provenance, never replay
+submission or completion authority. Legacy payloads missing this information
+must not qualify a query-policy comparison.
+
+**R-HARN-REPLAY-9.2** Admission must establish the query state at the capture
+cut. A query begun before the cut, an END whose contributing work is absent,
+or a result depending on an uncaptured issue cycle must have an authenticated
+complete checkpoint or be rejected with an identity-qualified reason before
+effects. Device-shadow completeness alone does not establish query or resource
+completeness. Capture failures must preserve normal application HRESULTs and
+must not silently strip queries, invent results, or publish a partial transcript
+as a complete experiment input.
+
+**R-HARN-REPLAY-9.3** CPU query replay must execute the production query,
+publication and lifetime path with an explicitly controlled backend completion
+schedule. Real-Metal replay must use actual queries and actual GPU completion.
+Both modes must bind END to the local replay issue cycle and real local
+submission identity. Captured Pending/Ready observations are semantic evidence,
+not permission to sleep for captured wait durations or acknowledge unfinished
+work. A bounded progress policy must report exhaustion rather than hang.
+
+**R-HARN-REPLAY-9.4** Replay must preserve every recorded polling call and its
+submission obligation, but must distinguish captured HRESULTs from newly
+observed replay readiness. Different legal completion timing may change Pending
+counts. Successful defined results must be compared for the same issue cycle;
+missing, duplicate, stale or mismatched results fail qualification. Any extra
+oracle polling or final drain must be separately reported, not inserted into
+the measured transcript without disclosure. The CPU controlled backend cannot
+claim a GPU occlusion result oracle.
+
+**R-HARN-REPLAY-9.5** Query-aware policy comparisons must bind unchanged input,
+source boundaries, images and reset policy, preserve production route
+eligibility, and report actual route/fallback coverage. Diagnostic attribution
+must separate replay/Slot construction, pass preparation, actual encoder
+creation/configuration, draw encoding and completion waits. Overlapping thread
+times must not be added into a critical-path estimate. CPU-only results must
+not be labelled Metal Encode cost. Qualification requires both captured
+query-bearing workload evidence and deterministic negative controls for stale
+cycles, early completion, reissue, release/reset and incomplete bootstrap,
+followed by actual Metal query-result and original-pixel oracles.
+
+**R-HARN-REPLAY-9.6** A captured workload using volume textures requires exact
+generation-qualified mip contents, including depth, before either executor may
+admit it. CPU lock pitch and slice pitch are layout metadata, not canonical
+content. Capture and replay must convert each checked row and slice to/from the
+complete canonical mip blob; block-compressed rows must use their block-row
+count, not logical height. Partial writes may establish a complete seed only
+through an exact-owner full snapshot or an already complete checked overlay.
+Failed snapshots reject capture without changing the application's operation
+result. CPU upload evidence must include depth and both strides, and the Metal
+oracle must exercise distinct z slices and mip levels. Supporting query grammar
+does not waive these resource-closure requirements.

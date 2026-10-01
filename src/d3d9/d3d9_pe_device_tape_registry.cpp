@@ -313,6 +313,10 @@ RenderTapeObjectRegistration D3D9DeviceImpl::registerRenderTapeObject(
                 return RenderTapeObjectRegistration::Rejected;
             }
             entry.contentCount = texture.subresourceCount;
+            if (texture.dimension == static_cast<std::uint32_t>(
+                    dxmt9::d3d9::RenderTapeTextureDimension::Volume)) {
+                entry.volumeLocks.resize(texture.subresourceCount);
+            }
             break;
         }
         default:
@@ -726,6 +730,38 @@ dxmt9::d3d9::RenderTapeBlockMutationStatus D3D9DeviceImpl::recordRenderTapeLinea
         return dxmt9::d3d9::RenderTapeBlockMutationStatus::InvalidLayout;
     }
     return dxmt9::d3d9::applyRenderTapeLinearMutation(
+        layout, bytes, entry->content[subresource]);
+}
+
+dxmt9::d3d9::RenderTapeBlockMutationStatus D3D9DeviceImpl::recordRenderTapeVolumeBytes(
+    const dxmt9::d3d9::pe::PeWireObjectRef &object,
+    std::uint32_t subresource,
+    const dxmt9::d3d9::RenderTapeVolumeLockLayout &layout,
+    std::span<const std::byte> bytes) noexcept {
+    auto *entry = findRenderTapeObject(object);
+    RenderTapeTextureDescriptorV2 texture{};
+    if (!entry || object.identity.kind != D9C_CHUNK_HANDLE_KIND_TEXTURE ||
+        subresource >= entry->content.size() ||
+        !dxmt9::d3d9::renderTapeLoadTextureDescriptorV2(
+            entry->descriptor, texture) ||
+        texture.dimension != static_cast<std::uint32_t>(
+            dxmt9::d3d9::RenderTapeTextureDimension::Volume)) {
+        return dxmt9::d3d9::RenderTapeBlockMutationStatus::InvalidLayout;
+    }
+    D9CSurfaceDesc desc{};
+    dxmt9::d3d9::RenderTapeVolumeLockLayout expected{};
+    if (!renderTapeObjectSubresourceDesc(*entry, object, subresource, desc) ||
+        dxmt9::d3d9::renderTapeVolumeContentLayout(desc, expected) !=
+            dxmt9::d3d9::RenderTapeVolumeLayoutStatus::Accepted ||
+        !layout.fullSubresource ||
+        layout.fullRowBytes != expected.fullRowBytes ||
+        layout.fullRows != expected.fullRows ||
+        layout.fullDepth != expected.fullDepth ||
+        layout.fullSliceBytes != expected.fullSliceBytes ||
+        layout.fullBytes != expected.fullBytes) {
+        return dxmt9::d3d9::RenderTapeBlockMutationStatus::InvalidLayout;
+    }
+    return dxmt9::d3d9::applyRenderTapeVolumeMutation(
         layout, bytes, entry->content[subresource]);
 }
 

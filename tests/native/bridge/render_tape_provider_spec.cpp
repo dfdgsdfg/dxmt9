@@ -1,10 +1,12 @@
 #include "device_c_render_tape_capture.hpp"
 #include "device_c_chunk_replay.hpp"
+#include "device_c_common.hpp"
 #include "device_c_render_tape_capture_layout.hpp"
 #include "device_c_render_tape_identity.hpp"
 #include "device_c_render_tape_provider.hpp"
 #include "device_c_render_tape_source_plan.hpp"
 #include "device_c_render_tape_runtime_objects.hpp"
+#include "dxmt9/dxmt9_command_queue.hpp"
 #include "dxmt9/dxmt9_device.hpp"
 #include "dxmt9/dxmt9_perf_counters.hpp"
 #include "dxmt9/dxmt9_presenter.hpp"
@@ -16,6 +18,7 @@
 #include <array>
 #include <algorithm>
 #include <bit>
+#include <chrono>
 #include <cstddef>
 #include <cstdint>
 #include <cstdlib>
@@ -371,9 +374,12 @@ constexpr RenderTapeDigest kGeneralExpectedDigest{
 constexpr std::uint32_t kGpuPolicyBaseColorARGB = 0xff102030u;
 constexpr std::uint32_t kGpuPolicyInsetColorARGB = 0xff506070u;
 constexpr std::uint32_t kGpuVisibleBackgroundColorARGB = 0xff101820u;
+constexpr std::uint32_t kGpuVisibleColorAARGB = 0xffe04040u;
+constexpr std::uint32_t kGpuVisibleColorBARGB = 0xff40e080u;
 
 std::vector<std::byte> gpuPolicyExpectedPixels();
-std::vector<std::byte> gpuVisibleUniformExpectedPixels();
+std::vector<std::byte> gpuVisibleUniformExpectedPixels(
+    std::uint32_t backgroundARGB = kGpuVisibleBackgroundColorARGB);
 
 std::vector<std::byte> sparsePayload(
     D9CCommandChunkWireDrawHeader draw,
@@ -481,7 +487,7 @@ std::vector<std::byte> generalBootstrapChunk(
     const D9CWireObjectIdentity& vertexDeclaration,
     const D9CWireObjectIdentity& output,
     const D9CWireObjectIdentity& pixelShader = {},
-    bool extraStream = false) {
+    bool extraStream = false, bool volumeTexture = false) {
   std::array<D9CCommandChunkWireTextureBinding, D9C_DRAW_PACKET_MAX_TEXTURES>
       textures{};
   for (std::uint32_t slot = 0u; slot < textures.size(); ++slot) {
@@ -489,6 +495,7 @@ std::vector<std::byte> generalBootstrapChunk(
                       .valid = 1u,
                       .handleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX};
   }
+  if (volumeTexture) textures[0].handleIndex = 6u;
   std::array<D9CCommandChunkWireStreamBinding, D9C_DRAW_PACKET_MAX_STREAMS>
       streams{};
   for (std::uint32_t slot = 0u; slot < streams.size(); ++slot) {
@@ -545,6 +552,14 @@ std::vector<std::byte> generalBootstrapChunk(
       D9CCommandChunkWireRenderState{.state = 168u, .value = 15u}, // COLORWRITEENABLE
       D9CCommandChunkWireRenderState{.state = 174u, .value = 0u}, // SCISSORTESTENABLE
   };
+  const std::array volumeSampler{
+      D9CDrawPacketSamplerState{0u, 1u, 3u}, // ADDRESSU CLAMP
+      D9CDrawPacketSamplerState{0u, 2u, 3u}, // ADDRESSV CLAMP
+      D9CDrawPacketSamplerState{0u, 3u, 3u}, // ADDRESSW CLAMP
+      D9CDrawPacketSamplerState{0u, 5u, 1u}, // MAGFILTER POINT
+      D9CDrawPacketSamplerState{0u, 6u, 1u}, // MINFILTER POINT
+      D9CDrawPacketSamplerState{0u, 7u, 1u}, // MIPFILTER POINT
+  };
   std::vector<std::pair<std::uint16_t, std::span<const std::byte>>> sections{
       std::pair{static_cast<std::uint16_t>(D9C_COMMAND_CHUNK_SECTION_TEXTURE),
                 spanBytes(textures)},
@@ -565,6 +580,9 @@ std::vector<std::byte> generalBootstrapChunk(
                           spanBytes(visibleRenderStates));
     sections.emplace_back(D9C_COMMAND_CHUNK_SECTION_VIEWPORT,
                           spanBytes(visibleViewport));
+    if (volumeTexture)
+      sections.emplace_back(D9C_COMMAND_CHUNK_SECTION_SAMPLER_STATE,
+                            spanBytes(volumeSampler));
     std::sort(sections.begin(), sections.end(),
               [](const auto& left, const auto& right) {
                 return left.first < right.first;
@@ -590,6 +608,8 @@ std::vector<std::byte> generalBootstrapChunk(
         handles.push_back({indexBuffer.kind, indexBuffer.generation,
                            indexBuffer.objectId});
         handles.push_back({output.kind, output.generation, output.objectId});
+        if (volumeTexture)
+          handles.push_back({kTexture.kind, kTexture.generation, kTexture.objectId});
         return handles;
       }(),
   }});
@@ -634,6 +654,17 @@ std::vector<std::byte> gpuVisiblePixelShader() {
       reinterpret_cast<const std::byte*>(words.data()) + sizeof(words));
 }
 
+std::vector<std::byte> gpuVolumePixelShader() {
+  // ps_3_0: dcl_volume s0; texldl r0, c0, s0; mov oC0, r0.
+  // Per-draw c0 selects both the z slice and exact mip, independent of UVs.
+  const std::array<std::uint32_t, 12u> words{
+      0xffff0300u, 0x0200001fu, 0xa0000000u, 0xa00f0800u,
+      0x0300005fu, 0x800f0000u, 0xa0e40000u, 0xa0e40800u,
+      0x02000001u, 0x800f0800u, 0x80e40000u, 0x0000ffffu};
+  return {reinterpret_cast<const std::byte*>(words.data()),
+          reinterpret_cast<const std::byte*>(words.data()) + sizeof(words)};
+}
+
 std::vector<std::byte> gpuVisibleUniformDrawPayload(
     std::uint32_t startIndex, std::array<float, 4u> transform,
     std::array<float, 4u> color) {
@@ -666,14 +697,17 @@ std::vector<std::byte> gpuVisibleUniformDrawPayload(
 
 std::vector<std::byte> gpuVisibleUniformDrawRunChunk(bool alteredMiddleColor,
                                                     bool alteredMiddleTransform,
-                                                    bool extraStream = false) {
+                                                    bool extraStream = false,
+                                                    bool volumeTexture = false) {
   const auto bootstrap = generalBootstrapChunk(
       kGeneralVertexBuffer, kGeneralIndexBuffer, kGeneralVertexShader,
-      kGeneralVertexDeclaration, kOutput, kGpuVisiblePixelShader, extraStream);
+      kGeneralVertexDeclaration, kOutput, kGpuVisiblePixelShader, extraStream,
+      volumeTexture);
   ImportedChunkView bootstrapView;
   check(importPrevalidatedCommandChunk(
             bootstrap,
-            CommandChunkEnvelope{.recordCount = 1u, .handleCount = 6u},
+            CommandChunkEnvelope{.recordCount = 1u,
+                                 .handleCount = volumeTexture ? 7u : 6u},
             bootstrapView),
         "visible-uniform fixture imports its FULL_SNAPSHOT anchor");
   const auto anchor = bootstrapView.record(0u);
@@ -693,11 +727,16 @@ std::vector<std::byte> gpuVisibleUniformDrawRunChunk(bool alteredMiddleColor,
   const std::array transforms{transformA, middleTransform, transformA};
   const std::array colors{colorA, alteredMiddleColor ?
       std::array<float, 4u>{0.25f, 0.25f, 0.95f, 1.f} : colorB, colorA};
+  const std::array volumeCoordinates{
+      std::array<float, 4u>{.5f, .5f, 1.f / 6.f, 0.f},
+      std::array<float, 4u>{.5f, .5f, 5.f / 6.f, 0.f},
+      std::array<float, 4u>{.5f, .5f, .5f, 1.f},
+  };
   for (std::uint32_t draw = 0u; draw < 3u; ++draw) {
     records.push_back(Record{
         .type = D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE,
         .payload = gpuVisibleUniformDrawPayload(draw * 6u, transforms[draw],
-                                                colors[draw]),
+            volumeTexture ? volumeCoordinates[draw] : colors[draw]),
     });
   }
   return makeChunk(records);
@@ -790,6 +829,7 @@ struct GeneralIndexedFixture {
   std::vector<std::byte> pixelShaderBytes{};
   std::vector<std::byte> outputSeed{};
   std::vector<std::byte> auditTextureSeed{};
+  std::array<std::vector<std::byte>, 3u> volumeSeeds{};
   std::vector<RenderTapeProviderBlob> blobsValue{};
   std::vector<std::byte> tape{};
 
@@ -801,7 +841,18 @@ struct GeneralIndexedFixture {
                                  bool alteredMiddleTransform = false,
                                  std::uint32_t auditTextureFormat = 0u,
                                  bool extraStream = false,
-                                 bool alteredExtraStream = false) {
+                                 bool alteredExtraStream = false,
+                                 bool queryAware = false,
+                                 std::uint32_t backgroundARGB = kGpuVisibleBackgroundColorARGB,
+                                 bool volumeTexture = false,
+                                 bool queryPendingOnly = false) {
+    check(!queryAware || (visibleUniform && drawCount == 3u && strictDigest),
+          "query fixture uses three visible draws and an exact original pixel oracle");
+    check(!volumeTexture || (visibleUniform && drawCount == 3u && strictDigest &&
+                            auditTextureFormat == 0u),
+          "volume fixture uses an exact visible shader oracle without a 2D audit seed");
+    check(!queryPendingOnly || queryAware,
+          "Pending-only query fixture carries an authenticated query transcript");
     // Overscan vertically so the uniform-binding oracle does not depend on
     // exact top/bottom edge ties after D3D9 half-pixel correction.
     const std::array visibleVertices{
@@ -856,7 +907,8 @@ struct GeneralIndexedFixture {
     shaderBytes = visibleUniform ? gpuVisibleVertexShader() : std::vector<std::byte>(
         reinterpret_cast<const std::byte*>(shaderWords.data()),
         reinterpret_cast<const std::byte*>(shaderWords.data()) + sizeof(shaderWords));
-    if (visibleUniform) pixelShaderBytes = gpuVisiblePixelShader();
+    if (visibleUniform) pixelShaderBytes = volumeTexture
+        ? gpuVolumePixelShader() : gpuVisiblePixelShader();
     const std::array declaration{
         // The legacy clipped fixture intentionally uses POSITIONT.  The
         // visible shader binds POSITION, so keep that fixture's declaration
@@ -881,8 +933,9 @@ struct GeneralIndexedFixture {
         RenderTapeCaptureSession::sha256(pixelShaderBytes);
     outputSeed.assign(16u * 16u * 4u, std::byte{0x3cu});
     if (visibleUniform) {
-      constexpr std::array background{
-          std::byte{0x20}, std::byte{0x18}, std::byte{0x10}, std::byte{0xff}};
+      const std::array background{
+          std::byte(backgroundARGB & 0xffu), std::byte((backgroundARGB >> 8u) & 0xffu),
+          std::byte((backgroundARGB >> 16u) & 0xffu), std::byte{0xff}};
       for (std::size_t offset = 0u; offset < outputSeed.size(); offset += 4u)
         std::copy(background.begin(), background.end(), outputSeed.begin() + offset);
     }
@@ -977,10 +1030,53 @@ struct GeneralIndexedFixture {
     builder.appendBootstrapState(generalBootstrapChunk(
         kGeneralVertexBuffer, kGeneralIndexBuffer, kGeneralVertexShader,
         kGeneralVertexDeclaration, kOutput,
-        visibleUniform ? kGpuVisiblePixelShader : D9CWireObjectIdentity{}, extraStream));
+        visibleUniform ? kGpuVisiblePixelShader : D9CWireObjectIdentity{}, extraStream,
+        volumeTexture));
     builder.appendObjectDefine(
         kOutput, static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
         std::as_bytes(std::span(&output, 1u)), 0u, {}, outputSeed.size(), 1u);
+    if (volumeTexture) {
+      const RenderTapeTextureDescriptorV2 header{
+          .dimension = static_cast<std::uint32_t>(RenderTapeTextureDimension::Volume),
+          .mipLevelCount = 3u, .subresourceCount = 3u,
+          .initialContentDisposition = static_cast<std::uint32_t>(
+              RenderTapeInitialContentDisposition::CompleteSeed)};
+      std::array<D9CSurfaceDesc, 3u> mips{};
+      const std::array extents{std::array{7u, 5u, 3u}, std::array{3u, 2u, 1u},
+                               std::array{1u, 1u, 1u}};
+      constexpr std::array<std::uint32_t, 3u> sliceColors{
+          kGpuVisibleColorAARGB, 0xff2040c0u, kGpuVisibleColorBARGB};
+      std::uint64_t total = 0u;
+      for (std::uint32_t mip = 0u; mip < mips.size(); ++mip) {
+        mips[mip] = {.format = 21u, .resourceType = 4u,
+            .width = extents[mip][0], .height = extents[mip][1],
+            .depth = extents[mip][2]};
+        auto& seed = volumeSeeds[mip];
+        seed.resize(mips[mip].width * mips[mip].height * mips[mip].depth * 4u);
+        for (std::uint32_t z = 0u; z < mips[mip].depth; ++z) {
+          const auto color = mip == 0u ? sliceColors[z]
+              : mip == 1u ? kGpuVisibleColorAARGB : 0xffc04020u;
+          for (std::uint32_t texel = 0u; texel < mips[mip].width * mips[mip].height;
+               ++texel) {
+            const auto offset = (z * mips[mip].width * mips[mip].height + texel) * 4u;
+            std::memcpy(seed.data() + offset, &color, sizeof(color));
+          }
+        }
+        total += seed.size();
+      }
+      std::vector<std::byte> descriptor = bytesOf(header);
+      const auto mipBytes = spanBytes(mips);
+      descriptor.insert(descriptor.end(), mipBytes.begin(), mipBytes.end());
+      builder.appendObjectDefine(kTexture,
+          static_cast<std::uint32_t>(RenderTapeDescriptorKind::Texture),
+          descriptor, 0u, {}, total, 3u);
+      for (std::uint32_t mip = 0u; mip < mips.size(); ++mip) {
+        const auto digest = RenderTapeCaptureSession::sha256(volumeSeeds[mip]);
+        blobsValue.push_back({.digest = digest, .bytes = volumeSeeds[mip]});
+        builder.appendResourceMutation(kTexture, RenderTapeMutationKind::Upload,
+            mip, 0u, volumeSeeds[mip].size(), digest);
+      }
+    }
     if (auditTextureFormat != 0u) {
       const std::array<float, 4u> values{0.25f, 0.5f, 0.75f, 1.0f};
       const auto bytes = std::as_bytes(std::span(values));
@@ -1022,6 +1118,42 @@ struct GeneralIndexedFixture {
         static_cast<std::uint32_t>(RenderTapeDescriptorKind::VertexDeclaration),
         std::as_bytes(std::span(&vertexDeclaration, 1u)),
         declarationBytes.size(), declarationDigest);
+    constexpr D9CWireObjectIdentity queryIdentity{
+        D9C_CHUNK_HANDLE_KIND_QUERY, 19u, 95u};
+    if (queryAware) {
+      const RenderTapeQueryDescriptorV2 descriptor{.type = 9u, .dataBytes = 4u};
+      builder.appendObjectDefine(queryIdentity,
+          static_cast<std::uint32_t>(RenderTapeDescriptorKind::Query),
+          spanBytes(descriptor), 0u, {});
+    }
+    const auto appendIssue = [&](std::uint32_t flags) {
+      const auto chunk = makeChunk(std::array{Record{
+          .type = D9C_COMMAND_RECORD_QUERY_ISSUE,
+          .payload = bytesOf(D9CCommandChunkWireQueryIssue{
+              .queryHandleIndex = 0u, .flags = flags}),
+          .handles = {{queryIdentity.kind, queryIdentity.generation,
+                       queryIdentity.objectId}},
+      }});
+      builder.appendCommandChunk(
+          CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u}, chunk);
+    };
+    const auto appendPoll = [&](std::uint64_t cycle, std::int32_t result,
+                                std::uint32_t samples, std::uint32_t flags) {
+      RenderTapeQueryGetDataControlV2 control{
+          .flags = flags, .hasOutput = 1u,
+          .definedBytes = result == 0 ? 4u : 0u,
+          .dataSize = 4u, .issueCycle = cycle,
+      };
+      if (control.definedBytes) std::memcpy(control.result.data(), &samples, 4u);
+      builder.appendOrderedControl(RenderTapeOrderedControlHeader{
+          .identity = queryIdentity,
+          .kind = static_cast<std::uint32_t>(RenderTapeControlKind::QueryGetData),
+          .disposition = static_cast<std::uint32_t>(result == 0
+              ? RenderTapeControlDisposition::Completed
+              : RenderTapeControlDisposition::Pending),
+          .resultCode = result, .controlBytes = sizeof(control),
+      }, spanBytes(control));
+    };
     builder.appendResourceMutation(
         kGeneralVertexBuffer, RenderTapeMutationKind::Upload, 0u, 0u,
         vertexBytes.size(), vertexDigest);
@@ -1041,28 +1173,45 @@ struct GeneralIndexedFixture {
               .recordCount = static_cast<std::uint32_t>(clearRecords.size())},
           makeChunk(clearRecords));
     }
+    if (queryAware) appendIssue(2u);
     builder.appendCommandChunk(
         CommandChunkEnvelope{.recordCount = drawCount == 1u ? 1u
                                                              : drawCount + 1u,
                              .handleCount = drawCount == 1u ? 0u
-                                                             : visibleUniform ? 6u : 5u},
+                                                             : visibleUniform ?
+                                                                 volumeTexture ? 7u : 6u : 5u},
         drawCount == 1u
             ? generalIndexedDrawChunk()
             : visibleUniform
                 ? gpuVisibleUniformDrawRunChunk(alteredMiddleUniform,
-                                                alteredMiddleTransform, extraStream)
+                                                alteredMiddleTransform, extraStream,
+                                                volumeTexture)
                 : generalIndexedDrawRunChunk(drawCount, patternedClear));
+    if (queryAware) {
+      appendIssue(1u);
+      appendPoll(1u, 1, 0u, 0u);
+      // Three four-pixel-wide visible stripes cover 12 * 16 samples. The
+      // middle VS transform intentionally leaves two background gaps.
+      appendPoll(1u, queryPendingOnly ? 1 : 0, 192u, 1u);
+      // The first result owner must survive reuse and the public wrapper's
+      // retirement if a fresh replay observes Pending for captured S_OK.
+      appendIssue(2u);
+      appendIssue(1u);
+      appendPoll(2u, queryPendingOnly ? 1 : 0, 0u, 0u);
+      builder.appendObjectDestroy(queryIdentity);
+    }
     builder.appendCommandChunk(
         CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u}, present);
     // Visible adds a pixel shader definition and omits the Clear event.
     builder.appendPresentComplete(
-        auditTextureFormat != 0u ? 14u : 12u, 1u,
+        queryAware || volumeTexture ? builder.eventCount()
+                                   : auditTextureFormat != 0u ? 14u : 12u, 1u,
         strictDigest ? RenderTapeDigestValidity::Sha256
                      : RenderTapeDigestValidity::NotCaptured,
         strictDigest
             ? (visibleUniform
                    ? RenderTapeCaptureSession::sha256(
-                         gpuVisibleUniformExpectedPixels())
+                         gpuVisibleUniformExpectedPixels(backgroundARGB))
                    : patternedClear
                    ? RenderTapeCaptureSession::sha256(gpuPolicyExpectedPixels())
                    : kGeneralExpectedDigest)
@@ -3312,6 +3461,438 @@ void generalIndexedReplayConservesAllObjects() {
         "general indexed replay must conserve output, VB, IB, shader, and declaration");
 }
 
+void synchronousReferenceRejectsSeedBeforeEffects() {
+  const GeneralIndexedFixture fixture(3u, true, false, true);
+  const auto prepared = prepareRenderTapeIdentity(fixture.tape, fixture.blobsValue);
+  check(prepared.valid(), "reference seed fixture prepares");
+  const D9CPresentParams params{.backBufferWidth = 16u, .backBufferHeight = 16u,
+      .backBufferFormat = 22u, .backBufferCount = 1u, .swapEffect = 1u,
+      .windowed = 1u, .presentationInterval = 0x80000000u};
+  std::unique_ptr<D9CFactory, decltype(&dxmt9c_factory_release)> factory(
+      dxmt9c_factory_create(), dxmt9c_factory_release);
+  check(bool(factory), "reference seed factory");
+  std::unique_ptr<D9CDevice, decltype(&dxmt9c_device_release)> device(
+      dxmt9c_factory_create_device(factory.get(), 0u, &params, 0u, nullptr),
+      dxmt9c_device_release);
+  check(device && device->dev().upperDevice() &&
+            !device->dev().upperDevice()->usesAsyncQueryFences(),
+        "isolated reference seed lane has signal-only initializer authority");
+  const auto rejected = replayPreparedRenderTapeIdentity(device.get(), prepared, {});
+  check(rejected.status == FrameTapeReplayStatus::UnsupportedGrammar &&
+            rejected.conservation.objectsCreated == 0u &&
+            rejected.queryReplay.failure == RenderTapeQueryReplayFailure::BackendUnavailable,
+        "signal-only initializer reference rejects seed before tape effects");
+}
+
+void nativeMetalCapturedQueryTapeOracle() {
+  const GeneralIndexedFixture fixture(3u, true, false, true,
+                                      false, false, 0u, false, false, true);
+  const auto prepared = prepareRenderTapeIdentity(fixture.tape, fixture.blobsValue);
+  constexpr std::uint32_t alternateBackground = 0xff403020u;
+  const GeneralIndexedFixture alternateFixture(3u, true, false, true,
+      false, false, 0u, false, false, true, alternateBackground);
+  const auto alternate = prepareRenderTapeIdentity(
+      alternateFixture.tape, alternateFixture.blobsValue);
+  check(prepared.valid() && alternate.valid() &&
+            prepared.preflight().queryReplay.queryDefinitions == 1u &&
+            prepared.preflight().queryReplay.issueRecords == 4u &&
+            prepared.preflight().queryReplay.recordedPolls == 3u,
+        "query-aware general admission preserves definitions/issues/original polls");
+  const D9CPresentParams params{.backBufferWidth = 16u, .backBufferHeight = 16u,
+      .backBufferFormat = 22u, .backBufferCount = 1u, .swapEffect = 1u,
+      .windowed = 1u, .presentationInterval = 0x80000000u};
+  for (const auto route : {RenderTapePreparedRoute::Compatibility,
+                           RenderTapePreparedRoute::ProductionSlot}) {
+    std::unique_ptr<D9CFactory, decltype(&dxmt9c_factory_release)> factory(
+        dxmt9c_factory_create(), dxmt9c_factory_release);
+    check(bool(factory), "query tape Metal factory");
+    std::unique_ptr<D9CDevice, decltype(&dxmt9c_device_release)> device(
+        dxmt9c_factory_create_device(factory.get(), 0u, &params, 0u, nullptr),
+        dxmt9c_device_release);
+    check(bool(device), "query tape Metal device");
+    for (std::uint32_t iteration = 0u; iteration != 3u; ++iteration) {
+      const bool changedSeed = iteration == 1u;
+      const auto replay = replayPreparedRenderTapeIdentity(
+          device.get(), changedSeed ? alternate : prepared, {
+          .route = route,
+          .reset = iteration == 0u ? RenderTapePreparedReset::FreshDevice
+                                   : RenderTapePreparedReset::WarmDevice,
+      });
+      if (!replay.complete()) {
+        std::cerr << "query failure=" << static_cast<unsigned>(replay.queryReplay.failure)
+                  << " route=" << static_cast<unsigned>(route)
+                  << " iteration=" << iteration
+                  << '\n';
+        for (const auto& row : replay.queryReplay.rows) {
+          std::uint32_t captured = 0u, observed = 0u;
+          std::memcpy(&captured, row.capturedBytes.data(), sizeof(captured));
+          std::memcpy(&observed, row.replayBytes.data(), sizeof(observed));
+          std::cerr << "query row event=" << row.eventIndex << " cycle=" << row.issueCycle
+                    << " captured_hr=" << row.capturedResult << " replay_hr="
+                    << row.replayResult << " oracle_hr=" << row.oracleResult
+                    << " captured=" << captured << " observed=" << observed
+                    << " local_seq=" << row.localSequence << " completed="
+                    << row.completedSequence << " supplemental=" << row.oraclePolls << '\n';
+        }
+        if (replay.outputPixels.size() >= 16u * 4u) {
+          std::cerr << "query output first row:";
+          for (std::uint32_t x = 0u; x < 16u; ++x) {
+            std::uint32_t pixel = 0u;
+            std::memcpy(&pixel, replay.outputPixels.data() + x * 4u, sizeof(pixel));
+            std::cerr << ' ' << std::hex << pixel << std::dec;
+          }
+          std::cerr << '\n';
+        }
+      }
+      check(replay.complete(), std::string("query tape replay: ") +
+          frameTapeReplayStatusName(replay.status) + " event=" +
+          std::to_string(replay.failedEventIndex) +
+          (replay.queryReplay.rows.empty() ? std::string{} :
+              " samples-low-byte=" + std::to_string(std::to_integer<unsigned>(
+                  replay.queryReplay.rows.back().replayBytes[0])) +
+              " expected-low-byte=" + std::to_string(std::to_integer<unsigned>(
+                  replay.queryReplay.rows.back().capturedBytes[0]))));
+      const auto& query = replay.queryReplay;
+      check(query.present && query.actualMetal && query.gpuResultOracle &&
+                query.transcriptComplete && query.oracleComplete &&
+                query.replayedIssueRecords == 4u && query.replayedPolls == 3u &&
+                query.capturedPending == 1u && query.capturedReady == 2u &&
+                query.readinessSatisfied == 2u && query.matchedResults == 2u &&
+                query.rows.size() == 3u &&
+                query.rows[1].issueCycle == 1u && query.rows[1].resultMatched &&
+                query.rows[2].issueCycle == 2u && query.rows[2].resultMatched,
+            "actual query results stay bound to both original issue cycles");
+      check(replay.outputPixels == gpuVisibleUniformExpectedPixels(
+                changedSeed ? alternateBackground : kGpuVisibleBackgroundColorARGB) &&
+                replay.sourcePixels == replay.outputPixels &&
+                replay.validity.expectedDigestMatched &&
+                replay.conservation.objectsCreated == replay.conservation.objectsReleased,
+            "query-aware replay preserves exact original source/output and wrapper conservation");
+      check(query.rows[1].localQueryIdentity != 0u &&
+                query.rows[1].localQueue != 0u &&
+                query.rows[1].localSequence <= query.rows[1].completedSequence,
+            "ready query oracle uses real local submission/completion");
+    }
+  }
+
+  // A changed defined result still passes structural admission and must fail
+  // the actual result oracle even though all original pixels are unchanged.
+  auto corrupt = fixture.tape;
+  RenderTapeHeader header{};
+  std::memcpy(&header, corrupt.data(), sizeof(header));
+  for (std::uint32_t i = 0u; i < header.eventCount; ++i) {
+    RenderTapeEventHeader event{};
+    std::memcpy(&event, corrupt.data() + header.eventTableOffset +
+                           i * sizeof(event), sizeof(event));
+    if (event.type != static_cast<std::uint32_t>(RenderTapeEventType::OrderedControl))
+      continue;
+    const auto offset = header.payloadArenaOffset + event.payloadOffset;
+    RenderTapeOrderedControlHeader control{};
+    std::memcpy(&control, corrupt.data() + offset, sizeof(control));
+    if (control.resultCode != 0) continue;
+    RenderTapeQueryGetDataControlV2 poll{};
+    std::memcpy(&poll, corrupt.data() + offset + sizeof(control), sizeof(poll));
+    if (poll.issueCycle != 1u) continue;
+    poll.result[0] ^= std::byte{1u};
+    std::memcpy(corrupt.data() + offset + sizeof(control), &poll, sizeof(poll));
+    break;
+  }
+  const auto negative = prepareRenderTapeIdentity(corrupt, fixture.blobsValue);
+  check(negative.valid(), "wrong query bytes remain a structurally valid negative");
+  std::unique_ptr<D9CFactory, decltype(&dxmt9c_factory_release)> factory(
+      dxmt9c_factory_create(), dxmt9c_factory_release);
+  std::unique_ptr<D9CDevice, decltype(&dxmt9c_device_release)> device(
+      dxmt9c_factory_create_device(factory.get(), 0u, &params, 0u, nullptr),
+      dxmt9c_device_release);
+  const auto mismatch = replayPreparedRenderTapeIdentity(device.get(), negative, {});
+  check(mismatch.status == FrameTapeReplayStatus::QueryOracleFailed &&
+            mismatch.queryReplay.failure == RenderTapeQueryReplayFailure::ResultMismatch,
+        "actual query bytes reject an otherwise unchanged-pixel tape");
+
+  const GeneralIndexedFixture pendingFixture(3u, true, false, true,
+      false, false, 0u, false, false, true, kGpuVisibleBackgroundColorARGB,
+      false, true);
+  const auto pending = prepareRenderTapeIdentity(
+      pendingFixture.tape, pendingFixture.blobsValue);
+  check(pending.valid(), "Pending-only query fixture prepares");
+  const auto pendingReplay = replayPreparedRenderTapeIdentity(device.get(), pending, {});
+  const auto& pendingQuery = pendingReplay.queryReplay;
+  check(pendingReplay.complete() && pendingQuery.present && pendingQuery.actualMetal &&
+            pendingQuery.transcriptComplete && pendingQuery.oracleComplete &&
+            !pendingQuery.gpuResultOracle && pendingQuery.capturedReady == 0u &&
+            pendingQuery.capturedPending == 3u && pendingQuery.replayedPolls == 3u &&
+            pendingQuery.readinessRequired == 0u && pendingQuery.requiredResults == 0u &&
+            pendingReplay.outputPixels == gpuVisibleUniformExpectedPixels(),
+        "Pending-only transcript preserves actual Metal/pixel evidence without a GPU query-result claim");
+}
+
+void nativeMetalVolumeMipSliceOracle() {
+  const GeneralIndexedFixture fixture(3u, true, false, true, false, false,
+      0u, false, false, true, kGpuVisibleBackgroundColorARGB, true);
+  const auto prepared = prepareRenderTapeIdentity(fixture.tape, fixture.blobsValue);
+  check(prepared.valid(), std::string("volume mip/slice fixture prepares: ") +
+      frameTapeReplayStatusName(prepared.preflight().status));
+  const D9CPresentParams params{.backBufferWidth = 16u, .backBufferHeight = 16u,
+      .backBufferFormat = 22u, .backBufferCount = 1u, .swapEffect = 1u,
+      .windowed = 1u, .presentationInterval = 0x80000000u};
+  for (const auto route : {RenderTapePreparedRoute::Compatibility,
+                           RenderTapePreparedRoute::ProductionSlot}) {
+    std::unique_ptr<D9CFactory, decltype(&dxmt9c_factory_release)> factory(
+        dxmt9c_factory_create(), dxmt9c_factory_release);
+    check(bool(factory), "volume oracle Metal factory");
+    std::unique_ptr<D9CDevice, decltype(&dxmt9c_device_release)> device(
+        dxmt9c_factory_create_device(factory.get(), 0u, &params, 0u, nullptr),
+        dxmt9c_device_release);
+    check(bool(device), "volume oracle Metal device");
+    for (std::uint32_t iteration = 0u; iteration < 2u; ++iteration) {
+      const auto before = dxmt9::perf::snapshotRenderTapeReplay();
+      const auto replay = replayPreparedRenderTapeIdentity(device.get(), prepared, {
+          .route = route,
+          .reset = iteration == 0u ? RenderTapePreparedReset::FreshDevice
+                                   : RenderTapePreparedReset::WarmDevice});
+      const auto after = dxmt9::perf::snapshotRenderTapeReplay();
+      check(replay.complete(), std::string("volume mip/slice replay: ") +
+          frameTapeReplayStatusName(replay.status) + " event=" +
+          std::to_string(replay.failedEventIndex));
+      check(replay.outputPixels == gpuVisibleUniformExpectedPixels() &&
+                replay.sourcePixels == replay.outputPixels &&
+                replay.validity.expectedDigestMatched &&
+                replay.queryReplay.actualMetal && replay.queryReplay.gpuResultOracle &&
+                replay.queryReplay.matchedResults == 2u &&
+                replay.conservation.objectsCreated == replay.conservation.objectsReleased,
+            "real Metal samples mip0 z0/z2 and mip1 with exact original pixels/query results");
+      const auto direct = after.directLeaseDraws - before.directLeaseDraws;
+      const auto compatibility = after.compatibilityDraws - before.compatibilityDraws;
+      check(after.gpuErrors == before.gpuErrors &&
+                (route == RenderTapePreparedRoute::Compatibility
+                     ? compatibility == 3u && direct == 0u
+                     : direct == 3u && compatibility == 0u),
+            "volume oracle executes the selected production route without GPU errors");
+    }
+  }
+
+  for (const std::uint32_t mip : {0u, 1u}) {
+    // Authenticate a wrong z-slice/mip seed while preserving the original
+    // independent pixel oracle. A source/output agreement alone cannot pass.
+    auto wrongSeed = fixture.volumeSeeds[mip];
+    const auto oldDigest = RenderTapeCaptureSession::sha256(wrongSeed);
+    const auto color = mip == 0u ? kGpuVisibleColorAARGB : kGpuVisibleColorBARGB;
+    const auto begin = mip == 0u ? 2u * 7u * 5u * 4u : 0u;
+    for (std::size_t offset = begin; offset < wrongSeed.size(); offset += 4u)
+      std::memcpy(wrongSeed.data() + offset, &color, sizeof(color));
+    const auto digest = RenderTapeCaptureSession::sha256(wrongSeed);
+    auto blobs = fixture.blobsValue;
+    for (auto& blob : blobs)
+      if (blob.digest == oldDigest) blob = {.digest = digest, .bytes = wrongSeed};
+    auto tape = fixture.tape;
+    ImportedRenderTapeView imported;
+    check(importPrevalidatedRenderTape(tape, imported), "wrong volume fixture imports");
+    for (std::uint32_t index = 0u; index < imported.header.eventCount; ++index) {
+      const auto event = imported.event(index);
+      if (event.header.type != static_cast<std::uint32_t>(
+                                    RenderTapeEventType::ResourceMutation)) continue;
+      RenderTapeResourceMutationHeader mutation{};
+      std::memcpy(&mutation, event.payload.data(), sizeof(mutation));
+      if (mutation.identity.kind != kTexture.kind ||
+          mutation.identity.objectId != kTexture.objectId || mutation.subresource != mip)
+        continue;
+      mutation.digest = digest;
+      std::memcpy(tape.data() + imported.header.payloadArenaOffset +
+                      event.header.payloadOffset, &mutation, sizeof(mutation));
+    }
+    const auto wrong = prepareRenderTapeIdentity(tape, blobs);
+    check(wrong.valid(), "wrong volume sample seed remains fully authenticated");
+    std::unique_ptr<D9CFactory, decltype(&dxmt9c_factory_release)> factory(
+        dxmt9c_factory_create(), dxmt9c_factory_release);
+    std::unique_ptr<D9CDevice, decltype(&dxmt9c_device_release)> device(
+        dxmt9c_factory_create_device(factory.get(), 0u, &params, 0u, nullptr),
+        dxmt9c_device_release);
+    const auto first = replayPreparedRenderTapeIdentity(device.get(), prepared, {});
+    check(first.complete(), "volume A starts from the exact authenticated seed");
+    const auto rejected = replayPreparedRenderTapeIdentity(device.get(), wrong, {
+        .reset = RenderTapePreparedReset::WarmDevice});
+    check(rejected.status == FrameTapeReplayStatus::OutputMismatch &&
+              rejected.validity.outputReadback && !rejected.validity.expectedDigestMatched &&
+              rejected.outputPixels != gpuVisibleUniformExpectedPixels(),
+          "wrong z-slice or mip bytes fail exact original GPU pixels");
+    const auto restored = replayPreparedRenderTapeIdentity(device.get(), prepared, {
+        .reset = RenderTapePreparedReset::WarmDevice});
+    check(restored.complete() && restored.outputPixels == first.outputPixels &&
+              restored.queryReplay.gpuResultOracle &&
+              restored.conservation.objectsCreated == restored.conservation.objectsReleased,
+          "volume A/B/A restores every mip/slice after changed-content failure");
+  }
+}
+
+void nativeMetalRetainedQueryResultSurvivesReuseAndRelease(
+    bool expectPollBudget = false) {
+  using namespace dxmt9::core;
+  const D9CPresentParams params{.backBufferWidth = 16u, .backBufferHeight = 16u,
+      .backBufferFormat = 21u, .backBufferCount = 1u, .swapEffect = 1u,
+      .windowed = 1u, .presentationInterval = 0x80000000u};
+  std::unique_ptr<D9CFactory, decltype(&dxmt9c_factory_release)> factory(
+      dxmt9c_factory_create(), dxmt9c_factory_release);
+  std::unique_ptr<D9CDevice, decltype(&dxmt9c_device_release)> wire(
+      dxmt9c_factory_create_device(factory.get(), 0u, &params, 0u, nullptr),
+      dxmt9c_device_release);
+  check(bool(wire), "retained query actual device");
+  auto& device = wire->dev();
+  auto upper = device.upperDevice();
+  check(upper && upper->usesMetalOcclusion(), "retained query requires GPU visibility");
+  auto& queue = upper->queue();
+  check(device.setFVF(0x4002u | 0x040u) == D3D_OK &&
+            device.setRenderState(RS_CULL_MODE, u32(CullMode::None)) == D3D_OK &&
+            device.setRenderState(RS_LIGHTING, 0u) == D3D_OK &&
+            device.setRenderState(RS_Z_ENABLE, 0u) == D3D_OK &&
+            device.setViewport({0u, 0u, 16u, 16u, 0.f, 1.f}) == D3D_OK,
+        "retained query fixed state");
+  struct Vertex { float x, y, z, w; u32 color; };
+  const std::array<Vertex, 6u> vertices{{
+      {-2,-2,.5f,1,0xff00ff00}, {-2,2,.5f,1,0xff00ff00}, {2,-2,.5f,1,0xff00ff00},
+      {2,-2,.5f,1,0xff00ff00}, {-2,2,.5f,1,0xff00ff00}, {2,2,.5f,1,0xff00ff00},
+  }};
+  auto vb = device.createBuffer({sizeof(vertices), Pool::Default, UsageVertexBuffer});
+  check(bool(vb), "retained query vertex buffer");
+  const auto mapped = vb->lock(0u, sizeof(vertices), 0u);
+  check(mapped.data != nullptr, "retained query vertex map");
+  std::memcpy(mapped.data, vertices.data(), sizeof(vertices));
+  vb->unlock();
+  check(device.setStreamSource(0u, vb, 0u, sizeof(Vertex)) == D3D_OK,
+        "retained query stream");
+  ClearDesc clear{};
+  clear.clearColor = true;
+  clear.color = {1.f, 0.f, 0.f, 1.f};
+  check(device.clear(clear) == D3D_OK, "retained query original red clear");
+  upper->flush();
+  struct Gate {
+    WMT::Reference<WMT::SharedEvent> event;
+    ~Gate() { if (event) event.signalValue(1u); }
+  } gate{queue.device().newSharedEvent()};
+  check(bool(gate.event), "real completion gate");
+  auto blocker = queue.newCommandBuffer();
+  blocker.encodeWaitForEvent(WMT::Event{gate.event.handle}, 1u);
+  blocker.commit();
+  std::unique_ptr<D9CQuery, decltype(&dxmt9c_query_release)> query(
+      dxmt9c_device_create_query(wire.get(), 9u), dxmt9c_query_release);
+  check(bool(query), "retained query wrapper");
+  check(dxmt9c_query_issue(query.get(), 2u) == D3D_OK &&
+            device.drawPrimitive(PrimitiveType::TriangleList, 2u) == D3D_OK &&
+            dxmt9c_query_issue(query.get(), 1u) == D3D_OK,
+        "old query issue/draw/end");
+  std::uint32_t pending = 0xdeadbeefu;
+  check(dxmt9c_query_get_data(query.get(), &pending, sizeof(pending), 1u) == S_FALSE &&
+            pending == 0xdeadbeefu,
+        "actual shared-event gate deterministically preserves old Pending");
+  const auto snapshot = device.captureQueryPollSnapshot(query->obj);
+  RenderTapeQueryReplayRow row{
+      .issueCycle = 1u, .hasOutput = true, .dataSize = 4u,
+      .capturedResult = S_OK, .replayResult = S_FALSE, .definedBytes = 4u,
+      .localQueryIdentity = snapshot.identity, .localIssueOrdinal = snapshot.issueOrdinal,
+      .localDeviceEpoch = snapshot.issueDeviceEpoch, .resultRequired = true,
+  };
+  const std::uint32_t expected = 256u;
+  std::memcpy(row.capturedBytes.data(), &expected, sizeof(expected));
+  check(dxmt9c_query_issue(query.get(), 2u) == D3D_OK &&
+            dxmt9c_query_issue(query.get(), 1u) == D3D_OK,
+        "reissue replaces public result with empty cycle");
+  query.reset();
+  const auto oracleOnlyDrain = [&]() {
+    const auto began = std::chrono::steady_clock::now();
+    gate.event.signalValue(1u);
+    upper->flush();
+    return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now() - began).count());
+  };
+  // Ordinary retention checks semantic ownership after actual completion, not
+  // OS scheduling within a finite spin count. The deterministic Pending call
+  // above remains before reissue/release; this drain is separate oracle work.
+  auto oracleDrainNanos = expectPollBudget ? 0u : oracleOnlyDrain();
+  RenderTapeQueryReplayEvidence evidence{.readinessRequired = 1u};
+  auto settled = render_tape_runtime::settleQueryOracle(
+      wire.get(), snapshot, row, evidence);
+  if (settled != RenderTapeQueryReplayFailure::None || !row.resultMatched) {
+    std::uint32_t observed = 0u;
+    std::memcpy(&observed, row.replayBytes.data(), sizeof(observed));
+    std::cerr << "query retained failure=" << static_cast<unsigned>(settled)
+              << " samples=" << observed << " expected=" << expected
+              << " local_seq=" << row.localSequence << " completed="
+              << row.completedSequence << " oracle_hr=" << row.oracleResult
+              << " polls=" << row.oraclePolls << " eligible=" << snapshot.eligible
+              << " progress_limit=" << static_cast<unsigned>(evidence.progressLimit)
+              << " aggregate_polls=" << evidence.supplementalPolls
+              << " poll_budget=" << evidence.maxOraclePolls
+              << " wall_ns=" << evidence.oracleWallNanos
+              << " wall_budget_ns=" << evidence.maxOracleWallNanos
+              << " fence_valid=" << snapshot.backendFence.valid()
+              << " marker_seq=" << snapshot.backendFence.snapshot().sequence << '\n';
+    const auto progress = snapshot.backend ? snapshot.backend->queryProgress()
+                                          : dxmt9::query::Progress{};
+    std::cerr << "query retained backend_failed=" << progress.failed
+              << " marker_cancelled=" << (snapshot.backendFence.marker &&
+                  snapshot.backendFence.marker->cancelled())
+              << " blocker_status=" << blocker.status();
+    if (snapshot.occlusionResult) {
+      const auto& result = *snapshot.occlusionResult;
+      std::cerr << " result_samples=" << result.samples.load(std::memory_order_acquire)
+                << " result_pending=" << result.pending.load(std::memory_order_acquire)
+                << " result_failed=" << result.failed.load(std::memory_order_acquire)
+                << " result_abandoned=" << result.abandoned.load(std::memory_order_acquire)
+                << " result_object=" << result.object << " result_issue=" << result.issue
+                << " result_epoch=" << result.epoch;
+    }
+    std::cerr << '\n';
+  }
+  if (expectPollBudget) {
+    // Keep the real event closed for the bounded probe, so this classifier
+    // does not depend on how quickly the OS schedules its completion thread.
+    check(settled == RenderTapeQueryReplayFailure::ProgressExhausted &&
+              evidence.progressLimit == RenderTapeQueryProgressLimit::PollBudget &&
+              evidence.supplementalPolls == evidence.maxOraclePolls &&
+              !row.readinessSatisfied && !row.resultMatched &&
+              snapshot.occlusionResult &&
+              !snapshot.occlusionResult->failed.load(std::memory_order_acquire),
+          "bounded real-event probe reports PollBudget without accepting a result");
+    const auto initialPolls = evidence.supplementalPolls;
+    const auto initialWallNanos = evidence.oracleWallNanos;
+    oracleDrainNanos = oracleOnlyDrain();
+    evidence = RenderTapeQueryReplayEvidence{.readinessRequired = 1u};
+    row.oraclePolls = 0u;
+    settled = render_tape_runtime::settleQueryOracle(wire.get(), snapshot, row, evidence);
+    std::cerr << "query retained recovery initial_failure=poll-budget initial_accepted=0"
+              << " initial_polls=" << initialPolls << " initial_wall_ns=" << initialWallNanos
+              << " oracle_drain_ns=" << oracleDrainNanos
+              << " recovery_polls=" << evidence.supplementalPolls
+              << " recovery_issue=" << row.localIssueOrdinal
+              << " recovery_identity=" << row.localQueryIdentity << '\n';
+  }
+  check(oracleDrainNanos != 0u, "retained query accounts for its separate real oracle drain");
+  check(settled ==
+            RenderTapeQueryReplayFailure::None && row.resultMatched &&
+            row.readinessSatisfied && row.supplemental && row.oraclePolls > 0u &&
+            row.localSequence <= row.completedSequence,
+        "old immutable actual result settles after public reuse/release");
+  auto wrong = row;
+  wrong.capturedBytes[0] ^= std::byte{1u};
+  check(render_tape_runtime::settleQueryOracle(wire.get(), snapshot, wrong, evidence) ==
+            RenderTapeQueryReplayFailure::ResultMismatch,
+        "same-cycle result negative detects wrong expected samples");
+  auto stale = row;
+  ++stale.localIssueOrdinal;
+  check(render_tape_runtime::settleQueryOracle(wire.get(), snapshot, stale, evidence) ==
+            RenderTapeQueryReplayFailure::SnapshotUnavailable,
+        "stale local issue identity cannot poll a different cycle");
+  RenderTapeQueryReplayEvidence exhausted{.maxOraclePolls = 0u};
+  check(render_tape_runtime::settleQueryOracle(wire.get(), snapshot, row, exhausted) ==
+            RenderTapeQueryReplayFailure::ProgressExhausted &&
+            exhausted.progressLimit == RenderTapeQueryProgressLimit::PollBudget,
+        "bounded final oracle exhaustion has a named failure");
+  RenderTapeQueryReplayEvidence wallExhausted{.maxOracleWallNanos = 0u};
+  check(render_tape_runtime::settleQueryOracle(wire.get(), snapshot, row, wallExhausted) ==
+            RenderTapeQueryReplayFailure::ProgressExhausted &&
+            wallExhausted.progressLimit == RenderTapeQueryProgressLimit::WallBudget,
+        "wall-time oracle exhaustion stays distinct from poll-count exhaustion");
+}
+
 void nativeMetalVisibleUniformPolicyOracle() {
   const GeneralIndexedFixture fixture(3u, true, false, true);
   const auto prepared = prepareRenderTapeIdentity(fixture.tape,
@@ -4575,12 +5156,13 @@ std::vector<std::byte> gpuPolicyExpectedPixels() {
   return pixels;
 }
 
-std::vector<std::byte> gpuVisibleUniformExpectedPixels() {
+std::vector<std::byte> gpuVisibleUniformExpectedPixels(std::uint32_t backgroundARGB) {
   // The independent oracle models the three transformed viewport strips:
   // A (left, four pixels), B (middle, four pixels after its 0.5x VS scale),
   // and A (right, four pixels). The remaining columns retain the clear.
-  constexpr std::array background{
-      std::byte{0x20}, std::byte{0x18}, std::byte{0x10}, std::byte{0xff}};
+  const std::array background{
+      std::byte(backgroundARGB & 0xffu), std::byte((backgroundARGB >> 8u) & 0xffu),
+      std::byte((backgroundARGB >> 16u) & 0xffu), std::byte{0xff}};
   constexpr std::array colorA{
       std::byte{0x40}, std::byte{0x40}, std::byte{0xe0}, std::byte{0xff}};
   constexpr std::array colorB{
@@ -4661,14 +5243,15 @@ void writeGpuVisibleUniformFixture(const std::filesystem::path& directory,
                                    bool alteredMiddleUniform = false,
                                    bool alteredMiddleTransform = false,
                                    bool extraStream = false,
-                                   bool alteredExtraStream = false) {
+                                   bool alteredExtraStream = false,
+                                   bool queryAware = false) {
   std::error_code error;
   std::filesystem::create_directories(directory, error);
   check(!error, "visible-uniform GPU fixture directory must be created");
   const GeneralIndexedFixture fixture(3u, true, false, true,
                                       alteredMiddleUniform,
                                       alteredMiddleTransform, 0u,
-                                      extraStream, alteredExtraStream);
+                                      extraStream, alteredExtraStream, queryAware);
   const auto preflight = preflightRenderTapeIdentity(fixture.tape,
                                                       fixture.blobsValue);
   if (!preflight.complete() ||
@@ -4766,6 +5349,13 @@ void writeGpuVisibleUniformFixture(const std::filesystem::path& directory,
                static_cast<std::streamsize>(oracle.size()));
     check(rgba.good(), "visible-uniform fixture must write an RGBA oracle");
   }
+  if (queryAware) {
+    const auto sidecar = sourceBoundaryFixtureIdentity(fixture, true);
+    std::ofstream identity(directory / "identity.bin", std::ios::binary);
+    identity.write(reinterpret_cast<const char*>(sidecar.data()),
+                   static_cast<std::streamsize>(sidecar.size()));
+    check(identity.good(), "query fixture writes its exact capture-source sidecar");
+  }
 }
 
 void writeParallelFixture(const std::filesystem::path& directory) {
@@ -4792,6 +5382,81 @@ void writeParallelFixture(const std::filesystem::path& directory) {
                static_cast<std::streamsize>(fixture.blobsValue[index].bytes.size()));
     check(blob.good(), "parallel fixture must write every blob file");
   }
+}
+
+void completedBackbufferSeedAdmissionTruthTable() {
+  using dxmt9::RenderTapeBackbufferSeedCompletionState;
+  using dxmt9::renderTapeBackbufferSeedCompletionAllowed;
+  for (unsigned builds = 0u; builds != 32u; ++builds) {
+    // This same staged guard precedes every payload/encoder read in the cold
+    // queue API. Model a borrowed append as an unreadable live payload.
+    unsigned payloadReads = 0u;
+    if (dxmt9::renderTapeBackbufferSeedBuildQuiescent(
+            builds & 1u, builds & 2u, builds & 4u, builds & 8u, builds & 16u)) {
+      ++payloadReads;
+    }
+    check(payloadReads == (builds == 0u ? 1u : 0u),
+          "active Direct/Arena builder is rejected before any payload read");
+  }
+  // Distinct handle values include a same-slot/different-generation owner.
+  // Their encoding is irrelevant to this pure identity/completion model;
+  // validSeedSurface independently models the pool's generation lookup.
+  constexpr std::array<dxmt9::core::Handle, 4u> owners{{
+      {0u}, {1u}, {2u}, {0x100000001u},
+  }};
+  constexpr std::array<std::array<std::uint64_t, 2u>, 4u> initializers{{
+      {0u, 0u}, {1u, 0u}, {1u, 1u}, {1u, 2u},
+  }};
+  std::size_t checked = 0u;
+  for (const auto target : owners) {
+    for (const auto current : owners) {
+      for (std::uint64_t published = 0u; published != 3u; ++published) {
+        for (std::uint64_t completed = 0u; completed != 4u; ++completed) {
+          for (unsigned flags = 0u; flags != 1024u; ++flags) {
+            const auto& initializer = initializers[flags >> 8u];
+            const RenderTapeBackbufferSeedCompletionState state{
+                .seedTarget = target,
+                .currentBackbuffer = current,
+                .publishedSequence = published,
+                .completedSequence = completed,
+                .initializerPublished = initializer[0],
+                .initializerCompleted = initializer[1],
+                .inflightCount = (flags & 32u) ? 1u : 0u,
+                .exactAttachmentPreservation = bool(flags & 1u),
+                .validSeedSurface = bool(flags & 2u),
+                .producerQuiescent = bool(flags & 4u),
+                .initializerQuiescent = bool(flags & 8u),
+                .initializerTrackingAvailable = bool(flags & 128u),
+                .initializerFailed = bool(flags & 64u),
+                .terminal = bool(flags & 16u),
+            };
+            // Serial semantics: a full live-target seed may replace discard
+            // permission only after all its real local work has completed,
+            // with no concurrent writer, initializer or terminal failure.
+            const bool sameLiveOwner = target.value != 0u &&
+                target.value == current.value && (flags & 2u);
+            const bool settled = published != 0u && completed >= published &&
+                !(flags & 32u) && (flags & 4u) && (flags & 8u) &&
+                (flags & 128u) && !(flags & 64u) && initializer[1] >= initializer[0];
+            const bool expected = sameLiveOwner && settled &&
+                (flags & 1u) && !(flags & 16u);
+            const bool admitted = renderTapeBackbufferSeedCompletionAllowed(state);
+            check(admitted == expected,
+                  "full-seed completion binds exact owner, waterline and terminal truth table");
+            for (const bool discard : {false, true}) {
+              bool nextDiscard = discard;
+              if (admitted) nextDiscard = false;
+              check(nextDiscard == (expected ? false : discard),
+                    "failed seed admission preserves discard; fresh accepted seed is a no-op");
+              ++checked;
+            }
+          }
+        }
+      }
+    }
+  }
+  check(checked == 393216u,
+        "bounded full-seed checker includes submitted initializer error/pending callbacks");
 }
 
 void eventLevelMutationDrainOrderingIsPinned() {
@@ -5601,7 +6266,42 @@ int main(int argc, char** argv) {
     check(::setenv("DXMT_PERF_COUNTERS", "1", 1) == 0,
           "native route evidence requires counters before first device");
     if (argc == 2 && std::string_view(argv[1]) == "--test-event-ordering") {
+      completedBackbufferSeedAdmissionTruthTable();
       eventLevelMutationDrainOrderingIsPinned();
+      return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--test-query-oracle") {
+      check(::setenv("DXMT9_METAL_OCCLUSION", "1", 1) == 0,
+            "query Metal oracle requires actual GPU visibility before first device");
+      completedBackbufferSeedAdmissionTruthTable();
+      nativeMetalCapturedQueryTapeOracle();
+      nativeMetalRetainedQueryResultSurvivesReuseAndRelease();
+      return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--test-seed-reference-rejection") {
+      check(::setenv("DXMT9_ASYNC_QUERY_FENCES", "0", 1) == 0,
+            "reference seed test selects signal-only lane before first device");
+      completedBackbufferSeedAdmissionTruthTable();
+      synchronousReferenceRejectsSeedBeforeEffects();
+      return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--test-volume-oracle") {
+      check(::setenv("DXMT9_METAL_OCCLUSION", "1", 1) == 0,
+            "volume oracle retains actual GPU query-result checks");
+      nativeMetalVolumeMipSliceOracle();
+      return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--test-retained-query-oracle") {
+      check(::setenv("DXMT9_METAL_OCCLUSION", "1", 1) == 0,
+            "retained query oracle uses actual GPU visibility");
+      nativeMetalRetainedQueryResultSurvivesReuseAndRelease();
+      return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--test-retained-query-budget") {
+      check(::setenv("DXMT9_METAL_OCCLUSION", "1", 1) == 0 &&
+                ::setenv("DXMT9_PERF_COMPLETION_SIGNAL_DELAY_MS", "250", 1) == 0,
+            "retained limit discriminator uses actual visibility and delayed publication");
+      nativeMetalRetainedQueryResultSurvivesReuseAndRelease(true);
       return 0;
     }
     if (argc == 3 && std::string_view(argv[1]) == "--write-production-fixture") {
@@ -5623,6 +6323,11 @@ int main(int argc, char** argv) {
     }
     if (argc == 3 && std::string_view(argv[1]) == "--write-texture-input-audit-fixture") {
       writeGpuPolicyFixture(argv[2], true);
+      return 0;
+    }
+    if (argc == 3 && std::string_view(argv[1]) ==
+                         "--write-gpu-query-fixture") {
+      writeGpuVisibleUniformFixture(argv[2], false, false, false, false, true);
       return 0;
     }
     if (argc == 3 && std::string_view(argv[1]) ==
@@ -5656,16 +6361,20 @@ int main(int argc, char** argv) {
     }
     check(argc == 1,
           "usage: render_tape_provider_spec "
-          "[--test-event-ordering|--write-production-fixture dir|"
+          "[--test-event-ordering|--test-query-oracle|--test-seed-reference-rejection|"
+          "--test-volume-oracle|--test-retained-query-oracle|--test-retained-query-budget|"
+          "--write-production-fixture dir|"
           "--write-projection-fixture dir|--write-sequence-fixture dir|"
           "--write-gpu-policy-fixture dir|"
           "--write-texture-input-audit-fixture dir|"
           "--write-gpu-visible-extra-stream-fixture dir|"
           "--write-gpu-visible-extra-stream-altered-fixture dir|"
           "--write-gpu-visible-uniform-fixture dir|"
+          "--write-gpu-query-fixture dir|"
           "--write-gpu-visible-uniform-altered-fixture dir|"
           "--write-gpu-visible-uniform-stale-vs-fixture dir|"
           "--write-parallel-fixture dir]");
+    completedBackbufferSeedAdmissionTruthTable();
     eventLevelMutationDrainOrderingIsPinned();
     bufferMutationReplayPlanPinsLockFlagsAndOffset();
     freshSeedDrainPredicateTruthTable();

@@ -2340,9 +2340,35 @@ HRESULT D3D9DeviceImpl::AppendQueryIssueForChild(
                 .queryHandleIndex = D9C_COMMAND_CHUNK_NULL_HANDLE_INDEX,
                 .flags = flags},
             .query = query});
-    return appendRecord(
+    const HRESULT result = appendRecord(
         D9C_COMMAND_RECORD_QUERY_ISSUE,
         kStableQueryIssueCadenceBytes);
+    if (peCaptureState_ && SUCCEEDED(result)) {
+        auto *entry = findRenderTapeObject(query);
+        const bool captured = IsRenderTapeCaptureActiveForChild();
+        if (!entry || !dxmt9::d3d9::renderTapeAdvanceQueryCycle(
+                          entry->query, flags, captured)) {
+            dxmt9DeviceInfoLog(
+                "render_tape_capture query rejected reason=query_uncaptured_cycle "
+                "kind=%u generation=%u object_id=%llu flags=%u",
+                query.identity.kind, query.identity.generation,
+                static_cast<unsigned long long>(query.identity.objectId), flags);
+            abortRenderTapeCapture("query_uncaptured_cycle");
+        } else if (!captured) {
+            dxmt9::d3d9::RenderTapeQueryDescriptorV2 descriptor{
+                .type = entry->query.type,
+                .dataBytes = dxmt9::d3d9::renderTapeQueryDataBytes(entry->query.type),
+                .initialState = static_cast<std::uint32_t>(
+                    dxmt9::d3d9::RenderTapeQueryInitialState::ClosedWithoutReplayResult),
+                .initialIssueCycle = entry->query.issueCycle};
+            if (entry->descriptor.size() != sizeof(descriptor)) {
+                abortRenderTapeCapture("query_descriptor");
+            } else {
+                std::memcpy(entry->descriptor.data(), &descriptor, sizeof(descriptor));
+            }
+        }
+    }
+    return result;
 }
 
 bool D3D9DeviceImpl::commandChunkReady() const noexcept {

@@ -2711,6 +2711,194 @@ void opaqueOracleAlphaIsCanonical() {
         "malformed X8 oracle storage must fail closed");
 }
 
+void queryTranscriptV2PreservesCallsAndRejectsStaleCycles() {
+  constexpr D9CWireObjectIdentity queryIdentity{
+      .kind = D9C_CHUNK_HANDLE_KIND_QUERY, .generation = 7u, .objectId = 901u};
+  const auto makeTape = [&](RenderTapeQueryDescriptorV2 descriptor,
+                            bool includeBegin, bool includeEnd,
+                            RenderTapeQueryGetDataControlV2 observed,
+                            std::int32_t hr = 0, bool reissue = false,
+                            bool skipPoll = false) {
+    RenderTapeBuilder builder;
+    builder.appendBootstrapState(makeApplyStateChunk());
+    const auto output = outputSurfaceDescriptor();
+    builder.appendObjectDefine(kSurface, kSurfaceDescriptorKind,
+        std::as_bytes(std::span(&output, 1u)), 0u, {});
+    builder.appendResourceMutation(kSurface, RenderTapeMutationKind::CpuUnlock,
+                                  0u, 0u, 4u, mutationDigest());
+    builder.appendObjectDefine(queryIdentity,
+        static_cast<std::uint32_t>(RenderTapeDescriptorKind::Query),
+        std::as_bytes(std::span(&descriptor, 1u)), 0u, {});
+    const auto issue = [&](std::uint32_t flags) {
+      const D9CCommandChunkWireQueryIssue payload{
+          .queryHandleIndex = 0u, .flags = flags};
+      const D9CCommandChunkWireHandleEntry handle{
+          .kind = queryIdentity.kind, .generation = queryIdentity.generation,
+          .objectId = queryIdentity.objectId};
+      const auto chunk = makeSingleRecordChunk(D9C_COMMAND_RECORD_QUERY_ISSUE,
+          std::as_bytes(std::span(&payload, 1u)), std::span(&handle, 1u));
+      builder.appendCommandChunk(
+          CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u}, chunk);
+    };
+    if (includeBegin) issue(2u);
+    if (includeEnd) issue(1u);
+    if (reissue) {
+      issue(2u);
+      issue(1u);
+    }
+    const RenderTapeOrderedControlHeader control{
+        .identity = queryIdentity,
+        .kind = static_cast<std::uint32_t>(RenderTapeControlKind::QueryGetData),
+        .disposition = static_cast<std::uint32_t>(hr == 1
+            ? RenderTapeControlDisposition::Pending
+            : hr == 0 ? RenderTapeControlDisposition::Completed
+                      : RenderTapeControlDisposition::Failed),
+        .resultCode = hr, .controlBytes = sizeof(observed),
+        .completionOrdinal = 1u};
+    if (!skipPoll)
+      builder.appendOrderedControl(control, std::as_bytes(std::span(&observed, 1u)));
+    builder.appendCommandChunk(
+        CommandChunkEnvelope{.recordCount = 1u, .handleCount = 1u},
+        makeMappedPresentChunk(kSurface));
+    const RenderTapeOracleAttachment oracle{
+        .identity = kSurface, .descriptorKind = kSurfaceDescriptorKind};
+    builder.appendPresentComplete(6u + (includeBegin ? 1u : 0u) +
+        (includeEnd ? 1u : 0u) + (reissue ? 2u : 0u) - (skipPoll ? 1u : 0u),
+        2u, RenderTapeDigestValidity::NotCaptured, {},
+        std::as_bytes(std::span(&oracle, 1u)));
+    return builder.seal();
+  };
+
+  const RenderTapeQueryDescriptorV2 occlusion{.type = 9u, .dataBytes = 4u};
+  RenderTapeQueryGetDataControlV2 ready{
+      .flags = 1u, .hasOutput = 1u, .definedBytes = 4u,
+      .dataSize = 4u, .issueCycle = 1u};
+  const std::uint32_t samples = 1024u;
+  std::memcpy(ready.result.data(), &samples, sizeof(samples));
+  const auto catalogue = completeCatalogue();
+  const auto tape = makeTape(occlusion, true, true, ready);
+  ImportedRenderTapeView imported;
+  check(validateRenderTape(tape, catalogue, &imported).valid(),
+        "V2 BEGIN END and exact successful result validate");
+  const auto controlEvent = imported.event(6u);
+  RenderTapeQueryGetDataControlV2 decoded{};
+  std::memcpy(&decoded, controlEvent.payload.data() +
+              sizeof(RenderTapeOrderedControlHeader), sizeof(decoded));
+  check(decoded.flags == 1u && decoded.hasOutput == 1u &&
+        decoded.dataSize == 4u && decoded.issueCycle == 1u &&
+        decoded.definedBytes == 4u && decoded.result == ready.result,
+        "call flags output shape cycle and exact bytes survive serialization");
+  ready.result[0] ^= std::byte{0xffu};
+  check(decoded.result[0] != ready.result[0],
+        "journal result bytes own a copy independent of caller storage");
+  ready.result[0] ^= std::byte{0xffu};
+  auto newest = ready;
+  newest.issueCycle = 2u;
+  check(validateRenderTape(makeTape(occlusion, true, true, newest, 0, true),
+                           catalogue).valid(),
+        "serialized reissue BEGIN and END replace a completed captured cycle");
+  check(validateRenderTape(makeTape(occlusion, true, true, ready, 0, true),
+                           catalogue).status == RenderTapeValidationStatus::QueryUncapturedCycle,
+        "old result cannot redirect a poll after serialized reissue");
+
+  const auto rejects = [&](RenderTapeQueryGetDataControlV2 control,
+                           RenderTapeValidationStatus status,
+                           std::string_view message) {
+    const auto result = validateRenderTape(
+        makeTape(occlusion, true, true, control), catalogue);
+    check(result.status == status && result.hasOffendingIdentity &&
+          sameWireIdentity(result.offendingIdentity, queryIdentity), message);
+  };
+  auto bad = ready;
+  bad.issueCycle = 2u;
+  rejects(bad, RenderTapeValidationStatus::QueryUncapturedCycle,
+          "stale or future issue cycle rejects with exact lifetime identity");
+  bad = ready;
+  bad.flags = 2u;
+  rejects(bad, RenderTapeValidationStatus::InvalidQueryTranscript,
+          "unknown GetData flags reject");
+  bad = ready;
+  bad.hasOutput = 2u;
+  rejects(bad, RenderTapeValidationStatus::InvalidQueryTranscript,
+          "nonboolean output presence rejects");
+  bad = ready;
+  bad.definedBytes = 9u;
+  rejects(bad, RenderTapeValidationStatus::InvalidQueryTranscript,
+          "result extent over eight rejects before indexing result storage");
+  bad = ready;
+  bad.result[7] = std::byte{1u};
+  rejects(bad, RenderTapeValidationStatus::InvalidQueryTranscript,
+          "undefined padding cannot carry caller memory");
+  bad = ready;
+  bad.hasOutput = 0u;
+  rejects(bad, RenderTapeValidationStatus::InvalidQueryTranscript,
+          "null output cannot claim defined bytes");
+
+  RenderTapeQueryGetDataControlV2 pending{
+      .flags = 1u, .hasOutput = 1u, .dataSize = 4u, .issueCycle = 1u};
+  check(validateRenderTape(makeTape(occlusion, true, false, pending, 1), catalogue)
+            .valid(), "active Pending preserves FLUSH but defines no bytes");
+  pending.result[0] = std::byte{0xa5u};
+  check(validateRenderTape(makeTape(occlusion, true, false, pending, 1), catalogue)
+            .status == RenderTapeValidationStatus::InvalidQueryTranscript,
+        "Pending result caller bytes are forbidden");
+  pending.result = {};
+  check(validateRenderTape(makeTape(occlusion, true, true, pending,
+                                   static_cast<std::int32_t>(0x88760868u)),
+                           catalogue).valid(),
+        "failed calls preserve their HRESULT without defining caller bytes");
+  check(validateRenderTape(makeTape(occlusion, true, false, ready), catalogue)
+            .status == RenderTapeValidationStatus::QueryUncapturedCycle,
+        "successful readiness cannot precede END");
+  check(validateRenderTape(makeTape(occlusion, false, true, ready), catalogue)
+            .status == RenderTapeValidationStatus::QueryUncapturedCycle,
+        "occlusion END cannot invent missing prefix work");
+
+  const RenderTapeQueryDescriptorV2 old{
+      .type = 9u, .dataBytes = 4u,
+      .initialState = static_cast<std::uint32_t>(
+          RenderTapeQueryInitialState::ClosedWithoutReplayResult),
+      .initialIssueCycle = 41u};
+  bad = ready;
+  bad.issueCycle = 41u;
+  check(validateRenderTape(makeTape(old, false, false, bad), catalogue).status ==
+            RenderTapeValidationStatus::QueryUncapturedCycle,
+        "closed bootstrap cycle conveys provenance without result authority");
+  check(validateRenderTape(makeTape(old, false, false, bad, 0, false, true),
+                           catalogue).valid(),
+        "an unreferenced old closed query does not invalidate the tape");
+  bad.issueCycle = 42u;
+  check(validateRenderTape(makeTape(old, true, true, bad), catalogue).valid(),
+        "captured replacement BEGIN closes over its new cycle");
+  const RenderTapeQueryDescriptorV2 event{.type = 8u, .dataBytes = 4u};
+  RenderTapeQueryGetDataControlV2 eventReady{
+      .hasOutput = 1u, .dataSize = 4u, .issueCycle = 1u};
+  check(validateRenderTape(makeTape(event, false, true, eventReady), catalogue).valid(),
+        "Event END-only cycle preserves public size without undefined writes");
+  eventReady.definedBytes = 4u;
+  check(validateRenderTape(makeTape(event, false, true, eventReady), catalogue).status ==
+            RenderTapeValidationStatus::InvalidQueryTranscript,
+        "Event cannot claim a result write absent from production contract");
+
+  RenderTapeQueryDescriptorV2 decodedDescriptor{};
+  auto unsupported = occlusion;
+  unsupported.type = 99u;
+  check(!renderTapeLoadQueryDescriptorV2(std::as_bytes(std::span(&unsupported, 1u)),
+                                        decodedDescriptor),
+        "unsupported type cannot be truncated into an eight-byte transcript");
+  RenderTapeQueryCycleState cycle{.type = 9u, .issueCycle = 41u, .active = true};
+  const auto initial = cycle;
+  check(!renderTapeAdvanceQueryCycle(cycle, 1u, true) &&
+        cycle.issueCycle == initial.issueCycle && cycle.active,
+        "captured END of prearm active scope rejects without changing state");
+  check(renderTapeAdvanceQueryCycle(cycle, 2u, true) &&
+        cycle.issueCycle == 42u && cycle.capturedCycle,
+        "replacement BEGIN establishes captured scope authority");
+  cycle.issueCycle = std::numeric_limits<std::uint64_t>::max();
+  check(!renderTapeAdvanceQueryCycle(cycle, 2u, true),
+        "issue-cycle overflow fails closed");
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
@@ -2737,6 +2925,7 @@ int main(int argc, char** argv) {
     textureSurfaceWrapperLifetimeIsIdempotent();
     gammaRampBootstrapAndOrderedMutationAreTyped();
     bufferMutationDispositionIsTypedAndBackwardCompatible();
+    queryTranscriptV2PreservesCallsAndRejectsStaleCycles();
     invalidInputsFailBeforeCallbacks();
     boundedCaptureReplayRefinementIsExhaustive();
     wholeEventReductionIsCanonicalAndFailClosed();

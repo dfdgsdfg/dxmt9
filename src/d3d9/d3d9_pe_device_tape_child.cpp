@@ -299,6 +299,99 @@ void D3D9DeviceImpl::NotifyRenderTapeLinearMutationForChild(
     }
 }
 
+void D3D9DeviceImpl::NotifyRenderTapeVolumeLockForChild(
+    const dxmt9::d3d9::pe::PeWireObjectRef &object,
+    std::uint32_t subresource, std::uint32_t flags) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
+    if (!peCaptureState_)
+        return;
+    auto *entry = findRenderTapeObject(object);
+    if (!object.valid(D9C_CHUNK_HANDLE_KIND_TEXTURE) || !entry ||
+        subresource >= entry->volumeLocks.size() ||
+        !entry->volumeLocks[subresource].begin(
+            (flags & D3DLOCK_READONLY) != 0u)) {
+        RejectRenderTapeCaptureForChild(
+            dxmt9::d3d9::RenderTapeCaptureRejectionReason::InvalidLockIdentity,
+            object, subresource, {});
+    }
+}
+
+bool D3D9DeviceImpl::FinishRenderTapeVolumeLockForChild(
+    const dxmt9::d3d9::pe::PeWireObjectRef &object,
+    std::uint32_t subresource, bool unlockSucceeded,
+    bool &writable) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
+    writable = false;
+    if (!peCaptureState_)
+        return false;
+    auto *entry = findRenderTapeObject(object);
+    if (!object.valid(D9C_CHUNK_HANDLE_KIND_TEXTURE) || !entry ||
+        subresource >= entry->volumeLocks.size()) {
+        RejectRenderTapeCaptureForChild(
+            dxmt9::d3d9::RenderTapeCaptureRejectionReason::InvalidLockIdentity,
+            object, subresource, {});
+        return false;
+    }
+    auto &state = entry->volumeLocks[subresource];
+    if (!unlockSucceeded) {
+        // The application's failed unlock does not consume the lock's intent.
+        // It remains visible to the arm guard and a subsequent real unlock.
+        if (state.active) {
+            RejectRenderTapeCaptureForChild(
+                dxmt9::d3d9::RenderTapeCaptureRejectionReason::FullSnapshotUnlockFailed,
+                object, subresource, {});
+        }
+        return false;
+    }
+    if (!state.take(writable)) {
+        RejectRenderTapeCaptureForChild(
+            dxmt9::d3d9::RenderTapeCaptureRejectionReason::InvalidLockIdentity,
+            object, subresource, {});
+        return false;
+    }
+    return true;
+}
+
+void D3D9DeviceImpl::NotifyRenderTapeVolumeSnapshotForChild(
+    const dxmt9::d3d9::pe::PeWireObjectRef &object,
+    std::uint32_t subresource,
+    const dxmt9::d3d9::RenderTapeVolumeLockLayout &layout,
+    std::span<const std::byte> bytes, bool writable) noexcept {
+    assertRecorderThreadConfined();
+    PeRecorderGuard recorderLock(recorderState_.recorderMutex, recorderState_.recorderLockRequired);
+    if (!peCaptureState_)
+        return;
+    const auto status =
+        recordRenderTapeVolumeBytes(object, subresource, layout, bytes);
+    if (status != dxmt9::d3d9::RenderTapeBlockMutationStatus::Accepted) {
+        D9CSurfaceDesc desc{};
+        const auto *entry = findRenderTapeObject(object);
+        if (entry)
+            (void)renderTapeObjectSubresourceDesc(*entry, object, subresource, desc);
+        RejectRenderTapeCaptureForChild(
+            status == dxmt9::d3d9::RenderTapeBlockMutationStatus::AllocationFailed
+                ? dxmt9::d3d9::RenderTapeCaptureRejectionReason::LockCopyFailed
+                : dxmt9::d3d9::RenderTapeCaptureRejectionReason::DescriptorMismatch,
+            object, subresource,
+            {.format = desc.format, .width = desc.width, .height = desc.height,
+             .pitch = static_cast<std::int32_t>(layout.pitch),
+             .bytes = bytes.size()});
+        return;
+    }
+    // A read-only unlock can establish a real initial seed but is not a CPU
+    // write. In particular it must not create a replay mutation transition.
+    if (!writable || !IsRenderTapeCaptureActiveForChild() ||
+        !renderTapeObjectAdmitted(object.identity)) {
+        return;
+    }
+    if (!appendRenderTapeUnlockMutation(object, subresource,
+                                        "volume_resource_mutation")) {
+        abortRenderTapeCapture("volume_resource_mutation");
+    }
+}
+
 void D3D9DeviceImpl::NotifyRenderTapeSurfaceAliasForChild(
     const dxmt9::d3d9::pe::PeWireObjectRef &surface,
     const dxmt9::d3d9::pe::PeWireObjectRef &parentTexture,
@@ -634,6 +727,30 @@ void D3D9DeviceImpl::NotifyRenderTapeOrderedControlForChild(
         return;
     }
     auto recorded = fixed;
+    dxmt9::d3d9::RenderTapeQueryGetDataControlV2 queryControl{};
+    if (fixed.kind == static_cast<std::uint32_t>(
+                          dxmt9::d3d9::RenderTapeControlKind::QueryGetData)) {
+        const auto query = std::find_if(
+            peCaptureState_->renderTapeRegistry.objects.begin(),
+            peCaptureState_->renderTapeRegistry.objects.end(),
+            [&](const auto &entry) {
+                return renderTapeSameIdentity(entry.identity, fixed.identity);
+            });
+        if (query == peCaptureState_->renderTapeRegistry.objects.end() ||
+            payload.size() != sizeof(queryControl) ||
+            (query->query.issueCycle != 0u && !query->query.capturedCycle)) {
+            dxmt9DeviceInfoLog(
+                "render_tape_capture query rejected reason=query_uncaptured_cycle "
+                "kind=%u generation=%u object_id=%llu",
+                fixed.identity.kind, fixed.identity.generation,
+                static_cast<unsigned long long>(fixed.identity.objectId));
+            abortRenderTapeCapture("query_uncaptured_cycle");
+            return;
+        }
+        std::memcpy(&queryControl, payload.data(), sizeof(queryControl));
+        queryControl.issueCycle = query->query.issueCycle;
+        payload = std::as_bytes(std::span(&queryControl, 1u));
+    }
     recorded.completionOrdinal = ++peCaptureState_->renderTapeCompletionOrdinal;
     if (peCaptureState_->renderTapeCapture.orderedControl(recorded, payload) !=
         dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
@@ -795,9 +912,11 @@ void D3D9DeviceImpl::notifyRenderTapeCreatedQuery(
         AbortRenderTapeCaptureForChild();
         return;
     }
-    const RenderTapeQueryDescriptor descriptor{
-        dxmt9c_query_get_type(query), dxmt9c_query_get_data_size(query)};
-    if (descriptor.dataBytes == 0u) {
+    const dxmt9::d3d9::RenderTapeQueryDescriptorV2 descriptor{
+        .type = dxmt9c_query_get_type(query),
+        .dataBytes = dxmt9c_query_get_data_size(query)};
+    if (descriptor.dataBytes == 0u ||
+        descriptor.dataBytes != dxmt9::d3d9::renderTapeQueryDataBytes(descriptor.type)) {
         AbortRenderTapeCaptureForChild();
         return;
     }
@@ -806,6 +925,8 @@ void D3D9DeviceImpl::notifyRenderTapeCreatedQuery(
         std::span<const std::byte>(
             reinterpret_cast<const std::byte *>(&descriptor),
             sizeof(descriptor)));
+    if (auto *entry = findRenderTapeObject(object))
+        entry->query.type = descriptor.type;
 }
 
 void D3D9DeviceImpl::notifyRenderTapeCreatedShader(

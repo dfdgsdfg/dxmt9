@@ -1,4 +1,5 @@
 #include "device_c_render_tape.hpp"
+#include "device_c_render_tape_capture.hpp"
 #include "device_c_render_tape_projection.hpp"
 #include "device_c_render_tape_policy.hpp"
 #include "device_c_render_tape_cpu_window.hpp"
@@ -92,6 +93,95 @@ void writeFile(const char* path, std::span<const std::byte> bytes) {
 
 class InspectSink final : public RenderTapeReplaySink {
 public:
+  struct QueryDefinitionInspection {
+    std::uint32_t event = 0u;
+    D9CWireObjectIdentity identity{};
+    RenderTapeQueryDescriptorV2 descriptor{};
+    RenderTapeQueryCycleState cycle{};
+    bool versioned = false;
+  };
+  struct QueryIssueInspection {
+    std::uint32_t event = 0u;
+    std::uint32_t record = 0u;
+    D9CWireObjectIdentity identity{};
+    std::uint32_t flags = 0u;
+    std::uint64_t issueCycle = 0u;
+  };
+  struct QueryPollInspection {
+    std::uint32_t event = 0u;
+    RenderTapeOrderedControlHeader header{};
+    RenderTapeQueryGetDataControlV2 control{};
+    bool versioned = false;
+  };
+
+  bool collectQueryInspection(const ImportedRenderTapeView& tape) {
+    queryDefinitions.reserve(tape.events.size());
+    queryPolls.reserve(tape.events.size());
+    for (std::size_t index = 0u; index < tape.events.size(); ++index) {
+      const auto event = tape.event(index);
+      const auto ordinal = static_cast<std::uint32_t>(index + 1u);
+      const auto type = static_cast<RenderTapeEventType>(event.header.type);
+      if (type == RenderTapeEventType::ObjectDefine) {
+        RenderTapeObjectDefineHeader fixed{};
+        if (event.payload.size() < sizeof(fixed)) return false;
+        std::memcpy(&fixed, event.payload.data(), sizeof(fixed));
+        if (fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_QUERY) continue;
+        QueryDefinitionInspection row{.event = ordinal, .identity = fixed.identity};
+        row.versioned = renderTapeLoadQueryDescriptorV2(
+            event.payload.subspan(sizeof(fixed)), row.descriptor);
+        if (row.versioned) {
+          row.cycle.type = row.descriptor.type;
+          row.cycle.issueCycle = row.descriptor.initialIssueCycle;
+        }
+        queryTranscriptComplete &= row.versioned;
+        queryDefinitions.push_back(row);
+      } else if (type == RenderTapeEventType::CommandChunk) {
+        RenderTapeCommandChunkHeader fixed{};
+        if (event.payload.size() < sizeof(fixed)) return false;
+        std::memcpy(&fixed, event.payload.data(), sizeof(fixed));
+        ImportedChunkView chunk;
+        if (!validateCommandChunk(event.payload.subspan(sizeof(fixed)),
+            {.version = fixed.wireVersion, .recordCount = fixed.recordCount,
+             .handleCount = fixed.handleCount}, &chunk).valid()) return false;
+        for (std::size_t recordIndex = 0u; recordIndex < chunk.records.size(); ++recordIndex) {
+          const auto record = chunk.record(recordIndex);
+          if (record.header.type != D9C_COMMAND_RECORD_QUERY_ISSUE) continue;
+          D9CCommandChunkWireQueryIssue issue{};
+          if (record.payload.size() != sizeof(issue)) return false;
+          std::memcpy(&issue, record.payload.data(), sizeof(issue));
+          if (issue.queryHandleIndex >= chunk.handles.size()) return false;
+          const auto& handle = chunk.handles[issue.queryHandleIndex];
+          const D9CWireObjectIdentity identity{.kind = handle.kind,
+              .generation = handle.generation, .objectId = handle.objectId};
+          auto definition = std::find_if(queryDefinitions.begin(), queryDefinitions.end(),
+              [&](const auto& row) { return row.identity.kind == identity.kind &&
+                  row.identity.generation == identity.generation &&
+                  row.identity.objectId == identity.objectId; });
+          if (definition == queryDefinitions.end()) return false;
+          if (definition->versioned &&
+              !renderTapeAdvanceQueryCycle(definition->cycle, issue.flags, true)) return false;
+          queryIssues.push_back({.event = ordinal,
+              .record = static_cast<std::uint32_t>(recordIndex), .identity = identity,
+              .flags = issue.flags, .issueCycle = definition->cycle.issueCycle});
+        }
+      } else if (type == RenderTapeEventType::OrderedControl) {
+        RenderTapeOrderedControlHeader fixed{};
+        if (event.payload.size() < sizeof(fixed)) return false;
+        std::memcpy(&fixed, event.payload.data(), sizeof(fixed));
+        if (fixed.kind != static_cast<std::uint32_t>(RenderTapeControlKind::QueryGetData)) continue;
+        QueryPollInspection row{.event = ordinal, .header = fixed};
+        row.versioned = event.payload.size() == sizeof(fixed) + sizeof(row.control);
+        if (row.versioned) {
+          std::memcpy(&row.control, event.payload.data() + sizeof(fixed), sizeof(row.control));
+          row.versioned = row.control.schemaVersion == kRenderTapeQueryTranscriptVersion2;
+        }
+        queryTranscriptComplete &= row.versioned;
+        queryPolls.push_back(row);
+      }
+    }
+    return true;
+  }
+
   struct BufferDefinitionInspection {
     std::uint32_t event = 0u;
     D9CWireObjectIdentity identity{};
@@ -332,6 +422,10 @@ public:
   std::vector<BufferDefinitionInspection> bufferDefinitions{};
   std::vector<BufferMutationInspection> bufferMutations{};
   std::vector<BufferDestroyInspection> bufferDestroys{};
+  bool queryTranscriptComplete = true;
+  std::vector<QueryDefinitionInspection> queryDefinitions{};
+  std::vector<QueryIssueInspection> queryIssues{};
+  std::vector<QueryPollInspection> queryPolls{};
 };
 
 template <std::size_t N>
@@ -437,6 +531,17 @@ std::string encodeDigest(const RenderTapeDigest& digest) {
     text.push_back(digits[value & 0xfu]);
   }
   return text;
+}
+
+std::string encodeQueryBytes(std::span<const std::byte> bytes) {
+  constexpr char digits[] = "0123456789abcdef";
+  std::string result;
+  for (const auto value : bytes) {
+    const auto byte = std::to_integer<unsigned>(value);
+    result.push_back(digits[byte >> 4u]);
+    result.push_back(digits[byte & 0xfu]);
+  }
+  return result;
 }
 
 void appendVerifiedBlob(RenderTapeBlobCatalogue& catalogue,
@@ -1059,6 +1164,9 @@ int main(int argc, char** argv) {
       throw std::runtime_error(
           "validated render tape buffer inspection could not be imported");
     }
+    if (!sink.collectQueryInspection(tape)) {
+      throw std::runtime_error("validated render tape query inspection could not be imported");
+    }
     const auto replay = replayPrevalidatedRenderTape(tape, catalogue, sink);
     if (!replay.complete) {
       std::cerr << "render tape inspect replay failed event="
@@ -1068,7 +1176,8 @@ int main(int argc, char** argv) {
     std::cout << "{\"schema\":\"dxmt9.render_tape.v2\","
                  "\"profile\":\""
               << renderTapeProfileName(tape.header.profile)
-              << "\",\"valid\":true,"
+              << "\",\"valid\":true,\"events_sha256\":\""
+              << encodeDigest(RenderTapeCaptureSession::sha256(bytes)) << "\","
                  "\"events\":"
               << sink.events
               << ",\"bootstraps\":" << sink.bootstraps
@@ -1128,7 +1237,53 @@ int main(int argc, char** argv) {
       writeInspectionIdentity(std::cout, destroy.identity);
       std::cout << '}';
     }
-    std::cout << "],\"command_event_indices\":[";
+    std::cout << "],\"query_transcript\":{\"schema\":\"dxmt9.render_tape.query_transcript.v2\","
+                 "\"complete\":" << (sink.queryTranscriptComplete ? "true" : "false")
+              << ",\"query_definitions\":" << sink.queryDefinitions.size()
+              << ",\"issue_records\":" << sink.queryIssues.size()
+              << ",\"recorded_polls\":" << sink.queryPolls.size()
+              << ",\"definitions\":[";
+    for (std::size_t index = 0u; index < sink.queryDefinitions.size(); ++index) {
+      if (index) std::cout << ',';
+      const auto& row = sink.queryDefinitions[index];
+      std::cout << "{\"event_ordinal\":" << row.event << ",\"identity\":";
+      writeInspectionIdentity(std::cout, row.identity);
+      std::cout << ",\"versioned\":" << (row.versioned ? "true" : "false")
+                << ",\"type\":" << row.descriptor.type
+                << ",\"data_bytes\":" << row.descriptor.dataBytes
+                << ",\"initial_state\":" << row.descriptor.initialState
+                << ",\"initial_issue_cycle\":" << row.descriptor.initialIssueCycle << '}';
+    }
+    std::cout << "],\"issues\":[";
+    for (std::size_t index = 0u; index < sink.queryIssues.size(); ++index) {
+      if (index) std::cout << ',';
+      const auto& row = sink.queryIssues[index];
+      std::cout << "{\"event_ordinal\":" << row.event << ",\"record_index\":"
+                << row.record << ",\"identity\":";
+      writeInspectionIdentity(std::cout, row.identity);
+      std::cout << ",\"flags\":" << row.flags << ",\"issue_cycle\":" << row.issueCycle << '}';
+    }
+    std::cout << "],\"polls\":[";
+    for (std::size_t index = 0u; index < sink.queryPolls.size(); ++index) {
+      if (index) std::cout << ',';
+      const auto& row = sink.queryPolls[index];
+      std::cout << "{\"event_index\":" << row.event - 1u
+                << ",\"event_ordinal\":" << row.event << ",\"identity\":";
+      writeInspectionIdentity(std::cout, row.header.identity);
+      std::cout << ",\"versioned\":" << (row.versioned ? "true" : "false")
+                << ",\"issue_cycle\":" << row.control.issueCycle
+                << ",\"flags\":" << row.control.flags
+                << ",\"has_output\":" << (row.control.hasOutput ? "true" : "false")
+                << ",\"data_size\":" << row.control.dataSize
+                << ",\"captured_result\":" << row.header.resultCode
+                << ",\"captured_disposition\":" << row.header.disposition
+                << ",\"captured_completion_ordinal\":" << row.header.completionOrdinal
+                << ",\"defined_bytes\":" << row.control.definedBytes
+                << ",\"captured_hex\":\"" << encodeQueryBytes(std::span(row.control.result).first(
+                       std::min<std::size_t>(row.control.definedBytes, row.control.result.size())))
+                << "\"}";
+    }
+    std::cout << "]},\"command_event_indices\":[";
     for (std::size_t i = 0u; i < commandEventIndices.size(); ++i) {
       if (i != 0u) std::cout << ',';
       std::cout << commandEventIndices[i];

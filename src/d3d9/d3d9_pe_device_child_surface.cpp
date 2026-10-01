@@ -43,6 +43,7 @@ static_assert(rt_format::A8 == D3DFMT_A8);
 static_assert(rt_format::A8B8G8R8 == D3DFMT_A8B8G8R8);
 static_assert(rt_format::X8B8G8R8 == D3DFMT_X8B8G8R8);
 static_assert(rt_format::A16B16G16R16 == D3DFMT_A16B16G16R16);
+static_assert(rt_format::A32B32G32R32F == D3DFMT_A32B32G32R32F);
 static_assert(rt_format::A8P8 == D3DFMT_A8P8);
 static_assert(rt_format::P8 == D3DFMT_P8);
 static_assert(rt_format::L8 == D3DFMT_L8);
@@ -647,6 +648,113 @@ static uint32_t formatBytesPerPixel(uint32_t fmt) {
   if (FAILED(flushHr))
     return flushHr;
   return hr32(dxmt9c_texture_unlock_rect(texture, level));
+}
+
+// Both Volume and VolumeTexture wrappers route through the exact owning
+// texture generation/mip. Keep only the lock's read/write intent in the cold
+// device registry: wrapper-local pBits/box state is not authoritative when a
+// different wrapper performs UnlockBox. After the real unlock succeeds, one
+// full same-owner lock supplies every byte, including untouched slices of a
+// first partial write. No synthetic padding becomes a complete seed.
+static void captureRenderTapeVolumeAfterUnlock(
+    D3D9PeSurfaceTextureContext *recorder, D9CTexture *texture,
+    const dxmt9::d3d9::pe::PeWireObjectRef &object, std::uint32_t subresource,
+    HRESULT userUnlockHr) noexcept {
+  if (!recorder)
+    return;
+  bool writable = false;
+  if (!recorder->FinishRenderTapeVolumeLockForChild(
+          object, subresource, SUCCEEDED(userUnlockHr), writable)) {
+    return;
+  }
+  using Reason = dxmt9::d3d9::RenderTapeCaptureRejectionReason;
+  D9CSurfaceDesc desc{};
+  D9CWireObjectIdentity identity{};
+  if (!texture || object.object != texture ||
+      !object.valid(D9C_CHUNK_HANDLE_KIND_TEXTURE) ||
+      FAILED(hr32(dxmt9c_texture_get_wire_identity(texture, &identity))) ||
+      !renderTapeIdentityMatches(object, identity) ||
+      FAILED(textureLevelDesc(texture, subresource, &desc))) {
+    rejectRenderTapeFullSnapshot(
+        recorder, Reason::FullSnapshotIdentityMismatch, object, subresource,
+        desc, 0);
+    return;
+  }
+  dxmt9::d3d9::RenderTapeVolumeLockLayout canonical{};
+  const auto contentStatus =
+      dxmt9::d3d9::renderTapeVolumeContentLayout(desc, canonical);
+  if (contentStatus != dxmt9::d3d9::RenderTapeVolumeLayoutStatus::Accepted) {
+    rejectRenderTapeFullSnapshot(
+        recorder,
+        contentStatus == dxmt9::d3d9::RenderTapeVolumeLayoutStatus::UnsupportedFormat
+            ? Reason::UnsupportedLockFormat
+            : contentStatus == dxmt9::d3d9::RenderTapeVolumeLayoutStatus::Overflow
+                  ? Reason::LockLayoutOverflow
+                  : Reason::FullSnapshotExtentMismatch,
+        object, subresource, desc, 0);
+    return;
+  }
+  D9CLockedRect locked{};
+  const HRESULT lockHr = hr32(dxmt9c_texture_lock_rect(
+      texture, subresource, &locked, nullptr, D3DLOCK_READONLY));
+  if (FAILED(lockHr)) {
+    rejectRenderTapeFullSnapshot(
+        recorder, Reason::FullSnapshotLockFailed, object, subresource, desc,
+        locked.pitch);
+    return;
+  }
+
+  // The C provider's native core storage is packed; WoW64 compressed
+  // multi-slice locks are explicitly shadowed even for a low native address
+  // so the PE32 result always has the exposed logical-height slice stride.
+  // The public LockBox SlicePitch is not a valid native compressed stride.
+#ifdef _WIN64
+  const auto slicePitch = static_cast<std::int64_t>(canonical.fullSliceBytes);
+#else
+  const auto slicePitch = static_cast<std::int64_t>(locked.pitch) * desc.height;
+#endif
+  dxmt9::d3d9::RenderTapeVolumeLockLayout layout{};
+  std::vector<std::byte> tight;
+  const auto layoutStatus = dxmt9::d3d9::renderTapeVolumeLockLayout(
+      desc, locked.pitch, slicePitch, nullptr, layout);
+  const bool copied =
+      layoutStatus == dxmt9::d3d9::RenderTapeVolumeLayoutStatus::Accepted &&
+      layout.fullSubresource && layout.fullBytes == canonical.fullBytes &&
+      dxmt9::d3d9::copyRenderTapeVolumeRows(locked.bits, layout, tight) &&
+      tight.size() == canonical.fullBytes;
+  // Always pair a successful internal lock, including layout/copy failures.
+  const HRESULT unlockHr =
+      hr32(dxmt9c_texture_unlock_rect(texture, subresource));
+  if (FAILED(unlockHr)) {
+    rejectRenderTapeFullSnapshot(
+        recorder, Reason::FullSnapshotUnlockFailed, object, subresource, desc,
+        locked.pitch, tight.size());
+    return;
+  }
+  if (!copied) {
+    dxmt9DeviceInfoLog(
+        "render_tape_capture volume_snapshot rejected layout_status=%u "
+        "kind=%u generation=%u object_id=%llu subresource=%u depth=%u "
+        "slice_pitch=%lld expected_bytes=%llu copied_bytes=%zu",
+        static_cast<unsigned>(layoutStatus), object.identity.kind,
+        object.identity.generation,
+        static_cast<unsigned long long>(object.identity.objectId), subresource,
+        desc.depth, static_cast<long long>(slicePitch),
+        static_cast<unsigned long long>(canonical.fullBytes), tight.size());
+    rejectRenderTapeFullSnapshot(
+        recorder,
+        layoutStatus == dxmt9::d3d9::RenderTapeVolumeLayoutStatus::Accepted
+            ? Reason::FullSnapshotCopyFailed
+            : layoutStatus == dxmt9::d3d9::RenderTapeVolumeLayoutStatus::InvalidPitch
+                  ? Reason::InvalidLockPitch
+                  : layoutStatus == dxmt9::d3d9::RenderTapeVolumeLayoutStatus::Overflow
+                        ? Reason::LockLayoutOverflow
+                        : Reason::FullSnapshotExtentMismatch,
+        object, subresource, desc, locked.pitch, tight.size());
+    return;
+  }
+  recorder->NotifyRenderTapeVolumeSnapshotForChild(
+      object, subresource, layout, tight, writable);
 }
 
 static bool loadSurfaceDesc(D9CSurface *surface, D9CSurfaceDesc &desc) {
@@ -2704,14 +2812,19 @@ class D3D9VolumeImpl final : public IDirect3DVolume9 {
   D3D9PeDiagnosticObserver *diagnostics_;
   UINT level_;
   bool defaultPoolTracked_ = false;
+  bool captureTrackingEnabled_ = false;
+  dxmt9::d3d9::pe::TextureRef wireObject_{};
   dxmt9::util::ComPrivateData privateData_{};
 
 public:
   D3D9VolumeImpl(D9CTexture *t, IDirect3DDevice9 *device, IUnknown *container,
                  D3D9PeSurfaceTextureContext *recorder,
-                 D3D9PeDiagnosticObserver *diagnostics, UINT level)
+                 D3D9PeDiagnosticObserver *diagnostics, UINT level,
+                 const dxmt9::d3d9::pe::TextureRef &ownerWireObject)
       : t_(t), device_(device), container_(container), context_(recorder),
-        diagnostics_(diagnostics), level_(level) {
+        diagnostics_(diagnostics), level_(level), wireObject_(ownerWireObject) {
+    captureTrackingEnabled_ = context_ &&
+        context_->IsRenderTapeCaptureTrackingEnabledForChild();
     if (t_)
       dxmt9c_texture_addref(t_);
     if (device_)
@@ -2814,13 +2927,15 @@ public:
       diagnostics_->notifyFirstCallAfterPresent(
           "Volume::LockBox", DXMT9_PE_CALLSITE_PC());
     const HRESULT hr = lockTextureBox(t_, level_, locked, box, flags, context_);
-    if (SUCCEEDED(hr) && context_ &&
-        context_->IsRenderTapeCaptureTrackingEnabledForChild())
-      context_->AbortRenderTapeCaptureForChild();
+    if (SUCCEEDED(hr) && captureTrackingEnabled_)
+      context_->NotifyRenderTapeVolumeLockForChild(wireObject_, level_, flags);
     return hr;
   }
   HRESULT STDMETHODCALLTYPE UnlockBox() noexcept override {
-    return unlockTextureBox(t_, level_, context_);
+    const HRESULT hr = unlockTextureBox(t_, level_, context_);
+    if (captureTrackingEnabled_)
+      captureRenderTapeVolumeAfterUnlock(context_, t_, wireObject_, level_, hr);
+    return hr;
   }
 };
 
@@ -2836,6 +2951,7 @@ class D3D9VolumeTextureImpl final : public IDirect3DVolumeTexture9 {
   DWORD lod_ = 0;
   D3DTEXTUREFILTERTYPE autoGenFilter_ = D3DTEXF_LINEAR;
   bool defaultPoolTracked_ = false;
+  bool captureTrackingEnabled_ = false;
   dxmt9::d3d9::pe::TextureRef wireObject_{};
   DWORD priorityShadow_ = 0;
   dxmt9::util::ComPrivateData privateData_{};
@@ -2847,6 +2963,8 @@ public:
                         D3D9PeDiagnosticObserver *diagnostics = nullptr)
       : t_(t), device_(device), context_(recorder),
         diagnostics_(diagnostics), autogenState_(t) {
+    captureTrackingEnabled_ = context_ &&
+        context_->IsRenderTapeCaptureTrackingEnabledForChild();
     if (device_)
       device_->AddRef();
     dxmt9::d3d9::pe::cacheWireObjectRef(
@@ -3020,7 +3138,7 @@ public:
       return finishPeCall(D3DERR_INVALIDCALL);
     *ppVolume = peNewNoexcept<D3D9VolumeImpl>(t_, device_,
                        static_cast<IDirect3DBaseTexture9 *>(this), context_,
-                       diagnostics_, level);
+                       diagnostics_, level, wireObject_);
     if (!*ppVolume)
       return finishPeCall(E_OUTOFMEMORY);
     return finishPeCall(S_OK);
@@ -3054,9 +3172,8 @@ public:
       }
     }
     const HRESULT hr = lockTextureBox(t_, level, locked, box, flags, context_);
-    if (SUCCEEDED(hr) && context_ &&
-        context_->IsRenderTapeCaptureTrackingEnabledForChild())
-      context_->AbortRenderTapeCaptureForChild();
+    if (SUCCEEDED(hr) && captureTrackingEnabled_)
+      context_->NotifyRenderTapeVolumeLockForChild(wireObject_, level, flags);
     return hr;
   }
   HRESULT STDMETHODCALLTYPE UnlockBox(UINT level) noexcept override {
@@ -3065,6 +3182,8 @@ public:
     const HRESULT hr = unlockTextureBox(t_, level, context_);
     if (SUCCEEDED(hr) && level == 0u)
       autogenState_.markDirty();
+    if (captureTrackingEnabled_)
+      captureRenderTapeVolumeAfterUnlock(context_, t_, wireObject_, level, hr);
     return hr;
   }
   HRESULT STDMETHODCALLTYPE AddDirtyBox(const D3DBOX *) noexcept override {

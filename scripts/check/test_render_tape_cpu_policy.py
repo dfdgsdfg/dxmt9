@@ -28,6 +28,7 @@ def _inspection():
         "schema": "dxmt9.render_tape.v2", "valid": True,
         "events": 1, "objects": 1, "mutations": 0, "chunks": 1,
         "records": 1, "draws": 1, "record_types": {"generate_mipmaps": 0},
+        "grammar": {"descriptor_kinds": {}, "record_types": {}, "control_kinds": {}},
         "event_types": [5],
     }
 
@@ -120,6 +121,101 @@ def _artifact(result, *, accepted, image_path):
     }
 
 
+def _query_native(module, policy, *, foreign_second_cycle=False):
+    """Two Ready boundaries with identical aggregate drain accounting."""
+    path = pathlib.Path(__file__).with_name("test_render_tape_query_receipts.py")
+    spec = importlib.util.spec_from_file_location("cpu_policy_query_fixture", path)
+    assert spec and spec.loader
+    fixture_module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fixture_module)
+    inspection, query = fixture_module.fixture(metal=False)
+    identity = inspection["query_transcript"]["definitions"][0]["identity"]
+    second_identity = ({**identity, "object_id": "43"}
+                       if foreign_second_cycle else identity)
+    inspection.update(events=22, objects=11, mutations=0, chunks=6, records=6, draws=2,
+                      event_types=[2] * 11 + [5, 5, 5, 6, 6, 5, 5, 6, 3, 5, 7],
+                      cpu_window_plan={"sources": [
+                          {"event": event, "record_count": 1}
+                          for event in (12, 13, 14, 17, 18, 21)]})
+    transcript = inspection["query_transcript"]
+    definition = transcript["definitions"][0]
+    if foreign_second_cycle:
+        transcript["definitions"].append({**definition, "event_ordinal": 2,
+                                          "identity": second_identity})
+    definitions = len(transcript["definitions"])
+    inspection["grammar"]["descriptor_kinds"]["query"] = definitions
+    inspection["grammar"]["record_types"]["query_issue"] = 4
+    inspection["grammar"]["control_kinds"]["query_get_data"] = 3
+    transcript.update(query_definitions=definitions, issue_records=4, recorded_polls=3,
+                      issues=[{"event_ordinal": event, "record_index": 0,
+                               "identity": issue_identity, "flags": flags,
+                               "issue_cycle": cycle}
+                              for event, flags, cycle, issue_identity in (
+                                  (12, 2, 1, identity), (14, 1, 1, identity),
+                                  (17, 2, 2, second_identity), (18, 1, 2, second_identity))])
+    ready = transcript["polls"][0]
+    ready.update(event_index=15, event_ordinal=16, issue_cycle=1)
+    pending = {**copy.deepcopy(ready), "event_index": 14, "event_ordinal": 15,
+               "captured_result": 1, "captured_disposition": 2,
+               "defined_bytes": 0, "captured_hex": ""}
+    second = {**copy.deepcopy(ready), "event_index": 18, "event_ordinal": 19,
+              "identity": second_identity, "issue_cycle": 2}
+    transcript["polls"] = [pending, ready, second]
+    first_row = query["rows"][0]
+    first_row.update(event_index=15, event_ordinal=16, issue_cycle=1,
+                     local_issue_ordinal=2, local_sequence=1, local_initializer=0,
+                     completed_sequence=1, completed_initializer=0)
+    pending_row = {**copy.deepcopy(first_row), **pending,
+                   "replay_result": 1, "oracle_result": 1, "replay_hex": "",
+                   "oracle_polls": 0, "result_required": False,
+                   "readiness_satisfied": False, "result_substituted": False,
+                   "supplemental": False, "completed_sequence": 0}
+    second_row = {**copy.deepcopy(first_row), **second, "replay_result": 0,
+                  "oracle_polls": 0, "supplemental": False,
+                  "local_issue_ordinal": 4,
+                  "local_query_identity": 100 if foreign_second_cycle else 99}
+    query.update(query_definitions=definitions, issue_records=4, replayed_issue_records=4,
+                 recorded_polls=3, replayed_polls=3, captured_pending=1, captured_ready=2,
+                 replay_pending=2, replay_ready=1, required_results=2,
+                 readiness_required=2, readiness_satisfied=2, substituted_results=2,
+                 supplemental_drains=1, rows=[pending_row, first_row, second_row])
+    verification = _native(module, policy)
+    verification.update(completion="controlled-query-ready-obligation",
+                        requested_completion="after-command",
+                        input_counts={key: inspection[key] for key in (
+                            "events", "objects", "mutations", "chunks", "records", "draws")})
+    verification["input_counts"].update(query_definitions=definitions,
+                                        query_issues=4, query_polls=3)
+    for row in verification["iterations"]:
+        trace = row["trace"][0]
+        trace.update(first_event=13, last_event=13, event=13, released_at_event=16)
+        next_trace = {**copy.deepcopy(trace), "submission": 2, "source_generation": 2,
+                      "storage_generation": 2, "event_submission": 2,
+                      "first_event": 21, "last_event": 21, "event": 21,
+                      "released_at_event": 22}
+        row.update(query_replay=copy.deepcopy(query), query_semantic_digest="21",
+                   command_count=6, draw_count=2, resources_created=11, resources_released=11,
+                   submitted=2, completed=2, reclaimed=2, deferred_releases=2,
+                   source_summary_commands=6, source_summary_draws=2,
+                   direct_draws=2 if policy["replay_route"] == "production-slot" else 0,
+                   compatibility_draws=2 if policy["replay_route"] == "compatibility" else 0,
+                   trace=[trace, next_trace], draw_observations=[
+                       {"ordinal": ordinal, "publication_event": event,
+                        "cumulative_semantic_digest": "11"}
+                       for ordinal, event in ((1, 13), (2, 21))])
+    measurement = copy.deepcopy(verification)
+    measurement.update(run_mode="measure", phase_accounting="iteration-only")
+    for row in measurement["iterations"]:
+        row.update(full_oracle_calls=0, semantic_digest="0", draw_observations=[],
+                   logical_resource_oracle_complete=False, buffer_backing_oracle_complete=False,
+                   buffer_backing_observed=False, buffer_snapshot_observations=0,
+                   buffer_live_binding_observations=0, buffer_binding_observations=0,
+                   query_semantic_digest="0", phase_ns={key: 0 for key in row["phase_ns"]})
+        row["query_replay"].update(mode="measurement", rows=[], transcript_wall_ns=0,
+                                    oracle_wall_ns=0, events_sha256=inspection["events_sha256"])
+    return inspection, verification, measurement
+
+
 def main() -> int:
     module = _load()
     compatibility = module.default_policy("compatibility")
@@ -148,6 +244,28 @@ def main() -> int:
         verified = _native(module, batch4, repeat=2)
         assert module.verify_receipt(
             verified, batch4, repeat=2, input_inspection=inspection)[0]
+        query = copy.deepcopy(verified)
+        query.update(completion="controlled-query-ready-obligation",
+                     requested_completion="after-command")
+        query["input_counts"]["query_definitions"] = 1
+        for row in query["iterations"]:
+            row.update(query_replay={"present": True}, query_semantic_digest="21")
+        assert module._basic_result_shape(
+            query, batch4, repeat=2, measurement=False)[0]
+        for requested in (None, "before-next-work", True):
+            broken = copy.deepcopy(query)
+            broken["requested_completion"] = requested
+            assert not module._basic_result_shape(
+                broken, batch4, repeat=2, measurement=False)[0]
+        assert module.compare_verification(query, query, repeat=2)["accepted"]
+        stale_query = copy.deepcopy(query)
+        stale_query["iterations"][0]["query_semantic_digest"] = "22"
+        query_comparison = module.compare_verification(query, stale_query, repeat=2)
+        assert not query_comparison["accepted"]
+        assert query_comparison["failures"][0]["name"] == "query-semantic-digest-mismatch"
+        for missing in (None, "", "0"):
+            stale_query["iterations"][0]["query_semantic_digest"] = missing
+            assert not module.compare_verification(stale_query, stale_query, repeat=2)["accepted"]
         for field, value in (("attachment_contents", None),
                              ("attachment_contents", "cpu-shadow"),
                              ("gpu_readback", None), ("gpu_readback", True)):
@@ -246,6 +364,74 @@ def main() -> int:
             image.write_bytes(b"changed")
             assert not module.bindings_match(verification_artifact, measurement_artifact, batch4)
     receipt_contract_cases()
+
+    # No high-frequency measurement observations are needed: the cold policy
+    # gate joins its logical releases to strict detailed query qualification.
+    for foreign_second_cycle in (False, True):
+        inspection, verified, measured = _query_native(
+            module, compatibility, foreign_second_cycle=foreign_second_cycle)
+        assert module.verify_receipt(
+            verified, compatibility, repeat=2, input_inspection=inspection)[0]
+        assert module.measure_receipt(
+            measured, compatibility, total=2, warmup=0, verification=verified,
+            input_inspection=inspection)[0]
+        for affected in ((0,), (0, 1)):
+            wrong = copy.deepcopy(measured)
+            for index in affected:
+                wrong["iterations"][index]["trace"][0]["released_at_event"] = 19
+            # Standalone execution_valid remains structural-only; it cannot
+            # independently qualify timing or query-cycle attribution.
+            assert module.execution_receipt(
+                wrong, compatibility, repeat=2, input_inspection=inspection)[0]
+            accepted, reason, _ = module.measure_receipt(
+                wrong, compatibility, total=2, warmup=0, verification=verified,
+                input_inspection=inspection)
+            assert not accepted and reason == "measurement-qualified-query-release-mismatch"
+        missing_end = copy.deepcopy(inspection)
+        missing_end["query_transcript"]["issues"][1]["flags"] = 2
+        assert not module.measure_receipt(
+            measured, compatibility, total=2, warmup=0, verification=verified,
+            input_inspection=missing_end)[0], "Ready without identity/cycle END"
+        with tempfile.TemporaryDirectory() as temporary:
+            root = pathlib.Path(temporary)
+            image = root / "image.metallib"
+            image.write_bytes(b"query image")
+            verification_artifact = _artifact(verified, accepted=True, image_path=image)
+            measurement_artifact = _artifact(measured, accepted=False, image_path=image)
+            for artifact in (verification_artifact, measurement_artifact):
+                artifact["input_inspection"] = inspection
+                artifact["forced_environment"].update(
+                    DXMT9_DRAW_CHUNK_COMMAND_LIMIT="0", DXMT9_DIRECT_SLOT_HEADROOM_BYTES="0",
+                    DXMT9_DIRECT_SLOT_AGGREGATE_HEADROOM_BYTES="0")
+            bundle = root / "input"
+            bundle.mkdir()
+            (bundle / "events.bin").write_bytes(b"query test input")
+            policy_file = root / "policy.json"
+            policy_file.write_bytes(module.canonical_policy(compatibility))
+            def query_child(command, timeout):
+                mode = command[command.index("--run-mode") + 1]
+                artifact = copy.deepcopy(verification_artifact if mode == "verify"
+                                         else measurement_artifact)
+                if mode == "measure":
+                    artifact["result"]["iterations"][0]["trace"][0]["released_at_event"] = 19
+                output = pathlib.Path(command[command.index("--output-dir") + 1])
+                output.mkdir(parents=True)
+                (output / "result.json").write_text(json.dumps(artifact))
+                return artifact
+            args = argparse.Namespace(bundle=bundle, reference_policy=policy_file,
+                candidate_policy=policy_file, repeat=2, warmup=0,
+                output_dir=root / "query-pair-rejected", provider=root / "unused-provider",
+                validator=root / "unused-validator", timeout_seconds=1)
+            with mock.patch.object(module, "_child", side_effect=query_child), \
+                    mock.patch.object(module, "_final_identity_check", return_value=True):
+                assert module.cpu_policy_compare(args) == 1
+            report = json.loads((args.output_dir / "result.json").read_text())
+            assert report["accepted"] is False and report["identity_bound"] is True
+            for name in ("reference", "candidate"):
+                assert report["measurement"][name]["accepted"] is False
+                assert report["measurement"][name]["reason"] == \
+                    "measurement-qualified-query-release-mismatch"
+                assert report["measurement"][name]["median_wall_ns"] is None
 
     with tempfile.TemporaryDirectory() as temporary:
         policy = pathlib.Path(temporary) / "policy.json"

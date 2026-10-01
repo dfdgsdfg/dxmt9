@@ -93,6 +93,46 @@ namespace render { class IRenderBackend; }
 inline constexpr size_t kCommandChunkCount = 32;
 inline constexpr size_t kMaxQueuedChunks = kCommandChunkCount - 1;
 
+// Cold Render Tape bootstrap boundary. A completed full seed replaces the
+// prior Present's discard permission only for its exact live destination.
+// Completion comes from the local queue, never from a captured sequence label.
+struct RenderTapeBackbufferSeedCompletionState {
+  core::Handle seedTarget{};
+  core::Handle currentBackbuffer{};
+  std::uint64_t publishedSequence = 0;
+  std::uint64_t completedSequence = 0;
+  std::uint64_t initializerPublished = 0;
+  std::uint64_t initializerCompleted = 0;
+  std::size_t inflightCount = 0;
+  bool exactAttachmentPreservation = false;
+  bool validSeedSurface = false;
+  bool producerQuiescent = false;
+  bool initializerQuiescent = false;
+  bool initializerTrackingAvailable = false;
+  bool initializerFailed = false;
+  bool terminal = false;
+};
+
+inline bool renderTapeBackbufferSeedBuildQuiescent(
+    bool arenaAdmission, bool activeArena, bool activeDirect,
+    bool arenaContext, bool directContext) noexcept {
+  return !arenaAdmission && !activeArena && !activeDirect &&
+      !arenaContext && !directContext;
+}
+
+inline bool renderTapeBackbufferSeedCompletionAllowed(
+    const RenderTapeBackbufferSeedCompletionState& state) noexcept {
+  return state.exactAttachmentPreservation && state.seedTarget &&
+      state.validSeedSurface && state.seedTarget == state.currentBackbuffer &&
+      state.publishedSequence != 0u &&
+      state.completedSequence >= state.publishedSequence &&
+      state.inflightCount == 0u && state.producerQuiescent &&
+      state.initializerQuiescent && state.initializerTrackingAvailable &&
+      !state.initializerFailed &&
+      state.initializerCompleted >= state.initializerPublished &&
+      !state.terminal;
+}
+
 enum class DceChunkLookaheadAction : std::uint8_t {
   UseReady,
   FailOpen,
@@ -1274,6 +1314,10 @@ class CommandQueue {
     return renderTapeExactAttachmentPreservation_.load(
         std::memory_order_acquire);
   }
+  // Provider-only cold seed settlement: caller has authenticated and copied a
+  // complete swapchain seed, then waited for actual queue completion. Default
+  // rendering policy is untouched; a failed admission changes no discard state.
+  bool completeRenderTapeBackbufferSeed(core::Handle handle) noexcept;
 
   // ─── Mostly-internal: worker-thread bodies + lifecycle binding ─────
   // Exposed so CommandQueue's constructor can wire its own runtime loops.

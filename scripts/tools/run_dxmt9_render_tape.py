@@ -1155,11 +1155,302 @@ def _source_replay_is_default(value: Any) -> bool:
         "empty_source_count", "present_source_count"))
 
 
+def query_input_transcript(inspection: Any) -> dict[str, Any] | None:
+    """Read query coverage only from the independent authenticated inspector."""
+    if (not isinstance(inspection, dict) or inspection.get("valid") is not True
+            or inspection.get("schema") != "dxmt9.render_tape.v2"):
+        return None
+    grammar = inspection.get("grammar")
+    if not isinstance(grammar, dict):
+        return None
+    counts = {}
+    for field, histogram, name in (
+            ("query_definitions", "descriptor_kinds", "query"),
+            ("issue_records", "record_types", "query_issue"),
+            ("recorded_polls", "control_kinds", "query_get_data")):
+        values = grammar.get(histogram)
+        if not isinstance(values, dict):
+            return None
+        value = values.get(name, 0)
+        if type(value) is not int or value < 0:
+            return None
+        counts[field] = value
+    transcript = inspection.get("query_transcript")
+    if not any(counts.values()):
+        if transcript is None:
+            return {"complete": True, **counts, "definitions": [], "issues": [], "polls": []}
+    if any(counts.values()) and (not isinstance(inspection.get("events_sha256"), str)
+            or re.fullmatch(r"[0-9a-f]{64}", inspection["events_sha256"]) is None):
+        return None
+    if (not isinstance(transcript, dict)
+            or transcript.get("schema") != "dxmt9.render_tape.query_transcript.v2"
+            or transcript.get("complete") is not True
+            or any(type(transcript.get(key)) is not int or transcript[key] != value
+                   for key, value in counts.items())):
+        return None
+    for field, count in (("definitions", counts["query_definitions"]),
+                         ("issues", counts["issue_records"]),
+                         ("polls", counts["recorded_polls"])):
+        rows = transcript.get(field)
+        if not isinstance(rows, list) or len(rows) != count:
+            return None
+    if any(not isinstance(row, dict) or row.get("versioned") is not True
+           for row in transcript["definitions"] + transcript["polls"]):
+        return None
+    definitions = {}
+    for row in transcript["definitions"]:
+        identity = row.get("identity")
+        if (not isinstance(identity, dict) or type(identity.get("kind")) is not int
+                or identity["kind"] != 5 or type(identity.get("generation")) is not int
+                or not 0 < identity["generation"] <= 0xffffffff
+                or not _cpu_decimal_uint64(identity.get("object_id")) or identity["object_id"] == "0"
+                or row.get("type") not in (8, 9, 11, 12)
+                or type(row.get("type")) is not int
+                or row.get("data_bytes") != (8 if row["type"] == 12 else 4)):
+            return None
+        key = tuple(identity.get(field) for field in ("kind", "generation", "object_id"))
+        if key in definitions:
+            return None
+        definitions[key] = row
+    issues_by_identity: dict[tuple[Any, ...], list[dict[str, Any]]] = {}
+    previous_issue = (0, -1)
+    for row in transcript["issues"]:
+        identity = row.get("identity") if isinstance(row, dict) else None
+        if not isinstance(identity, dict):
+            return None
+        key = tuple(identity.get(field) for field in ("kind", "generation", "object_id"))
+        if (key not in definitions or type(row.get("event_ordinal")) is not int
+                or row["event_ordinal"] <= 0 or type(row.get("record_index")) is not int
+                or row["record_index"] < 0 or type(row.get("flags")) is not int
+                or row["flags"] not in (1, 2) or type(row.get("issue_cycle")) is not int
+                or not 0 < row["issue_cycle"] <= 0xffffffffffffffff):
+            return None
+        coordinate = (row["event_ordinal"], row["record_index"])
+        if coordinate <= previous_issue:
+            return None
+        previous_issue = coordinate
+        issues_by_identity.setdefault(key, []).append(row)
+    for row in transcript["polls"]:
+        identity = row.get("identity")
+        if not isinstance(identity, dict):
+            return None
+        definition = definitions.get(tuple(identity.get(field) for field in
+                                           ("kind", "generation", "object_id")))
+        if definition is None:
+            return None
+        for field in ("event_index", "event_ordinal", "issue_cycle", "flags", "data_size",
+                      "defined_bytes", "captured_completion_ordinal"):
+            if type(row.get(field)) is not int or not 0 <= row[field] <= 0xffffffffffffffff:
+                return None
+        if (row["event_ordinal"] == 0 or row["event_index"] != row["event_ordinal"] - 1
+                or (row["issue_cycle"] == 0 and (definition.get("initial_state") != 0
+                    or definition.get("initial_issue_cycle") != 0))
+                or row["flags"] not in (0, 1)
+                or type(row.get("has_output")) is not bool
+                or type(row.get("captured_result")) is not int
+                or not -0x80000000 <= row["captured_result"] <= 1
+                or type(row.get("captured_disposition")) is not int
+                or row["captured_disposition"] != (1 if row["captured_result"] == 0
+                                                   else 2 if row["captured_result"] == 1 else 3)):
+            return None
+        if row["captured_result"] == 0 and row["issue_cycle"] > 0:
+            # A readiness obligation belongs to the latest END of this exact
+            # captured object/cycle, not any END or Ready with matching totals.
+            key = tuple(identity.get(field) for field in ("kind", "generation", "object_id"))
+            latest = next((issue for issue in reversed(issues_by_identity.get(key, []))
+                           if issue["event_ordinal"] < row["event_ordinal"]), None)
+            if (latest is None or latest["flags"] != 1
+                    or latest["issue_cycle"] != row["issue_cycle"]):
+                return None
+        defined = (definition["data_bytes"] if row["captured_result"] == 0
+                   and row["has_output"] and definition["type"] != 8
+                   and row["data_size"] >= definition["data_bytes"] else 0)
+        if (row["defined_bytes"] != defined or not isinstance(row.get("captured_hex"), str)
+                or re.fullmatch(r"[0-9a-f]{" + str(2 * defined) + r"}", row["captured_hex"]) is None):
+            return None
+    return transcript
+
+
+def query_replay_accepts(evidence: Any, inspection: Any, *, backend: str,
+                         measurement: bool = False) -> bool:
+    """Bind captured observations separately from local readiness and results."""
+    transcript = query_input_transcript(inspection)
+    if transcript is None:
+        return False
+    counts = {key: transcript[key] for key in (
+        "query_definitions", "issue_records", "recorded_polls")}
+    if not any(counts.values()):
+        # Old query-free receipts remain comparable only with independent zero
+        # coverage. An absent receipt never authenticates an absent query.
+        if evidence is None:
+            return True
+        return (isinstance(evidence, dict) and evidence.get("present") is False
+                and all(type(evidence.get(key)) is int and evidence[key] == 0
+                        for key in counts)
+                and evidence.get("rows") == [])
+    if counts["query_definitions"] == 0:
+        return False
+    if (not isinstance(evidence, dict)
+            or evidence.get("schema") != "dxmt9.render_tape.query_replay.v1"
+            or evidence.get("present") is not True
+            or evidence.get("transcript_complete") is not True
+            or evidence.get("oracle_complete") is not True
+            or evidence.get("failure") != "none"
+            or evidence.get("progress_limit", "none") != "none"
+            or evidence.get("mode") != ("measurement" if measurement else "qualification")
+            or evidence.get("backend") != backend):
+        return False
+    actual_metal = backend == "metal-real"
+    if evidence.get("actual_metal") is not actual_metal:
+        return False
+    for key, expected in {**counts, "replayed_issue_records": counts["issue_records"],
+                          "replayed_polls": counts["recorded_polls"]}.items():
+        if type(evidence.get(key)) is not int or evidence[key] != expected:
+            return False
+    polls = transcript["polls"]
+    pending = sum(row.get("captured_result") == 1 for row in polls)
+    ready = sum(row.get("captured_result") == 0 for row in polls)
+    required_results = sum(row.get("captured_result") == 0 and row.get("defined_bytes", 0) > 0
+                           for row in polls)
+    query_types = {tuple(row["identity"].get(key) for key in ("kind", "generation", "object_id")):
+                   row.get("type") for row in transcript["definitions"]
+                   if isinstance(row.get("identity"), dict)}
+    substituted_results = sum(row.get("captured_result") == 0 and row.get("defined_bytes", 0) > 0
+        and query_types.get(tuple(row["identity"].get(key) for key in
+                                  ("kind", "generation", "object_id"))) == 9
+        for row in polls if isinstance(row.get("identity"), dict)) if not actual_metal else 0
+    # Definitions, ENDs and Pending-only transcripts are complete evidence with
+    # zero readiness obligations, not vacuous GPU query-result proof.
+    if evidence.get("gpu_result_oracle") is not (actual_metal and ready > 0):
+        return False
+    expected = {"captured_pending": pending, "captured_ready": ready,
+                "required_results": required_results, "readiness_required": ready,
+                "readiness_satisfied": ready,
+                "matched_results": required_results - substituted_results,
+                "substituted_results": substituted_results}
+    if any(type(evidence.get(key)) is not int or evidence[key] != value
+           for key, value in expected.items()):
+        return False
+    for key in ("replay_pending", "replay_ready", "supplemental_polls", "supplemental_drains",
+                "transcript_wall_ns", "oracle_wall_ns", "max_oracle_polls", "max_oracle_wall_ns"):
+        if type(evidence.get(key)) is not int or not 0 <= evidence[key] <= 0xffffffffffffffff:
+            return False
+    if (evidence["replay_pending"] + evidence["replay_ready"] > counts["recorded_polls"]
+            or evidence["max_oracle_polls"] > 262144
+            or (counts["recorded_polls"] > 0 and evidence["max_oracle_polls"] == 0)
+            or evidence["supplemental_polls"] > evidence["max_oracle_polls"]
+            or (actual_metal and (evidence["max_oracle_wall_ns"] > 5000000000
+                or (counts["recorded_polls"] > 0 and evidence["max_oracle_wall_ns"] == 0)))
+            or (not actual_metal and evidence["max_oracle_wall_ns"] != 0)
+            or (actual_metal and evidence["oracle_wall_ns"] > evidence["max_oracle_wall_ns"])
+            or (ready == 0 and any(evidence[key] != 0 for key in (
+                "supplemental_polls", "supplemental_drains", "oracle_wall_ns")))):
+        return False
+    rows = evidence.get("rows")
+    if measurement:
+        # Input hashing happens at admission, before measured repetitions. The
+        # detailed qualification is rebound by the existing policy aggregate.
+        return (rows == [] and isinstance(inspection.get("events_sha256"), str)
+                and re.fullmatch(r"[0-9a-f]{64}", inspection["events_sha256"]) is not None
+                and evidence.get("events_sha256") == inspection["events_sha256"])
+    if not isinstance(rows, list) or len(rows) != len(polls):
+        return False
+    captured_fields = ("event_index", "event_ordinal", "identity", "issue_cycle", "flags",
+                       "has_output", "data_size", "captured_result", "defined_bytes", "captured_hex")
+    seen = set()
+    replay_pending = replay_ready = supplemental = 0
+    local_cycles: dict[tuple[Any, ...], tuple[int, ...]] = {}
+    definitions = {tuple(row["identity"].get(key) for key in ("kind", "generation", "object_id")):
+                   row for row in transcript["definitions"] if isinstance(row.get("identity"), dict)}
+    for captured, row in zip(polls, rows):
+        if (not isinstance(row, dict) or any(type(row.get(key)) is not type(captured.get(key))
+                or row.get(key) != captured.get(key) for key in captured_fields)):
+            return False
+        identity = captured.get("identity")
+        if not isinstance(identity, dict):
+            return False
+        identity_key = tuple(identity.get(key) for key in ("kind", "generation", "object_id"))
+        definition = definitions.get(identity_key)
+        if (definition is None or type(identity.get("kind")) is not int or identity["kind"] != 5
+                or type(identity.get("generation")) is not int or identity["generation"] <= 0
+                or not _cpu_decimal_uint64(identity.get("object_id")) or identity["object_id"] == "0"
+                or type(row.get("issue_cycle")) is not int or row["issue_cycle"] < 0
+                or type(row.get("event_ordinal")) is not int or row["event_ordinal"] <= 0
+                or row["event_index"] != row["event_ordinal"] - 1
+                or row["event_ordinal"] in seen):
+            return False
+        seen.add(row["event_ordinal"])
+        for key in ("local_query_identity", "local_issue_ordinal", "local_device_epoch", "local_queue",
+                    "local_sequence", "local_initializer", "completed_sequence", "completed_initializer",
+                    "oracle_polls"):
+            if type(row.get(key)) is not int or not 0 <= row[key] <= 0xffffffffffffffff:
+                return False
+        if row["local_query_identity"] == 0:
+            return False
+        if row["issue_cycle"] == 0:
+            if (definition.get("initial_state") != 0
+                    or definition.get("initial_issue_cycle") != 0
+                    or any(row[key] != 0 for key in ("local_issue_ordinal", "local_device_epoch",
+                                                   "local_queue", "local_sequence", "local_initializer"))):
+                return False
+        elif any(row[key] == 0 for key in ("local_issue_ordinal", "local_device_epoch")):
+            return False
+        cycle_key = (*identity_key, row["issue_cycle"])
+        local_key = tuple(row[key] for key in ("local_query_identity", "local_issue_ordinal", "local_device_epoch"))
+        if cycle_key in local_cycles and local_cycles[cycle_key] != local_key:
+            return False
+        if cycle_key not in local_cycles and local_key in local_cycles.values():
+            return False
+        local_cycles[cycle_key] = local_key
+        for key in ("replay_result", "oracle_result"):
+            if type(row.get(key)) is not int or not -0x80000000 <= row[key] <= 0x7fffffff:
+                return False
+        replay_pending += row["replay_result"] == 1
+        replay_ready += row["replay_result"] == 0
+        supplemental += row["oracle_polls"]
+        if (type(row.get("supplemental")) is not bool
+                or row["supplemental"] is not (row["oracle_polls"] > 0)):
+            return False
+        required = row["captured_result"] == 0
+        result_required = required and row["defined_bytes"] > 0
+        result_substituted = result_required and not actual_metal and definition.get("type") == 9
+        if (row.get("result_required") is not required
+                or row.get("readiness_satisfied") is not required
+                or row.get("result_matched") is not (result_required and not result_substituted)
+                or row.get("result_substituted") is not result_substituted):
+            return False
+        if row["captured_result"] < 0 and row["replay_result"] != row["captured_result"]:
+            return False
+        if row["captured_result"] >= 0 and row["replay_result"] not in (0, 1):
+            return False
+        if required:
+            if row["oracle_result"] != 0:
+                return False
+            if row["issue_cycle"] != 0 and definition.get("type") in (8, 9):
+                if (row["local_queue"] == 0 or (row["local_sequence"] == 0 and row["local_initializer"] == 0)
+                        or row["completed_sequence"] < row["local_sequence"]
+                        or row["completed_initializer"] < row["local_initializer"]):
+                    return False
+            if result_required and not result_substituted and row.get("replay_hex") != row["captured_hex"]:
+                return False
+    return (replay_pending == evidence["replay_pending"] and replay_ready == evidence["replay_ready"]
+            and supplemental == evidence["supplemental_polls"])
+
+
 def experiment_accepts(result: dict[str, Any], *, warmup: int, repeat: int,
                        reset: str, route: str, require_path: bool,
                        non_degenerate: bool, cpu_policy: dict[str, Any] | None = None,
-                       input_components: dict[str, Any] | None = None) -> bool:
+                       input_components: dict[str, Any] | None = None,
+                       input_inspection: dict[str, Any] | None = None) -> bool:
     """Fail closed on partial runs and nonexecuted policy candidates."""
+    query_transcript = query_input_transcript(input_inspection)
+    if query_transcript is None:
+        return False
+    if any(query_transcript[key] for key in ("query_definitions", "issue_records", "recorded_polls")):
+        if (not isinstance(input_components, dict)
+                or not isinstance(input_components.get("events"), dict)
+                or input_inspection.get("events_sha256") != input_components["events"].get("sha256")):
+            return False
     capture_source = bool(cpu_policy and cpu_policy.get("schema") ==
                           render_tape_cpu_policy.SOURCE_SCHEMA)
     expected_mode = "capture-source" if capture_source else "chunk"
@@ -1206,6 +1497,9 @@ def experiment_accepts(result: dict[str, Any], *, warmup: int, repeat: int,
                     {**evidence, "provider_exit_code": 0}, non_degenerate)
                 or not isinstance(counters, dict)
                 or counters.get("gpu_errors") != 0):
+            return False
+        if not query_replay_accepts(evidence.get("query_replay"), input_inspection,
+                                   backend="metal-real"):
             return False
         source_boundary_audit = evidence.get("source_boundary_audit")
         if not render_tape_gpu_policy.texture_input_audit_is_default(evidence):
@@ -1475,7 +1769,10 @@ def fixed_input_experiment(args: argparse.Namespace) -> int:
                 "capture source boundaries require authenticated components/identity.bin"
             )
         validator_digest = digest(args.validator.resolve())
-        run_validator(args.validator, "validate", events, refs)
+        input_inspection = run_validator(args.validator, "inspect", events, refs)
+        if ("events_sha256" in input_inspection and input_inspection["events_sha256"] !=
+                manifest["components"]["events"]["sha256"]):
+            raise SystemExit("validator query transcript input SHA-256 mismatch")
         if identity is not None:
             run_identity_validator(args.validator, events, identity, refs)
         provider = args.provider.resolve()
@@ -1550,7 +1847,8 @@ def fixed_input_experiment(args: argparse.Namespace) -> int:
                         reset=args.reset, route=args.replay_route,
                         require_path=args.require_path,
                         non_degenerate=bundle_requires_non_degenerate(manifest),
-                        cpu_policy=gpu_policy, input_components=manifest["components"]))
+                        cpu_policy=gpu_policy, input_components=manifest["components"],
+                        input_inspection=input_inspection))
         receipt = {
             "schema": "dxmt9.render_tape.experiment_artifact.v1",
             "accepted": accepted, "provider_exit_code": exit_code,
@@ -1567,6 +1865,7 @@ def fixed_input_experiment(args: argparse.Namespace) -> int:
             "validator": {"path": str(args.validator.resolve()),
                           "sha256": validator_digest},
             "input_components": manifest["components"],
+            "input_inspection": input_inspection,
             "input_scope": manifest.get("scope", {}),
             "renderer_environment": experiment_renderer_environment(provider_environment),
             "forced_environment": {
@@ -1688,6 +1987,69 @@ def _cpu_general_next_work_event(event_types: list[Any], event: int) -> int | No
          if event_types[index] != 3),
         None,
     )
+
+
+def _cpu_general_query_release_event(
+    inspection: dict[str, Any], query_evidence: dict[str, Any],
+    source_event: int, submission: int, measured_release: int | None = None,
+) -> int | None:
+    """Join controlled query progress to the original ordered work boundary."""
+    transcript = query_input_transcript(inspection)
+    plan = inspection.get("cpu_window_plan")
+    if transcript is None or not isinstance(plan, dict) or not isinstance(plan.get("sources"), list):
+        return None
+    record_counts = {}
+    for source in plan["sources"]:
+        if (not isinstance(source, dict) or type(source.get("event")) is not int
+                or type(source.get("record_count")) is not int or source["record_count"] <= 0
+                or source["event"] in record_counts):
+            return None
+        record_counts[source["event"]] = source["record_count"]
+    issue_counts: dict[int, int] = {}
+    for issue in transcript["issues"]:
+        if not isinstance(issue, dict) or type(issue.get("event_ordinal")) is not int:
+            return None
+        event = issue["event_ordinal"]
+        issue_counts[event] = issue_counts.get(event, 0) + 1
+    next_boundary = None
+    for index in range(source_event, len(inspection["event_types"])):
+        event = index + 1
+        kind = inspection["event_types"][index]
+        if kind in (3, 6):
+            continue
+        if kind == 5:
+            if event not in record_counts:
+                return None
+            if issue_counts.get(event, 0) == record_counts[event]:
+                continue
+        next_boundary = event
+        break
+    if next_boundary is None:
+        return None
+    if measured_release is not None:
+        if (query_evidence["rows"] != [] or measured_release > next_boundary
+                or measured_release <= source_event):
+            return None
+        if measured_release == next_boundary:
+            return next_boundary
+        # This is execution-only shape validation. Policy qualification must
+        # additionally bind this exact source/release schedule to independently
+        # checked detailed END/readiness receipts; drain totals do not do that.
+        if query_evidence["supplemental_drains"] > 0 and any(
+                poll["event_ordinal"] == measured_release and poll["captured_result"] == 0
+                for poll in transcript["polls"]):
+            return measured_release
+        return None
+    # A captured Ready may require one explicitly reported controlled release.
+    # Its locally issued END sequence must include this actual publication;
+    # captured completion labels never determine the release point.
+    for row in query_evidence["rows"]:
+        if (source_event < row["event_ordinal"] < next_boundary
+                and row["result_required"] and row["supplemental"]
+                and row["local_sequence"] >= submission
+                and row["completed_sequence"] >= submission):
+            next_boundary = row["event_ordinal"]
+    return next_boundary
 
 
 def _cpu_window_plan_rows(
@@ -1852,7 +2214,11 @@ def _cpu_general_counts_match(
     """Compare authenticated general input counts without bool/int coercion."""
     return bool(
         isinstance(actual, dict)
-        and actual.keys() == expected.keys()
+        and expected.keys() <= actual.keys()
+        and not actual.keys() - expected.keys() - {"query_definitions", "query_issues", "query_polls"}
+        and all(type(actual.get(field, 0)) is int and actual.get(field, 0) == 0
+                for field in ("query_definitions", "query_issues", "query_polls")
+                if field not in expected)
         and all(
             type(actual[field]) is int and actual[field] == expected[field]
             for field in expected
@@ -1916,6 +2282,16 @@ def _cpu_general_frame_accepts(
             or publication != "per-command"
             or resource_backend != "cpu-metal-resources" or fault != "none"):
         return False
+    query_iterations = result.get("iterations")
+    if (not isinstance(query_iterations, list) or any(
+            not isinstance(row, dict) or not query_replay_accepts(
+                row.get("query_replay"), input_inspection,
+                backend="cpu-controlled-production-queue", measurement=measurement)
+            for row in query_iterations)):
+        return False
+    query_transcript = query_input_transcript(input_inspection)
+    has_queries = query_transcript is not None and any(query_transcript[key] for key in (
+        "query_definitions", "issue_records", "recorded_polls"))
     if max_pending is not None and type(max_pending) is not int:
         return False
     effective_max_pending = 1 if max_pending is None else max_pending
@@ -1956,6 +2332,10 @@ def _cpu_general_frame_accepts(
     expected_mipmap_count = _cpu_general_mipmap_count(input_inspection)
     if expected_counts is None or expected_mipmap_count is None:
         return False
+    if has_queries:
+        expected_counts.update(query_definitions=query_transcript["query_definitions"],
+                               query_issues=query_transcript["issue_records"],
+                               query_polls=query_transcript["recorded_polls"])
     if measurement or cpu_policy is not None:
         if (completion != "after-command" or effective_max_pending != 1
                 or source_binding is not None or cpu_policy is None):
@@ -2008,7 +2388,8 @@ def _cpu_general_frame_accepts(
             or result.get("resource_execution") != "cpu-visible-metal-no-gpu-submit"
             or result.get("status") != "complete"
             or result.get("replay_route") != route
-            or result.get("completion") != completion
+            or result.get("completion") != ("controlled-query-ready-obligation" if has_queries else completion)
+            or (has_queries and result.get("requested_completion") != completion)
             or result.get("publication") != publication
             or result.get("fault") != fault
             or type(result.get("repeat")) is not int or result["repeat"] != repeat
@@ -2046,6 +2427,22 @@ def _cpu_general_frame_accepts(
                 or iteration.get("fault_triggered") is not False
                 or iteration.get("failure") != ""):
             return False
+        if has_queries and (not _cpu_decimal_uint64(iteration.get("query_semantic_digest"))
+                            or (measurement and iteration["query_semantic_digest"] != "0")
+                            or (not measurement and iteration["query_semantic_digest"] == "0")):
+            return False
+        if has_queries and not measurement:
+            trace = iteration.get("trace")
+            if not isinstance(trace, list):
+                return False
+            for query_row in iteration["query_replay"]["rows"]:
+                sequence = query_row["local_sequence"]
+                if sequence and not any(isinstance(row, dict)
+                        and type(row.get("submission")) is int and row["submission"] == sequence
+                        and row.get("submitted") is True
+                        and (not query_row["result_required"] or row.get("completed") is True)
+                        for row in trace):
+                    return False
         if ("input_counts" in iteration
                 and not _cpu_general_counts_match(
                     iteration.get("input_counts"), expected_counts)):
@@ -2211,7 +2608,13 @@ def _cpu_general_frame_accepts(
             if row["first_event"] != row["last_event"]:
                 return False
             expected_release = row["event"]
-            if completion == "before-next-work":
+            if has_queries:
+                expected_release = _cpu_general_query_release_event(
+                    input_inspection, iteration["query_replay"], row["event"], row["submission"],
+                    row["released_at_event"] if measurement else None)
+                if expected_release is None:
+                    return False
+            elif completion == "before-next-work":
                 expected_release = _cpu_general_next_work_event(
                     input_inspection["event_types"], row["event"])
                 if expected_release is None:
@@ -2295,6 +2698,12 @@ def _cpu_general_frame_accepts(
         expected_deferred_releases = sum(
             row["released_at_event"] > row["event"] for row in trace
         )
+        if has_queries and measurement:
+            ready_events = {row["event_ordinal"] for row in query_transcript["polls"]
+                            if row["captured_result"] == 0}
+            oracle_releases = sum(row["released_at_event"] in ready_events for row in trace)
+            if oracle_releases != iteration["query_replay"]["supplemental_drains"]:
+                return False
         expected_destroy_events = {
             destroy_event
             for row in trace
@@ -2377,6 +2786,12 @@ def cpu_experiment_accepts(result: dict[str, Any], *, repeat: int, route: str,
     # This projection comes from the independent validator over authenticated
     # input, never from the candidate's own claimed completion coordinates.
     if not isinstance(input_inspection, dict) or input_inspection.get("valid") is not True:
+        return False
+    if query_input_transcript(input_inspection) is None:
+        return False
+    if any(query_input_transcript(input_inspection)[key] for key in (
+            "query_definitions", "issue_records", "recorded_polls")):
+        # The bounded32 grammar does not execute the production query lane.
         return False
     event_types = input_inspection.get("event_types")
     dynamic_buffers = input_inspection.get("dynamic_buffers")
@@ -2939,6 +3354,19 @@ def compare_cpu_experiment_results(
             failures.append(_cpu_compare_failure(
                 "semantic-digest-mismatch", iteration=index,
                 reference=ref_digest, candidate=cand_digest))
+        query_transcript = query_input_transcript(input_inspection)
+        if query_transcript is not None and any(query_transcript[key] for key in (
+                "query_definitions", "issue_records", "recorded_polls")):
+            reference_query = reference_iteration.get("query_semantic_digest")
+            candidate_query = candidate_iteration.get("query_semantic_digest")
+            row["reference_query_semantic_digest"] = reference_query
+            row["candidate_query_semantic_digest"] = candidate_query
+            if (not _cpu_decimal_uint64(reference_query)
+                    or not _cpu_decimal_uint64(candidate_query)
+                    or reference_query != candidate_query):
+                failures.append(_cpu_compare_failure(
+                    "query-semantic-digest-mismatch", iteration=index,
+                    reference=reference_query, candidate=candidate_query))
         for field in CPU_COMPARE_LOGICAL_FIELDS:
             reference_value = reference_iteration.get(field)
             candidate_value = candidate_iteration.get(field)
@@ -3075,6 +3503,9 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
         copy_input_owned(args.bundle.resolve(), staged)
         manifest, events, refs, blobs, identity, _ = load_bundle(staged)
         input_inspection = run_validator(args.validator, "inspect", events, refs)
+        if ("events_sha256" in input_inspection and input_inspection["events_sha256"] !=
+                manifest["components"]["events"]["sha256"]):
+            raise SystemExit("validator query transcript input SHA-256 mismatch")
         if identity is not None:
             run_identity_validator(args.validator, events, identity, refs)
         provider = args.provider.resolve()
@@ -3196,6 +3627,7 @@ def cpu_fixed_input_experiment(args: argparse.Namespace) -> int:
                    "provider": {"path": str(provider), "sha256": binary_digest},
                    "validator": {"path": str(args.validator.resolve()), "sha256": validator_digest},
                    "input_components": manifest["components"],
+                   "input_scope": manifest.get("scope", {}),
                    "input_inspection": input_inspection,
                    "source_binding": source_binding,
                    "forced_environment": {"DXMT9_OFFLOAD_COMMIT_REPLAY":

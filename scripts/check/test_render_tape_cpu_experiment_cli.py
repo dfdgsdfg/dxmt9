@@ -73,6 +73,8 @@ def _general_frame_fixture():
         "records": 1,
         "draws": 1,
         "record_types": {"generate_mipmaps": 0},
+        "grammar": {"descriptor_kinds": {}, "record_types": {"query_issue": 0},
+                    "control_kinds": {}},
         "event_types": [5],
     }
     result = {
@@ -565,7 +567,8 @@ def native_free_general_frame_contract_tests(module):
             (broken if top_level else broken["iterations"][0])[field] = value
         assert not module.cpu_experiment_accepts(broken, **options), field
     for label, inspection_mutation, receipt_value in (
-        ("missing-mipmap-record-type", lambda value: value.pop("record_types"), 0),
+        ("missing-mipmap-record-type", lambda value: (
+            value.pop("record_types"), value["grammar"].pop("record_types")), 0),
         ("negative-mipmap-record-type",
          lambda value: value["record_types"].__setitem__("generate_mipmaps", -1), 0),
         ("boolean-mipmap-record-type",
@@ -586,8 +589,7 @@ def native_free_general_frame_contract_tests(module):
     assert module.cpu_experiment_accepts(
         result, **dict(options, input_inspection=sparse_inspection))
     nested_inspection = copy.deepcopy(inspection)
-    nested_inspection["grammar"] = {
-        "record_types": nested_inspection.pop("record_types")}
+    nested_inspection["grammar"]["record_types"] = nested_inspection.pop("record_types")
     assert module.cpu_experiment_accepts(
         result, **dict(options, input_inspection=nested_inspection))
 

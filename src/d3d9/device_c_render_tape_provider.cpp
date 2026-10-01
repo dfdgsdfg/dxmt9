@@ -20,6 +20,7 @@
 #include <limits>
 #include <memory>
 #include <mutex>
+#include <thread>
 #include <utility>
 
 namespace dxmt9::d3d9 {
@@ -1282,7 +1283,7 @@ bool generalMutationShapeValid(
             definition.descriptor, mutation.subresource, surface)) {
       return false;
     }
-    const auto expected = renderTapeDeriveExpectedSurfaceContent(surface);
+    const auto expected = renderTapeDeriveExpectedTextureSubresourceContent(surface);
     return expected.status == RenderTapeExpectedContentStatus::Accepted &&
            mutation.byteSize == expected.bytes;
   }
@@ -1331,6 +1332,7 @@ bool generalRecordTypeSupported(std::uint32_t type) noexcept {
   case D9C_COMMAND_RECORD_PRESENT:
   case D9C_COMMAND_RECORD_APPLY_STATE:
   case D9C_COMMAND_RECORD_GENERATE_MIPMAPS:
+  case D9C_COMMAND_RECORD_QUERY_ISSUE:
     return true;
   default:
     return false;
@@ -1443,7 +1445,9 @@ FrameTapeReplayResult buildGeneralPlan(
             (texture.dimension != static_cast<std::uint32_t>(
                                       RenderTapeTextureDimension::Texture2D) &&
              texture.dimension != static_cast<std::uint32_t>(
-                                      RenderTapeTextureDimension::Cube)) ||
+                                      RenderTapeTextureDimension::Cube) &&
+             texture.dimension != static_cast<std::uint32_t>(
+                                      RenderTapeTextureDimension::Volume)) ||
             (static_cast<RenderTapeInitialContentDisposition>(
                  texture.initialContentDisposition) !=
                  RenderTapeInitialContentDisposition::CompleteSeed &&
@@ -1452,6 +1456,12 @@ FrameTapeReplayResult buildGeneralPlan(
                  RenderTapeInitialContentDisposition::ProducedByCapturedPass)) {
           goto unsupported;
         }
+        // Metal does not admit BCn 3D backing. Its canonical row/slice layout
+        // remains supported by CPU capture/replay, not by this GPU provider.
+        if (texture.dimension == static_cast<std::uint32_t>(
+                                     RenderTapeTextureDimension::Volume) &&
+            core::isCompressedFormat(devicec::fmtFromD3D(level0.format)))
+          goto unsupported;
       } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
         RenderTapeSurfaceDescriptorV2 surface{};
         if (!renderTapeLoadSurfaceDescriptorV2(descriptor, surface))
@@ -1523,6 +1533,19 @@ FrameTapeReplayResult buildGeneralPlan(
           goto unsupported;
         }
         referenceBlob(fixed.immutablePayloadDigest);
+      } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY) {
+        RenderTapeQueryDescriptorV2 query{};
+        if (!renderTapeLoadQueryDescriptorV2(descriptor, query))
+          goto unsupported;
+        result.queryReplay.present = true;
+        ++result.queryReplay.queryDefinitions;
+        // Absolute timestamps are fresh-execution-dependent. No implicit
+        // normalization may substitute for a qualified relational oracle.
+        if (query.type == 10u) {
+          result.queryReplay.failure =
+              RenderTapeQueryReplayFailure::UnsupportedResultKind;
+          goto unsupported;
+        }
       } else {
         goto unsupported;
       }
@@ -1593,6 +1616,10 @@ FrameTapeReplayResult buildGeneralPlan(
         if (!generalRecordTypeSupported(record.header.type)) goto unsupported;
         ++result.coverage.commandRecords;
         switch (record.header.type) {
+        case D9C_COMMAND_RECORD_QUERY_ISSUE:
+          result.queryReplay.present = true;
+          ++result.queryReplay.issueRecords;
+          break;
         case D9C_COMMAND_RECORD_DRAW_PRIMITIVE:
           ++result.coverage.drawPrimitiveRecords;
           break;
@@ -1658,10 +1685,28 @@ FrameTapeReplayResult buildGeneralPlan(
     case RenderTapeEventType::OrderedControl: {
       RenderTapeOrderedControlHeader fixed{};
       if (!load(event.payload, 0u, fixed) ||
-          fixed.kind != static_cast<std::uint32_t>(
-              RenderTapeControlKind::GammaRampSet) ||
-          fixed.controlBytes != kRenderTapeGammaRampBytes ||
-          event.payload.size() != sizeof(fixed) + kRenderTapeGammaRampBytes) {
+          event.payload.size() != sizeof(fixed) + fixed.controlBytes) {
+        goto unsupported;
+      }
+      if (fixed.kind == static_cast<std::uint32_t>(
+                            RenderTapeControlKind::QueryGetData)) {
+        RenderTapeQueryGetDataControlV2 poll{};
+        if (fixed.controlBytes != sizeof(poll) ||
+            !load(event.payload, sizeof(fixed), poll) ||
+            poll.schemaVersion != kRenderTapeQueryTranscriptVersion2 ||
+            poll.dataSize > std::numeric_limits<std::uint32_t>::max())
+          goto unsupported;
+        result.queryReplay.present = true;
+        ++result.queryReplay.recordedPolls;
+        if (fixed.resultCode == core::S_FALSE) ++result.queryReplay.capturedPending;
+        if (fixed.resultCode == core::S_OK) {
+          ++result.queryReplay.capturedReady;
+          if (poll.definedBytes != 0u) ++result.queryReplay.requiredResults;
+          ++result.queryReplay.readinessRequired;
+        }
+      } else if (fixed.kind != static_cast<std::uint32_t>(
+                                  RenderTapeControlKind::GammaRampSet) ||
+                 fixed.controlBytes != kRenderTapeGammaRampBytes) {
         goto unsupported;
       }
       candidate.controls.push_back(fixed);
@@ -1935,6 +1980,77 @@ bool readbackTightSurface(D9CDevice* device, D9CSurface* surface,
 
 namespace render_tape_runtime {
 
+RenderTapeQueryReplayFailure settleQueryOracle(
+    D9CDevice* device, const core::QueryPollSnapshot& snapshot,
+    RenderTapeQueryReplayRow& row,
+    RenderTapeQueryReplayEvidence& evidence) noexcept {
+  using Failure = RenderTapeQueryReplayFailure;
+  const auto started = std::chrono::steady_clock::now();
+  const auto finish = [&](Failure failure) {
+    evidence.oracleWallNanos += static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - started).count());
+    return failure;
+  };
+  if (!device || snapshot.failed || snapshot.active ||
+      snapshot.owner != &device->dev() ||
+      snapshot.identity != row.localQueryIdentity ||
+      snapshot.issueOrdinal != row.localIssueOrdinal ||
+      snapshot.issueDeviceEpoch != row.localDeviceEpoch ||
+      (snapshot.issueOrdinal && !snapshot.constant() &&
+       !snapshot.backendFence.valid())) {
+    return finish(Failure::SnapshotUnavailable);
+  }
+  auto oracleSnapshot = snapshot;
+  if (!oracleSnapshot.eligible &&
+      !device->dev().promotePublishedQueryPollSnapshot(oracleSnapshot)) {
+    return finish(Failure::SnapshotUnavailable);
+  }
+  while (evidence.supplementalPolls < evidence.maxOraclePolls) {
+    const auto elapsed = static_cast<std::uint64_t>(
+        std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now() - started).count());
+    if (evidence.oracleWallNanos >= evidence.maxOracleWallNanos ||
+        elapsed >= evidence.maxOracleWallNanos - evidence.oracleWallNanos) {
+      evidence.progressLimit = RenderTapeQueryProgressLimit::WallBudget;
+      return finish(Failure::ProgressExhausted);
+    }
+    std::uint64_t staged = 0u;
+    row.supplemental = true;
+    ++row.oraclePolls;
+    ++evidence.supplementalPolls;
+    row.oracleResult = device->dev().pollQuerySnapshot(
+        oracleSnapshot, row.hasOutput ? &staged : nullptr,
+        std::min<std::uint64_t>(row.dataSize, sizeof(staged)),
+        core::QUERY_GETDATA_FLUSH);
+    const auto fence = snapshot.backendFence.snapshot();
+    row.localQueue = fence.queue;
+    row.localSequence = fence.sequence;
+    row.localInitializer = fence.initializer;
+    if (snapshot.backend) {
+      const auto progress = snapshot.backend->queryProgress();
+      row.completedSequence = progress.completed;
+      row.completedInitializer = progress.initializerCompleted;
+    }
+    if (row.oracleResult == core::S_OK) {
+      row.readinessSatisfied = true;
+      ++evidence.readinessSatisfied;
+      std::memcpy(row.replayBytes.data(), &staged, row.definedBytes);
+      row.resultMatched = row.definedBytes != 0u && std::equal(
+          row.capturedBytes.begin(), row.capturedBytes.begin() + row.definedBytes,
+          row.replayBytes.begin());
+      if (row.definedBytes != 0u && !row.resultMatched)
+        return finish(Failure::ResultMismatch);
+      if (row.definedBytes != 0u) ++evidence.matchedResults;
+      return finish(Failure::None);
+    }
+    if (row.oracleResult != core::S_FALSE) return finish(Failure::PollFailed);
+    std::this_thread::yield();
+  }
+  evidence.progressLimit = RenderTapeQueryProgressLimit::PollBudget;
+  return finish(Failure::ProgressExhausted);
+}
+
 void* createRenderTapeObject(
     D9CDevice* device, const RenderTapeObjectDefineHeader& fixed,
     std::span<const std::byte> descriptor,
@@ -2004,6 +2120,12 @@ void* createRenderTapeObject(
           device, level0.width, level0.height, desc.mipLevelCount,
           level0.usage, level0.format, level0.pool);
     }
+    if (desc.dimension == static_cast<std::uint32_t>(
+                              RenderTapeTextureDimension::Volume)) {
+      return dxmt9c_device_create_volume_texture(
+          device, level0.width, level0.height, level0.depth, desc.mipLevelCount,
+          level0.usage, level0.format, level0.pool);
+    }
     return nullptr;
   }
   if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SHADER) {
@@ -2025,6 +2147,16 @@ void* createRenderTapeObject(
               device,
               reinterpret_cast<const D9CVertexElement*>(blob->bytes.data())))
         : nullptr;
+  }
+  if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY) {
+    RenderTapeQueryDescriptorV2 desc{};
+    if (!renderTapeLoadQueryDescriptorV2(descriptor, desc)) return nullptr;
+    auto* query = dxmt9c_device_create_query(device, desc.type);
+    if (query && dxmt9c_query_get_data_size(query) != desc.dataBytes) {
+      dxmt9c_query_release(query);
+      return nullptr;
+    }
+    return query;
   }
   return nullptr;
 }
@@ -2118,7 +2250,31 @@ bool applyGeneralMutation(
         !locked.bits) {
       return false;
     }
-    const bool copied = writeGeneralLockedSurface(desc, locked, blob->bytes);
+    bool copied = false;
+    if (desc.resourceType == 4u) {
+      RenderTapeVolumeLockLayout canonical{}, layout{};
+      // This full-mip C facade exposes RowPitch only. Native volume storage
+      // packs storage rows (block rows for BC); a real WoW64 shadow, if active,
+      // owns its explicitly recorded app-visible SlicePitch instead.
+      std::uint64_t slicePitch = 0u;
+      copied = renderTapeVolumeContentLayout(desc, canonical) ==
+                   RenderTapeVolumeLayoutStatus::Accepted &&
+          locked.pitch > 0 &&
+          checkedMul(static_cast<std::uint64_t>(locked.pitch),
+                     canonical.fullRows, slicePitch);
+      const auto shadow = texture->wow64Locks.find(mutation.subresource);
+      if (copied && shadow != texture->wow64Locks.end() && shadow->second.active) {
+        if (shadow->second.shadow.ptr != locked.bits) copied = false;
+        else slicePitch = shadow->second.shadowSlicePitch;
+      }
+      copied = copied && slicePitch <= std::numeric_limits<std::int64_t>::max() &&
+          renderTapeVolumeLockLayout(desc, locked.pitch,
+              static_cast<std::int64_t>(slicePitch), nullptr, layout) ==
+              RenderTapeVolumeLayoutStatus::Accepted &&
+          writeRenderTapeVolumeRows(blob->bytes, locked.bits, layout);
+    } else {
+      copied = writeGeneralLockedSurface(desc, locked, blob->bytes);
+    }
     const bool unlocked =
         dxmt9c_texture_unlock_rect(texture, mutation.subresource) ==
         core::D3D_OK;
@@ -2197,7 +2353,8 @@ bool applyGeneralMutation(
           .destinationRect = extent,
       });
       upper->flush();
-      upper->queue().markColorHandleTouched(wrapped->obj->handle());
+      copied = upper->queue().completeRenderTapeBackbufferSeed(
+          wrapped->obj->handle());
     }
     if (staging) dxmt9c_surface_release(staging);
     dxmt9c_texture_release(stagingTexture);
@@ -2589,6 +2746,46 @@ FrameTapeReplayResult replayGeneralPlan(
     result.status = FrameTapeReplayStatus::ObjectCreationFailed;
     return result;
   }
+  if (result.queryReplay.present) {
+    const auto upper = device->dev().upperDevice();
+    if (!upper || !upper->pool()) {
+      result.queryReplay.failure = RenderTapeQueryReplayFailure::BackendUnavailable;
+      result.status = FrameTapeReplayStatus::QueryOracleUnsupported;
+      return result;
+    }
+    for (const auto& definition : plan.definitions) {
+      if (definition.fixed.identity.kind != D9C_CHUNK_HANDLE_KIND_QUERY) continue;
+      RenderTapeQueryDescriptorV2 query{};
+      if (!renderTapeLoadQueryDescriptorV2(definition.descriptor, query) ||
+          (query.type == 9u && !upper->usesMetalOcclusion())) {
+        result.queryReplay.failure = RenderTapeQueryReplayFailure::BackendUnavailable;
+        result.status = FrameTapeReplayStatus::QueryOracleUnsupported;
+        return result;
+      }
+    }
+  }
+  if (const auto upper = device->dev().upperDevice();
+      upper && !upper->usesAsyncQueryFences()) {
+    // The synchronous query-reference lane exposes only initializer signal
+    // progress, not command-buffer success. It cannot qualify a GPU seed.
+    const bool seededBackbuffer = std::any_of(
+        plan.definitions.begin(), plan.definitions.end(), [](const auto& definition) {
+          RenderTapeSurfaceDescriptorV2 surface{};
+          return definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE &&
+              renderTapeLoadSurfaceDescriptorV2(definition.descriptor, surface) &&
+              surface.storage == static_cast<std::uint32_t>(
+                  RenderTapeSurfaceStorage::SwapchainBackbuffer) &&
+              surface.initialContentDisposition == static_cast<std::uint32_t>(
+                  RenderTapeInitialContentDisposition::CompleteSeed);
+        });
+    if (seededBackbuffer) {
+      result.status = result.queryReplay.present
+          ? FrameTapeReplayStatus::QueryOracleUnsupported
+          : FrameTapeReplayStatus::UnsupportedGrammar;
+      result.queryReplay.failure = RenderTapeQueryReplayFailure::BackendUnavailable;
+      return result;
+    }
+  }
   if (sourcePolicy) {
     try {
       // replayGeneralPlan receives the result by value.  A vector copy keeps
@@ -2605,6 +2802,28 @@ FrameTapeReplayResult replayGeneralPlan(
   std::vector<Definition> definitions;
   std::vector<Chunk> bootstrap;
   std::vector<void*> resolved;
+  struct QueryState {
+    D9CWireObjectIdentity identity{};
+    RenderTapeQueryCycleState cycle{};
+  };
+  struct QueryObligation {
+    std::size_t rowIndex = 0u;
+    core::QueryPollSnapshot snapshot{};
+  };
+  std::vector<QueryState> queryStates;
+  std::vector<QueryObligation> queryObligations;
+  if (result.queryReplay.present) {
+    // No transcript or result-owner storage is first allocated after an
+    // original polling call has already produced an externally visible effect.
+    try {
+      queryStates.reserve(result.queryReplay.queryDefinitions);
+      queryObligations.reserve(result.queryReplay.recordedPolls);
+      result.queryReplay.rows.reserve(result.queryReplay.recordedPolls);
+    } catch (...) {
+      result.status = FrameTapeReplayStatus::ObjectCreationFailed;
+      return result;
+    }
+  }
   std::shared_ptr<OffscreenPresentOutput> output;
   D9CSurface* readbackTarget = nullptr;
   bool bootstrapReplayed = false;
@@ -2738,6 +2957,8 @@ FrameTapeReplayResult replayGeneralPlan(
         texturePrestageAudit->candidateSubresources == 0u;
   }
   auto replayUpper = device->dev().upperDevice();
+  result.queryReplay.actualMetal = result.queryReplay.present &&
+      replayUpper && replayUpper->pool();
   const bool priorExactAttachmentPreservation =
       replayUpper &&
       replayUpper->queue().renderTapeExactAttachmentPreservation();
@@ -3179,6 +3400,16 @@ FrameTapeReplayResult replayGeneralPlan(
           ++texturePrestageAudit->activatedObjects;
         }
         ++result.conservation.objectsCreated;
+        if (definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY) {
+          RenderTapeQueryDescriptorV2 desc{};
+          if (!renderTapeLoadQueryDescriptorV2(definition.descriptor, desc))
+            return fail(FrameTapeReplayStatus::QueryOracleUnsupported, eventIndex);
+          queryStates.push_back({
+              .identity = definition.fixed.identity,
+              .cycle = {.type = desc.type,
+                        .issueCycle = desc.initialIssueCycle},
+          });
+        }
         break;
       }
       case RenderTapeEventType::ObjectDestroy: {
@@ -3359,6 +3590,30 @@ FrameTapeReplayResult replayGeneralPlan(
                                    : std::span<const std::uint32_t>{},
                                sourceRows))
           return fail(FrameTapeReplayStatus::CommandReplayFailed, eventIndex);
+        if (result.queryReplay.present) {
+          ImportedChunkView imported;
+          if (!importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope, imported))
+            return fail(FrameTapeReplayStatus::CommandReplayFailed, eventIndex);
+          for (std::size_t i = 0u; i < imported.records.size(); ++i) {
+            const auto record = imported.record(i);
+            if (record.header.type != D9C_COMMAND_RECORD_QUERY_ISSUE) continue;
+            D9CCommandChunkWireQueryIssue issue{};
+            if (!load(record.payload, 0u, issue) ||
+                issue.queryHandleIndex >= imported.handles.size())
+              return fail(FrameTapeReplayStatus::QueryOracleFailed, eventIndex);
+            const auto& handle = imported.handles[issue.queryHandleIndex];
+            const D9CWireObjectIdentity identity{handle.kind, handle.generation,
+                                                handle.objectId};
+            const auto state = std::find_if(queryStates.begin(), queryStates.end(),
+                [&](const auto& value) { return sameIdentity(value.identity, identity); });
+            if (state == queryStates.end() ||
+                !renderTapeAdvanceQueryCycle(state->cycle, issue.flags, true)) {
+              result.queryReplay.failure = RenderTapeQueryReplayFailure::CycleMismatch;
+              return fail(FrameTapeReplayStatus::QueryOracleFailed, eventIndex);
+            }
+            ++result.queryReplay.replayedIssueRecords;
+          }
+        }
         sawSubmittedCommandWork = true;
         if (freshSeedDrainAudit) ++commandEpoch;
         break;
@@ -3446,6 +3701,90 @@ FrameTapeReplayResult replayGeneralPlan(
           return fail(FrameTapeReplayStatus::UnsupportedGrammar, eventIndex);
         }
         const auto& fixed = plan.controls[replayEvent.index];
+        if (fixed.kind == static_cast<std::uint32_t>(
+                              RenderTapeControlKind::QueryGetData)) {
+          const auto started = std::chrono::steady_clock::now();
+          RenderTapeQueryGetDataControlV2 captured{};
+          const auto& bytes = plan.controlBytes[replayEvent.index];
+          auto* query = static_cast<D9CQuery*>(
+              render_tape_runtime::findExactObject(objects, fixed.identity));
+          const auto state = std::find_if(queryStates.begin(), queryStates.end(),
+              [&](const auto& value) { return sameIdentity(value.identity, fixed.identity); });
+          if (bytes.size() != sizeof(captured) || !load(bytes, 0u, captured) ||
+              !query || !query->obj || state == queryStates.end() ||
+              captured.issueCycle != state->cycle.issueCycle) {
+            result.queryReplay.failure = RenderTapeQueryReplayFailure::CycleMismatch;
+            return fail(FrameTapeReplayStatus::QueryOracleFailed, eventIndex);
+          }
+          std::uint64_t staged = 0u;
+          const auto observed = dxmt9c_query_get_data(
+              query, captured.hasOutput ? &staged : nullptr,
+              static_cast<std::uint32_t>(captured.dataSize), captured.flags);
+          auto snapshot = device->dev().captureQueryPollSnapshot(query->obj);
+          const auto fence = snapshot.backendFence.snapshot();
+          RenderTapeQueryReplayRow row{
+              .eventIndex = eventIndex,
+              .eventOrdinal = plan.tape.event(eventIndex).header.ordinal,
+              .identity = fixed.identity,
+              .issueCycle = captured.issueCycle,
+              .flags = captured.flags,
+              .hasOutput = captured.hasOutput != 0u,
+              .dataSize = captured.dataSize,
+              .capturedResult = fixed.resultCode,
+              .replayResult = observed,
+              .oracleResult = observed,
+              .definedBytes = captured.definedBytes,
+              .capturedBytes = captured.result,
+              .localQueryIdentity = snapshot.identity,
+              .localIssueOrdinal = snapshot.issueOrdinal,
+              .localDeviceEpoch = snapshot.issueDeviceEpoch,
+              .localQueue = fence.queue,
+              .localSequence = fence.sequence,
+              .localInitializer = fence.initializer,
+              .resultRequired = fixed.resultCode == core::S_OK,
+          };
+          if (snapshot.backend) {
+            const auto progress = snapshot.backend->queryProgress();
+            row.completedSequence = progress.completed;
+            row.completedInitializer = progress.initializerCompleted;
+          }
+          if (observed == core::S_OK) {
+            ++result.queryReplay.replayReady;
+            if (row.resultRequired) {
+              row.readinessSatisfied = true;
+              ++result.queryReplay.readinessSatisfied;
+              std::memcpy(row.replayBytes.data(), &staged, row.definedBytes);
+              row.resultMatched = row.definedBytes != 0u && std::equal(row.capturedBytes.begin(),
+                  row.capturedBytes.begin() + row.definedBytes, row.replayBytes.begin());
+              if (row.resultMatched && row.definedBytes != 0u)
+                ++result.queryReplay.matchedResults;
+            }
+          } else if (observed == core::S_FALSE) {
+            ++result.queryReplay.replayPending;
+          }
+          ++result.queryReplay.replayedPolls;
+          result.queryReplay.rows.push_back(row);
+          result.queryReplay.transcriptWallNanos += elapsedNanos(
+              started, std::chrono::steady_clock::now());
+          if ((fixed.resultCode < 0 && observed != fixed.resultCode) ||
+              (fixed.resultCode >= 0 && observed != core::S_OK &&
+               observed != core::S_FALSE)) {
+            result.queryReplay.failure = RenderTapeQueryReplayFailure::PollFailed;
+            return fail(FrameTapeReplayStatus::QueryOracleFailed, eventIndex);
+          }
+          if (row.resultRequired && row.definedBytes != 0u &&
+              observed == core::S_OK && !row.resultMatched) {
+            result.queryReplay.failure = RenderTapeQueryReplayFailure::ResultMismatch;
+            return fail(FrameTapeReplayStatus::QueryOracleFailed, eventIndex);
+          }
+          if (row.resultRequired && observed == core::S_FALSE) {
+            queryObligations.push_back({
+                .rowIndex = result.queryReplay.rows.size() - 1u,
+                .snapshot = std::move(snapshot),
+            });
+          }
+          break;
+        }
         if (fixed.kind != static_cast<std::uint32_t>(
                 RenderTapeControlKind::GammaRampSet) ||
             fixed.controlBytes != kRenderTapeGammaRampBytes ||
@@ -3468,6 +3807,31 @@ FrameTapeReplayResult replayGeneralPlan(
     result.status = FrameTapeReplayStatus::ObjectCreationFailed;
     cleanup();
     return result;
+  }
+
+  if (result.queryReplay.present) {
+    result.queryReplay.transcriptComplete =
+        result.queryReplay.replayedPolls == result.queryReplay.recordedPolls &&
+        result.queryReplay.replayedIssueRecords == result.queryReplay.issueRecords;
+    for (const auto& obligation : queryObligations) {
+      auto& row = result.queryReplay.rows[obligation.rowIndex];
+      const auto failure = render_tape_runtime::settleQueryOracle(
+          device, obligation.snapshot, row, result.queryReplay);
+      if (failure != RenderTapeQueryReplayFailure::None) {
+        result.queryReplay.failure = failure;
+        return fail(failure == RenderTapeQueryReplayFailure::ProgressExhausted
+                        ? FrameTapeReplayStatus::QueryProgressExhausted
+                        : FrameTapeReplayStatus::QueryOracleFailed,
+                    row.eventIndex);
+      }
+    }
+    result.queryReplay.oracleComplete = result.queryReplay.transcriptComplete &&
+        result.queryReplay.readinessSatisfied == result.queryReplay.readinessRequired &&
+        result.queryReplay.matchedResults == result.queryReplay.requiredResults;
+    result.queryReplay.gpuResultOracle = result.queryReplay.actualMetal &&
+        result.queryReplay.oracleComplete && result.queryReplay.capturedReady != 0u;
+    if (!result.queryReplay.oracleComplete)
+      return fail(FrameTapeReplayStatus::QueryOracleFailed, 0xffffffffu);
   }
 
   if (!bootstrapReplayed || (output && output->scheduledCount() != 1u)) {
@@ -4603,6 +4967,12 @@ const char* frameTapeReplayStatusName(FrameTapeReplayStatus status) noexcept {
     return "warm-reset-unsupported";
   case FrameTapeReplayStatus::WarmResetFailed:
     return "warm-reset-failed";
+  case FrameTapeReplayStatus::QueryOracleUnsupported:
+    return "query-oracle-unsupported";
+  case FrameTapeReplayStatus::QueryOracleFailed:
+    return "query-oracle-failed";
+  case FrameTapeReplayStatus::QueryProgressExhausted:
+    return "query-progress-exhausted";
   }
   return "unknown";
 }

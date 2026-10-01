@@ -151,6 +151,7 @@ inline constexpr std::uint32_t V8U8 = 60u;
 inline constexpr std::uint32_t Q8W8V8U8 = 63u;
 inline constexpr std::uint32_t L16 = 81u;
 inline constexpr std::uint32_t R32F = 114u;
+inline constexpr std::uint32_t A32B32G32R32F = 116u;
 inline constexpr std::uint32_t D24S8 = 75u;
 inline constexpr std::uint32_t D24X8 = 77u;
 inline constexpr std::uint32_t DXT1 = 0x31545844u;
@@ -208,6 +209,15 @@ struct RenderTapeLockRect {
   std::int32_t top = 0;
   std::int32_t right = 0;
   std::int32_t bottom = 0;
+};
+
+struct RenderTapeLockBox {
+  std::int32_t left = 0;
+  std::int32_t top = 0;
+  std::int32_t right = 0;
+  std::int32_t bottom = 0;
+  std::int32_t front = 0;
+  std::int32_t back = 0;
 };
 
 struct RenderTapeCaptureLayoutDiagnostic {
@@ -289,9 +299,15 @@ RenderTapeMissingSeedDescriptor renderTapeDescribeMissingSeed(
 RenderTapeExpectedContentContract renderTapeDeriveExpectedSurfaceContent(
     const D9CSurfaceDesc& desc) noexcept;
 
+// Volume mip descriptors carry resourceType 4 and depth; standalone surface
+// contracts remain two-dimensional. Canonical volume bytes contain packed
+// rows and packed slices, independent of PE/native lock padding.
+RenderTapeExpectedContentContract renderTapeDeriveExpectedTextureSubresourceContent(
+    const D9CSurfaceDesc& desc) noexcept;
+
 // Derives the exact initial-content extent for every content-bearing resource
 // descriptor. Texture and standalone-surface inputs must use their canonical
-// V2 descriptors; volume seed closure is explicitly unsupported. Identities
+// V2 descriptors. Identities
 // whose contents are supplied by an immutable blob, an alias parent, or
 // PresentOutput return NotRequired with a zero/zero contract.
 RenderTapeExpectedContentContract renderTapeDeriveExpectedContentContract(
@@ -577,11 +593,95 @@ RenderTapeBlockMutationStatus applyRenderTapeLinearMutation(
     const RenderTapeLinearLockLayout& layout, std::span<const std::byte> bytes,
     std::vector<std::byte>& completeContent) noexcept;
 
+enum class RenderTapeVolumeLayoutStatus : std::uint32_t {
+  Accepted = 0u,
+  UnsupportedFormat,
+  InvalidExtent,
+  InvalidAlignment,
+  InvalidPitch,
+  Overflow,
+};
+
+// Capture-owned state is stored by exact owning texture/mip, so locks and
+// unlocks through Volume and VolumeTexture wrappers share the same decision.
+// Call begin/take only after the corresponding runtime operation succeeds;
+// a failed runtime unlock must retain the existing state.
+struct RenderTapeVolumeLockState {
+  bool active = false;
+  bool writable = false;
+
+  constexpr bool begin(bool readOnly) noexcept {
+    if (active)
+      return false;
+    active = true;
+    writable = !readOnly;
+    return true;
+  }
+
+  constexpr bool take(bool& wasWritable) noexcept {
+    wasWritable = false;
+    if (!active)
+      return false;
+    wasWritable = writable;
+    active = false;
+    writable = false;
+    return true;
+  }
+};
+
+// `top`/`rows` count storage rows (block rows for DXT). SlicePitch is supplied
+// explicitly: WoW64 LockBox shadows can pad slices to logical texel height,
+// whereas native compressed storage uses packed block rows.
+struct RenderTapeVolumeLockLayout {
+  std::uint32_t fullRowBytes = 0u;
+  std::uint32_t fullRows = 0u;
+  std::uint32_t fullDepth = 0u;
+  std::uint32_t destinationByteOffset = 0u;
+  std::uint32_t top = 0u;
+  std::uint32_t front = 0u;
+  std::uint32_t rowBytes = 0u;
+  std::uint32_t rows = 0u;
+  std::uint32_t slices = 0u;
+  std::uint32_t pitch = 0u;
+  std::uint64_t slicePitch = 0u;
+  std::uint64_t fullSliceBytes = 0u;
+  std::uint64_t fullBytes = 0u;
+  std::uint64_t tightSliceBytes = 0u;
+  std::uint64_t tightBytes = 0u;
+  std::uint64_t sourceBytes = 0u;
+  std::uint64_t subresourceSourceOffset = 0u;
+  std::uint64_t subresourceSourceBytes = 0u;
+  bool fullSubresource = false;
+};
+
+RenderTapeVolumeLayoutStatus renderTapeVolumeLockLayout(
+    const D9CSurfaceDesc& desc, std::int32_t pitch, std::int64_t slicePitch,
+    const RenderTapeLockBox* box, RenderTapeVolumeLockLayout& out) noexcept;
+
+RenderTapeVolumeLayoutStatus renderTapeVolumeContentLayout(
+    const D9CSurfaceDesc& desc, RenderTapeVolumeLockLayout& out) noexcept;
+
+// Rectangle origin means the returned LockBox pointer already names the box
+// origin. Subresource origin applies the checked x/y/z offset to a mip base.
+bool copyRenderTapeVolumeRows(
+    const void* bits, const RenderTapeVolumeLockLayout& layout,
+    std::vector<std::byte>& out,
+    RenderTapeLockBitsOrigin origin = RenderTapeLockBitsOrigin::Rectangle) noexcept;
+
+bool writeRenderTapeVolumeRows(
+    std::span<const std::byte> tightBytes, void* bits,
+    const RenderTapeVolumeLockLayout& layout,
+    RenderTapeLockBitsOrigin origin = RenderTapeLockBitsOrigin::Rectangle) noexcept;
+
+RenderTapeBlockMutationStatus applyRenderTapeVolumeMutation(
+    const RenderTapeVolumeLockLayout& layout, std::span<const std::byte> bytes,
+    std::vector<std::byte>& completeContent) noexcept;
+
 // Capture-only closure for the D3D9 UpdateTexture full-resource copy. The
 // destination may have no CPU-visible seed yet; this transform proves that
 // every source subresource is complete and copies those exact bytes into the
-// destination shadow. Volume/unknown dimensions and descriptor or extent
-// mismatches are intentionally rejected.
+// destination shadow. Unknown dimensions and descriptor or extent mismatches
+// are intentionally rejected.
 enum class RenderTapeUpdateTextureStatus : std::uint32_t {
   Accepted = 0u,
   IncompleteSource,

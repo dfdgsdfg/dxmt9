@@ -9,6 +9,83 @@ tags: [specs, gap, experiments]
 
 ## Fixed-input replay experiment
 
+### Query-aware captured policy loop (2026-10-02)
+
+R-HARN-REPLAY-9.1–9.5 are not yet implemented end-to-end. The current capture
+now has V2 query descriptors and polling payloads preserving FLUSH, output
+shape, defined result bytes and derived issue cycles; the native Render Tape
+validator passes stale/reissued/uncaptured-cycle and malformed payload cases.
+General CPU and Metal query execution and receipt qualification are under
+integration. Synthetic cold/warm Metal and controlled CPU CLI runs now accept
+both compatibility and production-slot routes, with original query transcript
+and pixel checks in `traces/query-tape-integration-h430/cli-*`. The real Metal
+profile returns 192 samples and zero after reissue; the default primitive-count
+backend is not a GPU query oracle and is rejected before execution. Capture
+and replay must use the same explicitly qualified backend profile.
+A retained old-query GPU snapshot assertion subsequently reproduced with named
+PollBudget exhaustion (262,144 polls in about 56 ms, actual contribution still
+pending, no backend failure). A controlled completion delay reproduces that
+bounded-oracle outcome. The fixture must distinguish bounded polling from
+retained-result correctness after real completion; the original uninstrumented
+failure remains unclassified. General provider settlement follows its actual
+Present drain, unlike the original isolated retained-query fixture.
+A complete device-state bootstrap still does not close an open query at the capture cut; capture
+explicitly rejects that cut. Synthetic query fixtures are not evidence of full
+captured STALKER support.
+
+An explicit published-only query snapshot capability preserves the marker and
+cancellation through reissue/release. The initial core snapshot, END-marker and
+device-lifecycle tests pass, along with the native-free query receipt gate.
+The snapshot target also passes cancellation-after-classification and stale
+epoch cases. The existing full TLA regression exits successfully; it does not
+prove the new captured end-to-end path. This does not change default snapshot
+eligibility or permit unbound-writer polling.
+
+Required evidence remains query-aware capture/validation, production CPU
+controlled-completion execution, actual Metal query and original-pixel
+qualification, and repeated unchanged-input policy comparisons with separate
+setup/replay/Encode/completion costs. No query stripping, eligibility relaxation,
+recorded-duration sleeps, or synthetic results may substitute for those gates.
+
+Measurement qualification now binds logical release schedules to independently
+verified query identity/cycle evidence. Count-preserving wrong-cycle and foreign
+Ready releases reject in paired results; standalone `execution_valid` remains
+structural-only. The completion-mode adapter and zero-obligation transcript
+contracts are corrected, with native-free negative tests and the x86 CPU CLI
+regression passing. No actual-workload repeated timing result is qualified yet.
+
+R-HARN-REPLAY-9.6 is also open. PE volume LockBox capture, canonical mip
+content/layout helpers, General provider creation/upload and the CPU full-slice
+writer are implemented. PE32/PE64 and the canonical x86 Unix builds pass,
+including the Unix install-name audit. Seven focused x86/Rosetta schema,
+query snapshot/transcript, Volume writer/layout and shadow-layout tests pass;
+the real Metal query, Volume mip/z-slice and seed-reference rejection tests also
+pass independently on x86/Rosetta. Actual STALKER capture remains open.
+The first new run (`app-d3d9-stkcop-bench-tape-h430-query-volume-02`) passes the
+bridge handshake but rejects format 116, 64x64, pitch 1024, at startup with
+`unsupported_lock_format`. It is intentionally stopped after permanent registry
+invalidation, not a successful wild/FPS or Tape result. Explicit format-116
+16-byte canonical layout support and raw-bit/padded-row, partial/mip/Volume and
+overflow tests now pass on native and x86. Capture retry
+`app-d3d9-stkcop-bench-tape-h430-query-volume-03` passes startup registration,
+reaches the selected arm boundary and completes color seed snapshots, but
+repeatedly rejects bootstrap construction with `snapshot_built=0`,
+`snapshot_appended=0` (`arm_status=4`, `interval_status=3`). The app exits zero;
+its runner PASS and desktop-fallback screenshot are not Tape or visual oracle
+qualification. Bootstrap-state rejection attribution is the next actual-input
+gate; no captured state may be dropped to bypass it.
+Failure-only bootstrap diagnostics now report all four shadow table counts and
+capacities plus all six constant-family byte/alignment/register bounds. Both
+PE builds pass. Full-shadow extents exceed the single-section capacities
+(render-state/TSS/sampler/transform: 64/64/64/16), making table overflow a
+candidate, not yet an observed attribution. The next capture must identify the
+rejected dimension before changing bootstrap serialization.
+Existing H343 artifacts do not identify the workload's volume format.
+The existing mutation event carries complete volume mip blobs without a new
+wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage
+and must not be inferred from logical height; the narrow shadow-layout fix and
+native layout tests do not replace actual captured-content qualification.
+
 ### STALKER capture and parallel experiment admission (2026-09-20)
 
 R-HARN-REPLAY-7.12/7.23 remain unqualified for STALKER. H342 R684 misses its

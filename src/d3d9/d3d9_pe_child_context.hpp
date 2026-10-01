@@ -107,6 +107,16 @@ struct D3D9PeSurfaceTextureContext {
   void NotifyRenderTapeLinearMutationForChild(
       const dxmt9::d3d9::pe::PeWireObjectRef &, std::uint32_t,
       const dxmt9::d3d9::RenderTapeLinearLockLayout &, std::span<const std::byte>) noexcept;
+  void NotifyRenderTapeVolumeLockForChild(
+      const dxmt9::d3d9::pe::PeWireObjectRef &, std::uint32_t,
+      std::uint32_t) noexcept;
+  bool FinishRenderTapeVolumeLockForChild(
+      const dxmt9::d3d9::pe::PeWireObjectRef &, std::uint32_t, bool,
+      bool &) noexcept;
+  void NotifyRenderTapeVolumeSnapshotForChild(
+      const dxmt9::d3d9::pe::PeWireObjectRef &, std::uint32_t,
+      const dxmt9::d3d9::RenderTapeVolumeLockLayout &, std::span<const std::byte>,
+      bool) noexcept;
   void NotifyRenderTapeSurfaceAliasForChild(
       const dxmt9::d3d9::pe::PeWireObjectRef &,
       const dxmt9::d3d9::pe::PeWireObjectRef &, std::uint32_t,
@@ -119,6 +129,7 @@ struct D3D9PeQueryContext {
   D3D9DeviceImpl *device = nullptr;
   HRESULT FlushPeRecorderForChild() noexcept;
   bool IsChunkRecorderEnabledForChild() const noexcept;
+  bool IsRenderTapeCaptureTrackingEnabledForChild() const noexcept;
   HRESULT AppendQueryIssueForChild(
       std::uint32_t, const dxmt9::d3d9::pe::QueryRef &) noexcept;
   void NotifyRenderTapeObjectDestroyForChild(

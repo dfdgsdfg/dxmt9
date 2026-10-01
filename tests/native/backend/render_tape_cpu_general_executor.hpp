@@ -24,6 +24,7 @@
 #include "render_tape_cpu_source_admission.hpp"
 #include "render_tape_cpu_policy.hpp"
 #include "render_tape_cpu_diagnostic.hpp"
+#include "render_tape_cpu_general_grammar.hpp"
 
 #include "dxmt9/dxmt9_source_payload.hpp"
 #include "dxmt9/attachment_contents.hpp"
@@ -130,6 +131,7 @@ struct CpuGeneralTapeExecutionResult {
   std::size_t observedLiveBindings = 0u;
   std::size_t sourceOracleCheckedSources = 0u;
   std::size_t observedMutations = 0u;
+  std::size_t observedTextureUploads = 0u;
   // Cheap counts taken from each published source payload.  These remain
   // available when semantic observation is disabled for timing samples.
   std::size_t sourceSummaryCommands = 0u;
@@ -150,6 +152,8 @@ struct CpuGeneralTapeExecutionResult {
   std::vector<dxmt9::d3d9::RenderTapeSourceReplayPublicationEvidence>
       captureSourceReplayPublications{};
   bool captureSourceReplayStorageOverflow = false;
+  dxmt9::d3d9::RenderTapeQueryReplayEvidence queryReplay{};
+  std::uint64_t querySemanticDigest = 1469598103934665603ull;
 };
 
 namespace detail {
@@ -210,6 +214,71 @@ inline bool cpuGeneralWriteRows(const D9CSurfaceDesc& desc,
                 layout.rowBytes);
   }
   return true;
+}
+
+struct CpuGeneralTextureUploadShape {
+  std::uint32_t width = 0u;
+  std::uint32_t height = 0u;
+  std::uint32_t depth = 0u;
+  std::uint32_t pitch = 0u;
+  std::uint32_t slicePitch = 0u;
+  std::uint64_t bytes = 0u;
+};
+
+inline bool cpuGeneralTextureUploadShape(
+    const D9CSurfaceDesc& desc, CpuGeneralTextureUploadShape& out) noexcept {
+  out = {};
+  const auto content = d3d9::renderTapeDeriveExpectedTextureSubresourceContent(desc);
+  if (content.status != d3d9::RenderTapeExpectedContentStatus::Accepted)
+    return false;
+  const auto format = d3d9::devicec::fmtFromD3D(desc.format);
+  const auto pitch = core::formatRowPitch(format, desc.width);
+  const auto slicePitch = core::formatByteSize(format, desc.width, desc.height);
+  if (pitch == 0u || slicePitch == 0u || desc.depth == 0u ||
+      slicePitch > std::numeric_limits<std::uint32_t>::max() ||
+      content.bytes != static_cast<std::uint64_t>(slicePitch) * desc.depth)
+    return false;
+  out = {desc.width, desc.height, desc.depth, pitch,
+         static_cast<std::uint32_t>(slicePitch), content.bytes};
+  return true;
+}
+
+inline bool cpuGeneralTextureUploadShapeMatches(
+    const CpuGeneralTextureUploadShape& expected, std::uint32_t width,
+    std::uint32_t height, std::uint32_t depth, std::uint32_t pitch,
+    std::uint32_t slicePitch, std::size_t bytes) noexcept {
+  return expected.bytes != 0u && width == expected.width &&
+         height == expected.height && depth == expected.depth &&
+         pitch == expected.pitch && slicePitch == expected.slicePitch &&
+         bytes == expected.bytes;
+}
+
+inline bool cpuGeneralWriteTextureRows(
+    const D9CSurfaceDesc& desc, const D9CTexture& texture,
+    std::uint32_t subresource, const D9CLockedRect& lock,
+    std::span<const std::byte> bytes) {
+  if (desc.resourceType != 4u) return cpuGeneralWriteRows(desc, lock, bytes);
+  d3d9::RenderTapeVolumeLockLayout canonical{};
+  if (d3d9::renderTapeVolumeContentLayout(desc, canonical) !=
+          d3d9::RenderTapeVolumeLayoutStatus::Accepted ||
+      canonical.fullBytes != bytes.size())
+    return false;
+  // Native core storage packs compressed block-row slices. A real WoW64
+  // pointer shadow, if present, carries its explicitly recorded slice stride.
+  // Never infer either stride from the logical texel height.
+  auto slicePitch = canonical.fullSliceBytes;
+  if (const auto shadow = texture.wow64Locks.find(subresource);
+      shadow != texture.wow64Locks.end() && shadow->second.active &&
+      shadow->second.shadow.ptr == lock.bits)
+    slicePitch = shadow->second.shadowSlicePitch;
+  if (slicePitch > static_cast<std::uint64_t>(
+                       std::numeric_limits<std::int64_t>::max()))
+    return false;
+  d3d9::RenderTapeVolumeLockLayout locked{};
+  return d3d9::renderTapeVolumeLockLayout(desc, lock.pitch,
+             static_cast<std::int64_t>(slicePitch), nullptr, locked) ==
+             d3d9::RenderTapeVolumeLayoutStatus::Accepted &&
+         d3d9::writeRenderTapeVolumeRows(bytes, lock.bits, locked);
 }
 
 struct LogicalReceipt {
@@ -313,6 +382,9 @@ class CpuGeneralTapeExecutor {
     std::span<const std::byte> captureSourceTape{};
     std::span<const std::byte> captureSourceIdentitySidecar{};
     CpuDiagnosticLedger* diagnostic = nullptr;
+    // Oracle probes are disclosed separately from the recorded transcript.
+    // A zero budget is useful to prove exhaustion without an implicit drain.
+    std::uint32_t maxQueryOraclePolls = 4u;
   };
 
   CpuGeneralTapeExecutor(Fixture& fixture, const Plan& plan,
@@ -365,6 +437,31 @@ class CpuGeneralTapeExecutor {
     }
     if (!admitCaptureSourcePlan(result)) return result;
     if (!admitEmission(result)) return result;
+    const auto queryAdmission = d3d9::render_tape_runtime::admitGeneralCpuPlan(plan_);
+    const bool queryBearing = std::any_of(plan_.definitions.begin(), plan_.definitions.end(),
+        [](const auto& definition) {
+          return definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY;
+        });
+    if (queryBearing && (!queryAdmission.accepted() ||
+                         options_.maxPendingSources != 1u ||
+                         options_.holdSafeBufferMutation ||
+                         options_.maxQueryOraclePolls > 64u)) {
+      result.failure = "general-executor-query-policy-or-transcript";
+      return result;
+    }
+    fixture_.routing->controlledQueries = queryBearing;
+    if (queryBearing) {
+      result.queryReplay.present = true;
+      result.queryReplay.queryDefinitions = queryAdmission.counts.queryDefinitions;
+      result.queryReplay.issueRecords = queryAdmission.counts.queryIssues;
+      result.queryReplay.recordedPolls = queryAdmission.counts.queryPolls;
+      result.queryReplay.maxOraclePolls = options_.maxQueryOraclePolls *
+          static_cast<std::uint32_t>(queryAdmission.counts.queryPolls);
+      result.queryReplay.maxOracleWallNanos = 0u;
+      if (options_.measurement) result.querySemanticDigest = 0u;
+      if (!options_.measurement)
+        result.queryReplay.rows.reserve(queryAdmission.counts.queryPolls);
+    }
     // The admitted grammar has no CPU read/control operations. Seed writes
     // remain real; post-render evidence is commands, never stale shadows.
     fixture_.routing->attachmentOwner = AttachmentContentOwner::BackendCommands;
@@ -404,6 +501,14 @@ class CpuGeneralTapeExecutor {
     std::vector<dxmt9::d3d9::render_tape_runtime::OwnedObject> objects;
     std::vector<detail::LogicalReceipt> receipts;
     objects.reserve(plan_.definitions.size());
+    struct QueryCycle {
+      D9CWireObjectIdentity identity{};
+      d3d9::RenderTapeQueryCycleState state{};
+      core::QueryPollSnapshot snapshot{};
+      std::uint64_t expectedLocalIssueOrdinal = 0u;
+    };
+    std::vector<QueryCycle> queryCycles;
+    queryCycles.reserve(queryAdmission.counts.queryDefinitions);
     receipts.reserve(plan_.mutations.size());
     result.tombstones.reserve(plan_.definitions.size());
     auto& tombstones = result.tombstones;
@@ -533,18 +638,24 @@ class CpuGeneralTapeExecutor {
     };
     core::Handle expectedUploadHandle{};
     std::uint32_t expectedUploadLevel = 0u;
+    detail::CpuGeneralTextureUploadShape expectedUploadShape{};
     std::span<const std::byte> expectedUploadBytes;
     bool observedUpload = false;
     fixture_.routing->generalTextureUpload =
         [&](core::TextureHandle handle, std::uint32_t level,
-            std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t,
-            std::uint32_t, std::span<const std::uint8_t> bytes) {
+            std::uint32_t width, std::uint32_t height, std::uint32_t depth,
+            std::uint32_t pitch, std::uint32_t slicePitch,
+            std::span<const std::uint8_t> bytes) {
           const bool exact = handle == expectedUploadHandle &&
-              level == expectedUploadLevel && bytes.size() == expectedUploadBytes.size() &&
+              level == expectedUploadLevel &&
+              detail::cpuGeneralTextureUploadShapeMatches(expectedUploadShape,
+                  width, height, depth, pitch, slicePitch, bytes.size()) &&
+              bytes.size() == expectedUploadBytes.size() &&
               !bytes.empty() &&
               (options_.measurement ||
                std::memcmp(bytes.data(), expectedUploadBytes.data(), bytes.size()) == 0);
           observedUpload |= exact;
+          if (exact) ++result.observedTextureUploads;
           return exact;
         };
     struct UploadCleanup {
@@ -692,6 +803,12 @@ class CpuGeneralTapeExecutor {
         if (strictMode && Access::readyCount(fixture_.routing->queue_) !=
                               expectedReady - drained)
           return fail(event, "general-executor-source-ready-count");
+        // Keep one actual submitted source outstanding for recorded polls.
+        // Earlier publications settle in order before the bounded queue
+        // credit is reused; query-bearing raws may cut more than one source.
+        if (queryBearing && !pendingSources.empty() &&
+            result.submitted - result.completed >= options_.maxPendingSources &&
+            !releaseOne(event)) return false;
         if (result.submitted < result.completed ||
             result.submitted - result.completed >= options_.maxPendingSources)
           return fail(event, "general-executor-pending-budget");
@@ -856,7 +973,7 @@ class CpuGeneralTapeExecutor {
         result.trace.push_back(trace);
         result.pendingPeak = std::max(result.pendingPeak, result.submitted - result.completed);
         ++drained;
-        if (!options_.beforeNextWork && !releasePending(event)) return false;
+        if (!options_.beforeNextWork && !queryBearing && !releasePending(event)) return false;
       }
       if (strictMode && (drained != expectedReady ||
                          Access::readyCount(fixture_.routing->queue_) != 0u))
@@ -881,12 +998,16 @@ class CpuGeneralTapeExecutor {
           ? std::chrono::steady_clock::time_point{}
           : std::chrono::steady_clock::now();
       const bool windowEligible = options_.maxPendingSources > 1u && overlapEligible(chunk, event);
+      const bool queryOnly = queryBearing && !imported.records.empty() &&
+          std::all_of(imported.records.begin(), imported.records.end(), [](const auto& record) {
+            return record.type == D9C_COMMAND_RECORD_QUERY_ISSUE;
+          });
       if (Access::readyCount(fixture_.routing->queue_) ||
           Access::writingCommandCount(fixture_.routing->queue_) ||
           Access::pendingCompletionCount(fixture_.routing->queue_) != pendingSources.size() ||
           Access::residentCount(fixture_.routing->queue_) != pendingSources.size() ||
           (!pendingSources.empty() &&
-           (!windowEligible || !pendingWindowEligible())))
+           !queryOnly && (!windowEligible || !pendingWindowEligible())))
         return fail(event, "general-executor-nonquiescent-chunk-entry");
       if (options_.maxPendingSources > 1u &&
           !Access::noWaitHeadroom(fixture_.routing->queue_).admitsOne())
@@ -1031,10 +1152,46 @@ class CpuGeneralTapeExecutor {
       if (!options_.measurement && !sourceDriven)
         result.replayNs += elapsed(replayBegin);
       result.commands += imported.records.size();
-      for (const auto& record : imported.records) {
+      for (std::size_t recordIndex = 0u; recordIndex < imported.records.size(); ++recordIndex) {
+        const auto& record = imported.records[recordIndex];
         if (record.type == D9C_COMMAND_RECORD_DRAW_PRIMITIVE ||
             record.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE)
           ++result.draws;
+        if (record.type == D9C_COMMAND_RECORD_QUERY_ISSUE) {
+          D9CCommandChunkWireQueryIssue issue{};
+          const auto view = imported.record(recordIndex);
+          if (view.payload.size() < sizeof(issue))
+            return fail(event, "general-executor-query-issue-payload");
+          std::memcpy(&issue, view.payload.data(), sizeof(issue));
+          if (issue.queryHandleIndex >= imported.handles.size())
+            return fail(event, "general-executor-query-issue-handle");
+          const auto& handle = imported.handles[issue.queryHandleIndex];
+          const D9CWireObjectIdentity identity{handle.kind, handle.generation, handle.objectId};
+          auto cycle = std::find_if(queryCycles.begin(), queryCycles.end(), [&](const auto& candidate) {
+            return detail::cpuGeneralSameIdentity(candidate.identity, identity);
+          });
+          auto* query = static_cast<D9CQuery*>(resolved[issue.queryHandleIndex]);
+          if (cycle == queryCycles.end() || !query || !query->obj ||
+              !d3d9::renderTapeAdvanceQueryCycle(cycle->state, issue.flags, true))
+            return fail(event, "general-executor-query-cycle-transition");
+          ++cycle->expectedLocalIssueOrdinal;
+          cycle->snapshot = fixture_.cDevice->dev().captureQueryPollSnapshot(query->obj);
+          ++result.queryReplay.replayedIssueRecords;
+          if (!options_.measurement) {
+            detail::cpuTapeDigestScalar(result.querySemanticDigest, identity.kind);
+            detail::cpuTapeDigestScalar(result.querySemanticDigest, identity.generation);
+            detail::cpuTapeDigestScalar(result.querySemanticDigest, identity.objectId);
+            detail::cpuTapeDigestScalar(result.querySemanticDigest, issue.flags);
+            detail::cpuTapeDigestScalar(result.querySemanticDigest, cycle->state.issueCycle);
+          }
+        }
+      }
+      if (queryBearing) {
+        for (const auto& cycle : queryCycles) {
+          if (cycle.snapshot.issueOrdinal != cycle.expectedLocalIssueOrdinal ||
+              (cycle.expectedLocalIssueOrdinal && cycle.snapshot.active != cycle.state.active))
+            return fail(event, "general-executor-query-local-issue-coverage");
+        }
       }
       if (sourceDriven) return result.failure.empty();
       return publishReady(event, windowEligible);
@@ -1090,16 +1247,18 @@ class CpuGeneralTapeExecutor {
         ok = definition != plan_.definitions.end() && fixed.byteOffset == 0u &&
              dxmt9::d3d9::renderTapeTextureSubresourceDescriptor(
                  definition->descriptor, fixed.subresource, desc) &&
+             detail::cpuGeneralTextureUploadShape(desc, expectedUploadShape) &&
              dxmt9c_texture_lock_rect(texture, fixed.subresource, &lock,
                                       nullptr, 0u) == core::D3D_OK &&
              lock.bits != nullptr;
-        const bool copied = ok && detail::cpuGeneralWriteRows(
-                                        desc, lock, blob->bytes);
+        const bool copied = ok && detail::cpuGeneralWriteTextureRows(
+            desc, *texture, fixed.subresource, lock, blob->bytes);
         const bool unlocked = ok &&
             dxmt9c_texture_unlock_rect(texture, fixed.subresource) ==
             core::D3D_OK;
         ok = copied && unlocked && observedUpload && !fixture_.routing->textureUploadFailed;
         expectedUploadBytes = {};
+        expectedUploadShape = {};
       } else if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
         const auto definition = std::find_if(
             plan_.definitions.begin(), plan_.definitions.end(),
@@ -1253,6 +1412,132 @@ class CpuGeneralTapeExecutor {
       return true;
     };
 
+    const auto replayQueryPoll = [&](std::uint32_t event, std::uint32_t index) {
+      using Failure = d3d9::RenderTapeQueryReplayFailure;
+      auto& evidence = result.queryReplay;
+      if (index >= plan_.controls.size() || index >= plan_.controlBytes.size() ||
+          plan_.controlBytes[index].size() != sizeof(d3d9::RenderTapeQueryGetDataControlV2))
+        return fail(event, "general-executor-query-control-index");
+      const auto& fixed = plan_.controls[index];
+      d3d9::RenderTapeQueryGetDataControlV2 poll{};
+      std::memcpy(&poll, plan_.controlBytes[index].data(), sizeof(poll));
+      auto cycle = std::find_if(queryCycles.begin(), queryCycles.end(), [&](const auto& candidate) {
+        return detail::cpuGeneralSameIdentity(candidate.identity, fixed.identity);
+      });
+      auto* wrapped = static_cast<D9CQuery*>(d3d9::render_tape_runtime::findExactObject(
+          objects, fixed.identity));
+      d3d9::RenderTapeQueryReplayRow row{
+          .eventIndex = event, .eventOrdinal = plan_.tape.event(event).header.ordinal,
+          .identity = fixed.identity, .issueCycle = poll.issueCycle, .flags = poll.flags,
+          .hasOutput = poll.hasOutput != 0u, .dataSize = poll.dataSize,
+          .capturedResult = fixed.resultCode, .definedBytes = poll.definedBytes,
+          .capturedBytes = poll.result, .resultRequired = fixed.resultCode == core::D3D_OK};
+      const auto queryFail = [&](Failure reason, const char* name) {
+        evidence.failure = reason;
+        if (!options_.measurement) evidence.rows.push_back(row);
+        return fail(event, name);
+      };
+      if (!wrapped || !wrapped->obj || cycle == queryCycles.end() ||
+          cycle->state.issueCycle != poll.issueCycle ||
+          (poll.issueCycle != 0u && !cycle->state.capturedCycle))
+        return queryFail(Failure::CycleMismatch, "general-executor-query-cycle-mismatch");
+      const auto snapshot = fixture_.cDevice->dev().captureQueryPollSnapshot(wrapped->obj);
+      if (!snapshot.eligible || snapshot.identity != wrapped->obj->identity() ||
+          cycle->snapshot.issueOrdinal != snapshot.issueOrdinal ||
+          (snapshot.issueOrdinal && snapshot.issueDeviceEpoch != cycle->snapshot.issueDeviceEpoch))
+        return queryFail(Failure::SnapshotUnavailable, "general-executor-query-snapshot-unavailable");
+      row.localQueryIdentity = snapshot.identity;
+      row.localIssueOrdinal = snapshot.issueOrdinal;
+      row.localDeviceEpoch = snapshot.issueDeviceEpoch;
+      const auto fence = snapshot.backendFence.snapshot();
+      row.localQueue = fence.queue;
+      row.localSequence = fence.sequence;
+      row.localInitializer = fence.initializer;
+      std::array<std::byte, 8> output{};
+      output.fill(std::byte{0xa5});
+      const auto transcriptBegin = options_.measurement
+          ? std::chrono::steady_clock::time_point{}
+          : std::chrono::steady_clock::now();
+      row.replayResult = dxmt9c_query_get_data(wrapped,
+          poll.hasOutput ? output.data() : nullptr,
+          static_cast<std::uint32_t>(poll.dataSize), poll.flags);
+      if (!options_.measurement) evidence.transcriptWallNanos += elapsed(transcriptBegin);
+      ++evidence.replayedPolls;
+      evidence.capturedPending += fixed.resultCode == core::S_FALSE;
+      evidence.capturedReady += fixed.resultCode == core::D3D_OK;
+      evidence.replayPending += row.replayResult == core::S_FALSE;
+      evidence.replayReady += row.replayResult == core::D3D_OK;
+      row.oracleResult = row.replayResult;
+      if (row.replayResult != core::D3D_OK &&
+          std::any_of(output.begin(), output.end(), [](auto byte) { return byte != std::byte{0xa5}; }))
+        return queryFail(Failure::PollFailed, "general-executor-query-undefined-output-written");
+      if (fixed.resultCode < 0 && row.replayResult != fixed.resultCode)
+        return queryFail(Failure::PollFailed, "general-executor-query-captured-failure-mismatch");
+      if (row.replayResult < 0 && fixed.resultCode >= 0)
+        return queryFail(Failure::PollFailed, "general-executor-query-poll-failed");
+      if (row.resultRequired) {
+        ++evidence.readinessRequired;
+        evidence.requiredResults += poll.definedBytes != 0u;
+        const auto oracleBegin = options_.measurement
+            ? std::chrono::steady_clock::time_point{}
+            : std::chrono::steady_clock::now();
+        while (row.oracleResult == core::S_FALSE && row.oraclePolls < options_.maxQueryOraclePolls) {
+          if (!pendingSources.empty()) {
+            ++evidence.supplementalDrains;
+            if (!releasePending(event))
+              return queryFail(Failure::PollFailed, "general-executor-query-progress-release");
+          }
+          ++row.oraclePolls;
+          ++evidence.supplementalPolls;
+          row.supplemental = true;
+          row.oracleResult = fixture_.cDevice->dev().pollQuerySnapshot(snapshot,
+              poll.hasOutput ? output.data() : nullptr, poll.dataSize, poll.flags);
+        }
+        if (!options_.measurement) evidence.oracleWallNanos += elapsed(oracleBegin);
+        if (row.oracleResult == core::S_FALSE) {
+          evidence.progressLimit = d3d9::RenderTapeQueryProgressLimit::PollBudget;
+          return queryFail(Failure::ProgressExhausted, "general-executor-query-progress-exhausted");
+        }
+        if (row.oracleResult != core::D3D_OK)
+          return queryFail(Failure::PollFailed, "general-executor-query-oracle-poll-failed");
+        const auto progress = fixture_.routing->queryProgress();
+        row.completedSequence = progress.completed;
+        row.completedInitializer = progress.initializerCompleted;
+        if (!snapshot.constant() && !snapshot.preIssue() &&
+            dxmt9::query::classifyEnd(snapshot.backendFence, progress) != dxmt9::query::Poll::Complete)
+          return queryFail(Failure::SnapshotUnavailable, "general-executor-query-premature-result");
+        row.readinessSatisfied = true;
+        ++evidence.readinessSatisfied;
+        const bool substituted = cycle->state.type == 9u && poll.definedBytes != 0u;
+        row.resultSubstituted = substituted;
+        evidence.substitutedResults += substituted;
+        if (poll.definedBytes != 0u) {
+          std::copy_n(output.begin(), poll.definedBytes, row.replayBytes.begin());
+          if (!substituted) {
+            row.resultMatched = std::equal(row.capturedBytes.begin(),
+                row.capturedBytes.begin() + poll.definedBytes, output.begin());
+            if (!row.resultMatched)
+              return queryFail(Failure::ResultMismatch, "general-executor-query-result-mismatch");
+            ++evidence.matchedResults;
+          }
+        }
+      }
+      if (!options_.measurement) {
+        detail::cpuTapeDigestScalar(result.querySemanticDigest, fixed.identity.kind);
+        detail::cpuTapeDigestScalar(result.querySemanticDigest, fixed.identity.generation);
+        detail::cpuTapeDigestScalar(result.querySemanticDigest, fixed.identity.objectId);
+        detail::cpuTapeDigestScalar(result.querySemanticDigest, poll.issueCycle);
+        detail::cpuTapeDigestScalar(result.querySemanticDigest, poll.flags);
+        detail::cpuTapeDigestScalar(result.querySemanticDigest, poll.hasOutput);
+        detail::cpuTapeDigestScalar(result.querySemanticDigest, poll.dataSize);
+        detail::cpuTapeDigestScalar(result.querySemanticDigest, fixed.resultCode);
+        detail::cpuGeneralHashBytes(result.querySemanticDigest,
+            {reinterpret_cast<const std::uint8_t*>(poll.result.data()), poll.definedBytes});
+        evidence.rows.push_back(row);
+      }
+      return true;
+    };
+
     const auto executeEvents = [&]() -> bool {
       for (const auto& replayEvent : plan_.events) {
         const auto kind = replayEvent.type;
@@ -1271,13 +1556,27 @@ class CpuGeneralTapeExecutor {
         const bool holdMutation = boundary.decision != CpuTapeMutationResult::ReleaseBeforeMutation;
         result.mutationBoundaryReleases += options_.holdSafeBufferMutation && pendingMutation && !holdMutation;
         if (!holdMutation) {
+          bool queryOnly = false;
+          if (queryBearing && replayEvent.type == d3d9::RenderTapeEventType::CommandChunk &&
+              replayEvent.index < plan_.commandChunks.size()) {
+            const auto& chunk = plan_.commandChunks[replayEvent.index];
+            d3d9::ImportedChunkView imported;
+            queryOnly = d3d9::importPrevalidatedCommandChunk(chunk.bytes, chunk.envelope, imported) &&
+                !imported.records.empty() &&
+                std::all_of(imported.records.begin(), imported.records.end(), [](const auto& record) {
+                  return record.type == D9C_COMMAND_RECORD_QUERY_ISSUE;
+                });
+          }
           const bool eligible = options_.maxPendingSources > 1u &&
               replayEvent.type == d3d9::RenderTapeEventType::CommandChunk &&
               replayEvent.index < plan_.commandChunks.size() &&
               overlapEligible(plan_.commandChunks[replayEvent.index], event);
           const auto action = cpuTapeWindowAction(pendingSources.size(),
               options_.maxPendingSources,
-              releaseBeforeCpuTapeWork(replayEvent.type, options_.beforeNextWork),
+              queryOnly || (replayEvent.type == d3d9::RenderTapeEventType::OrderedControl && queryBearing)
+                  ? false
+                  : releaseBeforeCpuTapeWork(replayEvent.type,
+                                             options_.beforeNextWork || queryBearing),
               eligible, pendingWindowEligible());
           if (action == CpuTapeWindowAction::Reject)
             return fail(event, "general-executor-window-invalid-state");
@@ -1316,6 +1615,13 @@ class CpuGeneralTapeExecutor {
             return false;
           }
           objects.push_back({.identity = definition.fixed.identity, .value = value});
+          if (definition.fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY) {
+            d3d9::RenderTapeQueryDescriptorV2 desc{};
+            if (!d3d9::renderTapeLoadQueryDescriptorV2(definition.descriptor, desc))
+              return fail(event, "general-executor-query-descriptor");
+            queryCycles.push_back({.identity = definition.fixed.identity,
+                .state = {.type = desc.type, .issueCycle = desc.initialIssueCycle}});
+          }
           ++result.resourcesCreated;
           break;
         }
@@ -1417,8 +1723,8 @@ class CpuGeneralTapeExecutor {
           break;
         }
         case dxmt9::d3d9::RenderTapeEventType::OrderedControl:
-          fail(event, "general-executor-unsupported-control");
-          return false;
+          if (!replayQueryPoll(event, replayEvent.index)) return false;
+          break;
         case dxmt9::d3d9::RenderTapeEventType::PresentComplete:
           break;
         }
@@ -1439,6 +1745,15 @@ class CpuGeneralTapeExecutor {
                     "general-executor-source-oracle-missing-row");
       if (result.completed != result.submitted)
         return fail(plan_.events.back().eventIndex, "general-executor-unresolved-schedule");
+      if (queryBearing) {
+        auto& evidence = result.queryReplay;
+        evidence.transcriptComplete = evidence.replayedIssueRecords == evidence.issueRecords &&
+            evidence.replayedPolls == evidence.recordedPolls;
+        evidence.oracleComplete = evidence.transcriptComplete &&
+            evidence.readinessRequired == evidence.readinessSatisfied;
+        if (!evidence.oracleComplete)
+          return fail(plan_.events.back().eventIndex, "general-executor-query-incomplete");
+      }
       return result.failure.empty();
     };
     diagnostic.set(CpuDiagnosticPhase::Bookkeeping);

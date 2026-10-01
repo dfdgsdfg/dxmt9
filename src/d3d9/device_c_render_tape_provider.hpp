@@ -47,6 +47,91 @@ enum class FrameTapeReplayStatus : std::uint8_t {
   OutputMismatch,
   WarmResetUnsupported,
   WarmResetFailed,
+  QueryOracleUnsupported,
+  QueryOracleFailed,
+  QueryProgressExhausted,
+};
+
+enum class RenderTapeQueryReplayFailure : std::uint8_t {
+  None,
+  UnsupportedResultKind,
+  SnapshotUnavailable,
+  CycleMismatch,
+  PollFailed,
+  ResultMismatch,
+  ProgressExhausted,
+  BackendUnavailable,
+};
+
+enum class RenderTapeQueryProgressLimit : std::uint8_t {
+  None,
+  PollBudget,
+  WallBudget,
+};
+
+// Cold provider evidence, one row per original GetData call. Queue/sequence
+// fields are actual local query receipts; captured provenance stays on the
+// immutable control and is never imported as completion authority.
+struct RenderTapeQueryReplayRow {
+  std::uint32_t eventIndex = 0u;
+  std::uint64_t eventOrdinal = 0u;
+  D9CWireObjectIdentity identity{};
+  std::uint64_t issueCycle = 0u;
+  std::uint32_t flags = 0u;
+  bool hasOutput = false;
+  std::uint64_t dataSize = 0u;
+  std::int32_t capturedResult = 0;
+  std::int32_t replayResult = 0;
+  std::int32_t oracleResult = 0;
+  std::uint32_t definedBytes = 0u;
+  std::array<std::byte, 8> capturedBytes{};
+  std::array<std::byte, 8> replayBytes{};
+  std::uint64_t localQueryIdentity = 0u;
+  std::uint64_t localIssueOrdinal = 0u;
+  std::uint64_t localDeviceEpoch = 0u;
+  std::uint64_t localQueue = 0u;
+  std::uint64_t localSequence = 0u;
+  std::uint64_t localInitializer = 0u;
+  std::uint64_t completedSequence = 0u;
+  std::uint64_t completedInitializer = 0u;
+  std::uint32_t oraclePolls = 0u;
+  bool resultRequired = false;
+  bool readinessSatisfied = false;
+  bool resultMatched = false;
+  bool resultSubstituted = false;
+  bool supplemental = false;
+};
+
+struct RenderTapeQueryReplayEvidence {
+  bool present = false;
+  bool transcriptComplete = false;
+  bool oracleComplete = false;
+  bool actualMetal = false;
+  // CPU replay may prove readiness/order but cannot compare GPU samples.
+  bool gpuResultOracle = false;
+  RenderTapeQueryProgressLimit progressLimit = RenderTapeQueryProgressLimit::None;
+  std::uint32_t queryDefinitions = 0u;
+  std::uint32_t issueRecords = 0u;
+  std::uint32_t replayedIssueRecords = 0u;
+  std::uint32_t recordedPolls = 0u;
+  std::uint32_t replayedPolls = 0u;
+  std::uint32_t capturedPending = 0u;
+  std::uint32_t replayPending = 0u;
+  std::uint32_t capturedReady = 0u;
+  std::uint32_t replayReady = 0u;
+  std::uint32_t requiredResults = 0u;
+  std::uint32_t matchedResults = 0u;
+  std::uint32_t readinessRequired = 0u;
+  std::uint32_t readinessSatisfied = 0u;
+  std::uint32_t substitutedResults = 0u;
+  std::uint32_t supplementalPolls = 0u;
+  std::uint32_t supplementalDrains = 0u;
+  std::uint64_t transcriptWallNanos = 0u;
+  std::uint64_t oracleWallNanos = 0u;
+  std::uint32_t maxOraclePolls = 262144u;
+  std::uint64_t maxOracleWallNanos = 5000000000ull;
+  RenderTapeQueryReplayFailure failure = RenderTapeQueryReplayFailure::None;
+  std::vector<RenderTapeQueryReplayRow> rows{};
 };
 
 // The prepared harness is intentionally cold-path only. Compatibility
@@ -441,6 +526,7 @@ struct FrameTapeReplayResult {
   RenderTapeSourceBoundaryEvidence sourceBoundaryAudit{};
   RenderTapeTextureInputAuditEvidence textureInputAudit{};
   RenderTapeSourceReplayEvidence sourceReplay{};
+  RenderTapeQueryReplayEvidence queryReplay{};
 
   bool complete() const noexcept {
     return status == FrameTapeReplayStatus::Complete;

@@ -231,6 +231,11 @@ def _case(root: pathlib.Path, *, route: str = "compatibility"):
         "readback_artifacts_valid": True, "provider": {"path": "/provider", "sha256": "p" * 64},
         "validator": {"path": "/validator", "sha256": "v" * 64},
         "input_components": components,
+        "input_scope": manifest["scope"],
+        "input_inspection": {"schema": "dxmt9.render_tape.v2", "valid": True,
+                             "events_sha256": components["events"]["sha256"],
+                             "grammar": {"descriptor_kinds": {}, "record_types": {},
+                                         "control_kinds": {}}},
         "renderer_environment": {},
         "forced_environment": GPU.policy_environment(policy),
         "requested": {"warmup": 0, "repeat": 2, "reset": "cold-device",
@@ -386,7 +391,8 @@ def main() -> int:
         })
         assert RUNNER.experiment_accepts(
             experiment, warmup=0, repeat=2, reset="cold-device",
-            route="compatibility", require_path=True, non_degenerate=False)
+            route="compatibility", require_path=True, non_degenerate=False,
+            input_inspection=good["input_inspection"])
         experiment["source_boundary_mode"] = "capture-source"
         assert not RUNNER.experiment_accepts(
             experiment, warmup=0, repeat=2, reset="cold-device",
@@ -483,6 +489,18 @@ def main() -> int:
         ok, _ = GPU.gpu_receipt_accepts(good, policy, manifest=no_scope,
                                         bundle=root, readback_root=readbacks, runner=RUNNER)
         assert not ok
+        assert GPU.original_oracles(manifest, root)[1] == "synthetic-test-input"
+        production = copy.deepcopy(manifest)
+        production["scope"] = {"production_capture": True}
+        assert GPU.original_oracles(production, root)[1] == "production-capture"
+        contradictory = copy.deepcopy(production)
+        contradictory["scope"]["synthetic"] = True
+        assert GPU.original_oracles(contradictory, root)[0] is None
+        mislabeled = copy.deepcopy(good)
+        mislabeled["input_scope"] = production["scope"]
+        assert GPU.gpu_receipt_accepts(
+            mislabeled, policy, manifest=manifest, bundle=root,
+            readback_root=readbacks, runner=RUNNER) == (False, "gpu-input-scope-mismatch")
         # A/A is a real pair of strict acceptance calls, not an equality-only shortcut.
         manifest_a, policy_a, receipt_a, readbacks_a = _case(root / "aa")
         manifest_b, policy_b, receipt_b, readbacks_b = _case(root / "aa-b")

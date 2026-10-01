@@ -865,6 +865,14 @@ test('dxmt9-cpu-ready-production-routing-spec',
      env: dxmt9_native_test_env_vars + [
        'DXMT9_OFFLOAD_COMMIT_REPLAY=1',
      ])
+test('dxmt9-render-tape-cpu-query-transcript-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--general-cpu-query-spec'],
+     env: dxmt9_native_test_env)
+test('dxmt9-render-tape-cpu-volume-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--general-cpu-volume-spec'],
+     env: dxmt9_native_test_env)
 test('dxmt9-deferred-ingress-routing-spec',
      cpu_ready_production_routing_spec,
      env: dxmt9_native_test_env_vars + [

@@ -959,7 +959,16 @@ extern "C" int32_t dxmt9c_texture_lock_rect(D9CTexture* t, uint32_t level, D9CLo
   }
   std::uint64_t lockRectShadowNs = 0;
   std::uint64_t lockRectBytes = 0;
-  if (lock.data && requiresWow64PointerShadow() && !pointerFits32Bit(lock.data)) {
+  const auto& textureDesc = t->obj->desc();
+  const uint32_t textureMipLevel = t->obj->mipLevelForSubresource(level);
+  const bool volume = textureDesc.type == dxmt9::core::TextureType::Volume;
+  const uint32_t textureLevelDepth = volume
+      ? mipDimension(textureDesc.depth, textureMipLevel) : 1u;
+  if (lock.data && textureLockRequiresPointerShadow(
+          requiresWow64PointerShadow(), pointerFits32Bit(lock.data), volume,
+          dxmt9::core::isCompressedFormat(textureDesc.format),
+          textureLevelDepth,
+          mipDimension(textureDesc.height, textureMipLevel))) {
     const auto shadowStart = std::chrono::steady_clock::now();
     const auto& desc = t->obj->desc();
     const uint32_t mipLevel = t->obj->mipLevelForSubresource(level);

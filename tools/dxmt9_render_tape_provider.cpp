@@ -206,6 +206,92 @@ RenderTapeBlobCatalogue makeIdentityCatalogue(
   return catalogue;
 }
 
+void printQueryReplay(const RenderTapeQueryReplayEvidence& evidence) {
+  const auto boolean = [](bool value) { return value ? "true" : "false"; };
+  const auto bytesHex = [](const auto& bytes, std::uint32_t count) {
+    constexpr char digits[] = "0123456789abcdef";
+    std::string result;
+    for (std::size_t index = 0u; index < std::min<std::size_t>(count, bytes.size()); ++index) {
+      const auto byte = std::to_integer<unsigned>(bytes[index]);
+      result.push_back(digits[byte >> 4u]);
+      result.push_back(digits[byte & 0xfu]);
+    }
+    return result;
+  };
+  constexpr std::array<const char*, 9> failures{
+      "none", "unsupported-result-kind", "snapshot-unavailable", "cycle-mismatch",
+      "poll-failed", "result-mismatch", "progress-exhausted", "backend-unavailable", "unknown"};
+  const auto failure = static_cast<std::size_t>(evidence.failure);
+  constexpr std::array<const char*, 4> progressLimits{
+      "none", "poll-budget", "wall-budget", "unknown"};
+  const auto progressLimit = static_cast<std::size_t>(evidence.progressLimit);
+  std::cout << "{\"schema\":\"dxmt9.render_tape.query_replay.v1\","
+               "\"backend\":\"metal-real\",\"mode\":\"qualification\",\"present\":"
+            << boolean(evidence.present)
+            << ",\"transcript_complete\":" << boolean(evidence.transcriptComplete)
+            << ",\"oracle_complete\":" << boolean(evidence.oracleComplete)
+            << ",\"actual_metal\":" << boolean(evidence.actualMetal)
+            << ",\"gpu_result_oracle\":" << boolean(evidence.gpuResultOracle)
+            << ",\"query_definitions\":" << evidence.queryDefinitions
+            << ",\"issue_records\":" << evidence.issueRecords
+            << ",\"replayed_issue_records\":" << evidence.replayedIssueRecords
+            << ",\"recorded_polls\":" << evidence.recordedPolls
+            << ",\"replayed_polls\":" << evidence.replayedPolls
+            << ",\"captured_pending\":" << evidence.capturedPending
+            << ",\"replay_pending\":" << evidence.replayPending
+            << ",\"captured_ready\":" << evidence.capturedReady
+            << ",\"replay_ready\":" << evidence.replayReady
+            << ",\"required_results\":" << evidence.requiredResults
+            << ",\"matched_results\":" << evidence.matchedResults
+            << ",\"readiness_required\":" << evidence.readinessRequired
+            << ",\"readiness_satisfied\":" << evidence.readinessSatisfied
+            << ",\"substituted_results\":" << evidence.substitutedResults
+            << ",\"supplemental_polls\":" << evidence.supplementalPolls
+            << ",\"supplemental_drains\":" << evidence.supplementalDrains
+            << ",\"transcript_wall_ns\":" << evidence.transcriptWallNanos
+            << ",\"oracle_wall_ns\":" << evidence.oracleWallNanos
+            << ",\"max_oracle_polls\":" << evidence.maxOraclePolls
+            << ",\"max_oracle_wall_ns\":" << evidence.maxOracleWallNanos
+            << ",\"progress_limit\":\""
+            << progressLimits[std::min(progressLimit, progressLimits.size() - 1u)] << '"'
+            << ",\"failure\":\"" << failures[std::min(failure, failures.size() - 1u)]
+            << "\",\"rows\":[";
+  for (std::size_t index = 0u; index < evidence.rows.size(); ++index) {
+    if (index) std::cout << ',';
+    const auto& row = evidence.rows[index];
+    std::cout << "{\"event_index\":" << row.eventIndex
+              << ",\"event_ordinal\":" << row.eventOrdinal
+              << ",\"identity\":{\"kind\":" << row.identity.kind
+              << ",\"generation\":" << row.identity.generation
+              << ",\"object_id\":\"" << row.identity.objectId << "\"}"
+              << ",\"issue_cycle\":" << row.issueCycle
+              << ",\"flags\":" << row.flags
+              << ",\"has_output\":" << boolean(row.hasOutput)
+              << ",\"data_size\":" << row.dataSize
+              << ",\"captured_result\":" << row.capturedResult
+              << ",\"replay_result\":" << row.replayResult
+              << ",\"oracle_result\":" << row.oracleResult
+              << ",\"defined_bytes\":" << row.definedBytes
+              << ",\"captured_hex\":\"" << bytesHex(row.capturedBytes, row.definedBytes)
+              << "\",\"replay_hex\":\"" << bytesHex(row.replayBytes, row.definedBytes) << '"'
+              << ",\"local_query_identity\":" << row.localQueryIdentity
+              << ",\"local_issue_ordinal\":" << row.localIssueOrdinal
+              << ",\"local_device_epoch\":" << row.localDeviceEpoch
+              << ",\"local_queue\":" << row.localQueue
+              << ",\"local_sequence\":" << row.localSequence
+              << ",\"local_initializer\":" << row.localInitializer
+              << ",\"completed_sequence\":" << row.completedSequence
+              << ",\"completed_initializer\":" << row.completedInitializer
+              << ",\"oracle_polls\":" << row.oraclePolls
+              << ",\"result_required\":" << boolean(row.resultRequired)
+              << ",\"result_matched\":" << boolean(row.resultMatched)
+              << ",\"readiness_satisfied\":" << boolean(row.readinessSatisfied)
+              << ",\"result_substituted\":" << boolean(row.resultSubstituted)
+              << ",\"supplemental\":" << boolean(row.supplemental) << '}';
+  }
+  std::cout << "]}";
+}
+
 void printResult(const FrameTapeReplayResult& result,
                  std::string_view requestedPartitionMode,
                  std::string_view resolvedPartitionMode,
@@ -219,6 +305,9 @@ void printResult(const FrameTapeReplayResult& result,
   const auto& coverage = result.coverage;
   const auto& conservation = result.conservation;
   std::cout << "{\"schema\":\"dxmt9.render_tape.provider_replay.v2\",";
+  std::cout << "\"query_replay\":";
+  printQueryReplay(result.queryReplay);
+  std::cout << ',';
   std::cout << "\"archive_policy\":\"disabled\",";
   std::cout << "\"partition_mode\":{\"requested\":\""
             << requestedPartitionMode << "\",\"resolved\":\""

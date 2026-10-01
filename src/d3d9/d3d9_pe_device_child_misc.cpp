@@ -164,6 +164,8 @@ class D3D9QueryImpl final : public IDirect3DQuery9 {
   D3D9PeQueryContext *context_;
   D3D9PeDiagnosticObserver *diagnostics_;
   dxmt9::d3d9::pe::QueryRef wireObject_{};
+  bool tapeTracking_ = false;
+  std::uint32_t tapeQueryType_ = 0u;
 
 public:
   D3D9QueryImpl(D9CQuery *q, IDirect3DDevice9 *device,
@@ -176,6 +178,11 @@ public:
     dxmt9::d3d9::pe::cacheWireObjectRef(
         q_,
         dxmt9c_query_get_wire_identity, wireObject_);
+    // Tracking is allocated once with the device, independently of arming.
+    // Capture-off GetData pays only the cached predicate below.
+    tapeTracking_ = context_ &&
+        context_->IsRenderTapeCaptureTrackingEnabledForChild();
+    if (tapeTracking_) tapeQueryType_ = dxmt9c_query_get_type(q_);
   }
   ~D3D9QueryImpl() {
     if (context_)
@@ -265,15 +272,22 @@ public:
     if (FAILED(flushHr))
       return flushHr;
     const HRESULT hr = hr32(dxmt9c_query_get_data(q_, pData, size, flags));
-    if (context_) {
+    if (tapeTracking_) {
       const auto disposition =
           hr == S_FALSE
               ? dxmt9::d3d9::RenderTapeControlDisposition::Pending
               : SUCCEEDED(hr)
                     ? dxmt9::d3d9::RenderTapeControlDisposition::Completed
                     : dxmt9::d3d9::RenderTapeControlDisposition::Failed;
-      const dxmt9::d3d9::RenderTapeQueryGetDataControl payload{
-          .dataSize = size, .seqId = 0u};
+      dxmt9::d3d9::RenderTapeQueryGetDataControlV2 payload{
+          .flags = flags,
+          .hasOutput = pData != nullptr ? 1u : 0u,
+          .definedBytes = dxmt9::d3d9::renderTapeQueryDefinedBytes(
+              tapeQueryType_, static_cast<std::int32_t>(hr), pData != nullptr,
+              size),
+          .dataSize = size};
+      if (payload.definedBytes != 0u)
+        std::memcpy(payload.result.data(), pData, payload.definedBytes);
       context_->NotifyRenderTapeOrderedControlForChild(
           dxmt9::d3d9::RenderTapeOrderedControlHeader{
               .identity = wireObject_.identity,

@@ -92,9 +92,6 @@ RenderTapeExpectedContentContract expectedContentForTexture(
   RenderTapeTextureDescriptorV2 texture{};
   if (!renderTapeLoadTextureDescriptorV2(descriptor, texture))
     return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidDescriptor);
-  const auto dimension = static_cast<RenderTapeTextureDimension>(texture.dimension);
-  if (dimension == RenderTapeTextureDimension::Volume)
-    return expectedContentFailure(RenderTapeExpectedContentStatus::UnsupportedDimension);
   if (texture.initialContentDisposition != static_cast<std::uint32_t>(
           RenderTapeInitialContentDisposition::CompleteSeed))
     return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidDescriptor);
@@ -107,7 +104,7 @@ RenderTapeExpectedContentContract expectedContentForTexture(
     D9CSurfaceDesc desc{};
     if (!renderTapeTextureSubresourceDescriptor(descriptor, subresource, desc))
       return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidDescriptor);
-    const auto content = expectedContentForSurface(desc);
+    const auto content = renderTapeDeriveExpectedTextureSubresourceContent(desc);
     if (content.status != RenderTapeExpectedContentStatus::Accepted)
       return content;
     if (!subresourceBytes.empty())
@@ -125,6 +122,23 @@ RenderTapeExpectedContentContract expectedContentForTexture(
 RenderTapeExpectedContentContract renderTapeDeriveExpectedSurfaceContent(
     const D9CSurfaceDesc& desc) noexcept {
   return expectedContentForSurface(desc);
+}
+
+RenderTapeExpectedContentContract renderTapeDeriveExpectedTextureSubresourceContent(
+    const D9CSurfaceDesc& desc) noexcept {
+  if (desc.resourceType != 4u)
+    return expectedContentForSurface(desc);
+  RenderTapeVolumeLockLayout layout{};
+  const auto status = renderTapeVolumeContentLayout(desc, layout);
+  if (status == RenderTapeVolumeLayoutStatus::UnsupportedFormat)
+    return expectedContentFailure(RenderTapeExpectedContentStatus::UnsupportedFormat);
+  if (status == RenderTapeVolumeLayoutStatus::Overflow)
+    return expectedContentFailure(RenderTapeExpectedContentStatus::Overflow);
+  if (status != RenderTapeVolumeLayoutStatus::Accepted)
+    return expectedContentFailure(RenderTapeExpectedContentStatus::InvalidExtent);
+  return {.status = RenderTapeExpectedContentStatus::Accepted,
+          .bytes = layout.fullBytes,
+          .count = 1u};
 }
 
 const char* renderTapeExpectedContentStatusName(
@@ -197,7 +211,7 @@ RenderTapeMissingSeedDescriptor renderTapeDescribeMissingSeed(
     }
     result.descriptorStatus = RenderTapeMissingSeedDescriptorStatus::Accepted;
     const auto expected =
-        renderTapeDeriveExpectedSurfaceContent(result.missingSurface);
+        renderTapeDeriveExpectedTextureSubresourceContent(result.missingSurface);
     result.expectedContentStatus = expected.status;
     result.expectedTightBytes = expected.bytes;
     result.expectedTightBytesValid =
@@ -373,6 +387,8 @@ std::uint32_t renderTapeLinearBytesPerPixel(std::uint32_t format) noexcept {
     return 4u;
   case render_tape_d3d_format::A16B16G16R16:
     return 8u;
+  case render_tape_d3d_format::A32B32G32R32F:
+    return 16u;
   case render_tape_d3d_format::R8G8B8:
     return 3u;
   case render_tape_d3d_format::A1R5G5B5:
@@ -1098,6 +1114,267 @@ RenderTapeBlockMutationStatus applyRenderTapeLinearMutation(
   return RenderTapeBlockMutationStatus::Accepted;
 }
 
+namespace {
+
+bool validVolumeLayout(const RenderTapeVolumeLockLayout& layout) noexcept {
+  if (layout.fullRowBytes == 0u || layout.fullRows == 0u ||
+      layout.fullDepth == 0u || layout.rowBytes == 0u || layout.rows == 0u ||
+      layout.slices == 0u || layout.pitch < layout.fullRowBytes ||
+      layout.destinationByteOffset > layout.fullRowBytes ||
+      layout.rowBytes > layout.fullRowBytes - layout.destinationByteOffset ||
+      layout.top > layout.fullRows || layout.rows > layout.fullRows - layout.top ||
+      layout.front > layout.fullDepth ||
+      layout.slices > layout.fullDepth - layout.front)
+    return false;
+  std::uint64_t minimumSlicePitch = 0u;
+  std::uint64_t fullSliceBytes = 0u;
+  std::uint64_t fullBytes = 0u;
+  std::uint64_t tightSliceBytes = 0u;
+  std::uint64_t tightBytes = 0u;
+  std::uint64_t sourceBytes = 0u;
+  std::uint64_t rowOffset = 0u;
+  std::uint64_t subresourceOffset = 0u;
+  std::uint64_t subresourceBytes = 0u;
+  if (!checkedMul(layout.pitch, layout.fullRows, minimumSlicePitch) ||
+      layout.slicePitch < minimumSlicePitch ||
+      !checkedMul(layout.fullRowBytes, layout.fullRows, fullSliceBytes) ||
+      !checkedMul(fullSliceBytes, layout.fullDepth, fullBytes) ||
+      !checkedMul(layout.rowBytes, layout.rows, tightSliceBytes) ||
+      !checkedMul(tightSliceBytes, layout.slices, tightBytes) ||
+      !checkedMul(layout.slicePitch, layout.slices - 1u, sourceBytes) ||
+      !checkedMul(layout.pitch, layout.rows - 1u, rowOffset) ||
+      !checkedAdd(sourceBytes, rowOffset, sourceBytes) ||
+      !checkedAdd(sourceBytes, layout.rowBytes, sourceBytes) ||
+      !checkedMul(layout.slicePitch, layout.front, subresourceOffset) ||
+      !checkedMul(layout.pitch, layout.top, rowOffset) ||
+      !checkedAdd(subresourceOffset, rowOffset, subresourceOffset) ||
+      !checkedAdd(subresourceOffset, layout.destinationByteOffset,
+                  subresourceOffset) ||
+      !checkedAdd(subresourceOffset, sourceBytes, subresourceBytes) ||
+      fullBytes > std::numeric_limits<std::size_t>::max() ||
+      subresourceBytes > std::numeric_limits<std::size_t>::max())
+    return false;
+  return layout.fullSliceBytes == fullSliceBytes &&
+         layout.fullBytes == fullBytes && layout.tightSliceBytes == tightSliceBytes &&
+         layout.tightBytes == tightBytes && layout.sourceBytes == sourceBytes &&
+         layout.subresourceSourceOffset == subresourceOffset &&
+         layout.subresourceSourceBytes == subresourceBytes &&
+         (!layout.fullSubresource ||
+          (layout.destinationByteOffset == 0u && layout.top == 0u &&
+           layout.front == 0u && layout.rowBytes == layout.fullRowBytes &&
+           layout.rows == layout.fullRows && layout.slices == layout.fullDepth));
+}
+
+} // namespace
+
+RenderTapeVolumeLayoutStatus renderTapeVolumeLockLayout(
+    const D9CSurfaceDesc& desc, std::int32_t pitch, std::int64_t slicePitch,
+    const RenderTapeLockBox* box, RenderTapeVolumeLockLayout& out) noexcept {
+  out = {};
+  const auto blockSize = blockBytes(desc.format);
+  const auto texelBytes = renderTapeLinearBytesPerPixel(desc.format);
+  if (blockSize == 0u && texelBytes == 0u)
+    return RenderTapeVolumeLayoutStatus::UnsupportedFormat;
+  if (desc.resourceType != 4u || desc.width == 0u || desc.height == 0u ||
+      desc.depth == 0u)
+    return RenderTapeVolumeLayoutStatus::InvalidExtent;
+  constexpr auto maxExtent = static_cast<std::uint32_t>(
+      std::numeric_limits<std::int32_t>::max());
+  if (desc.width > maxExtent || desc.height > maxExtent || desc.depth > maxExtent)
+    return RenderTapeVolumeLayoutStatus::Overflow;
+  if (pitch <= 0 || slicePitch <= 0)
+    return RenderTapeVolumeLayoutStatus::InvalidPitch;
+  const RenderTapeLockBox fullBox{
+      .right = static_cast<std::int32_t>(desc.width),
+      .bottom = static_cast<std::int32_t>(desc.height),
+      .back = static_cast<std::int32_t>(desc.depth)};
+  const auto& region = box ? *box : fullBox;
+  if (region.left < 0 || region.top < 0 || region.front < 0 ||
+      region.right <= region.left || region.bottom <= region.top ||
+      region.back <= region.front ||
+      static_cast<std::uint32_t>(region.right) > desc.width ||
+      static_cast<std::uint32_t>(region.bottom) > desc.height ||
+      static_cast<std::uint32_t>(region.back) > desc.depth)
+    return RenderTapeVolumeLayoutStatus::InvalidExtent;
+  const std::uint32_t unit = blockSize != 0u ? 4u : 1u;
+  if (blockSize != 0u &&
+      ((region.left & 3) != 0 || (region.top & 3) != 0 ||
+       ((region.right & 3) != 0 &&
+        static_cast<std::uint32_t>(region.right) != desc.width) ||
+       ((region.bottom & 3) != 0 &&
+        static_cast<std::uint32_t>(region.bottom) != desc.height)))
+    return RenderTapeVolumeLayoutStatus::InvalidAlignment;
+  const std::uint64_t unitBytes = blockSize != 0u ? blockSize : texelBytes;
+  const std::uint64_t fullUnitsWide =
+      (static_cast<std::uint64_t>(desc.width) + unit - 1u) / unit;
+  const std::uint32_t fullRows = (desc.height + unit - 1u) / unit;
+  const std::uint32_t left = static_cast<std::uint32_t>(region.left) / unit;
+  const std::uint32_t top = static_cast<std::uint32_t>(region.top) / unit;
+  const std::uint32_t right =
+      (static_cast<std::uint32_t>(region.right) + unit - 1u) / unit;
+  const std::uint32_t bottom =
+      (static_cast<std::uint32_t>(region.bottom) + unit - 1u) / unit;
+  RenderTapeVolumeLockLayout layout{
+      .fullRows = fullRows,
+      .fullDepth = desc.depth,
+      .top = top,
+      .front = static_cast<std::uint32_t>(region.front),
+      .rows = bottom - top,
+      .slices = static_cast<std::uint32_t>(region.back - region.front),
+      .pitch = static_cast<std::uint32_t>(pitch),
+      .slicePitch = static_cast<std::uint64_t>(slicePitch),
+      .fullSubresource = region.left == 0 && region.top == 0 &&
+                         region.front == 0 && region.right == fullBox.right &&
+                         region.bottom == fullBox.bottom &&
+                         region.back == fullBox.back};
+  std::uint64_t fullRowBytes = 0u;
+  std::uint64_t destinationByteOffset = 0u;
+  std::uint64_t rowBytes = 0u;
+  std::uint64_t minimumSlicePitch = 0u;
+  std::uint64_t rowOffset = 0u;
+  if (!checkedMul(fullUnitsWide, unitBytes, fullRowBytes) ||
+      !checkedMul(left, unitBytes, destinationByteOffset) ||
+      !checkedMul(right - left, unitBytes, rowBytes) ||
+      fullRowBytes > maxExtent || rowBytes > maxExtent ||
+      destinationByteOffset > maxExtent ||
+      !checkedMul(fullRowBytes, layout.fullRows, layout.fullSliceBytes) ||
+      !checkedMul(layout.fullSliceBytes, layout.fullDepth, layout.fullBytes) ||
+      !checkedMul(rowBytes, layout.rows, layout.tightSliceBytes) ||
+      !checkedMul(layout.tightSliceBytes, layout.slices, layout.tightBytes) ||
+      !checkedMul(layout.slicePitch, layout.slices - 1u, layout.sourceBytes) ||
+      !checkedMul(layout.pitch, layout.rows - 1u, rowOffset) ||
+      !checkedAdd(layout.sourceBytes, rowOffset, layout.sourceBytes) ||
+      !checkedAdd(layout.sourceBytes, rowBytes, layout.sourceBytes) ||
+      !checkedMul(layout.front, layout.slicePitch,
+                  layout.subresourceSourceOffset) ||
+      !checkedMul(layout.top, layout.pitch, rowOffset) ||
+      !checkedAdd(layout.subresourceSourceOffset, rowOffset,
+                  layout.subresourceSourceOffset) ||
+      !checkedAdd(layout.subresourceSourceOffset, destinationByteOffset,
+                  layout.subresourceSourceOffset) ||
+      !checkedAdd(layout.subresourceSourceOffset, layout.sourceBytes,
+                  layout.subresourceSourceBytes) ||
+      !checkedMul(layout.pitch, layout.fullRows, minimumSlicePitch) ||
+      layout.fullBytes > std::numeric_limits<std::size_t>::max() ||
+      layout.subresourceSourceBytes > std::numeric_limits<std::size_t>::max())
+    return RenderTapeVolumeLayoutStatus::Overflow;
+  if (static_cast<std::uint64_t>(pitch) < fullRowBytes ||
+      layout.slicePitch < minimumSlicePitch)
+    return RenderTapeVolumeLayoutStatus::InvalidPitch;
+  layout.fullRowBytes = static_cast<std::uint32_t>(fullRowBytes);
+  layout.destinationByteOffset = static_cast<std::uint32_t>(destinationByteOffset);
+  layout.rowBytes = static_cast<std::uint32_t>(rowBytes);
+  out = layout;
+  return RenderTapeVolumeLayoutStatus::Accepted;
+}
+
+RenderTapeVolumeLayoutStatus renderTapeVolumeContentLayout(
+    const D9CSurfaceDesc& desc, RenderTapeVolumeLockLayout& out) noexcept {
+  out = {};
+  const auto blockSize = blockBytes(desc.format);
+  const auto texelBytes = renderTapeLinearBytesPerPixel(desc.format);
+  if (blockSize == 0u && texelBytes == 0u)
+    return RenderTapeVolumeLayoutStatus::UnsupportedFormat;
+  const std::uint64_t unit = blockSize != 0u ? 4u : 1u;
+  const std::uint64_t unitBytes = blockSize != 0u ? blockSize : texelBytes;
+  std::uint64_t rowBytes = 0u;
+  std::uint64_t sliceBytes = 0u;
+  if (!checkedMul((static_cast<std::uint64_t>(desc.width) + unit - 1u) / unit,
+                  unitBytes, rowBytes) ||
+      !checkedMul(rowBytes,
+                  (static_cast<std::uint64_t>(desc.height) + unit - 1u) / unit,
+                  sliceBytes) ||
+      rowBytes > static_cast<std::uint64_t>(std::numeric_limits<std::int32_t>::max()) ||
+      sliceBytes > static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()))
+    return RenderTapeVolumeLayoutStatus::Overflow;
+  return renderTapeVolumeLockLayout(
+      desc, static_cast<std::int32_t>(rowBytes),
+      static_cast<std::int64_t>(sliceBytes), nullptr, out);
+}
+
+bool copyRenderTapeVolumeRows(
+    const void* bits, const RenderTapeVolumeLockLayout& layout,
+    std::vector<std::byte>& out, RenderTapeLockBitsOrigin origin) noexcept {
+  if (!bits || !validVolumeLayout(layout) ||
+      (origin != RenderTapeLockBitsOrigin::Rectangle &&
+       origin != RenderTapeLockBitsOrigin::Subresource))
+    return false;
+  try {
+    std::vector<std::byte> replacement(static_cast<std::size_t>(layout.tightBytes));
+    const auto* source = static_cast<const std::byte*>(bits) +
+        (origin == RenderTapeLockBitsOrigin::Subresource
+             ? static_cast<std::size_t>(layout.subresourceSourceOffset) : 0u);
+    for (std::uint32_t slice = 0u; slice < layout.slices; ++slice) {
+      for (std::uint32_t row = 0u; row < layout.rows; ++row) {
+        std::memcpy(replacement.data() + slice * layout.tightSliceBytes +
+                        static_cast<std::size_t>(row) * layout.rowBytes,
+                    source + slice * layout.slicePitch +
+                        static_cast<std::size_t>(row) * layout.pitch,
+                    layout.rowBytes);
+      }
+    }
+    out.swap(replacement);
+    return true;
+  } catch (...) {
+    return false;
+  }
+}
+
+bool writeRenderTapeVolumeRows(
+    std::span<const std::byte> tightBytes, void* bits,
+    const RenderTapeVolumeLockLayout& layout, RenderTapeLockBitsOrigin origin) noexcept {
+  if (!bits || !validVolumeLayout(layout) || tightBytes.size() != layout.tightBytes ||
+      (origin != RenderTapeLockBitsOrigin::Rectangle &&
+       origin != RenderTapeLockBitsOrigin::Subresource))
+    return false;
+  auto* destination = static_cast<std::byte*>(bits) +
+      (origin == RenderTapeLockBitsOrigin::Subresource
+           ? static_cast<std::size_t>(layout.subresourceSourceOffset) : 0u);
+  for (std::uint32_t slice = 0u; slice < layout.slices; ++slice) {
+    for (std::uint32_t row = 0u; row < layout.rows; ++row) {
+      std::memcpy(destination + slice * layout.slicePitch +
+                      static_cast<std::size_t>(row) * layout.pitch,
+                  tightBytes.data() + slice * layout.tightSliceBytes +
+                      static_cast<std::size_t>(row) * layout.rowBytes,
+                  layout.rowBytes);
+    }
+  }
+  return true;
+}
+
+RenderTapeBlockMutationStatus applyRenderTapeVolumeMutation(
+    const RenderTapeVolumeLockLayout& layout, std::span<const std::byte> bytes,
+    std::vector<std::byte>& completeContent) noexcept {
+  if (!validVolumeLayout(layout))
+    return RenderTapeBlockMutationStatus::InvalidLayout;
+  if (bytes.size() != layout.tightBytes)
+    return RenderTapeBlockMutationStatus::InvalidBytes;
+  if (layout.fullSubresource) {
+    try {
+      std::vector<std::byte> replacement(bytes.begin(), bytes.end());
+      completeContent.swap(replacement);
+      return RenderTapeBlockMutationStatus::Accepted;
+    } catch (...) {
+      return RenderTapeBlockMutationStatus::AllocationFailed;
+    }
+  }
+  if (completeContent.size() != layout.fullBytes)
+    return RenderTapeBlockMutationStatus::IncompleteSeed;
+  for (std::uint32_t slice = 0u; slice < layout.slices; ++slice) {
+    for (std::uint32_t row = 0u; row < layout.rows; ++row) {
+      const auto destinationOffset =
+          (layout.front + slice) * layout.fullSliceBytes +
+          static_cast<std::size_t>(layout.top + row) * layout.fullRowBytes +
+          layout.destinationByteOffset;
+      std::memcpy(completeContent.data() + destinationOffset,
+                  bytes.data() + slice * layout.tightSliceBytes +
+                      static_cast<std::size_t>(row) * layout.rowBytes,
+                  layout.rowBytes);
+    }
+  }
+  return RenderTapeBlockMutationStatus::Accepted;
+}
+
 RenderTapeUpdateTextureStatus applyRenderTapeUpdateTextureClosure(
     std::span<const std::byte> sourceDescriptor,
     std::span<const std::vector<std::byte>> sourceContent,
@@ -1114,9 +1391,11 @@ RenderTapeUpdateTextureStatus applyRenderTapeUpdateTextureClosure(
     const auto destinationDimension =
         static_cast<RenderTapeTextureDimension>(destination.dimension);
     if ((sourceDimension != RenderTapeTextureDimension::Texture2D &&
-         sourceDimension != RenderTapeTextureDimension::Cube) ||
+         sourceDimension != RenderTapeTextureDimension::Cube &&
+         sourceDimension != RenderTapeTextureDimension::Volume) ||
         (destinationDimension != RenderTapeTextureDimension::Texture2D &&
-         destinationDimension != RenderTapeTextureDimension::Cube))
+         destinationDimension != RenderTapeTextureDimension::Cube &&
+         destinationDimension != RenderTapeTextureDimension::Volume))
       return RenderTapeUpdateTextureStatus::UnsupportedDimension;
     if (sourceDimension != destinationDimension ||
         source.mipLevelCount == 0u ||

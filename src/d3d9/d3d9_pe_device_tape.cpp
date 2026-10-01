@@ -87,6 +87,53 @@ bool D3D9DeviceImpl::produceRenderTapeBootstrap(
                 "render_tape_capture producer aborted reason=bootstrap_state "
                 "snapshot_built=%d snapshot_appended=%d",
                 snapshotBuilt ? 1 : 0, snapshotAppended ? 1 : 0);
+            if (!snapshotBuilt) {
+                // Observe only the rejected capture checkpoint. The normal
+                // sparse-state producer and its hot-path contract stay intact.
+                const auto &shadow = recorderState_.peState;
+                const auto &scratch = recorderState_.peSparseScratch;
+                dxmt9DeviceInfoLog(
+                    "render_tape_capture bootstrap_state_tables "
+                    "render_states=%zu render_state_cap=%zu "
+                    "texture_stage_states=%zu texture_stage_state_cap=%zu "
+                    "sampler_states=%zu sampler_state_cap=%zu "
+                    "transforms=%zu transform_cap=%zu",
+                    static_cast<std::size_t>(
+                        shadow.renderStateShadowTyped().size()),
+                    scratch.renderStates.size(),
+                    static_cast<std::size_t>(shadow.tssShadowTyped().size()),
+                    scratch.textureStageStates.size(),
+                    static_cast<std::size_t>(
+                        shadow.samplerStateShadowTyped().size()),
+                    scratch.samplerStates.size(),
+                    static_cast<std::size_t>(
+                        shadow.transformShadowTyped().size()),
+                    scratch.transforms.size());
+                const auto logConstantRange = [](
+                    const char *kind, const ConstShadow &range,
+                    std::size_t elementBytes, std::uint32_t registerCap) {
+                    dxmt9DeviceInfoLog(
+                        "render_tape_capture bootstrap_state_constants "
+                        "kind=%s bytes=%zu element_bytes=%zu remainder=%zu "
+                        "registers=%zu register_cap=%u",
+                        kind, range.values.size(), elementBytes,
+                        range.values.size() % elementBytes,
+                        range.values.size() / elementBytes, registerCap);
+                };
+                const auto &constants = recorderState_.peConsts;
+                logConstantRange("vs_f", constants.vsConstF, 16u,
+                                 D9C_DRAW_PACKET_MAX_CONST_VS_F);
+                logConstantRange("vs_i", constants.vsConstI, 16u,
+                                 D9C_DRAW_PACKET_MAX_CONST_VS_I);
+                logConstantRange("vs_b", constants.vsConstB, 4u,
+                                 D9C_DRAW_PACKET_MAX_CONST_VS_B);
+                logConstantRange("ps_f", constants.psConstF, 16u,
+                                 D9C_DRAW_PACKET_MAX_CONST_PS_F);
+                logConstantRange("ps_i", constants.psConstI, 16u,
+                                 D9C_DRAW_PACKET_MAX_CONST_PS_I);
+                logConstantRange("ps_b", constants.psConstB, 4u,
+                                 D9C_DRAW_PACKET_MAX_CONST_PS_B);
+            }
             return false;
         }
         const auto overlay = builder.seal();
@@ -898,6 +945,36 @@ bool D3D9DeviceImpl::armRenderTapeCaptureAtPresentBoundaryInterval() {
     if (!advanceRenderTapeArmBoundary(dxmt9::d3d9::
             RenderTapeArmBoundaryPhase::PresentFlushed)) {
         return false;
+    }
+    // Open occlusion membership affects every captured draw, even when no
+    // query handle appears in its state. No prefix sample checkpoint exists.
+    for (auto &object : peCaptureState_->renderTapeRegistry.objects) {
+        // An open writable volume mip has not reached the authoritative
+        // full-after-unlock seed boundary. Never arm against its older bytes.
+        for (std::size_t mip = 0u; mip < object.volumeLocks.size(); ++mip) {
+            const auto &lock = object.volumeLocks[mip];
+            if (!lock.active || !lock.writable)
+                continue;
+            dxmt9DeviceInfoLog(
+                "render_tape_capture arm aborted reason=volume_cut_open_writable_lock "
+                "kind=%u generation=%u object_id=%llu subresource=%zu",
+                object.identity.kind, object.identity.generation,
+                static_cast<unsigned long long>(object.identity.objectId), mip);
+            abortRenderTapeCapture("volume_cut_open_writable_lock");
+            return false;
+        }
+        if (object.identity.kind != D9C_CHUNK_HANDLE_KIND_QUERY) continue;
+        if (object.query.type == 9u && object.query.active) {
+            dxmt9DeviceInfoLog(
+                "render_tape_capture arm aborted reason=query_cut_open_occlusion "
+                "kind=%u generation=%u object_id=%llu issue_cycle=%llu",
+                object.identity.kind, object.identity.generation,
+                static_cast<unsigned long long>(object.identity.objectId),
+                static_cast<unsigned long long>(object.query.issueCycle));
+            abortRenderTapeCapture("query_cut_open_occlusion");
+            return false;
+        }
+        object.query.capturedCycle = false;
     }
     // Admit the just-presented swap-chain backbuffer before taking the arm
     // snapshot. The backbuffer is the only capture identity whose role is

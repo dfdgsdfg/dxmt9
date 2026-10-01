@@ -97,6 +97,19 @@ void releaseShadowLock(ShadowLock& lock);
 bool requiresWow64PointerShadow();
 bool isWow64NativePointerAllowed(uint64_t value);
 
+// A compressed multi-slice WoW64 volume exposes logical-height SlicePitch,
+// even though its native storage has packed block-row slices. A low native
+// address does not remove that layout difference: this narrow case needs the
+// same shadow conversion as a high address. Linear and 2D locks keep their
+// established pointer-only admission policy.
+constexpr bool textureLockRequiresPointerShadow(
+    bool wow64Client, bool nativePointerFits32Bit, bool volume,
+    bool blockCompressed, uint32_t depth, uint32_t logicalHeight) noexcept {
+  return wow64Client &&
+      (!nativePointerFits32Bit ||
+       (volume && blockCompressed && depth > 1u && logicalHeight > 1u));
+}
+
 // Wow64 lock-rect shadow allocation upper bound.
 //
 // `nativePitch` is the byte stride between rows returned by the underlying

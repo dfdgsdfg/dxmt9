@@ -700,6 +700,42 @@ renderTapeClassifyObjectDefineValidation(
   return classifyObjectDefineValidation(fixed, descriptor);
 }
 
+bool renderTapeLoadQueryDescriptorV2(
+    std::span<const std::byte> bytes, RenderTapeQueryDescriptorV2& out) noexcept {
+  RenderTapeQueryDescriptorV2 value{};
+  if (bytes.size() != sizeof(value) || !load(bytes, 0u, value) ||
+      value.schemaVersion != kRenderTapeQueryTranscriptVersion2 ||
+      renderTapeQueryDataBytes(value.type) == 0u ||
+      value.dataBytes != renderTapeQueryDataBytes(value.type) ||
+      value.initialState > static_cast<std::uint32_t>(
+          RenderTapeQueryInitialState::ClosedWithoutReplayResult) ||
+      (value.initialState == static_cast<std::uint32_t>(
+          RenderTapeQueryInitialState::Unissued)) !=
+          (value.initialIssueCycle == 0u)) {
+    return false;
+  }
+  out = value;
+  return true;
+}
+
+bool renderTapeAdvanceQueryCycle(RenderTapeQueryCycleState& state,
+                                std::uint32_t flags,
+                                bool captured) noexcept {
+  if (flags != 1u && flags != 2u) return false;
+  auto next = state;
+  if (flags == 2u || !next.active) {
+    if (flags == 1u && captured && next.type == 9u) return false;
+    if (next.issueCycle == std::numeric_limits<std::uint64_t>::max()) return false;
+    ++next.issueCycle;
+    next.capturedCycle = captured;
+  } else if (captured && !next.capturedCycle) {
+    return false;
+  }
+  next.active = flags == 2u;
+  state = next;
+  return true;
+}
+
 RenderTapeBlobLookup RenderTapeBlobCatalogue::lookup(
     std::span<const std::byte, kRenderTapeDigestSize> digest,
     std::uint64_t size) const noexcept {
@@ -812,12 +848,14 @@ validateRenderTape(std::span<const std::byte> blob,
   scratch.seedContentExpectations.clear();
   scratch.seedSubresources.clear();
   scratch.producedPassObligations.clear();
+  scratch.queries.clear();
   try {
     scratch.liveObjects.reserve(header.eventCount);
     scratch.objectDefinitions.reserve(header.eventCount);
     scratch.seedContentExpectations.reserve(header.eventCount);
     scratch.seedSubresources.reserve(header.eventCount);
     scratch.producedPassObligations.reserve(header.eventCount);
+    scratch.queries.reserve(header.eventCount);
   } catch (...) {
     return failure(RenderTapeValidationStatus::ScratchAllocationFailed);
   }
@@ -898,6 +936,19 @@ validateRenderTape(std::span<const std::byte> blob,
             });
       }
       const auto descriptor = event.payload.subspan(sizeof(fixed));
+      if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_QUERY &&
+          descriptor.size() == sizeof(RenderTapeQueryDescriptorV2)) {
+        RenderTapeQueryDescriptorV2 query{};
+        if (!renderTapeLoadQueryDescriptorV2(descriptor, query)) {
+          return failure(RenderTapeValidationStatus::InvalidQueryTranscript, i,
+                         CommandChunkValidationStatus::Valid, {},
+                         RenderTapeIncompleteFrameReason::None, fixed.identity);
+        }
+        scratch.queries.push_back({
+            .identity = fixed.identity,
+            .cycle = {.type = query.type,
+                      .issueCycle = query.initialIssueCycle}});
+      }
       if (fixed.identity.kind == D9C_CHUNK_HANDLE_KIND_TEXTURE &&
           descriptor.size() >= sizeof(RenderTapeTextureDescriptorV2)) {
         RenderTapeTextureDescriptorV2 texture{};
@@ -1604,6 +1655,27 @@ validateRenderTape(std::span<const std::byte> blob,
       for (std::size_t recordIndex = 0u;
            recordIndex < chunk.records.size(); ++recordIndex) {
         const auto record = chunk.record(recordIndex);
+        if (record.header.type == D9C_COMMAND_RECORD_QUERY_ISSUE) {
+          D9CCommandChunkWireQueryIssue issue{};
+          if (!load(record.payload, 0u, issue) ||
+              issue.queryHandleIndex >= chunk.handles.size()) {
+            return failure(RenderTapeValidationStatus::InvalidQueryTranscript, i);
+          }
+          const auto& handle = chunk.handles[issue.queryHandleIndex];
+          const D9CWireObjectIdentity identity{
+              .kind = handle.kind, .generation = handle.generation,
+              .objectId = handle.objectId};
+          const auto query = std::find_if(scratch.queries.begin(),
+              scratch.queries.end(), [&](const auto& value) {
+                return sameIdentity(value.identity, identity);
+              });
+          if (query != scratch.queries.end() &&
+              !renderTapeAdvanceQueryCycle(query->cycle, issue.flags, true)) {
+            return failure(RenderTapeValidationStatus::QueryUncapturedCycle, i,
+                           CommandChunkValidationStatus::Valid, {},
+                           RenderTapeIncompleteFrameReason::None, identity);
+          }
+        }
         if (record.header.type == D9C_COMMAND_RECORD_PRESENT) {
           if (sawChunkPresent) {
             return failure(RenderTapeValidationStatus::InvalidCommandChunk, i);
@@ -1690,7 +1762,9 @@ validateRenderTape(std::span<const std::byte> blob,
       std::size_t expectedTail = 0u;
       switch (static_cast<RenderTapeControlKind>(fixed.kind)) {
       case RenderTapeControlKind::QueryGetData:
-        expectedTail = sizeof(RenderTapeQueryGetDataControl);
+        expectedTail = fixed.controlBytes == sizeof(RenderTapeQueryGetDataControlV2)
+            ? sizeof(RenderTapeQueryGetDataControlV2)
+            : sizeof(RenderTapeQueryGetDataControl);
         break;
       case RenderTapeControlKind::CpuRead:
         expectedTail = sizeof(RenderTapeCpuReadControl);
@@ -1716,7 +1790,43 @@ validateRenderTape(std::span<const std::byte> blob,
         return failure(RenderTapeValidationStatus::NonMonotoneCompletion, i);
       }
       previousCompletion = fixed.completionOrdinal;
-      if (controlKind == RenderTapeControlKind::FlushWait) {
+      if (controlKind == RenderTapeControlKind::QueryGetData &&
+          expectedTail == sizeof(RenderTapeQueryGetDataControlV2)) {
+        RenderTapeQueryGetDataControlV2 control{};
+        const auto query = std::find_if(scratch.queries.begin(),
+            scratch.queries.end(), [&](const auto& value) {
+              return sameIdentity(value.identity, fixed.identity);
+            });
+        if (!load(event.payload, sizeof(fixed), control) ||
+            query == scratch.queries.end() ||
+            control.schemaVersion != kRenderTapeQueryTranscriptVersion2 ||
+            (control.flags & ~1u) != 0u || control.hasOutput > 1u ||
+            control.dataSize > std::numeric_limits<std::uint32_t>::max() ||
+            control.definedBytes != renderTapeQueryDefinedBytes(
+                query->cycle.type, fixed.resultCode, control.hasOutput != 0u,
+                control.dataSize) ||
+            !std::all_of(control.result.begin() + control.definedBytes,
+                         control.result.end(), [](auto byte) {
+                           return byte == std::byte{};
+                         }) ||
+            (disposition == RenderTapeControlDisposition::Pending &&
+             fixed.resultCode != 1) ||
+            (disposition == RenderTapeControlDisposition::Completed &&
+             fixed.resultCode != 0) ||
+            (disposition == RenderTapeControlDisposition::Failed &&
+             fixed.resultCode >= 0)) {
+          return failure(RenderTapeValidationStatus::InvalidQueryTranscript, i,
+                         CommandChunkValidationStatus::Valid, {},
+                         RenderTapeIncompleteFrameReason::None, fixed.identity);
+        }
+        if (control.issueCycle != query->cycle.issueCycle ||
+            (query->cycle.issueCycle != 0u && !query->cycle.capturedCycle) ||
+            (query->cycle.active && fixed.resultCode == 0)) {
+          return failure(RenderTapeValidationStatus::QueryUncapturedCycle, i,
+                         CommandChunkValidationStatus::Valid, {},
+                         RenderTapeIncompleteFrameReason::None, fixed.identity);
+        }
+      } else if (controlKind == RenderTapeControlKind::FlushWait) {
         RenderTapeFlushWaitControl control{};
         if (!load(event.payload, sizeof(fixed), control) ||
             control.waitedSeqId > fixed.completionOrdinal) {
@@ -2767,6 +2877,10 @@ renderTapeValidationStatusName(RenderTapeValidationStatus status) noexcept {
     return "invalid-control-kind";
   case RenderTapeValidationStatus::InvalidControlSize:
     return "invalid-control-size";
+  case RenderTapeValidationStatus::InvalidQueryTranscript:
+    return "invalid-query-transcript";
+  case RenderTapeValidationStatus::QueryUncapturedCycle:
+    return "query-uncaptured-cycle";
   case RenderTapeValidationStatus::NonMonotoneCompletion:
     return "non-monotone-completion";
   case RenderTapeValidationStatus::ResetNotTerminal:

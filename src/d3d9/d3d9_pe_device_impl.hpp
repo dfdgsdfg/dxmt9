@@ -2069,6 +2069,12 @@ class D3D9DeviceImpl final : public IDirect3DDevice9Ex {
         const dxmt9::d3d9::RenderTapeLinearLockLayout &layout,
         std::span<const std::byte> bytes) noexcept;
 
+    dxmt9::d3d9::RenderTapeBlockMutationStatus recordRenderTapeVolumeBytes(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object,
+        std::uint32_t subresource,
+        const dxmt9::d3d9::RenderTapeVolumeLockLayout &layout,
+        std::span<const std::byte> bytes) noexcept;
+
     void logRenderTapeMutationFailure(
         const char *route,
         dxmt9::d3d9::RenderTapeBlockMutationStatus status,
@@ -2592,6 +2598,19 @@ public:
         std::uint32_t subresource,
         const dxmt9::d3d9::RenderTapeLinearLockLayout &layout,
         std::span<const std::byte> bytes) noexcept;
+
+    void NotifyRenderTapeVolumeLockForChild(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object,
+        std::uint32_t subresource, std::uint32_t flags) noexcept;
+    bool FinishRenderTapeVolumeLockForChild(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object,
+        std::uint32_t subresource, bool unlockSucceeded,
+        bool &writable) noexcept;
+    void NotifyRenderTapeVolumeSnapshotForChild(
+        const dxmt9::d3d9::pe::PeWireObjectRef &object,
+        std::uint32_t subresource,
+        const dxmt9::d3d9::RenderTapeVolumeLockLayout &layout,
+        std::span<const std::byte> bytes, bool writable) noexcept;
 
     // UpdateTexture is a full-resource SYSTEMMEM -> DEFAULT copy. Keep the
     // normal command record untouched, but use its successful append as the

@@ -11,6 +11,10 @@
 
 struct D9CDevice;
 
+namespace dxmt9::core {
+struct QueryPollSnapshot;
+}
+
 namespace dxmt9::d3d9::render_tape_runtime {
 
 // A definition view owns its fixed wire header but borrows the descriptor
@@ -124,5 +128,13 @@ void* createRenderTapeObject(
     std::span<const std::byte> descriptor,
     std::span<const RenderTapeProviderBlob> blobs,
     std::span<const OwnedObject> objects);
+
+// Cold supplemental oracle. It polls a retained immutable local issue receipt,
+// never the public Query that may already have been reissued or released. The
+// bounded work and elapsed cost are kept outside the recorded transcript.
+RenderTapeQueryReplayFailure settleQueryOracle(
+    D9CDevice* device, const core::QueryPollSnapshot& snapshot,
+    RenderTapeQueryReplayRow& row,
+    RenderTapeQueryReplayEvidence& evidence) noexcept;
 
 } // namespace dxmt9::d3d9::render_tape_runtime

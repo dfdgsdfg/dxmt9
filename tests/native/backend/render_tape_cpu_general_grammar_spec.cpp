@@ -100,8 +100,8 @@ void acceptedPlanRetainsGeneralObjectsAndState() {
   check(detail::generalCpuCommandRecordSupported(
             D9C_COMMAND_RECORD_GENERATE_MIPMAPS),
         "canonical mip generation has a CPU logical-operation observer");
-  check(!detail::generalCpuCommandRecordSupported(D9C_COMMAND_RECORD_QUERY_ISSUE),
-        "mip support does not admit unrelated ordered control");
+  check(detail::generalCpuCommandRecordSupported(D9C_COMMAND_RECORD_QUERY_ISSUE),
+        "canonical query issue retains the production command-record path");
   const MiniPlan fixture;
   const auto result = admit(fixture);
   check(result.accepted(), "small already-admitted plan is accepted");
@@ -247,16 +247,16 @@ void commandGrammarReportsRecordLocator() {
           "CPU attachment consumers reject before any resource effects");
   }
   MiniPlan fixture;
-  D9CCommandChunkWireQueryIssue query{};
+  D9CCommandChunkWireReadback readback{};
   fixture.presentBytes = test::singleRecordChunk(
-      D9C_COMMAND_RECORD_QUERY_ISSUE,
-      std::as_bytes(std::span(&query, 1u)));
+      D9C_COMMAND_RECORD_READBACK,
+      std::as_bytes(std::span(&readback, 1u)));
   fixture.plan.commandChunks[0].bytes = fixture.presentBytes;
   const auto result = admit(fixture);
   check(result.reason == GeneralCpuAdmissionReason::UnsupportedCommandRecord &&
             result.eventIndex == 2u && result.chunkIndex == 0u &&
             result.recordIndex == 0u,
-        "unsupported query record reports event/chunk/record locator");
+        "unsupported readback record reports event/chunk/record locator");
 
   D9CCommandChunkWireQueryIssue constant{};
   fixture.presentBytes = test::singleRecordChunk(
@@ -266,6 +266,67 @@ void commandGrammarReportsRecordLocator() {
   const auto integerResult = admit(fixture);
   check(integerResult.reason == GeneralCpuAdmissionReason::UnsupportedCommandRecord,
         "integer constants remain outside the first general CPU grammar");
+}
+
+void queryGrammarRequiresVersionedTranscript() {
+  MiniPlan fixture;
+  const D9CWireObjectIdentity identity{
+      .kind = D9C_CHUNK_HANDLE_KIND_QUERY, .generation = 2u, .objectId = 17u};
+  const RenderTapeQueryDescriptorV2 query{.type = 8u, .dataBytes = 4u};
+  fixture.plan.definitions.push_back({
+      .fixed = {.identity = identity,
+                .descriptorKind = static_cast<std::uint32_t>(RenderTapeDescriptorKind::Query),
+                .descriptorBytes = sizeof(query)},
+      .descriptor = std::as_bytes(std::span(&query, 1u))});
+  const D9CCommandChunkWireQueryIssue issue{.queryHandleIndex = 0u, .flags = 1u};
+  const D9CCommandChunkWireHandleEntry handle{
+      .kind = identity.kind, .generation = identity.generation,
+      .objectId = identity.objectId};
+  const auto chunk = test::singleRecordChunk(D9C_COMMAND_RECORD_QUERY_ISSUE,
+      std::as_bytes(std::span(&issue, 1u)), std::span(&handle, 1u));
+  fixture.plan.commandChunks.push_back({
+      .envelope = {.recordCount = 1u, .handleCount = 1u}, .bytes = chunk});
+  RenderTapeQueryGetDataControlV2 poll{.issueCycle = 1u};
+  fixture.plan.controls.push_back({
+      .identity = identity,
+      .kind = static_cast<std::uint32_t>(RenderTapeControlKind::QueryGetData),
+      .disposition = static_cast<std::uint32_t>(RenderTapeControlDisposition::Completed),
+      .controlBytes = sizeof(poll), .completionOrdinal = 1u});
+  const auto pollBytes = std::as_bytes(std::span(&poll, 1u));
+  fixture.plan.controlBytes.emplace_back(pollBytes.begin(), pollBytes.end());
+  fixture.plan.events.insert(fixture.plan.events.begin() + 2u,
+      {{.type = RenderTapeEventType::ObjectDefine, .index = 1u},
+       {.type = RenderTapeEventType::CommandChunk, .index = 1u},
+       {.type = RenderTapeEventType::OrderedControl, .index = 0u}});
+  for (std::uint32_t event = 0u; event < fixture.plan.events.size(); ++event)
+    fixture.plan.events[event].eventIndex = event;
+  const auto admitted = admit(fixture);
+  check(admitted.accepted() && admitted.counts.queryDefinitions == 1u &&
+            admitted.counts.queryIssues == 1u && admitted.counts.queryPolls == 1u,
+        "versioned query descriptor, canonical issue, and original poll are admitted together");
+
+  const RenderTapeQueryDescriptor legacy{.type = 8u, .dataBytes = 4u};
+  fixture.plan.definitions[1].descriptor = std::as_bytes(std::span(&legacy, 1u));
+  fixture.plan.definitions[1].fixed.descriptorBytes = sizeof(legacy);
+  const auto legacyDescriptor = admit(fixture);
+  check(legacyDescriptor.reason == GeneralCpuAdmissionReason::QueryTranscriptUnavailable &&
+            legacyDescriptor.eventIndex == 2u,
+        "legacy query descriptor rejects with a named transcript reason before effects");
+  fixture.plan.definitions[1].descriptor = std::as_bytes(std::span(&query, 1u));
+  fixture.plan.definitions[1].fixed.descriptorBytes = sizeof(query);
+  const RenderTapeQueryGetDataControl legacyPoll{};
+  const auto legacyBytes = std::as_bytes(std::span(&legacyPoll, 1u));
+  fixture.plan.controls[0].controlBytes = sizeof(legacyPoll);
+  fixture.plan.controlBytes[0].assign(legacyBytes.begin(), legacyBytes.end());
+  const auto legacyControl = admit(fixture);
+  check(legacyControl.reason == GeneralCpuAdmissionReason::QueryTranscriptUnavailable &&
+            legacyControl.eventIndex == 4u,
+        "legacy query poll cannot silently join the qualified V2 transcript");
+  poll.schemaVersion = 1u;
+  fixture.plan.controls[0].controlBytes = sizeof(poll);
+  fixture.plan.controlBytes[0].assign(pollBytes.begin(), pollBytes.end());
+  check(admit(fixture).reason == GeneralCpuAdmissionReason::QueryTranscriptUnavailable,
+        "wrong-version fixed-size poll also rejects before effects");
 }
 
 void presentAndOutputContractsAreEnforced() {
@@ -323,6 +384,7 @@ int main() {
     aggregateBoundsAreCheckedWithNamedReasons();
     grammarRejectsUnsupportedEventsAndControls();
     commandGrammarReportsRecordLocator();
+    queryGrammarRequiresVersionedTranscript();
     presentAndOutputContractsAreEnforced();
   } catch (const TestFailure& failure) {
     std::cerr << "render_tape_cpu_general_grammar_spec: " << failure.what()

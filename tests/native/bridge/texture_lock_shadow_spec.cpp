@@ -64,6 +64,38 @@ void checkEq(const A& left, const B& right, std::string_view message) {
 
 using dxmt9::d3d9::devicec::computeShadowBytesUpperBound;
 using dxmt9::d3d9::devicec::computeShadowVolumeBytesUpperBound;
+using dxmt9::d3d9::devicec::textureLockRequiresPointerShadow;
+
+void testCompressedVolumeShadowAdmissionDoesNotDependOnNativeAddress() {
+  for (const bool wow64 : {false, true}) {
+    for (const bool fits32 : {false, true}) {
+      for (const bool volume : {false, true}) {
+        for (const bool compressed : {false, true}) {
+          for (const uint32_t depth : {1u, 2u, 16u}) {
+            for (const uint32_t height : {1u, 2u, 8u}) {
+              const bool expected = wow64 &&
+                  (!fits32 || (volume && compressed && depth > 1u &&
+                               height > 1u));
+              checkEq(textureLockRequiresPointerShadow(
+                          wow64, fits32, volume, compressed, depth, height),
+                      expected, "volume shadow admission matrix");
+            }
+          }
+        }
+      }
+    }
+  }
+  check(textureLockRequiresPointerShadow(true, true, true, true, 2u, 8u),
+        "low-address compressed volume still needs padded slice conversion");
+  check(!textureLockRequiresPointerShadow(true, true, true, false, 2u, 8u),
+        "low-address linear volume keeps the native pointer");
+  check(!textureLockRequiresPointerShadow(true, true, false, true, 2u, 8u),
+        "low-address 2D compressed lock keeps the native pointer");
+  check(!textureLockRequiresPointerShadow(true, true, true, true, 1u, 8u),
+        "single-slice compressed lock has no inter-slice layout difference");
+  check(!textureLockRequiresPointerShadow(true, true, true, true, 2u, 1u),
+        "height-one compressed volume already has the exposed slice stride");
+}
 
 void testSfivBc3Level9RegressionShadowFloorClearsObservedFaultOffsets() {
   // SFIV repro inputs: BC3 256x256 base, level 9 -> 1x1 mip, native
@@ -162,6 +194,7 @@ void testVolumeShadowOverflowFailsClosed() {
 
 int main() {
   try {
+    testCompressedVolumeShadowAdmissionDoesNotDependOnNativeAddress();
     testSfivBc3Level9RegressionShadowFloorClearsObservedFaultOffsets();
     testNonCompressedFormatIsPitchTimesHeight();
     testCompressedRectHeightRoundsUpToBlock();

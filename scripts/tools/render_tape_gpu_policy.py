@@ -109,6 +109,8 @@ def _oracle_scope(manifest: dict[str, Any]) -> tuple[str | None, str]:
     if not isinstance(scope, dict):
         return None, "missing-scope"
     if scope.get("production_capture") is True:
+        if scope.get("synthetic") is True or scope.get("test_input") is True:
+            return None, "contradictory-production-and-synthetic-scope"
         return "production-capture", "accepted"
     if scope.get("synthetic") is True or scope.get("test_input") is True:
         return "synthetic-test-input", "accepted"
@@ -221,6 +223,12 @@ def gpu_receipt_accepts(
         return False, "gpu-artifact-rejected"
     if receipt.get("input_components") != manifest.get("components"):
         return False, "gpu-input-identity-mismatch"
+    if receipt.get("input_scope") != manifest.get("scope"):
+        return False, "gpu-input-scope-mismatch"
+    inspection = receipt.get("input_inspection")
+    if (not isinstance(inspection, dict)
+            or inspection.get("events_sha256") != manifest.get("components", {}).get("events", {}).get("sha256")):
+        return False, "gpu-input-inspection-missing-or-stale"
     renderer_environment = receipt.get("renderer_environment")
     if (not isinstance(renderer_environment, dict)
             or any(not isinstance(key, str) or not isinstance(value, str)
@@ -275,7 +283,8 @@ def gpu_receipt_accepts(
             evidence, warmup=warmup, repeat=repeat, reset=reset,
             route=policy["replay_route"], require_path=require_path,
             non_degenerate=True, cpu_policy=policy,
-            input_components=manifest.get("components")):
+            input_components=manifest.get("components"),
+            input_inspection=receipt.get("input_inspection")):
         return False, "gpu-experiment-rejected"
     iterations = evidence.get("iterations")
     if not isinstance(iterations, list) or len(iterations) != warmup + repeat:
@@ -340,6 +349,8 @@ def cpu_gpu_binding_matches(
                         if key not in policy_keys}
     if (not isinstance(cpu_result, dict) or not isinstance(gpu_result, dict)
             or cpu_receipt.get("input_components") != gpu_receipt.get("input_components")
+            or cpu_receipt.get("input_scope") != gpu_receipt.get("input_scope")
+            or cpu_receipt.get("input_inspection") != gpu_receipt.get("input_inspection")
             or cpu_receipt.get("validator") != gpu_receipt.get("validator")
             or cpu_renderer != gpu_renderer
             or module_images(cpu_receipt, cpu_result) != module_images(gpu_receipt, gpu_result)):
@@ -385,8 +396,9 @@ def _gpu_pair_fingerprint(receipt: dict[str, Any]) -> tuple[Any, ...]:
                   if key not in POLICY_ENVIRONMENT}
     evidence = _evidence(receipt)
     return (
-        receipt.get("input_components"), receipt.get("provider"),
-        receipt.get("validator"), renderer, forced, evidence.get("loaded_images"),
+        receipt.get("input_components"), receipt.get("input_scope"), receipt.get("provider"),
+        receipt.get("validator"), receipt.get("input_inspection"), renderer, forced,
+        evidence.get("loaded_images"),
     )
 
 
