@@ -11,6 +11,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H425](present-pacing-range-encode-body.425.md) splits five large range-source
+bodies: 54.5% encodeDraw and 39.8% enclosing DrawRun preparation/pass residual;
+per-record split and dispatch are small in that sample. The earlier trace
+window does not reproduce H424's long waits, and costly sub-128-command sources
+remain outside the detailed observer. Next decompose DrawRun residual and
+select wait-linked sources without assuming fixed Present ordinals.
+
 [H424](present-pacing-range-reuse-activation.424.md) confirms wild reuse (226/534
 retained requests). Remaining same-prefix round trips total 5.385 ms in five
 Presents; 15 other releases account for 110.226 ms. The five largest waits

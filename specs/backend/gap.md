@@ -127,6 +127,13 @@ general-frame ordered-control grammar. Keep default OFF; next attribute the
 identified Encode bodies rather than broaden ack elision. See
 [H424](../../docs/perfomance/present-pacing/present-pacing-range-reuse-activation.424.md).
 
+H425 partitions five large range-source bodies into 54.5% encodeDraw and 39.8%
+enclosing DrawRun residual. This earlier window does not reproduce H424's long
+release waits; sources below the 128-command observer threshold are also not
+fully attributed. No runtime change or FPS improvement follows. DrawRun
+preparation/pass ownership and wait-linked source selection remain open. See
+[H425](../../docs/perfomance/present-pacing/present-pacing-range-encode-body.425.md).
+
 R-BACK-2.15.2 fixed comparison now avoids a temporary projection with the same
 hash guard and fieldwise equality. Native float-edge/collision fixtures and
 18+18 identical-input CPU semantic iterations pass. This pure substitution
