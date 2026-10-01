@@ -2417,6 +2417,9 @@ class Device : public std::enable_shared_from_this<Device> {
                        u32 flags);
   [[nodiscard]] QueryPollSnapshot captureQueryPollSnapshot(
       const std::shared_ptr<Query>& query) const;
+  // Grant independent polling of an already captured, actually published
+  // writer receipt without consulting the mutable public Query.
+  bool promotePublishedQueryPollSnapshot(QueryPollSnapshot& snapshot) const;
   HResult pollQuerySnapshot(const QueryPollSnapshot& snapshot, void* output,
                             size_t size, u32 flags) const;
   void completeUpTo(u64 sequenceId);

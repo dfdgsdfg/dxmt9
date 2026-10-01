@@ -24,16 +24,34 @@ class SnapshotUpper final : public dxmt9::Device {
   std::shared_ptr<BackendDevice> backend() override { return backend_; }
 
   bool usesAsyncQueryFences() const noexcept override { return true; }
+  bool usesMetalOcclusion() const noexcept override { return gpuOcclusion; }
+  bool setOcclusionScope(dxmt9::query::OcclusionScopeRef next) noexcept override {
+    scope = std::move(next);
+    return true;
+  }
   dxmt9::query::EndReceipt publishQueryEnd() noexcept override {
+    if (deferredMarker) {
+      dxmt9::query::EndReceipt receipt{progress.queue, 0,
+                                      progress.initializerPublished};
+      receipt.marker = deferredMarker;
+      return receipt;
+    }
     return {progress.queue, ++progress.published, progress.initializerPublished};
   }
   dxmt9::query::Poll pollQueryFence(const dxmt9::query::EndReceipt& receipt,
-                             bool) noexcept override {
+                             bool flush) noexcept override {
+    ++polls;
+    flushPolls += flush;
     if (onPoll) {
       auto callback = std::exchange(onPoll, nullptr);
       callback(pollContext);
     }
-    return dxmt9::query::classifyEnd(receipt, progress);
+    lastPoll = dxmt9::query::classifyEnd(receipt, progress);
+    if (afterPoll) {
+      auto callback = std::exchange(afterPoll, nullptr);
+      callback(pollContext);
+    }
+    return lastPoll;
   }
   dxmt9::query::Progress queryProgress() noexcept override { return progress; }
 
@@ -41,7 +59,14 @@ class SnapshotUpper final : public dxmt9::Device {
   std::shared_ptr<BackendDevice> backend_;
   dxmt9::CommandQueue queue_;
   dxmt9::query::Progress progress{7, 0, 0, false};
+  std::shared_ptr<dxmt9::query::EndMarker> deferredMarker;
+  bool gpuOcclusion = false;
+  dxmt9::query::OcclusionScopeRef scope;
+  u64 polls = 0;
+  u64 flushPolls = 0;
+  dxmt9::query::Poll lastPoll = dxmt9::query::Poll::Invalid;
   void (*onPoll)(void*) = nullptr;
+  void (*afterPoll)(void*) = nullptr;
   void* pollContext = nullptr;
 };
 
@@ -200,6 +225,239 @@ void testConstantsAndDeferredMarkers() {
   checkEq(value, 0xabcdefull, "deferred marker preserves output");
 }
 
+void testPublishedReceiptPromotionTruthTable() {
+  using dxmt9::query::Poll;
+  for (bool valid : {false, true})
+    for (bool marker : {false, true})
+      for (u64 sequence : {0ull, 1ull, 2ull})
+        for (bool cancelled : {false, true})
+          for (auto poll : {Poll::Invalid, Poll::Failed, Poll::Pending,
+                            Poll::Complete}) {
+            check(queryPollPublishedReceiptAdmitted(valid, marker, sequence,
+                                                    cancelled, poll) ==
+                (valid && marker && sequence != 0 && !cancelled &&
+                 (poll == Poll::Pending || poll == Poll::Complete)),
+                "published promotion requires actual bound accepted receipt");
+          }
+}
+
+void testPublishedSnapshotSurvivesUnpublishedReissueAndDestroy() {
+  using dxmt9::query::EndMarker;
+  using dxmt9::query::WriterIdentity;
+  auto upper = std::make_shared<SnapshotUpper>(std::make_shared<RecordingBackend>());
+  upper->gpuOcclusion = true;
+  upper->progress.initializerPublished = 1;
+  const WriterIdentity oldWriter{7, 1, 1, 1};
+  auto marker = std::make_shared<EndMarker>(oldWriter);
+  upper->deferredMarker = marker;
+  Factory factory(upper);
+  auto device = factory.createDevice(0, testParams());
+  auto query = device->createQuery(QueryType::Occlusion);
+  checkEq(device->issueQuery(query, true), D3D_OK, "retained issue BEGIN");
+  checkEq(device->issueQuery(query, false), D3D_OK, "retained issue END");
+  auto old = device->captureQueryPollSnapshot(query);
+  check(!old.eligible && !old.publishedOnly && old.deferredBackendFence(),
+        "default capture retains writer fallback");
+  check(old.occlusionResult != nullptr, "snapshot retains original result");
+  old.occlusionResult->samples.store(42, std::memory_order_release);
+  old.occlusionResult->pending.store(1, std::memory_order_release);
+  check(!device->promotePublishedQueryPollSnapshot(old),
+        "unbound writer cannot be promoted");
+  checkEq(upper->polls, 0ull, "unbound promotion never polls backend");
+  u32 value = 0xdeadbeef;
+  checkEq(device->pollQuerySnapshot(old, &value, sizeof(value),
+                                    QUERY_GETDATA_FLUSH),
+          D3DERR_NOTAVAILABLE, "default unbound FLUSH falls back");
+  checkEq(upper->flushPolls, 0ull, "fallback cannot publish unbound writer");
+  checkEq(value, 0xdeadbeefu, "fallback preserves output");
+
+  upper->deferredMarker = std::make_shared<EndMarker>(WriterIdentity{7, 2, 2, 2});
+  checkEq(device->issueQuery(query, true), D3D_OK, "replacement BEGIN");
+  checkEq(device->issueQuery(query, false), D3D_OK, "replacement END");
+  const auto replacement = device->captureQueryPollSnapshot(query);
+  check(replacement.occlusionResult != old.occlusionResult &&
+        replacement.issueOrdinal > old.issueOrdinal,
+        "reissue has distinct result and ordinal");
+  replacement.occlusionResult->samples.store(99, std::memory_order_release);
+  query.reset();
+  check(replacement.occlusionResult->abandoned.load(std::memory_order_acquire),
+        "destroy marks only current issue abandoned");
+  check(!old.occlusionResult->abandoned.load(std::memory_order_acquire),
+        "old retained issue is independent of current Query destruction");
+
+  check(marker->bind(oldWriter, 1), "bind successful old publication");
+  check(!device->promotePublishedQueryPollSnapshot(old),
+        "bound prefix beyond actual publication is invalid");
+  check(!old.eligible && !old.publishedOnly,
+        "invalid promotion leaves snapshot capability unchanged");
+  upper->progress.published = 1;
+  checkEq(device->pollQuerySnapshot(old, nullptr, 0, 0), D3DERR_NOTAVAILABLE,
+          "binding alone does not silently change default eligibility");
+  const auto identity = old.identity;
+  const auto issue = old.issueOrdinal;
+  const auto epoch = old.issueDeviceEpoch;
+  const auto result = old.occlusionResult;
+  check(device->promotePublishedQueryPollSnapshot(old),
+        "captured issue promoted after publication and Query destruction");
+  check(old.eligible && old.publishedOnly && old.identity == identity &&
+        old.issueOrdinal == issue && old.issueDeviceEpoch == epoch &&
+        old.backendFence.marker == marker && old.occlusionResult == result &&
+        old.backend.get() == upper.get(),
+        "promotion retains exact issue receipt result and backend");
+  checkEq(upper->flushPolls, 0ull, "promotion only classifies without FLUSH");
+  checkEq(device->pollQuerySnapshot(old, &value, sizeof(value), 0), S_FALSE,
+          "publication is not completion");
+  upper->progress.completed = 1;
+  checkEq(device->pollQuerySnapshot(old, &value, sizeof(value), 0), S_FALSE,
+          "initializer remains part of published completion");
+  checkEq(value, 0xdeadbeefu, "pending retained issue preserves output");
+  upper->progress.initializerCompleted = 1;
+  checkEq(device->pollQuerySnapshot(old, &value, sizeof(value), 0),
+          D3DERR_DEVICELOST, "completed fence cannot bypass pending result");
+  checkEq(value, 0xdeadbeefu, "pending result error preserves output");
+  old.occlusionResult->pending.store(0, std::memory_order_release);
+  checkEq(device->pollQuerySnapshot(old, &value, sizeof(value), 0), S_OK,
+          "retained old result completes after reissue and destroy");
+  checkEq(value, 42u, "retained issue returns original samples");
+  old.occlusionResult->failed.store(true, std::memory_order_release);
+  value = 0xdeadbeef;
+  checkEq(device->pollQuerySnapshot(old, &value, sizeof(value), 0),
+          D3DERR_DEVICELOST, "retained result failure dominates completion");
+  checkEq(value, 0xdeadbeefu, "failed retained result preserves output");
+}
+
+void testPublishedPromotionControlAndReceiptFailures() {
+  using dxmt9::query::EndMarker;
+  using dxmt9::query::WriterIdentity;
+  auto upper = std::make_shared<SnapshotUpper>(std::make_shared<RecordingBackend>());
+  const WriterIdentity writer{7, 1, 1, 1};
+  auto marker = std::make_shared<EndMarker>(writer);
+  upper->deferredMarker = marker;
+  Factory factory(upper);
+  auto device = factory.createDevice(0, testParams());
+  auto query = device->createQuery(QueryType::Timestamp);
+  checkEq(device->issueQuery(query, false), D3D_OK, "control issue END");
+  auto snapshot = device->captureQueryPollSnapshot(query);
+  check(marker->bind(writer, 1), "control marker bound");
+  upper->progress.published = upper->progress.completed = 1;
+  upper->progress.failed = true;
+  check(!device->promotePublishedQueryPollSnapshot(snapshot),
+        "terminal backend rejects promotion despite complete waterline");
+  check(upper->lastPoll == dxmt9::query::Poll::Failed,
+        "matching queue classifies terminal publication failed");
+  upper->progress.queue = 8;
+  check(!device->promotePublishedQueryPollSnapshot(snapshot),
+        "foreign queue rejects promotion even with terminal failure");
+  check(upper->lastPoll == dxmt9::query::Poll::Invalid,
+        "queue authority mismatch takes precedence over foreign terminal state");
+  upper->progress.failed = false;
+  check(!device->promotePublishedQueryPollSnapshot(snapshot),
+        "foreign queue rejects promotion with complete waterline");
+  upper->progress.queue = 7;
+  Factory otherFactory(upper);
+  auto other = otherFactory.createDevice(0, testParams());
+  check(!other->promotePublishedQueryPollSnapshot(snapshot),
+        "foreign core owner cannot grant promotion");
+  device->setDeviceLost(true);
+  check(!device->promotePublishedQueryPollSnapshot(snapshot),
+        "device loss rejects promotion");
+  device->setDeviceLost(false);
+  auto duringReset = snapshot;
+  upper->pollContext = device.get();
+  upper->onPoll = [](void* context) {
+    static_cast<Device*>(context)->reset(testParams());
+  };
+  check(!device->promotePublishedQueryPollSnapshot(duringReset),
+        "reset during backend classification rejects promotion");
+  check(!duringReset.eligible && !duringReset.publishedOnly,
+        "reset overlap never grants capability");
+  check(!device->promotePublishedQueryPollSnapshot(snapshot),
+        "stale issue epoch rejects promotion");
+
+  // A new issue tests cancellation/terminal validation after a valid grant.
+  marker = std::make_shared<EndMarker>(WriterIdentity{7, 2, 2, 2});
+  upper->deferredMarker = marker;
+  checkEq(device->issueQuery(query, false), D3D_OK, "post-reset END");
+  snapshot = device->captureQueryPollSnapshot(query);
+  check(marker->bind(marker->owner(), 1), "post-reset marker bound");
+  check(device->promotePublishedQueryPollSnapshot(snapshot),
+        "post-reset current issue promoted");
+  u64 value = 0xdeadbeef;
+  upper->progress.failed = true;
+  checkEq(device->pollQuerySnapshot(snapshot, &value, sizeof(value), 0),
+          D3DERR_DEVICELOST, "terminal rechecked after promotion");
+  checkEq(value, 0xdeadbeefull, "terminal preserves output");
+  upper->progress.failed = false;
+  upper->progress.queue = 8;
+  checkEq(device->pollQuerySnapshot(snapshot, &value, sizeof(value), 0),
+          D3DERR_DEVICELOST, "foreign queue rechecked after promotion");
+  upper->progress.queue = 7;
+  marker->cancel();
+  const auto before = upper->polls;
+  checkEq(device->pollQuerySnapshot(snapshot, &value, sizeof(value),
+                                    QUERY_GETDATA_FLUSH),
+          D3DERR_DEVICELOST, "retained cancellation rejects promoted FLUSH");
+  checkEq(upper->polls, before, "cancelled receipt never requests submission");
+  checkEq(value, 0xdeadbeefull, "cancelled receipt preserves output");
+  check(!device->promotePublishedQueryPollSnapshot(snapshot),
+        "cancelled publication cannot be granted again");
+  auto cancelled = device->captureQueryPollSnapshot(query);
+  check(!device->promotePublishedQueryPollSnapshot(cancelled) &&
+        !cancelled.eligible && !cancelled.publishedOnly,
+        "cancelled default capture never receives capability");
+
+  auto unbound = snapshot;
+  unbound.backendFence.marker = std::make_shared<EndMarker>(writer);
+  checkEq(device->pollQuerySnapshot(unbound, &value, sizeof(value),
+                                    QUERY_GETDATA_FLUSH),
+          D3DERR_DEVICELOST, "published-only capability cannot poll unbound writer");
+  checkEq(upper->polls, before, "unbound published-only FLUSH never reaches backend");
+  auto noMarker = snapshot;
+  noMarker.backendFence.marker.reset();
+  checkEq(device->pollQuerySnapshot(noMarker, &value, sizeof(value), 0),
+          D3DERR_DEVICELOST, "published capability cannot discard marker authority");
+
+  marker = std::make_shared<EndMarker>(WriterIdentity{7, 3, 3, 3});
+  upper->deferredMarker = marker;
+  checkEq(device->issueQuery(query, false), D3D_OK, "cancellation overlap END");
+  auto overlap = device->captureQueryPollSnapshot(query);
+  check(marker->bind(marker->owner(), 1), "cancellation overlap marker bound");
+  upper->pollContext = marker.get();
+  upper->afterPoll = [](void* context) {
+    static_cast<EndMarker*>(context)->cancel();
+  };
+  check(!device->promotePublishedQueryPollSnapshot(overlap) &&
+        !overlap.eligible && !overlap.publishedOnly,
+        "cancellation after backend classification prevents capability grant");
+  check(upper->lastPoll == dxmt9::query::Poll::Complete,
+        "promotion independently rechecks cancellation after complete classify");
+
+  marker = std::make_shared<EndMarker>(WriterIdentity{7, 4, 4, 4});
+  upper->deferredMarker = marker;
+  checkEq(device->issueQuery(query, false), D3D_OK, "poll overlap END");
+  overlap = device->captureQueryPollSnapshot(query);
+  check(marker->bind(marker->owner(), 1), "poll overlap marker bound");
+  check(device->promotePublishedQueryPollSnapshot(overlap),
+        "poll overlap issue promoted");
+  upper->pollContext = marker.get();
+  upper->afterPoll = [](void* context) {
+    static_cast<EndMarker*>(context)->cancel();
+  };
+  checkEq(device->pollQuerySnapshot(overlap, &value, sizeof(value), 0),
+          D3DERR_DEVICELOST, "cancellation after complete classify preserves failure");
+  checkEq(value, 0xdeadbeefull, "cancellation overlap preserves output");
+  marker = std::make_shared<EndMarker>(WriterIdentity{7, 5, 5, 5});
+  upper->deferredMarker = marker;
+  checkEq(device->issueQuery(query, false), D3D_OK, "stale granted snapshot END");
+  auto stale = device->captureQueryPollSnapshot(query);
+  check(marker->bind(marker->owner(), 1), "stale granted snapshot marker bound");
+  check(device->promotePublishedQueryPollSnapshot(stale),
+        "stale snapshot receives valid grant before reset");
+  checkEq(device->reset(testParams()), D3D_OK, "reset granted snapshot");
+  checkEq(device->pollQuerySnapshot(stale, &value, sizeof(value), 0),
+          D3DERR_DEVICELOST, "granted capability cannot bypass stale issue epoch");
+}
+
 void testControlChangesDuringPollAndInitializer() {
   auto upper = std::make_shared<SnapshotUpper>(std::make_shared<RecordingBackend>());
   Factory factory(upper);
@@ -249,6 +507,9 @@ int main() {
     testEligibilityAndIndependentOwner();
     testPendingCompletionReissueLifetimeAndFailure();
     testConstantsAndDeferredMarkers();
+    testPublishedReceiptPromotionTruthTable();
+    testPublishedSnapshotSurvivesUnpublishedReissueAndDestroy();
+    testPublishedPromotionControlAndReceiptFailures();
     testControlChangesDuringPollAndInitializer();
   } catch (const TestFailure& error) {
     std::cerr << error.what() << '\n';

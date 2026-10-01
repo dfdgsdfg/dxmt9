@@ -304,6 +304,35 @@ QueryPollSnapshot Device::captureQueryPollSnapshot(
   return snapshot;
 }
 
+bool Device::promotePublishedQueryPollSnapshot(QueryPollSnapshot &snapshot) const {
+  const auto epoch = queryDeviceEpoch_.load(std::memory_order_acquire);
+  if (!snapshot.identity || snapshot.owner != this ||
+      snapshot.backend.get() != backend_.get() ||
+      queryResetInProgress_.load(std::memory_order_acquire) ||
+      deviceLost_.load(std::memory_order_acquire) ||
+      !snapshot.issueOrdinal || snapshot.issueDeviceEpoch != epoch ||
+      snapshot.constant() || snapshot.active || snapshot.failed ||
+      !snapshot.backend ||
+      !(snapshot.backend->usesAsyncQueryFences() ||
+        (snapshot.type == QueryType::Occlusion &&
+         snapshot.backend->usesMetalOcclusion())) ||
+      !snapshot.publishedReceiptAdmitted(query::Poll::Pending)) {
+    return false;
+  }
+  // The non-FLUSH backend poll checks this actual publication under the queue
+  // mutex. It cannot manufacture a prefix or publish an unbound writer.
+  const auto poll = snapshot.backend->pollQueryFence(snapshot.backendFence, false);
+  if (!snapshot.publishedReceiptAdmitted(poll) ||
+      queryResetInProgress_.load(std::memory_order_acquire) ||
+      deviceLost_.load(std::memory_order_acquire) ||
+      queryDeviceEpoch_.load(std::memory_order_acquire) != epoch) {
+    return false;
+  }
+  snapshot.publishedOnly = true;
+  snapshot.eligible = true;
+  return true;
+}
+
 HResult Device::pollQuerySnapshot(const QueryPollSnapshot &snapshot,
                                   void *output, size_t size, u32 flags) const {
   // This method deliberately reads no mutable Query state and no ordinary
@@ -317,8 +346,13 @@ HResult Device::pollQuerySnapshot(const QueryPollSnapshot &snapshot,
     return D3DERR_DEVICELOST;
   }
   if (!snapshot.eligible || snapshot.failed ||
-      (snapshot.issueOrdinal && snapshot.deferredBackendFence())) {
+      (snapshot.issueOrdinal && snapshot.deferredBackendFence() &&
+       !snapshot.publishedOnly)) {
     return snapshot.eligible ? D3DERR_DEVICELOST : D3DERR_NOTAVAILABLE;
+  }
+  if (snapshot.publishedOnly &&
+      !snapshot.publishedReceiptAdmitted(query::Poll::Pending)) {
+    return D3DERR_DEVICELOST;
   }
 
   if (snapshot.constant() || snapshot.preIssue()) {
@@ -337,8 +371,12 @@ HResult Device::pollQuerySnapshot(const QueryPollSnapshot &snapshot,
     return D3DERR_DEVICELOST;
   }
 
-  switch (snapshot.backend->pollQueryFence(
-      snapshot.backendFence, (flags & QUERY_GETDATA_FLUSH) != 0)) {
+  const auto poll = snapshot.backend->pollQueryFence(
+      snapshot.backendFence, (flags & QUERY_GETDATA_FLUSH) != 0);
+  if (snapshot.publishedOnly && !snapshot.publishedReceiptAdmitted(poll)) {
+    return D3DERR_DEVICELOST;
+  }
+  switch (poll) {
   case query::Poll::Pending:
     return S_FALSE;
   case query::Poll::Invalid:
@@ -359,7 +397,8 @@ HResult Device::pollQuerySnapshot(const QueryPollSnapshot &snapshot,
   // starting afterward may overlap the return, but cannot redirect its value.
   if (queryResetInProgress_.load(std::memory_order_acquire) ||
       deviceLost_.load(std::memory_order_acquire) ||
-      queryDeviceEpoch_.load(std::memory_order_acquire) != epoch) {
+      queryDeviceEpoch_.load(std::memory_order_acquire) != epoch ||
+      (snapshot.publishedOnly && !snapshot.publishedReceiptAdmitted(poll))) {
     return D3DERR_DEVICELOST;
   }
   return formatQueryPollResult(snapshot.type, value, output, size);

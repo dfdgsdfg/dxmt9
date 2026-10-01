@@ -19,6 +19,16 @@ namespace dxmt9::core {
 
 class Device;
 
+// A retained writer receipt becomes independently pollable only after actual
+// publication. The backend classification supplies queue identity, prefix and
+// terminal validation; a nonzero marker is still required and remains retained
+// so cancellation is never discarded while adapting the receipt.
+constexpr bool queryPollPublishedReceiptAdmitted(bool valid, bool hasMarker,
+    u64 sequence, bool cancelled, query::Poll poll) noexcept {
+  return valid && hasMarker && sequence && !cancelled &&
+      (poll == query::Poll::Pending || poll == query::Poll::Complete);
+}
+
 // A by-value, core-owned view of one Query issue.  The source Query is not
 // retained: a snapshot keeps the issue generation and the backend receipt (or
 // result owner) alive so reissuing or destroying the public Query cannot
@@ -42,6 +52,9 @@ struct QueryPollSnapshot {
   // identity AND cancellation, and FLUSH validates/publishes under the queue
   // mutex. The receipt/result do not borrow the mutable Query or writer.
   bool eligible = false;
+  // Explicitly granted after successful publication. Unlike retained range
+  // ownership this capability never permits publishing an unbound writer.
+  bool publishedOnly = false;
 
   bool constant() const noexcept {
     return type == QueryType::TimestampFreq ||
@@ -50,6 +63,12 @@ struct QueryPollSnapshot {
   bool preIssue() const noexcept { return issueOrdinal == 0; }
   bool deferredBackendFence() const noexcept {
     return backendFence.marker && !backendFence.marker->independentPolling();
+  }
+  bool publishedReceiptAdmitted(query::Poll poll) const noexcept {
+    return queryPollPublishedReceiptAdmitted(backendFence.valid(),
+        bool(backendFence.marker),
+        backendFence.marker ? backendFence.marker->sequence() : 0,
+        backendFence.marker && backendFence.marker->cancelled(), poll);
   }
 };
 
