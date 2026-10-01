@@ -299,6 +299,16 @@ gaps do not establish GPU blocking, and missing/evicted paths stay unknown.
 
 ### Ordered session-release trace
 
+With `DXMT9_CPU_SUPPLY_DRAW_SPLIT`, five sequential `DrawRunPhase` milestones
+add uniform/setup, flush-blit/hazard setup, pass entry, UP setup and binding-plan
+setup attribution inside each selected valid DrawRun. The analyzer subtracts
+nested encodeDraw from the remaining loop, not from the preparation phases.
+Pass entry includes exact hazard decisions and any encoder transition; the
+setup phase is not a complete hazard-cost measure. Missing milestones in old
+traces are unknown; partial/duplicate/out-of-order milestones are rejected.
+Skipped invalid commands remain unclassified. These extra clocks are diagnostic
+overhead, not a new runtime policy or a calibrated product-cost measurement.
+
 `DXMT9_CPU_SUPPLY_TRACE` also observes ordered release post, raw/policy/queue
 identity, Encode action begin, acknowledgement and caller return. Existing
 window/capacity/overflow rules apply. `scripts/tools/analyze_session_release.py`

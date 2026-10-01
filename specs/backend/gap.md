@@ -134,6 +134,14 @@ fully attributed. No runtime change or FPS improvement follows. DrawRun
 preparation/pass ownership and wait-linked source selection remain open. See
 [H425](../../docs/perfomance/present-pacing/present-pacing-range-encode-body.425.md).
 
+H426 adds opt-in sequential DrawRun preparation milestones without changing
+rendering policy. Five large diagnostic bodies attribute 22.466 ms to pass
+entry and 17.018 ms to per-draw loop residual, versus 1.429 ms command-level
+binding-plan setup. Small-source, observer-OFF and long-release-linked cost
+qualification remain open. No hazard/store/query boundary can be elided from
+this broad bucket alone. See
+[H426](../../docs/perfomance/present-pacing/present-pacing-drawrun-preparation.426.md).
+
 R-BACK-2.15.2 fixed comparison now avoids a temporary projection with the same
 hash guard and fieldwise equality. Native float-edge/collision fixtures and
 18+18 identical-input CPU semantic iterations pass. This pure substitution

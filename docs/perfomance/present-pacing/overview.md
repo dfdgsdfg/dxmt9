@@ -11,6 +11,12 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H426](present-pacing-drawrun-preparation.426.md) subdivides large-source DrawRun
+residual: pass entry 22.466 ms and per-draw loop residual 17.018 ms dominate
+47.538 ms across five bodies. Command binding-plan setup is 1.429 ms. These are
+observer-inclusive, changed-input diagnostics; next separate pass continuation
+from transitions and startRenderPass preparation. No policy/FPS promotion.
+
 [H425](present-pacing-range-encode-body.425.md) splits five large range-source
 bodies: 54.5% encodeDraw and 39.8% enclosing DrawRun preparation/pass residual;
 per-record split and dispatch are small in that sample. The earlier trace

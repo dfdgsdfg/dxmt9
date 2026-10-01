@@ -395,6 +395,32 @@ class TestSupply(unittest.TestCase):
             with self.assertRaises(ValueError):
                 progress.command_phases(a,b,bad)
 
+    def test_draw_run_milestones(self):
+        a = dict(kind='chunk_body_begin', tid=3, wall_ns=1000000,
+                 cpu_ns=500000, value=3)
+        b = dict(a, kind='chunk_body_end', wall_ns=3000000, cpu_ns=1500000)
+        shape = [('chunk_command_begin',1)] + [('draw_run_phase',i) for i in range(5)] + [
+            ('encode_draw_begin',7), ('encode_draw_end',7), ('chunk_command_end',1),
+            ('chunk_split_begin',0), ('chunk_split_end',0)]
+        rows = [dict(a, kind=k, value=v, wall_ns=1100000+i*100000,
+                     cpu_ns=(1100000+i*100000)//2) for i,(k,v) in enumerate(shape)]
+        p = progress.command_phases(a,b,rows)
+        detail = p['draw_run_phases']
+        self.assertTrue(detail['qualified'])
+        self.assertEqual(detail['commands'],1)
+        self.assertEqual(detail['unclassified_commands'],0)
+        self.assertAlmostEqual(sum(v['cpu_ms'] for v in detail['phases'].values()) +
+            p['draw_phases']['encode_draw']['cpu_ms'], p['draw_run']['cpu_ms'])
+        old = [r for r in rows if r['kind'] != 'draw_run_phase']
+        self.assertFalse(progress.command_phases(a,b,old)['draw_run_phases']['qualified'])
+        for bad in (rows[:3]+rows[4:], rows[:3]+[rows[2]]+rows[3:],
+                    [rows[0],dict(rows[1],value=5)]+rows[2:],
+                    [rows[0],dict(rows[1],tid=9)]+rows[2:],
+                    [dict(rows[0],value=0)]+rows[1:],
+                    [rows[0],dict(rows[1],cpu_ns=1)]+rows[2:]):
+            with self.assertRaises(ValueError):
+                progress.command_phases(a,b,bad)
+
     def test_command_body_cost_partition(self):
         a = dict(kind='chunk_body_begin', tid=3, wall_ns=1000000,
                  cpu_ns=500000, value=1)

@@ -43,7 +43,7 @@ EVENTS = ('present import_begin import_end raw_ready mutation_ready stateblock_r
           'queue_submit_phase queue_submit_validation_end queue_submit_summary_family '
           'session_release_post session_release_raw session_release_policy '
           'session_release_queue session_release_action_begin session_release_ack '
-          'session_release_return session_release_close session_release_reuse').split()
+          'session_release_return session_release_close session_release_reuse draw_run_phase').split()
 
 
 def load(path):

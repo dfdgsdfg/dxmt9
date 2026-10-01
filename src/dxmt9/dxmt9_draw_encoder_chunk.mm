@@ -2914,6 +2914,10 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
     // Draw/DrawRun records on the same Metal render encoder.
     traceEncodeCommand("drawrun.before-flush-blit", commandIndex,
                        Kind::DrawRun, command);
+    // Diagnostic milestones only; no storage or clock reads when disabled.
+    if (supplyDrawSplit)
+      ::dxmt9::supply::record(::dxmt9::supply::Event::DrawRunPhase,
+                            &ctx.pool, sourceSeqId, 0u);
     flushBlit();
     traceEncodeCommand("drawrun.after-flush-blit", commandIndex,
                        Kind::DrawRun, command);
@@ -2930,6 +2934,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
         commandIndex, drawReadHazard);
     if (!preparedRead) drawReadHazard = makeDrawReadHazard(stateView);
     if (preparedOwner) perf::countPreparedSerialRead(preparedRead);
+    if (supplyDrawSplit)
+      ::dxmt9::supply::record(::dxmt9::supply::Event::DrawRunPhase,
+                            &ctx.pool, sourceSeqId, 1u);
     auto hasExactRenderHazard = [&] {
       const bool bloomOverlap = passState.activeWriteHazard.bloomOverlaps(drawReadHazard);
       const bool exactOverlap = passState.activeWriteHazard.exactOverlaps(drawReadHazard);
@@ -3065,6 +3072,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
         passState.activeKey == drawKey) {
       renderPassFrameTracker.noteDrawRead(*stateView.hot);
     }
+    if (supplyDrawSplit)
+      ::dxmt9::supply::record(::dxmt9::supply::Event::DrawRunPhase,
+                            &ctx.pool, sourceSeqId, 2u);
     // Phase 3-E: bind BaseDrawState ONCE on iter 0, then issue-only
     // path on iters 1..N — the Metal render encoder retains
     // pipeline / depth / viewport / scissor / cull / texture /
@@ -3141,6 +3151,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
                          Kind::DrawRun, command);
     }
 
+    if (supplyDrawSplit)
+      ::dxmt9::supply::record(::dxmt9::supply::Event::DrawRunPhase,
+                            &ctx.pool, sourceSeqId, 3u);
     // encodeDraw receives the per-draw fields through DrawParam while
     // all base state is read from the canonical hot/shader view.
     // Per-frequency UBOs (VsConsts/PsConsts/FfpVsConsts/FfpPsConsts)
@@ -3176,6 +3189,9 @@ static std::optional<core::metalqueue::QueueSubmissionRecord> encodeChunkImpl(
     };
     u64 selectedMergePairs = 0u;
     CommandBindingPlan commandBindingPlan(hot, stateView.shaderContext().pixelShader);
+    if (supplyDrawSplit)
+      ::dxmt9::supply::record(::dxmt9::supply::Event::DrawRunPhase,
+                            &ctx.pool, sourceSeqId, 4u);
     auto encodeDrawSubrange = [&](std::span<const core::DrawParam> drawItems,
                                   std::size_t commandDrawBegin) {
     const std::size_t drawCount = drawItems.size();

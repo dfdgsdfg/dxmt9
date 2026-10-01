@@ -18,6 +18,78 @@ CHUNK_BODY = ('chunk_body_begin', 'chunk_body_end')
 COMMAND_EVENTS = ('chunk_command_begin', 'chunk_command_end',
                   'chunk_split_begin', 'chunk_split_end')
 DRAW_EVENTS = ('encode_draw_begin', 'encode_draw_end')
+DRAW_RUN_PHASES = ('uniform_setup', 'flush_blit_hazard_setup', 'pass_entry',
+                   'up_setup', 'binding_plan_setup')
+
+
+def draw_run_phases(begin, end, candidates):
+    """Optional sequential milestones; loop remainder includes per-draw setup."""
+    kinds = COMMAND_EVENTS + DRAW_EVENTS + ('draw_run_phase',)
+    rows = [r for r in candidates if r['kind'] in kinds and
+            begin['wall_ns'] <= r['wall_ns'] <= end['wall_ns']]
+    rows.sort(key=lambda r: r['wall_ns'])
+    if not any(r['kind'] == 'draw_run_phase' for r in rows):
+        return dict(qualified=False, reason='no DrawRun milestones; legacy or skipped commands')
+    totals = {k: dict(wall_ms=0.0, cpu_ms=0.0) for k in (*DRAW_RUN_PHASES, 'loop_residual')}
+    parent = previous_phase = draw = None
+    phase = 0
+    draw_wall = draw_cpu = 0
+    commands = unclassified = 0
+    saw_draw = False
+    previous = begin
+    for row in rows + [end]:
+        if (row['tid'] != begin['tid'] or row['wall_ns'] < previous['wall_ns'] or
+                row['cpu_ns'] < previous['cpu_ns']):
+            raise ValueError('invalid DrawRun milestone thread/clocks')
+        previous = row
+        kind = row['kind']
+        if kind == 'chunk_command_begin':
+            if parent is not None:
+                raise ValueError('nested DrawRun milestone parent')
+            parent = previous_phase = row
+            phase = 0
+            draw_wall = draw_cpu = 0
+            saw_draw = False
+        elif kind == 'draw_run_phase':
+            if parent is None or parent['value'] != 1 or draw is not None or saw_draw or row['value'] != phase or phase >= 5:
+                raise ValueError('invalid DrawRun milestone order/parent')
+            wall, cpu = row['wall_ns']-previous_phase['wall_ns'], row['cpu_ns']-previous_phase['cpu_ns']
+            if cpu > wall + 100000:
+                raise ValueError('invalid DrawRun milestone CPU')
+            totals[DRAW_RUN_PHASES[phase]]['wall_ms'] += wall/1e6
+            totals[DRAW_RUN_PHASES[phase]]['cpu_ms'] += cpu/1e6
+            previous_phase, phase = row, phase + 1
+        elif kind == 'encode_draw_begin':
+            if parent is None or parent['value'] != 1 or draw is not None or phase not in (0, 5):
+                raise ValueError('draw before completed DrawRun milestones')
+            draw = row
+            saw_draw = True
+        elif kind == 'encode_draw_end':
+            if draw is None or row['value'] != draw['value']:
+                raise ValueError('unpaired DrawRun nested draw')
+            draw_wall += row['wall_ns']-draw['wall_ns']
+            draw_cpu += row['cpu_ns']-draw['cpu_ns']
+            draw = None
+        elif kind == 'chunk_command_end':
+            if parent is None or draw is not None or row['value'] != parent['value'] or phase not in (0, 5):
+                raise ValueError('incomplete DrawRun milestones')
+            if parent['value'] == 1:
+                if phase == 0:
+                    unclassified += 1
+                else:
+                    wall = row['wall_ns']-previous_phase['wall_ns']-draw_wall
+                    cpu = row['cpu_ns']-previous_phase['cpu_ns']-draw_cpu
+                    if min(wall, cpu) < 0:
+                        raise ValueError('negative DrawRun loop remainder')
+                    totals['loop_residual']['wall_ms'] += wall/1e6
+                    totals['loop_residual']['cpu_ms'] += cpu/1e6
+                    commands += 1
+            parent = None
+    if parent is not None or draw is not None:
+        raise ValueError('unclosed DrawRun milestone parent')
+    return dict(qualified=True, commands=commands, unclassified_commands=unclassified, phases=totals)
+
+
 PARALLEL_EVENTS = tuple(k for k in supply.EVENTS if k.startswith('parallel_observe_'))
 ACCESS_EVENTS = ('parallel_access_range', 'parallel_access_counts',
                  'parallel_access_touches', 'parallel_access_reuse', 'parallel_access_flags')
@@ -233,6 +305,7 @@ def command_phases(begin, end, candidates):
     if any(v < -1e-9 for v in residual.values()):
         raise ValueError('negative command dispatch residual')
     return dict(qualified=True, **totals, dispatch_residual=residual,
+                draw_run_phases=draw_run_phases(begin, end, candidates),
                 draw_phases=draw_phases(begin,end,candidates,totals['draw_run']))
 
 
@@ -357,7 +430,7 @@ def analyze(meta, rows, wait_meta, wait_rows, query=None, source_only=False):
     backend_events = collections.defaultdict(list)
     chunk_events = collections.defaultdict(list)
     for r in rows:
-        if r['kind'] in CHUNK_BODY + COMMAND_EVENTS + DRAW_EVENTS + PARALLEL_EVENTS + ACCESS_EVENTS:
+        if r['kind'] in CHUNK_BODY + COMMAND_EVENTS + DRAW_EVENTS + ('draw_run_phase',) + PARALLEL_EVENTS + ACCESS_EVENTS:
             chunk_events[(r['owner'], r['id'])].append(r)
             continue
         if r['kind'] in FRAMEGRAPH + ('framegraph_pool_binding',):
