@@ -11,6 +11,13 @@ related: docs/perfomance/present-pacing/index.md; docs/perfomance/present-pacing
 
 # Present-Pacing — display sync, frame latency, and the wallclock cap - Current Overview
 
+[H424](present-pacing-range-reuse-activation.424.md) confirms wild reuse (226/534
+retained requests). Remaining same-prefix round trips total 5.385 ms in five
+Presents; 15 other releases account for 110.226 ms. The five largest waits
+overlap 89.968 ms of same-sequence CPU-active Encode bodies. Prioritize those
+bodies over more ack tuning. Global Arena/Direct exclusion is confirmed, but
+full query/polling tape route-cost isolation is unsupported; default stays OFF.
+
 [H423](present-pacing-close-reuse-wild.423.md) completes a Day visual smoke and
 observer-OFF reversed-order pairs on H422. Ranges ON remains 9.66% / 8.49%
 slower; default OFF is retained. This is a whole-policy comparison, not isolated

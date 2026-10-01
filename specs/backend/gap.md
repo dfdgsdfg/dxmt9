@@ -118,6 +118,15 @@ Wild reuse/fallback activation and identical-input Arena/session route-cost
 isolation remain open, alongside the broader correctness obligations above.
 See [H423](../../docs/perfomance/present-pacing/present-pacing-close-reuse-wild.423.md).
 
+H424 confirms wild receipt reuse in 226/534 retained requests. Most sampled
+release elapsed time belongs to nonrepeated prefixes; the five longest waits
+overlap CPU-active Encode bodies with matching sequence identities. Dirty/stale
+rejection attribution remains unobserved. Global Direct/Arena exclusion is
+confirmed, but full captured-query CPU route isolation remains blocked by the
+general-frame ordered-control grammar. Keep default OFF; next attribute the
+identified Encode bodies rather than broaden ack elision. See
+[H424](../../docs/perfomance/present-pacing/present-pacing-range-reuse-activation.424.md).
+
 R-BACK-2.15.2 fixed comparison now avoids a temporary projection with the same
 hash guard and fieldwise equality. Native float-edge/collision fixtures and
 18+18 identical-input CPU semantic iterations pass. This pure substitution
