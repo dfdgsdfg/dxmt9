@@ -68,6 +68,24 @@ bool mutationCapableIdentity(
          identity.kind == D9C_CHUNK_HANDLE_KIND_BUFFER;
 }
 
+// Called only with an active capture-path exception. Classification itself
+// must not allocate, especially when the original failure was bad_alloc.
+const char* captureMutationExceptionKind() noexcept {
+  try {
+    throw;
+  } catch (const std::bad_alloc&) {
+    return "bad_alloc";
+  } catch (const std::length_error&) {
+    return "length_error";
+  } catch (const std::invalid_argument&) {
+    return "invalid_argument";
+  } catch (const std::exception&) {
+    return "std_exception";
+  } catch (...) {
+    return "unknown";
+  }
+}
+
 } // namespace
 
 const char* renderTapeObjectDefineDispositionName(
@@ -230,6 +248,7 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::arm(
     catalogue_.blobs.assign(blobs.begin(), blobs.end());
     context.phase = "session_reset";
     lastAbortAccounting_ = {};
+    mutationFailure_ = {};
     publishedBlobs_.clear();
     publicationBundle_ = {};
     objects_.clear();
@@ -418,19 +437,34 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::registerVerifiedBlob(
   if (!enabled_) {
     return RenderTapeCaptureStatus::Disabled;
   }
+  mutationFailure_ = {};
+  auto context = mutationFailureContext("register_verified_blob");
+  context.byteSize = size;
+  const auto fail = [&](RenderTapeCaptureStatus status, const char* reason,
+                        const char* exception = "none") {
+    context.valid = true;
+    context.status = status;
+    context.reason = reason;
+    context.exceptionKind = exception;
+    mutationFailure_ = context;
+    return status;
+  };
   if (state_ != RenderTapeCaptureState::Armed &&
       state_ != RenderTapeCaptureState::Capturing) {
-    return RenderTapeCaptureStatus::InvalidState;
+    return fail(RenderTapeCaptureStatus::InvalidState, "invalid_state");
   }
+  context.phase = "blob_catalogue_lookup";
   RenderTapeDigest digestCopy{};
   std::memcpy(digestCopy.data(), digest.data(), kRenderTapeDigestSize);
   if (hasVerifiedBlob(digestCopy, size)) {
     return RenderTapeCaptureStatus::Accepted;
   }
+  context.phase = "blob_entry_admission";
   if (catalogue_.blobs.size() >= limits_.maxBlobEntries) {
-    return RenderTapeCaptureStatus::CapacityExceeded;
+    return fail(RenderTapeCaptureStatus::CapacityExceeded, "blob_entry_limit");
   }
   try {
+    context.phase = "blob_catalogue_append";
     catalogue_.blobs.push_back(RenderTapeBlob{
         .digest = digestCopy,
         .size = size,
@@ -438,7 +472,8 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::registerVerifiedBlob(
     });
     return RenderTapeCaptureStatus::Accepted;
   } catch (...) {
-    return RenderTapeCaptureStatus::CapacityExceeded;
+    return fail(RenderTapeCaptureStatus::CapacityExceeded, "exception",
+                captureMutationExceptionKind());
   }
 }
 
@@ -447,10 +482,23 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::registerBlobBytes(
   if (!enabled_) {
     return RenderTapeCaptureStatus::Disabled;
   }
+  mutationFailure_ = {};
+  auto context = mutationFailureContext("register_blob_bytes");
+  context.byteSize = bytes.size();
+  const auto fail = [&](RenderTapeCaptureStatus status, const char* reason,
+                        const char* exception = "none") {
+    context.valid = true;
+    context.status = status;
+    context.reason = reason;
+    context.exceptionKind = exception;
+    mutationFailure_ = context;
+    return status;
+  };
   if (state_ != RenderTapeCaptureState::Armed &&
       state_ != RenderTapeCaptureState::Capturing) {
-    return RenderTapeCaptureStatus::InvalidState;
+    return fail(RenderTapeCaptureStatus::InvalidState, "invalid_state");
   }
+  context.phase = "blob_deduplicate";
   const auto alreadyPublished = std::find_if(
       publishedBlobs_.begin(), publishedBlobs_.end(), [&](const auto& blob) {
         return blob.bytes.size() == bytes.size() &&
@@ -463,14 +511,17 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::registerBlobBytes(
     return RenderTapeCaptureStatus::Accepted;
   }
   const auto incomingBytes = static_cast<std::uint64_t>(bytes.size());
+  context.phase = "blob_byte_admission";
   if (incomingBytes > limits_.maxBlobBytes ||
       blobBytes_ > limits_.maxBlobBytes - incomingBytes) {
-    return RenderTapeCaptureStatus::CapacityExceeded;
+    return fail(RenderTapeCaptureStatus::CapacityExceeded, "blob_byte_limit");
   }
+  context.phase = "blob_digest";
   const auto digest = sha256(bytes);
   if (digestOut) {
     *digestOut = digest;
   }
+  context.phase = "blob_catalogue_lookup";
   const bool alreadyCatalogued = hasVerifiedBlob(digest, bytes.size());
   if (!alreadyCatalogued) {
     const auto status = registerVerifiedBlob(
@@ -481,14 +532,18 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::registerBlobBytes(
     }
   }
   try {
-    publishedBlobs_.push_back(RenderTapePublishedBlob{
-        .digest = digest, .bytes = std::vector<std::byte>(bytes.begin(), bytes.end())});
+    context.phase = "blob_payload_copy";
+    RenderTapePublishedBlob owned{
+        .digest = digest, .bytes = std::vector<std::byte>(bytes.begin(), bytes.end())};
+    context.phase = "blob_publication_append";
+    publishedBlobs_.push_back(std::move(owned));
     blobBytes_ += incomingBytes;
   } catch (...) {
     if (!alreadyCatalogued && !catalogue_.blobs.empty()) {
       catalogue_.blobs.pop_back();
     }
-    return RenderTapeCaptureStatus::CapacityExceeded;
+    return fail(RenderTapeCaptureStatus::CapacityExceeded, "exception",
+                captureMutationExceptionKind());
   }
   return RenderTapeCaptureStatus::Accepted;
 }
@@ -501,12 +556,35 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::resourceMutationBytes(
   RenderTapeDigest digest{};
   const auto status = registerBlobBytes(bytes, &digest);
   if (status != RenderTapeCaptureStatus::Accepted) {
+    // The inner layer owns the failure reason/phase; the wrapper supplies the
+    // exact generation-qualified mutation that attempted blob admission.
+    if (mutationFailure_.valid) {
+      mutationFailure_.hasIdentity = true;
+      mutationFailure_.identity = identity;
+      mutationFailure_.kind = kind;
+      mutationFailure_.bufferDisposition = bufferDisposition;
+      mutationFailure_.subresource = subresource;
+      mutationFailure_.byteOffset = byteOffset;
+      mutationFailure_.byteSize = bytes.size();
+      mutationFailure_.eventPayloadBytes = sizeof(RenderTapeResourceMutationHeader);
+    }
     return status;
   }
   return resourceMutation(
       identity, kind, subresource, byteOffset, bytes.size(),
       std::span<const std::byte, kRenderTapeDigestSize>(digest),
       bufferDisposition);
+}
+
+RenderTapeCaptureMutationFailure RenderTapeCaptureSession::mutationFailureContext(
+    const char* layer) const noexcept {
+  return {
+      .layer = layer, .phase = "state_validation", .captureState = state_,
+      .publishedBlobCount = publishedBlobs_.size(),
+      .accounting = {
+          .valid = true, .eventCount = eventCount_, .eventBytes = eventBytes_,
+          .blobCount = catalogue_.blobs.size(), .blobBytes = blobBytes_,
+          .objectCount = objects_.size()}};
 }
 
 RenderTapeCaptureStatus RenderTapeCaptureSession::reserveEvent(
@@ -714,28 +792,71 @@ RenderTapeCaptureStatus RenderTapeCaptureSession::resourceMutation(
     std::uint64_t byteSize,
     std::span<const std::byte, kRenderTapeDigestSize> digest,
     RenderTapeBufferMutationDisposition bufferDisposition) {
+  if (!enabled_) {
+    return RenderTapeCaptureStatus::Disabled;
+  }
+  mutationFailure_ = {};
+  auto context = mutationFailureContext("resource_mutation");
+  context.hasIdentity = true;
+  context.identity = identity;
+  context.kind = kind;
+  context.bufferDisposition = bufferDisposition;
+  context.subresource = subresource;
+  context.byteOffset = byteOffset;
+  context.byteSize = byteSize;
+  context.eventPayloadBytes = sizeof(RenderTapeResourceMutationHeader);
+  const auto fail = [&](RenderTapeCaptureStatus status, const char* reason,
+                        const char* exception = "none") {
+    context.valid = true;
+    context.status = status;
+    context.reason = reason;
+    context.exceptionKind = exception;
+    mutationFailure_ = context;
+    return status;
+  };
   if (const auto status = requireCapturing();
       status != RenderTapeCaptureStatus::Accepted) {
-    return status;
+    return fail(status, "invalid_state");
   }
+  context.phase = "event_validation";
   RenderTapeDigest copy{};
   std::memcpy(copy.data(), digest.data(), kRenderTapeDigestSize);
-  if (!validIdentity(identity) || !hasObject(identity, true) || byteSize == 0u ||
-      byteOffset > std::numeric_limits<std::uint64_t>::max() - byteSize ||
-      !hasVerifiedBlob(copy, byteSize)) {
-    return RenderTapeCaptureStatus::InvalidInput;
+  if (!validIdentity(identity)) {
+    return fail(RenderTapeCaptureStatus::InvalidInput, "invalid_identity");
   }
+  if (!hasObject(identity, true)) {
+    return fail(RenderTapeCaptureStatus::InvalidInput, "missing_live_object");
+  }
+  if (byteSize == 0u) {
+    return fail(RenderTapeCaptureStatus::InvalidInput, "empty_mutation");
+  }
+  if (byteOffset > std::numeric_limits<std::uint64_t>::max() - byteSize) {
+    return fail(RenderTapeCaptureStatus::InvalidInput, "mutation_extent_overflow");
+  }
+  if (!hasVerifiedBlob(copy, byteSize)) {
+    return fail(RenderTapeCaptureStatus::InvalidInput, "missing_verified_blob");
+  }
+  context.phase = "event_reserve";
+  // reserveEvent may release the owner. Classify using the pre-reserve values
+  // already retained in context, not the now-zero live counters.
   const auto status = reserveEvent(sizeof(RenderTapeResourceMutationHeader));
   if (status != RenderTapeCaptureStatus::Accepted) {
-    return status;
+    return fail(status,
+        context.accounting.eventCount >= limits_.maxEvents ? "event_count_limit"
+        : context.eventPayloadBytes >
+                  std::numeric_limits<std::uint64_t>::max() - context.accounting.eventBytes
+            ? "event_bytes_overflow" : "event_byte_limit");
   }
   try {
+    context.phase = "event_append";
     builder_.appendResourceMutation(identity, kind, subresource, byteOffset,
                                     byteSize, digest, bufferDisposition);
     ++eventCount_;
     eventBytes_ += sizeof(RenderTapeResourceMutationHeader);
     return RenderTapeCaptureStatus::Accepted;
   } catch (...) {
+    fail(RenderTapeCaptureStatus::CapacityExceeded, "exception",
+         captureMutationExceptionKind());
     abortInternal();
     return RenderTapeCaptureStatus::CapacityExceeded;
   }

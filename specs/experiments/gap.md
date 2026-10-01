@@ -335,6 +335,19 @@ format-21 owner 4294967306 snapshot completes (1280x720, pitch 5120,
 admission from mutation-event rejection. The game was deliberately terminated
 without publishing a Tape. Add identity-qualified phase/status/exception
 provenance before attributing this new failure or changing content ownership.
+Mutation failures now retain identity-qualified phase/status/typed-exception
+and pre-operation accounting through abort. Native capture/tape tests pass
+(2/2), including catalogue/payload/event allocation failures, explicit budgets,
+validation rejection and accounting retention. PE32, PE64 and canonical Unix
+builds pass. Capture `app-d3d9-stkcop-bench-tape-h430-query-volume-16` fails
+earlier than capture 15: bootstrap `content_blob_copy` throws `bad_alloc` for
+surface 4294967298, generation 1, subresource 0, 4,608,000 bytes, after one
+object/mutation/blob. Thus it does not attribute capture 15's JIT failure.
+Snapshots complete and closure remains four objects; the process was
+deliberately terminated after repeated failures without a published Tape.
+The next ownership review must address selected arm-snapshot duplication in
+bootstrap and JIT while preserving snapshots not yet materialized and EVENT
+checkpoint authority; a larger configured budget is not the demonstrated fix.
 Existing H343 artifacts do not identify the workload's volume format.
 The existing mutation event carries complete volume mip blobs without a new
 wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage

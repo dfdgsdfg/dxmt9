@@ -774,6 +774,7 @@ void D3D9DeviceImpl::logRenderTapeMutationRejection(
         return;
     const auto &limits = peCaptureState_->renderTapeCapture.limits();
     const auto &aborted = peCaptureState_->renderTapeCapture.lastAbortAccounting();
+    const auto &failure = peCaptureState_->renderTapeCapture.mutationFailure();
     dxmt9DeviceInfoLog(
         "render_tape_capture mutation_reject reason=%s detail=%s status=%u "
         "capture_state=%u kind=%u generation=%u object_id=%llu "
@@ -781,7 +782,15 @@ void D3D9DeviceImpl::logRenderTapeMutationRejection(
         "buffered_bytes=%llu/%llu owned_blob_bytes=%llu/%llu "
         "owned_blob_entries=%u/%u last_abort_valid=%d last_abort_event_count=%llu "
         "last_abort_event_bytes=%llu last_abort_blob_count=%llu "
-        "last_abort_blob_bytes=%llu last_abort_object_count=%llu",
+        "last_abort_blob_bytes=%llu last_abort_object_count=%llu "
+        "failure_valid=%d failure_reason=%s exception_kind=%s layer=%s phase=%s "
+        "failure_status=%u failure_capture_state=%u failure_has_identity=%d "
+        "failure_object_kind=%u failure_generation=%u failure_object_id=%llu "
+        "mutation_kind=%u buffer_disposition=%u failure_subresource=%u "
+        "byte_offset=%llu incoming_bytes=%llu event_payload_bytes=%llu "
+        "failure_event_count=%llu failure_event_bytes=%llu "
+        "failure_blob_count=%llu failure_blob_bytes=%llu "
+        "failure_published_blob_count=%llu failure_object_count=%llu",
         reason, detail, static_cast<unsigned>(status),
         static_cast<unsigned>(peCaptureState_->renderTapeCapture.state()),
         object.identity.kind, object.identity.generation,
@@ -800,7 +809,23 @@ void D3D9DeviceImpl::logRenderTapeMutationRejection(
         static_cast<unsigned long long>(aborted.eventBytes),
         static_cast<unsigned long long>(aborted.blobCount),
         static_cast<unsigned long long>(aborted.blobBytes),
-        static_cast<unsigned long long>(aborted.objectCount));
+        static_cast<unsigned long long>(aborted.objectCount),
+        failure.valid ? 1 : 0, failure.reason, failure.exceptionKind,
+        failure.layer, failure.phase, static_cast<unsigned>(failure.status),
+        static_cast<unsigned>(failure.captureState), failure.hasIdentity ? 1 : 0,
+        failure.identity.kind, failure.identity.generation,
+        static_cast<unsigned long long>(failure.identity.objectId),
+        static_cast<unsigned>(failure.kind),
+        static_cast<unsigned>(failure.bufferDisposition), failure.subresource,
+        static_cast<unsigned long long>(failure.byteOffset),
+        static_cast<unsigned long long>(failure.byteSize),
+        static_cast<unsigned long long>(failure.eventPayloadBytes),
+        static_cast<unsigned long long>(failure.accounting.eventCount),
+        static_cast<unsigned long long>(failure.accounting.eventBytes),
+        static_cast<unsigned long long>(failure.accounting.blobCount),
+        static_cast<unsigned long long>(failure.accounting.blobBytes),
+        static_cast<unsigned long long>(failure.publishedBlobCount),
+        static_cast<unsigned long long>(failure.accounting.objectCount));
 }
 
 bool D3D9DeviceImpl::appendRenderTapeUnlockMutation(
@@ -1179,10 +1204,14 @@ bool D3D9DeviceImpl::materializeRenderTapeObjectForReference(
     }
     for (std::uint32_t subresource = 0u;
          subresource < effectiveContent.size(); ++subresource) {
-        if (peCaptureState_->renderTapeCapture.resourceMutationBytes(
-                identity, dxmt9::d3d9::RenderTapeMutationKind::Upload,
-                subresource, 0u, effectiveContent[subresource]) !=
-            dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+        const auto status = peCaptureState_->renderTapeCapture.resourceMutationBytes(
+            identity, dxmt9::d3d9::RenderTapeMutationKind::Upload,
+            subresource, 0u, effectiveContent[subresource]);
+        if (status != dxmt9::d3d9::RenderTapeCaptureStatus::Accepted) {
+            const dxmt9::d3d9::pe::PeWireObjectRef reference{.identity = identity};
+            logRenderTapeMutationRejection(
+                "jit_resource_mutation", "mutation_bytes", reference,
+                subresource, effectiveContent[subresource].size(), status);
             abortRenderTapeCapture("jit_resource_mutation");
             return false;
         }

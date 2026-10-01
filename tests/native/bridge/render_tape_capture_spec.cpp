@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstring>
 #include <cstdlib>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -30,6 +31,7 @@ bool enabled = false;
 std::size_t count = 0u;
 bool failEnabled = false;
 std::size_t failAfter = 0u;
+std::exception_ptr injectedException{};
 std::size_t watchSize = 0u;
 void* watchedPointer = nullptr;
 bool watchedFreed = false;
@@ -40,6 +42,8 @@ void* operator new(std::size_t size) {
   if (capture_state_allocation_probe::failEnabled) {
     if (capture_state_allocation_probe::failAfter == 0u) {
       capture_state_allocation_probe::failEnabled = false;
+      if (capture_state_allocation_probe::injectedException)
+        std::rethrow_exception(capture_state_allocation_probe::injectedException);
       throw std::bad_alloc();
     }
     --capture_state_allocation_probe::failAfter;
@@ -3666,6 +3670,296 @@ void testArmFailureProvenanceAndAbortRelease() {
   capture_state_allocation_probe::watchedPointer = nullptr;
 }
 
+void testMutationFailureProvenanceAndFaults() {
+  static_assert(std::is_trivially_copyable_v<RenderTapeCaptureMutationFailure>);
+  const auto bootstrap = bootstrapChunk();
+  const D9CWireObjectIdentity identity{
+      .kind = D9C_CHUNK_HANDLE_KIND_BUFFER, .generation = 7u, .objectId = 159u};
+  const D9CBufferDesc descriptor{.size = 64u};
+  constexpr std::array<std::byte, 7u> payload{
+      std::byte{1u}, std::byte{2u}, std::byte{3u}, std::byte{4u},
+      std::byte{5u}, std::byte{6u}, std::byte{7u}};
+  const auto digest = RenderTapeCaptureSession::sha256(payload);
+  const auto setup = [&](RenderTapeCaptureSession& session) {
+    check(session.arm(bootstrap) == RenderTapeCaptureStatus::Accepted &&
+              session.beginPresentInterval() == RenderTapeCaptureStatus::Accepted &&
+              session.objectDefine(identity,
+                  static_cast<std::uint32_t>(RenderTapeDescriptorKind::Buffer),
+                  std::as_bytes(std::span(&descriptor, 1u)), 0u, {}) ==
+                  RenderTapeCaptureStatus::Accepted,
+          "mutation provenance fixture starts with exactly two complete events");
+  };
+  const auto mutate = [&](RenderTapeCaptureSession& session) {
+    return session.resourceMutationBytes(
+        identity, RenderTapeMutationKind::CpuUnlock, 2u, 3u, payload,
+        RenderTapeBufferMutationDisposition::NoOverwrite);
+  };
+  const auto checkExtent = [&](const RenderTapeCaptureMutationFailure& failure) {
+    check(failure.valid && failure.hasIdentity &&
+              failure.identity.kind == identity.kind &&
+              failure.identity.generation == identity.generation &&
+              failure.identity.objectId == identity.objectId &&
+              failure.kind == RenderTapeMutationKind::CpuUnlock &&
+              failure.bufferDisposition == RenderTapeBufferMutationDisposition::NoOverwrite &&
+              failure.subresource == 2u && failure.byteOffset == 3u &&
+              failure.byteSize == payload.size() &&
+              failure.eventPayloadBytes == sizeof(RenderTapeResourceMutationHeader),
+          "nested failures preserve the exact identity, mutation kind and incoming extent");
+  };
+
+  RenderTapeCaptureSession disabled(false);
+  capture_state_allocation_probe::count = 0u;
+  capture_state_allocation_probe::enabled = true;
+  const auto disabledStatus = mutate(disabled);
+  capture_state_allocation_probe::enabled = false;
+  check(disabledStatus == RenderTapeCaptureStatus::Disabled &&
+            !disabled.mutationFailure().valid && capture_state_allocation_probe::count == 0u,
+        "capture-disabled mutation remains allocation-free without diagnostic writes");
+  RenderTapeCaptureSession notArmed(true);
+  check(mutate(notArmed) == RenderTapeCaptureStatus::InvalidState &&
+            std::string_view(notArmed.mutationFailure().phase) == "state_validation" &&
+            std::string_view(notArmed.mutationFailure().layer) == "register_blob_bytes",
+        "registration state failure remains distinct from event state failure");
+  checkExtent(notArmed.mutationFailure());
+  RenderTapeCaptureSession armed(true);
+  check(armed.arm(bootstrap) == RenderTapeCaptureStatus::Accepted &&
+            mutate(armed) == RenderTapeCaptureStatus::InvalidState &&
+            std::string_view(armed.mutationFailure().layer) == "resource_mutation" &&
+            armed.mutationFailure().accounting.blobBytes == payload.size() &&
+            armed.state() == RenderTapeCaptureState::Armed,
+        "unchanged registration-before-validation order is visible for an Armed owner");
+
+  for (const bool entryLimit : {false, true}) {
+    RenderTapeCaptureSession limited(true,
+        {.maxBlobEntries = entryLimit ? 0u : 4096u,
+         .maxBlobBytes = entryLimit ? kRenderTapeDefaultMaxBlobBytes : 6u});
+    setup(limited);
+    capture_state_allocation_probe::count = 0u;
+    capture_state_allocation_probe::enabled = true;
+    const auto status = mutate(limited);
+    capture_state_allocation_probe::enabled = false;
+    const auto failure = limited.mutationFailure();
+    checkExtent(failure);
+    check(status == RenderTapeCaptureStatus::CapacityExceeded && failure.status == status &&
+              std::string_view(failure.reason) ==
+                  (entryLimit ? "blob_entry_limit" : "blob_byte_limit") &&
+              std::string_view(failure.phase) ==
+                  (entryLimit ? "blob_entry_admission" : "blob_byte_admission") &&
+              std::string_view(failure.exceptionKind) == "none" &&
+              failure.accounting.eventCount == 2u && failure.accounting.blobCount == 0u &&
+              failure.accounting.blobBytes == 0u && failure.accounting.objectCount == 1u &&
+              limited.state() == RenderTapeCaptureState::Capturing &&
+              capture_state_allocation_probe::count == 0u,
+          "explicit blob limits retain complete values allocation-free without aborting early");
+    limited.abort();
+    check(limited.mutationFailure().byteSize == payload.size() &&
+              limited.lastAbortAccounting().eventCount == 2u,
+          "caller-triggered abort cannot erase blob rejection provenance");
+  }
+  RenderTapeCaptureSession cumulativeLimit(true, {.maxBlobBytes = 10u});
+  setup(cumulativeLimit);
+  check(cumulativeLimit.registerBlobBytes(std::span(payload).first(4u)) ==
+            RenderTapeCaptureStatus::Accepted &&
+            mutate(cumulativeLimit) == RenderTapeCaptureStatus::CapacityExceeded &&
+            std::string_view(cumulativeLimit.mutationFailure().reason) == "blob_byte_limit" &&
+            cumulativeLimit.mutationFailure().byteSize == 7u &&
+            cumulativeLimit.mutationFailure().accounting.blobBytes == 4u &&
+            cumulativeLimit.mutationFailure().accounting.blobCount == 1u &&
+            cumulativeLimit.ownedBlobBytes() == 4u,
+        "cumulative admission failure distinguishes incoming bytes from already retained bytes");
+
+  const std::uint64_t initialEventBytes = sizeof(RenderTapeBootstrapHeader) +
+      bootstrap.size() + sizeof(RenderTapeObjectDefineHeader) + sizeof(descriptor);
+  for (const bool countLimit : {false, true}) {
+    RenderTapeCaptureSession limited(true,
+        {.maxEvents = countLimit ? 2u : 4096u,
+         .maxEventBytes = countLimit ? 64u * 1024u * 1024u : initialEventBytes});
+    setup(limited);
+    check(mutate(limited) == RenderTapeCaptureStatus::CapacityExceeded,
+          "unchanged event reserve rejects the third event at the configured exact bound");
+    const auto failure = limited.mutationFailure();
+    checkExtent(failure);
+    check(std::string_view(failure.reason) ==
+                  (countLimit ? "event_count_limit" : "event_byte_limit") &&
+              std::string_view(failure.phase) == "event_reserve" &&
+              std::string_view(failure.exceptionKind) == "none" &&
+              failure.captureState == RenderTapeCaptureState::Capturing &&
+              failure.accounting.eventCount == 2u &&
+              failure.accounting.eventBytes == initialEventBytes &&
+              failure.accounting.blobCount == 1u &&
+              failure.accounting.blobBytes == payload.size() &&
+              failure.publishedBlobCount == 1u && failure.accounting.objectCount == 1u &&
+              limited.state() == RenderTapeCaptureState::Aborted &&
+              limited.eventCount() == 0u && limited.ownedBlobEntries() == 0u &&
+              limited.lastAbortAccounting().eventCount == 2u &&
+              limited.lastAbortAccounting().blobBytes == payload.size(),
+          "automatic reserve abort classifies and preserves pre-release counts, not cleared counts");
+    limited.abort();
+    check(std::string_view(limited.mutationFailure().reason) ==
+              (countLimit ? "event_count_limit" : "event_byte_limit"),
+          "repeated abort retains the original event rejection reason");
+  }
+
+  RenderTapeCaptureSession validation(true);
+  setup(validation);
+  check(validation.registerBlobBytes(payload) == RenderTapeCaptureStatus::Accepted,
+        "validation fixture independently verifies the referenced bytes");
+  auto badIdentity = identity;
+  badIdentity.generation = 0u;
+  auto missingIdentity = identity;
+  ++missingIdentity.objectId;
+  struct InvalidMutation {
+    D9CWireObjectIdentity identity;
+    std::uint64_t offset;
+    std::uint64_t size;
+    RenderTapeDigest digest;
+    const char* reason;
+  };
+  const std::array<InvalidMutation, 5u> invalid{
+      InvalidMutation{badIdentity, 0u, payload.size(), digest, "invalid_identity"},
+      InvalidMutation{missingIdentity, 0u, payload.size(), digest, "missing_live_object"},
+      InvalidMutation{identity, 0u, 0u, digest, "empty_mutation"},
+      InvalidMutation{identity, UINT64_MAX, payload.size(), digest, "mutation_extent_overflow"},
+      InvalidMutation{identity, 0u, payload.size(), {}, "missing_verified_blob"}};
+  for (const auto& input : invalid) {
+    check(validation.resourceMutation(input.identity, RenderTapeMutationKind::Upload,
+              0u, input.offset, input.size, input.digest) == RenderTapeCaptureStatus::InvalidInput &&
+              std::string_view(validation.mutationFailure().reason) == input.reason &&
+              std::string_view(validation.mutationFailure().phase) == "event_validation" &&
+              std::string_view(validation.mutationFailure().exceptionKind) == "none" &&
+              validation.eventCount() == 2u && validation.ownedBlobBytes() == payload.size(),
+          "each existing event validation predicate has exact provenance without side effects");
+  }
+  RenderTapeCaptureSession missingObject(true);
+  setup(missingObject);
+  check(missingObject.resourceMutationBytes(missingIdentity, RenderTapeMutationKind::Upload,
+            0u, 0u, payload) == RenderTapeCaptureStatus::InvalidInput &&
+            std::string_view(missingObject.mutationFailure().reason) == "missing_live_object" &&
+            missingObject.mutationFailure().identity.objectId == missingIdentity.objectId &&
+            missingObject.mutationFailure().accounting.blobBytes == payload.size() &&
+            missingObject.ownedBlobBytes() == payload.size() && missingObject.eventCount() == 2u &&
+            missingObject.state() == RenderTapeCaptureState::Capturing,
+        "wrapper validation rejection still retains the previously registered blob until caller abort");
+  capture_state_allocation_probe::failAfter = 0u;
+  capture_state_allocation_probe::failEnabled = true;
+  const auto duplicateStatus = validation.registerBlobBytes(payload);
+  const bool duplicateAllocated = !capture_state_allocation_probe::failEnabled;
+  capture_state_allocation_probe::failEnabled = false;
+  check(duplicateStatus == RenderTapeCaptureStatus::Accepted && !duplicateAllocated &&
+            !validation.mutationFailure().valid && validation.ownedBlobEntries() == 1u,
+        "byte equality deduplication allocates nothing and clears stale failure provenance");
+
+  bool sawCatalogue = false;
+  bool sawCopy = false;
+  bool sawPublication = false;
+  bool sawEvent = false;
+  bool reachedSuccess = false;
+  for (std::size_t allocation = 0u; allocation < 32u; ++allocation) {
+    RenderTapeCaptureSession injected(true);
+    setup(injected);
+    capture_state_allocation_probe::failAfter = allocation;
+    capture_state_allocation_probe::failEnabled = true;
+    const auto status = mutate(injected);
+    capture_state_allocation_probe::failEnabled = false;
+    if (status == RenderTapeCaptureStatus::Accepted) {
+      reachedSuccess = true;
+      check(!injected.mutationFailure().valid && injected.eventCount() == 3u &&
+                injected.ownedBlobBytes() == payload.size(),
+            "successful mutation has unchanged admission and no stale provenance");
+      break;
+    }
+    const auto failure = injected.mutationFailure();
+    checkExtent(failure);
+    const std::string_view phase(failure.phase);
+    const bool eventFailure = phase == "event_append";
+    check(status == RenderTapeCaptureStatus::CapacityExceeded && failure.status == status &&
+              std::string_view(failure.reason) == "exception" &&
+              std::string_view(failure.exceptionKind) == "bad_alloc" &&
+              failure.accounting.eventCount == 2u &&
+              failure.accounting.eventBytes == initialEventBytes &&
+              failure.accounting.objectCount == 1u &&
+              failure.accounting.blobCount == (eventFailure ? 1u : 0u) &&
+              failure.accounting.blobBytes == (eventFailure ? payload.size() : 0u) &&
+              failure.publishedBlobCount == (eventFailure ? 1u : 0u) &&
+              injected.state() == (eventFailure ? RenderTapeCaptureState::Aborted
+                                               : RenderTapeCaptureState::Capturing) &&
+              injected.ownedBlobEntries() == 0u && injected.ownedBlobBytes() == 0u &&
+              injected.publicationBundle().events.empty() && injected.sealedArtifact().empty(),
+          "fault sweep separates exact allocation stages while preserving rollback and terminal semantics");
+    check(phase != "blob_digest" && phase != "blob_deduplicate",
+          "allocation-free digest and byte deduplication cannot be the allocation fault stage");
+    sawCatalogue |= phase == "blob_catalogue_append";
+    sawCopy |= phase == "blob_payload_copy";
+    sawPublication |= phase == "blob_publication_append";
+    sawEvent |= eventFailure;
+    capture_state_allocation_probe::count = 0u;
+    capture_state_allocation_probe::enabled = true;
+    injected.abort();
+    capture_state_allocation_probe::enabled = false;
+    check(capture_state_allocation_probe::count == 0u &&
+              injected.mutationFailure().phase == failure.phase &&
+              injected.mutationFailure().accounting.eventCount == 2u &&
+              injected.lastAbortAccounting().eventCount == 2u,
+          "abort and provenance retention allocate nothing after every injected failure");
+    check(injected.arm(bootstrap) == RenderTapeCaptureStatus::Accepted &&
+              !injected.mutationFailure().valid,
+          "successful rearm clears terminal mutation provenance");
+  }
+  check(reachedSuccess && sawCatalogue && sawCopy && sawPublication && sawEvent,
+        "fault sweep binds catalogue, payload copy, publication append, and event append independently");
+
+  const std::array<std::exception_ptr, 5u> exceptions{
+      std::make_exception_ptr(std::bad_alloc()),
+      std::make_exception_ptr(std::length_error("injected length")),
+      std::make_exception_ptr(std::invalid_argument("injected argument")),
+      std::make_exception_ptr(std::exception()), std::make_exception_ptr(17u)};
+  constexpr std::array<const char*, 5u> exceptionNames{
+      "bad_alloc", "length_error", "invalid_argument", "std_exception", "unknown"};
+  for (std::size_t i = 0u; i < exceptions.size(); ++i) {
+    for (const bool eventFailure : {false, true}) {
+      RenderTapeCaptureSession injected(true);
+      setup(injected);
+      if (eventFailure) {
+        check(injected.registerBlobBytes(payload) == RenderTapeCaptureStatus::Accepted,
+              "typed event fault fixture deduplicates registration before append");
+      }
+      capture_state_allocation_probe::injectedException = exceptions[i];
+      capture_state_allocation_probe::failAfter = 0u;
+      capture_state_allocation_probe::failEnabled = true;
+      capture_state_allocation_probe::count = 0u;
+      capture_state_allocation_probe::enabled = true;
+      const auto status = mutate(injected);
+      capture_state_allocation_probe::enabled = false;
+      capture_state_allocation_probe::failEnabled = false;
+      capture_state_allocation_probe::injectedException = {};
+      check(status == RenderTapeCaptureStatus::CapacityExceeded &&
+                std::string_view(injected.mutationFailure().exceptionKind) == exceptionNames[i] &&
+                std::string_view(injected.mutationFailure().phase) ==
+                    (eventFailure ? "event_append" : "blob_catalogue_append") &&
+                capture_state_allocation_probe::count == 0u,
+            "both failure layers classify typed and unknown exceptions without diagnostic allocation");
+    }
+  }
+
+  RenderTapeCaptureSession preverified(true);
+  setup(preverified);
+  check(preverified.registerVerifiedBlob(digest, payload.size()) ==
+            RenderTapeCaptureStatus::Accepted,
+        "preverified catalogue fixture has no owned payload yet");
+  capture_state_allocation_probe::failAfter = 0u;
+  capture_state_allocation_probe::failEnabled = true;
+  const auto preverifiedStatus = preverified.registerBlobBytes(payload);
+  capture_state_allocation_probe::failEnabled = false;
+  check(preverifiedStatus == RenderTapeCaptureStatus::CapacityExceeded &&
+            std::string_view(preverified.mutationFailure().phase) == "blob_payload_copy" &&
+            !preverified.mutationFailure().hasIdentity &&
+            preverified.mutationFailure().accounting.blobCount == 1u &&
+            preverified.ownedBlobEntries() == 1u && preverified.ownedBlobBytes() == 0u &&
+            preverified.registerBlobBytes(payload) == RenderTapeCaptureStatus::Accepted &&
+            !preverified.mutationFailure().valid && preverified.ownedBlobEntries() == 1u,
+        "direct byte registration failure cannot roll back a pre-existing verified catalogue entry");
+}
+
 void testConsumingArmBlobOwnershipAndEquivalence() {
   const auto bootstrap = bootstrapChunk();
   const std::vector<RenderTapeCaptureBlob> borrowed{
@@ -6072,6 +6366,7 @@ int main(int argc, char** argv) {
     testPresentCompleteOracleTargetTruthTable();
     testFailureBeforePublishAndBoundedBackpressure();
     testArmFailureProvenanceAndAbortRelease();
+    testMutationFailureProvenanceAndFaults();
     testConsumingArmBlobOwnershipAndEquivalence();
     testBoundedBlobBytesAndDeduplication();
     testRenderTapeBlobCapacityResolverTruthTable();

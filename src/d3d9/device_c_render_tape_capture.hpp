@@ -74,6 +74,30 @@ struct RenderTapeCaptureAbortAccounting {
   std::uint64_t objectCount = 0u;
 };
 
+// Capture-only failure values survive rollback and terminal payload release.
+// Accounting is sampled before the failing operation, never from an aborted
+// owner's cleared stores. No payload or exception-owned text is retained.
+struct RenderTapeCaptureMutationFailure {
+  bool valid = false;
+  const char* reason = "none";
+  const char* exceptionKind = "none";
+  const char* layer = "none";
+  const char* phase = "none";
+  RenderTapeCaptureStatus status = RenderTapeCaptureStatus::Accepted;
+  RenderTapeCaptureState captureState = RenderTapeCaptureState::Disabled;
+  bool hasIdentity = false;
+  D9CWireObjectIdentity identity{};
+  RenderTapeMutationKind kind = RenderTapeMutationKind::Upload;
+  RenderTapeBufferMutationDisposition bufferDisposition =
+      RenderTapeBufferMutationDisposition::Plain;
+  std::uint32_t subresource = 0u;
+  std::uint64_t byteOffset = 0u;
+  std::uint64_t byteSize = 0u;
+  std::uint64_t eventPayloadBytes = 0u;
+  std::uint64_t publishedBlobCount = 0u;
+  RenderTapeCaptureAbortAccounting accounting{};
+};
+
 // Value-only handoff for the device-owned production checkpoint and the
 // explicit injected test override. The session copies every field before the
 // producer's call returns and never retains COM/Metal objects.
@@ -265,6 +289,9 @@ public:
   const RenderTapeCaptureArmFailure& armFailure() const noexcept {
     return armFailure_;
   }
+  const RenderTapeCaptureMutationFailure& mutationFailure() const noexcept {
+    return mutationFailure_;
+  }
   const RenderTapeCaptureAbortAccounting& lastAbortAccounting() const noexcept {
     return lastAbortAccounting_;
   }
@@ -319,11 +346,14 @@ private:
                  bool liveOnly) const noexcept;
   bool chunkHasPresent(std::span<const std::byte> chunk,
                        const CommandChunkEnvelope& envelope) const noexcept;
+  RenderTapeCaptureMutationFailure mutationFailureContext(
+      const char* layer) const noexcept;
   void abortInternal() noexcept;
 
   bool enabled_ = false;
   RenderTapeCaptureLimits limits_{};
   RenderTapeCaptureArmFailure armFailure_{};
+  RenderTapeCaptureMutationFailure mutationFailure_{};
   RenderTapeCaptureAbortAccounting lastAbortAccounting_{};
   RenderTapeCaptureState state_ = RenderTapeCaptureState::Disabled;
   std::size_t eventCount_ = 0u;

@@ -600,6 +600,14 @@ report zero while old payloads remain owned. Failure attribution may preserve
 pre-release extents as value-only diagnostics; it must not keep those payloads
 alive. Resetting the builder must preserve the selected capture profile.
 
+Capture mutation failure evidence must bind the exact resource identity,
+subresource, byte offset and incoming extent to the rejected stage. Blob
+registration failures must be distinguishable from mutation-event validation,
+event reservation and append failures. Explicit capacity denials and typed
+exceptions must remain distinguishable, with pre-abort extents retained as
+allocation-free values. These diagnostics must not relax admission, expose
+partial publication, or retain borrowed payload/exception text.
+
 When the bootstrap producer already owns its blob payloads, session admission
 must transfer those payloads rather than create another full-size copy.
 Transferred bytes still require exact duplicate detection, budget admission,
