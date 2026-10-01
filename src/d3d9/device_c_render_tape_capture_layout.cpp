@@ -320,6 +320,18 @@ RenderTapeExpectedContentContract renderTapeDeriveExpectedContentContract(
         renderTapeProducedStandaloneSurfaceSupported(surface.surface))
       return {};
     if (storage == RenderTapeSurfaceStorage::Standalone &&
+        disposition == RenderTapeInitialContentDisposition::
+                           CompleteDepthStencilFloat32UInt8V1 &&
+        renderTapeSnapshotStandaloneD24S8Supported(surface.surface)) {
+      RenderTapeD24S8SnapshotLayout layout{};
+      if (!renderTapeDeriveD24S8SnapshotLayout(surface.surface, layout))
+        return expectedContentFailure(RenderTapeExpectedContentStatus::Overflow);
+      if (!subresourceBytes.empty()) subresourceBytes[0] = layout.byteCount;
+      return {.status = RenderTapeExpectedContentStatus::Accepted,
+              .bytes = layout.byteCount,
+              .count = 1u};
+    }
+    if (storage == RenderTapeSurfaceStorage::Standalone &&
         disposition ==
             RenderTapeInitialContentDisposition::CompleteDepthFloat32V1 &&
         renderTapeSnapshotStandaloneD24X8Supported(surface.surface)) {

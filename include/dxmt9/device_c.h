@@ -1054,6 +1054,48 @@ typedef struct D9CRenderTapeD24X8SnapshotResult {
     uint64_t byteCount;
 } D9CRenderTapeD24X8SnapshotResult;
 
+/* Capture-only, synchronous standalone D24S8 snapshot. Encoding version 1
+ * requires Depth32Float_Stencil8 backing (the named physical format value
+ * below), and contains one tight float32-LE depth plane followed by one tight
+ * uint8 stencil plane. For N = width * height, the stencil offset is 4*N and
+ * the total size is 5*N. Physical allocation padding never crosses the wire.
+ * The exact generation-qualified surface is retained through readback; bytes
+ * is a capacity-checked top-level bridge buffer, never a nested pointer. */
+enum {
+    D9C_RENDER_TAPE_D24S8_ENCODING_FLOAT32_LE_STENCIL_UINT8_V1 = 1u,
+    D9C_RENDER_TAPE_D24S8_PHYSICAL_FORMAT_D32FLOAT_STENCIL8 = 260u,
+};
+
+typedef enum D9CRenderTapeD24S8SnapshotStatus {
+    D9C_RENDER_TAPE_D24S8_SNAPSHOT_NONE = 0,
+    D9C_RENDER_TAPE_D24S8_SNAPSHOT_COMPLETE = 1,
+    D9C_RENDER_TAPE_D24S8_SNAPSHOT_STALE_GENERATION = 2,
+    D9C_RENDER_TAPE_D24S8_SNAPSHOT_DESCRIPTOR_MISMATCH = 3,
+    D9C_RENDER_TAPE_D24S8_SNAPSHOT_UNSUPPORTED = 4,
+    D9C_RENDER_TAPE_D24S8_SNAPSHOT_CAPACITY_MISMATCH = 5,
+    D9C_RENDER_TAPE_D24S8_SNAPSHOT_READBACK_FAILED = 6,
+} D9CRenderTapeD24S8SnapshotStatus;
+
+typedef struct D9CRenderTapeD24S8SnapshotRequest {
+    D9CWireObjectIdentity identity;
+    D9CSurfaceDesc surface;
+    uint32_t encodingVersion;
+    uint32_t reserved0;
+} D9CRenderTapeD24S8SnapshotRequest;
+
+typedef struct D9CRenderTapeD24S8SnapshotResult {
+    uint32_t status;
+    uint32_t encodingVersion;
+    uint32_t width;
+    uint32_t height;
+    uint32_t depthPitch;
+    uint32_t stencilPitch;
+    uint32_t physicalFormat;
+    uint32_t reserved0;
+    uint64_t stencilOffset;
+    uint64_t byteCount;
+} D9CRenderTapeD24S8SnapshotResult;
+
 /* Capture-only, synchronous color resource snapshot. The identity names an
  * exact generation-qualified standalone X8R8G8B8 surface or a supported
  * texture subresource (X8R8G8B8 2D or R32F cube face). Version 1 is the
@@ -1251,6 +1293,9 @@ void dxmt9c_device_cancel_render_tape_present_capture(D9CDevice*);
 DXMT9_NODISCARD int32_t dxmt9c_device_capture_render_tape_d24x8_snapshot(
     D9CDevice*, const D9CRenderTapeD24X8SnapshotRequest* request,
     D9CRenderTapeD24X8SnapshotResult* out, void* bytes, uint64_t capacity);
+DXMT9_NODISCARD int32_t dxmt9c_device_capture_render_tape_d24s8_snapshot(
+    D9CDevice*, const D9CRenderTapeD24S8SnapshotRequest* request,
+    D9CRenderTapeD24S8SnapshotResult* out, void* bytes, uint64_t capacity);
 DXMT9_NODISCARD int32_t dxmt9c_device_capture_render_tape_color_snapshot(
     D9CDevice*, const D9CRenderTapeColorSnapshotRequest* request,
     D9CRenderTapeColorSnapshotResult* out, void* bytes, uint64_t capacity);

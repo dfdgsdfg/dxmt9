@@ -157,6 +157,12 @@ class Device {
       core::SurfaceHandle, core::CanonicalD24X8Depth&) { return false; }
   virtual bool seedCanonicalD24X8Depth(
       core::SurfaceHandle, const core::CanonicalD24X8Depth&) { return false; }
+  // Cold checkpoint callers first drain the deferred PE replay FIFO. The
+  // backend itself then retains backing and exclusively drains its own queue.
+  virtual bool captureCanonicalD24S8DepthStencil(
+      core::SurfaceHandle, core::CanonicalD24S8DepthStencil&) { return false; }
+  virtual bool seedCanonicalD24S8DepthStencil(
+      core::SurfaceHandle, const core::CanonicalD24S8DepthStencil&) { return false; }
   virtual core::HResult generateTextureMipSublevels(core::TextureHandle) {
     return core::D3D_OK;
   }

@@ -679,6 +679,13 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
               renderTapeSnapshotStandaloneD24X8Supported(surface.surface) &&
               checkedMul(surface.surface.width, surface.surface.height,
                          depthBytes) && checkedMul(depthBytes, 4u, depthBytes);
+          RenderTapeD24S8SnapshotLayout depthStencilLayout{};
+          const bool seededDepthStencil =
+              disposition == RenderTapeInitialContentDisposition::
+                                 CompleteDepthStencilFloat32UInt8V1 &&
+              renderTapeDeriveD24S8SnapshotLayout(surface.surface, depthStencilLayout) &&
+              fixed.expectedContentBytes == depthStencilLayout.byteCount &&
+              fixed.expectedContentCount == 1u;
           std::uint64_t colorBytes = 0u;
           const bool colorLayout =
               renderTapeArmColorSnapshotStandaloneSurfaceSupported(
@@ -703,11 +710,11 @@ FrameTapeReplayResult buildPlan(std::span<const std::byte> bytes,
               fixed.expectedContentCount == 1u;
           if (surface.subresource != 0u ||
               !renderTapeZeroIdentity(surface.parentTexture) ||
-              (!produced && !seededDepth && !seededColor)) goto unsupported;
+              (!produced && !seededDepth && !seededDepthStencil && !seededColor)) goto unsupported;
           if (produced) {
             candidate.producedStandaloneSurfaces.push_back(
                 {fixed.identity, surface.surface});
-          } else if (seededDepth) {
+          } else if (seededDepth || seededDepthStencil) {
             candidate.seededStandaloneDepthSurfaces.push_back(
                 {fixed.identity, surface.surface});
           } else {
@@ -1310,6 +1317,14 @@ bool generalMutationShapeValid(
            checkedMul(rowBytes, surface.surface.height, expectedBytes) &&
            mutation.byteSize == expectedBytes;
   }
+  if (disposition == RenderTapeInitialContentDisposition::
+                         CompleteDepthStencilFloat32UInt8V1) {
+    RenderTapeD24S8SnapshotLayout layout{};
+    return surface.storage == static_cast<std::uint32_t>(
+                                  RenderTapeSurfaceStorage::Standalone) &&
+           renderTapeDeriveD24S8SnapshotLayout(surface.surface, layout) &&
+           mutation.byteSize == layout.byteCount;
+  }
   if (disposition != RenderTapeInitialContentDisposition::CompleteSeed ||
       (static_cast<RenderTapeSurfaceStorage>(surface.storage) ==
            RenderTapeSurfaceStorage::SwapchainBackbuffer &&
@@ -1496,6 +1511,8 @@ FrameTapeReplayResult buildGeneralPlan(
           if (disposition != RenderTapeInitialContentDisposition::CompleteSeed &&
               disposition != RenderTapeInitialContentDisposition::
                                  CompleteDepthFloat32V1 &&
+              disposition != RenderTapeInitialContentDisposition::
+                                 CompleteDepthStencilFloat32UInt8V1 &&
               disposition != RenderTapeInitialContentDisposition::
                                  ProducedByCapturedPass) {
             goto unsupported;
@@ -2204,6 +2221,28 @@ bool writeGeneralLockedSurface(const D9CSurfaceDesc& desc,
          writeBlockRows(bytes, locked.bits, layout);
 }
 
+bool seedStandaloneD24S8(D9CDevice* device, D9CSurface* wrapped,
+                         const D9CSurfaceDesc& surface,
+                         std::span<const std::byte> bytes) {
+  RenderTapeD24S8SnapshotLayout layout{};
+  auto upper = device ? device->dev().upperDevice() : nullptr;
+  if (!upper || !wrapped || !wrapped->obj ||
+      !renderTapeDeriveD24S8SnapshotLayout(surface, layout) ||
+      layout.byteCount > std::numeric_limits<std::size_t>::max() ||
+      bytes.size() != layout.byteCount) return false;
+  core::CanonicalD24S8DepthStencil checkpoint{
+      .bytes = std::vector<core::u8>(bytes.size()),
+      .version = core::kCanonicalD24S8DepthStencilVersion1,
+      .width = surface.width, .height = surface.height,
+      .depthRowPitchBytes = layout.depthPitch,
+      .stencilRowPitchBytes = layout.stencilPitch,
+      .stencilOffsetBytes = layout.stencilOffset,
+      .physicalFormat = D9C_RENDER_TAPE_D24S8_PHYSICAL_FORMAT_D32FLOAT_STENCIL8,
+  };
+  std::memcpy(checkpoint.bytes.data(), bytes.data(), bytes.size());
+  return upper->seedCanonicalD24S8DepthStencil(wrapped->obj->handle(), checkpoint);
+}
+
 bool applyGeneralMutation(
     D9CDevice* device, const RenderTapeResourceMutationHeader& mutation,
     std::span<const RenderTapeProviderBlob> blobs,
@@ -2298,6 +2337,12 @@ bool applyGeneralMutation(
   auto* wrapped = static_cast<D9CSurface*>(object);
   const auto disposition = static_cast<RenderTapeInitialContentDisposition>(
       surface.initialContentDisposition);
+  if (disposition == RenderTapeInitialContentDisposition::
+                         CompleteDepthStencilFloat32UInt8V1) {
+    return surface.storage == static_cast<std::uint32_t>(
+                                  RenderTapeSurfaceStorage::Standalone) &&
+           seedStandaloneD24S8(device, wrapped, surface.surface, blob->bytes);
+  }
   if (disposition ==
       RenderTapeInitialContentDisposition::CompleteDepthFloat32V1) {
     auto upper = device->dev().upperDevice();
@@ -2577,6 +2622,21 @@ void auditInitialSeedMutations(
                 reinterpret_cast<const std::byte*>(capturedDepth.bytes.data()),
                 reinterpret_cast<const std::byte*>(capturedDepth.bytes.data()) +
                     capturedDepth.bytes.size());
+          }
+        } else if (disposition == RenderTapeInitialContentDisposition::
+                                      CompleteDepthStencilFloat32UInt8V1) {
+          entry.kind = RenderTapeInitialSeedAuditKind::Depth;
+          RenderTapeD24S8SnapshotLayout layout{};
+          entry.supported = surface.storage == static_cast<std::uint32_t>(
+                                                  RenderTapeSurfaceStorage::Standalone) &&
+              renderTapeDeriveD24S8SnapshotLayout(surface.surface, layout);
+          if (entry.supported && upper) {
+            core::CanonicalD24S8DepthStencil checkpoint;
+            captured = upper->captureCanonicalD24S8DepthStencil(
+                static_cast<D9CSurface*>(object)->obj->handle(), checkpoint);
+            if (captured) actual.assign(
+                reinterpret_cast<const std::byte*>(checkpoint.bytes.data()),
+                reinterpret_cast<const std::byte*>(checkpoint.bytes.data()) + checkpoint.bytes.size());
           }
         } else if (disposition == RenderTapeInitialContentDisposition::CompleteSeed) {
           entry.kind = RenderTapeInitialSeedAuditKind::Color;
@@ -4318,6 +4378,7 @@ FrameTapeReplayResult replayPreflightPlan(
         RenderTapeSurfaceDescriptorV2 surface{};
         std::uint64_t pixelCount = 0u;
         std::uint64_t tightBytes = 0u;
+        RenderTapeD24S8SnapshotLayout depthStencilLayout{};
         auto* wrapped = static_cast<D9CSurface*>(object);
         auto upper = device->dev().upperDevice();
         ok = definition != plan.definitions.end() &&
@@ -4325,10 +4386,15 @@ FrameTapeReplayResult replayPreflightPlan(
              surface.storage == static_cast<std::uint32_t>(
                  RenderTapeSurfaceStorage::Standalone) &&
              mutation.subresource == 0u && mutation.byteOffset == 0u &&
-             checkedMul(surface.surface.width, surface.surface.height,
-                        pixelCount) &&
-             checkedMul(pixelCount, 4u, tightBytes) &&
-             blob->bytes.size() == tightBytes && wrapped && wrapped->obj;
+             wrapped && wrapped->obj;
+        const bool depthStencilSnapshot = ok &&
+            surface.initialContentDisposition == static_cast<std::uint32_t>(
+                RenderTapeInitialContentDisposition::CompleteDepthStencilFloat32UInt8V1) &&
+            renderTapeDeriveD24S8SnapshotLayout(surface.surface, depthStencilLayout) &&
+            blob->bytes.size() == depthStencilLayout.byteCount;
+        ok = ok && (depthStencilSnapshot ||
+             (checkedMul(surface.surface.width, surface.surface.height, pixelCount) &&
+              checkedMul(pixelCount, 4u, tightBytes) && blob->bytes.size() == tightBytes));
         const bool depthSnapshot = ok &&
             surface.initialContentDisposition ==
                 static_cast<std::uint32_t>(
@@ -4341,7 +4407,9 @@ FrameTapeReplayResult replayPreflightPlan(
                     RenderTapeInitialContentDisposition::CompleteSeed) &&
             renderTapeArmColorSnapshotStandaloneSurfaceSupported(
                 surface.surface);
-        if (depthSnapshot && upper) {
+        if (depthStencilSnapshot) {
+          ok = seedStandaloneD24S8(device, wrapped, surface.surface, blob->bytes);
+        } else if (depthSnapshot && upper) {
           core::CanonicalD24X8Depth canonical{
               .bytes = std::vector<core::u8>(blob->bytes.size()),
               .version = core::kCanonicalD24X8DepthVersion1,

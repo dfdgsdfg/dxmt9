@@ -8826,6 +8826,78 @@ bool CommandQueue::hasCompletedPendingWork() {
       completedSeqIdLocked() >= next - 1u;
 }
 
+std::optional<std::unique_lock<std::mutex>>
+CommandQueue::beginRenderTapeCheckpoint() noexcept {
+  try {
+    std::unique_lock lock(mutex_);
+    const auto quiescent = [&] {
+      return renderTapeBackbufferSeedBuildQuiescent(
+          arenaAdmissionActive_.load(std::memory_order_relaxed),
+          activeArenaBuild_.load(std::memory_order_relaxed) != nullptr,
+          activeDirectChunkSlotBuild_.load(std::memory_order_relaxed) != nullptr,
+          arenaBuildContext_.has_value(), directChunkSlotBuildContext_.has_value());
+    };
+    const auto terminal = [&] {
+      return stop_ || arenaBuildPoisoned_.load(std::memory_order_relaxed) ||
+          queryPendingTerminal_.load(std::memory_order_relaxed) ||
+          queueLifecycle_.queryCompletionFailed();
+    };
+    if (!quiescent() || terminal()) return std::nullopt;
+    queueLifecycle_.flushAndWait(lock, kMaxQueuedChunks,
+        [this](core::ChunkSlot& slot) {
+          prepareSlotForPublish(*this, pool_, slot, perf::ChunkPublishReason::Flush);
+        });
+    // flushAndWait releases the lock. Re-establish writer ownership before
+    // accessing the payload: borrowed appends do not hold this mutex.
+    if (!quiescent() || terminal()) return std::nullopt;
+    if (writingSlot_) {
+      if (*writingSlot_ >= slots_.size()) return std::nullopt;
+      const auto* payload = slots_[*writingSlot_].payload;
+      if (!payload || !payload->commandsEmpty()) return std::nullopt;
+    }
+    // A newly staged texture upload need not have an ordinary writer. Publish
+    // it explicitly and fence the same Metal queue used by Initializer. Do
+    // not wait on a signal that an errored upload might never produce.
+    if (initializer_) {
+      const auto prefix = initializer_->publishQueryPrefixUnlocked();
+      if (!prefix || terminal()) return std::nullopt;
+      if (*prefix != 0u) {
+        if (!query::asynchronousFencesEnabled()) return std::nullopt;
+        auto fence = newCommandBuffer();
+        if (!fence) return std::nullopt;
+        fence.commit();
+        const auto started = std::chrono::steady_clock::now();
+        fence.waitUntilCompleted();
+        perf::countSyncWait(static_cast<std::uint64_t>(
+            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - started).count()));
+        if (fence.status() != WMTCommandBufferStatusCompleted) return std::nullopt;
+      }
+    }
+    const auto uploads = initializer_ ? initializer_->queryProgressUnlocked()
+        : resources::Initializer::QueryProgress{};
+    const auto next = nextSeqId_.load(std::memory_order_relaxed);
+    const bool complete = renderTapeCheckpointCompletionAllowed({
+        .nextSequence = next,
+        .publishedSequence = lastCommittedSeqId_,
+        .completedSequence = completedSeqIdLocked(),
+        .initializerPublished = uploads.published,
+        .initializerCompleted = uploads.completed,
+        .inflightCount = inflightCount_,
+        .buildQuiescent = quiescent(),
+        .writingEmpty = true,
+        .initializerPending = initializer_ && initializer_->hasPendingUploadsUnlocked(),
+        .initializerTrackingAvailable = query::asynchronousFencesEnabled(),
+        .initializerFailed = uploads.failed,
+        .terminal = terminal(),
+    });
+    if (!complete) return std::nullopt;
+    return std::optional<std::unique_lock<std::mutex>>(std::move(lock));
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
 std::uint64_t CommandQueue::allocateQueryQueueIdentity() noexcept {
   static std::atomic<std::uint64_t> next{1};
   auto value = next.load(std::memory_order_relaxed);

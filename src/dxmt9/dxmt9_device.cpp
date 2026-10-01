@@ -484,6 +484,18 @@ class DeviceImpl final : public Device {
         queue_, queue_.pool(), wmt_device_, limits_, destination, depth);
   }
   bool supportsGpuReadback() const override { return true; }
+  bool captureCanonicalD24S8DepthStencil(
+      core::SurfaceHandle source,
+      core::CanonicalD24S8DepthStencil& checkpoint) override {
+    return encoders::captureCanonicalD24S8DepthStencil(
+        queue_, queue_.pool(), wmt_device_, source, checkpoint);
+  }
+  bool seedCanonicalD24S8DepthStencil(
+      core::SurfaceHandle destination,
+      const core::CanonicalD24S8DepthStencil& checkpoint) override {
+    return encoders::seedCanonicalD24S8DepthStencil(
+        queue_, queue_.pool(), wmt_device_, destination, checkpoint);
+  }
   AttachmentContentOwner attachmentContentOwner() const noexcept override {
     return AttachmentContentOwner::BackendCommands;
   }

@@ -1277,6 +1277,17 @@ class CpuGeneralTapeExecutor {
             : dxmt9::d3d9::RenderTapeInitialContentDisposition::Unavailable;
         if (ok && disposition ==
                       dxmt9::d3d9::RenderTapeInitialContentDisposition::
+                          CompleteDepthStencilFloat32UInt8V1) {
+          dxmt9::d3d9::RenderTapeD24S8SnapshotLayout layout{};
+          // Both canonical planes belong to this exact logical surface. They
+          // are not packed D3D9 pixels or physical Metal backing bytes, and
+          // the CPU lane must not issue a lock, seed blit or GPU submission.
+          ok = wrapped && wrapped->obj &&
+               dxmt9::d3d9::renderTapeDeriveD24S8SnapshotLayout(
+                   surface.surface, layout) &&
+               blob->bytes.size() == layout.byteCount;
+        } else if (ok && disposition ==
+                      dxmt9::d3d9::RenderTapeInitialContentDisposition::
                           CompleteDepthFloat32V1) {
           const auto expected = static_cast<std::uint64_t>(surface.surface.width) *
                                 surface.surface.height * 4u;
@@ -2172,6 +2183,33 @@ class CpuGeneralTapeExecutor {
       detail::cpuTapeDigestScalar(hash, object.identity.kind);
       detail::cpuTapeDigestScalar(hash, object.identity.generation);
       detail::cpuTapeDigestScalar(hash, object.identity.objectId);
+      if (kind == D9C_CHUNK_HANDLE_KIND_SURFACE) {
+        const auto definition = std::find_if(
+            plan_.definitions.begin(), plan_.definitions.end(),
+            [&](const auto& candidate) {
+              return detail::cpuGeneralSameIdentity(candidate.fixed.identity,
+                                                     object.identity);
+            });
+        d3d9::RenderTapeSurfaceDescriptorV2 surface{};
+        if (definition == plan_.definitions.end() ||
+            !d3d9::renderTapeLoadSurfaceDescriptorV2(
+                definition->descriptor, surface)) return false;
+        if (surface.initialContentDisposition == static_cast<std::uint32_t>(
+                d3d9::RenderTapeInitialContentDisposition::
+                    CompleteDepthStencilFloat32UInt8V1)) {
+          d3d9::RenderTapeD24S8SnapshotLayout layout{};
+          if (!d3d9::renderTapeDeriveD24S8SnapshotLayout(surface.surface, layout))
+            return false;
+          detail::cpuTapeDigestScalar(hash, surface.initialContentDisposition);
+          detail::cpuTapeDigestScalar(hash, surface.surface.format);
+          detail::cpuTapeDigestScalar(hash, surface.surface.width);
+          detail::cpuTapeDigestScalar(hash, surface.surface.height);
+          detail::cpuTapeDigestScalar(hash, layout.depthPitch);
+          detail::cpuTapeDigestScalar(hash, layout.stencilPitch);
+          detail::cpuTapeDigestScalar(hash, layout.stencilOffset);
+          detail::cpuTapeDigestScalar(hash, layout.byteCount);
+        }
+      }
       std::uint32_t count = 0u;
       for (const auto& receipt : receipts) {
         if (!detail::cpuGeneralSameIdentity(receipt.identity, contentIdentity) ||

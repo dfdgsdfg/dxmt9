@@ -1221,6 +1221,148 @@ struct GeneralIndexedFixture {
   }
 };
 
+struct D24S8PixelFixture {
+  GeneralIndexedFixture source{3u, true, false, true};
+  std::vector<std::byte> vertexBytes{source.vertexBytes};
+  std::vector<std::byte> checkpoint{};
+  std::vector<std::byte> expected{gpuVisibleUniformExpectedPixels()};
+  std::vector<RenderTapeProviderBlob> blobs{source.blobsValue};
+  std::vector<std::byte> tape{};
+  RenderTapeDigest checkpointDigest{};
+
+  D24S8PixelFixture(bool alternate, bool depthTest, bool stencilTest,
+                     bool wrongDepth = false, bool wrongStencil = false) {
+    // Original stripe geometry/oracle stays intact. Only z changes to the
+    // independently specified probe depth, so both checkpoint aspects matter.
+    for (std::size_t offset = offsetof(TexturedVertex, z); offset < vertexBytes.size();
+         offset += sizeof(TexturedVertex)) {
+      constexpr float z = 0.5f;
+      std::memcpy(vertexBytes.data() + offset, &z, sizeof(z));
+    }
+    const auto originalVertexDigest = RenderTapeCaptureSession::sha256(source.vertexBytes);
+    const auto vertexDigest = RenderTapeCaptureSession::sha256(vertexBytes);
+    for (auto& blob : blobs)
+      if (blob.digest == originalVertexDigest) blob = {.digest = vertexDigest, .bytes = vertexBytes};
+    checkpoint.resize(16u * 16u * 5u);
+    constexpr std::uint8_t reference = 61u;
+    for (std::uint32_t y = 0u; y < 16u; ++y) {
+      for (std::uint32_t x = 0u; x < 16u; ++x) {
+        const auto index = y * 16u + x;
+        const bool high = ((x + y + (alternate ? 1u : 0u)) % 3u) != 0u;
+        const auto depthBits = (high ? 0x3f400000u : 0x3e800000u) |
+                              ((index * 7919u + 3u) & 0x000fffffu);
+        const auto depth = std::bit_cast<float>(depthBits);
+        const auto stencil = ((x + 2u * y + (alternate ? 1u : 0u)) % 3u) != 0u
+            ? reference : static_cast<std::uint8_t>(index % 59u);
+        const auto storedDepth = wrongDepth
+            ? std::bit_cast<float>((high ? 0x3e800000u : 0x3f400000u) |
+                                   (depthBits & 0x000fffffu)) : depth;
+        const auto storedStencil = wrongStencil
+            ? static_cast<std::uint8_t>(stencil == reference ? 7u : reference) : stencil;
+        std::memcpy(checkpoint.data() + index * sizeof(float), &storedDepth, sizeof(float));
+        checkpoint[16u * 16u * sizeof(float) + index] = std::byte{storedStencil};
+        if ((depthTest && !(0.5f < depth)) || (stencilTest && stencil != reference)) {
+          constexpr auto background = kGpuVisibleBackgroundColorARGB;
+          std::memcpy(expected.data() + index * 4u, &background, 4u);
+        }
+      }
+    }
+    checkpointDigest = RenderTapeCaptureSession::sha256(checkpoint);
+    blobs.push_back({.digest = checkpointDigest, .bytes = checkpoint});
+    const RenderTapeSurfaceDescriptorV2 depthDescriptor{
+        .schemaVersion = kRenderTapeSurfaceDescriptorVersion2,
+        .storage = static_cast<std::uint32_t>(RenderTapeSurfaceStorage::Standalone),
+        .initialContentDisposition = static_cast<std::uint32_t>(
+            RenderTapeInitialContentDisposition::CompleteDepthStencilFloat32UInt8V1),
+        .surface = D9CSurfaceDesc{.format = 75u, .resourceType = 1u, .usage = 2u,
+                                .pool = 0u, .width = 16u, .height = 16u, .depth = 1u},
+    };
+    ImportedRenderTapeView imported;
+    check(importPrevalidatedRenderTape(source.tape, imported), "source for D24S8 pixel tape imports");
+    RenderTapeBuilder builder;
+    bool seeded = false;
+    for (std::uint32_t eventIndex = 0u; eventIndex < imported.events.size(); ++eventIndex) {
+      const auto event = imported.event(eventIndex);
+      const auto type = static_cast<RenderTapeEventType>(event.header.type);
+      if (type == RenderTapeEventType::ResourceMutation) {
+        RenderTapeResourceMutationHeader mutation{};
+        std::memcpy(&mutation, event.payload.data(), sizeof(mutation));
+        if (mutation.digest == originalVertexDigest) mutation.digest = vertexDigest;
+        builder.appendRawEvent(type, spanBytes(mutation));
+      } else if (type == RenderTapeEventType::CommandChunk) {
+        if (!seeded) {
+          builder.appendObjectDefine(kSnapshotDepth,
+              static_cast<std::uint32_t>(RenderTapeDescriptorKind::Surface),
+              spanBytes(depthDescriptor), 0u, {}, checkpoint.size(), 1u);
+          builder.appendResourceMutation(kSnapshotDepth, RenderTapeMutationKind::Upload,
+              0u, 0u, checkpoint.size(), checkpointDigest);
+          seeded = true;
+        }
+        RenderTapeCommandChunkHeader fixed{};
+        std::memcpy(&fixed, event.payload.data(), sizeof(fixed));
+        ImportedChunkView chunk;
+        check(importPrevalidatedCommandChunk(event.payload.subspan(sizeof(fixed)),
+                  CommandChunkEnvelope{.recordCount = fixed.recordCount, .handleCount = fixed.handleCount},
+                  chunk), "D24S8 source draw chunk imports");
+        std::vector<Record> records;
+        std::uint32_t firstHandle = 0u;
+        for (std::uint32_t index = 0u; index < chunk.records.size(); ++index) {
+          const auto record = chunk.record(index);
+          Record copy{.type = record.header.type,
+                      .payload = {record.payload.begin(), record.payload.end()},
+                      .handles = {record.handles.begin(), record.handles.end()}};
+          if (record.header.type == D9C_COMMAND_RECORD_DRAW_INDEXED_PRIMITIVE) {
+            const std::array states{
+                D9CCommandChunkWireRenderState{7u, depthTest ? 1u : 0u},
+                D9CCommandChunkWireRenderState{14u, 0u},
+                D9CCommandChunkWireRenderState{23u, 2u},
+                D9CCommandChunkWireRenderState{52u, stencilTest ? 1u : 0u},
+                D9CCommandChunkWireRenderState{53u, 1u},
+                D9CCommandChunkWireRenderState{54u, 1u},
+                D9CCommandChunkWireRenderState{55u, 1u},
+                D9CCommandChunkWireRenderState{56u, 3u},
+                D9CCommandChunkWireRenderState{57u, reference},
+                D9CCommandChunkWireRenderState{58u, 255u},
+                D9CCommandChunkWireRenderState{59u, 0u},
+                D9CCommandChunkWireRenderState{185u, 0u},
+            };
+            const D9CCommandChunkWireDepthStencilBinding depthBinding{
+                .valid = 1u, .handleIndex = firstHandle};
+            std::vector<std::pair<std::uint16_t, std::span<const std::byte>>> sections;
+            for (std::size_t sectionIndex = 0u; sectionIndex < record.sections.size(); ++sectionIndex) {
+              const auto section = record.section(sectionIndex);
+              sections.emplace_back(section.descriptor.kind, section.payload);
+            }
+            sections.emplace_back(D9C_COMMAND_CHUNK_SECTION_RENDER_STATE, spanBytes(states));
+            sections.emplace_back(D9C_COMMAND_CHUNK_SECTION_DEPTH_STENCIL, spanBytes(depthBinding));
+            std::sort(sections.begin(), sections.end(), [](const auto& a, const auto& b) {
+              return a.first < b.first;
+            });
+            copy.payload = sparsePayload(record.drawHeader, sections);
+            copy.handles = {{kSnapshotDepth.kind, kSnapshotDepth.generation, kSnapshotDepth.objectId}};
+          }
+          firstHandle += static_cast<std::uint32_t>(copy.handles.size());
+          records.push_back(std::move(copy));
+        }
+        const auto bytes = makeChunk(records);
+        D9CCommandChunkWireHeader header{};
+        std::memcpy(&header, bytes.data(), sizeof(header));
+        builder.appendCommandChunk(CommandChunkEnvelope{.recordCount = header.recordCount,
+                                                        .handleCount = header.handleCount}, bytes);
+      } else if (type == RenderTapeEventType::PresentComplete) {
+        RenderTapePresentCompleteHeader complete{};
+        std::memcpy(&complete, event.payload.data(), sizeof(complete));
+        builder.appendPresentComplete(builder.eventCount(), complete.completionOrdinal,
+            RenderTapeDigestValidity::Sha256, RenderTapeCaptureSession::sha256(expected),
+            event.payload.subspan(sizeof(complete)));
+      } else {
+        builder.appendRawEvent(type, event.payload);
+      }
+    }
+    tape = builder.seal();
+  }
+};
+
 struct ParallelIndexedFixture : GeneralIndexedFixture {
   ParallelIndexedFixture() : GeneralIndexedFixture(128u, true) {}
 };
@@ -4879,6 +5021,88 @@ void pixelOracleEnvelopeIsNarrowAndDigestAuthenticated() {
         "different replay source/output domains cannot share an envelope");
 }
 
+void nativeMetalD24S8ProviderPixelOracle() {
+  const D9CPresentParams params{.backBufferWidth = 16u, .backBufferHeight = 16u,
+      .backBufferFormat = 22u, .backBufferCount = 1u, .swapEffect = 1u,
+      .windowed = 1u, .presentationInterval = 0x80000000u};
+  std::size_t checked = 0u;
+  for (const unsigned aspects : {1u, 2u, 3u}) {
+    const bool depth = aspects & 1u;
+    const bool stencil = aspects & 2u;
+    for (const auto route : {RenderTapePreparedRoute::Compatibility,
+                             RenderTapePreparedRoute::ProductionSlot}) {
+      std::unique_ptr<D9CFactory, decltype(&dxmt9c_factory_release)> factory(
+          dxmt9c_factory_create(), dxmt9c_factory_release);
+      check(bool(factory), "D24S8 provider factory creates");
+      std::unique_ptr<D9CDevice, decltype(&dxmt9c_device_release)> device(
+          dxmt9c_factory_create_device(factory.get(), 0u, &params, 0u, nullptr),
+          dxmt9c_device_release);
+      check(bool(device), "D24S8 provider device creates");
+      // Warm reuse returns to A after B; wrong-plane seeds keep A's original
+      // output oracle. They must fail on pixels, not validation or upload.
+      const std::array cases{0u, 1u, 0u, depth ? 2u : 3u, stencil ? 3u : 2u, 0u};
+      for (std::size_t iteration = 0u; iteration < cases.size(); ++iteration) {
+        const auto kind = cases[iteration];
+        const D24S8PixelFixture fixture(kind == 1u, depth, stencil,
+                                       kind == 2u, kind == 3u);
+        const auto prepared = prepareRenderTapeIdentity(fixture.tape, fixture.blobs);
+        check(prepared.valid(), std::string("D24S8 pixel tape preflights: ") +
+            frameTapeReplayStatusName(prepared.preflight().status) + " event=" +
+            std::to_string(prepared.preflight().failedEventIndex));
+        const auto before = dxmt9::perf::snapshotRenderTapeReplay();
+        std::cerr << "D24S8 provider begin: aspects=" << aspects << " route="
+                  << static_cast<unsigned>(route) << " case=" << kind
+                  << " iteration=" << iteration << '\n';
+        const auto replay = replayPreparedRenderTapeIdentity(device.get(), prepared, {
+            .route = route,
+            .reset = iteration == 0u ? RenderTapePreparedReset::FreshDevice
+                                     : RenderTapePreparedReset::WarmDevice,
+            .auditInitialSeeds = iteration == 0u});
+        const auto after = dxmt9::perf::snapshotRenderTapeReplay();
+        std::cerr << "D24S8 provider completed: status=" << frameTapeReplayStatusName(replay.status)
+                  << " output=" << (replay.outputPixels == fixture.expected)
+                  << " source=" << (replay.sourcePixels == fixture.expected) << '\n';
+        const bool wrong = (kind == 2u && depth) || (kind == 3u && stencil);
+        if (wrong) {
+          check(replay.status == FrameTapeReplayStatus::OutputMismatch &&
+                    replay.validity.outputReadback &&
+                    !replay.validity.expectedDigestMatched && replay.outputPixels != fixture.expected,
+                "authenticated wrong depth/stencil plane fails the unchanged original pixel oracle");
+        } else {
+          check(replay.complete() && replay.validity.expectedDigestMatched &&
+                    replay.outputPixels == fixture.expected && replay.sourcePixels == fixture.expected,
+                std::string("D24S8 provider preserves exact independent aspect-tested pixels: ") +
+                    frameTapeReplayStatusName(replay.status));
+        }
+        const auto audit = std::find_if(replay.initialSeedAudit.entries.begin(),
+            replay.initialSeedAudit.entries.end(), [](const auto& entry) {
+              return entry.identity.kind == kSnapshotDepth.kind &&
+                  entry.identity.generation == kSnapshotDepth.generation &&
+                  entry.identity.objectId == kSnapshotDepth.objectId;
+            });
+        check(iteration != 0u ||
+                  (replay.initialSeedAudit.complete && audit != replay.initialSeedAudit.entries.end() &&
+                   audit->supported && audit->match && audit->bytes == 16u * 16u * 5u &&
+                   audit->actualDigest == fixture.checkpointDigest),
+              "provider initial-seed audit recaptures both exact5N planes before command effects");
+        const auto direct = after.directLeaseDraws - before.directLeaseDraws;
+        const auto compatibility = after.compatibilityDraws - before.compatibilityDraws;
+        check(after.gpuErrors == before.gpuErrors &&
+                  (route == RenderTapePreparedRoute::Compatibility
+                       ? compatibility == 3u && direct == 0u : direct == 3u && compatibility == 0u) &&
+                  replay.conservation.objectsCreated == replay.conservation.objectsReleased,
+              "D24S8 pixels execute actual selected provider route and conserve wrappers without GPU errors");
+        ++checked;
+      }
+      std::cerr << "D24S8 provider series qualified: aspects=" << aspects << " route="
+                << static_cast<unsigned>(route) << "; all pixels/routes/audit/wrappers checked\n";
+    }
+  }
+  std::cout << "D24S8 provider pixel oracle: replays=" << checked
+            << "; depth/stencil/combined; Compatibility+ProductionSlot; "
+            << "A-B-A + authenticated wrong-plane negatives + warm recovery; exact5N seed audits\n";
+}
+
 void standaloneD24X8SeedIsCreatedBeforeReplayAndConserved() {
   ProductionFixture fixture(false, true);
   const RenderTapeProviderBlob depthBlob{
@@ -6656,6 +6880,10 @@ int main(int argc, char** argv) {
             "volume oracle retains actual GPU query-result checks");
       nativeMetalVolumeMipSliceOracle();
       nativeMetalPagedBootstrapTailControlsSampledPixels();
+      return 0;
+    }
+    if (argc == 2 && std::string_view(argv[1]) == "--test-d24s8-oracle") {
+      nativeMetalD24S8ProviderPixelOracle();
       return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--test-retained-query-oracle") {

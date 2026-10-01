@@ -451,6 +451,20 @@ foreach spec : [
 endforeach
 
 render_tape_query_test_env = environment()
+render_tape_d24s8_test_env = environment()
+render_tape_d24s8_test_env.set('DXMT9_UPDATE_PE_PRODUCER_GOLDEN', '0')
+render_tape_d24s8_test_env.set('DXMT_DEBUG_DISABLE_SHADER_ARCHIVE', '1')
+render_tape_d24s8_test_env.set('DXMT9_ASYNC_QUERY_FENCES', '1')
+render_tape_d24s8_test_env.set('MTL_DEBUG_LAYER', '1')
+if host_machine.system() == 'darwin' and dxmt9_wine_install_path != ''
+  render_tape_d24s8_test_env.set('DYLD_LIBRARY_PATH', dxmt9_wine_unix_runtime_path)
+endif
+test('dxmt9-render-tape-d24s8-provider-metal-oracle',
+     render_tape_provider_fixture_spec,
+     args: ['--test-d24s8-oracle'],
+     env: render_tape_d24s8_test_env,
+     is_parallel: false,
+     timeout: 60)
 render_tape_query_test_env.set('DXMT9_UPDATE_PE_PRODUCER_GOLDEN', '0')
 render_tape_query_test_env.set('DXMT_DEBUG_DISABLE_SHADER_ARCHIVE', '1')
 render_tape_query_test_env.set('DXMT9_METAL_OCCLUSION', '1')

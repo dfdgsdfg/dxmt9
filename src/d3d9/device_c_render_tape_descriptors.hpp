@@ -27,6 +27,11 @@ enum class RenderTapeInitialContentDisposition : std::uint32_t {
   // Standalone D24X8 only. Canonical bytes are tightly packed little-endian
   // float32 depth, encoding version 1; they are not physical Metal bytes.
   CompleteDepthFloat32V1 = 5u,
+  // Standalone D24S8 on D32Float_Stencil8 backing only. Encoding version 1
+  // is a float32-LE depth plane followed by a uint8 stencil plane (5*N bytes).
+  // This fixed backing contract is enforced at capture and replay; neither
+  // packed D24 depth nor another physical format is compatible with it.
+  CompleteDepthStencilFloat32UInt8V1 = 6u,
 };
 
 // Capture-only model/code pin for the hard Present boundary. The PE owner
@@ -66,6 +71,65 @@ inline constexpr bool renderTapeSnapshotStandaloneD24X8Supported(
          surface.height != 0u && surface.depth == 1u && surface.pool == 0u &&
          surface.usage == 2u && surface.format == 77u &&
          surface.multiSampleType == 0u && surface.multiSampleQuality == 0u;
+}
+
+inline constexpr bool renderTapeSnapshotStandaloneD24S8Supported(
+    const D9CSurfaceDesc &surface) noexcept {
+  return surface.resourceType == 1u && surface.width != 0u &&
+         surface.height != 0u && surface.depth == 1u && surface.pool == 0u &&
+         surface.usage == 2u && surface.format == 75u &&
+         surface.multiSampleType == 0u && surface.multiSampleQuality == 0u;
+}
+
+struct RenderTapeD24S8SnapshotLayout {
+  std::uint32_t depthPitch = 0u;
+  std::uint32_t stencilPitch = 0u;
+  std::uint64_t stencilOffset = 0u;
+  std::uint64_t byteCount = 0u;
+};
+
+// The tape extent is architecture-independent. The receiving/capturing owner
+// additionally checks byteCount against its local size_t before allocating.
+inline constexpr bool renderTapeDeriveD24S8SnapshotLayout(
+    const D9CSurfaceDesc &surface,
+    RenderTapeD24S8SnapshotLayout &out) noexcept {
+  out = {};
+  if (!renderTapeSnapshotStandaloneD24S8Supported(surface) ||
+      surface.width > std::numeric_limits<std::uint32_t>::max() / 4u)
+    return false;
+  const auto pixels = static_cast<std::uint64_t>(surface.width) * surface.height;
+  if (pixels > std::numeric_limits<std::uint64_t>::max() / 5u)
+    return false;
+  out = {.depthPitch = surface.width * 4u,
+         .stencilPitch = surface.width,
+         .stencilOffset = pixels * 4u,
+         .byteCount = pixels * 5u};
+  return true;
+}
+
+inline constexpr bool renderTapeD24S8SnapshotResultMatches(
+    const D9CRenderTapeD24S8SnapshotRequest &request,
+    const D9CRenderTapeD24S8SnapshotResult &result,
+    std::uint64_t capacity) noexcept {
+  RenderTapeD24S8SnapshotLayout layout{};
+  return request.identity.kind == D9C_CHUNK_HANDLE_KIND_SURFACE &&
+         request.identity.generation != 0u && request.identity.objectId != 0u &&
+         request.encodingVersion ==
+             D9C_RENDER_TAPE_D24S8_ENCODING_FLOAT32_LE_STENCIL_UINT8_V1 &&
+         request.reserved0 == 0u &&
+         renderTapeDeriveD24S8SnapshotLayout(request.surface, layout) &&
+         capacity == layout.byteCount &&
+         capacity <= std::numeric_limits<std::size_t>::max() &&
+         result.status == D9C_RENDER_TAPE_D24S8_SNAPSHOT_COMPLETE &&
+         result.encodingVersion == request.encodingVersion &&
+         result.width == request.surface.width &&
+         result.height == request.surface.height &&
+         result.depthPitch == layout.depthPitch &&
+         result.stencilPitch == layout.stencilPitch &&
+         result.physicalFormat ==
+             D9C_RENDER_TAPE_D24S8_PHYSICAL_FORMAT_D32FLOAT_STENCIL8 &&
+         result.reserved0 == 0u && result.stencilOffset == layout.stencilOffset &&
+         result.byteCount == layout.byteCount;
 }
 
 inline constexpr bool renderTapeArmColorSnapshotStandaloneSurfaceSupported(
@@ -305,6 +369,9 @@ inline bool renderTapeLoadSurfaceDescriptorV2(
             (disposition == RenderTapeInitialContentDisposition::
                                 CompleteDepthFloat32V1 &&
              renderTapeSnapshotStandaloneD24X8Supported(out.surface)) ||
+            (disposition == RenderTapeInitialContentDisposition::
+                                CompleteDepthStencilFloat32UInt8V1 &&
+             renderTapeSnapshotStandaloneD24S8Supported(out.surface)) ||
             (disposition ==
                  RenderTapeInitialContentDisposition::ProducedByCapturedPass &&
              renderTapeProducedStandaloneSurfaceSupported(out.surface))) &&

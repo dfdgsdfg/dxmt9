@@ -133,6 +133,33 @@ inline bool renderTapeBackbufferSeedCompletionAllowed(
       !state.terminal;
 }
 
+struct RenderTapeCheckpointCompletionState {
+  std::uint64_t nextSequence = 0;
+  std::uint64_t publishedSequence = 0;
+  std::uint64_t completedSequence = 0;
+  std::uint64_t initializerPublished = 0;
+  std::uint64_t initializerCompleted = 0;
+  std::size_t inflightCount = 0;
+  bool buildQuiescent = false;
+  bool writingEmpty = false;
+  bool initializerPending = false;
+  bool initializerTrackingAvailable = false;
+  bool initializerFailed = false;
+  bool terminal = false;
+};
+
+inline constexpr bool renderTapeCheckpointCompletionAllowed(
+    const RenderTapeCheckpointCompletionState& state) noexcept {
+  return state.buildQuiescent && state.writingEmpty && !state.terminal &&
+      state.nextSequence != 0u &&
+      state.publishedSequence == state.nextSequence - 1u &&
+      state.completedSequence >= state.publishedSequence &&
+      state.inflightCount == 0u && !state.initializerPending &&
+      !state.initializerFailed &&
+      (state.initializerPublished == 0u || state.initializerTrackingAvailable) &&
+      state.initializerCompleted >= state.initializerPublished;
+}
+
 enum class DceChunkLookaheadAction : std::uint8_t {
   UseReady,
   FailOpen,
@@ -1127,6 +1154,11 @@ class CommandQueue {
   // Cold post-flush check for callers that need a success/failure result,
   // rather than treating submitFlush's terminal wake as successful completion.
   bool hasCompletedPendingWork();
+  // Cold checkpoint fence: rejects borrowed Direct/Arena writers before
+  // inspecting payloads, then proves ordinary publication and completion.
+  // The returned lease keeps producers from reopening a build until the
+  // caller's queue-owned transfer has committed and completed.
+  std::optional<std::unique_lock<std::mutex>> beginRenderTapeCheckpoint() noexcept;
   // Cold WSI replacement fence. Unlike submitFlush(), this never records a
   // deferred flush against an active CPU-ready arena and then reports success.
   // The drained bridge entry must reach this operation with no active arena;

@@ -1343,6 +1343,21 @@ struct CanonicalD24X8Depth {
   u32 physicalFormat = 0;
 };
 
+// Capture-only D24S8 encoding: preserve the actual D32FloatS8 depth bits and
+// stencil bytes in separate tight planes. No D24 quantization is permitted.
+inline constexpr u32 kCanonicalD24S8DepthStencilVersion1 = 1u;
+
+struct CanonicalD24S8DepthStencil {
+  std::vector<u8> bytes;
+  u32 version = 0;
+  u32 width = 0;
+  u32 height = 0;
+  u32 depthRowPitchBytes = 0;
+  u32 stencilRowPitchBytes = 0;
+  u64 stencilOffsetBytes = 0;
+  u32 physicalFormat = 0;
+};
+
 struct ColorFillDesc {
   Handle destination{};
   Rect rect{};

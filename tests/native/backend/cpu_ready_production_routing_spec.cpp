@@ -18,6 +18,7 @@
 #include "render_tape_cpu_alias_fixture.hpp"
 #include "render_tape_cpu_mipmap_fixture.hpp"
 #include "render_tape_cpu_query_fixture.hpp"
+#include "render_tape_cpu_d24s8_fixture.hpp"
 #include "render_tape_cpu_volume_fixture.hpp"
 #include "render_tape_cpu_bootstrap_pages_fixture.hpp"
 #include "render_tape_test_metal_device.hpp"
@@ -9106,6 +9107,105 @@ void generalCpuQueryTranscriptUsesControlledQueue() {
   }
 }
 
+void generalCpuD24S8CheckpointRetainsBothLogicalPlanes() {
+  namespace tape = dxmt9::d3d9;
+  namespace runtime = tape::render_tape_runtime;
+  using Fault = tape::test::CpuD24S8FixtureFault;
+  using Variant = tape::test::CpuD24S8FixtureVariant;
+  for (auto fault : {Fault::ShortSeed, Fault::ExtraSeed, Fault::PackedFourByteSeed,
+                     Fault::WrongFormat, Fault::Multisampled, Fault::MissingSeed}) {
+    const auto fixture = tape::test::makeGeneralCpuD24S8Fixture(fault);
+    check(!fixture.tape.empty(), "D24S8 negative fixture has actual tape bytes");
+    std::vector<tape::RenderTapeProviderBlob> blobs;
+    for (const auto& bytes : fixture.blobs)
+      blobs.push_back({tape::RenderTapeCaptureSession::sha256(bytes), bytes});
+    runtime::GeneralPreflightPlan plan;
+    const auto preflight = runtime::buildGeneralReplayPlan(fixture.tape, blobs, plan);
+    check(!preflight.complete() && plan.events.empty() && plan.definitions.empty(),
+          "D24S8 wrong descriptor/plane extent rejects transactionally before effects: " +
+              std::to_string(static_cast<unsigned>(fault)) + " " +
+              tape::frameTapeReplayStatusName(preflight.status));
+  }
+  MetalDeviceLease resourceDevice;
+  resourceDevice.handle = dxmt9_test_acquire_metal_device();
+  check(resourceDevice.handle != NULL_OBJECT_HANDLE,
+        "CPU D24S8 checkpoint needs CPU-visible resource backing only");
+  using Executor = dxmt9::test::CpuGeneralTapeExecutor<
+      RuntimeFixture, dxmt9::CommandQueueArenaLeaseTestAccess>;
+  std::uint64_t originalDigest = 0u;
+  std::vector<dxmt9::test::CpuGeneralTapeDrawObservation> originalDraws;
+  for (auto variant : {Variant::Original, Variant::DepthOnly, Variant::StencilOnly}) {
+    const auto fixture = tape::test::makeGeneralCpuD24S8Fixture(Fault::None, variant);
+    std::vector<tape::RenderTapeProviderBlob> blobs;
+    for (const auto& bytes : fixture.blobs)
+      blobs.push_back({tape::RenderTapeCaptureSession::sha256(bytes), bytes});
+    runtime::GeneralPreflightPlan plan;
+    const auto preflight = runtime::buildGeneralReplayPlan(fixture.tape, blobs, plan);
+    check(preflight.complete(), std::string("D24S8 shared CPU preflight: ") +
+          tape::frameTapeReplayStatusName(preflight.status));
+    const auto admission = runtime::admitGeneralCpuPlan(plan);
+    check(admission.accepted() && admission.counts.queryDefinitions == 1u &&
+              admission.counts.queryIssues == 4u && admission.counts.queryPolls == 4u &&
+              admission.counts.bootstrapRecords == 1u,
+          "D24S8 checkpoint is a complete initial seed, not source/query/bootstrap work");
+    std::uint64_t semantic = 0u, querySemantic = 0u;
+    for (bool measured : {false, true}) {
+      for (bool compatibility : {true, false}) {
+        RuntimeFixture runtimeFixture(false, false, true, false,
+                                      WMT::Device{resourceDevice.handle});
+        Executor executor(runtimeFixture, plan, blobs, {
+            .route = compatibility ? tape::ProviderReplayPolicy::Compatibility
+                                   : tape::ProviderReplayPolicy::ProductionSlot,
+            .measurement = measured});
+        const auto result = executor.run();
+        check(result.complete && result.resetOk,
+              "CPU D24S8 logical seed+draw/query replay: " + result.failure);
+        check(result.draws == 2u && result.observedMutations == plan.mutations.size() &&
+                  result.observedTextureUploads == 0u && result.submitted == 3u &&
+                  result.submitted == result.completed && result.completed == result.reclaimed &&
+                  result.resourcesCreated == result.resourcesReleased &&
+                  result.commands == admission.counts.records +
+                      admission.counts.bootstrapRecords &&
+                  result.sourceSummaryCommands == admission.counts.records -
+                      admission.counts.queryIssues &&
+                  result.sourceSummaryDraws == 2u &&
+                  result.queryReplay.readinessSatisfied == 2u &&
+                  !result.queryReplay.actualMetal && !result.queryReplay.gpuResultOracle &&
+                  result.queryReplay.replayedIssueRecords == 4u &&
+                  result.queryReplay.replayedPolls == 4u,
+              "both planes retain logical provenance, exact routes, query obligations and owner conservation");
+        if (measured) {
+          check(result.digest == 0u && result.fullOracleCalls == 0u &&
+                    result.drawObservations.empty() && result.queryReplay.rows.empty(),
+                "D24S8 measurement adds no physical seed, readback or semantic observations");
+        } else {
+          check(result.drawObservations.size() == 2u &&
+                    runtimeFixture.routing->ordinaryDrawCalls ==
+                        (compatibility ? 2u : 0u),
+                "D24S8 checkpoint reaches both requested production draw routes");
+          if (semantic == 0u) {
+            semantic = result.digest;
+            querySemantic = result.querySemanticDigest;
+          }
+          check(result.digest == semantic && result.querySemanticDigest == querySemantic,
+                "exact canonical checkpoint preserves cross-route draw/query semantics");
+          if (variant == Variant::Original && originalDraws.empty())
+            originalDraws = result.drawObservations;
+          if (variant != Variant::Original) {
+            check(result.digest != originalDigest,
+                  "depth-only or stencil-only changed canonical plane changes semantic digest");
+            for (std::size_t draw = 0u; draw < originalDraws.size(); ++draw)
+              check(result.drawObservations[draw].cumulativeSemanticDigest !=
+                        originalDraws[draw].cumulativeSemanticDigest,
+                    "every depth-bound draw consumes the full depth+stencil digest");
+          }
+        }
+      }
+    }
+    if (variant == Variant::Original) originalDigest = semantic;
+  }
+}
+
 void generalCpuVolumeWriterAndUploadShapeAreExact() {
   namespace tape = dxmt9::d3d9;
   namespace cpu = dxmt9::test::detail;
@@ -10837,6 +10937,7 @@ int main(int argc, char** argv) {
                       std::string_view(argv[1]) == "--general-cpu-attachment-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-alias-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-query-spec" ||
+                      std::string_view(argv[1]) == "--general-cpu-d24s8-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-volume-spec" ||
                       std::string_view(argv[1]) == "--general-cpu-bootstrap-pages-spec" ||
                       std::string_view(argv[1]) ==
@@ -10868,6 +10969,8 @@ int main(int argc, char** argv) {
       } else if (std::string_view(argv[1]) == "--general-cpu-query-spec") {
         controlledQueryFenceRefinementAndLifetime();
         generalCpuQueryTranscriptUsesControlledQueue();
+      } else if (std::string_view(argv[1]) == "--general-cpu-d24s8-spec") {
+        generalCpuD24S8CheckpointRetainsBothLogicalPlanes();
       } else if (std::string_view(argv[1]) == "--general-cpu-volume-spec") {
         generalCpuVolumeWriterAndUploadShapeAreExact();
         generalCpuVolumeTapeUsesProductionCreationAndMutation();
@@ -10900,6 +11003,7 @@ int main(int argc, char** argv) {
     if (argc == 3 && (std::string_view(argv[1]) == "--write-general-cpu-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-mipmap-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-query-fixture" ||
+                     std::string_view(argv[1]) == "--write-general-cpu-d24s8-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-volume-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-bootstrap-pages-fixture" ||
                      std::string_view(argv[1]) == "--write-general-cpu-window-fixture")) {
@@ -10922,6 +11026,8 @@ int main(int argc, char** argv) {
         writeFixture(dxmt9::d3d9::test::makeGeneralCpuMipmapFixture());
       else if (std::string_view(argv[1]) == "--write-general-cpu-query-fixture")
         writeFixture(dxmt9::d3d9::test::makeGeneralCpuQueryFixture());
+      else if (std::string_view(argv[1]) == "--write-general-cpu-d24s8-fixture")
+        writeFixture(dxmt9::d3d9::test::makeGeneralCpuD24S8Fixture());
       else if (std::string_view(argv[1]) == "--write-general-cpu-volume-fixture")
         writeFixture(dxmt9::d3d9::test::makeGeneralCpuVolumeFixture());
       else if (std::string_view(argv[1]) == "--write-general-cpu-bootstrap-pages-fixture")

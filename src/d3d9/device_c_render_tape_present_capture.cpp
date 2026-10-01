@@ -11,6 +11,7 @@
 #include <cstring>
 #include <limits>
 #include <span>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -522,6 +523,88 @@ extern "C" int32_t dxmt9c_device_capture_render_tape_d24x8_snapshot(
   } catch (...) {
     release();
     out->status = D9C_RENDER_TAPE_D24X8_SNAPSHOT_READBACK_FAILED;
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  }
+}
+
+extern "C" int32_t dxmt9c_device_capture_render_tape_d24s8_snapshot(
+    D9CDevice* device, const D9CRenderTapeD24S8SnapshotRequest* request,
+    D9CRenderTapeD24S8SnapshotResult* out, void* bytes,
+    std::uint64_t capacity) {
+  if (!out) return dxmt9::core::D3DERR_INVALIDCALL;
+  *out = {};
+  out->status = D9C_RENDER_TAPE_D24S8_SNAPSHOT_UNSUPPORTED;
+  if (!device || !request || !bytes || request->reserved0 != 0u ||
+      request->encodingVersion !=
+          D9C_RENDER_TAPE_D24S8_ENCODING_FLOAT32_LE_STENCIL_UINT8_V1 ||
+      request->identity.kind != D9C_CHUNK_HANDLE_KIND_SURFACE ||
+      request->identity.generation == 0u || request->identity.objectId == 0u)
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  dxmt9::d3d9::RenderTapeD24S8SnapshotLayout layout{};
+  if (!dxmt9::d3d9::renderTapeDeriveD24S8SnapshotLayout(request->surface, layout))
+    return dxmt9::core::D3DERR_NOTAVAILABLE;
+  if (capacity != layout.byteCount ||
+      capacity > std::numeric_limits<std::size_t>::max()) {
+    out->status = D9C_RENDER_TAPE_D24S8_SNAPSHOT_CAPACITY_MISMATCH;
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  const std::array<D9CCommandChunkWireHandleEntry, 1u> entries{{
+      dxmt9::d3d9::wireHandleEntry(request->identity)}};
+  std::array<void*, 1u> resolved{};
+  if (!device->wireObjects.resolveAndRetain(entries, resolved, retainSnapshotSurface)) {
+    out->status = D9C_RENDER_TAPE_D24S8_SNAPSHOT_STALE_GENERATION;
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  auto* surface = static_cast<D9CSurface*>(resolved[0]);
+  const auto release = [&] {
+    if (surface) dxmt9c_surface_release(std::exchange(surface, nullptr));
+  };
+  D9CSurfaceDesc actual{};
+  if (!surface || surface->device != device || !surface->obj || surface->ownerTex ||
+      dxmt9c_surface_get_desc(surface, &actual) != dxmt9::core::D3D_OK ||
+      !sameSurfaceDesc(actual, request->surface)) {
+    release();
+    out->status = D9C_RENDER_TAPE_D24S8_SNAPSHOT_DESCRIPTOR_MISMATCH;
+    return dxmt9::core::D3DERR_INVALIDCALL;
+  }
+  try {
+    if (!dxmt9::d3d9::drainDeferredReplay(device, "render-tape-d24s8-snapshot")) {
+      release();
+      out->status = D9C_RENDER_TAPE_D24S8_SNAPSHOT_READBACK_FAILED;
+      return dxmt9::core::D3DERR_INVALIDCALL;
+    }
+    auto upper = device->dev().upperDevice();
+    dxmt9::core::CanonicalD24S8DepthStencil captured;
+    // The Unix helper retains the actual generation/backing, rejects borrowed
+    // producers, drains the ordinary queue, and completes both aspect copies.
+    const bool capturedOk = upper && upper->captureCanonicalD24S8DepthStencil(
+        surface->obj->handle(), captured);
+    release();
+    if (!capturedOk ||
+        captured.version != dxmt9::core::kCanonicalD24S8DepthStencilVersion1 ||
+        captured.width != actual.width || captured.height != actual.height ||
+        captured.depthRowPitchBytes != layout.depthPitch ||
+        captured.stencilRowPitchBytes != layout.stencilPitch ||
+        captured.stencilOffsetBytes != layout.stencilOffset ||
+        captured.physicalFormat !=
+            D9C_RENDER_TAPE_D24S8_PHYSICAL_FORMAT_D32FLOAT_STENCIL8 ||
+        captured.bytes.size() != layout.byteCount) {
+      out->status = D9C_RENDER_TAPE_D24S8_SNAPSHOT_READBACK_FAILED;
+      return dxmt9::core::D3DERR_NOTAVAILABLE;
+    }
+    std::memcpy(bytes, captured.bytes.data(), captured.bytes.size());
+    *out = {.status = D9C_RENDER_TAPE_D24S8_SNAPSHOT_COMPLETE,
+            .encodingVersion = D9C_RENDER_TAPE_D24S8_ENCODING_FLOAT32_LE_STENCIL_UINT8_V1,
+            .width = captured.width, .height = captured.height,
+            .depthPitch = captured.depthRowPitchBytes,
+            .stencilPitch = captured.stencilRowPitchBytes,
+            .physicalFormat = captured.physicalFormat, .reserved0 = 0u,
+            .stencilOffset = captured.stencilOffsetBytes,
+            .byteCount = captured.bytes.size()};
+    return dxmt9::core::D3D_OK;
+  } catch (...) {
+    release();
+    out->status = D9C_RENDER_TAPE_D24S8_SNAPSHOT_READBACK_FAILED;
     return dxmt9::core::D3DERR_NOTAVAILABLE;
   }
 }

@@ -881,6 +881,11 @@ test('dxmt9-render-tape-cpu-bootstrap-pages-spec',
      cpu_ready_production_routing_spec,
      args: ['--general-cpu-bootstrap-pages-spec'],
      env: dxmt9_native_test_env)
+test('dxmt9-render-tape-cpu-d24s8-spec',
+     cpu_ready_production_routing_spec,
+     args: ['--general-cpu-d24s8-spec'],
+     env: dxmt9_native_test_env,
+     is_parallel: false)
 test('dxmt9-deferred-ingress-routing-spec',
      cpu_ready_production_routing_spec,
      env: dxmt9_native_test_env_vars + [
@@ -1169,6 +1174,23 @@ render_tape_d24x8_snapshot_metal_spec = executable(
 test('dxmt9-render-tape-d24x8-snapshot-metal-spec',
      render_tape_d24x8_snapshot_metal_spec,
      env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1'],
+     is_parallel: false,
+     timeout: 30)
+
+# Independent dual-plane D24S8 capability and actual Unix/bridge checkpoint
+# path: exact D32FloatS8 copies, both-aspect pixels, and exclusive queue fence.
+render_tape_d24s8_checkpoint_metal_spec = executable(
+  'dxmt9-render-tape-d24s8-checkpoint-metal-spec',
+  'render_tape_d24s8_checkpoint_metal_spec.mm',
+  include_directories: dxmt9_inc,
+  dependencies: [dxmt9_dep, dxmt9_frontend_dep, dxmt9_winemetal_dep,
+                 dependency('appleframeworks', modules: ['Foundation', 'Metal'])],
+  link_args: dxmt9_test_link_args,
+)
+
+test('dxmt9-render-tape-d24s8-checkpoint-metal-spec',
+     render_tape_d24s8_checkpoint_metal_spec,
+     env: dxmt9_native_test_env_vars + ['MTL_DEBUG_LAYER=1', 'DXMT9_ASYNC_QUERY_FENCES=1'],
      is_parallel: false,
      timeout: 30)
 

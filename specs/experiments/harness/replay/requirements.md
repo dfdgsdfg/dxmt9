@@ -1405,3 +1405,26 @@ state does not complete this contract. Legacy profile 2 retains its existing
 validation semantics. Native bounded refinement must compare reconstructed
 state with the unsliced reference across capacity boundaries; actual captured
 query and pixel qualification remain separate requirements.
+
+**R-HARN-REPLAY-9.8** A captured standalone single-sample D24S8 attachment must
+preserve both depth and stencil at the capture cut. A depth-only clear or
+checkpoint must not establish complete initial contents. The version-1 dual
+plane encoding consists of tight little-endian float32 depth followed by tight
+uint8 stencil, with checked total size `5 * width * height`. Its explicit
+content disposition requires actual Depth32Float_Stencil8 backing on both
+capture and replay. Depth24Unorm_Stencil8, depth-only fallback and multisample
+backings reject; no quantization to D3D packed 24-bit depth is permitted.
+Capture must validate generation, descriptor, encoding, both pitches, plane
+offset, byte count and physical format before publishing the checkpoint.
+Replay must restore both aspects before any consuming draw. Independent
+nonuniform depth/stencil byte and pixel oracles must establish capture and
+inverse restoration, including wrong-plane and warm A-to-B-to-A cases. The
+existing D24X8 and produced-by-pass admission contracts remain unchanged.
+The cold checkpoint must retain the exact backing through transfer completion,
+reject active borrowed producers before inspecting their payloads, and prove
+ordinary queue and initializer completion. Exclusive producer admission must
+remain held from that proof through transfer completion; a drained watermark
+alone does not authorize a later unprotected transfer. Terminal, failed upload
+or transfer, and incomplete drain must reject checkpoint completeness. Native
+bounded transition tests must distinguish early transfer, producer reopening,
+and signal-only completion from the accepted sequence.

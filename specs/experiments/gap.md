@@ -126,6 +126,46 @@ No Tape was published and no FPS/visual qualification is claimed. Lossless
 depth/stencil checkpoint capture and restoration, or an independently proven
 first-access initialization contract, remain to be established; omitting the
 bound resource or fabricating its initial contents is not a valid workaround.
+
+R-HARN-REPLAY-9.8 has a native Metal capability proof, not production admission:
+`dxmt9-render-tape-d24s8-checkpoint-metal-spec` passes with API validation,
+including Main's independent rerun. Independent rendering produces nonuniform
+17x19 Depth32Float_Stencil8 contents; two-plane capture and inverse blits
+preserve all 1615 canonical bytes through A-to-B-to-A, all 256 stencil values,
+and nine independent depth/stencil-tested pixel oracles. Single-aspect writes
+also preserve the other aspect. No float quantization or oracle relaxation was
+used. PE ABI/layout admission and production queue-owned capture/restore are
+now being integrated; actual STALKER replay remains unqualified.
+The additive capture ABI, checked dual-plane layout and arm-local overlay pass
+the native capture suite, including Main's independent rerun, and both PE
+builds. The new CPU fixture exposed and closed missing disposition-6
+structural-validator branches. Six focused CPU query/bootstrap/volume/attachment/
+alias/D24S8 tests pass, including Main's independent rerun; both replay routes
+preserve the full logical seed, query obligations and resource conservation.
+Depth-only and stencil-only changes alter the verification digest; measured
+execution omits those semantic observations. Synthetic repeat-two receipt
+checks accept both routes, not actual STALKER timings or GPU results. The full
+x86 Unix build and install-name audit pass. Main's Rosetta production checkpoint
+GPU test also passes with API validation: queued two-aspect clear drain, exact
+bridge capture and inverse A-to-B-to-A restoration, nine independent aspect
+pixel oracles, stale-generation/layout rejection and exclusive lease ownership.
+It checks 31,104 shared completion-predicate states and all 32 build flags.
+The bounded ordering checker additionally covers 20,480 traces and 62
+missing-post-drain-recheck counterexamples. The actual provider passes 36
+Compatibility/ProductionSlot replays covering depth-only, stencil-only and
+combined tests, A-to-B-to-A warm reuse, authenticated wrong-plane OutputMismatch
+and recovery, with six fresh exact-5N seed audits. Warm seed auditing remains
+unsupported; warm cases qualify through original-pixel equality instead.
+API validation initially exposed borrowed-device adoption at three existing
+Presenter sites. Both the new fixture and the existing Volume oracle crashed
+on PSO teardown on native and Rosetta. Correct retain-from-borrowed construction
+closes that defect: the unchanged validation profiles now pass both fixtures,
+the checkpoint test, and the ownership source contract, including Main's
+independent five-test Rosetta matrix and install-name audit. No validation,
+float precision or pixel oracle was relaxed. Existing
+TLA regression passes all 227 configurations; it does not establish the new
+exclusive checkpoint transfer protocol. Do not treat these intermediate build
+and capability results as a published STALKER Tape or a performance result.
 Existing H343 artifacts do not identify the workload's volume format.
 The existing mutation event carries complete volume mip blobs without a new
 wire schema. Compressed PE/WoW64 slice pitch differs from packed native storage

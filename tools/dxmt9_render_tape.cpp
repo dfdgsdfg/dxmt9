@@ -410,7 +410,7 @@ public:
   RenderTapeDigest lastExpectedDigest{};
   std::array<std::uint64_t, 7u> descriptorKinds{};
   std::array<std::uint64_t, 4u> textureDimensions{};
-  std::array<std::uint64_t, 6u> contentDispositions{};
+  std::array<std::uint64_t, 7u> contentDispositions{};
   std::array<std::uint64_t, 4u> surfaceStorages{};
   std::array<std::uint64_t, 5u> mutationKinds{};
   std::array<std::uint64_t, 6u> mutationObjectKinds{};
@@ -448,9 +448,10 @@ constexpr std::array<const char*, 7u> kDescriptorKindNames{
     "vertex_declaration", "query"};
 constexpr std::array<const char*, 4u> kTextureDimensionNames{
     nullptr, "texture_2d", "cube", "volume"};
-constexpr std::array<const char*, 6u> kContentDispositionNames{
+constexpr std::array<const char*, 7u> kContentDispositionNames{
     nullptr, "complete_seed", "unavailable", "produced_present_output",
-    "produced_by_captured_pass", "complete_depth_float32_v1"};
+    "produced_by_captured_pass", "complete_depth_float32_v1",
+    "complete_depth_stencil_float32_uint8_v1"};
 constexpr std::array<const char*, 4u> kSurfaceStorageNames{
     nullptr, "standalone", "texture_subresource", "swapchain_backbuffer"};
 constexpr std::array<const char*, 5u> kMutationKindNames{

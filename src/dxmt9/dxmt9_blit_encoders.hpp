@@ -179,4 +179,15 @@ bool seedCanonicalD24X8Depth(CommandQueue& queue,
                              core::SurfaceHandle destination,
                              const core::CanonicalD24X8Depth& depth);
 
+// Cold Unix-only two-aspect checkpoint. The actual retained texture must be
+// single-sample D32FloatS8; both copies complete on the production queue.
+bool captureCanonicalD24S8DepthStencil(
+    CommandQueue& queue, resources::Pool& pool,
+    WMT::Reference<WMT::Device> device, core::SurfaceHandle source,
+    core::CanonicalD24S8DepthStencil& checkpoint);
+bool seedCanonicalD24S8DepthStencil(
+    CommandQueue& queue, resources::Pool& pool,
+    WMT::Reference<WMT::Device> device, core::SurfaceHandle destination,
+    const core::CanonicalD24S8DepthStencil& checkpoint);
+
 }  // namespace dxmt9::encoders

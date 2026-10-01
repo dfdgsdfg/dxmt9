@@ -187,6 +187,21 @@ bind page coverage and state equality to the real producer, validator and fold,
 including cap+1 and maximum-size cases. GPU and original-workload oracles are
 still required independently.
 
+### Depth/stencil checkpoints
+
+Standalone D24S8 checkpoints use the aspect-complete contract in
+R-HARN-REPLAY-9.8. The new content disposition fixes both the dual-plane
+encoding and its Depth32Float_Stencil8 physical compatibility requirement;
+descriptor reserved fields are not repurposed. The capture-only bridge returns
+an exact identity-qualified result with depth pitch `4W`, stencil pitch `W`,
+stencil offset `4WH`, and total bytes `5WH`. Padding used by Metal transfer
+buffers is not part of the canonical blob. PE only stores these bytes; native
+Metal capture and restoration remain Unix-owned. Initial-content admission
+requires successful restoration of both aspects, not merely acceptance of a
+surface descriptor. Unsupported backing or transfer capability rejects before
+claiming checkpoint completeness. This does not broaden ordinary lock/upload
+formats or authorize first-access clear elision.
+
 ### Query observations
 
 R-HARN-REPLAY-9.1–9.5 extend the same experiment boundary to query-bearing

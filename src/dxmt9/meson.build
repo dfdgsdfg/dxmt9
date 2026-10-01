@@ -27,6 +27,7 @@ dxmt9_runtime_srcs = files(
   'dxmt9_compat.cpp',
   'dxmt9_capture.cpp',
   'dxmt9_blit_encoders.cpp',
+  'dxmt9_d24s8_checkpoint.mm',
   'dxmt9_debug_alloc_guard.cpp',
   'dxmt9_debug_trace.cpp',
   'dxmt9_device.cpp',

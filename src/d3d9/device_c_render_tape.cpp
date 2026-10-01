@@ -121,6 +121,12 @@ bool validDescriptorContentDisposition(
             RenderTapeInitialContentDisposition::CompleteDepthFloat32V1 &&
         renderTapeSnapshotStandaloneD24X8Supported(surface.surface) &&
         fixed.expectedContentBytes != 0u && fixed.expectedContentCount == 1u;
+    RenderTapeD24S8SnapshotLayout depthStencilLayout{};
+    const bool completeDepthStencilV1 =
+        disposition == RenderTapeInitialContentDisposition::CompleteDepthStencilFloat32UInt8V1 &&
+        renderTapeDeriveD24S8SnapshotLayout(surface.surface, depthStencilLayout) &&
+        fixed.expectedContentBytes == depthStencilLayout.byteCount &&
+        fixed.expectedContentCount == 1u;
     const bool produced =
         disposition ==
             RenderTapeInitialContentDisposition::ProducedByCapturedPass &&
@@ -129,7 +135,7 @@ bool validDescriptorContentDisposition(
     return storage == RenderTapeSurfaceStorage::Standalone &&
            surface.subresource == 0u &&
            renderTapeZeroIdentity(surface.parentTexture) &&
-           (completeSeed || completeDepthV1 || produced);
+           (completeSeed || completeDepthV1 || completeDepthStencilV1 || produced);
   }
   return true;
 }
@@ -594,6 +600,12 @@ RenderTapeObjectDefineValidationDetail classifyObjectDefineValidation(
               RenderTapeInitialContentDisposition::CompleteDepthFloat32V1 &&
           renderTapeSnapshotStandaloneD24X8Supported(surface.surface) &&
           fixed.expectedContentBytes != 0u && fixed.expectedContentCount == 1u;
+      RenderTapeD24S8SnapshotLayout depthStencilLayout{};
+      const bool completeDepthStencilV1 =
+          disposition == RenderTapeInitialContentDisposition::CompleteDepthStencilFloat32UInt8V1 &&
+          renderTapeDeriveD24S8SnapshotLayout(surface.surface, depthStencilLayout) &&
+          fixed.expectedContentBytes == depthStencilLayout.byteCount &&
+          fixed.expectedContentCount == 1u;
       const bool produced =
           disposition ==
               RenderTapeInitialContentDisposition::ProducedByCapturedPass &&
@@ -601,7 +613,7 @@ RenderTapeObjectDefineValidationDetail classifyObjectDefineValidation(
           fixed.expectedContentBytes == 0u && fixed.expectedContentCount == 0u;
       if (surface.subresource != 0u ||
           !renderTapeZeroIdentity(surface.parentTexture) ||
-          (!completeSeed && !completeDepthV1 && !produced)) {
+          (!completeSeed && !completeDepthV1 && !completeDepthStencilV1 && !produced)) {
         return reject(RenderTapeObjectDefineValidationSubreason::
                           SurfaceDescriptorDisposition);
       }

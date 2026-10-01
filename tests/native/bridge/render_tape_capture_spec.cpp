@@ -2427,6 +2427,224 @@ void testArmColorSnapshotDescriptorTruthTable() {
         "multi-mip cube snapshots remain fail-closed");
 }
 
+void testStandaloneD24S8SnapshotContract() {
+  static_assert(std::is_standard_layout_v<D9CRenderTapeD24S8SnapshotRequest>);
+  static_assert(std::is_trivially_copyable_v<D9CRenderTapeD24S8SnapshotRequest>);
+  static_assert(std::is_standard_layout_v<D9CRenderTapeD24S8SnapshotResult>);
+  static_assert(std::is_trivially_copyable_v<D9CRenderTapeD24S8SnapshotResult>);
+  static_assert(sizeof(D9CRenderTapeD24S8SnapshotResult) == 48u);
+  static_assert(offsetof(D9CRenderTapeD24S8SnapshotResult, stencilOffset) == 32u);
+  static_assert(offsetof(D9CRenderTapeD24S8SnapshotResult, byteCount) == 40u);
+  const D9CWireObjectIdentity depth{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE, .generation = 7u, .objectId = 81u};
+  const D9CWireObjectIdentity output{
+      .kind = D9C_CHUNK_HANDLE_KIND_SURFACE, .generation = 1u, .objectId = 82u};
+  const D9CSurfaceDesc surface{
+      .format = render_tape_d3d_format::D24S8, .resourceType = 1u,
+      .usage = 2u, .pool = 0u, .width = 17u, .height = 19u, .depth = 1u,
+  };
+  const RenderTapeSurfaceDescriptorV2 descriptor{
+      .storage = static_cast<std::uint32_t>(RenderTapeSurfaceStorage::Standalone),
+      .initialContentDisposition = static_cast<std::uint32_t>(
+          RenderTapeInitialContentDisposition::CompleteDepthStencilFloat32UInt8V1),
+      .surface = surface,
+  };
+  const auto descriptorBytes = std::as_bytes(std::span(&descriptor, 1u));
+  RenderTapeSurfaceDescriptorV2 loaded{};
+  RenderTapeD24S8SnapshotLayout layout{};
+  check(renderTapeLoadSurfaceDescriptorV2(descriptorBytes, loaded) &&
+            renderTapeDeriveD24S8SnapshotLayout(surface, layout) &&
+            layout.depthPitch == 68u && layout.stencilPitch == 17u &&
+            layout.stencilOffset == 1292u && layout.byteCount == 1615u,
+        "D24S8 disposition 6 pins odd-extent tight depth/stencil planes");
+  std::array<std::uint64_t, 1u> expected{};
+  const auto contract = renderTapeDeriveExpectedContentContract(
+      depth.kind, descriptorBytes, expected);
+  check(contract.status == RenderTapeExpectedContentStatus::Accepted &&
+            contract.bytes == 1615u && contract.count == 1u &&
+            expected[0] == 1615u &&
+            renderTapeValidateExpectedContentExtents(
+                depth.kind, descriptorBytes, expected) ==
+                RenderTapeExpectedContentStatus::Accepted,
+        "D24S8 canonical seed is one exact checked 5N subresource");
+  for (const auto wrongBytes : {1292u, 1614u, 1616u}) {
+    expected[0] = wrongBytes;
+    check(renderTapeValidateExpectedContentExtents(
+              depth.kind, descriptorBytes, expected) !=
+              RenderTapeExpectedContentStatus::Accepted,
+          "depth-only, truncated, and padded D24S8 seeds are rejected");
+  }
+  auto raw = descriptor;
+  raw.initialContentDisposition = static_cast<std::uint32_t>(
+      RenderTapeInitialContentDisposition::CompleteSeed);
+  check(renderTapeDeriveExpectedContentContract(
+            depth.kind, std::as_bytes(std::span(&raw, 1u))).status ==
+            RenderTapeExpectedContentStatus::UnsupportedFormat &&
+            renderTapeLinearBytesPerPixel(surface.format) == 0u &&
+            !renderTapeSnapshotStandaloneD24X8Supported(surface) &&
+            !renderTapeProducedStandaloneSurfaceSupported(surface),
+        "D24S8 does not widen raw lock, D24X8, or produced-pass policy");
+
+  for (const auto member : std::array{
+           &D9CSurfaceDesc::format, &D9CSurfaceDesc::resourceType,
+           &D9CSurfaceDesc::usage, &D9CSurfaceDesc::pool,
+           &D9CSurfaceDesc::multiSampleType, &D9CSurfaceDesc::multiSampleQuality,
+           &D9CSurfaceDesc::width, &D9CSurfaceDesc::height, &D9CSurfaceDesc::depth}) {
+    auto invalid = descriptor;
+    invalid.surface.*member = member == &D9CSurfaceDesc::width ||
+                                     member == &D9CSurfaceDesc::height
+                                 ? 0u : (invalid.surface.*member) + 1u;
+    layout = {.depthPitch = 99u, .stencilPitch = 99u,
+              .stencilOffset = 99u, .byteCount = 99u};
+    check(!renderTapeSnapshotStandaloneD24S8Supported(invalid.surface) &&
+              !renderTapeDeriveD24S8SnapshotLayout(invalid.surface, layout) &&
+              layout.depthPitch == 0u && layout.stencilPitch == 0u &&
+              layout.stencilOffset == 0u && layout.byteCount == 0u &&
+              !renderTapeLoadSurfaceDescriptorV2(
+                  std::as_bytes(std::span(&invalid, 1u)), loaded),
+          "unsupported D24S8 shape clears layout and rejects disposition 6");
+  }
+  for (const auto storage : {RenderTapeSurfaceStorage::TextureSubresource,
+                            RenderTapeSurfaceStorage::SwapchainBackbuffer}) {
+    auto invalid = descriptor;
+    invalid.storage = static_cast<std::uint32_t>(storage);
+    check(!renderTapeLoadSurfaceDescriptorV2(
+              std::as_bytes(std::span(&invalid, 1u)), loaded),
+          "D24S8 disposition 6 is standalone-only");
+  }
+  for (unsigned mutation = 0u; mutation < 3u; ++mutation) {
+    auto invalid = descriptor;
+    if (mutation == 0u) invalid.schemaVersion = 3u;
+    if (mutation == 1u) invalid.subresource = 1u;
+    if (mutation == 2u) invalid.parentTexture = depth;
+    check(!renderTapeLoadSurfaceDescriptorV2(
+              std::as_bytes(std::span(&invalid, 1u)), loaded),
+          "D24S8 descriptor rejects malformed version, subresource, or parent");
+  }
+  auto overflow = descriptor;
+  overflow.surface.width = std::numeric_limits<std::uint32_t>::max();
+  check(!renderTapeDeriveD24S8SnapshotLayout(overflow.surface, layout) &&
+            renderTapeDeriveExpectedContentContract(
+                depth.kind, std::as_bytes(std::span(&overflow, 1u))).status ==
+                RenderTapeExpectedContentStatus::Overflow,
+        "D24S8 four-byte depth row pitch cannot wrap uint32");
+  overflow.surface.width = std::numeric_limits<std::uint32_t>::max() / 4u;
+  overflow.surface.height = std::numeric_limits<std::uint32_t>::max();
+  check(!renderTapeDeriveD24S8SnapshotLayout(overflow.surface, layout) &&
+            layout.byteCount == 0u &&
+            renderTapeDeriveExpectedContentContract(
+                depth.kind, std::as_bytes(std::span(&overflow, 1u))).status ==
+                RenderTapeExpectedContentStatus::Overflow,
+        "D24S8 5N total extent cannot wrap uint64");
+
+  const D9CRenderTapeD24S8SnapshotRequest request{
+      .identity = depth, .surface = surface,
+      .encodingVersion = D9C_RENDER_TAPE_D24S8_ENCODING_FLOAT32_LE_STENCIL_UINT8_V1,
+  };
+  const D9CRenderTapeD24S8SnapshotResult result{
+      .status = D9C_RENDER_TAPE_D24S8_SNAPSHOT_COMPLETE,
+      .encodingVersion = D9C_RENDER_TAPE_D24S8_ENCODING_FLOAT32_LE_STENCIL_UINT8_V1,
+      .width = 17u, .height = 19u, .depthPitch = 68u, .stencilPitch = 17u,
+      .physicalFormat = D9C_RENDER_TAPE_D24S8_PHYSICAL_FORMAT_D32FLOAT_STENCIL8,
+      .stencilOffset = 1292u, .byteCount = 1615u,
+  };
+  check(renderTapeD24S8SnapshotResultMatches(request, result, 1615u) &&
+            !renderTapeD24S8SnapshotResultMatches(request, {}, 1615u),
+        "only an exact complete D32FloatS8 readback result can seed the arm overlay");
+  for (const auto member : std::array{
+           &D9CRenderTapeD24S8SnapshotResult::status,
+           &D9CRenderTapeD24S8SnapshotResult::encodingVersion,
+           &D9CRenderTapeD24S8SnapshotResult::width,
+           &D9CRenderTapeD24S8SnapshotResult::height,
+           &D9CRenderTapeD24S8SnapshotResult::depthPitch,
+           &D9CRenderTapeD24S8SnapshotResult::stencilPitch,
+           &D9CRenderTapeD24S8SnapshotResult::physicalFormat,
+           &D9CRenderTapeD24S8SnapshotResult::reserved0}) {
+    auto invalid = result;
+    ++(invalid.*member);
+    check(!renderTapeD24S8SnapshotResultMatches(request, invalid, 1615u),
+          "every D24S8 result uint32 field is validated");
+  }
+  for (const auto member : std::array{
+           &D9CRenderTapeD24S8SnapshotResult::stencilOffset,
+           &D9CRenderTapeD24S8SnapshotResult::byteCount}) {
+    auto invalid = result;
+    ++(invalid.*member);
+    check(!renderTapeD24S8SnapshotResultMatches(request, invalid, 1615u),
+          "D24S8 plane offset and total byte count are validated");
+  }
+  auto wrongBacking = result;
+  wrongBacking.physicalFormat = 255u; // Depth24Unorm_Stencil8 is not the contract.
+  check(!renderTapeD24S8SnapshotResultMatches(request, wrongBacking, 1615u),
+        "disposition 6 cannot lose its fixed D32FloatS8 backing contract");
+  for (unsigned mutation = 0u; mutation < 6u; ++mutation) {
+    auto invalid = request;
+    if (mutation == 0u) invalid.identity.kind = D9C_CHUNK_HANDLE_KIND_TEXTURE;
+    if (mutation == 1u) invalid.identity.generation = 0u;
+    if (mutation == 2u) invalid.identity.objectId = 0u;
+    if (mutation == 3u) invalid.encodingVersion = 2u;
+    if (mutation == 4u) invalid.reserved0 = 1u;
+    if (mutation == 5u) invalid.surface.format = render_tape_d3d_format::D24X8;
+    check(!renderTapeD24S8SnapshotResultMatches(invalid, result, 1615u),
+          "D24S8 arm readback validates generation-qualified identity and request");
+  }
+  check(!renderTapeD24S8SnapshotResultMatches(request, result, 1614u) &&
+            !renderTapeD24S8SnapshotResultMatches(request, result, 1616u),
+        "D24S8 arm readback capacity must be exactly 5N");
+
+  const std::vector<std::vector<std::byte>> durableContent(1u);
+  std::vector<std::vector<std::byte>> armContent{
+      std::vector<std::byte>(1615u, std::byte{0x15})};
+  std::fill(armContent[0].begin() + 1292u, armContent[0].end(), std::byte{0x47});
+  const auto rawBytes = std::as_bytes(std::span(&raw, 1u));
+  const std::vector<std::byte> rawBefore(rawBytes.begin(), rawBytes.end());
+  const auto selected = renderTapeSelectArmObjectSnapshotOverlay(
+      std::as_bytes(std::span(&raw, 1u)), durableContent,
+      descriptorBytes, armContent, 3u, 3u);
+  check(selected.source == RenderTapeArmSnapshotOverlaySource::CurrentArm &&
+            renderTapeArmObjectSnapshotContentComplete(
+                1u, false, RenderTapeArmObjectSnapshotOverlayPolicy::Ordinary,
+                selected.source, selected.content) &&
+            selected.content[0] == armContent[0] &&
+            durableContent[0].empty() &&
+            std::equal(rawBytes.begin(), rawBytes.end(), rawBefore.begin()),
+        "D24S8 arm overlay preserves both planes without mutating durable registry");
+  const auto stale = renderTapeSelectArmObjectSnapshotOverlay(
+      std::as_bytes(std::span(&raw, 1u)), durableContent,
+      descriptorBytes, armContent, 2u, 3u);
+  check(stale.source == RenderTapeArmSnapshotOverlaySource::StaleArm &&
+            stale.content.empty(),
+        "D24S8 seed from an earlier arm is not current content");
+  std::array<RenderTapeBootstrapClosureObject, 2u> objects{
+      RenderTapeBootstrapClosureObject{.identity = depth, .complete = true},
+      RenderTapeBootstrapClosureObject{.identity = output, .complete = true},
+  };
+  std::vector<D9CWireObjectIdentity> closure;
+  check(renderTapeBuildBootstrapClosure(std::span(&depth, 1u), output,
+                                        objects, closure) ==
+            RenderTapeBootstrapClosureStatus::Accepted && closure.size() == 2u &&
+            renderTapeBootstrapClosureContains(closure, depth),
+        "a seeded D24S8 remains in the exact bound bootstrap closure");
+  objects[0].complete = false;
+  const auto missing = renderTapeBuildBootstrapClosureAttributed(
+      std::span(&depth, 1u), output, objects, closure);
+  check(missing.status ==
+            RenderTapeBootstrapClosureStatus::ReferencedObjectIncomplete &&
+            missing.offendingIdentity.generation == depth.generation &&
+            missing.offendingIdentity.objectId == depth.objectId,
+        "missing D24S8 still rejects its exact bound identity without a produced shortcut");
+  auto staleDepth = depth;
+  ++staleDepth.generation;
+  objects[0].complete = true;
+  const auto staleIdentity = renderTapeBuildBootstrapClosureAttributed(
+      std::span(&staleDepth, 1u), output, objects, closure);
+  check(staleIdentity.status ==
+            RenderTapeBootstrapClosureStatus::ReferencedObjectMissing &&
+            staleIdentity.offendingIdentity.generation == staleDepth.generation &&
+            staleIdentity.offendingIdentity.objectId == staleDepth.objectId,
+        "seeded prior depth generation cannot satisfy the bound current generation");
+}
+
 void testExpectedContentContractDerivation() {
   constexpr auto texture = D9C_CHUNK_HANDLE_KIND_TEXTURE;
   constexpr auto surface = D9C_CHUNK_HANDLE_KIND_SURFACE;
@@ -2520,7 +2738,7 @@ void testExpectedContentContractDerivation() {
         "standalone D24X8 snapshot derives exact float32-v1 bytes");
   snapshotDepth.surface.format = render_tape_d3d_format::D24S8;
   check(!renderTapeSnapshotStandaloneD24X8Supported(snapshotDepth.surface),
-        "D24S8 remains explicitly fail-closed");
+        "the D24X8 snapshot encoding does not admit D24S8");
   snapshotDepth.surface.format = render_tape_d3d_format::D24X8;
   snapshotDepth.surface.multiSampleType = 4u;
   check(!renderTapeSnapshotStandaloneD24X8Supported(snapshotDepth.surface),
@@ -5100,6 +5318,7 @@ int main(int argc, char** argv) {
     testMissingSeedDescriptorAndProvenanceTruthTable();
     testArmBoundaryTransitionTruthTable();
     testArmColorSnapshotDescriptorTruthTable();
+    testStandaloneD24S8SnapshotContract();
     testExpectedContentContractDerivation();
     testUpdateTextureClosureTruthTable();
     testExpectedContentValidatorOrdering();
